@@ -82,6 +82,10 @@ struct ane_nn {
 	struct ane_bo chans[TILE_COUNT]; /* mmap-ed tile channels */
 	struct ane_bo btsp_chan; /* mmap-ed bootstrap channel */
 	struct ane_bind bind; /* role-to-channel map, per the task stream */
+	uint32_t tile_shift; /* log2 of the tile-count unit (see __ane_init_shift);
+			      * H13 island containers use 0xE (0x4000-B units),
+			      * whole-program containers from the hwxv2
+			      * converter use 0x9 (512-B units). */
 };
 
 /* #define LIBANE_CONFIG_NO_ERR */
@@ -135,6 +139,12 @@ void __ane_read(struct ane_nn *nn, void *to, const uint32_t idx);
 #define ane_send(nn, from, idx) _LIBANE_SF(__ane_send, nn, idx, from)
 #define ane_read(nn, to, idx)	_LIBANE_SF(__ane_read, nn, idx, to)
 
+/* Load an anec with an explicit tile-count unit. tile_shift is log2 of the
+ * byte unit the ANEC header's tiles[] counts are denominated in; pass 0xE for
+ * H13 island containers, 0x9 for whole-program containers from the hwxv2
+ * converter. Out-of-range shifts are refused. */
+struct ane_nn *__ane_init_shift(const char *path, int dev_id,
+				uint32_t tile_shift);
 void __ane_tile_send(struct ane_nn *nn, void *from, const uint32_t idx);
 void __ane_tile_read(struct ane_nn *nn, void *to, const uint32_t idx);
 #define ane_tile_send(nn, from, idx) _LIBANE_SF(__ane_tile_send, nn, idx, from)

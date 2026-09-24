@@ -61,12 +61,15 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string_view>
 #include <memory>
 #include <span>
 #include <unordered_map>
 #include <vector>
 
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/vulkan.h"
 
@@ -226,6 +229,11 @@ class GpuProfiler {
     p.gz = gz;
     p.host_cost = host_cost;
     p.tape = tape;
+    {
+      std::string_view prim = trace::current_prim();
+      std::memcpy(p.prim.data(), prim.data(), std::min(prim.size(), p.prim.size() - 1));
+      p.prim[std::min(prim.size(), p.prim.size() - 1)] = 0;
+    }
     p.nb = std::min(bindings.size(), p.bind.size());
     for (size_t i = 0; i < p.nb; ++i) {
       p.bind[i] = {reinterpret_cast<uintptr_t>(bindings[i].buffer),
@@ -335,6 +343,8 @@ class GpuProfiler {
     // 1 when this dispatch recorded a dependency barrier, 0 when the
     // gated tracker skipped it.
     uint32_t bar{0};
+    // Consuming primitive name (trace::current_prim at record time).
+    std::array<char, 48> prim{};
   };
 
   // Per-ring-slot recording state: one query pool per slot so an in-flight
@@ -413,7 +423,7 @@ class GpuProfiler {
       }
       emitf("{\"k\":\"d\",\"s\":%" PRIu64 ",\"e\":%u,\"op\":%u,\"n\":%u"
             ",\"gx\":%u,\"gy\":%u,\"gz\":%u,\"h\":%" PRIu64 ",\"tp\":%u"
-            ",\"bar\":%u",
+            ",\"bar\":%u,\"p\":\"%s\"",
             sub,
             p.kernel,
             p.operation,
@@ -423,7 +433,8 @@ class GpuProfiler {
             p.gz,
             p.host_cost,
             p.tape,
-            p.bar);
+            p.bar,
+            p.prim.data());
       if (p.tick_index + 1 < queries &&
           ticks[p.tick_index + 1] >= ticks[p.tick_index]) {
         emitf(",\"t0\":%" PRIu64 ",\"t1\":%" PRIu64,

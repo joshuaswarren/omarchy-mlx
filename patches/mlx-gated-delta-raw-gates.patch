@@ -1,0 +1,236 @@
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1174,6 +1174,140 @@
+   return result;
+ }
+ 
++std::vector<array> gated_delta_update_raw(
++    const array& queries,
++    const array& keys,
++    const array& values,
++    const array& a_in,
++    const array& b_in,
++    const array& A_log,
++    const array& dt_bias,
++    const std::optional<array>& initial_state,
++    const std::optional<array>& mask_,
++    StreamOrDevice s_) {
++  // Decode-only raw-gates fast path: the gate chain rides into the fused
++  // kernel prologue. Larger T falls back to the composed gates + scan so
++  // prefill semantics (f32 gates, no bf16 rounding of the decay) hold.
++  auto s = to_stream(s_);
++  if (queries.shape(1) != 1) {
++    auto beta = sigmoid(b_in, s);
++    auto g = exp(
++        negative(
++            multiply(exp(astype(A_log, float32, s)),
++                     logaddexp(array(0.0f, float32), add(a_in, dt_bias, s), s),
++                     s),
++            s),
++        s);
++    return gated_delta_update(queries, keys, values, g, beta, initial_state,
++                              mask_, s);
++  }
++  auto promoted = promote_types(queries.dtype(), keys.dtype());
++  auto out_dtype = issubdtype(promoted, floating)
++      ? promoted
++      : promote_types(promoted, float32);
++  auto q = astype(queries, out_dtype, s);
++  auto k = astype(keys, out_dtype, s);
++  auto v = astype(values, out_dtype, s);
++  // a/b/A_log stay bf16 (as produced by the projections); dt_bias stays
++  // f32 (the model parameter). The decode kernel widens a/b/A_log exactly
++  // and applies the same bf16 roundings to the in-kernel g/beta that the
++  // composed decode chain applies outside.
++  int B = q.shape(0);
++  int T = q.shape(1);
++  int Hk = q.shape(2);
++  int Dk = q.shape(3);
++  int Hv = v.shape(2);
++  int Dv = v.shape(3);
++  auto h0 = initial_state.has_value() ? astype(*initial_state, float32, s)
++                                      : zeros({B, Hv, Dv, Dk}, float32, s);
++  bool has_mask = mask_.has_value();
++  auto mask = has_mask ? astype(*mask_, bool_, s) : array(false);
++  auto fallback = [B, T, Hk, Dk, Hv, Dv, has_mask, s](
++                      std::vector<array> inputs) {
++    auto out_dtype = inputs[0].dtype();
++    auto q = inputs[0];
++    auto k = inputs[1];
++    auto v = inputs[2];
++    auto a = inputs[3];
++    auto b = inputs[4];
++    auto beta = sigmoid(b, s);
++    auto g = exp(
++        negative(
++            multiply(exp(astype(inputs[5], float32, s)),
++                     logaddexp(array(0.0f, float32), add(a, inputs[6], s), s),
++                     s),
++            s),
++        s);
++    auto state = astype(inputs[7], float32, s);
++    if (Hv != Hk) {
++      int repeat_factor = Hv / Hk;
++      q = repeat(q, repeat_factor, 2, s);
++      k = repeat(k, repeat_factor, 2, s);
++    }
++    array mask = has_mask ? astype(inputs[8], bool_, s) : array(false);
++    const array zero = array(0.0f, float32);
++    std::vector<array> outputs;
++    for (int t = 0; t < T; t++) {
++      auto get_t = [&](const array& arr, int t) {
++        Shape start(arr.ndim(), 0), stop = arr.shape();
++        start[1] = t;
++        stop[1] = t + 1;
++        return squeeze(slice(arr, start, stop, s), 1, s);
++      };
++      auto q_t = get_t(q, t);
++      auto k_t = get_t(k, t);
++      auto v_t = get_t(v, t);
++      auto g_t = get_t(g, t);
++      auto beta_t = get_t(beta, t);
++      array mask_t = has_mask ? get_t(mask, t) : array(true);
++      auto state_prev = state;
++      auto decay = (g_t.ndim() == 2)
++          ? expand_dims(g_t, {-1, -2}, s)
++          : expand_dims(g_t, -2, s);
++      auto state_next = multiply(state_prev, decay, s);
++      auto kv =
++          sum(multiply(state_next, expand_dims(k_t, -2, s), s),
++              -1,
++              false,
++              s);
++      auto delta = subtract(v_t, kv, s);
++      delta = multiply(delta, expand_dims(beta_t, -1, s), s);
++      state_next =
++          add(state_next,
++              multiply(expand_dims(delta, -1, s), expand_dims(k_t, -2, s), s),
++              s);
++      if (has_mask) {
++        auto state_mask = expand_dims(mask_t, {-1, -2, -3}, s);
++        state = where(state_mask, state_next, state_prev, s);
++      } else {
++        state = state_next;
++      }
++      auto o_t = sum(multiply(state, expand_dims(q_t, -2, s), s), -1, false, s);
++      if (has_mask) {
++        auto out_mask = expand_dims(mask_t, {-1, -2}, s);
++        o_t = where(out_mask, o_t, zero, s);
++      }
++      outputs.push_back(astype(o_t, out_dtype, s));
++    }
++    auto out = stack(outputs, 1, s);
++    return std::vector<array>{out, state};
++  };
++  if (!GatedDeltaUpdate::use_fallback(Hk, Dk, Hv, Dv, has_mask, s)) {
++    auto result = array::make_arrays(
++        /* output shapes */ {{B, T, Hv, Dv}, {B, Hv, Dv, Dk}},
++        /* dtypes */ {out_dtype, float32},
++        /* primitive */
++        std::make_shared<GatedDeltaUpdate>(s, fallback, /*raw_gates=*/true),
++        /* inputs */
++        has_mask
++            ? std::vector<array>{q, k, v, a_in, b_in, A_log, dt_bias, h0, mask}
++            : std::vector<array>{q, k, v, a_in, b_in, A_log, dt_bias, h0});
++    return result;
++  }
++  auto result = fallback({q, k, v, a_in, b_in, A_log, dt_bias, h0, mask});
++  return result;
++}
++
+ bool Quantize::is_equivalent(const Primitive& other) const {
+   const Quantize& p_other = static_cast<const Quantize&>(other);
+   return (
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -70,6 +70,22 @@
+     const std::optional<array>& mask = std::nullopt,
+     StreamOrDevice s = {});
+ 
++// Decode fast path: the gate chain (sigmoid(b), exp(-exp(A_log)*softplus(a +
++// dt_bias))) is computed inside the fused kernel prologue instead of as a
++// Python-level op chain. Decode (T == 1) only; larger T falls back to the
++// composed gates + scan.
++MLX_API std::vector<array> gated_delta_update_raw(
++    const array& queries,
++    const array& keys,
++    const array& values,
++    const array& a_in,
++    const array& b_in,
++    const array& A_log,
++    const array& dt_bias,
++    const std::optional<array>& initial_state = std::nullopt,
++    const std::optional<array>& mask = std::nullopt,
++    StreamOrDevice s = {});
++
+ using TemplateArg = std::variant<int, bool, Dtype>;
+ using ScalarArg = std::variant<bool, int, float>;
+ 
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -399,8 +399,15 @@
+  public:
+   GatedDeltaUpdate(
+       Stream stream,
+-      std::function<std::vector<array>(std::vector<array>)> fallback)
+-      : Custom(stream, std::move(fallback)) {}
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      bool raw_gates = false)
++      : Custom(stream, std::move(fallback)), raw_gates_(raw_gates) {}
++  // Raw-gates mode: inputs carry (q, k, v, a, b, A_log, dt_bias, state[,
++  // mask]) and the fused decode kernel computes the gate chain in its
++  // prologue instead of consuming precomputed g/beta.
++  bool raw_gates() const {
++    return raw_gates_;
++  }
+ 
+   static bool use_fallback(
+       const int Hk,
+@@ -425,6 +432,7 @@
+   }
+ 
+  private:
++  bool raw_gates_{false};
+ };
+ 
+ class Quantize : public Custom {
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -411,6 +411,37 @@
+             Returns:
+                 Tuple of (output [B, T, Hv, Dv], final_state [B, T, Hk, Dv])
+         )");
++  m.def(
++      "gated_delta_update_raw",
++      &mlx::core::fast::gated_delta_update_raw,
++      "q"_a,
++      "k"_a,
++      "v"_a,
++      "a"_a,
++      "b"_a,
++      "A_log"_a,
++      "dt_bias"_a,
++      "initial_state"_a = nb::none(), // optional, defaults to None
++      "mask"_a = nb::none(), // optional, defaults to None
++      "stream"_a = nb::none(), // optional, defaults to None
++      R"(
++            Chunked gated delta network forward pass with the gate chain
++            (sigmoid(b), exp(-exp(A_log)*softplus(a + dt_bias))) computed
++            inside the fused decode kernel prologue. Decode (T == 1) only;
++            larger T computes the gates eagerly and runs the standard scan.
++            Args:
++                q: Queries [B, 1, Hk, Dk]
++                k: Keys [B, 1, Hk, Dk]
++                v: Values [B, 1, Hv, Dv]
++                a: Raw decay input [B, 1, Hv]
++                b: Raw delta-rate input [B, 1, Hv]
++                A_log: Log decay parameter [Hv]
++                dt_bias: Delta bias parameter [Hv]
++                initial_state: Optional initial hidden state [B, Hv, Dv, Dk]
++                mask: Optional
++            Returns:
++                Tuple of (output [B, 1, Hv, Dv], final_state [B, Hv, Dv, Dk])
++        )");
+ 
+   m.def(
+       "metal_kernel",

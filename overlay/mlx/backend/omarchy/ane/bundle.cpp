@@ -485,8 +485,11 @@ uint64_t shape_elements(const std::vector<uint64_t>& shape, const std::string& l
   return total;
 }
 
-uint64_t channel_size_bytes(const AneAnecHeader& header, uint32_t bdx) {
-  return checked_mul(header.tiles.at(bdx), kAneTileAlignment, "ANEC channel size");
+uint64_t channel_size_bytes(
+    const AneAnecHeader& header,
+    uint32_t bdx,
+    uint64_t tile_alignment) {
+  return checked_mul(header.tiles.at(bdx), tile_alignment, "ANEC channel size");
 }
 
 constexpr uint32_t kBindFirstSurface = 4;
@@ -669,11 +672,13 @@ void validate_binding(
     const std::string& label,
     const AneProgramBinding& binding,
     const AneAnecHeader& header,
-    uint32_t expected_channel) {
+    uint32_t expected_channel,
+    uint64_t tile_alignment) {
   if (binding.channel != expected_channel || binding.channel >= kAnecTileCount) {
     throw bundle_error(label + " channel does not match ANEC binding order");
   }
-  const uint64_t allocation = channel_size_bytes(header, expected_channel);
+  const uint64_t allocation =
+      channel_size_bytes(header, expected_channel, tile_alignment);
   if (allocation != binding.allocation_bytes) {
     throw bundle_error(label + " allocation_bytes does not match ANEC channel allocation");
   }
@@ -681,6 +686,13 @@ void validate_binding(
       binding.dtype != "bool") {
     throw bundle_error(
         label + " ANEC channel requires a 16-bit or 1-byte bool tensor dtype");
+  }
+  // Raw bindings are selector-addressed: the ANEC header's NCHW for the
+  // channel describes the engine's staging window, not a dense tile
+  // placement, so only the allocation is checked (parse already enforced
+  // logical <= allocation and alignment).
+  if (binding.raw) {
+    return;
   }
   if (header.nchw[expected_channel] != binding.nchw) {
     throw bundle_error(label + " NCHW does not match ANEC channel geometry");
@@ -691,7 +703,8 @@ void validate_program_contract(
     const AneProgram& program,
     const AneAnecHeader& header,
     const std::filesystem::path& anec_path,
-    size_t program_index) {
+    size_t program_index,
+    uint64_t tile_alignment) {
   const std::string prefix = "program " + std::to_string(program_index);
   if (program.task_descriptors != header.task_descriptor_count) {
     throw bundle_error(prefix + " task_descriptors does not match ANEC header");
@@ -702,7 +715,7 @@ void validate_program_contract(
   if (program.outputs.size() != header.destination_count) {
     throw bundle_error(prefix + " output count does not match ANEC destination_count");
   }
-  if (channel_size_bytes(header, 3) != program.scratch_bytes) {
+  if (channel_size_bytes(header, 3, tile_alignment) != program.scratch_bytes) {
     throw bundle_error(prefix + " scratch_bytes does not match ANEC channel 3 allocation");
   }
   const auto payload = read_anec_payload(anec_path, header.payload_size);
@@ -718,20 +731,25 @@ void validate_program_contract(
         prefix + " output " + program.outputs[i].tensor,
         program.outputs[i],
         header,
-        dst[i]);
+        dst[i],
+        tile_alignment);
   }
   for (uint32_t i = 0; i < program.inputs.size(); ++i) {
     validate_binding(
         prefix + " input " + program.inputs[i].tensor,
         program.inputs[i],
         header,
-        src[i]);
+        src[i],
+        tile_alignment);
   }
 }
 
 } // namespace
 
-AneAnecHeader parse_anec_header(const std::filesystem::path& path) {
+AneAnecHeader parse_anec_header(
+    const std::filesystem::path& path,
+    uint64_t tile_shift) {
+  const uint64_t tile_alignment = uint64_t{1} << tile_shift;
   const auto file_size = file_size_checked(path);
   if (file_size < kAnecHeaderSize) {
     throw bundle_error("ANEC file is smaller than libane header");
@@ -801,7 +819,8 @@ AneAnecHeader parse_anec_header(const std::filesystem::path& path) {
     throw bundle_error("ANEC reserved kernel channel allocation must be zero");
   }
 
-  const uint64_t command_channel_size = channel_size_bytes(header, 0);
+  const uint64_t command_channel_size =
+      channel_size_bytes(header, 0, tile_alignment);
   if (header.payload_size > command_channel_size) {
     throw bundle_error("ANEC executable payload exceeds command channel allocation");
   }
@@ -818,7 +837,7 @@ AneAnecHeader parse_anec_header(const std::filesystem::path& path) {
     throw bundle_error("ANEC task plus kernel bytes exceed executable payload");
   }
   header.bootstrap_channel_size = align_up(
-      header.task_descriptor_size, kAneTileAlignment, "ANEC bootstrap channel");
+      header.task_descriptor_size, tile_alignment, "ANEC bootstrap channel");
   return header;
 }
 
@@ -1078,9 +1097,12 @@ AneBundle load_bundle_snapshot(
     if (path.empty()) {
       throw bundle_error("program payload mapping disappeared after manifest validation");
     }
-    AneAnecHeader header = parse_anec_header(path);
-    validate_program_contract(program, header, path, p);
-    bundle.programs.push_back({p, std::move(header), std::move(path)});
+    AneAnecHeader header =
+        parse_anec_header(path, bundle.manifest.tile_shift);
+    validate_program_contract(
+        program, header, path, p, uint64_t{1} << bundle.manifest.tile_shift);
+    bundle.programs.push_back(
+        {p, std::move(header), std::move(path), bundle.manifest.tile_shift});
   }
   return bundle;
 }

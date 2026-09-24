@@ -89,6 +89,16 @@ const uint SIMD = 32u;
 const uint DIM = 64u;
 const float FINITE_MIN = -3.4028234663852886e38;
 
+// Query-head width of the composition-exact bf16 arm. The default 64 keeps
+// the original blob; -DSDPA_DIM=256 compiles the Qwen3.8 full-attention
+// twin. Both widths run the identical f32 score-composition sequence
+// (ascending-d dot, 256-lane softmax, ascending-key 16-wide output tiles),
+// so the route is bit-identical to the composed path it replaces at either
+// width; only the per-dot length and the output thread count scale.
+#ifndef SDPA_DIM
+#define SDPA_DIM 64u
+#endif
+
 #ifndef BF16_IO
 shared float s_outputs[SIMD * SIMD];
 shared float s_max[SIMD];
@@ -101,7 +111,7 @@ shared float s_sum[SIMD];
 // the host guard; larger contexts fall through to the composition, which
 // this arm reproduces bit for bit.
 const uint kStreamKeys = 2048u;
-shared float s_qrow[64];
+shared float s_qrow[SDPA_DIM];
 shared float s_stream[kStreamKeys];
 shared float s_tree[256];
 #endif
@@ -170,7 +180,7 @@ void main() {
   uint kv_head = head / repeats;
   uint k_len = params.matrix_k;
 
-  if (thread < 64u) {
+  if (thread < SDPA_DIM) {
     s_qrow[thread] = params.alpha * bf16_load(
         query_data.values[params.lhs_offset +
             head * params.shape[0] + thread * params.shape[3]]);
@@ -182,7 +192,7 @@ void main() {
     uint k_base = params.rhs_offset + kv_head * params.shape[1] +
         key * params.shape[2];
     float accumulator = 0.0;
-    for (uint d = 0u; d < 64u; ++d) {
+    for (uint d = 0u; d < SDPA_DIM; ++d) {
       accumulator += s_qrow[d] *
           bf16_load(key_data.values[k_base + d * params.in_strides[0]]);
     }
@@ -240,7 +250,7 @@ void main() {
 
   // Output dim d: ascending-key accumulation over 16-wide tiles with
   // exact-zero tail padding, drained by 1.0f, stored RNE bf16.
-  if (thread < 64u) {
+  if (thread < SDPA_DIM) {
     uint d = thread;
     float accumulator = 0.0;
     uint key = 0u;
@@ -264,7 +274,7 @@ void main() {
       accumulator += prob * value16;
       ++key;
     }
-    output_data.values[params.output_offset + head * DIM + d] =
+    output_data.values[params.output_offset + head * SDPA_DIM + d] =
         bf16_store(1.0 * accumulator);
   }
   return;

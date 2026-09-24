@@ -23,3 +23,7 @@ GATES.md
 # Local agent taste/decision mirrors (public repo — do not commit)
 taste.md
 decisions.md
+
+# whole-program encoder bundle: 458 MB shipped at wheel-build time from
+# staging, never in git; integrity lives in parakeet-runtime-pin.json
+overlay/tools/mlx-omarchy-parakeet/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole/

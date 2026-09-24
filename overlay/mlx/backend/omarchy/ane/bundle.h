@@ -44,6 +44,7 @@ struct AneValidatedProgram {
   size_t manifest_index{0};
   AneAnecHeader anec_header;
   std::filesystem::path anec;
+  uint64_t tile_shift{kAneTileShiftDefault};
 };
 
 struct AneBundle {
@@ -52,7 +53,9 @@ struct AneBundle {
   std::optional<std::filesystem::path> weights;
 };
 
-MLX_API AneAnecHeader parse_anec_header(const std::filesystem::path& path);
+MLX_API AneAnecHeader parse_anec_header(
+    const std::filesystem::path& path,
+    uint64_t tile_shift = kAneTileShiftDefault);
 MLX_API AneBundle load_bundle(const std::filesystem::path& dir);
 MLX_API AneBundle load_bundle_snapshot(
     const std::filesystem::path& manifest,

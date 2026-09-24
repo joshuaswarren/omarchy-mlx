@@ -158,7 +158,8 @@ uint64_t element_count(
 AneTensor parse_tensor(
     const nlohmann::json& value,
     const std::string& list_name,
-    size_t position) {
+    size_t position,
+    uint64_t tile_alignment) {
   std::string where = list_name + "[" + std::to_string(position) + "]";
   if (!value.is_object()) {
     throw manifest_error(where + " must be an object");
@@ -184,8 +185,10 @@ AneTensor parse_tensor(
         where + " byte_size " + std::to_string(tensor.byte_size) +
         " does not match dtype geometry " + std::to_string(expected));
   }
-  if (tensor.stride < tensor.byte_size || tensor.stride % kAneTileAlignment != 0) {
-    throw manifest_error(where + " stride must cover byte_size and be 0x4000-aligned");
+  if (tensor.stride < tensor.byte_size || tensor.stride % tile_alignment != 0) {
+    throw manifest_error(
+        where + " stride must cover byte_size and be " +
+        std::to_string(tile_alignment) + "-aligned");
   }
   return tensor;
 }
@@ -193,7 +196,8 @@ AneTensor parse_tensor(
 std::vector<AneTensor> parse_tensor_list(
     const nlohmann::json& root,
     const char* field,
-    bool required_non_empty) {
+    bool required_non_empty,
+    uint64_t tile_alignment) {
   const auto& values = required_field(root, field);
   if (!values.is_array() || (required_non_empty && values.empty())) {
     throw manifest_error(
@@ -203,7 +207,7 @@ std::vector<AneTensor> parse_tensor_list(
   std::vector<AneTensor> tensors;
   std::set<uint64_t> indices;
   for (size_t i = 0; i < values.size(); ++i) {
-    AneTensor tensor = parse_tensor(values[i], field, i);
+    AneTensor tensor = parse_tensor(values[i], field, i, tile_alignment);
     if (!indices.insert(tensor.index).second) {
       throw manifest_error(std::string("field '") + field + "' has duplicate index");
     }
@@ -301,14 +305,47 @@ void validate_logical_results(const AneManifest& manifest) {
 
 AneProgramBinding parse_binding(
     const nlohmann::json& value,
-    const std::string& where) {
+    const std::string& where,
+    uint64_t tile_alignment) {
   if (!value.is_object()) {
     throw manifest_error(where + " must be an object");
   }
   reject_unknown_fields(
       value,
       {"tensor", "channel", "dtype", "shape", "nchw", "logical_bytes",
-       "allocation_bytes", "element_offset", "element_count", "physical_elements"});
+       "allocation_bytes", "element_offset", "element_count", "physical_elements",
+       "raw"});
+
+  // Raw staging (whole-program containers): the task stream addresses the
+  // surface through selector registers, not NCHW tile placement, so the
+  // binding carries only the channel, the staged byte count, and the ANEC
+  // channel allocation. Staged bytes are memcpy'd straight into (and back
+  // out of) the channel buffer, exactly like libane's ane_send/ane_read.
+  if (value.value("raw", false)) {
+    AneProgramBinding binding;
+    binding.raw = true;
+    binding.tensor = require_non_empty_string(value, "tensor");
+    binding.channel = require_unsigned(value, "channel");
+    binding.dtype = require_non_empty_string(value, "dtype");
+    binding.logical_bytes = require_positive(value, "logical_bytes");
+    binding.allocation_bytes = require_positive(value, "allocation_bytes");
+    if (binding.dtype != "float16" && binding.dtype != "bfloat16" &&
+        binding.dtype != "bool") {
+      throw manifest_error(where + " requires a 16-bit or 1-byte bool dtype");
+    }
+    if (binding.allocation_bytes < binding.logical_bytes ||
+        binding.allocation_bytes % tile_alignment != 0) {
+      throw manifest_error(
+          where + " allocation is smaller than logical data or unaligned");
+    }
+    uint64_t size = dtype_size(binding.dtype);
+    if (size == 0 || binding.logical_bytes % size != 0) {
+      throw manifest_error(
+          where + " logical_bytes must be a multiple of the dtype size");
+    }
+    binding.element_count = binding.logical_bytes / size;
+    return binding;
+  }
 
   AneProgramBinding binding;
   binding.tensor = require_non_empty_string(value, "tensor");
@@ -351,7 +388,7 @@ AneProgramBinding parse_binding(
     throw manifest_error(where + " element_count exceeds physical_elements");
   }
   if (binding.allocation_bytes < binding.logical_bytes ||
-      binding.allocation_bytes % kAneTileAlignment != 0) {
+      binding.allocation_bytes % tile_alignment != 0) {
     throw manifest_error(where + " allocation is smaller than logical data or unaligned");
   }
   if (binding.nchw[4] % binding.nchw[5] != 0 ||
@@ -373,6 +410,7 @@ AneProgramBinding parse_binding(
 std::vector<AneProgramBinding> parse_bindings(
     const nlohmann::json& program,
     const char* field,
+    uint64_t tile_alignment,
     size_t program_index,
     bool require_non_empty) {
   const auto& values = required_field(program, field);
@@ -384,8 +422,8 @@ std::vector<AneProgramBinding> parse_bindings(
   std::vector<AneProgramBinding> bindings;
   std::set<uint64_t> channels;
   for (size_t i = 0; i < values.size(); ++i) {
-    AneProgramBinding binding =
-        parse_binding(values[i], prefix + "[" + std::to_string(i) + "]");
+    AneProgramBinding binding = parse_binding(
+        values[i], prefix + "[" + std::to_string(i) + "]", tile_alignment);
     if (!channels.insert(binding.channel).second) {
       throw manifest_error(prefix + " has duplicate channel");
     }
@@ -394,7 +432,10 @@ std::vector<AneProgramBinding> parse_bindings(
   return bindings;
 }
 
-AneProgram parse_program(const nlohmann::json& value, size_t index) {
+AneProgram parse_program(
+    const nlohmann::json& value,
+    size_t index,
+    uint64_t tile_alignment) {
   std::string where = "programs[" + std::to_string(index) + "]";
   if (!value.is_object()) {
     throw manifest_error(where + " must be an object");
@@ -409,8 +450,9 @@ AneProgram parse_program(const nlohmann::json& value, size_t index) {
   program.encoder = require_non_empty_string(value, "encoder");
   program.task_descriptors = require_positive(value, "task_descriptors");
   program.scratch_bytes = require_unsigned(value, "scratch_bytes");
-  program.inputs = parse_bindings(value, "inputs", index, false);
-  program.outputs = parse_bindings(value, "outputs", index, true);
+  program.inputs = parse_bindings(value, "inputs", tile_alignment, index, false);
+  program.outputs =
+      parse_bindings(value, "outputs", tile_alignment, index, true);
   return program;
 }
 
@@ -628,10 +670,10 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
   }
   reject_unknown_fields(
       root,
-      {"manifest_version", "name", "graph_hash", "task_descriptors", "inputs",
-       "outputs", "logical_results", "state", "intermediates", "programs",
-       "dispatch_plan", "payloads", "compiler", "driver_abi_major",
-       "provenance", "release_asset"});
+      {"manifest_version", "tile_shift", "name", "graph_hash",
+       "task_descriptors", "inputs", "outputs", "logical_results", "state",
+       "intermediates", "programs", "dispatch_plan", "payloads", "compiler",
+       "driver_abi_major", "provenance", "release_asset"});
 
   AneManifest manifest;
   const auto& version = required_field(root, "manifest_version");
@@ -645,21 +687,35 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
         std::to_string(kAneManifestVersion) + ")");
   }
   manifest.manifest_version = kAneManifestVersion;
+  // Optional per-bundle tile-count unit: log2 of the byte unit the ANEC
+  // header's tiles[] counts are denominated in. Absent means shift 14, the
+  // H13 island unit, so every pre-existing manifest parses unchanged.
+  if (root.contains("tile_shift")) {
+    manifest.tile_shift = require_unsigned(root, "tile_shift");
+    if (manifest.tile_shift != kAneTileShiftDefault &&
+        manifest.tile_shift != kAneTileShiftWholeProgram) {
+      throw manifest_error(
+          "unsupported tile_shift " + std::to_string(manifest.tile_shift) +
+          " (expected " + std::to_string(kAneTileShiftDefault) + " or " +
+          std::to_string(kAneTileShiftWholeProgram) + ")");
+    }
+  }
+  const uint64_t tile_alignment = uint64_t{1} << manifest.tile_shift;
   manifest.name = require_non_empty_string(root, "name");
   manifest.graph_hash = require_hex(root, "graph_hash", 64, "a graph SHA-256 digest");
   manifest.task_descriptors = require_positive(root, "task_descriptors");
-  manifest.inputs = parse_tensor_list(root, "inputs", true);
-  manifest.outputs = parse_tensor_list(root, "outputs", true);
+  manifest.inputs = parse_tensor_list(root, "inputs", true, tile_alignment);
+  manifest.outputs = parse_tensor_list(root, "outputs", true, tile_alignment);
   manifest.logical_results = parse_logical_results(root);
-  manifest.state = parse_tensor_list(root, "state", false);
-  manifest.intermediates = parse_tensor_list(root, "intermediates", false);
+  manifest.state = parse_tensor_list(root, "state", false, tile_alignment);
+  manifest.intermediates = parse_tensor_list(root, "intermediates", false, tile_alignment);
 
   const auto& programs = required_field(root, "programs");
   if (!programs.is_array() || programs.empty()) {
     throw manifest_error("field 'programs' must be a non-empty array");
   }
   for (size_t i = 0; i < programs.size(); ++i) {
-    manifest.programs.push_back(parse_program(programs[i], i));
+    manifest.programs.push_back(parse_program(programs[i], i, tile_alignment));
   }
 
   const auto& dispatch = required_field(root, "dispatch_plan");

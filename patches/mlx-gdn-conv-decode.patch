@@ -1,0 +1,137 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -108,6 +108,17 @@
+     const std::optional<array>& mask = std::nullopt,
+     StreamOrDevice s = {});
+ 
++// GDN decode conv: the depthwise causal conv window (state ++ x) is read
++// from two buffers in one kernel and the shifted carry-out state is
++// written in-kernel, replacing the two Concatenate copies plus the
++// contiguous state view the composed path materializes. Decode (T == 1)
++// only; larger T falls back to the composed concatenate + conv1d.
++MLX_API std::vector<array> gdn_conv_update(
++    const array& state,
++    const array& x,
++    const array& weight,
++    StreamOrDevice s = {});
++
+ using TemplateArg = std::variant<int, bool, Dtype>;
+ using ScalarArg = std::variant<bool, int, float>;
+ 
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1441,6 +1441,42 @@
+   return result;
+ }
+ 
++std::vector<array> gdn_conv_update(
++    const array& state,
++    const array& x,
++    const array& weight,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  // Fallback composes the exact ops the model runs today: concatenate
++  // the carry-in state onto the row, conv1d over it, and keep the last
++  // K-1 rows as the carry-out state.
++  auto fallback = [s](std::vector<array> inputs) {
++    auto ci = concatenate({inputs[0], inputs[1]}, 1, s);
++    auto out = conv1d(ci, inputs[2], 1, 0, 1, inputs[2].shape(0), s);
++    int keep = inputs[2].shape(2) - 1;
++    int start_t = ci.shape(1) - keep;
++    auto ns = slice(
++        ci,
++        Shape{0, start_t, 0},
++        Shape{ci.shape(0), ci.shape(1), ci.shape(2)},
++        s);
++    return std::vector<array>{out, ns};
++  };
++  if (GdnConvUpdate::use_fallback(state, x, weight, s)) {
++    auto r = fallback({state, x, weight});
++      return r;
++  }
++  int B = x.shape(0);
++  int C = x.shape(2);
++  int K = weight.shape(1);
++  return array::make_arrays(
++      /* output shapes */ {{B, 1, C}, {B, K - 1, C}},
++      /* dtypes */ {bfloat16, bfloat16},
++      /* primitive */
++      std::make_shared<GdnConvUpdate>(s, fallback),
++      /* inputs */ std::vector<array>{state, x, weight});
++}
++
+ bool Quantize::is_equivalent(const Primitive& other) const {
+   const Quantize& p_other = static_cast<const Quantize&>(other);
+   return (
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -495,6 +495,40 @@
+   bool raw_gates_{false};
+ };
+ 
++class GdnConvUpdate : public Custom {
++ public:
++  GdnConvUpdate(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback)
++      : Custom(stream, std::move(fallback)) {}
++  // Backend-defined: the fused path never composes.
++  static bool use_fallback(Stream s);
++  // Decode-shaped depthwise causal conv (groups == C, stride 1, no
++  // padding, no dilation, bf16, MLX conv weight layout
++  // [C_out, K, C_in/groups]) with the state concatenation folded
++  // into the read. Everything else (prefill, other dtypes or shapes)
++  // composes the exact model ops via the fallback.
++  static bool use_fallback(
++      const array& state,
++      const array& x,
++      const array& weight,
++      Stream s) {
++    return x.ndim() != 3 || state.ndim() != 3 || weight.ndim() != 3 ||
++        state.dtype() != bfloat16 || x.dtype() != bfloat16 ||
++        weight.dtype() != bfloat16 || x.shape(1) != 1 ||
++        x.shape(0) != state.shape(0) || x.shape(2) != state.shape(2) ||
++        state.shape(1) != weight.shape(1) - 1 || weight.shape(2) != 1 ||
++        weight.shape(0) != x.shape(2);
++  }
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++  DEFINE_NAME(GdnConvUpdate)
++  DEFINE_INPUT_OUTPUT_SHAPE()
++};
+ class Quantize : public Custom {
+  public:
+   explicit Quantize(
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -501,6 +501,26 @@
+         )");
+ 
+   m.def(
++      "gdn_conv_update",
++      &mlx::core::fast::gdn_conv_update,
++      "state"_a,
++      "x"_a,
++      "weight"_a,
++      "stream"_a = nb::none(), // optional, defaults to None
++      R"(
++            GDN decode causal depthwise conv with the state concatenation
++            folded into the conv read and the shifted carry-out state
++            written in-kernel. Bit-exact to the composed
++            concatenate + conv1d path. Decode (T == 1) only; larger T
++            composes the exact eager ops.
++            Args:
++                state: Conv state [B, K-1, C]
++                x: Decode row [B, 1, C]
++                weight: Depthwise conv weight [C, K, 1]
++            Returns:
++                Tuple of (conv_out [B, 1, C], new_state [B, K-1, C])
++        )");
++  m.def(
+       "metal_kernel",
+       [](const std::string& name,
+          const std::vector<std::string>& input_names,

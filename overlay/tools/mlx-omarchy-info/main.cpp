@@ -545,12 +545,6 @@ void print_logical_results(
   }
 }
 
-uint64_t anec_channel_bytes(
-    const omarchy::ane::AneAnecHeader& header,
-    uint32_t channel) {
-  return uint64_t(header.tiles[channel]) * omarchy::ane::kAneTileAlignment;
-}
-
 void print_anec_nchw(
     const omarchy::ane::AneAnecHeader& header,
     uint32_t channel) {

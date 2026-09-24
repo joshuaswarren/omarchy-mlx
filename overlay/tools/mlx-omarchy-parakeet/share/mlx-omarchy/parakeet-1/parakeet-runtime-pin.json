@@ -13,10 +13,14 @@
       "island-select-8head": {
         "manifest.json": "121f100085927c8f7b8eb1ecfab37cca22b5461c59327c3f5c2eb1c106ebced8",
         "program-0.anec": "0879c6277cf3d89888735ea69ef96d29fb492d43eacfe42a0f154f8f0f91c8eb"
+      },
+      "parakeet-encoder-whole": {
+        "manifest.json": "08769793f8ee3299381f499bf90537d620e23635000a6dbc54b9b5c6a55a54ab",
+        "program-0.anec": "13c744231524d440b0a774155343df9ade0bbcbc37edc4b1ccf9698e580d5453"
       }
     },
     "libane": {
-      "libane-strict.so": "56b462346128b04139cb7c9397b06ca8d513c680c972d8914395ddd3aa978ba7"
+      "libane-strict.so": "d06222a86f3bff26aaf1cec1223ade32f27cad84b994dccb1af9cca965a7da8c"
     }
   },
   "e2e": {
@@ -349,16 +353,20 @@
       8135
     ],
     "transcript": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce........................................... \u042e\u043d \u042e",
-    "transcript_sha256": "db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790"
+    "transcript_sha256": "db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790",
+    "encoder_hidden_sha256_whole": "51830b6ffe992568c9fd19a3636373fd36939e14ff998c558fb85038acbd13b8",
+    "encoder_hidden_sha256_whole_basis": "sha256 of the float32 tensor bytes (C order) produced by the whole-program ANE encoder (all 13701 ops in the ANE, fp16); differs from encoder_hidden_sha256 (island hybrid, 1230 GPU ops) in f32 low bits only; bit-exact with the certified staged runs (868fa7f1e r1-r4, gates-20260922-r4/out-4 body sha); transcript/tokens/durations/frame_indices identical to the island pin"
   },
   "encoder_source": {
     "mil_sha256": "ac8e9526154ac8b8d4c08b83e44dbc1a2208d7ec33e42a7838d57b698b14f133"
   },
   "provenance": {
     "bundles": "mil-hwxc b61de468d1ca37b687d5fa371e489be16cd84ed1 recompiles; byte-identical to receipts/2026-09-14-encoder-split-plan/bundles",
-    "libane": "joshuaswarren/omarchy-ane 6fa243ac7241119a9eb229abbf8cb4dd8949f915 libane/ane.c built with LIBANE_CONFIG_STRICT_BIND",
+    "libane": "joshuaswarren/omarchy-ane df5c553f3f60509509257f8d4d3e6ca4057609f0 libane/ane.c built without LIBANE_CONFIG_STRICT_BIND (gcc -shared -fPIC -O2 -Wall; island bundles bind some surfaces positionally, so strict refusal must stay off; per-container tile-count unit via __ane_init_shift); byte-reproducible on jw16",
+    "whole_encoder": "shipped whole-program Parakeet encoder bundle (manifest v4, name parakeet-encoder-whole, operation whole-encoder, 13701 TDs): program-0.anec sha256 13c744231524d440b0a774155343df9ade0bbcbc37edc4b1ccf9698e580d5453 from hwx graph 020428fca545648f... via tools/hwxv2-to-anec; installed as a wheel asset under bundles/parakeet-encoder-whole and auto-discovered from the installed share root (MLX_OMARCHY_WHOLE_ENCODER_BUNDLE override still wins; MLX_OMARCHY_WHOLE_ENCODER=0 forces the islands)",
     "note": "runtime refuses to start when any shipped asset hash does not match",
-    "receipt": "receipts/2026-09-16-parakeet-e2e-both-hosts.md"
+    "receipt": "receipts/2026-09-22-encoder-whole-program.md",
+    "composed": "integrated-e2e composition: whole-program encoder (868fa7f1e/f45f5f5ea) + defer-commit knob (agent/parakeet-defer-commit eval.cpp, joint-batching excluded as measured-negative) + host-loop TDT already in base (env-gated) + soundfile audio decode (venv package)"
   },
   "schema": "mlx-omarchy.parakeet-runtime-pin.v1"
 }

@@ -35,6 +35,11 @@ layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_b
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { float    v[]; } s_in;
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
 layout(set = 0, binding = 7, std430) buffer         SOut  { float    v[]; } s_out;
+// Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
+// carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
+// dt_bias (bf16).
+layout(set = 0, binding = 8, std430) readonly buffer ALogBuf { uint16_t v[]; } alog_buf;
+layout(set = 0, binding = 9, std430) readonly buffer DtBuf   { uint16_t v[]; } dt_buf;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -92,8 +97,39 @@ void main() {
   }
   barrier();
 
-  float g = bf16_load(g_buf.v[params.shape[0] + head]);
-  float beta = bf16_load(b_buf.v[params.aux_offset + head]);
+  float g;
+  float beta;
+  if ((params.flags & 8u) != 0u) {
+    // Raw-gates prologue. Matches the composed decode chain's rounding:
+    // beta = sigmoid(b) in f32 then rounded to bf16; g =
+    // exp(-exp(A_log_f32) * softplus(a + dt_bias)) in f32 then rounded to
+    // bf16 (the same roundings the eager chain applies before the kernel
+    // widened the bf16 values exactly).
+    float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+    float beta_f = 1.0f / (1.0f + exp(-b_in));
+    beta = bf16_load(bf16_store(beta_f));
+    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+    float a_log = bf16_load(alog_buf.v[params.in_strides[0] + head]);
+    // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
+    float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
+    // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
+    // bf16) and softplus(x) to bf16; replicate those roundings exactly.
+    float x = bf16_load(bf16_store(a_in + dt));
+    // softplus = logaddexp(0, x): the eager chain lowers nn.softplus to
+    // LogAddExp, computed here with the elementwise kernel's exact
+    // formula max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected
+    // ratio form, log(u) * x / (u - 1)), then rounded to bf16.
+    float u = 1.0f + exp(-abs(x));
+    float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+    float sp = bf16_load(bf16_store(max(x, 0.0f) + l1p));
+    // The eager chain keeps g in f32 end to end (compute_g returns f32);
+    // exp(A_log) and the product stay f32, so no bf16 round here: the
+    // bf16 roundings the eager path applies are on x, sp, and beta.
+    g = exp(-(exp(a_log) * sp));
+  } else {
+    g = bf16_load(g_buf.v[params.shape[0] + head]);
+    beta = bf16_load(b_buf.v[params.aux_offset + head]);
+  }
   uint head_base = head * dv * dk;
   uint row_base = head_base + row * dk;
 

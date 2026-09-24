@@ -4,40 +4,29 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
-#ifdef X_BF16
-#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
-#endif
 
-// Prefill Q4/group-64 f16 matmul on the G13 8x8x8 fp32 subgroup
-// cooperative matrix. A 64-lane workgroup owns a TILE_ROWS x 32 output
-// tile; each subgroup owns half the rows. It stages 16 k values at a
-// time, dequantizes each 16x32 weight tile once into shared f32, and
-// reuses it across all TILE_ROWS rows. The ascending 8-wide coopmat
-// updates preserve the previous kernel's per-output accumulation order
-// and output ids.
-// dispatch gate requires cooperative_matrix_f32_8, subgroup size 32,
-// f16 output, transposed affine 4-bit/group-64, even x/output offsets
-// (the host stages an odd-offset x view into an aligned buffer instead
-// of rerouting to the tile kernel), enough shared memory, and
-// !MLX_OMARCHY_NO_COOPMAT.
+// Direct-global-load qmm prefill coopmat: whenever x can feed the
+// matrix unit exactly, the A (x) tiles are coopMatLoad'ed straight
+// from the x buffer and the x_s shared tile, its per-lane staging
+// stores/unpack and address arithmetic are deleted. The B (weight)
+// side keeps its shared staging in every build: the data is packed
+// 4-bit nibbles and cannot feed coopMatLoad, so w_s, the dequant
+// stores and the two per-step barriers remain. The output drain
+// reuses the staging scratch (idle past the k loop and large enough
+// for the four 8x8 blocks).
 //
-// TILE_ROWS is a build parameter. 32 (two 8-row blocks per subgroup) is
-// the shape the base M1 was tuned on and stays the default. 16 (one
-// block per subgroup) exists because the dispatch grid is purely
-// shape-derived, so a narrow n starves a wide part: the n=128 k/v
-// projections of Qwen2.5-0.5B dispatch 132 workgroups, 4.1 per core on
-// a 32-core part, and halving the rows to double the grid measures
-// 22.4% faster there. It is not a free win anywhere else - halving the
-// rows halves how many outputs share one staged weight tile - and it
-// measures 33% to 74% SLOWER from 8.2 workgroups per core upward, which
-// is why primitives.cpp gates the pick on the grid it is about to
-// dispatch. An 8-row, 32-lane variant was also built and measured: it
-// lost even at 4.1 per core (58% slower than 32 rows) and is not in the
-// tree. Numbers: receipts/2026-09-14-qmm-occupancy-tilem/.
-//
-// Both row counts keep one output's k chain identical, so they are
-// digest-identical, and TILE_ROWS = 32 compiles to byte-identical
-// SPIR-V to the pre-parameterization kernel.
+// X modes:
+// - default (f16 activations): coopMatLoad f16 straight from the x
+//   buffer; f16 A with f32 C is the exact-product HW form (f16*f16
+//   products are exact in f32) and the staged path only ever fed
+//   exactly-widened f16 values, so accumulation is unchanged.
+// - X_F32 (bf16 activations, widened by a cast pass into a fresh f32
+//   buffer): coopMatLoad f32 straight from that buffer; identical
+//   values to the staged path by construction (bf16 -> f32 widening
+//   is exact), identical f32 x f32 accumulation.
+// - X_BF16: bf16 x read as words cannot feed coopMatLoad (no bf16
+//   matrix operand, and bf16 -> f16 is lossy in exponent range), so
+//   this build keeps the shipped x_s staging bit for bit.
 
 #ifndef TILE_ROWS
 #define TILE_ROWS 32
@@ -51,10 +40,7 @@
 #error "TILE_ROWS must be 32 or 16"
 #endif
 
-// 8-row coopmat blocks in the tile, and packed x words per lane: the
-// 64-lane workgroup covers TILE_ROWS x 16 halves.
 #define ROW_BLOCKS (TILE_ROWS / 8u)
-#define X_LOADS (TILE_ROWS / 8u)
 
 const uint TILE_M = TILE_ROWS;
 const uint TILE_N = 32u;
@@ -64,15 +50,27 @@ const uint MAT = 8u;
 
 layout(local_size_x = 64) in;
 
+#ifdef X_BF16
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
   uint values[];
 } input_x;
+#elif defined(X_F32)
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  float values[];
+} input_x;
+#else
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  float16_t values[];
+} input_x;
+#endif
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
 } input_w;
-#ifdef X_BF16
+#if defined(X_BF16) || defined(X_F32)
 // bf16 models store scales and biases in bfloat16 (16-bit word layout,
-// widened exactly); the f16 models use float16_t storage.
+// widened exactly); the f16 models use float16_t storage. The X_F32
+// build serves the same bf16-hybrid route (x pre-widened by the host
+// cast pass), so it reads the bf16 scale layout too.
 layout(set = 0, binding = 2, std430) readonly buffer Scales {
   uint16_t values[];
 } scales;
@@ -97,12 +95,6 @@ layout(set = 0, binding = 4, std430) writeonly buffer Output {
 } output_data;
 #endif
 
-// bf16 x rides the same 16-bit-per-element word layout as the f16 path
-// (element 2i in the low half), so the word indexing and the even-offset
-// alignment rule are shared; only the widening differs. The drain packs
-// f32 back with the round-to-nearest-even bfloat16 store the elementwise
-// kernels use. The f16 variants are preprocessor-identical to the
-// shipped kernel: with neither define set, no new code is emitted.
 #ifdef X_BF16
 #define X_UNPACK(word)                                     \
   vec2(                                                    \
@@ -111,7 +103,7 @@ layout(set = 0, binding = 4, std430) writeonly buffer Output {
 #else
 #define X_UNPACK(word) unpackHalf2x16(word)
 #endif
-#ifdef X_BF16
+#if defined(X_BF16) || defined(X_F32)
 #define SCALE_LOAD(x) uintBitsToFloat(uint(x) << 16u)
 #else
 #define SCALE_LOAD(x) float(x)
@@ -153,11 +145,11 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-// 4 KiB shared at TILE_ROWS = 32, 3 KiB at 16: one TILE_ROWS x 16 x
-// tile and one 16x32 f32 weight tile. The drain reuses x_s as four 8x8
-// blocks, 256 floats, which is exactly the 16-row x tile and fits
-// inside the 32-row one.
+// One 16x32 f32 weight tile. The output drain uses the staging
+// scratch (w_s here; x_s in the X_BF16 build) as scratch.
+#ifdef X_BF16
 shared float x_s[TILE_M * STEP_K];
+#endif
 shared float w_s[STEP_K * TILE_N];
 
 void main() {
@@ -173,7 +165,6 @@ void main() {
   uint k_chunks = params.matrix_k / CHUNK_K;
   uint words_per_row = params.matrix_k / 8u;
   uint groups_per_row = params.matrix_k / 64u;
-  uint x_words_per_row = params.matrix_k / 2u;
   uint w_column_local = lid % 32u;
   uint w_part = lid / 32u;
 
@@ -181,7 +172,18 @@ void main() {
   uint w_slice = params.rhs_offset + b * w_batch_words;
   uint scale_slice = params.aux_offset + b * param_batch;
   uint bias_slice = params.aux_size + b * param_batch;
+#ifdef X_BF16
   uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
+  uint x_words_per_row = params.matrix_k / 2u;
+#elif defined(X_F32)
+  // The cast pass writes a fresh f32 buffer, so the offset is 0 in
+  // practice; the division stays for safety (lhs_offset counts
+  // 2-byte input elements, the f32 view is 4-byte).
+  uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
+#else
+  // x elements are f16 here, so the slice/row strides are elements.
+  uint x_slice = params.lhs_offset + b * x_batch_rows;
+#endif
   uint out_slice = params.output_offset +
       b * params.matrix_m * params.matrix_n;
   for (uint tile_row = gl_WorkGroupID.y; tile_row < m_tiles;
@@ -213,25 +215,6 @@ void main() {
         }
         for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
           uint k_base = chunk * CHUNK_K + step * STEP_K;
-          // X_LOADS half2 loads per lane cover the TILE_ROWS x 16 x tile.
-          uint x_words[X_LOADS];
-          for (uint j = 0u; j < X_LOADS; ++j) {
-            uint i = lid + 64u * j;
-            uint local_row = i / 8u;
-            uint row = row_base + local_row;
-            x_words[j] = row < params.matrix_m
-                ? input_x.values[
-                      x_slice + row * x_words_per_row + k_base / 2u +
-                      (i % 8u)]
-                : 0u;
-          }
-          for (uint j = 0u; j < X_LOADS; ++j) {
-            uint i = lid + 64u * j;
-            uint local_row = i / 8u;
-            vec2 pair = X_UNPACK(x_words[j]);
-            x_s[local_row * STEP_K + 2u * (i % 8u)] = pair.x;
-            x_s[local_row * STEP_K + 2u * (i % 8u) + 1u] = pair.y;
-          }
           // One packed word per lane covers the 16x32 weight tile.
           uint packed = column_ok
               ? input_w.values[w_row + k_base / 8u + w_part] : 0u;
@@ -250,18 +233,61 @@ void main() {
           w_s[w_base + 6u * TILE_N] =
               scale * float((packed >> 24u) & 0xFu) + bias;
           w_s[w_base + 7u * TILE_N] = scale * float(packed >> 28u) + bias;
+#ifdef X_BF16
+          // X_LOADS half2 loads per lane cover the TILE_ROWS x 16 x tile.
+          uint x_words[TILE_M / 8u];
+          for (uint j = 0u; j < TILE_M / 8u; ++j) {
+            uint i = lid + 64u * j;
+            uint local_row = i / 8u;
+            uint row = row_base + local_row;
+            x_words[j] = row < params.matrix_m
+                ? input_x.values[
+                      x_slice + row * x_words_per_row + k_base / 2u +
+                      (i % 8u)]
+                : 0u;
+          }
+          for (uint j = 0u; j < TILE_M / 8u; ++j) {
+            uint i = lid + 64u * j;
+            uint local_row = i / 8u;
+            vec2 pair = X_UNPACK(x_words[j]);
+            x_s[local_row * STEP_K + 2u * (i % 8u)] = pair.x;
+            x_s[local_row * STEP_K + 2u * (i % 8u) + 1u] = pair.y;
+          }
+#endif
           barrier();
 
           for (uint ks = 0u; ks < STEP_K / MAT; ++ks) {
+#ifdef X_BF16
             coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
                 mat_a[SUBGROUP_ROW_BLOCKS];
+#elif defined(X_F32)
+            coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+                mat_a[SUBGROUP_ROW_BLOCKS];
+#else
+            coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+                mat_a[SUBGROUP_ROW_BLOCKS];
+#endif
             coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
+#ifdef X_BF16
             for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
               coopMatLoad(
                   mat_a[rb], x_s,
                   (sub_rb + rb) * MAT * STEP_K + ks * MAT, STEP_K,
                   gl_CooperativeMatrixLayoutRowMajor);
             }
+#else
+            for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+              // Rows past matrix_m are never stored, but the load must
+              // stay in bounds: clamp to the last real row.
+              uint row = row_base + (sub_rb + rb) * MAT;
+              row = min(row, params.matrix_m - 1u);
+              coopMatLoad(
+                  mat_a[rb], input_x.values,
+                  x_slice + row * params.matrix_k + k_base + ks * MAT,
+                  params.matrix_k,
+                  gl_CooperativeMatrixLayoutRowMajor);
+            }
+#endif
             for (uint cb = 0u; cb < 4u; ++cb) {
               coopMatLoad(
                   mat_b[cb], w_s, ks * MAT * TILE_N + cb * MAT, TILE_N,
@@ -283,10 +309,17 @@ void main() {
       for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
         if (sub_rb == (rb & ~(SUBGROUP_ROW_BLOCKS - 1u))) {
           for (uint cb = 0u; cb < 4u; ++cb) {
+#ifdef X_BF16
             coopMatStore(
                 acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], x_s,
                 cb * MAT * MAT, MAT,
                 gl_CooperativeMatrixLayoutRowMajor);
+#else
+            coopMatStore(
+                acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], w_s,
+                cb * MAT * MAT, MAT,
+                gl_CooperativeMatrixLayoutRowMajor);
+#endif
           }
         }
         barrier();
@@ -295,9 +328,15 @@ void main() {
             uint r = 4u * w_part + pass;
             uint row = row_base + rb * MAT + r;
             if (row < params.matrix_m) {
+#ifdef X_BF16
               output_data.values[out_slice + row * params.matrix_n + column] =
                   OUT_STORE(x_s[(w_column_local / 8u) * MAT * MAT +
                                 r * MAT + (w_column_local % 8u)]);
+#else
+              output_data.values[out_slice + row * params.matrix_n + column] =
+                  OUT_STORE(w_s[(w_column_local / 8u) * MAT * MAT +
+                                r * MAT + (w_column_local % 8u)]);
+#endif
             }
           }
         }

@@ -301,10 +301,12 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_f16 shaders/qmm_vec.comp -DUSE_FP16=1 -
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1)
 omarchy_shader(sdpa_decode_native_f16 shaders/sdpa_decode_native.comp)
 omarchy_shader(sdpa_decode_native_bf16 shaders/sdpa_decode_native.comp -DBF16_IO=1)
+omarchy_shader(sdpa_decode_native_bf16_hd256 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=256)
 omarchy_shader(sdpa_decode_native_p1_f16 shaders/sdpa_decode_native_p1.comp)
 omarchy_shader(sdpa_decode_native_p2_f16 shaders/sdpa_decode_native_p2.comp)
 omarchy_shader(gated_delta_decode_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_prefill_bf16 shaders/gated_delta_prefill.comp)
+omarchy_shader(gated_delta_prefill_coopmat_bf16 shaders/gated_delta_prefill_coopmat.comp)
 # PrefillQmmTile: m-tiled quantized matmul for prefill (matrix_m > 1);
 # one workgroup dequantizes each 16 x 16 weight block into shared f32
 # once and applies it to a 16-row tile of x, amortizing the inline
@@ -332,6 +334,11 @@ omarchy_shader(qmm_coopmat_m16_f16 shaders/qmm_coopmat.comp -DTILE_ROWS=16)
 # accumulation order as the f16 kernels.
 omarchy_shader(qmm_coopmat_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1)
 omarchy_shader(qmm_coopmat_m16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DTILE_ROWS=16)
+# Direct-global-load A twins: the host widens bf16 x to f32 once (exact),
+# so the shader coopMatLoads A tiles straight from the f32 buffer and the
+# x_s staging disappears; same fp32 coopmat k chain, RNE bfloat16 drain.
+omarchy_shader(qmm_coopmat_x32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1)
+omarchy_shader(qmm_coopmat_m16_x32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
 omarchy_shader(matmul_fma_bf16 shaders/matmul_fma_bf16.comp)
@@ -498,6 +505,8 @@ omarchy_shader(linalg_svd_finalize_f32 shaders/linalg_svd_finalize.comp)
 omarchy_shader(fast_rms_norm_f32 shaders/fast_norm.comp)
 omarchy_shader(fast_rms_norm_f16 shaders/fast_norm.comp -DUSE_FP16=1)
 omarchy_shader(fast_rms_norm_bf16 shaders/fast_norm.comp -DUSE_BF16=1)
+omarchy_shader(fast_norm_gated_bf16 shaders/fast_norm_gated.comp -DUSE_BF16=1)
+omarchy_shader(gdn_conv_decode_bf16 shaders/gdn_conv_decode.comp -DUSE_BF16=1)
 omarchy_shader(fast_layer_norm_f32 shaders/fast_norm.comp -DLAYER_NORM=1)
 omarchy_shader(fast_layer_norm_f16 shaders/fast_norm.comp -DUSE_FP16=1 -DLAYER_NORM=1)
 omarchy_shader(fast_layer_norm_bf16 shaders/fast_norm.comp -DUSE_BF16=1 -DLAYER_NORM=1)

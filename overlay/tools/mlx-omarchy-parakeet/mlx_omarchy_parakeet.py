@@ -583,12 +583,22 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     native_tokens = list(expected["token_ids"])
     transcript_sha = hashlib.sha256(transcript.encode()).hexdigest()
 
+    # The whole-program ANE pipeline (all 13701 ops in the ANE, fp16) and the
+    # island hybrid (1230 ops on the GPU, fp32) differ in the f32 tensor's
+    # low bits; transcript, tokens, durations and frame indices are
+    # identical. The pin carries one hidden sha per encoder path.
+    whole_path = island.whole_bundle is not None
+    whole_sha = expected.get("encoder_hidden_sha256_whole")
+    expected_hidden_sha = (whole_sha if (whole_path and whole_sha)
+                           else expected["encoder_hidden_sha256"])
+
     check("mel_sha256", _npy_sha(mel_host) == expected["mel_sha256"],
           {"expected": expected["mel_sha256"], "actual": _npy_sha(mel_host)})
     check("encoder_hidden_sha256",
-          _npy_sha(hidden_host) == expected["encoder_hidden_sha256"],
-          {"expected": expected["encoder_hidden_sha256"],
-           "actual": _npy_sha(hidden_host)})
+          _npy_sha(hidden_host) == expected_hidden_sha,
+          {"expected": expected_hidden_sha,
+           "actual": _npy_sha(hidden_host),
+           "encoder_path": "whole-encoder" if whole_path else "islands"})
     check("emissions", len(actual_tokens) == expected["emissions"],
           {"expected": expected["emissions"], "actual": len(actual_tokens)})
     check("token_ids", actual_tokens == native_tokens,

@@ -13,7 +13,13 @@
 
 namespace mlx::core::omarchy::ane {
 
-constexpr uint64_t kAneTileAlignment = 0x4000;
+// Tile-count unit, per bundle. ANEC headers denominate their tiles[] counts
+// in 1<<tile_shift byte units: H13 island containers use 0x4000-B units
+// (shift 14, the default), whole-program containers from the hwxv2
+// converter use 512-B units (shift 9).
+constexpr uint64_t kAneTileShiftDefault = 14;
+constexpr uint64_t kAneTileShiftWholeProgram = 9;
+constexpr uint64_t kAneTileAlignment = 0x4000; // 1 << kAneTileShiftDefault
 constexpr int kAneManifestVersion = 4;
 constexpr uint64_t kAneDriverAbiMajor = 1;
 
@@ -38,6 +44,10 @@ struct AneLogicalResult {
 struct AneProgramBinding {
   std::string tensor;
   uint64_t channel{0};
+  // Raw staging: selector-addressed surface; staged bytes move to and from
+  // the channel verbatim (no dense<->tile placement). Whole-program
+  // containers only; island containers never set it.
+  bool raw{false};
   std::string dtype;
   std::vector<uint64_t> shape;
   std::array<uint64_t, 6> nchw{};
@@ -84,6 +94,7 @@ struct AneReleaseAsset {
 
 struct AneManifest {
   int manifest_version{0};
+  uint64_t tile_shift{kAneTileShiftDefault};
   std::string name;
   std::string graph_hash;
   uint64_t task_descriptors{0};

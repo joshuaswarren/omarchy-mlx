@@ -691,6 +691,66 @@ RESIDENT_BUNDLES = (
     "island-pv",
 )
 
+# The whole-program encoder: Apple's single-program Parakeet encoder
+# container (hwxv2 converter, 512-B tile units) executed in ONE submit.
+# programs[0].operation == "whole-encoder" in its manifest marks it. When a
+# whole-program bundle is discoverable (explicit MLX_OMARCHY_WHOLE_ENCODER_BUNDLE
+# directory, the bundles share, or a compiled-cache entry) the encoder runner
+# sends the whole graph in one ANE submit; otherwise it falls back to the
+# island path unchanged. MLX_OMARCHY_WHOLE_ENCODER=0 forces the islands.
+WHOLE_ENCODER_OP = "whole-encoder"
+
+
+def _manifest_operation(manifest_path: Path) -> str | None:
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    programs = manifest.get("programs") if isinstance(manifest, dict) else None
+    if not isinstance(programs, list) or not programs:
+        return None
+    op = programs[0].get("operation") if isinstance(programs[0], dict) else None
+    return op if isinstance(op, str) else None
+
+
+def _discover_whole_bundle() -> Path | None:
+    """Locate the whole-program encoder bundle, cheapest source first.
+
+    The worker re-verifies every payload digest against its manifest on
+    every open, so discovery only names a directory; integrity stays with
+    the loader and the compiled cache's stored digests.
+    """
+    override = os.environ.get("MLX_OMARCHY_WHOLE_ENCODER_BUNDLE", "")
+    if override:
+        path = Path(override)
+        if _manifest_operation(path / "manifest.json") == WHOLE_ENCODER_OP:
+            return path
+        raise EncoderRunError(
+            f"MLX_OMARCHY_WHOLE_ENCODER_BUNDLE {override} is not a "
+            f"whole-encoder bundle directory"
+        )
+    roots = [
+        Path(__file__).resolve().parents[2] / "mlx-omarchy-parakeet" / "share" /
+        "mlx-omarchy" / "parakeet-1" / "bundles",
+        # installed wheel layout: site-packages/mlx/coreml/vulkan_encoder.py
+        # -> site-packages/mlx/share/mlx-omarchy/parakeet-1/bundles
+        Path(__file__).resolve().parents[1] / "share" / "mlx-omarchy" /
+        "parakeet-1" / "bundles",
+    ]
+    try:
+        from coreml.compiled_cache import default_cache_root
+
+        roots.append(default_cache_root())
+    except Exception:
+        pass
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for manifest_path in sorted(root.rglob("manifest.json")):
+            if _manifest_operation(manifest_path) == WHOLE_ENCODER_OP:
+                return manifest_path.parent
+    return None
+
 
 class AneIsland:
     """One bounded submit to the physical ANE through mlx-omarchy-ane-worker.
@@ -748,6 +808,13 @@ class AneIsland:
         )
         self.resident_bundles = set(RESIDENT_BUNDLES)
         self._session = None
+        # Whole-program encoder bundle, when discoverable. Kept as a
+        # resolved directory so the launch path can pass it directly; the
+        # resident session registers it by manifest name.
+        self.whole_bundle: Path | None = None
+        if os.environ.get("MLX_OMARCHY_WHOLE_ENCODER", "1").strip().lower() \
+                not in ("", "0", "off", "false", "no"):
+            self.whole_bundle = _discover_whole_bundle()
 
     def close(self) -> None:
         """Release the resident session; a no-op on the launch path."""
@@ -779,6 +846,11 @@ class AneIsland:
             scratch=Path(self.scratch),
             deadline_ms=self.deadline_ms,
         )
+        if self.whole_bundle is not None:
+            manifest = json.loads(
+                (self.whole_bundle / "manifest.json").read_text()
+            )
+            session.bundles[manifest["name"]] = Path(self.whole_bundle)
         session.start()
         session.begin_batch(self._batch_deadline_ms)
         self.batch_open_ns = time.monotonic_ns() - started
@@ -852,14 +924,26 @@ class AneIsland:
         """inputs: name -> mx array. outputs: name -> (shape, dtype name)."""
         if self._mode == "resident-batch":
             return self._submit_resident(bundle, tag, inputs, outputs)
-        return self._submit_launch(bundle, tag, inputs, outputs)
+        return self._submit_launch(self.bundles / bundle, tag, inputs, outputs)
 
-    def _submit_launch(self, bundle: str, tag: str, inputs: dict, outputs: dict) -> dict:
+    def submit_whole(self, tag: str, inputs: dict, outputs: dict) -> dict:
+        """One whole-program submit.
+
+        Resident mode rides the open batch under the bundle's manifest
+        name; launch mode passes the resolved bundle directory directly.
+        """
+        manifest = json.loads((self.whole_bundle / "manifest.json").read_text())
+        if self._mode == "resident-batch":
+            return self._submit_resident(manifest["name"], tag, inputs, outputs)
+        return self._submit_launch(Path(self.whole_bundle), tag, inputs, outputs)
+
+    def _submit_launch(self, bundle, tag: str, inputs: dict, outputs: dict) -> dict:
+        bundle = Path(bundle)
         run_dir = self.scratch / tag
         run_dir.mkdir(parents=True, exist_ok=True)
         argv = [
             str(self.worker),
-            "--bundle", str(self.bundles / bundle),
+            "--bundle", str(bundle),
             "--libane", str(self.libane),
             "--deadline-ms", str(self.deadline_ms),
             "--iterations", "1",
@@ -939,7 +1023,24 @@ class EncoderRunner:
     def __init__(self, mil_path: Path, model_root: Path, island: AneIsland | None,
                  placed: frozenset[str] = frozenset(
                      os.environ.get("MLX_OMARCHY_PLACED", "AC"))):
-        self.text = mil_path.read_text()
+        # Whole-program selection happens before any MIL machinery: when a
+        # whole-encoder bundle is discoverable the MIL text is never parsed
+        # and the entire graph is one ANE submit. Missing bundle -> island
+        # fallback below, unchanged.
+        self.whole_manifest: dict | None = None
+        if island is not None and island.whole_bundle is not None:
+            self.whole_manifest = json.loads(
+                (island.whole_bundle / "manifest.json").read_text()
+            )
+        if self.whole_manifest is None:
+            self.text = mil_path.read_text()
+        else:
+            self.text = ""
+        self._init_island(mil_path, model_root, island, placed)
+
+    def _init_island(self, mil_path: Path, model_root: Path,
+                     island: AneIsland | None,
+                     placed: frozenset[str]) -> None:
         self.blobs = Blobs(model_root)
         self.island = island
         self.placed = placed if island is not None else frozenset()
@@ -980,6 +1081,12 @@ class EncoderRunner:
         self._index_islands()
         self._index_fusions()
         self._last_use()
+        if self.whole_manifest is not None:
+            self.placed = frozenset("W")
+            self.ane_ops = sum(
+                program.get("task_descriptors", 0)
+                for program in self.whole_manifest["programs"]
+            )
 
     # ---------------------------------------------------------------- parsing
 
@@ -1886,7 +1993,58 @@ class EncoderRunner:
 
     # ------------------------------------------------------------------- run
 
+    # Whole-program surface contract (field-level, from the island-container
+    # diff in receipts/2026-09-22-encoder-direct-exec): the stream reads the
+    # attention mask from source channel 6 and the dense input features from
+    # channel 7, and writes encoder_hidden to destination channel 4 and the
+    # output mask to channel 5. The manifest's binding order is the stream's
+    # staging order, so positions 0/1 are mask/features in and
+    # hidden/mask out.
+    WHOLE_INPUTS = ("attention_mask", "input_features")
+    WHOLE_OUTPUTS = ("encoder_hidden", "output_mask")
+    WHOLE_HIDDEN_SHAPE = (1, 375, 640)
+    WHOLE_MASK_SHAPE = (1, 375)
+
+    def _run_whole(self, inputs: dict, wanted: set[str]) -> dict:
+        import numpy as np
+
+        started = time.monotonic_ns()
+        features = np.asarray(inputs["input_features"], dtype=np.float32)
+        mask = np.asarray(inputs["attention_mask"])
+        features = np.ascontiguousarray(features.reshape(3000, 128)).astype(
+            np.float16
+        )
+        mask = np.ascontiguousarray(mask.reshape(-1)).astype(np.float16)
+        payload = {
+            "attention_mask": mask.tobytes(),
+            "input_features": features.tobytes(),
+        }
+        outputs = {
+            "encoder_hidden": (self.WHOLE_HIDDEN_SHAPE, "fp16"),
+            "output_mask": (self.WHOLE_MASK_SHAPE, "fp16"),
+        }
+        results = self.island.submit_whole("whole-encoder", payload, outputs)
+        self.executed += 1
+        hidden = np.asarray(results["encoder_hidden"], dtype=np.float16)
+        hidden = hidden.astype(np.float32).reshape(self.WHOLE_HIDDEN_SHAPE)
+        keep = {}
+        if "encoder_hidden" in wanted:
+            keep["encoder_hidden"] = mx.array(hidden)
+        if "encoder_mask" in wanted:
+            frames = np.asarray(results["output_mask"], dtype=np.float16)
+            keep["encoder_mask"] = mx.array(
+                (frames > 0.5).astype(np.int32).reshape(self.WHOLE_MASK_SHAPE)
+            )
+        missing = wanted - set(keep)
+        if missing:
+            raise EncoderRunError(
+                f"whole-encoder submit did not produce {sorted(missing)}"
+            )
+        return keep
+
     def run(self, inputs: dict, wanted: set[str], stop_after: str) -> dict:
+        if self.whole_manifest is not None:
+            return self._run_whole(inputs, wanted)
         if CONST_CACHE_ENABLED and self.const_values:
             # Warm pass: every const is device-resident in the cache; the
             # restore is a dict insert (buffer re-reference), never an

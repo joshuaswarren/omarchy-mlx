@@ -29,6 +29,10 @@ namespace {
 
 struct LibaneApi {
   struct ane_nn* (*init)(const char* path, int dev_id);
+  // Tile-shift-aware load (omarchy-ane agent/encoder-whole-program and
+  // later): whole-program containers denominate tiles[] in 512-B units.
+  // Optional: absent, every load uses the library's default shift.
+  struct ane_nn* (*init_shift)(const char* path, int dev_id, uint32_t shift);
   void (*free)(struct ane_nn* nn);
   int (*exec)(struct ane_nn* nn);
   uint64_t (*src_size)(struct ane_nn* nn, uint32_t idx);
@@ -44,6 +48,8 @@ LibaneApi load_api(void* handle) {
   LibaneApi api{};
   if (!handle) return api;
   api.init = reinterpret_cast<decltype(api.init)>(dlsym(handle, "__ane_init"));
+  api.init_shift = reinterpret_cast<decltype(api.init_shift)>(
+      dlsym(handle, "__ane_init_shift"));
   api.free = reinterpret_cast<decltype(api.free)>(dlsym(handle, "__ane_free"));
   api.exec = reinterpret_cast<decltype(api.exec)>(dlsym(handle, "ane_exec"));
   api.src_size = reinterpret_cast<decltype(api.src_size)>(
@@ -89,7 +95,9 @@ class LibaneDevice : public AneDevice {
     if (networks_.count(program.manifest_index)) {
       throw AneDeviceError("program already loaded");
     }
-    struct ane_nn* nn = api_.init(program.anec.c_str(), 0);
+    struct ane_nn* nn = api_.init_shift
+        ? api_.init_shift(program.anec.c_str(), 0, program.tile_shift)
+        : api_.init(program.anec.c_str(), 0);
     if (!nn) {
       throw AneDeviceError(
           "ane_init failed for " + program.anec.string());
@@ -108,6 +116,14 @@ class LibaneDevice : public AneDevice {
     // anec's inputs; the worker passes the manifest binding whose
     // channel order matches (ane.h: ane_send(nn, input, 0), (nn, input, 1)).
     (void)channel;
+    if (binding.raw) {
+      // Selector-addressed surface: staged bytes go in verbatim, zero
+      // padding beyond them, exactly like libane's ane_send.
+      std::vector<uint8_t> tile(binding.allocation_bytes, 0);
+      std::memcpy(tile.data(), data, size);
+      api_.send(nn, tile.data(), channel);
+      return;
+    }
     std::vector<uint8_t> tile(binding.allocation_bytes, 0);
     ane_pack_rows(
         binding, data, tile.data(), binding.logical_bytes / ane_element_size(binding));
@@ -130,6 +146,12 @@ class LibaneDevice : public AneDevice {
       size_t size) override {
     struct ane_nn* nn = network(manifest_index, "read");
     (void)channel;
+    if (binding.raw) {
+      std::vector<uint8_t> tile(binding.allocation_bytes, 0);
+      api_.read(nn, tile.data(), channel);
+      std::memcpy(out, tile.data(), size);
+      return;
+    }
     std::vector<uint8_t> tile(binding.allocation_bytes, 0);
     api_.read(nn, tile.data(), channel);
     ane_unpack_rows(

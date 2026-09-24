@@ -1,0 +1,166 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused RMSNorm epilogue kernels for the GDN decode chain (bf16 storage).
+// Mode 0 (params.operation == 0): RMSNorm + SwiGLU gate —
+//     y = bf16(x * rsqrt(mean(x^2) + eps) * w)      (exactly fast_norm.comp)
+//     out = bf16(silu_f32(bf16_to_f32(z)) * bf16_to_f32(y))
+//   which reproduces, bit for bit, the composed dispatch sequence
+//     FastRmsNormBF16 -> CastBF16F32(z) -> CastBF16F32(y)
+//       -> FusedChainF32(sigmoid, mul, mul) -> CastF32BF16
+//   used by mlx-lm Qwen3NextRMSNormGated + _precise_swiglu. Every
+//   intermediate the composed path rounds to bf16 is rounded here too;
+//   the f32 widens are exact, so the only float32 arithmetic order that
+//   matters (row reduction, value*norm*weight, sigmoid then two muls)
+//   is copied verbatim from the kernels it replaces.
+//
+// Mode 1 (params.operation == 1): RMSNorm + scalar multiply —
+//     out = bf16(bf16_to_f32(bf16(x * norm * w)) * bf16_to_f32(bf16(beta)))
+//   reproducing FastRmsNormBF16 -> ElementwiseBF16(mul) with the
+//   bf16-rounded scalar the promote cast materializes.
+//
+// Row geometry and the float32 reduction order are identical to
+// fast_norm.comp: one 256-thread workgroup per row, shared-memory tree
+// reduction, grid-stride row loop. eps arrives in params.alpha, the
+// mode-1 scalar in params.beta.
+
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#define WIDEN(x) float(x)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+// Exact bf16 -> float32 widening of a stored value.
+#define WIDEN(x) (uintBitsToFloat(uint(x) << 16u))
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#define WIDEN(x) float(x)
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  STORAGE_TYPE values[];
+} input_data;
+layout(set = 0, binding = 1, std430) readonly buffer Weight {
+  STORAGE_TYPE values[];
+} weight_data;
+layout(set = 0, binding = 2, std430) readonly buffer Gate {
+  STORAGE_TYPE values[];
+} gate_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+} params;
+
+shared float block_values[256];
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint row_length = params.reduce_size;
+  float eps = params.alpha;
+  uint threads = 256u;
+
+  // Mode-1 scalar: round the f32 scale to the storage dtype exactly as
+  // the composed promote cast does, then widen.
+  float scale = 0.0;
+  if (params.operation == 1u) {
+#ifdef USE_BF16
+    scale = WIDEN(bf16_store(params.beta));
+#else
+    scale = params.beta;
+#endif
+  }
+
+  for (uint row = gl_WorkGroupID.x; row < params.output_size;
+       row += gl_NumWorkGroups.x) {
+    uint start = params.lhs_offset + row * row_length;
+
+    float local_sq = 0.0;
+    for (uint index = thread; index < row_length; index += threads) {
+      float value = LOAD_VALUE(input_data.values[start + index]);
+      local_sq += value * value;
+    }
+    block_values[thread] = local_sq;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (thread < stride) {
+        block_values[thread] += block_values[thread + stride];
+      }
+      barrier();
+    }
+    float mean_square = block_values[0] / float(row_length);
+    barrier();
+    float norm = inversesqrt(mean_square + eps);
+
+    for (uint index = thread; index < row_length; index += threads) {
+      float value = LOAD_VALUE(input_data.values[start + index]);
+      float weight =
+          (params.lhs_size == 1u)
+              ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+              : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+      float result = value * norm * weight;
+      // The normed value the composed path stores and its consumers
+      // widen: round once to the storage dtype, then widen exactly.
+      float normed = WIDEN(STORE_VALUE(result));
+      float out_value;
+      if (params.operation == 0u) {
+        uint gate_index = params.aux_offset + row * row_length + index;
+        float gate = WIDEN(gate_data.values[gate_index]);
+        // silu(gate) then silu * normed, left-associated exactly like
+        // the composed sigmoid -> mul -> mul chain (f32 muls commute
+        // bitwise, so operand order inside each mul is free).
+        // The composed chain is bf16-typed and the interpreter rounds
+        // every node output to the storage dtype (swiglu.comp semantics,
+        // verified against the model gate): round sigmoid and the silu
+        // product to bf16 before the final multiply.
+        float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+        float sig_b = WIDEN(STORE_VALUE(sigmoid_value));
+        float silu = WIDEN(STORE_VALUE(gate * sig_b));
+        out_value = silu * normed;
+      } else {
+        out_value = normed * scale;
+      }
+      output_data.values[params.output_offset + row * row_length + index] =
+          STORE_VALUE(out_value);
+    }
+    barrier();
+  }
+}

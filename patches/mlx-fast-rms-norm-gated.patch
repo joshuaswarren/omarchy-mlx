@@ -1,0 +1,319 @@
+diff -r base/mlx/fast.cpp after/mlx/fast.cpp
+--- a/mlx/fast.cpp	2026-09-23 11:42:38.546731558 -0500
++++ b/mlx/fast.cpp	2026-09-23 11:42:07.916033689 -0500
+@@ -120,6 +120,129 @@
+   return fallback({x, passed_weight})[0];
+ }
+ 
++array rms_norm_gated(
++    const array& x,
++    const array& gate,
++    const array& weight,
++    float eps,
++    StreamOrDevice s_ /* = {} */) {
++  if (x.ndim() == 0) {
++    std::ostringstream msg;
++    msg << "[rms_norm_gated] Input must have at least 1 dimension but got "
++           "input with 0 dimensions.";
++    throw std::invalid_argument(msg.str());
++  }
++  if (gate.shape() != x.shape()) {
++    std::ostringstream msg;
++    msg << "[rms_norm_gated] Gate must have the same shape as x; got gate "
++        << gate.shape() << " for x " << x.shape() << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (weight.ndim() != 1) {
++    std::ostringstream msg;
++    msg << "[rms_norm_gated] weight must have 1 dimension but has "
++        << weight.ndim() << " dimensions.";
++    throw std::invalid_argument(msg.str());
++  }
++  if (!(weight.size() == 1 || weight.size() == x.shape(-1))) {
++    std::ostringstream msg;
++    msg << "[rms_norm_gated] weight must have one element or the same size "
++           "as the last dimension of x but has "
++        << weight.size() << " elements.";
++    throw std::invalid_argument(msg.str());
++  }
++
++  auto out_type = result_type(x, weight);
++  if (!issubdtype(out_type, floating)) {
++    std::ostringstream msg;
++    msg << "[rms_norm_gated] Received unsupported type " << out_type << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (!issubdtype(gate.dtype(), floating)) {
++    std::ostringstream msg;
++    msg << "[rms_norm_gated] Received unsupported gate type "
++        << gate.dtype() << ".";
++    throw std::invalid_argument(msg.str());
++  }
++
++  auto s = to_stream(s_);
++  // Bit-exact to mlx-lm's Qwen3NextRMSNormGated: rms_norm then
++  // silu(gate_f32) * normed_f32, rounded once to the input dtype.
++  auto fallback = [eps, out_type, s](const std::vector<array>& inputs) {
++    auto y = rms_norm(inputs[0], inputs[2], eps, s);
++    auto g = astype(inputs[1], float32, s);
++    auto silu = multiply(g, sigmoid(g, s), s);
++    auto out = multiply(astype(y, float32, s), silu, s);
++    return std::vector<array>{astype(out, out_type, s)};
++  };
++
++  if (!RMSNormGated::use_fallback(s)) {
++    return array(
++        x.shape(),
++        out_type,
++        std::make_shared<RMSNormGated>(s, fallback, eps),
++        {astype(x, out_type, s),
++         astype(gate, out_type, s),
++         astype(weight, out_type, s)});
++  }
++  return fallback({x, gate, weight})[0];
++}
++
++array rms_norm_scaled(
++    const array& x,
++    const std::optional<array>& weight,
++    float scale,
++    float eps,
++    StreamOrDevice s_ /* = {} */) {
++  if (x.ndim() == 0) {
++    std::ostringstream msg;
++    msg << "[rms_norm_scaled] Input must have at least 1 dimension but got "
++           "input with 0 dimensions.";
++    throw std::invalid_argument(msg.str());
++  }
++  if (weight.has_value()) {
++    if ((*weight).ndim() != 1) {
++      std::ostringstream msg;
++      msg << "[rms_norm_scaled] weight must have 1 dimension but has "
++          << (*weight).ndim() << " dimensions.";
++      throw std::invalid_argument(msg.str());
++    }
++    if (!((*weight).size() == 1 || (*weight).size() == x.shape(-1))) {
++      std::ostringstream msg;
++      msg << "[rms_norm_scaled] weight must have one element or the same "
++             "size as the last dimension of x but has "
++          << (*weight).size() << " elements.";
++      throw std::invalid_argument(msg.str());
++    }
++  }
++
++  auto out_type = (weight.has_value()) ? result_type(x, (*weight)) : x.dtype();
++  if (!issubdtype(out_type, floating)) {
++    std::ostringstream msg;
++    msg << "[rms_norm_scaled] Received unsupported type " << out_type << ".";
++    throw std::invalid_argument(msg.str());
++  }
++
++  auto s = to_stream(s_);
++  // Bit-exact to `scale * mx.fast.rms_norm(x, weight, eps)`: the scalar
++  // wraps as float32 and the multiply promotes exactly like the graph.
++  auto fallback = [scale, eps, out_type, s](const std::vector<array>& inputs) {
++    auto y = rms_norm(inputs[0], inputs[1], eps, s);
++    return std::vector<array>{multiply(array(scale, float32), y, s)};
++  };
++
++  auto passed_weight =
++      (weight.has_value()) ? astype(*weight, out_type, s) : array(1, out_type);
++  if (!RMSNormScaled::use_fallback(s)) {
++    return array(
++        x.shape(),
++        out_type,
++        std::make_shared<RMSNormScaled>(s, fallback, eps, scale),
++        {astype(x, out_type, s), passed_weight});
++  }
++  return fallback({x, passed_weight})[0];
++}
++
+ std::vector<array> RMSNorm::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
+@@ -182,6 +305,16 @@
+   return eps_ == a_other.eps_;
+ }
+ 
++bool RMSNormGated::is_equivalent(const Primitive& other) const {
++  const RMSNormGated& a_other = static_cast<const RMSNormGated&>(other);
++  return eps_ == a_other.eps_;
++}
++
++bool RMSNormScaled::is_equivalent(const Primitive& other) const {
++  const RMSNormScaled& a_other = static_cast<const RMSNormScaled&>(other);
++  return eps_ == a_other.eps_ && scale_ == a_other.scale_;
++}
++
+ bool RMSNormVJP::is_equivalent(const Primitive& other) const {
+   const RMSNormVJP& a_other = static_cast<const RMSNormVJP&>(other);
+   return eps_ == a_other.eps_;
+diff -r base/mlx/fast.h after/mlx/fast.h
+--- a/mlx/fast.h	2026-09-23 11:42:38.546731558 -0500
++++ b/mlx/fast.h	2026-09-23 11:41:22.675479925 -0500
+@@ -17,6 +17,28 @@
+     float eps,
+     StreamOrDevice s = {});
+ 
++// Fused RMSNorm + SwiGLU gate for the GDN decode chain: rms_norm(x,
++// weight, eps) followed by silu(gate_f32) * y_f32, rounded once to the
++// input dtype. The gate must have the same shape as x. The fused
++// dispatch and the composed fallback are bit-exact to each other.
++MLX_API array rms_norm_gated(
++    const array& x,
++    const array& gate,
++    const array& weight,
++    float eps,
++    StreamOrDevice s = {});
++
++// Fused RMSNorm + scalar multiply: rms_norm(x, weight, eps) * scale with
++// the scalar rounded to the storage dtype exactly like the equivalent
++// graph's promote cast. The scale rides the primitive state, so the
++// fused dispatch binds no scalar buffer.
++MLX_API array rms_norm_scaled(
++    const array& x,
++    const std::optional<array>& weight,
++    float scale,
++    float eps,
++    StreamOrDevice s = {});
++
+ MLX_API array layer_norm(
+     const array& x,
+     const std::optional<array>& weight,
+diff -r base/mlx/fast_primitives.h after/mlx/fast_primitives.h
+--- a/mlx/fast_primitives.h	2026-09-23 11:42:38.547731549 -0500
++++ b/mlx/fast_primitives.h	2026-09-23 11:41:22.675479925 -0500
+@@ -72,6 +72,66 @@
+   float eps_;
+ };
+ 
++class RMSNormGated : public Custom {
++ public:
++  RMSNormGated(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      float eps)
++      : Custom(stream, std::move(fallback)), eps_(eps) {}
++
++  static bool use_fallback(Stream stream);
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(RMSNormGated)
++  bool is_equivalent(const Primitive& other) const override;
++  DEFINE_INPUT_OUTPUT_SHAPE()
++
++  auto state() const {
++    return std::make_pair(nullptr, eps_);
++  }
++
++ private:
++  float eps_;
++};
++
++class RMSNormScaled : public Custom {
++ public:
++  RMSNormScaled(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      float eps,
++      float scale)
++      : Custom(stream, std::move(fallback)), eps_(eps), scale_(scale) {}
++
++  static bool use_fallback(Stream stream);
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(RMSNormScaled)
++  bool is_equivalent(const Primitive& other) const override;
++  DEFINE_INPUT_OUTPUT_SHAPE()
++
++  auto state() const {
++    return std::make_pair(nullptr, std::make_pair(eps_, scale_));
++  }
++
++ private:
++  float eps_;
++  float scale_;
++};
++
+ class RMSNormVJP : public Custom {
+  public:
+   RMSNormVJP(
+diff -r base/python/src/fast.cpp after/python/src/fast.cpp
+--- a/python/src/fast.cpp	2026-09-23 11:42:38.547731549 -0500
++++ b/python/src/fast.cpp	2026-09-23 11:42:19.849915977 -0500
+@@ -145,6 +145,63 @@
+       )pbdoc");
+ 
+   m.def(
++      "rms_norm_gated",
++      &mx::fast::rms_norm_gated,
++      "x"_a,
++      "gate"_a,
++      "weight"_a,
++      "eps"_a,
++      nb::kw_only(),
++      "stream"_a = nb::none(),
++      nb::sig(
++          "def rms_norm_gated(x: array, gate: array, weight: array, eps: float, *, stream: StreamOrDevice = None) -> array"),
++      R"pbdoc(
++        Fused RMS norm with a SwiGLU gate (GDN decode chain).
++
++        Computes ``silu(gate.astype(float32)) * rms_norm(x, weight, eps)
++        .astype(float32)`` rounded once to the dtype of ``x``. The gate
++        must have the same shape as ``x``; ``weight`` is one-dimensional
++        with the size of the last axis of ``x`` (or a single element).
++
++        Args:
++            x (array): Input array.
++            gate (array): Gate array with the same shape as ``x``.
++            weight (array): Multiplicative weight for the norm.
++            eps (float): A small additive constant for numerical stability.
++
++        Returns:
++            array: The gated, normalized array.
++      )pbdoc");
++
++  m.def(
++      "rms_norm_scaled",
++      &mx::fast::rms_norm_scaled,
++      "x"_a,
++      "weight"_a.none(),
++      "scale"_a,
++      "eps"_a,
++      nb::kw_only(),
++      "stream"_a = nb::none(),
++      nb::sig(
++          "def rms_norm_scaled(x: array, weight: array | None, scale: float, eps: float, *, stream: StreamOrDevice = None) -> array"),
++      R"pbdoc(
++        Fused RMS norm followed by a scalar multiply.
++
++        Computes ``scale * rms_norm(x, weight, eps)`` with the scalar
++        rounded to the storage dtype exactly like the equivalent two-op
++        graph.
++
++        Args:
++            x (array): Input array.
++            weight (array, optional): Multiplicative weight for the norm.
++            scale (float): Scalar multiplier applied after the norm.
++            eps (float): A small additive constant for numerical stability.
++
++        Returns:
++            array: The normalized, scaled array.
++      )pbdoc");
++
++  m.def(
+       "layer_norm",
+       &mx::fast::layer_norm,
+       "x"_a,

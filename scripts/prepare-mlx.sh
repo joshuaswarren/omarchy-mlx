@@ -69,7 +69,17 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-omarchy-metal-kernel.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-gated-delta-raw-gates.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-version-time.patch"
+# GDN decode chain: fused RMSNorm+SwiGLU-gate and RMSNorm+scalar-mul
+# fast primitives (FastNormGatedBF16 backend kernel).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-rms-norm-gated.patch"
+# GDN decode chain: conv1d with the state concatenation folded into
+# the read (GdnConvDecodeBF16 backend kernel).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-gdn-conv-decode.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"

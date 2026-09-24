@@ -220,9 +220,20 @@ struct Fixture {
   std::array<std::string, 2> payload_bytes{anec_bytes('A'), anec_bytes('K')};
   nlohmann::json manifest;
 
-  Fixture() {
+  explicit Fixture(uint64_t tile_shift = kAneTileShiftDefault) {
+    // Same byte allocations under any tile unit: the header's tiles[] counts
+    // are denominated in 1<<tile_shift byte units, so a shift-9 header scales
+    // each count by 32 to describe the identical channel bytes.
+    const uint32_t count = uint32_t(1) << (14 - tile_shift);
+    for (auto& payload : payload_bytes) {
+      for (uint32_t channel : {0u, 4u, 5u, 6u}) {
+        write_le<uint32_t>(
+            payload, 40 + channel * sizeof(uint32_t), count);
+      }
+    }
     manifest = {
         {"manifest_version", 4},
+        {"tile_shift", tile_shift},
         {"name", "h13-chain-add-mul"},
         {"graph_hash", hex(64, '1')},
         {"task_descriptors", 2},
@@ -990,4 +1001,106 @@ TEST_CASE("digest cache sidecar serves a fresh process without re-hash") {
   check_error(
       [&] { load_bundle(fixture.dir.path()); }, "program-0.anec sha256 mismatch");
   unsetenv("MLX_OMARCHY_ANE_DIGEST_CACHE");
+}
+
+TEST_CASE("tile_shift defaults to the H13 island unit") {
+  Fixture fixture;
+  fixture.manifest.erase("tile_shift");
+  fixture.write();
+  auto bundle = load_bundle(fixture.dir.path());
+  CHECK(bundle.manifest.tile_shift == kAneTileShiftDefault);
+  CHECK(bundle.programs[0].tile_shift == kAneTileShiftDefault);
+}
+
+TEST_CASE("explicit tile_shift 9 validates the same byte allocations") {
+  Fixture fixture(kAneTileShiftWholeProgram);
+  fixture.write();
+  auto bundle = load_bundle(fixture.dir.path());
+  CHECK(bundle.manifest.tile_shift == kAneTileShiftWholeProgram);
+  CHECK(bundle.programs[0].tile_shift == kAneTileShiftWholeProgram);
+  // Identical channel bytes: shift 9 with 32x counts equals shift 14 with 1x.
+  CHECK(
+      bundle.programs[0].anec_header.tiles[4] ==
+      uint32_t(32));
+}
+
+TEST_CASE("unsupported tile_shift is refused") {
+  Fixture fixture;
+  fixture.manifest["tile_shift"] = 10;
+  fixture.write();
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); }, "unsupported tile_shift 10");
+}
+
+TEST_CASE("whole-program manifest with raw bindings loads") {
+  // Raw bindings carry only channel + staged bytes; the ANEC channel
+  // allocation is the sole geometry. Matches the parakeet whole-encoder
+  // bundle shape (tile_shift 9, one 13701-TD program).
+  Fixture fixture(kAneTileShiftWholeProgram);
+  // Channel allocations big enough for the staged surfaces: 1500 tiles of
+  // 512 B = 768000 bytes, the features-sized window.
+  for (auto& payload : fixture.payload_bytes) {
+    for (uint32_t channel : {4u, 5u, 6u}) {
+      write_le<uint32_t>(payload, 40 + channel * sizeof(uint32_t), 1500);
+    }
+  }
+  fixture.refresh_payload(0);
+  const uint64_t alloc = 1500 * 512;
+  auto binding = [](const char* tensor, uint64_t channel, uint64_t logical,
+                    uint64_t allocation) {
+    return nlohmann::json{
+        {"tensor", tensor},
+        {"channel", channel},
+        {"dtype", "float16"},
+        {"raw", true},
+        {"logical_bytes", logical},
+        {"allocation_bytes", allocation},
+    };
+  };
+  fixture.manifest["name"] = "parakeet-encoder-whole";
+  fixture.manifest["task_descriptors"] = 1;
+  fixture.manifest["inputs"] = {
+      {{"name", "attention_mask"}, {"index", 0}, {"dtype", "float16"},
+       {"shape", {3000, 1, 1, 1}}, {"byte_size", 6000},
+       {"stride", alloc}},
+      {{"name", "input_features"}, {"index", 1}, {"dtype", "float16"},
+       {"shape", {3000, 128, 1, 1}}, {"byte_size", 768000},
+       {"stride", alloc}},
+  };
+  fixture.manifest["outputs"] = {
+      {{"name", "y"}, {"index", 0}, {"dtype", "float16"},
+       {"shape", {240000, 1, 1}}, {"byte_size", 480000},
+       {"stride", alloc}},
+  };
+  fixture.manifest["logical_results"] = {
+      {{"name", "y"}, {"dtype", "float16"}, {"shape", {240000, 1, 1}},
+       {"tensor", "y"}, {"element_offset", 0}, {"element_count", 240000},
+       {"conversion", "identity"}},
+  };
+  fixture.manifest["intermediates"] = nlohmann::json::array();
+  fixture.manifest["dispatch_plan"] = {0};
+  fixture.manifest["payloads"] = nlohmann::json::array({fixture.manifest["payloads"][0]});
+  fixture.manifest["release_asset"]["model_sha256"] =
+      payload_collection_identity(fixture.manifest["payloads"]);
+  fixture.manifest["programs"] = nlohmann::json::array({nlohmann::json{
+      {"payload", "program-0.anec"},
+      {"operation", "whole-encoder"},
+      {"encoder", "apple-whole-encoder-hwxv2"},
+      {"task_descriptors", 1},
+      {"scratch_bytes", 0},
+      {"inputs",
+       {binding("attention_mask", 5, 6000, alloc),
+        binding("input_features", 6, 768000, alloc)}},
+      {"outputs", {binding("y", 4, 480000, alloc)}},
+  }});
+  // Only program-0 exists in this bundle: the directory must not carry a
+  // payload the manifest does not list.
+  write_file(fixture.dir.path() / "program-0.anec", fixture.payload_bytes[0]);
+  write_file(fixture.dir.path() / "manifest.json",
+             fixture.manifest.dump(2) + "\n");
+  auto bundle = load_bundle(fixture.dir.path());
+  CHECK(bundle.manifest.programs[0].operation == "whole-encoder");
+  CHECK(bundle.manifest.programs[0].inputs[0].raw);
+  CHECK(bundle.manifest.programs[0].inputs[0].logical_bytes == 6000);
+  CHECK(bundle.manifest.programs[0].inputs[0].element_count == 3000);
 }

@@ -127,6 +127,18 @@ void eval(array& arr) {
 
 void finalize(Stream s) {
   omarchy::trace::counters().omarchy_finalize_calls++;
+  // MLX_OMARCHY_DEFER_COMMIT: keep the open batch across graph-eval
+  // boundaries so consecutive custom-kernel dispatches (Parakeet TDT step:
+  // 5 dispatches, one mx.eval per step) share one command buffer and one
+  // submit instead of one submit per dispatch. Batches still close at the
+  // node/byte budgets inside eval() and at every host-read sync; Event
+  // flushes self-submit (encoder flush contract). Opt-in via env; off by
+  // default everywhere.
+  static const bool defer_commits =
+      std::getenv("MLX_OMARCHY_DEFER_COMMIT") != nullptr;
+  if (defer_commits) {
+    return;
+  }
   // Flush contract: the evaluator calls finalize at task-throttle points
   // and at graph end, and then waits on task-completion handlers. The
   // open batch must reach the queue here or those waits never complete.

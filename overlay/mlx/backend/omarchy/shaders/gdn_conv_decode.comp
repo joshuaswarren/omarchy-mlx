@@ -1,0 +1,97 @@
+#version 460
+
+// GDN decode conv: the conv_input = concat(state, x) materialization is
+// folded into the depthwise conv read (T == 1), and the shifted
+// carry-out state is written in-kernel. One dispatch replaces
+// CopyGeneral x2 (concat halves) + ConvBF16 + the trailing contiguous
+// state view.
+//
+// Bit-exact by construction: the concatenation is value-transparent
+// (pure copies), so the conv reads identical values; the tap
+// accumulation below is the conv.comp body verbatim (same loop shape,
+// f32 widen, left-associated sum, RNE bf16 store), and the state rows
+// move as raw uint16 bits.
+//
+// Bindings: 0 state [B, K-1, C], 1 x [B, 1, C], 2 weight [C, 1, K],
+// 3 output [B, 1, C], 4 state out [B, K-1, C]. Push constants:
+//   count        B * C output elements
+//   operation    K (kernel taps)
+//   lhs_size     K - 1 (state rows)
+//   reduce_size  C (channels per row)
+
+#ifdef USE_BF16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InState {
+  STORAGE_TYPE values[];
+} in_state;
+layout(set = 0, binding = 1, std430) readonly buffer InX {
+  STORAGE_TYPE values[];
+} in_x;
+layout(set = 0, binding = 2, std430) readonly buffer Weight {
+  STORAGE_TYPE values[];
+} weight;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+layout(set = 0, binding = 4, std430) buffer StateOut {
+  STORAGE_TYPE values[];
+} state_out;
+
+// Field order must match the fixed omarchy::ComputeParams layout the
+// backend pushes: count, operation, lhs_size, rhs_size, reduce_size, ...
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+} params;
+
+void main() {
+  const uint channels = params.reduce_size;
+  const uint km1 = params.lhs_size;
+  uint stride_threads = gl_NumWorkGroups.x * 256u;
+  for (uint work_index = gl_GlobalInvocationID.x;
+       work_index < params.count;
+       work_index += stride_threads) {
+    uint batch = work_index / channels;
+    uint channel = work_index % channels;
+    uint state_base = batch * km1 * channels;
+    uint x_base = batch * channels;
+    float accumulator = 0.0;
+    for (uint tap = 0u; tap < params.operation; ++tap) {
+      float value = tap < km1
+          ? LOAD_VALUE(
+                in_state.values[state_base + tap * channels + channel])
+          : LOAD_VALUE(in_x.values[x_base + channel]);
+      accumulator += value *
+          LOAD_VALUE(weight.values[channel * params.operation + tap]);
+    }
+    output_data.values[work_index] = STORE_VALUE(accumulator);
+    for (uint row = 0u; row + 1u < km1; ++row) {
+      state_out.values[state_base + row * channels + channel] =
+          in_state.values[state_base + (row + 1u) * channels + channel];
+    }
+    state_out.values[state_base + (km1 - 1u) * channels + channel] =
+        in_x.values[x_base + channel];
+  }
+}
