@@ -39,8 +39,9 @@ case "${1:-}" in
 esac
 
 # 1. Hardware and interpreter checks. The release wheel is cp314 linux_aarch64
-#    and is verified on the M1 family (t8103, t6000, t6001, t6002) and
-#    M2 Max (t6021).
+#    and is supported on the M1 family (t8103, t6000, t6001, t6002 — same GPU
+#    generation and driver path; per-chip measurements live in the README)
+#    and M2 Max (t6021).
 #    The ANE gate runs BEFORE any network access: a missing device is a
 #    local fact and must refuse the install without depending on the
 #    GitHub API (rate-limited runners otherwise see the release-resolution
@@ -67,7 +68,7 @@ fi
 [[ "$(uname -m)" == aarch64 ]] || die "mlx-omarchy runs on Apple Silicon (aarch64); this machine is $(uname -m)."
 if [[ -r /proc/device-tree/compatible ]] &&
    ! tr '\0' ' ' </proc/device-tree/compatible | grep -qE 'apple,t(8103|6000|6001|6002|6021)'; then
-  echo "warning: this SoC is not one mlx-omarchy is verified on (M1 family t8103/t6000/t6001/t6002, M2 Max t6021); it is untested here." >&2
+  echo "warning: this SoC is outside mlx-omarchy's supported list (M1 family t8103/t6000/t6001/t6002, M2 Max t6021); it is untested here." >&2
 fi
 command -v python3 >/dev/null || die "python3 is missing."
 python3 -c 'import sys; sys.exit(sys.version_info[:2] != (3, 14))' \
