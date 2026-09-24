@@ -1,0 +1,14 @@
+diff -ru -x __pycache__ mlx_lm/models/gated_delta.py mlx_lm/models/gated_delta.py
+--- a/mlx_lm/models/gated_delta.py	2026-09-24 16:35:46.631368740 -0500
++++ b/mlx_lm/models/gated_delta.py	2026-09-24 16:35:46.601208876 -0500
+@@ -281,6 +281,10 @@
+     if not use_kernel or mx.default_device() != mx.gpu:
+         return gated_delta_ops(q, k, v, g, beta, state, mask)
+     if hasattr(mx.fast, "gated_delta_update"):
++        if q.shape[1] == 1 and hasattr(mx.fast, "gated_delta_update_raw"):
++            return mx.fast.gated_delta_update_raw(
++                q, k, v, a, b, A_log, dt_bias, state, mask
++            )
+         out, st = mx.fast.gated_delta_update(q, k, v, g, beta, state, mask)
+         return out, st
+     return gated_delta_kernel(q, k, v, g, beta, state, mask)
