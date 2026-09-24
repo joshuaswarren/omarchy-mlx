@@ -60,7 +60,7 @@ FP_MODE_SHAPES = {  # mode -> (bits, group_size)
     "nvfp4": (4, 16),
     "mxfp8": (8, 32),
 }
-ARCHES = ("t8103", "t6001", "t6021")
+ARCHES = ("t8103", "t6000", "t6001", "t6002", "t6021")
 BACKENDS = ("mlx-lm", "omlx", "module")
 
 QUAL_FIELDS = ("status", "receipt", "date")

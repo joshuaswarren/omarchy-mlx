@@ -204,5 +204,48 @@ class ServeCliContractTests(unittest.TestCase):
         self.assertNotIn("systemd-run", section)
 
 
+class SocGateTests(unittest.TestCase):
+    """The installer's SoC gate must accept the whole M1 family.
+
+    Regression for a community M1 Max report (MacBook Pro 14-inch, M1 Max,
+    2021): that machine reads device-tree compatible
+    ["apple,j314c", "apple,t6001", "apple,arm-platform"], and installers
+    older than v0.7.2 warned "this is not an Apple M1 (t8103)" on exactly
+    that machine, which reads as a chip rejection.
+    """
+
+    USER_M1_MAX_COMPATIBLE = ["apple,j314c", "apple,t6001", "apple,arm-platform"]
+    ACCEPTED = ["apple,t8103", "apple,t6000", "apple,t6001", "apple,t6002", "apple,t6021"]
+    NOT_ACCEPTED = ["apple,t6031"]
+
+    def soc_gate(self):
+        match = re.search(r"grep -qE '(apple,t[^']+)'; then", installer_text())
+        self.assertIsNotNone(match, "SoC gate grep missing from install.sh")
+        return match.group(1)
+
+    def warns(self, compatible_tokens):
+        line = "\0".join(compatible_tokens).replace("\0", " ")
+        return re.search(self.soc_gate(), line) is None
+
+    def test_soc_gate_accepts_m1_family_and_the_reported_m1_max(self):
+        self.assertFalse(self.warns(self.USER_M1_MAX_COMPATIBLE),
+                         "the reported M1 Max (j314c + t6001) must install without a warning")
+        for chip in self.ACCEPTED:
+            self.assertFalse(self.warns([chip, "apple,arm-platform"]), chip)
+        for chip in self.NOT_ACCEPTED:
+            self.assertTrue(self.warns([chip, "apple,arm-platform"]),
+                            f"{chip} is unverified and must keep the warning")
+
+    def test_serve_catalog_arches_cover_the_m1_family(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "mlx_omarchy_serve_catalog",
+            INSTALLER.parent / "serve/mlx_omarchy_serve/catalog.py")
+        catalog = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(catalog)
+        for chip in ("t8103", "t6000", "t6001", "t6002", "t6021"):
+            self.assertIn(chip, catalog.ARCHES)
+
+
 if __name__ == "__main__":
     unittest.main()
