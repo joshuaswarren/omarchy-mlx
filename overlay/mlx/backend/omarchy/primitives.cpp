@@ -12035,7 +12035,11 @@ void ScaledDotProductAttention::eval_gpu(
   // composition's parallel GEMV tiles once the key stream dominates), so
   // the arm engages from 12 keys - just under the 13-key first decode step
   // of a 12-token prompt - through 128; larger contexts keep the
-  // composition.
+  // composition. The 128 cap is also the measured-safe side of both
+  // 2026-09-24 sweeps (receipts-work/receipt-sdpa-k512-jw16.md): the arm
+  // wins through 192 keys, ties near 256-300, and loses 33-46% in the
+  // 448..544 contract regime (502.9 vs 339.8 us at 512), where the shipped
+  // <=2048 bound had been routing decode to the slower arm.
   const bool decode_bf16_ready =
       decode_caps.max_compute_work_group_invocations >= 1024u &&
       decode_caps.max_compute_work_group_size[0] >= 1024u &&
@@ -12053,7 +12057,8 @@ void ScaledDotProductAttention::eval_gpu(
       k_len > 0 &&
       (q.dtype() != bfloat16 ||
           (k_len >= (head_dim == 256 ? uint32_t{12} : uint32_t{256}) &&
-           k_len <= uint32_t{2048})) &&
+           k_len <=
+               (head_dim == 256 ? uint32_t{128} : uint32_t{2048}))) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
     out.set_data(allocate_omarchy(out.nbytes()));
