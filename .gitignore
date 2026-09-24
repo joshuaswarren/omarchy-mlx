@@ -19,3 +19,7 @@ GATES.md
 
 .omp/
 .private-patterns
+
+# Local agent taste/decision mirrors (public repo — do not commit)
+taste.md
+decisions.md

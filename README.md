@@ -4,95 +4,41 @@ MLX on Apple GPU under Linux.
 
 ![Primitive coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/docs/coverage.json)
 
-[MLX](https://github.com/ml-explore/mlx) is Apple's array framework. Upstream it runs on Metal, so it runs on macOS. mlx-omarchy is the GPU backend that keeps `import mlx.core as mx` and `mx.gpu` on Apple Silicon Linux through Mesa's Honeykrisp Vulkan 1.4 stack. There is no Metal. GPU work never falls back to CPU tensors.
+[MLX](https://github.com/ml-explore/mlx) is Apple's array framework. Upstream it runs on Metal. **mlx-omarchy** is the Omarchy GPU backend that keeps `import mlx.core as mx` and `mx.gpu` on Apple Silicon Linux through Mesa's Honeykrisp Vulkan 1.4 stack. There is no Metal. GPU work never falls back to CPU tensors.
 
-Open defects live in the [defect ledger](docs/known-defects.md).
+This repo is a **patch-set and overlay**, not a hard fork of MLX history. Upstream source is fetched by pin (`mlx.lock` + `scripts/prepare-mlx.sh`); project files live under `overlay/`, and edits to upstream files stay in a small `patches/` series. The Python module name remains `mlx`. Do not install upstream `mlx` beside this wheel.
+
+Open defects: [docs/known-defects.md](docs/known-defects.md).
 
 ## Demo
 
 https://github.com/user-attachments/assets/7b2326f0-4679-4784-9622-e403b99be853
 
-One-command install on an M1 running Omarchy, the first model download, the streamed answer with its measured tokens per second, and the launcher entry; 2:47, unedited, no narration. Also at [joshuaswarren.github.io/mlx-omarchy](https://joshuaswarren.github.io/mlx-omarchy/).
-
-## Serve a local model
-
-Current text-generation guidance and the qualification limits of local
-OpenAI-compatible servers: [docs/serve.md](docs/serve.md). Kernel feature
-and serve-patch flags: [docs/kernel-flags.md](docs/kernel-flags.md).
-
-The serving catalog CLI (`omarchy mlx serve`; approve-first downloads,
-memory-aware admission) and the Laya typed-decisions server
-(device-qualified on an M1 Max) are in this source tree — not yet in any
-published release. docs/serve.md distinguishes source-checkout use from
-release packaging and marks what is qualified.
-
-## Hardware
-
-Apple M1 is verified on [Omarchy](https://github.com/omarchy-mac/omarchy-mac) with Mesa Honeykrisp. Apple M1 Max GPU is measured; T6001 `/dev/accel/accel0` is live. M2 Max (T6021) GPU is verified third-silicon on Mesa Honeykrisp / Vulkan 1.4.354; M2 Max ANE is **not** live-inference-qualified on the Linux driver. Apple GPU and Apple ANE are separate lanes: T6021 GPU qualification does not qualify T6021 ANE.
-
-**Current hardware status (2026-09-20):** m1-test-host (T8103) runs provisioned
-Omarchy, and its Linux ANE qualification ladder has Step 5 closed: full-ASR
-runs are transcript-exact **104/104** with mel/hidden/transcript goldens
-bit-exact across two clean repeats on the fork driver
-([receipt 3babdb5](https://github.com/joshuaswarren/ane-linux-experiments/commit/3babdb5)),
-and a 10/10 resident-batch perf battery measured the encoder stage under AC
-partition at 5078–5274 ms (median 5217.4 ms) against the 259.9 ms macOS
-same-encoder divisor — an honest ~20× baseline across different OS
-generations, not a performance-parity claim
-([receipt 119b954](https://github.com/joshuaswarren/ane-linux-experiments/commit/119b954)).
-Hybrid partition and full-encoder coverage are still pending. Older M1
-numbers in this tree remain dated evidence from prior boots. t6001-test-host (T6001)
-Linux ANE is live. t6021-test-host (T6021) reads kernel 7.1.13-3-1-ARCH stable,
-ANE_UNBOUND, no `/dev/accel/accel0`; T6021 ANE is not qualified.
-
-Later SoCs follow.
+One-command install on an M1 running Omarchy, first model download, streamed answer with measured tokens/sec, and the launcher entry — 2:47, unedited. Also at [joshuaswarren.github.io/mlx-omarchy](https://joshuaswarren.github.io/mlx-omarchy/).
 
 ## Install
 
-On an M1 running Omarchy, one command installs the release wheel into a private
-venv under `~/.local/share/mlx-omarchy`, adds `mlx-omarchy`, `mlx-omarchy-demo`,
-and `mlx-omarchy-parakeet` (Parakeet download + ANE transcribe) to `~/.local/bin`,
-and registers MLX Chat (Apple GPU) in the Omarchy launcher. The Install > AI menu
-entry stays MLX (Apple GPU). It never replaces Mesa or edits Omarchy files.
+On Omarchy (Apple Silicon), one command installs the release wheel into a private venv under `~/.local/share/mlx-omarchy`, puts `mlx-omarchy`, `mlx-omarchy-demo`, and `mlx-omarchy-parakeet` on `~/.local/bin`, and registers **MLX Chat (Apple GPU)** in the Omarchy launcher. It never replaces Mesa or edits Omarchy package files.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
 ```
 
-The bundled interactive demo is a separate mlx-lm path; current Qwen3.8
-generation is documented below. Remove the install with `bash install.sh --uninstall`.
+Uninstall with `bash install.sh --uninstall`. Latest stable: [v0.7.3](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.3). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
-Manual install, or any other Linux box:
-
-```bash
-# Apple Silicon (M1, Honeykrisp) — Python 3.14
-python3 -m venv ~/.venvs/mlx
-~/.venvs/mlx/bin/pip install <the cp314 linux_aarch64 wheel from the latest release>
-# https://github.com/joshuaswarren/mlx-omarchy/releases/latest
-```
+Manual install (or any other Linux box):
 
 ```bash
-# Linux x86_64 dev box (software Vulkan, no ANE) — Python 3.11. The CLI ships,
-# but ANE assets and the fd-protocol worker are absent; the wheel refuses when
-# asked to use the ANE. Use the aarch64 wheel above for real runs.
+# Apple Silicon (Honeykrisp) — Python 3.14 + aarch64 wheel from the latest release
 python3 -m venv ~/.venvs/mlx
-~/.venvs/mlx/bin/pip install <the cp311 linux_x86_64 wheel from the latest release>
+~/.venvs/mlx/bin/pip install <cp314 linux_aarch64 wheel URL>
+
+# x86_64 dev box (software Vulkan, no ANE) — Python 3.11 + cp311 wheel
+python3 -m venv ~/.venvs/mlx
+~/.venvs/mlx/bin/pip install <cp311 linux_x86_64 wheel URL>
 ```
 
-Wheel filenames carry the build commit, so pin the exact URL from the release
-you choose; the SHA256 sums live in the release notes and the `SHA256SUMS`
-asset.
-
-**Release candidate:** [v0.7.2-rc.1](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.2-rc.1)
-publishes verified x86_64 and aarch64 wheels. The uploaded aarch64 wheel
-passed an M1 Max Qwen3.8-distilled 2B Q4 decode with compilation enabled
-and three GPU SDPA numerical checks ([receipt](receipts/2026-09-20-release-v0.7.2-rc.1/receipt.json)).
-This is a prerelease, not full GPU/native parity or M2 ANE qualification;
-the default installer continues to select the stable release.
-
-Building from source is covered in [docs/install-omarchy.md](docs/install-omarchy.md). Build dependencies: Python 3.10+, CMake 3.25+, Vulkan headers, a C++ compiler, and the BLAS/LAPACK packages named there.
-
-Do not install the upstream `mlx` package beside this wheel; both provide the `mlx` module. `mlx-lm` depends on upstream `mlx`, so install it with `pip install --no-deps mlx-lm` and add its own dependencies (`transformers[sentencepiece] numpy protobuf pyyaml jinja2 huggingface_hub`) as `install.sh` does.
+`mlx-lm` depends on upstream `mlx`, so install it with `pip install --no-deps mlx-lm` and add its own deps as `install.sh` does. Build-from-source and the Honeykrisp **fork driver** (required for verified M1 Omarchy numbers — stock Mesa is not enough): [docs/install-omarchy.md](docs/install-omarchy.md).
 
 ## Quick start
 
@@ -109,14 +55,14 @@ value, grad = mx.value_and_grad(loss)(w)
 print(value, grad)
 ```
 
-For Qwen3.8 text generation, the M2 Max passed a clean-environment smoke
-with candidate wheel `0.32.3.dev202609201346+a1251aaa`, `mlx-vlm` 0.7.1
-and `mlx-lm` 0.31.3. **This candidate is not yet a published release.**
-Model metadata verified **2026-09-20**: [Hugging Face repository](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit),
-Apache-2.0, ungated, last modified 2026-09-14.
-
-From this checkout, in a Python 3.14 environment containing that candidate
-wheel (installed with `--no-deps`):
+Text generation: the qualified model is
+[`mlx-community/Qwen3.8-27B-4bit`](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit)
+(metadata verified 2026-09-20: Apache-2.0, ungated; tested revision
+`10c35caafbb80f7dc6a7a432cdd11af10a6d4818`). The verified smoke ran on an
+M2 Max with candidate wheel `0.32.3.dev202609201346+a1251aaa`, `mlx-vlm`
+0.7.1 and `mlx-lm` 0.31.3 — **this candidate is not yet a published
+release**. From this checkout, in a Python 3.14 environment containing
+that wheel (installed with `--no-deps`):
 
 ```bash
 python -m pip install --no-deps -r receipts/2026-09-20-qwen38-text-install/requirements.txt
@@ -126,258 +72,76 @@ env -u MLX_DISABLE_COMPILE python -m mlx_vlm.generate \
 ```
 
 The [receipt and raw output](receipts/2026-09-20-qwen38-text-install/receipt.json)
-record exit 0 and `READY.` with compilation enabled. The frozen dependencies
-cover this text smoke, not every loader feature. `pip check` still reports
-two missing `mlx` distribution requirements: the fork is named `mlx-omarchy`
-but provides the `mlx` module. Do not install upstream `mlx` to silence them.
+record exit 0 and `READY.` with compilation enabled. The checkpoint
+downloads ~15 GB of weights; a 16 GB M1 has not passed this model's
+memory and generation gates.
 
-This model downloads approximately 15 GB of weights. The tested revision is
-`10c35caafbb80f7dc6a7a432cdd11af10a6d4818`; qualification on the 16 GB M1
-is pending. Do not assume it fits merely because the package installs.
+Local OpenAI-compatible serving (catalog CLI + qualification limits): [docs/serve.md](docs/serve.md). Kernel / serve-patch flags: [docs/kernel-flags.md](docs/kernel-flags.md). Serving tooling in this tree is not all in a published release yet — `docs/serve.md` marks what is qualified.
+
+## Hardware
+
+Verified on [Omarchy](https://github.com/omarchy-mac/omarchy-mac) with Mesa Honeykrisp / Vulkan 1.4:
+
+| Chip | GPU (Vulkan) | Linux ANE |
+|---|---|---|
+| M1 (T8103) | Verified | Step 5 closed (full-ASR 104/104 bit-exact on fork driver; hybrid/full-encoder still pending) |
+| M1 Max (T6001) | Measured | Live (`/dev/accel/accel0`) |
+| M2 Max (T6021) | Verified (third silicon) | **Not** live-inference-qualified |
+
+Apple GPU and Apple ANE are separate lanes. GPU qualification does not qualify ANE. Later SoCs follow. Receipts and dated detail live under `receipts/` and in [joshuaswarren/ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments).
 
 ## Performance
 
-Qwen3.8-2B (4-bit mlx) decode and prefill measured on Apple M-series
-laptops: Apple Metal on macOS (upstream mlx 0.32.2) and the omarchy
-Vulkan backend on Asahi Linux. Protocol on
-every cell: greedy (temperature 0), 32 new tokens, 2 warmup runs, and a
-512-token pure-prefill leg (single run, no generated token); medians of
-30 measured decode runs per cell (the 2026-09-22 integrated-wheel
-cells use the 10-prompt x 3-pass subset of the same protocol; the
-M2 Max Linux cell is from the earlier 100-prompt-corpus battery on
-wheel 0.32.3+5b18306). Token streams are deterministic per host for a
-given build and byte-identical across hosts within a build on the fork
-driver: on the pinned Honeykrisp fork stack (`joshuaswarren/mesa-1`
-branch `honeykrisp-omarchy`, driver build `git-7faf04c065`) the M1 and
-M1 Max produce identical ordered-record digests (receipt
-2026-09-22-qwen38-correctness, section 3). On stock Mesa the M1's
-driver stack reorders ulp-level bf16 argmax flips — logits agree
-within 1–2 bf16 quanta on every compared step, so the divergence is a
-driver-stack property, not a kernel bug. Cross-OS streams were never
-an invariant and raw token identity is not a parity claim; the
-acceptance bar is logit-level equivalence plus coherent decoding.
+Qwen3.8-2B (4-bit mlx) on Apple M-series: upstream Metal on macOS vs omarchy Vulkan on Asahi/Omarchy. Protocol for every cell: greedy (temperature 0), 32 new tokens, 2 warmups, 512-token pure-prefill leg; decode is the median of 30 measured runs. Rows are marked by source build — † ‡ § are **three different builds and two battery protocols**, so rows with different marks are not comparable:
 
-The Linux M1 and M1 Max cells are the 2026-09-22 v0.7.2 tag build
-(commit `fa103c867`, wheel
-`mlx_omarchy-0.32.3.dev202609221309+fa103c86`; fused GDN decode/prefill with the
-prefill shared-load/double-buffer rework,
-bf16 coopmat qmm prefill, q4 gemv xpack), receipts
-2026-09-22-release-v0.7.2 in
-`ane-linux-experiments`. The M1 Linux row is measured on the Honeykrisp
-fork driver — Omarchy installs must use the fork driver, not stock
-Mesa (build it with
-[docs/install-omarchy.md](docs/install-omarchy.md), section "Honeykrisp
-driver with the fork fixes"; the stock-Mesa M1 row measured 32.88
-pure-prefill tok/s on the same wheel):
+| Hardware | OS / backend | Build | Prefill→first token (tok/s) | Pure prefill 512 (tok/s) | Decode median (tok/s) |
+|---|---|---|---|---|---|
+| M1, 16 GB † | Omarchy / Vulkan (Honeykrisp fork driver) | v0.7.2 tag `fa103c867` | 46.7 | 128.7 | 34.3 |
+| M1 Max, 64 GB † | Omarchy / Vulkan | v0.7.2 tag `fa103c867` | 62.3 | 267.7 | 56.8 |
+| M2 Max, 96 GB ‡ | Omarchy / Vulkan | `0.32.3+5b18306` (2026-09-21) | 47.2 | 75.8 | 45.0 |
+| M1, 16 GB § | macOS 27.0 / Metal | upstream mlx 0.32.2 (2026-09-21) | 101.3 | 345.4 | 49.5 |
+| M1 Max, 64 GB § | macOS 27.0 / Metal | upstream mlx 0.32.2 (2026-09-21) | 359.2 | 1019.7 | 179.5 |
+| M2 Max, 96 GB § | macOS 27.0 / Metal | upstream mlx 0.32.2 (2026-09-21) | 423.8 | 1234.7 | 220.6 |
 
-| Hardware | OS / backend | Prefill, prompt-to-first-token (tok/s) | Pure prefill 512 (tok/s, single run) | Decode (tok/s, median) |
-|---|---|---|---|---|
-| M1, 16 GB | Omarchy / omarchy Vulkan (Honeykrisp fork driver) | 46.7 | 128.7 | 34.3 |
-| M1 Max, 64 GB | Omarchy / omarchy Vulkan | 62.3 | 267.7 | 56.8 |
-| M2 Max, 96 GB | Omarchy / omarchy Vulkan | 47.2 | 75.8 | 45.0 |
-| M1, 16 GB | macOS 27.0 / upstream Metal | 101.3 | 345.4 | 49.5 |
-| M1 Max, 64 GB | macOS 27.0 / upstream Metal | 359.2 | 1019.7 | 179.5 |
-| M2 Max, 96 GB | macOS 27.0 / upstream Metal | 423.8 | 1234.7 | 220.6 |
+Receipt per row:
 
-Notes: all macOS cells ran idle at the login window over pre-login
-SSH. A 27B cell is pending. Adapter evidence is captured
-per run (Vulkan loader trace on Linux naming the Apple physical device;
-mlx's own device identity on macOS); the omarchy backend refuses
-non-Apple GPUs by default.
+- **†** M1 / M1 Max Linux: [v0.7.2 release receipt](receipts/2026-09-22-release-v0.7.2) (mirrored at the same path in `ane-linux-experiments`) — records these exact rows on the tag build, wheel `mlx_omarchy-0.32.3.dev202609221309+fa103c86`, 10-prompt × 3-pass subset of the standing battery, ordered-record digests `ac1b2695…` identical on both hosts. The M1 row is the Honeykrisp fork-driver leg (stock Mesa measured 32.9 pure-prefill tok/s on the same wheel); Omarchy installs must use the fork driver ([docs/install-omarchy.md](docs/install-omarchy.md), "Honeykrisp driver with the fork fixes").
+- **‡** M2 Max Linux: the 2026-09-21 100-prompt-corpus battery on wheel `0.32.3+5b18306` — [public matrix](https://github.com/joshuaswarren/ane-linux-experiments#qwen38-mlx-decode-and-prefill-matrix-2026-09-21) (row "M2 Max", adapter Apple M2 Max G14C). Raw per-run receipt `qwen38-2b-m2-omarchy-firstpass.json` (label `M2Max-T6021-Omarchy-q4-2B-stable-corrected`, ordered-records digest `6f21e665…`), kept outside the repository.
+- **§** macOS rows: upstream mlx 0.32.2 Metal, idle login-window runs from the same 2026-09-21 battery. Raw per-run receipts outside the repository: `qwen38-2b-m1-macos-idle.json` (label `M1-T8103-macOS-q4-2B-idle-corrected`), `qwen38-2b-t6001-macos-firstpass.json` (label `M1Max-T6001-macOS-q4-2B-corrected`), `qwen38-2b-m2-macos-repro.json` (label `M2Max-T6021-macOS-q4-2B-corrected-repro` — the idle rerun that superseded the load-contaminated first pass). All three share ordered-records digest `301c4fc3…`: upstream Metal is deterministic across these hosts.
 
-The fork-driver M1 leg ran with `VK_DRIVER_FILES` pointed at the fork tip
-icd (same protocol and wheel as the other cells; stock-Mesa baseline on the
-same venv: 25.11 / 32.88 / 34.30).
+Cross-OS token identity was never an acceptance bar; the bar is logit-level equivalence plus coherent decoding. Adapter evidence is captured per run (Vulkan loader trace naming the Apple physical device on Linux; mlx device identity on macOS). The backend refuses non-Apple GPUs by default.
 
-### Historical Qwen2.5 benchmarks (not current recommendation)
-
-The Qwen2.5-0.5B-Instruct-4bit rows below are preserved verbatim as dated
-2026-09-17 / 2026-09-19 evidence from prior Linux boots. They are
-**not** a current recommendation — the current recommended model is the
-Qwen3.8-27B-4bit baseline above. Reproduce these rows only as
-archival reproduction of the previous generation's evidence, not as a
-fresh benchmark; do not present them as current performance.
-
-M1 versus native Metal (m1-test-host, single same-protocol battery on the v0.6.3 wheel, `ane-linux-experiments` `receipts/2026-09-17-m1-test-host-gpu-parity-refresh.md`; native from [receipts/2026-09-10-native-macos-metal-baseline/committed-base-m1/native-baseline-baseM1.json](receipts/2026-09-10-native-macos-metal-baseline/committed-base-m1/native-baseline-baseM1.json)):
-
-| Prompt / generated | Decode tok/s | vs native | Prefill tok/s | vs native |
-|---|---:|---:|---:|---:|
-| 30 / 32 | 117.3 / 150.6 | 78% | 390.8 / 294 | +33% |
-| 1053 / 32 | 105.7 / 140.4 | 75% | 1106 / 1841 | 60% |
-
-Against the same-protocol 2026-09-14 rerun that is +9.4% short decode, +11.2% ctx decode, +18.1% short prefill, and flat (−0.5%) ctx prefill — the CDM barrier trim, the rope-pair trio, the SwiGLU store epilogue, and `map_mode=3` move decode and short prefill; the long-context prefill gap stays pinned on `QmmPrefillCoopmatF16` shader throughput.
-
-M1 Max versus native Max (t6001-test-host, single same-protocol battery on the v0.6.1 wheel, `ane-linux-experiments` `receipts/2026-09-17-t6001-test-host-gpu-parity-refresh.md`; native from [receipts/2026-09-10-native-macos-metal-baseline/native-baseline-t6001-test-host/native-baseline-t6001-test-host.json](receipts/2026-09-10-native-macos-metal-baseline/native-baseline-t6001-test-host/native-baseline-t6001-test-host.json)):
-
-| Prompt / generated | Decode tok/s | vs native | Prefill tok/s | vs native |
-|---|---:|---:|---:|---:|
-| 30 / 32 | 190.6 / 287 | 66% | 459.7 / 1518 | 30% |
-| 1053 / 32 | 130.7 / 284 | 46% | 3845 / 8048 | 48% |
-
-Same battery on the v0.7.1 wheel (`receipts/2026-09-19-q4-chainbatch-t6001-test-host.md` in `ane-linux-experiments`, 2026-09-19; two-pass decode included; digests fatal and exact):
-
-| Prompt / generated | Decode tok/s | vs native | Prefill tok/s | vs native |
-|---|---:|---:|---:|---:|
-| 30 / 32 | 191.9 / 287 | 67% | 457 / 1518 | 30% |
-| 1053 / 32 | 150.8 / 284 | 53% | 3884 / 8048 | 48% |
-
-Digests match native (`7fd25a869ff21678` short, `7da83f06ec9f001d` ctx1053, every leg asserted). Against the same-protocol 2026-09-14 rerun that is +29% short decode, +49% ctx decode, +130% short prefill, and +86% ctx prefill, from the rope-pair trio, the SwiGLU store epilogue, the tile-M occupancy floor, and the SPIR-V disk cache. The M1 Max still runs the untrimmed CDM barrier: the Honeykrisp trim ships G13G-only because on G13X the designed bit set measured +13% short decode against −3.2% ctx1053, so it was not shipped. The batch-across-chains follow-up (`hk/cdm-chain-batch`) was screened on t6001-test-host on 2026-09-19 and corrupts generated IDs nondeterministically (16 vs ~2500 barriers per 2-token run, digests flip run-to-run) — the per-launch G13X barrier is lo…
-
-M2 Max — third Vulkan device, numbers only (t6021-test-host-linux, same-protocol battery on the F1-fixed `b744f4dd` wheel, single locked pass, eager per the standing protocol, [`receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md)):
-
-| Prompt / generated | Decode tok/s | Prefill tok/s | Generated-ID digest |
-|---|---:|---:|---|
-| 30 / 32 | 182.43 | 224.44 | `7fd25a869ff21678` (= native pin) |
-| 262 / 128 | 155.35 | 1593.52 | `55215e22d7f1b864` |
-| 1053 / 32 | 99.66 | 2416.61 | `7da83f06ec9f001d` (= native pin) |
-
-Both native-pinned digests reproduce bit-exact on T6021 (G14C B1, Honeykrisp). No native-M2-Max Metal divisor run exists, so no versus-native percentages are claimed for this device.
-
-To reproduce a historical (archival) leg:
-
-```bash
-MLX_DISABLE_COMPILE=1 python3 scripts/bench_decode.py \
-  --model mlx-community/Qwen2.5-0.5B-Instruct-4bit \
-  --prompt "What is the capital of France? Answer in one word." \
-  --tokens 64
-```
+Archival Qwen2.5 tables and older batteries stay in git history / linked receipts — they are **not** the current recommendation. Current text-generation guidance: [docs/serve.md](docs/serve.md).
 
 ## Feature parity
 
-The badge above is value-tested coverage of the 130 Mac-usable primitives: 126 / 130 as of 2026-09-10 (`docs/coverage.json`).
+Value-tested Mac-usable primitives: **126 / 130** (2026-09-10, `docs/coverage.json`). Upstream MLX C++ on GPU: 251 / 251; Python: 11,483 / 11,847 (2026-09-11 snapshot in `receipts/2026-09-11-upstream-suite/`). Standing battery closed 30 / 30 at `8790c463`.
 
-| Measure | Result | Date |
-|---|---|---|
-| Value-tested Mac-usable primitives | 126 / 130 | 2026-09-10 |
-| Upstream MLX C++ cases on the GPU device | 251 / 251 | 2026-09-11 |
-| Upstream MLX Python cases on the GPU device | 11,483 / 11,847 | 2026-09-11 |
-| Standing battery | 30 / 30 | `8790c463` |
-
-C++ and Python counts are the dated snapshot in [receipts/2026-09-11-upstream-suite/](receipts/2026-09-11-upstream-suite/). The battery closed 30 / 30 at commit `8790c463`.
-
-Known gaps: `ReduceScatter` is unavailable on the Linux ring transport; `fast.CustomKernel` remains a Metal subset. The rest is in [docs/known-defects.md](docs/known-defects.md).
-
-The compiled-bf16 tape gate lifted 2026-09-18 (`064b7301`): compile-ON is digest-identical to eager across the five-model recert matrix on the v0.7.0 wheel bytes (main `b283a16f`, wheel sha256 `2def345c…`) — Qwen3.5-9B-MLX-4bit `910abe30d4305271` (deterministic across two compiled reps), gemma-4-31b-it-4bit `9f1fe40101db3a4b`, Ministral-3-8B-4bit `d4735e3a265e16ee`, Ternary-Bonsai-8B-2bit `25dc382d3170a80c`, and Ternary-Bonsai-2-27B coherent at **1.44 tok/s** compiled-ON ([recert receipt](receipts/2026-09-18-v070-pretag-recert-t6001-test-host.md)). The fused-chain `(N,1,L)` broadcast misindexing behind the Bonsai-2-27B NaNs (F7) is fixed at `da43969e`; the in-model fused-bf16 fence is removed with it (the corrupt-matrix probe with fusion ON is clean on all three probed models, so bf16 tape nodes fuse again).
+Known gaps include `ReduceScatter` on the Linux ring transport and `fast.CustomKernel` remaining a Metal subset. Everything else: [docs/known-defects.md](docs/known-defects.md).
 
 ## Neural Engine
 
-The Apple Neural Engine is an internal accelerator for static graph regions, not a user-facing `mx.ane` device.
+ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified (M1 / M1 Max). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install.
 
-**ANE current status (2026-09-20):** live Linux ANE inference is qualified
-on the M1 Max (T6001, t6001-test-host) and current again on the M1 (T8103, m1-test-host):
-after re-provisioning, m1-test-host's Step 5 closed 2026-09-20 with full-ASR
-104/104 across two bit-exact repeats and a 10/10 perf battery whose
-encoder stage measured 5078–5274 ms (median 5217.4 ms) under AC partition
-— see the Hardware section receipts. The M2 Max (T6021) GPU path is
-qualified, but the M2 Max ANE is **not** live-inference-qualified on the
-Linux driver (macOS ANE numbers cited below are macOS CoreML / `aned`
-measurements on t6021-test-host / studio-host, not Linux-side execution; the M2 ANE
-still does not ACK). Apple GPU and Apple ANE are separate lanes: M2 Max
-GPU qualification does not qualify M2 Max ANE.
-The T6021 driver descriptor
-([`omarchy-ane/ane/src/ane_drv.c` `ane_soc_t6021`](https://github.com/joshuaswarren/omarchy-ane/blob/main/ane/src/ane_drv.c))
-is `ANE_RECOGNIZED`, not `ANE_QUALIFIED`.
-
-The v0.6.0 wheel ships the public Parakeet reference encoder on ANE end to end on the M1 (`T8103`) **and** the M1 Max (`T6001`). Both laptops pass full E2E **104/104 transcript-exact** ([receipts/2026-09-16-parakeet-e2e-both-hosts.md](receipts/2026-09-16-parakeet-e2e-both-hosts.md): m1-test-host 8541.8 ms, t6001-test-host 6418.5 ms, transcript `db501a8c…`, `encoder_hidden` = pin `38c73261…` identical bytes on both hosts, island batch 1/1/0, `tdt_fallback_reason: null`). The m1-test-host row is from a prior Linux boot; m1-test-host's current 2026-09-20 recertification is the Step-5 closure in the Hardware section above.
-
-macOS CoreML divisor for the same die (m1-test-host/T8103, [`ane-linux-experiments/receipts/2026-09-18-t8103-divisor-macos27.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t8103-divisor-macos27.md)): CoreML `transcribe` wall, median of all 10 runs, **259.9 ms `.ane` / 266.7 ms `.all`** on macOS 27.0 / CoreML 3600.25.2; the M1-Ultra reference (studio-host) is 292.2 / 305.8 ms on macOS 26.6.2 / CoreML 3520. **Cross-OS caveat: the two sides are different OS/CoreML generations, so ratios are indicative, not exact.** This is also a different stage definition than the Linux pipeline number above (CoreML `transcribe` wall vs whole mel → ANE → TDT pipeline) — the divisor is the reference-class target for the Linux ANE port, not a like-for-like comparison.
-
-Linux ANE island encoder wall, re-baselined on the published v0.7.1 bytes (t6001-test-host/T6001, medians of 3, tag `50eeb290`, [`ane-linux-experiments/receipts/2026-09-19-encwall-v071-attribution.md`](https://github.com/joshuawarren/ane-linux-experiments/blob/main/receipts/2026-09-19-encwall-v071-attribution.md)): **AC serve 3359.9 ms, ACO serve 3779.0 ms** (launch 4278.6 / 4825.8 ms; placement families per [docs/ane-encoder-placement.md](docs/ane-encoder-placement.md)) — within noise of the 3422 / 3797 ms the `ffn-chain-fusion` lane carried, so the wall is unchanged across the timeline-stall fix. Per-round attribution puts GPU-side `matmul`/`const` synchronous drains feeding and between islands first (~1950 ms of the wall), then island round-trip latency (1291 ms): the parent's stdout read alone is 1023 ms across 48 rounds, **21 ms/round** against ~1.2 ms of device compute per island. A transport-cut screen that removed three host-side copies per byte moved the wall only −8 / −6 ms, inside run-to-run spread (NO-LAND): the wall is round-trip latency plus GPU drains, not host memcpy. The relay-bypass follow-up (2026-09-19, main `e14752ff`, [`receipts/2026-09-19-encwall-relay-bypass.md`](https://github.com/joshuawarren/ane-linux-experiments/blob/main/receipts/2026-09-19-encwall-relay-bypass.md)) removed the relay's parse/reframe hops entirely — the runner speaks the resident wire protocol through a single-threaded poll/splice pump — and cut the serve wall for real: **AC serve 2530.6 ms median (−26.4% vs 3440.5), ACO serve 3044.6 ms (−22.0% vs 3904.9)**, transcript pins identical across the 12-arm battery (3 reps × {AC,ACO} × {base,cand}).
-
-Linux Parakeet E2E wall on the same v0.7.1 bytes (t6001-test-host/T6001, warm-up + 10 timed whole-pipeline runs, median of runs 2–10, [`ane-linux-experiments/receipts/2026-09-19-parakeet-e2e-v071-t6001-test-host.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-19-parakeet-e2e-v071-t6001-test-host.md)): **4773.8 ms `.ane`** (all-10 median 4779.4; like-for-like without `audio_load` 4698.0), 104/104 pins on every measured run (transcript `db501a8c…`, `encoder_hidden` `38c73261…`, mel `5b54f4a9…`, 0 timeouts) — **16.3× the M1-Ultra 292.2 ms `.ane` divisor** (like-for-like 16.1×), down from 6418.5 ms (22×) on the v0.6.1-era stack. The pure-GPU `.all` analog (`MLX_OMARCHY_PLACED=""`, whole pipeline on Vulkan) runs **2165.9 ms** but diverges at the tensor level by design (97-token golden prefix), so it is a wall reference, not a transcript claim.
-
-A 100/100 warm-run soak on the v0.5.1 wheel holds both pins with zero drift (see [`ane-linux-experiments/receipts/2026-09-16-parakeet-100-run`](https://github.com/joshuaswarren/ane-linux-experiments/tree/main/receipts/2026-09-16-parakeet-100-run), criterion 14 gate 10 closed). `MLX_OMARCHY_ANE_DEVICE=off` refuses by design.
-
-`mlx-omarchy-parakeet download` and `mlx-omarchy-parakeet transcribe` ship in the wheel (v0.6.0 clean-install gate): install the aarch64 wheel into a Python 3.14 venv and the commands are on `PATH`. The downloader fetches the pinned reference plus an audio fixture (sha-verified); `transcribe` runs mel → ANE islands → TDT → transcript from a clean install with no dev clones. `transcribe` needs host numpy + protobuf plus soundfile or ffmpeg; it refuses naming them. The x86_64 wheel carries the CLI without ANE assets and refuses explicitly when asked to use the ANE.
-
-Plan and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md), [docs/2026-09-13-encoder-parity-harness.md](docs/2026-09-13-encoder-parity-harness.md).
+Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md). Driver / `libane` ABI live in [joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 
 ## Contributing
 
-### Send us your hardware results
-
-Want to help? Start at **[docs/contribute-data.md](docs/contribute-data.md)** —
-the ten-minute version of "how do I contribute" with links to everything below.
-
-The most useful thing an M-series owner can do is run the collector and submit the report. It records chip, kernel, Mesa and Vulkan versions, correctness probes, and a benchmark sweep; it redacts user names, host names, paths, and addresses before anything is written, shows you the exact payload, and sends nothing without your explicit consent. Reports feed the public [community dataset](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results), which decides what gets fixed next.
-
-Three copy-paste paths. Pick the one that matches your machine.
-
-**Linux — quick capability report (no install, no network, a few seconds):**
+The most useful thing an M-series owner can do is submit a redacted hardware report: [docs/contribute-data.md](docs/contribute-data.md). Quick capability capture (no install required for the light path):
 
 ```bash
 git clone https://github.com/joshuaswarren/mlx-omarchy.git
 cd mlx-omarchy
 python3 scripts/collect_quick.py
-# or, in one command:
-python3 scripts/collect_quick.py \
-  --submit https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
 ```
 
-Quick mode is sufficient to capture the ANE devicetree (ane node, DARTs, PMGR
-domains, AIC, phandles) at enough fidelity to author the omarchy-ane overlay
-off-machine. Run the full report below when you want benchmark numbers or the
-correctness sweep. On a non-Apple box the wheel installs and the quick
-collector runs without complaint; the GPU path runs in software Vulkan and the
-ANE section is simply absent.
+Code contributors: start at [docs/CONTRIBUTOR-GUIDE.md](docs/CONTRIBUTOR-GUIDE.md). Dev machines without Apple GPU set `MLX_OMARCHY_ALLOW_NON_APPLE=1` (software Vulkan). GPU kernel changes still need Apple hardware before release.
 
-**Linux — full report (needs the v0.6.0 aarch64 wheel on an Apple Silicon host; x86_64 dev box installs the cp311 wheel and runs the same script):**
-
-```bash
-git clone https://github.com/joshuaswarren/mlx-omarchy.git
-cd mlx-omarchy
-
-# Apple Silicon (M1/M1 Max/etc, Honeykrisp) — Python 3.14 + aarch64 wheel
-python3.14 -m venv ~/.venvs/mlx-collect
-~/.venvs/mlx-collect/bin/pip install \
-  https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.6.0/mlx_omarchy-0.32.2.dev202609161852%2B2e252962-cp314-cp314-linux_aarch64.whl
-
-# Linux x86_64 dev box — Python 3.11 + cp311 wheel (no ANE assets):
-# python3.11 -m venv ~/.venvs/mlx-collect
-# ~/.venvs/mlx-collect/bin/pip install \
-#   https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.6.0/mlx_omarchy-0.32.2.dev202609161852%2B2e25296-cp311-cp311-linux_x86_64.whl
-
-# preview only, writes nothing:
-~/.venvs/mlx-collect/bin/python scripts/collect_deep.py
-
-# archive + paste-ready cover text:
-~/.venvs/mlx-collect/bin/python scripts/collect_deep.py \
-  --out mlx-omarchy-deep.tar.gz
-
-# publish in the same command (--submit requires --out):
-~/.venvs/mlx-collect/bin/python scripts/collect_deep.py \
-  --out mlx-omarchy-deep.tar.gz \
-  --submit https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
-```
-
-**macOS — native MLX reference report (Apple Silicon Mac, native MLX in a Python supported by that package):**
-
-```bash
-git clone https://github.com/joshuaswarren/mlx-omarchy.git
-cd mlx-omarchy
-
-python3.14 -m venv ~/.venvs/mlx-collect-macos
-~/.venvs/mlx-collect-macos/bin/python -m pip install mlx==0.32.1
-
-# preview only:
-~/.venvs/mlx-collect-macos/bin/python scripts/collect_deep.py
-
-# archive + publish:
-~/.venvs/mlx-collect-macos/bin/python scripts/collect_deep.py \
-  --out mlx-macos-reference.tar.gz \
-  --submit https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
-```
-
-Details of what is collected and how it is redacted are in [CONTRIBUTING.md](CONTRIBUTING.md) ([macOS setup](CONTRIBUTING.md#macos-setup), [Linux setup](CONTRIBUTING.md#linux-setup)). Query the dataset with `python3 scripts/query_community_data.py list`.
-
-### Code
-
-Start with the [contributor guide](docs/CONTRIBUTOR-GUIDE.md); it lists the open work and the verification each change needs. Development on any Linux machine works with a software Vulkan driver by setting `MLX_OMARCHY_ALLOW_NON_APPLE=1`; GPU kernel changes are verified on Apple hardware before release.
-
-- [docs/roadmap.md](docs/roadmap.md): release plan
-- [docs/compatibility.md](docs/compatibility.md): feature status by area
-- [docs/known-defects.md](docs/known-defects.md): open and fixed defects
+- [docs/roadmap.md](docs/roadmap.md)
+- [docs/compatibility.md](docs/compatibility.md)
+- [docs/architecture.md](docs/architecture.md)
+- [AGENTS.md](AGENTS.md) — agent contract for this repo
 
 ## License
 
-MIT. The prepared MLX source keeps Apple's MIT license and copyright notices. This project is not affiliated with Apple.
+MIT. Prepared MLX source keeps Apple's MIT license and copyright notices. Not affiliated with Apple.
