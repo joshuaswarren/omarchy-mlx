@@ -80,6 +80,11 @@ uint16_t bf16_store(float value) {
 #if defined(FP_MODE) && defined(QMM_VEC_Q4_WORD)
 #error "QMM_VEC_Q4_WORD applies to affine quantization only"
 #endif
+#if defined(QMM_VEC_GREEDY) && (!defined(USE_BF16) || \
+    !defined(USE_SUBGROUP) || !defined(QMM_VEC_Q4_WORD) || \
+    defined(QMM_VEC_MULTI))
+#error "QMM_VEC_GREEDY builds on the bf16 subgroup Q4 word column"
+#endif
 
 const uint COLUMNS_PER_GROUP = 8u;
 const uint LANES = 32u;
@@ -154,9 +159,36 @@ layout(set = 0, binding = 2, std430) readonly buffer Scales {
 layout(set = 0, binding = 3, std430) readonly buffer Biases {
   STORAGE_TYPE values[];
 } biases;
+#ifdef QMM_VEC_GREEDY
+// Greedy-argmax head (see the QMM_VEC_GREEDY main): top-bit plane, the
+// token, scratch (state words, per-row bounds, survivor rows, row
+// values), and the two stats words.
+layout(set = 0, binding = 4, std430) readonly buffer Plane {
+  uint values[];
+} plane;
+layout(set = 0, binding = 5, std430) writeonly buffer Token {
+  uint values[];
+} token;
+layout(set = 0, binding = 6, std430) buffer State {
+  uint values[];
+} state;
+layout(set = 0, binding = 7, std430) buffer Bounds {
+  float values[];
+} bounds;
+layout(set = 0, binding = 8, std430) buffer Survivors {
+  uint values[];
+} survivors;
+layout(set = 0, binding = 9, std430) buffer RowValues {
+  float values[];
+} row_values;
+layout(set = 0, binding = 10, std430) writeonly buffer Stats {
+  uint values[];
+} stats;
+#else
 layout(set = 0, binding = 4, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
 } output_data;
+#endif
 #endif
 #endif
 
@@ -531,6 +563,410 @@ void main() {
     } else {
       Q4_MULTI_STORE(2, rounded)
     }
+  }
+}
+#elif defined(QMM_VEC_GREEDY)
+// Greedy-argmax head: the token argmax(logits - logsumexp(logits)) picks
+// for one bf16 x row (K = 2048: one 64-wide group per subgroup lane)
+// against a transposed 4-bit/group-64 weight, without evaluating the rows
+// that provably cannot hold it. One dispatch per stage (params.operation),
+// full barriers between them. Proof: receipts/2026-09-23-vocab-prune.md.
+//   0 prologue: X_g = sum x and L1_g = sum |x| per group; refuses (full
+//     path) any |x| > 2^20 or NaN.
+//   1 bounds: the plane packs a = q >> 1 (3 bits, 64 codes per 6 words
+//     per group). With q = 2a + l, l in {0, 1}, the exact logit is
+//     C + sum_g s_g sum (l - 1/2) x, C = sum_g 2 s_g sum a x +
+//     (s_g / 2 + b_g) X_g, so it lies within C +- sum_g |s_g| L1_g / 2;
+//     A 2^-12 (A = sum_g (16|s_g| + |b_g|) L1_g) covers the float rounding
+//     here and in the full GEMV. Stores UB per row and each workgroup's
+//     largest-C row as a candidate.
+//   2 candidates: exact logits of the candidates; LB* = their max, an
+//     actual bf16 logit, so the max logit m >= LB*.
+//   3 compact: a row survives unless LB* - UB > G + |UB| 2^-7,
+//     G = 0.13 + max(|LB*|, |UBmax|) / 12800: a pruned row's bf16 logit
+//     sits more than G below m, so the logprob rounding cannot merge it
+//     with the max either.
+//   4 exact: survivors through Q4_ROW + subgroupAdd + bf16 store, the
+//     QmmVecQ4WordSubgroupBF16 column itself.
+//   5 select: first index of the max over survivors; hands over to the
+//     full path when a smaller-index survivor sits within G of the max
+//     (the only case where logits - logsumexp rounding can merge two
+//     rows), on NaN, or on a prologue refusal.
+//   6, 7 full path, flagged tokens only: every row's logit, then
+//     LogSumExpBF16, the bf16 subtract, and ArgMaxBF16 statement for
+//     statement (logsumexp_suffix.comp, binary_vec.comp,
+//     argreduce_suffix.comp).
+// stats: rows evaluated exactly, 1 when the full path decided, and the
+// float bits of the max logit (pruned path) or of the bf16 logsumexp (full
+// path), for bitwise qualification against the composed ops.
+// flags bit 0 forces the full path, bit 1 keeps every row (qualification).
+const uint GREEDY_ROWS_PER_SLOT = 16u;
+const uint STATE_LB = 64u;
+const uint STATE_UB = 65u;
+const uint STATE_COUNT = 66u;
+const uint STATE_FULL = 67u;
+#define NEG_INF uintBitsToFloat(0xff800000u)
+
+shared float greedy_values[256];
+shared uint greedy_rows[256];
+shared uint greedy_flag;
+
+// Monotone float -> uint map for atomicMax; key 0 decodes to NaN.
+uint order_key(float f) {
+  uint bits = floatBitsToUint(f);
+  return (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
+}
+float order_value(uint key) {
+  return uintBitsToFloat(
+      (key & 0x80000000u) != 0u ? (key & 0x7fffffffu) : ~key);
+}
+
+#define GREEDY_X8(i) { \
+  uvec4 xw = input_x.values[xbase + (i)]; \
+  xr[8u * (i)] = uintBitsToFloat((xw.x & 0xFFFFu) << 16u); \
+  xr[8u * (i) + 1u] = uintBitsToFloat(xw.x & 0xFFFF0000u); \
+  xr[8u * (i) + 2u] = uintBitsToFloat((xw.y & 0xFFFFu) << 16u); \
+  xr[8u * (i) + 3u] = uintBitsToFloat(xw.y & 0xFFFF0000u); \
+  xr[8u * (i) + 4u] = uintBitsToFloat((xw.z & 0xFFFFu) << 16u); \
+  xr[8u * (i) + 5u] = uintBitsToFloat(xw.z & 0xFFFF0000u); \
+  xr[8u * (i) + 6u] = uintBitsToFloat((xw.w & 0xFFFFu) << 16u); \
+  xr[8u * (i) + 7u] = uintBitsToFloat(xw.w & 0xFFFF0000u); \
+}
+// Code e of the group sits at bit 3e of the six plane words; four codes
+// straddle a word boundary. All shifts are compile-time constants.
+#define GREEDY_A(e) ((((e) * 3u) % 32u <= 29u) \
+  ? ((pw[((e) * 3u) / 32u] >> (((e) * 3u) % 32u)) & 7u) \
+  : (((pw[((e) * 3u) / 32u] >> (((e) * 3u) % 32u)) | \
+      (pw[((e) * 3u) / 32u + 1u] << ((32u - ((e) * 3u) % 32u) & 31u))) & 7u))
+#define GREEDY_TERM(e) h = fma(float(GREEDY_A(e)), xr[(e)], h);
+#define GREEDY_TERM4(e) GREEDY_TERM(e) GREEDY_TERM((e) + 1u) \
+  GREEDY_TERM((e) + 2u) GREEDY_TERM((e) + 3u)
+#define GREEDY_TERM16(e) GREEDY_TERM4(e) GREEDY_TERM4((e) + 4u) \
+  GREEDY_TERM4((e) + 8u) GREEDY_TERM4((e) + 12u)
+
+// One exact column: the full GEMV's Q4_ROW, subgroupAdd, and bf16 store.
+float greedy_exact(uint column, uint lane_in_slot) {
+  uint n = params.matrix_n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint x_row = params.lhs_offset;
+  precise float accumulator = 0.0;
+  uint w_base = params.rhs_offset + column * words_per_row;
+  uint scale_base = params.aux_offset + column * groups_per_row;
+  uint bias_base = params.aux_size + column * groups_per_row;
+  Q4_ROW(input_w, scales, biases)
+  return LOAD_VALUE(STORE_VALUE(subgroupAdd(accumulator)));
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n = params.matrix_n;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint x_row = params.lhs_offset;
+  uint stage = params.operation;
+  if (stage == 0u) {
+    uvec4 xw = input_x.values[(x_row + lane * 8u) / 8u];
+    float xs[8];
+    xs[0] = uintBitsToFloat((xw.x & 0xFFFFu) << 16u);
+    xs[1] = uintBitsToFloat(xw.x & 0xFFFF0000u);
+    xs[2] = uintBitsToFloat((xw.y & 0xFFFFu) << 16u);
+    xs[3] = uintBitsToFloat(xw.y & 0xFFFF0000u);
+    xs[4] = uintBitsToFloat((xw.z & 0xFFFFu) << 16u);
+    xs[5] = uintBitsToFloat(xw.z & 0xFFFF0000u);
+    xs[6] = uintBitsToFloat((xw.w & 0xFFFFu) << 16u);
+    xs[7] = uintBitsToFloat(xw.w & 0xFFFF0000u);
+    precise float sum = 0.0;
+    precise float l1 = 0.0;
+    uint refuse = 0u;
+    for (uint i = 0u; i < 8u; ++i) {
+      sum += xs[i];
+      l1 += abs(xs[i]);
+      refuse |= (abs(xs[i]) <= 1048576.0) ? 0u : 1u;
+    }
+    greedy_values[lane] = sum;
+    greedy_rows[lane] = floatBitsToUint(l1);
+    if (lane == 0u) {
+      greedy_flag = 0u;
+    }
+    barrier();
+    if (refuse != 0u) {
+      atomicOr(greedy_flag, 1u);
+    }
+    barrier();
+    if (lane < 32u) {
+      precise float group_sum = 0.0;
+      precise float group_l1 = 0.0;
+      for (uint p = 0u; p < 8u; ++p) {
+        group_sum += greedy_values[lane * 8u + p];
+        group_l1 += uintBitsToFloat(greedy_rows[lane * 8u + p]);
+      }
+      state.values[lane] = floatBitsToUint(group_sum);
+      state.values[32u + lane] = floatBitsToUint(group_l1);
+    }
+    if (lane == 0u) {
+      state.values[STATE_LB] = 0u;
+      state.values[STATE_UB] = 0u;
+      state.values[STATE_COUNT] = 0u;
+      state.values[STATE_FULL] =
+          (greedy_flag != 0u || (params.flags & 1u) != 0u) ? 1u : 0u;
+    }
+    return;
+  }
+  if (stage == 1u) {
+    float group_sum = uintBitsToFloat(state.values[lane_in_slot]);
+    float group_l1 = uintBitsToFloat(state.values[32u + lane_in_slot]);
+    float xr[64];
+    uint xbase = (x_row + lane_in_slot * 64u) / 8u;
+    GREEDY_X8(0u) GREEDY_X8(1u) GREEDY_X8(2u) GREEDY_X8(3u)
+    GREEDY_X8(4u) GREEDY_X8(5u) GREEDY_X8(6u) GREEDY_X8(7u)
+    uint plane_words = groups_per_row * 6u;
+    float ub_max = NEG_INF;
+    float best_center = NEG_INF;
+    uint best_row = 0u;
+    uint nan_seen = 0u;
+    uint first = gl_WorkGroupID.x * (8u * GREEDY_ROWS_PER_SLOT) + column_slot;
+    for (uint i = 0u; i < GREEDY_ROWS_PER_SLOT; ++i) {
+      uint row = first + i * 8u;
+      if (row >= n) {
+        break;
+      }
+      uint p_base = params.rhs_size + row * plane_words + lane_in_slot * 6u;
+      uint pw[7];
+      for (uint k = 0u; k < 6u; ++k) {
+        pw[k] = plane.values[p_base + k];
+      }
+      pw[6] = 0u;
+      uint param = row * groups_per_row + lane_in_slot;
+      float scale = LOAD_VALUE(scales.values[params.aux_offset + param]);
+      float bias = LOAD_VALUE(biases.values[params.aux_size + param]);
+      precise float h = 0.0;
+      GREEDY_TERM16(0u) GREEDY_TERM16(16u) GREEDY_TERM16(32u)
+      GREEDY_TERM16(48u)
+      precise float center = 2.0 * scale * h + (0.5 * scale + bias) * group_sum;
+      precise float radius = abs(scale) * group_l1;
+      precise float mass = (16.0 * abs(scale) + abs(bias)) * group_l1;
+      float c = subgroupAdd(center);
+      float ub = c + 0.5 * subgroupAdd(radius) +
+          subgroupAdd(mass) * (1.0 / 4096.0) + 9.094947e-13;
+      if (lane_in_slot == 0u) {
+        bounds.values[row] = ub;
+      }
+      nan_seen |= (isnan(ub) || isnan(c)) ? 1u : 0u;
+      if (ub > ub_max) {
+        ub_max = ub;
+      }
+      if (c > best_center) {
+        best_center = c;
+        best_row = row;
+      }
+    }
+    if (lane_in_slot == 0u) {
+      greedy_values[column_slot] = best_center;
+      greedy_values[8u + column_slot] = ub_max;
+      greedy_rows[column_slot] = best_row;
+      greedy_rows[8u + column_slot] = nan_seen;
+    }
+    barrier();
+    if (lane == 0u) {
+      float center = NEG_INF;
+      uint row = greedy_rows[0];
+      float ubs = NEG_INF;
+      uint nans = 0u;
+      for (uint k = 0u; k < 8u; ++k) {
+        if (greedy_values[k] > center) {
+          center = greedy_values[k];
+          row = greedy_rows[k];
+        }
+        ubs = greedy_values[8u + k] > ubs ? greedy_values[8u + k] : ubs;
+        nans |= greedy_rows[8u + k];
+      }
+      // Candidates ride the survivor buffer; stage 3 overwrites them
+      // after stage 2 has read them.
+      survivors.values[gl_WorkGroupID.x] = row;
+      atomicMax(state.values[STATE_UB], order_key(ubs));
+      if (nans != 0u) {
+        atomicOr(state.values[STATE_FULL], 1u);
+      }
+    }
+    return;
+  }
+  if (stage == 2u) {
+    uint candidates = (n + 8u * GREEDY_ROWS_PER_SLOT - 1u) /
+        (8u * GREEDY_ROWS_PER_SLOT);
+    for (uint k = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+         k < candidates;
+         k += gl_NumWorkGroups.x * COLUMNS_PER_GROUP) {
+      float value = greedy_exact(survivors.values[k], lane_in_slot);
+      if (lane_in_slot == 0u) {
+        if (isnan(value)) {
+          atomicOr(state.values[STATE_FULL], 1u);
+        } else {
+          atomicMax(state.values[STATE_LB], order_key(value));
+        }
+      }
+    }
+    return;
+  }
+  if (stage == 3u) {
+    uint row = gl_WorkGroupID.x * 256u + lane;
+    if (row >= n) {
+      return;
+    }
+    float lbs = order_value(state.values[STATE_LB]);
+    float ubs = order_value(state.values[STATE_UB]);
+    float guard = 0.13 + max(abs(lbs), abs(ubs)) * (1.0 / 12800.0);
+    float ub = bounds.values[row];
+    bool pruned = (params.flags & 2u) == 0u &&
+        (lbs - ub) > guard + abs(ub) * 0.0078125;
+    if (!pruned) {
+      survivors.values[atomicAdd(state.values[STATE_COUNT], 1u)] = row;
+    }
+    return;
+  }
+  if (stage == 4u || stage == 6u) {
+    // Stage 4 walks the survivor list, stage 6 (flagged only) every row;
+    // each subgroup owns one column at a time, exactly as the full GEMV.
+    bool full = stage == 6u;
+    if (full && state.values[STATE_FULL] == 0u) {
+      return;
+    }
+    uint count = full ? n : state.values[STATE_COUNT];
+    for (uint k = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+         k < count;
+         k += gl_NumWorkGroups.x * COLUMNS_PER_GROUP) {
+      float value = greedy_exact(full ? k : survivors.values[k], lane_in_slot);
+      if (lane_in_slot == 0u) {
+        row_values.values[k] = value;
+      }
+    }
+    return;
+  }
+  if (stage == 5u) {
+    uint count = state.values[STATE_COUNT];
+    if (lane == 0u) {
+      greedy_flag = 0u;
+    }
+    float best = NEG_INF;
+    uint best_row = 0xffffffffu;
+    uint nan_seen = 0u;
+    for (uint k = lane; k < count; k += 256u) {
+      float v = row_values.values[k];
+      uint r = survivors.values[k];
+      nan_seen |= isnan(v) ? 1u : 0u;
+      if (v > best || (v == best && r < best_row)) {
+        best = v;
+        best_row = r;
+      }
+    }
+    greedy_values[lane] = best;
+    greedy_rows[lane] = best_row;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        float v = greedy_values[lane + stride];
+        uint r = greedy_rows[lane + stride];
+        if (v > greedy_values[lane] ||
+            (v == greedy_values[lane] && r < greedy_rows[lane])) {
+          greedy_values[lane] = v;
+          greedy_rows[lane] = r;
+        }
+      }
+      barrier();
+    }
+    float top = greedy_values[0];
+    uint top_row = greedy_rows[0];
+    float guard = 0.13 + abs(top) * (1.0 / 12800.0);
+    uint risk = nan_seen;
+    for (uint k = lane; k < count; k += 256u) {
+      float v = row_values.values[k];
+      risk |= (survivors.values[k] < top_row && v < top && top - v <= guard)
+          ? 1u : 0u;
+    }
+    if (risk != 0u) {
+      atomicOr(greedy_flag, 1u);
+    }
+    barrier();
+    if (lane == 0u) {
+      bool full = state.values[STATE_FULL] != 0u || greedy_flag != 0u ||
+          top_row == 0xffffffffu;
+      token.values[0] = top_row;
+      stats.values[0] = count;
+      stats.values[1] = full ? 1u : 0u;
+      stats.values[2] = floatBitsToUint(top);
+      state.values[STATE_FULL] = full ? 1u : 0u;
+    }
+    return;
+  }
+  // Stage 7, flagged only: LogSumExpBF16 over the stage-6 logits, then
+  // the bf16 subtract and ArgMaxBF16, each as its own kernel computes.
+  if (state.values[STATE_FULL] == 0u) {
+    return;
+  }
+  float local_max = NEG_INF;
+  for (uint index = lane; index < n; index += 256u) {
+    float next = row_values.values[index];
+    if (isnan(next) || next > local_max) {
+      local_max = next;
+    }
+  }
+  greedy_values[lane] = local_max;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      greedy_values[lane] =
+          max(greedy_values[lane], greedy_values[lane + stride]);
+    }
+    barrier();
+  }
+  float row_max = greedy_values[0];
+  barrier();
+  float local_sum = 0.0;
+  for (uint index = lane; index < n; index += 256u) {
+    local_sum += exp(row_values.values[index] - row_max);
+  }
+  greedy_values[lane] = local_sum;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      greedy_values[lane] += greedy_values[lane + stride];
+    }
+    barrier();
+  }
+  float row_sum = greedy_values[0];
+  float value = isinf(row_max) ? row_max : row_max + log(row_sum);
+  float lse = LOAD_VALUE(STORE_VALUE(value));
+  barrier();
+  float local_value = NEG_INF;
+  uint local_index = 0u;
+  for (uint index = lane; index < n; index += 256u) {
+    float next = LOAD_VALUE(STORE_VALUE(row_values.values[index] - lse));
+    if (next > local_value) {
+      local_value = next;
+      local_index = index;
+    }
+  }
+  greedy_values[lane] = local_value;
+  greedy_rows[lane] = local_index;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      float mine = greedy_values[lane];
+      float theirs = greedy_values[lane + stride];
+      bool wins = theirs > mine;
+      bool ties = theirs == mine &&
+          greedy_rows[lane + stride] < greedy_rows[lane];
+      if (wins || ties) {
+        greedy_values[lane] = theirs;
+        greedy_rows[lane] = greedy_rows[lane + stride];
+      }
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    token.values[0] = greedy_rows[0];
+    stats.values[2] = floatBitsToUint(lse);
   }
 }
 #else

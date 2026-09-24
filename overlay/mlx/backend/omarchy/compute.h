@@ -683,6 +683,10 @@ enum class ComputeKernel : uint16_t {
   // its order matches the composed path, so the route is bit-identical
   // to the composition it replaces). Append-only profile id.
   SdpaDecodeNativeBF16Hd256,
+  // Greedy-argmax decode head (qmm_vec.comp QMM_VEC_GREEDY): bounds,
+  // compaction, exact survivor columns, selection, and the flagged full
+  // path, one kernel selected per stage. Append-only profile id.
+  QmmVecGreedyBF16,
   Count,
 };
 

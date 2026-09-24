@@ -26,7 +26,7 @@
   "e2e": {
     "audio_fixture_sha256": "30885601173f96b0d8ddd020dc959b055c6c1582b85a33e3fcab8c4b08ed94c2",
     "cpu_tensor_events": 0,
-    "decode_control": "gpu-loop",
+    "decode_control": "gpu-chain",
     "durations": [
       3,
       2,

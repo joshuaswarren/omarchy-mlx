@@ -187,9 +187,15 @@ def test_preemphasis_preserves_subnormal_results():
 
 
 def test_frame_windowing_preserves_subnormal_products():
+    lock = ReferenceLock.load(TOOLS / "parakeet-reference.lock")
     rng = np.random.default_rng(917)
-    preemphasis = (
+    waveform = (
         rng.uniform(-1, 1, vulkan_mel.CHUNK_SAMPLES) * np.float32(2.0**-120)
+    ).astype(np.float32)
+    preemphasis = np.empty_like(waveform)
+    preemphasis[0] = waveform[0]
+    preemphasis[1:] = (
+        waveform[1:] - np.float32(lock.mel.preemphasis) * waveform[:-1]
     ).astype(np.float32)
     hann = np.asarray(vulkan_mel._constant_floats(), dtype=np.float32)[
         vulkan_mel.HANN_OFFSET:vulkan_mel.HANN_OFFSET + 400
@@ -205,7 +211,7 @@ def test_frame_windowing_preserves_subnormal_products():
     expected = np.zeros((vulkan_mel.N_FRAMES, vulkan_mel.N_FFT), dtype=np.float32)
     expected[:, 56:456] = (windowed * hann[None, :]).astype(np.float32)
 
-    actual = vulkan_mel._frame(mx.array(preemphasis), mx.array(hann))
+    actual = vulkan_mel._frames(mx.array(waveform), mx.array(hann))
     mx.eval(actual)
 
     _assert_same_bits(np.asarray(actual), expected)
@@ -255,8 +261,7 @@ def test_low_scale_waveform_preserves_power_and_mel_subnormals():
     expected_mel_projection = mel_projection(filterbank, expected_power)
 
     constants = vulkan_mel._constant_arrays(mx)
-    preemphasis = vulkan_mel._preemphasize(mx.array(waveform))
-    actual_frames = vulkan_mel._frame(preemphasis, constants.hann)
+    actual_frames = vulkan_mel._frames(mx.array(waveform), constants.hann)
     actual_real, actual_imaginary = vulkan_mel._dft_frames(actual_frames)
     actual_power = vulkan_mel._power(actual_real, actual_imaginary)
     actual_mel_projection, _ = vulkan_mel._mel_project(

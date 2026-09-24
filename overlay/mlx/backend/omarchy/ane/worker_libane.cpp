@@ -115,16 +115,15 @@ class LibaneDevice : public AneDevice {
     // libane addresses sources by their sequential position among the
     // anec's inputs; the worker passes the manifest binding whose
     // channel order matches (ane.h: ane_send(nn, input, 0), (nn, input, 1)).
-    (void)channel;
+    auto& tile = send_buffers_[channel];
+    if (tile.size() < binding.allocation_bytes) {
+      tile.resize(binding.allocation_bytes, 0);
+    }
     if (binding.raw) {
-      // Selector-addressed surface: staged bytes go in verbatim, zero
-      // padding beyond them, exactly like libane's ane_send.
-      std::vector<uint8_t> tile(binding.allocation_bytes, 0);
       std::memcpy(tile.data(), data, size);
       api_.send(nn, tile.data(), channel);
       return;
     }
-    std::vector<uint8_t> tile(binding.allocation_bytes, 0);
     ane_pack_rows(
         binding, data, tile.data(), binding.logical_bytes / ane_element_size(binding));
     api_.send(nn, tile.data(), channel);
@@ -145,14 +144,15 @@ class LibaneDevice : public AneDevice {
       uint8_t* out,
       size_t size) override {
     struct ane_nn* nn = network(manifest_index, "read");
-    (void)channel;
+    auto& tile = read_buffers_[channel];
+    if (tile.size() < binding.allocation_bytes) {
+      tile.resize(binding.allocation_bytes, 0);
+    }
     if (binding.raw) {
-      std::vector<uint8_t> tile(binding.allocation_bytes, 0);
       api_.read(nn, tile.data(), channel);
       std::memcpy(out, tile.data(), size);
       return;
     }
-    std::vector<uint8_t> tile(binding.allocation_bytes, 0);
     api_.read(nn, tile.data(), channel);
     ane_unpack_rows(
         binding, tile.data(), out, binding.logical_bytes / ane_element_size(binding));
@@ -182,6 +182,8 @@ class LibaneDevice : public AneDevice {
   void* handle_{nullptr};
   LibaneApi api_{};
   std::unordered_map<size_t, struct ane_nn*> networks_;
+  std::unordered_map<uint32_t, std::vector<uint8_t>> send_buffers_;
+  std::unordered_map<uint32_t, std::vector<uint8_t>> read_buffers_;
 };
 
 } // namespace

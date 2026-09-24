@@ -1,0 +1,21 @@
+{
+ "mode": "keep",
+ "build_high_bits_s": 1.092,
+ "V": 248320,
+ "cases": 601,
+ "token_mismatches": 0,
+ "bits_mismatches": 0,
+ "full_path_cases": 61,
+ "corpus_steps": 320,
+ "corpus_full_path": 6,
+ "corpus_survivors_median": 248320.0,
+ "corpus_survivors_p90": 248320.0,
+ "corpus_survivors_max": 248320,
+ "corpus_pruned_fraction_mean": 0.0,
+ "timing_ms": {
+  "full": 6.5341,
+  "greedy": 14.4847,
+  "full2": 6.5516,
+  "greedy2": 14.4573
+ }
+}

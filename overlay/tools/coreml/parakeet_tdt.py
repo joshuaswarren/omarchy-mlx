@@ -8,11 +8,13 @@ The state machine follows ``GreedyTDTDecoder.swift`` from
 behind the decoder and joint callbacks; this module only threads opaque state
 handles and applies scalar token, duration, and frame decisions.
 
-``tdt_decode`` is the pipeline entry: the GPU-resident loop
-(``vulkan_tdt_loop.run_tdt_loop``, one dispatch, no per-emission host sync)
-runs by default, and the host control loop below stays available behind
-``--tdt-host`` / ``MLX_OMARCHY_TDT_HOST`` for A/B and software devices, and
-as the automatic fallback when the device lacks the loop's capabilities.
+``tdt_decode`` is the pipeline entry: the host control loop
+(``greedy_tdt_decode``, callbacks per frame) runs by default, and the
+one-dispatch GPU loop (``vulkan_tdt_loop.run_tdt_loop``) serves callers
+that cannot drive callbacks (``MLX_OMARCHY_TDT_HOST`` set to a false
+value opts in explicitly) and resumes whenever the host loop is not
+available; the active path and any fallback reason ride the returned
+``TdtOutput``.
 """
 
 from __future__ import annotations
@@ -170,6 +172,15 @@ def greedy_tdt_decode(
 
 _TDT_HOST_ENV = "MLX_OMARCHY_TDT_HOST"
 _TDT_HOST_FALSE = {"", "0", "false", "no"}
+_TDT_CHAIN_ENV = "MLX_OMARCHY_TDT_CHAIN"
+_TDT_CHAIN_OFF = {"", "0", "false", "no"}
+
+
+def _chain_disabled() -> bool:
+    """Escape hatch: MLX_OMARCHY_TDT_CHAIN=0/false/no/empty forces the
+    legacy host-control path."""
+    raw = os.environ.get(_TDT_CHAIN_ENV)
+    return raw is not None and raw.strip().lower() in _TDT_CHAIN_OFF
 
 
 def tdt_loop_blockers() -> list[str]:
@@ -192,68 +203,123 @@ def tdt_decode(
     run_joint: Callable[[int, Any], JointDecision] | None = None,
     force_host: bool = False,
 ) -> TdtOutput:
-    """Greedy TDT decode via the GPU-resident loop, host control on fallback.
+    """Greedy TDT decode: device chain by default, host loop fallback.
 
-    The default path is ``vulkan_tdt_loop.run_tdt_loop``.  The host control
-    loop runs instead when ``force_host`` (``--tdt-host``) or
-    ``MLX_OMARCHY_TDT_HOST`` is set, when the device lacks the loop's
-    capabilities (see ``tdt_loop_blockers``), or when the loop kernel fails
-    to launch; the reason is recorded on the returned ``TdtOutput``.
+    The default path is the device-chained decode
+    (``vulkan_tdt_chain.run_tdt_chain``, chunked submissions, no
+    per-emission host sync).  ``MLX_OMARCHY_TDT_CHAIN`` set to a false
+    value (``0``/``false``/``no``/empty), or ``force_host``
+    (``--tdt-host``), skips it: with ``MLX_OMARCHY_TDT_HOST`` set to a
+    false value the GPU megakernel (``vulkan_tdt_loop.run_tdt_loop``)
+    serves instead, and otherwise the host control loop
+    (``greedy_tdt_decode``) runs.  The returned ``TdtOutput`` records the
+    active path and, whenever the chain is skipped or fails to launch,
+    the reason.
     """
 
     _validate(valid_frames, config)
-    if force_host:
-        reason = "--tdt-host"
-    else:
-        raw = os.environ.get(_TDT_HOST_ENV, "").strip().lower()
-        if raw not in _TDT_HOST_FALSE:
-            reason = f"{_TDT_HOST_ENV}={os.environ.get(_TDT_HOST_ENV, '')}"
-        else:
-            blockers = tdt_loop_blockers()
-            if not blockers:
-                from .vulkan_tdt_loop import run_tdt_loop
+    raw = os.environ.get(_TDT_HOST_ENV)
+    explicit_gpu = (raw is not None and not force_host
+                    and raw.strip().lower() in _TDT_HOST_FALSE)
 
-                try:
-                    looped = run_tdt_loop(
-                        packed=packed,
-                        encoder=encoder,
-                        valid_frames=valid_frames,
-                        config=config,
-                        initial_hidden=initial_hidden,
-                        initial_cell=initial_cell,
-                    )
-                except Exception as exc:  # launch-time capability failures
-                    reason = f"gpu loop launch failed: {exc}"
-                else:
-                    return TdtOutput(
-                        token_ids=looped.token_ids,
-                        frame_indices=looped.frame_indices,
-                        durations=looped.durations,
-                        hidden=looped.hidden,
-                        cell=looped.cell,
-                        decode_path="gpu-loop",
-                    )
-            else:
-                reason = "; ".join(blockers)
-    if run_decoder is None or run_joint is None:
-        raise _fail(f"host fallback needs decoder/joint callbacks: {reason}")
-    output = greedy_tdt_decode(
-        valid_frames=valid_frames,
-        config=config,
-        initial_hidden=initial_hidden,
-        initial_cell=initial_cell,
-        run_decoder=run_decoder,
-        run_joint=run_joint,
-    )
-    return TdtOutput(
-        token_ids=output.token_ids,
-        frame_indices=output.frame_indices,
-        durations=output.durations,
-        hidden=output.hidden,
-        cell=output.cell,
-        decode_path="host",
-        fallback_reason=reason,
-    )
+    def run_host(reason: str | None) -> TdtOutput:
+        if run_decoder is None or run_joint is None:
+            raise _fail(f"host fallback needs decoder/joint callbacks: {reason}")
+        output = greedy_tdt_decode(
+            valid_frames=valid_frames,
+            config=config,
+            initial_hidden=initial_hidden,
+            initial_cell=initial_cell,
+            run_decoder=run_decoder,
+            run_joint=run_joint,
+        )
+        return TdtOutput(
+            token_ids=output.token_ids,
+            frame_indices=output.frame_indices,
+            durations=output.durations,
+            hidden=output.hidden,
+            cell=output.cell,
+            decode_path="host",
+            fallback_reason=reason,
+        )
+
+    chain_failure = None
+    if not force_host and not _chain_disabled():
+        from .vulkan_tdt_chain import run_tdt_chain
+
+        try:
+            chain = run_tdt_chain(
+                packed=packed,
+                encoder=encoder,
+                valid_frames=valid_frames,
+                config=config,
+                initial_hidden=initial_hidden,
+                initial_cell=initial_cell,
+            )
+        except Exception as exc:  # launch-time capability failures
+            chain_failure = f"gpu chain launch failed: {exc}"
+        else:
+            return TdtOutput(
+                token_ids=chain.token_ids,
+                frame_indices=chain.frame_indices,
+                durations=chain.durations,
+                hidden=chain.hidden,
+                cell=chain.cell,
+                decode_path="gpu-chain",
+            )
+    if chain_failure is not None and not explicit_gpu:
+        try:
+            return run_host(chain_failure)
+        except TdtControlError:
+            pass
+
+    reason: str | None
+    if not explicit_gpu:
+        # Host control loop: the default (env unset), or an explicit
+        # --tdt-host / MLX_OMARCHY_TDT_HOST request. A caller without
+        # decoder/joint callbacks cannot drive the host loop: an explicit
+        # request is a named error, the default falls through to the GPU
+        # loop below.
+        if run_decoder is not None and run_joint is not None:
+            if force_host:
+                return run_host("--tdt-host")
+            if raw is not None:
+                return run_host(f"{_TDT_HOST_ENV}={raw}")
+            return run_host(None)
+        if force_host or raw is not None:
+            raise _fail("host fallback needs decoder/joint callbacks: "
+                        f"{'--tdt-host' if force_host else f'{_TDT_HOST_ENV}={raw}'}")
+        reason = "host control loop needs decoder/joint callbacks"
+    else:
+        reason = None
+    blockers = tdt_loop_blockers()
+    if not blockers:
+        from .vulkan_tdt_loop import run_tdt_loop
+
+        try:
+            looped = run_tdt_loop(
+                packed=packed,
+                encoder=encoder,
+                valid_frames=valid_frames,
+                config=config,
+                initial_hidden=initial_hidden,
+                initial_cell=initial_cell,
+            )
+        except Exception as exc:  # launch-time capability failures
+            return run_host(f"gpu loop launch failed: {exc}")
+        return TdtOutput(
+            token_ids=looped.token_ids,
+            frame_indices=looped.frame_indices,
+            durations=looped.durations,
+            hidden=looped.hidden,
+            cell=looped.cell,
+            decode_path="gpu-loop",
+        )
+    if reason is not None:
+        reason = f"{reason}; {'; '.join(blockers)}"
+    else:
+        reason = "; ".join(blockers)
+    return run_host(reason)
 
 
 def _sha256(data: bytes) -> str:

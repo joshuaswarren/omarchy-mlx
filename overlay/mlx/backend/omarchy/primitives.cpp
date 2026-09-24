@@ -10818,6 +10818,132 @@ void GatedDeltaUpdate::eval_gpu(
       1);
 }
 
+bool GreedyQuantizedArgmax::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+// Greedy-argmax head, shaders/qmm_vec.comp QMM_VEC_GREEDY stages 0-7.
+// Its exact stage IS the QmmVecQ4WordSubgroupBF16 column, so the route
+// holds only where QuantizedMatmul::eval_gpu picks that kernel for the
+// single decode row; elsewhere the composed fallback answers.
+void GreedyQuantizedArgmax::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const auto& caps = encoder.device().capabilities();
+  bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  omarchy::capsim::require_backed(
+      encoder.device(),
+      caps,
+      subgroup_ready,
+      "QmmVec*Subgroup*",
+      "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+      (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+       (encoder.device().hardware_capabilities().subgroup_operations &
+        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+  const array& w = inputs.at(1);
+  uint32_t n = static_cast<uint32_t>(w.shape(0));
+  if (!subgroup_ready || !omarchy::q4_word_enabled() ||
+      !caps.storage_buffer_16bit_access || !caps.shader_int16) {
+    auto result = fallback_(inputs);
+    settle(result);
+    encoder.synchronize("greedy_argmax_fallback");
+    outputs.at(0).copy_shared_buffer(result.at(0));
+    outputs.at(1).copy_shared_buffer(result.at(1));
+    return;
+  }
+  // MLX_OMARCHY_GREEDY_PRUNE_TEST (qualification only): "full" forces the
+  // full exact path, "keep" keeps every row as a survivor.
+  static const uint32_t test_flags = [] {
+    const char* env = std::getenv("MLX_OMARCHY_GREEDY_PRUNE_TEST");
+    if (env == nullptr) {
+      return 0u;
+    }
+    return std::strcmp(env, "full") == 0 ? 1u
+        : std::strcmp(env, "keep") == 0  ? 2u
+                                         : 0u;
+  }();
+  const array& x = inputs.at(0);
+  std::optional<array> x_temp;
+  std::optional<array> w_temp;
+  std::optional<array> scales_temp;
+  std::optional<array> biases_temp;
+  std::optional<array> plane_temp;
+  // The Q4 word column reads x as uvec4: a 16-byte-aligned dense row.
+  const array& x_d = ensure_dense(
+      x,
+      x.flags().row_contiguous && x.offset() % (8 * x.itemsize()) == 0,
+      x_temp,
+      encoder,
+      s);
+  const array& w_d =
+      ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  const array& scales_d = ensure_dense(
+      inputs.at(2), inputs.at(2).flags().row_contiguous, scales_temp,
+      encoder, s);
+  const array& biases_d = ensure_dense(
+      inputs.at(3), inputs.at(3).flags().row_contiguous, biases_temp,
+      encoder, s);
+  const array& plane_d = ensure_dense(
+      inputs.at(4), inputs.at(4).flags().row_contiguous, plane_temp,
+      encoder, s);
+  array& token = outputs.at(0);
+  array& stats = outputs.at(1);
+  token.set_data(allocate_omarchy(token.nbytes()));
+  stats.set_data(allocate_omarchy(stats.nbytes()));
+  auto scratch = [&](Dtype dtype, int size) {
+    array a({size}, dtype, nullptr, {});
+    a.set_data(allocate_omarchy(a.nbytes()));
+    encoder.add_temporary(a);
+    return a;
+  };
+  array state = scratch(uint32, 128);
+  array bounds = scratch(float32, static_cast<int>(n));
+  array survivors = scratch(uint32, static_cast<int>(n));
+  array row_values = scratch(float32, static_cast<int>(n));
+  omarchy::ComputeParams params;
+  params.matrix_n = n;
+  params.matrix_k = static_cast<uint32_t>(x.shape(-1));
+  params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, token);
+  params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, token);
+  params.aux_offset =
+      checked_item_offset(scales_d, scales_d.size(), tag, token);
+  params.aux_size = checked_item_offset(biases_d, biases_d.size(), tag, token);
+  params.rhs_size = checked_item_offset(plane_d, plane_d.size(), tag, token);
+  params.flags = test_flags;
+  std::array<omarchy::ComputeBinding, 11> bindings{
+      binding(x_d),
+      binding(w_d),
+      binding(scales_d),
+      binding(biases_d),
+      binding(plane_d),
+      binding(token),
+      binding(state),
+      binding(bounds),
+      binding(survivors),
+      binding(row_values),
+      binding(stats)};
+  // Stage group counts: prologue 1; bounds 128 rows per workgroup;
+  // candidates and survivors 64 x 8 columns in flight; compact 256 rows
+  // per workgroup; select 1; full rows 256 x 8 in flight (flagged tokens
+  // only); full select 1.
+  const std::array<uint32_t, 8> groups{
+      1u, (n + 127u) / 128u, 64u, (n + 255u) / 256u, 64u, 1u, 256u, 1u};
+  for (uint32_t stage = 0; stage < groups.size(); ++stage) {
+    params.operation = stage;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyBF16,
+        bindings,
+        params,
+        groups[stage],
+        1u,
+        1u);
+  }
+}
+
 
 namespace {
 

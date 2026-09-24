@@ -15,6 +15,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -407,6 +408,31 @@ std::string sha256_file(const std::filesystem::path& path) {
   return sha256_pad_and_digest(context);
 }
 
+struct DigestCacheKey {
+  std::string path;
+  uint64_t dev;
+  uint64_t ino;
+  uint64_t size;
+  uint64_t mtime_ns;
+
+  std::string serialize() const {
+    char hex[64];
+    std::snprintf(
+        hex,
+        sizeof(hex),
+        "|%llx|%llx|%llx|%llx",
+        static_cast<unsigned long long>(dev),
+        static_cast<unsigned long long>(ino),
+        static_cast<unsigned long long>(size),
+        static_cast<unsigned long long>(mtime_ns));
+    return path + hex;
+  }
+
+  bool operator<(const DigestCacheKey& rhs) const {
+    return serialize() < rhs.serialize();
+  }
+};
+
 namespace {
 
 std::string payload_collection_sha256(const std::vector<AnePayload>& payloads) {
@@ -668,6 +694,254 @@ std::vector<uint8_t> read_anec_payload(
   return payload;
 }
 
+// Derived role-channel cache: the (src, dst) surface map that
+// derive_role_channels can only produce by walking the task stream inside
+// the full ANEC payload, keyed on the same cheap file identity as the
+// digest cache (path|dev|ino|size|mtime_ns) and persisted in a sidecar the
+// same way. Without it every open re-reads the whole payload per program
+// just to re-derive channels the file cannot have changed without its
+// identity changing. The per-binding validation that consumes the channels
+// still runs on every open, so a wrong cached map fails the open loudly
+// instead of misbinding. MLX_OMARCHY_ANE_CHANNEL_CACHE forces re-derivation
+// every open when set to 0/false/no/off/empty (case-insensitive);
+// MLX_OMARCHY_ANE_CHANNEL_CACHE_PATH overrides the sidecar location.
+struct ChannelCacheEntry {
+  std::vector<uint32_t> src;
+  std::vector<uint32_t> dst;
+};
+
+bool channel_cache_enabled() {
+  const char* value = std::getenv("MLX_OMARCHY_ANE_CHANNEL_CACHE");
+  if (value == nullptr) {
+    return true;
+  }
+  std::string lowered(value);
+  for (char& c : lowered) {
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return lowered != "0" && lowered != "false" && lowered != "no" &&
+      lowered != "off" && !lowered.empty();
+}
+
+std::filesystem::path channel_cache_path() {
+  if (const char* override_path =
+          std::getenv("MLX_OMARCHY_ANE_CHANNEL_CACHE_PATH")) {
+    return std::filesystem::path(override_path);
+  }
+  std::filesystem::path base;
+  if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg) {
+    base = xdg;
+  } else if (const char* home = std::getenv("HOME"); home && *home) {
+    base = std::filesystem::path(home) / ".cache";
+  } else {
+    return {};
+  }
+  return base / "mlx-omarchy" / "ane-channel-cache.txt";
+}
+
+std::mutex g_channel_cache_mutex;
+std::map<DigestCacheKey, ChannelCacheEntry> g_channel_cache;
+
+// Sidecar line: <serialized identity key> <nsrc>:c,c,... <ndst>:c,c,...
+// The identity key may contain spaces, so fields are split from the end and
+// the channel fields are validated structurally before use.
+std::optional<std::pair<uint64_t, std::vector<uint32_t>>> parse_channel_field(
+    const std::string& field) {
+  const size_t colon = field.find(':');
+  if (colon == std::string::npos || colon == 0) {
+    return std::nullopt;
+  }
+  uint64_t count = 0;
+  try {
+    count = std::stoull(field.substr(0, colon));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  std::vector<uint32_t> channels;
+  size_t begin = colon + 1;
+  while (true) {
+    const size_t comma = field.find(',', begin);
+    const std::string token = field.substr(
+        begin, (comma == std::string::npos ? field.size() : comma) - begin);
+    if (token.empty()) {
+      return std::nullopt;
+    }
+    uint64_t channel = 0;
+    try {
+      channel = std::stoull(token);
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+    if (channel >= kAnecTileCount) {
+      return std::nullopt;
+    }
+    channels.push_back(uint32_t(channel));
+    if (comma == std::string::npos) {
+      break;
+    }
+    begin = comma + 1;
+  }
+  if (channels.size() != count) {
+    return std::nullopt;
+  }
+  return std::make_pair(count, std::move(channels));
+}
+
+std::map<DigestCacheKey, ChannelCacheEntry> load_channel_cache_disk() {
+  std::map<DigestCacheKey, ChannelCacheEntry> entries;
+  std::ifstream input(channel_cache_path());
+  if (!input) {
+    return entries;
+  }
+  std::string line;
+  while (std::getline(input, line)) {
+    const size_t dst_sep = line.rfind(' ');
+    if (dst_sep == std::string::npos || dst_sep == 0) {
+      continue;
+    }
+    const size_t src_sep = line.rfind(' ', dst_sep - 1);
+    if (src_sep == std::string::npos || src_sep == 0) {
+      continue;
+    }
+    const std::string key = line.substr(0, src_sep);
+    std::vector<size_t> pipes;
+    for (size_t i = key.size(); i-- > 0;) {
+      if (key[i] == '|') {
+        pipes.push_back(i);
+        if (pipes.size() == 4) {
+          break;
+        }
+      }
+    }
+    if (pipes.size() != 4) {
+      continue;
+    }
+    auto src = parse_channel_field(line.substr(src_sep + 1, dst_sep - src_sep - 1));
+    auto dst = parse_channel_field(line.substr(dst_sep + 1));
+    if (!src || !dst) {
+      continue;
+    }
+    DigestCacheKey parsed;
+    parsed.path = key.substr(0, pipes[3]);
+    const auto field = [&](size_t n) -> uint64_t {
+      return std::strtoull(key.c_str() + pipes[n] + 1, nullptr, 16);
+    };
+    parsed.dev = field(3);
+    parsed.ino = field(2);
+    parsed.size = field(1);
+    parsed.mtime_ns = field(0);
+    ChannelCacheEntry entry;
+    entry.src = std::move(src->second);
+    entry.dst = std::move(dst->second);
+    entries.emplace(std::move(parsed), std::move(entry));
+  }
+  return entries;
+}
+
+void store_channel_cache_disk(
+    const std::filesystem::path& sidecar,
+    const std::string& serialized_key,
+    const ChannelCacheEntry& entry) {
+  std::error_code ec;
+  std::filesystem::create_directories(sidecar.parent_path(), ec);
+  if (ec) {
+    return;
+  }
+  std::ofstream output(sidecar, std::ios::binary | std::ios::app);
+  if (!output) {
+    return;
+  }
+  const auto join = [](const std::vector<uint32_t>& channels) {
+    std::string joined;
+    for (size_t i = 0; i < channels.size(); ++i) {
+      if (i != 0) {
+        joined += ',';
+      }
+      joined += std::to_string(channels[i]);
+    }
+    return joined;
+  };
+  output << serialized_key << ' ' << entry.src.size() << ':' << join(entry.src)
+         << ' ' << entry.dst.size() << ':' << join(entry.dst) << '\n';
+}
+
+bool channel_entry_plausible(
+    const ChannelCacheEntry& entry,
+    const AneAnecHeader& header) {
+  if (entry.src.size() != header.source_count ||
+      entry.dst.size() != header.destination_count) {
+    return false;
+  }
+  const auto plausible = [&header](uint32_t channel) {
+    return channel >= kBindFirstSurface && channel < kAnecTileCount &&
+        header.tiles[channel] != 0;
+  };
+  return std::all_of(entry.src.begin(), entry.src.end(), plausible) &&
+      std::all_of(entry.dst.begin(), entry.dst.end(), plausible);
+}
+
+// Returns the derived role channels, deriving from a full payload read only
+// on a cache miss (kill-switch, unknown identity, or missing/implausible
+// sidecar entry). Returns false when the task stream does not name every
+// surface, exactly like derive_role_channels, and that failure is never
+// cached.
+bool derived_role_channels(
+    const AneAnecHeader& header,
+    const std::filesystem::path& anec_path,
+    ChannelCacheEntry& entry) {
+  struct ::stat st {};
+  if (::stat(anec_path.c_str(), &st) != 0) {
+    throw bundle_error("cannot stat file " + anec_path.string());
+  }
+#if defined(__APPLE__)
+  const uint64_t mtime_ns = uint64_t(st.st_mtimespec.tv_sec) * 1000000000ull +
+      uint64_t(st.st_mtimespec.tv_nsec);
+#else
+  const uint64_t mtime_ns = uint64_t(st.st_mtim.tv_sec) * 1000000000ull +
+      uint64_t(st.st_mtim.tv_nsec);
+#endif
+  DigestCacheKey key{
+      anec_path.string(),
+      uint64_t(st.st_dev),
+      uint64_t(st.st_ino),
+      uint64_t(st.st_size),
+      mtime_ns};
+  if (channel_cache_enabled()) {
+    std::lock_guard<std::mutex> lock(g_channel_cache_mutex);
+    auto it = g_channel_cache.find(key);
+    if (it != g_channel_cache.end() &&
+        channel_entry_plausible(it->second, header)) {
+      entry = it->second;
+      return true;
+    }
+    auto disk = load_channel_cache_disk();
+    auto dit = disk.find(key);
+    if (dit != disk.end() && channel_entry_plausible(dit->second, header)) {
+      g_channel_cache.emplace(key, dit->second);
+      entry = dit->second;
+      return true;
+    }
+  }
+  const auto payload = read_anec_payload(anec_path, header.payload_size);
+  if (!derive_role_channels(
+          header,
+          payload.data(),
+          payload.size(),
+          entry.src,
+          entry.dst)) {
+    return false;
+  }
+  if (channel_cache_enabled()) {
+    const std::string serialized = key.serialize();
+    std::lock_guard<std::mutex> lock(g_channel_cache_mutex);
+    g_channel_cache.emplace(std::move(key), entry);
+    if (auto sidecar = channel_cache_path(); !sidecar.empty()) {
+      store_channel_cache_disk(sidecar, serialized, entry);
+    }
+  }
+  return true;
+}
+
 void validate_binding(
     const std::string& label,
     const AneProgramBinding& binding,
@@ -718,14 +992,14 @@ void validate_program_contract(
   if (channel_size_bytes(header, 3, tile_alignment) != program.scratch_bytes) {
     throw bundle_error(prefix + " scratch_bytes does not match ANEC channel 3 allocation");
   }
-  const auto payload = read_anec_payload(anec_path, header.payload_size);
-  std::vector<uint32_t> src;
-  std::vector<uint32_t> dst;
-  if (!derive_role_channels(header, payload.data(), payload.size(), src, dst)) {
+  ChannelCacheEntry channels;
+  if (!derived_role_channels(header, anec_path, channels)) {
     throw bundle_error(
         prefix +
         " task stream does not name every surface; channel map is positional");
   }
+  const std::vector<uint32_t>& src = channels.src;
+  const std::vector<uint32_t>& dst = channels.dst;
   for (uint32_t i = 0; i < program.outputs.size(); ++i) {
     validate_binding(
         prefix + " output " + program.outputs[i].tensor,
@@ -891,31 +1165,6 @@ std::filesystem::path digest_cache_path() {
   }
   return base / "mlx-omarchy" / "ane-digest-cache.txt";
 }
-
-struct DigestCacheKey {
-  std::string path;
-  uint64_t dev;
-  uint64_t ino;
-  uint64_t size;
-  uint64_t mtime_ns;
-
-  std::string serialize() const {
-    char hex[64];
-    std::snprintf(
-        hex,
-        sizeof(hex),
-        "|%llx|%llx|%llx|%llx",
-        static_cast<unsigned long long>(dev),
-        static_cast<unsigned long long>(ino),
-        static_cast<unsigned long long>(size),
-        static_cast<unsigned long long>(mtime_ns));
-    return path + hex;
-  }
-
-  bool operator<(const DigestCacheKey& rhs) const {
-    return serialize() < rhs.serialize();
-  }
-};
 
 std::mutex g_digest_cache_mutex;
 std::map<DigestCacheKey, std::string> g_digest_cache;

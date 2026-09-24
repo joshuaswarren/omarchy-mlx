@@ -43,6 +43,7 @@ process I/O, also not arithmetic; both are accounted explicitly.
 from __future__ import annotations
 
 import argparse
+import atexit
 import ctypes
 import hashlib
 import importlib.metadata
@@ -713,6 +714,32 @@ def _manifest_operation(manifest_path: Path) -> str | None:
     return op if isinstance(op, str) else None
 
 
+def _pin_declares_whole_bundle() -> bool:
+    """True iff the runtime pin read from the share tree names the
+    whole-encoder bundle. Used to decide whether a missing bundle is a
+    silent-fallback case or a deliberate opt-out (MLX_OMARCHY_WHOLE_ENCODER=0).
+    """
+    pin_candidates = [
+        # installed wheel layout
+        Path(__file__).resolve().parents[1] / "share" / "mlx-omarchy" /
+        "parakeet-1" / "parakeet-runtime-pin.json",
+        # source-tree layout
+        Path(__file__).resolve().parents[2] / "mlx-omarchy-parakeet" /
+        "share" / "mlx-omarchy" / "parakeet-1" / "parakeet-runtime-pin.json",
+    ]
+    for pin_path in pin_candidates:
+        if not pin_path.is_file():
+            continue
+        try:
+            pin = json.loads(pin_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        bundles = pin.get("assets", {}).get("bundles", {}) if isinstance(pin, dict) else {}
+        if isinstance(bundles, dict) and "parakeet-encoder-whole" in bundles:
+            return True
+    return False
+
+
 def _discover_whole_bundle() -> Path | None:
     """Locate the whole-program encoder bundle, cheapest source first.
 
@@ -749,7 +776,81 @@ def _discover_whole_bundle() -> Path | None:
         for manifest_path in sorted(root.rglob("manifest.json")):
             if _manifest_operation(manifest_path) == WHOLE_ENCODER_OP:
                 return manifest_path.parent
+    # Fail loud: when the runtime pin declares the whole-encoder bundle
+    # as a required asset, a missing discovery is no longer a quiet
+    # fallback to the split-island path -- the installed wheel was
+    # shipped incomplete. Force the operator to either supply the bundle
+    # or set MLX_OMARCHY_WHOLE_ENCODER=0 to opt out of the whole path
+    # deliberately. A nil discovery with no opt-out here would silently
+    # take the 705-1050 ms split-island path, which is the original bug.
+    if _pin_declares_whole_bundle() and os.environ.get(
+        "MLX_OMARCHY_WHOLE_ENCODER", "1"
+    ).strip().lower() not in ("", "0", "off", "false", "no"):
+        searched = ", ".join(str(r) for r in roots if r.is_dir()) or "(no share root found)"
+        raise EncoderRunError(
+            "the runtime pin declares parakeet-encoder-whole but the bundle "
+            "directory was not discoverable; refusing to silently fall back "
+            "to the split-island encoder path. Searched: " + searched +
+            ". Fix: install the bundle with scripts/install-integrated.sh, "
+            "set MLX_OMARCHY_WHOLE_ENCODER_BUNDLE=/path/to/dir, or set "
+            "MLX_OMARCHY_WHOLE_ENCODER=0 to opt out of the whole path."
+        )
     return None
+
+
+# Process-level resident session singleton: repeated transcriptions in one
+# process reuse the spawned worker and its resident bundles instead of paying
+# worker spawn + bundle register + device program load on every pass. The
+# held session is keyed on the full session identity (worker, libane, bundle
+# name/path set, deadlines), so a different identity simply spawns its own
+# session. ANE_ISLAND_PRIVATE_SESSION=1 (or true/yes/on) opts out and gives
+# every AneIsland its own private session, the pre-singleton behavior. The
+# worker is a private child process either way; the atexit hook releases it
+# when the process exits, outside any measured pass.
+_SHARED_SESSION: dict | None = None
+_SHARED_SESSION_ATEXIT = False
+
+
+def _shared_session_take(identity: tuple):
+    """Return the held session when identity matches and it is still up."""
+    if _SHARED_SESSION is None or _SHARED_SESSION["identity"] != identity:
+        return None
+    session = _SHARED_SESSION["session"]
+    return session if session.alive else None
+
+
+def _shared_session_hold(identity: tuple, session) -> None:
+    global _SHARED_SESSION, _SHARED_SESSION_ATEXIT
+    _SHARED_SESSION = {"identity": identity, "session": session}
+    if not _SHARED_SESSION_ATEXIT:
+        _SHARED_SESSION_ATEXIT = True
+        atexit.register(_shared_session_release)
+
+
+def _shared_session_drop(session) -> None:
+    """Forget a session that died mid-pass so nothing reuses a corpse."""
+    global _SHARED_SESSION
+    if _SHARED_SESSION is not None and _SHARED_SESSION["session"] is session:
+        _SHARED_SESSION = None
+
+
+def _shared_session_release() -> None:
+    """Close the held session at process exit; best effort by design."""
+    global _SHARED_SESSION
+    entry, _SHARED_SESSION = _SHARED_SESSION, None
+    if entry is None:
+        return
+    session = entry["session"]
+    try:
+        if session.alive and session._batch_until is not None:
+            session.end_batch()
+    except Exception:
+        pass
+    try:
+        if session.alive:
+            session.close()
+    except Exception:
+        session._terminate()
 
 
 class AneIsland:
@@ -808,6 +909,19 @@ class AneIsland:
         )
         self.resident_bundles = set(RESIDENT_BUNDLES)
         self._session = None
+        # Session singleton bookkeeping: worker_starts counts actual spawns
+        # this island performed (0 when it reused the shared session),
+        # session_open_ns is the full spawn+register+load cost (0 on reuse),
+        # batch_open_ns is this pass's ensure cost (spawn+register+batch on
+        # first use, begin_batch alone on reuse), session_close_ns the
+        # end_batch scope close this pass pays.
+        self.share_session = os.environ.get(
+            "ANE_ISLAND_PRIVATE_SESSION", ""
+        ).strip().lower() not in ("1", "true", "yes", "on")
+        self.session_reused = False
+        self.session_open_ns = 0
+        self.session_close_ns = 0
+        self._session_shared = False
         # Whole-program encoder bundle, when discoverable. Kept as a
         # resolved directory so the launch path can pass it directly; the
         # resident session registers it by manifest name.
@@ -817,18 +931,36 @@ class AneIsland:
             self.whole_bundle = _discover_whole_bundle()
 
     def close(self) -> None:
-        """Release the resident session; a no-op on the launch path."""
+        """End this pass's batch scope; a shared session stays resident."""
         if self._session is None:
             return
         session, self._session = self._session, None
+        started = time.monotonic_ns()
         try:
             session.end_batch()
         except Exception as error:
+            if self._session_shared:
+                _shared_session_drop(session)
             raise EncoderRunError(f"resident batch close failed: {error}") from error
-        try:
-            session.close()
-        except Exception as error:
-            raise EncoderRunError(f"resident session close failed: {error}") from error
+        self.session_close_ns = time.monotonic_ns() - started
+        if not self._session_shared:
+            try:
+                session.close()
+            except Exception as error:
+                raise EncoderRunError(f"resident session close failed: {error}") from error
+
+    def _session_bundles(self) -> dict:
+        """The resident bundle set this session registers, name -> path."""
+        bundles = {
+            name: Path(self.bundles) / name
+            for name in sorted(self.resident_bundles)
+        }
+        if self.whole_bundle is not None:
+            manifest = json.loads(
+                (self.whole_bundle / "manifest.json").read_text()
+            )
+            bundles[manifest["name"]] = Path(self.whole_bundle)
+        return bundles
 
     def _ensure_session(self):
         if self._session is not None:
@@ -836,25 +968,36 @@ class AneIsland:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ane_resident import ResidentAneWorker
         started = time.monotonic_ns()
-        session = ResidentAneWorker(
-            worker=Path(self.worker),
-            libane=Path(self.libane),
-            bundles={
-                name: Path(self.bundles) / name
-                for name in sorted(self.resident_bundles)
-            },
-            scratch=Path(self.scratch),
-            deadline_ms=self.deadline_ms,
+        bundles = self._session_bundles()
+        identity = (
+            str(self.worker),
+            str(self.libane),
+            tuple(sorted((name, str(path)) for name, path in bundles.items())),
+            self.deadline_ms,
+            self._batch_deadline_ms,
         )
-        if self.whole_bundle is not None:
-            manifest = json.loads(
-                (self.whole_bundle / "manifest.json").read_text()
+        session = None
+        if self.share_session:
+            session = _shared_session_take(identity)
+            self._session_shared = True
+            self.session_reused = session is not None
+        if session is None:
+            session = ResidentAneWorker(
+                worker=Path(self.worker),
+                libane=Path(self.libane),
+                bundles=bundles,
+                scratch=Path(self.scratch),
+                deadline_ms=self.deadline_ms,
             )
-            session.bundles[manifest["name"]] = Path(self.whole_bundle)
-        session.start()
+            session.start()
+            if self.share_session:
+                _shared_session_hold(identity, session)
+                self._session_shared = True
         session.begin_batch(self._batch_deadline_ms)
         self.batch_open_ns = time.monotonic_ns() - started
-        self.worker_starts += 1
+        if not self.session_reused:
+            self.worker_starts += 1
+            self.session_open_ns = self.batch_open_ns
         self.submissions += 1
         self._session = session
         return session
@@ -881,6 +1024,8 @@ class AneIsland:
         try:
             results = session.submit(bundle, tag, payload, out_names)
         except Exception as error:
+            if self._session_shared:
+                _shared_session_drop(session)
             raise EncoderRunError(
                 f"ANE batch round {tag} ({bundle}) failed: {error}"
             ) from error

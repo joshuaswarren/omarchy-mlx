@@ -1,0 +1,187 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -86,6 +86,26 @@
+     const std::optional<array>& mask = std::nullopt,
+     StreamOrDevice s = {});
+ 
++// Greedy token of a transposed affine-quantized projection: the index
++// argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
++// logits = quantized_matmul(x, w, scales, biases, transpose=true).
++// high_bits packs q >> 1 of every 4-bit code q, code e of each 64-code
++// group at bit 3e of that group's six uint32 words ([N, K * 3 / 32]); a
++// backend may use it to certify rows that cannot hold the argmax and skip
++// their exact evaluation. Returns {token (x.shape()[:-1], uint32), stats
++// (uint32 [3]: rows evaluated exactly, 1 when the full exact path decided
++// the token, float bits of the max logit or, on the full path, of the
++// logsumexp; 0 when composed)}.
++MLX_API std::vector<array> greedy_quantized_argmax(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    const array& high_bits,
++    int group_size,
++    int bits,
++    StreamOrDevice s = {});
++
+ using TemplateArg = std::variant<int, bool, Dtype>;
+ using ScalarArg = std::variant<bool, int, float>;
+ 
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1308,6 +1308,61 @@
+   return result;
+ }
+ 
++std::vector<array> greedy_quantized_argmax(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    const array& high_bits,
++    int group_size,
++    int bits,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (w.ndim() != 2 || x.ndim() < 1) {
++    throw std::invalid_argument(
++        "[greedy_quantized_argmax] w must be 2D and x at least 1D.");
++  }
++  auto fallback = [group_size, bits, s](const std::vector<array>& in) {
++    auto logits = quantized_matmul(
++        in[0], in[1], in[2], in[3], true, group_size, bits, "affine", s);
++    auto logprobs =
++        subtract(logits, logsumexp(logits, -1, true, s), s);
++    auto n = static_cast<uint32_t>(in[1].shape(0));
++    return std::vector<array>{
++        argmax(logprobs, -1, false, s), array({n, 1u, 0u})};
++  };
++  int n = w.shape(0);
++  int k = x.shape(-1);
++  Shape plane_shape{n, k * 3 / 32};
++  Shape param_shape{n, k / 64};
++  // The GPU route maps one 64-wide group to one of 32 subgroup lanes, so
++  // it serves exactly the K = 2048, 4-bit, group-64 decode row, with at
++  // most 65535 bound workgroups of 128 rows.
++  bool routed = bits == 4 && group_size == 64 && k == 2048 &&
++      x.size() == static_cast<size_t>(k) && x.dtype() == bfloat16 &&
++      w.dtype() == uint32 && w.shape(1) == k / 8 &&
++      scales.dtype() == bfloat16 && biases.dtype() == bfloat16 &&
++      scales.shape() == param_shape && biases.shape() == param_shape &&
++      high_bits.dtype() == uint32 && high_bits.shape() == plane_shape &&
++      n <= 65535 * 128 &&
++      !GreedyQuantizedArgmax::use_fallback(s);
++  std::vector<array> inputs{x, w, scales, biases, high_bits};
++  if (!routed) {
++    return fallback(inputs);
++  }
++  Shape token_shape(x.shape().begin(), x.shape().end() - 1);
++  return array::make_arrays(
++      {std::move(token_shape), Shape{3}},
++      {uint32, uint32},
++      std::make_shared<GreedyQuantizedArgmax>(s, fallback, group_size, bits),
++      std::move(inputs));
++}
++
++bool GreedyQuantizedArgmax::is_equivalent(const Primitive& other) const {
++  const auto& p = static_cast<const GreedyQuantizedArgmax&>(other);
++  return p.group_size_ == group_size_ && p.bits_ == bits_;
++}
++
+ bool Quantize::is_equivalent(const Primitive& other) const {
+   const Quantize& p_other = static_cast<const Quantize&>(other);
+   return (
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -435,6 +435,40 @@
+   bool raw_gates_{false};
+ };
+ 
++// Inputs (x, w, scales, biases, high_bits); outputs (token, stats). See
++// fast::greedy_quantized_argmax.
++class GreedyQuantizedArgmax : public Custom {
++ public:
++  GreedyQuantizedArgmax(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int group_size,
++      int bits)
++      : Custom(stream, std::move(fallback)),
++        group_size_(group_size),
++        bits_(bits) {}
++
++  static bool use_fallback(Stream s);
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(GreedyQuantizedArgmax);
++  bool is_equivalent(const Primitive& other) const override;
++  auto state() const {
++    return std::make_tuple(nullptr, group_size_, bits_);
++  }
++
++ private:
++  int group_size_;
++  int bits_;
++};
++
+ class Quantize : public Custom {
+  public:
+   explicit Quantize(
+--- a/mlx/backend/no_gpu/primitives.cpp
++++ b/mlx/backend/no_gpu/primitives.cpp
+@@ -190,6 +190,7 @@
+ NO_GPU_MULTI(ScaledDotProductAttention)
+ NO_GPU_MULTI(ScaledDotProductAttentionVJP)
+ NO_GPU_MULTI(GatedDeltaUpdate)
++NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
+ NO_GPU_MULTI(ConvertFP8)
+ NO_GPU_MULTI(Quantize)
+ NO_GPU_MULTI(CustomKernel)
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -442,6 +442,38 @@
+             Returns:
+                 Tuple of (output [B, 1, Hv, Dv], final_state [B, Hv, Dv, Dk])
+         )");
++  m.def(
++      "greedy_quantized_argmax",
++      &mlx::core::fast::greedy_quantized_argmax,
++      "x"_a,
++      "w"_a,
++      "scales"_a,
++      "biases"_a,
++      "high_bits"_a,
++      nb::kw_only(),
++      "group_size"_a,
++      "bits"_a,
++      "stream"_a = nb::none(),
++      R"(
++            Greedy token of a transposed affine-quantized projection:
++            the index ``argmax(logits - logsumexp(logits, -1, keepdims=True),
++            -1)`` selects, with ``logits = quantized_matmul(x, w, scales,
++            biases, transpose=True)``. The GPU backend uses ``high_bits``
++            to prove which rows cannot hold the argmax and evaluates only
++            the rest exactly; the token equals the composed expression's.
++            Args:
++                x: Input rows [..., K]
++                w: Packed weight [N, K * bits / 32]
++                scales, biases: Affine parameters [N, K / group_size]
++                high_bits: ``q >> 1`` of every code, 3 bits per code, code
++                    e of a 64-code group at bit 3e of its six words
++                    [N, K * 3 / 32]
++            Returns:
++                List of (token [...] uint32, stats [3] uint32: rows
++                evaluated exactly, 1 when the full exact path decided the
++                token, float bits of the max logit or, on the full path, of
++                the logsumexp; 0 when composed)
++        )");
+ 
+   m.def(
+       "metal_kernel",

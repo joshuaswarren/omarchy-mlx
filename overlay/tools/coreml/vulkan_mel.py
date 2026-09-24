@@ -127,6 +127,9 @@ def _call(kernel, inputs, output_shapes, output_dtypes, grid, threadgroup):
     )
 
 
+# Evidence-only: the runtime windowing kernel applies preemphasis inline
+# (fewer pipelines). This standalone kernel exists so capture-stages
+# qualification can still materialize the pinned macOS "preemph" stage.
 @cache
 def _preemphasis_kernel(mx=None):
     mx = mx or _mlx()
@@ -164,8 +167,8 @@ def _preemphasize(waveform):
 def _frames_kernel(mx=None):
     mx = mx or _mlx()
     return mx.fast.metal_kernel(
-        name="parakeet_frames_f32",
-        input_names=["preemph", "hann"],
+        name="parakeet_frames_preemph_f32",
+        input_names=["waveform", "hann"],
         output_names=["frames"],
         header=_FMA_HEADER,
         source="""
@@ -177,8 +180,16 @@ def _frames_kernel(mx=None):
                 uint window_index = fft_index - 56u;
                 int pre_index = int(frame * 160u + window_index) - 256;
                 if (pre_index >= 0 && pre_index < 480000) {
-                    precise float input_value = preemph[uint(pre_index)];
-                    value = mul32(input_value, hann[window_index]);
+                    uint length = uint(waveform_shape[0]);
+                    precise float current = uint(pre_index) < length
+                        ? waveform[pre_index] : 0.0f;
+                    precise float previous =
+                        (pre_index > 0 && uint(pre_index - 1) < length)
+                            ? waveform[uint(pre_index - 1)] : 0.0f;
+                    precise float product = mul32(0.97f, previous);
+                    precise float emphasized = pre_index == 0
+                        ? current : sub32(current, product);
+                    value = mul32(emphasized, hann[window_index]);
                 }
             }
             frames[index] = value;
@@ -187,11 +198,11 @@ def _frames_kernel(mx=None):
     )
 
 
-def _frame(preemph, hann):
+def _frames(waveform, hann):
     mx = _mlx()
     return _call(
         _frames_kernel(mx),
-        [preemph, hann],
+        [waveform, hann],
         [(N_FRAMES, N_FFT)],
         [mx.float32],
         (N_FRAMES * N_FFT, 1, 1),
@@ -853,35 +864,19 @@ def _dft_frames(frames):
 
 
 @cache
-def _magnitude_kernel(mx=None):
+def _power_kernel(mx=None):
     mx = mx or _mlx()
     return mx.fast.metal_kernel(
-        name="parakeet_magnitude_f32",
+        name="parakeet_power_f32",
         input_names=["dft_real", "dft_imag"],
-        output_names=["magnitude"],
+        output_names=["power"],
         header=_SQRT_HEADER,
         source="""
             uint i = thread_position_in_grid.x;
             precise float re2 = mul32(dft_real[i], dft_real[i]);
             precise float im2 = mul32(dft_imag[i], dft_imag[i]);
-            magnitude[i] = sqrt32(add32(re2, im2));
-        """,
-        compile_options={"math_mode": "safe"},
-    )
-
-
-@cache
-def _power_kernel(mx=None):
-    mx = mx or _mlx()
-    return mx.fast.metal_kernel(
-        name="parakeet_power_f32",
-        input_names=["magnitude"],
-        output_names=["power"],
-        header=_FMA_HEADER,
-        source="""
-            uint i = thread_position_in_grid.x;
-            precise float value = magnitude[i];
-            power[i] = mul32(value, value);
+            precise float magnitude = sqrt32(add32(re2, im2));
+            power[i] = mul32(magnitude, magnitude);
         """,
         compile_options={"math_mode": "safe"},
     )
@@ -890,22 +885,47 @@ def _power_kernel(mx=None):
 def _power(dft_real, dft_imag):
     mx = _mlx()
     size = dft_real.shape[0] * N_BINS
-    magnitude = _call(
-        _magnitude_kernel(mx),
+    return _call(
+        _power_kernel(mx),
         [dft_real, dft_imag],
         [dft_real.shape],
         [mx.float32],
         (size, 1, 1),
         (256, 1, 1),
     )[0]
-    return _call(
-        _power_kernel(mx),
-        [magnitude],
-        [dft_real.shape],
-        [mx.float32],
-        (size, 1, 1),
-        (256, 1, 1),
-    )[0]
+
+
+_MEL_PACKED_ROW = 12
+
+
+@cache
+def _mel_packed_indices(mx=None):
+    """Per-mel nonzero filterbank bin indices in the kernel's visit order.
+
+    The pinned filterbank has at most 12 nonzeros per mel row (mean 3.9), so
+    the dot products only need the nonzero terms. Rows are padded to a fixed
+    length with zero-weight bins: the emulated fma32 contract returns the
+    accumulator unchanged for a zero first operand, so padding and skipping
+    exact-zero terms are both bit-identical to the dense accumulation.
+    """
+    mx = mx or _mlx()
+    values = _constant_floats()
+    fb_base = FILTERBANK_OFFSET
+    rel_of_acc = (8, 12, 16, 20, 24, 28, 4, 0)
+    visit_order = [
+        block + rel_of_acc[accumulator] + lane
+        for block in range(0, 256, 32)
+        for accumulator in range(8)
+        for lane in range(4)
+    ]
+    packed = []
+    for mel in range(N_MELS):
+        row_base = fb_base + mel * N_BINS
+        nonzero = [s for s in visit_order if values[row_base + s] != 0.0]
+        pad = next(s for s in visit_order if values[row_base + s] == 0.0)
+        nonzero += [pad] * (_MEL_PACKED_ROW - len(nonzero))
+        packed.extend(nonzero)
+    return mx.array(packed, dtype=mx.uint32)
 
 
 @cache
@@ -913,7 +933,7 @@ def _mel_kernel(mx=None):
     mx = mx or _mlx()
     return mx.fast.metal_kernel(
         name="parakeet_mel_dot_log_f32",
-        input_names=["filterbank", "power"],
+        input_names=["filterbank", "power", "packed"],
         output_names=["melproj", "logmel"],
         header=_LOG_HEADER,
         source="""
@@ -922,26 +942,20 @@ def _mel_kernel(mx=None):
             uint mel = index - frame * 128u;
             uint fb_base = mel * 257u;
             uint power_base = frame * 257u;
+            uint packed_base = mel * 12u;
             precise float accum[32];
             for (uint i = 0u; i < 32u; ++i) accum[i] = 0.0f;
-            for (uint block = 0u; block < 256u; block += 32u) {
-                for (uint accumulator = 0u; accumulator < 8u; ++accumulator) {
-                    uint relative = accumulator == 0u ? 8u :
-                        (accumulator == 1u ? 12u :
-                        (accumulator == 2u ? 16u :
-                        (accumulator == 3u ? 20u :
-                        (accumulator == 4u ? 24u :
-                        (accumulator == 5u ? 28u :
-                        (accumulator == 6u ? 4u : 0u))))));
-                    for (uint lane = 0u; lane < 4u; ++lane) {
-                        uint source = block + relative + lane;
-                        uint slot = accumulator * 4u + lane;
-                        accum[slot] = fma32(
-                            filterbank[fb_base + source],
-                            power[power_base + source],
-                            accum[slot]);
-                    }
-                }
+            for (uint k = 0u; k < 12u; ++k) {
+                uint source = packed[packed_base + k];
+                uint offset = source & 31u;
+                uint relative = offset >> 2u;
+                uint accumulator = relative < 2u
+                    ? (7u - relative) : (relative - 2u);
+                uint slot = accumulator * 4u + (offset & 3u);
+                accum[slot] = fma32(
+                    filterbank[fb_base + source],
+                    power[power_base + source],
+                    accum[slot]);
             }
             precise float first0 = add32(accum[0], accum[4]);
             precise float first1 = add32(accum[1], accum[5]);
@@ -984,7 +998,7 @@ def _mel_project(power, filterbank):
     mx = _mlx()
     return tuple(_call(
         _mel_kernel(mx),
-        [filterbank, power],
+        [filterbank, power, _mel_packed_indices(mx)],
         [(power.shape[0], N_MELS), (power.shape[0], N_MELS)],
         [mx.float32, mx.float32],
         (power.shape[0] * N_MELS, 1, 1),
@@ -1107,8 +1121,7 @@ def extract_chunk_features(waveform, *, capture_stages: bool = False) -> VulkanM
     mx = _mlx()
     _validate_waveform(waveform, mx)
     constants = _constant_arrays(mx)
-    preemph = _preemphasize(waveform)
-    frames = _frame(preemph, constants.hann)
+    frames = _frames(waveform, constants.hann)
     dft_real, dft_imag = _dft_frames(frames)
     power = _power(dft_real, dft_imag)
     melproj, logmel = _mel_project(power, constants.filterbank)
@@ -1118,6 +1131,8 @@ def extract_chunk_features(waveform, *, capture_stages: bool = False) -> VulkanM
     encoder_mask = mask[:ENCODER_FRAMES].reshape(1, ENCODER_FRAMES)
     stages = {}
     if capture_stages:
+        preemph = _preemphasize(waveform)
+        mx.eval(preemph)
         stages = {
             "preemph": preemph,
             "hann": constants.hann,
@@ -1173,7 +1188,9 @@ def _qualification_status(comparisons, stage_names, expected_stage_names, deltas
     )
     gpu_execution = {
         "gpu_primitive_dispatches": deltas["gpu_primitive_dispatches"] > 0,
-        "vk_compute_dispatches": deltas["vk_compute_dispatches"] == 8,
+        # 6 runtime kernels (preemph folded into frames, magnitude into
+        # power) + 1 evidence-only preemph dispatch in capture mode.
+        "vk_compute_dispatches": deltas["vk_compute_dispatches"] == 7,
         "vk_submissions": deltas["vk_submissions"] > 0,
     }
     return {

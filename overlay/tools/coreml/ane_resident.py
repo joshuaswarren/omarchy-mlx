@@ -109,6 +109,11 @@ class ResidentAneWorker:
         self._bypass_batch_base = 0
 
     # ------------------------------------------------------------ lifecycle
+    @property
+    def alive(self) -> bool:
+        """True while the worker subprocess is up (protocol-level)."""
+        return self._process is not None
+
     def start(self) -> None:
         if self._process is not None:
             raise ResidentWorkerError("resident session is already started")

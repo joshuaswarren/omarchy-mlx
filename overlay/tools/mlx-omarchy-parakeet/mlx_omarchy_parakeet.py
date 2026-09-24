@@ -11,8 +11,10 @@ on disk.
 
 `transcribe` runs the pinned reference end to end on the installed
 runtime: FLAC decode, Vulkan mel frontend, ANE island encoder through
-the shipped worker and strict libane, GPU-resident greedy TDT decode,
-detokenization. The installed asset hashes and the frozen acceptance
+the shipped worker and strict libane, greedy TDT decode (host control
+loop by default; ``MLX_OMARCHY_TDT_HOST`` set to a false value opts
+into the one-dispatch GPU loop), detokenization. The installed asset
+hashes and the frozen acceptance
 pins live in ``share/mlx-omarchy/parakeet-1/parakeet-runtime-pin.json``;
 any mismatch, missing capability, or divergent output is an explicit
 refusal — there is no CPU or GPU-only encoder fallback.
@@ -383,21 +385,26 @@ def _transcribe(args) -> int:
             f"executes the pinned reference only"
         )
 
-    out = Path(args.out) if args.out else (
-        default_cache_root() / "transcriptions"
-        / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    )
-    out.mkdir(parents=True, exist_ok=True)
+    repeat = max(1, int(getattr(args, "repeat", 1) or 1))
+    passed = True
+    for index in range(repeat):
+        out = Path(args.out) if args.out else (
+            default_cache_root() / "transcriptions"
+            / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        )
+        if repeat > 1:
+            out = out.with_name(f"{out.name}-r{index + 1}")
+        out.mkdir(parents=True, exist_ok=True)
 
-    scratch_root = Path(tempfile.mkdtemp(prefix="parakeet-transcribe-",
-                                         dir=default_cache_root()))
-    passed = False
-    try:
-        passed = _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha,
-                               worker, share, scratch_root, out)
-    finally:
-        if not args.keep_scratch:
-            shutil.rmtree(scratch_root, ignore_errors=True)
+        scratch_root = Path(tempfile.mkdtemp(prefix="parakeet-transcribe-",
+                                             dir=default_cache_root()))
+        try:
+            if not _run_pipeline(args, pin, lock, cache_dir, fixture,
+                                 audio_sha, worker, share, scratch_root, out):
+                passed = False
+        finally:
+            if not args.keep_scratch:
+                shutil.rmtree(scratch_root, ignore_errors=True)
     return 0 if passed else 1
 
 
@@ -501,19 +508,44 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         lambda: load_decoder(cache_dir / "decoder.mlpackage"),
     )
     fused_packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
+    import numpy as np
+
+    from coreml.vulkan_decoder_step import _JOINT_OUT, _VOCAB, _WINDOW_SLOTS
+
     counts = {"decoder_calls": 0, "joint_calls": 0}
     decoder_ns = 0
     joint_ns = 0
     frame_holder = [0]
+    valid_frames = int(encoder_hidden.shape[1])
     fused = {"frame": None, "state": None, "tok": None, "dur": None}
+    # Speculative joint window: the decoder step's submit also evaluates the
+    # joint head for the next `spec_frames` frames against the new state,
+    # so frame-entry joints (blank runs, max-symbol roll-over) resolve from
+    # already-synced logits without another submit.
+    spec = {"base": None, "state": None, "host": None}
+    spec_frames = _WINDOW_SLOTS
+
+    def _spec_decision(frame_index, decoder_state):
+        host = spec["host"]
+        if host is None or spec["state"] is not decoder_state:
+            return None
+        offset = frame_index - spec["base"]
+        if not 0 <= offset < host.shape[0]:
+            return None
+        row = host[offset]
+        return JointDecision(
+            int(np.argmax(row[:_VOCAB])),
+            int(np.argmax(row[_VOCAB:_JOINT_OUT])),
+        )
 
     def decoder_callback(token_id, current_hidden, current_cell):
         nonlocal decoder_ns
         counts["decoder_calls"] += 1
         started = time.monotonic_ns()
-        state_out, tok, dur, _, _ = run_step(
+        state_out, tok, dur, _, _, window = run_step(
             fused_packed, current_hidden, current_cell, token_id,
             encoder_hidden, frame_holder[0],
+            spec_frames=spec_frames, spec_valid=valid_frames,
         )
         mx.eval(state_out)
         decoder_ns += time.monotonic_ns() - started
@@ -522,6 +554,12 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         fused["state"] = dec_state
         fused["tok"] = tok
         fused["dur"] = dur
+        spec["base"] = frame_holder[0] + 1
+        spec["state"] = dec_state
+        # Materialize the window on the host now: the per-row slice in
+        # _spec_decision would otherwise be a lazy GPU copy paying its own
+        # dispatch + submit per frame-entry joint.
+        spec["host"] = np.asarray(window) if window is not None else None
         return DecoderStep(
             dec_state,
             state_out[640:1920].reshape(2, 1, 640),
@@ -536,12 +574,20 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         if fused["frame"] == frame_index and fused["state"] is decoder_state:
             joint_ns += time.monotonic_ns() - started
             return JointDecision(fused["tok"], fused["dur"])
-        state_out, tok, dur, _, _ = run_step(
+        decision = _spec_decision(frame_index, decoder_state)
+        if decision is not None:
+            joint_ns += time.monotonic_ns() - started
+            return decision
+        state_out, tok, dur, _, _, window = run_step(
             fused_packed, None, None, 0, encoder_hidden, frame_index,
             skip_lstm=True, dec_in=decoder_state,
+            spec_frames=spec_frames, spec_valid=valid_frames,
         )
         mx.eval(state_out)
         joint_ns += time.monotonic_ns() - started
+        spec["base"] = frame_index + 1
+        spec["state"] = decoder_state
+        spec["host"] = np.asarray(window) if window is not None else None
         return JointDecision(tok, dur)
 
     def stage_tdt():
@@ -699,6 +745,18 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             "submissions": island.submissions,
             "worker_starts": island.worker_starts,
             "timeouts": island.timeouts,
+            # Session lifecycle, reported separately from per-call submit
+            # latency: open covers worker spawn + bundle register + device
+            # program load (0 when this pass reused the process-level
+            # session), batch_open is this pass's ensure cost, close the
+            # batch-scope release. Submit latency stays in exec_ms/log.
+            "session": {
+                "shared": island.share_session,
+                "reused": island.session_reused,
+                "open_ms": round(island.session_open_ns / 1e6, 3),
+                "batch_open_ms": round(island.batch_open_ns / 1e6, 3),
+                "close_ms": round(island.session_close_ns / 1e6, 3),
+            },
             "input_bytes": island.input_bytes,
             "output_bytes": island.output_bytes,
             "exec_ns": island.exec_ns,
@@ -776,6 +834,11 @@ def main(argv=None) -> int:
     transcribe.add_argument(
         "--deadline-ms", type=int, default=20000,
         help="per-submit ANE worker deadline in ms (default: 20000)",
+    )
+    transcribe.add_argument(
+        "--repeat", type=int, default=1,
+        help="transcriptions in this process; run 2+ reuses the resident "
+             "session and reports startup separately (default: 1)",
     )
     transcribe.add_argument(
         "--keep-scratch", action="store_true",

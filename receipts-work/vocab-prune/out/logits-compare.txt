@@ -1,0 +1,5 @@
+{
+ "flipped_prompts": 0,
+ "first_flips": [],
+ "max_abs_logit_delta_prefix": 0.0
+}

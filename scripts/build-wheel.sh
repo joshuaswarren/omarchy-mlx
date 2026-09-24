@@ -67,6 +67,71 @@ fi
 echo "== prepare upstream tree =="
 "$ROOT/scripts/prepare-mlx.sh"
 
+# Stage the whole-encoder bundle into the build source if the runtime
+# pin declares it. The bundle is 458 MB and gitignored; it must be
+# supplied via MLX_OMARCHY_WHOLE_BUNDLE_DIR, copied into the
+# tools/mlx-omarchy-parakeet share tree after prepare-mlx.sh so the
+# CMake install(DIRECTORY share/mlx-omarchy ...) rule picks it up.
+#
+# A wheel built without the whole bundle would still pass the rest of
+# this script -- the build chain only stages files reachable from
+# overlay/ -- and the runner would then silently fall back to the
+# 705-1050 ms split-island path. Refusing here forces the bundle to
+# travel with the build, which makes the silent fallback impossible.
+#
+# Set MLX_OMARCHY_WHOLE_BUNDLE_SKIP=1 to opt out of the whole-bundle
+# pin requirement (for non-Parakeet-focused diagnostic builds).
+echo "== stage whole-encoder bundle =="
+PIN_PATH="$WORK_DIR/mlx/tools/mlx-omarchy-parakeet/share/mlx-omarchy/parakeet-1/parakeet-runtime-pin.json"
+BUNDLE_STAGING="$WORK_DIR/mlx/tools/mlx-omarchy-parakeet/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole"
+if [[ -f "$PIN_PATH" ]] && python3 -c "
+import json, sys
+with open('$PIN_PATH') as fh:
+    pin = json.load(fh)
+sys.exit(0 if 'parakeet-encoder-whole' in pin.get('assets', {}).get('bundles', {}) else 1)
+"; then
+    if [[ "${MLX_OMARCHY_WHOLE_BUNDLE_SKIP:-0}" == "1" ]]; then
+        echo "[bundle] MLX_OMARCHY_WHOLE_BUNDLE_SKIP=1; refusing to build without the whole bundle"
+        exit 1
+    fi
+    if [[ -z "${MLX_OMARCHY_WHOLE_BUNDLE_DIR:-}" ]]; then
+        echo "[bundle] runtime pin declares parakeet-encoder-whole but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset; refusing to build a wheel that would silently fall back" >&2
+        echo "[bundle] supply the bundle dir (manifest.json + program-0.anec) via MLX_OMARCHY_WHOLE_BUNDLE_DIR=/path/to/dir" >&2
+        exit 1
+    fi
+    if [[ ! -f "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}/manifest.json" || ! -f "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}/program-0.anec" ]]; then
+        echo "[bundle] ${MLX_OMARCHY_WHOLE_BUNDLE_DIR} does not contain manifest.json + program-0.anec" >&2
+        exit 1
+    fi
+    EXPECTED_MANIFEST="$(python3 -c "
+import json
+with open('$PIN_PATH') as fh:
+    print(json.load(fh)['assets']['bundles']['parakeet-encoder-whole']['manifest.json'])
+")"
+    EXPECTED_PROGRAM="$(python3 -c "
+import json
+with open('$PIN_PATH') as fh:
+    print(json.load(fh)['assets']['bundles']['parakeet-encoder-whole']['program-0.anec'])
+")"
+    ACTUAL_MANIFEST="$(sha256sum "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}/manifest.json" | cut -d' ' -f1)"
+    ACTUAL_PROGRAM="$(sha256sum "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}/program-0.anec" | cut -d' ' -f1)"
+    [[ "$ACTUAL_MANIFEST" == "$EXPECTED_MANIFEST" ]] || {
+        echo "[bundle] manifest.json sha mismatch: pin=$EXPECTED_MANIFEST actual=$ACTUAL_MANIFEST" >&2; exit 1; }
+    [[ "$ACTUAL_PROGRAM" == "$EXPECTED_PROGRAM" ]] || {
+        echo "[bundle] program-0.anec sha mismatch: pin=$EXPECTED_PROGRAM actual=$ACTUAL_PROGRAM" >&2; exit 1; }
+    rm -rf "$BUNDLE_STAGING"
+    mkdir -p "$BUNDLE_STAGING"
+    install -m 0644 "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}/manifest.json" "$BUNDLE_STAGING/manifest.json"
+    install -m 0644 "${MLX_OMARCHY_WHOLE_BUNDLE_DIR}/program-0.anec" "$BUNDLE_STAGING/program-0.anec"
+    # Refresh mtime so the CMake install(DIRECTORY) rule treats the
+    # bundle as newer than any prior build output (the same rule
+    # prepare-mlx.sh applies to the overlay).
+    touch "$BUNDLE_STAGING/manifest.json" "$BUNDLE_STAGING/program-0.anec"
+    echo "[bundle] staged $BUNDLE_STAGING (manifest $ACTUAL_MANIFEST, program $ACTUAL_PROGRAM)"
+else
+    echo "[bundle] runtime pin does not declare parakeet-encoder-whole; skipping whole-bundle stage"
+fi
+
 echo "== build venv ($VENV_DIR) =="
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   python3 -m venv --system-site-packages "$VENV_DIR"

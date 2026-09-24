@@ -283,6 +283,7 @@
 #include "gated_delta_prefill_coopmat_bf16.h"
 #include "fast_norm_gated_bf16.h"
 #include "gdn_conv_decode_bf16.h"
+#include "qmm_vec_greedy_bf16.h"
 #include "qmm_tile_bf16.h"
 #include "qmm_tile_f16.h"
 #include "qmm_tile_rb_f16.h"
@@ -1256,6 +1257,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_norm_gated_bf16, fast_norm_gated_bf16_size};
     case ComputeKernel::GdnConvDecodeBF16:
       return {gdn_conv_decode_bf16, gdn_conv_decode_bf16_size};
+    case ComputeKernel::QmmVecGreedyBF16:
+      return {qmm_vec_greedy_bf16, qmm_vec_greedy_bf16_size};
     case ComputeKernel::QmmPrefillFmaF16:
       return {qmm_fma_f16, qmm_fma_f16_size};
     case ComputeKernel::MatmulBF16Coopmat:

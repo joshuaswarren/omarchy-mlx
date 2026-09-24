@@ -7,6 +7,9 @@
 # t8103: decode 17.46 -> 36.37 tok/s, pin dbf704971617fdfc identical to
 # t6001). Both self-guard on hasattr, falling back to the upstream kernel
 # when the entry point is absent.
+# Greedy vocab prune: ON by default. Tied 4-bit/g64 lm_head decode steps
+# go to mx.fast.greedy_quantized_argmax; the patch itself no-ops on any
+# other head and MLX_OMARCHY_NO_GREEDY_PRUNE=1 restores the upstream step.
 # Conv-ring: OFF by default (decode-only experimental optimization);
 # set MLX_OMARCHY_CONV_RING=1 to enable.
 #
@@ -47,6 +50,7 @@ apply() {
 }
 apply mlx-lm-gated-delta-fast-route.patch
 apply mlx-lm-gated-delta-raw.patch
+apply mlx-lm-greedy-prune.patch
 if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 ]]; then
   apply mlx-lm-convring.patch
 else

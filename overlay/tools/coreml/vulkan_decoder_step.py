@@ -203,6 +203,75 @@ _JOINT_SOURCE = f"""
 """
 
 
+_WINDOW_SLOTS = 6
+_WINDOW_ACC_DECLS = "\n".join(
+    f"    precise float acc{slot} = 0.0f;" for slot in range(_WINDOW_SLOTS)
+)
+_WINDOW_ACC_UPDATES = "\n".join(
+    f"            acc{slot} = acc{slot}"
+    f" + float(sh_relu[{slot}u * 640u + k]) * w;"
+    for slot in range(_WINDOW_SLOTS)
+)
+_WINDOW_WRITES = "\n".join(
+    f"        if (base + {slot} < valid) {{"
+    f"\n            window_out[{slot}u * 8198u + j] ="
+    f" float(float16_t(acc{slot}) + joint[640u * 8198u + j]);"
+    f"\n        }} else {{"
+    f"\n            window_out[{slot}u * 8198u + j] = 0.0f;"
+    f"\n        }}"
+    for slot in range(_WINDOW_SLOTS)
+)
+
+# The same joint head evaluated for `_WINDOW_SLOTS` consecutive encoder
+# frames against one decoder state (host control speculates frame-entry
+# joints so blank runs resolve without a submit). The joint weight matrix
+# is the bandwidth wall (640x8198 fp16 read per evaluation), so each
+# thread owns one output lane j and applies every loaded weight element
+# to the per-slot scalar accumulators: the weights stream once for the
+# whole window, not once per slot. Per-element arithmetic stays identical
+# to _JOINT_SOURCE: fp16 relu build, fp32 ascending k chain, one fp16
+# rounding, fp16 bias. flags = [base_frame, jmode, valid_frames]; rows
+# past valid_frames zero-fill (the control loop never queries them).
+_JOINT_WINDOW_SOURCE = f"""
+    uint g = threadgroup_position_in_grid.x;
+    uint t = thread_index_in_threadgroup.x;
+    uint j = g * {_JOINT_THREADS}u + t;
+    int base = flags[0];
+    int jmode = flags[1];
+    int valid = flags[2];
+    threadgroup float16_t sh_relu[{_WINDOW_SLOTS * 640}];
+    for (uint slot = 0u; slot < {_WINDOW_SLOTS}u; ++slot) {{
+        int frame = base + int(slot);
+        for (uint i = t; i < 640u; i += {_JOINT_THREADS}u) {{
+            float16_t pj;
+            if (jmode == 0) {{
+                pj = pj16_in[i];
+            }} else {{
+                pj = float16_t(dec_in[i]);
+            }}
+            if (frame < valid) {{
+                float16_t ev = float16_t(encoder[uint(frame) * 640u + i]);
+                float16_t rlv = ev + pj;
+                sh_relu[slot * 640u + i] = (rlv > float16_t(0.0f)) ? rlv : float16_t(0.0f);
+            }} else {{
+                sh_relu[slot * 640u + i] = float16_t(0.0f);
+            }}
+        }}
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (j < 8198u) {{
+{_WINDOW_ACC_DECLS}
+        for (uint k = 0u; k < 640u; ++k) {{
+            precise float w = float(joint[k * 8198u + j]);
+{_WINDOW_ACC_UPDATES}
+        }}
+{_WINDOW_WRITES}
+    }}
+"""
+
+
+@cache
+
 def _mx():
     import mlx.core as mx
 
@@ -282,6 +351,19 @@ def _joint_kernel():
     )
 
 
+@cache
+def _joint_window_kernel():
+    mx = _mx()
+    return mx.fast.metal_kernel(
+        name="parakeet_tdt_decoder_joint_window",
+        input_names=["pj16_in", "dec_in", "encoder", "flags", "joint"],
+        output_names=["window_out"],
+        header="",
+        source=_JOINT_WINDOW_SOURCE,
+        compile_options={"math_mode": "safe"},
+    )
+
+
 def pack_step_weights(decoder, joint_package: Path) -> StepWeights:
     """Pack the pinned decoder/joint constants into kernel-order buffers."""
     mx = _mx()
@@ -349,14 +431,25 @@ def run_step(
     skip_lstm: bool = False,
     dec_in=None,
     mode: int | None = None,
+    spec_frames: int = 0,
+    spec_valid: int = 0,
 ):
     """Queued dispatches on GPU buffers.
 
     ``hidden``/``cell`` are fp32 arrays shaped (2, 1, 640); ``encoder`` the
     fp32 encoder output (1, F, 640). Returns ``(state_out, token, duration,
-    logits, dbg)`` with ``state_out`` the GPU fp32 array
+    logits, dbg, window)`` with ``state_out`` the GPU fp32 array
     ``[decoder_hidden(640) | next_hidden(1280) | next_cell(1280)]``. The
     token/duration argmaxes run host-side with first-max semantics.
+
+    With ``spec_frames`` > 0 the joint head also evaluates the
+    ``spec_frames`` frames after ``frame`` against this step's decoder
+    state (rows past ``spec_valid`` zero-fill), returning the
+    ``(spec_frames, 8198)`` fp32 logits as ``window``; the caller resolves
+    frame-entry joints host-side without another submit. The joint-only
+    mode (``skip_lstm``) skips the projector dispatch entirely: its output
+    is never read (jmode 1 rebuilds the relu from ``dec_in``) and
+    ``state_out`` is ``dec_in`` unchanged.
     """
     mx = _mx()
     if mode is None:
@@ -421,24 +514,33 @@ def run_step(
         lstm_in = (
             dec_in.reshape(640,) if dec_in is not None else flat_hidden[:640]
         )
-    flags_p = mx.array(np.array([int(frame), int(dbg_wide)], np.int32))
-    pj, pj16, dbg2 = _proj_kernel()(
-        inputs=[
-            lstm_in,
-            packed.projector,
-            flags_p,
-        ],
-        output_shapes=[(640,), (640,), dbg_narrow],
-        output_dtypes=[mx.float32, mx.float16, mx.float32],
-        grid=(640, 1, 1),
-        threadgroup=(640, 1, 1),
-        stream=mx.gpu,
-    )
-    dec16src = flat_hidden if dec_in is None else dec_in.reshape(640,)
+    dec16src = lstm_in
+    if mode != 1:
+        flags_p = mx.array(np.array([int(frame), int(dbg_wide)], np.int32))
+        pj, pj16, dbg2 = _proj_kernel()(
+            inputs=[
+                lstm_in,
+                packed.projector,
+                flags_p,
+            ],
+            output_shapes=[(640,), (640,), dbg_narrow],
+            output_dtypes=[mx.float32, mx.float16, mx.float32],
+            grid=(640, 1, 1),
+            threadgroup=(640, 1, 1),
+            stream=mx.gpu,
+        )
+        dec16src = pj16
+        state_out = mx.concatenate([pj, h1s[0], h1s[1], c1s[0], c1s[1]])
+        dbg = dbg2
+        if dbg_wide:
+            dbg = mx.concatenate([dbgs[0], dbgs[1], dbg2])
+    else:
+        state_out = lstm_in
+        dbg = None
     flagsj = mx.array(np.array([int(frame), int(mode == 1)], np.int32))
     (logits,) = _joint_kernel()(
         inputs=[
-            pj16,
+            dec16src,
             dec16src,
             encoder.reshape(-1),
             flagsj,
@@ -450,15 +552,31 @@ def run_step(
         threadgroup=(_JOINT_THREADS, 1, 1),
         stream=mx.gpu,
     )
-    if mode != 1:
-        state_out = mx.concatenate([pj, h1s[0], h1s[1], c1s[0], c1s[1]])
+    window = None
+    if spec_frames > 0:
+        flags_w = mx.array(
+            np.array(
+                [int(frame) + 1, int(mode == 1), int(spec_valid)], np.int32
+            )
+        )
+        (window,) = _joint_window_kernel()(
+            inputs=[
+                dec16src,
+                dec16src,
+                encoder.reshape(-1),
+                flags_w,
+                packed.joint,
+            ],
+            output_shapes=[(int(spec_frames), _JOINT_OUT)],
+            output_dtypes=[mx.float32],
+            grid=(33 * _JOINT_THREADS, 1, 1),
+            threadgroup=(_JOINT_THREADS, 1, 1),
+            stream=mx.gpu,
+        )
+        mx.eval(state_out, logits, window)
     else:
-        state_out = pj
-    dbg = dbg2
-    if dbg_wide:
-        dbg = mx.concatenate([dbgs[0], dbgs[1], dbg2])
-    mx.eval(state_out, logits)
+        mx.eval(state_out, logits)
     lg = np.asarray(logits[:_JOINT_OUT])
     token = int(np.argmax(lg[:_VOCAB]))
     duration = int(np.argmax(lg[_VOCAB:_JOINT_OUT]))
-    return state_out, token, duration, logits, dbg
+    return state_out, token, duration, logits, dbg, window

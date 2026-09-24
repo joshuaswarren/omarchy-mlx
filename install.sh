@@ -168,10 +168,10 @@ python3 -m venv --clear "$VENV"
 #     this wheel); the conv-ring patch stays OFF unless
 #     MLX_OMARCHY_CONV_RING=1. Served models pick both up from the venv,
 #     so no manual venv patching is needed after install.
-say "Applying mlx-lm serve patches (GDN fast route on; conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
+say "Applying mlx-lm serve patches (GDN fast route on; greedy vocab prune on; conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
 curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/scripts/apply-mlx-lm-patches.sh" -o "$PREFIX/apply-mlx-lm-patches.sh"
 mkdir -p "$PREFIX/patches"
-for p in mlx-lm-gated-delta-fast-route.patch mlx-lm-gated-delta-raw.patch mlx-lm-convring.patch; do
+for p in mlx-lm-gated-delta-fast-route.patch mlx-lm-gated-delta-raw.patch mlx-lm-greedy-prune.patch mlx-lm-convring.patch; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p"
 done
 MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" "$PREFIX/apply-mlx-lm-patches.sh" "$VENV"

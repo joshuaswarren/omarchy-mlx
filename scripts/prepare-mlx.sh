@@ -25,13 +25,15 @@ trap cleanup EXIT
 tar --extract --gzip --file "$ARCHIVE" --strip-components=1 \
   --directory "$STAGING_DIR"
 
+find "$ROOT/overlay" -type f -print0 > /tmp/overlay_files.tmp
 while IFS= read -r -d '' file; do
   relative="${file#"$ROOT/overlay/"}"
   if [[ -e "$STAGING_DIR/$relative" ]]; then
     echo "overlay path already exists upstream: $relative" >&2
     exit 1
   fi
-done < <(find "$ROOT/overlay" -type f -print0)
+done < /tmp/overlay_files.tmp
+rm -f /tmp/overlay_files.tmp
 
 # Copy modes and contents but NOT timestamps. `cp -a` preserved overlay
 # mtimes, which silently dropped edits from builds: a freshly edited
@@ -80,6 +82,11 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # the read (GdnConvDecodeBF16 backend kernel).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-gdn-conv-decode.patch"
+# Greedy vocab head (QmmVecGreedyBF16 backend kernel). The hunk sits far
+# from the other patches' edits, but their insertions shift its line
+# numbers, so this one is applied with fuzz 3 (context still verified).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=3 \
+  < "$ROOT/patches/mlx-fast-greedy-argmax.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
