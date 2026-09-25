@@ -10,10 +10,11 @@
 // shape on every layer, and the general kernel serializes it: one
 // thread per output column walks the whole row serially, so its
 // 32-lane reads sit words-per-row*4 bytes apart - every lane a
-// separate cache line. Here one of the workgroup's eight 32-lane
-// subgroups owns one weight row and lanes stride single k steps, so
-// consecutive lanes read consecutive x elements, consecutive
-// weight-row words, and one shared cache line of row bytes per step.
+// separate cache line. Here each of the workgroup's 32-lane subgroups
+// owns one weight row (ROWS_PER_SLOT consecutive rows in the packed-x
+// subgroup builds) and lanes stride single k steps, so consecutive lanes
+// read consecutive x elements, consecutive weight-row words, and one
+// shared cache line of row bytes per step.
 // Dequantization happens in registers inside the dot product - no
 // dequantized intermediate tensor, no extra pass over memory, one
 // dispatch.
@@ -86,10 +87,29 @@ uint16_t bf16_store(float value) {
 #error "QMM_VEC_GREEDY builds on the bf16 subgroup Q4 word column"
 #endif
 
-const uint COLUMNS_PER_GROUP = 8u;
+// Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
+// owning ROWS_PER_SLOT consecutive output rows (native qmv_fast keeps four
+// rows per simdgroup: the x quads load once per block and feed every row,
+// and the row loads sit independent in flight). ROWS_PER_SLOT > 1 needs the
+// packed x view (f16/bf16) and the subgroup reduction; the per-row
+// arithmetic order is the single-row chain, so results stay bit-identical.
+#ifndef ROWS_PER_SLOT
+#define ROWS_PER_SLOT 1
+#endif
+#ifndef SLOTS_PER_GROUP
+#define SLOTS_PER_GROUP 8
+#endif
+#if ROWS_PER_SLOT != 1 && \
+    (!defined(USE_SUBGROUP) || !(defined(USE_FP16) || defined(USE_BF16)))
+#error "ROWS_PER_SLOT > 1 needs USE_SUBGROUP and a packed x view"
+#endif
+#if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
+#error "the tree reduction assumes 8 slots"
+#endif
+const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
 
-layout(local_size_x = 256) in;
+layout(local_size_x = SLOTS_PER_GROUP * 32) in;
 
 #if (defined(USE_FP16) || defined(USE_BF16)) && defined(QMM_VEC_Q4_WORD)
 // Decode x rows are 16-byte aligned by dispatch. Reading eight packed halves
@@ -404,6 +424,78 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
   } \
 }
+#if ROWS_PER_SLOT > 1
+// Multi-row form of Q4_ROW: ROWS_PER_SLOT rows starting at `column`
+// (rows past n are clamped to row n - 1 and their results discarded, so
+// every load stays in bounds without a branch). Per row the chain is
+// exactly Q4_ROW's: the same quads in the same order into dot, the same
+// block epilogue; the x quads and input_sum are shared because they do
+// not depend on the row. Expects the batch bases w_base, s_base, b_base
+// (0 for the multi-weight kernel), x_row, words_per_row, groups_per_row,
+// n, column and lane_in_slot in scope; accumulates into acc[ROWS_PER_SLOT].
+#define Q4_QUAD_ROWS(P_EXPR, a, b) { \
+  Q4_QUAD_LOAD(a, b) \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    uint p = (P_EXPR); \
+    dot[r] += fma(x3, float((p >> 12u) & 0xfu), \
+        fma(x2, float((p >> 8u) & 0xfu), \
+            fma(x1, float((p >> 4u) & 0xfu), \
+                x0 * float(p & 0xfu)))); \
+  } \
+}
+#define Q4_ROWS_FINISH(w, S, B) { \
+  uint group = (w) / 8u; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    float scale = \
+        LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
+    float bias = \
+        LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
+    precise float bias_term = input_sum * bias; \
+    acc[r] += fma(scale, dot[r], bias_term); \
+  } \
+}
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+    for (uint w = lane_in_slot * 2u; w < words_per_row; \
+         w += LANES * 2u) { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      uint wa[ROWS_PER_SLOT]; \
+      uint wb[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      } \
+      uvec4 xa = input_x.values[(x_row + w * 8u) / 8u]; \
+      uvec4 xb = input_x.values[(x_row + w * 8u + 8u) / 8u]; \
+      Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+      Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
+      Q4_QUAD_ROWS(wb[r], xb.x, xb.y) \
+      Q4_QUAD_ROWS(wb[r] >> 16u, xb.z, xb.w) \
+      Q4_ROWS_FINISH(w, S, B) \
+    } \
+  } else { \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+      } \
+      uvec4 xa = input_x.values[(x_row + w * 8u) / 8u]; \
+      Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+      Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
+      Q4_ROWS_FINISH(w, S, B) \
+    } \
+  } \
+}
+#endif
 #endif
 
 #ifdef QMM_VEC_MULTI
@@ -458,6 +550,114 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         (rounded) + LOAD_VALUE(addend##I.values[column])); \
   } \
 }
+#if ROWS_PER_SLOT > 1
+// Multi-row main: same workgroup -> weight partition and fold contract as
+// the single-row main below (COLUMNS_PER_GROUP now spans every slot's
+// rows), each slot owning ROWS_PER_SLOT consecutive columns.
+#define Q4_ROWS_REDUCE(total) { \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    (total)[r] = subgroupAdd(acc[r]); \
+  } \
+}
+#define Q4_ROWS_ZERO() { \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    acc[r] = 0.0; \
+  } \
+}
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n0 = params.shape[0];
+  uint n1 = params.shape[1];
+  uint n2 = params.shape[2];
+  uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint workgroup = gl_WorkGroupID.x;
+  uint which;
+  uint n;
+  if ((params.flags & 65536u) != 0u) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0 + groups1) {
+    which = 1u;
+    workgroup -= groups0;
+    n = n1;
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+  uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint w_base = 0u;
+  uint s_base = 0u;
+  uint b_base = 0u;
+  uint x_row = params.lhs_offset;
+  precise float acc[ROWS_PER_SLOT];
+  float total[ROWS_PER_SLOT];
+  if ((params.flags & 65536u) != 0u) {
+    float gate_rounded[ROWS_PER_SLOT];
+    Q4_ROWS_ZERO()
+    if (column_active) {
+      Q4_ROWS(input_w0, scales0, biases0)
+    }
+    Q4_ROWS_REDUCE(total)
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      gate_rounded[r] = ROUND_STORAGE(total[r]);
+    }
+    Q4_ROWS_ZERO()
+    if (column_active) {
+      Q4_ROWS(input_w1, scales1, biases1)
+    }
+    Q4_ROWS_REDUCE(total)
+    if (lane_in_slot == 0u) {
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        if (column + r < n) {
+          float up_rounded = ROUND_STORAGE(total[r]);
+          float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded[r])));
+          float silu = ROUND_STORAGE(gate_rounded[r] * sig);
+          output0.values[column + r] =
+              STORE_VALUE(ROUND_STORAGE(silu * up_rounded));
+        }
+      }
+    }
+    return;
+  }
+  Q4_ROWS_ZERO()
+  if (column_active) {
+    if (which == 0u) {
+      Q4_ROWS(input_w0, scales0, biases0)
+    } else if (which == 1u) {
+      Q4_ROWS(input_w1, scales1, biases1)
+    } else {
+      Q4_ROWS(input_w2, scales2, biases2)
+    }
+  }
+  Q4_ROWS_REDUCE(total)
+  if (lane_in_slot == 0u) {
+    uint column_first = column;
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      uint column = column_first + r;
+      if (column < n) {
+        float rounded = ROUND_STORAGE(total[r]);
+        if (which == 0u) {
+          Q4_MULTI_STORE(0, rounded)
+        } else if (which == 1u) {
+          Q4_MULTI_STORE(1, rounded)
+        } else {
+          Q4_MULTI_STORE(2, rounded)
+        }
+      }
+    }
+  }
+}
+#else
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
@@ -565,6 +765,7 @@ void main() {
     }
   }
 }
+#endif
 #elif defined(QMM_VEC_GREEDY)
 // Greedy-argmax head: the token argmax(logits - logsumexp(logits)) picks
 // for one bf16 x row (K = 2048: one 64-wide group per subgroup lane)
@@ -977,6 +1178,48 @@ void main() {
 // B and the per-slot work runs once per batch slice; each thread's
 // lane nibble and scale column stay fixed for the whole reduction.
 // FP_MODE dispatches only a single x row against a 2D w (batch = 1).
+#if ROWS_PER_SLOT > 1
+#ifndef QMM_VEC_Q4_WORD
+#error "ROWS_PER_SLOT > 1 builds on QMM_VEC_Q4_WORD"
+#endif
+// Multi-row form of the Q4 word main: same batch walk and bases as the
+// single-row main below, each slot owning ROWS_PER_SLOT consecutive
+// columns (see Q4_ROWS).
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint batch = params.shape[0];
+  uint w_batch_words = params.shape[1];
+  uint param_batch = params.shape[2];
+  uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP +
+      column_slot * uint(ROWS_PER_SLOT);
+  uint n = params.matrix_n;
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  for (uint b = 0u; b < batch; ++b) {
+    precise float acc[ROWS_PER_SLOT];
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc[r] = 0.0;
+    }
+    if (column_active) {
+      uint w_base = params.rhs_offset + b * w_batch_words;
+      uint s_base = params.aux_offset + b * param_batch;
+      uint b_base = params.aux_size + b * param_batch;
+      uint x_row = params.lhs_offset + b * params.matrix_k;
+      Q4_ROWS(input_w, scales, biases)
+    }
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      float total = subgroupAdd(acc[r]);
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + b * params.matrix_n +
+            column + r] = STORE_VALUE(total);
+      }
+    }
+  }
+}
+#else
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
@@ -1214,4 +1457,5 @@ void main() {
 #endif
   }
 }
+#endif
 #endif

@@ -383,6 +383,17 @@ static const Shape kShapes2B[] = {
     {"qkvz", 2048, 1, {8192, 0, 0}},
 };
 static const Shape* g_shapes = kShapes;
+// --cand <path>[:columns]: screen ONE candidate shader against base (default
+// mode: iso timing + bit compare; gap mode: iso4/widedep arms) instead of the
+// historical fixed candidate list. columns = rows per workgroup (grid = sum
+// ceil(n_i / columns)); default 8 = the production COLUMNS_PER_GROUP.
+static std::string g_cand_src;
+static uint32_t g_cand_columns = 8u;
+// --cand-def "-DX=1 ...": extra compile defines for the candidate only.
+static std::string g_cand_defs;
+// --grid-cap N: dispatch at most N workgroups per candidate GEMV (gap mode);
+// params.count keeps the logical group count for grid-stride shaders.
+static uint32_t g_grid_cap = 0u;
 // --2b also switches the gap-mode compile to the production bf16 x-load
 // mix (the 2B decode chain runs QmmVecQ4*BF16, not FP16).
 static bool g_gap_bf16 = false;
@@ -1344,7 +1355,7 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
       const char* spv;
       uint32_t columns;
     };
-    const CandSpec cands[] = {
+    std::vector<CandSpec> cands = {
         {"unroll", "tools/q4-bw-bench/shaders/qmm_vec_cand_unroll.comp",
             "/tmp/q4gap_cand_u.spv", 8u},
         {"loadfirst",
@@ -1355,12 +1366,17 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
         {"xpack", "tools/q4-bw-bench/shaders/qmm_vec_cand_xpack.comp",
             "/tmp/q4gap_cand_x.spv", 8u},
     };
+    if (!g_cand_src.empty())
+      cands = {{"cand", g_cand_src.c_str(), "/tmp/q4gap_cand_c.spv",
+          g_cand_columns}};
     for (const CandSpec& c : cands) {
       // loadfirst's explicit x-quad addressing is measurement-only for
       // the f16 uvec4 view; it does not compile under the --2b bf16
       // defines, so it is skipped there rather than killing the screen.
       if (g_gap_bf16 && std::string(c.tag) == "loadfirst") continue;
-      if (compile_shader(c.src, q4_defines, c.spv) != 0)
+      std::string cdefs = std::string(q4_defines) +
+          (std::string(c.tag) == "cand" ? g_cand_defs : std::string());
+      if (compile_shader(c.src, cdefs.c_str(), c.spv) != 0)
         die("compile gap cand %s", c.tag);
       Side cs;
       cs.tag = c.tag;
@@ -1371,6 +1387,7 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
       for (uint32_t s = 0; s < kNumShapes; ++s) {
         cgroups[s] = shape_groups(g_shapes[s], c.columns);
         fill_params(cparams[s], g_shapes[s], cgroups[s]);
+        if (g_grid_cap && cgroups[s] > g_grid_cap) cgroups[s] = g_grid_cap;
       }
       arm_side = &cs;
       arm_groups = cgroups;
@@ -1729,6 +1746,18 @@ int main(int argc, char** argv) {
       g_shapes = kShapes2B;
       g_gap_bf16 = true;
     }
+    if (std::string(argv[i]) == "--grid-cap" && i + 1 < argc)
+      g_grid_cap = (uint32_t)std::atoi(argv[++i]);
+    if (std::string(argv[i]) == "--cand-def" && i + 1 < argc)
+      g_cand_defs = std::string(" ") + argv[++i];
+    if (std::string(argv[i]) == "--cand" && i + 1 < argc) {
+      g_cand_src = argv[++i];
+      size_t colon = g_cand_src.rfind(':');
+      if (colon != std::string::npos) {
+        g_cand_columns = (uint32_t)std::atoi(g_cand_src.c_str() + colon + 1);
+        g_cand_src.resize(colon);
+      }
+    }
   }
   const int reps = quick ? 7 : 21;
 
@@ -1746,7 +1775,7 @@ int main(int argc, char** argv) {
     const char* spv;
     uint32_t columns;
   };
-  const SideSpec specs[] = {
+  std::vector<SideSpec> specs = {
       {"base", "tools/q4-bw-bench/shaders/qmm_vec_base.comp",
           "/tmp/q4base.spv", 8u},
       {"unroll", "tools/q4-bw-bench/shaders/qmm_vec_cand_unroll.comp",
@@ -1762,11 +1791,20 @@ int main(int argc, char** argv) {
                   : "tools/q4-bw-bench/shaders/qmm_vec_cand_xpack.comp",
           bf16_eq ? "/tmp/q4cand_x2.spv" : "/tmp/q4cand_x.spv", 8u},
   };
-  const int num_sides = 5;
+  if (!g_cand_src.empty()) {
+    specs.resize(1);
+    specs.push_back({"cand", g_cand_src.c_str(), "/tmp/q4cand_c.spv",
+        g_cand_columns});
+  }
+  constexpr int kMaxSides = 5;
+  const int num_sides = (int)specs.size();
+  if (num_sides > kMaxSides) die("too many sides");
   for (int i = 0; i < num_sides; ++i) {
     // loadfirst cannot compile under bf16 defines (f16-only form).
     if (bf16_eq && std::string(specs[i].tag) == "loadfirst") continue;
-    if (compile_shader(specs[i].src, variant_defines, specs[i].spv) != 0)
+    std::string sdefs = std::string(variant_defines) +
+        (std::string(specs[i].tag) == "cand" ? g_cand_defs : std::string());
+    if (compile_shader(specs[i].src, sdefs.c_str(), specs[i].spv) != 0)
       die("compile %s", specs[i].tag);
   }
 
@@ -1796,9 +1834,9 @@ int main(int argc, char** argv) {
   // Input buffers shared by all sides; output buffers distinct per side
   // so the bit-exactness compare sees each side's own writes.
   SetBufs inputs[kNumShapes];
-  SetBufs outs[kNumShapes][num_sides];
+  SetBufs outs[kNumShapes][kMaxSides];
   Params shape_params[kNumShapes];
-  uint32_t groups_v[kNumShapes][num_sides];
+  uint32_t groups_v[kNumShapes][kMaxSides];
   for (uint32_t s = 0; s < kNumShapes; ++s) {
     const Shape& sh = g_shapes[s];
     inputs[s].x = make_buf(g_vk.dev, ctx.mp, (uint64_t)sh.k * 2u, false);
@@ -1833,7 +1871,7 @@ int main(int argc, char** argv) {
   if (g_vk.CreateDescriptorPool(g_vk.dev, &dpci, nullptr, &pool) !=
       VK_SUCCESS)
     die("CreateDescriptorPool");
-  VkDescriptorSet sets[kNumShapes][num_sides];
+  VkDescriptorSet sets[kNumShapes][kMaxSides];
   for (uint32_t s = 0; s < kNumShapes; ++s) {
     for (int i = 0; i < num_sides; ++i) {
       SetBufs combined = inputs[s];
