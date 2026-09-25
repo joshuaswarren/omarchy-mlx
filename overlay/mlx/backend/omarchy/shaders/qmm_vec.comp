@@ -126,7 +126,7 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #ifndef QMM_VEC_Q4_WORD
 #error "QMM_VEC_MULTI builds on QMM_VEC_Q4_WORD"
 #endif
-// Multi-weight decode dispatch: up to three transposed 4-bit/group-64
+// Multi-weight decode dispatch: up to four transposed 4-bit/group-64
 // weights against one x row in one dispatch, each with its own
 // scale/bias/output triple and an optional fused Add epilogue
 // (sum = out + addend, the elementwise Add's float add and storage
@@ -160,6 +160,7 @@ layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
 QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
+QMM_VEC_MULTI_WEIGHT(3, 19)
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
@@ -499,8 +500,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #endif
 
 #ifdef QMM_VEC_MULTI
-// Multi-weight main: workgroup ranges [0, g0), [g0, g0 + g1), and the
-// rest select weight 0, 1, 2; the selection is uniform per workgroup so
+// Multi-weight main: workgroup ranges [0, g0), [g0, g0 + g1), [.., + g2),
+// and the rest select weight 0, 1, 2, 3; the selection is uniform per workgroup so
 // the barrier rounds of the tree reduction stay uniform. Each weight's
 // column runs the same Q4_ROW chain the single kernel runs for that
 // weight alone (n is that weight's N, so the qmv_fast tile choice is
@@ -571,8 +572,10 @@ void main() {
   uint n0 = params.shape[0];
   uint n1 = params.shape[1];
   uint n2 = params.shape[2];
+  uint n3 = params.shape[3];
   uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint workgroup = gl_WorkGroupID.x;
   uint which;
   uint n;
@@ -586,10 +589,14 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
-  } else {
+  } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
     n = n2;
+  } else {
+    which = 3u;
+    workgroup -= groups0 + groups1 + groups2;
+    n = n3;
   }
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
   bool column_active = column < n;
@@ -635,8 +642,10 @@ void main() {
       Q4_ROWS(input_w0, scales0, biases0)
     } else if (which == 1u) {
       Q4_ROWS(input_w1, scales1, biases1)
-    } else {
+    } else if (which == 2u) {
       Q4_ROWS(input_w2, scales2, biases2)
+    } else {
+      Q4_ROWS(input_w3, scales3, biases3)
     }
   }
   Q4_ROWS_REDUCE(total)
@@ -650,8 +659,10 @@ void main() {
           Q4_MULTI_STORE(0, rounded)
         } else if (which == 1u) {
           Q4_MULTI_STORE(1, rounded)
-        } else {
+        } else if (which == 2u) {
           Q4_MULTI_STORE(2, rounded)
+        } else {
+          Q4_MULTI_STORE(3, rounded)
         }
       }
     }
@@ -665,8 +676,10 @@ void main() {
   uint n0 = params.shape[0];
   uint n1 = params.shape[1];
   uint n2 = params.shape[2];
+  uint n3 = params.shape[3];
   uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint workgroup = gl_WorkGroupID.x;
   uint which;
   uint n;
@@ -693,10 +706,14 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
-  } else {
+  } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
     n = n2;
+  } else {
+    which = 3u;
+    workgroup -= groups0 + groups1 + groups2;
+    n = n3;
   }
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot;
   bool column_active = column < n;
@@ -748,8 +765,10 @@ void main() {
       Q4_ROW(input_w0, scales0, biases0)
     } else if (which == 1u) {
       Q4_ROW(input_w1, scales1, biases1)
-    } else {
+    } else if (which == 2u) {
       Q4_ROW(input_w2, scales2, biases2)
+    } else {
+      Q4_ROW(input_w3, scales3, biases3)
     }
   }
   float total;
@@ -760,8 +779,10 @@ void main() {
       Q4_MULTI_STORE(0, rounded)
     } else if (which == 1u) {
       Q4_MULTI_STORE(1, rounded)
-    } else {
+    } else if (which == 2u) {
       Q4_MULTI_STORE(2, rounded)
+    } else {
+      Q4_MULTI_STORE(3, rounded)
     }
   }
 }
