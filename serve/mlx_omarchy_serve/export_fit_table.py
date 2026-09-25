@@ -24,7 +24,6 @@ Usage (from serve/):  python3 -m mlx_omarchy_serve.export_fit_table [-o out.json
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import sys
 from pathlib import Path
@@ -92,8 +91,9 @@ def build_fit_table(catalog_path: Path | None = None) -> dict:
     path = catalog_path or bundled_path()
     cat = json.loads(path.read_text(encoding="utf-8"))
     validate_catalog(cat)
+    # No generated timestamp here on purpose: the site's sync test re-runs
+    # this export and deep-compares it, so it must be byte-reproducible.
     return {
-        "exported_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         "catalog": {"version": cat["version"], "generated_at": cat["generated_at"], "source": cat["source"]},
         "budget": {
             "safety_reserve_bytes": budget.SAFETY_RESERVE_BYTES,
