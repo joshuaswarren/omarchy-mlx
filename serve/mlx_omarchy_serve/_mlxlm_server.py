@@ -134,12 +134,9 @@ def install_ids_probe(server_module, emit=None) -> None:
     )
 
     def wrap(cls):
-        if cls is None:
+        if cls is None or getattr(cls, "_ids_probe_installed", False):
             return
-        # Patch only methods defined in the class's OWN dict: a probe on a
-        # base class is inherited by subclasses, and wrapping both would
-        # record every token twice (subclass probe -> inherited base probe).
-        orig_add = cls.__dict__.get("add_token")
+        orig_add = getattr(cls, "add_token", None)
         if orig_add is None:
             return
 
@@ -148,26 +145,143 @@ def install_ids_probe(server_module, emit=None) -> None:
             _orig(self, token)
 
         cls.add_token = add_token_probe
+        cls._ids_probe_installed = True
 
-        orig_reset = cls.__dict__.get("reset")
-        if orig_reset is None:
-            return
+        orig_reset = getattr(cls, "reset", None)
+        if orig_reset is not None:
 
-        def reset_probe(self, _orig=orig_reset):
-            if state["ids"]:
+            def reset_probe(self, _orig=orig_reset):
+                if state["ids"]:
+                    import hashlib
+                    emit({"event": "generation", "n": len(state["ids"]),
+                          "ids_sha16": hashlib.sha256(
+                              json.dumps(state["ids"]).encode()).hexdigest()[:16],
+                          "ids": state["ids"]})
+                    state["ids"] = []
+                return _orig(self)
+
+            cls.reset = reset_probe
+
+        # mlx_lm's stream_generate finalizes (never resets) at request end —
+        # the server path's actual flush boundary (generate.py:741).
+        orig_finalize = getattr(cls, "finalize", None)
+        if orig_finalize is not None:
+
+            def finalize_probe(self, _orig=orig_finalize):
+                if state["ids"]:
+                    import hashlib
+                    emit({"event": "generation", "n": len(state["ids"]),
+                          "ids_sha16": hashlib.sha256(
+                              json.dumps(state["ids"]).encode()).hexdigest()[:16],
+                          "ids": state["ids"]})
+                    state["ids"] = []
+                return _orig(self)
+
+            cls.finalize = finalize_probe
+
+    for cls in (StreamingDetokenizer, NaiveStreamingDetokenizer,
+                BPEStreamingDetokenizer, SPMStreamingDetokenizer):
+        wrap(cls)
+
+    # Third capture site: the BATCHED branch (mlx_lm/server.py:884) feeds
+    # generated tokens to the detokenizer via add_token but NEVER calls
+    # reset/finalize — the batch flush boundary is BatchGenerator.remove
+    # (finished uids) and close. With the managed CLI's decode_concurrency
+    # of 1, the accumulated state at remove time is exactly the finished
+    # request's token array.
+    batch_cls = getattr(server_module, "BatchGenerator", None)
+
+    def _flush_uids(uids=None):
+        import hashlib
+        store = state.get("by_uid", {})
+        done = list(store) if not uids else [u for u in uids if u in store]
+        for uid in done:
+            ids = store.pop(uid)
+            emit({"event": "generation", "n": len(ids),
+                  "ids_sha16": hashlib.sha256(
+                      json.dumps(ids).encode()).hexdigest()[:16],
+                  "ids": ids})
+
+    if batch_cls is not None and not getattr(batch_cls, "_ids_probe_flush",
+                                             False):
+        orig_next = getattr(batch_cls, "next", None)
+        if orig_next is not None:
+            # Primary batched capture: gen_responses carry (.uid, .token) —
+            # accumulate per uid and emit each uid's array when the server
+            # removes that uid (request completion).
+            def next_probe(self, *_a, _orig=orig_next, **_k):
+                prompt_responses, gen_responses = _orig(self, *_a, **_k)
+                for r in gen_responses or []:
+                    token = getattr(r, "token", None)
+                    uid = getattr(r, "uid", None)
+                    if token is None or uid is None:
+                        continue
+                    state.setdefault("by_uid", {}).setdefault(
+                        uid, []).append(int(token))
+                    # The server never resets the detokenizer on this route;
+                    # flush a uid's array the moment its generation finishes.
+                    if getattr(r, "finish_reason", None) is not None:
+                        _flush_uids([uid])
+                return prompt_responses, gen_responses
+            batch_cls.next = next_probe
+
+        orig_remove = getattr(batch_cls, "remove", None)
+        if orig_remove is not None:
+            def remove_probe(self, uids, _orig=orig_remove):
+                _flush_uids(list(uids) if uids else None)
+                return _orig(self, uids)
+            batch_cls.remove = remove_probe
+        else:
+            orig_remove = None
+        orig_close = getattr(batch_cls, "close", None)
+        if orig_close is not None:
+            def close_probe(self, _orig=orig_close):
+                _flush_uids(None)
+                return _orig(self)
+            batch_cls.close = close_probe
+        batch_cls._ids_probe_flush = True
+
+    # Second, independent capture site: mlx_lm.server calls stream_generate
+    # on the single-stream path (the managed CLI pins decode_concurrency=1,
+    # so this is THE generation route). Collect each yielded response's
+    # token and flush the per-request array when the generator exhausts —
+    # independent of any detokenizer reset/finalize behavior.
+    orig_stream = getattr(server_module, "stream_generate", None)
+    if orig_stream is not None:
+        def stream_probe(*args, **kwargs):
+            gen = orig_stream(*args, **kwargs)
+            print("shim: stream_probe ENTERED", file=sys.stderr, flush=True)
+            count = 0
+            while True:
+                try:
+                    item = next(gen)
+                except StopIteration:
+                    break
+                token = getattr(item, "token", None)
+                if token is not None:
+                    state["ids"].append(int(token))
+                    count += 1
+                try:
+                    yield item
+                except GeneratorExit:
+                    # Client disconnected mid-generation: flush what the
+                    # request produced so partial arrays are recorded.
+                    if count:
+                        import hashlib
+                        emit({"event": "generation_client_disconnected",
+                              "n": len(state["ids"]),
+                              "ids": state["ids"]})
+                        state["ids"] = []
+                    raise
+            if count:
                 import hashlib
                 emit({"event": "generation", "n": len(state["ids"]),
                       "ids_sha16": hashlib.sha256(
                           json.dumps(state["ids"]).encode()).hexdigest()[:16],
                       "ids": state["ids"]})
                 state["ids"] = []
-            return _orig(self)
 
-        cls.reset = reset_probe
-
-    for cls in (StreamingDetokenizer, NaiveStreamingDetokenizer,
-                BPEStreamingDetokenizer, SPMStreamingDetokenizer):
-        wrap(cls)
+        server_module.stream_generate = stream_probe
 
 
 def main() -> None:
@@ -187,8 +301,12 @@ def main() -> None:
         raise SystemExit(3)
     check_pinned(server_module)
     install(server_module, limit)
-    if os.environ.get(PROBE_ENV) == "1":
+    probe_wanted = os.environ.get(PROBE_ENV) == "1"
+    print(f"shim: PROBE_ENV={os.environ.get(PROBE_ENV)!r} "
+          f"installing={probe_wanted}", file=sys.stderr, flush=True)
+    if probe_wanted:
         install_ids_probe(server_module)
+        print("shim: ids probe installed", file=sys.stderr, flush=True)
     server_module.main()
 
 
