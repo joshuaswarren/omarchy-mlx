@@ -41,7 +41,7 @@ Deliberately not findings (checked, spec-floor-safe or already capability-keyed)
 push constants are exactly `sizeof(ComputeParams)` = 128 bytes = the Vulkan
 spec minimum (`compute.cpp:1320`); `fft_c2c.comp`'s 16 KiB shared and the
 linalg/sort/reduce shared budgets all sit at or under the 16 KiB spec floor;
-the 19-slot binding budget is `min(budget, device limits)` with a named throw
+the 25-slot binding budget is `min(budget, device limits)` with a named throw
 past the limit (`device.cpp:815-821`, `encoder.cpp:413-421`); the allocator's
 non-coherent fallback does explicit flush/invalidate (`allocator.h:20-24`);
 `kTrigArgumentLimit` is a device-independent contract, measured as such

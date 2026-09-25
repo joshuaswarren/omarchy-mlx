@@ -27,13 +27,15 @@ inline constexpr uint32_t kComputeBindingFloor = 4;
 // that budget refuse by name instead of dispatching. The spec floor is why
 // the pre-2026-09-02 four-slot constant was portable, not a device ceiling:
 // real drivers report orders of magnitude more.
-// Nineteen slots fit the widest kernel today: the multi-weight decode
+// Twenty-five slots fit the widest kernel today: the multi-weight decode
 // GEMV binds x plus, per weight, packed words, scales, biases, the
 // output, an Add addend, and the Add output (kQmmVecMultiBindings).
 // The triple-index scatter needs six.
-inline constexpr uint32_t kComputeBindingBudget = 19;
+inline constexpr uint32_t kComputeBindingBudget = 25;
 // Bindings of the QmmVecQ4Multi kernels and their per-weight stride.
-inline constexpr uint32_t kQmmVecMultiWeights = 3;
+// Four weights cover a GatedDeltaNet layer's qkv/z/a/b projections of one
+// normed row in one dispatch.
+inline constexpr uint32_t kQmmVecMultiWeights = 4;
 inline constexpr uint32_t kQmmVecMultiBindingsPerWeight = 6;
 inline constexpr uint32_t kQmmVecMultiBindings =
     1 + kQmmVecMultiWeights * kQmmVecMultiBindingsPerWeight;
@@ -589,7 +591,7 @@ enum class ComputeKernel : uint16_t {
   SwigluF16,
   SwigluBF16,
   // DecodeFusion multi-weight Q4 GEMV (shaders/qmm_vec.comp
-  // QMM_VEC_MULTI): up to three transposed 4-bit/group-64 weights per
+  // QMM_VEC_MULTI): up to four transposed 4-bit/group-64 weights per
   // dispatch with optional fused Add epilogues. Appended to keep
   // profile kernel ids stable.
   QmmVecQ4MultiF32,
