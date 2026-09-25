@@ -111,6 +111,24 @@ Receipt per row:
 
 Cross-OS token identity was never an acceptance bar; the bar is logit-level equivalence plus coherent decoding. Adapter evidence is captured per run (Vulkan loader trace naming the Apple physical device on Linux; mlx device identity on macOS). The backend refuses non-Apple GPUs by default.
 
+### Cross-OS parity state (2026-09-25)
+
+Three-laptop parity battery — GPU Qwen3.8-2B (this repo's Honeykrisp stack),
+ANE whole encoder, Parakeet — against same-SoC macOS denominators. Bar:
+>=1.00x macOS. No Linux cell meets the bar yet.
+
+| Host | GPU Qwen decode (Linux / macOS) | ANE encoder (Linux / macOS) | Parakeet warm (Linux / macOS) |
+|---|---|---|---|
+| m1-host (T8103) | 37.39 / 47.05 tok/s — 0.79x FAIL | 141.5-141.9 / 113.12 ms — 0.79x FAIL | 1588-1598 / 271 ms — 0.17x FAIL (transcript parity PASS) |
+| m1max-host (T6001) | 77.33-77.48 / 179.47 tok/s — 0.43x FAIL | figures unreceipted; firmware stalls before HELLO | total unreceipted; transcript 104/104 PASS |
+| m2-host (T6021) | stale-stack 72.58 vs 179.0 tok/s; main-tip cell staged, not run | no inference path (fw service loop, no HELLO) | blocked: T6021 ANE unavailable |
+
+m1-host GPU numbers were measured on this repo's main tree `024d4fe60`
+(records pin `dbf704971617fdfc`, bit-identical across m1-host and
+m1max-host). The full matrix with per-cell receipts and unreceipted-value
+marks lives in
+[joshuaswarren/ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments#three-laptop-parity-matrix-2026-09-25).
+
 Archival Qwen2.5 tables and older batteries stay in git history / linked receipts — they are **not** the current recommendation. Current text-generation guidance: [docs/serve.md](docs/serve.md).
 
 ## Feature parity
