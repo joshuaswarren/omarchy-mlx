@@ -86,7 +86,7 @@ const uint LANES = 32u;
 
 layout(local_size_x = 256) in;
 
-#if defined(USE_FP16) && defined(QMM_VEC_Q4_WORD)
+#if (defined(USE_FP16) || defined(USE_BF16)) && defined(QMM_VEC_Q4_WORD)
 // Decode x rows are 16-byte aligned by dispatch. Reading eight packed halves
 // at once keeps native's half arithmetic while avoiding eight scalar loads.
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
@@ -280,9 +280,21 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   float x1 = float(h1); \
   float x2 = float(h2); \
   float x3 = float(h3);
+#elif defined(USE_BF16)
+// Packed-x bf16 quad: two uint words of the uvec4 carry four bf16 halves
+// (low half first, as stored). bf16 -> f32 is an exact left shift by 16,
+// so every x value equals the scalar LOAD_VALUE, the sum chain keeps the
+// float order, and one uvec4 load replaces eight 2-byte scalar loads per
+// weight word.
+#define Q4_QUAD_LOAD(lo, hi) \
+  float x0 = uintBitsToFloat(((lo) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((lo) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((hi) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((hi) & 0xFFFF0000u); \
+  input_sum += ((x0 + x1) + x2) + x3;
 #else
-// f32 x has nothing to round; the bf16 native quad sum is uncaptured,
-// so bf16 keeps the float chain.
+// f32 x has nothing to round; the f32 quad sum is uncaptured,
+// so f32 keeps the float chain.
 #define Q4_QUAD_LOAD(base, unused) \
   float x0 = LOAD_VALUE(input_x.values[base]); \
   float x1 = LOAD_VALUE(input_x.values[(base) + 1u]); \
@@ -299,7 +311,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
               x0 * float(p & 0xfu)))); \
 }
 // One packed weight word and its eight x values.
-#ifdef USE_FP16
+#if defined(USE_FP16) || defined(USE_BF16)
 #define Q4_WORD(word, x_base) { \
   uint word_value = (word); \
   uvec4 x_words = input_x.values[(x_base) / 8u]; \
@@ -382,6 +394,25 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #else
 #define ROUND_STORAGE(f) (f)
 #endif
+// Workgroup reduction of `accumulator` into `total`, both flavors.
+// The paired SwiGLU epilogue (flags bit 16) runs it twice per
+// workgroup (gate, then up); the barrier rounds stay uniform because
+// the fold flag is workgroup-uniform.
+#ifdef USE_SUBGROUP
+#define Q4_REDUCE(total) { (total) = subgroupAdd(accumulator); }
+#else
+#define Q4_REDUCE(total) { \
+  reduce_scratch[lane] = accumulator; \
+  barrier(); \
+  for (uint offset = 1u; offset < LANES; offset <<= 1u) { \
+    if ((lane_in_slot & (2u * offset - 1u)) == 0u) { \
+      reduce_scratch[lane] += reduce_scratch[lane + offset]; \
+    } \
+    barrier(); \
+  } \
+  (total) = reduce_scratch[lane]; \
+}
+#endif
 #define Q4_MULTI_STORE(I, rounded) { \
   output##I.values[column] = STORE_VALUE(rounded); \
   if ((params.flags & (256u << I)) != 0u) { \
@@ -407,7 +438,23 @@ void main() {
   uint workgroup = gl_WorkGroupID.x;
   uint which;
   uint n;
-  if (workgroup < groups0) {
+  if ((params.flags & 65536u) != 0u) {
+    // SwiGLU store epilogue (fold path, flags bit 16): weight 0 is
+    // the gate projection, weight 1 the up projection, and the host
+    // guarantees n0 == n1 and dispatches exactly groups0 workgroups.
+    // Every workgroup computes the SAME column slice of both weights
+    // (same Q4_ROW chain and reduction the weight-partitioned layout
+    // runs — same words per lane, same pairing order, so both dots
+    // are bit-identical to the standalone stores) and then applies
+    // the fused_chain swiglu program statement-for-statement:
+    // sig = sigmoid(gate); silu = gate * sig; out = silu * up, every
+    // intermediate rounded through ROUND_STORAGE exactly as
+    // shaders/swiglu.comp rounds the values it loads back from
+    // memory. Only the swiglu product is stored; gate and up stay in
+    // registers, so the standalone swiglu dispatch is deleted.
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0) {
     which = 0u;
     n = n0;
   } else if (workgroup < groups0 + groups1) {
@@ -422,6 +469,42 @@ void main() {
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot;
   bool column_active = column < n;
   precise float accumulator = 0.0;
+  if ((params.flags & 65536u) != 0u) {
+    float gate_rounded = 0.0;
+    float up_rounded = 0.0;
+    if (column_active) {
+      uint words_per_row = params.matrix_k / 8u;
+      uint groups_per_row = params.matrix_k / 64u;
+      uint w_base = column * words_per_row;
+      uint scale_base = column * groups_per_row;
+      uint bias_base = scale_base;
+      uint x_row = params.lhs_offset;
+      Q4_ROW(input_w0, scales0, biases0)
+    }
+    float gate_total;
+    Q4_REDUCE(gate_total)
+    gate_rounded = ROUND_STORAGE(gate_total);
+    accumulator = 0.0;
+    if (column_active) {
+      uint words_per_row = params.matrix_k / 8u;
+      uint groups_per_row = params.matrix_k / 64u;
+      uint w_base = column * words_per_row;
+      uint scale_base = column * groups_per_row;
+      uint bias_base = scale_base;
+      uint x_row = params.lhs_offset;
+      Q4_ROW(input_w1, scales1, biases1)
+    }
+    float up_total;
+    Q4_REDUCE(up_total)
+    up_rounded = ROUND_STORAGE(up_total);
+    if (lane_in_slot == 0u && column_active) {
+      float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded)));
+      float silu = ROUND_STORAGE(gate_rounded * sig);
+      output0.values[column] =
+          STORE_VALUE(ROUND_STORAGE(silu * up_rounded));
+    }
+    return;
+  }
   if (column_active) {
     uint words_per_row = params.matrix_k / 8u;
     uint groups_per_row = params.matrix_k / 64u;
@@ -437,19 +520,8 @@ void main() {
       Q4_ROW(input_w2, scales2, biases2)
     }
   }
-#ifdef USE_SUBGROUP
-  float total = subgroupAdd(accumulator);
-#else
-  reduce_scratch[lane] = accumulator;
-  barrier();
-  for (uint offset = 1u; offset < LANES; offset <<= 1u) {
-    if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
-      reduce_scratch[lane] += reduce_scratch[lane + offset];
-    }
-    barrier();
-  }
-  float total = reduce_scratch[lane];
-#endif
+  float total;
+  Q4_REDUCE(total)
   if (lane_in_slot == 0u && column_active) {
     float rounded = ROUND_STORAGE(total);
     if (which == 0u) {

@@ -305,6 +305,21 @@ class MLX_API CommandEncoder {
     VkDeviceSize end;
   };
   static bool gated_barriers();
+  /* Phase-1 dependency-export (design 22b395d): per-dispatch records
+   * computed from the GATED_BARRIERS tracker, stored host-side, not
+   * consumed yet (the driver learns nothing until phase 2). */
+  struct DepRecord {
+    uint32_t disjoint;
+    uint32_t usc_changed;
+    uint64_t seq;
+  };
+  static bool export_dep_masks();
+  static bool dep_dump();
+  static int dep_dump_n();
+  std::vector<DepRecord> dep_records_;
+  uint32_t dep_prev_signature_{0};
+  uint32_t dep_have_prev_{0};
+  uint64_t dep_seq_{0};
   bool batch_needs_barrier(
       std::span<const TrackedRange> reads,
       std::span<const TrackedRange> writes) const;

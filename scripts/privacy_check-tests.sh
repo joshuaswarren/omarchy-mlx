@@ -124,5 +124,15 @@ cp "$0" "$R/scripts/privacy_check-tests.sh"
 git -C "$R" add .; git -C "$R" commit -qm guard
 g vbase..main >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL16 self-trigger rc=$rc"; FAILS=$((FAILS+1)); }
 
+# 17 .privacy-allow exact-blob pin: pinned fixture passes a new-ref
+# (full-history) scan; a new blob at the pinned path blocks again
+R="$T/c17"; newrepo "$R"
+printf 'path=%s\n' "$UPATH" > "$R/fixture.txt"; git -C "$R" add .; git -C "$R" commit -qm fixture
+g main >/dev/null 2>&1; rc=$?; [ $rc -eq 1 ] || { echo "FAIL17 unpinned rc=$rc"; FAILS=$((FAILS+1)); }
+printf '%s fixture.txt\n' "$(git -C "$R" rev-parse HEAD:fixture.txt)" >> "$R/.privacy-allow"
+g main >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || { echo "FAIL17 pinned rc=$rc"; FAILS=$((FAILS+1)); }
+printf 'path=%s\n' "$UPATH" >> "$R/fixture.txt"; git -C "$R" add .; git -C "$R" commit -qm fixture2
+g main >/dev/null 2>&1; rc=$?; [ $rc -eq 1 ] || { echo "FAIL17 edited rc=$rc"; FAILS=$((FAILS+1)); }
+
 rm -rf "$T" "$SITE"
 if [ $FAILS -eq 0 ]; then echo ALL_GUARD_V5_TESTS_PASS; else echo "FAILURES=$FAILS"; exit 1; fi

@@ -1,0 +1,32 @@
+# privacy_check.py reviewed-content allowlist.
+#
+# Pins the exact historical blobs ("<40-hex-sha> <path>") whose generic-
+# pattern hits were reviewed and confirmed SYNTHETIC fixture data: test
+# vectors for the collector redactor, the wheel-pin guard examples, and
+# the community-data PII scanner's own unit tests. A pin exempts only
+# that blob's CONTENT scan on that path; commit messages and filenames
+# are never exempted, and any edit to a pinned file makes a new blob
+# that blocks again until re-reviewed and re-pinned here.
+# Full-history new-ref scans (git push of a new branch or tag) walk
+# every commit, so historical fixture blobs need these pins to pass.
+955daa02bc578c2bdebb1e15d62a9ca32da04504  scripts/check-wheel-pins.py
+47a04b9cca8dd3507e078a16b2ccdba29bb47b02  scripts/test_collect.py
+6e93fb7964a09376d25c6faedebb24eaeeca2009  scripts/test_collect.py
+9ed9ffcb0efe9472b8bff7d4ab3e28c4059d4d92  scripts/test_collect.py
+2cf69be91dc1d9e40e69c72ca9557723dd7decb8  scripts/test_collect.py
+d326c0c94b3e79cbec27e31c9f1e57fcc1c7f153  scripts/test_collect.py
+6cfff3e9845fcee7f48184a1f717c2d06c76b268  scripts/test_collect.py
+9b81408746063c93f6a92049b7db30a54ff02b71  scripts/test_collect.py
+06356423cafb25f772f71b057b012d4f0037d6a4  scripts/test_collect.py
+902698a2e178cd9680c4709858482ceb419f3545  scripts/test_collect.py
+3d1d72947a0c1a3d8d17458e578f0eb2659dad50  scripts/test_collect.py
+771c6849c9f910fd7011581fcfacfd9089cbd63e  scripts/test_collect.py
+b1797b87755e5c38e53da6eb813faddb8eaeb761  scripts/test_collect.py
+2400000f8468e49f36798b6e1c20fa7548f2f61e  scripts/test_collect.py
+3cf1d9d753ca865e77aa0d7129440e8523b497dc  scripts/test_collect.py
+6a47ee359b5bd99987c47dbea9c0629fcc31b495  scripts/test_collect.py
+254b180cf2be23da73ef23b463c8828a8e951b7e  scripts/test_collect_macos.py
+72509d0c65a6d3961ae5de1216cadc989e0f8abd  scripts/test_collect_macos.py
+c83fcd529ee10234660b232ac8381b0a353ecbad  scripts/test_collect_macos.py
+8e3fb4161e1e17f6cc0e5f5deec93b5b8948a88b  services/community-data/test/unit/pii.test.ts
+5c534434017ff173b2fa78bccc538ada09115826  tests/test_wheel_pins.py

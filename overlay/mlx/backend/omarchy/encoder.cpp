@@ -31,6 +31,27 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
 
 } // namespace
 
+bool CommandEncoder::export_dep_masks() {
+  // MLX_OMARCHY_EXPORT_DEP_MASKS (design 22b395d phase 1): default ON
+  // for the phase-1 branch — the computation reuses tracker state and
+  // is provably inert (records are stored, never consumed).
+  static const bool on = !env_flag("MLX_OMARCHY_NO_EXPORT_DEP_MASKS");
+  return on;
+}
+bool CommandEncoder::dep_dump() {
+  static const int n = []() {
+    const char *v = getenv("MLX_OMARCHY_DEP_DUMP");
+    return v ? atoi(v) : 0;
+  }();
+  return n > 0;
+}
+int CommandEncoder::dep_dump_n() {
+  static const int n = []() {
+    const char *v = getenv("MLX_OMARCHY_DEP_DUMP");
+    return v ? atoi(v) : 0;
+  }();
+  return n;
+}
 bool CommandEncoder::gated_barriers() {
   // MLX_OMARCHY_GATED_BARRIERS (docs/install-omarchy.md): default off.
   // On, dispatch/copy/fill nodes record a barrier only when their buffer
@@ -494,6 +515,26 @@ void CommandEncoder::dispatch_compute_pipeline(
     for (size_t i = 0; i < bindings.size(); ++i) {
       tracked_reads_.push_back(ranges[i]);
       tracked_writes_.push_back(ranges[i]);
+    }
+    if (export_dep_masks()) {
+      // Compute the two exported signals (design 22b395d): (a) whether
+      // this dispatch's ranges are provably disjoint from everything
+      // since the last explicit dependency (same proof
+      // batch_needs_barrier just ran, inverted); (b) whether the launch
+      // reuses the previous dispatch's binding-layout signature (the
+      // mlx-level analogue of the driver's USC register configuration).
+      uint32_t usc_signature = 0;
+      for (size_t i = 0; i < bindings.size(); ++i) {
+        usc_signature = usc_signature * 31 +
+                        uint32_t((uintptr_t)ranges[i].buffer ^ ranges[i].offset ^
+                                 ranges[i].end);
+      }
+      uint32_t usc_changed =
+          (dep_have_prev_ && usc_signature != dep_prev_signature_) ? 1 : 0;
+      dep_records_.push_back({static_cast<uint32_t>(barrier_recorded ? 0 : 1),
+                              usc_changed, ++dep_seq_});
+      dep_prev_signature_ = usc_signature;
+      dep_have_prev_ = 1;
     }
   } else {
     VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};

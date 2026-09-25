@@ -2,7 +2,9 @@
 """privacy-check: fail-closed per-commit private-content guard (v5).
 
 Generic patterns only; site inventory via optional untracked
-.private-patterns (never published). Scans EVERY commit in range
+.private-patterns (never published). Reviewed-content allowlist via
+tracked .privacy-allow (exact "<blob-sha> <path>" pins; content scan
+only — messages and filenames are never exempted). Scans EVERY commit in range
 (merges via -m, root via --root): added lines, new filenames, commit
 message. Single rev = full history (conservative for new refs).
 
@@ -56,6 +58,30 @@ def compile_patterns(repo):
                 if line and not line.startswith(b"#"):
                     pats.append(line)
     return [re.compile(p, re.IGNORECASE) for p in pats]
+
+
+def compile_allows(repo):
+    """(blob_sha, path) pairs exempt from the blob-content scan.
+
+    Tracked .privacy-allow pins reviewed content the generic patterns
+    flag on synthetic fixture data (e.g. a PII scanner's own unit-test
+    literals). Lines: "<40-hex-sha> <path>", "#" comments. A pin is
+    exact: any edit to the file makes a new blob and blocks again
+    until re-pinned, so the exemption cannot silently cover new
+    content. Message and filename scans are never exempted.
+    """
+    allows = set()
+    site = os.path.join(repo, ".privacy-allow")
+    if os.path.isfile(site):
+        with open(site, "rb") as f:
+            for line in f.read().splitlines():
+                line = line.strip()
+                if not line or line.startswith(b"#"):
+                    continue
+                sha, _, path = line.partition(b" ")
+                if sha and path:
+                    allows.add((sha.lower(), path.strip()))
+    return allows
 
 
 def scan(content, label, regexes, hits):
@@ -159,6 +185,7 @@ def main():
             die("bad rev: %s" % rng)
 
     regexes = compile_patterns(repo)
+    allows = compile_allows(repo)
     if os.environ.get("PRIVACY_DEBUG"):
         sys.stderr.write("privacy-check DEBUG: repo=%s range=%s patterns=%d site=%s\n" % (
             repo, rng, len(regexes),
@@ -173,6 +200,8 @@ def main():
             if newsha is None:
                 newsha = run(["git", "-C", repo, "rev-parse",
                               cc + ":" + path.decode("utf-8", "surrogateescape")]).strip()
+            if (newsha.lower(), path) in allows:
+                continue
             body = run(["git", "-C", repo, "cat-file", "blob",
                         newsha.decode("ascii")])
             scan(body, "blob %s" % path.decode("utf-8", "replace")[:60],
