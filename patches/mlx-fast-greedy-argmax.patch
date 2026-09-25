@@ -1,7 +1,7 @@
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
-@@ -86,6 +86,26 @@
-     const std::optional<array>& mask = std::nullopt,
+@@ -119,6 +119,26 @@
+     const array& weight,
      StreamOrDevice s = {});
  
 +// Greedy token of a transposed affine-quantized projection: the index
@@ -29,8 +29,8 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1308,6 +1308,61 @@
-   return result;
+@@ -1477,6 +1477,61 @@
+       /* inputs */ std::vector<array>{state, x, weight});
  }
  
 +std::vector<array> greedy_quantized_argmax(
@@ -93,10 +93,25 @@
    return (
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -435,6 +435,40 @@
-   bool raw_gates_{false};
- };
+@@ -436,7 +436,6 @@
  
+   void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
+       override;
+-
+   const char* name() const override {
+     if (to_fp8_) {
+       return "ToFP8";
+@@ -447,13 +446,44 @@
+   bool state() const {
+     return to_fp8_;
+   };
+-
+   bool is_equivalent(const Primitive& other) const override;
+   DEFINE_INPUT_OUTPUT_SHAPE();
+-
+  private:
+   bool to_fp8_;
+ };
 +// Inputs (x, w, scales, biases, high_bits); outputs (token, stats). See
 +// fast::greedy_quantized_argmax.
 +class GreedyQuantizedArgmax : public Custom {
@@ -130,10 +145,9 @@
 +  int group_size_;
 +  int bits_;
 +};
-+
- class Quantize : public Custom {
+ 
+ class GatedDeltaUpdate : public Custom {
   public:
-   explicit Quantize(
 --- a/mlx/backend/no_gpu/primitives.cpp
 +++ b/mlx/backend/no_gpu/primitives.cpp
 @@ -190,6 +190,7 @@
@@ -146,7 +160,7 @@
  NO_GPU_MULTI(CustomKernel)
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
-@@ -442,6 +442,38 @@
+@@ -499,6 +499,38 @@
              Returns:
                  Tuple of (output [B, 1, Hv, Dv], final_state [B, Hv, Dv, Dk])
          )");
@@ -184,4 +198,4 @@
 +        )");
  
    m.def(
-       "metal_kernel",
+       "gdn_conv_update",
