@@ -119,7 +119,7 @@ ANE whole encoder, Parakeet — against same-SoC macOS denominators. Bar:
 
 | Host | GPU Qwen decode (Linux / macOS) | ANE encoder (Linux / macOS) | Parakeet warm (Linux / macOS) |
 |---|---|---|---|
-| m1-host (T8103) | 37.39 / 47.05 tok/s — 0.79x FAIL | 141.5-141.9 / 113.12 ms — 0.79x FAIL | 1588-1598 / 271 ms — 0.17x FAIL (transcript parity PASS) |
+| m1-host (T8103) | 37.39 / 47.05 tok/s — 0.79x FAIL | 141.5-141.9 / 113.12 ms — 0.79x FAIL | 1588-1598 per-process; **935.8 in-process warm** (2026-09-25 lean lane) / 271 ms — FAIL (transcript parity PASS, hidden bit-exact) |
 | m1max-host (T6001) | 77.33-77.48 / 179.47 tok/s — 0.43x FAIL | figures unreceipted; firmware stalls before HELLO | total unreceipted; transcript 104/104 PASS |
 | m2-host (T6021) | stale-stack 72.58 vs 179.0 tok/s; main-tip cell staged, not run | no inference path (fw service loop, no HELLO) | blocked: T6021 ANE unavailable |
 
@@ -128,6 +128,14 @@ m1-host GPU numbers were measured on this repo's main tree `024d4fe60`
 m1max-host). The full matrix with per-cell receipts and unreceipted-value
 marks lives in
 [joshuaswarren/ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments#three-laptop-parity-matrix-2026-09-25).
+
+**2026-09-25 m1-host addendum (lean lane receipt `2026-09-25-jwm1-parity2-parakeet-lean`)**:
+the 1588-1598 ms figure pays per-process kernel compile + 628 ms ANE session open every rep, while the
+macOS denominator amortizes CoreML load across rep10; on the matched in-process boundary the same laptop
+runs 935.8 ms warm median (hidden content sha 51830b6ffe992568 bit-exact vs the certified pins). Remaining
+named buckets: TDT per-call host glue (~1.45 ms x 265 calls), encoder submit overhead (293 vs 143 engine),
+mel 63 ms, q4 GEMV kernel efficiency — a 54.2 GB/s measured read rate disproves the 43 GB/s decode
+bandwidth wall on this DRAM.
 
 Archival Qwen2.5 tables and older batteries stay in git history / linked receipts — they are **not** the current recommendation. Current text-generation guidance: [docs/serve.md](docs/serve.md).
 
