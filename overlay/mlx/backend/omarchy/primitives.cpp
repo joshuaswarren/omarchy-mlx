@@ -5876,10 +5876,20 @@ uint32_t coopmat_workgroups_per_core() {
 // even at 4.1 workgroups per core (58% slower than 32 rows), so there
 // is nothing below 16 worth dispatching. Both row counts keep one
 // output's k chain identical, so the pick does not move generated ids.
+//
+// A prompt of at most 16 rows fills one 16-row tile: the 32-row tile
+// would pad it to 32 (a 13-token prompt runs 19 dead rows through
+// every mma and A load) while the grid stays one m-group either way,
+// so nothing is traded for the halved per-step work. Contract prompts
+// are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
+// cost 400-950 us each, 133 of them per first token.
 uint32_t coopmat_tile_rows(
     uint32_t matrix_m,
     uint32_t n_groups,
     const std::string& device_name) {
+  if (matrix_m <= 16u) {
+    return 16u;
+  }
   uint32_t cores = apple_gpu_cores(device_name);
   uint32_t per_core = coopmat_workgroups_per_core();
   if (cores == 0u || per_core == 0u) {
