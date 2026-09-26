@@ -331,12 +331,34 @@ static const char* kShaderHead =
     "layout(push_constant) uniform PC { uint pc_val; } pc;\n"
     "void main() { out_buf[gl_WorkGroupID.x] = pc.pc_val; }\n";
 
+// Read-modify-write on one binding: true RAW dependency with a single set.
+static const char* kShaderRmw =
+    "#version 450\n"
+    "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;\n"
+    "layout(set = 0, binding = 0) buffer Out { uint out_buf[]; };\n"
+    "void main() { out_buf[gl_WorkGroupID.x] = out_buf[gl_WorkGroupID.x] + 1u; }\n";
+
+// Consumer chain across two bindings: dispatch N reads what N-1 wrote
+// (production fold/fold_proj/control shape) through per-dispatch sets.
+static const char* kShaderRaw =
+    "#version 450\n"
+    "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;\n"
+    "layout(set = 0, binding = 0) buffer In { uint in_buf[]; };\n"
+    "layout(set = 0, binding = 1) buffer Out { uint out_buf[]; };\n"
+    "void main() { out_buf[gl_WorkGroupID.x] = in_buf[gl_WorkGroupID.x] + 1u; }\n";
+
+static std::string compile_shader_src(const char* src);
+
 static std::string compile_shader() {
+  return compile_shader_src(kShaderHead);
+}
+
+static std::string compile_shader_src(const char* src) {
   char path_src[] = "/tmp/cdb-src-XXXXXX.comp";
   char path_spv[] = "/tmp/cdb-out-XXXXXX.spv";
   int fd = mkstemps(path_src, 5);
   if (fd < 0) die("mkstemps src");
-  if (write(fd, kShaderHead, strlen(kShaderHead)) != (ssize_t)strlen(kShaderHead))
+  if (write(fd, src, strlen(src)) != (ssize_t)strlen(src))
     die("write src");
   close(fd);
   fd = mkstemps(path_spv, 4);
@@ -363,6 +385,19 @@ struct Bench {
   VkDescriptorPool pool{VK_NULL_HANDLE};
   VkDescriptorSet set{VK_NULL_HANDLE};
   Buf out;
+  // RAW-chain additions: two-binding layout, chained buffers, per-stage
+  // sets, and pipeline variants for the pipeline-diversity probe.
+  VkDescriptorSetLayout dsl2{VK_NULL_HANDLE};
+  VkPipelineLayout layout2{VK_NULL_HANDLE};
+  VkDescriptorPool pool2{VK_NULL_HANDLE};
+  VkDescriptorSet rsets[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+  Buf bufs[4];  // A->B->C->D RAW chain
+  VkDescriptorSet mset{VK_NULL_HANDLE};  // single-set RMW
+  VkShaderModule mod_rmw{VK_NULL_HANDLE};
+  VkShaderModule mod_raw{VK_NULL_HANDLE};
+  VkPipeline pipe_rmw{VK_NULL_HANDLE};
+  VkPipeline pw[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+  VkPipeline pr[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkCommandPool cpool{VK_NULL_HANDLE};
   VkCommandBuffer cmd[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkQueryPool qpool{VK_NULL_HANDLE};
@@ -397,10 +432,10 @@ static void setup_bench(Bench& b) {
 
   VkDescriptorPoolSize ps{};
   ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  ps.descriptorCount = 1;
+  ps.descriptorCount = 2;
   VkDescriptorPoolCreateInfo pci{};
   pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  pci.maxSets = 1;
+  pci.maxSets = 2;
   pci.poolSizeCount = 1;
   pci.pPoolSizes = &ps;
   if (g_vk.CreateDescriptorPool(g_vk.dev, &pci, nullptr, &b.pool) !=
@@ -426,6 +461,143 @@ static void setup_bench(Bench& b) {
   wr.pBufferInfo = &dbi;
   g_vk.UpdateDescriptorSets(g_vk.dev, 1, &wr, 0, nullptr);
 
+  // RMW set: same single-binding layout, own buffer, written by the
+  // read-modify-write pipeline.
+  {
+    VkDescriptorSetAllocateInfo a2{};
+    a2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a2.descriptorPool = b.pool;
+    a2.descriptorSetCount = 1;
+    a2.pSetLayouts = &b.dsl;
+    if (g_vk.AllocateDescriptorSets(g_vk.dev, &a2, &b.mset) != VK_SUCCESS)
+      die("AllocateDescriptorSets mset");
+    b.bufs[3] = make_buf(1 << 12);
+    VkDescriptorBufferInfo d2{};
+    d2.buffer = b.bufs[3].buf;
+    d2.offset = 0;
+    d2.range = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet w2{};
+    w2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w2.dstSet = b.mset;
+    w2.dstBinding = 0;
+    w2.descriptorCount = 1;
+    w2.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w2.pBufferInfo = &d2;
+    g_vk.UpdateDescriptorSets(g_vk.dev, 1, &w2, 0, nullptr);
+  }
+
+  // ---- RAW-chain setup: two-binding layout, A->B->C->D buffers, three
+  // per-stage sets, RMW + RAW modules, and three pipelines per shader so
+  // a case can bind a DIFFERENT pipeline per dispatch (production's
+  // fold/fold_proj/control bind five distinct pipelines per slot).
+  {
+    VkDescriptorSetLayoutBinding binds[2]{};
+    binds[0].binding = 0;
+    binds[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binds[0].descriptorCount = 1;
+    binds[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binds[1].binding = 1;
+    binds[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binds[1].descriptorCount = 1;
+    binds[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo dl2{};
+    dl2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dl2.bindingCount = 2;
+    dl2.pBindings = binds;
+    if (g_vk.CreateDescriptorSetLayout(g_vk.dev, &dl2, nullptr, &b.dsl2) !=
+        VK_SUCCESS)
+      die("CreateDescriptorSetLayout dsl2");
+    VkPipelineLayoutCreateInfo pl2{};
+    pl2.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl2.setLayoutCount = 1;
+    pl2.pSetLayouts = &b.dsl2;
+    pl2.pushConstantRangeCount = 1;
+    pl2.pPushConstantRanges = &pcr;
+    if (g_vk.CreatePipelineLayout(g_vk.dev, &pl2, nullptr, &b.layout2) !=
+        VK_SUCCESS)
+      die("CreatePipelineLayout layout2");
+    VkDescriptorPoolSize ps2{};
+    ps2.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    ps2.descriptorCount = 8;
+    VkDescriptorPoolCreateInfo pc2{};
+    pc2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pc2.maxSets = 4;
+    pc2.poolSizeCount = 1;
+    pc2.pPoolSizes = &ps2;
+    if (g_vk.CreateDescriptorPool(g_vk.dev, &pc2, nullptr, &b.pool2) !=
+        VK_SUCCESS)
+      die("CreateDescriptorPool pool2");
+    for (int i = 0; i < 3; ++i) {
+      b.bufs[i] = make_buf(1 << 12);
+      VkDescriptorSetAllocateInfo a3{};
+      a3.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+      a3.descriptorPool = b.pool2;
+      a3.descriptorSetCount = 1;
+      a3.pSetLayouts = &b.dsl2;
+      if (g_vk.AllocateDescriptorSets(g_vk.dev, &a3, &b.rsets[i]) !=
+          VK_SUCCESS)
+        die("AllocateDescriptorSets rset");
+      VkDescriptorBufferInfo dbis[2]{};
+      dbis[0].buffer = b.bufs[i].buf;  // in = previous output
+      dbis[0].offset = 0;
+      dbis[0].range = VK_WHOLE_SIZE;
+      dbis[1].buffer = b.bufs[i + 1].buf;
+      dbis[1].offset = 0;
+      dbis[1].range = VK_WHOLE_SIZE;
+      VkWriteDescriptorSet ws[2]{};
+      for (int k = 0; k < 2; ++k) {
+        ws[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ws[k].dstSet = b.rsets[i];
+        ws[k].dstBinding = k;
+        ws[k].descriptorCount = 1;
+        ws[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ws[k].pBufferInfo = &dbis[k];
+      }
+      g_vk.UpdateDescriptorSets(g_vk.dev, 2, ws, 0, nullptr);
+    }
+    std::string spv_rmw = compile_shader_src(kShaderRmw);
+    std::string spv_raw = compile_shader_src(kShaderRaw);
+    VkShaderModuleCreateInfo mi2{};
+    mi2.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    auto make_mod = [&](const std::string& code) {
+      VkShaderModuleCreateInfo mi{};
+      mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+      mi.codeSize = code.size();
+      mi.pCode = (const uint32_t*)code.data();
+      VkShaderModule m{VK_NULL_HANDLE};
+      if (g_vk.CreateShaderModule(g_vk.dev, &mi, nullptr, &m) != VK_SUCCESS)
+        die("CreateShaderModule variant");
+      return m;
+    };
+    b.mod_rmw = make_mod(spv_rmw);
+    b.mod_raw = make_mod(spv_raw);
+    (void)mi2;
+    fprintf(stderr, "MARK modules-created rmw=%p raw=%p\n",
+            (void*)b.mod_rmw, (void*)b.mod_raw);
+    auto make_pipe = [&](VkShaderModule m, VkPipelineLayout l) {
+      VkComputePipelineCreateInfo cp{};
+      cp.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+      cp.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+      cp.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+      cp.stage.module = m;
+      cp.stage.pName = "main";
+      cp.layout = l;
+      VkPipeline p{VK_NULL_HANDLE};
+      if (g_vk.CreateComputePipelines(g_vk.dev, VK_NULL_HANDLE, 1, &cp,
+              nullptr, &p) != VK_SUCCESS)
+        die("CreateComputePipelines variant");
+      return p;
+    };
+    b.pipe_rmw = make_pipe(b.mod_rmw, b.layout);
+    fprintf(stderr, "MARK pipe_rmw ok\n");
+    for (int i = 0; i < 3; ++i) {
+      b.pr[i] = make_pipe(b.mod_raw, b.layout2);
+      fprintf(stderr, "MARK pr%d ok\n", i);
+    }
+    // pw[i] (distinct write pipelines) are created after the original
+    // module exists; see the follow-up block below.
+  }
+
   std::string spv = compile_shader();
   VkShaderModuleCreateInfo mi{};
   mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -442,6 +614,22 @@ static void setup_bench(Bench& b) {
   cpi.layout = b.layout;
   if (g_vk.CreateComputePipelines(g_vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr,
       &b.pipe) != VK_SUCCESS) die("CreateComputePipelines");
+  for (int i = 0; i < 3; ++i) {
+    // Distinct trivial-write pipelines: same module as b.pipe, separate
+    // VkPipeline handles, matching production's per-dispatch pipeline
+    // binds at the pipeline-identity level.
+    VkComputePipelineCreateInfo cpx{};
+    cpx.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpx.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpx.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpx.stage.module = b.mod;
+    cpx.stage.pName = "main";
+    cpx.layout = b.layout;
+    if (g_vk.CreateComputePipelines(g_vk.dev, VK_NULL_HANDLE, 1, &cpx,
+            nullptr, &b.pw[i]) != VK_SUCCESS)
+      die("CreateComputePipelines pw");
+    fprintf(stderr, "MARK pw%d ok\n", i);
+  }
 
   VkCommandPoolCreateInfo cpci{};
   cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -522,6 +710,83 @@ struct RunRes {
 static RunRes run_case(Bench& b, const char* mode, uint32_t grid,
     VkSemaphore sem, VkEvent ev, bool& ev_supported, uint64_t vbase) {
   uint32_t pcv = 0x3f;
+  // In-CS probes isolating the per-slot cost ingredients: ONE command
+  // buffer, full barrier between dispatches, per-dispatch TOP/BOT
+  // timestamps only where the name says _ts.
+  //   cs1_a_grid1_ts     same pipe+set, WAW, grid 1, timestamps
+  //   cs1_b_grid20_ts    same pipe+set, WAW, grid 20, timestamps
+  //   cs1_c_grid20_nots  same pipe+set, WAW, grid 20, one CS span pair
+  //   cs1_d_grid20_raw   RMW RAW chain, same pipe+set, grid 20, no ts
+  bool variant = strcmp(mode, "cs1_a_grid1_ts") == 0 ||
+      strcmp(mode, "cs1_b_grid20_ts") == 0 ||
+      strcmp(mode, "cs1_c_grid20_nots") == 0 ||
+      strcmp(mode, "cs1_d_grid20_raw") == 0;
+  if (variant) {
+    uint32_t g = strcmp(mode, "cs1_a_grid1_ts") == 0 ? 1 : 20;
+    bool ts = strcmp(mode, "cs1_c_grid20_nots") != 0 &&
+        strcmp(mode, "cs1_d_grid20_raw") != 0;
+    bool rmw = strcmp(mode, "cs1_d_grid20_raw") == 0;
+    g_vk.ResetQueryPool(g_vk.dev, b.qpool, 0, 8);
+    begin_cmd(b.cmd[0]);
+    if (!ts) {
+      g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+          b.qpool, 0);
+    }
+    for (int i = 0; i < 3; ++i) {
+      if (ts) {
+        g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            b.qpool, 2 * i);
+      }
+      if (rmw) {
+        g_vk.CmdBindPipeline(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.pipe_rmw);
+        g_vk.CmdBindDescriptorSets(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.layout, 0, 1, &b.mset, 0, nullptr);
+      } else {
+        g_vk.CmdBindPipeline(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.pw[0]);
+        g_vk.CmdBindDescriptorSets(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.layout, 0, 1, &b.set, 0, nullptr);
+        g_vk.CmdPushConstants(b.cmd[0], b.layout,
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &pcv);
+      }
+      g_vk.CmdDispatch(b.cmd[0], g, 1, 1);
+      if (ts) {
+        g_vk.CmdWriteTimestamp(b.cmd[0],
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool, 2 * i + 1);
+      }
+      if (i < 2) full_barrier(b.cmd[0]);
+    }
+    if (!ts) {
+      g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+          b.qpool, 1);
+    }
+    g_vk.EndCommandBuffer(b.cmd[0]);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &b.cmd[0];
+    double t0 = now_us();
+    if (g_vk.QueueSubmit(g_vk.queue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS)
+      die("QueueSubmit variant");
+    if (g_vk.QueueWaitIdle(g_vk.queue) != VK_SUCCESS)
+      die("WaitIdle variant");
+    double t1 = now_us();
+    uint32_t nq = ts ? 6 : 2;
+    uint64_t ticks[8];
+    if (g_vk.GetQueryPoolResults(g_vk.dev, b.qpool, 0, nq, sizeof(ticks),
+            ticks, sizeof(uint64_t),
+            VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+      die("GetQueryPoolResults variant");
+    if (!ts) {
+      double span = ticks_between(ticks[0], ticks[1]);
+      return {t1 - t0, 0.0, 0.0, span};
+    }
+    double hop01 = ticks_between(ticks[1], ticks[2]);
+    double hop12 = ticks_between(ticks[3], ticks[4]);
+    double span = ticks_between(ticks[0], ticks[5]);
+    return {t1 - t0, hop01, hop12, span};
+  }
   if (strcmp(mode, "cs1_none") == 0 || strcmp(mode, "cs1_barrier") == 0 ||
       strcmp(mode, "cs1_event") == 0) {
     g_vk.ResetQueryPool(g_vk.dev, b.qpool, 0, 8);
@@ -709,6 +974,8 @@ int main() {
   }
 
   const char* modes[] = {"cs1_none", "cs1_barrier", "cs1_event",
+      "cs1_a_grid1_ts", "cs1_b_grid20_ts", "cs1_c_grid20_nots",
+      "cs1_d_grid20_raw",
       "cs3_1submit_sema", "cs3_3submit_sema", "cs3_fencejoin"};
   const uint32_t REPS = 31, WARM = 7;
   for (const char* mode : modes) {
