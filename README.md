@@ -24,7 +24,7 @@ On Omarchy (Apple Silicon), one command installs the release wheel into a privat
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
 ```
 
-Uninstall with `bash install.sh --uninstall`. Latest stable: [v0.7.3](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.3). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
+Uninstall with `bash install.sh --uninstall`. Latest stable: [v0.7.4](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.4). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
 Manual install (or any other Linux box):
 
@@ -115,12 +115,15 @@ Cross-OS token identity was never an acceptance bar; the bar is logit-level equi
 
 Three-laptop parity battery — GPU Qwen3.8-2B (this repo's Honeykrisp stack),
 ANE whole encoder, Parakeet — against same-SoC macOS denominators. Bar:
->=1.00x macOS. No Linux cell meets the bar yet.
+>=1.00x macOS. No GPU or Parakeet cell meets the bar yet; the M1 Qwen ANE
+staged cells do (omarchy-ane driver, separate stack: decode 1.49x, TTFT
+0.84x, e2e 0.69x, prefill-512 1.223x — see the
+[experiments parity matrix](https://github.com/joshuaswarren/ane-linux-experiments#three-laptop-parity-matrix-2026-09-25)).
 
 | Host | GPU Qwen decode (Linux / macOS) | ANE encoder (Linux / macOS) | Parakeet warm (Linux / macOS) |
 |---|---|---|---|
-| m1-host (T8103) | 37.39 / 47.05 tok/s — 0.79x FAIL | 141.5-141.9 / 113.12 ms — 0.79x FAIL | 1588-1598 per-process; **935.8 in-process warm** (2026-09-25 lean lane) / 271 ms — FAIL (transcript parity PASS, hidden bit-exact) |
-| m1max-host (T6001) | 77.33-77.48 / 179.47 tok/s — 0.43x FAIL | figures unreceipted; firmware stalls before HELLO | total unreceipted; transcript 104/104 PASS |
+|m1-host (T8103)|37.39 / 47.05 tok/s — 0.79x FAIL|141.5-141.9 / 113.12 ms — 0.79x FAIL|1588-1598 per-process; **935.8 in-process warm** (2026-09-25 lean lane) / 271 ms — FAIL (transcript parity PASS, hidden bit-exact)|
+|m1max-host (T6001)|77.33-77.48 / 179.47 tok/s — 0.43x FAIL|440.7 / 140.9 ms — 0.32x FAIL (resident ANE worker; whole pipeline 1825 -> 892.9 ms, receipts 2026-09-25-jw16-levers6)|892.9 / 264 ms — 0.30x FAIL (transcript 104/104 PASS)|
 | m2-host (T6021) | stale-stack 72.58 vs 179.0 tok/s; main-tip cell staged, not run | no inference path (fw service loop, no HELLO) | blocked: T6021 ANE unavailable |
 
 m1-host GPU numbers were measured on this repo's main tree `024d4fe60`
