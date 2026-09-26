@@ -10618,6 +10618,10 @@ void GatedDeltaUpdate::eval_gpu(
     }
   }
 
+  // Decode kernel and prefill scan: LANES=4 threads per Dv row, 128-thread
+  // workgroups over 32 rows, so a head takes Dv / 32 = 4 workgroups
+  // (shader constants).
+  constexpr uint32_t kGdnWorkgroupsPerHead = 4;
   // Decode (T=1): the original single-token kernel, unchanged.
   if (decode_shape) {
     out.set_data(allocate_omarchy(out.nbytes()));
@@ -10808,22 +10812,26 @@ void GatedDeltaUpdate::eval_gpu(
       has_mask ? binding(*mask) : binding(out),
       binding(g),
       snapshot_binding};
-  // Pass 0: prefix scan, snapshots at chunk boundaries.
-  params.flags = g_flags;
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::GatedDeltaPrefillBF16,
-      bindings,
-      params,
-      static_cast<uint32_t>(Hv),
-      1,
-      1);
+  // Pass 0: prefix scan, snapshots at chunk boundaries. A single chunk
+  // has no boundary to snapshot, so pass 1 restores from h0 directly and
+  // pass 0 is skipped (it wrote nothing).
+  if (chunks > 1) {
+    params.flags = g_flags;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GatedDeltaPrefillBF16,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv) * kGdnWorkgroupsPerHead,
+        1,
+        1);
+  }
   // Pass 1: chunk-parallel output replay.
   params.flags = g_flags | 8u;
   encoder.dispatch_compute(
       omarchy::ComputeKernel::GatedDeltaPrefillBF16,
       bindings,
       params,
-      static_cast<uint32_t>(Hv),
+      static_cast<uint32_t>(Hv) * kGdnWorkgroupsPerHead,
       chunks,
       1);
 }

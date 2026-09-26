@@ -4,18 +4,25 @@
 // Fused gated-delta-rule prefill scan (GatedDeltaUpdate, T>1), chunked
 // two-pass form:
 //
-//   pass 0 (prefix scan, flags bit3 clear): one workgroup per v-head, one
-//     thread per Dv row, the head's state row lives in registers for the
-//     whole scan. At every chunk boundary (params.lhs_gap = chunk size C)
-//     the row's chunk-initial state is written to the snapshot buffer, so
-//     no chunk ever reads another chunk's working state from memory. The
-//     last chunk's terminal row is written to hf (the [B, Hv, Dv, Dk] f32
+//   pass 0 (prefix scan, flags bit3 clear): grid (heads x 4), each
+//     workgroup scanning 32 Dv rows of one head over every token, the
+//     rows' state slices in registers for the whole scan. At every chunk
+//     boundary (params.lhs_gap = chunk size C) the chunk-initial state is
+//     written to the snapshot buffer, so no chunk ever reads another
+//     chunk's working state from memory. The caller skips this pass when
+//     there is a single chunk: pass 1 then restores from h0 directly.
+//   pass 1 (outputs, flags bit3 set): grid (heads x 4, ceil(T/C)); each
+//     workgroup restores its chunk's initial state (h0 for chunk 0,
+//     snapshot otherwise), replays the chunk's tokens with the identical
+//     per-token arithmetic, and writes the bf16 output rows. The last
+//     chunk's terminal state is written to hf (the [B, Hv, Dv, Dk] f32
 //     row-contiguous layout shared with the decode kernel).
-//   pass 1 (outputs, flags bit3 set): grid (heads x ceil(T/C)); each
-//     workgroup restores its chunk's initial row (h0 for chunk 0, snapshot
-//     otherwise), replays the chunk's tokens with the identical per-token
-//     arithmetic, and writes the bf16 output rows. All chunks run
-//     concurrently: heads x chunks workgroups instead of heads.
+//
+// Thread layout: LANES threads per Dv row, each owning a contiguous
+// Dk/LANES slice of the row's state in registers; 128-thread workgroups
+// cover 32 rows. The kv and o dot products are sequential f32 chains over
+// Dk in ascending order, handed lane to lane (subgroupShuffleUp) so every
+// partial sum equals the one-thread-per-row form's.
 //
 // Per-token math is unchanged from the single-workgroup kernel and the
 // fast.cpp gated_delta_update fallback with everything promoted to f32;
@@ -32,6 +39,15 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+
+// Dk is 128 by the dispatch contract (GatedDeltaUpdate::use_fallback).
+#define DK 128u
+#define LANES 4u
+#define SLICE (DK / LANES)
+#define WG_THREADS 128u
+#define ROWS_PER_WG (WG_THREADS / LANES)
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
@@ -86,10 +102,9 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
-shared float sk[2][128];
-shared float sq[2][128];
-shared float sg[2][128];
-
+shared float sk[2][DK];
+shared float sq[2][DK];
+shared float sg[2][DK];
 
 float load_g_scalar(uint t, uint head, uint hv) {
   if ((params.flags & 4u) != 0u) {
@@ -98,15 +113,22 @@ float load_g_scalar(uint t, uint head, uint hv) {
   return bf16_load(g_buf.v[params.shape[0] + t * hv + head]);
 }
 
-// g vector load is done inline in main(), spread across the workgroup.
+// Broadcast lane LANES-1's value to the LANES lanes of its row (two
+// uniform relative shuffles; LANES == 4).
+float row_total(float acc, uint sub) {
+  float d1 = subgroupShuffleDown(acc, 1u);
+  acc = (sub == 2u) ? d1 : acc;
+  float d2 = subgroupShuffleDown(acc, 2u);
+  return (sub < 2u) ? d2 : acc;
+}
 
-// One token's recurrence on the register-resident state row |st|. Each
-// thread owns a full Dv row, so delta never crosses threads; k/q/g ride
-// shared because the workgroup stages k/q/g together each token. Arithmetic
-// mirrors the ops path elementwise rounding.
+// One token's recurrence on the register-resident state slice |st|
+// (elements sub*SLICE .. sub*SLICE+SLICE-1 of the row). The two dot
+// products chain lane to lane in ascending Dk order. Arithmetic mirrors
+// the ops path elementwise rounding.
 void token_step(
-    inout float st[128],
-    uint dk,
+    inout float st[SLICE],
+    uint sub,
     bool tok,
     float beta,
     float g,
@@ -118,62 +140,82 @@ void token_step(
   if (!tok) {
     return;
   }
+  uint k0 = sub * SLICE;
   // precise: the ops reference rounds each product and each add
   // separately (elementwise kernels then a sequential sum); NoContraction
   // keeps the driver from fusing these into FMAs.
-  precise float kv_acc = 0.0f;
-  for (uint i = 0u; i < dk; ++i) {
-    precise float gi = (params.flags & 1u) != 0u ? sg[buf][i] : g;
-    precise float p = st[i] * gi;
-    p = p * sk[buf][i];
-    kv_acc += p;
+  precise float acc = 0.0f;
+  for (uint j = 0u; j < LANES; ++j) {
+    precise float prev = subgroupShuffleUp(acc, 1u);
+    if (sub == j) {
+      acc = (j == 0u) ? 0.0f : prev;
+      for (uint i = 0u; i < SLICE; ++i) {
+        precise float gi = (params.flags & 1u) != 0u ? sg[buf][k0 + i] : g;
+        precise float p = st[i] * gi;
+        p = p * sk[buf][k0 + i];
+        acc += p;
+      }
+    }
   }
+  precise float kv_acc = row_total(acc, sub);
   precise float delta = (v_row - kv_acc) * beta;
-  for (uint i = 0u; i < dk; ++i) {
-    precise float gi = (params.flags & 1u) != 0u ? sg[buf][i] : g;
+  for (uint i = 0u; i < SLICE; ++i) {
+    precise float gi = (params.flags & 1u) != 0u ? sg[buf][k0 + i] : g;
     precise float dec = st[i] * gi;
     // The ops reference stores the decayed state, then its eager-fused
     // add(state, k*delta) elementwise kernel contracts the multiply-add;
     // mirror that with an explicit fma.
-    precise float ns = fma(delta, sk[buf][i], dec);
+    precise float ns = fma(delta, sk[buf][k0 + i], dec);
     st[i] = ns;
-    if (compute_o) {
-      // Output pass only: the prefix scan never reads o_acc, so the
-      // ns*q dot is skipped there (state arithmetic is untouched).
-      precise float o = ns * sq[buf][i];
-      o_acc += o;
+  }
+  if (compute_o) {
+    // Output pass only: the prefix scan never reads o_acc, so the
+    // ns*q dot is skipped there (state arithmetic is untouched).
+    acc = 0.0f;
+    for (uint j = 0u; j < LANES; ++j) {
+      precise float prev = subgroupShuffleUp(acc, 1u);
+      if (sub == j) {
+        acc = (j == 0u) ? 0.0f : prev;
+        for (uint i = 0u; i < SLICE; ++i) {
+          precise float o = st[i] * sq[buf][k0 + i];
+          acc += o;
+        }
+      }
     }
+    o_acc = row_total(acc, sub);
   }
 }
 
 void main() {
-  uint dk = params.matrix_m;
   uint dv = params.matrix_n;
   uint hv = params.matrix_k;
   uint T = params.dims;
   uint C = params.chunk;
-  uint head = gl_WorkGroupID.x;
-  uint row = gl_LocalInvocationID.x;   // one dv row per thread
+  uint head = gl_WorkGroupID.x / LANES;
+  uint row_block = gl_WorkGroupID.x % LANES;
+  uint tid = gl_LocalInvocationID.x;
+  uint sub = tid % LANES;                       // slice index within the row
+  uint row = row_block * ROWS_PER_WG + tid / LANES;
   bool out_pass = (params.flags & 8u) != 0u;
   uint chunk = out_pass ? gl_WorkGroupID.y : 0u;
 
   if (head >= hv) {
     return;
   }
-  uint head_base = head * dv * dk;
-  uint row_base = head_base + row * dk;
+  uint head_base = head * dv * DK;
+  uint slice_base = head_base + row * DK + sub * SLICE;
 
-  float st[128];
+  float st[SLICE];
 
-  // Restore this row's chunk-initial state: chunk 0 reads h0, later
+  // Restore this slice's chunk-initial state: chunk 0 reads h0, later
   // chunks read the prefix scan's snapshot slot (chunk c stores at c-1).
   if (chunk == 0u) {
-    for (uint i = 0u; i < dk; ++i) {
-      st[i] = s_in.v[params.shape[1] + row_base + i];
+    for (uint i = 0u; i < SLICE; ++i) {
+      st[i] = s_in.v[params.shape[1] + slice_base + i];
     }
   } else {
-    uint snap_base = ((chunk - 1u) * hv + head) * dv * dk + row * dk;
-    for (uint i = 0u; i < dk; ++i) {
+    uint snap_base = ((chunk - 1u) * hv) * dv * DK + slice_base;
+    for (uint i = 0u; i < SLICE; ++i) {
       st[i] = snap.v[snap_base + i];
     }
   }
@@ -197,14 +239,12 @@ void main() {
     // lets the next iteration's writes (two steps later) safely wait on
     // the single per-iteration barrier.
     uint buf = t & 1u;
-    if (row < dk) {
-      sk[buf][row] = bf16_load(k_buf.v[params.rhs_offset + t_head * dk + row]);
-      sq[buf][row] = bf16_load(q_buf.v[params.lhs_offset + t_head * dk + row]);
-      if ((params.flags & 1u) != 0u) {
-        sg[buf][row] = (params.flags & 4u) != 0u
-            ? g_buf_f.v[params.shape[0] + (t * hv + head) * dk + row]
-            : bf16_load(g_buf.v[params.shape[0] + (t * hv + head) * dk + row]);
-      }
+    sk[buf][tid] = bf16_load(k_buf.v[params.rhs_offset + t_head * DK + tid]);
+    sq[buf][tid] = bf16_load(q_buf.v[params.lhs_offset + t_head * DK + tid]);
+    if ((params.flags & 1u) != 0u) {
+      sg[buf][tid] = (params.flags & 4u) != 0u
+          ? g_buf_f.v[params.shape[0] + (t * hv + head) * DK + tid]
+          : bf16_load(g_buf.v[params.shape[0] + (t * hv + head) * DK + tid]);
     }
     barrier();
 
@@ -213,16 +253,18 @@ void main() {
     float v_row = bf16_load(v_buf.v[params.aux_size + t_head * dv + row]);
 
     float o_acc;
-    token_step(st, dk, tok, beta, g, v_row, out_pass, buf, o_acc);
+    token_step(st, sub, tok, beta, g, v_row, out_pass, buf, o_acc);
 
     if (out_pass) {
-      y_buf.v[params.output_offset + t_head * dv + row] =
-          tok ? bf16_store(o_acc) : bf16_store(0.0f);
+      if (sub == 0u) {
+        y_buf.v[params.output_offset + t_head * dv + row] =
+            tok ? bf16_store(o_acc) : bf16_store(0.0f);
+      }
     } else if ((t + 1u) % C == 0u && t + 1u < T) {
-      // Chunk boundary: snapshot the row for pass 1's chunk t/C + 1
+      // Chunk boundary: snapshot the slice for pass 1's chunk t/C + 1
       // (slot index t/C).
-      uint snap_base = ((t / C) * hv + head) * dv * dk + row * dk;
-      for (uint i = 0u; i < dk; ++i) {
+      uint snap_base = ((t / C) * hv) * dv * DK + slice_base;
+      for (uint i = 0u; i < SLICE; ++i) {
         snap.v[snap_base + i] = st[i];
       }
     }
@@ -233,8 +275,8 @@ void main() {
 
   if (out_pass && chunk + 1u == params.chunks) {
     // Last chunk's terminal state is hf.
-    for (uint i = 0u; i < dk; ++i) {
-      s_out.v[params.shape[2] + row_base + i] = st[i];
+    for (uint i = 0u; i < SLICE; ++i) {
+      s_out.v[params.shape[2] + slice_base + i] = st[i];
     }
   }
 }
