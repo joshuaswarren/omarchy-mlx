@@ -632,7 +632,9 @@ void CommandEncoder::commit() {
   if (!recording_ && wait_semaphores_.empty() && signal_semaphores_.empty() &&
       completed_handlers_.empty()) {
     trace::counters().commit_calls_noop++;
-    fprintf(stderr, "[rtmod] COMMIT-NOOP\n");
+    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
+      fprintf(stderr, "[rtmod] COMMIT-NOOP\n");
+    }
     return;
   }
   trace::counters().commit_calls_with_work++;
@@ -889,10 +891,15 @@ void CommandEncoder::submit() {
       slots_[current_slot_].in_flight = completion_value;
     }
     trace::counters().vk_submissions++;
-    fprintf(stderr, "[rtmod] SUBMIT tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u\n",
-            (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value, (unsigned long)wait_sems.size(),
-            (unsigned long)signal_values.size(),
-            (unsigned)si.commandBufferCount);
+    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
+      fprintf(stderr,
+              "[rtmod] SUBMIT tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u\n",
+              (unsigned long)syscall(SYS_gettid),
+              (unsigned long)completion_value,
+              (unsigned long)wait_sems.size(),
+              (unsigned long)signal_values.size(),
+              (unsigned)si.commandBufferCount);
+    }
   }
 
   recording_ = false;
