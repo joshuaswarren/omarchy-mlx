@@ -174,7 +174,7 @@ mkdir -p "$PREFIX/patches"
 for p in mlx-lm-gated-delta-fast-route.patch mlx-lm-gated-delta-raw.patch mlx-lm-greedy-prune.patch mlx-lm-convring.patch; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p"
 done
-MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" "$PREFIX/apply-mlx-lm-patches.sh" "$VENV"
+MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$VENV"
 
 # 5. Demo and launchers.
 say "Installing launchers into $BIN"
