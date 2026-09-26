@@ -24,7 +24,7 @@ On Omarchy (Apple Silicon), one command installs the release wheel into a privat
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
 ```
 
-Uninstall with `bash install.sh --uninstall`. Latest stable: [v0.7.4](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.4). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
+Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.4](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.4) (prerelease: installed-from-release gates pending, see the release notes). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
 Manual install (or any other Linux box):
 
