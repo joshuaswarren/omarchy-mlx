@@ -43,9 +43,8 @@
 static void* vk_lib = nullptr;
 static PFN_vkGetInstanceProcAddr g_gipa = nullptr;
 
-#define LOAD(name) g_vk.name = (PFN_vk##name)g_gipa(nullptr, "vk" #name)
-#define LOAD_DEV(name) \
-  g_vk.name = (PFN_vk##name)g_gipa(g_vk.inst_dummy, nullptr, "vk" #name)
+#define LOAD_G(name) g_vk.name = (PFN_vk##name)g_gipa(nullptr, "vk" #name)
+#define LOAD(name) g_vk.name = (PFN_vk##name)g_gipa(g_vk.inst, "vk" #name)
 
 struct Vk;
 struct Vk {
@@ -94,6 +93,7 @@ struct Vk {
   PFN_vkGetQueryPoolResults GetQueryPoolResults{nullptr};
   PFN_vkQueueSubmit QueueSubmit{nullptr};
   PFN_vkQueueWaitIdle QueueWaitIdle{nullptr};
+  PFN_vkResetQueryPool ResetQueryPool{nullptr};
   PFN_vkCreateSemaphore CreateSemaphore{nullptr};
   PFN_vkDestroySemaphore DestroySemaphore{nullptr};
   PFN_vkDestroyShaderModule DestroyShaderModule{nullptr};
@@ -110,6 +110,8 @@ static Vk g_vk;
 struct Ctx {
   uint32_t qfi{0};
   float ts_period_ns{1.0f};
+  uint32_t ts_valid_bits{24};
+  bool timeline_semaphore{false};
   const char* name{""};
   VkPhysicalDeviceMemoryProperties mp{};
 };
@@ -136,8 +138,7 @@ static void setup_device() {
   if (!vk_lib) die("dlopen libvulkan.so.1: %s", dlerror());
   g_gipa = (PFN_vkGetInstanceProcAddr)dlsym(vk_lib, "vkGetInstanceProcAddr");
   if (!g_gipa) die("no vkGetInstanceProcAddr");
-  LOAD(CreateInstance);
-  LOAD(GetDeviceProcAddr);
+  LOAD_G(CreateInstance);
 
   VkApplicationInfo ai{};
   ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -148,6 +149,12 @@ static void setup_device() {
   ici.pApplicationInfo = &ai;
   if (g_vk.CreateInstance(&ici, nullptr, &g_vk.inst) != VK_SUCCESS)
     die("CreateInstance");
+  LOAD(GetDeviceProcAddr);
+  LOAD(EnumeratePhysicalDevices);
+  LOAD(GetPhysicalDeviceProperties);
+  LOAD(GetPhysicalDeviceMemoryProperties);
+  LOAD(GetPhysicalDeviceQueueFamilyProperties);
+  LOAD(CreateDevice);
 
   uint32_t n = 0;
   g_vk.EnumeratePhysicalDevices(g_vk.inst, &n, nullptr);
@@ -173,7 +180,22 @@ static void setup_device() {
       if ((qfpv[q].queueFlags & VK_QUEUE_COMPUTE_BIT) == 0) continue;
       ctx.qfi = q;
       ctx.ts_period_ns = props.limits.timestampPeriod;
+      ctx.ts_valid_bits = qfpv[q].timestampValidBits;
       ctx.name = props.deviceName;
+      {
+        PFN_vkGetPhysicalDeviceFeatures2 gpf2 =
+            (PFN_vkGetPhysicalDeviceFeatures2)g_gipa(
+                g_vk.inst, "vkGetPhysicalDeviceFeatures2");
+        if (gpf2) {
+          VkPhysicalDeviceVulkan12Features f{
+              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+          VkPhysicalDeviceFeatures2 f2{
+              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+          f2.pNext = &f;
+          gpf2(pds[i], &f2);
+          ctx.timeline_semaphore = f.timelineSemaphore != 0;
+        }
+      }
       PFN_vkGetPhysicalDeviceMemoryProperties gmp =
           (PFN_vkGetPhysicalDeviceMemoryProperties)g_gipa(
               g_vk.inst, "vkGetPhysicalDeviceMemoryProperties");
@@ -230,6 +252,7 @@ static void setup_device() {
   DEV(GetQueryPoolResults);
   DEV(QueueSubmit);
   DEV(QueueWaitIdle);
+  DEV(ResetQueryPool);
   DEV(CreateSemaphore);
   DEV(DestroySemaphore);
   DEV(DestroyShaderModule);
@@ -241,10 +264,22 @@ static void setup_device() {
   DEV(DestroyCommandPool);
   DEV(DestroyDevice);
 #undef DEV
+  { const char* core[] = {"GetDeviceQueue", "QueueSubmit", "QueueWaitIdle",
+      "CreateSemaphore", "CreateQueryPool", "CmdWriteTimestamp",
+      "GetQueryPoolResults", "CmdPipelineBarrier", "CmdDispatch", nullptr};
+    for (int i = 0; core[i]; ++i) {
+      void* p = nullptr;
+      // resolved already; re-resolving by name is easiest and cheap
+      p = (void*)g_vk.GetDeviceProcAddr(g_vk.dev,
+          (std::string("vk") + core[i]).c_str());
+      if (!p) die("driver does not export %s", core[i]);
+    } }
   g_vk.GetDeviceQueue(g_vk.dev, ctx.qfi, 0, &g_vk.queue);
   printf("{\"k\":\"meta\",\"dev\":\"%s\",\"ts_period_ns\":%.3f,"
+         "\"ts_valid_bits\":%u,\"timeline_semaphore\":%d,"
          "\"vk_driver_files\":\"%s\"}\n",
-         ctx.name, ctx.ts_period_ns,
+         ctx.name, ctx.ts_period_ns, ctx.ts_valid_bits,
+         ctx.timeline_semaphore ? 1 : 0,
          getenv("VK_DRIVER_FILES") ? getenv("VK_DRIVER_FILES") : "");
   fflush(stdout);
 }
@@ -291,10 +326,10 @@ static Buf make_buf(VkDeviceSize size) {
 
 static const char* kShaderHead =
     "#version 450\n"
-    "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+    "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;\n"
     "layout(set = 0, binding = 0) buffer Out { uint out_buf[]; };\n"
     "layout(push_constant) uniform PC { uint pc_val; } pc;\n"
-    "void main() { out_buf[gl_WorkGroupID.x] = pc_val; }\n";
+    "void main() { out_buf[gl_WorkGroupID.x] = pc.pc_val; }\n";
 
 static std::string compile_shader() {
   char path_src[] = "/tmp/cdb-src-XXXXXX.comp";
@@ -350,7 +385,7 @@ static void setup_bench(Bench& b) {
   VkPushConstantRange pcr{};
   pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   pcr.offset = 0;
-  pcr.size = 4;
+  pcr.size = 128;
   VkPipelineLayoutCreateInfo plci{};
   plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   plci.setLayoutCount = 1;
@@ -432,22 +467,25 @@ static void setup_bench(Bench& b) {
 static void begin_cmd(VkCommandBuffer c) {
   VkCommandBufferBeginInfo bi{};
   bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  bi.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
   g_vk.BeginCommandBuffer(c, &bi);
 }
 
 // Record one dispatch (with TOP/BOT timestamps at queries 2i/2i+1) into c.
-static void record_dispatch(Bench& b, VkCommandBuffer c, uint32_t i,
-    uint32_t grid, uint32_t pc_val) {
-  g_vk.CmdWriteTimestamp(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, b.qpool, 2 * i);
+static void record_dispatch(Bench& b, VkCommandBuffer c, uint32_t grid,
+    uint32_t pc_val) {
   g_vk.CmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, b.pipe);
   g_vk.CmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, b.layout, 0,
       1, &b.set, 0, nullptr);
   g_vk.CmdPushConstants(c, b.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4,
       &pc_val);
   g_vk.CmdDispatch(c, grid, 1, 1);
+}
+// One timestamp pair bracketing the whole CS (queries 2*slot, 2*slot+1).
+static void cs_span(Bench& b, VkCommandBuffer c, uint32_t slot) {
+  g_vk.CmdWriteTimestamp(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, b.qpool,
+      2 * slot);
   g_vk.CmdWriteTimestamp(c, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool,
-      2 * i + 1);
+      2 * slot + 1);
 }
 
 static void full_barrier(VkCommandBuffer c) {
@@ -461,6 +499,16 @@ static void full_barrier(VkCommandBuffer c) {
 
 static double ticks_to_us(uint64_t t) {
   return (double)t * ctx.ts_period_ns / 1000.0;
+}
+static uint64_t tick_delta(uint64_t a, uint64_t b) {  // b - a, wrap-safe
+  uint64_t mask = ctx.ts_valid_bits >= 64
+                      ? ~0ULL
+                      : ((1ULL << ctx.ts_valid_bits) - 1);
+  uint64_t d = (b - a) & mask;
+  return d;
+}
+static double ticks_between(uint64_t a, uint64_t b) {
+  return (double)tick_delta(a, b) * ctx.ts_period_ns / 1000.0;
 }
 
 struct RunRes {
@@ -476,9 +524,9 @@ static RunRes run_case(Bench& b, const char* mode, uint32_t grid,
   uint32_t pcv = 0x3f;
   if (strcmp(mode, "cs1_none") == 0 || strcmp(mode, "cs1_barrier") == 0 ||
       strcmp(mode, "cs1_event") == 0) {
+    g_vk.ResetQueryPool(g_vk.dev, b.qpool, 0, 8);
     begin_cmd(b.cmd[0]);
-    g_vk.CmdResetQueryPool(b.cmd[0], b.qpool, 0, 8);
-    record_dispatch(b, b.cmd[0], 0, grid, pcv);
+    record_dispatch(b, b.cmd[0], grid, pcv);
     if (strcmp(mode, "cs1_barrier") == 0) {
       full_barrier(b.cmd[0]);
     } else if (strcmp(mode, "cs1_event") == 0) {
@@ -487,7 +535,7 @@ static RunRes run_case(Bench& b, const char* mode, uint32_t grid,
           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, nullptr, 0, nullptr, 0,
           nullptr);
     }
-    record_dispatch(b, b.cmd[0], 1, grid, pcv + 1);
+    record_dispatch(b, b.cmd[0], grid, pcv + 1);
     if (strcmp(mode, "cs1_barrier") == 0) {
       full_barrier(b.cmd[0]);
     } else if (strcmp(mode, "cs1_event") == 0) {
@@ -496,30 +544,40 @@ static RunRes run_case(Bench& b, const char* mode, uint32_t grid,
           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, nullptr, 0, nullptr, 0,
           nullptr);
     }
-    record_dispatch(b, b.cmd[0], 2, grid, pcv + 2);
+    record_dispatch(b, b.cmd[0], grid, pcv + 2);
     g_vk.EndCommandBuffer(b.cmd[0]);
     VkSubmitInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &b.cmd[0];
     double t0 = now_us();
-    g_vk.QueueSubmit(g_vk.queue, 1, &si, VK_NULL_HANDLE);
-    g_vk.QueueWaitIdle(g_vk.queue);
+    VkResult src = g_vk.QueueSubmit(g_vk.queue, 1, &si, VK_NULL_HANDLE);
+    if (src != VK_SUCCESS) {
+      // Is the device gone, or just this CB rejected? Empty-CB probe.
+      VkCommandBufferBeginInfo bi2{};
+      bi2.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+      g_vk.BeginCommandBuffer(b.cmd[1], &bi2);
+      g_vk.EndCommandBuffer(b.cmd[1]);
+      VkSubmitInfo s2{};
+      s2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      s2.commandBufferCount = 1;
+      s2.pCommandBuffers = &b.cmd[1];
+      VkResult rc2 = g_vk.QueueSubmit(g_vk.queue, 1, &s2, VK_NULL_HANDLE);
+      VkResult w2 = rc2 == VK_SUCCESS ? g_vk.QueueWaitIdle(g_vk.queue) : rc2;
+      die("QueueSubmit cs1 vkrc=%d empty-probe submit=%d wait=%d",
+          (int)src, (int)rc2, (int)w2);
+    }
+    VkResult wrc = g_vk.QueueWaitIdle(g_vk.queue);
+    if (wrc != VK_SUCCESS) die("WaitIdle cs1 vkrc=%d", (int)wrc);
     double t1 = now_us();
-    uint64_t ticks[8];
-    g_vk.GetQueryPoolResults(g_vk.dev, b.qpool, 0, 8, sizeof(ticks), ticks,
-        sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-    return {t1 - t0, ticks_to_us(ticks[2] - ticks[1]),
-        ticks_to_us(ticks[4] - ticks[3]),
-        ticks_to_us(ticks[5] - ticks[2])};
+    return {t1 - t0, 0.0, 0.0, 0.0};
   }
 
   // Three-CS variants. CB i waits sem value v_i, signals v_i + 1.
   for (int i = 0; i < 3; ++i) {
     begin_cmd(b.cmd[i]);
     g_vk.CmdResetQueryPool(b.cmd[i], b.qpool, 0, 8);
-    record_dispatch(b, b.cmd[i], i, grid, pcv + i);
+    record_dispatch(b, b.cmd[i], grid, pcv + i);
     g_vk.EndCommandBuffer(b.cmd[i]);
   }
   VkTimelineSemaphoreSubmitInfo tsinfo[3]{};
@@ -555,25 +613,32 @@ static RunRes run_case(Bench& b, const char* mode, uint32_t grid,
   tsinfo[2].pSignalSemaphoreValues = &sig_vals[2];
 
   double t0 = now_us();
+  VkResult qrc = VK_ERROR_UNKNOWN;
   if (strcmp(mode, "cs3_1submit_sema") == 0) {
-    g_vk.QueueSubmit(g_vk.queue, 3, si, VK_NULL_HANDLE);
-    g_vk.QueueWaitIdle(g_vk.queue);
+    qrc = g_vk.QueueSubmit(g_vk.queue, 3, si, VK_NULL_HANDLE);
+    if (qrc == VK_SUCCESS) qrc = g_vk.QueueWaitIdle(g_vk.queue);
   } else if (strcmp(mode, "cs3_3submit_sema") == 0) {
-    for (int i = 0; i < 3; ++i)
-      g_vk.QueueSubmit(g_vk.queue, 1, &si[i], VK_NULL_HANDLE);
-    g_vk.QueueWaitIdle(g_vk.queue);
+    for (int i = 0; i < 3; ++i) {
+      qrc = g_vk.QueueSubmit(g_vk.queue, 1, &si[i], VK_NULL_HANDLE);
+      if (qrc != VK_SUCCESS) break;
+    }
+    if (qrc == VK_SUCCESS) qrc = g_vk.QueueWaitIdle(g_vk.queue);
   } else {  // cs3_fencejoin
     for (int i = 0; i < 3; ++i) {
-      g_vk.QueueSubmit(g_vk.queue, 1, &si[i], VK_NULL_HANDLE);
-      g_vk.QueueWaitIdle(g_vk.queue);
+      qrc = g_vk.QueueSubmit(g_vk.queue, 1, &si[i], VK_NULL_HANDLE);
+      if (qrc == VK_SUCCESS) qrc = g_vk.QueueWaitIdle(g_vk.queue);
+      if (qrc != VK_SUCCESS) break;
     }
   }
   double t1 = now_us();
-  uint64_t ticks[8];
-  g_vk.GetQueryPoolResults(g_vk.dev, b.qpool, 0, 8, sizeof(ticks), ticks,
-      sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-  return {t1 - t0, ticks_to_us(ticks[2] - ticks[1]),
-      ticks_to_us(ticks[4] - ticks[3]), ticks_to_us(ticks[5] - ticks[2])};
+  if (qrc != VK_SUCCESS) {
+    printf("{\"k\":\"fail\",\"mode\":\"%s\",\"vkrc\":%d}\n", mode,
+           (int)qrc);
+    fflush(stdout);
+    RunRes bad{0, 0, 0, 0};
+    return bad;
+  }
+  return {t1 - t0, 0.0, 0.0, 0.0};
 }
 
 int main() {
@@ -593,8 +658,55 @@ int main() {
     die("CreateSemaphore (timeline)");
   VkEventCreateInfo eci{};
   eci.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
-  VkEvent ev;
-  bool ev_ok = g_vk.CreateEvent(g_vk.dev, &eci, nullptr, &ev) == VK_SUCCESS;
+  VkEvent ev{VK_NULL_HANDLE};
+  bool ev_ok = g_vk.CreateEvent != nullptr &&
+      g_vk.CreateEvent(g_vk.dev, &eci, nullptr, &ev) == VK_SUCCESS;
+  printf("{\"k\":\"meta2\",\"events\":%d}\n", ev_ok ? 1 : 0);
+
+  // Bisect: what does honeykrisp accept in a submit?
+  {
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    struct T { const char* n; bool q; bool pipe; int ndisp; };
+    T ts[] = {{"empty", false, false, 0}, {"ts", true, false, 0},
+              {"ts+pipe", true, true, 1},
+              {"3pipe-nots", false, true, 3},
+              {"3pipe-ts", true, true, 3}};
+    for (auto& t : ts) {
+      g_vk.BeginCommandBuffer(b.cmd[0], &bi);
+      if (t.q) {
+        g_vk.CmdResetQueryPool(b.cmd[0], b.qpool, 0, 8);
+        g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            b.qpool, 0);
+      }
+      for (int dd = 0; dd < t.ndisp; ++dd) {
+        if (t.q)
+          g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+              b.qpool, 2 * dd);
+        g_vk.CmdBindPipeline(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.pipe);
+        g_vk.CmdBindDescriptorSets(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.layout, 0, 1, &b.set, 0, nullptr);
+        uint32_t v = 7;
+        g_vk.CmdPushConstants(b.cmd[0], b.layout,
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &v);
+        g_vk.CmdDispatch(b.cmd[0], 1, 1, 1);
+        if (t.q)
+          g_vk.CmdWriteTimestamp(b.cmd[0],
+              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool, 2 * dd + 1);
+      }
+      g_vk.EndCommandBuffer(b.cmd[0]);
+      VkSubmitInfo si{};
+      si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      si.commandBufferCount = 1;
+      si.pCommandBuffers = &b.cmd[0];
+      VkResult rc = g_vk.QueueSubmit(g_vk.queue, 1, &si, VK_NULL_HANDLE);
+      VkResult w = rc == VK_SUCCESS ? g_vk.QueueWaitIdle(g_vk.queue) : rc;
+      printf("{\"k\":\"bisect\",\"what\":\"%s\",\"submit\":%d,"
+             "\"wait\":%d}\n", t.n, (int)rc, (int)w);
+      fflush(stdout);
+    }
+  }
 
   const char* modes[] = {"cs1_none", "cs1_barrier", "cs1_event",
       "cs3_1submit_sema", "cs3_3submit_sema", "cs3_fencejoin"};
