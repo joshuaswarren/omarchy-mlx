@@ -928,6 +928,155 @@ const std::vector<uint32_t>& cached_compile(const std::string& glsl) {
 // regex-heavy: a decode-time kernel dispatched per token paid milliseconds per
 // call for it, several times the cost of the compute it was dispatching. The
 // SPIR-V below is already cached, so cache the step that produces it too.
+// The in-process memo alone still makes every fresh process re-run the full
+// translate_msl pass for each dynamic kernel before its first dispatch (the
+// Parakeet mel frontend pays ~100 ms there across its seven kernels), so the
+// memo is backed by the same disk layer the SPIR-V cache uses. The material
+// version must be bumped whenever any translate_* pass changes its output.
+constexpr char kTranslationCacheMagic[] = "MLXOTR1";
+constexpr size_t kTranslationCacheMagicSize = 8;
+constexpr char kTranslationCacheVersion[] = "1";
+
+std::string translation_cache_path(const std::string& identity) {
+  const std::string root = spirv_cache_root();
+  if (root.empty()) {
+    return {};
+  }
+  std::string material = "mlx-omarchy custom kernel translation ";
+  material += kTranslationCacheVersion;
+  material += "\n";
+  material += identity;
+  return root + "/" +
+      omarchy::ane::sha256_hex(
+             reinterpret_cast<const uint8_t*>(material.data()),
+             material.size()) +
+      ".tr";
+}
+
+void put_u64(std::string& out, uint64_t value) {
+  for (int i = 0; i < 8; ++i) {
+    out.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
+  }
+}
+
+bool get_u64(const std::string& blob, size_t& cursor, uint64_t& value) {
+  if (cursor + sizeof(uint64_t) > blob.size()) {
+    return false;
+  }
+  value = 0;
+  for (int i = 0; i < 8; ++i) {
+    value |= static_cast<uint64_t>(
+                 static_cast<unsigned char>(blob[cursor + i])) <<
+        (8 * i);
+  }
+  cursor += sizeof(uint64_t);
+  return true;
+}
+
+void put_string(std::string& out, const std::string& value) {
+  put_u64(out, value.size());
+  out += value;
+}
+
+bool get_string(
+    const std::string& blob,
+    size_t& cursor,
+    size_t& remaining,
+    std::string& value) {
+  uint64_t length = 0;
+  if (!get_u64(blob, cursor, length) || length > remaining) {
+    return false;
+  }
+  if (cursor + length > blob.size()) {
+    return false;
+  }
+  value.assign(blob, cursor, static_cast<size_t>(length));
+  cursor += static_cast<size_t>(length);
+  remaining -= static_cast<size_t>(length);
+  return true;
+}
+
+std::string serialize_translation(const Translation& translation) {
+  std::string payload;
+  put_string(payload, translation.glsl);
+  put_u64(payload, translation.parameters.size());
+  for (const auto& parameter : translation.parameters) {
+    put_string(payload, parameter.type);
+    put_string(payload, parameter.name);
+    put_u64(payload, parameter.binding);
+    payload.push_back(parameter.scalar ? 1 : 0);
+    payload.push_back(parameter.atomic ? 1 : 0);
+  }
+  std::string blob(kTranslationCacheMagic, kTranslationCacheMagicSize);
+  blob += payload;
+  return blob;
+}
+
+bool parse_translation(const std::string& blob, Translation& translation) {
+  if (blob.size() <= kTranslationCacheMagicSize ||
+      blob.compare(0, kTranslationCacheMagicSize, kTranslationCacheMagic, kTranslationCacheMagicSize) != 0) {
+    return false;
+  }
+  size_t cursor = kTranslationCacheMagicSize;
+  size_t remaining = blob.size() - kTranslationCacheMagicSize;
+  uint64_t count = 0;
+  if (!get_string(blob, cursor, remaining, translation.glsl) ||
+      !get_u64(blob, cursor, count) || count > 4096) {
+    return false;
+  }
+  translation.parameters.resize(static_cast<size_t>(count));
+  for (auto& parameter : translation.parameters) {
+    uint64_t binding = 0;
+    if (!get_string(blob, cursor, remaining, parameter.type) ||
+        !get_string(blob, cursor, remaining, parameter.name) ||
+        !get_u64(blob, cursor, binding) || remaining < 2) {
+      return false;
+    }
+    parameter.binding = static_cast<uint32_t>(binding);
+    parameter.scalar = blob[cursor] != 0;
+    parameter.atomic = blob[cursor + 1] != 0;
+    cursor += 2;
+    remaining -= 2;
+  }
+  if (remaining != 0) {
+    return false;
+  }
+  return true;
+}
+
+bool load_cached_translation(
+    const std::string& path,
+    Translation& translation) {
+  const std::string blob = read_file(path);
+  return parse_translation(blob, translation);
+}
+
+void store_cached_translation(
+    const std::string& path,
+    const Translation& translation) {
+  const size_t slash = path.rfind('/');
+  if (slash == std::string::npos || !make_directories(path.substr(0, slash))) {
+    return;
+  }
+  const std::string temporary = path + ".tmp-" + std::to_string(::getpid());
+  {
+    std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      return;
+    }
+    const std::string blob = serialize_translation(translation);
+    out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+    out.flush();
+    if (!out) {
+      ::unlink(temporary.c_str());
+      return;
+    }
+  }
+  if (::rename(temporary.c_str(), path.c_str()) != 0) {
+    ::unlink(temporary.c_str());
+  }
+}
+
 const Translation& cached_translation(
     const std::string& source,
     const std::tuple<int, int, int>& grid,
@@ -948,6 +1097,22 @@ const Translation& cached_translation(
   auto found = cache.find(identity);
   if (found != cache.end()) {
     return found->second;
+  }
+  const std::string entry = translation_cache_path(identity);
+  if (!entry.empty()) {
+    Translation stored;
+    if (load_cached_translation(entry, stored)) {
+      return cache.emplace(std::move(identity), std::move(stored))
+          .first->second;
+    }
+    auto& fresh = cache
+        .emplace(
+            std::move(identity),
+            translate_msl(
+                source, grid, threadgroup, output_count, compile_mode))
+        .first->second;
+    store_cached_translation(entry, fresh);
+    return fresh;
   }
   return cache
       .emplace(
