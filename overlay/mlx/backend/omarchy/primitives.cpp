@@ -863,17 +863,22 @@ void dispatch_float_elementwise_to(
       binding(axis_metadata ? *axis_metadata : out)};
   // Four-wide fast path (shaders/binary_vec.comp) for the hot binary
   // ops on 16-bit storage: same math and modulo addressing as
-  // elementwise.comp, 8-byte vector loads. Everything else, including
-  // a one-element scalar operand, keeps the general kernel.
+  // elementwise.comp, 8-byte vector loads. Sigmoid takes the same
+  // alignment gate through shaders/unary_vec.comp. Everything else,
+  // including a one-element scalar operand, keeps the general kernel.
   const bool vec_op = operation == AddOperation ||
       operation == MultiplyOperation || operation == DivideOperation ||
-      operation == SubtractOperation;
+      operation == SubtractOperation || operation == SigmoidOperation;
   if (vec_op && !general_broadcast && out.dtype() != float32 &&
       ((count | params.lhs_size | params.rhs_size | params.lhs_offset |
         params.rhs_offset | params.output_offset) & 3u) == 0u) {
+    auto kernel = operation == SigmoidOperation
+        ? (out.dtype() == float16 ? omarchy::ComputeKernel::UnaryVecF16
+                                  : omarchy::ComputeKernel::UnaryVecBF16)
+        : out.dtype() == float16 ? omarchy::ComputeKernel::BinaryVecF16
+                                 : omarchy::ComputeKernel::BinaryVecBF16;
     encoder.dispatch_compute(
-        out.dtype() == float16 ? omarchy::ComputeKernel::BinaryVecF16
-                               : omarchy::ComputeKernel::BinaryVecBF16,
+        kernel,
         bindings,
         params,
         omarchy::compute_dispatch_group_count(count / 4u));
