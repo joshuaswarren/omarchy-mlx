@@ -959,8 +959,12 @@ void put_u64(std::string& out, uint64_t value) {
   }
 }
 
-bool get_u64(const std::string& blob, size_t& cursor, uint64_t& value) {
-  if (cursor + sizeof(uint64_t) > blob.size()) {
+bool get_u64(
+    const std::string& blob,
+    size_t& cursor,
+    size_t& remaining,
+    uint64_t& value) {
+  if (cursor + sizeof(uint64_t) > blob.size() || remaining < sizeof(uint64_t)) {
     return false;
   }
   value = 0;
@@ -970,6 +974,7 @@ bool get_u64(const std::string& blob, size_t& cursor, uint64_t& value) {
         (8 * i);
   }
   cursor += sizeof(uint64_t);
+  remaining -= sizeof(uint64_t);
   return true;
 }
 
@@ -984,7 +989,7 @@ bool get_string(
     size_t& remaining,
     std::string& value) {
   uint64_t length = 0;
-  if (!get_u64(blob, cursor, length) || length > remaining) {
+  if (!get_u64(blob, cursor, remaining, length) || length > remaining) {
     return false;
   }
   if (cursor + length > blob.size()) {
@@ -1021,7 +1026,7 @@ bool parse_translation(const std::string& blob, Translation& translation) {
   size_t remaining = blob.size() - kTranslationCacheMagicSize;
   uint64_t count = 0;
   if (!get_string(blob, cursor, remaining, translation.glsl) ||
-      !get_u64(blob, cursor, count) || count > 4096) {
+      !get_u64(blob, cursor, remaining, count) || count > 4096) {
     return false;
   }
   translation.parameters.resize(static_cast<size_t>(count));
@@ -1029,7 +1034,7 @@ bool parse_translation(const std::string& blob, Translation& translation) {
     uint64_t binding = 0;
     if (!get_string(blob, cursor, remaining, parameter.type) ||
         !get_string(blob, cursor, remaining, parameter.name) ||
-        !get_u64(blob, cursor, binding) || remaining < 2) {
+        !get_u64(blob, cursor, remaining, binding) || remaining < 2) {
       return false;
     }
     parameter.binding = static_cast<uint32_t>(binding);
