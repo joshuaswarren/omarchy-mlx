@@ -359,17 +359,33 @@ struct Shape {
   uint32_t k;
   uint32_t dims;
   uint32_t n[kMaxDims];
+  // Per-token shapes (lm_head) run once per token, not once per layer:
+  // the gap arms cycle per-layer sets x24, which cannot afford 24 copies
+  // of a 286 MB weight, so they skip these (iso mode still benches them;
+  // their streaming rate is honest at any rep count because the weight
+  // never fits cache).
+  bool per_token{false};
 };
 
 // Shape tables, selected by --2b. The 0.5B table is the historical
 // Qwen2.5-0.5B decode chain. The 2B table is the Qwen3.8-2B decode
 // chain per full-attention / GDN layer (hidden 2048, inter 6144,
-// head_dim 256, 8 q heads / 2 kv heads, GDN qkvz 8192):
-//   qkv      dims=3  n=(2048,512,512)  k=2048  (full attn, multi)
-//   gate_up  dims=2  n=(6144,6144)     k=2048  (full attn + GDN mlp)
+// head_dim 256, 8 q heads / 2 kv heads, GDN qkvz 8192), cross-checked
+// against the checkpoint tensor shapes (qwen3_5: q_proj carries the
+// attn_output_gate half, 4096 rows) and the decode profile families:
+//   qkv      dims=3  n=(4096,512,512)  k=2048  (full attn, multi)
+//   gate_up  dims=2  n=(6144,6144)     k=2048  (in-model gate/up also
+//            dispatch solo as the 6144-row shape below)
 //   down     dims=1  n=(2048,)         k=6144
 //   qkvz     dims=1  n=(8192,)         k=2048  (GDN in_proj; in-model
 //            the 32-wide ba projection groups with it, same k)
+//   gate6144 dims=1  n=(6144,)         k=2048  (in_proj_qkv, gate, up
+//            dispatch solo per the decode profile: n=6144 gx=768)
+//   zout     dims=1  n=(2048,)         k=2048  (in_proj_z, out_proj, o)
+//   q4096    dims=1  n=(4096,)         k=2048  (attn q incl. gate half)
+//   kv512    dims=1  n=(512,)          k=2048  (attn k and v)
+//   ab       dims=2  n=(16,16)         k=2048  (GDN in_proj_a/b)
+//   lm_head  dims=1  n=(248320,)       k=2048  (26% of token bytes)
 static const Shape kShapes[] = {
     {"qkv", 896, 3, {896, 128, 128}},
     {"o", 896, 1, {896, 0, 0}},
@@ -377,10 +393,16 @@ static const Shape kShapes[] = {
     {"down", 4864, 1, {896, 0, 0}},
 };
 static const Shape kShapes2B[] = {
-    {"qkv", 2048, 3, {2048, 512, 512}},
+    {"qkv", 2048, 3, {4096, 512, 512}},
     {"gate_up", 2048, 2, {6144, 6144, 0}},
     {"down", 6144, 1, {2048, 0, 0}},
     {"qkvz", 2048, 1, {8192, 0, 0}},
+    {"gate6144", 2048, 1, {6144, 0, 0}},
+    {"zout", 2048, 1, {2048, 0, 0}},
+    {"q4096", 2048, 1, {4096, 0, 0}},
+    {"kv512", 2048, 1, {512, 0, 0}},
+    {"ab", 2048, 2, {16, 16, 0}},
+    {"lm_head", 2048, 1, {248320, 0, 0}, true},
 };
 static const Shape* g_shapes = kShapes;
 // --cand <path>[:columns]: screen ONE candidate shader against base (default
@@ -397,7 +419,11 @@ static uint32_t g_grid_cap = 0u;
 // --2b also switches the gap-mode compile to the production bf16 x-load
 // mix (the 2B decode chain runs QmmVecQ4*BF16, not FP16).
 static bool g_gap_bf16 = false;
-static constexpr uint32_t kNumShapes = 4;
+// Sized for the 2B table (10 entries); the 0.5B table uses the first 4.
+static constexpr uint32_t kNumShapes = 10;
+static constexpr uint32_t kNumShapes05B = 4;
+// Active table size: loops must never read past the selected table.
+static uint32_t g_num_shapes = kNumShapes05B;
 
 // Bytes one dispatch touches: weight words + scales + biases + x row +
 // outputs (flags are 0 in the bench, so no addend reads / sum writes).
@@ -1005,7 +1031,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   Params sparams[kNumShapes];
   uint32_t sgroups[kNumShapes];
   uint64_t layer_bytes = 0;
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
+    if (g_shapes[s].per_token) continue;
     sgroups[s] = shape_groups(g_shapes[s], 8u);
     fill_params(sparams[s], g_shapes[s], sgroups[s]);
     layer_bytes += shape_bytes(g_shapes[s]);
@@ -1019,7 +1046,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
 
   // Weight sets: Lmax independent per-layer weight footprints.
   std::vector<GapSet> sets(Lmax);
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
+    if (g_shapes[s].per_token) continue;
     const Shape& sh = g_shapes[s];
     for (uint32_t l = 0; l < Lmax; ++l) {
       GapShapeBufs& g = sets[l].sh[s];
@@ -1035,10 +1063,10 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
 
   VkDescriptorPoolSize ps{};
   ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  ps.descriptorCount = kBindings * 512;
+  ps.descriptorCount = kBindings * 512 * (g_num_shapes / 4u + 1u);
   VkDescriptorPoolCreateInfo dpci{};
   dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  dpci.maxSets = 512;
+  dpci.maxSets = 512 * (g_num_shapes / 4u + 1u);
   dpci.poolSizeCount = 1;
   dpci.pPoolSizes = &ps;
   dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -1050,6 +1078,11 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   using D4 = std::array<VkDescriptorSet, kNumShapes>;
   // Chained descriptor variants: shape s reads the producer's output.
   auto chain_x = [&](uint32_t l, uint32_t s, bool ring_b) -> const Buf* {
+    if (s == 0 || s >= 4) {
+      // qkv consumes the previous layer's down output; the added probe
+      // shapes (gate6144/zout/q4096/kv512/ab/lm_head) run on their own x.
+      if (s != 0) return nullptr;
+    }
     if (s == 1) return &sets[l].sh[0].out[0]; // o.x = qkv.out0
     if (s == 2) return &sets[l].sh[1].out[0]; // gate_up.x = o.out0
     if (s == 3) return &sets[l].sh[2].out[0]; // down.x = gate_up.out0
@@ -1059,7 +1092,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   };
   std::vector<D4> desc_ind(Lmax), dep_a(Lmax), dep_b(Lmax);
   for (uint32_t l = 0; l < Lmax; ++l) {
-    for (uint32_t s = 0; s < kNumShapes; ++s) {
+    for (uint32_t s = 0; s < g_num_shapes; ++s) {
+      if (g_shapes[s].per_token) continue;
       desc_ind[l][s] = gap_make_set(pool, side.dsl, sets[l].sh[s],
           sets[l].sh[s], s, nullptr);
       dep_a[l][s] = gap_make_set(pool, side.dsl, sets[l].sh[s],
@@ -1070,7 +1104,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   }
   // One-set RAW ring (iso4dep): odd tokens close the ring on its own down.
   D4 iso_dep_a, iso_dep_b;
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
+    if (g_shapes[s].per_token) continue;
     const Buf* xa = chain_x(0, s, false);
     const Buf* xb = chain_x(0, s, true);
     iso_dep_a[s] = gap_make_set(pool, side.dsl, sets[0].sh[s],
@@ -1178,7 +1213,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   };
   auto record_layer = [&](VkCommandBuffer c, const VkDescriptorSet* d4,
                             bool with_filler, uint32_t fill_per) {
-    for (uint32_t s = 0; s < kNumShapes; ++s) {
+    for (uint32_t s = 0; s < g_num_shapes; ++s) {
+      if (g_shapes[s].per_token) continue;
       if (with_filler) record_filler(c, fill_per);
       g_vk.CmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE,
           arm_side->layout, 0, 1, &d4[s], 0, nullptr);
@@ -1244,7 +1280,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
     std::vector<uint64_t> samples;
     for (int r = -1; r < rounds; ++r) {
       GapSet fresh{};
-      for (uint32_t s = 0; s < kNumShapes; ++s) {
+      for (uint32_t s = 0; s < g_num_shapes; ++s) {
+        if (g_shapes[s].per_token) continue;
         const Shape& sh = g_shapes[s];
         GapShapeBufs& g = fresh.sh[s];
         g.x = gap_alloc(ctx, (uint64_t)sh.k * 2u);
@@ -1252,9 +1289,11 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
           g.out[d] = gap_alloc(ctx, (uint64_t)sh.n[d] * 2u);
       }
       D4 d4;
-      for (uint32_t s = 0; s < kNumShapes; ++s)
+      for (uint32_t s = 0; s < g_num_shapes; ++s) {
+        if (g_shapes[s].per_token) continue;
         d4[s] = gap_make_set(pool, side.dsl, fresh.sh[s], sets[0].sh[s],
             s, nullptr);
+      }
       begin(cmd);
       g_vk.CmdBindPipeline(
           cmd.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, side.pipe);
@@ -1384,7 +1423,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
       make_pipeline(cs);
       uint32_t cgroups[kNumShapes];
       Params cparams[kNumShapes];
-      for (uint32_t s = 0; s < kNumShapes; ++s) {
+      for (uint32_t s = 0; s < g_num_shapes; ++s) {
+        if (g_shapes[s].per_token) continue;
         cgroups[s] = shape_groups(g_shapes[s], c.columns);
         fill_params(cparams[s], g_shapes[s], cgroups[s]);
         if (g_grid_cap && cgroups[s] > g_grid_cap) cgroups[s] = g_grid_cap;
@@ -1408,7 +1448,7 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   gap_free(fill_src);
   gap_free(fill_sink);
   for (auto& gs : sets)
-    for (uint32_t s = 0; s < kNumShapes; ++s)
+    for (uint32_t s = 0; s < g_num_shapes; ++s)
       gap_free_shape(gs.sh[s]);
 }
 // ---------------------------------------------------------------------------
@@ -1625,7 +1665,7 @@ static void run_roof_mode(const DeviceCtx& ctx, bool quick,
   SetBufs outs[kNumShapes];
   Params shape_params[kNumShapes];
   uint32_t groups_v[kNumShapes];
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     const Shape& sh = g_shapes[s];
     inputs[s].x = make_buf(g_vk.dev, ctx.mp, (uint64_t)sh.k * 2u, false);
     for (uint32_t d = 0; d < sh.dims; ++d) {
@@ -1656,7 +1696,7 @@ static void run_roof_mode(const DeviceCtx& ctx, bool quick,
       VK_SUCCESS)
     die("roof base pool");
   VkDescriptorSet sets[kNumShapes];
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     SetBufs combined = inputs[s];
     for (uint32_t d = 0; d < kMaxDims; ++d)
       combined.out[d] = outs[s].out[d];
@@ -1664,7 +1704,7 @@ static void run_roof_mode(const DeviceCtx& ctx, bool quick,
   }
   CmdRes cmd = make_cmd(ctx, 2);
   const uint32_t k_repeat = 8u;
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     const Shape& sh = g_shapes[s];
     std::vector<uint64_t> samples;
     for (int rep = 0; rep < rounds + 1; ++rep) {
@@ -1701,7 +1741,7 @@ static void run_roof_mode(const DeviceCtx& ctx, bool quick,
       begin(cmd);
       g_vk.CmdBindPipeline(
           cmd.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, base.pipe);
-      for (uint32_t s = 0; s < kNumShapes; ++s) {
+      for (uint32_t s = 0; s < g_num_shapes; ++s) {
         g_vk.CmdBindDescriptorSets(cmd.cmd,
             VK_PIPELINE_BIND_POINT_COMPUTE, base.layout, 0, 1, &sets[s],
             0, nullptr);
@@ -1716,7 +1756,7 @@ static void run_roof_mode(const DeviceCtx& ctx, bool quick,
     }
     uint64_t med = median(samples);
     double bytes = 0.0;
-    for (uint32_t s = 0; s < kNumShapes; ++s)
+    for (uint32_t s = 0; s < g_num_shapes; ++s)
       bytes += (double)shape_bytes(g_shapes[s]);
     std::printf(
         "{\"k\":\"q4layer\",\"bytes\":%.0f,\"med_wall_ns\":%llu,"
@@ -1744,6 +1784,7 @@ int main(int argc, char** argv) {
     if (std::string(argv[i]) == "--roof") roof_mode = true;
     if (std::string(argv[i]) == "--2b") {
       g_shapes = kShapes2B;
+      g_num_shapes = std::uint32_t{sizeof(kShapes2B) / sizeof(kShapes2B[0])};
       g_gap_bf16 = true;
     }
     if (std::string(argv[i]) == "--grid-cap" && i + 1 < argc)
@@ -1837,7 +1878,7 @@ int main(int argc, char** argv) {
   SetBufs outs[kNumShapes][kMaxSides];
   Params shape_params[kNumShapes];
   uint32_t groups_v[kNumShapes][kMaxSides];
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     const Shape& sh = g_shapes[s];
     inputs[s].x = make_buf(g_vk.dev, ctx.mp, (uint64_t)sh.k * 2u, false);
     for (uint32_t d = 0; d < sh.dims; ++d) {
@@ -1872,7 +1913,7 @@ int main(int argc, char** argv) {
       VK_SUCCESS)
     die("CreateDescriptorPool");
   VkDescriptorSet sets[kNumShapes][kMaxSides];
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     for (int i = 0; i < num_sides; ++i) {
       SetBufs combined = inputs[s];
       for (uint32_t d = 0; d < kMaxDims; ++d) {
@@ -1912,7 +1953,7 @@ int main(int argc, char** argv) {
       g_vk.UnmapMemory(g_vk.dev, inputs[s].biases[d].mem);
     }
   }
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     const Shape& sh = g_shapes[s];
     for (int i = 0; i < num_sides; ++i) {
       dispatch_isolated(ctx, sides[i], iso_cmd, sets[s][i],
@@ -1992,7 +2033,7 @@ int main(int argc, char** argv) {
     std::printf("{\"k\":\"dumped\"}\n");
   }
   // ---- Isolated per-shape timings, sides interleaved per rep ----
-  for (uint32_t s = 0; s < kNumShapes; ++s) {
+  for (uint32_t s = 0; s < g_num_shapes; ++s) {
     const Shape& sh = g_shapes[s];
     std::vector<uint64_t> med(num_sides), minv(num_sides);
     std::vector<std::vector<uint64_t>> samples(num_sides);
