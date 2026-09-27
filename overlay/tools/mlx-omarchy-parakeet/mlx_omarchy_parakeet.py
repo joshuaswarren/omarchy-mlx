@@ -338,6 +338,15 @@ def _transcribe(args) -> int:
     _check_ane_capability()
     worker = _worker_path()
     share = _share_dir()
+    # Installed prefix layouts resolve the whole-encoder bundle from this
+    # CLI's own share (the discovery fallback cannot see a prefix's share
+    # through a symlinked coreml/ and would silently take the split-island
+    # path). An explicit MLX_OMARCHY_WHOLE_ENCODER_BUNDLE still wins.
+    _installed_whole = share / "bundles" / "parakeet-encoder-whole"
+    if (_installed_whole / "manifest.json").is_file():
+        os.environ.setdefault(
+            "MLX_OMARCHY_WHOLE_ENCODER_BUNDLE", str(_installed_whole)
+        )
     _check_runtime_deps()
 
     lock = ReferenceLock.load()
