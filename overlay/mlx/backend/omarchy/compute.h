@@ -790,6 +790,7 @@ class ComputeRuntime {
   VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};
   VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
   std::string pipeline_cache_key_;
+  std::string cache_root_;
   VkPipelineCache pipeline_cache_{VK_NULL_HANDLE};
   std::array<VkPipeline, static_cast<size_t>(ComputeKernel::Count)> pipelines_{};
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;

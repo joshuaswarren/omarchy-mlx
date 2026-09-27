@@ -4,6 +4,7 @@
 #include "mlx/backend/omarchy/compute.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -1433,6 +1434,13 @@ ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit,
   // once per process. Keyed by the driver's own pipeline-cache UUID plus
   // driver/API identity; entries are equivalent compiled code for the same
   // SPIR-V, never a numerics change.
+  {
+    const char* xdg = ::getenv("XDG_CACHE_HOME");
+    cache_root_ = (xdg != nullptr && *xdg != '\0')
+                      ? std::string(xdg) + "/mlx-omarchy/pipelines"
+                      : std::string(::getenv("HOME") ? ::getenv("HOME") : "") +
+                            "/.cache/mlx-omarchy/pipelines";
+  }
   if (!pipeline_cache_key_.empty()) {
     pipeline_cache_ = load_pipeline_cache();
   }
@@ -1447,15 +1455,10 @@ VkPipelineCache ComputeRuntime::load_pipeline_cache() {
       return VK_NULL_HANDLE;  // disk layer explicitly off
     }
   }
-  const char* xdg = ::getenv("XDG_CACHE_HOME");
-  std::string root = (xdg != nullptr && *xdg != '\0')
-                         ? std::string(xdg) + "/mlx-omarchy/pipelines"
-                         : std::string(::getenv("HOME") ? ::getenv("HOME") : "") +
-                               "/.cache/mlx-omarchy/pipelines";
-  if (root.empty() || root == "/.cache/mlx-omarchy/pipelines") {
+  if (cache_root_.empty() || cache_root_ == "/.cache/mlx-omarchy/pipelines") {
     return VK_NULL_HANDLE;
   }
-  const std::string path = root + "/pipeline-" + pipeline_cache_key_ + ".bin";
+  const std::string path = cache_root_ + "/pipeline-" + pipeline_cache_key_ + ".bin";
 
   VkPipelineCacheCreateInfo info{
       VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
@@ -1480,6 +1483,11 @@ void ComputeRuntime::persist_pipeline_cache() {
     return;
   }
   size_t size = 0;
+  std::error_code ec;
+  std::filesystem::create_directories(cache_root_, ec);
+  if (ec) {
+    return;
+  }
   if (dt.GetPipelineCacheData(device_, pipeline_cache_, &size, nullptr) !=
           VK_SUCCESS ||
       size == 0) {
@@ -1491,12 +1499,7 @@ void ComputeRuntime::persist_pipeline_cache() {
       VK_SUCCESS) {
     return;
   }
-  const char* xdg = ::getenv("XDG_CACHE_HOME");
-  std::string root = (xdg != nullptr && *xdg != '\0')
-                         ? std::string(xdg) + "/mlx-omarchy/pipelines"
-                         : std::string(::getenv("HOME") ? ::getenv("HOME") : "") +
-                               "/.cache/mlx-omarchy/pipelines";
-  const std::string path = root + "/pipeline-" + pipeline_cache_key_ + ".bin";
+  const std::string path = cache_root_ + "/pipeline-" + pipeline_cache_key_ + ".bin";
   const std::string tmp = path + ".tmp";
   std::ofstream output(tmp, std::ios::binary | std::ios::trunc);
   if (!output) {
