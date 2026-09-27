@@ -3,13 +3,8 @@
 
 #include "mlx/backend/omarchy/compute.h"
 
-#include <cstdio>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 #include "mlx/backend/omarchy/vulkan.h"
 
@@ -1387,10 +1382,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
 
 } // namespace
 
-ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit,
-                               std::string pipeline_cache_key)
-    : device_(device), binding_limit_(binding_limit),
-      pipeline_cache_key_(std::move(pipeline_cache_key)) {
+ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit)
+    : device_(device), binding_limit_(binding_limit) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -1428,86 +1421,6 @@ ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit,
     throw;
   }
 
-  // Disk-backed pipeline cache: driver-compiled pipelines survive the
-  // process, so the per-process creation cost (measured ~135 ms across the
-  // mel frontend's kernels on asahi) is paid once per machine rather than
-  // once per process. Keyed by the driver's own pipeline-cache UUID plus
-  // driver/API identity; entries are equivalent compiled code for the same
-  // SPIR-V, never a numerics change.
-  {
-    const char* xdg = ::getenv("XDG_CACHE_HOME");
-    cache_root_ = (xdg != nullptr && *xdg != '\0')
-                      ? std::string(xdg) + "/mlx-omarchy/pipelines"
-                      : std::string(::getenv("HOME") ? ::getenv("HOME") : "") +
-                            "/.cache/mlx-omarchy/pipelines";
-  }
-  if (!pipeline_cache_key_.empty()) {
-    pipeline_cache_ = load_pipeline_cache();
-  }
-}
-
-VkPipelineCache ComputeRuntime::load_pipeline_cache() {
-  auto& dt = vk::device_table();
-  const char* configured = ::getenv("MLX_OMARCHY_PIPELINE_CACHE");
-  if (configured != nullptr) {
-    const std::string value = configured;
-    if (value.empty() || value == "0") {
-      return VK_NULL_HANDLE;  // disk layer explicitly off
-    }
-  }
-  if (cache_root_.empty() || cache_root_ == "/.cache/mlx-omarchy/pipelines") {
-    return VK_NULL_HANDLE;
-  }
-  const std::string path = cache_root_ + "/pipeline-" + pipeline_cache_key_ + ".bin";
-
-  VkPipelineCacheCreateInfo info{
-      VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-  std::vector<char> initial;
-  std::ifstream input(path, std::ios::binary);
-  if (input) {
-    initial.assign(std::istreambuf_iterator<char>(input),
-                   std::istreambuf_iterator<char>());
-    info.initialDataSize = initial.size();
-    info.pInitialData = initial.data();
-  }
-  VkPipelineCache cache{VK_NULL_HANDLE};
-  if (dt.CreatePipelineCache(device_, &info, nullptr, &cache) != VK_SUCCESS) {
-    return VK_NULL_HANDLE;
-  }
-  return cache;
-}
-
-void ComputeRuntime::persist_pipeline_cache() {
-  auto& dt = vk::device_table();
-  if (pipeline_cache_ == VK_NULL_HANDLE) {
-    return;
-  }
-  size_t size = 0;
-  std::error_code ec;
-  std::filesystem::create_directories(cache_root_, ec);
-  if (ec) {
-    return;
-  }
-  if (dt.GetPipelineCacheData(device_, pipeline_cache_, &size, nullptr) !=
-          VK_SUCCESS ||
-      size == 0) {
-    return;
-  }
-  std::vector<char> data(size);
-  if (dt.GetPipelineCacheData(device_, pipeline_cache_, &size,
-                              reinterpret_cast<void*>(data.data())) !=
-      VK_SUCCESS) {
-    return;
-  }
-  const std::string path = cache_root_ + "/pipeline-" + pipeline_cache_key_ + ".bin";
-  const std::string tmp = path + ".tmp";
-  std::ofstream output(tmp, std::ios::binary | std::ios::trunc);
-  if (!output) {
-    return;
-  }
-  output.write(data.data(), static_cast<std::streamsize>(data.size()));
-  output.close();
-  std::rename(tmp.c_str(), path.c_str());
 }
 
 ComputeRuntime::~ComputeRuntime() {
@@ -1525,10 +1438,6 @@ ComputeRuntime::~ComputeRuntime() {
   }
   if (descriptor_layout_ != VK_NULL_HANDLE) {
     dt.DestroyDescriptorSetLayout(device_, descriptor_layout_, nullptr);
-  }
-  if (pipeline_cache_ != VK_NULL_HANDLE) {
-    dt.DestroyPipelineCache(device_, pipeline_cache_, nullptr);
-    pipeline_cache_ = VK_NULL_HANDLE;
   }
 }
 
@@ -1594,17 +1503,12 @@ VkPipeline ComputeRuntime::create_pipeline(std::span<const uint32_t> spirv) {
   VkPipeline pipeline{VK_NULL_HANDLE};
   try {
     VKX_CHECK(dt.CreateComputePipelines(
-        device_, pipeline_cache_, 1, &pipeline_info, nullptr, &pipeline));
+        device_, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline));
   } catch (...) {
     dt.DestroyShaderModule(device_, shader, nullptr);
     throw;
   }
   dt.DestroyShaderModule(device_, shader, nullptr);
-  // Eager persistence: the device singleton has no destructor guarantee at
-  // process exit (observed: ~ComputeRuntime never runs under the Python
-  // runtime), so each NEW pipeline serializes the cache immediately. First
-  // process writes per pipeline; cache-hit processes never write.
-  persist_pipeline_cache();
   return pipeline;
 }
 
