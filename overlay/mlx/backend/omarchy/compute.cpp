@@ -1509,9 +1509,6 @@ void ComputeRuntime::persist_pipeline_cache() {
 
 ComputeRuntime::~ComputeRuntime() {
   auto& dt = vk::device_table();
-  // Persist the driver's compiled pipelines before the cache goes away:
-  // the next process loads them and skips the per-process compile.
-  persist_pipeline_cache();
   for (VkPipeline pipeline : pipelines_) {
     if (pipeline != VK_NULL_HANDLE) {
       dt.DestroyPipeline(device_, pipeline, nullptr);
@@ -1600,6 +1597,11 @@ VkPipeline ComputeRuntime::create_pipeline(std::span<const uint32_t> spirv) {
     throw;
   }
   dt.DestroyShaderModule(device_, shader, nullptr);
+  // Eager persistence: the device singleton has no destructor guarantee at
+  // process exit (observed: ~ComputeRuntime never runs under the Python
+  // runtime), so each NEW pipeline serializes the cache immediately. First
+  // process writes per pipeline; cache-hit processes never write.
+  persist_pipeline_cache();
   return pipeline;
 }
 
