@@ -908,14 +908,11 @@ class AneIsland:
         self.bundles = bundles
         self.scratch = scratch
         self.deadline_ms = deadline_ms
-        # Approved asset digests, keyed exactly like the runtime pin's
-        # "assets" object: "bundles" maps bundle directory name -> file
-        # name -> sha256, "libane" maps library file name -> sha256.
-        # When set, the resident worker seals every consumed byte at
+        # Approved asset digests in the runtime pin's "assets" shape
+        # ("bundles": dir name -> file -> sha256, "libane": file ->
+        # sha256). When set, the worker seals every consumed byte at
         # session open and refuses any mismatch before device load;
-        # every registered session bundle and the library must be
-        # covered (fail-closed, including the oproj family extended at
-        # index time).
+        # every session bundle and the library must be covered.
         self.seal_assets = seal_assets
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.submissions = 0

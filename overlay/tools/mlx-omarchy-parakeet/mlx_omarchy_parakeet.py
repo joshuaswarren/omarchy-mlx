@@ -456,13 +456,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     island = encoder_module.AneIsland(
         worker, share / "libane" / "libane-strict.so",
         share / "bundles", scratch_root, deadline_ms,
-        # The worker is the enforcement point: every byte its resident
-        # session consumes is sealed at open, hashed, and bound to these
-        # approved digests before the device loads anything. This
-        # replaces the per-call re-hash of the installed assets —
-        # verification happens once per session at the actual load
-        # boundary, and every new session (restart included)
-        # re-authenticates the real bytes.
+        # Every consumed byte is sealed at session open and bound to
+        # pin["assets"] before device load; restarts re-authenticate.
         seal_assets=pin["assets"],
     )
     source = _ensure_encoder_source(lock, pin, cache_dir)
