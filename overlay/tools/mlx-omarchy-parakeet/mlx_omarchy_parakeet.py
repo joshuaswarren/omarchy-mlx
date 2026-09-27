@@ -534,7 +534,12 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     # so frame-entry joints (blank runs, max-symbol roll-over) resolve from
     # already-synced logits without another submit.
     spec = {"base": None, "state": None, "host": None}
-    spec_frames = _WINDOW_SLOTS
+    # Diagnostic knob (MLX_OMARCHY_TDT_SPEC=off): disable the speculative
+    # joint window so every joint is evaluated fresh against its own state
+    # — the same semantics as the macOS reference GreedyTDTDecoder. Default
+    # remains the speculative path; this exists to bisect numeric
+    # divergences, not as a supported mode.
+    spec_frames = 0 if _env_off("MLX_OMARCHY_TDT_SPEC") else _WINDOW_SLOTS
 
     def _begin_chunk(encoder_hidden):
         enc_holder[0] = encoder_hidden
@@ -551,8 +556,17 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         if not 0 <= offset < host.shape[0]:
             return None
         row = host[offset]
+        tok_row = row[:_VOCAB]
+        if os.environ.get("MLX_OMARCHY_JOINT_MARGINS"):
+            top2 = np.sort(tok_row)[-2:]
+            with open(scratch_root / "joint-margins.log", "a") as fh:
+                fh.write(json.dumps({"frame": frame_index,
+                                     "margin": float(top2[1] - top2[0]),
+                                     "pick": int(np.argmax(tok_row)),
+                                     "dur": int(np.argmax(row[_VOCAB:_JOINT_OUT])),
+                                     "via": "spec"}) + "\n")
         return JointDecision(
-            int(np.argmax(row[:_VOCAB])),
+            int(np.argmax(tok_row)),
             int(np.argmax(row[_VOCAB:_JOINT_OUT])),
         )
 
