@@ -40,6 +40,12 @@ cold first-runs (one per rep group) and six warm:
 - every run: status `match`, 104/104 emissions, transcript `db501a8c…`, mel
   `bcbaa3ca…`, hidden `51830b6f…`, zero `checks_failed`.
 
+The mel and hidden pins are not host-local: the T8103 (jwm1) whole-encoder
+installed-parity raw runs (root-verified final-pair set) record the same
+`bcbaa3ca…` / `51830b6f…` with status `match` — bit-identical whole-encoder
+outputs across T8103 and T6001, like the island-path pin `38c73261…` before
+them.
+
 ## Scope — read before citing
 
 This is **golden-repeatability on the single pinned fixture, not corpus
