@@ -470,7 +470,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
 
     # ------------------------------------------------------------- 1. audio
     def stage_audio():
-        pcm, rate, decoder_name = _decode_flac(fixture)
+        pcm, rate, decoder_name = _decode_audio(fixture)
         if rate != lock.audio.sample_rate:
             raise TranscribeRefusal(
                 f"fixture sample rate {rate} != {lock.audio.sample_rate}"
@@ -682,12 +682,15 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                              else encoder_hidden[:, :decode_frames, :])
             valid_frames = _begin_chunk(decode_hidden)
 
-            hidden, cell = prev_state
-            if hidden is None:
-                with mx.stream(mx.gpu):
-                    hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
-                    cell = mx.zeros((2, 1, 640), dtype=mx.float32)
-                mx.eval(hidden, cell)
+            # The CoreML reference (GreedyTDTDecoder.decode, called once per
+            # chunk by Pipeline.swift) zeroes hidden/cell at the start of
+            # every 30 s window and decodes while t < sum(encoderMask) —
+            # chunks are independent decodes with concatenated streams.
+            # Match that contract exactly.
+            with mx.stream(mx.gpu):
+                hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
+                cell = mx.zeros((2, 1, 640), dtype=mx.float32)
+            mx.eval(hidden, cell)
             chunk_tdt = stage(f"tdt_decode{suffix}", trace_snapshot,
                               stage_tdt(hidden, cell, decode_hidden,
                                         decode_frames))
@@ -814,7 +817,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                "durations": len(tdt.durations),
                "monotone": monotone, "in_window": in_window,
                "decoded_frames": frame_base, "chunks": len(chunk_starts)})
-        check("valid_length_decode",
+        all_valid = last_mask_valid == last_window * len(chunk_starts)
+        check("decode_geometry",
               0 < frame_base <= last_window * len(chunk_starts)
               and frame_base == sum(
                   min(int(np.asarray(m).sum()), int(m.shape[-1]))
@@ -822,7 +826,11 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
               {"decoded_frames": frame_base,
                "mask_valid": last_mask_valid,
                "window": last_window,
-               "padded_decode": False})
+               # Both implementations (Linux mel frontend and the macOS
+               # CoreML reference) emit an all-valid mask by design, so the
+               # decoded frame count equals the window count; the mask is
+               # not duration-aware anywhere in the reference lineage.
+               "mask_all_valid": bool(all_valid)})
         check("durations_domain",
               all(d in lock.tdt.durations for d in tdt.durations),
               {"domain": list(lock.tdt.durations),
