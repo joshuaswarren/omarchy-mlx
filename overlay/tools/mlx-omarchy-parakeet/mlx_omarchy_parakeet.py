@@ -326,11 +326,18 @@ def _decode_audio(path: Path):
     except ImportError:
         pass
     else:
-        pcm, rate = soundfile.read(str(path), dtype="int16")
-        import numpy as np
+        try:
+            pcm, rate = soundfile.read(str(path), dtype="int16")
+        except soundfile.LibsndfileError:
+            # Container/codec libsndfile cannot decode (AAC/M4A/MP4, ...):
+            # fall through to the ffmpeg path. Anything else (keyboard
+            # interrupt, environment errors) still propagates.
+            pass
+        else:
+            import numpy as np
 
-        if int(rate) == 16000 and getattr(pcm, "ndim", 1) == 1:
-            return np.ascontiguousarray(pcm), int(rate), f"soundfile {soundfile.__version__}"
+            if int(rate) == 16000 and getattr(pcm, "ndim", 1) == 1:
+                return np.ascontiguousarray(pcm), int(rate), f"soundfile {soundfile.__version__}"
 
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
@@ -668,10 +675,15 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                 raise TranscribeRefusal(
                     "encoder mask validity is not a prefix; refusing to "
                     "slice-decode a mask with holes")
-            # The pinned golden contract decodes the legacy full padded
-            # window (its reference transcript includes the padded-tail
-            # artifact). General audio decodes only the encoder frames the
-            # mask marks valid — real signal, no padded-tail tokens.
+            # The pinned golden contract keeps the legacy full-window decode
+            # (its reference transcript includes the padded-tail artifact).
+            # The general path clamps decode frames to the mask-derived
+            # count. Today that equals the window: the mel frontend emits an
+            # all-valid mask by design — the same choice the macOS CoreML
+            # reference makes (MelFeatureExtractor.swift) — so the mask is
+            # not duration-aware anywhere in the lineage. The clamp exists
+            # so a future duration-aware mask slots in without touching the
+            # golden path.
             decode_frames = window if pinned else min(mask_valid, window)
             if decode_frames <= 0:
                 raise TranscribeRefusal(
@@ -817,7 +829,9 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                "durations": len(tdt.durations),
                "monotone": monotone, "in_window": in_window,
                "decoded_frames": frame_base, "chunks": len(chunk_starts)})
-        all_valid = last_mask_valid == last_window * len(chunk_starts)
+        all_valid = all(
+            int(np.asarray(m).sum()) == int(np.asarray(m).shape[-1])
+            for m in mask_parts)
         check("decode_geometry",
               0 < frame_base <= last_window * len(chunk_starts)
               and frame_base == sum(
