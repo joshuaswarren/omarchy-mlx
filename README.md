@@ -84,8 +84,8 @@ Verified on [Omarchy](https://github.com/omarchy-mac/omarchy-mac) with Mesa Hone
 
 | Chip | GPU (Vulkan) | Linux ANE |
 |---|---|---|
-| M1 (T8103) | Verified | Step 5 closed (full-ASR 104/104 bit-exact on fork driver; hybrid/full-encoder still pending) |
-| M1 Max (T6001) | Measured | Live (`/dev/accel/accel0`) |
+| M1 (T8103) | Verified | Pinned-fixture E2E parity closed on fork driver (104/104 emissions, bit-exact hidden; hybrid islands; whole-encoder pending) |
+| M1 Max (T6001) | Measured | Verified — whole-encoder ANE execution, pinned-fixture golden match ([receipt](receipts/2026-09-27-m1max-current-main-gold.md), 2026-09-27) |
 | M2 Max (T6021) | Verified (third silicon) | **Not** live-inference-qualified |
 
 Apple GPU and Apple ANE are separate lanes. GPU qualification does not qualify ANE. Later SoCs follow. Receipts and dated detail live under `receipts/` and in [joshuaswarren/ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments).
@@ -140,6 +140,23 @@ named buckets: TDT per-call host glue (~1.45 ms x 265 calls), encoder submit ove
 mel 63 ms, q4 GEMV kernel efficiency — a 54.2 GB/s measured read rate disproves the 43 GB/s decode
 bandwidth wall on this DRAM.
 
+**2026-09-27 current-main addendum (m1max-host, wheel built from `2dea53e2c`,
+[receipt](receipts/2026-09-27-m1max-current-main-gold.md))**: the whole-encoder
+ANE execution measured 440.405 ms on the gold run (cold pipeline 1542.708 ms
+including the 862 ms ANE session open and bundle seal). Nine repeats on the
+same pinned fixture ran warm 630.2–634.7 ms (median 631.4 ms; warm encoder ANE
+441.17 ms, TDT 129.5–133.7 ms), every run `match` with 104/104 emissions and
+transcript pin `db501a8c…` (hidden `51830b6f…`, bit-exact with the m1-host
+lean-lane pin above) — repeatability and reference parity on one
+sha-gated fixture, not corpus coverage and not general transcription
+correctness. The pinned reference transcript itself carries trailing
+punctuation/Cyrillic artifacts (reference behavior,
+[docs/known-defects.md](docs/known-defects.md)). On the macOS side of this
+same SoC, the 137.38 ms encoder figure is a preferred-MLComputePlan
+measurement, not an ANE execution-time proof. Against the 264 ms macOS
+denominator above, the warm median is 0.42x — the Parakeet cell still fails
+the 1.00x bar on current main (was 0.30x on the 2026-09-25 levers6 build).
+
 Archival Qwen2.5 tables and older batteries stay in git history / linked receipts — they are **not** the current recommendation. Current text-generation guidance: [docs/serve.md](docs/serve.md).
 
 ## Feature parity
@@ -150,7 +167,7 @@ Known gaps include `ReduceScatter` on the Linux ring transport and `fast.CustomK
 
 ## Neural Engine
 
-ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified (M1 / M1 Max). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install.
+ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified: hybrid island chains on M1, and the whole-encoder bundle on M1 Max (single-program ANE execution measured 440.405 ms; [receipt](receipts/2026-09-27-m1max-current-main-gold.md)). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install.
 
 Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md). Driver / `libane` ABI live in [joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 

@@ -222,6 +222,15 @@ summary. The pinned expectations are the `2026-09-16-parakeet-e2e-both-hosts`
 receipt: transcript `db501a8c…`, `encoder_hidden` `38c73261…` (identical on
 T8103 and T6001), 104/104 emissions.
 
+Whole-encoder bundle status (2026-09-27): on M1 Max the installed wheel of
+main `2dea53e2c` executes the whole encoder as a single ANE program — gold
+run 440.405 ms encoder execution inside a 1542.708 ms cold pipeline, and nine
+same-fixture repeats warm-median 631.4 ms pipeline / 441.17 ms encoder, all
+`match` against the current runtime pins (transcript `db501a8c…`, mel
+`bcbaa3ca…`, hidden `51830b6f…`). Same pinned fixture throughout — a golden
+`match` is reference parity, not general transcription correctness. See
+[the receipt](../receipts/2026-09-27-m1max-current-main-gold.md).
+
 ## Licensing record
 
 * `parakeet-coreml-swift` source: Apache-2.0 (repo `LICENSE`).
