@@ -241,30 +241,15 @@ def _env_off(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("off", "0", "false", "no")
 
 
-def _verify_assets(pin: dict) -> None:
-    share = _share_dir()
-    for name, files in pin["assets"]["bundles"].items():
-        bundle_dir = share / "bundles" / name
-        if not bundle_dir.is_dir():
-            raise TranscribeRefusal(f"installed bundle {name} is missing")
-        for relative, expected in sorted(files.items()):
-            path = bundle_dir / relative
-            actual = _sha256_file(path) if path.is_file() else None
-            if actual != expected:
-                raise TranscribeRefusal(
-                    f"installed bundle {name}/{relative} does not match the "
-                    f"pin: expected {expected}, found {actual}; refusing to "
-                    f"execute unverified ANE programs"
-                )
-    for relative, expected in sorted(pin["assets"]["libane"].items()):
-        path = share / "libane" / relative
-        actual = _sha256_file(path) if path.is_file() else None
-        if actual != expected:
-            raise TranscribeRefusal(
-                f"installed {relative} does not match the pin: expected "
-                f"{expected}, found {actual}; refusing to load unverified "
-                f"ANE userspace"
-            )
+# Installed-asset verification moved to the worker's load boundary: the
+# resident session seals every consumed bundle file and the device
+# library at open, hashes the sealed bytes, and refuses any mismatch
+# with pin["assets"] before the device loads anything. A pre-open re-hash
+# of the original paths could not protect the later open (the bytes were
+# re-read from disk at load) and cost ~275 ms per invocation on the 458
+# MB whole-encoder bundle; the sealed load is the same verification with
+# none of the gap, paid once per session, and every new session
+# re-authenticates.
 
 
 def _worker_path() -> Path:
@@ -357,7 +342,6 @@ def _transcribe(args) -> int:
 
     pin = _load_pin()
     _check_ane_capability()
-    _verify_assets(pin)
     worker = _worker_path()
     share = _share_dir()
     _check_runtime_deps()
@@ -478,6 +462,14 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     island = encoder_module.AneIsland(
         worker, share / "libane" / "libane-strict.so",
         share / "bundles", scratch_root, deadline_ms,
+        # The worker is the enforcement point: every byte its resident
+        # session consumes is sealed at open, hashed, and bound to these
+        # approved digests before the device loads anything. This
+        # replaces the per-call re-hash of the installed assets —
+        # verification happens once per session at the actual load
+        # boundary, and every new session (restart included)
+        # re-authenticates the real bytes.
+        seal_assets=pin["assets"],
     )
     source = _ensure_encoder_source(lock, pin, cache_dir)
     runner = encoder_module.EncoderRunner(

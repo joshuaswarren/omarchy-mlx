@@ -19,8 +19,11 @@
 #include <system_error>
 #include <type_traits>
 #include <fcntl.h>
+#include <linux/memfd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cerrno>
 
 using namespace mlx::core::omarchy::ane;
 
@@ -1103,4 +1106,211 @@ TEST_CASE("whole-program manifest with raw bindings loads") {
   CHECK(bundle.manifest.programs[0].inputs[0].raw);
   CHECK(bundle.manifest.programs[0].inputs[0].logical_bytes == 6000);
   CHECK(bundle.manifest.programs[0].inputs[0].element_count == 3000);
+}
+
+
+// ---------------------------------------------------------------------
+// Load-boundary seal: sealed_file_at + load_bundle_sealed.
+
+namespace {
+
+std::map<std::string, std::string> full_pin(const Fixture& fixture) {
+  std::map<std::string, std::string> pin;
+  for (size_t index = 0; index < fixture.payload_bytes.size(); ++index) {
+    pin.emplace(
+        "program-" + std::to_string(index) + ".anec", fixture.digest(index));
+  }
+  return pin;
+}
+
+std::string read_bytes(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return std::string(
+      std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+} // namespace
+
+TEST_CASE("sealed_file_at seals the digested copy") {
+  Fixture fixture;
+  fixture.write();
+
+  int dir_fd = ::open(fixture.dir.path().c_str(), O_RDONLY | O_DIRECTORY);
+  REQUIRE(dir_fd >= 0);
+  AneSealedFile image = sealed_file_at(dir_fd, "program-0.anec");
+  ::close(dir_fd);
+  CHECK(image.sha256 == fixture.digest(0));
+
+  // The seals are real: the kernel confirms every seal bit, writes are
+  // refused, the file cannot grow or shrink, and the seal set itself is
+  // locked.
+  int seals = ::fcntl(image.fd, F_GET_SEALS);
+  const int wanted = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+  REQUIRE(seals >= 0);
+  CHECK((seals & wanted) == wanted);
+  errno = 0;
+  const ssize_t written = ::pwrite(image.fd, "X", 1, 0);
+  CHECK(written < 0);
+  CHECK(errno == EPERM);
+  errno = 0;
+  const int shrunk = ::ftruncate(image.fd, 1);
+  CHECK(shrunk < 0);
+  CHECK(errno == EPERM);
+  errno = 0;
+  const int resealed = ::fcntl(image.fd, F_ADD_SEALS, F_SEAL_WRITE);
+  CHECK(resealed < 0);
+  CHECK(errno == EPERM);
+
+  // The digest describes the sealed bytes: re-hashing the image through
+  // its own /proc/self/fd path lands on the same digest.
+  const std::string sealed_path =
+      "/proc/self/fd/" + std::to_string(image.fd);
+  CHECK(sha256_file(sealed_path) == fixture.digest(0));
+}
+
+TEST_CASE("sealed_file_at refuses links and nested names") {
+  Fixture fixture;
+  fixture.write();
+  std::filesystem::create_hard_link(
+      fixture.dir.path() / "program-0.anec",
+      fixture.dir.path() / "hard.anec");
+  int dir_fd = ::open(fixture.dir.path().c_str(), O_RDONLY | O_DIRECTORY);
+  REQUIRE(dir_fd >= 0);
+  check_error(
+      [&] { sealed_file_at(dir_fd, "nested/program-0.anec"); },
+      "not a flat directory entry");
+  // O_NOFOLLOW on the sealed open: a symlink is refused outright.
+  REQUIRE(::symlink(
+              "program-0.anec",
+              (fixture.dir.path() / "link.anec").c_str()) == 0);
+  check_error([&] { sealed_file_at(dir_fd, "link.anec"); }, "sealed snapshot open");
+  // A hard link is accepted content-wise... but the loader refuses it as
+  // an unknown file; the seal primitive itself only refuses symlinks.
+  (void)::close(dir_fd);
+}
+
+TEST_CASE("load_bundle_sealed binds every consumed byte to the pin") {
+  Fixture fixture;
+  fixture.write();
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace(
+      "manifest.json",
+      sha256_file(fixture.dir.path() / "manifest.json"));
+
+  std::vector<AneSealedFile> sealed;
+  AneBundle bundle = load_bundle_sealed(fixture.dir.path(), pin, sealed);
+  CHECK(sealed.size() == 3); // manifest + two payloads
+  REQUIRE(bundle.programs.size() == 2);
+  // All later consumption reads the sealed images, not the on-disk
+  // files: every program path points into this process's sealed fds.
+  CHECK(bundle.programs[0].anec.string().rfind("/proc/self/fd/", 0) == 0);
+  CHECK(read_bytes(bundle.programs[0].anec) == fixture.payload_bytes[0]);
+  CHECK(read_bytes(bundle.programs[1].anec) == fixture.payload_bytes[1]);
+
+  // Flip the on-disk payload after the sealed load: the executed bytes
+  // are still the pinned originals.
+  std::string flipped = fixture.payload_bytes[0];
+  for (auto& byte : flipped) {
+    byte = uint8_t(byte) ^ 0xFF;
+  }
+  write_file(fixture.dir.path() / "program-0.anec", flipped);
+  CHECK(read_bytes(bundle.programs[0].anec) == fixture.payload_bytes[0]);
+
+  // Replacement (delete + recreate) after the snapshot: same outcome.
+  std::filesystem::remove(fixture.dir.path() / "program-1.anec");
+  write_file(fixture.dir.path() / "program-1.anec", flipped);
+  CHECK(read_bytes(bundle.programs[1].anec) == fixture.payload_bytes[1]);
+}
+
+TEST_CASE("load_bundle_sealed refuses wrong and missing pins") {
+  Fixture fixture;
+  fixture.write();
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace(
+      "manifest.json",
+      sha256_file(fixture.dir.path() / "manifest.json"));
+
+  SUBCASE("wrong payload digest") {
+    std::map<std::string, std::string> wrong = pin;
+    wrong["program-1.anec"] = hex(64, '0');
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), wrong, sealed); },
+        "program-1.anec sha256");
+  }
+  SUBCASE("wrong manifest digest") {
+    std::map<std::string, std::string> wrong = pin;
+    wrong["manifest.json"] = hex(64, 'f');
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), wrong, sealed); },
+        "manifest.json sha256");
+  }
+  SUBCASE("missing payload pin") {
+    std::map<std::string, std::string> missing = pin;
+    missing.erase("program-0.anec");
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), missing, sealed); },
+        "no pinned digest");
+  }
+  SUBCASE("missing manifest pin") {
+    auto missing = full_pin(fixture);
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), missing, sealed); },
+        "manifest.json has no pinned digest");
+  }
+  SUBCASE("pin names a file the bundle does not carry") {
+    std::map<std::string, std::string> extra = pin;
+    extra["program-9.anec"] = hex(64, '2');
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), extra, sealed); },
+        "is not part of bundle");
+  }
+}
+
+TEST_CASE("load_bundle_sealed enforces the directory contract") {
+  Fixture fixture;
+  fixture.write();
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace(
+      "manifest.json",
+      sha256_file(fixture.dir.path() / "manifest.json"));
+
+  SUBCASE("unknown extra file") {
+    write_file(fixture.dir.path() / "stray.bin", "nope");
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+        "unknown payload file");
+  }
+  SUBCASE("symlinked payload") {
+    std::filesystem::remove(fixture.dir.path() / "program-1.anec");
+    REQUIRE(::symlink(
+                "program-0.anec",
+                (fixture.dir.path() / "program-1.anec").c_str()) == 0);
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+        "unexpected link");
+  }
+  SUBCASE("directory in place of a payload") {
+    std::filesystem::remove(fixture.dir.path() / "program-1.anec");
+    std::filesystem::create_directory(fixture.dir.path() / "program-1.anec");
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+        "unexpected directory");
+  }
+  SUBCASE("missing bundle directory") {
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] {
+          load_bundle_sealed(
+              fixture.dir.path() / "absent", pin, sealed);
+        },
+        "bundle directory not found");
+  }
 }

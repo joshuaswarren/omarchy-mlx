@@ -10,14 +10,18 @@
 #include "mlx/backend/omarchy/ane/bundle.h"
 #include "mlx/backend/omarchy/ane/worker.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <poll.h>
+#include <sys/stat.h>
 #include <sstream>
 #include <utility>
 #include <string>
@@ -54,6 +58,8 @@ int usage() {
       "  mlx-omarchy-ane-worker --serve --libane PATH\n"
       "       --bundle NAME=DIR [--bundle NAME=DIR]...\n"
       "       [--deadline-ms N] [--iterations N]\n"
+      "       [--seal-expect BUNDLE:FILE=SHA256]...\n"
+      "       [--seal-expect-libane FILE=SHA256]\n"
       "  stdin: batch DEADLINE_MS | batch-end | quit\n"
       "         submit NAME [--input NAME=FILE]... [--save NAME=FILE]...\n"
       "         [--expect NAME=FILE]...\n"
@@ -113,6 +119,131 @@ bool split_assignment(
   name = text.substr(0, separator);
   value = text.substr(separator + 1);
   return !value.empty();
+}
+
+// A pinned digest is a lowercase hex sha256; anything else is a caller
+// typo and must fail here, not silently disable the pin binding.
+bool is_sha256_hex(const std::string& text) {
+  return text.size() == 64 &&
+      std::all_of(text.begin(), text.end(), [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+      });
+}
+
+struct OwnedFd {
+  int fd;
+  explicit OwnedFd(int fd = -1) : fd(fd) {}
+  ~OwnedFd() {
+    if (fd >= 0) {
+      ::close(fd);
+    }
+  }
+  OwnedFd(const OwnedFd&) = delete;
+  OwnedFd& operator=(const OwnedFd&) = delete;
+};
+
+void log_sealed_image(
+    const std::string& session_name,
+    const std::string& name,
+    const AneSealedFile& image) {
+  struct stat status {};
+  size_t bytes =
+      ::fstat(image.fd, &status) == 0 ? size_t(status.st_size) : 0;
+  int seals = ::fcntl(image.fd, F_GET_SEALS);
+  std::fprintf(
+      stderr,
+      "[omarchy-ane] sealed %s/%s bytes=%zu sha256=%s seals=0x%x\n",
+      session_name.c_str(), name.c_str(), bytes, image.sha256.c_str(),
+      seals > 0 ? unsigned(seals) : 0u);
+}
+
+// One resident bundle plus, when the caller pinned this session name,
+// the sealed images its load consumed. `sealed` holds the descriptors
+// backing the bundle's program and weights paths; it must outlive the
+// bundle, the worker session, and the device that loaded its programs.
+struct SealedLoad {
+  AneBundle bundle;
+  std::map<std::string, AneSealedFile> sealed;
+};
+
+// The load boundary for resident sessions: when the session name is
+// pinned, every byte the bundle load consumes (manifest, every payload)
+// is snapshotted into a sealed memfd, hashed, and bound to the pin
+// before anything parses it, and all later consumption reads the sealed
+// images — a flip or replacement of the on-disk bundle after this point
+// cannot reach execution. Without a pin the bundle loads exactly as the
+// one-shot path always has.
+SealedLoad load_resident_bundle(
+    const std::string& session_name,
+    const std::string& dir,
+    const std::map<std::string, std::map<std::string, std::string>>&
+        seal_expects) {
+  auto pinned = seal_expects.find(session_name);
+  if (pinned == seal_expects.end() || pinned->second.empty()) {
+    SealedLoad plain;
+    plain.bundle = load_bundle(dir);
+    return plain;
+  }
+  std::vector<AneSealedFile> sealed;
+  AneBundle bundle = load_bundle_sealed(dir, pinned->second, sealed);
+  SealedLoad load;
+  load.bundle = std::move(bundle);
+  // load_bundle_sealed appends the manifest first, then the payloads in
+  // manifest order; pair that order back to file names for the log.
+  size_t slot = 0;
+  load.sealed.emplace("manifest.json", std::move(sealed.at(slot++)));
+  for (const auto& payload : load.bundle.manifest.payloads) {
+    load.sealed.emplace(payload.path, std::move(sealed.at(slot++)));
+  }
+  for (const auto& [name, image] : load.sealed) {
+    log_sealed_image(session_name, name, image);
+  }
+  std::fflush(stderr);
+  return load;
+}
+
+// The device library: when the caller pinned it, the dlopen performed by
+// the resident child consumes a sealed image of the pinned bytes instead
+// of the mutable installed path. The pin must name exactly the library
+// that will be opened — an unpinned or differently-named library is a
+// refusal, not a fallback.
+std::string sealed_device_library(
+    const std::string& libane_path,
+    const std::map<std::string, std::string>& seal_libane_expect,
+    std::vector<AneSealedFile>& keep) {
+  if (seal_libane_expect.empty()) {
+    return libane_path;
+  }
+  const std::filesystem::path path(libane_path);
+  const std::string name = path.filename().string();
+  auto pinned = seal_libane_expect.find(name);
+  if (pinned == seal_libane_expect.end()) {
+    throw std::runtime_error(
+        "[omarchy-ane] no pinned digest for device library " + name +
+        "; refusing to load unpinned ANE userspace");
+  }
+  if (seal_libane_expect.size() != 1) {
+    throw std::runtime_error(
+        "[omarchy-ane] --seal-expect-libane must name only " + name);
+  }
+  OwnedFd directory(
+      ::open(path.parent_path().c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY));
+  if (directory.fd < 0) {
+    throw std::runtime_error(
+        "[omarchy-ane] cannot open " + path.parent_path().string() + ": " +
+        std::strerror(errno));
+  }
+  AneSealedFile image = sealed_file_at(directory.fd, name);
+  if (image.sha256 != pinned->second) {
+    throw std::runtime_error(
+        "[omarchy-ane] sealed " + name + " sha256 " + image.sha256 +
+        " does not match the pin " + pinned->second +
+        "; refusing to load unverified ANE userspace");
+  }
+  log_sealed_image("libane", name, image);
+  std::fflush(stderr);
+  keep.push_back(std::move(image));
+  return "/proc/self/fd/" + std::to_string(keep.back().fd);
 }
 
 struct ResidentJob {
@@ -186,6 +317,69 @@ bool parse_job(const std::string& line, ResidentJob& job, std::string& error) {
   return true;
 }
 
+#ifdef MLX_OMARCHY_ANE_DEVICE
+
+// The prologue both resident transports share: load every named bundle
+// (sealed and pin-bound when that session name is pinned), seal the
+// device library when it is pinned, and construct the worker whose
+// child dlopens the sealed library and loads the sealed bundles.
+struct ResidentSession {
+  std::vector<SealedLoad> loads;                // sealed bundle images
+  std::vector<AneSealedFile> library_images;    // sealed device library
+  std::vector<AneBundle> bundles;
+  std::map<std::string, size_t> index_of;
+  std::vector<std::string> session_names;
+  std::unique_ptr<AneWorker> worker;
+};
+
+ResidentSession open_resident_session(
+    const std::vector<std::pair<std::string, std::string>>& bundle_args,
+    const std::string& libane_path,
+    long deadline_ms,
+    long iterations,
+    const std::map<std::string, std::map<std::string, std::string>>&
+        seal_expects,
+    const std::map<std::string, std::string>& seal_libane_expect) {
+  ResidentSession session;
+  session.loads.reserve(bundle_args.size());
+  session.bundles.reserve(bundle_args.size());
+  session.session_names.reserve(bundle_args.size());
+  for (const auto& entry : bundle_args) {
+    if (session.index_of.count(entry.first)) {
+      std::fprintf(
+          stderr, "duplicate resident bundle name '%s'\n",
+          entry.first.c_str());
+      std::exit(64);
+    }
+    session.loads.push_back(
+        load_resident_bundle(entry.first, entry.second, seal_expects));
+    const AneBundle& bundle = session.loads.back().bundle;
+    std::printf(
+        "resident bundle=%s index=%zu name=%s programs=%zu driver_abi=%llu "
+        "graph=%s\n",
+        entry.first.c_str(), session.bundles.size(),
+        bundle.manifest.name.c_str(), bundle.programs.size(),
+        static_cast<unsigned long long>(bundle.manifest.driver_abi_major),
+        bundle.manifest.graph_hash.c_str());
+    session.index_of[entry.first] = session.bundles.size();
+    session.session_names.push_back(entry.first);
+    session.bundles.push_back(std::move(session.loads.back().bundle));
+  }
+  std::fflush(stdout);
+
+  const std::string device_library = sealed_device_library(
+      libane_path, seal_libane_expect, session.library_images);
+  AneWorkerOptions options;
+  options.deadline = std::chrono::milliseconds(deadline_ms);
+  options.iterations = static_cast<int>(iterations);
+  session.worker = std::make_unique<AneWorker>(
+      [device_library] { return make_libane_device(device_library); },
+      options);
+  return session;
+}
+
+#endif // MLX_OMARCHY_ANE_DEVICE
+
 // Resident service: load every named bundle once, keep the programs on
 // the device, and serve bounded submits from stdin until the caller
 // quits or one submit fails. Not an inference server (plan section 25):
@@ -195,52 +389,30 @@ int serve_resident(
     const std::vector<std::pair<std::string, std::string>>& bundle_args,
     const std::string& libane_path,
     long deadline_ms,
-    long iterations) {
+    long iterations,
+    const std::map<std::string, std::map<std::string, std::string>>&
+        seal_expects,
+    const std::map<std::string, std::string>& seal_libane_expect) {
 #ifndef MLX_OMARCHY_ANE_DEVICE
   (void)bundle_args;
   (void)libane_path;
   (void)deadline_ms;
   (void)iterations;
+  (void)seal_expects;
+  (void)seal_libane_expect;
   std::fprintf(
       stderr,
       "this binary was built without MLX_OMARCHY_ANE_DEVICE; no device "
       "backend is linked\n");
   return 70;
 #else
-  std::vector<AneBundle> bundles;
-  std::map<std::string, size_t> index_of;
-  // The CLI session names in bundle order: the wire-protocol namespace
-  // for both the relayed and the bypassed path.
-  std::vector<std::string> session_names;
-  session_names.reserve(bundle_args.size());
-  bundles.reserve(bundle_args.size());
-  for (const auto& entry : bundle_args) {
-    if (index_of.count(entry.first)) {
-      std::fprintf(
-          stderr, "duplicate resident bundle name '%s'\n",
-          entry.first.c_str());
-      return 64;
-    }
-    AneBundle bundle = load_bundle(entry.second);
-    std::printf(
-        "resident bundle=%s index=%zu name=%s programs=%zu driver_abi=%llu "
-        "graph=%s\n",
-        entry.first.c_str(), bundles.size(), bundle.manifest.name.c_str(),
-        bundle.programs.size(),
-        static_cast<unsigned long long>(bundle.manifest.driver_abi_major),
-        bundle.manifest.graph_hash.c_str());
-    index_of[entry.first] = bundles.size();
-    session_names.push_back(entry.first);
-    bundles.push_back(std::move(bundle));
-  }
+  ResidentSession session = open_resident_session(
+      bundle_args, libane_path, deadline_ms, iterations, seal_expects,
+      seal_libane_expect);
+  AneWorker& worker = *session.worker;
+  const std::map<std::string, size_t>& index_of = session.index_of;
 
-  AneWorkerOptions options;
-  options.deadline = std::chrono::milliseconds(deadline_ms);
-  options.iterations = static_cast<int>(iterations);
-  AneWorker worker(
-      [libane_path] { return make_libane_device(libane_path); }, options);
-
-  AneWorkerReport opened = worker.open(bundles, session_names);
+  AneWorkerReport opened = worker.open(session.bundles, session.session_names);
   if (opened.status != AneWorkerStatus::Completed) {
     std::fprintf(
         stderr, "resident open failed: %s\n", opened.detail.c_str());
@@ -330,7 +502,7 @@ int serve_resident(
           job.bundle.c_str());
       return 64;
     }
-    const AneBundle& bundle = bundles[found->second];
+    const AneBundle& bundle = session.bundles[found->second];
 
     // Three phases, reported per job: an operator who sees a slow
     // submit needs to know whether the time went to host staging or to
@@ -472,52 +644,29 @@ int serve_resident_bypass(
     const std::vector<std::pair<std::string, std::string>>& bundle_args,
     const std::string& libane_path,
     long deadline_ms,
-    long iterations) {
+    long iterations,
+    const std::map<std::string, std::map<std::string, std::string>>&
+        seal_expects,
+    const std::map<std::string, std::string>& seal_libane_expect) {
 #ifndef MLX_OMARCHY_ANE_DEVICE
   (void)bundle_args;
   (void)libane_path;
   (void)deadline_ms;
   (void)iterations;
+  (void)seal_expects;
+  (void)seal_libane_expect;
   std::fprintf(
       stderr,
       "this binary was built without MLX_OMARCHY_ANE_DEVICE; no device "
       "backend is linked\n");
   return 70;
 #else
-  std::vector<AneBundle> bundles;
-  std::map<std::string, size_t> index_of;
-  // The CLI session names in bundle order: the wire-protocol namespace
-  // for both the relayed and the bypassed path.
-  std::vector<std::string> session_names;
-  session_names.reserve(bundle_args.size());
-  bundles.reserve(bundle_args.size());
-  for (const auto& entry : bundle_args) {
-    if (index_of.count(entry.first)) {
-      std::fprintf(
-          stderr, "duplicate resident bundle name '%s'\n",
-          entry.first.c_str());
-      return 64;
-    }
-    AneBundle bundle = load_bundle(entry.second);
-    std::printf(
-        "resident bundle=%s index=%zu name=%s programs=%zu driver_abi=%llu "
-        "graph=%s\n",
-        entry.first.c_str(), bundles.size(), bundle.manifest.name.c_str(),
-        bundle.programs.size(),
-        static_cast<unsigned long long>(bundle.manifest.driver_abi_major),
-        bundle.manifest.graph_hash.c_str());
-    index_of[entry.first] = bundles.size();
-    session_names.push_back(entry.first);
-    bundles.push_back(std::move(bundle));
-  }
+  ResidentSession session = open_resident_session(
+      bundle_args, libane_path, deadline_ms, iterations, seal_expects,
+      seal_libane_expect);
+  AneWorker& worker = *session.worker;
 
-  AneWorkerOptions options;
-  options.deadline = std::chrono::milliseconds(deadline_ms);
-  options.iterations = static_cast<int>(iterations);
-  AneWorker worker(
-      [libane_path] { return make_libane_device(libane_path); }, options);
-
-  AneWorkerReport opened = worker.open(bundles, session_names);
+  AneWorkerReport opened = worker.open(session.bundles, session.session_names);
   if (opened.status != AneWorkerStatus::Completed) {
     std::fprintf(
         stderr, "resident open failed: %s\n", opened.detail.c_str());
@@ -625,6 +774,8 @@ int main(int argc, char** argv) {
   std::map<std::string, std::string> input_files;
   std::map<std::string, std::string> expect_files;
   std::map<std::string, std::string> save_files;
+  std::map<std::string, std::map<std::string, std::string>> seal_expects;
+  std::map<std::string, std::string> seal_libane_expect;
 
   for (int i = 1; i < argc; ++i) {
     std::string flag = argv[i];
@@ -678,6 +829,30 @@ int main(int argc, char** argv) {
         return usage();
       }
       save_files[assignment.substr(0, sep)] = assignment.substr(sep + 1);
+    } else if (flag == "--seal-expect") {
+      auto assignment = value();
+      auto colon = assignment.find(':');
+      auto sep = assignment.rfind('=');
+      if (colon == std::string::npos || colon == 0 || sep == std::string::npos ||
+          sep <= colon + 1 ||
+          !is_sha256_hex(assignment.substr(sep + 1))) {
+        std::fprintf(
+            stderr, "--seal-expect expects BUNDLE:FILE=SHA256\n");
+        return usage();
+      }
+      seal_expects[assignment.substr(0, colon)][assignment.substr(
+          colon + 1, sep - colon - 1)] = assignment.substr(sep + 1);
+    } else if (flag == "--seal-expect-libane") {
+      auto assignment = value();
+      auto sep = assignment.rfind('=');
+      if (sep == std::string::npos || sep == 0 ||
+          !is_sha256_hex(assignment.substr(sep + 1))) {
+        std::fprintf(
+            stderr, "--seal-expect-libane expects FILE=SHA256\n");
+        return usage();
+      }
+      seal_libane_expect[assignment.substr(0, sep)] =
+          assignment.substr(sep + 1);
     } else {
       return usage();
     }
@@ -696,17 +871,40 @@ int main(int argc, char** argv) {
           stderr, "--serve and --relay-bypass are mutually exclusive\n");
       return usage();
     }
+    // A pinned name that is not part of this session would silently
+    // leave that bundle unpinned: refuse instead of guessing.
+    for (const auto& [name, files] : seal_expects) {
+      if (!std::any_of(
+              resident_bundles.begin(),
+              resident_bundles.end(),
+              [&](const std::pair<std::string, std::string>& bundle) {
+                return bundle.first == name;
+              })) {
+        std::fprintf(
+            stderr,
+            "--seal-expect names unknown resident bundle '%s'\n",
+            name.c_str());
+        return usage();
+      }
+    }
     try {
       if (relay_bypass) {
         return serve_resident_bypass(
-            resident_bundles, libane_path, deadline_ms, iterations);
+            resident_bundles, libane_path, deadline_ms, iterations,
+            seal_expects, seal_libane_expect);
       }
       return serve_resident(
-          resident_bundles, libane_path, deadline_ms, iterations);
+          resident_bundles, libane_path, deadline_ms, iterations,
+          seal_expects, seal_libane_expect);
     } catch (const std::exception& error) {
       std::fprintf(stderr, "error: %s\n", error.what());
       return 1;
     }
+  }
+  if (!seal_expects.empty() || !seal_libane_expect.empty()) {
+    std::fprintf(
+        stderr, "--seal-expect requires --serve or --relay-bypass\n");
+    return usage();
   }
   if (!resident_bundles.empty()) {
     std::fprintf(

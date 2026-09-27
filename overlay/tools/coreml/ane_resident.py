@@ -28,6 +28,26 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
+# The load-boundary pin flags for one resident session: every consumed
+# bundle file and the device library travel to the worker as approved
+# sha256 digests; the worker refuses on any mismatch before device load.
+def seal_expect_argv(
+    seal_expects: Mapping[str, Mapping[str, str]] | None,
+    seal_libane_sha: str | None,
+    libane: Path,
+) -> Sequence[str]:
+    argv: list[str] = []
+    for name, files in sorted((seal_expects or {}).items()):
+        for file, sha in sorted(files.items()):
+            argv += ["--seal-expect", f"{name}:{file}={sha}"]
+    if seal_libane_sha is not None:
+        argv += [
+            "--seal-expect-libane",
+            f"{Path(libane).name}={seal_libane_sha}",
+        ]
+    return argv
+
+
 class ResidentWorkerError(RuntimeError):
     """The resident worker refused or failed; the reason is named."""
 
@@ -55,6 +75,8 @@ class ResidentAneWorker:
         deadline_ms: int = 20000,
         iterations: int = 1,
         relay_bypass: bool | None = None,
+        seal_expects: Mapping[str, Mapping[str, str]] | None = None,
+        seal_libane_sha: str | None = None,
     ):
         if not bundles:
             raise ResidentWorkerError("a resident session needs at least one bundle")
@@ -84,6 +106,16 @@ class ResidentAneWorker:
                 "MLX_OMARCHY_ANE_RELAY_BYPASS", ""
             ).lower() not in ("", "0", "off", "false")
         self.relay_bypass = relay_bypass
+
+        # Load-boundary pins: bundle session name -> file name -> sha256
+        # of the approved bytes, plus the device library digest. When
+        # set, the worker seals every consumed file into an immutable
+        # memfd, hashes the sealed image, and refuses any mismatch
+        # before the device loads anything.
+        self.seal_expects = {
+            name: dict(files) for name, files in (seal_expects or {}).items()
+        }
+        self.seal_libane_sha = seal_libane_sha
 
         # Counters in the shape the parity harness reports (section 42).
         self.submissions = 0
@@ -127,6 +159,9 @@ class ResidentAneWorker:
         ]
         for name, path in self.bundles.items():
             argv += ["--bundle", f"{name}={path}"]
+        argv += seal_expect_argv(
+            self.seal_expects, self.seal_libane_sha, self.libane
+        )
 
         self._stderr = self._stderr_path.open("wb")
         started = time.monotonic_ns()
