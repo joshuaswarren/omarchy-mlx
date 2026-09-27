@@ -753,7 +753,8 @@ struct ComputeParams {
 
 class ComputeRuntime {
  public:
-  explicit ComputeRuntime(VkDevice device, uint32_t binding_limit);
+  explicit ComputeRuntime(VkDevice device, uint32_t binding_limit,
+                          std::string pipeline_cache_key);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -780,12 +781,16 @@ class ComputeRuntime {
  private:
   VkPipeline create_pipeline(ComputeKernel kernel);
   VkPipeline create_pipeline(std::span<const uint32_t> spirv);
+  VkPipelineCache load_pipeline_cache();
+  void persist_pipeline_cache();
 
   uint32_t binding_limit_{0};
 
   VkDevice device_;
   VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};
   VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
+  std::string pipeline_cache_key_;
+  VkPipelineCache pipeline_cache_{VK_NULL_HANDLE};
   std::array<VkPipeline, static_cast<size_t>(ComputeKernel::Count)> pipelines_{};
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;
   std::mutex mutex_;

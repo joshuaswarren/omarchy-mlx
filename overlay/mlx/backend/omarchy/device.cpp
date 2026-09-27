@@ -863,6 +863,9 @@ Device::Device(uint32_t physical_device_index) {
   VKX_LOAD_DEVICE_FN(UpdateDescriptorSets, vkUpdateDescriptorSets)
   VKX_LOAD_DEVICE_FN(CreatePipelineLayout, vkCreatePipelineLayout)
   VKX_LOAD_DEVICE_FN(DestroyPipelineLayout, vkDestroyPipelineLayout)
+  VKX_LOAD_DEVICE_FN(CreatePipelineCache, vkCreatePipelineCache)
+  VKX_LOAD_DEVICE_FN(DestroyPipelineCache, vkDestroyPipelineCache)
+  VKX_LOAD_DEVICE_FN(GetPipelineCacheData, vkGetPipelineCacheData)
   VKX_LOAD_DEVICE_FN(CreateComputePipelines, vkCreateComputePipelines)
   VKX_LOAD_DEVICE_FN(DestroyPipeline, vkDestroyPipeline)
   VKX_LOAD_DEVICE_FN(CmdBindPipeline, vkCmdBindPipeline)
@@ -903,7 +906,25 @@ Device::Device(uint32_t physical_device_index) {
       std::min(
           caps_.max_per_stage_descriptor_storage_buffers,
           caps_.max_descriptor_set_storage_buffers));
-  compute_ = std::make_unique<ComputeRuntime>(device_, binding_limit);
+  // Disk pipeline-cache identity: driver pipeline-cache UUID + driver/API
+  // identity. A different driver or device simply misses the cache; entries
+  // are equivalent compiled pipelines for the same SPIR-V.
+  std::string cache_key;
+  {
+    static constexpr char kHex[] = "0123456789abcdef";
+    char hex[2];
+    for (uint8_t byte : caps_.pipeline_cache_uuid) {
+      hex[0] = kHex[byte >> 4];
+      hex[1] = kHex[byte & 0xf];
+      cache_key.append(hex, 2);
+    }
+    cache_key += "-" + std::to_string(caps_.driver_version) + "-" +
+        std::to_string(caps_.api_version) + "-" +
+        std::to_string(caps_.vendor_id) + "-" +
+        std::to_string(caps_.device_id) + "-" +
+        std::to_string(caps_.driver_id);
+  }
+  compute_ = std::make_unique<ComputeRuntime>(device_, binding_limit, cache_key);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 
