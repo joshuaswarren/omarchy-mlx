@@ -241,15 +241,9 @@ def _env_off(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("off", "0", "false", "no")
 
 
-# Installed-asset verification moved to the worker's load boundary: the
-# resident session seals every consumed bundle file and the device
-# library at open, hashes the sealed bytes, and refuses any mismatch
-# with pin["assets"] before the device loads anything. A pre-open re-hash
-# of the original paths could not protect the later open (the bytes were
-# re-read from disk at load) and cost ~275 ms per invocation on the 458
-# MB whole-encoder bundle; the sealed load is the same verification with
-# none of the gap, paid once per session, and every new session
-# re-authenticates.
+# Installed-asset verification lives at the worker's load boundary: the
+# resident session seals every consumed file, hashes the sealed bytes,
+# and refuses any mismatch with pin["assets"] before device load.
 
 
 def _worker_path() -> Path:

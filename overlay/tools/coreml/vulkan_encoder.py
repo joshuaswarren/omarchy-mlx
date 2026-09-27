@@ -812,11 +812,50 @@ _SHARED_SESSION_ATEXIT = False
 
 
 def _shared_session_take(identity: tuple):
-    """Return the held session when identity matches and it is still up."""
-    if _SHARED_SESSION is None or _SHARED_SESSION["identity"] != identity:
+    """Return the held session when identity matches and it is still up.
+
+    An identity change (worker, library, bundle set, deadlines, or the
+    load-boundary pins) retires the held session BEFORE the caller
+    spawns its replacement: the old child is a private worker holding
+    the device and its sealed images, and overwriting the registry slot
+    would orphan it. The caller only proceeds once the old child is
+    confirmed reaped.
+    """
+    global _SHARED_SESSION
+    entry = _SHARED_SESSION
+    if entry is None:
         return None
-    session = _SHARED_SESSION["session"]
-    return session if session.alive else None
+    if entry["identity"] == identity and entry["session"].alive:
+        return entry["session"]
+    _retire_shared_session(entry["session"])
+    _SHARED_SESSION = None
+    return None
+
+
+def _retire_shared_session(session) -> None:
+    """Close a held session and confirm its child process is really gone."""
+    pid = session._process.pid if session._process is not None else None
+    if session.alive:
+        try:
+            session.close()
+        except Exception:
+            session._terminate()
+    if pid is not None:
+        # Real liveness probe on the recorded child, not a state flag:
+        # close() nulls its handle, so the pid is the only evidence.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        session._terminate()
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        raise RuntimeError(
+            f"retired resident worker child {pid} is still alive; "
+            "refusing to open a replacement session"
+        )
 
 
 def _shared_session_hold(identity: tuple, session) -> None:
