@@ -340,6 +340,19 @@ ResidentSession open_resident_session(
     const std::map<std::string, std::map<std::string, std::string>>&
         seal_expects,
     const std::map<std::string, std::string>& seal_libane_expect) {
+  // Optional open-phase timing (MLX_OMARCHY_OPEN_TIMING=1): parent-side
+  // seal/load cost per bundle and for the device library; the child's
+  // per-program load and the fork-to-loaded handshake are logged by
+  // AneWorker under the same gate.
+  const bool timing = [] {
+    const char* v = ::getenv("MLX_OMARCHY_OPEN_TIMING");
+    return v != nullptr && v[0] != '\0';
+  }();
+  auto ms_since = [](std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+  };
   ResidentSession session;
   session.loads.reserve(bundle_args.size());
   session.bundles.reserve(bundle_args.size());
@@ -351,8 +364,14 @@ ResidentSession open_resident_session(
           entry.first.c_str());
       std::exit(64);
     }
+    const auto load_started = std::chrono::steady_clock::now();
     session.loads.push_back(
         load_resident_bundle(entry.first, entry.second, seal_expects));
+    if (timing) {
+      std::fprintf(
+          stderr, "[omarchy-ane] timing bundle %s load %.1f ms\n",
+          entry.first.c_str(), ms_since(load_started));
+    }
     const AneBundle& bundle = session.loads.back().bundle;
     std::printf(
         "resident bundle=%s index=%zu name=%s programs=%zu driver_abi=%llu "
@@ -367,8 +386,14 @@ ResidentSession open_resident_session(
   }
   std::fflush(stdout);
 
+  const auto library_started = std::chrono::steady_clock::now();
   const std::string device_library = sealed_device_library(
       libane_path, seal_libane_expect, session.library_images);
+  if (timing) {
+    std::fprintf(
+        stderr, "[omarchy-ane] timing libane seal %.1f ms\n",
+        ms_since(library_started));
+  }
   AneWorkerOptions options;
   options.deadline = std::chrono::milliseconds(deadline_ms);
   options.iterations = static_cast<int>(iterations);
