@@ -833,27 +833,19 @@ def _shared_session_take(identity: tuple):
 
 
 def _retire_shared_session(session) -> None:
-    """Close a held session and confirm its child process is really gone."""
-    pid = session._process.pid if session._process is not None else None
-    if session.alive:
-        try:
+    """Close a held session and confirm its child was actually reaped."""
+    # Retain the Popen before close(): close() releases the handle, and
+    # the kernel's own reap status (wait/poll) is the only authoritative
+    # evidence — a recorded pid could be recycled, so it proves nothing.
+    process = session._process
+    try:
+        if session.alive:
             session.close()
-        except Exception:
-            session._terminate()
-    if pid is not None:
-        # Real liveness probe on the recorded child, not a state flag:
-        # close() nulls its handle, so the pid is the only evidence.
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
+    finally:
         session._terminate()
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
+    if process is not None and process.poll() is None:
         raise RuntimeError(
-            f"retired resident worker child {pid} is still alive; "
+            "retired resident worker child has not exited; "
             "refusing to open a replacement session"
         )
 
