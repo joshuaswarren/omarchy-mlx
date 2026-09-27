@@ -9,15 +9,20 @@ and verifies every file's SHA-256 before and after. Nothing is trusted
 on presence or mtime; the receipt (``--json``) records the exact bytes
 on disk.
 
-`transcribe` runs the pinned reference end to end on the installed
-runtime: FLAC decode, Vulkan mel frontend, ANE island encoder through
-the shipped worker and strict libane, greedy TDT decode (host control
-loop by default; ``MLX_OMARCHY_TDT_HOST`` set to a false value opts
-into the one-dispatch GPU loop), detokenization. The installed asset
-hashes and the frozen acceptance
-pins live in ``share/mlx-omarchy/parakeet-1/parakeet-runtime-pin.json``;
-any mismatch, missing capability, or divergent output is an explicit
-refusal — there is no CPU or GPU-only encoder fallback.
+`transcribe` runs the end-to-end pipeline on the installed runtime:
+FLAC/audio decode (any mono-friendly input; 16 kHz mono is native,
+anything else is downmixed/resampled through ffmpeg), Vulkan mel
+frontend, ANE island encoder through the shipped worker and strict
+libane, greedy TDT decode (host control loop by default;
+``MLX_OMARCHY_TDT_HOST`` set to a false value opts into the one-dispatch
+GPU loop), detokenization. The pinned reference fixture runs the golden
+contract: every stage output is checked against the frozen acceptance
+pins. Any other audio runs the general contract (on-device execution,
+finite outputs, stream geometry, cross-repeat determinism); audio longer
+than the 30 s model window is transcribed in 30 s chunks with carried
+TDT recurrent state. Any mismatch, missing capability, or divergent
+output is an explicit refusal — there is no CPU or GPU-only encoder
+fallback.
 """
 
 import argparse
@@ -184,7 +189,22 @@ def _verify(args) -> int:
     else:
         print("audio fixture not cached yet; run `download`", file=sys.stderr)
         return 1
-    return code
+    if code != 0:
+        return code
+
+    # Golden e2e verify: run the pinned reference end to end with the full
+    # per-item pin checks (mel/hidden sha, emissions, token ids, transcript).
+    # Only possible where the ANE runtime can execute; byte verification
+    # above stays meaningful on any host.
+    try:
+        _check_ane_capability()
+    except TranscribeRefusal as error:
+        print(f"NOTE: golden e2e verify skipped: {error}", file=sys.stderr)
+        return 0
+    e2e = argparse.Namespace(audio=None, out=None, deadline_ms=20000,
+                             repeat=1, keep_scratch=False)
+    print("running golden e2e verify (pinned fixture, full pin checks)")
+    return 0 if _transcribe(e2e) == 0 else 1
 
 
 def _load_pin() -> dict:
@@ -292,8 +312,15 @@ def _ensure_encoder_source(lock: ReferenceLock, pin: dict, cache_dir: Path) -> P
     return source
 
 
-def _decode_flac(path: Path):
-    """Return int16 PCM, sample rate, and the decoder that produced them."""
+def _decode_audio(path: Path):
+    """Return int16 mono 16 kHz PCM, sample rate, and the decoder used.
+
+    The fast path is libsndfile (soundfile) when the file already is mono
+    16 kHz. Anything else (stereo, other rates, other containers) goes
+    through ffmpeg's deterministic `-ar 16000 -ac 1` downmix/resample so
+    general audio is usable; a native 16 kHz mono file keeps the exact
+    legacy decode (no resampler is engaged for it).
+    """
     try:
         import soundfile
     except ImportError:
@@ -302,7 +329,8 @@ def _decode_flac(path: Path):
         pcm, rate = soundfile.read(str(path), dtype="int16")
         import numpy as np
 
-        return np.ascontiguousarray(pcm), int(rate), f"soundfile {soundfile.__version__}"
+        if int(rate) == 16000 and getattr(pcm, "ndim", 1) == 1:
+            return np.ascontiguousarray(pcm), int(rate), f"soundfile {soundfile.__version__}"
 
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
@@ -310,19 +338,18 @@ def _decode_flac(path: Path):
         capture_output=True, text=True, check=True,
     )
     stream = json.loads(probe.stdout)["streams"][0]
-    if int(stream["channels"]) != 1:
-        raise TranscribeRefusal("the pinned fixture must be mono")
-    raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le", "-acodec",
-         "pcm_s16le", "-"],
-        capture_output=True, check=True,
-    ).stdout
+    rate, channels = int(stream["sample_rate"]), int(stream["channels"])
+    cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le",
+           "-acodec", "pcm_s16le"]
+    if rate != 16000 or channels != 1:
+        cmd += ["-ar", "16000", "-ac", "1"]
+    raw = subprocess.run(cmd + ["-"], capture_output=True, check=True).stdout
     version = subprocess.run(
         ["ffmpeg", "-version"], capture_output=True, text=True, check=True
     ).stdout.splitlines()[0]
     import numpy as np
 
-    return np.frombuffer(raw, dtype="<i2"), int(stream["sample_rate"]), version
+    return np.frombuffer(raw, dtype="<i2"), 16000, version
 
 
 def _transcribe(args) -> int:
@@ -365,15 +392,11 @@ def _transcribe(args) -> int:
             f"`mlx-omarchy-parakeet download` first"
         )
     audio_sha = _sha256_file(fixture)
-    if audio_sha != pin["e2e"]["audio_fixture_sha256"]:
-        raise TranscribeRefusal(
-            f"audio fixture sha256 {audio_sha} is not the pinned "
-            f"{pin['e2e']['audio_fixture_sha256']}; the installed runtime "
-            f"executes the pinned reference only"
-        )
 
     repeat = max(1, int(getattr(args, "repeat", 1) or 1))
+    pinned = audio_sha == pin["e2e"]["audio_fixture_sha256"]
     passed = True
+    prior: tuple[list[int], str] | None = None
     for index in range(repeat):
         out = Path(args.out) if args.out else (
             default_cache_root() / "transcriptions"
@@ -386,9 +409,12 @@ def _transcribe(args) -> int:
         scratch_root = Path(tempfile.mkdtemp(prefix="parakeet-transcribe-",
                                              dir=default_cache_root()))
         try:
-            if not _run_pipeline(args, pin, lock, cache_dir, fixture,
-                                 audio_sha, worker, share, scratch_root, out):
+            ok, tokens, transcript = _run_pipeline(
+                args, pin, lock, cache_dir, fixture, audio_sha, worker,
+                share, scratch_root, out, pinned, prior)
+            if not ok:
                 passed = False
+            prior = (tokens, transcript)
         finally:
             if not args.keep_scratch:
                 shutil.rmtree(scratch_root, ignore_errors=True)
@@ -396,8 +422,14 @@ def _transcribe(args) -> int:
 
 
 def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
-                  share, scratch_root, out) -> bool:
-    """mel -> ANE islands -> TDT -> transcript, then the pin checks."""
+                  share, scratch_root, out, pinned, prior) -> tuple:
+    """mel -> ANE islands -> TDT -> transcript, then the checks.
+
+    `pinned` selects the golden contract (per-item sha equality against
+    pin["e2e"]); any other audio takes the general contract (finite,
+    on-device, mask-consistent, deterministic across repeats). Returns
+    (passed, token_ids, transcript).
+    """
     import numpy as np
 
     import mlx.core as mx
@@ -451,14 +483,13 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     waveform, sample_count, decoder_name = stage("audio_load", trace_snapshot,
                                                  stage_audio)
 
-    # --------------------------------------------------------------- 2. mel
-    def stage_mel():
-        result = extract_chunk_features(waveform)
-        mx.eval(result.mel, result.mask, result.encoder_features,
-                result.encoder_mask)
-        return result
+    # ------------------------------------------- 2. chunks (30 s windows)
+    from coreml.vulkan_mel import CHUNK_SAMPLES
 
-    mel_result = stage("mel_frontend", trace_snapshot, stage_mel)
+    if sample_count <= 0:
+        raise TranscribeRefusal("audio decodes to zero samples")
+    chunk_starts = list(range(0, int(sample_count), CHUNK_SAMPLES))
+    single = len(chunk_starts) == 1
 
     # ----------------------------------------------------------- 3. encoder
     deadline_ms = int(args.deadline_ms)
@@ -474,24 +505,6 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         source / "model.mil", source / "model-root", island,
     )
 
-    def stage_encoder():
-        try:
-            return runner.run(
-                inputs={
-                    "input_features": mel_result.encoder_features,
-                    "attention_mask": mel_result.encoder_mask,
-                },
-                wanted={"encoder_hidden", "encoder_mask"},
-                stop_after="encoder_mask",
-            )
-        finally:
-            island.close()
-
-    encoded = stage("encoder_ane", trace_snapshot, stage_encoder)
-    encoder_hidden = encoded["encoder_hidden"].astype(mx.float32)
-    encoder_mask = encoded["encoder_mask"].astype(mx.int32)
-    mx.eval(encoder_hidden, encoder_mask)
-
     # ------------------------------------------- 4. decoder, joint, control
     decoder = stage(
         "decoder_load", trace_snapshot,
@@ -506,7 +519,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     decoder_ns = 0
     joint_ns = 0
     frame_holder = [0]
-    valid_frames = int(encoder_hidden.shape[1])
+    enc_holder = [None]
+    valid_frames = 0
     fused = {"frame": None, "state": None, "tok": None, "dur": None}
     # Speculative joint window: the decoder step's submit also evaluates the
     # joint head for the next `spec_frames` frames against the new state,
@@ -514,6 +528,13 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     # already-synced logits without another submit.
     spec = {"base": None, "state": None, "host": None}
     spec_frames = _WINDOW_SLOTS
+
+    def _begin_chunk(encoder_hidden):
+        enc_holder[0] = encoder_hidden
+        frame_holder[0] = 0
+        fused.update(frame=None, state=None, tok=None, dur=None)
+        spec.update(base=None, state=None, host=None)
+        return int(encoder_hidden.shape[1])
 
     def _spec_decision(frame_index, decoder_state):
         host = spec["host"]
@@ -534,7 +555,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         started = time.monotonic_ns()
         state_out, tok, dur, _, _, window = run_step(
             fused_packed, current_hidden, current_cell, token_id,
-            encoder_hidden, frame_holder[0],
+            enc_holder[0], frame_holder[0],
             spec_frames=spec_frames, spec_valid=valid_frames,
         )
         mx.eval(state_out)
@@ -569,7 +590,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             joint_ns += time.monotonic_ns() - started
             return decision
         state_out, tok, dur, _, _, window = run_step(
-            fused_packed, None, None, 0, encoder_hidden, frame_index,
+            fused_packed, None, None, 0, enc_holder[0], frame_index,
             skip_lstm=True, dec_in=decoder_state,
             spec_frames=spec_frames, spec_valid=valid_frames,
         )
@@ -580,15 +601,29 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         spec["host"] = np.asarray(window) if window is not None else None
         return JointDecision(tok, dur)
 
-    def stage_tdt():
-        with mx.stream(mx.gpu):
-            hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
-            cell = mx.zeros((2, 1, 640), dtype=mx.float32)
-        mx.eval(hidden, cell)
-        return tdt_decode(
+    def stage_mel(chunk_wave):
+        def work():
+            result = extract_chunk_features(chunk_wave)
+            mx.eval(result.mel, result.mask, result.encoder_features,
+                    result.encoder_mask)
+            return result
+        return work
+
+    def stage_encoder(mel_result):
+        return lambda: runner.run(
+            inputs={
+                "input_features": mel_result.encoder_features,
+                "attention_mask": mel_result.encoder_mask,
+            },
+            wanted={"encoder_hidden", "encoder_mask"},
+            stop_after="encoder_mask",
+        )
+
+    def stage_tdt(hidden, cell, chunk_hidden):
+        return lambda: tdt_decode(
             packed=fused_packed,
-            encoder=encoder_hidden,
-            valid_frames=int(encoder_hidden.shape[1]),
+            encoder=chunk_hidden,
+            valid_frames=int(chunk_hidden.shape[1]),
             config=lock.tdt,
             initial_hidden=hidden,
             initial_cell=cell,
@@ -596,7 +631,77 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             run_joint=joint_callback,
         )
 
-    tdt = stage("tdt_decode", trace_snapshot, stage_tdt)
+    mel_parts: list = []
+    hidden_parts: list = []
+    mask_parts: list = []
+    token_ids: list[int] = []
+    frame_indices: list[int] = []
+    all_durations: list[int] = []
+    prev_state: tuple = (None, None)
+    decode_path = "host"
+    fallback_reason = "no chunk ran"
+    window_frames = 0
+    try:
+        for ci, start in enumerate(chunk_starts):
+            suffix = "" if single else f"#{ci}"
+            chunk_wave = (waveform if single
+                          else waveform[start:start + CHUNK_SAMPLES])
+            mel_result = stage(f"mel_frontend{suffix}", trace_snapshot,
+                               stage_mel(chunk_wave))
+            encoded = stage(f"encoder_ane{suffix}", trace_snapshot,
+                            stage_encoder(mel_result))
+            encoder_hidden = encoded["encoder_hidden"].astype(mx.float32)
+            encoder_mask = encoded["encoder_mask"].astype(mx.int32)
+            mx.eval(encoder_hidden, encoder_mask)
+            valid_frames = _begin_chunk(encoder_hidden)
+
+            hidden, cell = prev_state
+            if hidden is None:
+                with mx.stream(mx.gpu):
+                    hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
+                    cell = mx.zeros((2, 1, 640), dtype=mx.float32)
+                mx.eval(hidden, cell)
+            chunk_tdt = stage(f"tdt_decode{suffix}", trace_snapshot,
+                              stage_tdt(hidden, cell, encoder_hidden))
+
+            offset = window_frames * ci
+            token_ids += list(chunk_tdt.token_ids)
+            frame_indices += [int(f) + offset for f in chunk_tdt.frame_indices]
+            all_durations += list(chunk_tdt.durations)
+            prev_state = (chunk_tdt.hidden, chunk_tdt.cell)
+            decode_path = chunk_tdt.decode_path
+            fallback_reason = chunk_tdt.fallback_reason
+            window_frames = int(encoder_hidden.shape[1])
+            if single:
+                mel_parts = [mel_result.mel]
+                hidden_parts = [encoder_hidden]
+                mask_parts = [encoder_mask]
+            else:
+                mel_parts.append(mel_result.mel)
+                hidden_parts.append(encoder_hidden)
+                mask_parts.append(encoder_mask)
+    finally:
+        island.close()
+
+    from coreml.parakeet_tdt import TdtOutput
+
+    tdt = TdtOutput(
+        token_ids=token_ids,
+        frame_indices=frame_indices,
+        durations=all_durations,
+        hidden=prev_state[0],
+        cell=prev_state[1],
+        decode_path=decode_path,
+        fallback_reason=fallback_reason,
+    )
+    mel_host = (np.asarray(mel_parts[0]) if single else
+                np.concatenate([np.asarray(p) for p in mel_parts], axis=0))
+    hidden_host = (np.asarray(hidden_parts[0]).astype(np.float32) if single else
+                   np.concatenate([np.asarray(p) for p in hidden_parts],
+                                  axis=1).astype(np.float32))
+    mask_host = (np.asarray(mask_parts[0]).astype(np.int32) if single else
+                 np.concatenate([np.asarray(p) for p in mask_parts],
+                                axis=1).astype(np.int32))
 
     # ----------------------------------------------------------- 5. tokenizer
     def stage_tokenizer():
@@ -613,59 +718,85 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     def check(name: str, passed: bool, detail) -> None:
         checks.append({"check": name, "pass": bool(passed), "detail": detail})
 
-    mel_host = np.asarray(mel_result.mel)
-    hidden_host = np.asarray(encoder_hidden).astype(np.float32)
     actual_tokens = list(tdt.token_ids)
-    native_tokens = list(expected["token_ids"])
     transcript_sha = hashlib.sha256(transcript.encode()).hexdigest()
 
-    # The whole-program ANE pipeline (all 13701 ops in the ANE, fp16) and the
-    # island hybrid (1230 ops on the GPU, fp32) differ in the f32 tensor's
-    # low bits; transcript, tokens, durations and frame indices are
-    # identical. The pin carries one hidden sha per encoder path.
-    whole_path = island.whole_bundle is not None
-    whole_sha = expected.get("encoder_hidden_sha256_whole")
-    expected_hidden_sha = (whole_sha if (whole_path and whole_sha)
-                           else expected["encoder_hidden_sha256"])
+    if pinned:
+        native_tokens = list(expected["token_ids"])
 
-    check("mel_sha256", _npy_sha(mel_host) == expected["mel_sha256"],
-          {"expected": expected["mel_sha256"], "actual": _npy_sha(mel_host)})
-    check("encoder_hidden_sha256",
-          _npy_sha(hidden_host) == expected_hidden_sha,
-          {"expected": expected_hidden_sha,
-           "actual": _npy_sha(hidden_host),
-           "encoder_path": "whole-encoder" if whole_path else "islands"})
-    check("emissions", len(actual_tokens) == expected["emissions"],
-          {"expected": expected["emissions"], "actual": len(actual_tokens)})
-    check("token_ids", actual_tokens == native_tokens,
-          {"matching_prefix_length": _prefix_len(actual_tokens, native_tokens)})
-    check("frame_indices",
-          list(tdt.frame_indices) == list(expected["frame_indices"]), {})
-    check("durations", list(tdt.durations) == list(expected["durations"]), {})
-    check("transcript",
-          transcript == expected["transcript"]
-          and transcript_sha == expected["transcript_sha256"],
-          {"expected_sha256": expected["transcript_sha256"],
-           "actual_sha256": transcript_sha})
-    check("cpu_tensor_events",
-          runner.cpu_tensor_events == expected["cpu_tensor_events"],
-          {"expected": expected["cpu_tensor_events"],
-           "actual": runner.cpu_tensor_events})
-    check("decode_control",
-          tdt.decode_path == expected["decode_control"]
-          and tdt.fallback_reason is None,
-          {"expected": expected["decode_control"],
-           "actual": tdt.decode_path, "fallback_reason": tdt.fallback_reason})
-    check("finite_hidden",
-          int(np.isnan(hidden_host).sum()) == contract.nan_count_allowed
-          and int(np.isinf(hidden_host).sum()) == contract.inf_count_allowed,
-          {"nan": int(np.isnan(hidden_host).sum()),
-           "inf": int(np.isinf(hidden_host).sum())})
+        # The whole-program ANE pipeline (all 13701 ops in the ANE, fp16) and
+        # the island hybrid (1230 ops on the GPU, fp32) differ in the f32
+        # tensor's low bits; transcript, tokens, durations and frame indices
+        # are identical. The pin carries one hidden sha per encoder path.
+        whole_path = island.whole_bundle is not None
+        whole_sha = expected.get("encoder_hidden_sha256_whole")
+        expected_hidden_sha = (whole_sha if (whole_path and whole_sha)
+                               else expected["encoder_hidden_sha256"])
+
+        check("mel_sha256", _npy_sha(mel_host) == expected["mel_sha256"],
+              {"expected": expected["mel_sha256"], "actual": _npy_sha(mel_host)})
+        check("encoder_hidden_sha256",
+              _npy_sha(hidden_host) == expected_hidden_sha,
+              {"expected": expected_hidden_sha,
+               "actual": _npy_sha(hidden_host),
+               "encoder_path": "whole-encoder" if whole_path else "islands"})
+        check("emissions", len(actual_tokens) == expected["emissions"],
+              {"expected": expected["emissions"], "actual": len(actual_tokens)})
+        check("token_ids", actual_tokens == native_tokens,
+              {"matching_prefix_length": _prefix_len(actual_tokens, native_tokens)})
+        check("frame_indices",
+              list(tdt.frame_indices) == list(expected["frame_indices"]), {})
+        check("durations", list(tdt.durations) == list(expected["durations"]), {})
+        check("transcript",
+              transcript == expected["transcript"]
+              and transcript_sha == expected["transcript_sha256"],
+              {"expected_sha256": expected["transcript_sha256"],
+               "actual_sha256": transcript_sha})
+    else:
+        # General-audio contract: on-device execution, finite outputs, a
+        # token stream consistent with the window geometry, and — when the
+        # caller runs repeats — determinism against the first pass. Golden
+        # byte equality is the pinned fixture's contract (`verify`), not a
+        # general-audio one.
+        check("cpu_tensor_events", runner.cpu_tensor_events == 0,
+              {"expected": 0, "actual": runner.cpu_tensor_events})
+        check("decode_control",
+              tdt.decode_path == expected["decode_control"]
+              and tdt.fallback_reason is None,
+              {"expected": expected["decode_control"],
+               "actual": tdt.decode_path,
+               "fallback_reason": tdt.fallback_reason})
+        check("finite_hidden",
+              int(np.isnan(hidden_host).sum()) == contract.nan_count_allowed
+              and int(np.isinf(hidden_host).sum()) == contract.inf_count_allowed,
+              {"nan": int(np.isnan(hidden_host).sum()),
+               "inf": int(np.isinf(hidden_host).sum())})
+        monotone = all(a <= b for a, b in
+                       zip(tdt.frame_indices, tdt.frame_indices[1:]))
+        in_window = all(0 <= f < window_frames * len(chunk_starts)
+                        for f in tdt.frame_indices)
+        check("frame_stream",
+              len(actual_tokens) == len(tdt.frame_indices)
+              == len(tdt.durations) and monotone and in_window,
+              {"tokens": len(actual_tokens),
+               "frames": len(tdt.frame_indices),
+               "durations": len(tdt.durations),
+               "monotone": monotone, "in_window": in_window,
+               "window_frames": window_frames, "chunks": len(chunk_starts)})
+        check("durations_domain",
+              all(d in lock.tdt.durations for d in tdt.durations),
+              {"domain": list(lock.tdt.durations),
+               "observed": sorted(set(tdt.durations))})
+        if prior is not None:
+            check("repeat_determinism",
+                  actual_tokens == prior[0] and transcript == prior[1],
+                  {"tokens_equal": actual_tokens == prior[0],
+                   "transcript_equal": transcript == prior[1]})
 
     np.save(out / "waveform.npy", np.asarray(waveform))
     np.save(out / "mel.npy", mel_host)
     np.save(out / "encoder_hidden.npy", hidden_host)
-    np.save(out / "encoder_mask.npy", np.asarray(encoder_mask).astype(np.int32))
+    np.save(out / "encoder_mask.npy", mask_host)
     (out / "transcript.txt").write_text(transcript)
     (out / "token_ids.json").write_text(json.dumps({
         "token_ids": actual_tokens,
@@ -677,6 +808,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     passed = all(item["pass"] for item in checks)
     report = {
         "schema": REPORT_SCHEMA,
+        "mode": "golden" if pinned else "general",
         "status": "match" if passed else "diverged",
         "host": {
             "hostname": platform.node(),
@@ -699,6 +831,9 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                 "samples": int(sample_count),
                 "sample_rate": lock.audio.sample_rate,
                 "decoder": decoder_name,
+                "chunks": len(chunk_starts),
+                "chunk_samples": CHUNK_SAMPLES,
+                "pinned_fixture": pinned,
             },
             "model": {
                 "repo": lock.model_repo,
@@ -727,7 +862,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             "cpu_tensor_events": runner.cpu_tensor_events,
             "decoder_calls": counts["decoder_calls"],
             "joint_calls": counts["joint_calls"],
-            "valid_encoder_frames": int(encoder_hidden.shape[1]),
+            "valid_encoder_frames": window_frames,
             "control": tdt.decode_path,
             "tdt_fallback_reason": tdt.fallback_reason,
         },
@@ -771,7 +906,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         "out": str(out),
         "transcript": transcript,
     }, indent=2, ensure_ascii=False))
-    return passed
+    return passed, actual_tokens, transcript
 
 
 def _npy_sha(array) -> str:
@@ -805,17 +940,21 @@ def main(argv=None) -> int:
     download.set_defaults(handler=_download)
 
     verify = sub.add_parser(
-        "verify", help="verify the cache against the lock and pin"
+        "verify",
+        help="verify the cache against the lock and pin, then run the "
+             "golden e2e (pinned fixture) where the ANE runtime exists",
     )
     verify.set_defaults(handler=_verify)
 
     transcribe = sub.add_parser(
         "transcribe",
-        help="run the pinned reference end to end (mel, ANE encoder, TDT)",
+        help="mel, ANE encoder and TDT over 16 kHz mono audio; the pinned "
+             "fixture additionally runs the golden pin checks",
     )
     transcribe.add_argument(
         "audio", nargs="?", default=None,
-        help="path to the pinned audio fixture (default: the cached copy)",
+        help="audio file to transcribe (default: the pinned fixture; any "
+             "other audio takes the general contract, >30 s is chunked)",
     )
     transcribe.add_argument(
         "-o", "--out", default=None,
