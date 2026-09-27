@@ -1420,7 +1420,6 @@ ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit)
     descriptor_layout_ = VK_NULL_HANDLE;
     throw;
   }
-
 }
 
 ComputeRuntime::~ComputeRuntime() {
