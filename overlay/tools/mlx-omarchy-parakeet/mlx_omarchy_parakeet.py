@@ -619,11 +619,11 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             stop_after="encoder_mask",
         )
 
-    def stage_tdt(hidden, cell, chunk_hidden):
+    def stage_tdt(hidden, cell, chunk_hidden, chunk_valid_frames):
         return lambda: tdt_decode(
             packed=fused_packed,
             encoder=chunk_hidden,
-            valid_frames=int(chunk_hidden.shape[1]),
+            valid_frames=chunk_valid_frames,
             config=lock.tdt,
             initial_hidden=hidden,
             initial_cell=cell,
@@ -640,7 +640,11 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     prev_state: tuple = (None, None)
     decode_path = "host"
     fallback_reason = "no chunk ran"
-    window_frames = 0
+    chain_final: int | None = None
+    chain_slots: int | None = None
+    frame_base = 0
+    last_mask_valid = 0
+    last_window = 0
     try:
         for ci, start in enumerate(chunk_starts):
             suffix = "" if single else f"#{ci}"
@@ -653,7 +657,30 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             encoder_hidden = encoded["encoder_hidden"].astype(mx.float32)
             encoder_mask = encoded["encoder_mask"].astype(mx.int32)
             mx.eval(encoder_hidden, encoder_mask)
-            valid_frames = _begin_chunk(encoder_hidden)
+            window = int(encoder_hidden.shape[1])
+            mask_host_i = np.asarray(encoder_mask)
+            mask_valid = int(mask_host_i.sum())
+            # Decode-by-slicing assumes validity is a prefix (padding tail).
+            # A mask with holes is a contract break, not a decode input.
+            flat = mask_host_i.reshape(-1)
+            if not (flat[:mask_valid].all()
+                    and not flat[mask_valid:].any()):
+                raise TranscribeRefusal(
+                    "encoder mask validity is not a prefix; refusing to "
+                    "slice-decode a mask with holes")
+            # The pinned golden contract decodes the legacy full padded
+            # window (its reference transcript includes the padded-tail
+            # artifact). General audio decodes only the encoder frames the
+            # mask marks valid — real signal, no padded-tail tokens.
+            decode_frames = window if pinned else min(mask_valid, window)
+            if decode_frames <= 0:
+                raise TranscribeRefusal(
+                    f"encoder mask marks zero valid frames ({mask_valid})")
+            last_mask_valid = mask_valid
+            last_window = window
+            decode_hidden = (encoder_hidden if decode_frames == window
+                             else encoder_hidden[:, :decode_frames, :])
+            valid_frames = _begin_chunk(decode_hidden)
 
             hidden, cell = prev_state
             if hidden is None:
@@ -662,16 +689,19 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                     cell = mx.zeros((2, 1, 640), dtype=mx.float32)
                 mx.eval(hidden, cell)
             chunk_tdt = stage(f"tdt_decode{suffix}", trace_snapshot,
-                              stage_tdt(hidden, cell, encoder_hidden))
+                              stage_tdt(hidden, cell, decode_hidden,
+                                        decode_frames))
 
-            offset = window_frames * ci
+            offset = frame_base
             token_ids += list(chunk_tdt.token_ids)
             frame_indices += [int(f) + offset for f in chunk_tdt.frame_indices]
             all_durations += list(chunk_tdt.durations)
             prev_state = (chunk_tdt.hidden, chunk_tdt.cell)
             decode_path = chunk_tdt.decode_path
             fallback_reason = chunk_tdt.fallback_reason
-            window_frames = int(encoder_hidden.shape[1])
+            chain_final = chunk_tdt.final_frame
+            chain_slots = chunk_tdt.slots_used
+            frame_base += decode_frames
             if single:
                 mel_parts = [mel_result.mel]
                 hidden_parts = [encoder_hidden]
@@ -693,6 +723,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         cell=prev_state[1],
         decode_path=decode_path,
         fallback_reason=fallback_reason,
+        final_frame=chain_final,
+        slots_used=chain_slots,
     )
     mel_host = (np.asarray(mel_parts[0]) if single else
                 np.concatenate([np.asarray(p) for p in mel_parts], axis=0))
@@ -773,8 +805,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                "inf": int(np.isinf(hidden_host).sum())})
         monotone = all(a <= b for a, b in
                        zip(tdt.frame_indices, tdt.frame_indices[1:]))
-        in_window = all(0 <= f < window_frames * len(chunk_starts)
-                        for f in tdt.frame_indices)
+        in_window = all(0 <= f < frame_base for f in tdt.frame_indices)
         check("frame_stream",
               len(actual_tokens) == len(tdt.frame_indices)
               == len(tdt.durations) and monotone and in_window,
@@ -782,7 +813,16 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                "frames": len(tdt.frame_indices),
                "durations": len(tdt.durations),
                "monotone": monotone, "in_window": in_window,
-               "window_frames": window_frames, "chunks": len(chunk_starts)})
+               "decoded_frames": frame_base, "chunks": len(chunk_starts)})
+        check("valid_length_decode",
+              0 < frame_base <= last_window * len(chunk_starts)
+              and frame_base == sum(
+                  min(int(np.asarray(m).sum()), int(m.shape[-1]))
+                  for m in mask_parts),
+              {"decoded_frames": frame_base,
+               "mask_valid": last_mask_valid,
+               "window": last_window,
+               "padded_decode": False})
         check("durations_domain",
               all(d in lock.tdt.durations for d in tdt.durations),
               {"domain": list(lock.tdt.durations),
@@ -862,7 +902,19 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             "cpu_tensor_events": runner.cpu_tensor_events,
             "decoder_calls": counts["decoder_calls"],
             "joint_calls": counts["joint_calls"],
-            "valid_encoder_frames": window_frames,
+            # Scope honesty: these two counters increment only in the host
+            # control-loop callbacks. On the default gpu-chain decode the
+            # whole loop runs device-side and the honest work counters are
+            # final_frame/slots_used below — zeros here mean "host loop not
+            # taken", never "compute skipped" (the transcript stream proves
+            # execution).
+            "decode_counter_scope": ("host-callbacks" if tdt.decode_path
+                                     == "host" else "device-chain"),
+            "chain_final_frame": tdt.final_frame,
+            "chain_slots_used": tdt.slots_used,
+            "valid_encoder_frames": frame_base,
+            "encoder_mask_valid_frames": last_mask_valid,
+            "encoder_window_frames": last_window,
             "control": tdt.decode_path,
             "tdt_fallback_reason": tdt.fallback_reason,
         },

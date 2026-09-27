@@ -68,6 +68,11 @@ class TdtOutput:
     cell: Any
     decode_path: str = "host"
     fallback_reason: str | None = None
+    # Device-chain bookkeeping (gpu-chain path only): the last frame index
+    # consumed and the schedule slots used. Host-loop runs leave these None —
+    # the host callbacks do not produce them.
+    final_frame: int | None = None
+    slots_used: int | None = None
 
 
 def _fail(message: str) -> TdtControlError:
@@ -266,6 +271,8 @@ def tdt_decode(
                 hidden=chain.hidden,
                 cell=chain.cell,
                 decode_path="gpu-chain",
+                final_frame=int(chain.final_frame),
+                slots_used=int(chain.slots_used),
             )
     if chain_failure is not None and not explicit_gpu:
         try:
