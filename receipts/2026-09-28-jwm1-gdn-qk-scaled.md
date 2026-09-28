@@ -29,3 +29,21 @@ Load caveat: the H4 run drifted to loadavg 0.77 (own ssh polling) in later round
 
 Open: root-cause `FastNormGatedBF16` gated mode (would add a further ~1.2% and 90 dispatches/token); remaining gap after this
 change is still ~0.78x decode.
+
+## Addendum (same day): gated-norm root cause and residual
+
+Root cause of the gated divergence, measured at tensor level (`scripts/check-rms-norm-gated-exact.py`, on jwm1): `fast_norm_gated.comp`
+mode 0 rounded `sigmoid` and `silu` through bf16, but mlx-lm 0.31.3 `_precise_swiglu` (and the primitive's own C++ fallback)
+keep the chain in f32 and round once. Composed == all-f32 reference (0 mismatches); the old fused kernel == the
+bf16-rounded reference exactly (14828 / 14650 / 6452 / 235674 mismatching elements at 16x128 / 1x2048 / 7x128 / 256x128 = ~36%).
+
+Fix (this commit): drop the two intermediate roundings. Result on a wheel built from it (35bc8bc75): mismatch vs composed falls to
+~1e-5 of elements (2.4e-5 max over the checked shapes; 0 at several). The norm stage alone is exact over 9.8M elements
+(weighted and weightless), so the remaining deviation is in the sigmoid/multiply epilogue, most likely f32 `exp`/reciprocal
+codegen differing between this kernel and the FusedChainF32 interpreter (not confirmed; needs ISA-level inspection).
+
+That residual is still enough to flip greedy tokens over a real run: A/B with the gated site routed at size <= 2048 (decode shapes
+only) on top of the shipped q/k patch: decode64 40.59 vs 39.92 tok/s (1.017x) and decode128 39.83 vs 38.87 (1.025x), but digests
+DIFFER from control (6a5841bd1c474703 vs 7fe6badf4d560e25; 7577500edb264fa4 vs da5568eeb4b6a1c1). Per the exactness policy the
+gated site is NOT shipped: no installer patch is added and `rms_norm_gated` stays unrouted by default. The check script exits 1
+on a systematic deviation (rate > 1e-4), which the pre-fix wheel fails (0.36) and this build passes.

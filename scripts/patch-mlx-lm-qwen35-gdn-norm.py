@@ -8,6 +8,8 @@ Idempotent patch for mlx-lm 0.31.3 venvs. Two sites:
 - GatedDeltaNet.__call__ (qwen3_5.py): the q/k rms_norm + scalar
   multiply pairs become rms_norm_scaled calls.
 
+The gated site is limited to decode shapes (size <= 2048): after the 2026-09-28 sigmoid/silu f32 fix it is bit-exact there, but
+rare 1-ULP deviations appear at >= 32 rows (scripts/check-rms-norm-gated-exact.py).
 Both sites self-guard on hasattr, so the patch is a no-op on stacks
 without the primitives. bf16-only routing keeps non-bf16 models on the
 composed path. Routing is further gated to decode-sized rows
@@ -36,7 +38,7 @@ GATED_NEW = """    def __call__(
         if (
             gate is not None
             and hidden_states.dtype == mx.bfloat16
-            and hidden_states.size <= 32768
+            and hidden_states.size <= 2048
             and mx.default_device() == mx.gpu
             and hasattr(mx.fast, "rms_norm_gated")
         ):
