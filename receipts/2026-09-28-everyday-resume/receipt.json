@@ -2,7 +2,7 @@
   "date": "2026-09-28",
   "status": "incomplete-not-qualified",
   "source_commit": "134d0b67a",
-  "source_changes": "Uncommitted: card schema sent only when a turn asks for a card; reaper clears unclaimed reservations of a dead creator.",
+  "source_changes": "Uncommitted at the time of the runs; committed with this receipt. Includes the backend add fix, compact card schema, repetition penalty, reaper fix, voice options, and UI fixes.",
   "host": "<project-m2>",
   "chip": "Apple M2 Max T6021",
   "device_name": "Apple M2 Max (G14C B1)",
@@ -36,25 +36,40 @@
     "first_visible_answer": {
       "procedure": "2 warmups, 30 measured turns, one persistent pair, ~170-token prompt, 256-token allowance, clock stops at first text event",
       "target": "p95 <= 2.00 s",
-      "before_fix": {"first_text_p50": 2.86, "first_text_p95": 3.24, "done_p95": 4.65, "pass": false},
-      "cause": "A 650-token card schema was prefilled on every chat turn. The chat worker alone returned its first chunk in 0.78 s and finished in 1.8 s for a 170-token prompt. Removing the schema on a scratch copy gave p95 1.03 s.",
-      "after_fix": {"first_text_p50": 0.99, "first_text_p95": 1.06, "done_p95": 2.18, "pass": true},
+      "before_fix": {"first_text_p50": 2.86, "first_text_p95": 3.24, "done_p95": 4.65, "pass": false, "schema_tokens": 792},
+      "cause": "A 792-token card schema was prefilled on every chat turn. The chat worker alone returned its first chunk in 0.78 s for a 170-token prompt.",
+      "with_no_schema": {"first_text_p50": 0.99, "first_text_p95": 1.06},
+      "after_fix": {"schema": "compact, 209 tokens, three card types", "first_text_p50": 1.47, "first_text_p95": 1.52, "done_p95": 2.66, "pass": true},
       "not_measured": "Thermal state. Peak memory. Cold-start figure separate from warm."
+    },
+    "cards_real_model": {
+      "everyday_2b": {"prompts": 8, "valid_cards": 0, "note": "Model writes a markdown list; no assistant-ui fence. A reminder made it write JSON under the wrong fence tag."},
+      "quality_27b": {"prompts": 8, "valid_cards": 5, "stopped_at_700_token_test_cap": 3, "unrequested_cards": 1,
+                      "note": "Decode about 3 tokens/s on a GPU shared with other jobs. Timing not qualified."}
+    },
+    "speech_output": {
+      "before_fix": "Low-frequency hum: 98% of energy below 1 kHz, spectral flatness 0.002. The owner: not speech.",
+      "root_cause": "Elementwise add of two transposed views scrambled output positions on the Vulkan backend.",
+      "after_fix": {"whisper_large_v3_turbo_wer_overall": 0.0426, "worst_sentence": 0.1818, "worst_sentence_note": "number words versus digits; 0.01 overall when normalized",
+                    "first_audio_p95_seconds": 1.46, "real_time_factor": "0.13 to 0.19 (5 to 6 times slower than real time)"},
+      "listener": "The owner listened to the first voice: clear, crisp, but Chinese-accented. Default is now aiden; the owner has not yet confirmed the accent.",
+      "aiden_wer": 0.0
     }
   },
   "defects_fixed": [
     "Card schema prefilled on every chat turn",
-    "Unclaimed reservation of a dead creator blocked every restart after a reboot during pair start"
+    "Greedy decoding looped on the 2B model until the token cap",
+    "Unclaimed reservation of a dead creator blocked every restart after a reboot during pair start",
+    "Elementwise add of two transposed views scrambled output on the Vulkan backend (speech was a hum)"
   ],
   "not_run": [
-    "Quality pair",
     "routing held-out suite",
-    "voice accuracy and listener check",
-    "UX screenshots and accessibility checks",
-    "card generation with the real model",
+    "speech input: no Linux path (Parakeet needs the ANE encoder)",
+    "real screen reader",
     "standing M1 battery and zero-CPU dispatch trace",
-    "clean installation on a fresh machine",
-    "pair memory peak"
+    "clean installation on a fresh machine (needs a release that contains the assistant)",
+    "pair memory peak",
+    "Quality pair latency on an idle GPU"
   ],
   "login_service": "install.sh writes and enables mlx-omarchy-chat.service for a real user home. It was not enabled on the shared test GPU."
 }

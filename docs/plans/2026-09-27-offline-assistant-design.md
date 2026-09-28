@@ -1,6 +1,6 @@
 # Offline assistant design
 
-Status: source application implemented and tested offline. Everyday text gates measured on M2 Max on 2026-09-28: chat, compare, cancel, resume, network-denied restart, and first-answer latency pass. Voice, Quality, routing, UX, and card-generation gates have not passed. See [gate status](../serve.md#everyday-pair-gate-status-2026-09-28).
+Status: source application implemented and tested offline. Everyday text gates measured on M2 Max on 2026-09-28: chat, compare, cancel, resume, network-denied restart, first-answer latency, and interface checks pass. Speech output is intelligible after a backend fix but slower than real time; speech input, Quality, routing, and card generation on the 2B model have not passed. See [gate status](../serve.md#everyday-pair-gate-status-2026-09-28).
 
 ## Product contract
 

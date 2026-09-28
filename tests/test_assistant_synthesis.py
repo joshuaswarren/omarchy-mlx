@@ -12,6 +12,7 @@ import io
 import json
 import multiprocessing
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -835,6 +836,164 @@ def psutil_alive(pid):
         return False
     except PermissionError:
         return True
+
+
+class VoiceChoiceTests(unittest.TestCase):
+    """Voice default, named refusal, persisted choice applies on next request
+    without restarting workers (the IPC contract the real _worker_main reads)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.pack, self.content = make_fixture_pack()
+        self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
+                                            self.pack))
+        self.enterContext(mock.patch.object(synthesis, "MP_START_METHOD",
+                                            "fork"))
+        self.accel = {"available": True, "device": "Device(gpu, 0)",
+                      "detail": ""}
+        self.deps = {"present": ["mlx", "mlx_audio", "transformers"],
+                     "missing": [], "detail": {}}
+        self.s = synthesis.Synthesis(self.home)
+        self.s.prepare(approve_download=True, fetch=self._static_fetch)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _static_fetch(self, url, dest):
+        for entry in self.pack["files"]:
+            expected = (f"https://huggingface.co/{self.pack['repo']}/"
+                        f"resolve/{self.pack['revision']}/{entry['name']}")
+            if url == expected:
+                dest.write_bytes(self.content[entry["name"]])
+                return
+        raise AssertionError(url)
+
+    def _green(self):
+        return (mock.patch.object(synthesis, "probe_accelerator",
+                                  return_value=self.accel),
+                mock.patch.object(synthesis, "probe_dependencies",
+                                  return_value=self.deps))
+
+    def test_default_voice_is_english_native(self):
+        # The owner requirement: a default that does not sound accented.
+        # Aiden is the only American English speaker in this pack.
+        self.assertEqual(self.pack["voice"], "aiden")
+        aiden = synthesis.VOICE_META["aiden"]
+        self.assertEqual(aiden["accent"], "American English")
+        options = synthesis.voice_options()
+        aiden_option = next(o for o in options if o["id"] == "aiden")
+        self.assertEqual(aiden_option["accent"], "American English")
+
+    def test_voice_options_label_every_non_english_native_speaker(self):
+        # The honest note: the pack has no American female voice, and the
+        # non-English-native voices are surfaced, accent included.
+        accents = {o["id"]: o["accent"] for o in synthesis.voice_options()}
+        self.assertEqual(accents["aiden"], "American English")
+        self.assertEqual(accents["ryan"], "English")
+        self.assertIn("Chinese-native", accents["serena"])
+        self.assertIn("Chinese-native", accents["vivian"])
+        self.assertIn("Chinese-native", accents["uncle_fu"])
+        self.assertIn("Japanese-native", accents["ono_anna"])
+        self.assertIn("Korean-native", accents["sohee"])
+        self.assertEqual(accents["eric"], "Sichuan dialect (Chinese)")
+        self.assertEqual(accents["dylan"], "Beijing dialect (Chinese)")
+
+    def test_unknown_voice_refused_by_name_not_silently_swapped(self):
+        with self.assertRaises(synthesis.VoiceError) as ctx:
+            synthesis.resolve_voice("biden")
+        self.assertIn("biden", str(ctx.exception))
+        self.assertIn("serena", str(ctx.exception))  # lists the real options
+        # And the same refusal applies when an HTTP body asks for it:
+        with self.assertRaises(synthesis.VoiceError) as ctx2:
+            self.s.set_voice("biden")
+        self.assertIn("biden", str(ctx2.exception))
+
+    def test_set_voice_writes_atomic_0600_with_no_secrets(self):
+        target = self.s._voice_choice_path()
+        self.assertFalse(target.exists())
+        result = self.s.set_voice("ryan")
+        self.assertTrue(target.is_file())
+        mode = stat.S_IMODE(target.stat().st_mode)
+        self.assertEqual(mode, 0o600)
+        payload = json.loads(target.read_text())
+        self.assertEqual(payload["voice"], "ryan")
+        self.assertEqual(set(payload.keys()), {"voice", "set_at"})
+        # No secret-like fields leak in: only the voice id and a set time.
+        self.assertEqual(result["voice"], "ryan")
+        self.assertEqual(result["label"], "Ryan")
+        self.assertEqual(result["accent"], "English")
+        self.assertFalse(result["default"])
+
+    def test_corrupt_voice_choice_is_a_named_refusal_not_fallback(self):
+        target = self.s._voice_choice_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("not json")
+        with self.assertRaises(synthesis.VoiceError) as ctx:
+            self.s.current_voice()
+        self.assertIn("unreadable", str(ctx.exception))
+        self.assertIn(str(target), str(ctx.exception))
+
+    def test_status_survives_corrupt_stored_voice(self):
+        target = self.s._voice_choice_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("not json")
+        with mock.patch.object(synthesis, "probe_accelerator",
+                               return_value=self.accel), \
+             mock.patch.object(synthesis, "probe_dependencies",
+                               return_value=self.deps):
+            status = self.s.status()
+        self.assertEqual(status["pack"]["voice"], self.pack["voice"])
+        self.assertIn("unreadable", (status.get("voice_choice_error") or ""))
+
+    def test_voice_choice_persists_across_restart(self):
+        self.s.set_voice("ryan")
+        fresh = synthesis.Synthesis(self.home)
+        self.assertEqual(fresh.current_voice(), "ryan")
+
+    def test_voice_choice_is_applied_to_next_request_without_worker_restart(self):
+        # The parent's contract with _worker_main: each speak message carries
+        # the voice, so the worker reads it without restart. The persistent
+        # worker stays up across the change. We observe the voice by reading
+        # the first chunk back through the IPC pipe (the chunk is sha256 of
+        # the voice id, 16 bytes; chunks are PCM streams so the parent test
+        # treats them as opaque, and the worker emits a "done" after each).
+        import hashlib as _hl
+        def echo(conn, assets_dir):
+            while True:
+                try:
+                    msg = conn.recv()
+                except (EOFError, OSError):
+                    break
+                if msg.get("type") == "shutdown":
+                    break
+                if msg.get("type") == "speak":
+                    v = (msg.get("voice") or "").encode("utf-8")
+                    digest = _hl.sha256(v).digest()[:16]
+                    conn.send({"type": "chunk", "id": msg["id"],
+                               "sample_rate": 24000,
+                               "data": digest})
+                    conn.send({"type": "done", "id": msg["id"]})
+
+        accel_patch, deps_patch = self._green()
+        with accel_patch, deps_patch, \
+                mock.patch.object(synthesis, "_worker_main", echo):
+            chunks_first = list(self.s.synthesize_chunks("hi",
+                                                          threading.Event()))
+            pid_before = self.s._worker.process.pid
+            self.assertTrue(self.s._worker.process.is_alive())
+            self.s.set_voice("ryan")
+            chunks_second = list(self.s.synthesize_chunks("there",
+                                                           threading.Event()))
+            pid_after = self.s._worker.process.pid
+            self.assertTrue(self.s._worker.process.is_alive())
+        self.assertEqual(pid_before, pid_after)
+        # Worker echoed sha256(voice)[:16] as the first chunk each time;
+        # this confirms the IPC carries the persisted voice without restart.
+        self.assertEqual(chunks_first[0].data,
+                         _hl.sha256(self.pack["voice"].encode()).digest()[:16])
+        self.assertEqual(chunks_second[0].data,
+                         _hl.sha256(b"ryan").digest()[:16])
 
 
 class AssetCacheTests(unittest.TestCase):

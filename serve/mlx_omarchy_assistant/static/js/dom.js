@@ -40,7 +40,7 @@ export function dl(rows) {
   return list;
 }
 
-export function renderDetails(status) {
+export function renderDetails(status, controls) {
   const wrap = el("div", { class: "drawer__body" });
   if (!status) {
     wrap.appendChild(el("p", { class: "drawer__empty" }, "No status available."));
@@ -78,6 +78,78 @@ export function renderDetails(status) {
         ["Speech", synthesis.state || ""],
         ["Speech qualification", synthesis.qualification || synthesis.detail || ""],
       ])));
+    const pack = synthesis.pack || {};
+    const options = Array.isArray(pack.voice_options) ? pack.voice_options : [];
+    if (options.length > 0) {
+      const section = el("section", { class: "detail-section",
+                                       "aria-labelledby": "details-voice-title" },
+        el("h3", { id: "details-voice-title" }, "Voice picker"),
+        el("p", { class: "setup__hint" },
+          "Pick which preset speaker reads replies aloud. The pack has no "
+          + "American female voice; non-English-native voices read English "
+          + "with their native accent."));
+      const fieldId = "details-voice-select";
+      const select = el("select", {
+        id: fieldId, name: "voice", class: "field-input",
+        "aria-label": "Reply voice",
+      });
+      const current = pack.voice || pack.voice_default || options[0].id;
+      for (const opt of options) {
+        const isDefault = opt.id === pack.voice_default;
+        const tag = isDefault ? " (default)" : "";
+        const option = el("option", { value: opt.id },
+          `${opt.label} - ${opt.accent}${tag}`);
+        if (opt.id === current) option.setAttribute("selected", "");
+        select.appendChild(option);
+      }
+      const label = el("label", { for: fieldId },
+        "Reply voice", select);
+      const voiceReady = (voice.state === "ready");
+      const previewButton = el("button", {
+        type: "button", class: "message__action", id: "details-voice-preview",
+        "aria-describedby": "details-voice-hint",
+      }, "Preview");
+      const hint = el("p", { class: "setup__hint", id: "details-voice-hint" },
+        voiceReady
+          ? "Preview speaks one fixed sentence in the selected voice."
+          : "Preview is disabled until the voice pack is qualified.");
+      previewButton.disabled = !voiceReady;
+      let previewInFlight = false;
+      const announce = (controls && controls.announce) || (() => {});
+      const previewNow = (controls && controls.onPreview) || (() => {});
+      const changeVoice = (controls && controls.onVoiceChange) || (() => {});
+      select.addEventListener("change", () => {
+        const id = select.value;
+        const opt = options.find((o) => o.id === id);
+        changeVoice(id, opt);
+        announce(`Voice set to ${opt ? opt.label : id}.`);
+      });
+      previewButton.addEventListener("click", () => {
+        if (previewButton.disabled || previewInFlight) return;
+        previewInFlight = true;
+        previewButton.disabled = true;
+        const optionChildren = (select.children || []).filter(
+          (c) => c && c.tagName === "option");
+        const selected = optionChildren.find(
+          (o) => (o.getAttribute("value") === select.value)
+              || (o.getAttribute("selected") === ""));
+        const label = (selected
+          && ((selected.children || []).map((c) => c.text).join("")
+              || selected.textContent)) || select.value;
+        announce(`Previewing ${label}.`);
+        Promise.resolve(previewNow(select.value))
+          .catch((err) => announce(`Preview failed: ${err && err.message
+              ? err.message : "unknown error"}`))
+          .finally(() => {
+            previewInFlight = false;
+            previewButton.disabled = !voiceReady;
+          });
+      });
+      section.appendChild(el("div", { class: "detail-section__row" },
+        label, previewButton));
+      section.appendChild(hint);
+      wrap.appendChild(section);
+    }
   }
   if (status.theme) {
     wrap.appendChild(el("section", { class: "detail-section" },

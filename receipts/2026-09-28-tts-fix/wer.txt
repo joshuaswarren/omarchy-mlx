@@ -1,0 +1,6 @@
+sentence-1: 0/7 = 0.0%  hyp: 'The local assistant is ready to help.'
+sentence-2: 0/11 = 0.0%  hyp: 'Your meeting starts at 9 and the review follows at 11.'
+sentence-3: 0/10 = 0.0%  hyp: 'I chose the shorter word because it has fewer letters.'
+sentence-4: 1/10 = 10.0%  hyp: 'Please check the campaign list before you leave on Friday.'
+sentence-5: 1/9 = 11.1%  hyp: 'Everything runs on this laptop with no network connection.'
+overall: 2/47 = 4.3%

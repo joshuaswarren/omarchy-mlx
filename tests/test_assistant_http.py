@@ -176,3 +176,95 @@ class VoiceReadyTests(unittest.TestCase):
         self.assertFalse(voice_ready({"ready": True}, "unqualified"))
         self.assertFalse(voice_ready({"ready": True}, "missing"))
         self.assertTrue(voice_ready({"ready": True, "qualified": True}, "ready"))
+
+
+class VoiceChoiceRouteTests(unittest.TestCase):
+    """The voice picker surfaces through POST /api/voice; the preview
+    route asks the worker to render the fixed sentence in the chosen
+    voice, with the same CSRF + Origin gates as every other mutation."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.server = AssistantServer(('127.0.0.1', 0), Path(self.temp.name))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.port = self.server.server_port
+        self.origin = f'http://127.0.0.1:{self.port}'
+        self.addCleanup(self.cleanup)
+
+    def cleanup(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(2)
+        self.temp.cleanup()
+
+    def request(self, method, path, body=None, headers=None):
+        import http.client as _http
+        conn = _http.HTTPConnection('127.0.0.1', self.port, timeout=3)
+        self.addCleanup(conn.close)
+        data = json.dumps(body) if body is not None else None
+        conn.request(method, path, data, headers or {})
+        response = conn.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+
+    def login(self):
+        status, headers, data = self.request('POST', '/api/session',
+            {'token': self.server.bootstrap},
+            {'Origin': self.origin, 'Content-Type': 'application/json'})
+        self.assertEqual(status, 200)
+        return {'Cookie': headers['Set-Cookie'].split(';')[0], 'Origin': self.origin,
+                'X-Assistant-CSRF': json.loads(data)['csrf'],
+                'Content-Type': 'application/json'}
+
+    def test_status_lists_every_voice_with_accent_label(self):
+        headers = self.login()
+        status, _, data = self.request('GET', '/api/status', headers=headers)
+        self.assertEqual(status, 200)
+        payload = json.loads(data)
+        pack = payload["voice"]["synthesis"]["pack"]
+        self.assertEqual(pack["voice"], "aiden")
+        self.assertEqual(pack["voice_default"], "aiden")
+        ids = [opt["id"] for opt in pack["voice_options"]]
+        self.assertEqual(set(ids),
+                         {"aiden", "ryan", "serena", "vivian", "uncle_fu",
+                          "ono_anna", "sohee", "eric", "dylan"})
+        accents = {o["id"]: o["accent"] for o in pack["voice_options"]}
+        self.assertEqual(accents["aiden"], "American English")
+        self.assertIn("Chinese-native", accents["serena"])
+
+    def test_set_voice_unknown_is_refused_with_named_error(self):
+        headers = self.login()
+        status, _, data = self.request('POST', '/api/voice',
+            {"voice": "biden"}, headers)
+        self.assertEqual(status, 400)
+        self.assertIn("biden", json.loads(data)["error"])
+
+    def test_set_voice_persists_and_next_status_shows_new_choice(self):
+        headers = self.login()
+        status, _, data = self.request('POST', '/api/voice',
+            {"voice": "ryan"}, headers)
+        self.assertEqual(status, 200)
+        body = json.loads(data)
+        self.assertEqual(body["voice"], "ryan")
+        self.assertEqual(body["label"], "Ryan")
+        self.assertEqual(body["accent"], "English")
+        status, _, data = self.request('GET', '/api/status', headers=headers)
+        self.assertEqual(json.loads(data)["voice"]["synthesis"]["pack"]["voice"],
+                         "ryan")
+
+    def test_preview_refuses_when_voice_not_enabled_in_setup(self):
+        # The same gate /api/speak uses: voice.requested must be true.
+        # Without a setup, the manager never sets voice.requested.
+        headers = self.login()
+        status, _, data = self.request('POST', '/api/voice/preview',
+            {}, headers)
+        self.assertEqual(status, 400)
+        self.assertIn("setup", json.loads(data)["error"].lower())
+
+    def test_preview_routes_through_csrf_and_origin_checks(self):
+        # Without CSRF, the preview mutation is rejected (403).
+        headers = self.login()
+        bad = {k: v for k, v in headers.items() if k != "X-Assistant-CSRF"}
+        status, _, _ = self.request('POST', '/api/voice/preview', {}, bad)
+        self.assertEqual(status, 403)
+

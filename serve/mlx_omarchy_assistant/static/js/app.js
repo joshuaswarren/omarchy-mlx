@@ -1,8 +1,9 @@
 import { ConversationView } from "./chat.js";
-import { Recorder, SpeakQueue } from "./voice.js";
+import { Recorder, SpeakQueue, playPreview } from "./voice.js";
 import { exchangeFragment, fetchSession, fetchStatus, postSetup,
          newConversation, openConversation, listConversations,
-         deleteConversation, transcribe, postContext } from "./api.js";
+         deleteConversation, transcribe, postContext,
+         setVoice, previewVoice } from "./api.js";
 import { renderSetup, renderSetupProgress } from "./setup.js";
 import { buildComposer } from "./composer.js";
 import { refreshTheme, startThemePolling } from "./theme.js";
@@ -185,7 +186,23 @@ export class App {
       detailsDrawer.showModal();
       try {
         const status = await fetchStatus();
-        detailsBody.replaceChildren(renderDetails(status));
+        const self = this;
+        detailsBody.replaceChildren(renderDetails(status, {
+          announce: (msg) => announce(self.live, msg),
+          onVoiceChange: async (id) => {
+            try {
+              await setVoice(id);
+            } catch (err) {
+              announce(self.live,
+                `Voice change failed: ${err.message || "unknown error"}`);
+              throw err;
+            }
+          },
+          onPreview: async () => {
+            const payload = await previewVoice();
+            await playPreview(payload);
+          },
+        }));
       } catch (err) {
         detailsBody.replaceChildren(el("p", { class: "drawer__empty" },
           `Could not load details: ${err.message || "unknown error"}`));

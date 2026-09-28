@@ -716,3 +716,19 @@ a component. Do not invent measurements; do not present estimates as measurement
 The application renders these cards itself; you cannot add new component types, \
 fields, actions, URLs, code or styling.
 """
+
+# Sent on ordinary chat turns so cards stay spontaneous without a long prefill.
+# The validator accepts every type; the full SCHEMA_PROMPT covers the rest.
+SCHEMA_PROMPT_COMPACT = f"""\
+Cards: when a card clearly helps, end the reply with ONE fenced block tagged \
+assistant-ui holding complete JSON; keep the readable answer as plain text outside it:
+```assistant-ui
+{{"version": {ENVELOPE_VERSION}, "components": [ ... ]}}
+```
+Otherwise reply in text only. No HTML, CSS, JavaScript, SVG, image URLs or shell \
+commands. Use only conversation facts. Ids are lowercase letters, digits, - or _.
+- checklist: {{"type": "checklist", "items": [{{"id": "t1", "text": "...", "done": false}}]}}
+- timeline: {{"type": "timeline", "entries": [{{"id": "e1", "when": "Mon", "text": "..."}}]}}
+- comparison: {{"type": "comparison", "columns": [{{"id": "c1", "label": "...", "kind": "text"}}], \
+"rows": [{{"id": "r1", "label": "...", "values": ["..."]}}]}}
+"""

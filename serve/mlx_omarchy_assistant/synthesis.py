@@ -60,7 +60,7 @@ VOICE_PACK = {
     "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit",
     "revision": "08c72cad5e2fd0f41730c8bd1f28149585e46361",
     "license": "apache-2.0",
-    "voice": "serena",
+    "voice": "aiden",
     "voices": ["serena", "vivian", "uncle_fu", "ryan", "aiden", "ono_anna",
                "sohee", "eric", "dylan"],
     "asset_bytes": 1693602151,
@@ -108,6 +108,40 @@ VOICE_PACK = {
 }
 
 _URL_TEMPLATE = "https://huggingface.co/{repo}/resolve/{revision}/{name}"
+
+# Native language per preset speaker, shown as a plain label and accent note.
+# The pack has no American English female voice; non-English-native voices
+# reading English text are offered openly, accent included.
+VOICE_META = {
+    "aiden": {"label": "Aiden", "accent": "American English"},
+    "ryan": {"label": "Ryan", "accent": "English"},
+    "serena": {"label": "Serena", "accent": "Chinese-native; English has an accent"},
+    "vivian": {"label": "Vivian", "accent": "Chinese-native; English has an accent"},
+    "uncle_fu": {"label": "Uncle Fu", "accent": "Chinese-native; English has an accent"},
+    "ono_anna": {"label": "Ono Anna", "accent": "Japanese-native; English has an accent"},
+    "sohee": {"label": "Sohee", "accent": "Korean-native; English has an accent"},
+    "eric": {"label": "Eric", "accent": "Sichuan dialect (Chinese)"},
+    "dylan": {"label": "Dylan", "accent": "Beijing dialect (Chinese)"},
+}
+_VOICE_CHOICE_NAME = "voice.json"
+
+
+def voice_options() -> list[dict]:
+    """The pack's preset speakers with label and accent, in pack order."""
+    return [{"id": name, "label": VOICE_META[name]["label"],
+             "accent": VOICE_META[name]["accent"]}
+            for name in VOICE_PACK["voices"]]
+
+
+def resolve_voice(name) -> str:
+    """Validate a requested voice against the pack; unknown is a named
+    refusal, never a fallback to the default."""
+    if not isinstance(name, str) or name not in VOICE_PACK["voices"]:
+        raise VoiceError(
+            f"unknown voice {name!r}; this pack offers: "
+            + ", ".join(VOICE_PACK["voices"]))
+    return name
+
 
 _EXPORTED_ERRORS = {name: None for name in
                     ("VoiceError", "VoiceAssetsMissingError",
@@ -518,12 +552,14 @@ def _worker_main(conn, assets_dir: str) -> None:
                     rate = int(getattr(model, "sample_rate", 24000))
                     conn.send({"type": "loaded", "sample_rate": rate})
                 import numpy as np
+                voice = resolve_voice(msg.get("voice", VOICE_PACK["voice"]))
+                language = "english" if msg["text"].strip().isascii() else "auto"
                 cap = int(rate * MAX_OUTPUT_SECONDS)
                 produced = 0
                 results = model.generate_custom_voice(
                     text=msg["text"].strip(),
-                    speaker=VOICE_PACK["voice"],
-                    language="auto",
+                    speaker=voice,
+                    language=language,
                     stream=True,
                     streaming_interval=0.32)
                 for result in results:
@@ -632,6 +668,54 @@ class Synthesis:
     def assets_dir(self) -> Path:
         return self.home / "voice" / VOICE_PACK["id"]
 
+    def _voice_choice_path(self) -> Path:
+        return self.home / "voice" / _VOICE_CHOICE_NAME
+
+    def current_voice(self) -> str:
+        """The voice applied to the next synthesis request. Falls back to
+        the built-in default when nothing is persisted; an unreadable or
+        unknown stored choice is a named refusal, never a silent fallback."""
+        path = self._voice_choice_path()
+        if not path.is_file():
+            return VOICE_PACK["voice"]
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise VoiceError(
+                f"saved voice choice at {path} is unreadable ({exc}); "
+                "pick a voice in settings to replace it") from exc
+        if not isinstance(raw, dict) or "voice" not in raw:
+            raise VoiceError(
+                f"saved voice choice at {path} has no 'voice' field; "
+                "pick a voice in settings to replace it")
+        return resolve_voice(raw["voice"])
+
+    def set_voice(self, name) -> dict:
+        """Persist the next-synthesis voice choice. Atomic, mode 0600, no
+        secrets. The chat workers stay alive: they pick up the new voice
+        when the next request asks for it, with no reload."""
+        resolved = resolve_voice(name)
+        target = self._voice_choice_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=target.parent, suffix=".tmp",
+                                    prefix=".voice-")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump({"voice": resolved, "set_at": time.time()}, fh,
+                          indent=2, sort_keys=True)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, target)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        meta = VOICE_META[resolved]
+        return {"voice": resolved, "label": meta["label"],
+                "accent": meta["accent"],
+                "default": resolved == VOICE_PACK["voice"]}
+
     @staticmethod
     def _asset_status_for(assets: Path) -> dict:
         expected = VOICE_PACK["asset_bytes"]
@@ -695,13 +779,21 @@ class Synthesis:
             reasons.append("no completed synthesis run on this machine yet")
         worker_alive = (self._worker is not None
                         and self._worker.process.is_alive())
+        try:
+            current = self.current_voice()
+            voice_error = None
+        except VoiceError as exc:
+            current = VOICE_PACK["voice"]
+            voice_error = str(exc)
         return {
             "pack": {
                 "id": VOICE_PACK["id"],
                 "repo": VOICE_PACK["repo"],
                 "revision": VOICE_PACK["revision"],
                 "license": VOICE_PACK["license"],
-                "voice": VOICE_PACK["voice"],
+                "voice": current,
+                "voice_default": VOICE_PACK["voice"],
+                "voice_options": voice_options(),
                 "voices": list(VOICE_PACK["voices"]),
                 "sample_rate": self._sample_rate or 24000,
                 "runtime": VOICE_PACK["runtime"],
@@ -724,6 +816,7 @@ class Synthesis:
                        "pid": self._worker.process.pid if self._worker
                        else None},
             "last_error": self._last_error,
+            "voice_choice_error": voice_error,
             "qualification": self._qualification_status(assets, accel),
         }
 
@@ -966,8 +1059,10 @@ class Synthesis:
             self._req_counter += 1
             req_id = self._req_counter
             settled = False
+            voice = self.current_voice()
             try:
-                worker.conn.send({"type": "speak", "id": req_id, "text": text})
+                worker.conn.send({"type": "speak", "id": req_id,
+                                  "text": text, "voice": voice})
             except Exception as exc:
                 self._reset_worker()
                 raise VoiceError(

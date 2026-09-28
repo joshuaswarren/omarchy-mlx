@@ -1,0 +1,11 @@
+{
+ "digest": "df4f339bd87704533f1d5ea7ed276d7959ed1e61af1e0096309526d9fe37db58",
+ "upsample_pairs": 2,
+ "decoder_layers": 7,
+ "total_upsample": 1920,
+ "codes_shape": [
+  1,
+  41,
+  16
+ ]
+}

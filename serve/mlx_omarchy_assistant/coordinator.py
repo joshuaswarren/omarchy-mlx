@@ -26,12 +26,11 @@ MAX_QUESTIONS = 8
 # Auto allowances are backed by the admitted context in _admit_output.
 TASK_OUTPUT_ALLOWANCE = {"chat": 2048, "compare": 1024, "decide": 1024, "draft": 1024}
 MIN_AUTO_ALLOWANCE = 256
-# The card schema costs about 650 prompt tokens on every turn. Ordinary chat
-# skips it; a message that names a card-shaped output, and every Laya turn,
-# keeps it.
-CARD_CUES = re.compile(
-    r"\b(cards?|tables?|charts?|graphs?|check ?lists?|timelines?|forms?|compar(?:e|es|ison|isons)"
-    r"|pros and cons|decisions?|options?)\b", re.IGNORECASE)
+# Ordinary chat sends the compact card schema (a third of the full one in tokens).
+# A message that names a chart, graph, form, decision, options, facts, or sources,
+# and every Laya turn, sends the full schema.
+FULL_CARD_CUES = re.compile(r"\b(charts?|graphs?|forms?|decisions?|options?|facts?|sources?)\b", re.IGNORECASE)
+REPETITION_PENALTY = 1.1
 
 DRAFT_PROMPT = (
     "Extract a comparison draft from the user's request. Reply with ONLY one JSON "
@@ -372,8 +371,11 @@ class LocalModels:
     def chat(self, pair, messages, max_tokens, cancel, yield_headers=None):
         connection = self._connect(pair["chat_url"])
         model = str((pair.get("model_paths") or {}).get("chat") or pair["chat_model"])
+        # Greedy decoding loops on the 2B model ("Extra socks" until the token cap);
+        # a mild penalty removed the loops in the 2026-09-28 card experiment.
         payload = {"model": model, "messages": messages, "max_tokens": max_tokens,
-                   "stream": True, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
+                   "stream": True, "temperature": 0, "repetition_penalty": REPETITION_PENALTY,
+                   "chat_template_kwargs": {"enable_thinking": False}}
         finish = None
         try:
             headers = {"Content-Type": "application/json"}
@@ -469,7 +471,7 @@ class Coordinator:
         speech_secret = None
         speech_capable = False
         try:
-            from .components import SCHEMA_PROMPT, validate_components
+            from .components import SCHEMA_PROMPT, SCHEMA_PROMPT_COMPACT, validate_components
             pair = self.manager.start()
             if cancel.is_set():
                 return
@@ -483,9 +485,9 @@ class Coordinator:
             if mode == "draft":
                 self._run_draft(cid, turn, pair, payload, maximum, cancel)
                 return
-            wants_cards = mode in ("compare", "decide") or bool(CARD_CUES.search(payload["text"]))
-            messages = [{"role": "system", "content": "Answer the user using their supplied facts."
-                         + (" " + SCHEMA_PROMPT if wants_cards else "")}]
+            full_schema = mode in ("compare", "decide") or bool(FULL_CARD_CUES.search(payload["text"]))
+            messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
+                         + (SCHEMA_PROMPT if full_schema else SCHEMA_PROMPT_COMPACT)}]
             messages.extend(self._selected_history(record, turn))
             if mode in ("compare", "decide"):
                 path = pair["model_paths"]["decision"]

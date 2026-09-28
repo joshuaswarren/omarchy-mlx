@@ -174,10 +174,15 @@ body { display: flex; flex-direction: column; }
 
 .setup__pair {
   border: 1px solid var(--mlx-border); border-radius: .625rem;
-  padding: .75rem; display: grid; gap: .25rem;
+  padding: .75rem; display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: .75rem;
+  row-gap: .25rem;
+  align-items: center;
 }
 .setup__pair h4 { margin: 0; font-size: .9375rem; }
-.setup__pair p { margin: 0; color: var(--mlx-dim); font-size: .8125rem; }
+.setup__pair p { margin: 0; color: var(--mlx-dim); font-size: .8125rem; grid-column: 1; }
+.setup__pair input[type=radio] { margin: 0; grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 
 .setup__preference {
   display: flex; flex-wrap: wrap; gap: .5rem;
@@ -186,8 +191,12 @@ body { display: flex; flex-direction: column; }
   display: flex; flex-direction: column; gap: .125rem;
   padding: .5rem .75rem; border: 1px solid var(--mlx-border);
   border-radius: .5rem; cursor: pointer; min-width: 8rem;
+  position: relative; padding-left: 1.875rem;
 }
-.setup__preference input { margin-right: .375rem; }
+.setup__preference input[type=radio] {
+  position: absolute; left: .625rem; top: 50%; transform: translateY(-50%);
+  margin: 0;
+}
 .setup__preference small { color: var(--mlx-dim); font-size: .75rem; }
 
 .setup__checkbox {
@@ -244,6 +253,7 @@ body { display: flex; flex-direction: column; }
   border: 1px solid var(--mlx-border);
 }
 .message--error { border-color: var(--mlx-error); color: var(--mlx-error); }
+.message__error { color: var(--mlx-error); font-size: .875rem; margin: .375rem 0 0; }
 .message--stopped::before {
   content: "Stopped";
   display: inline-block; font-size: .75rem; padding: .125rem .375rem;

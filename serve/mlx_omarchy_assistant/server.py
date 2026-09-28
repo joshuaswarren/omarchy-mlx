@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import array
 import base64
 import contextlib
 import hmac
@@ -17,8 +18,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .history import BusyError, ConversationStore, EventGap
+from . import synthesis
 
 CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+
+# Fixed preview sentence: short, all-ASCII so the worker asks for the English
+# language token, and never longer than 8 seconds at the slowest voice.
+PREVIEW_SENTENCE = "Hello. This is a short preview of the selected voice."
 
 
 
@@ -473,6 +479,56 @@ class Handler(BaseHTTPRequestHandler):
             if app.audio_kind == kind:
                 app.audio_cancel.set()
             return self._json(200, {"stopped": True})
+        if self.command == "POST" and path in ("/api/voice", "/api/voice/preview"):
+            body = self._body()
+            if path == "/api/voice":
+                requested = body.get("voice")
+                if not isinstance(requested, str):
+                    raise ValueError("voice must be one of the pack speakers")
+                try:
+                    return self._json(200, app.synthesis.set_voice(requested))
+                except synthesis.VoiceError as exc:
+                    raise ValueError(str(exc)) from exc
+            # Preview: synthesise one fixed sentence in the current voice and
+            # hand the PCM16LE back to the client (single JSON envelope, not
+            # SSE) so a one-shot playback does not need a conversation.
+            if not app.audio_lock.acquire(blocking=False):
+                raise BusyError("Another speech operation is active")
+            try:
+                if not app.manager.status().get("voice", {}).get("requested"):
+                    raise ValueError(
+                        "Enable voice in model setup before using speech")
+                app.audio_cancel = threading.Event()
+                app.audio_kind = "tts"
+                grant = app.coordinator.speech.enter(app.audio_cancel)
+                if grant is None:
+                    raise BusyError(
+                        "Speech is waiting for the current model operation")
+                rate = None
+                pcm = array.array("h")
+                try:
+                    chunks = app.synthesis.synthesize_chunks(
+                        PREVIEW_SENTENCE, app.audio_cancel)
+                    with contextlib.closing(chunks) as stream:
+                        for chunk in stream:
+                            if app.audio_cancel.is_set():
+                                break
+                            if rate is None:
+                                rate = chunk.sample_rate
+                            pcm.frombytes(chunk.data)
+                finally:
+                    grant.release()
+                    app.audio_kind = None
+                    app.audio_identity = None
+                if not pcm or rate is None:
+                    raise synthesis.VoiceError(
+                        "preview produced no audio")
+                encoded = base64.b64encode(pcm.tobytes()).decode("ascii")
+                return self._json(200, {"sample_rate": int(rate),
+                                        "encoding": "pcm16le",
+                                        "data": encoded})
+            finally:
+                app.audio_lock.release()
         if self.command == "POST" and path in ("/api/transcribe", "/api/speak"):
             raw = self._body(binary=path == "/api/transcribe")
             if not app.audio_lock.acquire(blocking=False):

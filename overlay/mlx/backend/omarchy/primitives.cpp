@@ -268,6 +268,21 @@ bool is_trailing_broadcast(const array& input, const array& out) {
   return true;
 }
 
+// The omarchy elementwise shaders write output linearly, so a donated
+// output buffer must be row-contiguous. get_binary_op_type routes two
+// col-contiguous views (gapless transposes) to VectorVector, whose
+// donation would attach the donor's transposed strides to a linearly
+// written output: correct values at scrambled positions. Force the
+// General path there: dense fresh output, stride-aware operand reads.
+BinaryOpType omp_binary_op_type(const array& lhs, const array& rhs) {
+  auto bopt = get_binary_op_type(lhs, rhs);
+  if (bopt == BinaryOpType::VectorVector &&
+      (!lhs.flags().row_contiguous || !rhs.flags().row_contiguous)) {
+    bopt = BinaryOpType::General;
+  }
+  return bopt;
+}
+
 uint32_t matrix_group_count(uint32_t dimension, uint32_t tile_size = 16) {
   uint32_t groups = dimension / tile_size + (dimension % tile_size != 0);
   return std::min(groups, omarchy::kMaxComputeGroupCountX);
@@ -925,7 +940,7 @@ void dispatch_elementwise(
       : !is_trailing_broadcast(lhs, out);
 
   if (binary) {
-    auto binary_type = get_binary_op_type(lhs, rhs);
+    auto binary_type = omp_binary_op_type(lhs, rhs);
     // Broadcast views inherit contiguous=true while data_size < size, so
     // the Scalar/Vector output branches mirror the view's undersized
     // buffer or donate it. General always allocates dense output storage
@@ -1461,7 +1476,7 @@ void dispatch_int_elementwise(
             encoder,
             out.primitive().stream())
       : lhs;
-  auto binary_type = get_binary_op_type(lhs, rhs);
+  auto binary_type = omp_binary_op_type(lhs, rhs);
   // Broadcast views inherit contiguous=true while data_size < size; the
   // Scalar/Vector output branches would mirror the view's undersized
   // buffer or donate it. General always allocates dense output storage.
@@ -3176,7 +3191,7 @@ void dispatch_complex(
       ? (!is_trailing_broadcast(lhs, out) || !is_trailing_broadcast(rhs, out))
       : !is_trailing_broadcast(lhs, out);
   if (binary) {
-    auto binary_type = get_binary_op_type(lhs, rhs);
+    auto binary_type = omp_binary_op_type(lhs, rhs);
     if (lhs.data_size() != lhs.size() || rhs.data_size() != rhs.size()) {
       binary_type = BinaryOpType::General;
     }
@@ -4426,7 +4441,7 @@ void DivMod::eval_gpu(
   auto is_int_dtype = is_int_elementwise_dtype;
   if (is_int_dtype(lhs.dtype()) && is_int_dtype(rhs.dtype()) &&
       is_int_dtype(quotient.dtype()) && is_int_dtype(remainder.dtype())) {
-    auto binary_type = get_binary_op_type(lhs, rhs);
+    auto binary_type = omp_binary_op_type(lhs, rhs);
     if (lhs.data_size() != lhs.size() || rhs.data_size() != rhs.size()) {
       binary_type = BinaryOpType::General;
     }
@@ -4447,7 +4462,7 @@ void DivMod::eval_gpu(
   bool general_broadcast =
       !is_trailing_broadcast(lhs, quotient) ||
       !is_trailing_broadcast(rhs, quotient);
-  auto binary_type = get_binary_op_type(lhs, rhs);
+  auto binary_type = omp_binary_op_type(lhs, rhs);
   if (lhs.data_size() != lhs.size() || rhs.data_size() != rhs.size()) {
     binary_type = BinaryOpType::General;
   }

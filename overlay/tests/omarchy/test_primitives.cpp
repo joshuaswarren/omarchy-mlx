@@ -507,6 +507,90 @@ TEST_CASE("elementwise on broadcast-expanded views matches host values") {
       1e-6);
 }
 
+TEST_CASE("col-contiguous view Add forces General output storage") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // Two gapless transposes whose result layout is col-contiguous hit the
+  // VectorVector branch of get_binary_op_type. Donating a donor's
+  // transposed strides to a linearly written output put correct values
+  // at scrambled positions (sum preserved). The Qwen3-TTS codec
+  // quantizer decode summed exactly this shape, (1, 512, 41), and the
+  // M2 voice output degraded to a hum. The donation guard must force
+  // the General path: dense output storage, stride-aware reads.
+  std::vector<float> base1_values(41 * 512);
+  std::iota(base1_values.begin(), base1_values.end(), 0.0f);
+  for (float& value : base1_values) {
+    value = value * 0.25f - 5000.0f;
+  }
+  std::vector<float> base2_values(41 * 512);
+  std::iota(base2_values.begin(), base2_values.end(), 0.0f);
+  for (float& value : base2_values) {
+    value = value * 0.125f - 2500.0f;
+  }
+  array base1(base1_values.begin(), Shape{41, 512}, float32);
+  array base2(base2_values.begin(), Shape{41, 512}, float32);
+  array view1 = transpose(base1, {1, 0}, stream);
+  array view2 = transpose(base2, {1, 0}, stream);
+
+  std::vector<float> expected(41 * 512);
+  for (int col = 0; col < 41; ++col) {
+    for (int row = 0; row < 512; ++row) {
+      expected[row * 41 + col] =
+          base1_values[col * 512 + row] + base2_values[col * 512 + row];
+    }
+  }
+  check_values(add(view1, view2, stream), expected, stream, 1e-4);
+
+  // The 3-D quantizer shape: two (1, 41, 512) views transposed to
+  // (1, 512, 41) are col-contiguous in the same way.
+  std::vector<float> base3_values(1 * 41 * 512);
+  std::iota(base3_values.begin(), base3_values.end(), 0.0f);
+  for (float& value : base3_values) {
+    value = std::fmod(value * 0.031f, 7.0f);
+  }
+  std::vector<float> base4_values(1 * 41 * 512);
+  std::iota(base4_values.begin(), base4_values.end(), 0.0f);
+  for (float& value : base4_values) {
+    value = std::fmod(value * 0.017f, 5.0f);
+  }
+  array base3(base3_values.begin(), Shape{1, 41, 512}, float32);
+  array base4(base4_values.begin(), Shape{1, 41, 512}, float32);
+  array view3 = transpose(base3, {0, 2, 1}, stream);
+  array view4 = transpose(base4, {0, 2, 1}, stream);
+  std::vector<float> expected3(1 * 41 * 512);
+  for (int col = 0; col < 41; ++col) {
+    for (int row = 0; row < 512; ++row) {
+      expected3[row * 41 + col] =
+          base3_values[col * 512 + row] + base4_values[col * 512 + row];
+    }
+  }
+  check_values(add(view3, view4, stream), expected3, stream, 1e-5);
+
+  // The int elementwise family shares the guarded helper.
+  std::vector<int32_t> int1_values(64);
+  std::vector<int32_t> int2_values(64);
+  std::iota(int1_values.begin(), int1_values.end(), 0);
+  std::iota(int2_values.rbegin(), int2_values.rend(), 0);
+  array int1(int1_values.begin(), Shape{8, 8}, int32);
+  array int2(int2_values.begin(), Shape{8, 8}, int32);
+  std::vector<int32_t> int_expected(64);
+  for (int row = 0; row < 8; ++row) {
+    for (int col = 0; col < 8; ++col) {
+      int_expected[row * 8 + col] =
+          int1_values[col * 8 + row] + int2_values[col * 8 + row];
+    }
+  }
+  check_int32_values(
+      add(
+          transpose(int1, {1, 0}, stream),
+          transpose(int2, {1, 0}, stream),
+          stream),
+      int_expected,
+      stream);
+}
+
 TEST_CASE("compute indexing stays inside Vulkan and uint32 limits") {
   constexpr uint32_t max_u32 = std::numeric_limits<uint32_t>::max();
 

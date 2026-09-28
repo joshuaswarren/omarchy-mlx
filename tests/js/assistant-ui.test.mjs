@@ -216,4 +216,153 @@ function buildHarness(onSend) {
   assert.equal(h.textarea.value, "", "accepted decide turn clears its text");
 }
 
+// --- Details drawer: voice picker select states -----------------------
+// A label, the option list with every pack speaker (accent in the label),
+// the current voice pre-selected, the preview button disabled until the
+// voice pack is qualified, and the select/button announce changes through
+// the supplied live-region callback.
+
+import { renderDetails } from "../../serve/mlx_omarchy_assistant/static/js/dom.js";
+
+{
+  // Status shape: every preset speaker shown with label + accent, the
+  // currently chosen voice is marked selected, the preview button reflects
+  // voice readiness, and changes propagate through the announce callback.
+  const announces = [];
+  const changes = [];
+  const previews = [];
+  const status = {
+    voice: {
+      state: "ready",
+      recognition: { state: "ready" },
+      synthesis: {
+        state: "ready",
+        qualification: "qualified",
+        pack: {
+          voice: "aiden",
+          voice_default: "aiden",
+          voice_options: [
+            { id: "aiden", label: "Aiden", accent: "American English" },
+            { id: "ryan", label: "Ryan", accent: "English" },
+            { id: "serena", label: "Serena",
+              accent: "Chinese-native; English has an accent" },
+            { id: "vivian", label: "Vivian",
+              accent: "Chinese-native; English has an accent" },
+            { id: "uncle_fu", label: "Uncle Fu",
+              accent: "Chinese-native; English has an accent" },
+            { id: "ono_anna", label: "Ono Anna",
+              accent: "Japanese-native; English has an accent" },
+            { id: "sohee", label: "Sohee",
+              accent: "Korean-native; English has an accent" },
+            { id: "eric", label: "Eric", accent: "Sichuan dialect (Chinese)" },
+            { id: "dylan", label: "Dylan", accent: "Beijing dialect (Chinese)" },
+          ],
+        },
+      },
+    },
+  };
+  const wrap = renderDetails(status, {
+    announce: (msg) => announces.push(msg),
+    onVoiceChange: (id) => changes.push(id),
+    onPreview: () => previews.push("preview"),
+  });
+  const select = wrap.querySelector("select[id=details-voice-select]");
+  assert.ok(select, "voice select must render");
+  const optionEls = (select.children || []).filter((c) => c.tagName === "option");
+  const labels = optionEls.map((o) =>
+    (o.children || []).map((c) => c.text).join(""));
+  assert.equal(labels.length, 9, "all nine preset speakers are listed");
+  assert.match(labels.join(" | "), /American English/);
+  assert.match(labels.join(" | "), /Chinese-native/);
+  assert.match(labels.join(" | "), /Japanese-native/);
+  assert.match(labels.join(" | "), /Korean-native/);
+  assert.match(labels.join(" | "), /Sichuan dialect/);
+  assert.match(labels.join(" | "), /Beijing dialect/);
+  assert.match(labels.find((l) => l.startsWith("Aiden")) || "", /\(default\)/);
+  // The persisted voice is the one pre-selected. The shim represents
+  // "selected" as an attribute on the option node, not as a property.
+  const selected = optionEls.find((o) => o.getAttribute("selected") === "");
+  assert.ok(selected, "exactly one option must be marked selected");
+  assert.equal(selected.getAttribute("value"), "aiden",
+    "the persisted voice must be the one selected");
+  const button = wrap.querySelector("button[id=details-voice-preview]");
+  assert.ok(button);
+  assert.equal(button.disabled, false,
+    "preview is enabled when voice is qualified");
+  select.value = "ryan";
+  select._fire("change");
+  assert.deepEqual(changes, ["ryan"]);
+  assert.ok(announces.some((m) => /Ryan/.test(m)),
+    "select changes are announced through the live region");
+  button._fire("click");
+  await tick();
+  assert.deepEqual(previews, ["preview"]);
+  assert.ok(announces.some((m) => /Previewing/.test(m)),
+    "previewing is announced before playback");
+}
+
+{
+  // Preview is disabled when the voice pack is not yet ready; the picker
+  // is still readable, the select still works, but the button cannot
+  // claim readiness when there is none.
+  const status = {
+    voice: {
+      state: "unqualified",
+      recognition: { state: "ready" },
+      synthesis: {
+        state: "unqualified",
+        pack: {
+          voice: "aiden", voice_default: "aiden",
+          voice_options: [
+            { id: "aiden", label: "Aiden", accent: "American English" },
+            { id: "ryan", label: "Ryan", accent: "English" },
+            { id: "serena", label: "Serena",
+              accent: "Chinese-native; English has an accent" },
+            { id: "vivian", label: "Vivian",
+              accent: "Chinese-native; English has an accent" },
+            { id: "uncle_fu", label: "Uncle Fu",
+              accent: "Chinese-native; English has an accent" },
+            { id: "ono_anna", label: "Ono Anna",
+              accent: "Japanese-native; English has an accent" },
+            { id: "sohee", label: "Sohee",
+              accent: "Korean-native; English has an accent" },
+            { id: "eric", label: "Eric", accent: "Sichuan dialect (Chinese)" },
+            { id: "dylan", label: "Dylan", accent: "Beijing dialect (Chinese)" },
+          ],
+        },
+      },
+    },
+  };
+  const wrap = renderDetails(status, {
+    announce: () => {}, onVoiceChange: () => {}, onPreview: () => {},
+  });
+  const button = wrap.querySelector("button[id=details-voice-preview]");
+  assert.equal(button.disabled, true,
+    "preview must be disabled when the voice pack is not qualified");
+  const section = button.parent && button.parent.parent;
+  const text = section ? collectText(section) : "";
+  assert.match(text, /Preview is disabled/);
+}
+
+function collectText(node, out) {
+  out = out || [];
+  if (!node) return out.join("");
+  if (node.text) { out.push(node.text); return out.join(""); }
+  for (const c of node.children || []) collectText(c, out);
+  return out.join("");
+}
+
+{
+  // When voice_options is absent (older servers) the picker section is
+  // omitted entirely, never rendered as an empty select.
+  const status = { voice: { state: "ready",
+    recognition: { state: "ready" },
+    synthesis: { state: "ready", pack: { voice: "aiden",
+      voice_default: "aiden" } } } };
+  const wrap = renderDetails(status, {
+    announce: () => {}, onVoiceChange: () => {}, onPreview: () => {},
+  });
+  assert.equal(wrap.querySelector("select[id=details-voice-select]"), null);
+}
+
 console.log("assistant ui js tests passed");

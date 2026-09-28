@@ -53,19 +53,55 @@ The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbe
 | Resume after reboot | Pass. Saved pair loaded in 1.41 s. The next chat answered. |
 | Restart with outbound sockets denied | Pass, twice. A network namespace with loopback only. Both connection tests failed as intended. |
 | First visible answer, 30 warm turns | Pass after a fix. Before: p50 2.86 s, p95 3.24 s. After: p50 0.99 s, p95 1.06 s. Target is p95 2.00 s. |
-| Voice | Not qualified. No listener check. No accuracy corpus. |
-| Quality pair | Not run. |
+| Voice output | Intelligible after a backend fix. Whisper large-v3-turbo transcribed the first voice at 4.3% word error and `aiden` at 0.0% on five sentences. The owner listened to the first voice: "clear, crisp". Generation runs 5 to 6 times slower than real time (real-time factor 0.13 to 0.19). First audio p95 1.46 s. The accent choice for the default voice is not yet confirmed by the owner. |
+| Voice input | No Linux path. Parakeet needs the ANE encoder: 5.2 s median on the M1 against a 2 s target, and the T6021 ANE is not live. |
+| Voice as a whole | Not qualified. It needs both directions. |
+| Quality pair | Not qualified. Ten card prompts gave a valid card on 5 of 8 expected. The other 3 hit my 700-token test cap. One unrequested card appeared. Decode was about 3 tokens/s on a GPU shared with other jobs, so the interactive latency target is unproven. |
+| Card generation, Everyday (2B) | Fails. 0 of 8 prompts produced a card, with the full schema, the compact schema, an example, or a reminder. The model writes a markdown list and ignores the fence. Invalid or absent blocks are dropped and the prose stays. |
 | Routing held-out suite | Not evaluated. Automatic routing stays off. |
-| UX screenshots and accessibility checks | Not run. |
-| Card generation with the real model | Not run. |
-| Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. |
+| UX screenshots and accessibility | Pass for six states at 375, 768, 1024, and 1440 px, plus a 200% zoom frame, keyboard, contrast, reduced motion, and semantics checks, with five defects fixed. See the [UI receipt](../receipts/2026-09-28-ui-qualification/README.md). Not run: a real screen reader. |
+| Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. A clean install needs a release that contains the assistant. |
 
 No pair is qualified. All catalog entries keep `recommended: false`.
 
-Two defects found by these runs are fixed:
+Defects found by these runs and fixed in source:
 
-- The chat prompt carried a 650-token card schema on every turn. Prefill took about 2 s. Ordinary chat now omits it. A message that names a card, table, chart, checklist, timeline, form, comparison, decision, or options keeps it, and so does every Laya turn. A plain request such as "summarize this" no longer gets an unprompted card.
-- A reboot during pair start left an unclaimed reservation. Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
+- **Speech was a hum.** An elementwise add of two transposed views wrote its output at the wrong positions on the Vulkan backend (max absolute error 6 to 9 against NumPy). The speech decoder uses that add. The fix is in `overlay/mlx/backend/omarchy/primitives.cpp` with a focused test. It is a runtime fix: the v0.7.4 wheel does not contain it. See the [receipt](../receipts/2026-09-28-tts-fix/README.md).
+- **Chat prompts carried a 792-token card schema on every turn.** Prefill cost about 2 s. Ordinary chat now sends a 209-token schema with three card types. A message that names a chart, graph, form, decision, options, facts, or sources gets the full schema, and so does every Laya turn.
+- **Greedy decoding looped on the 2B model** until the token cap. Chat requests now send a repetition penalty of 1.1.
+- **A reboot during pair start left an unclaimed reservation.** Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
+
+### Voice options
+
+The pinned voice pack is `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`
+(mlx-audio 0.5.6). The worker exposes every preset speaker; the default
+is `aiden`, an American English male voice. The Details drawer surfaces a
+`Voice` select with each speaker's native accent, a `Preview` button
+that renders one fixed sentence in the selected voice, and a live-region
+announcement for the new choice. The choice is persisted per home in
+`voice/voice.json` (mode 0600, atomic) and read by the worker at the next
+synthesis request; chat workers stay resident and no pack reload happens.
+
+| Speaker | Native language / accent |
+|---|---|
+| aiden | American English (default) |
+| ryan | English |
+| serena, vivian, uncle_fu | Chinese-native; English with an accent |
+| ono_anna | Japanese-native; English with an accent |
+| sohee | Korean-native; English with an accent |
+| eric | Sichuan dialect (Chinese) |
+| dylan | Beijing dialect (Chinese) |
+
+Honest note: the pack has no American English female voice. The
+non-English-native speakers are surfaced as fully labelled options, accent
+included, and refused to fall back to the default when the worker cannot
+find the speaker. An unknown voice id is a 400 with the name repeated,
+never a silent swap.
+
+The worker asks mlx-audio for the `english` codec token whenever the
+text is ASCII; non-ASCII text falls back to the model's auto-detection,
+which is also how the dialect speakers (Eric, Dylan) keep their
+Sichuan/Beijing dialect when they are used for Chinese text.
 
 ## Model status
 

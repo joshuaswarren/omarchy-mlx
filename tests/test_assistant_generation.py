@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
 from mlx_omarchy_assistant import coordinator as coord  # noqa: E402
+from mlx_omarchy_assistant import components  # noqa: E402
 from mlx_omarchy_assistant.history import ConversationStore  # noqa: E402
 
 VALID_ENVELOPE = json.dumps(
@@ -260,14 +261,17 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(record["messages"][-1]["content"], "more text")
         self.assertEqual(len(record["messages"]), 4)  # two turns, user+assistant each
 
-    def test_card_schema_is_sent_only_when_the_turn_asks_for_a_card(self):
+    def test_ordinary_chat_sends_the_compact_card_schema_and_charts_get_the_full_one(self):
         cid = self.cid()
         self.worker.scripts = [[(0, delta("ok")), (0, finish("stop"))]] * 2
         self.run_turn(cid, {"text": "Summarize the release notes in plain words."})
-        self.run_turn(cid, {"text": "Show the options as a comparison table."})
-        plain, cards = (call["messages"][0]["content"] for call in self.worker.calls)
-        self.assertNotIn("assistant-ui", plain)
-        self.assertIn("assistant-ui", cards)
+        self.run_turn(cid, {"text": "Show the numbers as a chart."})
+        plain, chart = (call["messages"][0]["content"] for call in self.worker.calls)
+        self.assertIn(components.SCHEMA_PROMPT_COMPACT, plain)
+        self.assertNotIn(components.SCHEMA_PROMPT, plain)
+        self.assertIn(components.SCHEMA_PROMPT, chart)
+        # First-answer latency: the compact prompt was measured at ~3 ms per prompt token.
+        self.assertLess(len(components.SCHEMA_PROMPT_COMPACT), 800)
 
     def test_invalid_component_repaired_once(self):
         cid = self.cid()

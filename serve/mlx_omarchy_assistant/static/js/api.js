@@ -269,6 +269,41 @@ export async function cancelVoice(kind) {
   });
 }
 
+export async function setVoice(voiceId) {
+  // Same-origin JSON route: validated against the pinned pack; an unknown
+  // voice comes back as a 400 with the offending id named, never a swap.
+  return request("/api/voice", {
+    method: "POST",
+    body: JSON.stringify({ voice: voiceId }),
+  });
+}
+
+export async function previewVoice() {
+  // Renders one fixed sentence in the currently chosen voice and returns
+  // {sample_rate, encoding: "pcm16le", data: base64}. 409 before the
+  // response starts means the GPU is busy; the caller announces that and
+  // waits for the next user gesture.
+  const headers = { "Content-Type": "application/json" };
+  if (csrfToken) headers[csrfHeader] = csrfToken;
+  const res = await fetch("/api/voice/preview", {
+    method: "POST", credentials: "same-origin", headers, body: "{}",
+  });
+  if (res.status === 409) {
+    const err = new Error("preview busy");
+    err.code = "busy";
+    throw err;
+  }
+  if (!res.ok) {
+    let message = `preview failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body && body.error) message = body.error;
+    } catch { /* ignore non-JSON */ }
+    throw new Error(message);
+  }
+  return res.json();
+}
+
 export async function fetchTransfer() {
   const res = await request("/api/transfer");
   if (!res.ok) throw new Error(`transfer status failed (${res.status})`);

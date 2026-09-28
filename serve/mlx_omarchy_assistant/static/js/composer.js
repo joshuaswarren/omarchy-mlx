@@ -257,9 +257,17 @@ export function buildComposer({
     const panelMaterial = comparePanel.querySelector("#compare-material");
     const material = ((panelMaterial && panelMaterial.value) || textarea.value || "").trim();
     if (!material) {
-      textarea.focus();
+      const submitError = comparePanel.querySelector("#compare-error");
+      if (submitError) {
+        submitError.hidden = false;
+        submitError.textContent = "Add the text the decision should be made on before submitting.";
+      }
+      const materialField = comparePanel.querySelector("#compare-material");
+      (materialField || textarea).focus();
       return Promise.resolve(false);
     }
+    const submitError = comparePanel.querySelector("#compare-error");
+    if (submitError) { submitError.hidden = true; submitError.textContent = ""; }
     return dispatch({
       text: material,
       mode: "compare",
@@ -366,7 +374,8 @@ function renderComparePanel({ onCommit, onDraft, onClose }) {
   panel.appendChild(el("label", { for: "compare-criteria",
     class: "compare-panel__criteria-label" }, "Criteria"));
   const criteria = el("textarea", { id: "compare-criteria", rows: "2",
-    placeholder: "What should the decision optimise for?" });
+    placeholder: "What should the decision optimise for?",
+    "aria-label": "Criteria" });
   panel.appendChild(criteria);
 
   const commit = el("div", { class: "card__actions" });
@@ -376,6 +385,10 @@ function renderComparePanel({ onCommit, onDraft, onClose }) {
   addOptionRow(list, "Option A");
   addOptionRow(list, "Option B");
 
+  const submitError = el("p", { class: "message__error", id: "compare-error",
+    role: "alert", hidden: true });
+  panel.appendChild(submitError);
+
   panel.querySelector("#compare-submit").addEventListener("click", () => {
     const rows = list.querySelectorAll(".compare-panel__option");
     const options = [];
@@ -384,7 +397,15 @@ function renderComparePanel({ onCommit, onDraft, onClose }) {
       const label = (input?.value || "").trim();
       if (label) options.push({ label });
     });
-    if (options.length < 2) return;
+    if (options.length < 2) {
+      submitError.hidden = false;
+      submitError.textContent = "A comparison needs at least two named options.";
+      const first = list.querySelector("input[type=text]");
+      if (first) first.focus();
+      return;
+    }
+    submitError.hidden = true;
+    submitError.textContent = "";
     onCommit({ options, criteria: criteria.value });
   });
 
@@ -394,9 +415,11 @@ function renderComparePanel({ onCommit, onDraft, onClose }) {
 function addOptionRow(list, seedLabel = "") {
   if (list.querySelectorAll(".compare-panel__option").length >= 8) return;
   const row = el("div", { class: "compare-panel__option" });
-  const input = el("input", { type: "text", placeholder: "Describe an option", value: seedLabel });
+  const idx = list.querySelectorAll(".compare-panel__option").length + 1;
+  const input = el("input", { type: "text", placeholder: "Describe an option", value: seedLabel,
+    "aria-label": `Option ${idx}` });
   const remove = el("button", { type: "button", class: "compare-panel__remove",
-    "aria-label": "Remove option" }, "Remove");
+    "aria-label": `Remove option ${idx}` }, "Remove");
   remove.addEventListener("click", () => { row.remove(); });
   row.appendChild(input); row.appendChild(remove);
   list.appendChild(row);

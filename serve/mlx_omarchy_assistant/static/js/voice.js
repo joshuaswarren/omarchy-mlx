@@ -207,6 +207,35 @@ function pcm16leToFloat32(base64) {
   return out;
 }
 
+export { pcm16leToFloat32 };
+
+// One-shot preview: decode a single PCM16LE base64 payload and play it
+// through a fresh AudioContext. The shared SpeakQueue is for streamed
+// sentence playback; preview is a single bounded render and reuses none
+// of that machinery.
+export async function playPreview({ sample_rate, encoding, data }) {
+  if (encoding !== "pcm16le") {
+    throw new Error(`unsupported preview encoding: ${encoding}`);
+  }
+  const rate = Number(sample_rate) || 24000;
+  const ctx = new AudioContext();
+  try {
+    const samples = pcm16leToFloat32(data);
+    const buffer = ctx.createBuffer(1, samples.length, rate);
+    buffer.getChannelData(0).set(samples);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    await new Promise((resolve, reject) => {
+      src.onended = () => resolve();
+      src.onerror = (err) => reject(err);
+      src.start();
+    });
+  } finally {
+    try { await ctx.close(); } catch { /* ignore */ }
+  }
+}
+
 export class SpeakQueue {
   constructor() {
     this._ctx = null;

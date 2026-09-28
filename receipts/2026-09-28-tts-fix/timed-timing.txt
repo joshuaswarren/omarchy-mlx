@@ -1,0 +1,7 @@
+PREPARED {"downloaded": true, "verified": true}
+STATUS {"state": "usable", "usable": true, "qualified": false, "deps": {"missing": [], "detail": {"mlx": {"version": "unknown"}, "mlx_audio": {"version": "0.5.6", "constraint": "==0.5.6", "satisfies": true}, "transformers": {"version": "5.16.1", "constraint": ">=5.14.0", "satisfies": true}, "numpy": {"version": "2.5.3", "constraint": ">=1.26.4", "satisfies": true}}}}
+WAV <home>/mlx-tts-final-timed/sentence-1.wav audio_seconds=3.20 first_chunk_s=3.94 total_s=17.23
+WAV <home>/mlx-tts-final-timed/sentence-2.wav audio_seconds=4.80 first_chunk_s=1.37 total_s=21.92
+WAV <home>/mlx-tts-final-timed/sentence-3.wav audio_seconds=5.04 first_chunk_s=1.40 total_s=23.12
+WAV <home>/mlx-tts-final-timed/sentence-4.wav audio_seconds=4.32 first_chunk_s=1.41 total_s=19.67
+WAV <home>/mlx-tts-final-timed/sentence-5.wav audio_seconds=5.44 first_chunk_s=1.41 total_s=25.21
