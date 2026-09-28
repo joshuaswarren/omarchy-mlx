@@ -1102,8 +1102,10 @@ class PairManager:
             return self.status()
 
     def _newest_lock_pair_id(self) -> str | None:
-        locks = pair_lock_path(self.home, "")
-        candidates = sorted(locks.glob("*.json"), key=lambda p: p.stat().st_mtime)
+        directory = pair_lock_path(self.home, "unused").parent
+        if not directory.is_dir():
+            return None
+        candidates = sorted(directory.glob("*.json"), key=lambda path: path.stat().st_mtime)
         return candidates[-1].stem if candidates else None
 
     def start(self, pair_id: str | None = None) -> dict:

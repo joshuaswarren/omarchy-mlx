@@ -23,6 +23,9 @@ If an explanation claims a different option and omits the Laya choice, the chat 
 History selection includes whole turns. Pinned constraints remain separate and visible.
 The terminal uses the same coordinator with `--terminal` or `--prompt TEXT --once`.
 Setup approval covers the selected pinned artifacts, including Laya conversion and optional voice assets.
+After login, `mlx-omarchy-chat --resume` loads that saved pair and keeps both workers resident until logout.
+A reboot clears GPU memory. The user service starts the same saved pair again at the next login.
+Opening the launcher attaches to that process. It does not load the weights a second time.
 Do not treat a successful download or process startup as pair qualification.
 A missing Parakeet dictation module leaves speech unavailable. It must not stop text setup.
 

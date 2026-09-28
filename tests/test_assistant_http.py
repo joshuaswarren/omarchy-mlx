@@ -67,6 +67,33 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('GET', f'/api/conversations/{cid}/export', headers=headers)[0], 200)
         self.assertEqual(self.request('DELETE', f'/api/conversations/{cid}', headers=headers)[0], 200)
         self.assertEqual(self.request('GET', f'/api/conversations/{cid}', headers=headers)[0], 404)
+    def test_resume_without_a_saved_pair_is_absent(self):
+        class Gpu:
+            def acquire(self, blocking=False):
+                return True
+            def release(self):
+                return None
+        class Coordinator:
+            gpu = Gpu()
+            def close(self):
+                return None
+        class Manager:
+            def adopt_saved(self):
+                raise RuntimeError("no saved pair lock to adopt")
+            def start(self):
+                raise AssertionError("start should not run when no lock exists")
+            def cancel(self):
+                return None
+            def stop(self):
+                return {"stopped": True}
+        self.server._manager = Manager()
+        self.server._coordinator = Coordinator()
+        headers = self.login()
+        status, _, _ = self.request("POST", "/api/resume", {}, headers)
+        self.assertEqual(status, 202)
+        self.server.setup_thread.join(2)
+        self.assertEqual(self.server.setup_state["state"], "absent")
+
     def test_context_selection_preserves_constraints_and_rejects_unknown_fields(self):
         headers = self.login()
         _, _, raw = self.request("POST", "/api/conversations", {}, headers)

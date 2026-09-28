@@ -338,6 +338,31 @@ Exec=$BIN/mlx-omarchy-chat
 Icon=applications-internet
 Categories=Development;Utility;
 EOF
+
+# Login service: after reboot, load the saved pair before the first message.
+# A reboot clears GPU memory. This starts the saved pair once at login.
+# No saved pair exits immediately. Enable only for a real user home so a
+# test install cannot enable a service on the machine running the test.
+UNIT_DIR="$HOME/.config/systemd/user"
+mkdir -p "$UNIT_DIR"
+cat >"$UNIT_DIR/mlx-omarchy-chat.service" <<EOF
+[Unit]
+Description=MLX Chat resident pair
+After=default.target
+
+[Service]
+ExecStart=$BIN/mlx-omarchy-chat --resume --no-browser
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target
+EOF
+REAL_HOME="$(getent passwd "$(id -un)" | cut -d: -f6)"
+if [ "$HOME" = "$REAL_HOME" ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  systemctl --user enable mlx-omarchy-chat.service >/dev/null 2>&1 || true
+fi
 if command -v omarchy-menu >/dev/null 2>&1; then
   # The Omarchy shell scans desktop entries at startup; ask it to rescan so
   # the entry shows up in the launcher (Super+Space) without a re-login.

@@ -282,6 +282,9 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotIn("omarchy-launch-floating-terminal-with-presentation", body)
         self.assertFalse((self.apps_dir / "mlx-omarchy-demo.desktop").exists(),
                          "stale terminal-demo entry survived the upgrade")
+        unit = self.home / ".config" / "systemd" / "user" / "mlx-omarchy-chat.service"
+        self.assertTrue(unit.is_file(), "login unit missing")
+        self.assertIn("--resume --no-browser", unit.read_text())
 
     def test_launchers_are_executable(self):
         for name in ("mlx-omarchy-serve", "mlx-omarchy-demo", "mlx-omarchy-chat"):

@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-28",
+  "status": "incomplete-not-qualified",
+  "source_commit": "d02f863ff",
+  "source_changes": "Uncommitted login resume: --resume, saved-pair directory lookup, user service unit in install.sh.",
+  "host": "<project-m2>",
+  "chip": "Apple M2 Max T6021",
+  "device_name": "Apple M2 Max (G14C B1)",
+  "kernel": "7.1.13-ARCH-polltx",
+  "runtime_version": "0.32.3.dev202609232032+4fd2130ed",
+  "pair": "everyday",
+  "chat_model": "qwen3.8-2b-4bit",
+  "decision_model": "laya-mlx",
+  "checks": {
+    "chat": {"seconds": 3.02, "text": "ready", "status": "complete"},
+    "second_chat": {"seconds": 3.01, "text": "warm", "status": "complete"},
+    "compare": {
+      "seconds": 4.03,
+      "choice": "cat",
+      "probabilities": {"cat": 0.7192, "elephant": 0.2808},
+      "model": "laya-mlx",
+      "abstained": false
+    },
+    "cancel": "stopped",
+    "voice": "unqualified",
+    "resume_after_process_stop": {"load_seconds": 1.43, "chat_seconds": 4.27, "text": "resident"},
+    "resume_after_reboot": {"load_seconds": 1.41, "chat_seconds": 4.28, "text": "resident", "uptime_at_start": "2 min"}
+  },
+  "not_run": [
+    "outbound sockets denied during restart",
+    "Quality pair",
+    "routing held-out suite",
+    "voice accuracy and listener check",
+    "UX screenshots",
+    "30-turn latency battery"
+  ],
+  "login_service": "install.sh writes and enables mlx-omarchy-chat.service for a real user home. It was not enabled on the shared test GPU."
+}

@@ -183,6 +183,32 @@ class AssistantServer(ThreadingHTTPServer):
             self.setup_thread = threading.Thread(target=run, daemon=True)
             self.setup_thread.start()
 
+    def resume(self):
+        """Start the saved pair without a download. No saved pair is absent, not an error."""
+        with self.mutex:
+            if self.setup_thread and self.setup_thread.is_alive():
+                raise BusyError("Model setup is already active")
+            if not self.coordinator.gpu.acquire(blocking=False):
+                raise BusyError("Stop the current model operation before changing the model pair")
+            self.setup_state = {"state": "preparing", "stage": "Resume saved pair"}
+
+            def run():
+                try:
+                    self.manager.adopt_saved()
+                    result = self.manager.start()
+                    with self.mutex:
+                        self.setup_state = {"state": "complete",
+                                            "ready_offline": result.get("ready_offline", False)}
+                except Exception as error:
+                    message = str(error)[:1000]
+                    absent = "no saved pair lock" in message
+                    with self.mutex:
+                        self.setup_state = {"state": "absent" if absent else "error", "message": message}
+                finally:
+                    self.coordinator.gpu.release()
+
+            self.setup_thread = threading.Thread(target=run, daemon=True)
+            self.setup_thread.start()
     def transfer(self, body):
         from .transfer import run_transfer_request
         allowed = {"action", "bundle", "output", "pair_ids", "approved_licenses", "voice", "wheel_caches"}
@@ -361,6 +387,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET" and path == "/api/theme":
             from .theme import read_theme
             return self._json(200, asdict(read_theme()))
+        if self.command == "POST" and path == "/api/resume":
+            self._body()
+            app.resume()
+            return self._json(202, {"state": "preparing"})
         if self.command == "POST" and path == "/api/setup":
             app.setup(self._body())
             return self._json(202, {"state": "preparing"})

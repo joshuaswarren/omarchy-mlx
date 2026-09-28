@@ -115,6 +115,8 @@ def main(argv=None):
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--max-tokens", type=int, help="explicit output allowance; otherwise size it for the task")
     parser.add_argument("--pair", choices=("everyday", "quality"))
+    parser.add_argument("--resume", action="store_true",
+                        help="load the saved pair at login and keep both models resident")
     parser.add_argument("--yes", action="store_true", help="approve downloading the explicitly selected pair")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
@@ -123,6 +125,8 @@ def main(argv=None):
         parser.error("--once requires --prompt")
     if args.yes and not args.pair:
         parser.error("--yes requires an explicit --pair")
+    if args.resume and args.pair:
+        parser.error("--resume uses the saved pair; do not pass --pair")
     directory = args.home / "assistant"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = (directory / "application.lock").open("a")
@@ -161,6 +165,25 @@ def main(argv=None):
                 time.sleep(1)
             else:
                 raise RuntimeError("Model setup exceeded twenty minutes; inspect the setup error before retrying")
+        if args.resume:
+            try:
+                request(runtime, "POST", "/api/resume", {})
+            except RuntimeError as error:
+                if "already active" not in str(error):
+                    raise
+            deadline = time.monotonic() + 1200
+            while time.monotonic() < deadline:
+                state = request(runtime, "GET", "/api/status").get("setup") or {}
+                if state.get("state") == "error":
+                    raise RuntimeError(state.get("message", "Saved pair did not resume"))
+                if state.get("state") == "absent":
+                    print("MLX Chat: no saved pair to resume", file=sys.stderr)
+                    return 0
+                if state.get("state") == "complete":
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError("Saved pair did not resume within twenty minutes")
         if args.terminal or args.prompt:
             return terminal(runtime, args.prompt, args.once, args.max_tokens)
         if not args.no_browser:
