@@ -202,7 +202,6 @@ def main():
             die("bad rev: %s" % rng)
 
     regexes = compile_patterns(repo)
-    allows = compile_allows(repo)
     if os.environ.get("PRIVACY_DEBUG"):
         sys.stderr.write("privacy-check DEBUG: repo=%s range=%s patterns=%d site=%s\n" % (
             repo, rng, len(regexes),
@@ -213,6 +212,7 @@ def main():
 
 def finish(repo, commits, label):
     regexes = compile_patterns(repo)
+    allows = compile_allows(repo)
     hits = []
     for c in commits:
         msg = run(["git", "-C", repo, "log", "-1", "--format=%B", c])
