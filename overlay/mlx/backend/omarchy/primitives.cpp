@@ -863,17 +863,22 @@ void dispatch_float_elementwise_to(
       binding(axis_metadata ? *axis_metadata : out)};
   // Four-wide fast path (shaders/binary_vec.comp) for the hot binary
   // ops on 16-bit storage: same math and modulo addressing as
-  // elementwise.comp, 8-byte vector loads. Everything else, including
-  // a one-element scalar operand, keeps the general kernel.
+  // elementwise.comp, 8-byte vector loads. Sigmoid takes the same
+  // alignment gate through shaders/unary_vec.comp. Everything else,
+  // including a one-element scalar operand, keeps the general kernel.
   const bool vec_op = operation == AddOperation ||
       operation == MultiplyOperation || operation == DivideOperation ||
-      operation == SubtractOperation;
+      operation == SubtractOperation || operation == SigmoidOperation;
   if (vec_op && !general_broadcast && out.dtype() != float32 &&
       ((count | params.lhs_size | params.rhs_size | params.lhs_offset |
         params.rhs_offset | params.output_offset) & 3u) == 0u) {
+    auto kernel = operation == SigmoidOperation
+        ? (out.dtype() == float16 ? omarchy::ComputeKernel::UnaryVecF16
+                                  : omarchy::ComputeKernel::UnaryVecBF16)
+        : out.dtype() == float16 ? omarchy::ComputeKernel::BinaryVecF16
+                                 : omarchy::ComputeKernel::BinaryVecBF16;
     encoder.dispatch_compute(
-        out.dtype() == float16 ? omarchy::ComputeKernel::BinaryVecF16
-                               : omarchy::ComputeKernel::BinaryVecBF16,
+        kernel,
         bindings,
         params,
         omarchy::compute_dispatch_group_count(count / 4u));
@@ -5876,10 +5881,20 @@ uint32_t coopmat_workgroups_per_core() {
 // even at 4.1 workgroups per core (58% slower than 32 rows), so there
 // is nothing below 16 worth dispatching. Both row counts keep one
 // output's k chain identical, so the pick does not move generated ids.
+//
+// A prompt of at most 16 rows fills one 16-row tile: the 32-row tile
+// would pad it to 32 (a 13-token prompt runs 19 dead rows through
+// every mma and A load) while the grid stays one m-group either way,
+// so nothing is traded for the halved per-step work. Contract prompts
+// are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
+// cost 400-950 us each, 133 of them per first token.
 uint32_t coopmat_tile_rows(
     uint32_t matrix_m,
     uint32_t n_groups,
     const std::string& device_name) {
+  if (matrix_m <= 16u) {
+    return 16u;
+  }
   uint32_t cores = apple_gpu_cores(device_name);
   uint32_t per_core = coopmat_workgroups_per_core();
   if (cores == 0u || per_core == 0u) {
@@ -10608,6 +10623,10 @@ void GatedDeltaUpdate::eval_gpu(
     }
   }
 
+  // Decode kernel and prefill scan: LANES=4 threads per Dv row, 128-thread
+  // workgroups over 32 rows, so a head takes Dv / 32 = 4 workgroups
+  // (shader constants).
+  constexpr uint32_t kGdnWorkgroupsPerHead = 4;
   // Decode (T=1): the original single-token kernel, unchanged.
   if (decode_shape) {
     out.set_data(allocate_omarchy(out.nbytes()));
@@ -10798,22 +10817,26 @@ void GatedDeltaUpdate::eval_gpu(
       has_mask ? binding(*mask) : binding(out),
       binding(g),
       snapshot_binding};
-  // Pass 0: prefix scan, snapshots at chunk boundaries.
-  params.flags = g_flags;
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::GatedDeltaPrefillBF16,
-      bindings,
-      params,
-      static_cast<uint32_t>(Hv),
-      1,
-      1);
+  // Pass 0: prefix scan, snapshots at chunk boundaries. A single chunk
+  // has no boundary to snapshot, so pass 1 restores from h0 directly and
+  // pass 0 is skipped (it wrote nothing).
+  if (chunks > 1) {
+    params.flags = g_flags;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GatedDeltaPrefillBF16,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv) * kGdnWorkgroupsPerHead,
+        1,
+        1);
+  }
   // Pass 1: chunk-parallel output replay.
   params.flags = g_flags | 8u;
   encoder.dispatch_compute(
       omarchy::ComputeKernel::GatedDeltaPrefillBF16,
       bindings,
       params,
-      static_cast<uint32_t>(Hv),
+      static_cast<uint32_t>(Hv) * kGdnWorkgroupsPerHead,
       chunks,
       1);
 }

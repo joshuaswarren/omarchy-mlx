@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,10 @@ class AdapterTest(unittest.TestCase):
             source["programs"][0]["inputs"][0]["index"] = 6
             source["programs"][0]["inputs"][1]["index"] = 5
             (package / "manifest.json").write_text(json.dumps(source))
-            with self.assertRaisesRegex(ADAPTER.AdapterError, "channel mapping"):
+            with self.assertRaisesRegex(
+                    ADAPTER.AdapterError,
+                    r"declares input channels \[6, 5\] but the task stream "
+                    r"binds inputs"):
                 ADAPTER.adapt(package, Path(directory) / "bundle", IDENTITY)
 
     def _build_reverse_fixture(
@@ -100,11 +104,10 @@ class AdapterTest(unittest.TestCase):
         (5 for the formula layout, 4 for the derived layout) and its output
         at 4 (formula) or 5 (derived). Mirrors fb4dfa86 test_bundle.cpp
         """
-        struct = ADAPTER.struct
         package = Path(directory) / "package"
         package.mkdir()
         nchw = [1, 64, 1, 1, 64, 64]
-        anec = bytearray(ADAPTER.ANEC_PAYLOAD_OFFSET + 0x4000)
+        anec = bytearray(ADAPTER._ANEC_PAYLOAD_OFFSET + 0x4000)
         struct.pack_into("<Q", anec, 0, 0x4000)
         struct.pack_into("<I", anec, 8, 64)
         struct.pack_into("<I", anec, 12, 1)
@@ -118,16 +121,16 @@ class AdapterTest(unittest.TestCase):
             nchw_off = 40 + 32 * 4 + ch * len(nchw) * 8
             for i, v in enumerate(nchw):
                 struct.pack_into("<Q", anec, nchw_off + i * 8, v)
-        struct.pack_into("<I", anec, ADAPTER.ANEC_PAYLOAD_OFFSET + 4,
+        struct.pack_into("<I", anec, ADAPTER._ANEC_PAYLOAD_OFFSET + 4,
                          (16 - 1) << 16)
-        struct.pack_into("<I", anec, ADAPTER.ANEC_PAYLOAD_OFFSET + 32, 0x25864)
-        at = ADAPTER.ANEC_PAYLOAD_OFFSET + 40
+        struct.pack_into("<I", anec, ADAPTER._ANEC_PAYLOAD_OFFSET + 32, 0x25864)
+        at = ADAPTER._ANEC_PAYLOAD_OFFSET + 40
         for reg, cfg in ((0x13800, 0x00033881), (0x13804, 0x00033881),
                          (0x17800, 0x040000c1)):
             struct.pack_into("<I", anec, at, reg)
             struct.pack_into("<I", anec, at + 4, cfg)
             at += 8
-        assert at == ADAPTER.ANEC_PAYLOAD_OFFSET + 64
+        assert at == ADAPTER._ANEC_PAYLOAD_OFFSET + 64
         (package / "model.anec").write_bytes(bytes(anec))
         manifest = {
             "artifactFormat": "anec",
@@ -181,8 +184,10 @@ class AdapterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             package = self._build_reverse_fixture(
                 directory, manifest_input_index=5)
-            with self.assertRaisesRegex(ADAPTER.AdapterError,
-                                         "channel mapping disagrees"):
+            with self.assertRaisesRegex(
+                    ADAPTER.AdapterError,
+                    r"declares output channels \[4\] but the task stream "
+                    r"binds outputs \[5\]"):
                 ADAPTER.adapt(package, Path(directory) / "bundle", IDENTITY)
 
     def test_derived_reverse_map_accepts_the_task_stream_channels(self):

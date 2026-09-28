@@ -332,8 +332,26 @@ def _sampler(temperature, top_p):
 
 
 def _generate(state, prompt_ids, max_tokens, temperature, top_p):
-    """Run generation; returns (text, finish_reason, timings)."""
-    from mlx_lm.generate import stream_generate
+    """Run generation; returns (text, finish_reason, timings).
+
+    stream_generate is looked up on each call via the mlx_lm package
+    attribute, so the ids-probe env-gated wrap (which rebinds
+    `mlx_lm.generate` after this module is imported) is picked up here.
+    The captured-at-import fallback was a silent miss; per-call lookup
+    is the documented fix."""
+    # Per-call stream_generate lookup via the mlx_lm package
+    # attribute. In mlx_lm 0.31.3, `mlx_lm.generate` is the stream_generate
+    # function (re-exported at the package level), so re-reading the
+    # In mlx_lm 0.31.3, `mlx_lm.generate` is the non-streaming wrapper
+    # that returns str, while the streaming generator is exposed as
+    # `mlx_lm.stream_generate`. Reading the package attribute on each
+    # call picks up the ids-probe env-gated wrap (which rebinds
+    # sys.modules['mlx_lm'].stream_generate after this module is
+    # imported). The captured-at-import `from mlx_lm.generate import
+    # stream_generate` form was a silent miss because it bound the
+    # ORIGINAL function name before the wrap could rebind the package
+    # attribute.
+    stream_generate = sys.modules["mlx_lm"].stream_generate
 
     kwargs = {"sampler": _sampler(temperature, top_p)}
     prompt_n = len(prompt_ids)
@@ -555,8 +573,11 @@ def _make_handler(state: Bonsai2State):
 
         def _stream_job(self, state, prompt_ids, max_tokens, temperature, req, created, emit):
             """Worker-side streaming generation: emits chunk dicts, never
-            touches the socket (the handler thread drains and writes)."""
-            from mlx_lm.generate import stream_generate
+            touches the socket (the handler thread drains and writes).
+
+            Per-call stream_generate lookup (see _generate docstring)."""
+            # Per-call stream_generate lookup (see _generate).
+            stream_generate = sys.modules["mlx_lm"].stream_generate
 
             def chunk(delta, finish=None, extra=None):
                 payload = {
@@ -645,6 +666,10 @@ def serve_main(argv):
         sys.exit(2)
     args.reservation_name = _reservation_name(args.model_id)
     args.owner = _owner_token(_budget_module())
+    # Env-gated ids-probe hook (bench-only, default OFF, byte-identical
+    # otherwise). Mirrors the contract in serve.mlx_omarchy_serve._mlxlm_server.
+    from . import ids_probe as _bonsai_ids_probe
+    _bonsai_ids_probe.install_ids_probe()
     state = None
     httpd = None
     server_thread = None

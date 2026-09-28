@@ -212,13 +212,29 @@ needs is pinned and present. There is no CPU or GPU-only encoder fallback:
   lacks the ANE: no `/dev/accel/accel0` character device (`MLX_OMARCHY_ACCEL_DEV`
   relocates it), or the `ane` module is not loaded;
 * the reference cache does not verify against the lock (run `download`);
-* the audio is not the pinned fixture;
+* the audio decodes to zero samples, or the encoder mask's valid frames do
+  not form a prefix (a mask with holes is a contract break, never a decode
+  input);
 * the emitted encoder source does not match its recorded SHA-256 — the
   depalettized textual MIL is emitted once into the cache
   (`encoder-source/<revision>/`) and then hash-pinned;
 * any output pin diverges: mel, `encoder_hidden`, transcript, token ids,
   frame indices, durations, emission count, decode control (`gpu-loop`,
   no fallback), or a nonzero `cpu_tensor_events` count.
+
+The pinned fixture runs the golden contract above. Any other audio takes
+the general contract: 16 kHz mono decodes natively (libsndfile), anything
+else is downmixed/resampled through ffmpeg (`-ar 16000 -ac 1`); audio
+within the 30 s model window flows through the existing padding machinery;
+longer audio is transcribed in exact 480000-sample chunks with the decoder
+state zeroed at every chunk start, matching the macOS CoreML reference
+(`GreedyTDTDecoder.decode` / `Pipeline.swift`) exactly. General runs are
+checked for on-device execution (`cpu_tensor_events == 0`), gpu-chain
+decode with no fallback, finite outputs, token/frame/duration stream
+geometry, and — with `--repeat` — determinism across repeats; the report
+records `mode: golden|general` and the decode geometry. `verify` runs the
+byte checks and then the golden e2e (pinned fixture, full pin checks)
+wherever the ANE runtime can execute.
 
 The run writes `transcript.txt`, `token_ids.json`, `encoder_hidden.npy`,
 `mel.npy`, and `transcribe-report.json` (schema
@@ -227,6 +243,15 @@ libane identity, per-check verdicts) into the output directory and prints a
 summary. The pinned expectations are the `2026-09-16-parakeet-e2e-both-hosts`
 receipt: transcript `db501a8c…`, `encoder_hidden` `38c73261…` (identical on
 T8103 and T6001), 104/104 emissions.
+
+Whole-encoder bundle status (2026-09-27): on M1 Max the installed wheel of
+main `2dea53e2c` executes the whole encoder as a single ANE program — gold
+run 440.405 ms encoder execution inside a 1542.708 ms cold pipeline, and nine
+same-fixture repeats warm-median 631.4 ms pipeline / 441.17 ms encoder, all
+`match` against the current runtime pins (transcript `db501a8c…`, mel
+`bcbaa3ca…`, hidden `51830b6f…`). Same pinned fixture throughout — a golden
+`match` is reference parity, not general transcription correctness. See
+[the receipt](../receipts/2026-09-27-m1max-current-main-gold.md).
 
 ## Licensing record
 

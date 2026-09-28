@@ -5,15 +5,22 @@
 
 #include <json.hpp>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/memfd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -21,6 +28,7 @@
 #include <system_error>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace mlx::core::omarchy::ane {
@@ -406,6 +414,102 @@ std::string sha256_file(const std::filesystem::path& path) {
     throw bundle_error("read failed on payload " + path.string());
   }
   return sha256_pad_and_digest(context);
+}
+
+namespace {
+
+class UniqueFd {
+ public:
+  explicit UniqueFd(int fd = -1) : fd_(fd) {}
+  ~UniqueFd() {
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
+  }
+  UniqueFd(const UniqueFd&) = delete;
+  UniqueFd& operator=(const UniqueFd&) = delete;
+  int get() const {
+    return fd_;
+  }
+  // Hand ownership to the caller without closing.
+  int release() {
+    return std::exchange(fd_, -1);
+  }
+
+ private:
+  int fd_;
+};
+
+} // namespace
+
+AneSealedFile sealed_file_at(int directory_fd, const std::string& name) {
+  if (name.empty() || name.find('/') != std::string::npos) {
+    throw bundle_error(
+        "sealed snapshot name '" + name + "' is not a flat directory entry");
+  }
+  UniqueFd source(
+      ::openat(directory_fd, name.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+  if (source.get() < 0) {
+    throw bundle_error(
+        "sealed snapshot open " + name + ": " + std::strerror(errno));
+  }
+  struct stat status {};
+  if (::fstat(source.get(), &status) != 0) {
+    throw bundle_error(
+        "sealed snapshot stat " + name + ": " + std::strerror(errno));
+  }
+  if (!S_ISREG(status.st_mode)) {
+    throw bundle_error("sealed snapshot source is not a regular file: " + name);
+  }
+  UniqueFd snapshot(
+      ::memfd_create("mlx-omarchy-ane-seal", MFD_CLOEXEC | MFD_ALLOW_SEALING));
+  if (snapshot.get() < 0) {
+    throw bundle_error(
+        "sealed snapshot memfd_create " + name + ": " + std::strerror(errno));
+  }
+  Sha256Context context = sha256_begin();
+  std::array<uint8_t, 64 * 1024> bytes{};
+  for (;;) {
+    ssize_t count = ::read(source.get(), bytes.data(), bytes.size());
+    if (count == 0) {
+      break;
+    }
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      throw bundle_error(
+          "sealed snapshot read " + name + ": " + std::strerror(errno));
+    }
+    context.total += size_t(count);
+    sha256_feed(context, bytes.data(), size_t(count));
+    size_t written = 0;
+    while (written < size_t(count)) {
+      ssize_t result =
+          ::write(snapshot.get(), bytes.data() + written, size_t(count) - written);
+      if (result < 0 && errno == EINTR) {
+        continue;
+      }
+      if (result <= 0) {
+        throw bundle_error(
+            "sealed snapshot write " + name + ": " + std::strerror(errno));
+      }
+      written += size_t(result);
+    }
+  }
+  const std::string digest = sha256_pad_and_digest(context);
+  const int wanted = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+  if (::lseek(snapshot.get(), 0, SEEK_SET) < 0 ||
+      ::fcntl(snapshot.get(), F_ADD_SEALS, wanted) != 0) {
+    throw bundle_error(
+        "sealed snapshot seal " + name + ": " + std::strerror(errno));
+  }
+  const int actual = ::fcntl(snapshot.get(), F_GET_SEALS);
+  if (actual < 0 || (actual & wanted) != wanted) {
+    throw bundle_error(
+        "sealed snapshot " + name + " did not take the write seal");
+  }
+  return AneSealedFile(snapshot.release(), digest);
 }
 
 struct DigestCacheKey {
@@ -1281,7 +1385,8 @@ std::string sha256_file_cached(const std::filesystem::path& path) {
 
 AneBundle load_bundle_snapshot(
     const std::filesystem::path& manifest_path,
-    const std::map<std::string, std::filesystem::path>& payload_paths) {
+    const std::map<std::string, std::filesystem::path>& payload_paths,
+    const std::map<std::filesystem::path, std::string>& known_digests) {
   AneManifest manifest = parse_ane_manifest(manifest_path);
   const std::string payload_identity = payload_collection_sha256(manifest.payloads);
   if (manifest.release_asset.model_sha256 != payload_identity) {
@@ -1319,7 +1424,14 @@ AneBundle load_bundle_snapshot(
           "payload " + payload.path + " byte size " + std::to_string(actual) +
           " does not match manifest " + std::to_string(payload.byte_size));
     }
-    std::string digest = sha256_file_cached(resolved[i]);
+    std::string digest;
+    if (auto known = known_digests.find(resolved[i]); known != known_digests.end()) {
+      // The caller sealed this image and hashed the sealed bytes itself;
+      // re-hashing an immutable sealed copy would only repeat the pass.
+      digest = known->second;
+    } else {
+      digest = sha256_file_cached(resolved[i]);
+    }
     if (digest != payload.sha256) {
       throw bundle_error(
           "payload " + payload.path + " sha256 mismatch: manifest " +
@@ -1401,6 +1513,137 @@ AneBundle load_bundle(const std::filesystem::path& dir) {
     payloads.emplace(std::move(name), entry.path());
   }
   return load_bundle_snapshot(dir / "manifest.json", payloads);
+}
+
+AneBundle load_bundle_sealed(
+    const std::filesystem::path& dir,
+    const std::map<std::string, std::string>& expected,
+    std::vector<AneSealedFile>& sealed) {
+  if (expected.find("manifest.json") == expected.end()) {
+    throw bundle_error(
+        "manifest.json has no pinned digest; refusing to consume unpinned "
+        "bytes");
+  }
+  UniqueFd directory(
+      ::open(dir.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_DIRECTORY));
+  if (directory.get() < 0) {
+    if (errno == ENOENT || errno == ENOTDIR) {
+      throw AneBundleNotFound(
+          "[omarchy-ane] bundle directory not found: " + dir.string() +
+          " (the affected region stays on Vulkan)");
+    }
+    throw bundle_error(
+        "cannot open bundle directory " + dir.string() + ": " +
+        std::strerror(errno));
+  }
+
+  // The manifest is sealed first: the parse, the directory contract, and
+  // every payload decision below consume the sealed image, so a manifest
+  // rewrite after this point cannot change what this session loads.
+  const size_t manifest_slot = sealed.size();
+  sealed.push_back(sealed_file_at(directory.get(), "manifest.json"));
+  const std::string manifest_path =
+      "/proc/self/fd/" + std::to_string(sealed[manifest_slot].fd);
+  if (sealed[manifest_slot].sha256 != expected.at("manifest.json")) {
+    throw bundle_error(
+        "sealed manifest.json sha256 " + sealed[manifest_slot].sha256 +
+        " does not match the pin " + expected.at("manifest.json") +
+        "; refusing to execute unverified bytes");
+  }
+  const AneManifest manifest = parse_ane_manifest(manifest_path);
+
+  // Same directory contract as load_bundle: regular files only, no
+  // links, nothing outside the manifest's payload list. Enforced before
+  // any payload is sealed so a stray or hostile entry is a refusal, not
+  // a silently unsealed bystander.
+  std::map<std::string, bool> listed;
+  for (const auto& payload : manifest.payloads) {
+    listed.emplace(payload.path, true);
+    if (!expected.count(payload.path)) {
+      throw bundle_error(
+          "payload " + payload.path +
+          " has no pinned digest; refusing to consume unpinned bytes");
+    }
+  }
+  int scan_fd = ::fcntl(directory.get(), F_DUPFD_CLOEXEC, 0);
+  if (scan_fd < 0) {
+    throw bundle_error(
+        std::string("cannot duplicate bundle directory: ") +
+        std::strerror(errno));
+  }
+  DIR* stream = ::fdopendir(scan_fd);
+  if (stream == nullptr) {
+    ::close(scan_fd);
+    throw bundle_error(
+        "cannot read bundle directory " + dir.string() + ": " +
+        std::strerror(errno));
+  }
+  auto close_directory = [](DIR* directory) { ::closedir(directory); };
+  std::unique_ptr<DIR, decltype(close_directory)> entries(stream, close_directory);
+  for (;;) {
+    errno = 0;
+    dirent* entry = ::readdir(entries.get());
+    if (entry == nullptr) {
+      if (errno != 0) {
+        throw bundle_error(
+            "cannot scan bundle directory " + dir.string() + ": " +
+            std::strerror(errno));
+      }
+      break;
+    }
+    const std::string name(entry->d_name);
+    if (name == "." || name == "..") {
+      continue;
+    }
+    struct stat status {};
+    if (::fstatat(directory.get(), name.c_str(), &status, AT_SYMLINK_NOFOLLOW) !=
+        0) {
+      throw bundle_error(
+          "cannot stat '" + name + "' inside bundle " + dir.string());
+    }
+    if (S_ISLNK(status.st_mode)) {
+      throw bundle_error("unexpected link '" + name + "' inside bundle");
+    }
+    if (S_ISDIR(status.st_mode)) {
+      throw bundle_error("unexpected directory '" + name + "' inside bundle");
+    }
+    if (!S_ISREG(status.st_mode)) {
+      throw bundle_error(
+          "unexpected non-regular file '" + name + "' inside bundle");
+    }
+    if (name != "manifest.json" && !listed.count(name)) {
+      throw bundle_error(
+          "unknown payload file '" + name + "' not listed in manifest");
+    }
+  }
+
+  std::map<std::string, std::filesystem::path> sealed_paths;
+  std::map<std::filesystem::path, std::string> known_digests;
+  for (const auto& payload : manifest.payloads) {
+    sealed.push_back(sealed_file_at(directory.get(), payload.path));
+    AneSealedFile& image = sealed.back();
+    if (image.sha256 != expected.at(payload.path)) {
+      throw bundle_error(
+          "sealed " + payload.path + " sha256 " + image.sha256 +
+          " does not match the pin " + expected.at(payload.path) +
+          "; refusing to execute unverified bytes");
+    }
+    const std::string sealed_path = "/proc/self/fd/" + std::to_string(image.fd);
+    sealed_paths.emplace(payload.path, sealed_path);
+    known_digests.emplace(sealed_path, image.sha256);
+  }
+
+  // Every pinned file must be consumed too: a pin naming a file the
+  // bundle does not carry describes a different bundle than the one on
+  // disk, and executing it would be an guess, not a match.
+  for (const auto& [name, digest] : expected) {
+    if (name != "manifest.json" && !listed.count(name)) {
+      throw bundle_error(
+          "pinned file " + name + " is not part of bundle " + manifest.name +
+          "; the installed bundle does not match the pin");
+    }
+  }
+  return load_bundle_snapshot(manifest_path, sealed_paths, known_digests);
 }
 
 } // namespace mlx::core::omarchy::ane

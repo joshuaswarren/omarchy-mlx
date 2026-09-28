@@ -812,11 +812,42 @@ _SHARED_SESSION_ATEXIT = False
 
 
 def _shared_session_take(identity: tuple):
-    """Return the held session when identity matches and it is still up."""
-    if _SHARED_SESSION is None or _SHARED_SESSION["identity"] != identity:
+    """Return the held session when identity matches and it is still up.
+
+    An identity change (worker, library, bundle set, deadlines, or the
+    load-boundary pins) retires the held session BEFORE the caller
+    spawns its replacement: the old child is a private worker holding
+    the device and its sealed images, and overwriting the registry slot
+    would orphan it. The caller only proceeds once the old child is
+    confirmed reaped.
+    """
+    global _SHARED_SESSION
+    entry = _SHARED_SESSION
+    if entry is None:
         return None
-    session = _SHARED_SESSION["session"]
-    return session if session.alive else None
+    if entry["identity"] == identity and entry["session"].alive:
+        return entry["session"]
+    _retire_shared_session(entry["session"])
+    _SHARED_SESSION = None
+    return None
+
+
+def _retire_shared_session(session) -> None:
+    """Close a held session and confirm its child was actually reaped."""
+    # Retain the Popen before close(): close() releases the handle, and
+    # the kernel's own reap status (wait/poll) is the only authoritative
+    # evidence — a recorded pid could be recycled, so it proves nothing.
+    process = session._process
+    try:
+        if session.alive:
+            session.close()
+    finally:
+        session._terminate()
+    if process is not None and process.poll() is None:
+        raise RuntimeError(
+            "retired resident worker child has not exited; "
+            "refusing to open a replacement session"
+        )
 
 
 def _shared_session_hold(identity: tuple, session) -> None:
@@ -871,12 +902,18 @@ class AneIsland:
     """
 
     def __init__(self, worker: Path, libane: Path, bundles: Path, scratch: Path,
-                 deadline_ms: int = 20000):
+                 deadline_ms: int = 20000, seal_assets: dict | None = None):
         self.worker = worker
         self.libane = libane
         self.bundles = bundles
         self.scratch = scratch
         self.deadline_ms = deadline_ms
+        # Approved asset digests in the runtime pin's "assets" shape
+        # ("bundles": dir name -> file -> sha256, "libane": file ->
+        # sha256). When set, the worker seals every consumed byte at
+        # session open and refuses any mismatch before device load;
+        # every session bundle and the library must be covered.
+        self.seal_assets = seal_assets
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.submissions = 0
         self.worker_starts = 0
@@ -962,6 +999,40 @@ class AneIsland:
             bundles[manifest["name"]] = Path(self.whole_bundle)
         return bundles
 
+    def _seal_kwargs(self, bundles: dict) -> dict:
+        """Per-session pin arguments derived from the approved assets.
+
+        Every registered session bundle must be covered by the pin
+        (looked up by bundle directory name) and the device library by
+        its file name; an uncovered bundle or library is a refusal, so
+        an installed-but-unpinned asset can never execute.
+        """
+        if self.seal_assets is None:
+            return {}
+        pinned_bundles = self.seal_assets.get("bundles", {})
+        seal_expects: dict[str, dict[str, str]] = {}
+        for name, path in bundles.items():
+            files = pinned_bundles.get(Path(path).name)
+            if not files:
+                raise EncoderRunError(
+                    f"resident bundle {name} ({Path(path).name}) is not "
+                    "covered by the approved assets; refusing to load "
+                    "unpinned ANE programs"
+                )
+            seal_expects[name] = {str(k): str(v) for k, v in files.items()}
+        libane_files = self.seal_assets.get("libane", {})
+        seal_libane_sha = libane_files.get(Path(self.libane).name)
+        if not seal_libane_sha:
+            raise EncoderRunError(
+                f"device library {Path(self.libane).name} is not covered "
+                "by the approved assets; refusing to load unpinned ANE "
+                "userspace"
+            )
+        return {
+            "seal_expects": seal_expects,
+            "seal_libane_sha": str(seal_libane_sha),
+        }
+
     def _ensure_session(self):
         if self._session is not None:
             return self._session
@@ -975,6 +1046,7 @@ class AneIsland:
             tuple(sorted((name, str(path)) for name, path in bundles.items())),
             self.deadline_ms,
             self._batch_deadline_ms,
+            self._seal_kwargs(bundles),
         )
         session = None
         if self.share_session:
@@ -988,6 +1060,7 @@ class AneIsland:
                 bundles=bundles,
                 scratch=Path(self.scratch),
                 deadline_ms=self.deadline_ms,
+                **self._seal_kwargs(bundles),
             )
             session.start()
             if self.share_session:

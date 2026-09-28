@@ -185,7 +185,10 @@ _JOINT_SOURCE = f"""
     for (uint i = t; i < 640u; i += {_JOINT_THREADS}u) {{
         float16_t pj;
         if (jmode == 0) {{
-            pj = pj16_in[i];
+            // explicit cast: the caller binds this slot fp16 normally but
+            // fp32 on the skip_lstm path, and the Vulkan MSL subset has
+            // no implicit float-to-half conversion
+            pj = float16_t(pj16_in[i]);
         }} else {{
             pj = float16_t(dec_in[i]);
         }}
@@ -245,7 +248,10 @@ _JOINT_WINDOW_SOURCE = f"""
         for (uint i = t; i < 640u; i += {_JOINT_THREADS}u) {{
             float16_t pj;
             if (jmode == 0) {{
-                pj = pj16_in[i];
+                // explicit cast: the caller binds this slot fp16 normally
+                // but fp32 on the skip_lstm path, and the Vulkan MSL
+                // subset has no implicit float-to-half conversion
+                pj = float16_t(pj16_in[i]);
             }} else {{
                 pj = float16_t(dec_in[i]);
             }}

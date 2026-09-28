@@ -452,6 +452,10 @@ struct RecCfg {
   uint32_t grid{1};
   uint32_t n{512};
   bool barrier{false};
+  // 0 = none, 1 = post c2c barrier, 2 = exact MLX pre+post production pair,
+  // 3 = full ALL_COMMANDS/MEMORY both-ways barrier before each dispatch
+  // (encoder.cpp record_dependency_barrier shape).
+  int barrier_mode{0};
   bool rebind{false};
   bool pushconst{false};
   bool pipeswitch{false};
@@ -496,11 +500,36 @@ static RecRes run_recorded(Bench& b, const RecCfg& c) {
     if (c.ts_per_dispatch)
       g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, b.qpool,
           q++);
+    if (c.barrier_mode == 2) {
+      // Exact MLX production pre-dispatch barrier (encoder.cpp, gated off):
+      // src HOST|TRANSFER|COMPUTE writes, dst COMPUTE read/write.
+      VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      before.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT |
+          VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      before.dstAccessMask =
+          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      g_vk.CmdPipelineBarrier(cmd,
+          VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &before, 0, nullptr,
+          0, nullptr);
+    } else if (c.barrier_mode == 3) {
+      // Full dependency barrier (encoder.cpp record_dependency_barrier).
+      VkMemoryBarrier full{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      full.srcAccessMask =
+          VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      full.dstAccessMask =
+          VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      g_vk.CmdPipelineBarrier(cmd,
+          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &full, 0, nullptr, 0,
+          nullptr);
+    }
     g_vk.CmdDispatch(cmd, c.grid, 1, 1);
     if (c.ts_per_dispatch)
       g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool,
           q++);
-    if (c.barrier) {
+    if (c.barrier_mode == 1) {
       VkMemoryBarrier mb{};
       mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
       mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -509,6 +538,16 @@ static RecRes run_recorded(Bench& b, const RecCfg& c) {
       VkPipelineStageFlags src = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       VkPipelineStageFlags dst = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       g_vk.CmdPipelineBarrier(cmd, src, dst, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    } else if (c.barrier_mode == 2) {
+      // Exact MLX production post-dispatch barrier (encoder.cpp, gated off).
+      VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+          VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_HOST_READ_BIT;
+      g_vk.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+              VK_PIPELINE_STAGE_HOST_BIT,
+          0, 1, &after, 0, nullptr, 0, nullptr);
     }
   }
   g_vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, b.qpool, 1);
@@ -603,6 +642,7 @@ struct CaseDef {
   uint32_t grid;
   uint32_t n;
   bool barrier, rebind, pushconst, pipeswitch, ts_per;
+  int barrier_mode{0};
 };
 
 int main() {
@@ -645,6 +685,9 @@ int main() {
       {"local512_1wg", &b.trivial_l512, nullptr, 1, 512, 0, 0, 0, 0, 0},
       {"barrier_trivial_1wg", &b.trivial, nullptr, 1, 512, 1, 0, 0, 0, 0},
       {"barrier_empty_1wg", &b.empty, nullptr, 1, 512, 1, 0, 0, 0, 0},
+      {"barrierfull_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 0, 0, 0,
+          0, 3},
+      {"mlxpair_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 0, 0, 0, 0, 2},
       {"rebind_trivial_1wg", &b.trivial, nullptr, 1, 512, 0, 1, 0, 0, 0},
       {"pushconst_trivial_1wg", &b.tpc, nullptr, 1, 512, 0, 0, 1, 0, 0},
       {"pipeswitch_trivial_1wg", &b.trivial, &b.trivial_b, 1, 512, 0, 0, 0, 1,
@@ -662,6 +705,7 @@ int main() {
     rc.grid = c.grid;
     rc.n = c.n;
     rc.barrier = c.barrier;
+    rc.barrier_mode = c.barrier_mode;
     rc.rebind = c.rebind;
     rc.pushconst = c.pushconst;
     rc.pipeswitch = c.pipeswitch;

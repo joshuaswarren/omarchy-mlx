@@ -867,13 +867,44 @@ AneWorkerReport AneWorker::open(
     ::signal(SIGTERM, SIG_DFL);
     int code = 0;
     try {
+      // Optional open-phase timing (MLX_OMARCHY_OPEN_TIMING=1): the
+      // child's device construction and per-program load cost land on
+      // stderr next to the parent's seal-phase lines, so a slow open
+      // can be attributed to seal, dlopen, or ane_init without guessing.
+      const bool timing = [] {
+        const char* v = ::getenv("MLX_OMARCHY_OPEN_TIMING");
+        return v != nullptr && v[0] != '\0';
+      }();
+      auto stall = [](std::chrono::steady_clock::time_point t0) {
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - t0)
+            .count();
+      };
+      const auto factory_started = std::chrono::steady_clock::now();
       std::unique_ptr<AneDevice> device = factory_();
+      if (timing) {
+        std::fprintf(
+            stderr, "[omarchy-ane] child device factory %.1f ms\n",
+            stall(factory_started));
+      }
       size_t loaded = 0;
       for (const auto& bundle : resident) {
         for (const auto& program : bundle.programs) {
+          const auto load_started = std::chrono::steady_clock::now();
           device->load(program);
+          if (timing) {
+            std::fprintf(
+                stderr,
+                "[omarchy-ane] child load program %zu (%s) %.1f ms\n",
+                loaded, program.anec.filename().string().c_str(),
+                stall(load_started));
+          }
           ++loaded;
         }
+      }
+      if (timing) {
+        std::fprintf(stderr, "[omarchy-ane] child loaded %zu programs\n",
+                     loaded);
       }
       send_frame(fds[1], "loaded " + std::to_string(loaded) + "\n");
       code = resident_child_loop(
@@ -893,9 +924,21 @@ AneWorkerReport AneWorker::open(
   channel_ = fds[0];
   resident_programs_ = base;
 
-  const auto until = now_ms() + options_.deadline;
+  const bool timing = [] {
+    const char* v = ::getenv("MLX_OMARCHY_OPEN_TIMING");
+    return v != nullptr && v[0] != '\0';
+  }();
+  const auto handshake_started = now_ms();
+  const auto until = handshake_started + options_.deadline;
   std::string line;
   auto wait = recv_line(line, until);
+  if (timing) {
+    std::fprintf(
+        stderr,
+        "[omarchy-ane] parent open handshake %.1f ms (fork to loaded)\n",
+        std::chrono::duration<double, std::milli>(now_ms() - handshake_started)
+            .count());
+  }
   if (!wait.ok) {
     auto out = end_session(wait);
     out.elapsed = now_ms() - started;

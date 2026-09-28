@@ -190,6 +190,7 @@ CapabilityReport collect_capabilities(
 
   caps.unified_memory = false;
   size_t device_local = 0;
+  size_t host_visible_heap = 0;
   for (uint32_t i = 0; i < mem2.memoryProperties.memoryHeapCount; ++i) {
     const auto& heap = mem2.memoryProperties.memoryHeaps[i];
     if (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
@@ -210,7 +211,22 @@ CapabilityReport collect_capabilities(
       }
     }
   }
-  caps.total_memory = device_local;
+  // total_memory must be the memory the allocator can actually use: every
+  // buffer is allocated from a HOST_VISIBLE type, so the usable size is the
+  // largest heap backing any HOST_VISIBLE type. The largest DEVICE_LOCAL
+  // heap is the wrong measure on Apple-UMA drivers (Honeykrisp on T8103
+  // reports a ~16 MB device-local heap alongside the multi-GB unified
+  // heap), which collapsed memory_limit_ and the batch byte budget
+  // (receipt 2026-09-23-m1host-decode-gap-batchbudget, addendum 2).
+  for (uint32_t i = 0; i < mem2.memoryProperties.memoryTypeCount; ++i) {
+    const auto& type = mem2.memoryProperties.memoryTypes[i];
+    if (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+      host_visible_heap =
+          std::max(host_visible_heap, static_cast<size_t>(
+              mem2.memoryProperties.memoryHeaps[type.heapIndex].size));
+    }
+  }
+  caps.total_memory = host_visible_heap > 0 ? host_visible_heap : device_local;
 
   caps.timeline_semaphore = f12.timelineSemaphore == VK_TRUE;
   caps.shader_float16 = f12.shaderFloat16 == VK_TRUE;

@@ -17,7 +17,15 @@ The licensed LibriSpeech `1089-134686-0000` clip produces 104 tokens on
 ANE and GPU, including repeated punctuation and a Cyrillic suffix after
 the English sentence. CPU produces 100 tokens and a different suffix.
 Every capture matches the pinned end-to-end transcriber for its compute
-plan. The cause is not established. No output cleanup is applied.
+plan. The mechanism is established in source (2026-09-27): the mel frontends
+emit an all-valid attention mask regardless of real signal length on both
+sides — the Linux runtime (`overlay/tools/coreml/vulkan_mel.py`, normalize
+kernel sets `mask[frame] = 1` for every frame) and the macOS CoreML reference
+(`MelFeatureExtractor.swift` in the pinned `75aec2a1` tree) — so the decoder
+decodes the full 375-frame padded window on audio shorter than the 30 s model
+window, producing trailing punctuation/Cyrillic artifacts. This is reference
+behavior in the pinned lineage; changing it is a reference-contract decision,
+intentionally not taken unilaterally. No output cleanup is applied.
 
 The exact ANE output is retained as a native parity reference, not presented
 as clean ASR output. This is a macOS reference finding, not a demonstrated

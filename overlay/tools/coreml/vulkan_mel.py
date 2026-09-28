@@ -681,17 +681,20 @@ def _dft_kernel(mx=None):
         output_names=["dft_real", "dft_imag"],
         header=_FMA_HEADER,
         source="""
-            threadgroup float real0[256];
-            threadgroup float imag0[256];
-            threadgroup float real1[256];
-            threadgroup float imag1[256];
-            uint lane = thread_index_in_threadgroup;
-            uint frame = threadgroup_position_in_grid.x;
+            threadgroup float real0[512];
+            threadgroup float imag0[512];
+            threadgroup float real1[512];
+            threadgroup float imag1[512];
+            uint fid = thread_index_in_threadgroup / 64u;
+            uint lane = thread_index_in_threadgroup % 64u;
+            uint foff = fid * 256u;
+            uint frame = threadgroup_position_in_grid.x * 2u + fid;
+            if (frame >= frames_shape[0]) { return; }
             uint frame_base = frame * 512u;
             for (uint part = 0u; part < 4u; ++part) {
                 uint packed = lane + part * 64u;
-                real0[packed] = frames[frame_base + packed * 2u];
-                imag0[packed] = frames[frame_base + packed * 2u + 1u];
+                real0[foff + packed] = frames[frame_base + packed * 2u];
+                imag0[foff + packed] = frames[frame_base + packed * 2u + 1u];
             }
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -701,10 +704,10 @@ def _dft_kernel(mx=None):
                 uint next_remaining = remaining / 4u;
                 uint group = lane / prefix;
                 uint p = lane - group * prefix;
-                uint source0 = group * prefix + p;
-                uint source1 = (next_remaining + group) * prefix + p;
-                uint source2 = (2u * next_remaining + group) * prefix + p;
-                uint source3 = (3u * next_remaining + group) * prefix + p;
+                uint source0 = foff + group * prefix + p;
+                uint source1 = foff + (next_remaining + group) * prefix + p;
+                uint source2 = foff + (2u * next_remaining + group) * prefix + p;
+                uint source3 = foff + (3u * next_remaining + group) * prefix + p;
                 precise float xr0;
                 precise float xr1;
                 precise float xr2;
@@ -791,7 +794,7 @@ def _dft_kernel(mx=None):
                 yi3 = fma32(orm, cos1, eim);
             }
 
-                uint target0 = (group * 4u) * prefix + p;
+                uint target0 = foff + (group * 4u) * prefix + p;
                 uint target1 = target0 + prefix;
                 uint target2 = target1 + prefix;
                 uint target3 = target2 + prefix;
@@ -811,8 +814,8 @@ def _dft_kernel(mx=None):
 
             uint output_base = frame * 257u;
             if (lane == 0u) {
-            precise float twice_real = add32(real0[0], real0[0]);
-            precise float twice_imag = add32(imag0[0], imag0[0]);
+            precise float twice_real = add32(real0[foff], real0[foff]);
+            precise float twice_imag = add32(imag0[foff], imag0[foff]);
             dft_real[output_base] = mul32(0.5f, add32(twice_real, twice_imag));
             dft_real[output_base + 256u] = mul32(0.5f, sub32(twice_real, twice_imag));
             dft_imag[output_base] = 0.0f;
@@ -820,10 +823,10 @@ def _dft_kernel(mx=None):
         }
         for (uint low = lane + 1u; low <= 128u; low += 64u) {
             uint mirrored = 256u - low;
-            precise float direct_real = real0[low];
-            precise float direct_imag = imag0[low];
-            precise float mirror_real = real0[mirrored];
-            precise float mirror_imag = imag0[mirrored];
+            precise float direct_real = real0[foff + low];
+            precise float direct_imag = imag0[foff + low];
+            precise float mirror_real = real0[foff + mirrored];
+            precise float mirror_imag = imag0[foff + mirrored];
             precise float imag_sum = add32(direct_imag, mirror_imag);
             precise float real_diff = sub32(mirror_real, direct_real);
             precise float real_sum = add32(direct_real, mirror_real);
@@ -858,8 +861,8 @@ def _dft_frames(frames):
         [frames, constants.dft, constants.untangle_cos, constants.untangle_sin],
         [(frames.shape[0], N_BINS), (frames.shape[0], N_BINS)],
         [mx.float32, mx.float32],
-        (frames.shape[0] * 64, 1, 1),
-        (64, 1, 1),
+        ((frames.shape[0] + 1) // 2 * 128, 1, 1),
+        (128, 1, 1),
     ))
 
 

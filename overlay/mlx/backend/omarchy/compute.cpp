@@ -302,6 +302,8 @@
 #include "matmul_fma_bf16.h"
 #include "binary_vec_f16.h"
 #include "binary_vec_bf16.h"
+#include "unary_vec_f16.h"
+#include "unary_vec_bf16.h"
 #include "matmul_rb_f16.h"
 #include "swiglu_f16.h"
 #include "swiglu_bf16.h"
@@ -1281,6 +1283,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {binary_vec_f16, binary_vec_f16_size};
     case ComputeKernel::BinaryVecBF16:
       return {binary_vec_bf16, binary_vec_bf16_size};
+    case ComputeKernel::UnaryVecF16:
+      return {unary_vec_f16, unary_vec_f16_size};
+    case ComputeKernel::UnaryVecBF16:
+      return {unary_vec_bf16, unary_vec_bf16_size};
     case ComputeKernel::MatmulRbF16:
       return {matmul_rb_f16, matmul_rb_f16_size};
     case ComputeKernel::SwigluF16:
