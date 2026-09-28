@@ -144,16 +144,16 @@ void main() {
       if (params.operation == 0u) {
         uint gate_index = params.aux_offset + row * row_length + index;
         float gate = WIDEN(gate_data.values[gate_index]);
-        // silu(gate) then silu * normed, left-associated exactly like
-        // the composed sigmoid -> mul -> mul chain (f32 muls commute
-        // bitwise, so operand order inside each mul is free).
-        // The composed chain is bf16-typed and the interpreter rounds
-        // every node output to the storage dtype (swiglu.comp semantics,
-        // verified against the model gate): round sigmoid and the silu
-        // product to bf16 before the final multiply.
+        // silu(gate) then silu * normed, left-associated exactly like the
+        // composed sigmoid -> mul -> mul chain. mlx-lm's _precise_swiglu
+        // (and this primitive's C++ fallback) run that chain in float32
+        // (gate.astype(float32)) and round ONCE at the end, so nothing is
+        // rounded to the storage dtype between the sigmoid and the final
+        // multiply. (An earlier revision of this file rounded sigmoid and
+        // silu to bf16, which flipped ~36% of outputs by one ulp against
+        // the composed path: receipts/2026-09-28-jwm1-gdn-qk-scaled.md.)
         float sigmoid_value = 1.0 / (1.0 + exp(-gate));
-        float sig_b = WIDEN(STORE_VALUE(sigmoid_value));
-        float silu = WIDEN(STORE_VALUE(gate * sig_b));
+        float silu = gate * sigmoid_value;
         out_value = silu * normed;
       } else {
         out_value = normed * scale;
