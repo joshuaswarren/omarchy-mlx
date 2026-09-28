@@ -10,6 +10,7 @@
 # Greedy vocab prune: ON by default. Tied 4-bit/g64 lm_head decode steps
 # go to mx.fast.greedy_quantized_argmax; the patch itself no-ops on any
 # other head and MLX_OMARCHY_NO_GREEDY_PRUNE=1 restores the upstream step.
+# GDN q/k scaled norm: ON by default (mx.fast.rms_norm_scaled, decode rows only).
 # Conv-ring: OFF by default (decode-only experimental optimization);
 # set MLX_OMARCHY_CONV_RING=1 to enable.
 #
@@ -51,6 +52,10 @@ apply() {
 apply mlx-lm-gated-delta-fast-route.patch
 apply mlx-lm-gated-delta-raw.patch
 apply mlx-lm-greedy-prune.patch
+# GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
+# bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
+# digest unchanged, decode +2.1%). The gated-norm site is NOT shipped: it diverges.
+apply mlx-lm-qwen35-qk-scaled.patch
 if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 ]]; then
   apply mlx-lm-convring.patch
 else

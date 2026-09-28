@@ -1,0 +1,42 @@
+--- a/mlx_lm/models/qwen3_5.py
++++ b/mlx_lm/models/qwen3_5.py
+@@ -177,8 +177,16 @@
+ 
+         state = cache[1] if cache else None
+         inv_scale = k.shape[-1] ** -0.5
+-        q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
+-        k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
++        if (
++            q.dtype == mx.bfloat16
++            and q.size <= 32768
++            and hasattr(mx.fast, "rms_norm_scaled")
++        ):
++            q = mx.fast.rms_norm_scaled(q, None, inv_scale * inv_scale, 1e-6)
++            k = mx.fast.rms_norm_scaled(k, None, inv_scale, 1e-6)
++        else:
++            q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
++            k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+ 
+         out, state = gated_delta_update(
+             q,
+--- a/mlx_lm/models/qwen3_next.py
++++ b/mlx_lm/models/qwen3_next.py
+@@ -281,8 +281,16 @@
+ 
+         state = cache[1] if cache else None
+         inv_scale = k.shape[-1] ** -0.5
+-        q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
+-        k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
++        if (
++            q.dtype == mx.bfloat16
++            and q.size <= 32768
++            and hasattr(mx.fast, "rms_norm_scaled")
++        ):
++            q = mx.fast.rms_norm_scaled(q, None, inv_scale * inv_scale, 1e-6)
++            k = mx.fast.rms_norm_scaled(k, None, inv_scale, 1e-6)
++        else:
++            q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
++            k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+ 
+         out, state = gated_delta_update(
+             q,
