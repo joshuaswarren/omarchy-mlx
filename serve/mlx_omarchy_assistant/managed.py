@@ -154,6 +154,10 @@ def reap_pair_records(pair_id: str, home: Path,
         elif tracked is None and record.get("claimed") is not None \
                 and not budget.identity_alive(record["claimed"]):
             verified_dead = True
+        elif tracked is None and record.get("claimed") is None \
+                and record.get("parent") is not None \
+                and not budget.identity_alive(record["parent"]):
+            verified_dead = True
         if not verified_dead:
             continue
         try:

@@ -747,6 +747,19 @@ class ClaimProtocolTests(BasePairTest):
         self.assertEqual(set(budget.load_reservations(self.home)),
                          {"chat", "decision"})
 
+    def test_unclaimed_record_of_a_dead_creator_is_reaped_after_reboot(self):
+        budget.admit_and_reserve_batch(
+            [("chat", 1024, ""), ("decision", 1024, "")],
+            pair_id="everyday", home=self.home, available_bytes=10 * GiB)
+        path = budget.reservations_path(self.home)
+        stale = json.loads(path.read_text())
+        for record in stale.values():
+            record["parent"]["starttime"] += 1
+        path.write_text(json.dumps(stale))
+        cleared = managed.reap_pair_records("everyday", self.home, children=[])
+        self.assertEqual(sorted(cleared), ["chat", "decision"])
+        self.assertEqual(budget.load_reservations(self.home), {})
+
 
 class StubWorkerLifecycleTests(BasePairTest):
     def _close_lw(self):

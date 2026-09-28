@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import re
 import threading
 import time
 import uuid
@@ -25,6 +26,12 @@ MAX_QUESTIONS = 8
 # Auto allowances are backed by the admitted context in _admit_output.
 TASK_OUTPUT_ALLOWANCE = {"chat": 2048, "compare": 1024, "decide": 1024, "draft": 1024}
 MIN_AUTO_ALLOWANCE = 256
+# The card schema costs about 650 prompt tokens on every turn. Ordinary chat
+# skips it; a message that names a card-shaped output, and every Laya turn,
+# keeps it.
+CARD_CUES = re.compile(
+    r"\b(cards?|tables?|charts?|graphs?|check ?lists?|timelines?|forms?|compar(?:e|es|ison|isons)"
+    r"|pros and cons|decisions?|options?)\b", re.IGNORECASE)
 
 DRAFT_PROMPT = (
     "Extract a comparison draft from the user's request. Reply with ONLY one JSON "
@@ -476,7 +483,9 @@ class Coordinator:
             if mode == "draft":
                 self._run_draft(cid, turn, pair, payload, maximum, cancel)
                 return
-            messages = [{"role": "system", "content": "Answer the user using their supplied facts. " + SCHEMA_PROMPT}]
+            wants_cards = mode in ("compare", "decide") or bool(CARD_CUES.search(payload["text"]))
+            messages = [{"role": "system", "content": "Answer the user using their supplied facts."
+                         + (" " + SCHEMA_PROMPT if wants_cards else "")}]
             messages.extend(self._selected_history(record, turn))
             if mode in ("compare", "decide"):
                 path = pair["model_paths"]["decision"]

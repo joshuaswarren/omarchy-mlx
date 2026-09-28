@@ -26,6 +26,8 @@ Setup approval covers the selected pinned artifacts, including Laya conversion a
 After login, `mlx-omarchy-chat --resume` loads that saved pair and keeps both workers resident until logout.
 A reboot clears GPU memory. The user service starts the same saved pair again at the next login.
 Opening the launcher attaches to that process. It does not load the weights a second time.
+The service does nothing until a pair has been set up, so a fresh install holds no model memory.
+To stop the load at login, run `systemctl --user disable --now mlx-omarchy-chat.service`. `install.sh --uninstall` removes the unit.
 Do not treat a successful download or process startup as pair qualification.
 A missing Parakeet dictation module leaves speech unavailable. It must not stop text setup.
 
@@ -39,6 +41,31 @@ The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.js
 Automatic decision routing stays disabled. The held-out suite is frozen and unevaluated at `tests/fixtures/routing_held_out.json`.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
 The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
+
+### Everyday pair gate status, 2026-09-28
+
+Host: M2 Max (T6021), kernel 7.1.13-ARCH-polltx, MLX 0.32.3.dev202609232032+4fd2130ed, source `134d0b67a` plus the fixes below.
+The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbers.
+
+| Gate | Result |
+|---|---|
+| Chat, compare, cancel | Pass. Laya chose `cat` over `elephant` (0.7192 / 0.2808). Cancel stopped the turn. |
+| Resume after reboot | Pass. Saved pair loaded in 1.41 s. The next chat answered. |
+| Restart with outbound sockets denied | Pass, twice. A network namespace with loopback only. Both connection tests failed as intended. |
+| First visible answer, 30 warm turns | Pass after a fix. Before: p50 2.86 s, p95 3.24 s. After: p50 0.99 s, p95 1.06 s. Target is p95 2.00 s. |
+| Voice | Not qualified. No listener check. No accuracy corpus. |
+| Quality pair | Not run. |
+| Routing held-out suite | Not evaluated. Automatic routing stays off. |
+| UX screenshots and accessibility checks | Not run. |
+| Card generation with the real model | Not run. |
+| Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. |
+
+No pair is qualified. All catalog entries keep `recommended: false`.
+
+Two defects found by these runs are fixed:
+
+- The chat prompt carried a 650-token card schema on every turn. Prefill took about 2 s. Ordinary chat now omits it. A message that names a card, table, chart, checklist, timeline, form, comparison, decision, or options keeps it, and so does every Laya turn. A plain request such as "summarize this" no longer gets an unprompted card.
+- A reboot during pair start left an unclaimed reservation. Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
 
 ## Model status
 

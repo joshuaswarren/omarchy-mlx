@@ -1,8 +1,8 @@
 {
   "date": "2026-09-28",
   "status": "incomplete-not-qualified",
-  "source_commit": "d02f863ff",
-  "source_changes": "Uncommitted login resume: --resume, saved-pair directory lookup, user service unit in install.sh.",
+  "source_commit": "134d0b67a",
+  "source_changes": "Uncommitted: card schema sent only when a turn asks for a card; reaper clears unclaimed reservations of a dead creator.",
   "host": "<project-m2>",
   "chip": "Apple M2 Max T6021",
   "device_name": "Apple M2 Max (G14C B1)",
@@ -12,8 +12,8 @@
   "chat_model": "qwen3.8-2b-4bit",
   "decision_model": "laya-mlx",
   "checks": {
-    "chat": {"seconds": 3.02, "text": "ready", "status": "complete"},
-    "second_chat": {"seconds": 3.01, "text": "warm", "status": "complete"},
+    "chat": {"seconds": 3.02, "text": "ready", "status": "complete", "note": "before the card-schema fix"},
+    "second_chat": {"seconds": 3.01, "text": "warm", "status": "complete", "note": "before the card-schema fix"},
     "compare": {
       "seconds": 4.03,
       "choice": "cat",
@@ -24,15 +24,37 @@
     "cancel": "stopped",
     "voice": "unqualified",
     "resume_after_process_stop": {"load_seconds": 1.43, "chat_seconds": 4.27, "text": "resident"},
-    "resume_after_reboot": {"load_seconds": 1.41, "chat_seconds": 4.28, "text": "resident", "uptime_at_start": "2 min"}
+    "resume_after_reboot": {"load_seconds": 1.41, "chat_seconds": 4.28, "text": "resident", "uptime_at_start": "2 min"},
+    "offline_restart": {
+      "method": "unshare -n -r with loopback up; connections to 1.1.1.1:443 and huggingface.co:443 failed",
+      "runs": [
+        {"label": "cold", "denied": true, "load_seconds": 1.48, "chat_seconds": 4.29, "compare_seconds": 4.03, "choice": "cat", "model": "laya-mlx"},
+        {"label": "restart", "denied": true, "load_seconds": 1.42, "chat_seconds": 4.29, "compare_seconds": 4.02, "choice": "cat", "model": "laya-mlx"}
+      ],
+      "scope": "Chat and decision only. Voice, fonts, and history were not exercised."
+    },
+    "first_visible_answer": {
+      "procedure": "2 warmups, 30 measured turns, one persistent pair, ~170-token prompt, 256-token allowance, clock stops at first text event",
+      "target": "p95 <= 2.00 s",
+      "before_fix": {"first_text_p50": 2.86, "first_text_p95": 3.24, "done_p95": 4.65, "pass": false},
+      "cause": "A 650-token card schema was prefilled on every chat turn. The chat worker alone returned its first chunk in 0.78 s and finished in 1.8 s for a 170-token prompt. Removing the schema on a scratch copy gave p95 1.03 s.",
+      "after_fix": {"first_text_p50": 0.99, "first_text_p95": 1.06, "done_p95": 2.18, "pass": true},
+      "not_measured": "Thermal state. Peak memory. Cold-start figure separate from warm."
+    }
   },
+  "defects_fixed": [
+    "Card schema prefilled on every chat turn",
+    "Unclaimed reservation of a dead creator blocked every restart after a reboot during pair start"
+  ],
   "not_run": [
-    "outbound sockets denied during restart",
     "Quality pair",
     "routing held-out suite",
     "voice accuracy and listener check",
-    "UX screenshots",
-    "30-turn latency battery"
+    "UX screenshots and accessibility checks",
+    "card generation with the real model",
+    "standing M1 battery and zero-CPU dispatch trace",
+    "clean installation on a fresh machine",
+    "pair memory peak"
   ],
   "login_service": "install.sh writes and enables mlx-omarchy-chat.service for a real user home. It was not enabled on the shared test GPU."
 }

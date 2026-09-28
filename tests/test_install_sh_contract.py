@@ -194,9 +194,13 @@ class ServeCliContractTests(unittest.TestCase):
 
     def test_no_background_scheduler_is_installed(self):
         text = installer_text()
-        self.assertNotIn("systemctl", text)
         self.assertNotIn(".timer", text)
-        self.assertNotIn(".service", text)
+        services = {word.rsplit("/", 1)[-1] for line in text.splitlines()
+                    for word in line.replace('"', " ").split() if word.endswith(".service")}
+        self.assertLessEqual(services, {"mlx-omarchy-chat.service"})
+        for line in text.splitlines():
+            if "systemctl" in line and "command -v systemctl" not in line and not line.lstrip().startswith("#"):
+                self.assertIn("--user", line)
 
     def test_periodic_checker_ships_only_with_the_release_that_has_it(self):
         # Migration contract: the checker is part of the serve package fetched

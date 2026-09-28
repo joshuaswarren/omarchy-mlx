@@ -82,7 +82,7 @@ The installer includes local model servers and Laya. The [serving guide](docs/se
 
 MLX Chat now has a local web app in this source tree.
 The browser and terminal use the same model pair, chat history, and stop control.
-This is not a tested release. Neither pair has passed all release checks. Voice has not passed them either.
+This is not a tested release. No pair has passed all release checks. On an M2 Max the Everyday pair passes chat, compare, cancel, restart with the network denied, and a 2-second first-answer target. Voice, the Quality pair, the interface checks, and routing have not passed. See [gate status](docs/serve.md#everyday-pair-gate-status-2026-09-28).
 
 | Pair to test | Chat model | Decision model |
 |---|---|---|

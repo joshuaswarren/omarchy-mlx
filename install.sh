@@ -30,9 +30,13 @@ case "${1:-}" in
   --ane) ANE=1 ;;
   --voice) VOICE=1 ;;
   --uninstall)
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl --user disable --now mlx-omarchy-chat.service >/dev/null 2>&1 || true
+    fi
     rm -rf "$PREFIX" "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info" \
       "$BIN/mlx-omarchy-serve" "$BIN/omarchy-mlx-serve" \
-      "$APPS/mlx-omarchy-chat.desktop" "$APPS/mlx-omarchy-demo.desktop"
+      "$APPS/mlx-omarchy-chat.desktop" "$APPS/mlx-omarchy-demo.desktop" \
+      "$HOME/.config/systemd/user/mlx-omarchy-chat.service"
     if command -v omarchy >/dev/null 2>&1; then
       omarchy_target="$(dirname "$(command -v omarchy)")/omarchy-mlx-serve"
       if [[ -w "$(dirname "$omarchy_target")" ]] && grep -qs 'mlx_omarchy_serve' "$omarchy_target" 2>/dev/null; then

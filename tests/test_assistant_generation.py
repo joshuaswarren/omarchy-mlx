@@ -260,6 +260,15 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(record["messages"][-1]["content"], "more text")
         self.assertEqual(len(record["messages"]), 4)  # two turns, user+assistant each
 
+    def test_card_schema_is_sent_only_when_the_turn_asks_for_a_card(self):
+        cid = self.cid()
+        self.worker.scripts = [[(0, delta("ok")), (0, finish("stop"))]] * 2
+        self.run_turn(cid, {"text": "Summarize the release notes in plain words."})
+        self.run_turn(cid, {"text": "Show the options as a comparison table."})
+        plain, cards = (call["messages"][0]["content"] for call in self.worker.calls)
+        self.assertNotIn("assistant-ui", plain)
+        self.assertIn("assistant-ui", cards)
+
     def test_invalid_component_repaired_once(self):
         cid = self.cid()
         bad_block = '{"version": 1, "components": [{"type": "nope"}]}'
