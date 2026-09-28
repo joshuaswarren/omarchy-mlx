@@ -4,11 +4,14 @@
 Generic patterns only; site inventory via optional untracked
 .private-patterns (never published). Scans EVERY commit in range
 (merges via -m, root via --root): added lines, new filenames, commit
-message. Single rev = full history (conservative for new refs).
+message. Single rev = full history (conservative). A new push ref scans
+commits not already reachable from a remote, so published history is not
+re-blocked.
 
 Usage:
   privacy_check.py <base>..<head>     scan introduced commits
-  privacy_check.py <head>             scan full history (new refs)
+  privacy_check.py <head>             scan full history
+  privacy_check.py --not-remotes <sha> scan commits not on any remote
   privacy_check.py --hook             pre-push hook mode (reads stdin)
   privacy_check.py --staged           pre-commit mode (scan staged added lines)
 
@@ -124,12 +127,13 @@ def main():
             if local_sha == ZERO:
                 continue  # deletion
             if remote_sha == ZERO:
-                ranges = [local_sha]  # new ref: full history, conservative
+                ranges = ["--not-remotes", local_sha]
             else:
                 ranges = ["%s..%s" % (remote_sha, local_sha)]
-            for rng in ranges:
-                p = subprocess.run([sys.executable, os.path.abspath(__file__),
-                                    rng],
+            for i in range(0, len(ranges), 1 if ranges[0] != "--not-remotes" else 2):
+                cmd = [sys.executable, os.path.abspath(__file__)] + (
+                    ranges[i:i + 2] if ranges[0] == "--not-remotes" else [ranges[i]])
+                p = subprocess.run(cmd,
                                    env={**os.environ,
                                         "PRIVACY_REPO": toplevel},
                                    stdout=subprocess.DEVNULL)
@@ -142,6 +146,19 @@ def main():
         die("PRIVACY_REPO not set (fail-closed)")
     if not os.path.isdir(repo):
         die("PRIVACY_REPO '%s' is not a directory" % repo)
+    if args[0] == "--not-remotes":
+        if len(args) != 2:
+            die("usage: --not-remotes <sha>")
+        repo = os.environ.get("PRIVACY_REPO")
+        if not repo:
+            die("PRIVACY_REPO not set (fail-closed)")
+        sha = args[1]
+        if subprocess.run(["git", "-C", repo, "rev-parse", "-q", "--verify", sha],
+                          stdout=subprocess.DEVNULL).returncode != 0:
+            die("bad rev: %s" % sha)
+        commits = run(["git", "-C", repo, "rev-list", sha, "--not", "--remotes"]).decode().split()
+        finish(repo, commits, "not-remotes %s" % sha[:9])
+        return
     rng = args[0]
     base_part, sep, head_part = rng.partition("..")
     if sep:
@@ -164,6 +181,11 @@ def main():
             repo, rng, len(regexes),
             os.path.isfile(os.path.join(repo, os.environ.get("PRIVACY_PATTERNS_NAME", ".private-patterns")))))
     commits = run(["git", "-C", repo, "rev-list", rng]).decode().split()
+    finish(repo, commits, rng)
+
+
+def finish(repo, commits, label):
+    regexes = compile_patterns(repo)
     hits = []
     for c in commits:
         msg = run(["git", "-C", repo, "log", "-1", "--format=%B", c])
@@ -179,7 +201,7 @@ def main():
                  regexes, hits)
     if hits:
         sys.exit(1)
-    print("privacy-check: clean (%s)" % rng)
+    print("privacy-check: clean (%s)" % label)
 
 
 if __name__ == "__main__":
