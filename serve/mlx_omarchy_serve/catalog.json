@@ -782,5 +782,35 @@
         "module": null
       }
     }
+  ],
+  "pairs": [
+    {
+      "id": "everyday",
+      "label": "Everyday",
+      "chat_model": "qwen3.8-2b-4bit",
+      "decision_model": "laya-mlx",
+      "priority": 2,
+      "max_questions": 8,
+      "routing_policy": "1",
+      "qualification": {
+        "status": "untested",
+        "receipt": null,
+        "date": null
+      }
+    },
+    {
+      "id": "quality",
+      "label": "Quality",
+      "chat_model": "qwen3.8-27b-4bit",
+      "decision_model": "laya-mlx",
+      "priority": 1,
+      "max_questions": 8,
+      "routing_policy": "1",
+      "qualification": {
+        "status": "untested",
+        "receipt": null,
+        "date": null
+      }
+    }
   ]
 }

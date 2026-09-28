@@ -9,6 +9,23 @@ The ANE can replace supported static graph regions after numerical and performan
 The CPU may schedule commands, copy buffers, tokenize input, and serve requests.
 It must not evaluate tensor primitives in a release build.
 
+## Offline assistant application
+
+The application lives in `serve/mlx_omarchy_assistant/`. The browser and terminal use one authenticated loopback coordinator.
+The coordinator owns conversation IDs, ordered events, opt-in history, cancellation, and generated-component validation.
+PairManager prepares pinned chat and converted Laya artifacts, then reserves both workers through the existing memory ledger.
+Each worker inherits a lifetime pipe. Reservations remain until the manager verifies process exit.
+
+The shared GPU admission lock serializes generation, dictation, synthesis, setup, and transfer activation.
+The coordinator parks chat generation at a real decode boundary and hands the GPU lock to one queued speech request between chunks (mlx_omarchy_assistant.speech_yield + the pinned-server yield gate).
+A persistent synthesis worker returns PCM chunks over a pipe; the HTTP layer streams them to the browser.
+Recognition uses a bounded subprocess and retains the installed Parakeet fixture route.
+
+Sizing searches token counts against byte-based memory admission and declared model limits.
+Missing backend qualification imposes an explicit unqualified cap; it does not create a ready recommendation.
+All model inference, including speech, keeps the no-CPU-tensor contract below.
+The [design](plans/2026-09-27-offline-assistant-design.md) lists the acceptance gates that remain open.
+
 ## Backend boundary
 
 MLX exposes `DeviceType::cpu` and `DeviceType::gpu`.

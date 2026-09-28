@@ -27,8 +27,12 @@ qualify full-encoder ANE coverage or macOS performance parity.
 
 Apple M2 Max (T6021, t6021-test-host) GPU is verified third-silicon on Mesa
 Honeykrisp / Vulkan 1.4.354 ([`ane-linux-experiments/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md)).
-t6021-test-host Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND, no
-`/dev/accel/accel0`. **Apple M2 Max ANE is NOT live-inference-qualified
+t6021-test-host Linux on kernel 7.1.13-3-1-ARCH was ANE_UNBOUND, with no
+`/dev/accel/accel0`. On 2026-09-28, kernel `7.1.13-ARCH-polltx` bound
+`ane_t6021_rtclient`. With the nap-prevention bit set, legacy `CONFIG_GET`
+returned 0. The reply words were `00000000,00000003,016e3600,00000003`.
+A following header-only `PING` (`0x0011`) was not consumed. `/dev/accel`
+was still absent. **Apple M2 Max ANE is NOT live-inference-qualified
 on the Linux driver.** macOS-side ANE numbers cited in this tree
 (T8103/T6021 "divisor" measurements, t6021 captures, H14 oracle mints)
 are macOS CoreML / `aned` measurements on t6021-test-host / studio-host, not

@@ -1,175 +1,144 @@
 # Local generation and HTTP serving on Omarchy
 
-mlx-omarchy provides the Linux GPU backend. A successful CLI generation run
-is not proof that an HTTP server supports the same model.
+The installer includes the serving CLI, Laya decision server, and Bonsai server packages.
+The v0.7.4 installer contains all three. Old installations need an explicit update.
+Installed code and a successful generation request do not establish model or assistant qualification.
 
-## Current model and qualification
+## Current application boundary
 
-The current example is
-[`mlx-community/Qwen3.8-27B-4bit`](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit).
-Verified online **2026-09-20**: Apache-2.0, ungated, last modified
-2026-09-14; [Hugging Face metadata](https://huggingface.co/api/models/mlx-community/Qwen3.8-27B-4bit).
-The tested revision is `10c35caafbb80f7dc6a7a432cdd11af10a6d4818`.
-This is a multimodal checkpoint; text-only generation passed a fresh
-Python 3.14 environment on t6021-test-host with candidate
-`0.32.3.dev202609201346+a1251aaa`, `mlx-vlm==0.7.1` and mlx-lm 0.31.3.
-The candidate is not yet a published release.
+The source tree includes the shared application under `serve/mlx_omarchy_assistant/`.
+It is not a qualified release. Both default pairs and voice still require end-to-end hardware evidence.
+All catalog entries retain `recommended: false`. No code-only check promotes **Ready offline**.
 
-Use the [README text-generation example](../README.md#quick-start) and its
-[pinned install receipt](../receipts/2026-09-20-qwen38-text-install/receipt.json).
-Compilation was enabled; the older diagnostic wheel
-`b744f4dd` required `MLX_DISABLE_COMPILE=1`, which is not a current-main limitation.
-The published prerelease [v0.7.2-rc.1](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.2-rc.1)
-(`5b18306`) re-ran the same smoke on the same model revision with the same
-result ([receipt](../receipts/2026-09-20-release-v0.7.2-rc.1/m2-receipt.json)).
-Image inference and Qwen3.8 HTTP serving on this Linux stack are not yet
-qualified. Model-card server snippets alone do not establish compatibility.
+Inspect the source application:
 
-The checkpoint contains approximately 15 GB of weights. Disk size is not
-peak runtime memory. A 16 GiB M1 has not passed this model's memory and
-generation gates; no smaller current-generation Q4 replacement is qualified
-here yet. The MTP checkpoint is an auxiliary prediction component, not a
-standalone smaller language model.
+```bash
+PYTHONPATH=serve python3 -m mlx_omarchy_assistant --help
+PYTHONPATH=serve python3 -m mlx_omarchy_assistant --home /tmp/mlx-chat-check
+```
 
-## Model status for serving (2026-09-20)
+The browser offers pair setup, comparisons, classification, ordinal scores, opt-in history, and local speech controls.
+The LLM can draft comparison options, but scoring requires explicit confirmation of the editable draft.
+If an explanation claims a different option and omits the Laya choice, the chat says they disagree and leaves the Laya result unchanged. That sentence is part of the saved turn.
+History selection includes whole turns. Pinned constraints remain separate and visible.
+The terminal uses the same coordinator with `--terminal` or `--prompt TEXT --once`.
+Setup approval covers the selected pinned artifacts, including Laya conversion and optional voice assets.
+Do not treat a successful download or process startup as pair qualification.
+A missing Parakeet dictation module leaves speech unavailable. It must not stop text setup.
 
-"Recommended" here requires a qualification pass on real hardware — a
-generation gate alone does not make a model recommended. As of the
-2026-09-20 integration, three catalog entries have passed both
-generation and HTTP on device: the Qwen3.8-27B-4bit chat checkpoint, the
-Bonsai-2-27B module backend, and the Laya typed-decision endpoint. The
-catalog still flags no recommendation pending the remaining qualification gates (numeric equivalence via the out18 ids-capture and a managed-launch qualification run).
-Per-entry status:
+Transfer uses the **Transfer** dialog or `python3 -m mlx_omarchy_assistant.transfer --help`.
+Preparation collects the app, speech tools, installed dependency pins, runtime wheels, model files, and approved licenses.
+It follows version markers and requested extras, and refuses missing required dependencies.
+Export-plan failures leave the inspection control available for retry.
+Installation validates the archive and stages a venv without network access before replacing the active files.
+Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. On-hardware pacing qualification is still pending.
+The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
+Automatic decision routing stays disabled. The held-out suite is frozen and unevaluated at `tests/fixtures/routing_held_out.json`.
+Long-context admission still needs measured workspace and latency curves for each chip/runtime.
+The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
 
-| Model | Verified online (HF API) | Serving status here |
-|---|---|---|
-| [`mlx-community/Qwen3.8-27B-4bit`](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit) | 2026-09-20, Apache-2.0, ungated | **Qualified: text CLI and functional HTTP on device (t6001-test-host)** — revision `10c35caa`. Text CLI: [install receipt](../receipts/2026-09-20-qwen38-text-install/receipt.json). HTTP: against **raw `mlx_lm.server` 0.31.3** — 4 measured + 3 streamed requests, all HTTP 200 with identical text ([raw qualification receipt](../receipts/2026-09-20-qwen38-http-mlxlm-t6001-test-host-raw-qualification.md)); observed rates in that receipt are explicitly not a performance claim. Limits: a managed-route smoke has since passed (route + admission + cleanup on t6001-test-host), but this receipt predates it and does not validate the shim itself; HTTP-vs-direct numerical equivalence is under investigation, image input is not qualified, and the recommendation flag stays off pending the remaining qualification gates (numeric equivalence via the out18 ids-capture and a managed-launch qualification run). |
-| [`prism-ml/Ternary-Bonsai-2-27B-mlx-2bit`](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-mlx-2bit) | 2026-09-20, Apache-2.0, ungated | **Qualified: generation and HTTP on device (t6001-test-host)** via the dedicated `mlx_omarchy_bonsai2` module backend ([receipt](https://github.com/joshuaswarren/ane-linux-experiments/commit/2e4b78f)). The pack's bundled runtime, which is remote code, is never executed; the server enforces a hard context cap and reports the pack's LICENSE/NOTICE with the required attribution. Historical coherent decode on this pack: ~1.44 tok/s ([v0.7.0 recert receipt](../receipts/2026-09-18-v070-pretag-recert-t6001-test-host.md)). |
-| [`empero-ai/Qwen3.8-35B-A3B-Distill`](https://huggingface.co/empero-ai/Qwen3.8-35B-A3B-Distill) | 2026-09-20, Apache-2.0, ungated | Not qualified. No load or serve test recorded on this stack; device qualification is planned. Scripting trap for this GDN/hybrid family: `mlx_lm.generate_step` takes a 1-D `[S]` prompt tensor while direct `model()` calls take `[B,S]` — use the CLI or handle shapes explicitly. |
-| [`convaiinnovations/laya`](https://huggingface.co/convaiinnovations/laya) — served through the in-repo `mlx_omarchy_laya` conversion @ `1c5edc17` | 2026-09-20, Apache-2.0, ungated | **Typed decisions endpoint qualified on device (t6001-test-host)**: generation and HTTP both pass, 6/6 frozen numerical gates, with concurrent real co-serving against an external resident chat service ([receipt](../receipts/2026-09-20-laya-gpu-qual-t6001-test-host.md)). Managed-reservation co-serving: not exercised. Not in a release, and the catalog still recommends nothing pending the remaining qualification gates (numeric equivalence via the out18 ids-capture and a managed-launch qualification run) — see below. |
+## Model status
+
+The catalog records generation, HTTP, and managed-launch qualification separately.
+Its records are not proof of a clean installation, paired memory use, or a disconnected assistant session.
+Read the exact model revision, runtime, and scope in each receipt before using a result.
+
+| Catalog ID | Role | Generation / HTTP / managed status in catalog | Remaining pair requirement |
+|---|---|---|---|
+| `qwen3.8-2b-4bit` | Small chat, MLX-LM | Qualified / qualified / untested | Managed launch and paired qualification |
+| `qwen3.8-27b-4bit` | Larger chat, MLX-LM | Qualified / qualified / qualified | Resolve recorded numerical-equivalence limits and qualify the pair |
+| `laya-mlx` | Typed decisions, dedicated module | Qualified / qualified / untested | Converted artifact, managed launch, paired qualification |
+
+The IDs above reference pinned entries, not floating upstream model names.
+The catalog also contains Bonsai and other Qwen variants; they are not automatic assistant defaults.
+Some qualification references are missing from this checkout, and historical notes disagree with later catalog flags.
+Resolve those references and preserve their original scope before promoting a recommendation.
+This documentation update does not certify a new hardware result.
+
+The pinned Qwen3.8-27B text-generation example and its raw output remain in the
+[README](../README.md#quick-start) and [install receipt](../receipts/2026-09-20-qwen38-text-install/receipt.json).
+That historical CLI run used MLX-VLM; the serving catalog selects MLX-LM through the project shim.
+A loader-specific result does not qualify every loader or vision inference.
+The 27B checkpoint's roughly 16 GB of weights are not its runtime memory requirement.
+Do not select it automatically for a 16 GiB machine.
 
 ## Laya typed-decision serving
 
-Laya is not a chat LLM: it is a ~421M-parameter non-autoregressive typed
-decision model (choice / score / yes-no questions) with calibrated
-probabilities and an explicit escalate/abstain probability per answer,
-served as a second model with its own model id and its own typed
-decision endpoint — a shape `mlx_lm.server` does not offer. Serving it
-is two steps: the in-repo `mlx_omarchy_laya` converter first converts
-convaiinnovations/laya @ `1c5edc17` into a local checkpoint, then
-`mlx_omarchy_laya.server` serves that checkpoint — conversion and
-serving are separate commands.
+Laya is a roughly 421M-parameter non-autoregressive model for choices, ordinal scores, and yes/no answers.
+It generates no prose. It uses `POST /v1/decisions` rather than chat completions.
+The [Laya contract](../serve/mlx_omarchy_laya/CONTRACT.md) specifies request schemas, calibration, and conversion.
+Its `rl_agent.act_probability` value is the probability of answering rather than escalating.
+Its `confidence` value is one minus normalized entropy, not factual accuracy.
 
-On 2026-09-20 the decisions endpoint passed device qualification on an
-M1 Max: 6/6 frozen numerical gates (fp16 GPU against an fp32 CPU
-fixture), managed memory admission before load, and concurrent real
-co-serving — the standing chat service stayed resident and both
-endpoints answered real requests in the same second
-([receipt](../receipts/2026-09-20-laya-gpu-qual-t6001-test-host.md)). Scope limits
-that receipt records: co-serving evidence is the external-resident chat
-(observed through `MemAvailable`); co-serving between two managed
-reservations was not exercised. The code ships with the release that
-contains it, and the catalog's recommendation flags stay off pending the
-integration decision.
+The catalog pins `convaiinnovations/laya` at `1c5edc17a7acd8701df6fc341c0d179f1c62c982`. Convert that source snapshot with the in-repository converter before serving it.
+The serving CLI checks for a converted artifact and refuses the raw source snapshot with a conversion hint.
+It does not currently perform the conversion for the user.
+Chat and Laya retain independent processes, model IDs, and endpoints.
+The assistant coordinates these workers without changing their model contracts.
 
 ## Serving catalog CLI
 
-The serve front door is `mlx-omarchy-serve`, exposed as `omarchy mlx
-serve …` when the command-center launcher is installed. It is in this
-source tree (serving packages integrated 2026-09-20) but **not yet in a
-published release or the installer**: a release install gains it only
-when a release carries it, and old installs never poll anything. From a
-source checkout, run it from the repository root as
-`PYTHONPATH=serve python -m mlx_omarchy_serve` — the PYTHONPATH is
-required so the server's child processes can import the top-level
-`mlx_omarchy_*` packages; a bare `python -m mlx_omarchy_serve` fails,
-and the `serve.mlx_omarchy_serve` spelling resolves `plan`/`--help` but
-is not the validated child-launch environment.
-
-Downloads are approve-first: interactive runs require typed approval
-before anything downloads, and a memory-aware admission gate must pass
-first (details below). The catalog currently flags **every entry
-`recommended: false`**, so the automatic pick names no model — name a
-target explicitly. Manual targets, exactly as `--help` defines them:
+Use `mlx-omarchy-serve` after installation, or `omarchy mlx serve` when the command-center integration is available.
+From a source checkout, include `PYTHONPATH=serve` so child processes can import the serving packages.
+These commands only inspect the catalog or plan memory and disk use; they do not download or launch a model:
 
 ```bash
-PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3.8-27b-4bit --offline
-PYTHONPATH=serve python -m mlx_omarchy_serve serve mlx-community/Qwen3.8-27B-4bit
-PYTHONPATH=serve python -m mlx_omarchy_serve serve /path/to/local/model --context 4096
-PYTHONPATH=serve python -m mlx_omarchy_serve catalog list|status|refresh
-PYTHONPATH=serve python -m mlx_omarchy_serve reserve NAME GIB [--note TEXT]   # memory another local service owns
-PYTHONPATH=serve python -m mlx_omarchy_serve unreserve NAME
+PYTHONPATH=serve python -m mlx_omarchy_serve catalog list --offline
+PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3.8-2b-4bit --context 4096 --offline
+PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3.8-27b-4bit --context 8192 --offline
 ```
 
-`target` is a catalog id, a Hugging Face `org/name`, or a local model
-directory. `plan` runs the admission and disk checks only — it downloads
-nothing; `serve` plans, requires approval, downloads, and launches in
-the foreground. Unqualified manual targets proceed only with a loud
-warning.
+To start one model, use an explicit target and context. This is a manual route, not paired assistant setup:
 
-The catalog it reads seeds ten pinned entries — six Qwen3.8-27B
-quantizations (4-bit through bf16/mxfp4/nvfp4/mxfp8), the
-Qwen3.8-35B-A3B-Distill pair, Ternary-Bonsai-2-27B, and the laya-mlx
-decision model. Three entries carry qualification records, each
-generation and HTTP: `qwen3.8-27b-4bit`, `bonsai-2-27b-mlx-2bit`, and
-`laya-mlx`. Every other entry is an untested placeholder until it passes
-the same bars — generation and HTTP are gated separately, and the
-catalog flags no recommendation pending the remaining qualification gates (numeric equivalence via the out18 ids-capture and a managed-launch qualification run).
+```bash
+mlx-omarchy-serve serve qwen3.8-2b-4bit --context 4096
+```
 
-Before anything downloads, a memory-aware gate budgets `MemAvailable` as
-weights (the full total for MoE; a 35B-A3B counts its full 35B) plus KV at
-the model's explicit context limit, plus a labeled workspace-margin
-estimate and a safety reserve, minus reservations declared with
-`reserve` (a pending reservation subtracts from `MemAvailable`; a
-resident one does not, because the memory is already in use). A no-fit
-is rejected: the gate never trades swap or OOM for
-a download, and a pass is a conservative pre-flight check, not a live
-admission coordinator between concurrent servers. Disk free is checked
-before download. Interactive runs
-require typed approval before any download; noninteractive runs fail
-closed without `--yes`, and `--yes` requires an explicit target — a
-recommendation is never downloaded silently.
+The command checks memory and disk before asking for download approval.
+Manual unqualified targets print a warning. Noninteractive download requires `--yes` and an explicit target.
+Targets can be catalog IDs, Hugging Face repository IDs, or local model directories.
+Use `--help` to inspect the flags for `recommend`, `plan`, `serve`, `catalog`, `reserve`, and `unreserve`.
+With all recommendation flags false, `recommend` selects no model.
 
-Selection: `recommend` orders the catalog by curated priority within a
-kind among tested/compatible fits, not "largest model that fits". Manual
-use accepts a catalog id, an explicit Hugging Face repo, or a local path.
-The automatic pick requires an entry that is recommended, generation- and
-HTTP-qualified, with a working backend and a memory fit — every catalog
-entry currently reads `recommended: false`, so auto-pick names no model
-today; manual targets with unqualified status proceed only with a loud
-warning.
+## Memory and context
 
-Context is enforced on the mlx-lm path by a project shim
-(`_mlxlm_server.py`): every request is capped so prompt and output
-together stay within the admitted context — upstream `--max-tokens` alone
-does not do this (it is an output-only per-request default). The shim
-pins mlx-lm to 0.31.3 and refuses other versions loudly, rejects
-non-integer token arguments, and launches with decode/prompt concurrency
-1 so exactly one request's tokens are resident; a nonzero
-`--prompt-cache-size` is sized into the memory admission before launch.
-(The shim's own HTTP acceptance suite validates this cap independently;
-the Qwen HTTP qualification above ran against raw `mlx_lm.server`.)
-The omlx backend has no verified server-side cap and launches with an
-honest warning saying so. `--server module` routes only through an
-audited in-repo allowlist (`mlx_omarchy_laya.server`,
-`mlx_omarchy_bonsai2.server`); catalog-named modules are never executed
-directly.
+The budget counts full model weights, KV for the requested context, workspace, and a system safety reserve.
+A mixture-of-experts model must budget all its weights, not only its active parameters.
+Use a practical explicit context rather than inheriting the catalog's theoretical maximum.
 
-Catalog refresh fetches from GitHub raw only: conditional ETag, 5 s
-timeout, atomic rename over a last-known-good copy, with a bundled
-fallback before the first successful fetch. `MLX_OMARCHY_OFFLINE=1` (or
-per-command `--offline`) disables refresh entirely,
-`MLX_OMARCHY_CATALOG_TTL_HOURS` (default 24) gates staleness,
-`MLX_OMARCHY_CATALOG_URL` can repoint the source, and
-`MLX_OMARCHY_HOME` relocates state. The TTL check runs only inside
-serve/catalog invocations — no daemon, no telemetry.
+Admission uses an atomic shared reservation transaction before managed model loading.
+A pending reservation counts its full allocation. A resident reservation retains unmaterialized headroom,
+subtracting only its verified materialized floor to avoid counting resident memory twice.
+Without a verified floor, the full reservation remains counted.
+Owner tokens prevent another process from clearing the reservation.
+Shutdown releases it only after the owned worker has stopped.
+See [budget.py](../serve/mlx_omarchy_serve/budget.py) for the implementation.
 
-Safety boundaries as designed: loopback bind by default, `trust_remote_code`
-is never enabled, unsupported models error honestly, nothing downloads in
-the background. The unit suite is green (71 tests, 2026-09-20) and the
-command shapes above are real, but green tests and help output are not
-behavioral proof: the open review findings above gate acceptance, HTTP
-serving is unqualified, and no performance claim is made.
+A preflight pass is not a measured peak or a guarantee against unrelated applications consuming memory later.
+The assistant reserves both models and optional speech workers together through batch admission.
+It must never make fit depend on swap, silent model substitution, or CPU tensor fallback.
+
+On the MLX-LM route, [the project shim](../serve/mlx_omarchy_serve/_mlxlm_server.py) enforces prompt plus output within admitted context.
+It pins MLX-LM 0.31.3, rejects invalid token arguments, and limits generation concurrency to one.
+Prompt-cache entries add to the admitted memory bound.
+The oMLX route has no verified server-side context cap and prints a warning.
+Module routes use an in-repository allowlist for Laya and Bonsai; arbitrary catalog-named Python modules never execute.
+
+## Offline operation
+
+After the runtime and model artifacts are prepared, `--offline` or `MLX_OMARCHY_OFFLINE=1` disables catalog refresh and model downloads.
+The CLI uses cached or bundled catalog data and checks local snapshot completeness before serving.
+A missing model produces a refusal, not an attempted download.
+This does not make the installer offline: Python dependencies, converted Laya files, and every other required artifact must already exist.
+
+Catalog refresh uses the project's GitHub raw source, an ETag, a five-second timeout, and atomic cache replacement.
+The TTL check runs inside serving/catalog commands, not a background daemon.
+The [catalog implementation](../serve/mlx_omarchy_serve/catalog.py) defines refresh settings and validation.
+The assistant's **Ready offline** gate requires a cold start with outbound traffic denied.
+No such end-to-end assistant qualification is claimed here.
+
+Keep all development servers on loopback. Do not expose these unauthenticated endpoints to a LAN or the internet.
+No model load enables `trust_remote_code`. Unsupported operations must fail by name rather than run CPU tensors.
 
 ## Install and check the backend
 
@@ -184,9 +153,8 @@ replace its wheel with the upstream macOS package.
 
 ## HTTP server contract
 
-The installer includes `mlx-lm==0.31.3`. The following is a server template,
-**not a qualified Qwen3.8 invocation**. Set `MODEL_ID` only after validating
-that exact checkpoint with the selected server and wheel.
+The installer includes `mlx-lm==0.31.3`. This low-level example bypasses the managed CLI's memory admission and context shim.
+Prefer the managed command above. For direct server development, choose a checkpoint qualified with this exact loader and wheel.
 
 ```bash
 : "${MODEL_ID:?Set a model already qualified with this server}"

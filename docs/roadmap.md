@@ -106,3 +106,17 @@ Exit receipt: The forked `libane` ABI passes its tests and an M1 consumer smoke.
 (6) Keep a region only when total median latency improves by 10 percent.
 
 Exit receipt: Hybrid traces, numerical checks, state reuse, latency crossover, containment, and recovery all pass.
+
+## Offline assistant: paired text and voice
+
+The [assistant design](plans/2026-09-27-offline-assistant-design.md) defines a new application gate, not a completed backend milestone.
+
+1. Prepare pinned Everyday and Quality model pairs through one setup flow.
+2. Join Laya decisions and LLM conversation in one local chat UI.
+3. Add arbitrary-input recognition and interruptible local speech synthesis.
+4. Qualify installation, paired memory use, disconnected restart, and accessible interaction on each supported configuration.
+
+Text can ship before voice, with voice explicitly unavailable. The complete assistant gate remains open until both pass.
+Exit receipts must include real requests through both models, arbitrary recorded speech, audible TTS,
+zero CPU tensor dispatches, cancellation/recovery, and a cold restart with outbound traffic denied.
+Catalog model flags alone do not satisfy this gate.

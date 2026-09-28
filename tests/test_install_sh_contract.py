@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
-LAUNCHERS = ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-info")
+LAUNCHERS = ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat", "mlx-omarchy-info")
 
 # Deterministic offline contract tests: never resolve the latest release
 # over the network (api.github.com rate limits make that flake).
@@ -49,7 +49,8 @@ class InstallerContractTests(unittest.TestCase):
             apps = home / ".local/share/applications"
             for directory in (prefix, binary, apps):
                 directory.mkdir(parents=True)
-            artifacts = [prefix / "venv", apps / "mlx-omarchy-demo.desktop"]
+            artifacts = [prefix / "venv", apps / "mlx-omarchy-chat.desktop",
+                         apps / "mlx-omarchy-demo.desktop"]
             artifacts.extend(binary / name for name in LAUNCHERS)
             for artifact in artifacts:
                 artifact.touch()
@@ -98,6 +99,9 @@ class AneSmokeGateTests(unittest.TestCase):
         text = installer_text()
         self.assertIn('"$BIN/mlx-omarchy-info"', text)
         self.assertIn('"$BIN/mlx-omarchy-demo"', text)
+        self.assertIn('"$BIN/mlx-omarchy-chat"', text)
+        self.assertIn('"$APPS/mlx-omarchy-chat.desktop"', text)
+        # Pre-existing installs named the desktop entry after the demo.
         self.assertIn('"$APPS/mlx-omarchy-demo.desktop"', text)
 
     def test_extracted_ane_smoke_refuses_char_device_without_fdt(self):
@@ -139,7 +143,7 @@ class ServeCliContractTests(unittest.TestCase):
     def serve_section(self):
         text = installer_text()
         start = text.index('# 5b. Serve CLI')
-        end = text.index('if command -v omarchy-launch-floating-terminal-with-presentation')
+        end = text.index('# 5d. MLX Chat assistant')
         return text[start:end]
 
     def test_serve_package_fetched_from_pinned_release_tag(self):
@@ -192,7 +196,7 @@ class ServeCliContractTests(unittest.TestCase):
         text = installer_text()
         self.assertNotIn("systemctl", text)
         self.assertNotIn(".timer", text)
-        self.assertNotIn(".service", text.replace("omarchy-launch-floating-terminal-with-presentation", ""))
+        self.assertNotIn(".service", text)
 
     def test_periodic_checker_ships_only_with_the_release_that_has_it(self):
         # Migration contract: the checker is part of the serve package fetched
@@ -203,6 +207,38 @@ class ServeCliContractTests(unittest.TestCase):
         self.assertNotIn("cron", section)
         self.assertNotIn("systemd-run", section)
 
+
+class AssistantInstallTests(unittest.TestCase):
+    """Voice dependencies contract.
+
+    The assistant package staging, static layout, launchers, and desktop
+    entry are exercised for real by tests/test_serve_bootstrap.py (local
+    curl shim against this checkout). Only the voice leg has no bootstrap
+    coverage -- it is a pip/system-package branch -- so its installer
+    contract stays checked here.
+    """
+
+    def test_voice_dependencies_are_optional_and_pinned(self):
+        text = installer_text()
+        self.assertIn("VOICE=0", text)
+        self.assertIn("--voice) VOICE=1 ;;", text)
+        self.assertIn("(supported: --ane, --voice, --uninstall)", text)
+        self.assertIn("MLX_AUDIO_VERSION=0.5.6", text)
+        voice_section = text[text.index("if (( VOICE )); then"):]
+        self.assertIn('--no-deps "mlx-audio==$MLX_AUDIO_VERSION"', voice_section)
+        # Verified mlx-audio 0.5.6 runtime floors, extras excluded.
+        for floor in ('"huggingface_hub>=1.0"', '"miniaudio>=1.61"', '"numpy>=1.26.4"',
+                      '"scipy>=1.10.0"', '"sounddevice>=0.5.3"', '"tqdm>=4.67.1"',
+                      '"transformers>=5.14.0"'):
+            self.assertIn(floor, voice_section, f"missing voice dependency {floor}")
+        # mlx-audio declares an mlx requirement; the custom wheel satisfies
+        # it. Any pip install of upstream mlx here would clobber the vendored
+        # build.
+        self.assertNotIn(" mlx>=", voice_section)
+        self.assertNotIn('"mlx"', voice_section)
+        # Playback loads the system PortAudio library (sounddevice ships no
+        # Linux binary), so the runtime package installs only under --voice.
+        self.assertIn("--needed --noconfirm portaudio", voice_section)
 
 class SocGateTests(unittest.TestCase):
     """The installer's SoC gate must accept the whole M1 family.

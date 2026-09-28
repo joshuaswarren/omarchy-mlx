@@ -26,6 +26,8 @@ import inspect
 import json
 import os
 import sys
+import threading
+import time
 
 LIMIT_ENV = "MLX_OMARCHY_SERVE_CONTEXT_LIMIT"
 UNPINNED_ENV = "MLX_OMARCHY_ALLOW_UNPINNED_MLXLM"
@@ -115,6 +117,232 @@ def install(server_module, limit: int) -> None:
 PROBE_ENV = "MLX_OMARCHY_SERVE_IDS_PROBE"
 
 
+# ----------------------------------------------------------- speech yield gate
+#
+# Cooperative TTS scheduling between generation chunks (offline assistant
+# design, "Recognition and synthesis"): the assistant coordinator must be able
+# to run bounded speech synthesis on the GPU BETWEEN generation chunks instead
+# of only after a whole response. Generation happens in this (separate mlx-lm)
+# process, so a coordinator-side lock alone cannot stop it: without a real
+# pause the server would keep decoding while the voice worker synthesizes —
+# overlapping GPU generation and synthesis — and "not reading the SSE stream"
+# is only a fake pause (TCP backpressure freezes the loop mid-flight, not at a
+# token boundary).
+#
+# The gate therefore parks the pinned batched decode loop at a genuine chunk
+# boundary: BatchGenerator.next() runs one full decode step synchronously and
+# returns with every array materialized and all KV caches resident, so a block
+# between steps is a GPU-idle boundary with state preserved. The coordinator
+# only releases its GPU lock for synthesis AFTER a hold was acknowledged from
+# inside this process ("held" means: no step running now and no step can start
+# until release), so the no-overlap invariant is provable, not assumed. When
+# the pause cannot be proven (unpatched single-path generation, parked-ack
+# timeout, wrong secret), hold fails honestly and the assistant keeps today's
+# busy rejection. Nothing is ever SIGSTOPed.
+
+YIELD_CONTROL_PATH = "/v1/internal/yield"
+YIELD_SECRET_HEADER = "X-MLX-Yield-Secret"
+_ACTIVE_GATE: "YieldGate | None" = None
+YIELD_HOLD_MAX_SECONDS = 600.0
+YIELD_ACK_MAX_SECONDS = 30.0
+EXPECTED_NEXT_SIGNATURE = ("self",)
+EXPECTED_RUN_SIGNATURE = ("host", "port", "response_generator", "server_class",
+                          "handler_class")
+
+
+class YieldGate:
+    """Hold/park state shared by the decode thread and the control route.
+
+    State changes interlock under one condition so a hold can never be
+    acknowledged while a decode step is starting: the step side sets
+    ``in_step`` and checks ``desire`` in one atomic region, and the control
+    side sets ``desire`` and checks ``in_step`` in the same region.
+    """
+
+    def __init__(self, hold_max_seconds: float = YIELD_HOLD_MAX_SECONDS):
+        self._cond = threading.Condition()
+        self._secret: str | None = None
+        self._desire = False
+        self._parked = False
+        self._in_step = False
+        self._closed = False
+        self._hold_max_seconds = hold_max_seconds
+        self.holds_granted = 0
+        self.hold_timeouts = 0
+
+    def bind_secret(self, secret) -> None:
+        """Bind the secret presented by the current chat stream. Loopback
+        trust: generation requests were never authenticated on this server;
+        the secret only keeps browsers (no custom headers on simple
+        cross-origin requests) and unrelated local tools from flipping the
+        gate."""
+        if not isinstance(secret, str) or not secret:
+            return
+        with self._cond:
+            self._secret = secret
+
+    def close(self) -> None:
+        """Release a parked decode thread at shutdown."""
+        with self._cond:
+            self._closed = True
+            self._desire = False
+            self._cond.notify_all()
+
+    def control(self, action, secret, ack_timeout) -> tuple[int, dict]:
+        """Handle one control request; returns (http status, payload)."""
+        with self._cond:
+            if action == "probe":
+                if self._secret is None and isinstance(secret, str) and secret:
+                    self._secret = secret
+                return 200, {"gate": True, "bound": self._secret is not None,
+                             "secret_ok": isinstance(secret, str)
+                             and secret == self._secret}
+            if self._closed:
+                return 503, {"error": "worker is shutting down"}
+            if not isinstance(secret, str) or secret != self._secret:
+                return 403, {"error": "yield secret mismatch"}
+            if action == "hold":
+                self._desire = True
+                if self._in_step or self._parked:
+                    deadline = time.monotonic() + min(
+                        max(float(ack_timeout), 0.1), YIELD_ACK_MAX_SECONDS)
+                    while not self._parked and not self._closed:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            # Honest failure: no proven pause, no fake one.
+                            self._desire = False
+                            self.hold_timeouts += 1
+                            self._cond.notify_all()
+                            return 409, {"held": False,
+                                         "reason": "park-ack-timeout"}
+                        self._cond.wait(remaining)
+                if self._closed:
+                    self._desire = False
+                    return 503, {"error": "worker is shutting down"}
+                self.holds_granted += 1
+                return 200, {"held": True}
+            if action == "release":
+                self._desire = False
+                self._cond.notify_all()
+                return 200, {"released": True}
+            return 400, {"error": "action must be probe, hold or release"}
+
+    # Decode-thread side (called from the wrapped BatchGenerator).
+    def _before_step(self) -> None:
+        with self._cond:
+            self._in_step = True
+            if not self._desire:
+                return
+            self._parked = True
+            self._cond.notify_all()
+            deadline = time.monotonic() + self._hold_max_seconds
+            while self._desire and not self._closed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # Crash net: an assistant that died mid-hold must not
+                    # wedge generation forever. It only fires long after any
+                    # bounded synthesis could legitimately take.
+                    self._desire = False
+                    self._cond.notify_all()
+                    break
+                self._cond.wait(remaining)
+            self._parked = False
+            self._cond.notify_all()
+
+    def _after_step(self) -> None:
+        with self._cond:
+            self._in_step = False
+            self._cond.notify_all()
+
+
+def install_yield_gate(server_module, gate: YieldGate) -> None:
+    """Wrap the pinned decode loop and HTTP handler with the yield gate.
+
+    Refuses to launch when the pinned internals moved: an unverified hook
+    could silently stop parking or park mid-step, so the shim refuses the
+    same way it does for the context cap.
+    """
+    real_generator = server_module.BatchGenerator
+    if getattr(real_generator, "_omarchy_yield_wrapped", False):
+        return
+    next_params = tuple(inspect.signature(real_generator.next).parameters)
+    if next_params != EXPECTED_NEXT_SIGNATURE:
+        raise RuntimeError(
+            "unexpected BatchGenerator.next signature "
+            f"{next_params} != {EXPECTED_NEXT_SIGNATURE}; this shim does not "
+            "know this mlx-lm build and refuses to launch with the speech "
+            "yield gate")
+    run_fn = server_module._run_http_server
+    run_params = tuple(inspect.signature(run_fn).parameters)
+    if run_params != EXPECTED_RUN_SIGNATURE:
+        raise RuntimeError(
+            "unexpected _run_http_server signature "
+            f"{run_params} != {EXPECTED_RUN_SIGNATURE}; this shim does not "
+            "know this mlx-lm build and refuses to launch with the speech "
+            "yield gate")
+
+    class _GatedBatchGenerator:
+        """Delegates everything; parks at genuine chunk boundaries."""
+        _omarchy_yield_wrapped = True
+
+        def __init__(self, *args, **kwargs):
+            self._real = real_generator(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def next(self, *args, **kwargs):
+            gate._before_step()
+            try:
+                return self._real.next(*args, **kwargs)
+            finally:
+                gate._after_step()
+
+    server_module.BatchGenerator = _GatedBatchGenerator
+
+    base_handler = server_module.APIHandler
+
+    class _GatedHandler(base_handler):
+        def do_POST(self):  # noqa: N802 (stdlib API)
+            path = self.path.split("?", 1)[0]
+            if path == YIELD_CONTROL_PATH:
+                return self._handle_yield_control()
+            secret = self.headers.get(YIELD_SECRET_HEADER)
+            if secret:
+                gate.bind_secret(secret)
+            return base_handler.do_POST(self)
+
+        def _handle_yield_control(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError("body must be a JSON object")
+            except (ValueError, OSError):
+                self._yield_json(400, {"error": "invalid control body"})
+                return
+            status, payload = gate.control(
+                body.get("action"), body.get("secret"),
+                body.get("ack_timeout", YIELD_ACK_MAX_SECONDS))
+            self._yield_json(status, payload)
+
+        def _yield_json(self, status, payload):
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    def _run_with_gate(host, port, response_generator, server_class=None,
+                       handler_class=None):
+        return run_fn(host, port, response_generator,
+                      server_class=server_class or server_module.ThreadingHTTPServer,
+                      handler_class=_GatedHandler)
+
+    server_module._run_http_server = _run_with_gate
+
+
 def install_ids_probe(server_module, emit=None) -> None:
     """Bench-only ids capture for the managed route (default OFF; enabled
     only when MLX_OMARCHY_SERVE_IDS_PROBE=1). Wraps the streaming
@@ -187,6 +415,17 @@ def main() -> None:
         raise SystemExit(3)
     check_pinned(server_module)
     install(server_module, limit)
+    gate = None
+    if getattr(server_module, "BatchGenerator", None) is not None and getattr(server_module, "_run_http_server", None) is not None:
+        gate = YieldGate()
+        globals()["_ACTIVE_GATE"] = gate
+        install_yield_gate(server_module, gate)
+    else:
+        # No batched decode surface to park (stub servers, non-batched
+        # builds): launch WITHOUT the gate. Assistant speak requests then
+        # keep the honest busy refusal instead of a fake pause.
+        print("warning: no BatchGenerator surface; speech yield gate disabled",
+              file=sys.stderr)
     if os.environ.get(PROBE_ENV) == "1":
         install_ids_probe(server_module)
     server_module.main()

@@ -36,8 +36,10 @@ PINNED_REVISION = "1c5edc17a7acd8701df6fc341c0d179f1c62c982"
 WORKSPACE_HEADROOM_BYTES = 512 * 1024 * 1024
 
 # variant -> (subpath in repo, catalog model id)
+# The catalog id must be the id the serve catalog serves and the pair runtime
+# reserves under; identity is part of the artifact, not a local convention.
 VARIANTS = {
-    "root": ("", "laya"),
+    "root": ("", "laya-mlx"),
     "typed-decisions": ("typed-decisions/", "laya-typed-decisions"),
 }
 

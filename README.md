@@ -18,13 +18,13 @@ One-command install on an M1 running Omarchy, first model download, streamed ans
 
 ## Install
 
-On Omarchy (Apple Silicon), one command installs the release wheel into a private venv under `~/.local/share/mlx-omarchy`, puts `mlx-omarchy`, `mlx-omarchy-demo`, and `mlx-omarchy-parakeet` on `~/.local/bin`, and registers **MLX Chat (Apple GPU)** in the Omarchy launcher. It never replaces Mesa or edits Omarchy package files.
+On Omarchy (Apple Silicon), the installer creates a private venv under `~/.local/share/mlx-omarchy`. It installs `mlx-omarchy`, `mlx-omarchy-demo`, `mlx-omarchy-serve`, and `mlx-omarchy-parakeet` on `~/.local/bin`. It also registers **MLX Chat (Apple GPU)** in the Omarchy launcher. It never replaces Mesa or edits Omarchy package files.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
 ```
 
-Uninstall with `bash install.sh --uninstall`. Latest stable: [v0.7.3](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.3). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
+Uninstall with `bash install.sh --uninstall`. Get the [latest stable release](https://github.com/joshuaswarren/mlx-omarchy/releases/latest). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
 Manual install (or any other Linux box):
 
@@ -76,7 +76,26 @@ record exit 0 and `READY.` with compilation enabled. The checkpoint
 downloads ~15 GB of weights; a 16 GB M1 has not passed this model's
 memory and generation gates.
 
-Local OpenAI-compatible serving (catalog CLI + qualification limits): [docs/serve.md](docs/serve.md). Kernel / serve-patch flags: [docs/kernel-flags.md](docs/kernel-flags.md). Serving tooling in this tree is not all in a published release yet — `docs/serve.md` marks what is qualified.
+The installer includes local model servers and Laya. The [serving guide](docs/serve.md) lists commands and model checks. See [kernel flags](docs/kernel-flags.md) for backend settings. A server can be installed while a model still needs tests.
+
+## Local chat
+
+MLX Chat now has a local web app in this source tree.
+The browser and terminal use the same model pair, chat history, and stop control.
+This is not a tested release. Neither pair has passed all release checks. Voice has not passed them either.
+
+| Pair to test | Chat model | Decision model |
+|---|---|---|
+| Everyday | Qwen3.8-2B, 4-bit | Laya |
+| Quality | Qwen3.8-27B, 4-bit | Laya |
+
+The code supports option comparisons, interactive cards, speech input, speech output, and offline transfer.
+Automatic routing stays off until its held-out tests pass.
+Memory sizing uses byte counts and integer search, not RAM tiers.
+A larger calculated context still needs proof on the target chip and runtime.
+
+See the [serving guide](docs/serve.md#current-application-boundary) for commands and gaps.
+The [design](docs/plans/2026-09-27-offline-assistant-design.md) defines the full release checks.
 
 ## Hardware
 
@@ -121,7 +140,7 @@ Known gaps include `ReduceScatter` on the Linux ring transport and `fast.CustomK
 
 ## Neural Engine
 
-ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified (M1 / M1 Max). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install.
+ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified (M1 / M1 Max). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install. This transcription command accepts the pinned fixture only; it is not microphone dictation. See [the installed speech contract](docs/parakeet.md#installed-product-wheel).
 
 Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md). Driver / `libane` ABI live in [joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 

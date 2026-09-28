@@ -3,10 +3,14 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
 #   bash install.sh --ane
+#   bash install.sh --voice
 #   bash install.sh --uninstall
 #
 # The default install writes only under $HOME, except for runtime packages
 # installed through pacman. --ane also provisions host-global ANE ownership.
+# --voice adds the optional local speech-synthesis dependencies (text chat
+# never needs them).
+
 set -euo pipefail
 
 REPO=joshuaswarren/mlx-omarchy
@@ -16,15 +20,19 @@ BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 MLX_LM_VERSION=0.31.3
 TRANSFORMERS_VERSION=5.16.1
+MLX_AUDIO_VERSION=0.5.6
 ANE=0
+VOICE=0
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 case "${1:-}" in
   --ane) ANE=1 ;;
+  --voice) VOICE=1 ;;
   --uninstall)
-    rm -rf "$PREFIX" "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-info" \
-      "$BIN/mlx-omarchy-serve" "$BIN/omarchy-mlx-serve" "$APPS/mlx-omarchy-demo.desktop"
+    rm -rf "$PREFIX" "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info" \
+      "$BIN/mlx-omarchy-serve" "$BIN/omarchy-mlx-serve" \
+      "$APPS/mlx-omarchy-chat.desktop" "$APPS/mlx-omarchy-demo.desktop"
     if command -v omarchy >/dev/null 2>&1; then
       omarchy_target="$(dirname "$(command -v omarchy)")/omarchy-mlx-serve"
       if [[ -w "$(dirname "$omarchy_target")" ]] && grep -qs 'mlx_omarchy_serve' "$omarchy_target" 2>/dev/null; then
@@ -35,7 +43,7 @@ case "${1:-}" in
     exit 0
     ;;
   "") ;;
-  *) die "unknown option: $1 (supported: --ane, --uninstall)" ;;
+  *) die "unknown option: $1 (supported: --ane, --voice, --uninstall)" ;;
 esac
 
 # 1. Hardware and interpreter checks. The release wheel is cp314 linux_aarch64
@@ -83,6 +91,17 @@ if command -v omarchy-pkg-add >/dev/null; then
   omarchy-pkg-add lapack blas openblas
 else
   sudo pacman -S --needed --noconfirm lapack blas openblas
+fi
+# Voice playback (--voice) needs the PortAudio shared library: sounddevice
+# ships no Linux binary and loads the system libportaudio.so.2. Text chat
+# never needs it.
+if (( VOICE )); then
+  say "Installing voice runtime package (portaudio)"
+  if command -v omarchy-pkg-add >/dev/null; then
+    omarchy-pkg-add portaudio
+  else
+    sudo pacman -S --needed --noconfirm portaudio
+  fi
 fi
 
 # 3. Download the release wheel and verify it against the SHA256SUMS asset.
@@ -163,6 +182,21 @@ python3 -m venv --clear "$VENV"
 "$VENV/bin/pip" install --quiet --no-deps "mlx-lm==$MLX_LM_VERSION"
 "$VENV/bin/pip" install --quiet "transformers[sentencepiece]==$TRANSFORMERS_VERSION" numpy protobuf pyyaml jinja2 huggingface_hub
 
+# 4a. Optional voice dependencies (--voice), used by the assistant's local
+#     speech synthesis. mlx-audio declares an mlx requirement (>= 0.31.1)
+#     that the custom wheel installed above satisfies, so it goes in with
+#     --no-deps: letting pip resolve it would pull upstream mlx over the
+#     vendored mlx-omarchy build. The remaining lines are the verified
+#     mlx-audio $MLX_AUDIO_VERSION runtime floors, extras excluded;
+#     transformers, numpy, and huggingface_hub are usually already
+#     satisfied by the base pins above.
+if (( VOICE )); then
+  say "Installing voice dependencies (mlx-audio $MLX_AUDIO_VERSION, no deps)"
+  "$VENV/bin/pip" install --quiet --no-deps "mlx-audio==$MLX_AUDIO_VERSION"
+  "$VENV/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "numpy>=1.26.4" \
+    "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0"
+fi
+
 # 4b. Vendored mlx-lm serve patches. The GDN fast route is applied by
 #     default (gated-delta updates go to mx.fast.gated_delta_update in
 #     this wheel); the conv-ring patch stays OFF unless
@@ -186,13 +220,21 @@ exec "$VENV/bin/python" "\$@"
 EOF
 cat >"$BIN/mlx-omarchy-demo" <<EOF
 #!/usr/bin/env bash
+# Terminal face of MLX Chat: attaches to the shared coordinator (see 5d).
+export PYTHONPATH="$PREFIX\${PYTHONPATH:+:\$PYTHONPATH}"
 exec "$VENV/bin/python" "$PREFIX/chat.py" "\$@"
+EOF
+cat >"$BIN/mlx-omarchy-chat" <<EOF
+#!/usr/bin/env bash
+# MLX Chat web application: loopback coordinator + local UI, opens the browser.
+export PYTHONPATH="$PREFIX\${PYTHONPATH:+:\$PYTHONPATH}"
+exec "$VENV/bin/python" -m mlx_omarchy_assistant "\$@"
 EOF
 INFO=$("$VENV/bin/python" -I -c 'import os, mlx
 print(next(p for root in mlx.__path__
            if os.access(p := os.path.join(root, "bin", "mlx-omarchy-info"), os.X_OK)))')
 printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$INFO" >"$BIN/mlx-omarchy-info"
-chmod +x "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-info"
+chmod +x "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info"
 
 # 5b. Serve CLI: catalog-driven serving with memory admission and an
 #     approve-first download gate. The package ships from the same release
@@ -263,16 +305,40 @@ if command -v omarchy >/dev/null 2>&1; then
     echo "note: mlx-omarchy-serve works right now without that step."
   fi
 fi
-if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null; then
-  cat >"$APPS/mlx-omarchy-demo.desktop" <<EOF
+
+# 5d. MLX Chat assistant: the local web application — static UI plus the
+#     shared conversation coordinator — that both the desktop entry and the
+#     terminal demo attach to. Same release tag as the wheel, so an install
+#     is internally consistent. Voice assets are NOT shipped: they download
+#     approve-first at runtime from the pinned revision recorded in the
+#     synthesis module's manifest.
+say "Installing MLX Chat"
+ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
+mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
+for assistant_file in __init__.py __main__.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py speech_yield.py; do
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
+    -o "$ASSISTANT_PKG/$assistant_file"
+done
+for assistant_static in index.html css/app.css js/api.js js/app.js js/chat.js js/composer.js js/dom.js js/genui.js js/markdown.js js/setup.js js/theme.js js/transfer.js js/util.js js/voice.js js/worklet/capture-worklet.js; do
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/static/$assistant_static" \
+    -o "$ASSISTANT_PKG/static/$assistant_static"
+done
+
+# Desktop entry: MLX Chat opens the same loopback web application the
+# launcher starts — no terminal wrapper, no model dialog. The coordinator
+# mints a one-use session URL per launch. Upgrades from the old terminal
+# entry must not leave it behind in the launcher.
+rm -f "$APPS/mlx-omarchy-demo.desktop"
+cat >"$APPS/mlx-omarchy-chat.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=MLX Chat (Apple GPU)
-Comment=Chat with a local LLM on the Apple GPU via mlx-omarchy
-Exec=omarchy-launch-floating-terminal-with-presentation $BIN/mlx-omarchy-demo
-Icon=utilities-terminal
+Comment=Local chat and typed decisions on the Apple GPU via mlx-omarchy
+Exec=$BIN/mlx-omarchy-chat
+Icon=applications-internet
 Categories=Development;Utility;
 EOF
+if command -v omarchy-menu >/dev/null 2>&1; then
   # The Omarchy shell scans desktop entries at startup; ask it to rescan so
   # the entry shows up in the launcher (Super+Space) without a re-login.
   omarchy-menu refresh >/dev/null 2>&1 || true
@@ -367,8 +433,10 @@ else
 fi
 
 say "Done."
-echo "  Run the demo:        mlx-omarchy-demo      (also in the Omarchy app launcher as 'MLX Chat')"
+echo "  Open MLX Chat:       mlx-omarchy-chat      (also in the Omarchy app launcher as 'MLX Chat')"
+echo "  Terminal chat:       mlx-omarchy-demo      (the same local coordinator, no browser)"
 echo "  Use in your scripts: mlx-omarchy your_script.py   (import mlx.core as mx)"
 echo "  Serve a model:       mlx-omarchy-serve     (also 'omarchy mlx serve' when registered)"
+echo "  Voice replies:       bash install.sh --voice   (adds local speech synthesis deps)"
 echo "  Remove everything:   bash install.sh --uninstall"
 case ":$PATH:" in *":$BIN:"*) ;; *) echo "  note: $BIN is not on your PATH in this shell; open a new terminal or add it." ;; esac

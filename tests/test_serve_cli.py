@@ -607,6 +607,30 @@ class ModulePreflightTests(CliTestBase):
         self.assertEqual(budget.load_reservations(self.home), {})
 
 
+class ModuleQuestionFlagTests(unittest.TestCase):
+    """The pair route forwards the pair's question batch bound to the module
+    server; the standalone CLI keeps the module default."""
+
+    def test_laya_question_flag_forwarded_when_requested(self):
+        argv = serve_cli.server_argv("module", "mlx_omarchy_laya.server",
+                                     Path("/models/laya"), "127.0.0.1", 8081,
+                                     4096, max_questions=8)
+        self.assertIn("--max-questions", argv)
+        self.assertEqual(argv[argv.index("--max-questions") + 1], "8")
+
+    def test_standalone_module_launch_keeps_module_default(self):
+        argv = serve_cli.server_argv("module", "mlx_omarchy_laya.server",
+                                     Path("/models/laya"), "127.0.0.1", 8081,
+                                     4096)
+        self.assertNotIn("--max-questions", argv)
+
+    def test_question_flag_refused_for_modules_without_one(self):
+        with self.assertRaises(budget.BudgetError):
+            serve_cli.server_argv("module", "unrelated_module.server",
+                                  Path("/models/x"), "127.0.0.1", 8081, 4096,
+                                  max_questions=8)
+
+
 class ServeApprovalTests(CliTestBase):
     def test_noninteractive_without_yes_refuses(self):
         with unittest.mock.patch.object(serve_cli, "probe_snapshot",

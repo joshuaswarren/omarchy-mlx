@@ -92,6 +92,13 @@ MODULE_CONTEXT_FLAG = {
     "mlx_omarchy_bonsai2.server": "--max-context",
 }
 
+# Modules whose per-request question batch bound the CLI forwards. The
+# assistant pair route passes the pair's cap (8); the standalone CLI omits
+# the flag and keeps the module default.
+MODULE_QUESTIONS_FLAG = {
+    "mlx_omarchy_laya.server": "--max-questions",
+}
+
 MODULE_CONVERT_HINTS = {
     # mlx_omarchy_laya.server: upstream raw snapshots need conversion
     # (mlx_omarchy_laya.convert). mlx_omarchy_bonsai2.server is
@@ -495,6 +502,7 @@ def probe_snapshot(resolved: Resolved, patterns: list[str] | None = None) -> Pat
             repo_id=resolved.repo,
             revision=resolved.revision,
             local_files_only=True,
+            cache_dir=hf_cache_dir(),
             **({"allow_patterns": patterns} if patterns else {}),
         ))
     except Exception:  # huggingface_hub raises several types for a missing snapshot
@@ -517,6 +525,7 @@ def download_snapshot(resolved: Resolved, patterns: list[str] | None = None) -> 
         raise budget.BudgetError("huggingface_hub is not installed in this environment")
     return Path(
         hub.snapshot_download(repo_id=resolved.repo, revision=resolved.revision,
+                              cache_dir=hf_cache_dir(),
                               **({"allow_patterns": patterns} if patterns else {}))
     )
 
@@ -536,7 +545,8 @@ def check_custom_code(model_dir: Path) -> None:
 
 def server_argv(backend: str, module: str | None, model_dir: Path, host: str,
                 port: int, context_tokens: int,
-                prompt_cache_size: int = 0) -> list[str]:
+                prompt_cache_size: int = 0,
+                max_questions: int | None = None) -> list[str]:
     if backend == "mlx-lm":
         # Upstream --max-tokens is only a per-request default (client
         # overridable, verified in the 0.31.3 wheel), so the REAL total
@@ -578,6 +588,13 @@ def server_argv(backend: str, module: str | None, model_dir: Path, host: str,
         flag = MODULE_CONTEXT_FLAG.get(module)
         if flag:
             argv += [flag, str(context_tokens)]
+        if max_questions is not None:
+            qflag = MODULE_QUESTIONS_FLAG.get(module)
+            if not qflag:
+                raise budget.BudgetError(
+                    f"module {module!r} has no question-batch flag; "
+                    "max_questions cannot be forwarded")
+            argv += [qflag, str(int(max_questions))]
         return argv
     raise budget.BudgetError(f"unknown backend {backend!r}")
 

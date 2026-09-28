@@ -16,37 +16,26 @@ against `SHA256SUMS`, a private venv created in
 `device: Apple M1 (G13G B1)` followed by `matmul OK`. If the device line says
 `llvmpipe`, the Vulkan driver is not the Apple one; see Troubleshooting.
 
-## 2. Run the chat demo
+## 2. Open the chat app
 
-The demo asks for a Hugging Face model id before it imports mlx or
-downloads anything. **Prerequisite: supply a model you have qualified on
-the demo's `mlx_lm` stack.** The demo has not been modernized to the
-current generation — `mlx-community/Qwen3.8-27B-4bit` loads through
-`mlx_vlm`, not `mlx_lm` — so this repo pins no model here; the verified
-current-generation path is documented in the top-level README Quick start.
+The source installer adds `mlx-omarchy-chat` to open the web app.
+`mlx-omarchy-demo` uses the same models in a terminal. It no longer loads its own model.
+This change has not passed release tests. Published installers may still use the old terminal demo.
 
-From a terminal:
+From this checkout, inspect the app without an install:
 
 ```bash
-mlx-omarchy-demo --model MODEL_ID
+PYTHONPATH=serve python3 -m mlx_omarchy_assistant --help
+PYTHONPATH=serve python3 -m mlx_omarchy_assistant --home /tmp/mlx-chat-check
 ```
 
-or pass nothing and answer the prompt:
+Setup offers Everyday and Quality pairs and requires approval before downloads.
+Neither pair currently has complete co-serving and disconnected-restart evidence.
+Unqualified models refuse normal startup rather than claim readiness.
 
-```bash
-mlx-omarchy-demo
-```
-
-The Omarchy launcher entry **MLX Chat (Apple GPU)** opens the same demo
-on an interactive terminal, so it asks for the model id there. Then it:
-
-1. prints the mlx-omarchy version and the GPU it is running on,
-2. answers one scripted question so you can see tokens stream, with the
-   measured prompt and generation tokens per second on the last line,
-3. drops into an interactive chat. Empty line or Ctrl-D exits.
-
-macOS on the same chip is faster; this project is not at performance
-parity yet, and the numbers on the last line are the honest ones.
+The terminal interface accepts `--terminal`, `--prompt`, and `--once`.
+Use `--pair everyday --yes` only when you intend to approve that pair's downloads.
+See the [serving guide](../docs/serve.md) for exact qualification limits.
 
 ## 3. Use it from your own code
 

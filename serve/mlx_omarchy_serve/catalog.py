@@ -66,6 +66,27 @@ BACKENDS = ("mlx-lm", "omlx", "module")
 QUAL_FIELDS = ("status", "receipt", "date")
 MEM_FIELDS = ("weights_bytes", "kv_bytes_per_token", "peak_estimate_bytes")
 
+MAX_PAIRS = 8
+# A pair references model IDs and the adaptive routing policy version; the
+# adaptive context policy itself is code (assistant/pairs.py), never a
+# byte-counted or tiered catalog constant. Qualification is the pair-level
+# release gate (clean install, managed co-serving, cancellation, offline
+# restart) and is NOT implied by its models' single-model receipts.
+PAIR_FIELDS = ("id", "label", "chat_model", "decision_model", "priority",
+               "max_questions", "routing_policy", "qualification")
+# Optional per-pair measured selection evidence: measured task quality and
+# decode latency bound to a chip, the chat runtime backend, and the exact
+# pinned revisions. Absent means unqualified for automatic selection —
+# quality and latency are never inferred from weights or parameter count.
+PAIR_EXTENSION_FIELDS = ("selection_evidence",)
+SELECTION_EVIDENCE_FIELDS = ("arch", "backend", "chat_revision",
+                             "decision_revision", "date", "quality", "latency",
+                             "runtime")
+# The exact runtime the measurements are bound to: same RECORD-hash identity
+# the voice qualification uses for the mlx.core extension + loaded libmlx.so.
+RUNTIME_IDENTITY_FIELDS = ("mlx_version", "extension_sha256", "libmlx_sha256")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
 
 class CatalogError(ValueError):
     """Catalog data violates the v1 schema or its bounds."""
@@ -130,9 +151,55 @@ def _check_qualification(group: str, obj) -> None:
                 _fail(f"qualification.{group}.{f}: must be null unless status is qualified")
 
 
+def _check_positive_number(value, field: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        _fail(f"{field}: expected number > 0")
+
+
+def _check_selection_evidence(where: str, evidence) -> None:
+    """Shape validation only. Whether the evidence still matches the loaded
+    models' pins and this machine's chip is a selection-time check."""
+    _check_keys(evidence, SELECTION_EVIDENCE_FIELDS, where)
+    arch = evidence["arch"]
+    if not isinstance(arch, list) or not arch or not all(a in ARCHES for a in arch):
+        _fail(f"{where}.arch: entries must be from {ARCHES}")
+    if evidence["backend"] not in BACKENDS:
+        _fail(f"{where}.backend: unknown backend {evidence['backend']!r}")
+    _check_str(evidence["chat_revision"], f"{where}.chat_revision", 40,
+               REVISION_PATTERN)
+    _check_str(evidence["decision_revision"], f"{where}.decision_revision", 40,
+               REVISION_PATTERN)
+    _check_str(evidence["date"], f"{where}.date", 10, DATE_PATTERN)
+    quality = evidence["quality"]
+    _check_keys(quality, ("task", "score", "receipt"), f"{where}.quality")
+    _check_str(quality["task"], f"{where}.quality.task", 64)
+    _check_str(quality["receipt"], f"{where}.quality.receipt", 128)
+    if isinstance(quality["score"], bool) \
+            or not isinstance(quality["score"], (int, float)) \
+            or not 0 < quality["score"] <= 1:
+        _fail(f"{where}.quality.score: expected number in (0, 1]")
+    latency = evidence["latency"]
+    _check_keys(latency, ("decode_tokens_per_sec", "target_tokens_per_sec",
+                          "first_visible_p95_ms", "receipt"), f"{where}.latency")
+    _check_str(latency["receipt"], f"{where}.latency.receipt", 128)
+    _check_positive_number(latency["decode_tokens_per_sec"],
+                           f"{where}.latency.decode_tokens_per_sec")
+    _check_positive_number(latency["target_tokens_per_sec"],
+                           f"{where}.latency.target_tokens_per_sec")
+    _check_positive_number(latency["first_visible_p95_ms"],
+                           f"{where}.latency.first_visible_p95_ms")
+    runtime = evidence["runtime"]
+    _check_keys(runtime, RUNTIME_IDENTITY_FIELDS, f"{where}.runtime")
+    _check_str(runtime["mlx_version"], f"{where}.runtime.mlx_version", 64)
+    for field in ("extension_sha256", "libmlx_sha256"):
+        _check_str(runtime[field], f"{where}.runtime.{field}", 64,
+                   SHA256_PATTERN)
+
+
 def validate_catalog(obj) -> None:
     """Validate a parsed catalog object against schema v1. Raises CatalogError."""
-    _check_keys(obj, ("version", "generated_at", "source", "models"), "catalog")
+    _check_keys(obj, ("version", "generated_at", "source", "models"), "catalog",
+                optional=("pairs",))
     if isinstance(obj["version"], bool) or obj["version"] != SCHEMA_VERSION:
         _fail(f"catalog.version: expected {SCHEMA_VERSION}, got {obj['version']!r}")
     _check_str(obj["source"], "catalog.source", 256)
@@ -248,6 +315,42 @@ def validate_catalog(obj) -> None:
             _check_int(avail["size_bytes"], f"{where}.availability.size_bytes", 1, 2**48)
         if avail["refreshed_at"] is not None:
             _check_iso(avail["refreshed_at"], f"{where}.availability.refreshed_at")
+
+    pairs = obj.get("pairs")
+    if pairs is None:
+        return
+    if not isinstance(pairs, list) or not 1 <= len(pairs) <= MAX_PAIRS:
+        _fail(f"catalog.pairs: expected 1..{MAX_PAIRS} records")
+    model_by_id = {entry["id"]: entry for entry in models}
+    seen_pair_ids: set[str] = set()
+    seen_pair_priorities: set[int] = set()
+    for i, pair in enumerate(pairs):
+        where = f"pairs[{i}]"
+        _check_keys(pair, PAIR_FIELDS, where, optional=("extension",))
+        _check_str(pair["id"], f"{where}.id", 64, ID_PATTERN)
+        if pair["id"] in seen_pair_ids:
+            _fail(f"{where}.id: duplicate pair id {pair['id']!r}")
+        seen_pair_ids.add(pair["id"])
+        _check_str(pair["label"], f"{where}.label", 64)
+        _check_str(pair["routing_policy"], f"{where}.routing_policy", 32)
+        _check_int(pair["priority"], f"{where}.priority", 1, 999)
+        if pair["priority"] in seen_pair_priorities:
+            _fail(f"{where}.priority: duplicate pair priority {pair['priority']}")
+        seen_pair_priorities.add(pair["priority"])
+        _check_int(pair["max_questions"], f"{where}.max_questions", 1, 64)
+        for field, kind in (("chat_model", "chat"), ("decision_model", "decisions")):
+            ref = pair[field]
+            if ref not in model_by_id:
+                _fail(f"{where}.{field}: unknown model id {ref!r}")
+            if model_by_id[ref]["kind"] != kind:
+                _fail(f"{where}.{field}: {ref!r} is kind {model_by_id[ref]['kind']!r}, "
+                      f"expected {kind!r}")
+        _check_qualification(f"{i}", pair["qualification"])
+        extension = pair.get("extension")
+        if extension is not None:
+            _check_keys(extension, PAIR_EXTENSION_FIELDS, f"{where}.extension")
+            _check_selection_evidence(f"{where}.extension.selection_evidence",
+                                      extension["selection_evidence"])
 
 
 def _check_iso(value, field: str) -> None:

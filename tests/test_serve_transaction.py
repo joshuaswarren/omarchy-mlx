@@ -127,6 +127,65 @@ print(json.dumps(results))
         self.assertEqual(held["bytes"], int(1 * GiB))
 
 
+class BatchAdmissionRaceTests(unittest.TestCase):
+    """The pair batch transaction is atomic across processes: a combined
+    fit check that passes only per-child must not partially commit."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+
+    BATCH_WORKER = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, {serve!r})
+from mlx_omarchy_serve import budget
+try:
+    records = budget.admit_and_reserve_batch(
+        [(name, int(size), "race") for name, size in json.loads(sys.argv[1])],
+        pair_id=sys.argv[2], home=Path(sys.argv[3]), available_bytes=int(sys.argv[4]))
+    print(json.dumps({{"ok": True, "names": [r["name"] for r in records]}}))
+except budget.BudgetError as exc:
+    print(json.dumps({{"ok": False, "error": str(exc)}}))
+""".format(serve=str(REPO_ROOT / "serve"))
+
+    def run_batch(self, items, pair_id, available_gib):
+        result = subprocess.run(
+            [sys.executable, "-c", self.BATCH_WORKER, json.dumps(items),
+             pair_id, str(self.home), str(int(available_gib * GiB))],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_cross_process_pair_refusal_commits_nothing(self):
+        # usable 8 GiB in a 10 GiB budget; each 6 GiB child alone "fits"
+        # against a naive reading, the 12 GiB pair never does.
+        winners = []
+        outcomes = [self.run_batch([["chat", int(6 * GiB)], ["decision", int(6 * GiB)]],
+                                   f"pair{i}", 10)
+                    for i in range(2)]
+        for outcome in outcomes:
+            if outcome["ok"]:
+                winners.append(outcome)
+            else:
+                self.assertIn("pair does not fit", outcome["error"])
+        self.assertEqual(winners, [])
+        self.assertEqual(budget.load_reservations(self.home), {})
+
+    def test_cross_process_pair_writes_grouped_records(self):
+        outcome = self.run_batch([["chat", int(4 * GiB)], ["decision", int(2 * GiB)]],
+                                 "everyday", 10)
+        self.assertTrue(outcome["ok"], outcome)
+        held = budget.load_reservations(self.home)
+        self.assertEqual(set(held), {"chat", "decision"})
+        for record in held.values():
+            self.assertEqual(record["pair_id"], "everyday")
+            self.assertEqual(record["state"], "pending")
+            self.assertIsNotNone(record["parent"])
+        self.assertEqual(len({r["owner"] for r in held.values()}), 2)
+
+
 class OwnerSemanticsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

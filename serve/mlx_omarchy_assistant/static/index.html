@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<title>MLX Chat</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/app.css">
+<script type="module" src="js/app.js" defer></script>
+</head>
+<body data-theme-loading="true">
+<a class="skip-link" href="#composer-text">Skip to message box</a>
+
+<header class="topbar" role="banner">
+  <div class="topbar__brand">
+    <span class="topbar__title">MLX Chat</span>
+    <span class="topbar__pair" id="pair-chip" hidden></span>
+  </div>
+  <div class="topbar__status">
+    <span class="topbar__badge" id="ready-badge" data-state="unknown" hidden>
+      <span class="dot" aria-hidden="true"></span>
+      <span class="topbar__badge-label" id="ready-badge-label">Checking</span>
+    </span>
+    <span class="topbar__error" id="topbar-error" role="status" hidden></span>
+  </div>
+  <div class="topbar__actions">
+    <button type="button" class="btn" id="new-chat-btn" aria-label="Start a new conversation">New chat</button>
+    <button type="button" class="btn btn--ghost" id="history-btn" aria-label="Open conversation history"
+            aria-haspopup="dialog">History</button>
+    <button type="button" class="btn btn--ghost" id="transfer-btn" aria-label="Prepare another computer or install an offline bundle"
+            aria-haspopup="dialog">Transfer</button>
+    <button type="button" class="btn btn--ghost" id="details-btn" aria-label="Open model and memory details"
+            aria-haspopup="dialog">Details</button>
+  </div>
+</header>
+
+<main id="view" class="view" role="main" aria-labelledby="topbar-title" tabindex="-1">
+  <p class="view__loading" id="view-loading">Loading…</p>
+</main>
+
+<dialog class="drawer" id="history-drawer" aria-labelledby="history-title">
+  <form method="dialog" class="drawer__header">
+    <h2 class="drawer__title" id="history-title">Conversation history</h2>
+    <button type="submit" class="btn btn--ghost" aria-label="Close history" value="cancel">Close</button>
+  </form>
+  <div class="drawer__body" id="history-body">
+    <p class="drawer__empty">No saved conversations yet.</p>
+  </div>
+</dialog>
+
+<dialog class="drawer" id="details-drawer" aria-labelledby="details-title">
+  <form method="dialog" class="drawer__header">
+    <h2 class="drawer__title" id="details-title">Model and memory details</h2>
+    <button type="submit" class="btn btn--ghost" aria-label="Close details" value="cancel">Close</button>
+  </form>
+  <div class="drawer__body" id="details-body">
+    <p class="drawer__empty">Loading details…</p>
+  </div>
+</dialog>
+
+<dialog class="drawer" id="transfer-drawer" aria-labelledby="transfer-title">
+  <form method="dialog" class="drawer__header">
+    <h2 class="drawer__title" id="transfer-title">Prepare another computer</h2>
+    <button type="submit" class="btn btn--ghost" aria-label="Close transfer" value="cancel">Close</button>
+  </form>
+  <div class="drawer__body" id="transfer-body">
+    <p class="drawer__empty">Loading…</p>
+  </div>
+</dialog>
+
+<div id="live-region" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

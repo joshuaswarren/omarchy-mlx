@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -303,6 +305,56 @@ def _clear_memory(name: str, managed: bool, why: str, owner=None):
             print(msg, file=sys.stderr)
 
 
+def _budget_or_none():
+    try:
+        from mlx_omarchy_serve import budget
+    except ImportError:
+        return None
+    return budget
+
+
+def _read_claim_payload(fd: int) -> dict:
+    budget = _budget_or_none()
+    if budget is None:
+        raise RuntimeError(
+            "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH")
+    return budget.read_claim_fd(fd)
+
+
+def _claim_reserved(model_dir: Path, catalog_id: str, payload: dict, managed: bool,
+                    dtype: str, max_questions: int):
+    """Bind this child to the parent's batch reservation instead of running
+    its own admission. The claimed allocation is validated against THIS
+    child's recomputed requirement (manifest + run args) — a mismatch is a
+    fatal refusal, never a silent growth — and against the record under the
+    budget lock (token, bytes, parent identity)."""
+    from .model import load_encoder_config
+
+    name = str(payload["name"])
+    if name != catalog_id:
+        raise RuntimeError(
+            "claim refused: batch record %r does not match this checkpoint's "
+            "catalog_id %r" % (name, catalog_id))
+    enc_cfg = load_encoder_config(model_dir / "encoder")
+    total = total_estimate_bytes(_read_manifest(model_dir), enc_cfg, dtype, max_questions)
+    if int(payload["bytes"]) != int(total):
+        raise RuntimeError(
+            "claim refused: batch record %r reserves %d bytes but this run "
+            "(dtype=%s, max_questions=%d) requires %d; claims never change an "
+            "allocation" % (name, int(payload["bytes"]), dtype, max_questions, total))
+    try:
+        from mlx_omarchy_serve import budget
+    except ImportError as exc:
+        raise RuntimeError(
+            "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH: %s" % exc) from exc
+    record = budget.claim_reservation(
+        name, str(payload["claim_token"]), expected_bytes=int(payload["bytes"]),
+        home=budget.default_home(), expected_pair=payload.get("pair_id"))
+    print("laya: claimed %s (%d bytes) from pair %s" % (
+        name, int(payload["bytes"]), payload.get("pair_id")), file=sys.stderr)
+    return {"state": "pending", "claimed": record["claimed"]}, record["owner"], int(total)
+
+
 class LayaState:
     def __init__(self, args):
         import mlx.core as mx
@@ -316,11 +368,29 @@ class LayaState:
         self.model_dir = Path(args.model).resolve()
         self.manifest = _read_manifest(self.model_dir)
         self.catalog_id = str(self.manifest.get("catalog_id") or self.engine_id_fallback(args))
-        # pending phase: dtype-aware atomic admit + reserve BEFORE any weight
-        # is resident; concurrent admissions subtract it from MemAvailable
-        self.reservation, self.owner, self.admitted_total = _register_pending(
-            self.model_dir, self.catalog_id, self.managed, args.dtype, args.max_questions
-        )
+        claim_payload = None
+        budget = _budget_or_none()
+        raw_fd = os.environ.get(budget.CLAIM_FD_ENV) if budget is not None else None
+        if raw_fd:
+            if not self.managed:
+                raise RuntimeError(
+                    "claim mode (managed pair child) requires --managed; refusing "
+                    "to bind a batch reservation without fail-closed admission")
+            claim_payload = _read_claim_payload(int(raw_fd))
+        if claim_payload is not None:
+            # Claimed child: the parent manager fit-checked and reserved this
+            # worker's allocation in the atomic batch transaction. The child
+            # re-derives its own requirement with the SAME run-args math and
+            # refuses any mismatch before a single weight loads.
+            self.reservation, self.owner, self.admitted_total = _claim_reserved(
+                self.model_dir, self.catalog_id, claim_payload,
+                self.managed, args.dtype, args.max_questions)
+        else:
+            # pending phase: dtype-aware atomic admit + reserve BEFORE any weight
+            # is resident; concurrent admissions subtract it from MemAvailable
+            self.reservation, self.owner, self.admitted_total = _register_pending(
+                self.model_dir, self.catalog_id, self.managed, args.dtype, args.max_questions
+            )
         # Phase-scoped BaseException guards: whichever phase fails clears the
         # held reservation exactly once with a DISTINCT registry label
         # (forensics: failed-startup vs failed-relabel), then re-raises the
@@ -464,6 +534,19 @@ def serve_main(argv):
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, _on_sigterm)
+    # Managed pair child: stop when the parent manager's lifetime pipe closes
+    # (manager exited or died), so workers never outlive their owner.
+    budget = _budget_or_none()
+    raw_lifetime = os.environ.get(budget.LIFETIME_FD_ENV, "") if budget is not None else ""
+    if raw_lifetime.isdigit():
+        def _parent_gone():
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Thread(
+            target=budget.watch_parent_fd,
+            args=(int(raw_lifetime), _parent_gone),
+            daemon=True,
+        ).start()
+        print("laya: watching parent lifetime fd %s" % raw_lifetime, file=sys.stderr)
     state = None
     try:
         # the admit -> construct -> bind -> serve span is wrapped so any
