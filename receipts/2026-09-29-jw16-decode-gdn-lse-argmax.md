@@ -91,3 +91,30 @@ does not apply.
    (norm into the GEMV prologue, conv+silu+q/k norms into the GDN kernel).
 3. q4 GEMV efficiency: Main's standalone shapes read Linux 113-193 GB/s vs
    macOS 186-299 GB/s (lm_head 193 vs 299 on one 286 MB dispatch).
+
+## Addendum (same day, window 4, 14:11-14:15Z, fresh boot 38371487)
+
+Arms: c2 = main 4f291fe wheel (this receipt's change), c3 = c2 + a
+fast_norm.comp load-prefetch candidate (branch `agent/jw16-decode-attrib`
+53ad7cf), gp = c3 wheel + `patches/mlx-lm-greedy-prune.patch` applied to the
+test venv's mlx_lm (the serving venv does not carry that patch; the dispatch
+census showed the full 286 MB tied head + logsumexp + argmax every token).
+
+| cell | c2 | c3 | gp | gp vs serving (88.67/87.66/86.68/84.20) | gp / macOS | digest (all arms) |
+|---|---:|---:|---:|---:|---:|---|
+| d64 | 93.36 | 93.92 | 100.18 (100.06-100.33) | +13.0% | 0.557 | c84b3e7af6401c64 |
+| d128 | 92.96 | 93.75 | 100.01 (99.89-100.32) | +14.1% | 0.558 | 07c515e0338b9108 |
+| d256 | 92.27 | 93.03 | 98.70 (97.71-98.84) | +13.9% | 0.554 | c6aabbf0a51de38d |
+| d512 | 88.49 | 89.24 | 94.64 (94.41-94.87) | +12.4% | 0.534 | 5c120987f0e5869d |
+
+- The greedy-prune route is already on main (wheel op + mlx-lm patch, listed
+  in `scripts/apply-mlx-lm-patches.sh`); applying it to the serving venv is
+  worth +6.1..6.7% on top of this change with every digest unchanged.
+- c3 (fast_norm prefetch) is NOT landed: +0.6..0.8% (below the
+  pre-registered +1% bar) and not bit-identical for f32 weighted rms_norm
+  (86 of 360 rows differ; bf16/f16, unweighted and layer_norm rows identical).
+  AGX NIR of the shipped kernel: sum of squares acc = ffma(v, v, acc) in a
+  loop; bf16 output fmul(v, fmul(norm, w)). A `[[dont_unroll]]` loop over a
+  preloaded array keeps the sum-of-squares chain at length 2 (NIR of c3:
+  ffma(v, v, acc) per iteration); the f32 output grouping differs from the
+  bf16 one, so pinning it needs the f32 NIR too.
