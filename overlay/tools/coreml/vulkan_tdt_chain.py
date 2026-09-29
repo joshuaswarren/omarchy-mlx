@@ -227,10 +227,43 @@ _FOLD_PROJ_BODY = """
     sh_h1[lane] = float(h1);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     precise float acc = 0.0f;
-    for (uint k = 0u; k < 640u; ++k) {
-        acc = acc + float(float16_t(sh_h1[k]))
-              * float(projector[k * 640u + lane]);
+    // Loads are independent of the acc chain: keep 8 weight rows in
+    // flight. Same expression, same ascending-k order: bit-identical.
+    float16_t pw0 = projector[0u * 640u + lane];
+    float16_t pw1 = projector[1u * 640u + lane];
+    float16_t pw2 = projector[2u * 640u + lane];
+    float16_t pw3 = projector[3u * 640u + lane];
+    float16_t pw4 = projector[4u * 640u + lane];
+    float16_t pw5 = projector[5u * 640u + lane];
+    float16_t pw6 = projector[6u * 640u + lane];
+    float16_t pw7 = projector[7u * 640u + lane];
+    for (uint k = 0u; k < 632u; k += 8u) {
+        float16_t pn0 = projector[(k + 8u) * 640u + lane];
+        float16_t pn1 = projector[(k + 9u) * 640u + lane];
+        float16_t pn2 = projector[(k + 10u) * 640u + lane];
+        float16_t pn3 = projector[(k + 11u) * 640u + lane];
+        float16_t pn4 = projector[(k + 12u) * 640u + lane];
+        float16_t pn5 = projector[(k + 13u) * 640u + lane];
+        float16_t pn6 = projector[(k + 14u) * 640u + lane];
+        float16_t pn7 = projector[(k + 15u) * 640u + lane];
+        acc = acc + float(float16_t(sh_h1[k + 0u])) * float(pw0);
+        acc = acc + float(float16_t(sh_h1[k + 1u])) * float(pw1);
+        acc = acc + float(float16_t(sh_h1[k + 2u])) * float(pw2);
+        acc = acc + float(float16_t(sh_h1[k + 3u])) * float(pw3);
+        acc = acc + float(float16_t(sh_h1[k + 4u])) * float(pw4);
+        acc = acc + float(float16_t(sh_h1[k + 5u])) * float(pw5);
+        acc = acc + float(float16_t(sh_h1[k + 6u])) * float(pw6);
+        acc = acc + float(float16_t(sh_h1[k + 7u])) * float(pw7);
+        pw0 = pn0; pw1 = pn1; pw2 = pn2; pw3 = pn3; pw4 = pn4; pw5 = pn5; pw6 = pn6; pw7 = pn7;
     }
+    acc = acc + float(float16_t(sh_h1[632u + 0u])) * float(pw0);
+    acc = acc + float(float16_t(sh_h1[632u + 1u])) * float(pw1);
+    acc = acc + float(float16_t(sh_h1[632u + 2u])) * float(pw2);
+    acc = acc + float(float16_t(sh_h1[632u + 3u])) * float(pw3);
+    acc = acc + float(float16_t(sh_h1[632u + 4u])) * float(pw4);
+    acc = acc + float(float16_t(sh_h1[632u + 5u])) * float(pw5);
+    acc = acc + float(float16_t(sh_h1[632u + 6u])) * float(pw6);
+    acc = acc + float(float16_t(sh_h1[632u + 7u])) * float(pw7);
     float16_t pjv = float16_t(float16_t(acc) + projector[640u * 640u + lane]);
     pj16[lane] = pjv;
     pj[lane] = float(pjv);
