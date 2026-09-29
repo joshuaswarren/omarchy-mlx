@@ -30,7 +30,11 @@ void init() {
 }
 
 namespace {
-thread_local bool g_first_batch_done = false;
+// 0 = undecided for this graph, 1 = first batch commits early, 2 = normal.
+// Early commit only when the GPU is idle at graph start (nothing in flight):
+// in pipelined decode the next token is recorded while the previous one still
+// executes, so an early submit buys nothing there and only adds a submit.
+thread_local int g_first_state = 0;
 } // namespace
 
 void eval(array& arr) {
@@ -68,6 +72,10 @@ void eval(array& arr) {
   // Open-batch state BEFORE this op records: a batch spans every op
   // recorded between commits.
   bool batch_open = encoder.needs_commit();
+  if (g_first_state == 0 && !batch_open) {
+    g_first_state =
+        (omarchy::batch_first_budget() > 0 && encoder.synchronized()) ? 1 : 2;
+  }
   {
     // If the array is a tracer hold a reference
     std::vector<array> inputs;
@@ -123,11 +131,11 @@ void eval(array& arr) {
     auto& alloc = omarchy::allocator();
     // First-batch-early (MLX_OMARCHY_BATCH_FIRST): per host thread, reset at
     // every finalize (graph end).
-    const int budget = (!g_first_batch_done && omarchy::batch_first_budget() > 0)
+    const int budget = (g_first_state == 1)
         ? omarchy::batch_first_budget()
         : omarchy::batch_node_budget();
     if (encoder.nodes() >= budget) {
-      g_first_batch_done = true;
+      g_first_state = 2;
     }
     if (encoder.nodes() >= budget ||
         alloc.pending_quarantine_bytes() >=
@@ -156,7 +164,7 @@ void finalize(Stream s) {
   // open batch must reach the queue here or those waits never complete.
   // Batching still happens: every dispatch recorded between finalizes
   // (one whole graph evaluation) shares one open command buffer.
-  g_first_batch_done = false;
+  g_first_state = 0;
   omarchy::get_command_encoder(s).commit();
 }
 
