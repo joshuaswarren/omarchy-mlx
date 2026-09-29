@@ -1,6 +1,6 @@
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
-@@ -108,6 +108,17 @@
+@@ -108,6 +108,22 @@
      const std::optional<array>& mask = std::nullopt,
      StreamOrDevice s = {});
  
@@ -9,10 +9,15 @@
 +// written in-kernel, replacing the two Concatenate copies plus the
 +// contiguous state view the composed path materializes. Decode (T == 1)
 +// only; larger T falls back to the composed concatenate + conv1d.
++// `activate` applies silu to the conv output (the model's nn.silu) inside
++// the same dispatch: the fused kernel rounds the conv output, the
++// sigmoid, and the product exactly like the composed chain, and the
++// fallback composes out * sigmoid(out).
 +MLX_API std::vector<array> gdn_conv_update(
 +    const array& state,
 +    const array& x,
 +    const array& weight,
++    bool activate = false,
 +    StreamOrDevice s = {});
 +
  using TemplateArg = std::variant<int, bool, Dtype>;
@@ -20,7 +25,7 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1441,6 +1441,42 @@
+@@ -1441,6 +1441,47 @@
    return result;
  }
  
@@ -28,14 +33,19 @@
 +    const array& state,
 +    const array& x,
 +    const array& weight,
++    bool activate,
 +    StreamOrDevice s_) {
 +  auto s = to_stream(s_);
 +  // Fallback composes the exact ops the model runs today: concatenate
-+  // the carry-in state onto the row, conv1d over it, and keep the last
-+  // K-1 rows as the carry-out state.
-+  auto fallback = [s](std::vector<array> inputs) {
++  // the carry-in state onto the row, conv1d over it, apply the model's
++  // silu when `activate` (out * sigmoid(out), the nn.silu composition),
++  // and keep the last K-1 rows as the carry-out state.
++  auto fallback = [s, activate](std::vector<array> inputs) {
 +    auto ci = concatenate({inputs[0], inputs[1]}, 1, s);
 +    auto out = conv1d(ci, inputs[2], 1, 0, 1, inputs[2].shape(0), s);
++    if (activate) {
++      out = out * sigmoid(out, s);
++    }
 +    int keep = inputs[2].shape(2) - 1;
 +    int start_t = ci.shape(1) - keep;
 +    auto ns = slice(
@@ -56,7 +66,7 @@
 +      /* output shapes */ {{B, 1, C}, {B, K - 1, C}},
 +      /* dtypes */ {bfloat16, bfloat16},
 +      /* primitive */
-+      std::make_shared<GdnConvUpdate>(s, fallback),
++      std::make_shared<GdnConvUpdate>(s, fallback, activate),
 +      /* inputs */ std::vector<array>{state, x, weight});
 +}
 +
@@ -65,7 +75,7 @@
    return (
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -495,6 +495,40 @@
+@@ -495,6 +495,49 @@
    bool raw_gates_{false};
  };
  
@@ -73,15 +83,18 @@
 + public:
 +  GdnConvUpdate(
 +      Stream stream,
-+      std::function<std::vector<array>(std::vector<array>)> fallback)
-+      : Custom(stream, std::move(fallback)) {}
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      bool activate)
++      : Custom(stream, std::move(fallback)), activate_{activate} {}
 +  // Backend-defined: the fused path never composes.
 +  static bool use_fallback(Stream s);
 +  // Decode-shaped depthwise causal conv (groups == C, stride 1, no
 +  // padding, no dilation, bf16, MLX conv weight layout
 +  // [C_out, K, C_in/groups]) with the state concatenation folded
 +  // into the read. Everything else (prefill, other dtypes or shapes)
-+  // composes the exact model ops via the fallback.
++  // composes the exact model ops via the fallback. `activate` applies
++  // the model's silu to the conv output inside the same dispatch; the
++  // backend reproduces the composed sigmoid -> mul rounding exactly.
 +  static bool use_fallback(
 +      const array& state,
 +      const array& x,
@@ -100,15 +113,21 @@
 +  }
 +  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
 +      override;
++  bool activates() const {
++    return activate_;
++  }
 +  DEFINE_NAME(GdnConvUpdate)
 +  DEFINE_INPUT_OUTPUT_SHAPE()
++
++ private:
++  bool activate_{false};
 +};
  class Quantize : public Custom {
   public:
    explicit Quantize(
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
-@@ -501,6 +501,26 @@
+@@ -501,6 +501,30 @@
          )");
  
    m.def(
@@ -117,6 +136,7 @@
 +      "state"_a,
 +      "x"_a,
 +      "weight"_a,
++      "activate"_a = false,
 +      "stream"_a = nb::none(), // optional, defaults to None
 +      R"(
 +            GDN decode causal depthwise conv with the state concatenation
@@ -128,6 +148,9 @@
 +                state: Conv state [B, K-1, C]
 +                x: Decode row [B, 1, C]
 +                weight: Depthwise conv weight [C, K, 1]
++                activate: Apply silu to the conv output inside the same
++                    dispatch (the model's nn.silu); bit-exact to the
++                    composed sigmoid -> multiply chain.
 +            Returns:
 +                Tuple of (conv_out [B, 1, C], new_state [B, K-1, C])
 +        )");

@@ -11416,6 +11416,9 @@ void GdnConvUpdate::eval_gpu(
   params.output_offset = checked_item_offset(out, out.size(), tag, out);
   params.in_strides[0] =
       checked_item_offset(state_out, state_out.size(), tag, out);
+  if (activates()) {
+    params.flags |= 1u;
+  }
   std::array<omarchy::ComputeBinding, 5> bindings{
       binding(in_state),
       binding(in_x),

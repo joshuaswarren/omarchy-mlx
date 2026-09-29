@@ -60,6 +60,13 @@ apply mlx-lm-qwen35-qk-scaled.patch
 # kernel; decode S==1, bf16, self-guarded on hasattr): bit-identical on jwm1 (decode64/128/256
 # digests 7fe6badf/da5568ee/7d0523ae unchanged), decode +1.5-2.0%.
 apply mlx-lm-qwen35-gdn-conv.patch
+# GDN conv + silu epilogue: the decode fast route's nn.silu folds into the
+# gdn_conv_update dispatch (activate=True; the wheel's GdnConvDecode kernel
+# rounds conv out, sigmoid, and the product exactly like the composed
+# sigmoid -> multiply chain). Removes the standalone Silu dispatch per GDN
+# layer (18/token). Requires the activate kwarg (landed with the same
+# wheel); older wheels fail loudly at the first decode step.
+apply mlx-lm-conv-silu.patch
 # GDN gated norm -> mx.fast.rms_norm_gated (rms_norm + silu(gate) * x in one dispatch, decode-sized
 # rows only, bf16, self-guarded on hasattr). Requires the wheel's bit-exact FastNormGatedOnly kernel
 # (precise product associations; verified 0 mismatches vs the composed chain over an exhaustive bf16

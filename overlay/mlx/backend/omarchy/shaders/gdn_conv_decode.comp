@@ -64,6 +64,16 @@ layout(push_constant) uniform Params {
   uint lhs_size;
   uint rhs_size;
   uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
 } params;
 
 void main() {
@@ -86,7 +96,22 @@ void main() {
       accumulator += value *
           LOAD_VALUE(weight.values[channel * params.operation + tap]);
     }
-    output_data.values[work_index] = STORE_VALUE(accumulator);
+    // Flag bit 0 (GdnConvUpdate `activate`): fold the model's nn.silu
+    // into this dispatch. Bit-exact to the standalone swiglu.comp
+    // SILU_ONLY chain: the conv output rounds to storage first (the
+    // value the composed path stores and its consumer widens), then
+    // sigmoid = 1/(1+exp(-v)) and the product each round exactly like
+    // the composed sigmoid -> multiply nodes.
+    STORAGE_TYPE conv_out = STORE_VALUE(accumulator);
+    if ((params.flags & 1u) != 0u) {
+      float value = LOAD_VALUE(conv_out);
+      float sigmoid_value = 1.0 / (1.0 + exp(-value));
+      STORAGE_TYPE sig_b = STORE_VALUE(sigmoid_value);
+      float silu = value * LOAD_VALUE(sig_b);
+      output_data.values[work_index] = STORE_VALUE(silu);
+    } else {
+      output_data.values[work_index] = conv_out;
+    }
     for (uint row = 0u; row + 1u < km1; ++row) {
       state_out.values[state_base + row * channels + channel] =
           in_state.values[state_base + (row + 1u) * channels + channel];
