@@ -1,0 +1,30 @@
+{
+ "model": "~/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381",
+ "env": {
+  "MLX_OMARCHY_FULL_LOGITS": "1"
+ },
+ "T512": {
+  "logits_sha256": "f771c4265f88d90cbf9b067fbf8af48fdc26585bde676bc3c32da8ad5329435c",
+  "ids_sha256": "589b9bd30507716a5ab256a9b42bf5c0ae3ab735e19f27cbc7526b8541e33bb9",
+  "argmax_sha256": "5aad53fcb0d9d932668907f1a6cf00d3c55b52236f04bf33299e7d9cb7e31406",
+  "finite": true,
+  "nonfinite_positions": 0,
+  "first_nonfinite_position": null
+ },
+ "T1024": {
+  "logits_sha256": "ce24f3b4ce42ddd834beb047996d0ad92c1a9cf4ca3cf6eadb9f0ae430965b7e",
+  "ids_sha256": "9e634cf72111b19091c164a6d6ad261eee43876c3dac7dc61d7fafff565a7a7b",
+  "argmax_sha256": "bbf2c9a6c810bae6516a0aeb681d6cae4b8a92aa3807453d8aa185748a2c2b4c",
+  "finite": true,
+  "nonfinite_positions": 0,
+  "first_nonfinite_position": null
+ },
+ "T2048": {
+  "logits_sha256": "b8c4e14f8f8a3a5efc59105f344b6b968baabe7703847a4c6f3a07812890e2f5",
+  "ids_sha256": "8dfb02f4bbb65f7845ac5b97ad2f15d6b348820fde9f14885ce50f12b26cdcb9",
+  "argmax_sha256": "927a1e3f5e595d9712d83bdd686a34e8ce6decdcd4500bc4143a98f5c30c234c",
+  "finite": true,
+  "nonfinite_positions": 0,
+  "first_nonfinite_position": null
+ }
+}

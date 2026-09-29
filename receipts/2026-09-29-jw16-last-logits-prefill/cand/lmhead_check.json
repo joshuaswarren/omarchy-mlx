@@ -1,0 +1,159 @@
+T=512 full=76925c45cd769ea6 last=ea81fdac66343dc0 bitwise=False argmax=6043==6043 max|d|=0.0625 quanta=2.0 margin=1.3292203898813145e+37 no_flip=True det=True PASS=True
+T=2048 full=90919d4471a3a702 last=e9796761582f0cf1 bitwise=False argmax=264==264 max|d|=0.015625 quanta=1.0 margin=1.3292203898813145e+37 no_flip=True det=True PASS=True
+{
+ "model": "~/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381",
+ "T512": {
+  "full": {
+   "arm": "FULL",
+   "T": 512,
+   "shape": [
+    1,
+    512,
+    248320
+   ],
+   "lastrow_sha": "76925c45cd769ea6",
+   "argmax": 6043,
+   "finite": true,
+   "argmax_sha": "86721481b53e1cd1",
+   "rowpath": "/tmp/pg3_lastrow_FULL_512.npy",
+   "head_m1_sha": "ea81fdac66343dc0",
+   "head_mt_sha": "76925c45cd769ea6",
+   "head_bitwise_equal": false,
+   "head_finite": true
+  },
+  "last": {
+   "arm": "LAST",
+   "T": 512,
+   "shape": [
+    1,
+    1,
+    248320
+   ],
+   "lastrow_sha": "ea81fdac66343dc0",
+   "argmax": 6043,
+   "finite": true,
+   "argmax_sha": "86721481b53e1cd1",
+   "rowpath": "/tmp/pg3_lastrow_LAST_512.npy",
+   "head_m1_sha": "ea81fdac66343dc0",
+   "head_mt_sha": "76925c45cd769ea6",
+   "head_bitwise_equal": false,
+   "head_finite": true
+  },
+  "last2": {
+   "arm": "LAST",
+   "T": 512,
+   "shape": [
+    1,
+    1,
+    248320
+   ],
+   "lastrow_sha": "ea81fdac66343dc0",
+   "argmax": 6043,
+   "finite": true,
+   "argmax_sha": "86721481b53e1cd1",
+   "rowpath": "/tmp/pg3_lastrow_LAST_512.npy",
+   "head_m1_sha": "ea81fdac66343dc0",
+   "head_mt_sha": "76925c45cd769ea6",
+   "head_bitwise_equal": false,
+   "head_finite": true
+  },
+  "shape_full": [
+   1,
+   512,
+   248320
+  ],
+  "shape_last": [
+   1,
+   1,
+   248320
+  ],
+  "lastrow_bitwise_equal": false,
+  "argmax_equal": true,
+  "both_finite": true,
+  "head_bitwise_equal": false,
+  "head_finite": true,
+  "deterministic": true,
+  "max_abs_delta": 0.0625,
+  "delta_quanta_at_ref_precision": 2.0,
+  "top1_top2_margin": 1.3292203898813145e+37,
+  "no_flip_possible": true,
+  "PASS": true
+ },
+ "T2048": {
+  "full": {
+   "arm": "FULL",
+   "T": 2048,
+   "shape": [
+    1,
+    2048,
+    248320
+   ],
+   "lastrow_sha": "90919d4471a3a702",
+   "argmax": 264,
+   "finite": true,
+   "argmax_sha": "6ac1c8ea5b4632f9",
+   "rowpath": "/tmp/pg3_lastrow_FULL_2048.npy",
+   "head_m1_sha": "e9796761582f0cf1",
+   "head_mt_sha": "90919d4471a3a702",
+   "head_bitwise_equal": false,
+   "head_finite": true
+  },
+  "last": {
+   "arm": "LAST",
+   "T": 2048,
+   "shape": [
+    1,
+    1,
+    248320
+   ],
+   "lastrow_sha": "e9796761582f0cf1",
+   "argmax": 264,
+   "finite": true,
+   "argmax_sha": "6ac1c8ea5b4632f9",
+   "rowpath": "/tmp/pg3_lastrow_LAST_2048.npy",
+   "head_m1_sha": "e9796761582f0cf1",
+   "head_mt_sha": "90919d4471a3a702",
+   "head_bitwise_equal": false,
+   "head_finite": true
+  },
+  "last2": {
+   "arm": "LAST",
+   "T": 2048,
+   "shape": [
+    1,
+    1,
+    248320
+   ],
+   "lastrow_sha": "e9796761582f0cf1",
+   "argmax": 264,
+   "finite": true,
+   "argmax_sha": "6ac1c8ea5b4632f9",
+   "rowpath": "/tmp/pg3_lastrow_LAST_2048.npy",
+   "head_m1_sha": "e9796761582f0cf1",
+   "head_mt_sha": "90919d4471a3a702",
+   "head_bitwise_equal": false,
+   "head_finite": true
+  },
+  "shape_full": [
+   1,
+   2048,
+   248320
+  ],
+  "shape_last": [
+   1,
+   1,
+   248320
+  ],
+  "lastrow_bitwise_equal": false,
+  "argmax_equal": true,
+  "both_finite": true,
+  "head_bitwise_equal": false,
+  "head_finite": true,
+  "deterministic": true,
+  "max_abs_delta": 0.015625,
+  "delta_quanta_at_ref_precision": 1.0,
+  "top1_top2_margin": 1.3292203898813145e+37,
+  "no_flip_possible": true,
+  "PASS": true
+ }
+}
