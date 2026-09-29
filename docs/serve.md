@@ -1,7 +1,7 @@
 # Local generation and HTTP serving on Omarchy
 
 The installer includes the serving CLI, Laya decision server, and Bonsai server packages.
-The v0.7.5 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
+The v0.7.6 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
 Installed code and a successful generation request do not establish model or assistant qualification.
 
 ## Current application boundary
@@ -72,7 +72,7 @@ Defects found by these runs and fixed in source:
 - **A reboot during pair start left an unclaimed reservation.** Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
 - **A fresh install could not set up Laya, offline or online.** Two causes. (1) The generic snapshot check required a top-level `config.json`, which Laya's layout (`encoder/config.json`, `tokenizer/`) does not have, so a fully cached raw Laya snapshot never counted and offline setup refused with "no raw snapshot to convert". Laya now declares its own files and is checked against them. Offline refusals now name the missing files. (2) The pinned Laya commit `1c5edc17` no longer exists upstream (Hugging Face returns "Invalid rev id"), so a fresh online download failed. The catalog now pins upstream `main` at `55cf4c4e`. All five files conversion reads hash identical to the earlier conversion, so the converted artifact and its weights hash `891102d3…` are unchanged. An existing converted Laya records the old revision and is converted again on the next setup. That needs the new snapshot in the cache, or a network. Measured on the M2: fresh home offline from the cache 3.8 s; empty cache online 24 s and 1.8 GB.
 
-The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.5, installed-from-release gates green; see `receipts/2026-09-29-v075-release.md`).
+The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.6, installed-from-release gates green; the Laya fresh-install fix is described above; see `receipts/2026-09-30-v076-release.md`).
 
 ### Voice options
 
