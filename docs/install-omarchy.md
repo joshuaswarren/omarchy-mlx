@@ -81,6 +81,19 @@ records digest `dbf70497`, +2.9% decode) on the dependency-tracked Honeykrisp
 driver; other SoCs should re-run their own digest gate. Skip and emit counts
 appear in the GPU profile and in the runtime-test trace counters.
 
+Submit batching (scheduling only; results are bit-identical): the open batch is
+submitted at 4096 nodes or at the byte budget. `MLX_OMARCHY_BATCH_NODES=<n>`
+overrides the node budget. `MLX_OMARCHY_BATCH_FIRST=<n>` submits the first batch
+of each graph after n nodes so the GPU starts while the host is still recording
+the rest of a long graph; host record time is otherwise fully exposed in
+synchronous paths (about 45 us per dispatch on the M1). It is read at every graph
+start. The mlx-lm patch `mlx-lm-ttft-early-submit.patch` sets it to 128 only
+around prompt processing and the first token of `generate_step`, so pipelined
+decode keeps one submit per token (a constant early first batch cost decode
+about 1%); `MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT=1` disables the patch's behavior.
+Measured on jwm1 (T8103): qwen38 protocol TTFT 0.1844 -> 0.1590 s (-13.8%),
+decode64 41.62 -> 41.48 tok/s, digests unchanged.
+
 ## Build the wheel
 
 1. Install the build tools: Python 3.10 or newer with `venv`, `cmake` 3.25 or
