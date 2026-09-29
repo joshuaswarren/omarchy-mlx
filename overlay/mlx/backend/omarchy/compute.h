@@ -718,6 +718,7 @@ enum class ComputeKernel : uint16_t {
   // G13C, faster on G13G. Selected per chip; MLX_OMARCHY_GDN_DECODE_TILE
   // overrides. Append-only profile id.
   GatedDeltaDecodeBF16Untiled,
+  GatedDeltaDecodeBF16Pf,
   Count,
 };
 

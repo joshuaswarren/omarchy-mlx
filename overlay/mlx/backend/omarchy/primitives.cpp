@@ -10794,9 +10794,13 @@ void GatedDeltaUpdate::eval_gpu(
     // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head;
     // the legacy per-row variant runs one workgroup per head.
     bool decode_tile = gdn_decode_tile_enabled(encoder);
+    // Prefetching legacy walks (env-gated while measured): the untiled
+    // kernel's per-element load-wait-fma loop, with eight loads in flight.
+    static const bool gdn_pf = omarchy::env_flag("MLX_OMARCHY_GDN_PF");
     encoder.dispatch_compute(
         decode_tile ? omarchy::ComputeKernel::GatedDeltaDecodeBF16
-                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled,
+                    : (gdn_pf ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf
+                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled),
         bindings,
         params,
         static_cast<uint32_t>(Hv),

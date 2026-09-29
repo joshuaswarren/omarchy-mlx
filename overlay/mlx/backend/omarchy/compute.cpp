@@ -283,6 +283,7 @@
 #include "sdpa_decode_native_p2_f16.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
+#include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_prefill_bf16.h"
 #include "gated_delta_prefill_coopmat_bf16.h"
 #include "fast_norm_gated_bf16.h"
@@ -303,6 +304,7 @@
 #include "qmm_coopmat_m16_x32_fn.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
+#include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_prefill_bf16.h"
 #include "qmm_fma_precise_f16.h"
 #include "matmul_fma_bf16.h"
@@ -1274,6 +1276,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_m16_x32_fn, qmm_coopmat_m16_x32_fn_size};
     case ComputeKernel::GatedDeltaDecodeBF16:
       return {gated_delta_decode_bf16, gated_delta_decode_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeBF16Pf:
+      return {
+          gated_delta_decode_perrow_pf_bf16,
+          gated_delta_decode_perrow_pf_bf16_size};
     case ComputeKernel::GatedDeltaDecodeBF16Untiled:
       return {
           gated_delta_decode_perrow_bf16,

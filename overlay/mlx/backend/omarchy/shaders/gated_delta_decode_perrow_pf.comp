@@ -1,0 +1,230 @@
+// Legacy per-row GDN decode variant, restored verbatim from the
+// pre-shared-tile kernel (main f0f142776^). The staged state tile wins
+// +3.1..3.9% decode on G13C (T6001) but loses ~3.8% on G13G (T8103);
+// dispatch selects this variant on the G13 parts unless
+// MLX_OMARCHY_GDN_DECODE_TILE forces the tile. Arithmetic is
+// bit-identical to the tiled variant (dg_bitcheck arms).
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused gated-delta-rule decode step (GatedDeltaUpdate, T=1). Replaces the
+// composed per-token op chain that Qwen3.5-style GDN linear-attention layers
+// run per decoded token: state decay, kv reduction, delta, outer-product
+// state update, and the output projection over the updated state.
+//
+// One workgroup per (batch, v-head), one thread per Dv row. The thread's row
+// of the state is read twice (kv pass, update+output pass) instead of being
+// held in registers; k and q ride shared memory. Every intermediate is
+// float32 and each row reduces sequentially over Dk in ascending order, so
+// the arithmetic matches the composed fallback's per-row sums.
+//
+// Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
+// (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
+// promotes them to the q/k dtype; bf16 widening is exact); state and the
+// final state store stay f32; the output store rounds to bf16 RNE, the same
+// store cast.comp applies everywhere. See receipts/2026-09-21-gdn-decode-fused.
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#ifdef QKV_BF16
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
+layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { float    v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer         SOut  { float    v[]; } s_out;
+// Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
+// carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
+// dt_bias (bf16).
+layout(set = 0, binding = 8, std430) readonly buffer ALogBuf { uint16_t v[]; } alog_buf;
+layout(set = 0, binding = 9, std430) readonly buffer DtBuf   { uint16_t v[]; } dt_buf;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;   // Dk
+  uint matrix_n;   // Dv
+  uint matrix_k;   // Hv
+  uint flags;
+  float alpha;
+  float beta_f;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+shared float sk[128];
+shared float sq[128];
+shared float sdelta[128];
+
+// Prefetching walks (H95). The per-row loops of the untiled kernel are
+// runtime-count loops whose state load is waited on before its fma, so a row
+// pays one memory round trip per element (256 per row). Here eight state words
+// are loaded ahead of the eight in-order fma steps. The contraction grouping is
+// written out so it equals what the untiled source compiles to (AGX NIR/ISA,
+// receipts/2026-09-29-jw16-decode-gdn-lse-argmax): kv = fma(s, k[i] * g, kv),
+// ns = fma(s, g, delta * k[i]), o = fma(ns, q[i], o), with k[i] * g and
+// delta * k[i] each rounded once.
+shared float skg[128];
+
+float gdn_kv_walk(uint sbase, uint dk) {
+  float kv = 0.0f;
+  for (uint i = 0u; i < dk; i += 8u) {
+    float s0 = s_in.v[sbase + i];
+    float s1 = s_in.v[sbase + i + 1u];
+    float s2 = s_in.v[sbase + i + 2u];
+    float s3 = s_in.v[sbase + i + 3u];
+    float s4 = s_in.v[sbase + i + 4u];
+    float s5 = s_in.v[sbase + i + 5u];
+    float s6 = s_in.v[sbase + i + 6u];
+    float s7 = s_in.v[sbase + i + 7u];
+    kv = fma(s0, skg[i], kv);
+    kv = fma(s1, skg[i + 1u], kv);
+    kv = fma(s2, skg[i + 2u], kv);
+    kv = fma(s3, skg[i + 3u], kv);
+    kv = fma(s4, skg[i + 4u], kv);
+    kv = fma(s5, skg[i + 5u], kv);
+    kv = fma(s6, skg[i + 6u], kv);
+    kv = fma(s7, skg[i + 7u], kv);
+  }
+  return kv;
+}
+
+float gdn_dk_term(float sd, float kk) {
+  precise float t = sd * kk;
+  return t;
+}
+
+float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd) {
+  float o = 0.0f;
+  for (uint i = 0u; i < dk; i += 8u) {
+    float s0 = s_in.v[sbase + i];
+    float s1 = s_in.v[sbase + i + 1u];
+    float s2 = s_in.v[sbase + i + 2u];
+    float s3 = s_in.v[sbase + i + 3u];
+    float s4 = s_in.v[sbase + i + 4u];
+    float s5 = s_in.v[sbase + i + 5u];
+    float s6 = s_in.v[sbase + i + 6u];
+    float s7 = s_in.v[sbase + i + 7u];
+    float n0 = fma(s0, g, gdn_dk_term(sd, sk[i]));
+    float n1 = fma(s1, g, gdn_dk_term(sd, sk[i + 1u]));
+    float n2 = fma(s2, g, gdn_dk_term(sd, sk[i + 2u]));
+    float n3 = fma(s3, g, gdn_dk_term(sd, sk[i + 3u]));
+    float n4 = fma(s4, g, gdn_dk_term(sd, sk[i + 4u]));
+    float n5 = fma(s5, g, gdn_dk_term(sd, sk[i + 5u]));
+    float n6 = fma(s6, g, gdn_dk_term(sd, sk[i + 6u]));
+    float n7 = fma(s7, g, gdn_dk_term(sd, sk[i + 7u]));
+    s_out.v[obase + i] = n0;
+    s_out.v[obase + i + 1u] = n1;
+    s_out.v[obase + i + 2u] = n2;
+    s_out.v[obase + i + 3u] = n3;
+    s_out.v[obase + i + 4u] = n4;
+    s_out.v[obase + i + 5u] = n5;
+    s_out.v[obase + i + 6u] = n6;
+    s_out.v[obase + i + 7u] = n7;
+    o = fma(n0, sq[i], o);
+    o = fma(n1, sq[i + 1u], o);
+    o = fma(n2, sq[i + 2u], o);
+    o = fma(n3, sq[i + 3u], o);
+    o = fma(n4, sq[i + 4u], o);
+    o = fma(n5, sq[i + 5u], o);
+    o = fma(n6, sq[i + 6u], o);
+    o = fma(n7, sq[i + 7u], o);
+  }
+  return o;
+}
+
+void main() {
+  uint dk = params.matrix_m;
+  uint dv = params.matrix_n;
+  uint hv = params.matrix_k;
+  uint head = gl_WorkGroupID.x;
+  uint row = gl_LocalInvocationID.x;   // one dv row per thread
+
+  if (head >= hv) {
+    return;
+  }
+  for (uint i = row; i < dk; i += 128u) {
+    sk[i] = bf16_load(k_buf.v[params.rhs_offset + head * dk + i]);
+    sq[i] = bf16_load(q_buf.v[params.lhs_offset + head * dk + i]);
+  }
+  barrier();
+
+  float g;
+  float beta;
+  if ((params.flags & 8u) != 0u) {
+    // Raw-gates prologue. Matches the composed decode chain's rounding:
+    // beta = sigmoid(b) in f32 then rounded to bf16; g =
+    // exp(-exp(A_log_f32) * softplus(a + dt_bias)) in f32 then rounded to
+    // bf16 (the same roundings the eager chain applies before the kernel
+    // widened the bf16 values exactly).
+    float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+    float beta_f = 1.0f / (1.0f + exp(-b_in));
+    beta = bf16_load(bf16_store(beta_f));
+    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+    float a_log = bf16_load(alog_buf.v[params.in_strides[0] + head]);
+    // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
+    float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
+    // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
+    // bf16) and softplus(x) to bf16; replicate those roundings exactly.
+    float x = bf16_load(bf16_store(a_in + dt));
+    // softplus = logaddexp(0, x): the eager chain lowers nn.softplus to
+    // LogAddExp, computed here with the elementwise kernel's exact
+    // formula max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected
+    // ratio form, log(u) * x / (u - 1)), then rounded to bf16.
+    float u = 1.0f + exp(-abs(x));
+    float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+    float sp = bf16_load(bf16_store(max(x, 0.0f) + l1p));
+    // The eager chain keeps g in f32 end to end (compute_g returns f32);
+    // exp(A_log) and the product stay f32, so no bf16 round here: the
+    // bf16 roundings the eager path applies are on x, sp, and beta.
+    g = exp(-(exp(a_log) * sp));
+  } else {
+    g = bf16_load(g_buf.v[params.shape[0] + head]);
+    beta = bf16_load(b_buf.v[params.aux_offset + head]);
+  }
+  uint head_base = head * dv * dk;
+  uint row_base = head_base + row * dk;
+  for (uint i = row; i < dk; i += 128u) {
+    skg[i] = sk[i] * g;
+  }
+  barrier();
+
+  float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk);
+  float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
+  sdelta[row] = delta;
+  barrier();
+
+  float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row]);
+  y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
+}
