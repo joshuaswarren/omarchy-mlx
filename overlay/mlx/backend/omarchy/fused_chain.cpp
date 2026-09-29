@@ -522,6 +522,26 @@ std::optional<std::pair<uint32_t, uint32_t>> swiglu_leaves(
   return std::make_pair(gate, up);
 }
 
+// The standalone silu program (r0 = sigmoid(x); out = x * r0, one direct
+// leaf). The generic interpreter runs it at ~8% of the memory roofline.
+bool silu_leaf(const FusedChainImpl& chain) {
+  if (chain.program.size() != 2 || chain.leaves.size() != 1 ||
+      chain.node_ids.size() != 2 || (chain.count & 3u) != 0u ||
+      chain.dtype == float32 || chain.leaf_modes[0] != kLeafDirect ||
+      (chain.leaf_offsets[0] & 3u) != 0u) {
+    return false;
+  }
+  auto field = [&](size_t i, int shift) {
+    return (chain.program[i] >> shift) & 0xffu;
+  };
+  uint32_t op0 = field(0, 0), a0 = field(0, 8), d0 = field(0, 24);
+  uint32_t op1 = field(1, 0), a1 = field(1, 8), b1 = field(1, 16),
+           d1 = field(1, 24);
+  return op0 == ChainSigmoid && op1 == ChainMultiply && a0 >= kChainLeafBase &&
+      ((a1 == a0 && b1 == d0) || (a1 == d0 && b1 == a0)) &&
+      d1 == chain.node_ids.size() - 1;
+}
+
 void dispatch_chain(
     FusedChainImpl& chain,
     array& out,
@@ -573,6 +593,29 @@ void dispatch_chain(
     encoder.dispatch_compute(
         out.dtype() == float16 ? ComputeKernel::SwigluF16
                                : ComputeKernel::SwigluBF16,
+        bindings,
+        params,
+        compute_dispatch_group_count(chain.count / 4u));
+    return;
+  }
+  // Standalone silu (r0 = sigmoid(x); out = x * r0; one direct leaf): the
+  // straight-line swiglu kernel built with up == 1.0, so the stored bits are
+  // the interpreter's (x * r0 rounded, then * 1.0 exactly).
+  if (!materialize_intermediates && silu_leaf(chain)) {
+    ComputeParams params;
+    params.count = chain.count;
+    params.operation = chain.leaf_offsets[0];
+    params.lhs_size = chain.leaf_offsets[0];
+    params.rhs_size = 0u;
+    std::array<ComputeBinding, 5> bindings{
+        chain_binding(chain.leaves[0]),
+        chain_binding(chain.leaves[0]),
+        chain_binding(out),
+        chain_binding(out),
+        chain_binding(out)};
+    encoder.dispatch_compute(
+        out.dtype() == float16 ? ComputeKernel::SiluF16
+                               : ComputeKernel::SiluBF16,
         bindings,
         params,
         compute_dispatch_group_count(chain.count / 4u));

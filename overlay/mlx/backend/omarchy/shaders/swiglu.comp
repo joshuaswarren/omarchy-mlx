@@ -82,7 +82,11 @@ void main() {
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   while (index < vec_count) {
     vec4 gate = LOAD_VEC(gate_buf.values[params.gate_offset / 4u + index]);
+#ifdef SILU_ONLY
+    vec4 up = vec4(1.0);  // standalone silu: silu * 1.0 is exact
+#else
     vec4 up = LOAD_VEC(up_buf.values[params.up_offset / 4u + index]);
+#endif
     vec4 sig = round4(1.0 / (1.0 + exp(-gate)));
     vec4 silu = round4(gate * sig);
     vec4 value = round4(silu * up);

@@ -698,6 +698,9 @@ enum class ComputeKernel : uint16_t {
   ElementwiseLiteF32,
   ElementwiseLiteF16,
   ElementwiseLiteBF16,
+  // Standalone silu chain: shaders/swiglu.comp built with -DSILU_ONLY (up == 1.0).
+  SiluF16,
+  SiluBF16,
   Count,
 };
 
