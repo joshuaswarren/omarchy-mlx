@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { parseAnalyzeQuestions } from "../../serve/mlx_omarchy_assistant/static/js/composer.js";
 import { normalizeLayaDecision, plainText }
   from "../../serve/mlx_omarchy_assistant/static/js/genui.js";
+import { renderSetup } from "../../serve/mlx_omarchy_assistant/static/js/setup.js";
 
 // --- parseAnalyzeQuestions: the typed classify/score composer path -------
 
@@ -393,6 +394,38 @@ function collectText(node, out) {
     announce: () => {}, onVoiceChange: () => {}, onPreview: () => {},
   });
   assert.equal(wrap.querySelector("select[id=details-voice-select]"), null);
+}
+
+{
+  // Setup download approval checkbox: required but NOT invalid.
+  // Chromium AX otherwise reports `invalid entry` to Orca on every
+  // focus visit because the AX `invalid` property defaults to
+  // "indeterminate" for required empty form controls.
+  const mount = document.createElement("div");
+  const status = {
+    state: "setup",
+    pairs: [
+      { id: "everyday", label: "Everyday (fast)", chat_model: "X",
+        decision_model: "Y", qualification: { status: "ready" } },
+    ],
+    recommended_pair: "everyday",
+    context: { max_tokens: 8192, step_tokens: 512 },
+    voice: { state: "missing" },
+    download_components: [
+      { id: "model", label: "Model", bytes: 1_500_000_000 },
+    ],
+    total_download_bytes: 1_500_000_000,
+    download_has_unknown: false,
+  };
+  const ctrl = renderSetup(mount, status, {
+    onSubmit: () => {}, onCancel: () => {},
+  });
+  const approve = mount.querySelector("#setup-approve");
+  assert.ok(approve, "setup-approve checkbox must render");
+  assert.equal(approve.required, true);
+  assert.equal(approve.getAttribute("aria-invalid"), "false",
+    "required checkboxes must explicitly set aria-invalid=false so " +
+    "Chromium AX does not surface 'invalid entry' to screen readers");
 }
 
 console.log("assistant ui js tests passed");

@@ -1,0 +1,14 @@
+# scenario: ready-offline-chip (ready offline chip: Tab through topbar)
+# total utterances: 11
+
+[21:11:03.075942] tab 
+[21:11:03.102012] banner
+[21:11:03.102071] Start a new conversation push button.
+[21:11:03.410309] tab 
+[21:11:03.432296] Open conversation history push button.
+[21:11:03.432317] opens dialog
+[21:11:03.432930] Focus mode
+[21:11:03.746146] tab 
+[21:11:03.768353] Prepare another computer or install an offline bundle push button.
+[21:11:03.768381] opens dialog
+[21:11:04.078955] tab 

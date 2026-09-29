@@ -1,0 +1,47 @@
+# scenario: setup (setup: Tab through all controls)
+# total utterances: 44
+
+[21:07:50.130645] tab 
+[21:07:50.153131] Skip to message box link.
+[21:07:50.370174] tab 
+[21:07:50.395476] banner
+[21:07:50.395529] Start a new conversation push button.
+[21:07:50.605860] tab 
+[21:07:50.633486] Open conversation history push button.
+[21:07:50.633532] opens dialog
+[21:07:50.634406] Focus mode
+[21:07:50.832711] tab 
+[21:07:50.855135] Prepare another computer or install an offline bundle push button.
+[21:07:50.855186] opens dialog
+[21:07:51.060559] tab 
+[21:07:51.083253] Open model and memory details push button.
+[21:07:51.083298] opens dialog
+[21:07:51.304869] tab 
+[21:07:51.336213] leaving banner.
+[21:07:51.336274] main content
+[21:07:51.336293] region Set up local chat
+[21:07:51.336307] form
+[21:07:51.336318] Everyday (fast) Chat: Qwen3.8-2B-4bit · Decisions: Laya-1 · Qualification: ready.
+[21:07:51.336329] selected radio button
+[21:07:51.336999] Browse mode
+[21:07:51.543567] tab 
+[21:07:51.567019] Balanced Balance response latency with answer quality.
+[21:07:51.567074] selected radio button
+[21:07:51.772191] tab 
+[21:07:51.796797] Download the voice pack with this setup Required for spoken replies; the chat path is unaffected. check box not checked.
+[21:07:52.008816] tab 
+[21:07:52.032882] Context cap in tokens 0 spin button.
+[21:07:52.033752] Focus mode
+[21:07:52.245579] tab 
+[21:07:52.268577] Allow downloading 1.6 GB of measured components Unknown sizes are not assumed cached or free; the coordinator reports them by component. check box not checked required.
+[21:07:52.269293] Browse mode
+[21:07:52.500441] tab 
+[21:07:52.516745] Start setup push button.
+[21:07:52.733633] tab 
+[21:07:52.763053] Cancel push button.
+[21:07:52.971447] tab 
+[21:07:52.995932] Skip to message box link.
+[21:07:53.208126] tab 
+[21:07:53.233406] banner
+[21:07:53.233465] Start a new conversation push button.
+[21:07:53.451399] tab 

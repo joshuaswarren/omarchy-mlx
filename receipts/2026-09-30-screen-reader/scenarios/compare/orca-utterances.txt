@@ -1,0 +1,31 @@
+# scenario: compare (compare: open, submit empty, expect validation)
+# total utterances: 28
+
+[21:09:46.512140] tab 
+[21:09:46.535999] Skip to message box link.
+[21:09:46.744339] tab 
+[21:09:46.768553] banner
+[21:09:46.768614] Start a new conversation push button.
+[21:09:46.976572] tab 
+[21:09:47.000771] Open conversation history push button.
+[21:09:47.000828] opens dialog
+[21:09:47.001614] Focus mode
+[21:09:47.203972] tab 
+[21:09:47.226138] Prepare another computer or install an offline bundle push button.
+[21:09:47.226195] opens dialog
+[21:09:47.431274] tab 
+[21:09:47.454316] Open model and memory details push button.
+[21:09:47.454364] opens dialog
+[21:09:47.660926] tab 
+[21:09:47.688302] leaving banner.
+[21:09:47.688369] main content
+[21:09:47.688390] region Set up local chat
+[21:09:47.688407] form
+[21:09:47.688420] Balanced Balance response latency with answer quality.
+[21:09:47.688432] selected radio button
+[21:09:47.689417] Browse mode
+[21:09:47.890841] tab 
+[21:09:47.914745] Download the voice pack with this setup Required for spoken replies; the chat path is unaffected. check box not checked.
+[21:09:48.123049] tab 
+[21:09:48.146070] Context cap in tokens 0 spin button.
+[21:09:48.146984] Focus mode

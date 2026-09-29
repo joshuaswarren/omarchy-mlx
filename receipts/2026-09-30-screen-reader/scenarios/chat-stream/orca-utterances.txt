@@ -1,0 +1,62 @@
+# scenario: chat-stream (chat: send message, observe polite announcements)
+# total utterances: 59
+
+[21:08:10.011680] Download heading level 3.
+[21:08:10.015485] l 
+[21:08:10.018713] No more lists.
+[21:08:10.020334] y 
+[21:08:10.037481] leaving form.
+[21:08:10.037540] leaving region.
+[21:08:10.037557] leaving main content.
+[21:08:10.037571] main content
+[21:08:10.037583] information
+[21:08:10.037596] Voice status statusbar
+[21:08:10.037605] Dictation: Voice pack missing.
+[21:08:10.037971] space 
+[21:08:10.040823] w 
+[21:08:10.042588] i 
+[21:08:10.044577] No more list items.
+[21:08:10.052683] t 
+[21:08:10.056280] No more tables.
+[21:08:10.064843] h 
+[21:08:10.068635] Wrapping to top.
+[21:08:10.090902] Set up local chat heading level 2.
+[21:08:10.092121] space 
+[21:08:10.094558] o 
+[21:08:10.110888] Model pair heading level 3.
+[21:08:10.111720] n 
+[21:08:10.115476] e 
+[21:08:10.134581] Context cap in tokens 0 spin button.
+[21:08:10.137307] space 
+[21:08:10.148411] main content.
+[21:08:10.150747] s 
+[21:08:10.152267] No more separators.
+[21:08:10.153487] h 
+[21:08:10.168280] Set up local chat heading level 2.
+[21:08:10.171494] o 
+[21:08:10.185301] Model pair heading level 3.
+[21:08:10.188977] r 
+[21:08:10.203619] Fast Prefer lower response latency.
+[21:08:10.203682] not selected radio button
+[21:08:10.204094] t 
+[21:08:10.207811] No more tables.
+[21:08:10.209064] space 
+[21:08:10.222597] Context cap in tokens 0 spin button.
+[21:08:10.223244] Focus mode
+[21:08:10.226958] s 
+[21:08:10.228872] e 
+[21:08:10.236795] n 
+[21:08:10.250359] main content.
+[21:08:10.251115] Browse mode
+[21:08:10.254170] t 
+[21:08:10.255720] No more tables.
+[21:08:10.262450] e 
+[21:08:10.277360] Context cap in tokens 0 spin button.
+[21:08:10.281015] n 
+[21:08:10.287075] c 
+[21:08:10.290027] No more combo boxes.
+[21:08:10.299511] e 
+[21:08:10.305507] Wrapping to top.
+[21:08:10.317237] Context cap in tokens 0 spin button.
+[21:08:10.318695] dot 
+[21:08:10.649202] return 

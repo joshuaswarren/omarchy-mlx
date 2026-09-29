@@ -1,0 +1,14 @@
+# scenario: error (error: Tab to error banner)
+# total utterances: 11
+
+[21:10:47.054697] tab 
+[21:10:47.081396] banner
+[21:10:47.081457] Start a new conversation push button.
+[21:10:47.389128] tab 
+[21:10:47.417208] Open conversation history push button.
+[21:10:47.417277] opens dialog
+[21:10:47.418567] Focus mode
+[21:10:47.728823] tab 
+[21:10:47.761460] Prepare another computer or install an offline bundle push button.
+[21:10:47.761516] opens dialog
+[21:10:48.070414] tab 

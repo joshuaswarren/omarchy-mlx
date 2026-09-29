@@ -1,0 +1,18 @@
+# scenario: drawer (drawers: focus trap, Escape, focus return)
+# total utterances: 15
+
+[21:10:05.371076] tab 
+[21:10:05.698239] tab 
+[21:10:06.029961] tab 
+[21:10:06.096032] leaving form.
+[21:10:06.096086] MLX Chat document web.
+[21:10:06.114870] Conversation history dialog
+[21:10:06.114920] form
+[21:10:06.114934] Close history push button.
+[21:10:06.372730] escape 
+[21:10:06.947636] Model and memory details dialog
+[21:10:06.947682] form
+[21:10:06.947696] Close details push button.
+[21:10:07.424237] tab 
+[21:10:07.750315] tab 
+[21:10:08.083186] escape 

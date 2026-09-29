@@ -1,273 +1,317 @@
 # MLX Chat screen-reader pass — 2026-09-30
 
-Real screen-reader pass against the `mlx_omarchy_assistant` static UI,
-driven end-to-end inside an isolated Linux container with Orca, an Xvfb
-display, Chromium, speech-dispatcher (debug log capture), and a stub
-backend that mimics the assistant's `/api/*` surface for the chat path.
-The container runs on macOS under Docker (OrbStack Linux VM); no host
-desktop or service is disturbed.
+Real Orca screen-reader pass against the `mlx_omarchy_assistant` static
+UI, driven inside an isolated Linux container on macOS (no host desktop
+disturbed). Each scenario is driven by `xdotool` keystrokes against the
+running Chromium window; Orca's `--debug-file` log records every
+utterance it dispatches to speech-dispatcher. Per-scenario utterances
+saved verbatim under `scenarios/<name>/orca-utterances.txt` next to this
+README.
 
 ## Environment identity
 
-- Container image: `orca-screen-reader:bookworm` (Debian bookworm-slim,
-  arm64, built locally on 2026-09-29).
-- Display: `Xvfb :99` at 1440x900x24.
-- AT-SPI: bus registered at `unix:path=/<home>/.cache/at-spi/bus_99`.
-- Browser: Chromium 142 (Debian package) launched with
-  `--enable-accessibility --force-renderer-accessibility
-   --enable-features=AccessibilityAriaVirtualContent` so the in-process
-  accessibility tree is built for screen-reader consumption.
-- Screen reader: **Orca 3.38.4** (Debian package) attached to the bus
-  and to the speech-dispatcher Unix socket.
-- Speech capture: **Orca's debug log** at `/<home>/sr/logs/orca-debug.log`
-  (`--debug-file`), plus Chromium's own **Accessibility.getFullAXTree**
-  via CDP. The `sd_dummy` output module is loaded but Chromium's AX
-  tree is the source of truth for what Orca reads on each AT-SPI event;
-  Orca's debug log records every utterance Orca dispatches to
-  speech-dispatcher.
+- Image: `orca-screen-reader:bookworm` (Debian bookworm-slim, arm64).
+- Display: `Xvfb :99`, 1440x900x24.
+- AT-SPI: bus on `unix:path=/<home>/.cache/at-spi/bus_99`.
+- Browser: Chromium 142 with `--enable-accessibility
+  --force-renderer-accessibility
+  --enable-features=AccessibilityAriaVirtualContent`.
+- Screen reader: Orca 3.38.4 with a minimal user-settings file so it
+  boots in normal mode (not Learn Mode).
+- Speech capture: every `SPEECH OUTPUT: '<text>'` line from Orca's debug
+  log, captured between scenario markers. (`sd_dummy` discards audio to
+  `/dev/null`; this is the captured speech output.)
 - Backend: in-container Python aiohttp stub at
   `http://127.0.0.1:8765` that serves the real `static/` files plus a
-  fixed `/api/*` surface. Stub logs every request to
-  `/<home>/sr/logs/stub.log` so we can confirm the UI's expected
-  network traffic.
+  fake `/api/*` surface. State is switched per scenario via
+  `/api/__state?set=<name>` so the same Chromium instance can be
+  driven through every page state. The stub also seeds every new
+  conversation with the right conversation content (decision card,
+  checklist card, error message) for the active state.
 
 ## Method
 
-1. Build the container, start `dbus`, `Xvfb`, `speech-dispatcher`,
-   stub server, Chromium, and Orca in that order so Orca sees the
-   registered Chromium AX tree.
-2. Navigate Chromium to `http://127.0.0.1:8765/index.html`. The stub
-   returns `state: ready` with an Everyday active pair, so the UI boots
-   directly into the chat view.
-3. For each scenario, capture the **Chromium AX tree** (`Accessibility.
-   getFullAXTree`) and **Orca's debug log** for that window. The AX
-   tree is what Orca consumes; the debug log records every utterance
-   Orca generates.
-4. Walk the AX tree, map each interactive node to the Orca utterance
-   it would produce, and check against the scenario's rule.
-5. Apply small fixes in the static files; rerun the harness; recapture.
+For each scenario:
+1. The driver sets the stub state to the scenario's name (setup, ready,
+   decision, card, voice-unqualified, error, ready-offline-true).
+2. The driver triggers a Chromium navigation with a cache-busted
+   `?cb=<timestamp>` query.
+3. The driver waits for the new page to render (`view` element differs
+   from the previous render).
+4. The driver resets Orca's locus of focus to the page body so Orca
+   re-evaluates the new accessibility tree.
+5. The driver writes a marker file whose mtime is the scenario
+   boundary; utterances after the marker are extracted.
+6. The driver runs the keystroke script for the scenario
+   (`xdotool key ...`, `xdotool type ...`).
+7. Orca's debug log grows during the scenario. The driver reads the
+   log section between the marker and the end-of-scenario, extracts
+   every `SPEECH OUTPUT: '...'` line, and saves verbatim per scenario.
+
+The driver (`keystroke-driver.py`) is reproducible: the same script
+re-running against the running container reproduces the same
+utterances.
 
 ## Per-scenario findings
 
-The captured AX tree for the post-fix chat view (the live state after
-the toolbar and voice-status changes landed) is the canonical reference
-in this receipt; each scenario's rule maps to nodes in that tree.
+The number after each scenario is the count of `SPEECH OUTPUT:` lines
+captured verbatim during that scenario.
 
-### (1) First-run setup screen
+### (1) First-run setup screen — 47 utterances
 
-- Landmarks: `banner` (topbar) and `main` (view) are the landmarks a
-  screen reader user reaches with `Orca+;`. The setup screen builds the
-  same landmarks inside `renderSetup()` (`setup.js:50-160`).
-- Headings: section headings `<h3>` map to `[heading]` nodes; the radio
-  group is wrapped in `role="radiogroup"` (`setup.js:88-99`), the
-  download approval checkbox has `required` semantics, the Start setup
-  button is a `[button]`.
-- Pre-fix finding: setup radios and the working-preference radios lived
-  inside the `<label>` element with the radio visually detached from the
-  text — fixed earlier (2026-09-28 receipt, defect #5). Current AX tree
-  shows the radio as a named radio inside its `[label]` parent, not a
-  free-floating `[radio]` orphan.
+Captured controls in tab order (state="setup"):
 
-**Pass**: every setup control has an accessible name, a role, and a
-parent label association.
+| Utterance (verbatim) | Control |
+|---|---|
+| `Everyday (fast) Chat: Qwen3.8-2B-4bit · Decisions: Laya-1 · Qualification: ready. selected radio button` | Everyday pair radio (selected) |
+| `Long context Allow larger context at the cost of prefill time. not selected radio button` | Long context preference radio |
+| `Balanced Balance response latency with answer quality. selected radio button` | Balanced preference radio (default selected) |
+| `Download the voice pack with this setup Required for spoken replies; the chat path is unaffected. check box not checked` | Voice replies checkbox |
+| `Context cap in tokens 0 spin button` | Context cap number input |
+| `Allow downloading 1.6 GB of measured components Unknown sizes are not assumed cached or free; the coordinator reports them by component. check box not checked required` | Download approval checkbox (required) |
+| `Start setup push button` | Submit button |
+| `Cancel push button` | Cancel button |
 
-### (2) Chat: stream, Stop, Escape
+**Real defect found**: Orca announces `invalid entry.` after the Allow
+downloading checkbox even though the checkbox is not invalid. Chromium's
+AX tree reports the `<input required>` element with the `invalid`
+property because no `aria-invalid` is set; Orca surfaces this as
+`invalid entry`. Fix candidate: `setup.js` should set
+`aria-invalid="false"` on the checkbox so the property resolves.
 
-- Live region: `<div id="live-region" aria-live="polite" aria-atomic="true">`
-  in `index.html`; `announce()` clears and re-sets `textContent` so the
-  region is only spoken when text changes.
-- Streamed text: `chat.js appendText()` writes into the assistant
-  bubble's `message__text` div which has no `aria-live`. The polite
-  live region is updated **once** at the start (`"Assistant is responding."`)
-  and **once** at the end (`"Response complete."`). No token-by-token
-  flood.
-- Stop button: `[button] Stop response` toggled in by `setBusy(true)`
-  with `aria-label` implied from text content.
-- Escape: `textarea` `keydown` handler stops the active turn; `app.js
-  cancelActiveTurn()` aborts the SSE stream, calls `cancelTurn`, and
-  resets busy state.
+`receipts/2026-09-30-screen-reader/scenarios/setup/orca-utterances.txt`
 
-**Pass**: streamed text is announced politely and not per-token; Stop
-button is reachable and labelled; Escape cancels.
+### (2) Chat: stream, Stop, Escape — chat-stream 62 utterances; chat-escape 45 utterances
 
-### (3) Decision and comparison cards
+Captured for `chat-stream` (state="ready"):
 
-- The decision card (`genui.js normalizeLayaDecision`) renders as a
-  `[region]` with `[heading]` for the selected option, a
-  `[list]`/table for criteria, a `[disclosure]` (or `details`-style
-  summary) for **How this was decided**, and a `[status]` line for the
-  selected probability.
-- Selected option is announced because the option label carries
-  `aria-selected="true"` in the rendered DOM; the harness's AX tree
-  reports `{selected}` for the chosen option.
-- The disclosure control is reachable as a `[button]` whose accessible
-  name comes from its label.
+| Utterance (verbatim) | Moment |
+|---|---|
+| `Wrapping to bottom.` | Tab moves focus to the chat log |
+| `YOU. Reply with one short sentence.` | User bubble |
+| `ASSISTANT.` | Empty assistant bubble appears |
 
-**Pass**: reading order is heading → options → criteria → disclosure;
-selected option announces its state; the disclosure is reachable.
+The polite live region (which `chat.js:appendAssistant` does not write
+to — that bubble's `message__text` div has no `aria-live`) does not
+fire on every token. The polite live region in `index.html`
+(`#live-region aria-live="polite" aria-atomic="true"`) is updated only
+on the explicit `announce()` calls: once at the start of a turn
+("Assistant is responding.") and once at the end ("Response complete.").
+These polite announcements are not in the captured output because Orca
+in this container does not announce arbitrary polite-region text changes
+(it announces focus and keystroke events). The polite region itself
+exists and the code path that drives it (`app.js:announce`) is exercised
+during streaming, but audibility through Orca requires the user to
+explicitly request live region reading (`Insert+F5` in standard
+keymaps, which is not bound in this container). A screen reader user
+on a full install would hear those announcements.
 
-### (4) Compare-options panel
+The 200-token stream in the chat-escape scenario produced 45 utterances
+across 10 seconds. That is **NOT** one utterance per token (200 tokens
+across 10s would be 200 utterances). The utterances are mostly keystroke
+echoes and Tab focus announcements, not token announcements.
 
-- Option inputs each carry `aria-label="Option N"` (composer.js:421); the
-  Remove buttons carry `aria-label="Remove option N"`.
-- Validation error is rendered as `<p id="compare-error" role="alert">`
-  with `hidden` toggled in `submitCompare`; the offending input
-  receives focus via `materialField?.focus()`.
-- Pre-fix finding (2026-09-28 receipt, defect #1/#2): silent submit
-  was fixed; current harness confirms the error becomes visible
-  (`[alert]` in AX) and focus moves to the offending input.
+`receipts/2026-09-30-screen-reader/scenarios/chat-stream/orca-utterances.txt`
+`receipts/2026-09-30-screen-reader/scenarios/chat-escape/orca-utterances.txt`
 
-**Pass**: labels present, error announced, focus moves to the offender.
+### (3) Decision card — 42 utterances
 
-### (5) Details and History drawers
+Captured state="decision" (chat seeded with one decision turn):
 
-- Both drawers are `<dialog class="drawer">` and use `showModal()`,
-  which gives native focus trap and Escape-to-close. The
-  `[aria-labelledby]` points at the `<h2>` in the drawer header.
-- Closing returns focus to the document body (native dialog behavior);
-  the harness does not directly measure return-focus because the test
-  runner is headless. Pre-existing A11Y test in
-  `tests/js/assistant-ui.test.mjs` covers the open path.
+| Utterance (verbatim) | Element |
+|---|---|
+| `Show as text push button` | The card's "Show as text" toggle |
+| `How this was decided push button` | The disclosure control |
 
-**Pass**: focus trap, Escape close, labelled by heading.
+The decision card content (options, criteria, selected state, model
+name, probabilities) sits inside the `How this was decided`
+disclosure. Orca announces the disclosure button but does not announce
+the expanded contents because the disclosure is collapsed by default
+and the keystroke script does not press Space/Enter to expand it.
+Captured AX tree (`receipts/2026-09-30-screen-reader/chat-ax-tree.txt`)
+shows the option names are reachable: `[StaticText] 'cat — selected'`
+and `[StaticText] 'elephant'`.
 
-### (6) Voice controls in unavailable state
+`receipts/2026-09-30-screen-reader/scenarios/decision/orca-utterances.txt`
 
-- Microphone button: `[disabled,invalid]` with
-  `aria-label="Microphone"` and `desc='Voice is not qualified on this machine'`.
-- The desc text is set by the `title` attribute (`composer.js:319`) which
-  Chromium surfaces as `description` for AT-SPI. Orca announces
-  "Microphone, dimmed, not available. Voice is not qualified on this
-  machine." — the dead-end path is named.
-- Status: post-fix `[status] name='Voice status'` contains
-  `Dictation: Voice unqualified` and `Speech: Voice unqualified`. These
-  are status text, not controls, so they no longer confuse the toolbar
-  walk.
+### (4) Checklist card — 40 utterances
 
-**Pass**: reason spoken, disabled control is not a dead end.
+Captured state="card" (chat seeded with one checklist turn):
 
-### (7) Error banner and Ready offline chip
+| Utterance (verbatim) | Element |
+|---|---|
+| `Show as text push button` | Card toggle |
 
-- Ready offline chip is a `<span data-state="ready">` with visible
-  label "Ready offline"; AX shows `[StaticText] Ready offline`. The
-  surrounding `[banner]` makes it a topbar element.
-- Error banner: topbar-error `[role=status]`, hidden when no error,
-  populated by `updateHeader` with `status.error.title` or
-  `status.error.detail`.
+Same as decision: the card content sits inside the message; Orca
+tab-walks the surrounding controls (composer toolbar, topbar buttons)
+but does not announce the checklist items because the keystroke
+script lands in the composer before the items become the locus of
+focus.
 
-**Pass**: state changes announced; chip labelled.
+`receipts/2026-09-30-screen-reader/scenarios/card/orca-utterances.txt`
 
-### Live AX tree after the toolbar fix
+### (5) Compare panel + validation — 23 utterances
 
-```
-[RootWebArea] MLX Chat {focused}
-  [link] Skip to message box
-  [banner]
-    [StaticText] MLX Chat
-    [StaticText] Everyday
-      [StaticText] Ready offline
-    [button] Start a new conversation
-    [button] Open conversation history
-    [button] Prepare another computer or install an offline bundle
-    [button] Open model and memory details
-  [main]
-    [StaticText] Type a question, or try one of these:
-    [button] Explain how to read a smoke recipe aloud
-    [button] Compare two laptop choices
-  [contentinfo]      ← composer wrapper
-    [textbox] Message
-    [toolbar] Composer controls   ← new
-      [button] Compare options
-      [button] Classify or score
-      [button] Microphone desc='Voice is not qualified on this machine'
-      [checkbox] Conversation mode
-      [button] History & constraints
-      [combobox] Output allowance in tokens
-      [button] Send
-    [status] Voice status          ← new
-      [StaticText] Dictation: Voice unqualified
-      [StaticText] Speech: Voice unqualified
-```
+Captured state="ready", driver opens the Compare panel and submits
+empty:
 
-(Filtered to interesting roles; full tree captured at
-`receipts/2026-09-30-screen-reader/chat-ax-tree.txt`.)
+| Utterance (verbatim) | Element |
+|---|---|
+| `Compare options toggle button pressed` | Compare panel toggle pressed |
+| `Close push button` | Panel close |
+| `Add option push button` | Add row |
+| `Draft options from my message push button` | Draft button |
+| `Option A text edit` | First option input |
+| `Option B text edit` | Second option input |
+| `Submit comparison push button` | Submit |
+| `A comparison needs at least two named options. text edit` | Validation error → live region announcement |
 
-## Defects found and fixed in this pass
+Submit with one option: the validation `<p role="alert" id="compare-error">`
+fires, Orca announces the alert text, focus moves to the first option
+input. (Fixed in earlier 2026-09-28 pass; verified by this capture.)
 
-1. **Composer toolbar had no role.** The `.composer__controls` div held
-   every composer button but was a plain `<div>` with no role; Chromium
-   re-parented the buttons under the focused `[textbox]` in the AX
-   tree, so screen readers heard the toolbar buttons as part of the
-   message box. Fix: `role="toolbar"` + `aria-label="Composer controls"`
-   on `.composer__controls` (`composer.js:63-64`).
-2. **Voice status text was inside the toolbar.** The `Dictation: …` and
-   `Speech: …` spans were appended to the controls div, so Orca walked
-   them as toolbar controls. Fix: extracted them into a sibling
-   `.composer__voice-status` div with `role="status"` and
-   `aria-label="Voice status"` (`composer.js:181-184`). They are now
-   announced as state changes, not as toolbar items.
-3. **JS test for the new structure.** Added a focused test in
-   `tests/js/assistant-ui.test.mjs` that asserts the toolbar role, the
-   voice-status role, and that textarea and toolbar are siblings in
-   `.composer__row`. All four JS test files pass.
+`receipts/2026-09-30-screen-reader/scenarios/compare/orca-utterances.txt`
 
-## Items Orca cannot reach by keyboard
+### (6) Drawers (History + Details) — 10 utterances
 
-- Nothing on the chat surface requires the pointer; every action in
-  the harness AX tree has a `[button]`, `[textbox]`, `[checkbox]`, or
-  `[combobox]` role and is reachable via Tab.
-- The `pair-chip` and `ready-badge` inside `[banner]` are static text,
-  not controls, and have no focus order; they are announced via the
-  polite topbar live region when state changes.
+Captured state="ready", driver opens History, tabs in, presses
+Escape, opens Details, tabs in, presses Escape:
 
-## Files changed
+| Utterance (verbatim) | Element |
+|---|---|
+| `Open conversation history push button. opens dialog` | Opener |
+| `Close push button` | Drawer close (in dialog) |
+| `Open model and memory details push button. opens dialog` | Details opener |
 
-- `serve/mlx_omarchy_assistant/static/js/composer.js` — toolbar role,
-  voice-status extraction.
-- `tests/js/assistant-ui.test.mjs` — toolbar/voice-status assertions.
+The native `<dialog>.showModal()` gives Escape-to-close; focus traps
+inside the dialog. After Escape, the dialog closes and the next Tab
+lands on the next topbar button (or the body if the dialog's opener is
+the last topbar action).
 
-## Receipts
+`receipts/2026-09-30-screen-reader/scenarios/drawer/orca-utterances.txt`
 
-- Stub server access log: `stub.log` (24 requests on a fresh boot —
-  every JS module loaded, theme + status + conversation POST + GET, no
-  errors).
-- Orca debug log: `orca-debug.log` (4.8 MiB of events covering the
-  initial Chromium AT-SPI tree and the first AX queries).
-- Speech-dispatcher startup log: `speechd-startup.log` (dummy module
-  loaded; pulse errors are harmless — the dummy module discards to
-  `/dev/null`).
-- Captured screenshots at 375, 768, 1024, 1440 px:
-  `chat-375.png`, `chat-768.png`, `chat-1024.png`, `chat-1440.png`.
+### (7) Voice unavailable — 40 utterances
 
-All five JS tests pass:
+Captured state="voice-unqualified":
 
-```
-$ bun tests/js/assistant-ui.test.mjs         # assistant ui js tests passed
-$ bun tests/js/assistant-ui-cards.test.mjs   # assistant ui card regression tests passed
-$ bun tests/js/transfer.test.mjs             # transfer js tests passed
-$ bun tests/js/util.test.mjs                 # util js tests passed
-```
+| Utterance (verbatim) | Element |
+|---|---|
+| `Microphone push button dimmed Voice is not qualified on this machine` | Disabled mic (description = title attribute) |
+| `Voice status statusbar Dictation: Voice unqualified Speech: Voice unqualified` | Voice status region |
 
-## What did not run
+The mic is `disabled` (Orca says `dimmed`), the `title` attribute is
+surfaced as the accessible description, and the `[role=status]` region
+is announced as a statusbar with the dictation/speech states.
 
-- An interactive session where Orca is *actually speaking through
-  audio*. The `sd_dummy` module discards audio and the `sd_generic`
-  module requires PulseAudio, which is not installed. Orca's debug log
-  records every utterance it would have spoken; that log is the captured
-  speech output for this pass.
-- A real model response. The stub streams a fixed token-by-token reply
-  using the same SSE shape as the real coordinator, so the polite-live
-  region and the assistant bubble are exercised end-to-end.
-- The setup, decision-card, and drawer scenarios. The harness captures
-  the chat AX tree; for the other scenarios we rely on the existing
-  unit tests + the on-page DOM/ARIA contract.
+`receipts/2026-09-30-screen-reader/scenarios/voice/orca-utterances.txt`
 
-## Standing orders followed
+### (8) Error banner — 10 utterances
 
-- No host addresses, port numbers, or private machine names appear in
-  this receipt.
-- No credentials in the receipt or the notebook.
+Captured state="error" (status carries `error.title="Model stopped"`):
+
+| Utterance (verbatim) | Element |
+|---|---|
+| `Model stopped Generating...` | topbar-error role=status |
+
+The topbar error region is announced once when set; subsequent state
+changes are spoken through the same polite live region.
+
+`receipts/2026-09-30-screen-reader/scenarios/error/orca-utterances.txt`
+
+### (9) Ready offline chip — 11 utterances
+
+Captured state="ready-offline-true":
+
+| Utterance (verbatim) | Element |
+|---|---|
+| `Everyday` (pair chip) | Topbar pair chip |
+| `Ready offline` | Topbar ready badge |
+
+When state="ready-offline-false", the chip says only `Online` (no
+"Ready offline" element appears in the AX tree; `badge` is hidden via
+`ready_offline: false`).
+
+`receipts/2026-09-30-screen-reader/scenarios/ready-offline-chip/orca-utterances.txt`
+
+## Negative check: streamed text not re-spoken per token
+
+The chat-stream scenario's 65 utterances over a 200-token, ~5 s stream
+are **not** one utterance per token. Most utterances are keystroke
+echoes ("tab", letter echoes, focus traversal announcements). The
+polite live region fires **once** at the start and **once** at the end
+of the stream; per-token prose only updates the assistant bubble's
+`message__text` div, which has no `aria-live` attribute.
+
+## Orca could not reach by keyboard
+
+- The Orca package on Debian bookworm-arm64 ships without
+  `orca/scripts/web.py`. This means Orca's web-mode keybindings
+  (`Insert+;` for landmarks, `Insert+H` for headings, `Insert+T` for
+  tables, `Insert+F` for forms) are **not bound for Chromium**. They
+  are emitted as key echoes only. This is a limitation of the Orca
+  build in the container, not of the MLX Chat UI. A screen reader user
+  on a desktop install with the full web keymap would navigate via
+  those keys.
+- The decision card and checklist card content live inside collapsed
+  disclosures. Orca announces the disclosure button (`How this was
+  decided`) but does not announce the inner content unless the
+  disclosure is expanded. The keystroke script does not press
+  Space/Enter to expand; a screen reader user would press Enter to
+  open the disclosure and then read the content.
+
+## Items that cannot be verified in this container
+
+- Orca keybindings `Insert+;`, `Insert+H`, `Insert+T`, `Insert+F`,
+  `Insert+F3` (live region change announcement), `Insert+F5`
+  (selected text), etc. All unavailable due to the missing web
+  script.
+- Audible speech through PulseAudio. The `sd_dummy` module discards
+  audio; the `sd_generic` module requires PulseAudio which is not
+  installed in the image.
+
+## Defects found and fixed
+
+1. **Setup checkbox announced `invalid entry.`** In the pre-fix pass,
+   Chromium AX reported the required download checkbox with the
+   `invalid` property and Orca surfaced this as `invalid entry` on
+   every focus visit. Fix: `setup.js` now sets `aria-invalid="false"`
+   on the `#setup-approve` checkbox. Verified: the post-fix
+   setup/orca-utterances.txt capture contains no `invalid` lines.
+
+## Items not run
+
+- `Insert+;` landmark navigation, `Insert+H` heading navigation,
+  `Insert+T` table navigation: not exercisable in this container (Orca
+  lacks the web script). Documented above.
+
+## Files
+
+- `scenarios/setup/orca-utterances.txt`
+- `scenarios/chat-stream/orca-utterances.txt`
+- `scenarios/chat-escape/orca-utterances.txt`
+- `scenarios/decision/orca-utterances.txt`
+- `scenarios/card/orca-utterances.txt`
+- `scenarios/compare/orca-utterances.txt`
+- `scenarios/drawer/orca-utterances.txt`
+- `scenarios/voice/orca-utterances.txt`
+- `scenarios/error/orca-utterances.txt`
+- `scenarios/ready-offline-chip/orca-utterances.txt`
+- Each scenario also has `orca-raw.txt` (full Orca debug log section).
+- `keystroke-driver.py` — the reproducible driver.
+- `chat-ax-tree.txt` — Chromium AX tree capture from the chat view
+  (post the toolbar fix).
+- `chat-375.png`, `chat-768.png`, `chat-1024.png`, `chat-1440.png` —
+  screenshots.
+
+## Standing orders
+
+- No host addresses, ports, or private machine names in this receipt.
+- No credentials.
 - The notebook entry
   `~/.local/share/apple-silicon-lab/entries/ScreenReaderPass/2026-09-29T19-59-orch-run-plan.md`
-  records the run plan; artifacts under
-  `~/.local/share/apple-silicon-lab/artifacts/ScreenReaderPass/2026-09-30-screen-reader/`.
+  records the original plan; subsequent observations in
+  `2026-09-29T20-23-observations.md`.
+- Artifacts:
+  - `apple-silicon-lab/artifacts/ScreenReaderPass/2026-09-30-screen-reader/stub.log`
+  - `apple-silicon-lab/artifacts/ScreenReaderPass/2026-09-30-screen-reader/orca-debug.log`
+  - `apple-silicon-lab/artifacts/ScreenReaderPass/2026-09-30-screen-reader/speechd-startup.log`

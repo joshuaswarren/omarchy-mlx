@@ -176,7 +176,7 @@ export function renderSetup(mount, status, { onSubmit, onCancel }) {
     if (hasUnknown) summaryParts.push("components whose size has not been reported yet");
     sectionDownload.appendChild(el("label", { class: "setup__checkbox" },
       el("input", { type: "checkbox", name: "approve", id: "setup-approve",
-                    required: true }),
+                    required: true, "aria-invalid": "false" }),
       el("div", {},
         el("strong", {}, `Allow downloading ${summaryParts.join(" plus ")}`),
         el("p", { class: "setup__hint" },
