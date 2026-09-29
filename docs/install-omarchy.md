@@ -68,16 +68,18 @@ independent per-output accumulation, also bit-identical to the per-node
 path. Set `MLX_OMARCHY_FUSED_GEMV=0` to keep either grouping on the
 per-node path (`MLX_OMARCHY_FUSED_CHAIN=0` disables it too).
 
-Dispatches record unconditional pre+post memory barriers by default.
-`MLX_OMARCHY_GATED_BARRIERS=1` replaces them with dependency-gated
-barriers: the encoder tracks per open batch which buffer ranges were
-read or written since the last barrier and records one barrier only
-when a dispatch, copy, or fill overlaps an unsynced range. Each recorded
-submission ends with a device-to-host visibility barrier before its
-completion signal; waiting and invalidating host caches do not replace
-that memory-domain transfer. The mode defaults off pending the M1 A/B (`docs/plans/2026-09-06-decode-gap-plan.md`,
-TOP-1); skip and emit counts appear in the GPU profile and in the
-runtime-test trace counters.
+Dispatches record dependency-gated barriers by default: the encoder tracks
+per open batch which buffer ranges were read or written since the last
+barrier and records one barrier only when a dispatch, copy, or fill overlaps
+an unsynced range. `MLX_OMARCHY_GATED_BARRIERS=0` restores the historic
+unconditional pre+post barriers. Each recorded submission ends with a
+device-to-host visibility barrier before its completion signal; waiting and
+invalidating host caches do not replace that memory-domain transfer. The mode
+became the default on 2026-09-29 after an 8-pair interleaved battery of the
+full 10-prompt x 10-pass contract on the M1 Max (16 runs, identical ordered
+records digest `dbf70497`, +2.9% decode) on the dependency-tracked Honeykrisp
+driver; other SoCs should re-run their own digest gate. Skip and emit counts
+appear in the GPU profile and in the runtime-test trace counters.
 
 ## Build the wheel
 

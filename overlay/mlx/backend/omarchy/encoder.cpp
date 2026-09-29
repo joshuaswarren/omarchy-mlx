@@ -53,13 +53,16 @@ int CommandEncoder::dep_dump_n() {
   return n;
 }
 bool CommandEncoder::gated_barriers() {
-  // MLX_OMARCHY_GATED_BARRIERS (docs/install-omarchy.md): default off.
-  // On, dispatch/copy/fill nodes record a barrier only when their buffer
-  // ranges overlap unsynced work of the open batch; off, the historic
-  // unconditional pre+post dispatch barriers apply. Read once: the gate
+  // MLX_OMARCHY_GATED_BARRIERS (docs/install-omarchy.md): default ON since
+  // 2026-09-29 (set 0 to restore the unconditional pre+post barriers).
+  // Dispatch/copy/fill nodes record a barrier only when their buffer
+  // ranges overlap unsynced work of the open batch. Read once: the gate
   // shapes recorded commands, so flipping it mid-batch would desync the
   // tracker from the command buffer.
-  static const bool on = env_flag("MLX_OMARCHY_GATED_BARRIERS");
+  static const bool on = []() {
+    return std::getenv("MLX_OMARCHY_GATED_BARRIERS") == nullptr ||
+        env_flag("MLX_OMARCHY_GATED_BARRIERS");
+  }();
   return on;
 }
 

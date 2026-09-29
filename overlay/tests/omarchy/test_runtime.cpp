@@ -1978,7 +1978,7 @@ TEST_CASE("dependency-gated barriers keep hazard chains correct") {
   const bool gated = []() {
     const char* v = std::getenv("MLX_OMARCHY_GATED_BARRIERS");
     if (v == nullptr) {
-      return false;
+      return true;  // default on
     }
     std::string t = v;
     return t == "1" || t == "on" || t == "true" || t == "yes";
