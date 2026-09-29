@@ -1504,6 +1504,77 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
       reinterpret_cast<const uint32_t*>(bytes), size / sizeof(uint32_t)});
 }
 
+// Per-binding access from the SPIR-V: glslang lowers `readonly`/`writeonly`
+// buffer blocks to NonWritable (24) / NonReadable (25) member decorations on
+// the block struct. Variable -> pointer -> struct gives the binding's block.
+// Unknown or undecorated bindings stay read+write (conservative). A binding
+// never appears both NonWritable and NonReadable.
+// MLX_OMARCHY_DEP_RW=0 disables the reflection (every binding read+write).
+static ComputeRuntime::BindingAccess reflect_binding_access(
+    std::span<const uint32_t> spirv) {
+  ComputeRuntime::BindingAccess out;
+  if (const char* v = std::getenv("MLX_OMARCHY_DEP_RW");
+      v != nullptr && v[0] == '0') {
+    return out;
+  }
+  std::unordered_map<uint32_t, uint32_t> var_binding;   // var id -> binding
+  std::unordered_map<uint32_t, uint32_t> var_pointer;   // var id -> pointer type id
+  std::unordered_map<uint32_t, uint32_t> pointer_pointee;
+  std::unordered_map<uint32_t, uint32_t> struct_flags;  // bit0 NonWritable, bit1 NonReadable
+  size_t i = 5;
+  while (i < spirv.size()) {
+    uint32_t word = spirv[i];
+    uint32_t count = word >> 16;
+    uint32_t op = word & 0xffffu;
+    if (count == 0 || i + count > spirv.size()) {
+      return ComputeRuntime::BindingAccess{};
+    }
+    if (op == 71 && count >= 4 && spirv[i + 2] == 33) {          // OpDecorate Binding
+      var_binding[spirv[i + 1]] = spirv[i + 3];
+    } else if (op == 72 && count >= 4) {                          // OpMemberDecorate
+      if (spirv[i + 3] == 24) {
+        struct_flags[spirv[i + 1]] |= 1u;
+      } else if (spirv[i + 3] == 25) {
+        struct_flags[spirv[i + 1]] |= 2u;
+      }
+    } else if (op == 32 && count >= 4) {                          // OpTypePointer
+      pointer_pointee[spirv[i + 1]] = spirv[i + 3];
+    } else if (op == 59 && count >= 4) {                          // OpVariable
+      var_pointer[spirv[i + 2]] = spirv[i + 1];
+    }
+    i += count;
+  }
+  for (const auto& [var, binding] : var_binding) {
+    if (binding >= 32) {
+      continue;
+    }
+    auto vp = var_pointer.find(var);
+    if (vp == var_pointer.end()) {
+      continue;
+    }
+    auto pp = pointer_pointee.find(vp->second);
+    if (pp == pointer_pointee.end()) {
+      continue;
+    }
+    auto sf = struct_flags.find(pp->second);
+    if (sf == struct_flags.end()) {
+      continue;
+    }
+    if ((sf->second & 1u) != 0u && (sf->second & 2u) == 0u) {
+      out.write_mask &= ~(1u << binding);  // readonly
+    } else if ((sf->second & 2u) != 0u && (sf->second & 1u) == 0u) {
+      out.read_mask &= ~(1u << binding);   // writeonly
+    }
+  }
+  return out;
+}
+
+ComputeRuntime::BindingAccess ComputeRuntime::binding_access(VkPipeline pipeline) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = access_.find(pipeline);
+  return it == access_.end() ? BindingAccess{} : it->second;
+}
+
 VkPipeline ComputeRuntime::create_pipeline(std::span<const uint32_t> spirv) {
   if (spirv.empty() || spirv.front() != 0x07230203u) {
     throw std::runtime_error("[omarchy] custom SPIR-V is invalid.");
@@ -1535,6 +1606,7 @@ VkPipeline ComputeRuntime::create_pipeline(std::span<const uint32_t> spirv) {
     throw;
   }
   dt.DestroyShaderModule(device_, shader, nullptr);
+  access_[pipeline] = reflect_binding_access(spirv);
   return pipeline;
 }
 

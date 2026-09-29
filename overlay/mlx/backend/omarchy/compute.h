@@ -788,6 +788,15 @@ class ComputeRuntime {
   VkDescriptorSetLayout descriptor_layout() const {
     return descriptor_layout_;
   }
+  // Per-binding access of a built pipeline, reflected from the SPIR-V
+  // NonWritable/NonReadable member decorations (GLSL readonly/writeonly).
+  // Bit i of read_mask/write_mask set = binding i may be read/written; an
+  // undecorated or unknown binding is read+write (conservative).
+  struct BindingAccess {
+    uint32_t read_mask{~0u};
+    uint32_t write_mask{~0u};
+  };
+  BindingAccess binding_access(VkPipeline pipeline);
 
  private:
   VkPipeline create_pipeline(ComputeKernel kernel);
@@ -800,6 +809,7 @@ class ComputeRuntime {
   VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
   std::array<VkPipeline, static_cast<size_t>(ComputeKernel::Count)> pipelines_{};
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;
+  std::unordered_map<VkPipeline, BindingAccess> access_;
   std::mutex mutex_;
 };
 

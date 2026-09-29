@@ -505,8 +505,26 @@ void CommandEncoder::dispatch_compute_pipeline(
                    bindings[i].offset,
                    tracked_range_end(bindings[i].offset, bindings[i].range)};
     }
-    std::span<const TrackedRange> view{ranges.data(), bindings.size()};
-    if (!head_synced_ || batch_needs_barrier(view, view)) {
+    // Per-binding access reflected from the pipeline's SPIR-V (readonly /
+    // writeonly block qualifiers): read-only bindings no longer count as
+    // writes, so read-read pairs (two consumers of one activation) skip the
+    // barrier. Unknown bindings stay read+write. MLX_OMARCHY_DEP_RW=0
+    // restores the all-read+write tracking.
+    const auto access = compute.binding_access(pipeline);
+    std::array<TrackedRange, kComputeBindingBudget> rd{};
+    std::array<TrackedRange, kComputeBindingBudget> wr{};
+    size_t nr = 0;
+    size_t nw = 0;
+    for (size_t i = 0; i < bindings.size(); ++i) {
+      if (((access.read_mask >> i) & 1u) != 0u) {
+        rd[nr++] = ranges[i];
+      }
+      if (((access.write_mask >> i) & 1u) != 0u) {
+        wr[nw++] = ranges[i];
+      }
+    }
+    if (!head_synced_ ||
+        batch_needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -515,9 +533,11 @@ void CommandEncoder::dispatch_compute_pipeline(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
-    for (size_t i = 0; i < bindings.size(); ++i) {
-      tracked_reads_.push_back(ranges[i]);
-      tracked_writes_.push_back(ranges[i]);
+    for (size_t i = 0; i < nr; ++i) {
+      tracked_reads_.push_back(rd[i]);
+    }
+    for (size_t i = 0; i < nw; ++i) {
+      tracked_writes_.push_back(wr[i]);
     }
     if (export_dep_masks()) {
       // Compute the two exported signals (design 22b395d): (a) whether
