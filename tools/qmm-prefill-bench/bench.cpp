@@ -577,6 +577,8 @@ int main(int argc, char** argv) {
   const uint32_t cand_rows = (uint32_t)std::atoi(arg_str(argc, argv, "--cand-rows", "32").c_str());
   const int reps = std::atoi(arg_str(argc, argv, "--reps", "20").c_str());
   const int rounds = std::atoi(arg_str(argc, argv, "--rounds", "5").c_str());
+  const uint32_t base_cols = (uint32_t)std::atoi(arg_str(argc, argv, "--base-cols", "32").c_str());
+  const uint32_t cand_cols = (uint32_t)std::atoi(arg_str(argc, argv, "--cand-cols", "32").c_str());
   const uint32_t cand_flags = (uint32_t)std::atoi(arg_str(argc, argv, "--cand-flags", "0").c_str());
 
   auto make_module = [&](const std::string& spv) {
@@ -625,9 +627,17 @@ int main(int argc, char** argv) {
   if (g_vk.CreateDescriptorPool(g_vk.dev, &dpci, nullptr, &dpool) != VK_SUCCESS) die("dpool");
 
   // Buffers: x f32 (bf16-exact values), packed 4-bit weights, bf16 scales/biases, bf16 out.
-  SetBufs bufs{make_buf(g_vk.dev, c.mp, (size_t)M * K * 4), make_buf(g_vk.dev, c.mp, (size_t)N * (K / 8) * 4),
-      make_buf(g_vk.dev, c.mp, (size_t)N * (K / 64) * 2), make_buf(g_vk.dev, c.mp, (size_t)N * (K / 64) * 2),
-      make_buf(g_vk.dev, c.mp, (size_t)M * N * 2)};
+  // --pad-w / --pad-s / --pad-o KB: dummy allocations before W / scales / out to shift relative placement.
+  auto padkb = [&](const char* name) { return (size_t)std::atoll(arg_str(argc, argv, name, "0").c_str()) * 1024; };
+  Buf bx = make_buf(g_vk.dev, c.mp, (size_t)M * K * 4);
+  if (padkb("--pad-w")) make_buf(g_vk.dev, c.mp, padkb("--pad-w"));
+  Buf bw = make_buf(g_vk.dev, c.mp, (size_t)N * (K / 8) * 4);
+  if (padkb("--pad-s")) make_buf(g_vk.dev, c.mp, padkb("--pad-s"));
+  Buf bs = make_buf(g_vk.dev, c.mp, (size_t)N * (K / 64) * 2);
+  Buf bb = make_buf(g_vk.dev, c.mp, (size_t)N * (K / 64) * 2);
+  if (padkb("--pad-o")) make_buf(g_vk.dev, c.mp, padkb("--pad-o"));
+  Buf bo = make_buf(g_vk.dev, c.mp, (size_t)M * N * 2);
+  SetBufs bufs{bx, bw, bs, bb, bo};
   uint32_t seed = 0x1234567u;
   float* x = (float*)bufs.x.mapped;
   for (size_t i = 0; i < (size_t)M * K; ++i) {
@@ -647,7 +657,18 @@ int main(int argc, char** argv) {
   }
   std::memset(bufs.out.mapped, 0, (size_t)M * N * 2);
   VkDescriptorSet base_set = make_set(c, dpool, base.dsl, bufs);
-  VkDescriptorSet cand_set = make_set(c, dpool, cand.dsl, bufs);
+  SetBufs cbufs = bufs;
+  if (std::atoi(arg_str(argc, argv, "--cand-xtile", "0").c_str())) {
+    // 8x8-tile-major copy of x: tile (rb, cb) is 64 contiguous floats, row-major inside.
+    uint32_t mpad = (M + 7) / 8 * 8;
+    cbufs.x = make_buf(g_vk.dev, c.mp, (size_t)mpad * K * 4);
+    float* xt = (float*)cbufs.x.mapped;
+    std::memset(xt, 0, (size_t)mpad * K * 4);
+    for (uint32_t r = 0; r < M; ++r)
+      for (uint32_t k = 0; k < K; ++k)
+        xt[(((size_t)(r / 8) * (K / 8) + k / 8) * 64) + (r % 8) * 8 + (k % 8)] = x[(size_t)r * K + k];
+  }
+  VkDescriptorSet cand_set = make_set(c, dpool, cand.dsl, cbufs);
 
   Params p{};
   p.count = M * N;
@@ -656,7 +677,7 @@ int main(int argc, char** argv) {
   p.matrix_n = N;
   p.matrix_k = K;
   p.shape[0] = 1;
-  auto run = [&](Side& side, VkDescriptorSet set, uint32_t rows, uint32_t flags, int nreps) {
+  auto run = [&](Side& side, VkDescriptorSet set, uint32_t rows, uint32_t flags, int nreps, uint32_t cols) {
     Params q = p;
     q.flags = flags << 16;
     VkCommandBufferBeginInfo bi2{};
@@ -666,7 +687,7 @@ int main(int argc, char** argv) {
     g_vk.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, side.pipe);
     g_vk.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, side.layout, 0, 1, &set, 0, nullptr);
     g_vk.CmdPushConstants(cmd, side.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Params), &q);
-    for (int i = 0; i < nreps; ++i) g_vk.CmdDispatch(cmd, (N + 31) / 32, (M + rows - 1) / rows, 1);
+    for (int i = 0; i < nreps; ++i) g_vk.CmdDispatch(cmd, (N + cols - 1) / cols, (M + rows - 1) / rows, 1);
     g_vk.EndCommandBuffer(cmd);
     g_vk.ResetFences(g_vk.dev, 1, &fence);
     VkSubmitInfo si{};
@@ -681,21 +702,42 @@ int main(int argc, char** argv) {
   };
   // Correctness: one dispatch each, compare bit for bit.
   std::vector<uint16_t> base_out((size_t)M * N), cand_out((size_t)M * N);
-  run(base, base_set, base_rows, 0, 1);
+  run(base, base_set, base_rows, 0, 1, base_cols);
   std::memcpy(base_out.data(), bufs.out.mapped, base_out.size() * 2);
   std::memset(bufs.out.mapped, 0, (size_t)M * N * 2);
-  run(cand, cand_set, cand_rows, cand_flags, 1);
+  run(cand, cand_set, cand_rows, cand_flags, 1, cand_cols);
   std::memcpy(cand_out.data(), bufs.out.mapped, cand_out.size() * 2);
   size_t mism = 0, first = (size_t)-1;
   for (size_t i = 0; i < base_out.size(); ++i)
     if (base_out[i] != cand_out[i]) { if (first == (size_t)-1) first = i; ++mism; }
+  // --realloc N: rebuild and refill all buffers N times inside this process,
+  // timing the base pipeline after each rebuild. If the 9.6/13.0 ms mode is a
+  // property of the allocation, it re-rolls per rebuild.
+  if (int n = std::atoi(arg_str(argc, argv, "--realloc", "0").c_str()); n > 0) {
+    for (int i = 0; i < n; ++i) {
+      g_vk.FreeMemory(g_vk.dev, bufs.x.mem, nullptr);
+      g_vk.DestroyBuffer(g_vk.dev, bufs.x.buf, nullptr);
+      g_vk.FreeMemory(g_vk.dev, bufs.w.mem, nullptr);
+      g_vk.DestroyBuffer(g_vk.dev, bufs.w.buf, nullptr);
+      g_vk.FreeMemory(g_vk.dev, bufs.out.mem, nullptr);
+      g_vk.DestroyBuffer(g_vk.dev, bufs.out.buf, nullptr);
+      bufs.x = make_buf(g_vk.dev, c.mp, (size_t)M * K * 4);
+      bufs.w = make_buf(g_vk.dev, c.mp, (size_t)N * (K / 8) * 4);
+      bufs.out = make_buf(g_vk.dev, c.mp, (size_t)M * N * 2);
+      VkDescriptorSet ns = make_set(c, dpool, base.dsl, bufs);
+      run(base, ns, base_rows, 0, 3, base_cols);
+      double us = run(base, ns, base_rows, 0, 20, base_cols);
+      std::printf("{\"k\":\"realloc\",\"i\":%d,\"base_us\":%.1f}\n", i, us);
+    }
+    return 0;
+  }
   // Timing: alternate arms, warmup then rounds.
-  run(base, base_set, base_rows, 0, 3);
-  run(cand, cand_set, cand_rows, cand_flags, 3);
+  run(base, base_set, base_rows, 0, 3, base_cols);
+  run(cand, cand_set, cand_rows, cand_flags, 3, cand_cols);
   std::vector<double> bt, ct;
   for (int r = 0; r < rounds; ++r) {
-    bt.push_back(run(base, base_set, base_rows, 0, reps));
-    ct.push_back(run(cand, cand_set, cand_rows, cand_flags, reps));
+    bt.push_back(run(base, base_set, base_rows, 0, reps, base_cols));
+    ct.push_back(run(cand, cand_set, cand_rows, cand_flags, reps, cand_cols));
   }
   std::sort(bt.begin(), bt.end());
   std::sort(ct.begin(), ct.end());

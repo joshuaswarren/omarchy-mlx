@@ -1,0 +1,356 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Direct-global-load qmm prefill coopmat: whenever x can feed the
+// matrix unit exactly, the A (x) tiles are coopMatLoad'ed straight
+// from the x buffer and the x_s shared tile, its per-lane staging
+// stores/unpack and address arithmetic are deleted. The B (weight)
+// side keeps its shared staging in every build: the data is packed
+// 4-bit nibbles and cannot feed coopMatLoad, so w_s, the dequant
+// stores and the two per-step barriers remain. The output drain
+// reuses the staging scratch (idle past the k loop and large enough
+// for the four 8x8 blocks).
+//
+// X modes:
+// - default (f16 activations): coopMatLoad f16 straight from the x
+//   buffer; f16 A with f32 C is the exact-product HW form (f16*f16
+//   products are exact in f32) and the staged path only ever fed
+//   exactly-widened f16 values, so accumulation is unchanged.
+// - X_F32 (bf16 activations, widened by a cast pass into a fresh f32
+//   buffer): coopMatLoad f32 straight from that buffer; identical
+//   values to the staged path by construction (bf16 -> f32 widening
+//   is exact), identical f32 x f32 accumulation.
+// - X_BF16: bf16 x read as words cannot feed coopMatLoad (no bf16
+//   matrix operand, and bf16 -> f16 is lossy in exponent range), so
+//   this build keeps the shipped x_s staging bit for bit.
+
+#ifndef TILE_ROWS
+#define TILE_ROWS 32
+#endif
+
+#if TILE_ROWS == 32
+#define SUBGROUP_ROW_BLOCKS 2u
+#elif TILE_ROWS == 16
+#define SUBGROUP_ROW_BLOCKS 1u
+#else
+#error "TILE_ROWS must be 32 or 16"
+#endif
+
+#define ROW_BLOCKS (TILE_ROWS / 8u)
+
+const uint TILE_M = TILE_ROWS;
+const uint TILE_N = 64u;
+const uint CHUNK_K = 64u;
+const uint STEP_K = 16u;
+const uint MAT = 8u;
+
+layout(local_size_x = 64) in;
+
+#ifdef X_BF16
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  uint values[];
+} input_x;
+#elif defined(X_F32)
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  float values[];
+} input_x;
+#else
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  float16_t values[];
+} input_x;
+#endif
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+#if defined(X_BF16) || defined(X_F32)
+// bf16 models store scales and biases in bfloat16 (16-bit word layout,
+// widened exactly); the f16 models use float16_t storage. The X_F32
+// build serves the same bf16-hybrid route (x pre-widened by the host
+// cast pass), so it reads the bf16 scale layout too.
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  uint16_t values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  uint16_t values[];
+} biases;
+#else
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  float16_t values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  float16_t values[];
+} biases;
+#endif
+#ifdef OUT_BF16
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+#else
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  float16_t values[];
+} output_data;
+#endif
+
+#ifdef X_BF16
+#define X_UNPACK(word)                                     \
+  vec2(                                                    \
+      uintBitsToFloat(((word) & 0xffffu) << 16u),          \
+      uintBitsToFloat((word) & 0xffff0000u))
+#else
+#define X_UNPACK(word) unpackHalf2x16(word)
+#endif
+#if defined(X_BF16) || defined(X_F32)
+#define SCALE_LOAD(x) uintBitsToFloat(uint(x) << 16u)
+#else
+#define SCALE_LOAD(x) float(x)
+#endif
+#ifdef OUT_BF16
+uint16_t out_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define OUT_STORE(value) out_store(value)
+#else
+#define OUT_STORE(value) float16_t(value)
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+// One 16x32 f32 weight tile. The output drain uses the staging
+// scratch (w_s here; x_s in the X_BF16 build) as scratch.
+#ifdef X_BF16
+shared float x_s[TILE_M * STEP_K];
+#endif
+shared float w_s[STEP_K * TILE_N];
+
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  uint sub = gl_SubgroupID;
+  uint sub_rb = SUBGROUP_ROW_BLOCKS * sub;
+  uint batch = params.shape[0];
+  uint w_batch_words = params.shape[1];
+  uint param_batch = params.shape[2];
+  uint x_batch_rows = params.matrix_m * params.matrix_k;
+  uint m_tiles = (params.matrix_m + TILE_M - 1u) / TILE_M;
+  uint n_tiles = (params.matrix_n + TILE_N - 1u) / TILE_N;
+  uint k_chunks = params.matrix_k / CHUNK_K;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint w_column_local = lid;
+
+  for (uint b = 0u; b < batch; ++b) {
+  uint w_slice = params.rhs_offset + b * w_batch_words;
+  uint scale_slice = params.aux_offset + b * param_batch;
+  uint bias_slice = params.aux_size + b * param_batch;
+#ifdef X_BF16
+  uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
+  uint x_words_per_row = params.matrix_k / 2u;
+#elif defined(X_F32)
+  // The cast pass writes a fresh f32 buffer, so the offset is 0 in
+  // practice; the division stays for safety (lhs_offset counts
+  // 2-byte input elements, the f32 view is 4-byte).
+  uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
+#else
+  // x elements are f16 here, so the slice/row strides are elements.
+  uint x_slice = params.lhs_offset + b * x_batch_rows;
+#endif
+  uint out_slice = params.output_offset +
+      b * params.matrix_m * params.matrix_n;
+  for (uint tile_row = gl_WorkGroupID.y; tile_row < m_tiles;
+       tile_row += gl_NumWorkGroups.y) {
+    uint row_base = tile_row * TILE_M;
+    for (uint tile_col = gl_WorkGroupID.x; tile_col < n_tiles;
+         tile_col += gl_NumWorkGroups.x) {
+      uint column = tile_col * TILE_N + w_column_local;
+#ifdef FULL_N
+      // Every column tile is full (matrix_n % 32 == 0, checked on the host):
+      // the predicated scale/bias/weight loads and their exec-mask regions
+      // drop out of the K loop. Arithmetic is unchanged.
+      const bool column_ok = true;
+#else
+      bool column_ok = column < params.matrix_n;
+#endif
+      uint w_row = w_slice + column * words_per_row;
+      uint scale_row = scale_slice + column * groups_per_row;
+      uint bias_row = bias_slice + column * groups_per_row;
+
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+          acc[SUBGROUP_ROW_BLOCKS][8];
+      for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+        for (uint cb = 0u; cb < 8u; ++cb) {
+          acc[rb][cb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(0.0);
+        }
+      }
+
+      for (uint chunk = 0u; chunk < k_chunks; ++chunk) {
+        float scale = 0.0;
+        float bias = 0.0;
+        if (column_ok) {
+          scale = SCALE_LOAD(scales.values[scale_row + chunk]);
+          bias = SCALE_LOAD(biases.values[bias_row + chunk]);
+        }
+        for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
+          uint k_base = chunk * CHUNK_K + step * STEP_K;
+          // Two packed words per lane cover the 16x64 weight tile (one column, k 0..15).
+          for (uint wj = 0u; wj < 2u; ++wj) {
+            uint packed = column_ok
+                ? input_w.values[w_row + k_base / 8u + wj] : 0u;
+            uint w_base = 8u * wj * TILE_N + w_column_local;
+            w_s[w_base + 0u * TILE_N] = scale * float(packed & 0xFu) + bias;
+            w_s[w_base + 1u * TILE_N] =
+                scale * float((packed >> 4u) & 0xFu) + bias;
+            w_s[w_base + 2u * TILE_N] =
+                scale * float((packed >> 8u) & 0xFu) + bias;
+            w_s[w_base + 3u * TILE_N] =
+                scale * float((packed >> 12u) & 0xFu) + bias;
+            w_s[w_base + 4u * TILE_N] =
+                scale * float((packed >> 16u) & 0xFu) + bias;
+            w_s[w_base + 5u * TILE_N] =
+                scale * float((packed >> 20u) & 0xFu) + bias;
+            w_s[w_base + 6u * TILE_N] =
+                scale * float((packed >> 24u) & 0xFu) + bias;
+            w_s[w_base + 7u * TILE_N] = scale * float(packed >> 28u) + bias;
+          }
+#ifdef X_BF16
+          // X_LOADS half2 loads per lane cover the TILE_ROWS x 16 x tile.
+          uint x_words[TILE_M / 8u];
+          for (uint j = 0u; j < TILE_M / 8u; ++j) {
+            uint i = lid + 64u * j;
+            uint local_row = i / 8u;
+            uint row = row_base + local_row;
+            x_words[j] = row < params.matrix_m
+                ? input_x.values[
+                      x_slice + row * x_words_per_row + k_base / 2u +
+                      (i % 8u)]
+                : 0u;
+          }
+          for (uint j = 0u; j < TILE_M / 8u; ++j) {
+            uint i = lid + 64u * j;
+            uint local_row = i / 8u;
+            vec2 pair = X_UNPACK(x_words[j]);
+            x_s[local_row * STEP_K + 2u * (i % 8u)] = pair.x;
+            x_s[local_row * STEP_K + 2u * (i % 8u) + 1u] = pair.y;
+          }
+#endif
+          barrier();
+
+          for (uint ks = 0u; ks < STEP_K / MAT; ++ks) {
+#ifdef X_BF16
+            coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+                mat_a[SUBGROUP_ROW_BLOCKS];
+#elif defined(X_F32)
+            coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+                mat_a[SUBGROUP_ROW_BLOCKS];
+#else
+            coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+                mat_a[SUBGROUP_ROW_BLOCKS];
+#endif
+            coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[8];
+#ifdef X_BF16
+            for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+              coopMatLoad(
+                  mat_a[rb], x_s,
+                  (sub_rb + rb) * MAT * STEP_K + ks * MAT, STEP_K,
+                  gl_CooperativeMatrixLayoutRowMajor);
+            }
+#else
+            for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+              // Rows past matrix_m are never stored, but the load must
+              // stay in bounds: clamp to the last real row.
+              uint row = row_base + (sub_rb + rb) * MAT;
+              row = min(row, params.matrix_m - 1u);
+              coopMatLoad(
+                  mat_a[rb], input_x.values,
+                  x_slice + row * params.matrix_k + k_base + ks * MAT,
+                  params.matrix_k,
+                  gl_CooperativeMatrixLayoutRowMajor);
+            }
+#endif
+            for (uint cb = 0u; cb < 8u; ++cb) {
+              coopMatLoad(
+                  mat_b[cb], w_s, ks * MAT * TILE_N + cb * MAT, TILE_N,
+                  gl_CooperativeMatrixLayoutRowMajor);
+            }
+            for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+              for (uint cb = 0u; cb < 8u; ++cb) {
+                acc[rb][cb] =
+                    coopMatMulAdd(mat_a[rb], mat_b[cb], acc[rb][cb]);
+              }
+            }
+          }
+          barrier();
+        }
+      }
+
+      // One subgroup stores each 8-row block it owns; duplicated column
+      // lanes each drain their four distinct rows of that block.
+      for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+        if (sub_rb == (rb & ~(SUBGROUP_ROW_BLOCKS - 1u))) {
+          for (uint cb = 0u; cb < 8u; ++cb) {
+#ifdef X_BF16
+            coopMatStore(
+                acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], x_s,
+                cb * MAT * MAT, MAT,
+                gl_CooperativeMatrixLayoutRowMajor);
+#else
+            coopMatStore(
+                acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], w_s,
+                cb * MAT * MAT, MAT,
+                gl_CooperativeMatrixLayoutRowMajor);
+#endif
+          }
+        }
+        barrier();
+        if (column_ok) {
+          for (uint pass = 0u; pass < 8u; ++pass) {
+            uint r = pass;
+            uint row = row_base + rb * MAT + r;
+            if (row < params.matrix_m) {
+#ifdef X_BF16
+              output_data.values[out_slice + row * params.matrix_n + column] =
+                  OUT_STORE(x_s[(w_column_local / 8u) * MAT * MAT +
+                                r * MAT + (w_column_local % 8u)]);
+#else
+              output_data.values[out_slice + row * params.matrix_n + column] =
+                  OUT_STORE(w_s[(w_column_local / 8u) * MAT * MAT +
+                                r * MAT + (w_column_local % 8u)]);
+#endif
+            }
+          }
+        }
+        barrier();
+      }
+    }
+  }
+  }
+}
