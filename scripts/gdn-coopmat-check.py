@@ -12,10 +12,20 @@ deterministic inputs through each by flipping MLX_OMARCHY_NO_COOPMAT_GDN
   5. both arms against a numpy f32 per-token oracle (ops-path rounding:
      decay, sequential ascending dk sums, separate rounding per product).
 
-Recorded inputs: none exist in the receipts (the GDN receipts generate
-synthetic shapes), so inputs are fixed-seed synthetic at the exact Qwen3.8
-model shapes (Dk=Dv=128, Hk=Hv=16, B=1), g in f32 (the serve path, from
-compute_g) and bf16, chunk-boundary aligned and tail T values.
+Inputs are fixed-seed synthetic at the exact Qwen3.8 model shapes
+(Dk=Dv=128, Hk=Hv=16, B=1), g in f32 (the serve path, from compute_g) and
+bf16, chunk-boundary aligned and tail T values. The near-orthogonal random
+keys keep N = beta.KK^T tiny, which hid a wrong chunk inverse (N^6 was
+computed as N^8 = 0) until real text produced NaN logits (2026-09-29): the
+correlated case (unit keys sharing a dominant direction per head, cosine
+about 0.9, sigmoid-range beta) makes N large. There the coopmat output must
+track the scan kernel (p999 of |y_scan - y_coop| <= CORR_P999_QUANTA bf16
+quanta) and stay as close to the f32 oracle as the scan does (max abs error
+<= CORR_ORACLE_RATIO x the scan's). The max-quanta figure is reported but not
+gated: near-zero outputs make it large for any two roundings (54 quanta on
+the uncorrelated 512 case for both the defective and the fixed kernel);
+measured 2026-09-29 on jw16, fixed: p999 0.0, ratio 1.0; defective: p999
+118-121, ratio 4.6-6.8.
 
 Usage: gdn-coopmat-check.py <python-with-wheel> <out.json>
 """
@@ -32,6 +42,8 @@ import numpy as np
 T_CASES = [512, 520, 68]  # 68 = 8 full C=8 chunks + a 4-token tail (coopmat
                           # dispatch covers T >= 64; 7 now routes to scan)
 SEED = 7
+CORR_P999_QUANTA = 2.0   # p999 |y_scan - y_coop| in bf16 quanta, correlated case
+CORR_ORACLE_RATIO = 2.0  # coop max abs error vs oracle / scan's, correlated case
 
 CHILD = r'''
 import json, os, sys
@@ -50,6 +62,11 @@ def make(T):
     v = mx.random.normal((1, T, 16, 128)).astype(mx.bfloat16)
     beta = (mx.random.normal((1, T, 16)) * 0.5).astype(mx.bfloat16)
     h0 = mx.random.normal((1, 16, 128, 128)).astype(mx.float32) * 0.1
+    if os.environ.get("GDN_CHECK_CORR") == "1":
+        u = mx.random.normal((1, 1, 16, 128))
+        kr = u + 0.3 * mx.random.normal((1, T, 16, 128))
+        k = (kr * mx.rsqrt((kr * kr).sum(-1, keepdims=True))).astype(mx.bfloat16)
+        beta = mx.random.uniform(0.6, 0.95, (1, T, 16)).astype(mx.bfloat16)
     if os.environ.get("GDN_CHECK_G_BF16") == "1":
         g = (mx.random.normal((1, T, 16)) * 0.2).astype(mx.bfloat16) * 0.5 + 0.5
     else:
@@ -72,15 +89,16 @@ for T in t_cases:
 print("child ok")
 '''
 
-def run_arm(python, workdir, tag, g_bf16, save_inputs=False):
+def run_arm(python, workdir, tag, g_bf16, save_inputs=False, corr=False):
     env = dict(os.environ)
     env["GDN_CHECK_G_BF16"] = "1" if g_bf16 else "0"
+    env["GDN_CHECK_CORR"] = "1" if corr else "0"
     env["GDN_CHECK_SAVE_INPUTS"] = "1" if save_inputs else "0"
     if tag == "scan":
         env["MLX_OMARCHY_NO_COOPMAT_GDN"] = "1"
     else:
         env.pop("MLX_OMARCHY_NO_COOPMAT_GDN", None)
-    outdir = os.path.join(workdir, f"{tag}_{int(g_bf16)}")
+    outdir = os.path.join(workdir, f"{tag}_{int(g_bf16)}_{int(corr)}")
     os.makedirs(outdir, exist_ok=True)
     r = subprocess.run(
         [python, "-c", CHILD, outdir, json.dumps(T_CASES), str(SEED)],
@@ -143,12 +161,12 @@ def main():
     report = {"T_cases": T_CASES, "seed": SEED}
     workdir = tempfile.mkdtemp(prefix="gdn-coopmat-check-")
     try:
-        for g_bf16 in (False, True):
-            tag = "g_bf16" if g_bf16 else "g_f32"
-            scan, scan_d = run_arm(py, workdir, "scan", g_bf16, save_inputs=True)
-            scan2, scan2_d = run_arm(py, workdir, "scan", g_bf16)
-            coop, coop_d = run_arm(py, workdir, "coop", g_bf16)
-            coop2, coop2_d = run_arm(py, workdir, "coop", g_bf16)
+        for g_bf16, corr in ((False, False), (True, False), (False, True)):
+            tag = ("g_bf16" if g_bf16 else "g_f32") + ("_corr" if corr else "")
+            scan, scan_d = run_arm(py, workdir, "scan", g_bf16, save_inputs=True, corr=corr)
+            scan2, scan2_d = run_arm(py, workdir, "scan", g_bf16, corr=corr)
+            coop, coop_d = run_arm(py, workdir, "coop", g_bf16, corr=corr)
+            coop2, coop2_d = run_arm(py, workdir, "coop", g_bf16, corr=corr)
             yr, hfr = oracle(scan)
             rep = {"determinism": scan_d == scan2_d and coop_d == coop2_d,
                    "scan_sha": scan_d, "coop_sha": coop_d,
@@ -181,8 +199,16 @@ def main():
     print(json.dumps(report, indent=1))
     ok = all(report[t]["determinism"] and
              all(c["finite"] for c in report[t]["cases"].values())
-             for t in ("g_f32", "g_bf16"))
+             for t in ("g_f32", "g_bf16", "g_f32_corr"))
+    corr_ok = all(
+        c["y_quanta_p999"] <= CORR_P999_QUANTA and
+        c["y_coop_vs_oracle"]["max_abs"] <=
+        CORR_ORACLE_RATIO * c["y_scan_vs_oracle"]["max_abs"]
+        for c in report["g_f32_corr"]["cases"].values())
     print("DETERMINISM+FINITE:", "PASS" if ok else "FAIL")
+    print(f"CORRELATED (p999 <= {CORR_P999_QUANTA} quanta, oracle error <= "
+          f"{CORR_ORACLE_RATIO}x scan):", "PASS" if corr_ok else "FAIL")
+    ok = ok and corr_ok
     return 0 if ok else 1
 
 if __name__ == "__main__":
