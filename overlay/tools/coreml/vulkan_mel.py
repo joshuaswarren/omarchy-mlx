@@ -493,21 +493,71 @@ return (a_bits ^ b_bits) & 0x80000000u;
 return fma32_bits(a_bits, b_bits, 0u);
 }
 
+// Hardware fast path (jwm1 H60). fma32_bits/add32_bits/sub32_bits/mul32_bits
+// above stay the reference. The GPU's fused multiply-add, add and multiply are
+// single-rounding round-to-nearest-even for normal finite operands and results;
+// they differ from the emulation only on denormal/zero/inf/nan edges (the GPU
+// flushes denormals). So the hardware result is returned only when every operand
+// and the result have an exponent field of 1..254; a zero product with a normal
+// addend returns the addend (identical to the emulation); everything else takes
+// the emulation. Verified against the emulation by a randomized equivalence test.
+bool fast_normal(uint bits) {
+    uint e = (bits >> 23u) & 0xffu;
+    return e != 0u && e != 0xffu;
+}
+
 float fma32(float a, float b, float c) {
-return uintBitsToFloat(fma32_bits(
-floatBitsToUint(a), floatBitsToUint(b), floatBitsToUint(c)));
+    uint ab = floatBitsToUint(a);
+    uint bb = floatBitsToUint(b);
+    uint cb = floatBitsToUint(c);
+    if (fast_normal(cb)) {
+        if (fast_normal(ab) && fast_normal(bb)) {
+            precise float r = fma(a, b, c);
+            if (fast_normal(floatBitsToUint(r))) return r;
+        } else if (((ab & 0x7fffffffu) == 0u && (bb & 0x7f800000u) != 0x7f800000u) ||
+                   ((bb & 0x7fffffffu) == 0u && (ab & 0x7f800000u) != 0x7f800000u)) {
+            return c;
+        }
+    }
+    return uintBitsToFloat(fma32_bits(ab, bb, cb));
 }
 
 float add32(float a, float b) {
-return uintBitsToFloat(add32_bits(floatBitsToUint(a), floatBitsToUint(b)));
+    uint ab = floatBitsToUint(a);
+    uint bb = floatBitsToUint(b);
+    if (fast_normal(ab) && fast_normal(bb)) {
+        precise float r = a + b;
+        if (fast_normal(floatBitsToUint(r))) return r;
+    } else if ((ab & 0x7fffffffu) == 0u && fast_normal(bb)) {
+        return b;
+    } else if ((bb & 0x7fffffffu) == 0u && fast_normal(ab)) {
+        return a;
+    }
+    return uintBitsToFloat(add32_bits(ab, bb));
 }
 
 float sub32(float a, float b) {
-return uintBitsToFloat(sub32_bits(floatBitsToUint(a), floatBitsToUint(b)));
+    uint ab = floatBitsToUint(a);
+    uint bb = floatBitsToUint(b);
+    if (fast_normal(ab) && fast_normal(bb)) {
+        precise float r = a - b;
+        if (fast_normal(floatBitsToUint(r))) return r;
+    } else if ((ab & 0x7fffffffu) == 0u && fast_normal(bb)) {
+        return uintBitsToFloat(bb ^ 0x80000000u);
+    } else if ((bb & 0x7fffffffu) == 0u && fast_normal(ab)) {
+        return a;
+    }
+    return uintBitsToFloat(sub32_bits(ab, bb));
 }
 
 float mul32(float a, float b) {
-    return uintBitsToFloat(mul32_bits(floatBitsToUint(a), floatBitsToUint(b)));
+    uint ab = floatBitsToUint(a);
+    uint bb = floatBitsToUint(b);
+    if (fast_normal(ab) && fast_normal(bb)) {
+        precise float r = a * b;
+        if (fast_normal(floatBitsToUint(r))) return r;
+    }
+    return uintBitsToFloat(mul32_bits(ab, bb));
 }
 
 float neg32(float value) {
