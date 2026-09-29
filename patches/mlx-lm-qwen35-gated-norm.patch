@@ -1,0 +1,19 @@
+--- a/mlx_lm/models/qwen3_next.py
++++ b/mlx_lm/models/qwen3_next.py
+@@ -71,6 +71,16 @@
+     def __call__(
+         self, hidden_states: mx.array, gate: mx.array | None = None
+     ) -> mx.array:
++        if (
++            gate is not None
++            and hidden_states.dtype == mx.bfloat16
++            and hidden_states.size <= 2048
++            and mx.default_device() == mx.gpu
++            and hasattr(mx.fast, "rms_norm_gated")
++        ):
++            return mx.fast.rms_norm_gated(
++                hidden_states, gate, self.weight, self.eps
++            )
+         x = mx.fast.rms_norm(hidden_states, self.weight, self.eps)
+         if gate is not None:
+             return _precise_swiglu(hidden_states, gate, x)
