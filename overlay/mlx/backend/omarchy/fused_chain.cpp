@@ -1429,7 +1429,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // buffers, offset 0, row-contiguous) and the dispatch re-checks it;
     // the only genuinely open condition, input_ready, is guaranteed by
     // same-stream tape ordering.
-    auto& encoder = get_command_encoder(stream);
+    auto& encoder = get_command_encoder(member_stream);
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready = caps.subgroup_size == 32u &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
