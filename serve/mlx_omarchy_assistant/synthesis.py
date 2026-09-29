@@ -430,6 +430,7 @@ def to_wav_bytes(samples, sample_rate: int,
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _URL_PATTERN = re.compile(r"\b(?:https?://|www\.)\S+")
+_CLAUSE_SPLIT = re.compile(r"(?<=[,;:])\s+")
 
 
 def split_sentences(text: str) -> list[str]:
@@ -829,12 +830,18 @@ def _kokoro_runtime(assets_dir: str):
 
 
 def _kokoro_generate(pipe, text: str, voice: str) -> Iterator:
-    """Yield float32 numpy chunks, one per phoneme chunk the pipeline makes."""
+    """Yield float32 numpy chunks, one per phoneme chunk the pipeline makes.
+
+    The first clause is synthesized as its own segment so the first audio
+    chunk is short (TTFA), then the remainder follows in order.
+    """
     import numpy as np
-    for result in pipe(text, voice=voice, speed=1.0):
-        audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
-        if audio.size:
-            yield audio
+    pieces = _CLAUSE_SPLIT.split(text.strip(), maxsplit=1)
+    for piece in (p for p in pieces if p.strip()):
+        for result in pipe(piece, voice=voice, speed=1.0):
+            audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
+            if audio.size:
+                yield audio
 
 
 def _worker_main(conn, assets_dir: str) -> None:

@@ -17,10 +17,10 @@ Thresholds were fixed before measurement (notebook entry
 |---|---|---|---|
 | RTF (audio s / wall s), per-voice median over 15 sentences x 3 rounds | >= 5 | **0.69** (af_heart 0.686, af_bella 0.694, am_michael 0.660) | **FAIL** (~7x short) |
 | Worst sentence median RTF | >= 5 | 0.65 (sentence 1, all voices) | **FAIL** |
-| Time to first audio p95 | <= 1.0 s | **10.8 s** (af_bella), 10.5 s (af_heart) | **FAIL** |
-| Whisper large-v3-turbo WER | <= 8% overall, no sentence > 25% | **not measured** — the speed gate already fails; intelligibility does not change the decision | not run |
-| Zero CPU tensor dispatch, whole-synthesis trace | 0 | trace pass **did not run** (queue cap); the backend has no CPU evaluator and the run-001 gate crash proves unsupported ops fail loudly, not silently | incomplete, named |
-| Peak memory / cold start | record | cold model load **0.79 s**; peak record **not captured** (bench capped mid-run; resumable continuation appends it) | partial |
+| Time to first audio p95 | <= 1.0 s | **10.8 s** (af_bella), 10.5 s (af_heart) eager; clause-split first-chunk lands only with a passing RTF | **FAIL** |
+| Whisper large-v3-turbo WER (33 of 35 files; 2 truncated WAVs repaired and pending re-transcription) | <= 8% overall, no sentence > 25% | **0.87% overall** (4/461 words), worst sentence **12.5%** (af_bella "oclock") | **PASS** |
+| Zero CPU tensor dispatch, whole-synthesis trace | 0 | trace pass in flight (`artifacts/trace-2026*/summary.json`); the backend has no CPU evaluator and run-001's gate crash proves unsupported ops fail loudly, not silently | in flight, named |
+| Peak memory / cold start | record | cold model load **0.79 s**; peak record lands with the resumable bench completion (`results.jsonl` peak line) | partial |
 
 Per-voice medians are stable across 95 measured runs (RTF min 0.65, max
 0.71) — the failure is architectural, not noise.
@@ -45,14 +45,43 @@ Per-voice medians are stable across 95 measured runs (RTF min 0.65, max
 3. **Speed verdict:** with the fix, one forward per sentence costs
    4.5-6.6 s wall for 2.8-4.5 s of audio on the M2 Max — RTF ≈ 0.69,
    TTFA p95 ≈ 10.5 s. The eager graph runs hundreds of small conv/deconv
-   kernels per sentence; a `mx.compile` attempt through the supported
-   seam (`model.decoder = mx.compile(model.decoder)`) fails on this
-   wheel ("Attempting to eval an array without a primitive" — the
-   compiled callable is not a pure function over captured inputs), and
-   mlx-audio 0.5.6's pipeline never passes its `decoder` parameter, so
-   the seam needs an mlx-audio-side change. Reaching RTF >= 5 needs
-   either that compile path or fused Vulkan kernels for the
-   Snake/AdaIN/ISTFT stack — neither is in this change.
+   kernels per sentence; the backend's default elementwise chain fusion
+   (FuseDecodeChains, `MLX_OMARCHY_FUSED_CHAIN`, on by default) already
+   collapses the float unary/binary runs, so what remains is conv-heavy.
+4. **`mx.compile` root cause (step 1 of the follow-up): unusable on this
+   wheel, two distinct failures.**
+   - A pure 4-op Snake function `x + (1/a)*(sin(a*x)**2)` wrapped in
+     `mx.compile` **hangs** — no trace completion within 100 s (killed by
+     the turn cap; expected trace time is milliseconds), repro
+     `bench/kokoro_compile2.py` / `-c` one-liner, 2026-09-30.
+   - Compiling graph-bearing blocks (whole `Decoder` instance, or
+     block-level `mx.compile` of `decoder.encode`, `decode[]`,
+     `generator.resblocks[]`, `generator.noise_res[]`) traces but dies at
+     the final `mx.eval` with `RuntimeError: [eval] Attempting to eval an
+     array without a primitive` (kokoro.py:175), repro
+     `artifacts/compile2-stdout.log` / `profile-stdout.log`.
+   - Both repros ran WITHOUT the trig wrapper installed for the pure
+     hang, so the trig reduction is not the cause. This is a backend
+     tape/compile defect in the omarchy wheel (0.32.3.dev Vulkan build),
+     not fixable from the synthesis layer; it needs the overlay owners.
+   - Note for the fuse path: `shaders/fast_rope.comp` documents that
+     fused chains remove the per-primitive trig gate sites — the
+     graph-level argument reduction here protects fused Snake chains
+     too, since arguments are folded before any sin site, eager or
+     fused.
+5. **WER (step 4):** Whisper large-v3-turbo on the reference Mac, 33
+   files: overall 0.87%, worst sentence 12.5% — both gates pass with
+   margin. Transcript quality is not the blocker; speed is.
+
+## Follow-up table (Main's 2026-09-30 order)
+
+| Step | Before | After | Evidence |
+|---|---|---|---|
+| 1. mx.compile root cause | unknown crash | pure Snake compile **hangs** (>100 s, no trace); block/graph compile fails at eval: `[eval] Attempting to eval an array without a primitive` — backend tape/compile defect, reported not fixed (out of synthesis scope) | `compile2-stdout.log`, `profile-stdout.log`, 2-min `-c` repro |
+| 2. compiled Snake/AdaIN blocks | eager RTF 0.69 | **not achievable**: compile unusable (step 1) | same |
+| 3. TTFA clause split | single-segment synthesis, TTFA = whole sentence | shipped: `_kokoro_generate` splits the first clause into its own segment (`_CLAUSE_SPLIT`, maxsplit=1); first-chunk shortness now scales with RTF — still FAIL until RTF passes | synthesis.py, tests 69/69 |
+| 4. WER | not measured | 0.87% overall / 12.5% worst — PASS | `/tmp` macstudio hypotheses + `wer.json` staged in notebook artifacts |
+| 4. dispatch trace, peak memory, live smoke | not run | chain queued on the M2 (bench remainder -> trace -> smoke); artifact paths `trace-2026*/summary.json`, `smoke.json`, `results.jsonl` peak line | `gpu-turn --status` |
 
 ## What shipped
 
