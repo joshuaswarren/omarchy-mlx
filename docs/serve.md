@@ -1,7 +1,7 @@
 # Local generation and HTTP serving on Omarchy
 
 The installer includes the serving CLI, Laya decision server, and Bonsai server packages.
-The v0.7.4 installer contains all three. Old installations need an explicit update.
+The v0.7.5 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
 Installed code and a successful generation request do not establish model or assistant qualification.
 
 ## Current application boundary
@@ -66,12 +66,12 @@ No pair is qualified. All catalog entries keep `recommended: false`.
 
 Defects found by these runs and fixed in source:
 
-- **Speech was a hum.** An elementwise add of two transposed views wrote its output at the wrong positions on the Vulkan backend (max absolute error 6 to 9 against NumPy). The speech decoder uses that add. The fix is in `overlay/mlx/backend/omarchy/primitives.cpp` with a focused test. It is a runtime fix: the v0.7.4 wheel does not contain it. See the [receipt](../receipts/2026-09-28-tts-fix/README.md).
+- **Speech was a hum.** An elementwise add of two transposed views wrote its output at the wrong positions on the Vulkan backend (max absolute error 6 to 9 against NumPy). The speech decoder uses that add. The fix is in `overlay/mlx/backend/omarchy/primitives.cpp` with a focused test. It first shipped in the v0.7.5 wheel, whose codec regression the release gate ran on hardware. See the [receipt](../receipts/2026-09-28-tts-fix/README.md).
 - **Chat prompts carried a 792-token card schema on every turn.** Prefill cost about 2 s. Ordinary chat now sends a 209-token schema with three card types. A message that names a chart, graph, form, decision, options, facts, or sources gets the full schema, and so does every Laya turn.
 - **Greedy decoding looped on the 2B model** until the token cap. Chat requests now send a repetition penalty of 1.1.
 - **A reboot during pair start left an unclaimed reservation.** Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
 
-Known gap: the one-line installer on `main` cannot install the assistant yet. `install.sh` fetches the assistant files from the latest release tag. v0.7.4 was cut before they existed, so those fetches return 404 and the install aborts. A new release that contains the assistant, promoted to latest after a clean install passes, fixes this. Until then, run the assistant from a source checkout.
+The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.5, installed-from-release gates green; see `receipts/2026-09-29-v075-release.md`).
 
 ### Voice options
 

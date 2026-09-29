@@ -24,7 +24,7 @@ On Omarchy (Apple Silicon), the installer creates a private venv under `~/.local
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
 ```
 
-Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.4](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.4) (prerelease: installed-from-release gates pending, see the release notes). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
+Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.5](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.5) (installed-from-release gates green on the M2 Max; the installer ships MLX Chat, the serve CLI, and the wheel from the same tag). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
 Manual install (or any other Linux box):
 
