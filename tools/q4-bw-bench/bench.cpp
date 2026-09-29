@@ -1776,7 +1776,9 @@ int main(int argc, char** argv) {
   bool gap_mode = false;
   bool roof_mode = false;
   bool bf16_eq = false;
+  bool alu_mode = false;
   for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "--alu") alu_mode = true;
     if (std::string(argv[i]) == "--tree") tree_mode = true;
     if (std::string(argv[i]) == "--quick") quick = true;
     if (std::string(argv[i]) == "--bf16eq") bf16_eq = true;
@@ -1851,6 +1853,13 @@ int main(int argc, char** argv) {
 
   if (vk_init() != 0) return 1;
   DeviceCtx ctx = setup_device();
+  if (alu_mode) {
+    // fp32 FMA probe: 8192 groups x 256 threads x 32768 flop per thread.
+    for (int rep = 0; rep < 8; ++rep)
+      run_peak(ctx, "tools/q4-bw-bench/shaders/alu_fma.comp",
+          "/tmp/q4alu.spv", "alu", 8192u * 256u, false);
+    return 0;
+  }
   std::printf(
       "{\"k\":\"mode\",\"variant\":\"%s\",\"reps\":%d}\n",
       tree_mode ? "tree" : "subgroup", reps);
