@@ -69,7 +69,7 @@ function encodeWav(float32, sampleRate) {
 // ---------------------------------------------------------------------------
 
 export class Recorder {
-  constructor({ onMeter, onTick, onWarn, onStop } = {}) {
+  constructor({ onMeter, onTick, onWarn, onStop, onDeviceLost } = {}) {
     this.state = "idle";          // idle | recording | error
     this.startedAt = 0;
     this._samples = [];
@@ -82,8 +82,10 @@ export class Recorder {
     this._onTick = onTick;
     this._onWarn = onWarn;
     this._onStop = onStop;
+    this._onDeviceLost = onDeviceLost;
     this._warned = false;
     this._maxSamples = 0;
+    this._stopReason = null;       // 'user' | 'limit' | 'device' | null
   }
 
   async start() {
@@ -114,10 +116,25 @@ export class Recorder {
         if (this._onWarn) this._onWarn(elapsed);
       }
       if (elapsed >= MAX_DURATION) {
+        // Auto-stop on the 30 s cap. The stop reason records the
+        // difference from a user-initiated stop so the caller can
+        // announce it correctly.
+        this._stopReason = "limit";
         this.stop().catch(() => {});
       }
     };
     source.connect(node);
+    // Track loss mid-recording: yank the cable, OS revokes permission,
+    // or the user picks a different default device. We surface it as a
+    // named event so the caller can return to Idle with the typed draft
+    // intact instead of hanging.
+    for (const track of stream.getAudioTracks()) {
+      track.addEventListener("ended", () => {
+        if (this.state !== "recording") return;
+        this._stopReason = "device";
+        this.stop().catch(() => {});
+      });
+    }
     this._ctx = ctx;
     this._source = source;
     this._node = node;
@@ -125,6 +142,7 @@ export class Recorder {
     this._samples = [];
     this._maxSamples = 0;
     this._warned = false;
+    this._stopReason = null;
     this.state = "recording";
     this.startedAt = ctx.currentTime;
     this._tickHandle = window.setInterval(() => {
@@ -139,6 +157,7 @@ export class Recorder {
   async stop() {
     if (this.state !== "recording") return null;
     if (this._tickHandle) { clearInterval(this._tickHandle); this._tickHandle = null; }
+    const reason = this._stopReason || "user";
     const inputRate = this._ctx ? this._ctx.sampleRate : 48000;
     const totalLength = this._samples.reduce((n, s) => n + s.length, 0);
     const merged = new Float32Array(totalLength);
@@ -154,13 +173,24 @@ export class Recorder {
       if (v > peakRms) peakRms = v;
     }
     this.state = "idle";
-    if (this._onStop) this._onStop({ blob, duration: merged.length / inputRate, peakRms });
+    if (reason === "device") {
+      // Mid-recording device loss: there is no usable WAV to ship, but
+      // the caller must still learn about it. The onDeviceLost hook is
+      // the named surface; onStop is intentionally skipped so the UI
+      // does not kick off a transcribe roundtrip on a silent blob.
+      this._stopReason = null;
+      if (this._onDeviceLost) this._onDeviceLost({ reason });
+      return null;
+    }
+    this._stopReason = null;
+    if (this._onStop) this._onStop({ blob, duration: merged.length / inputRate, peakRms, reason });
     return { blob, duration: merged.length / inputRate };
   }
 
   async cancel() {
     if (this.state !== "recording") return;
     this._samples = [];
+    this._stopReason = null;
     await this._cleanup();
     this.state = "idle";
   }

@@ -33,7 +33,8 @@ export class App {
       onMeter: () => {},
       onTick: (elapsed) => announce(this.live, `Recording ${elapsed.toFixed(1)} seconds`),
       onWarn: () => announce(this.live, "About to hit the 30 second limit."),
-      onStop: ({ blob, peakRms }) => this._handleRecordingStop(blob, peakRms),
+      onStop: ({ blob, peakRms, reason }) => this._handleRecordingStop(blob, peakRms, reason),
+      onDeviceLost: () => this._handleDeviceLost(),
     });
     this.speaker = new SpeakQueue();
     this.speaker.attachHooks({
@@ -67,7 +68,10 @@ export class App {
     });
   }
 
-  async _handleRecordingStop(blob, peakRms) {
+  async _handleRecordingStop(blob, peakRms, reason) {
+    if (reason === "limit") {
+      announce(this.live, "Recording stopped at the 30 second limit.");
+    }
     if (peakRms < 0.005) {
       announce(this.live, "No speech detected.");
       return;
@@ -86,6 +90,13 @@ export class App {
       return;
     }
     this._mergeTranscriptIntoComposer(transcript);
+  }
+
+  _handleDeviceLost() {
+    announce(this.live, "Recording stopped: microphone disconnected.");
+    if (this.composer && typeof this.composer.resetMicUi === "function") {
+      this.composer.resetMicUi();
+    }
   }
 
   _mergeTranscriptIntoComposer(transcript) {

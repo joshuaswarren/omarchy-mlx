@@ -202,6 +202,10 @@ if (( VOICE )); then
   "$VENV/bin/pip" install --quiet --no-deps "mlx-audio==$MLX_AUDIO_VERSION"
   "$VENV/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "numpy>=1.26.4" \
     "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0"
+  # STT-side deps (same mlx-audio stack plus soundfile for offline corpus
+  # validation; installed only when --voice is requested, since the GPU
+  # STT path is the assistant's recognition backend).
+  "$VENV/bin/pip" install --quiet "soundfile>=0.13" "librosa>=0.10" "jiwer>=3.0"
 fi
 
 # 4b. Vendored mlx-lm serve patches. The apply script decides which patches
@@ -321,7 +325,7 @@ fi
 say "Installing MLX Chat"
 ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
 mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
-for assistant_file in __init__.py __main__.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py speech_yield.py; do
+for assistant_file in __init__.py __main__.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py speech_yield.py gpu_stt.py gpu_stt_worker.py; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
     -o "$ASSISTANT_PKG/$assistant_file"
 done

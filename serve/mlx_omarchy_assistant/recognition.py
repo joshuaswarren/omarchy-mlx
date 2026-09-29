@@ -99,25 +99,123 @@ def _locate_tools_root() -> Path | None:
     return None
 
 
-def _load_dictation_module():
-    root = _locate_tools_root()
-    if root is None:
+def _backend_kind(module) -> str:
+    """Return the tag the backend module declares for itself (``ane``/``gpu``).
+
+    The ANE Parakeet module does not declare ``BACKEND_KIND`` — older
+    installs predate the discovery switch — so we treat the absence as
+    ``ane``. ``gpu_stt`` declares ``BACKEND_KIND = "gpu"``.
+    """
+    return getattr(module, "BACKEND_KIND", "ane")
+
+
+def _ensure_gpu_worker(module) -> "_GpuWorkerAdapter":
+    """Construct a GPU worker handle and wrap it in a backend-agnostic adapter.
+
+    The GPU handle's ``request(...)`` signature already matches the ANE
+    one, so the wrapper only adds the same module-side helpers the ANE
+    path exposed to ``transcribe``.
+    """
+    model_dir = module._model_dir()
+    if not model_dir.is_dir():
         raise RecognitionUnavailable(
-            "the mlx-omarchy Parakeet tools tree (coreml package) was not "
-            "found; set MLX_OMARCHY_TOOLS or install the "
-            "mlx-omarchy-parakeet product"
+            f"the GPU STT model directory is missing: {model_dir}"
         )
-    root_text = str(root)
-    if root_text not in sys.path:
-        sys.path.insert(0, root_text)
-    try:
-        from coreml import parakeet_dictation
-    except ImportError as exc:
-        raise RecognitionUnavailable(
-            "Parakeet dictation is not importable from "
-            f"{root}: {exc}"
-        ) from exc
-    return parakeet_dictation
+    return _GpuWorkerAdapter(module._WorkerHandle(model_dir, module.GPU_STT_MODEL["id"]))
+
+
+class _GpuWorkerAdapter:
+    """Wrap ``gpu_stt._WorkerHandle`` so the existing transcribe code path is unchanged."""
+
+    def __init__(self, handle):
+        self._handle = handle
+
+    @property
+    def alive(self) -> bool:
+        return self._handle.alive
+
+    def request(self, header: dict, payload: bytes = b"", *,
+                timeout: float, cancel=None) -> dict:
+        return self._handle.request(header, payload, timeout=timeout, cancel=cancel)
+
+    def shutdown(self) -> None:
+        return self._handle.shutdown()
+
+    def kill(self) -> None:
+        return self._handle.kill()
+
+
+def _load_dictation_module():
+    """Return the active STT backend module or raise ``RecognitionUnavailable``.
+
+    Runtime discovery picks the backend: ANE Parakeet when its tools
+    tree is present AND its probe succeeds, otherwise the GPU STT
+    path that ships with this package. ``MLX_OMARCHY_RECOGNITION_BACKEND``
+    can pin ``ane`` or ``gpu`` for tests; default ``auto`` probes both.
+    Either backend must expose ``probe_runtime``, ``resample_to_16k``,
+    ``read_acceptance_receipt``, ``write_acceptance_receipt`` and
+    keep a module-level ``BACKEND_KIND`` tag for status reporting.
+    """
+    pin = os.environ.get("MLX_OMARCHY_RECOGNITION_BACKEND", "auto").strip().lower()
+    if pin not in ("auto", "ane", "gpu"):
+        pin = "auto"
+
+    last_error: Exception | None = None
+
+    def _try_ane():
+        root = _locate_tools_root()
+        if root is None:
+            return None
+        root_text = str(root)
+        if root_text not in sys.path:
+            sys.path.insert(0, root_text)
+        try:
+            from coreml import parakeet_dictation  # type: ignore
+        except ImportError as exc:
+            raise RecognitionUnavailable(
+                "Parakeet dictation is not importable from "
+                f"{root}: {exc}"
+            ) from exc
+        return parakeet_dictation
+
+    def _try_gpu():
+        try:
+            from . import gpu_stt  # type: ignore
+        except ImportError as exc:
+            raise RecognitionUnavailable(
+                f"the GPU STT backend is not importable: {exc}"
+            ) from exc
+        return gpu_stt
+
+    if pin in ("auto", "ane"):
+        try:
+            module = _try_ane()
+            if module is not None:
+                probe = module.probe_runtime()
+                if probe["ok"]:
+                    return module
+                last_error = RecognitionUnavailable(
+                    "ANE Parakeet probe failed: " + "; ".join(probe["reasons"])
+                )
+            else:
+                last_error = RecognitionUnavailable(
+                    "the mlx-omarchy Parakeet tools tree (coreml package) "
+                    "was not found; set MLX_OMARCHY_TOOLS or install the "
+                    "mlx-omarchy-parakeet product"
+                )
+        except RecognitionUnavailable as exc:
+            last_error = exc
+
+    if pin in ("auto", "gpu"):
+        try:
+            return _try_gpu()
+        except RecognitionUnavailable as exc:
+            if pin == "gpu":
+                raise
+            last_error = exc
+
+    assert last_error is not None
+    raise last_error
 
 
 def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
@@ -613,16 +711,26 @@ class Recognition:
             return 0
         return total
 
-    def _ensure_worker(self) -> _WorkerHandle:
+    def _ensure_worker(self):
+        """Return a live worker handle for the active backend.
+
+        ``_WorkerHandle`` (ANE subprocess) and ``gpu_stt._WorkerHandle``
+        share the same ``request(header, payload, timeout, cancel)``
+        contract, so the rest of ``transcribe`` is backend-agnostic.
+        """
         with self._lock:
             if self._worker is not None and self._worker.alive:
                 return self._worker
-            root = _locate_tools_root()
-            if root is None:
-                raise RecognitionUnavailable(
-                    "the mlx-omarchy Parakeet tools tree was not found"
-                )
-            self._worker = _WorkerHandle(root)
+            module = _load_dictation_module()
+            if _backend_kind(module) == "gpu":
+                self._worker = _ensure_gpu_worker(module)
+            else:
+                root = _locate_tools_root()
+                if root is None:
+                    raise RecognitionUnavailable(
+                        "the mlx-omarchy Parakeet tools tree was not found"
+                    )
+                self._worker = _WorkerHandle(root)
             return self._worker
 
     def transcribe(self, wav_bytes: bytes, cancel=None) -> str:
@@ -630,6 +738,15 @@ class Recognition:
         if cancel is not None and cancel.is_set():
             raise RecognitionCancelled("cancelled before transcription started")
         samples, rate = decode_wav(wav_bytes)
+        module = _load_dictation_module()
+        if rate != TARGET_SAMPLE_RATE:
+            try:
+                samples = module.resample_to_16k(samples, rate)
+            except ImportError as error:
+                raise RecognitionUnavailable(
+                    f"resampling runs on the GPU/Vulkan path and mlx is "
+                    f"not importable: {error}"
+                ) from error
 
         worker = self._ensure_worker()
         payload = np.ascontiguousarray(samples, dtype="<f4").tobytes()

@@ -142,6 +142,17 @@ export function buildComposer({
     if (onMicStop) onMicStop();
   }
 
+  function resetMicUi() {
+    // Idempotent UI reset for the recording controls; the recorder may
+    // have stopped on its own (device loss, 30 s cap, cancel) before the
+    // composer's pointer handler could call stopMic(). Resetting here
+    // keeps the composer in sync with the recorder's state without
+    // double-firing onMicStop.
+    micBtn.textContent = "Microphone";
+    micBtn.classList.remove("recording-indicator");
+    latch = false;
+  }
+
   const convToggle = el("label", { class: "setup__checkbox conv-toggle" },
     el("input", { type: "checkbox", id: "conv-mode" }),
     el("span", { class: "conv-toggle__label" }, "Conversation mode"),
@@ -324,6 +335,7 @@ export function buildComposer({
 
   return { wrap, setText, currentText, setBusy, setSpeaking, setVoiceStates,
            prefillCompare,
+           resetMicUi,
            focus: () => textarea.focus(), closeComparePanel };
 }
 
