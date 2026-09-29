@@ -31,9 +31,10 @@ void init() {
 
 namespace {
 // 0 = undecided for this graph, 1 = first batch commits early, 2 = normal.
-// Early commit only when the GPU is idle at graph start (nothing in flight):
-// in pipelined decode the next token is recorded while the previous one still
-// executes, so an early submit buys nothing there and only adds a submit.
+// Whether early commit applies is decided per graph from
+// MLX_OMARCHY_BATCH_FIRST, which mlx-lm's generate_step sets only around
+// prompt processing and the first token (pipelined decode keeps one submit
+// per token; an early submit there only adds submit cost).
 thread_local int g_first_state = 0;
 } // namespace
 
@@ -73,8 +74,7 @@ void eval(array& arr) {
   // recorded between commits.
   bool batch_open = encoder.needs_commit();
   if (g_first_state == 0 && !batch_open) {
-    g_first_state =
-        (omarchy::batch_first_budget() > 0 && encoder.synchronized()) ? 1 : 2;
+    g_first_state = omarchy::batch_first_budget() > 0 ? 1 : 2;
     static const bool trace_first = std::getenv("MLX_OMARCHY_BATCH_TRACE") != nullptr;
     if (trace_first) {
       std::fprintf(stderr, "[batchfirst] graph start state=%d last_completion=%llu drained=%llu\n",

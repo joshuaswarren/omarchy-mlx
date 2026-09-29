@@ -65,6 +65,11 @@ apply mlx-lm-qwen35-gdn-conv.patch
 # (precise product associations; verified 0 mismatches vs the composed chain over an exhaustive bf16
 # gate sweep). Measured on jwm1: decode64/128 +2.4%/+1.7% with identical digests.
 apply mlx-lm-qwen35-gated-norm.patch
+# Early first submit around prompt processing + the first token (sets
+# MLX_OMARCHY_BATCH_FIRST=128 for those graphs only, cleared after the first token;
+# backend ignores nothing else). Scheduling only: digests identical; jwm1 TTFT -12%,
+# pipelined decode unchanged. MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT=1 disables at runtime.
+apply mlx-lm-ttft-early-submit.patch
 if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 ]]; then
   apply mlx-lm-convring.patch
 else

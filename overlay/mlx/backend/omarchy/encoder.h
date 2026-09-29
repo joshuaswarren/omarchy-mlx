@@ -71,12 +71,11 @@ inline constexpr int kBatchNodeBudget = 4096;
 // ~45 us per dispatch on Linux and is otherwise fully exposed in synchronous
 // paths), at the cost of one extra submit per graph. Scheduling only.
 inline int batch_first_budget() {
-  static const int v = []() {
-    const char* e = std::getenv("MLX_OMARCHY_BATCH_FIRST");
-    int n = e ? std::atoi(e) : 0;
-    return n > 0 ? n : 0;
-  }();
-  return v;
+  // Read on every call (once per graph start): mlx-lm's generate_step sets
+  // the variable around prompt processing and clears it after the first token.
+  const char* e = std::getenv("MLX_OMARCHY_BATCH_FIRST");
+  int n = e ? std::atoi(e) : 0;
+  return n > 0 ? n : 0;
 }
 inline int batch_node_budget() {
   static const int v = []() {
