@@ -63,3 +63,16 @@ Setup: upstream streaming path, aiden, seed 123+i per sentence, 1 warmup sentenc
 | C | compile/fuse the 15-pass CP body | not measured | - | - | open |
 
 C evidence so far: one serialized CP pass = 240 dispatch lines in 8.7 ms, about 36 us per dispatch. That cost is per dispatch; the 0.15 ms per-eval barrier is not what we pay. A frame is about 1.5k (talker) + 3.6k (15 CP) dispatches plus the sampler. To fit 67 ms per frame at ~36 us, a frame must stay under ~1.9k dispatches, about 2.7x fewer. Fusing q/k/v and gate/up removes only 3 of ~48 dispatches per layer, so the reduction must come from fusing elementwise ops (compile) or from a fused decoder-layer kernel. Floor with A applied: RTF 0.23. The threshold is 1.2: FAIL.
+
+# CORRECTION 3 and fix A shipped, 2026-09-29
+
+Correction to 5b0b80b5c: `_streamed_generate_custom_voice` diverged from the upstream loop in two ways. It never appended generated token ids, so the repetition penalty (1.05) was silently off. It also appended the EOS frame before breaking, so the codec decoded one extra frame. Its `if is_eos:` also synced every step, so "no per-step sync" was false. The helper is deleted. The worker is back on `model.generate_custom_voice(stream=True, streaming_interval=0.32)`.
+
+Fix A is shipped: `_fast_codec_sampler(model)` swaps the qwen3_tts module's `categorical_sampling` for `_gumbel_categorical` during one request and restores it on exit or error. Suppression, repetition penalty, temperature and top-k stay upstream's. Tests: `FastCodecSamplerTests`. One test checks scope and restore without mlx. The other runs the upstream `_sample_token` with suppress + penalty + T 0.9 + top-k 5 through the patch: masked tokens are never drawn, chi-square < 18.47 (df 4, p 0.001). It passed on the M2 under gpu-turn. Assistant suite locally: 477 OK (1 skip: the mlx test).
+
+| Row | RTF median / min | first p95 | Whisper WER (5 sentences, numbers normalised) | RMS dBFS range | spectral flatness range |
+|---|---|---|---|---|---|
+| base | 0.206 / 0.132 | 1.55 s | 0.0% (0/5 sentences with errors) | -20.8 to -18.5 | 0.088-0.218 |
+| A (shipped) | 0.231 / 0.108 | 1.45 s | 0.0% | -25.2 to -17.0 | 0.135-0.217 |
+
+Sample-level correlation against the pre-change audio does not apply here: the draw consumes the RNG differently, so the same seed yields a different (equally distributed) sample. Equivalence is shown at the distribution level (chi-square). WAVs for listening are in the orchestrator listening directory `mlx-tts-samples-fast/`. The owner listening check is pending.

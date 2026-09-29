@@ -8,8 +8,10 @@ faked here; the tests pin the honest-refusal behavior instead.
 
 import array
 import hashlib
+import importlib.util
 import io
 import json
+import math
 import multiprocessing
 import os
 import stat
@@ -1273,6 +1275,64 @@ class KokoroEngineTests(unittest.TestCase):
             self.s.close()
         self.assertIsNone(self.s._worker)
         self.assertEqual(self.s._workers, {})
+
+
+class FastCodecSamplerTests(unittest.TestCase):
+    """The Qwen3-TTS draw goes through the Gumbel sampler for one request."""
+
+    def _fake_model(self, name, draw):
+        module = type(sys)(name)
+        module.categorical_sampling = draw
+        sys.modules[name] = module
+        self.addCleanup(sys.modules.pop, name, None)
+        model_cls = type("FakeTTS", (), {"__module__": name})
+        return model_cls(), module
+
+    def test_patch_is_scoped_and_restored_on_error(self):
+        upstream = object()
+        model, module = self._fake_model("fake_tts_scoped", upstream)
+        with self.assertRaises(RuntimeError):
+            with synthesis._fast_codec_sampler(model):
+                self.assertIs(module.categorical_sampling,
+                              synthesis._gumbel_categorical)
+                raise RuntimeError("synthesis failed mid-request")
+        self.assertIs(module.categorical_sampling, upstream)
+
+    @unittest.skipUnless(importlib.util.find_spec("mlx_audio"),
+                         "needs mlx and mlx_audio (run on the GPU host)")
+    def test_upstream_sampler_distribution_is_preserved(self):
+        import mlx.core as mx
+        from mlx_audio.tts.models.qwen3_tts import qwen3_tts
+
+        base = [1.2, -0.8, 0.4, 2.0, -0.3, 0.9, 1.7, -1.5, 0.1, 0.6, 3.0, 2.5]
+        suppress, history, penalty, temp, top_k = [10, 11], [0, 3, 3], 1.3, 0.9, 5
+        ref = list(base)
+        for token in suppress:
+            ref[token] = float("-inf")
+        for token in set(history):
+            ref[token] = ref[token] * penalty if ref[token] < 0 else ref[token] / penalty
+        ref = [x / temp for x in ref]
+        keep = sorted(range(len(ref)), key=lambda i: ref[i])[-top_k:]
+        weights = [math.exp(ref[i]) if i in keep else 0.0 for i in range(len(ref))]
+        expected = [w / sum(weights) for w in weights]
+
+        logits = mx.array([[base]])
+        mx.random.seed(7)
+        draws = 4000
+        counts = [0] * len(base)
+        model = qwen3_tts.Model.__new__(qwen3_tts.Model)
+        with synthesis._fast_codec_sampler(model):
+            for _ in range(draws):
+                token = model._sample_token(
+                    logits, temperature=temp, top_k=top_k, top_p=1.0,
+                    repetition_penalty=penalty, generated_tokens=history,
+                    suppress_tokens=suppress)
+                counts[int(token[0, 0])] += 1
+        self.assertEqual([c for i, c in enumerate(counts) if i not in keep],
+                         [0] * (len(base) - top_k))
+        chi2 = sum((counts[i] - draws * expected[i]) ** 2 / (draws * expected[i])
+                   for i in keep)
+        self.assertLess(chi2, 18.47)  # df 4, p = 0.001
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import array
 import atexit
+import contextlib
 import hashlib
 import importlib
 import importlib.metadata
@@ -615,137 +616,31 @@ def _worker_guard(assets_dir: str, pack: dict | None = None) -> None:
             "run setup with download approval")
 
 
-def _streamed_generate_custom_voice(model, text, speaker, language,
-                                    streaming_interval=0.32, max_tokens=4096):
-    """Streaming CustomVoice generator that defers per-step CPU syncs.
-
-    Matches ``model.generate_custom_voice(..., stream=True)``'s public
-    contract (yields ``GenerationResult`` chunks with ``.audio``) but drops
-    the per-step ``mx.eval(input_embeds, is_eos)`` that the upstream
-    implementation does inside the talker loop.  Per-step sync forces a
-    CPU/GPU round-trip between every 12.5 Hz frame; with 30+ steps per
-    sentence, the cumulative sync overhead drags the real-time factor to
-    ~0.22 on the M2.  This helper keeps the inner graph in flight and
-    syncs only at chunk boundaries (one ``mx.eval`` for the codes +
-    is_eos) plus the decoder's own per-chunk sync.
-
-    The trade-off: the loop may run a few extra steps after EOS until the
-    next chunk boundary.  At 12.5 Hz that is at most ``streaming_interval``
-    seconds of extra generated audio, which is then truncated by the worker's
-    ``cap`` enforcement.
-    """
+def _gumbel_categorical(logits, temp):
+    """Drop-in for mlx_audio's ``categorical_sampling``: the same
+    distribution by the Gumbel-max identity, argmax(logits/T + G) with
+    G = -log(-log(U)).  ``mx.random.categorical`` takes 2.3 ms per draw on
+    the M2 Vulkan backend against 0.3 ms here, and a Qwen3-TTS frame draws
+    16 times (receipt 2026-09-30-speech-output-speed)."""
     import mlx.core as mx
 
-    config = model.config.talker_config
-    eos_token_id = config.codec_eos_token_id
-    suppress_tokens = [
-        i for i in range(config.vocab_size - 1024, config.vocab_size)
-        if i != eos_token_id
-    ]
-    streaming_chunk_size = max(1, int(streaming_interval * 12.5))
-
-    input_embeds, trailing_text_hidden, tts_pad_embed = (
-        model._prepare_generation_inputs(text, language=language, speaker=speaker)
-    )
-    cache = model.talker.make_cache()
-    code_cache = model.talker.code_predictor.make_cache()
-    generated_codes = []
-    generated_token_ids = []
-    decoded_tokens = 0
-    eos_hit = False
-    model.speech_tokenizer.decoder.reset_streaming_state()
-
-    def _emit_chunk(is_final=False):
-        nonlocal decoded_tokens
-        if decoded_tokens >= len(generated_codes):
-            return None
-        codes_chunk = mx.stack(generated_codes[decoded_tokens:], axis=1)
-        codes_for_decoder = mx.transpose(codes_chunk, (0, 2, 1))
-        wav = model.speech_tokenizer.decoder.streaming_step(codes_for_decoder)
-        audio_chunk = wav.squeeze(1)[0]
-        mx.eval(codes_for_decoder, audio_chunk)
-        new_tokens = len(generated_codes) - decoded_tokens
-        decoded_tokens = len(generated_codes)
-        return audio_chunk, new_tokens
-
-    for step in range(max_tokens):
-        logits, hidden = model.talker(input_embeds, cache=cache)
-        next_token = model._sample_token(
-            logits,
-            temperature=0.9, top_k=50, top_p=1.0,
-            repetition_penalty=1.05,
-            generated_tokens=generated_token_ids if generated_token_ids else None,
-            suppress_tokens=suppress_tokens,
-        )
-        is_eos = next_token[0, 0] == eos_token_id
-        code_tokens = [next_token]
-        code_hidden = hidden[:, -1:, :]
-        for c in code_cache:
-            c.keys = None
-            c.values = None
-            c.offset = 0
-        for code_idx in range(config.num_code_groups - 1):
-            if code_idx == 0:
-                code_0_embed = model.talker.get_input_embeddings()(next_token)
-                code_input = mx.concatenate([code_hidden, code_0_embed], axis=1)
-            else:
-                code_embed = model.talker.code_predictor.codec_embedding[
-                    code_idx - 1](code_tokens[-1])
-                code_input = code_embed
-            code_logits, code_cache, _ = model.talker.code_predictor(
-                code_input, cache=code_cache, generation_step=code_idx,
-            )
-            next_code = model._sample_token(
-                code_logits, temperature=0.9, top_k=50, top_p=1.0,
-            )
-            code_tokens.append(next_code)
-        all_codes = mx.concatenate(code_tokens, axis=1)
-
-        text_embed = (
-            trailing_text_hidden[:, step:step + 1, :]
-            if step < trailing_text_hidden.shape[1] else tts_pad_embed
-        )
-        codec_embed = model.talker.get_input_embeddings()(next_token)
-        for i, code in enumerate(code_tokens[1:]):
-            codec_embed = (
-                codec_embed
-                + model.talker.code_predictor.codec_embedding[i](code)
-            )
-        input_embeds = text_embed + codec_embed
-
-        # NO per-step mx.eval here: the whole step stays in graph.
-        generated_codes.append(all_codes)
-        if is_eos:
-            eos_hit = True
-
-        if (len(generated_codes) - decoded_tokens >= streaming_chunk_size
-                or eos_hit):
-            # Single sync at the chunk boundary: covers EOS check and the
-            # next-step input embed.  Decoder runs in graph then evals.
-            mx.eval(is_eos, input_embeds)
-            if eos_hit and not bool(is_eos):
-                # EOS check was a false positive (cached value stale).  Keep going.
-                eos_hit = False
-            emitted = _emit_chunk()
-            if emitted is not None:
-                audio_chunk, new_tokens = emitted
-                yield _Chunk(audio_chunk, model.sample_rate, new_tokens)
-            if eos_hit:
-                break
-
-    # Drain any remaining tokens (post-loop chunk if EOS never triggered).
-    if decoded_tokens < len(generated_codes):
-        emitted = _emit_chunk()
-        if emitted is not None:
-            audio_chunk, new_tokens = emitted
-            yield _Chunk(audio_chunk, model.sample_rate, new_tokens)
+    scaled = logits.astype(mx.float32) * (1.0 / temp)
+    uniform = mx.random.uniform(shape=scaled.shape)
+    return mx.argmax(scaled - mx.log(-mx.log(uniform)), axis=-1)
 
 
-class _Chunk(NamedTuple):
-    """Minimal duck-type for GenerationResult: the worker only reads .audio."""
-    audio: object
-    sample_rate: int
-    new_tokens: int = 0
+@contextlib.contextmanager
+def _fast_codec_sampler(model):
+    """Route the model module's final categorical draw through
+    ``_gumbel_categorical`` for the duration of one request.  Masking,
+    repetition penalty, temperature and top-k stay upstream's."""
+    module = sys.modules[type(model).__module__]
+    original = module.categorical_sampling
+    module.categorical_sampling = _gumbel_categorical
+    try:
+        yield
+    finally:
+        module.categorical_sampling = original
 
 
 _TRIG_TWO_PI = 6.2831853071795864769
@@ -922,32 +817,30 @@ def _worker_main(conn, assets_dir: str) -> None:
                     language = "english" if msg["text"].strip().isascii() else "auto"
                     cap = int(rate * MAX_OUTPUT_SECONDS)
                     produced = 0
-                    results = _streamed_generate_custom_voice(
-                        model,
-                        text=msg["text"].strip(),
-                        speaker=voice,
-                        language=language,
-                        streaming_interval=0.32,
-                    )
-                    for result in results:
-                        if cancelled:
-                            break
-                        chunk = np.asarray(result.audio,
-                                           dtype=np.float32).reshape(-1)
-                        room = cap - produced
-                        if room <= 0:
-                            raise VoiceOutputLimitError(
-                                "synthesis exceeded the "
-                                f"{MAX_OUTPUT_SECONDS:.0f}s output bound; "
-                                "split the text into shorter sentences")
-                        if len(chunk) > room:
-                            chunk = chunk[:room]
-                        produced += len(chunk)
-                        pcm = (chunk * 32767.0).clip(-32768, 32767
-                                                     ).astype("int16")
-                        conn.send({"type": "chunk", "id": req_id,
-                                   "sample_rate": rate,
-                                   "data": pcm.tobytes()})
+                    with _fast_codec_sampler(model):
+                        for result in model.generate_custom_voice(
+                                text=msg["text"].strip(), speaker=voice,
+                                language=language, stream=True,
+                                streaming_interval=0.32):
+                            if cancelled:
+                                break
+                            chunk = np.asarray(result.audio,
+                                               dtype=np.float32).reshape(-1)
+                            room = cap - produced
+                            if room <= 0:
+                                raise VoiceOutputLimitError(
+                                    "synthesis exceeded the "
+                                    f"{MAX_OUTPUT_SECONDS:.0f}s output "
+                                    "bound; split the text into shorter "
+                                    "sentences")
+                            if len(chunk) > room:
+                                chunk = chunk[:room]
+                            produced += len(chunk)
+                            pcm = (chunk * 32767.0).clip(
+                                -32768, 32767).astype("int16")
+                            conn.send({"type": "chunk", "id": req_id,
+                                       "sample_rate": rate,
+                                       "data": pcm.tobytes()})
                     conn.send({"type": "cancelled" if cancelled else "done",
                                "id": req_id})
             except Exception as exc:
