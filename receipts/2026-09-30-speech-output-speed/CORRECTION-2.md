@@ -50,3 +50,16 @@ The chat 2B QuantizedLinear alone runs at 0.15-0.19 ms, the same barrier floor. 
 ## Floor, as measured
 
 With the sampler at argmax cost (−45 ms), a frame costs about 210 ms. The frame's 103 layer-passes at the measured ~1.4 ms each set a floor of about 145 ms, 2.2× over the 67 ms budget. Reaching RTF 1.2 needs the per-layer-pass cost cut to ≤0.5 ms, which is chat-model parity. Eval-barrier timing cannot attribute the remaining ~1 ms per attention block below the 0.15 ms barrier floor. The next discriminator is a backend-profiler (GPU timestamp) trace of one attention block. **Not done: no fix was built, and no RTF, WER or WAV was produced after a change.**
+
+# Fix rows, 2026-09-29 (dated; one gpu-turn ticket each; `fix_ab.json`)
+
+Setup: upstream streaming path, aiden, seed 123+i per sentence, 1 warmup sentence, then 2 measured rounds of 5 sentences. The M2 rebooted twice mid-run; the reboot-tolerant driver resumed it per sentence.
+
+| Row | Change | Microbench | E2E RTF median / min | first-chunk p95 | Kept? |
+|---|---|---|---|---|---|
+| base | upstream | categorical 2.31-2.36 ms/draw | 0.206 / 0.132 | 1.55 s | - |
+| A | Gumbel-max sampler (argmax(logits - log(-log(U))), one uniform per draw; the upstream sampler is mx.compile'd, so a cross-call pool is invalid) | 0.26-0.33 ms/draw; chi2 (df 7, crit 14.07): gumbel 7.28 / 8.67, categorical 6.24 / 11.4 | **0.231 / 0.108** | 1.45 s | measured gain of about 12%; NOT shipped to synthesis.py yet (needs a scoped patch plus a unit test) |
+| B | matmul attention at q_len=1 (fp32 softmax) | 0.50 ms vs sdpa 0.34-0.36 ms; max abs diff 1.2e-7 | not run E2E: slower in the microbench | - | reverted |
+| C | compile/fuse the 15-pass CP body | not measured | - | - | open |
+
+C evidence so far: one serialized CP pass = 240 dispatch lines in 8.7 ms, about 36 us per dispatch. That cost is per dispatch; the 0.15 ms per-eval barrier is not what we pay. A frame is about 1.5k (talker) + 3.6k (15 CP) dispatches plus the sampler. To fit 67 ms per frame at ~36 us, a frame must stay under ~1.9k dispatches, about 2.7x fewer. Fusing q/k/v and gate/up removes only 3 of ~48 dispatches per layer, so the reduction must come from fusing elementwise ops (compile) or from a fused decoder-layer kernel. Floor with A applied: RTF 0.23. The threshold is 1.2: FAIL.
