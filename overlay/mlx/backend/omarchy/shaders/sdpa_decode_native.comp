@@ -110,7 +110,7 @@ shared float s_sum[SIMD];
 // writes only its own strided slots). The kStreamKeys bound is enforced by
 // the host guard; larger contexts fall through to the composition, which
 // this arm reproduces bit for bit.
-const uint kStreamKeys = 2048u;
+const uint kStreamKeys = 7168u;
 shared float s_qrow[SDPA_DIM];
 shared float s_stream[kStreamKeys];
 shared float s_tree[256];
@@ -263,8 +263,20 @@ void main() {
     uint key = 0u;
     uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
         d * params.in_strides[3];
-    for (uint tile = 0u; tile < k_len / 16u; ++tile) {
-      // 16 independent V loads first, then the 16 in-order FMAs.
+    // Blocks of 64 keys: 64 independent V loads first, then the 64 in-order
+    // FMAs (ascending key order is unchanged; chunking is not an arithmetic
+    // choice). The remaining whole 16-key tiles follow, then the padded tail.
+    for (; key + 64u <= k_len; key += 64u) {
+      float vv[64];
+      for (uint index = 0u; index < 64u; ++index) {
+        vv[index] = bf16_load(
+            value_data.values[v_base + (key + index) * params.in_strides[2]]);
+      }
+      for (uint index = 0u; index < 64u; ++index) {
+        accumulator += s_stream[key + index] * vv[index];
+      }
+    }
+    for (; key + 16u <= k_len; key += 16u) {
       float vv[16];
       for (uint index = 0u; index < 16u; ++index) {
         vv[index] = bf16_load(
@@ -273,7 +285,6 @@ void main() {
       for (uint index = 0u; index < 16u; ++index) {
         accumulator += s_stream[key + index] * vv[index];
       }
-      key += 16u;
     }
     for (uint index = 0u; index < 16u; ++index) {
       float prob = key < k_len ? s_stream[key] : 0.0;

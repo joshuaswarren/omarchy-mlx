@@ -12218,9 +12218,9 @@ void ScaledDotProductAttention::eval_gpu(
   // base stream. 256 sits between the measured losing (<=61-key) and
   // winning (>=262-key) regimes on the 16-wide tile boundary.
   constexpr uint32_t kDecodeBf16SharedBytes =
-      (64u + 2048u + 256u) * sizeof(float);
+      (64u + 7168u + 256u) * sizeof(float);
   constexpr uint32_t kDecodeBf16SharedBytesHd256 =
-      (256u + 2048u + 256u) * sizeof(float);
+      (256u + 7168u + 256u) * sizeof(float);
   const uint32_t decode_bf16_shared_required = head_dim == 256
       ? kDecodeBf16SharedBytesHd256
       : kDecodeBf16SharedBytes;
@@ -12257,7 +12257,7 @@ void ScaledDotProductAttention::eval_gpu(
       (q.dtype() != bfloat16 ||
           (k_len >= (head_dim == 256 ? uint32_t{12} : uint32_t{256}) &&
            k_len <=
-               (head_dim == 256 ? uint32_t{2048} : uint32_t{2048}))) &&
+               (head_dim == 256 ? uint32_t{7168} : uint32_t{2048}))) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
     out.set_data(allocate_omarchy(out.nbytes()));
