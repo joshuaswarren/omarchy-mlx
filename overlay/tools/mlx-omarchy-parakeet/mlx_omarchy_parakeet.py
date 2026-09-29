@@ -257,6 +257,51 @@ def _check_ane_capability() -> None:
         )
 
 
+class _GpuWarm:
+    """GPU pre-warm during the CPU decoder load (default on; MLX_OMARCHY_PK_PREWARM=off disables).
+
+    The first GPU work after >= ~50 ms of GPU idle costs about +10 ms on the M1
+    (the fast state decays over 10-50 ms; jwm1 H27-H30/H56/H57), and the mel
+    stage is the first real GPU work after the CPU-only decoder load. While
+    that stage runs, a background thread streams 1024x1024 f32 matmuls (results
+    discarded, no pipeline data touched) and is joined right before mel, so mel
+    starts in the fast state (mel 29 -> 19.5 ms on jwm1). The thread stops
+    exactly when the CPU stage ends, so it never delays a stage by more than
+    one matmul (~5 ms). GPU energy for ~45 ms per transcription is not measured.
+    """
+
+    def __init__(self, mx):
+        self.mx = mx
+        self.enabled = os.environ.get("MLX_OMARCHY_PK_PREWARM", "").lower() not in (
+            "off", "0", "no", "false")
+        self.thread = None
+        self.stop_flag = False
+        if self.enabled:
+            self.a = mx.ones((1024, 1024), dtype=mx.float32)
+            mx.eval(self.a)
+
+    def _run(self):
+        mx = self.mx
+        limit = time.monotonic() + 2.0  # never outlive a stalled CPU stage
+        while not self.stop_flag and time.monotonic() < limit:
+            mx.eval(mx.matmul(self.a, self.a))
+
+    def start(self):
+        if not self.enabled or self.thread is not None:
+            return
+        import threading
+        self.stop_flag = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        if self.thread is None:
+            return
+        self.stop_flag = True
+        self.thread.join()
+        self.thread = None
+
+
 def _env_off(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("off", "0", "false", "no")
 
@@ -450,6 +495,13 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     from coreml import vulkan_encoder as encoder_module
 
     mx.set_default_device(mx.gpu)
+    # A larger buffer cache keeps the TDT chain's per-step temporaries (and the
+    # pre-warm outputs) from being re-created and re-mapped every step: on jwm1
+    # tdt_decode 137.8 -> 133.4 ms, and without it the pre-warm's cached outputs
+    # made TDT ~10 ms slower. MLX_OMARCHY_PK_CACHE_MB overrides (0 keeps the default).
+    _cache_mb = int(os.environ.get("MLX_OMARCHY_PK_CACHE_MB", "1024"))
+    if _cache_mb > 0:
+        mx.set_cache_limit(_cache_mb << 20)
 
     contract = lock.numerical_contract
     if contract is None:
@@ -489,6 +541,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
 
     waveform, sample_count, decoder_name = stage("audio_load", trace_snapshot,
                                                  stage_audio)
+    warm = _GpuWarm(mx)
+    warm.start()
 
     # ------------------------------------------- 2. chunks (30 s windows)
     from coreml.vulkan_mel import CHUNK_SAMPLES
@@ -518,6 +572,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         lambda: load_decoder(cache_dir / "decoder.mlpackage"),
     )
     fused_packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
+    warm.stop()
     import numpy as np
 
     from coreml.vulkan_decoder_step import _JOINT_OUT, _VOCAB, _WINDOW_SLOTS
