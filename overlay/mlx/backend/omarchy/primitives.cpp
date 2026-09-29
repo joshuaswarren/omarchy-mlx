@@ -3459,6 +3459,43 @@ void ArgPartition::eval_gpu(const std::vector<array>& inputs, array& out) {
 // One thread per output row sweeps the row-contiguous suffix row of
 // `src`; the uint32 index output drops the reduced axis, so `out` is
 // dense with the input's non-axis dims.
+// Chip-keyed decode-path defaults (2026-09-29): the staged GDN state
+// tile and the 16-step LSE/argreduce walk prefetch gained +3.1..3.9%
+// decode on G13C (T6001) and lost ~3.8% on G13G (T8103). G13 parts other
+// than G13C default to the legacy paths; the env overrides (0/1) force
+// either arm for A/B runs and for unmeasured parts.
+static int decode_path_override(const char* name) {
+  const char* v = std::getenv(name);
+  if (v == nullptr || *v == '\0') {
+    return -1;
+  }
+  return (v[0] == '0' && v[1] == '\0') ? 0 : 1;
+}
+
+static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
+  const std::string& name = encoder.device().capabilities().device_name;
+  return name.find("G13") != std::string::npos &&
+      name.find("G13C") == std::string::npos;
+}
+
+static bool gdn_decode_tile_enabled(omarchy::CommandEncoder& encoder) {
+  int override_value = decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE");
+  return override_value >= 0 ? override_value != 0
+                             : !g13_legacy_part(encoder);
+}
+
+// Walk-prefetch shaders read this as push-constant flag bit 31 (the
+// legacy walk: one load per element per round trip, arithmetic order
+// unchanged).
+static constexpr uint32_t kWalkLegacyFlag = 0x80000000u;
+
+static bool walk_prefetch_enabled(omarchy::CommandEncoder& encoder) {
+  int override_value =
+      decode_path_override("MLX_OMARCHY_LSE_ARGREDUCE_PREFETCH");
+  return override_value >= 0 ? override_value != 0
+                             : !g13_legacy_part(encoder);
+}
+
 void dispatch_arg_reduce_suffix(
     const std::string& operation_name,
     bool is_max,
@@ -3480,6 +3517,9 @@ void dispatch_arg_reduce_suffix(
   params.lhs_offset = checked_item_offset(
       src, src.size(), operation_name, out);
   params.output_offset = checked_item_offset(out, out.size(), operation_name, out);
+  if (!walk_prefetch_enabled(encoder)) {
+    params.flags |= kWalkLegacyFlag;
+  }
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(src), binding(src), binding(out)};
   omarchy::ComputeKernel kernel;
@@ -6426,6 +6466,9 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
       src, src.size(), "LogSumExp", out);
   params.output_offset = checked_item_offset(
       out, out.size(), "LogSumExp", out);
+  if (!walk_prefetch_enabled(encoder)) {
+    params.flags |= kWalkLegacyFlag;
+  }
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(src), binding(src), binding(out)};
   auto kernel = select_float_kernel(
@@ -10748,13 +10791,16 @@ void GatedDeltaUpdate::eval_gpu(
       bindings[3] = binding(g);
       bindings[4] = binding(beta);
     }
-    // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head.
+    // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head;
+    // the legacy per-row variant runs one workgroup per head.
+    bool decode_tile = gdn_decode_tile_enabled(encoder);
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::GatedDeltaDecodeBF16,
+        decode_tile ? omarchy::ComputeKernel::GatedDeltaDecodeBF16
+                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled,
         bindings,
         params,
         static_cast<uint32_t>(Hv),
-        static_cast<uint32_t>(Dv / 32),
+        decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
         1);
     return;
   }

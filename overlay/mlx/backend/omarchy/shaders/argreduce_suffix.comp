@@ -136,6 +136,7 @@ layout(push_constant) uniform Params {
   uint lhs_offset;
   uint rhs_offset;
   uint output_offset;
+  uint flags;
 } params;
 
 shared VAL_TYPE block_values[256];
@@ -170,18 +171,33 @@ void main() {
     uint start = params.lhs_offset + row * row_length;
     VAL_TYPE local_value = is_max ? ACC_LOWEST : ACC_HIGHEST;
     uint local_index = 0u;
-    uint index = thread;
-    for (; index + 15u * 256u < row_length; index += 16u * 256u) {
-      uint base = start + index;
-      AR_LOAD16
-      AR_STEP16
-    }
-    for (; index < row_length; index += 256u) {
-      VAL_TYPE next = LOAD_AT(start + index);
-      bool wins = is_max ? next > local_value : next < local_value;
-      if (wins) {
-        local_value = next;
-        local_index = index;
+    // Flag bit 31: legacy walk, one load per element per round trip,
+    // identical element order and compares (bit-identical to the
+    // prefetch arm; chosen per chip and by
+    // MLX_OMARCHY_LSE_ARGREDUCE_PREFETCH).
+    if ((params.flags & 0x80000000u) != 0u) {
+      for (uint index = thread; index < row_length; index += 256u) {
+        VAL_TYPE next = LOAD_AT(start + index);
+        bool wins = is_max ? next > local_value : next < local_value;
+        if (wins) {
+          local_value = next;
+          local_index = index;
+        }
+      }
+    } else {
+      uint index = thread;
+      for (; index + 15u * 256u < row_length; index += 16u * 256u) {
+        uint base = start + index;
+        AR_LOAD16
+        AR_STEP16
+      }
+      for (; index < row_length; index += 256u) {
+        VAL_TYPE next = LOAD_AT(start + index);
+        bool wins = is_max ? next > local_value : next < local_value;
+        if (wins) {
+          local_value = next;
+          local_index = index;
+        }
       }
     }
     block_values[thread] = local_value;
