@@ -8,13 +8,13 @@ import numpy as np
 
 H, KV, D = 8, 2, 256
 out = {}
-for L in (12, 13, 33, 64, 100, 128, 129, 200, 256, 500, 1024, 1500, 2047, 2048):
+for L in (12, 13, 33, 64, 100, 128, 129, 200, 256, 500, 1024, 1500, 2047, 2048, 2049, 3000, 4096, 5000, 7167, 7168, 7169):
     h = hashlib.sha256()
     for seed in range(5):
         rng = np.random.default_rng(1000 * L + seed)
         q = mx.array(rng.standard_normal((1, H, 1, D)).astype(np.float32)).astype(mx.bfloat16)
-        kf = mx.array(rng.standard_normal((1, KV, 2304, D)).astype(np.float32) * (1.0 + seed)).astype(mx.bfloat16)
-        vf = mx.array(rng.standard_normal((1, KV, 2304, D)).astype(np.float32)).astype(mx.bfloat16)
+        kf = mx.array(rng.standard_normal((1, KV, 7400, D)).astype(np.float32) * (1.0 + seed)).astype(mx.bfloat16)
+        vf = mx.array(rng.standard_normal((1, KV, 7400, D)).astype(np.float32)).astype(mx.bfloat16)
         mx.eval(q, kf, vf)
         k = kf[:, :, :L, :]  # strided cache slice like the model's KV cache
         v = vf[:, :, :L, :]
