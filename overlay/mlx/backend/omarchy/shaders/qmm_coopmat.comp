@@ -192,7 +192,14 @@ void main() {
     for (uint tile_col = gl_WorkGroupID.x; tile_col < n_tiles;
          tile_col += gl_NumWorkGroups.x) {
       uint column = tile_col * TILE_N + w_column_local;
+#ifdef FULL_N
+      // Every column tile is full (matrix_n % 32 == 0, checked on the host):
+      // the predicated scale/bias/weight loads and their exec-mask regions
+      // drop out of the K loop. Arithmetic is unchanged.
+      const bool column_ok = true;
+#else
       bool column_ok = column < params.matrix_n;
+#endif
       uint w_row = w_slice + column * words_per_row;
       uint scale_row = scale_slice + column * groups_per_row;
       uint bias_row = bias_slice + column * groups_per_row;

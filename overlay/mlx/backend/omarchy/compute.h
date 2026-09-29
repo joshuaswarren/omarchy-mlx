@@ -647,6 +647,9 @@ enum class ComputeKernel : uint16_t {
   // bit-identical) and the x_s staging disappears. Append-only ids.
   QmmPrefillCoopmatBF16X32,
   QmmPrefillCoopmatM16BF16X32,
+  // FULL_N twins (matrix_n % 32 == 0): column_ok compiled out.
+  QmmPrefillCoopmatBF16X32FullN,
+  QmmPrefillCoopmatM16BF16X32FullN,
   // Native-shape two-pass long-context decode SDPA (f16): pass 1 runs one
   // 32-thread workgroup per (head, block) - native Metal's
   // sdpa_vector_2pass_1 grid - and writes the fused kernel's exact f16/f32
