@@ -169,6 +169,36 @@ function buildHarness(onSend) {
 }
 
 {
+  // composer toolbar semantics: the controls div is role=toolbar with a
+  // label, and the voice status text lives in a sibling role=status group
+  // (not inside the toolbar, so screen readers do not announce it as a
+  // toolbar control). The textarea is named "Message" and is not a parent
+  // of the toolbar.
+  const h = buildHarness(() => Promise.resolve(true));
+  const wrap = h.composer.wrap;
+  const toolbar = wrap.querySelector(".composer__controls");
+  assert.equal(toolbar.getAttribute("role"), "toolbar",
+    "composer controls must be a toolbar landmark so the buttons inside are grouped");
+  assert.equal(toolbar.getAttribute("aria-label"), "Composer controls");
+  const voice = wrap.querySelector(".composer__voice-status");
+  assert.ok(voice, "voice status group must exist");
+  assert.equal(voice.getAttribute("role"), "status",
+    "voice status must be a status region, not a toolbar control");
+  // The textarea and toolbar must be siblings, not nested.
+  const row = wrap.querySelector(".composer__row");
+  assert.ok(row, "composer__row must wrap the textarea and toolbar");
+  // Both the textarea and the toolbar are children of the row (not nested).
+  const rowChildren = Array.from(row.querySelectorAll("#composer-text, .composer__controls"));
+  assert.equal(rowChildren.length, 2,
+    "textarea and toolbar must both live inside composer__row as siblings");
+  // The voice status must NOT live inside the toolbar.
+  assert.equal(toolbar.querySelectorAll(".composer__voice-status").length, 0,
+               "voice status must not be a descendant of the toolbar");
+  assert.equal(row.querySelectorAll(".composer__voice-status").length, 0,
+               "voice status must live outside the composer__row too");
+}
+
+{
   // extracted-draft → confirm: source material preserved, restored, submitted
   const sends = [];
   const h = buildHarness((turn) => { sends.push(turn); return Promise.resolve(true); });

@@ -60,7 +60,8 @@ export function buildComposer({
   let compareOpen = !!compareActive;
   let analyzeOpen = false;
 
-  const controls = el("div", { class: "composer__controls" });
+  const controls = el("div", { class: "composer__controls",
+    role: "toolbar", "aria-label": "Composer controls" });
   const compareBtn = el("button", { type: "button", class: "btn btn--ghost",
     "aria-pressed": compareOpen ? "true" : "false",
     id: "compare-btn",
@@ -176,11 +177,15 @@ export function buildComposer({
     dataset: { state: recognitionState } }, `Dictation: ${voiceLabel(recognitionState)}`);
   const speakStatus = el("span", { class: "voice-status",
     dataset: { state: synthesisState } }, `Speech: ${voiceLabel(synthesisState)}`);
-  controls.appendChild(micStatus);
-  controls.appendChild(speakStatus);
+  // Voice status is reporting text, not a toolbar control. Group it under a
+  // status region so screen readers announce it as state, not as part of the
+  // toolbar's control list.
+  const voiceStatus = el("div", { class: "composer__voice-status",
+    role: "status", "aria-label": "Voice status" }, micStatus, speakStatus);
 
   const row = el("div", { class: "composer__row" }, textarea, controls);
   wrap.appendChild(row);
+  wrap.appendChild(voiceStatus);
   wrap.appendChild(comparePanel);
   comparePanel.hidden = !compareOpen;
   wrap.appendChild(analyzePanel);
