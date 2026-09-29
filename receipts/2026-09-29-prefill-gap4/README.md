@@ -67,17 +67,31 @@ head rides the greedy-prune kernel this variant does not touch.
 | decode tok/s d64/d128/d256/d512 | 99.85 / 100.04 / 98.71 / 94.78 | matches the fleet's current decode table |
 | restore | health 200 + completion probe finish=length + is-active=active | OK |
 
-**OPEN ANOMALY (pf bench ttft metric on this boot):** the cert bench cells
-report ttft_tok_rate 120.70 / 119.47 / 119.38 at T=512/1024/2048 — an order of
-magnitude below the serving regime (1089.55/1234.30/1307.31 measured on boot
-cacd7b45 with the SAME wheel/patches/bench file, unchanged mtime Sep 28 16:18).
-The stack itself measures HEALTHY on the same boot: `prefill_breakdown.py`
-(direct model forward, same venv) implies 1333.8 tok/s at T=512 (layers sum
-383.9 ms; gdn.mixer 7.96 ms/layer, attn.mixer 5.03, mlp ~8.3), and decode
-cells are normal. The inflation is linear in T (~7.5 ms/token extra) inside
-the bench's ttft only. Evidence: /var/tmp/pp/pf4-cert/ (bench JSONs),
-/var/tmp/pp/pf4-bd/bd512.json, notebook artifacts PrefillGap4/cert. Root cause
-NOT identified within this lane; needs one clean bench-vs-breakdown arbitration
-window (Main / DecodeGap6). Do not quote the 120-number as a serving
-regression; do not quote yesterday's 1089/1234/1307 as current until
-re-measured.
+**RESOLVED ANOMALY (pf bench ttft metric — was reported open above):** the cert
+summary compared the WRONG BENCH FIELDS. `ttft_tok_rate` (120.70 / 119.47 /
+119.38) is the 12-token-prompt time-to-first-token metric — the pf cells run
+`--limit 1` over a 12-token corpus prompt, so this field is ~99-122 tok/s on
+EVERY window, stack, and boot (PrefillGap3 w1a base arm, old wheel
+51dd63fa9 pre-conv-silu, boot cacd7b45: ttft 99.25-111.18 in the same JSONs;
+PrefillGap3 w2 serving: ttft 118.21-122.42). The pf prefill-throughput metric
+is `/pure_prefill/pure_prefill_tok_rate`, and the same cert JSONs already held
+the healthy values: **pf512 1089.66 [1087.32-1094.95], pf1024 1232.14
+[1228.48-1238.33], pf2048 1308.07 [1296.35-1310.01]** (n=5, records
+100a61b62470 all 15 runs) — matching PrefillGap3 w2's 1089.55/1234.30/1307.31
+within window noise. There was no regression; the "10x drop" was a field
+misread, not a stack or bench defect. Nothing to roll back or redeploy.
+Arbitrated by PrefillGap5, one window on the unchanged serving venv (boot
+8c3d0b5c, wheel fbdb6da62, 2026-09-29T22:37-22:42Z, restore health 200 +
+finish=length): last-logits pf 1093.00 / 1235.94 / 1308.11 tok/s (medians,
+records 100a61b62470 all 15 runs, gates f771c4265f88 / ce24f3b4ce42 /
+b8c4e14f8f8a finite); full-logits control (MLX_OMARCHY_FULL_LOGITS=1) pf
+891.41 / 986.13 / 1032.86 tok/s with IDENTICAL records digest and gates
+(full-logits last-row argmax is bit-identical, so the control arm also holds
+100a61b62470); prefill_breakdown same window implies 1331.7 / 1362.1 / 1297.8
+tok/s (model_layers_sum_ms 384.5 / 751.8 / 1578.0), corroborating the pure
+rates. vs macOS window-5: last-logits 0.627 / 0.689 / 0.716, full-logits
+0.671 / 0.727 / 0.749. Guard added: pp_cells.sh now echoes
+`PF-RATE /pure_prefill/pure_prefill_tok_rate` per pf run so the 12-token ttft
+field can never be mistaken for the pf rate again. Evidence:
+/var/tmp/pp/pf5-arb/{lastlogits,fulllogits}/ (jw16), notebook artifacts
+PrefillGap5/pf5-arb/, entry entries/PrefillGap5/20260929T2240Z-jw16-pf-ttft-anomaly.md.
