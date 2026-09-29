@@ -82,39 +82,46 @@ uint16_t bf16_store(float value) {
 // ROWS Dv rows per workgroup, Dv / ROWS workgroups per head
 // (gl_WorkGroupID.y). The ROWS x Dk f32 state tile is staged through shared
 // memory with coalesced loads and stores (thread t owns column t of every
-// tile row), so the per-row sequential walks below read shared memory
-// instead of one 512-byte-strided global word per lane per step. The
-// arithmetic is the one-thread-per-row chain of the single-workgroup form,
-// statement for statement: the same ascending-i accumulations, the same
-// expressions, the same stores; only where the state words come from moved
-// (bit-identical, receipts/2026-09-29-jw16-decode-gdn-lse-argmax).
+// tile row), so the per-row sequential walks read shared memory instead of
+// one 512-byte-strided global word per lane per step.
+//
+// Bit identity with the one-workgroup-per-head kernel this replaces: that
+// kernel's source (`kv += s * g * k[i]`, `ns = s * g + delta * k[i]`,
+// `out += ns * q[i]`) compiled, after Honeykrisp's rank-based
+// reassociation of non-exact float chains, to kv = fma(s, k[i] * g, kv),
+// ns = fma(s, g, delta * k[i]), out = fma(ns, q[i], out) (AGX NIR dump,
+// receipts/2026-09-29-jw16-decode-gdn-lse-argmax). The same source reading
+// a shared tile regroups differently, so the walks below are written so each
+// step is a two-operand chain the compiler can only contract one way:
+// k[i] * g is a per-workgroup table (one rounding, the same fmul), and
+// delta * k[i] is precise, leaving s * g as the only product next to it.
+// The walks and the gate prologue sit in their own functions because
+// glslang propagates `precise` backward through everything that feeds a
+// precise value inside one function.
 const uint ROWS = 32u;
 const uint TILE_STRIDE = 129u;  // padded: row r, column i -> bank (r + i) % 32
 
 shared float sk[128];
 shared float sq[128];
+shared float skg[128];
 shared float tile[ROWS * TILE_STRIDE];
 
-void main() {
-  uint dk = params.matrix_m;
-  uint dv = params.matrix_n;
-  uint hv = params.matrix_k;
-  uint head = gl_WorkGroupID.x;
-  uint row0 = gl_WorkGroupID.y * ROWS;
-  uint lane = gl_LocalInvocationID.x;
-
-  if (head >= hv) {
-    return;
+// kv = sum over ascending i of s[i] * (k[i] * g), contracted per step.
+float gdn_kv_walk(uint trow, uint dk) {
+  float kv_acc = 0.0f;
+  for (uint i = 0u; i < dk; ++i) {
+    kv_acc += tile[trow + i] * skg[i];
   }
-  sk[lane] = bf16_load(k_buf.v[params.rhs_offset + head * dk + lane]);
-  sq[lane] = bf16_load(q_buf.v[params.lhs_offset + head * dk + lane]);
-  uint head_base = head * dv * dk;
-  uint tile_base = params.shape[1] + head_base + row0 * dk;
-  for (uint r = 0u; r < ROWS; ++r) {
-    tile[r * TILE_STRIDE + lane] = s_in.v[tile_base + r * dk + lane];
-  }
-  barrier();
+  return kv_acc;
+}
 
+// ns = s * g + dk_term, contracted (dk_term arrives rounded).
+float gdn_decay_add(float s, float g, float dk_term) {
+  return s * g + dk_term;
+}
+
+// Gate prologue (g, beta) for one head.
+vec2 gdn_gates(uint head) {
   float g;
   float beta;
   if ((params.flags & 8u) != 0u) {
@@ -148,19 +155,44 @@ void main() {
     g = bf16_load(g_buf.v[params.shape[0] + head]);
     beta = bf16_load(b_buf.v[params.aux_offset + head]);
   }
+  return vec2(g, beta);
+}
+
+void main() {
+  uint dk = params.matrix_m;
+  uint dv = params.matrix_n;
+  uint hv = params.matrix_k;
+  uint head = gl_WorkGroupID.x;
+  uint row0 = gl_WorkGroupID.y * ROWS;
+  uint lane = gl_LocalInvocationID.x;
+
+  if (head >= hv) {
+    return;
+  }
+  vec2 gates = gdn_gates(head);
+  float g = gates.x;
+  float beta = gates.y;
+  sk[lane] = bf16_load(k_buf.v[params.rhs_offset + head * dk + lane]);
+  sq[lane] = bf16_load(q_buf.v[params.lhs_offset + head * dk + lane]);
+  skg[lane] = sk[lane] * g;
+  uint head_base = head * dv * dk;
+  uint tile_base = params.shape[1] + head_base + row0 * dk;
+  for (uint r = 0u; r < ROWS; ++r) {
+    tile[r * TILE_STRIDE + lane] = s_in.v[tile_base + r * dk + lane];
+  }
+  barrier();
+
   if (lane < ROWS) {
     uint row = row0 + lane;
     uint trow = lane * TILE_STRIDE;
-    float kv_acc = 0.0f;
-    for (uint i = 0u; i < dk; ++i) {
-      kv_acc += tile[trow + i] * g * sk[i];
-    }
-    float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
+    float kv_acc = gdn_kv_walk(trow, dk);
+    precise float delta =
+        (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
 
     float o_acc = 0.0f;
     for (uint i = 0u; i < dk; ++i) {
-      float s = tile[trow + i] * g;
-      float ns = s + delta * sk[i];
+      precise float dk_term = delta * sk[i];
+      float ns = gdn_decay_add(tile[trow + i], g, dk_term);
       tile[trow + i] = ns;
       o_acc += ns * sq[i];
     }
