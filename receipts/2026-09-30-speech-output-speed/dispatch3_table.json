@@ -1,0 +1,14 @@
+{
+  "PROBE1": {
+    "total_dispatches": 330730408,
+    "per_iter": 33073040.8
+  },
+  "PROBE2": {
+    "total_dispatches": 374309277,
+    "per_iter": 37430927.7
+  },
+  "PROBE3": {
+    "total_dispatches": 331954310,
+    "per_iter": 33195431.0
+  }
+}
