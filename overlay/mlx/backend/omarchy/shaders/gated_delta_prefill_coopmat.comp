@@ -11,15 +11,18 @@
 //
 // Per chunk (C=8 tokens), with gamma_log = inclusive prefix sum of
 // log(max(g, 1e-6)) over the chunk and gamma_j = exp(gamma_log_j):
-//   N      = strict_lower(diag(beta) . K.K^T)
+//   N      = strict_lower(diag(beta) . K.K^T) * Gamma,
+//            Gamma[r][c] = exp(gamma_log_r - gamma_log_c)      (elementwise)
 //   Tinv   = (I + N)^-1 = (I - N)(I + N^2 + N^4 + N^6)   (N^8 = 0)
-//   U      = diag(gamma) . Tinv . (diag(beta.exp(-gamma_log)) . V)
-//   WS     = diag(gamma) . Tinv . ((diag(beta) K) . S)
-//   delta  = U - WS
+//   delta  = Tinv . (diag(beta) V - (diag(gamma.beta) K) . S)
 //   out    = tril(Q.K^T . diag(exp(gamma_log_r - gamma_log_c))) . delta
 //            + ((diag(gamma) Q) . S)                       (y rows)
 //   S      = gamma_C . S + (K . diag(exp(gamma_C - gamma_log)))^T . delta
-// The (a,b) exp(gamma_a - gamma_b) factors of the causal output term ride
+// Every exponent is a log-decay difference over a later minus an earlier
+// token (or the plain prefix), so it is <= 0 and no factor can overflow for
+// any gate: the earlier form exponentiated -gamma_log separately
+// (diag(gamma) Tinv diag(exp(-gamma)) V), which overflows past a chunk
+// log-decay of -88.7. The Gamma, (a,b) exp(gamma_a - gamma_b) factors ride
 // one shared round trip (store, per-lane scale/mask, load); Vulkan
 // cooperative matrices have no lane-addressable elements, so every
 // position-dependent scale or mask and every matrix feeding an operand
@@ -195,13 +198,13 @@ void main() {
     const float gamC = exp(gamma_s[sg][C - 1u]);
     const float beta_r0 = beta_s[sg][r0];
     const float gam_r0 = exp(gamma_s[sg][r0]);
-    const float gaminv_r0 = exp(-gamma_s[sg][r0]);
+    const float bg_r0 = beta_r0 * gam_r0;
     // Decay from token r0 to the chunk end, log-domain difference.
     const float dec_r0 =
         r0 < valid ? exp(gamma_s[sg][C - 1u] - gamma_s[sg][r0]) : 0.0;
 
     // Loop 1: stage the chunk's k/q tiles (raw and row-scaled variants)
-    // and accumulate KK^T, Q.K^T, (beta K).S and (gamma Q).S.
+    // and accumulate KK^T, Q.K^T, (gamma beta K).S and (gamma Q).S.
     coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kkt =
         coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
     coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> qkt =
@@ -227,8 +230,8 @@ void main() {
       }
       k_s[sg][e0] = kv0;
       k_s[sg][e0 + 1u] = kv1;
-      kg_s[sg][e0] = kv0 * beta_r0;
-      kg_s[sg][e0 + 1u] = kv1 * beta_r0;
+      kg_s[sg][e0] = kv0 * bg_r0;
+      kg_s[sg][e0 + 1u] = kv1 * bg_r0;
       q_s[sg][e0] = qv0;
       q_s[sg][e0 + 1u] = qv1;
       qg_s[sg][e0] = qv0 * gam_r0;
@@ -247,13 +250,15 @@ void main() {
       barrier();
     }
 
-    // N = strict_lower(diag(beta) . KK^T): one shared round trip.
+    // N = strict_lower(diag(beta) . KK^T) * Gamma: one shared round trip.
     coopMatStore(kkt, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     barrier();
     float n0 = rt_a[sg][e0];
     float n1 = rt_a[sg][e0 + 1u];
-    rt_a[sg][e0] = (c0 < r0) ? n0 * beta_r0 : 0.0;
-    rt_a[sg][e0 + 1u] = (c0 + 1u < r0) ? n1 * beta_r0 : 0.0;
+    rt_a[sg][e0] = (c0 < r0)
+        ? n0 * beta_r0 * exp(gamma_s[sg][r0] - gamma_s[sg][c0]) : 0.0;
+    rt_a[sg][e0 + 1u] = (c0 + 1u < r0)
+        ? n1 * beta_r0 * exp(gamma_s[sg][r0] - gamma_s[sg][c0 + 1u]) : 0.0;
     barrier();
     coopMatLoad(mat_a, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     coopMatLoad(mat_b, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
@@ -272,7 +277,7 @@ void main() {
         coopMatMulAdd(mat_a2, mat_b2, zero);
     coopMatStore(a2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     barrier();
-    coopMatLoad(mat_a2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    // N^6 = N^2 . N^4: mat_a2 keeps N^2, only the B operand takes N^4.
     coopMatLoad(mat_b2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     barrier();
     coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> a3 =
@@ -291,10 +296,9 @@ void main() {
     coopMatLoad(mat_a2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     barrier();
 
-    // diag(gamma): exp(gamma_r) on the diagonal, staged through rt_a.
-    rt_a[sg][e0] = (r0 == c0) ? gam_r0 : 0.0;
-    rt_a[sg][e0 + 1u] = (r0 == c0 + 1u) ? gam_r0 : 0.0;
-    // V tilde: diag(beta.exp(-gamma_log)) rows of V.
+    // diag(beta) V rows, then delta = Tinv . (diag(beta) V - M2) with
+    // M2 = (diag(gamma beta) K) . S: one shared round trip for the
+    // difference (operand role).
     uint vbase = v_off + (t0 + r0) * hv * params.matrix_n + head * params.matrix_n + dv0 + c0;
     float vv0 = 0.0;
     float vv1 = 0.0;
@@ -303,36 +307,17 @@ void main() {
       vv0 = bf16_word_lo(vw);
       vv1 = bf16_word_hi(vw);
     }
-    v_s[sg][e0] = vv0 * beta_r0 * gaminv_r0;
-    v_s[sg][e0 + 1u] = vv1 * beta_r0 * gaminv_r0;
-    // M2 round trip (operand role for the WS chain).
-    coopMatStore(m2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    v_s[sg][e0] = vv0 * beta_r0;
+    v_s[sg][e0 + 1u] = vv1 * beta_r0;
     barrier();
-    coopMatLoad(mat_b, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
-    coopMatLoad(mat_b2, v_s[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
-    barrier();
-    coopMatLoad(mat_a, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
-    barrier();
-
-    // U = diag(gamma) . Tinv . Vtilde; WS = diag(gamma) . Tinv . M2;
-    // delta = U - WS. Every intermediate re-consumed as an operand takes
-    // one shared round trip.
-    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> tinvv =
-        coopMatMulAdd(mat_a2, mat_b2, zero);
-    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> ws =
-        coopMatMulAdd(mat_a2, mat_b, zero);
-    coopMatStore(tinvv, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
-    barrier();
-    coopMatLoad(mat_b, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
-    barrier();
-    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> u =
-        coopMatMulAdd(mat_a, mat_b, zero);
-    coopMatStore(ws, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> bv;
+    coopMatLoad(bv, v_s[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(bv - m2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     barrier();
     coopMatLoad(mat_b, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     barrier();
     coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> delta =
-        u - coopMatMulAdd(mat_a, mat_b, zero);
+        coopMatMulAdd(mat_a2, mat_b, zero);
 
     // QKt tri: tril(Q.K^T) scaled elementwise by exp(gamma_log_r - gamma_log_c):
     // one shared round trip. The column factor differs per element (c0 vs
