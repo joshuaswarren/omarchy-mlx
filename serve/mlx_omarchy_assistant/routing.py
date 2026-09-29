@@ -105,6 +105,50 @@ class RoutingOutcome:
     timed_out: bool = False
 
 
+def _neutralise_quoted_text(text: str) -> str:
+    """Collapse list/label syntax inside the quoted user turn.
+
+    The user text is presented as inert data to the Laya choice head
+    (see `_build_routing_payload`). Inside that inert payload, `Options:`,
+    `Criteria:`, and verb-like prefixes (Compare / Pick / Decide / Choose)
+    would otherwise be parsed by the head as decision structure — even
+    inside injection text that is not actually a structured decision
+    request. Reducing those markers to inert lowercase tokens keeps the
+    content available while removing the lexical signal that fooled the
+    choice head into routing injection cases to `structured_decision`.
+    """
+    import re
+    out = re.sub(r"\bOptions?:\s*", "options-marker ", text, flags=re.IGNORECASE)
+    out = re.sub(r"\bCriterias?:\s*", "criteria-marker ", out, flags=re.IGNORECASE)
+    out = re.sub(r"\b(Compare|Pick|Decide|Choose)\s+", "verb ", out, flags=re.IGNORECASE)
+    return out
+
+
+def _build_routing_payload(text: str, question_text: str) -> dict:
+    """Build the /v1/decisions payload for routing.
+
+    Design: the user turn is presented to the Laya choice head as
+    inert quoted data (JSON-encoded inside a `<state-json>` delimiter),
+    with the classification instruction OUTSIDE the quote. This
+    neutralises injection-style text whose lexical structure (Options:,
+    Criteria:) was being read as decision structure by the choice head
+    in the first version of the policy.
+    """
+    quoted = _neutralise_quoted_text(text)
+    encoded = json.dumps(quoted, ensure_ascii=False)
+    inert_state = f"<state-json>{encoded}</state-json>"
+    return {
+        "state": inert_state,
+        "questions": {
+            "route": {
+                "type": "choice",
+                "instructions": question_text,
+                "criteria": {label: None for label in ROUTES},
+            }
+        },
+    }
+
+
 def fit_route_question(text: str, *, tokenizer=None) -> tuple[bool, int | None]:
     """Refuse routing when the supplied material will not fit without
     truncation; return (ok, token_count_estimate).
@@ -209,16 +253,7 @@ def evaluate_route(text: str, *, worker, policy: RoutingPolicy | None = None,
     if not ok:
         return RoutingOutcome(reason="material_does_not_fit")
 
-    payload = {
-        "state": text,
-        "questions": {
-            "route": {
-                "type": "choice",
-                "instructions": pol.question_text,
-                "criteria": {label: None for label in ROUTES},
-            }
-        },
-    }
+    payload = _build_routing_payload(text, pol.question_text)
 
     # 2) Single-shot call with deadline. A timeout stays accounted for
     # in the runner's pending list until the worker truly finishes or

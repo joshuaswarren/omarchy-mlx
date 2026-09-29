@@ -101,8 +101,30 @@ is not enabled.
   status `frozen-unevaluated`.
 - Notebook entry: `entries/RoutingGate/20260929T181500Z-jw14m2-linux-routing-gate.md`
   (with dated CORRECTION addendum from Main's audit).
-- Dev raw: `artifacts/RoutingGate/routing-gate/dev-raw-latest.json`.
-- Dev sweep table: `artifacts/RoutingGate/routing-gate/dev-sweep-latest.json`.
+- Dev raw (iter 1, design-failed): `artifacts/RoutingGate/routing-gate/dev-raw-latest.json`
+  (sha256 `8cfd96e0…d75d5936`).
+- Dev sweep table (iter 1): `artifacts/RoutingGate/routing-gate/dev-sweep-latest.json`
+  (sha256 `c056a1c6…ad5915`).
 - Pipeline: `<home>/routing_pipeline.sh dev|held`,
   `<home>/src/dev_sweep_run.py`, `<home>/src/dev_sweep_sweep.py`
   (resumable per-case writes; `sync` after each phase).
+
+## Iteration log (dev sweep, M2 Laya, gpu-turn queued)
+
+| # | When (UTC) | Question version | Inert-quote + neutralise? | Best precision | inj→dec | Coverage | Pass? |
+|---|---|---|---|---|---|---|---|
+| 1 | 2026-09-29T21:38Z | "1" raw | no | 0.9405 | 8 / 15 | 1.0000 | NO |
+| 2 | 2026-09-29T21:48Z (queued, gpu-turn pid 374098) | "2" + inert-quote + neutralise | yes | TBD | TBD | TBD | TBD |
+
+Iteration 2 is queued with the design fix: the user turn is
+JSON-encoded inside a `<state-json>` delimiter (outside the head
+side of the head/body boundary), and inside that quoted JSON,
+`Options:` / `Criteria:` / verb prefixes are reduced to inert
+lowercase markers. The runner's `build_payload` and the
+production `routing._build_routing_payload` use the same transform;
+both wired by commit on this branch.
+
+Per Main's audit: 15 injection cases span 8 templates (ignore /
+disregard / forget / override / pretend / you-are-now / drop-the /
+system-prompt), no single overfit. The design fix addresses the
+shared mechanism (Options: lexical pattern), not a template.
