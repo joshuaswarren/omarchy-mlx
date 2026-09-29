@@ -96,7 +96,7 @@ export function renderDetails(status, controls) {
       });
       const current = pack.voice || pack.voice_default || options[0].id;
       const optionEls = [];
-      const usableEngines = new Map((pack.engines || [])
+      const usableEngines = new Map(((synthesis.engines) || [])
         .map((engine) => [engine.id, engine.usable !== false]));
       let group = null;
       let groupKey = null;

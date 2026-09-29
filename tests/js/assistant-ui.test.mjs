@@ -350,6 +350,10 @@ import { renderDetails } from "../../serve/mlx_omarchy_assistant/static/js/dom.j
       synthesis: {
         state: "ready",
         qualification: "qualified",
+        engines: [
+          { id: "qwen3-tts", label: "Qwen3-TTS", usable: true },
+          { id: "kokoro-82m-bf16", label: "Kokoro 82M", usable: false },
+        ],
         pack: {
           voice: "aiden",
           voice_default: "aiden",
@@ -360,10 +364,6 @@ import { renderDetails } from "../../serve/mlx_omarchy_assistant/static/js/dom.j
               engine: "kokoro-82m-bf16", engine_label: "Kokoro 82M" },
             { id: "af_bella", label: "Bella", accent: "American English",
               engine: "kokoro-82m-bf16", engine_label: "Kokoro 82M" },
-          ],
-          engines: [
-            { id: "qwen3-tts", label: "Qwen3-TTS", usable: true },
-            { id: "kokoro-82m-bf16", label: "Kokoro 82M", usable: false },
           ],
         },
       },
