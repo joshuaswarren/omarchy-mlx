@@ -1,0 +1,47 @@
+{
+  "per_sentence": {
+    "The local assistant is ready to help.": {
+      "audio_s": 2.64,
+      "wall_s": 11.904580698000018,
+      "rtf": 0.22176337554194772,
+      "chunks": 9,
+      "first_chunk_s": 1.5422024229999352
+    },
+    "Your meeting starts at nine, and the review follows at eleven.": {
+      "audio_s": 5.76,
+      "wall_s": 26.21017133199996,
+      "rtf": 0.2197620125041924,
+      "chunks": 18,
+      "first_chunk_s": 1.5104602789999717
+    },
+    "I chose the shorter word, because it has fewer letters.": {
+      "audio_s": 3.76,
+      "wall_s": 17.287056358000086,
+      "rtf": 0.2175037740453684,
+      "chunks": 12,
+      "first_chunk_s": 1.55656013600003
+    },
+    "Please check the camping list before you leave on Friday.": {
+      "audio_s": 3.84,
+      "wall_s": 17.48359390600001,
+      "rtf": 0.21963447679267994,
+      "chunks": 12,
+      "first_chunk_s": 1.5177541350000183
+    },
+    "Everything ran on this laptop, with no network connection.": {
+      "audio_s": 4.64,
+      "wall_s": 21.154985434000082,
+      "rtf": 0.21933364191982085,
+      "chunks": 15,
+      "first_chunk_s": 1.511650574999976
+    }
+  },
+  "summary": {
+    "rtf_median": 0.21963447679267994,
+    "rtf_min": 0.2175037740453684,
+    "rtf_max": 0.22176337554194772,
+    "first_p50": 1.5177541350000183,
+    "first_p95": 1.5422024229999352,
+    "first_max": 1.55656013600003
+  }
+}
