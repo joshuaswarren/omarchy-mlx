@@ -114,3 +114,26 @@ Within-session ratio cand/ctl (Linux-only, this window, paired):
 apple-silicon-lab/entries/Jw16DecodeGap5/20260929T1904Z-jw16-conv-silu-boundary.md
 apple-silicon-lab/artifacts/Jw16DecodeGap5/w2/ (21 files, SHA256SUMS verified)
 apple-silicon-lab/artifacts/Jw16DecodeGap5/w2-battery/ (32 files)
+## Deploy (2026-09-29T20:39Z, Main directive, boot 8c3d0b5c)
+
+deploy_wheel.sh installed the fbdb6da62 wheel into /var/tmp/v072-venv-fused
+(backup /var/tmp/v072-venv-fused.pre-20260929T153912, sha 2cd97a78 verified,
+before: 1848+51dd63fa9 -> after: 1923+fbdb6da62); mlx-lm-conv-silu.patch
+hand-applied to the venv's qwen3_5.py (AST OK, 1 activate=True site; the
+full apply-mlx-lm-patches.sh is skipped on the already-patched venv per the
+DecodeGap4 watchdog; greedy-prune + last-logits markers verified present).
+This closes the DecodeGap4 half-deploy (conv-capable wheel + composed patch).
+
+Gate window (run-linux-cells.sh, own stop/flock/restore, health 200 +
+completion finish=length + is-active after):
+
+- d64 100.46 c84b3e7af640... d128 100.38 07c515e0338b... d256 99.02
+  c6aabbf0a51d... d512 94.74 5c120987f0e5... — ALL FOUR DIGESTS IDENTICAL.
+- pf512 records 100a61b62470; logits gates finite=True at all three T:
+  f771c4265f88 (512) / ce24f3b4ce42 (1024) / b8c4e14f8f8a (2048).
+- Deployed decode vs macOS fresh window-5 (179.72/179.08/178.72/177.02):
+  0.559 / 0.560 / 0.554 / 0.535.
+
+Rollback: swap /var/tmp/v072-venv-fused.pre-20260929T153912 back, restart
+llm-inference, probe. Artifacts: /var/tmp/dg5/deploy (jw16), notebook
+entries/Jw16DecodeGap5 + artifacts/Jw16DecodeGap5/.
