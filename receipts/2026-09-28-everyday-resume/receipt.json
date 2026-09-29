@@ -52,7 +52,7 @@
       "root_cause": "Elementwise add of two transposed views scrambled output positions on the Vulkan backend.",
       "after_fix": {"whisper_large_v3_turbo_wer_overall": 0.0426, "worst_sentence": 0.1818, "worst_sentence_note": "number words versus digits; 0.01 overall when normalized",
                     "first_audio_p95_seconds": 1.46, "real_time_factor": "0.13 to 0.19 (5 to 6 times slower than real time)"},
-      "listener": "The owner listened to the first voice: clear, crisp, but Chinese-accented. Default is now aiden; the owner has not yet confirmed the accent.",
+      "listener": "The owner listened on 2026-09-28. The first voice (serena) was clear but Chinese-accented. The owner then listened to aiden, the new default, and said it sounds good.",
       "aiden_wer": 0.0
     }
   },

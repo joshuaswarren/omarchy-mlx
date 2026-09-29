@@ -53,7 +53,7 @@ The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbe
 | Resume after reboot | Pass. Saved pair loaded in 1.41 s. The next chat answered. |
 | Restart with outbound sockets denied | Pass, twice. A network namespace with loopback only. Both connection tests failed as intended. |
 | First visible answer, 30 warm turns | Pass after a fix. Before: p50 2.86 s, p95 3.24 s. After: p50 0.99 s, p95 1.06 s. Target is p95 2.00 s. |
-| Voice output | Intelligible after a backend fix. Whisper large-v3-turbo transcribed the first voice at 4.3% word error and `aiden` at 0.0% on five sentences. The owner listened to the first voice: "clear, crisp". Generation runs 5 to 6 times slower than real time (real-time factor 0.13 to 0.19). First audio p95 1.46 s. The accent choice for the default voice is not yet confirmed by the owner. |
+| Voice output | Intelligible after a backend fix. Whisper large-v3-turbo transcribed the first voice at 4.3% word error and `aiden` at 0.0% on five sentences. The owner listened on 2026-09-28: the first voice was clear but Chinese-accented; `aiden` "sounds good" and is the default. Generation runs 5 to 6 times slower than real time (real-time factor 0.13 to 0.19). First audio p95 1.46 s. |
 | Voice input | No Linux path. Parakeet needs the ANE encoder: 5.2 s median on the M1 against a 2 s target, and the T6021 ANE is not live. |
 | Voice as a whole | Not qualified. It needs both directions. |
 | Quality pair | Not qualified. Ten card prompts gave a valid card on 5 of 8 expected. The other 3 hit my 700-token test cap. One unrequested card appeared. Decode was about 3 tokens/s on a GPU shared with other jobs, so the interactive latency target is unproven. |
@@ -70,6 +70,8 @@ Defects found by these runs and fixed in source:
 - **Chat prompts carried a 792-token card schema on every turn.** Prefill cost about 2 s. Ordinary chat now sends a 209-token schema with three card types. A message that names a chart, graph, form, decision, options, facts, or sources gets the full schema, and so does every Laya turn.
 - **Greedy decoding looped on the 2B model** until the token cap. Chat requests now send a repetition penalty of 1.1.
 - **A reboot during pair start left an unclaimed reservation.** Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
+
+Known gap: the one-line installer on `main` cannot install the assistant yet. `install.sh` fetches the assistant files from the latest release tag. v0.7.4 was cut before they existed, so those fetches return 404 and the install aborts. A new release that contains the assistant, promoted to latest after a clean install passes, fixes this. Until then, run the assistant from a source checkout.
 
 ### Voice options
 
