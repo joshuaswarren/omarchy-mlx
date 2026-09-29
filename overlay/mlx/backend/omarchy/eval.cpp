@@ -117,7 +117,7 @@ void eval(array& arr) {
     // recycle before it submits, reach their share of the memory limit
     // (kBatchByteBudgetDivisor).
     auto& alloc = omarchy::allocator();
-    if (encoder.nodes() >= omarchy::kBatchNodeBudget ||
+    if (encoder.nodes() >= omarchy::batch_node_budget() ||
         alloc.pending_quarantine_bytes() >=
             alloc.get_memory_limit() / omarchy::kBatchByteBudgetDivisor) {
       encoder.commit();

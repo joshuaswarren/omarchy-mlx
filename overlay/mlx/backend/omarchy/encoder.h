@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #pragma once
+#include <cstdlib>
 
 #include <vulkan/vulkan.h>
 
@@ -59,6 +60,18 @@ namespace mlx::core::omarchy {
 // cap for large-tensor graphs, so prefill flush behavior is unchanged
 // (2026-09-08 8.11 GB incident stays covered by the byte budget).
 inline constexpr int kBatchNodeBudget = 4096;
+// MLX_OMARCHY_BATCH_NODES=<n> overrides the node budget (default
+// kBatchNodeBudget). A smaller budget submits the first nodes of a long graph
+// while the host is still recording the rest, overlapping host record time
+// with GPU execution; scheduling only, results are unchanged.
+inline int batch_node_budget() {
+  static const int v = []() {
+    const char* e = std::getenv("MLX_OMARCHY_BATCH_NODES");
+    int n = e ? std::atoi(e) : 0;
+    return n > 0 ? n : kBatchNodeBudget;
+  }();
+  return v;
+}
 // Byte budget for the same batch: freed intermediates stay pinned in the
 // allocator quarantine until their batch submits and drains, so the open
 // batch may hold at most 1/16 of the allocator memory limit in such bytes
