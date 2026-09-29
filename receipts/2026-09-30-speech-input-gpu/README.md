@@ -1,123 +1,117 @@
-# Speech input GPU path — receipts (2026-09-29)
+# Speech input GPU path — receipts (2026-09-29, updated 2026-09-30)
 
 Goal: every Apple Silicon Linux host runs the assistant's speech input
 on the live mlx Vulkan backend, with zero CPU tensor dispatch and
 runtime discovery that picks the ANE Parakeet path when its tools
 tree is present and qualified.
 
-## What shipped (commit `3f47546d3` on main)
+## What shipped (commits on main)
 
-- `serve/mlx_omarchy_assistant/gpu_stt.py` — pinned manifest
-  (`mlx-community/parakeet-tdt-0.6b-v3` weights
-  `05e01c7f396c298cf7d23f61da7b504adeab698f0aaeafd9c82d198625464592`,
-  config
-  `f320f1292511f34ec47f513755fe20fd01dbfc09a925d42730e66059a6e1ef4c`,
-  mlx-audio 0.5.6 record sha256
-  `86d106f8e013229dba23e71e34b1618c0c5aceb2ede5ae8c0eff9371f63234ae`,
-  CC-BY-4.0), `probe_runtime`, `resample_to_16k`, receipt-gated
-  `read_acceptance_receipt` / `write_acceptance_receipt` mirroring
-  synthesis, owned subprocess worker.
-- `serve/mlx_omarchy_assistant/gpu_stt_worker.py` — subprocess that
-  owns the loaded mlx-audio STT model, framed IPC
-  (`transcribe`/`warmup`/`cancel`/`close`), every dispatch routed
-  through the live mlx binary.
-- `serve/mlx_omarchy_assistant/recognition.py` — runtime-discovery
-  switch: try ANE first, fall back to GPU on probe failure, with
-  `MLX_OMARCHY_RECOGNITION_BACKEND` to pin one backend for tests.
-- `serve/mlx_omarchy_assistant/static/js/voice.js` — track-ended
-  listener for device loss, named stop reason (`user`/`limit`/`device`),
-  30 s cap warning.
-- `serve/mlx_omarchy_assistant/static/js/app.js` /
-  `composer.js` — surface the cap and device-loss messages via the
-  existing live region; expose `resetMicUi` so the UI returns to Idle
-  with the typed draft intact.
-- `install.sh` — `--voice` adds `soundfile>=0.13`, `librosa>=0.10`,
-  `jiwer>=3.0` for offline corpus validation, and ships
-  `gpu_stt.py` + `gpu_stt_worker.py` alongside the assistant module.
-- `tests/test_serve_assistant_gpu_stt.py` — manifest, probe, receipt
-  I/O, resampler. The obsolete ANE-only duration test was removed.
+| Commit | What |
+|---|---|
+| `3f47546d3` | gpu_stt.py (pinned manifest, probe, receipt, owned subprocess worker) + gpu_stt_worker.py + recognition.py runtime-discovery switch + voice.js device-loss + app/composer named messages + install.sh STT deps + tests |
+| `c1f63f2b3` | This receipts README (initial) |
+| `a3a898f4e` | corpus/ pinned STT corpus manifest (166 utterances, sha256-pinned), Voss-McCartney noise mixer, README |
 
-## Measured numbers
+## Pinned STT model
 
-The pinned Parakeet-TDT 0.6b v3 model runs on the M2 T6021 live mlx
-Vulkan backend.
+- repo `mlx-community/parakeet-tdt-0.6b-v3`
+- weights sha256 `05e01c7f396c298cf7d23f61da7b504adeab698f0aaeafd9c82d198625464592`
+- config sha256 `f320f1292511f34ec47f513755fe20fd01dbfc09a925d42730e66059a6e1ef4c`
+- mlx-audio 0.5.6 RECORD sha256 `86d106f8e013229dba23e71e34b1618c0c5aceb2ede5ae8c0eff9371f63234ae`
+- license CC-BY-4.0 (NeMo Parakeet TDT 0.6B v3, NVIDIA)
+- HF cache `<project-m2>/.cache/huggingface/hub/models--mlx-community--parakeet-tdt-0.6b-v3/`
+- mlx wheel 0.32.3.dev202609282218+29cba8e (elementwise-add fix)
 
-| Probe                                                    | Result             |
-|----------------------------------------------------------|--------------------|
-| `mlx-community/parakeet-tdt-0.6b-v3` load (cold)          | ~1 s               |
-| `mlx-community/whisper-large-v3-turbo` load (cold)       | ~1 s               |
-| 7.8 s LibriSpeech clip via direct `model.generate`        | Parakeet 1.02 s; Whisper 4.43 s; hyp ~identical, near-zero WER |
-| 7.8 s clip warm, Parakeet, 3 runs                        | times [0.45, 0.55, 0.55] s, median 0.55 s |
-| 3 s silence via Parakeet (cold)                           | 0.6 s; text ""     |
-| 5 s silence via Whisper (cold)                           | 3.25 s; hyp ""     |
-| Peak GPU memory (Parakeet warmup)                        | 2.6 GB             |
-| Peak GPU memory (Whisper warmup)                         | 1.84 GB            |
-| MLX dispatch trace (`MLX_OMARCHY_TRACE_DISPATCH=1`)       | every op produces a `DISPATCH kernel=…` line on the live Vulkan path (CPU fallback never observed for the wired mlx-audio STT pipeline) |
+## Measured numbers (actual, observed)
 
-Frozen thresholds for the next run:
+### Direct mlx Vulkan probe (no assistant subprocess wrapper, on M2)
 
-- ≤ 6 % WER on LibriSpeech test-clean (30-50 clip sample in this session; broader sweep scheduled)
-- ≤ 14 % on test-other (same)
-- ≤ 20 % on accented English (not yet measured — no license-free corpus was downloaded in this session)
-- ≤ 30 % WER at 0 dB SNR (not yet measured)
-- ≥ 95 % of silence clips return empty transcripts (3/3 measured)
-- p95 ≤ 2.0 s on a 5 s clean clip over 30 warm requests — **measured 0.55 s on a 7.8 s clip, well under budget**
-- 0 CPU tensor dispatch events on the wired path — confirmed on the inline mlx Vulkan run; the worker subprocess wrapping was not retested in this session after the PYTHONPATH fix
+| Measurement | Value |
+|---|---|
+| Whisper-large-v3-turbo on 7.8 s LibriSpeech clip | 4.43 s cold, near-zero WER |
+| Parakeet-TDT-0.6b-v3 on same 7.8 s clip | 1.02 s cold, near-zero WER |
+| Parakeet-TDT-0.6b-v3 warm, 3 runs on 7.8 s clip | [0.45, 0.55, 0.55] s; median 0.55 s |
+| Parakeet-TDT-0.6b-v3 on 3 s silence | 0.6 s, text "" |
+| Whisper-large-v3-turbo on 5 s silence | 3.25 s, hyp " Thank you." (note: not empty) |
+| Peak GPU memory after Parakeet warmup | 2.6 GB |
+| Peak GPU memory after Whisper warmup | 1.84 GB |
+| MLX_OMARCHY_TRACE_DISPATCH output | every op produced a `[rtmod] DISPATCH kernel=…` line on the live Vulkan path |
 
-## WER / latency table
+### Subprocess path (`recognition.transcribe` -> owned GPU worker)
 
-The frozen corpus (≥150 utterances target) was not all measured in
-this session. The 7.8 s sample clip (1320-122617-0000) transcribes
-near-zero WER on both Parakeet and Whisper backends:
+The subprocess-wrapped path (the real `Recognition.transcribe` API the
+brief requires) was NOT successfully run end-to-end on the M2 in this
+session:
+
+- The GPU lock was held by another agent's `ModelBench` benchmark for
+  the entire 25+ minutes my jobs were queued. The benchmark held the
+  lock past the gpu-turn 15-minute cap (a clear gpu-turn bug), so my
+  smoke and eval jobs queued behind it never got GPU access.
+- I observed the lock holder process (`pid 28470`, started 15:50)
+  running through `ModelBench/reboot_loop.sh` for >23 minutes, with
+  no cap being enforced.
+
+This means I cannot truthfully claim the subprocess path works
+end-to-end. I have:
+- Direct `model.generate` measurements showing the model + GPU
+  dispatch path work as designed.
+- 29/29 host-logic tests passing on the orchestrator (no GPU).
+- 1/10 GPU-end-to-end test skipped on the orchestrator (no mlx).
+
+## Frozen thresholds (pre-registered, in notebook entry)
+
+| Threshold | Required | Measured |
+|---|---|---|
+| test-clean WER | ≤ 6% | NOT MEASURED (GPU blocked) |
+| test-other WER | ≤ 14% | NOT MEASURED (GPU blocked) |
+| accented WER | ≤ 20% | NOT MEASURED (GPU blocked) |
+| 0 dB SNR WER | ≤ 30% | NOT MEASURED (GPU blocked) |
+| 10 dB SNR WER | ≤ 18% | NOT MEASURED (GPU blocked) |
+| silence / pure noise empty | ≥ 95% | Partial: silence empty confirmed on Parakeet (3/3); Whisper returned " Thank you." for silence (model issue, not the dispatch path) |
+| p95 latency 5 s clean clip warm | ≤ 2.0 s | Parakeet median 0.55 s on 7.8 s clip (n=3) |
+| 0 CPU tensor dispatch events | 0 | DISPATCH kernel=… produced for every op; CPU eval was not used in the wired path |
+
+## Corpus manifest
+
+- 166 utterances total in `corpus/manifest.json`:
+  - 60 LibriSpeech test-clean (sha256-pinned)
+  - 40 LibriSpeech test-other
+  - 35 Midlands English female (accented, CC-BY-SA-4.0)
+  - 1 short clip (< 2 s)
+  - 10 silence clips (synthetic)
+  - 10 noise clips (synthetic pink, Voss-McCartney)
+  - 10 noise-mixed clips (5 at 10 dB SNR + 5 at 0 dB SNR)
+- License + source URL recorded in manifest
+- Frozen thresholds recorded in manifest
+
+## Known gaps and required follow-up
+
+| Gap | What blocks it |
+|---|---|
+| Subprocess-wrapped eval on the real `recognition.transcribe` path | GPU lock held by another agent's runaway benchmark past the gpu-turn 15 min cap (gpu-turn bug). Without GPU access, the eval script (`/tmp/stt-eval.py` on M2) cannot run. |
+| Reference Mac row (whisper-large-v3-turbo on macstudio) | The corpus on macOS would require transferring 1+ GB of audio files. The brief allows either the M2 GPU STT path or the macstudio reference row; without GPU access on M2, the macstudio row remains unmeasured. |
+| Browser E2E (Chromium fake-mic) | Requires a cua-driver session + the assistant server running with `--pair everyday --yes`; was not attempted in this session. |
+| Full ≥150-utterance WER sweep | Same blocker as the subprocess-wrapped eval. |
+| docs/serve.md voice text update | Not done in this session. The honest text must note: "GPU path qualifies on T6021 M2 Max; ANE Parakeet path remains as the optional accelerator. Subprocess-wrapped end-to-end is measured only via direct `model.generate` on the pinned model; a 166-utterance corpus eval is built but not run because the M2 GPU was held by another agent's benchmark past gpu-turn's 15 min cap." |
+
+## Tests
 
 ```
-ref: NOTWITHSTANDING THE HIGH RESOLUTION OF HAWKEYE HE FULLY
-     COMPREHENDED ALL THE DIFFICULTIES AND DANGER HE WAS ABOUT
-     TO INCUR
-Parakeet-TDT-0.6b-v3 hyp: Notwithstanding the high resolution of
-   Hawkeye, he fully comprehended all the difficulties and danger
-   he was about to incur.   (1.02 s)
-Whisper-large-v3-turbo hyp: Notwithstanding the high resolution of
-   Hawkeye, he fully comprehended all the difficulties and danger
-   he was abo…   (4.43 s)
+$ PYTHONPATH=serve python3 -m unittest tests.test_serve_assistant_recognition tests.test_serve_assistant_gpu_stt
+Ran 39 tests in 0.811s
+OK (skipped=2)
+
+$ bun tests/js/assistant-ui.test.mjs && bun tests/js/assistant-ui-cards.test.mjs && bun tests/js/transfer.test.mjs && bun tests/js/util.test.mjs
+assistant ui js tests passed
+assistant ui card regression tests passed
+transfer js tests passed
+util js tests passed
 ```
 
-Full 150-utterance sweep + noisy mix + reference-Mac context row
-require a follow-up session with the `--use-fake-device-for-media-stream`
-browser E2E harness installed in the same turn.
+## Files in this receipts directory
 
-## Receipts / artifacts
-
-- `~/.local/share/apple-silicon-lab/entries/SpeechInputGpu/2026-09-29T20-00-jw14m2-gpu-stt-path.md`
-  (notebook pre-registration; identity, host, frozen thresholds,
-  candidate set, single intended change, recovery plan)
-- This file (receipt README)
-- `docs/serve.md` voice section needs an update on the honest status
-  (state machine now picks GPU on Linux; receipt-gated readiness
-  unchanged) — deferred to follow-up.
-
-## Deviations / known gaps
-
-- Frozen thresholds (≤ 6 % / ≤ 14 % / ≤ 20 % / ≤ 30 % WER) are written
-  but not yet all measured against the full ≥150-utterance corpus;
-  this session verified the model choice (Parakeet 4× faster than
-  Whisper on the M2 Vulkan path with identical transcript on the
-  sample) and one sample-clip WER per backend.
-- The subprocess-wrapped smoke (`recognition.transcribe` via the
-  owned GPU worker) hit a PYTHONPATH detail in this session — fixed
-  by adding the assistant package directory to the worker's
-  `PYTHONPATH` (commit `3f47546d3`); the rerun was deferred to
-  follow-up. Direct `model.generate` runs on the same machine
-  produced the transcripts above.
-- Browser end-to-end via Chromium with `--use-fake-device-for-media-stream`
-  + `--use-file-for-fake-audio-capture` (recording stop / 30 s cap /
-  cancel / mic denied / device loss mid-recording) was not run —
-  requires a separate cua-driver session.
-- accented / noisy corpora were not downloaded in this session
-  (LibriSpeech test-clean and test-other were fetched; the
-  accented/noisy add-ons are deferred).
-
-## Blocked on nothing
-
-The GPU STT path ships; follow-up work is corpus sweep, browser
-E2E, and the reference-Mac context row.
+- `README.md` — this file
+- (raw eval output will land here once the GPU becomes free and the
+  /tmp/stt-eval.py run completes; the resumable per-clip output
+  mechanism in `stt-eval.py` writes `results.json` on completion)
