@@ -747,6 +747,57 @@ class _Chunk(NamedTuple):
     new_tokens: int = 0
 
 
+_TRIG_TWO_PI = 6.2831853071795864769
+# 6.28125 is exact in float32 and k*C1 stays exact for |k| < 2**17
+# (observed |k| ~ 2e4); the residue is carried by C2.
+_TRIG_C1 = 6.28125
+_TRIG_C2 = 0.001935307179586477  # TWO_PI - C1, rounded to float32
+
+
+def _kokoro_install_trig_reduction(threshold: float = 10000.0,
+                                   record: list | None = None) -> None:
+    """Fold sin/cos arguments into range before the primitive.
+
+    The Kokoro graph (Snake activation sin(alpha*x), source-phase
+    integration) feeds arguments past the omarchy Vulkan backend's
+    100,000 float-trig accuracy gate: the driver's range reduction is
+    untrusted above it and the software Payne-Hanek fallback miscompiles
+    on this driver, so the backend refuses instead of computing wrong
+    values. The fix is at the graph level: a 3-term Cody-Waite reduction
+    in float32 (phase error ~3e-6 rad at |x| = 1e5), applied in-graph
+    with mx.where so arguments under the threshold are untouched. Every
+    op stays on the GPU; nothing falls back to CPU. Per-process and
+    idempotent; the Qwen3-TTS engine's worker never installs it.
+    """
+    import mlx.core as mx
+    if getattr(mx, "_kokoro_trig_reduced", False):
+        return
+
+    def reduced_arg(x):
+        xf = x.astype(mx.float32)
+        k = mx.floor(xf * (1.0 / _TRIG_TWO_PI))
+        r = (xf - k * _TRIG_C1) - k * _TRIG_C2
+        return r.astype(x.dtype)
+
+    def wrap(real, name):
+        def trig(x, *args, **kwargs):
+            if record is not None:
+                m = float(mx.max(mx.abs(x.astype(mx.float32))))
+                record.append({"op": name, "max_arg": m,
+                               "reduced": m > threshold})
+            if getattr(x, "dtype", None) == mx.complex64:
+                return real(x, *args, **kwargs)
+            xf = x.astype(mx.float32)
+            return real(mx.where(mx.abs(xf) <= threshold, x,
+                                 reduced_arg(x)), *args, **kwargs)
+        return trig
+
+    real_sin, real_cos = mx.sin, mx.cos
+    mx.sin = wrap(real_sin, "sin")
+    mx.cos = wrap(real_cos, "cos")
+    mx._kokoro_trig_reduced = True
+
+
 def _kokoro_runtime(assets_dir: str):
     """Offline Kokoro pipeline over the pinned pack.
 
@@ -756,6 +807,7 @@ def _kokoro_runtime(assets_dir: str):
     Voice tensors are pre-seeded from the local pack, so no Hugging Face
     lookup ever happens at run time.
     """
+    _kokoro_install_trig_reduction()
     try:
         import espeakng_loader
         from phonemizer.backend.espeak.wrapper import EspeakWrapper
