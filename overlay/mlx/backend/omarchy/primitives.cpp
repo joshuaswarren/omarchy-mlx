@@ -11291,7 +11291,6 @@ void GdnConvUpdate::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
   const std::string tag = name();
-  std::fprintf(stderr, "CCTRACE backend: eval_gpu entry");
   auto s = stream();
   auto& encoder = omarchy::get_command_encoder(s);
   array in_state = inputs.at(0);
@@ -11305,8 +11304,6 @@ void GdnConvUpdate::eval_gpu(
     any_strided = any_strided || !x.flags().row_contiguous || x.offset() != 0;
   }
   if (any_strided) {
-    std::fprintf(stderr, "CCTRACE backend: strided materialize");
-
     std::vector<array> dense;
     dense.reserve(inputs.size());
     for (const auto& x : inputs) {
@@ -11321,8 +11318,6 @@ void GdnConvUpdate::eval_gpu(
     in_x = dense[1];
     in_w = dense[2];
   }
-  std::fprintf(stderr, "CCTRACE backend: fused dispatch state_off=%d x_off=%d\n",
-      (int)in_state.offset(), (int)in_x.offset());
   array& out = outputs.at(0);
   array& state_out = outputs.at(1);
   if (in_x.shape(1) != 1 || in_state.shape(1) != in_w.shape(1) - 1 ||
