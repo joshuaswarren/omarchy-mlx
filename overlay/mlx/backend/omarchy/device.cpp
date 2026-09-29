@@ -356,6 +356,14 @@ bool Runtime::init_impl() {
         " buffer cache is off for the whole process.\n");
   }
 
+  // Honeykrisp bounded syncobj poll (HK_SUBMIT_POLL_US, mesa-1
+  // hk/submit-latency): removes the host wake-up premium on the short
+  // submit->wait round trips of stepwise loops (Parakeet TDT tdt_decode
+  // 341 -> 254 ms, -25%, transcript pins unchanged) and backs off after
+  // missed budgets, so long waits do not spin. An explicit user value
+  // wins; drivers without the knob ignore the variable.
+  setenv("HK_SUBMIT_POLL_US", "2000", 0);
+
   if (!vk::load_loader()) {
     error =
         "[omarchy] Vulkan loader not found (libvulkan.so.1)."
