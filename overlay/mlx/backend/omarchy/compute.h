@@ -706,6 +706,10 @@ enum class ComputeKernel : uint16_t {
   ConvDw1dF32,
   ConvDw1dF16,
   ConvDw1dBF16,
+  // f32-score SDPA composition matmuls on bf16 operands (shaders/matmul_coopmat.comp
+  // A_BF16/B_BF16/A_SCALE and B_BF16/OUT_BF16), bit-identical to cast + f32 matmul + cast.
+  MatmulF32CoopmatQkBF16,
+  MatmulF32CoopmatPvBF16,
   Count,
 };
 

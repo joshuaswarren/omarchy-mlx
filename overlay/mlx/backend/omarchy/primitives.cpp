@@ -431,9 +431,14 @@ std::tuple<Shape, std::vector<Strides>> collapse_matmul_batches(
 }
 
 // causal: attention shortcut for the register-blocked f16 tile
-// (shaders/matmul_rb.comp flags 8 / 16), a (key length - query length,
-// skip mode) pair; the other kernels ignore it. Only meaningful when
-// the consumer never reads the masked output (the causal softmax).
+// (shaders/matmul_rb.comp flags 8 / 16) and the f32 coopmat tile
+// (shaders/matmul_coopmat.comp, same flags), a (key length - query
+// length, skip mode) pair; the other kernels ignore it. Only meaningful
+// when the consumer never reads the masked output (the causal softmax).
+// sdpa_kernel: one of the MatmulF32Coopmat attention builds (bf16
+// operands and/or bf16 output, see matmul_coopmat.comp); the caller has
+// gated on the device conditions under which the f32 composition takes
+// MatmulF32Coopmat. Count selects by dtype as usual.
 enum class CausalSkip { None, Columns, K };
 void dispatch_matmul(
     const std::string& name,
@@ -443,16 +448,23 @@ void dispatch_matmul(
     float beta,
     bool use_c,
     const Stream& s,
-    std::pair<uint32_t, CausalSkip> causal = {0u, CausalSkip::None}) {
+    std::pair<uint32_t, CausalSkip> causal = {0u, CausalSkip::None},
+    omarchy::ComputeKernel sdpa_kernel = omarchy::ComputeKernel::Count) {
   const array& a_in = inputs.at(0);
   const array& b_in = inputs.at(1);
   const array& c_in = use_c ? inputs.at(2) : out;
   auto& encoder = omarchy::get_command_encoder(s);
+  const bool sdpa = sdpa_kernel != omarchy::ComputeKernel::Count;
   if (out.dtype() == complex64) {
     if (a_in.dtype() != complex64 || b_in.dtype() != complex64 ||
         (use_c && c_in.dtype() != complex64)) {
       omarchy::unsupported(name + " dtype", out);
     }
+  } else if (sdpa) {
+    // Mixed operand dtypes by construction; capability checks per operand.
+    require_float_dtype(name, a_in, a_in, encoder);
+    require_float_dtype(name, b_in, b_in, encoder);
+    require_float_dtype(name, out, out, encoder);
   } else {
     require_float_dtype(name, a_in, out, encoder);
     require_float_dtype(name, b_in, out, encoder);
@@ -632,7 +644,7 @@ void dispatch_matmul(
   // same way the qmm route does instead of assuming it.
   constexpr uint32_t kMatmulCoopmatBf16SharedBytes =
       (32u * 16u + 16u * 32u) * sizeof(float);
-  const bool coopmat = coopmat_base && coopmat_alpha &&
+  const bool coopmat = !sdpa && coopmat_base && coopmat_alpha &&
       (kernel == omarchy::ComputeKernel::MatmulF32 ||
        (kernel == omarchy::ComputeKernel::MatmulBF16 && bf16_aligned &&
         (params.matrix_k % 8u) == 0u && params.matrix_m >= 32u &&
@@ -643,7 +655,7 @@ void dispatch_matmul(
   // cell); where it does not (stock Mesa) the FMA kernel triples the
   // shipped staged-tile fallback (645.2 vs 195.0). The FMA pick is
   // therefore reserved for drivers without the cooperative matrix.
-  bf16_fma = bf16_fma && !coopmat;
+  bf16_fma = bf16_fma && !coopmat && !sdpa;
   // Bit 8 tells matmul_coopmat_bf16.comp its operands are 8-byte
   // aligned, so the two word-adjacent orientations stage with uvec2
   // pair loads (one load per two bf16 pairs) instead of scalar words.
@@ -679,12 +691,16 @@ void dispatch_matmul(
       params.matrix_m >= 32u && !use_c;
   if (rb) {
     kernel = omarchy::ComputeKernel::MatmulRbF16;
-    if (causal.second != CausalSkip::None) {
-      params.aux_size = causal.first;
-      params.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
-    }
   }
-  const uint32_t tile = coopmat ? 32u : (rb ? 64u : 16u);
+  if (sdpa) {
+    kernel = sdpa_kernel;
+  }
+  if (causal.second != CausalSkip::None &&
+      (rb || sdpa || kernel == omarchy::ComputeKernel::MatmulF32Coopmat)) {
+    params.aux_size = causal.first;
+    params.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
+  }
+  const uint32_t tile = (coopmat || sdpa) ? 32u : (rb ? 64u : 16u);
   uint64_t a_inner = params.matrix_m == 0u || params.matrix_k == 0u
       ? 0u
       : (a_transposed
@@ -711,7 +727,8 @@ void dispatch_matmul(
     bf16_vec_aligned = ((params.in_strides[axis] |
         params.out_strides[axis]) & 3u) == 0u;
   }
-  const bool bf16_vec = out.dtype() == bfloat16 && params.matrix_m == 1u &&
+  const bool bf16_vec = !sdpa && out.dtype() == bfloat16 &&
+      params.matrix_m == 1u &&
       b_transposed && !a_transposed && !use_c && alpha == 1.0f &&
       (params.matrix_k % 128u) == 0u && (params.matrix_n % 4u) == 0u &&
       caps.subgroup_size == 32u &&
@@ -12344,32 +12361,32 @@ void ScaledDotProductAttention::eval_gpu(
         params.matrix_m);
     return;
   }
+  // GQA regroup as pure stride views, so a non-contiguous cache
+  // slice rides its own strides straight into the matmul;
+  // reshape_in_eval would copy - it only views row-contiguous
+  // inputs, and a cache slice never is one. q splits the heads axis
+  // into (kv, repeat); k and v keep their kv heads and insert a
+  // size-1 repeat axis the matmul broadcasts (stride pinned 0).
+  auto regroup_view = [&](const array& base) {
+    bool splits = base.shape(1) != kv_heads;
+    int rep = splits ? repeats : 1;
+    Shape shape = {
+        base.shape(0), kv_heads, rep, base.shape(2), base.shape(3)};
+    Strides strides(5);
+    strides[0] = base.strides()[0];
+    strides[1] = splits ? base.strides()[1] * rep : base.strides()[1];
+    strides[2] = splits ? base.strides()[1] : 0;
+    strides[3] = base.strides()[2];
+    strides[4] = base.strides()[3];
+    array view(std::move(shape), base.dtype(), nullptr, {});
+    view.copy_shared_buffer(
+        base, strides, {false, false, false}, base.size());
+    encoder.add_temporary(view);
+    return view;
+  };
   if (q.dtype() == float16 || bf16_fast) {
     const bool bf16 = q.dtype() == bfloat16;
     const Dtype storage_dtype = bf16 ? bfloat16 : float16;
-    // GQA regroup as pure stride views, so a non-contiguous cache
-    // slice rides its own strides straight into the matmul;
-    // reshape_in_eval would copy - it only views row-contiguous
-    // inputs, and a cache slice never is one. q splits the heads axis
-    // into (kv, repeat); k and v keep their kv heads and insert a
-    // size-1 repeat axis the matmul broadcasts (stride pinned 0).
-    auto regroup_view = [&](const array& base) {
-      bool splits = base.shape(1) != kv_heads;
-      int rep = splits ? repeats : 1;
-      Shape shape = {
-          base.shape(0), kv_heads, rep, base.shape(2), base.shape(3)};
-      Strides strides(5);
-      strides[0] = base.strides()[0];
-      strides[1] = splits ? base.strides()[1] * rep : base.strides()[1];
-      strides[2] = splits ? base.strides()[1] : 0;
-      strides[3] = base.strides()[2];
-      strides[4] = base.strides()[3];
-      array view(std::move(shape), base.dtype(), nullptr, {});
-      view.copy_shared_buffer(
-          base, strides, {false, false, false}, base.size());
-      encoder.add_temporary(view);
-      return view;
-    };
     array qs = repeats > 1 ? regroup_view(q) : q;
     array ks = repeats > 1 ? regroup_view(k) : k;
     array vs = repeats > 1 ? regroup_view(v) : v;
@@ -12480,30 +12497,75 @@ void ScaledDotProductAttention::eval_gpu(
     return view;
   };
 
-  array q32 = to_f32(q);
-  array scale_arr(scale_);
-  scale_arr.set_data(allocate_omarchy(scale_arr.nbytes()));
-  scale_arr.data<float>()[0] = scale_;
-  encoder.add_temporary(scale_arr);
-  array qs(q32.shape(), float32, nullptr, {});
-  dispatch_elementwise(
-      tag,
-      MultiplyOperation,
-      {q32, broadcast_view(scale_arr, q32.shape())},
-      qs,
-      s);
-  encoder.add_temporary(qs);
+  // bfloat16 q/k/v skip the cast and scale passes: the attention builds
+  // of matmul_coopmat.comp widen each bf16 operand exactly at staging
+  // and multiply q by the scale there (the one f32 product the scale
+  // pass stored), read the strided cache views through the GQA
+  // regroup, and round the probs matmul's accumulator straight to the
+  // bf16 output with the cast pass's store. The staged tiles, k order,
+  // and coopMatMulAdd chain are the composition's, so every stored word
+  // matches it. Gated to exactly the shapes whose two matmuls the
+  // composition sends to MatmulF32Coopmat (q_len > 1, the coopmat
+  // device gate of dispatch_matmul); everything else keeps the casts.
+  static const bool sdpa_coopmat_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+  const auto& sdpa_caps = encoder.device().capabilities();
+  const bool bf16_direct = q.dtype() == bfloat16 &&
+      k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
+      out.dtype() == bfloat16 && q_len > 1 && head_dim > 0 && k_len > 0 &&
+      sdpa_caps.cooperative_matrix_f32_8 && sdpa_caps.subgroup_size == 32 &&
+      !sdpa_coopmat_disabled;
+  // Causal mode with every row holding at least one key: the softmax runs
+  // its causal mode and never reads a masked score, so the scores matmul
+  // skips fully masked column tiles and the probs matmul stops its k walk
+  // at the last key a tile's rows reach (exact zeros past it).
+  const bool causal_fast = do_causal_ && k_len >= q_len;
+  const uint32_t causal_offset =
+      causal_fast ? static_cast<uint32_t>(k_len - q_len) : 0u;
 
-  array k32 = to_f32(k);
-  array v32 = to_f32(v);
-  if (repeats > 1) {
-    qs = reshape_in_eval(
-        qs, Shape{batch, kv_heads, repeats, q_len, head_dim}, s);
-    k32 = reshape_in_eval(k32, Shape{batch, kv_heads, 1, k_len, head_dim}, s);
-    v32 = reshape_in_eval(v32, Shape{batch, kv_heads, 1, k_len, v_dim}, s);
+  array qs = q;
+  array k32 = k;
+  array v32 = v;
+  if (bf16_direct) {
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        sdpa_caps,
+        bf16_direct,
+        "MatmulF32CoopmatQkBF16/MatmulF32CoopmatPvBF16",
+        "cooperative_matrix_fp32_8x8x8",
+        encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
+    if (repeats > 1) {
+      qs = regroup_view(q);
+      k32 = regroup_view(k);
+      v32 = regroup_view(v);
+    }
+  } else {
+    array q32 = to_f32(q);
+    array scale_arr(scale_);
+    scale_arr.set_data(allocate_omarchy(scale_arr.nbytes()));
+    scale_arr.data<float>()[0] = scale_;
+    encoder.add_temporary(scale_arr);
+    qs = array(q32.shape(), float32, nullptr, {});
+    dispatch_elementwise(
+        tag,
+        MultiplyOperation,
+        {q32, broadcast_view(scale_arr, q32.shape())},
+        qs,
+        s);
     encoder.add_temporary(qs);
-    encoder.add_temporary(k32);
-    encoder.add_temporary(v32);
+
+    k32 = to_f32(k);
+    v32 = to_f32(v);
+    if (repeats > 1) {
+      qs = reshape_in_eval(
+          qs, Shape{batch, kv_heads, repeats, q_len, head_dim}, s);
+      k32 = reshape_in_eval(
+          k32, Shape{batch, kv_heads, 1, k_len, head_dim}, s);
+      v32 = reshape_in_eval(v32, Shape{batch, kv_heads, 1, k_len, v_dim}, s);
+      encoder.add_temporary(qs);
+      encoder.add_temporary(k32);
+      encoder.add_temporary(v32);
+    }
   }
 
   Shape score_shape = qs.shape();
@@ -12511,7 +12573,17 @@ void ScaledDotProductAttention::eval_gpu(
   array scores(score_shape, float32, nullptr, {});
   array keys_t = swapaxes_in_eval(k32, -1, -2);
   encoder.add_temporary(keys_t);
-  dispatch_matmul(tag, {qs, keys_t}, scores, 1.0f, 0.0f, false, s);
+  dispatch_matmul(
+      tag,
+      {qs, keys_t},
+      scores,
+      bf16_direct ? scale_ : 1.0f,
+      0.0f,
+      false,
+      s,
+      {causal_offset, causal_fast ? CausalSkip::Columns : CausalSkip::None},
+      bf16_direct ? omarchy::ComputeKernel::MatmulF32CoopmatQkBF16
+                  : omarchy::ComputeKernel::Count);
   encoder.add_temporary(scores);
 
   std::optional<array> masked;
@@ -12521,7 +12593,6 @@ void ScaledDotProductAttention::eval_gpu(
   }
   const bool has_arr_mask =
       (inputs.size() == 5) || (inputs.size() == 4 && !has_sinks_);
-  const bool causal_fast = do_causal_ && k_len >= q_len;
   if (!causal_fast && do_causal_) {
     // The additive causal mask holds 0 for attended positions and
     // -1e30 elsewhere: the same float32 tensor the validated
@@ -12562,13 +12633,23 @@ void ScaledDotProductAttention::eval_gpu(
       sinks,
       q_len,
       causal_fast,
-      causal_fast ? k_len - q_len : 0);
+      static_cast<int>(causal_offset));
   encoder.add_temporary(probs);
 
   Shape result_shape = probs.shape();
   result_shape.back() = v_dim;
-  array result(result_shape, float32, nullptr, {});
-  dispatch_matmul(tag, {probs, v32}, result, 1.0f, 0.0f, false, s);
+  array result(result_shape, bf16_direct ? bfloat16 : float32, nullptr, {});
+  dispatch_matmul(
+      tag,
+      {probs, v32},
+      result,
+      1.0f,
+      0.0f,
+      false,
+      s,
+      {causal_offset, causal_fast ? CausalSkip::K : CausalSkip::None},
+      bf16_direct ? omarchy::ComputeKernel::MatmulF32CoopmatPvBF16
+                  : omarchy::ComputeKernel::Count);
   encoder.add_temporary(result);
   if (result.dtype() == out.dtype()) {
     commit_result(result);

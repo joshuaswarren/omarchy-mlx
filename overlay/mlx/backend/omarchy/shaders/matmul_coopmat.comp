@@ -1,6 +1,10 @@
 #version 460
 #extension GL_KHR_cooperative_matrix : require
 #extension GL_KHR_memory_scope_semantics : require
+#if defined(A_BF16) || defined(B_BF16) || defined(OUT_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
 
 // Dense f32 matmul on the G13 hardware 8x8x8 matrix unit (VK_KHR_
 // cooperative_matrix, subgroup scope), STAGED: one 32-lane workgroup
@@ -28,6 +32,24 @@
 // Layout arguments to coopMatLoad are compile-time constants (glslang
 // asserts on a runtime layout). Batch unravel matches matmul.comp
 // (workgroup z over shape[]).
+//
+// Attention builds (the f32-score SDPA composition, bfloat16 q/k/v):
+// A_BF16 / B_BF16 read that operand as bfloat16 bits and widen it
+// exactly at staging, so the staged f32 equals what the cast pass wrote;
+// A_SCALE multiplies the widened A element by alpha at staging, the same
+// single f32 product the composition's q * scale pass stored. OUT_BF16
+// rounds the drained f32 accumulator to bfloat16 with the cast pass's
+// round-to-nearest-even store. The staged 8x8 tiles, the k order, and
+// every coopMatMulAdd are unchanged, so each build stores the words the
+// cast + scale + f32 matmul + cast chain stored.
+//
+// Causal attention shortcuts (all builds), aux_size = key length minus
+// query length, row = query position: flags bit 3 skips output tiles
+// whose every column lies past every row's last valid key (the scores
+// matmul; the causal softmax never reads them), flags bit 4 stops the k
+// loop after the last 8-wide k step any row of the tile can reach (the
+// probs matmul; the probabilities past it are exact zeros and an
+// accumulator that starts at +0 never moves under a +0 product).
 
 const uint TILE_M = 32u;
 const uint TILE_N = 32u;
@@ -35,18 +57,53 @@ const uint MAT = 8u;
 
 layout(local_size_x = 32) in;
 
+#ifdef A_BF16
+layout(set = 0, binding = 0, std430) readonly buffer InputA {
+  uint16_t values[];
+} input_a;
+#ifdef A_SCALE
+#define LOAD_A(i) (uintBitsToFloat(uint(input_a.values[i]) << 16u) * params.alpha)
+#else
+#define LOAD_A(i) uintBitsToFloat(uint(input_a.values[i]) << 16u)
+#endif
+#else
 layout(set = 0, binding = 0, std430) readonly buffer InputA {
   float values[];
 } input_a;
+#define LOAD_A(i) input_a.values[i]
+#endif
+#ifdef B_BF16
+layout(set = 0, binding = 1, std430) readonly buffer InputB {
+  uint16_t values[];
+} input_b;
+#define LOAD_B(i) uintBitsToFloat(uint(input_b.values[i]) << 16u)
+#else
 layout(set = 0, binding = 1, std430) readonly buffer InputB {
   float values[];
 } input_b;
+#define LOAD_B(i) input_b.values[i]
+#endif
 layout(set = 0, binding = 2, std430) readonly buffer InputC {
   float values[];
 } input_c;
+#ifdef OUT_BF16
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_OUT(f) bf16_store(f)
+#else
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
   float values[];
 } output_data;
+#define STORE_OUT(f) (f)
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -100,13 +157,24 @@ void main() {
   uint k_tail = params.matrix_k % MAT;
   bool a_colmaj = (params.flags & 4u) != 0u;
   bool b_colmaj = (params.flags & 1u) != 0u;
+  bool causal_columns = (params.flags & 8u) != 0u;
+  bool causal_k = (params.flags & 16u) != 0u;
+  uint total_steps = k_steps + (k_tail > 0u ? 1u : 0u);
 
   for (uint tile_row = gl_WorkGroupID.y; tile_row < m_tiles;
        tile_row += gl_NumWorkGroups.y) {
     uint row_base = tile_row * TILE_M;
+    // Last key any row of this tile may attend to.
+    uint last_valid = params.aux_size + row_base + TILE_M - 1u;
+    uint tile_steps = causal_k
+        ? min(total_steps, (last_valid + MAT) / MAT)
+        : total_steps;
     for (uint tile_col = gl_WorkGroupID.x; tile_col < n_tiles;
          tile_col += gl_NumWorkGroups.x) {
       uint col_base = tile_col * TILE_N;
+      if (causal_columns && col_base > last_valid) {
+        continue;
+      }
 
       coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
           acc[4][4];
@@ -117,8 +185,7 @@ void main() {
         }
       }
 
-      for (uint step = 0u; step < k_steps + (k_tail > 0u ? 1u : 0u);
-           ++step) {
+      for (uint step = 0u; step < tile_steps; ++step) {
         uint k_base = step * MAT;
         // Stage A (32 rows x 8 k): word i = lane + 32 j covers row
         // i / 8, k offset i % 8.
@@ -130,8 +197,8 @@ void main() {
           float v = 0.0;
           if (row < params.matrix_m && k < params.matrix_k) {
             v = a_colmaj
-                ? input_a.values[a_slice + k * params.lhs_gap + row]
-                : input_a.values[a_slice + row * params.lhs_gap + k];
+                ? LOAD_A(a_slice + k * params.lhs_gap + row)
+                : LOAD_A(a_slice + row * params.lhs_gap + k);
           }
           a_s[row_local * MAT + (i % MAT)] = v;
         }
@@ -144,8 +211,8 @@ void main() {
           float v = 0.0;
           if (col < params.matrix_n && k < params.matrix_k) {
             v = b_colmaj
-                ? input_b.values[b_slice + col * params.rhs_gap + k]
-                : input_b.values[b_slice + k * params.rhs_gap + col];
+                ? LOAD_B(b_slice + col * params.rhs_gap + k)
+                : LOAD_B(b_slice + k * params.rhs_gap + col);
           }
           b_s[(i % MAT) * TILE_N + col_local] = v;
         }
@@ -186,8 +253,8 @@ void main() {
             uint row = row_base + rb * MAT + r;
             if (row < params.matrix_m) {
               output_data.values[out_slice + row * params.matrix_n +
-                                 column] = a_s[(lane / MAT) * MAT * MAT +
-                                               r * MAT + (lane % MAT)];
+                                 column] = STORE_OUT(a_s[(lane / MAT) * MAT * MAT +
+                                               r * MAT + (lane % MAT)]);
             }
           }
         }
