@@ -1,0 +1,138 @@
+{
+  "checkpoint": true,
+  "model_id": "SiddhJagani/Qwen3.8-2B-mlx-4Bit",
+  "model_label": "qwen2b-baseline",
+  "revision": "0867d98bfb174b042d88461c0e7c97b86b34b381",
+  "cold_load_s": 1.5135898640000391,
+  "warm_load_s": 1.4599498939999762,
+  "peak_mem_after_load_gb": 1.05979904,
+  "ttft_170sys_256tok": {
+    "mean": 0.29369209680002084,
+    "median": 0.30319048699999485,
+    "min": 0.2396759480000128,
+    "max": 0.3154640260000292,
+    "stdev": 0.030643969149129733,
+    "n": 5
+  },
+  "ttft_measured": [
+    {
+      "iteration": 1,
+      "ttft_s": 0.2396759480000128,
+      "n_tokens_generated": 256,
+      "prompt_tokens": 234,
+      "peak_mem_gb": 1.148780544,
+      "rss_mib_pre": 443,
+      "rss_mib_post": 443,
+      "mem_avail_mib_pre": 79418,
+      "mem_avail_mib_post": 79597,
+      "mem_avail_delta_mib": 179
+    },
+    {
+      "iteration": 2,
+      "ttft_s": 0.30319048699999485,
+      "n_tokens_generated": 256,
+      "prompt_tokens": 234,
+      "peak_mem_gb": 1.14878464,
+      "rss_mib_pre": 443,
+      "rss_mib_post": 443,
+      "mem_avail_mib_pre": 79597,
+      "mem_avail_mib_post": 80200,
+      "mem_avail_delta_mib": 603
+    },
+    {
+      "iteration": 3,
+      "ttft_s": 0.3154640260000292,
+      "n_tokens_generated": 256,
+      "prompt_tokens": 234,
+      "peak_mem_gb": 1.14878464,
+      "rss_mib_pre": 443,
+      "rss_mib_post": 443,
+      "mem_avail_mib_pre": 80200,
+      "mem_avail_mib_post": 81504,
+      "mem_avail_delta_mib": 1304
+    },
+    {
+      "iteration": 4,
+      "ttft_s": 0.30227714900001956,
+      "n_tokens_generated": 256,
+      "prompt_tokens": 234,
+      "peak_mem_gb": 1.14878464,
+      "rss_mib_pre": 443,
+      "rss_mib_post": 443,
+      "mem_avail_mib_pre": 81504,
+      "mem_avail_mib_post": 80847,
+      "mem_avail_delta_mib": -657
+    },
+    {
+      "iteration": 5,
+      "ttft_s": 0.3078528740000479,
+      "n_tokens_generated": 256,
+      "prompt_tokens": 234,
+      "peak_mem_gb": 1.14878464,
+      "rss_mib_pre": 443,
+      "rss_mib_post": 443,
+      "mem_avail_mib_pre": 80847,
+      "mem_avail_mib_post": 80532,
+      "mem_avail_delta_mib": -315
+    }
+  ],
+  "prefill_512": {
+    "mean": 0.4210392627999795,
+    "median": 0.39649219899996524,
+    "min": 0.3922704369999792,
+    "max": 0.5111748639999973,
+    "stdev": 0.05084555416252944,
+    "n": 5
+  },
+  "prefill_2048": {
+    "mean": 1.4147400444000027,
+    "median": 1.3787505779999947,
+    "min": 1.3473611830000323,
+    "max": 1.5925463979999677,
+    "stdev": 0.10036139085714743,
+    "n": 5
+  },
+  "decode_512": {
+    "mean": 65.50624810595443,
+    "median": 68.74161477130735,
+    "min": 51.22649671003606,
+    "max": 69.43906382827149,
+    "stdev": 7.989780146106901,
+    "n": 5
+  },
+  "decode_2048": {
+    "mean": 49.78860272574425,
+    "median": 49.71133101748649,
+    "min": 46.187250121545055,
+    "max": 55.226836510078854,
+    "stdev": 3.449112646759232,
+    "n": 5
+  },
+  "card_pass": 1,
+  "card_total": 1,
+  "card_results": [
+    {
+      "fences_found": 0,
+      "invalid_json": false,
+      "prose_only": true,
+      "valid_components": [],
+      "has_checklist_md": true,
+      "has_pipe_table_md": null,
+      "has_timeline_md": false,
+      "expected_kind": "card",
+      "hit": true,
+      "index": 1,
+      "expect": "card",
+      "category": "checklist",
+      "uses_full_schema": false,
+      "text_excerpt": "The user wants a packing checklist for a weekend camping trip. I'll organize this into categories with clear sections, using the specified format where applicable. A weekend trip means camping for 2-3 days, so I'll include essentials for both day use and overnight comfort.\n</think>\n\n# Weekend Campin"
+    }
+  ],
+  "gsm_pass": 0,
+  "gsm_total": 0,
+  "gsm_results": [],
+  "ife_pass": 0,
+  "ife_total": 0,
+  "ife_results": [],
+  "provenance": "prov: mlx=0.32.3.dev202609282218+29cba8e mlx_lm=0.31.3 wheel=0.32.3.dev202609282218+29cba8e commit=f505bfa27360 python=3.14.7"
+}

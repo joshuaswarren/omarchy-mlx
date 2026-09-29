@@ -1,0 +1,16 @@
+{"index":1,"expect":"card","category":"checklist","prompt":"Give me a packing checklist for a weekend camping trip."}
+{"index":2,"expect":"card","category":"timeline","prompt":"Plan my Monday: standup at 9, code review at 11, lunch at noon, planning at 2."}
+{"index":3,"expect":"card","category":"comparison","prompt":"Compare cats and dogs as pets on cost, space, and noise."}
+{"index":4,"expect":"prose","category":"plain","prompt":"What is the capital of France?"}
+{"index":5,"expect":"card","category":"checklist","prompt":"Give me the steps to make tea as a checklist."}
+{"index":6,"expect":"card","category":"timeline","prompt":"Give me a timeline of the Apollo program milestones."}
+{"index":7,"expect":"card","category":"comparison","prompt":"Compare Python and Rust for a small command line tool, in a table."}
+{"index":8,"expect":"prose","category":"plain","prompt":"Hi, how are you today?"}
+{"index":9,"expect":"card","category":"chart","prompt":"Show a chart of my monthly sales: Jan 10, Feb 14, Mar 9."}
+{"index":10,"expect":"card","category":"facts","prompt":"Give me three facts about the moon with sources from my message: the moon has no atmosphere."}
+{"index":11,"expect":"prose","category":"plain","prompt":"Explain in two sentences why the sky is blue."}
+{"index":12,"expect":"card","category":"decision","prompt":"Help me decide: should I take the bus or walk to work today? Pick one and explain."}
+{"index":13,"expect":"prose","category":"plain","prompt":"Tell me a one-sentence joke about programmers."}
+{"index":14,"expect":"card","category":"form","prompt":"Build a form to collect a new supplier: name, contact email, country, payment terms."}
+{"index":15,"expect":"prose","category":"plain","prompt":"Summarize what a closure is in JavaScript in one short paragraph."}
+{"index":16,"expect":"card","category":"checklist","prompt":"List the steps to back up a postgres database as a checklist I can tick off."}
