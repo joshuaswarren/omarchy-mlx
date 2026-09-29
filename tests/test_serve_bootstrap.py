@@ -17,6 +17,7 @@ venv is created without pip, so nothing here imports mlx, and the assistant
 """
 
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -350,6 +351,35 @@ class BootstrapTests(unittest.TestCase):
             or "does not fit" in result.stderr,
             f"expected a refusal, got: {result.stderr[-400:]}",
         )
+
+
+class PatchFetchTests(unittest.TestCase):
+    def test_installer_fetches_every_patch_the_apply_script_applies(self):
+        # v0.7.4 and v0.7.5 both shipped an installer whose patch list lagged
+        # the apply script, so fresh installs died with "patch file missing".
+        # Run the real 4b fetch text under the release-tag curl shim, then ask
+        # the fetched apply script which files it needs.
+        text = installer_text()
+        section = text[text.index("# 4b."):text.index('MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING')]
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            script = "".join([
+                "set -euo pipefail\n",
+                'say() { :; }\n',
+                f'PREFIX="{prefix}"\n',
+                CURL_SHIM,
+                section,
+            ])
+            env = {**os.environ, "MLX_OMARCHY_TEST_TREE": str(REPO_ROOT),
+                   "REPO": "local.test/does-not-matter", "VERSION": "test"}
+            result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
+                                    text=True, timeout=60, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            applied = (prefix / "apply-mlx-lm-patches.sh").read_text()
+            needed = set(re.findall(r"^\s*apply (\S+\.patch)", applied, re.MULTILINE))
+            self.assertGreaterEqual(len(needed), 4)
+            fetched = {p.name for p in (prefix / "patches").iterdir()}
+            self.assertEqual(needed - fetched, set())
 
 
 if __name__ == "__main__":

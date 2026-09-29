@@ -204,15 +204,14 @@ if (( VOICE )); then
     "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0"
 fi
 
-# 4b. Vendored mlx-lm serve patches. The GDN fast route is applied by
-#     default (gated-delta updates go to mx.fast.gated_delta_update in
-#     this wheel); the conv-ring patch stays OFF unless
-#     MLX_OMARCHY_CONV_RING=1. Served models pick both up from the venv,
-#     so no manual venv patching is needed after install.
-say "Applying mlx-lm serve patches (GDN fast route on; greedy vocab prune on; conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
+# 4b. Vendored mlx-lm serve patches. The apply script decides which patches
+#     run (conv-ring stays OFF unless MLX_OMARCHY_CONV_RING=1). The installer
+#     downloads exactly the patches that script names, so a patch added to the
+#     script can never be missing here. Served models pick them up from the venv.
+say "Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
 curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/scripts/apply-mlx-lm-patches.sh" -o "$PREFIX/apply-mlx-lm-patches.sh"
 mkdir -p "$PREFIX/patches"
-for p in mlx-lm-gated-delta-fast-route.patch mlx-lm-gated-delta-raw.patch mlx-lm-greedy-prune.patch mlx-lm-convring.patch; do
+for p in $(grep -oE 'mlx-lm-[a-z0-9-]+\.patch' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p"
 done
 MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$VENV"
