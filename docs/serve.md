@@ -76,7 +76,11 @@ The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the s
 
 ### Voice options
 
-The pinned voice pack is `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`
+Two pinned engines are registered; the Details drawer groups the picker by
+engine, and the default stays Qwen3-TTS until the owner accepts the second
+engine by listening.
+
+The default engine is `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`
 (mlx-audio 0.5.6). The worker exposes every preset speaker; the default
 is `aiden`, an American English male voice. The Details drawer surfaces a
 `Voice` select with each speaker's native accent, a `Preview` button
@@ -100,6 +104,28 @@ non-English-native speakers are surfaced as fully labelled options, accent
 included, and refused to fall back to the default when the worker cannot
 find the speaker. An unknown voice id is a 400 with the name repeated,
 never a silent swap.
+
+The second engine is `mlx-community/Kokoro-82M-bf16` (revision
+`a71e4d38…b1c3c`, Apache-2.0, 24 kHz, files sha256-pinned in
+`KOKORO_PACK`). It is non-autoregressive: one or a few forward passes per
+sentence instead of one per 12.5 Hz frame, so streaming never underruns.
+Its G2P front end is misaki 0.7.4 (English) with a user-space espeak-ng
+wheel (`espeakng-loader`, `phonemizer`) as the out-of-vocabulary fallback —
+no root and no system package; everything installs into the pack's own
+runtime, and nothing touches the network at run time. Voices come from the
+pack's own tensors:
+
+| Speaker | Accent |
+|---|---|
+| af_heart (engine default) | American English |
+| af_bella | American English |
+| am_michael | American English |
+
+Each engine keeps its own resident worker, so switching engines does not
+reload the other. Picking a voice picks its engine; engine assets are
+verified with the same hash gate as the default pack, and an engine whose
+assets are not downloaded is shown disabled in the picker, not silently
+offered.
 
 The worker asks mlx-audio for the `english` codec token whenever the
 text is ASCII; non-ASCII text falls back to the model's auto-detection,

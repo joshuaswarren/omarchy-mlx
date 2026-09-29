@@ -109,6 +109,68 @@ VOICE_PACK = {
 
 _URL_TEMPLATE = "https://huggingface.co/{repo}/resolve/{revision}/{name}"
 
+# Second engine: Kokoro-82M (StyleTTS2-based, non-autoregressive — one or a
+# few forward passes per sentence instead of one per 12.5 Hz frame). Pinned
+# like the primary pack; 24 kHz; American English voices from the pack's own
+# voice files. Not the default: the owner picks after listening.
+KOKORO_PACK = {
+    "id": "kokoro-82m-bf16",
+    "repo": "mlx-community/Kokoro-82M-bf16",
+    "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
+    "license": "apache-2.0",
+    "label": "Kokoro 82M",
+    "voice": "af_heart",
+    "voices": ["af_heart", "af_bella", "am_michael"],
+    "asset_bytes": 328684463,
+    "weights_bytes": 328682112,
+    "runtime_estimate_bytes": 585000000,
+    "files": [
+        {"name": "config.json", "bytes": 2351,
+         "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"},
+        {"name": "kokoro-v1_0.safetensors", "bytes": 327115152,
+         "sha256": "4e9ecdf03b8b6cf906070390237feda473dc13327cb8d56a43deaa374c02acd8"},
+        {"name": "voices/af_heart.safetensors", "bytes": 522320,
+         "sha256": "2c1c733b0e6576c810e268d3e440c21dea4e0f0131a3ba4cfc98d7fe6136d094"},
+        {"name": "voices/af_bella.safetensors", "bytes": 522320,
+         "sha256": "112d310468cbb3cf23404d3d0b50ad3adf017b87bf38bf9edd15f4ad572df6a3"},
+        {"name": "voices/am_michael.safetensors", "bytes": 522320,
+         "sha256": "3940147ded35deba0bb52e8132f89b719298e0520258c34584358aa5a24da2ea"},
+    ],
+    "runtime": {
+        "mlx_audio": {
+            "version": "0.5.6",
+            "wheel_sha256": ("7cf7b49135f6f681988a9e0b9d2fbfdd2e9be783b0a3204"
+                             "d0c4028e0cf2d8b4c"),
+        },
+        "requires": ["mlx", "mlx_audio", "numpy", "misaki", "num2words",
+                     "spacy", "en-core-web-sm", "phonemizer", "espeakng-loader"],
+        "constraints": {
+            "mlx_audio": "==0.5.6",
+            "misaki": "==0.7.4",
+            "num2words": "==0.5.14",
+            "spacy": ">=3.8.0",
+            "en-core-web-sm": "==3.8.0",
+            "phonemizer": ">=3.2.1",
+            "espeakng-loader": "==0.2.4",
+        },
+    },
+}
+
+VOICE_PACK["label"] = "Qwen3-TTS 0.6B CustomVoice"
+
+# Engine registry keyed implicitly by pack id; read at call time so tests
+# can patch VOICE_PACK. Order is the UI order: default engine first.
+VOICE_ENGINES = (VOICE_PACK, KOKORO_PACK)
+
+# Native language per Kokoro preset speaker: all American English, from the
+# pack's own voice tensors (voices/<id>.safetensors).
+KOKORO_VOICE_META = {
+    "af_heart": {"label": "Heart", "accent": "American English"},
+    "af_bella": {"label": "Bella", "accent": "American English"},
+    "am_michael": {"label": "Michael", "accent": "American English"},
+}
+
+
 # Native language per preset speaker, shown as a plain label and accent note.
 # The pack has no American English female voice; non-English-native voices
 # reading English text are offered openly, accent included.
@@ -127,19 +189,48 @@ _VOICE_CHOICE_NAME = "voice.json"
 
 
 def voice_options() -> list[dict]:
-    """The pack's preset speakers with label and accent, in pack order."""
-    return [{"id": name, "label": VOICE_META[name]["label"],
-             "accent": VOICE_META[name]["accent"]}
-            for name in VOICE_PACK["voices"]]
+    """Every engine's preset speakers with label and accent, default engine
+    first; each option names its engine so the UI can group honestly."""
+    options = []
+    for pack in VOICE_ENGINES:
+        for name in pack["voices"]:
+            entry = dict(_voice_meta(name))
+            entry["id"] = name
+            entry["engine"] = pack["id"]
+            entry["engine_label"] = pack.get("label", pack["id"])
+            options.append(entry)
+    return options
+
+
+def _voice_pack(name) -> dict | None:
+    """The engine pack that declares this voice, or None."""
+    for pack in VOICE_ENGINES:
+        if name in pack["voices"]:
+            return pack
+    return None
+
+
+def _pack_by_id(pack_id) -> dict | None:
+    for pack in VOICE_ENGINES:
+        if pack["id"] == pack_id:
+            return pack
+    return None
+
+
+def _voice_meta(name) -> dict:
+    pack = _voice_pack(name)
+    if pack is not None and pack["id"] == KOKORO_PACK["id"]:
+        return KOKORO_VOICE_META[name]
+    return VOICE_META[name]
 
 
 def resolve_voice(name) -> str:
-    """Validate a requested voice against the pack; unknown is a named
+    """Validate a requested voice across engines; unknown is a named
     refusal, never a fallback to the default."""
-    if not isinstance(name, str) or name not in VOICE_PACK["voices"]:
+    if not isinstance(name, str) or _voice_pack(name) is None:
         raise VoiceError(
-            f"unknown voice {name!r}; this pack offers: "
-            + ", ".join(VOICE_PACK["voices"]))
+            f"unknown voice {name!r}; available voices: "
+            + ", ".join(o["id"] for o in voice_options()))
     return name
 
 
@@ -224,10 +315,11 @@ def _constraint_conflicts(deps: dict) -> list[str]:
             if isinstance(info, dict) and info.get("satisfies") is False]
 
 
-def _probe_dependencies_now() -> dict:
+def _probe_dependencies_now(pack: dict | None = None) -> dict:
+    pack = pack if pack is not None else VOICE_PACK
     present, missing, detail = [], [], {}
-    constraints = VOICE_PACK["runtime"]["constraints"]
-    for name in VOICE_PACK["runtime"]["requires"]:
+    constraints = pack["runtime"]["constraints"]
+    for name in pack["runtime"]["requires"]:
         try:
             version = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -279,8 +371,9 @@ def _cached_probe(key: str, fn) -> dict:
     return value
 
 
-def probe_dependencies() -> dict:
-    return _cached_probe("deps", _probe_dependencies_now)
+def probe_dependencies(pack: dict | None = None) -> dict:
+    return _cached_probe(f"deps:{'default' if pack is None else pack['id']}",
+                         lambda: _probe_dependencies_now(pack))
 
 
 def probe_accelerator() -> dict:
@@ -500,8 +593,9 @@ def _backend_provenance() -> dict:
     return result
 
 
-def _worker_guard(assets_dir: str) -> None:
-    deps = probe_dependencies()
+def _worker_guard(assets_dir: str, pack: dict | None = None) -> None:
+    pack = pack if pack is not None else VOICE_PACK
+    deps = probe_dependencies(pack)
     conflicts = _constraint_conflicts(deps)
     if deps["missing"] or conflicts:
         raise VoiceDependencyMissingError(
@@ -514,7 +608,7 @@ def _worker_guard(assets_dir: str) -> None:
             f"voice synthesis requires the GPU accelerator "
             f"(default device {accel['device']!r}: {accel['detail']}); "
             "no CPU fallback is permitted")
-    if not Synthesis._asset_status_for(Path(assets_dir))["verified"]:
+    if not Synthesis._asset_status_for(Path(assets_dir), pack)["verified"]:
         raise VoiceAssetsMissingError(
             f"voice pack missing or unverified at {assets_dir}; "
             "run setup with download approval")
@@ -653,9 +747,53 @@ class _Chunk(NamedTuple):
     new_tokens: int = 0
 
 
+def _kokoro_runtime(assets_dir: str):
+    """Offline Kokoro pipeline over the pinned pack.
+
+    The espeak-ng user-space wheel is registered before misaki is imported
+    (mlx_audio's KokoroPipeline imports misaki.espeak at construction), so
+    out-of-vocabulary words get real G2P with no root and no system package.
+    Voice tensors are pre-seeded from the local pack, so no Hugging Face
+    lookup ever happens at run time.
+    """
+    try:
+        import espeakng_loader
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+    except Exception as exc:
+        raise VoiceDependencyMissingError(
+            "kokoro G2P runtime missing: install the espeakng-loader and "
+            f"phonemizer wheels listed in status(): {exc}") from exc
+    EspeakWrapper.set_library(espeakng_loader.get_library_path())
+    EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+    from mlx_audio.tts.utils import load_model
+    model = load_model(Path(assets_dir))
+    from mlx_audio.tts.models.kokoro.pipeline import KokoroPipeline
+    from mlx_audio.tts.models.kokoro.voice import load_voice_tensor
+    pipe = KokoroPipeline(lang_code="a", model=model, repo_id=str(assets_dir))
+    for name in KOKORO_PACK["voices"]:
+        path = Path(assets_dir) / "voices" / f"{name}.safetensors"
+        pipe.voices[name] = load_voice_tensor(str(path))
+    return pipe
+
+
+def _kokoro_generate(pipe, text: str, voice: str) -> Iterator:
+    """Yield float32 numpy chunks, one per phoneme chunk the pipeline makes."""
+    import numpy as np
+    for result in pipe(text, voice=voice, speed=1.0):
+        audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
+        if audio.size:
+            yield audio
+
+
 def _worker_main(conn, assets_dir: str) -> None:
-    """Persistent voice worker: model loads once, requests serialize."""
+    """Persistent voice worker: model loads once, requests serialize.
+
+    The parent's first message names the engine pack ("init"); each engine
+    keeps its own resident model for the worker's lifetime.
+    """
+    pack: dict | None = None
     model = None
+    kokoro = None
     rate = 24000
     current_id = None
     cancelled = False
@@ -668,6 +806,10 @@ def _worker_main(conn, assets_dir: str) -> None:
             kind = msg.get("type")
             if kind == "shutdown":
                 break
+            if kind == "init":
+                requested = _pack_by_id(msg.get("pack"))
+                pack = requested if requested is not None else VOICE_PACK
+                continue
             if kind == "cancel":
                 if msg.get("id") == current_id:
                     cancelled = True
@@ -678,43 +820,77 @@ def _worker_main(conn, assets_dir: str) -> None:
             current_id = req_id
             cancelled = False
             try:
-                _worker_guard(assets_dir)
-                if model is None:
-                    from mlx_audio.tts.utils import load_model
-                    model = load_model(Path(assets_dir))
-                    rate = int(getattr(model, "sample_rate", 24000))
-                    conn.send({"type": "loaded", "sample_rate": rate})
-                import numpy as np
-                voice = resolve_voice(msg.get("voice", VOICE_PACK["voice"]))
-                language = "english" if msg["text"].strip().isascii() else "auto"
-                cap = int(rate * MAX_OUTPUT_SECONDS)
-                produced = 0
-                results = _streamed_generate_custom_voice(
-                    model,
-                    text=msg["text"].strip(),
-                    speaker=voice,
-                    language=language,
-                    streaming_interval=0.32,
-                )
-                for result in results:
-                    if cancelled:
-                        break
-                    chunk = np.asarray(result.audio,
-                                       dtype=np.float32).reshape(-1)
-                    room = cap - produced
-                    if room <= 0:
-                        raise VoiceOutputLimitError(
-                            "synthesis exceeded the "
-                            f"{MAX_OUTPUT_SECONDS:.0f}s output bound; split "
-                            "the text into shorter sentences")
-                    if len(chunk) > room:
-                        chunk = chunk[:room]
-                    produced += len(chunk)
-                    pcm = (chunk * 32767.0).clip(-32768, 32767).astype("int16")
-                    conn.send({"type": "chunk", "id": req_id,
-                               "sample_rate": rate, "data": pcm.tobytes()})
-                conn.send({"type": "cancelled" if cancelled else "done",
-                           "id": req_id})
+                if pack is None:
+                    pack = VOICE_PACK
+                _worker_guard(assets_dir, pack)
+                if pack["id"] == KOKORO_PACK["id"]:
+                    if kokoro is None:
+                        kokoro = _kokoro_runtime(assets_dir)
+                        rate = int(getattr(kokoro.model, "sample_rate", 24000))
+                        conn.send({"type": "loaded", "sample_rate": rate})
+                    import numpy as np
+                    voice = resolve_voice(msg.get("voice", pack["voice"]))
+                    cap = int(rate * MAX_OUTPUT_SECONDS)
+                    produced = 0
+                    for chunk in _kokoro_generate(kokoro, msg["text"].strip(),
+                                                  voice):
+                        if cancelled:
+                            break
+                        room = cap - produced
+                        if room <= 0:
+                            raise VoiceOutputLimitError(
+                                "synthesis exceeded the "
+                                f"{MAX_OUTPUT_SECONDS:.0f}s output bound; "
+                                "split the text into shorter sentences")
+                        if len(chunk) > room:
+                            chunk = chunk[:room]
+                        produced += len(chunk)
+                        pcm = (chunk * 32767.0).clip(-32768, 32767
+                                                     ).astype("int16")
+                        conn.send({"type": "chunk", "id": req_id,
+                                   "sample_rate": rate,
+                                   "data": pcm.tobytes()})
+                    conn.send({"type": "cancelled" if cancelled else "done",
+                               "id": req_id})
+                else:
+                    if model is None:
+                        from mlx_audio.tts.utils import load_model
+                        model = load_model(Path(assets_dir))
+                        rate = int(getattr(model, "sample_rate", 24000))
+                        conn.send({"type": "loaded", "sample_rate": rate})
+                    import numpy as np
+                    voice = resolve_voice(msg.get("voice", pack["voice"]))
+                    language = "english" if msg["text"].strip().isascii() else "auto"
+                    cap = int(rate * MAX_OUTPUT_SECONDS)
+                    produced = 0
+                    results = _streamed_generate_custom_voice(
+                        model,
+                        text=msg["text"].strip(),
+                        speaker=voice,
+                        language=language,
+                        streaming_interval=0.32,
+                    )
+                    for result in results:
+                        if cancelled:
+                            break
+                        chunk = np.asarray(result.audio,
+                                           dtype=np.float32).reshape(-1)
+                        room = cap - produced
+                        if room <= 0:
+                            raise VoiceOutputLimitError(
+                                "synthesis exceeded the "
+                                f"{MAX_OUTPUT_SECONDS:.0f}s output bound; "
+                                "split the text into shorter sentences")
+                        if len(chunk) > room:
+                            chunk = chunk[:room]
+                        produced += len(chunk)
+                        pcm = (chunk * 32767.0).clip(-32768, 32767
+                                                     ).astype("int16")
+                        conn.send({"type": "chunk", "id": req_id,
+                                   "sample_rate": rate,
+                                   "data": pcm.tobytes()})
+                    conn.send({"type": "cancelled" if cancelled else "done",
+                               "id": req_id})
             except Exception as exc:
                 try:
                     conn.send({"type": "error", "id": req_id,
@@ -751,15 +927,20 @@ def _stop_all_workers() -> None:
 class _WorkerHandle:
     """Owned worker process + pipe with confirmed-death teardown."""
 
-    def __init__(self, assets_dir: str):
+    def __init__(self, assets_dir: str, pack_id: str):
         ctx = multiprocessing.get_context(MP_START_METHOD)
         parent_conn, worker_conn = ctx.Pipe()  # duplex: both ends send+recv
         self.conn = parent_conn
+        self.pack_id = pack_id
         self.process = ctx.Process(target=_worker_main,
                                    args=(worker_conn, assets_dir),
                                    daemon=True)
         self.process.start()
         worker_conn.close()
+        try:
+            self.conn.send({"type": "init", "pack": pack_id})
+        except Exception:
+            pass
         with _workers_lock:
             _live_workers.add(self)
 
@@ -785,13 +966,15 @@ atexit.register(_stop_all_workers)
 
 
 class Synthesis:
-    """Local-only, accelerator-only TTS over the pinned Qwen3-TTS pack."""
+    """Local-only, accelerator-only TTS over the pinned engine packs
+    (default Qwen3-TTS CustomVoice; Kokoro-82M as the second engine)."""
 
     _generated_once = False
 
     def __init__(self, home: Path):
         self.home = Path(home)
         self._worker: _WorkerHandle | None = None
+        self._workers: dict[str, _WorkerHandle] = {}
         self._worker_lock = threading.Lock()
         self._slots = 0
         self._slots_cond = threading.Condition()
@@ -801,6 +984,13 @@ class Synthesis:
 
     def assets_dir(self) -> Path:
         return self.home / "voice" / VOICE_PACK["id"]
+
+    def assets_dir_for(self, pack_id: str) -> Path:
+        return self.home / "voice" / pack_id
+
+    def _current_engine(self) -> dict:
+        """The pack that owns the persisted voice choice."""
+        return _voice_pack(self.current_voice()) or VOICE_PACK
 
     def _voice_choice_path(self) -> Path:
         return self.home / "voice" / _VOICE_CHOICE_NAME
@@ -845,20 +1035,22 @@ class Synthesis:
             except OSError:
                 pass
             raise
-        meta = VOICE_META[resolved]
+        meta = _voice_meta(resolved)
         return {"voice": resolved, "label": meta["label"],
                 "accent": meta["accent"],
-                "default": resolved == VOICE_PACK["voice"]}
+                "engine": _voice_pack(resolved)["id"],
+                "default": resolved == _voice_pack(resolved)["voice"]}
 
     @staticmethod
-    def _asset_status_for(assets: Path) -> dict:
-        expected = VOICE_PACK["asset_bytes"]
+    def _asset_status_for(assets: Path, pack: dict | None = None) -> dict:
+        pack = pack if pack is not None else VOICE_PACK
+        expected = pack["asset_bytes"]
         if not assets.is_dir():
             return {"path": str(assets), "present": False, "verified": False,
                     "bytes": 0, "expected_bytes": expected}
         receipt = read_receipt(assets)
-        pinned = {entry["name"]: entry for entry in VOICE_PACK["files"]}
-        if receipt is None or receipt.get("revision") != VOICE_PACK["revision"]:
+        pinned = {entry["name"]: entry for entry in pack["files"]}
+        if receipt is None or receipt.get("revision") != pack["revision"]:
             return {"path": str(assets), "present": False, "verified": False,
                     "bytes": 0, "expected_bytes": expected}
         present_bytes = 0
@@ -919,19 +1111,45 @@ class Synthesis:
         except VoiceError as exc:
             current = VOICE_PACK["voice"]
             voice_error = str(exc)
+        engines = []
+        for pack in VOICE_ENGINES:
+            engine_deps = probe_dependencies(pack)
+            engine_conflicts = _constraint_conflicts(engine_deps)
+            engine_assets = self._asset_status_for(
+                self.assets_dir_for(pack["id"]), pack)
+            engines.append({
+                "id": pack["id"],
+                "label": pack.get("label", pack["id"]),
+                "repo": pack["repo"],
+                "revision": pack["revision"],
+                "license": pack["license"],
+                "voice_default": pack["voice"],
+                "voices": list(pack["voices"]),
+                "voice_options": [o for o in voice_options()
+                                  if o["engine"] == pack["id"]],
+                "assets": engine_assets,
+                "dependencies": engine_deps,
+                "usable": (engine_assets["verified"]
+                           and not engine_deps["missing"]
+                           and not engine_conflicts
+                           and accel["available"]),
+            })
         return {
             "pack": {
                 "id": VOICE_PACK["id"],
                 "repo": VOICE_PACK["repo"],
                 "revision": VOICE_PACK["revision"],
                 "license": VOICE_PACK["license"],
+                "label": VOICE_PACK.get("label", VOICE_PACK["id"]),
                 "voice": current,
+                "engine": (_voice_pack(current) or VOICE_PACK)["id"],
                 "voice_default": VOICE_PACK["voice"],
                 "voice_options": voice_options(),
                 "voices": list(VOICE_PACK["voices"]),
                 "sample_rate": self._sample_rate or 24000,
                 "runtime": VOICE_PACK["runtime"],
             },
+            "engines": engines,
             "assets": assets,
             "accelerator": accel,
             "dependencies": deps,
@@ -1041,21 +1259,35 @@ class Synthesis:
         return {"recorded": True, "path": str(assets / _QUALIFICATION_NAME)}
 
     def prepare(self, approve_download: bool, *, fetch=None) -> dict:
-        assets = self.assets_dir()
-        if assets.is_dir() and self._asset_status()["verified"]:
-            return {"downloaded": True, "verified": True, "path": str(assets),
-                    "bytes": VOICE_PACK["asset_bytes"]}
-        if not approve_download:
-            reason = ("voice pack download requires explicit approval "
-                      f"({VOICE_PACK['asset_bytes']} bytes, "
-                      f"{VOICE_PACK['license']} license, "
-                      f"revision {VOICE_PACK['revision']})")
-            return {"downloaded": False, "verified": False,
-                    "path": str(assets), "reason": reason}
-        fetch = fetch or _default_fetch
+        packs = list(VOICE_ENGINES)
+        total_bytes = sum(p["asset_bytes"] for p in packs)
+        default = packs[0]
+        results = []
+        for pack in packs:
+            assets = self.assets_dir_for(pack["id"])
+            if assets.is_dir() and self._asset_status_for(assets, pack)["verified"]:
+                results.append({"engine": pack["id"], "downloaded": True,
+                                "verified": True, "path": str(assets),
+                                "bytes": pack["asset_bytes"]})
+                continue
+            if not approve_download:
+                reason = ("voice pack download requires explicit approval "
+                          f"({total_bytes} bytes total, "
+                          f"{pack['license']} license, "
+                          f"revision {pack['revision']})")
+                return {"downloaded": False, "verified": False,
+                        "path": str(self.assets_dir()), "reason": reason,
+                        "engines": [{"engine": p["id"], "downloaded": False,
+                                     "verified": False} for p in packs]}
+            results.append(self._prepare_pack(pack, assets, fetch or _default_fetch))
+        default_result = next(r for r in results
+                              if r["engine"] == default["id"])
+        return {**default_result, "engines": results}
+
+    def _prepare_pack(self, pack: dict, assets: Path, fetch) -> dict:
         assets.mkdir(parents=True, exist_ok=True)
         try:
-            for entry in sorted(VOICE_PACK["files"], key=lambda e: e["bytes"]):
+            for entry in sorted(pack["files"], key=lambda e: e["bytes"]):
                 dest = assets / entry["name"]
                 if dest.is_file() and dest.stat().st_size == entry["bytes"] \
                         and _sha256_file(dest) == entry["sha256"]:
@@ -1063,8 +1295,8 @@ class Synthesis:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 tmp = dest.with_name(dest.name + ".part")
                 try:
-                    fetch(_URL_TEMPLATE.format(repo=VOICE_PACK["repo"],
-                                               revision=VOICE_PACK["revision"],
+                    fetch(_URL_TEMPLATE.format(repo=pack["repo"],
+                                               revision=pack["revision"],
                                                name=entry["name"]), tmp)
                     actual = _sha256_file(tmp)
                     if actual != entry["sha256"]:
@@ -1075,7 +1307,7 @@ class Synthesis:
                     os.replace(tmp, dest)
                 finally:
                     tmp.unlink(missing_ok=True)
-            for entry in VOICE_PACK["files"]:
+            for entry in pack["files"]:
                 dest = assets / entry["name"]
                 if not dest.is_file() or dest.stat().st_size != entry["bytes"]:
                     raise VoiceError(
@@ -1088,25 +1320,26 @@ class Synthesis:
                 with _stat_identity_lock:
                     _stat_identity_cache[(str(assets), entry["name"])] = \
                         _identity(dest.stat())
-            self._write_receipt(assets)
+            self._write_receipt(assets, pack)
         except VoiceError as exc:
             self._last_error = str(exc)
             raise
         except Exception as exc:
             self._last_error = f"voice pack download failed: {exc}"
             raise VoiceError(self._last_error) from exc
-        return {"downloaded": True, "verified": True, "path": str(assets),
-                "bytes": VOICE_PACK["asset_bytes"]}
+        return {"engine": pack["id"], "downloaded": True, "verified": True,
+                "path": str(assets), "bytes": pack["asset_bytes"]}
 
-    def _write_receipt(self, assets: Path) -> None:
+    def _write_receipt(self, assets: Path, pack: dict | None = None) -> None:
+        pack = pack if pack is not None else VOICE_PACK
         receipt = {
-            "pack_id": VOICE_PACK["id"],
-            "repo": VOICE_PACK["repo"],
-            "revision": VOICE_PACK["revision"],
-            "license": VOICE_PACK["license"],
+            "pack_id": pack["id"],
+            "repo": pack["repo"],
+            "revision": pack["revision"],
+            "license": pack["license"],
             "files": {entry["name"]: {"bytes": entry["bytes"],
                                       "sha256": entry["sha256"]}
-                      for entry in VOICE_PACK["files"]},
+                      for entry in pack["files"]},
             "verified_by": ("sha256 at download time and once per process "
                             "startup; between hashes, file identity "
                             "(size, mtimes, ctime, inode) is compared "
@@ -1119,7 +1352,8 @@ class Synthesis:
         os.replace(tmp_name, assets / _RECEIPT_NAME)
 
     def _guard(self) -> None:
-        deps = probe_dependencies()
+        pack = self._current_engine()
+        deps = probe_dependencies(pack)
         conflicts = _constraint_conflicts(deps)
         if deps["missing"] or conflicts:
             raise VoiceDependencyMissingError(
@@ -1132,7 +1366,7 @@ class Synthesis:
                 f"voice synthesis requires the GPU accelerator "
                 f"(default device {accel['device']!r}: {accel['detail']}); "
                 "no CPU fallback is permitted")
-        assets = self._asset_status()
+        assets = self._asset_status_for(self.assets_dir_for(pack["id"]), pack)
         if not assets["verified"]:
             raise VoiceAssetsMissingError(
                 f"voice pack missing or unverified at {assets['path']}; "
@@ -1151,14 +1385,20 @@ class Synthesis:
             self._slots = max(0, self._slots - 1)
             self._slots_cond.notify_all()
 
-    def _ensure_worker(self) -> _WorkerHandle:
-        if self._worker is None:
-            self._worker = _WorkerHandle(str(self.assets_dir()))
-        return self._worker
+    def _ensure_worker(self, pack_id: str | None = None) -> _WorkerHandle:
+        if pack_id is None:
+            pack_id = VOICE_PACK["id"]
+        handle = self._workers.get(pack_id)
+        if handle is None:
+            handle = _WorkerHandle(str(self.assets_dir_for(pack_id)), pack_id)
+            self._workers[pack_id] = handle
+        self._worker = handle
+        return handle
 
     def _reset_worker(self) -> None:
         worker, self._worker = self._worker, None
         if worker is not None:
+            self._workers.pop(getattr(worker, "pack_id", None), None)
             worker.stop()
 
     def synthesize_chunks(self, text: str,
@@ -1189,7 +1429,7 @@ class Synthesis:
             locked = True
             if cancel.is_set():
                 raise SynthesisCancelled("cancelled while queued")
-            worker = self._ensure_worker()
+            worker = self._ensure_worker(self._current_engine()["id"])
             self._req_counter += 1
             req_id = self._req_counter
             settled = False
@@ -1308,9 +1548,12 @@ class Synthesis:
         return buffer.getvalue()
 
     def close(self) -> None:
-        """Release worker residency; returns only once the child is dead."""
+        """Release worker residency; returns only once each child is dead."""
         with self._worker_lock:
-            worker, self._worker = self._worker, None
-        if worker is not None and not worker.stop():
-            raise VoiceError("voice worker could not be confirmed dead")
+            active, self._worker = self._worker, None
+            residents = list(self._workers.values())
+            self._workers.clear()
+        for worker in dict.fromkeys(([active] if active else []) + residents):
+            if not worker.stop():
+                raise VoiceError("voice worker could not be confirmed dead")
         self._last_error = None

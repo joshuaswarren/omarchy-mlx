@@ -144,6 +144,8 @@ class PrepareDownloadTests(unittest.TestCase):
         self.pack, self.content = make_fixture_pack()
         self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
                                             self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -264,6 +266,8 @@ class SynthesizeRefusalTests(unittest.TestCase):
         self.pack, self.content = make_fixture_pack()
         self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
                                             self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
         self.s = synthesis.Synthesis(self.home)
 
     def tearDown(self):
@@ -446,6 +450,8 @@ class QualificationTests(unittest.TestCase):
         self.pack, self.content = make_fixture_pack()
         self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
                                             self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
         self.s = synthesis.Synthesis(self.home)
         self.s.prepare(approve_download=True, fetch=self._static_fetch)
         self.accel = {"available": True, "device": "Device(gpu, 0)",
@@ -665,6 +671,8 @@ class PersistentWorkerTests(unittest.TestCase):
         self.pack, self.content = make_fixture_pack()
         self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
                                             self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
         self.enterContext(mock.patch.object(synthesis, "MP_START_METHOD",
                                             "fork"))
         self.accel = {"available": True, "device": "Device(gpu, 0)",
@@ -848,6 +856,8 @@ class VoiceChoiceTests(unittest.TestCase):
         self.pack, self.content = make_fixture_pack()
         self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
                                             self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
         self.enterContext(mock.patch.object(synthesis, "MP_START_METHOD",
                                             "fork"))
         self.accel = {"available": True, "device": "Device(gpu, 0)",
@@ -1007,6 +1017,8 @@ class AssetCacheTests(unittest.TestCase):
         self.pack, self.content = make_fixture_pack()
         self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
                                             self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
         synthesis.forget_asset_cache()
         self.s = synthesis.Synthesis(self.home)
         self.s.prepare(approve_download=True, fetch=self._static_fetch)
@@ -1078,6 +1090,189 @@ class CloseTests(unittest.TestCase):
         s = synthesis.Synthesis(Path(tempfile.mkdtemp()))
         s.close()
         s.close()
+
+
+def make_kokoro_fixture_pack():
+    """A kokoro-shaped fixture pack: same id and voices as KOKORO_PACK."""
+    content = {
+        "config.json": b'{"model_type": "kokoro"}',
+        "kokoro-v1_0.safetensors": bytes(range(256)) * 2,
+        "voices/af_heart.safetensors": b"heart" * 8,
+        "voices/af_bella.safetensors": b"bella" * 8,
+        "voices/am_michael.safetensors": b"michael" * 8,
+    }
+    files = [{"name": name, "bytes": len(data),
+              "sha256": hashlib.sha256(data).hexdigest()}
+             for name, data in content.items()]
+    pack = dict(synthesis.KOKORO_PACK)
+    pack["files"] = files
+    pack["asset_bytes"] = sum(f["bytes"] for f in files)
+    pack["weights_bytes"] = sum(f["bytes"] for f in files
+                                if f["name"].endswith(".safetensors"))
+    pack["runtime_estimate_bytes"] = pack["asset_bytes"] + 4096
+    return pack, content
+
+
+class KokoroManifestTests(unittest.TestCase):
+    """The second engine's pack is pinned to the same standard."""
+
+    def test_kokoro_revision_and_license_are_pinned(self):
+        pack = synthesis.KOKORO_PACK
+        self.assertRegex(pack["revision"], r"^[0-9a-f]{40}$")
+        self.assertEqual(pack["repo"], "mlx-community/Kokoro-82M-bf16")
+        self.assertEqual(pack["license"], "apache-2.0")
+
+    def test_kokoro_files_are_hash_and_size_pinned(self):
+        pack = synthesis.KOKORO_PACK
+        total = 0
+        for entry in pack["files"]:
+            self.assertRegex(entry["name"], r"^[A-Za-z0-9._/-]+$")
+            self.assertGreater(entry["bytes"], 0)
+            self.assertTrue(is_hex64(entry["sha256"]), entry["name"])
+            total += entry["bytes"]
+        self.assertEqual(pack["asset_bytes"], total)
+        weights = sum(f["bytes"] for f in pack["files"]
+                      if f["name"].endswith(".safetensors"))
+        self.assertEqual(pack["weights_bytes"], weights)
+        self.assertLess(pack["weights_bytes"], pack["asset_bytes"])
+
+    def test_kokoro_voice_files_are_pinned_per_voice(self):
+        pack = synthesis.KOKORO_PACK
+        pinned_names = {f["name"] for f in pack["files"]}
+        for voice in pack["voices"]:
+            self.assertIn(f"voices/{voice}.safetensors", pinned_names)
+
+    def test_kokoro_g2p_stack_is_pinned_without_root(self):
+        pack = synthesis.KOKORO_PACK
+        constraints = pack["runtime"]["constraints"]
+        self.assertEqual(constraints["misaki"], "==0.7.4")
+        self.assertEqual(constraints["espeakng-loader"], "==0.2.4")
+        self.assertIn("phonemizer", constraints)
+        self.assertIn("en-core-web-sm", pack["runtime"]["requires"])
+        self.assertEqual(constraints["mlx_audio"], "==0.5.6")
+
+
+class KokoroEngineTests(unittest.TestCase):
+    """Engine registry, voice validation, per-pack worker routing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.kpack, self.kcontent = make_kokoro_fixture_pack()
+        self.qpack, self.qcontent = make_fixture_pack()
+        self.enterContext(mock.patch.object(
+            synthesis, "VOICE_ENGINES", (self.qpack, self.kpack)))
+        self.enterContext(mock.patch.object(synthesis, "MP_START_METHOD",
+                                            "fork"))
+        self.accel = {"available": True, "device": "Device(gpu, 0)",
+                      "detail": ""}
+        self.deps = {"present": ["mlx", "mlx_audio"], "missing": [],
+                     "detail": {}}
+        self.s = synthesis.Synthesis(self.home)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fetch(self, content):
+        def static_fetch(url, dest):
+            for pack in (self.qpack, self.kpack):
+                for entry in pack["files"]:
+                    expected = (f"https://huggingface.co/{pack['repo']}/"
+                                f"resolve/{pack['revision']}/{entry['name']}")
+                    if url == expected:
+                        dest.write_bytes(content[entry["name"]])
+                        return
+            raise AssertionError(url)
+        return static_fetch
+
+    def _green(self):
+        return (mock.patch.object(synthesis, "probe_accelerator",
+                                  return_value=self.accel),
+                mock.patch.object(synthesis, "probe_dependencies",
+                                  return_value=self.deps))
+
+    def test_voice_options_group_by_engine(self):
+        options = synthesis.voice_options()
+        engines = [o["engine"] for o in options]
+        self.assertEqual(engines[0], self.qpack["id"])
+        self.assertEqual(engines[-1], self.kpack["id"])
+        kokoro = [o for o in options if o["engine"] == self.kpack["id"]]
+        self.assertEqual([o["id"] for o in kokoro],
+                         ["af_heart", "af_bella", "am_michael"])
+        for option in kokoro:
+            self.assertEqual(option["accent"], "American English")
+            self.assertTrue(option["engine_label"])
+
+    def test_kokoro_voice_resolves_and_persists_with_engine(self):
+        self.s.prepare(approve_download=True, fetch=self._fetch(
+            {**self.qcontent, **self.kcontent}))
+        result = self.s.set_voice("af_bella")
+        self.assertEqual(result["engine"], self.kpack["id"])
+        self.assertEqual(self.s.current_voice(), "af_bella")
+        fresh = synthesis.Synthesis(self.home)
+        self.assertEqual(fresh.current_voice(), "af_bella")
+
+    def test_unknown_voice_refusal_lists_both_engines(self):
+        with self.assertRaises(synthesis.VoiceError) as ctx:
+            synthesis.resolve_voice("nope")
+        self.assertIn("nope", str(ctx.exception))
+        self.assertIn("af_heart", str(ctx.exception))
+        self.assertIn("aiden", str(ctx.exception))
+
+    def test_status_reports_engines_and_current_engine(self):
+        self.s.prepare(approve_download=True, fetch=self._fetch(
+            {**self.qcontent, **self.kcontent}))
+        with self._green()[0], self._green()[1]:
+            status = self.s.status()
+        by_id = {e["id"]: e for e in status["engines"]}
+        self.assertEqual(set(by_id), {self.qpack["id"], self.kpack["id"]})
+        self.assertTrue(by_id[self.kpack["id"]]["usable"])
+        self.assertEqual(status["pack"]["engine"], self.qpack["id"])
+        self.s.set_voice("am_michael")
+        with self._green()[0], self._green()[1]:
+            status = self.s.status()
+        self.assertEqual(status["pack"]["engine"], self.kpack["id"])
+
+    def test_kokoro_request_keeps_its_own_resident_worker(self):
+        import hashlib as _hl
+
+        def echo(conn, assets_dir):
+            while True:
+                try:
+                    msg = conn.recv()
+                except (EOFError, OSError):
+                    break
+                if msg.get("type") == "shutdown":
+                    break
+                if msg.get("type") == "speak":
+                    digest = _hl.sha256(
+                        (msg.get("voice") or "").encode()).digest()[:16]
+                    conn.send({"type": "chunk", "id": msg["id"],
+                               "sample_rate": 24000, "data": digest})
+                    conn.send({"type": "done", "id": msg["id"]})
+
+        self.s.prepare(approve_download=True, fetch=self._fetch(
+            {**self.qcontent, **self.kcontent}))
+        with self._green()[0], self._green()[1], \
+                mock.patch.object(synthesis, "_worker_main", echo):
+            list(self.s.synthesize_chunks("hi", threading.Event()))
+            qpid = self.s._worker.process.pid
+            self.assertEqual(self.s._worker.pack_id, self.qpack["id"])
+            self.s.set_voice("af_bella")
+            chunks = list(self.s.synthesize_chunks("there",
+                                                    threading.Event()))
+            kpid = self.s._worker.process.pid
+            self.assertEqual(chunks[0].data,
+                             _hl.sha256(b"af_bella").digest()[:16])
+            self.assertNotEqual(kpid, qpid)  # second engine, own worker
+            self.s.set_voice("af_bella")
+            list(self.s.synthesize_chunks("again", threading.Event()))
+            self.assertEqual(self.s._worker.process.pid, kpid)  # resident
+            engines = list(self.s._workers)
+            self.assertEqual(engines, [self.qpack["id"], self.kpack["id"]])
+            self.s.close()
+        self.assertIsNone(self.s._worker)
+        self.assertEqual(self.s._workers, {})
 
 
 if __name__ == "__main__":

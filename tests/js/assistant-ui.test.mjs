@@ -299,7 +299,11 @@ import { renderDetails } from "../../serve/mlx_omarchy_assistant/static/js/dom.j
   });
   const select = wrap.querySelector("select[id=details-voice-select]");
   assert.ok(select, "voice select must render");
-  const optionEls = (select.children || []).filter((c) => c.tagName === "option");
+  // Options live directly under the select when no engine metadata is
+  // present, and under one fallback optgroup when it is.
+  const optionEls = (select.children || []).flatMap((c) =>
+    c.tagName === "optgroup" ? (c.children || [])
+      : (c.tagName === "option" ? [c] : []));
   const labels = optionEls.map((o) =>
     (o.children || []).map((c) => c.text).join(""));
   assert.equal(labels.length, 9, "all nine preset speakers are listed");
@@ -330,6 +334,62 @@ import { renderDetails } from "../../serve/mlx_omarchy_assistant/static/js/dom.j
   assert.deepEqual(previews, ["preview"]);
   assert.ok(announces.some((m) => /Previewing/.test(m)),
     "previewing is announced before playback");
+}
+
+// --- Details drawer: voice picker grouped by engine ---------------------
+// Options carrying engine metadata render as one optgroup per engine, in
+// server order, and an engine whose assets are not usable is disabled and
+// labeled honestly instead of silently offering voices that cannot load.
+
+{
+  const announces = [];
+  const status = {
+    voice: {
+      state: "ready",
+      recognition: { state: "ready" },
+      synthesis: {
+        state: "ready",
+        qualification: "qualified",
+        pack: {
+          voice: "aiden",
+          voice_default: "aiden",
+          voice_options: [
+            { id: "aiden", label: "Aiden", accent: "American English",
+              engine: "qwen3-tts", engine_label: "Qwen3-TTS" },
+            { id: "af_heart", label: "Heart", accent: "American English",
+              engine: "kokoro-82m-bf16", engine_label: "Kokoro 82M" },
+            { id: "af_bella", label: "Bella", accent: "American English",
+              engine: "kokoro-82m-bf16", engine_label: "Kokoro 82M" },
+          ],
+          engines: [
+            { id: "qwen3-tts", label: "Qwen3-TTS", usable: true },
+            { id: "kokoro-82m-bf16", label: "Kokoro 82M", usable: false },
+          ],
+        },
+      },
+    },
+  };
+  const wrap = renderDetails(status, { announce: (m) => announces.push(m),
+                                       onPreview: () => {} });
+  const select = wrap.querySelector("select[id=details-voice-select]");
+  const groups = (select.children || []).filter(
+    (c) => c.tagName === "optgroup");
+  assert.equal(groups.length, 2, "one optgroup per engine");
+  assert.equal(groups[0].getAttribute("label"), "Qwen3-TTS");
+  assert.equal(groups[1].getAttribute("label"), "Kokoro 82M (not downloaded)",
+    "an unusable engine is labeled honestly");
+  assert.equal(groups[1].getAttribute("disabled"), "",
+    "an unusable engine's group is disabled");
+  const heart = (groups[1].children || []).find(
+    (o) => o.getAttribute("value") === "af_heart");
+  assert.ok(heart, "kokoro voices are listed inside their engine group");
+  // Preview announces the real label of an option nested in a group.
+  select.value = "af_heart";
+  const button = wrap.querySelector("button[id=details-voice-preview]");
+  button._fire("click");
+  await tick();
+  assert.ok(announces.some((m) => /Previewing Heart/.test(m)),
+    "preview finds the selected label inside its optgroup");
 }
 
 {

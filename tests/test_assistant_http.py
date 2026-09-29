@@ -227,10 +227,15 @@ class VoiceChoiceRouteTests(unittest.TestCase):
         ids = [opt["id"] for opt in pack["voice_options"]]
         self.assertEqual(set(ids),
                          {"aiden", "ryan", "serena", "vivian", "uncle_fu",
-                          "ono_anna", "sohee", "eric", "dylan"})
+                          "ono_anna", "sohee", "eric", "dylan",
+                          "af_heart", "af_bella", "am_michael"})
         accents = {o["id"]: o["accent"] for o in pack["voice_options"]}
         self.assertEqual(accents["aiden"], "American English")
         self.assertIn("Chinese-native", accents["serena"])
+        self.assertEqual(accents["af_heart"], "American English")
+        engines = {o["id"]: o["engine"] for o in pack["voice_options"]}
+        self.assertEqual(engines["aiden"], "qwen3-tts-0.6b-customvoice-4bit")
+        self.assertEqual(engines["af_bella"], "kokoro-82m-bf16")
 
     def test_set_voice_unknown_is_refused_with_named_error(self):
         headers = self.login()

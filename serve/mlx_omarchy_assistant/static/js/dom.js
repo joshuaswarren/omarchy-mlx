@@ -85,22 +85,39 @@ export function renderDetails(status, controls) {
                                        "aria-labelledby": "details-voice-title" },
         el("h3", { id: "details-voice-title" }, "Voice picker"),
         el("p", { class: "setup__hint" },
-          "Pick which preset speaker reads replies aloud. The pack has no "
-          + "American female voice; non-English-native voices read English "
-          + "with their native accent."));
+          "Pick which engine's preset speaker reads replies aloud. "
+          + "Qwen3-TTS speakers without an American English accent read "
+          + "English with their native accent; Kokoro voices are American "
+          + "English."));
       const fieldId = "details-voice-select";
       const select = el("select", {
         id: fieldId, name: "voice", class: "field-input",
         "aria-label": "Reply voice",
       });
       const current = pack.voice || pack.voice_default || options[0].id;
+      const optionEls = [];
+      const usableEngines = new Map((pack.engines || [])
+        .map((engine) => [engine.id, engine.usable !== false]));
+      let group = null;
+      let groupKey = null;
       for (const opt of options) {
+        const key = opt.engine_label || opt.engine || "";
+        if (key !== groupKey) {
+          groupKey = key;
+          group = el("optgroup", { label: key });
+          if (opt.engine && usableEngines.get(opt.engine) === false) {
+            group.setAttribute("disabled", "");
+            group.setAttribute("label", `${key} (not downloaded)`);
+          }
+          select.appendChild(group);
+        }
         const isDefault = opt.id === pack.voice_default;
         const tag = isDefault ? " (default)" : "";
         const option = el("option", { value: opt.id },
           `${opt.label} - ${opt.accent}${tag}`);
         if (opt.id === current) option.setAttribute("selected", "");
-        select.appendChild(option);
+        group.appendChild(option);
+        optionEls.push(option);
       }
       const label = el("label", { for: fieldId },
         "Reply voice", select);
@@ -128,11 +145,9 @@ export function renderDetails(status, controls) {
         if (previewButton.disabled || previewInFlight) return;
         previewInFlight = true;
         previewButton.disabled = true;
-        const optionChildren = (select.children || []).filter(
-          (c) => c && c.tagName === "option");
-        const selected = optionChildren.find(
-          (o) => (o.getAttribute("value") === select.value)
-              || (o.getAttribute("selected") === ""));
+        const selected = optionEls.find(
+            (o) => o.getAttribute("value") === select.value)
+            || optionEls.find((o) => o.getAttribute("selected") === "");
         const label = (selected
           && ((selected.children || []).map((c) => c.text).join("")
               || selected.textContent)) || select.value;
