@@ -81,8 +81,7 @@ Per-voice medians are stable across 95 measured runs (RTF min 0.65, max
   (trig sites, per-voice probe RTFs); profile attempt:
   `profile-stdout.log` (compile seam failure).
 - Listening samples (owner): `<home>/mlx-tts-samples-kokoro/`
-  with `index.html`; af_heart and af_bella carry all five sentences,
-  am_michael has sentences 1-2 (bench capped before 3-5 were generated).
+  with `index.html`; all three voices carry all five sentences.
 - Notebook (private):
   `apple-silicon-lab/entries/SpeechOutputKokoro/20260929T213728Z-jw14m2-kokoro-tts-engine.md`,
   artifacts under `artifacts/SpeechOutputKokoro/run-002/` with
@@ -95,7 +94,5 @@ Per-voice medians are stable across 95 measured runs (RTF min 0.65, max
 - WER, full dispatch trace, and the peak-memory record are not captured
   (bench turn caps + queue contention; the speed verdict does not depend
   on them).
-- am_michael sentences 3-5 listening WAVs pending the resumable bench
-  continuation.
 - No qualification was recorded (`record_qualification` untouched); no
   pair is qualified; `recommended` stays false everywhere.
