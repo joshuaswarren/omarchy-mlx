@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .history import BusyError, ConversationStore
+from .routing import ROUTING_POLICY, RoutingOutcome, evaluate_route
 from .speech_yield import SpeechYieldScheduler, YieldClient
 from mlx_omarchy_serve._mlxlm_server import YIELD_SECRET_HEADER
 
@@ -31,6 +32,36 @@ MIN_AUTO_ALLOWANCE = 256
 # and every Laya turn, sends the full schema.
 FULL_CARD_CUES = re.compile(r"\b(charts?|graphs?|forms?|decisions?|options?|facts?|sources?)\b", re.IGNORECASE)
 REPETITION_PENALTY = 1.1
+
+# Routing gate hook. The flag defaults OFF; only flipping it on after a
+# held-out suite passes (recorded in the notebook and pinned on the pair)
+# lets `submit(mode="auto")` succeed.
+ROUTING_GATE_OFF = "off"
+ROUTING_GATE_ON = "on"
+
+
+def _routing_gate_enabled(manager) -> bool:
+    """Whether the live pair record has the routing gate turned ON.
+
+    Reads the manager's currently selected pair record, never a static
+    catalog entry: routing approval is per-pair evidence (the suite
+    sha256 and the receipt path), not a global flag.
+    """
+    try:
+        status = manager.status()
+    except Exception:
+        return False
+    extension = (status or {}).get("extension") or {}
+    evidence = extension.get("selection_evidence") or {}
+    routing = evidence.get("routing")
+    if not isinstance(routing, dict):
+        return False
+    return (routing.get("gate") == ROUTING_GATE_ON
+            and isinstance(routing.get("suite_sha256"), str)
+            and bool(routing.get("suite_sha256").strip())
+            and isinstance(routing.get("receipt"), str)
+            and bool(routing.get("receipt").strip())
+            and routing.get("policy_version") == ROUTING_POLICY.version)
 
 DRAFT_PROMPT = (
     "Extract a comparison draft from the user's request. Reply with ONLY one JSON "
@@ -417,6 +448,34 @@ class LocalModels:
             self.close_connection()
 
 
+class _RoutingWorker:
+    """Tiny worker adapter for the routing module.
+
+    Wraps `LocalModels.decision` so the routing module stays free of any
+    HTTP details. The deadline is enforced on a worker-local timer:
+    a returned `timed_out` response is honored by the runner instead of
+    blocking on a cold call. The call is one-shot — no retries, no
+    replacement, no leak of worker state into the routing module.
+    """
+
+    def __init__(self, models, pair, cancel):
+        self.models = models
+        self.pair = pair
+        self.cancel = cancel
+
+    def call(self, payload, deadline_seconds):
+        import concurrent.futures
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(self.models.decision, self.pair, payload)
+        try:
+            return future.result(timeout=deadline_seconds)
+        except concurrent.futures.TimeoutError:
+            return {"timed_out": True}
+        finally:
+            executor.shutdown(wait=False)
+
+
 class Coordinator:
     def __init__(self, home, manager, store=None):
         self.store = store if store is not None else ConversationStore(home)
@@ -437,11 +496,17 @@ class Coordinator:
             raise RuntimeError(self.failure)
         if self.closed.is_set():
             raise RuntimeError("The assistant is shutting down")
-        if set(payload) - {"text", "mode", "options", "criteria", "questions", "max_tokens"}:
+        if set(payload) - {"text", "mode", "options", "criteria", "questions",
+                           "max_tokens", "routing_evidence"}:
             raise ValueError("Unknown turn field")
         mode = payload.get("mode", "chat")
-        if mode not in ("chat", "compare", "decide", "draft"):
+        if mode not in ("chat", "compare", "decide", "draft", "auto"):
             raise ValueError("Unknown turn mode")
+        if mode == "auto" and not _routing_gate_enabled(self.manager):
+            raise ValueError(
+                "Automatic routing stays disabled until the held-out routing suite passes. "
+                "Use explicit Compare options or change the mode to chat/decide."
+            )
         maximum = payload.get("max_tokens")
         if maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int)
                                     or not 1 <= maximum <= 262144):
@@ -449,6 +514,12 @@ class Coordinator:
         if mode == "decide" and (not isinstance(payload.get("questions"), list)
                                  or not 1 <= len(payload["questions"]) <= MAX_QUESTIONS):
             raise ValueError("Send between one and %d typed questions" % MAX_QUESTIONS)
+        # Automatic routing runs BEFORE the GPU is acquired: a warm 250 ms
+        # call is the only thing that can run synchronously; cold Laya or
+        # an over-budget material falls back to chat immediately, without
+        # blocking ordinary chat or holding the GPU.
+        if mode == "auto":
+            payload = self._resolve_auto_route(cid, payload)
         if not self.gpu.acquire(blocking=False):
             raise BusyError("Another local response is active. Wait or stop it before sending")
         try:
@@ -463,6 +534,56 @@ class Coordinator:
         except BaseException:
             self.gpu.release()
             raise
+
+    def _resolve_auto_route(self, cid, payload):
+        """Run the routing call (warm 250 ms) BEFORE acquiring the GPU.
+
+        Records the routing decision in the conversation so the UI shows
+        the same 'How this was decided' details, even when the answer is
+        `clarify` or the router skipped entirely. Always returns a
+        payload whose `mode` is one of `chat`, `compare`, or `decide` so
+        the GPU-bound worker only sees the worker modes it knows.
+
+        The route cannot be `structured_decision` when the user did not
+        supply explicit alternatives: never invent options.
+        """
+        try:
+            pair = self.manager.start()
+        except Exception as error:
+            # Pair start refused; ordinary chat still has to work.
+            routing = {"policy_version": ROUTING_POLICY.version,
+                       "route": None, "reason": "pair_start_failed",
+                       "model": "laya-mlx", "use_chat_model_available": True,
+                       "probabilities": {}, "runner_up_margin": None,
+                       "act_probability": None, "latency_ms": None,
+                       "timed_out": False, "error": str(error)[:200]}
+            new_payload = dict(payload)
+            new_payload["mode"] = "chat"
+            new_payload["routing"] = routing
+            return new_payload
+        cancel = threading.Event()
+        routing = self._auto_route(pair, payload["text"], cancel)
+        chosen = routing.get("route") or "conversation"
+        if chosen == "structured_decision":
+            options = payload.get("options")
+            if not isinstance(options, list) or not 2 <= len(options) <= 8:
+                chosen = "clarify"
+        new_payload = dict(payload)
+        new_payload["routing"] = routing
+        if chosen == "structured_decision":
+            new_payload["mode"] = "compare"
+        else:
+            new_payload["mode"] = "chat"
+        try:
+            existing = self.store.get(cid)
+        except Exception:
+            existing = None
+        if existing is not None:
+            try:
+                self.store.emit(cid, "pending", "routing", routing)
+            except Exception:
+                pass
+        return new_payload
 
     def _run(self, cid, turn, payload, maximum, job):
         cancel = job["cancel"]
@@ -485,6 +606,12 @@ class Coordinator:
             if mode == "draft":
                 self._run_draft(cid, turn, pair, payload, maximum, cancel)
                 return
+            # Emit the recorded routing decision (if any) so the UI can
+            # show how the auto-route was chosen. The router itself ran
+            # in `_resolve_auto_route` BEFORE the GPU was acquired so
+            # ordinary chat latency is unaffected.
+            if "routing" in payload:
+                self.store.emit(cid, turn, "routing", payload["routing"])
             full_schema = mode in ("compare", "decide") or bool(FULL_CARD_CUES.search(payload["text"]))
             messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
                          + (SCHEMA_PROMPT if full_schema else SCHEMA_PROMPT_COMPACT)}]
@@ -787,6 +914,49 @@ class Coordinator:
             return parse_draft(text)
         except (ValueError, TypeError):
             return None
+
+    def _auto_route(self, pair, text, cancel):
+        """One automatic routing call with a 250 ms warm deadline.
+
+        Always emits a routing decision event the UI can show, even when
+        the router skips routing: a skip is a real answer (return to the
+        chat model), not a hidden failure.
+
+        A timed-out call stays accounted for in the runner's pending
+        list until the worker truly finishes or stops; we never launch
+        a replacement. Ordinary chat latency is unaffected because the
+        deadline is warm: cold Laya loads already exceed 250 ms and
+        therefore bypass routing immediately.
+        """
+        payload = {
+            "state": text,
+            "questions": {
+                "route": {
+                    "type": "choice",
+                    "instructions": ROUTING_POLICY.question_text,
+                    "criteria": {"conversation": None, "structured_decision": None, "clarify": None},
+                }
+            },
+        }
+        outcome = evaluate_route(
+            text,
+            worker=_RoutingWorker(self.models, pair, cancel),
+            policy=ROUTING_POLICY,
+            deadline_seconds=0.250,
+        )
+        event = {
+            "policy_version": ROUTING_POLICY.version,
+            "route": outcome.route,
+            "reason": outcome.reason,
+            "probabilities": outcome.probabilities,
+            "runner_up_margin": outcome.runner_up_margin,
+            "act_probability": outcome.act_probability,
+            "latency_ms": outcome.latency_ms,
+            "timed_out": outcome.timed_out,
+            "use_chat_model_available": True,
+            "model": "laya-mlx",
+        }
+        return event
 
     def _validated(self, envelope, component_count, turn):
         """Validate one assistant-ui envelope; returns components or None.
