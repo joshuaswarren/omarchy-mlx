@@ -75,3 +75,10 @@ if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 ]]; then
 else
   echo "conv-ring: OFF (set MLX_OMARCHY_CONV_RING=1 to enable)"
 fi
+# Last-logits prefill: cached (incremental) calls compute the quantized head only
+# for the final prompt position (448 ms of the T=2048 prefill on the M1 Max was
+# the head over 2048 positions no consumer reads). Decode steps are untouched
+# (greedy fast path never routes through this call). Whole-sequence calls
+# (cache=None: scoring/training) and MLX_OMARCHY_FULL_LOGITS=1 keep full logits.
+# Bit-exact: records digest and per-digest gates unchanged (Jw16PrefillGap3).
+apply mlx-lm-last-logits.patch
