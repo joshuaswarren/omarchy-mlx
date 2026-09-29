@@ -63,3 +63,42 @@ measured in-session: d64 101.73/179.72 = 0.566, d128 101.44/179.08 = 0.566, d256
   exactly the 18 silu compiled-chain dispatches; the "+4" vs DecodeGap4's 315
   is head-class drift between wheels (greedy head stages replaced the
   full-head GEMV; Take/TakeU32/Dequant left the stream). No hidden op.
+
+## Addendum: LANDED + DEPLOYED (LandDG6, 2026-09-29T23:25–24:05Z)
+
+Landed by LandDG6 after the detached lander was killed (its battery wait
+self-matched pgrep). Race battery gate PASS first: 16/16 runs, contract
+digest dbf704971617 both arms (re-verified from /var/tmp/dg6/w2-battery).
+
+- Rebase: main had moved to a4870a7d3; branch rebased in a fresh worktree
+  with NO conflict — `git diff origin/main..HEAD` byte-identical to the
+  pre-rebase branch diff. Landed as ff push a4870a7d3..82f2f482f (ls-remote
+  verified); agent/jw16-decode-gap6 updated to the rebased lineage.
+- Rebuilt release wheel from the rebased tip:
+  mlx_omarchy-0.32.3.dev202609292324+82f2f482f (416167317 bytes, sha256
+  317d3e9dd82b212bb9f0e14cb32ba17bb413ba05ab0d5bb59d89b4a24c3ead16).
+- Re-gate window on the rebased wheel (23:40–23:43Z): dg_bitcheck 3086 leaf
+  rows, ONE differing key = wheel version string (all 3084 check rows
+  identical); cells n=5 interleaved d64 ctl 100.31 cand 101.62 (+1.31%),
+  d128 100.23/101.15, d256 98.93/100.08, d512 94.52/95.83, ctl2 100.16 —
+  digests c84b3e7a/07c515e0/c6aabbf0/5c120987 identical both arms.
+- Deploy: deploy_wheel.sh installed 82f2f482f into /var/tmp/v072-venv-fused
+  (auto backup /var/tmp/v072-venv-fused.pre-20260929T185303); mlx_lm patch
+  set verified intact post-deploy (greedy-prune generate.py bc4903b5,
+  last-logits + conv-silu qwen3_5.py cf9e7d5f, unchanged).
+- Deploy-verify window (23:53–23:56Z, boot 8c3d0b5c before/after):
+  d64 records c84b3e7af640 101.68 tok/s, d128 07c515e0338b 101.25, d256
+  c6aabbf0a51d 99.95, d512 5c120987f0e5 95.82; pf512 records 100a61b62470 on
+  all 5 runs; logits gates f771c4265f88 / ce24f3b4ce42 / b8c4e14f8f8a
+  finite=True; DEPLOY-GATE PASS; restore health_ok=1 probe_finish=length
+  active=active; live post-window check: pip shows 82f2f482f, health 200,
+  completion probe finish_reason=length.
+- Deployed ratios vs macOS window-5 (179.72/179.08/178.72/177.02):
+  d64 101.68/179.72 = 0.566, d128 101.25/179.08 = 0.565, d256 99.95/178.72 =
+  0.559, d512 95.82/177.02 = 0.541 (was 0.559/0.560/0.554/0.535 before this
+  fold).
+- First deploy attempt failed (zero cells: run-linux-cells' nested
+  `flock /tmp/m1-gpu.lock` deadlocked inside the gpuwin window that already
+  holds that lock; 900 s timeout) and rolled back clean to fbdb6da62; retried
+  with inlined cells — logs under jw16:/var/tmp/landdg6/{failed1,deploy}/,
+  mirrored to the private notebook artifacts/LandDG6/.
