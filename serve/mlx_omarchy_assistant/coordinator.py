@@ -180,6 +180,41 @@ def _check_labels(value, low, high, cap, what):
     return labels
 
 
+# ---------------------------------------------------------------------------
+# Card-format capability lookup (lazy, cached, never raises)
+# ---------------------------------------------------------------------------
+
+_CARD_FORMAT_CACHE: dict[str, str | None] = {}
+
+
+def _model_card_format(chat_model_id: str) -> str | None:
+    """Return ``"fenced-json"`` when the catalog entry declares a measured
+    card-fence capability, otherwise ``"markdown-promotion"`` (or ``None``
+    when the model is not in the catalog).  Used to pick which schema to
+    send with chat prompts.  Reads are cached and never raise: a broken
+    catalog is treated as no capability."""
+    if not chat_model_id:
+        return None
+    if chat_model_id in _CARD_FORMAT_CACHE:
+        return _CARD_FORMAT_CACHE[chat_model_id]
+    fmt: str | None = None
+    try:
+        from mlx_omarchy_serve import catalog as _catalog
+        catalog_data = _catalog.load_catalog()
+    except Exception:
+        catalog_data = None
+    if catalog_data:
+        for entry in catalog_data.get("entries") or ():
+            if entry.get("id") == chat_model_id:
+                extension = entry.get("extension") or {}
+                fmt = extension.get("card_format")
+                if fmt not in (None, "fenced-json", "markdown-promotion"):
+                    fmt = None
+                break
+    _CARD_FORMAT_CACHE[chat_model_id] = fmt
+    return fmt
+
+
 def _typed_request(model_path, text, questions):
     """Build one batched /v1/decisions payload for Laya-shaped questions.
 
@@ -607,12 +642,26 @@ class Coordinator:
                 self._run_draft(cid, turn, pair, payload, maximum, cancel)
                 return
             # Emit the recorded routing decision (if any) so the UI can
-            # show how the auto-route was chosen. The router itself ran
-            # in `_resolve_auto_route` BEFORE the GPU was acquired so
-            # ordinary chat latency is unaffected.
+            # show how the auto-route was chosen.
             if "routing" in payload:
                 self.store.emit(cid, turn, "routing", payload["routing"])
-            full_schema = mode in ("compare", "decide") or bool(FULL_CARD_CUES.search(payload["text"]))
+            user_text = payload.get("text") or ""
+            chat_model_id = pair.get("chat_model") or ""
+            # Schema policy: the model fence is unreliable on every current
+            # pair (27B ~5/8, 2B 0/8 in the v0.7.6 qualification).  When the
+            # catalog entry declares ``extension.card_format == "fenced-json"``
+            # we trust the model to emit JSON and send the full schema;
+            # otherwise we send the compact schema and rely on
+            # card_promotion to derive a card from the reply's markdown.
+            # Any message that names a kind the markdown parser cannot
+            # promote (charts/forms/decisions/sources) still gets the
+            # full schema so the model can emit the JSON itself.
+            from .card_promotion import user_requested_full_schema
+            card_format = _model_card_format(chat_model_id)
+            full_schema = (mode in ("compare", "decide")
+                           or bool(FULL_CARD_CUES.search(user_text))
+                           or user_requested_full_schema(user_text)
+                           or card_format == "fenced-json")
             messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
                          + (SCHEMA_PROMPT if full_schema else SCHEMA_PROMPT_COMPACT)}]
             messages.extend(self._selected_history(record, turn))
@@ -646,6 +695,10 @@ class Coordinator:
             repaired = False
             finish_reason = None
             marker = "```assistant-ui\n"
+            # Mirror every chunk the user sees so card_promotion can derive
+            # a card from the exact text the UI rendered.  We never
+            # promote when the model already emitted a valid fenced block.
+            reply_text_parts: list[str] = []
             # Cooperative TTS scheduling: probe the chat worker's yield gate
             # and, when present, park generation at chunk boundaries so
             # queued speak requests can synthesize between chunks. Without
@@ -705,6 +758,7 @@ class Coordinator:
                         if start >= 0:
                             if start:
                                 self.store.emit(cid, turn, "text", {"text": buffer[:start]})
+                                reply_text_parts.append(buffer[:start])
                             buffer = buffer[start + len(marker):]
                             component_buffer = ""
                             continue
@@ -715,12 +769,14 @@ class Coordinator:
                         ready = buffer[:-keep] if keep else buffer
                         if ready:
                             self.store.emit(cid, turn, "text", {"text": ready})
+                            reply_text_parts.append(ready)
                         buffer = buffer[-keep:] if keep else ""
                         break
             finally:
                 stream.close()
             if buffer and component_buffer is None and not cancel.is_set():
                 self.store.emit(cid, turn, "text", {"text": buffer})
+                reply_text_parts.append(buffer)
             elif component_buffer is not None and not cancel.is_set():
                 if not repaired:
                     repaired = True
@@ -739,6 +795,27 @@ class Coordinator:
                 self.store.emit(cid, turn, "status", {"state": "output_truncated",
                     "message": "The response reached the output allowance. Send Continue to keep going.",
                     "continue": True})
+            # Card promotion: when the model emitted no valid fenced block,
+            # try to derive one card from the rendered markdown.  Only chat
+            # turns are eligible (compare/decide/draft produce structured
+            # payloads of their own).  Hostile, oversize, or empty replies
+            # return None from extract_text and emit nothing.
+            if (not cancel.is_set() and mode == "chat" and component_count == 0):
+                from .card_promotion import extract_text as _promote_card
+                reply_text = "".join(reply_text_parts)
+                promoted = _promote_card(reply_text, user_text)
+                if promoted is not None:
+                    try:
+                        validated = validate_components(
+                            {"version": 1, "components": [promoted]})
+                    except Exception:
+                        validated = None
+                    if validated:
+                        for component in validated:
+                            component_count += 1
+                            trusted = dict(component, id=uuid.uuid4().hex,
+                                           turn_id=turn, revision=1)
+                            self.store.emit(cid, turn, "component", trusted)
             if (mode in ("compare", "decide") and not cancel.is_set()
                     and explanation_disagrees(result,
                                               self.store.get(cid)["messages"][-1].get("content", ""))):

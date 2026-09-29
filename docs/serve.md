@@ -106,6 +106,69 @@ text is ASCII; non-ASCII text falls back to the model's auto-detection,
 which is also how the dialect speakers (Eric, Dylan) keep their
 Sichuan/Beijing dialect when they are used for Chinese text.
 
+## How cards are produced
+
+Every chat reply that lands in the UI carries one of three states: prose
+only, prose plus a model-emitted card, or prose plus a derived card.
+The order matters.
+
+1. **Text streams first.**  The coordinator walks the chat worker's
+   delta stream and emits `text` events to the UI as soon as each chunk
+   arrives.  When the chunk contains ```` ```assistant-ui ```` the text
+   before the marker is flushed to the UI and the remaining bytes are
+   buffered until the matching closer.  A valid fenced block always
+   wins: it is validated by `components.validate_components` and emitted
+   as one or more `component` events before the post-stream pass.
+2. **Repair (one bounded attempt).**  An invalid fenced block (bad JSON,
+   unknown type, missing fields, exceeds the 64 KiB envelope cap) is
+   rejected and at most one repair chat call is allowed per turn.  A
+   second failure drops the card and keeps the prose; the UI shows a
+   short "the generated interface was invalid" status.
+3. **Markdown promotion (assistant-built).**  When no valid fenced block
+   was emitted, the coordinator calls
+   `card_promotion.extract_text(reply, user_text)`.  The reply's fenced
+   code blocks are stripped (so a `python` snippet cannot leak as a
+   checklist), then a conservative structural pass applies:
+   - a task-list block with at least three `- [ ]` or `- [x]` items
+     becomes a `checklist`;
+   - a markdown pipe table with a separator row, two-to-eight columns
+     and at least two data rows becomes a `comparison`;
+   - a list or paragraph whose items start with a time, weekday,
+     `Mon Mar 5`, or `Day N` marker (at least three such items)
+     becomes a `timeline`;
+   - a plain bullet or ordered list of three or more items becomes a
+     `checklist` only when the user explicitly asked for a checklist
+     ("give me the steps to …", "make a to-do", "checklist of …");
+   - a plain bullet list with `|`- or `:`-separated columns becomes a
+     `comparison` only when the user asked for a table / comparison;
+   - everything else (plain prose, prose with two-item lists, code
+     snippets) is left as prose — the parser is conservative on purpose.
+   Every derived component is validated again before it is emitted; if
+   the validator would reject it (too many rows, missing fields) the
+   card is dropped silently and the prose stays.
+4. **Honest labelling.**  A derived card carries the title suffix
+   ` (from reply)` so the UI can mark it as assistant-built rather than
+   model-asserted JSON.  The component carries no extra top-level keys
+   (the validator rejects unknown keys); the suffix is the entire honest
+   signal.
+5. **Schema policy.**  The compact 209-token schema is the default for
+   ordinary chat turns (about 0.5 s of prefill saved on the 2B).  The
+   full 792-token schema is sent only when the user names a card kind
+   the parser cannot promote (`chart`, `graph`, `form`, `decision`,
+   `options`, `sources`), or when the catalog entry declares
+   `extension.card_format == "fenced-json"` — a capability flag set
+   per chat model after held-out measurement.  `markdown-promotion`
+   (or the absence of the flag) means the compact schema is sent and
+   the reply's markdown is promoted if needed.
+6. **Bounded work.**  The parser is a single linear scan over the
+   reply; the input is rejected above 1 MiB.  No regex backtracking
+   traps; the structural patterns are anchored and a single character
+   class `[a-z0-9_-]+` drives id slugs.
+
+Charts, forms, decisions and typed results cannot be derived from
+markdown alone and stay model-only.  When the user asks for them the
+coordinator still sends the full schema so the model can emit the JSON.
+
 ## Model status
 
 The catalog records generation, HTTP, and managed-launch qualification separately.
