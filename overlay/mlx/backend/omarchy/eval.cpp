@@ -29,6 +29,10 @@ void init() {
   omarchy::init();
 }
 
+namespace {
+thread_local bool g_first_batch_done = false;
+} // namespace
+
 void eval(array& arr) {
   omarchy::trace::counters().gpu_primitive_dispatches++;
   if (!arr.has_primitive() || arr.status() == array::Status::evaluated) {
@@ -117,7 +121,15 @@ void eval(array& arr) {
     // recycle before it submits, reach their share of the memory limit
     // (kBatchByteBudgetDivisor).
     auto& alloc = omarchy::allocator();
-    if (encoder.nodes() >= omarchy::batch_node_budget() ||
+    // First-batch-early (MLX_OMARCHY_BATCH_FIRST): per host thread, reset at
+    // every finalize (graph end).
+    const int budget = (!g_first_batch_done && omarchy::batch_first_budget() > 0)
+        ? omarchy::batch_first_budget()
+        : omarchy::batch_node_budget();
+    if (encoder.nodes() >= budget) {
+      g_first_batch_done = true;
+    }
+    if (encoder.nodes() >= budget ||
         alloc.pending_quarantine_bytes() >=
             alloc.get_memory_limit() / omarchy::kBatchByteBudgetDivisor) {
       encoder.commit();
@@ -144,6 +156,7 @@ void finalize(Stream s) {
   // open batch must reach the queue here or those waits never complete.
   // Batching still happens: every dispatch recorded between finalizes
   // (one whole graph evaluation) shares one open command buffer.
+  g_first_batch_done = false;
   omarchy::get_command_encoder(s).commit();
 }
 

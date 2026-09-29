@@ -64,6 +64,20 @@ inline constexpr int kBatchNodeBudget = 4096;
 // kBatchNodeBudget). A smaller budget submits the first nodes of a long graph
 // while the host is still recording the rest, overlapping host record time
 // with GPU execution; scheduling only, results are unchanged.
+// MLX_OMARCHY_BATCH_FIRST=<n>: the FIRST batch of every graph evaluation is
+// submitted after n nodes (default 0 = off, uses batch_node_budget()), the
+// rest of the graph then rides the normal budget. The GPU starts on the head
+// of a long graph while the host still records the tail (host record is
+// ~45 us per dispatch on Linux and is otherwise fully exposed in synchronous
+// paths), at the cost of one extra submit per graph. Scheduling only.
+inline int batch_first_budget() {
+  static const int v = []() {
+    const char* e = std::getenv("MLX_OMARCHY_BATCH_FIRST");
+    int n = e ? std::atoi(e) : 0;
+    return n > 0 ? n : 0;
+  }();
+  return v;
+}
 inline int batch_node_budget() {
   static const int v = []() {
     const char* e = std::getenv("MLX_OMARCHY_BATCH_NODES");
