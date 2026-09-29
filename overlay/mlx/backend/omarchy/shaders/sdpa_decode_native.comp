@@ -263,19 +263,8 @@ void main() {
     uint key = 0u;
     uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
         d * params.in_strides[3];
-    // Blocks of 64 keys: 64 independent V loads first, then the 64 in-order
-    // FMAs (ascending key order is unchanged; chunking is not an arithmetic
-    // choice). The remaining whole 16-key tiles follow, then the padded tail.
-    for (; key + 64u <= k_len; key += 64u) {
-      float vv[64];
-      for (uint index = 0u; index < 64u; ++index) {
-        vv[index] = bf16_load(
-            value_data.values[v_base + (key + index) * params.in_strides[2]]);
-      }
-      for (uint index = 0u; index < 64u; ++index) {
-        accumulator += s_stream[key + index] * vv[index];
-      }
-    }
+    // Whole 16-key tiles: 16 independent V loads first, then the 16 in-order
+    // FMAs (a 64-key block spilled the load registers and was 9x slower).
     for (; key + 16u <= k_len; key += 16u) {
       float vv[16];
       for (uint index = 0u; index < 16u; ++index) {
