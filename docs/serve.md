@@ -58,7 +58,7 @@ The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbe
 | Voice as a whole | Not qualified. It needs both directions. |
 | Quality pair | Not qualified. Ten card prompts gave a valid card on 5 of 8 expected. The other 3 hit my 700-token test cap. One unrequested card appeared. Decode was about 3 tokens/s on a GPU shared with other jobs, so the interactive latency target is unproven. |
 | Card generation, Everyday (2B) | Fails. 0 of 8 prompts produced a card, with the full schema, the compact schema, an example, or a reminder. The model writes a markdown list and ignores the fence. Invalid or absent blocks are dropped and the prose stays. |
-| Routing held-out suite | Not evaluated. Automatic routing stays off. |
+| Routing held-out suite | Policy "1" frozen (`1fbfd682e`); 29 focused unit tests pass; the held-out suite at `tests/fixtures/routing_held_out.json` (sha256 `09a37b60…8906f0`) was **not** scored in the 2026-09-29 session — `flock /tmp/m2-gpu.lock` stayed contended. Automatic routing stays OFF until the suite passes >= 99% precision on routed decisions. Receipt and gating run live in `receipts/2026-09-30-routing-gate/README.md` (and the notebook at `entries/RoutingGate/20260929T181500Z-jw14m2-linux-routing-gate.md`). |
 | UX screenshots and accessibility | Pass for six states at 375, 768, 1024, and 1440 px, plus a 200% zoom frame, keyboard, contrast, reduced motion, and semantics checks, with five defects fixed. See the [UI receipt](../receipts/2026-09-28-ui-qualification/README.md). Not run: a real screen reader. |
 | Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. A clean install needs a release that contains the assistant. |
 
