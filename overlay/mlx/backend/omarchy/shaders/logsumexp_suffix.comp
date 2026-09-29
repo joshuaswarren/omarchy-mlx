@@ -53,9 +53,17 @@ layout(push_constant) uniform Params {
   uint lhs_offset;
   uint rhs_offset;
   uint output_offset;
+  uint flags;
 } params;
 
 shared float block_values[256];
+
+// Flag bit 31 selects the legacy walk: one load per element per memory
+// round trip, identical element order and arithmetic. The prefetch walk
+// (default) issues 16 consecutive steps' loads before the arithmetic
+// consumes them in the same order, so both arms are bit-identical; the
+// chip default (G13 parts other than G13C) and
+// MLX_OMARCHY_LSE_ARGREDUCE_PREFETCH choose the arm.
 
 // Each thread walks its strided elements (thread, thread + 256, ...) in
 // ascending order in both passes. The walks below issue the loads of 16
@@ -80,16 +88,25 @@ void main() {
     uint start = params.lhs_offset + row * row_length;
 
     float local_max = uintBitsToFloat(0xff800000u);
-    uint index = thread;
-    for (; index + 15u * 256u < row_length; index += 16u * 256u) {
-      uint base = start + index;
-      LSE_LOAD16
-      LSE_APPLY16(LSE_MAX)
-    }
-    for (; index < row_length; index += 256u) {
-      float next = LOAD_VALUE(input_data.values[start + index]);
-      if (isnan(next) || next > local_max) {
-        local_max = next;
+    if ((params.flags & 0x80000000u) != 0u) {
+      for (uint index = thread; index < row_length; index += 256u) {
+        float next = LOAD_VALUE(input_data.values[start + index]);
+        if (isnan(next) || next > local_max) {
+          local_max = next;
+        }
+      }
+    } else {
+      uint index = thread;
+      for (; index + 15u * 256u < row_length; index += 16u * 256u) {
+        uint base = start + index;
+        LSE_LOAD16
+        LSE_APPLY16(LSE_MAX)
+      }
+      for (; index < row_length; index += 256u) {
+        float next = LOAD_VALUE(input_data.values[start + index]);
+        if (isnan(next) || next > local_max) {
+          local_max = next;
+        }
       }
     }
     block_values[thread] = local_max;
@@ -105,14 +122,22 @@ void main() {
     barrier();
 
     float local_sum = 0.0;
-    index = thread;
-    for (; index + 15u * 256u < row_length; index += 16u * 256u) {
-      uint base = start + index;
-      LSE_LOAD16
-      LSE_APPLY16(LSE_SUM)
-    }
-    for (; index < row_length; index += 256u) {
-      local_sum += exp(LOAD_VALUE(input_data.values[start + index]) - row_max);
+    if ((params.flags & 0x80000000u) != 0u) {
+      for (uint index = thread; index < row_length; index += 256u) {
+        local_sum +=
+            exp(LOAD_VALUE(input_data.values[start + index]) - row_max);
+      }
+    } else {
+      uint index = thread;
+      for (; index + 15u * 256u < row_length; index += 16u * 256u) {
+        uint base = start + index;
+        LSE_LOAD16
+        LSE_APPLY16(LSE_SUM)
+      }
+      for (; index < row_length; index += 256u) {
+        local_sum +=
+            exp(LOAD_VALUE(input_data.values[start + index]) - row_max);
+      }
     }
     block_values[thread] = local_sum;
     barrier();

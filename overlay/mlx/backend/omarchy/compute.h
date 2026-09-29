@@ -713,6 +713,11 @@ enum class ComputeKernel : uint16_t {
   // A_BF16/B_BF16/A_SCALE and B_BF16/OUT_BF16), bit-identical to cast + f32 matmul + cast.
   MatmulF32CoopmatQkBF16,
   MatmulF32CoopmatPvBF16,
+  // Legacy per-row GDN decode (shaders/gated_delta_decode_perrow.comp):
+  // the pre-shared-tile kernel, bit-identical arithmetic, slower on
+  // G13C, faster on G13G. Selected per chip; MLX_OMARCHY_GDN_DECODE_TILE
+  // overrides. Append-only profile id.
+  GatedDeltaDecodeBF16Untiled,
   Count,
 };
 
