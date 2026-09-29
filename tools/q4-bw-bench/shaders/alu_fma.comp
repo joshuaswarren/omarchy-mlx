@@ -1,0 +1,29 @@
+#version 460
+// fp32 FMA throughput probe: 16 independent chains per thread, 1024 iterations,
+// no memory traffic. flops per thread = 16 * 1024 * 2 = 32768. The result is
+// only stored for a bit pattern the seeded values never produce, so the loop
+// cannot be eliminated.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, std430) readonly buffer Src {
+  uvec4 values[];
+}
+src;
+layout(set = 0, binding = 1, std430) writeonly buffer Sink {
+  uint values[];
+}
+sink;
+void main() {
+  uint idx = gl_GlobalInvocationID.x;
+  float a = float(idx & 255u) * 1e-3 + 0.5;
+  float m = 0.9999 + float(idx & 7u) * 1e-6;
+  float c[16];
+  for (uint i = 0u; i < 16u; ++i) c[i] = a + float(i);
+  for (uint it = 0u; it < 1024u; ++it) {
+    for (uint i = 0u; i < 16u; ++i) c[i] = fma(c[i], m, 0.25);
+  }
+  float s = 0.0;
+  for (uint i = 0u; i < 16u; ++i) s += c[i];
+  if (floatBitsToUint(s) == 0xdeadbeefu) {
+    sink.values[idx & 1023u] = floatBitsToUint(s);
+  }
+}
