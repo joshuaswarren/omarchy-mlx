@@ -10794,9 +10794,11 @@ void GatedDeltaUpdate::eval_gpu(
     // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head;
     // the legacy per-row variant runs one workgroup per head.
     bool decode_tile = gdn_decode_tile_enabled(encoder);
-    // Prefetching legacy walks (env-gated while measured): the untiled
-    // kernel's per-element load-wait-fma loop, with eight loads in flight.
-    static const bool gdn_pf_env = omarchy::env_flag("MLX_OMARCHY_GDN_PF");
+    // Vec4 prefetching walks for the untiled (legacy G13 part) kernel:
+    // bit-exact, +3.4% decode on the 13-inch M1. MLX_OMARCHY_GDN_PF=0 restores
+    // the scalar kernel.
+    static const bool gdn_pf_env =
+        decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
     const bool gdn_pf = gdn_pf_env && (params.shape[1] % 4u) == 0u &&
         (params.shape[2] % 4u) == 0u;
     encoder.dispatch_compute(
