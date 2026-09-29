@@ -76,3 +76,25 @@ Fix A is shipped: `_fast_codec_sampler(model)` swaps the qwen3_tts module's `cat
 | A (shipped) | 0.231 / 0.108 | 1.45 s | 0.0% | -25.2 to -17.0 | 0.135-0.217 |
 
 Sample-level correlation against the pre-change audio does not apply here: the draw consumes the RNG differently, so the same seed yields a different (equally distributed) sample. Equivalence is shown at the distribution level (chi-square). WAVs for listening are in the orchestrator listening directory `mlx-tts-samples-fast/`. The owner listening check is pending.
+
+# Fix C rows and the named floor, 2026-09-29
+
+Correction to CORRECTION.md wording: `count=` on a `[rtmod] DISPATCH` line is that dispatch's element count (`params.count`, overlay `encoder.cpp:436`). It is not a running counter. Summing it gave elements, not dispatches. Line counts, used below, are the dispatch counts.
+
+Dispatches are line counts from a traced run split by MARK lines. The ms figures come from a separate untraced run in the same gpu-turn ticket. Kernel names come from the `ComputeKernel` enum in `overlay/mlx/backend/omarchy/compute.h`.
+
+| Row | Scope | Dispatches | ms (p50 of 10) | Tokens vs reference |
+|---|---|---|---|---|
+| CP upstream (15 x cp + `_sample_token`) | 15 passes | 3,393 | 174.9 | - |
+| CP loop as a pure function (noise passed in) | 15 passes | 3,253 | 165.9 | - |
+| (a+c) `mx.compile` of the whole 15-pass loop | 15 passes | 3,244 | 156.0 | identical to uncompiled, 10/10 frames |
+| Full frame, default SDPA route | talker decode + draw + compiled CP + embeds | **4,279** | **197.7** | - |
+| Full frame, `MLX_OMARCHY_SDPA_BF16_FAST=1` | same | **3,548** | **161.8** | CP codes agree 141/150 (bf16 score rounding) |
+
+Where a default frame's 4,279 dispatches go: CopyGeneralBF16 1,059, FastRmsNormBF16 428 (4 per layer: input, post, q_norm, k_norm), FusedChainBF16 417, QmmVecQ4 392, CastBF16F32 366, ElementwiseBF16 236, ElementwiseF32 213, MatmulF32 196, ArgSortMergeBF16 188 (top-k runs as a full merge argsort), CastF32BF16 136, SoftmaxF32 103, SwigluBF16 103.
+
+**Backend route gap (named):** `ScaledDotProductAttention::eval_gpu` (`primitives.cpp:12361-12372`) engages the fused one-dispatch decode kernel only for head_dim 64 (k >= 256) or 256 (k >= 12). Qwen3-TTS uses head_dim 128, so every decode layer runs the composition: q/k/v upcasts, layout copies, two f32 matmuls, f32 softmax and a downcast. The BF16_FAST flag removes the casts (-731 dispatches, -18% ms). The fused arm would also remove the matmuls, softmax and layout copies. It needs a SdpaDecodeNativeBF16 blob at query width 128; shared memory is (128+7168+256)*4 = 30.2 KB, under the 32 KB device limit. Not built.
+
+Not done: (b) q/k/v and gate/up fusion. At most 3 of ~42 dispatches per layer, about 300 per frame.
+
+**Named floor:** the default frame costs 197.7 ms / 4,279 = **46 us per dispatch** on this backend. Every route available today still leaves 3,548 dispatches (162 ms) per frame. At 46 us per dispatch, the 67 ms frame budget (RTF 1.2) allows about 1,450 dispatches. The talker and CP layers get none of the architecture-specific fused decode chains the chat model runs (`fused_chain.cpp`). Their generic Qwen3 layers (head_dim 128, per-head q/k RMSNorm) issue about 34-42 dispatches each, and a frame has 103 layer-passes. The model-compute ceiling with today's routes is about 80 ms of audio / 162 ms, **RTF ~0.49**, before codec decode and host overhead. The shipped end-to-end figure is RTF 0.23 because the upstream loop syncs every frame. RTF 1.2 needs roughly 2.5x fewer dispatches per frame: a fused hd-128 decode SDPA arm plus fused decoder-layer chains for this architecture. That is backend kernel work that is not built. The alternative is a different engine.

@@ -1,0 +1,8 @@
+{
+  "loadavg": "0.07 0.16 0.14 13/342 1552",
+  "mlx": "0.32.3.dev202609282218+29cba8e",
+  "trace": "0",
+  "default_frame_ms_p50": 197.67,
+  "bf16fast_frame_ms_p50": 161.81,
+  "cp_tokens_agree_of_150": 141
+}
