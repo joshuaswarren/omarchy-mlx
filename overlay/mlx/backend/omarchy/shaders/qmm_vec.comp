@@ -86,6 +86,10 @@ uint16_t bf16_store(float value) {
     defined(QMM_VEC_MULTI))
 #error "QMM_VEC_GREEDY builds on the bf16 subgroup Q4 word column"
 #endif
+#if defined(QMM_VEC_OUTGATE) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || !defined(QMM_VEC_MULTI))
+#error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi column"
+#endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
 // owning ROWS_PER_SLOT consecutive output rows (native qmv_fast keeps four
@@ -105,6 +109,14 @@ uint16_t bf16_store(float value) {
 #endif
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
+#endif
+// The x fetch inside Q4_WORD / Q4_ROWS: the out-gate prologue variant
+// (QMM_VEC_OUTGATE, multi-only) transforms the two prologue vectors
+// instead of reading the product; every other variant reads input_x.
+#if defined(QMM_VEC_OUTGATE)
+#define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#else
+#define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #endif
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP * ROWS_PER_SLOT);
 const uint LANES = 32u;
@@ -161,6 +173,51 @@ QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#if defined(QMM_VEC_OUTGATE)
+// Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
+// exact arithmetic and rounding of the two elementwise kernels the
+// prologue deletes (unary_vec.comp / elementwise.comp: float math on
+// the widened operand, one round to storage per kernel boundary —
+// sig_b = bf16(1/(1+exp(-g))), m = bf16(o * sig_b), both bf16_store
+// RNE). Every workgroup recomputes the full product from the same two
+// read-only vectors and gets identical bits; workgroup 0 stores the
+// materialized product so retained references to the deleted
+// Multiply's output stay valid (bindings 25-27; the vectors start at
+// element 0 — the host refuses otherwise).
+layout(set = 0, binding = 25, std430) readonly buffer OutgateOut {
+  uvec4 values[];
+} outgate_out;
+layout(set = 0, binding = 26, std430) readonly buffer OutgateGate {
+  uvec4 values[];
+} outgate_gate;
+layout(set = 0, binding = 27, std430) writeonly buffer OutgateMul {
+  uvec4 values[];
+} outgate_mul;
+uint16_t outgate_sig_lane(uint g_bits) {
+  float g = uintBitsToFloat(g_bits << 16u);
+  return bf16_store(1.0 / (1.0 + exp(-g)));
+}
+uint outgate_word(uint o, uint g) {
+  float sig_lo = uintBitsToFloat(
+      uint(outgate_sig_lane(g & 0xFFFFu)) << 16u);
+  float sig_hi = uintBitsToFloat(
+      uint(outgate_sig_lane(g >> 16u)) << 16u);
+  float lo = uintBitsToFloat((o & 0xFFFFu) << 16u) * sig_lo;
+  float hi = uintBitsToFloat((o & 0xFFFF0000u)) * sig_hi;
+  return uint(bf16_store(lo)) | (uint(bf16_store(hi)) << 16u);
+}
+uvec4 outgate_quad(uint quad_index) {
+  uvec4 o = outgate_out.values[quad_index];
+  uvec4 g = outgate_gate.values[quad_index];
+  uvec4 m = {outgate_word(o.x, g.x), outgate_word(o.y, g.y),
+             outgate_word(o.z, g.z), outgate_word(o.w, g.w)};
+  if (gl_WorkGroupID.x == 0u) {
+    outgate_mul.values[quad_index] = m;
+  }
+  return m;
+}
+#define OUTGATE_XWORDS(x_base) outgate_quad((x_base) / 8u)
+#endif
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
@@ -373,7 +430,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #if defined(USE_FP16) || defined(USE_BF16)
 #define Q4_WORD(word, x_base) { \
   uint word_value = (word); \
-  uvec4 x_words = input_x.values[(x_base) / 8u]; \
+  uvec4 x_words = OUTGATE_XWORDS(x_base); \
   Q4_QUAD(word_value, x_words.x, x_words.y) \
   Q4_QUAD(word_value >> 16u, x_words.z, x_words.w) \
 }
@@ -478,8 +535,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
         wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
       } \
-      uvec4 xa = input_x.values[(x_row + w * 8u) / 8u]; \
-      uvec4 xb = input_x.values[(x_row + w * 8u + 8u) / 8u]; \
+      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+      uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
       Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
       Q4_QUAD_ROWS(wb[r], xb.x, xb.y) \
@@ -495,7 +552,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         dot[r] = 0.0; \
         wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
       } \
-      uvec4 xa = input_x.values[(x_row + w * 8u) / 8u]; \
+      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
       Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
       Q4_ROWS_FINISH(w, S, B) \

@@ -163,6 +163,21 @@ struct GemvFusionMember {
   std::optional<KvDirectWindow> sum_window;
 };
 
+// Out-gate prologue fold: the group's shared x is the output of
+// x = Multiply(Sigmoid(gate), |out|) whose only consumer is the group's
+// first member. |gate| and |out| are the prologue vectors (element 0,
+// whole, dense), |x| the deleted Multiply's output — the kernel
+// recomputes it per workgroup with the elementwise arithmetic and
+// rounds, and materializes it so retained references stay valid.
+struct OutgatePlan {
+  array gate;
+  array out;
+  array x;
+  // The tape id of the deleted Sigmoid node: the gate's only allowed
+  // reader when the plan attaches.
+  std::uintptr_t sigmoid_id;
+};
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU
@@ -170,14 +185,18 @@ struct GemvFusionMember {
 // whose chain is silu(gate) * up; the dispatch computes both dots per
 // workgroup and stores only the product into |swiglu_out|, and both
 // member outputs alias that buffer (their only readers were the
-// deleted swiglu dispatch). Returns false having allocated nothing
-// when any member falls outside the contract; the caller then lets
-// every node take its ordinary eval_gpu path. Defined in
-// primitives.cpp beside QuantizedMatmul::eval_gpu.
+// deleted swiglu dispatch). |outgate| plans the out-gate prologue:
+// the shared x is the deleted Multiply(Sigmoid(gate), out) output, and
+// the one dispatch reads gate and out directly, reconstructing x per
+// workgroup with the elementwise arithmetic and rounding. Returns false
+// having allocated nothing when any member falls outside the contract;
+// the caller then lets every node take its ordinary eval_gpu path.
+// Defined in primitives.cpp beside QuantizedMatmul::eval_gpu.
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
-    const Stream& stream);
+    const Stream& stream,
+    OutgatePlan* outgate = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,

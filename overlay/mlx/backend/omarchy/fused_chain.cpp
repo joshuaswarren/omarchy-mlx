@@ -707,7 +707,7 @@ void FusedChain::evaluate_tail(const Stream& stream) {
 
 namespace {
 
-enum class EagerStep : uint8_t { sigmoid, gate_mul, output_mul };
+enum class EagerStep : uint8_t { skip, sigmoid, gate_mul, output_mul };
 
 struct EagerRole {
   std::uintptr_t group;
@@ -731,6 +731,10 @@ struct GemvGroup {
   // exactly a chain's gate and up projections. The one dispatch writes
   // silu(gate) * up into this array and no swiglu dispatch exists.
   std::optional<array> swiglu_out;
+  // Out-gate prologue fold: set at plan time when the group's shared x
+  // is the deleted Multiply(Sigmoid(gate), out) output. The one
+  // dispatch reads gate and out directly and rebuilds x per workgroup.
+  std::optional<OutgatePlan> outgate;
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -1214,6 +1218,41 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     claimed.insert(inner->id());
     claimed.insert(tail.id());
   }
+  // Out-gate prologue plans: tail = Multiply(Sigmoid(gate), out) whose
+  // sigmoid the tail alone reads and whose own single consumer is a
+  // QuantizedMatmul (the group attach below verifies both). The group
+  // dispatch rebuilds tail's value per workgroup with the elementwise
+  // arithmetic and rounding, so the sigmoid and multiply dispatches the
+  // pattern would create are deleted. Roles are registered only when a
+  // group actually adopts the plan; otherwise every node evaluates
+  // ordinarily.
+  std::unordered_map<std::uintptr_t, OutgatePlan> outgate_plans;
+  for (const auto& tail : tape) {
+    if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
+        claimed.count(tail.id()) || uses[tail.id()] != 1 ||
+        tail.dtype() == float32) {
+      continue;
+    }
+    const array* left = lookup(tail.inputs()[0]);
+    const array* right = lookup(tail.inputs()[1]);
+    const array* sigmoid = is_op(left, typeid(Sigmoid)) ? left
+        : (is_op(right, typeid(Sigmoid)) ? right : nullptr);
+    if (!sigmoid || sigmoid->inputs().size() != 1 ||
+        uses[sigmoid->id()] != 1 || claimed.count(sigmoid->id()) ||
+        tail.dtype() != sigmoid->dtype() ||
+        tail.primitive().stream() != sigmoid->primitive().stream()) {
+      continue;
+    }
+    const array& out = sigmoid == left ? tail.inputs()[1] : tail.inputs()[0];
+    if (out.id() == sigmoid->inputs()[0].id()) {
+      continue;  // x * sigmoid(x) is silu, not an out-gate product
+    }
+    outgate_plans.emplace(
+        tail.id(),
+        OutgatePlan{sigmoid->inputs()[0], out, tail, sigmoid->id()});
+    claimed.insert(sigmoid->id());
+    claimed.insert(tail.id());
+  }
   for (size_t i = 1; i < tape.size(); ++i) {
     const array& first = tape[i - 1];
     const array& second = tape[i];
@@ -1290,10 +1329,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   }
   for (auto x_id : x_order) {
     const auto& nodes = by_x[x_id];
+    auto plan_it = outgate_plans.find(x_id);
+    bool x_has_plan = plan_it != outgate_plans.end();
     for (size_t start = 0; start < nodes.size();
          start += kQmmVecMultiWeights) {
       GemvGroup group;
-      bool worth = false;
+      bool worth = x_has_plan && start == 0;
       for (size_t i = start; i < nodes.size() && i < start + kQmmVecMultiWeights;
            ++i) {
         const array& node = *nodes[i];
@@ -1334,6 +1375,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       if (group.members.size() < 2 && !worth) {
         continue;
       }
+      if (worth && start == 0 && x_has_plan) {
+        group.outgate = std::move(plan_it->second);
+      }
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
         state->gemv_roles.emplace(member.node.id(), index);
@@ -1345,6 +1389,62 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       state->gemv_groups.push_back(std::move(group));
     }
+  }
+  // Out-gate attach validation. A group carrying a plan keeps it only
+  // when the gate's only reader is the plan's sigmoid and out's only
+  // reader the deleted multiply, and the folding producers share the
+  // member stream. The sigmoid and multiply nodes then map to the
+  // group as skip roles — true exactly when the group dispatched, so a
+  // failed contract drops them back onto the ordinary path and the
+  // multiply materializes x as before. (EagerRole.group carries the
+  // gemv-group index for skip roles.)
+  std::unordered_map<std::uintptr_t, size_t> outgate_reader_count;
+  for (const auto& node : tape) {
+    for (const auto& input : node.inputs()) {
+      ++outgate_reader_count[input.id()];
+    }
+  }
+  for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+    auto& group = state->gemv_groups[gi];
+    if (!group.outgate) {
+      continue;
+    }
+    OutgatePlan& plan = *group.outgate;
+    auto gate_node = lookup(plan.gate);
+    auto out_node = lookup(plan.out);
+    const Stream& member_stream = group.members[0].node.primitive().stream();
+    bool streams_ok =
+        (!gate_node ||
+         gate_node->primitive().stream() == member_stream) &&
+        (!out_node || out_node->primitive().stream() == member_stream);
+    if (!streams_ok || outgate_reader_count[plan.gate.id()] != 1 ||
+        outgate_reader_count[plan.out.id()] != 1) {
+      group.outgate.reset();
+      continue;
+    }
+    // Everything the dispatch will check must be decided here: after
+    // adoption the deleted nodes never evaluate, so a dispatch-time
+    // refusal would leave their product unmaterialized. Whole-dense on
+    // the two vectors is implied for tape-produced inputs (fresh whole
+    // buffers, offset 0, row-contiguous) and the dispatch re-checks it;
+    // the only genuinely open condition, input_ready, is guaranteed by
+    // same-stream tape ordering.
+    auto& encoder = get_command_encoder(stream);
+    const auto& caps = encoder.device().capabilities();
+    bool subgroup_ready = caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    if (plan.x.dtype() != bfloat16 || !subgroup_ready ||
+        encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3 ||
+        plan.gate.dtype() != plan.x.dtype() ||
+        plan.out.dtype() != plan.x.dtype() ||
+        plan.x.ndim() < 2 || plan.x.shape(-2) != 1) {
+      group.outgate.reset();
+      continue;
+    }
+    state->roles.emplace(
+        plan.sigmoid_id, EagerRole{gi, EagerStep::skip});
+    state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
   }
   // SwiGLU store epilogue fold. When a planned group is exactly the
   // gate and up projections of a planned swiglu chain — two members,
@@ -1897,9 +1997,19 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       group.state = dispatch_quantized_gemv_group(
                         group.members,
                         group.swiglu_out ? &*group.swiglu_out : nullptr,
-                        stream)
+                        stream,
+                        group.outgate ? &*group.outgate : nullptr)
           ? GemvGroup::State::done
           : GemvGroup::State::failed;
+      if (group.state == GemvGroup::State::failed && group.outgate) {
+        // The deleted sigmoid and multiply never ran and cannot be
+        // replayed here; a refusal after adoption is a planner bug,
+        // not a fallback path (plan-time validation covers everything
+        // but same-stream readiness, which tape ordering guarantees).
+        throw std::runtime_error(
+            "[mlx-omarchy] out-gate prologue group refused after fold "
+            "adoption");
+      }
     }
     return group.state == GemvGroup::State::done;
   }
@@ -1908,6 +2018,15 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return false;
   }
   const auto role = role_it->second;
+  if (role.step == EagerStep::skip) {
+    // A node deleted by an adopted out-gate plan: true while its group
+    // is pending or done (the group's dispatch owns the work and
+    // materializes x; EagerRole.group carries the gemv group index),
+    // false on a failed contract so the node evaluates ordinarily and
+    // the multiply produces x as before.
+    return eager_state->gemv_groups[role.group].state !=
+        GemvGroup::State::failed;
+  }
   if (role.step == EagerStep::sigmoid) {
     // The chain interpreter binds up to kMaxChainLeaves + 3 buffers.
     if (device().compute().binding_limit() < kMaxChainLeaves + 3) {

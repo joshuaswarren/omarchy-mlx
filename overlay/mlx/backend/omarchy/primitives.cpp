@@ -7444,7 +7444,8 @@ bool input_ready(const array& value, const Stream& stream) {
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
     array* swiglu_out,
-    const Stream& stream) {
+    const Stream& stream,
+    OutgatePlan* outgate) {
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
     return false;
@@ -7464,7 +7465,31 @@ bool dispatch_quantized_gemv_group(
   }
   const array& x = members[0].node.inputs().at(0);
   const Dtype dtype = members[0].node.dtype();
-  if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
+  bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  if (outgate != nullptr) {
+    // The prologue deletes the Multiply that produced x (it was never
+    // evaluated), so x's usual readiness checks do not apply: its
+    // shape and dtype still describe the product. Needs the bf16
+    // subgroup variant and three more bindings than the plain multi.
+    if (encoder.device().compute().binding_limit() <
+            kQmmVecMultiBindings + 3 ||
+        dtype != bfloat16 || !subgroup_ready) {
+      return false;
+    }
+    const array& gate = outgate->gate;
+    const array& out = outgate->out;
+    if (!whole_dense(gate, gate.size()) || !whole_dense(out, out.size()) ||
+        gate.dtype() != dtype || out.dtype() != dtype ||
+        outgate->x.id() != x.id() || !input_ready(gate, stream) ||
+        !input_ready(out, stream)) {
+      return false;
+    }
+    if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
+        x.ndim() < 2 || x.shape(-2) != 1) {
+      return false;
+    }
+  } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
       x.ndim() < 2 || x.shape(-2) != 1 || !input_ready(x, stream) ||
       x.data_shared_ptr() == nullptr || !x.flags().row_contiguous ||
       x.offset() % x.itemsize() != 0) {
@@ -7576,6 +7601,12 @@ bool dispatch_quantized_gemv_group(
   // Contract satisfied: allocate every output, then bind. Unused
   // weight slots bind the first member's output so every binding the
   // shader declares is a valid buffer.
+  if (outgate != nullptr) {
+    // The deleted Multiply's output materializes: workgroup 0 of the
+    // dispatch writes the product it recomputes, so retained
+    // references stay valid.
+    outgate->x.set_data(allocator().malloc(outgate->x.nbytes()));
+  }
   if (swiglu_out) {
     // The fold stores only the product; both member outputs alias it
     // so their retained references stay valid (their only readers
@@ -7646,8 +7677,8 @@ bool dispatch_quantized_gemv_group(
       params.matrix_m = window.head_dim;
     }
   }
-  std::array<ComputeBinding, kQmmVecMultiBindings> bindings{};
-  bindings[0] = binding(x);
+  std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
+  bindings[0] = binding(outgate != nullptr ? outgate->x : x);
   const ComputeBinding filler = binding(members[0].node);
   for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
     uint32_t base = 1 + i * kQmmVecMultiBindingsPerWeight;
@@ -7672,9 +7703,15 @@ bool dispatch_quantized_gemv_group(
   if (swiglu_out) {
     bindings[1 + 3] = binding(*swiglu_out);
   }
-  bool subgroup_ready = caps.subgroup_size == 32u &&
-      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
-  auto kernel = subgroup_ready
+  if (outgate != nullptr) {
+    params.flags |= 131072u;  // flags bit 17, the out-gate prologue
+    bindings[kQmmVecMultiBindings] = binding(outgate->out);
+    bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
+    bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
+  }
+  auto kernel = outgate != nullptr
+      ? ComputeKernel::QmmVecQ4MultiOutgateBF16
+      : subgroup_ready
       ? select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,

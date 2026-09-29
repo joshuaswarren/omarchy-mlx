@@ -29,9 +29,10 @@ inline constexpr uint32_t kComputeBindingFloor = 4;
 // real drivers report orders of magnitude more.
 // Twenty-five slots fit the widest kernel today: the multi-weight decode
 // GEMV binds x plus, per weight, packed words, scales, biases, the
-// output, an Add addend, and the Add output (kQmmVecMultiBindings).
-// The triple-index scatter needs six.
-inline constexpr uint32_t kComputeBindingBudget = 25;
+// output, an Add addend, and the Add output (kQmmVecMultiBindings); the
+// out-gate prologue variant adds three more. The triple-index scatter
+// needs six.
+inline constexpr uint32_t kComputeBindingBudget = 28;
 // Bindings of the QmmVecQ4Multi kernels and their per-weight stride.
 // Four weights cover a GatedDeltaNet layer's qkv/z/a/b projections of one
 // normed row in one dispatch.
@@ -39,6 +40,8 @@ inline constexpr uint32_t kQmmVecMultiWeights = 4;
 inline constexpr uint32_t kQmmVecMultiBindingsPerWeight = 6;
 inline constexpr uint32_t kQmmVecMultiBindings =
     1 + kQmmVecMultiWeights * kQmmVecMultiBindingsPerWeight;
+// The out-gate prologue adds three slots: the gate and pre-multiply
+// vectors it reads, and the materialized product (kQmmVecMultiBindings + 3).
 inline constexpr uint32_t kDenseVecMultiWeights = 3;
 inline constexpr uint32_t kDenseVecMultiBindingsPerWeight = 2;
 inline constexpr uint32_t kDenseVecMultiBindings =
@@ -719,6 +722,13 @@ enum class ComputeKernel : uint16_t {
   // overrides. Append-only profile id.
   GatedDeltaDecodeBF16Untiled,
   GatedDeltaDecodeBF16Pf,
+  // Out-gate prologue multi-weight decode GEMV
+  // (qmm_vec.comp -DQMM_VEC_OUTGATE): x = out * sigmoid(gate) is
+  // computed per x quad inside the kernel with the elementwise
+  // arithmetic and rounding, so the standalone Sigmoid and Multiply
+  // dispatches are deleted. bf16 + subgroup only. Append-only profile
+  // id.
+  QmmVecQ4MultiOutgateBF16,
   Count,
 };
 
