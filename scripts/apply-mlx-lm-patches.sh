@@ -56,6 +56,10 @@ apply mlx-lm-greedy-prune.patch
 # bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
 # digest unchanged, decode +2.1%). The gated-norm site is NOT shipped: it diverges.
 apply mlx-lm-qwen35-qk-scaled.patch
+# GDN decode conv -> mx.fast.gdn_conv_update (state concat + carry folded into the conv
+# kernel; decode S==1, bf16, self-guarded on hasattr): bit-identical on jwm1 (decode64/128/256
+# digests 7fe6badf/da5568ee/7d0523ae unchanged), decode +1.5-2.0%.
+apply mlx-lm-qwen35-gdn-conv.patch
 if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 ]]; then
   apply mlx-lm-convring.patch
 else
