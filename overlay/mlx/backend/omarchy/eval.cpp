@@ -75,6 +75,13 @@ void eval(array& arr) {
   if (g_first_state == 0 && !batch_open) {
     g_first_state =
         (omarchy::batch_first_budget() > 0 && encoder.synchronized()) ? 1 : 2;
+    static const bool trace_first = std::getenv("MLX_OMARCHY_BATCH_TRACE") != nullptr;
+    if (trace_first) {
+      std::fprintf(stderr, "[batchfirst] graph start state=%d last_completion=%llu drained=%llu\n",
+                   g_first_state,
+                   static_cast<unsigned long long>(encoder.last_submitted_completion()),
+                   static_cast<unsigned long long>(encoder.device().completions().drained_value()));
+    }
   }
   {
     // If the array is a tracer hold a reference
@@ -164,6 +171,12 @@ void finalize(Stream s) {
   // open batch must reach the queue here or those waits never complete.
   // Batching still happens: every dispatch recorded between finalizes
   // (one whole graph evaluation) shares one open command buffer.
+  {
+    static const bool trace_first = std::getenv("MLX_OMARCHY_BATCH_TRACE") != nullptr;
+    if (trace_first) {
+      std::fprintf(stderr, "[batchfirst] finalize\n");
+    }
+  }
   g_first_state = 0;
   omarchy::get_command_encoder(s).commit();
 }
