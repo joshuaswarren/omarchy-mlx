@@ -701,6 +701,10 @@ enum class ComputeKernel : uint16_t {
   // Standalone silu chain: shaders/swiglu.comp built with -DSILU_ONLY (up == 1.0).
   SiluF16,
   SiluBF16,
+  // Depthwise 1-D conv (shaders/conv_dw1d.comp), bit-exact to conv.comp on that shape.
+  ConvDw1dF32,
+  ConvDw1dF16,
+  ConvDw1dBF16,
   Count,
 };
 

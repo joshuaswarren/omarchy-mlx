@@ -4180,6 +4180,37 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
 
+  // Depthwise 1-D (GatedDeltaNet prefill conv): straight-line kernel, bit-exact
+  // to the general conv.comp path (same ascending-tap accumulation and store).
+  if (spatial == 1 && groups_ == in_channels && out_channels == in_channels &&
+      in_channels_per_group == 1 && !flip_ &&
+      axis_or_one(kernel_strides_, 0) == 1u && pad_lo_axis(0) == 0u &&
+      axis_or_one(kernel_dilation_, 0) == 1u &&
+      axis_or_one(input_dilation_, 0) == 1u &&
+      out.shape(1) == in_ext[0] - kern_ext[0] + 1) {
+    omarchy::ComputeParams dw;
+    dw.count = total;
+    dw.operation = checked_u32(kern_ext[0], "Convolution", out);
+    dw.lhs_size = checked_u32(in_ext[0], "Convolution", out);
+    dw.rhs_size = checked_u32(out.shape(1), "Convolution", out);
+    dw.reduce_size = checked_u32(in_channels, "Convolution", out);
+    dw.output_size = total;
+    dw.lhs_offset = checked_item_offset(x, x.size(), "Convolution", out);
+    dw.rhs_offset = checked_item_offset(w, w.size(), "Convolution", out);
+    dw.output_offset = checked_item_offset(out, out.size(), "Convolution", out);
+    std::array<omarchy::ComputeBinding, 3> dw_bindings{
+        binding(x), binding(w), binding(out)};
+    encoder.dispatch_compute(
+        select_float_kernel(
+            out.dtype(),
+            omarchy::ComputeKernel::ConvDw1dF32,
+            omarchy::ComputeKernel::ConvDw1dF16,
+            omarchy::ComputeKernel::ConvDw1dBF16),
+        dw_bindings,
+        dw,
+        omarchy::compute_dispatch_group_count(total));
+    return;
+  }
   params.count = total;
   params.reduce_size = checked_u32(in_channels_per_group, "Convolution", out);
   params.lhs_offset = checked_item_offset(x, x.size(), "Convolution", out);

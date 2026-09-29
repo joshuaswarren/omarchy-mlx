@@ -342,6 +342,9 @@
 #include "qmm_tile_fp_f16.h"
 #include "qmm_tile_fp_bf16.h"
 #include "conv_bf16.h"
+#include "conv_dw1d_f32.h"
+#include "conv_dw1d_f16.h"
+#include "conv_dw1d_bf16.h"
 #include "clear_u32.h"
 #include "gather_axis_bf16.h"
 #include "gather_axis_f16.h"
@@ -1308,6 +1311,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {silu_f16, silu_f16_size};
     case ComputeKernel::SiluBF16:
       return {silu_bf16, silu_bf16_size};
+    case ComputeKernel::ConvDw1dF32:
+      return {conv_dw1d_f32, conv_dw1d_f32_size};
+    case ComputeKernel::ConvDw1dF16:
+      return {conv_dw1d_f16, conv_dw1d_f16_size};
+    case ComputeKernel::ConvDw1dBF16:
+      return {conv_dw1d_bf16, conv_dw1d_bf16_size};
     case ComputeKernel::FastTrioNormF16:
       return {fast_trio_norm_f16, fast_trio_norm_f16_size};
     case ComputeKernel::FastTrioRopePairF16:
