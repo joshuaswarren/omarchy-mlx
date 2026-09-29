@@ -611,7 +611,7 @@
     {
       "id": "laya-mlx",
       "repo": "convaiinnovations/laya",
-      "revision": "1c5edc17a7acd8701df6fc341c0d179f1c62c982",
+      "revision": "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851",
       "kind": "decisions",
       "priority": 1,
       "recommended": false,
@@ -663,7 +663,7 @@
         "source_repo": "convaiinnovations/laya",
         "source_revision_pinned_in_manifest": "c5d78730f3493e4fe16d61507ef4b78eef7318cf",
         "source_head_at_discovery": "1c5edc17a7acd8701df6fc341c0d179f1c62c982",
-        "source_drift": "Upstream source moved past the revision recorded in the pack manifest (2026-09-20); repacking requires requalification. Lane tests cover both revisions.",
+        "source_drift": "Upstream source moved past the revision recorded in the pack manifest (2026-09-20); repacking requires requalification. Lane tests cover both revisions. On 2026-09-29 the pinned commit 1c5edc17 no longer existed upstream (Hugging Face: Invalid rev id; upstream history was rewritten). Catalog now pins main at 55cf4c4e. All five files the conversion reads (model.safetensors, encoder/config.json, rl_agent_config.json, tokenizer/tokenizer.json, tokenizer/tokenizer_config.json) hash byte-identical to the 1c5edc17 conversion manifest, so the qualified artifact is unchanged.",
         "runtime_owner": "Runtime adaptation is owned by the Laya serving lane; this entry records metadata only.",
         "variant": "fp16-pack",
         "availability_files": [
@@ -673,7 +673,7 @@
         "pack_variant_note": "The aac6fef/laya-mlx pack @ 20aed815 (weights sha b9c07bf1..., alias-normalized names) remains available metadata but is NOT the qualified artifact.",
         "min_mem_gib_basis": "ceil(weights_bytes * 1.25 / 2^30); static weights floor, not a measured peak",
         "qualification_scope": "receipts/2026-09-20-laya-gpu-qual-the T6021 qualification host.md @ 96873ad8: a 64 GiB M1-Max-class (T6021) host, fp16 GPU. Managed atomic admission 6,228,139,532 B before any weight load (param floor 842,587,660 + 2x-safety workspace 5,385,551,872 = formula(64) exactly); post-load relabel resident with param-only floor; B=64 worst-case on-device workspace audit measured 2,686,279,680 <= bound 5,385,551,872; 6/6 frozen numerical gates PASS through the managed HTTP decisions endpoint (argmax 100%, prob err <= 1.1e-3); rtmod trace shows no CPU primitive dispatches. Co-serving scope: the standing llama.cpp chat service was an EXTERNAL RESIDENT recognized via MemAvailable (its ~19 GiB already counted) while laya's own pending headroom was held; concurrent real chat + laya responses succeeded. A managed-reservation co-serving test (second budget-reserved model) was NOT exercised. recommended stays false pending integration per owner directive. Co-serving concurrence proof COMMITTED: receipts/2026-09-20-laya-window-raw/coresidency-evidence.json holds both full untruncated response bodies (HTTP 200/200, launches 0.475 ms apart, requests_in_flight_overlap TRUE \u2014 chat still in flight when laya responded). Managed-reservation co-serving remains unexercised and unclaimed.",
-        "serve_path": "Contract: catalog pins the SOURCE revision to convert (convaiinnovations/laya @ 1c5edc17); serving requires the mlx_omarchy_laya conversion (weights byte-identical, sha256 891102d3...). The unified serve flow does not convert yet (route fix in progress by the schema owner); raw snapshots have no manifest and cannot complete --managed admission.",
+        "serve_path": "Contract: catalog pins the SOURCE revision to convert (convaiinnovations/laya @ 55cf4c4e); serving requires the mlx_omarchy_laya conversion (weights byte-identical, sha256 891102d3...). The unified serve flow does not convert yet (route fix in progress by the schema owner); raw snapshots have no manifest and cannot complete --managed admission.",
         "download_patterns": [
           "model.safetensors",
           "encoder/config.json",

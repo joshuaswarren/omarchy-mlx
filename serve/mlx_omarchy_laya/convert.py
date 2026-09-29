@@ -32,7 +32,7 @@ import urllib.request
 from pathlib import Path
 
 SOURCE_REPO = "convaiinnovations/laya"
-PINNED_REVISION = "1c5edc17a7acd8701df6fc341c0d179f1c62c982"
+PINNED_REVISION = "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
 WORKSPACE_HEADROOM_BYTES = 512 * 1024 * 1024
 
 # variant -> (subpath in repo, catalog model id)

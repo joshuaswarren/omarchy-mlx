@@ -451,45 +451,71 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
     return lines, admission, disk_ok
 
 
-def snapshot_complete(path: Path, patterns: list[str] | None = None) -> bool:
-    """A directory alone proves nothing: weights (index shards or single
-    file) must exist nonempty, config.json must be present, some tokenizer
-    file must be present, and every declared download pattern must be
-    satisfied (exact patterns: the file exists; wildcard patterns: at
-    least one match). Missing encoder/tokenizer configs are unacceptable
-    even when the weights are complete."""
+def snapshot_gaps(path: Path, patterns: list[str] | None = None,
+                  hf_layout: bool = True) -> list[str]:
+    """Names of the files that make this snapshot unusable: weights (index
+    shards or single file) must exist nonempty, and every declared download
+    pattern must be satisfied (exact patterns: the file exists; wildcard
+    patterns: at least one match). With hf_layout (the default, for
+    transformers-style checkpoints) config.json and some tokenizer file must
+    also be present; a pack with its own layout (Laya keeps encoder/config.json
+    and tokenizer/) declares its files in patterns and passes hf_layout=False.
+    Empty list means complete."""
+    gaps: list[str] = []
     index = path / "model.safetensors.index.json"
     if index.is_file():
         try:
             weight_map = json.loads(index.read_text(encoding="utf-8")).get("weight_map", {})
         except (OSError, json.JSONDecodeError):
-            return False
+            weight_map = {}
         shards = sorted(set(weight_map.values()))
         if not shards:
-            return False
-        if not all((path / shard).is_file() and (path / shard).stat().st_size > 0
-                   for shard in shards):
-            return False
+            gaps.append("model.safetensors.index.json (no shards mapped)")
+        gaps.extend(shard for shard in shards
+                    if not (path / shard).is_file() or (path / shard).stat().st_size == 0)
     else:
         single = path / "model.safetensors"
         if not (single.is_file() and single.stat().st_size > 0):
-            return False
-    if not (path / "config.json").is_file():
-        return False
-    if not any((path / name).is_file() for name in
-               ("tokenizer.json", "tokenizer.model", "tokenizer_config.json")):
-        return False
+            gaps.append("model.safetensors")
+    if hf_layout and not (path / "config.json").is_file():
+        gaps.append("config.json")
+    if hf_layout and not any((path / name).is_file() for name in
+                             ("tokenizer.json", "tokenizer.model", "tokenizer_config.json")):
+        gaps.append("a tokenizer file (tokenizer.json et al.)")
     if patterns:
         for pattern in patterns:
             if any(ch in pattern for ch in "*?["):
                 if not any(path.glob(pattern)):
-                    return False
+                    gaps.append(pattern)
             elif not (path / pattern).is_file():
-                return False
-    return True
+                gaps.append(pattern)
+    return gaps
 
 
-def probe_snapshot(resolved: Resolved, patterns: list[str] | None = None) -> Path | None:
+def snapshot_complete(path: Path, patterns: list[str] | None = None,
+                      hf_layout: bool = True) -> bool:
+    return not snapshot_gaps(path, patterns, hf_layout)
+
+
+def offline_snapshot_detail(resolved: Resolved, patterns: list[str] | None = None,
+                            hf_layout: bool = True) -> str:
+    """Human-readable cache state for an offline refusal: names the exact
+    missing files when a snapshot directory exists, or says none does."""
+    if resolved.local_path is not None or not resolved.revision:
+        return ""
+    directory = (hf_cache_dir() / ("models--" + resolved.repo.replace("/", "--"))
+                 / "snapshots" / resolved.revision)
+    if not directory.is_dir():
+        return (f"; the Hugging Face cache has no snapshot for revision "
+                f"{resolved.revision[:12]} of {resolved.repo}")
+    gaps = snapshot_gaps(directory, patterns, hf_layout)
+    if not gaps:
+        return ""
+    return f"; the cached snapshot for {resolved.repo} is missing: " + ", ".join(gaps[:8])
+
+
+def probe_snapshot(resolved: Resolved, patterns: list[str] | None = None,
+                   hf_layout: bool = True) -> Path | None:
     """Local-only snapshot resolution. Returns a verified-complete path or
     None (missing OR partial download). Never touches the network."""
     if resolved.local_path is not None:
@@ -507,7 +533,7 @@ def probe_snapshot(resolved: Resolved, patterns: list[str] | None = None) -> Pat
         ))
     except Exception:  # huggingface_hub raises several types for a missing snapshot
         return None
-    return path if snapshot_complete(path, patterns) else None
+    return path if snapshot_complete(path, patterns, hf_layout) else None
 
 
 def _import_huggingface_hub():

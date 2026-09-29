@@ -1187,6 +1187,56 @@ class PairManagerTests(BasePairTest):
             self.manager.setup("everyday", approve_download=True)
         self.assertIn(CHAT_SMALL_ID, str(ctx.exception))
 
+    def make_raw_laya_snapshot(self, with_weights=True):
+        # Laya's source layout has no top-level config.json: encoder/config.json,
+        # tokenizer/, rl_agent_config.json, model.safetensors.
+        snap = self.home / "hf" / "models--org--laya" / "snapshots" / ("a" * 40)
+        (snap / "encoder").mkdir(parents=True)
+        (snap / "tokenizer").mkdir()
+        (snap / "encoder" / "config.json").write_text("{}", encoding="utf-8")
+        (snap / "rl_agent_config.json").write_text("{}", encoding="utf-8")
+        (snap / "tokenizer" / "tokenizer.json").write_text("{}", encoding="utf-8")
+        if with_weights:
+            (snap / "model.safetensors").write_bytes(b"w" * 16)
+        return snap
+
+    def test_setup_offline_converts_a_fully_cached_raw_laya_snapshot(self):
+        # v0.7.5 refused this offline ("no raw snapshot to convert") because the
+        # generic completeness gate demanded a top-level config.json that Laya's
+        # layout does not have. A complete cached snapshot must reach conversion.
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        snap = self.make_raw_laya_snapshot()
+        launched = []
+
+        def fake_spawn(argv, **_kwargs):
+            launched.append(argv)
+            return types.SimpleNamespace(poll=lambda: 0, returncode=0)
+
+        with mock.patch.object(pairs.managed, "spawn_supervised", fake_spawn):
+            with self.assertRaises(pairs.PairError) as ctx:
+                self.manager.setup("everyday", approve_download=True)
+        self.assertNotIn("no raw snapshot", str(ctx.exception))
+        self.assertEqual(len(launched), 1)
+        argv = launched[0]
+        self.assertIn("mlx_omarchy_laya.convert", argv)
+        self.assertEqual(argv[argv.index("--from-local") + 1], str(snap))
+
+    def test_setup_offline_names_the_missing_weights_in_a_partial_laya_snapshot(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_raw_laya_snapshot(with_weights=False)
+        with self.assertRaises(pairs.PairError) as ctx:
+            self.manager.setup("everyday", approve_download=True)
+        message = str(ctx.exception)
+        self.assertIn(DECISION_ID, message)
+        self.assertIn("model.safetensors", message)
+        self.assertIn("org/laya", message)
+
+    def test_setup_offline_says_when_the_cache_has_no_snapshot_for_the_pin(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        with self.assertRaises(pairs.PairError) as ctx:
+            self.manager.setup("everyday", approve_download=True)
+        self.assertIn("no snapshot for revision aaaaaaaaaaaa", str(ctx.exception))
+
     def test_setup_voice_requires_synthesis_module(self):
         self.make_chat_snapshot(CHAT_SMALL_ID)
         self.make_converted_laya()

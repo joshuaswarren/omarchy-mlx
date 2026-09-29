@@ -201,7 +201,7 @@ Exact candidate pins, taken from the existing catalog:
 |---|---|---|
 | `qwen3.8-2b-4bit` | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` | `0867d98bfb174b042d88461c0e7c97b86b34b381` |
 | `qwen3.8-27b-4bit` | `mlx-community/Qwen3.8-27B-4bit` | `10c35caafbb80f7dc6a7a432cdd11af10a6d4818` |
-| `laya-mlx` | `convaiinnovations/laya` | `1c5edc17a7acd8701df6fc341c0d179f1c62c982` |
+| `laya-mlx` | `convaiinnovations/laya` | `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` |
 
 The catalog weight totals are approximately 1.90 GB for Everyday and 16.90 GB for Quality.
 These are decimal weight bytes only, not download totals, disk requirements, or runtime memory requirements.

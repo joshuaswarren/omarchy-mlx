@@ -70,6 +70,7 @@ Defects found by these runs and fixed in source:
 - **Chat prompts carried a 792-token card schema on every turn.** Prefill cost about 2 s. Ordinary chat now sends a 209-token schema with three card types. A message that names a chart, graph, form, decision, options, facts, or sources gets the full schema, and so does every Laya turn.
 - **Greedy decoding looped on the 2B model** until the token cap. Chat requests now send a repetition penalty of 1.1.
 - **A reboot during pair start left an unclaimed reservation.** Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
+- **A fresh install could not set up Laya, offline or online.** Two causes. (1) The generic snapshot check required a top-level `config.json`, which Laya's layout (`encoder/config.json`, `tokenizer/`) does not have, so a fully cached raw Laya snapshot never counted and offline setup refused with "no raw snapshot to convert". Laya now declares its own files and is checked against them. Offline refusals now name the missing files. (2) The pinned Laya commit `1c5edc17` no longer exists upstream (Hugging Face returns "Invalid rev id"), so a fresh online download failed. The catalog now pins upstream `main` at `55cf4c4e`. All five files conversion reads hash identical to the earlier conversion, so the converted artifact and its weights hash `891102d3…` are unchanged. An existing converted Laya records the old revision and is converted again on the next setup. That needs the new snapshot in the cache, or a network. Measured on the M2: fresh home offline from the cache 3.8 s; empty cache online 24 s and 1.8 GB.
 
 The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.5, installed-from-release gates green; see `receipts/2026-09-29-v075-release.md`).
 
@@ -138,7 +139,7 @@ The [Laya contract](../serve/mlx_omarchy_laya/CONTRACT.md) specifies request sch
 Its `rl_agent.act_probability` value is the probability of answering rather than escalating.
 Its `confidence` value is one minus normalized entropy, not factual accuracy.
 
-The catalog pins `convaiinnovations/laya` at `1c5edc17a7acd8701df6fc341c0d179f1c62c982`. Convert that source snapshot with the in-repository converter before serving it.
+The catalog pins `convaiinnovations/laya` at `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`. Convert that source snapshot with the in-repository converter before serving it.
 The serving CLI checks for a converted artifact and refuses the raw source snapshot with a conversion hint.
 It does not currently perform the conversion for the user.
 Chat and Laya retain independent processes, model IDs, and endpoints.

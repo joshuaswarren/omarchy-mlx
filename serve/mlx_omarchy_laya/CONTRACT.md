@@ -23,7 +23,7 @@ Checkpoints (upstream repo root + subfolders):
 
 Pinned provenance used by this lane:
 
-- source: `convaiinnovations/laya` @ `1c5edc17a7acd8701df6fc341c0d179f1c62c982`
+- source: `convaiinnovations/laya` @ `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`
   (upstream `NandhaKishorM/laya` now 401s; it moved to the convaiinnovations org)
 - pack: `aac6fef/laya-mlx` @ `20aed815fc6acde75733882e7ec0e3f28aeb9717` (fp16, 206 tensors;
   pins source `c5d78730f3493e4fe16d61507ef4b78eef7318cf`)

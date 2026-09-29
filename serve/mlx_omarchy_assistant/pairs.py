@@ -859,7 +859,7 @@ class PairManager:
             converted = self._converted_usable(decision_conv, decision)
             chat_path = serve_cli.probe_snapshot(chat_resolved, chat_patterns)
             raw_decision = None if converted else \
-                serve_cli.probe_snapshot(decision_resolved, decision_patterns)
+                serve_cli.probe_snapshot(decision_resolved, decision_patterns, hf_layout=False)
             conversion_needed = not converted
             chat_fetch = chat_path is None
             decision_fetch = raw_decision is None and not converted
@@ -955,7 +955,8 @@ class PairManager:
                 raise PairError(
                     f"{chat['id']}: no complete local snapshot and downloads are "
                     "disabled (offline mode); run setup once online or pre-seed "
-                    "the Hugging Face cache")
+                    "the Hugging Face cache"
+                    + serve_cli.offline_snapshot_detail(resolved, patterns))
             need = serve_cli.disk_need_bytes(resolved)
             if need is not None:
                 ok, free, where = budget.disk_check(need, serve_cli.hf_cache_dir())
@@ -977,7 +978,7 @@ class PairManager:
         if self._converted_usable(conv_dir, decision):
             progress("verify", role="decision", reused=True)
             return conv_dir
-        snap = serve_cli.probe_snapshot(resolved, patterns)
+        snap = serve_cli.probe_snapshot(resolved, patterns, hf_layout=False)
         if snap is None:
             if not allow_fetch:
                 raise PairError(
@@ -987,7 +988,8 @@ class PairManager:
                 raise PairError(
                     f"{decision['id']}: no usable converted artifact and no raw "
                     "snapshot to convert (offline mode); conversion of the pinned "
-                    "source snapshot is required before serving")
+                    "source snapshot is required before serving"
+                    + serve_cli.offline_snapshot_detail(resolved, patterns, hf_layout=False))
             need = serve_cli.disk_need_bytes(resolved)
             if need is not None:
                 ok, free, where = budget.disk_check(need, serve_cli.hf_cache_dir())
