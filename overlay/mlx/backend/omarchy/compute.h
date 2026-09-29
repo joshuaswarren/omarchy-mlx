@@ -674,6 +674,7 @@ enum class ComputeKernel : uint16_t {
   // ElementwiseBF16(mul). Same row reduction as fast_norm.comp.
   // Append-only profile id.
   FastNormGatedBF16,
+  FastNormGatedOnlyBF16,
   // GDN decode conv: conv_input = concat(state, x) folded into the
   // depthwise conv read (T == 1) with the shifted carry-out state
   // written in-kernel. Replaces CopyGeneral x2 (concat halves) +

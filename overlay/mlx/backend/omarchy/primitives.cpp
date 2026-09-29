@@ -11224,7 +11224,7 @@ void RMSNormGated::eval_gpu(
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(gate), binding(out)};
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::FastNormGatedBF16,
+      omarchy::ComputeKernel::FastNormGatedOnlyBF16,
       bindings,
       params,
       std::min(params.output_size, omarchy::kMaxComputeGroupCountX));

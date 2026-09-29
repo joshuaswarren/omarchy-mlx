@@ -55,6 +55,16 @@ uint16_t bf16_store(float value) {
 #define WIDEN(x) float(x)
 #endif
 
+// GATED_ONLY builds have no runtime mode branch (the gated kernel used by
+// RMSNormGated); the default build keeps both modes for RMSNormScaled.
+#ifdef GATED_ONLY
+#define IS_SCALED (false)
+#define IS_GATED (true)
+#else
+#define IS_SCALED (params.operation == 1u)
+#define IS_GATED (params.operation == 0u)
+#endif
+
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Input {
@@ -101,7 +111,7 @@ void main() {
   // Mode-1 scalar: round the f32 scale to the storage dtype exactly as
   // the composed promote cast does, then widen.
   float scale = 0.0;
-  if (params.operation == 1u) {
+  if (IS_SCALED) {
 #ifdef USE_BF16
     scale = WIDEN(bf16_store(params.beta));
 #else
@@ -136,12 +146,18 @@ void main() {
           (params.lhs_size == 1u)
               ? LOAD_VALUE(weight_data.values[params.rhs_offset])
               : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-      float result = value * norm * weight;
+      // The reference FastRmsNormBF16 kernel compiles this product as
+      // value * (norm * weight); the shader compiler is free to reassociate a
+      // plain fmul chain differently in this kernel, which flipped ~5e-6 of
+      // outputs by one bf16 ulp. precise pins the association to the reference's
+      // (measured: 0 mismatches over 5.4M elements; the source order gave 25).
+      precise float norm_weight = norm * weight;
+      precise float result = value * norm_weight;
       // The normed value the composed path stores and its consumers
       // widen: round once to the storage dtype, then widen exactly.
       float normed = WIDEN(STORE_VALUE(result));
       float out_value;
-      if (params.operation == 0u) {
+      if (IS_GATED) {
         uint gate_index = params.aux_offset + row * row_length + index;
         float gate = WIDEN(gate_data.values[gate_index]);
         // silu(gate) then silu * normed, left-associated exactly like the
@@ -153,8 +169,11 @@ void main() {
         // silu to bf16, which flipped ~36% of outputs by one ulp against
         // the composed path: receipts/2026-09-28-jwm1-gdn-qk-scaled.md.)
         float sigmoid_value = 1.0 / (1.0 + exp(-gate));
-        float silu = gate * sigmoid_value;
-        out_value = silu * normed;
+        // precise: keep the composed chain's association (gate * sigmoid) * normed;
+        // without it the compiler reassociated the product (7e-6 of outputs off).
+        precise float silu = gate * sigmoid_value;
+        precise float prod = silu * normed;
+        out_value = prod;
       } else {
         out_value = normed * scale;
       }
