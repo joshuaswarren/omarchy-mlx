@@ -184,7 +184,10 @@ python3 -m venv --clear "$VENV"
 # and would conflict, so it is installed without dependencies and its real
 # runtime dependencies are pinned explicitly.
 "$VENV/bin/pip" install --quiet --no-deps "mlx-lm==$MLX_LM_VERSION"
-"$VENV/bin/pip" install --quiet "transformers[sentencepiece]==$TRANSFORMERS_VERSION" numpy protobuf pyyaml jinja2 huggingface_hub
+# soundfile: the Parakeet CLI decodes its FLAC fixture with it; without it the CLI
+# spawns ffprobe/ffmpeg three times (measured on an M1: audio_load 181 ms vs 4.7 ms,
+# total_pipeline_ms 567 vs 363 ms, transcript sha unchanged).
+"$VENV/bin/pip" install --quiet "transformers[sentencepiece]==$TRANSFORMERS_VERSION" numpy protobuf pyyaml jinja2 huggingface_hub soundfile
 
 # 4a. Optional voice dependencies (--voice), used by the assistant's local
 #     speech synthesis. mlx-audio declares an mlx requirement (>= 0.31.1)
