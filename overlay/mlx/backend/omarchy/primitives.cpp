@@ -12257,7 +12257,7 @@ void ScaledDotProductAttention::eval_gpu(
       (q.dtype() != bfloat16 ||
           (k_len >= (head_dim == 256 ? uint32_t{12} : uint32_t{256}) &&
            k_len <=
-               (head_dim == 256 ? uint32_t{128} : uint32_t{2048}))) &&
+               (head_dim == 256 ? uint32_t{2048} : uint32_t{2048}))) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
     out.set_data(allocate_omarchy(out.nbytes()));

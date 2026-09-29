@@ -192,9 +192,16 @@ void main() {
     uint k_base = params.rhs_offset + kv_head * params.shape[1] +
         key * params.shape[2];
     float accumulator = 0.0;
-    for (uint d = 0u; d < SDPA_DIM; ++d) {
-      accumulator += s_qrow[d] *
-          bf16_load(key_data.values[k_base + d * params.in_strides[0]]);
+    // Loads are independent of the accumulator chain: issue 16 K elements
+    // before the 16 in-order FMAs (same expression order, bit-identical).
+    for (uint d = 0u; d < SDPA_DIM; d += 16u) {
+      float kv[16];
+      for (uint i = 0u; i < 16u; ++i) {
+        kv[i] = bf16_load(key_data.values[k_base + (d + i) * params.in_strides[0]]);
+      }
+      for (uint i = 0u; i < 16u; ++i) {
+        accumulator += s_qrow[d + i] * kv[i];
+      }
     }
     s_stream[key] = 1.0 * accumulator;
   }
@@ -254,15 +261,19 @@ void main() {
     uint d = thread;
     float accumulator = 0.0;
     uint key = 0u;
+    uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
+        d * params.in_strides[3];
     for (uint tile = 0u; tile < k_len / 16u; ++tile) {
+      // 16 independent V loads first, then the 16 in-order FMAs.
+      float vv[16];
       for (uint index = 0u; index < 16u; ++index) {
-        accumulator += s_stream[key] * bf16_load(
-            value_data.values[params.aux_offset +
-                kv_head * params.in_strides[1] +
-                key * params.in_strides[2] +
-                d * params.in_strides[3]]);
-        ++key;
+        vv[index] = bf16_load(
+            value_data.values[v_base + (key + index) * params.in_strides[2]]);
       }
+      for (uint index = 0u; index < 16u; ++index) {
+        accumulator += s_stream[key + index] * vv[index];
+      }
+      key += 16u;
     }
     for (uint index = 0u; index < 16u; ++index) {
       float prob = key < k_len ? s_stream[key] : 0.0;
