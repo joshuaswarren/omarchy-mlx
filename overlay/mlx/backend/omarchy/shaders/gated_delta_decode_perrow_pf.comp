@@ -38,9 +38,9 @@ layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_b
 layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
-layout(set = 0, binding = 5, std430) readonly buffer SIn   { float    v[]; } s_in;
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { vec4     v[]; } s_in;
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
-layout(set = 0, binding = 7, std430) buffer         SOut  { float    v[]; } s_out;
+layout(set = 0, binding = 7, std430) buffer         SOut  { vec4     v[]; } s_out;
 // Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
 // carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
 // dt_bias (bf16).
@@ -99,23 +99,18 @@ shared float skg[128];
 
 float gdn_kv_walk(uint sbase, uint dk) {
   float kv = 0.0f;
+  uint q = sbase >> 2u;
   for (uint i = 0u; i < dk; i += 8u) {
-    float s0 = s_in.v[sbase + i];
-    float s1 = s_in.v[sbase + i + 1u];
-    float s2 = s_in.v[sbase + i + 2u];
-    float s3 = s_in.v[sbase + i + 3u];
-    float s4 = s_in.v[sbase + i + 4u];
-    float s5 = s_in.v[sbase + i + 5u];
-    float s6 = s_in.v[sbase + i + 6u];
-    float s7 = s_in.v[sbase + i + 7u];
-    kv = fma(s0, skg[i], kv);
-    kv = fma(s1, skg[i + 1u], kv);
-    kv = fma(s2, skg[i + 2u], kv);
-    kv = fma(s3, skg[i + 3u], kv);
-    kv = fma(s4, skg[i + 4u], kv);
-    kv = fma(s5, skg[i + 5u], kv);
-    kv = fma(s6, skg[i + 6u], kv);
-    kv = fma(s7, skg[i + 7u], kv);
+    vec4 a = s_in.v[q + (i >> 2u)];
+    vec4 b = s_in.v[q + (i >> 2u) + 1u];
+    kv = fma(a.x, skg[i], kv);
+    kv = fma(a.y, skg[i + 1u], kv);
+    kv = fma(a.z, skg[i + 2u], kv);
+    kv = fma(a.w, skg[i + 3u], kv);
+    kv = fma(b.x, skg[i + 4u], kv);
+    kv = fma(b.y, skg[i + 5u], kv);
+    kv = fma(b.z, skg[i + 6u], kv);
+    kv = fma(b.w, skg[i + 7u], kv);
   }
   return kv;
 }
@@ -127,31 +122,21 @@ float gdn_dk_term(float sd, float kk) {
 
 float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd) {
   float o = 0.0f;
+  uint qi = sbase >> 2u;
+  uint qo = obase >> 2u;
   for (uint i = 0u; i < dk; i += 8u) {
-    float s0 = s_in.v[sbase + i];
-    float s1 = s_in.v[sbase + i + 1u];
-    float s2 = s_in.v[sbase + i + 2u];
-    float s3 = s_in.v[sbase + i + 3u];
-    float s4 = s_in.v[sbase + i + 4u];
-    float s5 = s_in.v[sbase + i + 5u];
-    float s6 = s_in.v[sbase + i + 6u];
-    float s7 = s_in.v[sbase + i + 7u];
-    float n0 = fma(s0, g, gdn_dk_term(sd, sk[i]));
-    float n1 = fma(s1, g, gdn_dk_term(sd, sk[i + 1u]));
-    float n2 = fma(s2, g, gdn_dk_term(sd, sk[i + 2u]));
-    float n3 = fma(s3, g, gdn_dk_term(sd, sk[i + 3u]));
-    float n4 = fma(s4, g, gdn_dk_term(sd, sk[i + 4u]));
-    float n5 = fma(s5, g, gdn_dk_term(sd, sk[i + 5u]));
-    float n6 = fma(s6, g, gdn_dk_term(sd, sk[i + 6u]));
-    float n7 = fma(s7, g, gdn_dk_term(sd, sk[i + 7u]));
-    s_out.v[obase + i] = n0;
-    s_out.v[obase + i + 1u] = n1;
-    s_out.v[obase + i + 2u] = n2;
-    s_out.v[obase + i + 3u] = n3;
-    s_out.v[obase + i + 4u] = n4;
-    s_out.v[obase + i + 5u] = n5;
-    s_out.v[obase + i + 6u] = n6;
-    s_out.v[obase + i + 7u] = n7;
+    vec4 a = s_in.v[qi + (i >> 2u)];
+    vec4 b = s_in.v[qi + (i >> 2u) + 1u];
+    float n0 = fma(a.x, g, gdn_dk_term(sd, sk[i]));
+    float n1 = fma(a.y, g, gdn_dk_term(sd, sk[i + 1u]));
+    float n2 = fma(a.z, g, gdn_dk_term(sd, sk[i + 2u]));
+    float n3 = fma(a.w, g, gdn_dk_term(sd, sk[i + 3u]));
+    float n4 = fma(b.x, g, gdn_dk_term(sd, sk[i + 4u]));
+    float n5 = fma(b.y, g, gdn_dk_term(sd, sk[i + 5u]));
+    float n6 = fma(b.z, g, gdn_dk_term(sd, sk[i + 6u]));
+    float n7 = fma(b.w, g, gdn_dk_term(sd, sk[i + 7u]));
+    s_out.v[qo + (i >> 2u)] = vec4(n0, n1, n2, n3);
+    s_out.v[qo + (i >> 2u) + 1u] = vec4(n4, n5, n6, n7);
     o = fma(n0, sq[i], o);
     o = fma(n1, sq[i + 1u], o);
     o = fma(n2, sq[i + 2u], o);

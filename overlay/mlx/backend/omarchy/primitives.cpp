@@ -10796,7 +10796,9 @@ void GatedDeltaUpdate::eval_gpu(
     bool decode_tile = gdn_decode_tile_enabled(encoder);
     // Prefetching legacy walks (env-gated while measured): the untiled
     // kernel's per-element load-wait-fma loop, with eight loads in flight.
-    static const bool gdn_pf = omarchy::env_flag("MLX_OMARCHY_GDN_PF");
+    static const bool gdn_pf_env = omarchy::env_flag("MLX_OMARCHY_GDN_PF");
+    const bool gdn_pf = gdn_pf_env && (params.shape[1] % 4u) == 0u &&
+        (params.shape[2] % 4u) == 0u;
     encoder.dispatch_compute(
         decode_tile ? omarchy::ComputeKernel::GatedDeltaDecodeBF16
                     : (gdn_pf ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf
