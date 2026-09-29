@@ -6,11 +6,12 @@
 // run per decoded token: state decay, kv reduction, delta, outer-product
 // state update, and the output projection over the updated state.
 //
-// One workgroup per (batch, v-head), one thread per Dv row. The thread's row
-// of the state is read twice (kv pass, update+output pass) instead of being
-// held in registers; k and q ride shared memory. Every intermediate is
-// float32 and each row reduces sequentially over Dk in ascending order, so
-// the arithmetic matches the composed fallback's per-row sums.
+// One thread per Dv row walks that row of the state twice (kv pass,
+// update+output pass); k and q ride shared memory, and the state tile of
+// the workgroup's rows is staged through shared memory (see the geometry
+// note above main). Every intermediate is float32 and each row reduces
+// sequentially over Dk in ascending order, so the arithmetic matches the
+// composed fallback's per-row sums.
 //
 // Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
 // (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
@@ -77,23 +78,40 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
+// Geometry: Dk == Dv == 128 (dispatch-gated), 128 threads per workgroup,
+// ROWS Dv rows per workgroup, Dv / ROWS workgroups per head
+// (gl_WorkGroupID.y). The ROWS x Dk f32 state tile is staged through shared
+// memory with coalesced loads and stores (thread t owns column t of every
+// tile row), so the per-row sequential walks below read shared memory
+// instead of one 512-byte-strided global word per lane per step. The
+// arithmetic is the one-thread-per-row chain of the single-workgroup form,
+// statement for statement: the same ascending-i accumulations, the same
+// expressions, the same stores; only where the state words come from moved
+// (bit-identical, receipts/2026-09-29-jw16-decode-gdn-lse-argmax).
+const uint ROWS = 32u;
+const uint TILE_STRIDE = 129u;  // padded: row r, column i -> bank (r + i) % 32
+
 shared float sk[128];
 shared float sq[128];
-shared float sdelta[128];
+shared float tile[ROWS * TILE_STRIDE];
 
 void main() {
   uint dk = params.matrix_m;
   uint dv = params.matrix_n;
   uint hv = params.matrix_k;
   uint head = gl_WorkGroupID.x;
-  uint row = gl_LocalInvocationID.x;   // one dv row per thread
+  uint row0 = gl_WorkGroupID.y * ROWS;
+  uint lane = gl_LocalInvocationID.x;
 
   if (head >= hv) {
     return;
   }
-  for (uint i = row; i < dk; i += 128u) {
-    sk[i] = bf16_load(k_buf.v[params.rhs_offset + head * dk + i]);
-    sq[i] = bf16_load(q_buf.v[params.lhs_offset + head * dk + i]);
+  sk[lane] = bf16_load(k_buf.v[params.rhs_offset + head * dk + lane]);
+  sq[lane] = bf16_load(q_buf.v[params.lhs_offset + head * dk + lane]);
+  uint head_base = head * dv * dk;
+  uint tile_base = params.shape[1] + head_base + row0 * dk;
+  for (uint r = 0u; r < ROWS; ++r) {
+    tile[r * TILE_STRIDE + lane] = s_in.v[tile_base + r * dk + lane];
   }
   barrier();
 
@@ -130,23 +148,27 @@ void main() {
     g = bf16_load(g_buf.v[params.shape[0] + head]);
     beta = bf16_load(b_buf.v[params.aux_offset + head]);
   }
-  uint head_base = head * dv * dk;
-  uint row_base = head_base + row * dk;
+  if (lane < ROWS) {
+    uint row = row0 + lane;
+    uint trow = lane * TILE_STRIDE;
+    float kv_acc = 0.0f;
+    for (uint i = 0u; i < dk; ++i) {
+      kv_acc += tile[trow + i] * g * sk[i];
+    }
+    float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
 
-  float kv_acc = 0.0f;
-  for (uint i = 0u; i < dk; ++i) {
-    kv_acc += s_in.v[params.shape[1] + row_base + i] * g * sk[i];
+    float o_acc = 0.0f;
+    for (uint i = 0u; i < dk; ++i) {
+      float s = tile[trow + i] * g;
+      float ns = s + delta * sk[i];
+      tile[trow + i] = ns;
+      o_acc += ns * sq[i];
+    }
+    y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
   }
-  float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
-  sdelta[row] = delta;
   barrier();
-
-  float o_acc = 0.0f;
-  for (uint i = 0u; i < dk; ++i) {
-    float s = s_in.v[params.shape[1] + row_base + i] * g;
-    float ns = s + sdelta[row] * sk[i];
-    s_out.v[params.shape[2] + head_base + row * dk + i] = ns;
-    o_acc += ns * sq[i];
+  uint out_base = params.shape[2] + head_base + row0 * dk;
+  for (uint r = 0u; r < ROWS; ++r) {
+    s_out.v[out_base + r * dk + lane] = tile[r * TILE_STRIDE + lane];
   }
-  y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 }

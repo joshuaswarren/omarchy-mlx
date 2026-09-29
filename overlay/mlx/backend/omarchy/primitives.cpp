@@ -10727,12 +10727,13 @@ void GatedDeltaUpdate::eval_gpu(
       bindings[3] = binding(g);
       bindings[4] = binding(beta);
     }
+    // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head.
     encoder.dispatch_compute(
         omarchy::ComputeKernel::GatedDeltaDecodeBF16,
         bindings,
         params,
         static_cast<uint32_t>(Hv),
-        1,
+        static_cast<uint32_t>(Dv / 32),
         1);
     return;
   }

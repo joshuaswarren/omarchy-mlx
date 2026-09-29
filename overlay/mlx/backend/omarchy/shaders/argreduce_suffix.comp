@@ -141,6 +141,26 @@ layout(push_constant) uniform Params {
 shared VAL_TYPE block_values[256];
 shared uint block_indices[256];
 
+// Each thread walks its strided elements (thread, thread + 256, ...) in
+// ascending order. The walk issues the loads of 16 consecutive steps before
+// the compares consume them in the same order (one element per memory round
+// trip made a 248320-wide logits row latency-bound at ~0.5 ms); every
+// thread's (value, index) pair, and so the result, is unchanged.
+#define AR_LOAD(b) VAL_TYPE v##b = LOAD_AT(base + (b) * 256u);
+#define AR_LOAD16 AR_LOAD(0u) AR_LOAD(1u) AR_LOAD(2u) AR_LOAD(3u) AR_LOAD(4u) \
+  AR_LOAD(5u) AR_LOAD(6u) AR_LOAD(7u) AR_LOAD(8u) AR_LOAD(9u) AR_LOAD(10u) \
+  AR_LOAD(11u) AR_LOAD(12u) AR_LOAD(13u) AR_LOAD(14u) AR_LOAD(15u)
+#define AR_STEP(b) { \
+  bool wins = is_max ? v##b > local_value : v##b < local_value; \
+  if (wins) { \
+    local_value = v##b; \
+    local_index = index + (b) * 256u; \
+  } \
+}
+#define AR_STEP16 AR_STEP(0u) AR_STEP(1u) AR_STEP(2u) AR_STEP(3u) AR_STEP(4u) \
+  AR_STEP(5u) AR_STEP(6u) AR_STEP(7u) AR_STEP(8u) AR_STEP(9u) AR_STEP(10u) \
+  AR_STEP(11u) AR_STEP(12u) AR_STEP(13u) AR_STEP(14u) AR_STEP(15u)
+
 void main() {
   uint thread = gl_LocalInvocationID.x;
   uint row_length = params.reduce_size;
@@ -150,7 +170,13 @@ void main() {
     uint start = params.lhs_offset + row * row_length;
     VAL_TYPE local_value = is_max ? ACC_LOWEST : ACC_HIGHEST;
     uint local_index = 0u;
-    for (uint index = thread; index < row_length; index += 256u) {
+    uint index = thread;
+    for (; index + 15u * 256u < row_length; index += 16u * 256u) {
+      uint base = start + index;
+      AR_LOAD16
+      AR_STEP16
+    }
+    for (; index < row_length; index += 256u) {
       VAL_TYPE next = LOAD_AT(start + index);
       bool wins = is_max ? next > local_value : next < local_value;
       if (wins) {

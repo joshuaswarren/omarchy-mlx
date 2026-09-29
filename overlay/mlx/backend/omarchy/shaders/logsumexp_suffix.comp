@@ -57,6 +57,21 @@ layout(push_constant) uniform Params {
 
 shared float block_values[256];
 
+// Each thread walks its strided elements (thread, thread + 256, ...) in
+// ascending order in both passes. The walks below issue the loads of 16
+// consecutive steps before the arithmetic consumes them in the same order:
+// one element per memory round trip made a long row (a 248320-wide logits
+// row) latency-bound at ~0.7 ms. The arithmetic sequence per thread is
+// unchanged, so every partial, and the result, is bit-identical.
+#define LSE_LOAD(b) float v##b = LOAD_VALUE(input_data.values[base + (b) * 256u]);
+#define LSE_LOAD16 LSE_LOAD(0u) LSE_LOAD(1u) LSE_LOAD(2u) LSE_LOAD(3u) \
+  LSE_LOAD(4u) LSE_LOAD(5u) LSE_LOAD(6u) LSE_LOAD(7u) LSE_LOAD(8u) LSE_LOAD(9u) \
+  LSE_LOAD(10u) LSE_LOAD(11u) LSE_LOAD(12u) LSE_LOAD(13u) LSE_LOAD(14u) LSE_LOAD(15u)
+#define LSE_MAX(v) if (isnan(v) || v > local_max) { local_max = v; }
+#define LSE_SUM(v) local_sum += exp(v - row_max);
+#define LSE_APPLY16(OP) OP(v0u) OP(v1u) OP(v2u) OP(v3u) OP(v4u) OP(v5u) OP(v6u) \
+  OP(v7u) OP(v8u) OP(v9u) OP(v10u) OP(v11u) OP(v12u) OP(v13u) OP(v14u) OP(v15u)
+
 void main() {
   uint thread = gl_LocalInvocationID.x;
   uint row_length = params.reduce_size;
@@ -65,7 +80,13 @@ void main() {
     uint start = params.lhs_offset + row * row_length;
 
     float local_max = uintBitsToFloat(0xff800000u);
-    for (uint index = thread; index < row_length; index += 256u) {
+    uint index = thread;
+    for (; index + 15u * 256u < row_length; index += 16u * 256u) {
+      uint base = start + index;
+      LSE_LOAD16
+      LSE_APPLY16(LSE_MAX)
+    }
+    for (; index < row_length; index += 256u) {
       float next = LOAD_VALUE(input_data.values[start + index]);
       if (isnan(next) || next > local_max) {
         local_max = next;
@@ -84,7 +105,13 @@ void main() {
     barrier();
 
     float local_sum = 0.0;
-    for (uint index = thread; index < row_length; index += 256u) {
+    index = thread;
+    for (; index + 15u * 256u < row_length; index += 16u * 256u) {
+      uint base = start + index;
+      LSE_LOAD16
+      LSE_APPLY16(LSE_SUM)
+    }
+    for (; index < row_length; index += 256u) {
       local_sum += exp(LOAD_VALUE(input_data.values[start + index]) - row_max);
     }
     block_values[thread] = local_sum;
