@@ -612,6 +612,7 @@ void main() {
       case 10:
         value = -lhs;
         break;
+#ifndef LITE  // lean variant: ops 0-10 only (host routes only those here)
       case 11:
         // GLSL built-in cos. The host refuses arguments whose maximum
         // magnitude exceeds kTrigArgumentLimit (primitives.cpp,
@@ -736,6 +737,7 @@ void main() {
       case 40:
         value = floor(lhs / rhs);
         break;
+#endif  // LITE
       default:
         return;
     }

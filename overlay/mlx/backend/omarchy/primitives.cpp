@@ -899,11 +899,15 @@ void dispatch_float_elementwise_to(
         omarchy::compute_dispatch_group_count(count / 4u));
     return;
   }
+  const bool lite_op = operation <= NegativeOperation;  // ops 0-10 exist in the -DLITE builds
   auto kernel = select_float_kernel(
       out.dtype(),
-      omarchy::ComputeKernel::ElementwiseF32,
-      omarchy::ComputeKernel::ElementwiseF16,
-      omarchy::ComputeKernel::ElementwiseBF16);
+      lite_op ? omarchy::ComputeKernel::ElementwiseLiteF32
+              : omarchy::ComputeKernel::ElementwiseF32,
+      lite_op ? omarchy::ComputeKernel::ElementwiseLiteF16
+              : omarchy::ComputeKernel::ElementwiseF16,
+      lite_op ? omarchy::ComputeKernel::ElementwiseLiteBF16
+              : omarchy::ComputeKernel::ElementwiseBF16);
   encoder.dispatch_compute(
       kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
 }

@@ -66,6 +66,9 @@
 #include "cast_i32_f16.h"
 #include "cast_i32_f32.h"
 #include "elementwise_bf16.h"
+#include "elementwise_lite_bf16.h"
+#include "elementwise_lite_f16.h"
+#include "elementwise_lite_f32.h"
 #include "elementwise_i32.h"
 #include "elementwise_u32.h"
 #include "elementwise_f16.h"
@@ -469,6 +472,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {elementwise_f16, elementwise_f16_size};
     case ComputeKernel::ElementwiseBF16:
       return {elementwise_bf16, elementwise_bf16_size};
+    case ComputeKernel::ElementwiseLiteF32:
+      return {elementwise_lite_f32, elementwise_lite_f32_size};
+    case ComputeKernel::ElementwiseLiteF16:
+      return {elementwise_lite_f16, elementwise_lite_f16_size};
+    case ComputeKernel::ElementwiseLiteBF16:
+      return {elementwise_lite_bf16, elementwise_lite_bf16_size};
     case ComputeKernel::CastF16F32:
       return {cast_f16_f32, cast_f16_f32_size};
     case ComputeKernel::CastBoolF32:

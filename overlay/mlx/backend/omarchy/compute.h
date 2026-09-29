@@ -694,6 +694,10 @@ enum class ComputeKernel : uint16_t {
   // alignment. Appended to keep profile kernel ids stable.
   UnaryVecF16,
   UnaryVecBF16,
+  // Lean elementwise.comp builds (-DLITE: ops 0-10 only). Appended to keep profile ids stable.
+  ElementwiseLiteF32,
+  ElementwiseLiteF16,
+  ElementwiseLiteBF16,
   Count,
 };
 
