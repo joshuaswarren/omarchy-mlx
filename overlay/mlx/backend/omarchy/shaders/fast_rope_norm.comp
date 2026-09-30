@@ -1,0 +1,233 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused q/k RMSNorm + rotary embedding (the attention rope_rms_norm route).
+// One workgroup owns one rotation row (b, *, t) of D elements: the row RMS
+// reduction is reproduced EXACTLY from shaders/fast_norm.comp (strided f32
+// local_sq, stride-128..1 shared-memory pairing with barriers, mean =
+// block[0] / float(row_length) f32 divide, norm = inversesqrt(mean + eps),
+// (value * norm) * weight, one bf16 RNE round), and the rotary math is
+// reproduced EXACTLY from the production bf16 main in shaders/fast_rope.comp
+// (rope_round intermediates, exp(-i * beta) inv-frequencies, scalar-offset
+// position, packed 32-bit output words). The normalized values are rounded
+// to bf16 BEFORE the rotation consumes them, which is what the composed
+// rms_norm -> rope chain does across the kernel boundary, so the output is
+// bit-identical to it. The passthrough tail (dims < D) carries the
+// normalized-rounded values where the unfused kernel carries raw inputs.
+//
+// Push-constant mapping (ComputeParams fields), identical to fast_rope.comp
+// plus two reused fields — ComputeParams is pushed whole (128 bytes, the
+// Vulkan minimum guarantee), so nothing may grow it:
+//   operation    floatBitsToUint(eps)   (unused by every other rope path)
+//   reduce_size  D, the norm row length (== shape[2], host-guarded)
+//   count        the row count B*N*T (one workgroup per row, so the group
+//                count is rows and count is informational)
+//   alpha/beta/dims/shape/in_strides/out_strides/offsets/flags/matrix_m
+//                exactly the fast_rope.comp meanings.
+//
+// Host guards (RoPE::eval_gpu) before this kernel is selected: bf16 input
+// and weight, weight.size == D, D <= 256, D even, in_strides[2] == 1,
+// non-traditional, base variant (no freqs), forward, scalar offset, and the
+// existing bf16 pair-granular guards. Anything else composes the exact eager
+// chain through the primitive fallback.
+//
+// bfloat16 only, and the fast_rope.comp llvmpipe word-IO form is kept: 32-bit
+// words with constant shifts and select chains for input, weight, and output.
+
+#version 460
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  uint values[];
+} input_data;
+layout(set = 0, binding = 1, std430) buffer Output {
+  uint values[];
+} output_data;
+layout(set = 0, binding = 2, std430) readonly buffer Offsets {
+  int values[];
+} offset_data;
+layout(set = 0, binding = 4, std430) readonly buffer Weight {
+  uint values[];
+} weight_data;
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float block_values[256];
+shared float rounded[256];
+
+float rope_load(uint abs_index) {
+  uint word = input_data.values[abs_index >> 1u];
+  uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+
+float weight_load(uint abs_index) {
+  uint word = weight_data.values[abs_index >> 1u];
+  uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+
+uint bf16_bits(float value) {
+  uint bits = floatBitsToUint(value);
+  return isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+}
+
+float rope_round(float value) {
+  uint bits = floatBitsToUint(value);
+  uint rounded = isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+  return uintBitsToFloat(rounded << 16u);
+}
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint row = gl_WorkGroupID.x;
+  uint time = params.shape[1];
+  uint heads = params.shape[0];
+  bool forward = (params.flags & 1u) != 0u;
+  bool head_seq_transpose = (params.flags & 4u) != 0u;
+  bool passthrough = (params.flags & 8u) != 0u;
+  uint half_dims = params.dims;
+  uint row_length = params.reduce_size;
+  float eps = uintBitsToFloat(params.operation);
+
+  uint mat = row / time;
+  uint t = row - mat * time;
+  uint b = mat / heads;
+  uint head = mat - b * heads;
+  uint in_base;
+  if (head_seq_transpose) {
+    in_base = b * (time * params.in_strides[1]) + t * params.in_strides[1] +
+        head * params.in_strides[0];
+  } else {
+    in_base = t * params.in_strides[1] + mat * params.in_strides[0];
+  }
+  uint out_row = t * params.out_strides[1] + mat * params.out_strides[0];
+
+  // fast_norm.comp reduction tree, verbatim: one f32 sum-of-squares per
+  // thread (threads past the row length contribute exactly the same 0.0 the
+  // fast_norm grid-stride loop produces), stride-128..1 shared pairing with
+  // a barrier per step, f32 divide by the row length, inversesqrt.
+  float value = 0.0;
+  if (thread < row_length) {
+    value = rope_load(params.lhs_offset + in_base + thread);
+  }
+  block_values[thread] = value * value;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) {
+      block_values[thread] += block_values[thread + stride];
+    }
+    barrier();
+  }
+  float mean_square = block_values[0] / float(row_length);
+  float norm = inversesqrt(mean_square + eps);
+  float weight = (thread < row_length)
+      ? weight_load(params.aux_offset + thread)
+      : 0.0;
+  // fast_norm.comp output: value * norm * weight rounded once to bf16, the
+  // exact bits the rms_norm kernel would write and the rope kernel would
+  // read back. barrier() publishes every thread's rounded value before the
+  // pair math below reads across threads.
+  rounded[thread] = (thread < row_length) ? rope_round(value * norm * weight)
+                                          : 0.0;
+  barrier();
+
+  // Production bf16 word math from fast_rope.comp with shared[] standing in
+  // for the loads. Threads own one output word each; word pairs of one row.
+  if (thread >= (row_length / 2u)) {
+    return;
+  }
+  uint k = thread;
+  float offset = float(offset_data.values[params.rhs_offset + b * params.matrix_m]);
+  float position = params.alpha * (float(t) + offset);
+  uint word_base = (params.output_offset + out_row) >> 1u;
+  float v0;
+  float v1;
+  if (passthrough) {
+    uint d0 = 2u * k;
+    uint d1 = d0 + 1u;
+    if (d0 >= 2u * half_dims) {
+      // Tail: the normalized-rounded values pass through (the unfused
+      // kernel passes the raw input through; the norm it replaced already
+      // ran above).
+      v0 = rounded[d0];
+      v1 = rounded[d1];
+    } else {
+      float vals[2];
+      for (uint side = 0u; side < 2u; ++side) {
+        uint d = d0 + side;
+        uint i = d % half_dims;
+        float inv_freq = exp(-float(i) * params.beta);
+        float theta = position * inv_freq;
+        float cos_t = rope_round(cos(theta));
+        float sin_t = rope_round(sin(theta));
+        float x1 = rounded[i];
+        float x2 = rounded[i + half_dims];
+        float xa = rope_round(x1 * cos_t);
+        float xb = rope_round(x2 * sin_t);
+        float xc = rope_round(x1 * sin_t);
+        float xd = rope_round(x2 * cos_t);
+        vals[side] = (d < half_dims) ? (forward ? (xa - xb) : (xb + xa))
+                                     : (forward ? (xc + xd) : (xd - xa));
+      }
+      v0 = vals[0];
+      v1 = vals[1];
+    }
+  } else {
+    // Half-split rotation over the full row (dims == D).
+    bool r1_side = k < (half_dims >> 1u);
+    uint j0 = r1_side ? (2u * k) : (half_dims + 2u * (k - (half_dims >> 1u)));
+    uint j1 = j0 + 1u;
+    uint i0 = r1_side ? j0 : (j0 - half_dims);
+    uint i1 = i0 + 1u;
+    float inv0 = exp(-float(i0) * params.beta);
+    float inv1 = exp(-float(i1) * params.beta);
+    float cos0 = rope_round(cos(position * inv0));
+    float sin0 = rope_round(sin(position * inv0));
+    float cos1 = rope_round(cos(position * inv1));
+    float sin1 = rope_round(sin(position * inv1));
+    float xa = rounded[i0];
+    float xb = rounded[i0 + half_dims];
+    float xc = rounded[i1];
+    float xd = rounded[i1 + half_dims];
+    if (r1_side) {
+      v0 = forward ? (rope_round(xa * cos0) - rope_round(xb * sin0))
+                   : (rope_round(xb * sin0) + rope_round(xa * cos0));
+      v1 = forward ? (rope_round(xc * cos1) - rope_round(xd * sin1))
+                   : (rope_round(xd * sin1) + rope_round(xc * cos1));
+    } else {
+      v0 = forward ? (rope_round(xa * sin0) + rope_round(xb * cos0))
+                   : (rope_round(xb * cos0) - rope_round(xa * sin0));
+      v1 = forward ? (rope_round(xc * sin1) + rope_round(xd * cos1))
+                   : (rope_round(xd * cos1) - rope_round(xc * sin1));
+    }
+  }
+  output_data.values[word_base + k] = bf16_bits(v0) | (bf16_bits(v1) << 16u);
+}

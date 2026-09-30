@@ -342,6 +342,10 @@ enum class ComputeKernel : uint16_t {
   FastRopeFreqsF32,
   FastRopeFreqsF16,
   FastRopeFreqsBF16,
+  // FusedRoPE+RMSNorm (rope_rms_norm route): one workgroup per rotation row
+  // reproduces the fast_norm.comp reduction inside fast_rope.comp's bf16
+  // word math. bf16 only; every other shape composes the eager chain.
+  FastRopeNormBF16,
   Fp8ToF32,
   Fp8ToF16,
   Fp8ToBF16,

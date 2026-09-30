@@ -232,6 +232,7 @@
 #include "fast_rope_f16.h"
 #include "fast_rope_f32.h"
 #include "fast_rope_freqs_bf16.h"
+#include "fast_rope_norm_bf16.h"
 #include "fast_rope_freqs_f16.h"
 #include "fast_rope_freqs_f32.h"
 #include "scan_f16.h"
@@ -1048,6 +1049,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rope_freqs_f16, fast_rope_freqs_f16_size};
     case ComputeKernel::FastRopeFreqsBF16:
       return {fast_rope_freqs_bf16, fast_rope_freqs_bf16_size};
+    case ComputeKernel::FastRopeNormBF16:
+      return {fast_rope_norm_bf16, fast_rope_norm_bf16_size};
     case ComputeKernel::CrossEntropyBF16:
       return {fast_cross_entropy_bf16, fast_cross_entropy_bf16_size};
     case ComputeKernel::Fp8ToF32:

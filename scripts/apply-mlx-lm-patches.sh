@@ -92,3 +92,10 @@ fi
 # (cache=None: scoring/training) and MLX_OMARCHY_FULL_LOGITS=1 keep full logits.
 # Bit-exact: records digest and per-digest gates unchanged (Jw16PrefillGap3).
 apply mlx-lm-last-logits.patch
+# Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
+# chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
+# reproduces the fast RMSNorm reduction and rounds to bf16 before the
+# rotation, bit-identical to the composed chain). Self-guarded on hasattr;
+# decode removes 12 dependent dispatches/token on qwen3.5 (6 attention
+# layers x q+k).
+apply mlx-lm-rope-norm.patch

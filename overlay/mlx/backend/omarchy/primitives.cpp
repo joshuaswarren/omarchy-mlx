@@ -11977,7 +11977,12 @@ void RoPE::eval_gpu(
     out.set_data(allocate_omarchy(out.nbytes()));
     return;
   }
-  bool with_freqs = inputs.size() == 3;
+  // rope_rms_norm rides inputs[2] as the norm weight; freqs and the norm
+  // are mutually exclusive (enforced where the primitive is built), so the
+  // slot meaning is decided by has_norm(), not by the input count.
+  const bool with_norm = has_norm();
+  const array& norm_weight = with_norm ? inputs.at(2) : in;
+  bool with_freqs = inputs.size() == 3 && !with_norm;
   rope_trig_gate(
       tag,
       in,
@@ -11996,7 +12001,7 @@ void RoPE::eval_gpu(
   omarchy::KvDirectWindow* kv_window =
       (out.size() > 0 &&
        (out.dtype() == float16 || out.dtype() == bfloat16) &&
-       inputs.size() == 2)
+       inputs.size() == (with_norm ? 3u : 2u))
       ? omarchy::find_rope_kv_redirect(out)
       : nullptr;
   if (kv_window) {
@@ -12118,7 +12123,24 @@ void RoPE::eval_gpu(
       static_cast<size_t>(B) * N * T * (passthrough ? D : half_dims),
       tag,
       out);
-  if (direct_bf16 && passthrough) {
+  // The fused norm+rope kernel runs one workgroup per rotation row; every
+  // other route keeps the pair-granular word enumeration.
+  const bool fuse_norm = with_norm && direct_bf16 && !traditional_ &&
+      norm_weight.dtype() == bfloat16 &&
+      norm_weight.size() == static_cast<size_t>(D) && D > 0 && D <= 256u &&
+      (D % 2) == 0u && strides[2] == 1;
+  if (fuse_norm) {
+    params.count = checked_u32(static_cast<size_t>(B) * N * T, tag, out);
+    // Reused push-constant fields (ComputeParams is pushed whole at the
+    // Vulkan-minimum 128 bytes, so nothing may grow it; see
+    // shaders/fast_rope_norm.comp): eps bits ride `operation`, the norm row
+    // length rides `reduce_size`, and the weight item offset rides
+    // `aux_offset` (freqs and the norm are mutually exclusive).
+    params.operation = floatBitsToUint(norm_eps());
+    params.reduce_size = checked_u32(D, tag, out);
+    params.aux_offset =
+        checked_item_offset(norm_weight, norm_weight.size(), tag, out);
+  } else if (direct_bf16 && passthrough) {
     // The pair-granular bf16 main enumerates output words: D/2 per row.
     params.count = checked_u32(params.count / 2, tag, out);
   }
@@ -12162,13 +12184,19 @@ void RoPE::eval_gpu(
   } else {
     out.set_data(allocate_omarchy(out.nbytes()));
   }
-  std::array<omarchy::ComputeBinding, 4> bindings{
+  std::array<omarchy::ComputeBinding, 5> bindings{
       binding(*src),
       binding(rope_output),
       binding(offset),
-      binding(with_freqs ? inputs.at(2) : offset)};
+      binding(with_freqs ? inputs.at(2) : offset),
+      // Binding slot 4 is read only by FastRopeNormBF16; the other rope
+      // kernels leave it untouched. Without the norm it harmlessly repeats
+      // the input binding.
+      binding(norm_weight)};
   omarchy::ComputeKernel kernel;
-  if (direct_bf16) {
+  if (fuse_norm) {
+    kernel = omarchy::ComputeKernel::FastRopeNormBF16;
+  } else if (direct_bf16) {
     kernel = with_freqs ? omarchy::ComputeKernel::FastRopeFreqsBF16
                         : omarchy::ComputeKernel::FastRopeBF16;
   } else {
@@ -12185,7 +12213,8 @@ void RoPE::eval_gpu(
       kernel,
       bindings,
       params,
-      omarchy::compute_dispatch_group_count(params.count));
+      fuse_norm ? params.count
+                : omarchy::compute_dispatch_group_count(params.count));
   if (kv_direct) {
     omarchy::commit_rope_kv_redirect(out);
   }

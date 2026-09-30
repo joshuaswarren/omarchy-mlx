@@ -1,0 +1,294 @@
+--- a/mlx/fast.h	2026-09-29 19:23:08.227641277 -0500
++++ b/mlx/fast.h	2026-09-29 19:26:38.818574880 -0500
+@@ -70,6 +70,35 @@
+     const std::optional<array>& freqs = std::nullopt,
+     StreamOrDevice s = {});
+ 
++// rope + row RMS norm fused (the attention q/k q_norm/k_norm -> rope chain):
++// the row-wise RMS normalization `rms_norm(x, weight, eps)` is computed
++// inside the rope dispatch and the rotation consumes the rounded normalized
++// values, so the result is bit-identical to
++// `rope(rms_norm(x, weight, eps), ...)` while saving one dependent dispatch
++// per call. Freqs are not supported (base variant only); everything the
++// backend cannot fuse composes the exact eager chain via the fallback.
++MLX_API array rope_rms_norm(
++    const array& x,
++    int dims,
++    const array& weight,
++    float eps,
++    bool traditional,
++    std::optional<float> base,
++    float scale,
++    int offset,
++    StreamOrDevice s = {});
++
++MLX_API array rope_rms_norm(
++    const array& x,
++    int dims,
++    const array& weight,
++    float eps,
++    bool traditional,
++    std::optional<float> base,
++    float scale,
++    const array& offset,
++    StreamOrDevice s = {});
++
+ /** Computes: O = softmax(Q @ K.T) @ V **/
+ MLX_API array scaled_dot_product_attention(
+     const array& queries,
+--- a/mlx/fast.cpp	2026-09-29 19:23:08.333640237 -0500
++++ b/mlx/fast.cpp	2026-09-29 19:27:46.244913269 -0500
+@@ -605,7 +605,9 @@
+     float base,
+     float scale,
+     bool forward,
+-    StreamOrDevice s) {
++    StreamOrDevice s,
++    const std::optional<array>& norm_weight,
++    float norm_eps) {
+   auto& x = inputs[0];
+   auto& offset = inputs[1];
+   if (x.ndim() < 3) {
+@@ -664,10 +666,28 @@
+         << " but got shape " << inputs[2].shape() << ".";
+     throw std::invalid_argument(msg.str());
+   }
++  if (norm_weight && inputs.size() == 3) {
++    // The norm weight and the freqs share the inputs[2] slot by design; the
++    // public wrapper never combines them.
++    throw std::invalid_argument(
++        "[rope] rope_rms_norm does not support freqs.");
++  }
+ 
+-  auto fallback = [dims, traditional, base, scale, forward, s](
+-                      std::vector<array> inputs) {
++  auto fallback = [dims,
++                   traditional,
++                   base,
++                   scale,
++                   forward,
++                   norm_weight,
++                   norm_eps,
++                   s](std::vector<array> inputs) {
+     auto x = inputs[0];
++    // Compose the exact eager chain the fused route replaces: the row-wise
++    // RMS norm first (rows of the last axis, weight and eps as given), then
++    // the rope above on the normalized values.
++    if (norm_weight) {
++      x = rms_norm(x, norm_weight, norm_eps, s);
++    }
+     auto shape = x.shape();
+     if (x.ndim() == 3) {
+       x = expand_dims(x, 1, s);
+@@ -751,17 +771,83 @@
+     }
+   };
+   auto stream = to_stream(s);
++  if (norm_weight) {
++    inputs.push_back(*norm_weight);
++  }
+   if (!RoPE::use_fallback(stream)) {
+     return array(
+         x.shape(),
+         x.dtype(),
+         std::make_shared<RoPE>(
+-            stream, fallback, dims, traditional, base, scale, forward),
++            stream,
++            fallback,
++            dims,
++            traditional,
++            base,
++            scale,
++            forward,
++            norm_weight.has_value(),
++            norm_eps),
+         std::move(inputs));
+   }
+   return fallback(std::move(inputs))[0];
+ }
+ 
++array rope_rms_norm(
++    const array& x,
++    int dims,
++    const array& weight,
++    float eps,
++    bool traditional,
++    std::optional<float> base,
++    float scale,
++    int offset,
++    StreamOrDevice s) {
++  return rope_rms_norm(
++      x, dims, weight, eps, traditional, base, scale, array(offset, int32), s);
++}
++
++array rope_rms_norm(
++    const array& x,
++    int dims,
++    const array& weight,
++    float eps,
++    bool traditional,
++    std::optional<float> base,
++    float scale,
++    const array& offset,
++    StreamOrDevice s) {
++  if (!issubdtype(x.dtype(), floating)) {
++    throw std::invalid_argument(
++        "[rope_rms_norm] Input must be a floating type.");
++  }
++  if (!issubdtype(weight.dtype(), floating)) {
++    throw std::invalid_argument(
++        "[rope_rms_norm] Weight must be a floating type.");
++  }
++  if (weight.size() != x.shape(-1)) {
++    std::ostringstream msg;
++    msg << "[rope_rms_norm] Weight must have " << x.shape(-1)
++        << " elements to match the last axis but has " << weight.size()
++        << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (!base) {
++    throw std::invalid_argument(
++        "[rope_rms_norm] base (or freqs, unsupported here) is required.");
++  }
++  return rope(
++      std::vector<array>{x, offset},
++      dims,
++      traditional,
++      *base,
++      scale,
++      true,
++      s,
++      weight,
++      eps);
++}
++
+ array rope(
+     const array& x,
+     int dims,
+@@ -810,6 +896,12 @@
+     const std::vector<int>& argnums,
+     const std::vector<array>& outputs) {
+   auto s = stream();
++  if (has_norm_) {
++    // The fused norm+rope route has no inverse rope that reproduces it; a
++    // silent rope-only vjp would be wrong. Throw loudly instead.
++    throw std::invalid_argument(
++        "[RoPE::vjp] vjp through the fused rms-norm rope is not supported.");
++  }
+   auto fallback = [dims = dims_,
+                    traditional = traditional_,
+                    base = base_,
+@@ -840,7 +932,8 @@
+   return (
+       dims_ == a_other.dims_ && base_ == a_other.base_ &&
+       scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
+-      forward_ == a_other.forward_);
++      forward_ == a_other.forward_ && has_norm_ == a_other.has_norm_ &&
++      (!has_norm_ || norm_eps_ == a_other.norm_eps_));
+ }
+ 
+ /** Computes: O = softmax(Q @ K.T) @ V **/
+--- a/mlx/fast_primitives.h	2026-09-29 19:23:08.447639118 -0500
++++ b/mlx/fast_primitives.h	2026-09-29 19:28:11.415666285 -0500
+@@ -286,13 +286,17 @@
+       bool traditional,
+       float base,
+       float scale,
+-      bool forward)
++      bool forward,
++      bool has_norm = false,
++      float norm_eps = 0.0f)
+       : Custom(stream, std::move(fallback)),
+         dims_(dims),
+         traditional_(traditional),
+         base_(base),
+         scale_(scale),
+-        forward_(forward) {}
++        forward_(forward),
++        has_norm_(has_norm),
++        norm_eps_(norm_eps) {}
+ 
+   static bool use_fallback(Stream s);
+ 
+@@ -316,6 +320,13 @@
+     return std::make_tuple(
+         nullptr, dims_, traditional_, base_, scale_, forward_);
+   }
++  // The fused row RMS norm (rope_rms_norm): inputs[2] carries the weight.
++  bool has_norm() const {
++    return has_norm_;
++  }
++  float norm_eps() const {
++    return norm_eps_;
++  }
+ 
+  private:
+   int dims_;
+@@ -323,6 +334,8 @@
+   float base_;
+   float scale_;
+   bool forward_;
++  bool has_norm_{false};
++  float norm_eps_{0.0f};
+ };
+ 
+ class ScaledDotProductAttention : public Custom {
+--- a/python/src/fast.cpp	2026-09-29 19:23:08.556638049 -0500
++++ b/python/src/fast.cpp	2026-09-29 19:28:33.244452093 -0500
+@@ -314,6 +314,56 @@
+       )pbdoc");
+ 
+   m.def(
++      "rope_rms_norm",
++      [](const mx::array& a,
++         int dims,
++         const mx::array& weight,
++         float eps,
++         bool traditional,
++         std::optional<float> base,
++         float scale,
++         const ScalarOrArray& offset,
++         mx::StreamOrDevice s /* = {} */) {
++        return mx::fast::rope_rms_norm(
++            a, dims, weight, eps, traditional, base, scale, to_array(offset), s);
++      },
++      "a"_a,
++      "dims"_a,
++      "weight"_a,
++      "eps"_a,
++      nb::kw_only(),
++      "traditional"_a,
++      "base"_a.none(),
++      "scale"_a,
++      "offset"_a,
++      "stream"_a = nb::none(),
++      nb::sig(
++          "def rope_rms_norm(a: array, dims: int, weight: array, eps: float, *, traditional: bool, base: float, scale: float, offset: int | array, stream: StreamOrDevice = None) -> array"),
++      R"pbdoc(
++        Row-wise RMS normalization fused into rotary positional encoding.
++
++        Computes ``rope(rms_norm(a, weight, eps), ...)`` in one dispatch with
++        bit-identical output while saving one dependent dispatch per call.
++        The input is expected to be at least 3D with shape ``(B, *, T, D)``;
++        each length-``D`` row of the last axis is normalized with ``weight``
++        and ``eps`` before the rotation consumes it.
++
++        Args:
++            a (array): The input array.
++            dims (int): The feature dimensions to be rotated.
++            weight (array): The RMS norm weight, one element per row element.
++            eps (float): The RMS norm epsilon.
++            traditional (bool): If set to ``True`` choose the traditional
++              implementation which rotates consecutive dimensions.
++            base (float): The base used to compute angular frequencies.
++            scale (float): The scale used to scale the positions.
++            offset (int or array): The position offset to start at.
++
++        Returns:
++            array: The output array.
++      )pbdoc");
++
++  m.def(
+       "scaled_dot_product_attention",
+       [](const mx::array& queries,
+          const mx::array& keys,

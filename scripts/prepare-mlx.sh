@@ -50,6 +50,11 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-eager-fusion.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-rope-settle-tape.patch"
+# rope_rms_norm: the attention q/k RMSNorm folded into the rope dispatch
+# (bit-identical; the omarchy backend reproduces the fast RMSNorm reduction
+# inside the rope kernel).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-rope-rms-norm.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-python-package.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
