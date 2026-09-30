@@ -545,11 +545,56 @@ TEST_CASE("driver ABI is required, unsigned, and exact") {
     fixture.write();
     check_error([&] { load_bundle(fixture.dir.path()); }, "must be a non-negative integer");
   }
-  SUBCASE("wrong major") {
+  SUBCASE("unsupported major 3") {
     Fixture fixture;
+    fixture.manifest["driver_abi_major"] = 3;
+    fixture.write();
+    check_error([&] { load_bundle(fixture.dir.path()); }, "unsupported driver_abi_major 3");
+  }
+}
+
+TEST_CASE("compiler target accepts h13 and h14 only") {
+  SUBCASE("h13 accepted") {
+    Fixture fixture;
+    fixture.manifest["compiler"]["target"] = "h13";
+    fixture.write();
+    load_bundle(fixture.dir.path()); // does not throw
+  }
+  SUBCASE("h14 with abi 2 accepted") {
+    Fixture fixture;
+    fixture.manifest["compiler"]["target"] = "h14";
     fixture.manifest["driver_abi_major"] = 2;
     fixture.write();
-    check_error([&] { load_bundle(fixture.dir.path()); }, "unsupported driver_abi_major 2");
+    load_bundle(fixture.dir.path()); // does not throw
+  }
+  SUBCASE("unknown target rejected") {
+    Fixture fixture;
+    fixture.manifest["compiler"]["target"] = "h15";
+    fixture.write();
+    check_error(
+        [&] { load_bundle(fixture.dir.path()); },
+        "field 'compiler.target' must be exactly 'h13' or 'h14'");
+  }
+}
+
+TEST_CASE("compiler target pairs with driver_abi_major") {
+  SUBCASE("h13 with abi 2 rejected") {
+    Fixture fixture;
+    fixture.manifest["compiler"]["target"] = "h13";
+    fixture.manifest["driver_abi_major"] = 2;
+    fixture.write();
+    check_error(
+        [&] { load_bundle(fixture.dir.path()); },
+        "'h13' requires driver_abi_major 1, found 2");
+  }
+  SUBCASE("h14 with abi 1 rejected") {
+    Fixture fixture;
+    fixture.manifest["compiler"]["target"] = "h14";
+    fixture.manifest["driver_abi_major"] = 1;
+    fixture.write();
+    check_error(
+        [&] { load_bundle(fixture.dir.path()); },
+        "'h14' requires driver_abi_major 2, found 1");
   }
 }
 

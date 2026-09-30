@@ -12,4 +12,13 @@ Every execute and shutdown transaction uses one absolute monotonic deadline from
 
 `shutdown` clears all worker-owned program handles, waits for process exit within its deadline, clears host ownership state, and returns the worker PID and released-program count. Only a returned receipt confirms clean release. A failure before its command is sent is classified as a confirmed pre-submission failure. A failure after submission is uncertain and preserves the boot-scoped quarantine.
 
-The worker accepts only Linux AArch64 with `apple,t8103-ane`, device-tree status `okay`, driver version `f2a3e5e+lifecycle6`, a bound `ane` platform driver, runtime PM `on/active`, and readable/writable `/dev/accel/accel0`. Its runtime identity records the graph hash, raw manifest hash, payload-collection model hash, kernel, module source version, libane commit, and driver ABI.
+The worker accepts only a per-ABI lane selected by `MLX_OMARCHY_ANE_ABI` (default `1`). The selected lane must match the host AND the bundle's declared `driver_abi_major`; otherwise the worker refuses before opening the device.
+
+| ABI | Lane name | DT compatible | Module | Driver version pin | Pinned libane commit |
+| --- | --- | --- | --- | --- | --- |
+| `1` (default) | M1 / T8103 / T6001 | `apple,t8103-ane` | `ane` | `f2a3e5e+lifecycle6` | `6fa243ac7241119a9eb229abbf8cb4dd8949f915` |
+| `2` | M2 / T6021 | `apple,t6021-ane` | `ane_t6021` | _not pinned_ — the current ane/t6021 build line does not declare `MODULE_VERSION`, so the kernel does not expose `/sys/module/ane_t6021/version` (verified in the install-path receipts) | `8b010938aeb64bfa04b95e89da0bedd2ef9e3e72` |
+
+Every lane additionally requires: Linux AArch64, device-tree ANE node status `okay`, bound `ane` platform driver, runtime PM `on/active`, and a readable+writable `/dev/accel/accel0`. The lane is exclusive — a per-ABI pin (libane commit, module name) never satisfies a request for the other lane, and an `MLX_OMARCHY_ANE_ABI=N` worker refuses a bundle whose `driver_abi_major` is not `N`. The bundle manifest parser also refuses a target/abi mismatch: `compiler.target=h13` requires `driver_abi_major: 1`, `compiler.target=h14` requires `driver_abi_major: 2`.
+
+The runtime identity records the graph hash, raw manifest hash, payload-collection model hash, kernel, module source version, libane commit, the active ABI lane, and the matched DT-compatible string.

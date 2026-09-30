@@ -485,8 +485,12 @@ void parse_compiler(const nlohmann::json& value, AneManifest& manifest) {
   manifest.compiler.host_build = require_non_empty_string(value, "host_build");
   manifest.compiler.toolchain = require_non_empty_string(value, "toolchain");
   manifest.compiler.target = require_non_empty_string(value, "target");
-  if (manifest.compiler.target != "h13") {
-    throw manifest_error("field 'compiler.target' must be exactly 'h13'");
+  if (manifest.compiler.target != kAneCompilerTargetH13 &&
+      manifest.compiler.target != kAneCompilerTargetH14) {
+    throw manifest_error(
+        "field 'compiler.target' must be exactly '" +
+        std::string(kAneCompilerTargetH13) + "' or '" +
+        std::string(kAneCompilerTargetH14) + "'");
   }
 }
 
@@ -753,10 +757,34 @@ AneManifest parse_ane_manifest(const std::filesystem::path& manifest_path) {
 
   parse_compiler(required_field(root, "compiler"), manifest);
   manifest.driver_abi_major = require_unsigned(root, "driver_abi_major");
-  if (manifest.driver_abi_major != kAneDriverAbiMajor) {
+  if (manifest.driver_abi_major != kAneDriverAbiMajor &&
+      manifest.driver_abi_major != kAneDriverAbiMajorAbl) {
     throw manifest_error(
-        "unsupported driver_abi_major " + std::to_string(manifest.driver_abi_major) +
-        " (expected " + std::to_string(kAneDriverAbiMajor) + ")");
+        "unsupported driver_abi_major " +
+        std::to_string(manifest.driver_abi_major) + " (expected " +
+        std::to_string(kAneDriverAbiMajor) + " or " +
+        std::to_string(kAneDriverAbiMajorAbl) + ")");
+  }
+  // Pair compiler.target with driver_abi_major so a bundle that names
+  // h13 never ships with the M2 ABI and vice versa. The pairing is the
+  // load-time half of the "an h14 bundle must not run against an h13
+  // host and vice versa" property; the host-half is enforced by the
+  // worker gate (runtime_worker.cpp, AbiProfile).
+  if (manifest.compiler.target == kAneCompilerTargetH13 &&
+      manifest.driver_abi_major != kAneDriverAbiMajor) {
+    throw manifest_error(
+        "compiler.target '" + std::string(kAneCompilerTargetH13) +
+        "' requires driver_abi_major " +
+        std::to_string(kAneDriverAbiMajor) + ", found " +
+        std::to_string(manifest.driver_abi_major));
+  }
+  if (manifest.compiler.target == kAneCompilerTargetH14 &&
+      manifest.driver_abi_major != kAneDriverAbiMajorAbl) {
+    throw manifest_error(
+        "compiler.target '" + std::string(kAneCompilerTargetH14) +
+        "' requires driver_abi_major " +
+        std::to_string(kAneDriverAbiMajorAbl) + ", found " +
+        std::to_string(manifest.driver_abi_major));
   }
   parse_provenance(required_field(root, "provenance"), manifest);
   parse_release(required_field(root, "release_asset"), manifest);

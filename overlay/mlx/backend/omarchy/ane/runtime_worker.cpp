@@ -9,9 +9,11 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -27,9 +29,77 @@
 namespace mlx::core::omarchy::ane::detail {
 namespace {
 
-constexpr const char* kQualifiedLibaneCommit =
-    "6fa243ac7241119a9eb229abbf8cb4dd8949f915";
-constexpr const char* kQualifiedDriverVersion = "f2a3e5e+lifecycle6";
+// Per-ABI eligibility profile. The runtime gate picks one profile based on
+// the MLX_OMARCHY_ANE_ABI env var at process start (default 1 = the audited
+// M1 / T8103 / T6001 lane). Each ABI carries its own DT-compatible set,
+// kernel-module name, driver version, and pinned libane commit; per-ABI
+// pins keep one ABI from loosening the other.
+struct AbiProfile {
+  int abi{1};
+  const char* env_name{""};
+  // Any one of these DT compatibles passes the eligibility check.
+  std::initializer_list<const char*> compatibles;
+  // The /sys/module/<module_name> directory the gate reads.
+  const char* module_name{""};
+  // Exact string at /sys/module/<module_name>/version; nullptr = skip the
+  // version check (the kernel may not expose one for this module).
+  const char* driver_version{nullptr};
+  // Exact libane commit the worker will require under this ABI.
+  const char* libane_commit{""};
+  // Exact string written into the readiness identity's "driver_abi=" field.
+  const char* identity_abi_tag{""};
+};
+
+constexpr AbiProfile kAbiProfiles[] = {
+    {1,
+     "ABI 1 (M1 / T8103 / T6001)",
+     {"apple,t8103-ane"},
+     "ane",
+     "f2a3e5e+lifecycle6",
+     "6fa243ac7241119a9eb229abbf8cb4dd8949f915",
+     "1"},
+    {2,
+     "ABI 2 (M2 / T6021)",
+     {"apple,t6021-ane"},
+     "ane_t6021",
+     // The current ane/t6021 build does not declare MODULE_VERSION, so the
+     // gate does not pin a version string on this ABI (verified by reading
+     // the .modinfo of the M2 build artifact in the worktree notebook).
+     nullptr,
+     // Smallest libane that loads every h14 ANEC currently on disk in the
+     // M2 fixtures (bmm islands + rms + select-runtime). Bumped by the E5/E6
+     // owners when select numerics land.
+     "8b010938aeb64bfa04b95e89da0bedd2ef9e3e72",
+     "2"},
+};
+
+constexpr int kAneDefaultAbi = 1;
+
+const AbiProfile& requested_abi_profile() {
+  const char* value = std::getenv("MLX_OMARCHY_ANE_ABI");
+  if (value == nullptr || value[0] == '\0') {
+    return kAbiProfiles[kAneDefaultAbi - 1];
+  }
+  // Strtol with a non-null end-pointer to reject whitespace and trailing
+  // junk; std::stoi would accept "2foo".
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(value, &end, 10);
+  if (errno != 0 || end == value || (end != nullptr && *end != '\0')) {
+    throw runtime_error(
+        "MLX_OMARCHY_ANE_ABI='" + std::string(value) +
+        "' is not a valid ABI integer (expected 1 or 2)");
+  }
+  for (const auto& profile : kAbiProfiles) {
+    if (profile.abi == parsed) {
+      return profile;
+    }
+  }
+  throw runtime_error(
+      "MLX_OMARCHY_ANE_ABI=" + std::to_string(parsed) +
+      " is not a supported ABI (expected 1 or 2)");
+}
+
 using Clock = std::chrono::steady_clock;
 
 class UncertainCompletion : public std::runtime_error {
@@ -94,38 +164,89 @@ std::filesystem::path single_entry(
   return match;
 }
 
-std::string verify_hardware_eligibility() {
+std::string verify_hardware_eligibility(const AbiProfile& profile) {
   utsname system{};
   if (::uname(&system) != 0) {
     throw runtime_error("uname failed: " + std::string(std::strerror(errno)));
   }
   if (std::string(system.sysname) != "Linux" ||
       std::string(system.machine) != "aarch64") {
-    throw runtime_error("ANE execution requires Linux aarch64 on the qualified base M1");
+    throw runtime_error(
+        "ANE execution requires Linux aarch64 on " + std::string(profile.env_name));
   }
 
   const auto node = single_entry("/proc/device-tree/soc", "ane@", "");
   const std::string compatible = read_value(node / "compatible");
-  if (!has_compatible(compatible, "apple,t8103-ane")) {
-    throw runtime_error("device-tree ANE node is not apple,t8103-ane");
+  bool matched_compatible = false;
+  const char* matched_compatible_str = nullptr;
+  for (const char* expected : profile.compatibles) {
+    if (has_compatible(compatible, expected)) {
+      matched_compatible = true;
+      matched_compatible_str = expected;
+      break;
+    }
+  }
+  if (!matched_compatible) {
+    std::string expected_list;
+    for (size_t i = 0; i < profile.compatibles.size(); ++i) {
+      if (i > 0) {
+        expected_list += " or ";
+      }
+      expected_list += profile.compatibles[i];
+    }
+    throw runtime_error(
+        "device-tree ANE node does not match " + expected_list +
+        " for " + std::string(profile.env_name));
   }
   const std::string status = read_value(node / "status");
   if (status != "okay") {
     throw runtime_error("device-tree ANE status is '" + status + "', not 'okay'");
   }
 
-  const std::string module_version = read_value("/sys/module/ane/version");
-  if (module_version != kQualifiedDriverVersion) {
-    throw runtime_error(
-        "qualified driver " + std::string(kQualifiedDriverVersion) +
-        " required, found '" + module_version + "'");
+  const std::string module_version_path =
+      "/sys/module/" + std::string(profile.module_name) + "/version";
+  // Some kernels (e.g. the M2 ane_t6021 build line) do not declare
+  // MODULE_VERSION and therefore do not expose /sys/module/<name>/version;
+  // skip the version pin in that case (see AbiProfile.driver_version).
+  std::string module_version;
+  bool module_version_exposed = false;
+  if (profile.driver_version != nullptr) {
+    struct stat version_stat {};
+    if (::stat(module_version_path.c_str(), &version_stat) != 0) {
+      throw runtime_error(
+          "qualified driver " + std::string(profile.driver_version) +
+          " expected, but " + module_version_path + " is missing for " +
+          std::string(profile.env_name));
+    }
+    module_version = read_value(module_version_path);
+    module_version_exposed = true;
+    if (module_version != profile.driver_version) {
+      throw runtime_error(
+          "qualified driver " + std::string(profile.driver_version) +
+          " required for " + std::string(profile.env_name) + ", found '" +
+          module_version + "'");
+    }
+  } else {
+    module_version = "<not exposed>";
   }
-  const std::string module_source = read_value("/sys/module/ane/srcversion");
+  const std::string module_source_path =
+      "/sys/module/" + std::string(profile.module_name) + "/srcversion";
+  std::string module_source;
+  bool module_source_exposed = false;
+  struct stat src_stat {};
+  if (::stat(module_source_path.c_str(), &src_stat) == 0) {
+    module_source = read_value(module_source_path);
+    module_source_exposed = true;
+  } else {
+    module_source = "<not exposed>";
+  }
 
   const auto platform = single_entry("/sys/bus/platform/devices", "", ".ane");
   const auto driver = std::filesystem::canonical(platform / "driver").filename();
   if (driver != "ane") {
-    throw runtime_error("ANE platform device is not bound to the ane driver");
+    throw runtime_error(
+        "ANE platform device is not bound to the ane driver (found '" +
+        driver.string() + "')");
   }
   const std::string power_control = read_value(platform / "power/control");
   const std::string runtime_status = read_value(platform / "power/runtime_status");
@@ -145,13 +266,15 @@ std::string verify_hardware_eligibility() {
   std::ostringstream identity;
   identity << "host=" << system.nodename << " kernel=" << system.release
            << " machine=" << system.machine
+           << " abi=" << profile.identity_abi_tag
            << " dt_node=" << node.filename().string()
-           << " dt_compatible=apple,t8103-ane"
-           << " driver_version=" << module_version
-           << " driver_srcversion=" << module_source
+           << " dt_compatible=" << matched_compatible_str
+           << " driver_module=" << profile.module_name
+           << " driver_version=" << (module_version_exposed ? module_version : "<not exposed>")
+           << " driver_srcversion=" << (module_source_exposed ? module_source : "<not exposed>")
            << " runtime_pm=" << power_control << '/' << runtime_status
-           << " libane_commit=" << kQualifiedLibaneCommit
-           << " driver_abi=1";
+           << " libane_commit=" << profile.libane_commit
+           << " driver_abi=" << profile.identity_abi_tag;
   return identity.str();
 }
 
@@ -189,7 +312,9 @@ struct LoadedProgram {
   std::vector<std::vector<uint8_t>> outputs;
 };
 
-std::vector<LoadedProgram> load_programs(const AneBundle& bundle) {
+std::vector<LoadedProgram> load_programs(
+    const AneBundle& bundle,
+    const AbiProfile& profile) {
   std::vector<LoadedProgram> loaded;
   loaded.reserve(bundle.programs.size());
   for (const auto& program : bundle.programs) {
@@ -199,7 +324,8 @@ std::vector<LoadedProgram> load_programs(const AneBundle& bundle) {
     if (!handle) {
       throw runtime_error(
           "libane rejected program " + std::to_string(program.manifest_index) +
-          " or the ANE device; qualified driver ABI 1 is required (errno=" +
+          " or the ANE device; qualified driver " +
+          std::string(profile.env_name) + " is required (errno=" +
           std::to_string(errno) + ")");
     }
     const auto& manifest = bundle.manifest.programs.at(program.manifest_index);
@@ -389,8 +515,21 @@ int run_worker(
   uint8_t* staging = nullptr;
   std::vector<LoadedProgram> programs;
   try {
-    std::string identity = verify_hardware_eligibility();
+    const AbiProfile& profile = requested_abi_profile();
+    std::string identity = verify_hardware_eligibility(profile);
     AneBundle bundle = load_bundle_snapshot(manifest_path, payload_paths);
+    // Cross-check the bundle's declared ABI against the gate's profile:
+    // an h14 bundle must not run against an h13 host and vice versa.
+    // The manifest parser enforces target<->abi pairing (h13<->1, h14<->2);
+    // this check makes the host-half of that invariant explicit on every
+    // worker load.
+    if (bundle.manifest.driver_abi_major != static_cast<uint64_t>(profile.abi)) {
+      throw runtime_error(
+          "bundle declares driver_abi_major " +
+          std::to_string(bundle.manifest.driver_abi_major) +
+          " but the worker gate is " + std::string(profile.env_name) +
+          " (set MLX_OMARCHY_ANE_ABI to switch lanes)");
+    }
     if (staging_size(bundle.manifest) != expected_staging_size) {
       throw runtime_error("parent and worker staging sizes differ");
     }
@@ -406,7 +545,7 @@ int run_worker(
                           std::string(std::strerror(errno)));
     }
     staging = static_cast<uint8_t*>(mapping);
-    programs = load_programs(bundle);
+    programs = load_programs(bundle, profile);
     auto dense = allocate_dense(bundle.manifest);
 
     WorkerReply ready;
