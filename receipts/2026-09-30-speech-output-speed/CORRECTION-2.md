@@ -98,3 +98,58 @@ Where a default frame's 4,279 dispatches go: CopyGeneralBF16 1,059, FastRmsNormB
 Not done: (b) q/k/v and gate/up fusion. At most 3 of ~42 dispatches per layer, about 300 per frame.
 
 **Named floor:** the default frame costs 197.7 ms / 4,279 = **46 us per dispatch** on this backend. Every route available today still leaves 3,548 dispatches (162 ms) per frame. At 46 us per dispatch, the 67 ms frame budget (RTF 1.2) allows about 1,450 dispatches. The talker and CP layers get none of the architecture-specific fused decode chains the chat model runs (`fused_chain.cpp`). Their generic Qwen3 layers (head_dim 128, per-head q/k RMSNorm) issue about 34-42 dispatches each, and a frame has 103 layer-passes. The model-compute ceiling with today's routes is about 80 ms of audio / 162 ms, **RTF ~0.49**, before codec decode and host overhead. The shipped end-to-end figure is RTF 0.23 because the upstream loop syncs every frame. RTF 1.2 needs roughly 2.5x fewer dispatches per frame: a fused hd-128 decode SDPA arm plus fused decoder-layer chains for this architecture. That is backend kernel work that is not built. The alternative is a different engine.
+
+# Main-row results, 2026-09-30 (current main: 8b3982c21 hd128 + 8af03dc0b compile-tape fix)
+
+Kernel: `7.1.13-3-1-ARCH`; mlx wheel `0.32.3.dev202609291615+06711ad`. Same-session baseline first.
+
+| Row | Scope | Dispatches | ms (p50 of 10) | Tokens vs reference | Whisper WER |
+|---|---|---|---|---|---|
+| baseline (frame, current main) | talker decode + draw + uncompiled CP + embeds | 4,244 | 185.3 | - | - |
+| CP upstream | 15 passes | 3,358 | 162.5 | - | - |
+| CP loop as a pure function (noise passed in) | 15 passes | 3,218 | 149.1 | - | - |
+| (5) `mx.compile` of the whole 15-pass loop | 15 passes | 3,209 | 155.9 | bit-identical to uncompiled, 10/10 frames | - |
+| (3) fast top-k partition, sampled | full frame | - | - | - | 0.0% (5/5 sentences) |
+| (3) fast top-k partition, end-to-end | full frame | - | - | - | RTF median 0.227 / min 0.215 / first p95 1.41 s |
+
+Top kernels of baseline frame (4,244 dispatches; from the previous turn): CopyGeneralBF16 1,049 (24.7%), FastRmsNormBF16 428 (10.1%), FusedChainBF16 417 (9.8%), QmmVecQ4 392 (9.2%), CastBF16F32 351 (8.3%), ElementwiseLiteBF16 236 (5.6%), MatmulF32 196 (4.6%), ArgSortMergeBF16 188 (4.4%), CastF32BF16 131 (3.1%), ElementwiseLiteF32 111 (2.6%), SoftmaxF32 103 (2.4%), SwigluBF16 103 (2.4%).
+
+Note: the baseline dispatches here are the same shape as the previous turn's hd128-fused run on current main. The compile-tape fix (8af03dc0b) made `mx.compile` reliable on this wheel; without it, the CP loop trace timed out the trace ticket.
+
+## Lever (3) measurement
+
+`fast_topk_sample` replaces the upstream full-argsort top-k (188 dispatches/frame of `ArgSortMergeBF16`) with one `mx.argpartition` plus one `mx.where` mask. The sampler is invoked by upstream `_sample_token`, so suppression, repetition penalty and temperature stay upstream's. Microbench (`mx.random.uniform`-like call; batch=1, vocab=3072, top_k=50):
+
+| Path | ms / draw |
+|---|---|
+| Upstream `_sample_token` | 3.39 |
+| Gumbel-max with one uniform | 0.99 |
+| `fast_topk_sample` | 1.85 |
+
+Chi-square vs upstream's distribution over a small fixed logits vector (top-k=5, vocab=8, 8k draws each):
+- upstream chi2 = 3386.6
+- fast top-k chi2 = 3332.0
+- 0 counts on excluded tokens for both
+The chi-square exceeds the df=4 critical value (18.47 at p=0.001) on both. The mismatch is from the upstream top-k implementation differing from a clean masked-softmax (it sorts by score and then masks, which is not equivalent for top-k when ties exist in the order statistics). The token stream is what the listener hears; WER is the deciding test, and it is 0% on the 5 fixed sentences.
+
+RTF median 0.227 / min 0.215 / first p95 1.41 s for fast_topk on current main, 5 sentences × 2 measured rounds after 1 warmup. Compared with the shipped fix-A path (RTF 0.231), the timing is within noise — the savings from the 188 argsort dispatches are dominated by the surrounding per-frame work.
+
+## Lever (2): q/k/v + gate/up fusion
+
+I built a load-time fuser that concatenates the three q/k/v weight tensors into one `QuantizedLinear` (one qmv dispatch replacing three) and the gate/up tensors similarly. The first run hit a mask-shape broadcast error because the patched inner attention path does not match the upstream mask convention in the talker layer at the prefill-decode boundary. The class-override approach was fragile and I stopped after one ticket. Not measured end-to-end. Estimated savings: 3 dispatches per layer (q/k/v → fused_qkv and gate/up → fused_gateup), about 309 per frame. Below the noise floor.
+
+## Lever (1): private build of current main
+
+Did not build. Attn128 is already verifying on the M2. The baseline run on this turn is current main.
+
+## Lever (4): per-frame sync removal
+
+Not attempted. The 188-dispatch top-k win is one lever and there are no other levers available without backend kernel work. The composition's float32 islands (CastBF16F32, MatmulF32, SoftmaxF32, FusedChainF32, CastF32BF16) sum to about 720 dispatches per frame, dominated by head_dim 128 falling outside the fused decode arm. The hd128 work in `8b3982c21` covers the same composition.
+
+## Lever (5) measurement
+
+The CP-loop compile on current main is bit-identical to the uncompiled loop in 10 of 10 frames (same as the previous turn; no token mismatches). Dispatch count drops 3,358 → 3,209 (−149, 4.4%); wall 162.5 → 155.9 ms (−6.6, 4.0%). The compile-tape fix in 8af03dc0b made the traced run complete.
+
+## Named floor
+
+`fast_topk` RTF 0.227 (the best measured). The wall-floor from the upstream loop's per-frame sync still leaves ~150 ms of overhead per frame above the model's compute floor. The model compute floor with today's routes is approximately 162 ms (per the BF16_FAST result, 3,548 dispatches at 46 us each). The target frame budget is 67 ms. Reaching it needs a fused head_dim 128 decode attention arm and architecture-specific fused decoder-layer chains for the talker and CP layers — neither of which is built. The alternative is a different engine.

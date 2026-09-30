@@ -1,0 +1,8 @@
+{
+  "uname": "7.1.13-3-1-ARCH",
+  "boot_id": "4aed18b3-a96b-4959-8f3d-a877e3e96ef9",
+  "loadavg_start": "0.48 0.58 0.89 1/325 212409",
+  "mlx": "0.32.3.dev202609291615+06711ad",
+  "trace": "0",
+  "default_frame_ms_p50": 185.26
+}
