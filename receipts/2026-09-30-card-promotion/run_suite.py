@@ -254,6 +254,14 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                 print(f"TIMEOUT {prompt['id']} after {timeout_s}s; not recorded", flush=True)
                 break
             components = (message or {}).get("components") or []
+            try:
+                events = call("GET", f"/api/conversations/{cid}/events?after=0",
+                              runtime=runtime).get("events") or []
+            except Exception as exc:
+                events = [{"type": "error", "turn_id": turn,
+                           "data": {"message": f"events unavailable: {exc}"}}]
+            turn_events = [e for e in events if e.get("turn_id") == turn
+                           and e.get("type") in ("error", "status")]
             types = [c.get("type") for c in components]
             elapsed = time.monotonic() - started
             expect = prompt["expect"]
@@ -269,6 +277,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                 "elapsed_s": round(elapsed, 1),
                 "status": (message or {}).get("status"),
                 "max_heartbeat_s": round(max(gaps, default=0.0), 2),
+                "events": [{"type": e["type"], **(e.get("data") or {})} for e in turn_events][:10],
                 "pass": pass_,
                 "reply": ((message or {}).get("content") or "")[:6000],
             }
