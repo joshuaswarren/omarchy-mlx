@@ -65,8 +65,8 @@ on the pinned base, cherry-pick that commit instead.
 
 The build still consumes the pinned upstream archive:
 
-- `mlx.lock` pins MLX 0.32.3 at commit `59d600b5e64c238427d0f8d897ab7c682ef4d3d2`, with the archive URL and SHA-256 (verified against main on 2026-09-20).
-- `scripts/prepare-mlx.sh` downloads the archive and applies the 13 patches from `patches/`.
+- `mlx.lock` pins MLX 0.32.3 at commit `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`, with the archive URL and SHA-256 (verified against main on 2026-09-30).
+- `scripts/prepare-mlx.sh` downloads the archive and applies the 17 patches from `patches/`.
 - Nothing in the build reads `joshuaswarren/omarchy-mlx`.
 
 Switching the build to the fork is an owner decision that has not been made.
