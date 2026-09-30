@@ -177,12 +177,17 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
         except Exception:
             pass
 
-    deadline = time.monotonic() + 180 if not do_setup else 1500
+    # Setup deadlines are per-model: 2B finishes in ~3 min on the v0.7.6
+    # wheel, 27B needs ~10 min.  Allow 25 min total per chunk (the gpu-turn
+    # ticket is -m 8, so this is the maximum wall-clock budget).
+    is_27b = "27b" in chat_model
+    deadline = time.monotonic() + 300 if not do_setup else 1500
     while not os.path.exists(runtime) and time.monotonic() < deadline:
         time.sleep(0.5)
     if not os.path.exists(runtime):
         raise RuntimeError("server never wrote application.json")
-    setup_deadline = time.monotonic() + (600 if not do_setup else 1500)
+    setup_deadline = time.monotonic() + (900 if not do_setup else
+                                          (1500 if not is_27b else 1500))
     while time.monotonic() < setup_deadline:
         state = call("GET", "/api/status", runtime=runtime).get("setup") or {}
         if state.get("state") == "complete":
