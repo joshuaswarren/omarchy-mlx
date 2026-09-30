@@ -63,6 +63,7 @@ import numpy as np
 
 from .vulkan_decoder_step import _CHAIN_GROUPS, _CHAIN_THREADS, _EXACT_FMA16
 
+DEPTH = 8
 _WINDOW_ROWS = 7  # row 0 = emission joint, rows 1..6 = frame-entry spec
 _JOINT_OUT = 8198
 _NGROUPS = 33  # window workgroups: ceil(8198 / 256)
@@ -299,9 +300,8 @@ _ACC_DECLS
     uint nrows = (ctl[_C_COUNT] == 0u) ? ROWSU : 1u;
     if (j < 8198u) {
         if (nrows == ROWSU) {
-            for (uint k = 0u; k < 640u; ++k) {
-                precise float w = float(joint[k * 8198u + j]);
-_ACC_UPDATES
+            for (uint k = 0u; k < 640u; k += DEPTHu) {
+_ACC_BLOCK
             }
         } else {
 _ACC_UPDATES_1
@@ -560,6 +560,17 @@ def _build_window() -> str:
         f" + float(sh_relu[{slot}u * 640u + k]) * w;"
         for slot in range(_WINDOW_ROWS)
     )
+    # Window k loop: DEPTH independent weight loads first, then the updates in
+    # ascending k per accumulator. fma is bit-identical to the old separately
+    # rounded mul+add because both operands are f16 (their product has <= 22
+    # significant bits and is exact in fp32); only the load scheduling changes.
+    blk = "\n".join(
+        f"                precise float w{i} = float(joint[(k + {i}u) * 8198u + j]);"
+        for i in range(DEPTH)
+    ) + "\n" + "\n".join(
+        f"                acc{slot} = fma(float(sh_relu[{slot}u * 640u + k + {i}u]), w{i}, acc{slot});"
+        for i in range(DEPTH) for slot in range(_WINDOW_ROWS)
+    )
     acc_updates_1 = (
         "            for (uint k = 0u; k < 640u; ++k) {\n"
         "                precise float w1r = float(joint[k * 8198u + j]);\n"
@@ -580,6 +591,8 @@ def _build_window() -> str:
         _ACC_DECLS=acc_decls,
         _ACC_UPDATES_1=acc_updates_1,
         _ACC_UPDATES=acc_updates,
+        _ACC_BLOCK=blk,
+        DEPTHu=f"{DEPTH}u",
         _AV_ARRAY=av_array,
         _C_FRAME=str(_C_FRAME),
         _G_VALID=str(_G_VALID),
