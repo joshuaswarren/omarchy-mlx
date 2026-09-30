@@ -48,6 +48,12 @@ Per-voice medians are stable across 95 measured runs (RTF min 0.65, max
    kernels per sentence; the backend's default elementwise chain fusion
    (FuseDecodeChains, `MLX_OMARCHY_FUSED_CHAIN`, on by default) already
    collapses the float unary/binary runs, so what remains is conv-heavy.
+   **Correction (2026-09-30, receipts/2026-09-30-compile-fix):** the
+   pure-Snake hang did not reproduce (five cases, eval in 3-27 ms, error
+   0). The no-primitive failure was a tape-interpreter defect, fixed in
+   `ec94a4bb5`. Compiled Snake blocks now match eager at 140 dB SNR, but
+   RTF moves only from 0.735 to 0.743. The text below records the original
+   report.
 4. **`mx.compile` root cause (step 1 of the follow-up): unusable on this
    wheel, two distinct failures.**
    - A pure 4-op Snake function `x + (1/a)*(sin(a*x)**2)` wrapped in
