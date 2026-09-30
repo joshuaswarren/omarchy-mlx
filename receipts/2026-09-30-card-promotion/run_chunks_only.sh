@@ -11,7 +11,14 @@ cd "$REPO"
 
 run_chunk() {
   local label="$1"; shift
-  "$_HOME/bin/gpu-turn" -m 8 -- \
+  # 27B setup needs ~10 min on the v0.7.6 wheel.  Use -m 28 (the wrapper
+  # max) so the chunk's gpu-turn budget covers setup + prompts for 27B.
+  # -m 8 stays for 2B chunks after setup to free the queue faster.
+  local minutes=8
+  if [[ "$label" == *27b* ]]; then
+    minutes=28
+  fi
+  "$_HOME/bin/gpu-turn" -m "$minutes" -- \
     env MARKCARDS_HOME="$_HOME" \
         "$VENV/bin/python" \
     "$@" \
