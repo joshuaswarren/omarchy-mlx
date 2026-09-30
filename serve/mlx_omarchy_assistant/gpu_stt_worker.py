@@ -13,6 +13,7 @@ killing the process group, so there is no cancel frame. Resampling to
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import struct
 import sys
@@ -35,6 +36,22 @@ def _send(stream, header: dict) -> None:
     encoded = json.dumps(dict(header, payload_bytes=0)).encode("utf-8")
     stream.write(struct.pack("<Q", len(encoded)) + encoded)
     stream.flush()
+
+
+def _register_bare_package(name: str) -> None:
+    """Put package ``name`` in sys.modules without running its __init__.
+
+    Its submodules still import normally. mlx_audio.stt.models/__init__
+    imports every model family, and granite_speech5_ctc builds a float64 mel
+    filterbank on the CPU stream at import: 152 CPU-stream dispatches in
+    every worker, none of them for Parakeet.
+    """
+    if name in sys.modules:
+        return
+    spec = importlib.util.find_spec(name)
+    if spec is None:
+        raise ModuleNotFoundError(name)
+    sys.modules[name] = importlib.util.module_from_spec(spec)
 
 
 def _transcribe(model, payload: bytes, rate: int) -> dict:
@@ -64,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
     try:
         import mlx.core as mx
+        _register_bare_package("mlx_audio.stt.models")
         from mlx_audio.stt.utils import load_model
 
         # A Path (not str) skips mlx-audio's hub resolution: the snapshot

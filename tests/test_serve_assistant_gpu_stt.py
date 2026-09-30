@@ -220,5 +220,24 @@ class ResampleTest(unittest.TestCase):
         self.assertLess(np.abs(out[200:-200] - expected[200:-200]).max(), 1e-2)
 
 
+class BarePackageTest(unittest.TestCase):
+    def test_submodule_imports_without_running_the_package_init(self):
+        from mlx_omarchy_assistant import gpu_stt_worker
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp, "stt_families_probe")
+            (pkg / "wanted").mkdir(parents=True)
+            (pkg / "__init__.py").write_text("raise RuntimeError('package __init__ ran')\n")
+            (pkg / "wanted" / "__init__.py").write_text("VALUE = 7\n")
+            sys.path.insert(0, tmp)
+            try:
+                gpu_stt_worker._register_bare_package("stt_families_probe")
+                import stt_families_probe.wanted as wanted
+                self.assertEqual(wanted.VALUE, 7)
+            finally:
+                sys.path.remove(tmp)
+                for name in ("stt_families_probe.wanted", "stt_families_probe"):
+                    sys.modules.pop(name, None)
+
+
 if __name__ == "__main__":
     unittest.main()
