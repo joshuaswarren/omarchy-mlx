@@ -138,10 +138,10 @@ class Base(unittest.TestCase):
             "boot_id": None,
             "started_offline": True,
             "chip": {"arch": ["t6021"]},
-            "licenses": {"qwen3.8-2b-4bit": "apache-2.0", "laya-mlx": "apache-2.0"},
+            "licenses": {"qwen3-4b-instruct-2507-4bit": "apache-2.0", "laya-mlx": "apache-2.0"},
             "models": {
                 "chat": {
-                    "id": "qwen3.8-2b-4bit", "repo": "org/qwen", "revision": "a" * 40,
+                    "id": "qwen3-4b-instruct-2507-4bit", "repo": "org/qwen", "revision": "a" * 40,
                     "path": str(self.chat_dir), "weights_bytes": 4096, "kv_bytes_per_token": 128,
                 },
                 "decision": {
@@ -270,7 +270,7 @@ class ExportImportRoundtrip(Base):
         self.assertEqual(info["bundle_id"], manifest_bundle_id(self.bundle_path()))
         self.assertEqual(info["licenses"], ["apache-2.0"])
         self.assertEqual(info["license_details"],
-                         {"apache-2.0": {"models": ["laya-mlx", "qwen3.8-2b-4bit"],
+                         {"apache-2.0": {"models": ["laya-mlx", "qwen3-4b-instruct-2507-4bit"],
                                          "bytes": 4096 + 2 + 2 + 2048}})
         self.assertEqual(info["pairs"][0]["arch"], ["t6021"])
         self.assertTrue(info["wheels_complete"])
@@ -1174,7 +1174,7 @@ class InstallBundleTransaction(Base):
             self.import_(bundle="omit.zip")
         # decoy: manifest lists 'mit' but the embedded lock says apache-2.0
         def decoy(m):
-            m["licenses"] = {"mit": {"models": ["qwen3.8-2b-4bit"], "bytes": 1}}
+            m["licenses"] = {"mit": {"models": ["qwen3-4b-instruct-2507-4bit"], "bytes": 1}}
             m["pairs"][0]["licenses"] = ["mit"]
             return m
         self._rebuild("decoy.zip", manifest_fn=decoy)

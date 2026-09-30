@@ -82,12 +82,13 @@ The installer includes local model servers and Laya. The [serving guide](docs/se
 
 MLX Chat now has a local web app in this source tree.
 The browser and terminal use the same model pair, chat history, and stop control.
-This is not a tested release. No pair has passed all release checks. On an M2 Max the Everyday pair passes chat, compare, cancel, restart with the network denied, the 2-second first-answer target, and the interface and accessibility checks. Speech output is intelligible but runs 5 to 6 times slower than real time, and speech input has no Linux path yet. The Quality pair and routing have not passed. See [gate status](docs/serve.md#everyday-pair-gate-status-2026-09-28).
+This is not a tested release. No current pair has passed all release checks. The 2026-09-28 hardware results apply to the former 2B Everyday pair, not these new defaults. Everyday (9B), Compact (4B), and Quality (27B) still need pair qualification; speech output and input also need work. See [gate status](docs/serve.md#everyday-pair-gate-status-2026-09-28).
 
 | Pair to test | Chat model | Decision model |
 |---|---|---|
-| Everyday | Qwen3.8-2B, 4-bit | Laya |
+| Everyday | Qwen3.5-9B, 4-bit | Laya |
 | Quality | Qwen3.8-27B, 4-bit | Laya |
+| Compact | Qwen3-4B-Instruct-2507, 4-bit | Laya |
 
 The code supports option comparisons, interactive cards, speech input, speech output, and offline transfer.
 Automatic routing stays off until its held-out tests pass.

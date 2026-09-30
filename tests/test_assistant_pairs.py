@@ -36,7 +36,7 @@ from mlx_omarchy_assistant.pairs import PAIR_DEV_QUALIFICATION_ENV
 
 GiB = 1024**3
 
-CHAT_SMALL_ID = "qwen3.8-2b-4bit"
+CHAT_SMALL_ID = "qwen3-4b-instruct-2507-4bit"
 CHAT_BIG_ID = "qwen3.8-27b-4bit"
 DECISION_ID = "laya-mlx"
 SPEED_ID = "qwen3.8-3b-4bit"
@@ -320,6 +320,46 @@ class CatalogPairSchemaTests(unittest.TestCase):
                 self.assertIsNone(qual["date"], pair["id"])
             # no invented measurements: automatic selection must refuse
             self.assertNotIn("extension", pair, pair["id"])
+
+
+    def test_bundled_chat_models_pin_revision_hashes_and_license(self):
+        models = {entry["id"]: entry for entry in self.bundled["models"]}
+        expected = {
+            "qwen3.5-9b-mlx-4bit": ("938d8919941c6e7efd3c7150eff7fe9d12afa631",
+                                     "mlx-community/Qwen3.5-9B-MLX-4bit", 5950221072),
+            "qwen3-4b-instruct-2507-4bit": ("50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+                                             "mlx-community/Qwen3-4B-Instruct-2507-4bit", 2263022417),
+        }
+        for model_id, (revision, repo, weights) in expected.items():
+            with self.subTest(model=model_id):
+                entry = models[model_id]
+                self.assertEqual((entry["revision"], entry["repo"], entry["license"]),
+                                 (revision, repo, "apache-2.0"))
+                self.assertFalse(entry["recommended"])
+                self.assertEqual(entry["qualification"]["generation"]["status"], "untested")
+                self.assertEqual(entry["memory"]["weights_bytes"], weights)
+                files = entry["extension"]["files"]
+                self.assertTrue(files)
+                self.assertEqual(sum(file["size_bytes"] for file in files
+                                     if file["path"].endswith(".safetensors")), weights)
+                for file in files:
+                    self.assertEqual(len(file["sha256"]), 64, file["path"])
+                    self.assertGreater(file["size_bytes"], 0, file["path"])
+                self.assertNotIn("card_format", entry["extension"])
+
+    def test_default_pair_selection_respects_memory_and_priority(self):
+        large = pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
+                                          preference="balanced", available_bytes=96 * GiB)
+        self.assertEqual(large["id"], "everyday")
+        self.assertEqual(large["chat_model"], "qwen3.5-9b-mlx-4bit")
+        # A 16 GiB-class host with 10 GiB available after OS/desktop reserve.
+        compact = pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
+                                            preference="balanced", available_bytes=10 * GiB)
+        self.assertEqual(compact["id"], "compact")
+        self.assertEqual(compact["chat_model"], "qwen3-4b-instruct-2507-4bit")
+        with self.assertRaisesRegex(pairs.PairError, "no default pair fits"):
+            pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
+                                      preference="balanced", available_bytes=2 * GiB)
 
     def test_unknown_pair_key_rejected(self):
         cat = fixture_catalog()
@@ -995,7 +1035,7 @@ class PairManagerTests(BasePairTest):
     def test_ready_offline_requires_a_named_receipt(self):
         pair = {"id": "everyday",
                 "qualification": {"status": "qualified", "receipt": None},
-                "chat_model": "qwen3.8-2b-4bit", "decision_model": "laya-mlx"}
+                "chat_model": CHAT_SMALL_ID, "decision_model": "laya-mlx"}
         self.assertFalse(self.manager._ready_offline(pair))
         pair["qualification"]["receipt"] = "   "
         self.assertFalse(self.manager._ready_offline(pair))

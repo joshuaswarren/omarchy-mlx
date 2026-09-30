@@ -7,7 +7,7 @@ Installed code and a successful generation request do not establish model or ass
 ## Current application boundary
 
 The source tree includes the shared application under `serve/mlx_omarchy_assistant/`.
-It is not a qualified release. Both default pairs and voice still require end-to-end hardware evidence.
+It is not a qualified release. All three default pairs and voice still require end-to-end hardware evidence.
 All catalog entries retain `recommended: false`. No code-only check promotes **Ready offline**.
 
 Inspect the source application:
@@ -177,7 +177,8 @@ Read the exact model revision, runtime, and scope in each receipt before using a
 
 | Catalog ID | Role | Generation / HTTP / managed status in catalog | Remaining pair requirement |
 |---|---|---|---|
-| `qwen3.8-2b-4bit` | Small chat, MLX-LM | Qualified / qualified / untested | Managed launch and paired qualification |
+| qwen3.5-9b-mlx-4bit | Everyday chat, MLX-LM | Untested / untested / untested | Generation, HTTP, managed launch, and pair qualification |
+| qwen3-4b-instruct-2507-4bit | Compact chat, MLX-LM | Untested / untested / untested | Generation, HTTP, managed launch, and pair qualification |
 | `qwen3.8-27b-4bit` | Larger chat, MLX-LM | Qualified / qualified / qualified | Resolve recorded numerical-equivalence limits and qualify the pair |
 | `laya-mlx` | Typed decisions, dedicated module | Qualified / qualified / untested | Converted artifact, managed launch, paired qualification |
 
@@ -216,14 +217,15 @@ These commands only inspect the catalog or plan memory and disk use; they do not
 
 ```bash
 PYTHONPATH=serve python -m mlx_omarchy_serve catalog list --offline
-PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3.8-2b-4bit --context 4096 --offline
+PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3.5-9b-mlx-4bit --context 4096 --offline
+PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3-4b-instruct-2507-4bit --context 4096 --offline
 PYTHONPATH=serve python -m mlx_omarchy_serve plan qwen3.8-27b-4bit --context 8192 --offline
 ```
 
 To start one model, use an explicit target and context. This is a manual route, not paired assistant setup:
 
 ```bash
-mlx-omarchy-serve serve qwen3.8-2b-4bit --context 4096
+mlx-omarchy-serve serve qwen3.5-9b-mlx-4bit --context 4096
 ```
 
 The command checks memory and disk before asking for download approval.

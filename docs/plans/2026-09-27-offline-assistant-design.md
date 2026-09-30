@@ -118,8 +118,9 @@ Pair readiness is a release gate, not something the user must establish themselv
 
 | Pair | Chat catalog ID | Decision catalog ID | Context policy | Selection |
 |---|---|---|---|---|
-| Everyday | `qwen3.8-2b-4bit` | `laya-mlx` | Calculated per machine and workload | Lower-memory, lower-latency choice |
-| Quality | `qwen3.8-27b-4bit` | `laya-mlx` | Calculated per machine and workload | Prefer when its qualified quality and latency meet the user's selected mode |
+| Everyday | qwen3.5-9b-mlx-4bit | laya-mlx | Calculated per machine and workload | Default chat model for machines where the full pair fits |
+| Quality | qwen3.8-27b-4bit | laya-mlx | Calculated per machine and workload | Existing higher-capacity pair |
+| Compact | qwen3-4b-instruct-2507-4bit | laya-mlx | Calculated per machine and workload | Fallback when the Everyday pair does not fit admission |
 
 Do not encode RAM tiers or a list of supported memory sizes into selection logic.
 The same calculation handles every reported byte capacity, including unusual sizes and changing available memory.
@@ -199,11 +200,12 @@ Exact candidate pins, taken from the existing catalog:
 
 | Catalog ID | Source | Revision |
 |---|---|---|
-| `qwen3.8-2b-4bit` | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` | `0867d98bfb174b042d88461c0e7c97b86b34b381` |
-| `qwen3.8-27b-4bit` | `mlx-community/Qwen3.8-27B-4bit` | `10c35caafbb80f7dc6a7a432cdd11af10a6d4818` |
-| `laya-mlx` | `convaiinnovations/laya` | `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` |
+| qwen3.5-9b-mlx-4bit | mlx-community/Qwen3.5-9B-MLX-4bit | 938d8919941c6e7efd3c7150eff7fe9d12afa631 |
+| qwen3-4b-instruct-2507-4bit | mlx-community/Qwen3-4B-Instruct-2507-4bit | 50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b |
+| qwen3.8-27b-4bit | mlx-community/Qwen3.8-27B-4bit | 10c35caafbb80f7dc6a7a432cdd11af10a6d4818 |
+| laya-mlx | convaiinnovations/laya | 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 |
 
-The catalog weight totals are approximately 1.90 GB for Everyday and 16.90 GB for Quality.
+The catalog weight totals are approximately 6.79 GB for Everyday, 16.90 GB for Quality, and 3.11 GB for Compact (decimal bytes, chat plus Laya).
 These are decimal weight bytes only, not download totals, disk requirements, or runtime memory requirements.
 Show actual complete download sizes during setup, including tokenizers, runtime dependencies, conversion output, and optional voice assets.
 Laya uses the in-repository converter; its raw source snapshot is not a servable MLX checkpoint.

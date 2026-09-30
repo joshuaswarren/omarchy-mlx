@@ -688,129 +688,125 @@
       }
     },
     {
-      "id": "qwen3.8-2b-4bit",
-      "repo": "SiddhJagani/Qwen3.8-2B-mlx-4Bit",
-      "revision": "0867d98bfb174b042d88461c0e7c97b86b34b381",
+      "id": "qwen3.5-9b-mlx-4bit",
+      "repo": "mlx-community/Qwen3.5-9B-MLX-4bit",
+      "revision": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
       "kind": "chat",
       "priority": 10,
       "recommended": false,
       "license": "apache-2.0",
-      "quant": {
-        "bits": 4,
-        "group_size": 64,
-        "mode": "affine"
-      },
-      "memory": {
-        "weights_bytes": 1059404429,
-        "kv_bytes_per_token": 12288,
-        "peak_estimate_bytes": null
-      },
-      "context": {
-        "max_tokens": 262144
-      },
-      "capability": {
-        "min_mem_gib": 2,
-        "arch": null
-      },
+      "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
+      "memory": {"weights_bytes": 5950221072, "kv_bytes_per_token": 32768, "peak_estimate_bytes": null},
+      "context": {"max_tokens": 262144},
+      "capability": {"min_mem_gib": 7, "arch": null},
       "qualification": {
-        "generation": {
-          "status": "qualified",
-          "receipt": "https://github.com/joshuawarren/ane-linux-experiments/blob/main/receipts/2026-09-22-qwen38-integration/README.md",
-          "date": "2026-09-22"
-        },
-        "http": {
-          "status": "qualified",
-          "receipt": "https://github.com/joshuawarren/ane-linux-experiments/blob/main/receipts/2026-09-22-serving-integration-smoke/README.md",
-          "date": "2026-09-22"
-        },
-        "managed": {
-          "status": "untested",
-          "receipt": null,
-          "date": null
-        }
+        "generation": {"status": "untested", "receipt": null, "date": null},
+        "http": {"status": "untested", "receipt": null, "date": null},
+        "managed": {"status": "untested", "receipt": null, "date": null}
       },
-      "availability": {
-        "size_bytes": 1059404429,
-        "refreshed_at": "2026-09-20T19:30:09Z"
-      },
-      "family": "qwen3.8-2b",
+      "availability": {"size_bytes": 5950221072, "refreshed_at": "2026-09-30T14:49:20Z"},
+      "family": "qwen3.5-9b",
       "extension": {
-        "scope": "Smoke/bench model. Direct-launch mlx_lm.server HTTP qualified 2026-09-22 on the integrated kernel wheel (integration/qwen38-2026-09-22 @ dc7ca4a0, mlx-lm 0.31.3 + GDN fast-route patch, conv-ring off): 30/30 streaming completions 200 OK, usage verified, output digests identical with and without the GDN patch and across both qualification hosts. Managed serve route untested.",
-        "model_type": "qwen3_5",
-        "params": null,
-        "multimodal": false,
-        "mtp": true,
-        "hybrid_attention": "linear_attention x3 + full_attention, interval 4, 24 layers",
-        "kv_basis": "kv_bytes_per_token = 2 (K+V) x 6 full-attention layers (24/4) x 2 kv heads x 256 head_dim x 2 bytes (bf16), from the pinned config; GDN layers carry fixed recurrent state, not a growing cache; MTP excluded",
+        "model_type": "qwen3_5_text",
+        "multimodal": true,
         "variant": "4bit",
-        "model_architecture": "Qwen3_5TextForCausalLM",
-        "min_mem_gib_basis": "ceil(weights_bytes * 1.25 / 2^30); static weights floor, not a measured peak",
-        "serve_bench": {
-          "protocol": "10 prompts x 3 passes, greedy, 32 new tokens, streaming, usage-verified; mlx_lm.server 0.31.3, GDN fast-route patch vs same wheel without it",
-          "measured": [
-            {
-              "host_class": "M1 Max",
-              "arm": "before",
-              "ttft_s_median": 0.89,
-              "token_rate_completion_median": 9.05
-            },
-            {
-              "host_class": "M1 Max",
-              "arm": "after-gdn",
-              "ttft_s_median": 0.59,
-              "token_rate_completion_median": 13.56
-            },
-            {
-              "host_class": "M1",
-              "arm": "before",
-              "ttft_s_median": 1.79,
-              "token_rate_completion_median": 8.29
-            },
-            {
-              "host_class": "M1",
-              "arm": "after-gdn",
-              "ttft_s_median": 1.32,
-              "token_rate_completion_median": 10.78
-            }
-          ],
-          "note": "Output digests identical before/after per host and across hosts. Server cold-start to /v1/models ready: 4 s on both hosts."
-        },
-        "client_note": "mlx_lm.server /v1/models lists every cached HF model, not the loaded one; clients must not resolve the served model via the first /v1/models id."
+        "model_architecture": "Qwen3_5ForConditionalGeneration",
+        "kv_basis": "32768 B/token = 2 (K+V) x 8 full-attention layers (32/4) x 4 KV heads x 256 head_dim x 2 bytes (bf16); linear-attention layers carry recurrent state, not a growing KV cache.",
+        "benchmark_receipt": "receipts/2026-09-30-chat-model-bench/README.md",
+        "license_source": "Hugging Face model card (README.md) and API cardData.license at this pinned revision; public and ungated.",
+        "files": [
+          {"path": ".gitattributes", "size_bytes": 1570, "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"},
+          {"path": "README.md", "size_bytes": 1954, "sha256": "7cbe4c3e07a5465d52d60c94c71f8d578113550eb767d331553f9ca19538ce56"},
+          {"path": "chat_template.jinja", "size_bytes": 7756, "sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"},
+          {"path": "config.json", "size_bytes": 3331, "sha256": "a96942cb6a8a1d3f1d17514d81a1925d04362a6a3233b389d13012211baaa9f8"},
+          {"path": "model-00001-of-00002.safetensors", "size_bytes": 5349771222, "sha256": "a68b87558c6ef43f74c2bd63ce7e9092ceddc3101f3def0030774bae5f42aadd"},
+          {"path": "model-00002-of-00002.safetensors", "size_bytes": 600449850, "sha256": "b0a770bf8469c7f3f18756a0e0283f1c1174344a83e059a4e483f6af4907352d"},
+          {"path": "model.safetensors.index.json", "size_bytes": 123592, "sha256": "dd023913fb87cfdae27fb11dcf695117c925833796ccac3c64117d6652d8ff1e"},
+          {"path": "preprocessor_config.json", "size_bytes": 390, "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"},
+          {"path": "processor_config.json", "size_bytes": 1300, "sha256": "14932921ca485d458a04dafd8069fbb0a4505622a48208d19ed247115801385b"},
+          {"path": "tokenizer.json", "size_bytes": 19989343, "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4"},
+          {"path": "tokenizer_config.json", "size_bytes": 1139, "sha256": "e98f1901ac6f0adff67b1d540bfa0c36ac1a0cf59eb72ed78146ef89aafa1182"},
+          {"path": "video_preprocessor_config.json", "size_bytes": 385, "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"},
+          {"path": "vocab.json", "size_bytes": 6722759, "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"}
+        ]
       },
-      "serve": {
-        "backend": "mlx-lm",
-        "module": null
-      }
+      "serve": {"backend": "mlx-lm", "module": null}
+    },
+    {
+      "id": "qwen3-4b-instruct-2507-4bit",
+      "repo": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+      "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+      "kind": "chat",
+      "priority": 11,
+      "recommended": false,
+      "license": "apache-2.0",
+      "quant": {"bits": 4, "group_size": 64, "mode": "affine"},
+      "memory": {"weights_bytes": 2263022417, "kv_bytes_per_token": 147456, "peak_estimate_bytes": null},
+      "context": {"max_tokens": 262144},
+      "capability": {"min_mem_gib": 3, "arch": null},
+      "qualification": {
+        "generation": {"status": "untested", "receipt": null, "date": null},
+        "http": {"status": "untested", "receipt": null, "date": null},
+        "managed": {"status": "untested", "receipt": null, "date": null}
+      },
+      "availability": {"size_bytes": 2263022417, "refreshed_at": "2026-09-30T14:49:20Z"},
+      "family": "qwen3-4b-instruct-2507",
+      "extension": {
+        "model_type": "qwen3",
+        "variant": "4bit",
+        "model_architecture": "Qwen3ForCausalLM",
+        "kv_basis": "147456 B/token = 2 (K+V) x 36 layers x 8 KV heads x 128 head_dim x 2 bytes (bf16), from the pinned config.",
+        "benchmark_receipt": "receipts/2026-09-30-chat-model-bench/README.md",
+        "license_source": "Hugging Face model card (README.md) and API cardData.license at this pinned revision; public and ungated.",
+        "files": [
+          {"path": ".gitattributes", "size_bytes": 1570, "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"},
+          {"path": "README.md", "size_bytes": 969, "sha256": "7b17ce562d7ea121c86d2ffdf660eed3726ac5b52cacfa9f1de11a65969f5657"},
+          {"path": "added_tokens.json", "size_bytes": 707, "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"},
+          {"path": "chat_template.jinja", "size_bytes": 4040, "sha256": "40c21f34cf67d8c760ef72f8ad3ae5afad514299d4b06e91dd9a8d705af7b541"},
+          {"path": "config.json", "size_bytes": 938, "sha256": "574349e5a343236546fda55e4744a76e181f534182d7dc60ff1bad7e7a502849"},
+          {"path": "generation_config.json", "size_bytes": 238, "sha256": "835fffe355c9438e7a25be099b3fccaa98350b83451f9fd2d99512e74f1ade48"},
+          {"path": "merges.txt", "size_bytes": 1671853, "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"},
+          {"path": "model.safetensors", "size_bytes": 2263022417, "sha256": "2a73c6c248601ab904e035548abd8e6abb65ea27dcb5f342fb0a8910eb44173f"},
+          {"path": "model.safetensors.index.json", "size_bytes": 63964, "sha256": "388d811b8b7c2608dd04cce1bcb04a8bf715d19b42790894e6d3427ff429a777"},
+          {"path": "special_tokens_map.json", "size_bytes": 613, "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"},
+          {"path": "tokenizer.json", "size_bytes": 11422654, "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"},
+          {"path": "tokenizer_config.json", "size_bytes": 5440, "sha256": "4397cc477eb6d79715ccd2000accd6b3531928f30029665832fa1b255f24d2b9"},
+          {"path": "vocab.json", "size_bytes": 2776833, "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+        ]
+      },
+      "serve": {"backend": "mlx-lm", "module": null}
     }
   ],
   "pairs": [
     {
       "id": "everyday",
       "label": "Everyday",
-      "chat_model": "qwen3.8-2b-4bit",
+      "chat_model": "qwen3.5-9b-mlx-4bit",
       "decision_model": "laya-mlx",
-      "priority": 2,
+      "priority": 1,
       "max_questions": 8,
       "routing_policy": "1",
-      "qualification": {
-        "status": "untested",
-        "receipt": null,
-        "date": null
-      }
+      "qualification": {"status": "untested", "receipt": null, "date": null}
     },
     {
       "id": "quality",
       "label": "Quality",
       "chat_model": "qwen3.8-27b-4bit",
       "decision_model": "laya-mlx",
-      "priority": 1,
+      "priority": 2,
       "max_questions": 8,
       "routing_policy": "1",
-      "qualification": {
-        "status": "untested",
-        "receipt": null,
-        "date": null
-      }
+      "qualification": {"status": "untested", "receipt": null, "date": null}
+    },
+    {
+      "id": "compact",
+      "label": "Compact",
+      "chat_model": "qwen3-4b-instruct-2507-4bit",
+      "decision_model": "laya-mlx",
+      "priority": 3,
+      "max_questions": 8,
+      "routing_policy": "1",
+      "qualification": {"status": "untested", "receipt": null, "date": null}
     }
   ]
 }

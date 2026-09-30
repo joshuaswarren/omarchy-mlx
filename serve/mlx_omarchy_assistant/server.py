@@ -229,8 +229,8 @@ class AssistantServer(ThreadingHTTPServer):
             values = body.get(key, [])
             if not isinstance(values, list) or len(values) > 32 or any(not isinstance(v, str) or not v for v in values):
                 raise ValueError(f"{key} must be a list of names or paths")
-        if any(pair not in ("everyday", "quality") for pair in body.get("pair_ids", [])):
-            raise ValueError("Choose Everyday or Quality for transfer")
+        if any(pair not in ("everyday", "quality", "compact") for pair in body.get("pair_ids", [])):
+            raise ValueError("Choose Everyday, Quality, or Compact for transfer")
         for key in ("bundle", "output"):
             if key in body and (not isinstance(body[key], str) or not Path(body[key]).is_absolute()):
                 raise ValueError(f"{key} must be an absolute local path")

@@ -114,7 +114,7 @@ def main(argv=None):
     parser.add_argument("--prompt")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--max-tokens", type=int, help="explicit output allowance; otherwise size it for the task")
-    parser.add_argument("--pair", choices=("everyday", "quality"))
+    parser.add_argument("--pair", choices=("everyday", "quality", "compact"))
     parser.add_argument("--resume", action="store_true",
                         help="load the saved pair at login and keep both models resident")
     parser.add_argument("--yes", action="store_true", help="approve downloading the explicitly selected pair")

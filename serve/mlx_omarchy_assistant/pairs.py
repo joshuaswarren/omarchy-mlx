@@ -185,6 +185,30 @@ def _catalog_decision_bytes(decision_entry: dict) -> int:
                                     budget.DEFAULT_CONTEXT_TOKENS).total
 
 
+
+def select_default_pair(pair_records, model_entries, *, preference: str,
+                        available_bytes: int, reserved_bytes: int = 0) -> dict:
+    """Pick the first curated setup default whose pair fits current memory.
+
+    This is a setup default, not an automatic recommendation: qualification
+    remains visible and admission never changes qualification state.
+    """
+    models = {entry["id"]: entry for entry in model_entries}
+    for pair in sorted(pair_records, key=lambda item: item["priority"]):
+        chat = models.get(pair["chat_model"])
+        decision = models.get(pair["decision_model"])
+        if chat is None or decision is None:
+            continue
+        try:
+            admissible_context(chat, other_bytes=_catalog_decision_bytes(decision),
+                               preference=preference,
+                               available_bytes=available_bytes,
+                               reserved_bytes=reserved_bytes)
+        except PairError:
+            continue
+        return pair
+    raise PairError("memory: no default pair fits available memory")
+
 def local_chip_arch() -> str | None:
     """This machine's Apple chip id (e.g. 't6021') from the devicetree."""
     return serve_cli.machine_soc()
@@ -756,13 +780,12 @@ class PairManager:
         }
 
     def _recommendation(self) -> dict | None:
-        """The pair this manager would pick right now, from live memory —
-        continuous in bytes, never a fixed table."""
+        """Expose the first memory-fitting setup default without qualifying it."""
         try:
-            pick = select_pair(self.catalog.get("pairs") or [],
-                               self.catalog["models"],
-                               preference="balanced", home=self.home,
-                               available_bytes=self._available_bytes())
+            pick = select_default_pair(self.catalog.get("pairs") or [],
+                                       self.catalog["models"],
+                                       preference="balanced",
+                                       available_bytes=self._available_bytes())
         except PairError as exc:
             return {"error": str(exc)}
         return {"pair_id": pick["id"], "label": pick["label"],
