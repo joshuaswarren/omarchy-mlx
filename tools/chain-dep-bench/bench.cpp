@@ -347,6 +347,31 @@ static const char* kShaderRaw =
     "layout(set = 0, binding = 1) buffer Out { uint out_buf[]; };\n"
     "void main() { out_buf[gl_WorkGroupID.x] = in_buf[gl_WorkGroupID.x] + 1u; }\n";
 
+// Fusion-feasibility prototype (DecodeGap7): the SAME K-step dependent chain
+// as the RMW dispatch chain, folded into ONE dispatch. Each phase does the
+// same +1 work per thread and a cross-lane exchange through shared memory
+// (two barriers) so phase s+1 genuinely depends on all of phase s — the
+// in-kernel stand-in for the boundaries the folded layer would delete. No
+// grid-wide sync: one workgroup owns its lane ring, which is the only sync
+// AGX/Honeykrisp safely provides inside a dispatch.
+static const char* kShaderFolded =
+    "#version 450\n"
+    "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;\n"
+    "layout(set = 0, binding = 0) buffer Out { uint out_buf[]; };\n"
+    "layout(push_constant) uniform PC { uint phases; } pc;\n"
+    "shared uint lane[32];\n"
+    "void main() {\n"
+    "  uint id = gl_LocalInvocationID.x;\n"
+    "  uint v = out_buf[gl_WorkGroupID.x] + id;\n"
+    "  for (uint s = 0u; s < pc.phases; ++s) {\n"
+    "    lane[id] = v;\n"
+    "    barrier();\n"
+    "    v = lane[(id + 1u) & 31u] + 1u;\n"
+    "    barrier();\n"
+    "  }\n"
+    "  if (id == 0u) out_buf[gl_WorkGroupID.x] = v;\n"
+    "}\n";
+
 static std::string compile_shader_src(const char* src);
 
 static std::string compile_shader() {
@@ -395,7 +420,9 @@ struct Bench {
   VkDescriptorSet mset{VK_NULL_HANDLE};  // single-set RMW
   VkShaderModule mod_rmw{VK_NULL_HANDLE};
   VkShaderModule mod_raw{VK_NULL_HANDLE};
+  VkShaderModule mod_folded{VK_NULL_HANDLE};
   VkPipeline pipe_rmw{VK_NULL_HANDLE};
+  VkPipeline pipe_folded{VK_NULL_HANDLE};
   VkPipeline pw[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkPipeline pr[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkCommandPool cpool{VK_NULL_HANDLE};
@@ -571,6 +598,7 @@ static void setup_bench(Bench& b) {
     };
     b.mod_rmw = make_mod(spv_rmw);
     b.mod_raw = make_mod(spv_raw);
+    b.mod_folded = make_mod(compile_shader_src(kShaderFolded));
     (void)mi2;
     fprintf(stderr, "MARK modules-created rmw=%p raw=%p\n",
             (void*)b.mod_rmw, (void*)b.mod_raw);
@@ -589,6 +617,7 @@ static void setup_bench(Bench& b) {
       return p;
     };
     b.pipe_rmw = make_pipe(b.mod_rmw, b.layout);
+    b.pipe_folded = make_pipe(b.mod_folded, b.layout);
     fprintf(stderr, "MARK pipe_rmw ok\n");
     for (int i = 0; i < 3; ++i) {
       b.pr[i] = make_pipe(b.mod_raw, b.layout2);
@@ -710,6 +739,57 @@ struct RunRes {
 static RunRes run_case(Bench& b, const char* mode, uint32_t grid,
     VkSemaphore sem, VkEvent ev, bool& ev_supported, uint64_t vbase) {
   uint32_t pcv = 0x3f;
+  // DecodeGap7 fusion-feasibility arms: the SAME K-step dependent chain as
+  //   foldK_rmw   K dispatches of the RMW kernel, full barrier between
+  //               (the production dependent-chain shape)
+  //   foldK_in    ONE dispatch of the folded kernel doing K in-kernel phases
+  // with a TOP/BOT timestamp pair bracketing the whole chain.
+  if (strncmp(mode, "fold", 4) == 0) {
+    int K = atoi(mode + 4);
+    bool in_kernel = strstr(mode, "_in") != nullptr;
+    g_vk.ResetQueryPool(g_vk.dev, b.qpool, 0, 8);
+    begin_cmd(b.cmd[0]);
+    g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        b.qpool, 0);
+    if (in_kernel) {
+      g_vk.CmdBindPipeline(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+          b.pipe_folded);
+      g_vk.CmdBindDescriptorSets(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+          b.layout, 0, 1, &b.set, 0, nullptr);
+      uint32_t phases = (uint32_t)K;
+      g_vk.CmdPushConstants(b.cmd[0], b.layout,
+          VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &phases);
+      g_vk.CmdDispatch(b.cmd[0], 20, 1, 1);
+    } else {
+      for (int i = 0; i < K; ++i) {
+        g_vk.CmdBindPipeline(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.pipe_rmw);
+        g_vk.CmdBindDescriptorSets(b.cmd[0], VK_PIPELINE_BIND_POINT_COMPUTE,
+            b.layout, 0, 1, &b.mset, 0, nullptr);
+        g_vk.CmdDispatch(b.cmd[0], 20, 1, 1);
+        if (i < K - 1) full_barrier(b.cmd[0]);
+      }
+    }
+    g_vk.CmdWriteTimestamp(b.cmd[0], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        b.qpool, 1);
+    g_vk.EndCommandBuffer(b.cmd[0]);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &b.cmd[0];
+    double t0 = now_us();
+    if (g_vk.QueueSubmit(g_vk.queue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS)
+      die("QueueSubmit fold");
+    if (g_vk.QueueWaitIdle(g_vk.queue) != VK_SUCCESS) die("WaitIdle fold");
+    double t1 = now_us();
+    uint64_t ticks[2];
+    if (g_vk.GetQueryPoolResults(g_vk.dev, b.qpool, 0, 2, sizeof(ticks),
+            ticks, sizeof(uint64_t),
+            VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+      die("GetQueryPoolResults fold");
+    double span = ticks_between(ticks[0], ticks[1]);
+    return {t1 - t0, 0.0, 0.0, span};
+  }
   // In-CS probes isolating the per-slot cost ingredients: ONE command
   // buffer, full barrier between dispatches, per-dispatch TOP/BOT
   // timestamps only where the name says _ts.
@@ -976,6 +1056,8 @@ int main() {
   const char* modes[] = {"cs1_none", "cs1_barrier", "cs1_event",
       "cs1_a_grid1_ts", "cs1_b_grid20_ts", "cs1_c_grid20_nots",
       "cs1_d_grid20_raw",
+      "fold3_rmw", "fold3_in", "fold12_rmw", "fold12_in",
+      "fold48_rmw", "fold48_in",
       "cs3_1submit_sema", "cs3_3submit_sema", "cs3_fencejoin"};
   const uint32_t REPS = 31, WARM = 7;
   for (const char* mode : modes) {
