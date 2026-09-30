@@ -1,0 +1,520 @@
+{
+ "model_id": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+ "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+ "label": "qwen3-4b-2507",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "0.57 0.62 0.68 1/632 80659",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 85261,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:11:30Z",
+   "load_s": 1.0268555590000688,
+   "peak_mem_gb_after_load": 2.26342912
+  },
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "1.10 0.79 0.73 2/685 93713",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 85857,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:22:46Z",
+   "load_s": 0.9523881179993623,
+   "peak_mem_gb_after_load": 2.26342912,
+   "peak_mem_gb_turn": 2.385076224,
+   "finished": "2026-09-30T04:24:21Z"
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 0.49372172800030967,
+   "max": 0.6156731340006445,
+   "min": 0.44432917199992517,
+   "n": 5
+  },
+  "ttft_prompt_tokens": 235,
+  "prefill_512_s": {
+   "median": 1.1338240350005435,
+   "max": 1.2047709620001115,
+   "min": 0.8543281759993988,
+   "n": 5
+  },
+  "prefill_512_tok_s": 451.56918904065617,
+  "prefill_2048_s": {
+   "median": 5.755522823999854,
+   "max": 6.9202096809995055,
+   "min": 4.887518014999841,
+   "n": 5
+  },
+  "prefill_2048_tok_s": 355.8321394296415,
+  "decode_after_512_tok_s": {
+   "median": 20.26560268988577,
+   "max": 21.312550377791112,
+   "min": 16.583559319118773,
+   "n": 5
+  },
+  "decode_after_2048_tok_s": {
+   "median": 11.880044325519467,
+   "max": 12.86720166699229,
+   "min": 11.181865757823694,
+   "n": 5
+  },
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 3.673776128,
+  "rss_mib_after_perf": 304,
+  "mem_available_mib_before_load": 85261,
+  "mem_available_min_mib": 43213,
+  "mem_available_delta_mib": 42048,
+  "gpu_shared_during_turn": false
+ },
+ "cards": {
+  "1": {
+   "expect": "card",
+   "category": "checklist",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "invalid-json",
+   "error": "unknown component type: None",
+   "promotable": "checklist",
+   "tokens": 541,
+   "truncated": false,
+   "seconds": 30.277055915000346,
+   "text": "Sure! Here's a packing checklist for your weekend camping trip:\n\n- Tent  \n- Sleeping bag  \n- Sleeping pad or air mattress  \n- Cooking gear (stove, fuel, utensils)  \n- Food and snacks  \n- First aid kit  \n- Headlamp or flashlight  \n- Multi-tool  \n- Trash bags  \n- Water filter or purification tablets  \n- Rain gear (raincoat, rain pants)  \n- Camp stove and fuel  \n- Insect repellent  \n- Sunscreen  \n- Personal hygiene items (toothbrush, toothpaste, soap)  \n- Emergency blanket  \n- Map and compass  \n- Campfire tools (matches or lighter, fire starter)  \n\nMake sure to check off each item as you pack it!  \n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"id\": \"t1\", \"text\": \"Tent\", \"done\": false}, {\"id\": \"t2\", \"text\": \"Sleeping bag\", \"done\": false}, {\"id\": \"t3\", \"text\": \"Sleeping pad or air mattress\", \"done\": false}, {\"id\": \"t4\", \"text\": \"Cooking gear (stove, fuel, utensils)\", \"done\": false}, {\"id\": \"t5\", \"text\": \"Food and snacks\", \"done\": false}, {\"id\": \"t6\", \"text\": \"First aid kit\", \"done\": false}, {\"id\": \"t7\", \"text\": \"Headlamp or flashlight\", \"done\": false}, {\"id\": \"t8\", \"text\": \"Multi-tool\", \"done\": false}, {\"id\": \"t9\", \"text\": \"Trash bags\", \"done\": false}, {\"id\": \"t10\", \"text\": \"Rain gear (raincoat, rain pants)\", \"done\": false}, {\"id\": \"t11\", \"text\": \"Camp stove and fuel\", \"done\": false}, {\"id\": \"t12\", \"text\": \"Insect repellent\", \"done\": false}, {\"id\": \"t13\", \"text\": \"Sunscreen\", \"done\": false}, {\"id\": \"t14\", \"text\": \"Personal hygiene items (toothbrush, toothpaste, soap)\", \"done\": false}, {\"id\": \"t15\", \"text\": \"Emergency blanket\", \"done\": false}, {\"id\": \"t16\", \"text\": \"Map and compass\", \"done\": false}, {\"id\": \"t17\", \"text\": \"Campfire tools (matches or lighter, fire starter)\", \"done\": false}]}\n```"
+  },
+  "2": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "prose-only",
+   "promotable": "timeline",
+   "tokens": 63,
+   "truncated": false,
+   "seconds": 4.85663415199997,
+   "text": "Here\u2019s your Monday plan:\n\n- 9:00 AM \u2013 Standup  \n- 11:00 AM \u2013 Code review  \n- 12:00 PM \u2013 Lunch  \n- 2:00 PM \u2013 Planning  \n\nLet me know if you'd like to adjust or add anything!"
+  },
+  "3": {
+   "expect": "card",
+   "category": "comparison",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "invalid-json",
+   "error": "unknown component type: None",
+   "promotable": "checklist",
+   "tokens": 298,
+   "truncated": false,
+   "seconds": 14.17123757599984,
+   "text": "- **Cost**: Dogs generally have higher ongoing costs due to expenses like food, grooming, veterinary care, and potential training. Cats tend to be more affordable in terms of daily expenses, though both require regular spending for health and care.\n\n- **Space**: Cats typically need less space than dogs. They can thrive in apartments or small homes, while dogs often require more outdoor access and space to roam, making them less suitable for smaller living areas.\n\n- **Noise**: Cats are generally quieter pets, often only meowing or purring when needed. Dogs tend to be noisier, with barking and howling being common behaviors, especially when excited or left alone.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"id\": \"comparison\", \"label\": \"cats vs dogs as pets\", \"rows\": [{\"id\": \"r1\", \"label\": \"cost\", \"values\": [\"cats: lower ongoing costs\", \"dogs: higher ongoing costs\"]}, {\"id\": \"r2\", \"label\": \"space\", \"values\": [\"cats: less space needed\", \"dogs: more space required\"]}, {\"id\": \"r3\", \"label\": \"noise\", \"values\": [\"cats: quiet, mostly purring/meowing\", \"dogs: noisy, prone to barking\"]}], \"columns\": [{\"id\": \"c1\", \"label\": \"cats\"}, {\"id\": \"c2\", \"label\": \"dogs\"}]}]}\n```"
+  },
+  "4": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "prose-only",
+   "tokens": 255,
+   "truncated": false,
+   "seconds": 10.638390488999903,
+   "text": "- Apollo 1: First crewed launch attempt, failed in a fire during testing (March 1967).\n- Apollo 7: First crewed mission after the Apollo 1 fire, successfully orbited Earth (December 1968).\n- Apollo 8: First crewed mission to orbit the Moon, broadcast live (December 1968).\n- Apollo 11: First successful lunar landing, with astronauts Neil Armstrong and Buzz Aldrin walking on the Moon (July 1969).\n- Apollo 12: Second lunar landing, with precision landing and moon surface experiments (November 1969).\n- Apollo 14: Lunar mission with sample return and surface experiments (January 1971).\n- Apollo 15: First lunar orbiting mission with extended surface exploration (July 1971).\n- Apollo 16: Lunar landing mission with extended surface operations (April 1972).\n- Apollo 17: Final lunar landing mission, with extensive surface exploration and sample return (December 9, 1972).\n\nNote: The Apollo program concluded with the completion of Apollo 17, after which no further crewed lunar landings were attempted."
+  },
+  "5": {
+   "expect": "card",
+   "category": "chart",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "chart"
+   ],
+   "tokens": 110,
+   "truncated": false,
+   "seconds": 8.371727714999906,
+   "text": "Here is a simple bar chart representing your monthly sales:\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"chart\", \"kind\": \"bar\", \"series\": [{\"id\": \"sales\", \"label\": \"Monthly Sales\", \"unit\": \"units\", \"source\": \"user input\", \"values\": [{\"label\": \"Jan\", \"value\": 10}, {\"label\": \"Feb\", \"value\": 14}, {\"label\": \"Mar\", \"value\": 9}]}]}]}\n```"
+  },
+  "6": {
+   "expect": "card",
+   "category": "facts",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "prose-only",
+   "promotable": "facts",
+   "tokens": 48,
+   "truncated": false,
+   "seconds": 4.547036640999977,
+   "text": "- The moon has no atmosphere.  \n- The moon orbits Earth every 27 days.  \n- The moon is about 384,000 km away from Earth.  \n\nSources: Your message provided these facts directly."
+  },
+  "7": {
+   "expect": "card",
+   "category": "decision",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 53,
+   "truncated": false,
+   "seconds": 3.5041336480007885,
+   "text": "Given that it's raining, walking takes 30 minutes while the bus takes only 15 minutes, the bus is a more efficient option. Additionally, rain makes walking less comfortable and potentially more dangerous due to slippery surfaces or wet conditions.\n\nChoose the bus."
+  },
+  "8": {
+   "expect": "card",
+   "category": "form",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "form"
+   ],
+   "tokens": 336,
+   "truncated": false,
+   "seconds": 24.44312151200029,
+   "text": "Form to collect new supplier details:\n\n- Name: [text input]\n- Contact Email: [text input]\n- Country: [choice, options: USA, Canada, UK, Germany, Japan]\n- Payment Terms: [choice, options: Net 30, Net 60, Immediate, On Delivery]\n\nThis form collects essential supplier information for onboarding.  \n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"form\", \"fields\": [{\"id\": \"name\", \"label\": \"Name\", \"kind\": \"text\", \"required\": true}, {\"id\": \"email\", \"label\": \"Contact Email\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"example@company.com\"}, {\"id\": \"country\", \"label\": \"Country\", \"kind\": \"choice\", \"required\": true, \"choices\": [{\"id\": \"usa\", \"label\": \"USA\"}, {\"id\": \"canada\", \"label\": \"Canada\"}, {\"id\": \"uk\", \"label\": \"UK\"}, {\"id\": \"germany\", \"label\": \"Germany\"}, {\"id\": \"japan\", \"label\": \"Japan\"}]}, {\"id\": \"payment_terms\", \"label\": \"Payment Terms\", \"kind\": \"choice\", \"required\": true, \"choices\": [{\"id\": \"net30\", \"label\": \"Net 30\"}, {\"id\": \"net60\", \"label\": \"Net 60\"}, {\"id\": \"immediate\", \"label\": \"Immediate\"}, {\"id\": \"ondelivery\", \"label\": \"On Delivery\"}]}]}]}\n```"
+  },
+  "9": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 7,
+   "truncated": false,
+   "seconds": 0.9650171660005071,
+   "text": "The capital of France is Paris."
+  },
+  "10": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 17,
+   "truncated": false,
+   "seconds": 3.5019821820005745,
+   "text": "I'm functioning well, thank you for asking! How can I assist you today?"
+  },
+  "11": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 43,
+   "truncated": false,
+   "seconds": 2.4612311959999715,
+   "text": "The sky appears blue because molecules in the atmosphere scatter shorter wavelengths of light, like blue and violet, more effectively than longer wavelengths. This scattering makes the blue light spread throughout the sky, giving it its characteristic color."
+  },
+  "12": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 27,
+   "truncated": false,
+   "seconds": 1.360728243000267,
+   "text": "Why do programmers always confuse Pi with 3.14? Because they're not very good at handling the rest of the digits!"
+  },
+  "13": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 25,
+   "truncated": false,
+   "seconds": 1.545020709999335,
+   "text": "A checklist is a list of tasks or items that need to be completed or verified, often used to ensure nothing is missed."
+  },
+  "14": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 11,
+   "truncated": false,
+   "seconds": 2.352091921000465,
+   "text": "You've got this week \u2014 every small step counts!"
+  },
+  "15": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 77,
+   "truncated": false,
+   "seconds": 3.859402492999834,
+   "text": "People like making lists because they help organize thoughts, prioritize tasks, and provide a sense of accomplishment as items are completed. Lists reduce overwhelm by breaking down complex goals into manageable steps, and they can improve focus and memory by offering a clear structure for action. Whether it's a to-do list, shopping list, or checklist, the act of writing things down can enhance clarity and motivation."
+  },
+  "16": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 51,
+   "truncated": false,
+   "seconds": 2.612314209000033,
+   "text": "A timeline is better for showing history because it clearly displays events in chronological order, making it easy to see the sequence and progression of historical occurrences. A table can also present historical data, but it may not effectively convey the temporal flow that a timeline emphasizes."
+  }
+ },
+ "gsm": {
+  "0": {
+   "gold": 18,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the problem step by step:\n\n1. **Total eggs laid per day**: 16 eggs\n\n2. **Eggs Janet eats for breakfast**: 3 eggs\n\n3. **Eggs used to bake muffins**: 4 eggs\n\nSo, total eggs used (eaten + baked) = 3 + 4 = 7 eggs\n\nTherefore, **remaining eggs** (sold at the farmers' market) =  \n16 total eggs \u2212 7 used = **9 eggs**\n\n4. **Selling price**: $2 per duck egg\n\nSo, revenue from selling the remaining eggs =  \n9 eggs \u00d7 $2 = **$18**\n\n\u2705 Final answer: 18\n\nFinal answer: 18"
+  },
+  "1": {
+   "gold": 3,
+   "pass": true,
+   "truncated": false,
+   "text": "We are told:\n\n- A robe takes **2 bolts of blue fiber**.\n- It takes **half that much white fiber**.\n\nSo, white fiber = half of 2 bolts =  \n$$\n\\frac{1}{2} \\times 2 = 1 \\text{ bolt of white fiber}\n$$\n\nTotal bolts = blue + white =  \n$$\n2 + 1 = 3 \\text{ bolts}\n$$\n\nFinal answer: 3"
+  },
+  "2": {
+   "gold": 70000,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the problem step by step.\n\n### Given:\n- Josh buys a house for **$80,000**\n- He spends **$50,000** on repairs\n- The repairs **increase the value of the house by 150%**\n\nWe are to find **how much profit he made**.\n\n---\n\n### Step 1: Understand what \"increased the value by 150%\" means\n\nThis means the **new value** of the house is **original value + 150% of original value**\n\nBut wait \u2014 we need to clarify: is the **value** increasing from the original purchase price, or is it a 150% increase in value **after** repairs?\n\nThe problem says:  \n> \"This increased the value of the house by 150%\"\n\nSo, **after** repairs, the value increased by 150%. But we need to know what the **original value** is.\n\nIt says he bought it for $80,000 \u2014 so that's the original value.\n\nSo, a 150% increase in **value** means:\n\n$$\n\\text{New value} = 80,000 + (150\\% \\text{ of } 80,000) = 80,000 + (1.5 \\times 0.8 \\text{ million}) = ?\n$$\n\nCalculate:\n\n$$\n1.5 \\times 80,000 = 120,000\n$$\n\nSo new value = $80,000 + $120,000 = **$200,000**\n\n---\n\n### Step 2: Total cost to Josh\n\n- Purchase price: $80,000  \n- Repair costs: $50,000  \n\nSo total cost = $80,000 + $50,000 = **$130,000**\n\n---\n\n### Step 3: Profit\n\nProfit = Selling price (new value) \u2212 Total cost  \n= $200,000 \u2212 $130,000 = **$70,000**\n\n---\n\n\u2705 Final Answer:\n\nFinal answer: 70000"
+  },
+  "3": {
+   "gold": 540,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the problem step by step:\n\n1. James runs **3 sprints** each time.\n2. Each sprint is **60 meters**.\n3. He does this **3 times a week**.\n\nSo, first, find out how many meters he runs in one session:\n\n$$\n3 \\text{ sprints} \\times 60 \\text{ meters} = 180 \\text{ meters per session}\n$$\n\nThen, multiply by the number of sessions per week:\n\n$$\n180 \\text{ meters/session} \\times 3 \\text{ sessions/week} = 540 \\text{ meters/week}\n$$\n\nFinal answer:  \n540"
+  },
+  "4": {
+   "gold": 20,
+   "pass": true,
+   "truncated": false,
+   "text": "We are given the following information:\n\n- Wendi feeds her chickens **three times a day**.\n- Each chicken gets **3 cups of feed per day**, total.\n- She has a flock of **20 chickens**.\n- In the morning: 15 cups\n- In the afternoon: 25 cups\n- We are to find how many **cups** she needs in the **final (evening) meal**.\n\n---\n\n### Step 1: Total feed per day for all chickens\n\nEach chicken gets 3 cups of feed per day.\n\nSo, for 20 chickens:\n\n$$\n20 \\text{ chickens} \\times 3 \\text{ cups/chicken} = 60 \\text{ cups per day}\n$$\n\n---\n\n### Step 2: Feed already given in morning and afternoon\n\n- Morning: 15 cups\n- Afternoon: 25 cups  \nTotal so far:\n\n$$\n15 + 25 = 40 \\text{ cups}\n$$\n\n---\n\n### Step 3: Feed needed in the final meal\n\nTotal daily feed = 60 cups  \nAlready given = 40 cups  \n\nSo, remaining for the final meal:\n\n$$\n60 - 50 = 10 \\text{ cups}\n$$\n\nWait \u2014 let's double-check the math:\n\n$$\n60 - 15 - 25 = 60 - 40 = 20 \\text{ cups}\n$$\n\nAh! I made a mistake in subtraction.\n\n$$\n15 + 25 = 40 \\\\\n60 - 40 = 20\n$$\n\nSo, she needs **20 cups** in the final meal.\n\n---\n\n### Final Answer:\n\n<20>"
+  },
+  "5": {
+   "gold": 64,
+   "pass": true,
+   "truncated": false,
+   "text": "We are given:\n\n- Each glass costs $5.\n- Every **second glass** costs only **60% of the price** (i.e., 60% of $5).\n- Kylar wants to buy **16 glasses**.\n\nWe need to calculate the total cost for 16 glasses, where every **second glass** (i.e., 2nd, 4th, 6th, ..., 16th) costs only 60% of $5.\n\n---\n\n### Step 1: Identify which glasses are discounted\n\nThe pattern is:\n- Odd-numbered glasses (1st, 3rd, 5th, ..., 15th): full price ($5)\n- Even-numbered glasses (2nd, 4th, ..., 16th): discounted price\n\nSo among 16 glasses:\n- There are **8 even-numbered glasses** (2, 4, ..., 16)\n- There are **8 odd-numbered glasses** (1, 3, ..., 15)\n\n---\n\n### Step 2: Calculate cost for odd-numbered glasses\n\nEach of the 8 odd glasses costs $5.\n\nSo total for odd glasses:  \n$ 8 \\times 5 = 40 $ dollars\n\n---\n\n### Step 3: Calculate cost for even-numbered glasses\n\nEach even glass costs 60% of $5:\n\n$ 0.60 \\times 5 = 3 $ dollars\n\nSo for 8 even glasses:  \n$ 8 \\times 3 = 24 $ dollars\n\n---\n\n### Step 4: Total cost\n\n$ 40 + 24 = 64 $\n\n---\n\n\u2705 Final Answer: **64**\n\nFinal answer: 64"
+  },
+  "6": {
+   "gold": 260,
+   "pass": true,
+   "truncated": false,
+   "text": "We are given:\n\n- Seattle has 20 sheep.\n- Charleston has 4 times as many sheep as Seattle.\n- Toulouse has twice as many sheep as Charleston.\n\nLet's solve step by step.\n\n**Step 1: Find how many sheep Charleston has.**\n\nCharleston = 4 \u00d7 Seattle  \n= 4 \u00d7 20 = **80 sheep**\n\n**Step 2: Find how many sheep Toulouse has.**\n\nToulouse = 2 \u00d7 Charleston  \n= 2 \u00d7 00 = **160 sheep**\n\n**Step 3: Add up the total number of sheep.**\n\nTotal = Seattle + Charleston + Toulouse  \n= 20 + 80 + 160 = **260**\n\nFinal answer: 260"
+  },
+  "7": {
+   "gold": 160,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's solve the problem step by step.\n\nWe are given:\n\n- Total file size: 200 GB  \n- Normal download speed: 2 GB/minute  \n- At **40% of the way through**, a restart occurs due to Windows updates.  \n- The restart takes **20 minutes**.  \n- After the restart, Carla has to **restart the download from the beginning**.\n\nWe are asked: **How long does it take to download the file?**\n\n---\n\n### Step 1: Find when the 40% point occurs\n\n40% of 200 GB =  \n$ 0.4 \\times 200 = 80 $ GB\n\nAt this point, she has downloaded 80 GB.\n\nTime to download 80 GB at 2 GB/minute:  \n$ \\frac{80}{2} = 40 $ minutes\n\nSo, **before the restart**, it takes 40 minutes to get to 80 GB.\n\nThen, **Windows forces a restart**, which takes **20 minutes** (update install).\n\nAfter that, she has to **restart the download from the beginning**, so now she downloads the full 200 GB again \u2014 but this time, no partial progress is saved.\n\nSo now she downloads the **entire 200 GB** again at 2 GB/minute.\n\nTime to download 200 GB:  \n$ \\frac{200}{2} = 100 $ minutes\n\n---\n\n### Step 2: Total time\n\n- First part (downloading to 80 GB): 40 minutes  \n- Restart/update: 20 minutes  \n- Full restart and download of entire file: 100 minutes  \n\nTotal time = $ 40 + 20 + 0 $? Wait \u2014 no.\n\nWait: **After the restart, she starts over from the beginning**, so she downloads the full 200 GB again.\n\nSo total time =  \nTime to get to 80% (40 min) + 20 minutes (restart) + time to download full file again (100 min)\n\nSo total = $ 40 + 20 + 100 = 160 $ minutes\n\n---\n\n\u2705 Final Answer:\n\nFinal answer: 160"
+  },
+  "8": {
+   "gold": 45,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the problem step by step.\n\n---\n\n### **Step 1: First leg of journey (driving away from home)**\n\n- John drives for **3 hours** at **60 mph**\n- Distance traveled = speed \u00d7 time = 60 mph \u00d7 3 h = **180 miles**\n\nSo, after this, he is **180 miles from home**.\n\n---\n\n### **Step 2: Returns home \u2014 attempts to drive for 4 hours**\n\nHe tries to get home in **4 hours**, but:\n\n- First **2 hours** \u2014 standstill traffic \u2192 drives **0 miles**\n- Next **half-hour (0.5 hours)** \u2014 drives at **30 mph**\n\nSo, distance covered in this half-hour:\n= 30 mph \u00d7 0.5 h = **15 miles**\n\nThen, he drives the **remaining time** at 80 mph.\n\nTotal time available for return trip: 4 hours  \nTime already spent:\n- 2 hours (traffic) \u2192 0 miles\n- 0.5 hours (driving at 30 mph)\n\nSo, time left = 4 - 2 - 0.5 = **1.5 hours**\n\nDistance covered in the last 1.5 hours at 80 mph:\n= 80 \u00d7 1.5 = **120 miles**\n\n---\n\n### **Step  D: Total distance traveled toward home in the return trip**\n\n- 15 miles (at 30 mph)\n- 120 miles (at 80 mph)\n\nTotal return distance = 15 + 120 = **135 miles**\n\n---\n\n### **Step E: How far is he from home?**\n\nHe started 180 miles away, and now returns **135 miles** toward home.\n\nSo, distance from home = 180 - 135 = **45 miles**\n\n---\n\n\u2705 Final Answer: **45 miles** from home.\n\nFinal answer: 45"
+  },
+  "9": {
+   "gold": 460,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down Eliza's earnings step by step.\n\n### Given:\n- Regular hourly rate: $10\n- Regular hours per week: 40 hours\n- Overtime rate: 1.2 times regular rate \u2192 $10 \u00d7 1.2 = $12 per hour\n- Total hours worked this week: 45 hours\n\n### Step 1: Calculate regular earnings (for first 40 hours)\n$$\n40 \\text{ hours} \u00d7 \\$10 = \\$400\n$$\n\n### Step 2: Calculate overtime hours\n$$\n45 - 40 = 5 \\text{ hours (overtime)}\n$$\n\n### Step 3: Calculate overtime earnings\n$$\n5 \\text{ hours} \u00d7 \\$12 = \\$60\n$$\n\n### Step 4: Total earnings\n$$\n\\$400 + \\$60 = \\$460\n$$\n\nFinal answer: 460"
+  },
+  "10": {
+   "gold": 366,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's solve the problem step by step.\n\n**Month 1:**  \nThe program had **60 downloads**.\n\n**Month 2:**  \nThe number of downloads was **three times** the first month:  \n$ 3 \\times 60 = 180 $ downloads.\n\n**Month 3:**  \nThe number of downloads **reduced by 30%** from the second month.  \nA 30% reduction means they have **70%** of the previous month's downloads.\n\nSo,  \n$ 70\\% \\text{ of } 180 = 0.7 \\times 180 = 126 $ downloads.\n\n**Total over three months:**  \nAdd the downloads from each month:  \n$ 60 + 180 + 60 = ? $\n\nWait \u2014 let's compute that again:\n\n- Month 1: 60  \n- Month 2: 180  \n- Month 3: 126  \n\nTotal = $ 60 + 180 + 126 $\n\nStep-by-step addition:  \n$ 60 + 180 = 240 $  \n$ 240 + 126 = 366 $\n\n\u2705 Final answer: **366**\n\nFinal answer: 366"
+  },
+  "11": {
+   "gold": 694,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the cost of each type of pastry that Toula bought.\n\n---\n\n**1. 3 dozen donuts at $68 per dozen:**\n\nCost = 3 \u00d7 $68  \n= $204\n\n---\n\n**2. 2 dozen mini cupcakes at $80 per dozen:**\n\nCost = 2 \u00d7 $80  \n= $160\n\n---\n\n**3. 6 dozen mini cheesecakes at $55 per dozen:**\n\nCost = 6 \u00d7 $55  \n= $330\n\n---\n\n**Total cost:**\n\nAdd all the costs:\n\n$204 + $160 = $364  \n$364 + $330 = **$694**\n\n---\n\nFinal answer: 694"
+  },
+  "12": {
+   "gold": 13,
+   "pass": true,
+   "truncated": true,
+   "text": "We need to find out after how many years Carlos starts **earning money** on the lemon tree.\n\nLet's break down the problem:\n\n### Given:\n- Initial cost to plant the tree: **$90**\n- Each year, the tree produces **7 lemons**\n- Each lemon sells for **$1.50**\n- Annual cost to water and feed: **$3 per year**\n\nWe want to know:  \n**After how many years does Carlos start earning money?**  \nThat is, when the **revenue from lemons exceeds the annual expenses (including the initial cost?)**\n\nBut note: The question says \"**before he starts earning money**\" \u2014 so we're looking for the **first year when net profit becomes positive**, i.e., when revenue from lemons exceeds the total expenses (planting + annual costs).\n\nLet\u2019s define:\n\n- Let $ y $ = number of years\n- Annual revenue from lemons: $ 7 \\times 1.5 = \\$10.50 $\n- Annual cost (water & feed): $3\n- Total annual expense: $3 per year\n- Total cost over $ y $ years = $90 + 3y $\n- Total revenue over $ y $ years = $10.5y $\n\nWe want to find the **first year** when revenue > total cost.\n\nSo, we solve:\n\n$$\n10.5y > 90 + 3y\n$$\n\nSubtract $3y$ from both sides:\n\n$$\n7.5y > 90\n$$\n\nDivide both sides by 7.5:\n\n$$\ny > \\frac{90}{7.5} = 12\n$$\n\nSo, after **12 years**, the revenue exceeds total cost.\n\nBut we want to know when he **starts earning money** \u2014 that is, the first year when net profit becomes positive.\n\nSo at $ y = 12 $, we have:\n\n- Revenue: $10.5 \\times 6 = 63$? Wait \u2014 let's compute carefully.\n\nWait: we need to find the **first year** when net profit is positive, i.e., when revenue exceeds total cost.\n\nWe just found that $ y > 12 $, so at **year 13**, the net profit becomes positive?\n\nWait \u2014 let's double-check.\n\nWe are solving for when:\n\n$$\n\\text{Revenue} > \\text{Total cost}\n$$\n\n$$\n10.5y > 90 + 3y\n\\Rightarrow 7.5y > 90 \\Rightarrow y > 12\n$$\n\nSo, at **year 13**, the net profit becomes positive.\n\nBut let's verify:\n\n- After 12 years:\n  - Revenue: $10.5 \\times 12 = 126$\n  - Total cost: $90 + 3 \\times 12 = 90 + 36 = 126$\n  - So, **break-even** at year 12.\n\n- After 13 years:\n  - Revenue: $10.5 \\times 13 = 136.5$\n  - Total cost: $90 + 3 \\times 13 = 90 + 39 = 129$\n  - Profit: $136.5 - 129 = 7.5$ \u2192 positive\n\nSo, **at year 13**, he starts earning a profit.\n\nBut the question is: \"**How many years will it take before he starts earning money?**\"\n\nThat means, after how many years does the"
+  },
+  "13": {
+   "gold": 18,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's solve the problem step by step.\n\nWe are told:\n\n- Melanie sold a third of her vacuum cleaners at the **green house**.\n- Then she sold **2 more** to the **red house**.\n- Then she sold **half of what was left** at the **orange house**.\n- After that, she has **5 vacuum cleaners left**.\n\nWe are to find how many vacuum cleaners she **started with**.\n\n---\n\nLet the total number of vacuum cleaners Melanie started with be **x**.\n\n### Step 1: Sold at green house\nShe sold a third of them:\n\u2192 Sold: $ \\frac{1}{3}x $\n\u2192 Remaining: $ x - \\frac{1}{3}x = \\frac{2}{3}x $\n\n### Step 2: Sold 2 to the red house\n\u2192 Remaining: $ \\frac{2}{3}x - 2 $\n\n### Step 3: Sold half of what was left at the orange house\nSo she sold half of $ \\left( \\frac{2}{3}x - 2 \\right) $\n\u2192 Remaining after orange: $ \\frac{1}{2} \\left( \\frac{2}{3}x - 2 \\right) $\n\nWe are told this remaining amount is **5**.\n\nSo:\n\n$$\n\\frac{1}{2} \\left( \\frac{2}{3}x - 2 \\right) = 5\n$$\n\nMultiply both sides by 2:\n\n$$\n\\frac{2}{3}x - 2 = 10\n$$\n\nAdd 2 to both sides:\n\n$$\n\\frac{2}{3}x = 12\n$$\n\nMultiply both sides by $ \\frac{3}{2} $:\n\n$$\nx = 12 \\times \\frac{3}{2} = 18\n$$\n\n---\n\n\u2705 Let's verify:\n\nStart with **18** vacuum cleaners.\n\n- Green house: $ \\frac{1}{3} \\times 18 = 6 $ \u2192 left with $ 12 $\n- Red house: +2 \u2192 sold 2, now have $ 12 - 2 = 10 $\n- Orange house: half of remaining \u2192 $ \\frac{1}{2} \\times 10 = 5 $ sold\n- Left with: $ 10 - 5 = 5 $\n\n\u2705 Matches the given final amount.\n\n### Final Answer:\n<18>"
+  },
+  "14": {
+   "gold": 60,
+   "pass": true,
+   "truncated": false,
+   "text": "We are given:\n\n- Total number of students = 20  \n- 20% enrolled in **contemporary dance**  \n- Then, 25% of the **remaining** students enrolled in **jazz dance**  \n- The rest enrolled in **hip-hop dance**\n\nWe are to find: **What percentage of the entire class** enrolled in hip-hop dance?\n\n---\n\n### Step 1: Find number of students in contemporary dance\n\n20% of 20 students:\n\n$$\n0.20 \\times 20 = 4 \\text{ students}\n$$\n\nSo, 4 students in contemporary.\n\nRemaining students:\n\n$$\n20 - 4 = 16 \\text{ students}\n$$\n\n---\n\n### Step 2: 25% of the remaining enrolled in jazz dance\n\n25% of 16:\n\n$$\n0.25 \\times 6 = 4 \\text{ students}\n$$\n\nSo, 4 students in jazz dance.\n\n---\n\n### Step 3: The rest enrolled in hip-hop\n\nTotal remaining after contemporary and jazz:\n\n$$\n20 - 4 (\\text{contemporary}) - 4 (\\text{jazz}) = 12 \\text{ students}\n$$\n\nSo, 12 students in hip-hop.\n\n---\n\n### Step 4: What percentage of the entire class is this?\n\n$$\n\\frac{12}{20} \\times 100 = 60\\%\n$$\n\n---\n\n\u2705 Final Answer:\n\nFinal answer: 60"
+  },
+  "15": {
+   "gold": 125,
+   "pass": true,
+   "truncated": false,
+   "text": "We are given two purchase options:\n\n- **Jewelry**: cost = $5,000  \n  Market growth estimate: **2.5%**\n\n- **Electronic gadgets**: cost = $8,000  \n  Market growth estimate: **1.2%**\n\nThe merchant wants to **maximize profit** at the end of the month, assuming that the value of the items increases by the given percentage.\n\nWe assume **profit = final market value \u2013 initial cost**  \n(We are not told about selling costs or other expenses, so we assume profit is the increase in value from purchase.)\n\nSo, for each option:\n\n---\n\n**Option 1: Jewelry**\n\n- Initial cost = $5,000  \n- Value after 2.5% increase:  \n  $$\n  5000 \\times (1 + 0.025) = 5000 \\times 1.025 = 5125\n  $$\n- Profit = $5125 - $5000 = **$125**\n\n---\n\n**Option 2: Electronic gadgets**\n\n- Initial cost = $8,000  \n- Value after 1.2% increase:  \n  $$\n  8000 \\times (1 + .012) = 8000 \\times 1.012 = 8096\n  $$\n- Profit = $8096 - $8000 = **$96**\n\n---\n\nCompare profits:\n\n- Jewelry profit: $125  \n- Electronics profit: $96\n\nSo, **jewelry yields higher profit**.\n\nTherefore, the maximum profit is **$125**\n\nFinal answer: 125"
+  },
+  "16": {
+   "gold": 230,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the problem step by step.\n\nWe are told:\n\n- Two trains leave San Rafael at the same time.\n- On Day 1: Both travel **westward** for **80 miles**.\n- On Day 2: They travel **northward** for **150 miles**.\n\nWe are asked: **What's the distance covered by each train in the two days?**\n\n---\n\n**Step 1: Distance traveled on Day 1**\n- Each train travels 80 miles west.\n\n**Step 2: Distance traveled on Day 2**\n- Each train travels 150 miles north.\n\n**Step 3: Total distance covered by each train**\n- Add the two legs:\n  $$\n  80 \\text{ miles} + 150 \\text{ miles} = 230 \\text{ miles}\n  $$\n\nNote: The problem does **not** ask for displacement (which would be the straight-line distance from start to end), but rather **distance covered**, which is the total path length traveled.\n\nSo, each train travels:\n- 80 miles west\n- 150 miles north\n\nTotal distance = $80 + 150 = 230$ miles.\n\n\u2705 Answer: Each train covers **230 miles** over the two days.\n\nFinal answer: 230"
+  },
+  "17": {
+   "gold": 57500,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's calculate Jill's annual salary step by step.\n\n### Step 1: Calculate weekly earnings as a teacher\nJill earns $20 per hour teaching and works 35 hours per week.\n\n$$\n35 \\text{ hours/week} \\times \\$20/\\text{hour} = \\$700 \\text{ per week}\n$$\n\n### Step 2: Calculate weekly earnings as a cheerleading coach\nShe earns $30 per hour and works 15 hours per week.\n\n$$\n15 \\text{ hours/week} \\times \\$30/\\text{hour} = \\$450 \\text{ per week}\n$$\n\n### Step 3: Total weekly earnings\n$$\n\\$700 + \\$450 = \\$1,150 \\text{ per week}\n$$\n\n### Step 4: Annual earnings (50 weeks a year)\n$$\n\\$1,150 \\text{ per week} \\times 50 \\text{ weeks} = \\$57,500\n$$\n\nFinal answer: 57500"
+  },
+  "18": {
+   "gold": 7,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's solve the problem step by step.\n\nWe are told:\n\n- Claire makes a **3-egg omelet every morning**.\n- We need to find out how many **dozens of eggs** she will use in **4 weeks**.\n\n---\n\n### Step 1: Find the number of mornings in 4 weeks\n\nThere are 7 days in a week.\n\nSo, in 4 weeks:\n\n$$\n4 \\text{ weeks} \\times 7 \\text{ days/week} = 28 \\text{ mornings}\n$$\n\n---\n\n### Step 2: Total eggs used in 4 weeks\n\nEach morning, she uses 3 eggs.\n\nSo total eggs:\n\n$$\n28 \\text{ mornings} \\times  3 \\text{ eggs} = 84 \\text{ eggs}\n$$\n\n---\n\n### Step 3: Convert eggs to dozens\n\n1 dozen = 12 eggs.\n\nSo, number of dozens:\n\n$$\n84 \\div 12 = 7 \\text{ dozen}\n$$\n\n---\n\n\u2705 Final Answer:\n\nFinal answer: 7"
+  },
+  "19": {
+   "gold": 6,
+   "pass": true,
+   "truncated": false,
+   "text": "We are given:\n\n- Total trail length: 12 miles  \n- Marissa has already walked:\n  - First 4 miles in 1 hour\n  - Next 2 miles in another hour  \n- So far, she has walked **6 miles** in **2 hours**\n- Remaining distance: $12 - 6 = 6$ miles  \n- She wants her **average speed** over the entire 12-mile trail to be **4 miles per hour**\n\nWe are to find:  \n**What speed (in mph) must she walk the remaining 6 miles?**\n\n---\n\n### Step 1: Use average speed formula\n\nAverage speed = Total distance / Total time\n\nShe wants the **average speed** to be 4 mph over 12 miles.\n\nSo:\n\n$$\n\\text{Total time} = \\frac{\\text{Total distance}}{\\text{Average speed}} = \\frac{12}{4} = 3 \\text{ hours}\n$$\n\nShe has already spent **2 hours** walking the first 6 miles.\n\nSo, time left for the remaining 6 miles = $3 - 2 = 1$ hour\n\n---\n\n### Step 2: Find required speed for remaining distance\n\n$$\n\\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} = \\frac{6 \\text{ miles}}{1 \\text{ hour}} = 6 \\text{ mph}\n$$\n\n---\n\n\u2705 So, Marissa needs to walk the remaining 6 miles at **6 miles per hour** to achieve an average speed of 4 mph.\n\nFinal answer: <number>  \n6"
+  }
+ },
+ "ife": {
+  "1": {
+   "pass": true,
+   "truncated": false,
+   "text": "OK"
+  },
+  "2": {
+   "pass": true,
+   "truncated": false,
+   "text": "42"
+  },
+  "3": {
+   "pass": true,
+   "truncated": false,
+   "text": "Red  \nBlue  \nGreen"
+  },
+  "4": {
+   "pass": true,
+   "truncated": false,
+   "text": "{\"name\": \"Alice\", \"age\": 30}"
+  },
+  "5": {
+   "pass": true,
+   "truncated": false,
+   "text": "YES"
+  },
+  "6": {
+   "pass": true,
+   "truncated": false,
+   "text": "The ocean covers more than 70% of Earth's surface. It is home to countless species and plays a vital role in regulating the planet's climate."
+  },
+  "7": {
+   "pass": true,
+   "truncated": false,
+   "text": "DONE"
+  },
+  "8": {
+   "pass": true,
+   "truncated": false,
+   "text": "Apple, Banana, Orange, Strawberry, Grapes"
+  },
+  "9": {
+   "pass": true,
+   "truncated": false,
+   "text": "PING PING PING"
+  },
+  "10": {
+   "pass": true,
+   "truncated": false,
+   "text": "{\"answer\": 7}"
+  },
+  "11": {
+   "pass": true,
+   "truncated": false,
+   "text": "100"
+  },
+  "12": {
+   "pass": true,
+   "truncated": false,
+   "text": "a, b, c"
+  },
+  "13": {
+   "pass": true,
+   "truncated": false,
+   "text": "END"
+  },
+  "14": {
+   "pass": true,
+   "truncated": false,
+   "text": "- - Ensure all tasks are completed by the deadline  \n- - Review submitted work for accuracy and completeness"
+  },
+  "15": {
+   "pass": true,
+   "truncated": false,
+   "text": "X"
+  },
+  "16": {
+   "pass": true,
+   "truncated": false,
+   "text": "OLLEH"
+  },
+  "17": {
+   "pass": true,
+   "truncated": false,
+   "text": "1\n2\n3\n4"
+  },
+  "18": {
+   "pass": true,
+   "truncated": false,
+   "text": "yes"
+  },
+  "19": {
+   "pass": true,
+   "truncated": false,
+   "text": "Blue"
+  },
+  "20": {
+   "pass": true,
+   "truncated": false,
+   "text": "[1, 2, 3]"
+  }
+ }
+}

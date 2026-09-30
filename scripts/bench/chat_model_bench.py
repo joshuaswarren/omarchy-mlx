@@ -166,7 +166,8 @@ def perf_phase(bench: Bench, args) -> dict:
     return {
         "ttft_card_prompt_s": stats(ttft), "ttft_prompt_tokens": len(ttft_prompt),
         "prefill_512_s": stats(p512), "prefill_512_tok_s": 512 / statistics.median(p512),
-        "prefill_2048_s": stats(p2048), "prefill_2048_tok_s": 2048 / statistics.median(p2048),
+        "prefill_2048_s": stats(p2048),
+        "prefill_2048_tok_s": 2048 / statistics.median(p2048) if p2048 else "skipped (--prefill2048-n 0)",
         "decode_after_512_tok_s": stats(d512), "decode_after_2048_tok_s": stats(d2048),
         "decode_tokens": args.n_decode,
         "peak_mem_gb_mx": mx.get_peak_memory() / 1e9,
@@ -293,6 +294,11 @@ def main() -> int:
             "provenance": provenance(), "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     print(turn["provenance"], flush=True)
     state["turns"].append(turn)
+    if "perf" in phases and "perf" not in state and turn["other_gpu_processes"]:
+        turn["perf_refused"] = f"{turn['other_gpu_processes']} other process(es) hold the GPU"
+        save()
+        print("PERF_REFUSED", turn["perf_refused"], flush=True)
+        return 4
 
     import mlx.core as mx
     from mlx_lm import load
@@ -314,7 +320,6 @@ def main() -> int:
         perf.update({"mem_available_mib_before_load": turn["mem_available_mib_before_load"],
                      "mem_available_min_mib": bench.min_mem_avail})
         perf["mem_available_delta_mib"] = perf["mem_available_mib_before_load"] - perf["mem_available_min_mib"]
-        perf["gpu_shared_during_turn"] = bool(turn["other_gpu_processes"])
         state["perf"] = perf
         save()
         print("PERF", json.dumps(perf), flush=True)

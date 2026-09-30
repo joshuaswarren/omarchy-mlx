@@ -1,0 +1,321 @@
+{
+ "model_id": "mlx-community/Qwen3.8-27B-4bit",
+ "revision": "10c35caafbb80f7dc6a7a432cdd11af10a6d4818",
+ "label": "qwen3.8-27b",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "0.45 0.55 0.65 1/705 101683",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 85761,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:30:36Z",
+   "load_s": 8.285337586999958,
+   "peak_mem_gb_after_load": 15.133851648
+  },
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "0.13 0.27 0.15 1/368 1515",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 91789,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:40:00Z",
+   "load_s": 12.526955663000024,
+   "peak_mem_gb_after_load": 15.133851648,
+   "peak_mem_gb_turn": 16.353501184,
+   "finished": "2026-09-30T04:44:47Z"
+  },
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "0.52 0.39 0.23 1/322 1620",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 89152,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:44:49Z",
+   "load_s": 9.035539728999993,
+   "peak_mem_gb_after_load": 15.133851648,
+   "peak_mem_gb_turn": 15.133851648,
+   "finished": "2026-09-30T04:44:59Z"
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 2.8102673004996177,
+   "max": 3.0327917899994645,
+   "min": 2.587742810999771,
+   "n": 2
+  },
+  "ttft_prompt_tokens": 244,
+  "prefill_512_s": {
+   "median": 4.974485202999858,
+   "max": 5.0642920570007846,
+   "min": 4.884678348998932,
+   "n": 2
+  },
+  "prefill_512_tok_s": 102.92522323540915,
+  "prefill_2048_s": {
+   "median": 21.07288946100016,
+   "max": 21.07288946100016,
+   "min": 21.07288946100016,
+   "n": 1
+  },
+  "prefill_2048_tok_s": 97.18648236589753,
+  "decode_after_512_tok_s": {
+   "median": 8.599528584832884,
+   "max": 8.638274154553942,
+   "min": 8.560783015111825,
+   "n": 2
+  },
+  "decode_after_2048_tok_s": {
+   "median": 7.986514825810657,
+   "max": 7.986514825810657,
+   "min": 7.986514825810657,
+   "n": 1
+  },
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 18.216706048,
+  "rss_mib_after_perf": 392,
+  "mem_available_mib_before_load": 85761,
+  "mem_available_min_mib": 55591,
+  "mem_available_delta_mib": 30170,
+  "gpu_shared_during_turn": false
+ },
+ "cards": {
+  "1": {
+   "expect": "card",
+   "category": "checklist",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "leaked-fence",
+   "tokens": 700,
+   "truncated": true,
+   "seconds": 76.13037864599937,
+   "text": "Here is a packing checklist for your weekend camping trip, organized by category to help you prepare:\n\n**Shelter & Sleep**\n*   Tent (including footprint/groundsheet)\n*   Sleeping bag (rated for expected temperatures)\n*   Sleeping pad or air mattress\n*   Pillow\n\n**Clothing & Footwear**\n*   Moisture-wicking base layers\n*   Insulating layer (fleece or down jacket)\n*   Waterproof/windproof outer shell\n*   Sturdy hiking boots or trail shoes\n*   Camp shoes or sandals for relaxing\n*   Socks (including extra pairs)\n*   Hat and gloves (if it gets cold)\n\n**Food & Water**\n*   Cooler with ice packs\n*   Percolator or camp stove (and fuel)\n*   Cookware and utensils\n*   Biodegradable soap and sponge\n*   Water bottles or hydration bladder\n*   Food (snacks, meals, coffee/tea)\n\n**Tools & Safety**\n*   Headlamp or flashlight (with extra batteries)\n*   Multi-tool or knife\n*   First aid kit\n*   Map and compass (or offline maps on phone)\n*   Fire starter (matches/lighter)\n\n**Comfort & Hygiene**\n*   Toilet paper and trash bags\n*   Hand sanitizer\n*   Sunscreen and insect repellent\n*   Towel\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"checklist\", \"items\": [{\"id\": \"shelter-tent\", \"text\": \"Tent (including footprint/groundsheet)\", \"done\": false}, {\"id\": \"shelter-bag\", \"text\": \"Sleeping bag (rated for expected temperatures)\", \"done\": false}, {\"id\": \"shelter-pad\", \"text\": \"Sleeping pad or air mattress\", \"done\": false}, {\"id\": \"shelter-pillow\", \"text\": \"Pillow\", \"done\": false}, {\"id\": \"clothing-base\", \"text\": \"Moisture-wicking base layers\", \"done\": false}, {\"id\": \"clothing-insulation\", \"text\": \"Insulating layer (fleece or down jacket)\", \"done\": false}, {\"id\": \"clothing-shell\", \"text\": \"Waterproof/windproof outer shell\", \"done\": false}, {\"id\": \"clothing-boots\", \"text\": \"Sturdy hiking boots or trail shoes\", \"done\": false}, {\"id\": \"clothing-campshoes\", \"text\": \"Camp shoes or sandals for relaxing\", \"done\": false}, {\"id\": \"clothing-socks\", \"text\": \"Socks (including extra pairs)\", \"done\": false}, {\"id\": \"clothing-cold\", \"text\": \"Hat and gloves (if it gets cold)\", \"done\": false}, {\"id\": \"food-cooler\", \"text\": \"Cooler with ice packs\", \"done\": false}, {\"id\": \"food-stove\", \"text\": \"Percolator or camp stove (and fuel)\", \"done\": false}, {\"id\": \"food-cookware\", \"text\": \"Cookware and utensils\", \"done\": false}, {\"id\": \"food-soap\", \"text\": \"Biodegradable soap and sponge\", \"done\": false},"
+  },
+  "2": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "timeline"
+   ],
+   "promotable": "timeline",
+   "tokens": 182,
+   "truncated": false,
+   "seconds": 21.0086820409997,
+   "text": "Here is your plan for Monday:\n\n- **9:00 AM** \u2013 Standup\n- **11:00 AM** \u2013 Code review\n- **12:00 PM (Noon)** \u2013 Lunch\n- **2:00 PM** \u2013 Planning\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"timeline\", \"entries\": [{\"id\": \"standup\", \"when\": \"9:00 AM\", \"text\": \"Standup\"}, {\"id\": \"code-review\", \"when\": \"11:00 AM\", \"text\": \"Code review\"}, {\"id\": \"lunch\", \"when\": \"12:00 PM\", \"text\": \"Lunch\"}, {\"id\": \"planning\", \"when\": \"2:00 PM\", \"text\": \"Planning\"}]}]}\n```"
+  },
+  "3": {
+   "expect": "card",
+   "category": "comparison",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "invalid-json",
+   "error": "comparison.rows: each row needs one value per column",
+   "promotable": "checklist",
+   "tokens": 559,
+   "truncated": false,
+   "seconds": 54.65679620999998,
+   "text": "Here is a comparison of cats and dogs as pets based on cost, space, and noise:\n\n**Cost**\n*   **Dogs:** Generally more expensive. Costs include higher food prices, regular veterinary care (vaccinations, check-ups), grooming, training classes, and potential boarding or daycare fees.\n*   **Cats:** Typically less expensive to maintain. While they still require veterinary care and food, they do not need the same level of professional training or daily outdoor supervision as dogs.\n\n**Space**\n*   **Dogs:** Usually require more space, particularly if they are larger breeds. They need room to move around and often benefit from access to a yard for exercise.\n*   **Cats:** Better suited for smaller living spaces, such as apartments. They are content with indoor environments and do not require a yard or large open areas to be healthy and happy.\n\n**Noise**\n*   **Dogs:** Can be noisier, especially if they bark frequently due to excitement, alertness, or separation anxiety. This can be a consideration in shared living spaces like apartments.\n*   **Cats:** Generally quieter. While they do meow and purr, their vocalizations are usually less disruptive to neighbors or household members compared to a barking dog.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"comparison\", \"columns\": [{\"id\": \"c1\", \"label\": \"Factor\", \"kind\": \"text\"}, {\"id\": \"c2\", \"label\": \"Cats\", \"kind\": \"text\"}, {\"id\": \"c3\", \"label\": \"Dogs\", \"kind\": \"text\"}], \"rows\": [{\"id\": \"r1\", \"label\": \"Cost\", \"values\": [\"Typically less expensive to maintain\", \"Generally more expensive (food, training, grooming)\"]}, {\"id\": \"r2\", \"label\": \"Space\", \"values\": [\"Better suited for smaller spaces/apartments\", \"Usually require more space and access to a yard\"]}, {\"id\": \"r3\", \"label\": \"Noise\", \"values\": [\"Generally quieter (meowing/purring)\", \"Can be noisier (barking)\"]}]}, {\"type\": \"checklist\", \"items\": [{\"id\": \"t1\", \"text\": \"Consider your budget for ongoing pet expenses.\", \"done\": false}, {\"id\": \"t2\", \"text\": \"Evaluate your living space and whether you have a yard.\", \"done\": false}, {\"id\": \"t3\", \"text\": \"Assess your tolerance for noise, especially if living in an apartment.\", \"done\": false}]}]}\n```"
+  },
+  "4": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "timeline"
+   ],
+   "tokens": 203,
+   "truncated": false,
+   "seconds": 21.65704281999996,
+   "text": "Here is a timeline of the key milestones in the Apollo program:\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"timeline\", \"entries\": [{\"id\": \"e1\", \"when\": \"July 20, 1969\", \"text\": \"Apollo 11: Neil Armstrong and Buzz Aldrin become the first humans to walk on the Moon.\"}, {\"id\": \"e2\", \"when\": \"December 1968\", \"text\": \"Apollo 8: The first crewed mission to orbit the Moon.\"}, {\"id\": \"e3\", \"when\": \"February 1966\", \"text\": \"Apollo 8: First crewed mission to orbit the Moon.\"}, {\"id\": \"e4\", \"when\": \"1961-1972\", \"text\": \"The overall span of the Apollo program, from its inception to the final mission.\"}]}]}\n```"
+  },
+  "5": {
+   "expect": "card",
+   "category": "chart",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "chart"
+   ],
+   "tokens": 116,
+   "truncated": false,
+   "seconds": 20.798428820000026,
+   "text": "Here\u2019s your monthly sales chart:\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"chart\", \"kind\": \"bar\", \"series\": [{\"id\": \"monthly_sales\", \"label\": \"Monthly Sales\", \"unit\": \"units\", \"source\": \"user-provided data\", \"estimate\": false, \"values\": [{\"label\": \"Jan\", \"value\": 10}, {\"label\": \"Feb\", \"value\": 14}, {\"label\": \"Mar\", \"value\": 9}]}]}]}\n```"
+  },
+  "6": {
+   "expect": "card",
+   "category": "facts",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "facts"
+   ],
+   "promotable": "facts",
+   "tokens": 337,
+   "truncated": false,
+   "seconds": 42.21100581899998,
+   "text": "Here are three facts about the moon based on your message:\n\n1. **No Atmosphere**: The moon has no atmosphere, meaning there is no air to breathe or weather to speak of on its surface.\n2. **Orbital Period**: The moon orbits Earth every 27 days, which is the time it takes to complete one full revolution around our planet.\n3. **Distance**: The moon is about 384,000 km away from Earth, making it the closest celestial body to our planet.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"facts\", \"cards\": [{\"id\": \"fact-atmosphere\", \"heading\": \"No Atmosphere\", \"text\": \"The moon has no atmosphere, meaning there is no air to breathe or weather on its surface.\", \"sources\": [{\"ref\": \"user msg\", \"text\": \"the moon has no atmosphere\"}]}, {\"id\": \"fact-orbit\", \"heading\": \"Orbital Period\", \"text\": \"The moon orbits Earth every 27 days, completing one full revolution around our planet.\", \"sources\": [{\"ref\": \"user msg\", \"text\": \"the moon orbits Earth every 27 days\"}]}, {\"id\": \"fact-distance\", \"heading\": \"Distance from Earth\", \"text\": \"The moon is about 384,000 km away from Earth, making it the closest celestial body to our planet.\", \"sources\": [{\"ref\": \"user msg\", \"text\": \"the moon is about 384,000 km away\"}]}]}]}\n```"
+  },
+  "7": {
+   "expect": "card",
+   "category": "decision",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "invalid-json",
+   "error": "comparison.rows: each row needs one value per column",
+   "tokens": 263,
+   "truncated": false,
+   "seconds": 27.811134863999996,
+   "text": "Given that it is raining, taking the bus is the better choice. Here is a quick comparison to help you decide:\n\n- **Bus**: Takes 15 minutes. You will stay dry and arrive at work in half the time compared to walking.\n- **Walk**: Takes 30 minutes. You will likely get wet, which can be uncomfortable and may require changing clothes or dealing with damp gear at work.\n\nUnless you have a specific reason to avoid the bus (like it being extremely crowded or having an inconvenient stop), the bus is the more practical and comfortable option for a rainy day.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"comparison\", \"columns\": [{\"id\": \"c1\", \"label\": \"Option\", \"kind\": \"text\"}, {\"id\": \"c2\", \"label\": \"Time\", \"kind\": \"text\"}, {\"id\": \"c3\", \"label\": \"Weather Impact\", \"kind\": \"text\"}], \"rows\": [{\"id\": \"r1\", \"label\": \"Bus\", \"values\": [\"15 minutes\", \"Stay dry\"]}, {\"id\": \"r2\", \"label\": \"Walk\", \"values\": [\"30 minutes\", \"Will get wet\"]}]}]}\n```"
+  },
+  "8": {
+   "expect": "card",
+   "category": "form",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "form"
+   ],
+   "tokens": 270,
+   "truncated": false,
+   "seconds": 35.291786824999974,
+   "text": "Here's a form to collect the new supplier details:\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"form\", \"title\": \"New Supplier Registration\", \"fields\": [{\"id\": \"name\", \"label\": \"Supplier Name\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"e.g. Acme Industrial Supplies\"}, {\"id\": \"contact_email\", \"label\": \"Contact Email\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"e.g. procurement@acme.com\"}, {\"id\": \"country\", \"label\": \"Country\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"e.g. Germany\"}, {\"id\": \"payment_terms\", \"label\": \"Payment Terms\", \"kind\": \"choice\", \"required\": true, \"choices\": [{\"id\": \"net_30\", \"label\": \"Net 30\"}, {\"id\": \"net_60\", \"label\": \"Net 60\"}, {\"id\": \"net_90\", \"label\": \"Net 90\"}, {\"id\": \"prepaid\", \"label\": \"Prepaid / 100% upfront\"}, {\"id\": \"cod\", \"label\": \"Cash on Delivery\"}]}]}]}\n```"
+  },
+  "9": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "invalid-json",
+   "error": "unknown component type: 'text'",
+   "tokens": 50,
+   "truncated": false,
+   "seconds": 7.854625380000016,
+   "text": "The capital of France is Paris.\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"text\", \"id\": \"capital-fact\", \"text\": \"The capital of France is Paris.\"}]}\n```"
+  },
+  "10": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 26,
+   "truncated": false,
+   "seconds": 5.725532240000007,
+   "text": "I'm doing well, thank you for asking! I'm ready to help with whatever you need. How are you doing today?"
+  },
+  "11": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 50,
+   "truncated": false,
+   "seconds": 7.502473796999993,
+   "text": "Sunlight is made up of all the colors of the rainbow, each with a different wavelength. When sunlight enters Earth's atmosphere, shorter blue wavelengths scatter more than other colors due to a phenomenon called Rayleigh scattering, which makes the sky appear blue."
+  },
+  "12": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 29,
+   "truncated": false,
+   "seconds": 5.91885448000005,
+   "text": "A programmer puts two glasses on the nightstand before bed: one full of water, and one empty, in case they get thirsty or not."
+  },
+  "13": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 21,
+   "truncated": false,
+   "seconds": 5.00967339500005,
+   "text": "A checklist is a list of items or tasks that need to be completed, verified, or checked off."
+  },
+  "14": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 19,
+   "truncated": false,
+   "seconds": 10.785053730999948,
+   "text": "Even when options feel limited, you always have the power to choose your next small step forward."
+  },
+  "15": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "checklist"
+   ],
+   "tokens": 185,
+   "truncated": false,
+   "seconds": 20.156723380000017,
+   "text": "People often enjoy making lists because they provide a sense of control and organization in the face of complex or overwhelming tasks. By breaking down large goals into smaller, manageable steps, lists reduce cognitive load and anxiety, making it easier to focus on one item at a time. Additionally, the act of checking off completed items triggers a small release of dopamine, providing a satisfying sense of progress and motivation that encourages continued productivity.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"checklist\", \"items\": [{\"id\": \"t1\", \"text\": \"Reduces cognitive load by breaking tasks into steps\", \"done\": false}, {\"id\": \"t2\", \"text\": \"Provides a sense of control and organization\", \"done\": false}, {\"id\": \"t3\", \"text\": \"Triggers dopamine release upon completion for motivation\", \"done\": false}]}]}\n```"
+  },
+  "16": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 48,
+   "truncated": false,
+   "seconds": 7.629752336000024,
+   "text": "A timeline is generally better for showing history because it visually emphasizes the chronological sequence and flow of events over time. A table is more suitable when you need to compare specific, structured data points across multiple categories rather than just tracking a linear progression."
+  }
+ }
+}
