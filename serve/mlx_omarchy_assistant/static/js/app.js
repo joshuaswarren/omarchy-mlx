@@ -68,32 +68,38 @@ export class App {
     });
   }
 
+  _micMessage(text) {
+    announce(this.live, text);
+    if (this.composer) this.composer.setMicNotice(text);
+  }
+
   async _handleRecordingStop(blob, peakRms, reason) {
     // The recorder can stop on its own (30 s cap); the button must follow it.
     if (this.composer) this.composer.resetMicUi();
     const prefix = reason === "limit" ? "Recording stopped at the 30 second limit. " : "";
     if (peakRms < 0.005) {
-      announce(this.live, `${prefix}No speech detected.`);
+      this._micMessage(`${prefix}No speech detected.`);
       return;
     }
-    announce(this.live, `${prefix}Transcribing…`);
+    this._micMessage(`${prefix}Transcribing…`);
     let text;
     try {
       ({ text } = await transcribe(blob));
     } catch (err) {
-      announce(this.live, `Transcribe failed: ${err.message || "unknown error"}`);
+      this._micMessage(`Transcribe failed: ${err.message || "unknown error"}`);
       return;
     }
     const transcript = (text || "").trim();
     if (!transcript) {
-      announce(this.live, "No speech detected.");
+      this._micMessage("No speech detected.");
       return;
     }
+    if (this.composer) this.composer.setMicNotice(prefix.trim());
     this._mergeTranscriptIntoComposer(transcript);
   }
 
   _handleDeviceLost() {
-    announce(this.live, "Recording stopped: microphone disconnected.");
+    this._micMessage("Recording stopped: microphone disconnected.");
     if (this.composer) this.composer.resetMicUi();
   }
 
@@ -446,9 +452,9 @@ export class App {
       onMicStop: async () => { await this.recorder.stop(); },
       onMicCancel: async () => {
         await this.recorder.cancel();
-        announce(this.live, "Recording cancelled.");
+        this._micMessage("Recording cancelled.");
       },
-      onMicResult: (msg) => announce(this.live, msg.error || "Recording stopped"),
+      onMicResult: (msg) => this._micMessage(msg.error || "Recording stopped"),
       onConversationModeChange: (enabled) => {
         this.conversationModeEnabled = !!enabled;
         this.speakReplies = !!enabled;
