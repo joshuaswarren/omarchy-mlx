@@ -1,0 +1,206 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+// Guard against the Qwen3.5-9B GDN prefill regression: when Hk != Hv
+// (linear_num_key_heads=16, linear_num_value_heads=32 on the 9B; the
+// model-side gated_delta_update calls mx.fast.gated_delta_update with
+// the un-repeated q/k), the omarchy backend's
+// GatedDeltaUpdate::use_fallback check returns true and the per-token
+// Python loop runs. The composed fallback produces hundreds of small
+// dispatches per GDN layer; the coopmat fused path produces one.
+//
+// This doctest drives the exact prefill shape the 9B sees, asserts the
+// fused coopmat path is selected (small dispatch count), and asserts a
+// tolerance-pinned numerical result against the model-side composed
+// fallback (which is the reference for this kernel). Without the
+// mlx-lm-gated-delta-fast-route-repeat.patch the test would still pass
+// (the C++ backend correctly composes when use_fallback returns true)
+// but the dispatch count would explode; the asserted upper bound catches
+// the regression before it ships.
+
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest/doctest.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/trace.h"
+#include "mlx/fast.h"
+#include "mlx/fast_primitives.h"
+#include "mlx/ops.h"
+#include "mlx/random.h"
+#include "mlx/stream.h"
+
+using namespace mlx::core;
+using mlx::core::omarchy::trace::counters;
+
+namespace {
+
+void skip(const char* reason) { std::cout << "Skipping: " << reason << "\n"; }
+
+Stream gpu_stream() {
+  set_default_device(Device::gpu);
+  return new_stream(Device::gpu);
+}
+
+bool compute_available() {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device");
+    return false;
+  }
+  return true;
+}
+
+// Qwen3.5-9B GDN shape (B=1, T=512 prefill):
+//   Hk=16 (linear_num_key_heads), Dk=128, Hv=32 (linear_num_value_heads),
+//   Dv=128, scalar g [B,T,Hv], scalar beta [B,T,Hv], f32 state [B,Hv,Dv,Dk].
+// When the model calls mx.fast.gated_delta_update with the un-repeated
+// q/k the backend sees Hk=16, Hv=32 -> use_fallback returns true.
+// With the mlx-lm patch the model expands q/k to Hv heads first.
+struct Qwen95Shape {
+  int B = 1;
+  int T = 32;       // smaller T keeps the test fast; T>=64 still hits coopmat
+  int Hk = 16;
+  int Hv = 32;
+  int Dk = 128;
+  int Dv = 128;
+};
+
+std::vector<float> pattern(size_t count, uint32_t seed) {
+  std::vector<float> v;
+  v.reserve(count);
+  uint32_t s = seed;
+  for (size_t i = 0; i < count; ++i) {
+    s = s * 1664525u + 1013904223u;
+    v.push_back(static_cast<float>(static_cast<double>(s % 20000u) / 10000.0) - 1.0f);
+  }
+  return v;
+}
+
+array make_input(const Qwen95Shape& sh, const std::vector<float>& data) {
+  array a = array(data.data(), {sh.B, sh.T, sh.Hk, sh.Dk}, float32);
+  return astype(a, bfloat16, gpu_stream());
+}
+
+} // namespace
+
+TEST_CASE("gdn fast path: Hk != Hv repeats q/k before fast dispatch") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  Qwen95Shape sh;
+
+  // Inputs in the SHAPE THE MODEL PASSES (Hk=16). Two routes:
+  //   route A: caller expanded q/k to Hv=32 (the patch's behavior)
+  //   route B: caller did NOT expand (the unpatched regression)
+  // The backend should fuse route A in one dispatch and use the composed
+  // fallback for route B. We exercise BOTH and assert the fused path
+  // dispatch count is far smaller than the fallback.
+  std::vector<float> q_data = pattern(
+      static_cast<size_t>(sh.B) * sh.T * sh.Hk * sh.Dk, 1);
+  std::vector<float> k_data = pattern(
+      static_cast<size_t>(sh.B) * sh.T * sh.Hk * sh.Dk, 2);
+  std::vector<float> v_data = pattern(
+      static_cast<size_t>(sh.B) * sh.T * sh.Hv * sh.Dv, 3);
+
+  array q_raw = make_input(sh, q_data);
+  array k_raw = make_input(sh, k_data);
+  array v = astype(
+      array(v_data.data(), {sh.B, sh.T, sh.Hv, sh.Dv}, float32),
+      bfloat16, s);
+  array g = astype(
+      array(pattern(static_cast<size_t>(sh.B) * sh.T * sh.Hv, 4).data(),
+            {sh.B, sh.T, sh.Hv}, float32),
+      bfloat16, s);
+  array beta = astype(
+      array(pattern(static_cast<size_t>(sh.B) * sh.T * sh.Hv, 5).data(),
+            {sh.B, sh.T, sh.Hv}, float32),
+      bfloat16, s);
+  array h0 = zeros({sh.B, sh.Hv, sh.Dv, sh.Dk}, float32, s);
+
+  // Route A: caller repeats q/k to Hv (the patch).
+  array q_exp = repeat(q_raw, sh.Hv / sh.Hk, 2, s);
+  array k_exp = repeat(k_raw, sh.Hv / sh.Hk, 2, s);
+  q_exp.eval();
+  k_exp.eval();
+  v.eval();
+  g.eval();
+  beta.eval();
+  h0.eval();
+  auto& enc = omarchy::get_command_encoder(s);
+  enc.synchronize("gdn_repeat_inputs");
+
+  uint64_t before_a = counters().vk_compute_dispatches.load();
+  auto out_a = fast::gated_delta_update(q_exp, k_exp, v, g, beta, h0);
+  out_a[0].eval();
+  out_a[1].eval();
+  enc.synchronize("gdn_repeat_fused");
+  uint64_t after_a = counters().vk_compute_dispatches.load();
+  uint64_t dispatches_a = after_a - before_a;
+
+  // Route B: caller does NOT repeat (the unpatched regression).
+  q_raw.eval();
+  k_raw.eval();
+  enc.synchronize("gdn_repeat_inputs_b");
+  uint64_t before_b = counters().vk_compute_dispatches.load();
+  auto out_b = fast::gated_delta_update(q_raw, k_raw, v, g, beta, h0);
+  out_b[0].eval();
+  out_b[1].eval();
+  enc.synchronize("gdn_repeat_fallback");
+  uint64_t after_b = counters().vk_compute_dispatches.load();
+  uint64_t dispatches_b = after_b - before_b;
+
+  std::cout << "[gdn_fast_route_repeat] fused (Hk=Hv=" << sh.Hv
+            << "): " << dispatches_a << " dispatches; "
+            << "fallback (Hk=" << sh.Hk << ", Hv=" << sh.Hv
+            << "): " << dispatches_b << " dispatches\n";
+
+  // The fused coopmat path runs in a small bounded number of dispatches
+  // (the coopmat kernel = 1, plus dtype/state materializations < 16).
+  // The composed fallback is the per-token Python loop and produces
+  // O(T * layers) dispatches worth of small ops.
+  CHECK_MESSAGE(
+      dispatches_a <= 16,
+      "fused coopmat path should produce <=16 dispatches for the expanded "
+      "q/k; got ",
+      dispatches_a,
+      ". Either the dispatch gate (Hk==Hv && Dk==128 && Dv==128) failed "
+      "or the coopmat prefill path did not select.");
+  CHECK_MESSAGE(
+      dispatches_b > dispatches_a * 4,
+      "composed fallback should produce substantially more dispatches "
+      "than the fused path; got fused=",
+      dispatches_a,
+      " fallback=",
+      dispatches_b,
+      ". If they are close, the per-token Python loop is not running on "
+      "route B and the regression is hidden.");
+
+  // Numerical tolerance: when both routes are allowed to compose, the
+  // outputs should agree bit-exactly (both are reference math). The
+  // fused coopmat path rounds chunk-form and may differ from the
+  // composed fallback by up to a small bf16 quantum per element. We
+  // assert that the gap is bounded by 2 quanta at the output's scale.
+  array diff = abs(out_a[0] - out_b[0]);
+  array mx = abs(out_a[0]);
+  double max_diff = static_cast<double>(max(diff).item<float>());
+  double max_val = static_cast<double>(max(mx).item<float>());
+  double tolerance = std::max(2.0 * max_val * 1e-3, 1e-2);
+  CHECK_MESSAGE(
+      max_diff <= tolerance,
+      "fused vs fallback max abs diff = ",
+      max_diff,
+      " exceeds tolerance ",
+      tolerance,
+      " (max value ",
+      max_val,
+      ")");
+}

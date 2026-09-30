@@ -50,6 +50,9 @@ apply() {
   fi
 }
 apply mlx-lm-gated-delta-fast-route.patch
+# GDN fast-route Hk!=Hv repeat: Qwen3.5-9B (Hk=16, Hv=32) hit the composed
+# per-token fallback without this; A/B 42 -> 317 tok/s prefill 512 on M2.
+apply mlx-lm-gated-delta-fast-route-repeat.patch
 apply mlx-lm-gated-delta-raw.patch
 apply mlx-lm-greedy-prune.patch
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,

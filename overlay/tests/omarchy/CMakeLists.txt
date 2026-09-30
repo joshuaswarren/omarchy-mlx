@@ -193,6 +193,18 @@ doctest_discover_tests(omarchy_gdn_prefill_profile_tests)
 add_test(NAME omarchy_gdn_prefill_profile_tests
          COMMAND omarchy_gdn_prefill_profile_tests)
 
+add_executable(omarchy_gdn_fast_route_repeat_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_fast_route_repeat.cpp)
+target_link_libraries(omarchy_gdn_fast_route_repeat_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_fast_route_repeat_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_fast_route_repeat_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_gdn_fast_route_repeat_tests)
+add_test(NAME omarchy_gdn_fast_route_repeat_tests
+         COMMAND omarchy_gdn_fast_route_repeat_tests)
+
 add_executable(omarchy_linalg_ops_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_linalg_ops.cpp)
 target_link_libraries(omarchy_linalg_ops_tests PRIVATE mlx doctest)
