@@ -282,7 +282,9 @@ _WINDOW_BODY = """
     }
     int base = ctl[_C_FRAME];
     int valid = cfg[_G_VALID];
-    for (uint slot = 0u; slot < ROWSU; ++slot) {
+    // stage only the rows this window will accumulate (one after the
+    // first emission)
+    for (uint slot = 0u; slot < ((ctl[_C_COUNT] == 0u) ? ROWSU : 1u); ++slot) {
         int frame = base + int(slot);
         for (uint i = t; i < 640u; i += 256u) {
             if (frame < valid) {
@@ -574,10 +576,19 @@ def _build_window() -> str:
         f"                acc{slot} = fma(float(sh_relu[{slot}u * 640u + k + {i}u]), w{i}, acc{slot});"
         for i in range(DEPTH) for slot in range(_WINDOW_ROWS)
     )
+    # One-row path (every slot after the first emission): four independent
+    # weight loads in flight per k block, then the fmas in ascending k.  fma
+    # of two f16 operands equals the old mul+add exactly (see above).
     acc_updates_1 = (
-        "            for (uint k = 0u; k < 640u; ++k) {\n"
-        "                precise float w1r = float(joint[k * 8198u + j]);\n"
-        "                acc0 = acc0 + float(sh_relu[k]) * w1r;\n"
+        "            for (uint k = 0u; k < 640u; k += 4u) {\n"
+        + "\n".join(
+            f"                precise float w1r{i} = float(joint[(k + {i}u) * 8198u + j]);"
+            for i in range(4)
+        ) + "\n"
+        + "\n".join(
+            f"                acc0 = fma(float(sh_relu[k + {i}u]), w1r{i}, acc0);"
+            for i in range(4)
+        ) + "\n"
         "            }"
     )
     av_array = "    float av[" + str(_WINDOW_ROWS) + "];\n" + "\n".join(
