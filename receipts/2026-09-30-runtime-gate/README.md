@@ -28,3 +28,21 @@ A real GPU matmul returned the exact expected 4×4 result in the inherited envir
 ```
 
 Commands ran under `flock /tmp/m1-gpu.lock` with bounded timeouts. The M1 test, info, provenance, and matmul logs are in the local `artifacts/RuntimeGate/20260930-jwm1-runtime-gate/` directory. `SHA256SUMS` covers those logs. Raw logs are not committed because they contain private host paths; this receipt contains the public-safe results.
+
+## Addendum: packaged-module hardware verification on an M1 Max / T6001 host (2026-09-30)
+
+The consumer path above was verified on the M1 / T8103 host for the Vulkan parts; the ANE worker gate then ran against a packaged DKMS `ane.ko` (`0.2.0.r14.g87f427f`) on a T6001 host. That run found two gate bugs, both fixed and unit-tested before the run passed:
+
+- The ABI-1 profile accepted only `apple,t8103-ane`, but T6001 device-tree nodes carry the family compatible `apple,t6000-ane` (the `of_match` entry the driver binds). The pristine wheel refused the host at the DT stage, exactly as pre-registered: `device-tree ANE node does not match apple,t8103-ane for ABI 1 (M1 / T8103 / T6001).`
+- The gate required `power/control` to be the literal `on`, but the packaged driver manages runtime PM (`auto`). A healthy, bound, `active` device was refused. The gate now opens `/dev/accel/accel0` before reading the power state — which resumes a runtime-PM device — and accepts `on` or `auto` control with `active` status (`runtime_pm_acceptable`, unit-tested).
+
+After both fixes, under the host's lab locks and with bounded timeouts:
+
+- A `DRM_IOCTL_VERSION` probe printed the compared values: `driver_name=ane version_major=1 expected_major=1 accepted=true`; the worker accepted the packaged module and its identity recorded `abi=1 dt_compatible=apple,t6000-ane driver_version=0.2.0.r14.g87f427f runtime_pm=auto/active driver_abi=1`.
+- The repo's smallest real ANE workload — the h13 add-mul bundle adapted from the test fixture with the repo's own adapter (2 programs) — ran bit-exact (`exact_fp16=PASS`, expected fp16 `0x4600` on all 64 elements, 2 iterations) and shut down cleanly (`released_programs=2 process_released=true`).
+- The same run as a non-root user who owns none of the files succeeded via the per-user ownership fallback (`ANE ownership uses per-user lock ...` under that user's `XDG_RUNTIME_DIR`), with identical bit-exact output and a clean shutdown receipt.
+- Negative controls: the pristine wheel reproduced the pre-registered DT refusal; `MLX_OMARCHY_ANE_ABI=2` was refused with the ABI-2 lane error; `=99` was refused as unsupported. The driver-major mismatch branch (`requires major 1, driver reports major 2`) is unit-proven — the live driver cannot report another major and the code exposes no seam to fake the expected value.
+- `scripts/mlx_provenance.py` reported `verified: match` for the loaded binaries against the installed wheel; wheel SHA-256 `a519c46a3fc240ff65974a09e5a1c07ba5aaad41995ad496360ec19ef5bd0a7a` (worker-gate doctest state: 19 cases / 75 assertions on both the build host and the target host).
+- No dmesg ANE errors during the window; both per-user quarantine files were empty after the clean shutdowns.
+
+Raw logs are in the private lab `artifacts/AbiVerify/` directory with `SHA256SUMS`; this addendum keeps only the public-safe results.
