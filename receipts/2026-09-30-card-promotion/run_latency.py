@@ -162,6 +162,7 @@ def host_state():
         return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
                               timeout=60).stdout.strip()
     return {
+        "kernel": os.uname().release,
         "loadavg": open("/proc/loadavg").read().strip(),
         "boot_id": open("/proc/sys/kernel/random/boot_id").read().strip(),
         "gpu_processes": sh("ps -eo pid,etime,cmd | grep -E 'python|mlx' | grep -v grep"),
