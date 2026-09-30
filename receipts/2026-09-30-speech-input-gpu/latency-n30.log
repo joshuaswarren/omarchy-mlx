@@ -1,0 +1,42 @@
+warmup...
+[gpu-stt] Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 2112.20it/s]
+warmup done
+[1/30] 451.1 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[2/30] 451.4 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[3/30] 461.9 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[4/30] 458.2 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[5/30] 510.0 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[6/30] 453.4 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[7/30] 451.1 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[8/30] 454.0 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[9/30] 456.1 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[10/30] 451.0 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[11/30] 448.4 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[12/30] 449.3 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[13/30] 451.4 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[14/30] 454.8 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[15/30] 456.9 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[16/30] 463.5 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[17/30] 457.1 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[18/30] 457.8 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[19/30] 457.8 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[20/30] 456.1 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[21/30] 464.3 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[22/30] 463.9 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[23/30] 455.2 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[24/30] 465.0 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[25/30] 468.1 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[26/30] 459.3 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[27/30] 460.8 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[28/30] 457.9 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[29/30] 450.7 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+[30/30] 462.7 ms  text='Notwithstanding the high resolution of Hawkeye, he fully com'
+
+N=30
+min: 448.4 ms
+max: 510.0 ms
+mean: 458.6 ms
+p50: 457.1 ms
+p95: 468.1 ms
+target p95 ≤ 2000 ms: PASS
+EXIT_latency30=0
