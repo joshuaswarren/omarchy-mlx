@@ -425,7 +425,10 @@ _CONTROL_BODY = """
     if (loop_live) {
         // reduce the window's 33 per-workgroup token partials per row,
         // then carry the duration partial (workgroup 32) unchanged
-        for (uint row = 0u; row < ROWSU; ++row) {
+        // the window computed ROWSU rows only before the first emission
+        // and one row after; the walk never reads the others
+        uint nrows_c = (count == 0) ? ROWSU : 1u;
+        for (uint row = 0u; row < nrows_c; ++row) {
             float v = -3.0e38f;
             uint ix = 0u;
             if (t < NGRPSu) {
