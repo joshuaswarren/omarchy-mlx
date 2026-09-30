@@ -9,15 +9,18 @@ const tracks = [];
 let node = null;
 globalThis.window = { AudioWorkletNode: true, setInterval: () => 1 };
 globalThis.clearInterval = () => {};
-globalThis.navigator = {
-  mediaDevices: {
-    getUserMedia: async () => {
-      const track = { addEventListener() {}, stop() {} };
-      tracks.push(track);
-      return { getAudioTracks: () => [track], getTracks: () => [track] };
+Object.defineProperty(globalThis, "navigator", {
+  configurable: true,
+  value: {
+    mediaDevices: {
+      getUserMedia: async () => {
+        const track = { addEventListener() {}, stop() {} };
+        tracks.push(track);
+        return { getAudioTracks: () => [track], getTracks: () => [track] };
+      },
     },
   },
-};
+});
 globalThis.AudioContext = class {
   constructor() { this.sampleRate = 48000; this.currentTime = 0; this.audioWorklet = { addModule: async () => {} }; }
   createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
