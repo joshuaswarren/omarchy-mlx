@@ -13,15 +13,16 @@ A card is built only when BOTH hold:
 
 1. **The user asked for that artifact.**  The user message must name the
    kind: checklist / to-do / action items / a ``<noun>ing list``
-   (checklist); compare / comparison / tabular / side by side / versus
-   (comparison); timeline / schedule / agenda / itinerary / roadmap
-   / milestones / phases / "plan my <day>" (timeline); facts / key points /
-   key takeaways / highlights (facts).  Weaker cues count unless the
-   message leads with an explanation request ("explain", "describe", "why",
-   "how does", "what is", "tell me about"): "steps" or "tasks" ask for a
-   checklist; "in a table", "table of ...", "2x2 table" ask for a
-   comparison ("what is a hash table" does not).
-   A request for prose ("in a paragraph", "in one sentence", "no bullets")
+   (checklist); compare / comparison / contrast / tabular / side by side /
+   versus (comparison); timeline / schedule / agenda / itinerary / roadmap /
+   "plan my <day>" (timeline); facts / key points / key takeaways (facts).
+   Weaker cues count unless the message leads with an explanation request
+   ("explain", "describe", "why", "how does", "what is", "tell me about"):
+   "steps" or "tasks" ask for a checklist; "in a table", "table of ...",
+   "2x2 table" ask for a comparison; "milestones", "phases" ask for a
+   timeline; "highlights" asks for facts.  "What is a hash table" and
+   "describe the phases of the moon" stay prose.  A request for prose ("in a
+   paragraph", "in one sentence", "no bullets", "without using a list")
    turns promotion off.  A table or list inside an answer to a question
    that did not ask for an artifact stays prose.
 2. **The reply has the matching structure** (outside fenced code blocks):
@@ -29,7 +30,10 @@ A card is built only when BOTH hold:
    - checklist: a task list (``- [ ]`` / ``- [x]``) or a plain bullet or
      numbered list, at least 3 items.
    - comparison: a pipe table (header, ``|---|`` separator, 2-8 columns,
-     at least 2 data rows, every row the same width).
+     at least 2 data rows, every row the same width), or 2 or more headed
+     sections of bullets (``### Cost`` or a whole-line ``**Cost**``): one row
+     per section, a column per bullet label (``**Price:** ...``) that two or
+     more sections share, or one Details column when none is shared.
    - timeline: at least 3 list items or headings that carry a time,
      weekday, date, ``Day/Week/Month/Phase/Step/Stage N`` or ``QN``
      marker, or a leading label (``**Discovery** - ...`` / ``Pilot: ...``);
@@ -85,21 +89,24 @@ _STRONG_INTENT = {
         r"\b(?:check[\s-]?lists?|to[\s-]?dos?|todos?|action items?|task lists?"
         r"|[a-z]{2,20}ing lists?|grocery lists?)\b", re.IGNORECASE),
     "comparison": re.compile(
-        r"\b(?:compare|compared|comparing|comparison|tabular"
+        r"\b(?:compare|compares|compared|comparing|comparison|contrast|contrasting|tabular"
         r"|side[\s-]by[\s-]side|versus|vs)\b", re.IGNORECASE),
     "timeline": re.compile(
         r"\b(?:timelines?|schedules?|scheduled|agenda|itinerary|roadmap"
-        r"|milestones?|phases?|phased|week[\s-]by[\s-]week|day[\s-]by[\s-]day"
         r"|plan my (?:day|week|weekend|morning|afternoon|evening|monday|tuesday"
         r"|wednesday|thursday|friday|saturday|sunday))\b", re.IGNORECASE),
     "facts": re.compile(
-        r"\b(?:facts?|key points?|key takeaways?|takeaways|highlights)\b",
-        re.IGNORECASE),
+        r"\b(?:facts?|key points?|key takeaways?|takeaways)\b", re.IGNORECASE),
 }
-# Weak cues count only when the message does not lead with an explanation
-# request ("what is a hash table" names a table but asks for prose).
+# Weak cues are topic words as often as artifact requests; they count only
+# when the message does not lead with an explanation request ("what is a
+# hash table", "describe the phases of the moon" ask for prose).
 _WEAK_INTENT = {
     "checklist": re.compile(r"\b(?:steps?|tasks?)\b", re.IGNORECASE),
+    "timeline": re.compile(
+        r"\b(?:milestones?|phases?|phased|week[\s-]by[\s-]week|day[\s-]by[\s-]day)\b",
+        re.IGNORECASE),
+    "facts": re.compile(r"\bhighlights\b", re.IGNORECASE),
     "comparison": re.compile(
         r"\b(?:(?:in|as|into) (?:a |the )?(?:[\w-]+ ){0,2}tables?"
         r"|tables? (?:of|comparing|showing|with)|\d+\s*x\s*\d+ tables?)\b", re.IGNORECASE),
@@ -112,8 +119,9 @@ _EXPLAIN_LEAD = re.compile(
 _PROSE_REQUEST = re.compile(
     r"\b(?:in|as) (?:a |one |two |a single |a short |plain )?"
     r"(?:paragraph|sentence|prose|plain words|plain text)s?\b"
-    r"|\bno (?:bullets?|lists?|tables?)\b"
-    r"|\bwithout (?:bullets?|a list|lists|a table|tables)\b",
+    r"|\b(?:no|not as an?|not in an?) (?:bullets?|bullet points|lists?|tables?)\b"
+    r"|\bwithout (?:using |any |making )?(?:an? )?"
+    r"(?:bullets?|bullet points|lists?|tables?|formatting)\b",
     re.IGNORECASE)
 
 
@@ -157,6 +165,8 @@ _PERIOD = re.compile(
 _WEEKDAY = re.compile(
     r"(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(?:day|nesday|sday|rsday|urday)?\b",
     re.IGNORECASE)
+_BOLD_LINE = re.compile(r"[ \t]*\*\*([^*]{1,80})\*\*:?[ \t]*")
+_NUMBERING = re.compile(r"\d{1,3}[.)][ \t]*")
 _LEAD_LABEL = re.compile(r"([^:\u2013\u2014|]{1,40}?)\s*(?::|\s[-\u2013\u2014]\s)\s*(\S.*)")
 
 
@@ -200,7 +210,11 @@ def _is_separator(line: str) -> bool:
 
 class _Blocks:
     """One pass over the reply: task items, list items, headings, other
-    non-blank lines, and pipe tables."""
+    non-blank lines, pipe tables, and headed sections of bullets.
+
+    A section starts at a ``#`` heading or a line that is entirely bold.  Its
+    top-level bullets are ``[label, parts]`` (``**Cost:** low`` gives label
+    ``Cost``); deeper bullets are appended to the preceding one's parts."""
 
     def __init__(self, lines: list[str]):
         self.tasks: list[tuple[bool, str]] = []
@@ -208,6 +222,9 @@ class _Blocks:
         self.headings: list[str] = []
         self.lines: list[str] = []
         self.tables: list[tuple[list[str], list[list[str]]]] = []
+        self.sections: list[tuple[str, list[list]]] = []
+        section: list[list] | None = None
+        top_indent = 0
         i, n = 0, len(lines)
         while i < n:
             line = lines[i]
@@ -233,14 +250,33 @@ class _Blocks:
             m = _ITEM.match(line)
             if m:
                 self.items.append(m.group(1))
+                if section is not None:
+                    indent = len(line) - len(line.lstrip())
+                    if not section or indent <= top_indent:
+                        top_indent = indent
+                        section.append(_labelled(m.group(1)))
+                    else:
+                        section[-1][1].append(_clean(m.group(1), _CELL_CAP))
                 i += 1
                 continue
-            m = _HEADING.match(line)
+            m = _HEADING.match(line) or _BOLD_LINE.fullmatch(line)
             if m:
                 self.headings.append(m.group(1))
+                section = []
+                title = _clean(_NUMBERING.sub("", m.group(1), count=1), _LABEL_CAP)
+                self.sections.append((title, section))
             elif line.strip():
                 self.lines.append(line.strip())
             i += 1
+
+
+def _labelled(text: str) -> list:
+    """``[label, [body]]`` for a bullet; label is None when it has none."""
+    plain = _clean(text, _CELL_CAP)
+    if plain.endswith(":") and len(plain) <= 41:
+        return [plain[:-1].strip(), []]
+    m = _LEAD_LABEL.match(plain)
+    return [m.group(1).strip(), [m.group(2)]] if m else [None, [plain]]
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +312,44 @@ def _checklist(blocks: _Blocks) -> dict | None:
     return {"type": "checklist", "items": items} if len(items) >= MIN_LIST_ITEMS else None
 
 
-def _comparison(blocks: _Blocks) -> dict | None:
-    if not blocks.tables:
+def _section_table(blocks: _Blocks) -> tuple[list[str], list[list[str]]] | None:
+    """A table from two or more headed sections of bullets: one row per
+    section; a column per bullet label shared by two or more sections, or a
+    single Details column when no label is shared."""
+    sections = [(title, entries) for title, entries in blocks.sections
+                if title and entries][:MAX_ROWS]
+    if len(sections) < MIN_ROWS:
         return None
-    header, rows = blocks.tables[0]
+    counts: dict[str, list] = {}  # lower-case label -> [first spelling, sections]
+    for _, entries in sections:
+        seen = set()
+        for label, _ in entries:
+            if label and label.lower() not in seen:
+                seen.add(label.lower())
+                counts.setdefault(label.lower(), [label, 0])[1] += 1
+    shared = [shown for shown, count in counts.values() if count >= 2][:MAX_COLUMNS - 1]
+    rows = []
+    for title, entries in sections:
+        if shared:
+            by_label = {}
+            for label, parts in entries:
+                if label:
+                    by_label.setdefault(label.lower(), " ".join(parts))
+            if any(label.lower() in by_label for label in shared):
+                rows.append([title] + [by_label.get(label.lower(), "") for label in shared])
+        else:
+            rows.append([title, "; ".join(f"{label}: {' '.join(parts)}" if label and parts
+                                          else label or " ".join(parts)
+                                          for label, parts in entries)])
+    header = ["Item"] + shared if shared else ["Aspect", "Details"]
+    return (header, rows) if len(rows) >= MIN_ROWS else None
+
+
+def _comparison(blocks: _Blocks) -> dict | None:
+    table = blocks.tables[0] if blocks.tables else _section_table(blocks)
+    if table is None:
+        return None
+    header, rows = table
     ids = _Ids()
     columns = []
     for index, label in enumerate(header):

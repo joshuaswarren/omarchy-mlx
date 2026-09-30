@@ -149,17 +149,20 @@ plus a card the application built from the reply.
    reply:
    - checklist ("checklist", "to-do", "action items", "packing list", or
      "steps"): a task list or bullet/numbered list of 3 or more items;
-   - comparison ("compare", "versus", "side by side", "in a table"): a pipe
-     table with 2-8 columns and 2 or more rows of equal width;
-   - timeline ("timeline", "schedule", "agenda", "roadmap", "phases",
-     "plan my Monday"): 3 or more items or headings that start with a time,
-     date, weekday, `Week 2`-style period or a short label, or a table whose
-     first column is the time;
+   - comparison ("compare", "contrast", "versus", "side by side", "in a
+     table"): a pipe table with 2-8 columns and 2 or more rows of equal
+     width, or 2 or more headed sections of bullets, one row per section
+     with a column per bullet label (`**Price:** ...`) the sections share;
+   - timeline ("timeline", "schedule", "agenda", "roadmap", "milestones",
+     "phases", "plan my Monday"): 3 or more items or headings that start with
+     a time, date, weekday, `Week 2`-style period or a short label, or a table
+     whose first column is the time;
    - facts ("facts", "key points"): 2 or more list items.
 
    "Explain", "what is", "why" and "how does" questions stay prose even when
-   the reply has a table, and "in a paragraph" or "no bullets" turns
-   promotion off.  The card is validated before it is emitted and its title
+   the reply has a table ("describe the phases of the moon" too), and "in a
+   paragraph", "no bullets" or "without using a list" turns promotion off.
+   The card is validated before it is emitted and its title
    ends with `(from reply)`.  Input over 1 MiB is refused and every pattern
    runs in linear time.
 3. **Schema policy.**  Ordinary chat turns send no card schema.  The full

@@ -105,6 +105,9 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(requested_kinds("Explain how DNS works, with the key steps"), [])
         self.assertEqual(requested_kinds("Give me the steps to make tea in a paragraph."), [])
         self.assertEqual(requested_kinds("Why is the sky blue?"), [])
+        self.assertEqual(requested_kinds("Describe the stages and phases of sleep"), [])
+        self.assertEqual(requested_kinds("Outline the project phases"), ["timeline"])
+        self.assertEqual(requested_kinds("Plan my week, without using a list"), [])
 
     def test_plain_list_needs_a_request(self):
         reply = "- red\n- blue\n- green\n"
@@ -113,7 +116,30 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(card["type"], "checklist")
         _valid(card)
 
-    def test_comparison_needs_a_table(self):
+    def test_comparison_from_headed_sections(self):
+        by_option = ("### 1. The first plan\n*   **Price:** low\n*   **Speed:** slow\n\n"
+                     "### 2. The second plan\n*   **Price:** high\n*   **Speed:** fast\n"
+                     "*   **Extras:** many\n")
+        card = extract_text(by_option, "compare the two plans")
+        self.assertEqual([c["label"] for c in card["columns"]], ["Item", "Price", "Speed"])
+        self.assertEqual(card["rows"][1]["values"], ["The second plan", "high", "fast"])
+        by_criterion = ("**Cost**\n- **Kindle:**\n    - device is expensive\n    - books are cheap\n"
+                        "- **Paperback:** no device\n\n**Weight**\n- **Kindle:** light\n"
+                        "- **Paperback:** heavy\n")
+        card = extract_text(by_criterion, "Kindle versus paperback")
+        self.assertEqual(card["rows"][0]["values"],
+                         ["Cost", "device is expensive books are cheap", "no device"])
+        unshared = "## Setup\n- quick\n## Support\n- forums\n- paid plans\n"
+        card = extract_text(unshared, "contrast the two tools")
+        self.assertEqual(card["rows"][1]["values"], ["Support", "forums; paid plans"])
+        for reply, user in ((by_option, "compare the two plans"),
+                            (by_criterion, "Kindle versus paperback"),
+                            (unshared, "contrast the two tools")):
+            _valid(extract_text(reply, user))
+        self.assertIsNone(extract_text(by_option, "Explain how the plans work"))
+        self.assertIsNone(extract_text("### Only one\n- **Price:** low\n", "compare it"))
+
+    def test_comparison_needs_a_table_or_sections(self):
         self.assertIsNone(extract_text("- cats: cheap\n- dogs: costly\n- fish: cheap\n",
                                        "compare cats, dogs and fish"))
         table = ("| Pet | Cost | Noise |\n|:--|--:|---|\n| **Cat** | low | quiet |\n"

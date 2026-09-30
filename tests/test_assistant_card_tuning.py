@@ -36,6 +36,12 @@ SHAPES = {
         "Short answer first.\n\n| Criterion | **A** | **B** |\n|:--|:-:|--:|\n"
         "| Setup | easy | hard |\n| Speed | ok | fast |\n| Ecosystem | big | small |\n\n"
         "- A suits beginners\n- B suits experts\n",
+        "Here is how they compare:\n\n### 1. Cost\n*   **Option A:** cheaper up front\n"
+        "*   **Option B:** cheaper to run\n\n### 2. Upkeep\n*   **Option A:**\n"
+        "    *   needs yearly service\n*   **Option B:** almost none\n\n**Verdict:** it depends.\n",
+        "#### The first choice\n- **Price:** low\n- **Speed:** slow\n\n"
+        "#### The second choice\n- **Price:** high\n- **Speed:** fast\n",
+        "**Setup**\n- quick for one, slow for the other\n\n**Support**\n- community forums\n- paid plans\n",
     ],
     "timeline": [
         "| Week | Milestone |\n|---|---|\n| 1-2 | discovery |\n| 3-6 | build |\n"
@@ -54,6 +60,11 @@ SHAPES = {
         "- one thing\n- another thing\n- a third thing\n",
         "```python\ndef f():\n    return 1\n```\n- returns one\n- takes no args\n- is pure\n",
         "> Quoted text here.\n\nIt permits:\n- use\n- copy\n- modify\n",
+        "It has four stages:\n1. **Start** \u2013 things begin\n2. **Middle** \u2013 things grow\n"
+        "3. **Late** \u2013 things slow\n4. **End** \u2013 things stop\n",
+        "## How it works\n- **Input:** air comes in\n- **Output:** heat leaves\n\n"
+        "## Why it matters\n- **Input:** less energy\n- **Output:** lower bills\n",
+        "### Pros\n- flexible hours\n- no commute\n### Cons\n- isolation\n- blurred boundaries\n",
     ],
 }
 
@@ -85,9 +96,9 @@ class DevTuningTests(unittest.TestCase):
     def test_recorded_bench_replies_stay_prose(self):
         prompts_dir = REPO_ROOT / "scripts" / "bench" / "prompts"
         questions = {
-            "gsm": {r["index"]: r["q"] for r in map(json.loads, (prompts_dir / "gsm8k_20.jsonl").open())},
+            "gsm": {r["index"]: r["q"] for r in map(json.loads, (prompts_dir / "gsm8k_20.jsonl").read_text().splitlines())},
             "ife": {r["index"]: r["instruction"]
-                    for r in map(json.loads, (prompts_dir / "ife_20.jsonl").open())},
+                    for r in map(json.loads, (prompts_dir / "ife_20.jsonl").read_text().splitlines())},
         }
         replies = 0
         for path in sorted((REPO_ROOT / "receipts" / "2026-09-30-chat-model-bench" / "v3").glob("*.json")):

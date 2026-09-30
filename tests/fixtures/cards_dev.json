@@ -1,7 +1,7 @@
 {
   "version": "2026-09-30.1",
   "status": "dev-tune",
-  "rule": "Used to tune card_promotion.py rules and the SCHEMA_PROMPT. Throw-away set; not the held-out suite. 2026-09-30: dev-52 relabelled card-worthy (the user asks for a table; the rules promote a requested table with >= 2 data rows).",
+  "rule": "Used to tune card_promotion.py rules and the SCHEMA_PROMPT. Throw-away set; not the held-out suite. 2026-09-30: dev-52 relabelled card-worthy (the user asks for a table; the rules promote a requested table with >= 2 data rows). 2026-09-30 (after HELD-OUT v3 on the 2B): dev-53..57 added for the explanation-led topic-word and 'without using a list' classes. 2026-09-30 (after HELD-OUT v3 on the 9B): dev-58..dev-74 added for comparisons written as headed sections and for explanations with headed sections.",
   "prompts": [
     {"id": "dev-01", "category": "card-worthy", "kind": "checklist", "text": "Give me a packing list for a weekend camping trip."},
     {"id": "dev-02", "category": "card-worthy", "kind": "checklist", "text": "What are the steps to make a sourdough loaf at home?"},
@@ -57,6 +57,28 @@
     {"id": "dev-49", "category": "near-miss", "kind": "plain-with-summary", "text": "Tell me about Kubernetes, then summarize in one sentence."},
     {"id": "dev-50", "category": "near-miss", "kind": "plain-with-summary", "text": "What's Redis used for, then recap in one line."},
     {"id": "dev-51", "category": "near-miss", "kind": "plain-with-quote", "text": "Quote the project's license, then describe what it permits."},
-    {"id": "dev-52", "category": "card-worthy", "kind": "comparison", "text": "Give me a 2x2 table: yes/no for HTTPS and TLS 1.3."}
+    {"id": "dev-52", "category": "card-worthy", "kind": "comparison", "text": "Give me a 2x2 table: yes/no for HTTPS and TLS 1.3."},
+    {"id": "dev-53", "category": "near-miss", "kind": "explain-with-cue", "text": "Describe the phases of a clinical drug trial."},
+    {"id": "dev-54", "category": "near-miss", "kind": "explain-with-cue", "text": "Explain the milestones in a baby's first year."},
+    {"id": "dev-55", "category": "near-miss", "kind": "prose-request", "text": "Walk me through setting up a home network without using bullet points."},
+    {"id": "dev-56", "category": "near-miss", "kind": "prose-request", "text": "Summarize the history of jazz, not as a list."},
+    {"id": "dev-57", "category": "card-worthy", "kind": "timeline", "text": "Lay out the phases for renovating a kitchen."},
+    {"id": "dev-58", "category": "card-worthy", "kind": "comparison", "text": "Compare cloud backup services Backblaze and iDrive for a small office."},
+    {"id": "dev-59", "category": "card-worthy", "kind": "comparison", "text": "Contrast hiking boots and trail runners for a summer thru-hike."},
+    {"id": "dev-60", "category": "card-worthy", "kind": "comparison", "text": "Learning piano versus guitar as an adult beginner: which is easier?"},
+    {"id": "dev-61", "category": "card-worthy", "kind": "comparison", "text": "Weigh a heat pump against a gas furnace for a cold climate, side by side."},
+    {"id": "dev-62", "category": "card-worthy", "kind": "comparison", "text": "How do Rust and Go compare for writing network services?"},
+    {"id": "dev-63", "category": "card-worthy", "kind": "comparison", "text": "Compare three budgeting apps for a college student."},
+    {"id": "dev-64", "category": "card-worthy", "kind": "comparison", "text": "Put Chrome and Firefox in a table on privacy, speed, and extensions."},
+    {"id": "dev-65", "category": "near-miss", "kind": "explanation-with-sections", "text": "Explain how a refrigerator keeps food cold."},
+    {"id": "dev-66", "category": "near-miss", "kind": "explanation-with-sections", "text": "Describe the pros and cons of working remotely."},
+    {"id": "dev-67", "category": "near-miss", "kind": "explanation-with-sections", "text": "Give me an overview of the French and Russian revolutions."},
+    {"id": "dev-68", "category": "near-miss", "kind": "explanation-with-sections", "text": "What should I know before adopting a cat?"},
+    {"id": "dev-69", "category": "near-miss", "kind": "explanation-with-sections", "text": "Tell me about the inner planets of the solar system."},
+    {"id": "dev-70", "category": "near-miss", "kind": "explanation-with-sections", "text": "Walk me through how DNS, DHCP and NAT work together."},
+    {"id": "dev-71", "category": "near-miss", "kind": "prose-request", "text": "Explain the phases of mitosis without using a list."},
+    {"id": "dev-72", "category": "near-miss", "kind": "explanation-with-sections", "text": "Describe what happens at each stage of a startup funding round."},
+    {"id": "dev-73", "category": "near-miss", "kind": "explanation-with-sections", "text": "Summarize the plot of Hamlet act by act."},
+    {"id": "dev-74", "category": "near-miss", "kind": "prose-request", "text": "Lay out the differences between stocks and bonds, no bullet points please."}
   ]
 }
