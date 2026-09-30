@@ -144,15 +144,17 @@ def first_text(runtime, cid, turn, started, timeout_s=120):
 
 
 def finish_turn(runtime, cid, turn):
-    """Cancel the turn and wait until the conversation is idle, so the next
-    turn starts on an idle worker."""
-    call("POST", f"/api/conversations/{cid}/cancel", {"turn_id": turn}, runtime=runtime)
-    deadline = time.monotonic() + 120
+    """Keep the turn alive until it completes, so the next turn starts on an
+    idle worker.  (Cancelling instead leaves the worker still decoding the
+    old reply, and the next turn's speech-yield probe then waits out its
+    3 s timeout: the first run of this probe measured that, not the app.)"""
+    deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
+        call("POST", f"/api/conversations/{cid}/heartbeat", {"turn_id": turn}, runtime=runtime)
         if not call("GET", f"/api/conversations/{cid}", runtime=runtime).get("active_turn"):
             return
-        time.sleep(0.2)
-    raise RuntimeError(f"turn {turn} did not stop")
+        time.sleep(1)
+    raise RuntimeError(f"turn {turn} did not finish")
 
 
 def host_state():
@@ -201,7 +203,7 @@ def run(model, n_turns=30, warmup=3):
             text = f"Say something short about the number {i + 100}."
             started = time.monotonic()
             turn = call("POST", f"/api/conversations/{cid}/turns",
-                        {"text": text, "mode": "chat", "max_tokens": 256},
+                        {"text": text, "mode": "chat", "max_tokens": 64},
                         runtime=runtime)["turn_id"]
             elapsed = first_text(runtime, cid, turn, started)
             finish_turn(runtime, cid, turn)
