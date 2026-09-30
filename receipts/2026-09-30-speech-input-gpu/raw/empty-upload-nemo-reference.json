@@ -1,0 +1,69 @@
+{
+ "nemo": "3.0.0",
+ "rows": [
+  {
+   "case": "pre_fix_upload17",
+   "text": ""
+  },
+  {
+   "case": "pre_fix_upload17_pad160",
+   "text": ""
+  },
+  {
+   "case": "pre_fix_upload17_trim_end_800",
+   "text": ""
+  },
+  {
+   "case": "pre_fix_upload17_trim_start_800",
+   "text": "Promise to do this. And she mentioned to me that when for a moment"
+  },
+  {
+   "case": "pre_fix_upload16",
+   "text": "She promised to do this. And he mentioned to me when for a moment"
+  },
+  {
+   "case": "pre_fix_upload16_pad160",
+   "text": "She promised to do this. And he mentioned to me when for a moment"
+  },
+  {
+   "case": "pre_fix_upload16_trim_end_800",
+   "text": "She promised to do this. And he mentioned to me when for a moment"
+  },
+  {
+   "case": "pre_fix_upload16_trim_start_800",
+   "text": "She promised to do this. And he mentioned to meet when for a moment"
+  },
+  {
+   "case": "post_fix_upload05",
+   "text": ""
+  },
+  {
+   "case": "post_fix_upload05_pad160",
+   "text": ""
+  },
+  {
+   "case": "post_fix_upload05_trim_end_800",
+   "text": "She promised to do this."
+  },
+  {
+   "case": "post_fix_upload05_trim_start_800",
+   "text": ""
+  },
+  {
+   "case": "post_fix_upload03",
+   "text": "She promised to do this. And she mentioned to me and from"
+  },
+  {
+   "case": "post_fix_upload03_pad160",
+   "text": "She promised to do this. And she mentioned to me and from"
+  },
+  {
+   "case": "post_fix_upload03_trim_end_800",
+   "text": "She promised to do this. And she mentioned to me and"
+  },
+  {
+   "case": "post_fix_upload03_trim_start_800",
+   "text": "She promised to do this. And she mentioned to me and for the time."
+  }
+ ]
+}

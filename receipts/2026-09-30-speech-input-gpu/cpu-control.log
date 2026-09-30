@@ -1,12 +1,0 @@
-=== normal GPU transcribe ===
-[gpu-stt] Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 1932.19it/s]
-  text: 'Notwithstanding the high resolution of Hawkeye, he fully com'
-  cpu_events: 0  gpu_events: 0
-
-=== CPU op + transcribe ===
-  cpu_op: cpu_events after explicit CPU eval: 1
-[gpu-stt] Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 1843.25it/s]
-  text: 'Notwithstanding the high resolution of Hawkeye, he fully com'
-  total cpu_events: 1  gpu_events: 0
-  positive control counter incremented: PASS
-EXIT_cpu=0

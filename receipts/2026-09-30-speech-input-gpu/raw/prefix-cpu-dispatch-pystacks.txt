@@ -1,0 +1,440 @@
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END
+PYSTACK-BEGIN MainThread
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 104, in <module>
+    sys.exit(main())
+  File "<home>/agents/SpeechInputGpu/repo/serve/mlx_omarchy_assistant/gpu_stt_worker.py", line 71, in main
+    model = load_model(args.model_dir)
+  File "<home>/voice-site/mlx_audio/stt/utils.py", line 176, in load_model
+    from mlx_audio.stt.models.phonon.transport import (
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1314, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/__init__.py", line 1, in <module>
+    from . import (
+  File "<frozen importlib._bootstrap>", line 1434, in _handle_fromlist
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/__init__.py", line 2, in <module>
+    from .granite_speech5 import Model
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "<home>/voice-site/mlx_audio/stt/models/granite_speech5_ctc/granite_speech5.py", line 40, in <module>
+    mx.eval(_WINDOW, _MEL_FILTERS_T)
+  File "<string>", line 1, in <module>
+PYSTACK-END

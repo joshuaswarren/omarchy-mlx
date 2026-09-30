@@ -1,0 +1,14 @@
+Function "_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE" not defined.
+Breakpoint 1 (_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE) pending.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+[New Thread 0xffffcd7db160 (LWP 58218)]
+[New Thread 0xffffccfcb160 (LWP 58220)]
+[New Thread 0xffffc7fff160 (LWP 58221)]
+[Thread 0xffffcd7db160 (LWP 58218) exited]
+[Thread 0xffffccfcb160 (LWP 58220) exited]
+[Thread 0xfffff7ff0020 (LWP 58216) exited]
+[Thread 0xffffc7fff160 (LWP 58221) exited]
+[New process 58216]
+[Inferior 1 (process 58216) exited normally]
+CPU_COUNT {"symbol": "_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE", "cpu_command_encoder_calls": 3, "resolved_while_running": true, "libmlx_loaded": true}

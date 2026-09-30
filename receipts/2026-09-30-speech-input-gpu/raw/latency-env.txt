@@ -1,0 +1,5 @@
+2026-09-30T07:02:23Z
+35df33be-ada4-4d3e-9028-3d761a510c65
+1.01 0.70 0.50 1/417 101352
+  99503       04:01 <home>/.local/share/mlx-omarchy/venv/bin/python -u -m mlx_omarchy_assistant --home <home>/agents/PairGates/homes/quality --port 36359 --pair quality --yes --no-browser
+ 101330       00:00 bash <home>/bin/gpu-turn -m 8 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-2b-4bit --start 18 --end 21

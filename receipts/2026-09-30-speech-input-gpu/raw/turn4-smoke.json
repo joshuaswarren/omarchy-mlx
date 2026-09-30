@@ -1,0 +1,87 @@
+{
+ "prepare_without_approval": {
+  "downloaded": true,
+  "verified": true,
+  "path": "<app-home>/voice/parakeet-tdt-0.6b-v3"
+ },
+ "status_before": {
+  "state": "usable",
+  "reasons": [
+   "runtime is loadable and its pipeline may run, but no hardware acceptance receipt is recorded yet"
+  ],
+  "model": {
+   "repo": "mlx-community/parakeet-tdt-0.6b-v3",
+   "revision": "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
+  },
+  "memory": {
+   "runtime_estimate_bytes": 2776724192,
+   "estimate": true,
+   "estimate_basis": {
+    "weights_bytes": 2508288736,
+    "conservative_margin_bytes": 268435456
+   }
+  }
+ },
+ "first_call": {
+  "ms": 1592.3,
+  "text": "Notwithstanding the high resolution of Hawkeye, he fully comprehended all the difficulties and danger he was about to incur.",
+  "matches_reference": true
+ },
+ "input_48k": {
+  "ms": 435.1,
+  "text": "Notwithstanding the high resolution of Hawkeye, he fully comprehended all the difficulties and danger he was about to incur.",
+  "matches_reference": true
+ },
+ "silence_3s": {
+  "text": "",
+  "ms": 342.4
+ },
+ "exactly_30s": {
+  "ms": 1120.2,
+  "words": 75
+ },
+ "over_30s": {
+  "pass": true,
+  "refusal": "audio is 30.10 s; the recognizer accepts at most 30 s per submission",
+  "ms": 0.2
+ },
+ "oversize_payload": {
+  "pass": true,
+  "refusal": "audio payload exceeds 50331648 bytes (51380228 received)",
+  "ms": 0.0
+ },
+ "nan_float": {
+  "pass": true,
+  "refusal": "audio contains non-finite samples (NaN or infinity)",
+  "ms": 0.1
+ },
+ "rate_zero": {
+  "pass": true,
+  "refusal": "invalid sample rate 0; supported range is 1-192000 Hz",
+  "ms": 0.0
+ },
+ "rate_500k": {
+  "pass": true,
+  "refusal": "invalid sample rate 500000; supported range is 1-192000 Hz",
+  "ms": 0.0
+ },
+ "pcm_8bit": {
+  "pass": true,
+  "refusal": "unsupported PCM sample width 8 bits; supported: 16 or 32",
+  "ms": 0.0
+ },
+ "cancel_mid_request": {
+  "pass": true,
+  "refusal": "cancelled during transcription",
+  "ms_to_raise": 651.2,
+  "worker_pid": 58295,
+  "worker_alive": false,
+  "process_group_alive": false
+ },
+ "after_cancel": {
+  "ms": 1578.2,
+  "matches_reference": true,
+  "new_worker_pid": 58386
+ },
+ "closed_worker_exit_code": true
+}

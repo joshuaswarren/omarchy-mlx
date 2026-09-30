@@ -1,0 +1,107 @@
+[
+ {
+  "case": "gpu",
+  "n": 60416,
+  "seconds": 3.776,
+  "ms": 1142.3,
+  "text": ""
+ },
+ {
+  "case": "gpu_pad_end_160",
+  "n": 60576,
+  "seconds": 3.786,
+  "ms": 830.2,
+  "text": "promise to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_pad_end_800",
+  "n": 61216,
+  "seconds": 3.826,
+  "ms": 1534.5,
+  "text": "Promise to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_pad_end_1600",
+  "n": 62016,
+  "seconds": 3.876,
+  "ms": 1418.5,
+  "text": "promise to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_pad_end_4000",
+  "n": 64416,
+  "seconds": 4.026,
+  "ms": 885.5,
+  "text": "promised to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_pad_end_8000",
+  "n": 68416,
+  "seconds": 4.276,
+  "ms": 1044.7,
+  "text": "promised to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_trim_start_160",
+  "n": 60256,
+  "seconds": 3.766,
+  "ms": 765.3,
+  "text": ""
+ },
+ {
+  "case": "gpu_trim_end_160",
+  "n": 60256,
+  "seconds": 3.766,
+  "ms": 1173.7,
+  "text": ""
+ },
+ {
+  "case": "gpu_trim_start_800",
+  "n": 59616,
+  "seconds": 3.726,
+  "ms": 1101.0,
+  "text": "promise to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_trim_end_800",
+  "n": 59616,
+  "seconds": 3.726,
+  "ms": 1114.1,
+  "text": ""
+ },
+ {
+  "case": "gpu_trim_start_1600",
+  "n": 58816,
+  "seconds": 3.676,
+  "ms": 878.3,
+  "text": "Promise to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_trim_end_1600",
+  "n": 58816,
+  "seconds": 3.676,
+  "ms": 829.2,
+  "text": ""
+ },
+ {
+  "case": "gpu_trim_start_4000",
+  "n": 56416,
+  "seconds": 3.526,
+  "ms": 763.0,
+  "text": "Promise to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "case": "gpu_trim_end_4000",
+  "n": 56416,
+  "seconds": 3.526,
+  "ms": 898.1,
+  "text": ""
+ },
+ {
+  "case": "gpu_gain_0.5",
+  "n": 60416,
+  "seconds": 3.776,
+  "ms": 1420.4,
+  "text": ""
+ }
+]

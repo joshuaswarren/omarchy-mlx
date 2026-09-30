@@ -1,0 +1,140 @@
+[
+ {
+  "width": 1440,
+  "scenario": "loaded",
+  "button": "Microphone",
+  "disabled": false,
+  "live": "",
+  "draft": ""
+ },
+ {
+  "width": 1440,
+  "scenario": "stop-by-user-transcript",
+  "ms": 11828,
+  "transcribeRequests": 1,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Transcript added to your draft. Review, then press Send.",
+  "draft": "Typed draft before speaking. Notwithstanding the high resolution of Hawkeye, he fully comprehended all the difficulties and danger he was about to incur.",
+  "stopToTranscriptMs": 2796,
+  "announcements": [
+   "Transcribing…",
+   "Transcript added to your draft. Review, then press Send."
+  ]
+ },
+ {
+  "width": 1440,
+  "scenario": "thirty-second-limit",
+  "ms": 44358,
+  "transcribeRequests": 1,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Transcript added to your draft. Review, then press Send.",
+  "draft": "Typed draft before speaking. Notstanding the high resolution of Hakai, he fully comprehended all the difficulties and danger he was about to incur. Notwithstanding the high resolution of Hakai, he fully comprehended all the difficulties and danger he was about to incur. Notwithstanding the high resolution of Hakkai, he fully comprehended all the difficulties and danger he was about to incur. Notwithstanding the high resolution of Hakai, he fully comprehended all the difficulties and danger he was about to incur. Notwithstanding the high resolution of Hakai,",
+  "limitAnnounced": true,
+  "announcements": [
+   "About to hit the 30 second limit.",
+   "Recording stopped at the 30 second limit. Transcribing…",
+   "Transcript added to your draft. Review, then press Send."
+  ]
+ },
+ {
+  "width": 1440,
+  "scenario": "cancel-escape",
+  "ms": 3811,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Recording cancelled.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Recording cancelled."
+  ]
+ },
+ {
+  "width": 1440,
+  "scenario": "device-loss",
+  "ms": 2032,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Recording stopped: microphone disconnected.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Recording stopped: microphone disconnected."
+  ]
+ },
+ {
+  "width": 375,
+  "scenario": "loaded",
+  "button": "Microphone",
+  "disabled": false,
+  "live": "",
+  "draft": ""
+ },
+ {
+  "width": 375,
+  "scenario": "stop-by-user-transcript",
+  "ms": 10258,
+  "transcribeRequests": 1,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Transcript added to your draft. Review, then press Send.",
+  "draft": "Typed draft before speaking. Notwithstanding the high resolution of Hakai, he fully comprehended all the difficulties and danger he was about to incur.",
+  "stopToTranscriptMs": 1131,
+  "announcements": [
+   "Transcribing…",
+   "Transcript added to your draft. Review, then press Send."
+  ]
+ },
+ {
+  "width": 375,
+  "scenario": "thirty-second-limit",
+  "ms": 42961,
+  "transcribeRequests": 1,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Transcript added to your draft. Review, then press Send.",
+  "draft": "Typed draft before speaking. Notwithstanding the high resolution of Hakkai, he fully comprehended all the difficulty danger he was about to incur. Notwithstanding the high resolution of Hakai, he fully comprehended all the difficulties and danger he was about to incur. Notwithstanding the high resolution of Hakkai, he fully comprehended all the difficulties and dangers about to incur. Notwithstanding the high resolution of Hakkai, he fully comprehended all the difficulties and danger he was about to incur.",
+  "limitAnnounced": true,
+  "announcements": [
+   "About to hit the 30 second limit.",
+   "Recording stopped at the 30 second limit. Transcribing…",
+   "Transcript added to your draft. Review, then press Send."
+  ]
+ },
+ {
+  "width": 375,
+  "scenario": "cancel-escape",
+  "ms": 3668,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Recording cancelled.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Recording cancelled."
+  ]
+ },
+ {
+  "width": 375,
+  "scenario": "device-loss",
+  "ms": 2020,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Recording stopped: microphone disconnected.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Recording stopped: microphone disconnected."
+  ]
+ }
+]

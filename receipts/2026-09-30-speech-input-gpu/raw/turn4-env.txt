@@ -1,0 +1,28 @@
+2026-09-30T03:49:05Z
+2a4f18f7-c9cb-4358-8573-1082ad33823b
+0.33 0.76 0.88 1/541 58254
+  55237       01:33 bash <home>/bin/gpu-turn -m 8 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/MarkdownCards/repo/receipts/2026-09-30-card-promotion/probe_finite_logits.py --model qwen3.8-2b-4bit
+{
+  "dist": "mlx-omarchy",
+  "verified": "match",
+  "mismatch": null,
+  "files": [
+    {
+      "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
+      "label": "mlx.core extension",
+      "sha256": "0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621",
+      "record_sha256": "0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621",
+      "match": true
+    },
+    {
+      "path": "mlx/lib/libmlx.so",
+      "label": "mlx/lib/libmlx.so",
+      "sha256": "004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29",
+      "record_sha256": "004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29",
+      "match": true
+    }
+  ],
+  "dist_version": "0.32.3.dev202609291615+06711ad",
+  "mx_version": "0.32.3.dev202609291615+06711ad",
+  "version_match": true
+}
