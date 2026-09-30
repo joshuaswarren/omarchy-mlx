@@ -152,10 +152,12 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
         start_new_session=True)
 
     def _kill_server():
-        # Hard-kill the whole process group the server started in, then
-        # any lingering GPU child (laya, _mlxlm_server, gpu_stt) that
-        # somehow outlived the parent.  start_new_session=True made the
-        # server its own pgid so killpg reaches every inherited fd.
+        # Hard-kill the server's process group (set by start_new_session),
+        # then any direct mlx child that survives because it inherited an
+        # open GPU fd.  NEVER call `fuser -k /dev/dri/renderD*` here --
+        # that nukes every other agent's process holding the device
+        # inside their own gpu-turn ticket.  Filter by --home path
+        # under our agent dir only.
         try:
             os.killpg(server.pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
@@ -167,12 +169,16 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                 os.killpg(server.pid, signal.SIGKILL)
             except Exception:
                 pass
-        # Belt-and-braces: hunt for any direct mlx child still holding
-        # /dev/dri/renderD* under our user and SIGKILL them.
+        # Filter by --home under agents/MarkdownCards/ only -- do NOT touch
+        # any process holding /dev/dri/renderD* that is not ours.
         try:
             import subprocess as _sp
             _sp.run(["bash", "-lc",
-                     "fuser -k /dev/dri/renderD128 /dev/dri/renderD129 2>/dev/null"],
+                     "ps -eo pid,cmd | grep -E "
+                     "'mlx_omarchy_assistant.*--home.*MarkdownCards|"
+                     "_mlxlm_server.*MarkdownCards|"
+                     "mlx_omarchy_assistant.gpu_stt.*MarkdownCards' | "
+                     "awk '{print $1}' | xargs -r kill -9 2>/dev/null"],
                     timeout=15, check=False)
         except Exception:
             pass
