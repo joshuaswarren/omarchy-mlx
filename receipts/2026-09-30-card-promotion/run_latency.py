@@ -222,14 +222,16 @@ def run(model, n_turns=30, warmup=3):
         p95 = first_text_ms[-(-95 * len(first_text_ms) // 100) - 1]  # nearest rank
         print(f"\nFIRST_TEXT_MS p50={p50} p95={p95} gate=2000")
         summary = {
-            "model": model, "n": len(first_text_ms), "host_before": before,
+            "model": model, "checkout": os.path.basename(REPO), "n": len(first_text_ms),
+            "host_before": before,
             "host_after": host_state(),
             "samples_ms": first_text_ms,
             "p50_ms": p50, "p95_ms": p95, "gate_ms": 2000,
             "gate_pass": p95 <= 2000,
         }
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        out = os.path.join(RESULTS_DIR, f"latency_{model.replace('/', '_')}.json")
+        tag = os.environ.get("MARKCARDS_LATENCY_TAG", "")
+        out = os.path.join(RESULTS_DIR, f"latency_{tag + '_' if tag else ''}{model.replace('/', '_')}.json")
         with open(out, "w") as fp:
             json.dump(summary, fp, indent=2)
         return summary
