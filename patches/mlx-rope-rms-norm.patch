@@ -1,5 +1,5 @@
---- a/mlx/fast.h	2026-09-29 19:23:08.227641277 -0500
-+++ b/mlx/fast.h	2026-09-29 19:26:38.818574880 -0500
+--- a/mlx/fast.h
++++ b/mlx/fast.h
 @@ -70,6 +70,35 @@
      const std::optional<array>& freqs = std::nullopt,
      StreamOrDevice s = {});
@@ -36,16 +36,16 @@
  /** Computes: O = softmax(Q @ K.T) @ V **/
  MLX_API array scaled_dot_product_attention(
      const array& queries,
---- a/mlx/fast.cpp	2026-09-29 19:23:08.333640237 -0500
-+++ b/mlx/fast.cpp	2026-09-29 19:27:46.244913269 -0500
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
 @@ -605,7 +605,9 @@
      float base,
      float scale,
      bool forward,
 -    StreamOrDevice s) {
 +    StreamOrDevice s,
-+    const std::optional<array>& norm_weight,
-+    float norm_eps) {
++    const std::optional<array>& norm_weight = std::nullopt,
++    float norm_eps = 0.0f) {
    auto& x = inputs[0];
    auto& offset = inputs[1];
    if (x.ndim() < 3) {
@@ -188,8 +188,8 @@
  }
  
  /** Computes: O = softmax(Q @ K.T) @ V **/
---- a/mlx/fast_primitives.h	2026-09-29 19:23:08.447639118 -0500
-+++ b/mlx/fast_primitives.h	2026-09-29 19:28:11.415666285 -0500
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
 @@ -286,13 +286,17 @@
        bool traditional,
        float base,
@@ -233,8 +233,8 @@
  };
  
  class ScaledDotProductAttention : public Custom {
---- a/python/src/fast.cpp	2026-09-29 19:23:08.556638049 -0500
-+++ b/python/src/fast.cpp	2026-09-29 19:28:33.244452093 -0500
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
 @@ -314,6 +314,56 @@
        )pbdoc");
  
