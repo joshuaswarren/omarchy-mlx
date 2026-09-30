@@ -106,7 +106,7 @@ def start_server(chat_model):
             saved_boot_id = json.load(open(lock_path)).get("boot_id", "")
         except Exception:
             saved_boot_id = ""
-    do_setup = bool(saved_boot_id) and saved_boot_id != cur_boot_id
+    do_setup = saved_boot_id != cur_boot_id  # no lock yet, or locked on an earlier boot
 
     if os.path.exists(runtime):
         os.unlink(runtime)

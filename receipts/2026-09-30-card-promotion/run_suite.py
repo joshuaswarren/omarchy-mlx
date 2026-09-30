@@ -134,7 +134,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
             saved_boot_id = json.load(open(lock_path)).get("boot_id", "")
         except Exception:
             saved_boot_id = ""
-    do_setup = bool(saved_boot_id) and saved_boot_id != cur_boot_id
+    do_setup = saved_boot_id != cur_boot_id  # no lock yet, or locked on an earlier boot
     if do_setup:
         print(f"boot_id mismatch (saved={saved_boot_id[:8]} "
               f"current={cur_boot_id[:8]}); falling back to --setup", flush=True)
