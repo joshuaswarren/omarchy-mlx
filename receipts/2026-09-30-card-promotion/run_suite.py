@@ -71,6 +71,21 @@ def call(method, path, body=None, runtime=None):
         raise
 
 
+def read_events(runtime, cid, after=0, timeout=30):
+    """Yield the conversation's events after ``after`` from the server-sent
+    event stream; the server closes it about 15 s in or when no turn is active."""
+    rt = json.load(open(runtime))
+    base = f"http://127.0.0.1:{rt['port']}"
+    request = urllib.request.Request(
+        f"{base}/api/conversations/{cid}/events?after={after}",
+        headers={"Cookie": rt["cookie"], "X-Assistant-CSRF": rt["csrf"], "Origin": base})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        for raw in response:
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if line.startswith("data: "):
+                yield json.loads(line[6:])
+
+
 def sync_results(results):
     os.makedirs(RESULTS_DIR, exist_ok=True)
     tmp = results["_path"] + ".tmp"
@@ -255,8 +270,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                 break
             components = (message or {}).get("components") or []
             try:
-                events = call("GET", f"/api/conversations/{cid}/events?after=0",
-                              runtime=runtime).get("events") or []
+                events = list(read_events(runtime, cid))
             except Exception as exc:
                 events = [{"type": "error", "turn_id": turn,
                            "data": {"message": f"events unavailable: {exc}"}}]

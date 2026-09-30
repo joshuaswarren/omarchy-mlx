@@ -17,6 +17,8 @@ import sys
 import time
 import urllib.request
 
+from run_suite import read_events
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 
@@ -126,34 +128,31 @@ def start_server(chat_model):
     return server, runtime
 
 
-def first_text_for(turn_url, runtime, turn, timeout_s=120):
-    rt = json.load(open(runtime))
-    base = f"http://127.0.0.1:{rt['port']}"
-    headers = {"Cookie": rt["cookie"], "X-Assistant-CSRF": rt["csrf"],
-               "Origin": base}
-    started = time.monotonic()
-    deadline = started + timeout_s
-    cursor = 0
-    seen_first_text = False
+def first_text(runtime, cid, turn, started, timeout_s=120):
+    """Seconds from ``started`` until the turn's first text event, or None."""
+    after = 0
+    while time.monotonic() - started < timeout_s:
+        for event in read_events(runtime, cid, after):
+            after = event["sequence"]
+            if event.get("turn_id") != turn:
+                continue
+            if event["type"] == "text" and (event.get("data") or {}).get("text"):
+                return time.monotonic() - started
+            if event["type"] in ("done", "error"):
+                return None
+    return None
+
+
+def finish_turn(runtime, cid, turn):
+    """Cancel the turn and wait until the conversation is idle, so the next
+    turn starts on an idle worker."""
+    call("POST", f"/api/conversations/{cid}/cancel", {"turn_id": turn}, runtime=runtime)
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
-        url = f"{base}{turn_url}?after={cursor}"
-        request = urllib.request.Request(url, headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=10) as resp:
-                body = json.loads(resp.read().decode())
-        except Exception:
-            time.sleep(0.1)
-            continue
-        for event in body.get("events") or []:
-            cursor = event.get("seq", cursor) + 1
-            if event.get("type") == "text":
-                if not seen_first_text:
-                    return time.monotonic() - started, event
-                seen_first_text = True
-            if event.get("type") == "done":
-                return None, None
-        time.sleep(0.05)
-    return None, None
+        if not call("GET", f"/api/conversations/{cid}", runtime=runtime).get("active_turn"):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"turn {turn} did not stop")
 
 
 def host_state():
@@ -192,24 +191,32 @@ def run(model, n_turns=30, warmup=3):
         else:
             raise RuntimeError("setup did not complete in time")
 
+        # Ordinary chat turns: no card cue words, so no schema is sent.
         first_text_ms = []
+        missing = 0
         for i in range(-warmup, n_turns):
             cid = call("POST", "/api/conversations", {"save": False},
                        runtime=runtime)["id"]
-            text = f"Tell me a one-line fact about number {i + 100}."
+            text = f"Say something short about the number {i + 100}."
             started = time.monotonic()
             turn = call("POST", f"/api/conversations/{cid}/turns",
                         {"text": text, "mode": "chat", "max_tokens": 256},
                         runtime=runtime)["turn_id"]
-            elapsed, event = first_text_for(
-                f"/api/conversations/{cid}/events", runtime, turn)
-            if i >= 0 and elapsed is not None:
-                first_text_ms.append(round(elapsed * 1000, 1))
-                print(f"turn {i + 1:2d}: {elapsed * 1000:.0f} ms",
-                      flush=True)
+            elapsed = first_text(runtime, cid, turn, started)
+            finish_turn(runtime, cid, turn)
+            if i < 0:
+                continue
+            if elapsed is None:
+                missing += 1
+                print(f"turn {i + 1:2d}: no text", flush=True)
+                continue
+            first_text_ms.append(round(elapsed * 1000, 1))
+            print(f"turn {i + 1:2d}: {elapsed * 1000:.0f} ms", flush=True)
+        if missing:
+            raise RuntimeError(f"{missing} of {n_turns} turns produced no text")
         first_text_ms.sort()
         p50 = first_text_ms[int(0.50 * len(first_text_ms))]
-        p95 = first_text_ms[int(0.95 * len(first_text_ms))]
+        p95 = first_text_ms[-(-95 * len(first_text_ms) // 100) - 1]  # nearest rank
         print(f"\nFIRST_TEXT_MS p50={p50} p95={p95} gate=2000")
         summary = {
             "model": model, "n": len(first_text_ms), "host_before": before,
@@ -229,7 +236,7 @@ def run(model, n_turns=30, warmup=3):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="qwen3.8-2b-4bit")
+    p.add_argument("--model", required=True)
     p.add_argument("--n", type=int, default=30)
     args = p.parse_args()
     run(args.model, args.n)
