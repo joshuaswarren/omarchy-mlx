@@ -10299,7 +10299,7 @@ void Sort::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
   auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
   require_sort_dtype("Sort", input, out, false, encoder);
-  dispatch_sort_any_axis("Sort", input, out, state(), false, encoder);
+  dispatch_sort_any_axis("Sort", input, out, state(), false, -1, encoder);
 }
 void Square::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.dtype() == complex64) {
@@ -12396,17 +12396,6 @@ void ScaledDotProductAttention::eval_gpu(
   // forces the composition side); the landed row is the measured one.
   constexpr DecodeBf16Window kDecodeBf16Windows[] = {
       {64, 256, 2048}, {128, 12, 7168}, {256, 12, 7168}};
-  auto decode_bf16_window = [](uint32_t width) -> const DecodeBf16Window* {
-    for (const auto& candidate : kDecodeBf16Windows) {
-      if (candidate.width == width) {
-        return &candidate;
-      }
-    }
-    return nullptr;
-  };
-  const DecodeBf16Window* decode_window =
-      decode_bf16_probe ? decode_bf16_window(static_cast<uint32_t>(head_dim))
-                        : nullptr;
   // Perf-only k window: bitwise identity holds for every k (both routes
   // store identical words), so the boundary cannot move a token - only the
   // wall. Width 64 keeps the measured 256..2048 window from the original
@@ -12430,6 +12419,17 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_bf16_probe = q.dtype() == bfloat16;
   const bool decode_route_ready =
       decode_bf16_probe ? decode_bf16_ready : decode_subgroup_ready;
+  // Width-keyed engagement window lookup; only meaningful for the bf16
+  // arm. f16 routes engage unconditionally on their compiled widths.
+  const DecodeBf16Window* decode_window = nullptr;
+  if (decode_bf16_probe) {
+    for (const auto& candidate : kDecodeBf16Windows) {
+      if (candidate.width == static_cast<uint32_t>(head_dim)) {
+        decode_window = &candidate;
+        break;
+      }
+    }
+  }
   if ((decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
       decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
       !output_logsumexp_ && batch == 1 && q_len == 1 &&
@@ -12439,7 +12439,7 @@ void ScaledDotProductAttention::eval_gpu(
                (head_dim == 128 && v_dim == 128))) ||
           (decode_bf16_probe && head_dim % 32 == 0 && head_dim >= 32 &&
                head_dim <= 256 && v_dim == head_dim &&
-               decode_window != nullptr))) &&
+               decode_window != nullptr)) &&
       k_len > 0 &&
       (q.dtype() != bfloat16 ||
           (k_len >= decode_window->k_min && k_len <= decode_window->k_max)) &&
