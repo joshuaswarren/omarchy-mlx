@@ -220,6 +220,30 @@ class SystemStageTest(unittest.TestCase):
         if result.returncode != 0:
             raise AssertionError(f"install.sh --system failed:\n{result.stdout}\n{result.stderr}")
 
+    def test_venv_bin_scripts_carry_final_paths(self):
+        """venv/bin scripts survive package()'s copy to /.
+
+        build-venv.sh creates the venv at the staging absolute path, so
+        pip, activate, and any entry-point scripts embed that path. A
+        PKGBUILD copies the staged tree to / in package(); scripts that
+        still name the staging dir would be dead on an installed system.
+        """
+        venv_bin = self.stage / "usr/lib/omarchy-mlx/venv/bin"
+        staging_prefix = str(self.stage)
+        final_venv = "/usr/lib/omarchy-mlx/venv"
+        checked = 0
+        for script in venv_bin.iterdir():
+            if script.is_symlink() or not script.is_file():
+                continue
+            text = script.read_text(errors="replace")
+            self.assertNotIn(staging_prefix, text,
+                             f"{script.name} embeds the staging path")
+            if script.name.startswith("pip"):
+                self.assertTrue(text.startswith(f"#!{final_venv}/bin/python"),
+                                f"{script.name} shebang: {text.splitlines()[0]}")
+            checked += 1
+        self.assertGreater(checked, 0, "no regular scripts under venv/bin")
+
     def test_full_tree_is_staged(self):
         self.assertTrue((self.stage / "usr/lib/omarchy-mlx/venv/bin/python").exists())
         for launcher in ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat",

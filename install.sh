@@ -81,6 +81,20 @@ install_system() {
   say "Building $venv offline from vendored wheels"
   bash "$ROOT/packaging/build-venv.sh" "${build_args[@]}"
 
+  # The venv was created at the staging absolute path, so its own bin
+  # scripts (pip, activate, entry points) embed that path. A PKGBUILD
+  # copies the tree to / in package(), which would orphan every one of
+  # them; point them at the final venv before staging completes.
+  local bin_script total nul
+  while IFS= read -r -d '' bin_script; do
+    [[ -f $bin_script && ! -L $bin_script ]] || continue
+    total=$(head -c 4096 -- "$bin_script" | wc -c)
+    nul=$(head -c 4096 -- "$bin_script" | LC_ALL=C tr -d '\0' | wc -c)
+    [[ $total == "$nul" ]] || continue  # NUL bytes: leave binaries alone
+    grep -qF -- "$venv" "$bin_script" || continue
+    sed -i "s|$venv|$final_venv|g" -- "$bin_script"
+  done < <(find "$venv/bin" -maxdepth 1 -type f -print0)
+
   local site_dir
   site_dir="$(printf '%s\n' "$venv"/lib/python3.*/site-packages)"
   [[ -d $site_dir ]] || die "no site-packages under $venv"
