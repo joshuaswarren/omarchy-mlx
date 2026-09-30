@@ -17,4 +17,16 @@ inline void require_driver_abi_major(int expected, int actual) {
   }
 }
 
+// Runtime PM acceptance for the ANE platform device. The packaged ane
+// driver manages runtime PM itself (power/control 'auto'); a dev setup
+// may pin the device 'on'. Either control value is acceptable as long
+// as the device reports 'active': the gate opens /dev/accel/accel0
+// before this check, which resumes a runtime-PM-managed device, so a
+// device that cannot power up still fails here.
+inline bool runtime_pm_acceptable(
+    const std::string& control,
+    const std::string& status) {
+  return (control == "on" || control == "auto") && status == "active";
+}
+
 } // namespace mlx::core::omarchy::ane::detail

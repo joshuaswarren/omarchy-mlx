@@ -250,6 +250,18 @@ TEST_CASE(
   CHECK(std::strcmp(abi_profile_identity_tag(abi1), "1") == 0);
   CHECK(std::strcmp(abi_profile_identity_tag(abi2), "2") == 0);
 }
+TEST_CASE("runtime PM acceptance allows packaged auto control, refuses inactive") {
+  using mlx::core::omarchy::ane::detail::runtime_pm_acceptable;
+  CHECK(runtime_pm_acceptable("on", "active"));
+  // The packaged ane driver enables runtime PM: control is 'auto' and
+  // the gate's device open resumes the device before this check.
+  CHECK(runtime_pm_acceptable("auto", "active"));
+  CHECK_FALSE(runtime_pm_acceptable("auto", "suspended"));
+  CHECK_FALSE(runtime_pm_acceptable("on", "suspended"));
+  CHECK_FALSE(runtime_pm_acceptable("idle", "active"));
+  CHECK_FALSE(runtime_pm_acceptable("", "active"));
+}
+
 TEST_CASE("driver ABI major accepts the expected ABI and rejects mismatches") {
   using mlx::core::omarchy::ane::detail::require_driver_abi_major;
   CHECK_NOTHROW(require_driver_abi_major(1, 1));

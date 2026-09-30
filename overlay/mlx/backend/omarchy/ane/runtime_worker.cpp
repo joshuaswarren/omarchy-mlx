@@ -252,14 +252,10 @@ std::string verify_hardware_eligibility(const AbiProfile& profile) {
         "ANE platform device is not bound to the ane driver (found '" +
         driver.string() + "')");
   }
-  const std::string power_control = read_value(platform / "power/control");
-  const std::string runtime_status = read_value(platform / "power/runtime_status");
-  if (power_control != "on" || runtime_status != "active") {
-    throw runtime_error(
-        "ANE runtime power must be on and active, found control='" +
-        power_control + "' status='" + runtime_status + "'");
-  }
-
+  // Open the device before reading runtime PM state: with the packaged
+  // driver the accel node uses runtime PM (control 'auto'), and opening
+  // it is what resumes a suspended device. A device that cannot resume
+  // still reports a non-active status and is refused below.
   struct stat device_status {};
   if (::stat("/dev/accel/accel0", &device_status) != 0 ||
       !S_ISCHR(device_status.st_mode) ||
@@ -268,6 +264,14 @@ std::string verify_hardware_eligibility(const AbiProfile& profile) {
   }
   const int driver_abi_major = query_driver_abi_major(profile.abi);
   require_driver_abi_major(profile.abi, driver_abi_major);
+
+  const std::string power_control = read_value(platform / "power/control");
+  const std::string runtime_status = read_value(platform / "power/runtime_status");
+  if (!runtime_pm_acceptable(power_control, runtime_status)) {
+    throw runtime_error(
+        "ANE runtime power must be on or auto control with active status, found control='" +
+        power_control + "' status='" + runtime_status + "'");
+  }
 
   std::ostringstream identity;
   identity << "host=" << system.nodename << " kernel=" << system.release
