@@ -53,13 +53,18 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint DIM = 64u;
 const float FINITE_MIN = -3.4028234663852886e38;
 
-// Scratch words per head: blocks max words + blocks sum words +
-// blocks*SIMD packed output-pair words. Shared with pass 1; keep the two
-// shaders' layouts in lockstep.
-const uint SCRATCH_STRIDE_FACTOR = 2u + SIMD;
+// Query-head width and scratch layout, matching pass 1: PAIRS dim pairs
+// per lane, so SDPA_DIM must be a multiple of 64. Scratch words per head:
+// blocks max words + blocks sum words + PAIRS*blocks*SIMD packed
+// output-pair words. Shared with pass 1; keep the two shaders' layouts in
+// lockstep.
+#ifndef SDPA_DIM
+#define SDPA_DIM 64u
+#endif
+const uint PAIRS = SDPA_DIM / 64u;
+const uint SCRATCH_STRIDE_FACTOR = 2u + SIMD * PAIRS;
 
 shared float s_outputs[SIMD * SIMD];
 
@@ -67,10 +72,16 @@ float native_exp(float x) {
   return exp(x);
 }
 
-void store_pair(uint head, uint lane, float x, float y, float denominator) {
+void store_pair(
+    uint head,
+    uint lane,
+    uint pair,
+    float x,
+    float y,
+    float denominator) {
   if (lane == 0u) {
-    uint out_base = params.output_offset + head * DIM +
-        2u * gl_SubgroupID;
+    uint out_base = params.output_offset + head * SDPA_DIM +
+        pair * 64u + 2u * gl_SubgroupID;
     output_data.values[out_base] = float16_t(x / denominator);
     output_data.values[out_base + 1u] = float16_t(y / denominator);
   }
@@ -105,22 +116,26 @@ void main() {
   // Each SIMD first folds blocks sgid+32*b for each lane's output pair,
   // preserving pass 2's loop order, then the native shared transpose and
   // SIMD reduction merge the 32 partial streams for output pair sgid.
-  float o0 = 0.0;
-  float o1 = 0.0;
-  for (uint block = sgid; block < blocks; block += SIMD) {
-    float factor = native_exp(
-        uintBitsToFloat(scratch_data.values[head_base + block]) - merged_max);
-    vec2 partial = unpackHalf2x16(
-        scratch_data.values[head_base + 2u * blocks + block * SIMD + lane]);
-    o0 = fma(factor, partial.x, o0);
-    o1 = fma(factor, partial.y, o1);
+  for (uint p = 0u; p < PAIRS; ++p) {
+    float o0 = 0.0;
+    float o1 = 0.0;
+    for (uint block = sgid; block < blocks; block += SIMD) {
+      float factor = native_exp(
+          uintBitsToFloat(scratch_data.values[head_base + block]) - merged_max);
+      vec2 partial = unpackHalf2x16(scratch_data.values[
+          head_base + 2u * blocks + (p * blocks + block) * SIMD + lane]);
+      o0 = fma(factor, partial.x, o0);
+      o1 = fma(factor, partial.y, o1);
+    }
+    s_outputs[lane * SIMD + sgid] = o0;
+    barrier();
+    float merged0 = subgroupAdd(s_outputs[sgid * SIMD + lane]);
+    barrier();
+    s_outputs[lane * SIMD + sgid] = o1;
+    barrier();
+    float merged1 = subgroupAdd(s_outputs[sgid * SIMD + lane]);
+    store_pair(head, lane, p, merged0, merged1, denominator);
+    // The next pair's write must not start before this pair's read ends.
+    barrier();
   }
-  s_outputs[lane * SIMD + sgid] = o0;
-  barrier();
-  float merged0 = subgroupAdd(s_outputs[sgid * SIMD + lane]);
-  barrier();
-  s_outputs[lane * SIMD + sgid] = o1;
-  barrier();
-  float merged1 = subgroupAdd(s_outputs[sgid * SIMD + lane]);
-  store_pair(head, lane, merged0, merged1, denominator);
 }

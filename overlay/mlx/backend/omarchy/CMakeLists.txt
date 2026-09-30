@@ -317,9 +317,24 @@ omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)
 omarchy_shader(sdpa_decode_native_f16 shaders/sdpa_decode_native.comp)
 omarchy_shader(sdpa_decode_native_bf16 shaders/sdpa_decode_native.comp -DBF16_IO=1)
-omarchy_shader(sdpa_decode_native_bf16_hd256 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=256)
+# Attn128: the composition-exact bf16 arm compiles per query width; the f16
+# arm compiles per 64-wide dim-pair count (PAIRS), so head_dim 128 has an
+# f16 twin and every multiple of 32 up to 256 has a bf16 twin.
+omarchy_shader(sdpa_decode_native_bf16_hd32 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=32)
+omarchy_shader(sdpa_decode_native_bf16_hd96 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=96)
+omarchy_shader(sdpa_decode_native_bf16_hd128 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=128)
+omarchy_shader(sdpa_decode_native_bf16_hd160 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=160)
+omarchy_shader(sdpa_decode_native_bf16_hd192 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=192)
+omarchy_shader(sdpa_decode_native_bf16_hd224 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=224)
+omarchy_shader(sdpa_decode_native_f16_hd128 shaders/sdpa_decode_native.comp -DSDPA_DIM=128)
 omarchy_shader(sdpa_decode_native_p1_f16 shaders/sdpa_decode_native_p1.comp)
 omarchy_shader(sdpa_decode_native_p2_f16 shaders/sdpa_decode_native_p2.comp)
+omarchy_shader(sdpa_decode_native_p1_f16_hd128 shaders/sdpa_decode_native_p1.comp -DSDPA_DIM=128)
+omarchy_shader(sdpa_decode_native_p2_f16_hd128 shaders/sdpa_decode_native_p2.comp -DSDPA_DIM=128)
+# Attn128: one-dispatch small-k wide-row value Partition (the mx.topk route).
+omarchy_shader(partition_smallk_f32 shaders/partition_smallk.comp)
+omarchy_shader(partition_smallk_f16 shaders/partition_smallk.comp -DF16_IO=1)
+omarchy_shader(partition_smallk_bf16 shaders/partition_smallk.comp -DBF16_IO=1)
 omarchy_shader(gated_delta_decode_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_decode_perrow_bf16 shaders/gated_delta_decode_perrow.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_decode_perrow_pf_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1)

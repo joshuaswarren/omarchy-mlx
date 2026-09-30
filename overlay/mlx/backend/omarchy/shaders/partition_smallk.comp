@@ -1,0 +1,261 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Small-k wide-row value Partition (the mx.topk route: partition(a, -k)
+// plus a tail slice). The wide-row sort path answers every k by sorting the
+// whole padded row through a pad-and-copy, a 1024-wide chunk sort and one
+// merge dispatch per bitonic stage - about ten dispatches for a 152k
+// vocabulary row. Sampling never wants that: k is tiny and only the tail k
+// values are observable (upstream topk slices them; the leading region is
+// unspecified beyond the partition property "nothing left of kth larger
+// than value[kth]").
+//
+// One workgroup per row radix-selects the k-th largest key in four 8-bit
+// passes over the row, then gathers the k candidates into shared memory and
+// bitonic-sorts them ascending. The whole answer is one dispatch.
+//
+// Exactness contract versus the sort path: finite rows return the identical
+// k values in the identical ascending order. The radix key is the standard
+// order-preserving sign-flip map of the f32 bit pattern (f16/bf16 widen
+// exactly on load and narrow round-to-nearest-even on store, so their keys
+// are exact too), which makes the following ties deterministic where the
+// comparison-based sort leaves them incidental:
+//   - NaN keys rank above +inf, so NaNs are selected first as largest; the
+//   old path's NaN placement is unspecified. NaN payload bits are not
+//   preserved (the store narrows through the f32 value).
+//   - -0.0 keys below +0.0; both zero signs are stored exactly.
+// The leading region (positions < kth) is filled with the threshold value,
+// which satisfies the partition property; it is not the sorted remainder.
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef BF16_IO
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef F16_IO
+layout(set = 0, binding = 0, std430) readonly buffer Source {
+  float16_t values[];
+} source_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  float16_t values[];
+} output_data;
+#elif defined(BF16_IO)
+layout(set = 0, binding = 0, std430) readonly buffer Source {
+  uint16_t values[];
+} source_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+#else
+layout(set = 0, binding = 0, std430) readonly buffer Source {
+  float values[];
+} source_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  float values[];
+} output_data;
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const uint WG = 256u;
+const uint NSG = WG / 32u;
+const uint kMaxTopK = 256u;
+// Pad key for unused bitonic slots: the maximal uint sorts past every real
+// key, including the NaN keys (a NaN maps to the top of the key space just
+// below all-ones), so pads can never displace a selected value. A real
+// 0x7ffffffc..0x7fffffff-payload NaN ties with it; ties store the same NaN
+// bits either way.
+const uint kSentinelKey = 0xffffffffu;
+
+#ifdef BF16_IO
+// The cast.comp conversion pair, verbatim: exact widening in, RNE out.
+float load_value(uint index) {
+  uint bits = uint(source_data.values[index]) << 16u;
+  return uintBitsToFloat(bits);
+}
+uint16_t store_bf16(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+void store_value(uint index, float value) {
+  output_data.values[index] = store_bf16(value);
+}
+#elif defined(F16_IO)
+float load_value(uint index) {
+  return float(source_data.values[index]);
+}
+void store_value(uint index, float value) {
+  output_data.values[index] = float16_t(value);
+}
+#else
+float load_value(uint index) {
+  return source_data.values[index];
+}
+void store_value(uint index, float value) {
+  output_data.values[index] = value;
+}
+#endif
+
+// Order-preserving f32 key map: negative floats flip every bit,
+// non-negative floats flip the sign bit, so uint order is float order.
+uint key_of(float value) {
+  uint bits = floatBitsToUint(value);
+  return (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
+}
+uint value_bits_of_key(uint key) {
+  return (key & 0x80000000u) != 0u ? (key ^ 0x80000000u) : ~key;
+}
+
+shared uint s_hist[NSG * 256u];
+shared uint s_hist_row[256u];
+shared uint s_prefix;
+shared uint s_rank;
+shared uint s_threshold;
+shared uint s_count;
+shared uint s_cand[kMaxTopK];
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;
+  uint row = gl_WorkGroupID.x;
+  uint n = params.matrix_k;      // row length
+  uint kth = params.matrix_m;    // the kth position Partition must place
+  uint k = params.matrix_n;      // tail size: n - kth
+  uint base = params.lhs_offset + row * n;
+  uint out_base = params.output_offset + row * n;
+
+  // Four 8-bit radix passes from the top: narrow the candidate bucket that
+  // holds the rank-th largest key until the full key is known.
+  uint prefix = 0u;
+  uint rank = k;
+  for (uint pass = 0u; pass < 4u; ++pass) {
+    uint shift = 24u - 8u * pass;
+    for (uint i = tid; i < NSG * 256u; i += WG) {
+      s_hist[i] = 0u;
+    }
+    barrier();
+    uint sg = tid / 32u;
+    for (uint i = tid; i < n; i += WG) {
+      uint key = key_of(load_value(base + i));
+      bool in_prefix = pass == 0u ||
+          ((key >> (32u - 8u * pass)) == (prefix >> (32u - 8u * pass)));
+      if (in_prefix) {
+        atomicAdd(s_hist[sg * 256u + ((key >> shift) & 0xffu)], 1u);
+      }
+    }
+    barrier();
+    if (tid < 256u) {
+      uint total = 0u;
+      for (uint sgi = 0u; sgi < NSG; ++sgi) {
+        total += s_hist[sgi * 256u + tid];
+      }
+      s_hist_row[tid] = total;
+    }
+    barrier();
+    if (tid == 0u) {
+      uint seen = 0u;
+      uint bucket = 0u;
+      for (uint b = 256u; b > 0u; --b) {
+        seen += s_hist_row[b - 1u];
+        if (seen >= rank) {
+          bucket = b - 1u;
+          break;
+        }
+      }
+      s_prefix = prefix | (bucket << shift);
+      s_rank = rank - (seen - s_hist_row[bucket]);
+    }
+    barrier();
+    prefix = s_prefix;
+    rank = s_rank;
+  }
+  s_threshold = prefix;
+
+  // Gather: keys above the threshold are candidates; the threshold itself
+  // backfills the tail. Exactly k entries result - the radix passes
+  // guarantee keys-above plus keys-equal is at least k.
+  if (tid == 0u) {
+    s_count = 0u;
+  }
+  barrier();
+  for (uint i = tid; i < n; i += WG) {
+    uint key = key_of(load_value(base + i));
+    if (key > s_threshold) {
+      uint slot = atomicAdd(s_count, 1u);
+      if (slot < k) {
+        s_cand[slot] = key;
+      }
+    }
+  }
+  barrier();
+  for (uint i = s_count + tid; i < k; i += WG) {
+    s_cand[i] = s_threshold;
+  }
+  uint kpad = 1u;
+  while (kpad < k) {
+    kpad <<= 1u;
+  }
+  barrier();
+  for (uint i = k + tid; i < kpad; i += WG) {
+    s_cand[i] = kSentinelKey;
+  }
+  barrier();
+
+  // Bitonic sort ascending over the padded candidate window; the +inf
+  // sentinels sort past the real values, so the first k slots hold the
+  // answer after the network. Comparing keys (not floats) keeps NaN
+  // candidates placed.
+  for (uint size = 2u; size <= kpad; size <<= 1u) {
+    for (uint stride = size >> 1u; stride > 0u; stride >>= 1u) {
+      for (uint i = tid; i < kpad; i += WG) {
+        uint partner = i ^ stride;
+        if (partner > i) {
+          uint a = s_cand[i];
+          uint b = s_cand[partner];
+          bool up = (i & size) == 0u;
+          if (up == (a > b)) {
+            s_cand[i] = b;
+            s_cand[partner] = a;
+          }
+        }
+      }
+      barrier();
+    }
+  }
+
+  for (uint i = tid; i < n; i += WG) {
+    store_value(
+        out_base + i,
+        uintBitsToFloat(value_bits_of_key(
+            i < kth ? s_threshold : s_cand[i - kth])));
+  }
+}

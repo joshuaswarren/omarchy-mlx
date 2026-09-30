@@ -1569,6 +1569,7 @@ void dispatch_sort_wide(
     const array& src,
     array& out,
     bool argsort,
+    int kth,
     omarchy::CommandEncoder& encoder,
     const Stream& s);
 void dispatch_sort(
@@ -1576,6 +1577,7 @@ void dispatch_sort(
     const array& input,
     array& out,
     bool argsort,
+    int kth,
     omarchy::CommandEncoder& encoder,
     const Stream& s) {
   // |s| comes from the caller's primitive-bearing output array. The
@@ -1591,7 +1593,7 @@ void dispatch_sort(
       s);
   size_t row_length = src.shape(-1);
   if (row_length > kSortMaxRowLength) {
-    dispatch_sort_wide(name, src, out, argsort, encoder, s);
+    dispatch_sort_wide(name, src, out, argsort, kth, encoder, s);
     return;
   }
   out.set_data(allocate_omarchy(out.nbytes()));
@@ -1678,10 +1680,49 @@ void dispatch_sort_wide(
     const array& src,
     array& out,
     bool argsort,
+    int kth,
     omarchy::CommandEncoder& encoder,
     const Stream& s) {
   size_t row_length = src.shape(-1);
   size_t rows = src.size() / row_length;
+  // Attn128: value Partition with a small k on long rows is a selection,
+  // not a sort. mx.topk lowers to partition(a, -k) plus a tail slice, so
+  // only the tail k values are observable (upstream leaves the rest of the
+  // partitioned row unspecified beyond the partition property); the sort
+  // path answers that with a pad-and-copy, a chunk sort and one merge
+  // dispatch per bitonic stage - about ten dispatches for a 152k row. The
+  // selection kernel does it in one. ArgPartition keeps the full sort: its
+  // index output is pinned to the sorted order, and the small rows and
+  // integer/complex dtypes keep it too. kth < 0 (callers without a kth,
+  // like ArgSort) also keeps the sort.
+  const int64_t topk =
+      kth >= 0 ? static_cast<int64_t>(row_length) - kth : -1;
+  if (!argsort && kth >= 0 && kth < static_cast<int>(row_length) &&
+      (src.dtype() == float32 || src.dtype() == float16 ||
+          src.dtype() == bfloat16) &&
+      rows >= 1 && rows <= 256 && topk >= 1 && topk <= 256) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+    omarchy::ComputeParams params;
+    params.count = checked_u32(out.size(), name, out);
+    params.matrix_m = checked_u32(static_cast<uint32_t>(kth), name, out);
+    params.matrix_n = checked_u32(static_cast<uint32_t>(topk), name, out);
+    params.matrix_k = checked_u32(row_length, name, out);
+    params.lhs_offset = checked_item_offset(src, src.size(), name, out);
+    params.output_offset = checked_item_offset(out, out.size(), name, out);
+    std::array<omarchy::ComputeBinding, 2> bindings{
+        binding(src), binding(out)};
+    omarchy::ComputeKernel kernel = select_float_kernel(
+        src.dtype(),
+        omarchy::ComputeKernel::PartitionSmallKF32,
+        omarchy::ComputeKernel::PartitionSmallKF16,
+        omarchy::ComputeKernel::PartitionSmallKBF16);
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        checked_u32(rows, name, out));
+    return;
+  }
   size_t padded = 1;
   while (padded < row_length) {
     padded <<= 1;
@@ -1916,12 +1957,13 @@ void dispatch_sort_any_axis(
     array& out,
     int axis,
     bool argsort,
+    int kth,
     omarchy::CommandEncoder& encoder) {
   // |out| carries the Sort/ArgSort/Partition primitive here, so its
   // stream is the authoritative one for every temp and sub-dispatch.
   auto& s = out.primitive().stream();
   if (axis == input.ndim() - 1) {
-    dispatch_sort(name, input, out, argsort, encoder, s);
+    dispatch_sort(name, input, out, argsort, kth, encoder, s);
     return;
   }
   AxisMoveTables tables = axis_move_tables(input, axis);
@@ -1940,7 +1982,7 @@ void dispatch_sort_any_axis(
         /* o_offset = */ 0,
         CopyType::GeneralGeneral,
         s);
-    dispatch_sort(name, moved, sorted, argsort, encoder, s);
+    dispatch_sort(name, moved, sorted, argsort, kth, encoder, s);
     copy_gpu_inplace(
         sorted,
         out,
@@ -3454,7 +3496,7 @@ void ArgPartition::eval_gpu(const std::vector<array>& inputs, array& out) {
   // [0, axis_size) so the row axis is non-empty. The full-sort redirect
   // covers any row length: the wide-row sort path sorts the row and the
   // argsort indices are the partition order.
-  dispatch_sort_any_axis("ArgPartition", input, out, axis, true, encoder);
+  dispatch_sort_any_axis("ArgPartition", input, out, axis, true, kth, encoder);
 }
 // One thread per output row sweeps the row-contiguous suffix row of
 // `src`; the uint32 index output drops the reduced axis, so `out` is
@@ -3647,7 +3689,7 @@ void ArgSort::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
   auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
   require_sort_dtype("ArgSort", input, out, true, encoder);
-  dispatch_sort_any_axis("ArgSort", input, out, state(), true, encoder);
+  dispatch_sort_any_axis("ArgSort", input, out, state(), true, -1, encoder);
 }
 // BitwiseBinary carries the upstream op enum (and/or/xor and both
 // shifts). int32 and uint32 run through the integer kernel, where `>>`
@@ -6669,7 +6711,7 @@ void Partition::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
   require_sort_dtype("Partition", input, out, false, encoder);
   dispatch_sort_any_axis(
-      "Partition", input, out, state().second, false, encoder);
+      "Partition", input, out, state().second, false, state().first, encoder);
 }
 // Power promotes base and exponent to one dtype upstream, so a float
 // dtype runs the float pow and an integer dtype runs the upstream
@@ -12317,24 +12359,54 @@ void ScaledDotProductAttention::eval_gpu(
           kDecodeSubgroupFeatures;
   // The composition-exact bf16 arm uses no subgroup operations at all - its
   // per-thread work and barriers need only the 1024-thread workgroup and the
-  // static shared the arm declares (9,472 bytes at query width 64, 10,240 at
-  // the Qwen3.8 full-attention width 256) - so it gates on those alone and
-  // engages on any device that meets them, including software drivers, where
-  // its bit-identity against the composition is testable.
-  // Perf-only shape gate: below 256 keys the arm's serial accumulation
+  // static shared the arm declares (29,952 bytes at query width 64, 30,720
+  // at the Qwen3.8 full-attention width 256, against the 32 KiB device
+  // limit) - so it gates on those alone and engages on any device that
+  // meets them, including software drivers, where its bit-identity against
+  // the composition is testable.
+  // Perf-only shape gate: below 256 keys the hd64 arm's serial accumulation
   // loses to the composition (34.1 vs 31.2 ms/token at the short leg); at
   // and above it the arm wins (34.4 vs 34.7 at 262, 39.9 vs 43.3 at 1K).
   // The gate cannot move a digest: both routes store identical words for
   // every input, so either side of the boundary the token stream is the
-  // base stream. 256 sits between the measured losing (<=61-key) and
-  // winning (>=262-key) regimes on the 16-wide tile boundary.
-  constexpr uint32_t kDecodeBf16SharedBytes =
-      (64u + 7168u + 256u) * sizeof(float);
-  constexpr uint32_t kDecodeBf16SharedBytesHd256 =
-      (256u + 7168u + 256u) * sizeof(float);
-  const uint32_t decode_bf16_shared_required = head_dim == 256
-      ? kDecodeBf16SharedBytesHd256
-      : kDecodeBf16SharedBytes;
+  // base stream.
+  // The bf16 arm's shared scales with the query width: (width + 7168-key
+  // f32 score stream + 256-lane tree) floats. Attn128 compiles the arm at
+  // every multiple of 32 up to 256 next to the qualified 64 and 256.
+  constexpr uint32_t kDecodeBf16StreamKeys = 7168u;
+  auto decode_bf16_shared_required_for = [&](uint32_t width) {
+    return (width + kDecodeBf16StreamKeys + 256u) * sizeof(float);
+  };
+  const uint32_t decode_bf16_shared_required =
+      decode_bf16_shared_required_for(static_cast<uint32_t>(head_dim));
+  // Perf-only engagement windows per bf16 query width. Bitwise identity
+  // holds for every k (both routes store identical words), so a boundary
+  // can move only the wall, never a token. Widths 64 and 256 keep their
+  // previously measured windows (comment below); the Attn128 widths carry
+  // the windows measured on the M2 Max (artifacts/Attn128 k-grid, fused
+  // vs composition one-call wall) - a width without a measured winning
+  // range stays off this table and keeps the composition.
+  struct DecodeBf16Window {
+    uint32_t width;
+    uint32_t k_min;
+    uint32_t k_max;
+  };
+  // PROVISIONAL hd128 row: {12, 7168} exists only so the measurement grid
+  // can reach both routes at every k (MLX_OMARCHY_SDPA_DECODE_NATIVE=0
+  // forces the composition side); the landed row is the measured one.
+  constexpr DecodeBf16Window kDecodeBf16Windows[] = {
+      {64, 256, 2048}, {128, 12, 7168}, {256, 12, 7168}};
+  auto decode_bf16_window = [](uint32_t width) -> const DecodeBf16Window* {
+    for (const auto& candidate : kDecodeBf16Windows) {
+      if (candidate.width == width) {
+        return &candidate;
+      }
+    }
+    return nullptr;
+  };
+  const DecodeBf16Window* decode_window =
+      decode_bf16_probe ? decode_bf16_window(static_cast<uint32_t>(head_dim))
+                        : nullptr;
   // Perf-only k window: bitwise identity holds for every k (both routes
   // store identical words), so the boundary cannot move a token - only the
   // wall. Width 64 keeps the measured 256..2048 window from the original
@@ -12362,15 +12434,70 @@ void ScaledDotProductAttention::eval_gpu(
       decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
       !output_logsumexp_ && batch == 1 && q_len == 1 &&
       (q.dtype() == float16 || q.dtype() == bfloat16) &&
-      ((head_dim == 64 && v_dim == 64) ||
-          (decode_bf16_probe && head_dim == 256 && v_dim == 256)) &&
+      ((q.dtype() == float16 &&
+           ((head_dim == 64 && v_dim == 64) ||
+               (head_dim == 128 && v_dim == 128))) ||
+          (decode_bf16_probe && head_dim % 32 == 0 && head_dim >= 32 &&
+               head_dim <= 256 && v_dim == head_dim &&
+               decode_window != nullptr))) &&
       k_len > 0 &&
       (q.dtype() != bfloat16 ||
-          (k_len >= (head_dim == 256 ? uint32_t{12} : uint32_t{256}) &&
-           k_len <=
-               (head_dim == 256 ? uint32_t{7168} : uint32_t{2048}))) &&
+          (k_len >= decode_window->k_min && k_len <= decode_window->k_max)) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
+    // f16 lanes carry SDPA_DIM/64 dim pairs; the bf16 arm's shared layout
+    // is width-driven inside the shader, so it keeps one pair here.
+    const uint32_t decode_pairs =
+        decode_bf16 ? 1u : static_cast<uint32_t>(head_dim) / 64u;
+    auto decode_kernel_name = [&]() {
+      if (decode_bf16) {
+        switch (head_dim) {
+          case 32:
+            return "SdpaDecodeNativeBF16Hd32";
+          case 96:
+            return "SdpaDecodeNativeBF16Hd96";
+          case 128:
+            return "SdpaDecodeNativeBF16Hd128";
+          case 160:
+            return "SdpaDecodeNativeBF16Hd160";
+          case 192:
+            return "SdpaDecodeNativeBF16Hd192";
+          case 224:
+            return "SdpaDecodeNativeBF16Hd224";
+          case 256:
+            return "SdpaDecodeNativeBF16Hd256";
+          default:
+            return "SdpaDecodeNativeBF16";
+        }
+      }
+      return head_dim == 128 ? "SdpaDecodeNativeF16Hd128"
+                             : "SdpaDecodeNativeF16";
+    };
+    auto one_pass_kernel = [&]() {
+      if (decode_bf16) {
+        switch (head_dim) {
+          case 32:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd32;
+          case 96:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd96;
+          case 128:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd128;
+          case 160:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd160;
+          case 192:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd192;
+          case 224:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd224;
+          case 256:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd256;
+          default:
+            return omarchy::ComputeKernel::SdpaDecodeNativeBF16;
+        }
+      }
+      return head_dim == 128
+          ? omarchy::ComputeKernel::SdpaDecodeNativeF16Hd128
+          : omarchy::ComputeKernel::SdpaDecodeNativeF16;
+    };
     out.set_data(allocate_omarchy(out.nbytes()));
     omarchy::ComputeParams params;
     params.count = checked_u32(out.size(), tag, out);
@@ -12402,10 +12529,7 @@ void ScaledDotProductAttention::eval_gpu(
           encoder.device(),
           decode_caps,
           decode_subgroup_ready,
-          decode_bf16
-              ? (head_dim == 256 ? "SdpaDecodeNativeBF16Hd256"
-                                 : "SdpaDecodeNativeBF16")
-              : "SdpaDecodeNativeF16",
+          decode_kernel_name(),
           "cooperative_matrix_fp32_8x8x8+workgroup_limits+"
           "shared_memory_limit_bytes",
           encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
@@ -12420,11 +12544,11 @@ void ScaledDotProductAttention::eval_gpu(
       // partials; pass 2 folds them with the fused kernel's pass-2 code
       // unchanged, so the pair is bit-identical to the fused two-pass.
       const uint32_t blocks = params.flags;
-      // Scratch words per head: blocks max + blocks sum + blocks*32 packed
-      // f16 output-pair words (uint32 each), matching the shaders'
-      // SCRATCH_STRIDE_FACTOR layout.
-      const uint64_t scratch_words =
-          static_cast<uint64_t>(heads) * blocks * 34u;
+      // Scratch words per head: blocks max + blocks sum +
+      // blocks*32*PAIRS packed f16 output-pair words (uint32 each),
+      // matching the shaders' SCRATCH_STRIDE_FACTOR layout.
+      const uint64_t scratch_words = static_cast<uint64_t>(heads) * blocks *
+          (2u + 32u * decode_pairs);
       array scratch(
           Shape{static_cast<int>(scratch_words)}, uint32, nullptr, {});
       scratch.set_data(allocate_omarchy(scratch.nbytes()));
@@ -12434,7 +12558,9 @@ void ScaledDotProductAttention::eval_gpu(
       omarchy::ComputeParams pass1_params = params;
       pass1_params.count = checked_u32(scratch_words, tag, out);
       encoder.dispatch_compute(
-          omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP1F16,
+          head_dim == 128
+              ? omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP1F16Hd128
+              : omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP1F16,
           pass1_bindings,
           pass1_params,
           params.matrix_m,
@@ -12442,18 +12568,16 @@ void ScaledDotProductAttention::eval_gpu(
       std::array<omarchy::ComputeBinding, 2> pass2_bindings{
           binding(scratch), binding(out)};
       encoder.dispatch_compute(
-          omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP2F16,
+          head_dim == 128
+              ? omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP2F16Hd128
+              : omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP2F16,
           pass2_bindings,
           params,
           params.matrix_m);
       return;
     }
     encoder.dispatch_compute(
-        decode_bf16
-            ? (head_dim == 256
-                  ? omarchy::ComputeKernel::SdpaDecodeNativeBF16Hd256
-                  : omarchy::ComputeKernel::SdpaDecodeNativeBF16)
-            : omarchy::ComputeKernel::SdpaDecodeNativeF16,
+        one_pass_kernel(),
         bindings,
         params,
         params.matrix_m);

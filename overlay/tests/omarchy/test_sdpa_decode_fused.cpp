@@ -435,3 +435,219 @@ TEST_CASE("fused bf16 decode is bit-identical to the f32 composition") {
       composition_reference_len(long_cache, 2100, stream),
       stream);
 }
+
+namespace {
+
+// Qwen3-TTS talker decode shape: head_dim 128, GQA 16 query heads over 8
+// kv heads, strided capacity-backed KV views. The hd128 gap this file's
+// route closes (SpeechOutputFast profile: every TTS and Qwen3.x chat
+// decode attention fell back to the ~10-dispatch composition).
+constexpr int kHd = 128;
+constexpr int kHdHeads = 16;
+constexpr int kHdKvHeads = 8;
+constexpr float kHdScale = 1.0f / std::sqrt(float(kHd));
+
+struct HdCacheInputs {
+  array q;
+  array k;
+  array v;
+};
+
+array hd_pattern_values(int count, uint32_t seed) {
+  std::vector<float> values;
+  values.reserve(count);
+  uint32_t state = seed;
+  for (int index = 0; index < count; ++index) {
+    state = state * 1664525u + 1013904223u;
+    values.push_back(
+        static_cast<float>(static_cast<double>(state % 20000u) / 10000.0) -
+        1.0f);
+  }
+  return array(values.begin(), Shape{count}, float32);
+}
+
+HdCacheInputs make_hd_cache(Dtype dtype, int keys, int capacity, Stream stream) {
+  array q = astype(
+      hd_pattern_values(kHdHeads * kHd, 11),
+      dtype,
+      stream);
+  q = reshape(q, Shape{1, kHdHeads, 1, kHd}, stream);
+  array k_cache = astype(
+      hd_pattern_values(kHdKvHeads * capacity * kHd, 22), dtype, stream);
+  k_cache = reshape(k_cache, Shape{1, kHdKvHeads, capacity, kHd}, stream);
+  array v_cache = astype(
+      hd_pattern_values(kHdKvHeads * capacity * kHd, 33), dtype, stream);
+  v_cache = reshape(v_cache, Shape{1, kHdKvHeads, capacity, kHd}, stream);
+  array k = slice(
+      k_cache, {0, 0, 0, 0}, {1, kHdKvHeads, keys, kHd}, stream);
+  array v = slice(
+      v_cache, {0, 0, 0, 0}, {1, kHdKvHeads, keys, kHd}, stream);
+  q.eval();
+  k.eval();
+  v.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  return HdCacheInputs{std::move(q), std::move(k), std::move(v)};
+}
+
+array hd_sdpa(const HdCacheInputs& in, Stream stream) {
+  return fast::scaled_dot_product_attention(
+      in.q, in.k, in.v, kHdScale, "", {}, std::nullopt, false, stream);
+}
+
+// The f32-score composition at head_dim 128, narrowed like the real route.
+array hd_composition(const HdCacheInputs& in, int keys, Stream stream) {
+  array q32 = multiply(astype(in.q, float32, stream), array(kHdScale), stream);
+  array k32 = astype(in.k, float32, stream);
+  array v32 = astype(in.v, float32, stream);
+  array qs = reshape(
+      q32, Shape{1, kHdKvHeads, kHdHeads / kHdKvHeads, 1, kHd}, stream);
+  array kt = swapaxes(
+      reshape(k32, Shape{1, kHdKvHeads, 1, keys, kHd}, stream), -1, -2,
+      stream);
+  array vs = reshape(v32, Shape{1, kHdKvHeads, 1, keys, kHd}, stream);
+  array scores = matmul(qs, kt, stream);
+  array probs = softmax(scores, std::vector<int>{-1}, false, stream);
+  array result = matmul(probs, vs, stream);
+  return astype(
+      reshape(result, Shape{1, kHdHeads, 1, kHd}, stream),
+      in.q.dtype(),
+      stream);
+}
+
+void require_hd_bit_identical(
+    const array& got,
+    const array& want,
+    Stream stream) {
+  auto got_bits = flat(got, stream);
+  auto want_bits = flat(want, stream);
+  REQUIRE_EQ(got_bits.size(), want_bits.size());
+  for (size_t index = 0; index < want_bits.size(); ++index) {
+    uint32_t a;
+    uint32_t b;
+    std::memcpy(&a, &got_bits[index], 4);
+    std::memcpy(&b, &want_bits[index], 4);
+    REQUIRE_MESSAGE(
+        a == b,
+        "bit mismatch at ",
+        index,
+        ": got ",
+        got_bits[index],
+        " want ",
+        want_bits[index]);
+  }
+}
+
+bool hd_route_ready(Stream stream) {
+  HdCacheInputs probe = make_hd_cache(bfloat16, 93, 128, stream);
+  return dispatches_for([&] { return hd_sdpa(probe, stream); }, stream) == 1;
+}
+
+} // namespace
+
+// Keep the engaged/refused key boundaries in sync with kDecodeBf16Windows
+// in overlay/mlx/backend/omarchy/primitives.cpp: {64, 256, 2048},
+// {128, 12, 7168}, {256, 12, 7168} (hd128 row measured on the M2 Max,
+// artifacts/Attn128). Bitwise identity holds at every k either way.
+TEST_CASE("fused hd128 bf16 decode is bit-identical to the composition") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  bool fused_available = hd_route_ready(stream);
+  if (!fused_available) {
+    printf("Skipping hd128 fused-route assertions: route refuses on this "
+           "device (composition agreement still exercised)\n");
+  }
+  for (int keys : {1, 5, 12, 34, 93, 263, 512, 2100}) {
+    CAPTURE(keys);
+    HdCacheInputs in = make_hd_cache(bfloat16, keys, keys < 512 ? 512 : keys, stream);
+    if (fused_available) {
+      uint64_t dispatches =
+          dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+      if (keys >= 12) {
+        CHECK_EQ(dispatches, 1);
+      } else {
+        CHECK(dispatches > 1);
+      }
+    }
+    require_hd_bit_identical(hd_sdpa(in, stream), hd_composition(in, keys, stream), stream);
+  }
+
+  // Past the 7168-key shared-memory stream bound the hd128 route must
+  // refuse and the composition answers - identical words either way.
+  HdCacheInputs long_cache = make_hd_cache(bfloat16, 7200, 7200, stream);
+  if (fused_available) {
+    uint64_t dispatches =
+        dispatches_for([&] { return hd_sdpa(long_cache, stream); }, stream);
+    CHECK(dispatches > 1);
+  }
+  require_hd_bit_identical(
+      hd_sdpa(long_cache, stream), hd_composition(long_cache, 7200, stream), stream);
+}
+
+TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  HdCacheInputs in = make_hd_cache(float16, 263, 320, stream);
+  uint64_t dispatches = dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+  CHECK_EQ(dispatches, 1);
+  require_close(
+      flat(hd_sdpa(in, stream), stream),
+      flat(hd_composition(in, 263, stream), stream),
+      0.01,
+      "fused hd128 f16 decode vs f32-score composition");
+
+  // Past the one-pass crossover the native-shape two-pass pair answers:
+  // two dispatches, same composition agreement.
+  HdCacheInputs long_in = make_hd_cache(float16, 1100, 1100, stream);
+  uint64_t long_dispatches =
+      dispatches_for([&] { return hd_sdpa(long_in, stream); }, stream);
+  CHECK_EQ(long_dispatches, 2);
+  require_close(
+      flat(hd_sdpa(long_in, stream), stream),
+      flat(hd_composition(long_in, 1100, stream), stream),
+      0.01,
+      "fused hd128 f16 two-pass vs f32-score composition");
+}
+
+TEST_CASE("hd128 decode shapes without a compiled width keep the composition") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // head_dim 100 is no multiple of 32: no compiled blob, the gate refuses,
+  // and the composition answers within tolerance.
+  auto q_values = pattern(kHdHeads * 100, 11);
+  array q = astype(
+      array(q_values.begin(), Shape{1, kHdHeads, 1, 100}, float32),
+      bfloat16,
+      stream);
+  array k_cache = astype(
+      array(pattern(kHdKvHeads * 320 * 100, 22).begin(),
+            Shape{1, kHdKvHeads, 320, 100},
+            float32),
+      bfloat16,
+      stream);
+  array v_cache = astype(
+      array(pattern(kHdKvHeads * 320 * 100, 33).begin(),
+            Shape{1, kHdKvHeads, 320, 100},
+            float32),
+      bfloat16,
+      stream);
+  array k = slice(k_cache, {0, 0, 0, 0}, {1, kHdKvHeads, 93, 100}, stream);
+  array v = slice(v_cache, {0, 0, 0, 0}, {1, kHdKvHeads, 93, 100}, stream);
+  q.eval();
+  k.eval();
+  v.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  HdCacheInputs in{std::move(q), std::move(k), std::move(v)};
+  uint64_t dispatches = dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+  CHECK(dispatches > 1);
+  require_close(
+      flat(hd_sdpa(in, stream), stream),
+      flat(hd_composition(in, 93, stream), stream),
+      0.01,
+      "head_dim 100 falls through to the composition");
+}

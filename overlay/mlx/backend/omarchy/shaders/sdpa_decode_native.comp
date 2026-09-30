@@ -86,18 +86,22 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint DIM = 64u;
 const float FINITE_MIN = -3.4028234663852886e38;
 
-// Query-head width of the composition-exact bf16 arm. The default 64 keeps
-// the original blob; -DSDPA_DIM=256 compiles the Qwen3.8 full-attention
-// twin. Both widths run the identical f32 score-composition sequence
+// Query-head width. The default 64 keeps the original blobs; -DSDPA_DIM=N
+// compiles the wider twins. In the bf16 arm N is any multiple of 32 up to
+// 256 - every width runs the identical f32 score-composition sequence
 // (ascending-d dot, 256-lane softmax, ascending-key 16-wide output tiles),
-// so the route is bit-identical to the composed path it replaces at either
-// width; only the per-dot length and the output thread count scale.
+// so the route is bit-identical to the composed path it replaces at every
+// width; only the per-dot length and the output thread count scale. In the
+// f16 arm each lane covers SDPA_DIM/64 consecutive dim pairs (the 64-wide
+// simdgroup mapping applied PAIRS times), so N must be a multiple of 64;
+// the native 32-interleaved-stream order and its merge are unchanged per
+// pair.
 #ifndef SDPA_DIM
 #define SDPA_DIM 64u
 #endif
+const uint PAIRS = SDPA_DIM / 64u;
 
 #ifndef BF16_IO
 shared float s_outputs[SIMD * SIMD];
@@ -137,10 +141,16 @@ uint16_t bf16_store(float value) {
 #define LD16(x) float(x)
 #endif
 
-void store_pair(uint head, uint lane, float x, float y, float denominator) {
+void store_pair(
+    uint head,
+    uint lane,
+    uint pair,
+    float x,
+    float y,
+    float denominator) {
   if (lane == 0u) {
-    uint out_base = params.output_offset + head * DIM +
-        2u * gl_SubgroupID;
+    uint out_base = params.output_offset + head * SDPA_DIM +
+        pair * 64u + 2u * gl_SubgroupID;
 #ifdef BF16_IO
     output_data.values[out_base] = bf16_store(x / denominator);
     output_data.values[out_base + 1u] = bf16_store(y / denominator);
@@ -297,25 +307,42 @@ void main() {
   uint kv_head = head / repeats;
   uint q_base = params.lhs_offset + head * params.shape[0];
   uint q_dim = 2u * lane;
-  float q0 = params.alpha *
-      LD16(query_data.values[q_base + q_dim * params.shape[3]]);
-  float q1 = params.alpha *
-      LD16(query_data.values[q_base + (q_dim + 1u) * params.shape[3]]);
+  float q0[PAIRS];
+  float q1[PAIRS];
+  for (uint p = 0u; p < PAIRS; ++p) {
+    q0[p] = params.alpha *
+        LD16(query_data.values[q_base + (p * 64u + q_dim) * params.shape[3]]);
+    q1[p] = params.alpha * LD16(
+        query_data.values[q_base + (p * 64u + q_dim + 1u) * params.shape[3]]);
+  }
 
   // Native sdpa_vector: each SIMD owns keys sgid, sgid+32, ... and keeps an
-  // independent online-softmax state before the 32 states are merged.
+  // independent online-softmax state before the 32 states are merged. The
+  // score dot runs ascending-d across the lane's dim pairs, so PAIRS=1 is
+  // the original two-fma sequence verbatim.
   float max_score = FINITE_MIN;
   float sum_exp_score = 0.0;
-  float o0 = 0.0;
-  float o1 = 0.0;
+  float o0[PAIRS];
+  float o1[PAIRS];
+  for (uint p = 0u; p < PAIRS; ++p) {
+    o0[p] = 0.0;
+    o1[p] = 0.0;
+  }
   for (uint key = sgid; key < params.matrix_k; key += SIMD) {
     uint k_base = params.rhs_offset + kv_head * params.shape[1] +
         key * params.shape[2] + q_dim * params.in_strides[0];
-    float score = fma(q0, LD16(key_data.values[k_base]), 0.0);
-    score = fma(
-        q1,
-        LD16(key_data.values[k_base + params.in_strides[0]]),
-        score);
+    float score = 0.0;
+    for (uint p = 0u; p < PAIRS; ++p) {
+      score = fma(
+          q0[p],
+          LD16(key_data.values[k_base + p * 64u * params.in_strides[0]]),
+          score);
+      score = fma(
+          q1[p],
+          LD16(key_data.values[
+              k_base + (p * 64u + 1u) * params.in_strides[0]]),
+          score);
+    }
     score = subgroupAdd(score);
     float new_max = max(max_score, score);
     float factor = native_exp(max_score - new_max);
@@ -324,15 +351,18 @@ void main() {
     sum_exp_score = fma(sum_exp_score, factor, exp_score);
     uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
         key * params.in_strides[2] + q_dim * params.in_strides[3];
-    o0 = fma(
-        o0,
-        factor,
-        exp_score * LD16(value_data.values[v_base]));
-    o1 = fma(
-        o1,
-        factor,
-        exp_score *
-            LD16(value_data.values[v_base + params.in_strides[3]]));
+    for (uint p = 0u; p < PAIRS; ++p) {
+      o0[p] = fma(
+          o0[p],
+          factor,
+          exp_score * LD16(value_data.values[
+              v_base + p * 64u * params.in_strides[3]]));
+      o1[p] = fma(
+          o1[p],
+          factor,
+          exp_score * LD16(value_data.values[
+              v_base + (p * 64u + 1u) * params.in_strides[3]]));
+    }
   }
 
   if (lane == 0u) {
@@ -345,13 +375,17 @@ void main() {
   float factor = native_exp(max_score - merged_max);
   float denominator = subgroupAdd(s_sum[lane] * factor);
 
-  s_outputs[lane * SIMD + sgid] = o0;
-  barrier();
-  float merged0 = subgroupAdd(s_outputs[sgid * SIMD + lane] * factor);
-  barrier();
-  s_outputs[lane * SIMD + sgid] = o1;
-  barrier();
-  float merged1 = subgroupAdd(s_outputs[sgid * SIMD + lane] * factor);
-  store_pair(head, lane, merged0, merged1, denominator);
+  for (uint p = 0u; p < PAIRS; ++p) {
+    s_outputs[lane * SIMD + sgid] = o0[p];
+    barrier();
+    float merged0 = subgroupAdd(s_outputs[sgid * SIMD + lane] * factor);
+    barrier();
+    s_outputs[lane * SIMD + sgid] = o1[p];
+    barrier();
+    float merged1 = subgroupAdd(s_outputs[sgid * SIMD + lane] * factor);
+    store_pair(head, lane, p, merged0, merged1, denominator);
+    // The next pair's write must not start before this pair's read ends.
+    barrier();
+  }
 #endif
 }

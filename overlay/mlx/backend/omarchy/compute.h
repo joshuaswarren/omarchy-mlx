@@ -729,6 +729,29 @@ enum class ComputeKernel : uint16_t {
   // dispatches are deleted. bf16 + subgroup only. Append-only profile
   // id.
   QmmVecQ4MultiOutgateBF16,
+  // Attn128 decode SDPA widths: the composition-exact bf16 arm at every
+  // multiple of 32 up to 256 (same shader source, -DSDPA_DIM=N; every f32
+  // op and its order matches the composed path, so each width is
+  // bit-identical to the composition it replaces), and the f16 arm at
+  // head_dim 128 (two dim pairs per lane) with its native-shape two-pass
+  // pair. Append-only profile ids.
+  SdpaDecodeNativeBF16Hd32,
+  SdpaDecodeNativeBF16Hd96,
+  SdpaDecodeNativeBF16Hd128,
+  SdpaDecodeNativeBF16Hd160,
+  SdpaDecodeNativeBF16Hd192,
+  SdpaDecodeNativeBF16Hd224,
+  SdpaDecodeNativeF16Hd128,
+  SdpaDecodeNativeTwoPassP1F16Hd128,
+  SdpaDecodeNativeTwoPassP2F16Hd128,
+  // Attn128: one-workgroup-per-row small-k wide-row value Partition
+  // (shaders/partition_smallk.comp) - radix-selects the kth largest key and
+  // bitonic-sorts the k candidates in one dispatch, tail-slice bit-exact to
+  // the wide-row sort path it replaces for finite rows. Append-only
+  // profile ids.
+  PartitionSmallKF32,
+  PartitionSmallKF16,
+  PartitionSmallKBF16,
   Count,
 };
 

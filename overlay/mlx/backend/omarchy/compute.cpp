@@ -280,8 +280,20 @@
 #include "sdpa_decode_native_f16.h"
 #include "sdpa_decode_native_bf16.h"
 #include "sdpa_decode_native_bf16_hd256.h"
+#include "sdpa_decode_native_bf16_hd32.h"
+#include "sdpa_decode_native_bf16_hd96.h"
+#include "sdpa_decode_native_bf16_hd128.h"
+#include "sdpa_decode_native_bf16_hd160.h"
+#include "sdpa_decode_native_bf16_hd192.h"
+#include "sdpa_decode_native_bf16_hd224.h"
+#include "sdpa_decode_native_f16_hd128.h"
 #include "sdpa_decode_native_p1_f16.h"
 #include "sdpa_decode_native_p2_f16.h"
+#include "sdpa_decode_native_p1_f16_hd128.h"
+#include "sdpa_decode_native_p2_f16_hd128.h"
+#include "partition_smallk_f32.h"
+#include "partition_smallk_f16.h"
+#include "partition_smallk_bf16.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
@@ -1381,6 +1393,32 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_native_p1_f16, sdpa_decode_native_p1_f16_size};
     case ComputeKernel::SdpaDecodeNativeTwoPassP2F16:
       return {sdpa_decode_native_p2_f16, sdpa_decode_native_p2_f16_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd32:
+      return {sdpa_decode_native_bf16_hd32, sdpa_decode_native_bf16_hd32_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd96:
+      return {sdpa_decode_native_bf16_hd96, sdpa_decode_native_bf16_hd96_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd128:
+      return {sdpa_decode_native_bf16_hd128, sdpa_decode_native_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd160:
+      return {sdpa_decode_native_bf16_hd160, sdpa_decode_native_bf16_hd160_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd192:
+      return {sdpa_decode_native_bf16_hd192, sdpa_decode_native_bf16_hd192_size};
+    case ComputeKernel::SdpaDecodeNativeBF16Hd224:
+      return {sdpa_decode_native_bf16_hd224, sdpa_decode_native_bf16_hd224_size};
+    case ComputeKernel::SdpaDecodeNativeF16Hd128:
+      return {sdpa_decode_native_f16_hd128, sdpa_decode_native_f16_hd128_size};
+    case ComputeKernel::SdpaDecodeNativeTwoPassP1F16Hd128:
+      return {
+          sdpa_decode_native_p1_f16_hd128, sdpa_decode_native_p1_f16_hd128_size};
+    case ComputeKernel::SdpaDecodeNativeTwoPassP2F16Hd128:
+      return {
+          sdpa_decode_native_p2_f16_hd128, sdpa_decode_native_p2_f16_hd128_size};
+    case ComputeKernel::PartitionSmallKF32:
+      return {partition_smallk_f32, partition_smallk_f32_size};
+    case ComputeKernel::PartitionSmallKF16:
+      return {partition_smallk_f16, partition_smallk_f16_size};
+    case ComputeKernel::PartitionSmallKBF16:
+      return {partition_smallk_bf16, partition_smallk_bf16_size};
     case ComputeKernel::QuantizeFpF16:
       return {quantize_fp_f16, quantize_fp_f16_size};
     case ComputeKernel::QuantizeFpBF16:

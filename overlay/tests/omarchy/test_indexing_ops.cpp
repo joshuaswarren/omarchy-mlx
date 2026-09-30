@@ -22,7 +22,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <functional>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -30,6 +33,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/trace.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 
@@ -1210,6 +1214,345 @@ TEST_CASE("argpartition wide rows partition exactly") {
     }
     for (int i = 1001; i < 2000; ++i) {
       CHECK(row[indices[i]] >= pivot);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Attn128: small-k wide-row value Partition (the mx.topk route)
+// ---------------------------------------------------------------------------
+//
+// partition(a, kth, -1) on long float rows with a small tail k routes to a
+// one-dispatch radix selection instead of the pad-chunk-merge sort. The
+// tail k values must be bit-identical to the sort path's for finite rows;
+// ties (NaN, the two zeros) resolve by the order-preserving sign-flip key
+// map the kernel documents, which the references below replicate exactly.
+
+namespace {
+
+uint32_t host_key(uint32_t bits) {
+  return (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
+}
+uint32_t host_unkey(uint32_t key) {
+  return (key & 0x80000000u) != 0u ? (key ^ 0x80000000u) : ~key;
+}
+uint32_t float_bits(float value) {
+  uint32_t bits;
+  std::memcpy(&bits, &value, 4);
+  return bits;
+}
+float bits_float(uint32_t bits) {
+  float value;
+  std::memcpy(&value, &bits, 4);
+  return value;
+}
+// Exact f16 widening; bf16 is a 16-bit left shift.
+float f16_bits_to_float(uint16_t half) {
+  uint32_t sign = static_cast<uint32_t>(half & 0x8000u) << 16;
+  uint32_t exp = (half >> 10) & 0x1fu;
+  uint32_t man = half & 0x3ffu;
+  uint32_t bits;
+  if (exp == 0u && man == 0u) {
+    bits = sign;
+  } else if (exp == 0u) {
+    int e = -1;
+    uint32_t m = man;
+    do {
+      ++e;
+      m <<= 1;
+    } while ((m & 0x400u) == 0u);
+    bits = sign | ((127u - 15u - static_cast<uint32_t>(e)) << 23) |
+        ((m & 0x3ffu) << 13);
+  } else if (exp == 31u) {
+    bits = sign | 0x7f800000u | (man << 13);
+  } else {
+    bits = sign | ((exp - 15u + 127u) << 23) | (man << 13);
+  }
+  return bits_float(bits);
+}
+
+uint64_t smallk_dispatches(
+    const std::function<array()>& step,
+    const Stream& stream) {
+  array out = step();
+  out.eval();
+  sync_gpu(stream);
+  uint64_t before = omarchy::trace::counters().vk_compute_dispatches.load();
+  out = step();
+  out.eval();
+  sync_gpu(stream);
+  return omarchy::trace::counters().vk_compute_dispatches.load() - before;
+}
+
+// The documented tie rule, on the host: ascending key order.
+std::vector<uint32_t> host_tail_bits(
+    const std::vector<uint32_t>& widened_bits,
+    int k) {
+  std::vector<uint32_t> keys(widened_bits.size());
+  for (size_t i = 0; i < widened_bits.size(); ++i) {
+    keys[i] = host_key(widened_bits[i]);
+  }
+  std::vector<size_t> order(widened_bits.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(
+      order.begin(), order.end(), [&](size_t a, size_t b) {
+        return keys[a] < keys[b];
+      });
+  std::vector<uint32_t> tail;
+  tail.reserve(k);
+  for (int i = 0; i < k; ++i) {
+    tail.push_back(widened_bits[order[order.size() - static_cast<size_t>(k) + i]]);
+  }
+  // tail is in ascending key order; the route stores exactly these bits.
+  return tail;
+}
+
+void require_tail_bits(
+    const array& out,
+    int kth,
+    const std::vector<uint32_t>& expected_tail_bits,
+    const Stream& stream,
+    const char* what) {
+  array dense = contiguous(out);
+  dense.eval();
+  sync_gpu(stream);
+  const uint32_t* words = dense.data<uint32_t>();
+  for (int i = 0; i < kth; ++i) {
+    // Leading region: the threshold fill, always <= the first tail value.
+    CHECK_MESSAGE(
+        host_key(words[i]) <= host_key(words[kth]),
+        what,
+        " leading slot ",
+        i,
+        " exceeds the threshold");
+  }
+  for (size_t i = 0; i < expected_tail_bits.size(); ++i) {
+    CHECK_MESSAGE(
+        words[kth + i] == expected_tail_bits[i],
+        what,
+        " tail slot ",
+        i,
+        ": got ",
+        words[kth + i],
+        " want ",
+        expected_tail_bits[i]);
+  }
+}
+
+std::vector<float> smallk_pattern(size_t count, uint32_t seed) {
+  std::vector<float> values;
+  values.reserve(count);
+  uint32_t state = seed;
+  for (size_t index = 0; index < count; ++index) {
+    state = state * 1664525u + 1013904223u;
+    values.push_back(
+        static_cast<float>(static_cast<double>(state % 20000u) / 10000.0) -
+        1.0f);
+  }
+  return values;
+}
+
+} // namespace
+
+TEST_CASE("wide-row small-k partition selects the exact tail in one dispatch") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int n = 4096;
+  auto row = smallk_pattern(n, 101);
+  for (int k : {1, 50, 256}) {
+    CAPTURE(k);
+    array a = array(row.begin(), Shape{1, n}, float32);
+    int kth = n - k;
+    uint64_t dispatches = smallk_dispatches(
+        [&] { return partition(a, kth, -1, stream); }, stream);
+    CHECK_EQ(dispatches, 1);
+    auto widened = std::vector<uint32_t>(n);
+    for (int i = 0; i < n; ++i) {
+      widened[i] = float_bits(row[i]);
+    }
+    require_tail_bits(
+        partition(a, kth, -1, stream), kth, host_tail_bits(widened, k), stream,
+        "f32 tail");
+  }
+}
+
+TEST_CASE("wide-row small-k partition covers rows, ties, and 16-bit dtypes") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int n = 2048;
+  const int k = 5;
+  const int kth = n - k;
+
+  // Three rows, f32, with heavy duplicates and the k boundary inside a tie
+  // run, plus infinities.
+  std::vector<float> rows;
+  for (int r = 0; r < 3; ++r) {
+    auto row = smallk_pattern(n, 202 + r);
+    for (int i = 0; i < k + 3; ++i) {
+      row[i] = 7.5f; // duplicate values straddling the boundary
+    }
+    row[10] = std::numeric_limits<float>::infinity();
+    rows.insert(rows.end(), row.begin(), row.end());
+  }
+  array a = array(rows.begin(), Shape{3, n}, float32);
+  uint64_t dispatches = smallk_dispatches(
+      [&] { return partition(a, kth, -1, stream); }, stream);
+  CHECK_EQ(dispatches, 1);
+  std::vector<uint32_t> expected;
+  for (int r = 0; r < 3; ++r) {
+    std::vector<uint32_t> widened(rows.begin() + r * n, rows.begin() + (r + 1) * n);
+    auto tail = host_tail_bits(widened, k);
+    expected.insert(expected.end(), tail.begin(), tail.end());
+  }
+  {
+    array dense = contiguous(partition(a, kth, -1, stream));
+    dense.eval();
+    sync_gpu(stream);
+    const uint32_t* words = dense.data<uint32_t>();
+    for (int r = 0; r < 3; ++r) {
+      for (int i = 0; i < kth; ++i) {
+        CHECK(host_key(words[r * n + i]) <= host_key(words[r * n + kth]));
+      }
+      for (int i = 0; i < k; ++i) {
+        CHECK_EQ(words[r * n + kth + i], expected[r * k + i]);
+      }
+    }
+  }
+
+  // bf16 rows built at the bit level (f16 shares the path through F16_IO).
+  std::vector<uint16_t> bf16_bits;
+  std::vector<std::vector<uint32_t>> widened_rows;
+  for (int r = 0; r < 2; ++r) {
+    auto row = smallk_pattern(n, 303 + r);
+    std::vector<uint32_t> widened(n);
+    for (int i = 0; i < n; ++i) {
+      uint16_t bits = static_cast<uint16_t>(float_bits(row[i]) >> 16);
+      bf16_bits.push_back(bits);
+      widened[i] = static_cast<uint32_t>(bits) << 16;
+    }
+    widened_rows.push_back(std::move(widened));
+  }
+  array b = array(bf16_bits.data(), Shape{2, n}, bfloat16);
+  uint64_t bf16_dispatches = smallk_dispatches(
+      [&] { return partition(b, kth, -1, stream); }, stream);
+  CHECK_EQ(bf16_dispatches, 1);
+  {
+    array dense = contiguous(partition(b, kth, -1, stream));
+    dense.eval();
+    sync_gpu(stream);
+    const uint16_t* words = dense.data<uint16_t>();
+    for (int r = 0; r < 2; ++r) {
+      auto tail = host_tail_bits(widened_rows[r], k);
+      for (int i = 0; i < k; ++i) {
+        CHECK_EQ(words[r * n + kth + i], static_cast<uint16_t>(tail[i] >> 16));
+      }
+    }
+  }
+}
+
+TEST_CASE("wide-row small-k partition places NaNs and zero signs by the key map") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int n = 2048;
+  const int k = 6;
+  const int kth = n - k;
+  auto row = smallk_pattern(n, 404);
+  row[0] = std::numeric_limits<float>::quiet_NaN();
+  row[1] = -0.0f;
+  row[2] = 0.0f;
+  row[3] = std::numeric_limits<float>::infinity();
+  array a = array(row.begin(), Shape{1, n}, float32);
+  uint64_t dispatches = smallk_dispatches(
+      [&] { return partition(a, kth, -1, stream); }, stream);
+  CHECK_EQ(dispatches, 1);
+  std::vector<uint32_t> widened(n);
+  for (int i = 0; i < n; ++i) {
+    widened[i] = float_bits(row[i]);
+  }
+  // NaN keys rank above +inf, the two zeros separate (-0.0 below +0.0);
+  // the tail stores the selected values' exact bits.
+  require_tail_bits(
+      partition(a, kth, -1, stream), kth, host_tail_bits(widened, k), stream,
+      "NaN tail");
+}
+
+TEST_CASE("wide-row shapes outside the small-k selection keep the full sort") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int n = 2048;
+  auto row = smallk_pattern(n, 505);
+
+  // kth = 0 asks for the whole row (k = n > 256): the sort path answers and
+  // sorts the row exactly.
+  {
+    array a = array(row.begin(), Shape{1, n}, float32);
+    uint64_t dispatches = smallk_dispatches(
+        [&] { return partition(a, 0, -1, stream); }, stream);
+    CHECK(dispatches > 1);
+    array dense = contiguous(partition(a, 0, -1, stream));
+    dense.eval();
+    sync_gpu(stream);
+    const uint32_t* words = dense.data<uint32_t>();
+    auto sorted = row;
+    std::sort(sorted.begin(), sorted.end());
+    for (int i = 0; i < n; ++i) {
+      CHECK_EQ(words[i], float_bits(sorted[i]));
+    }
+  }
+
+  // More than 256 rows also keeps the sort path, with its exact output.
+  {
+    std::vector<float> grid;
+    for (int r = 0; r < 257; ++r) {
+      auto row_r = smallk_pattern(n, 606 + r);
+      grid.insert(grid.end(), row_r.begin(), row_r.end());
+    }
+    array a = array(grid.begin(), Shape{257, n}, float32);
+    uint64_t dispatches = smallk_dispatches(
+        [&] { return partition(a, n - 4, -1, stream); }, stream);
+    CHECK(dispatches > 1);
+    array dense = contiguous(partition(a, n - 4, -1, stream));
+    dense.eval();
+    sync_gpu(stream);
+    const uint32_t* words = dense.data<uint32_t>();
+    for (int r = 0; r < 257; ++r) {
+      auto row_r = smallk_pattern(n, 606 + r);
+      auto sorted = row_r;
+      std::sort(sorted.begin(), sorted.end());
+      for (int i = 0; i < 4; ++i) {
+        CHECK_EQ(
+            words[r * n + n - 4 + i], float_bits(sorted[n - 4 + i]));
+      }
+    }
+  }
+
+  // Integer rows keep the sort path too (the selection route is float
+  // only), with the exact sorted row.
+  {
+    std::vector<int32_t> irow(n);
+    for (int i = 0; i < n; ++i) {
+      irow[i] = static_cast<int32_t>((i * 2654435761u) % 1000u) - 500;
+    }
+    array a = array(irow.begin(), Shape{1, n}, int32);
+    uint64_t dispatches = smallk_dispatches(
+        [&] { return partition(a, n - 8, -1, stream); }, stream);
+    CHECK(dispatches > 1);
+    array dense = contiguous(partition(a, n - 8, -1, stream));
+    dense.eval();
+    sync_gpu(stream);
+    const int32_t* words = dense.data<int32_t>();
+    auto sorted = irow;
+    std::sort(sorted.begin(), sorted.end());
+    for (int i = 0; i < 8; ++i) {
+      CHECK_EQ(words[n - 8 + i], sorted[n - 8 + i]);
     }
   }
 }

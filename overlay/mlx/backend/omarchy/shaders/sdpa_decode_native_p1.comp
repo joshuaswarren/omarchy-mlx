@@ -70,10 +70,15 @@ layout(push_constant) uniform Params {
 const uint SIMD = 32u;
 const float FINITE_MIN = -3.4028234663852886e38;
 
-// Scratch words per head: blocks max words + blocks sum words +
-// blocks*SIMD packed output-pair words. Shared with pass 2; keep the two
-// shaders' layouts in lockstep.
-const uint SCRATCH_STRIDE_FACTOR = 2u + SIMD;
+// Query-head width, matching the fused kernel: PAIRS dim pairs per lane,
+// so SDPA_DIM must be a multiple of 64. Scratch words per head: blocks max
+// words + blocks sum words + PAIRS*blocks*SIMD packed output-pair words.
+// Shared with pass 2; keep the two shaders' layouts in lockstep.
+#ifndef SDPA_DIM
+#define SDPA_DIM 64u
+#endif
+const uint PAIRS = SDPA_DIM / 64u;
+const uint SCRATCH_STRIDE_FACTOR = 2u + SIMD * PAIRS;
 
 #define LD16(x) float(x)
 
@@ -90,24 +95,39 @@ void main() {
   uint kv_head = head / repeats;
   uint q_base = params.lhs_offset + head * params.shape[0];
   uint q_dim = 2u * lane;
-  float q0 = params.alpha *
-      LD16(query_data.values[q_base + q_dim * params.shape[3]]);
-  float q1 = params.alpha *
-      LD16(query_data.values[q_base + (q_dim + 1u) * params.shape[3]]);
+  float q0[PAIRS];
+  float q1[PAIRS];
+  for (uint p = 0u; p < PAIRS; ++p) {
+    q0[p] = params.alpha *
+        LD16(query_data.values[q_base + (p * 64u + q_dim) * params.shape[3]]);
+    q1[p] = params.alpha * LD16(
+        query_data.values[q_base + (p * 64u + q_dim + 1u) * params.shape[3]]);
+  }
 
   // The fused kernel's per-block online state, verbatim.
   float max_score = FINITE_MIN;
   float sum_exp_score = 0.0;
-  float o0 = 0.0;
-  float o1 = 0.0;
+  float o0[PAIRS];
+  float o1[PAIRS];
+  for (uint p = 0u; p < PAIRS; ++p) {
+    o0[p] = 0.0;
+    o1[p] = 0.0;
+  }
   for (uint key = block; key < params.matrix_k; key += blocks) {
     uint k_base = params.rhs_offset + kv_head * params.shape[1] +
         key * params.shape[2] + q_dim * params.in_strides[0];
-    float score = fma(q0, LD16(key_data.values[k_base]), 0.0);
-    score = fma(
-        q1,
-        LD16(key_data.values[k_base + params.in_strides[0]]),
-        score);
+    float score = 0.0;
+    for (uint p = 0u; p < PAIRS; ++p) {
+      score = fma(
+          q0[p],
+          LD16(key_data.values[k_base + p * 64u * params.in_strides[0]]),
+          score);
+      score = fma(
+          q1[p],
+          LD16(key_data.values[
+              k_base + (p * 64u + 1u) * params.in_strides[0]]),
+          score);
+    }
     score = subgroupAdd(score);
     float new_max = max(max_score, score);
     float factor = native_exp(max_score - new_max);
@@ -116,15 +136,18 @@ void main() {
     sum_exp_score = fma(sum_exp_score, factor, exp_score);
     uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
         key * params.in_strides[2] + q_dim * params.in_strides[3];
-    o0 = fma(
-        o0,
-        factor,
-        exp_score * LD16(value_data.values[v_base]));
-    o1 = fma(
-        o1,
-        factor,
-        exp_score *
-            LD16(value_data.values[v_base + params.in_strides[3]]));
+    for (uint p = 0u; p < PAIRS; ++p) {
+      o0[p] = fma(
+          o0[p],
+          factor,
+          exp_score * LD16(value_data.values[
+              v_base + p * 64u * params.in_strides[3]]));
+      o1[p] = fma(
+          o1[p],
+          factor,
+          exp_score * LD16(value_data.values[
+              v_base + (p * 64u + 1u) * params.in_strides[3]]));
+    }
   }
 
   uint head_base = head * blocks * SCRATCH_STRIDE_FACTOR;
@@ -133,6 +156,9 @@ void main() {
     scratch_data.values[head_base + blocks + block] =
         floatBitsToUint(sum_exp_score);
   }
-  scratch_data.values[head_base + 2u * blocks + block * SIMD + lane] =
-      packHalf2x16(vec2(o0, o1));
+  for (uint p = 0u; p < PAIRS; ++p) {
+    scratch_data.values[head_base + 2u * blocks +
+                        (p * blocks + block) * SIMD + lane] =
+        packHalf2x16(vec2(o0[p], o1[p]));
+  }
 }
