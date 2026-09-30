@@ -1,5 +1,5 @@
---- a/mlx/fast.h
-+++ b/mlx/fast.h
+--- a/mlx/fast.h	2026-09-29 20:31:21.279323203 -0500
++++ b/mlx/fast.h	2026-09-29 20:31:13.822395601 -0500
 @@ -70,6 +70,35 @@
      const std::optional<array>& freqs = std::nullopt,
      StreamOrDevice s = {});
@@ -36,8 +36,8 @@
  /** Computes: O = softmax(Q @ K.T) @ V **/
  MLX_API array scaled_dot_product_attention(
      const array& queries,
---- a/mlx/fast.cpp
-+++ b/mlx/fast.cpp
+--- a/mlx/fast.cpp	2026-09-29 20:31:21.278323213 -0500
++++ b/mlx/fast.cpp	2026-09-29 20:31:17.616358766 -0500
 @@ -605,7 +605,9 @@
      float base,
      float scale,
@@ -49,7 +49,7 @@
    auto& x = inputs[0];
    auto& offset = inputs[1];
    if (x.ndim() < 3) {
-@@ -664,10 +666,28 @@
+@@ -664,10 +666,51 @@
          << " but got shape " << inputs[2].shape() << ".";
      throw std::invalid_argument(msg.str());
    }
@@ -75,12 +75,35 @@
 +    // RMS norm first (rows of the last axis, weight and eps as given), then
 +    // the rope above on the normalized values.
 +    if (norm_weight) {
-+      x = rms_norm(x, norm_weight, norm_eps, s);
++      // The reference path runs rms_norm on the row-contiguous (B, T, H, D)
++      // input and only then transposes to (B, H, T, D) for the rotation.
++      // Calling rms_norm on the already-transposed (B, H, T, D) view sends a
++      // non-row-contiguous tensor to mx.fast.rms_norm, which falls back to a
++      // different (often CPU) code path and produces different bits at the
++      // bf16 rounding boundary (DecodeGap8 W2 gate Class A failures:
++      // f16/f32/traditional/big-D legs). Match the reference exactly:
++      // transpose back, materialize contiguous, rms_norm, transpose forward.
++      // The fused shader path is bit-exact because the GPU kernel is
++      // layout-aware (the eval_gpu dispatch honors the head_seq_transpose
++      // flag), so this transpose dance is ONLY for the fallback chain.
++      if (x.ndim() == 4) {
++        auto x_t = transpose(x, std::vector<int>{0, 2, 1, 3}, s);
++        if (!x_t.flags().row_contiguous) {
++          x_t = contiguous(x_t, false, s);
++        }
++        x = rms_norm(x_t, norm_weight, norm_eps, s);
++        x = transpose(x, std::vector<int>{0, 2, 1, 3}, s);
++        if (!x.flags().row_contiguous) {
++          x = contiguous(x, false, s);
++        }
++      } else {
++        x = rms_norm(x, norm_weight, norm_eps, s);
++      }
 +    }
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -751,17 +771,87 @@
+@@ -751,17 +794,87 @@
      }
    };
    auto stream = to_stream(s);
@@ -171,7 +194,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -810,6 +900,12 @@
+@@ -810,6 +923,12 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -184,7 +207,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -840,7 +936,8 @@
+@@ -840,7 +959,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
@@ -194,8 +217,8 @@
  }
  
  /** Computes: O = softmax(Q @ K.T) @ V **/
---- a/mlx/fast_primitives.h
-+++ b/mlx/fast_primitives.h
+--- a/mlx/fast_primitives.h	2026-09-29 20:31:21.280323194 -0500
++++ b/mlx/fast_primitives.h	2026-09-29 20:31:13.823395591 -0500
 @@ -286,13 +286,17 @@
        bool traditional,
        float base,
@@ -239,8 +262,8 @@
  };
  
  class ScaledDotProductAttention : public Custom {
---- a/python/src/fast.cpp
-+++ b/python/src/fast.cpp
+--- a/python/src/fast.cpp	2026-09-29 20:31:21.281323184 -0500
++++ b/python/src/fast.cpp	2026-09-29 20:31:13.823395591 -0500
 @@ -314,6 +314,56 @@
        )pbdoc");
  

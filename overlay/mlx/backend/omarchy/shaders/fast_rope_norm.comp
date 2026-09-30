@@ -15,6 +15,18 @@
 // bit-identical to it. The passthrough tail (dims < D) carries the
 // normalized-rounded values where the unfused kernel carries raw inputs.
 //
+// Bit-exactness recipe (DecodeGap9 / DecodeGap2): the squared register from
+// the reduction phase is THROWN AWAY; the output multiply chain re-loads
+// `value` from input_data after the reduction barrier, matching production
+// fast_norm.comp's output loop exactly. Without the re-load, Honeykrisp's
+// nir_opt_reassociate can fold the squared form and the multiply chain into
+// an ffma that drifts by 1 bf16 ULP at the rounding boundary (observed in
+// DecodeGap8 W2 gate: model-q-prefill-t512-off{0,600}, h=3 t=416 d=80,
+// h=1 t=500 d=62). The explicit barrier() between the reduction and the
+// output multiply chain and the `precise` qualifiers on `norm`, `value`,
+// `weight`, `v_normed` prevent FMA contraction and reassociation through
+// the bf16 rounding site.
+//
 // Push-constant mapping (ComputeParams fields), identical to fast_rope.comp
 // plus two reused fields — ComputeParams is pushed whole (128 bytes, the
 // Vulkan minimum guarantee), so nothing may grow it:
@@ -134,11 +146,14 @@ void main() {
   // thread (threads past the row length contribute exactly the same 0.0 the
   // fast_norm grid-stride loop produces), stride-128..1 shared pairing with
   // a barrier per step, f32 divide by the row length, inversesqrt.
-  float value = 0.0;
+  // The squared register lives ONLY in this block; it is discarded below
+  // (the production kernel discards it after the reduction tree too).
+  float squared = 0.0;
   if (thread < row_length) {
-    value = rope_load(params.lhs_offset + in_base + thread);
+    squared = rope_load(params.lhs_offset + in_base + thread);
+    squared = squared * squared;
   }
-  block_values[thread] = value * value;
+  block_values[thread] = squared;
   barrier();
   for (uint stride = 128u; stride > 0u; stride >>= 1u) {
     if (thread < stride) {
@@ -146,16 +161,41 @@ void main() {
     }
     barrier();
   }
+  // fast_norm.comp re-loads `value` after the reduction barrier. We do the
+  // same: the production kernel carries the squared value in a register
+  // across the reduction barrier and re-loads the input inside its output
+  // loop. Honeykrisp's nir_opt_reassociate sees a fresh memory load and
+  // cannot contract the (value * norm) * weight chain with the squared form;
+  // sharing the squared register across the barrier lets NIR group the
+  // multiplies into an ffma that drifts by 1 bf16 ULP at the rounding
+  // boundary. The re-load here is what makes the fused reduction bit-
+  // identical to the production chain (verified row-by-row; see
+  // artifacts/Jw16DecodeGap9/nir-diffs/).
   float mean_square = block_values[0] / float(row_length);
-  float norm = inversesqrt(mean_square + eps);
-  float weight = (thread < row_length)
+  // The fast_norm.comp production script inserts a barrier() between the
+  // reduction tree's last iteration and the output multiply chain. We
+  // mirror it: the reduction loop's last barrier() runs at stride=1, so the
+  // visible state across the divide is the same, but the explicit barrier
+  // makes it impossible for NIR to fold block_values[0] / float(row_length)
+  // into the (value * norm) chain downstream.
+  barrier();
+  precise float norm = inversesqrt(mean_square + eps);
+  // Re-load the input value (production's output loop reads from input_data
+  // fresh; same address, same bits, but a separate memory op that breaks
+  // any NIR carry-through).
+  precise float value = (thread < row_length)
+      ? rope_load(params.lhs_offset + in_base + thread)
+      : 0.0;
+  precise float weight = (thread < row_length)
       ? weight_load(params.aux_offset + thread)
       : 0.0;
-  // fast_norm.comp output: value * norm * weight rounded once to bf16, the
-  // exact bits the rms_norm kernel would write and the rope kernel would
-  // read back. barrier() publishes every thread's rounded value before the
-  // pair math below reads across threads.
-  rounded[thread] = (thread < row_length) ? rope_round(value * norm * weight)
+  // precise prevents FMA contraction / reassociation; the multiply chain
+  // rounds to bf16 the same way production fast_norm.comp's STORE_VALUE
+  // does (RNE, two bf16 ULPs at the boundary; verified identical bit pattern
+  // on the failing rows model-q-prefill-t512-off{0,600}, h=3 t=416 d=80,
+  // h=1 t=500 d=62).
+  precise float v_normed = value * norm;
+  rounded[thread] = (thread < row_length) ? rope_round(v_normed * weight)
                                           : 0.0;
   barrier();
 
