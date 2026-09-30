@@ -64,6 +64,9 @@ DeviceSupport classify_physical_device(
 struct CapabilityReport {
   std::string device_name;
   std::string driver_name;
+  std::string driver_info;
+  std::string driver_sha;
+  std::string icd_path;
   uint32_t vendor_id{0};
   uint32_t device_id{0};
   uint32_t driver_version{0};

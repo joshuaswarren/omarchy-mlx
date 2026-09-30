@@ -62,7 +62,6 @@ if (( ANE )); then
   [[ -c /dev/accel/accel0 ]] || die "ANE installation requires /dev/accel/accel0."
   command -v sudo >/dev/null || die "ANE installation requires sudo."
   command -v systemd-tmpfiles >/dev/null || die "ANE installation requires systemd-tmpfiles."
-  getent group render >/dev/null || die "ANE installation requires the render group."
 fi
 
 # MLX_OMARCHY_VERSION pins a release explicitly; otherwise the latest published
@@ -140,13 +139,6 @@ PY
   sudo install -D -m0644 "$ane_conf" /usr/lib/tmpfiles.d/mlx-omarchy-ane.conf
   sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/mlx-omarchy-ane.conf
 
-  install_user="${SUDO_USER:-$(id -un)}"
-  render_gid="$(getent group render | cut -d: -f3)"
-  if [[ " $(id -G "$install_user") " != *" $render_gid "* ]]; then
-    sudo usermod -aG render "$install_user"
-    echo "note: $install_user was added to render; open a new login session before using ANE."
-  fi
-
   sudo python3 - <<'PY'
 import os
 import stat
@@ -155,16 +147,15 @@ device = os.stat("/dev/accel/accel0", follow_symlinks=False)
 if not stat.S_ISCHR(device.st_mode):
     raise SystemExit("/dev/accel/accel0 is not a character device")
 expected = (
-    ("/run/lock/mlx-omarchy-ane", stat.S_ISDIR, 0o750, False),
-    ("/run/lock/mlx-omarchy-ane/device.lock", stat.S_ISREG, 0o660, True),
-    ("/run/lock/mlx-omarchy-ane/quarantine", stat.S_ISREG, 0o660, True),
+    ("/run/lock/mlx-omarchy-ane", stat.S_ISDIR, 0o1777, False),
+    ("/run/lock/mlx-omarchy-ane/device.lock", stat.S_ISREG, 0o666, True),
+    ("/run/lock/mlx-omarchy-ane/quarantine", stat.S_ISREG, 0o666, True),
 )
 for path, type_check, mode, single_link in expected:
     status = os.stat(path, follow_symlinks=False)
     valid = (
         type_check(status.st_mode)
         and status.st_uid == 0
-        and status.st_gid == device.st_gid
         and stat.S_IMODE(status.st_mode) == mode
         and (not single_link or status.st_nlink == 1)
     )

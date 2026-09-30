@@ -28,7 +28,6 @@ struct AbiProfileMirror {
   const char* env_name;
   std::initializer_list<const char*> compatibles;
   const char* module_name;
-  const char* driver_version; // nullptr skips the version check
   const char* libane_commit;
   const char* identity_abi_tag;
 };
@@ -38,14 +37,12 @@ inline constexpr AbiProfileMirror kAbiProfilesMirror[] = {
      "ABI 1 (M1 / T8103 / T6001)",
      {"apple,t8103-ane"},
      "ane",
-     "f2a3e5e+lifecycle6",
      "6fa243ac7241119a9eb229abbf8cb4dd8949f915",
      "1"},
     {2,
      "ABI 2 (M2 / T6021)",
      {"apple,t6021-ane"},
      "ane_t6021",
-     nullptr,
      "8b010938aeb64bfa04b95e89da0bedd2ef9e3e72",
      "2"},
 };

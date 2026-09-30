@@ -12,11 +12,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include "mlx/backend/omarchy/honeykrisp_identity.h"
+#include "mlx/backend/omarchy/ane/driver_abi.h"
 #include "mlx/backend/omarchy/ane/runtime_worker_gate.h"
+#include "mlx/backend/omarchy/ane/runtime_ownership.h"
 
 #include <cstring>
-#include <stdexcept>
+#include <filesystem>
+#include <fcntl.h>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 using mlx::core::omarchy::ane::detail::abi_profile_expected_compatibles_text;
 using mlx::core::omarchy::ane::detail::abi_profile_first_matching_compatible;
@@ -31,7 +37,6 @@ using mlx::core::omarchy::ane::detail::resolve_abi_profile_index;
 // ever loosens or forgets this pin, the test below will catch it.
 constexpr const char* kAbiOneExpectedLibane =
     "6fa243ac7241119a9eb229abbf8cb4dd8949f915";
-constexpr const char* kAbiOneExpectedDriverVersion = "f2a3e5e+lifecycle6";
 
 TEST_CASE(
     "default gate selects ABI 1 when MLX_OMARCHY_ANE_ABI is unset") {
@@ -39,8 +44,6 @@ TEST_CASE(
   CHECK(index == 0);
   CHECK(kAbiProfilesMirror[index].abi == 1);
   CHECK(std::strcmp(kAbiProfilesMirror[index].module_name, "ane") == 0);
-  CHECK(std::strcmp(kAbiProfilesMirror[index].driver_version,
-                    kAbiOneExpectedDriverVersion) == 0);
   CHECK(std::strcmp(
             abi_profile_libane_commit(kAbiProfilesMirror[index]),
             kAbiOneExpectedLibane) == 0);
@@ -58,8 +61,6 @@ TEST_CASE("MLX_OMARCHY_ANE_ABI=2 selects the ABI-2 T6021 profile") {
   CHECK(index == 1);
   CHECK(kAbiProfilesMirror[index].abi == 2);
   CHECK(std::strcmp(kAbiProfilesMirror[index].module_name, "ane_t6021") == 0);
-  // ABI 2 has no MODULE_VERSION pin in the current ane/t6021 build line.
-  CHECK(kAbiProfilesMirror[index].driver_version == nullptr);
   // ABI-2 libane commit must differ from ABI-1 — the two lanes cannot
   // share a pin or an M1 host could pass an ABI-2 bundle (or vice
   // versa) by replaying the same libane build.
@@ -219,4 +220,73 @@ TEST_CASE(
   CHECK(abi1_compatibles_text.find("apple,t8103-ane") != std::string::npos);
   CHECK(std::strcmp(abi_profile_identity_tag(abi1), "1") == 0);
   CHECK(std::strcmp(abi_profile_identity_tag(abi2), "2") == 0);
+}
+TEST_CASE("driver ABI major accepts the expected ABI and rejects mismatches") {
+  using mlx::core::omarchy::ane::detail::require_driver_abi_major;
+  CHECK_NOTHROW(require_driver_abi_major(1, 1));
+  CHECK_NOTHROW(require_driver_abi_major(2, 2));
+  try {
+    require_driver_abi_major(1, 2);
+    FAIL("expected ABI mismatch");
+  } catch (const std::runtime_error& error) {
+    CHECK(std::string(error.what()) ==
+          "ANE driver ABI mismatch: runtime requires major 1, driver reports major 2");
+  }
+}
+TEST_CASE("Honeykrisp ICD resolution honors user choices and identifies Mesa SHA") {
+  using namespace mlx::core::omarchy;
+  const std::vector<std::string> candidates{
+      "/usr/share/vulkan/icd.d/lvp_icd.json",
+      "/usr/share/vulkan/icd.d/asahi_icd.json"};
+  CHECK(resolve_honeykrisp_icd(candidates, nullptr) == candidates[1]);
+  CHECK(resolve_honeykrisp_icd(candidates, candidates[1].c_str()) == candidates[1]);
+  CHECK(resolve_honeykrisp_icd(candidates, "/tmp/honeykrisp.json:/tmp/other.json") ==
+        "/tmp/honeykrisp.json");
+  CHECK_THROWS_AS(
+      resolve_honeykrisp_icd(candidates, "/tmp/lvp_icd.json"),
+      std::runtime_error);
+  CHECK(mesa_git_sha("Mesa 26.1.0-devel (git-0123456789abcdef)") ==
+        "0123456789abcdef");
+  CHECK(mesa_git_sha("Mesa release build") == "");
+  CHECK_NOTHROW(require_expected_honeykrisp_sha("0123456789abcdef",
+                                                "0123456789abcdef"));
+  try {
+    require_expected_honeykrisp_sha("expected", "actual");
+    FAIL("expected SHA mismatch");
+  } catch (const std::runtime_error& error) {
+    CHECK(std::string(error.what()) ==
+          "Honeykrisp Mesa git SHA mismatch: expected expected, found actual");
+  }
+}
+
+TEST_CASE("ANE lock files are created and repaired to world access") {
+  using mlx::core::omarchy::ane::detail::RuntimeOwnership;
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("runtimegate-lock-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(directory);
+  REQUIRE(std::filesystem::create_directory(directory));
+  const auto lock = directory / "device.lock";
+  const auto state = directory / "quarantine";
+  for (const auto& path : {lock, state}) {
+    const int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0660);
+    REQUIRE(fd >= 0);
+    REQUIRE(::fchmod(fd, 0660) == 0);
+    REQUIRE(::close(fd) == 0);
+  }
+  {
+    auto ownership = RuntimeOwnership::acquire_at(
+        lock, state, "00000000-0000-0000-0000-000000000000");
+    struct stat lock_status {};
+    struct stat state_status {};
+    REQUIRE(::stat(lock.c_str(), &lock_status) == 0);
+    REQUIRE(::stat(state.c_str(), &state_status) == 0);
+    CHECK((lock_status.st_mode & 0777) == 0666);
+    CHECK((state_status.st_mode & 0777) == 0666);
+  }
+  REQUIRE(::chmod(directory.c_str(), 01777) == 0);
+  CHECK_THROWS_AS(
+      RuntimeOwnership::validate_shared_paths_at(
+          directory, lock, state, ::geteuid() + 1, ::getegid()),
+      std::runtime_error);
+  std::filesystem::remove_all(directory);
 }

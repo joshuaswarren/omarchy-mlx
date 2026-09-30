@@ -7,9 +7,11 @@
 
 #include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fcntl.h>
+#include <cstdio>
 #include <string>
 #include <utility>
 #include <sys/file.h>
@@ -57,21 +59,36 @@ class RuntimeOwnership {
 
   static RuntimeOwnership acquire() {
     struct stat device {};
-    if (::lstat("/dev/accel/accel0", &device) != 0 ||
-        !S_ISCHR(device.st_mode)) {
+    if (::lstat("/dev/accel/accel0", &device) != 0 || !S_ISCHR(device.st_mode)) {
       throw runtime_error("qualified ANE device identity is unavailable");
     }
-    validate_shared_paths_at(
-        kRuntimeOwnershipDirectory,
-        kRuntimeOwnershipLockPath,
-        kRuntimeQuarantinePath,
-        0,
-        device.st_gid);
-    return acquire_at(
-        kRuntimeOwnershipLockPath,
-        kRuntimeQuarantinePath,
-        read_text_file("/proc/sys/kernel/random/boot_id"),
-        false);
+    const std::string boot_id = read_text_file("/proc/sys/kernel/random/boot_id");
+    try {
+      return acquire_at(kRuntimeOwnershipLockPath, kRuntimeQuarantinePath, boot_id, false);
+    } catch (const std::runtime_error& error) {
+      if (std::string(error.what()).find("cannot open ANE ownership state") == std::string::npos) {
+        throw;
+      }
+      const char* runtime_dir = std::getenv("XDG_RUNTIME_DIR");
+      if (!runtime_dir || runtime_dir[0] != '/') {
+        throw;
+      }
+      const auto private_dir = std::filesystem::path(runtime_dir) / "mlx-omarchy-ane";
+      if (::mkdir(private_dir.c_str(), 0700) != 0 && errno != EEXIST) {
+        throw;
+      }
+      struct stat status {};
+      if (::lstat(private_dir.c_str(), &status) != 0 || !S_ISDIR(status.st_mode) ||
+          status.st_uid != ::geteuid() || (status.st_mode & 0777) != 0700) {
+        throw runtime_error("per-user ANE ownership directory is unsafe");
+      }
+      const auto lock_path = private_dir / "device.lock";
+      std::fprintf(
+          stderr,
+          "ANE ownership uses per-user lock %s\n",
+          lock_path.c_str());
+      return acquire_at(lock_path, private_dir / "quarantine", boot_id);
+    }
   }
 
   static void validate_shared_paths_at(
@@ -175,11 +192,11 @@ class RuntimeOwnership {
   static void validate_shared_directory(
       const std::filesystem::path& path,
       uid_t owner,
-      gid_t group) {
+      gid_t) {
     struct stat status {};
     if (::lstat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode) ||
-        status.st_uid != owner || status.st_gid != group ||
-        (status.st_mode & 07777) != 0750 || ::access(path.c_str(), X_OK) != 0) {
+        status.st_uid != owner || (status.st_mode & 07777) != 01777 ||
+        ::access(path.c_str(), X_OK) != 0) {
       throw runtime_error(
           "ANE ownership directory is not a provisioned shared directory: " +
           path.string());
@@ -189,11 +206,11 @@ class RuntimeOwnership {
   static void validate_shared_file(
       const std::filesystem::path& path,
       uid_t owner,
-      gid_t group) {
+      gid_t) {
     struct stat status {};
     if (::lstat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode) ||
         status.st_nlink != 1 || status.st_uid != owner ||
-        status.st_gid != group || (status.st_mode & 07777) != 0660 ||
+        (status.st_mode & 07777) != 0666 ||
         ::access(path.c_str(), R_OK | W_OK) != 0) {
       throw runtime_error(
           "ANE ownership state is not a provisioned shared regular file: " +
@@ -232,9 +249,23 @@ class RuntimeOwnership {
       ::close(fd);
       throw runtime_error("ANE ownership state is not a private regular file: " + path.string());
     }
+    if ((status.st_mode & 07777) != 0666) {
+      if (status.st_uid == ::geteuid()) {
+        if (::fchmod(fd, 0666) != 0) {
+          const int error = errno;
+          ::close(fd);
+          throw runtime_error(
+              "cannot set ANE ownership file mode: " +
+              std::string(std::strerror(error)));
+        }
+      } else {
+        ::close(fd);
+        throw runtime_error(
+            "cannot open ANE ownership state for mode repair: " + path.string());
+      }
+    }
     return fd;
   }
-
   static std::string read_fd(int fd) {
     if (::lseek(fd, 0, SEEK_SET) < 0) {
       throw runtime_error(

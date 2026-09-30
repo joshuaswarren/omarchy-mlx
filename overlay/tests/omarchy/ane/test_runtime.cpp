@@ -509,22 +509,22 @@ TEST_CASE("ANE shared ownership paths require frozen provisioned identities") {
       ("mlx-omarchy-ane-shared-ownership-" + std::to_string(::getpid()));
   std::filesystem::remove_all(root);
   std::filesystem::create_directory(root);
-  REQUIRE(::chmod(root.c_str(), 0750) == 0);
+  REQUIRE(::chmod(root.c_str(), 01777) == 0);
   const auto lock = root / "device.lock";
   const auto state = root / "quarantine";
   std::ofstream{lock};
   std::ofstream{state};
-  REQUIRE(::chmod(lock.c_str(), 0660) == 0);
-  REQUIRE(::chmod(state.c_str(), 0660) == 0);
+  REQUIRE(::chmod(lock.c_str(), 0666) == 0);
+  REQUIRE(::chmod(state.c_str(), 0666) == 0);
 
   detail::RuntimeOwnership::validate_shared_paths_at(
       root, lock, state, ::geteuid(), ::getegid());
-  REQUIRE(::chmod(root.c_str(), 02750) == 0);
+  REQUIRE(::chmod(root.c_str(), 03777) == 0);
   CHECK_THROWS_AS(
       detail::RuntimeOwnership::validate_shared_paths_at(
           root, lock, state, ::geteuid(), ::getegid()),
       std::runtime_error);
-  REQUIRE(::chmod(root.c_str(), 0750) == 0);
+  REQUIRE(::chmod(root.c_str(), 01777) == 0);
   REQUIRE(::chmod(lock.c_str(), 0640) == 0);
   CHECK_THROWS_WITH_AS(
       detail::RuntimeOwnership::validate_shared_paths_at(
@@ -534,7 +534,7 @@ TEST_CASE("ANE shared ownership paths require frozen provisioned identities") {
            lock.string() + ".")
               .c_str()},
       std::runtime_error);
-  REQUIRE(::chmod(lock.c_str(), 0660) == 0);
+  REQUIRE(::chmod(lock.c_str(), 0666) == 0);
   std::filesystem::remove(state);
   std::filesystem::create_symlink(lock, state);
   CHECK_THROWS_WITH_AS(

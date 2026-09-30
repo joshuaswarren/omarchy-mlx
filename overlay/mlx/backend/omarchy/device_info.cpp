@@ -41,6 +41,9 @@ device_info(int device_index) {
     const auto& caps = omarchy::capability_report(device_index);
     info["device_name"] = caps.device_name;
     info["driver"] = caps.driver_name;
+    info["driver_info"] = caps.driver_info;
+    info["driver_sha"] = caps.driver_sha;
+    info["icd_path"] = caps.icd_path;
     info["api_version"] =
         std::to_string(VK_API_VERSION_MAJOR(caps.api_version)) + "." +
         std::to_string(VK_API_VERSION_MINOR(caps.api_version)) + "." +

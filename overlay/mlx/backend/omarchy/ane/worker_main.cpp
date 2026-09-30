@@ -22,15 +22,10 @@ int main(int argc, char** argv) {
   }
   try {
     struct stat inherited_lock {};
-    struct stat ownership_lock {};
     if (::fstat(
             mlx::core::omarchy::ane::detail::kWorkerHardwareLockFd,
-            &inherited_lock) != 0 ||
-        ::stat(
-            mlx::core::omarchy::ane::detail::kRuntimeOwnershipLockPath,
-            &ownership_lock) != 0 ||
-        inherited_lock.st_dev != ownership_lock.st_dev ||
-        inherited_lock.st_ino != ownership_lock.st_ino ||
+            &inherited_lock) != 0 || !S_ISREG(inherited_lock.st_mode) ||
+        inherited_lock.st_nlink != 1 ||
         ::flock(
             mlx::core::omarchy::ane::detail::kWorkerHardwareLockFd,
             LOCK_EX | LOCK_NB) != 0) {

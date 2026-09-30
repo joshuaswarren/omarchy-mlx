@@ -189,7 +189,7 @@ Known gaps include `ReduceScatter` on the Linux ring transport and `fast.CustomK
 
 ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified: hybrid island chains on M1, and the whole-encoder bundle on M1 Max (single-program ANE execution measured 440.405 ms; [receipt](receipts/2026-09-27-m1max-current-main-gold.md)). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install. This transcription command accepts the pinned fixture only; it is not microphone dictation. See [the installed speech contract](docs/parakeet.md#installed-product-wheel).
 
-Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md). Driver / `libane` ABI live in [joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
+Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md), and [docs/ane-runtime.md](docs/ane-runtime.md). The GPU backend selects Honeykrisp in-process and reports its driver identity. ANE workers check the driver's DRM ABI major, and the shared ownership files do not require render-group membership. Driver / `libane` ABI live in [joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 
 ## Contributing
 

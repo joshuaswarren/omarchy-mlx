@@ -159,3 +159,9 @@ opened as a pull request.
 Forking does not relax the rule above: driver code lives in the fork, not
 vendored into this repository.
 The fork map and the backport flow are in [`forks.md`](forks.md).
+
+## Runtime identity and access
+
+Before loading Vulkan, the backend selects the Honeykrisp ICD from the standard system ICD directories. A non-empty `VK_DRIVER_FILES` or `VK_ICD_FILENAMES` value is honored only when it includes Honeykrisp; otherwise initialization fails with the value that excluded it. Runtime device information reports the selected ICD path, Vulkan driver name and info, and a Mesa git SHA parsed from driver info when present. `MLX_OMARCHY_EXPECTED_HK_SHA` is optional; when set, a mismatch fails initialization and reports expected and observed values. When unset, the runtime reports identity without enforcing a SHA.
+
+The ANE worker checks `DRM_IOCTL_VERSION.version_major` against the ABI major used to build its runtime. It does not pin a module version string. ANE ownership and quarantine files use mode `0666` in a sticky shared runtime directory; if a shared legacy file cannot be opened for mode repair, the process uses private lock and quarantine files under `XDG_RUNTIME_DIR`. Device-node permissions remain the driver and udev configuration's responsibility.

@@ -8,6 +8,11 @@
 #include <ane.h>
 
 #include <cerrno>
+#include "mlx/backend/omarchy/ane/driver_abi.h"
+
+#include <libdrm/drm.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -41,9 +46,6 @@ struct AbiProfile {
   std::initializer_list<const char*> compatibles;
   // The /sys/module/<module_name> directory the gate reads.
   const char* module_name{""};
-  // Exact string at /sys/module/<module_name>/version; nullptr = skip the
-  // version check (the kernel may not expose one for this module).
-  const char* driver_version{nullptr};
   // Exact libane commit the worker will require under this ABI.
   const char* libane_commit{""};
   // Exact string written into the readiness identity's "driver_abi=" field.
@@ -55,17 +57,12 @@ constexpr AbiProfile kAbiProfiles[] = {
      "ABI 1 (M1 / T8103 / T6001)",
      {"apple,t8103-ane"},
      "ane",
-     "f2a3e5e+lifecycle6",
      "6fa243ac7241119a9eb229abbf8cb4dd8949f915",
      "1"},
     {2,
      "ABI 2 (M2 / T6021)",
      {"apple,t6021-ane"},
      "ane_t6021",
-     // The current ane/t6021 build does not declare MODULE_VERSION, so the
-     // gate does not pin a version string on this ABI (verified by reading
-     // the .modinfo of the M2 build artifact in the worktree notebook).
-     nullptr,
      // Smallest libane that loads every h14 ANEC currently on disk in the
      // M2 fixtures (bmm islands + rms + select-runtime). Bumped by the E5/E6
      // owners when select numerics land.
@@ -164,6 +161,28 @@ std::filesystem::path single_entry(
   return match;
 }
 
+int query_driver_abi_major(int expected) {
+  const int fd = ::open("/dev/accel/accel0", O_RDWR | O_CLOEXEC);
+  if (fd < 0) {
+    throw runtime_error(
+        "ANE driver ABI mismatch: runtime requires major " +
+        std::to_string(expected) + ", driver reports unavailable (open failed: " +
+        std::strerror(errno) + ")");
+  }
+  drm_version version{};
+  if (::ioctl(fd, DRM_IOCTL_VERSION, &version) != 0) {
+    const int error = errno;
+    ::close(fd);
+    throw runtime_error(
+        "ANE driver ABI mismatch: runtime requires major " +
+        std::to_string(expected) + ", driver reports unavailable (DRM_IOCTL_VERSION: " +
+        std::strerror(error) + ")");
+  }
+  ::close(fd);
+  return version.version_major;
+}
+
+
 std::string verify_hardware_eligibility(const AbiProfile& profile) {
   utsname system{};
   if (::uname(&system) != 0) {
@@ -188,11 +207,13 @@ std::string verify_hardware_eligibility(const AbiProfile& profile) {
   }
   if (!matched_compatible) {
     std::string expected_list;
-    for (size_t i = 0; i < profile.compatibles.size(); ++i) {
-      if (i > 0) {
+    bool first_expected = true;
+    for (const char* expected : profile.compatibles) {
+      if (!first_expected) {
         expected_list += " or ";
       }
-      expected_list += profile.compatibles[i];
+      expected_list += expected;
+      first_expected = false;
     }
     throw runtime_error(
         "device-tree ANE node does not match " + expected_list +
@@ -205,29 +226,12 @@ std::string verify_hardware_eligibility(const AbiProfile& profile) {
 
   const std::string module_version_path =
       "/sys/module/" + std::string(profile.module_name) + "/version";
-  // Some kernels (e.g. the M2 ane_t6021 build line) do not declare
-  // MODULE_VERSION and therefore do not expose /sys/module/<name>/version;
-  // skip the version pin in that case (see AbiProfile.driver_version).
-  std::string module_version;
+  std::string module_version = "<not exposed>";
   bool module_version_exposed = false;
-  if (profile.driver_version != nullptr) {
-    struct stat version_stat {};
-    if (::stat(module_version_path.c_str(), &version_stat) != 0) {
-      throw runtime_error(
-          "qualified driver " + std::string(profile.driver_version) +
-          " expected, but " + module_version_path + " is missing for " +
-          std::string(profile.env_name));
-    }
+  struct stat version_stat {};
+  if (::stat(module_version_path.c_str(), &version_stat) == 0) {
     module_version = read_value(module_version_path);
     module_version_exposed = true;
-    if (module_version != profile.driver_version) {
-      throw runtime_error(
-          "qualified driver " + std::string(profile.driver_version) +
-          " required for " + std::string(profile.env_name) + ", found '" +
-          module_version + "'");
-    }
-  } else {
-    module_version = "<not exposed>";
   }
   const std::string module_source_path =
       "/sys/module/" + std::string(profile.module_name) + "/srcversion";
@@ -262,6 +266,8 @@ std::string verify_hardware_eligibility(const AbiProfile& profile) {
       ::access("/dev/accel/accel0", R_OK | W_OK) != 0) {
     throw runtime_error("qualified /dev/accel/accel0 is not readable and writable");
   }
+  const int driver_abi_major = query_driver_abi_major(profile.abi);
+  require_driver_abi_major(profile.abi, driver_abi_major);
 
   std::ostringstream identity;
   identity << "host=" << system.nodename << " kernel=" << system.release

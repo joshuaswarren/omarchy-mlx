@@ -4,6 +4,9 @@
 #include "mlx/backend/omarchy/device.h"
 
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/honeykrisp_identity.h"
+
+#include <filesystem>
 
 #include <algorithm>
 #include <cctype>
@@ -55,25 +58,6 @@ bool contains_case_insensitive(const char* haystack, const char* needle) {
   return false;
 }
 
-const char* driver_id_name(int32_t id) {
-  // Driver-id constants are plain enum values. kMesaHoneykrispDriverId is
-  // spelled out in device.h so Vulkan 1.3 headers (which predate the enum
-  // entry) compile; unknown ids fall through to the default.
-  switch (id) {
-    case kMesaHoneykrispDriverId:
-      return "Mesa Honeykrisp";
-    case VK_DRIVER_ID_MESA_RADV:
-      return "Mesa RADV";
-    case VK_DRIVER_ID_MESA_LLVMPIPE:
-      return "Mesa llvmpipe";
-    case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
-      return "NVIDIA proprietary";
-    case VK_DRIVER_ID_AMD_OPEN_SOURCE:
-      return "AMD open source";
-    default:
-      return nullptr;
-  }
-}
 
 int env_index(const char* name) {
   const char* v = std::getenv(name);
@@ -87,6 +71,43 @@ int env_index(const char* name) {
   }
   return static_cast<int>(parsed);
 }
+
+std::string configure_honeykrisp_icd() {
+  std::vector<std::string> candidates;
+  for (const char* directory : {
+           "/etc/vulkan/icd.d",
+           "/usr/local/share/vulkan/icd.d",
+           "/usr/share/vulkan/icd.d"}) {
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(directory, error), end;
+         !error && it != end; it.increment(error)) {
+      if (it->path().extension() == ".json") {
+        candidates.push_back(it->path().string());
+      }
+    }
+  }
+  const char* driver_files = std::getenv("VK_DRIVER_FILES");
+  const char* icd_filenames = std::getenv("VK_ICD_FILENAMES");
+  std::string selected;
+  if (driver_files != nullptr && driver_files[0] != '\0') {
+    selected = resolve_honeykrisp_icd(candidates, driver_files);
+  }
+  if (icd_filenames != nullptr && icd_filenames[0] != '\0') {
+    const std::string legacy = resolve_honeykrisp_icd(candidates, icd_filenames);
+    if (selected.empty()) {
+      selected = legacy;
+    }
+  }
+  if (selected.empty()) {
+    selected = resolve_honeykrisp_icd(candidates, nullptr);
+    if (::setenv("VK_DRIVER_FILES", selected.c_str(), 1) != 0 ||
+        ::setenv("VK_ICD_FILENAMES", selected.c_str(), 1) != 0) {
+      throw std::runtime_error("cannot set Honeykrisp Vulkan ICD environment");
+    }
+  }
+  return selected;
+}
+
 
 struct PhysicalDeviceInfo {
   VkPhysicalDevice handle{VK_NULL_HANDLE};
@@ -112,6 +133,7 @@ struct Runtime {
   bool probed{false};
   bool allow_non_apple{false};
   int preferred_device_index{-1};
+  std::string icd_path;
 
   // Discover devices once per process. Never throws; failures are recorded
   // in |error| so callers can surface exact reasons.
@@ -158,6 +180,7 @@ CapabilityReport collect_capabilities(
     vk::InstanceTable& it,
     VkPhysicalDevice pd,
     const DeviceSupport& support,
+    const VkPhysicalDeviceDriverProperties& driver,
     const VkPhysicalDeviceProperties2& props2,
     const VkPhysicalDeviceMemoryProperties2& mem2,
     const VkPhysicalDeviceFeatures2& feats2,
@@ -180,11 +203,11 @@ CapabilityReport collect_capabilities(
   caps.driver_version = props.driverVersion;
   caps.api_version = props.apiVersion;
   caps.driver_id = support.driver_id;
-  if (const char* name = driver_id_name(support.driver_id)) {
-    caps.driver_name = name;
-  } else {
-    caps.driver_name = "driver id " + std::to_string(support.driver_id);
-  }
+  caps.driver_name = driver.driverName[0] == '\0'
+      ? "driver id " + std::to_string(support.driver_id)
+      : driver.driverName;
+  caps.driver_info = driver.driverInfo;
+  caps.driver_sha = mesa_git_sha(caps.driver_info);
   std::memcpy(
       caps.pipeline_cache_uuid.data(), props.pipelineCacheUUID, VK_UUID_SIZE);
 
@@ -356,6 +379,7 @@ bool Runtime::init_impl() {
         " buffer cache is off for the whole process.\n");
   }
 
+  icd_path = configure_honeykrisp_icd();
   // Honeykrisp bounded syncobj poll (HK_SUBMIT_POLL_US, mesa-1
   // hk/submit-latency): removes the host wake-up premium on the short
   // submit->wait round trips of stepwise loops (Parakeet TDT tdt_decode
@@ -511,6 +535,7 @@ bool Runtime::init_impl() {
         it,
         pd,
         info.support,
+        driver,
         props2,
         mem2,
         feats2,
@@ -522,6 +547,12 @@ bool Runtime::init_impl() {
         m3,
         m4,
         subgroup);
+    info.caps.icd_path = icd_path;
+    if (info.support.driver_id == kMesaHoneykrispDriverId) {
+      const char* expected_sha = std::getenv("MLX_OMARCHY_EXPECTED_HK_SHA");
+      require_expected_honeykrisp_sha(
+          expected_sha == nullptr ? "" : expected_sha, info.caps.driver_sha);
+    }
     info.hardware = info.caps;
     if (sim) {
       info.caps = capsim::apply(info.caps, *sim);
