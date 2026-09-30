@@ -142,7 +142,8 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
     if os.path.exists(runtime):
         os.unlink(runtime)
     env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "serve"),
-               MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
+               MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home,
+               MLX_OMARCHY_PAIR_DEV_QUALIFICATION="1")
     safe = chat_model.replace("/", "_")
     log_path = os.path.join(_HOME, "agents", "MarkdownCards",
                             f"server_{suite}_{safe}.log")

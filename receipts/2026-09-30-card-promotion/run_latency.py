@@ -111,7 +111,8 @@ def start_server(chat_model):
     if os.path.exists(runtime):
         os.unlink(runtime)
     env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "serve"),
-               MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
+               MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home,
+               MLX_OMARCHY_PAIR_DEV_QUALIFICATION="1")
     setup_args = ["--pair", pair_id, "--yes"] if do_setup else []
     resume_args = ["--resume"] if not do_setup else []
     server_log = os.path.join(_HOME, "agents", "MarkdownCards",
