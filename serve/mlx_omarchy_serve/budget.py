@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import mlx_omarchy_paths
 import os
 import shutil
 import tempfile
@@ -78,7 +79,7 @@ class BudgetError(ValueError):
 
 
 def default_home() -> Path:
-    return Path(os.environ.get("MLX_OMARCHY_HOME", Path.home() / ".local/share/mlx-omarchy"))
+    return mlx_omarchy_paths.default_data_home()
 
 
 def parse_meminfo(text: str) -> int:

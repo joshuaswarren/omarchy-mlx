@@ -142,15 +142,15 @@ class CliLocatorTest(unittest.TestCase):
             root = venv / "lib" / "python3.14" / "site-packages" / "mlx"
             (root / "bin").mkdir(parents=True)
             (root / "bin" / "mlx-omarchy-parakeet").write_text("x = 1\n")
-            previous = os.environ.get("MLX_OMARCHY_VENV")
-            os.environ["MLX_OMARCHY_VENV"] = str(venv)
+            previous = os.environ.get("OMARCHY_MLX_VENV")
+            os.environ["OMARCHY_MLX_VENV"] = str(venv)
             try:
                 candidates = list(pd._script_candidates())
             finally:
                 if previous is None:
-                    os.environ.pop("MLX_OMARCHY_VENV", None)
+                    os.environ.pop("OMARCHY_MLX_VENV", None)
                 else:
-                    os.environ["MLX_OMARCHY_VENV"] = previous
+                    os.environ["OMARCHY_MLX_VENV"] = previous
             self.assertIn(root / "bin" / "mlx-omarchy-parakeet", candidates)
 
 

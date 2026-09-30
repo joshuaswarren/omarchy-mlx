@@ -629,6 +629,10 @@ def _app_wheel_from_repo(wheel_dir: Path, repo: Path) -> dict:
     if not demo.is_file():
         raise TransferError(f"repo packaging missing: {demo}")
     members["chat.py"] = demo.read_bytes()
+    paths_module = serve / "mlx_omarchy_paths.py"
+    if not paths_module.is_file():
+        raise TransferError(f"repo packaging missing: {paths_module}")
+    members["mlx_omarchy_paths.py"] = paths_module.read_bytes()
     wheel = _write_app_wheel(Path(wheel_dir), members)
     digest, size = _hash_file(wheel)
     return {"wheel": wheel.name, "version": APP_VERSION, "sha256": digest, "size": size}

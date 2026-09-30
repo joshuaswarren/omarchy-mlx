@@ -39,6 +39,8 @@ from pathlib import Path
 
 import numpy as np
 
+import mlx_omarchy_paths
+
 TARGET_SAMPLE_RATE = 16_000
 MAX_DURATION_SECONDS = 30.0
 MAX_INPUT_RATE = 192_000
@@ -70,12 +72,8 @@ class RecognitionTimedOut(RuntimeError):
 
 def _installed_roots() -> list[Path]:
     """The mlx-omarchy install venv package root, independent of PATH."""
-    venv_roots = [Path.home() / ".local" / "share" / "mlx-omarchy" / "venv"]
-    env_venv = os.environ.get("MLX_OMARCHY_VENV", "")
-    if env_venv:
-        venv_roots.insert(0, Path(env_venv))
     roots: list[Path] = []
-    for venv in venv_roots:
+    for venv in mlx_omarchy_paths.venv_roots():
         roots.extend(venv.glob("lib/python3.*/site-packages/mlx"))
     return roots
 

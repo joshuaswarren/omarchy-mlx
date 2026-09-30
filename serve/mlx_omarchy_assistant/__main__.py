@@ -14,6 +14,8 @@ import time
 import webbrowser
 from pathlib import Path
 
+import mlx_omarchy_paths
+
 from .server import AssistantServer
 
 
@@ -107,7 +109,7 @@ def terminal(runtime, prompt=None, once=False, maximum=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="mlx-omarchy-assistant", description="Local MLX Chat and typed decisions")
-    parser.add_argument("--home", type=Path, default=Path(os.environ.get("MLX_OMARCHY_HOME", Path.home() / ".local/share/mlx-omarchy")))
+    parser.add_argument("--home", type=Path, default=mlx_omarchy_paths.default_data_home())
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--terminal", action="store_true")

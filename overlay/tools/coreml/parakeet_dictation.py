@@ -52,13 +52,46 @@ class DictationTimedOut(RuntimeError):
     """The transcription exceeded its deadline."""
 
 
+def _paths_module():
+    """The shared name module (serve/mlx_omarchy_paths.py) in a checkout."""
+    if "mlx_omarchy_paths" in sys.modules:
+        return sys.modules["mlx_omarchy_paths"]
+    for base in Path(__file__).resolve().parents:
+        candidate = base / "serve" / "mlx_omarchy_paths.py"
+        if candidate.is_file():
+            spec = spec_from_loader(
+                "mlx_omarchy_paths",
+                importlib.machinery.SourceFileLoader("mlx_omarchy_paths", str(candidate)),
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
 def _installed_cli_candidates():
     """The mlx-omarchy install venv, independent of PATH and wrappers."""
-    venv_roots = [Path.home() / ".local" / "share" / "mlx-omarchy" / "venv"]
-    env_venv = os.environ.get("MLX_OMARCHY_VENV", "")
+    paths = _paths_module()
+    if paths is not None:
+        for root in paths.venv_roots():
+            yield from root.glob(
+                "lib/python3.*/site-packages/mlx/bin/mlx-omarchy-parakeet"
+            )
+        return
+    # Packaged inside the wheel the checkout name module is absent; the
+    # candidates derive structurally. The two literals are contract-locked
+    # to serve/mlx_omarchy_paths.py by tests/test_paths_module.py.
+    roots = []
+    env_venv = os.environ.get("OMARCHY_MLX_VENV", "")
     if env_venv:
-        venv_roots.insert(0, Path(env_venv))
-    for root in venv_roots:
+        roots.append(Path(env_venv))
+    for base in Path(__file__).resolve().parents:
+        if (base / "pyvenv.cfg").is_file():
+            roots.append(base)
+            break
+    roots.append(Path.home() / ".local" / "share" / "mlx-omarchy" / "venv")
+    for root in roots:
         yield from root.glob(
             "lib/python3.*/site-packages/mlx/bin/mlx-omarchy-parakeet"
         )

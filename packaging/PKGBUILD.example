@@ -1,0 +1,62 @@
+# Example PKGBUILD for the mlx-omarchy system package.
+#
+# This file documents the recipe shape for the omarchy-pkgs lane; it is an
+# EXAMPLE, not a buildable recipe: the real PKGBUILD lives in the package
+# repository, carries the reviewed-lane metadata (channels, min_release_age),
+# and pins the release tag and checksums at publish time.
+#
+# Layout produced (name table of record: serve/mlx_omarchy_paths.py):
+#   /usr/lib/omarchy-mlx/venv/                     private venv, built offline
+#   /usr/lib/omarchy-mlx/chat.py                   terminal demo entry
+#   /usr/bin/mlx-omarchy{,-demo,-chat,-serve,-info}
+#   /usr/bin/mlx-omarchy-retire-legacy             legacy $HOME cleanup
+#   /usr/bin/omarchy-mlx-serve                     command-center launcher
+#   /usr/lib/systemd/user/mlx-omarchy-chat.service staged, never enabled
+#   /usr/share/applications/mlx-omarchy-chat.desktop
+#   /usr/share/omarchy-mlx/paths.sh                generated name table
+#   /usr/share/doc/mlx-omarchy/README.md
+#
+# The build is fully offline: wheels are vendored and hash-locked at
+# release time (packaging/vendor-wheels.sh); makepkg downloads exactly
+# three pinned sources and nothing else.
+
+# source=("mlx-omarchy-$pkgver.tar.gz"        # repo snapshot at the pinned tag
+#         "mlx_omarchy-$pkgver-cp314-cp314-linux_aarch64.whl"  # release wheel
+#         "mlx-omarchy-vendor-$pkgver.tar.gz" # packaging/vendor-wheels.sh output
+#         )
+# sha256sums=(... three pins ...)
+
+# depends=(python=3.14 openblas lapack blas glibc gcc-libs)
+# optdepends=(omarchy-ane-dkms: ANE execution on qualified chips)
+# makedepends=(python)
+
+build() {
+  cd "mlx-omarchy-$pkgver"
+
+  # Vendored wheels + hash-locked manifest from the vendor tarball.
+  tar -xf "$srcdir/mlx-omarchy-vendor-$pkgver.tar.gz" -C "$srcdir"
+  export MLX_OMARCHY_CONV_RING=0
+
+  # Everything: verify the vendor bytes against the lock, build the venv
+  # offline with --require-hashes, copy the serve trees into the venv,
+  # apply the mlx-lm serve patches to the venv, and stage /usr.
+  bash install.sh --system \
+    --dest-root "$srcdir/stage" \
+    --vendor "$srcdir/vendor" \
+    --lock "$srcdir/vendor/requirements-lock.txt"
+}
+
+check() {
+  cd "mlx-omarchy-$pkgver"
+  # Import smoke in the sandbox; the GPU matmul smoke needs a device and
+  # stays a post-install step on qualified hardware.
+  "stage/usr/lib/omarchy-mlx/venv/bin/python" \
+    -c 'import mlx.core, mlx_omarchy_paths, mlx_omarchy_serve'
+}
+
+package() {
+  cp -a "$srcdir/stage/usr" "$pkgdir/usr"
+  # The venv is built directly at its final absolute path, so the venv's
+  # own scripts and the staged launchers already point at /usr/lib/omarchy-mlx.
+  # No shebang fixups are needed.
+}

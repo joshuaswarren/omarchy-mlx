@@ -375,15 +375,15 @@ class WorkerProtocolTest(unittest.TestCase):
             (root / "coreml").mkdir(parents=True)
             (root / "coreml" / "reference.py").write_text("# probe\n")
             (root / "coreml" / "parakeet_dictation.py").write_text("# dictation\n")
-            previous = os.environ.get("MLX_OMARCHY_VENV")
-            os.environ["MLX_OMARCHY_VENV"] = str(venv)
+            previous = os.environ.get("OMARCHY_MLX_VENV")
+            os.environ["OMARCHY_MLX_VENV"] = str(venv)
             try:
                 located = recognition._locate_tools_root()
             finally:
                 if previous is None:
-                    os.environ.pop("MLX_OMARCHY_VENV", None)
+                    os.environ.pop("OMARCHY_MLX_VENV", None)
                 else:
-                    os.environ["MLX_OMARCHY_VENV"] = previous
+                    os.environ["OMARCHY_MLX_VENV"] = previous
             self.assertEqual(located, root)
     def test_transfer_package_resolves_tools_without_checkout(self):
         from unittest.mock import patch
@@ -415,7 +415,7 @@ class WorkerProtocolTest(unittest.TestCase):
             fake_file.parent.mkdir(parents=True)
             with patch.object(recognition, "__file__", str(fake_file)), \
                     patch.object(recognition.shutil, "which", return_value=None), \
-                    patch.dict(os.environ, {"MLX_OMARCHY_TOOLS": "", "MLX_OMARCHY_VENV": str(base / "venv")}):
+                    patch.dict(os.environ, {"MLX_OMARCHY_TOOLS": "", "OMARCHY_MLX_VENV": str(base / "venv")}):
                 self.assertEqual(recognition._locate_tools_root(), tools)
 
 

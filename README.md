@@ -26,6 +26,10 @@ curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/inst
 
 Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.6](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.6) (installed-from-release gates green on the M2 Max; the installer ships MLX Chat, the serve CLI, and the wheel from the same tag; fixes the fresh-install setup for the Laya pair, offline and online). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
+### System package layout
+
+The packaging lane builds the same stack as an offline system venv instead of a home install: `packaging/vendor-wheels.sh` vendors and hash-locks the dependency closure at release time, `packaging/build-venv.sh` creates `/usr/lib/omarchy-mlx/venv` from those wheels with `pip --require-hashes` (no network), and `install.sh --system` stages the whole `/usr` tree for a PKGBUILD — see `packaging/PKGBUILD.example`. Every install name (paths, launchers, unit, desktop entry) is defined once in `serve/mlx_omarchy_paths.py`, and venv discovery for the serve CLI and the assistant follows `$OMARCHY_MLX_VENV`, then `/usr/lib/omarchy-mlx/venv`, then the legacy `~/.local/share/mlx-omarchy/venv`. Once the system package owns the venv, `mlx-omarchy-retire-legacy` removes a legacy home install; it is dry-run by default and keeps chat history, pair homes, and the model cache unless `--purge-data`.
+
 Manual install (or any other Linux box):
 
 ```bash

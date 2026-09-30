@@ -13,6 +13,10 @@
 
 set -euo pipefail
 
+# Name table of record for every install path: serve/mlx_omarchy_paths.py
+# (packaging/paths.sh is generated from it and sourced by --system).
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 REPO=joshuaswarren/mlx-omarchy
 PREFIX="${MLX_OMARCHY_HOME:-$HOME/.local/share/mlx-omarchy}"
 VENV="$PREFIX/venv"
@@ -26,9 +30,173 @@ VOICE=0
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# System-layout install (packaging lane). A PKGBUILD runs this in build()
+# against vendored, hash-locked wheels and stages the /usr tree under
+# --dest-root; package() copies the staged tree. Nothing here touches the
+# network, pacman, systemd state, or the running machine's $HOME.
+install_system() {
+  local dest_root="" vendor="" lock="" serve_src="" python_bin="" import_smoke=0
+  while (($#)); do
+    case "$1" in
+      --dest-root) dest_root="$2"; shift 2 ;;
+      --vendor) vendor="$2"; shift 2 ;;
+      --lock) lock="$2"; shift 2 ;;
+      --serve-src) serve_src="$2"; shift 2 ;;
+      --python) python_bin="$2"; shift 2 ;;
+      --import-smoke) import_smoke=1; shift ;;
+      *) die "unknown --system option: $1 (supported: --dest-root, --vendor, --lock, --serve-src, --python, --import-smoke)" ;;
+    esac
+  done
+  if [[ -z $vendor || -z $lock ]]; then
+    die "--system requires --vendor DIR and --lock FILE (vendored, hash-locked wheels)"
+  fi
+  if [[ -z $serve_src ]]; then
+    serve_src="$ROOT/serve"
+  fi
+  [[ -d $vendor ]] || die "vendor directory not found: $vendor"
+  [[ -f $lock ]] || die "lock file not found: $lock"
+  [[ -d $serve_src ]] || die "serve sources not found: $serve_src"
+  [[ -f "$ROOT/packaging/paths.sh" ]] || die "--system runs from a checkout; packaging/paths.sh is missing"
+
+  # Every staged path comes from the generated name table.
+  # shellcheck disable=SC1091
+  source "$ROOT/packaging/paths.sh"
+
+  local system_root="${dest_root%/}$SYSTEM_PREFIX"
+  local venv="$system_root/$VENV_DIR"
+  local bindir="${dest_root%/}/usr/bin"
+  # Generated launcher/unit/desktop contents carry the FINAL system paths:
+  # a PKGBUILD stages under --dest-root and copies the tree to / in
+  # package(), so an embedded staging path would break at runtime.
+  local final_venv="$SYSTEM_PREFIX/$VENV_DIR"
+  local final_bindir="/usr/bin"
+  say "Verifying vendored wheels against $lock"
+  bash "$ROOT/packaging/verify-vendor.sh" "$vendor" "$lock"
+
+  local build_args=(--vendor "$vendor" --lock "$lock" --venv "$venv")
+  if [[ -n $python_bin ]]; then
+    build_args+=(--python "$python_bin")
+  fi
+  say "Building $venv offline from vendored wheels"
+  bash "$ROOT/packaging/build-venv.sh" "${build_args[@]}"
+
+  local site_dir
+  site_dir="$(printf '%s\n' "$venv"/lib/python3.*/site-packages)"
+  [[ -d $site_dir ]] || die "no site-packages under $venv"
+  local pkg
+  for pkg in $SERVE_PACKAGES; do
+    [[ -d "$serve_src/$pkg" ]] || die "serve package missing: $serve_src/$pkg"
+    mkdir -p "$site_dir/$pkg"
+    cp -a "$serve_src/$pkg/." "$site_dir/$pkg/"
+  done
+  cp "$ROOT/serve/mlx_omarchy_paths.py" "$site_dir/mlx_omarchy_paths.py"
+
+  if [[ -d "$site_dir/mlx_lm" ]]; then
+    say "Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
+    : "${MLX_OMARCHY_CONV_RING:=0}"
+    bash "$ROOT/scripts/apply-mlx-lm-patches.sh" "$venv"
+  else
+    echo "note: mlx-lm is not in this venv; skipped the mlx-lm serve patches (every real vendor lock carries mlx-lm==0.31.3)"
+  fi
+
+  say "Installing launchers into $bindir"
+  mkdir -p "$bindir" "$system_root"
+  cp "$ROOT/demo/chat.py" "$system_root/chat.py"
+  cat >"$bindir/mlx-omarchy" <<EOF
+#!/usr/bin/env bash
+exec "$final_venv/bin/python" "\$@"
+EOF
+  cat >"$bindir/mlx-omarchy-demo" <<EOF
+#!/usr/bin/env bash
+exec "$final_venv/bin/python" "$SYSTEM_PREFIX/chat.py" "\$@"
+EOF
+  cat >"$bindir/mlx-omarchy-chat" <<EOF
+#!/usr/bin/env bash
+exec "$final_venv/bin/python" -m mlx_omarchy_assistant "\$@"
+EOF
+  cat >"$bindir/mlx-omarchy-serve" <<EOF
+#!/usr/bin/env bash
+exec "$final_venv/bin/python" -m mlx_omarchy_serve "\$@"
+EOF
+  cat >"$bindir/omarchy-mlx-serve" <<EOF
+#!/usr/bin/env bash
+# omarchy:group=mlx
+# omarchy:name=serve
+# omarchy:summary=Serve a vetted local model on the Apple GPU (memory-checked, approve-first)
+# omarchy:args=[target] [--context N] [--server mlx-lm|omlx] [--host H] [--port P] [--yes]
+# omarchy:examples=omarchy mlx serve | omarchy mlx serve recommend | omarchy mlx serve plan <model> | omarchy mlx serve catalog list
+exec "$final_venv/bin/python" -m mlx_omarchy_serve "\$@"
+EOF
+  chmod +x "$bindir/mlx-omarchy" "$bindir/mlx-omarchy-demo" "$bindir/mlx-omarchy-chat" \
+    "$bindir/mlx-omarchy-serve" "$bindir/omarchy-mlx-serve"
+  local info info_final
+  if info="$("$venv/bin/python" -I -c 'import os, mlx
+print(next(p for root in mlx.__path__
+           if os.access(p := os.path.join(root, "bin", "mlx-omarchy-info"), os.X_OK)))' 2>/dev/null)"; then
+    info_final="${info#"$dest_root"}"
+    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$info_final" >"$bindir/mlx-omarchy-info"
+    chmod +x "$bindir/mlx-omarchy-info"
+  else
+    die "the installed wheel provides no mlx/bin/mlx-omarchy-info; cannot stage the info launcher"
+  fi
+  install -m 755 "$ROOT/packaging/mlx-omarchy-retire-legacy" "$bindir/$RETIRE_CMD"
+  local sharedir="${dest_root%/}$SYSTEM_SHARE_PREFIX"
+  install -d -m 755 "$sharedir"
+  install -m 644 "$ROOT/packaging/paths.sh" "$sharedir/paths.sh"
+
+  local unitdir="${dest_root%/}/usr/lib/systemd/user"
+  mkdir -p "$unitdir"
+  cat >"$unitdir/$UNIT_NAME" <<EOF
+[Unit]
+Description=MLX Chat resident pair
+After=default.target
+
+[Service]
+ExecStart=$final_bindir/mlx-omarchy-chat --resume --no-browser
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target
+EOF
+
+  local appsdir="${dest_root%/}/usr/share/applications"
+  mkdir -p "$appsdir"
+  cat >"$appsdir/mlx-omarchy-chat.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=MLX Chat (Apple GPU)
+Comment=Local chat and typed decisions on the Apple GPU via mlx-omarchy
+Exec=$final_bindir/mlx-omarchy-chat
+Icon=applications-internet
+Categories=Development;Utility;
+EOF
+
+  local docdir="${dest_root%/}/usr/share/doc/$HOME_NAME"
+  mkdir -p "$docdir"
+  cp "$ROOT/README.md" "$docdir/README.md"
+
+  if (( import_smoke )); then
+    say "Import smoke"
+    "$venv/bin/python" -c 'import mlx.core, mlx_omarchy_paths, mlx_omarchy_serve'
+  fi
+
+  say "System tree staged under ${dest_root:-/}"
+  echo "  venv:      $venv"
+  echo "  launchers: $bindir/{mlx-omarchy,mlx-omarchy-demo,mlx-omarchy-chat,mlx-omarchy-serve,mlx-omarchy-info,$RETIRE_CMD,omarchy-mlx-serve}"
+  echo "  unit:      $unitdir/$UNIT_NAME (staged only; never enabled at build time)"
+  echo "  desktop:   $appsdir/mlx-omarchy-chat.desktop"
+  echo "  packaging: the recipe declares pacman depends=(python=$PYTHON_VERSION openblas lapack blas)"
+}
+
 case "${1:-}" in
   --ane) ANE=1 ;;
   --voice) VOICE=1 ;;
+  --system)
+    install_system "${@:2}"
+    exit 0
+    ;;
   --uninstall)
     if command -v systemctl >/dev/null 2>&1; then
       systemctl --user disable --now mlx-omarchy-chat.service >/dev/null 2>&1 || true
@@ -47,7 +215,7 @@ case "${1:-}" in
     exit 0
     ;;
   "") ;;
-  *) die "unknown option: $1 (supported: --ane, --voice, --uninstall)" ;;
+  *) die "unknown option: $1 (supported: --ane, --voice, --system, --uninstall)" ;;
 esac
 
 # 1. Hardware and interpreter checks. The release wheel is cp314 linux_aarch64
@@ -237,6 +405,10 @@ chmod +x "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BI
 #     approve-first download gate. The package ships from the same release
 #     tag as the wheel, so an install is internally consistent.
 say "Installing serve CLI"
+# Shared name module first: venv discovery and the install name table,
+# imported by the serve CLI, the assistant, and the retire tooling.
+curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_paths.py" \
+  -o "$PREFIX/mlx_omarchy_paths.py"
 SERVE_PKG="$PREFIX/mlx_omarchy_serve"
 mkdir -p "$SERVE_PKG"
 for serve_file in __init__.py catalog.py budget.py __main__.py _mlxlm_server.py catalog.json; do
@@ -273,15 +445,15 @@ chmod +x "$BIN/mlx-omarchy-serve"
 #     An existing non-mlx-omarchy binary is never overwritten.
 write_omarchy_serve_launcher() {
   local dest="$1"
-  cat >"$dest" <<'OMLX'
+  cat >"$dest" <<OMLX
 #!/usr/bin/env bash
 # omarchy:group=mlx
 # omarchy:name=serve
 # omarchy:summary=Serve a vetted local model on the Apple GPU (memory-checked, approve-first)
 # omarchy:args=[target] [--context N] [--server mlx-lm|omlx] [--host H] [--port P] [--yes]
 # omarchy:examples=omarchy mlx serve | omarchy mlx serve recommend | omarchy mlx serve plan <model> | omarchy mlx serve catalog list
-export PYTHONPATH="$HOME/.local/share/mlx-omarchy${PYTHONPATH:+:$PYTHONPATH}"
-exec "$HOME/.local/share/mlx-omarchy/venv/bin/python" -m mlx_omarchy_serve "$@"
+export PYTHONPATH="$PREFIX\${PYTHONPATH:+:\$PYTHONPATH}"
+exec "$VENV/bin/python" -m mlx_omarchy_serve "\$@"
 OMLX
   chmod +x "$dest"
 }
@@ -312,7 +484,7 @@ fi
 say "Installing MLX Chat"
 ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
 mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
-for assistant_file in __init__.py __main__.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py speech_yield.py gpu_stt.py gpu_stt_worker.py; do
+for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py speech_yield.py gpu_stt.py gpu_stt_worker.py; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
     -o "$ASSISTANT_PKG/$assistant_file"
 done

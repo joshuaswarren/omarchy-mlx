@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# mlx-omarchy-retire-legacy — remove a legacy $HOME mlx-omarchy install.
+#
+#   mlx-omarchy-retire-legacy              # dry run: list what would go
+#   mlx-omarchy-retire-legacy --yes        # remove venv, launchers, unit, desktop, shims
+#   mlx-omarchy-retire-legacy --yes --purge-data   # also delete the data root
+#
+# User data is kept unless --purge-data: chat history, pair homes, and
+# serve state under the data root, plus model weights in
+# ~/.cache/huggingface, which no mode ever touches. The system venv
+# (/usr/lib/omarchy-mlx/venv) is never touched: the package owns it.
+set -euo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for candidate in "$self_dir/paths.sh" "$self_dir/../packaging/paths.sh" \
+                 "${SYSTEM_SHARE_PREFIX:-/usr/share/omarchy-mlx}/paths.sh"; do
+  if [[ -f $candidate ]]; then
+    # shellcheck disable=SC1090
+    source "$candidate"
+    break
+  fi
+done
+if [[ -z "${HOME_NAME:-}" ]]; then
+  echo "error: paths.sh (the name table) not found next to $self_dir" >&2
+  exit 1
+fi
+
+say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mnote:\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+YES=0
+PURGE_DATA=0
+for arg in "$@"; do
+  case "$arg" in
+    --yes) YES=1 ;;
+    --purge-data) PURGE_DATA=1 ;;
+    -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) die "unknown option: $arg (supported: --yes, --purge-data)" ;;
+  esac
+done
+if (( PURGE_DATA )) && (( ! YES )); then
+  warn "--purge-data is a scope flag; nothing is deleted without --yes."
+fi
+
+# The legacy install root is the data root (fixed at install time via
+# MLX_OMARCHY_HOME); the venv inside it is the only part that must go.
+PREFIX="${!DATA_HOME_ENV:-$HOME/.local/share/$HOME_NAME}"
+VENV="$PREFIX/$VENV_DIR"
+BIN="$HOME/.local/bin"
+APPS="$HOME/.local/share/applications"
+UNIT="$HOME/.config/systemd/user/$UNIT_NAME"
+
+plan=()
+add() { plan+=("$1"); }
+
+if [[ -d $VENV ]]; then
+  add "venv:$VENV"
+fi
+for launcher in $LAUNCHERS; do
+  if [[ -e "$BIN/$launcher" ]]; then
+    add "file:$BIN/$launcher"
+  fi
+done
+if [[ -e $UNIT ]]; then
+  add "unit:$UNIT"
+fi
+for desktop in $DESKTOPS; do
+  if [[ -e "$APPS/$desktop" ]]; then
+    add "file:$APPS/$desktop"
+  fi
+done
+# Command-center shims written next to `omarchy` by the old installer:
+# remove only files carrying our marker, exactly like install.sh --uninstall.
+shim_dirs=()
+while IFS= read -r dir; do
+  if [[ -d $dir ]]; then
+    shim_dirs+=("$dir")
+  fi
+done < <(printf '%s\n' "$PATH" | tr ':' '\n' | sort -u)
+if command -v omarchy >/dev/null 2>&1; then
+  shim_dirs+=("$(dirname "$(command -v omarchy)")")
+fi
+for dir in "${shim_dirs[@]}"; do
+  shim="$dir/omarchy-mlx-serve"
+  if [[ ! -e $shim ]]; then
+    continue
+  fi
+  if ! grep -qs 'mlx_omarchy_serve' "$shim"; then
+    warn "$shim exists and is not mlx-omarchy's; left untouched."
+  elif [[ -w $dir ]]; then
+    add "shim:$shim"
+  else
+    warn "$shim carries the legacy marker but $dir is not writable; remove it with: sudo rm -f $shim"
+  fi
+done
+
+if (( PURGE_DATA )) && [[ -d $PREFIX ]]; then
+  add "data:$PREFIX"
+fi
+
+if [[ ${#plan[@]} -eq 0 ]]; then
+  if [[ -d $PREFIX ]]; then
+    say "Legacy install already retired. User data remains under $PREFIX."
+  else
+    say "No legacy $HOME_NAME install found under $HOME."
+  fi
+  if [[ -d "${SYSTEM_PREFIX%/}/$VENV_DIR" ]]; then
+    say "System venv ${SYSTEM_PREFIX%/}/$VENV_DIR stays (owned by the package)."
+  fi
+  exit 0
+fi
+
+for entry in "${plan[@]}"; do
+  kind="${entry%%:*}"
+  path="${entry#*:}"
+  case "$kind" in
+    venv) label="venv" ;;
+    file) label="file" ;;
+    unit) label="user unit" ;;
+    shim) label="shim" ;;
+    data) label="data root" ;;
+    *) die "internal: unknown plan kind $kind" ;;
+  esac
+  if (( YES )); then
+    if [[ $kind == unit ]] && command -v systemctl >/dev/null 2>&1; then
+      systemctl --user disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$path"
+    say "removed $label: $path"
+  else
+    say "would remove $label: $path"
+  fi
+done
+if (( YES )) && command -v systemctl >/dev/null 2>&1; then
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+fi
+
+if [[ -d "${SYSTEM_PREFIX%/}/$VENV_DIR" ]]; then
+  say "System venv ${SYSTEM_PREFIX%/}/$VENV_DIR stays (owned by the package)."
+fi
+if (( YES )); then
+  if (( PURGE_DATA )); then
+    say "Legacy install and user data removed."
+  else
+    say "Legacy install retired. User data kept under $PREFIX (chat history, pair homes, serve state)."
+  fi
+  say "Model weights stay in ~/.cache/huggingface; delete them yourself if you want the space back."
+else
+  say "Dry run: nothing was deleted. Pass --yes to apply${PURGE_DATA:+ (with --purge-data)}."
+fi

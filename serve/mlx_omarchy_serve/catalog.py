@@ -19,6 +19,7 @@ maintainer-side refresher contract).
 from __future__ import annotations
 
 import json
+import mlx_omarchy_paths
 import os
 import re
 import sys
@@ -93,7 +94,7 @@ class CatalogError(ValueError):
 
 
 def default_home() -> Path:
-    return Path(os.environ.get("MLX_OMARCHY_HOME", Path.home() / ".local/share/mlx-omarchy"))
+    return mlx_omarchy_paths.default_data_home()
 
 
 def env_offline() -> bool:

@@ -226,7 +226,7 @@ class AssistantInstallTests(unittest.TestCase):
         text = installer_text()
         self.assertIn("VOICE=0", text)
         self.assertIn("--voice) VOICE=1 ;;", text)
-        self.assertIn("(supported: --ane, --voice, --uninstall)", text)
+        self.assertIn("(supported: --ane, --voice, --system, --uninstall)", text)
         self.assertIn("MLX_AUDIO_VERSION=0.5.6", text)
         voice_section = text[text.index("if (( VOICE )); then"):]
         self.assertIn('--no-deps "mlx-audio==$MLX_AUDIO_VERSION"', voice_section)

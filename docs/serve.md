@@ -284,6 +284,15 @@ curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/inst
 mlx-omarchy -c 'import mlx.core as mx; print(mx.device_info())'
 ```
 
+System packaging builds this same serving stack offline: `packaging/build-venv.sh`
+creates the private venv from vendored, hash-locked wheels and
+`install.sh --system` stages `/usr/lib/omarchy-mlx/venv` with the serve
+launchers (`packaging/PKGBUILD.example` documents the recipe shape). The
+serve CLI and the assistant discover their venv through
+`serve/mlx_omarchy_paths.py`: `$OMARCHY_MLX_VENV`, then
+`/usr/lib/omarchy-mlx/venv`, then the legacy `~/.local/share/mlx-omarchy/venv`
+(with a one-line hint naming `mlx-omarchy-retire-legacy`).
+
 Confirm the Apple GPU / Honeykrisp backend, not a software Vulkan device.
 Install additional loaders in the same environment as mlx-omarchy; do not
 replace its wheel with the upstream macOS package.
