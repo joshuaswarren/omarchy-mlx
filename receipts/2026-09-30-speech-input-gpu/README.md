@@ -15,7 +15,7 @@ A real screen reader was not run.
 
 | Item | Value |
 |---|---|
-| Host | `<project-m2>`, Apple M2 Max (T6021), Linux 7.1.13-ARCH-polltx. Final runs on boot `35df33be…`. The first corpus run (`turn4`) ran on boot `2a4f18f7…` |
+| Host | `<project-m2>`, Apple M2 Max (T6021), Linux 7.1.13-ARCH-polltx. The reconfirmation on main `2c08e72dd` (`turn7`) and the latency A/B ran on boot `95675db4…`. Earlier final-code runs used boot `35df33be…`, and the first corpus run (`turn4`) used boot `2a4f18f7…` |
 | mlx wheel | `0.32.3.dev202609291615+06711ad` (v0.7.6 release wheel), provenance `verified: match`, libmlx sha256 `004d24b6…5b240d9a29`, extension sha256 `0b720eb9…ec1d282621` ([env](raw/turn6-env.txt)) |
 | Model | `mlx-community/parakeet-tdt-0.6b-v3` at `ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15`, `model.safetensors` sha256 `05e01c7f…625464592`, loaded offline from `<home>/voice/parakeet-tdt-0.6b-v3` |
 | Stack | mlx-audio 0.5.6 in an owned worker subprocess (`gpu_stt_worker.py`); resampling runs on the mlx device |
@@ -27,30 +27,32 @@ Every GPU run held the M2 GPU lock. The tables say when another agent's GPU proc
 
 WER is total word edits over total reference words, with one normalizer for every system
 (`corpus/score.py`). A clip without a transcript counts every reference word as a deletion.
-Parakeet ran through `Recognition.transcribe` over the worker subprocess on the final code
-(`turn6`, alone on the GPU). Its WER matches `turn4`, the run before the empty-transcript retry,
-on every subset. Whisper is a context row only: large-v3-turbo on the reference Mac (M1 Ultra,
-macOS 26.6.2, mlx-whisper 0.4.3, mlx 0.30.6), with a new CLI process per clip.
+Parakeet ran through `Recognition.transcribe` over the worker subprocess, alone on the GPU. The
+final code was reconfirmed on main `2c08e72dd` (`turn7`; a 2 s [monitor](raw/turn7-monitor.txt)
+shows only this run holding the GPU render node; [scores](raw/turn7-scores.json)). WER is the
+same on every subset in `turn7`, `turn6` (the first run with the empty-transcript retry) and
+`turn4` (the run before it). Whisper is a context row only: large-v3-turbo on the reference Mac
+(M1 Ultra, macOS 26.6.2, mlx-whisper 0.4.3, mlx 0.30.6), with a new CLI process per clip.
 
-| Subset | n | Parakeet WER | Threshold | Result | Parakeet p50 / p95 ms (turn6; turn4) | Whisper WER |
+| Subset | n | Parakeet WER | Threshold | Result | Parakeet p50 / p95 ms (turn7; turn6; turn4) | Whisper WER |
 |---|---:|---:|---:|---|---|---:|
-| test-clean | 60 | 3.42% | ≤ 6% | pass | 475 / 853; 482 / 845 | 2.36% |
-| test-other | 40 | 2.92% | ≤ 14% | pass | 451 / 805; 447 / 780 | 3.21% |
-| accented (Midlands) | 35 | 4.39% | ≤ 20% | pass | 440 / 553; 431 / 571 | 1.34% |
-| babble at 0 dB | 10 | 11.43% | ≤ 30% | pass | 1185 / 2591; 446 / 897 | 8.00% |
-| babble at 10 dB | 10 | 0.58% | none | — | 1120 / 2275; 441 / 741 | 2.34% |
-| short | 12 | 3.85% | none | — | 673 / 979; 382 / 500 | 1.92% |
-| final chunk | 5 | 1.49% | none | — | 1235 / 1765; 449 / 462 | 0.00% |
+| test-clean | 60 | 3.42% | ≤ 6% | pass | 475 / 874; 475 / 853; 482 / 845 | 2.36% |
+| test-other | 40 | 2.92% | ≤ 14% | pass | 479 / 772; 451 / 805; 447 / 780 | 3.21% |
+| accented (Midlands) | 35 | 4.39% | ≤ 20% | pass | 386 / 475; 440 / 553; 431 / 571 | 1.34% |
+| babble at 0 dB | 10 | 11.43% | ≤ 30% | pass | 430 / 665; 1185 / 2591; 446 / 897 | 8.00% |
+| babble at 10 dB | 10 | 0.58% | none | — | 435 / 645; 1120 / 2275; 441 / 741 | 2.34% |
+| short | 12 | 3.85% | none | — | 354 / 444; 673 / 979; 382 / 500 | 1.92% |
+| final chunk | 5 | 1.49% | none | — | 387 / 398; 1235 / 1765; 449 / 462 | 0.00% |
 
 | Subset | n | Parakeet empty rate | Threshold | Result | Whisper empty rate |
 |---|---:|---:|---:|---|---:|
 | silence | 10 | 1.00 | ≥ 0.95 | pass | 0.00 (text on every silent clip) |
 | pink noise | 10 | 1.00 | ≥ 0.95 | pass | 1.00 |
 
-The corpus ran in manifest order. In `turn6`, the subsets decoded late in the run were 2 to 2.5
-times slower than the same clips in `turn4`. No other agent's process was listed at the start of
-`turn6`, and the retry does not fire on those clips (all of them returned text). The slowdown was
-not attributed.
+`turn6` ran the corpus in manifest order, and its late subsets were 2 to 2.5 times slower than
+in `turn4`. `turn7` ran the same code on main and matches `turn4` speed, with its monitor showing
+no other GPU holder. `turn6` had no monitor, so the cause of its slowdown cannot be established
+after the fact. The code is ruled out; see "Latency and memory".
 
 One test-clean clip, `121-123859-0002`, is 30.04 s long. The recognizer refuses anything over
 30 s, and the browser recorder now cuts every upload at exactly 30.0 s. The gate row scores the
@@ -69,8 +71,9 @@ the worker process, which every CPU-stream evaluation reaches
 | Control, `mx.add` on `mx.gpu` | 0 | yes ([log](raw/control-gpu-gdb.txt)) |
 | Control, `mx.add` on `mx.cpu` | 3 | yes ([log](raw/control-cpu-gdb.txt)) |
 | Final worker: load, warm-up, 21 requests (16 kHz and 48 kHz; silence and noise included, so the voicing check ran) | **0** | yes ([log](raw/turn6-worker-gdb.txt), [requests](raw/turn6-trace-requests.json)) |
+| Same, on main `2c08e72dd` (`turn7`) | **0** | yes ([log](raw/turn7-worker-gdb.txt)) |
 
-All 21 requests got answers. Before the models-package fix, the worker made **152** CPU-stream
+All 21 requests got answers in both runs. Before the models-package fix, the worker made **152** CPU-stream
 calls ([log](raw/prefix-worker-gdb.txt), old wheel `+29cba8e`). The call chains
 ([tally](raw/prefix-cpu-dispatch-native-chains.txt)) and Python stacks
 ([stacks](raw/prefix-cpu-dispatch-pystacks.txt)) put every first hit at
@@ -125,9 +128,18 @@ unprocessed audio, which is how the corpus WER was measured: 0.90x
 |---|---|---|
 | Browser, stop click to transcript in the composer, 1440 px, 5.0 s recordings, 2 warm-ups + 30 | p50 861.8 ms, p95 1397.8 ms (budget p95 ≤ 2000 ms): **pass** | none |
 | HTTP `POST /api/transcribe` with the Everyday pair resident, 2 warm-ups + 30 | final code: p50 442.7 / p95 492.7 ms ([E2E run](raw/e2e-http-latency.json)) and p50 1052.2 / p95 1467.3 ms ([latency run](raw/latency-http-latency.json)); earlier code, four runs: p95 1295.9 to 1507.9 ms ([1](raw/http-latency-e2e-20260930T054943Z.json), [2](raw/http-latency-e2e-latency-20260930T055241Z.json), [3](raw/http-latency-e2e-latency-20260930T061333Z.json)) | none |
-| Direct `Recognition.transcribe`, 30 warm requests on a 5.075 s clip | final code p50 817.4 / p95 1167.4 ms ([turn6](raw/turn6-latency.json)); before the retry p50 424.7 / p95 556.4 ms ([turn4](raw/turn4-latency.json)). The retry did not fire (the clip returns text), so this 2x gap is run-to-run variance and was not attributed | none |
-| Cold first call (worker spawn, model load, warm-up, first request) | 2982.8 ms (turn6), 2883.8 ms (turn4). The first dictation after setup pays it | none |
+| Direct `Recognition.transcribe`, fresh worker, 2 warm-ups + 30 on a 5.075 s clip, A/B in two tickets: final worker (6 runs) vs the worker before the retry (4 runs), interleaved ([env](raw/latency-ab-20260930T144558Z-env.txt), [monitor](raw/latency-ab-20260930T144558Z-monitor.txt), [2nd env](raw/latency-ab-20260930T144930Z-env.txt), [2nd monitor](raw/latency-ab-20260930T144930Z-monitor.txt)) | final p95 452.4, 455.5, 430.4, 434.9, 428.1, 428.8 ms (p50 418.0 to 422.4); pre-retry p95 430.0, 430.0, 431.0, 428.9 ms (p50 419.7 to 422.0) | none: one render-node holder at a time, always this run's worker |
+| Direct, after the 192-clip corpus in the same worker | `turn7` p50 441.2 / p95 485.2 ms ([latency](raw/turn7-latency.json)); `turn4` p50 424.7 / p95 556.4 ms ([latency](raw/turn4-latency.json)); `turn6` p50 817.4 / p95 1167.4 ms ([latency](raw/turn6-latency.json)) | none listed at run start; `turn6` had no monitor |
+| Cold first call (worker spawn, model load, warm-up, first request) | 2652.0 to 3066.6 ms over the 10 A/B runs; 2886.6 ms (turn7). The first dictation after setup pays it | none |
 | `GET /api/status`, 30 requests ([probe](raw/route-probe-status-latency.json)) | p50 77.2 ms, p95 255.3 ms. The transcribe route calls the pair manager's full `status()` on every request | none |
+
+The earlier p95 doubling of direct latency (556.4 ms in `turn4`, 1167.4 ms in `turn6`) does not
+reproduce. The 10 interleaved A/B runs put the final worker and the pre-retry worker within 27 ms
+of each other at p95, so the retry code is not the cause. The final code on main measured p95
+428.1 to 485.2 ms in all 7 later runs. `turn6` had no process monitor, so what slowed it cannot be
+established after the fact. The A/B monitors saw one foreign process: another agent's `rsync`,
+which used the CPU but held no GPU. The second A/B ticket started at loadavg 4.87 because
+`turn7` had just ended; its numbers match the first ticket's.
 
 Memory is system MemAvailable sampled every 0.25 s
 ([summary](raw/mem-probe-20260930T091655Z-summary.json),
@@ -188,7 +200,8 @@ screen-reader live region. The two voice status labels no longer run together.
 
 The scripts are in [harness/](harness/):
 
-- `turn6.sh`: smoke, corpus, over-limit clip, traced worker.
+- `turn6.sh`, `turn7.sh`: smoke, corpus, over-limit clip, traced worker (`turn7` adds a process monitor).
+- `latency_ab.sh` with `latency_only.py`: the direct-latency A/B.
 - `controls.sh`: CPU and GPU controls.
 - `e2e.sh`, `e2e_denied.sh`, `e2e_latency.sh`: browser runs.
 - `mem_probe.sh`: memory.

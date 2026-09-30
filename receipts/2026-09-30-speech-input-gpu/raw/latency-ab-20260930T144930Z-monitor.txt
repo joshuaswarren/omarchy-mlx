@@ -1,0 +1,819 @@
+14:49:31.005319266
+== final 14:49:31.005356475
+4.87 2.20 0.87 8/374 13464
+      4 2424000       8 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  13425  100 93584       00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/lto1 -quiet -dumpbase <home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-314/mlx/core.cpy
+  13470  100 12080       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+  13392 99.0 119600      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/lto1 -quiet -dumpbase <home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-314/mlx/core.cpy
+  13351 98.9 138592      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/lto1 -quiet -dumpbase <home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-314/mlx/core.cpy
+14:49:32.028944034
+4.87 2.20 0.87 3/364 13520
+      4 1752000       4 2208000       4 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  13470  146 49360       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:14 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:27 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.5 11408       07:14 avahi-daemon: running [<project-m2>-2.local]
+14:49:33.043510861
+4.87 2.20 0.87 3/379 13586
+      4 1284000       4 2568000       4 3264000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530  208 129088      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 84.3 47936       00:02 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+  13584 50.0 10336       00:00 <home>/src/mlx-omarchy-attn128/.work/venv-attn128/bin/python -c import mlx.core as mx; print(mx.__version__)
+    743  1.8 65216       07:15 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:34.057755021
+4.87 2.20 0.87 1/375 13622
+      4 1188000       3 1752000       4 2208000       1 912000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 99.4 130304      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 56.1 48880       00:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:16 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:29 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:35.085584076
+4.48 2.16 0.87 1/375 13651
+      4 1752000       2 1968000       6 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 69.5 130592      00:02 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 42.2 48880       00:04 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:17 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:30 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:36.104122474
+4.48 2.16 0.87 1/375 13680
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 55.2 130608      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 33.8 48880       00:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:18 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:31 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:37.122220660
+4.48 2.16 0.87 1/375 13709
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 47.7 130624      00:04 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 28.2 48880       00:06 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:19 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:32 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:38.138956530
+4.48 2.16 0.87 2/375 13740
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 42.8 130736      00:05 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 24.3 48880       00:07 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:20 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:33 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:39.158197918
+4.48 2.16 0.87 1/375 13769
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 38.4 130784      00:06 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 21.3 48880       00:08 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:21 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:35 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:40.173393095
+4.12 2.13 0.86 2/375 13798
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 35.3 131392      00:07 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 18.9 48880       00:09 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:22 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:36 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:41.187370290
+4.12 2.13 0.86 1/375 13827
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 33.3 131472      00:08 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 17.0 48880       00:10 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:23 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:37 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:42.206182138
+4.12 2.13 0.86 1/375 13856
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 31.0 131552      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 15.5 48896       00:11 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:24 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:38 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:43.220834727
+4.12 2.13 0.86 1/375 13885
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 29.9 131648      00:10 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 14.2 48896       00:12 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:25 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:39 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:44.239512409
+4.12 2.13 0.86 2/372 13914
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 28.3 131728      00:11 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 13.1 48896       00:13 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:26 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:40 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:45.258665851
+3.87 2.11 0.86 1/372 13943
+      4 1188000       3 1752000       4 2208000       1 912000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 27.6 131840      00:13 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 12.1 48896       00:14 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:27 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:41 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:46.286792665
+3.87 2.11 0.86 1/372 13972
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 26.7 131904      00:14 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 11.3 48896       00:15 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:28 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:42 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:47.314056001
+3.87 2.11 0.86 2/369 14001
+      4 1452000       4 1752000       4 2208000 
+/dev/dri/renderD128: 13530m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13530 26.3 124288      00:15 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  13470 10.6 48896       00:16 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:29 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:43 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+== pre 14:49:47.592452428
+14:49:48.333321488
+3.87 2.11 0.86 2/356 14045
+      4 1752000       4 2208000       4 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  14026  226 49536       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65216       07:30 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:44 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.5 11408       07:30 avahi-daemon: running [<project-m2>-2.local]
+14:49:49.353101526
+3.64 2.09 0.86 2/372 14090
+      4 1752000       4 3132000       4 3264000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067  259 124384      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026  120 48096       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:31 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:45 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:50.374075130
+3.64 2.09 0.86 2/372 14119
+      4 1752000       6 2208000       2 702000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067  116 127136      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 76.0 48640       00:02 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:32 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:46 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:51.397556205
+3.64 2.09 0.86 1/372 14148
+      4 2424000       4 3132000       4 3264000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 76.5 127424      00:02 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 55.7 48640       00:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:33 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:47 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:52.427446258
+3.64 2.09 0.86 2/372 14189
+      4 1704000       1 2004000       3 2424000       4 702000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 60.2 127424      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 43.9 48640       00:04 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:34 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:48 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:53.448143387
+3.64 2.09 0.86 2/372 14218
+      4 1752000       4 2208000       4 3000000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 50.9 127456      00:04 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 36.2 48640       00:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:35 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:49 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:54.471326735
+3.35 2.05 0.86 1/372 14247
+      3 1752000       8 2208000       1 912000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 44.0 127520      00:05 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 30.8 48640       00:06 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:36 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:50 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:55.497325393
+3.35 2.05 0.86 1/372 14276
+      8 2208000       4 912000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 40.3 127616      00:06 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 26.8 48640       00:07 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65232       07:37 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:51 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:56.523167207
+3.35 2.05 0.86 1/372 14305
+      2 1284000       2 1752000       8 2208000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 36.6 128208      00:07 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 23.7 48640       00:08 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65264       07:38 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:52 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:57.546877508
+3.35 2.05 0.86 2/372 14336
+      4 1188000       4 1752000       4 702000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 34.5 128304      00:08 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 21.3 48640       00:09 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65264       07:39 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:53 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:58.568420836
+3.35 2.05 0.86 1/372 14365
+      4 1752000       4 2208000       4 3264000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 32.2 128384      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 19.3 48640       00:11 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:40 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:54 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:59.595098900
+3.16 2.04 0.86 1/372 14394
+      4 1752000       4 2208000       4 702000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 30.6 128464      00:10 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 17.7 48640       00:12 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:41 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:55 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:00.619924747
+3.16 2.04 0.86 1/372 14423
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 29.5 128560      00:11 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 16.3 48640       00:13 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:42 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:56 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:01.641252504
+3.16 2.04 0.86 1/372 14452
+      4 2208000       4 2724000       4 912000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 28.0 128624      00:12 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 15.2 48640       00:14 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:43 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:57 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:02.661999321
+3.16 2.04 0.86 1/372 14481
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 27.3 128736      00:13 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 14.1 48640       00:15 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:44 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:58 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:03.688004335
+3.16 2.04 0.86 1/372 14510
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 14067m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14067 26.3 128800      00:14 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14026 13.2 48656       00:16 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:45 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       07:59 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+== final 14:50:04.181956616
+14:50:04.713614371
+3.87 2.20 0.92 2/354 14585
+      4 1752000       4 2208000       4 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  14529  272 49712       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:46 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:00 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.4 11408       07:47 avahi-daemon: running [<project-m2>-2.local]
+14:50:05.738706926
+3.87 2.20 0.92 2/370 14630
+      4 1752000       4 2208000       4 3264000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601  320 127664      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529  135 49776       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:47 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:01 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:06.767178715
+3.87 2.20 0.92 1/370 14659
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601  123 129936      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 81.9 49776       00:02 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:48 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:02 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:07.790425538
+3.87 2.20 0.92 2/370 14688
+      4 1752000       4 2208000       4 3264000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 79.1 130640      00:02 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 58.9 49456       00:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:50 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:03 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:08.822363094
+3.87 2.20 0.92 1/370 14717
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 59.4 130640      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 45.9 49456       00:04 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:51 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:04 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:09.850005162
+3.56 2.16 0.91 1/370 14746
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 49.6 130656      00:04 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 37.6 49456       00:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:52 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:05 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:10.877003577
+3.56 2.16 0.91 1/370 14775
+      4 1452000       4 1752000       4 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 44.3 130736      00:05 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 31.8 49456       00:06 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:53 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:06 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:11.904763330
+3.56 2.16 0.91 2/370 14804
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 39.4 130816      00:06 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 27.6 49456       00:07 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:54 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:07 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:12.932685573
+3.56 2.16 0.91 2/370 14839
+      4 2208000       4 2724000       4 912000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 36.6 131424      00:07 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 24.4 49456       00:08 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:55 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:08 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:13.965606962
+3.56 2.16 0.91 1/370 14868
+      4 1752000       4 2208000       4 3132000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 33.7 131488      00:08 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 21.8 49456       00:09 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:56 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:09 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:14.992262479
+3.27 2.13 0.91 1/370 14897
+      4 1452000       4 1752000       4 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 31.7 131568      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 19.7 49456       00:10 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:57 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:10 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:16.011410763
+3.27 2.13 0.91 1/370 14926
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 30.3 131664      00:10 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 18.0 49456       00:11 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:58 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:11 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:17.033702229
+3.27 2.13 0.91 1/370 14955
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 28.8 131744      00:11 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 16.6 49456       00:12 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       07:59 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:12 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:18.062176410
+3.27 2.13 0.91 1/370 14986
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 27.8 131840      00:12 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 15.4 49472       00:13 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65520       08:00 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:13 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:19.087345663
+3.27 2.13 0.91 1/370 15015
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 26.7 131920      00:13 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 14.3 49472       00:14 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65536       08:01 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:14 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:20.114624033
+3.01 2.09 0.90 1/370 15044
+      4 1452000       1 1752000       4 2208000       3 2424000 
+/dev/dri/renderD128: 14601m
+
+    PID %CPU   RSS     ELAPSED CMD
+  14601 26.2 132016      00:14 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  14529 13.4 49472       00:15 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65536       08:02 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:15 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+== pre 14:50:20.817554710
+14:50:21.141037031
+3.01 2.09 0.90 2/354 15088
+      4 1752000       4 2208000       4 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  15069  387 49680       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 65536       08:03 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:16 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.4 11408       08:03 avahi-daemon: running [<project-m2>-2.local]
+14:50:22.159206566
+3.01 2.09 0.90 18/368 15131
+      4 2424000       8 3264000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116  823 96368       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069  161 49760       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:04 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:18 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:23.174609308
+3.01 2.09 0.90 2/370 15162
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116  155 126656      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 91.9 49760       00:02 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:05 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:19 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:24.207006478
+3.01 2.09 0.90 1/370 15191
+      4 1188000       1 1752000       4 2208000       3 2424000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 88.9 127184      00:02 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 64.1 49760       00:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:06 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:20 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:25.233112355
+2.77 2.06 0.90 1/370 15220
+      4 1452000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 65.1 127440      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 49.2 49760       00:04 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:07 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:21 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:26.259110710
+2.77 2.06 0.90 1/370 15249
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 54.4 127456      00:04 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 39.9 49760       00:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:08 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:22 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:27.285543514
+2.77 2.06 0.90 1/370 15278
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 46.5 127504      00:05 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 33.6 49760       00:06 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:09 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:23 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:28.310505054
+2.77 2.06 0.90 2/370 15307
+      4 1752000       4 2208000       4 702000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 41.9 127600      00:06 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 29.0 49760       00:07 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:10 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:24 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:29.337155865
+2.55 2.02 0.89 1/370 15368
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 38.0 128192      00:07 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 25.5 49760       00:08 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64592       08:11 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.9 17952       08:25 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:30.364007161
+2.55 2.02 0.89 1/370 15397
+      4 1752000       4 2208000       4 702000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 35.0 128272      00:08 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 22.8 49760       00:09 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:12 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:26 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:31.384744497
+2.55 2.02 0.89 1/370 15426
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 33.0 128368      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 20.6 49760       00:10 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:13 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:27 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:32.411016236
+2.55 2.02 0.89 1/370 15455
+      4 1188000       1 1752000       4 2208000       3 2424000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 31.0 128448      00:10 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 18.7 49760       00:11 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:14 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:28 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:33.434390259
+2.55 2.02 0.89 2/370 15484
+      1 1752000       4 2208000       3 2424000       4 702000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 29.7 128544      00:11 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 17.2 49760       00:12 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:15 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:29 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:34.455851130
+2.34 1.99 0.89 1/370 15513
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 28.3 128624      00:12 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 15.9 49776       00:13 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:16 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:30 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:35.478316587
+2.34 1.99 0.89 1/370 15542
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 27.7 128688      00:13 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 14.8 49776       00:14 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:17 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:31 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:36.502963657
+2.34 1.99 0.89 1/370 15571
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15116m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15116 26.6 128752      00:14 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15069 13.8 49776       00:15 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:18 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:32 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+== final 14:50:37.437792079
+14:50:37.530170392
+2.34 1.99 0.89 14/356 15630
+      4 2424000       8 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  15604  854 49680       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:19 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:33 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.4 11408       08:19 avahi-daemon: running [<project-m2>-2.local]
+14:50:38.549774377
+2.34 1.99 0.89 2/356 15660
+      4 1752000       4 2208000       4 3264000 
+
+    PID %CPU   RSS     ELAPSED CMD
+  15604  182 49680       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64608       08:20 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:34 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.4 11408       08:20 avahi-daemon: running [<project-m2>-2.local]
+14:50:39.570247944
+2.23 1.97 0.89 1/372 15705
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670  179 129168      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 98.6 48016       00:02 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64624       08:21 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:35 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:40.589898925
+2.23 1.97 0.89 1/372 15734
+      4 1752000       4 2208000       4 2724000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 95.9 130352      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 66.8 48960       00:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64624       08:22 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:36 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:41.608459272
+2.23 1.97 0.89 1/372 15763
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 68.3 130544      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 50.5 48960       00:04 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:23 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:37 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:42.627020637
+2.23 1.97 0.89 1/372 15792
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 55.4 130592      00:04 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 40.6 48960       00:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:24 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:38 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:43.646128989
+2.23 1.97 0.89 2/372 15821
+      4 1452000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 47.8 130704      00:05 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 34.0 48960       00:06 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:25 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:39 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:44.665046396
+2.06 1.94 0.89 1/372 15850
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 41.8 130768      00:06 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 29.2 48960       00:07 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:26 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:40 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:45.683807440
+2.06 1.94 0.89 2/372 15879
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 38.0 131360      00:07 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 25.6 48960       00:08 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:27 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:41 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:46.704960725
+2.06 1.94 0.89 1/372 15908
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 35.3 131456      00:08 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 22.8 48960       00:09 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:28 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:42 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:47.723903180
+2.06 1.94 0.89 1/372 15937
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 32.8 131536      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 20.5 48976       00:10 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:29 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:43 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:48.743412290
+2.06 1.94 0.89 1/372 15967
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 31.2 131632      00:10 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 18.7 48976       00:11 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:30 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:44 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:49.761641953
+1.89 1.91 0.88 1/372 15996
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 29.5 131712      00:11 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 17.1 48976       00:12 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:31 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:45 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:50.780900326
+1.89 1.91 0.88 1/372 16025
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 28.7 131808      00:12 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 15.8 48976       00:13 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:33 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:46 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:51.796810650
+1.89 1.91 0.88 1/372 16056
+      4 1188000       4 1752000       4 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 27.3 131600      00:13 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 14.8 48976       00:14 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:34 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:47 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:52.815670921
+1.89 1.91 0.88 2/372 16085
+      4 1752000       8 2208000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 26.7 131696      00:14 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 13.9 48976       00:15 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:35 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:48 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:50:53.835902200
+1.89 1.91 0.88 2/369 16114
+      4 1752000       4 2208000       4 3264000 
+/dev/dri/renderD128: 15670m
+
+    PID %CPU   RSS     ELAPSED CMD
+  15670 26.9 124128      00:15 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  15604 13.0 47872       00:16 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/latency_only.py <home>/agents/SpeechInputGpu/runs/latenc
+    743  1.8 64688       08:36 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  0.8 17952       08:49 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+== end 14:50:53.991552501
