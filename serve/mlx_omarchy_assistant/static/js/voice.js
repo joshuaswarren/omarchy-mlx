@@ -94,9 +94,21 @@ export class Recorder {
       throw new Error("Microphone API unavailable in this browser");
     if (!window.AudioWorkletNode)
       throw new Error("AudioWorklet is not available in this browser");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, noiseSuppression: true }, video: false,
-    });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, noiseSuppression: true }, video: false,
+      });
+    } catch (err) {
+      const name = err && err.name;
+      if (name === "NotAllowedError" || name === "SecurityError")
+        throw new Error("Microphone permission denied. Allow microphone access for this page, then try again.");
+      if (name === "NotFoundError" || name === "OverconstrainedError")
+        throw new Error("No microphone found. Connect a microphone, then try again.");
+      if (name === "NotReadableError")
+        throw new Error("The microphone is in use by another application.");
+      throw err;
+    }
     const ctx = new AudioContext();
     await ctx.audioWorklet.addModule(new URL("./worklet/capture-worklet.js", import.meta.url));
     const source = ctx.createMediaStreamSource(stream);

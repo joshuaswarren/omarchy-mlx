@@ -23,7 +23,12 @@ export function buildComposer({
   textarea.addEventListener("compositionend", () => { imeComposing = false; });
   textarea.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      if (isRecording && isRecording()) { event.preventDefault(); if (onMicCancel) onMicCancel(); return; }
+      if (isRecording && isRecording()) {
+        event.preventDefault();
+        resetMicUi();
+        if (onMicCancel) onMicCancel();
+        return;
+      }
       if (isBusy && isBusy()) { event.preventDefault(); if (onCancel) onCancel(); return; }
     }
     if (event.key === "Enter" && !event.shiftKey && !imeComposing) {

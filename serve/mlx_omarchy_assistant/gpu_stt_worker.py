@@ -2,17 +2,12 @@
 # SPDX-License-Identifier: MIT
 """GPU STT worker subprocess.
 
-Owns one mlx-audio STT model loaded on the live mlx Vulkan backend.
-Reads framed requests on stdin (``<u64 header_bytes><json header><bytes>
-payload``), runs ``model.generate`` on the GPU, writes a framed
-response to stdout, and exits cleanly on ``close`` / cancel / deadline.
-The model is resident across requests so warm latencies are tight
-and the parent can confirm its exit before reporting a failure.
-
-The worker NEVER does CPU tensor inference — every dispatch goes
-through the live mlx binary, and the dispatch trace mode
-(``MLX_OMARCHY_TRACE_DISPATCH``) records each GPU compute submission
-so a zero-CPU-tensor-dispatch assertion is verifiable on a real run.
+Owns one mlx-audio STT model resident on the live mlx backend. Framed
+requests arrive on stdin (``<u64 header size><json header><payload>``)
+and each gets exactly one framed response on stdout; ``close`` ends the
+loop. The worker serves one request at a time. The parent cancels by
+killing the process group, so there is no cancel frame. Resampling to
+16 kHz runs on the mlx device inside the worker.
 """
 
 from __future__ import annotations
@@ -21,9 +16,7 @@ import argparse
 import json
 import struct
 import sys
-import threading
-import time
-from typing import Any
+from pathlib import Path
 
 import numpy as np
 
@@ -38,175 +31,73 @@ def _read_exact(stream, n: int) -> bytes:
     return buf
 
 
-def _send(stream, header: dict, payload: bytes = b"") -> None:
-    header = dict(header)
-    header["payload_bytes"] = len(payload)
-    encoded = json.dumps(header).encode("utf-8")
-    stream.write(struct.pack("<Q", len(encoded)) + encoded + payload)
+def _send(stream, header: dict) -> None:
+    encoded = json.dumps(dict(header, payload_bytes=0)).encode("utf-8")
+    stream.write(struct.pack("<Q", len(encoded)) + encoded)
     stream.flush()
 
 
-def _load_model(model_dir: str, model_id: str):
-    """Load the pinned model from its resolved HF cache directory.
-
-    ``model_dir`` is the resolved snapshot path (used for files like
-    tokenizer.model that live alongside the weights); ``model_id`` is
-    the repo slug (``mlx-community/parakeet-tdt-0.6b-v3``) that
-    ``load_model`` recognises for the type-detection table.
-    """
-    from mlx_audio.stt.utils import load_model
-    return load_model(model_id)
-
-
-def _run(model, samples: np.ndarray, deadline_ms: int,
-         cancel: threading.Event) -> dict:
+def _transcribe(model, payload: bytes, rate: int) -> dict:
     import mlx.core as mx
-    audio = mx.array(np.ascontiguousarray(samples, dtype=np.float32))
-    # Parakeet-TDT expects a 1-D waveform at 16 kHz; passing a 2-D
-    # (1, N) view silently returns "" on mlx-audio 0.5.6. Whisper
-    # accepts both shapes, but feeding it 1-D works too. Stay 1-D.
-    mx_audio = audio
-    deadline = time.monotonic() + deadline_ms / 1000.0
-    cancel_event = threading.Event()
-    cancel_thread: threading.Thread | None = None
-    if cancel is not None:
-        def watch():
-            cancel.wait()
-            cancel_event.set()
-        cancel_thread = threading.Thread(target=watch, daemon=True)
-        cancel_thread.start()
+
+    from .gpu_stt import resample_to_16k
+
     try:
-        if cancel_event.is_set():
-            return {"ok": False, "kind": "cancelled",
-                    "error": "cancelled before transcription"}
-        # Whisper accepts language; Parakeet ignores it (and emitting it
-        # empty-stubs the output on the mlx-audio 0.5.6 STT path). Pass
-        # only the kwargs the model's signature actually wants.
-        kwargs: dict[str, Any] = {"verbose": False}
-        try:
-            import inspect
-            params = inspect.signature(model.generate).parameters
-            if "language" in params and "Whisper" in type(model).__name__:
-                kwargs["language"] = "en"
-        except Exception:
-            pass
-        out = model.generate(mx_audio, **kwargs)
-        if cancel_event.is_set():
-            return {"ok": False, "kind": "cancelled",
-                    "error": "cancelled during transcription"}
-        if time.monotonic() > deadline:
-            return {"ok": False, "kind": "timeout",
-                    "error": "transcription exceeded deadline"}
-        # mlx-audio STT returns either a string or an STTOutput with a
-        # .text attribute. Both code paths normalize to str here.
-        if isinstance(out, str):
-            text = out
-        else:
-            text = getattr(out, "text", "")
-        if text is None:
-            text = ""
-        return {"ok": True, "transcript": str(text),
-                "model": type(model).__name__,
-                "segments": len(getattr(out, "segments", []) or [])
-                              if not isinstance(out, str) else 0}
+        samples = np.frombuffer(payload, dtype="<f4")
+    except ValueError as exc:
+        return {"ok": False, "kind": "input", "error": f"payload parse failed: {exc}"}
+    try:
+        # 1-D only: a (1, N) input makes Parakeet-TDT on mlx-audio 0.5.6
+        # silently return "".
+        audio = resample_to_16k(mx.array(samples), rate)
+        out = model.generate(audio, verbose=False)
     except Exception as exc:
-        return {"ok": False, "kind": "unavailable",
-                "error": f"gpu-stt generate failed: {exc}"}
+        return {"ok": False, "kind": "unavailable", "error": f"gpu-stt generate failed: {exc}"}
+    return {"ok": True, "transcript": str(getattr(out, "text", out) or ""),
+            "peak_memory_bytes": int(mx.get_peak_memory())}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="GPU STT worker")
-    parser.add_argument("--model-dir", required=True)
-    parser.add_argument("--model-id", required=True)
-    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--model-dir", required=True, type=Path)
     args = parser.parse_args(argv)
-    stdin = sys.stdin.buffer
-    stdout = sys.stdout.buffer
-    try:
-        model = _load_model(args.model_dir, args.model_id)
-    except Exception as exc:
-        _send(stdout, {"ok": False, "kind": "unavailable",
-                       "error": f"failed to load model: {exc}"})
-        return 2
-    # Warm the model with a single 1-second silence pass before we declare
-    # readiness. mlx-audio STT's first generate() after load() on Parakeet
-    # silently returns "" on the live mlx-audio 0.5.6 path; the second
-    # call onwards returns the previous audio's transcript because the
-    # model buffer is latched on the first input. The warmup call
-    # unlatches the buffer and the next transcribe() call sees a fresh
-    # state. Measured on jw14m2-linux M2 Max T6021, mlx wheel
-    # 0.32.3.dev202609282218+29cba8e.
+    stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
     try:
         import mlx.core as mx
-        _warmup = model.generate(
-            mx.zeros((16000 * 1,), dtype=mx.float32),
-            verbose=False,
-        )
-        del _warmup
+        from mlx_audio.stt.utils import load_model
+
+        # A Path (not str) skips mlx-audio's hub resolution: the snapshot
+        # directory is loaded as-is, with no network lookup.
+        model = load_model(args.model_dir)
+        # The first generate() after load returns "" on this stack; spend
+        # it on one second of silence before declaring readiness.
+        model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
     except Exception as exc:
-        # Warmup failure is not fatal: surface it but stay up so the
-        # caller can decide.
-        _send(stdout, {"ok": True, "event": "ready",
-                       "model_id": args.model_id,
-                       "model": type(model).__name__,
-                       "warmup_error": str(exc)})
-    else:
-        _send(stdout, {"ok": True, "event": "ready",
-                       "model_id": args.model_id,
-                       "model": type(model).__name__})
+        _send(stdout, {"ok": False, "kind": "unavailable", "error": f"failed to load model: {exc}"})
+        return 2
+    _send(stdout, {"ok": True, "event": "ready", "model": type(model).__name__})
 
-    cancel = threading.Event()
-
-    for raw in iter(lambda: _read_exact(stdin, 8), b""):
-        (header_size,) = struct.unpack("<Q", raw)
-        header_bytes = _read_exact(stdin, header_size)
+    while True:
+        raw = _read_exact(stdin, 8)
+        if len(raw) < 8:
+            return 0
+        (size,) = struct.unpack("<Q", raw)
         try:
-            header = json.loads(header_bytes.decode("utf-8"))
-        except Exception as exc:
-            _send(stdout, {"ok": False, "kind": "input",
-                           "error": f"invalid header JSON: {exc}"})
+            header = json.loads(_read_exact(stdin, size).decode("utf-8"))
+        except ValueError as exc:
+            _send(stdout, {"ok": False, "kind": "input", "error": f"invalid header JSON: {exc}"})
             continue
-        op = header.get("op")
         payload_size = int(header.get("payload_bytes", 0))
         payload = _read_exact(stdin, payload_size) if payload_size else b""
-        request_id = header.get("id")
+        op, request_id = header.get("op"), header.get("id")
         if op == "close":
             _send(stdout, {"ok": True, "event": "closed", "id": request_id})
-            break
-        if op == "cancel":
-            cancel.set()
-            continue
-        if op == "warmup":
-            try:
-                import mlx.core as mx
-                _ = model.generate(
-                    mx.zeros((16000 * 1,), dtype=mx.float32),
-                    verbose=False,
-                )
-            except Exception as exc:
-                _send(stdout, {"ok": False, "kind": "unavailable",
-                               "error": f"warmup failed: {exc}",
-                               "id": request_id})
-                continue
-            _send(stdout, {"ok": True, "event": "warmed", "id": request_id})
-            continue
+            return 0
         if op == "transcribe":
-            cancel.clear()
-            try:
-                samples = np.frombuffer(payload, dtype="<f4").astype(np.float32)
-            except Exception as exc:
-                _send(stdout, {"ok": False, "kind": "input",
-                               "error": f"payload parse failed: {exc}",
-                               "id": request_id})
-                continue
-            deadline_ms = int(header.get("deadline_ms", 90_000))
-            response = _run(model, samples, deadline_ms, cancel)
-            response["id"] = request_id
-            _send(stdout, response)
-            continue
-        _send(stdout, {"ok": False, "kind": "input",
-                       "error": f"unknown op {op!r}", "id": request_id})
-    return 0
+            response = _transcribe(model, payload, int(header.get("sample_rate", 16_000)))
+        else:
+            response = {"ok": False, "kind": "input", "error": f"unknown op {op!r}"}
+        _send(stdout, dict(response, id=request_id))
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@
 #
 # The default install writes only under $HOME, except for runtime packages
 # installed through pacman. --ane also provisions host-global ANE ownership.
-# --voice adds the optional local speech-synthesis dependencies (text chat
-# never needs them).
+# --voice adds the optional local speech dependencies (mlx-audio: speech
+# input and read-aloud; text chat never needs them).
 
 set -euo pipefail
 
@@ -190,7 +190,7 @@ python3 -m venv --clear "$VENV"
 "$VENV/bin/pip" install --quiet "transformers[sentencepiece]==$TRANSFORMERS_VERSION" numpy protobuf pyyaml jinja2 huggingface_hub soundfile
 
 # 4a. Optional voice dependencies (--voice), used by the assistant's local
-#     speech synthesis. mlx-audio declares an mlx requirement (>= 0.31.1)
+#     speech input and synthesis. mlx-audio declares an mlx requirement (>= 0.31.1)
 #     that the custom wheel installed above satisfies, so it goes in with
 #     --no-deps: letting pip resolve it would pull upstream mlx over the
 #     vendored mlx-omarchy build. The remaining lines are the verified
@@ -202,10 +202,6 @@ if (( VOICE )); then
   "$VENV/bin/pip" install --quiet --no-deps "mlx-audio==$MLX_AUDIO_VERSION"
   "$VENV/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "numpy>=1.26.4" \
     "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0"
-  # STT-side deps (same mlx-audio stack plus soundfile for offline corpus
-  # validation; installed only when --voice is requested, since the GPU
-  # STT path is the assistant's recognition backend).
-  "$VENV/bin/pip" install --quiet "soundfile>=0.13" "librosa>=0.10" "jiwer>=3.0"
 fi
 
 # 4b. Vendored mlx-lm serve patches. The apply script decides which patches
@@ -472,6 +468,6 @@ echo "  Open MLX Chat:       mlx-omarchy-chat      (also in the Omarchy app laun
 echo "  Terminal chat:       mlx-omarchy-demo      (the same local coordinator, no browser)"
 echo "  Use in your scripts: mlx-omarchy your_script.py   (import mlx.core as mx)"
 echo "  Serve a model:       mlx-omarchy-serve     (also 'omarchy mlx serve' when registered)"
-echo "  Voice replies:       bash install.sh --voice   (adds local speech synthesis deps)"
+echo "  Voice:               bash install.sh --voice   (adds local speech input and read-aloud deps)"
 echo "  Remove everything:   bash install.sh --uninstall"
 case ":$PATH:" in *":$BIN:"*) ;; *) echo "  note: $BIN is not on your PATH in this shell; open a new terminal or add it." ;; esac
