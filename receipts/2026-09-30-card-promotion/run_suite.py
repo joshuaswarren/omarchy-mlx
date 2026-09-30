@@ -124,12 +124,12 @@ def _heartbeat_loop(cid, turn, runtime, stop, gaps):
 
 
 def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
-              timeout_s=600, setup=False, budget_s=None):
+              timeout_s=600, setup=False, budget_s=None, tag=""):
     chunk_started = time.monotonic()
     raw = open(held_out_path, "rb").read()
     prompts_doc = json.loads(raw)
     suite_sha = hashlib.sha256(raw).hexdigest()
-    suite = os.path.splitext(os.path.basename(held_out_path))[0].replace("cards_", "")
+    suite = os.path.splitext(os.path.basename(held_out_path))[0].replace("cards_", "") + tag
     home = home_for(chat_model)
     runtime = runtime_for(chat_model)
     pair_id = PAIR_FOR_MODEL[chat_model]
@@ -315,6 +315,8 @@ def main():
     p.add_argument("--max-tokens", type=int, default=700)
     p.add_argument("--timeout-s", type=int, default=600)
     p.add_argument("--setup", action="store_true")
+    p.add_argument("--tag", default="",
+                   help="suffix for the results file, e.g. _fenced for a config run")
     p.add_argument("--budget-s", type=int, default=None,
                    help="start no new prompt after this many seconds")
     args = p.parse_args()
@@ -322,7 +324,7 @@ def main():
         sys.exit(f"unknown model {args.model!r}")
     run_chunk(os.path.join(REPO, args.suite), args.model, args.start, args.end,
               max_tokens=args.max_tokens, timeout_s=args.timeout_s,
-              setup=args.setup, budget_s=args.budget_s)
+              setup=args.setup, budget_s=args.budget_s, tag=args.tag)
 
 
 if __name__ == "__main__":
