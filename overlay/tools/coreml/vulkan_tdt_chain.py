@@ -11,23 +11,26 @@ schedule of per-emission slots whose control state lives in DEVICE
 buffers, so a whole chunk of slots becomes one submission (one
 ``mx.eval`` per chunk instead of per emission).
 
-Per active slot (six queued dispatches):
+Per active slot (five queued dispatches):
 
 1. ``chains`` layer 0 (embedding row looked up from the device token),
-2. ``fold`` layer 0 (contract-order block fold + LUT gates + cell),
-3. ``chains`` layer 1,
-4. ``fold_proj`` layer 1 fused with the projector (h1 staged in
+2. ``chains`` layer 1 fused with the layer-0 fold: every workgroup
+   re-derives the layer-0 gates from ``bsum0`` in threadgroup memory with
+   the fold's exact formulas and order (workgroup 0 publishes them
+   globally for ``fold_proj``), removing the standalone fold dispatch,
+3. ``fold_proj`` layer 1 fused with the projector (h1 staged in
    threadgroup memory; assembles the whole decoder state and passes it
    through untouched on inactive slots),
-5. ``window`` joint head: seven consecutive encoder frames against this
+4. ``window`` joint head: seven consecutive encoder frames against this
    slot's decoder state (row 0 is the emission joint; rows past
    ``valid_frames`` zero-fill), weights streamed with the exact
    ``_JOINT_SOURCE`` element order,
-6. ``control``: in-kernel first-max argmax per row (``np.argmax``
+5. ``control``: in-kernel first-max argmax per row (``np.argmax``
    semantics: strict ``>`` on an ascending scan, smaller index wins
-   ties, first NaN wins) plus the duration-head argmax, then the greedy
-   TDT walk appending emissions and writing the next slot's control
-   word.
+   ties, first NaN wins) plus the duration-head argmax, a segmented
+   1024-thread tree reduction of the window's per-workgroup partials
+   (all rows at once), then the greedy TDT walk appending emissions and
+   writing the next slot's control word.
 
 Every slot reads its control word from the previous slot's control
 output, so the chain runs on the device.  A decode longer than one
@@ -150,39 +153,93 @@ _CHAINS_BODY = """
     bsum[idx] = bc;
 """
 
-_FOLD_BODY = """
+_CHAIN1_FOLD_BODY = """
+    uint g = threadgroup_position_in_grid.x;
     uint t = thread_index_in_threadgroup.x;
-    float16_t pr[4];
+    uint idx = g * _CHANTHREADSu + t;
+    int token_id = ctl[_C_TOKEN];
+    threadgroup float sh_h0[640];
+    threadgroup float16_t sh_c1l0[640];
+    threadgroup float16_t sh_a[1280];
     if (!step_live) {
-        h1_out[t] = 0.0f;
-        c1_out[t] = 0.0f;
+        bsum[idx] = float16_t(0.0f);
         return;
     }
-    uint lane = t;
-    for (uint gate = 0u; gate < 4u; ++gate) {
-        uint n = lane + gate * 640u;
-        float16_t bacc = bsum[n];
-        for (uint block = 1u; block < 10u; ++block) {
-            bacc = float16_t(bacc + bsum[block * 2560u + n]);
+    // Self-fold: every workgroup recomputes the layer-0 gates from bsum0
+    // with the standalone fold's exact formulas and accumulation order
+    // (ascending blocks, bit-indexed LUT pairing, exact_fma16 cell), so
+    // h0/c1l0 are bit-identical to the old separate fold dispatch; the
+    // redundant per-workgroup compute replaces one host kernel call per
+    // slot.  Workgroup 0 also publishes h0/c1l0 for fold_proj.
+    for (uint lane = t; lane < 640u; lane += _CHANTHREADSu) {
+        float16_t pr[4];
+        for (uint gate = 0u; gate < 4u; ++gate) {
+            uint n = lane + gate * 640u;
+            float16_t bacc = bsum0[n];
+            for (uint block = 1u; block < 10u; ++block) {
+                bacc = float16_t(bacc + bsum0[block * 2560u + n]);
+            }
+            pr[gate] = float16_t(bacc + biases[0u * 2560u + n]);
         }
-        pr[gate] = float16_t(bacc + biases[0u * 2560u + n]);
+        uint bi = packHalf2x16(vec2(float(pr[0]), 0.0f)) & 0xFFFFu;
+        uint bf = packHalf2x16(vec2(float(pr[1]), 0.0f)) & 0xFFFFu;
+        uint bo = packHalf2x16(vec2(float(pr[2]), 0.0f)) & 0xFFFFu;
+        uint bg = packHalf2x16(vec2(float(pr[3]), 0.0f)) & 0xFFFFu;
+        float16_t si = luts[bi];
+        float16_t sf = luts[bf];
+        float16_t so = luts[bo];
+        float16_t tg = luts[65536u + bg];
+        float16_t cprev = float16_t(cell_in[0u * 640u + lane]);
+        float16_t fprod = sf * cprev;
+        float16_t c1 = exact_fma16(fprod, si, tg);
+        uint cb = packHalf2x16(vec2(float(c1), 0.0f)) & 0xFFFFu;
+        float16_t tc = luts[65536u + cb];
+        float16_t h1 = so * tc;
+        sh_h0[lane] = float(h1);
+        sh_c1l0[lane] = c1;
     }
-    uint bi = packHalf2x16(vec2(float(pr[0]), 0.0f)) & 0xFFFFu;
-    uint bf = packHalf2x16(vec2(float(pr[1]), 0.0f)) & 0xFFFFu;
-    uint bo = packHalf2x16(vec2(float(pr[2]), 0.0f)) & 0xFFFFu;
-    uint bg = packHalf2x16(vec2(float(pr[3]), 0.0f)) & 0xFFFFu;
-    float16_t si = luts[bi];
-    float16_t sf = luts[bf];
-    float16_t so = luts[bo];
-    float16_t tg = luts[65536u + bg];
-    float16_t c0 = float16_t(cell_in[0u * 640u + lane]);
-    float16_t fprod = sf * c0;
-    float16_t c1 = exact_fma16(fprod, si, tg);
-    uint cb = packHalf2x16(vec2(float(c1), 0.0f)) & 0xFFFFu;
-    float16_t tc = luts[65536u + cb];
-    float16_t h1 = so * tc;
-    h1_out[lane] = float(h1);
-    c1_out[lane] = float(c1);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (g == 0u) {
+        for (uint lane = t; lane < 640u; lane += _CHANTHREADSu) {
+            h0_out[lane] = sh_h0[lane];
+            c0_out[lane] = float(sh_c1l0[lane]);
+        }
+    }
+    for (uint i = t; i < 1280u; i += _CHANTHREADSu) {
+        if (i < 640u) {
+            sh_a[i] = float16_t(sh_h0[i]);
+        } else {
+            sh_a[i] = float16_t(hidden_in[uint(_LAYER) * 640u + (i - 640u)]);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint n = idx % 2560u;
+    uint gb = idx / 2560u;
+    uint block = gb % 10u;
+    float16_t bc = float16_t(0.0f);
+    uint k = block * 128u;
+    uint wbase = uint(_LAYER) * 3276800u + k * 2560u + n;
+    // Loads are independent of the bc chain: prefetch four weight elements
+    // ahead so the DRAM stream stays in flight.  The exact_fma16 adds keep
+    // their ascending-k order, so the result is bit-identical.
+    float16_t w0 = weights[wbase];
+    float16_t w1 = weights[wbase + 2560u];
+    float16_t w2 = weights[wbase + 5120u];
+    float16_t w3 = weights[wbase + 7680u];
+    for (uint j = 0u; j < 128u; j += 4u) {
+        float16_t w4 = weights[wbase + 10240u];
+        float16_t w5 = weights[wbase + 12800u];
+        float16_t w6 = weights[wbase + 15360u];
+        float16_t w7 = weights[wbase + 17920u];
+        bc = exact_fma16(bc, sh_a[k], w0);
+        bc = exact_fma16(bc, sh_a[k + 1u], w1);
+        bc = exact_fma16(bc, sh_a[k + 2u], w2);
+        bc = exact_fma16(bc, sh_a[k + 3u], w3);
+        w0 = w4; w1 = w5; w2 = w6; w3 = w7;
+        wbase += 10240u;
+        k += 4u;
+    }
+    bsum[idx] = bc;
 """
 
 _FOLD_PROJ_BODY = """
@@ -417,44 +474,56 @@ _CONTROL_BODY = """
     if (ctl[_C_SKIP] == 0 && run != 0 && done == 0) { last = sid[0]; }
 
     bool loop_live = (ctl[_C_RUN] != 0) && (ctl[_C_DONE] == 0);
-    threadgroup float s_val[64];
-    threadgroup uint s_idx[64];
+    threadgroup float s_val[1024];
+    threadgroup uint s_idx[1024];
     threadgroup int s_tok[ROWSC];
     threadgroup int s_duri[ROWSC];
     for (uint i = t; i < cfg[_G_CAP3]; i += 1024u) {
         emissions_next[i] = emissions_in[i];
     }
     if (loop_live) {
-        // reduce the window's 33 per-workgroup token partials per row,
-        // then carry the duration partial (workgroup 32) unchanged
-        // the window computed ROWSU rows only before the first emission
-        // and one row after; the walk never reads the others
-        uint nrows_c = (count == 0) ? ROWSU : 1u;
-        for (uint row = 0u; row < nrows_c; ++row) {
-            float v = -3.0e38f;
+        // Reduce the window's 33 per-workgroup token partials for ALL
+        // ROWSU rows in one segmented tree (row segments of 64 lanes,
+        // 7 x 64 = 448 live lanes of 1024), then carry the duration
+        // partial (workgroup 32) unchanged.  np.argmax semantics as an
+        // order-independent max: a NaN partial maps to +3.4e38 so the
+        // first (smallest-index) NaN wins ties, strict > keeps the
+        // smaller index on exact ties; the -3.4e38 fill loses to every
+        // finite partial.  (The old code reduced rows serially on
+        // thread 0 between two barriers per row.)
+        for (uint slot = t; slot < 448u; slot += 1024u) {
+            uint row = slot >> 6;
+            uint col = slot & 63u;
+            float v = -3.4e38f;
             uint ix = 0u;
-            if (t < NGRPSu) {
-                v = pval_t[row * NGRPS + t];
-                ix = uint(pidx_t[row * NGRPS + t]);
+            if (col < NGRPSu) {
+                float pv = pval_t[row * NGRPS + col];
+                v = (pv == pv) ? pv : 3.4e38f;
+                ix = uint(pidx_t[row * NGRPS + col]);
             }
-            if (t < 64u) { s_val[t] = v; s_idx[t] = ix; }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            if (t == 0u) {
-                float v0 = -3.0e38f; uint i0 = 0u;
-                bool have = false;
-                for (uint i = 0u; i < NGRPSu; ++i) {
-                    float v2 = s_val[i]; uint ix2 = s_idx[i];
-                    bool take;
-                    if (v2 != v2) { take = (!have) ? true : (ix2 < i0); }
-                    else if (!have) { take = true; }
-                    else { take = (v2 > v0) || (v2 == v0 && ix2 < i0); }
-                    if (take) { v0 = v2; i0 = ix2; have = true; }
+            s_val[slot] = v;
+            s_idx[slot] = ix;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = 32u; stride >= 1u; stride >>= 1u) {
+            uint slot = t;
+            if (slot < 448u && (slot & 63u) < stride) {
+                float v1 = s_val[slot];
+                uint ix1 = s_idx[slot];
+                float v2 = s_val[slot + stride];
+                uint ix2 = s_idx[slot + stride];
+                if (v2 > v1 || (v2 == v1 && ix2 < ix1)) {
+                    s_val[slot] = v2;
+                    s_idx[slot] = ix2;
                 }
-                s_tok[row] = int(i0);
-                s_duri[row] = int(pidx_d[row]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
+        if (t < ROWSC) {
+            s_tok[t] = int(s_idx[t * 64u]);
+            s_duri[t] = int(pidx_d[t]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     } else {
         if (t == 0u) {
             for (uint row = 0u; row < ROWSU; ++row) {
@@ -542,10 +611,15 @@ def _build_chains(layer: int) -> str:
     )
 
 
-def _build_fold() -> str:
+def _build_chain1_fold() -> str:
     return _subst(
-        _STEP_LIVE + _FOLD_BODY,
-        _C_RUN=str(_C_RUN), _C_DONE=str(_C_DONE), _C_SKIP=str(_C_SKIP),
+        _STEP_LIVE + _CHAIN1_FOLD_BODY,
+        _CHANTHREADS=str(_CHAIN_THREADS),
+        _LAYER=str(1),
+        _C_TOKEN=str(_C_TOKEN),
+        _C_RUN=str(_C_RUN),
+        _C_DONE=str(_C_DONE),
+        _C_SKIP=str(_C_SKIP),
     )
 
 
@@ -669,14 +743,15 @@ def _chains_kernel(layer: int):
 
 
 @cache
-def _fold_kernel():
+def _chain1_fold_kernel():
     mx = _mx()
     return mx.fast.metal_kernel(
-        name="parakeet_tdt_chain_fold_l0",
-        input_names=["bsum", "biases", "luts", "cell_in", "ctl"],
-        output_names=["h1_out", "c1_out"],
+        name="parakeet_tdt_chain_chains_l1_fold",
+        input_names=["bsum0", "weights", "hidden_in", "cell_in", "biases",
+                     "luts", "ctl"],
+        output_names=["bsum", "h0_out", "c0_out"],
         header=_EXACT_FMA16,
-        source=_build_fold(),
+        source=_build_chain1_fold(),
         compile_options={"math_mode": "safe"},
     )
 
@@ -802,18 +877,11 @@ def run_tdt_chain(
                     threadgroup=(_CHAIN_THREADS, 1, 1),
                     stream=mx.gpu,
                 )
-                h0, c0 = _fold_kernel()(
-                    inputs=[bsum0, packed.biases, packed.luts, c_state, ctl_i],
-                    output_shapes=[(640,), (640,)],
-                    output_dtypes=[mx.float32, mx.float32],
-                    grid=(640, 1, 1), threadgroup=(640, 1, 1),
-                    stream=mx.gpu,
-                )
-                bsum1, = _chains_kernel(1)(
-                    inputs=[packed.embedding, packed.weights, h_state, h0,
-                            ctl_i],
-                    output_shapes=[(25600,)],
-                    output_dtypes=[mx.float16],
+                bsum1, h0, c0 = _chain1_fold_kernel()(
+                    inputs=[bsum0, packed.weights, h_state, c_state,
+                            packed.biases, packed.luts, ctl_i],
+                    output_shapes=[(25600,), (640,), (640,)],
+                    output_dtypes=[mx.float16, mx.float32, mx.float32],
                     grid=(_CHAIN_GROUPS * _CHAIN_THREADS, 1, 1),
                     threadgroup=(_CHAIN_THREADS, 1, 1),
                     stream=mx.gpu,
