@@ -1,12 +1,18 @@
 """Score raw transcripts with one normalizer for every system.
 
-python3 score.py manifest.json parakeet_clips.jsonl whisper_full_results.json > scores.json
+python3 score.py manifest.json clips.jsonl[+overlimit.jsonl] [whisper_full_results.json] > scores.json
 
 Normalization (identical for references and every hypothesis): '&' -> AND,
 '%' -> PERCENT, digit groups (thousands commas, decimals, ordinals 1st/2nd/
 3rd/Nth) -> English words, uppercase, every non-alphanumeric character ->
 space, whitespace collapsed. WER per subset = total word edits / total
-reference words (Levenshtein over words).
+reference words (Levenshtein over words). A clip with no transcript (refused
+or failed) counts every reference word as a deletion; nothing is skipped.
+
+"parakeet_gpu" merges the '+'-joined files: a later row replaces an earlier
+one only when the earlier has no transcript (the over-30 s clip, re-run as
+the browser uploads it: first 30.0 s). "parakeet_gpu_raw_submission" scores
+the first file alone.
 """
 import json, re, sys
 
@@ -68,10 +74,13 @@ def score(manifest, rows):
                                     "empty": 0, "errors": 0, "latency_ms": []})
         b["n"] += 1
         row = rows.get(utt)
+        r = normalize(ref).split()
         if row is None or row.get("hypothesis") is None:
             b["errors"] += 1
+            b["ref_words"] += len(r)
+            b["edits"] += len(r)
             continue
-        r, h = normalize(ref).split(), normalize(row["hypothesis"]).split()
+        h = normalize(row["hypothesis"]).split()
         b["scored"] += 1
         b["ref_words"] += len(r)
         b["edits"] += edits(r, h)
@@ -90,8 +99,16 @@ def score(manifest, rows):
 
 if __name__ == "__main__":
     manifest = json.load(open(sys.argv[1]))
-    parakeet = {r["utt_id"]: r for r in map(json.loads, open(sys.argv[2]).read().splitlines())}
-    result = {"parakeet_gpu": score(manifest, parakeet)}
+    files = [list(map(json.loads, open(p).read().splitlines())) for p in sys.argv[2].split("+")]
+    raw = {r["utt_id"]: r for r in files[0]}
+    merged = dict(raw)
+    for extra in files[1:]:
+        for r in extra:
+            if merged.get(r["utt_id"], {}).get("hypothesis") is None:
+                merged[r["utt_id"]] = r
+    result = {"parakeet_gpu": score(manifest, merged)}
+    if len(files) > 1:
+        result["parakeet_gpu_raw_submission"] = score(manifest, raw)
     if len(sys.argv) > 3:
         whisper = {r["utt_id"]: dict(r, hypothesis=r["hyp"], latency_ms=r["latency_s"] * 1000)
                    for r in json.load(open(sys.argv[3]))["per_clip"]}
