@@ -80,17 +80,23 @@
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -751,17 +771,83 @@
+@@ -751,17 +771,87 @@
      }
    };
    auto stream = to_stream(s);
++  // push_back may reallocate the vector, so the output shape and dtype are
++  // captured before the weight joins the inputs (x references inputs[0]).
++  auto out_shape = x.shape();
++  auto out_dtype = x.dtype();
 +  if (norm_weight) {
 +    inputs.push_back(*norm_weight);
 +  }
    if (!RoPE::use_fallback(stream)) {
      return array(
-         x.shape(),
-         x.dtype(),
+-        x.shape(),
+-        x.dtype(),
++        out_shape,
++        out_dtype,
          std::make_shared<RoPE>(
 -            stream, fallback, dims, traditional, base, scale, forward),
 +            stream,
@@ -165,7 +171,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -810,6 +896,12 @@
+@@ -810,6 +900,12 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -178,7 +184,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -840,7 +932,8 @@
+@@ -840,7 +936,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
