@@ -55,7 +55,7 @@ struct AbiProfile {
 constexpr AbiProfile kAbiProfiles[] = {
     {1,
      "ABI 1 (M1 / T8103 / T6001)",
-     {"apple,t8103-ane"},
+     {"apple,t8103-ane", "apple,t6000-ane"},
      "ane",
      "6fa243ac7241119a9eb229abbf8cb4dd8949f915",
      "1"},

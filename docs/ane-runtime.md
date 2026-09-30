@@ -16,7 +16,7 @@ The worker accepts only a per-ABI lane selected by `MLX_OMARCHY_ANE_ABI` (defaul
 
 | ABI | Lane name | DT compatible | Module | Driver ABI check | Pinned libane commit |
 | --- | --- | --- | --- | --- | --- |
-| `1` (default) | M1 / T8103 / T6001 | `apple,t8103-ane` | `ane` | DRM version ioctl major must be `1` | `6fa243ac7241119a9eb229abbf8cb4dd8949f915` |
+| `1` (default) | M1 / T8103 / T6001 | `apple,t8103-ane` / `apple,t6000-ane` | `ane` | DRM version ioctl major must be `1` | `6fa243ac7241119a9eb229abbf8cb4dd8949f915` |
 | `2` | M2 / T6021 | `apple,t6021-ane` | `ane_t6021` | DRM version ioctl major must be `2` | `8b010938aeb64bfa04b95e89da0bedd2ef9e3e72` |
 
 Every lane additionally requires: Linux AArch64, device-tree ANE node status `okay`, bound `ane` platform driver, runtime PM `on/active`, and a readable+writable `/dev/accel/accel0`. The lane is exclusive — a per-ABI pin (libane commit, module name) never satisfies a request for the other lane, and an `MLX_OMARCHY_ANE_ABI=N` worker refuses a bundle whose `driver_abi_major` is not `N`. The bundle manifest parser also refuses a target/abi mismatch: `compiler.target=h13` requires `driver_abi_major: 1`, `compiler.target=h14` requires `driver_abi_major: 2`.

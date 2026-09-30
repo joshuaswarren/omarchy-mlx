@@ -167,6 +167,35 @@ TEST_CASE("ABI-2 profile accepts an M2 host and rejects an M1 host") {
   CHECK(expected_text.find("apple,t8103-ane") == std::string::npos);
 }
 
+TEST_CASE("ABI-1 profile accepts the T6000-family node of T6001 hosts") {
+  // Packaged T6001 overlay nodes (omarchy-ane packaging/dt/t6001-ane.dts)
+  // carry the family compatible apple,t6000-ane — the of_match entry the
+  // ane driver binds on M1 Pro/Max/Ultra. ABI-1 must accept it (as primary
+  // or fallback entry, and as the single-entry blob the live node carries)
+  // and ABI-2 must keep refusing it.
+  auto make_blob = [](const char* first, const char* second) {
+    std::string blob(std::strlen(first) + 1 + std::strlen(second), '\0');
+    std::memcpy(blob.data(), first, std::strlen(first));
+    std::memcpy(blob.data() + std::strlen(first) + 1, second,
+                std::strlen(second));
+    return blob;
+  };
+  const std::string t6001_blob = make_blob("apple,ane", "apple,t6000-ane");
+  const std::string packaged_blob = std::string("apple,t6000-ane") + '\0';
+  const std::string m2_blob = make_blob("apple,ane", "apple,t6021-ane");
+
+  const auto& abi1 = kAbiProfilesMirror[0];
+  const auto& abi2 = kAbiProfilesMirror[1];
+  CHECK(std::strcmp(abi_profile_first_matching_compatible(abi1, t6001_blob),
+                    "apple,t6000-ane") == 0);
+  CHECK(std::strcmp(abi_profile_first_matching_compatible(abi1, packaged_blob),
+                    "apple,t6000-ane") == 0);
+  CHECK(abi_profile_first_matching_compatible(abi2, t6001_blob) == nullptr);
+  CHECK(abi_profile_first_matching_compatible(abi2, m2_blob) != nullptr);
+  const std::string expected_text = abi_profile_expected_compatibles_text(abi1);
+  CHECK(expected_text.find("apple,t6000-ane") != std::string::npos);
+}
+
 TEST_CASE(
     "per-ABI pins do not leak between lanes (libane + module_name)") {
   const auto& abi1 = kAbiProfilesMirror[0];
