@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import http.client
 import json
 import math
@@ -484,31 +485,46 @@ class LocalModels:
 
 
 class _RoutingWorker:
-    """Tiny worker adapter for the routing module.
+    """Deadline-bounded routing calls with at most one call in flight.
 
-    Wraps `LocalModels.decision` so the routing module stays free of any
-    HTTP details. The deadline is enforced on a worker-local timer:
-    a returned `timed_out` response is honored by the runner instead of
-    blocking on a cold call. The call is one-shot — no retries, no
-    replacement, no leak of worker state into the routing module.
+    Uses its own LocalModels (its own connection), so a late routing call
+    can never close a chat stream. A call that misses the deadline keeps
+    running on the single pool thread and stays recorded in `inflight`;
+    until it finishes, new routing attempts are refused (`busy`) instead
+    of queueing a replacement.
     """
 
-    def __init__(self, models, pair, cancel):
-        self.models = models
-        self.pair = pair
-        self.cancel = cancel
+    def __init__(self, manager):
+        self.models = LocalModels(manager)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.lock = threading.Lock()
+        self.inflight = None
 
-    def call(self, payload, deadline_seconds):
-        import concurrent.futures
+    def bind(self, pair):
+        worker = self
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self.models.decision, self.pair, payload)
+        class Bound:
+            def call(self, payload, deadline_seconds):
+                return worker.call(pair, payload, deadline_seconds)
+
+        return Bound()
+
+    def call(self, pair, payload, deadline_seconds):
+        with self.lock:
+            if self.inflight is not None and not self.inflight.done():
+                return {"busy": True}
+            self.inflight = self.pool.submit(self.models.decision, pair, payload)
+            future = self.inflight
         try:
             return future.result(timeout=deadline_seconds)
         except concurrent.futures.TimeoutError:
             return {"timed_out": True}
-        finally:
-            executor.shutdown(wait=False)
+        except Exception as error:
+            return {"error": str(error)[:200]}
+
+    def close(self):
+        self.models.close_connection()
+        self.pool.shutdown(wait=True, cancel_futures=True)
 
 
 class Coordinator:
@@ -516,6 +532,7 @@ class Coordinator:
         self.store = store if store is not None else ConversationStore(home)
         self.manager = manager
         self.models = LocalModels(manager)
+        self.router = _RoutingWorker(manager)
         self.gpu = threading.Lock()
         self.speech = SpeechYieldScheduler(self.gpu)
         self.lock = threading.RLock()
@@ -579,8 +596,9 @@ class Coordinator:
         payload whose `mode` is one of `chat`, `compare`, or `decide` so
         the GPU-bound worker only sees the worker modes it knows.
 
-        The route cannot be `structured_decision` when the user did not
-        supply explicit alternatives: never invent options.
+        A `structured_decision` route compares only the options the user
+        wrote (from the explicit payload or the structure extractor); it
+        needs criteria too, otherwise the turn becomes `clarify`.
         """
         try:
             pair = self.manager.start()
@@ -596,28 +614,29 @@ class Coordinator:
             new_payload["mode"] = "chat"
             new_payload["routing"] = routing
             return new_payload
-        cancel = threading.Event()
-        routing = self._auto_route(pair, payload["text"], cancel)
-        chosen = routing.get("route") or "conversation"
-        if chosen == "structured_decision":
-            options = payload.get("options")
-            if not isinstance(options, list) or not 2 <= len(options) <= 8:
-                chosen = "clarify"
+        routing = self._auto_route(pair, payload["text"])
         new_payload = dict(payload)
         new_payload["routing"] = routing
-        if chosen == "structured_decision":
-            new_payload["mode"] = "compare"
-        else:
-            new_payload["mode"] = "chat"
-        try:
-            existing = self.store.get(cid)
-        except Exception:
-            existing = None
-        if existing is not None:
+        new_payload["mode"] = "chat"
+        if routing.get("route") == "structured_decision":
+            options = payload.get("options")
+            criteria = payload.get("criteria")
+            if not (isinstance(options, list) and 2 <= len(options) <= 8):
+                labels = routing.get("options") or []
+                options = [{"id": "option-%d" % (i + 1), "label": label}
+                           for i, label in enumerate(labels)]
+                criteria = routing.get("criteria")
+            if not (2 <= len(options) <= 8 and isinstance(criteria, str) and criteria.strip()):
+                routing["route"] = "clarify"
+                routing["reason"] = "missing_options_or_criteria"
+                return new_payload
             try:
-                self.store.emit(cid, "pending", "routing", routing)
-            except Exception:
-                pass
+                decision_request(pair["model_paths"]["decision"], payload["text"], options, criteria)
+            except DecisionInputError:
+                routing["route"] = None
+                routing["reason"] = "material_does_not_fit"
+                return new_payload
+            new_payload.update(mode="compare", options=options, criteria=criteria)
         return new_payload
 
     def _run(self, cid, turn, payload, maximum, job):
@@ -992,36 +1011,21 @@ class Coordinator:
         except (ValueError, TypeError):
             return None
 
-    def _auto_route(self, pair, text, cancel):
+    def _auto_route(self, pair, text):
         """One automatic routing call with a 250 ms warm deadline.
 
-        Always emits a routing decision event the UI can show, even when
-        the router skips routing: a skip is a real answer (return to the
-        chat model), not a hidden failure.
-
-        A timed-out call stays accounted for in the runner's pending
-        list until the worker truly finishes or stops; we never launch
-        a replacement. Ordinary chat latency is unaffected because the
-        deadline is warm: cold Laya loads already exceed 250 ms and
-        therefore bypass routing immediately.
+        Returns the routing event the UI shows, including skips: a skip
+        is a real answer (use the chat model), not a hidden failure.
+        Deadline misses and in-flight accounting live in `_RoutingWorker`.
         """
-        payload = {
-            "state": text,
-            "questions": {
-                "route": {
-                    "type": "choice",
-                    "instructions": ROUTING_POLICY.question_text,
-                    "criteria": {"conversation": None, "structured_decision": None, "clarify": None},
-                }
-            },
-        }
         outcome = evaluate_route(
             text,
-            worker=_RoutingWorker(self.models, pair, cancel),
+            worker=self.router.bind(pair),
+            model_path=pair["model_paths"]["decision"],
             policy=ROUTING_POLICY,
             deadline_seconds=0.250,
         )
-        event = {
+        return {
             "policy_version": ROUTING_POLICY.version,
             "route": outcome.route,
             "reason": outcome.reason,
@@ -1030,10 +1034,11 @@ class Coordinator:
             "act_probability": outcome.act_probability,
             "latency_ms": outcome.latency_ms,
             "timed_out": outcome.timed_out,
+            "options": list(outcome.options),
+            "criteria": outcome.criteria,
             "use_chat_model_available": True,
             "model": "laya-mlx",
         }
-        return event
 
     def _validated(self, envelope, component_count, turn):
         """Validate one assistant-ui envelope; returns components or None.
@@ -1166,4 +1171,5 @@ class Coordinator:
             raise RuntimeError("Turn threads survived shutdown: "
                                + ", ".join(survivors))
         self.models.close_connection()
+        self.router.close()
         self.watch.join(timeout=3)
