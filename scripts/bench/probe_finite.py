@@ -19,8 +19,8 @@ bench = cmb.Bench(model, tok)
 prompts_dir = cmb.REPO_ROOT / "scripts/bench/prompts"
 cases = []
 for p in cmb.load_jsonl(prompts_dir / "cards_16.jsonl"):
-    full = bool(cmb.FULL_CARD_CUES.search(p["prompt"]) or cmb.user_requested_full_schema(p["prompt"]))
-    cases.append((f"card{p['index']}", cmb.SYSTEM_PREFIX + (cmb.SCHEMA_PROMPT if full else cmb.SCHEMA_PROMPT_COMPACT), p["prompt"]))
+    full = bool(cmb.FULL_CARD_CUES.search(p["prompt"]))
+    cases.append((f"card{p['index']}", cmb.SYSTEM_PREFIX + (cmb.SCHEMA_PROMPT if full else ""), p["prompt"]))
 for g in cmb.load_jsonl(prompts_dir / "gsm8k_20.jsonl")[:4]:
     cases.append((f"gsm{g['index']}", cmb.GSM_SYSTEM, g["q"]))
 for name, system, user in cases:

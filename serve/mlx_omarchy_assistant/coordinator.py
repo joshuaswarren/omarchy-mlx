@@ -28,9 +28,10 @@ MAX_QUESTIONS = 8
 # Auto allowances are backed by the admitted context in _admit_output.
 TASK_OUTPUT_ALLOWANCE = {"chat": 2048, "compare": 1024, "decide": 1024, "draft": 1024}
 MIN_AUTO_ALLOWANCE = 256
-# Ordinary chat sends the compact card schema (a third of the full one in tokens).
-# A message that names a chart, graph, form, decision, options, facts, or sources,
-# and every Laya turn, sends the full schema.
+# Ordinary chat sends no card schema: cards come from card_promotion.  A message
+# that names a chart, graph, form, decision, options, facts, or sources, every
+# Laya turn, and every model whose catalog entry declares fenced-json cards get
+# the full schema.
 FULL_CARD_CUES = re.compile(r"\b(charts?|graphs?|forms?|decisions?|options?|facts?|sources?)\b", re.IGNORECASE)
 REPETITION_PENALTY = 1.1
 
@@ -185,35 +186,25 @@ def _check_labels(value, low, high, cap, what):
 # Card-format capability lookup (lazy, cached, never raises)
 # ---------------------------------------------------------------------------
 
-_CARD_FORMAT_CACHE: dict[str, str | None] = {}
+_FENCED_JSON_CACHE: dict[str, bool] = {}
 
 
-def _model_card_format(chat_model_id: str) -> str | None:
-    """Return ``"fenced-json"`` when the catalog entry declares a measured
-    card-fence capability, otherwise ``"markdown-promotion"`` (or ``None``
-    when the model is not in the catalog).  Used to pick which schema to
-    send with chat prompts.  Reads are cached and never raise: a broken
-    catalog is treated as no capability."""
-    if not chat_model_id:
-        return None
-    if chat_model_id in _CARD_FORMAT_CACHE:
-        return _CARD_FORMAT_CACHE[chat_model_id]
-    fmt: str | None = None
-    try:
-        from mlx_omarchy_serve import catalog as _catalog
-        catalog_data = _catalog.load_catalog()
-    except Exception:
-        catalog_data = None
-    if catalog_data:
-        for entry in catalog_data.get("entries") or ():
-            if entry.get("id") == chat_model_id:
-                extension = entry.get("extension") or {}
-                fmt = extension.get("card_format")
-                if fmt not in (None, "fenced-json", "markdown-promotion"):
-                    fmt = None
-                break
-    _CARD_FORMAT_CACHE[chat_model_id] = fmt
-    return fmt
+def _model_emits_fenced_cards(chat_model_id: str) -> bool:
+    """True when the catalog entry declares ``extension.card_format ==
+    "fenced-json"`` (a measured fence capability).  Cached; a missing or
+    broken catalog means no capability."""
+    if chat_model_id not in _FENCED_JSON_CACHE:
+        fenced = False
+        try:
+            from mlx_omarchy_serve import catalog as _catalog
+            for entry in _catalog.load_catalog().get("entries") or ():
+                if entry.get("id") == chat_model_id:
+                    fenced = (entry.get("extension") or {}).get("card_format") == "fenced-json"
+                    break
+        except Exception:
+            fenced = False
+        _FENCED_JSON_CACHE[chat_model_id] = fenced
+    return _FENCED_JSON_CACHE[chat_model_id]
 
 
 def _typed_request(model_path, text, questions):
@@ -646,7 +637,7 @@ class Coordinator:
         speech_secret = None
         speech_capable = False
         try:
-            from .components import SCHEMA_PROMPT, SCHEMA_PROMPT_COMPACT, validate_components
+            from .components import SCHEMA_PROMPT, validate_components
             pair = self.manager.start()
             if cancel.is_set():
                 return
@@ -665,24 +656,11 @@ class Coordinator:
             if "routing" in payload:
                 self.store.emit(cid, turn, "routing", payload["routing"])
             user_text = payload.get("text") or ""
-            chat_model_id = pair.get("chat_model") or ""
-            # Schema policy: the model fence is unreliable on every current
-            # pair (27B ~5/8, 2B 0/8 in the v0.7.6 qualification).  When the
-            # catalog entry declares ``extension.card_format == "fenced-json"``
-            # we trust the model to emit JSON and send the full schema;
-            # otherwise we send the compact schema and rely on
-            # card_promotion to derive a card from the reply's markdown.
-            # Any message that names a kind the markdown parser cannot
-            # promote (charts/forms/decisions/sources) still gets the
-            # full schema so the model can emit the JSON itself.
-            from .card_promotion import user_requested_full_schema
-            card_format = _model_card_format(chat_model_id)
             full_schema = (mode in ("compare", "decide")
                            or bool(FULL_CARD_CUES.search(user_text))
-                           or user_requested_full_schema(user_text)
-                           or card_format == "fenced-json")
+                           or _model_emits_fenced_cards(pair.get("chat_model") or ""))
             messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
-                         + (SCHEMA_PROMPT if full_schema else SCHEMA_PROMPT_COMPACT)}]
+                         + (SCHEMA_PROMPT if full_schema else "")}]
             messages.extend(self._selected_history(record, turn))
             if mode in ("compare", "decide"):
                 path = pair["model_paths"]["decision"]

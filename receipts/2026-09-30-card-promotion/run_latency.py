@@ -153,7 +153,23 @@ def first_text_for(turn_url, runtime, turn, timeout_s=120):
     return None, None
 
 
+def host_state():
+    """Load average, GPU-capable processes and wheel provenance, recorded
+    before the server starts so a foreign GPU user is visible in the result."""
+    def sh(cmd):
+        return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
+                              timeout=60).stdout.strip()
+    return {
+        "loadavg": open("/proc/loadavg").read().strip(),
+        "boot_id": open("/proc/sys/kernel/random/boot_id").read().strip(),
+        "gpu_processes": sh("ps -eo pid,etime,cmd | grep -E 'python|mlx' | grep -v grep"),
+        "provenance": sh(f"{PYTHON} {os.path.join(REPO, 'scripts', 'mlx_provenance.py')} 2>&1"),
+    }
+
+
 def run(model, n_turns=30, warmup=3):
+    before = host_state()
+    print(json.dumps(before, indent=1), flush=True)
     server, runtime = start_server(model)
     try:
         # Wait for runtime file + setup complete.
@@ -193,13 +209,14 @@ def run(model, n_turns=30, warmup=3):
         p95 = first_text_ms[int(0.95 * len(first_text_ms))]
         print(f"\nFIRST_TEXT_MS p50={p50} p95={p95} gate=2000")
         summary = {
-            "model": model, "n": len(first_text_ms),
+            "model": model, "n": len(first_text_ms), "host_before": before,
+            "host_after": host_state(),
             "samples_ms": first_text_ms,
             "p50_ms": p50, "p95_ms": p95, "gate_ms": 2000,
             "gate_pass": p95 <= 2000,
         }
-        out = os.path.join(_HOME, "agents", "MarkdownCards",
-                            f"latency_{model.replace('/', '_')}.json")
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        out = os.path.join(RESULTS_DIR, f"latency_{model.replace('/', '_')}.json")
         with open(out, "w") as fp:
             json.dump(summary, fp, indent=2)
         return summary

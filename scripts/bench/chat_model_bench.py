@@ -37,9 +37,8 @@ sys.path.insert(0, str(REPO_ROOT / "serve"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from mlx_omarchy_assistant.components import (  # noqa: E402
-    SCHEMA_PROMPT, SCHEMA_PROMPT_COMPACT, ComponentError, validate_components)
-from mlx_omarchy_assistant.card_promotion import (  # noqa: E402
-    extract_text, user_requested_full_schema)
+    SCHEMA_PROMPT, ComponentError, validate_components)
+from mlx_omarchy_assistant.card_promotion import extract_text  # noqa: E402
 from mlx_omarchy_assistant.coordinator import FULL_CARD_CUES, REPETITION_PENALTY  # noqa: E402
 
 SYSTEM_PREFIX = "Answer the user using their supplied facts. "
@@ -145,7 +144,7 @@ def synthetic_prompt(tok, n: int) -> list[int]:
 
 def perf_phase(bench: Bench, args) -> dict:
     mx = bench.mx
-    card_system = SYSTEM_PREFIX + SCHEMA_PROMPT_COMPACT
+    card_system = SYSTEM_PREFIX
     ttft_prompt = bench.encode_chat(card_system, TTFT_USER)
     for _ in range(2):
         bench.run(ttft_prompt, 8)
@@ -330,8 +329,8 @@ def main() -> int:
         for p in load_jsonl(prompts_dir / "cards_16.jsonl"):
             if str(p["index"]) in done:
                 continue
-            full = bool(FULL_CARD_CUES.search(p["prompt"]) or user_requested_full_schema(p["prompt"]))
-            reply = bench.chat(SYSTEM_PREFIX + (SCHEMA_PROMPT if full else SCHEMA_PROMPT_COMPACT),
+            full = bool(FULL_CARD_CUES.search(p["prompt"]))
+            reply = bench.chat(SYSTEM_PREFIX + (SCHEMA_PROMPT if full else ""),
                                p["prompt"], args.max_tokens)
             done[str(p["index"])] = {"expect": p["expect"], "category": p["category"],
                                      "full_schema": full, **score_card(reply["text"], p["prompt"]),

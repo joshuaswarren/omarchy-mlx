@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Run the frozen HELD-OUT v2 suite once per chat model.
+"""Run a frozen card HELD-OUT suite once per chat model through the real app.
 
-The fixture (tests/fixtures/cards_held_out_v2.json) was FROZEN before any
-model saw it (sha256 in the file).  This runner reads it, chunks the 36
-prompts across gpu-turn -m 8 tickets, writes per-prompt checkpoints to
-results_held_out_v2_<model>.json, and skips prompts already recorded so
-reboots / killed tickets lose no work.
+``--suite`` names the fixture (v2 ran as cards_held_out_v2.json, v3 as
+cards_held_out_v3.json).  Each chunk starts its own assistant inside the
+caller's gpu-turn ticket, sends real HTTP chat turns, records one outcome per
+prompt in results/<suite>_<model>.json (sha256 of the fixture bytes, card
+types and titles, the reply text) and skips prompts already recorded, so a
+reboot or a killed ticket loses no finished work.
 """
+import hashlib
 import argparse
 import json
 import os
@@ -38,8 +40,8 @@ def runtime_for(chat_model):
     return os.path.join(home_for(chat_model), "assistant", "application.json")
 
 
-def results_path(chat_model):
-    return os.path.join(RESULTS_DIR, f"held_out_v2_{chat_model.replace('/', '_')}.json")
+def results_path(suite, chat_model):
+    return os.path.join(RESULTS_DIR, f"{suite}_{chat_model.replace('/', '_')}.json")
 
 
 def call(method, path, body=None, runtime=None):
@@ -82,8 +84,8 @@ def sync_results(results):
         pass
 
 
-def load_results(chat_model):
-    path = results_path(chat_model)
+def load_results(suite, chat_model):
+    path = results_path(suite, chat_model)
     if os.path.exists(path):
         with open(path) as fp:
             return json.load(fp), path
@@ -92,12 +94,14 @@ def load_results(chat_model):
 
 def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
               timeout_s=300, setup=False):
-    prompts_doc = json.load(open(held_out_path))
-    suite_sha = prompts_doc.get("sha256", "")
+    raw = open(held_out_path, "rb").read()
+    prompts_doc = json.loads(raw)
+    suite_sha = hashlib.sha256(raw).hexdigest()
+    suite = os.path.splitext(os.path.basename(held_out_path))[0].replace("cards_", "")
     home = home_for(chat_model)
     runtime = runtime_for(chat_model)
     pair_id = PAIR_FOR_MODEL[chat_model]
-    results, path = load_results(chat_model)
+    results, path = load_results(suite, chat_model)
     results["suite_sha256"] = suite_sha
     results["_path"] = path
     finished_ids = {p["id"] for p in results.get("prompts") or []}
@@ -124,7 +128,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
     safe = chat_model.replace("/", "_")
     log_path = os.path.join(_HOME, "agents", "MarkdownCards",
-                            f"server_v2_{safe}.log")
+                            f"server_{suite}_{safe}.log")
     setup_args = ["--pair", pair_id, "--yes"] if do_setup else []
     resume_args = ["--resume"] if not do_setup else []
     server = subprocess.Popen(
@@ -229,14 +233,18 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
             outcome = {
                 "id": prompt["id"], "category": prompt["category"],
                 "kind": prompt["kind"], "expect": expect,
-                "components": types, "elapsed_s": round(elapsed, 1),
+                "components": types,
+                "titles": [c.get("title", "") for c in components],
+                "promoted": [c.get("title", "").endswith("(from reply)") for c in components],
+                "elapsed_s": round(elapsed, 1),
                 "status": (message or {}).get("status"),
                 "pass": pass_,
+                "reply": ((message or {}).get("content") or "")[:6000],
             }
             results.setdefault("prompts", []).append(outcome)
             finished_ids.add(prompt["id"])
             sync_results(results)
-            print(f"HELD_OUT_V2 {offset + 1:2d}/{len(prompts_doc['prompts'])} "
+            print(f"{suite.upper()} {offset + 1:2d}/{len(prompts_doc['prompts'])} "
                   f"id={prompt['id']} expect={expect} types={types} "
                   f"elapsed={elapsed:.0f}s pass={pass_}", flush=True)
     finally:
@@ -248,15 +256,15 @@ def main():
     p.add_argument("--model", required=True)
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--end", type=int, default=36)
-    p.add_argument("--held-out", default=os.path.join(
-        REPO, "tests", "fixtures", "cards_held_out_v2.json"))
+    p.add_argument("--suite", required=True,
+                   help="fixture path, e.g. tests/fixtures/cards_held_out_v3.json")
     p.add_argument("--max-tokens", type=int, default=700)
     p.add_argument("--timeout-s", type=int, default=300)
     p.add_argument("--setup", action="store_true")
     args = p.parse_args()
     if args.model not in PAIR_FOR_MODEL:
         sys.exit(f"unknown model {args.model!r}")
-    run_chunk(args.held_out, args.model, args.start, args.end,
+    run_chunk(os.path.join(REPO, args.suite), args.model, args.start, args.end,
               max_tokens=args.max_tokens, timeout_s=args.timeout_s,
               setup=args.setup)
 

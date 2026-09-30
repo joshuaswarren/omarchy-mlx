@@ -1,10 +1,15 @@
-"""Coordinator card-promotion contract: model fence wins, promotion only
-fires on plain markdown replies, hostile input is inert, large inputs are
-bounded, and a validation rejection drops the card without dropping the
-prose.  Uses the SSE wire-protocol harness from test_assistant_generation."""
+"""Card promotion contract.
 
-import json
+Coordinator tests drive the SSE wire-protocol harness from
+test_assistant_generation (fake worker, fake pair manager): the model fence
+wins, text streams before the card, a validator rejection keeps the prose,
+compare turns never promote.  Rule tests call extract_text directly:
+promotion needs a user request for the artifact, prose requests and fenced
+code are inert, and hostile input costs linear time.
+"""
+
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,267 +17,191 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
-from mlx_omarchy_assistant import coordinator as coord  # noqa: E402
-from mlx_omarchy_assistant import components  # noqa: E402
-from mlx_omarchy_assistant import card_promotion  # noqa: E402
-from mlx_omarchy_assistant.card_promotion import extract_text  # noqa: E402
+from mlx_omarchy_assistant import card_promotion, components  # noqa: E402
+from mlx_omarchy_assistant.card_promotion import extract_text, requested_kinds  # noqa: E402
 
-from tests.test_assistant_generation import (
-    GenerationTests, FakeWorker, VALID_ENVELOPE, delta, finish,
-)
+from tests import test_assistant_generation as harness  # noqa: E402
+
+delta, finish = harness.delta, harness.finish
 
 
-def _card_events(record):
-    return [e for e in record["messages"][-1].get("components") or []]
+def _valid(component):
+    return components.validate_components({"version": 1, "components": [component]})
 
 
-class CardPromotionTests(GenerationTests):
-    """Reuses GenerationTests.setUp (fake SSE worker + fake pair manager)."""
+class CoordinatorPromotionTests(unittest.TestCase):
+    setUp = harness.GenerationTests.setUp
+    cid = harness.GenerationTests.cid
+    tearDown = harness.GenerationTests.tearDown
+    run_turn = harness.GenerationTests.run_turn
 
-    def _run_chat(self, cid, worker_scripts, user_text="please help",
-                  chat_model="fake", max_tokens=700):
-        self.worker.scripts = worker_scripts
-        # Force a known chat_model id so the schema-policy branch is
-        # exercised and stays reproducible across catalog changes.
-        original_start = self.manager.start
-        def start_with_model():
-            result = original_start()
-            result["chat_model"] = chat_model
-            return result
-        self.manager.start = start_with_model
-        turn, record = self.run_turn(
-            cid, {"text": user_text, "max_tokens": max_tokens})
-        return turn, record
+    def chat(self, reply, user_text):
+        cid = self.cid()
+        self.worker.scripts = [[(0, delta(reply)), (0, finish("stop"))]]
+        turn, record = self.run_turn(cid, {"text": user_text})
+        return cid, turn, record
+
+    def cards(self, record):
+        return record["messages"][-1].get("components") or []
 
     def test_model_fence_wins_over_promotion(self):
-        # Model emits a valid fenced block; the parser would also be able
-        # to derive a checklist from the prose, but the fence must win.
-        reply = "Here is the list.\n\n```assistant-ui\n" + VALID_ENVELOPE + "\n```\n"
-        cid = self.cid()
-        turn, record = self._run_chat(
-            cid,
-            [[(0, delta(reply)), (0, finish("stop"))]],
-            user_text="give me a checklist of steps",
-        )
-        cards = _card_events(record)
-        self.assertEqual(len(cards), 1, "model fence must produce exactly one card")
-        self.assertEqual(cards[0]["type"], "checklist")
-        # The card must NOT carry the assistant-built title suffix.
-        self.assertFalse((cards[0].get("title") or "").endswith(" (from reply)"),
-                         "model-emitted card must not be tagged as derived")
-
-    def test_promotion_off_for_plain_prose(self):
-        cid = self.cid()
-        turn, record = self._run_chat(
-            cid,
-            [[(0, delta("The capital of France is Paris.")), (0, finish("stop"))]],
-            user_text="What is the capital of France?",
-        )
-        self.assertEqual(_card_events(record), [])
-
-    def test_promotion_derives_checklist_when_user_asks(self):
-        # No fence, plain bullet list, but the user asked for a checklist.
-        reply = "- one\n- two\n- three\n- four\n"
-        cid = self.cid()
-        turn, record = self._run_chat(
-            cid,
-            [[(0, delta(reply)), (0, finish("stop"))]],
-            user_text="give me a checklist of steps",
-        )
-        cards = _card_events(record)
+        reply = ("- one\n- two\n- three\n\n```assistant-ui\n"
+                 + harness.VALID_ENVELOPE + "\n```\n")
+        _, _, record = self.chat(reply, "give me a checklist")
+        cards = self.cards(record)
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["type"], "checklist")
-        self.assertEqual(len(cards[0]["items"]), 4)
-        self.assertTrue(cards[0]["title"].endswith(" (from reply)"))
+        self.assertEqual([i["text"] for i in cards[0]["items"]], ["x"])
+        self.assertNotIn("(from reply)", cards[0].get("title", ""))
 
-    def test_promotion_derives_comparison_from_pipe_table(self):
-        reply = (
-            "| Option | Cost |\n|---|---|\n"
-            "| Cat | low |\n| Dog | high |\n"
-        )
-        cid = self.cid()
-        turn, record = self._run_chat(
-            cid,
-            [[(0, delta(reply)), (0, finish("stop"))]],
-            user_text="compare cats and dogs",
-        )
-        cards = _card_events(record)
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["type"], "comparison")
-        self.assertEqual(len(cards[0]["rows"]), 2)
-        self.assertTrue(cards[0]["title"].endswith(" (from reply)"))
+    def test_card_follows_the_streamed_text(self):
+        reply = "Pack these:\n- [ ] tent\n- [x] stove\n- [ ] water\n"
+        cid, turn, record = self.chat(reply, "packing list for camping")
+        kinds = [e["type"] for e in self.coord.store.events(cid, 0)
+                 if e["turn_id"] == turn and e["type"] in ("text", "component")]
+        self.assertEqual(kinds[-1], "component")
+        self.assertIn("text", kinds[:-1])
+        card = self.cards(record)[0]
+        self.assertEqual(card["type"], "checklist")
+        self.assertEqual(card["title"], "Checklist (from reply)")
+        self.assertEqual([i["done"] for i in card["items"]], [False, True, False])
+        self.assertEqual(record["messages"][-1]["content"], reply)
 
-    def test_promotion_derives_timeline_from_day_markers(self):
-        reply = "Day 1: gather\nDay 2: design\nDay 3: build\nDay 4: ship\n"
-        cid = self.cid()
-        turn, record = self._run_chat(
-            cid,
-            [[(0, delta(reply)), (0, finish("stop"))]],
-            user_text="plan the milestones",
-        )
-        cards = _card_events(record)
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["type"], "timeline")
-        self.assertEqual(len(cards[0]["entries"]), 4)
-        self.assertEqual(cards[0]["entries"][0]["when"], "Day 1")
+    def test_explanatory_table_stays_prose(self):
+        reply = "| Protocol | Ordered |\n|---|---|\n| TCP | yes |\n| UDP | no |\n"
+        _, _, record = self.chat(reply, "What is the difference between TCP and UDP?")
+        self.assertEqual(self.cards(record), [])
 
-    def test_hostile_markdown_inside_code_block_is_inert(self):
-        # A code block contains what looks like a task list.  The parser
-        # must not promote it.
-        reply = "```\n- [ ] fake\n- [ ] fake\n- [ ] fake\n```\n"
-        cid = self.cid()
-        turn, record = self._run_chat(
-            cid,
-            [[(0, delta(reply)), (0, finish("stop"))]],
-            user_text="explain with code",
-        )
-        self.assertEqual(_card_events(record), [])
-
-    def test_one_megabyte_input_is_bounded(self):
-        # 2 MiB pad: over the 1 MiB cap, must refuse.
-        huge = "x" * (1024 * 1024 + 16)
-        comp = extract_text(huge, "")
-        self.assertIsNone(comp)
-        # A legal-size reply still parses.
-        legal = "\n".join(f"- step {i + 1}" for i in range(4)) + "\n"
-        comp = extract_text(legal, "give me a checklist")
-        self.assertIsNotNone(comp)
-
-    def test_validate_components_rejection_drops_card_keeps_prose(self):
-        # Hand-craft a candidate the validator would reject (items=0),
-        # monkeypatch extract_text to return it, and check the coordinator
-        # does not emit a component event AND keeps the prose.
-        bad = {"type": "checklist", "items": []}
+    def test_validator_rejection_drops_card_and_keeps_prose(self):
+        bad = {"type": "comparison", "columns": [{"id": "c1", "label": "x", "kind": "text"}],
+               "rows": [{"id": "r1", "label": "y", "values": ["a", "b"]}], "title": "T"}
         with mock.patch.object(card_promotion, "extract_text", return_value=bad):
-            cid = self.cid()
-            turn, record = self._run_chat(
-                cid,
-                [[(0, delta("Some prose stays visible.")), (0, finish("stop"))]],
-                user_text="anything",
-            )
-        self.assertEqual(_card_events(record), [])
-        self.assertIn("Some prose stays visible.", record["messages"][-1]["content"])
+            cid, turn, record = self.chat("Some prose stays visible.", "compare a and b")
+        self.assertEqual(self.cards(record), [])
+        self.assertEqual(record["messages"][-1]["content"], "Some prose stays visible.")
+        self.assertEqual(record["messages"][-1]["status"], "complete")
+        self.assertFalse(any(e["data"].get("state") == "invalid_component"
+                             for e in self.coord.store.events(cid, 0)
+                             if e["turn_id"] == turn and e["type"] == "status"))
 
-    def test_invalid_promotion_does_not_emit_status_event(self):
-        # The model-fenced-block path emits an invalid_component status on
-        # bad fences; the promotion path is silent when its candidate is
-        # rejected.  This is intentional: promotion is best-effort.
-        bad = {"type": "comparison", "columns": [{"id": "c1", "label": "x"}],
-               "rows": [{"id": "r1", "label": "y", "values": []}]}
-        with mock.patch.object(card_promotion, "extract_text", return_value=bad):
-            cid = self.cid()
-            turn, record = self._run_chat(
-                cid,
-                [[(0, delta("ok")), (0, finish("stop"))]],
-                user_text="anything",
-            )
-        self.assertEqual(_card_events(record), [])
-        status = [e for e in self.coord.store.events(cid, 0)
-                  if e["turn_id"] == turn and e["type"] == "status"]
-        self.assertFalse(any(s["data"].get("state") == "invalid_component"
-                             for s in status),
-                        "promotion failures stay silent")
-
-    def test_promotion_skipped_in_compare_mode(self):
-        # compare/decide modes do their own thing; promotion must not fire.
+    def test_compare_mode_never_promotes(self):
         cid = self.cid()
-        self.worker.decision_response = {
-            "answers": {"comparison": {
-                "type": "choice", "choice": "a",
-                "probabilities": {"a": 0.7, "b": 0.3},
-                "rl_agent": {"act_probability": 0.9}, "confidence": 0.7}},
-        }
-        self.worker.scripts = [[(0, delta("Some explanation text.")), (0, finish("stop"))]]
-        turn, record = self.run_turn(
-            cid, {"text": "compare a and b", "mode": "compare",
-                  "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
-                  "criteria": "which is faster"})
-        # The decision event was emitted; no promoted checklist.
-        self.assertEqual(_card_events(record), [])
-
-    def test_user_requested_full_schema_overrides_markdown_promotion(self):
-        # A "charts" keyword forces the full schema and the chat path
-        # continues to work as before (no regression).
-        cid = self.cid()
-        self._run_chat(
-            cid,
-            [[(0, delta("ok")), (0, finish("stop"))]],
-            user_text="give me a chart of monthly sales",
-        )
-        request = self.worker.calls[0]
-        self.assertIn(components.SCHEMA_PROMPT, request["messages"][0]["content"])
+        self.worker.decision_response = {"answers": {"comparison": {
+            "type": "choice", "choice": "a", "probabilities": {"a": 0.7, "b": 0.3},
+            "rl_agent": {"act_probability": 0.9}, "confidence": 0.7}}}
+        self.worker.scripts = [[(0, delta("- one\n- two\n- three\n")), (0, finish("stop"))]]
+        _, record = self.run_turn(cid, {
+            "text": "compare a and b, as a checklist", "mode": "compare",
+            "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            "criteria": "which is faster"})
+        self.assertFalse(any(c.get("title", "").endswith("(from reply)")
+                             for c in self.cards(record)))
 
 
-class CardPromotionUnitTests(unittest.TestCase):
-    """Direct tests of the extract_text rules (no coordinator, no model)."""
+class RuleTests(unittest.TestCase):
+    def test_request_words_select_kinds_in_mention_order(self):
+        self.assertEqual(requested_kinds("Compare iOS and Android, then a rollout timeline"),
+                         ["comparison", "timeline"])
+        self.assertEqual(requested_kinds("What are the steps to bake bread?"), ["checklist"])
+        self.assertEqual(requested_kinds("Explain how DNS works, with the key steps"), [])
+        self.assertEqual(requested_kinds("Give me the steps to make tea in a paragraph."), [])
+        self.assertEqual(requested_kinds("Why is the sky blue?"), [])
 
-    def test_dev_set_tuning_targets(self):
-        # Load the DEV set and assert the parser is conservative enough:
-        # >= 80% of card-worthy prompts produce a valid card, and the
-        # 6 plain prompts + 6 near-miss prompts produce no card.
-        path = REPO_ROOT / "tests" / "fixtures" / "cards_dev.json"
-        data = json.loads(path.read_text())
-        hits = 0
-        expected_cards = 0
-        spurious = 0
-        for prompt in data["prompts"]:
-            # The "model" emits just the structured markdown (no fence).
-            # We hand-craft the typical 2B shape per kind.
-            reply = _fake_model_reply(prompt)
-            user_text = prompt["text"]
-            comp = extract_text(reply, user_text)
-            if prompt["category"] == "card-worthy":
-                expected_cards += 1
-                if comp is not None:
-                    try:
-                        components.validate_components(
-                            {"version": 1, "components": [comp]})
-                        hits += 1
-                    except Exception:
-                        pass
-            else:
-                if comp is not None:
-                    try:
-                        components.validate_components(
-                            {"version": 1, "components": [comp]})
-                        spurious += 1
-                    except Exception:
-                        pass
-        self.assertGreaterEqual(hits, int(0.8 * expected_cards),
-                                f"dev hits {hits} / {expected_cards} < 80%")
-        self.assertEqual(spurious, 0,
-                         f"dev produced {spurious} spurious cards")
+    def test_plain_list_needs_a_request(self):
+        reply = "- red\n- blue\n- green\n"
+        self.assertIsNone(extract_text(reply, "Name three primary colours."))
+        card = extract_text(reply, "Make a checklist of colours to buy")
+        self.assertEqual(card["type"], "checklist")
+        _valid(card)
 
+    def test_comparison_needs_a_table(self):
+        self.assertIsNone(extract_text("- cats: cheap\n- dogs: costly\n- fish: cheap\n",
+                                       "compare cats, dogs and fish"))
+        table = ("| Pet | Cost | Noise |\n|:--|--:|---|\n| **Cat** | low | quiet |\n"
+                 "| Dog | high | loud |\n| Fish | low | |\n")
+        card = extract_text(table, "compare cats, dogs and fish")
+        self.assertEqual([c["label"] for c in card["columns"]], ["Pet", "Cost", "Noise"])
+        self.assertEqual(card["rows"][0]["values"], ["Cat", "low", "quiet"])
+        _valid(card)
 
-def _fake_model_reply(prompt):
-    """Render the kind of markdown the model would produce for this prompt.
+    def test_ragged_or_one_column_tables_are_refused(self):
+        ragged = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 |\n"
+        self.assertIsNone(extract_text(ragged, "put it in a table"))
+        narrow = "| a |\n|---|\n| 1 |\n| 2 |\n"
+        self.assertIsNone(extract_text(narrow, "put it in a table"))
 
-    These are the same shapes the v0.7.6 qualification recorded: the 2B
-    writes rich markdown and the 27B writes a markdown checklist/table
-    when it does not emit JSON."""
-    kind = prompt.get("kind")
-    text = prompt["text"]
-    if kind == "checklist":
-        return "\n".join(f"- [ ] step {i + 1} for {text[:40]}"
-                          for i in range(4)) + "\n"
-    if kind == "comparison":
-        # table 2x2
-        return "| Option | Detail |\n|---|---|\n| A | x |\n| B | y |\n"
-    if kind == "timeline":
-        return "\n".join(f"Day {i + 1}: phase {i + 1}"
-                          for i in range(4)) + "\n"
-    if kind == "facts":
-        return ("- fact one\n- fact two\n- fact three\n- fact four\n")
-    if kind == "none":
-        return ("The answer is straightforward: " + text + "\n")
-    if kind == "list-in-prose":
-        return ("Three things come to mind: " + ", ".join(
-            f"item {i}" for i in range(3)) + ". That's the answer.\n")
-    if kind == "short-list":
-        return "\n".join(f"- {i}" for i in range(3)) + "\n"
-    if kind == "code-only":
-        return ("```python\nprint('hi')\n```\n")
-    return "Sure, here you go.\n"
+    def test_timeline_from_labels_markers_tables_and_headings(self):
+        labelled = ("1. **Discovery** - interview users\n2. **Pilot**: two teams\n"
+                    "3. **Rollout** \u2013 everyone\n4. **Cleanup**: remove flags\n")
+        card = extract_text(labelled, "Schedule the migration in phases")
+        self.assertEqual([e["when"] for e in card["entries"]],
+                         ["Discovery", "Pilot", "Rollout", "Cleanup"])
+        timed = "9:00 standup\n11:30 code review\n12:00 lunch\n"
+        card = extract_text(timed, "plan my monday")
+        self.assertEqual([e["when"] for e in card["entries"]], ["9:00", "11:30", "12:00"])
+        self.assertEqual(card["entries"][0]["text"], "standup")
+        table = ("| Week | Goal |\n|---|---|\n| Weeks 1-4 | plan |\n"
+                 "| Weeks 5-10 | build |\n| Weeks 11-12 | review |\n")
+        card = extract_text(table, "OKR cycle timeline")
+        self.assertEqual(card["entries"][1], {"id": card["entries"][1]["id"],
+                                              "when": "Weeks 5-10", "text": "build"})
+        headings = "## Week 1: internal\n...\n## Week 2: beta\n...\n## Week 3: launch\n"
+        card = extract_text(headings, "roadmap for launch")
+        self.assertEqual([e["when"] for e in card["entries"]], ["Week 1", "Week 2", "Week 3"])
+        for text, user in ((labelled, "phases"), (timed, "plan my monday"),
+                           (table, "timeline"), (headings, "roadmap")):
+            _valid(extract_text(text, user))
+
+    def test_facts_accept_two_items(self):
+        card = extract_text("- Moon: no atmosphere\n- Distance: 384,400 km\n",
+                            "two facts about the moon")
+        self.assertEqual([c["heading"] for c in card["cards"]], ["Moon", "Distance"])
+        _valid(card)
+
+    def test_fenced_code_and_unterminated_fences_are_inert(self):
+        inside = "```\n- [ ] a\n- [ ] b\n- [ ] c\n```\n"
+        self.assertIsNone(extract_text(inside, "checklist please"))
+        open_fence = "~~~~md\n- [ ] a\n- [ ] b\n- [ ] c\n"
+        self.assertIsNone(extract_text(open_fence, "checklist please"))
+        after = "```\ncode\n```\n- [ ] a\n- [ ] b\n- [ ] c\n"
+        self.assertEqual(len(extract_text(after, "checklist please")["items"]), 3)
+
+    def test_markup_stays_text(self):
+        reply = ("- <script>alert(1)</script>\n- <img src=x onerror=alert(1)>\n"
+                 "- [link](javascript:alert(1))\n")
+        card = extract_text(reply, "to-do list")
+        self.assertEqual(card["items"][0]["text"], "<script>alert(1)</script>")
+        _valid(card)
+
+    def test_oversize_items_are_truncated_to_validator_bounds(self):
+        reply = "\n".join(f"- {'x' * 5000} {i}" for i in range(80))
+        card = extract_text(reply, "checklist")
+        self.assertEqual(len(card["items"]), 50)
+        _valid(card)
+        wide = "| " + " | ".join(f"h{i}" for i in range(9)) + " |\n|" + "---|" * 9 + "\n"
+        wide += ("| " + " | ".join("v" for _ in range(9)) + " |\n") * 3
+        self.assertIsNone(extract_text(wide, "table"))
+
+    def test_input_over_one_mebibyte_is_refused(self):
+        self.assertIsNone(extract_text("- a\n" * 300_000, "checklist"))
+
+    def test_hostile_one_mebibyte_inputs_are_linear(self):
+        near = card_promotion.MAX_INPUT_BYTES - 64
+        cases = [
+            "- a" + " " * near + "b",
+            "| a" + " " * near + "b",
+            "a | b\n" + "|" + " " * near + "-",
+            "# " + "x " * (near // 2),
+            "```\n" * (near // 4),
+            "- [ ] " + "[" * (near - 8),
+            "9:" * (near // 2),
+            "**" * (near // 2),
+        ]
+        users = ["checklist, table, timeline and facts", "shopping" + "g" * 200_000 + " list"]
+        for reply in cases:
+            for user in users:
+                started = time.monotonic()
+                extract_text(reply, user)
+                self.assertLess(time.monotonic() - started, 2.0, reply[:20])
 
 
 if __name__ == "__main__":

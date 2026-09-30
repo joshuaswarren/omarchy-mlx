@@ -1,7 +1,7 @@
 {
   "version": "2026-09-30.1",
   "status": "dev-tune",
-  "rule": "Used to tune card_promotion.py rules and the SCHEMA_PROMPT. Throw-away set; not the held-out suite.",
+  "rule": "Used to tune card_promotion.py rules and the SCHEMA_PROMPT. Throw-away set; not the held-out suite. 2026-09-30: dev-52 relabelled card-worthy (the user asks for a table; the rules promote a requested table with >= 2 data rows).",
   "prompts": [
     {"id": "dev-01", "category": "card-worthy", "kind": "checklist", "text": "Give me a packing list for a weekend camping trip."},
     {"id": "dev-02", "category": "card-worthy", "kind": "checklist", "text": "What are the steps to make a sourdough loaf at home?"},
@@ -57,6 +57,6 @@
     {"id": "dev-49", "category": "near-miss", "kind": "plain-with-summary", "text": "Tell me about Kubernetes, then summarize in one sentence."},
     {"id": "dev-50", "category": "near-miss", "kind": "plain-with-summary", "text": "What's Redis used for, then recap in one line."},
     {"id": "dev-51", "category": "near-miss", "kind": "plain-with-quote", "text": "Quote the project's license, then describe what it permits."},
-    {"id": "dev-52", "category": "near-miss", "kind": "short-table", "text": "Give me a 2x2 table: yes/no for HTTPS and TLS 1.3."}
+    {"id": "dev-52", "category": "card-worthy", "kind": "comparison", "text": "Give me a 2x2 table: yes/no for HTTPS and TLS 1.3."}
   ]
 }
