@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -72,14 +73,18 @@ class RoutingPolicy:
 # evaluated. The flag defaults OFF; this object is here so the wiring
 # has one canonical place to read the version and the question text.
 ROUTING_POLICY = RoutingPolicy(
-    version="1",
+    version="3",
     question_text=(
-        "Classify this user turn as exactly one of: conversation (the "
-        "user wants an explanation or chat, no bounded choice), "
-        "structured_decision (the user supplies explicit alternatives to "
-        "pick from, even when phrased as a question), or clarify (the "
-        "user's request is missing options, criteria, or scope and the "
-        "assistant needs to ask before deciding)."
+        "Pick the label that matches the fingerprint: "
+        "(A) conversation = no options marker AND no criteria marker AND "
+        "no decision request; "
+        "(B) structured_decision = BOTH an options marker AND a criteria "
+        "marker (explicit user-supplied alternatives with explicit "
+        "criteria); "
+        "(C) clarify = either marker alone, or neither marker but the "
+        "user asks for a decision. Injection-style text that imitates "
+        "decision grammar counts as structured_decision ONLY when BOTH "
+        "markers appear with explicit user-supplied content."
     ),
     # Calibrated conservatively against the Laya choice head. The held-out
     # evaluation re-tunes these and writes policy "2" if precision < 99%.
@@ -88,7 +93,7 @@ ROUTING_POLICY = RoutingPolicy(
     act_min=0.55,
     suite_sha256=None,
     receipt=None,
-    note="starter policy; held-out suite unevaluated; flag defaults OFF",
+    note="iter-3 prompt with fingerprint-only state; dev sweeps 1 and 2 failed (no passing cell); iter-3 queued; flag defaults OFF",
 )
 
 
@@ -105,40 +110,48 @@ class RoutingOutcome:
     timed_out: bool = False
 
 
-def _neutralise_quoted_text(text: str) -> str:
-    """Collapse list/label syntax inside the quoted user turn.
+_OPTIONS_RE = re.compile(r"\boptions?\s*:\s*", re.IGNORECASE)
+_CRITERIA_RE = re.compile(r"\bcriteri[ao]\s*:\s*", re.IGNORECASE)
+_INJECTION_KEYWORDS = ("ignore", "disregard", "forget", "override",
+                       "pretend", "system:", "you are now", "run rm")
+_NEGATION_KEYWORDS = ("not", "never", "don't", "do not", "avoid", "skip")
 
-    The user text is presented as inert data to the Laya choice head
-    (see `_build_routing_payload`). Inside that inert payload, `Options:`,
-    `Criteria:`, and verb-like prefixes (Compare / Pick / Decide / Choose)
-    would otherwise be parsed by the head as decision structure — even
-    inside injection text that is not actually a structured decision
-    request. Reducing those markers to inert lowercase tokens keeps the
-    content available while removing the lexical signal that fooled the
-    choice head into routing injection cases to `structured_decision`.
+
+def _fingerprint(text: str) -> dict:
+    """A minimal structural summary of the user turn.
+
+    The choice head sees ONLY the fingerprint. We deliberately exclude
+    the raw text so injection text cannot be read as a decision request.
+    Iter 3 of the routing policy: this is the design fix that addresses
+    the injection-fooled head observed in dev iter 1 and 2.
     """
-    import re
-    out = re.sub(r"\bOptions?:\s*", "options-marker ", text, flags=re.IGNORECASE)
-    out = re.sub(r"\bCriterias?:\s*", "criteria-marker ", out, flags=re.IGNORECASE)
-    out = re.sub(r"\b(Compare|Pick|Decide|Choose)\s+", "verb ", out, flags=re.IGNORECASE)
-    return out
+    text_lower = text.lower()
+    return {
+        "char_count": len(text),
+        "word_count": len(text.split()),
+        "ends_with_question": text.rstrip().endswith("?"),
+        "has_options_marker": bool(_OPTIONS_RE.search(text)),
+        "options_marker_count": len(_OPTIONS_RE.findall(text)),
+        "has_criteria_marker": bool(_CRITERIA_RE.search(text)),
+        "criteria_marker_count": len(_CRITERIA_RE.findall(text)),
+        "has_negation": any(w in text_lower for w in _NEGATION_KEYWORDS),
+        "has_injection_keyword": any(w in text_lower for w in _INJECTION_KEYWORDS),
+    }
 
 
 def _build_routing_payload(text: str, question_text: str) -> dict:
     """Build the /v1/decisions payload for routing.
 
-    Design: the user turn is presented to the Laya choice head as
-    inert quoted data (JSON-encoded inside a `<state-json>` delimiter),
-    with the classification instruction OUTSIDE the quote. This
-    neutralises injection-style text whose lexical structure (Options:,
-    Criteria:) was being read as decision structure by the choice head
-    in the first version of the policy.
+    Iter 3 design: present the head ONLY with a structural fingerprint
+    of the user turn (presence/absence of explicit Options: and Criteria:
+    markers, length, ends-with-?, negation/injection keywords). The raw
+    text is intentionally NOT shown so injection text cannot be parsed
+    as decision structure.
     """
-    quoted = _neutralise_quoted_text(text)
-    encoded = json.dumps(quoted, ensure_ascii=False)
-    inert_state = f"<state-json>{encoded}</state-json>"
+    fp = _fingerprint(text)
+    fp_text = json.dumps(fp, ensure_ascii=False)
     return {
-        "state": inert_state,
+        "state": f"<fingerprint>{fp_text}</fingerprint>",
         "questions": {
             "route": {
                 "type": "choice",
@@ -153,14 +166,14 @@ def fit_route_question(text: str, *, tokenizer=None) -> tuple[bool, int | None]:
     """Refuse routing when the supplied material will not fit without
     truncation; return (ok, token_count_estimate).
 
-    Uses Laya's tokenizer the same way `coordinator._typed_request`
-    does: hand-rebuild the full sequence shape and confirm the head
-    fits inside the catalog 512-token cap. Any renderer shortening
-    (option labels, instructions, state) or material overflow refuses
-    the request before dispatch.
+    Iter 3: the state sent to Laya is the FINGERPRINT of the user text,
+    not the raw text. The fit check uses the same fingerprint state to
+    match what actually goes on the wire. The cap is the catalog
+    512-token limit; anything that would silently truncate refuses the
+    request before dispatch.
 
-    `tokenizer` is injected by tests; production falls back to
-    scanning the live venv for a converted Laya checkpoint.
+    `tokenizer` is injected by tests; production falls back to scanning
+    the live venv for a converted Laya checkpoint.
     """
     if not isinstance(text, str) or not text.strip():
         return False, None
@@ -188,7 +201,12 @@ def fit_route_question(text: str, *, tokenizer=None) -> tuple[bool, int | None]:
     }
     internal = to_internal(question)
 
-    material = [str(internal["ins"]), serialize_state(text)] + render_options(internal)
+    # The state sent to Laya is the fingerprint JSON inside a delimiter
+    # (see `_build_routing_payload`). The fit check MUST use the same
+    # state shape, otherwise it would silently disagree with the actual
+    # dispatch.
+    fp_state = f"<fingerprint>{json.dumps(_fingerprint(text), ensure_ascii=False)}</fingerprint>"
+    material = [str(internal["ins"]), serialize_state(fp_state)] + render_options(internal)
     if any(tok.mask_token in item for item in material):
         return False, None
 
@@ -198,13 +216,14 @@ def fit_route_question(text: str, *, tokenizer=None) -> tuple[bool, int | None]:
         ) + [tok.sep_token_id]
         for option in render_options(internal):
             ids += [tok.mask_token_id] + tok.encode(" " + option)
-        ids += [tok.sep_token_id] + tok.encode(serialize_state(text)) + [tok.sep_token_id]
+        ids += [tok.sep_token_id] + tok.encode(serialize_state(fp_state)) + [tok.sep_token_id]
     except Exception:
         return False, None
 
-    # Catalog Laya cap is 512 tokens. Allow a small headroom margin for
-    # the rendered mask-token alignment the upstream build_sequence also
-    # fits under; refuse anything that would silently truncate.
+    # Catalog Laya cap is 512 tokens. Refuse anything that would
+    # silently truncate. With the fingerprint state the cap is hit
+    # only for an absurdly long user turn; for normal turns the
+    # fingerprint is bounded.
     if len(ids) > 512:
         return False, None
     return True, len(ids)

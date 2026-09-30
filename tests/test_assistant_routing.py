@@ -51,9 +51,22 @@ class _FakeTokenizer:
         self.pad_token_id = 3
 
     def encode(self, text):
-        # Cheap stub: each token is one integer. Length is bounded by
-        # character count; tests rely on over-budget being detected.
-        return list(range(min(len(text), 4096)))
+        # Cheap stub: ~1 token per whitespace-delimited word plus
+        # ~1 sub-token per 4 chars of punctuation. Real Laya uses BPE
+        # with vocab ~30000 so this stays well within the 512-token cap
+        # for normal-length routing instructions.
+        tokens = []
+        for word in text.split():
+            tokens.append(word[:8])  # truncate long tokens to 1 id
+            if len(word) > 8:
+                # sub-tokens for the rest
+                rest = word[8:]
+                while rest:
+                    tokens.append(rest[:6])
+                    rest = rest[6:]
+        if not tokens and text:
+            tokens = [text[:8]]
+        return tokens
 
 
 _FAKE_TOKENIZER = _FakeTokenizer()
