@@ -1,6 +1,6 @@
 --- a/mlx_lm/models/gated_delta.py	2026-09-30 03:00:00.000000000 +0000
 +++ b/mlx_lm/models/gated_delta.py	2026-09-30 03:00:00.000000000 +0000
-@@ -280,6 +280,11 @@
+@@ -280,6 +280,14 @@
          Hv, Dv = v.shape[-2:]
          state = mx.zeros((B, Hv, Dv, Dk), dtype=mx.float32)
  
