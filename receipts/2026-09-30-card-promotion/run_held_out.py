@@ -177,37 +177,36 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
         except Exception:
             pass
 
-    try:
-        deadline = time.monotonic() + 180 if not do_setup else 1500
-        while not os.path.exists(runtime) and time.monotonic() < deadline:
-            time.sleep(0.5)
-        if not os.path.exists(runtime):
-            raise RuntimeError("server never wrote application.json")
-        setup_deadline = time.monotonic() + (600 if not do_setup else 1500)
-        while time.monotonic() < setup_deadline:
-            state = call("GET", "/api/status", runtime=runtime).get("setup") or {}
-            if state.get("state") == "complete":
-                break
-            if state.get("state") == "error":
-                raise RuntimeError(f"setup error: {state}")
-            if state.get("state") == "absent":
-                # /api/resume found no usable pair; re-issue with --pair.
-                _kill_server()
-                if os.path.exists(runtime):
-                    os.unlink(runtime)
-                server = subprocess.Popen(
-                    [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
-                     "--no-browser", "--pair", pair_id, "--yes"],
-                    cwd=REPO, env=env,
-                    stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
-                    start_new_session=True)
-                deadline = time.monotonic() + 1500
-                while not os.path.exists(runtime) and time.monotonic() < deadline:
-                    time.sleep(0.5)
-                setup_deadline = time.monotonic() + 1500
-            time.sleep(1)
-        else:
-            raise RuntimeError("setup did not complete in time")
+    deadline = time.monotonic() + 180 if not do_setup else 1500
+    while not os.path.exists(runtime) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if not os.path.exists(runtime):
+        raise RuntimeError("server never wrote application.json")
+    setup_deadline = time.monotonic() + (600 if not do_setup else 1500)
+    while time.monotonic() < setup_deadline:
+        state = call("GET", "/api/status", runtime=runtime).get("setup") or {}
+        if state.get("state") == "complete":
+            break
+        if state.get("state") == "error":
+            raise RuntimeError(f"setup error: {state}")
+        if state.get("state") == "absent":
+            # /api/resume found no usable pair; re-issue with --pair.
+            _kill_server()
+            if os.path.exists(runtime):
+                os.unlink(runtime)
+            server = subprocess.Popen(
+                [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
+                 "--no-browser", "--pair", pair_id, "--yes"],
+                cwd=REPO, env=env,
+                stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
+                start_new_session=True)
+            deadline = time.monotonic() + 1500
+            while not os.path.exists(runtime) and time.monotonic() < deadline:
+                time.sleep(0.5)
+            setup_deadline = time.monotonic() + 1500
+        time.sleep(1)
+    else:
+        raise RuntimeError("setup did not complete in time")
 
     try:
         valid_card_kinds = {"checklist", "comparison", "timeline", "facts"}
