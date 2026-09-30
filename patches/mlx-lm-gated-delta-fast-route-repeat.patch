@@ -1,0 +1,17 @@
+--- a/mlx_lm/models/gated_delta.py	2026-09-30 03:00:00.000000000 +0000
++++ b/mlx_lm/models/gated_delta.py	2026-09-30 03:00:00.000000000 +0000
+@@ -280,6 +280,11 @@
+         Hv, Dv = v.shape[-2:]
+         state = mx.zeros((B, Hv, Dv, Dk), dtype=mx.float32)
+ 
++    # The fused backend requires Hk == Hv (omarchy/primitives.cpp:10630).
++    # gated_delta_ops (the composed fallback) does the repeat itself; the
++    # fast path must do it before dispatching or the backend's
++    # use_fallback check returns true and the per-token loop runs.
++    if Hv != Hk:
++        q = mx.repeat(q, Hv // Hk, -2)
++        k = mx.repeat(k, Hv // Hk, -2)
++
+     if not use_kernel or mx.default_device() != mx.gpu:
+         return gated_delta_ops(q, k, v, g, beta, state, mask)
+     if hasattr(mx.fast, "gated_delta_update"):
