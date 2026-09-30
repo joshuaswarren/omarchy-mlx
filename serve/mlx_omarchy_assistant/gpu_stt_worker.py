@@ -8,6 +8,15 @@ and each gets exactly one framed response on stdout; ``close`` ends the
 loop. The worker serves one request at a time. The parent cancels by
 killing the process group, so there is no cancel frame. Resampling to
 16 kHz runs on the mlx device inside the worker.
+
+Empty-transcript retry: Parakeet-TDT returned no transcript for 3 of 96
+browser recordings of clear speech, and NeMo's own implementation does the
+same on them. When a decode comes back empty and the clip holds at least
+0.5 s of voiced frames, it is decoded once more with 1 s of fixed low-level
+noise on both ends, which recovers those recordings. Padding every request
+instead was measured and rejected: it emptied tiled 20-30 s clips that
+decode fully without it. Silence and stationary noise have no voiced frames,
+so they never retry.
 """
 
 from __future__ import annotations
@@ -20,6 +29,16 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+
+SAMPLE_RATE = 16_000
+RETRY_PAD_SECONDS = 1.0
+MIN_VOICED_SECONDS = 0.5
+_FRAME = 320  # 20 ms
+_VOICED_RMS_FLOOR = 0.005  # the browser recorder's no-speech level
+_VOICED_OVER_BACKGROUND = 4.0  # 12 dB above the clip's 10th-percentile frame
+_PAD_NOISE = (np.random.default_rng(0).standard_normal(int(RETRY_PAD_SECONDS * SAMPLE_RATE))
+              .astype(np.float32) * 1e-4)  # about -80 dBFS
 
 
 def _read_exact(stream, n: int) -> bytes:
@@ -54,7 +73,31 @@ def _register_bare_package(name: str) -> None:
     sys.modules[name] = importlib.util.module_from_spec(spec)
 
 
-def _transcribe(model, payload: bytes, rate: int) -> dict:
+def voiced_seconds(xp, audio) -> float:
+    """Seconds of 20 ms frames louder than both the recorder's no-speech
+    level and 12 dB over the clip's own background (10th-percentile frame).
+    ``xp`` is numpy or mlx.core; with mlx the work stays on the device."""
+    count = audio.shape[0] // _FRAME
+    if count == 0:
+        return 0.0
+    frames = audio[: count * _FRAME].reshape(count, _FRAME)
+    rms = xp.sqrt((frames * frames).mean(axis=1))
+    background = xp.sort(rms)[int(0.1 * (count - 1))]
+    threshold = xp.maximum(background * _VOICED_OVER_BACKGROUND, _VOICED_RMS_FLOOR)
+    return float((rms > threshold).sum()) * _FRAME / SAMPLE_RATE
+
+
+def decode_with_retry(generate, xp, audio, noise) -> str:
+    """``generate(audio) -> str``, retried once with padded edges when it is
+    empty but voiced (see the module docstring)."""
+    text = generate(audio)
+    if text or voiced_seconds(xp, audio) < MIN_VOICED_SECONDS:
+        return text
+    n = int(RETRY_PAD_SECONDS * SAMPLE_RATE)
+    return generate(xp.concatenate([noise[:n], audio, noise[-n:]]))
+
+
+def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
     import mlx.core as mx
 
     from .gpu_stt import resample_to_16k
@@ -63,15 +106,18 @@ def _transcribe(model, payload: bytes, rate: int) -> dict:
         samples = np.frombuffer(payload, dtype="<f4")
     except ValueError as exc:
         return {"ok": False, "kind": "input", "error": f"payload parse failed: {exc}"}
+
+    # 1-D only: a (1, N) input makes Parakeet-TDT on mlx-audio 0.5.6
+    # silently return "".
+    def generate(audio) -> str:
+        return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
+
     try:
-        # 1-D only: a (1, N) input makes Parakeet-TDT on mlx-audio 0.5.6
-        # silently return "".
         audio = resample_to_16k(mx.array(samples), rate)
-        out = model.generate(audio, verbose=False)
+        text = decode_with_retry(generate, mx, audio, noise)
     except Exception as exc:
         return {"ok": False, "kind": "unavailable", "error": f"gpu-stt generate failed: {exc}"}
-    return {"ok": True, "transcript": str(getattr(out, "text", out) or ""),
-            "peak_memory_bytes": int(mx.get_peak_memory())}
+    return {"ok": True, "transcript": text, "peak_memory_bytes": int(mx.get_peak_memory())}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -90,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         # The first generate() after load returns "" on this stack; spend
         # it on one second of silence before declaring readiness.
         model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
+        noise = mx.array(_PAD_NOISE)
     except Exception as exc:
         _send(stdout, {"ok": False, "kind": "unavailable", "error": f"failed to load model: {exc}"})
         return 2
@@ -112,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             _send(stdout, {"ok": True, "event": "closed", "id": request_id})
             return 0
         if op == "transcribe":
-            response = _transcribe(model, payload, int(header.get("sample_rate", 16_000)))
+            response = _transcribe(model, payload, int(header.get("sample_rate", 16_000)), noise)
         else:
             response = {"ok": False, "kind": "input", "error": f"unknown op {op!r}"}
         _send(stdout, dict(response, id=request_id))

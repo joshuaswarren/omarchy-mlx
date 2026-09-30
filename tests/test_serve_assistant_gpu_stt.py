@@ -239,5 +239,55 @@ class BarePackageTest(unittest.TestCase):
                     sys.modules.pop(name, None)
 
 
+class EmptyTranscriptRetryTest(unittest.TestCase):
+    """The worker's decode path, with numpy standing in for mlx."""
+
+    def setUp(self):
+        import numpy as np
+        from mlx_omarchy_assistant import gpu_stt_worker as worker
+        self.np, self.worker = np, worker
+        rng = np.random.default_rng(7)
+        t = np.arange(2 * 16_000) / 16_000
+        # 2 s of 200 Hz bursts, 150 ms on / 150 ms off: syllable-like energy swings.
+        self.speech = (0.2 * np.sin(2 * np.pi * 200 * t) * (np.floor(t / 0.15) % 2)).astype(np.float32)
+        self.noise = (0.05 * rng.standard_normal(2 * 16_000)).astype(np.float32)
+        self.silence = np.zeros(2 * 16_000, dtype=np.float32)
+
+    def decode(self, audio, answers):
+        calls = []
+
+        def generate(clip):
+            calls.append(clip)
+            return answers[len(calls) - 1]
+        text = self.worker.decode_with_retry(generate, self.np, audio, self.worker._PAD_NOISE)
+        return text, calls
+
+    def test_a_transcript_on_the_first_pass_is_the_answer_unpadded(self):
+        text, calls = self.decode(self.speech, ["hello"])
+        self.assertEqual((text, len(calls)), ("hello", 1))
+        self.np.testing.assert_array_equal(calls[0], self.speech)
+
+    def test_empty_voiced_clip_retries_once_between_low_level_edges(self):
+        text, calls = self.decode(self.speech, ["", "hello"])
+        pad = int(self.worker.RETRY_PAD_SECONDS * 16_000)
+        self.assertEqual((text, len(calls)), ("hello", 2))
+        self.np.testing.assert_array_equal(calls[1][pad:-pad], self.speech)
+        self.assertLess(float(self.np.abs(self.np.concatenate([calls[1][:pad], calls[1][-pad:]])).max()), 0.001)
+
+    def test_a_second_empty_answer_is_final(self):
+        text, calls = self.decode(self.speech, ["", "", "should not be asked"])
+        self.assertEqual((text, len(calls)), ("", 2))
+
+    def test_silence_and_stationary_noise_never_retry(self):
+        for audio in (self.silence, self.noise):
+            text, calls = self.decode(audio, ["", "should not be asked"])
+            self.assertEqual((text, len(calls)), ("", 1))
+
+    def test_voicing_needs_half_a_second(self):
+        short = self.speech[: int(0.3 * 16_000)]
+        self.assertLess(self.worker.voiced_seconds(self.np, short), self.worker.MIN_VOICED_SECONDS)
+        self.assertGreaterEqual(self.worker.voiced_seconds(self.np, self.speech), self.worker.MIN_VOICED_SECONDS)
+
+
 if __name__ == "__main__":
     unittest.main()
