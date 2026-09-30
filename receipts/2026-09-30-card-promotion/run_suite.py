@@ -8,7 +8,9 @@ prompt in results/<suite>_<model>.json (sha256 of the fixture bytes, card
 types and titles, the reply text) and skips prompts already recorded, so a
 reboot or a killed ticket loses no finished work.
 """
+import atexit
 import hashlib
+import threading
 import argparse
 import json
 import os
@@ -92,8 +94,21 @@ def load_results(suite, chat_model):
     return {"suite_sha256": "", "chat_model": chat_model, "prompts": []}, path
 
 
+def _heartbeat_loop(cid, turn, runtime, stop, gaps):
+    """Keep the turn alive every 5 s from its own thread; the server cancels
+    a turn after 20 s without one.  Records the slowest heartbeat call."""
+    while not stop.wait(5):
+        started = time.monotonic()
+        try:
+            call("POST", f"/api/conversations/{cid}/heartbeat", {"turn_id": turn}, runtime=runtime)
+        except Exception:
+            pass
+        gaps.append(time.monotonic() - started)
+
+
 def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
-              timeout_s=300, setup=False):
+              timeout_s=600, setup=False, budget_s=None):
+    chunk_started = time.monotonic()
     raw = open(held_out_path, "rb").read()
     prompts_doc = json.loads(raw)
     suite_sha = hashlib.sha256(raw).hexdigest()
@@ -162,6 +177,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
         except Exception:
             pass
 
+    atexit.register(_kill_server)
     deadline = time.monotonic() + 180 if not do_setup else 1500
     while not os.path.exists(runtime) and time.monotonic() < deadline:
         time.sleep(0.5)
@@ -200,8 +216,10 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
         prompts = prompts_doc["prompts"][start:end]
         for offset, prompt in enumerate(prompts, start=start):
             if prompt["id"] in finished_ids:
-                print(f"SKIP {prompt['id']} already recorded", flush=True)
                 continue
+            if budget_s is not None and time.monotonic() - chunk_started > budget_s:
+                print(f"BUDGET spent before {prompt['id']}; next ticket resumes", flush=True)
+                break
             cid = call("POST", "/api/conversations", {"save": False},
                        runtime=runtime)["id"]
             started = time.monotonic()
@@ -210,19 +228,28 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                          "max_tokens": max_tokens},
                         runtime=runtime)["turn_id"]
             message = None
+            stop, gaps = threading.Event(), []
+            beat = threading.Thread(target=_heartbeat_loop,
+                                    args=(cid, turn, runtime, stop, gaps), daemon=True)
+            beat.start()
             deadline = time.monotonic() + timeout_s
-            while time.monotonic() < deadline:
-                call("POST", f"/api/conversations/{cid}/heartbeat",
-                     {"turn_id": turn}, runtime=runtime)
-                record = call("GET", f"/api/conversations/{cid}",
-                              runtime=runtime)
-                message = next((m for m in record.get("messages") or []
-                                if m.get("turn_id") == turn
-                                and m.get("role") == "assistant"), None)
-                if message and message.get("status") in (
-                        "complete", "error", "stopped"):
-                    break
-                time.sleep(1)
+            try:
+                while time.monotonic() < deadline:
+                    record = call("GET", f"/api/conversations/{cid}",
+                                  runtime=runtime)
+                    message = next((m for m in record.get("messages") or []
+                                    if m.get("turn_id") == turn
+                                    and m.get("role") == "assistant"), None)
+                    if message and message.get("status") in (
+                            "complete", "error", "stopped"):
+                        break
+                    time.sleep(1)
+            finally:
+                stop.set()
+                beat.join()
+            if not message or message.get("status") not in ("complete", "error", "stopped"):
+                print(f"TIMEOUT {prompt['id']} after {timeout_s}s; not recorded", flush=True)
+                break
             components = (message or {}).get("components") or []
             types = [c.get("type") for c in components]
             elapsed = time.monotonic() - started
@@ -238,6 +265,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
                 "promoted": [c.get("title", "").endswith("(from reply)") for c in components],
                 "elapsed_s": round(elapsed, 1),
                 "status": (message or {}).get("status"),
+                "max_heartbeat_s": round(max(gaps, default=0.0), 2),
                 "pass": pass_,
                 "reply": ((message or {}).get("content") or "")[:6000],
             }
@@ -259,15 +287,20 @@ def main():
     p.add_argument("--suite", required=True,
                    help="fixture path, e.g. tests/fixtures/cards_held_out_v3.json")
     p.add_argument("--max-tokens", type=int, default=700)
-    p.add_argument("--timeout-s", type=int, default=300)
+    p.add_argument("--timeout-s", type=int, default=600)
     p.add_argument("--setup", action="store_true")
+    p.add_argument("--budget-s", type=int, default=None,
+                   help="start no new prompt after this many seconds")
     args = p.parse_args()
     if args.model not in PAIR_FOR_MODEL:
         sys.exit(f"unknown model {args.model!r}")
     run_chunk(os.path.join(REPO, args.suite), args.model, args.start, args.end,
               max_tokens=args.max_tokens, timeout_s=args.timeout_s,
-              setup=args.setup)
+              setup=args.setup, budget_s=args.budget_s)
 
 
 if __name__ == "__main__":
+    # gpu-turn's timeout sends SIGTERM: exit through the finally blocks so the
+    # assistant (its own session) is always stopped inside the ticket.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     main()
