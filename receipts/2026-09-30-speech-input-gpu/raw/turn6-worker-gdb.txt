@@ -1,0 +1,33 @@
+Function "_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE" not defined.
+Breakpoint 1 (_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE) pending.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+[New Thread 0xffffdca5f160 (LWP 386902)]
+[New Thread 0xffffdc24f160 (LWP 386903)]
+[New Thread 0xffffdba3f160 (LWP 386904)]
+[New Thread 0xffffdb22f160 (LWP 386905)]
+[New Thread 0xffffdaa1f160 (LWP 386906)]
+[New Thread 0xffffda20f160 (LWP 386907)]
+[New Thread 0xffffd99ff160 (LWP 386908)]
+[New Thread 0xffffd91ef160 (LWP 386909)]
+[New Thread 0xffffd89df160 (LWP 386910)]
+[New Thread 0xffffd81cf160 (LWP 386911)]
+[New Thread 0xffffd79bf160 (LWP 386912)]
+[New Thread 0xffffac82b160 (LWP 386913)]
+[New Thread 0xffffa664f160 (LWP 386942)]
+[Thread 0xffffac82b160 (LWP 386913) exited]
+[Thread 0xffffa664f160 (LWP 386942) exited]
+[Thread 0xffffd99ff160 (LWP 386908) exited]
+[Thread 0xffffd79bf160 (LWP 386912) exited]
+[Thread 0xffffd81cf160 (LWP 386911) exited]
+[Thread 0xffffd89df160 (LWP 386910) exited]
+[Thread 0xffffd91ef160 (LWP 386909) exited]
+[Thread 0xffffda20f160 (LWP 386907) exited]
+[Thread 0xffffdaa1f160 (LWP 386906) exited]
+[Thread 0xffffdb22f160 (LWP 386905) exited]
+[Thread 0xffffdba3f160 (LWP 386904) exited]
+[Thread 0xffffdc24f160 (LWP 386903) exited]
+[Thread 0xffffdca5f160 (LWP 386902) exited]
+[Inferior 1 (process 386894) exited normally]
+CPU_COUNT {"symbol": "_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE", "cpu_command_encoder_calls": 0, "resolved_while_running": true, "libmlx_loaded": true}
+exit=0

@@ -1,0 +1,269 @@
+{
+  "suite_sha256": "bafd7724d1944454cfce0173565a30159de74f90252368e215b80d55bab23c00",
+  "chat_model": "qwen3.8-2b-4bit",
+  "prompts": [
+    {
+      "id": "ho-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 178.4,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 155.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 173.6,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-04",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 125.5,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 156.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 148.9,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-07",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 166.3,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "ho-08",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 154.5,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "ho-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 24.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-10",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "elapsed_s": 15.7,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-11",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "elapsed_s": 15.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-12",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 102.8,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-13",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 8.9,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-14",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 11.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-15",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 79.7,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-16",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 83.3,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "ho-17",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 19.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-18",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 6.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-19",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 24.9,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-20",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 27.3,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-21",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 36.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-22",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 24.3,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-23",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 41.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "ho-24",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 11.1,
+      "status": "complete",
+      "pass": true
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_qwen3.8-2b-4bit.json"
+}

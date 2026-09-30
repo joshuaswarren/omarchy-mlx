@@ -2,7 +2,7 @@
 
 Kokoro-82M (StyleTTS2-based, non-autoregressive, 24 kHz, Apache-2.0) was
 evaluated as a second voice engine next to the default Qwen3-TTS pack, on
-the M2 Max (jw14m2-linux, Vulkan mlx). **The speed threshold fails, so
+the M2 Max (<project-m2>, Vulkan mlx). **The speed threshold fails, so
 Kokoro is NOT the default and not recommended; the owner listens before
 any decision.** The engine ships behind the honest picker: voices are
 offered, assets hash-pinned, and every number below is reproducible from
@@ -11,7 +11,7 @@ the receipt sources.
 ## Verdict vs frozen thresholds
 
 Thresholds were fixed before measurement (notebook entry
-`20260929T213728Z-jw14m2-kokoro-tts-engine.md`).
+`20260929T213728Z-<project-m2>-kokoro-tts-engine.md`).
 
 | Threshold | Required | Measured | Verdict |
 |---|---|---|---|
@@ -112,7 +112,7 @@ Per-voice medians are stable across 95 measured runs (RTF min 0.65, max
 - Listening samples (owner): `<home>/mlx-tts-samples-kokoro/`
   with `index.html`; all three voices carry all five sentences.
 - Notebook (private):
-  `apple-silicon-lab/entries/SpeechOutputKokoro/20260929T213728Z-jw14m2-kokoro-tts-engine.md`,
+  `apple-silicon-lab/entries/SpeechOutputKokoro/20260929T213728Z-<project-m2>-kokoro-tts-engine.md`,
   artifacts under `artifacts/SpeechOutputKokoro/run-002/` with
   SHA256SUMS.
 - Branch: `feat/speech-output-kokoro` (3 commits on origin/main

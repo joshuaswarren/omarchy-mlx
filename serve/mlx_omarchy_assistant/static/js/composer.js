@@ -23,7 +23,12 @@ export function buildComposer({
   textarea.addEventListener("compositionend", () => { imeComposing = false; });
   textarea.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      if (isRecording && isRecording()) { event.preventDefault(); if (onMicCancel) onMicCancel(); return; }
+      if (isRecording && isRecording()) {
+        event.preventDefault();
+        resetMicUi();
+        if (onMicCancel) onMicCancel();
+        return;
+      }
       if (isBusy && isBusy()) { event.preventDefault(); if (onCancel) onCancel(); return; }
     }
     if (event.key === "Enter" && !event.shiftKey && !imeComposing) {
@@ -120,6 +125,7 @@ export function buildComposer({
 
   async function startMic() {
     if (micBtn.disabled) return;
+    setMicNotice("");
     micBtn.textContent = "Listening…";
     micBtn.classList.add("recording-indicator");
     try {
@@ -193,10 +199,18 @@ export function buildComposer({
   // toolbar's control list.
   const voiceStatus = el("div", { class: "composer__voice-status",
     role: "status", "aria-label": "Voice status" }, micStatus, speakStatus);
+  // The sighted twin of the live-region microphone messages (permission
+  // denied, no speech, device lost); the live region already announces them.
+  const micNotice = el("p", { class: "voice-notice", "aria-hidden": "true", hidden: true });
+  function setMicNotice(text) {
+    micNotice.textContent = text;
+    micNotice.hidden = !text;
+  }
 
   const row = el("div", { class: "composer__row" }, textarea, controls);
   wrap.appendChild(row);
   wrap.appendChild(voiceStatus);
+  wrap.appendChild(micNotice);
   wrap.appendChild(comparePanel);
   comparePanel.hidden = !compareOpen;
   wrap.appendChild(analyzePanel);
@@ -335,7 +349,7 @@ export function buildComposer({
 
   return { wrap, setText, currentText, setBusy, setSpeaking, setVoiceStates,
            prefillCompare,
-           resetMicUi,
+           resetMicUi, setMicNotice,
            focus: () => textarea.focus(), closeComparePanel };
 }
 

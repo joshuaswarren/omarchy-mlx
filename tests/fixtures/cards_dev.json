@@ -1,7 +1,7 @@
 {
-  "version": "2026-09-29.1",
+  "version": "2026-09-30.1",
   "status": "dev-tune",
-  "rule": "Used to tune card_promotion.py rules. Throw-away set; not the held-out suite.",
+  "rule": "Used to tune card_promotion.py rules and the SCHEMA_PROMPT. Throw-away set; not the held-out suite. 2026-09-30: dev-52 relabelled card-worthy (the user asks for a table; the rules promote a requested table with >= 2 data rows).",
   "prompts": [
     {"id": "dev-01", "category": "card-worthy", "kind": "checklist", "text": "Give me a packing list for a weekend camping trip."},
     {"id": "dev-02", "category": "card-worthy", "kind": "checklist", "text": "What are the steps to make a sourdough loaf at home?"},
@@ -26,6 +26,37 @@
     {"id": "dev-21", "category": "near-miss", "kind": "short-list", "text": "Name three primary colours."},
     {"id": "dev-22", "category": "near-miss", "kind": "short-list", "text": "What are two CSS units for length?"},
     {"id": "dev-23", "category": "near-miss", "kind": "code-only", "text": "Show me a Python function that reverses a string."},
-    {"id": "dev-24", "category": "near-miss", "kind": "code-only", "text": "Write a hello world program in Go."}
+    {"id": "dev-24", "category": "near-miss", "kind": "code-only", "text": "Write a hello world program in Go."},
+
+    {"id": "dev-25", "category": "card-worthy", "kind": "timeline", "text": "Lay out a phased rollout: week 1 internal, week 2 closed beta, week 3 public launch."},
+    {"id": "dev-26", "category": "card-worthy", "kind": "timeline", "text": "Roadmap for the next 6 months: discovery, design, build, pilot, GA."},
+    {"id": "dev-27", "category": "card-worthy", "kind": "comparison", "text": "Compare Postgres and SQLite across three criteria: concurrency, setup cost, query optimizer maturity."},
+    {"id": "dev-28", "category": "card-worthy", "kind": "comparison", "text": "Tabular comparison of REST vs GraphQL on schema, caching, streaming, error handling."},
+    {"id": "dev-29", "category": "card-worthy", "kind": "checklist", "text": "Give me a to-do list for moving into a new apartment."},
+    {"id": "dev-30", "category": "card-worthy", "kind": "checklist", "text": "Steps to publish a Python package on PyPI: prep, build, twine, verify."},
+    {"id": "dev-31", "category": "card-worthy", "kind": "checklist", "text": "Pre-flight checklist for a drone flight: weather, battery, props, GPS."},
+    {"id": "dev-32", "category": "card-worthy", "kind": "checklist", "text": "Cleanup tasks before ending a release branch: tests, docs, tag, changelog."},
+    {"id": "dev-33", "category": "card-worthy", "kind": "checklist", "text": "Action items after a 1:1 meeting."},
+    {"id": "dev-34", "category": "card-worthy", "kind": "facts", "text": "Two facts about my server: 16 cores, runs Linux, mem 32 GB."},
+    {"id": "dev-35", "category": "card-worthy", "kind": "facts", "text": "Three key points from the meeting notes."},
+
+    {"id": "dev-36", "category": "plain", "kind": "none", "text": "What is a hash table and how does it work?"},
+    {"id": "dev-37", "category": "plain", "kind": "none", "text": "Why does ice float on water?"},
+    {"id": "dev-38", "category": "plain", "kind": "none", "text": "Describe what happens during a TCP handshake."},
+    {"id": "dev-39", "category": "plain", "kind": "none", "text": "How does an SSD differ from an HDD at the hardware level?"},
+    {"id": "dev-40", "category": "plain", "kind": "none", "text": "What's the difference between a list and a tuple in Python?"},
+
+    {"id": "dev-41", "category": "near-miss", "kind": "list-in-prose", "text": "Three CSS tips for responsive layout, in a paragraph."},
+    {"id": "dev-42", "category": "near-miss", "kind": "list-in-prose", "text": "Two debugging tips for Python, in a sentence."},
+    {"id": "dev-43", "category": "near-miss", "kind": "short-list", "text": "Two punctuation characters used in C strings."},
+    {"id": "dev-44", "category": "near-miss", "kind": "short-list", "text": "Three HTTP status code classes (1xx, 2xx, 3xx)."},
+    {"id": "dev-45", "category": "near-miss", "kind": "code-only", "text": "Print the numbers 1 to 10 in Python."},
+    {"id": "dev-46", "category": "near-miss", "kind": "code-only", "text": "Write a Hello World in Rust."},
+    {"id": "dev-47", "category": "near-miss", "kind": "explanation-with-bullets", "text": "Explain how DNS resolves a name, with a few key steps as bullets."},
+    {"id": "dev-48", "category": "near-miss", "kind": "explanation-with-bullets", "text": "Briefly explain TLS handshake, then list three things it achieves."},
+    {"id": "dev-49", "category": "near-miss", "kind": "plain-with-summary", "text": "Tell me about Kubernetes, then summarize in one sentence."},
+    {"id": "dev-50", "category": "near-miss", "kind": "plain-with-summary", "text": "What's Redis used for, then recap in one line."},
+    {"id": "dev-51", "category": "near-miss", "kind": "plain-with-quote", "text": "Quote the project's license, then describe what it permits."},
+    {"id": "dev-52", "category": "card-worthy", "kind": "comparison", "text": "Give me a 2x2 table: yes/no for HTTPS and TLS 1.3."}
   ]
 }

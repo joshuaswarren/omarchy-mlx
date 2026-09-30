@@ -55,6 +55,19 @@ target_link_options(omarchy_ane_worker_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
 doctest_discover_tests(omarchy_ane_worker_tests)
 add_test(NAME omarchy_ane_worker_tests COMMAND omarchy_ane_worker_tests)
+
+# Host-only ABI profile gate tests (E3.1). No /proc, /sys, libane, or
+# ANE device touched; runs on any architecture so the gate's decision
+# logic is covered even when the binary cannot link the worker.
+add_executable(omarchy_ane_worker_gate_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_worker_gate.cpp)
+target_link_libraries(omarchy_ane_worker_gate_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_ane_worker_gate_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_ane_worker_gate_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_ane_worker_gate_tests)
+add_test(NAME omarchy_ane_worker_gate_tests
+         COMMAND omarchy_ane_worker_gate_tests)
 add_executable(omarchy_ane_tile_layout_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_tile_layout.cpp)
 target_link_libraries(omarchy_ane_tile_layout_tests PRIVATE mlx doctest)
@@ -180,6 +193,30 @@ target_link_options(omarchy_fast_ops_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
 doctest_discover_tests(omarchy_fast_ops_tests)
 add_test(NAME omarchy_fast_ops_tests COMMAND omarchy_fast_ops_tests)
+
+add_executable(omarchy_gdn_prefill_profile_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_prefill_profile.cpp)
+target_link_libraries(omarchy_gdn_prefill_profile_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_prefill_profile_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_prefill_profile_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_gdn_prefill_profile_tests)
+add_test(NAME omarchy_gdn_prefill_profile_tests
+         COMMAND omarchy_gdn_prefill_profile_tests)
+
+add_executable(omarchy_gdn_fast_route_repeat_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_fast_route_repeat.cpp)
+target_link_libraries(omarchy_gdn_fast_route_repeat_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_fast_route_repeat_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_fast_route_repeat_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_gdn_fast_route_repeat_tests)
+add_test(NAME omarchy_gdn_fast_route_repeat_tests
+         COMMAND omarchy_gdn_fast_route_repeat_tests)
 
 add_executable(omarchy_linalg_ops_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_linalg_ops.cpp)

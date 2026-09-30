@@ -13,8 +13,8 @@ import soundfile as sf
 
 random.seed(42)
 
-CORPUS_ROOT = Path("<project-m2>/agents/SpeechInputGpu/corpus")
-LIBRI_ROOT = CORPUS_ROOT / "LibriSpeech" / "LibriSpeech"
+CORPUS_ROOT = Path(__file__).resolve().parent
+LIBRI_ROOT = CORPUS_ROOT / "LibriSpeech"
 MIDLANDS_ROOT = CORPUS_ROOT / "midlands"
 MANIFEST_OUT = CORPUS_ROOT / "manifest.json"
 
@@ -111,6 +111,7 @@ def collect_midlands(root, max_clips):
             "sample_rate": rate,
             "channels": ch,
             "source": "midlands",
+            "subset": "accented",
         })
     random.shuffle(entries)
     return entries[:max_clips]

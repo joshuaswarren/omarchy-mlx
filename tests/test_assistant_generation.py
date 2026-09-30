@@ -261,17 +261,22 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(record["messages"][-1]["content"], "more text")
         self.assertEqual(len(record["messages"]), 4)  # two turns, user+assistant each
 
-    def test_ordinary_chat_sends_the_compact_card_schema_and_charts_get_the_full_one(self):
+    def test_card_schema_is_sent_only_for_full_cues_or_fenced_json_models(self):
+        from mlx_omarchy_serve import catalog
         cid = self.cid()
-        self.worker.scripts = [[(0, delta("ok")), (0, finish("stop"))]] * 2
+        self.worker.scripts = [[(0, delta("ok")), (0, finish("stop"))]] * 3
         self.run_turn(cid, {"text": "Summarize the release notes in plain words."})
         self.run_turn(cid, {"text": "Show the numbers as a chart."})
-        plain, chart = (call["messages"][0]["content"] for call in self.worker.calls)
-        self.assertIn(components.SCHEMA_PROMPT_COMPACT, plain)
-        self.assertNotIn(components.SCHEMA_PROMPT, plain)
+        declared = {"entries": [{"id": "fenced-model", "extension": {"card_format": "fenced-json"}}]}
+        original_start = self.manager.start
+        self.manager.start = lambda: dict(original_start(), chat_model="fenced-model")
+        with mock.patch.dict(coord._FENCED_JSON_CACHE, clear=True), \
+                mock.patch.object(catalog, "load_catalog", return_value=declared):
+            self.run_turn(cid, {"text": "Summarize the release notes in plain words."})
+        plain, chart, fenced = (call["messages"][0]["content"] for call in self.worker.calls)
+        self.assertNotIn("assistant-ui", plain)
         self.assertIn(components.SCHEMA_PROMPT, chart)
-        # First-answer latency: the compact prompt was measured at ~3 ms per prompt token.
-        self.assertLess(len(components.SCHEMA_PROMPT_COMPACT), 800)
+        self.assertIn(components.SCHEMA_PROMPT, fenced)
 
     def test_invalid_component_repaired_once(self):
         cid = self.cid()

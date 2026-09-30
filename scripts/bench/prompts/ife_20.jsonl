@@ -1,20 +1,20 @@
-{"index":1,"instruction":"Reply with exactly one word: OK","pass_check":"equals","expected":"OK","case_insensitive":true}
-{"index":2,"instruction":"Reply with the number 42 and nothing else","pass_check":"equals","expected":"42"}
-{"index":3,"instruction":"List exactly three colors, one per line, no punctuation","pass_check":"lines","expected":["red","green","blue"],"case_insensitive":true}
-{"index":4,"instruction":"Reply with a JSON object that has key name equal to Alice and key age equal to 30, no other keys","pass_check":"json_keys","expected_keys":["name","age"],"expected_values":{"name":"Alice","age":30}}
-{"index":5,"instruction":"Reply with the word YES in all uppercase letters","pass_check":"equals","expected":"YES","case_insensitive":true}
-{"index":6,"instruction":"Write exactly two sentences, each ending with a period","pass_check":"sentence_count","expected":2}
-{"index":7,"instruction":"Reply with just a single line containing the word DONE","pass_check":"line_equals","expected":"DONE"}
-{"index":8,"instruction":"List exactly five fruits separated by commas","pass_check":"comma_count","expected":5}
-{"index":9,"instruction":"Reply with the word PING exactly three times separated by single spaces","pass_check":"equals","expected":"PING PING PING"}
-{"index":10,"instruction":"Answer in JSON with one key answer whose value is 7","pass_check":"json_keys","expected_keys":["answer"],"expected_values":{"answer":7}}
-{"index":11,"instruction":"Output only the number 100","pass_check":"equals","expected":"100"}
-{"index":12,"instruction":"Output three lowercase letters a, b, c on one line separated by commas","pass_check":"equals","expected":"a, b, c","case_insensitive":true}
-{"index":13,"instruction":"Reply with the word END","pass_check":"equals","expected":"END"}
-{"index":14,"instruction":"Output a bullet list with exactly two items, each starting with a hyphen","pass_check":"bullet_count","expected":2}
-{"index":15,"instruction":"Reply with the single character X","pass_check":"equals","expected":"X"}
-{"index":16,"instruction":"Write the word HELLO in reverse order","pass_check":"equals","expected":"OLLEH"}
-{"index":17,"instruction":"List exactly four numbers in ascending order, one per line: 1, 2, 3, 4","pass_check":"lines","expected":["1","2","3","4"]}
-{"index":18,"instruction":"Reply with the lowercase word yes","pass_check":"equals","expected":"yes"}
-{"index":19,"instruction":"Output only a single line containing the word STOP","pass_check":"line_equals","expected":"STOP"}
-{"index":20,"instruction":"Reply with a JSON array containing the numbers 1, 2, 3 in that order","pass_check":"json_array","expected_values":[1,2,3]}
+{"index":1,"instruction":"Reply with exactly one word: OK","check":"equals","expected":"ok","normalize":"casefold_strip_period"}
+{"index":2,"instruction":"Reply with the number 42 and nothing else.","check":"equals","expected":"42","normalize":"strip_period"}
+{"index":3,"instruction":"List exactly three colors, one per line, with no numbering, bullets or punctuation.","check":"line_count_plain_words","expected":3}
+{"index":4,"instruction":"Reply with only a JSON object with the key name set to \"Alice\" and the key age set to the number 30. No other keys, no code fence.","check":"json_equals","expected":{"name":"Alice","age":30}}
+{"index":5,"instruction":"Reply with the word YES in all uppercase letters and nothing else.","check":"equals","expected":"YES","normalize":"strip_period"}
+{"index":6,"instruction":"Write exactly two sentences about the ocean. Each sentence must end with a period.","check":"sentence_count","expected":2}
+{"index":7,"instruction":"Reply with a single line containing only the word DONE.","check":"equals","expected":"DONE","normalize":"strip_period"}
+{"index":8,"instruction":"Name exactly five fruits on one line, separated by commas.","check":"comma_items","expected":5}
+{"index":9,"instruction":"Reply with the word PING exactly three times, separated by single spaces, and nothing else.","check":"equals","expected":"PING PING PING","normalize":"strip_period"}
+{"index":10,"instruction":"Reply with only a JSON object whose single key answer has the number 7 as its value. No code fence.","check":"json_equals","expected":{"answer":7}}
+{"index":11,"instruction":"Output only the number 100.","check":"equals","expected":"100","normalize":"strip_period"}
+{"index":12,"instruction":"Output the lowercase letters a, b and c on one line, separated by commas, and nothing else.","check":"equals","expected":"a,b,c","normalize":"remove_spaces_strip_period"}
+{"index":13,"instruction":"Reply with the word END and nothing else.","check":"equals","expected":"END","normalize":"strip_period"}
+{"index":14,"instruction":"Write a bullet list with exactly two items. Start each item with a hyphen.","check":"hyphen_bullets","expected":2}
+{"index":15,"instruction":"Reply with the single character X and nothing else.","check":"equals","expected":"X","normalize":"strip_period"}
+{"index":16,"instruction":"Write the word HELLO spelled backwards, in uppercase, and nothing else.","check":"equals","expected":"OLLEH","normalize":"strip_period"}
+{"index":17,"instruction":"Write the numbers 1, 2, 3 and 4 in ascending order, one per line, with nothing else.","check":"lines_equal","expected":["1","2","3","4"]}
+{"index":18,"instruction":"Reply with the lowercase word yes and nothing else.","check":"equals","expected":"yes","normalize":"strip_period"}
+{"index":19,"instruction":"Answer in at most five words: what color is a clear daytime sky?","check":"max_words","expected":5}
+{"index":20,"instruction":"Reply with only a JSON array containing the numbers 1, 2 and 3 in that order. No code fence.","check":"json_equals","expected":[1,2,3]}

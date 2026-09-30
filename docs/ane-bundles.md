@@ -41,7 +41,12 @@ closed.
  
  Schema 4 rejects versions 1, 2, and 3. It requires explicit ordered
  `logical_results`; it never infers returns from physical output order.
- Applicability requires exact unsigned `driver_abi_major: 1`, not a firmware range.
+ Applicability requires an exact unsigned `driver_abi_major` in `{1, 2}`,
+ paired with `compiler.target`: `h13` demands ABI 1 (M1 / T8103 / T6001),
+ `h14` demands ABI 2 (M2 / T6021). A manifest that names one pair is
+ refused at parse time, before any device call; the worker gate in
+ `runtime_worker.cpp` additionally cross-checks the manifest's
+ `driver_abi_major` against the active `MLX_OMARCHY_ANE_ABI` lane.
 
 | Field | Contract |
 | --- | --- |
@@ -55,9 +60,9 @@ closed.
 | `programs` | Non-empty ordered program definitions. Each ANEC payload is referenced exactly once. |
 | `dispatch_plan` | A complete permutation of program indices. |
 | `payloads` | At least one `anec`; at most one `weights`; unique filename, byte size, and SHA-256 for each. |
-| `compiler.target` | Exact string `h13`. This compiler target is not a physical-device identity. |
-| `compiler.host_build`, `compiler.toolchain` | Non-empty, actual compiler provenance. |
-| `driver_abi_major` | Exact unsigned integer `1`. |
+| `compiler.target` | Exact string `h13` (ABI 1, M1 / T8103 / T6001) or `h14` (ABI 2, M2 / T6021). This compiler target is not a physical-device identity; it pairs with `driver_abi_major`. |
+| `compiler.host_build`, `compiler.toolchain` | Non-empty, actual compiler provenance. The `toolchain` is expected to distinguish the H14 emission from the H13 emission (e.g. an H14 ANEC builder records the H14 toolchain name); the pair is what makes the bundle's ABI lane honest, not the integer alone. |
+| `driver_abi_major` | Exact unsigned integer `1` (with `compiler.target=h13`) or `2` (with `compiler.target=h14`). |
 | `provenance.source_repo`, `source_commit`, `exported_at` | Non-empty repository and date; commit is exactly 40 lowercase hexadecimal characters. |
 | `release_asset.model`, `model_sha256` | Non-empty release name and canonical compiled-payload collection SHA-256. |
 

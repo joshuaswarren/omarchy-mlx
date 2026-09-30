@@ -1,0 +1,28 @@
+2026-09-30T09:09:38Z
+35df33be-ada4-4d3e-9028-3d761a510c65
+0.31 0.38 0.36 1/390 381581
+ 377852       01:38 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> MARKCARDS_VENV=<home>/.local/share/mlx-omarchy/venv <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-27b-4bit --start 6 --end 9
+{
+  "dist": "mlx-omarchy",
+  "verified": "match",
+  "mismatch": null,
+  "files": [
+    {
+      "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
+      "label": "mlx.core extension",
+      "sha256": "0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621",
+      "record_sha256": "0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621",
+      "match": true
+    },
+    {
+      "path": "mlx/lib/libmlx.so",
+      "label": "mlx/lib/libmlx.so",
+      "sha256": "004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29",
+      "record_sha256": "004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29",
+      "match": true
+    }
+  ],
+  "dist_version": "0.32.3.dev202609291615+06711ad",
+  "mx_version": "0.32.3.dev202609291615+06711ad",
+  "version_match": true
+}

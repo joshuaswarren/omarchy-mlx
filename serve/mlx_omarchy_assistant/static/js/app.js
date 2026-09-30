@@ -68,35 +68,39 @@ export class App {
     });
   }
 
+  _micMessage(text) {
+    announce(this.live, text);
+    if (this.composer) this.composer.setMicNotice(text);
+  }
+
   async _handleRecordingStop(blob, peakRms, reason) {
-    if (reason === "limit") {
-      announce(this.live, "Recording stopped at the 30 second limit.");
-    }
+    // The recorder can stop on its own (30 s cap); the button must follow it.
+    if (this.composer) this.composer.resetMicUi();
+    const prefix = reason === "limit" ? "Recording stopped at the 30 second limit. " : "";
     if (peakRms < 0.005) {
-      announce(this.live, "No speech detected.");
+      this._micMessage(`${prefix}No speech detected.`);
       return;
     }
-    announce(this.live, "Transcribing…");
+    this._micMessage(`${prefix}Transcribing…`);
     let text;
     try {
       ({ text } = await transcribe(blob));
     } catch (err) {
-      announce(this.live, `Transcribe failed: ${err.message || "unknown error"}`);
+      this._micMessage(`Transcribe failed: ${err.message || "unknown error"}`);
       return;
     }
     const transcript = (text || "").trim();
     if (!transcript) {
-      announce(this.live, "No speech detected.");
+      this._micMessage("No speech detected.");
       return;
     }
+    if (this.composer) this.composer.setMicNotice(prefix.trim());
     this._mergeTranscriptIntoComposer(transcript);
   }
 
   _handleDeviceLost() {
-    announce(this.live, "Recording stopped: microphone disconnected.");
-    if (this.composer && typeof this.composer.resetMicUi === "function") {
-      this.composer.resetMicUi();
-    }
+    this._micMessage("Recording stopped: microphone disconnected.");
+    if (this.composer) this.composer.resetMicUi();
   }
 
   _mergeTranscriptIntoComposer(transcript) {
@@ -446,8 +450,11 @@ export class App {
       onOpenContext: () => this._openContextDrawer(),
       onMicStart: async () => { await this.recorder.start(); },
       onMicStop: async () => { await this.recorder.stop(); },
-      onMicCancel: () => this.recorder.cancel(),
-      onMicResult: (msg) => announce(this.live, msg.error || "Recording stopped"),
+      onMicCancel: async () => {
+        await this.recorder.cancel();
+        this._micMessage("Recording cancelled.");
+      },
+      onMicResult: (msg) => this._micMessage(msg.error || "Recording stopped"),
       onConversationModeChange: (enabled) => {
         this.conversationModeEnabled = !!enabled;
         this.speakReplies = !!enabled;

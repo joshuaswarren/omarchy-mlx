@@ -70,7 +70,7 @@ function encodeWav(float32, sampleRate) {
 
 export class Recorder {
   constructor({ onMeter, onTick, onWarn, onStop, onDeviceLost } = {}) {
-    this.state = "idle";          // idle | recording | error
+    this.state = "idle";          // idle | recording | stopping
     this.startedAt = 0;
     this._samples = [];
     this._ctx = null;
@@ -94,17 +94,35 @@ export class Recorder {
       throw new Error("Microphone API unavailable in this browser");
     if (!window.AudioWorkletNode)
       throw new Error("AudioWorklet is not available in this browser");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, noiseSuppression: true }, video: false,
-    });
+    let stream;
+    try {
+      // Unprocessed audio: the recognizer was measured on raw recordings.
+      // Browser noise suppression and gain control reshaped clear speech
+      // enough that Parakeet returned nothing for it.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, noiseSuppression: false, echoCancellation: false,
+                 autoGainControl: false },
+        video: false,
+      });
+    } catch (err) {
+      const name = err && err.name;
+      if (name === "NotAllowedError" || name === "SecurityError")
+        throw new Error("Microphone permission denied. Allow microphone access for this page, then try again.");
+      if (name === "NotFoundError" || name === "OverconstrainedError")
+        throw new Error("No microphone found. Connect a microphone, then try again.");
+      if (name === "NotReadableError")
+        throw new Error("The microphone is in use by another application.");
+      throw err;
+    }
     const ctx = new AudioContext();
     await ctx.audioWorklet.addModule(new URL("./worklet/capture-worklet.js", import.meta.url));
     const source = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, "mlx-capture");
     node.port.onmessage = (event) => {
+      if (this.state !== "recording") return;
       const frame = event.data;
       this._samples.push(frame);
-      this._maxSamples = this._samples.reduce((n, s) => n + s.length, 0);
+      this._maxSamples += frame.length;
       let sum = 0;
       for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
       const rms = Math.sqrt(sum / Math.max(1, frame.length));
@@ -156,13 +174,22 @@ export class Recorder {
 
   async stop() {
     if (this.state !== "recording") return null;
+    // Frames keep arriving while cleanup awaits; "stopping" makes this stop
+    // the only one and drops those late frames.
+    this.state = "stopping";
     if (this._tickHandle) { clearInterval(this._tickHandle); this._tickHandle = null; }
     const reason = this._stopReason || "user";
     const inputRate = this._ctx ? this._ctx.sampleRate : 48000;
-    const totalLength = this._samples.reduce((n, s) => n + s.length, 0);
+    // The recognizer refuses anything over 30 s; the frame that crossed the
+    // cap must not push the upload past it.
+    const totalLength = Math.min(this._maxSamples, MAX_DURATION * inputRate);
     const merged = new Float32Array(totalLength);
     let offset = 0;
-    for (const s of this._samples) { merged.set(s, offset); offset += s.length; }
+    for (const s of this._samples) {
+      if (offset >= totalLength) break;
+      const part = s.subarray(0, totalLength - offset);
+      merged.set(part, offset); offset += part.length;
+    }
     this._samples = [];
     const resampled = resampleTo16k(merged, inputRate);
     const blob = encodeWav(resampled, SAMPLE_RATE);
@@ -189,6 +216,8 @@ export class Recorder {
 
   async cancel() {
     if (this.state !== "recording") return;
+    this.state = "stopping";
+    if (this._tickHandle) { clearInterval(this._tickHandle); this._tickHandle = null; }
     this._samples = [];
     this._stopReason = null;
     await this._cleanup();

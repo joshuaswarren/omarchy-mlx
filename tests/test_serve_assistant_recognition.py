@@ -288,6 +288,21 @@ class RecognitionStatusTest(unittest.TestCase):
             self.assertNotIn("sample rate", str(caught.exception))
             self.assertNotIn("RIFF", str(caught.exception))
 
+    def test_worker_receives_the_original_audio_duration(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        class DurationWorker:
+            def request(worker, header, payload, **kwargs):
+                self.assertEqual(len(payload) // 4 / header["sample_rate"], 1.0)
+                return {"transcript": ""}
+
+        module = SimpleNamespace(resample_to_16k=lambda samples, rate: samples[::3])
+        audio = wav_bytes(sine_int16(440, 48_000, 1.0), 48_000)
+        with patch.object(recognition, "_load_dictation_module", return_value=module), \
+                patch.object(self.recognition, "_ensure_worker", return_value=DurationWorker()):
+            self.recognition.transcribe(audio)
+
     def test_close_confirms_worker_exit_and_is_idempotent(self):
         self.recognition.close()
         self.recognition.close()
@@ -409,7 +424,13 @@ class HardwareRecognitionTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        module = recognition._load_dictation_module()
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"MLX_OMARCHY_RECOGNITION_BACKEND": "ane"}):
+            try:
+                module = recognition._load_dictation_module()
+            except recognition.RecognitionUnavailable as error:
+                raise unittest.SkipTest(f"ANE Parakeet runtime unavailable: {error}")
         cls.module = module
         cls.probe = module.probe_runtime(verify_cache=True)
         if not cls.probe["ok"]:

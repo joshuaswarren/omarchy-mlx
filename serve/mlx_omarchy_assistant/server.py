@@ -177,6 +177,9 @@ class AssistantServer(ThreadingHTTPServer):
                         voice = self.synthesis.prepare(approve_download=body.get("approve_download", False))
                         if not voice.get("verified"):
                             raise ValueError("Approve the voice download before preparing speech")
+                        speech = self.recognition.prepare(approve_download=body.get("approve_download", False))
+                        if not speech.get("verified"):
+                            raise ValueError(speech.get("reason") or "Approve the speech recognition download")
                     result = self.manager.start()
                     with self.mutex:
                         self.setup_state = {"state": "complete", "ready_offline": result.get("ready_offline", False)}

@@ -1,4 +1,6 @@
-"""Frozen held-out routing suite. Unevaluated. Automatic routing stays off."""
+"""Frozen held-out routing suite. Spent: evaluated once on 2026-09-30 with
+routing policy 3 (receipts/2026-09-30-routing-gate). Automatic routing stays
+off. The bytes are pinned by sha256; never edit the cases."""
 
 import hashlib
 import json
@@ -22,7 +24,6 @@ class RoutingSuiteTests(unittest.TestCase):
 
     def test_suite_is_frozen_and_covers_the_required_categories(self):
         self.assertEqual(hashlib.sha256(SUITE.read_bytes()).hexdigest(), FROZEN_SHA256)
-        self.assertEqual(self.doc["status"], "frozen-unevaluated")
         cases = self.doc["cases"]
         self.assertGreaterEqual(len(cases), 100)
         self.assertEqual(len({case["id"] for case in cases}), len(cases))

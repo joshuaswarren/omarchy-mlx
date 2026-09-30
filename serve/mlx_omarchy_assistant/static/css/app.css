@@ -328,6 +328,8 @@ body { display: flex; flex-direction: column; }
 .voice-status[data-state="ready"] { color: var(--mlx-ready); }
 .voice-status[data-state="unqualified"] { color: var(--mlx-warn); }
 .voice-status[data-state="missing"] { color: var(--mlx-warn); }
+.composer__voice-status { display: flex; flex-wrap: wrap; gap: .25rem 1rem; }
+.voice-notice { font-size: .8125rem; color: var(--mlx-text); margin: .25rem 0 0; }
 
 .recording-indicator {
   display: inline-flex; gap: .375rem; align-items: center;

@@ -1,0 +1,626 @@
+[
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-00.wav",
+  "zero_fraction": 0.43844302431737076,
+  "none": 18,
+  "retry_path": 18
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-01.wav",
+  "zero_fraction": 0.3353828359231132,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-02.wav",
+  "zero_fraction": 0.26697445889279514,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-03.wav",
+  "zero_fraction": 0.3864700997978975,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-04.wav",
+  "zero_fraction": 0.3583777615016437,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-05.wav",
+  "zero_fraction": 0.37631593528368795,
+  "none": 21,
+  "retry_path": 21
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-06.wav",
+  "zero_fraction": 0.3294570739236637,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-07.wav",
+  "zero_fraction": 0.39032789828461373,
+  "none": 11,
+  "retry_path": 11
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-08.wav",
+  "zero_fraction": 0.31031191259398494,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-09.wav",
+  "zero_fraction": 0.31653965798179634,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-10.wav",
+  "zero_fraction": 0.3252010061210544,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-11.wav",
+  "zero_fraction": 0.3713676950896424,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-12.wav",
+  "zero_fraction": 0.2690854702172606,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-13.wav",
+  "zero_fraction": 0.31229339575796267,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-14.wav",
+  "zero_fraction": 0.39404104472146134,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-15.wav",
+  "zero_fraction": 0.3112456054470206,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-16.wav",
+  "zero_fraction": 0.4122825287069049,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-17.wav",
+  "zero_fraction": 0.285205905720339,
+  "none": 0,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-18.wav",
+  "zero_fraction": 0.33333844619986197,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-19.wav",
+  "zero_fraction": 0.34291605476688475,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-20.wav",
+  "zero_fraction": 0.34696216425619836,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-21.wav",
+  "zero_fraction": 0.3387245352542322,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-22.wav",
+  "zero_fraction": 0.4320455142773217,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-23.wav",
+  "zero_fraction": 0.3177202221543218,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-24.wav",
+  "zero_fraction": 0.42837895000705006,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-25.wav",
+  "zero_fraction": 0.27338866378466314,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-26.wav",
+  "zero_fraction": 0.3823012405203154,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-27.wav",
+  "zero_fraction": 0.3170700037330996,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-28.wav",
+  "zero_fraction": 0.46361477902278503,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-29.wav",
+  "zero_fraction": 0.2929192943242596,
+  "none": 19,
+  "retry_path": 19
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-30.wav",
+  "zero_fraction": 0.3184139888028223,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T061333Z/upload-31.wav",
+  "zero_fraction": 0.31508008963399453,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-00.wav",
+  "zero_fraction": 0.29449131653450145,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-01.wav",
+  "zero_fraction": 0.323827736556261,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-02.wav",
+  "zero_fraction": 0.3644376542484428,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-03.wav",
+  "zero_fraction": 0.39069379204242294,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-04.wav",
+  "zero_fraction": 0.33544722127940835,
+  "none": 10,
+  "retry_path": 10
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-05.wav",
+  "zero_fraction": 0.3901982845536771,
+  "none": 0,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-06.wav",
+  "zero_fraction": 0.2952357133925222,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-07.wav",
+  "zero_fraction": 0.297180102915952,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-08.wav",
+  "zero_fraction": 0.2844117157848578,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-09.wav",
+  "zero_fraction": 0.3388524521388916,
+  "none": 16,
+  "retry_path": 16
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-10.wav",
+  "zero_fraction": 0.3312316893707219,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-11.wav",
+  "zero_fraction": 0.3089960704247018,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-12.wav",
+  "zero_fraction": 0.3081173032466305,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-13.wav",
+  "zero_fraction": 0.2928972932056799,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-14.wav",
+  "zero_fraction": 0.27486590485074625,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-15.wav",
+  "zero_fraction": 0.2993081843101423,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-16.wav",
+  "zero_fraction": 0.4559369565557975,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-17.wav",
+  "zero_fraction": 0.27015386488501986,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-18.wav",
+  "zero_fraction": 0.28367712877857315,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-19.wav",
+  "zero_fraction": 0.3757534039588335,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-20.wav",
+  "zero_fraction": 0.41152207852283024,
+  "none": 6,
+  "retry_path": 6
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-21.wav",
+  "zero_fraction": 0.2855724897540984,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-22.wav",
+  "zero_fraction": 0.38094520616744515,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-23.wav",
+  "zero_fraction": 0.39255792350702945,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-24.wav",
+  "zero_fraction": 0.3164910234514933,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-25.wav",
+  "zero_fraction": 0.3277309746422013,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-26.wav",
+  "zero_fraction": 0.29586971507352944,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-27.wav",
+  "zero_fraction": 0.3460525265426678,
+  "none": 19,
+  "retry_path": 19
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-28.wav",
+  "zero_fraction": 0.32296833555618826,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-29.wav",
+  "zero_fraction": 0.3211884803718151,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-30.wav",
+  "zero_fraction": 0.34452084946187594,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T064321Z/upload-31.wav",
+  "zero_fraction": 0.382234375,
+  "none": 5,
+  "retry_path": 5
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-00.wav",
+  "zero_fraction": 0.32976932028201794,
+  "none": 17,
+  "retry_path": 17
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-01.wav",
+  "zero_fraction": 0.30549172794117646,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-02.wav",
+  "zero_fraction": 0.343273107117792,
+  "none": 23,
+  "retry_path": 23
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-03.wav",
+  "zero_fraction": 0.3523396796026684,
+  "none": 10,
+  "retry_path": 10
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-04.wav",
+  "zero_fraction": 0.3755178740530303,
+  "none": 21,
+  "retry_path": 21
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-05.wav",
+  "zero_fraction": 0.2717604737743288,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-06.wav",
+  "zero_fraction": 0.3532926247181395,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-07.wav",
+  "zero_fraction": 0.40184403173721817,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-08.wav",
+  "zero_fraction": 0.24111944182102038,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-09.wav",
+  "zero_fraction": 0.39134779930180025,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-10.wav",
+  "zero_fraction": 0.2842247596153846,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-11.wav",
+  "zero_fraction": 0.439111504686001,
+  "none": 19,
+  "retry_path": 19
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-12.wav",
+  "zero_fraction": 0.33066744421765876,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-13.wav",
+  "zero_fraction": 0.2747109314038448,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-14.wav",
+  "zero_fraction": 0.33292806187469787,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-15.wav",
+  "zero_fraction": 0.3568344689849624,
+  "none": 17,
+  "retry_path": 17
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-16.wav",
+  "zero_fraction": 0.23105301816239315,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-17.wav",
+  "zero_fraction": 0.3814467810150376,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-18.wav",
+  "zero_fraction": 0.3474226638627133,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-19.wav",
+  "zero_fraction": 0.2440888464294244,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-20.wav",
+  "zero_fraction": 0.345853562025355,
+  "none": 27,
+  "retry_path": 27
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-21.wav",
+  "zero_fraction": 0.3052662037037037,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-22.wav",
+  "zero_fraction": 0.3218651737096403,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-23.wav",
+  "zero_fraction": 0.32495408109051716,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-24.wav",
+  "zero_fraction": 0.39501875947952425,
+  "none": 0,
+  "retry_path": 5
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-25.wav",
+  "zero_fraction": 0.3017508264390534,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-26.wav",
+  "zero_fraction": 0.27429242796246367,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-27.wav",
+  "zero_fraction": 0.3172316335498992,
+  "none": 13,
+  "retry_path": 13
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-28.wav",
+  "zero_fraction": 0.2569981287920313,
+  "none": 12,
+  "retry_path": 12
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-29.wav",
+  "zero_fraction": 0.2767937049357491,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-30.wav",
+  "zero_fraction": 0.31481215533088236,
+  "none": 14,
+  "retry_path": 14
+ },
+ {
+  "input": "e2e-latency-20260930T070223Z/upload-31.wav",
+  "zero_fraction": 0.27721007394857133,
+  "none": 15,
+  "retry_path": 15
+ },
+ {
+  "input": "tiled_10s",
+  "zero_fraction": 0.0009125,
+  "none": 19,
+  "retry_path": 19
+ },
+ {
+  "input": "tiled_20s",
+  "zero_fraction": 0.000959375,
+  "none": 47,
+  "retry_path": 47
+ },
+ {
+  "input": "tiled_25s",
+  "zero_fraction": 0.00098,
+  "none": 60,
+  "retry_path": 60
+ },
+ {
+  "input": "tiled_28s",
+  "zero_fraction": 0.00096875,
+  "none": 68,
+  "retry_path": 68
+ },
+ {
+  "input": "tiled_29s",
+  "zero_fraction": 0.0009547413793103448,
+  "none": 69,
+  "retry_path": 69
+ },
+ {
+  "input": "tiled_29.6s",
+  "zero_fraction": 0.0009375,
+  "none": 71,
+  "retry_path": 71
+ },
+ {
+  "input": "tiled_30s",
+  "zero_fraction": 0.00093125,
+  "none": 75,
+  "retry_path": 75
+ },
+ {
+  "input": "real_30s",
+  "zero_fraction": 0.033114583333333336,
+  "none": 61,
+  "retry_path": 61
+ }
+]

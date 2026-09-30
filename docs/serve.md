@@ -38,7 +38,7 @@ Export-plan failures leave the inspection control available for retry.
 Installation validates the archive and stages a venv without network access before replacing the active files.
 Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. On-hardware pacing qualification is still pending.
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
-Automatic decision routing stays disabled. The held-out suite is frozen and unevaluated at `tests/fixtures/routing_held_out.json`.
+Automatic decision routing stays off. Routing policy 3 passed the held-out suite on precision (35/35) with no injection routed to a decision, but the Laya head call takes p95 347 ms against a 250 ms warm deadline. See the [routing receipt](../receipts/2026-09-30-routing-gate/README.md). The held-out suite is now spent. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
 The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
 
@@ -54,11 +54,11 @@ The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbe
 | Restart with outbound sockets denied | Pass, twice. A network namespace with loopback only. Both connection tests failed as intended. |
 | First visible answer, 30 warm turns | Pass after a fix. Before: p50 2.86 s, p95 3.24 s. After: p50 0.99 s, p95 1.06 s. Target is p95 2.00 s. |
 | Voice output | Intelligible after a backend fix. Whisper large-v3-turbo transcribed the first voice at 4.3% word error and `aiden` at 0.0% on five sentences. The owner listened on 2026-09-28: the first voice was clear but Chinese-accented; `aiden` "sounds good" and is the default. Generation runs 5 to 6 times slower than real time (real-time factor 0.13 to 0.19). First audio p95 1.46 s. |
-| Voice input | GPU path shipped on Linux. `Recognition` now picks the ANE Parakeet tools tree when its probe succeeds, otherwise the GPU STT path that runs `mlx-community/parakeet-tdt-0.6b-v3` (pinned, weights sha256 `05e01c7…625464592`, mlx-audio 0.5.6) on the live mlx Vulkan backend. Direct `model.generate` on a 7.8 s LibriSpeech clip measured 1.02 s cold and median 0.55 s warm (n=3); 3 s silence returned an empty transcript. The subprocess-wrapped `recognition.transcribe` path is wired through an owned GPU worker (framed IPC over stdin/stdout) and tested by host-logic units (29/29 + 2 skip on this orchestrator); a 166-utterance corpus eval (LibriSpeech test-clean 60, test-other 40, Midlands English female 35, short 1, silence 10, noise 10, mixed-noise 10) is built under `corpus/manifest.json` but the full eval could not run on the M2 in the 2026-09-29 session because another agent's benchmark held the GPU lock past the gpu-turn 15 min cap (a gpu-turn bug, see `receipts/2026-09-30-speech-input-gpu/README.md`). Browser end-to-end with Chromium's `--use-fake-device-for-media-stream` is also unmeasured. Device loss mid-recording is handled in `voice.js` with a `track-ended` listener and a named message; the existing ANE fixture path stays intact as an optional accelerator. |
+| Voice input | Not qualified. When the ANE probe fails, `Recognition` uses an owned GPU worker that runs the pinned `mlx-community/parakeet-tdt-0.6b-v3` (`ed2b7e8c…`, mlx-audio 0.5.6) on the Vulkan device. On the M2 (T6021, wheel `+06711ad`), every frozen corpus threshold passes on a 192-clip corpus: WER 3.42% test-clean (≤ 6%), 2.92% test-other (≤ 14%), 4.39% accented (≤ 20%), and 11.43% in 0 dB babble (≤ 30%); silence and noise were empty on 10 of 10 each. The test-clean figure scores one 30.04 s clip through the product's 30.0 s cut; counted as a refusal, test-clean is 8.15%. The worker made 0 CPU-stream dispatches (CPU control 3, GPU control 0). The model returned no transcript for 3 of 96 recordings of clear speech; NeMo's own Parakeet does the same. When a voiced clip comes back empty, the worker now retries once with 1 s of low-level padding at both ends: 0 of 96 empty. A browser run of 30 turns then gave 0 empty transcripts, p95 1397.8 ms (budget 2000 ms). Pair plus recognizer peak: 5218 MiB less MemAvailable; the recognizer's share is 3195 MiB. Stop, the 30 s limit, Escape, device loss and permission denial pass at 375 and 1440 px. A real screen reader was not run. See the [receipt](../receipts/2026-09-30-speech-input-gpu/README.md). |
 | Voice as a whole | Not qualified. It needs both directions. |
 | Quality pair | Not qualified. Ten card prompts gave a valid card on 5 of 8 expected. The other 3 hit my 700-token test cap. One unrequested card appeared. Decode was about 3 tokens/s on a GPU shared with other jobs, so the interactive latency target is unproven. |
 | Card generation, Everyday (2B) | Fails. 0 of 8 prompts produced a card, with the full schema, the compact schema, an example, or a reminder. The model writes a markdown list and ignores the fence. Invalid or absent blocks are dropped and the prose stays. |
-| Routing held-out suite | Policy "1" frozen (`1fbfd682e`); 29 focused unit tests pass; the held-out suite at `tests/fixtures/routing_held_out.json` (sha256 `09a37b60…8906f0`) was **not** scored in the 2026-09-29 session — `flock /tmp/m2-gpu.lock` stayed contended. Automatic routing stays OFF until the suite passes >= 99% precision on routed decisions. Receipt and gating run live in `receipts/2026-09-30-routing-gate/README.md` (and the notebook at `entries/RoutingGate/20260929T181500Z-jw14m2-linux-routing-gate.md`). |
+| Routing held-out suite | Evaluated once on 2026-09-30 with frozen policy 3 (commit `50ca49fae`). Precision 1.000 (35/35), recall 1.000, and 0 of 15 injection cases routed to a decision. Every held-out turn was decided without a model call: the head-free path runs at p95 43 ms on the M2 CPU. The Laya head call took p95 347 ms over 100 warm calls, above the 250 ms limit. Automatic routing stays off until the owner decides which latency the gate measures. See the [receipt](../receipts/2026-09-30-routing-gate/README.md). |
 | UX screenshots and accessibility | Pass for six states at 375, 768, 1024, and 1440 px, plus a 200% zoom frame, keyboard, contrast, reduced motion, and semantics checks, with five defects fixed. See the [UI receipt](../receipts/2026-09-28-ui-qualification/README.md). Not run: a real screen reader. |
 | Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. A clean install needs a release that contains the assistant. |
 
@@ -134,66 +134,40 @@ Sichuan/Beijing dialect when they are used for Chinese text.
 
 ## How cards are produced
 
-Every chat reply that lands in the UI carries one of three states: prose
-only, prose plus a model-emitted card, or prose plus a derived card.
-The order matters.
+A chat reply shows prose only, prose plus a card the model emitted, or prose
+plus a card the application built from the reply.
 
-1. **Text streams first.**  The coordinator walks the chat worker's
-   delta stream and emits `text` events to the UI as soon as each chunk
-   arrives.  When the chunk contains ```` ```assistant-ui ```` the text
-   before the marker is flushed to the UI and the remaining bytes are
-   buffered until the matching closer.  A valid fenced block always
-   wins: it is validated by `components.validate_components` and emitted
-   as one or more `component` events before the post-stream pass.
-2. **Repair (one bounded attempt).**  An invalid fenced block (bad JSON,
-   unknown type, missing fields, exceeds the 64 KiB envelope cap) is
-   rejected and at most one repair chat call is allowed per turn.  A
-   second failure drops the card and keeps the prose; the UI shows a
-   short "the generated interface was invalid" status.
-3. **Markdown promotion (assistant-built).**  When no valid fenced block
-   was emitted, the coordinator calls
-   `card_promotion.extract_text(reply, user_text)`.  The reply's fenced
-   code blocks are stripped (so a `python` snippet cannot leak as a
-   checklist), then a conservative structural pass applies:
-   - a task-list block with at least three `- [ ]` or `- [x]` items
-     becomes a `checklist`;
-   - a markdown pipe table with a separator row, two-to-eight columns
-     and at least two data rows becomes a `comparison`;
-   - a list or paragraph whose items start with a time, weekday,
-     `Mon Mar 5`, or `Day N` marker (at least three such items)
-     becomes a `timeline`;
-   - a plain bullet or ordered list of three or more items becomes a
-     `checklist` only when the user explicitly asked for a checklist
-     ("give me the steps to …", "make a to-do", "checklist of …");
-   - a plain bullet list with `|`- or `:`-separated columns becomes a
-     `comparison` only when the user asked for a table / comparison;
-   - everything else (plain prose, prose with two-item lists, code
-     snippets) is left as prose — the parser is conservative on purpose.
-   Every derived component is validated again before it is emitted; if
-   the validator would reject it (too many rows, missing fields) the
-   card is dropped silently and the prose stays.
-4. **Honest labelling.**  A derived card carries the title suffix
-   ` (from reply)` so the UI can mark it as assistant-built rather than
-   model-asserted JSON.  The component carries no extra top-level keys
-   (the validator rejects unknown keys); the suffix is the entire honest
-   signal.
-5. **Schema policy.**  The compact 209-token schema is the default for
-   ordinary chat turns (about 0.5 s of prefill saved on the 2B).  The
-   full 792-token schema is sent only when the user names a card kind
-   the parser cannot promote (`chart`, `graph`, `form`, `decision`,
-   `options`, `sources`), or when the catalog entry declares
-   `extension.card_format == "fenced-json"` — a capability flag set
-   per chat model after held-out measurement.  `markdown-promotion`
-   (or the absence of the flag) means the compact schema is sent and
-   the reply's markdown is promoted if needed.
-6. **Bounded work.**  The parser is a single linear scan over the
-   reply; the input is rejected above 1 MiB.  No regex backtracking
-   traps; the structural patterns are anchored and a single character
-   class `[a-z0-9_-]+` drives id slugs.
+1. **Text streams first.**  Text before an ```` ```assistant-ui ```` fence is
+   shown as it arrives; the fenced JSON is buffered, validated by
+   `components.validate_components`, and gets at most one repair call.  A
+   valid fenced card always wins.  A block that stays invalid is dropped and
+   the prose stays.
+2. **Card promotion.**  When a chat turn ends without a valid fence,
+   `card_promotion.extract_text(reply, user_text)` may build one card from
+   the reply's markdown, outside fenced code.  It needs both a request for
+   the artifact in the user's message and a matching structure in the
+   reply:
+   - checklist ("checklist", "to-do", "action items", "packing list", or
+     "steps"): a task list or bullet/numbered list of 3 or more items;
+   - comparison ("compare", "versus", "side by side", "in a table"): a pipe
+     table with 2-8 columns and 2 or more rows of equal width;
+   - timeline ("timeline", "schedule", "agenda", "roadmap", "phases",
+     "plan my Monday"): 3 or more items or headings that start with a time,
+     date, weekday, `Week 2`-style period or a short label, or a table whose
+     first column is the time;
+   - facts ("facts", "key points"): 2 or more list items.
 
-Charts, forms, decisions and typed results cannot be derived from
-markdown alone and stay model-only.  When the user asks for them the
-coordinator still sends the full schema so the model can emit the JSON.
+   "Explain", "what is", "why" and "how does" questions stay prose even when
+   the reply has a table, and "in a paragraph" or "no bullets" turns
+   promotion off.  The card is validated before it is emitted and its title
+   ends with `(from reply)`.  Input over 1 MiB is refused and every pattern
+   runs in linear time.
+3. **Schema policy.**  Ordinary chat turns send no card schema.  The full
+   schema is sent on Laya turns, when the message names something markdown
+   cannot carry (chart, graph, form, decision, options, facts, sources), and
+   for chat models whose catalog entry declares
+   `extension.card_format: "fenced-json"` (at least 6 of 8 valid fenced
+   cards, measured).  No catalog entry declares it today.
 
 ## Model status
 

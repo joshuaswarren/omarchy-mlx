@@ -100,49 +100,8 @@ def _locate_tools_root() -> Path | None:
 
 
 def _backend_kind(module) -> str:
-    """Return the tag the backend module declares for itself (``ane``/``gpu``).
-
-    The ANE Parakeet module does not declare ``BACKEND_KIND`` — older
-    installs predate the discovery switch — so we treat the absence as
-    ``ane``. ``gpu_stt`` declares ``BACKEND_KIND = "gpu"``.
-    """
+    """``gpu`` for gpu_stt; the ANE dictation module carries no tag."""
     return getattr(module, "BACKEND_KIND", "ane")
-
-
-def _ensure_gpu_worker(module) -> "_GpuWorkerAdapter":
-    """Construct a GPU worker handle and wrap it in a backend-agnostic adapter.
-
-    The GPU handle's ``request(...)`` signature already matches the ANE
-    one, so the wrapper only adds the same module-side helpers the ANE
-    path exposed to ``transcribe``.
-    """
-    model_dir = module._model_dir()
-    if not model_dir.is_dir():
-        raise RecognitionUnavailable(
-            f"the GPU STT model directory is missing: {model_dir}"
-        )
-    return _GpuWorkerAdapter(module._WorkerHandle(model_dir, module.GPU_STT_MODEL["id"]))
-
-
-class _GpuWorkerAdapter:
-    """Wrap ``gpu_stt._WorkerHandle`` so the existing transcribe code path is unchanged."""
-
-    def __init__(self, handle):
-        self._handle = handle
-
-    @property
-    def alive(self) -> bool:
-        return self._handle.alive
-
-    def request(self, header: dict, payload: bytes = b"", *,
-                timeout: float, cancel=None) -> dict:
-        return self._handle.request(header, payload, timeout=timeout, cancel=cancel)
-
-    def shutdown(self) -> None:
-        return self._handle.shutdown()
-
-    def kill(self) -> None:
-        return self._handle.kill()
 
 
 def _load_dictation_module():
@@ -152,9 +111,9 @@ def _load_dictation_module():
     tree is present AND its probe succeeds, otherwise the GPU STT
     path that ships with this package. ``MLX_OMARCHY_RECOGNITION_BACKEND``
     can pin ``ane`` or ``gpu`` for tests; default ``auto`` probes both.
-    Either backend must expose ``probe_runtime``, ``resample_to_16k``,
-    ``read_acceptance_receipt``, ``write_acceptance_receipt`` and
-    keep a module-level ``BACKEND_KIND`` tag for status reporting.
+    Both expose ``probe_runtime`` and ``read_acceptance_receipt``; each
+    backend's worker receives the original samples and rate and resamples
+    on its own accelerator. The ANE module has no ``BACKEND_KIND`` tag.
     """
     pin = os.environ.get("MLX_OMARCHY_RECOGNITION_BACKEND", "auto").strip().lower()
     if pin not in ("auto", "ane", "gpu"):
@@ -611,6 +570,7 @@ class Recognition:
                 status["acceptance"] = {
                     "recorded_at": receipt.get("recorded_at"),
                     "emissions": receipt.get("emissions"),
+                    "latency_ms": receipt.get("latency_ms"),
                 }
             return status
 
@@ -627,10 +587,13 @@ class Recognition:
             except RecognitionUnavailable as error:
                 self._probe = {"ok": False, "reasons": [str(error)], "facts": {}}
             else:
-                self._probe = module.probe_runtime()
-                facts = self._probe["facts"]
-                facts["model"] = self._model_identity(module)
-                facts["asset_bytes"] = self._asset_footprint(module)
+                if _backend_kind(module) == "gpu":
+                    self._probe = module.probe_runtime(self._home)
+                else:
+                    self._probe = module.probe_runtime()
+                    facts = self._probe["facts"]
+                    facts["model"] = self._model_identity(module)
+                    facts["asset_bytes"] = self._asset_footprint(module)
         return self._probe
 
     def _module_cached(self):
@@ -677,7 +640,7 @@ class Recognition:
         """Conservative named estimate; always positive for admission."""
         facts = probe["facts"]
         basis: dict[str, int] = {}
-        for key in ("bundle_bytes", "libane_bytes", "worker_bytes"):
+        for key in ("bundle_bytes", "libane_bytes", "worker_bytes", "weights_bytes"):
             value = int(facts.get("asset_bytes", {}).get(key, 0))
             if value:
                 basis[key] = value
@@ -723,7 +686,11 @@ class Recognition:
                 return self._worker
             module = _load_dictation_module()
             if _backend_kind(module) == "gpu":
-                self._worker = _ensure_gpu_worker(module)
+                if not module.model_verified(self._home):
+                    raise RecognitionUnavailable(
+                        "the speech recognition model is not downloaded and "
+                        "verified; enable voice in model setup")
+                self._worker = module._WorkerHandle(module.model_dir(self._home))
             else:
                 root = _locate_tools_root()
                 if root is None:
@@ -733,21 +700,25 @@ class Recognition:
                 self._worker = _WorkerHandle(root)
             return self._worker
 
+    def prepare(self, approve_download: bool) -> dict:
+        """Download and verify the GPU backend's pinned model (approve-first).
+
+        The ANE backend's assets come from ``mlx-omarchy-parakeet download``,
+        so it has nothing to fetch here.
+        """
+        module = _load_dictation_module()
+        if _backend_kind(module) != "gpu":
+            return {"verified": True, "backend": "ane"}
+        result = module.prepare(self._home, approve_download)
+        with self._lock:
+            self._probe = None
+        return result
+
     def transcribe(self, wav_bytes: bytes, cancel=None) -> str:
         """Transcribe mono PCM WAV bytes; empty string means silence."""
         if cancel is not None and cancel.is_set():
             raise RecognitionCancelled("cancelled before transcription started")
         samples, rate = decode_wav(wav_bytes)
-        module = _load_dictation_module()
-        if rate != TARGET_SAMPLE_RATE:
-            try:
-                samples = module.resample_to_16k(samples, rate)
-            except ImportError as error:
-                raise RecognitionUnavailable(
-                    f"resampling runs on the GPU/Vulkan path and mlx is "
-                    f"not importable: {error}"
-                ) from error
-
         worker = self._ensure_worker()
         payload = np.ascontiguousarray(samples, dtype="<f4").tobytes()
         deadline = DEFAULT_DEADLINE_MS / 1000.0 + CANCEL_GRACE_SECONDS

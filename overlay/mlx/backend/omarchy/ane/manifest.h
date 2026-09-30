@@ -21,7 +21,13 @@ constexpr uint64_t kAneTileShiftDefault = 14;
 constexpr uint64_t kAneTileShiftWholeProgram = 9;
 constexpr uint64_t kAneTileAlignment = 0x4000; // 1 << kAneTileShiftDefault
 constexpr int kAneManifestVersion = 4;
+// Schema 4 accepts two ABIs and their named compiler targets; the loader
+// refuses every other value at parse time. The pairing is fixed: H13 ships
+// against ABI 1 (M1/T8103/T6001), H14 against ABI 2 (M2/T6021).
 constexpr uint64_t kAneDriverAbiMajor = 1;
+constexpr uint64_t kAneDriverAbiMajorAbl = 2;
+constexpr const char* kAneCompilerTargetH13 = "h13";
+constexpr const char* kAneCompilerTargetH14 = "h14";
 
 struct AneTensor {
   std::string name;

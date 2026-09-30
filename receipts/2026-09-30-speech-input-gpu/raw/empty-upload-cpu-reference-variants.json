@@ -1,0 +1,100 @@
+{
+ "meta": {
+  "mlx": "0.32.3",
+  "device": "Device(cpu, 0)",
+  "mlx_audio": "?",
+  "model_path": "/tmp/sig/hf/models--mlx-community--parakeet-tdt-0.6b-v3/snapshots/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
+ },
+ "rows": [
+  {
+   "case": "cpu",
+   "n": 60416,
+   "ms": 25707.2,
+   "text": ""
+  },
+  {
+   "case": "cpu_pad_end_160",
+   "n": 60576,
+   "ms": 25815.5,
+   "text": "promise to do this and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_pad_end_800",
+   "n": 61216,
+   "ms": 25963.5,
+   "text": "Promise to do this, and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_pad_end_1600",
+   "n": 62016,
+   "ms": 26364.5,
+   "text": "promise to do this and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_pad_end_4000",
+   "n": 64416,
+   "ms": 27246.6,
+   "text": "promised to do this and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_pad_end_8000",
+   "n": 68416,
+   "ms": 30862.4,
+   "text": "promised to do this and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_trim_start_160",
+   "n": 60256,
+   "ms": 26187.4,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_end_160",
+   "n": 60256,
+   "ms": 25771.9,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_start_800",
+   "n": 59616,
+   "ms": 25042.4,
+   "text": "promise to do this and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_trim_end_800",
+   "n": 59616,
+   "ms": 24899.7,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_start_1600",
+   "n": 58816,
+   "ms": 24414.3,
+   "text": "Promise to do this, and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_trim_end_1600",
+   "n": 58816,
+   "ms": 24711.8,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_start_4000",
+   "n": 56416,
+   "ms": 24394.3,
+   "text": "Promise to do this and she mentioned to me that when for a moment"
+  },
+  {
+   "case": "cpu_trim_end_4000",
+   "n": 56416,
+   "ms": 24580.1,
+   "text": ""
+  },
+  {
+   "case": "cpu_gain_0.5",
+   "n": 60416,
+   "ms": 25941.1,
+   "text": ""
+  }
+ ]
+}

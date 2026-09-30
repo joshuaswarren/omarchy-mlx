@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Run the frozen HELD-OUT card-promotion suite once per chat model through
-the real coordinator on the M2.  Records per-prompt outcomes and a final
-summary so the orchestrator can verify the 10/12 card-worthy + 0 spurious
-acceptance bar.
+"""Run the frozen HELD-OUT card-promotion suite once per chat model.
 
-Usage:
-    flock /tmp/m2-gpu.lock PYTHONPATH=serve python3 \\
-        receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-2b-4bit
+Resumable across reboots and killed gpu-turn chunks: writes
+``results_<model>.json`` on every prompt and skips prompts whose id
+is already recorded.  Designed to be wrapped in ``gpu-turn -m 8 --``
+with a tight prompt slice (``--start``/``--end``) so each chunk fits
+under the M2 5-12 min reboot cadence and the gpu-turn 8 min cap.
 
-The script starts the assistant server with the named chat model, drives
-24 prompts through HTTP, and captures the assistant-built component
-events.  It writes one JSON line per prompt plus a summary block.
+Usage (paths via env vars so the script is portable):
+    MARKCARDS_HOME=<home> MARKCARDS_VENV=<home>/.local/share/mlx-omarchy/venv \\
+        <venv>/bin/python receipts/2026-09-30-card-promotion/run_held_out.py \\
+        --model qwen3.8-2b-4bit --start 0 --end 3
 """
 import argparse
 import json
@@ -23,25 +23,30 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+
 # Runtime paths.  Defaults below are placeholders; override via the
-# MARKCARDS_HOME / MARKCARDS_VENV environment variables before running.
+# MARKCARDS_HOME environment variable before running.
 _HOME = os.environ.get("MARKCARDS_HOME", "<home>")
 HOME_ROOT = os.path.join(_HOME, "agents", "MarkdownCards", "homes")
-# One home per chat model so the saved pair is unambiguous.
 PAIR_FOR_MODEL = {
     "qwen3.8-2b-4bit": "everyday",
     "qwen3.8-27b-4bit": "quality",
 }
 PYTHON = os.path.join(_HOME, ".local", "share", "mlx-omarchy", "venv", "bin", "python")
+RESULTS_DIR = os.path.join(_HOME, "agents", "MarkdownCards", "results")
 
 
-def home_for(chat_model: str) -> str:
+def home_for(chat_model):
     safe = chat_model.replace("/", "_")
     return os.path.join(HOME_ROOT, safe)
 
 
-def runtime_for(chat_model: str) -> str:
+def runtime_for(chat_model):
     return os.path.join(home_for(chat_model), "assistant", "application.json")
+
+
+def results_path(chat_model):
+    return os.path.join(RESULTS_DIR, f"held_out_{chat_model.replace('/', '_')}.json")
 
 
 def call(method, path, body=None, runtime=None):
@@ -54,74 +59,180 @@ def call(method, path, body=None, runtime=None):
         base + path,
         data=None if body is None else json.dumps(body).encode(),
         method=method, headers=headers)
-    with urllib.request.urlopen(request, timeout=300) as response:
-        return json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode()[:500]
+        except Exception:
+            pass
+        print(f"HTTP {exc.code} on {method} {path}: {body_text}", flush=True)
+        raise
 
 
-def log(line, handle):
-    print(line, flush=True)
-    handle.write(line + "\n")
-    handle.flush()
+def sync_results(results):
+    """Persist ``results`` to disk and fsync to survive a reboot."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    tmp = results["_path"] + ".tmp"
+    with open(tmp, "w") as fp:
+        json.dump(results, fp, indent=2)
+        fp.flush()
+        os.fsync(fp.fileno())
+    os.replace(tmp, results["_path"])
+    # Belt-and-braces: ask the kernel to flush.
+    try:
+        os.sync()
+    except OSError:
+        pass
 
 
-def run(held_out_path, chat_model, output_path, max_tokens=700, timeout_s=600,
-        resume_only=False):
-    prompts = json.load(open(held_out_path))
-    suite_sha = prompts.get("sha256", "")
-    out = open(output_path, "w")
+def load_results(chat_model):
+    path = results_path(chat_model)
+    if os.path.exists(path):
+        with open(path) as fp:
+            return json.load(fp), path
+    return {"suite_sha256": "", "chat_model": chat_model, "prompts": []}, path
 
+
+def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
+              timeout_s=300, setup=False):
+    prompts_doc = json.load(open(held_out_path))
+    suite_sha = prompts_doc.get("sha256", "")
     home = home_for(chat_model)
     runtime = runtime_for(chat_model)
     pair_id = PAIR_FOR_MODEL[chat_model]
+    results, path = load_results(chat_model)
+    results["suite_sha256"] = suite_sha
+    results["_path"] = path
+    finished_ids = {p["id"] for p in results.get("prompts") or []}
+
     os.makedirs(home, exist_ok=True)
+    # Always start with --setup so a stale boot_id in the saved pair lock
+    # does not silently turn /api/resume into an absent pair.  Setup reuses
+    # cached weights when present, so the second-and-later chunk is fast.
+    if setup:
+        do_setup = True
+    else:
+        # Without --setup, try --resume but if the boot_id in the saved
+        # lock differs from the current /proc/sys/kernel/random/boot_id,
+        # resume will refuse; fall back to --setup.
+        boot_id_path = "/proc/sys/kernel/random/boot_id"
+        cur_boot_id = (open(boot_id_path).read().strip()
+                       if os.path.exists(boot_id_path) else "")
+        lock_path = os.path.join(home, "assistant", "pair-locks",
+                                 f"{pair_id}.json")
+        saved_boot_id = ""
+        if os.path.exists(lock_path):
+            try:
+                saved_boot_id = json.load(open(lock_path)).get("boot_id", "")
+            except Exception:
+                saved_boot_id = ""
+        do_setup = bool(saved_boot_id) and saved_boot_id != cur_boot_id
+        if do_setup:
+            print(f"boot_id mismatch (saved={saved_boot_id[:8]} "
+                  f"current={cur_boot_id[:8]}); falling back to --setup",
+                  flush=True)
+
     if os.path.exists(runtime):
         os.unlink(runtime)
     env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "serve"),
-               MLX_OMARCHY_OFFLINE="1",
-               MLX_OMARCHY_HOME=home)
+               MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
     safe = chat_model.replace("/", "_")
     log_path = os.path.join(_HOME, "agents", "MarkdownCards",
                             f"server_{safe}.log")
-    # First run: do an explicit setup (--pair everyday --yes) so the saved
-    # pair is the right chat model.  Subsequent runs: --resume.
-    setup_args = ["--pair", pair_id, "--yes"] if not resume_only else ["--resume"]
+    setup_args = ["--pair", pair_id, "--yes"] if do_setup else []
+    resume_args = ["--resume"] if not do_setup else []
     server = subprocess.Popen(
-        [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home, "--no-browser"]
-        + setup_args,
+        [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
+         "--no-browser"] + setup_args + resume_args,
         cwd=REPO, env=env,
         stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
         start_new_session=True)
+
+    def _kill_server():
+        # Hard-kill the server's process group (set by start_new_session),
+        # then any direct mlx child that survives because it inherited an
+        # open GPU fd.  NEVER call `fuser -k /dev/dri/renderD*` here --
+        # that nukes every other agent's process holding the device
+        # inside their own gpu-turn ticket.  Filter by --home path
+        # under our agent dir only.
+        try:
+            os.killpg(server.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            server.wait(timeout=10)
+        except Exception:
+            try:
+                os.killpg(server.pid, signal.SIGKILL)
+            except Exception:
+                pass
+        # Filter by --home under agents/MarkdownCards/ only -- do NOT touch
+        # any process holding /dev/dri/renderD* that is not ours.
+        try:
+            import subprocess as _sp
+            _sp.run(["bash", "-lc",
+                     "ps -eo pid,cmd | grep -E "
+                     "'mlx_omarchy_assistant.*--home.*MarkdownCards|"
+                     "_mlxlm_server.*MarkdownCards|"
+                     "mlx_omarchy_assistant.gpu_stt.*MarkdownCards' | "
+                     "awk '{print $1}' | xargs -r kill -9 2>/dev/null"],
+                    timeout=15, check=False)
+        except Exception:
+            pass
+
+    # Setup deadlines are per-model: 2B finishes in ~3 min on the v0.7.6
+    # wheel, 27B needs ~10 min.  Allow 25 min total per chunk (the gpu-turn
+    # ticket is -m 8, so this is the maximum wall-clock budget).
+    is_27b = "27b" in chat_model
+    deadline = time.monotonic() + 300 if not do_setup else 1500
+    while not os.path.exists(runtime) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if not os.path.exists(runtime):
+        raise RuntimeError("server never wrote application.json")
+    setup_deadline = time.monotonic() + (900 if not do_setup else
+                                          (1500 if not is_27b else 1500))
+    while time.monotonic() < setup_deadline:
+        state = call("GET", "/api/status", runtime=runtime).get("setup") or {}
+        if state.get("state") == "complete":
+            break
+        if state.get("state") == "error":
+            raise RuntimeError(f"setup error: {state}")
+        if state.get("state") == "absent":
+            # /api/resume found no usable pair; re-issue with --pair.
+            _kill_server()
+            if os.path.exists(runtime):
+                os.unlink(runtime)
+            server = subprocess.Popen(
+                [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
+                 "--no-browser", "--pair", pair_id, "--yes"],
+                cwd=REPO, env=env,
+                stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
+                start_new_session=True)
+            deadline = time.monotonic() + 1500
+            while not os.path.exists(runtime) and time.monotonic() < deadline:
+                time.sleep(0.5)
+            setup_deadline = time.monotonic() + 1500
+        time.sleep(1)
+    else:
+        raise RuntimeError("setup did not complete in time")
+
     try:
-        # Wait for runtime + setup.
-        deadline = time.monotonic() + 300
-        while not os.path.exists(runtime) and time.monotonic() < deadline:
-            time.sleep(0.3)
-        if not os.path.exists(runtime):
-            raise RuntimeError("server never wrote application.json")
-        setup_deadline = time.monotonic() + 1800
-        while time.monotonic() < setup_deadline:
-            state = call("GET", "/api/status", runtime=runtime).get("setup") or {}
-            if state.get("state") == "complete":
-                break
-            if state.get("state") == "error":
-                raise RuntimeError(f"setup error: {state}")
-            time.sleep(1)
-        else:
-            raise RuntimeError("setup did not complete in time")
-
-        summary = {"suite_sha256": suite_sha, "chat_model": chat_model,
-                   "pair_id": pair_id, "max_tokens": max_tokens,
-                   "prompts": []}
         valid_card_kinds = {"checklist", "comparison", "timeline", "facts"}
-
-        for index, prompt in enumerate(prompts["prompts"]):
+        prompts = prompts_doc["prompts"][start:end]
+        for offset, prompt in enumerate(prompts, start=start):
+            if prompt["id"] in finished_ids:
+                print(f"SKIP {prompt['id']} already recorded", flush=True)
+                continue
             cid = call("POST", "/api/conversations", {"save": False},
                        runtime=runtime)["id"]
             started = time.monotonic()
             turn = call("POST", f"/api/conversations/{cid}/turns",
                         {"text": prompt["text"], "mode": "chat",
                          "max_tokens": max_tokens},
-                        runtime=runtime)["turn"]
+                        runtime=runtime)["turn_id"]
             message = None
             deadline = time.monotonic() + timeout_s
             while time.monotonic() < deadline:
@@ -150,35 +261,17 @@ def run(held_out_path, chat_model, output_path, max_tokens=700, timeout_s=600,
                 "status": (message or {}).get("status"),
                 "pass": pass_,
             }
-            log(f"HELD_OUT {index + 1:2d}/{len(prompts['prompts'])} "
-                f"id={prompt['id']} expect={expect} types={types} "
-                f"elapsed={elapsed:.0f}s pass={pass_}", out)
-            summary["prompts"].append(outcome)
-
-        # Score and threshold checks.
-        card_worthy = [p for p in summary["prompts"] if p["expect"] == "card"]
-        plain = [p for p in summary["prompts"] if p["expect"] == "none"]
-        valid = [p for p in card_worthy if p["pass"]]
-        spurious = [p for p in plain if any(t in valid_card_kinds
-                                            for t in p["components"])]
-        summary["valid_card_worthy"] = f"{len(valid)}/{len(card_worthy)}"
-        summary["spurious_cards"] = len(spurious)
-        summary["thresholds"] = {
-            "card_worthy_min": 10, "card_worthy_total": len(card_worthy),
-            "spurious_max": 0}
-        summary["gates_pass"] = (
-            len(valid) >= 10 and len(spurious) == 0)
-        log(f"SUMMARY chat_model={chat_model} pair_id={pair_id} "
-            f"valid_card_worthy={len(valid)}/{len(card_worthy)} "
-            f"spurious={len(spurious)} gates_pass={summary['gates_pass']}", out)
-        # Persist a JSON summary alongside the JSONL log.
-        summary_path = output_path.rsplit(".", 1)[0] + "_summary.json"
-        with open(summary_path, "w") as fp:
-            json.dump(summary, fp, indent=2)
+            results.setdefault("prompts", []).append(outcome)
+            finished_ids.add(prompt["id"])
+            sync_results(results)
+            print(f"HELD_OUT {offset + 1:2d}/{len(prompts_doc['prompts'])} "
+                  f"id={prompt['id']} expect={expect} types={types} "
+                  f"elapsed={elapsed:.0f}s pass={pass_}",
+                  flush=True)
     finally:
         try:
             os.killpg(server.pid, signal.SIGTERM)
-            server.wait(timeout=60)
+            server.wait(timeout=30)
         except Exception:
             try:
                 os.killpg(server.pid, signal.SIGKILL)
@@ -189,16 +282,21 @@ def run(held_out_path, chat_model, output_path, max_tokens=700, timeout_s=600,
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", required=True)
+    p.add_argument("--start", type=int, default=0)
+    p.add_argument("--end", type=int, default=6,
+                   help="exclusive end index into the prompts list")
     p.add_argument("--held-out", default=os.path.join(
         REPO, "tests", "fixtures", "cards_held_out.json"))
-    p.add_argument("--out", default=os.path.join(
-        HERE, f"held_out_{int(time.time())}.jsonl"))
     p.add_argument("--max-tokens", type=int, default=700)
-    p.add_argument("--resume", action="store_true",
-                   help="skip --pair setup; the saved pair must already exist")
+    p.add_argument("--timeout-s", type=int, default=300)
+    p.add_argument("--setup", action="store_true",
+                   help="run --pair setup before this chunk")
     args = p.parse_args()
-    run(args.held_out, args.model, args.out, max_tokens=args.max_tokens,
-        resume_only=args.resume)
+    if args.model not in PAIR_FOR_MODEL:
+        sys.exit(f"unknown model {args.model!r}")
+    run_chunk(args.held_out, args.model, args.start, args.end,
+              max_tokens=args.max_tokens, timeout_s=args.timeout_s,
+              setup=args.setup)
 
 
 if __name__ == "__main__":

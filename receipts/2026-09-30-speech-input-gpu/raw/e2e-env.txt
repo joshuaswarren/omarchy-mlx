@@ -1,0 +1,4 @@
+2026-09-30T09:18:06Z
+35df33be-ada4-4d3e-9028-3d761a510c65
+0.25 0.43 0.42 1/392 397048
+ 377852       10:06 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> MARKCARDS_VENV=<home>/.local/share/mlx-omarchy/venv <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-27b-4bit --start 6 --end 9

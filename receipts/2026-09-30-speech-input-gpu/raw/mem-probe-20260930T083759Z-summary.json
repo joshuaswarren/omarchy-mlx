@@ -1,0 +1,11 @@
+{
+ "baseline_mib": 74135,
+ "foreign_procs_max": 5,
+ "recognizer_alone_peak_drop_mib": 3228,
+ "after_alone_mib": 74004,
+ "pair_resident_drop_mib": 2032,
+ "recognizer_with_pair_peak_drop_mib": 3214,
+ "recognizer_with_pair_resident_drop_mib": 3140,
+ "all_resident_peak_drop_from_baseline_mib": 5377,
+ "after_stop_mib": 74178
+}

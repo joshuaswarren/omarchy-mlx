@@ -672,9 +672,17 @@ def plain_text(component: dict) -> str:
 
 
 SCHEMA_PROMPT = f"""\
-Interactive cards: when a card genuinely helps, end your reply with EXACTLY ONE \
-fenced code block tagged assistant-ui containing one JSON object, and keep the \
-readable answer as plain text outside the block:
+Interactive cards: only emit a fenced assistant-ui block when the USER asked \
+for a structured artifact. Cue words in the user's message: checklist, list of \
+steps / to-do / tasks / action items; comparison, table, versus, side-by-side, \
+tabular comparison; timeline, schedule, agenda, milestones, weeks, phases, \
+phased plan; facts, key points, summary of facts, N facts about X. Do NOT emit a \
+fence for general "explain", "what is", "why", "how" questions, or for any \
+explanatory prose reply -- reply in plain text only.
+
+When the user did ask for a structured artifact, end your reply with EXACTLY \
+ONE fenced code block tagged assistant-ui containing one JSON object, and keep \
+the readable answer as plain text outside the block:
 
 ```assistant-ui
 {{"version": {ENVELOPE_VERSION}, "components": [ ... ]}}
@@ -715,20 +723,4 @@ ids are lowercase letters, digits, "-" or "_" (<=64 chars) and must be unique wi
 a component. Do not invent measurements; do not present estimates as measurements. \
 The application renders these cards itself; you cannot add new component types, \
 fields, actions, URLs, code or styling.
-"""
-
-# Sent on ordinary chat turns so cards stay spontaneous without a long prefill.
-# The validator accepts every type; the full SCHEMA_PROMPT covers the rest.
-SCHEMA_PROMPT_COMPACT = f"""\
-Cards: when a card clearly helps, end the reply with ONE fenced block tagged \
-assistant-ui holding complete JSON; keep the readable answer as plain text outside it:
-```assistant-ui
-{{"version": {ENVELOPE_VERSION}, "components": [ ... ]}}
-```
-Otherwise reply in text only. No HTML, CSS, JavaScript, SVG, image URLs or shell \
-commands. Use only conversation facts. Ids are lowercase letters, digits, - or _.
-- checklist: {{"type": "checklist", "items": [{{"id": "t1", "text": "...", "done": false}}]}}
-- timeline: {{"type": "timeline", "entries": [{{"id": "e1", "when": "Mon", "text": "..."}}]}}
-- comparison: {{"type": "comparison", "columns": [{{"id": "c1", "label": "...", "kind": "text"}}], \
-"rows": [{{"id": "r1", "label": "...", "values": ["..."]}}]}}
 """

@@ -1,0 +1,56 @@
+{
+ "pair": {
+  "active_pair": "everyday",
+  "state": "ready",
+  "setup": {
+   "state": "complete",
+   "ready_offline": false
+  },
+  "recognition_state": "ready"
+ },
+ "warmups": 2,
+ "thermal_zone0_c": [
+  32.9,
+  33.0
+ ],
+ "n": 30,
+ "wav_bytes": 162444,
+ "ms": [
+  801.5,
+  690.7,
+  676.6,
+  1182.6,
+  630.1,
+  645.0,
+  948.7,
+  1440.4,
+  952.4,
+  1472.0,
+  1052.8,
+  1095.4,
+  1117.4,
+  1262.9,
+  1268.0,
+  1101.3,
+  1077.1,
+  1244.4,
+  1208.2,
+  945.7,
+  1251.6,
+  1390.0,
+  928.0,
+  892.5,
+  860.9,
+  832.2,
+  831.5,
+  1193.5,
+  1224.3,
+  1393.3
+ ],
+ "p50_ms": 1077.1,
+ "p95_ms": 1440.4,
+ "max_ms": 1472.0,
+ "distinct_transcripts": [
+  "Well, if I don't know who she was in love with, I know who he was."
+ ]
+}

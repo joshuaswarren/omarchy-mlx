@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import http.client
 import json
 import math
@@ -27,9 +28,10 @@ MAX_QUESTIONS = 8
 # Auto allowances are backed by the admitted context in _admit_output.
 TASK_OUTPUT_ALLOWANCE = {"chat": 2048, "compare": 1024, "decide": 1024, "draft": 1024}
 MIN_AUTO_ALLOWANCE = 256
-# Ordinary chat sends the compact card schema (a third of the full one in tokens).
-# A message that names a chart, graph, form, decision, options, facts, or sources,
-# and every Laya turn, sends the full schema.
+# Ordinary chat sends no card schema: cards come from card_promotion.  A message
+# that names a chart, graph, form, decision, options, facts, or sources, every
+# Laya turn, and every model whose catalog entry declares fenced-json cards get
+# the full schema.
 FULL_CARD_CUES = re.compile(r"\b(charts?|graphs?|forms?|decisions?|options?|facts?|sources?)\b", re.IGNORECASE)
 REPETITION_PENALTY = 1.1
 
@@ -184,35 +186,25 @@ def _check_labels(value, low, high, cap, what):
 # Card-format capability lookup (lazy, cached, never raises)
 # ---------------------------------------------------------------------------
 
-_CARD_FORMAT_CACHE: dict[str, str | None] = {}
+_FENCED_JSON_CACHE: dict[str, bool] = {}
 
 
-def _model_card_format(chat_model_id: str) -> str | None:
-    """Return ``"fenced-json"`` when the catalog entry declares a measured
-    card-fence capability, otherwise ``"markdown-promotion"`` (or ``None``
-    when the model is not in the catalog).  Used to pick which schema to
-    send with chat prompts.  Reads are cached and never raise: a broken
-    catalog is treated as no capability."""
-    if not chat_model_id:
-        return None
-    if chat_model_id in _CARD_FORMAT_CACHE:
-        return _CARD_FORMAT_CACHE[chat_model_id]
-    fmt: str | None = None
-    try:
-        from mlx_omarchy_serve import catalog as _catalog
-        catalog_data = _catalog.load_catalog()
-    except Exception:
-        catalog_data = None
-    if catalog_data:
-        for entry in catalog_data.get("entries") or ():
-            if entry.get("id") == chat_model_id:
-                extension = entry.get("extension") or {}
-                fmt = extension.get("card_format")
-                if fmt not in (None, "fenced-json", "markdown-promotion"):
-                    fmt = None
-                break
-    _CARD_FORMAT_CACHE[chat_model_id] = fmt
-    return fmt
+def _model_emits_fenced_cards(chat_model_id: str) -> bool:
+    """True when the catalog entry declares ``extension.card_format ==
+    "fenced-json"`` (a measured fence capability).  Cached; a missing or
+    broken catalog means no capability."""
+    if chat_model_id not in _FENCED_JSON_CACHE:
+        fenced = False
+        try:
+            from mlx_omarchy_serve import catalog as _catalog
+            for entry in _catalog.load_catalog().get("entries") or ():
+                if entry.get("id") == chat_model_id:
+                    fenced = (entry.get("extension") or {}).get("card_format") == "fenced-json"
+                    break
+        except Exception:
+            fenced = False
+        _FENCED_JSON_CACHE[chat_model_id] = fenced
+    return _FENCED_JSON_CACHE[chat_model_id]
 
 
 def _typed_request(model_path, text, questions):
@@ -484,31 +476,46 @@ class LocalModels:
 
 
 class _RoutingWorker:
-    """Tiny worker adapter for the routing module.
+    """Deadline-bounded routing calls with at most one call in flight.
 
-    Wraps `LocalModels.decision` so the routing module stays free of any
-    HTTP details. The deadline is enforced on a worker-local timer:
-    a returned `timed_out` response is honored by the runner instead of
-    blocking on a cold call. The call is one-shot — no retries, no
-    replacement, no leak of worker state into the routing module.
+    Uses its own LocalModels (its own connection), so a late routing call
+    can never close a chat stream. A call that misses the deadline keeps
+    running on the single pool thread and stays recorded in `inflight`;
+    until it finishes, new routing attempts are refused (`busy`) instead
+    of queueing a replacement.
     """
 
-    def __init__(self, models, pair, cancel):
-        self.models = models
-        self.pair = pair
-        self.cancel = cancel
+    def __init__(self, manager):
+        self.models = LocalModels(manager)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.lock = threading.Lock()
+        self.inflight = None
 
-    def call(self, payload, deadline_seconds):
-        import concurrent.futures
+    def bind(self, pair):
+        worker = self
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self.models.decision, self.pair, payload)
+        class Bound:
+            def call(self, payload, deadline_seconds):
+                return worker.call(pair, payload, deadline_seconds)
+
+        return Bound()
+
+    def call(self, pair, payload, deadline_seconds):
+        with self.lock:
+            if self.inflight is not None and not self.inflight.done():
+                return {"busy": True}
+            self.inflight = self.pool.submit(self.models.decision, pair, payload)
+            future = self.inflight
         try:
             return future.result(timeout=deadline_seconds)
         except concurrent.futures.TimeoutError:
             return {"timed_out": True}
-        finally:
-            executor.shutdown(wait=False)
+        except Exception as error:
+            return {"error": str(error)[:200]}
+
+    def close(self):
+        self.models.close_connection()
+        self.pool.shutdown(wait=True, cancel_futures=True)
 
 
 class Coordinator:
@@ -516,6 +523,7 @@ class Coordinator:
         self.store = store if store is not None else ConversationStore(home)
         self.manager = manager
         self.models = LocalModels(manager)
+        self.router = _RoutingWorker(manager)
         self.gpu = threading.Lock()
         self.speech = SpeechYieldScheduler(self.gpu)
         self.lock = threading.RLock()
@@ -579,8 +587,9 @@ class Coordinator:
         payload whose `mode` is one of `chat`, `compare`, or `decide` so
         the GPU-bound worker only sees the worker modes it knows.
 
-        The route cannot be `structured_decision` when the user did not
-        supply explicit alternatives: never invent options.
+        A `structured_decision` route compares only the options the user
+        wrote (from the explicit payload or the structure extractor); it
+        needs criteria too, otherwise the turn becomes `clarify`.
         """
         try:
             pair = self.manager.start()
@@ -596,28 +605,29 @@ class Coordinator:
             new_payload["mode"] = "chat"
             new_payload["routing"] = routing
             return new_payload
-        cancel = threading.Event()
-        routing = self._auto_route(pair, payload["text"], cancel)
-        chosen = routing.get("route") or "conversation"
-        if chosen == "structured_decision":
-            options = payload.get("options")
-            if not isinstance(options, list) or not 2 <= len(options) <= 8:
-                chosen = "clarify"
+        routing = self._auto_route(pair, payload["text"])
         new_payload = dict(payload)
         new_payload["routing"] = routing
-        if chosen == "structured_decision":
-            new_payload["mode"] = "compare"
-        else:
-            new_payload["mode"] = "chat"
-        try:
-            existing = self.store.get(cid)
-        except Exception:
-            existing = None
-        if existing is not None:
+        new_payload["mode"] = "chat"
+        if routing.get("route") == "structured_decision":
+            options = payload.get("options")
+            criteria = payload.get("criteria")
+            if not (isinstance(options, list) and 2 <= len(options) <= 8):
+                labels = routing.get("options") or []
+                options = [{"id": "option-%d" % (i + 1), "label": label}
+                           for i, label in enumerate(labels)]
+                criteria = routing.get("criteria")
+            if not (2 <= len(options) <= 8 and isinstance(criteria, str) and criteria.strip()):
+                routing["route"] = "clarify"
+                routing["reason"] = "missing_options_or_criteria"
+                return new_payload
             try:
-                self.store.emit(cid, "pending", "routing", routing)
-            except Exception:
-                pass
+                decision_request(pair["model_paths"]["decision"], payload["text"], options, criteria)
+            except DecisionInputError:
+                routing["route"] = None
+                routing["reason"] = "material_does_not_fit"
+                return new_payload
+            new_payload.update(mode="compare", options=options, criteria=criteria)
         return new_payload
 
     def _run(self, cid, turn, payload, maximum, job):
@@ -627,7 +637,7 @@ class Coordinator:
         speech_secret = None
         speech_capable = False
         try:
-            from .components import SCHEMA_PROMPT, SCHEMA_PROMPT_COMPACT, validate_components
+            from .components import SCHEMA_PROMPT, validate_components
             pair = self.manager.start()
             if cancel.is_set():
                 return
@@ -646,24 +656,11 @@ class Coordinator:
             if "routing" in payload:
                 self.store.emit(cid, turn, "routing", payload["routing"])
             user_text = payload.get("text") or ""
-            chat_model_id = pair.get("chat_model") or ""
-            # Schema policy: the model fence is unreliable on every current
-            # pair (27B ~5/8, 2B 0/8 in the v0.7.6 qualification).  When the
-            # catalog entry declares ``extension.card_format == "fenced-json"``
-            # we trust the model to emit JSON and send the full schema;
-            # otherwise we send the compact schema and rely on
-            # card_promotion to derive a card from the reply's markdown.
-            # Any message that names a kind the markdown parser cannot
-            # promote (charts/forms/decisions/sources) still gets the
-            # full schema so the model can emit the JSON itself.
-            from .card_promotion import user_requested_full_schema
-            card_format = _model_card_format(chat_model_id)
             full_schema = (mode in ("compare", "decide")
                            or bool(FULL_CARD_CUES.search(user_text))
-                           or user_requested_full_schema(user_text)
-                           or card_format == "fenced-json")
+                           or _model_emits_fenced_cards(pair.get("chat_model") or ""))
             messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
-                         + (SCHEMA_PROMPT if full_schema else SCHEMA_PROMPT_COMPACT)}]
+                         + (SCHEMA_PROMPT if full_schema else "")}]
             messages.extend(self._selected_history(record, turn))
             if mode in ("compare", "decide"):
                 path = pair["model_paths"]["decision"]
@@ -992,36 +989,21 @@ class Coordinator:
         except (ValueError, TypeError):
             return None
 
-    def _auto_route(self, pair, text, cancel):
+    def _auto_route(self, pair, text):
         """One automatic routing call with a 250 ms warm deadline.
 
-        Always emits a routing decision event the UI can show, even when
-        the router skips routing: a skip is a real answer (return to the
-        chat model), not a hidden failure.
-
-        A timed-out call stays accounted for in the runner's pending
-        list until the worker truly finishes or stops; we never launch
-        a replacement. Ordinary chat latency is unaffected because the
-        deadline is warm: cold Laya loads already exceed 250 ms and
-        therefore bypass routing immediately.
+        Returns the routing event the UI shows, including skips: a skip
+        is a real answer (use the chat model), not a hidden failure.
+        Deadline misses and in-flight accounting live in `_RoutingWorker`.
         """
-        payload = {
-            "state": text,
-            "questions": {
-                "route": {
-                    "type": "choice",
-                    "instructions": ROUTING_POLICY.question_text,
-                    "criteria": {"conversation": None, "structured_decision": None, "clarify": None},
-                }
-            },
-        }
         outcome = evaluate_route(
             text,
-            worker=_RoutingWorker(self.models, pair, cancel),
+            worker=self.router.bind(pair),
+            model_path=pair["model_paths"]["decision"],
             policy=ROUTING_POLICY,
             deadline_seconds=0.250,
         )
-        event = {
+        return {
             "policy_version": ROUTING_POLICY.version,
             "route": outcome.route,
             "reason": outcome.reason,
@@ -1030,10 +1012,11 @@ class Coordinator:
             "act_probability": outcome.act_probability,
             "latency_ms": outcome.latency_ms,
             "timed_out": outcome.timed_out,
+            "options": list(outcome.options),
+            "criteria": outcome.criteria,
             "use_chat_model_available": True,
             "model": "laya-mlx",
         }
-        return event
 
     def _validated(self, envelope, component_count, turn):
         """Validate one assistant-ui envelope; returns components or None.
@@ -1166,4 +1149,5 @@ class Coordinator:
             raise RuntimeError("Turn threads survived shutdown: "
                                + ", ".join(survivors))
         self.models.close_connection()
+        self.router.close()
         self.watch.join(timeout=3)

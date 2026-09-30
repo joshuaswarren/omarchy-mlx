@@ -375,121 +375,141 @@
       "index": 1,
       "gold": 72,
       "pass": true,
-      "excerpt": " number for April: 48.\n    *   Next, calculate May's amount based on the \"half as many\" rule. Half of 48 is 24.\n    *   Finally, add them up to get the \"altogether\" amount. 48 + 24 = 72.\n    *   Wait,"
+      "excerpt": " number for April: 48.\n    *   Next, calculate May's amount based on the \"half as many\" rule. Half of 48 is 24.\n    *   Finally, add them up to get the \"altogether\" amount. 48 + 24 = 72.\n    *   Wait,",
+      "pass_thinking_stripped": true
     },
     {
       "index": 2,
       "gold": 10,
       "pass": false,
-      "excerpt": "ng the per-minute method: $0.20 \\times 50$.\n            *   $2 \\times 5 = 10$.\n\n    *   *Result:* $10.\n\n5.  **Draft the Explanation (Tutor Persona):**\n    *   Start by acknowledging the units involved"
+      "excerpt": "ng the per-minute method: $0.20 \\times 50$.\n            *   $2 \\times 5 = 10$.\n\n    *   *Result:* $10.\n\n5.  **Draft the Explanation (Tutor Persona):**\n    *   Start by acknowledging the units involved",
+      "pass_thinking_stripped": false
     },
     {
       "index": 3,
       "gold": 5,
       "pass": true,
-      "excerpt": "late the remaining amount needed.*\n        *   Needed = (Total Cost) - (Total Money Betty Has).\n        *   Needed = $100 - $95.\n\n    *   *Step 6: Perform the subtraction.*\n        *   $100 - $95 = $5"
+      "excerpt": "late the remaining amount needed.*\n        *   Needed = (Total Cost) - (Total Money Betty Has).\n        *   Needed = $100 - $95.\n\n    *   *Step 6: Perform the subtraction.*\n        *   $100 - $95 = $5",
+      "pass_thinking_stripped": true
     },
     {
       "index": 4,
       "gold": 42,
       "pass": false,
-      "excerpt": "alculate pages to read tomorrow.*\n        *   $P_{tom} = \\frac{1}{2} \\times 84$.\n        *   Calculation: $84 / 2 = 42$.\n\n    *   *Step 5: Verify the logic.*\n        *   Total pages = 120.\n        *  "
+      "excerpt": "alculate pages to read tomorrow.*\n        *   $P_{tom} = \\frac{1}{2} \\times 84$.\n        *   Calculation: $84 / 2 = 42$.\n\n    *   *Step 5: Verify the logic.*\n        *   Total pages = 120.\n        *  ",
+      "pass_thinking_stripped": false
     },
     {
       "index": 5,
       "gold": 624,
       "pass": false,
-      "excerpt": "er a letter to Friend 2.\n            *   Usually, \"writes a 3-page letter to 2 different friends\" implies the total volume of writing per week involves both friends.\n            *   Let's check the ph"
+      "excerpt": "er a letter to Friend 2.\n            *   Usually, \"writes a 3-page letter to 2 different friends\" implies the total volume of writing per week involves both friends.\n            *   Let's check the ph",
+      "pass_thinking_stripped": false
     },
     {
       "index": 6,
       "gold": 13,
       "pass": false,
-      "excerpt": "lants Mark put in the ground initially.\n    *   He has 3 rows, and each row holds 6 plants. So, $3 \\times 6 = 18$.\n    *   Next, we know that not all of them grew. Specifically, 5 didn't sprout.\n    *"
+      "excerpt": "lants Mark put in the ground initially.\n    *   He has 3 rows, and each row holds 6 plants. So, $3 \\times 6 = 18$.\n    *   Next, we know that not all of them grew. Specifically, 5 didn't sprout.\n    *",
+      "pass_thinking_stripped": false
     },
     {
       "index": 7,
       "gold": 40,
       "pass": true,
-      "excerpt": "inal line matches the required format exactly.\n\n5.  **Review and Refine:**\n    *   Check arithmetic: $2 \\times 12 = 24$. $2 \\times 8 = 16$. $24 + 16 = 40$. Correct.\n    *   Check tone: Helpful, clear,"
+      "excerpt": "inal line matches the required format exactly.\n\n5.  **Review and Refine:**\n    *   Check arithmetic: $2 \\times 12 = 24$. $2 \\times 8 = 16$. $24 + 16 = 40$. Correct.\n    *   Check tone: Helpful, clear,",
+      "pass_thinking_stripped": true
     },
     {
       "index": 8,
       "gold": 18,
       "pass": false,
-      "excerpt": " $W_3 = W_2 + 2$\n        *   Calculation: $W_3 = 3 + 2$\n        *   Result: $W_3 = 5$.\n\n    *   **Step 4:**\n        *   Action: Add gummy worms to double the weight.\n        *   Calculation: $W_4 = W_"
+      "excerpt": " $W_3 = W_2 + 2$\n        *   Calculation: $W_3 = 3 + 2$\n        *   Result: $W_3 = 5$.\n\n    *   **Step 4:**\n        *   Action: Add gummy worms to double the weight.\n        *   Calculation: $W_4 = W_",
+      "pass_thinking_stripped": false
     },
     {
       "index": 9,
       "gold": 41,
       "pass": false,
-      "excerpt": "    *   Remaining = $16.\n        *   Total Spent (Shoes + Others) = $200 - $16 = $184.\n        *   Sum of Known Expenses:\n            *   30 + 46 = 76\n            *   76 + 38 = 114\n            *   114"
+      "excerpt": "    *   Remaining = $16.\n        *   Total Spent (Shoes + Others) = $200 - $16 = $184.\n        *   Sum of Known Expenses:\n            *   30 + 46 = 76\n            *   76 + 38 = 114\n            *   114",
+      "pass_thinking_stripped": false
     },
     {
       "index": 10,
       "gold": 1080,
       "pass": false,
-      "excerpt": " *   Regular hours cap = 8.\n        *   Overtime hours = Total - Cap = $10 - 8 = 2$ hours.\n        *   Regular pay applies to the first 8 hours.\n        *   Overtime pay applies to the next 2 hours.\n\n"
+      "excerpt": " *   Regular hours cap = 8.\n        *   Overtime hours = Total - Cap = $10 - 8 = 2$ hours.\n        *   Regular pay applies to the first 8 hours.\n        *   Overtime pay applies to the next 2 hours.\n\n",
+      "pass_thinking_stripped": false
     },
     {
       "index": 11,
       "gold": 280,
       "pass": false,
-      "excerpt": "ages in 4 weeks).\n    *   Is it step-by-step? Yes.\n    *   Is the tone appropriate? Yes, helpful and clear.\n    *   Check for constraints: \"end your reply with the final answer as a single line\".\n\n8. "
+      "excerpt": "ages in 4 weeks).\n    *   Is it step-by-step? Yes.\n    *   Is the tone appropriate? Yes, helpful and clear.\n    *   Check for constraints: \"end your reply with the final answer as a single line\".\n\n8. ",
+      "pass_thinking_stripped": false
     },
     {
       "index": 12,
       "gold": 140,
       "pass": false,
-      "excerpt": " Define terms (deposit = add, withdraw = subtract).\n    *   Show the arithmetic clearly.\n\n6.  **Formatting the Output:**\n    *   Write out the steps.\n    *   Ensure the final line matches the specific"
+      "excerpt": " Define terms (deposit = add, withdraw = subtract).\n    *   Show the arithmetic clearly.\n\n6.  **Formatting the Output:**\n    *   Write out the steps.\n    *   Ensure the final line matches the specific",
+      "pass_thinking_stripped": false
     },
     {
       "index": 13,
       "gold": 3,
       "pass": false,
-      "excerpt": " final line matches the required format exactly.\n\n    *Step 1:* Determine the amount of blue fiber.\n    Blue fiber = 2 bolts.\n\n    *Step 2:* Determine the amount of white fiber.\n    White fiber = Half"
+      "excerpt": " final line matches the required format exactly.\n\n    *Step 1:* Determine the amount of blue fiber.\n    Blue fiber = 2 bolts.\n\n    *Step 2:* Determine the amount of white fiber.\n    White fiber = Half",
+      "pass_thinking_stripped": false
     },
     {
       "index": 14,
       "gold": 70000,
       "pass": false,
-      "excerpt": "on: \"Increased by X%\" means $\\text{New Value} = \\text{Original Value} + (\\text{Percentage} \\times \\text{Original Value})$.\n        *   Original Value = \\$80,000.\n        *   Increase Amount = $150\\% \\"
+      "excerpt": "on: \"Increased by X%\" means $\\text{New Value} = \\text{Original Value} + (\\text{Percentage} \\times \\text{Original Value})$.\n        *   Original Value = \\$80,000.\n        *   Increase Amount = $150\\% \\",
+      "pass_thinking_stripped": false
     },
     {
       "index": 15,
       "gold": 540,
       "pass": false,
-      "excerpt": "ints/week} \\times 60 \\text{ meters/sprint}$.\n        *   Calculation: $9 \\times 60 = 540$ meters.\n\n    *   Both methods yield the same result (540). The logic is sound.\n\n4.  **Drafting the Response:**"
+      "excerpt": "ints/week} \\times 60 \\text{ meters/sprint}$.\n        *   Calculation: $9 \\times 60 = 540$ meters.\n\n    *   Both methods yield the same result (540). The logic is sound.\n\n4.  **Drafting the Response:**",
+      "pass_thinking_stripped": false
     },
     {
       "index": 16,
       "gold": 20,
       "pass": false,
-      "excerpt": "\n        *   Total daily feed per chicken = 3 cups.\n        *   Morning feed per chicken: $15 \\text{ cups} / 20 \\text{ chickens} = 0.75$ cups per chicken.\n        *   Afternoon feed per chicken: $25 \\"
+      "excerpt": "\n        *   Total daily feed per chicken = 3 cups.\n        *   Morning feed per chicken: $15 \\text{ cups} / 20 \\text{ chickens} = 0.75$ cups per chicken.\n        *   Afternoon feed per chicken: $25 \\",
+      "pass_thinking_stripped": false
     },
     {
       "index": 17,
       "gold": 64,
       "pass": false,
-      "excerpt": "       Cost per pair = $5 + $3 = $8$.\n\n    *   *Step 5: Calculate the total cost.*\n        Total Cost = (Number of pairs) $\\times$ (Cost per pair).\n        Total Cost = $8 \\times \\$8$.\n\n    *   *Step "
+      "excerpt": "       Cost per pair = $5 + $3 = $8$.\n\n    *   *Step 5: Calculate the total cost.*\n        Total Cost = (Number of pairs) $\\times$ (Cost per pair).\n        Total Cost = $8 \\times \\$8$.\n\n    *   *Step ",
+      "pass_thinking_stripped": false
     },
     {
       "index": 18,
       "gold": 260,
       "pass": false,
-      "excerpt": "has 160 sheep.\n\n    *   *Step 3: Find the total number of sheep.*\n        *   We need $T + C + S$.\n        *   Values: $160$ (Toulouse) + $80$ (Charleston) + $20$ (Seattle).\n        *   Calculation: $"
+      "excerpt": "has 160 sheep.\n\n    *   *Step 3: Find the total number of sheep.*\n        *   We need $T + C + S$.\n        *   Values: $160$ (Toulouse) + $80$ (Charleston) + $20$ (Seattle).\n        *   Calculation: $",
+      "pass_thinking_stripped": false
     },
     {
       "index": 19,
       "gold": 8500,
       "pass": false,
-      "excerpt": "000 * 20 = $20,000.\n\n    *   **Step 3: Calculate the royalty payment (20% of revenue).**\n        *   Total Revenue = $20,000.\n        *   Percentage = 20% (or 0.20).\n        *   Royalty amount = $20,0"
+      "excerpt": "000 * 20 = $20,000.\n\n    *   **Step 3: Calculate the royalty payment (20% of revenue).**\n        *   Total Revenue = $20,000.\n        *   Percentage = 20% (or 0.20).\n        *   Royalty amount = $20,0",
+      "pass_thinking_stripped": false
     },
     {
       "index": 20,
       "gold": 280,
       "pass": false,
-      "excerpt": "dging the problem.\n    *   Break it down into manageable chunks (segments).\n    *   Show the multiplication clearly.\n    *   Sum them up.\n    *   Check units (miles).\n\n6.  **Refine the Response:**\n   "
+      "excerpt": "dging the problem.\n    *   Break it down into manageable chunks (segments).\n    *   Show the multiplication clearly.\n    *   Sum them up.\n    *   Check units (miles).\n\n6.  **Refine the Response:**\n   ",
+      "pass_thinking_stripped": false
     }
   ],
   "ife_pass": 0,
@@ -499,116 +519,137 @@
       "index": 1,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with exactly one word: \"OK\".\n2.  **Check Constraints:** The instruction says \"Reply O"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with exactly one word: \"OK\".\n2.  **Check Constraints:** The instruction says \"Reply O",
+      "pass_thinking_stripped": false
     },
     {
       "index": 2,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the number \"42\" and nothing else.\n2.  **Check Constraints:** The system instruct"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the number \"42\" and nothing else.\n2.  **Check Constraints:** The system instruct",
+      "pass_thinking_stripped": false
     },
     {
       "index": 3,
       "pass": false,
       "check": "lines",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: List exactly three colors.\n    *   Format: One per line.\n    *   Constraint: No punctuation.\n\n2.  "
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: List exactly three colors.\n    *   Format: One per line.\n    *   Constraint: No punctuation.\n\n2.  ",
+      "pass_thinking_stripped": false
     },
     {
       "index": 4,
       "pass": false,
       "check": "json_keys",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Target format: JSON object.\n    *   Required keys: `name` (value: \"Alice\"), `age` (value: 30).\n    *   C"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Target format: JSON object.\n    *   Required keys: `name` (value: \"Alice\"), `age` (value: 30).\n    *   C",
+      "pass_thinking_stripped": false
     },
     {
       "index": 5,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the word \"YES\" in all uppercase letters.\n2.  **Check Constraints:** The system i"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the word \"YES\" in all uppercase letters.\n2.  **Check Constraints:** The system i",
+      "pass_thinking_stripped": false
     },
     {
       "index": 6,
       "pass": false,
       "check": "sentence_count",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Constraint 1: Write exactly two sentences.\n    *   Constraint 2: Each sentence must end with a period.\n "
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Constraint 1: Write exactly two sentences.\n    *   Constraint 2: Each sentence must end with a period.\n ",
+      "pass_thinking_stripped": false
     },
     {
       "index": 7,
       "pass": false,
       "check": "line_equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with *just* a single line containing the word \"DONE\". No commentary, no extra text.\n\n"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with *just* a single line containing the word \"DONE\". No commentary, no extra text.\n\n",
+      "pass_thinking_stripped": false
     },
     {
       "index": 8,
       "pass": false,
       "check": "comma_count",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: List exactly five fruits.\n    *   Format: Separated by commas.\n    *   Constraint: Reply ONLY with"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: List exactly five fruits.\n    *   Format: Separated by commas.\n    *   Constraint: Reply ONLY with",
+      "pass_thinking_stripped": false
     },
     {
       "index": 9,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the word \"PING\" exactly three times, separated by single spaces.\n2.  **Constrain"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the word \"PING\" exactly three times, separated by single spaces.\n2.  **Constrain",
+      "pass_thinking_stripped": false
     },
     {
       "index": 10,
       "pass": false,
       "check": "json_keys",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: \"Answer in JSON with one key answer whose value is 7\"\n    *   Constraint: Reply ONLY with what th"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: \"Answer in JSON with one key answer whose value is 7\"\n    *   Constraint: Reply ONLY with what th",
+      "pass_thinking_stripped": false
     },
     {
       "index": 11,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to output *only* the number 100.\n2.  **Check Constraints:** The system instruction says \"Reply"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to output *only* the number 100.\n2.  **Check Constraints:** The system instruction says \"Reply",
+      "pass_thinking_stripped": false
     },
     {
       "index": 12,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Target output: Three lowercase letters 'a', 'b', 'c'.\n    *   Format: On one line.\n    *   Separator: Co"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Target output: Three lowercase letters 'a', 'b', 'c'.\n    *   Format: On one line.\n    *   Separator: Co",
+      "pass_thinking_stripped": false
     },
     {
       "index": 13,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the word \"END\".\n2.  **Check Constraints:** The system instruction says \"Reply ON"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the word \"END\".\n2.  **Check Constraints:** The system instruction says \"Reply ON",
+      "pass_thinking_stripped": false
     },
     {
       "index": 14,
       "pass": false,
       "check": "bullet_count",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Output a bullet list with exactly two items.\n    *   Format: Each item must start with a hyphen (`"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Output a bullet list with exactly two items.\n    *   Format: Each item must start with a hyphen (`",
+      "pass_thinking_stripped": true
     },
     {
       "index": 15,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with a single character, specifically 'X'.\n2.  **Check Constraints:** The system inst"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with a single character, specifically 'X'.\n2.  **Check Constraints:** The system inst",
+      "pass_thinking_stripped": false
     },
     {
       "index": 16,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to write the word \"HELLO\" in reverse order.\n2.  **Constraint:** Reply ONLY with what the instr"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to write the word \"HELLO\" in reverse order.\n2.  **Constraint:** Reply ONLY with what the instr",
+      "pass_thinking_stripped": false
     },
     {
       "index": 17,
       "pass": false,
       "check": "lines",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: List exactly four numbers in ascending order.\n    *   Format: One per line.\n    *   Specific Numbe"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: List exactly four numbers in ascending order.\n    *   Format: One per line.\n    *   Specific Numbe",
+      "pass_thinking_stripped": false
     },
     {
       "index": 18,
       "pass": false,
       "check": "equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the lowercase word \"yes\".\n2.  **Check Constraints:** The system instruction says"
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to reply with the lowercase word \"yes\".\n2.  **Check Constraints:** The system instruction says",
+      "pass_thinking_stripped": false
     },
     {
       "index": 19,
       "pass": false,
       "check": "line_equals",
-      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to output *only* a single line containing the word \"STOP\". No commentary, no extra text, just "
+      "excerpt": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to output *only* a single line containing the word \"STOP\". No commentary, no extra text, just ",
+      "pass_thinking_stripped": false
     }
   ],
-  "provenance": "prov: mlx=0.32.3.dev202609282218+29cba8e mlx_lm=0.31.3 wheel=0.32.3.dev202609282218+29cba8e commit=f505bfa27360 python=3.14.7"
+  "provenance": "prov: mlx=0.32.3.dev202609282218+29cba8e mlx_lm=0.31.3 wheel=0.32.3.dev202609282218+29cba8e commit=f505bfa27360 python=3.14.7",
+  "gsm_pass_thinking_stripped": 3,
+  "ife_pass_thinking_stripped": 1
 }

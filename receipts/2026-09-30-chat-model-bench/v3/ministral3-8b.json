@@ -1,0 +1,326 @@
+{
+ "model_id": "mlx-community/Ministral-3-8B-Instruct-2512-4bit",
+ "revision": "182f003f01daa75f9de0f2c4d379722fd0bc1c61",
+ "label": "ministral3-8b",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "1.75 0.88 0.43 1/323 2080",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 90665,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:46:36Z",
+   "load_s": 2.578984930000047,
+   "peak_mem_gb_after_load": 4.777037824
+  },
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "0.37 0.45 0.37 1/316 2198",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 90569,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:54:37Z",
+   "load_s": 1.727139176000037,
+   "peak_mem_gb_after_load": 4.777037824
+  },
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "0.26 0.26 0.30 1/342 2383",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 90477,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T05:02:37Z",
+   "load_s": 2.496608439000056,
+   "peak_mem_gb_after_load": 4.777037824
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 0.8358049219999657,
+   "max": 0.8465989469999613,
+   "min": 0.8336048410000103,
+   "n": 5
+  },
+  "ttft_prompt_tokens": 239,
+  "prefill_512_s": {
+   "median": 1.5870635950000178,
+   "max": 1.611047474999964,
+   "min": 1.467260642000042,
+   "n": 5
+  },
+  "prefill_512_tok_s": 322.6083703343937,
+  "prefill_2048_s": {
+   "median": 5.730101834000038,
+   "max": 5.9581251040000325,
+   "min": 5.721251407999944,
+   "n": 5
+  },
+  "prefill_2048_tok_s": 357.41075103552623,
+  "decode_after_512_tok_s": {
+   "median": 9.285097928746046,
+   "max": 9.426311062183348,
+   "min": 8.130062421226949,
+   "n": 5
+  },
+  "decode_after_2048_tok_s": {
+   "median": 8.632464923881441,
+   "max": 8.765185006828226,
+   "min": 6.986846890810269,
+   "n": 5
+  },
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 6.175776768,
+  "rss_mib_after_perf": 386,
+  "mem_available_mib_before_load": 90665,
+  "mem_available_min_mib": 85051,
+  "mem_available_delta_mib": 5614,
+  "gpu_shared_during_turn": false
+ },
+ "cards": {
+  "1": {
+   "expect": "card",
+   "category": "checklist",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": true,
+   "outcome": "leaked-fence",
+   "tokens": 700,
+   "truncated": true,
+   "seconds": 88.97834475400009,
+   "text": "Based on the **checklist** you provided, here\u2019s a general packing checklist for a weekend camping trip. Since your specific checklist isn\u2019t detailed enough to use directly, I\u2019ll provide a comprehensive one instead:\n\n---\n### **Weekend Camping Packing Checklist**\n**Shelter & Sleep:**\n- Tent (and stakes/guylines)\n- Sleeping bag (check temperature rating for the season)\n- Sleeping pad or air mattress\n- Pillows (or stuff sack with clothes)\n\n**Clothing:**\n- Moisture-wicking base layers\n- Insulating mid-layer (fleece or down jacket)\n- Waterproof/windproof outer layer\n- Hiking pants/shorts (quick-dry material)\n- T-shirts or tank tops\n- Underwear and socks (extra pair(s))\n- Hat/cap and beanie\n- Rain jacket or poncho\n\n**Footwear:**\n- Hiking boots/shoes (broken-in)\n- Sandals or camp shoes\n- Wool or moisture-wicking socks\n\n**Food & Water:**\n- Meal plan (breakfast, lunch, dinner, snacks)\n- Cooking supplies (camp stove, fuel, lighter/matches)\n- Pots, pans, and utensils\n- Plates/bowls and cups (or reusable ones)\n- Biodegradable soap and sponge\n- Cooler with ice packs (if needed)\n- Water bottles or hydration bladder (2\u20133L per person)\n- Water filter/purification tablets\n\n**Cooking & Eating:**\n- Easy-to-prepare meals (dehydrated food, canned goods, etc.)\n- Spices and condiments\n- Paper towels or wet wipes\n\n**Safety & Tools:**\n- First-aid kit (bandages, antiseptic, pain relievers)\n- Multi-tool or pocket knife\n- Headlamp or flashlight (+ extra batteries)\n- Whistle (for emergencies)\n- Map and compass (or GPS device)\n\n**Hygiene:**\n- Biodegradable soap\n- Toothbrush and toothpaste\n- Hand sanitizer\n- Towel (quick-dry)\n- Toilet paper and trowel (for digging cat holes if no restrooms)\n\n**Miscellaneous:**\n- Cash or card (for campground fees)\n- Notebook and pen\n- Camera or phone (with extra battery)\n- Bug spray and sunscreen\n- Lighter/matches (waterproof if possible)\n\n---\n```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"checklist\",\n      \"items\": [\n        {\"id\": \"shelter_sleep\", \"text\": \"Shelter & Sleep\", \"done\": false},\n        {\"id\": \"clothing\", \"text\": \"Clothing (layers, rain gear)\", \"done\": false},\n        {\"id\": \"footwear\", \"text\": \"Footwear (boots, sandals)\", \"done\": false},\n        {\"id\": \"food_water\", \"text\": \"Food & Water (cooler, filter)\", \"done\": false},\n        {\"id\": \"safety_tools\", \"text\": \"Safety & Tools (first-aid, flashlight)\", \"done\": false},\n        {\"id\": \"hygiene\", \"text\": \"Hygiene (soap, sunscreen)\", \"done\": false"
+  },
+  "2": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "timeline"
+   ],
+   "promotable": "timeline",
+   "tokens": 210,
+   "truncated": false,
+   "seconds": 22.99873311800002,
+   "text": "Here\u2019s your Monday plan based on the provided facts:\n\n- **Standup** at 9:00 AM\n- **Code review** at 11:00 AM\n- **Lunch** at noon (12:00 PM)\n- **Planning session** at 2:00 PM\n\n```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"timeline\",\n      \"entries\": [\n        {\"id\": \"e1\", \"when\": \"9:00 AM\", \"text\": \"Standup\"},\n        {\"id\": \"e2\", \"when\": \"11:00 AM\", \"text\": \"Code review\"},\n        {\"id\": \"e3\", \"when\": \"12:00 PM\", \"text\": \"Lunch\"},\n        {\"id\": \"e4\", \"when\": \"2:00 PM\", \"text\": \"Planning\"}\n      ]\n    }\n  ]\n}\n```"
+  },
+  "3": {
+   "expect": "card",
+   "category": "comparison",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": true,
+   "outcome": "invalid-json",
+   "error": "comparison.: unknown key(s): label",
+   "promotable": "checklist",
+   "tokens": 465,
+   "truncated": false,
+   "seconds": 58.45918782699994,
+   "text": "Here\u2019s a comparison of cats and dogs as pets based on **cost**, **space**, and **noise** using the facts you\u2019ve provided:\n\n### **Cost**\n- Cats are generally lower maintenance than dogs. They don\u2019t require walks, training classes, or as much food.\n- Dogs often need more expensive supplies (leashes, toys, grooming) and may incur higher vet costs due to potential health issues or accidents.\n\n### **Space**\n- Cats are more adaptable to small spaces (apartments, studios) since they don\u2019t need as much room to move around.\n- Dogs typically require more space\u2014larger breeds need room to run, while even smaller dogs may need regular walks.\n\n### **Noise**\n- Cats are quieter overall; they meow occasionally but don\u2019t bark or howl.\n- Dogs can be noisy, especially breeds known for barking (e.g., terriers, hounds). Some dogs may also howl or whine.\n\n---\n```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"comparison\",\n      \"label\": \"Cats vs. Dogs as Pets\",\n      \"columns\": [\n        {\n          \"id\": \"cost\",\n          \"label\": \"Cost (Monthly/Yearly)\",\n          \"kind\": \"text\"\n        },\n        {\n          \"id\": \"space\",\n          \"label\": \"Space Requirements\",\n          \"kind\": \"text\"\n        },\n        {\n          \"id\": \"noise\",\n          \"label\": \"Noise Level\",\n          \"kind\": \"text\"\n        }\n      ],\n      \"rows\": [\n        {\n          \"id\": \"cat\",\n          \"label\": \"Cats\",\n          \"values\": [\n            \"Lower (food, vet visits, minimal supplies)\",\n            \"Adaptable to small spaces\",\n            \"Quiet (occasional meowing)\"\n          ]\n        },\n        {\n          \"id\": \"dog\",\n          \"label\": \"Dogs\",\n          \"values\": [\n            \"Higher (food, grooming, vet care, training)\",\n            \"Needs more room to move/exercise\",\n            \"Can be noisy (barking, howling)\"\n          ]\n        }\n      ]\n    }\n  ]\n}\n```"
+  },
+  "4": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": true,
+   "outcome": "invalid-json",
+   "error": "timeline.entries: must contain 1-50 items",
+   "tokens": 313,
+   "truncated": false,
+   "seconds": 36.42415329200003,
+   "text": "Here\u2019s a timeline of key **Apollo program milestones** based on the facts you\u2019ve provided (though I don\u2019t see explicit Apollo data in your shared objects\u2014here\u2019s a general overview of the program\u2019s major phases):\n\n---\n**Apollo Program Timeline (Key Milestones)**\n- **1961**: President Kennedy announces the goal of landing a man on the Moon by the end of the decade.\n- **1963**: Apollo 1 crew (Gus Grissom, Ed White, Roger B. Chaffee) dies in a cabin fire during a launch pad test.\n- **1968**: Apollo 8 becomes the first crewed mission to orbit the Moon (Dec. 21\u201327).\n- **1969**: Apollo 11 lands on the Moon (July 20), with Neil Armstrong and Buzz Aldrin becoming the first humans to walk on its surface.\n- **1972**: Apollo 17 (Dec. 7\u201319) is the last crewed Moon mission, with Gene Cernan and Harrison Schmitt as the final lunar explorers.\n\n---\nIf you\u2019d like a more detailed or specific timeline (e.g., focusing on uncrewed tests, Skylab overlaps, or Soviet competition), let me know! For now, here\u2019s a placeholder for your shared objects (no Apollo data found):\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"timeline\", \"entries\": []}]}\n```"
+  },
+  "5": {
+   "expect": "card",
+   "category": "chart",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "chart"
+   ],
+   "tokens": 134,
+   "truncated": false,
+   "seconds": 17.58544916799997,
+   "text": "```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"chart\",\n      \"kind\": \"bar\",\n      \"series\": [\n        {\n          \"id\": \"sales-series\",\n          \"label\": \"Monthly Sales\",\n          \"unit\": \"\",\n          \"source\": \"user input\",\n          \"estimate\": false,\n          \"values\": [\n            {\"label\": \"Jan\", \"value\": 10},\n            {\"label\": \"Feb\", \"value\": 14},\n            {\"label\": \"Mar\", \"value\": 9}\n          ]\n        }\n      ]\n    }\n  ]\n}\n```"
+  },
+  "6": {
+   "expect": "card",
+   "category": "facts",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "facts"
+   ],
+   "promotable": "facts",
+   "tokens": 437,
+   "truncated": false,
+   "seconds": 107.73356045399987,
+   "text": "Here are three facts about the Moon based on your provided information:\n\n1. **No Atmosphere**: The Moon has no atmosphere, which means there is no air or weather like on Earth.\n2. **Orbital Period**: The Moon orbits Earth approximately every 27 days, a period known as its sidereal orbit.\n3. **Distance from Earth**: The Moon is about 384,000 kilometers away from Earth on average.\n\n```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"facts\",\n      \"cards\": [\n        {\n          \"id\": \"moon-atmosphere\",\n          \"heading\": \"No Atmosphere on the Moon\",\n          \"text\": \"The Moon lacks an atmosphere, meaning there is no air or weather systems like on Earth. This also means no sound can travel and extreme temperature fluctuations occur.\",\n          \"sources\": [\n            {\n              \"ref\": \"user message\",\n              \"text\": \"the moon has no atmosphere\"\n            }\n          ]\n        },\n        {\n          \"id\": \"moon-orbit\",\n          \"heading\": \"Orbital Period of the Moon\",\n          \"text\": \"The Moon completes an orbit around Earth every 27 days, known as its sidereal orbital period. This is the time it takes for the Moon to return to the same position relative to distant stars.\",\n          \"sources\": [\n            {\n              \"ref\": \"user message\",\n              \"text\": \"the moon orbits Earth every 27 days\"\n            }\n          ]\n        },\n        {\n          \"id\": \"moon-distance\",\n          \"heading\": \"Distance from Earth\",\n          \"text\": \"The Moon is approximately 384,000 kilometers away from Earth on average. This distance can vary slightly due to the Moon's elliptical orbit.\",\n          \"sources\": [\n            {\n              \"ref\": \"user message\",\n              \"text\": \"the moon is about 384,000 km away\"\n            }\n          ]\n        }\n      ]\n    }\n  ]\n}\n```"
+  },
+  "7": {
+   "expect": "card",
+   "category": "decision",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "invalid-json",
+   "error": "decision.: unknown key(s): recommendation",
+   "tokens": 267,
+   "truncated": false,
+   "seconds": 368.295052447,
+   "text": "Based on the facts you've provided, here\u2019s how to decide:\n\n- **Bus**: Takes 15 minutes and is likely more comfortable in the rain.\n- **Walking**: Takes 30 minutes, but you\u2019ll avoid the bus and get some extra time.\n\nSince it\u2019s raining, the bus is probably your best option\u2014it\u2019ll save you time and keep you dry.\n\n```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"decision\",\n      \"title\": \"Bus vs. Walk Decision\",\n      \"options\": [\n        {\n          \"id\": \"bus_option\",\n          \"label\": \"Take the Bus (15 min, dry)\",\n          \"description\": \"Faster and avoids rain. Good if you value time efficiency.\"\n        },\n        {\n          \"id\": \"walk_option\",\n          \"label\": \"Walk (30 min, exposed to rain)\",\n          \"description\": \"Longer but avoids public transport. Only ideal if you have extra time or prefer walking.\"\n        }\n      ],\n      \"recommendation\": {\n        \"id\": \"bus_option\",\n        \"reason\": \"Given the rain, taking the bus is more practical due to its shorter duration and protection from weather.\"\n      }\n    }\n  ]\n}\n```"
+  },
+  "8": {
+   "expect": "card",
+   "category": "form",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "form"
+   ],
+   "tokens": 221,
+   "truncated": false,
+   "seconds": 248.272189519,
+   "text": "```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"form\",\n      \"fields\": [\n        {\n          \"id\": \"supplier-name\",\n          \"label\": \"Supplier Name\",\n          \"kind\": \"text\",\n          \"required\": true,\n          \"placeholder\": \"Enter supplier's full name\"\n        },\n        {\n          \"id\": \"contact-email\",\n          \"label\": \"Contact Email\",\n          \"kind\": \"text\",\n          \"required\": true,\n          \"placeholder\": \"Enter supplier's email address\"\n        },\n        {\n          \"id\": \"country\",\n          \"label\": \"Country\",\n          \"kind\": \"text\",\n          \"required\": true,\n          \"placeholder\": \"Enter country name\"\n        },\n        {\n          \"id\": \"payment-terms\",\n          \"label\": \"Payment Terms\",\n          \"kind\": \"text\",\n          \"required\": true,\n          \"placeholder\": \"e.g., Net 30, Due on Receipt\"\n        }\n      ]\n    }\n  ]\n}\n```"
+  },
+  "9": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 18,
+   "truncated": false,
+   "seconds": 7.509918435999907,
+   "text": "The capital of France is **Paris**. This is a well-known fact about the country."
+  },
+  "10": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 26,
+   "truncated": false,
+   "seconds": 21.17173895300016,
+   "text": "I'm just a program, so I don't have feelings, but thank you for asking! How can I assist you today?"
+  },
+  "11": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 41,
+   "truncated": false,
+   "seconds": 13.212608448999845,
+   "text": "The sky appears blue because sunlight is scattered by tiny molecules and particles in Earth's atmosphere. Shorter wavelengths of light, like blue, scatter more than other colors due to a phenomenon called Rayleigh scattering."
+  },
+  "12": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 12,
+   "truncated": false,
+   "seconds": 3.305467158000056,
+   "text": "Why do programmers prefer dark mode? Because light attracts bugs!"
+  },
+  "13": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "invalid-json",
+   "error": "unknown component type: 'text'",
+   "tokens": 87,
+   "truncated": false,
+   "seconds": 83.33044458900008,
+   "text": "A **checklist** is a list of items or tasks that you need to do, often used for organization and ensuring nothing is forgotten.\n\n```assistant-ui\n{\n  \"version\": 1,\n  \"components\": [\n    {\n      \"type\": \"text\",\n      \"content\": \"A checklist is a list of items or tasks to be completed, often used for organization and tracking progress.\"\n    }\n  ]\n}\n```"
+  },
+  "14": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 43,
+   "truncated": false,
+   "seconds": 19.341315614999985,
+   "text": "You\u2019ve got this\u2014even when choices feel narrow, there\u2019s always room to explore something unexpected or take a step in a new direction. What if this week becomes the start of something you hadn\u2019t considered before?"
+  },
+  "15": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 129,
+   "truncated": false,
+   "seconds": 13.889282273999925,
+   "text": "People like making lists because they provide a sense of control and clarity in an often overwhelming world. Lists help organize thoughts, tasks, or goals into manageable chunks, reducing mental clutter and stress. They also create a visual roadmap for progress\u2014checking off items gives a tangible sense of accomplishment, reinforcing motivation. Additionally, lists serve as external reminders, ensuring nothing is forgotten or overlooked. Whether it\u2019s a grocery list, to-do checklist, or timeline of events, the act of listing things simplifies decision-making and makes complex information feel more approachable. It\u2019s a way to break down life\u2019s chaos into structured, actionable steps."
+  },
+  "16": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 51,
+   "truncated": false,
+   "seconds": 5.358359479999763,
+   "text": "A **timeline** is better for showing history when you want to emphasize the sequence of events over time, as it visually highlights progression and timing. A **table**, however, works better if you need to compare specific details or data points alongside dates."
+  }
+ },
+ "gsm": {
+  "0": {
+   "gold": 18,
+   "pass": true,
+   "truncated": false,
+   "text": "Let's break down the problem step by step:\n\n1. **Total eggs laid per day**: 16\n\n2. **Eggs Janet uses for breakfast**: 3\n   *Remaining eggs after breakfast*: \\(16 - 3 = 13\\)\n\n3. **Eggs used for baking muffins**: 4\n   *Remaining eggs after baking*: \\(13 - 4 = 9\\)\n\n4. **Eggs sold at the farmers' market**: 9\n   *Price per egg*: $2\n\n5. **Total earnings from selling eggs**:\n   \\(9 \\times 2 = 18\\)\n\nFinal answer: 18"
+  },
+  "1": {
+   "gold": 3,
+   "pass": true,
+   "truncated": false,
+   "text": "1. The problem states that a robe requires **2 bolts of blue fiber**.\n2. It also says the amount of white fiber is **half that much** as the blue fiber.\n   - Half of 2 bolts = \\( \\frac{1}{2} \\times 2 = 1 \\) bolt of white fiber.\n3. To find the total number of bolts, add the blue and white fibers together:\n   - Total bolts = 2 (blue) + 1 (white) = **3 bolts**.\n\nFinal answer: 3"
+  }
+ }
+}
