@@ -109,55 +109,105 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
     finished_ids = {p["id"] for p in results.get("prompts") or []}
 
     os.makedirs(home, exist_ok=True)
+    # Always start with --setup so a stale boot_id in the saved pair lock
+    # does not silently turn /api/resume into an absent pair.  Setup reuses
+    # cached weights when present, so the second-and-later chunk is fast.
     if setup:
-        if os.path.exists(runtime):
-            os.unlink(runtime)
-        env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "serve"),
-                   MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
-        safe = chat_model.replace("/", "_")
-        log_path = os.path.join(_HOME, "agents", "MarkdownCards",
-                                f"server_{safe}.log")
-        setup_args = ["--pair", pair_id, "--yes"]
-        server = subprocess.Popen(
-            [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
-             "--no-browser"] + setup_args,
-            cwd=REPO, env=env,
-            stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
-            start_new_session=True)
-        deadline = time.monotonic() + 1500
+        do_setup = True
+    else:
+        # Without --setup, try --resume but if the boot_id in the saved
+        # lock differs from the current /proc/sys/kernel/random/boot_id,
+        # resume will refuse; fall back to --setup.
+        boot_id_path = "/proc/sys/kernel/random/boot_id"
+        cur_boot_id = (open(boot_id_path).read().strip()
+                       if os.path.exists(boot_id_path) else "")
+        lock_path = os.path.join(home, "assistant", "pair-locks",
+                                 f"{pair_id}.json")
+        saved_boot_id = ""
+        if os.path.exists(lock_path):
+            try:
+                saved_boot_id = json.load(open(lock_path)).get("boot_id", "")
+            except Exception:
+                saved_boot_id = ""
+        do_setup = bool(saved_boot_id) and saved_boot_id != cur_boot_id
+        if do_setup:
+            print(f"boot_id mismatch (saved={saved_boot_id[:8]} "
+                  f"current={cur_boot_id[:8]}); falling back to --setup",
+                  flush=True)
+
+    if os.path.exists(runtime):
+        os.unlink(runtime)
+    env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "serve"),
+               MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
+    safe = chat_model.replace("/", "_")
+    log_path = os.path.join(_HOME, "agents", "MarkdownCards",
+                            f"server_{safe}.log")
+    setup_args = ["--pair", pair_id, "--yes"] if do_setup else []
+    resume_args = ["--resume"] if not do_setup else []
+    server = subprocess.Popen(
+        [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
+         "--no-browser"] + setup_args + resume_args,
+        cwd=REPO, env=env,
+        stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
+        start_new_session=True)
+
+    def _kill_server():
+        # Hard-kill the whole process group the server started in, then
+        # any lingering GPU child (laya, _mlxlm_server, gpu_stt) that
+        # somehow outlived the parent.  start_new_session=True made the
+        # server its own pgid so killpg reaches every inherited fd.
+        try:
+            os.killpg(server.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            server.wait(timeout=10)
+        except Exception:
+            try:
+                os.killpg(server.pid, signal.SIGKILL)
+            except Exception:
+                pass
+        # Belt-and-braces: hunt for any direct mlx child still holding
+        # /dev/dri/renderD* under our user and SIGKILL them.
+        try:
+            import subprocess as _sp
+            _sp.run(["bash", "-lc",
+                     "fuser -k /dev/dri/renderD128 /dev/dri/renderD129 2>/dev/null"],
+                    timeout=15, check=False)
+        except Exception:
+            pass
+
+    try:
+        deadline = time.monotonic() + 180 if not do_setup else 1500
         while not os.path.exists(runtime) and time.monotonic() < deadline:
             time.sleep(0.5)
         if not os.path.exists(runtime):
             raise RuntimeError("server never wrote application.json")
-        setup_deadline = time.monotonic() + 1500
+        setup_deadline = time.monotonic() + (600 if not do_setup else 1500)
         while time.monotonic() < setup_deadline:
             state = call("GET", "/api/status", runtime=runtime).get("setup") or {}
             if state.get("state") == "complete":
                 break
             if state.get("state") == "error":
                 raise RuntimeError(f"setup error: {state}")
+            if state.get("state") == "absent":
+                # /api/resume found no usable pair; re-issue with --pair.
+                _kill_server()
+                if os.path.exists(runtime):
+                    os.unlink(runtime)
+                server = subprocess.Popen(
+                    [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
+                     "--no-browser", "--pair", pair_id, "--yes"],
+                    cwd=REPO, env=env,
+                    stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
+                    start_new_session=True)
+                deadline = time.monotonic() + 1500
+                while not os.path.exists(runtime) and time.monotonic() < deadline:
+                    time.sleep(0.5)
+                setup_deadline = time.monotonic() + 1500
             time.sleep(1)
         else:
             raise RuntimeError("setup did not complete in time")
-    else:
-        env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "serve"),
-                   MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
-        safe = chat_model.replace("/", "_")
-        log_path = os.path.join(_HOME, "agents", "MarkdownCards",
-                                f"server_{safe}.log")
-        if os.path.exists(runtime):
-            os.unlink(runtime)
-        server = subprocess.Popen(
-            [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
-             "--no-browser", "--resume"],
-            cwd=REPO, env=env,
-            stdout=open(log_path, "w"), stderr=subprocess.STDOUT,
-            start_new_session=True)
-        deadline = time.monotonic() + 180
-        while not os.path.exists(runtime) and time.monotonic() < deadline:
-            time.sleep(0.3)
-        if not os.path.exists(runtime):
-            raise RuntimeError("server never wrote application.json")
 
     try:
         valid_card_kinds = {"checklist", "comparison", "timeline", "facts"}
