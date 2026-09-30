@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -12136,7 +12137,7 @@ void RoPE::eval_gpu(
     // shaders/fast_rope_norm.comp): eps bits ride `operation`, the norm row
     // length rides `reduce_size`, and the weight item offset rides
     // `aux_offset` (freqs and the norm are mutually exclusive).
-    params.operation = floatBitsToUint(norm_eps());
+    params.operation = std::bit_cast<uint32_t>(norm_eps());
     params.reduce_size = checked_u32(D, tag, out);
     params.aux_offset =
         checked_item_offset(norm_weight, norm_weight.size(), tag, out);
