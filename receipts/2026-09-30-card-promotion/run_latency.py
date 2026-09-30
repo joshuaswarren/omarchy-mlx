@@ -23,8 +23,10 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 _HOME = os.environ.get("MARKCARDS_HOME", "<home>")
 HOME_ROOT = os.path.join(_HOME, "agents", "MarkdownCards", "homes")
 PAIR_FOR_MODEL = {
-    "qwen3.8-2b-4bit": "everyday",
+    "qwen3.5-9b-mlx-4bit": "everyday",
     "qwen3.8-27b-4bit": "quality",
+    "qwen3-4b-instruct-2507-4bit": "compact",
+    "qwen3.8-2b-4bit": "everyday",  # the pre-8a1e25843 Everyday chat model
 }
 PYTHON = os.path.join(_HOME, ".local", "share", "mlx-omarchy", "venv", "bin", "python")
 RESULTS_DIR = os.path.join(_HOME, "agents", "MarkdownCards", "results")

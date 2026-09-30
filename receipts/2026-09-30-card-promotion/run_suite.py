@@ -26,8 +26,10 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 _HOME = os.environ.get("MARKCARDS_HOME", "<home>")
 HOME_ROOT = os.path.join(_HOME, "agents", "MarkdownCards", "homes")
 PAIR_FOR_MODEL = {
-    "qwen3.8-2b-4bit": "everyday",
+    "qwen3.5-9b-mlx-4bit": "everyday",
     "qwen3.8-27b-4bit": "quality",
+    "qwen3-4b-instruct-2507-4bit": "compact",
+    "qwen3.8-2b-4bit": "everyday",  # the pre-8a1e25843 Everyday chat model
 }
 PYTHON = os.path.join(_HOME, ".local", "share", "mlx-omarchy", "venv", "bin", "python")
 RESULTS_DIR = os.path.join(_HOME, "agents", "MarkdownCards", "results")
@@ -178,7 +180,7 @@ def run_chunk(held_out_path, chat_model, start, end, max_tokens=700,
             pass
 
     atexit.register(_kill_server)
-    deadline = time.monotonic() + 180 if not do_setup else 1500
+    deadline = time.monotonic() + (1500 if do_setup else 180)
     while not os.path.exists(runtime) and time.monotonic() < deadline:
         time.sleep(0.5)
     if not os.path.exists(runtime):

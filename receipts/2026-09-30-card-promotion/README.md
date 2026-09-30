@@ -12,7 +12,7 @@ put it off-limits to every agent (reserved for another job).
 | Gate | 2B Everyday | 27B Quality |
 |---|---|---|
 | v1: >= 10/12 cards, 0 spurious on 12 | 10/12, **1 spurious: FAIL** | 7/12, **6 spurious: FAIL** |
-| v2: >= 15/18 cards, 0 spurious on 18 | partial, **3 spurious in 12 recorded: FAIL** | 36/36 recorded on the M2, counts not retrieved |
+| v2: >= 15/18 cards, 0 spurious on 18 | 14/36 recorded, **3 spurious: FAIL** | 9/18, **4 spurious: FAIL** |
 | v3: >= 15/18 cards, 0 spurious on 18 | NOT RUN (M2 off-limits) | NOT RUN (M2 off-limits) |
 | Every card passes `validate_components` | yes on v1 (the server only emits validated cards) | yes on v1 |
 | 2B first-text p95 <= 2.0 s, 30 warm turns | NOT MEASURED | n/a |
@@ -88,20 +88,82 @@ These are DEV results. They are not the gate.
   `run_latency.py` records load average, the python/mlx process list and the
   wheel provenance before and after the 30 turns.
 
-## HELD-OUT v2 (spent, partial)
+## HELD-OUT v2 (spent, failed on both pairs)
 
-`tests/fixtures/cards_held_out_v2.json`: 36 prompts, run with the v1 rules
-plus the cue-word schema prompt. The runner needed an `expect` field; it was
-added from `category` after the first chunks crashed (prompt texts,
-categories and kinds are byte-identical to the committed file, sha256
-`04d6fd79...`; as-run file sha256 `c1cf3594...`, commit `4c272ddeb`).
+`tests/fixtures/cards_held_out_v2.json`: 36 prompts (18 card-worthy, 18
+plain or near-miss), run with the v1 rules plus a cue-word compact schema on
+every chat turn. The runner needed an `expect` field; it was added from
+`category` after the first chunks crashed (prompt texts, categories and kinds
+are byte-identical to the committed file, sha256 `04d6fd79...`; as-run file
+sha256 `c1cf3594...`, commit `4c272ddeb`). Raw results:
+`artifacts/held_out_v2_qwen3.8-2b-4bit.json`,
+`artifacts/held_out_v2_qwen3.8-27b-4bit.json`.
 
-- 2B: v2-25..v2-36 recorded (the earlier chunks crashed before recording).
-  v2-25 `comparison`, v2-27 `comparison`, v2-35 `checklist` on non-card
-  prompts: 3 spurious, so the 0-spurious threshold fails regardless of the
-  missing 24. The rerun of v2-01..v2-24 was cut off by the M2 outage.
-- 27B: 36/36 recorded in the M2 results file. I did not copy it before the
-  M2 went away, so its counts are not in this receipt.
+- 2B: 14 of 36 recorded (early chunks crashed, the rerun was cut off by the
+  M2 outage). 2 of 2 recorded card-worthy prompts got a card; **3 of 12
+  recorded non-card prompts got a card** (v2-25 and v2-27 `comparison`, v2-35
+  `checklist`): FAIL.
+- 27B: 36 of 36 recorded. **9 of 18 cards** (threshold 15) and **4 of 18
+  spurious** (v2-20, v2-21, v2-28, v2-36 `checklist`): FAIL. 14 turns ended
+  `stopped` after 110-217 s. The runner sent its heartbeat from the polling
+  loop and the server cancels a turn after 20 s without one, so those misses
+  are partly a harness defect. The v3 runner sends heartbeats from a
+  separate thread and records the slowest one.
+
+```
+qwen3.8-2b-4bit
+    v2-01 card-worthy checklist                complete   36.3s ['checklist'] pass=True
+    v2-02 card-worthy checklist                complete   40.1s ['checklist'] pass=True
+    v2-25 plain       none                     complete   37.4s ['comparison'] pass=False
+    v2-26 plain       none                     complete   37.1s [] pass=True
+    v2-27 plain       none                     complete   25.1s ['comparison'] pass=False
+    v2-28 near-miss   list-in-prose            complete    4.0s [] pass=True
+    v2-29 near-miss   list-in-prose            complete    5.0s [] pass=True
+    v2-30 near-miss   list-in-prose            complete    5.0s [] pass=True
+    v2-31 near-miss   short-list               complete   13.3s [] pass=True
+    v2-32 near-miss   short-list               complete    5.0s [] pass=True
+    v2-33 near-miss   code-only                complete    3.0s [] pass=True
+    v2-34 near-miss   code-only                complete    3.0s [] pass=True
+    v2-35 near-miss   explanation-with-bullets complete   41.1s ['checklist'] pass=False
+    v2-36 near-miss   explanation-with-bullets complete   13.1s [] pass=True
+qwen3.8-27b-4bit
+    v2-01 card-worthy checklist                stopped   174.6s [] pass=False
+    v2-02 card-worthy checklist                stopped   181.6s [] pass=False
+    v2-03 card-worthy checklist                complete   60.2s ['checklist'] pass=True
+    v2-04 card-worthy comparison               stopped   217.3s [] pass=False
+    v2-05 card-worthy comparison               stopped   152.6s [] pass=False
+    v2-06 card-worthy comparison               stopped   109.4s [] pass=False
+    v2-07 card-worthy timeline                 complete  116.4s ['timeline'] pass=True
+    v2-08 card-worthy timeline                 complete   49.2s ['timeline'] pass=True
+    v2-09 card-worthy timeline                 complete   34.1s ['timeline'] pass=True
+    v2-10 card-worthy facts                    complete   65.2s ['facts'] pass=True
+    v2-11 card-worthy facts                    complete   29.1s ['checklist'] pass=True
+    v2-12 card-worthy facts                    complete   72.2s ['facts'] pass=True
+    v2-13 card-worthy mixed                    complete   21.1s [] pass=False
+    v2-14 card-worthy mixed                    stopped   156.5s [] pass=False
+    v2-15 card-worthy mixed                    complete   38.1s [] pass=False
+    v2-16 card-worthy checklist                complete   54.2s ['checklist'] pass=True
+    v2-17 card-worthy comparison               stopped   187.6s [] pass=False
+    v2-18 card-worthy timeline                 complete   58.2s ['timeline'] pass=True
+    v2-19 plain       none                     stopped   187.6s [] pass=True
+    v2-20 plain       none                     complete   94.3s ['checklist'] pass=False
+    v2-21 plain       none                     complete   91.3s ['checklist'] pass=False
+    v2-22 plain       none                     stopped   169.5s [] pass=True
+    v2-23 plain       none                     complete   40.1s [] pass=True
+    v2-24 plain       none                     complete  169.6s [] pass=True
+    v2-25 plain       none                     stopped   131.6s [] pass=True
+    v2-26 plain       none                     stopped   184.6s [] pass=True
+    v2-27 plain       none                     stopped   187.6s [] pass=True
+    v2-28 near-miss   list-in-prose            complete   47.2s ['checklist'] pass=False
+    v2-29 near-miss   list-in-prose            complete   23.1s [] pass=True
+    v2-30 near-miss   list-in-prose            complete   25.1s [] pass=True
+    v2-31 near-miss   short-list               complete   25.1s [] pass=True
+    v2-32 near-miss   short-list               complete   39.1s [] pass=True
+    v2-33 near-miss   code-only                complete   33.1s [] pass=True
+    v2-34 near-miss   code-only                complete   26.1s [] pass=True
+    v2-35 near-miss   explanation-with-bullets stopped   173.5s [] pass=True
+    v2-36 near-miss   explanation-with-bullets complete   97.3s ['checklist'] pass=False
+```
 
 ## HELD-OUT v1 (spent), v0.7.6 wheel 0.32.3.dev202609291615+06711ad
 
