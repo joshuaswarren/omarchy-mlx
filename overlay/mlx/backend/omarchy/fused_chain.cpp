@@ -1227,8 +1227,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // group actually adopts the plan; otherwise every node evaluates
   // ordinarily.
   std::unordered_map<std::uintptr_t, OutgatePlan> outgate_plans;
+  const bool outgate_on = outgate_fold_enabled();
   for (const auto& tail : tape) {
-    if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
+    if (!outgate_on || !is_op(&tail, typeid(Multiply)) ||
+        tail.inputs().size() != 2 ||
         claimed.count(tail.id()) || uses[tail.id()] != 1 ||
         tail.dtype() == float32) {
       continue;
@@ -1770,6 +1772,22 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 EagerFusionScope::~EagerFusionScope() {
   delete eager_state;
   eager_state = static_cast<EagerFusionState*>(previous_);
+}
+
+// Out-gate prologue fold (sigmoid*multiply recomputed per o_proj workgroup).
+// Chip-keyed like the other decode-path defaults: it gained on G13C (jw16,
+// M1 Max) but every o_proj workgroup redoes the 4096-element gate on
+// G13G (T8103), where decode dropped ~1.7% versus the wheel without it
+// (H147). MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.
+bool outgate_fold_enabled() {
+  const char* v = std::getenv("MLX_OMARCHY_OUTGATE_FOLD");
+  if (v != nullptr && *v != '\0') {
+    return !(v[0] == '0' && v[1] == '\0');
+  }
+  const std::string& name = device().capabilities().device_name;
+  bool legacy_g13 = name.find("G13") != std::string::npos &&
+      name.find("G13C") == std::string::npos;
+  return !legacy_g13;
 }
 
 bool fused_gemv_enabled() {

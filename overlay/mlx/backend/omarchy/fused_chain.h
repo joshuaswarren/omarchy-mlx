@@ -233,6 +233,10 @@ bool kv_direct_enabled();
 // MLX_OMARCHY_FUSED_CHAIN gate also covers it).
 bool fused_gemv_enabled();
 
+// MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; default off on G13 parts other
+// than G13C (see fused_chain.cpp).
+bool outgate_fold_enabled();
+
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
