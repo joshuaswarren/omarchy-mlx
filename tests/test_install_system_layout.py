@@ -309,6 +309,27 @@ class SystemStageTest(unittest.TestCase):
         self.assertFalse(legacy_venv.exists())
         self.assertTrue((home / ".local/share/mlx-omarchy").is_dir())
 
+    def test_staged_retire_finds_name_table_without_env(self):
+        """The staged retire script must locate paths.sh from its own
+        staged layout (/usr/bin/../share/omarchy-mlx), with no
+        SYSTEM_SHARE_PREFIX override — the same relative path works once
+        package() copies the tree to /. Found broken on hardware
+        (SysInstallHw, jw16 2026-09-30): the candidate list only knew
+        self_dir, ../packaging, and the absolute /usr fallback."""
+        home = self.tmp / "legacy-home-noenv"
+        legacy_venv = home / ".local/share/mlx-omarchy/venv"
+        legacy_venv.mkdir(parents=True)
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("SYSTEM_SHARE_PREFIX", "MLX_OMARCHY_HOME")}
+        env["HOME"] = str(home)
+        result = subprocess.run(
+            [str(self.stage / "usr/bin/mlx-omarchy-retire-legacy")],
+            env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("would remove venv", result.stdout)
+        self.assertTrue(legacy_venv.exists(), "dry run must delete nothing")
+
     def test_system_mode_requires_vendor_and_lock(self):
         result = subprocess.run(
             ["bash", str(INSTALL), "--system"], capture_output=True, text=True,

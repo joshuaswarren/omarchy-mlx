@@ -12,7 +12,11 @@
 set -euo pipefail
 
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for candidate in "$self_dir/paths.sh" "$self_dir/../packaging/paths.sh" \
+# Staged or installed, the retire script lives one level above the share
+# table (stage/usr/bin/../share/omarchy-mlx == /usr/bin/../share/omarchy-mlx),
+# so it works from a PKGBUILD stage without env help too.
+for candidate in "$self_dir/paths.sh" "$self_dir/../share/omarchy-mlx/paths.sh" \
+                 "$self_dir/../packaging/paths.sh" \
                  "${SYSTEM_SHARE_PREFIX:-/usr/share/omarchy-mlx}/paths.sh"; do
   if [[ -f $candidate ]]; then
     # shellcheck disable=SC1090
