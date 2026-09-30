@@ -38,7 +38,7 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1578,6 +1578,82 @@
+@@ -1582,6 +1582,83 @@
    return result;
  }
  
@@ -118,12 +118,13 @@
 +      /* inputs */ std::vector<array>{state, x, weight});
 +}
 +
- bool Quantize::is_equivalent(const Primitive& other) const {
-   const Quantize& p_other = static_cast<const Quantize&>(other);
-   return (
++
+ std::vector<array> GatedDeltaUpdate::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -508,6 +508,75 @@
+@@ -546,6 +546,76 @@
    bool raw_gates_{false};
  };
  
@@ -196,9 +197,10 @@
 +  float qk_scale_k_{0.0f};
 +  float qk_eps_{0.0f};
 +};
- class Quantize : public Custom {
++
+ class GatedDeltaUpdateVJP : public Custom {
   public:
-   explicit Quantize(
+   GatedDeltaUpdateVJP(
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
 @@ -551,6 +551,46 @@

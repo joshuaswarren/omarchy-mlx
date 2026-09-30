@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/cpu/device_info.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -2791,4 +2792,220 @@ TEST_CASE("sdpa bf16 fast scale==1.0 stays bit-identical to the pre-fix alpha==1
               << " want=0xf1f70dbd2f2be747" << std::dec << "\n";
   }
   CHECK_EQ(digest, 0xf1f70dbd2f2be747ull);
+}
+
+TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // ---- SDPA: grad through the fast primitive vs grad through the
+  // composed reference graph on the same device (upstream #4563 wires
+  // ScaledDotProductAttention::vjp; the Omarchy backend keeps
+  // ScaledDotProductAttentionVJP::use_fallback true, so the backward is
+  // the composed fallback, never a missing eval_gpu).
+  const int B = 2, T = 4, H = 2, D = 4;
+  const float scale = 1.0f / std::sqrt(float(D));
+  auto q_data = pattern(B * T * H * D, 211);
+  auto k_data = pattern(B * T * H * D, 223);
+  auto v_data = pattern(B * T * H * D, 227);
+  array q = array(q_data.begin(), Shape{B, T, H, D}, float32);
+  array k = array(k_data.begin(), Shape{B, T, H, D}, float32);
+  array v = array(v_data.begin(), Shape{B, T, H, D}, float32);
+
+  auto sdpa_fun = [&](const std::vector<array>& inputs) {
+    return fast::scaled_dot_product_attention(
+        inputs[0], inputs[1], inputs[2], scale, "", {}, std::nullopt, false,
+        stream);
+  };
+  auto composed_fun = [&](const std::vector<array>& inputs) {
+    // softmax(Q K^T * scale) V in the [B, T, H, D] storage MLX uses.
+    auto qt = transpose(inputs[0], 0, 2, 1, 3, stream);
+    auto kt = transpose(inputs[1], 0, 2, 1, 3, stream);
+    auto vt = transpose(inputs[2], 0, 2, 1, 3, stream);
+    auto scores = multiply(
+        matmul(qt, transpose(kt, 0, 1, 3, 2, stream), stream),
+        array(scale, float32),
+        stream);
+    auto probs = softmax(scores, -1, stream);
+    return transpose(
+        matmul(probs, vt, stream), 0, 2, 1, 3, stream);
+  };
+  auto fast_grads = grad(sdpa_fun, std::vector<int>{0, 1, 2})({q, k, v});
+  auto composed_grads = grad(composed_fun, std::vector<int>{0, 1, 2})({q, k, v});
+  for (int arg = 0; arg < 3; ++arg) {
+    require_close(
+        flat(fast_grads[arg], stream),
+        widen(flat(composed_grads[arg], stream)),
+        5e-4,
+        "sdpa grad arg " + std::to_string(arg));
+  }
+
+  // ---- GDN, composed shape (T > 1 keeps use_fallback true): grad through
+  // the primitive vs the composed recursion on the same device.
+  const int GB = 1, GT = 2, GH = 2, GD = 4;
+  auto gq_data = pattern(GB * GT * GH * GD, 307);
+  auto gk_data = pattern(GB * GT * GH * GD, 311);
+  auto gv_data = pattern(GB * GT * GH * GD, 313);
+  auto gg_data = pattern(GB * GT * GH, 317);
+  auto gb_data = pattern(GB * GT * GH, 331);
+  array gq = array(gq_data.begin(), Shape{GB, GT, GH, GD}, float32);
+  array gk = array(gk_data.begin(), Shape{GB, GT, GH, GD}, float32);
+  array gv = array(gv_data.begin(), Shape{GB, GT, GH, GD}, float32);
+  array gg = array(gg_data.begin(), Shape{GB, GT, GH}, float32);
+  array gb = array(gb_data.begin(), Shape{GB, GT, GH}, float32);
+  array gh0 = zeros({GB, GH, GD, GD}, float32, stream);
+
+  auto gdn_fun = [&](const std::vector<array>& inputs) {
+    auto pair = fast::gated_delta_update(
+        inputs[0],
+        inputs[1],
+        inputs[2],
+        inputs[3],
+        inputs[4],
+        inputs[5],
+        std::nullopt,
+        stream);
+    return pair[0];
+  };
+  auto gdn_ref = [&](const std::vector<array>& inputs) {
+    // The composed arithmetic the backend's fallback composes: per-token
+    // state scan with decay g and write strength beta.
+    auto state = inputs[5];
+    std::vector<array> outputs;
+    for (int t = 0; t < GT; ++t) {
+      auto get_t = [&](const array& arr) {
+        auto sliced = slice(
+            arr,
+            Shape{0, t, 0},
+            Shape{arr.shape(0), t + 1, arr.shape(2)},
+            stream);
+        return squeeze(sliced, 1, stream);
+      };
+      auto q_t = get_t(inputs[0]);
+      auto k_t = get_t(inputs[1]);
+      auto v_t = get_t(inputs[2]);
+      auto g_t = get_t(inputs[3]);
+      auto beta_t = get_t(inputs[4]);
+      auto decay = expand_dims(g_t, {-1, -2}, stream);
+      auto state_next = multiply(state, decay, stream);
+      auto kv = sum(
+          multiply(state_next, expand_dims(k_t, -2, stream), stream),
+          -1,
+          false,
+          stream);
+      auto delta = multiply(
+          subtract(v_t, kv, stream), expand_dims(beta_t, -1, stream), stream);
+      state_next = add(
+          state_next,
+          multiply(
+              expand_dims(delta, -1, stream),
+              expand_dims(k_t, -2, stream),
+              stream),
+          stream);
+      state = state_next;
+      outputs.push_back(
+          sum(multiply(state, expand_dims(q_t, -2, stream), stream),
+              -1,
+              false,
+              stream));
+    }
+    return stack(outputs, 1, stream);
+  };
+  auto gdn_fast_grads =
+      grad(gdn_fun, std::vector<int>{0, 1, 2, 3, 4})({gq, gk, gv, gg, gb, gh0});
+  auto gdn_ref_grads =
+      grad(gdn_ref, std::vector<int>{0, 1, 2, 3, 4})({gq, gk, gv, gg, gb, gh0});
+  for (size_t arg = 0; arg < gdn_fast_grads.size(); ++arg) {
+    require_close(
+        flat(gdn_fast_grads[arg], stream),
+        widen(flat(gdn_ref_grads[arg], stream)),
+        5e-4,
+        "gdn grad arg " + std::to_string(arg));
+  }
+
+  // ---- GDN, fused decode shape (T == 1, bf16, square 128 heads): the
+  // forward takes GatedDeltaDecodeBF16 and the backward must take the
+  // GatedDeltaUpdateVJP composed fallback (upstream #4565), never a
+  // missing eval_gpu.
+  const int FB = 1, FH = 2, FD = 128;
+  auto fq_data = pattern(FB * FH * FD, 347);
+  auto fk_data = pattern(FB * FH * FD, 349);
+  auto fv_data = pattern(FB * FH * FD, 353);
+  array fq = astype(
+      array(fq_data.begin(), Shape{FB, 1, FH, FD}, float32),
+      bfloat16,
+      stream);
+  array fk = astype(
+      array(fk_data.begin(), Shape{FB, 1, FH, FD}, float32),
+      bfloat16,
+      stream);
+  array fv = astype(
+      array(fv_data.begin(), Shape{FB, 1, FH, FD}, float32),
+      bfloat16,
+      stream);
+  array fg = astype(
+      array(pattern(FB * FH, 359).begin(), Shape{FB, 1, FH}, float32),
+      bfloat16,
+      stream);
+  array fbeta = astype(
+      array(pattern(FB * FH, 367).begin(), Shape{FB, 1, FH}, float32),
+      bfloat16,
+      stream);
+  array fh0 = zeros({FB, FH, FD, FD}, float32, stream);
+  auto gdn_fused_fun = [&](const std::vector<array>& inputs) {
+    auto pair = fast::gated_delta_update(
+        inputs[0],
+        inputs[1],
+        inputs[2],
+        inputs[3],
+        inputs[4],
+        inputs[5],
+        std::nullopt,
+        stream);
+    return pair[0];
+  };
+  auto cot_out = ones({FB, 1, FH, FD}, float32, stream);
+  auto [fused_out, fused_vjps] =
+      vjp(gdn_fused_fun,
+          std::vector<array>{fq, fk, fv, fg, fbeta, fh0},
+          std::vector<array>{cot_out});
+  auto fused_dq = flat(fused_vjps[0], stream);
+  auto fused_ref_grads =
+      grad(gdn_ref, std::vector<int>{0})({fq, fk, fv, fg, fbeta, fh0});
+  require_close(fused_dq, widen(flat(fused_ref_grads[0], stream)), 2e-2, "gdn fused dq");
+
+  // ---- Zero CPU dispatch: every tensor op above ran on the Omarchy GPU
+  // evaluator (dispatch counters advanced); an explicit CPU stream moves
+  // no GPU work, and the GPU counters never moved for CPU-stream work.
+  uint64_t gpu_prims = omarchy::trace::counters().gpu_primitive_dispatches.load();
+  uint64_t vk_dispatches = omarchy::trace::counters().vk_compute_dispatches.load();
+  CHECK_MESSAGE(
+      gpu_prims > 0,
+      "zero GPU primitive dispatches: gradients never reached the GPU");
+  CHECK_MESSAGE(
+      vk_dispatches > 0,
+      "zero Vulkan compute dispatches: gradients never reached the GPU");
+  CHECK_EQ(default_device(), Device::gpu);
+  if (cpu::is_available()) {
+    uint64_t gpu_prims_before =
+        omarchy::trace::counters().gpu_primitive_dispatches.load();
+    uint64_t vk_before =
+        omarchy::trace::counters().vk_compute_dispatches.load();
+    Stream cpu_stream = new_stream(Device::cpu);
+    auto probe = add(
+        array({1.0f, 2.0f}, Shape{2}, float32),
+        array({3.0f, 4.0f}, Shape{2}, float32),
+        cpu_stream);
+    probe.eval();
+    synchronize(cpu_stream);
+    // The CPU stream ran its own tensors; the grad work above stayed on
+    // the GPU. Zero GPU primitives may move to a CPU stream.
+    CHECK_EQ(
+        omarchy::trace::counters().gpu_primitive_dispatches.load(),
+        gpu_prims_before);
+    CHECK_EQ(
+        omarchy::trace::counters().vk_compute_dispatches.load(), vk_before);
+  }
 }

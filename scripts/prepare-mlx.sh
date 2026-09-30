@@ -72,8 +72,6 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-omarchy-quantize-errors.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-distributed-reduce-scatter-assert.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-bool-mask-floor.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-omarchy-metal-kernel.patch"

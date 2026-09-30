@@ -18,7 +18,7 @@
    buffer_info(
        std::string format,
        std::vector<Py_ssize_t> shape_in,
-@@ -80,43 +84,118 @@
+@@ -80,47 +84,118 @@
      format = std::move(rhs.format);
      shape = std::move(rhs.shape);
      strides = std::move(rhs.strides);
@@ -30,18 +30,17 @@
  extern "C" inline int getbuffer(PyObject* obj, Py_buffer* view, int flags) {
    std::memset(view, 0, sizeof(Py_buffer));
 -  auto a = nb::cast<mx::array>(nb::handle(obj));
+-
+-  // Exceptions can not propagate through the buffer protocol.
 +  buffer_info* info = nullptr;
-+  try {
-+    auto a = nb::cast<mx::array>(nb::handle(obj));
- 
--  {
+   try {
 -    nb::gil_scoped_release nogil;
 -    a.eval();
+-  } catch (const std::exception& e) {
+-    PyErr_SetString(PyExc_RuntimeError, e.what());
+-    return -1;
 -  }
-+    {
-+      nb::gil_scoped_release nogil;
-+      a.eval();
-+    }
++    auto a = nb::cast<mx::array>(nb::handle(obj));
  
 -  std::vector<Py_ssize_t> shape(a.shape().begin(), a.shape().end());
 -  std::vector<Py_ssize_t> strides(a.strides().begin(), a.strides().end());
@@ -50,8 +49,10 @@
 -  }
 -  buffer_info* info =
 -      new buffer_info(buffer_format(a), std::move(shape), std::move(strides));
-+    // Flags are valid only after eval: a lazy array's descriptor starts
-+    // with every flag true; eval installs the real values.
++    {
++      nb::gil_scoped_release nogil;
++      a.eval();
++    }
  
 -  view->obj = obj;
 -  view->ndim = a.ndim();
@@ -66,6 +67,9 @@
 -  if ((flags & PyBUF_STRIDES) == PyBUF_STRIDES) {
 -    view->strides = info->strides.data();
 -    view->shape = info->shape.data();
++    // Flags are valid only after eval: a lazy array's descriptor starts
++    // with every flag true; eval installs the real values.
++
 +    if ((flags & PyBUF_STRIDES) == PyBUF_STRIDES) {
 +      const auto& f = a.flags();
 +      if ((flags & PyBUF_C_CONTIGUOUS) == PyBUF_C_CONTIGUOUS &&

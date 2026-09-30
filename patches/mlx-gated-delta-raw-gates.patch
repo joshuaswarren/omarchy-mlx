@@ -1,9 +1,10 @@
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1174,6 +1174,140 @@
+@@ -1177,6 +1177,141 @@
+   auto result = fallback({q, k, v, g, beta, h0, mask});
    return result;
  }
- 
++
 +std::vector<array> gated_delta_update_raw(
 +    const array& queries,
 +    const array& keys,
@@ -138,9 +139,9 @@
 +  return result;
 +}
 +
- bool Quantize::is_equivalent(const Primitive& other) const {
-   const Quantize& p_other = static_cast<const Quantize&>(other);
-   return (
+ std::vector<array> GatedDeltaUpdate::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
 @@ -70,6 +70,22 @@
@@ -168,7 +169,7 @@
  
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -399,8 +399,15 @@
+@@ -400,8 +400,15 @@
   public:
    GatedDeltaUpdate(
        Stream stream,
@@ -186,14 +187,14 @@
  
    static bool use_fallback(
        const int Hk,
-@@ -425,6 +432,7 @@
-   }
+@@ -433,6 +440,7 @@
  
   private:
+   bool is_training_;
 +  bool raw_gates_{false};
  };
  
- class Quantize : public Custom {
+ class GatedDeltaUpdateVJP : public Custom {
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
 @@ -411,6 +411,37 @@

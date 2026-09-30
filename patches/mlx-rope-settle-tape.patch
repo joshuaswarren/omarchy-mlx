@@ -1,3 +1,13 @@
+--- a/mlx/transforms.h
++++ b/mlx/transforms.h
+@@ -17,6 +17,7 @@
+ }
+ 
+ MLX_API void eval(std::vector<array> outputs);
++MLX_API void settle(std::vector<array> outputs);
+ 
+ template <typename... Arrays, typename = enable_for_arrays_t<Arrays...>>
+ void eval(Arrays&&... outputs) {
 --- a/mlx/transforms.cpp
 +++ b/mlx/transforms.cpp
 @@ -80,7 +80,26 @@
@@ -26,8 +36,8 @@
 +  EvalNestDepth eval_nest_depth_guard;
    std::deque<array> tape;
  
-   // Make an effort to choose a good output stream
-@@ -172,7 +191,8 @@
+   // Make an effort to choose a good output stream, and only create the default
+@@ -178,7 +197,8 @@
          }
          continue;
        }
@@ -37,7 +47,7 @@
            a.has_primitive()) {
          // If the array is evaluated and is no longer a tracer, detach it
          a.detach();
-@@ -235,7 +255,16 @@
+@@ -241,7 +261,16 @@
      while (!tape.empty()) {
        auto arr = std::move(tape.back());
        tape.pop_back();
@@ -55,7 +65,7 @@
        auto stream = arr.primitive().stream();
        open_streams.insert(stream);
  
-@@ -274,9 +303,10 @@
+@@ -281,9 +310,10 @@
          cpu::eval(arr);
        }
  
@@ -69,7 +79,7 @@
          // Commit any open streams
          for (auto& s : open_streams) {
            if (s.device == Device::gpu) {
-@@ -309,7 +339,7 @@
+@@ -317,7 +347,7 @@
          sib.set_status(array::Status::evaluated);
          maybe_update_fence(sib);
        }
@@ -78,7 +88,7 @@
          arr.detach();
        }
      }
-@@ -340,12 +370,20 @@
+@@ -348,12 +378,20 @@
      throw;
    }
  
@@ -102,7 +112,7 @@
        gpu::finalize(s);
      }
    }
-@@ -384,6 +422,22 @@
+@@ -392,6 +430,22 @@
    eval_impl(std::move(outputs), false).wait();
  }
  
@@ -125,13 +135,3 @@
  std::pair<std::vector<array>, std::vector<array>> vjp(
      const std::function<std::vector<array>(const std::vector<array>&)>& fun,
      const std::vector<array>& primals,
---- a/mlx/transforms.h
-+++ b/mlx/transforms.h
-@@ -17,6 +17,7 @@
- }
- 
- MLX_API void eval(std::vector<array> outputs);
-+MLX_API void settle(std::vector<array> outputs);
- 
- template <typename... Arrays, typename = enable_for_arrays_t<Arrays...>>
- void eval(Arrays&&... outputs) {

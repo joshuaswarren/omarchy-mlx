@@ -10658,6 +10658,18 @@ bool GatedDeltaUpdate::use_fallback(
   return Dk != 128 || Dv != 128 || Hk != Hv;
 }
 
+// Gradient of the gated delta update (upstream #4565): the fused backward
+// kernel is Metal-only upstream; the Omarchy backend always takes the
+// composed fallback, which is the arithmetic reference for the gradients.
+bool GatedDeltaUpdateVJP::use_fallback(
+    const int Hk,
+    const int Dk,
+    const int Hv,
+    const int Dv,
+    Stream s) {
+  return true;
+}
+
 void GatedDeltaUpdate::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
@@ -12947,6 +12959,7 @@ void ScaledDotProductAttention::eval_gpu(
 }
 
 OMARCHY_UNSUPPORTED_MULTI(ScaledDotProductAttentionVJP)
+OMARCHY_UNSUPPORTED_MULTI(GatedDeltaUpdateVJP)
 void ConvertFP8::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
