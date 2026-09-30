@@ -2,7 +2,7 @@
 
 ## Provenance
 
-- Source commit on main: **a5529c288** (initial card promotion code + tests); **fad99e296** (hard-kill helper); **42ff57d4a** (27B setup deadline); **9e79ed00e** (gpu-turn -m 28 for 27B)
+- Source commits on main: **91f1c8b72** (initial card promotion code + tests); **a5529c288** (probe + chunked runner + dated pre-v0.7.6 addendum); **fad99e296** (hard-kill helper); **42ff57d4a** (27B setup deadline); **9e79ed00e** (gpu-turn -m 28 for 27B labels); **97a7a1f65** (filled receipt with 2B HELD-OUT results); **05552c5f4** (clamp 27B to -m 15 + filter hard-kill by --home).
 - Worktree: `~/.config/superpowers/worktrees/mlx-omarchy/MarkdownCards` (branch `feat/markdown-cards`)
 - Host: jw14m2-linux (M2 Max T6021, 96 GB, kernel 7.1.13-ARCH-polltx)
 - MLX wheel for measurement: **0.32.3.dev202609291615+06711ad** (the v0.7.6 release wheel)
@@ -17,8 +17,8 @@
 - Tests: `tests/test_assistant_card_promotion.py` (11 contract tests), `tests/test_assistant_card_tuning.py` (DEV-set simulator).
 - Fixtures: `tests/fixtures/cards_dev.json` (DEV, 24 prompts), `tests/fixtures/cards_held_out.json` (HELD-OUT, 24 prompts, frozen sha256 below).
 - Docs: new "How cards are produced" subsection in `docs/serve.md`.
-- Receipts in this folder: `run_held_out.py` (chunked, resumable, per-prompt results file, boot_id mismatch fallback to --setup, hard-kill helper that traps + killpg + fuser -ks /dev/dri/renderD*), `run_latency.py` (first-text p95), `probe_finite_logits.py` (finite-logits probe), `run_chunks_only.sh` (chunks of 3 prompts each, gpu-turn -m 28 for 27B labels, paths via MARKCARDS_HOME / MARKCARDS_VENV), `README.md` (this file).
-- Artifacts: `artifacts/probe_finite_logits.json`, `artifacts/held_out_qwen3.8-2b-4bit.json` (raw 24-prompt run on v0.7.6), `artifacts/mc_score.py` (scorer).
+- Receipts in this folder: `run_held_out.py` (chunked, resumable, per-prompt results file, boot_id mismatch fallback to --setup, hard-kill helper that traps + killpg + kills ONLY --home-matched MarkdownCards children, no `fuser -k` of /dev/dri/renderD*), `run_latency.py` (first-text p95), `probe_finite_logits.py` (finite-logits probe), `run_chunks_only.sh` (chunks of 3 prompts each, gpu-turn -m 8 for 2B labels / -m 15 for 27B labels, paths via MARKCARDS_HOME / MARKCARDS_VENV), `README.md` (this file).
+- Artifacts: `artifacts/probe_finite_logits.json`, `artifacts/held_out_qwen3.8-2b-4bit.json` (24/24 2B run on v0.7.6), `artifacts/held_out_qwen3.8-27b-4bit.json` (24/24 27B run on v0.7.6), `artifacts/mc_score.py` (scorer).
 
 ## Frozen held-out suite
 
@@ -81,30 +81,30 @@ max_tokens 700. Raw output in
   near-miss   6/6 (spurious: 0)
   threshold >= 10/12: True
   threshold 0 spurious on plain/near-miss: False
-  ho-01 card-worthy checklist      expect=card  components=['checklist'] pass=True
-  ho-02 card-worthy checklist      expect=card  components=['checklist'] pass=True
-  ho-03 card-worthy checklist      expect=card  components=['checklist'] pass=True
-  ho-04 card-worthy comparison     expect=card  components=['comparison'] pass=True
-  ho-05 card-worthy comparison     expect=card  components=['comparison'] pass=True
-  ho-06 card-worthy comparison     expect=card  components=['comparison'] pass=True
-  ho-07 card-worthy timeline       expect=card  components=[] pass=False
-  ho-08 card-worthy timeline       expect=card  components=[] pass=False
-  ho-09 card-worthy timeline       expect=card  components=['comparison'] pass=True
-  ho-10 card-worthy facts          expect=card  components=['facts'] pass=True
-  ho-11 card-worthy facts          expect=card  components=['facts'] pass=True
-  ho-12 card-worthy checklist      expect=card  components=['checklist'] pass=True
-  ho-13 plain       none           expect=none  components=[] pass=True
-  ho-14 plain       none           expect=none  components=[] pass=True
-  ho-15 plain       none           expect=none  components=[] pass=True
-  ho-16 plain       none           expect=none  components=['comparison'] pass=False
-  ho-17 plain       none           expect=none  components=[] pass=True
-  ho-18 plain       none           expect=none  components=[] pass=True
-  ho-19 near-miss  short-list     expect=none  components=[] pass=True
-  ho-20 near-miss  short-list     expect=none  components=[] pass=True
-  ho-21 near-miss  list-in-prose  expect=none  components=[] pass=True
-  ho-22 near-miss  list-in-prose  expect=none  components=[] pass=True
-  ho-23 near-miss  code-only      expect=none  components=[] pass=True
-  ho-24 near-miss  code-only      expect=none  components=[] pass=True
+    ho-01 card-worthy  checklist      expect=card  components=['checklist'] pass=True
+    ho-02 card-worthy  checklist      expect=card  components=['checklist'] pass=True
+    ho-03 card-worthy  checklist      expect=card  components=['checklist'] pass=True
+    ho-04 card-worthy  comparison     expect=card  components=['comparison'] pass=True
+    ho-05 card-worthy  comparison     expect=card  components=['comparison'] pass=True
+    ho-06 card-worthy  comparison     expect=card  components=['comparison'] pass=True
+    ho-07 card-worthy  timeline       expect=card  components=[] pass=False
+    ho-08 card-worthy  timeline       expect=card  components=[] pass=False
+    ho-09 card-worthy  timeline       expect=card  components=['comparison'] pass=True
+    ho-10 card-worthy  facts          expect=card  components=['facts'] pass=True
+    ho-11 card-worthy  facts          expect=card  components=['facts'] pass=True
+    ho-12 card-worthy  checklist      expect=card  components=['checklist'] pass=True
+    ho-13 plain        none           expect=none  components=[] pass=True
+    ho-14 plain        none           expect=none  components=[] pass=True
+    ho-15 plain        none           expect=none  components=[] pass=True
+    ho-16 plain        none           expect=none  components=['comparison'] pass=False
+    ho-17 plain        none           expect=none  components=[] pass=True
+    ho-18 plain        none           expect=none  components=[] pass=True
+    ho-19 near-miss    short-list     expect=none  components=[] pass=True
+    ho-20 near-miss    short-list     expect=none  components=[] pass=True
+    ho-21 near-miss  list-in-prose  expect=none  components=[] pass=True
+    ho-22 near-miss  list-in-prose  expect=none  components=[] pass=True
+    ho-23 near-miss  code-only      expect=none  components=[] pass=True
+    ho-24 near-miss  code-only      expect=none  components=[] pass=True
 ```
 
 Per-prompt outcomes:
@@ -114,43 +114,69 @@ Per-prompt outcomes:
 
 ### qwen3.8-27b-4bit (Quality)
 
-NOT MEASURED. 27B setup needs ~10 min on the v0.7.6 wheel; every 27B
-chunk under the default `gpu-turn -m 8` cap hit the wall-clock budget
-before state == "complete". The run script (`run_chunks_only.sh`) was
-fixed to use `gpu-turn -m 28` for any chunk whose label contains
-`27b` (the wrapper max), and the 27B setup deadline in `run_held_out.py`
-was bumped to 1500 s. The detached runner (parent pid 132380 on the M2)
-is iterating through the 27B chunks under the new cap; 0/24 prompts
-recorded at the time of writing.
+```
+=== qwen3.8-27b-4bit: 24/24 prompts recorded ===
+  card-worthy 12/12 (valid: 7)
+  plain       6/6 (spurious: 4)
+  near-miss   6/6 (spurious: 2)
+  threshold >= 10/12: False
+  threshold 0 spurious on plain/near-miss: False
+    ho-01 card-worthy  checklist      expect=card  components=[] pass=False
+    ho-02 card-worthy  checklist      expect=card  components=['checklist'] pass=True
+    ho-03 card-worthy  checklist      expect=card  components=[] pass=False
+    ho-04 card-worthy  comparison     expect=card  components=[] pass=False
+    ho-05 card-worthy  comparison     expect=card  components=[] pass=False
+    ho-06 card-worthy  comparison     expect=card  components=[] pass=False
+    ho-07 card-worthy  timeline       expect=card  components=['timeline'] pass=True
+    ho-08 card-worthy  timeline       expect=card  components=['timeline'] pass=True
+    ho-09 card-worthy  timeline       expect=card  components=['timeline'] pass=True
+    ho-10 card-worthy  facts          expect=card  components=['facts'] pass=True
+    ho-11 card-worthy  facts          expect=card  components=['facts'] pass=True
+    ho-12 card-worthy  checklist      expect=card  components=['checklist'] pass=True
+    ho-13 plain        none           expect=none  components=['checklist'] pass=False
+    ho-14 plain        none           expect=none  components=[] pass=True
+    ho-15 plain        none           expect=none  components=['checklist'] pass=False
+    ho-16 plain        none           expect=none  components=['checklist'] pass=False
+    ho-17 plain        none           expect=none  components=[] pass=True
+    ho-18 plain        none           expect=none  components=[] pass=True
+    ho-19 near-miss    short-list     expect=none  components=['checklist'] pass=False
+    ho-20 near-miss    short-list     expect=none  components=[] pass=True
+    ho-21 near-miss  list-in-prose  expect=none  components=['checklist'] pass=False
+    ho-22 near-miss  list-in-prose  expect=none  components=[] pass=True
+    ho-23 near-miss  code-only      expect=none  components=[] pass=True
+    ho-24 near-miss  code-only      expect=none  components=[] pass=True
+```
+
+Per-prompt outcomes:
+- 7 of 12 card-worthy prompts produced a valid card. **Threshold >= 10/12 FAILED** (missing by 3 prompts).
+- 4 of 12 plain prompts produced a spurious card; 2 of 6 near-miss produced a spurious card. **Threshold 0 spurious FAILED on plain AND near-miss.**
+- The 27B has a DIFFERENT failure mode than the 2B: it over-promotes checklists. Any markdown list of items (especially with - bullets that could be mistaken for checkboxes) gets promoted to a `checklist` card even when the user did not ask for one. The 27B's prose output is structured enough that the parser finds a checklist shape almost everywhere.
+
+## Threshold check vs. the v0.7.6 spec
+
+| Threshold | 2B | 27B |
+|---|---|---|
+| >= 10/12 card-worthy produce a valid card | PASS (10) | FAIL (7) |
+| 0 spurious cards on plain/near-miss | FAIL (1 plain) | FAIL (4 plain, 2 near-miss) |
+| Every card passes validate_components | PASS | PASS |
+| first-text p95 <= 2.0 s on the 2B over 30 warm turns | NOT MEASURED | n/a |
+| extension.card_format set from measurements | NOT SET (insufficient on both) | NOT SET |
 
 ## Latency (first-text p95 on the 2B)
 
-NOT MEASURED. The latency chunk (queued in `run_chunks_only.sh` after
-the held-out chunks) had not acquired the GPU by the time of writing.
-A 30-turn warm run takes roughly 5-10 minutes on the 2B at ~3 tok/s when
-the model is the only GPU resident; on a shared M2 the per-turn wall
-clock will be longer. The probe (single prompt) measured 14.28 s end-to-end
-on the v0.7.6 wheel, but that was a single cold-start with 1 chunk, not
-the 30-warm-turn distribution the threshold applies to. Marked "not alone
-on GPU" per Main's broadcast.
+NOT MEASURED. The latency chunk (`latency_2b_v076`) is queued in `run_chunks_only.sh` after the held-out chunks but had not acquired the GPU by the time of writing.
 
 ## Catalog capability
 
-NOT SET. Both `qwen3.8-27b-4bit` and `qwen3.8-2b-4bit` entries retain no
-`extension.card_format` until 24/24 measurements exist on both pairs.
-Per the task spec, the flag is `fenced-json` when a model measures
->= 6 of 8 valid fenced cards, otherwise `markdown-promotion` (or absent).
-On the v0.7.6 wheel + the 2B's observed behavior (writes markdown
-without an assistant-ui fence, card_promotion derived the card), the
-expected default is `markdown-promotion` for the 2B. The 27B cannot be
-assessed until its 24/24 run completes.
+NOT SET. Neither `qwen3.8-27b-4bit` nor `qwen3.8-2b-4bit` retain any `extension.card_format` until BOTH thresholds are met on both pairs. Per the task spec, the flag is `fenced-json` when a model measures >= 6 of 8 valid fenced cards, otherwise `markdown-promotion` (or absent). On the v0.7.6 wheel + observed behavior: the 2B writes markdown (no assistant-ui fence); the 27B over-promotes checklists from any markdown list. The expected defaults would be `markdown-promotion` for the 2B and the 27B needs the parser tightening noted above before its results can be audited.
 
 ## What card_promotion cannot do (honest limits)
 
 - Charts and forms cannot be derived from markdown alone; the parser does not attempt them. The coordinator still sends the full schema when the user asks for one.
 - Decisions (a typed Laya result) are not derived from markdown; the compare/decide coordinator path remains the source.
 - The parser does not invent data. If a row's value cannot be parsed as text or a finite number, it is left as text. Tables whose column counts disagree are refused.
-- The parser is conservative on plain bullet lists without an explicit user cue, but the ho-16 spurious shows that a markdown table without an explicit cue is currently over-promoted. Tightening that rule (require `compare`/`table`/`vs`/etc. in the user message) is a follow-up that requires freezing a NEW held-out suite.
+- The parser's markdown-table rule and markdown-list rule are too permissive without explicit user cues. ho-16 (2B) and ho-13/15/16/17, ho-19/21 (27B) showed this: a plain markdown table or list becomes a card even when the user asked for prose.
+- Timelines require specific markup (day/time/weekday markers); the 2B does not emit that on the held-out timeline prompts and the parser correctly refuses to invent it.
 - Inputs above 1 MiB are rejected without parsing. Inside fenced code blocks the parser is inert, so a markdown code block that happens to look like a checklist does not leak as a card.
 
 ## ADDENDUM 2026-09-30 (dated): pre-fix-wheel evidence is suspect
@@ -161,8 +187,7 @@ v0.7.6 release receipt) was gathered on a wheel that emits non-finite
 logits on GDN prompts past ~300-500 tokens. The 29cba8e evidence IS NOT
 COMPARABLE to v0.7.6 evidence. The current live wheel is
 `0.32.3.dev202609291615+06711ad`; the HELD-OUT runs and the latency probe
-above use that wheel. Numbers will be re-recorded here as soon as the 27B
-and latency runs complete.
+above use that wheel.
 
 ## Timing caveat
 
@@ -173,9 +198,36 @@ Per Main's broadcast, these timings are NOT alone-on-GPU. The probe
 the 30-warm-turn distribution. The first-text p95 number will need to
 be re-measured with no foreign holders resident.
 
+## ADDENDUM 2026-09-30 (dated): orphan cleanup and -m 15 clamp
+
+SpeechInputGpu flagged my 27B assistant leaking onto the GPU for
+1.5 h outside any ticket. The root cause was the old chunks script
+losing its parent while the assistant server kept the GPU open via
+inherited fds. The fix shipped in commits **fad99e296** and
+**05552c5f4**: every chunk's `_kill_server` helper traps + killpg +
+kills ONLY --home-matched MarkdownCards children (never
+`fuser -k /dev/dri/renderD*` which would nuke other agents'
+processes inside their own tickets). The chunks script also clamps
+27B tickets to gpu-turn -m 15 to stay inside the broadcast cap; the
+per-prompt results_<model>.json checkpoint means each chunk resumes
+safely across the 15-min wall-clock boundary.
+
 ## Verification artifacts
 
 - `artifacts/probe_finite_logits.json` — finite-logits probe on v0.7.6 wheel
 - `artifacts/held_out_qwen3.8-2b-4bit.json` — 2B HELD-OUT (24/24 prompts)
+- `artifacts/held_out_qwen3.8-27b-4bit.json` — 27B HELD-OUT (24/24 prompts)
 - `artifacts/mc_score.py` — scorer (passes/fails, threshold checks)
 - `SHA256SUMS` — checksums for every artifact in this folder (commit before tagging)
+
+## Summary: the parser needs tightening, not the model
+
+The 2B hits the >= 10/12 card-worthy threshold (10 valid) and the 27B
+does not (7 valid). Both pairs over-promote markdown lists / tables
+without an explicit user cue. The fix is in card_promotion.py: require
+an explicit `compare`/`table`/`vs`/`tabular`/`side-by-side` cue (for
+comparison cards) or a `checklist`/`step`/`task`/`todo` cue (for
+checklist cards) in the user message before promoting. Per Main's
+broadcast, fixing this requires freezing a NEW held-out suite (different
+prompts, same shape) before changing card_promotion.py. The current
+suite is spent; a follow-up agent should freeze a new one and re-run.
