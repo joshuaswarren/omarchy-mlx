@@ -38,7 +38,7 @@ Export-plan failures leave the inspection control available for retry.
 Installation validates the archive and stages a venv without network access before replacing the active files.
 Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. On-hardware pacing qualification is still pending.
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
-Automatic decision routing stays disabled. The held-out suite is frozen and unevaluated at `tests/fixtures/routing_held_out.json`.
+Automatic decision routing stays off. Routing policy 3 passed the held-out suite on precision (35/35) with no injection routed to a decision, but the Laya head call takes p95 347 ms against a 250 ms warm deadline. See the [routing receipt](../receipts/2026-09-30-routing-gate/README.md). The held-out suite is now spent. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
 The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
 
@@ -58,7 +58,7 @@ The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbe
 | Voice as a whole | Not qualified. It needs both directions. |
 | Quality pair | Not qualified. Ten card prompts gave a valid card on 5 of 8 expected. The other 3 hit my 700-token test cap. One unrequested card appeared. Decode was about 3 tokens/s on a GPU shared with other jobs, so the interactive latency target is unproven. |
 | Card generation, Everyday (2B) | Fails. 0 of 8 prompts produced a card, with the full schema, the compact schema, an example, or a reminder. The model writes a markdown list and ignores the fence. Invalid or absent blocks are dropped and the prose stays. |
-| Routing held-out suite | Policy "1" frozen (`1fbfd682e`); 29 focused unit tests pass; the held-out suite at `tests/fixtures/routing_held_out.json` (sha256 `09a37b60…8906f0`) was **not** scored in the 2026-09-29 session — `flock /tmp/m2-gpu.lock` stayed contended. Automatic routing stays OFF until the suite passes >= 99% precision on routed decisions. Receipt and gating run live in `receipts/2026-09-30-routing-gate/README.md` (and the notebook at `entries/RoutingGate/20260929T181500Z-jw14m2-linux-routing-gate.md`). |
+| Routing held-out suite | Evaluated once on 2026-09-30 with frozen policy 3 (commit `50ca49fae`). Precision 1.000 (35/35), recall 1.000, and 0 of 15 injection cases routed to a decision. Every held-out turn was decided without a model call: the head-free path runs at p95 43 ms on the M2 CPU. The Laya head call took p95 347 ms over 100 warm calls, above the 250 ms limit. Automatic routing stays off until the owner decides which latency the gate measures. See the [receipt](../receipts/2026-09-30-routing-gate/README.md). |
 | UX screenshots and accessibility | Pass for six states at 375, 768, 1024, and 1440 px, plus a 200% zoom frame, keyboard, contrast, reduced motion, and semantics checks, with five defects fixed. See the [UI receipt](../receipts/2026-09-28-ui-qualification/README.md). Not run: a real screen reader. |
 | Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. A clean install needs a release that contains the assistant. |
 
