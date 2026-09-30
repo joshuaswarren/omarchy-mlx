@@ -96,8 +96,13 @@ export class Recorder {
       throw new Error("AudioWorklet is not available in this browser");
     let stream;
     try {
+      // Unprocessed audio: the recognizer was measured on raw recordings.
+      // Browser noise suppression and gain control reshaped clear speech
+      // enough that Parakeet returned nothing for it.
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, noiseSuppression: true }, video: false,
+        audio: { channelCount: 1, noiseSuppression: false, echoCancellation: false,
+                 autoGainControl: false },
+        video: false,
       });
     } catch (err) {
       const name = err && err.name;
