@@ -405,8 +405,13 @@ void eval_compiled_tape(
       }
     }
 
-    // One output per tape node. The node's primitive stays attached so the
-    // per-node dispatch sees the compiled stream.
+    // One output per tape node. The node's primitive stays attached
+    // during the dispatch so eval_gpu sees the compiled stream; after it,
+    // the value is cut off its graph like an eager node the evaluator has
+    // run (evaluated, then detached). A consumer's eval_gpu may settle()
+    // a graph over its inputs (the Sin/Cos argument gate); a value left
+    // unscheduled with live inputs would be re-dispatched there with its
+    // whole upstream sub-tape.
     //
     // The output shape is derived from the eval-time inputs, not the
     // trace. A shapeless fragment serves every input shape from one
@@ -446,7 +451,8 @@ void eval_compiled_tape(
         trace::counters().vk_compute_dispatches.load(std::memory_order_relaxed) -
         dispatches_before,
         std::memory_order_relaxed);
-
+    outs[0].set_status(array::Status::evaluated);
+    outs[0].detach();
     resolved.emplace(node.id(), outs[0]);
     if (output_ids.find(node.id()) == output_ids.end()) {
       // The evaluator's temporaries cover only the Compiled inputs and

@@ -72,9 +72,9 @@ class FusedChain {
       bool is_tape_output);
 
   // Dispatches the accumulated chain (1 or more nodes) as one fused
-  // kernel. Returns the fused output carrying the last node's primitive
-  // so downstream graph bookkeeping stays valid. Returns nullopt only
-  // for an empty chain: refusals happen in try_add before acceptance.
+  // kernel. Returns the fused output as an evaluated, graph-free array
+  // (no primitive, no inputs). Returns nullopt only for an empty chain:
+  // refusals happen in try_add before acceptance.
   std::optional<array> evaluate(const Stream& stream);
 
   // Dispatch into the current tail's graph array. Used by eager fusion,

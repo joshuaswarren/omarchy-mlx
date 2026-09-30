@@ -28,6 +28,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/compile.h"
 #include "mlx/device.h"
@@ -1014,5 +1015,61 @@ TEST_CASE("shapeless reuse works on the default path with no override set") {
               1e-6 * std::max(1.0f, std::abs(eager_data[index])));
       }
     }
+  }
+}
+
+TEST_CASE(
+    "compiled AdaIN + Snake: a Sin after a fused chain matches eager"
+    " (no-primitive regression)") {
+  // Kokoro's AdaINResBlock1 shape: instance norm with a style affine from
+  // a split matmul, then Snake x + (1/a) sin(a x)^2 with a captured alpha.
+  // The norm/affine run closes as a fused chain whose tail operand is a
+  // tracing-graph array, and Sin's argument gate settle()s a graph over
+  // its input. Before the fix that nested eval walked into the trace and
+  // threw "[eval] Attempting to eval an array without a primitive".
+  if (!compute_available()) {
+    return;
+  }
+  if (!omarchy::fused_chain_enabled()) {
+    skip("MLX_OMARCHY_FUSED_CHAIN is off; this case needs the fused path");
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int C = 8, T = 64, S = 16;
+  auto ramp = [](int n, float scale, float offset) {
+    std::vector<float> v(n);
+    for (int i = 0; i < n; ++i) {
+      v[i] = static_cast<float>(i % 13) * scale + offset;
+    }
+    return v;
+  };
+  auto wv = ramp(2 * C * S, 0.01f, -0.05f);
+  auto bv = ramp(2 * C, 0.02f, -0.1f);
+  auto av = ramp(C, 0.1f, 0.5f);
+  auto xv = ramp(C * T, 0.21f, -1.3f);
+  auto sv = ramp(S, 0.3f, -2.0f);
+  for (Dtype dtype : {float32, bfloat16}) {
+    INFO("dtype ", dtype);
+    array w(wv.begin(), {2 * C, S}, dtype);
+    array b(bv.begin(), {2 * C}, dtype);
+    array alpha(av.begin(), {1, C, 1}, dtype);
+    auto adain_snake = [w, b, alpha](const std::vector<array>& in) {
+      const array& x = in[0];
+      auto affine = split(expand_dims(addmm(b, in[1], transpose(w)), 2), 2, 1);
+      array xn = divide(
+          subtract(x, mean(x, {2}, true)),
+          sqrt(add(var(x, {2}, true), array(1e-5f, x.dtype()))));
+      array y = add(multiply(add(array(1.0f, x.dtype()), affine[0]), xn),
+                    affine[1]);
+      array s2 = power(sin(multiply(alpha, y)), array(2.0f, x.dtype()));
+      return std::vector<array>{
+          add(y, multiply(divide(array(1.0f, x.dtype()), alpha), s2))};
+    };
+    std::vector<array> inputs = {
+        array(xv.begin(), {1, C, T}, dtype), array(sv.begin(), {1, S}, dtype)};
+    // bf16: 1e-7 relative is far below one bf16 ulp (2^-8), so after
+    // widening this demands bit-exact agreement with eager.
+    check_compiled_matches_eager(
+        adain_snake, inputs, dtype, stream, dtype == float32 ? 1e-5 : 1e-7);
   }
 }

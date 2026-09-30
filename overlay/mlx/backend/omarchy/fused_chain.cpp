@@ -188,7 +188,6 @@ struct FusedChainImpl {
   // entries are detached immediately after gpu::eval returns.
   std::vector<std::uintptr_t> node_ids;
   std::vector<array> node_arrays;
-  std::vector<std::vector<array>> inputs;
   std::vector<uint32_t> program;
   std::vector<array> leaves;
   std::vector<uint32_t> leaf_offsets;
@@ -197,7 +196,6 @@ struct FusedChainImpl {
   uint32_t last_dim = 0;
   Shape eval_shape;
   Dtype dtype = float32;
-  std::shared_ptr<Primitive> tail_primitive;
   std::optional<array> tail_array;
   bool gate_enabled = false;
   bool open = false;
@@ -453,10 +451,8 @@ bool FusedChain::try_add(
 
   impl_->program.push_back(pack_instruction(op, a.value(), b.value(), dst));
   impl_->node_ids.push_back(node.id());
-  impl_->inputs.push_back(node_inputs);
   impl_->node_arrays.push_back(node);
   impl_->dtype = node.dtype();
-  impl_->tail_primitive = node.primitive_ptr();
   impl_->tail_array = node;
   if (!impl_->open) {
     impl_->count = count;
@@ -689,12 +685,15 @@ std::optional<array> FusedChain::evaluate(const Stream& stream) {
   if (impl_->node_ids.empty()) {
     return std::nullopt;
   }
-  array out(
-      impl_->eval_shape,
-      impl_->dtype,
-      impl_->tail_primitive,
-      impl_->inputs.back());
+  // A graph-free value, like an eager node after the evaluator detaches
+  // it. The tail's operands include the previous member's tracing-graph
+  // array (the chain continuation), so an output that kept them as
+  // inputs led any nested eval over a consumer's inputs - the Sin/Cos
+  // argument gate's settle() - into the trace and its placeholder
+  // inputs: "[eval] Attempting to eval an array without a primitive".
+  array out(impl_->eval_shape, impl_->dtype, nullptr, {});
   dispatch_chain(*impl_, out, stream, false);
+  out.set_status(array::Status::evaluated);
   return out;
 }
 
