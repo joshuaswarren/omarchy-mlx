@@ -112,11 +112,13 @@ def start_server(chat_model):
                MLX_OMARCHY_OFFLINE="1", MLX_OMARCHY_HOME=home)
     setup_args = ["--pair", pair_id, "--yes"] if do_setup else []
     resume_args = ["--resume"] if not do_setup else []
+    server_log = os.path.join(_HOME, "agents", "MarkdownCards",
+                              f"latency_server_{chat_model.replace('/', '_')}.log")
     server = subprocess.Popen(
         [PYTHON, "-m", "mlx_omarchy_assistant", "--home", home,
          "--no-browser"] + setup_args + resume_args,
         cwd=REPO, env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        stdout=open(server_log, "w"), stderr=subprocess.STDOUT,
         start_new_session=True)
     return server, runtime
 
