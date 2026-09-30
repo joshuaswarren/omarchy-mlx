@@ -118,4 +118,4 @@ Not re-measured for this PR because the change is a pure refactor of where sync 
 - `~/agents/SpeechOutputFast/profile/baseline.json` — raw baseline timings (5 sentences × 4 rounds, m2 direct)
 - `~/agents/SpeechOutputFast/profile/deep.json` — per-component timing breakdown
 - `~/agents/SpeechOutputFast/profile/v1.json`, `v2.json` — fix attempts 1 and 2
-- `~/.local/share/apple-silicon-lab/entries/SpeechOutputFast/2026-09-29T20-00-jw14m2-profile-speech-output.md` — notebook entry
+- `~/.local/share/apple-silicon-lab/entries/SpeechOutputFast/2026-09-29T20-00-<project-m2>-profile-speech-output.md` — notebook entry

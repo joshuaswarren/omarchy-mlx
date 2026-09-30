@@ -103,7 +103,7 @@ the named hd128 TTS and chat-attention SDPA win.
   `kDecodeBf16Windows` from the measurement, push the follow-up commit
   with the narrowed windows, and write the per-ticket JSON receipts to
   `artifacts/Attn128/`.
-- Notebook: `~/.local/share/apple-silicon-lab/entries/Attn128/20260930T000651Z-jw14m2-attn128-fused-decode-and-smallk-topk.md`.
+- Notebook: `~/.local/share/apple-silicon-lab/entries/Attn128/20260930T000651Z-<project-m2>-attn128-fused-decode-and-smallk-topk.md`.
 
 ## Files
 
