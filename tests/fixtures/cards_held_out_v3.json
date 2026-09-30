@@ -1,0 +1,259 @@
+{
+ "version": "2026-09-30.3",
+ "status": "frozen-held-out-v3",
+ "rule": "FROZEN before any model or the promotion code sees it; hash this file (sha256 recorded in the commit message and the receipt) and never edit it. Wording differs from cards_dev.json, cards_held_out.json (v1) and cards_held_out_v2.json. 18 card-worthy (4 checklist, 4 comparison, 4 timeline, 3 facts, 3 mixed), 9 plain, 9 near-miss. Thresholds fixed now: >= 15 of 18 card-worthy produce a valid card, 0 cards on the 18 plain and near-miss prompts, every card passes validate_components, 2B first-text p95 <= 2.0 s over 30 warm turns.",
+ "prompts": [
+  {
+   "id": "v3-01",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "Make me a checklist for closing up a lake cabin for the winter."
+  },
+  {
+   "id": "v3-02",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "I need a to-do list for hosting Thanksgiving dinner for twelve people."
+  },
+  {
+   "id": "v3-03",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "What steps should I follow to replace a bike inner tube?"
+  },
+  {
+   "id": "v3-04",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "Put together a packing list for a three-day business trip to Chicago."
+  },
+  {
+   "id": "v3-05",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Compare electric and gas stoves on cost, cooking speed, and maintenance."
+  },
+  {
+   "id": "v3-06",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Kindle versus paperback books: weigh price, portability, and eye strain."
+  },
+  {
+   "id": "v3-07",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Can you lay out the three biggest US mobile carriers in a table by coverage, price, and perks?"
+  },
+  {
+   "id": "v3-08",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Side-by-side view of renting and buying a home over five years, please."
+  },
+  {
+   "id": "v3-09",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "Give me a schedule for a Saturday garage cleanout starting at 8 am."
+  },
+  {
+   "id": "v3-10",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "Sketch a roadmap for learning Spanish over six months."
+  },
+  {
+   "id": "v3-11",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "What does a typical wedding-day timeline look like, from hair and makeup to the send-off?"
+  },
+  {
+   "id": "v3-12",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "Plan my Friday: dentist at 8:30, team sync at 10, gym at noon, and dinner with Sam at 7."
+  },
+  {
+   "id": "v3-13",
+   "category": "card-worthy",
+   "kind": "facts",
+   "expect": "card",
+   "text": "From what I told you (my car is a 2019 Civic, 48,000 miles, oil changed in June), list the key facts."
+  },
+  {
+   "id": "v3-14",
+   "category": "card-worthy",
+   "kind": "facts",
+   "expect": "card",
+   "text": "Pull out the key points from this: the meeting moved to Thursday, the budget is frozen, and Dana leads the redesign."
+  },
+  {
+   "id": "v3-15",
+   "category": "card-worthy",
+   "kind": "facts",
+   "expect": "card",
+   "text": "Three quick facts about the Eiffel Tower, please."
+  },
+  {
+   "id": "v3-16",
+   "category": "card-worthy",
+   "kind": "mixed",
+   "expect": "card",
+   "text": "Compare Zoom and Google Meet, then give me an agenda for our first call."
+  },
+  {
+   "id": "v3-17",
+   "category": "card-worthy",
+   "kind": "mixed",
+   "expect": "card",
+   "text": "Write a checklist to prep my garden for spring, and add a planting timeline by month."
+  },
+  {
+   "id": "v3-18",
+   "category": "card-worthy",
+   "kind": "mixed",
+   "expect": "card",
+   "text": "Give me the action items from today's standup: Priya fixes the login bug, Omar updates the docs, and I review the PR."
+  },
+  {
+   "id": "v3-19",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Why do cats purr?"
+  },
+  {
+   "id": "v3-20",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "What causes inflation?"
+  },
+  {
+   "id": "v3-21",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "How does a heat pump work in winter?"
+  },
+  {
+   "id": "v3-22",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Is it safe to eat raw cookie dough?"
+  },
+  {
+   "id": "v3-23",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Tell me a short story about a lighthouse keeper."
+  },
+  {
+   "id": "v3-24",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "What is the difference between baking soda and baking powder?"
+  },
+  {
+   "id": "v3-25",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Explain how compound interest works."
+  },
+  {
+   "id": "v3-26",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Write a haiku about autumn rain."
+  },
+  {
+   "id": "v3-27",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "What's a good way to apologize to a coworker?"
+  },
+  {
+   "id": "v3-28",
+   "category": "near-miss",
+   "kind": "list-in-prose",
+   "expect": "none",
+   "text": "In a paragraph, tell me the steps of photosynthesis."
+  },
+  {
+   "id": "v3-29",
+   "category": "near-miss",
+   "kind": "list-in-prose",
+   "expect": "none",
+   "text": "Describe the phases of the moon without using a list."
+  },
+  {
+   "id": "v3-30",
+   "category": "near-miss",
+   "kind": "short-list",
+   "expect": "none",
+   "text": "Name four planets."
+  },
+  {
+   "id": "v3-31",
+   "category": "near-miss",
+   "kind": "short-list",
+   "expect": "none",
+   "text": "What are two good houseplants for low light?"
+  },
+  {
+   "id": "v3-32",
+   "category": "near-miss",
+   "kind": "code-only",
+   "expect": "none",
+   "text": "Show me a bash one-liner that counts lines in all .txt files."
+  },
+  {
+   "id": "v3-33",
+   "category": "near-miss",
+   "kind": "code-only",
+   "expect": "none",
+   "text": "Write a SQL query that returns the ten newest orders."
+  },
+  {
+   "id": "v3-34",
+   "category": "near-miss",
+   "kind": "table-noun",
+   "expect": "none",
+   "text": "Explain what a lookup table is in databases."
+  },
+  {
+   "id": "v3-35",
+   "category": "near-miss",
+   "kind": "explanation-with-bullets",
+   "expect": "none",
+   "text": "How do vaccines train the immune system? A few bullets are fine."
+  },
+  {
+   "id": "v3-36",
+   "category": "near-miss",
+   "kind": "history",
+   "expect": "none",
+   "text": "What happened during the French Revolution, briefly?"
+  }
+ ]
+}
