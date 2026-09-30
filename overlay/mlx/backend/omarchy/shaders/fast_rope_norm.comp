@@ -18,14 +18,16 @@
 // Bit-exactness recipe (DecodeGap9 / DecodeGap2): the squared register from
 // the reduction phase is THROWN AWAY; the output multiply chain re-loads
 // `value` from input_data after the reduction barrier, matching production
-// fast_norm.comp's output loop exactly. Without the re-load, Honeykrisp's
-// nir_opt_reassociate can fold the squared form and the multiply chain into
-// an ffma that drifts by 1 bf16 ULP at the rounding boundary (observed in
-// DecodeGap8 W2 gate: model-q-prefill-t512-off{0,600}, h=3 t=416 d=80,
-// h=1 t=500 d=62). The explicit barrier() between the reduction and the
-// output multiply chain and the `precise` qualifiers on `norm`, `value`,
-// `weight`, `v_normed` prevent FMA contraction and reassociation through
-// the bf16 rounding site.
+// fast_norm.comp's output loop exactly. The multiply chain is in the
+// EXACT order production's compiled SPIR-V emits: (weight * norm) * value
+// (verified in artifacts/Jw16DecodeGap9/nir-diffs/); reordering to
+// (value * norm) * weight shifts the bf16 rounding boundary by 1 ULP at
+// the rounding tie line, which is what DecodeGap8 W2 gate observed (9
+// mismatches per 1M output bytes on model-q-prefill-t512-off{0,600}).
+// `precise` on `norm`, `value`, `weight`, `weight_norm` prevents
+// nir_opt_reassociate from folding the chain and breaks any FMA contraction
+// across the bf16 rounding site (25 NoContraction decorations emitted by
+// glslangValidator).
 //
 // Push-constant mapping (ComputeParams fields), identical to fast_rope.comp
 // plus two reused fields — ComputeParams is pushed whole (128 bytes, the
@@ -189,13 +191,20 @@ void main() {
   precise float weight = (thread < row_length)
       ? weight_load(params.aux_offset + thread)
       : 0.0;
-  // precise prevents FMA contraction / reassociation; the multiply chain
-  // rounds to bf16 the same way production fast_norm.comp's STORE_VALUE
-  // does (RNE, two bf16 ULPs at the boundary; verified identical bit pattern
-  // on the failing rows model-q-prefill-t512-off{0,600}, h=3 t=416 d=80,
-  // h=1 t=500 d=62).
-  precise float v_normed = value * norm;
-  rounded[thread] = (thread < row_length) ? rope_round(v_normed * weight)
+  // MIRROR PRODUCTION'S EXACT MULTIPLY ORDER: fast_norm.comp's compiled
+  // SPIR-V emits (weight * norm) * value (verified in
+  // artifacts/Jw16DecodeGap9/nir-diffs/fast_rms_norm_bf16.spvasm:
+  //   %171 = InverseSqrt(...)             -> norm
+  //   %190 = weight loaded as f32
+  //   %225 = FMul %190 %171               -> weight * norm
+  //   %227 = FMul %225 %297               -> (weight*norm) * value
+  // ). An order-of-multiplication change in fp32 shifts the bf16 rounding
+  // boundary by 1 ULP at the rounding tie line, so this exact order is
+  // bit-identity for production. The two precise intermediates pin the
+  // shape so nir_opt_reassociate cannot fold the chain (25 NoContraction
+  // decorations on this shader; verified via glslangValidator).
+  precise float weight_norm = weight * norm;
+  rounded[thread] = (thread < row_length) ? rope_round(value * weight_norm)
                                           : 0.0;
   barrier();
 
