@@ -1246,6 +1246,19 @@ float bits_float(uint32_t bits) {
   std::memcpy(&value, &bits, 4);
   return value;
 }
+// Round-to-nearest-even f32 -> bf16 (matches the shader's RNE bf16_store).
+uint16_t f32_to_bf16_rne(float value) {
+  uint32_t bits;
+  std::memcpy(&bits, &value, 4);
+  if (std::isnan(value)) {
+    uint32_t nan_payload = (bits >> 16) | 0x40u;
+    return static_cast<uint16_t>(nan_payload);
+  }
+  uint32_t round_bit = (bits >> 15) & 1u;
+  uint32_t sticky = bits & 0x7fffu;
+  uint32_t rounded = (bits + (round_bit | sticky)) >> 16;
+  return static_cast<uint16_t>(rounded);
+}
 // Exact f16 widening; bf16 is a 16-bit left shift.
 float f16_bits_to_float(uint16_t half) {
   uint32_t sign = static_cast<uint32_t>(half & 0x8000u) << 16;
@@ -1404,7 +1417,11 @@ TEST_CASE("wide-row small-k partition covers rows, ties, and 16-bit dtypes") {
   CHECK_EQ(dispatches, 1);
   std::vector<uint32_t> expected;
   for (int r = 0; r < 3; ++r) {
-    std::vector<uint32_t> widened(rows.begin() + r * n, rows.begin() + (r + 1) * n);
+    std::vector<uint32_t> widened;
+    widened.reserve(n);
+    for (int i = 0; i < n; ++i) {
+      widened.push_back(float_bits(rows[r * n + i]));
+    }
     auto tail = host_tail_bits(widened, k);
     expected.insert(expected.end(), tail.begin(), tail.end());
   }
@@ -1430,7 +1447,7 @@ TEST_CASE("wide-row small-k partition covers rows, ties, and 16-bit dtypes") {
     auto row = smallk_pattern(n, 303 + r);
     std::vector<uint32_t> widened(n);
     for (int i = 0; i < n; ++i) {
-      uint16_t bits = static_cast<uint16_t>(float_bits(row[i]) >> 16);
+      uint16_t bits = f32_to_bf16_rne(row[i]);
       bf16_bits.push_back(bits);
       widened[i] = static_cast<uint32_t>(bits) << 16;
     }
