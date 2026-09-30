@@ -139,9 +139,19 @@ _STRICT_INJECTION_VERBS = (
 # "forget" / "skip" / "overwrite" require an explicit meta-noun to fire —
 # they appear in benign contexts (forget the budget, skip the warm-up).
 _FORGET_LIKE_VERBS = ("forget", "skip", "overwrite")
+# Targets that signal an override attempt when combined with a strict
+# verb: "everything", "all", "this" are abstract pronouns (forget
+# everything = override attempt; forget the budget = benign).
 _TARGETS = (
     "previous", "prior", "above", "all", "your",
     "earlier", "above-mentioned", "system",
+)
+# Abstract override-target pronouns — pairing these with a strict verb
+# is an injection attempt on its own (no meta-noun needed). "Forget
+# everything above" -> injection. "Forget the earlier budget" -> no
+# match because "earlier" is in _TARGETS but "budget" is not abstract.
+_ABSTRACT_OVERRIDE_TARGETS = (
+    "everything", "all", "this", "that", "every", "any",
 )
 # Meta-nouns: these are the words that signal "the user is talking about
 # the prompt / policy / instructions themselves".
@@ -159,6 +169,8 @@ _FORGET_RE = _re.compile(r"\b(?:" + "|".join(_FORGET_LIKE_VERBS) + r")\b",
 _META_NOUN_RE = _re.compile(r"\b(?:" + "|".join(_META_NOUNS) + r")\b",
                             _re.IGNORECASE)
 _TARGET_RE = _re.compile(r"\b(?:" + "|".join(_TARGETS) + r")\b", _re.IGNORECASE)
+_ABSTRACT_TARGET_RE = _re.compile(
+    r"\b(?:" + "|".join(_ABSTRACT_OVERRIDE_TARGETS) + r")\b", _re.IGNORECASE)
 
 # Role-override prefix
 _SYSTEM_PREFIX_RE = _re.compile(
@@ -227,6 +239,12 @@ def _is_injection(text: str) -> bool:
         has_forget_verb = bool(_FORGET_RE.search(sentence))
         has_meta_noun = bool(_META_NOUN_RE.search(sentence))
         if has_meta_noun and (has_strict_verb or has_forget_verb):
+            return True
+        # Abstract override-target pronoun + strict verb: injection even
+        # without a meta-noun ("Forget everything above", "Ignore all").
+        # forget-like verbs are included here too because "forget
+        # everything" is a clear override attempt.
+        if (has_strict_verb or has_forget_verb) and _ABSTRACT_TARGET_RE.search(sentence):
             return True
     return False
 
