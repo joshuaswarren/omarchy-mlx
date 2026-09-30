@@ -128,9 +128,32 @@ def main(argv: list[str] | None = None) -> int:
         _send(stdout, {"ok": False, "kind": "unavailable",
                        "error": f"failed to load model: {exc}"})
         return 2
-    _send(stdout, {"ok": True, "event": "ready",
-                   "model_id": args.model_id,
-                   "model": type(model).__name__})
+    # Warm the model with a single 1-second silence pass before we declare
+    # readiness. mlx-audio STT's first generate() after load() on Parakeet
+    # silently returns "" on the live mlx-audio 0.5.6 path; the second
+    # call onwards returns the previous audio's transcript because the
+    # model buffer is latched on the first input. The warmup call
+    # unlatches the buffer and the next transcribe() call sees a fresh
+    # state. Measured on jw14m2-linux M2 Max T6021, mlx wheel
+    # 0.32.3.dev202609282218+29cba8e.
+    try:
+        import mlx.core as mx
+        _warmup = model.generate(
+            mx.zeros((16000 * 1,), dtype=mx.float32),
+            verbose=False,
+        )
+        del _warmup
+    except Exception as exc:
+        # Warmup failure is not fatal: surface it but stay up so the
+        # caller can decide.
+        _send(stdout, {"ok": True, "event": "ready",
+                       "model_id": args.model_id,
+                       "model": type(model).__name__,
+                       "warmup_error": str(exc)})
+    else:
+        _send(stdout, {"ok": True, "event": "ready",
+                       "model_id": args.model_id,
+                       "model": type(model).__name__})
 
     cancel = threading.Event()
 

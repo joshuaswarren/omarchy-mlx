@@ -341,6 +341,8 @@ class _WorkerHandle:
         self._pgid = os.getpgid(self._process.pid)
         self._send_lock = threading.Lock()
         self._stop_lock = threading.Lock()
+        self._ready_lock = threading.Lock()
+        self._ready_seen = False
         self._request_id = 0
         self._active_id: int | None = None
 
@@ -411,6 +413,22 @@ class _WorkerHandle:
             watcher.start()
         try:
             header = dict(header, id=request_id)
+            # The worker emits a one-shot "ready" header on startup
+            # (post-warmup). Drain any pre-call notices so the FIRST
+            # ``request`` call sees its own response, not the boot
+            # banner — otherwise ``transcribe`` would return "" on its
+            # very first call because the parent's _read_response
+            # would consume the ready header and find no transcript.
+            with self._ready_lock:
+                if not self._ready_seen:
+                    ready = self._read_response(timeout=max(timeout, 60.0))
+                    if ready.get("event") == "ready":
+                        self._ready_seen = True
+                    else:
+                        # Worker did not boot — surface whatever it sent.
+                        if not ready.get("ok"):
+                            raise _worker_error(ready)
+                        return ready
             self._send(header, payload)
             assert self._process.stdout is not None
             response = self._read_response(timeout)
