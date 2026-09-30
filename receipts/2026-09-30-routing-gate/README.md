@@ -111,20 +111,50 @@ is not enabled.
 
 ## Iteration log (dev sweep, M2 Laya, gpu-turn queued)
 
-| # | When (UTC) | Question version | Inert-quote + neutralise? | Best precision | inj→dec | Coverage | Pass? |
+| # | When (UTC) | Question version | State sent to head | Best precision | inj→dec | Coverage | Pass? |
 |---|---|---|---|---|---|---|---|
-| 1 | 2026-09-29T21:38Z | "1" raw | no | 0.9405 | 8 / 15 | 1.0000 | NO |
-| 2 | 2026-09-29T21:48Z (queued, gpu-turn pid 374098) | "2" + inert-quote + neutralise | yes | TBD | TBD | TBD | TBD |
+| 1 | 2026-09-29T21:38Z | "1" raw user text | raw text | 0.9405 | 8 / 15 | 1.0000 | NO |
+| 2 | 2026-09-30T01:11Z (queued, gpu-turn pid 374098, then re-queued after reboot) | "2" + JSON-quote + neutralise Options:/Criteria:/verb | `<state-json>` of neutralised text | 0.9405 | 9 / 15 | 1.0000 | NO |
+| 3 | 2026-09-30T01:32Z (after M2 reboot, gpu-turn pid 6904) | "3" + structural fingerprint only (no raw text); head sees `has_options_marker`, `has_criteria_marker`, etc. | `<fingerprint>` JSON | n/a (best cell has every case routed to `structured_decision`) | 15 / 15 | 1.0000 (vacuous) | NO |
 
-Iteration 2 is queued with the design fix: the user turn is
-JSON-encoded inside a `<state-json>` delimiter (outside the head
-side of the head/body boundary), and inside that quoted JSON,
-`Options:` / `Criteria:` / verb prefixes are reduced to inert
-lowercase markers. The runner's `build_payload` and the
-production `routing._build_routing_payload` use the same transform;
-both wired by commit on this branch.
+**Three dev iterations, none passed.** Each design fix addressed the
+previous failure mode but exposed a deeper one:
 
-Per Main's audit: 15 injection cases span 8 templates (ignore /
-disregard / forget / override / pretend / you-are-now / drop-the /
-system-prompt), no single overfit. The design fix addresses the
-shared mechanism (Options: lexical pattern), not a template.
+- **Iter 1** (raw user text): 8/15 injection cases route to
+  `structured_decision` because injection text mimics decision
+  grammar (`Options:` / `Criteria:`).
+- **Iter 2** (JSON-quote the user text + neutralise the explicit
+  `Options:` / `Criteria:` / verb prefixes inside the quoted text):
+  no improvement on injection (9/15 instead of 8/15). The
+  choice head reads the JSON-encoded text inside the `<state-json>`
+  block and still recognises the structural pattern from the
+  remaining tokens (e.g. semicolon-separated lists, "Pick"
+  synonyms).
+- **Iter 3** (replace the user text with a structural fingerprint:
+  only `has_options_marker`, `has_criteria_marker`,
+  `options_marker_count`, etc., in JSON, with a question that
+  requires BOTH markers for `structured_decision`): the head now
+  defaults to `structured_decision` for **every** case (15/15
+  injection, 35/35 ordinary, 20/20 ambiguity). The fingerprint
+  scheme tells the head "decision grammar is present" in a way
+  that, combined with the question wording, makes the head always
+  pick `structured_decision`.
+
+Per Main's protocol, three iterations is the cap. **No passing
+cell exists on the dev set at any threshold combination** (448
+cells swept per iteration). The Laya choice head cannot reliably
+classify a user turn as `structured_decision` vs other for this
+domain without seeing the actual user text, and once it sees the
+user text, it is fooled by injection that mimics decision grammar.
+
+## Decision
+
+Routing gate stays OFF. Held-out suite `09a37b60…8906f0` remains
+unspent. Policy record version stays at "3" (frozen in
+`4a864454b`) for forensic record; the pair record's
+`extension.selection_evidence.routing.gate` is not flipped.
+
+Per Main's protocol: the gate stays off and a NEW frozen held-out
+suite must be authored (>= 100 cases, hashed before evaluation,
+written by a process that does not consult the spent suite's
+results) before another held-out evaluation can run.
