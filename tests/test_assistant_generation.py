@@ -267,9 +267,11 @@ class GenerationTests(unittest.TestCase):
         self.worker.scripts = [[(0, delta("ok")), (0, finish("stop"))]] * 3
         self.run_turn(cid, {"text": "Summarize the release notes in plain words."})
         self.run_turn(cid, {"text": "Show the numbers as a chart."})
-        declared = {"entries": [{"id": "fenced-model", "extension": {"card_format": "fenced-json"}}]}
+        declared = catalog.load_catalog(prefer_cache=False)
+        model = declared["models"][0]
+        model.setdefault("extension", {})["card_format"] = "fenced-json"
         original_start = self.manager.start
-        self.manager.start = lambda: dict(original_start(), chat_model="fenced-model")
+        self.manager.start = lambda: dict(original_start(), chat_model=model["id"])
         with mock.patch.dict(coord._FENCED_JSON_CACHE, clear=True), \
                 mock.patch.object(catalog, "load_catalog", return_value=declared):
             self.run_turn(cid, {"text": "Summarize the release notes in plain words."})
@@ -292,10 +294,13 @@ class GenerationTests(unittest.TestCase):
                          "main call plus exactly one repair call")
         main, repair = self.worker.calls
         self.assertLessEqual(repair["max_tokens"], 2048)
-        self.assertEqual(len(repair["messages"]), 1)
+        # A system turn with the schema, then the rejected block as the user
+        # turn (chat templates refuse a conversation without one); never
+        # the user's conversation.
+        self.assertEqual([m["role"] for m in repair["messages"]], ["system", "user"])
         self.assertIn("assistant-ui", repair["messages"][0]["content"])
-        self.assertIn(bad_block, repair["messages"][0]["content"])
-        self.assertNotIn("make a list", repair["messages"][0]["content"])
+        self.assertIn(bad_block, repair["messages"][1]["content"])
+        self.assertFalse(any("make a list" in m["content"] for m in repair["messages"]))
         self.assertEqual(len(record["messages"][-1]["components"]), 1)
         component = record["messages"][-1]["components"][0]
         self.assertEqual(component["type"], "checklist")
@@ -413,7 +418,7 @@ class GenerationTests(unittest.TestCase):
                          ["ensure", "status", "ensure", "status"])
         repair = self.worker.calls[1]
         self.assertIn(components.SCHEMA_PROMPT, repair["messages"][0]["content"])
-        self.assertIn(bad_block, repair["messages"][0]["content"])
+        self.assertIn(bad_block, repair["messages"][1]["content"])
         self.assertLessEqual(repair["max_tokens"], 2048)
 
     def test_repair_admission_refusal_preserves_prose(self):

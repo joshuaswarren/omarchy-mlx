@@ -197,7 +197,7 @@ def _model_emits_fenced_cards(chat_model_id: str) -> bool:
         fenced = False
         try:
             from mlx_omarchy_serve import catalog as _catalog
-            for entry in _catalog.load_catalog().get("entries") or ():
+            for entry in _catalog.load_catalog().get("models") or ():
                 if entry.get("id") == chat_model_id:
                     fenced = (entry.get("extension") or {}).get("card_format") == "fenced-json"
                     break
@@ -1048,12 +1048,15 @@ class Coordinator:
         from .components import (validate_components, ENVELOPE_MAX_BYTES,
                                  SCHEMA_PROMPT)
         blob = envelope.encode("utf-8", "replace")[:ENVELOPE_MAX_BYTES]
+        # Chat templates such as Qwen 3.5's refuse a conversation without a
+        # user turn, so the rejected block travels as the user message.
         messages = [{"role": "system", "content":
                      SCHEMA_PROMPT
                      + "\nThe previous ```assistant-ui block failed "
                        "validation. Return ONLY one corrected "
                        "```assistant-ui fenced block with the same intent "
-                       "and no prose. Rejected block:\n"
+                       "and no prose."},
+                    {"role": "user", "content": "Rejected block:\n"
                      + blob.decode("utf-8", "replace")}]
         required = (self.models.count(pair["model_paths"]["chat"], messages)
                     + min(allowance, 2048))
