@@ -21,11 +21,14 @@ Fence::Fence(Stream s) {
   fence_ = std::make_shared<FenceImpl>(0, s);
 }
 
-void Fence::wait(Stream s, const array&) {
+void Fence::wait(Stream s, const array&, uint32_t) {
+  // The events are timeline semaphores; waiting at the event's current
+  // value covers every update() this fence published before the wait was
+  // enqueued, which is a superset of the requested `value`.
   cast<FenceImpl>().event.wait(s);
 }
 
-void Fence::update(Stream s, const array&, bool) {
+uint32_t Fence::update(Stream s, const array&, bool) {
   auto& f = cast<FenceImpl>();
   if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
     fprintf(stderr, "[rtmod] FENCE-UPDATE count=%u st=%d\n", f.count, s.index);
@@ -33,6 +36,7 @@ void Fence::update(Stream s, const array&, bool) {
   f.count++;
   f.event.set_value(f.count);
   f.event.signal(s);
+  return f.count;
 }
 
 } // namespace mlx::core

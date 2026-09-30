@@ -10612,6 +10612,7 @@ bool ScaledDotProductAttention::use_fallback(
     bool has_mask,
     bool has_arr_mask,
     bool do_causal,
+    bool has_sinks,
     bool is_training,
     bool output_logsumexp,
     bool force_fused,
@@ -10621,8 +10622,10 @@ bool ScaledDotProductAttention::use_fallback(
         "[scaled_dot_product_attention] force_fused=True but no fused "
         "kernel is available in the Omarchy backend.");
   }
-  // Training with a logsumexp output needs the VJP, which stays a
-  // named rejection, so that one case keeps the composed graph.
+  // Sinks ride the fused kernels (the denominator fold); training with a
+  // logsumexp output needs the VJP, which stays a named rejection, so
+  // that one case keeps the composed graph.
+  (void)has_sinks;
   return output_logsumexp;
 }
 

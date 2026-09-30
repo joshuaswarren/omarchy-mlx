@@ -2821,19 +2821,22 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
   };
   auto composed_fun = [&](const std::vector<array>& inputs) {
     // softmax(Q K^T * scale) V in the [B, T, H, D] storage MLX uses.
-    auto qt = transpose(inputs[0], 0, 2, 1, 3, stream);
-    auto kt = transpose(inputs[1], 0, 2, 1, 3, stream);
-    auto vt = transpose(inputs[2], 0, 2, 1, 3, stream);
+    auto qt = transpose(inputs[0], std::vector<int>{0, 2, 1, 3}, stream);
+    auto kt = transpose(inputs[1], std::vector<int>{0, 2, 1, 3}, stream);
+    auto vt = transpose(inputs[2], std::vector<int>{0, 2, 1, 3}, stream);
     auto scores = multiply(
-        matmul(qt, transpose(kt, 0, 1, 3, 2, stream), stream),
+        matmul(qt, transpose(kt, std::vector<int>{0, 1, 3, 2}, stream), stream),
         array(scale, float32),
         stream);
     auto probs = softmax(scores, -1, stream);
-    return transpose(
-        matmul(probs, vt, stream), 0, 2, 1, 3, stream);
+    return transpose(matmul(probs, vt, stream), std::vector<int>{0, 2, 1, 3}, stream);
   };
-  auto fast_grads = grad(sdpa_fun, std::vector<int>{0, 1, 2})({q, k, v});
-  auto composed_grads = grad(composed_fun, std::vector<int>{0, 1, 2})({q, k, v});
+  auto fast_grad_pair =
+      value_and_grad(sdpa_fun, std::vector<int>{0, 1, 2})({q, k, v});
+  auto composed_grad_pair =
+      value_and_grad(composed_fun, std::vector<int>{0, 1, 2})({q, k, v});
+  auto fast_grads = fast_grad_pair.second;
+  auto composed_grads = composed_grad_pair.second;
   for (int arg = 0; arg < 3; ++arg) {
     require_close(
         flat(fast_grads[arg], stream),
@@ -2913,10 +2916,12 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
     }
     return stack(outputs, 1, stream);
   };
-  auto gdn_fast_grads =
-      grad(gdn_fun, std::vector<int>{0, 1, 2, 3, 4})({gq, gk, gv, gg, gb, gh0});
-  auto gdn_ref_grads =
-      grad(gdn_ref, std::vector<int>{0, 1, 2, 3, 4})({gq, gk, gv, gg, gb, gh0});
+  auto gdn_fast_grads = value_and_grad(gdn_fun, std::vector<int>{0, 1, 2, 3, 4})(
+      {gq, gk, gv, gg, gb, gh0})
+      .second;
+  auto gdn_ref_grads = value_and_grad(gdn_ref, std::vector<int>{0, 1, 2, 3, 4})(
+      {gq, gk, gv, gg, gb, gh0})
+      .second;
   for (size_t arg = 0; arg < gdn_fast_grads.size(); ++arg) {
     require_close(
         flat(gdn_fast_grads[arg], stream),
@@ -2954,7 +2959,7 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
       bfloat16,
       stream);
   array fh0 = zeros({FB, FH, FD, FD}, float32, stream);
-  auto gdn_fused_fun = [&](const std::vector<array>& inputs) {
+  auto gdn_fused_vjp_fun = [&](const std::vector<array>& inputs) {
     auto pair = fast::gated_delta_update(
         inputs[0],
         inputs[1],
@@ -2964,16 +2969,17 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
         inputs[5],
         std::nullopt,
         stream);
-    return pair[0];
+    return std::vector<array>{pair[0]};
   };
   auto cot_out = ones({FB, 1, FH, FD}, float32, stream);
   auto [fused_out, fused_vjps] =
-      vjp(gdn_fused_fun,
+      vjp(gdn_fused_vjp_fun,
           std::vector<array>{fq, fk, fv, fg, fbeta, fh0},
           std::vector<array>{cot_out});
   auto fused_dq = flat(fused_vjps[0], stream);
   auto fused_ref_grads =
-      grad(gdn_ref, std::vector<int>{0})({fq, fk, fv, fg, fbeta, fh0});
+      value_and_grad(gdn_ref, std::vector<int>{0})({fq, fk, fv, fg, fbeta, fh0})
+          .second;
   require_close(fused_dq, widen(flat(fused_ref_grads[0], stream)), 2e-2, "gdn fused dq");
 
   // ---- Zero CPU dispatch: every tensor op above ran on the Omarchy GPU
