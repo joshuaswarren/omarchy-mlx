@@ -62,7 +62,10 @@ def _run(model, samples: np.ndarray, deadline_ms: int,
          cancel: threading.Event) -> dict:
     import mlx.core as mx
     audio = mx.array(np.ascontiguousarray(samples, dtype=np.float32))
-    mx_audio = audio.reshape(1, -1) if audio.ndim == 1 else audio
+    # Parakeet-TDT expects a 1-D waveform at 16 kHz; passing a 2-D
+    # (1, N) view silently returns "" on mlx-audio 0.5.6. Whisper
+    # accepts both shapes, but feeding it 1-D works too. Stay 1-D.
+    mx_audio = audio
     deadline = time.monotonic() + deadline_ms / 1000.0
     cancel_event = threading.Event()
     cancel_thread: threading.Thread | None = None
@@ -73,17 +76,20 @@ def _run(model, samples: np.ndarray, deadline_ms: int,
         cancel_thread = threading.Thread(target=watch, daemon=True)
         cancel_thread.start()
     try:
+        if cancel_event.is_set():
+            return {"ok": False, "kind": "cancelled",
+                    "error": "cancelled before transcription"}
+        # Whisper accepts language; Parakeet ignores it (and emitting it
+        # empty-stubs the output on the mlx-audio 0.5.6 STT path). Pass
+        # only the kwargs the model's signature actually wants.
         kwargs: dict[str, Any] = {"verbose": False}
         try:
             import inspect
             params = inspect.signature(model.generate).parameters
-            if "language" in params:
+            if "language" in params and "Whisper" in type(model).__name__:
                 kwargs["language"] = "en"
         except Exception:
             pass
-        if cancel_event.is_set():
-            return {"ok": False, "kind": "cancelled",
-                    "error": "cancelled before transcription"}
         out = model.generate(mx_audio, **kwargs)
         if cancel_event.is_set():
             return {"ok": False, "kind": "cancelled",
@@ -91,9 +97,18 @@ def _run(model, samples: np.ndarray, deadline_ms: int,
         if time.monotonic() > deadline:
             return {"ok": False, "kind": "timeout",
                     "error": "transcription exceeded deadline"}
-        text = getattr(out, "text", "")
-        return {"ok": True, "transcript": str(text or ""),
-                "model": type(model).__name__}
+        # mlx-audio STT returns either a string or an STTOutput with a
+        # .text attribute. Both code paths normalize to str here.
+        if isinstance(out, str):
+            text = out
+        else:
+            text = getattr(out, "text", "")
+        if text is None:
+            text = ""
+        return {"ok": True, "transcript": str(text),
+                "model": type(model).__name__,
+                "segments": len(getattr(out, "segments", []) or [])
+                              if not isinstance(out, str) else 0}
     except Exception as exc:
         return {"ok": False, "kind": "unavailable",
                 "error": f"gpu-stt generate failed: {exc}"}
