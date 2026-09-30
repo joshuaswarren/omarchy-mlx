@@ -1,23 +1,23 @@
 {
  "summary": {
   "n": 30,
-  "missing": 1,
-  "p50_ms": 990.2,
-  "p95_ms": 1579.4,
-  "max_ms": 1768.1
+  "missing": 0,
+  "p50_ms": 861.8,
+  "p95_ms": 1397.8,
+  "max_ms": 1410.1
  },
  "turns": [
   {
    "i": 0,
    "warmup": true,
-   "stop_to_transcript_ms": 1305.4,
-   "words": 17,
+   "stop_to_transcript_ms": 888.3,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 5517.600000000559,
-    "done": 6823
+    "stop": 5313.5999999996275,
+    "done": 6201.9000000003725
    },
    "requests": 1,
    "upload": {
@@ -27,14 +27,14 @@
   {
    "i": 1,
    "warmup": true,
-   "stop_to_transcript_ms": 905,
+   "stop_to_transcript_ms": 1174.4,
    "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 12566.900000000373,
-    "done": 13471.900000000373
+    "stop": 12032.900000000373,
+    "done": 13207.300000000745
    },
    "requests": 1,
    "upload": {
@@ -44,14 +44,14 @@
   {
    "i": 2,
    "warmup": false,
-   "stop_to_transcript_ms": 1290.9,
-   "words": 23,
+   "stop_to_transcript_ms": 880.9,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 19302.10000000056,
-    "done": 20593
+    "stop": 18891.900000000373,
+    "done": 19772.800000000745
    },
    "requests": 1,
    "upload": {
@@ -61,14 +61,14 @@
   {
    "i": 3,
    "warmup": false,
-   "stop_to_transcript_ms": 695.4,
-   "words": 10,
+   "stop_to_transcript_ms": 660.8,
+   "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 26348.10000000056,
-    "done": 27043.5
+    "stop": 25437.5,
+    "done": 26098.300000000745
    },
    "requests": 1,
    "upload": {
@@ -78,14 +78,14 @@
   {
    "i": 4,
    "warmup": false,
-   "stop_to_transcript_ms": 1362.4,
-   "words": 21,
+   "stop_to_transcript_ms": 1016.6,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 32645.60000000056,
-    "done": 34008
+    "stop": 31803,
+    "done": 32819.59999999963
    },
    "requests": 1,
    "upload": {
@@ -95,14 +95,14 @@
   {
    "i": 5,
    "warmup": false,
-   "stop_to_transcript_ms": 978.1,
-   "words": 15,
+   "stop_to_transcript_ms": 1255.1,
+   "words": 19,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 39560.60000000056,
-    "done": 40538.700000000186
+    "stop": 38544.90000000037,
+    "done": 39800
    },
    "requests": 1,
    "upload": {
@@ -112,14 +112,14 @@
   {
    "i": 6,
    "warmup": false,
-   "stop_to_transcript_ms": 1058.9,
-   "words": 14,
+   "stop_to_transcript_ms": 577.5,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 46175.700000000186,
-    "done": 47234.60000000056
+    "stop": 45658.09999999963,
+    "done": 46235.59999999963
    },
    "requests": 1,
    "upload": {
@@ -129,14 +129,14 @@
   {
    "i": 7,
    "warmup": false,
-   "stop_to_transcript_ms": 1057.9,
+   "stop_to_transcript_ms": 1036.5,
    "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 52945.10000000056,
-    "done": 54003
+    "stop": 51810.800000000745,
+    "done": 52847.300000000745
    },
    "requests": 1,
    "upload": {
@@ -146,14 +146,14 @@
   {
    "i": 8,
    "warmup": false,
-   "stop_to_transcript_ms": 797.7,
-   "words": 14,
+   "stop_to_transcript_ms": 974.8,
+   "words": 12,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 59740.200000000186,
-    "done": 60537.90000000037
+    "stop": 58544.90000000037,
+    "done": 59519.70000000112
    },
    "requests": 1,
    "upload": {
@@ -163,14 +163,14 @@
   {
    "i": 9,
    "warmup": false,
-   "stop_to_transcript_ms": 932.1,
-   "words": 15,
+   "stop_to_transcript_ms": 1136.2,
+   "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 66618.40000000037,
-    "done": 67550.5
+    "stop": 65303.90000000037,
+    "done": 66440.09999999963
    },
    "requests": 1,
    "upload": {
@@ -180,14 +180,14 @@
   {
    "i": 10,
    "warmup": false,
-   "stop_to_transcript_ms": 806.2,
-   "words": 14,
+   "stop_to_transcript_ms": 1397.8,
+   "words": 12,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 73309.29999999981,
-    "done": 74115.5
+    "stop": 72048.90000000037,
+    "done": 73446.70000000112
    },
    "requests": 1,
    "upload": {
@@ -197,14 +197,14 @@
   {
    "i": 11,
    "warmup": false,
-   "stop_to_transcript_ms": 1255.7,
-   "words": 19,
+   "stop_to_transcript_ms": 789.5,
+   "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 79818.29999999981,
-    "done": 81074
+    "stop": 79031.20000000112,
+    "done": 79820.70000000112
    },
    "requests": 1,
    "upload": {
@@ -214,14 +214,14 @@
   {
    "i": 12,
    "warmup": false,
-   "stop_to_transcript_ms": 777.6,
-   "words": 15,
+   "stop_to_transcript_ms": 961,
+   "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 86865.70000000019,
-    "done": 87643.29999999981
+    "stop": 85411,
+    "done": 86372
    },
    "requests": 1,
    "upload": {
@@ -231,14 +231,14 @@
   {
    "i": 13,
    "warmup": false,
-   "stop_to_transcript_ms": 1252.5,
-   "words": 14,
+   "stop_to_transcript_ms": 861.8,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 93381.79999999981,
-    "done": 94634.29999999981
+    "stop": 92060,
+    "done": 92921.80000000075
    },
    "requests": 1,
    "upload": {
@@ -248,14 +248,14 @@
   {
    "i": 14,
    "warmup": false,
-   "stop_to_transcript_ms": 1113.3,
-   "words": 14,
+   "stop_to_transcript_ms": 1410.1,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 100539.60000000056,
-    "done": 101652.90000000037
+    "stop": 98542.30000000075,
+    "done": 99952.40000000037
    },
    "requests": 1,
    "upload": {
@@ -265,14 +265,14 @@
   {
    "i": 15,
    "warmup": false,
-   "stop_to_transcript_ms": 1440.8,
-   "words": 17,
+   "stop_to_transcript_ms": 1341.7,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 107324.5,
-    "done": 108765.29999999981
+    "stop": 105565.59999999963,
+    "done": 106907.30000000075
    },
    "requests": 1,
    "upload": {
@@ -282,14 +282,14 @@
   {
    "i": 16,
    "warmup": false,
-   "stop_to_transcript_ms": 506.8,
-   "words": 15,
+   "stop_to_transcript_ms": 943.7,
+   "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 114488.20000000019,
-    "done": 114995
+    "stop": 112658,
+    "done": 113601.70000000112
    },
    "requests": 1,
    "upload": {
@@ -299,14 +299,14 @@
   {
    "i": 17,
    "warmup": false,
-   "stop_to_transcript_ms": 807.3,
-   "words": 14,
+   "stop_to_transcript_ms": 689.8,
+   "words": 12,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 120660.70000000019,
-    "done": 121468
+    "stop": 119563,
+    "done": 120252.80000000075
    },
    "requests": 1,
    "upload": {
@@ -316,14 +316,14 @@
   {
    "i": 18,
    "warmup": false,
-   "stop_to_transcript_ms": 1014.6,
+   "stop_to_transcript_ms": 1015.6,
    "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 127285.29999999981,
-    "done": 128299.90000000037
+    "stop": 126041.09999999963,
+    "done": 127056.70000000112
    },
    "requests": 1,
    "upload": {
@@ -333,14 +333,14 @@
   {
    "i": 19,
    "warmup": false,
-   "stop_to_transcript_ms": 1021.9,
+   "stop_to_transcript_ms": 854.1,
    "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 133976.60000000056,
-    "done": 134998.5
+    "stop": 132657.59999999963,
+    "done": 133511.70000000112
    },
    "requests": 1,
    "upload": {
@@ -350,14 +350,14 @@
   {
    "i": 20,
    "warmup": false,
-   "stop_to_transcript_ms": 1768.1,
-   "words": 27,
+   "stop_to_transcript_ms": 727.4,
+   "words": 12,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 140782,
-    "done": 142550.10000000056
+    "stop": 139364.90000000037,
+    "done": 140092.30000000075
    },
    "requests": 1,
    "upload": {
@@ -367,14 +367,14 @@
   {
    "i": 21,
    "warmup": false,
-   "stop_to_transcript_ms": 1579.4,
-   "words": 15,
+   "stop_to_transcript_ms": 1206.3,
+   "words": 12,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 148105.7000000002,
-    "done": 149685.10000000056
+    "stop": 145940.5,
+    "done": 147146.80000000075
    },
    "requests": 1,
    "upload": {
@@ -384,14 +384,14 @@
   {
    "i": 22,
    "warmup": false,
-   "stop_to_transcript_ms": 921.5,
+   "stop_to_transcript_ms": 1254.1,
    "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 155259.10000000056,
-    "done": 156180.60000000056
+    "stop": 153073.80000000075,
+    "done": 154327.90000000037
    },
    "requests": 1,
    "upload": {
@@ -401,14 +401,14 @@
   {
    "i": 23,
    "warmup": false,
-   "stop_to_transcript_ms": 889.1,
-   "words": 15,
+   "stop_to_transcript_ms": 625.4,
+   "words": 14,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 161946.5,
-    "done": 162835.60000000056
+    "stop": 159980.30000000075,
+    "done": 160605.70000000112
    },
    "requests": 1,
    "upload": {
@@ -418,14 +418,14 @@
   {
    "i": 24,
    "warmup": false,
-   "stop_to_transcript_ms": null,
-   "words": 0,
-   "live": "No speech detected.",
+   "stop_to_transcript_ms": 1196.8,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 168487.90000000037,
-    "done": null
+    "stop": 166229.90000000037,
+    "done": 167426.70000000112
    },
    "requests": 1,
    "upload": {
@@ -435,14 +435,14 @@
   {
    "i": 25,
    "warmup": false,
-   "stop_to_transcript_ms": 895.9,
-   "words": 13,
+   "stop_to_transcript_ms": 592,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 186477,
-    "done": 187372.90000000037
+    "stop": 173029.70000000112,
+    "done": 173621.70000000112
    },
    "requests": 1,
    "upload": {
@@ -452,14 +452,14 @@
   {
    "i": 26,
    "warmup": false,
-   "stop_to_transcript_ms": 990.2,
+   "stop_to_transcript_ms": 502.8,
    "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 192952.7999999998,
-    "done": 193943
+    "stop": 179213.90000000037,
+    "done": 179716.70000000112
    },
    "requests": 1,
    "upload": {
@@ -469,14 +469,14 @@
   {
    "i": 27,
    "warmup": false,
-   "stop_to_transcript_ms": 909.9,
-   "words": 13,
+   "stop_to_transcript_ms": 443.2,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 199788.7999999998,
-    "done": 200698.7000000002
+    "stop": 185296,
+    "done": 185739.20000000112
    },
    "requests": 1,
    "upload": {
@@ -486,14 +486,14 @@
   {
    "i": 28,
    "warmup": false,
-   "stop_to_transcript_ms": 1359,
-   "words": 12,
+   "stop_to_transcript_ms": 454.8,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 206350.90000000037,
-    "done": 207709.90000000037
+    "stop": 191330.09999999963,
+    "done": 191784.90000000037
    },
    "requests": 1,
    "upload": {
@@ -503,14 +503,14 @@
   {
    "i": 29,
    "warmup": false,
-   "stop_to_transcript_ms": 947.2,
+   "stop_to_transcript_ms": 444.3,
    "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 213285.90000000037,
-    "done": 214233.10000000056
+    "stop": 197362.40000000037,
+    "done": 197806.70000000112
    },
    "requests": 1,
    "upload": {
@@ -520,14 +520,14 @@
   {
    "i": 30,
    "warmup": false,
-   "stop_to_transcript_ms": 1301.2,
-   "words": 14,
+   "stop_to_transcript_ms": 441.6,
+   "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 220043.40000000037,
-    "done": 221344.60000000056
+    "stop": 203395.90000000037,
+    "done": 203837.5
    },
    "requests": 1,
    "upload": {
@@ -537,14 +537,14 @@
   {
    "i": 31,
    "warmup": false,
-   "stop_to_transcript_ms": 925.3,
+   "stop_to_transcript_ms": 442.5,
    "words": 15,
    "live": "Edit the transcript, then press Send.",
    "afterStart": "Listening…",
    "afterStop": "Microphone",
    "raw": {
-    "stop": 227014.2000000002,
-    "done": 227939.5
+    "stop": 209429.30000000075,
+    "done": 209871.80000000075
    },
    "requests": 1,
    "upload": {

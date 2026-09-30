@@ -11,10 +11,10 @@ PORT=47811
 { date -u +%FT%TZ; cat /proc/sys/kernel/random/boot_id; cat /proc/loadavg
   ps -eo pid,etime,cmd | grep -E "python|mlx" | grep -v grep; } > "$R/env.txt" 2>&1
 $PY $A/make_wavs.py "$R" > "$R/wavs.json" 2>&1
-T2=$A/runs/turn4
+T2=$A/runs/turn6
 [ -e "$T2/eval.done" ] && [ -e "$T2/overlimit.done" ] && [ -e "$T2/worker_trace.done" ] || { echo "turn2 incomplete; not running E2E" > "$R/qualify.json"; echo "$R"; exit 0; }
 $PY $A/score.py $A/corpus/manifest.json "$T2/eval/clips.jsonl+$T2/eval/overlimit.jsonl" > "$T2/scores.json" 2> "$R/score.stderr"
-if ! $PY $A/qualify.py $A/home $T2/scores.json $T2/eval/latency.json $T2/worker.gdb.txt runs/turn4 > "$R/qualify.json" 2>&1; then
+if ! $PY $A/qualify.py $A/home $T2/scores.json $T2/eval/latency.json $T2/worker.gdb.txt runs/turn6 > "$R/qualify.json" 2>&1; then
   echo "$R"; exit 0
 fi
 cd "$A/repo"

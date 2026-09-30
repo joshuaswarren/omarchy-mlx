@@ -9,8 +9,8 @@
    "errors": 0,
    "wer": 0.0342,
    "empty_rate": 0.0,
-   "latency_p50_ms": 481.9,
-   "latency_p95_ms": 845.1
+   "latency_p50_ms": 475.3,
+   "latency_p95_ms": 853.2
   },
   "short": {
    "n": 12,
@@ -21,8 +21,8 @@
    "errors": 0,
    "wer": 0.0385,
    "empty_rate": 0.0,
-   "latency_p50_ms": 381.5,
-   "latency_p95_ms": 499.6
+   "latency_p50_ms": 672.5,
+   "latency_p95_ms": 978.5
   },
   "test-other": {
    "n": 40,
@@ -33,8 +33,8 @@
    "errors": 0,
    "wer": 0.0292,
    "empty_rate": 0.0,
-   "latency_p50_ms": 447.0,
-   "latency_p95_ms": 779.9
+   "latency_p50_ms": 450.8,
+   "latency_p95_ms": 805.2
   },
   "accented": {
    "n": 35,
@@ -45,8 +45,8 @@
    "errors": 0,
    "wer": 0.0439,
    "empty_rate": 0.0,
-   "latency_p50_ms": 431.3,
-   "latency_p95_ms": 571.0
+   "latency_p50_ms": 440.1,
+   "latency_p95_ms": 552.8
   },
   "silence": {
    "n": 10,
@@ -57,8 +57,8 @@
    "errors": 0,
    "wer": null,
    "empty_rate": 1.0,
-   "latency_p50_ms": 337.0,
-   "latency_p95_ms": 455.1
+   "latency_p50_ms": 353.2,
+   "latency_p95_ms": 918.9
   },
   "noise": {
    "n": 10,
@@ -69,8 +69,8 @@
    "errors": 0,
    "wer": null,
    "empty_rate": 1.0,
-   "latency_p50_ms": 341.8,
-   "latency_p95_ms": 360.6
+   "latency_p50_ms": 715.9,
+   "latency_p95_ms": 1137.0
   },
   "final-chunk": {
    "n": 5,
@@ -81,8 +81,8 @@
    "errors": 0,
    "wer": 0.0149,
    "empty_rate": 0.0,
-   "latency_p50_ms": 448.9,
-   "latency_p95_ms": 462.0
+   "latency_p50_ms": 1234.5,
+   "latency_p95_ms": 1765.1
   },
   "mixed_10dB": {
    "n": 10,
@@ -93,8 +93,8 @@
    "errors": 0,
    "wer": 0.0058,
    "empty_rate": 0.0,
-   "latency_p50_ms": 440.9,
-   "latency_p95_ms": 741.2
+   "latency_p50_ms": 1119.9,
+   "latency_p95_ms": 2275.1
   },
   "mixed_0dB": {
    "n": 10,
@@ -105,8 +105,8 @@
    "errors": 0,
    "wer": 0.1143,
    "empty_rate": 0.0,
-   "latency_p50_ms": 446.4,
-   "latency_p95_ms": 897.4
+   "latency_p50_ms": 1184.8,
+   "latency_p95_ms": 2591.2
   }
  },
  "parakeet_gpu_raw_submission": {
@@ -119,8 +119,8 @@
    "errors": 1,
    "wer": 0.0815,
    "empty_rate": 0.0,
-   "latency_p50_ms": 481.9,
-   "latency_p95_ms": 845.1
+   "latency_p50_ms": 475.3,
+   "latency_p95_ms": 853.2
   },
   "short": {
    "n": 12,
@@ -131,8 +131,8 @@
    "errors": 0,
    "wer": 0.0385,
    "empty_rate": 0.0,
-   "latency_p50_ms": 381.5,
-   "latency_p95_ms": 499.6
+   "latency_p50_ms": 672.5,
+   "latency_p95_ms": 978.5
   },
   "test-other": {
    "n": 40,
@@ -143,8 +143,8 @@
    "errors": 0,
    "wer": 0.0292,
    "empty_rate": 0.0,
-   "latency_p50_ms": 447.0,
-   "latency_p95_ms": 779.9
+   "latency_p50_ms": 450.8,
+   "latency_p95_ms": 805.2
   },
   "accented": {
    "n": 35,
@@ -155,8 +155,8 @@
    "errors": 0,
    "wer": 0.0439,
    "empty_rate": 0.0,
-   "latency_p50_ms": 431.3,
-   "latency_p95_ms": 571.0
+   "latency_p50_ms": 440.1,
+   "latency_p95_ms": 552.8
   },
   "silence": {
    "n": 10,
@@ -167,8 +167,8 @@
    "errors": 0,
    "wer": null,
    "empty_rate": 1.0,
-   "latency_p50_ms": 337.0,
-   "latency_p95_ms": 455.1
+   "latency_p50_ms": 353.2,
+   "latency_p95_ms": 918.9
   },
   "noise": {
    "n": 10,
@@ -179,8 +179,8 @@
    "errors": 0,
    "wer": null,
    "empty_rate": 1.0,
-   "latency_p50_ms": 341.8,
-   "latency_p95_ms": 360.6
+   "latency_p50_ms": 715.9,
+   "latency_p95_ms": 1137.0
   },
   "final-chunk": {
    "n": 5,
@@ -191,8 +191,8 @@
    "errors": 0,
    "wer": 0.0149,
    "empty_rate": 0.0,
-   "latency_p50_ms": 448.9,
-   "latency_p95_ms": 462.0
+   "latency_p50_ms": 1234.5,
+   "latency_p95_ms": 1765.1
   },
   "mixed_10dB": {
    "n": 10,
@@ -203,8 +203,8 @@
    "errors": 0,
    "wer": 0.0058,
    "empty_rate": 0.0,
-   "latency_p50_ms": 440.9,
-   "latency_p95_ms": 741.2
+   "latency_p50_ms": 1119.9,
+   "latency_p95_ms": 2275.1
   },
   "mixed_0dB": {
    "n": 10,
@@ -215,8 +215,8 @@
    "errors": 0,
    "wer": 0.1143,
    "empty_rate": 0.0,
-   "latency_p50_ms": 446.4,
-   "latency_p95_ms": 897.4
+   "latency_p50_ms": 1184.8,
+   "latency_p95_ms": 2591.2
   }
  },
  "whisper_large_v3_turbo_mac": {

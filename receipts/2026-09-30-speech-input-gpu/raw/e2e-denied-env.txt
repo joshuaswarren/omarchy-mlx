@@ -1,6 +1,4 @@
-2026-09-30T05:52:29Z
+2026-09-30T09:26:11Z
 35df33be-ada4-4d3e-9028-3d761a510c65
-0.33 0.55 0.52 1/404 51603
-  39508       05:25 bash <home>/bin/gpu-turn -m 5 -- <home>/.local/share/mlx-omarchy/venv/bin/python /tmp/ab_full.py --venv-python <home>/.local/share/mlx-omarchy/venv/bin/python --label OLD_live --model 9b
-  40581       04:47 bash <home>/bin/gpu-turn -m 8 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-2b-4bit --start 0 --end 3
-  45276       02:49 bash <home>/bin/gpu-turn -m 8 -- venv-rel/bin/python -u src/scripts/bench/chat_model_bench.py --model-id NovaeonStudio/Qwen3.8-35B-A3B-Distill-oQ8-fp16-mtp --revision 5315bc8a40d751f5bded428eadd6a22007a3bf17 --model-label qwen3.8-35b-a3b-moe --out runs-v3/qwen3.8-35b-a3b-moe.json --phases perf --perf-n 2 --prefill2048-n 0
+0.19 0.36 0.40 1/374 401106
+ 401084       00:00 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> MARKCARDS_VENV=<home>/.local/share/mlx-omarchy/venv <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-27b-4bit --start 9 --end 12

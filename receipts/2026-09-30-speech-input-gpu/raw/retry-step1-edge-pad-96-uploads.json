@@ -1,0 +1,962 @@
+[
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-00.wav",
+  "seconds": 3.7653125,
+  "voiced_s": 2.02,
+  "baseline": "And she mentioned that when for a moment was a little bit more than a little bit of",
+  "padded": "And she mentioned that when for a moment, I think it's a little bit more than",
+  "padded_ms": 1513.5,
+  "padded_quiet_x0.1": "And she mentioned that when for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-01.wav",
+  "seconds": 4.1066875,
+  "voiced_s": 2.48,
+  "baseline": "She was to do this. And she mentioned to me that when for a moment",
+  "padded": "She was to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1437.6,
+  "padded_quiet_x0.1": "She was to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-02.wav",
+  "seconds": 4.4266875,
+  "voiced_s": 2.84,
+  "baseline": "She promised to do this and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 674.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-03.wav",
+  "seconds": 3.9893125,
+  "voiced_s": 2.26,
+  "baseline": "Trauma to do this. She mentioned to me when for a moment",
+  "padded": "Trauma to do this. She mentioned to me when for a moment",
+  "padded_ms": 760.0,
+  "padded_quiet_x0.1": "Trauma to do this. She mentioned to me when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-04.wav",
+  "seconds": 3.6693125,
+  "voiced_s": 2.28,
+  "baseline": "She promised this. And she meant to me that when for a moment.",
+  "padded": "And she meant to me that when for a moment, I was like, I'm not sure",
+  "padded_ms": 1460.3,
+  "padded_quiet_x0.1": "She promised to be meant to me that when for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-05.wav",
+  "seconds": 4.512,
+  "voiced_s": 2.74,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment, I was like, I'm not sure",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1380.6,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-06.wav",
+  "seconds": 4.1706875,
+  "voiced_s": 2.72,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 990.6,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-07.wav",
+  "seconds": 3.8293125,
+  "voiced_s": 2.14,
+  "baseline": "She promises and she mentioned to me when for a moment",
+  "padded": "She promised and she mentioned to me when for a moment",
+  "padded_ms": 960.6,
+  "padded_quiet_x0.1": "She promises and she mentioned to me when for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-08.wav",
+  "seconds": 4.256,
+  "voiced_s": 2.56,
+  "baseline": "Promised to do this. And she mentioned to me that when for a moment",
+  "padded": "And she mentioned to me that when for a moment,",
+  "padded_ms": 1838.8,
+  "padded_quiet_x0.1": "And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-09.wav",
+  "seconds": 3.7973125,
+  "voiced_s": 2.4,
+  "baseline": "She promised to do s and she mentioned to me that when for a moment",
+  "padded": "She promised to do s and she mentioned to me that when for a moment",
+  "padded_ms": 1124.1,
+  "padded_quiet_x0.1": "She promised to do s and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-10.wav",
+  "seconds": 4.2986875,
+  "voiced_s": 2.74,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1255.5,
+  "padded_quiet_x0.1": "She promised to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-11.wav",
+  "seconds": 4.4586875,
+  "voiced_s": 2.54,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 751.6,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-12.wav",
+  "seconds": 4.0533125,
+  "voiced_s": 2.68,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1012.6,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-13.wav",
+  "seconds": 4.4053125,
+  "voiced_s": 2.6,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 867.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-14.wav",
+  "seconds": 4.2666875,
+  "voiced_s": 2.52,
+  "baseline": "She promised to do this. And she mentioned to me then for a moment",
+  "padded": "She promised to do this. And she mentioned to me then for a moment",
+  "padded_ms": 1212.9,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me then for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-15.wav",
+  "seconds": 4.2133125,
+  "voiced_s": 2.68,
+  "baseline": "She promised to do this. And she mentioned to me that and for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1008.2,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-16.wav",
+  "seconds": 4.5013125,
+  "voiced_s": 2.58,
+  "baseline": "She promised to do this. And he mentioned to me when for a moment",
+  "padded": "She promised to do this. And he mentioned to me when for a moment",
+  "padded_ms": 1196.1,
+  "padded_quiet_x0.1": "She promised to do this. And he mentioned to me when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-17.wav",
+  "seconds": 3.776,
+  "voiced_s": 2.56,
+  "baseline": "",
+  "padded": "And she mentioned to me that when for a moment",
+  "padded_ms": 941.5,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-18.wav",
+  "seconds": 4.0746875,
+  "voiced_s": 2.62,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 1411.1,
+  "padded_quiet_x0.1": "She promised to do this. She mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-19.wav",
+  "seconds": 4.2133125,
+  "voiced_s": 2.52,
+  "baseline": "She promised to do this. I mentioned either when for a moment",
+  "padded": "She promised to do this. I mentioned me that when for a moment",
+  "padded_ms": 1015.0,
+  "padded_quiet_x0.1": "She promised to do this. I mentioned me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-20.wav",
+  "seconds": 3.872,
+  "voiced_s": 2.32,
+  "baseline": "I promise you this. And she mentioned to me that when for a moment",
+  "padded": "I promise you this. And she mentioned to me that when for a moment",
+  "padded_ms": 1038.3,
+  "padded_quiet_x0.1": "I promise you this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-21.wav",
+  "seconds": 4.1386875,
+  "voiced_s": 2.56,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 914.4,
+  "padded_quiet_x0.1": "She promised to do this. She mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-22.wav",
+  "seconds": 4.0426875,
+  "voiced_s": 2.18,
+  "baseline": "She promised to do this. And she mentioned to me that when",
+  "padded": "She promised to do this. And she mentioned to me that when f",
+  "padded_ms": 625.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when five years ago, I was like,"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-23.wav",
+  "seconds": 3.4773125,
+  "voiced_s": 2.18,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 1388.0,
+  "padded_quiet_x0.1": "She promised to do this. She mentioned to me that when for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-24.wav",
+  "seconds": 3.9893125,
+  "voiced_s": 2.24,
+  "baseline": "She promised to do this. And she mentioned to me that when for a",
+  "padded": "She promised to do this. And she mentioned to me that when for a",
+  "padded_ms": 1079.5,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-25.wav",
+  "seconds": 4.1493125,
+  "voiced_s": 2.74,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1241.9,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-26.wav",
+  "seconds": 3.7333125,
+  "voiced_s": 2.24,
+  "baseline": "She promised to do this. And she mentioned to me that when Roman",
+  "padded": "She promised to do this. And she mentioned to me that when Rama",
+  "padded_ms": 1205.5,
+  "padded_quiet_x0.1": "She promised to do this and she mentioned to me that when Rom"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-27.wav",
+  "seconds": 3.8506875,
+  "voiced_s": 2.32,
+  "baseline": "She promised to do this. And she mentioned to me that we're a mo-",
+  "padded": "She promised to do this. And she mentioned to me that we're a mo",
+  "padded_ms": 600.5,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that we're a mo"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-28.wav",
+  "seconds": 4.5013125,
+  "voiced_s": 2.38,
+  "baseline": "She promised to do this. And she mentioned to me when for the first time.",
+  "padded": "She promised to do this. And she mentioned to me when from",
+  "padded_ms": 488.6,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me when from"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-29.wav",
+  "seconds": 3.9146875,
+  "voiced_s": 2.64,
+  "baseline": "She promised to do this. And he mentioned to me that when for a moment was a good one.",
+  "padded": "She promised to do this. And he mentioned to me that when for a moment",
+  "padded_ms": 1110.7,
+  "padded_quiet_x0.1": "She promised to do this. And he mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-30.wav",
+  "seconds": 4.0746875,
+  "voiced_s": 2.68,
+  "baseline": "She b to do this. And she mentioned to me that when for moment",
+  "padded": "She do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1668.3,
+  "padded_quiet_x0.1": "She was to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T061333Z",
+  "upload": "upload-31.wav",
+  "seconds": 3.7653125,
+  "voiced_s": 2.4,
+  "baseline": "She promised to do this. And she meant to me that when for a moment.",
+  "padded": "She promised to do this. And she meant to me that when for a moment.",
+  "padded_ms": 659.1,
+  "padded_quiet_x0.1": "She promised to do this. And she meant to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-00.wav",
+  "seconds": 4.4373125,
+  "voiced_s": 2.72,
+  "baseline": "She promised to do this and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 715.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-01.wav",
+  "seconds": 4.0853125,
+  "voiced_s": 2.46,
+  "baseline": "She promised to do this. And she mentioned to me that when Roman",
+  "padded": "She promised to do this. And she mentioned to me that when Romant",
+  "padded_ms": 1005.7,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when Romant"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-02.wav",
+  "seconds": 3.7226875,
+  "voiced_s": 2.28,
+  "baseline": "She promised to do this. And imagine even when for a moment",
+  "padded": "She promised to do this. And imagine even when for a moment",
+  "padded_ms": 755.9,
+  "padded_quiet_x0.1": "She promised to do this. And imagine either when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-03.wav",
+  "seconds": 3.8186875,
+  "voiced_s": 2.08,
+  "baseline": "She promised to do this. And she mentioned to me and from",
+  "padded": "She promised to do this. And she mentioned to me and from",
+  "padded_ms": 906.1,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me when from"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-04.wav",
+  "seconds": 3.4986875,
+  "voiced_s": 1.96,
+  "baseline": "And she mentioned to me that when for a moment",
+  "padded": "And she mentioned to me that when for a moment",
+  "padded_ms": 807.2,
+  "padded_quiet_x0.1": "She promised and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-05.wav",
+  "seconds": 4.2773125,
+  "voiced_s": 2.42,
+  "baseline": "",
+  "padded": "She promised to do this. And she mentioned to me that when Mo",
+  "padded_ms": 2713.7,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when Mo"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-06.wav",
+  "seconds": 3.4986875,
+  "voiced_s": 2.22,
+  "baseline": "She promised to this and to me that when for a moment.",
+  "padded": "She promised to mention to me that when for a moment",
+  "padded_ms": 1338.5,
+  "padded_quiet_x0.1": "She promised the water."
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-07.wav",
+  "seconds": 4.5546875,
+  "voiced_s": 2.76,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 806.1,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-08.wav",
+  "seconds": 4.1333125,
+  "voiced_s": 2.56,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 983.7,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-09.wav",
+  "seconds": 4.4693125,
+  "voiced_s": 2.74,
+  "baseline": "She promised to do this. And she mentioned to me that when from moment to me,",
+  "padded": "She promised to do this. And she mentioned to me that when from moment",
+  "padded_ms": 1005.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-10.wav",
+  "seconds": 4.6293125,
+  "voiced_s": 2.82,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1114.4,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-11.wav",
+  "seconds": 4.4693125,
+  "voiced_s": 2.7,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 1069.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-12.wav",
+  "seconds": 4.2986875,
+  "voiced_s": 2.5,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 763.8,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-13.wav",
+  "seconds": 4.4586875,
+  "voiced_s": 2.72,
+  "baseline": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 1308.5,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-14.wav",
+  "seconds": 4.288,
+  "voiced_s": 2.72,
+  "baseline": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 682.6,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-15.wav",
+  "seconds": 4.3093125,
+  "voiced_s": 2.64,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 671.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-16.wav",
+  "seconds": 3.9893125,
+  "voiced_s": 2.06,
+  "baseline": "She promised to do this. She mentioned to me that when for a",
+  "padded": "She promised to do this. She mentioned to me that when for a",
+  "padded_ms": 989.8,
+  "padded_quiet_x0.1": "She promised to do this. She mentioned to me that when for a"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-17.wav",
+  "seconds": 4.1066875,
+  "voiced_s": 2.64,
+  "baseline": "She promised to do this and she mentioned to me that when a moment",
+  "padded": "She promised to do this, and she mentioned to me that when a moment",
+  "padded_ms": 711.1,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-18.wav",
+  "seconds": 4.4266875,
+  "voiced_s": 2.66,
+  "baseline": "She promised to do this, and she meant to me that when for a moment",
+  "padded": "She promised to do this, and she meant to me that when for a moment",
+  "padded_ms": 1211.6,
+  "padded_quiet_x0.1": "She promised to do this, and she meant to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-19.wav",
+  "seconds": 3.7226875,
+  "voiced_s": 2.18,
+  "baseline": "We promised to do this. And she mentioned me that one moment",
+  "padded": "We promised to do this. And she mentioned me that one moment",
+  "padded_ms": 884.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned me that one moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-20.wav",
+  "seconds": 3.2426875,
+  "voiced_s": 1.62,
+  "baseline": "Shibomus. Dimension me up in front.",
+  "padded": "She almost this. Dimension me up in front.",
+  "padded_ms": 1437.6,
+  "padded_quiet_x0.1": "She almost do this. You mentioned me up in front."
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-21.wav",
+  "seconds": 3.904,
+  "voiced_s": 2.56,
+  "baseline": "She promised this. She mentioned to me that when for a moment",
+  "padded": "She promised this. She mentioned to me that when for a moment",
+  "padded_ms": 1154.6,
+  "padded_quiet_x0.1": "She promised this. She mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-22.wav",
+  "seconds": 3.7333125,
+  "voiced_s": 2.14,
+  "baseline": "She promised to do this. And he mentioned to me that in for a moment.",
+  "padded": "She promised to do this. And he mentioned to me that in for a moment.",
+  "padded_ms": 626.0,
+  "padded_quiet_x0.1": "She promised to do this. And he mentioned to me that in for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-23.wav",
+  "seconds": 3.4986875,
+  "voiced_s": 2.02,
+  "baseline": "She bombs to do this. And then to me that for a moment.",
+  "padded": "She bombs to do this.",
+  "padded_ms": 578.0,
+  "padded_quiet_x0.1": "She wants to do this attention to me there for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-24.wav",
+  "seconds": 4.5013125,
+  "voiced_s": 2.66,
+  "baseline": "She promised to do this and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 589.2,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-25.wav",
+  "seconds": 4.4586875,
+  "voiced_s": 2.7,
+  "baseline": "He promised to do this. And he mentioned to me that when for a moment",
+  "padded": "He promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1328.6,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-26.wav",
+  "seconds": 4.352,
+  "voiced_s": 2.66,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 1084.8,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-27.wav",
+  "seconds": 3.9146875,
+  "voiced_s": 2.34,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment was a good one.",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1007.5,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-28.wav",
+  "seconds": 4.1706875,
+  "voiced_s": 2.44,
+  "baseline": "She promised to do this. And she meant to me that when for a moment",
+  "padded": "She promised to do this. And she meant to me that when for a moment",
+  "padded_ms": 1001.1,
+  "padded_quiet_x0.1": "She promised to do this, and she meant to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-29.wav",
+  "seconds": 3.7653125,
+  "voiced_s": 2.14,
+  "baseline": "She prom to do this. And she meant me that and for a moment",
+  "padded": "She prom to do this. And she met me that for a moment.",
+  "padded_ms": 1115.8,
+  "padded_quiet_x0.1": "She promised to do this. And she met me then for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-30.wav",
+  "seconds": 4.1173125,
+  "voiced_s": 2.56,
+  "baseline": "She promised to do this. And she mentioned to me that when for a",
+  "padded": "She promised to do this, and she mentioned to me that when for a m",
+  "padded_ms": 781.5,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a m"
+ },
+ {
+  "run": "e2e-latency-20260930T064321Z",
+  "upload": "upload-31.wav",
+  "seconds": 4.0,
+  "voiced_s": 2.5,
+  "baseline": "She promised to do this.",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment, I was like, I'm not sure",
+  "padded_ms": 1592.4,
+  "padded_quiet_x0.1": "She promised to do this and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-00.wav",
+  "seconds": 4.5653125,
+  "voiced_s": 2.86,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment she was",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1041.4,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-01.wav",
+  "seconds": 4.352,
+  "voiced_s": 2.84,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 498.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-02.wav",
+  "seconds": 3.8293125,
+  "voiced_s": 2.34,
+  "baseline": "She promised to do this. And she mentioned to me that where a moment was a little bit more than a little bit.",
+  "padded": "She promised to do this. And she mentioned to me that when a moment",
+  "padded_ms": 1016.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-03.wav",
+  "seconds": 3.8506875,
+  "voiced_s": 2.14,
+  "baseline": "She promised do this. Mention me when for a moment.",
+  "padded": "She promised to do this. Mention me when for a moment",
+  "padded_ms": 1759.6,
+  "padded_quiet_x0.1": "She promised to do this. Mentioned me when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-04.wav",
+  "seconds": 4.224,
+  "voiced_s": 2.58,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment, I was like, I'm not sure",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment, I was a little bit more than a little",
+  "padded_ms": 1607.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-05.wav",
+  "seconds": 3.9786875,
+  "voiced_s": 2.58,
+  "baseline": "She promised to do this and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 963.2,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-06.wav",
+  "seconds": 3.7973125,
+  "voiced_s": 2.16,
+  "baseline": "She was to do this and she mentioned to me one for a moment",
+  "padded": "She wants to do this and she mentioned to me one for a moment.",
+  "padded_ms": 1134.9,
+  "padded_quiet_x0.1": "She wants to do this and she mentioned to me even for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-07.wav",
+  "seconds": 4.2773125,
+  "voiced_s": 2.4,
+  "baseline": "She promised to do th and she mentioned to me it when for a moment",
+  "padded": "She promised to do th and she mentioned to me it when for a moment",
+  "padded_ms": 987.0,
+  "padded_quiet_x0.1": "She promised to do and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-08.wav",
+  "seconds": 3.2426875,
+  "voiced_s": 2.26,
+  "baseline": "She pr do this, and she mentioned to me that when for a moment.",
+  "padded": "She pro do this, and she mentioned to me that when for a moment",
+  "padded_ms": 1786.6,
+  "padded_quiet_x0.1": "She promised to me that when for a moment."
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-09.wav",
+  "seconds": 4.5653125,
+  "voiced_s": 2.46,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 892.0,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-10.wav",
+  "seconds": 4.16,
+  "voiced_s": 2.56,
+  "baseline": "She promised to do this. And she mentioned to me that when a moment",
+  "padded": "She promised to do this. And she mentioned to me that when a moment",
+  "padded_ms": 1719.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-11.wav",
+  "seconds": 4.2346875,
+  "voiced_s": 2.3,
+  "baseline": "She promised to do this. And she mentioned to me that when for the first time, I'm not sure",
+  "padded": "She promised to do this. And she mentioned to me that when for",
+  "padded_ms": 514.0,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-12.wav",
+  "seconds": 4.5013125,
+  "voiced_s": 2.64,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 909.3,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-13.wav",
+  "seconds": 4.4053125,
+  "voiced_s": 2.66,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 687.0,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-14.wav",
+  "seconds": 4.2666875,
+  "voiced_s": 2.74,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 701.7,
+  "padded_quiet_x0.1": "She promised to do this. She mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-15.wav",
+  "seconds": 4.256,
+  "voiced_s": 2.54,
+  "baseline": "And she mentioned to me that when for a moment, I was like, I'm not sure if",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment.",
+  "padded_ms": 998.4,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-16.wav",
+  "seconds": 3.744,
+  "voiced_s": 2.6,
+  "baseline": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 1010.1,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-17.wav",
+  "seconds": 4.256,
+  "voiced_s": 2.48,
+  "baseline": "She promised to do this. She mentioned to me that when for a moment",
+  "padded": "She promised to do this. She mentioned to me that when for a moment",
+  "padded_ms": 885.4,
+  "padded_quiet_x0.1": "She promised to do this. She mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-18.wav",
+  "seconds": 3.8933125,
+  "voiced_s": 2.42,
+  "baseline": "She promised to do this. And she mentioned to me when for a moment.",
+  "padded": "She promised to do this. And she mentioned to me when for a moment",
+  "padded_ms": 1012.9,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-19.wav",
+  "seconds": 3.9253125,
+  "voiced_s": 2.6,
+  "baseline": "She promised to this and she mentioned to me that when for a moment",
+  "padded": "She promised to this, and she mentioned to me that when for a moment",
+  "padded_ms": 1426.3,
+  "padded_quiet_x0.1": "She promised to this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-20.wav",
+  "seconds": 4.1066875,
+  "voiced_s": 2.56,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment she was a little bit more than a little bit of a",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1246.8,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-21.wav",
+  "seconds": 4.32,
+  "voiced_s": 2.84,
+  "baseline": "She promised to do this and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 979.7,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-22.wav",
+  "seconds": 4.0746875,
+  "voiced_s": 2.42,
+  "baseline": "She promised to do this. And she mentioned to me that for a moment,",
+  "padded": "She promised to do this. And she mentioned to me that for a moment",
+  "padded_ms": 867.6,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-23.wav",
+  "seconds": 4.1173125,
+  "voiced_s": 2.44,
+  "baseline": "She pressed to do this. And she mentioned to me that when for a moment,",
+  "padded": "She pressed to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 901.0,
+  "padded_quiet_x0.1": "She pressed to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-24.wav",
+  "seconds": 3.9146875,
+  "voiced_s": 2.22,
+  "baseline": "",
+  "padded": "She promised to do this.",
+  "padded_ms": 2040.7,
+  "padded_quiet_x0.1": "She promised to do this."
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-25.wav",
+  "seconds": 3.5733125,
+  "voiced_s": 2.5,
+  "baseline": "She do this. And she mentioned to me that when for a moment",
+  "padded": "She do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1331.7,
+  "padded_quiet_x0.1": "She do this. And she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-26.wav",
+  "seconds": 4.1493125,
+  "voiced_s": 2.68,
+  "baseline": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded": "She promised to do this, and she mentioned to me that when for a moment",
+  "padded_ms": 738.8,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-27.wav",
+  "seconds": 3.6266875,
+  "voiced_s": 2.14,
+  "baseline": "She promised do this. And she meant she that when for a moment",
+  "padded": "She promised to do this. And she meant she that when for a moment",
+  "padded_ms": 1010.6,
+  "padded_quiet_x0.1": "She promised to do this. And she meant she that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-28.wav",
+  "seconds": 3.3066875,
+  "voiced_s": 2.2,
+  "baseline": "She promised to do this. And he mentioned to me that enrollment.",
+  "padded": "She promised to do this. And he mentioned to me the environment.",
+  "padded_ms": 1624.1,
+  "padded_quiet_x0.1": "She promised to do this. And you mentioned to me the environment."
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-29.wav",
+  "seconds": 3.7013125,
+  "voiced_s": 2.42,
+  "baseline": "She prom to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1572.8,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me that when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-30.wav",
+  "seconds": 4.352,
+  "voiced_s": 2.58,
+  "baseline": "She promised to do this. And she mentioned to me when for a moment",
+  "padded": "She promised to do this. And she mentioned to me when for a moment",
+  "padded_ms": 756.3,
+  "padded_quiet_x0.1": "She promised to do this, and she mentioned to me when for a moment"
+ },
+ {
+  "run": "e2e-latency-20260930T070223Z",
+  "upload": "upload-31.wav",
+  "seconds": 3.5413125,
+  "voiced_s": 2.3,
+  "baseline": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded": "She promised to do this. And she mentioned to me that when for a moment",
+  "padded_ms": 1088.7,
+  "padded_quiet_x0.1": "She promised to do this. And she mentioned to me that when for a moment"
+ }
+]

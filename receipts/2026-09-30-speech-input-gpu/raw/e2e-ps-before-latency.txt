@@ -1,6 +1,6 @@
-  87400       06:42  3168 bash <home>/bin/gpu-turn -m 8 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-2b-4bit --start 6 --end 9
-  94587       02:08 132512 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant --home <home>/agents/SpeechInputGpu/home --no-browser --port 47811
-  94648       02:04 462656 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_serve._mlxlm_server --model <home>/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381 --host 127.0.0.1 --port 52743 --max-tokens 512 --decode-concurrency 1 --prompt-concurrency 1 --prompt-cache-size 0
-  94649       02:04 122240 <home>/.local/share/mlx-omarchy/venv/bin/python -c import sys; from mlx_omarchy_laya.server import serve_main; serve_main(sys.argv[1:]) --model <app-home>/models/laya-mlx --host 127.0.0.1 --port 57727 --managed --max-questions 8
-  95090       01:53 129808 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parakeet-tdt-0.6b-v3
-0.52 0.50 0.42 4/478 96490
+ 377852       11:50  3152 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> MARKCARDS_VENV=<home>/.local/share/mlx-omarchy/venv <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-27b-4bit --start 6 --end 9
+ 397084       01:41 128288 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant --home <home>/agents/SpeechInputGpu/home --no-browser --port 47811
+ 397128       01:39 461536 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_serve._mlxlm_server --model <home>/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381 --host 127.0.0.1 --port 50527 --max-tokens 512 --decode-concurrency 1 --prompt-concurrency 1 --prompt-cache-size 0
+ 397129       01:39 122208 <home>/.local/share/mlx-omarchy/venv/bin/python -c import sys; from mlx_omarchy_laya.server import serve_main; serve_main(sys.argv[1:]) --model <app-home>/models/laya-mlx --host 127.0.0.1 --port 47567 --managed --max-questions 8
+ 397593       01:28 133168 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parakeet-tdt-0.6b-v3
+0.23 0.41 0.42 5/474 398617

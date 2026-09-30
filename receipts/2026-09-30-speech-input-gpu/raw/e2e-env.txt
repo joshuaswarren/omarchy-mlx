@@ -1,7 +1,4 @@
-2026-09-30T06:47:54Z
+2026-09-30T09:18:06Z
 35df33be-ada4-4d3e-9028-3d761a510c65
-0.71 0.38 0.36 1/462 94540
-  87400       04:32 bash <home>/bin/gpu-turn -m 8 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-2b-4bit --start 6 --end 9
-  93848       00:30 <home>/.local/share/mlx-omarchy/venv/bin/python -u -m mlx_omarchy_assistant --home <home>/agents/PairGates/homes/everyday --port 34547 --pair everyday --yes --no-browser
-  93881       00:29 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_serve._mlxlm_server --model <home>/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381 --host 127.0.0.1 --port 60011 --max-tokens 512 --decode-concurrency 1 --prompt-concurrency 1 --prompt-cache-size 0
-  93882       00:29 <home>/.local/share/mlx-omarchy/venv/bin/python -c import sys; from mlx_omarchy_laya.server import serve_main; serve_main(sys.argv[1:]) --model <home>/agents/PairGates/homes/everyday/models/laya-mlx --host 127.0.0.1 --port 41405 --managed --max-questions 8
+0.25 0.43 0.42 1/392 397048
+ 377852       10:06 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> MARKCARDS_VENV=<home>/.local/share/mlx-omarchy/venv <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_held_out.py --model qwen3.8-27b-4bit --start 6 --end 9

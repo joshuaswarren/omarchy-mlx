@@ -5,10 +5,8 @@
   "path": "<app-home>/voice/parakeet-tdt-0.6b-v3"
  },
  "status_before": {
-  "state": "usable",
-  "reasons": [
-   "runtime is loadable and its pipeline may run, but no hardware acceptance receipt is recorded yet"
-  ],
+  "state": "ready",
+  "reasons": [],
   "model": {
    "repo": "mlx-community/parakeet-tdt-0.6b-v3",
    "revision": "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
@@ -23,27 +21,27 @@
   }
  },
  "first_call": {
-  "ms": 1592.3,
+  "ms": 1663.6,
   "text": "Notwithstanding the high resolution of Hawkeye, he fully comprehended all the difficulties and danger he was about to incur.",
   "matches_reference": true
  },
  "input_48k": {
-  "ms": 435.1,
+  "ms": 452.9,
   "text": "Notwithstanding the high resolution of Hawkeye, he fully comprehended all the difficulties and danger he was about to incur.",
   "matches_reference": true
  },
  "silence_3s": {
   "text": "",
-  "ms": 342.4
+  "ms": 353.2
  },
  "exactly_30s": {
-  "ms": 1120.2,
+  "ms": 1227.3,
   "words": 75
  },
  "over_30s": {
   "pass": true,
   "refusal": "audio is 30.10 s; the recognizer accepts at most 30 s per submission",
-  "ms": 0.2
+  "ms": 0.1
  },
  "oversize_payload": {
   "pass": true,
@@ -73,15 +71,15 @@
  "cancel_mid_request": {
   "pass": true,
   "refusal": "cancelled during transcription",
-  "ms_to_raise": 651.2,
-  "worker_pid": 58295,
+  "ms_to_raise": 702.1,
+  "worker_pid": 381634,
   "worker_alive": false,
   "process_group_alive": false
  },
  "after_cancel": {
-  "ms": 1578.2,
+  "ms": 1666.9,
   "matches_reference": true,
-  "new_worker_pid": 58386
+  "new_worker_pid": 381778
  },
  "closed_worker_exit_code": true
 }

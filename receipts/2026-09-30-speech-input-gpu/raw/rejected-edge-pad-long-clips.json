@@ -1,0 +1,71 @@
+[
+ {
+  "input": "tiled_10s",
+  "none": 19,
+  "noise0.4": 23,
+  "zeros0.4": 23,
+  "noise0.4_start": 0,
+  "noise0.4_end": 23,
+  "noise1.0": 0
+ },
+ {
+  "input": "tiled_20s",
+  "none": 47,
+  "noise0.4": 0,
+  "zeros0.4": 22,
+  "noise0.4_start": 28,
+  "noise0.4_end": 24,
+  "noise1.0": 0
+ },
+ {
+  "input": "tiled_25s",
+  "none": 60,
+  "noise0.4": 41,
+  "zeros0.4": 60,
+  "noise0.4_start": 38,
+  "noise0.4_end": 60,
+  "noise1.0": 19
+ },
+ {
+  "input": "tiled_28s",
+  "none": 68,
+  "noise0.4": 0,
+  "zeros0.4": 0,
+  "noise0.4_start": 38,
+  "noise0.4_end": 0,
+  "noise1.0": 0
+ },
+ {
+  "input": "tiled_29s",
+  "none": 69,
+  "noise0.4": 12,
+  "zeros0.4": 12,
+  "noise0.4_start": 38,
+  "noise0.4_end": 50,
+  "noise1.0": 31
+ },
+ {
+  "input": "tiled_29.6s",
+  "none": 71,
+  "noise0.4": 0,
+  "zeros0.4": 0,
+  "noise0.4_start": 71,
+  "noise0.4_end": 0,
+  "noise1.0": 14
+ },
+ {
+  "input": "tiled_30s",
+  "none": 75,
+  "noise0.4": 0,
+  "zeros0.4": 0,
+  "noise0.4_start": 75,
+  "noise0.4_end": 0,
+  "noise1.0": 0
+ },
+ {
+  "input": "real_30s",
+  "none": 61,
+  "noise0.4": 61,
+  "noise1.0": 61
+ }
+]

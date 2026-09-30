@@ -10,7 +10,7 @@
  {
   "width": 1440,
   "scenario": "permission-denied",
-  "ms": 129,
+  "ms": 115,
   "transcribeRequests": 0,
   "draftIntact": true,
   "button": "Microphone",
@@ -24,7 +24,7 @@
  {
   "width": 1440,
   "scenario": "permission-denied-injected",
-  "ms": 86,
+  "ms": 13,
   "transcribeRequests": 0,
   "draftIntact": true,
   "button": "Microphone",
@@ -46,7 +46,7 @@
  {
   "width": 375,
   "scenario": "permission-denied",
-  "ms": 111,
+  "ms": 119,
   "transcribeRequests": 0,
   "draftIntact": true,
   "button": "Microphone",
@@ -60,7 +60,7 @@
  {
   "width": 375,
   "scenario": "permission-denied-injected",
-  "ms": 14,
+  "ms": 11,
   "transcribeRequests": 0,
   "draftIntact": true,
   "button": "Microphone",
