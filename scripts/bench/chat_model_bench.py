@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 """Chat-model benchmark for the offline-assistant pair defaults.
 
-Per the assignment:
-  - one model per process (clean cold and warm load times)
-  - same machine, same prompts, greedy, thinking disabled
-  - 2 warmups + 5 measured turns
-  - prefill @512, @2048, decode @128, TTFT for ~170-token prompt + assistant
-    SCHEMA_PROMPT_COMPACT system prompt
-  - 16 frozen card-adherence prompts, 20 frozen GSM8K, 20 frozen IFE
-  - peak memory via mx.get_peak_memory, process RSS, /proc/meminfo MemAvailable
-  - provenance line printed beside every measurement
-  - does NOT mark anything recommended
+One model per process. Greedy, thinking disabled (``enable_thinking=False``
+in the chat template, as the coordinator sends), repetition penalty 1.1.
+Generation stops at the tokenizer's EOS tokens except for the fixed-length
+decode measurement, which ignores EOS on purpose.
 
-Output: JSON written to --out. The driver is invoked by run_one.sh for each model.
+Phases, each checkpointed to --out after every item so a killed turn
+resumes where it stopped:
+  perf    cold/warm load, TTFT for the coordinator card prompt, prefill at
+          512 and 2048 tokens, decode over --n-decode tokens, peak memory
+  cards   16 frozen prompts, scored with components.validate_components and
+          card_promotion.extract_text
+  gsm     20 GSM8K test items (proxy, not a benchmark)
+  ife     20 deterministic instruction-following checks (proxy)
 
-Usage:
-  chat_model_bench.py --model-id <hfrepo> --revision <sha> \
-      --prompts-dir <dir> --out <path.json> [--model-label <label>] \
-      [--max-tokens 700] [--repetition-penalty 1.1]
-
-The model path passed to mlx_lm.load is the local snapshot dir
-(hub/models--<repo>/snapshots/<sha>/) so the load is reproducible and
-avoids any network I/O.
+Paths come from BENCH_REPO_ROOT (default: this checkout) and HF_HUB_CACHE.
 """
 from __future__ import annotations
 
@@ -30,712 +24,337 @@ import json
 import os
 import re
 import statistics
-import subprocess
 import sys
 import time
 from pathlib import Path
 
-# Force Honeykrisp / deterministic numerics where possible
 os.environ.setdefault("MLX_DISABLE_COMPILE", "1")
 
-REPO_ROOT = Path(os.environ.get(
-    "BENCH_REPO_ROOT",
-    str(Path(__file__).resolve().parents[2]),
-))
-PROMPTS_DEFAULT = REPO_ROOT / "scripts/bench/prompts"
-# HF cache root. Set HF_HUB_CACHE to override; default matches the host's
-# standard location when the env var is unset.
-HF_CACHE_ROOT = Path(os.environ.get(
-    "HF_HUB_CACHE",
-    str(Path.home() / ".cache" / "huggingface" / "hub"),
-))
+HARNESS_VERSION = 2
+REPO_ROOT = Path(os.environ.get("BENCH_REPO_ROOT", str(Path(__file__).resolve().parents[2])))
+HF_CACHE_ROOT = Path(os.environ.get("HF_HUB_CACHE", str(Path.home() / ".cache" / "huggingface" / "hub")))
+sys.path.insert(0, str(REPO_ROOT / "serve"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-# Match the coordinator's defaults: see coordinator.py
-REPETITION_PENALTY = 1.1
+from mlx_omarchy_assistant.components import (  # noqa: E402
+    SCHEMA_PROMPT, SCHEMA_PROMPT_COMPACT, ComponentError, validate_components)
+from mlx_omarchy_assistant.card_promotion import (  # noqa: E402
+    extract_text, user_requested_full_schema)
+from mlx_omarchy_assistant.coordinator import FULL_CARD_CUES, REPETITION_PENALTY  # noqa: E402
 
-# Reproduce coordinator prompt build for chat turns (SCHEMA_PROMPT_COMPACT)
-# Import from the project; we are a child process the parent runs under PYTHONPATH=serve
-try:
-    from mlx_omarchy_assistant.components import (
-        SCHEMA_PROMPT_COMPACT,
-        SCHEMA_PROMPT,
-        validate_components,
-    )
-except Exception as exc:  # noqa: BLE001
-    print(f"WARN cannot import assistant components: {exc}", file=sys.stderr)
-    SCHEMA_PROMPT_COMPACT = ""
-    SCHEMA_PROMPT = ""
-    validate_components = None
+SYSTEM_PREFIX = "Answer the user using their supplied facts. "
+TTFT_USER = "Describe what is on the desk in front of you."
+GSM_SYSTEM = ("You are a careful math tutor. Solve the problem step by step, then end your "
+              "reply with the final answer as a single line:\nFinal answer: <number>")
+IFE_SYSTEM = "You follow instructions exactly. Reply ONLY with what the instruction asks."
+FENCE = "```assistant-ui\n"
 
 
-def provenance_line() -> str:
-    """One line for the side of every measurement."""
-    import mlx.core as mx
-
-    mlx_v = getattr(mx, "__version__", "?")
-    import mlx_lm  # noqa: PLC0415
-    mlxlm_v = getattr(mlx_lm, "__version__", "?")
+def provenance() -> str:
     try:
-        wheel = subprocess.check_output(
-            [sys.executable, "-c",
-             "import importlib.metadata as m; print(m.version('mlx-omarchy'))"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-    except Exception:  # noqa: BLE001
-        wheel = "unknown"
-    # Commit lookup: try REPO_ROOT (worktree), then cwd, then env override
-    commit = None
-    for path in (REPO_ROOT, Path.cwd()):
-        try:
-            commit = subprocess.check_output(
-                ["git", "-C", str(path), "rev-parse", "--short=12", "HEAD"],
-                stderr=subprocess.DEVNULL,
-            ).decode().strip()
-            break
-        except Exception:  # noqa: BLE001
-            continue
-    commit = commit or os.environ.get("BENCH_COMMIT_OVERRIDE", "unknown")
-    return (
-        f"prov: mlx={mlx_v} mlx_lm={mlxlm_v} wheel={wheel} "
-        f"commit={commit} python={sys.version.split()[0]}"
-    )
-
-
-def _save_partial(out_path: str, scope: dict) -> None:
-    """Persist a partial result snapshot to <out_path>.tmp then rename.
-
-    `scope` is the locals() dict from the calling function; we copy the
-    result lists/metrics we need.
-    """
-    import os as _os  # noqa: PLC0415
-    if not out_path:
-        return
-    try:
-        out = Path(out_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        partial = {
-            "checkpoint": True,
-            "model_id": scope.get("args").model_id if scope.get("args") else None,
-            "model_label": scope.get("args").model_label if scope.get("args") else None,
-            "revision": scope.get("args").revision if scope.get("args") else None,
-            "cold_load_s": scope.get("cold_load_s"),
-            "warm_load_s": scope.get("warm_load_s"),
-            "peak_mem_after_load_gb": scope.get("peak_after_load_gb"),
-            "ttft_170sys_256tok": scope.get("ttft_stats"),
-            "ttft_measured": scope.get("measured"),
-            "prefill_512": scope.get("prefill_512"),
-            "prefill_2048": scope.get("prefill_2048"),
-            "decode_512": scope.get("decode_512_tps"),
-            "decode_2048": scope.get("decode_2048_tps"),
-            "card_pass": sum(1 for c in scope.get("card_results", []) if c.get("hit")),
-            "card_total": len([c for c in scope.get("card_results", []) if "expect" in c]),
-            "card_results": _coerce(scope.get("card_results", [])),
-            "gsm_pass": sum(1 for g in scope.get("gsm_results", []) if g.get("pass")),
-            "gsm_total": len(scope.get("gsm_results", [])),
-            "gsm_results": _coerce(scope.get("gsm_results", [])),
-            "ife_pass": sum(1 for i in scope.get("ife_results", []) if i.get("pass")),
-            "ife_total": len(scope.get("ife_results", [])),
-            "ife_results": _coerce(scope.get("ife_results", [])),
-            "provenance": provenance_line(),
-        }
-        tmp = out.with_suffix(out.suffix + ".tmp")
-        with open(tmp, "w") as fh:
-            json.dump(partial, fh, indent=2)
-        _os.replace(tmp, out)
+        import mlx_provenance
+        return mlx_provenance.provenance_line(mlx_provenance.installed_provenance())
     except Exception as exc:  # noqa: BLE001
-        print(f"WARN partial save failed: {exc}", file=sys.stderr)
+        return f"provenance unavailable: {type(exc).__name__}: {exc}"
 
 
-def _coerce(value):
-    """Recursively coerce unserializable objects to strings.
-
-    JSON-serializable primitives pass through. Containers are recursed.
-    Anything else (regex Match, MLX arrays, custom classes) becomes str().
-    """
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, dict):
-        return {str(k): _coerce(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_coerce(v) for v in value]
-    return str(value)
-
-
-def meminfo_available_mib() -> int:
-    txt = Path("/proc/meminfo").read_text()
-    m = re.search(r"MemAvailable:\s+(\d+)\s+kB", txt)
-    return int(m.group(1)) // 1024 if m else -1
+def mem_available_mib() -> int:
+    m = re.search(r"MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text())
+    return int(m.group(1)) // 1024
 
 
 def rss_mib() -> int:
-    txt = Path(f"/proc/{os.getpid()}/status").read_text()
-    m = re.search(r"VmRSS:\s+(\d+)\s+kB", txt)
-    return int(m.group(1)) // 1024 if m else -1
+    m = re.search(r"VmRSS:\s+(\d+)", Path("/proc/self/status").read_text())
+    return int(m.group(1)) // 1024
 
 
-def build_prompt(system: str, user: str) -> list[dict]:
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
-
-
-def load_model(model_path: str, tokenizer_config=None):
-    """mlx_lm.load; returns (model, tokenizer)."""
-    from mlx_lm import load  # noqa: PLC0415
-
-    t0 = time.monotonic()
-    model, tok = load(model_path, tokenizer_config=tokenizer_config)
-    dt = time.monotonic() - t0
-    return model, tok, dt
-
-
-def warm_load_model(model_path: str):
-    """Second load to measure warm restart (kernel cache, page cache warm)."""
-    from mlx_lm import load  # noqa: PLC0415
-
-    t0 = time.monotonic()
-    model, tok = load(model_path)
-    dt = time.monotonic() - t0
-    return model, tok, dt
-
-
-def time_first_token(model, tok, system: str, user: str, max_tokens: int):
-    """Return (ttft_s, generated_text, prompt_tokens, n_tokens)."""
-    from mlx_lm.sample_utils import make_sampler, make_logits_processors  # noqa: PLC0415
-    from mlx_lm.generate import generate_step  # noqa: PLC0415
-    import mlx.core as mx  # noqa: PLC0415
-
-    sampler = make_sampler(temp=0.0, top_p=1.0)
-    logits_processors = make_logits_processors(repetition_penalty=REPETITION_PENALTY)
-    prompt_text = build_prompt(system, user)
-    from mlx_lm.tokenizer_utils import TokenizerWrapper  # noqa: PLC0415
-
-    if isinstance(tok, TokenizerWrapper):
-        prompt_str = tok.apply_chat_template(
-            prompt_text, tokenize=False, add_generation_prompt=True
-        )
-        prompt_tokens = tok.encode(prompt_str)
-    else:
-        prompt_str = system + "\n\n" + user
-        prompt_tokens = tok.encode(prompt_str)
-
-    mx.reset_peak_memory()
-    t0 = time.monotonic()
-    gen = generate_step(
-        mx.array(prompt_tokens),
-        model,
-        max_tokens=max_tokens,
-        sampler=sampler,
-        logits_processors=logits_processors,
-    )
-    first_token_at = None
-    all_tokens: list[int] = []
-    for token, _prob in gen:
-        if first_token_at is None:
-            first_token_at = time.monotonic()
-        all_tokens.append(int(token))
-        if len(all_tokens) >= max_tokens:
-            break
-    ttft_s = (first_token_at - t0) if first_token_at is not None else float("nan")
-    text = tok.decode(all_tokens) if all_tokens else ""
-    return ttft_s, text, prompt_tokens, len(all_tokens)
-
-
-def time_decode_n_tokens(
-    model, tok, prompt_tokens: list[int], n_decode: int = 128
-) -> dict:
-    """Time prefill then decode for n_decode tokens. Return tok/s + prefill s."""
-    from mlx_lm.generate import generate_step  # noqa: PLC0415
-    from mlx_lm.sample_utils import make_sampler, make_logits_processors  # noqa: PLC0415
-    import mlx.core as mx  # noqa: PLC0415
-
-    sampler = make_sampler(temp=0.0, top_p=1.0)
-    logits_processors = make_logits_processors(repetition_penalty=REPETITION_PENALTY)
-    mx.reset_peak_memory()
-
-    t_pre = time.monotonic()
-    first_token = None
-    gen = generate_step(
-        mx.array(prompt_tokens),
-        model,
-        max_tokens=n_decode,
-        sampler=sampler,
-        logits_processors=logits_processors,
-    )
-    decode_times: list[float] = []
-    for i, (token, _prob) in enumerate(gen):
-        now = time.monotonic()
-        if first_token is None:
-            first_token = now
-            t_first = now - t_pre
-        else:
-            decode_times.append(now - t_pre)
-        if i + 1 >= n_decode:
-            break
-    t_end = time.monotonic()
-
-    if not decode_times:
-        decode_tps = float("nan")
-        prefill_s = float("nan")
-    else:
-        per_token = []
-        prev = t_first
-        for t in decode_times:
-            per_token.append(t - prev)
-            prev = t
-        decode_tps = 1.0 / statistics.mean(per_token) if per_token else float("nan")
-        prefill_s = t_first
-    return {
-        "prefill_s": prefill_s,
-        "decode_tps": decode_tps,
-        "decode_count": len(decode_times),
-        "peak_mem_gb": mx.get_peak_memory() / 1e9,
-        "t_total_s": t_end - t_pre,
-    }
-
-
-def synthesize_prompt_tokens(tok, n_target: int) -> list[int]:
-    """Synthesize a real (coherent-ish) prompt of n_target tokens.
-
-    Strategy: build a long factual paragraph and truncate. This avoids the
-    "all-padding tokens" pathology where synthetic IDs don't reflect realistic
-    attention patterns.
-    """
-    seed = (
-        "The history of computing begins with early mechanical calculators, "
-        "telescopes and clocks, but the modern computer age began with "
-        "electronic digital computers in the mid twentieth century. "
-        "These machines relied on vacuum tubes, transistors, and later "
-        "integrated circuits. Programming languages evolved from machine "
-        "code to assembly to high level languages such as Fortran, "
-        "Lisp, C, and many successors. Networking protocols like TCP/IP "
-        "made distributed computing practical, and the World Wide Web "
-        "turned a research network into a global communications substrate. "
-        "Today the field continues to evolve with machine learning, "
-        "specialized accelerators, and a growing emphasis on privacy, "
-        "open weights, and local execution. Open source communities "
-        "publish reproducible code and reproducible measurements, "
-        "while benchmarks quantify quality, latency, and energy use."
-    )
-    # Tokenize then repeat with slight separators until we hit the target
-    toks = tok.encode(seed)
-    out: list[int] = []
-    while len(out) < n_target:
-        out.extend(toks)
-    return out[:n_target]
-
-
-def evaluate_card(
-    text: str, components_module, expected_kind: str
-) -> dict:
-    """Use assistant components.validate_components to score card adherence."""
-    if components_module is None:
-        return {"score": "skipped", "reason": "no validator"}
-    # Extract fenced block (```assistant-ui ...```)
-    fences = re.findall(r"```assistant-ui\s*\n(.*?)```", text, re.DOTALL)
-    prose_only = not fences
-    invalid_json = False
-    leaked_fence = False
-    valid_components: list[dict] = []
-    for raw in fences:
+def other_gpu_processes() -> int:
+    """Count other processes holding a DRM render node (the shared GPU)."""
+    count = 0
+    for fd_dir in Path("/proc").glob("[0-9]*/fd"):
+        if fd_dir.parent.name == str(os.getpid()):
+            continue
         try:
-            payload = json.loads(raw)
-            if isinstance(payload, dict):
-                comps = components_module.validate_components(payload)
-                valid_components.extend(comps)
-        except Exception:  # noqa: BLE001
-            invalid_json = True
-    # Plain text could still contain markdown structure
-    has_checklist = bool(re.search(r"^\s*[-*]\s+\[[ x]\]", text, re.MULTILINE))
-    has_pipe_table = bool(re.search(r"\n\|[\s\-:|]+\|\n", text))
-    has_timeline = bool(re.search(r"\b(19|20)\d{2}\b", text))
+            if any(os.readlink(fd).startswith("/dev/dri/renderD") for fd in fd_dir.iterdir()):
+                count += 1
+        except OSError:
+            continue
+    return count
+
+
+def stats(values):
+    vals = [v for v in values if v == v]
+    if not vals:
+        return None
+    return {"median": statistics.median(vals), "max": max(vals), "min": min(vals), "n": len(vals)}
+
+
+class Bench:
+    def __init__(self, model, tok):
+        import mlx.core as mx
+        from mlx_lm.generate import generate_step
+        from mlx_lm.sample_utils import make_logits_processors, make_sampler
+        self.mx, self.model, self.tok = mx, model, tok
+        self.generate_step = generate_step
+        self.sampler = make_sampler(temp=0.0)
+        self.processors = make_logits_processors(repetition_penalty=REPETITION_PENALTY)
+        self.eos = set(getattr(tok, "eos_token_ids", None) or [tok.eos_token_id])
+        self.min_mem_avail = mem_available_mib()
+
+    def encode_chat(self, system: str, user: str) -> list[int]:
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        text = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
+                                            enable_thinking=False)
+        bos = getattr(self.tok, "bos_token", None)
+        return self.tok.encode(text, add_special_tokens=bos is None or not text.startswith(bos))
+
+    def run(self, tokens: list[int], max_tokens: int, stop_on_eos: bool = True):
+        """Return (generated ids, per-token wall times from start, stopped_on_eos)."""
+        start = time.monotonic()
+        ids, times, eos_hit = [], [], False
+        gen = self.generate_step(self.mx.array(tokens), self.model, max_tokens=max_tokens,
+                                 sampler=self.sampler, logits_processors=self.processors)
+        for token, _ in gen:
+            token = int(token)
+            times.append(time.monotonic() - start)
+            if stop_on_eos and token in self.eos:
+                eos_hit = True
+                break
+            ids.append(token)
+            if len(ids) >= max_tokens:
+                break
+        self.min_mem_avail = min(self.min_mem_avail, mem_available_mib())
+        return ids, times, eos_hit
+
+    def chat(self, system: str, user: str, max_tokens: int) -> dict:
+        ids, times, eos_hit = self.run(self.encode_chat(system, user), max_tokens)
+        return {"text": self.tok.decode(ids), "tokens": len(ids),
+                "truncated": not eos_hit, "seconds": times[-1] if times else 0.0}
+
+
+def synthetic_prompt(tok, n: int) -> list[int]:
+    seed = tok.encode(
+        "The history of computing begins with mechanical calculators and clocks. Electronic digital "
+        "computers used vacuum tubes, then transistors and integrated circuits. Programming moved "
+        "from machine code to high-level languages, and networks connected machines worldwide. ")
+    out = []
+    while len(out) < n:
+        out.extend(seed)
+    return out[:n]
+
+
+def perf_phase(bench: Bench, args) -> dict:
+    mx = bench.mx
+    card_system = SYSTEM_PREFIX + SCHEMA_PROMPT_COMPACT
+    ttft_prompt = bench.encode_chat(card_system, TTFT_USER)
+    for _ in range(2):
+        bench.run(ttft_prompt, 8)
+    ttft = [bench.run(ttft_prompt, 8)[1][0] for _ in range(args.perf_n)]
+
+    def prefill_decode(n_prompt: int, reps: int):
+        prompt = synthetic_prompt(bench.tok, n_prompt)
+        prefill, decode = [], []
+        for _ in range(reps):
+            _, times, _ = bench.run(prompt, args.n_decode, stop_on_eos=False)
+            prefill.append(times[0])
+            decode.append((len(times) - 1) / (times[-1] - times[0]))
+        return prefill, decode
+
+    bench.run(synthetic_prompt(bench.tok, 512), 8, stop_on_eos=False)
+    p512, d512 = prefill_decode(512, args.perf_n)
+    p2048, d2048 = prefill_decode(2048, args.prefill2048_n)
     return {
-        "fences_found": len(fences),
-        "invalid_json": invalid_json,
-        "prose_only": prose_only,
-        "valid_components": [c.get("type") for c in valid_components],
-        "has_checklist_md": has_checklist,
-        "has_pipe_table_md": has_pipe_table,
-        "has_timeline_md": has_timeline,
-        "expected_kind": expected_kind,
-        "hit": (
-            (expected_kind == "prose" and prose_only and not invalid_json)
-            or (expected_kind == "card" and (len(valid_components) > 0 or has_checklist or has_pipe_table))
-        ),
+        "ttft_card_prompt_s": stats(ttft), "ttft_prompt_tokens": len(ttft_prompt),
+        "prefill_512_s": stats(p512), "prefill_512_tok_s": 512 / statistics.median(p512),
+        "prefill_2048_s": stats(p2048), "prefill_2048_tok_s": 2048 / statistics.median(p2048),
+        "decode_after_512_tok_s": stats(d512), "decode_after_2048_tok_s": stats(d2048),
+        "decode_tokens": args.n_decode,
+        "peak_mem_gb_mx": mx.get_peak_memory() / 1e9,
+        "rss_mib_after_perf": rss_mib(),
     }
 
 
-def evaluate_gsm8k(text: str, gold: int) -> bool:
-    """Parse the final integer from the response and compare."""
-    # Look for the last number in the text
-    nums = re.findall(r"-?\d[\d,]*", text)
+def score_card(text: str, user_text: str) -> dict:
+    lines = text.splitlines()
+    out = {
+        "md_checklist": any(re.match(r"\s*[-*]\s+\[[ xX]\]", ln) for ln in lines),
+        "md_pipe_table": any(re.match(r"\s*\|?\s*:?-{3,}", ln) for ln in lines),
+        "md_numbered_or_bullets": sum(bool(re.match(r"\s*([-*]|\d+[.)])\s+", ln)) for ln in lines) >= 3,
+    }
+    start = text.find(FENCE)
+    if start < 0:
+        out["outcome"] = "leaked-fence" if "```assistant-ui" in text else "prose-only"
+    else:
+        body = text[start + len(FENCE):]
+        end = body.find("```")
+        if end < 0:
+            out["outcome"] = "leaked-fence"
+        else:
+            try:
+                comps = validate_components(json.loads(body[:end]))
+                out["outcome"], out["types"] = "valid-card", [c["type"] for c in comps]
+            except (ValueError, TypeError, KeyError, ComponentError) as exc:
+                out["outcome"], out["error"] = "invalid-json", str(exc)[:160]
+    promoted = extract_text(text, user_text)
+    if promoted is not None:
+        try:
+            validate_components({"version": 1, "components": [promoted]})
+            out["promotable"] = promoted.get("type")
+        except (ValueError, ComponentError):
+            pass
+    return out
+
+
+def grade_gsm(text: str, gold: int) -> bool:
+    m = re.findall(r"Final answer:\s*\**\s*\$?\s*(-?[\d,]+(?:\.\d+)?)", text, re.IGNORECASE)
+    nums = m or re.findall(r"-?\d[\d,]*(?:\.\d+)?", text)
     if not nums:
         return False
-    last = nums[-1].replace(",", "")
     try:
-        return int(last) == gold
+        return float(nums[-1].replace(",", "")) == gold
     except ValueError:
         return False
 
 
-def evaluate_ife(text: str, spec: dict) -> bool:
-    """Apply the deterministic pass/fail check."""
+def grade_ife(text: str, spec: dict) -> bool:
     t = text.strip()
-    check = spec["pass_check"]
+    check, want = spec["check"], spec["expected"]
     if check == "equals":
-        expected = spec["expected"]
-        if spec.get("case_insensitive"):
-            return t.upper() == expected.upper()
-        return t == expected
-    if check == "line_equals":
-        first_line = (t.splitlines() or [""])[0].strip()
-        return first_line == spec["expected"]
-    if check == "lines":
-        lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
-        expected = [str(x).lower() if spec.get("case_insensitive") else str(x) for x in spec["expected"]]
-        actual = [ln.lower() if spec.get("case_insensitive") else ln for ln in lines]
-        return actual == expected
+        norm = spec.get("normalize", "")
+        if "remove_spaces" in norm:
+            t = t.replace(" ", "")
+        if "strip_period" in norm:
+            t = t.rstrip(".").strip()
+        if "casefold" in norm:
+            t = t.casefold()
+        return t == want
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    if check == "line_count_plain_words":
+        return len(lines) == want and all(re.fullmatch(r"[A-Za-z][A-Za-z ]*", ln) for ln in lines)
+    if check == "lines_equal":
+        return lines == want
     if check == "sentence_count":
-        # Split on . ? ! ignoring trailing whitespace
-        sents = [s for s in re.split(r"(?<=[.!?])\s+", t) if s.strip()]
-        return len(sents) == spec["expected"]
-    if check == "comma_count":
-        # count commas in first line
-        first = (t.splitlines() or [""])[0]
-        return first.count(",") == spec["expected"]
-    if check == "bullet_count":
-        bullets = [ln for ln in t.splitlines() if re.match(r"^\s*[-*]\s", ln)]
-        return len(bullets) == spec["expected"]
-    if check == "json_keys":
+        return len(lines) >= 1 and len(re.findall(r"[^.!?]+[.]", t)) == want and t.endswith(".")
+    if check == "comma_items":
+        return len(lines) == 1 and len([p for p in lines[0].split(",") if p.strip()]) == want
+    if check == "hyphen_bullets":
+        return len(lines) == want and all(ln.startswith("- ") for ln in lines)
+    if check == "max_words":
+        return 0 < len(t.split()) <= want
+    if check == "json_equals":
         try:
-            obj = json.loads(t)
-        except Exception:  # noqa: BLE001
+            return json.loads(t) == want
+        except ValueError:
             return False
-        if set(obj.keys()) != set(spec["expected_keys"]):
-            return False
-        for k, v in spec["expected_values"].items():
-            if obj.get(k) != v:
-                return False
-        return True
-    if check == "json_array":
-        try:
-            obj = json.loads(t)
-        except Exception:  # noqa: BLE001
-            return False
-        return obj == spec["expected_values"]
-    return False
+    raise ValueError(f"unknown IFE check {check}")
+
+
+def load_jsonl(path: Path) -> list[dict]:
+    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-id", required=True)
     ap.add_argument("--revision", required=True)
-    ap.add_argument("--model-label", default="")
-    ap.add_argument("--prompts-dir", default=str(PROMPTS_DEFAULT))
+    ap.add_argument("--model-label", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--max-tokens", type=int, default=700)
+    ap.add_argument("--prompts-dir", default=str(REPO_ROOT / "scripts/bench/prompts"))
+    ap.add_argument("--max-tokens", type=int, default=700, help="card reply cap")
     ap.add_argument("--n-decode", type=int, default=128)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--skip-quality", action="store_true",
-                    help="skip GSM8K/IFE (perf-only run)")
-    ap.add_argument("--skip-cards", action="store_true",
-                    help="skip card adherence run")
+    ap.add_argument("--perf-n", type=int, default=5)
+    ap.add_argument("--prefill2048-n", type=int, default=5)
+    ap.add_argument("--phases", default="perf,cards,gsm,ife")
     args = ap.parse_args()
+    phases = args.phases.split(",")
 
-    snapshot = (
-        HF_CACHE_ROOT
-        / f"models--{args.model_id.replace('/', '--')}"
-        / "snapshots"
-        / args.revision
-    )
-    model_path = str(snapshot)
-    if not snapshot.exists():
-        print(f"ERROR snapshot missing: {snapshot}", file=sys.stderr)
-        return 2
+    out = Path(args.out)
+    state = json.loads(out.read_text()) if out.exists() else {}
+    if (state.get("model_id"), state.get("revision"), state.get("harness_version")) != (
+            args.model_id, args.revision, HARNESS_VERSION):
+        state = {"model_id": args.model_id, "revision": args.revision, "label": args.model_label,
+                 "harness_version": HARNESS_VERSION, "turns": []}
 
-    # Reset everything; record idle mem
-    mem_before = meminfo_available_mib()
-    rss_before = rss_mib()
+    def save():
+        tmp = out.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=1))
+        os.replace(tmp, out)
+        os.sync()
 
-    # Cold load
+    snapshot = HF_CACHE_ROOT / f"models--{args.model_id.replace('/', '--')}" / "snapshots" / args.revision
+    boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    turn = {"boot_id": boot_id,
+            "loadavg_start": Path("/proc/loadavg").read_text().strip(),
+            "other_gpu_processes": other_gpu_processes(),
+            "mem_available_mib_before_load": mem_available_mib(),
+            "page_cache": ("warm: loaded earlier in this boot"
+                           if any(t.get("boot_id") == boot_id and "load_s" in t for t in state["turns"])
+                           else "cold or unknown: first load recorded in this boot"),
+            "provenance": provenance(), "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    print(turn["provenance"], flush=True)
+    state["turns"].append(turn)
+
+    import mlx.core as mx
+    from mlx_lm import load
     t0 = time.monotonic()
-    model, tok, cold_load_s = load_model(model_path)
-    print(f"LOAD_COLD {cold_load_s:.2f}s peak={model.__class__.__name__}")
-    import mlx.core as mx  # noqa: PLC0415
-    peak_after_load_gb = mx.get_peak_memory() / 1e9
-    rss_after_load = rss_mib()
+    try:
+        model, tok = load(str(snapshot))
+    except Exception as exc:  # noqa: BLE001  a model that cannot load is a finding
+        turn["load_error"] = f"{type(exc).__name__}: {str(exc)[:600]}"
+        save()
+        print("LOAD_ERROR", turn["load_error"], flush=True)
+        return 3
+    turn["load_s"] = time.monotonic() - t0
+    turn["peak_mem_gb_after_load"] = mx.get_peak_memory() / 1e9
+    save()
+    bench = Bench(model, tok)
 
-    # Warm restart = second load in the same process (page cache warm)
-    # Skip the model; just reload
-    _, _, warm_load_s = warm_load_model(model_path)
+    if "perf" in phases and "perf" not in state:
+        perf = perf_phase(bench, args)
+        perf.update({"mem_available_mib_before_load": turn["mem_available_mib_before_load"],
+                     "mem_available_min_mib": bench.min_mem_avail})
+        perf["mem_available_delta_mib"] = perf["mem_available_mib_before_load"] - perf["mem_available_min_mib"]
+        perf["gpu_shared_during_turn"] = bool(turn["other_gpu_processes"])
+        state["perf"] = perf
+        save()
+        print("PERF", json.dumps(perf), flush=True)
 
-    # 2 warmups, 5 measured
-    sample_user = "Describe what is on the desk in front of you."
-    chat_system = SCHEMA_PROMPT_COMPACT
-    # Warmups (results discarded)
-    for _ in range(2):
-        ttft, _, _, n = time_first_token(model, tok, chat_system, sample_user, max_tokens=64)
-    measured: list[dict] = []
-    for i in range(5):
-        mx.reset_peak_memory()
-        mem_pre = meminfo_available_mib()
-        rss_pre = rss_mib()
-        ttft, text, ptoks, n_tok = time_first_token(model, tok, chat_system, sample_user, max_tokens=256)
-        mem_post = meminfo_available_mib()
-        rss_post = rss_mib()
-        peak = mx.get_peak_memory() / 1e9
-        measured.append({
-            "iteration": i + 1,
-            "ttft_s": ttft,
-            "n_tokens_generated": n_tok,
-            "prompt_tokens": len(ptoks),
-            "peak_mem_gb": peak,
-            "rss_mib_pre": rss_pre,
-            "rss_mib_post": rss_post,
-            "mem_avail_mib_pre": mem_pre,
-            "mem_avail_mib_post": mem_post,
-            "mem_avail_delta_mib": mem_post - mem_pre,
-        })
-
-    # Prefill @512 and @2048
-    prompt_512 = synthesize_prompt_tokens(tok, 512)
-    prompt_2048 = synthesize_prompt_tokens(tok, 2048)
-    # 2 warmup decode runs to settle
-    time_decode_n_tokens(model, tok, prompt_2048, n_decode=16)
-    time_decode_n_tokens(model, tok, prompt_2048, n_decode=16)
-    decode_512 = [time_decode_n_tokens(model, tok, prompt_512, n_decode=args.n_decode) for _ in range(5)]
-    decode_2048 = [time_decode_n_tokens(model, tok, prompt_2048, n_decode=args.n_decode) for _ in range(5)]
-
-    def stats(values):
-        clean = [v for v in values if v == v]  # drop NaN
-        if not clean:
-            return {"mean": None, "median": None, "min": None, "max": None, "stdev": None, "n": 0}
-        return {
-            "mean": statistics.mean(clean),
-            "median": statistics.median(clean),
-            "min": min(clean),
-            "max": max(clean),
-            "stdev": statistics.stdev(clean) if len(clean) > 1 else 0.0,
-            "n": len(clean),
-        }
-
-    prefill_512 = stats([d["prefill_s"] for d in decode_512])
-    prefill_2048 = stats([d["prefill_s"] for d in decode_2048])
-    decode_512_tps = stats([d["decode_tps"] for d in decode_512])
-    decode_2048_tps = stats([d["decode_tps"] for d in decode_2048])
-    ttft_stats = stats([m["ttft_s"] for m in measured])
-
-    # Resume from existing checkpoint if present (so a reboot/restart can
-    # pick up partial card/gsm/ife results without rerunning them).
-    card_results = []
-    gsm_results = []
-    ife_results = []
-    existing = Path(args.out)
-    if existing.exists() and existing.stat().st_size > 100:
-        try:
-            old = json.loads(existing.read_text())
-            if old.get("model_id") == args.model_id and old.get("revision") == args.revision:
-                card_results = old.get("card_results", [])
-                gsm_results = old.get("gsm_results", [])
-                ife_results = old.get("ife_results", [])
-                print(f"RESUMED checkpoint: cards={len(card_results)} gsm={len(gsm_results)} ife={len(ife_results)}", file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001
-            print(f"WARN resume failed: {exc}", file=sys.stderr)
-
-    # Save partial after perf work is done (before cards/quality)
-    _save_partial(args.out, locals())
-
-    # Card adherence: 16 frozen prompts
-    if not args.skip_cards:
-        prompts_path = Path(args.prompts_dir) / "cards_16.jsonl"
-        with prompts_path.open() as fh:
-            prompts = [json.loads(ln) for ln in fh if ln.strip()]
-        from mlx_lm.sample_utils import make_sampler, make_logits_processors  # noqa: PLC0415
-        from mlx_lm.generate import generate_step  # noqa: PLC0415
-        from mlx_lm.tokenizer_utils import TokenizerWrapper  # noqa: PLC0415
-
-        sampler = make_sampler(temp=0.0, top_p=1.0)
-        logits_processors = make_logits_processors(repetition_penalty=REPETITION_PENALTY)
-
-        def chat_generate(system: str, user: str, max_tokens: int) -> str:
-            messages = build_prompt(system, user)
-            if isinstance(tok, TokenizerWrapper):
-                prompt_str = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                prompt_tokens = tok.encode(prompt_str)
-            else:
-                prompt_tokens = tok.encode(system + "\n\n" + user)
-            out_tokens: list[int] = []
-            for token, _ in generate_step(
-                mx.array(prompt_tokens), model,
-                max_tokens=max_tokens, sampler=sampler,
-                logits_processors=logits_processors,
-            ):
-                out_tokens.append(int(token))
-                if len(out_tokens) >= max_tokens:
-                    break
-            return tok.decode(out_tokens)
-
-        # 2 warmups on a sample
-        for _ in range(2):
-            chat_generate(chat_system, "Hi", 8)
-
-        done_card_indices = {c.get("index") for c in card_results if "index" in c}
-        for p in prompts:
-            if p["index"] in done_card_indices:
-                continue  # already done in a previous run
-            uses_full = bool(re.search(
-                r"\b(charts?|graphs?|forms?|decisions?|options?|facts?|sources?)\b",
-                p["prompt"], re.IGNORECASE))
-            sys_prompt = SCHEMA_PROMPT if uses_full else SCHEMA_PROMPT_COMPACT
-            try:
-                text = chat_generate(sys_prompt, p["prompt"], args.max_tokens)
-            except Exception as exc:  # noqa: BLE001
-                card_results.append({
-                    "index": p["index"], "error": str(exc)[:200],
-                    "expect": p["expect"],
-                })
+    prompts_dir = Path(args.prompts_dir)
+    if "cards" in phases:
+        done = state.setdefault("cards", {})
+        for p in load_jsonl(prompts_dir / "cards_16.jsonl"):
+            if str(p["index"]) in done:
                 continue
-            verdict = evaluate_card(text, sys.modules.get("mlx_omarchy_assistant.components"),
-                                    p["expect"])
-            verdict.update({
-                "index": p["index"], "expect": p["expect"],
-                "category": p["category"], "uses_full_schema": uses_full,
-                "text_excerpt": text[:300],
-            })
-            card_results.append(verdict)
-            _save_partial(args.out, locals())
-
-    # GSM8K: 20 frozen items
-    gsm_results = []
-    if not args.skip_quality:
-        gsm_path = Path(args.prompts_dir) / "gsm8k_20.jsonl"
-        with gsm_path.open() as fh:
-            gsm_prompts = [json.loads(ln) for ln in fh if ln.strip()]
-        from mlx_lm.sample_utils import make_sampler, make_logits_processors  # noqa: PLC0415
-        from mlx_lm.generate import generate_step  # noqa: PLC0415
-        from mlx_lm.tokenizer_utils import TokenizerWrapper  # noqa: PLC0415
-
-        sampler = make_sampler(temp=0.0, top_p=1.0)
-        logits_processors = make_logits_processors(repetition_penalty=REPETITION_PENALTY)
-
-        def chat_generate_local(system: str, user: str, max_tokens: int) -> str:
-            messages = build_prompt(system, user)
-            if isinstance(tok, TokenizerWrapper):
-                prompt_str = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                prompt_tokens = tok.encode(prompt_str)
-            else:
-                prompt_tokens = tok.encode(system + "\n\n" + user)
-            out_tokens: list[int] = []
-            for token, _ in generate_step(
-                mx.array(prompt_tokens), model,
-                max_tokens=max_tokens, sampler=sampler,
-                logits_processors=logits_processors,
-            ):
-                out_tokens.append(int(token))
-                if len(out_tokens) >= max_tokens:
-                    break
-            return tok.decode(out_tokens)
-
-        gsm_system = (
-            "You are a careful math tutor. Solve the problem step by step, "
-            "then end your reply with the final answer as a single line:\n"
-            "Final answer: <number>"
-        )
-        done_gsm_indices = {g.get("index") for g in gsm_results if "index" in g}
-        for g in gsm_prompts:
-            if g["index"] in done_gsm_indices:
+            full = bool(FULL_CARD_CUES.search(p["prompt"]) or user_requested_full_schema(p["prompt"]))
+            reply = bench.chat(SYSTEM_PREFIX + (SCHEMA_PROMPT if full else SCHEMA_PROMPT_COMPACT),
+                               p["prompt"], args.max_tokens)
+            done[str(p["index"])] = {"expect": p["expect"], "category": p["category"],
+                                     "full_schema": full, **score_card(reply["text"], p["prompt"]),
+                                     **{k: reply[k] for k in ("tokens", "truncated", "seconds")},
+                                     "text": reply["text"]}
+            save()
+    if "gsm" in phases:
+        done = state.setdefault("gsm", {})
+        for g in load_jsonl(prompts_dir / "gsm8k_20.jsonl"):
+            if str(g["index"]) in done:
                 continue
-            try:
-                text = chat_generate_local(gsm_system, g["q"], 512)
-            except Exception as exc:  # noqa: BLE001
-                gsm_results.append({"index": g["index"], "error": str(exc)[:200]})
+            reply = bench.chat(GSM_SYSTEM, g["q"], 768)
+            done[str(g["index"])] = {"gold": g["gold"], "pass": grade_gsm(reply["text"], g["gold"]),
+                                     "truncated": reply["truncated"], "text": reply["text"]}
+            save()
+    if "ife" in phases:
+        done = state.setdefault("ife", {})
+        for spec in load_jsonl(prompts_dir / "ife_20.jsonl"):
+            if str(spec["index"]) in done:
                 continue
-            ok = evaluate_gsm8k(text, g["gold"])
-            gsm_results.append({"index": g["index"], "gold": g["gold"],
-                                "pass": ok, "excerpt": text[-200:]})
-            _save_partial(args.out, locals())
-
-    # IFE: 20 frozen items
-    if not args.skip_quality:
-        ife_path = Path(args.prompts_dir) / "ife_20.jsonl"
-        with ife_path.open() as fh:
-            ife_prompts = [json.loads(ln) for ln in fh if ln.strip()]
-        ife_system = (
-            "You follow instructions exactly. Reply ONLY with what the "
-            "instruction asks; do not add commentary."
-        )
-        done_ife_indices = {i.get("index") for i in ife_results if "index" in i}
-        for it in ife_prompts:
-            if it["index"] in done_ife_indices:
-                continue
-            try:
-                text = chat_generate_local(ife_system, it["instruction"], 256)
-            except Exception as exc:  # noqa: BLE001
-                ife_results.append({"index": it["index"], "error": str(exc)[:200]})
-                continue
-            ok = evaluate_ife(text, it)
-            ife_results.append({"index": it["index"], "pass": ok,
-                                "check": it["pass_check"],
-                                "excerpt": text[:160]})
-            _save_partial(args.out, locals())
-
-    # Build summary
-    card_pass = sum(1 for c in card_results if c.get("hit"))
-    card_total = len([c for c in card_results if "expect" in c])
-    gsm_pass = sum(1 for g in gsm_results if g.get("pass"))
-    ife_pass = sum(1 for i in ife_results if i.get("pass"))
-
-    summary = {
-        "model_id": args.model_id,
-        "model_label": args.model_label or args.model_id,
-        "revision": args.revision,
-        "provenance": provenance_line(),
-        "cold_load_s": cold_load_s,
-        "warm_load_s": warm_load_s,
-        "peak_mem_after_load_gb": peak_after_load_gb,
-        "rss_after_load_mib": rss_after_load,
-        "mem_before_run_mib": mem_before,
-        "rss_before_run_mib": rss_before,
-        "ttft_170sys_256tok": ttft_stats,
-        "ttft_measured": measured,
-        "prefill_512": prefill_512,
-        "prefill_2048": prefill_2048,
-        "decode_512": decode_512_tps,
-        "decode_2048": decode_2048_tps,
-        "card_pass": card_pass,
-        "card_total": card_total,
-        "card_results": card_results,
-        "gsm_pass": gsm_pass,
-        "gsm_total": len(gsm_results),
-        "gsm_results": gsm_results,
-        "ife_pass": ife_pass,
-        "ife_total": len(ife_results),
-        "ife_results": ife_results,
-    }
-
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "w") as fh:
-        json.dump(summary, fh, indent=2)
-
-    print(json.dumps({
-        "model": args.model_id,
-        "label": args.model_label,
-        "revision": args.revision,
-        "cold_load_s": round(cold_load_s, 2),
-        "warm_load_s": round(warm_load_s, 2),
-        "peak_mem_gb": round(peak_after_load_gb, 2),
-        "ttft_p50_s": ttft_stats["median"],
-        "prefill_512_p50_s": prefill_512["median"],
-        "prefill_2048_p50_s": prefill_2048["median"],
-        "decode_512_tps": decode_512_tps["median"],
-        "decode_2048_tps": decode_2048_tps["median"],
-        "card_valid": f"{card_pass}/{card_total}",
-        "gsm8k": f"{gsm_pass}/{len(gsm_results)}",
-        "ife": f"{ife_pass}/{len(ife_results)}",
-        "provenance": provenance_line(),
-    }, indent=2))
-
+            reply = bench.chat(IFE_SYSTEM, spec["instruction"], 256)
+            done[str(spec["index"])] = {"pass": grade_ife(reply["text"], spec),
+                                        "truncated": reply["truncated"], "text": reply["text"]}
+            save()
+    turn["peak_mem_gb_turn"] = mx.get_peak_memory() / 1e9
+    turn["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    save()
+    print("DONE", args.model_label, flush=True)
     return 0
 
 
