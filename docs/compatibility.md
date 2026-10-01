@@ -712,8 +712,12 @@ A Supported row must link every applicable record.
   repros are clean at the exact operand configs).
 - Fused SDPA VJP: gated off for all shapes (2088e1c6a) pending
   dq/dk/dv finite-difference parity at rep=1, 2, 4 on real hardware.
-  The GQA gate predates this (db30ab6ec). No user is served fused SDPA
-  training gradients until the parity gate flips.
+  The GQA gate predates this (db30ab6ec). dk at rep=1 is
+  hardware-proven correct against host finite differences (M2 G14X,
+  three-way with the exact doctest seeds); dv at rep=1 (post
+  operand-fix) and dk/dv at rep>1 (the GQA reduce/matmul shortfall)
+  remain unproven. No user is served fused SDPA training gradients
+  until the parity gate flips.
 - Fused gated-delta-net (GDN) VJP: serving GQA shapes, fd-verified
   against the composed reference on M2 G14X (doctest "fused gdn vjp
   matches the composed reference at GQA shapes").
