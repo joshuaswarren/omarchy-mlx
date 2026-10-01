@@ -3167,7 +3167,7 @@ TEST_CASE("sdpa gqa training routes to composed and matches finite differences")
 // Python on the M2 - the trigger is inside the composed backward's own
 // operand chain; see the VjpKernels notebook parts 5-7).
 // Expected-failure until fixed.
-TEST_CASE("fused sdpa vjp dk dv match finite differences at rep=1" *
+TEST_CASE("sdpa vjp dk dv match finite differences at rep=1 (path per gate)" *
           doctest::may_fail(true)) {
   if (!compute_available()) {
     return;
