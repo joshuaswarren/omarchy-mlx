@@ -155,39 +155,91 @@ This is the finding to list: either remove the CPU encoder symbols
 from the release `libmlx.so`, or instrument the CPU encoder so the
 contract is observable end-to-end.
 
-## Paired memory peak — NOT MEASURED yet
+## Paired memory peak — 3 runs measured (1 per pair), 2 more per pair pending
 
-Ticket scripts are ready on the M2 host and queued for the shared
-GPU. Every script:
-- exports `MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1` so untested pairs can
-  start (memory behavior is unchanged: the var only flips
-  `backend_override=True` in `admissible_context`, which relaxes a
-  null limit; it does NOT bypass `estimate_required`, the safety
-  reserve, the desktop reserve, or atomic admission);
-- proves a real chat completion (`choices` in warmup.json) before any
-  memory sample;
-- records `uname -r`;
-- samples system-level `MemTotal - MemAvailable` delta from
-  `/proc/meminfo` (the honest whole-system peak on unified memory);
-- samples per-process RSS/PSS of the assistant PID plus its
-  descendants via `/proc/<pid>/task/<pid>/children` BFS plus
-  `/proc/<pid>/smaps_rollup`;
-- samples DRM fdinfo for each renderD128 fd (best-effort: Mesa does
-  not emit `drm-*` keys on this build, reported as empty);
-- samples backend allocator peak via `GET /v1/internal/memory` on the
-  chat worker (added by the side-effect import of
+Measured 2026-10-01 on jw14m2-linux (T6021, 96 GB) with
+`scripts/pair_memory_turns.py` driven entirely through the assistant
+HTTP API (cookie + CSRF on `/api/conversations/{cid}/turns`, message
+status polled on `/api/conversations/{cid}`). One run per pair so far;
+runs 2 and 3 of each pair still to land.
+
+Kernel: 7.1.13-3-1-ARCH. All three runs set
+`MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1` (memory behavior unchanged: the
+var only relaxes a null `backend_context_qualified_tokens` limit).
+Each run: (a) samples a pre-start `baseline_before_assistant` snapshot
+of system memory + the top-15 RSS processes (for contamination
+visibility, written to `baseline-top-rss.json` in the artifact dir);
+(b) launches the assistant with `--pair <id> --yes`; (c) waits for
+setup completion; (d) proves a real completion before any sample; (e)
+drives 4 scripted turns via the API (plain chat, long-context,
+explicit Compare options, card); (f) samples idle-after and
+post-teardown.
+
+Method notes:
+- System-level memory = `MemTotal - MemAvailable` from `/proc/meminfo`
+  (the honest whole-system peak on unified memory; includes page
+  cache from mmap'd weights once touched).
+- Pair resident cost = `idle_before.system_used - baseline.system_used`
+  (the delta the pair adds over the pre-start baseline).
+- Peak over baseline = `max(system_used) - baseline.system_used`.
+- Per-process RSS/PSS of the assistant PID and descendants via
+  `/proc/<pid>/task/<pid>/children` BFS + `/proc/<pid>/smaps_rollup`.
+- DRM fdinfo for renderD128 fds (best-effort: Mesa does not emit
+  `drm-*` keys on this build, reported as `drm_allocated_bytes = 0`).
+- Backend allocator peak via `GET /v1/internal/memory` on the chat
+  worker (added by the side-effect import of
   `scripts/_mlxlm_server_with_memory.py` in
   `serve/mlx_omarchy_serve/_mlxlm_server.py`, which patches
-  `mlx_lm.server.APIHandler.do_GET` to return
-  `{active, peak, cache}` from `mx.get_active_memory()`,
-  `mx.get_peak_memory()`, `mx.get_cache_memory()`);
-- fences on a real completion before sampling memory.
+  `mlx_lm.server.APIHandler.do_GET` to return `{active, peak, cache}`).
+  Reported as `backend_peak_available: true` for all three runs; the
+  earlier `Connection refused` failure was a stale chat-port read
+  (the harness picked the FIRST `Starting httpd at` line in a log
+  with multiple restarts, not the last). Fixed in
+  `pair_memory_turns.py`.
 
-Runs planned: everyday9b run1..3 (qwen3.5-9b-mlx-4bit + laya-mlx),
-compact4b run1..3 (qwen3-4b-instruct-2507-4bit + laya-mlx),
-quality27b run1..3 (qwen3.8-27b-4bit + laya-mlx). Every phase: idle,
-plain chat, ~2 k-token long-context, explicit Compare options
-decision, card turn, idle-after.
+### Measured (run 1 of each pair)
+
+| pair | chat model | baseline MiB | idle MiB | pair resident MiB | peak over baseline MiB | tree peak RSS MiB | backend peak MiB | admitted context | card turn |
+|---|---|---|---|---|---|---|---|---|---|
+| compact4b | qwen3-4b-instruct-2507-4bit | 8654.8 | 10420.7 | **1765.9** | **4917.8** | 688.4 | 6406.8 | 262144 | complete, text_len 0 (defect — see below) |
+| everyday9b | qwen3.5-9b-mlx-4bit | 7276.2 | 9768.4 | **2492.2** | **11142.4** | 1063.7 | 7583.8 | 262144 | stopped, text_len 109 |
+| quality27b | qwen3.8-27b-4bit | 7193.6 | 9050.4 | **1856.8** | **19724.9** | 985.7 | 19607.4 | 262144 | complete, text_len 109, components=[chart] |
+
+All three pairs admitted context = 262144 tokens (the model maximum
+from the catalog, not a memory-admitted limit; the memory-admitted
+limit comes from `admissible_context()` and is recorded in the
+pair-locks JSON).
+
+Observations:
+
+- The 27B pair peaks at 19.26 GiB over the pre-start baseline. The
+  9B pair peaks at 10.88 GiB. Compact 4B peaks at 4.80 GiB. All
+  three fit on the 96 GB M2 with 70+ GiB still free at peak.
+- On the 16 GB tier, quality27b (19.26 GiB peak) does NOT fit;
+  everyday9b (10.88 GiB peak) fits with room to spare; compact4b
+  (4.80 GiB peak) fits easily.
+- `backend_peak` tracks the mlx allocator's `mx.get_peak_memory()`
+  inside the chat worker process. For 27B it reaches 19.15 GiB, which
+  is the 14.95 GiB weights + ~4.2 GiB of activation/KV workspace at
+  4096 context.
+- `pair_resident_cost` (idle_before - baseline) is much smaller than
+  the backend peak because the model weights are mmap'd lazily; the
+  allocator peak only builds up once inference runs. The 27B pair
+  resident cost is 1.81 GiB before any turn; after one long-context
+  turn it climbs to ~19 GiB.
+
+### Defect: card turn returns empty text on compact4b (default config)
+
+On compact4b (qwen3-4b-instruct-2507-4bit + laya-mlx), the card turn
+`"Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos
+21.0M."` with `mode=chat, max_tokens=256` returned
+`status=complete, content=""`, `components=[]`, `text_len=0` after
+~65 s. The user turn had 69 chars; the assistant turn had 0. This is
+a product defect to report (silent empty reply on a card request on
+the 4B default config). The everyday9b and quality27b runs returned
+non-empty replies for the same prompt.
+
+Artifact: `receipts/2026-09-30-pair-gates/raw/{compact4b-memory-test,everyday9b-run1,quality27b-run1}/`
 
 ## Quality pair on idle GPU — NOT MEASURED yet
 
