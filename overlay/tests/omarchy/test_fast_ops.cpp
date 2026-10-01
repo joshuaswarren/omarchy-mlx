@@ -3158,10 +3158,15 @@ TEST_CASE("sdpa gqa training routes to composed and matches finite differences")
 // gradients for dk are wrong at specific elements (last-dim of early
 // keys, head-1 last-key) at rep=1 shapes 5x7/4x4/6x9 on Honeykrisp AND
 // llvmpipe, while dq/dv and the GQA-shape dk are fd-clean on the same
-// runs. Exact-config standalone mx.matmul with the same transposed
-// views is clean in Python on the M2, so the trigger is inside the
-// composed backward's own operand chain (under investigation - see the
-// VjpKernels notebook part 5). Expected-failure until fixed.
+// runs. CONFIRMED on M2 real hardware with the exact doctest seeds via
+// a pure-Python three-way (python-ops == backend-routed-composed-side
+// != host fd at dk[7]: -0.126 vs 0.474); the same run shows the FUSED
+// path (pre-gate wheel) matching the host exactly, so the fused dk at
+// rep=1 is correct and this defect belongs to the composed chain
+// (standalone mx.matmul with the same transposed views is clean in
+// Python on the M2 - the trigger is inside the composed backward's own
+// operand chain; see the VjpKernels notebook parts 5-7).
+// Expected-failure until fixed.
 TEST_CASE("fused sdpa vjp dk dv match finite differences at rep=1" *
           doctest::may_fail(true)) {
   if (!compute_available()) {
