@@ -1,4 +1,79 @@
 --- a/mlx_lm/models/qwen3_next.py	2026-09-29 19:28:59.496194502 -0500
 +++ b/mlx_lm/models/qwen3_next.py	2026-09-29 19:30:55.002057572 -0500
 @@ -1,5 +1,6 @@
-@@ -166,22 +167,58 @@
+ # Copyright © 2025 Apple Inc.
+ 
+ from __future__ import annotations
++import os
+ 
+ from dataclasses import dataclass
+@@ -166,22 +167,59 @@
+ 
+         keys, values = self.k_proj(x), self.v_proj(x)
+ 
+-        queries = self.q_norm(queries).transpose(0, 2, 1, 3)
+-        keys = self.k_norm(keys.reshape(B, L, self.num_key_value_heads, -1)).transpose(
+-            0, 2, 1, 3
+-        )
++        # mlx-omarchy rope-norm patch: fold the q/k RMSNorm into the rope
++        # dispatch (mx.fast.rope_rms_norm). Bit-identical: the fused kernel
++        # reproduces the fast RMSNorm reduction tree and rounds the
++        # normalized values to bf16 before the rotation consumes them, the
++        # same rounding the composed norm -> rope chain does across the
++        # kernel boundary. Kill switch: MLX_OMARCHY_ROPE_NORM_FUSE=0 runs
++        # the exact eager chain in the else-branch (bit-identical by
++        # construction); the backend fence refuses non-fuseable legs.
++        if (
++            os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "0") == "1"
++            and queries.dtype == mx.bfloat16
++            and hasattr(mx.fast, "rope_rms_norm")
++        ):
++            offset_pos = cache.offset if cache is not None else 0
++            queries = mx.fast.rope_rms_norm(
++                queries.transpose(0, 2, 1, 3),
++                self.rope.dims,
++                self.q_norm.weight,
++                self.q_norm.eps,
++                traditional=self.rope.traditional,
++                base=self.rope.base,
++                scale=self.rope.scale,
++                offset=offset_pos,
++            )
++            keys = mx.fast.rope_rms_norm(
++                keys.reshape(B, L, self.num_key_value_heads, -1).transpose(
++                    0, 2, 1, 3
++                ),
++                self.rope.dims,
++                self.k_norm.weight,
++                self.k_norm.eps,
++                traditional=self.rope.traditional,
++                base=self.rope.base,
++                scale=self.rope.scale,
++                offset=offset_pos,
++            )
++        else:
++            queries = self.q_norm(queries).transpose(0, 2, 1, 3)
++            keys = self.k_norm(
++                keys.reshape(B, L, self.num_key_value_heads, -1)
++            ).transpose(0, 2, 1, 3)
++            if cache is not None:
++                queries = self.rope(queries, offset=cache.offset)
++                keys = self.rope(keys, offset=cache.offset)
++            else:
++                queries = self.rope(queries)
++                keys = self.rope(keys)
+         values = values.reshape(B, L, self.num_key_value_heads, -1).transpose(
+             0, 2, 1, 3
+         )
+ 
+         if cache is not None:
+-            queries = self.rope(queries, offset=cache.offset)
+-            keys = self.rope(keys, offset=cache.offset)
+             keys, values = cache.update_and_fetch(keys, values)
+-        else:
+-            queries = self.rope(queries)
+-            keys = self.rope(keys)
+-
+         output = scaled_dot_product_attention(
+             queries, keys, values, cache=cache, scale=self.scale, mask=mask
+         )
