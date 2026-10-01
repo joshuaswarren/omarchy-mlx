@@ -30,6 +30,17 @@ for N in 64 128 256 512; do
 done
 cell 64 ctl2 "$SERVE"
 cell 64 ksoff "$CAND"   # kill switch: no flags -> exact eager chain
+
+# F6 adoption receipt: the planner trace shows whether the bf16 KV
+# pairs classified (kinds 1,2 / 2,1 = keys_rope+values) or refused.
+env X=1 MLX_OMARCHY_KV_TRACE=1 MLX_OMARCHY_ROPE_NORM_FUSE=1 \
+  MLX_OMARCHY_GDN_QKNORM_FUSE=1 "$CAND" "$BENCH" --model "$MODEL"/ \
+  --prompts "$HOME/bench-scripts/qwen38-2b-prompts.jsonl" \
+  --limit 1 --new-tokens 8 --warmup 1 --passes 1 --prefill-tokens 512 \
+  --label "fuse4c-kvtrace" --out "$OUT/kvtrace.json" \
+  > "$OUT/kvtrace.log" 2>&1
+grep -m 6 "kv-plan" "$OUT/kvtrace.log" > "$OUT/kvtrace-plan.txt" || true
+echo "kv-trace: $(cat "$OUT/kvtrace-plan.txt" | head -2 | tr '\n' ' ')"
 ( cd "$OUT" && sha256sum ./* > SHA256SUMS 2>/dev/null )
 
 python3 - "$OUT" > "$OUT/combined-final.txt" 2>&1 <<'PYEOF'
