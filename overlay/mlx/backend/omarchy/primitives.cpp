@@ -13498,7 +13498,8 @@ void ScaledDotProductAttentionVJP::eval_gpu(
   copy_gpu(p_t, p_t_dense, CopyType::General, s);
   encoder.add_temporary(p_t_dense);
   dispatch_matmul(tag, {s_t_dense, q5}, dkt, 1.0f, 0.0f, false, s);
-  dispatch_matmul(tag, {p_t_dense, o5}, dvt, 1.0f, 0.0f, false, s);
+  // dV = P^T dO - the COTANGENT, not the forward output o.
+  dispatch_matmul(tag, {p_t_dense, co5}, dvt, 1.0f, 0.0f, false, s);
 
   auto reduce_kernel = [](Dtype dt) {
     if (dt == float16) {
