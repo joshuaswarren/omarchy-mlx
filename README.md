@@ -1,217 +1,234 @@
-# mlx-omarchy
+# omarchy-mlx
 
-MLX on Apple GPU under Linux.
+MLX on the Apple GPU under Linux, and Core ML models on the
+Apple Neural Engine.
 
-![Primitive coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/docs/coverage.json)
+[MLX](https://github.com/ml-explore/mlx) is Apple's array framework for
+machine learning on Apple silicon. Upstream it speaks Metal, so it runs
+on macOS only. omarchy-mlx runs the same `import mlx.core as mx` code on
+an Apple silicon Mac running
+[Omarchy](https://github.com/omacom/omarchy) Linux. The GPU driver is
+Mesa's Honeykrisp Vulkan stack. Tensors stay on the GPU. There is no
+Metal and no CPU fallback.
 
-[MLX](https://github.com/ml-explore/mlx) is Apple's array framework. Upstream it runs on Metal. **mlx-omarchy** is the Omarchy GPU backend that keeps `import mlx.core as mx` and `mx.gpu` on Apple Silicon Linux through Mesa's Honeykrisp Vulkan 1.4 stack. There is no Metal. GPU work never falls back to CPU tensors.
+It is for people who run Linux on an M1 or M2 Mac. You get local chat,
+serving, and speech to text, with no macOS and no cloud account.
 
-This repo is a **patch-set and overlay**, not a hard fork of MLX history. Upstream source is fetched by pin (`mlx.lock` + `scripts/prepare-mlx.sh`); project files live under `overlay/`, and edits to upstream files stay in a small `patches/` series. The Python module name remains `mlx`. Do not install upstream `mlx` beside this wheel.
+## What you get
 
-Open defects: [docs/known-defects.md](docs/known-defects.md).
+- The `mlx` Python module with the Vulkan GPU backend. The distribution
+  name is `mlx-omarchy`; the module stays `mlx`. Upstream source is
+  fetched at a pinned commit, and this project's code lives in
+  `overlay/` and `patches/`. The tree stays a small patch-set, not a
+  fork.
+- MLX Chat, a local web app for chat and comparing options, with a
+  browser UI and a terminal mode. The install registers it in the
+  launcher and sets up a user service that keeps the loaded pair ready
+  across logins.
+- `mlx-omarchy-serve`, a serving CLI with `catalog`, `plan`, and
+  `serve` commands, memory admission, and approve-first model
+  downloads. The same install ships the Laya typed-decision server and
+  the Bonsai2 packed-runtime server.
+- Core ML on the Neural Engine. `mlx-omarchy-parakeet` transcribes
+  audio (`download`, `verify`, `transcribe`). `mlx-omarchy-coreml`
+  inspects a Core ML package. The aarch64 wheel ships the ANE worker
+  and the pinned Parakeet encoder bundles.
 
-## Demo
+Chat models download from Hugging Face the first time you use them. You
+approve each download first. The default pairs: Everyday is Qwen3.5-9B
+4-bit plus the Laya model. Compact is
+Qwen3-4B-Instruct-2507 4-bit plus Laya. Quality is Qwen3.8-27B 4-bit
+plus Laya, and it needs a 96 GB machine.
 
-https://github.com/user-attachments/assets/7b2326f0-4679-4784-9622-e403b99be853
+## Supported hardware
 
-One-command install on an M1 running Omarchy, first model download, streamed answer with measured tokens/sec, and the launcher entry — 2:47, unedited. Also at [joshuaswarren.github.io/mlx-omarchy](https://joshuaswarren.github.io/mlx-omarchy/).
+| Chip | GPU | ANE |
+|---|---|---|
+| M1 | Tested | Parakeet islands |
+| M1 Max | Tested | Whole encoder |
+| M2 Max | Tested | Research driver, opt-in |
+| M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested overlay |
+| M3 and newer | Not yet | Not yet |
+
+The install accepts every chip in the M1 class and the M2 Max. They
+share one GPU class and driver path. The Tested rows are the machines
+this project measures on.
+
+The ANE is a separate lane from the GPU. It has its own driver and its
+own tested state. Chip-by-chip ANE status, including what each untested
+chip needs, lives in the [chip coverage
+table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage) of
+[omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 
 ## Install
 
-On Omarchy (Apple Silicon), the installer creates a private venv under `~/.local/share/mlx-omarchy`. It installs `mlx-omarchy`, `mlx-omarchy-demo`, `mlx-omarchy-serve`, and `mlx-omarchy-parakeet` on `~/.local/bin`. It also registers **MLX Chat (Apple GPU)** in the Omarchy launcher. It never replaces Mesa or edits Omarchy package files.
+### The Omarchy package
+
+Open the Omarchy menu and pick Install > AI > MLX + Core ML (Apple
+Silicon). It installs the `omarchy-mac-ml` meta package. That pulls in
+`omarchy-mlx` (the runtime, as a system venv under
+`/usr/lib/omarchy-mlx` with launchers in `/usr/bin`), the Honeykrisp
+Vulkan driver, and the ANE packages. The system install builds offline
+from the vendored, hash-locked wheel set attached to each release.
+
+### Install with the script
+
+On any Asahi-based Arch install (M1 class or M2 Max), the script sets
+up a private venv under `~/.local/share/mlx-omarchy` and puts the
+launchers in `~/.local/bin`. It registers MLX Chat in the launcher
+menu. It never replaces Mesa or edits Omarchy package files.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
 ```
 
-Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.6](https://github.com/joshuaswarren/omarchy-mlx/releases/tag/v0.7.6) (installed-from-release gates green on the M2 Max; the installer ships MLX Chat, the serve CLI, and the wheel from the same tag; fixes the fresh-install setup for the Laya pair, offline and online). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
+The flags: `--ane` sets up ANE device ownership. Use `--voice` for the
+optional speech packages. Use `--uninstall` to remove it. The script
+picks the latest release, checks the wheel against the release
+`SHA256SUMS`, and asks for Python 3.14 on aarch64.
 
-### System package layout
+### From a release wheel
 
-The packaging lane builds the same stack as an offline system venv instead of a home install: `packaging/vendor-wheels.sh` vendors and hash-locks the dependency closure at release time, `packaging/build-venv.sh` creates `/usr/lib/omarchy-mlx/venv` from those wheels with `pip --require-hashes` (no network), and `install.sh --system` stages the whole `/usr` tree for a PKGBUILD — see `packaging/PKGBUILD.example`. Every install name (paths, launchers, unit, desktop entry) is defined once in `serve/mlx_omarchy_paths.py`, and venv discovery for the serve CLI and the assistant follows `$OMARCHY_MLX_VENV`, then `/usr/lib/omarchy-mlx/venv`, then the legacy `~/.local/share/mlx-omarchy/venv`. Once the system package owns the venv, `mlx-omarchy-retire-legacy` removes a legacy home install; it is dry-run by default and keeps chat history, pair homes, and the model cache unless `--purge-data`.
-
-Manual install (or any other Linux box):
+Releases attach wheels named
+`mlx_omarchy-<version>-cp314-cp314-linux_aarch64.whl` for Apple
+Silicon and `mlx_omarchy-<version>-cp311-cp311-linux_x86_64.whl` for
+x86_64 dev boxes, plus a `SHA256SUMS` covering every asset. Example for
+v0.7.10:
 
 ```bash
-# Apple Silicon (Honeykrisp) — Python 3.14 + aarch64 wheel from the latest release
 python3 -m venv ~/.venvs/mlx
-~/.venvs/mlx/bin/pip install <cp314 linux_aarch64 wheel URL>
-
-# x86_64 dev box (software Vulkan, no ANE) — Python 3.11 + cp311 wheel
-python3 -m venv ~/.venvs/mlx
-~/.venvs/mlx/bin/pip install <cp311 linux_x86_64 wheel URL>
+~/.venvs/mlx/bin/pip install "https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.7.10/mlx_omarchy-0.32.4.dev202610012048+6cff5ea-cp314-cp314-linux_aarch64.whl"
+~/.venvs/mlx/bin/pip install --no-deps mlx-lm==0.31.3
 ```
 
-`mlx-lm` depends on upstream `mlx`, so install it with `pip install --no-deps mlx-lm` and add its own deps as `install.sh` does. Build-from-source and the Honeykrisp **fork driver** (required for verified M1 Omarchy numbers — stock Mesa is not enough): [docs/install-omarchy.md](docs/install-omarchy.md).
+The `--no-deps` on `mlx-lm` matters. It depends on upstream `mlx`,
+which would clobber this wheel. On x86_64 there is no ANE. You need a
+software Vulkan driver plus `MLX_OMARCHY_ALLOW_NON_APPLE=1` to import
+the module.
+
+The wheels ship GPU kernels, not the driver. The Omarchy package path
+brings the Honeykrisp driver with it. A script or wheel install needs
+the fork driver built per
+[docs/install-omarchy.md](docs/install-omarchy.md).
+
+The demo video is 2:47, unedited. It runs from the one-line install to
+a streamed answer on an M1.
+
+[demo](https://github.com/user-attachments/assets/7b2326f0-4679-4784-9622-e403b99be853)
 
 ## Quick start
 
-```python
-import mlx.core as mx
-
-x = mx.array([[1.0, 2.0], [3.0, 4.0]])
-w = mx.array([[0.5], [0.25]])
-
-def loss(w):
-    return mx.exp(x @ w).sum()
-
-value, grad = mx.value_and_grad(loss)(w)
-print(value, grad)
-```
-
-Text generation: the qualified model is
-[`mlx-community/Qwen3.8-27B-4bit`](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit)
-(metadata verified 2026-09-20: Apache-2.0, ungated; tested revision
-`10c35caafbb80f7dc6a7a432cdd11af10a6d4818`). The verified smoke ran on an
-M2 Max with candidate wheel `0.32.3.dev202609201346+a1251aaa`, `mlx-vlm`
-0.7.1 and `mlx-lm` 0.31.3 — **this candidate is not yet a published
-release**. From this checkout, in a Python 3.14 environment containing
-that wheel (installed with `--no-deps`):
+After any install path, this works:
 
 ```bash
-python -m pip install --no-deps -r receipts/2026-09-20-qwen38-text-install/requirements.txt
-env -u MLX_DISABLE_COMPILE python -m mlx_vlm.generate \
-  --model mlx-community/Qwen3.8-27B-4bit \
-  --max-tokens 32 --prompt "Say READY."
+mlx-omarchy-info                                                   # GPU and driver state
+mlx-omarchy -c "import mlx.core as mx; print(mx.default_device())" # Device(gpu, 0)
+mlx-omarchy-chat                                                   # chat in the browser
 ```
 
-The [receipt and raw output](receipts/2026-09-20-qwen38-text-install/receipt.json)
-record exit 0 and `READY.` with compilation enabled. The checkpoint
-downloads ~15 GB of weights; a 16 GB M1 has not passed this model's
-memory and generation gates.
+The first chat run asks you to approve a model download. Then it
+streams the answer from the Apple GPU.
 
-The installer includes local model servers and Laya. The [serving guide](docs/serve.md) lists commands and model checks. See [kernel flags](docs/kernel-flags.md) for backend settings. A server can be installed while a model still needs tests.
+## Usage
 
-## Local chat
+Use `mlx-omarchy` as a Python interpreter with the wheel and `mlx-lm`
+installed. `mlx-omarchy-demo` is the terminal face of the same chat
+app. `mlx-omarchy-chat --resume` reattaches to the resident service
+instead of loading the weights again. Use `--prompt "TEXT" --once` for
+one terminal turn.
 
-MLX Chat now has a local web app in this source tree.
-The browser and terminal use the same model pair, chat history, and stop control.
-This is not a tested release. No pair is qualified and every catalog entry keeps `recommended: false`. Card gates pass on all three current pairs, first-text latency passes on the 9B and 4B, and speech input meets every frozen corpus threshold on the M2 Max; the Quality pair misses the 2 s first-text budget, speech output misses the real-time threshold (RTF 0.22–0.23 vs 1.2), and automatic routing stays off. See [per-pair gate status](docs/serve.md#per-pair-gate-status-2026-10-01).
+The serve CLI plans before it loads:
 
-| Pair to test | Chat model | Decision model |
-|---|---|---|
-| Everyday | Qwen3.5-9B, 4-bit | Laya |
-| Quality | Qwen3.8-27B, 4-bit | Laya |
-| Compact | Qwen3-4B-Instruct-2507, 4-bit | Laya |
+```bash
+mlx-omarchy-serve catalog list --offline
+mlx-omarchy-serve plan qwen3.5-9b-mlx-4bit --context 4096 --offline
+mlx-omarchy-serve serve qwen3.5-9b-mlx-4bit --context 4096
+```
 
-The code supports option comparisons, interactive cards, speech input, speech output, and offline transfer.
-Automatic routing stays off until its held-out tests pass.
-Memory sizing uses byte counts and integer search, not RAM tiers.
-A larger calculated context still needs proof on the target chip and runtime.
+`plan` reports what fits at a given context. Nothing is
+fetched without you asking for it.
 
-See the [serving guide](docs/serve.md#current-application-boundary) for commands and gaps.
-The [design](docs/plans/2026-09-27-offline-assistant-design.md) defines the full release checks.
+Parakeet runs the pinned model end to end. The encoder runs on the
+ANE; the decoder runs on the GPU.
 
-## Hardware
+```bash
+mlx-omarchy-parakeet download
+mlx-omarchy-parakeet verify
+mlx-omarchy-parakeet transcribe recording.wav -o out/
+```
 
-Verified on [Omarchy](https://github.com/omarchy-mac/omarchy-mac) with Mesa Honeykrisp / Vulkan 1.4:
+`transcribe` refuses rather than guess. Exit 1 and the reason are
+printed: missing assets, a hash mismatch, or no ANE. The contract is
+in [docs/parakeet.md](docs/parakeet.md).
 
-| Chip | GPU (Vulkan) | Linux ANE |
-|---|---|---|
-| M1 (T8103) | Verified | Pinned-fixture E2E parity closed on fork driver (104/104 emissions, bit-exact hidden; hybrid islands; whole-encoder pending) |
-| M1 Max (T6001) | Measured | Verified — whole-encoder ANE execution, pinned-fixture golden match ([receipt](receipts/2026-09-27-m1max-current-main-gold.md), 2026-09-27) |
-| M2 Max (T6021) | Verified (third silicon) | **Not** live-inference-qualified |
+## How it works
 
-Apple GPU and Apple ANE are separate lanes. GPU qualification does not qualify ANE. Later SoCs follow. Receipts and dated detail live under `receipts/` and in [joshuaswarren/ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments).
+MLX lowers your graph to Vulkan compute and runs it on the Apple GPU.
+The backend picks the Vulkan ICD
+inside its own process. With no `VK_DRIVER_FILES` or
+`VK_ICD_FILENAMES` set, it scans the standard ICD paths and prefers
+the packaged Honeykrisp ICD over the stock Asahi one. It pins the
+loader variables for itself. It refuses to start on a driver whose
+Mesa git sha does not match the pinned value. Stock Mesa stays the
+system driver for the desktop; nothing replaces it. The ANE runs as a
+separate worker process. It only executes hash-pinned program
+bundles, so unverified ANE programs never run.
 
-## Performance
+## Contribute hardware data
 
-Qwen3.8-2B (4-bit mlx) on Apple M-series: upstream Metal on macOS vs omarchy Vulkan on Asahi/Omarchy. Protocol for every cell: greedy (temperature 0), 32 new tokens, 2 warmups, 512-token pure-prefill leg; decode is the median of 30 measured runs. Rows are marked by source build — † ‡ § are **three different builds and two battery protocols**, so rows with different marks are not comparable:
-
-| Hardware | OS / backend | Build | Prefill→first token (tok/s) | Pure prefill 512 (tok/s) | Decode median (tok/s) |
-|---|---|---|---|---|---|
-| M1, 16 GB † | Omarchy / Vulkan (Honeykrisp fork driver) | v0.7.2 tag `fa103c867` | 46.7 | 128.7 | 34.3 |
-| M1 Max, 64 GB † | Omarchy / Vulkan | v0.7.2 tag `fa103c867` | 62.3 | 267.7 | 56.8 |
-| M2 Max, 96 GB ‡ | Omarchy / Vulkan | `0.32.3+5b18306` (2026-09-21) | 47.2 | 75.8 | 45.0 |
-| M1, 16 GB § | macOS 27.0 / Metal | upstream mlx 0.32.2 (2026-09-21) | 101.3 | 345.4 | 49.5 |
-| M1 Max, 64 GB § | macOS 27.0 / Metal | upstream mlx 0.32.2 (2026-09-21) | 359.2 | 1019.7 | 179.5 |
-| M2 Max, 96 GB § | macOS 27.0 / Metal | upstream mlx 0.32.2 (2026-09-21) | 423.8 | 1234.7 | 220.6 |
-
-Receipt per row:
-
-- **†** M1 / M1 Max Linux: [v0.7.2 release receipt](receipts/2026-09-22-release-v0.7.2) (mirrored at the same path in `ane-linux-experiments`) — records these exact rows on the tag build, wheel `mlx_omarchy-0.32.3.dev202609221309+fa103c86`, 10-prompt × 3-pass subset of the standing battery, ordered-record digests `ac1b2695…` identical on both hosts. The M1 row is the Honeykrisp fork-driver leg (stock Mesa measured 32.9 pure-prefill tok/s on the same wheel); Omarchy installs must use the fork driver ([docs/install-omarchy.md](docs/install-omarchy.md), "Honeykrisp driver with the fork fixes").
-- **‡** M2 Max Linux: the 2026-09-21 100-prompt-corpus battery on wheel `0.32.3+5b18306` — [public matrix](https://github.com/joshuaswarren/ane-linux-experiments#qwen38-mlx-decode-and-prefill-matrix-2026-09-21) (row "M2 Max", adapter Apple M2 Max G14C). Raw per-run receipt `qwen38-2b-m2-omarchy-firstpass.json` (label `M2Max-T6021-Omarchy-q4-2B-stable-corrected`, ordered-records digest `6f21e665…`), kept outside the repository.
-- **§** macOS rows: upstream mlx 0.32.2 Metal, idle login-window runs from the same 2026-09-21 battery. Raw per-run receipts outside the repository: `qwen38-2b-m1-macos-idle.json` (label `M1-T8103-macOS-q4-2B-idle-corrected`), `qwen38-2b-t6001-macos-firstpass.json` (label `M1Max-T6001-macOS-q4-2B-corrected`), `qwen38-2b-m2-macos-repro.json` (label `M2Max-T6021-macOS-q4-2B-corrected-repro` — the idle rerun that superseded the load-contaminated first pass). All three share ordered-records digest `301c4fc3…`: upstream Metal is deterministic across these hosts.
-
-Cross-OS token identity was never an acceptance bar; the bar is logit-level equivalence plus coherent decoding. Adapter evidence is captured per run (Vulkan loader trace naming the Apple physical device on Linux; mlx device identity on macOS). The backend refuses non-Apple GPUs by default.
-
-### Cross-OS parity state (2026-09-25)
-
-Three-laptop parity battery — GPU Qwen3.8-2B (this repo's Honeykrisp stack),
-ANE whole encoder, Parakeet — against same-SoC macOS denominators. Bar:
->=1.00x macOS. No GPU or Parakeet cell meets the bar yet; the M1 Qwen ANE
-staged cells do (omarchy-ane driver, separate stack: decode 1.49x, TTFT
-0.84x, e2e 0.69x, prefill-512 1.223x — see the
-[experiments parity matrix](https://github.com/joshuaswarren/ane-linux-experiments#three-laptop-parity-matrix-2026-09-25)).
-
-| Host | GPU Qwen decode (Linux / macOS) | ANE encoder (Linux / macOS) | Parakeet warm (Linux / macOS) |
-|---|---|---|---|
-|m1-host (T8103)|37.39 / 47.05 tok/s — 0.79x FAIL|141.5-141.9 / 113.12 ms — 0.79x FAIL|1588-1598 per-process; **935.8 in-process warm** (2026-09-25 lean lane) / 271 ms — FAIL (transcript parity PASS, hidden bit-exact)|
-|m1max-host (T6001)|77.33-77.48 / 179.47 tok/s — 0.43x FAIL|440.7 / 140.9 ms — 0.32x FAIL (resident ANE worker; whole pipeline 1825 -> 892.9 ms, receipts 2026-09-25-jw16-levers6)|892.9 / 264 ms — 0.30x FAIL (transcript 104/104 PASS)|
-| m2-host (T6021) | stale-stack 72.58 vs 179.0 tok/s; main-tip cell staged, not run | no inference path (fw service loop, no HELLO) | blocked: T6021 ANE unavailable |
-
-m1-host GPU numbers were measured on this repo's main tree `024d4fe60`
-(records pin `dbf704971617fdfc`, bit-identical across m1-host and
-m1max-host). The full matrix with per-cell receipts and unreceipted-value
-marks lives in
-[joshuaswarren/ane-linux-experiments](https://github.com/joshuaswarren/ane-linux-experiments#three-laptop-parity-matrix-2026-09-25).
-
-**2026-09-25 m1-host addendum (lean lane receipt `2026-09-25-jwm1-parity2-parakeet-lean`)**:
-the 1588-1598 ms figure pays per-process kernel compile + 628 ms ANE session open every rep, while the
-macOS denominator amortizes CoreML load across rep10; on the matched in-process boundary the same laptop
-runs 935.8 ms warm median (hidden content sha 51830b6ffe992568 bit-exact vs the certified pins). Remaining
-named buckets: TDT per-call host glue (~1.45 ms x 265 calls), encoder submit overhead (293 vs 143 engine),
-mel 63 ms, q4 GEMV kernel efficiency — a 54.2 GB/s measured read rate disproves the 43 GB/s decode
-bandwidth wall on this DRAM.
-
-**2026-09-27 current-main addendum (m1max-host, wheel built from `2dea53e2c`,
-[receipt](receipts/2026-09-27-m1max-current-main-gold.md))**: the whole-encoder
-ANE execution measured 440.405 ms on the gold run (cold pipeline 1542.708 ms
-including the 862 ms ANE session open and bundle seal). Nine repeats on the
-same pinned fixture ran warm 630.2–634.7 ms (median 631.4 ms; warm encoder ANE
-441.17 ms, TDT 129.5–133.7 ms), every run `match` with 104/104 emissions and
-transcript pin `db501a8c…` (hidden `51830b6f…`, bit-exact with the m1-host
-lean-lane pin above) — repeatability and reference parity on one
-sha-gated fixture, not corpus coverage and not general transcription
-correctness. The pinned reference transcript itself carries trailing
-punctuation/Cyrillic artifacts (reference behavior,
-[docs/known-defects.md](docs/known-defects.md)). On the macOS side of this
-same SoC, the 137.38 ms encoder figure is a preferred-MLComputePlan
-measurement, not an ANE execution-time proof. Against the 264 ms macOS
-denominator above, the warm median is 0.42x — the Parakeet cell still fails
-the 1.00x bar on current main (was 0.30x on the 2026-09-25 levers6 build).
-
-Archival Qwen2.5 tables and older batteries stay in git history / linked receipts — they are **not** the current recommendation. Current text-generation guidance: [docs/serve.md](docs/serve.md).
-
-## Feature parity
-
-Value-tested Mac-usable primitives: **126 / 130** (2026-09-10, `docs/coverage.json`). Upstream MLX C++ on GPU: 251 / 251; Python: 11,483 / 11,847 (2026-09-11 snapshot in `receipts/2026-09-11-upstream-suite/`). Standing battery closed 30 / 30 at `8790c463`.
-
-Known gaps include `ReduceScatter` on the Linux ring transport and `fast.CustomKernel` remaining a Metal subset. Everything else: [docs/known-defects.md](docs/known-defects.md).
-
-## Neural Engine
-
-ANE is an internal accelerator for static graph regions, not a user-facing `mx.ane` device. The wheel ships Parakeet reference encoder paths on ANE where qualified: hybrid island chains on M1, and the whole-encoder bundle on M1 Max (single-program ANE execution measured 440.405 ms; [receipt](receipts/2026-09-27-m1max-current-main-gold.md)). `mlx-omarchy-parakeet download` / `transcribe` are on `PATH` after aarch64 install. This transcription command accepts the pinned fixture only; it is not microphone dictation. See [the installed speech contract](docs/parakeet.md#installed-product-wheel).
-
-Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/plans/2026-09-12-coreml-parakeet-ane-plan.md), [docs/ane-bundles.md](docs/ane-bundles.md), and [docs/ane-runtime.md](docs/ane-runtime.md). The GPU backend selects Honeykrisp in-process and reports its driver identity. ANE workers check the driver's DRM ABI major, and the shared ownership files do not require render-group membership. Driver / `libane` ABI live in [joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
-
-## Contributing
-
-The most useful thing an M-series owner can do is submit a redacted hardware report: [docs/contribute-data.md](docs/contribute-data.md). Quick capability capture (no install required for the light path):
+The fastest way to help is a capture from your machine. Owners of the
+untested chips above are the unblock for those rows. Both collectors
+print a fully redacted payload. Nothing is sent until you pass
+`--submit`.
 
 ```bash
 git clone https://github.com/joshuaswarren/omarchy-mlx.git
-cd mlx-omarchy
-python3 scripts/collect_quick.py
+cd omarchy-mlx
+python3 scripts/collect_quick.py    # quick capture, Linux
+python3 scripts/collect_deep.py     # deep capture, Linux and macOS
 ```
 
-Code contributors: start at [docs/CONTRIBUTOR-GUIDE.md](docs/CONTRIBUTOR-GUIDE.md). Dev machines without Apple GPU set `MLX_OMARCHY_ALLOW_NON_APPLE=1` (software Vulkan). GPU kernel changes still need Apple hardware before release.
+On a dual-boot Mac, run `collect_deep.py` under macOS and under
+Omarchy, and submit both. The full guide, including what gets
+collected and how redaction works, is
+[docs/contribute-data.md](docs/contribute-data.md).
 
-- [docs/roadmap.md](docs/roadmap.md)
-- [docs/compatibility.md](docs/compatibility.md)
-- [docs/architecture.md](docs/architecture.md)
-- [AGENTS.md](AGENTS.md) — agent contract for this repo
+## Troubleshooting
+
+- `import mlx.core` fails on a missing shared library: install
+  `openblas`, `lapack`, and `blas` through pacman. The installers do
+  this for you; a manual wheel install has to.
+- `mlx-omarchy-info` reports the stock Asahi driver: stock Mesa lacks
+  cooperative matrix support and carries the compiler bugs the fork
+  fixes. The numbers you get will be far off. Build the fork driver
+  per [docs/install-omarchy.md](docs/install-omarchy.md).
+- The backend refuses to start and names a non-Apple GPU. The refusal
+  is on purpose. Set `MLX_OMARCHY_ALLOW_NON_APPLE=1` only on a dev
+  box with software Vulkan.
+- `mlx-omarchy-parakeet transcribe` refuses before it runs: run
+  `mlx-omarchy-parakeet download` first. The ANE needs an M1 or
+  M1 Max with `/dev/accel/accel0` present and the `ane` module
+  loaded. The refusal names the missing piece.
+- On an M2 Max, `mlx-omarchy-info` can report the ANE as missing
+  while the research driver is loaded. This is a reporting gap in the
+  current release, not a new failure.
+
+## Contributing
+
+Code contributions start at
+[CONTRIBUTING.md](CONTRIBUTING.md). Hardware captures start at
+[docs/contribute-data.md](docs/contribute-data.md). Dev machines
+without an Apple GPU can run the module under software Vulkan. GPU
+kernel changes still need real hardware before a release.
+
+## Releases
+
+Releases are tagged on the
+[Releases page](https://github.com/joshuaswarren/omarchy-mlx/releases).
+The current release is v0.7.10.
 
 ## License
 
-MIT. Prepared MLX source keeps Apple's MIT license and copyright notices. Not affiliated with Apple.
+MIT, see [LICENSE](LICENSE). Prepared MLX source keeps Apple's MIT
+license and copyright notices. Other bundled components keep their
+own notices under [LICENSES](LICENSES). Not affiliated with Apple.
