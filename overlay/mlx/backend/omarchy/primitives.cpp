@@ -1698,18 +1698,13 @@ void dispatch_sort_wide(
   // like ArgSort) also keeps the sort.
   const int64_t topk =
       kth >= 0 ? static_cast<int64_t>(row_length) - kth : -1;
-  // 16-bit (f16/bf16) selection is verified on the M2 Max (G14): doctest
-  // bit-exact against device-held input words, 2.5-3.2x faster than the
-  // sort route on 1 x 151936 rows, identical sampler ids (2026-10-01,
-  // attn128 receipt). G13 parts (M1 family) have not run that doctest yet,
-  // so they keep the sort route for 16-bit rows until one does. float32
-  // selects on every chip.
-  const bool sixteen_bit_selects =
-      encoder.device().capabilities().device_name.find("G13") ==
-      std::string::npos;
+  // 16-bit (f16/bf16) rows take the same selection route as float32 on
+  // every chip: doctest bit-exact against device-held input words on the
+  // M2 Max (G14, 2026-10-01, attn128 receipt) and on the M1 Max (T6001,
+  // G13C, one-dispatch asserts active), 2.5-3.2x faster than the sort
+  // route on 1 x 151936 rows, identical sampler ids.
   const bool selection_dtype = src.dtype() == float32 ||
-      (sixteen_bit_selects &&
-       (src.dtype() == float16 || src.dtype() == bfloat16));
+      src.dtype() == float16 || src.dtype() == bfloat16;
   if (!argsort && kth >= 0 && kth < static_cast<int>(row_length) &&
       selection_dtype &&
       rows >= 1 && rows <= 256 && topk >= 1 && topk <= 256) {
