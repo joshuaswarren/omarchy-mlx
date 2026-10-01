@@ -6,10 +6,11 @@ builds at most one card from the reply's markdown. On 8a1e25843 the pairs
 became Everyday = Qwen3.5-9B, Compact = Qwen3-4B-Instruct-2507, Quality =
 Qwen3.8-27B (the 2B left the catalog).
 
-**No pair is qualified by this receipt yet.** The frozen v3 suite has run on
-all four chat models; the config-selection run, HELD-OUT v4 and a valid
-latency measurement are still to run (the M2 is shared and was rebooting for
-another workstream's kernel-module tests).
+**Card gates: all three pairs pass HELD-OUT v4 in the config the product
+ships, and the 9B and 4B pass first-text latency.** This receipt does not mark
+any pair qualified (the pair gates also cover voice, memory, routing and more;
+see `docs/serve.md`). `extension.card_format` stays unset on every catalog
+entry, as the pre-registered rule requires (below).
 
 ## Kernel of every row
 
@@ -17,7 +18,7 @@ another workstream's kernel-module tests).
 |---|---|---|
 | v1, v2, finite-logits probe | polltx (7.1.13-ARCH-polltx) | several, 2026-09-29/30 |
 | v3 on 2B, 9B, 27B, 4B; first latency attempt | polltx | 95675db4 |
-| Stock baseline below; fenced-json v3, v4, final latency | stock 7.1.13-3-1-ARCH | 4aed18b3 and later |
+| Stock baseline below; fenced-json v3, v4, final latency | stock 7.1.13-3-1-ARCH | 4aed18b3, b68db721, 0e2c3743 (USB chain load); 10fba2de, 40f95214, 529d10a1 (disk boot) |
 
 Card counts are model behaviour under greedy decoding and are compared across
 kernels; timings are not. The same-microbench baseline shows why:
@@ -44,10 +45,18 @@ may be compared with a stock-kernel number. Both rows use wheel
 | v3 default config: >= 15/18 cards | **14/18 FAIL** | 17/18 pass | 15/18 pass |
 | v3 default config: 0/18 spurious | 0/18 pass | 0/18 pass | 0/18 pass |
 | v3 fenced-json config (selection only, stock kernel) | 21/36 run: 17/18 cards, **1 spurious: FAIL** | 18/18, 0/18 pass | not run (default passed) |
-| config chosen by the pre-registered rule | default | **fenced-json** | default |
-| v4 (frozen, sha256 `7f807008...`) | not run | not run | not run |
-| first-text p95 <= 2.0 s, 30 warm turns | not measured validly | not measured validly | not required |
-| `extension.card_format` | not set | not set | not set |
+| config chosen by the pre-registered rule | default | fenced-json | default |
+| **v4, chosen config** (sha256 `7f807008...`) | **16/18, 0/18 spurious: PASS** | **17/18, 0/18: PASS** | **18/18, 0/18: PASS** |
+| first-text p95, chosen config, stock kernel | **1049 ms: PASS** | **2398 ms: FAIL** | not required |
+| v4, 4B default config (run after the fenced one) | - | **18/18, 0/18: PASS** | - |
+| first-text p95, 4B default config | - | **656 ms: PASS** | - |
+| every card passes `validate_components` | yes (server-side) | yes | yes |
+| `extension.card_format` | unset (default chosen) | unset (fenced failed latency) | unset (default chosen) |
+
+What the product does now, with `card_format` unset everywhere: no card schema
+on ordinary chat turns, markdown promotion for cards. That is the config each
+pair passed in: 9B v4 16/18 with p95 1.05 s, 4B v4 18/18 with p95 0.66 s,
+27B v4 18/18. The 27B's latency was not part of this gate.
 
 The old Everyday 2B ran v3 first: 18/18 cards but **1/18 spurious**
 (v3-29), so it failed too.
@@ -95,7 +104,7 @@ arithmetic, fresh pair homes, SSE event parsing, developer-qualification env
 for the untested pairs, a pinned 4B snapshot missing `README.md` (downloaded
 once online), per-row kernel and boot id.
 
-## Latency: the first attempt is not valid
+## Latency: the first attempt (polltx) is not valid
 
 `artifacts/latency_polltx_cancel_*.json` (polltx, boot 95675db4, alone on
 the GPU: only the probe's own ticket in the process list):
@@ -111,6 +120,223 @@ each turn waited on a worker still decoding the cancelled reply; this is an
 inference, not verified. The probe now lets every turn finish (max_tokens
 64) before the next starts (ef64d12e7). The gate needs a fresh stock-kernel
 run; these numbers do not pass or fail it.
+
+## HELD-OUT v4 (frozen, stock kernel)
+
+`tests/fixtures/cards_held_out_v4.json`, sha256
+`7f8070083407c9e3b7f274f8a4104316184805402ed09fc436acfa046ac2b29d`, frozen in
+41817c8af before any model or `extract_text` saw it. 18 card-worthy, 9 plain,
+9 near-miss (prose requests including "without using a list", short lists,
+code, explanations likely to use headed sections). Card code: origin/main
+fa3865a7b (card_promotion `06e42942...`, both coordinator fixes). Kernel
+7.1.13-3-1-ARCH (disk boots 10fba2de, 40f95214, 529d10a1); wheel
+0.32.3.dev202609291615+06711ad. max_tokens 700, real HTTP turns, one run per
+pair and config; after a reboot the next ticket resumed from the per-prompt
+checkpoint and no prompt was rerun. The plan was pre-registered in the
+notebook before the runs.
+
+Everyday 9B, default config: **16/18 cards, 0/18 spurious, PASS.**
+```
+    v4-01 card-worthy checklist                  complete   74.3s ['checklist'] promoted pass=True
+    v4-02 card-worthy checklist                  complete   40.1s ['checklist'] promoted pass=True
+    v4-03 card-worthy checklist                  complete   76.2s ['checklist'] promoted pass=True
+    v4-04 card-worthy checklist                  complete   17.0s ['checklist'] promoted pass=True
+    v4-05 card-worthy comparison                 complete   91.2s ['comparison'] promoted pass=True
+    v4-06 card-worthy comparison                 complete   72.1s ['comparison'] promoted pass=True
+    v4-07 card-worthy comparison                 complete   71.1s [] -        pass=False
+    v4-08 card-worthy comparison                 complete   83.2s ['comparison'] promoted pass=True
+    v4-09 card-worthy timeline                   complete   85.2s ['timeline'] promoted pass=True
+    v4-10 card-worthy timeline                   complete   84.2s ['timeline'] promoted pass=True
+    v4-11 card-worthy timeline                   complete   88.2s ['timeline'] promoted pass=True
+    v4-12 card-worthy timeline                   complete   86.4s [] -        pass=False
+    v4-13 card-worthy facts                      complete   31.1s ['facts'] fence    pass=True
+    v4-14 card-worthy facts                      complete    7.0s ['facts'] promoted pass=True
+    v4-15 card-worthy facts                      complete   70.1s ['facts'] fence    pass=True
+    v4-16 card-worthy mixed                      complete   85.2s ['comparison'] promoted pass=True
+    v4-17 card-worthy mixed                      complete   87.2s ['checklist'] promoted pass=True
+    v4-18 card-worthy mixed                      complete   43.1s ['facts'] promoted pass=True
+    v4-19 plain       none                       complete   76.1s [] -        pass=True
+    v4-20 plain       none                       complete   86.2s [] -        pass=True
+    v4-21 plain       none                       complete    7.0s [] -        pass=True
+    v4-22 plain       none                       complete   90.2s [] -        pass=True
+    v4-23 plain       none                       complete   91.2s [] -        pass=True
+    v4-24 plain       none                       complete   58.3s [] -        pass=True
+    v4-25 plain       none                       complete   67.1s [] -        pass=True
+    v4-26 plain       none                       complete   42.1s [] -        pass=True
+    v4-27 plain       none                       complete   83.2s [] -        pass=True
+    v4-28 near-miss   prose-request              complete   22.0s [] -        pass=True
+    v4-29 near-miss   prose-request              complete   18.0s [] -        pass=True
+    v4-30 near-miss   prose-request              complete   27.1s [] -        pass=True
+    v4-31 near-miss   short-list                 complete    4.0s [] -        pass=True
+    v4-32 near-miss   short-list                 complete    2.0s [] -        pass=True
+    v4-33 near-miss   code-only                  complete   68.1s [] -        pass=True
+    v4-34 near-miss   code-only                  complete   37.1s [] -        pass=True
+    v4-35 near-miss   explanation-with-sections  complete   84.2s [] -        pass=True
+    v4-36 near-miss   explanation-with-sections  complete   86.2s [] -        pass=True
+```
+Both misses (v4-07, v4-12) are pipe tables whose separator row ends in a
+malformed `| : |` cell; the table rule needs at least one dash per separator
+cell and refused them. This is a rule gap found on v4 and left unfixed
+(fixing it now would tune on v4); see Follow-ups.
+
+Compact 4B, fenced-json config (the selection's choice): **17/18,
+0/18, PASS.**
+```
+    v4-01 card-worthy checklist                  complete   43.1s ['checklist'] promoted pass=True
+    v4-02 card-worthy checklist                  complete   17.0s ['checklist'] promoted pass=True
+    v4-03 card-worthy checklist                  complete   28.1s ['checklist'] promoted pass=True
+    v4-04 card-worthy checklist                  complete   27.1s ['checklist'] promoted pass=True
+    v4-05 card-worthy comparison                 complete   82.2s ['comparison'] promoted pass=True
+    v4-06 card-worthy comparison                 complete   52.1s ['comparison'] promoted pass=True
+    v4-07 card-worthy comparison                 complete   30.1s [] -        pass=False
+    v4-08 card-worthy comparison                 complete   56.1s ['comparison'] promoted pass=True
+    v4-09 card-worthy timeline                   complete   78.1s ['timeline'] promoted pass=True
+    v4-10 card-worthy timeline                   complete   26.1s ['timeline'] promoted pass=True
+    v4-11 card-worthy timeline                   complete  194.4s ['timeline'] fence    pass=True
+    v4-12 card-worthy timeline                   complete   33.1s ['timeline'] promoted pass=True
+    v4-13 card-worthy facts                      complete    8.0s ['facts'] promoted pass=True
+    v4-14 card-worthy facts                      complete    8.0s ['facts'] promoted pass=True
+    v4-15 card-worthy facts                      complete   17.0s ['facts'] promoted pass=True
+    v4-16 card-worthy mixed                      complete   67.1s ['comparison'] promoted pass=True
+    v4-17 card-worthy mixed                      complete  103.2s ['checklist'] promoted pass=True
+    v4-18 card-worthy mixed                      complete   25.0s ['facts'] promoted pass=True
+    v4-19 plain       none                       complete   21.0s [] -        pass=True
+    v4-20 plain       none                       complete   40.1s [] -        pass=True
+    v4-21 plain       none                       complete    9.0s [] -        pass=True
+    v4-22 plain       none                       complete   34.0s [] -        pass=True
+    v4-23 plain       none                       complete   14.0s [] -        pass=True
+    v4-24 plain       none                       complete   18.0s [] -        pass=True
+    v4-25 plain       none                       complete   65.1s [] -        pass=True
+    v4-26 plain       none                       complete   30.1s [] -        pass=True
+    v4-27 plain       none                       complete   16.0s [] -        pass=True
+    v4-28 near-miss   prose-request              complete   26.0s [] -        pass=True
+    v4-29 near-miss   prose-request              complete   22.0s [] -        pass=True
+    v4-30 near-miss   prose-request              complete   35.1s [] -        pass=True
+    v4-31 near-miss   short-list                 complete    3.0s [] -        pass=True
+    v4-32 near-miss   short-list                 complete    3.0s [] -        pass=True
+    v4-33 near-miss   code-only                  complete   33.1s [] -        pass=True
+    v4-34 near-miss   code-only                  complete   17.0s [] -        pass=True
+    v4-35 near-miss   explanation-with-sections  complete   47.1s [] -        pass=True
+    v4-36 near-miss   explanation-with-sections  complete   33.1s [] -        pass=True
+```
+
+Compact 4B, default config: **18/18, 0/18, PASS.** Run after the fenced
+config had seen the same prompts (Main's GO, 2026-10-01), because the fenced
+config failed latency and the default is what ships. Rules unchanged; nothing
+was tuned on v4.
+```
+    v4-01 card-worthy checklist                  complete   72.1s ['checklist'] promoted pass=True
+    v4-02 card-worthy checklist                  complete   29.1s ['checklist'] promoted pass=True
+    v4-03 card-worthy checklist                  complete   70.1s ['checklist'] promoted pass=True
+    v4-04 card-worthy checklist                  complete   53.1s ['checklist'] promoted pass=True
+    v4-05 card-worthy comparison                 complete   71.1s ['comparison'] promoted pass=True
+    v4-06 card-worthy comparison                 complete   73.1s ['comparison'] promoted pass=True
+    v4-07 card-worthy comparison                 complete   45.1s ['comparison'] promoted pass=True
+    v4-08 card-worthy comparison                 complete   72.1s ['comparison'] promoted pass=True
+    v4-09 card-worthy timeline                   complete   71.1s ['timeline'] promoted pass=True
+    v4-10 card-worthy timeline                   complete   56.1s ['timeline'] promoted pass=True
+    v4-11 card-worthy timeline                   complete   74.1s ['timeline'] promoted pass=True
+    v4-12 card-worthy timeline                   complete   38.1s ['timeline'] promoted pass=True
+    v4-13 card-worthy facts                      complete    7.0s ['facts'] promoted pass=True
+    v4-14 card-worthy facts                      complete    3.0s ['facts'] promoted pass=True
+    v4-15 card-worthy facts                      complete   17.0s ['facts'] promoted pass=True
+    v4-16 card-worthy mixed                      complete   70.1s ['comparison'] promoted pass=True
+    v4-17 card-worthy mixed                      complete   71.1s ['checklist'] promoted pass=True
+    v4-18 card-worthy mixed                      complete   37.1s ['facts'] promoted pass=True
+    v4-19 plain       none                       complete   16.0s [] -        pass=True
+    v4-20 plain       none                       complete   30.1s [] -        pass=True
+    v4-21 plain       none                       complete    5.0s [] -        pass=True
+    v4-22 plain       none                       complete   20.0s [] -        pass=True
+    v4-23 plain       none                       complete   15.0s [] -        pass=True
+    v4-24 plain       none                       complete   12.0s [] -        pass=True
+    v4-25 plain       none                       complete   58.1s [] -        pass=True
+    v4-26 plain       none                       complete   15.0s [] -        pass=True
+    v4-27 plain       none                       complete   19.0s [] -        pass=True
+    v4-28 near-miss   prose-request              complete   22.0s [] -        pass=True
+    v4-29 near-miss   prose-request              complete   14.0s [] -        pass=True
+    v4-30 near-miss   prose-request              complete   28.1s [] -        pass=True
+    v4-31 near-miss   short-list                 complete    1.0s [] -        pass=True
+    v4-32 near-miss   short-list                 complete    8.0s [] -        pass=True
+    v4-33 near-miss   code-only                  complete   17.0s [] -        pass=True
+    v4-34 near-miss   code-only                  complete   12.0s [] -        pass=True
+    v4-35 near-miss   explanation-with-sections  complete   39.1s [] -        pass=True
+    v4-36 near-miss   explanation-with-sections  complete   26.1s [] -        pass=True
+```
+
+Quality 27B, default config: **18/18, 0/18, PASS.**
+```
+    v4-01 card-worthy checklist                  complete  182.3s ['checklist'] promoted pass=True
+    v4-02 card-worthy checklist                  complete  146.3s ['checklist'] promoted pass=True
+    v4-03 card-worthy checklist                  complete  166.3s ['checklist'] promoted pass=True
+    v4-04 card-worthy checklist                  complete   40.1s ['checklist'] promoted pass=True
+    v4-05 card-worthy comparison                 complete  162.3s ['comparison'] promoted pass=True
+    v4-06 card-worthy comparison                 complete  165.3s ['comparison'] promoted pass=True
+    v4-07 card-worthy comparison                 complete  136.2s ['comparison'] promoted pass=True
+    v4-08 card-worthy comparison                 complete  168.3s ['comparison'] promoted pass=True
+    v4-09 card-worthy timeline                   complete  165.3s ['timeline'] promoted pass=True
+    v4-10 card-worthy timeline                   complete  128.2s ['timeline'] promoted pass=True
+    v4-11 card-worthy timeline                   complete  157.3s ['timeline'] promoted pass=True
+    v4-12 card-worthy timeline                   complete  132.2s ['timeline'] promoted pass=True
+    v4-13 card-worthy facts                      complete   67.1s ['facts'] fence    pass=True
+    v4-14 card-worthy facts                      complete   13.0s ['facts'] promoted pass=True
+    v4-15 card-worthy facts                      complete  166.3s ['facts'] fence    pass=True
+    v4-16 card-worthy mixed                      complete  159.3s ['comparison'] promoted pass=True
+    v4-17 card-worthy mixed                      complete  165.3s ['checklist'] promoted pass=True
+    v4-18 card-worthy mixed                      complete   77.1s ['facts'] promoted pass=True
+    v4-19 plain       none                       complete  100.2s [] -        pass=True
+    v4-20 plain       none                       complete  154.3s [] -        pass=True
+    v4-21 plain       none                       complete   17.0s [] -        pass=True
+    v4-22 plain       none                       complete  165.3s [] -        pass=True
+    v4-23 plain       none                       complete  112.2s [] -        pass=True
+    v4-24 plain       none                       complete   79.2s [] -        pass=True
+    v4-25 plain       none                       complete  170.3s [] -        pass=True
+    v4-26 plain       none                       complete  120.2s [] -        pass=True
+    v4-27 plain       none                       complete  162.3s [] -        pass=True
+    v4-28 near-miss   prose-request              complete   49.1s [] -        pass=True
+    v4-29 near-miss   prose-request              complete   32.1s [] -        pass=True
+    v4-30 near-miss   prose-request              complete   34.1s [] -        pass=True
+    v4-31 near-miss   short-list                 complete    7.0s [] -        pass=True
+    v4-32 near-miss   short-list                 complete    3.0s [] -        pass=True
+    v4-33 near-miss   code-only                  complete   28.0s [] -        pass=True
+    v4-34 near-miss   code-only                  complete   75.1s [] -        pass=True
+    v4-35 near-miss   explanation-with-sections  complete  161.3s [] -        pass=True
+    v4-36 near-miss   explanation-with-sections  complete  155.3s [] -        pass=True
+```
+
+## First-text latency (stock kernel, alone on the GPU)
+
+`run_latency.py` at ef64d12e7+: 3 warm-up turns, then 30 ordinary prompts with
+no card words ("Say something short about the number N"), max_tokens 64, each
+turn runs to completion before the next. First text = first non-empty `text`
+event on the SSE stream, measured from the POST. p95 is nearest-rank. The
+process list before and after holds only this probe's own assistant, chat
+worker and Laya worker; provenance `verified: match`.
+
+| Pair, config | p50 | p95 | gate 2000 ms | boot, load before |
+|---|---|---|---|---|
+| Everyday 9B, default | 1002 ms | 1049 ms | pass | 40f95214, 0.98 |
+| Compact 4B, fenced-json | 2364 ms | 2398 ms | **fail** | 40f95214, 0.34 |
+| Compact 4B, default | 596 ms | 656 ms | pass | 529d10a1, 0.00 |
+
+The full schema adds about 1.8 s of prefill to every 4B turn. Raw:
+`artifacts/latency_stock_*.json`, `artifacts/latency_stockdefault_*.json`.
+
+## `extension.card_format` decision
+
+Rule (pre-registered): set `fenced-json` only for a pair whose chosen config is
+fenced-json AND passes v4 AND latency. 9B and 27B chose the default; the 4B
+chose fenced-json, which passed v4 but failed latency. So no entry gets the
+field, and the catalog is unchanged.
+
+## Follow-ups
+
+- Separator cells without a dash (`| : |`) cost the 9B two v4 cards. A fix
+  needs invented DEV cases and a new frozen suite (v5) to certify it.
+- The coordinator's speech-yield probe may add a 3 s wait when a turn starts
+  while the worker still decodes a cancelled reply. The first latency probe
+  suggested it; it was not verified.
+- The first stock-kernel ModelBench row shows 9B decode at 16.7 tok/s against
+  26.0 on polltx; the kernel team owns that.
 
 ## v3 with `card_format: "fenced-json"` (config selection, stock kernel)
 
