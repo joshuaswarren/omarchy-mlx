@@ -163,6 +163,28 @@ class ServeCliContractTests(unittest.TestCase):
                           f"missing bonsai2 package file {member}")
         self.assertNotIn("CONTRACT.md", section)  # repo documentation stays in-repo
 
+    def test_apply_script_helper_scripts_are_fetched(self):
+        """The installer downloads every scripts/*.py the apply script runs.
+
+        The apply script invokes its helpers at $ROOT/scripts/<name>.py with
+        $ROOT = the install prefix; a helper it names must never be missing
+        from a fresh install (v0.7.7 draft gate: patch-mlx-lm-rope-norm.py
+        was missing and the install died mid-patch).
+        """
+        text = installer_text()
+        section = text.split("Applying mlx-lm serve patches", 1)[1]
+        self.assertIn("grep -oE 'scripts/[a-z0-9_-]+\\.py'", section)
+        self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/$s"', section)
+        self.assertIn('-o "$PREFIX/$s"', section)
+        # the loop sits before the apply-script run it feeds
+        self.assertLess(section.index("for s in $(grep -oE 'scripts/"),
+                        section.index('bash "$PREFIX/apply-mlx-lm-patches.sh"'))
+        # every helper the apply script names is matched by the fetch pattern
+        apply = INSTALLER.parent / "scripts" / "apply-mlx-lm-patches.sh"
+        for helper in set(re.findall(r'scripts/([a-z0-9_-]+\.py)', apply.read_text())):
+            self.assertRegex(helper, r"^[a-z0-9_-]+\.py$",
+                             f"helper {helper} does not match the installer fetch pattern")
+
     def test_serve_launcher_sets_pythonpath_and_module(self):
         text = self.serve_section()
         self.assertIn('"$BIN/mlx-omarchy-serve"', text)

@@ -387,6 +387,13 @@ mkdir -p "$PREFIX/patches"
 for p in $(grep -oE 'mlx-lm-[a-z0-9-]+\.patch' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p"
 done
+# The apply script also runs helper scripts from the repo (scripts/*.py).
+# Download exactly those, by the same derive-from-the-script contract: a
+# helper the script names can never be missing here.
+mkdir -p "$PREFIX/scripts"
+for s in $(grep -oE 'scripts/[a-z0-9_-]+\.py' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/$s" -o "$PREFIX/$s"
+done
 MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$VENV"
 
 # 5. Demo and launchers.
