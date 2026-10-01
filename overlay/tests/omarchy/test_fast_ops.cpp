@@ -2815,8 +2815,13 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
   array v = array(v_data.begin(), Shape{B, T, H, D}, float32);
 
   auto sdpa_fun = [&](const std::vector<array>& inputs) {
-    return fast::scaled_dot_product_attention(
-        inputs[0], inputs[1], inputs[2], scale, "", {}, std::nullopt, false,
+    // Sum keeps the autograd output scalar (the new baseline's vjp is
+    // strict about cotangent shapes); grad of the sum equals grad with an
+    // all-ones cotangent.
+    return sum(
+        fast::scaled_dot_product_attention(
+            inputs[0], inputs[1], inputs[2], scale, "", {}, std::nullopt,
+            false, stream),
         stream);
   };
   auto composed_fun = [&](const std::vector<array>& inputs) {
@@ -2829,7 +2834,9 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
         array(scale, float32),
         stream);
     auto probs = softmax(scores, -1, stream);
-    return transpose(matmul(probs, vt, stream), std::vector<int>{0, 2, 1, 3}, stream);
+    return sum(
+        transpose(matmul(probs, vt, stream), std::vector<int>{0, 2, 1, 3}, stream),
+        stream);
   };
   auto fast_grad_pair =
       value_and_grad(sdpa_fun, std::vector<int>{0, 1, 2})({q, k, v});
@@ -2870,7 +2877,7 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
         inputs[5],
         std::nullopt,
         stream);
-    return pair[0];
+    return sum(pair[0], stream);
   };
   auto gdn_ref = [&](const std::vector<array>& inputs) {
     // The composed arithmetic the backend's fallback composes: per-token
@@ -2914,7 +2921,8 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
               false,
               stream));
     }
-    return stack(outputs, 1, stream);
+    // Scalar for value_and_grad on the new baseline (see sdpa_fun).
+    return sum(stack(outputs, 1, stream), stream);
   };
   auto gdn_fast_grads = value_and_grad(gdn_fun, std::vector<int>{0, 1, 2, 3, 4})(
       {gq, gk, gv, gg, gb, gh0})
