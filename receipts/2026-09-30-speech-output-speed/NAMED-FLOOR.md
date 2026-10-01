@@ -2,10 +2,7 @@
 
 Qwen3-TTS cannot reach real time on the current M2 backend. This
 document is the audited close-out for the speech-output-speed work
-stream. The vendored module is on origin/main for the equivalence
-proof (commits c60d9aca5, 166e62353) and is NOT wired into
-synthesis.py — no worker uses it. The receiving agent (SpeechOutputKokoro)
-should consume only the equivalence tests, not the vendored forward.
+stream.
 
 ## Measured floor
 
@@ -19,14 +16,14 @@ Per-dispatch cost is the same for chat and TTS on this wheel:
 The 67 ms frame budget (RTF >= 1.2) at 45 us/dispatch allows **1,488
 dispatches per frame**. Every measured frame sits at 3,548-4,279
 dispatches, ~2.4-2.9x over budget. The bf16-fast SDPA route
-(MLX_OMARCHY_SDPA_BF16_FAST=1) drops 731 dispatches/frame
-(-18%), but a fused hd-128 decode attention arm and architecture-
-specific fused decoder-layer chains (the kind the chat model already
-uses via fused_chain) are not built for this architecture.
+(MLX_OMARCHY_SDPA_BF16_FAST=1) drops 731 dispatches/frame (-18%), but a
+fused hd-128 decode attention arm and architecture-specific fused
+decoder-layer chains (the kind the chat model already uses via
+fused_chain) are not built for this architecture.
 
-## Vendored module attempts (committed)
+## Vendored module attempts (committed, then removed)
 
-| Stage | Result | Commit |
+| Stage | Result | Commit (recoverable from git history) |
 |---|---|---|
 | Layer bodies (FusedQKV, FusedGateUp, fused_rms_norm/rope/sdpa, StaticKVCache) | Imported cleanly on M2 | 84efba917 |
 | Equivalence at L0/L13/L27 and full prefill | **Bit-identical** (max abs diff and P99.99 = 0.0) | c60d9aca5 |
@@ -55,17 +52,24 @@ Not proven (would need backend work):
 
 ## Recommendation
 
-**Per Main's direction: ship the floor, leave the vendored module on
-main only because it is fully tested (equiv_layer.py runs in CI on M2
-when GPU is available; FastCodecSamplerTests in the assistant suite
-run on x86). The frame-loop integration is unwired and not used by
-the worker.**
+**Per Main's direction: ship the floor. The vendored module and its
+probes are removed from the working tree in this turn. Git keeps the
+history; recover the full equivalence proof at commit c60d9aca5
+("vendored: mrope uses upstream apply_multimodal_rotary_pos_emb;
+equiv_layer uses HR_HOME") — at that commit
+`serve/mlx_omarchy_assistant/_vendored/qwen3_tts_step.py`,
+`tests/equiv_layer.py`, and `tests/test_qwen3_tts_step.py` exist and
+pass equivalence on M2. The frame-loop integration
+(`tests/vendored_e2e.py`, `tests/vendored_full.py`) is at commit
+166e62353. FastCodecSamplerTests in the local assistant suite
+(`tests/test_assistant_synthesis.py`, shipped in 656722ba3) run on
+x86 and are kept.**
 
-Real-time TTS moves to Kokoro (SpeechOutputKokoro owns the
-conv-kernel speedups). For the Qwen3-TTS path: use it for non-real-
-time synthesis (audiobook, podcast preview) where RTF 0.23 is
-acceptable, and switch to a streaming-first-sentence pattern: emit
-the first sentence as soon as it is decoded (it is audible in under
-the first chunk's latency), so the user perceives latency as ~1.4 s
-even when total wall is much higher. synthesis.py's `synthesize_chunks`
-already supports this via `stream=True, streaming_interval=0.32`.
+Real-time TTS moves to Kokoro (SpeechOutputKokoro owns the conv-kernel
+speedups). For the Qwen3-TTS path: use it for non-real-time synthesis
+(audiobook, podcast preview) where RTF 0.23 is acceptable, and switch
+to a streaming-first-sentence pattern: emit the first sentence as soon
+as it is decoded (it is audible in under the first chunk's latency), so
+the user perceives latency as ~1.4 s even when total wall is much
+higher. synthesis.py's `synthesize_chunks` already supports this via
+`stream=True, streaming_interval=0.32`.
