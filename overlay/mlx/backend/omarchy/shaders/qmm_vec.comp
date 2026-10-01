@@ -603,7 +603,10 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #endif
 #define Q4_MULTI_STORE(I, rounded) { \
   output##I.values[column] = STORE_VALUE(rounded); \
-  if ((params.flags & (256u << I)) != 0u) { \
+  bool raw_kv_i = ((params.flags & 262144u) != 0u) && \
+      ((params.flags & (4096u << I)) != 0u) && \
+      ((params.flags & (256u << I)) == 0u); \
+  if ((params.flags & (256u << I)) != 0u || raw_kv_i) { \
     uint sum_column = column; \
     if ((params.flags & (4096u << I)) != 0u) { \
       sum_column = params.out_strides[I] + \
@@ -611,7 +614,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
           (column % params.matrix_m); \
     } \
     sum##I.values[sum_column] = STORE_VALUE( \
-        (rounded) + LOAD_VALUE(addend##I.values[column])); \
+        raw_kv_i ? (rounded) \
+                 : ((rounded) + LOAD_VALUE(addend##I.values[column]))); \
   } \
 }
 #if ROWS_PER_SLOT > 1

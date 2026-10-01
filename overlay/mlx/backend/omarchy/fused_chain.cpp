@@ -923,7 +923,16 @@ DirectPlan plan_keys_window(
     const std::unordered_map<std::uintptr_t, size_t>& uses,
     const std::unordered_map<std::uintptr_t, size_t>& view_uses) {
   DirectPlan plan;
-  if (!is_op(update, typeid(fast::RoPE)) || update->inputs().size() != 2) {
+  if (!is_op(update, typeid(fast::RoPE))) {
+    return plan;
+  }
+  // rope_rms_norm (the fused q/k RMSNorm + RoPE) rides the same RoPE
+  // primitive with the norm weight as a third input; the redirected
+  // dispatch is norm-aware and gates inputs.size() == (with_norm ? 3 : 2)
+  // itself, so both shapes plan identically.
+  const bool with_norm =
+      static_cast<const fast::RoPE&>(update->primitive()).has_norm();
+  if (update->inputs().size() != (with_norm ? 3u : 2u)) {
     return plan;
   }
   auto geometry = direct_window_geometry(member);
@@ -995,6 +1004,7 @@ DirectPlan plan_values_window(
     node = &node->inputs()[0];
   }
   if (dense_roles.count(node->id()) == 0 &&
+      !is_op(node, typeid(QuantizedMatmul)) &&
       (!is_op(node, typeid(Add)) || use_count(*node) != 1)) {
     return plan;
   }
@@ -1025,6 +1035,23 @@ DirectPlan plan_values_window(
       for (size_t mi = 0; mi < groups[gi].members.size(); ++mi) {
         const auto& candidate = groups[gi].members[mi].epilogue;
         if (candidate && candidate->id() == sum->id()) {
+          plan.group_index = gi;
+          plan.member_index = mi;
+          plan.kind = DirectKind::values_sum;
+          found = true;
+        }
+      }
+    }
+    // Raw-terminal: the sum is a fused GEMV group member's own output
+    // row (v projections carry no Add epilogue). The dispatch stores
+    // the rounded output into the window directly; the member's own
+    // buffer stays a scratch write nothing reads.
+    for (size_t gi = 0; gi < groups.size() && !found; ++gi) {
+      for (size_t mi = 0; mi < groups[gi].members.size(); ++mi) {
+        if (groups[gi].members[mi].node.id() == sum->id()) {
+          if (use_count(*sum) != 1) {
+            return plan;
+          }
           plan.group_index = gi;
           plan.member_index = mi;
           plan.kind = DirectKind::values_sum;
@@ -1607,6 +1634,40 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
               static_cast<int>(plans[0].kind),
               static_cast<int>(plans[1].kind),
               state->dense_gemv_groups.size());
+          // MLX_OMARCHY_KV_TRACE detail: per-side update primitive,
+          // shapes, strides, and the values-side terminal check, so a
+          // refusal names its structural cause.
+          {
+            for (int side = 0; side < 2; ++side) {
+              const array& member = pair.nodes[side];
+              const array* upd = lookup(member.inputs()[1]);
+              if (!upd) {
+                std::fprintf(stderr, "[kv-plan]   side %d: update gone\n", side);
+                continue;
+              }
+              const char* opname = "no-primitive";
+              if (upd->has_primitive()) {
+                opname = typeid(upd->primitive()).name();
+              }
+              std::fprintf(
+                  stderr,
+                  "[kv-plan]   side %d: upd=%s shape=[", side, opname);
+              for (auto d : upd->shape()) {
+                std::fprintf(stderr, "%d,", static_cast<int>(d));
+              }
+              std::fprintf(stderr, "] strides=[");
+              for (auto s : upd->strides()) {
+                std::fprintf(stderr, "%lld,", static_cast<long long>(s));
+              }
+              std::fprintf(stderr, "] inputs=%zu", upd->inputs().size());
+              const array& base = member.inputs()[0];
+              std::fprintf(stderr, " base shape=[");
+              for (auto d : base.shape()) {
+                std::fprintf(stderr, "%d,", static_cast<int>(d));
+              }
+              std::fprintf(stderr, "]\n");
+            }
+          }
         }
         continue;
       }

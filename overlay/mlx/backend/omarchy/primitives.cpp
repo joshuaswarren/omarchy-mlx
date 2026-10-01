@@ -7635,7 +7635,11 @@ bool dispatch_quantized_gemv_group(
       continue;
     }
     auto& window = *member.sum_window;
-    if (!member.epilogue || window.node.data_shared_ptr() != nullptr ||
+    // The window may ride a raw member (no Add epilogue: the rounded
+    // GEMV output row is stored straight into the window) or an
+    // epilogue member (the Add sum is stored). Everything else about
+    // the window contract is shared.
+    if (window.node.data_shared_ptr() != nullptr ||
         window.base.data_shared_ptr() == nullptr ||
         (window.base.dtype() != float16 &&
          window.base.dtype() != bfloat16) ||
@@ -7728,6 +7732,11 @@ bool dispatch_quantized_gemv_group(
       params.out_strides[i] = window.offset;
       params.flags |= 4096u << i;
       params.matrix_m = window.head_dim;
+      if (!members[i].epilogue) {
+        // Raw member: the kernel stores the rounded output into the
+        // window without reading an addend (shader flags bit 18).
+        params.flags |= 262144u;
+      }
     }
   }
   std::array<ComputeBinding, kQmmVecMultiBindings + 3> bindings{};
