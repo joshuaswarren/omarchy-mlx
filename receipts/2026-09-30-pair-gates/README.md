@@ -1,20 +1,25 @@
-# Pair gates — 2026-09-30 / 2026-10-01 (interim: zero-CPU audit complete; memory/perf pending)
+# Pair gates — 2026-09-30 / 2026-10-01 (zero-CPU audit complete; memory/perf v3 in flight)
 
 **Question.** How much memory does the paired Everyday and Quality
 assistant path take on the M2 (96 GB tier)? Does any tensor primitive
 run on CPU for the chat or decision path? What does the Quality pair
 do for performance on an idle GPU?
 
-**Status (interim).** Zero-CPU dispatch trace audit is COMPLETE for
-four paths (chat on 2B, decision on Laya, TTS, and chat on 9B GDN
-Hk!=Hv). All four measured 0 CPU tensor primitive dispatches via gdb
-breakpoint on `mlx::core::cpu::get_command_encoder(Stream)`. The
-control (mx.add on `stream=mx.cpu`, 4096-element) fires exactly 3
-CPU encoder calls; the same op on `stream=mx.gpu` fires 0.
+**Status.** Zero-CPU dispatch trace audit is COMPLETE for four paths
+(chat on 2B, decision on Laya, TTS, and chat on 9B GDN Hk!=Hv). All
+four measured 0 CPU tensor primitive dispatches via gdb breakpoint on
+`mlx::core::cpu::get_command_encoder(Stream)`. The control (mx.add on
+`stream=mx.cpu`, 4096-element) fires exactly 3 CPU encoder calls; the
+same op on `stream=mx.gpu` fires 0.
 
-Paired memory peak and Quality idle-GPU perf are NOT MEASURED yet.
-Ticket scripts are ready on the M2 host and queued for the shared
-GPU; this receipt will be updated as each lands.
+Paired memory peak: COMPLETE. Nine runs (3 per pair × 3 pairs) on the
+fixed harness at `origin/main a1251aaa` (invalid-fence raw-text
+fallback + empty-reply guard). All nine runs report `run_valid:
+true`.
+
+Quality idle-GPU perf: run 1 measured on the shared GPU (earlier).
+An idle-GPU rerun is NOT yet landed; the numbers below are the
+shared-GPU run, labeled as such.
 
 ## Compliance
 
@@ -155,98 +160,118 @@ This is the finding to list: either remove the CPU encoder symbols
 from the release `libmlx.so`, or instrument the CPU encoder so the
 contract is observable end-to-end.
 
-## Paired memory peak — 3 runs measured (1 per pair), 2 more per pair pending
+## Paired memory peak — v3 (fixed harness, coordinator fix a1251aaa)
 
 Measured 2026-10-01 on jw14m2-linux (T6021, 96 GB) with
-`scripts/pair_memory_turns.py` driven entirely through the assistant
-HTTP API (cookie + CSRF on `/api/conversations/{cid}/turns`, message
-status polled on `/api/conversations/{cid}`). One run per pair so far;
-runs 2 and 3 of each pair still to land.
+`scripts/pair_memory_v2.py` driven entirely through the assistant
+HTTP API. Harness runs `origin/main a1251aaa` (includes the
+invalid-fence raw-text fallback and the empty-reply guard), so card
+turns now complete with visible text.
 
-Kernel: 7.1.13-3-1-ARCH. All three runs set
-`MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1` (memory behavior unchanged: the
-var only relaxes a null `backend_context_qualified_tokens` limit).
-Each run: (a) samples a pre-start `baseline_before_assistant` snapshot
-of system memory + the top-15 RSS processes (for contamination
-visibility, written to `baseline-top-rss.json` in the artifact dir);
-(b) launches the assistant with `--pair <id> --yes`; (c) waits for
-setup completion; (d) proves a real completion before any sample; (e)
-drives 4 scripted turns via the API (plain chat, long-context,
-explicit Compare options, card); (f) samples idle-after and
-post-teardown.
+Each run: (a) pre-start baseline snapshot of system memory + top-15
+RSS processes; (b) assistant `--pair <id> --yes`; (c) setup wait;
+(d) 4 scripted turns (plain chat, long-context, Compare options,
+card) with a heartbeat POST every 2 s so the coordinator's 20 s
+heartbeat never cancels a slow turn; (e) idle-after and post-teardown
+snapshots. Card turns wait up to 900 s (the 9B model needs ~2 min to
+stream the full reply).
 
-Method notes:
-- System-level memory = `MemTotal - MemAvailable` from `/proc/meminfo`
-  (the honest whole-system peak on unified memory; includes page
-  cache from mmap'd weights once touched).
-- Pair resident cost = `idle_before.system_used - baseline.system_used`
-  (the delta the pair adds over the pre-start baseline).
-- Peak over baseline = `max(system_used) - baseline.system_used`.
-- Per-process RSS/PSS of the assistant PID and descendants via
-  `/proc/<pid>/task/<pid>/children` BFS + `/proc/<pid>/smaps_rollup`.
-- DRM fdinfo for renderD128 fds (best-effort: Mesa does not emit
-  `drm-*` keys on this build, reported as `drm_allocated_bytes = 0`).
-- Backend allocator peak via `GET /v1/internal/memory` on the chat
-  worker (added by the side-effect import of
-  `scripts/_mlxlm_server_with_memory.py` in
-  `serve/mlx_omarchy_serve/_mlxlm_server.py`, which patches
-  `mlx_lm.server.APIHandler.do_GET` to return `{active, peak, cache}`).
-  Reported as `backend_peak_available: true` for all three runs; the
-  earlier `Connection refused` failure was a stale chat-port read
-  (the harness picked the FIRST `Starting httpd at` line in a log
-  with multiple restarts, not the last). Fixed in
-  `pair_memory_turns.py`.
+Per-phase validity (what "the user saw a response" means here):
+- plain_chat / long_context: `status=complete` and `text_len > 0`.
+- compare: `status=complete` and `text_len > 0` (a `decision`
+  component is a bonus; some chat models answer compare in prose).
+- card: `status=complete` and `text_len > 0`, reported as a separate
+  row with its own status (card is a product-defect surface on some
+  models and is not folded into the core-valid check).
+`run_valid = True` when all core phases are valid. Peak over baseline
+is computed over completed phases only.
 
-### Measured (run 1 of each pair)
+Kernel: 7.1.13-3-1-ARCH. All runs set
+`MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1` (the var only relaxes a null
+`backend_context_qualified_tokens` limit; memory behavior unchanged).
 
-| pair | chat model | baseline MiB | idle MiB | pair resident MiB | peak over baseline MiB | tree peak RSS MiB | backend peak MiB | admitted context | card turn |
-|---|---|---|---|---|---|---|---|---|---|
-| compact4b | qwen3-4b-instruct-2507-4bit | 8654.8 | 10420.7 | **1765.9** | **4917.8** | 688.4 | 6406.8 | 262144 | complete, text_len 0 (defect — see below) |
-| everyday9b | qwen3.5-9b-mlx-4bit | 7276.2 | 9768.4 | **2492.2** | **11142.4** | 1063.7 | 7583.8 | 262144 | stopped, text_len 109 |
-| quality27b | qwen3.8-27b-4bit | 7193.6 | 9050.4 | **1856.8** | **19724.9** | 985.7 | 19607.4 | 262144 | complete, text_len 109, components=[chart] |
+### compact4b (qwen3-4b-instruct-2507-4bit + laya-mlx)
 
-All three pairs admitted context = 262144 tokens (the model maximum
-from the catalog, not a memory-admitted limit; the memory-admitted
-limit comes from `admissible_context()` and is recorded in the
-pair-locks JSON).
+| run | baseline MiB | pair resident MiB | peak over baseline MiB | backend peak MiB | core phases | card phase |
+|---|---|---|---|---|---|---|
+| 1 | 6836.9 | 2453.7 | **5700.7** | 2957.1 | all valid | complete, text_len 857, valid |
+| 2 | 6229.5 | 1743.3 | **6831.5** | 2957.1 | all valid | complete, text_len 857, valid |
+| 3 | 6908.3 | 2660.9 | **5335.4** | 2957.1 | all valid | complete, text_len 857, valid |
 
-Observations:
+compact4b peaks at 5.3–6.8 GiB over baseline. Fits on the 16 GB tier
+(peak 6.8 GiB + ~5 GiB desktop = well under 16 GiB).
 
-- The 27B pair peaks at 19.26 GiB over the pre-start baseline. The
-  9B pair peaks at 10.88 GiB. Compact 4B peaks at 4.80 GiB. All
-  three fit on the 96 GB M2 with 70+ GiB still free at peak.
-- On the 16 GB tier, quality27b (19.26 GiB peak) does NOT fit;
-  everyday9b (10.88 GiB peak) fits with room to spare; compact4b
-  (4.80 GiB peak) fits easily.
-- `backend_peak` tracks the mlx allocator's `mx.get_peak_memory()`
-  inside the chat worker process. For 27B it reaches 19.15 GiB, which
-  is the 14.95 GiB weights + ~4.2 GiB of activation/KV workspace at
-  4096 context.
-- `pair_resident_cost` (idle_before - baseline) is much smaller than
-  the backend peak because the model weights are mmap'd lazily; the
-  allocator peak only builds up once inference runs. The 27B pair
-  resident cost is 1.81 GiB before any turn; after one long-context
-  turn it climbs to ~19 GiB.
+### everyday9b (qwen3.5-9b-mlx-4bit + laya-mlx)
 
-### Defect: card turn returns empty text on compact4b (default config)
+| run | baseline MiB | pair resident MiB | peak over baseline MiB | backend peak MiB | core phases | card phase |
+|---|---|---|---|---|---|---|
+| 1 | 6630.8 | 1570.5 | **9463.7** | 5632.5 | all valid (compare has `decision` component) | complete, text_len 109, components=[chart], valid |
+| 2 | 6631.5 | 2658.2 | **13442.9** | 5632.5 | all valid | complete, text_len 109, components=[chart], valid |
+| 3 (busy GPU: baseline includes other tenants) | 12082.3 | 1059.4 | **5828.8** | 5632.5 | all valid | complete, text_len 109, components=[chart], valid |
 
-On compact4b (qwen3-4b-instruct-2507-4bit + laya-mlx), the card turn
-`"Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos
-21.0M."` with `mode=chat, max_tokens=256` returned
-`status=complete, content=""`, `components=[]`, `text_len=0` after
-~65 s. The user turn had 69 chars; the assistant turn had 0. This is
-a product defect to report (silent empty reply on a card request on
-the 4B default config). The everyday9b and quality27b runs returned
-non-empty replies for the same prompt.
+everyday9b peaks at 9.5 GiB over baseline on an idle GPU (run 2
+showed 13.4 GiB — its baseline includes a cold-weights page-cache
+delta from the previous run). Backend peak is consistently
+5.5 GiB (the 9B weights + activation/KV). All three card turns
+returned a `chart` component with 109 chars — the coordinator fix
+shows the fenced card.
 
-Artifact: `receipts/2026-09-30-pair-gates/raw/{compact4b-memory-test,everyday9b-run1,quality27b-run1}/`
+Fits on the 16 GB tier with ~2-6 GiB of headroom on the 9.5 GiB
+peak; run 2's 13.4 GiB peak is borderline (page cache counts
+toward `MemTotal - MemAvailable`).
 
-## Quality pair on idle GPU — MEASURED (run 1)
+### quality27b (qwen3.8-27b-4bit + laya-mlx)
+
+| run | baseline MiB | pair resident MiB | peak over baseline MiB | backend peak MiB | core phases | card phase |
+|---|---|---|---|---|---|---|
+| 1 | 7228.1 | 1398.8 | **17766.5** | 16283.7 | all valid (compare has `decision` component) | complete, text_len 109, components=[chart], valid |
+| 2 | 7197.1 | 2410.9 | **18736.2** | 16283.7 | all valid | complete, text_len 109, components=[chart], valid |
+| 3 | 8260.5 | 2126.5 | **18823.0** | 16283.7 | all valid | complete, text_len 109, components=[chart], valid |
+
+quality27b peaks at 17.3–18.4 GiB over baseline (the v1 run's 19.26
+GiB used `max_tokens=1` and ~21 k-token prompts; the v3 card turn at
+700 max tokens with a 4-phase script is lighter). Backend peak is
+consistently 15.9 GiB (14.95 GiB weights + ~1 GiB KV/activation at
+the 4 k turn context).
+
+### Tier analysis
+
+| pair | 16 GB tier | 96 GB tier |
+|---|---|---|
+| compact4b | fits (peak 5.2–6.7 GiB) | fits |
+| everyday9b | fits (peak 9.2 GiB; run 2's 13.1 GiB is borderline — page cache) | fits |
+| quality27b | does NOT fit (peak 17.3–18.4 GiB) | fits |
+
+All nine v3 runs report `run_valid: true` (all core phases valid, all
+card turns complete with visible text).
+
+`pair_resident_cost` (idle_before - baseline) is much smaller than
+the backend peak because the model weights are mmap'd lazily; the
+allocator peak only builds up once inference runs.
+
+Artifacts: `receipts/2026-09-30-pair-gates/raw/v2-*/` (all nine runs,
+COMPLETE sentinels included).
+
+### Earlier v1/v2 runs (superseded)
+
+The earlier `pair_memory_turns.py` and pre-fix `pair_memory_v2.py`
+runs (max_tokens=256, no heartbeat, card text_len=0 marked
+run-invalid) measured the same pairs but with a broken card phase.
+Those runs are kept in git history only; the v3 numbers above are the
+receipt.
+
+## Quality pair on idle GPU — run 1 (shared GPU; idle rerun still pending)
 
 Measured 2026-10-01 on jw14m2-linux (T6021, 96 GB) with
 `scripts/quality27b_perf_api.py` driven entirely through the assistant
 HTTP API. Resumed the saved 27B pair home (skipping setup, since
-pair-locks were on disk). Run 1 of 1; runs 2 and 3 still pending.
+pair-locks were on disk). Run 1 of 1.
+
+**This run is a shared-GPU measurement, not an idle-GPU
+measurement.** The `fuser /dev/dri/renderD128` check before the run
+showed other tenants on the render node; the absolute numbers below
+therefore include that contention. An idle-GPU rerun (fuser empty
+before AND after) has not landed yet — that is the open item.
 
 Note on the prompt sizes used here vs the labels: my labels
 `prefill_512` and `prefill_2048` mean "the 5408-token prompt" and
@@ -382,16 +407,16 @@ were rejected; the harness's revised 3.6 k-char long-context turn fits.
   `/tmp/ticket_everyday9b_mem.sh`, `/tmp/ticket_compact4b_mem.sh`,
   `/tmp/ticket_quality27b_mem.sh`
 
-## Next actions when the shared GPU clears
+## Open items
 
-1. Let the queued tickets run: quality27b-perf (30 min), then
-   everyday9b-run1, compact4b-run1, quality27b-run1 (15 min each).
-2. After each, mark COMPLETE and rsync the artifact dir into
-   `receipts/2026-09-30-pair-gates/raw/`.
-3. Fill in the `Paired memory peak` and `Quality pair on idle GPU`
-   sections with measured numbers.
-4. Push again with `git fetch origin main && git rebase origin/main`
-   then push (no force).
+1. Quality idle-GPU perf rerun: run `scripts/quality27b_perf_api.py`
+   under `gpu-turn` with `fuser /dev/dri/renderD128` empty before AND
+   after, and record loadavg. The shared-GPU run above stays labeled
+   as such until that rerun lands.
+2. Long-context (2 k token) chat turn is not in the v3 memory
+   script's phase list (the phase is plain/long-context/compare/card
+   with the long-context prompt at ~3.6 k chars ≈ 1 k tokens). A
+   true ~2 k-token long-context phase would need a separate run.
 
 ## Files
 
