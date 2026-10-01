@@ -2909,11 +2909,12 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
     std::vector<array> outputs;
     for (int t = 0; t < GT; ++t) {
       auto get_t = [&](const array& arr) {
-        auto sliced = slice(
-            arr,
-            Shape{0, t, 0},
-            Shape{arr.shape(0), t + 1, arr.shape(2)},
-            stream);
+        // Rank-generic token slice: q/k/v are [B,T,H,D], g/beta are
+        // [B,T,H]; a fixed 3-element start throws on the 4-dim inputs.
+        Shape start(arr.ndim(), 0), stop = arr.shape();
+        start[1] = t;
+        stop[1] = t + 1;
+        auto sliced = slice(arr, start, stop, stream);
         return squeeze(sliced, 1, stream);
       };
       auto q_t = get_t(inputs[0]);
