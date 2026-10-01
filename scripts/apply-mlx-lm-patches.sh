@@ -95,7 +95,7 @@ apply mlx-lm-last-logits.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the
-# rotation, bit-identical to the composed chain). Self-guarded on hasattr;
-# decode removes 12 dependent dispatches/token on qwen3.5 (6 attention
-# layers x q+k).
-apply mlx-lm-rope-norm.patch
+# rotation, bit-identical to the composed chain). Default OFF: set
+# MLX_OMARCHY_ROPE_NORM_FUSE=1 to enable (kill switch =0). Python patcher:
+# GNU patch 2.8 on this host fails byte-verified hunks (DecodeFuse3).
+python3 "$ROOT/scripts/patch-mlx-lm-rope-norm.py" "$VENV"

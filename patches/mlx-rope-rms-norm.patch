@@ -3,7 +3,7 @@
 @@ -70,6 +70,35 @@
      const std::optional<array>& freqs = std::nullopt,
      StreamOrDevice s = {});
- 
+
 +// rope + row RMS norm fused (the attention q/k q_norm/k_norm -> rope chain):
 +// the row-wise RMS normalization `rms_norm(x, weight, eps)` is computed
 +// inside the rope dispatch and the rotation consumes the rounded normalized
@@ -59,7 +59,7 @@
 +    throw std::invalid_argument(
 +        "[rope] rope_rms_norm does not support freqs.");
 +  }
- 
+
 -  auto fallback = [dims, traditional, base, scale, forward, s](
 -                      std::vector<array> inputs) {
 +  auto fallback = [dims,
@@ -135,7 +135,7 @@
    }
    return fallback(std::move(inputs))[0];
  }
- 
+
 +array rope_rms_norm(
 +    const array& x,
 +    int dims,
@@ -232,7 +232,7 @@
 +      forward_ == a_other.forward_ && has_norm_ == a_other.has_norm_ &&
 +      (!has_norm_ || norm_eps_ == a_other.norm_eps_));
  }
- 
+
  /** Computes: O = softmax(Q @ K.T) @ V **/
 --- a/mlx/fast_primitives.h	2026-09-29 20:31:21.280323194 -0500
 +++ b/mlx/fast_primitives.h	2026-09-29 20:31:13.823395591 -0500
@@ -253,9 +253,9 @@
 +        forward_(forward),
 +        has_norm_(has_norm),
 +        norm_eps_(norm_eps) {}
- 
+
    static bool use_fallback(Stream s);
- 
+
 @@ -316,6 +320,13 @@
      return std::make_tuple(
          nullptr, dims_, traditional_, base_, scale_, forward_);
@@ -267,7 +267,7 @@
 +  float norm_eps() const {
 +    return norm_eps_;
 +  }
- 
+
   private:
    int dims_;
 @@ -323,6 +334,8 @@
@@ -277,13 +277,13 @@
 +  bool has_norm_{false};
 +  float norm_eps_{0.0f};
  };
- 
+
  class ScaledDotProductAttention : public Custom {
 --- a/python/src/fast.cpp	2026-09-29 20:31:21.281323184 -0500
 +++ b/python/src/fast.cpp	2026-09-29 20:31:13.823395591 -0500
 @@ -314,6 +314,56 @@
        )pbdoc");
- 
+
    m.def(
 +      "rope_rms_norm",
 +      [](const mx::array& a,
