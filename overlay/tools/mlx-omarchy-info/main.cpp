@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <vector>
 
+#include "ane_module.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/ane/bundle.h"
 #include "mlx/backend/omarchy/device.h"
@@ -193,10 +194,8 @@ AneCapability collect_ane() {
     out.accel0_character_device = S_ISCHR(status.st_mode);
   }
 
-  const auto module = root == "/"
-      ? std::filesystem::path("/sys/module/ane")
-      : root / "sys/module/ane";
-  if (std::filesystem::is_directory(module, ec)) {
+  const auto module = omarchy_info::find_ane_module(root);
+  if (!module.empty()) {
     out.module_present = true;
     out.module_version = read_text_file(module / "version");
   }
