@@ -6,6 +6,11 @@ from `c89392a5c`). Local x86 wheel build green (Linux x86_64,
 to a follow-up window (the M2 was on a macOS boot window at receipt
 write time, see the post-state section).
 
+**Status 2026-10-01:** verified on the M2 Max; see the dated addenda at the
+end. They supersede the "queued" status and the provisional hd128 window
+below, and they correct two earlier claims (a "chip-class bf16 defect" that
+was a test bug, and a forced push that briefly truncated main).
+
 ## What landed
 
 1. **Fused one-dispatch decode SDPA at head_dim 128** in the omarchy
@@ -125,3 +130,137 @@ the named hd128 TTS and chat-attention SDPA win.
   test cases.
 - `overlay/tests/omarchy/test_indexing_ops.cpp` — four small-k value
   Partition test cases; ArgPartition untouched.
+
+## Addendum 2026-10-01: measured on the M2 Max
+
+Host: Apple M2 Max, Linux 7.1.13-3-1-ARCH, Honeykrisp Vulkan. Every GPU
+run went through the shared GPU queue, one ticket at a time, in a single
+boot. A/B sides prove distinct builds by their version stamps.
+
+### Shaders on glslc
+
+All 13 new blobs and the modified existing variants compile cleanly under
+glslc on the M2 and on the M1 (T8103, glslc 2026.3). The original x86 check
+used glslangValidator only, which AGENTS.md says is no evidence for these
+chips.
+
+### Measured hd128 window (replaces the provisional row)
+
+`q (1,16,1,128)`, GQA 16/8 over strided bf16 cache views. Fused and
+composition (`MLX_OMARCHY_SDPA_DECODE_NATIVE=0`) alternate in one process;
+each cell is the median of 3 x 200 one-eval calls. The outputs were
+bit-identical at all 20 grid points.
+
+| keys | 1 | 12 | 33 | 93 | 256 | 512 | 1024 | 2048 | 4096 | 7168 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fused us | 214 | 259 | 274 | 295 | 361 | 581 | 909 | 859 | 1162 | 1882 |
+| composition us | 349 | 450 | 470 | 557 | 747 | 1475 | 1613 | 1592 | 2774 | 2552 |
+
+The fused arm wins at every k, so main `1cc561b35` sets the hd128 row to
+`{1, 7168}`.
+
+### Battery at `1cc561b35`
+
+| suite | cases | assertions |
+|---|---|---|
+| omarchy_sdpa_decode_fused_tests | 6/6 | 34,926 |
+| omarchy_indexing_ops_tests | 57/57 | 35,859 |
+| omarchy_fast_ops_tests | 36/36 | 1,104,679 |
+| omarchy_fast_regression_tests | 2/2 | 16 |
+| omarchy_runtime_tests | 41/41 | 22,694 |
+| omarchy_primitive_tests | 104/104 | 2,743,003 |
+| omarchy_kv_ops_tests | 16/16 | 781 |
+| omarchy_error_contract_tests | 3/3 | 14 |
+
+### Chat decode: Qwen3-4B-Instruct-2507-4bit (head_dim 128)
+
+One wheel (`+e00b37116`) runs the fused route and the composition
+(`MLX_OMARCHY_SDPA_DECODE_NATIVE=0`) as the single change, plus the
+release wheel (`+06711ad`) as context. Three rounds alternate in one boot;
+each leg is a fresh process with 2 warmups and 5 greedy 64-token
+generations, measured with mlx-lm's own decode tok/s.
+
+| leg | decode tok/s |
+|---|---|
+| fused hd128 | **64.20** |
+| composition | 53.27 |
+| release wheel | 50.30 |
+
+Fused gives +20.5% over the composition, and greedy token ids are
+identical on all three legs.
+
+### Qwen3-TTS full decode frame
+
+This is the speech-output receipt's frame harness, toggling the decode
+route in-process with legs alternating. Code-predictor tokens agreed
+150/150 in every pair.
+
+| route | dispatches/frame | ms/frame p50 |
+|---|---|---|
+| composition | 4,244 | 167-176 |
+| fused, provisional k>=12 window | 3,767 | 158-166 |
+| fused, measured k>=1 window (main) | **3,362** | **134-137** |
+
+The k>=1 window matters because the 15-pass code predictor attends over
+fewer than 12 keys on most passes. The k>=1 timing ticket overlapped a CPU
+build. The legs alternated, so the relative numbers hold, but the absolute
+ms run high. The frame still exceeds the RTF-1.2 dispatch budget recorded
+in the speech-output receipt.
+
+### Small-k Partition: 16-bit route
+
+One wheel pair differs by a single change (`+e00b37116` takes the sort
+route, `+e7498ce89` takes the selection route) and alternates in one boot.
+The input is a 1 x 151,936 row, timed with `mx.topk`.
+
+| cell | sort ms | selection ms | speedup |
+|---|---|---|---|
+| bf16 k=20 | 2.734 | 1.074 | 2.55x |
+| bf16 k=50 | 3.412 | 1.085 | 3.15x |
+| f16 k=20 | 3.100 | 1.072 | 2.89x |
+| f16 k=50 | 3.420 | 1.067 | 3.21x |
+
+The tail words were identical across routes. The selection-route doctest
+passes 57/57 with 35,859 assertions. For sampler ids, Qwen3-4B ran at
+temperature 0.8, top_k 20, seed 42 for 47 tokens. Stock argpartition
+masking and a threshold mask through `mx.topk` produced identical ids on
+both wheels.
+
+## Correction 2026-10-01: the "bf16 small-k defect" was a test bug
+
+The 16-bit block of `omarchy_indexing_ops_tests` failed on M1 (T8103),
+M1 Max (T6001), and the M2. It was reported as a chip-class backend defect,
+and the 16-bit selection route was gated off (`666d22c13`). **That claim
+was wrong.** The test built its bf16 input as
+`array(uint16_t*, shape, bfloat16)`, and MLX's `array::init` converts with
+`std::copy`, which converts each uint16 *value*. The bit pattern 0xBF00
+(-0.5) became the number 48896, which is bf16 0x473F. That accounts exactly
+for the failing words 0x473F/0x4740. Every route returned the correct top-k
+of that input. A second test bug compounded it: the bf16 reference
+helper did not round to nearest even. The test now feeds input through
+`astype`. Its reference reads back the device-held input words and
+compares against the input words at the top-k indices (`e00b37116`).
+
+The hd128 refusal doctest had a separate test bug. Its composition reshaped
+head_dim-100 data into width 128. It now reads the width from its inputs
+(`ec171e65f`).
+
+## Correction 2026-10-01: forced push
+
+Two pushes from this lane used a forced refspec. They reset `main` to this
+lane's tip and dropped the commits that had landed after `8b3982c21`.
+Merge `1bd649b80` restored that lineage. Every push from this lane since
+then has been a fetch, a rebase, and a fast-forward.
+
+## Open item
+
+The 16-bit selection route stays gated to float32 (`666d22c13`). Its
+reversal waits on one G13-class run of the selection-route doctest. On
+M2-class parts all three reversal conditions above already hold.
+
+A build-flow defect is outside this change but blocks source-built
+baselines. A raw `pip wheel` of pre-Attn128 commit `c89392a5c` on the
+M1 (T8103) produces a `libmlx.so` with an undefined
+`mlx::core::fast::RMSNormGated` vtable reference, so the wheel cannot be
+imported. The shipped release wheel and every Attn128-era build import
+cleanly.

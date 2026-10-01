@@ -78,3 +78,30 @@ already supports this via `stream=True, streaming_interval=0.32`.
 ## Addendum: vendored module removed
 
 The vendored forward (`serve/mlx_omarchy_assistant/_vendored/qwen3_tts_step.py`) and its equivalence probes were deleted from main after this study because nothing uses them. The last commit that contains them is c60d9aca5 (recover with `git show c60d9aca5:serve/mlx_omarchy_assistant/_vendored/qwen3_tts_step.py`).
+
+## Addendum 2026-10-01: fused head_dim-128 decode attention (Attn128)
+
+Host: Apple M2 Max, Linux 7.1.13-3-1-ARCH. One boot. Every run went
+through the shared GPU queue. The full frame is talker decode, talker
+draw, the compiled 15-pass code predictor, and the codec-embedding sum.
+It was measured with this receipt's frame harness, adapted to toggle the
+decode route in-process (`MLX_OMARCHY_SDPA_DECODE_NATIVE=0` selects the
+composition). Legs alternate inside one process. Code-predictor tokens
+agree 150/150 in every pair, because the fused bf16 arm is bit-identical
+to the composition.
+
+| route | dispatches/frame | ms/frame p50 |
+|---|---|---|
+| composition (pre-Attn128 head_dim-128 path) | 4,244 | 167-176 |
+| fused, provisional window (k >= 12) | 3,767 | 158-166 |
+| fused, measured window (k >= 1, main `1cc561b35`) | **3,362** | **134-137** |
+
+Caveat: the k >= 1 ms run overlapped a CPU wheel build on the same host.
+Both legs alternate in one process, so the relative change (about -21%)
+holds, but the absolute ms may run high. Dispatch counts do not depend on
+load.
+
+Against the floor above, 3,362 dispatches is still about 2.3x the
+1,488-dispatch budget for RTF 1.2. The fused attention narrows the gap.
+It does not close it, and the recommendation stands. Full numbers and
+the head_dim-128 k-grid are in `receipts/2026-09-30-attn128/README.md`.
