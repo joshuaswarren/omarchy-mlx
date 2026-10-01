@@ -137,6 +137,49 @@ class AneSmokeGateTests(unittest.TestCase):
             self.assertIn("ANE smoke OK", result.stdout)
 
 
+    def test_extracted_ane_smoke_accepts_t6021_module_name(self):
+        """The M2 driver registers as ane_t6021; the smoke must accept it.
+
+        omarchy-ane installs a per-chip module on the M2 Max; an install on
+        a t6021 host with only that module loaded must pass (v0.7.8 draft
+        gate: /sys/module/ane alone was checked and the install refused).
+        """
+        script = extract_ane_smoke()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            node = root / "sys/firmware/devicetree/base/ane@284000000"
+            node.mkdir(parents=True)
+            (node / "compatible").write_bytes(b"apple,t6021-ane\x00")
+            module = root / "sys/module/ane_t6021"
+            module.mkdir(parents=True)
+            (module / "version").write_text("0.4.0\n")
+            result = subprocess.run(
+                ["python3", "-c", script],
+                env={**os.environ, "MLX_OMARCHY_ACCEL_DEV": "/dev/null",
+                     "MLX_OMARCHY_SYSROOT": str(root)},
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("ANE smoke OK", result.stdout)
+            self.assertIn("(0.4.0)", result.stdout)
+
+    def test_extracted_ane_smoke_refuses_accel0_with_neither_module_name(self):
+        script = extract_ane_smoke()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            node = root / "sys/firmware/devicetree/base/ane@284000000"
+            node.mkdir(parents=True)
+            (node / "compatible").write_bytes(b"apple,t6021-ane\x00")
+            result = subprocess.run(
+                ["python3", "-c", script],
+                env={**os.environ, "MLX_OMARCHY_ACCEL_DEV": "/dev/null",
+                     "MLX_OMARCHY_SYSROOT": str(root)},
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing FDT node or ane module", result.stderr)
+
+
 class ServeCliContractTests(unittest.TestCase):
     """Serve CLI integration: package fetch, launchers, omarchy conventions."""
 

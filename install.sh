@@ -596,10 +596,18 @@ dt = (
     if sysroot in ("", "/")
     else os.path.join(sysroot, "sys/firmware/devicetree/base")
 )
-module = (
-    "/sys/module/ane"
-    if sysroot in ("", "/")
-    else os.path.join(sysroot, "sys/module/ane")
+# The loaded ANE driver registers as `ane` on the M1 family and as
+# `ane_t6021` on the M2 Max (omarchy-ane installs a per-chip module there).
+module = next(
+    (
+        m
+        for m in (
+            os.path.join(sysroot, "sys/module/ane"),
+            os.path.join(sysroot, "sys/module/ane_t6021"),
+        )
+        if os.path.isdir(m)
+    ),
+    None,
 )
 
 def ane_fdt(base):
@@ -623,7 +631,7 @@ def ane_fdt(base):
     return True, sorted(set(matches))[:8]
 
 fdt_node, compatible = ane_fdt(dt)
-module_present = os.path.isdir(module)
+module_present = module is not None
 version = None
 if module_present:
     try:
