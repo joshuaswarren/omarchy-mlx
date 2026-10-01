@@ -1,0 +1,3 @@
+loadavg_before=0.24 0.92 0.86 1/368 41279 uname_r=7.1.13-3-1-ARCH fuser_before=
+pair_memory_v2 rc=0
+loadavg_after=0.66 0.79 0.81 1/374 45731 fuser_after=

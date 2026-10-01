@@ -2,20 +2,20 @@
   "label": "compact4b-run1",
   "pair_id": "compact",
   "uname": "7.1.13-3-1-ARCH",
-  "assistant_pid": 5708,
-  "chat_port": "38485",
+  "assistant_pid": 39429,
+  "chat_port": "58683",
   "pair_lock_context_tokens": 262144,
   "samples": [
     {
       "phase": "baseline_before_assistant",
-      "t": 1790877966.6752427,
+      "t": 1790880047.2310977,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "92636832 kB",
-        "MemFree": "89701744 kB"
+        "MemAvailable": "91829184 kB",
+        "MemFree": "89380672 kB"
       },
-      "system_used_bytes": 6341951488,
+      "system_used_bytes": 7168983040,
       "pids": [
         0
       ],
@@ -27,96 +27,96 @@
     },
     {
       "phase": "idle_before",
-      "t": 1790877968.4200761,
+      "t": 1790880048.9472532,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "90377088 kB",
-        "MemFree": "87038400 kB"
+        "MemAvailable": "89316560 kB",
+        "MemFree": "86867968 kB"
       },
-      "system_used_bytes": 8655929344,
+      "system_used_bytes": 9741910016,
       "pids": [
-        5708,
-        5746,
-        5747
+        39429,
+        39454,
+        39455
       ],
-      "rss_total": 417087488,
-      "pss_total": 261870592,
+      "rss_total": 417169408,
+      "pss_total": 261999616,
       "per_pid": {
-        "5746": {
-          "rss": 146046976,
-          "pss": 93335552
-        },
-        "5747": {
-          "rss": 126697472,
-          "pss": 77008896
-        },
-        "5708": {
+        "39429": {
           "rss": 144343040,
-          "pss": 91526144
+          "pss": 91542528
+        },
+        "39454": {
+          "rss": 146145280,
+          "pss": 93449216
+        },
+        "39455": {
+          "rss": 126681088,
+          "pss": 77007872
         }
       },
       "drm_per_pid": {
-        "5746": {
+        "39429": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5747": {
+        "39454": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5708": {
+        "39455": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         }
       },
       "backend_peak": {
-        "active": 1563074560,
-        "peak": 1563074560,
-        "cache": 4550656
+        "active": 1860165632,
+        "peak": 1860165632,
+        "cache": 4501504
       }
     },
     {
       "phase": "after_plain_chat",
-      "t": 1790877970.4512787,
+      "t": 1790880050.9772365,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "89134128 kB",
-        "MemFree": "85209248 kB"
+        "MemAvailable": "88452944 kB",
+        "MemFree": "86004368 kB"
       },
-      "system_used_bytes": 9928720384,
+      "system_used_bytes": 10626252800,
       "pids": [
-        5708,
-        5746,
-        5747
+        39429,
+        39454,
+        39455
       ],
-      "rss_total": 689029120,
-      "pss_total": 528912384,
+      "rss_total": 689111040,
+      "pss_total": 529040384,
       "per_pid": {
-        "5746": {
-          "rss": 299958272,
-          "pss": 245298176
+        "39429": {
+          "rss": 262406144,
+          "pss": 208049152
         },
-        "5747": {
-          "rss": 126697472,
-          "pss": 75613184
+        "39454": {
+          "rss": 300023808,
+          "pss": 245379072
         },
-        "5708": {
-          "rss": 262373376,
-          "pss": 208001024
+        "39455": {
+          "rss": 126681088,
+          "pss": 75612160
         }
       },
       "drm_per_pid": {
-        "5746": {
+        "39429": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5747": {
+        "39454": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5708": {
+        "39455": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         }
@@ -130,49 +130,49 @@
       "text_len": 5,
       "components": [],
       "turn_valid": true,
-      "wall_s": 2.0
+      "wall_s": 2.01
     },
     {
       "phase": "after_long_context",
-      "t": 1790877972.4683115,
+      "t": 1790880052.9966197,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "88572288 kB",
-        "MemFree": "84646208 kB"
+        "MemAvailable": "87868624 kB",
+        "MemFree": "85419984 kB"
       },
-      "system_used_bytes": 10504044544,
+      "system_used_bytes": 11224596480,
       "pids": [
-        5708,
-        5746,
-        5747
+        39429,
+        39454,
+        39455
       ],
-      "rss_total": 697827328,
-      "pss_total": 537713664,
+      "rss_total": 697909248,
+      "pss_total": 537838592,
       "per_pid": {
-        "5746": {
-          "rss": 308477952,
-          "pss": 253818880
+        "39429": {
+          "rss": 262684672,
+          "pss": 208327680
         },
-        "5747": {
-          "rss": 126697472,
-          "pss": 75614208
+        "39454": {
+          "rss": 308543488,
+          "pss": 253898752
         },
-        "5708": {
-          "rss": 262651904,
-          "pss": 208280576
+        "39455": {
+          "rss": 126681088,
+          "pss": 75612160
         }
       },
       "drm_per_pid": {
-        "5746": {
+        "39429": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5747": {
+        "39454": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5708": {
+        "39455": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         }
@@ -186,49 +186,49 @@
       "text_len": 44,
       "components": [],
       "turn_valid": true,
-      "wall_s": 2.01
+      "wall_s": 2.0
     },
     {
       "phase": "after_compare",
-      "t": 1790877985.5550368,
+      "t": 1790880067.0812805,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "87470992 kB",
-        "MemFree": "83542784 kB"
+        "MemAvailable": "86802912 kB",
+        "MemFree": "84352768 kB"
       },
-      "system_used_bytes": 11631771648,
+      "system_used_bytes": 12315885568,
       "pids": [
-        5708,
-        5746,
-        5747
+        39429,
+        39454,
+        39455
       ],
-      "rss_total": 726204416,
-      "pss_total": 563225600,
+      "rss_total": 726253568,
+      "pss_total": 563320832,
       "per_pid": {
-        "5746": {
-          "rss": 308576256,
-          "pss": 252720128
+        "39429": {
+          "rss": 284377088,
+          "pss": 229921792
         },
-        "5747": {
-          "rss": 133234688,
-          "pss": 80582656
+        "39454": {
+          "rss": 308658176,
+          "pss": 252817408
         },
-        "5708": {
-          "rss": 284393472,
-          "pss": 229922816
+        "39455": {
+          "rss": 133218304,
+          "pss": 80581632
         }
       },
       "drm_per_pid": {
-        "5746": {
+        "39429": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5747": {
+        "39454": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5708": {
+        "39455": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         }
@@ -242,125 +242,125 @@
       "text_len": 313,
       "components": [],
       "turn_valid": true,
-      "wall_s": 13.07
+      "wall_s": 14.07
     },
     {
       "phase": "after_card",
-      "t": 1790878074.702202,
+      "t": 1790880155.2215576,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "88040048 kB",
-        "MemFree": "84111600 kB"
+        "MemAvailable": "85991648 kB",
+        "MemFree": "83540336 kB"
       },
-      "system_used_bytes": 11049058304,
+      "system_used_bytes": 13146619904,
       "pids": [
-        5708,
-        5746,
-        5747
+        39429,
+        39454,
+        39455
       ],
-      "rss_total": 735756288,
-      "pss_total": 572771328,
+      "rss_total": 735494144,
+      "pss_total": 572553216,
       "per_pid": {
-        "5746": {
-          "rss": 317063168,
-          "pss": 261204992
+        "39429": {
+          "rss": 285147136,
+          "pss": 230688768
         },
-        "5747": {
-          "rss": 133234688,
-          "pss": 80580608
+        "39454": {
+          "rss": 317128704,
+          "pss": 261285888
         },
-        "5708": {
-          "rss": 285458432,
-          "pss": 230985728
+        "39455": {
+          "rss": 133218304,
+          "pss": 80578560
         }
       },
       "drm_per_pid": {
-        "5746": {
+        "39429": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5747": {
+        "39454": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5708": {
+        "39455": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         }
       },
       "backend_peak": {
-        "active": 2678980608,
-        "peak": 3250511872,
+        "active": 2689597440,
+        "peak": 3100696576,
         "cache": 33554432
       },
       "turn_status": "complete",
-      "text_len": 0,
+      "text_len": 857,
       "components": [],
-      "turn_valid": false,
-      "wall_s": 89.14
+      "turn_valid": true,
+      "wall_s": 88.13
     },
     {
       "phase": "idle_after",
-      "t": 1790878077.7122343,
+      "t": 1790880158.2348316,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "88040320 kB",
-        "MemFree": "84111872 kB"
+        "MemAvailable": "86007008 kB",
+        "MemFree": "83555696 kB"
       },
-      "system_used_bytes": 11048779776,
+      "system_used_bytes": 13130891264,
       "pids": [
-        5708,
-        5746,
-        5747
+        39429,
+        39454,
+        39455
       ],
-      "rss_total": 735756288,
-      "pss_total": 572771328,
+      "rss_total": 735494144,
+      "pss_total": 572553216,
       "per_pid": {
-        "5746": {
-          "rss": 317063168,
-          "pss": 261204992
+        "39429": {
+          "rss": 285147136,
+          "pss": 230688768
         },
-        "5747": {
-          "rss": 133234688,
-          "pss": 80580608
+        "39454": {
+          "rss": 317128704,
+          "pss": 261285888
         },
-        "5708": {
-          "rss": 285458432,
-          "pss": 230985728
+        "39455": {
+          "rss": 133218304,
+          "pss": 80578560
         }
       },
       "drm_per_pid": {
-        "5746": {
+        "39429": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5747": {
+        "39454": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         },
-        "5708": {
+        "39455": {
           "drm_renderD_fds": 2,
           "drm_allocated_bytes": 0
         }
       },
       "backend_peak": {
-        "active": 2678980608,
-        "peak": 3250511872,
+        "active": 2689597440,
+        "peak": 3100696576,
         "cache": 33554432
       }
     },
     {
       "phase": "post_teardown",
-      "t": 1790878081.411681,
+      "t": 1790880161.935048,
       "uname": "7.1.13-3-1-ARCH",
       "meminfo": {
         "MemTotal": "98830144 kB",
-        "MemAvailable": "92874768 kB",
-        "MemFree": "88947296 kB"
+        "MemAvailable": "91884192 kB",
+        "MemFree": "89434928 kB"
       },
-      "system_used_bytes": 6098305024,
+      "system_used_bytes": 7112654848,
       "pids": [
         0
       ],
@@ -371,16 +371,61 @@
       "backend_peak": null
     }
   ],
-  "baseline_sys_used_bytes": 6341951488,
-  "idle_before_sys_used_bytes": 8655929344,
-  "pair_resident_cost_bytes": 2313977856,
-  "system_peak_over_baseline_bytes": 5289820160,
-  "tree_peak_rss_total_bytes": 735756288,
-  "tree_peak_pss_total_bytes": 572771328,
-  "backend_peak_bytes": 3250511872,
-  "backend_peak_available": true,
-  "invalid_turns": [
-    "after_card"
+  "phases": [
+    {
+      "phase": "plain_chat",
+      "status": "complete",
+      "text_len": 5,
+      "components": [],
+      "wall_s": 2.01,
+      "valid": true,
+      "system_peak_over_baseline_bytes": 3457269760
+    },
+    {
+      "phase": "long_context",
+      "status": "complete",
+      "text_len": 44,
+      "components": [],
+      "wall_s": 2.0,
+      "valid": true,
+      "system_peak_over_baseline_bytes": 4055613440
+    },
+    {
+      "phase": "compare",
+      "status": "complete",
+      "text_len": 313,
+      "components": [],
+      "wall_s": 14.07,
+      "valid": true,
+      "system_peak_over_baseline_bytes": 5146902528
+    },
+    {
+      "phase": "card",
+      "status": "complete",
+      "text_len": 857,
+      "components": [],
+      "wall_s": 88.13,
+      "valid": true,
+      "system_peak_over_baseline_bytes": 5977636864
+    }
   ],
-  "run_valid": false
+  "card": {
+    "phase": "card",
+    "status": "complete",
+    "text_len": 857,
+    "components": [],
+    "wall_s": 88.13,
+    "valid": true,
+    "system_peak_over_baseline_bytes": 5977636864
+  },
+  "baseline_sys_used_bytes": 7168983040,
+  "idle_before_sys_used_bytes": 9741910016,
+  "pair_resident_cost_bytes": 2572926976,
+  "system_peak_over_baseline_bytes": 5977636864,
+  "tree_peak_rss_total_bytes": 735494144,
+  "tree_peak_pss_total_bytes": 572553216,
+  "backend_peak_bytes": 3100696576,
+  "backend_peak_available": true,
+  "core_invalid_turns": [],
+  "run_valid": true
 }
