@@ -348,6 +348,9 @@ omarchy_shader(gated_delta_decode_perrow_bf16 shaders/gated_delta_decode_perrow.
 omarchy_shader(gated_delta_decode_perrow_pf_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_prefill_bf16 shaders/gated_delta_prefill.comp)
 omarchy_shader(gated_delta_prefill_coopmat_bf16 shaders/gated_delta_prefill_coopmat.comp)
+omarchy_shader(
+    gated_delta_prefill_coopmat_batch_bf16
+    shaders/gated_delta_prefill_coopmat_batch.comp)
 # VjpKernels: fused backward kernels for SDPA (upstream #4563) and the
 # gated delta update (upstream #4565). One gated_delta_vjp.comp source
 # builds the state-recall pass (save) and the backward pass.

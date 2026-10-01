@@ -10683,6 +10683,11 @@ bool ScaledDotProductAttention::supports_bool_mask() {
 // before selecting it.
 inline constexpr size_t kGdnCoopmatSharedBytes = 24832;
 
+// Shared bytes of the round-trip-diet variant: the base layout plus
+// double-buffered chunk staging (8 KiB) and a 4-slice wave array (4 KiB),
+// with the old per-step K slice removed.
+inline constexpr size_t kGdnCoopmatBatchSharedBytes = 32000;
+
 // Gated delta nets (upstream 0.32.3): the fused GatedDeltaDecodeBF16 kernel
 // serves the decode shape (T=1, no mask, square heads, bf16 activations,
 // f32 state); everything else - prefill token chunks, masks, f16/f32
@@ -11218,13 +11223,24 @@ void GatedDeltaUpdate::eval_gpu(
   // MLX_OMARCHY_NO_COOPMAT_GDN=1.
   constexpr uint32_t kGdnCoopmatMinTokens = 64;
   static const bool coopmat_gdn_disabled =
-      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN");
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+  // Round-trip-diet batch variant of the coopmat GDN prefill kernel
+  // (default ON; MLX_OMARCHY_GDN_BATCH=0 is the kill switch back to the
+  // deployed kernel): restructures staging/barriers only; per-element
+  // arithmetic is identical, so kernel_bits hashes must not move.
+  static const bool gdn_batch_env =
+      std::getenv("MLX_OMARCHY_GDN_BATCH") == nullptr ||
+      omarchy::env_flag("MLX_OMARCHY_GDN_BATCH");
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
-      gdn_caps.cooperative_matrix_f32_8 && gdn_caps.subgroup_size == 32u &&
-      kGdnCoopmatSharedBytes <= gdn_caps.max_compute_shared_memory_size;
-  if (gdn_coopmat) {
+      gdn_caps.cooperative_matrix_f32_8 && gdn_caps.subgroup_size == 32u;
+  const bool gdn_batch = gdn_coopmat && gdn_batch_env &&
+      kGdnCoopmatBatchSharedBytes <= gdn_caps.max_compute_shared_memory_size;
+  const bool gdn_coopmat_base =
+      gdn_coopmat &&
+      (kGdnCoopmatSharedBytes <= gdn_caps.max_compute_shared_memory_size);
+  if (gdn_batch || gdn_coopmat_base) {
     omarchy::ComputeParams params;
     params.count = Dv;
     params.lhs_size = checked_u32(q.data_size(), tag, out);
@@ -11258,7 +11274,8 @@ void GatedDeltaUpdate::eval_gpu(
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
+        gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
+                  : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
         bindings,
         params,
         static_cast<uint32_t>(Hv),

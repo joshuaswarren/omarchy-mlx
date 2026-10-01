@@ -677,6 +677,11 @@ enum class ComputeKernel : uint16_t {
   // f32 coopmat tiles; square bf16 Dk=Dv=128, Hk=Hv, maskless, scalar g,
   // coopmat device. Append-only profile id.
   GatedDeltaPrefillCoopmatBF16,
+  // Round-trip-diet variant of the kernel above: identical per-element
+  // arithmetic and order, restructured synchronization (double-buffered
+  // chunk staging, 4-slice state-update waves). Selected only by
+  // MLX_OMARCHY_GDN_BATCH. Append-only profile id.
+  GatedDeltaPrefillCoopmatBatchBF16,
   // Fused RMSNorm + SwiGLU-gate / RMSNorm + scalar-multiply epilogues
   // for the GDN decode chain (bf16). Mode 0 replaces
   // FastRmsNormBF16 + CastBF16F32 x2 + FusedChainF32(sigmoid,mul,mul)
