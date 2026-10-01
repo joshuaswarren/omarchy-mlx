@@ -1,0 +1,430 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused gated-delta-rule backward (GatedDeltaUpdateVJP, upstream #4565),
+// sequential form with a per-16-token checkpoint. Two blobs build from this
+// one source:
+//
+//   GDN_VJP_SAVE (gdn_vjp_save_bf16): the state-recall pass. One 128-thread
+//     workgroup per (head, 32-row block, batch) rescans every token from h0
+//     with the exact fused-forward step math and snapshots the chunk-entry
+//     state at every token index with t % 16 == 0, including h0 itself at
+//     slot 0. Layout [B, Hv, n_ckpt, Dv, Dk] f32.
+//
+//   default (gdn_vjp_bf16): the backward pass. One 128-thread workgroup per
+//     (32-row block, b*Hv+head): 32 lanes per row, each lane owning a
+//     contiguous 4-column slice of the Dk state, matching the upstream Metal
+//     seq_gated_delta_vjp geometry (gated_delta_update_vjp.h). Per segment
+//     of up to 16 tokens the kernel replays the forward step math from the
+//     checkpoint into registers, then walks the segment newest-first:
+//       s_hat  = cot_h + sum_t cot_o_t q_t        (state-grad stream)
+//       w      = <s_hat, k_t>
+//       dv_t   = beta * w
+//       u      = v_t - <gamma s_prev, k_t>;  delta = beta u
+//       db_t  += w u;  dg_t += <s_hat - beta w k_t, s_prev>
+//       dq_t  += cot_o_t s_t;  dk_t += beta (u s_hat - w s_prev)
+//       s_hat  = gamma (s_hat - beta w k_t)
+//     GQA: q/k read head hv/G; the group sums land as compare-exchange
+//     float adds (the ScatterFCas twin - Honeykrisp does not advertise
+//     VK_EXT_shader_atomic_float) of one workgroup partial per 32-row
+//     block, so each (t, hk, col) cell takes Hv/32 * G adds per token.
+//
+// The replay rounds like the fused forward scan (per-product rounding,
+// precise ns fma), so recalled states match the fused forward; gradients
+// are compared against the composed autograd within pinned tolerance, not
+// bit-exactly (the composed backward sums in a different order).
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#ifdef GDN_VJP_SAVE
+// The recall pass chains kv partials lane to lane like the forward scan.
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#endif
+
+#define DK 128u
+#define DV 128u
+#define CKPT 16u
+#define NPT 4u  // state columns per lane (DK / 32 lanes)
+
+#ifdef GDN_VJP_SAVE
+#define LANES 4u
+#define SLICE (DK / LANES)
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#else
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+#endif
+
+layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
+layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+#ifdef GDN_VJP_SAVE
+layout(set = 0, binding = 5, std430) readonly buffer H0Buf  { float v[]; } h0_buf;
+layout(set = 0, binding = 6, std430) writeonly buffer Cache { float v[]; } cache_buf;
+layout(set = 0, binding = 7, std430) readonly buffer GBufF  { float v[]; } g_buf_f;
+#else
+layout(set = 0, binding = 5, std430) readonly buffer CotO   { uint16_t v[]; } co_buf;
+layout(set = 0, binding = 6, std430) readonly buffer CotH   { float v[]; } ch_buf;
+layout(set = 0, binding = 7, std430) readonly buffer Cache  { float v[]; } cache_buf;
+layout(set = 0, binding = 8, std430) buffer DqAcc { uint v[]; } dq_acc;
+layout(set = 0, binding = 9, std430) buffer DkAcc { uint v[]; } dk_acc;
+layout(set = 0, binding = 10, std430) writeonly buffer DvOut { uint16_t v[]; } dv_buf;
+layout(set = 0, binding = 11, std430) buffer DgAcc { uint v[]; } dg_acc;
+layout(set = 0, binding = 12, std430) buffer DbAcc { uint v[]; } db_acc;
+layout(set = 0, binding = 13, std430) writeonly buffer DhOut { float v[]; } dh_buf;
+layout(set = 0, binding = 14, std430) readonly buffer GBufF  { float v[]; } g_buf_f;
+layout(set = 0, binding = 15, std430) readonly buffer Unused { uint v[]; } unused_buf;
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;   // q
+  uint rhs_offset;   // k
+  uint output_offset;
+  uint aux_size;     // v offset
+  uint aux_offset;   // beta offset
+  uint matrix_m;     // Dk
+  uint matrix_n;     // Dv
+  uint matrix_k;     // Hv
+  uint flags;        // bit0: g rides f32 (GBufF)
+  float alpha;
+  float beta_f;
+  uint dims;         // T
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+float load_g(uint t, uint head) {
+  if ((params.flags & 1u) != 0u) {
+    return g_buf_f.v[params.shape[0] + t * params.matrix_k + head];
+  }
+  return bf16_load(g_buf.v[params.shape[0] + t * params.matrix_k + head]);
+}
+
+#ifdef GDN_VJP_SAVE
+
+// Broadcast lane LANES-1's partial to the LANES lanes of its row, the
+// shaders/gated_delta_prefill.comp chain (two uniform relative shuffles;
+// LANES == 4), so the kv total sums ascending over Dk exactly like the
+// composed reference and the fused forward scan.
+float row_total(float acc, uint sub) {
+  float d1 = subgroupShuffleDown(acc, 1u);
+  acc = (sub == 2u) ? d1 : acc;
+  float d2 = subgroupShuffleDown(acc, 2u);
+  return (sub < 2u) ? d2 : acc;
+}
+
+// State-recall pass: exact fused-forward scan, snapshot every CKPT tokens.
+// Geometry follows shaders/gated_delta_prefill.comp pass 0 (4 lanes per
+// row, 32-column slices in registers) with the head mapped through the GQA
+// repeat and the output/mask writes removed.
+void main() {
+  uint hv = params.matrix_k;
+  uint T = params.dims;
+  uint n_ckpt = params.in_strides[0];
+  uint head = gl_WorkGroupID.x;
+  uint row = gl_WorkGroupID.y * 32u + gl_LocalInvocationID.x / LANES;
+  uint sub = gl_LocalInvocationID.x % LANES;
+  uint b = gl_WorkGroupID.z;
+  if (head >= hv) {
+    return;
+  }
+  uint gqa = params.out_strides[1];
+  uint qk_head = head / gqa;
+  uint qk_stride = (params.matrix_k / gqa) * DK;
+  uint v_stride = hv * DV;
+  uint slice_base = head * DV * DK + row * DK + sub * SLICE;
+
+  float st[SLICE];
+  for (uint i = 0u; i < SLICE; ++i) {
+    st[i] = h0_buf.v[slice_base + i];
+  }
+
+  for (uint t = 0u; t < T; ++t) {
+    if (t % CKPT == 0u) {
+      uint base = ((b * hv + head) * n_ckpt + t / CKPT) * DV * DK +
+          row * DK + sub * SLICE;
+      for (uint i = 0u; i < SLICE; ++i) {
+        cache_buf.v[base + i] = st[i];
+      }
+    }
+    float gamma = load_g(t, head);
+    float beta = bf16_load(b_buf.v[params.aux_offset + (b * T + t) * hv + head]);
+    uint t_head = b * T + t;
+    uint kt = params.rhs_offset + t_head * qk_stride + qk_head * DK;
+    // kv chained lane to lane in ascending Dk order (token_step form).
+    precise float acc = 0.0f;
+    for (uint j = 0u; j < LANES; ++j) {
+      precise float prev = subgroupShuffleUp(acc, 1u);
+      if (sub == j) {
+        acc = (j == 0u) ? 0.0f : prev;
+        for (uint i = 0u; i < SLICE; ++i) {
+          precise float p = st[i] * gamma;
+          p = p * bf16_load(k_buf.v[kt + sub * SLICE + i]);
+          acc += p;
+        }
+      }
+    }
+    precise float kv = row_total(acc, sub);
+    precise float delta = (bf16_load(v_buf.v[params.aux_size +
+        t_head * v_stride + head * DV + row]) - kv) * beta;
+    for (uint i = 0u; i < SLICE; ++i) {
+      precise float dec = st[i] * gamma;
+      precise float ns = fma(
+          delta,
+          bf16_load(k_buf.v[kt + sub * SLICE + i]),
+          dec);
+      st[i] = ns;
+    }
+  }
+}
+
+#else  // backward pass
+
+// Compare-exchange float add through the uint view (the ScatterFCas twin;
+// exact-arithmetic equivalent of a hardware atomicAdd).
+void cas_add(uint buffer_idx, uint index, float value) {
+  uint add_bits = floatBitsToUint(value);
+  uint assumed;
+  uint next;
+  uint prev;
+  if (buffer_idx == 0u) {
+    assumed = dq_acc.v[index];
+    for (;;) {
+      next = floatBitsToUint(uintBitsToFloat(assumed) + value);
+      prev = atomicCompSwap(dq_acc.v[index], assumed, next);
+      if (prev == assumed) {
+        break;
+      }
+      assumed = prev;
+    }
+  } else if (buffer_idx == 1u) {
+    assumed = dk_acc.v[index];
+    for (;;) {
+      next = floatBitsToUint(uintBitsToFloat(assumed) + value);
+      prev = atomicCompSwap(dk_acc.v[index], assumed, next);
+      if (prev == assumed) {
+        break;
+      }
+      assumed = prev;
+    }
+  } else if (buffer_idx == 2u) {
+    assumed = dg_acc.v[index];
+    for (;;) {
+      next = floatBitsToUint(uintBitsToFloat(assumed) + value);
+      prev = atomicCompSwap(dg_acc.v[index], assumed, next);
+      if (prev == assumed) {
+        break;
+      }
+      assumed = prev;
+    }
+  } else {
+    assumed = db_acc.v[index];
+    for (;;) {
+      next = floatBitsToUint(uintBitsToFloat(assumed) + value);
+      prev = atomicCompSwap(db_acc.v[index], assumed, next);
+      if (prev == assumed) {
+        break;
+      }
+      assumed = prev;
+    }
+  }
+}
+
+shared float s_kv[32][4];   // lane x -> column x, row y
+shared float s_w[32][4];
+shared float s_dq[4][128];  // row y -> column c
+shared float s_dk[4][128];
+shared float s_scal[2][4];  // dgamma, w*u per row
+
+void main() {
+  uint hv = params.matrix_k;
+  uint T = params.dims;
+  uint n_ckpt = params.out_strides[2];
+  uint gqa = params.out_strides[1];
+  uint n = gl_GlobalInvocationID.z;          // b * hv + head
+  uint b = n / hv;
+  uint head = n % hv;
+  uint qk_head = head / gqa;
+  uint qk_stride = (hv / gqa) * DK;
+  uint v_stride = hv * DV;
+  uint row = gl_GlobalInvocationID.y;        // Dv row
+  uint lane = gl_LocalInvocationID.x;        // 32 lanes per row
+  uint lrow = gl_LocalInvocationID.y;        // 4 rows per workgroup
+  uint col0 = lane * NPT;
+
+  uint t_base_q = params.lhs_offset + b * T * qk_stride + qk_head * DK;
+  uint t_base_k = params.rhs_offset + b * T * qk_stride + qk_head * DK;
+  uint t_base_v = params.aux_size + b * T * v_stride + head * DV + row;
+  uint t_base_g = params.shape[0] + b * T * hv + head;
+  uint t_base_b = params.aux_offset + b * T * hv + head;
+  uint t_base_o = params.output_offset + b * T * v_stride + head * DV + row;
+
+  // s_hat = cot_h for this (head, row), the state-grad stream.
+  float s_hat[NPT];
+  uint ch_base = (n * DV + row) * DK + col0;
+  for (uint i = 0u; i < NPT; ++i) {
+    s_hat[i] = ch_buf.v[ch_base + i];
+  }
+
+  for (uint seg = n_ckpt; seg-- > 0u;) {
+    const uint t0 = seg * CKPT;
+    const uint seg_len = min(CKPT, T - t0);
+
+    // Replay forward from the checkpoint, recording entry states.
+    float segst[CKPT][NPT];
+    uint c_base = ((n * n_ckpt + seg) * DV + row) * DK + col0;
+    float st[NPT];
+    for (uint i = 0u; i < NPT; ++i) {
+      st[i] = cache_buf.v[c_base + i];
+    }
+    for (uint j = 0u; j < seg_len; ++j) {
+      const uint t = t0 + j;
+      for (uint i = 0u; i < NPT; ++i) {
+        segst[j][i] = st[i];
+      }
+      float gamma = load_g(t, head);
+      float beta = bf16_load(b_buf.v[t_base_b + t * hv]);
+      uint kt = t_base_k + t * qk_stride;
+      float k_slice[NPT];
+      for (uint i = 0u; i < NPT; ++i) {
+        k_slice[i] = bf16_load(k_buf.v[kt + col0 + i]);
+      }
+      precise float kv_acc = 0.0f;
+      for (uint i = 0u; i < NPT; ++i) {
+        precise float p = st[i] * gamma;
+        p = p * k_slice[i];
+        kv_acc += p;
+      }
+      s_kv[lane][lrow] = kv_acc;
+      barrier();
+      // Row total over the 32 lanes: every lane sums its row's column.
+      float kv_total = 0.0f;
+      for (uint x = 0u; x < 32u; ++x) {
+        kv_total += s_kv[x][lrow];
+      }
+      precise float delta = (bf16_load(v_buf.v[t_base_v + t * v_stride]) - kv_total) * beta;
+      for (uint i = 0u; i < NPT; ++i) {
+        precise float ns = fma(delta, k_slice[i], st[i] * gamma);
+        st[i] = ns;
+      }
+    }
+
+    // Backward over the same steps, newest first.
+    for (uint j = seg_len; j-- > 0u;) {
+      const uint t = t0 + j;
+      float gamma = load_g(t, head);
+      float beta = bf16_load(b_buf.v[t_base_b + t * hv]);
+      float co = bf16_load(co_buf.v[t_base_o + t * v_stride]);
+      uint kt = t_base_k + t * qk_stride;
+      uint qt = t_base_q + t * qk_stride;
+      float k_slice[NPT];
+      float q_slice[NPT];
+      for (uint i = 0u; i < NPT; ++i) {
+        k_slice[i] = bf16_load(k_buf.v[kt + col0 + i]);
+        q_slice[i] = bf16_load(q_buf.v[qt + col0 + i]);
+      }
+
+      float s_prev[NPT];
+      float s_dec[NPT];
+      precise float kv_acc = 0.0f;
+      float w_acc = 0.0f;
+      for (uint i = 0u; i < NPT; ++i) {
+        s_prev[i] = segst[j][i];
+        precise float dec = s_prev[i] * gamma;
+        s_dec[i] = dec;
+        precise float p = dec * k_slice[i];
+        kv_acc += p;
+        s_hat[i] += co * q_slice[i];
+        w_acc += s_hat[i] * k_slice[i];
+      }
+      s_kv[lane][lrow] = kv_acc;
+      s_w[lane][lrow] = w_acc;
+      barrier();
+      float kv_total = 0.0f;
+      float w_total = 0.0f;
+      for (uint x = 0u; x < 32u; ++x) {
+        kv_total += s_kv[x][lrow];
+        w_total += s_w[x][lrow];
+      }
+
+      // Row-scoped writes: dv and the db partial leave once per row.
+      if (lane == 0u) {
+        dv_buf.v[t_base_o + t * v_stride] = bf16_store(beta * w_total);
+        s_scal[0][lrow] = w_total *
+            (bf16_load(v_buf.v[t_base_v + t * v_stride]) - kv_total);
+      }
+      float u = bf16_load(v_buf.v[t_base_v + t * v_stride]) - kv_total;
+      float delta = beta * u;
+
+      float dgamma = 0.0f;
+      for (uint i = 0u; i < NPT; ++i) {
+        s_dq[lrow][col0 + i] = co * (s_dec[i] + delta * k_slice[i]);
+        s_dk[lrow][col0 + i] = beta * (u * s_hat[i] - w_total * s_dec[i]);
+        s_hat[i] -= beta * w_total * k_slice[i];
+        dgamma += s_hat[i] * s_prev[i];
+      }
+      if (lane == 0u) {
+        s_scal[1][lrow] = dgamma;
+      }
+      barrier();
+
+      // One workgroup partial per column: sum the four rows, then the
+      // compare-exchange add into the f32 accumulators. Cells see one add
+      // per 32-row block per token; only row 0's lanes fire so the add is
+      // once per workgroup, not once per row.
+      if (lrow == 0u) {
+        uint dq_base = params.shape[3] + (b * T + t) * qk_stride + qk_head * DK;
+        uint dk_base = params.in_strides[0] + (b * T + t) * qk_stride + qk_head * DK;
+        for (uint i = 0u; i < NPT; ++i) {
+          float dq_sum = s_dq[0][col0 + i] + s_dq[1][col0 + i] +
+              s_dq[2][col0 + i] + s_dq[3][col0 + i];
+          float dk_sum = s_dk[0][col0 + i] + s_dk[1][col0 + i] +
+              s_dk[2][col0 + i] + s_dk[3][col0 + i];
+          cas_add(0u, dq_base + col0 + i, dq_sum);
+          cas_add(1u, dk_base + col0 + i, dk_sum);
+        }
+      }
+      if (lane == 0u && lrow == 0u) {
+        float dg_sum = s_scal[1][0] + s_scal[1][1] + s_scal[1][2] + s_scal[1][3];
+        float db_sum = s_scal[0][0] + s_scal[0][1] + s_scal[0][2] + s_scal[0][3];
+        cas_add(2u, params.in_strides[2] + (b * T + t) * hv + head, dg_sum);
+        cas_add(3u, params.in_strides[3] + (b * T + t) * hv + head, db_sum);
+      }
+      // The next iteration's barrier orders its shared writes after these
+      // reads (same argument shaders/gated_delta_prefill.comp documents).
+      for (uint i = 0u; i < NPT; ++i) {
+        s_hat[i] *= gamma;
+      }
+    }
+  }
+
+  uint dh_base = params.out_strides[0] + (n * DV + row) * DK + col0;
+  for (uint i = 0u; i < NPT; ++i) {
+    dh_buf.v[dh_base + i] = s_hat[i];
+  }
+}
+
+#endif

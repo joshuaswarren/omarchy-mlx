@@ -295,6 +295,16 @@
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
+#include "gdn_vjp_save_bf16.h"
+#include "gdn_vjp_bf16.h"
+#include "sdpa_vjp_odo_f32.h"
+#include "sdpa_vjp_odo_f16.h"
+#include "sdpa_vjp_odo_bf16.h"
+#include "sdpa_vjp_ds_f32.h"
+#include "sdpa_vjp_lse_f32.h"
+#include "sdpa_vjp_reduce_f32.h"
+#include "sdpa_vjp_reduce_f16.h"
+#include "sdpa_vjp_reduce_bf16.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
@@ -1422,6 +1432,26 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {partition_smallk_f16, partition_smallk_f16_size};
     case ComputeKernel::PartitionSmallKBF16:
       return {partition_smallk_bf16, partition_smallk_bf16_size};
+    case ComputeKernel::GdnVjpSaveBF16:
+      return {gdn_vjp_save_bf16, gdn_vjp_save_bf16_size};
+    case ComputeKernel::GdnVjpBF16:
+      return {gdn_vjp_bf16, gdn_vjp_bf16_size};
+    case ComputeKernel::SdpaVjpOdoF32:
+      return {sdpa_vjp_odo_f32, sdpa_vjp_odo_f32_size};
+    case ComputeKernel::SdpaVjpOdoF16:
+      return {sdpa_vjp_odo_f16, sdpa_vjp_odo_f16_size};
+    case ComputeKernel::SdpaVjpOdoBF16:
+      return {sdpa_vjp_odo_bf16, sdpa_vjp_odo_bf16_size};
+    case ComputeKernel::SdpaVjpDsF32:
+      return {sdpa_vjp_ds_f32, sdpa_vjp_ds_f32_size};
+    case ComputeKernel::SdpaVjpLseF32:
+      return {sdpa_vjp_lse_f32, sdpa_vjp_lse_f32_size};
+    case ComputeKernel::SdpaVjpReduceF32:
+      return {sdpa_vjp_reduce_f32, sdpa_vjp_reduce_f32_size};
+    case ComputeKernel::SdpaVjpReduceF16:
+      return {sdpa_vjp_reduce_f16, sdpa_vjp_reduce_f16_size};
+    case ComputeKernel::SdpaVjpReduceBF16:
+      return {sdpa_vjp_reduce_bf16, sdpa_vjp_reduce_bf16_size};
     case ComputeKernel::QuantizeFpF16:
       return {quantize_fp_f16, quantize_fp_f16_size};
     case ComputeKernel::QuantizeFpBF16:

@@ -348,6 +348,19 @@ omarchy_shader(gated_delta_decode_perrow_bf16 shaders/gated_delta_decode_perrow.
 omarchy_shader(gated_delta_decode_perrow_pf_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1)
 omarchy_shader(gated_delta_prefill_bf16 shaders/gated_delta_prefill.comp)
 omarchy_shader(gated_delta_prefill_coopmat_bf16 shaders/gated_delta_prefill_coopmat.comp)
+# VjpKernels: fused backward kernels for SDPA (upstream #4563) and the
+# gated delta update (upstream #4565). One gated_delta_vjp.comp source
+# builds the state-recall pass (save) and the backward pass.
+omarchy_shader(gdn_vjp_save_bf16 shaders/gated_delta_vjp.comp -DGDN_VJP_SAVE=1)
+omarchy_shader(gdn_vjp_bf16 shaders/gated_delta_vjp.comp)
+omarchy_shader(sdpa_vjp_odo_f32 shaders/sdpa_vjp_odo.comp)
+omarchy_shader(sdpa_vjp_odo_f16 shaders/sdpa_vjp_odo.comp -DIN_F16=1)
+omarchy_shader(sdpa_vjp_odo_bf16 shaders/sdpa_vjp_odo.comp -DIN_BF16=1)
+omarchy_shader(sdpa_vjp_ds_f32 shaders/sdpa_vjp_ds.comp)
+omarchy_shader(sdpa_vjp_lse_f32 shaders/sdpa_vjp_lse.comp)
+omarchy_shader(sdpa_vjp_reduce_f32 shaders/sdpa_vjp_reduce.comp)
+omarchy_shader(sdpa_vjp_reduce_f16 shaders/sdpa_vjp_reduce.comp -DOUT_F16=1)
+omarchy_shader(sdpa_vjp_reduce_bf16 shaders/sdpa_vjp_reduce.comp -DOUT_BF16=1)
 # PrefillQmmTile: m-tiled quantized matmul for prefill (matrix_m > 1);
 # one workgroup dequantizes each 16 x 16 weight block into shared f32
 # once and applies it to a 16-row tile of x, amortizing the inline

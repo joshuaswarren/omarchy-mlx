@@ -756,6 +756,19 @@ enum class ComputeKernel : uint16_t {
   PartitionSmallKF32,
   PartitionSmallKF16,
   PartitionSmallKBF16,
+  // VjpKernels fused backward kernels (append-only profile ids):
+  // gated-delta-rule state recall + backward (upstream #4565) and the
+  // SDPA VJP row-dot, P/dS, and GQA reduce passes (upstream #4563).
+  GdnVjpSaveBF16,
+  GdnVjpBF16,
+  SdpaVjpOdoF32,
+  SdpaVjpOdoF16,
+  SdpaVjpOdoBF16,
+  SdpaVjpDsF32,
+  SdpaVjpLseF32,
+  SdpaVjpReduceF32,
+  SdpaVjpReduceF16,
+  SdpaVjpReduceBF16,
   Count,
 };
 

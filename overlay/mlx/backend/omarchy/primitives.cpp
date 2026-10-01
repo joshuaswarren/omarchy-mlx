@@ -10618,15 +10618,57 @@ bool ScaledDotProductAttention::use_fallback(
         "[scaled_dot_product_attention] force_fused=True but no fused "
         "kernel is available in the Omarchy backend.");
   }
-  // Sinks ride the fused kernels (the denominator fold); training with a
-  // logsumexp output needs the VJP, which stays a named rejection, so
-  // that one case keeps the composed graph.
   (void)has_sinks;
-  return output_logsumexp;
+  (void)has_mask;
+  (void)is_training;
+  if (!output_logsumexp) {
+    return false;
+  }
+  // Training: the fused VJP (SdpaVjp*) serves causal maskless attention on
+  // the float dtypes. The backward rebuilds S = Q K^T in float32 from the
+  // same operands the forward scaled composition used, so P = exp(scale*S
+  // - lse) sees identical score words on both sides. Everything else -
+  // array masks, sinks, prefix-query causal (rows with zero admissible
+  // keys normalize differently under the composed path) - keeps the
+  // composed graph, whose autograd is the reference the fused gradients
+  // are tolerance-checked against. MLX_OMARCHY_NO_FUSED_VJP=1 keeps the
+  // composed graph everywhere.
+  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
+  if (disabled || has_arr_mask || has_sinks) {
+    return true;
+  }
+  auto dt = q.dtype();
+  if (dt != float32 && dt != float16 && dt != bfloat16) {
+    return true;
+  }
+  int64_t heads = q.shape(1);
+  int64_t kv_heads = k.shape(1);
+  if (kv_heads <= 0 || heads % kv_heads != 0) {
+    return true;
+  }
+  if (do_causal && k.shape(2) < q.shape(2)) {
+    return true;
+  }
+  // Dispatch grid bounds (65535 is the Vulkan minimum for every dimension
+  // the kernels use): the ds pass grids (kL, qL, B*H) and the row kernels
+  // one workgroup per (B*H*qL) row.
+  int64_t bh = q.shape(0) * heads;
+  if (bh > 65535 || bh * q.shape(2) > 65535) {
+    return true;
+  }
+  return false;
 }
 
 bool ScaledDotProductAttentionVJP::use_fallback(const array& q, Stream s) {
-  return true;
+  if (s.device == Device::cpu) {
+    return true;
+  }
+  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
+  if (disabled) {
+    return true;
+  }
+  auto dt = q.dtype();
+  return !(dt == float32 || dt == float16 || dt == bfloat16);
 }
 
 bool ScaledDotProductAttention::supports_bool_mask() {
@@ -10658,15 +10700,249 @@ bool GatedDeltaUpdate::use_fallback(
 }
 
 // Gradient of the gated delta update (upstream #4565): the fused backward
-// kernel is Metal-only upstream; the Omarchy backend always takes the
-// composed fallback, which is the arithmetic reference for the gradients.
+// runs as two Vulkan dispatches - a state-recall scan that snapshots the
+// chunk-entry states (every 16 tokens, h0 included) and the backward walk
+// itself (32 lanes per Dv row, 4 state columns per lane, checkpoints
+// replayed in registers). Serves bf16 activations, scalar g (bf16 or the
+// f32 gates compute_g produces for prefill), f32 state, Dk=Dv=128, and any
+// head layout where Hv is a multiple of Hk (the GQA repeat sums ride the
+// compare-exchange float adds). Everything else - per-channel decay,
+// 16-bit/32-bit activations, ragged head dims - keeps the composed
+// fallback, which is the arithmetic reference the kernel was
+// equivalence-checked against. MLX_OMARCHY_NO_FUSED_VJP=1 is the kill
+// switch.
 bool GatedDeltaUpdateVJP::use_fallback(
     const int Hk,
     const int Dk,
     const int Hv,
     const int Dv,
     Stream s) {
-  return true;
+  if (s.device == Device::cpu) {
+    return true;
+  }
+  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
+  if (disabled) {
+    return true;
+  }
+  return Dk != 128 || Dv != 128 || Hk <= 0 || Hv % Hk != 0;
+}
+
+void GatedDeltaUpdateVJP::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  // Inputs: q, k, v, g, beta, h0, cot_o, cot_h. Outputs: dq, dk, dv, dg,
+  // db, dh (the dh dtype is float32 by the fast.cpp vjp contract).
+  array q = inputs.at(0);
+  array k = inputs.at(1);
+  array v = inputs.at(2);
+  array g = inputs.at(3);
+  array beta = inputs.at(4);
+  array h0 = inputs.at(5);
+  array cot_o = inputs.at(6);
+  array cot_h = inputs.at(7);
+
+  int B = q.shape(0);
+  int T = q.shape(1);
+  int Hk = q.shape(2);
+  int Dk = q.shape(3);
+  int Hv = v.shape(2);
+  int Dv = v.shape(3);
+  const uint32_t gqa = static_cast<uint32_t>(Hv / Hk);
+  const uint32_t n_ckpt = static_cast<uint32_t>((T + 15) / 16);
+
+  // The kernel body carries bf16 loads and an f32 state contract; g rides
+  // bf16 (decode) or f32 (prefill keeps compute_g's float32 gates), scalar
+  // per (b, t, head) only. dg keeps g's dtype (the fast.cpp vjp builds it
+  // that way), so the f32 form accumulates straight into dg.
+  const bool g_f32 = g.dtype() == float32;
+  bool supported = Dk == 128 && Dv == 128 && Hv % Hk == 0 &&
+      q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+      v.dtype() == bfloat16 && cot_o.dtype() == bfloat16 &&
+      beta.dtype() == bfloat16 && h0.dtype() == float32 &&
+      cot_h.dtype() == float32 && g.ndim() == 3 &&
+      (g.dtype() == bfloat16 || g_f32) &&
+      encoder.device().compute().binding_limit() >= 15;
+  if (!supported) {
+    auto result = fallback_(inputs);
+    settle(result);
+    encoder.synchronize("gated_delta_vjp_fallback");
+    for (int i = 0; i < 6; ++i) {
+      outputs.at(i).copy_shared_buffer(result.at(i));
+    }
+    return;
+  }
+
+  // Dense temporaries for strided inputs (the GatedDeltaUpdate pattern);
+  // nonzero offsets ride along because the kernel indexes from the array
+  // start, not the storage start.
+  {
+    bool any_strided = false;
+    for (const auto& x : inputs) {
+      any_strided =
+          any_strided || !x.flags().row_contiguous || x.offset() != 0;
+    }
+    if (any_strided) {
+      std::vector<array> dense;
+      dense.reserve(inputs.size());
+      for (const auto& x : inputs) {
+        if (x.flags().row_contiguous && x.offset() == 0) {
+          dense.push_back(x);
+        } else {
+          dense.push_back(contiguous_copy_gpu(x, s));
+          encoder.add_temporary(dense.back());
+        }
+      }
+      q = dense[0];
+      k = dense[1];
+      v = dense[2];
+      g = dense[3];
+      beta = dense[4];
+      h0 = dense[5];
+      cot_o = dense[6];
+      cot_h = dense[7];
+    }
+  }
+
+  auto& dq = outputs.at(0);
+  auto& dk = outputs.at(1);
+  auto& dv = outputs.at(2);
+  auto& dg = outputs.at(3);
+  auto& db = outputs.at(4);
+  auto& dh = outputs.at(5);
+  dq.set_data(allocate_omarchy(dq.nbytes()));
+  dk.set_data(allocate_omarchy(dk.nbytes()));
+  dv.set_data(allocate_omarchy(dv.nbytes()));
+  dg.set_data(allocate_omarchy(dg.nbytes()));
+  db.set_data(allocate_omarchy(db.nbytes()));
+  dh.set_data(allocate_omarchy(dh.nbytes()));
+
+  // The kernel accumulates dq/dk/db (and dg under bf16 gates) through
+  // compare-exchange float adds, so those stage in float32 and cast once.
+  // dv is written exactly once per element (bf16 store); dh is float32.
+  auto stage_f32 = [&](const array& like) {
+    array acc(like.shape(), float32, nullptr, {});
+    acc.set_data(allocate_omarchy(acc.nbytes()));
+    encoder.add_temporary(acc);
+    return acc;
+  };
+  array dq_acc = stage_f32(dq);
+  array dk_acc = stage_f32(dk);
+  array db_acc = stage_f32(db);
+  array dg_acc = g_f32 ? dg : stage_f32(dg);
+  // Fresh allocations hold undefined bytes: the accumulators must start
+  // at zero before the first compare-exchange add lands.
+  encoder.fill_buffer(binding(dq_acc).buffer, 0u, dq_acc.nbytes(), 0);
+  encoder.fill_buffer(binding(dk_acc).buffer, 0u, dk_acc.nbytes(), 0);
+  encoder.fill_buffer(binding(db_acc).buffer, 0u, db_acc.nbytes(), 0);
+  if (!g_f32) {
+    encoder.fill_buffer(binding(dg_acc).buffer, 0u, dg_acc.nbytes(), 0);
+  }
+
+  // State recall: [B, Hv, n_ckpt, Dv, Dk] float32, written fully by the
+  // save pass (slot t/16 at every t % 16 == 0, including h0 at slot 0).
+  array state_cache(Shape{B, Hv, static_cast<int>(n_ckpt), Dv, Dk}, float32, nullptr, {});
+  state_cache.set_data(allocate_omarchy(state_cache.nbytes()));
+  encoder.add_temporary(state_cache);
+
+  // Save pass: one 128-thread workgroup per (head, 32-row block, batch).
+  {
+    omarchy::ComputeParams params;
+    params.count = checked_u32(Dv, tag, dq);
+    params.matrix_m = checked_u32(Dk, tag, dq);
+    params.matrix_n = checked_u32(Dv, tag, dq);
+    params.matrix_k = checked_u32(Hv, tag, dq);
+    params.dims = checked_u32(T, tag, dq);
+    params.lhs_offset = checked_item_offset(q, q.size(), tag, dq);
+    params.rhs_offset = checked_item_offset(k, k.size(), tag, dq);
+    params.aux_size = checked_item_offset(v, v.size(), tag, dq);
+    params.aux_offset = checked_item_offset(beta, beta.size(), tag, dq);
+    params.output_offset = checked_item_offset(
+        state_cache, state_cache.size(), tag, dq);
+    params.shape[0] = checked_item_offset(g, g.size(), tag, dq);
+    params.in_strides[0] = n_ckpt;
+    params.out_strides[1] = gqa;
+    params.flags = g_f32 ? 1u : 0u;
+    std::array<omarchy::ComputeBinding, 8> bindings{
+        binding(q),            // 0 QBuf
+        binding(k),            // 1 KBuf
+        binding(v),            // 2 VBuf
+        binding(g),            // 3 GBuf (bf16 view)
+        binding(beta),         // 4 BBuf
+        binding(h0),           // 5 H0Buf
+        binding(state_cache),  // 6 Cache
+        binding(g)};           // 7 GBufF (f32 view; placeholder when bf16)
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GdnVjpSaveBF16,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv),
+        static_cast<uint32_t>(Dv / 32),
+        static_cast<uint32_t>(B));
+  }
+
+  // Backward pass: one 128-thread workgroup per (32-row block, b*Hv+head).
+  {
+    omarchy::ComputeParams params;
+    params.count = checked_u32(Dv, tag, dq);
+    params.matrix_m = checked_u32(Dk, tag, dq);
+    params.matrix_n = checked_u32(Dv, tag, dq);
+    params.matrix_k = checked_u32(Hv, tag, dq);
+    params.dims = checked_u32(T, tag, dq);
+    params.lhs_offset = checked_item_offset(q, q.size(), tag, dq);
+    params.rhs_offset = checked_item_offset(k, k.size(), tag, dq);
+    params.aux_size = checked_item_offset(v, v.size(), tag, dq);
+    params.aux_offset = checked_item_offset(beta, beta.size(), tag, dq);
+    params.output_offset = checked_item_offset(cot_o, cot_o.size(), tag, dq);
+    params.shape[0] = checked_item_offset(g, g.size(), tag, dq);
+    params.shape[1] = checked_item_offset(
+        state_cache, state_cache.size(), tag, dq);
+    params.shape[2] = checked_item_offset(cot_h, cot_h.size(), tag, dq);
+    params.shape[3] = checked_item_offset(dq_acc, dq_acc.size(), tag, dq);
+    params.in_strides[0] = checked_item_offset(dk_acc, dk_acc.size(), tag, dq);
+    params.in_strides[1] = checked_item_offset(dv, dv.size(), tag, dq);
+    params.in_strides[2] = checked_item_offset(dg_acc, dg_acc.size(), tag, dq);
+    params.in_strides[3] = checked_item_offset(db_acc, db_acc.size(), tag, dq);
+    params.out_strides[0] = checked_item_offset(dh, dh.size(), tag, dq);
+    params.out_strides[1] = gqa;
+    params.out_strides[2] = n_ckpt;
+    params.flags = g_f32 ? 1u : 0u;
+    std::array<omarchy::ComputeBinding, 15> bindings{
+        binding(q),            // 0 QBuf
+        binding(k),            // 1 KBuf
+        binding(v),            // 2 VBuf
+        binding(g),            // 3 GBuf (bf16 view)
+        binding(beta),         // 4 BBuf
+        binding(cot_o),        // 5 CotO
+        binding(cot_h),        // 6 CotH
+        binding(state_cache),  // 7 Cache
+        binding(dq_acc),       // 8 DqAcc (uint view)
+        binding(dk_acc),       // 9 DkAcc
+        binding(dv),           // 10 DvOut (bf16)
+        binding(dg_acc),       // 11 DgAcc
+        binding(db_acc),       // 12 DbAcc
+        binding(dh),           // 13 DhOut (f32)
+        binding(g)};           // 14 GBufF (f32 view; placeholder when bf16)
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GdnVjpBF16,
+        bindings,
+        params,
+        1u,
+        static_cast<uint32_t>(Dv / 4),
+        checked_u32(static_cast<size_t>(B) * Hv, tag, dq));
+  }
+
+  // Single cast pass per staged accumulator (Vector copies, contiguous
+  // both sides). dg is skipped when the gates are f32: it accumulated
+  // directly in the output.
+  copy_gpu(dq_acc, dq, CopyType::Vector, s);
+  copy_gpu(dk_acc, dk, CopyType::Vector, s);
+  copy_gpu(db_acc, db, CopyType::Vector, s);
+  if (!g_f32) {
+    copy_gpu(dg_acc, dg, CopyType::Vector, s);
+  }
 }
 
 void GatedDeltaUpdate::eval_gpu(
@@ -12683,7 +12959,7 @@ void ScaledDotProductAttention::eval_gpu(
     encoder.add_temporary(view);
     return view;
   };
-  if (q.dtype() == float16 || bf16_fast) {
+  if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1) {
     const bool bf16 = q.dtype() == bfloat16;
     const Dtype storage_dtype = bf16 ? bfloat16 : float16;
     array qs = repeats > 1 ? regroup_view(q) : q;
@@ -12923,6 +13199,31 @@ void ScaledDotProductAttention::eval_gpu(
   const array& logits = masked ? *masked : scores;
   encoder.add_temporary(logits);
 
+  if (outputs.size() > 1) {
+    // Training route (ScaledDotProductAttention::use_fallback sent it
+    // here): the fused VJP consumes this lse together with its own
+    // rebuild of S, so it must come from the same float32 score words the
+    // backward's matmul reproduces. One workgroup per (B*H*qL) row; the
+    // causal limit mirrors the softmax's causal mode.
+    array& lse = outputs.at(1);
+    lse.set_data(allocate_omarchy(lse.nbytes()));
+    const int64_t lse_rows = static_cast<int64_t>(batch) * heads * q_len;
+    omarchy::ComputeParams lse_params;
+    lse_params.count = checked_u32(lse_rows, tag, out);
+    lse_params.matrix_n = checked_u32(k_len, tag, out);
+    lse_params.lhs_offset = checked_item_offset(logits, logits.size(), tag, out);
+    lse_params.output_offset = checked_item_offset(lse, lse.size(), tag, out);
+    lse_params.flags = causal_fast ? 1u : 0u;
+    lse_params.dims = causal_fast ? causal_offset : 0u;
+    std::array<omarchy::ComputeBinding, 2> lse_bindings{
+        binding(logits), binding(lse)};
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::SdpaVjpLseF32,
+        lse_bindings,
+        lse_params,
+        checked_u32(lse_rows, tag, out));
+  }
+
   array probs(logits.shape(), float32, nullptr, {});
   dispatch_softmax(
       tag,
@@ -12957,8 +13258,260 @@ void ScaledDotProductAttention::eval_gpu(
   }
 }
 
-OMARCHY_UNSUPPORTED_MULTI(ScaledDotProductAttentionVJP)
-OMARCHY_UNSUPPORTED_MULTI(GatedDeltaUpdateVJP)
+// Fused SDPA backward (upstream #4563): delta = rowsum(o * cot_o), then
+// per score element P = exp(scale*S - lse) and dS = P*(dP - delta)*scale,
+// then dQ = dS K, dK = dS^T Q, dV = P^T dO with the GQA repeat group
+// summed into the KV-head gradients. S and dP are rebuilt in float32 by
+// the same dispatch_matmul calls the forward composition uses (the
+// forward's lse comes from those score words), dS lands in S's buffer,
+// and dK/dV tiles reduce over the repeat axis into the output dtype.
+// The full-length float32 score buffers mirror the composed fallback's
+// own footprint; kL/qL tiling is the named next lever, not a correctness
+// need. Masks and sinks never reach this eval (the forward's use_fallback
+// routed them to the composed graph).
+void ScaledDotProductAttentionVJP::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  if (has_sinks_) {
+    omarchy::unsupported(tag + " sinks", outputs.at(0));
+  }
+  // Inputs: q, k, v, [mask], [sinks], o, lse, cot_o. Outputs: dq, dk, dv.
+  const int n_in = static_cast<int>(inputs.size());
+  array q = inputs.at(0);
+  array k = inputs.at(1);
+  array v = inputs.at(2);
+  array o = inputs.at(n_in - 3);
+  array lse = inputs.at(n_in - 2);
+  array cot_o = inputs.at(n_in - 1);
+
+  const int B = q.shape(0);
+  const int H = q.shape(1);
+  const int qL = q.shape(2);
+  const int D = q.shape(3);
+  const int Hk = k.shape(1);
+  const int kL = k.shape(2);
+  const int Dv = v.shape(3);
+  const int G = H / Hk;
+  const int BH = B * H;
+  const int diag_off = kL - qL;
+
+  auto& dq = outputs.at(0);
+  auto& dk = outputs.at(1);
+  auto& dv = outputs.at(2);
+
+  if (dq.size() == 0) {
+    dq.set_data(allocate_omarchy(dq.nbytes()));
+    dk.set_data(allocate_omarchy(dk.nbytes()));
+    dv.set_data(allocate_omarchy(dv.nbytes()));
+    return;
+  }
+
+  // Dense temporaries for strided inputs (cache slices ride strided views).
+  {
+    std::vector<array> dense;
+    bool any_strided = false;
+    for (const array* x : {&q, &k, &v, &o, &lse, &cot_o}) {
+      any_strided =
+          any_strided || !x->flags().row_contiguous || x->offset() != 0;
+    }
+    if (any_strided) {
+      dense.reserve(6);
+      for (const array* x : {&q, &k, &v, &o, &lse, &cot_o}) {
+        if (x->flags().row_contiguous && x->offset() == 0) {
+          dense.push_back(*x);
+        } else {
+          dense.push_back(contiguous_copy_gpu(*x, s));
+          encoder.add_temporary(dense.back());
+        }
+      }
+      q = dense[0];
+      k = dense[1];
+      v = dense[2];
+      o = dense[3];
+      lse = dense[4];
+      cot_o = dense[5];
+    }
+  }
+
+  // Float32 score-plane operands: f32 stays, f16/bf16 widen exactly (the
+  // forward's bf16-direct coopmat route stores the same words as this
+  // cast path, so the lse from the forward matches this rebuild).
+  auto to_f32 = [&](const array& x) {
+    if (x.dtype() == float32) {
+      return x;
+    }
+    array wide(x.shape(), float32, nullptr, {});
+    copy_gpu(x, wide, CopyType::Vector, s);
+    encoder.add_temporary(wide);
+    return wide;
+  };
+  array q32 = to_f32(q);
+  array k32 = to_f32(k);
+  array v32 = to_f32(v);
+  array co32 = to_f32(cot_o);
+
+  // GQA regroup as stride views (the forward's regroup_view): q-side
+  // arrays split the head axis into (kv, repeat); k/v carry a size-1
+  // repeat axis the matmul broadcasts (stride pinned 0). When G == 1
+  // the repeat axis is degenerate - skip the regroup and feed the
+  // 4-D arrays straight to the matmuls, which gives the composer's
+  // exact 4-D GEMM without an unused 5-D batch axis.
+  auto regroup_view = [&](const array& base, bool splits) {
+    int rep = splits ? G : 1;
+    Shape shape = {base.shape(0), Hk, rep, base.shape(2), base.shape(3)};
+    Strides strides(5);
+    strides[0] = base.strides()[0];
+    strides[1] = splits ? base.strides()[1] * rep : base.strides()[1];
+    strides[2] = splits ? base.strides()[1] : 0;
+    strides[3] = base.strides()[2];
+    strides[4] = base.strides()[3];
+    array view(std::move(shape), base.dtype(), nullptr, {});
+    view.copy_shared_buffer(base, strides, {false, false, false}, base.size());
+    encoder.add_temporary(view);
+    return view;
+  };
+  array q5 = G > 1 ? regroup_view(q32, true) : q32;
+  array k5 = G > 1 ? regroup_view(k32, false) : k32;
+  array v5 = G > 1 ? regroup_view(v32, false) : v32;
+  array co5 = G > 1 ? regroup_view(co32, true) : co32;
+  array o5 = G > 1 ? regroup_view(o, true) : o;
+
+  Shape score_shape = q5.shape();
+  score_shape.back() = kL;
+  array S(score_shape, float32, nullptr, {});
+  array dP(score_shape, float32, nullptr, {});
+  array P(score_shape, float32, nullptr, {});
+  S.set_data(allocate_omarchy(S.nbytes()));
+  dP.set_data(allocate_omarchy(dP.nbytes()));
+  P.set_data(allocate_omarchy(P.nbytes()));
+  encoder.add_temporary(S);
+  encoder.add_temporary(dP);
+  encoder.add_temporary(P);
+
+  array keys_t = swapaxes_in_eval(k5, -1, -2);
+  encoder.add_temporary(keys_t);
+  array values_t = swapaxes_in_eval(v5, -1, -2);
+  encoder.add_temporary(values_t);
+  dispatch_matmul(tag, {q5, keys_t}, S, 1.0f, 0.0f, false, s);
+  dispatch_matmul(tag, {co5, values_t}, dP, 1.0f, 0.0f, false, s);
+
+  // delta = rowsum(o * cot_o): one workgroup per (B*H*qL) row.
+  Shape odo_shape = q.shape();
+  odo_shape.back() = 1;
+  array odo(std::move(odo_shape), float32, nullptr, {});
+  odo.set_data(allocate_omarchy(odo.nbytes()));
+  encoder.add_temporary(odo);
+  {
+    omarchy::ComputeParams params;
+    params.count = checked_u32(static_cast<int64_t>(BH) * qL, tag, dq);
+    params.matrix_n = checked_u32(Dv, tag, dq);
+    params.lhs_offset = checked_item_offset(o, o.size(), tag, dq);
+    params.rhs_offset = checked_item_offset(cot_o, cot_o.size(), tag, dq);
+    params.output_offset = checked_item_offset(odo, odo.size(), tag, dq);
+    auto odo_kernel = [](Dtype dt) {
+      if (dt == float16) {
+        return omarchy::ComputeKernel::SdpaVjpOdoF16;
+      }
+      if (dt == bfloat16) {
+        return omarchy::ComputeKernel::SdpaVjpOdoBF16;
+      }
+      return omarchy::ComputeKernel::SdpaVjpOdoF32;
+    };
+    std::array<omarchy::ComputeBinding, 3> bindings{
+        binding(o), binding(cot_o), binding(odo)};
+    encoder.dispatch_compute(
+        odo_kernel(o.dtype()),
+        bindings,
+        params,
+        checked_u32(static_cast<int64_t>(BH) * qL, tag, dq));
+  }
+
+  // P = exp(scale*S - lse), dS = P*(dP - delta)*scale (dS lands in S).
+  {
+    omarchy::ComputeParams params;
+    params.matrix_m = checked_u32(qL, tag, dq);
+    params.matrix_n = checked_u32(kL, tag, dq);
+    params.matrix_k = checked_u32(BH, tag, dq);
+    params.alpha = scale_;
+    params.dims = checked_u32(static_cast<uint32_t>(diag_off), tag, dq);
+    params.flags = do_causal_ ? 1u : 0u;
+    params.lhs_offset = checked_item_offset(S, S.size(), tag, dq);
+    params.rhs_offset = checked_item_offset(dP, dP.size(), tag, dq);
+    params.output_offset = checked_item_offset(P, P.size(), tag, dq);
+    params.shape[0] = checked_item_offset(lse, lse.size(), tag, dq);
+    params.shape[1] = checked_item_offset(odo, odo.size(), tag, dq);
+    std::array<omarchy::ComputeBinding, 5> bindings{
+        binding(S), binding(dP), binding(lse), binding(odo), binding(P)};
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::SdpaVjpDsF32,
+        bindings,
+        params,
+        (checked_u32(kL, tag, dq) + 15u) / 16u,
+        (checked_u32(qL, tag, dq) + 7u) / 8u,
+        checked_u32(BH, tag, dq));
+  }
+
+  // dQ = dS K (the K repeat axis broadcasts; the flat result is [B,H,qL,D]).
+  Shape dq5_shape = q5.shape();
+  array dq5(std::move(dq5_shape), float32, nullptr, {});
+  dq5.set_data(allocate_omarchy(dq5.nbytes()));
+  encoder.add_temporary(dq5);
+  dispatch_matmul(tag, {S, k5}, dq5, 1.0f, 0.0f, false, s);
+  copy_gpu(dq5, dq, CopyType::Vector, s);
+
+  // dK = dS^T Q and dV = P^T dO per query head, GQA-summed into the
+  // KV-head outputs.
+  Shape tile_shape = q5.shape();
+  tile_shape[3] = kL;
+  tile_shape[4] = D;
+  array dkt(tile_shape, float32, nullptr, {});
+  tile_shape[4] = Dv;
+  array dvt(tile_shape, float32, nullptr, {});
+  dkt.set_data(allocate_omarchy(dkt.nbytes()));
+  dvt.set_data(allocate_omarchy(dvt.nbytes()));
+  encoder.add_temporary(dkt);
+  encoder.add_temporary(dvt);
+  array s_t = swapaxes_in_eval(S, -1, -2);
+  array p_t = swapaxes_in_eval(P, -1, -2);
+  encoder.add_temporary(s_t);
+  encoder.add_temporary(p_t);
+  dispatch_matmul(tag, {s_t, q5}, dkt, 1.0f, 0.0f, false, s);
+  dispatch_matmul(tag, {p_t, o5}, dvt, 1.0f, 0.0f, false, s);
+
+  auto reduce_kernel = [](Dtype dt) {
+    if (dt == float16) {
+      return omarchy::ComputeKernel::SdpaVjpReduceF16;
+    }
+    if (dt == bfloat16) {
+      return omarchy::ComputeKernel::SdpaVjpReduceBF16;
+    }
+    return omarchy::ComputeKernel::SdpaVjpReduceF32;
+  };
+  auto gqa_reduce = [&](const array& tile, array& out, int dim) {
+    omarchy::ComputeParams params;
+    params.matrix_m = checked_u32(kL, tag, out);
+    params.matrix_n = checked_u32(dim, tag, out);
+    params.matrix_k = checked_u32(G, tag, out);
+    params.lhs_offset = checked_item_offset(tile, tile.size(), tag, out);
+    params.output_offset = checked_item_offset(out, out.size(), tag, out);
+    std::array<omarchy::ComputeBinding, 2> bindings{binding(tile), binding(out)};
+    encoder.dispatch_compute(
+        reduce_kernel(out.dtype()),
+        bindings,
+        params,
+        (checked_u32(dim, tag, out) + 31u) / 32u,
+        (checked_u32(kL, tag, out) + 3u) / 4u,
+        checked_u32(static_cast<int64_t>(B) * Hk, tag, out));
+  };
+  dk.set_data(allocate_omarchy(dk.nbytes()));
+  dv.set_data(allocate_omarchy(dv.nbytes()));
+  gqa_reduce(dkt, dk, D);
+  gqa_reduce(dvt, dv, Dv);
+}
+
 void ConvertFP8::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
