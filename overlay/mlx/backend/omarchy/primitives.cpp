@@ -488,6 +488,21 @@ void dispatch_matmul(
       a_in, a_transposed, a_gap, a_materialized, name, out, s);
   classify_matmul_operand(
       b_in, b_transposed, b_gap, b_materialized, name, out, s);
+  if (const char* mm_dbg = std::getenv("MLX_OMARCHY_MATMUL_DEBUG");
+      mm_dbg != nullptr && mm_dbg[0] != '0') {
+    std::fprintf(stderr,
+        "[mm-dbg] %s a shape=[", name.c_str());
+    for (auto d : a_in.shape()) std::fprintf(stderr, "%d,", (int)d);
+    std::fprintf(stderr, "] strides=[");
+    for (auto st : a_in.strides()) std::fprintf(stderr, "%d,", (int)st);
+    std::fprintf(stderr, "] aT=%d agap=%u | b shape=[", a_transposed, a_gap);
+    for (auto d : b_in.shape()) std::fprintf(stderr, "%d,", (int)d);
+    std::fprintf(stderr, "] strides=[");
+    for (auto st : b_in.strides()) std::fprintf(stderr, "%d,", (int)st);
+    std::fprintf(stderr, "] bT=%d bgap=%u | out shape=[", b_transposed, b_gap);
+    for (auto d : out.shape()) std::fprintf(stderr, "%d,", (int)d);
+    std::fprintf(stderr, "] dtype=%s\n", dtype_to_string(out.dtype()).c_str());
+  }
   const array* a = a_materialized ? &*a_materialized : &a_in;
   const array* b = b_materialized ? &*b_materialized : &b_in;
   if (use_c && !is_trailing_broadcast(c_in, out)) {
