@@ -110,6 +110,30 @@ consistent with a prefill-only collapse. Untested falsifier: `AGX_SIMDMAT=1`
 on v3 for G14. Gaps: v2 dispatch trace, pf2048 leg, and T2048 logits were out
 of scope for the focused G14 tickets.
 
+## ADDENDUM 2026-10-01 — G14 falsifier: the coopmat gate is the whole story
+
+After an M2 reboot, four arms ×3 alternating prefill-512 (plus one prefill-2048
+run and one dispatch trace per arm):
+
+| arm | decode mean | pf512 mean [range] | pf2048 | pf512 digest | dispatch lines |
+|---|---|---|---|---|---|
+| deployed (7faf04c) | 98.20 | 849.5 [840.2–863.2] | 1208.8 | `bc519c03…` | 1087 |
+| v3 stock | 98.14 | 160.1 [158.3–161.6] | 146.1 | `bc519c03…` | 954 |
+| v3 + `AGX_SIMDMAT=1` | 98.10 | **901.9 [888.2–911.8]** | **1311.6** | `bc519c03…` | **1087** |
+| v3 + SIMDMAT + `HK_PERFTEST=trackcdmbarrier` | **103.49** | **904.9 [891.1–927.5]** | **1345.0** | `bc519c03…` | **1087** |
+
+One environment variable (`AGX_SIMDMAT=1`) restores the dispatch count to
+exactly the deployed 1087 and takes v3 PAST the deployed driver on G14
+(+6.2% pf512, +8.5% pf2048; trackcdmbarrier adds +11.3% pf2048 and +5.4%
+decode). Digests bit-exact across all four arms per leg. The fix for the Mesa
+stack is one line in `src/asahi/vulkan/hk_physical_device.c:56`
+(`hk_cooperative_matrix_enabled`): add the G14 chips (`AGX_CHIP_G14G`,
+`AGX_CHIP_G14X`) to the default-on disjunction. Boot-dependent digest note:
+this boot's pf512 digest is `bc519c03…` on all arms including the deployed
+driver (the pre-reboot boot hit the cross-host pin `dbf704971617fdfc…`
+exactly); deterministic within a boot, varies across boots — arm comparisons
+are unaffected.
+
 ## T8103 v3 substitute evidence
 
 The T8103 host hung (initramfs) during this lane's v3 window, so the lane has
@@ -148,9 +172,11 @@ ledger.
   - G13X: v3 is pinnable on this evidence — prefill parity/recovered, decode
     +2.1%, pf2048 +2.1% over the deployed driver; TTFT −6% is the only
     regression.
-  - G14: BLOCKED — both stacks collapse prefill ~5.4× vs the deployed driver
-    (coopmat path lost; hypothesis with a ready falsifier) and v3's dispatch
-    sequence differs.
+  - G14: UNBLOCKED by the falsifier — with the coopmat gate opened for G14
+    (one line, `hk_physical_device.c:56`), v3 matches the deployed dispatch
+    structure exactly and beats the deployed driver on every leg (+6.2%
+    pf512, +8.5% pf2048; +11.3% pf2048 and +5.4% decode with
+    trackcdmbarrier). Pin once that line lands.
   - G13G: driver deltas not stable across windows and confounded by wheel
     choice; v3 ≈ deployed per the substitute cells. Re-measure on the
     deployed wheel if G13G matters short-term.
