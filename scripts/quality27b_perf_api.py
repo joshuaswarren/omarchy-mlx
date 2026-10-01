@@ -80,7 +80,7 @@ class Assistant:
                    MLX_OMARCHY_PAIR_DEV_QUALIFICATION="1")
         args = ["--pair", self.pair_id, "--yes"] if do_setup else ["--resume"]
         self.server = subprocess.Popen(
-            ["<home>/.local/share/mlx-omarchy/venv/bin/python",
+            [os.path.expanduser("~/.local/share/mlx-omarchy/venv/bin/python"),
              "-m", "mlx_omarchy_assistant",
              "--home", self.home, "--no-browser"] + args,
             cwd=os.path.dirname(self.repo_serve),

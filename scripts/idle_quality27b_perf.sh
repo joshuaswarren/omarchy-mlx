@@ -19,13 +19,12 @@ guard_kill_leftovers "$HOME_DIR"
 GPU_USERS=$(fuser /dev/dri/renderD128 2>/dev/null | tr -d ' ' || true)
 LOAD_BEFORE=$(cat /proc/loadavg)
 uname_r=$(uname -r)
-{
-    echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before=$GPU_USERS"
-    if [ -n "$GPU_USERS" ]; then
-        echo "REFUSED: render node busy with non-PairGates work (fuser=$GPU_USERS); idle-only run"
-        exit 1
-    fi
-} | tee "$ART/launch.log"
+if [ -n "$GPU_USERS" ]; then
+    echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before=$GPU_USERS" | tee "$ART/launch.log"
+    echo "REFUSED: render node busy with non-PairGates work (fuser=$GPU_USERS); idle-only run" | tee -a "$ART/launch.log"
+    exit 1
+fi
+echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before= (empty)" | tee "$ART/launch.log"
 
 # Watchdog: kill the 27B assistant tree if this ticket dies on ANY path.
 guard_start_watchdog "$HOME_DIR"
@@ -38,7 +37,6 @@ PYTHONPATH=$WORKTREE/scripts:$WORKTREE/serve \
   $VENV -u $WORKTREE/scripts/quality27b_perf_api.py \
   --home "$HOME_DIR" \
   --repo-serve $WORKTREE/serve \
-  --label "quality27b-idle" \
   --out "$ART/quality27b-idle.json" \
   2>&1 | tee -a "$ART/harness.log"
 RC=${PIPESTATUS[0]}

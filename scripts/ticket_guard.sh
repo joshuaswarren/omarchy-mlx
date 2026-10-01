@@ -14,6 +14,20 @@ guard_kill_leftovers() {
     for pat in "$@"; do
         pkill -KILL -f "$pat" 2>/dev/null || true
     done
+    # Workers inherit MLX_OMARCHY_HOME; their cmdline may point at the
+    # HF cache instead of the pair home, so cmdline patterns alone miss
+    # them.  Sweep /proc environ for our home fragments.
+    local pid envhome
+    for pid in $(pgrep -f "mlx_omarchy|_mlxlm_server" 2>/dev/null); do
+        envhome=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null |
+                  grep '^MLX_OMARCHY_HOME=' | cut -d= -f2-)
+        [ -n "$envhome" ] || continue
+        for pat in "$@"; do
+            case "$envhome" in
+                $pat) kill -KILL "$pid" 2>/dev/null || true ;;
+            esac
+        done
+    done
     sleep 2
 }
 

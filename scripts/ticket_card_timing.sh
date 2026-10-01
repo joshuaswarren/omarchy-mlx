@@ -16,13 +16,12 @@ guard_kill_leftovers "$H/compact4b" "$H/everyday9b" "$H/quality27b"
 GPU_USERS=$(fuser /dev/dri/renderD128 2>/dev/null | tr -d ' ' || true)
 LOAD_BEFORE=$(cat /proc/loadavg)
 uname_r=$(uname -r)
-{
-    echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before=$GPU_USERS"
-    if [ -n "$GPU_USERS" ]; then
-        echo "REFUSED: render node busy with non-PairGates work (fuser=$GPU_USERS); idle-only run"
-        exit 1
-    fi
-} | tee "$ART/launch.log"
+if [ -n "$GPU_USERS" ]; then
+    echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before=$GPU_USERS" | tee "$ART/launch.log"
+    echo "REFUSED: render node busy with non-PairGates work (fuser=$GPU_USERS); idle-only run" | tee -a "$ART/launch.log"
+    exit 1
+fi
+echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before= (empty)" | tee "$ART/launch.log"
 
 # Watchdog: if this ticket dies on ANY path (incl. SIGKILL of the
 # wrapper), kill the whole assistant tree for every home we touch.

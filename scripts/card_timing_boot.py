@@ -35,31 +35,54 @@ def load_assistant_cls():
 
 
 def stream_events(cid, runtime, stop, timeout_s):
+    """Yield (type, data, ts) from the events endpoint.
+
+    The server closes each SSE connection after 15 s or when the turn
+    goes inactive, so a single connection misses everything after the
+    first 15 s.  Reconnect with the last seen sequence as the cursor;
+    the store replays from it.
+    """
     import http.client
     rt = json.load(open(runtime))
-    conn = http.client.HTTPConnection("127.0.0.1", rt["port"], timeout=300)
-    path = f"/api/conversations/{cid}/events?after=0"
-    conn.request("GET", path, headers={"Cookie": rt["cookie"]})
-    r = conn.getresponse()
-    buf = b""
-    started = time.monotonic()
-    try:
-        while time.monotonic() - started < timeout_s:
-            if stop.is_set():
-                break
-            chunk = r.read1(65536) if hasattr(r, "read1") else r.read(65536)
-            if not chunk:
-                break
-            buf += chunk
-            while b"\n\n" in buf:
-                block, buf = buf.split(b"\n\n", 1)
-                for line in block.split(b"\n"):
-                    if line.startswith(b"data:"):
-                        event = json.loads(line[5:])
-                        yield (event.get("type"), event.get("data") or {},
-                               time.monotonic())
-    finally:
-        conn.close()
+    after = 0
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline and not stop.is_set():
+        conn = None
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", rt["port"],
+                                              timeout=300)
+            conn.request("GET",
+                         f"/api/conversations/{cid}/events?after={after}",
+                         headers={"Cookie": rt["cookie"]})
+            r = conn.getresponse()
+            buf = b""
+            while time.monotonic() < deadline and not stop.is_set():
+                chunk = r.read1(65536) if hasattr(r, "read1") else r.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n\n" in buf:
+                    block, buf = buf.split(b"\n\n", 1)
+                    for line in block.split(b"\n"):
+                        if line.startswith(b"data:"):
+                            event = json.loads(line[5:])
+                            seq = event.get("sequence")
+                            if isinstance(seq, int) and seq > after:
+                                after = seq
+                            yield (event.get("type"),
+                                   event.get("data") or {},
+                                   time.monotonic())
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        if stop.is_set():
+            break
+        time.sleep(0.2)
 
 
 _TOK = None
