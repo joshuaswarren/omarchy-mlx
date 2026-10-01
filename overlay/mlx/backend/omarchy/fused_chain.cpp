@@ -1261,7 +1261,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     if (!is_op(&first, typeid(SliceUpdate)) ||
         !is_op(&second, typeid(SliceUpdate)) ||
         first.inputs().size() != 2 || second.inputs().size() != 2 ||
-        first.dtype() != float16 || second.dtype() != float16 ||
+        first.dtype() != second.dtype() ||
+        (first.dtype() != float16 && first.dtype() != bfloat16) ||
         first.shape() != second.shape() ||
         first.inputs()[0].shape() != second.inputs()[0].shape() ||
         first.inputs()[1].shape() != second.inputs()[1].shape() ||
@@ -1647,6 +1648,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // The keys side keeps any planned producer-direct KV window; the
   // query side must not be one. Any runtime refusal un-plans the pair
   // and both nodes take the ordinary RoPE path unchanged.
+  // (bf16 streams are covered by the F6 SliceUpdate pair widening below,
+  // not by this f16-only rope-pair plan.)
   if (fused_trio_enabled()) {
     RopePairScanTrace trace;
     // The RoPE nodes of one decode step are NOT tape-adjacent: each
