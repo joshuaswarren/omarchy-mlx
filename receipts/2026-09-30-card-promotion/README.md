@@ -43,7 +43,8 @@ may be compared with a stock-kernel number. Both rows use wheel
 |---|---|---|---|
 | v3 default config: >= 15/18 cards | **14/18 FAIL** | 17/18 pass | 15/18 pass |
 | v3 default config: 0/18 spurious | 0/18 pass | 0/18 pass | 0/18 pass |
-| v3 fenced-json config (selection only) | not run yet | not run yet | not planned |
+| v3 fenced-json config (selection only, stock kernel) | 21/36 run: 17/18 cards, **1 spurious: FAIL** | 18/18, 0/18 pass | not run (default passed) |
+| config chosen by the pre-registered rule | default | **fenced-json** | default |
 | v4 (frozen, sha256 `7f807008...`) | not run | not run | not run |
 | first-text p95 <= 2.0 s, 30 warm turns | not measured validly | not measured validly | not required |
 | `extension.card_format` | not set | not set | not set |
@@ -110,6 +111,86 @@ each turn waited on a worker still decoding the cancelled reply; this is an
 inference, not verified. The probe now lets every turn finish (max_tokens
 64) before the next starts (ef64d12e7). The gate needs a fresh stock-kernel
 run; these numbers do not pass or fail it.
+
+## v3 with `card_format: "fenced-json"` (config selection, stock kernel)
+
+Declared in the notebook before it ran. Checkout: the frozen v3 rules
+(card_promotion `9f1177f9...`), coordinator fa3865a7b, and the catalog with
+`extension.card_format: "fenced-json"` on the 9B and 4B, so every chat turn
+carries the full schema and the model's own fence wins, with promotion as the
+fallback. A card from either path counts; so does a spurious one. Boots
+b68db721 and 0e2c3743, kernel 7.1.13-3-1-ARCH.
+
+Rule (fixed before the run): pick the config that passes v3; if both pass,
+the one with more cards; a tie or two failures keep the default.
+
+Compact 4B: 18/18 cards, 0/18 spurious (pass; default 17/18, 0/18) ->
+**fenced-json**.
+```
+    v3-01 card-worthy checklist                complete   33.1s ['checklist'] promoted pass=True
+    v3-02 card-worthy checklist                complete   39.1s ['checklist'] promoted pass=True
+    v3-03 card-worthy checklist                complete   91.2s ['checklist'] fence    pass=True
+    v3-04 card-worthy checklist                complete   28.1s ['checklist'] promoted pass=True
+    v3-05 card-worthy comparison               complete   36.1s ['comparison'] promoted pass=True
+    v3-06 card-worthy comparison               complete   52.1s ['comparison'] promoted pass=True
+    v3-07 card-worthy comparison               complete   36.1s ['comparison'] promoted pass=True
+    v3-08 card-worthy comparison               complete  171.3s ['comparison'] promoted pass=True
+    v3-09 card-worthy timeline                 complete   99.2s ['timeline'] promoted pass=True
+    v3-10 card-worthy timeline                 complete  200.4s ['timeline'] promoted pass=True
+    v3-11 card-worthy timeline                 complete   48.1s ['timeline'] promoted pass=True
+    v3-12 card-worthy timeline                 complete   13.0s ['timeline'] promoted pass=True
+    v3-13 card-worthy facts                    complete   11.0s ['facts'] promoted pass=True
+    v3-14 card-worthy facts                    complete    7.0s ['facts'] promoted pass=True
+    v3-15 card-worthy facts                    complete   18.0s ['facts'] promoted pass=True
+    v3-16 card-worthy mixed                    complete   64.1s ['comparison'] promoted pass=True
+    v3-17 card-worthy mixed                    complete  140.3s ['checklist'] promoted pass=True
+    v3-18 card-worthy mixed                    complete    7.0s ['checklist'] promoted pass=True
+    v3-19 plain       none                     complete   28.1s [] -        pass=True
+    v3-20 plain       none                     complete   31.1s [] -        pass=True
+    v3-21 plain       none                     complete   38.1s [] -        pass=True
+    v3-22 plain       none                     complete   15.0s [] -        pass=True
+    v3-23 plain       none                     complete   62.1s [] -        pass=True
+    v3-24 plain       none                     complete   19.0s [] -        pass=True
+    v3-25 plain       none                     complete   47.1s [] -        pass=True
+    v3-26 plain       none                     complete    6.0s [] -        pass=True
+    v3-27 plain       none                     complete   35.1s [] -        pass=True
+    v3-28 near-miss   list-in-prose            complete   24.0s [] -        pass=True
+    v3-29 near-miss   list-in-prose            complete   32.1s [] -        pass=True
+    v3-30 near-miss   short-list               complete    4.0s [] -        pass=True
+    v3-31 near-miss   short-list               complete    9.0s [] -        pass=True
+    v3-32 near-miss   code-only                complete    5.0s [] -        pass=True
+    v3-33 near-miss   code-only                complete    5.0s [] -        pass=True
+    v3-34 near-miss   table-noun               complete   26.0s [] -        pass=True
+    v3-35 near-miss   explanation-with-bullets complete   16.0s [] -        pass=True
+    v3-36 near-miss   history                  complete   25.1s [] -        pass=True
+```
+
+Everyday 9B: stopped at 21/36 when the GPU slot closed; already 1 spurious
+(v3-19 "Why do cats purr?" got a model-fenced facts card), so it cannot pass.
+Neither config passes -> **default**.
+```
+    v3-01 card-worthy checklist                complete  175.5s ['checklist'] fence    pass=True
+    v3-02 card-worthy checklist                complete  107.2s ['checklist'] fence    pass=True
+    v3-03 card-worthy checklist                complete  137.2s ['checklist'] promoted pass=True
+    v3-04 card-worthy checklist                complete   96.2s ['checklist'] promoted pass=True
+    v3-05 card-worthy comparison               complete  124.2s ['comparison'] promoted pass=True
+    v3-06 card-worthy comparison               complete   57.1s ['comparison'] fence    pass=True
+    v3-07 card-worthy comparison               complete   86.1s ['comparison'] fence    pass=True
+    v3-08 card-worthy comparison               complete  180.6s [] -        pass=False
+    v3-09 card-worthy timeline                 complete  145.3s ['timeline'] fence    pass=True
+    v3-10 card-worthy timeline                 complete   93.2s ['timeline'] promoted pass=True
+    v3-11 card-worthy timeline                 complete  146.3s ['timeline'] fence    pass=True
+    v3-12 card-worthy timeline                 complete   28.1s ['timeline'] fence    pass=True
+    v3-13 card-worthy facts                    complete   24.0s ['facts'] fence    pass=True
+    v3-14 card-worthy facts                    complete  129.2s ['facts'] promoted pass=True
+    v3-15 card-worthy facts                    complete  107.2s ['facts'] promoted pass=True
+    v3-16 card-worthy mixed                    complete  181.5s ['comparison'] promoted pass=True
+    v3-17 card-worthy mixed                    complete  171.3s ['checklist', 'timeline'] fence    pass=True
+    v3-18 card-worthy mixed                    complete   22.0s ['checklist'] fence    pass=True
+    v3-19 plain       none                     complete  166.3s ['facts'] fence    pass=False
+    v3-20 plain       none                     complete  142.3s [] -        pass=True
+    v3-21 plain       none                     complete  141.3s [] -        pass=True
+```
 
 ## HELD-OUT v3 (default config, polltx, boot 95675db4)
 
