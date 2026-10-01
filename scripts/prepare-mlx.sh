@@ -47,6 +47,8 @@ find "$STAGING_DIR" -newermt '@0' -exec touch {} +
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-build.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-no-silent-cpu-fallback.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-eager-fusion.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-rope-settle-tape.patch"

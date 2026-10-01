@@ -46,3 +46,33 @@ After both fixes, under the host's lab locks and with bounded timeouts:
 - No dmesg ANE errors during the window; both per-user quarantine files were empty after the clean shutdowns.
 
 Raw logs are in the private lab `artifacts/AbiVerify/` directory with `SHA256SUMS`; this addendum keeps only the public-safe results.
+
+## Correction, 2026-09-30
+
+Defect found on another host: an explicit `VK_DRIVER_FILES` value naming a
+missing Honeykrisp JSON (for example `asahi_icd.json` where the installed
+file is `asahi_icd.aarch64.json`) was accepted by the ICD selection, the
+Vulkan loader then failed, and the process silently continued with the CPU
+default device.
+
+Two fixes:
+
+1. ICD selection now verifies that an explicit override entry exists. A
+   Honeykrisp-named entry whose file is missing fails initialization with
+   `Honeykrisp ICD selection refused: user Vulkan ICD JSON does not exist:`
+   and the exact path. A value that excludes Honeykrisp is refused as
+   before.
+2. The default-device selection no longer degrades silently. In release
+   builds, a failed GPU backend initialization raises the recorded
+   compatibility error; the CPU device is never chosen implicitly. Debug
+   builds keep the CPU fallback for development hosts without Apple GPUs.
+
+Unit tests cover both: a doctest refuses an injected missing override path
+and checks the exact message, and a doctest checks the release refusal,
+the debug fallback, and the GPU selection for the default-device policy.
+On an x86 host with lavapipe installed, the info tool refuses a missing
+Honeykrisp override naming the exact path, refuses a lavapipe override,
+and reports the missing Honeykrisp JSON with no override. The M1
+confirmation run (release wheel install, `omarchy_runtime_tests`,
+`omarchy_error_contract_tests`, and the `env -i` Honeykrisp case) follows
+after the jwm1 GPU window frees; this receipt updates with its results.

@@ -13,6 +13,7 @@
 #include "doctest/doctest.h"
 
 #include "mlx/backend/omarchy/honeykrisp_identity.h"
+#include "mlx/backend/omarchy/device_selection.h"
 #include "mlx/backend/omarchy/ane/driver_abi.h"
 #include "mlx/backend/omarchy/ane/runtime_worker_gate.h"
 #include "mlx/backend/omarchy/ane/runtime_ownership.h"
@@ -276,15 +277,26 @@ TEST_CASE("driver ABI major accepts the expected ABI and rejects mismatches") {
 }
 TEST_CASE("Honeykrisp ICD resolution honors user choices and identifies Mesa SHA") {
   using namespace mlx::core::omarchy;
-  const std::vector<std::string> candidates{
-      "/usr/share/vulkan/icd.d/lvp_icd.json",
-      "/usr/share/vulkan/icd.d/asahi_icd.json"};
-  CHECK(resolve_honeykrisp_icd(candidates, nullptr) == candidates[1]);
-  CHECK(resolve_honeykrisp_icd(candidates, candidates[1].c_str()) == candidates[1]);
-  CHECK(resolve_honeykrisp_icd(candidates, "/tmp/honeykrisp.json:/tmp/other.json") ==
-        "/tmp/honeykrisp.json");
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("runtimegate-icd-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(directory);
+  REQUIRE(std::filesystem::create_directory(directory));
+  const auto lavapipe = directory / "lvp_icd.json";
+  const auto honeykrisp = directory / "asahi_icd.json";
+  for (const auto& path : {lavapipe, honeykrisp}) {
+    const int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    REQUIRE(fd >= 0);
+    REQUIRE(::close(fd) == 0);
+  }
+  const std::vector<std::string> candidates{lavapipe.string(), honeykrisp.string()};
+  CHECK(resolve_honeykrisp_icd(candidates, nullptr) == honeykrisp.string());
+  CHECK(resolve_honeykrisp_icd(candidates, honeykrisp.string().c_str()) ==
+        honeykrisp.string());
+  CHECK(resolve_honeykrisp_icd(
+            candidates, (honeykrisp.string() + ":/tmp/other.json").c_str()) ==
+        honeykrisp.string());
   CHECK_THROWS_AS(
-      resolve_honeykrisp_icd(candidates, "/tmp/lvp_icd.json"),
+      resolve_honeykrisp_icd(candidates, lavapipe.string().c_str()),
       std::runtime_error);
   CHECK(mesa_git_sha("Mesa 26.1.0-devel (git-0123456789abcdef)") ==
         "0123456789abcdef");
@@ -297,6 +309,65 @@ TEST_CASE("Honeykrisp ICD resolution honors user choices and identifies Mesa SHA
   } catch (const std::runtime_error& error) {
     CHECK(std::string(error.what()) ==
           "Honeykrisp Mesa git SHA mismatch: expected expected, found actual");
+  }
+  std::filesystem::remove_all(directory);
+}
+
+TEST_CASE("an explicit ICD override naming a missing file is refused") {
+  using namespace mlx::core::omarchy;
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("runtimegate-icd-missing-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(directory);
+  REQUIRE(std::filesystem::create_directory(directory));
+  const auto missing = directory / "asahi_icd.json";
+  const std::string missing_path = missing.string();
+  const std::vector<std::string> candidates{missing_path};
+  try {
+    resolve_honeykrisp_icd(candidates, missing_path.c_str());
+    FAIL("expected missing ICD refusal");
+  } catch (const std::runtime_error& error) {
+    CHECK(
+        std::string(error.what()) ==
+        "Honeykrisp ICD selection refused: user Vulkan ICD JSON does not"
+        " exist: " +
+            missing_path);
+  }
+  // An existing Honeykrisp entry in a mixed override list is still honored.
+  const auto present = directory / "present-asahi_icd.json";
+  {
+    const int fd = ::open(present.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    REQUIRE(fd >= 0);
+    REQUIRE(::close(fd) == 0);
+  }
+  const std::string mixed = present.string() + ":/tmp/other.json";
+  CHECK(resolve_honeykrisp_icd(candidates, mixed.c_str()) == present.string());
+  std::filesystem::remove_all(directory);
+}
+
+TEST_CASE("release builds refuse the CPU default device when GPU init fails") {
+  using mlx::core::omarchy::gpu_default_or_refuse;
+  CHECK(gpu_default_or_refuse(true, true, ""));
+  CHECK(gpu_default_or_refuse(true, false, "unused"));
+  CHECK_FALSE(gpu_default_or_refuse(false, false, "[omarchy] any reason."));
+  try {
+    gpu_default_or_refuse(
+        false, true, "[omarchy] no qualifying Vulkan 1.3 device found.");
+    FAIL("expected CPU fallback refusal");
+  } catch (const std::runtime_error& error) {
+    CHECK(
+        std::string(error.what()) ==
+        "[omarchy] refusing CPU tensor fallback in a release build;"
+        " the GPU backend is unavailable: [omarchy] no qualifying Vulkan"
+        " 1.3 device found.");
+  }
+  try {
+    gpu_default_or_refuse(false, true, "");
+    FAIL("expected CPU fallback refusal");
+  } catch (const std::runtime_error& error) {
+    CHECK(
+        std::string(error.what()) ==
+        "[omarchy] refusing CPU tensor fallback in a release build;"
+        " the GPU backend is unavailable: no reason recorded");
   }
 }
 

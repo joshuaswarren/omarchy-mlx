@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -31,6 +32,13 @@ inline std::string resolve_honeykrisp_icd(
       const size_t end = value.find(':', start);
       const std::string item = value.substr(start, end - start);
       if (is_honeykrisp_icd(item)) {
+        std::error_code existence;
+        if (!std::filesystem::exists(item, existence) || existence) {
+          throw std::runtime_error(
+              "Honeykrisp ICD selection refused: user Vulkan ICD JSON does"
+              " not exist: " +
+              item);
+        }
         return item;
       }
       if (end == std::string::npos) {
