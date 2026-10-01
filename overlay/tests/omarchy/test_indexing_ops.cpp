@@ -1444,9 +1444,18 @@ TEST_CASE("wide-row small-k partition covers rows, ties, and 16-bit dtypes") {
   // "bf16 defect". The reference reads back the device-held input words,
   // widens them exactly, stable-sorts by the documented key and takes the
   // INPUT words at the top-k indices, so no host narrowing can disagree.
-  // 16-bit rows currently take the wide-row sort route (the selection
-  // arm is gated to float32 in dispatch_sort_wide).
-  constexpr bool kSixteenBitSelects = false;
+  // 16-bit rows take the one-dispatch selection on every part except G13
+  // (M1 family), which keeps the sort route until it runs this doctest
+  // (gate in dispatch_sort_wide). Words are bit-exact on either route.
+  const bool kSixteenBitSelects = [] {
+    for (const auto& [key, value] : gpu::device_info()) {
+      if (key == "device_name") {
+        const auto* name = std::get_if<std::string>(&value);
+        return name == nullptr || name->find("G13") == std::string::npos;
+      }
+    }
+    return true;
+  }();
   std::vector<float> rows16;
   for (int r = 0; r < 2; ++r) {
     auto row = smallk_pattern(n, 303 + r);
