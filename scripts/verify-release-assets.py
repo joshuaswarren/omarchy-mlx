@@ -59,7 +59,7 @@ REQUIRED_PLATFORMS = {
     True: ("linux_aarch64",),
 }
 WHERE_BUILT = {
-    "linux_aarch64": "the M1 (m1-test-host, cp314)",
+    "linux_aarch64": "an aarch64 Apple Silicon host (cp314, glslc)",
     "linux_x86_64": "the dev box (cp311)",
 }
 
@@ -89,6 +89,49 @@ def download_wheels(repo, tag, dest):
     return sorted(Path(dest).glob("*.whl"))
 
 
+def download_asset(repo, tag, name, dest):
+    """Download one asset. Works on drafts: gh resolves them for the owner."""
+    proc = run(["gh", "release", "download", tag, "--repo", repo,
+                "--pattern", name, "--dir", str(dest), "--clobber"])
+    return proc.returncode == 0
+
+
+def parse_sha256sums(text):
+    """name -> sha256 from a SHA256SUMS asset (flat filenames)."""
+    out = {}
+    for line in text.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and HASH_RE.fullmatch(parts[0]):
+            out[parts[1].strip().lstrip("*")] = parts[0]
+    return out
+
+
+def sums_coverage(asset_names, sums):
+    """(stale, uncovered) between the uploaded assets and SHA256SUMS.
+
+    A release must publish a SHA256SUMS that covers every asset; entries
+    for assets that were not uploaded mean the sums were cut against a
+    different asset set and the installer's `sha256sum -c` no longer
+    describes what is actually there.
+    """
+    if not sums:
+        return [], []
+    stale = sorted(set(sums) - set(asset_names))
+    uncovered = sorted(set(asset_names) - set(sums) - {"SHA256SUMS"})
+    return stale, uncovered
+
+
+def receipt_paths(repo_root, tag):
+    """Receipt files recording a release: the dated vNNN name and legacy."""
+    if not repo_root or not (repo_root / "receipts").is_dir():
+        return []
+    short = "v" + tag.lstrip("v").replace(".", "")
+    found = []
+    for pat in (f"*release-{tag}.md", f"*-{short}-release.md"):
+        found += (repo_root / "receipts").glob(pat)
+    return sorted(set(found))
+
+
 def tag_commit(repo_root, repo, tag):
     """Full sha of the commit a tag points at (peels annotated tags)."""
     if repo_root:
@@ -115,17 +158,16 @@ def tag_commit(repo_root, repo, tag):
     return json.loads(proc.stdout)["object"]["sha"]
 
 
-def recorded_hashes(body, repo_root, tag, asset_names):
-    """Map asset name -> recorded sha256 from notes, else from receipts/."""
+def recorded_hashes(body, repo_root, tag, asset_names, sums=None):
+    """Map asset name -> recorded sha256, from SHA256SUMS, notes, receipts."""
     out = {}
     sources = [("release notes", body)]
-    if repo_root:
-        receipts = sorted((repo_root / "receipts").glob(
-            f"*release-{tag}.md")) if (repo_root / "receipts").is_dir() \
-            else []
-        for r in receipts:
-            sources.append((f"{r.name}", r.read_text(errors="replace")))
+    for r in receipt_paths(repo_root, tag):
+        sources.append((f"{r.name}", r.read_text(errors="replace")))
     for name in asset_names:
+        if sums and name in sums:
+            out[name] = (sums[name], "SHA256SUMS asset")
+            continue
         for src_name, text in sources:
             found = _hash_near(text, name)
             if found:
@@ -317,18 +359,50 @@ def main():
     assets = rel["assets"]
     if not assets:
         die(f"release {args.tag} has no assets")
+    asset_names = {a["name"] for a in assets}
+
+    # SHA256SUMS is the hash source of record for the whole asset set and
+    # works on a draft release (gh resolves drafts for the owner).
+    sums = {}
+    sums_dir = Path(tempfile.mkdtemp(prefix="verify-release-"))
+    if download_asset(args.repo, args.tag, "SHA256SUMS", sums_dir):
+        sums_file = sums_dir / "SHA256SUMS"
+        if sums_file.exists():
+            sums = parse_sha256sums(sums_file.read_text(errors="replace"))
+
     wheels = download_wheels(args.repo, args.tag,
                              tempfile.mkdtemp(prefix="verify-release-"))
     if not wheels:
         die(f"release {args.tag} has no wheel assets")
 
     hashes = recorded_hashes(rel["body"], repo_root, args.tag,
-                             [a["name"] for a in assets])
+                             asset_names, sums)
     versions = _versions_from_text(rel["body"], repo_root, args.tag)
 
-    print(f"release {args.tag} ({'prerelease' if rel['isPrerelease'] else 'stable'})"
+    state = "draft" if rel.get("isDraft") else "published"
+    print(f"release {args.tag} ({state}, "
+          f"{'prerelease' if rel['isPrerelease'] else 'stable'})"
           f" tag commit {tag_full}")
     all_failures, all_findings = [], []
+    stale_sums, uncovered = sums_coverage(asset_names, sums)
+    if not sums:
+        all_failures.append(
+            "no SHA256SUMS asset: a release whose installer verifies with "
+            "`sha256sum -c` must upload SHA256SUMS covering every asset")
+    else:
+        if stale_sums:
+            all_failures.append(
+                "SHA256SUMS lists assets that are not uploaded: "
+                f"{', '.join(stale_sums)}; the sums were cut against a "
+                "different asset set")
+        if uncovered:
+            all_failures.append(
+                "uploaded assets missing from SHA256SUMS: "
+                f"{', '.join(uncovered)}; the installer's checksum step "
+                "does not cover them")
+        if not stale_sums and not uncovered:
+            print(f"== SHA256SUMS covers all {len(asset_names)} uploaded "
+                  f"assets")
     for wheel in wheels:
         expected, src = hashes.get(wheel.name, (None, None))
         candidates = [v for v in versions
@@ -410,9 +484,8 @@ def main():
 def _versions_from_text(body, repo_root, tag):
     """Version strings (0.32.2.devNNNNNNNNNNNN+seg) the release records."""
     texts = [body]
-    if repo_root:
-        for r in sorted((repo_root / "receipts").glob(f"*release-{tag}.md")):
-            texts.append(r.read_text(errors="replace"))
+    for r in receipt_paths(repo_root, tag):
+        texts.append(r.read_text(errors="replace"))
     found = set()
     for t in texts:
         t = t.replace("%2B", "+").replace("%2b", "+")
