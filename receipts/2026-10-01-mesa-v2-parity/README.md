@@ -158,6 +158,22 @@ prefill recovers completely and beats the deployed driver (+4.7% pf512 mean,
 bit-exact across arms. The G13X and G13G gates for this candidate are pending
 host availability (both laptops hard-down at gate time; scripts staged).
 
+## ADDENDUM 2026-10-01 (3) — v3b G13X gate PASS
+
+The G13X host returned; the same candidate (`e7631595df6`, same `.so` bytes as
+the G14X gate) gated against its deployed driver (`9d949d4-vec2`), default
+env, alternating ×3:
+
+| arm | decode_med ×3 | pf512 ×3 | pf2048 | TTFT med | T512 / T2048 logits |
+|---|---|---|---|---|---|
+| deployed | 99.48 / 99.67 / 99.81 | 864.3 / 879.8 / 879.1 | 1039.6 | ~150.8 ms | `f771c4265f88…` / `b8c4e14f8f8a…` |
+| v3b default | 99.48 / 99.73 / 99.79 | 860.4 / 881.4 / 882.5 | 1027.3 | ~150.6 ms | same, finite |
+
+**G13X verdict: PASS — indistinguishable from the deployed driver on every
+leg** (decode parity, pf512 parity, pf2048 −1.2% n=1 within noise, TTFT
+parity), digests bit-exact across arms per leg. Only the G13G arm of this
+candidate remains pending host availability.
+
 ## T8103 v3 substitute evidence
 
 The T8103 host hung (initramfs) during this lane's v3 window, so the lane has
