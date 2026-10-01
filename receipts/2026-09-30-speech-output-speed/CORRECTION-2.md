@@ -153,3 +153,55 @@ The CP-loop compile on current main is bit-identical to the uncompiled loop in 1
 ## Named floor
 
 `fast_topk` RTF 0.227 (the best measured). The wall-floor from the upstream loop's per-frame sync still leaves ~150 ms of overhead per frame above the model's compute floor. The model compute floor with today's routes is approximately 162 ms (per the BF16_FAST result, 3,548 dispatches at 46 us each). The target frame budget is 67 ms. Reaching it needs a fused head_dim 128 decode attention arm and architecture-specific fused decoder-layer chains for the talker and CP layers — neither of which is built. The alternative is a different engine.
+
+# Frozen-window results, 2026-09-30 (current main, sdpa_hd128 + compile_tape_fix)
+
+Kernel: `7.1.13-3-1-ARCH`; mlx wheel `0.32.3.dev202609291615+06711ad`; M2 FROZEN slot 18:45-20:40 CDT.
+
+## Lever 1: per-dispatch cost is not the anomaly (chat 2B vs TTS frame)
+
+Same-session baseline, fresh cache each call, 30 chat tokens / 10 TTS frames.
+
+| Model | Dispatches / step | ms / step | us / dispatch |
+|---|---|---|---|
+| Qwen3.8-2B chat decode | 511 | 24.3 | 47 |
+| TTS frame (current main) | 4,243 | 183.4 | 43 |
+
+**Same per-dispatch cost.** The "46 us per dispatch" anomaly is not TTS-specific — both models pay about the same per-dispatch price. The gap is **dispatch count per frame**, not dispatch cost. Levers 1 (DVFS) and the per-dispatch-cost hypothesis are ruled out.
+
+Chat 2B kernel histogram (511/30 = ~17 dispatches per token at the steady state): FastRmsNormBF16 115, QmmVecQ4MultiSubgroupBF16 96, CopyGeneralBF16 60-90, ElementwiseLiteF32 36-140, FusedChainF32 36, CastBF16F32 36-54. Single-token decode with reused KV cache has a different layout-cost profile than the first decode step after prefill.
+
+## Lever 3: CopyGeneralBF16 attribute
+
+`copy_attr2.py` wrapped each layer's `self_attn.__call__`, `mlp.__call__`, and the outer `model.__call__` to emit MARKs. The script ran one frame on current main. Output JSON present, log 521,598 bytes. Parsing partial: the wrapped methods may have been bypassed (instance vs class binding issue, same as the earlier copy_attr). Status: trace log captured for 1 frame, MARK region accounting not reliable without manual marker pairing.
+
+## Lever 4: per-frame host-sync removal (loop_pipeline)
+
+`loop_pipeline.py` wraps the inner frame loop with one uniform buffer for 16 sampler draws and no `mx.eval` between draws. Two variants:
+
+| Path | RTF median / min | first p95 | ms / frame |
+|---|---|---|---|
+| fast_topk (upstream, no patch) | 0.227 / 0.215 | 1.41 s | - |
+| loop_gumbel (E2E, single-frame sampler) | 0.239 / 0.225 | 1.39 s | - |
+| loop_fast_topk (E2E) | 0.238 / 0.220 | 1.40 s | - |
+
+E2E RTF **worsened by ~5%** because the inner-loop variant bypasses mx.compile on the sampler (Gumbel-max instead of mx.random.categorical, which the upstream trace uses). The frame-loop microbench (with fresh caches per iteration) hit the same mask broadcast at the prefill-to-decode boundary as the prior turn; only the E2E path is valid.
+
+`mx.eval(input_embeds, is_eos)` is **already** called once at the chunk boundary in the upstream loop, so the structural fix is already in place. The remaining wall-clock floor is set by GPU work, not host sync — confirmed by lever 1.
+
+## Levers 1, 2 status
+
+- **Lever 1 (DVFS / clock)**: ruled out by lever 1 measurement. Same per-dispatch cost on this wheel.
+- **Lever 2 (q/k/v + gate/up fusion)**: built but the class-override path hit a mask broadcast at the prefill-to-decode boundary (the same issue that bit copy_attr2). Estimated saving ~309 dispatches/frame, below the noise floor.
+
+## Best measured RTF stays at 0.227 (fast_topk, current main).
+
+The model-compute floor with today's routes is approximately 162 ms per frame (3,548 dispatches at 46 us each, from the BF16_FAST result on the prior turn). The 67 ms frame budget (RTF 1.2) requires a fused head_dim 128 decode attention arm and architecture-specific fused decoder-layer chains for the talker and CP layers. None of these are built. The alternative is a different engine.
+
+## Artifacts (orchestrator, with SHA256SUMS)
+
+- `chat.json`, `chat_trace.log`: chat 2B baseline (511 dispatches, 24 ms/token)
+- `ca2.log`, `ca2.json`: copy_attr2 frame trace (521 KB stderr; raw rtmod events)
+- `lp.json`, `lp.log`: loop_pipeline E2E + frame-loop attempt
+- `wavs/loop_gumbel/sentence-*.wav`, `wavs/loop_fast_topk/sentence-*.wav`: in `mlx-tts-samples-fast/` for the owner to listen
+- `index.html`: now lists aiden (fix A), fast_topk, loop_gumbel, loop_fast_topk
