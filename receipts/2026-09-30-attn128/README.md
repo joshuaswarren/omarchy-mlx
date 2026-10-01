@@ -252,11 +252,28 @@ lane's tip and dropped the commits that had landed after `8b3982c21`.
 Merge `1bd649b80` restored that lineage. Every push from this lane since
 then has been a fetch, a rebase, and a fast-forward.
 
-## Open item
+## Update 2026-10-01: 16-bit selection restored on non-G13 parts
 
-The 16-bit selection route stays gated to float32 (`666d22c13`). Its
-reversal waits on one G13-class run of the selection-route doctest. On
-M2-class parts all three reversal conditions above already hold.
+The float32-only gate (`666d22c13`) is replaced by a chip-class gate
+(`27f47aa5d`): 16-bit rows take the one-dispatch selection everywhere
+except G13 parts (M1 family), which keep the sort route. On the M2 Max
+("Apple M2 Max (G14C B1)") all three reversal conditions held: the
+selection-route doctest is bit-exact against device-held input words
+(57/57 cases, 35,859 assertions), the route is 2.5-3.2x faster than the
+sort route on 1 x 151,936 bf16/f16 rows at k 20/50 with identical tail
+words, and Qwen3-4B top_k sampling produced identical ids through
+argpartition and threshold-via-`mx.topk` masks. The full battery at that
+commit is green (compiled tape 13/13, fused chain 36/36 with 346,272
+assertions, runtime 41/41, primitive 104/104 with 2,743,003, fast ops
+36/36, indexing 57/57, decode fused 6/6).
+
+**G13 remains unverified**: no G13-class host ran the selection-route
+doctest (the M1 was down for reinstall; the M1 Max was in gated ANE
+work). On a G13 part the 16-bit rows keep the sort route, which is the
+long-standing behavior, and the doctest reads the device name so its
+expectations follow the part. A G13 run of `omarchy_indexing_ops_tests`
+at any commit from `27f47aa5d` on closes the item; if it fails, the
+fix is to extend the exclusion, not to hunt the kernel.
 
 A build-flow defect is outside this change but blocks source-built
 baselines. A raw `pip wheel` of pre-Attn128 commit `c89392a5c` on the
