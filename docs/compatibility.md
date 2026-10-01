@@ -700,3 +700,20 @@ A Supported row must link every applicable record.
 (6) Record prefill, decode, first-token, memory, and thermal results.
 (7) Record the repeated-request stability result.
 (8) Link the clean-install command output.
+
+## Training gradients status (2026-10-01)
+
+- Composed SDPA backward: dk is wrong at specific elements (last-dim of
+  early keys, head-1 last-key) at rep=1 shapes 5x7, 4x4, and 6x9 on
+  Honeykrisp (fd doctest, may_fail, omarchy_fast_ops_tests
+  "fused sdpa vjp dk dv match finite differences at rep=1"). dq, dv,
+  and GQA-shape dk are fd-clean on the same runs. Under investigation;
+  the defect lives in the composed backward chain (standalone matmul
+  repros are clean at the exact operand configs).
+- Fused SDPA VJP: gated off for all shapes (2088e1c6a) pending
+  dq/dk/dv finite-difference parity at rep=1, 2, 4 on real hardware.
+  The GQA gate predates this (db30ab6ec). No user is served fused SDPA
+  training gradients until the parity gate flips.
+- Fused gated-delta-net (GDN) VJP: serving GQA shapes, fd-verified
+  against the composed reference on M2 G14X (doctest "fused gdn vjp
+  matches the composed reference at GQA shapes").
