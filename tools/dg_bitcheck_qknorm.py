@@ -77,6 +77,10 @@ def case(name, st, xv, wv, kd, sq, sk, eps=1e-6, fenced=False):
             st, xv, wv, True,
             qk_key_dim=kd, qk_scale_q=sq, qk_scale_k=sk, qk_eps=eps,
         )
+        # Force the async eval inside the try: an epilogue-geometry
+        # refusal throws from eval_gpu at materialization, not at the
+        # graph-building call.
+        mx.eval(fout)
     except TypeError:
         rows[f"qknorm.fused.{name}"] = "ABSENT"
         return False
@@ -133,8 +137,9 @@ state2 = bf16(rng.standard_normal((2, K - 1, C)) * 0.7)
 x2 = bf16(rng.standard_normal((2, 1, C)) * 0.7)
 cases["model-b2-kd2048"] = (state2, x2, w)
 
-# Geometry variety: kd 512 / 256 (v sized to 3 heads of 128).
-for kd, vd in ((512, 384), (256, 128)):
+# Geometry variety: kd 512 / 256 with v sized so C % 256 == 0 (the
+# fused epilogue requires count % 256 == 0; C = 2*kd + v).
+for kd, vd in ((512, 512), (256, 256)):
     c = 2 * kd + vd
     stv = bf16(rng.standard_normal((1, K - 1, c)) * 0.7)
     xv = bf16(rng.standard_normal((1, 1, c)) * 0.7)
