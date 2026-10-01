@@ -1438,51 +1438,61 @@ TEST_CASE("wide-row small-k partition covers rows, ties, and 16-bit dtypes") {
     }
   }
 
-  // bf16 rows built at the bit level (f16 shares the path through F16_IO).
-  std::vector<uint16_t> bf16_bits;
-  std::vector<std::vector<uint32_t>> widened_rows;
+  // 16-bit rows (bf16 and f16). Input comes through astype - never
+  // array(uint16_t*, shape, bfloat16), whose init() VALUE-converts each
+  // uint16 (0xBF00 became 48896); that ctor was the whole 2026-09-30
+  // "bf16 defect". The reference reads back the device-held input words,
+  // widens them exactly, stable-sorts by the documented key and takes the
+  // INPUT words at the top-k indices, so no host narrowing can disagree.
+  // 16-bit rows currently take the wide-row sort route (the selection
+  // arm is gated to float32 in dispatch_sort_wide).
+  constexpr bool kSixteenBitSelects = false;
+  std::vector<float> rows16;
   for (int r = 0; r < 2; ++r) {
     auto row = smallk_pattern(n, 303 + r);
-    std::vector<uint32_t> widened(n);
-    for (int i = 0; i < n; ++i) {
-      uint16_t bits = f32_to_bf16_rne(row[i]);
-      bf16_bits.push_back(bits);
-      widened[i] = static_cast<uint32_t>(bits) << 16;
-    }
-    widened_rows.push_back(std::move(widened));
+    rows16.insert(rows16.end(), row.begin(), row.end());
   }
-  array b = array(bf16_bits.data(), Shape{2, n}, bfloat16);
-  uint64_t bf16_dispatches = smallk_dispatches(
-      [&] { return partition(b, kth, -1, stream); }, stream);
-  CHECK_EQ(bf16_dispatches, 1);
-  {
-    array dense = contiguous(partition(b, kth, -1, stream));
+  array rows16_f32 = array(rows16.begin(), Shape{2, n}, float32);
+  for (Dtype dtype : {bfloat16, float16}) {
+    CAPTURE(dtype == bfloat16 ? "bf16" : "f16");
+    array x = contiguous(astype(rows16_f32, dtype, stream), false, stream);
+    x.eval();
+    sync_gpu(stream);
+    const uint16_t* in_words = x.data<uint16_t>();
+    auto widen = [&](uint16_t w) {
+      return dtype == bfloat16 ? static_cast<uint32_t>(w) << 16
+                               : float_bits(f16_bits_to_float(w));
+    };
+    uint64_t dispatches = smallk_dispatches(
+        [&] { return partition(x, kth, -1, stream); }, stream);
+    if (kSixteenBitSelects) {
+      CHECK_EQ(dispatches, 1);
+    } else {
+      CHECK(dispatches > 1);
+    }
+    array dense = contiguous(partition(x, kth, -1, stream));
     dense.eval();
     sync_gpu(stream);
     const uint16_t* words = dense.data<uint16_t>();
     for (int r = 0; r < 2; ++r) {
-      auto tail = host_tail_bits(widened_rows[r], k);
+      std::vector<uint32_t> keys(n);
+      for (int i = 0; i < n; ++i) {
+        keys[i] = host_key(widen(in_words[r * n + i]));
+      }
+      std::vector<int> order(n);
+      std::iota(order.begin(), order.end(), 0);
+      std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        return keys[a] < keys[b];
+      });
       for (int i = 0; i < k; ++i) {
         CHECK_MESSAGE(
-            words[r * n + kth + i] == static_cast<uint16_t>(tail[i] >> 16),
-            "bf16 tail mismatch r=",
-            r,
-            " i=",
-            i,
-            " got=0x",
-            std::hex,
-            words[r * n + kth + i],
-            " want=0x",
-            static_cast<uint16_t>(tail[i] >> 16),
-            std::dec,
-            " row[kth+i] window:",
-            [&, r, i] {
-              std::ostringstream os;
-              for (int j = 0; j < k; ++j) {
-                os << " " << std::hex << words[r * n + kth + j] << std::dec;
-              }
-              return os.str();
-            }());
+            words[r * n + kth + i] == in_words[r * n + order[n - k + i]],
+            "tail r=", r, " i=", i, " got=", words[r * n + kth + i],
+            " want=", in_words[r * n + order[n - k + i]]);
+      }
+      uint32_t first = host_key(widen(words[r * n + kth]));
+      for (int i = 0; i < kth; ++i) {
+        CHECK(host_key(widen(words[r * n + i])) <= first);
       }
     }
   }
