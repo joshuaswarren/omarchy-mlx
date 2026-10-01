@@ -69,3 +69,8 @@ the first sentence as soon as it is decoded (it is audible in under
 the first chunk's latency), so the user perceives latency as ~1.4 s
 even when total wall is much higher. synthesis.py's `synthesize_chunks`
 already supports this via `stream=True, streaming_interval=0.32`.
+
+
+## Addendum: vendored module removed
+
+The vendored forward (`serve/mlx_omarchy_assistant/_vendored/qwen3_tts_step.py`) and its equivalence probes were deleted from main after this study because nothing uses them. The last commit that contains them is c60d9aca5 (recover with `git show c60d9aca5:serve/mlx_omarchy_assistant/_vendored/qwen3_tts_step.py`).
