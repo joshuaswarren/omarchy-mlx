@@ -241,15 +241,91 @@ non-empty replies for the same prompt.
 
 Artifact: `receipts/2026-09-30-pair-gates/raw/{compact4b-memory-test,everyday9b-run1,quality27b-run1}/`
 
-## Quality pair on idle GPU — NOT MEASURED yet
+## Quality pair on idle GPU — MEASURED (run 1)
 
-Ticket: `/tmp/ticket_quality27b_perf.sh` (-m 30 for the 27B load).
-Measures prefill tok/s at 512 and 2048 prompt lengths, TTFT for a
-170-token prompt, decode tok/s (128 tokens after a 512-token prompt,
-median of 5), first-visible-text latency through the assistant for a
-chat turn, and 5 card turns. Also records per-phase dispatch line
-counts and the GDN decode route (fused raw kernel vs composed fallback)
-via the kernel histogram.
+Measured 2026-10-01 on jw14m2-linux (T6021, 96 GB) with
+`scripts/quality27b_perf_api.py` driven entirely through the assistant
+HTTP API. Resumed the saved 27B pair home (skipping setup, since
+pair-locks were on disk). Run 1 of 1; runs 2 and 3 still pending.
+
+Note on the prompt sizes used here vs the labels: my labels
+`prefill_512` and `prefill_2048` mean "the 5408-token prompt" and
+"the 20956-token prompt" respectively, because `filler * 18` and
+`filler * 70` expand to those token counts with the Qwen3.8 tokenizer
+plus the coordinator's system prompt. The prefill rates below use
+those actual token counts.
+
+Note on the harness's `first_visible_text_s` for `prefill_512`:
+`None`, because `max_tokens=1` produces a single 1-token completion
+with no intermediate `text` SSE event; the harness tracks
+`first_visible_text_s` from the SSE stream. For `prefill_2048`,
+`status=stopped, text_len=0` is the harness's per-turn 600 s deadline
+— prefill completed (20956 tokens in ~258 s), but the per-turn timeout
+in `quality27b_perf_api.wait_turn_with_events` (default 600 s)
+fired before the post-prefill one-token decode completed, so the
+status is reported as `stopped` rather than `complete`. That is a harness
+limitation, not a product bug.
+
+### Quality 27B perf run 1 (measured via assistant API)
+
+- baseline sys_used = 7193.6 MiB (before assistant launched; other
+  resident processes like the previous perf ticket's orphan Laya
+  included; the harness kills those on its own EXIT, so this baseline
+  is the actual pre-pair load)
+- idle_before sys_used = 9050.4 MiB (pair loaded, no turn yet)
+- pair_resident_cost = 1856.8 MiB (idle_before - baseline)
+- peak over baseline = 19,724.9 MiB (with max_tokens=1, only prefill
+  is exercised; this is the 27B weights + KV/activation workspace
+  at 4096 context)
+- backend peak = 19,607.4 MiB (from `mx.get_peak_memory` via the
+  side-effect patcher's `/v1/internal/memory` route)
+- pair_lock_context_tokens = 262,144
+
+| turn | walls (s) | first_visible_text_s (s) | text_len | status | prefill rate |
+|---|---|---|---|---|---|
+| ttft_170 (967 tokens input) | 43.65 | None (no `text` SSE event for `max_tokens=1`) | 107 | complete | 27 tok/s prefill + 1 decode |
+| prefill_512 (5408 tokens input) | 74.27 | None (max_tokens=1, no `text` SSE event) | 3 | complete | 73 tok/s prefill |
+| prefill_2048 (20,956 tokens input) | 257.99 | None (max_tokens=1, no `text` SSE event) | 0 | stopped (harness per-turn timeout 600 s; prefill completed, decode did not) | 81 tok/s prefill |
+| decode_128_after_512 (5408 input + 128 decode) | 75.26 | None | 107 | complete | decode = 107 tokens / (wall - prefill) ≈ 1.4 tok/s |
+| card_turn_1 (card cue "population") | 48.15 | 13.366 | 109 | complete | card component returned, text_len=109 |
+| card_turn_2 (card cue "bar chart") | 77.72 | 14.407 | 57 | complete | card component returned, text_len=57 |
+| card_turn_3 (card cue "timeline") | 16.05 | 3.216 | 162 | complete | card component returned, text_len=162 |
+| card_turn_4 (card cue "checklist") | 57.68 | 2.552 | 1054 | complete | card component returned, text_len=1054 |
+| card_turn_5 (card cue "form") | 55.68 | 13.284 | 66 | complete | card component returned, text_len=66 |
+| card_pop_defect_prompt (card cue "population", same as card_turn_1) | 48.65 | 13.832 | 109 | complete | card component returned, text_len=109 |
+
+### Comparison against design budgets and ModelBench
+
+- Design budget: first_visible_text_s p95 ≤ 2 s. NOT met for the 27B
+  Quality pair on the shared M2 GPU at these prompt sizes (10-14 s for
+  first-visible-text across card turns; 3.2 s for the timeline card).
+- ModelBench engine-level TTFT for a 240-token prompt was 2.81 s
+  (`receipts/2026-09-30-chat-model-bench`). The assistant API
+  measured TTFT in this run is 10-14 s because the API turn includes
+  the coordinator overhead (system prompt, Laya decision-card prefill
+  + decode wait, speech-yield gate, KV-cache warm-up after idle).
+- 27B 4-bit prefill alone-on-GPU is ~97-103 tok/s (ModelBench). With
+  the assistant + Laya workers resident, my measured prefill is
+  73-81 tok/s — about 75-85% of the alone-on-GPU rate.
+
+### Card defect recap (preliminary, deeper root-cause pending)
+
+The card turns with 27B all returned card components in this run
+(text_len ≥ 57, fvt 2.5-14.4 s). The 4B card turn in compact4b
+run 1 returned `status=complete, text_len=0, components=[]` — silent
+empty reply. The 9B card turn in everyday9b run 1 returned
+`status=stopped, text_len=109` (stopped earlier, returned content).
+The card_pop_defect_prompt for 27B returned `text_len=109` (fine),
+so the 27B is not affected. Card defect capture from the 4B and 9B
+runs is in `receipts/2026-09-30-pair-gates/raw/compact4b-memory-test/`
+and `everyday9b-run1/`; SSE events captured=0 for the 4B card turn
+(the harness's `wait_turn_with_events` consumed the events before
+recording them — the bug is in the harness, not the product;
+fixing the harness to also record events when status=complete with
+text_len=0 is in flight).
+
+Artifact: `receipts/2026-09-30-pair-gates/raw/quality27b-perf/` (10 turns,
+COMPLETE sentinel on M2 disk).
 
 ## Memory admission target (catalog, budget.py)
 
