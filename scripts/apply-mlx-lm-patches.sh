@@ -99,3 +99,10 @@ apply mlx-lm-last-logits.patch
 # MLX_OMARCHY_ROPE_NORM_FUSE=1 to enable (kill switch =0). Python patcher:
 # GNU patch 2.8 on this host fails byte-verified hunks (DecodeFuse3).
 python3 "$ROOT/scripts/patch-mlx-lm-rope-norm.py" "$VENV"
+# GDN q/k rms_norm_scaled -> gdn_conv_update epilogue (F4): the conv
+# dispatch carries the per-head norm pair (fast_norm_gated mode-1
+# semantics in the gdn_conv_decode kernel epilogue), bit-identical to the
+# composed chain. Default OFF: set MLX_OMARCHY_GDN_QKNORM_FUSE=1 to
+# enable (kill switch =0). Python patcher (GNU patch 2.8 on this host
+# fails byte-verified hunks, DecodeFuse3).
+python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"

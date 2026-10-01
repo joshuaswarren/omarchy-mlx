@@ -11507,6 +11507,23 @@ void GdnConvUpdate::eval_gpu(
   if (activates()) {
     params.flags |= 1u;
   }
+  if (qk_key_dim() > 0) {
+    // F4: the q/k rms_norm_scaled pair folds into the kernel epilogue
+    // (flag bit 1; fast_norm_gated mode-1 semantics per head-row of 128
+    // channels). The shared-memory reduction tree requires one element
+    // per thread with exactly one grid-stride iteration, and the
+    // per-head-row scale must be workgroup-uniform (key_dim % 256 == 0
+    // puts the q|k boundary on a workgroup edge). Refuse loudly outside
+    // that geometry — never silently skip the epilogue on a fused call.
+    if (qk_key_dim() % 256 != 0 || params.count % 256u != 0u) {
+      omarchy::unsupported(tag + " qk-norm epilogue geometry", out);
+    }
+    params.flags |= 2u;
+    params.rhs_size = checked_u32(static_cast<size_t>(qk_key_dim()), tag, out);
+    params.matrix_m = std::bit_cast<uint32_t>(qk_scale_q());
+    params.matrix_n = std::bit_cast<uint32_t>(qk_scale_k());
+    params.matrix_k = std::bit_cast<uint32_t>(qk_eps());
+  }
   std::array<omarchy::ComputeBinding, 5> bindings{
       binding(in_state),
       binding(in_x),

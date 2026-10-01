@@ -1,6 +1,6 @@
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
-@@ -108,6 +108,22 @@
+@@ -137,6 +137,35 @@
      const std::optional<array>& mask = std::nullopt,
      StreamOrDevice s = {});
  
@@ -13,11 +13,24 @@
 +// the same dispatch: the fused kernel rounds the conv output, the
 +// sigmoid, and the product exactly like the composed chain, and the
 +// fallback composes out * sigmoid(out).
++// `qk_key_dim > 0` additionally folds the GDN q/k per-head rms_norm_scaled
++// calls into the same dispatch (the model's q = rms_norm_scaled(q, None,
++// inv_scale^2, eps); k = rms_norm_scaled(k, None, inv_scale, eps) over
++// 128-channel head-rows of the first 2*qk_key_dim channels). The fused
++// kernel reproduces the FastNormGatedBF16 mode-1 reduction and rounding
++// exactly; the fallback composes the exact model ops. The wrapper refuses
++// qk work it cannot fuse (loudly, per the omarchy error contract): the
++// kernel needs count % 256 == 0 and qk_key_dim % 256 == 0, and the caller
++// guarantees head_dim == 128.
 +MLX_API std::vector<array> gdn_conv_update(
 +    const array& state,
 +    const array& x,
 +    const array& weight,
 +    bool activate = false,
++    int qk_key_dim = 0,
++    float qk_scale_q = 0.0f,
++    float qk_scale_k = 0.0f,
++    float qk_eps = 0.0f,
 +    StreamOrDevice s = {});
 +
  using TemplateArg = std::variant<int, bool, Dtype>;
@@ -25,7 +38,7 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1441,6 +1441,47 @@
+@@ -1578,6 +1578,75 @@
    return result;
  }
  
@@ -34,17 +47,44 @@
 +    const array& x,
 +    const array& weight,
 +    bool activate,
++    int qk_key_dim,
++    float qk_scale_q,
++    float qk_scale_k,
++    float qk_eps,
 +    StreamOrDevice s_) {
 +  auto s = to_stream(s_);
 +  // Fallback composes the exact ops the model runs today: concatenate
 +  // the carry-in state onto the row, conv1d over it, apply the model's
 +  // silu when `activate` (out * sigmoid(out), the nn.silu composition),
-+  // and keep the last K-1 rows as the carry-out state.
-+  auto fallback = [s, activate](std::vector<array> inputs) {
++  // and keep the last K-1 rows as the carry-out state. With
++  // `qk_key_dim > 0` it also composes the model's per-head
++  // rms_norm_scaled q/k pair (reshape to head rows of 128, norm, reshape
++  // back) on the first 2*qk_key_dim channels of the conv output.
++  auto fallback = [s, activate, qk_key_dim, qk_scale_q, qk_scale_k, qk_eps](
++                      std::vector<array> inputs) {
 +    auto ci = concatenate({inputs[0], inputs[1]}, 1, s);
 +    auto out = conv1d(ci, inputs[2], 1, 0, 1, inputs[2].shape(0), s);
 +    if (activate) {
 +      out = out * sigmoid(out, s);
++    }
++    if (qk_key_dim > 0) {
++      int b = out.shape(0);
++      int t = out.shape(1);
++      auto parts = split(out, {qk_key_dim, 2 * qk_key_dim}, -1, s);
++      auto shape4 = Shape{b, t, qk_key_dim / 128, 128};
++      auto norm_one = [&](const array& part, double scale) {
++        auto r = reshape(part, shape4, s);
++        array n = (part.dtype() == bfloat16)
++            ? rms_norm_scaled(r, std::nullopt, scale, qk_eps, s)
++            : scale * rms_norm(r, std::nullopt, qk_eps, s);
++        return reshape(n, part.shape(), s);
++      };
++      out = concatenate(
++          {norm_one(parts[0], qk_scale_q),
++           norm_one(parts[1], qk_scale_k),
++           parts[2]},
++          -1,
++          s);
 +    }
 +    int keep = inputs[2].shape(2) - 1;
 +    int start_t = ci.shape(1) - keep;
@@ -66,7 +106,8 @@
 +      /* output shapes */ {{B, 1, C}, {B, K - 1, C}},
 +      /* dtypes */ {bfloat16, bfloat16},
 +      /* primitive */
-+      std::make_shared<GdnConvUpdate>(s, fallback, activate),
++      std::make_shared<GdnConvUpdate>(
++          s, fallback, activate, qk_key_dim, qk_scale_q, qk_scale_k, qk_eps),
 +      /* inputs */ std::vector<array>{state, x, weight});
 +}
 +
@@ -75,7 +116,7 @@
    return (
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -495,6 +495,49 @@
+@@ -508,6 +508,75 @@
    bool raw_gates_{false};
  };
  
@@ -84,8 +125,17 @@
 +  GdnConvUpdate(
 +      Stream stream,
 +      std::function<std::vector<array>(std::vector<array>)> fallback,
-+      bool activate)
-+      : Custom(stream, std::move(fallback)), activate_{activate} {}
++      bool activate,
++      int qk_key_dim = 0,
++      float qk_scale_q = 0.0f,
++      float qk_scale_k = 0.0f,
++      float qk_eps = 0.0f)
++      : Custom(stream, std::move(fallback)),
++        activate_{activate},
++        qk_key_dim_{qk_key_dim},
++        qk_scale_q_{qk_scale_q},
++        qk_scale_k_{qk_scale_k},
++        qk_eps_{qk_eps} {}
 +  // Backend-defined: the fused path never composes.
 +  static bool use_fallback(Stream s);
 +  // Decode-shaped depthwise causal conv (groups == C, stride 1, no
@@ -116,18 +166,35 @@
 +  bool activates() const {
 +    return activate_;
 +  }
++  // F4 q/k norm epilogue parameters (qk_key_dim > 0 enables the fold).
++  int qk_key_dim() const {
++    return qk_key_dim_;
++  }
++  float qk_scale_q() const {
++    return qk_scale_q_;
++  }
++  float qk_scale_k() const {
++    return qk_scale_k_;
++  }
++  float qk_eps() const {
++    return qk_eps_;
++  }
 +  DEFINE_NAME(GdnConvUpdate)
 +  DEFINE_INPUT_OUTPUT_SHAPE()
 +
 + private:
 +  bool activate_{false};
++  int qk_key_dim_{0};
++  float qk_scale_q_{0.0f};
++  float qk_scale_k_{0.0f};
++  float qk_eps_{0.0f};
 +};
  class Quantize : public Custom {
   public:
    explicit Quantize(
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
-@@ -501,6 +501,30 @@
+@@ -551,6 +551,46 @@
          )");
  
    m.def(
@@ -137,6 +204,10 @@
 +      "x"_a,
 +      "weight"_a,
 +      "activate"_a = false,
++      "qk_key_dim"_a = 0,
++      "qk_scale_q"_a = 0.0,
++      "qk_scale_k"_a = 0.0,
++      "qk_eps"_a = 0.0,
 +      "stream"_a = nb::none(), // optional, defaults to None
 +      R"(
 +            GDN decode causal depthwise conv with the state concatenation
@@ -144,6 +215,13 @@
 +            written in-kernel. Bit-exact to the composed
 +            concatenate + conv1d path. Decode (T == 1) only; larger T
 +            composes the exact eager ops.
++            With qk_key_dim > 0 the GDN q/k per-head rms_norm_scaled pair
++            folds into the same dispatch over the first 2*qk_key_dim
++            channels (128-channel head rows; the model's
++            q = rms_norm_scaled(q, None, inv_scale**2, eps),
++            k = rms_norm_scaled(k, None, inv_scale, eps)). Bit-exact to
++            the composed norm pair; requires qk_key_dim % 256 == 0 and
++            B*C % 256 == 0 and refuses loudly otherwise.
 +            Args:
 +                state: Conv state [B, K-1, C]
 +                x: Decode row [B, 1, C]
@@ -151,6 +229,11 @@
 +                activate: Apply silu to the conv output inside the same
 +                    dispatch (the model's nn.silu); bit-exact to the
 +                    composed sigmoid -> multiply chain.
++                qk_key_dim: GDN key dimension (channels of q = channels
++                    of k); 0 disables the q/k norm fold.
++                qk_scale_q: q norm scale (the model's inv_scale**2).
++                qk_scale_k: k norm scale (the model's inv_scale).
++                qk_eps: q/k norm epsilon.
 +            Returns:
 +                Tuple of (conv_out [B, 1, C], new_state [B, K-1, C])
 +        )");
