@@ -27,7 +27,7 @@ head_dim = cfg.head_dim
 
 def diff(a, b):
     d = mx.abs(a.astype(mx.float32) - b.astype(mx.float32))
-    return float(mx.max(d).item()), float(mx.quantile(d, 0.9999).item())
+    return float(mx.max(d).item()), float(mx.sort(d.reshape(-1))[-(int(d.size * 0.0001) + 1)].item())
 
 
 results = {}

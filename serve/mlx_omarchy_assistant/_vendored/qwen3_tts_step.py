@@ -100,9 +100,16 @@ def fused_rms_norm(x: mx.array, weight: mx.array, eps: float) -> mx.array:
 
 
 def fused_rope(q: mx.array, k: mx.array, cos: mx.array, sin: mx.array) -> Tuple[mx.array, mx.array]:
-    """mx.fast.rope: returns (q', k') with cos/sin applied on the head axis.
-    Shapes: q [B, H_q, S, D], k [B, H_kv, S, D]; cos/sin [B, S, D]."""
-    return mx.fast.rope(q, k, cos, sin)
+    """Multimodal rotary embedding applied to q and k.
+
+    Falls back to the upstream TalkerRotaryEmbedding path because
+    mx.fast.rope's API requires precomputed 1D frequency tables and does
+    not support the 3D mrope combine that Qwen3-TTS uses. We use the
+    upstream's apply_multimodal_rotary_pos_emb, which is already
+    mx.compile-decorated in voice-site.
+    """
+    from mlx_audio.tts.models.qwen3_tts.talker import apply_multimodal_rotary_pos_emb
+    return apply_multimodal_rotary_pos_emb(q, k, cos, sin)
 
 
 def fused_sdpa(q, k, v, scale: float, mask=None):
