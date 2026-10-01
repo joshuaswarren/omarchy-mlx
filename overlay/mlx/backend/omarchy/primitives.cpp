@@ -501,7 +501,7 @@ void dispatch_matmul(
     for (auto st : b_in.strides()) std::fprintf(stderr, "%d,", (int)st);
     std::fprintf(stderr, "] bT=%d bgap=%u | out shape=[", b_transposed, b_gap);
     for (auto d : out.shape()) std::fprintf(stderr, "%d,", (int)d);
-    std::fprintf(stderr, "] dtype=%s\n", dtype_to_string(out.dtype()).c_str());
+    std::fprintf(stderr, "] dtype=%s\n", dtype_to_string(out.dtype()));
   }
   const array* a = a_materialized ? &*a_materialized : &a_in;
   const array* b = b_materialized ? &*b_materialized : &b_in;
