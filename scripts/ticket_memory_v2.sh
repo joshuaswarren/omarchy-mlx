@@ -10,14 +10,20 @@ ART_DIR=${4:?artifact dir required}
 MAXM=${5:-15}
 WORKTREE=$HOME/agents/PairGates/main-checkout
 VENV=$HOME/.local/share/mlx-omarchy/venv/bin/python
+source "$WORKTREE/scripts/ticket_guard.sh"
 
 mkdir -p "$ART_DIR"
 mkdir -p "$HOME_DIR/assistant/logs" "$HOME_DIR/assistant/pair-locks" "$HOME_DIR/models"
 
+# Kill MY leftovers from aborted tickets first, then observe.
+guard_kill_leftovers "$HOME_DIR"
 LOAD_BEFORE=$(cat /proc/loadavg)
 uname_r=$(uname -r)
 GPU_USERS_BEFORE=$(fuser /dev/dri/renderD128 2>/dev/null | tr -d ' ' || true)
 echo "loadavg_before=$LOAD_BEFORE uname_r=$uname_r fuser_before=$GPU_USERS_BEFORE" | tee "$ART_DIR/launch.log"
+
+# Watchdog: kill the assistant tree if this ticket dies on ANY path.
+guard_start_watchdog "$HOME_DIR"
 
 PYTHONPATH=$WORKTREE/scripts:$WORKTREE/serve \
   MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1 \
@@ -34,6 +40,7 @@ pkill -KILL -f "mlx_omarchy_assistant" 2>/dev/null || true
 pkill -KILL -f "_mlxlm_server" 2>/dev/null || true
 pkill -KILL -f "mlx_omarchy_laya" 2>/dev/null || true
 
+guard_kill_leftovers "$HOME_DIR"
 LOAD_AFTER=$(cat /proc/loadavg)
 GPU_USERS_AFTER=$(fuser /dev/dri/renderD128 2>/dev/null | tr -d ' ' || true)
 echo "loadavg_after=$LOAD_AFTER fuser_after=$GPU_USERS_AFTER" | tee -a "$ART_DIR/launch.log"
