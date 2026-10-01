@@ -22,7 +22,7 @@ V.vendorize_talker(model)
 V.vendorize_cp(model)
 
 cfg = model.config.talker_config
-head_dim = cfg.hidden_size // cfg.num_attention_heads
+head_dim = cfg.head_dim
 
 
 def diff(a, b):
