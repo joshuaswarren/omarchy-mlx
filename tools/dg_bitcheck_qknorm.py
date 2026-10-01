@@ -86,7 +86,9 @@ def case(name, st, xv, wv, kd, sq, sk, eps=1e-6, fenced=False):
         return False
     except RuntimeError:
         rows[f"qknorm.fence.{name}"] = "RAISED"
-        return not fenced
+        # A fenced leg raising is the pass condition; an unfenced leg
+        # raising is a failure.
+        return fenced
     if fenced:
         rows[f"qknorm.fence.{name}"] = "NOT-RAISED"
         return False

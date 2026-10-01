@@ -38,7 +38,7 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1578,6 +1578,75 @@
+@@ -1578,6 +1578,82 @@
    return result;
  }
  
@@ -74,9 +74,16 @@
 +      auto shape4 = Shape{b, t, qk_key_dim / 128, 128};
 +      auto norm_one = [&](const array& part, double scale) {
 +        auto r = reshape(part, shape4, s);
++        // Off-bf16, the model composes a python-scalar multiply: the
++        // scalar converts to the array's dtype FIRST (one rounding),
++        // so wrap the scale at the part's dtype instead of relying on
++        // C++ scalar promotion (float32), which double-rounds.
 +        array n = (part.dtype() == bfloat16)
 +            ? rms_norm_scaled(r, std::nullopt, scale, qk_eps, s)
-+            : scale * rms_norm(r, std::nullopt, qk_eps, s);
++            : multiply(
++                  array(scale, part.dtype()),
++                  rms_norm(r, std::nullopt, qk_eps, s),
++                  s);
 +        return reshape(n, part.shape(), s);
 +      };
 +      out = concatenate(
