@@ -1,0 +1,31 @@
+baseline sys_used=5681.6 MiB
+do_setup=True
+setup complete
+chat port: 39695
+Traceback (most recent call last):
+  File "<home>/agents/PairGates/main-checkout/scripts/pair_memory_v2.py", line 457, in <module>
+    main()
+    ~~~~^^
+  File "<home>/agents/PairGates/main-checkout/scripts/pair_memory_v2.py", line 381, in main
+    cid, turn = submit_turn(pair.runtime, prompt, mode=mode,
+                ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                           max_tokens=max_tokens, options=options,
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                           criteria=criteria)
+                           ^^^^^^^^^^^^^^^^^^
+TypeError: submit_turn() got an unexpected keyword argument 'options'
+baseline sys_used=6048.2 MiB
+do_setup=False
+setup complete
+chat port: 38485
+plain_chat: status=complete text_len=5 components=[] valid=True wall=2.0s
+long_context: status=complete text_len=44 components=[] valid=True wall=2.0s
+compare: status=complete text_len=313 components=[] valid=True wall=13.1s
+card: status=complete text_len=0 components=[] valid=False wall=89.1s
+WARNING: INVALID TURNS: ['after_card']
+wrote <home>/.local/share/apple-silicon-lab/artifacts/PairGates/v2-compact4b-run1/measure.json
+baseline_MiB=6048.2
+pair_resident_MiB=2206.8
+peak_over_baseline_MiB=5044.8
+backend_peak_MiB=3099.9
+run_valid=False

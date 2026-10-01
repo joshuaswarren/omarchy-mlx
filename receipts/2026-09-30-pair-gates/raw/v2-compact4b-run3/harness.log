@@ -1,0 +1,15 @@
+baseline sys_used=6409.9 MiB
+do_setup=True
+setup complete
+chat port: 34053
+plain_chat: status=complete text_len=5 components=[] valid=True wall=2.0s
+long_context: status=complete text_len=44 components=[] valid=True wall=3.0s
+compare: status=complete text_len=313 components=[] valid=True wall=13.1s
+card: status=complete text_len=0 components=[] valid=False wall=74.1s
+WARNING: INVALID TURNS: ['after_card']
+wrote <home>/.local/share/apple-silicon-lab/artifacts/PairGates/v2-compact4b-run3/measure.json
+baseline_MiB=6409.9
+pair_resident_MiB=1449.5
+peak_over_baseline_MiB=6982.3
+backend_peak_MiB=3099.9
+run_valid=False
