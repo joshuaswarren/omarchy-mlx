@@ -2904,10 +2904,12 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
   };
   auto gdn_ref = [&](const std::vector<array>& inputs) {
     // The composed arithmetic the backend's fallback composes: per-token
-    // state scan with decay g and write strength beta.
+    // state scan with decay g and write strength beta. Token count comes
+    // from the input (the fused decode arm passes T=1).
     auto state = inputs[5];
     std::vector<array> outputs;
-    for (int t = 0; t < GT; ++t) {
+    int tokens = inputs[0].shape(1);
+    for (int t = 0; t < tokens; ++t) {
       auto get_t = [&](const array& arr) {
         // Rank-generic token slice: q/k/v are [B,T,H,D], g/beta are
         // [B,T,H]; a fixed 3-element start throws on the 4-dim inputs.
