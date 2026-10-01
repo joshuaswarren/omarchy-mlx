@@ -3151,6 +3151,96 @@ TEST_CASE("sdpa gqa training routes to composed and matches finite differences")
   }
 }
 
+// Fused SDPA VJP dk/dv finite-difference legs at rep=1 (causal, several
+// shapes, f32 + bf16). The fd reference reads back the exact device
+// input words so bf16 rounding is inside the reference, not noise.
+TEST_CASE("fused sdpa vjp dk dv match finite differences at rep=1") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto run = [&](int B, int H, int qL, int kL, int D, Dtype dt) {
+    const float scale = 1.0f / std::sqrt(float(D));
+    Shape qsh{B, H, qL, D};
+    auto qd = pattern((size_t)B * H * qL * D, 0xF10 + qL);
+    auto kd = pattern((size_t)B * H * kL * D, 0xF20 + kL);
+    auto vd = pattern((size_t)B * H * kL * D, 0xF30 + kL);
+    array q = astype(array(qd.begin(), qsh, float32), dt, stream);
+    array k = astype(array(kd.begin(), Shape{B, H, kL, D}, float32), dt, stream);
+    array v = astype(array(vd.begin(), Shape{B, H, kL, D}, float32), dt, stream);
+    auto fun = [&](const std::vector<array>& in) {
+      return sum(
+          fast::scaled_dot_product_attention(
+              in[0], in[1], in[2], scale, "causal", {}, std::nullopt, false,
+              stream),
+          stream);
+    };
+    auto grads = value_and_grad(fun, {0, 1, 2})({q, k, v}).second;
+    auto gk = flat(grads[1], stream);
+    auto gv = flat(grads[2], stream);
+    // Exact device input words (post bf16/f16 rounding) for the fd
+    // reference.
+    auto words = [&](const array& a) {
+      auto w = astype(a, float32, stream);
+      w.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      return std::vector<float>(w.data<float>(), w.data<float>() + w.size());
+    };
+    auto kw = words(k);
+    auto vw = words(v);
+    auto qf = flat(q, stream);
+    // Spot elements: key 0 row and the last diagonal key, dims 0 and D-1.
+    std::vector<int> spots = {0, D - 1, ((H - 1) * kL + (kL - 1)) * D};
+    const double h = 1e-2;
+    for (int idx : spots) {
+      // dk
+      std::vector<double> base_k(kw.begin(), kw.end());
+      base_k.insert(base_k.end(), vw.begin(), vw.end());
+      std::vector<double> plus = base_k, minus = base_k;
+      plus[idx] += h;
+      minus[idx] -= h;
+      auto obj_k = [&](const std::vector<double>& p) {
+        std::vector<float> kk(p.begin(), p.begin() + kw.size());
+        std::vector<float> vv(p.end() - vw.size(), p.end());
+        auto out = host_sdpa(qf, kk, vv, B, H, H, qL, kL, D, scale, true);
+        double acc = 0;
+        for (double x : out) acc += x;
+        return acc;
+      };
+      double fd_k = (obj_k(plus) - obj_k(minus)) / (2.0 * h);
+      require_close(
+          std::vector<float>{gk[idx]},
+          std::vector<double>{fd_k},
+          2e-2,
+          "fused sdpa vjp dk[" + std::to_string(idx) + "] shape " +
+              std::to_string(qL) + "x" + std::to_string(kL));
+      // dv
+      std::vector<double> base_v(vw.begin(), vw.end());
+      std::vector<double> plus_v = base_v, minus_v = base_v;
+      plus_v[idx] += h;
+      minus_v[idx] -= h;
+      auto obj_v = [&](const std::vector<double>& p) {
+        std::vector<float> vv(p.begin(), p.end());
+        auto out = host_sdpa(qf, kw, vv, B, H, H, qL, kL, D, scale, true);
+        double acc = 0;
+        for (double x : out) acc += x;
+        return acc;
+      };
+      double fd_v = (obj_v(plus_v) - obj_v(minus_v)) / (2.0 * h);
+      require_close(
+          std::vector<float>{gv[idx]},
+          std::vector<double>{fd_v},
+          2e-2,
+          "fused sdpa vjp dv[" + std::to_string(idx) + "] shape " +
+              std::to_string(qL) + "x" + std::to_string(kL));
+    }
+  };
+  run(1, 2, 5, 7, 8, float32);
+  run(2, 2, 4, 4, 4, float32);
+  run(1, 1, 6, 9, 16, float32);
+  run(1, 2, 5, 7, 8, bfloat16);
+}
+
 // Fused GDN VJP (upstream #4565) - bf16, Dk=Dv=128, GQA repeat, T crossing
 // the per-16-token checkpoint boundary, vs the composed per-token
 // recursion. Tolerance pinned at 2e-2 (bf16 outputs) and 1e-3 for the

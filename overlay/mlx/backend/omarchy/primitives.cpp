@@ -10633,50 +10633,30 @@ bool ScaledDotProductAttention::use_fallback(
   // composed graph, whose autograd is the reference the fused gradients
   // are tolerance-checked against. MLX_OMARCHY_NO_FUSED_VJP=1 keeps the
   // composed graph everywhere.
-  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
-  if (disabled || has_arr_mask || has_sinks) {
-    return true;
-  }
-  auto dt = q.dtype();
-  if (dt != float32 && dt != float16 && dt != bfloat16) {
-    return true;
-  }
-  int64_t heads = q.shape(1);
-  int64_t kv_heads = k.shape(1);
-  if (kv_heads <= 0 || heads % kv_heads != 0) {
-    return true;
-  }
-  // GQA (rep > 1): the fused VJP's dq is exact but dk/dv still diverge
-  // from finite differences at rep=2 (dk 0.24 vs 0.36, dv 0.87 vs 2.18
-  // at the probe shape) - training gradients route to the composed
-  // graph until the dkt/dvt matmul + GQA reduce are fixed and proven
-  // against host finite differences on real hardware.
-  if (heads != kv_heads) {
-    return true;
-  }
-  if (do_causal && k.shape(2) < q.shape(2)) {
-    return true;
-  }
-  // Dispatch grid bounds (65535 is the Vulkan minimum for every dimension
-  // the kernels use): the ds pass grids (kL, qL, B*H) and the row kernels
-  // one workgroup per (B*H*qL) row.
-  int64_t bh = q.shape(0) * heads;
-  if (bh > 65535 || bh * q.shape(2) > 65535) {
-    return true;
-  }
-  return false;
+  // Training keeps the composed graph: the fused VJP is gated off
+  // (ScaledDotProductAttentionVJP::use_fallback) until its dk/dv pass
+  // finite-difference parity on real hardware.
+  (void)has_arr_mask;
+  (void)has_sinks;
+  (void)q;
+  (void)k;
+  (void)v;
+  (void)do_causal;
+  (void)s;
+  return true;
 }
 
 bool ScaledDotProductAttentionVJP::use_fallback(const array& q, Stream s) {
-  if (s.device == Device::cpu) {
-    return true;
-  }
-  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
-  if (disabled) {
-    return true;
-  }
-  auto dt = q.dtype();
-  return !(dt == float32 || dt == float16 || dt == bfloat16);
+  // GATED OFF everywhere: finite-difference legs for dk and dv at rep=1
+  // (causal, f32 + bf16, shapes 5x7/4x4/6x9) fail with zeros and
+  // half/quarter values at tail keys, so the fused backward is not
+  // value-proven. Training keeps the composed graph (fd-proven on real
+  // hardware) until the fused dk/dv land with fd parity for dq, dk, dv
+  // at rep = 1, 2, 4 on the M2. The kernels stay in the tree for that
+  // work.
+  (void)s;
+  (void)q;
+  return true;
 }
 
 bool ScaledDotProductAttention::supports_bool_mask() {
