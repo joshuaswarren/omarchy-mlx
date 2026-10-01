@@ -308,16 +308,30 @@ def main():
             beat.join()
         wall = time.monotonic() - t0
         text = (msg or {}).get("content") or ""
-        # first-visible-text from SSE events
+        # first-visible-text and first-visible-component from SSE events
         fvt = None
+        fvc = None
         for e in events:
             if e["type"] == "text" and e["data_head"] and e["data_head"] != '""':
                 fvt = e["ts"] - t0
                 break
+        for e in events:
+            if e["type"] == "component":
+                fvc = e["ts"] - t0
+                break
+        try:
+            text_tokens = _tok_count(text)
+        except NameError:
+            text_tokens = len(text) // 4
+        decode_tok_s = (text_tokens / (wall - fvt)
+                        if fvt and wall > fvt and text_tokens else None)
         r = {
             "label": label,
             "wall_s": round(wall, 2),
             "first_visible_text_s": round(fvt, 3) if fvt else None,
+            "first_visible_component_s": round(fvc, 3) if fvc else None,
+            "text_tokens": text_tokens,
+            "decode_tok_s": round(decode_tok_s, 3) if decode_tok_s else None,
             "text_len": len(text),
             "status": (msg or {}).get("status"),
             "prompt_chars": len(prompt),
