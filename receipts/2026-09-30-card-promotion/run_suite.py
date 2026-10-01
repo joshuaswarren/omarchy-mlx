@@ -319,9 +319,16 @@ def main():
     p.add_argument("--setup", action="store_true")
     p.add_argument("--tag", default="",
                    help="suffix for the results file, e.g. _fenced for a config run")
+    p.add_argument("--stop-at", type=float, default=None,
+                   help="epoch seconds: exit before starting setup or a prompt that could run past it")
     p.add_argument("--budget-s", type=int, default=None,
                    help="start no new prompt after this many seconds")
     args = p.parse_args()
+    if args.stop_at is not None:
+        left = args.stop_at - time.time()
+        if left < 600:  # setup plus one long prompt
+            sys.exit(f"STOP-AT: only {left:.0f} s before the window closes; not starting")
+        args.budget_s = int(min(args.budget_s or left, left - 300))
     if args.model not in PAIR_FOR_MODEL:
         sys.exit(f"unknown model {args.model!r}")
     run_chunk(os.path.join(REPO, args.suite), args.model, args.start, args.end,
