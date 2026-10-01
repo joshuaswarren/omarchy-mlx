@@ -21,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fcntl.h>
+#include <fstream>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -369,6 +370,98 @@ TEST_CASE("release builds refuse the CPU default device when GPU init fails") {
         "[omarchy] refusing CPU tensor fallback in a release build;"
         " the GPU backend is unavailable: no reason recorded");
   }
+}
+
+TEST_CASE("the packaged Honeykrisp ICD is preferred over the system search") {
+  using namespace mlx::core::omarchy;
+  const auto prefix = std::filesystem::temp_directory_path() /
+      ("runtimegate-packaged-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(prefix);
+  const auto packaged = packaged_honeykrisp_icd_path(prefix.string());
+  std::filesystem::create_directories(packaged);
+  const std::vector<std::string> candidates{
+      "/usr/share/vulkan/icd.d/lvp_icd.json",
+      "/usr/share/vulkan/icd.d/asahi_icd.json"};
+  const auto selection =
+      resolve_honeykrisp_icd_detail(candidates, nullptr, packaged);
+  CHECK(selection.path == packaged);
+  CHECK(selection.packaged);
+  CHECK_FALSE(selection.user_override);
+  // Without the packaged file, the system search still applies.
+  std::filesystem::remove_all(prefix);
+  const auto fallback =
+      resolve_honeykrisp_icd_detail(candidates, nullptr, packaged);
+  CHECK(fallback.path == candidates[1]);
+  CHECK_FALSE(fallback.packaged);
+  // The prefix seam routes derivation through OMARCHY_MLX_SYSTEM_PREFIX.
+  ::setenv("OMARCHY_MLX_SYSTEM_PREFIX", prefix.string().c_str(), 1);
+  CHECK(omarchy_system_prefix() == prefix.string());
+  CHECK(packaged_honeykrisp_icd_path(omarchy_system_prefix()) == packaged);
+  ::unsetenv("OMARCHY_MLX_SYSTEM_PREFIX");
+  CHECK(omarchy_system_prefix() == "/usr/lib/omarchy-mlx");
+  std::filesystem::remove_all(prefix);
+}
+
+TEST_CASE("an explicit user ICD override beats the packaged ICD") {
+  using namespace mlx::core::omarchy;
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("runtimegate-override-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(directory);
+  REQUIRE(std::filesystem::create_directory(directory));
+  const auto packaged = directory / "packaged-honeykrisp_icd.aarch64.json";
+  const auto chosen = directory / "chosen-asahi_icd.json";
+  for (const auto& path : {packaged, chosen}) {
+    const int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    REQUIRE(fd >= 0);
+    REQUIRE(::close(fd) == 0);
+  }
+  const std::vector<std::string> candidates{chosen.string()};
+  const auto selection = resolve_honeykrisp_icd_detail(
+      candidates, chosen.string().c_str(), packaged.string());
+  CHECK(selection.path == chosen.string());
+  CHECK_FALSE(selection.packaged);
+  CHECK(selection.user_override);
+  std::filesystem::remove_all(directory);
+}
+
+TEST_CASE("the packaged mesa-git-sha file supplies the expected SHA") {
+  using namespace mlx::core::omarchy;
+  const auto prefix = std::filesystem::temp_directory_path() /
+      ("runtimegate-sha-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(prefix);
+  // Missing file: record only (empty expectation).
+  CHECK(packaged_mesa_git_sha(prefix.string()).empty());
+  std::filesystem::create_directories(
+      std::filesystem::path(packaged_mesa_git_sha_path(prefix.string()))
+          .parent_path());
+  {
+    std::ofstream output(packaged_mesa_git_sha_path(prefix.string()),
+                         std::ios::binary);
+    REQUIRE(output.good());
+    output << "f04cf2e97d\n";
+  }
+  CHECK(packaged_mesa_git_sha(prefix.string()) == "f04cf2e97d");
+  // The expectation enforces against the loaded driver SHA and names both.
+  CHECK_NOTHROW(require_expected_honeykrisp_sha(
+      packaged_mesa_git_sha(prefix.string()), "f04cf2e97d"));
+  try {
+    require_expected_honeykrisp_sha(
+        packaged_mesa_git_sha(prefix.string()), "0123456789abcdef");
+    FAIL("expected packaged SHA mismatch");
+  } catch (const std::runtime_error& error) {
+    CHECK(std::string(error.what()) ==
+          "Honeykrisp Mesa git SHA mismatch: expected f04cf2e97d, found"
+          " 0123456789abcdef");
+  }
+  // Trailing whitespace on the single line is trimmed.
+  {
+    std::ofstream output(packaged_mesa_git_sha_path(prefix.string()),
+                         std::ios::binary | std::ios::trunc);
+    REQUIRE(output.good());
+    output << "  abc1234  \n";
+  }
+  CHECK(packaged_mesa_git_sha(prefix.string()) == "abc1234");
+  std::filesystem::remove_all(prefix);
 }
 
 TEST_CASE("ANE lock files are created and repaired to world access") {

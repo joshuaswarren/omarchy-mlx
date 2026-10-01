@@ -67,6 +67,12 @@ struct CapabilityReport {
   std::string driver_info;
   std::string driver_sha;
   std::string icd_path;
+  // ICD selection origin: "packaged", "override", or "search".
+  std::string icd_source;
+  // Expected Mesa git SHA and where it came from: "env", "packaged file",
+  // or empty when identity is recorded without enforcement.
+  std::string expected_sha;
+  std::string expected_sha_source;
   uint32_t vendor_id{0};
   uint32_t device_id{0};
   uint32_t driver_version{0};

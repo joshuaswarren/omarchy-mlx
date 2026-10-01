@@ -7,6 +7,13 @@ if(MLX_OMARCHY_GPU_PROFILING)
   target_compile_definitions(mlx PRIVATE MLX_OMARCHY_GPU_PROFILING)
 endif()
 target_compile_definitions(mlx PRIVATE MLX_OMARCHY_BACKEND)
+# System prefix holding the packaged Honeykrisp ICD JSON and Mesa git SHA
+# file (v0.7.7 recipe). OMARCHY_MLX_SYSTEM_PREFIX env var overrides at
+# runtime so tests and hardware rehearsals can stage a fake tree.
+set(OMARCHY_MLX_SYSTEM_PREFIX "/usr/lib/omarchy-mlx" CACHE STRING
+    "System prefix for packaged Omarchy MLX Vulkan identity files")
+target_compile_definitions(
+  mlx PRIVATE OMARCHY_MLX_SYSTEM_PREFIX="${OMARCHY_MLX_SYSTEM_PREFIX}")
 set(MLX_OMARCHY_ANE_SOURCE_DIR "" CACHE PATH
     "Qualified joshuaswarren/omarchy-ane checkout for the private ANE runtime")
 if(MLX_OMARCHY_ANE_SOURCE_DIR)

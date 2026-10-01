@@ -37,6 +37,9 @@ HOME_PREFIX_NAME = "mlx-omarchy"
 SYSTEM_PREFIX = "/usr/lib/omarchy-mlx"
 SYSTEM_SHARE_PREFIX = "/usr/share/omarchy-mlx"
 VENV_DIR_NAME = "venv"
+VULKAN_DIR_NAME = "vulkan"
+HONEYKRISP_ICD_NAME = "honeykrisp_icd.aarch64.json"
+MESA_GIT_SHA_NAME = "mesa-git-sha"
 DATA_HOME_ENV = "MLX_OMARCHY_HOME"
 VENV_ENV = "OMARCHY_MLX_VENV"
 PYTHON_VERSION = "3.14"
@@ -76,6 +79,25 @@ def default_data_home() -> Path:
 def system_venv(prefix: str | Path | None = None) -> Path:
     """The packaged venv; pass ``prefix`` to stage or test elsewhere."""
     return Path(prefix) / VENV_DIR_NAME if prefix else Path(SYSTEM_PREFIX) / VENV_DIR_NAME
+
+
+def system_vulkan_dir(prefix: str | Path | None = None) -> Path:
+    """The packaged Vulkan identity directory; ``prefix`` for tests."""
+    return (
+        Path(prefix) / VULKAN_DIR_NAME
+        if prefix
+        else Path(SYSTEM_PREFIX) / VULKAN_DIR_NAME
+    )
+
+
+def packaged_honeykrisp_icd(prefix: str | Path | None = None) -> Path:
+    """The packaged Honeykrisp ICD JSON with an absolute library_path."""
+    return system_vulkan_dir(prefix) / HONEYKRISP_ICD_NAME
+
+
+def packaged_mesa_git_sha_path(prefix: str | Path | None = None) -> Path:
+    """One line: the string the driver reports after ``git-``."""
+    return system_vulkan_dir(prefix) / MESA_GIT_SHA_NAME
 
 
 def legacy_venv(home: Path | None = None) -> Path:
@@ -133,6 +155,9 @@ SHELL_TABLE = (
     ("SYSTEM_PREFIX", SYSTEM_PREFIX),
     ("SYSTEM_SHARE_PREFIX", SYSTEM_SHARE_PREFIX),
     ("VENV_DIR", VENV_DIR_NAME),
+    ("VULKAN_DIR", VULKAN_DIR_NAME),
+    ("HONEYKRISP_ICD", HONEYKRISP_ICD_NAME),
+    ("MESA_GIT_SHA", MESA_GIT_SHA_NAME),
     ("DATA_HOME_ENV", DATA_HOME_ENV),
     ("VENV_ENV", VENV_ENV),
     ("PYTHON_VERSION", PYTHON_VERSION),

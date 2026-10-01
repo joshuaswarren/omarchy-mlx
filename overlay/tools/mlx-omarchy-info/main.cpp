@@ -331,6 +331,9 @@ void print_json(uint32_t index) {
   str_field("driver_info", caps.driver_info, true);
   str_field("driver_sha", caps.driver_sha, true);
   str_field("icd_path", caps.icd_path, true);
+  str_field("icd_source", caps.icd_source, true);
+  str_field("expected_sha", caps.expected_sha, true);
+  str_field("expected_sha_source", caps.expected_sha_source, true);
   str_field("api_version", version_string(caps.api_version), true);
   str_field("driver_version_raw", std::to_string(caps.driver_version), true);
   num_field("vendor_id", caps.vendor_id, true);
@@ -416,6 +419,12 @@ void print_text(uint32_t index) {
   std::cout << "  driver info:       " << caps.driver_info << "\n";
   std::cout << "  driver SHA:        " << caps.driver_sha << "\n";
   std::cout << "  ICD:               " << caps.icd_path << "\n";
+  std::cout << "  ICD source:        " << caps.icd_source << "\n";
+  std::cout << "  expected SHA:      " << caps.expected_sha << "\n";
+  std::cout << "  expected SHA from: "
+            << (caps.expected_sha_source.empty() ? "none (record only)"
+                                                 : caps.expected_sha_source)
+            << "\n";
   std::cout << "  api version:       " << version_string(caps.api_version)
             << "\n";
   std::cout << "  vendor:device id:  0x" << std::hex << caps.vendor_id << ":0x"

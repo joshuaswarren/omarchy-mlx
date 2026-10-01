@@ -44,6 +44,9 @@ device_info(int device_index) {
     info["driver_info"] = caps.driver_info;
     info["driver_sha"] = caps.driver_sha;
     info["icd_path"] = caps.icd_path;
+    info["icd_source"] = caps.icd_source;
+    info["expected_sha"] = caps.expected_sha;
+    info["expected_sha_source"] = caps.expected_sha_source;
     info["api_version"] =
         std::to_string(VK_API_VERSION_MAJOR(caps.api_version)) + "." +
         std::to_string(VK_API_VERSION_MINOR(caps.api_version)) + "." +

@@ -72,7 +72,7 @@ int env_index(const char* name) {
   return static_cast<int>(parsed);
 }
 
-std::string configure_honeykrisp_icd() {
+HoneykrispIcdSelection configure_honeykrisp_icd() {
   std::vector<std::string> candidates;
   for (const char* directory : {
            "/etc/vulkan/icd.d",
@@ -88,24 +88,47 @@ std::string configure_honeykrisp_icd() {
   }
   const char* driver_files = std::getenv("VK_DRIVER_FILES");
   const char* icd_filenames = std::getenv("VK_ICD_FILENAMES");
-  std::string selected;
+  HoneykrispIcdSelection selection;
   if (driver_files != nullptr && driver_files[0] != '\0') {
-    selected = resolve_honeykrisp_icd(candidates, driver_files);
-  }
-  if (icd_filenames != nullptr && icd_filenames[0] != '\0') {
-    const std::string legacy = resolve_honeykrisp_icd(candidates, icd_filenames);
-    if (selected.empty()) {
-      selected = legacy;
-    }
-  }
-  if (selected.empty()) {
-    selected = resolve_honeykrisp_icd(candidates, nullptr);
-    if (::setenv("VK_DRIVER_FILES", selected.c_str(), 1) != 0 ||
-        ::setenv("VK_ICD_FILENAMES", selected.c_str(), 1) != 0) {
+    selection = resolve_honeykrisp_icd_detail(candidates, driver_files, {});
+    selection.user_override = true;
+  } else if (icd_filenames != nullptr && icd_filenames[0] != '\0') {
+    selection = resolve_honeykrisp_icd_detail(candidates, icd_filenames, {});
+    selection.user_override = true;
+  } else {
+    // No user override: the packaged recipe ICD wins over a stock system
+    // asahi ICD, and the loader variables follow the selection.
+    selection = resolve_honeykrisp_icd_detail(
+        candidates, nullptr, packaged_honeykrisp_icd_path(omarchy_system_prefix()));
+    if (::setenv("VK_DRIVER_FILES", selection.path.c_str(), 1) != 0 ||
+        ::setenv("VK_ICD_FILENAMES", selection.path.c_str(), 1) != 0) {
       throw std::runtime_error("cannot set Honeykrisp Vulkan ICD environment");
     }
   }
-  return selected;
+  return selection;
+}
+
+// Expected SHA policy: an explicit env value always wins; otherwise the
+// packaged mesa-git-sha file applies only when the packaged ICD is the
+// one selected. Empty expectation records identity without enforcing.
+void resolve_expected_sha_policy(
+    const HoneykrispIcdSelection& selection,
+    std::string& expected_sha,
+    std::string& expected_sha_source) {
+  const char* env_sha = std::getenv("MLX_OMARCHY_EXPECTED_HK_SHA");
+  if (env_sha != nullptr && env_sha[0] != '\0') {
+    expected_sha = env_sha;
+    expected_sha_source = "env";
+    return;
+  }
+  expected_sha.clear();
+  expected_sha_source.clear();
+  if (selection.packaged) {
+    expected_sha = packaged_mesa_git_sha(omarchy_system_prefix());
+    if (!expected_sha.empty()) {
+      expected_sha_source = "packaged file";
+    }
+  }
 }
 
 
@@ -133,7 +156,10 @@ struct Runtime {
   bool probed{false};
   bool allow_non_apple{false};
   int preferred_device_index{-1};
+  HoneykrispIcdSelection icd_selection;
   std::string icd_path;
+  std::string expected_sha;
+  std::string expected_sha_source;
 
   // Discover devices once per process. Never throws; failures are recorded
   // in |error| so callers can surface exact reasons.
@@ -379,7 +405,9 @@ bool Runtime::init_impl() {
         " buffer cache is off for the whole process.\n");
   }
 
-  icd_path = configure_honeykrisp_icd();
+  icd_selection = configure_honeykrisp_icd();
+  icd_path = icd_selection.path;
+  resolve_expected_sha_policy(icd_selection, expected_sha, expected_sha_source);
   // Honeykrisp bounded syncobj poll (HK_SUBMIT_POLL_US, mesa-1
   // hk/submit-latency): removes the host wake-up premium on the short
   // submit->wait round trips of stepwise loops (Parakeet TDT tdt_decode
@@ -548,10 +576,13 @@ bool Runtime::init_impl() {
         m4,
         subgroup);
     info.caps.icd_path = icd_path;
+    info.caps.icd_source = icd_selection.packaged
+        ? "packaged"
+        : (icd_selection.user_override ? "override" : "search");
+    info.caps.expected_sha = expected_sha;
+    info.caps.expected_sha_source = expected_sha_source;
     if (info.support.driver_id == kMesaHoneykrispDriverId) {
-      const char* expected_sha = std::getenv("MLX_OMARCHY_EXPECTED_HK_SHA");
-      require_expected_honeykrisp_sha(
-          expected_sha == nullptr ? "" : expected_sha, info.caps.driver_sha);
+      require_expected_honeykrisp_sha(expected_sha, info.caps.driver_sha);
     }
     info.hardware = info.caps;
     if (sim) {

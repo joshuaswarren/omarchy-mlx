@@ -72,7 +72,19 @@ and checks the exact message, and a doctest checks the release refusal,
 the debug fallback, and the GPU selection for the default-device policy.
 On an x86 host with lavapipe installed, the info tool refuses a missing
 Honeykrisp override naming the exact path, refuses a lavapipe override,
-and reports the missing Honeykrisp JSON with no override. The M1
-confirmation run (release wheel install, `omarchy_runtime_tests`,
-`omarchy_error_contract_tests`, and the `env -i` Honeykrisp case) follows
-after the jwm1 GPU window frees; this receipt updates with its results.
+and reports the missing Honeykrisp JSON with no override.
+
+Packaged ICD contract (v0.7.7 recipe lane), same day: with no override,
+the packaged `$prefix/vulkan/honeykrisp_icd.aarch64.json` is preferred
+over any stock system ICD, and when it is selected the expected SHA comes
+from the packaged `mesa-git-sha` file; an explicit env SHA wins, and an
+env-selected ICD never inherits the packaged SHA. Device info reports the
+ICD source (`packaged`, `override`, `search`), the expected SHA, and its
+source (`env`, `packaged file`, or none). Prefix `/usr/lib/omarchy-mlx`
+is a build-time constant with an `OMARCHY_MLX_SYSTEM_PREFIX` runtime
+seam; the names live in `serve/mlx_omarchy_paths.py` and generated
+`packaging/paths.sh`. The M1 confirmation run (release wheel install,
+`omarchy_runtime_tests`, `omarchy_error_contract_tests`, the `env -i`
+Honeykrisp case, and a staged packaged tree with the real system ICD)
+follows after the jwm1 GPU window frees; this receipt updates with its
+results.
