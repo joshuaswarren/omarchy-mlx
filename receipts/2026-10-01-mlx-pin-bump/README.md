@@ -112,11 +112,39 @@ held throughout, kernel 7.1.13-3-2-ARCH, Mesa/Honeykrisp as installed):
   the private lab under `artifacts/MlxBump/20260930-jwm1-pin-bump/` with
   SHA256SUMS.
 
+## G13C (T6001, jw16) battery + chip-local digest A/B
+
+The jwm1 reinstall pushed the remaining gates to jw16 (G13C/T6001) via
+`gpuwin.sh` slices:
+
+- **29/30 ctest cases green** at tip `aabe46c3c` (slices 1-3: runtime,
+  primitive, matmul-family, fast_ops, kv, indexing, reduce, shape, linalg,
+  copy-offset, distributed, compiled-tape, fft x2, eig, take-fill, conv,
+  complex, select-layout, fast-regression, scatter-determinism, eq-math,
+  fused-chain, error-contract, ane-bundle, capability-sim).
+- **Chip-local digest A/B: bit-identical.** Old-pin wheel (`f2b4369`) vs
+  new-pin wheel (`aabe46c`), same model/prompts/protocol on the same host:
+  `ordered_records_sha256 = dbf704971617fdfc…` for BOTH — and identical to
+  the G13G jwm1 baseline. The pin bump is bit-invisible on the contract
+  decode path on both chips.
+- Both release wheels built on jw16 with glslc + the pinned
+  whole-encoder bundle (`/var/tmp/encoder-whole/bundle`, manifest/program
+  SHAs match the runtime pin).
+- `omarchy_indexing_ops_tests` fails on G13C at BOTH pins (old and new).
+  This confirms the G13G finding and extends it: the bf16 small-k route
+  issue is chip-class-wide (T8103 + T6001), Attn128b's route gate fixes
+  T8103 but T6001 needs its own follow-up. NOT bump-induced; owned by the
+  Attn128 lane. G13C caveat recorded per the repo's
+  cross-chip-comparison rule.
+
 ## Merge status
 
-NOT merged. The gate for merging is the full 26-suite battery green at the
-final commit on the M1; the two test failures above are being fixed and the
-battery will be rerun in a follow-up window before `origin/main` moves.
+HELD. The gate (26/26, or indexing green on main and tip) is not met:
+indexing fails on G13C at both pins (pre-existing, Attn128 lane) and G13G
+coverage is pending the jwm1 reinstall. Everything else is green on both
+chips, and the digest A/B is bit-exact on both. The merge lands when the
+indexing lane posts its T6001 fix (or Main calls the gate with the
+pre-existing-failure caveat on record).
 
 ## Scope notes
 
