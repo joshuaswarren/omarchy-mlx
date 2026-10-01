@@ -12463,20 +12463,20 @@ void ScaledDotProductAttention::eval_gpu(
   // Perf-only engagement windows per bf16 query width. Bitwise identity
   // holds for every k (both routes store identical words), so a boundary
   // can move only the wall, never a token. Widths 64 and 256 keep their
-  // previously measured windows (comment below); the Attn128 widths carry
-  // the windows measured on the M2 Max (artifacts/Attn128 k-grid, fused
-  // vs composition one-call wall) - a width without a measured winning
-  // range stays off this table and keeps the composition.
+  // previously measured windows (comment below). Width 128 was measured on
+  // the M2 Max (2026-10-01, q 1x16x1x128 GQA 16/8 over strided bf16 cache
+  // views, fused vs composition alternating in one process, median of 3x200
+  // one-eval calls): the arm wins at every k from 1 (214 vs 349 us) through
+  // 7168 (1882 vs 2552 us) and stores identical words at all 20 grid
+  // points, so it engages over the whole shared-memory stream. A width
+  // without a measured winning range stays off this table and composes.
   struct DecodeBf16Window {
     uint32_t width;
     uint32_t k_min;
     uint32_t k_max;
   };
-  // PROVISIONAL hd128 row: {12, 7168} exists only so the measurement grid
-  // can reach both routes at every k (MLX_OMARCHY_SDPA_DECODE_NATIVE=0
-  // forces the composition side); the landed row is the measured one.
   constexpr DecodeBf16Window kDecodeBf16Windows[] = {
-      {64, 256, 2048}, {128, 12, 7168}, {256, 12, 7168}};
+      {64, 256, 2048}, {128, 1, 7168}, {256, 12, 7168}};
   // Perf-only k window: bitwise identity holds for every k (both routes
   // store identical words), so the boundary cannot move a token - only the
   // wall. Width 64 keeps the measured 256..2048 window from the original

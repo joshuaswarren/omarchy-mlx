@@ -549,8 +549,8 @@ bool hd_route_ready(Stream stream) {
 
 // Keep the engaged/refused key boundaries in sync with kDecodeBf16Windows
 // in overlay/mlx/backend/omarchy/primitives.cpp: {64, 256, 2048},
-// {128, 12, 7168}, {256, 12, 7168} (hd128 row measured on the M2 Max,
-// artifacts/Attn128). Bitwise identity holds at every k either way.
+// {128, 1, 7168}, {256, 12, 7168} (hd128 row measured on the M2 Max,
+// 2026-10-01). Bitwise identity holds at every k either way.
 TEST_CASE("fused hd128 bf16 decode is bit-identical to the composition") {
   if (!compute_available()) {
     return;
@@ -565,13 +565,10 @@ TEST_CASE("fused hd128 bf16 decode is bit-identical to the composition") {
     CAPTURE(keys);
     HdCacheInputs in = make_hd_cache(bfloat16, keys, keys < 512 ? 512 : keys, stream);
     if (fused_available) {
+      // The hd128 row engages from the first key: one dispatch per call.
       uint64_t dispatches =
           dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
-      if (keys >= 12) {
-        CHECK_EQ(dispatches, 1);
-      } else {
-        CHECK(dispatches > 1);
-      }
+      CHECK_EQ(dispatches, 1);
     }
     require_hd_bit_identical(hd_sdpa(in, stream), hd_composition(in, keys, stream), stream);
   }
