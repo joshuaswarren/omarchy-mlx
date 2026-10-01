@@ -31,13 +31,13 @@ def call(method, path, body=None, runtime_path=None):
 
 
 def heartbeat_loop(cid, turn, runtime_path, stop, gaps):
-    while not stop.wait(5):
+    print(f"heartbeat_loop started cid={cid} turn={turn}", flush=True)
+    while not stop.wait(1):
         try:
             call("POST", f"/api/conversations/{cid}/heartbeat",
                  {"turn_id": turn}, runtime_path=runtime_path)
         except Exception:
             pass
-        gaps.append(time.monotonic() - started)
 
 
 def capture_sse(cid, runtime_path, after_seq, events, stop, timeout_s=600):
@@ -92,6 +92,7 @@ def main():
     ap.add_argument("--label", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--prompt", required=True)
+    ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--timeout-s", type=int, default=180)
     args = ap.parse_args()
 
@@ -176,7 +177,7 @@ def main():
                runtime_path=runtime_path)["id"]
     t0 = time.monotonic()
     turn = call("POST", f"/api/conversations/{cid}/turns",
-                {"text": args.prompt, "mode": "chat", "max_tokens": 256},
+                {"text": args.prompt, "mode": "chat", "max_tokens": args.max_tokens},
                 runtime_path=runtime_path)["turn_id"]
     print(f"turn submitted: cid={cid} turn={turn}", flush=True)
 
@@ -187,6 +188,13 @@ def main():
                            args=(cid, runtime_path, 0, events, stop, args.timeout_s),
                            daemon=True)
     sse.start()
+
+    gaps = []
+    beat_stop = threading.Event()
+    beat = threading.Thread(target=heartbeat_loop,
+                            args=(cid, turn, runtime_path, beat_stop, gaps),
+                            daemon=True)
+    beat.start()
 
     message = None
     deadline = time.monotonic() + args.timeout_s
@@ -199,6 +207,7 @@ def main():
             break
         time.sleep(1)
     stop.set()
+    beat_stop.set()
     sse.join(timeout=5)
     wall = time.monotonic() - t0
 
