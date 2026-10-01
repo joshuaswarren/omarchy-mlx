@@ -1440,32 +1440,63 @@ TEST_CASE("wide-row small-k partition covers rows, ties, and 16-bit dtypes") {
     }
   }
 
-  // bf16 rows built at the bit level (f16 shares the path through F16_IO).
-  std::vector<uint16_t> bf16_bits;
-  std::vector<std::vector<uint32_t>> widened_rows;
+  // 16-bit rows (bf16 here, f16 below through the same astype path): the
+  // selection route is gated OFF for 16-bit dtypes (2026-09-30, wrong bf16
+  // tail words on M1+M2; see the gate comment in dispatch_sort_wide), so
+  // these keep the wide-row sort fallback: more than one dispatch, and the
+  // tail is the sort path's stable ascending order, bit-exact.
+  std::vector<float> rows16;
   for (int r = 0; r < 2; ++r) {
     auto row = smallk_pattern(n, 303 + r);
-    std::vector<uint32_t> widened(n);
-    for (int i = 0; i < n; ++i) {
-      uint16_t bits = f32_to_bf16_rne(row[i]);
-      bf16_bits.push_back(bits);
-      widened[i] = static_cast<uint32_t>(bits) << 16;
-    }
-    widened_rows.push_back(std::move(widened));
+    rows16.insert(rows16.end(), row.begin(), row.end());
   }
-  array b = array(bf16_bits.data(), Shape{2, n}, bfloat16);
-  uint64_t bf16_dispatches = smallk_dispatches(
-      [&] { return partition(b, kth, -1, stream); }, stream);
-  CHECK_EQ(bf16_dispatches, 1);
+  array f16_32 = array(rows16.begin(), Shape{2, n}, float32);
   {
+    array b = astype(f16_32, bfloat16, stream);
+    uint64_t bf16_dispatches = smallk_dispatches(
+        [&] { return partition(b, kth, -1, stream); }, stream);
+    CHECK(bf16_dispatches > 1);
     array dense = contiguous(partition(b, kth, -1, stream));
     dense.eval();
     sync_gpu(stream);
     const uint16_t* words = dense.data<uint16_t>();
     for (int r = 0; r < 2; ++r) {
-      auto tail = host_tail_bits(widened_rows[r], k);
+      // Host reference: RNE-narrow the row exactly as astype did, widen,
+      // stable-sort ascending by key, take the tail.
+      std::vector<uint32_t> widened(n);
+      for (int i = 0; i < n; ++i) {
+        uint16_t bits = f32_to_bf16_rne(rows16[r * n + i]);
+        widened[i] = static_cast<uint32_t>(bits) << 16;
+      }
+      auto tail = host_tail_bits(widened, k);
       for (int i = 0; i < k; ++i) {
-        CHECK_EQ(words[r * n + kth + i], static_cast<uint16_t>(tail[i] >> 16));
+        CHECK_EQ(
+            words[r * n + kth + i],
+            static_cast<uint16_t>(tail[i] >> 16));
+      }
+    }
+  }
+  {
+    array h = astype(f16_32, float16, stream);
+    uint64_t f16_dispatches = smallk_dispatches(
+        [&] { return partition(h, kth, -1, stream); }, stream);
+    CHECK(f16_dispatches > 1);
+    array dense = contiguous(partition(h, kth, -1, stream));
+    dense.eval();
+    sync_gpu(stream);
+    const uint16_t* words = dense.data<uint16_t>();
+    for (int r = 0; r < 2; ++r) {
+      // Partition property through exact f16 widening: no lead word
+      // exceeds the threshold (first tail word).
+      float threshold = f16_bits_to_float(words[r * n + kth]);
+      for (int i = 0; i < kth; ++i) {
+        CHECK(f16_bits_to_float(words[r * n + i]) <= threshold);
+      }
+      // The tail holds exactly k words and is non-decreasing.
+      for (int i = 1; i < k; ++i) {
+        CHECK(
+            f16_bits_to_float(words[r * n + kth + i]) >=
+            f16_bits_to_float(words[r * n + kth + i - 1]));
       }
     }
   }

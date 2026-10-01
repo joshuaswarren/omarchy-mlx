@@ -1698,9 +1698,19 @@ void dispatch_sort_wide(
   // like ArgSort) also keeps the sort.
   const int64_t topk =
       kth >= 0 ? static_cast<int64_t>(row_length) - kth : -1;
+  // Attn128, 2026-09-30: the 16-bit selection arms (f16/bf16) are GATED
+  // OFF pending the bf16 standing-battery failure (omarchy_indexing_ops_tests
+  // "wide-row small-k partition covers rows, ties, and 16-bit dtypes" —
+  // wrong words across the whole bf16 tail on both M1 G13G and M2, f32
+  // sections green; suspect is the 16-bit load/store path or the test's
+  // raw-pointer bf16 input construction — probe queued). bf16 and f16
+  // fall back to the wide-row sort route (bit-exact, pinned below);
+  // float32 keeps the selection route (green on both chips).
+  // TODO(attn128): root-cause the 16-bit selection words, restore the
+  // route, and flip this gate with the pinning doctest. Tracked in the
+  // 2026-09-30-attn128 receipt addendum.
   if (!argsort && kth >= 0 && kth < static_cast<int>(row_length) &&
-      (src.dtype() == float32 || src.dtype() == float16 ||
-          src.dtype() == bfloat16) &&
+      src.dtype() == float32 &&
       rows >= 1 && rows <= 256 && topk >= 1 && topk <= 256) {
     out.set_data(allocate_omarchy(out.nbytes()));
     omarchy::ComputeParams params;
