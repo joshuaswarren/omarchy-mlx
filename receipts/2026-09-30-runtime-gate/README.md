@@ -132,6 +132,35 @@ completion probe:
   Vulkan ICD JSON does not exist: /var/tmp/runtimegate-packaged/vulkan/nonexistent_asahi_icd.json`.
   Exit code 1.
 
-The M1 confirmation on jwm1 (`G13G`) remains pending. Raw logs are in the
-private lab `artifacts/IcdConfirm/20261001-jw16-icd-confirm/` directory
-with `SHA256SUMS`; only the public-safe results are recorded here.
+The Mesa-26.3.0-devel that ships on jw16 carries no `git-` token in
+`driver_info`, so the live driver_sha there is empty; the packaged-tree
+contract above therefore could not assert `expected_sha_source =
+"packaged file"` with a real SHA on the live driver. That assertion was
+filled in with a Mesa-26.3.0-devel that does report a git-sha: the
+MesaParity lane's `v3` driver at
+`/var/tmp/MesaParity/libvulkan_asahi_v3.so`, driver_info
+`Mesa 26.3.0-devel (git-9b97b82ab1)`. A second fake packaged tree at
+`/var/tmp/runtimegate-packaged-vulkan-v3/vulkan/` (ICD JSON copied
+from `asahi_icd_hkv3.json` with `library_path` pointing at the v3
+`.so`; `mesa-git-sha` set to `9b97b82ab1`) was loaded with
+`OMARCHY_MLX_SYSTEM_PREFIX=/var/tmp/runtimegate-packaged-vulkan-v3`:
+
+- `mlx-omarchy-info --json` reports `icd_source=packaged`,
+  `icd_path=/var/tmp/runtimegate-packaged-vulkan-v3/vulkan/honeykrisp_icd.aarch64.json`,
+  `expected_sha=9b97b82ab1`, `expected_sha_source=packaged file`,
+  `driver_sha=9b97b82ab1`, `driver_info=Mesa 26.3.0-devel (git-9b97b82ab1)`,
+  `api_version=1.4.362`. The packaged driver sha matches the packaged
+  file: no refusal.
+- The same 4×4 `f32` matmul returned the same result row through the
+  v3-packaged pointer.
+- Wrong SHA in the v3 packaged `mesa-git-sha` (`0123456789abcdef`)
+  refused with `RuntimeError: [omarchy] refusing CPU tensor fallback
+  in a release build; the GPU backend is unavailable: Honeykrisp Mesa
+  git SHA mismatch: expected 0123456789abcdef, found 9b97b82ab1` —
+  both pre-registered errors (file SHA mismatch → CPU refusal) and
+  naming the actual driver SHA, not `unavailable`. Exit code 1.
+
+The M1 confirmation on jwm1 (`G13G`) remains pending. Raw logs are in
+the private lab `artifacts/IcdConfirm/20261001-jw16-icd-confirm/`
+directory with `SHA256SUMS`; only the public-safe results are recorded
+here.
