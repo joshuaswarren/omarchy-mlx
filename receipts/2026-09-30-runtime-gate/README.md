@@ -83,8 +83,55 @@ ICD source (`packaged`, `override`, `search`), the expected SHA, and its
 source (`env`, `packaged file`, or none). Prefix `/usr/lib/omarchy-mlx`
 is a build-time constant with an `OMARCHY_MLX_SYSTEM_PREFIX` runtime
 seam; the names live in `serve/mlx_omarchy_paths.py` and generated
-`packaging/paths.sh`. The M1 confirmation run (release wheel install,
-`omarchy_runtime_tests`, `omarchy_error_contract_tests`, the `env -i`
-Honeykrisp case, and a staged packaged tree with the real system ICD)
-follows after the jwm1 GPU window frees; this receipt updates with its
-results.
+`packaging/paths.sh`.
+
+The packaged-ICD and ICD-refusal confirmation ran on jw16 (M1 Max, G13C,
+T6001, kernel `7.1.13-3-2-ARCH`) because jwm1 was reserved by `H176`
+and `MesaParity`; the existing preserved wheel built at `31af03eac`
+(`/var/tmp/omarchy-mlx-wheels/mlx_omarchy-0.32.3.dev202610010514+31af03e-cp314-cp314-linux_aarch64.whl`,
+sha256 `c49ecca0950659f445fd86e873a9527b3fac6920780f18020f9075df1ec2d6b7`)
+was reused. One `gpuwin` slice under `flock /tmp/m1-gpu.lock`, announced
+to `w72:p1`, restored with `llm-inference.service` `active` and a real
+completion probe:
+
+- `omarchy_runtime_tests` 41 cases / 41 passed / 22,694 assertions / 0
+  failed. `omarchy_error_contract_tests` 3 cases / 3 passed / 14
+  assertions / 0 failed. `scripts/mlx_provenance.py` reported
+  `verified: match`, `version_match: true`.
+- The M1 Max info tool reported device `Apple M1 Max (G13C C0)`, driver
+  `Honeykrisp`, driver info `Mesa 26.3.0-devel`, ICD
+  `/usr/share/vulkan/icd.d/asahi_icd.aarch64.json`, Vulkan 1.4.359,
+  `architecture=honeykrisp`, ANE module `0.2.0.r14.g87f427f`. The Mesa
+  build on this box carries no `git-` token in `driver_info`, so
+  `driver_sha=""` and the packaged `mesa-git-sha` file cannot carry a
+  live-read SHA on this hardware (expected-sha enforcement is exercised
+  below via the wrong-value case).
+- A 4×4 `f32` matmul returned the matrix the existing receipt records
+  (`[[56, 62, 68, 74], [152, 174, 196, 218], [248, 286, 324, 362],
+  [344, 398, 452, 506]]`) in the inherited environment and under
+  `env -i PATH=/usr/bin:/bin`. MLX matmul does not accept integer
+  operands; the prior int32 smoke row is reproduced here as the f32
+  matrix.
+- The fake packaged tree at `/var/tmp/runtimegate-packaged/vulkan/honeykrisp_icd.aarch64.json`
+  (system ICD JSON copied verbatim, `mesa-git-sha` populated from the
+  live driver read; `OMARCHY_MLX_SYSTEM_PREFIX` redirected the packaged
+  ICD path) flipped selection source from `search` to `packaged`
+  (`mlx-omarchy-info --json` reports `icd_source=packaged`,
+  `icd_path=/var/tmp/runtimegate-packaged/vulkan/honeykrisp_icd.aarch64.json`)
+  and the 4×4 matmul returned the same matrix through that pointer.
+- Wrong SHA in the packaged `mesa-git-sha` (`000000000000000`) refused
+  with `RuntimeError: [omarchy] refusing CPU tensor fallback in a release
+  build; the GPU backend is unavailable: Honeykrisp Mesa git SHA mismatch:
+  expected 000000000000000, found unavailable` — both pre-registered
+  errors (file SHA mismatch → CPU refusal) in one message. Exit code 1.
+- `MLX_OMARCHY_EXPECTED_HK_SHA=0123456789abcdef` refused with the same
+  prefix and `SHA mismatch: expected 0123456789abcdef, found unavailable`
+  (inherited and `env -i PATH=/usr/bin:/bin`, exit 1).
+- `VK_DRIVER_FILES=/var/tmp/runtimegate-packaged/vulkan/nonexistent_asahi_icd.json`
+  refused with `RuntimeError: ... Honeykrisp ICD selection refused: user
+  Vulkan ICD JSON does not exist: /var/tmp/runtimegate-packaged/vulkan/nonexistent_asahi_icd.json`.
+  Exit code 1.
+
+The M1 confirmation on jwm1 (`G13G`) remains pending. Raw logs are in the
+private lab `artifacts/IcdConfirm/20261001-jw16-icd-confirm/` directory
+with `SHA256SUMS`; only the public-safe results are recorded here.
