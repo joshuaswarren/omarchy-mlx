@@ -29,6 +29,13 @@ import sys
 import threading
 import time
 
+# PairGates: install /v1/internal/memory probe if the patcher is on
+# PYTHONPATH. Side-effect import — no-op if absent.
+try:
+    import _mlxlm_server_with_memory  # noqa: F401
+except ImportError:
+    pass
+
 LIMIT_ENV = "MLX_OMARCHY_SERVE_CONTEXT_LIMIT"
 UNPINNED_ENV = "MLX_OMARCHY_ALLOW_UNPINNED_MLXLM"
 SUPPORTED_MLXLM_VERSIONS = ("0.31.3",)
