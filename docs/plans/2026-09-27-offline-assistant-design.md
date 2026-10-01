@@ -1,6 +1,6 @@
 # Offline assistant design
 
-Status: source application implemented and tested offline. Everyday text gates measured on M2 Max on 2026-09-28: chat, compare, cancel, resume, network-denied restart, first-answer latency, and interface checks pass. Speech output is intelligible after a backend fix but slower than real time; speech input, Quality, routing, and card generation on the 2B model have not passed. See [gate status](../serve.md#everyday-pair-gate-status-2026-09-28).
+Status: source application implemented and tested offline. The defaults are Everyday = Qwen3.5-9B + Laya, Compact = Qwen3-4B-Instruct-2507 + Laya, and Quality = Qwen3.8-27B + Laya (2026-09-30; the 2B left the catalog). Measured on the M2 Max through 2026-10-01: card gates pass on all three pairs, first-text latency passes on the 9B and 4B, speech input meets every frozen corpus threshold, and the screen-reader pass is done; the Quality pair misses the 2 s first-text budget, speech output misses the RTF 1.2 threshold, automatic routing stays off on the head-latency deadline, and no pair is qualified. See [gate status](../serve.md#per-pair-gate-status-2026-10-01).
 
 ## Product contract
 

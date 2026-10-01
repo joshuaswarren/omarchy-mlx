@@ -86,7 +86,7 @@ The installer includes local model servers and Laya. The [serving guide](docs/se
 
 MLX Chat now has a local web app in this source tree.
 The browser and terminal use the same model pair, chat history, and stop control.
-This is not a tested release. No current pair has passed all release checks. The 2026-09-28 hardware results apply to the former 2B Everyday pair, not these new defaults. Everyday (9B), Compact (4B), and Quality (27B) still need pair qualification; speech output and input also need work. See [gate status](docs/serve.md#everyday-pair-gate-status-2026-09-28).
+This is not a tested release. No pair is qualified and every catalog entry keeps `recommended: false`. Card gates pass on all three current pairs, first-text latency passes on the 9B and 4B, and speech input meets every frozen corpus threshold on the M2 Max; the Quality pair misses the 2 s first-text budget, speech output misses the real-time threshold (RTF 0.22–0.23 vs 1.2), and automatic routing stays off. See [per-pair gate status](docs/serve.md#per-pair-gate-status-2026-10-01).
 
 | Pair to test | Chat model | Decision model |
 |---|---|---|

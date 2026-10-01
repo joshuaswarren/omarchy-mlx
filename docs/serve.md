@@ -38,41 +38,175 @@ Export-plan failures leave the inspection control available for retry.
 Installation validates the archive and stages a venv without network access before replacing the active files.
 Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. On-hardware pacing qualification is still pending.
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
-Automatic decision routing stays off. Routing policy 3 passed the held-out suite on precision (35/35) with no injection routed to a decision, but the Laya head call takes p95 347 ms against a 250 ms warm deadline. See the [routing receipt](../receipts/2026-09-30-routing-gate/README.md). The held-out suite is now spent. Explicit **Compare options** is unaffected.
+Automatic decision routing stays off; [gate status](#per-pair-gate-status-2026-10-01) has the measured reason. The held-out suite is now spent. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
 The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
 
-### Everyday pair gate status, 2026-09-28
+### Per-pair gate status, 2026-10-01
 
-Host: M2 Max (T6021), kernel 7.1.13-ARCH-polltx, MLX 0.32.3.dev202609232032+4fd2130ed, source `134d0b67a` plus the fixes below.
-The [receipt](../receipts/2026-09-28-everyday-resume/receipt.json) has the numbers.
+Since `8a1e25843` the default pairs are Everyday = `qwen3.5-9b-mlx-4bit` + Laya,
+Compact = `qwen3-4b-instruct-2507-4bit` + Laya, and Quality = `qwen3.8-27b-4bit`
++ Laya; the 2B left the catalog ([card promotion
+receipt](../receipts/2026-09-30-card-promotion/README.md)). The 2026-09-28 runs
+([receipt](../receipts/2026-09-28-everyday-resume/receipt.json)) measured the
+retired 2B pair and stay history.
 
-| Gate | Result |
-|---|---|
-| Chat, compare, cancel | Pass. Laya chose `cat` over `elephant` (0.7192 / 0.2808). Cancel stopped the turn. |
-| Resume after reboot | Pass. Saved pair loaded in 1.41 s. The next chat answered. |
-| Restart with outbound sockets denied | Pass, twice. A network namespace with loopback only. Both connection tests failed as intended. |
-| First visible answer, 30 warm turns | Pass after a fix. Before: p50 2.86 s, p95 3.24 s. After: p50 0.99 s, p95 1.06 s. Target is p95 2.00 s. |
-| Voice output | Intelligible after a backend fix. Whisper large-v3-turbo transcribed the first voice at 4.3% word error and `aiden` at 0.0% on five sentences. The owner listened on 2026-09-28: the first voice was clear but Chinese-accented; `aiden` "sounds good" and is the default. Generation runs 5 to 6 times slower than real time (real-time factor 0.13 to 0.19). First audio p95 1.46 s. |
-| Voice input | Not qualified. When the ANE probe fails, `Recognition` uses an owned GPU worker that runs the pinned `mlx-community/parakeet-tdt-0.6b-v3` (`ed2b7e8c…`, mlx-audio 0.5.6) on the Vulkan device. On the M2 (T6021, wheel `+06711ad`), every frozen corpus threshold passes on a 192-clip corpus: WER 3.42% test-clean (≤ 6%), 2.92% test-other (≤ 14%), 4.39% accented (≤ 20%), and 11.43% in 0 dB babble (≤ 30%); silence and noise were empty on 10 of 10 each. The test-clean figure scores one 30.04 s clip through the product's 30.0 s cut; counted as a refusal, test-clean is 8.15%. The worker made 0 CPU-stream dispatches (CPU control 3, GPU control 0). The model returned no transcript for 3 of 96 recordings of clear speech; NeMo's own Parakeet does the same. When a voiced clip comes back empty, the worker now retries once with 1 s of low-level padding at both ends: 0 of 96 empty. A browser run of 30 turns then gave 0 empty transcripts, p95 1397.8 ms (budget 2000 ms). Pair plus recognizer peak: 5218 MiB less MemAvailable; the recognizer's share is 3195 MiB. Stop, the 30 s limit, Escape, device loss and permission denial pass at 375 and 1440 px. The same thresholds and 0 CPU calls were reconfirmed on main `2c08e72dd`. Direct warm transcription of a 5 s clip had p95 428 to 485 ms in 7 runs. An earlier 1167 ms outlier did not reproduce, and an A/B run shows the retry code does not cause it. A real screen reader was not run. See the [receipt](../receipts/2026-09-30-speech-input-gpu/README.md). |
-| Voice as a whole | Not qualified. It needs both directions. |
-| Quality pair | Not qualified. Cards pass HELD-OUT v4: 18/18 card prompts gave a valid card, 0 of 18 plain or near-miss prompts got one (stock kernel, 2026-10-01). Interactive latency was not part of the card gate. |
-| Cards (markdown promotion, no schema on ordinary chat) | Pass on all three pairs on the frozen HELD-OUT v4 (36 prompts; threshold 15/18 cards and 0 spurious; stock kernel 7.1.13-3-1-ARCH): Everyday 9B 16/18, 0 spurious, first-text p95 1.05 s; Compact 4B 18/18, 0 spurious, p95 0.66 s; Quality 27B 18/18, 0 spurious. The full schema (`card_format: fenced-json`) gave the 4B 17/18 but p95 2.40 s, so no catalog entry sets it. See the [receipt](../receipts/2026-09-30-card-promotion/README.md). |
-| Routing held-out suite | Evaluated once on 2026-09-30 with frozen policy 3 (commit `50ca49fae`). Precision 1.000 (35/35), recall 1.000, and 0 of 15 injection cases routed to a decision. Every held-out turn was decided without a model call: the head-free path runs at p95 43 ms on the M2 CPU. The Laya head call took p95 347 ms over 100 warm calls, above the 250 ms limit. Automatic routing stays off until the owner decides which latency the gate measures. See the [receipt](../receipts/2026-09-30-routing-gate/README.md). |
-| UX screenshots and accessibility | Pass for six states at 375, 768, 1024, and 1440 px, plus a 200% zoom frame, keyboard, contrast, reduced motion, and semantics checks, with five defects fixed. See the [UI receipt](../receipts/2026-09-28-ui-qualification/README.md). Not run: a real screen reader. |
-| Standing M1 battery, zero-CPU trace, peak memory, clean install | Not run. A clean install needs a release that contains the assistant. |
+Why the defaults changed: on the fixed stack — the GDN prefill repeat fix
+(`9ef622d14`, [receipt](../receipts/2026-09-30-gdn-prefill/README.md), 9B
+prefill 46.8 to 316.9 tok/s) and the release wheel `+06711ad` (the earlier live
+wheel returned non-finite logits on long GDN prompts) — the 2B is last on every
+quality proxy measured (0/8 native cards, GSM8K 11/20, IFE 17/20) while the 9B
+(0.78 s TTFT) and the 4B (0.44 s) hold the 2.0 s first-text budget ([chat-model
+bench](../receipts/2026-09-30-chat-model-bench/README.md)).
+
+Unless a row names another build, every number below was measured on the M2 Max
+(T6021, 96 GB) with the v0.7.6 release wheel `0.32.3.dev202609291615+06711ad`
+(provenance `verified: match`).
+
+| Gate | Everyday (9B) | Compact (4B) | Quality (27B) |
+|---|---|---|---|
+| Cards, HELD-OUT v4 (frozen; pass needs 15/18 valid, 0 spurious) | 16/18, 0 spurious — pass | 18/18, 0 spurious — pass | 18/18, 0 spurious — pass |
+| First-text p95, chosen config, stock kernel | 1.05 s — pass | 0.66 s — pass | not part of this gate |
+| First text on the real card prompt, engine level | 0.78 s — within the 2.0 s design budget | 0.44 s — within | 2.45 s — over budget |
+| Paired memory peak over baseline (whole system, run 1 per pair) | 10.88 GiB | 4.80 GiB | 19.26 GiB |
+| Tier fit | 16 GB and 96 GB | 16 GB and 96 GB | 96 GB only |
+| Pair qualified | No | No | No |
+
+Tier fit is host-RAM arithmetic on the measured 96 GB peaks; no 16 GB machine was measured ([chat-model bench](../receipts/2026-09-30-chat-model-bench/README.md), [pair gates receipt](../receipts/2026-09-30-pair-gates/README.md)).
+
+Cards: the product ships `card_format` unset everywhere (markdown promotion, no
+schema on ordinary chat). The fenced-json schema was measured and rejected by
+the pre-registered rule: the 4B wrote 18/18 cards with it but first-text p95 was
+2.40 s, and the 9B had one spurious card (17/18) — see the [card promotion
+receipt](../receipts/2026-09-30-card-promotion/README.md). The bench card
+protocol leaves the same two prompts (the Apollo timeline and the decision)
+without a card on both the 9B and the 4B ([chat-model
+bench](../receipts/2026-09-30-chat-model-bench/README.md)).
+
+**Quality performance — the design budget is not met.** Through the assistant
+API with both workers resident ([pair gates
+receipt](../receipts/2026-09-30-pair-gates/README.md), run 1): prefill 73–81
+tok/s (about 75–85 % of the 97–103 tok/s the same wheel reaches alone on the
+GPU), decode about 1.4 tok/s behind a 5,408-token prompt, and first visible
+text 2.5–14.4 s on card turns against the 2 s design budget. A 20,956-token
+prefill completed in about 258 s; the harness's own 600 s per-turn deadline
+then stopped the turn before its one-token decode — a harness limit, recorded
+as such. The 262,144-token admission is the catalog model maximum, not a
+memory-admitted limit.
+
+**Routing — the held-out suite passed on precision; routing stays off.** Frozen
+policy 3 (commit `50ca49fae`) scored precision 1.000 (35/35, 0 false
+positives), recall 1.000, and 0 of 15 injection cases routed to a decision; the
+head was called on 0 of 100 held-out turns. The shipped head-free decision path
+runs at p95 43 ms on the M2 CPU. The Laya head call itself took p95 347 ms
+(p50 309 ms, 100 warm calls) against the 250 ms warm deadline. Automatic
+routing stays off until the owner decides which latency the gate measures
+([routing receipt](../receipts/2026-09-30-routing-gate/README.md)). The
+held-out suite is now spent.
+
+**Voice input — every frozen threshold passed; not qualified as a pair gate.**
+On the 192-clip corpus with the pinned `parakeet-tdt-0.6b-v3` (`ed2b7e8c…`):
+WER 3.42 % test-clean (≤ 6 %), 2.92 % test-other (≤ 14 %), 4.39 % accented
+(≤ 20 %), and 11.43 % in 0 dB babble (≤ 30 %); silence and pink noise returned
+empty on 10 of 10 each ([speech input
+receipt](../receipts/2026-09-30-speech-input-gpu/README.md)). The test-clean
+figure scores one 30.04 s clip through the product's 30.0 s cut; counted as a
+refusal, test-clean is 8.15 % and fails. The recognition worker made 0
+CPU-stream dispatches (152 before the models-package fix). Empty transcripts
+are fixed: 3 of 96 clear-speech uploads returned nothing, and the voiced-clip
+retry returns 0 of 96; padding every request and dithering the clip were
+measured and rejected. Browser run, n=30 after the fix: 0 empty, p50 861.8 ms,
+p95 1397.8 ms against the 2 s budget, and the 375/1440 px scenarios (permission
+denied, device loss, 30 s limit, cancel) pass. The Orca pass below covers the
+UI states; no screen-reader run has driven a live dictation.
+
+**Voice output — the real-time threshold is not met, for either engine.** The
+default Qwen3-TTS pack measures median RTF 0.22–0.23 (audio s over wall s)
+against the 1.2 threshold, and the named floor is about 87 ms of GPU compute
+per talker step — about 5.2 s of GPU work per 5 s of audio at 12.5 Hz, at
+43–47 µs per dispatch ([speech output speed
+receipt](../receipts/2026-09-30-speech-output-speed/README.md) and
+[NAMED-FLOOR](../receipts/2026-09-30-speech-output-speed/NAMED-FLOOR.md)). The
+Attn128 fused head_dim-128 decode attention cuts a full frame from 4,244 to
+3,362 dispatches (167–176 to 134–137 ms p50) — still about 2.3× the
+1,488-dispatch budget for RTF 1.2
+([Attn128](../receipts/2026-09-30-attn128/README.md)). Per Main's direction the
+floor ships: Qwen3-TTS stays for non-real-time synthesis, with a streaming
+first sentence audible in about 1.4 s. The Kokoro-82M second engine fails its
+own frozen thresholds — RTF 0.69 against a required 5 or more, and first-audio
+p95 10.5–10.8 s against 1.0 s (WER 0.87 % passes) — so it ships behind the
+picker, is not the default, and is not recommended; the owner listens before
+any decision ([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
+Voice as a whole stays unqualified: it needs both directions.
+
+**Zero-CPU traces.** The chat (2B), decision, TTS, and 9B GDN chat paths each
+measured 0 CPU tensor-primitive dispatches through a gdb breakpoint on
+`mlx::core::cpu::get_command_encoder`, with live controls: one `mx.add` on an
+explicit `mx.cpu` stream fires 3 encoder calls, the same op on `mx.gpu` fires 0.
+The `[rtmod] DISPATCH` facility alone cannot prove this — it instruments only
+the GPU encoder ([pair gates receipt](../receipts/2026-09-30-pair-gates/README.md)).
+Finding, still open: an explicit `stream=mx.cpu` still executes CPU primitives
+in the release wheel (`binary_op_cpu<Add>` and similar instantiations live in
+`libmlx.so`, untraced by the dispatch facility). The product paths never trip
+it; a caller that passes a CPU stream can bypass the contract.
+
+**Standing battery and pin state.** The 13-inch M1 battery passed 26/26 suites
+at `db74f11ad` ([M1 battery
+receipt](../receipts/2026-09-30-m1-battery/README.md)). At the [mlx pin
+bump](../receipts/2026-10-01-mlx-pin-bump/README.md) tip (`aabe46c3c`) the
+T6001 battery passed 29/30; its one failure, the bf16 block of
+`omarchy_indexing_ops_tests`, was later shown to be two test bugs rather than a
+backend defect and is fixed on main (`e00b37116`, [Attn128
+corrections](../receipts/2026-09-30-attn128/README.md)). The pin bump's token
+digests are bit-identical on both chips; its merge gate stays held pending the
+G13G re-run after that host's reinstall. Mesa: the omacom v2/v3 driver stacks
+keep every digest bit-exact on every chip, and v3 is pinnable on T6001
+evidence, but both stacks collapse pure prefill about 5.4× on the M2 chip
+(G14) against the deployed driver — consistent with the coopmat matmul path
+the deployed pre-gating build uses on G14 and the omacom stacks gate to G13
+(the receipt's labeled hypothesis; ready falsifier `AGX_SIMDMAT=1`) — so the
+Mesa pin is blocked for that chip ([Mesa v2
+parity](../receipts/2026-10-01-mesa-v2-parity/README.md)).
+
+**Runtime and install gates.** The packaged DKMS ANE module passed the worker's
+ABI-1 acceptance on T6001 (bit-exact h13 add-mul bundle, per-user fallback,
+negative controls); Honeykrisp ICD selection now refuses a missing override
+JSON, and release builds raise instead of silently falling back to the CPU
+device ([runtime gate](../receipts/2026-09-30-runtime-gate/README.md)). The
+offline `--system` stage ran green inside a network namespace on T6001 with 36
+vendored aarch64 wheels; two bugs were found on hardware and fixed test-first
+([system install receipt](../receipts/2026-09-30-system-install-hw/README.md)).
+
+**Screen reader — pass.** A real Orca run drove the static UI through ten
+states (setup, chat stream, escape, decision, card, compare, drawers, voice
+unavailable, error, offline chip) in a container, with utterances captured
+verbatim. One defect was found and fixed: the setup checkbox announced
+"invalid entry." until `setup.js` set `aria-invalid="false"` ([receipt](../receipts/2026-09-30-screen-reader/README.md)).
+Landmark, heading, and table navigation are not exercisable in that container.
+
+Defects these runs found and fixed in source: chat requests carry a repetition
+penalty of 1.1 because greedy decoding looped on the 2B until the token cap;
+the STT worker made 152 CPU-stream calls through a float64 filterbank built at
+models-package import until the worker registered that package without running
+its `__init__`; the recorder requested browser noise suppression, which doubled
+the captured level (median 2.14×) until it asked for unprocessed audio; and the
+voiced-clip retry above. Two defects are still open: the Compact 4B card turn
+that returned a silent empty reply (run 1, `status=complete`, `text_len` 0),
+and the explicit-CPU-stream finding above.
+
+### Open items for the owner
+
+| # | Item | Why it blocks |
+|---|---|---|
+| 1 | Routing latency decision: does the 250 ms gate measure the Laya head call (p95 347 ms, fails) or the shipped head-free path (p95 43 ms, passes)? | Automatic routing stays off until decided. |
+| 2 | TTS real-time route: Qwen3-TTS RTF 0.22–0.23 vs 1.2; Kokoro RTF 0.69 vs 5. | No engine meets its real-time threshold; voice output stays unqualified. |
+| 3 | Pair qualification and the card-rule gap: no pair has passed the full gate set, and the 9B and 4B produce no card for the Apollo-timeline and decision prompts. | Nothing is qualified; `recommended` stays false everywhere. |
+| 4 | G14 Mesa coopmat: both omacom stacks collapse prefill about 5.4× vs the deployed driver; the hypothesis has a ready falsifier (`AGX_SIMDMAT=1` on v3). | Blocks the Mesa pin for the M2 chip. |
+| 5 | G13G re-run on the reinstalled jwm1, and one G13-class run of the Attn128 16-bit selection-route doctest. | Gates the mlx pin bump merge; the selection route stays float32-gated until then. |
 
 No pair is qualified. All catalog entries keep `recommended: false`.
 
-Defects found by these runs and fixed in source:
-
-- **Speech was a hum.** An elementwise add of two transposed views wrote its output at the wrong positions on the Vulkan backend (max absolute error 6 to 9 against NumPy). The speech decoder uses that add. The fix is in `overlay/mlx/backend/omarchy/primitives.cpp` with a focused test. It first shipped in the v0.7.5 wheel, whose codec regression the release gate ran on hardware. See the [receipt](../receipts/2026-09-28-tts-fix/README.md).
-- **Chat prompts carried a 792-token card schema on every turn.** Prefill cost about 2 s. Ordinary chat now sends no card schema; cards come from the reply's markdown (see [How cards are produced](#how-cards-are-produced)). A message that names a chart, graph, form, decision, options, facts, or sources gets the full schema, and so does every Laya turn.
-- **Greedy decoding looped on the 2B model** until the token cap. Chat requests now send a repetition penalty of 1.1.
-- **A reboot during pair start left an unclaimed reservation.** Every later start refused with "already held". The reaper now clears an unclaimed record when its creating process is gone.
-- **A fresh install could not set up Laya, offline or online.** Two causes. (1) The generic snapshot check required a top-level `config.json`, which Laya's layout (`encoder/config.json`, `tokenizer/`) does not have, so a fully cached raw Laya snapshot never counted and offline setup refused with "no raw snapshot to convert". Laya now declares its own files and is checked against them. Offline refusals now name the missing files. (2) The pinned Laya commit `1c5edc17` no longer exists upstream (Hugging Face returns "Invalid rev id"), so a fresh online download failed. The catalog now pins upstream `main` at `55cf4c4e`. All five files conversion reads hash identical to the earlier conversion, so the converted artifact and its weights hash `891102d3…` are unchanged. An existing converted Laya records the old revision and is converted again on the next setup. That needs the new snapshot in the cache, or a network. Measured on the M2: fresh home offline from the cache 3.8 s; empty cache online 24 s and 1.8 GB.
-
-The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.6, installed-from-release gates green; the Laya fresh-install fix is described above; see `receipts/2026-09-30-v076-release.md`).
+The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.6, installed-from-release gates green, including both Laya fresh-install paths; see `receipts/2026-09-30-v076-release.md`).
 
 ### Voice options
 

@@ -182,6 +182,7 @@ excluded and store exact zeros) and the register-blocked scores and probs
 matmuls skip the fully masked tiles, storing the same bits the additive
 storage-floor mask produced ("f16 causal attention equals the additive
 storage-floor mask bit for bit", `omarchy_primitive_tests`).
+Decode shapes at head_dim 128 have a fused one-dispatch arm: the bf16 arm is bit-identical to the f32-score composition at every measured k (doctests at k ∈ {12, 34, 93, 263, 512, 7200}; engagement window `{1, 7168}`), and the f16 arm keeps the hd64 arm's ≤ 0.01 tolerance; other widths and windows keep the composition (`omarchy_sdpa_decode_fused_tests`).
 `mx.quantized_matmul` passes the gate for the mlx-lm Linear shape:
 affine mode, 4-bit and 8-bit codes, group sizes 32 and 64, transposed
 packed weights `[N, K * bits / 32]`, and f32, f16, and bf16 activations.
@@ -332,7 +333,11 @@ Rows up to 1024 elements sort in one workgroup: the bitonic kernel keeps the row
 Longer rows sort through the wide-row path: the padded row is sliced into 1024-element chunks that the same suffix kernel sorts, then one global-memory compare-exchange dispatch per bitonic network stage finishes each padded row in place; the argsort carries source indices in a parallel buffer, so the stable order survives every stage.
 The comparator orders NaN after every number and breaks value ties on the smaller source index, which mirrors the upstream CPU `stable_sort` rule.
 ArgSort writes uint32 source indices, and the tie rule makes the index order unique.
-`mx.partition` and `mx.argpartition` route to the same full sort, the redirect the upstream Metal backend makes, so every kth position holds the sorted value; the full-sort redirect covers wide rows too.
+`mx.argpartition` keeps the full sort the upstream Metal redirect makes, so every kth position holds the sorted value; the sort redirect covers wide rows too.
+Value `mx.partition` (and the `mx.topk` redirect to `partition(a, -k)` plus a tail slice) has a second route: a one-dispatch small-k selection kernel that radix-selects the kth key in four 8-bit passes, gathers the k candidates, and bitonic-sorts them.
+It engages when the kth index is nonnegative, the row is a contiguous last axis longer than 1024 elements, the dtype is float32, and 1 ≤ rows ≤ 256 with 1 ≤ k ≤ 256; its tail slice is bit-equal to the sort path's tail slice.
+F16 and bf16 selection blobs are built but stay gated to the wide-row sort route pending one G13-class run of the selection-route doctest ([Attn128 receipt](../receipts/2026-09-30-attn128/README.md); the recorded 16-bit failures were later traced to test bugs, fixed in `e00b37116`).
+Outside that window the sort redirect serves both.
 Non-suffix axes, non-contiguous inputs, and non-float inputs fail with named errors.
 `mx.topk` returns the k largest values in ascending order through the partition path, and the strided tail slice now passes for 2-D inputs.
 The BF16 sort variants build, but they have no gate receipt yet.
@@ -389,8 +394,8 @@ The full mlx-lm temp sampling shape also passes: one `[1, 151936]`
 bfloat16 logprob row scaled by `1/temp` and sampled in range.
 Temp-only sampling needs no `ArgPartition`: with the sampler defaults
 `make_sampler` chains nothing but `categorical_sampling`.
-Wide-row `ArgPartition` and `top-k` now ride the wide-row sort path, so
-vocabulary-width rows partition without a row-length limit.
+Wide-row `ArgPartition` keeps the wide-row sort path, so
+vocabulary-width rows partition without a row-length limit; eligible value top-k rides the small-k selection kernel described above ([Attn128 receipt](../receipts/2026-09-30-attn128/README.md)).
 The BF16 arange kernel variant builds, but it has no gate receipt yet.
 The gradient of `sum(sin(x))` matches `cos(x)` at `1e-5`.
 The Sin vjp lowers to Cos and Multiply only, so the gradient stays inside supported operations.
