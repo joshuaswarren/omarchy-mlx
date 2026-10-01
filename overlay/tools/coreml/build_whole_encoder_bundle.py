@@ -245,7 +245,7 @@ def _build_manifest(container: bytes, hwx_sha: str, source_commit: str) -> dict:
         },
         "driver_abi_major": 1,
         "provenance": {
-            "source_repo": "joshuaswarren/mlx-omarchy",
+            "source_repo": "joshuaswarren/omarchy-mlx",
             "source_commit": source_commit,
             "exported_at": time.strftime("%Y-%m-%d"),
         },

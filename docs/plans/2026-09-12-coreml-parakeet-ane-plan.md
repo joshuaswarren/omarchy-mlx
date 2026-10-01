@@ -14,7 +14,7 @@ source plan; it maps requirements to existing evidence or open status.
 
 ## Full Implementation and Shipping Requirements
 
-**Primary repository:** `joshuaswarren/mlx-omarchy`  
+**Primary repository:** `joshuaswarren/omarchy-mlx`  
 **ANE driver/runtime:** `joshuaswarren/omarchy-ane`  
 **ANE compiler:** `joshuaswarren/mil-hwx-compiler`  
 **Hardware research:** `joshuaswarren/ane-linux-experiments`  

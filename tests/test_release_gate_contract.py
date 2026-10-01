@@ -14,6 +14,7 @@ DEV_MEASUREMENT_SCRIPTS = {
     "pair_memory_turns.py",
     "pair_memory_v2.py",
     "quality27b_perf_api.py",
+    "ticket_card_timing.sh",
     "ticket_memory_turns.sh",
     "ticket_memory_v2.sh",
     "ticket_quality27b_perf_api.sh",

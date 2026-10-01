@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # mlx-omarchy installer for Omarchy on Apple M1 (Asahi Linux, Honeykrisp Vulkan).
 #
-#   curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
 #   bash install.sh --ane
 #   bash install.sh --voice
 #   bash install.sh --uninstall
@@ -17,7 +17,7 @@ set -euo pipefail
 # (packaging/paths.sh is generated from it and sourced by --system).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-REPO=joshuaswarren/mlx-omarchy
+REPO=joshuaswarren/omarchy-mlx
 PREFIX="${MLX_OMARCHY_HOME:-$HOME/.local/share/mlx-omarchy}"
 VENV="$PREFIX/venv"
 BIN="$HOME/.local/bin"

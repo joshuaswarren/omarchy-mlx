@@ -338,7 +338,7 @@ def verify(wheel_path, expected_hash, expected_version_note, tag,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tag")
-    ap.add_argument("--repo", default="joshuaswarren/mlx-omarchy")
+    ap.add_argument("--repo", default="joshuaswarren/omarchy-mlx")
     ap.add_argument("--repo-root", default=None,
                     help="repo checkout for receipts/ and git tag "
                          "resolution (default: this script's repo)")

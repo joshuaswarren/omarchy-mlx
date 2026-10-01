@@ -40,7 +40,7 @@ recent version are all useful, and the archive accepts them all.
 Redacted hostnames, paths, and serials; explicit preview; opt-in submit;
 open [schema](../services/community-data/schema/) and [archive](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results).
 Something failed or looks weird (a 422, a crash, an exotic machine)?
-[Open an issue](https://github.com/joshuaswarren/mlx-omarchy/issues) and
+[Open an issue](https://github.com/joshuaswarren/omarchy-mlx/issues) and
 paste the exact error text — the collector prints the failing field, and
 that line is what we need.
 

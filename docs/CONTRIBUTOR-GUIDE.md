@@ -242,7 +242,7 @@ fails, file an issue with the exact error and the wheel commit.
 ### Pull the source and prepare the pinned MLX
 
 ```sh
-git clone https://github.com/joshuaswarren/mlx-omarchy.git
+git clone https://github.com/joshuaswarren/omarchy-mlx.git
 cd mlx-omarchy
 ./scripts/prepare-mlx.sh        # fetches mlx.lock's archive, sha-checks it, stages .work/mlx
 ```
@@ -321,7 +321,7 @@ nproc && cat /sys/devices/system/cpu/present
 # 2. Install the wheel into a venv
 python3.14 -m venv ~/.venvs/mlx-collect
 ~/.venvs/mlx-collect/bin/pip install \
-  https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.3.5/mlx_omarchy-0.32.2.dev202609040917%2B0535e62-cp314-cp314-linux_aarch64.whl
+  https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.3.5/mlx_omarchy-0.32.2.dev202609040917%2B0535e62-cp314-cp314-linux_aarch64.whl
 
 # 3. Print the provenance line beside every measurement
 ~/.venvs/mlx-collect/bin/python scripts/mlx_provenance.py

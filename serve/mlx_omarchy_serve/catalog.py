@@ -37,14 +37,14 @@ MAX_CONTEXT_TOKENS = 1_048_576
 MIN_CONTEXT_TOKENS = 128
 
 DEFAULT_CATALOG_URL = (
-    "https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/"
+    "https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/"
     "serve/mlx_omarchy_serve/catalog.json"
 )
 DEFAULT_TTL_HOURS = 24.0
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 APPROVED_CATALOG_HOSTS = frozenset({"raw.githubusercontent.com"})
-APPROVED_CATALOG_PREFIX = "/joshuaswarren/mlx-omarchy/"
+APPROVED_CATALOG_PREFIX = "/joshuaswarren/omarchy-mlx/"
 DEV_URL_OVERRIDE_ENV = "MLX_OMARCHY_CATALOG_ALLOW_ANY_URL"
 
 

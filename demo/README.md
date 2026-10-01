@@ -6,7 +6,7 @@ Mesa driver, Hyprland, or any Omarchy file; everything lands under `$HOME`.
 ## 1. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
 ```
 
 What you should see, in order: the two runtime packages (`lapack`, `blas`)
@@ -53,7 +53,7 @@ operations ([docs/compatibility.md](../docs/compatibility.md)).
 ## 4. Remove it
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash -s -- --uninstall
 ```
 
 ## Troubleshooting

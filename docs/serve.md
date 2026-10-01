@@ -414,7 +414,7 @@ No model load enables `trust_remote_code`. Unsupported operations must fail by n
 ## Install and check the backend
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
 mlx-omarchy -c 'import mlx.core as mx; print(mx.device_info())'
 ```
 

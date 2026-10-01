@@ -31,7 +31,7 @@ IDENTITY = {
     "graph_hash": "5584d0fd8d40027229890408e924e6f7930cd5f02516466a442193408482ce76",
     "compiler_host_build": "Linux x86_64 explicit ANEC fixture",
     "compiler_toolchain": "mil-hwxc aa688df66cbc2110e0df94f0d50fb72c7fa30a18",
-    "source_repo": "joshuaswarren/mlx-omarchy",
+    "source_repo": "joshuaswarren/omarchy-mlx",
     "source_commit": "309cd745d40117b689e8936d3ef62fcea262b232",
     "exported_at": "2026-09-12",
     "model": "h13-first-run-chain-add-mul",
@@ -44,7 +44,7 @@ ISLAND_IDENTITY = {
         "mil-hwxc c2cf32e4aa0200d72cecbce203bf6b47f50f729e "
         "sha256:82f1d4ce44dc8f2cb5eefd843eea41c47527af3fbff2def0ed1fc154ccd3ce71"
     ),
-    "source_repo": "joshuaswarren/mlx-omarchy",
+    "source_repo": "joshuaswarren/omarchy-mlx",
     "source_commit": "947ece40ec49671f9cb423aff7401b0e88f94680",
     "exported_at": "2026-09-13",
     "model": "attn-select-island",

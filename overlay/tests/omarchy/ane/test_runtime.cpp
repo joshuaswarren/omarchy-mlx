@@ -126,7 +126,7 @@ class RuntimeBundle {
         "}],\"compiler\":{\"host_build\":\"Linux test host\","
         "\"toolchain\":\"mil-hwxc test source\",\"target\":\"h13\"},"
         "\"driver_abi_major\":1,\"provenance\":{"
-        "\"source_repo\":\"joshuaswarren/mlx-omarchy\",\"source_commit\":\"" +
+        "\"source_repo\":\"joshuaswarren/omarchy-mlx\",\"source_commit\":\"" +
         std::string(40, 'c') +
         "\",\"exported_at\":\"2026-09-12\"},\"release_asset\":{"
         "\"model\":\"runtime-directory-test\",\"model_sha256\":\"" +

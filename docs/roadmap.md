@@ -23,7 +23,7 @@ A fresh process reopens the device.
 (3) Balance the case order across both programs.
 (4) Run CPU references and negative controls before timing.
 
-Exit receipt: The [full M1 run](https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.2.0/mlx-omarchy-v0.2.0-m1-kernel.json) passed every speed gate.
+Exit receipt: The [full M1 run](https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.2.0/mlx-omarchy-v0.2.0-m1-kernel.json) passed every speed gate.
 Every matched result exceeded the 0.80 release threshold.
 
 ## v0.3.0: Vulkan primitives and dtypes

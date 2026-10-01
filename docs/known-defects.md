@@ -742,7 +742,7 @@ The 1e5 refusal stays in the shaders for stock Mesa.
 
 ## Shipped in v0.3.0-alpha.1 - fixed in v0.3.0 unless marked otherwise
 
-Release [v0.3.0-alpha.1](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.3.0-alpha.1) was cut on 2026-09-01. The wheels on its release page ship every defect in this section. Each one returns confidently wrong numbers and raises nothing. Unless a heading says otherwise, the entry is fixed in v0.3.0 with value tests at the exact upstream failing shapes, and the record is kept here because the alpha.1 wheels are still installed somewhere. Observed on: dev box, Mesa llvmpipe, via upstream's own suites on 2026-09-02.
+Release [v0.3.0-alpha.1](https://github.com/joshuaswarren/omarchy-mlx/releases/tag/v0.3.0-alpha.1) was cut on 2026-09-01. The wheels on its release page ship every defect in this section. Each one returns confidently wrong numbers and raises nothing. Unless a heading says otherwise, the entry is fixed in v0.3.0 with value tests at the exact upstream failing shapes, and the record is kept here because the alpha.1 wheels are still installed somewhere. Observed on: dev box, Mesa llvmpipe, via upstream's own suites on 2026-09-02.
 
 ### `mx.fast.scaled_dot_product_attention` with grouped-query attention - fixed in v0.3.0
 

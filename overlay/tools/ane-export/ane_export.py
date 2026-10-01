@@ -212,7 +212,7 @@ def main() -> int:
     parser.add_argument("--tools-dir", type=Path, default=None,
                         help="dir with ane-compile-hwx + converter "
                              "(default: this script's directory)")
-    parser.add_argument("--source-repo", default="joshuaswarren/mlx-omarchy")
+    parser.add_argument("--source-repo", default="joshuaswarren/omarchy-mlx")
     parser.add_argument("--source-commit", default="",
                         help="40-hex commit of the source repo")
     parser.add_argument("--firmware-min", default="26.0")

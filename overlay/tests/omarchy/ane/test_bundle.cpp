@@ -267,7 +267,7 @@ struct Fixture {
           {"target", "h13"}}},
         {"driver_abi_major", 1},
         {"provenance",
-         {{"source_repo", "joshuaswarren/mlx-omarchy"},
+         {{"source_repo", "joshuaswarren/omarchy-mlx"},
           {"source_commit", hex(40, 'c')},
           {"exported_at", "2026-09-12"}}},
         {"release_asset",

@@ -358,7 +358,7 @@ class RefreshTests(unittest.TestCase):
             with self.assertRaises(catalog.CatalogError):
                 catalog.refresh(
                     self.home,
-                    url="http://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/x.json",
+                    url="http://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/x.json",
                     ttl_hours=0)
             with self.assertRaises(catalog.CatalogError):
                 catalog.refresh(

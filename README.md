@@ -2,7 +2,7 @@
 
 MLX on Apple GPU under Linux.
 
-![Primitive coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/docs/coverage.json)
+![Primitive coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/docs/coverage.json)
 
 [MLX](https://github.com/ml-explore/mlx) is Apple's array framework. Upstream it runs on Metal. **mlx-omarchy** is the Omarchy GPU backend that keeps `import mlx.core as mx` and `mx.gpu` on Apple Silicon Linux through Mesa's Honeykrisp Vulkan 1.4 stack. There is no Metal. GPU work never falls back to CPU tensors.
 
@@ -21,10 +21,10 @@ One-command install on an M1 running Omarchy, first model download, streamed ans
 On Omarchy (Apple Silicon), the installer creates a private venv under `~/.local/share/mlx-omarchy`. It installs `mlx-omarchy`, `mlx-omarchy-demo`, `mlx-omarchy-serve`, and `mlx-omarchy-parakeet` on `~/.local/bin`. It also registers **MLX Chat (Apple GPU)** in the Omarchy launcher. It never replaces Mesa or edits Omarchy package files.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joshuaswarren/mlx-omarchy/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
 ```
 
-Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.6](https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.7.6) (installed-from-release gates green on the M2 Max; the installer ships MLX Chat, the serve CLI, and the wheel from the same tag; fixes the fresh-install setup for the Laya pair, offline and online). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
+Uninstall with `bash install.sh --uninstall`. Latest release: [v0.7.6](https://github.com/joshuaswarren/omarchy-mlx/releases/tag/v0.7.6) (installed-from-release gates green on the M2 Max; the installer ships MLX Chat, the serve CLI, and the wheel from the same tag; fixes the fresh-install setup for the Laya pair, offline and online). Wheel filenames carry the build commit; pin the exact URL and check `SHA256SUMS` on the release.
 
 ### System package layout
 
@@ -200,7 +200,7 @@ Plans and contracts: [docs/plans/2026-09-12-coreml-parakeet-ane-plan.md](docs/pl
 The most useful thing an M-series owner can do is submit a redacted hardware report: [docs/contribute-data.md](docs/contribute-data.md). Quick capability capture (no install required for the light path):
 
 ```bash
-git clone https://github.com/joshuaswarren/mlx-omarchy.git
+git clone https://github.com/joshuaswarren/omarchy-mlx.git
 cd mlx-omarchy
 python3 scripts/collect_quick.py
 ```

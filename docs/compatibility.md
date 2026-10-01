@@ -115,15 +115,15 @@ caused the next day.
 
 Arrays and memory are runtime verified.
 The tests cover allocation, copies, views, aliases, and lifetime.
-See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
+See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
 
 Streams and events are runtime verified.
 The tests prove correct order without a global device wait.
-See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
+See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
 
 Matched kernel speed is verified through `v0.2.0`.
 The gate covers matched prefill, decode, and attention operations against pinned `llama.cpp` Vulkan operations.
-See the [v0.2.0 M1 kernel receipt](https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.2.0/mlx-omarchy-v0.2.0-m1-kernel.json).
+See the [v0.2.0 M1 kernel receipt](https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.2.0/mlx-omarchy-v0.2.0-m1-kernel.json).
 
 Custom Metal kernels are in progress. The Omarchy backend translates the
 MLX-generated signature and a bounded MSL subset to GLSL, compiles it to
@@ -437,7 +437,7 @@ Pre-fusion ANE partitioning and compiled-cache tests remain open.
 
 The runtime has no CPU tensor fallback.
 The release build and backend trace prove this state.
-See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
+See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
 
 Explicit exclusions are in progress.
 Named errors now cover unsupported linear algebra, `float64`, and complex dtypes in the development gate.

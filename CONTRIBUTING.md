@@ -66,7 +66,7 @@ default run uploads nothing; you always see the full preview first.
 Clone this repository first; both scripts live in `scripts/`:
 
 ```bash
-git clone https://github.com/joshuaswarren/mlx-omarchy.git
+git clone https://github.com/joshuaswarren/omarchy-mlx.git
 cd mlx-omarchy
 ```
 
@@ -198,7 +198,7 @@ Prerequisites, in order:
    yours with `python3 --version`; if it is not 3.14.x, install a 3.14
    interpreter and use its name in the commands below.
 2. The aarch64 wheel asset from a stable release at
-   [github.com/joshuaswarren/mlx-omarchy/releases](https://github.com/joshuaswarren/mlx-omarchy/releases).
+   [github.com/joshuaswarren/omarchy-mlx/releases](https://github.com/joshuaswarren/omarchy-mlx/releases).
    The name pattern is `mlx_omarchy-*-cp314-cp314-linux_aarch64.whl`;
    v0.3.5 ships
    `mlx_omarchy-0.32.2.dev202609040917+0535e62-cp314-cp314-linux_aarch64.whl`.
@@ -211,14 +211,14 @@ Prerequisites, in order:
    ```bash
    python3.14 -m venv ~/.venvs/mlx-collect
    ~/.venvs/mlx-collect/bin/pip install \
-     https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.3.5/mlx_omarchy-0.32.2.dev202609040917%2B0535e62-cp314-cp314-linux_aarch64.whl
+     https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.3.5/mlx_omarchy-0.32.2.dev202609040917%2B0535e62-cp314-cp314-linux_aarch64.whl
    ```
 
    That URL pins v0.3.5. To take whatever the newest stable release
    ships instead:
 
    ```bash
-   gh release download --repo joshuaswarren/mlx-omarchy \
+   gh release download --repo joshuaswarren/omarchy-mlx \
      --pattern '*cp314*linux_aarch64.whl'
    ~/.venvs/mlx-collect/bin/pip install ./mlx_omarchy-*-cp314-cp314-linux_aarch64.whl
    ```
@@ -265,7 +265,7 @@ with the profiling harness OFF on purpose, so the dispatch path
 carries zero profiling code. Two ways to turn it on:
 
 Easiest: install the dev diagnostics prerelease from GitHub Releases
-at <https://github.com/joshuaswarren/mlx-omarchy/releases/tag/v0.3.3-diag.1>.
+at <https://github.com/joshuaswarren/omarchy-mlx/releases/tag/v0.3.3-diag.1>.
 It carries the profiling harness compiled IN and the `mlx-omarchy-info`
 tool. The harness slows every dispatch down, so use this build to
 collect profiles only; it is not for production work. Attach the dev
@@ -274,7 +274,7 @@ wheel to a venv:
 ```bash
 python3.14 -m venv ~/venv-mlx-diag
 ~/venv-mlx-diag/bin/pip install \
-  'https://github.com/joshuaswarren/mlx-omarchy/releases/download/v0.3.3-diag.1/mlx_omarchy-0.32.2.dev202609031348%2Bdiag-cp314-cp314-linux_aarch64.whl'
+  'https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.3.3-diag.1/mlx_omarchy-0.32.2.dev202609031348%2Bdiag-cp314-cp314-linux_aarch64.whl'
 ```
 
 Set the env var to a file path and run your workload. The runtime
