@@ -240,7 +240,7 @@ def heartbeat_loop(cid, turn, runtime_path, stop):
             pass
 
 
-def wait_turn(cid, turn, runtime_path, timeout_s=600):
+def wait_turn(cid, turn, runtime_path, timeout_s=600, want_fvt=False):
     stop = threading.Event()
     beat = threading.Thread(target=heartbeat_loop,
                             args=(cid, turn, runtime_path, stop),
@@ -248,8 +248,22 @@ def wait_turn(cid, turn, runtime_path, timeout_s=600):
     beat.start()
     deadline = time.monotonic() + timeout_s
     message = None
+    first_text_at = None
+    t0 = time.monotonic()
     try:
         while time.monotonic() < deadline:
+            if want_fvt and first_text_at is None:
+                try:
+                    events = call("GET",
+                                  f"/api/conversations/{cid}/events?after=0",
+                                  runtime_path=runtime_path)
+                    for ev in events if isinstance(events, list) else []:
+                        if (ev.get("turn_id") == turn
+                                and ev.get("type") == "text"):
+                            first_text_at = time.monotonic() - t0
+                            break
+                except Exception:
+                    pass
             record = call("GET", f"/api/conversations/{cid}", runtime_path=runtime_path)
             message = next((m for m in record.get("messages") or []
                             if m.get("turn_id") == turn
@@ -260,6 +274,8 @@ def wait_turn(cid, turn, runtime_path, timeout_s=600):
     finally:
         stop.set()
         beat.join(timeout=5)
+    if message is not None and first_text_at is not None:
+        message = dict(message, first_visible_text_s=round(first_text_at, 3))
     return message
 
 
@@ -391,7 +407,8 @@ def main():
         # stream the full reply and the coordinator's card-promotion pass
         # runs after the stream ends.
         timeout_s = args.timeout_s if phase_name != "card" else args.timeout_s_card
-        msg = wait_turn(cid, turn, pair.runtime, timeout_s=timeout_s)
+        msg = wait_turn(cid, turn, pair.runtime, timeout_s=timeout_s,
+                        want_fvt=True)
         wall = time.monotonic() - t0
         text = (msg or {}).get("content") or ""
         status = (msg or {}).get("status")
@@ -413,7 +430,8 @@ def main():
         s = sample(f"after_{phase_name}", pair.server.pid, chat_port)
         s.update({"turn_status": status, "text_len": len(text),
                   "components": components, "turn_valid": valid,
-                  "wall_s": round(wall, 2)})
+                  "wall_s": round(wall, 2),
+                  "first_visible_text_s": (msg or {}).get("first_visible_text_s")})
         samples.append(s)
 
     time.sleep(3)
@@ -433,6 +451,7 @@ def main():
                 "text_len": s.get("text_len"),
                 "components": s.get("components"),
                 "wall_s": s.get("wall_s"),
+                "first_visible_text_s": s.get("first_visible_text_s"),
                 "valid": s["turn_valid"],
                 "system_peak_over_baseline_bytes": s["system_used_bytes"] - baseline_sys,
             })

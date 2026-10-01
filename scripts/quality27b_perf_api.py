@@ -255,9 +255,31 @@ def main():
     print("setup complete", flush=True)
 
     filler = ("The quick brown fox jumps over the lazy dog. " * 30).strip()
-    prefill_512 = filler * 18
-    prefill_2048 = filler * 70
-    ttft_prompt = filler * 7
+    # Prompts of exactly 512/2048/170 tokens: grow the filler until the
+    # tokenizer counts the target (measured, not assumed). Falls back
+    # to a char/4 heuristic only if no tokenizer loads.
+    _tok = None
+    try:
+        from transformers import AutoTokenizer
+        _tok = AutoTokenizer.from_pretrained(
+            "Qwen/Qwen3-0.6B", trust_remote_code=False)
+    except Exception as e:
+        print(f"tokenizer unavailable ({e}); using char/4 heuristic")
+
+    def _tok_count(text):
+        if _tok is not None:
+            return len(_tok(text)["input_ids"])
+        return len(text) // 4
+
+    def _build_exact(target):
+        text = filler
+        while _tok_count(text) < target:
+            text = text + " " + filler
+        return text
+
+    prefill_512 = _build_exact(512)
+    prefill_2048 = _build_exact(2048)
+    ttft_prompt = _build_exact(170)
     decode_prompt = "Repeat the last sentence five times verbatim."
     card_prompts = [
         "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
@@ -299,6 +321,7 @@ def main():
             "text_len": len(text),
             "status": (msg or {}).get("status"),
             "prompt_chars": len(prompt),
+            "prompt_tokens": _tok_count(prompt),
             "max_tokens": max_tokens,
             "mode": mode,
             "reply_head": text[:200],

@@ -245,6 +245,39 @@ the 4 k turn context).
 All nine v3 runs report `run_valid: true` (all core phases valid, all
 card turns complete with visible text).
 
+### Card-turn latency per pair (total wall; first-visible text where captured)
+
+The card turn is the user-visible latency surface. The memory harness
+polls the assembled conversation record and (from this revision on)
+reads the `/events` stream for the first `text` event; the v3 runs
+below recorded wall only, so first-visible text is shown for the
+Quality pair from the SSE-instrumented perf harness and marked
+"not captured" for the 4B and 9B pairs.
+
+| pair | card wall (3 runs, s) | first_visible_text (s) | text_len | visible component |
+|---|---|---|---|---|
+| compact4b (4B) | 88.1 / 90.1 / 94.1 | not captured (memory harness) | 857 each | none (prose fallback text) |
+| everyday9b (9B) | 122.2 / 117.2 / 113.2 | not captured (memory harness) | 109 each | chart |
+| quality27b (27B) | 49.1 / 53.1 / 49.1 | 13.4 / 14.4 / 3.2 / 2.6 / 13.3 across the perf harness's five card prompts | 57–1054 | chart |
+
+Decode tok/s over the card turn (text_len / (wall − fvt), Quality
+pair from the perf harness): 109/(48.15−13.37) ≈ 3.1 tok/s,
+57/(77.72−14.41) ≈ 0.9 tok/s, 162/(16.05−3.22) ≈ 12.6 tok/s,
+1054/(57.68−2.55) ≈ 19.1 tok/s, 66/(55.68−13.28) ≈ 1.6 tok/s. For the
+4B and 9B pairs wall is measured but the fvt split is not, so their
+decode rate cannot be separated from prefill+decision latency in
+these runs; `scripts/pair_memory_v2.py` now records
+`first_visible_text_s` for any rerun.
+
+What dominates the card turn, from the split the data allows: the
+27B card turn spends 2.6–14.4 s before the first token shows
+(prefill plus the Laya decision pass plus coordinator setup), then
+streams at 0.9–19.1 tok/s depending on how much the model writes
+(text_len 57–1054). The 9B card turn's 113–122 s wall with only 109
+characters of output means the time is going somewhere other than
+visible text streaming; the memory harness does not split it, and
+this receipt does not guess.
+
 `pair_resident_cost` (idle_before - baseline) is much smaller than
 the backend peak because the model weights are mmap'd lazily; the
 allocator peak only builds up once inference runs.
