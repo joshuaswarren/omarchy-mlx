@@ -103,7 +103,7 @@
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -751,17 +794,87 @@
+@@ -751,17 +794,102 @@
      }
    };
    auto stream = to_stream(s);
@@ -179,6 +179,23 @@
 +    throw std::invalid_argument(
 +        "[rope_rms_norm] base (or freqs, unsupported here) is required.");
 +  }
++  // omarchy fence: the eval layer would silently dispatch a plain rope
++  // (norm skipped) for any with_norm leg the FastRopeNorm kernel refuses.
++  // The model path only ever issues fuseable legs (the
++  // mlx-lm-rope-norm.patch python gate); anything else must compose the
++  // eager rms_norm + rope chain at the call site, so refuse loudly here.
++  {
++    auto st = to_stream(s);
++    int D = x.shape(-1);
++    bool fuseable = !traditional && x.dtype() == bfloat16 &&
++        weight.dtype() == bfloat16 && D == static_cast<int>(weight.size()) &&
++        D > 0 && D <= 256 && (D % 2) == 0 && x.strides().back() == 1;
++    if (!RoPE::use_fallback(st) && !fuseable) {
++      throw std::invalid_argument(
++          "[rope_rms_norm] leg cannot fuse; compose the eager rms_norm + "
++          "rope chain at the call site instead.");
++    }
++  }
 +  return rope(
 +      std::vector<array>{x, offset},
 +      dims,
@@ -194,7 +211,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -810,6 +923,12 @@
+@@ -810,6 +938,12 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -207,7 +224,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -840,7 +959,8 @@
+@@ -840,7 +974,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
