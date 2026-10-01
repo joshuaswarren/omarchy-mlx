@@ -1254,10 +1254,8 @@ uint16_t f32_to_bf16_rne(float value) {
     uint32_t nan_payload = (bits >> 16) | 0x40u;
     return static_cast<uint16_t>(nan_payload);
   }
-  uint32_t round_bit = (bits >> 15) & 1u;
-  uint32_t sticky = bits & 0x7fffu;
-  uint32_t rounded = (bits + (round_bit | sticky)) >> 16;
-  return static_cast<uint16_t>(rounded);
+  // cast.comp's RNE: add 0x7fff plus the kept lsb, then drop 16 bits.
+  return static_cast<uint16_t>((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 // Exact f16 widening; bf16 is a 16-bit left shift.
 float f16_bits_to_float(uint16_t half) {

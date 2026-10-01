@@ -494,22 +494,25 @@ array hd_sdpa(const HdCacheInputs& in, Stream stream) {
       in.q, in.k, in.v, kHdScale, "", {}, std::nullopt, false, stream);
 }
 
-// The f32-score composition at head_dim 128, narrowed like the real route.
+// The f32-score composition, narrowed like the real route. The head width
+// comes from the inputs, so the uncompiled-width refusal case (head_dim
+// 100) composes at its own width instead of reshaping into 128.
 array hd_composition(const HdCacheInputs& in, int keys, Stream stream) {
+  const int width = in.q.shape(3);
   array q32 = multiply(astype(in.q, float32, stream), array(kHdScale), stream);
   array k32 = astype(in.k, float32, stream);
   array v32 = astype(in.v, float32, stream);
   array qs = reshape(
-      q32, Shape{1, kHdKvHeads, kHdHeads / kHdKvHeads, 1, kHd}, stream);
+      q32, Shape{1, kHdKvHeads, kHdHeads / kHdKvHeads, 1, width}, stream);
   array kt = swapaxes(
-      reshape(k32, Shape{1, kHdKvHeads, 1, keys, kHd}, stream), -1, -2,
+      reshape(k32, Shape{1, kHdKvHeads, 1, keys, width}, stream), -1, -2,
       stream);
-  array vs = reshape(v32, Shape{1, kHdKvHeads, 1, keys, kHd}, stream);
+  array vs = reshape(v32, Shape{1, kHdKvHeads, 1, keys, width}, stream);
   array scores = matmul(qs, kt, stream);
   array probs = softmax(scores, std::vector<int>{-1}, false, stream);
   array result = matmul(probs, vs, stream);
   return astype(
-      reshape(result, Shape{1, kHdHeads, 1, kHd}, stream),
+      reshape(result, Shape{1, kHdHeads, 1, width}, stream),
       in.q.dtype(),
       stream);
 }
