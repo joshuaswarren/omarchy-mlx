@@ -5,8 +5,8 @@
 __call__ in qwen3_5.py (the only model file with the gdn_conv_update
 fast branch).
 
-The fused branch is gated on MLX_OMARCHY_GDN_QKNORM_FUSE=1 (default 0:
-the exact composed chain runs; kill switch =0 at any time) and on the
+The fused branch is gated on MLX_OMARCHY_GDN_QKNORM_FUSE (default ON
+since the DecodeFuse4 combined land; kill switch =0 at any time) and on the
 geometry the fused kernel requires (head_k_dim == 128, key_dim % 256 ==
 0, B*C % 256 == 0); the backend refuses any remaining violation loudly.
 Bit-exact: the epilogue reproduces the FastNormGatedBF16 mode-1
@@ -32,7 +32,7 @@ CONV_NEW = """        and hasattr(mx.fast, "gdn_conv_update")
             # mismatch) runs the exact composed chain below.
             qknorm_fused = False
             if (
-                os.environ.get("MLX_OMARCHY_GDN_QKNORM_FUSE", "0") == "1"
+                os.environ.get("MLX_OMARCHY_GDN_QKNORM_FUSE", "1") == "1"
                 and self.head_k_dim == 128
                 and self.key_dim % 256 == 0
                 and (qkv.shape[0] * qkv.shape[2]) % 256 == 0

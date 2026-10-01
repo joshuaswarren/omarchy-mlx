@@ -95,14 +95,14 @@ apply mlx-lm-last-logits.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the
-# rotation, bit-identical to the composed chain). Default OFF: set
-# MLX_OMARCHY_ROPE_NORM_FUSE=1 to enable (kill switch =0). Python patcher:
+# rotation, bit-identical to the composed chain). Default ON since the
+# DecodeFuse4 combined land (kill switch =0). Python patcher:
 # GNU patch 2.8 on this host fails byte-verified hunks (DecodeFuse3).
 python3 "$ROOT/scripts/patch-mlx-lm-rope-norm.py" "$VENV"
 # GDN q/k rms_norm_scaled -> gdn_conv_update epilogue (F4): the conv
 # dispatch carries the per-head norm pair (fast_norm_gated mode-1
 # semantics in the gdn_conv_decode kernel epilogue), bit-identical to the
-# composed chain. Default OFF: set MLX_OMARCHY_GDN_QKNORM_FUSE=1 to
-# enable (kill switch =0). Python patcher (GNU patch 2.8 on this host
+# composed chain. Default ON since the DecodeFuse4 combined land
+# (kill switch =0). Python patcher (GNU patch 2.8 on this host
 # fails byte-verified hunks, DecodeFuse3).
 python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"

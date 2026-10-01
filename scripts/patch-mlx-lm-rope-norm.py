@@ -4,8 +4,8 @@ FastRopeNormBF16 kernel). Idempotent patch for mlx-lm 0.31.3 venvs,
 mirroring patch-mlx-lm-qwen35-gdn-conv.py. The Attention class lives in
 qwen3_next.py (qwen3_5.py imports it as Attention).
 
-The fused branch is gated on MLX_OMARCHY_ROPE_NORM_FUSE=1 (default 0:
-the exact eager chain runs; kill switch =0 at any time). Bit-identical:
+The fused branch is gated on MLX_OMARCHY_ROPE_NORM_FUSE (default ON
+since the DecodeFuse4 combined land; kill switch =0 at any time). Bit-identical:
 the fused kernel reproduces the fast RMSNorm reduction tree and rounds
 the normalized values to bf16 before the rotation consumes them, the
 same rounding the composed norm -> rope chain does across the kernel
@@ -38,7 +38,7 @@ NORM_NEW = """        # mlx-omarchy rope-norm patch: fold the q/k RMSNorm into t
         # (bit-identical by construction); the backend fence refuses
         # non-fuseable legs loudly.
         if (
-            os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "0") == "1"
+            os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "1") == "1"
             and queries.dtype == mx.bfloat16
             and hasattr(mx.fast, "rope_rms_norm")
         ):
