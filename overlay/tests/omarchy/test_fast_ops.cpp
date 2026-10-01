@@ -3058,6 +3058,99 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
 // to f32 in the VJP gemms; the composed graph keeps bf16 intermediates,
 // so bf16 has a wider tolerance than f32 (matches the gdn fused test).
 
+// SDPA training at GQA shapes routes to the composed graph (the fused
+// VJP gate refuses rep > 1 until dk/dv are fixed) and the routed
+// gradients match host finite differences on real hardware.
+TEST_CASE("sdpa gqa training routes to composed and matches finite differences") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int B = 1, H = 4, KV = 2, qL = 5, kL = 7, D = 8;
+  const float scale = 1.0f / std::sqrt(float(D));
+  auto qd = pattern((size_t)B * H * qL * D, 0xE10);
+  auto kd = pattern((size_t)B * KV * kL * D, 0xE11);
+  auto vd = pattern((size_t)B * KV * kL * D, 0xE12);
+  array q = array(qd.begin(), Shape{B, H, qL, D}, float32);
+  array k = array(kd.begin(), Shape{B, KV, kL, D}, float32);
+  array v = array(vd.begin(), Shape{B, KV, kL, D}, float32);
+  auto fun = [&](const std::vector<array>& in) {
+    return sum(
+        fast::scaled_dot_product_attention(
+            in[0], in[1], in[2], scale, "causal", {}, std::nullopt, false,
+            stream),
+        stream);
+  };
+  auto grads = value_and_grad(fun, {0, 1, 2})({q, k, v}).second;
+  auto gq = flat(grads[0], stream);
+  auto gk = flat(grads[1], stream);
+  auto gv = flat(grads[2], stream);
+
+  std::vector<double> q_host(qd.begin(), qd.end());
+  std::vector<double> k_host(kd.begin(), kd.end());
+  std::vector<double> v_host(vd.begin(), vd.end());
+  auto objective_q = [&](const std::vector<double>& qq) {
+    auto out = host_sdpa(
+        std::vector<float>(qq.begin(), qq.end()),
+        kd, vd, B, H, KV, qL, kL, D, scale, true);
+    double acc = 0;
+    for (double x : out) acc += x;
+    return acc;
+  };
+  auto objective_k = [&](const std::vector<double>& kk) {
+    auto out = host_sdpa(
+        qd,
+        std::vector<float>(kk.begin(), kk.end()),
+        vd, B, H, KV, qL, kL, D, scale, true);
+    double acc = 0;
+    for (double x : out) acc += x;
+    return acc;
+  };
+  auto objective_v = [&](const std::vector<double>& vv) {
+    auto out = host_sdpa(
+        qd, kd,
+        std::vector<float>(vv.begin(), vv.end()),
+        B, H, KV, qL, kL, D, scale, true);
+    double acc = 0;
+    for (double x : out) acc += x;
+    return acc;
+  };
+  const double h = 1e-2;
+  // Spot-check elements across both KV groups and both causal regimes
+  // (fully visible row 0 and the diagonal row qL-1).
+  std::vector<std::pair<int, const std::vector<float>&>> checks = {
+      {0, qd}, {((H - 1) * qL + (qL - 1)) * D, qd},
+      {0, kd}, {((KV - 1) * kL + (kL - 1)) * D, kd},
+      {0, vd}, {((KV - 1) * kL + 0) * D, vd}};
+  std::vector<double> fd(B * H * qL * D);
+  std::vector<double> fd_k(B * KV * kL * D);
+  std::vector<double> fd_v(B * KV * kL * D);
+  for (auto [index, base] : checks) {
+    if (base.data() == qd.data()) {
+      fd[index] = central_difference(q_host, index, h, objective_q);
+      require_close(
+          std::vector<float>{gq[index]},
+          std::vector<double>{fd[index]},
+          2e-2,
+          "sdpa gqa composed dq[" + std::to_string(index) + "]");
+    } else if (base.data() == kd.data()) {
+      fd_k[index] = central_difference(k_host, index, h, objective_k);
+      require_close(
+          std::vector<float>{gk[index]},
+          std::vector<double>{fd_k[index]},
+          2e-2,
+          "sdpa gqa composed dk[" + std::to_string(index) + "]");
+    } else {
+      fd_v[index] = central_difference(v_host, index, h, objective_v);
+      require_close(
+          std::vector<float>{gv[index]},
+          std::vector<double>{fd_v[index]},
+          2e-2,
+          "sdpa gqa composed dv[" + std::to_string(index) + "]");
+    }
+  }
+}
+
 // Fused GDN VJP (upstream #4565) - bf16, Dk=Dv=128, GQA repeat, T crossing
 // the per-16-token checkpoint boundary, vs the composed per-token
 // recursion. Tolerance pinned at 2e-2 (bf16 outputs) and 1e-3 for the

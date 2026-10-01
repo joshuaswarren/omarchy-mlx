@@ -10646,6 +10646,14 @@ bool ScaledDotProductAttention::use_fallback(
   if (kv_heads <= 0 || heads % kv_heads != 0) {
     return true;
   }
+  // GQA (rep > 1): the fused VJP's dq is exact but dk/dv still diverge
+  // from finite differences at rep=2 (dk 0.24 vs 0.36, dv 0.87 vs 2.18
+  // at the probe shape) - training gradients route to the composed
+  // graph until the dkt/dvt matmul + GQA reduce are fixed and proven
+  // against host finite differences on real hardware.
+  if (heads != kv_heads) {
+    return true;
+  }
   if (do_causal && k.shape(2) < q.shape(2)) {
     return true;
   }
