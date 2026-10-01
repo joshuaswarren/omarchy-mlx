@@ -55,6 +55,10 @@ SHAPES = {
         "- Atmosphere: none\n- Distance: 384,400 km\n- Orbit: 27.3 days\n",
         "Here are the facts:\n\n- It is old.\n- It is large.\n",
     ],
+    "mixed": [
+        "| Metric | A | B |\n|---|---|---|\n| Speed | 1.2 | 0.8 |\n| Quality | high | medium |\n\n- [ ] book the venue\n- [ ] send invites\n",
+        "## Plan\n- **First:** research\n- **Then:** draft\n\n## Goals\n- **Quality:** high\n- **Speed:** fast\n",
+    ],
     "adversarial": [
         EXPLAIN,
         "- one thing\n- another thing\n- a third thing\n",

@@ -79,6 +79,14 @@
     {"id": "dev-71", "category": "near-miss", "kind": "prose-request", "text": "Explain the phases of mitosis without using a list."},
     {"id": "dev-72", "category": "near-miss", "kind": "explanation-with-sections", "text": "Describe what happens at each stage of a startup funding round."},
     {"id": "dev-73", "category": "near-miss", "kind": "explanation-with-sections", "text": "Summarize the plot of Hamlet act by act."},
-    {"id": "dev-74", "category": "near-miss", "kind": "prose-request", "text": "Lay out the differences between stocks and bonds, no bullet points please."}
+    {"id": "dev-74", "category": "near-miss", "kind": "prose-request", "text": "Lay out the differences between stocks and bonds, no bullet points please."},
+    {"id": "dev-75", "category": "card-worthy", "kind": "comparison", "text": "Compare Postfix and Mailgun on deliverability and setup cost."},
+    {"id": "dev-76", "category": "card-worthy", "kind": "comparison", "text": "Weigh enameled cast iron and stainless steel for a daily stew pot."},
+    {"id": "dev-77", "category": "card-worthy", "kind": "facts", "text": "List three key points from the user note I just pasted."},
+    {"id": "dev-78", "category": "card-worthy", "kind": "checklist", "text": "Give me a checklist to prepare for a two-week vacation with my partner."},
+    {"id": "dev-79", "category": "card-worthy", "kind": "timeline", "text": "Plan my Saturday around 6 AM coffee, 10 AM hike, 1 PM lunch and 7 PM book club."},
+    {"id": "dev-80", "category": "card-worthy", "kind": "mixed", "text": "Compare two carbonation devices, then give me a checklist for the first soda run."},
+    {"id": "dev-81", "category": "near-miss", "kind": "code-only", "text": "Write a Python function to deduplicate a list."},
+    {"id": "dev-82", "category": "near-miss", "kind": "prose-request", "text": "Explain how to type less to me, especially when I ask for the easiest to learn."}
   ]
 }

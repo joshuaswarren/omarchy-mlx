@@ -696,6 +696,12 @@ class Coordinator:
             # a card from the exact text the UI rendered.  We never
             # promote when the model already emitted a valid fenced block.
             reply_text_parts: list[str] = []
+            raw_text_parts: list[str] = []  # every chunk the model emitted,
+            #    kept even after a fence starts so an invalid/truncated fence
+            #    can still surface the model's own output for the user
+            #    (PairGates card-defect-compact4b, 2026-10-01).
+            saw_visible_text = False      # did any text event reach the UI?
+            saw_visible_component = False  # did any validated component reach the UI?
             # Cooperative TTS scheduling: probe the chat worker's yield gate
             # and, when present, park generation at chunk boundaries so
             # queued speak requests can synthesize between chunks. Without
@@ -725,6 +731,7 @@ class Coordinator:
                         finish_reason = event[1]
                         continue
                     text = event[1]
+                    raw_text_parts.append(text)
                     if cancel.is_set():
                         break
                     buffer += text
@@ -747,15 +754,18 @@ class Coordinator:
                                     component_count += 1
                                     trusted = dict(component, id=uuid.uuid4().hex, turn_id=turn, revision=1)
                                     self.store.emit(cid, turn, "component", trusted)
+                                    saw_visible_component = True
                             elif not cancel.is_set():
                                 self.store.emit(cid, turn, "status", {"state": "invalid_component",
-                                    "message": "The generated interface was invalid. The text answer remains available."})
+                                    "message": "The generated interface was invalid."})
+                                self._emit_raw_fallback(cid, turn, raw_text_parts, marker)
                             continue
                         start = buffer.find(marker)
                         if start >= 0:
                             if start:
                                 self.store.emit(cid, turn, "text", {"text": buffer[:start]})
                                 reply_text_parts.append(buffer[:start])
+                                saw_visible_text = True
                             buffer = buffer[start + len(marker):]
                             component_buffer = ""
                             continue
@@ -767,15 +777,20 @@ class Coordinator:
                         if ready:
                             self.store.emit(cid, turn, "text", {"text": ready})
                             reply_text_parts.append(ready)
+                            saw_visible_text = True
                         buffer = buffer[-keep:] if keep else ""
                         break
             finally:
                 stream.close()
-            if buffer and component_buffer is None and not cancel.is_set():
+            # Finish rules (card-defect fix, 2026-10-01): anything still buffered
+            # when the stream ends must reach the user as text.
+            if buffer and component_buffer is None:
                 self.store.emit(cid, turn, "text", {"text": buffer})
                 reply_text_parts.append(buffer)
-            elif component_buffer is not None and not cancel.is_set():
-                if not repaired:
+                saw_visible_text = True
+            if component_buffer is not None:
+                # Unterminated fence: repair once or surface the raw text.
+                if not repaired and not cancel.is_set():
                     repaired = True
                     components = self._repair_components(pair, buffer, allowance,
                                                          cancel, component_count)
@@ -784,11 +799,18 @@ class Coordinator:
                             component_count += 1
                             trusted = dict(component, id=uuid.uuid4().hex, turn_id=turn, revision=1)
                             self.store.emit(cid, turn, "component", trusted)
+                            saw_visible_component = True
                         component_buffer = None
                 if component_buffer is not None:
                     self.store.emit(cid, turn, "status", {"state": "invalid_component",
-                        "message": "The interface was incomplete; it was not rendered."})
+                        "message": "The interface was incomplete; the model output is shown below."})
+                    self._emit_raw_fallback(cid, turn, raw_text_parts, marker)
             if finish_reason == "length" and not cancel.is_set():
+                # The model ran out of tokens mid-reply.  A truncated fence is
+                # as bad as an invalid one from the user's point of view; show
+                # the raw text and offer to continue.
+                if component_buffer is not None:
+                    self._emit_raw_fallback(cid, turn, raw_text_parts, marker)
                 self.store.emit(cid, turn, "status", {"state": "output_truncated",
                     "message": "The response reached the output allowance. Send Continue to keep going.",
                     "continue": True})
@@ -813,6 +835,19 @@ class Coordinator:
                             trusted = dict(component, id=uuid.uuid4().hex,
                                            turn_id=turn, revision=1)
                             self.store.emit(cid, turn, "component", trusted)
+                            saw_visible_component = True
+            # Card-defect catch-all: if the turn ended with no visible text
+            # and no validated component, emit a short explanation.  Without
+            # this the user sees an empty reply (12d8d9c0b).
+            if (not saw_visible_text and not saw_visible_component
+                    and not cancel.is_set() and not failed):
+                msg = ("The model produced no readable reply this turn "
+                       "(no text and no rendered interface).")
+                self.store.emit(cid, turn, "text", {"text": msg})
+                self.store.emit(cid, turn, "status",
+                                 {"state": "empty_reply",
+                                    "message": "Turn completed without a visible reply."})
+
             if (mode in ("compare", "decide") and not cancel.is_set()
                     and explanation_disagrees(result,
                                               self.store.get(cid)["messages"][-1].get("content", ""))):
@@ -1032,6 +1067,24 @@ class Coordinator:
             return components
         except (ValueError, TypeError, KeyError):
             return None
+
+    def _emit_raw_fallback(self, cid, turn, raw_text_parts, marker):
+        """Surface the model's own output as text when its interface failed.
+
+        Append the raw chunks to the message, fenced in a code block so the
+        UI cannot interpret stray ``` as a real card.  Skipped if the stream
+        is empty.  Updates ``saw_visible_text`` so the catch-all guard knows
+        something already reached the user.
+        """
+        raw = "".join(raw_text_parts)
+        if not raw:
+            return False
+        block = (
+            "The model's reply could not be rendered as a card. "
+            "Here is its raw output:\n\n```\n" + raw + "\n```")
+        self.store.emit(cid, turn, "text", {"text": block})
+        return True
+
 
     def _repair_components(self, pair, envelope, allowance, cancel,
                            component_count=0):

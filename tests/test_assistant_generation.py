@@ -342,6 +342,95 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(invalid, [])
         self.assertIn("A.", record["messages"][-1]["content"])
 
+    def test_invalid_fence_still_shows_model_text(self):
+        cid = self.cid()
+        bad_block = '{"version": 1, "components": [{"type": "nope"}]}'
+        self.worker.scripts = [
+            [(0, delta("Summary: here it is.```assistant-ui\n"
+                       + bad_block + "``` Hope that helps.")),
+             (0, finish("stop"))],
+            [(0, delta("```assistant-ui\n" + bad_block + "```")),
+             (0, finish("stop"))],
+        ]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        self.assertEqual(record["messages"][-1]["status"], "complete")
+        self.assertIn("Summary: here it is.", record["messages"][-1]["content"])
+        self.assertIn("Hope that helps.", record["messages"][-1]["content"])
+
+    def test_truncated_fence_at_token_cap_shows_raw(self):
+        cid = self.cid()
+        # Stream opens an envelope and runs out of tokens before the closer.
+        self.worker.scripts = [[
+            (0, delta("```assistant-ui\n" + VALID_ENVELOPE + " cut mid-ff")),
+            (0, finish("length")),
+        ]]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        content = record["messages"][-1]["content"]
+        # The model's raw reply (including the truncated fence) is visible,
+        # wrapped in a code block so the UI cannot misinterpret ``` later.
+        self.assertIn("```", content)
+        self.assertIn(VALID_ENVELOPE[:40], content)
+        self.assertIn("cut mid-ff", content)
+        # Truncation is signalled to the user.
+        self.assertTrue(any(
+            e["data"].get("state") == "output_truncated"
+            for e in self.status_events_for(cid, turn)))
+
+    def test_only_invalid_fence_with_no_surrounding_prose_shows_raw(self):
+        cid = self.cid()
+        bad_block = '{"version": 1, "components": [{"type": "nope"}]}'
+        self.worker.scripts = [
+            [(0, delta("```assistant-ui\n" + bad_block + "```")),
+             (0, finish("stop"))],
+            [(0, delta("```assistant-ui\n" + bad_block + "```")),
+             (0, finish("stop"))],
+        ]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        content = record["messages"][-1]["content"]
+        # The card-defect reproducer: no prose was visible to begin with, so
+        # the user must still see the model's reply.
+        self.assertTrue(content.strip())
+        self.assertIn("raw output", content.lower())
+        self.assertIn("```", content)
+
+    def test_unterminated_fence_shows_raw(self):
+        cid = self.cid()
+        self.worker.scripts = [[
+            (0, delta("```assistant-ui\n" + VALID_ENVELOPE)),
+            (0, finish("stop")),
+        ]]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        self.assertEqual(record["messages"][-1]["status"], "complete")
+        content = record["messages"][-1]["content"]
+        self.assertIn("```", content)
+        self.assertTrue(any(
+            e["data"].get("state") == "invalid_component"
+            for e in self.status_events_for(cid, turn)))
+
+    def test_empty_reply_guard(self):
+        # Worker emits nothing at all (silence), the turn must not finish
+        # with content="".  The catch-all emits a short message and a
+        # status event.
+        cid = self.cid()
+        self.worker.scripts = [[(0, finish("stop"))]]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        self.assertEqual(record["messages"][-1]["status"], "complete")
+        self.assertTrue(record["messages"][-1]["content"].strip())
+        states = [e["data"].get("state") for e in self.status_events_for(cid, turn)]
+        self.assertIn("empty_reply", states)
+
+    def test_prose_around_valid_fence_stays_prose_plus_card(self):
+        cid = self.cid()
+        self.worker.scripts = [[
+            (0, delta("Here:```assistant-ui\n" + VALID_ENVELOPE + "``` Bye.")),
+            (0, finish("stop")),
+        ]]
+        turn, record = self.run_turn(cid, {"text": "hi"})
+        self.assertEqual(len(record["messages"][-1]["components"]), 1)
+        content = record["messages"][-1]["content"]
+        self.assertIn("Here:", content)
+        self.assertIn("Bye.", content)
+
     def test_repair_output_still_validated_never_rendered(self):
         cid = self.cid()
         schema_violation = json.dumps(
