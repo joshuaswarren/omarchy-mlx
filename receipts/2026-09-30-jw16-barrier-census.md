@@ -60,14 +60,18 @@ emitted(raw+heads) equals the SUBMIT-ENTER count (111) in the traced run.
    12.2 us (DecodeGap3's per-dependent-dispatch slope) ~= 2.76 ms/token of the 9.86 ms/token
    wall (101.4 tok/s d128 unprofiled control in the same lane). Drains hide behind 10-40 us
    kernels; only the un-hidden part is real win.
-3. **The remaining lever is ORDER, not tracking.** Greedy level batching over the dumped DAG
-   (read-read sharing allowed) needs **41.8 levels/token** vs 226.1 emitted barriers: the
-   recorded eval order re-opens batches ~184x/token where a level-batched emission would
-   emit ~42. Ceiling ~2.25 ms/token (~23%) at slope arithmetic; the realistic win is the
-   un-hidden fraction, unmeasured. This is a deep encoder change (host-side node queue,
-   level sort before flush, submission-boundary and cross-encoder semaphore edges kept,
-   buffer-pinning contract re-derived) — H157 deferred it as "+3%"; this census replaces the
-   guess with a measured structure. Not built in this lane.
+3. **CORRECTED 2026-10-01 (Jw16LevelBatch): ORDER is NOT a lever.** An earlier version of this
+   paragraph claimed greedy level batching needs 41.8 levels/token vs 226.1 emitted barriers
+   (ceiling ~2.25 ms/token). That number was a packing count: `level_batch` in
+   `be1_dag_analyze2.py` places a node in the first level whose members do not conflict with it,
+   without requiring it to come after its producers' levels, so it is not a schedule. The true
+   longest-path depth is ~267 levels per decode token (frontier algorithm == brute-force O(N^2)
+   reference on the last-token slice of the d128 DAG dump, 0 mismatches over 321 nodes),
+   accumulating ~270 levels/token across a batch. The recorded order (~273 barriers/token) is
+   within ~15% of optimal. A full implementation (`MLX_OMARCHY_LEVEL_BATCH`, branch
+   agent/jw16-level-batch f44a35aab) was bit-exact (all decode pins, pf512 records, logits gate)
+   and SLOWER by 8.5-9.2% (d64-d512), -8.1% on pf512 ttft. The remaining dispatch-boundary lever
+   is node-count reduction (fusion). See receipts of Jw16LevelBatch in the private notebook.
 
 ## Per-lever ledger for dispatch-boundary cost on G13X (all closed with receipts)
 
@@ -78,7 +82,7 @@ emitted(raw+heads) equals the SUBMIT-ENTER count (111) in the traced run.
 | coherent loads/stores | Jw16MacParity 0240Z (2026-09-29) | closed: corrupt + 27% slower |
 | tracker-layer elision (masks/ranges/recycling) | **this census** | closed: RAW-only, 0 avoidable |
 | cheaper in-queue RAW semantics | DecodeGap3 finding 1 | firmware semantics, out of driver reach |
-| **level-batched emission (order)** | **this census (measured 41.8 levels/token)** | **open; ceiling ~2.25 ms/token; deep encoder change** |
+| level-batched emission (order) | Jw16LevelBatch (2026-10-01) | closed: true depth ~267 levels/token (census 41.8 was a packing count); implemented bit-exact but -8.5..-9.2% decode |
 
 ## Reproduce
 
