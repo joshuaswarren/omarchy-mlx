@@ -13353,32 +13353,33 @@ void ScaledDotProductAttentionVJP::eval_gpu(
   array v32 = to_f32(v);
   array co32 = to_f32(cot_o);
 
-  // GQA regroup as stride views (the forward's regroup_view): q-side
-  // arrays split the head axis into (kv, repeat); k/v carry a size-1
-  // repeat axis the matmul broadcasts (stride pinned 0). When G == 1
-  // the repeat axis is degenerate - skip the regroup and feed the
-  // 4-D arrays straight to the matmuls, which gives the composer's
-  // exact 4-D GEMM without an unused 5-D batch axis.
-  auto regroup_view = [&](const array& base, bool splits) {
-    int rep = splits ? G : 1;
-    Shape shape = {base.shape(0), Hk, rep, base.shape(2), base.shape(3)};
-    Strides strides(5);
-    strides[0] = base.strides()[0];
-    strides[1] = splits ? base.strides()[1] * rep : base.strides()[1];
-    strides[2] = splits ? base.strides()[1] : 0;
-    strides[3] = base.strides()[2];
-    strides[4] = base.strides()[3];
-    array view(std::move(shape), base.dtype(), nullptr, {});
-    view.copy_shared_buffer(base, strides, {false, false, false}, base.size());
-    encoder.add_temporary(view);
-    return view;
+  // GQA regroup as pure reshape views of the contiguous f32 operands
+  // (the forward's f32 route pattern): q splits the head axis into
+  // (kv, repeat); k/v reshape to [B, Hk, 1, kL, D] so the matmul
+  // broadcasts the size-1 group axis. q's flat layout after the split
+  // is [B, Hk, rep, qL, D] which flattens back to [B, H, qL, D].
+  auto head_split = [&](const array& base) -> array {
+    if (G == 1) {
+      return base;
+    }
+    // base is [B, H, rows, dim], row-major; H = Hk * G with kv-major
+    // order, so a direct 5-D reshape splits H into (Hk, G).
+    array split = reshape_in_eval(
+        base, Shape{B, Hk, G, base.shape(2), base.shape(3)}, s);
+    encoder.add_temporary(split);
+    return split;
   };
-  array q5 = G > 1 ? regroup_view(q32, true) : q32;
-  array k5 = G > 1 ? regroup_view(k32, false) : k32;
-  array v5 = G > 1 ? regroup_view(v32, false) : v32;
-  array co5 = G > 1 ? regroup_view(co32, true) : co32;
-  array o5 = G > 1 ? regroup_view(o, true) : o;
-
+  array q5 = head_split(q32);
+  array k5 = k32;
+  array v5 = v32;
+  array co5 = head_split(co32);
+  array o5 = head_split(o);
+  if (G > 1) {
+    k5 = reshape_in_eval(k32, Shape{B, Hk, 1, kL, D}, s);
+    encoder.add_temporary(k5);
+    v5 = reshape_in_eval(v32, Shape{B, Hk, 1, kL, Dv}, s);
+    encoder.add_temporary(v5);
+  }
   Shape score_shape = q5.shape();
   score_shape.back() = kL;
   array S(score_shape, float32, nullptr, {});
@@ -13474,12 +13475,22 @@ void ScaledDotProductAttentionVJP::eval_gpu(
   dvt.set_data(allocate_omarchy(dvt.nbytes()));
   encoder.add_temporary(dkt);
   encoder.add_temporary(dvt);
+  // The dK/dV gemms need the transpose as the LEFT operand; the matmul
+  // kernels take an rhs stride view but not an lhs one, so the
+  // transposes materialize as dense copies (same footprint class as
+  // the composed fallback's own transposed matmul copies).
   array s_t = swapaxes_in_eval(S, -1, -2);
+  array s_t_dense(s_t.shape(), float32, nullptr, {});
+  s_t_dense.set_data(allocate_omarchy(s_t_dense.nbytes()));
+  copy_gpu(s_t, s_t_dense, CopyType::General, s);
+  encoder.add_temporary(s_t_dense);
   array p_t = swapaxes_in_eval(P, -1, -2);
-  encoder.add_temporary(s_t);
-  encoder.add_temporary(p_t);
-  dispatch_matmul(tag, {s_t, q5}, dkt, 1.0f, 0.0f, false, s);
-  dispatch_matmul(tag, {p_t, o5}, dvt, 1.0f, 0.0f, false, s);
+  array p_t_dense(p_t.shape(), float32, nullptr, {});
+  p_t_dense.set_data(allocate_omarchy(p_t_dense.nbytes()));
+  copy_gpu(p_t, p_t_dense, CopyType::General, s);
+  encoder.add_temporary(p_t_dense);
+  dispatch_matmul(tag, {s_t_dense, q5}, dkt, 1.0f, 0.0f, false, s);
+  dispatch_matmul(tag, {p_t_dense, o5}, dvt, 1.0f, 0.0f, false, s);
 
   auto reduce_kernel = [](Dtype dt) {
     if (dt == float16) {

@@ -3058,7 +3058,6 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
 // to f32 in the VJP gemms; the composed graph keeps bf16 intermediates,
 // so bf16 has a wider tolerance than f32 (matches the gdn fused test).
 
-
 // Fused GDN VJP (upstream #4565) - bf16, Dk=Dv=128, GQA repeat, T crossing
 // the per-16-token checkpoint boundary, vs the composed per-token
 // recursion. Tolerance pinned at 2e-2 (bf16 outputs) and 1e-3 for the
