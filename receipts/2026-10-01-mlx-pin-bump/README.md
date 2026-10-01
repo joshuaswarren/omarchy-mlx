@@ -102,10 +102,12 @@ held throughout, kernel 7.1.13-3-2-ARCH, Mesa/Honeykrisp as installed):
   2. `omarchy_indexing_ops_tests` — the bf16 small-k partition tail check
      (`test_indexing_ops.cpp` bf16 rows) mismatches the host key-map
      reference; the f32 section of the same test passes and the radix path
-     still runs in exactly one dispatch. Diagnostics added to the test;
-     root cause open — this suite passed at `db74f11a` yesterday, so the
-     delta comes from the baseline bump and must be understood, not
-     re-pinned.
+     still runs in exactly one dispatch. CORRECTION (2026-10-01): this is
+     NOT bump-induced — the same suite fails on the M1 at main without the
+     pin (Attn128b; suspect route: Attn128's small-k Partition,
+     `c689c7ba6` + `e63f8263c`). Diagnostics added to the check; the cause
+     is being isolated jointly with Attn128b (M2 cross-check running there)
+     and will be fixed on main, then this branch rebases.
 - Provenance beside every number above; raw logs and the runs JSON live in
   the private lab under `artifacts/MlxBump/20260930-jwm1-pin-bump/` with
   SHA256SUMS.
