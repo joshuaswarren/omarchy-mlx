@@ -336,7 +336,10 @@ class CatalogPairSchemaTests(unittest.TestCase):
                 self.assertEqual((entry["revision"], entry["repo"], entry["license"]),
                                  (revision, repo, "apache-2.0"))
                 self.assertFalse(entry["recommended"])
-                self.assertEqual(entry["qualification"]["generation"]["status"], "untested")
+                for group in ("generation", "http", "managed"):
+                    qual = entry["qualification"][group]
+                    self.assertEqual(qual["status"], "qualified")
+                    self.assertTrue((Path(__file__).resolve().parents[1] / qual["receipt"]).is_file())
                 self.assertEqual(entry["memory"]["weights_bytes"], weights)
                 files = entry["extension"]["files"]
                 self.assertTrue(files)

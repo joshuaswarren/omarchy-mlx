@@ -700,9 +700,9 @@
       "context": {"max_tokens": 262144},
       "capability": {"min_mem_gib": 7, "arch": null},
       "qualification": {
-        "generation": {"status": "untested", "receipt": null, "date": null},
-        "http": {"status": "untested", "receipt": null, "date": null},
-        "managed": {"status": "untested", "receipt": null, "date": null}
+        "generation": {"status": "qualified", "receipt": "receipts/2026-09-30-chat-model-bench/README.md", "date": "2026-10-01"},
+        "http": {"status": "qualified", "receipt": "receipts/2026-09-30-card-promotion/README.md", "date": "2026-10-01"},
+        "managed": {"status": "qualified", "receipt": "receipts/2026-09-30-pair-gates/README.md", "date": "2026-10-01"}
       },
       "availability": {"size_bytes": 5950221072, "refreshed_at": "2026-09-30T14:49:20Z"},
       "family": "qwen3.5-9b",
@@ -745,9 +745,9 @@
       "context": {"max_tokens": 262144},
       "capability": {"min_mem_gib": 3, "arch": null},
       "qualification": {
-        "generation": {"status": "untested", "receipt": null, "date": null},
-        "http": {"status": "untested", "receipt": null, "date": null},
-        "managed": {"status": "untested", "receipt": null, "date": null}
+        "generation": {"status": "qualified", "receipt": "receipts/2026-09-30-chat-model-bench/README.md", "date": "2026-10-01"},
+        "http": {"status": "qualified", "receipt": "receipts/2026-09-30-card-promotion/README.md", "date": "2026-10-01"},
+        "managed": {"status": "qualified", "receipt": "receipts/2026-09-30-pair-gates/README.md", "date": "2026-10-01"}
       },
       "availability": {"size_bytes": 2263022417, "refreshed_at": "2026-09-30T14:49:20Z"},
       "family": "qwen3-4b-instruct-2507",
