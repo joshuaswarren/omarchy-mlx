@@ -3049,3 +3049,122 @@ TEST_CASE("sdpa and gated delta gradients hold the zero CPU dispatch contract") 
         omarchy::trace::counters().vk_compute_dispatches.load(), vk_before);
   }
 }
+
+
+// Fused SDPA backward (upstream #4563) - GQA + odd-length + causal shapes,
+// tolerance-pinned vs the composed reference (the forward now produces
+// lse from the same float32 score buffer the backward rebuilds, so the
+// P = exp(scale*S - lse) values match on both sides). bf16 inputs widen
+// to f32 in the VJP gemms; the composed graph keeps bf16 intermediates,
+// so bf16 has a wider tolerance than f32 (matches the gdn fused test).
+
+
+// Fused GDN VJP (upstream #4565) - bf16, Dk=Dv=128, GQA repeat, T crossing
+// the per-16-token checkpoint boundary, vs the composed per-token
+// recursion. Tolerance pinned at 2e-2 (bf16 outputs) and 1e-3 for the
+// float32 state gradient.
+TEST_CASE("fused gdn vjp matches the composed reference at GQA shapes") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto run = [&](int B, int Hk, int Hv, int T) {
+    const int D = 128;
+    auto qd = pattern((size_t)B * T * Hk * D, 0x700 + Hv);
+    auto kd = pattern((size_t)B * T * Hk * D, 0x800 + Hv);
+    auto vd = pattern((size_t)B * T * Hv * D, 0x900 + Hv);
+    auto gd = pattern((size_t)B * T * Hv, 0xA00 + Hv);
+    auto bd = pattern((size_t)B * T * Hv, 0xB00 + Hv);
+    array q = astype(
+        array(qd.begin(), Shape{B, T, Hk, D}, float32), bfloat16, stream);
+    array k = astype(
+        array(kd.begin(), Shape{B, T, Hk, D}, float32), bfloat16, stream);
+    array v = astype(
+        array(vd.begin(), Shape{B, T, Hv, D}, float32), bfloat16, stream);
+    array g = astype(
+        array(gd.begin(), Shape{B, T, Hv}, float32), bfloat16, stream);
+    array beta = astype(
+        array(bd.begin(), Shape{B, T, Hv}, float32), bfloat16, stream);
+    array h0 = zeros({B, Hv, D, D}, float32, stream);
+    auto fun = [&](const std::vector<array>& in) {
+      auto pair = fast::gated_delta_update(
+          in[0], in[1], in[2], in[3], in[4], in[5], std::nullopt, stream);
+      return sum(pair[0], stream);
+    };
+    // Composed per-token recursion with the fallback's GQA repeat (the
+    // arithmetic reference the fused kernel was equivalence-checked
+    // against; matches the zero-CPU doctest's gdn_ref).
+    auto gdn_ref = [&](const std::vector<array>& inputs) {
+      auto state = inputs[5];
+      std::vector<array> outputs;
+      int tokens = inputs[0].shape(1);
+      auto q = inputs[0];
+      auto k = inputs[1];
+      if (Hv != Hk) {
+        int rep = Hv / Hk;
+        q = repeat(q, rep, 2, stream);
+        k = repeat(k, rep, 2, stream);
+      }
+      for (int t = 0; t < tokens; ++t) {
+        auto get_t = [&](const array& arr) {
+          Shape start(arr.ndim(), 0), stop = arr.shape();
+          start[1] = t;
+          stop[1] = t + 1;
+          auto sliced = slice(arr, start, stop, stream);
+          return squeeze(sliced, 1, stream);
+        };
+        auto q_t = get_t(q);
+        auto k_t = get_t(k);
+        auto v_t = get_t(inputs[2]);
+        auto g_t = get_t(inputs[3]);
+        auto beta_t = get_t(inputs[4]);
+        auto decay = expand_dims(g_t, {-1, -2}, stream);
+        auto state_next = multiply(state, decay, stream);
+        auto kv = sum(
+            multiply(state_next, expand_dims(k_t, -2, stream), stream),
+            -1,
+            false,
+            stream);
+        auto delta = multiply(
+            subtract(v_t, kv, stream),
+            expand_dims(beta_t, -1, stream),
+            stream);
+        state_next = add(
+            state_next,
+            multiply(
+                expand_dims(delta, -1, stream),
+                expand_dims(k_t, -2, stream),
+                stream),
+            stream);
+        state = state_next;
+        outputs.push_back(
+            sum(multiply(state, expand_dims(q_t, -2, stream), stream),
+                -1,
+                false,
+                stream));
+      }
+      return sum(stack(outputs, 1, stream), stream);
+    };
+    auto grads = value_and_grad(fun, {0, 1, 2, 3, 4})({q, k, v, g, beta, h0})
+                     .second;
+    auto refs = value_and_grad(
+                    gdn_ref, std::vector<int>{0, 1, 2, 3, 4})(
+                    {q, k, v, g, beta, h0})
+                    .second;
+    for (int arg = 0; arg < 5; ++arg) {
+      require_close(
+          flat(grads[arg], stream),
+          widen(flat(refs[arg], stream)),
+          2e-2,
+          "fused gdn vjp arg " + std::to_string(arg) +
+              " B=" + std::to_string(B) + " Hk=" + std::to_string(Hk) +
+              " Hv=" + std::to_string(Hv) + " T=" + std::to_string(T));
+    }
+  };
+  // sq T = 1, G = 2.
+  run(1, 8, 16, 1);
+  // T crosses the 16-token checkpoint boundary.
+  run(1, 4, 8, 33);
+  // sq T, G = 4.
+  run(1, 4, 16, 17);
+}
