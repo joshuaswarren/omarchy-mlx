@@ -134,6 +134,30 @@ driver (the pre-reboot boot hit the cross-host pin `dbf704971617fdfc…`
 exactly); deterministic within a boot, varies across boots — arm comparisons
 are unaffected.
 
+## ADDENDUM 2026-10-01 (2) — v3b candidate (coopmat default-on G14X only) gates PASS on G14X
+
+Candidate: `honeykrisp-omarchy-v3` @
+`e7631595df6281748ea5e643d74db59c5f783b01` (omacom/mesa#6 head; enables
+cooperative matrices by default on G14X only, G14G stays opt-in, G13 path
+unchanged). Built natively on the G14 host in userspace (no system packages;
+rev-parse verified; `-Db_ndebug=true`): sha256
+`6bcec6474403513cca00716b4d2d723b8b51c42f47623194b340785cc3dedd21`,
+`Mesa 26.3.0-devel (git-e7631595df)`.
+
+Gate (deployed vs candidate DEFAULT — no environment overrides — alternating
+×3 prefill-512, plus one prefill-2048 run and one dispatch trace per arm):
+
+| arm | decode_med ×3 | pf512 ×3 | pf2048 | pf512 digest | dispatch |
+|---|---|---|---|---|---|
+| deployed (7faf04c) | 97.25 / 97.76 / 97.57 | 801.5 / 838.4 / 838.3 | 1243.0 | `bc519c03…` | 1087 |
+| v3b default | 97.87 / 97.67 / 97.74 | 841.1 / 868.0 / 885.2 | **1358.0** | `bc519c03…` | **1087** |
+
+**G14X verdict: PASS.** The default build needs no environment overrides:
+prefill recovers completely and beats the deployed driver (+4.7% pf512 mean,
++9.3% pf2048), decode parity, dispatch count exactly equal, all digests
+bit-exact across arms. The G13X and G13G gates for this candidate are pending
+host availability (both laptops hard-down at gate time; scripts staged).
+
 ## T8103 v3 substitute evidence
 
 The T8103 host hung (initramfs) during this lane's v3 window, so the lane has
