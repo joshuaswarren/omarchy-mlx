@@ -232,12 +232,17 @@ explicit-CPU-stream finding above.
 No pair is qualified. All catalog entries keep `recommended: false`.
 
 The one-line installer ships MLX Chat from the promoted release tag. The
-current release is v0.7.10 (published 2026-10-01; draft-first: every gate ran
+current release is v0.7.13 (published 2026-10-02; draft-first: every gate ran
 against the uploaded draft, then the release was published and promoted;
-[receipt](../receipts/2026-10-01-v0710-release.md)). The v0.7.7 and v0.7.8
+[receipt](../receipts/2026-10-02-v0713-release.md)). The v0.7.7 and v0.7.8
 drafts failed their installed-from-release gates and were never published
 ([cut log](../receipts/2026-10-01-v077-release.md)). The repository is now
 `joshuaswarren/omarchy-mlx`; the Python package names are unchanged.
+v0.7.13 is a privacy patch release: the community-data collector redacts
+hostname-derived aliases from dmesg/journal unit paths before submission
+and the service scans submissions for the same aliases
+(`scripts/collect_deep.py`, `services/community-data/src/pii.ts`); the
+worker redeploy is a separate packaging step.
 
 ### Voice options
 
