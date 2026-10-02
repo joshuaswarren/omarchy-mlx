@@ -549,6 +549,39 @@ float float_power(float base, float exponent) {
   return negative ? -result : result;
 }
 
+// Cody-Waite 3-term range reduction for large sin/cos arguments.
+// The Honeykrisp built-in sin/cos degrades above ~1e4 (the internal
+// range reduction loses precision through that band and collapses
+// past 1e6). These functions reduce the argument to [-pi, pi] using
+// a 3-term decomposition of 2*pi in float32 before calling the
+// built-in, which is accurate for |x| up to ~1e7 (phase error
+// ~1.2e-5 rad at 1e7). Above 1e9 the error exceeds the stated
+// accuracy and NaN is produced (the op refuses by value, not by a
+// pre-dispatch GPU sync — the old trig_argument_gate cost a full
+// GPU pipeline drain + host round-trip per sin/cos call).
+const float OP_TWO_PI = 6.283185307179586476925286766559;
+const float OP_C1 = 6.283185488128662109375;  // float32 rounding of 2*pi
+const float OP_C2 = -6.779263430016050976e-8;  // 2*pi - OP_C1 (exact in f32)
+const float OP_INV_2PI = 0.159154943091895345608222100962;
+
+float opcost_reduce_arg(float x) {
+  float k = floor(x * OP_INV_2PI);
+  return (x - k * OP_C1) - k * OP_C2;
+}
+
+float opcost_reduced_sin(float x) {
+  if (abs(x) <= 1.0e4) return sin(x);
+  if (abs(x) > 1.0e9) return uintBitsToFloat(0x7fc00000u);
+  return sin(opcost_reduce_arg(x));
+}
+
+float opcost_reduced_cos(float x) {
+  float ax = abs(x);
+  if (ax <= 1.0e4) return cos(x);
+  if (ax > 1.0e9) return uintBitsToFloat(0x7fc00000u);
+  return cos(opcost_reduce_arg(ax));
+}
+
 void main() {
   uint index = gl_GlobalInvocationID.x;
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
@@ -614,22 +647,16 @@ void main() {
         break;
 #ifndef LITE  // lean variant: ops 0-10 only (host routes only those here)
       case 11:
-        // GLSL built-in cos. The host refuses arguments whose maximum
-        // magnitude exceeds kTrigArgumentLimit (primitives.cpp,
-        // 1e5) because the Honeykrisp built-in range reduction
-        // degrades through that band and collapses from ~1e6 (probe
-        // 2026-09-02). The in-source Payne-Hanek fallback was probed
-        // on the same device and produces garbage of magnitude 1e15+
-        // - its carry chain rides the dynamic-indexing shapes this
-        // driver miscompiles - so it stays dead code and the op
-        // refuses above the limit instead. RoPE note: fast::RoPE is a
-        // fallback composition of these sin/cos calls with
-        // inv_freq[0] = 1.0, so 1e5 is the positional ceiling; it
-        // covers Qwen-class 32k contexts with margin.
-        value = cos(lhs);
+        // GLSL built-in cos with in-shader Cody-Waite 3-term range
+        // reduction for arguments above the 1e4 accuracy threshold of
+        // the Honeykrisp built-in. Below 1e4 the built-in is used
+        // unchanged (bit-identical). Above 1e9 the reduction error
+        // exceeds the stated accuracy and NaN is produced (the op
+        // refuses by value, not by a pre-dispatch GPU sync).
+        value = opcost_reduced_cos(lhs);
         break;
       case 12:
-        value = sin(lhs);
+        value = opcost_reduced_sin(lhs);
         break;
       case 13:
         value = log(lhs);

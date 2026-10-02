@@ -277,6 +277,18 @@ doctest_discover_tests(omarchy_conv_gemm_decomp_tests)
 add_test(NAME omarchy_conv_gemm_decomp_tests
          COMMAND omarchy_conv_gemm_decomp_tests)
 
+add_executable(omarchy_trig_reduction_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_trig_reduction.cpp)
+target_link_libraries(omarchy_trig_reduction_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_trig_reduction_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_trig_reduction_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_trig_reduction_tests)
+add_test(NAME omarchy_trig_reduction_tests
+         COMMAND omarchy_trig_reduction_tests)
+
 doctest_discover_tests(omarchy_conv_tests)
 add_test(NAME omarchy_conv_tests COMMAND omarchy_conv_tests)
 

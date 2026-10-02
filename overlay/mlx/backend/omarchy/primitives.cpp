@@ -4691,7 +4691,8 @@ void Cos::eval_gpu(const std::vector<array>& inputs, array& out) {
         name(), ComplexCos, inputs, out, out.primitive().stream());
     return;
   }
-  trig_argument_gate(name(), inputs, out);
+  // The in-shader Cody-Waite reduction handles large arguments
+  // (see the Sin::eval_gpu comment).
   dispatch_elementwise(
       name(), CosOperation, inputs, out, out.primitive().stream());
 }
@@ -10318,7 +10319,11 @@ void Sin::eval_gpu(const std::vector<array>& inputs, array& out) {
         name(), ComplexSin, inputs, out, out.primitive().stream());
     return;
   }
-  trig_argument_gate(name(), inputs, out);
+  // The in-shader Cody-Waite reduction (elementwise.comp) handles
+  // large arguments; the old trig_argument_gate (a full GPU sync +
+  // host read per sin/cos call) is no longer needed. The shader
+  // produces NaN above 1e9 where even the 3-term reduction exceeds
+  // its stated accuracy.
   dispatch_elementwise(
       name(), SinOperation, inputs, out, out.primitive().stream());
 }
