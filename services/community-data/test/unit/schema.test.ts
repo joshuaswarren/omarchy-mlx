@@ -3,6 +3,7 @@ import payloadSchemaJson from "../../schema/payload-v1.schema.json";
 import payloadE2ESchemaJson from "../../schema/payload-v1-e2e.schema.json";
 import { SchemaNode, validateSchemaRoot } from "../../src/schema";
 import fixture from "./fixtures/payload-v1.json";
+import fixtureV2 from "./fixtures/payload-v2.json";
 import e2eFixture from "./fixtures/payload-v1-e2e.json";
 
 const schema = payloadSchemaJson as SchemaNode;
@@ -15,6 +16,40 @@ function mutate(overrides: Record<string, unknown>): Record<string, unknown> {
 describe("payload schema v1", () => {
   test("collector-generated fixture validates", () => {
     expect(validateSchemaRoot(fixture, schema)).toEqual([]);
+  });
+
+  test("v2 fixture with the ANE turn-on blocks validates", () => {
+    expect(validateSchemaRoot(fixtureV2, schema)).toEqual([]);
+  });
+
+  test("omarchy_ane promotion block shape is enforced", () => {
+    const bad = structuredClone(fixtureV2);
+    (bad.ane_port_detail.runtime.omarchy_ane as Record<string, unknown>)
+      .machine_id = "not-hex";
+    expect(
+      validateSchemaRoot(bad, schema).some((e) => e.includes("machine_id")),
+    ).toBe(true);
+    const badCheck = structuredClone(fixtureV2);
+    (badCheck.ane_port_detail.runtime.omarchy_ane as Record<string, unknown>)
+      .check = { available: true, status: "READY-BUT-WAY-TOO-LONG", lines: [] };
+    expect(
+      validateSchemaRoot(badCheck, schema).some((e) => e.includes("check")),
+    ).toBe(true);
+  });
+
+  test("mailbox and reserved_memory shapes are enforced", () => {
+    const bad = structuredClone(fixtureV2);
+    (bad.ane_port_detail.devicetree.reserved_memory as Record<string, unknown>)
+      .found = "yes";
+    expect(
+      validateSchemaRoot(bad, schema).some((e) => e.includes("reserved_memory")),
+    ).toBe(true);
+    const badDtb = structuredClone(fixtureV2);
+    (badDtb.ane_port_detail.devicetree as Record<string, unknown>)
+      .dtb_sha256_error = "x".repeat(65);
+    expect(
+      validateSchemaRoot(badDtb, schema).some((e) => e.includes("dtb_sha256_error")),
+    ).toBe(true);
   });
 
   test("e2e fixture validates with the extended kind", () => {
@@ -31,8 +66,10 @@ describe("payload schema v1", () => {
     expect(validateSchemaRoot(mutate({ kind: "quick" }), e2eSchema).length).toBeGreaterThan(0);
   });
 
-  test("schema_version is pinned to 1", () => {
-    expect(validateSchemaRoot(mutate({ schema_version: 2 }), schema).length).toBeGreaterThan(0);
+  test("schema_version accepts v1 and v2, rejects the rest", () => {
+    expect(validateSchemaRoot(mutate({ schema_version: 2 }), schema)).toEqual([]);
+    expect(validateSchemaRoot(mutate({ schema_version: 1 }), schema)).toEqual([]);
+    expect(validateSchemaRoot(mutate({ schema_version: 3 }), schema).length).toBeGreaterThan(0);
     expect(validateSchemaRoot(mutate({ schema_version: "1" }), schema).length).toBeGreaterThan(0);
   });
 

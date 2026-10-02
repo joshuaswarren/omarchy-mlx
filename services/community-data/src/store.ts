@@ -1,4 +1,4 @@
-import { CACHE_PART_CHARS, SCHEMA_VERSION } from "./caps";
+import { CACHE_PART_CHARS, SCHEMA_VERSIONS } from "./caps";
 
 export interface SubmissionRow {
   content_sha256: string;
@@ -65,6 +65,7 @@ export type InitiateFields = {
   contentSha: string;
   now: number;
   kind: string;
+  schemaVersion: number;
   arch: string | null;
   model: string | null;
   chip: string | null;
@@ -106,7 +107,7 @@ export async function initiateSubmission(
       f.contentSha,
       f.now,
       f.kind,
-      SCHEMA_VERSION,
+      f.schemaVersion,
       f.arch,
       f.model,
       f.chip,
@@ -450,7 +451,7 @@ export async function rebuildCaches(db: D1Database, now: number): Promise<number
     {
       generated_at: generatedAt,
       count: lines.length,
-      text: `{"generated_at":"${generatedAt}","schema_version":${SCHEMA_VERSION},"count":${lines.length},"results":[${lines.join(",")}]}`,
+      text: `{"generated_at":"${generatedAt}","schema_versions":${JSON.stringify(SCHEMA_VERSIONS)},"count":${lines.length},"results":[${lines.join(",")}]`,
     },
     now,
   );

@@ -82,10 +82,14 @@ describe("initiate body checks", () => {
   });
 
   test("wrong schema_version is schema_unsupported", () => {
-    expect(checkInitiate(validBody({ schema_version: 2 }))).toEqual({
+    expect(checkInitiate(validBody({ schema_version: 3 }))).toEqual({
       ok: false,
       code: "schema_unsupported",
     });
+  });
+
+  test("v2 bodies pass the gate like v1", () => {
+    expect(checkInitiate(validBody({ schema_version: 2 })).ok).toBe(true);
   });
 
   test("unknown kind is kind_invalid", () => {

@@ -20,13 +20,14 @@ const payloadE2ESchema = payloadE2ESchemaJson as SchemaNode;
 // scripts/compute_schema_identity.py when the JSON schema changes. Surfaced
 // via GET /v1/schema so stale deploys are caught at the wire instead of
 // silently 422-ing every submission that carries a field the live worker
-// does not know about.
+// does not know about. schema_versions lists every version the worker
+// accepts (v1 rows stay readable; v2 adds the ANE turn-on blocks).
 export const SCHEMA_IDENTITY = {
-  schema_version: 1 as const,
+  schema_versions: [1, 2] as number[],
   fields_sha256:
-    "4484ecd954dfdff802ed6a66cccb7a8354d9a06788333ecbbd77927ccb28c3c8",
+    "47a5e33ad5d3356bb386f8075e59695d8e8e0901b6ec640920ea68dfdb679e4f",
   schema_sha256:
-    "b69c2bfbcbcb9962ba601f0c5bed3daf450e4a47630c627c82920ab774878d97",
+    "84ce432db6f0f816525b15463ec2613ab97319254cd35a2af83fbd715cb45314",
 };
 
 const CACHEABLE = "public, max-age=60";
@@ -158,6 +159,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
     contentSha: init.content_sha256,
     now,
     kind: init.kind,
+    schemaVersion: init.schema_version,
     arch: textColumn(fields.arch),
     model: textColumn(fields.model),
     chip: textColumn(fields.chip),
@@ -343,7 +345,7 @@ async function serveCache(env: Env, key: string, contentType: string): Promise<R
 
 function handleSchema(): Response {
   return jsonResponse(200, {
-    schema_version: SCHEMA_IDENTITY.schema_version,
+    schema_versions: SCHEMA_IDENTITY.schema_versions,
     fields_sha256: SCHEMA_IDENTITY.fields_sha256,
     schema_sha256: SCHEMA_IDENTITY.schema_sha256,
   }, { "cache-control": "public, max-age=300" });

@@ -28,6 +28,7 @@ Derivation rules (hard, by design):
 """
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -57,13 +58,48 @@ def _u64le_pairs(hexstr):
     return out
 
 
+def _irq_bytes(spec):
+    """Decode one IOInterruptSpecifiers value to bytes, or None.
+
+    Published rows carry FOUR encodings (community rows 2026-09 and
+    earlier predate the hex form):
+      * canonical hex string  "0x74030000" (current collector),
+      * python bytes repr     "b't\\x03\\x00\\x00'",
+      * latin-1 text          the raw control-character string,
+      * lossy U+FFFD text     the bytes lost their values -> None.
+    """
+    if isinstance(spec, bytes):
+        return spec
+    if not isinstance(spec, str):
+        return None
+    text = spec.strip()
+    if text.startswith("0x"):
+        try:
+            return bytes.fromhex(text[2:])
+        except ValueError:
+            return None
+    if "\ufffd" in text:
+        return None
+    if text.startswith(("b'", 'b"')):
+        # A python bytes repr: printable bytes stay printable ('t' IS
+        # 0x74), so decode with ast, not an escape scan.
+        try:
+            value = ast.literal_eval(text)
+            return value if isinstance(value, bytes) else None
+        except (ValueError, SyntaxError):
+            return None
+    try:
+        return text.encode("latin-1")
+    except UnicodeEncodeError:
+        return None
+
+
 def _irq_number(spec):
-    """IOInterruptSpecifiers: raw little-endian bytes -> AIC number."""
-    if isinstance(spec, str):
-        b = spec.encode("latin-1")
-    elif isinstance(spec, list) and spec:
-        b = spec[0] if isinstance(spec[0], bytes) else str(spec[0]).encode("latin-1")
-    else:
+    """IOInterruptSpecifiers (any of the four encodings) -> AIC number."""
+    if isinstance(spec, list):
+        spec = spec[0] if spec else None
+    b = _irq_bytes(spec)
+    if not b:
         return None
     return int.from_bytes(b[:4].ljust(4, b"\x00"), "little") or None
 
@@ -144,6 +180,27 @@ def _range_for(ranges, kinds, want, cand):
     return None
 
 
+def _ane_node_of(mac):
+    """Pick THE ane device node: ane0 / die 0 first (community rows
+    bugfix: the T6022 row 90c6b9bf3e03 has ane0+ane1 and the old
+    first-entry pick chose ane1 and refused)."""
+    nodes = [n for n in (mac.get("ane_nodes") or [])
+             if isinstance(n, dict) and n.get("name")]
+
+    def rank(node):
+        name = str(node["name"]).lower()
+        if name == "ane0":
+            return (0, name)
+        if name == "ane":
+            return (1, name)
+        m = re.fullmatch(r"ane(\d+)", name)
+        if m:
+            return (2, int(m.group(1)))
+        return (3, name)
+
+    return min(nodes, key=rank) if nodes else None
+
+
 def derive(socs):
     """Per-SoC emission record or refusal reason."""
     out = {}
@@ -172,7 +229,7 @@ def derive(socs):
             out[soc] = {"refused": f"set_base_candidate offset "
                                    f"{cand.get('offset')} != 0xc000"}
             continue
-        node = next(iter(mac.get("ane_nodes") or []), None)
+        node = _ane_node_of(mac)
         ranges = _ane_ranges(node, cand) if node else []
         window = _range_for(ranges, node.get("range_kinds"),
                             "pmgr_plus_c000", cand)

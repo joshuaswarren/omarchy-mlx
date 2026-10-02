@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "mlx-omarchy community submission payload, schema v1",
-  "description": "The JSON summary the collector sends alongside the chunked archive. The Worker validates this strictly; unknown fields are rejected. Covers the quick/deep collector kinds; the e2e kind has payload-v1-e2e.schema.json.",
+  "title": "mlx-omarchy community submission payload, schema v1/v2",
+  "description": "The JSON summary the collector sends alongside the chunked archive. The Worker validates this strictly; unknown fields are rejected. Covers the quick/deep collector kinds; the e2e kind has payload-v1-e2e.schema.json. schema_version 2 (2026-10) adds the ane_macos/ane_linux turn-on blocks and the omarchy_ane promotion block; v1 rows stay valid and accepted.",
   "type": "object",
   "required": [
     "schema_version",
@@ -10,7 +10,10 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "kind": {
       "enum": [
@@ -155,6 +158,36 @@
               "type": "object",
               "additionalProperties": {
                 "type": "object"
+              }
+            },
+            "mailbox": {
+              "type": "object",
+              "description": "The ANE mailbox node(s) (the mboxes target): full devicetree props (reg window, interrupts, status). The send-empty line pick on stock apple-mailbox SoCs needs the reg and the AIC line.",
+              "additionalProperties": {
+                "type": "object"
+              }
+            },
+            "reserved_memory": {
+              "type": "object",
+              "description": "The devicetree reserved-memory subtree: found/child_count plus the (ane-named) children with reg, iommu-addresses, compatible. found=false with child_count=0 is a platform fact, not a probe failure.",
+              "properties": {
+                "found": {
+                  "type": "boolean"
+                },
+                "child_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "nodes": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object"
+                  }
+                },
+                "truncated": {
+                  "type": "string",
+                  "maxLength": 64
+                }
               }
             },
             "ane_reg": {
@@ -330,6 +363,14 @@
                 "null"
               ],
               "pattern": "^[0-9a-f]{64}$"
+            },
+            "dtb_sha256_error": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64,
+              "description": "Why dtb_sha256 is null: /sys/firmware/fdt is root-only on shipped kernels, so almost every Linux row records 'needs root'. The collector never calls sudo itself."
             },
             "set_base_candidate": {
               "type": [
@@ -538,6 +579,483 @@
                 "maxLength": 512
               },
               "maxItems": 64
+            },
+            "firmware": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "ANE firmware placement: names, sizes, sha256 of matched files under the known firmware roots; the bytes never leave the machine.",
+              "properties": {
+                "files": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "path": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 512
+                      },
+                      "bytes": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                },
+                "roots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "maxItems": 4
+                },
+                "truncated": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 64
+                }
+              }
+            },
+            "omarchy_ane": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "The omarchy-ane turn-on block (deep rows; contract field names read by omarchy-ane promotion tooling - do not rename): install ids, check state, bound module, firmware hashes, opt-in keys, opt-in smoke, uptime, filtered kernel log with the fault subset. Own cap 48 KiB; when over cap the dmesg tail is dropped first and check/module/smoke/dmesg_faults are never dropped.",
+              "properties": {
+                "machine_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9a-f]{16}$",
+                  "description": "First 16 hex of sha256 of a random per-install token (~/.config/mlx-omarchy/machine-id, mode 0600). Never a serial/UUID/MAC."
+                },
+                "owner_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9a-f]{16}$",
+                  "description": "Same shape as machine_id from its own token; the owner may copy owner-id to their other machines to link their submissions."
+                },
+                "check": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "exit": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "status": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 8
+                    },
+                    "untested": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "lines": {
+                      "type": "array",
+                      "maxItems": 40,
+                      "items": {
+                        "type": "string",
+                        "maxLength": 160
+                      }
+                    },
+                    "unavailable": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 256
+                    }
+                  }
+                },
+                "module": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64
+                    },
+                    "version": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 128
+                    },
+                    "srcversion": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 128
+                    },
+                    "params": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 256
+                      }
+                    },
+                    "unavailable": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 256
+                    }
+                  }
+                },
+                "modules": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "maxItems": 8
+                },
+                "loaded_line": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256
+                },
+                "firmware": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "files": {
+                      "type": "array",
+                      "maxItems": 32,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "sha256"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "maxLength": 512
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          }
+                        }
+                      }
+                    },
+                    "unavailable": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 256
+                    },
+                    "truncated": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64
+                    }
+                  }
+                },
+                "opt_in": {
+                  "type": "array",
+                  "description": "The ane-* keys of /etc/omarchy-platform/dtb-overlays.opt-in (keys only).",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "maxItems": 32
+                },
+                "smoke": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "Opt-in parakeet-encoder smoke (only with the collector's consent flag, omarchy-ane installed and the module bound). Until the packaged runner ships: available=false with the reason, never omitted.",
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "requested": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64
+                    },
+                    "sha256": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "maxItems": 32
+                    },
+                    "errors": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "min_ms": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "median_ms": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "exit": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 256
+                    }
+                  }
+                },
+                "uptime_s": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "dmesg": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string",
+                    "maxLength": 160
+                  },
+                  "maxItems": 200
+                },
+                "dmesg_faults": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string",
+                    "maxLength": 160
+                  },
+                  "maxItems": 32
+                },
+                "dmesg_source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 16
+                },
+                "iomem": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "maxItems": 64
+                },
+                "interrupts": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "description": "ANE/DART/mailbox lines of /proc/interrupts: idle pair 10 s apart, third sample after the opt-in smoke when it ran (a storm shows as rate between the samples).",
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "phase"
+                    ],
+                    "properties": {
+                      "phase": {
+                        "type": "string",
+                        "maxLength": 32
+                      },
+                      "lines": {
+                        "type": [
+                          "array",
+                          "null"
+                        ],
+                        "items": {
+                          "type": "string",
+                          "maxLength": 512
+                        },
+                        "maxItems": 64
+                      }
+                    }
+                  }
+                },
+                "packages": {
+                  "type": [
+                    "array",
+                    "object",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "maxLength": 128
+                      },
+                      "version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 128
+                      }
+                    }
+                  },
+                  "maxItems": 16
+                },
+                "host": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "cpu_online": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "mem_total_mib": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "lscpu_model": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 256
+                    },
+                    "uptime_s": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    }
+                  }
+                },
+                "dt_text": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "unavailable": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 256
+                    }
+                  }
+                },
+                "truncated": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "maxItems": 16
+                }
+              }
             }
           }
         },
@@ -668,11 +1186,17 @@
                     "maxLength": 256
                   },
                   "IOInterruptSpecifiers": {
+                    "description": "Hex, one entry per specifier (canonical since schema v2: [\"0x74030000\"]). Published v1 rows carry three legacy encodings (python bytes repr, latin-1 text, U+FFFD-lossy); readers must accept all four.",
                     "type": [
+                      "array",
                       "string",
                       "null"
                     ],
-                    "maxLength": 256
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 8
                   },
                   "IOClass": {
                     "type": [
@@ -783,10 +1307,15 @@
                   },
                   "IOInterruptSpecifiers": {
                     "type": [
+                      "array",
                       "string",
                       "null"
                     ],
-                    "maxLength": 256
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 8
                   },
                   "IOClass": {
                     "type": [
@@ -833,6 +1362,312 @@
                     ],
                     "maxLength": 256,
                     "description": "Raw dart-options IORegistry property when present; dart-internal ID, NOT a stream map (t6021: 0x25-class values). Recorded for completeness."
+                  }
+                }
+              }
+            },
+            "mailbox_nodes": {
+              "type": "array",
+              "description": "The ANE mailbox nodes from the IOService plane: reg window, AIC interrupt line (hex), phandle.",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "compatible": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "maxItems": 8
+                  },
+                  "reg": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 8192
+                  },
+                  "reg_ranges": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "maxItems": 256
+                  },
+                  "IOInterruptControllers": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "IOInterruptSpecifiers": {
+                    "type": [
+                      "array",
+                      "string",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 8
+                  },
+                  "IOClass": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "phandle": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "dt_nodes": {
+              "type": "array",
+              "description": "IODeviceTree-plane nodes matching the ANE family (ane / dart-ane / iop-ane / ascwrap / exclave / t8020 patterns, so M3-M6 generations are captured without code changes). WHITELIST keys only: name, compatible, reg, interrupts, interrupt-names, IOInterruptSpecifiers, segment-ranges, ane-type/subtype/id, die-id, die-ane-id, clock-gates, power-gates, iommu-parent, phandle, vm-base, vm-size, page-size, sids, bypass-15, instance, dapf-instance-0, dart-id, dart-options, role, device_type, ranges, #address-cells, #size-cells. Binary values as hex. Root and /chosen are never dumped.",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "compatible": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 16
+                  },
+                  "reg": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 16384
+                  },
+                  "interrupts": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 16384
+                  },
+                  "interrupt-names": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "maxItems": 16
+                  },
+                  "IOInterruptSpecifiers": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 8
+                  },
+                  "segment-ranges": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 16384
+                  },
+                  "ane-type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "ane-subtype": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "ane-id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "die-id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "die-ane-id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "clock-gates": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "power-gates": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "iommu-parent": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "phandle": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 16
+                  },
+                  "vm-base": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "vm-size": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "page-size": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "sids": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "bypass-15": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "instance": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "dapf-instance-0": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "dart-id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "dart-options": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "role": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "device_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "ranges": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
                   }
                 }
               }
@@ -1262,6 +2097,684 @@
               "null"
             ]
           }
+        }
+      }
+    },
+    "ane_macos": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Deep macOS ANE turn-on block (schema v2). Pattern-based M3-M6 discovery: every IODeviceTree node whose name/compatible/device_type/role matches the ANE family, with ALL properties (strip list applied), ANE driver classes, loaded ANE kexts, OS firmware image hashes (names/sizes/sha256 of public paths only, never the files), and the opt-in CoreML smoke. Bulk raw fields also live in the archive; the payload block is budget-capped and records what was dropped.",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 16
+        },
+        "generation_probe": {
+          "type": "array",
+          "description": "Per-pattern hit counts; a pattern with no match is {matched: 0}, never omitted.",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "matched"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "matched": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "dump": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "nodes": {
+              "type": "array",
+              "maxItems": 24,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "compatible": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 16
+                  },
+                  "props": {
+                    "type": "object"
+                  },
+                  "pmgr_ane_rows": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "maxLength": 128
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "arm_io": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "aic": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256
+                },
+                "props": {
+                  "type": "object"
+                }
+              }
+            },
+            "classes": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "ioclass": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "provider_class": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "bundle_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "user_client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "property_names": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "maxItems": 64
+                  }
+                }
+              }
+            },
+            "kexts": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "line": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "bundle_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64
+                  },
+                  "macho_bytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "unavailable": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  }
+                }
+              }
+            },
+            "firmware": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "matched": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "files": {
+                  "type": "array",
+                  "maxItems": 24,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 512
+                      },
+                      "size": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0
+                      },
+                      "sha256": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                },
+                "truncated": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 64
+                }
+              }
+            },
+            "tunables": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "node": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "property": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  }
+                }
+              }
+            },
+            "truncated": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "maxItems": 16
+            },
+            "stripped": {
+              "type": "array",
+              "description": "Names (never values) of the identity properties the strip list removed.",
+              "items": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "maxItems": 64
+            }
+          }
+        },
+        "os": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "product_version": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64
+            },
+            "build": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64
+            }
+          }
+        },
+        "hardware": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "model_identifier": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 128
+            },
+            "machine": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64
+            },
+            "ncpu": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "memsize_bytes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "kext_facts": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "extensions_ane": {
+              "type": [
+                "array",
+                "object",
+                "null"
+              ],
+              "items": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "maxItems": 16
+            },
+            "framework_present": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "smoke": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "requested": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "calls": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "min_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "median_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "unavailable": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            }
+          }
+        },
+        "truncated": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 16
+        },
+        "stripped": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 64
+        }
+      }
+    },
+    "ane_linux": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Deep Linux ANE turn-on block (schema v2): generation probe over the booted devicetree, full reserved-memory subtree, /proc/interrupts samples, package versions, host facts, and the dtc-text dump state. The promotion-critical omarchy_ane block rides ane_port_detail.runtime.omarchy_ane.",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 16
+        },
+        "generation_probe": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "matched"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "matched": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "reserved_memory": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "found": {
+              "type": "boolean"
+            },
+            "child_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "nodes": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "object"
+              }
+            },
+            "truncated": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64
+            }
+          }
+        },
+        "interrupts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "required": [
+              "phase"
+            ],
+            "properties": {
+              "phase": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "lines": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "maxItems": 64
+              }
+            }
+          }
+        },
+        "packages": {
+          "type": [
+            "array",
+            "object",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 128
+              }
+            }
+          },
+          "maxItems": 16
+        },
+        "host": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "cpu_online": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "mem_total_mib": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "lscpu_model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "uptime_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "boot_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{12}$",
+              "description": "sha256 of the boot id, truncated to 12 hex."
+            }
+          }
+        },
+        "dt_text": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "unavailable": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            }
+          }
+        },
+        "truncated": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 16
         }
       }
     },

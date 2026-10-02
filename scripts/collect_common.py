@@ -32,7 +32,11 @@ import tarfile
 import time
 import getpass
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# v1 rows (pre-2026-10) stay readable: the community-data service
+# accepts schema_version 1 and 2; v2 adds the ane_macos / ane_linux
+# turn-on blocks (see docs/ane-turn-on-data.md) and the mailbox /
+# reserved-memory / firmware additions to ane_port_detail.
 
 MAX_STREAM_LINES = 400
 MAX_STREAM_CHARS = 200_000
@@ -339,7 +343,15 @@ def _bounded_pmgr_blocks(blocks, truncated, max_blocks=8, max_children=256):
     return kept
 
 
-def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
+# Payload budget for the whole ane_port_detail block. 64 KiB covered
+# the old devicetree-only content; deep rows also carry the 48 KiB
+# omarchy_ane promotion block, so the deep path raises the budget
+# (payload cap is 256 KiB, shared with ane_macos/ane_linux).
+PORT_DETAIL_MAX_BYTES = 64 * 1024
+PORT_DETAIL_MAX_BYTES_DEEP = 112 * 1024
+
+
+def _cap_port_detail(port, redactor, max_bytes=PORT_DETAIL_MAX_BYTES):
     """Bounded `ane_port_detail` blob for the quick PAYLOAD.
 
     Carries the devicetree (and the runtime block if it fits) at enough
@@ -404,7 +416,9 @@ def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
             out["truncated"] = (truncated or [])[:15] + \
                 ["macos:over_budget"]
             if _size(out) > max_bytes:
-                return None
+                return {"available": False,
+                        "error": "macos ane_port_detail over budget",
+                        "truncated": out["truncated"]}
         return out
 
     src_devicetree = src_devicetree or {}
@@ -425,6 +439,11 @@ def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
             if isinstance(src_devicetree.get("ane_reg"), list) else None,
         "darts": _bounded_dict(src_devicetree.get("darts") or {},
                                MAX_DARTS, "darts"),
+        "mailbox": _bounded_dict(src_devicetree.get("mailbox") or {},
+                                 MAX_NODES, "mailbox"),
+        "reserved_memory": _walk(src_devicetree.get("reserved_memory"))
+            if isinstance(src_devicetree.get("reserved_memory"), dict) else {
+                "found": False, "child_count": 0, "nodes": {}},
         "pmgr_domains": _walk(src_devicetree.get("pmgr_domains") or [])[:64]
             if len(src_devicetree.get("pmgr_domains") or []) > 64
             else _walk(src_devicetree.get("pmgr_domains") or []),
@@ -447,6 +466,10 @@ def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
             if re.fullmatch(r"[0-9a-f]{64}",
                             str(src_devicetree.get("dtb_sha256") or ""))
             else None,
+        "dtb_sha256_error": (str(src_devicetree.get("dtb_sha256_error"))
+                             [:64]
+                             if src_devicetree.get("dtb_sha256_error")
+                             else None),
     }
     if len(src_devicetree.get("pmgr_domains") or []) > 64:
         truncated.append(f"pmgr_domains:"
@@ -468,15 +491,19 @@ def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
     # Still over budget: drop by porting value. The phandle map goes
     # first (iommus_resolved already did that arithmetic for the
     # reader), then the AIC block, the structured boot provenance, the
-    # ANE pmgr subset and the full pmgr topology, then DARTs; the ane
-    # nodes go last.
+    # ANE pmgr subset and the full pmgr topology, then DARTs, the
+    # reserved-memory subtree, the mailbox nodes; the ane nodes go
+    # last.
     if _size(out) > max_bytes:
         trimmed = out
         for field, blank in (("phandles", {}), ("aic", None),
                              ("boot", None), ("set_base_candidate", None),
                              ("pmgr_domains", []),
                              ("pmgr_blocks", []), ("darts", {}),
-                             ("ane_nodes", {})):
+                             ("reserved_memory",
+                              {"found": False, "child_count": 0,
+                               "nodes": {}}),
+                             ("mailbox", {}), ("ane_nodes", {})):
             if _size(trimmed) <= max_bytes:
                 break
             dt = dict(trimmed["devicetree"])
@@ -487,7 +514,9 @@ def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
             truncated.append(f"{field}:over_budget")
         if _size(trimmed) > max_bytes:
             truncated.append("devicetree:over_budget")
-            return None
+            return {"available": False,
+                    "error": "devicetree ane_port_detail over budget",
+                    "truncated": truncated[:16]}
         out = trimmed
 
     if truncated:
@@ -495,17 +524,98 @@ def _cap_port_detail(port, redactor, max_bytes=64 * 1024):
     return out
 
 
+def _cap_omarchy_ane(block, redactor, max_bytes=48 * 1024):
+    """Bounded `omarchy_ane` turn-on block (Linux deep section).
+
+    Cap order is fixed by contract: when over budget the dmesg tail is
+    dropped FIRST; check / module / smoke / dmesg_faults are never
+    dropped. Still over budget after that, the list-shaped fields
+    (firmware, opt_in) are halved with an explicit truncated marker;
+    those never lose the check or module facts.
+    """
+    if not isinstance(block, dict):
+        return None
+    out = dict(block)
+
+    def _walk(value):
+        if isinstance(value, str):
+            return redactor.apply(value) if redactor else value
+        if isinstance(value, dict):
+            return {k: _walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_walk(v) for v in value]
+        return value
+
+    out = _walk(out)
+    dropped = []
+    if _size_json(out) > max_bytes and "dmesg" in out:
+        out.pop("dmesg")
+        dropped.append("dmesg")
+    for field in ("firmware", "opt_in"):
+        if _size_json(out) <= max_bytes:
+            break
+        value = out.get(field)
+        if isinstance(value, list) and len(value) > 4:
+            out[field] = value[:len(value) // 2]
+            dropped.append(f"{field}:half")
+    if dropped:
+        out["truncated"] = (out.get("truncated") or [])[:8] + dropped
+    return out
+
+
+def _size_json(value):
+    return len(json.dumps(value, separators=(",", ":")))
+
+
+def _cap_ane_block(block, redactor, max_bytes=96 * 1024):
+    """Bounded top-level ane_macos / ane_linux payload block.
+
+    Bulk raw-dump fields are dropped first (they also live in the
+    archive); compact identity/summary fields are protected. Every drop
+    is recorded in `truncated`.
+    """
+    if not isinstance(block, dict):
+        return None
+
+    def _walk(value):
+        if isinstance(value, str):
+            return redactor.apply(value) if redactor else value
+        if isinstance(value, dict):
+            return {k: _walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_walk(v) for v in value]
+        return value
+
+    out = _walk(block)
+    truncated = list(out.get("truncated") or [])
+    # Drop order: the raw dumps and per-node property payloads first,
+    # then the derived row lists; scalars and probe verdicts survive.
+    for field in ("raw_text", "dt", "dmesg", "interrupts", "overlays",
+                  "dtb_copies", "firmware", "tunables", "nodes",
+                  "generation_probe", "classes"):
+        if _size_json(out) <= max_bytes:
+            break
+        if field in out:
+            out.pop(field)
+            truncated.append(f"{field}:over_budget")
+    if truncated:
+        out["truncated"] = truncated[:16]
+    return out
+
+
 def build_payload(kind, quick, manifest, generated_at=None, benchmark=None,
-                  redactor=None):
+                  redactor=None, ane_macos=None, ane_linux=None):
     """Build the strict-schema JSON summary sent with the upload.
 
     Must match schema/payload-v1.schema.json in services/community-data:
-    fixed key set, schema_version pinned, every identity field nullable.
-    All values come from already-redacted data. `redactor` is the
-    collector's shared Redactor; it is used to belt-and-braces re-redact
-    the ane_port_detail blob in case a probe missed a string-shaped
-    value. New callers should pass it; existing tests that do not are
-    tolerated (re-redaction becomes a no-op).
+    fixed key set, schema_version pinned (v2 since 2026-10; the service
+    accepts v1 and v2), every identity field nullable. `ane_macos` /
+    `ane_linux` carry the deep collector's ANE turn-on blocks (null on
+    a quick run). All values come from already-redacted data.
+    `redactor` is the collector's shared Redactor; it is used to
+    belt-and-braces re-redact the ane_port_detail blob in case a probe
+    missed a string-shaped value. New callers should pass it; existing
+    tests that do not are tolerated (re-redaction becomes a no-op).
     """
     host = quick.get("host") or {}
     dt = host.get("devicetree") or {}
@@ -589,9 +699,22 @@ def build_payload(kind, quick, manifest, generated_at=None, benchmark=None,
     # Bounded full-structure port detail. Capped per-section, total
     # bytes hard-bounded; truncation is recorded explicitly so a reader
     # can tell which corner the cap clipped. Re-redacts every string
-    # leaf against the shared Redactor in case a probe missed one.
-    ane_port_detail = _cap_port_detail(quick.get("ane_port"), redactor) \
-        if quick.get("ane_port") else None
+    # leaf against the shared Redactor in case a probe missed one. A
+    # failed probe or an over-budget detail is an explicit error
+    # object in the payload, never a silent omission.
+    ane_port_detail = None
+    if quick.get("ane_port"):
+        if src_port.get("available") is False:
+            ane_port_detail = {
+                "available": False,
+                "error": str(src_port.get("error")
+                             or "ane_port probe failed")[:256],
+            }
+        else:
+            ane_port_detail = _cap_port_detail(
+                src_port, redactor, max_bytes=(
+                    PORT_DETAIL_MAX_BYTES_DEEP if kind == "deep"
+                    else PORT_DETAIL_MAX_BYTES))
     kernel = host.get("kernel_release")
     if native:
         shortfall_flag = None
@@ -630,6 +753,8 @@ def build_payload(kind, quick, manifest, generated_at=None, benchmark=None,
         "core_shortfall": shortfall_flag,
         "cpu_online": host_cpu if isinstance(host_cpu, int) else None,
         "benchmark": rows,
+        "ane_macos": _cap_ane_block(ane_macos, redactor),
+        "ane_linux": _cap_ane_block(ane_linux, redactor),
         "redaction_summary": dict(
             manifest.get("redaction_summary") or {}),
         "files": [

@@ -21,9 +21,9 @@ const expectedSchemaHash = sha256Hex(
 );
 
 describe("SCHEMA_IDENTITY", () => {
-  test("schema_version matches the bundled JSON schema", () => {
-    const declared = payloadSchemaJson.properties.schema_version.const;
-    expect(SCHEMA_IDENTITY.schema_version).toBe(declared);
+  test("schema_versions match the bundled JSON schema", () => {
+    const declared = payloadSchemaJson.properties.schema_version.enum;
+    expect(SCHEMA_IDENTITY.schema_versions).toEqual(declared);
   });
 
   test("fields_sha256 matches the sorted field names of the bundled schema", async () => {

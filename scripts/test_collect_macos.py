@@ -220,7 +220,7 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertFalse(json.loads(files["thermal.json"])["available"])
         self.assertEqual(manifest["sections_unavailable"].count("thermal"), 1)
         cover = files["submission.md"].decode()
-        self.assertIn("Not available on this machine: quick, environment, correctness, benchmark, profile, thermal", cover)
+        self.assertIn("Not available on this machine: quick, environment, correctness, benchmark, profile, ane, thermal", cover)
 
 
 class NativeProvenanceTests(unittest.TestCase):

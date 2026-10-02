@@ -203,3 +203,46 @@ class CollectorLabelingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IrqEncodings(unittest.TestCase):
+    """IOInterruptSpecifiers arrive in four encodings across published
+    rows; all decode to the same AIC number (t6021 ane: 884), and the
+    lossy form must refuse rather than guess."""
+
+    def test_canonical_hex(self):
+        self.assertEqual(gen._irq_number("0x74030000"), 884)
+
+    def test_python_bytes_repr(self):
+        # The v0.6.4 bug read this as 0x7427625b.
+        self.assertEqual(gen._irq_number("b't\\x03\\x00\\x00'"), 884)
+
+    def test_latin1_text(self):
+        self.assertEqual(gen._irq_number("t\x03\x00\x00"), 884)
+
+    def test_bytes_list(self):
+        self.assertEqual(gen._irq_number([b"t\x03\x00\x00"]), 884)
+
+    def test_lossy_is_none_not_a_guess(self):
+        self.assertIsNone(gen._irq_number("\ufffd\x03\x00\x00"))
+        self.assertIsNone(gen._irq_number("b'\ufffd\x03\x00\x00'"))
+
+
+class AneNodeChoice(unittest.TestCase):
+    """The generator must pick ane0/die 0, not the first list entry
+    (T6022 row 90c6b9bf3e03 carries ane0+ane1)."""
+
+    def test_ane0_wins_over_ane1(self):
+        nodes = [{"name": "ane1"}, {"name": "ane0"}]
+        self.assertEqual(gen._ane_node_of({"ane_nodes": nodes})["name"],
+                         "ane0")
+
+    def test_bare_ane_wins_over_higher_die(self):
+        nodes = [{"name": "ane3"}, {"name": "ane"}]
+        self.assertEqual(gen._ane_node_of({"ane_nodes": nodes})["name"],
+                         "ane")
+
+    def test_lowest_die_number_wins(self):
+        nodes = [{"name": "ane10"}, {"name": "ane2"}]
+        self.assertEqual(gen._ane_node_of({"ane_nodes": nodes})["name"],
+                         "ane2")

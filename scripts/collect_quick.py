@@ -358,6 +358,30 @@ def _probe_adt(redactor):
     return {"found": False, "path": None, "sha256": None, "source": None}
 
 
+def _ane_reserved_memory(redactor, base=DT_BASE, max_nodes=32):
+    """The devicetree reserved-memory subtree, bounded.
+
+    The ANE driver allocates its fence/IOVA pools inside the reserved
+    regions iBoot carves; a port to an untested chip needs every child
+    (name, reg, no-map, reusable, compatible) to place them. Each item
+    a reader cannot get is an explicit fact, never an omission: a tree
+    without reserved-memory reports found=false.
+    """
+    parent = os.path.join(base, "reserved-memory")
+    out = {"found": False, "child_count": 0, "nodes": {}}
+    if not os.path.isdir(parent):
+        return out
+    out["found"] = True
+    children = sorted(d for d in os.listdir(parent)
+                      if os.path.isdir(os.path.join(parent, d)))
+    out["child_count"] = len(children)
+    for child in children[:max_nodes]:
+        out["nodes"][child] = _dt_props(os.path.join(parent, child), redactor)
+    if len(children) > max_nodes:
+        out["truncated"] = f"nodes:{len(children) - max_nodes}"
+    return out
+
+
 def _ane_port_devicetree(redactor, base=DT_BASE,
                          fdt_path="/sys/firmware/fdt"):
     """Everything a contributor needs to port omarchy-ane to this SoC.
@@ -380,7 +404,9 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
     """
     ane_nodes = {}
     darts = {}
+    mailbox = {}
     phandles = {}
+    pmgr_dirs = set()
     pmgr_domains = []
     pmgr_blocks = []
     aic = None
@@ -392,10 +418,35 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         ph = _dt_u32s(_read_dt_raw("phandle", dirpath) or b"")
         if ph:
             phandles[ph[0]] = rel
-        named = bool(re.search(r"(?:^|/)ane(?:@[0-9a-f]+)?$", dirpath))
-        hit = [t for t in compat if t == "apple,ane" or t.endswith("-ane")]
+        # Generic ANE-family match: node names vary per generation
+        # (ane@, dart-ane@, iop-ane@, ane-ascwrap@, mailbox-ane@, M5
+        # exclave nodes) and compatibles carry ascwrap-v6 / t8020-ane
+        # style markers, so match patterns, not fixed names. The tree
+        # root itself never matches by name (a temp dir's random name
+        # must not decide this). Children of a pmgr block are power
+        # domains (ane_sys / ane_set* pwrstates), captured via
+        # pmgr_domains below - never the ANE device itself.
+        named = rel != "." and bool(re.search(
+            r"(?:^|/)[^/]*(?:ane|ascwrap|exclave)[^/]*$", dirpath))
+        hit = [t for t in compat
+               if t == "apple,ane" or t.endswith("-ane")
+               or "ascwrap" in t or "exclave" in t or t.startswith("ane,")]
+        if any(t == "apple,pmgr" for t in compat):
+            pmgr_dirs.add(rel)
+        if os.path.dirname(rel) in pmgr_dirs or \
+                os.path.basename(rel).startswith("power-controller@"):
+            named = False
+            hit = []
         if named or hit:
             ane_nodes[rel] = _dt_props(dirpath, redactor)
+        # The ANE mailbox (`apple,<soc>-mailbox-ane` and friends): the
+        # driver needs its reg window and its AIC line (the send-empty
+        # pick) on SoCs where the stock apple-mailbox path binds. Node
+        # names vary across ADT generations; the compatible pair
+        # ("mailbox" + "ane") is the stable marker.
+        mb = [t for t in compat if "mailbox" in t and "ane" in t]
+        if mb or ("mailbox" in rel and "ane" in rel):
+            mailbox[rel] = _dt_props(dirpath, redactor)
         # Real trees name DART nodes `iommu@<addr>` and tag them
         # `apple,<soc>-dart` (t600x drops the legacy `apple,dart`
         # fallback entirely), so match on the compatible suffix, not the
@@ -492,12 +543,21 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         "chosen": chosen or None,
     }
     # DTB identity: hash only, never the blob, so a submission's device
-    # tree is reproducible/comparable across kernels.
+    # tree is reproducible/comparable across kernels. /sys/firmware/fdt
+    # is root-only on every shipped kernel (59 published rows carry
+    # null); the explicit reason is recorded, and the collector never
+    # calls sudo itself.
     try:
         with open(fdt_path, "rb") as fh:
             dtb_sha256 = hashlib.sha256(fh.read()).hexdigest()
+    except PermissionError:
+        dtb_sha256 = None
+        dtb_sha256_error = "needs root"
     except OSError:
         dtb_sha256 = None
+        dtb_sha256_error = "unreadable"
+    else:
+        dtb_sha256_error = None
     # Ship only the phandles the porting data actually resolves: the
     # iommus / power-domains cells of the ane nodes and DARTs. The full
     # map runs to hundreds of entries on t600x and blew the 64 KiB
@@ -536,6 +596,9 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         "ane_nodes": ane_nodes,
         "ane_reg": ane_reg,
         "darts": darts,
+        "mailbox": mailbox,
+        "reserved_memory": _ane_reserved_memory(redactor, base=base,
+                                                max_nodes=8),
         "pmgr_domains": pmgr_domains[:64],
         "pmgr_blocks": pmgr_blocks[:8],
         "aic": aic,
@@ -543,9 +606,62 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         "phandles": {str(k): phandles[k] for k in sorted(referenced)},
         "boot": boot,
         "dtb_sha256": dtb_sha256,
+        "dtb_sha256_error": dtb_sha256_error,
         "adt": _probe_adt(redactor),
         "adt_nodes": None,
     }
+
+
+_FIRMWARE_ROOTS = (
+    "/lib/firmware/apple/ane",
+    "/var/lib/omarchy-ane",
+    "/lib/firmware",
+    "/usr/lib/firmware",
+)
+
+
+def _ane_firmware(redactor, max_files=32, roots=None):
+    """ANE firmware placement: names, sizes, sha256; bytes stay local.
+
+    Walks the known firmware roots and hashes every regular file whose
+    name mentions the ANE (the Asahi layout keeps the per-SoC blobs
+    under /lib/firmware/apple/ane; omarchy-ane pins copies under
+    /var/lib/omarchy-ane). Symlinks are skipped so a linked duplicate
+    is hashed once.
+    """
+    roots = _FIRMWARE_ROOTS if roots is None else roots
+    out = {"files": [], "roots": list(roots[:2]), "truncated": None}
+    seen = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirs, files in os.walk(root):
+            dirs.sort()
+            for name in sorted(files):
+                if "ane" not in name.lower():
+                    continue
+                path = os.path.join(dirpath, name)
+                if path in seen or os.path.islink(path):
+                    continue
+                seen.add(path)
+                if len(out["files"]) >= max_files:
+                    out["truncated"] = "files:max"
+                    return out
+                try:
+                    with open(path, "rb") as fh:
+                        digest = hashlib.sha256()
+                        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    size = os.path.getsize(path)
+                except OSError:
+                    continue
+                out["files"].append({
+                    "name": redactor.apply(name)[:256],
+                    "path": redactor.apply(path)[:512],
+                    "bytes": size,
+                    "sha256": digest.hexdigest(),
+                })
+    return out
 
 
 def _ane_port_runtime(redactor):
@@ -584,6 +700,7 @@ def _ane_port_runtime(redactor):
     if dmesg["exit_code"] == 0 and dmesg["stdout"].strip():
         out["dmesg"] = [redactor.apply(line[:512])
                         for line in dmesg["stdout"].splitlines()[-64:]]
+    out["firmware"] = _ane_firmware(redactor)
     return out
 
 

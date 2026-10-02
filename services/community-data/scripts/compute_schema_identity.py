@@ -20,12 +20,22 @@ SCHEMA_PATHS = sorted((ROOT / "schema").glob("payload-v1*.schema.json"))
 
 def main() -> int:
     raws = [p.read_bytes() for p in SCHEMA_PATHS]
+    parsed = [json.loads(raw) for raw in raws]
     fields = sorted(set().union(
-        *(json.loads(raw)["properties"].keys() for raw in raws)))
+        *(set(p["properties"].keys()) for p in parsed)))
     fields_hash = hashlib.sha256("\n".join(fields).encode()).hexdigest()
     schema_hash = hashlib.sha256(b"".join(raws)).hexdigest()
+    # parsed is sorted, so parsed[0] is the e2e sibling, which also
+    # pins a const. Read the versions from the MAIN payload schema.
+    main = next(p for p in parsed
+                if p["properties"]["kind"].get("enum") == ["quick", "deep"])
+    version_prop = main["properties"]["schema_version"]
+    if "enum" in version_prop:
+        versions = list(version_prop["enum"])
+    else:
+        versions = [version_prop["const"]]
     out = {
-        "schema_version": json.loads(raws[0])["properties"]["schema_version"]["const"],
+        "schema_versions": versions,
         "fields_sha256": fields_hash,
         "schema_sha256": schema_hash,
     }

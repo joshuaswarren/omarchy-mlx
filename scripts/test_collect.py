@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import stat
 import sys
 import tarfile
 import tempfile
@@ -442,7 +443,8 @@ class BuildPayload(unittest.TestCase):
             "chip", "kernel", "mesa_driver", "mesa_device", "mlx_version",
             "mlx_device", "source_commit", "repo_dirty", "cpu_online",
             "cpu_present", "hotplug_control", "ane_dt_node", "ane_port",
-            "ane_port_detail", "ane_dt_compatible", "boot_chain", "cmdline", "core_shortfall",
+            "ane_port_detail", "ane_dt_compatible", "boot_chain", "cmdline",
+            "core_shortfall", "ane_macos", "ane_linux",
             "benchmark", "redaction_summary", "files",
         ]))
 
@@ -1605,7 +1607,10 @@ class PayloadSchemaContract(unittest.TestCase):
             e2e = json.load(fh)
         self.assertEqual(schema["properties"]["kind"]["enum"], ["quick", "deep"])
         self.assertEqual(e2e["properties"]["kind"]["enum"], ["omarchy-mac-e2e"])
-        self.assertFalse(set(schema["properties"]) - set(e2e["properties"]))
+        # ane_macos / ane_linux are deep-collector turn-on blocks (schema
+        # v2); the e2e summary stays a stripped-down envelope.
+        self.assertFalse(set(schema["properties"]) - set(e2e["properties"])
+                         - {"ane_macos", "ane_linux"})
 
 class HyphenAdjacentUserName(unittest.TestCase):
     """A user name inside a hyphenated token is still the user name."""
@@ -1857,3 +1862,350 @@ class PayloadOnlySubmit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class MailboxAndReservedMemoryCapture(unittest.TestCase):
+    """The ANE mailbox (mboxes target) and reserved-memory subtree:
+    exactly the fields the omarchy-ane send-empty pick and fence-pool
+    placement need on an untested SoC."""
+
+    def test_mailbox_reg_and_interrupts_are_captured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible":
+                                b"apple,t6001\x00apple,arm-platform\x00"})
+            _write_dt(tmp, "soc", {
+                "#address-cells": _u32_be(2),
+                "#size-cells": _u32_be(2),
+            })
+            _write_dt(tmp, "soc/mailbox-ane@277408000", {
+                "compatible": b"apple,t6001-mailbox-ane\x00",
+                "reg": _u32_be(0x0, 0x77408000, 0x0, 0x1000),
+                "interrupts": _u32_be(588, 0, 589, 0, 590, 0, 591, 0),
+                "interrupt-names": b"tx-empty\x00rx\x00",
+                "status": b"okay\x00",
+            })
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp)
+        mb = out["mailbox"]["soc/mailbox-ane@277408000"]
+        self.assertEqual(mb["reg"], ["0x77408000/0x1000"])
+        self.assertEqual(mb["interrupts"], [588, 0, 589, 0, 590, 0, 591, 0])
+        self.assertEqual(mb["interrupt-names"], ["tx-empty", "rx"])
+        self.assertEqual(mb["status"], "okay")
+
+    def test_reserved_memory_ane_children_and_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible": b"apple,t6001\x00"})
+            _write_dt(tmp, "reserved-memory", {
+                "#address-cells": _u32_be(2),
+                "#size-cells": _u32_be(2),
+            })
+            _write_dt(tmp, "reserved-memory/ane-firmware", {
+                "reg": _u32_be(0x2, 0x90000000, 0x0, 0x8000000),
+                "no-map": b"",
+            })
+            _write_dt(tmp, "reserved-memory/other-reserved", {
+                "reg": _u32_be(0x2, 0x98000000, 0x0, 0x1000000),
+            })
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp)
+        rm = out["reserved_memory"]
+        self.assertTrue(rm["found"])
+        self.assertEqual(rm["child_count"], 2)
+        self.assertIn("ane-firmware", rm["nodes"])
+        self.assertEqual(rm["nodes"]["ane-firmware"]["reg"],
+                         ["0x290000000/0x8000000"])
+        # no-map arrives as [] (empty DT property), not a missing value.
+        self.assertEqual(rm["nodes"]["ane-firmware"]["no-map"], [])
+
+    def test_missing_reserved_memory_is_a_fact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible": b"apple,t6001\x00"})
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp)
+        self.assertFalse(out["reserved_memory"]["found"])
+        self.assertEqual(out["reserved_memory"]["child_count"], 0)
+
+    def test_generic_generation_nodes_match_patterns(self):
+        """M3 ascwrap IOP and M4 t8020-class names match without code
+        changes; pmgr power-controller children are power domains, not
+        the ANE device."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible": b"apple,t8122\x00"})
+            _write_dt(tmp, "soc/iop-ane0@280000000", {
+                "compatible": b"iop-ane,ascwrap-v6\x00",
+                "reg": _u32_be(0x2, 0x80000000, 0x0, 0x40000),
+            })
+            _write_dt(tmp, "soc/ane@284000000", {
+                "compatible": b"ane,t8020\x00",
+                "reg": _u32_be(0x2, 0x84000000, 0x0, 0x100000),
+            })
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp)
+        self.assertIn("soc/iop-ane0@280000000", out["ane_nodes"])
+        self.assertIn("soc/ane@284000000", out["ane_nodes"])
+        self.assertEqual(
+            out["ane_nodes"]["soc/iop-ane0@280000000"]["compatible"],
+            "iop-ane,ascwrap-v6")
+
+    def test_power_controller_children_never_look_like_the_ane(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible": b"apple,t8122\x00"})
+            _write_dt(tmp, "soc/pmgr", {
+                "compatible": b"apple,t8122-pmgr\x00apple,pmgr\x00",
+            })
+            _write_dt(tmp, "soc/pmgr/power-controller@c000", {
+                "label": b"ane_set0\x00",
+            })
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp)
+        self.assertEqual(out["ane_nodes"], {})
+        self.assertEqual(len(out["pmgr_domains"]), 1)
+
+    def test_dtb_error_is_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible": b"apple,t6001\x00"})
+            fdt = os.path.join(tmp, "fdt-dir")
+            os.makedirs(fdt)
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp,
+                                          fdt_path=fdt)
+        self.assertIsNone(out["dtb_sha256"])
+        self.assertEqual(out["dtb_sha256_error"], "unreadable")
+
+    def test_firmware_files_are_hashed_not_shipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fw = os.path.join(tmp, "ane")
+            os.makedirs(fw)
+            data = b"\x01\x02\x03ane-firmware-bytes"
+            with open(os.path.join(fw, "t8122_ane0_fw.bin"), "wb") as fh:
+                fh.write(data)
+            os.symlink("t8122_ane0_fw.bin",
+                       os.path.join(fw, "linked_ane_fw.bin"))
+            with open(os.path.join(fw, "unrelated.bin"), "wb") as fh:
+                fh.write(b"no ane here")
+            out = cq._ane_firmware(cc.Redactor(), roots=[tmp])
+        self.assertEqual(len(out["files"]), 1)
+        self.assertEqual(out["files"][0]["name"], "t8122_ane0_fw.bin")
+        self.assertEqual(out["files"][0]["sha256"],
+                         hashlib.sha256(data).hexdigest())
+
+    def test_firmware_cap_records_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(5):
+                with open(os.path.join(tmp, f"ane{i}.bin"), "wb") as fh:
+                    fh.write(b"x" * i)
+            out = cq._ane_firmware(cc.Redactor(), max_files=3, roots=[tmp])
+        self.assertEqual(len(out["files"]), 3)
+        self.assertEqual(out["truncated"], "files:max")
+
+    def test_payload_detail_carries_mailbox_and_reserved_memory(self):
+        quick = json.loads(json.dumps(BuildPayload.QUICK))
+        quick["ane_port"] = {"available": True, "devicetree": {
+            "ane_node_present": True,
+            "ane_nodes": {"ane@26a000000":
+                          {"reg": ["0x26a000000/0x100000"]}},
+            "darts": {},
+            "mailbox": {"soc/mailbox-ane@277408000": {
+                "reg": ["0x277408000/0x1000"]}},
+            "reserved_memory": {"found": True, "child_count": 1,
+                                "nodes": {"ane-firmware": {
+                                    "reg": ["0x90000000/0x8000000"]}}},
+        }}
+        payload = cc.build_payload("quick", quick, {},
+                                   redactor=cc.Redactor())
+        detail = payload["ane_port_detail"]["devicetree"]
+        self.assertEqual(
+            detail["mailbox"]["soc/mailbox-ane@277408000"]["reg"],
+            ["0x277408000/0x1000"])
+        self.assertTrue(detail["reserved_memory"]["found"])
+        self.assertIn("ane-firmware", detail["reserved_memory"]["nodes"])
+
+    def test_dtb_sha256_error_rides_the_payload(self):
+        quick = json.loads(json.dumps(BuildPayload.QUICK))
+        quick["ane_port"] = {"available": True, "devicetree": {
+            "ane_node_present": False, "ane_nodes": {}, "darts": {},
+            "dtb_sha256": None, "dtb_sha256_error": "needs root",
+        }}
+        payload = cc.build_payload("quick", quick, {},
+                                   redactor=cc.Redactor())
+        self.assertEqual(
+            payload["ane_port_detail"]["devicetree"]["dtb_sha256_error"],
+            "needs root")
+
+
+class InstallTokenTests(unittest.TestCase):
+    """machine-id / owner-id: random per-install tokens, 16 hex ids,
+    never serials; the file is created mode 0600 on first run."""
+
+    def test_ids_are_stable_and_differ_per_name(self):
+        with tempfile.TemporaryDirectory() as home:
+            machine = cd._install_token("machine-id", home=home)
+            again = cd._install_token("machine-id", home=home)
+            owner = cd._install_token("owner-id", home=home)
+        self.assertEqual(machine, again)
+        self.assertNotEqual(machine, owner)
+        for value in (machine, owner):
+            self.assertRegex(value, r"^[0-9a-f]{16}$")
+
+    def test_token_file_is_private(self):
+        with tempfile.TemporaryDirectory() as home:
+            cd._install_token("machine-id", home=home)
+            mode = stat.S_IMODE(os.stat(
+                os.path.join(home, ".config", "mlx-omarchy",
+                             "machine-id")).st_mode)
+        self.assertEqual(mode, 0o600)
+
+
+class OmarchyAneBlockTests(unittest.TestCase):
+    """The omarchy_ane promotion block: check parsing, module state,
+    kernel log window, and the fixed 48 KiB cap that drops the dmesg
+    tail first and never drops check/module/smoke/dmesg_faults."""
+
+    def test_check_parses_status_and_untested(self):
+        rec = {"available": True, "exit_code": 1, "error": None,
+               "stdout": "omarchy-ane-check: kernel (ok)\n"
+                         "UNTESTED SoC: T8122\nomarchy-ane-check: FAILED",
+               "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec):
+            out = cd._omarchy_ane_check(cc.Redactor())
+        self.assertEqual(out["status"], "FAILED")
+        self.assertTrue(out["untested"])
+        self.assertEqual(len(out["lines"]), 3)
+
+    def test_check_absent_is_unavailable_not_omitted(self):
+        with patch.object(cd, "run_tool", return_value={
+                "available": False, "exit_code": None, "error": "not-found",
+                "stdout": "", "stderr": "", "argv": []}):
+            out = cd._omarchy_ane_check(cc.Redactor())
+        self.assertFalse(out["available"])
+        self.assertIn("not installed", out["unavailable"])
+
+    def test_smoke_without_runner_says_so(self):
+        with patch.object(cd.shutil, "which", return_value=None):
+            out = cd._omarchy_ane_smoke(cc.Redactor())
+        self.assertFalse(out["available"])
+        self.assertEqual(out["name"], "parakeet-encoder")
+        self.assertIn("not shipped", out["reason"])
+
+    def test_smoke_with_runner_parses_the_contract(self):
+        runner_out = json.dumps({
+            "name": "parakeet-encoder",
+            "sha256": ["ab" * 32] * 20,
+            "errors": 0, "min_ms": 100.1, "median_ms": 101.5})
+        with patch.object(cd.shutil, "which", return_value="/usr/bin/x"), \
+                patch.object(cd, "run_tool", return_value={
+                    "available": True, "exit_code": 0, "error": None,
+                    "stdout": runner_out, "stderr": "", "argv": []}):
+            out = cd._omarchy_ane_smoke(cc.Redactor())
+        self.assertTrue(out["available"])
+        self.assertEqual(out["sha256"], ["ab" * 32] * 20)
+        self.assertEqual(out["median_ms"], 101.5)
+
+    def test_kernel_log_keeps_first_window_and_fault_subset(self):
+        lines = [f"line {i} ane" for i in range(250)]
+        lines.append("line fault: ANE DART fault")
+        fake = {"exit_code": 0, "error": None,
+                "stdout": "\n".join(lines), "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=fake):
+            out = cd._ane_kernel_log(cc.Redactor())
+        self.assertEqual(out["source"], "journalctl")
+        self.assertEqual(len(out["dmesg"]), cd.ANE_DMESG_LINES)
+        self.assertEqual(out["dmesg_faults"],
+                         ["line fault: ANE DART fault"])
+
+    def test_cap_drops_dmesg_tail_first_and_keeps_the_contract(self):
+        block = {"machine_id": "a" * 16, "owner_id": "b" * 16,
+                 "check": {"available": True, "exit": 0,
+                           "status": "ready", "untested": False,
+                           "lines": ["ready"]},
+                 "module": {"available": True, "name": "ane"},
+                 "smoke": {"available": False, "name": "parakeet-encoder"},
+                 "dmesg_faults": ["fault one"],
+                 "dmesg": ["x" * 160] * 400}
+        out = cc._cap_omarchy_ane(block, cc.Redactor(), max_bytes=4096)
+        self.assertNotIn("dmesg", out)
+        for kept in ("check", "module", "smoke", "dmesg_faults",
+                     "machine_id"):
+            self.assertIn(kept, out)
+
+    def test_deep_payload_carries_the_omarchy_ane_block(self):
+        quick = json.loads(json.dumps(BuildPayload.QUICK))
+        quick["ane_port"] = {"available": True, "devicetree": {
+            "ane_node_present": True,
+            "ane_nodes": {"ane@26a000000":
+                          {"reg": ["0x26a000000/0x100000"]}},
+            "darts": {},
+        }}
+        files = {"quick.json": cc.json_bytes(quick),
+                 "ane.json": cc.json_bytes({
+                     "platform": "Linux", "available": True,
+                     "machine_id": "a" * 16, "owner_id": "b" * 16,
+                     "check": {"available": True, "exit": 0,
+                               "status": "ready", "untested": False,
+                               "lines": ["ready"]},
+                     "module": {"available": True, "name": "ane",
+                                "version": "0.4", "srcversion": None,
+                                "params": None},
+                     "modules": ["ane"], "loaded_line": "ane 1 0",
+                     "firmware": {"files": [], "unavailable": None},
+                     "opt_in": [], "uptime_s": 100,
+                     "smoke": {"requested": False},
+                     "dmesg": [], "dmesg_faults": [],
+                     "dmesg_source": None, "iomem": None,
+                     "reserved_memory": {"found": False, "child_count": 0,
+                                         "nodes": {}},
+                     "interrupts": [], "packages": [],
+                     "host": {"cpu_online": 8}, "dt_text":
+                     {"available": False, "unavailable": "dtc unavailable"},
+                     "generation_probe": [{"pattern": "ane", "matched": 1}],
+                     "truncated": []})}
+        files = {name: data if isinstance(data, bytes) else data
+                 for name, data in files.items()}
+        manifest, _, payload = cd.finalize(
+            files, [], {}, "t.tar.gz", cd.REPO)
+        block = (payload["ane_port_detail"]["runtime"] or {}) \
+            .get("omarchy_ane")
+        self.assertIsNotNone(block)
+        self.assertEqual(block["machine_id"], "a" * 16)
+        self.assertEqual(block["check"]["status"], "ready")
+        self.assertEqual(block["module"]["name"], "ane")
+        self.assertEqual(payload["ane_linux"]["generation_probe"],
+                         [{"pattern": "ane", "matched": 1}])
+        self.assertEqual(payload["ane_macos"], None)
+
+
+class InterruptsSamplingTests(unittest.TestCase):
+    def test_two_idle_samples_and_after_smoke(self):
+        samples = iter([[ " 592: ane" ], [" 592: ane"], [" 592: ane"]])
+        with patch.object(cd, "_ane_interrupts_sample",
+                          side_effect=lambda: next(samples)), \
+                patch.object(cd.time, "sleep") as slept:
+            out = cd._ane_interrupts(cc.Redactor(), smoke_ran=False)
+        self.assertEqual([s["phase"] for s in out],
+                         ["idle_first", "idle_second"])
+        slept.assert_called_once_with(cd.ANE_INTERRUPT_SAMPLE_SECS)
+
+    def test_missing_proc_interrupts_is_null_not_an_error(self):
+        with patch.object(cd, "open", side_effect=OSError):
+            self.assertIsNone(cd._ane_interrupts_sample())
+
+
+class AneSectionUnavailableMarks(unittest.TestCase):
+    """Every capture a machine cannot provide says so explicitly."""
+
+    def test_linux_section_runs_read_only_and_reports(self):
+        with tempfile.TemporaryDirectory() as ws, \
+                patch.object(cd, "_omarchy_ane_check", return_value={
+                    "available": False,
+                    "unavailable": "omarchy-ane-check not installed"}), \
+                patch.object(cd, "_omarchy_ane_module", return_value={
+                    "module": {"available": False,
+                               "unavailable": "no module"},
+                    "modules": [], "loaded_line": None}), \
+                patch.object(cd, "_ane_kernel_log", return_value={
+                    "source": None, "dmesg": [], "dmesg_faults": []}), \
+                patch.object(cd, "_ane_linux_dt_text",
+                             return_value=(None, "dtc unavailable")), \
+                patch.object(cd, "_ane_interrupts", return_value=[]), \
+                patch.object(cd, "_ane_packages", return_value={
+                    "unavailable": "pacman not available"}):
+            out = cd.section_ane(cc.Redactor(), cd.REPO, ws, smoke=False)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["smoke"], {"requested": False})
+        self.assertIn("not installed", out["check"]["unavailable"])
+        self.assertEqual(out["reserved_memory"]["found"], False)
+        self.assertFalse(any(v == "written" for v in [1]))

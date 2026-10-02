@@ -107,19 +107,34 @@ property set: MMIO `reg` (decoded address/size) and `reg-names`,
 `interrupts` with `interrupt-parent`, `iommus` with phandles resolved
 to DART paths, the ordered `power-domains` list, `status`, and the
 `compatible` strings. It also dumps every DART node (`reg`,
-`reg-names`, `compatible`, `#iommu-cells`), the PMGR power-domain
-children with their labels, the AIC `compatible`, and the phandle map.
-Runtime facts — `/proc/iomem` lines mentioning ane/dart, the loaded
-`ane` module version and srcversion, and redacted `dmesg` lines
-matching ane/dart/pmgr — ride along so the report also shows whether
-the driver bound on the reporting machine.
+`reg-names`, `compatible`, `#iommu-cells`), the ANE **mailbox** node
+(reg window, interrupts, status), the **reserved-memory** subtree
+(reg, no-map, compatible), the PMGR power-domain children with their
+labels, the AIC `compatible`, and the phandle map. Node matching is
+pattern-based (`ane`, `iop-ane`, `ascwrap`, `exclave`, `dart-ane`,
+`t8020` markers), so M3–M6 generations are captured without code
+changes. Runtime facts — `/proc/iomem` lines mentioning ane/dart/pmgr,
+the loaded `ane` module version and srcversion, ANE **firmware file
+names + sha256**, and redacted `dmesg` lines matching
+ane/dart/pmgr — ride along so the report also shows whether the driver
+bound on the reporting machine. The booted-DTB hash is recorded when
+readable and otherwise states `needs root` explicitly (the collector
+never calls sudo).
 
 The same data rides in `ane_port_detail`, with hard caps so the JSON
-stays under 64 KiB: up to 8 entries each for `ane_nodes`, `darts`, and
-`phandles`; up to 64 PMGR domains; the runtime block rides if it
-fits, otherwise it is dropped with `truncated: ["runtime:over_budget"]`
-and `devicetree` stays. The flat `ane_port` summary string is kept
-for back-compat with rows stored before the detail block existed.
+stays under the wire budget: up to 8 entries each for `ane_nodes`,
+`darts`, `mailbox`, and `phandles`; up to 64 PMGR domains; the runtime
+block rides if it fits, otherwise it is dropped with
+`truncated: ["runtime:over_budget"]` and `devicetree` stays. A probe
+failure or an over-budget detail is an explicit error object in the
+payload, never a silent omission. The flat `ane_port` summary string
+is kept for back-compat with rows stored before the detail block
+existed. On macOS the block carries the IODeviceTree-plane whitelist
+dump (`dt_nodes`: reg, segment-ranges, ane-type, die-id, power-gates,
+sids, vm-base/vm-size, dart-id, and the rest — binary values as hex),
+the mailbox nodes, and `IOInterruptSpecifiers` as hex, one entry per
+specifier. See [docs/ane-turn-on-data.md](docs/ane-turn-on-data.md)
+for what each chip's rows already cover.
 
 A stock t8103 dtb ships no `ane` node; the report says so
 (`ane_node_present: false`) and still dumps DART, PMGR, and AIC, which
@@ -129,15 +144,39 @@ against the worked t6001 example DTS in omarchy-ane
 changes to the [omarchy-ane repo](https://github.com/joshuaswarren/omarchy-ane).
 
 The quick collector is enough for porting work. Run the full deep
-collector when you want the matmul/attention benchmark numbers and the
-correctness probes that go with them.
+collector when you want the matmul/attention benchmark numbers, the
+correctness probes, and the ANE turn-on blocks that go with them.
 
 ### Path 2: full report, needs an installed MLX package
 
-`scripts/collect_deep.py` runs five sections: `quick`, `environment`,
-`correctness`, `benchmark`, and `profile`. The `correctness` and
+`scripts/collect_deep.py` runs six sections: `quick`, `environment`,
+`correctness`, `benchmark`, `profile`, and `ane`. The `correctness` and
 `benchmark` sections import `mlx`, so they report `available: false`
 when no MLX package is installed for the interpreter that runs the collector.
+
+The `ane` section carries everything needed to turn the ANE on for an
+untested chip (payload schema v2):
+
+- **macOS**: full-property IODeviceTree dump of every ANE-family node
+  (identity keys stripped, names recorded), AIC identity, pmgr ANE
+  power rows and `*tunables*` properties, ANE driver classes, loaded
+  ANE kexts (version, Mach-O size + sha256 when readable), OS-shipped
+  ANE firmware images (path, size, sha256 of public paths only — never
+  the files), `sw_vers`/hardware identity, and a dtc-free raw plist
+  text member for the archive.
+- **Linux**: the `omarchy_ane` promotion block (`machine_id`/`owner_id`
+  random per-install tokens, `omarchy-ane-check` state, bound-module
+  identity + parameters, `/lib/firmware/apple/ane` hashes, overlay
+  opt-in keys, uptime, the first 200 filtered kernel-log lines with the
+  fault subset, `/proc/interrupts` samples 10 s apart, package
+  versions, host facts), the full reserved-memory subtree, a
+  strip-list-cleaned dtc text dump as an archive member, and an
+  optional m1n1 ADT dump attachment (`--adt-dump FILE`, capped 2 MiB).
+- **Opt-in smoke** (`--ane-smoke`): macOS runs a tiny CoreML add model
+  20 times (min/median ms); Linux runs the packaged
+  `omarchy-ane-smoke` runner when omarchy-ane ships it and otherwise
+  records an explicit unavailable reason. The smoke never loads or
+  unloads modules and never writes.
 
 #### macOS setup
 
@@ -258,6 +297,12 @@ What each section contributes:
   comparable across machines without downloading anyone's archive.
 - `profile`: the GPU dispatch profile. Reports `available: false` on a
   released install; see the profile section below.
+- `ane`: the ANE turn-on capture (macOS IODeviceTree dump with the
+  strip list, driver classes, kext and firmware-image hashes; Linux
+  `omarchy_ane` promotion block, reserved-memory, mailbox, kernel-log
+  window, interrupt samples). Needs no wheel. Adds the `--ane-smoke`
+  and `--adt-dump` flags; the smoke is opt-in and never loads or
+  unloads modules.
 
 The GPU profile section needs more than the wheel, and it reports
 `available: false` on a released install. Release wheels are compiled

@@ -1,0 +1,370 @@
+{
+  "ane_dt_compatible": null,
+  "ane_dt_node": false,
+  "ane_linux": {
+    "available": true,
+    "dt_text": {
+      "available": true,
+      "unavailable": null
+    },
+    "generation_probe": [
+      {
+        "matched": 1,
+        "pattern": "ane"
+      },
+      {
+        "matched": 0,
+        "pattern": "ascwrap"
+      }
+    ],
+    "host": {
+      "boot_id": "aaaaaaaaaaaa",
+      "cpu_online": 10,
+      "lscpu_model": "Apple M2 Max",
+      "mem_total_mib": 32768,
+      "uptime_s": 3600
+    },
+    "interrupts": [
+      {
+        "lines": [
+          "  592: ane"
+        ],
+        "phase": "idle_first"
+      }
+    ],
+    "packages": [
+      {
+        "name": "omarchy-ane",
+        "version": "0.4"
+      }
+    ],
+    "platform": "Linux",
+    "reserved_memory": {
+      "child_count": 1,
+      "found": true,
+      "nodes": {}
+    },
+    "truncated": []
+  },
+  "ane_macos": null,
+  "ane_port": "present=false darts=0 pmgr_domains=0",
+  "ane_port_detail": {
+    "devicetree": {
+      "ane_node_present": true,
+      "ane_nodes": {
+        "soc/ane@284000000": {
+          "compatible": "apple,t6021-ane"
+        }
+      },
+      "darts": {},
+      "dtb_sha256": null,
+      "dtb_sha256_error": "needs root",
+      "mailbox": {
+        "soc/mailbox-ane@277408000": {
+          "reg": [
+            "0x277408000/0x1000"
+          ]
+        }
+      },
+      "phandles": {
+        "1": "soc/dart-ane@0"
+      },
+      "pmgr_domains": [
+        {
+          "compatible": [
+            "apple,t6021-pmgr-pwrstate"
+          ],
+          "label": "ane_set0",
+          "path": "soc/power-management@28e080000/power-controller@c000"
+        }
+      ],
+      "reserved_memory": {
+        "child_count": 1,
+        "found": true,
+        "nodes": {
+          "ane-firmware": {
+            "reg": [
+              "0x90000000/0x8000000"
+            ]
+          }
+        }
+      }
+    },
+    "macos": {
+      "ane_nodes": [
+        {
+          "IOClass": "AppleARMIODevice",
+          "IOInterruptControllers": "IOInterruptController000000A4",
+          "IOInterruptSpecifiers": "74030000",
+          "compatible": [
+            "ane,t8020"
+          ],
+          "name": "ane0",
+          "phandle": 361,
+          "range_kinds": [
+            "ane_mmio",
+            "pmgr_block",
+            "pmgr_plus_c000"
+          ],
+          "reg": "000000840000000000000002000000000000088e00000000344000000000000000c0088e000000000040000000000000",
+          "reg_ranges": [
+            "0x84000000/0x2000000",
+            "0x8e080000/0x4034",
+            "0x8e08c000/0x4000"
+          ]
+        }
+      ],
+      "available": true,
+      "compiler": {
+        "binaries_cache_resident": true,
+        "compiler_service_present": false,
+        "daemons": [
+          "/usr/libexec/aned",
+          "/usr/libexec/aneuserd"
+        ],
+        "error": null,
+        "framework_version": "9.509.0",
+        "kext_version": "9.512.0"
+      },
+      "coreml": {
+        "available": false,
+        "compute_units": null,
+        "error": "ModuleNotFoundError"
+      },
+      "dart_nodes": [
+        {
+          "compatible": [
+            "iommu-mapper"
+          ],
+          "dart_id": null,
+          "iommu_cells": null,
+          "name": "mapper-ane0",
+          "phandle": 363,
+          "reg": "00000000",
+          "reg_ranges": null
+        },
+        {
+          "compatible": [
+            "dart,t8110"
+          ],
+          "dart_id": 37,
+          "iommu_cells": null,
+          "name": "dart-ane0",
+          "phandle": 362,
+          "reg": "00008085000000000040000000000000000081850000000000400000000000000000828500000000004000000000000000408085000000000040000000000000",
+          "reg_ranges": [
+            "0x85800000/0x4000",
+            "0x85810000/0x4000",
+            "0x85820000/0x4000",
+            "0x85804000/0x4000"
+          ]
+        }
+      ],
+      "driver": {
+        "ane_minor_version": 17,
+        "ane_version": 128,
+        "arch": "h14g",
+        "bundle_identifier": "com.apple.driver.AppleH11ANEInterface",
+        "classes_empty": [
+          "AppleH13ANEInterface",
+          "AppleH16ANEInterface"
+        ],
+        "cores": 16,
+        "firmware_loaded": true,
+        "instance_count": 1,
+        "kext_version": "9.512.0",
+        "matched_class": "H11ANEIn",
+        "matched_compatible": "ane,t8020"
+      },
+      "dt_nodes": [
+        {
+          "compatible": [
+            "ane,t8020"
+          ],
+          "name": "ane0",
+          "path": "/arm-io/ane0",
+          "phandle": "69010000",
+          "segment-ranges": "0000008400000000"
+        }
+      ],
+      "instances": [
+        {
+          "arch": "h14g",
+          "cores": 16,
+          "firmware_loaded": true,
+          "hw_board_type": 160,
+          "matched": "ane,t8020",
+          "minor_version": 17,
+          "name": "ane,t8020",
+          "version": 128
+        }
+      ],
+      "mailbox_nodes": [],
+      "platform": {
+        "compatible": [
+          "Mac14,5"
+        ],
+        "model": "Mac14,5",
+        "soc_id": "t6021",
+        "target_type": "J414c"
+      },
+      "pmgr_nodes": [
+        {
+          "location": "8E080000",
+          "name": "pmgr",
+          "reg": "0000088e0000000000000800000000000000289e000000000000100000000000000028900000000000001000000000000000688e0000000000c00200000000000000008e0000000000000800000000000000209e0000000000000800000000000000608e0000000000800700000000000040009e0000000000100000000000000000e2100000000000500100000000000000f0100000000000000500000000000000e4100000000000000100000000000000e5100000000000100000000000000000e710000000000000090000000000000005100000000000000100000000000000151000000000000001000000000000002510000000000000010000000000",
+          "reg_ranges": [
+            "0x8e080000/0x80000"
+          ],
+          "reg_ranges_total": 73
+        }
+      ],
+      "powermetrics": {
+        "available": false,
+        "error": "powermetrics must be invoked as the superuser",
+        "power_mw": null
+      },
+      "set_base_candidate": {
+        "base": "0x8e08c000",
+        "driver_window_confirms": true,
+        "offset": "0xc000",
+        "pmgr_block": "0x8e080000"
+      },
+      "truncated": [
+        "iommu_cells:unavailable_on_macos"
+      ]
+    },
+    "runtime": {
+      "dmesg": null,
+      "firmware": {
+        "files": [
+          {
+            "bytes": 94528,
+            "name": "t6021_ane0_fw.bin",
+            "path": "/lib/firmware/apple/ane/t6021_ane0_fw.bin",
+            "sha256": "abababababababababababababababababababababababababababababababab"
+          }
+        ],
+        "roots": [
+          "/lib/firmware/apple/ane"
+        ],
+        "truncated": null
+      },
+      "iomem": null,
+      "loaded": "ane 1 0",
+      "module_version": "0.4",
+      "omarchy_ane": {
+        "check": {
+          "available": true,
+          "exit": 0,
+          "lines": [
+            "omarchy-ane-check: 6 ok, ready"
+          ],
+          "status": "ready",
+          "untested": false
+        },
+        "dmesg": [],
+        "dmesg_faults": [],
+        "dmesg_source": "journalctl",
+        "dt_text": {
+          "available": true,
+          "unavailable": null
+        },
+        "firmware": {
+          "files": [
+            {
+              "path": "/lib/firmware/apple/ane/fw.bin",
+              "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+            }
+          ],
+          "truncated": null,
+          "unavailable": null
+        },
+        "host": {
+          "cpu_online": 10,
+          "lscpu_model": "Apple M2 Max",
+          "mem_total_mib": 32768,
+          "uptime_s": 3600
+        },
+        "interrupts": [
+          {
+            "lines": [
+              "  592: ane"
+            ],
+            "phase": "idle_first"
+          }
+        ],
+        "iomem": null,
+        "loaded_line": "ane 1 0",
+        "machine_id": "aaaaaaaaaaaaaaaa",
+        "module": {
+          "available": true,
+          "name": "ane",
+          "params": null,
+          "srcversion": "ABCD",
+          "version": "0.4"
+        },
+        "modules": [
+          "ane"
+        ],
+        "opt_in": [],
+        "owner_id": "bbbbbbbbbbbbbbbb",
+        "packages": [
+          {
+            "name": "omarchy-ane",
+            "version": "0.4"
+          }
+        ],
+        "smoke": {
+          "available": false,
+          "errors": 0,
+          "exit": null,
+          "median_ms": null,
+          "min_ms": null,
+          "name": "parakeet-encoder",
+          "reason": "not shipped yet",
+          "requested": false,
+          "sha256": []
+        },
+        "truncated": [],
+        "uptime_s": 3600
+      },
+      "srcversion": null
+    }
+  },
+  "arch": "aarch64",
+  "boot_chain": "iboot2=iBoot-8422.141.2 m1n1_stage2=v1.5.2",
+  "chip": "apple,t8103",
+  "cmdline": "root=UUID=[redacted-uuid] quiet",
+  "core_shortfall": false,
+  "cpu_online": 8,
+  "cpu_present": 8,
+  "files": [
+    {
+      "bytes": 1234,
+      "path": "manifest.json",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "bytes": 5678,
+      "path": "quick.json",
+      "sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    }
+  ],
+  "generated_at": "2026-09-03T12:00:00Z",
+  "hotplug_control": true,
+  "kernel": "6.9.1-asahi",
+  "kind": "deep",
+  "mesa_device": "Apple M1 (G13G B0)",
+  "mesa_driver": "Asahi Vulkan",
+  "mlx_device": "gpu",
+  "mlx_version": "0.3.2",
+  "model": "Apple Mac mini (M1, 2020)",
+  "redaction_summary": {
+    "home_path": 3,
+    "mac": 2
+  },
+  "repo_dirty": false,
+  "schema_version": 2,
+  "source_commit": "f7169fcb7c2df1713ee635ec5cdc57462292d90e"
+}

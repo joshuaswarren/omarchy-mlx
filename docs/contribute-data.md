@@ -21,8 +21,14 @@ The one-paragraph version:
   captures the ANE device-tree data and submits with one command —
   see [quick mode](../README.md#contributing).
 - **Full report (either OS):** `scripts/collect_deep.py` adds the
-  correctness sweep and benchmark numbers; it shows you the exact
-  redacted payload and sends nothing without your explicit `--submit`.
+  correctness sweep, the benchmark numbers, and the ANE turn-on blocks
+  (macOS IODeviceTree dump with identity keys stripped; Linux
+  reserved-memory, mailbox, firmware hashes and the `omarchy_ane`
+  promotion block). It shows you the exact redacted payload and sends
+  nothing without your explicit `--submit`. An ANE smoke result can be
+  added with `--ane-smoke`; it never loads or unloads modules and
+  never writes. What each chip's rows already cover, and the
+  promotion rule, are in [ane-turn-on-data.md](ane-turn-on-data.md).
 - **Dual-booters, you're gold:** run it under macOS *and* Omarchy on the
   same machine and submit both. The macOS side sees data (IORegistry,
   power topology) Linux can't, and vice versa — the pair is worth more

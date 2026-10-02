@@ -2,7 +2,7 @@ import {
   MAX_ARCHIVE_BYTES,
   MAX_CHUNKS,
   MAX_CHUNK_BYTES,
-  SCHEMA_VERSION,
+  SCHEMA_VERSIONS,
   expectedChunkCount,
 } from "./caps";
 
@@ -72,7 +72,10 @@ export function checkInitiate(body: unknown): Check<InitiateBody> {
     return { ok: false, code: "bad_json" };
   }
   const b = body as Record<string, unknown>;
-  if (b.schema_version !== SCHEMA_VERSION) {
+  if (
+    typeof b.schema_version !== "number" ||
+    !(SCHEMA_VERSIONS as readonly number[]).includes(b.schema_version)
+  ) {
     return { ok: false, code: "schema_unsupported" };
   }
   if (b.kind !== "quick" && b.kind !== "deep" && b.kind !== "omarchy-mac-e2e") {

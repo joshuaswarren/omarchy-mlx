@@ -11,8 +11,9 @@ export const MIN_POW_BITS = 18;
 // Incomplete submissions older than this are deleted by the cron handler.
 export const GC_AFTER_SECONDS = 7 * 24 * 3600;
 
-// Payload JSON Schema version this deployment accepts.
-export const SCHEMA_VERSION = 1;
+// Payload JSON Schema versions this deployment accepts: v1 rows stay
+// readable; v2 (2026-10) adds the ane_macos / ane_linux turn-on blocks.
+export const SCHEMA_VERSIONS = [1, 2] as const;
 
 // Cache parts are split so no D1 row approaches the 2 MB row limit.
 export const CACHE_PART_CHARS = 500_000;

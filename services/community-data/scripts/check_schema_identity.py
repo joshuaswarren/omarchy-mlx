@@ -32,11 +32,18 @@ USER_AGENT = "mlx-omarchy-schema-check/1"
 
 def expected() -> dict:
     raws = [p.read_bytes() for p in sorted(SCHEMA_DIR.glob("payload-v1*.schema.json"))]
-    parsed = json.loads(raws[0])
+    # raws is sorted, so raws[0] is the e2e sibling; read fields from
+    # both but the version list from the MAIN payload schema.
+    main = next(json.loads(raw) for raw in raws
+                if json.loads(raw)["properties"]["kind"].get("enum")
+                == ["quick", "deep"])
     fields = sorted(set().union(
         *(json.loads(raw)["properties"].keys() for raw in raws)))
+    version_prop = main["properties"]["schema_version"]
+    versions = version_prop["enum"] if "enum" in version_prop \
+        else [version_prop["const"]]
     return {
-        "schema_version": parsed["properties"]["schema_version"]["const"],
+        "schema_versions": versions,
         "fields_sha256": hashlib.sha256(
             "\n".join(fields).encode()).hexdigest(),
         "schema_sha256": hashlib.sha256(b"".join(raws)).hexdigest(),
@@ -59,8 +66,11 @@ def main() -> int:
     exp = expected()
     got = live(url)
     mismatches = []
-    for key in ("schema_version", "fields_sha256", "schema_sha256"):
-        if exp[key] != got.get(key):
+    for key in ("schema_versions", "fields_sha256", "schema_sha256"):
+        want, have = exp[key], got.get(key)
+        same = (sorted(want) == sorted(have or [])) \
+            if key == "schema_versions" else want == have
+        if not same:
             mismatches.append(
                 f"  {key}: expected={exp[key]} live={got.get(key)}")
     if mismatches:
