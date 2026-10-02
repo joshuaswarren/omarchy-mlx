@@ -335,8 +335,8 @@ The comparator orders NaN after every number and breaks value ties on the smalle
 ArgSort writes uint32 source indices, and the tie rule makes the index order unique.
 `mx.argpartition` keeps the full sort the upstream Metal redirect makes, so every kth position holds the sorted value; the sort redirect covers wide rows too.
 Value `mx.partition` (and the `mx.topk` redirect to `partition(a, -k)` plus a tail slice) has a second route: a one-dispatch small-k selection kernel that radix-selects the kth key in four 8-bit passes, gathers the k candidates, and bitonic-sorts them.
-It engages when the kth index is nonnegative, the row is a contiguous last axis longer than 1024 elements, the dtype is float32, and 1 ≤ rows ≤ 256 with 1 ≤ k ≤ 256; its tail slice is bit-equal to the sort path's tail slice.
-F16 and bf16 selection blobs are built but stay gated to the wide-row sort route pending one G13-class run of the selection-route doctest ([Attn128 receipt](../receipts/2026-09-30-attn128/README.md); the recorded 16-bit failures were later traced to test bugs, fixed in `e00b37116`).
+It engages when the kth index is nonnegative, the row is a contiguous last axis longer than 1024 elements, the dtype is float32, float16, or bfloat16, and 1 ≤ rows ≤ 256 with 1 ≤ k ≤ 256; its tail slice is bit-equal to the sort path's tail slice.
+The 16-bit arms were gated to float32 twice (a recorded 16-bit failure, then traced to test bugs, fixed in `e00b37116`); the gate is now removed and the selection route runs on every chip — verified on the M2 Max and on T6001 at 57/57 doctests, with the T8103 (G13G) doctest run the last box in the matrix ([Attn128 receipt](../receipts/2026-09-30-attn128/README.md)).
 Outside that window the sort redirect serves both.
 Non-suffix axes, non-contiguous inputs, and non-float inputs fail with named errors.
 `mx.topk` returns the k largest values in ascending order through the partition path, and the strided tail slice now passes for 2-D inputs.

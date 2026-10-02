@@ -1,7 +1,7 @@
 # Local generation and HTTP serving on Omarchy
 
 The installer includes the serving CLI, Laya decision server, and Bonsai server packages.
-The v0.7.6 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
+The v0.7.10 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
 Installed code and a successful generation request do not establish model or assistant qualification.
 
 ## Current application boundary
@@ -60,19 +60,22 @@ quality proxy measured (0/8 native cards, GSM8K 11/20, IFE 17/20) while the 9B
 bench](../receipts/2026-09-30-chat-model-bench/README.md)).
 
 Unless a row names another build, every number below was measured on the M2 Max
-(T6021, 96 GB) with the v0.7.6 release wheel `0.32.3.dev202609291615+06711ad`
-(provenance `verified: match`).
+(T6021, 96 GB). The bench, card, routing, and speech runs used the v0.7.6
+release wheel `0.32.3.dev202609291615+06711ad` (provenance `verified: match`);
+the paired-memory, card-timing, and idle-GPU runs used the harness at main
+`a1251aaa`, which carries the card-reply fix.
 
 | Gate | Everyday (9B) | Compact (4B) | Quality (27B) |
 |---|---|---|---|
 | Cards, HELD-OUT v4 (frozen; pass needs 15/18 valid, 0 spurious) | 16/18, 0 spurious — pass | 18/18, 0 spurious — pass | 18/18, 0 spurious — pass |
 | First-text p95, chosen config, stock kernel | 1.05 s — pass | 0.66 s — pass | not part of this gate |
 | First text on the real card prompt, engine level | 0.78 s — within the 2.0 s design budget | 0.44 s — within | 2.45 s — over budget |
-| Paired memory peak over baseline (whole system, run 1 per pair) | 10.88 GiB | 4.80 GiB | 19.26 GiB |
-| Tier fit | 16 GB and 96 GB | 16 GB and 96 GB | 96 GB only |
+| Paired memory peak over baseline (whole system; nine valid runs) | 9.5 GiB idle (one run 13.4 with page cache) | 5.2–6.8 GiB | 17.3–18.4 GiB |
+| Backend peak (chat worker allocator) | 5.5 GiB | 2.9 GiB | 15.9 GiB |
+| Tier fit | 16 GB and 96 GB (one 16 GB run borderline) | 16 GB and 96 GB | 96 GB only |
 | Pair qualified | No | No | No |
 
-Tier fit is host-RAM arithmetic on the measured 96 GB peaks; no 16 GB machine was measured ([chat-model bench](../receipts/2026-09-30-chat-model-bench/README.md), [pair gates receipt](../receipts/2026-09-30-pair-gates/README.md)).
+Tier fit is host-RAM arithmetic on the measured peaks; no 16 GB machine was measured ([pair gates receipt](../receipts/2026-09-30-pair-gates/README.md), v3 tier analysis). The card turns in all nine v3 runs completed with visible text and a valid component.
 
 Cards: the product ships `card_format` unset everywhere (markdown promotion, no
 schema on ordinary chat). The fenced-json schema was measured and rejected by
@@ -83,16 +86,31 @@ protocol leaves the same two prompts (the Apollo timeline and the decision)
 without a card on both the 9B and the 4B ([chat-model
 bench](../receipts/2026-09-30-chat-model-bench/README.md)).
 
-**Quality performance — the design budget is not met.** Through the assistant
-API with both workers resident ([pair gates
-receipt](../receipts/2026-09-30-pair-gates/README.md), run 1): prefill 73–81
-tok/s (about 75–85 % of the 97–103 tok/s the same wheel reaches alone on the
-GPU), decode about 1.4 tok/s behind a 5,408-token prompt, and first visible
-text 2.5–14.4 s on card turns against the 2 s design budget. A 20,956-token
-prefill completed in about 258 s; the harness's own 600 s per-turn deadline
-then stopped the turn before its one-token decode — a harness limit, recorded
-as such. The 262,144-token admission is the catalog model maximum, not a
-memory-admitted limit.
+**Card timing on a quiet boot** (idle render node; [pair gates
+receipt](../receipts/2026-09-30-pair-gates/README.md)): the release-relevant
+number is the wait to the first *visible component*. The 9B streams prose from
+5.75 s but its chart payload stays invisible until it validates at 115.9 s;
+the 27B shows prose at 20.5 s and its chart at 53.8 s; the 4B emits a fenced
+block that fails component validation, so its user sees nothing until the
+coordinator's `invalid_component` notice plus raw text lands at about 91 s.
+The coordinator fix (`003823df5`, in `a1251aaa`) is why that fallback exists:
+an invalid fence is now shown as raw text and an empty reply is guarded
+against — the earlier silent empty reply on the 4B is fixed. What remains on
+the 4B is the model's own invalid fence, a model- or card-format change, not
+a coordinator one.
+
+**Quality performance — the design budget is not met, on an idle GPU.** The
+quiet-window run (no other render-node holder, `fuser` empty before and after;
+[pair gates receipt](../receipts/2026-09-30-pair-gates/README.md)): prefill
+42 tok/s at a 600-token prompt and 76 tok/s at 2,100 tokens (about 25 % under
+the 97–103 tok/s the same model does alone on the GPU in ModelBench, the cost
+of the resident assistant and Laya workers); TTFT 6.31 s for the real
+300-token chat prompt — about 3× the 2 s design budget, of which about
+3.5 s is coordinator overhead on top of the 2.81 s engine-level TTFT; visible
+decode about 5.4 tok/s (about 4× the superseded shared-GPU estimate of
+1.4 tok/s, which that run's contention produced); card-turn first text
+2.6–14.4 s. A shared-GPU run 1 (73–81 tok/s prefill, ~1.4 tok/s decode) is
+kept in the receipt for comparison and is superseded.
 
 **Routing — the held-out suite passed on precision; routing stays off.** Frozen
 policy 3 (commit `50ca49fae`) scored precision 1.000 (35/35, 0 false
@@ -133,10 +151,16 @@ Attn128 fused head_dim-128 decode attention cuts a full frame from 4,244 to
 ([Attn128](../receipts/2026-09-30-attn128/README.md)). Per Main's direction the
 floor ships: Qwen3-TTS stays for non-real-time synthesis, with a streaming
 first sentence audible in about 1.4 s. The Kokoro-82M second engine fails its
-own frozen thresholds — RTF 0.69 against a required 5 or more, and first-audio
-p95 10.5–10.8 s against 1.0 s (WER 0.87 % passes) — so it ships behind the
-picker, is not the default, and is not recommended; the owner listens before
-any decision ([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
+own frozen thresholds, and the conv-shader lane is closed with a named floor:
+RTF 0.73 on the production driver, with conv kernels at 0.2 % of GPU time and
+the gap to chat decode in per-dispatch cost, 330 µs versus 45 µs ([Kokoro conv
+receipt](../receipts/2026-10-01-kokoro-conv/README.md)). A microbenchmark
+sweep puts that cost at GPU job boundaries in the command buffer, not in any
+host-side pattern its toggles touch; the fix levers live in the omarchy
+encoder and are a follow-up ticket ([OpCost
+receipt](../receipts/2026-10-01-opcost-microbench/README.md)). Kokoro ships
+behind the picker, is not the default, and is not recommended; the owner
+listens before any decision ([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
 Voice as a whole stays unqualified: it needs both directions.
 
 **Zero-CPU traces.** The chat (2B), decision, TTS, and 9B GDN chat paths each
@@ -152,21 +176,20 @@ it; a caller that passes a CPU stream can bypass the contract.
 
 **Standing battery and pin state.** The 13-inch M1 battery passed 26/26 suites
 at `db74f11ad` ([M1 battery
-receipt](../receipts/2026-09-30-m1-battery/README.md)). At the [mlx pin
-bump](../receipts/2026-10-01-mlx-pin-bump/README.md) tip (`aabe46c3c`) the
-T6001 battery passed 29/30; its one failure, the bf16 block of
-`omarchy_indexing_ops_tests`, was later shown to be two test bugs rather than a
-backend defect and is fixed on main (`e00b37116`, [Attn128
-corrections](../receipts/2026-09-30-attn128/README.md)). The pin bump's token
-digests are bit-identical on both chips; its merge gate stays held pending the
-G13G re-run after that host's reinstall. Mesa: the omacom v2/v3 driver stacks
-keep every digest bit-exact on every chip, and v3 is pinnable on T6001
-evidence, but both stacks collapse pure prefill about 5.4× on the M2 chip
-(G14) against the deployed driver — consistent with the coopmat matmul path
-the deployed pre-gating build uses on G14 and the omacom stacks gate to G13
-(the receipt's labeled hypothesis; ready falsifier `AGX_SIMDMAT=1`) — so the
-Mesa pin is blocked for that chip ([Mesa v2
-parity](../receipts/2026-10-01-mesa-v2-parity/README.md)).
+receipt](../receipts/2026-09-30-m1-battery/README.md)). The [mlx pin
+bump](../receipts/2026-10-01-mlx-pin-bump/README.md) landed (`2e6a39d6a`, pin
+`9c3d35571a`) with token digests bit-identical on both chips and shipped in
+v0.7.10; the battery failure it recorded in `omarchy_indexing_ops_tests` was
+two test bugs rather than a backend defect and is fixed on main (`e00b37116`,
+[Attn128 corrections](../receipts/2026-09-30-attn128/README.md)); the 16-bit
+selection doctest has since passed on the M2 and on T6001, and the T8103
+(G13G) run of that doctest is the last box in the matrix. Mesa: the earlier
+G14 prefill collapse was unblocked by opening the coopmat gate for G14X, and
+the pin candidate `e7631595df6` now passes on G14X (+4.7 % prefill-512,
++9.3 % prefill-2048 over the deployed driver, dispatch count exactly equal)
+and on G13X (parity on every leg), all digests bit-exact; the G13G arm of
+that candidate is pending host availability, and the pin lands after it
+([Mesa v2 parity](../receipts/2026-10-01-mesa-v2-parity/README.md)).
 
 **Runtime and install gates.** The packaged DKMS ANE module passed the worker's
 ABI-1 acceptance on T6001 (bit-exact h13 add-mul bundle, per-user fallback,
@@ -189,24 +212,32 @@ penalty of 1.1 because greedy decoding looped on the 2B until the token cap;
 the STT worker made 152 CPU-stream calls through a float64 filterbank built at
 models-package import until the worker registered that package without running
 its `__init__`; the recorder requested browser noise suppression, which doubled
-the captured level (median 2.14×) until it asked for unprocessed audio; and the
-voiced-clip retry above. Two defects are still open: the Compact 4B card turn
-that returned a silent empty reply (run 1, `status=complete`, `text_len` 0),
-and the explicit-CPU-stream finding above.
+the captured level (median 2.14×) until it asked for unprocessed audio; the
+voiced-clip retry above; and the card-reply fix (`003823df5`, in `a1251aaa`)
+that shows an invalid fence as raw text and guards the empty reply. Still
+open: the 4B's fenced card output keeps failing component validation (model
+behavior — the user gets the notice and raw text, not a card), and the
+explicit-CPU-stream finding above.
 
 ### Open items for the owner
 
 | # | Item | Why it blocks |
 |---|---|---|
 | 1 | Routing latency decision: does the 250 ms gate measure the Laya head call (p95 347 ms, fails) or the shipped head-free path (p95 43 ms, passes)? | Automatic routing stays off until decided. |
-| 2 | TTS real-time route: Qwen3-TTS RTF 0.22–0.23 vs 1.2; Kokoro RTF 0.69 vs 5. | No engine meets its real-time threshold; voice output stays unqualified. |
-| 3 | Pair qualification and the card-rule gap: no pair has passed the full gate set, and the 9B and 4B produce no card for the Apollo-timeline and decision prompts. | Nothing is qualified; `recommended` stays false everywhere. |
-| 4 | G14 Mesa coopmat: both omacom stacks collapse prefill about 5.4× vs the deployed driver; the hypothesis has a ready falsifier (`AGX_SIMDMAT=1` on v3). | Blocks the Mesa pin for the M2 chip. |
-| 5 | G13G re-run on the reinstalled jwm1, and one G13-class run of the Attn128 16-bit selection-route doctest. | Gates the mlx pin bump merge; the selection route stays float32-gated until then. |
+| 2 | TTS real-time route: Qwen3-TTS RTF 0.22–0.23 vs 1.2; Kokoro RTF 0.73 floor; the 330 µs-vs-45 µs per-dispatch substrate gap has an open microbenchmark lane and no fix yet. | No engine meets its real-time threshold; voice output stays unqualified. |
+| 3 | Pair qualification and the card format: no pair has passed the full gate set; chart cards take 53.8 s (27B) and 115.9 s (9B) to a visible component, and the 4B's fence never validates. | Nothing is qualified; `recommended` stays false everywhere. |
+| 4 | Mesa pin: land `e7631595df6` after its G13G arm runs (G14X +9.3 % prefill-2048, G13X parity already pass). | The omacom Mesa package pin waits on the last chip gate. |
+| 5 | G13G (T8103) runs: the 16-bit selection doctest at `353701235` or later, and the standing battery on the reinstalled host. | Closes the last box in the Attn128 chip matrix and refreshes the G13G battery record. |
 
 No pair is qualified. All catalog entries keep `recommended: false`.
 
-The one-line installer ships MLX Chat: `install.sh` fetches the assistant, the serve CLI, and the wheel from the promoted release tag (v0.7.6, installed-from-release gates green, including both Laya fresh-install paths; see `receipts/2026-09-30-v076-release.md`).
+The one-line installer ships MLX Chat from the promoted release tag. The
+current release is v0.7.10 (published 2026-10-01; draft-first: every gate ran
+against the uploaded draft, then the release was published and promoted;
+[receipt](../receipts/2026-10-01-v0710-release.md)). The v0.7.7 and v0.7.8
+drafts failed their installed-from-release gates and were never published
+([cut log](../receipts/2026-10-01-v077-release.md)). The repository is now
+`joshuaswarren/omarchy-mlx`; the Python package names are unchanged.
 
 ### Voice options
 
@@ -314,8 +345,8 @@ Read the exact model revision, runtime, and scope in each receipt before using a
 
 | Catalog ID | Role | Generation / HTTP / managed status in catalog | Remaining pair requirement |
 |---|---|---|---|
-| qwen3.5-9b-mlx-4bit | Everyday chat, MLX-LM | Untested / untested / untested | Generation, HTTP, managed launch, and pair qualification |
-| qwen3-4b-instruct-2507-4bit | Compact chat, MLX-LM | Untested / untested / untested | Generation, HTTP, managed launch, and pair qualification |
+| qwen3.5-9b-mlx-4bit | Everyday chat, MLX-LM | Qualified / qualified / qualified | Pair qualification |
+| qwen3-4b-instruct-2507-4bit | Compact chat, MLX-LM | Qualified / qualified / qualified | Pair qualification |
 | `qwen3.8-27b-4bit` | Larger chat, MLX-LM | Qualified / qualified / qualified | Resolve recorded numerical-equivalence limits and qualify the pair |
 | `laya-mlx` | Typed decisions, dedicated module | Qualified / qualified / untested | Converted artifact, managed launch, paired qualification |
 
@@ -325,8 +356,9 @@ Some qualification references are missing from this checkout, and historical not
 Resolve those references and preserve their original scope before promoting a recommendation.
 This documentation update does not certify a new hardware result.
 
-The pinned Qwen3.8-27B text-generation example and its raw output remain in the
-[README](../README.md#quick-start) and [install receipt](../receipts/2026-09-20-qwen38-text-install/receipt.json).
+The pinned Qwen3.8-27B text-generation example remains in the
+[README](../README.md#quick-start); its original install receipt is no longer
+in this checkout.
 That historical CLI run used MLX-VLM; the serving catalog selects MLX-LM through the project shim.
 A loader-specific result does not qualify every loader or vision inference.
 The 27B checkpoint's roughly 16 GB of weights are not its runtime memory requirement.
@@ -494,9 +526,8 @@ earlier two-leg run that day measured the mlx_lm.server leg at 9.33
 tok/s versus 10.36 in the four-leg run; the four-leg numbers are the
 canonical comparison because every leg shared that window.
 
-See the [four-leg receipt](../receipts/2026-09-19-mlxserve-linux-port-t6001-test-host.md)
-and [earlier comparison](../receipts/2026-09-19-serve-options-bench-t6001-test-host.md)
-for reproduction, versions and limitations. These measurements establish
+The raw runs of that comparison predate this checkout's receipt set. These
+measurements establish
 nothing about current-generation models: they predate Qwen3.8
 qualification and must not be read as a "fastest server for current
 models" claim. Linux mlx-serve's GGUF and ANE engines were not
@@ -504,5 +535,4 @@ operational in that comparison. Its `/v1/models` ID may be an internal
 hash rather than a Hugging Face repository name.
 
 Other historical loader experiments, including the specialized Bonsai
-runtime, remain in the [v0.7.0 recertification receipt](../receipts/2026-09-18-v070-pretag-recert-t6001-test-host.md).
-They are not drop-in HTTP-serving recommendations.
+runtime, are not drop-in HTTP-serving recommendations.
