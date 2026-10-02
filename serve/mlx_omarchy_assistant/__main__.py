@@ -124,8 +124,12 @@ def main(argv=None):
     if os.environ.get("MLX_OMARCHY_TTFT_TRACE") == "1":
         # Diagnostic: SIGUSR1 dumps every thread's stack to stderr so a
         # stuck turn or a busy GPU lock can be attributed from outside.
+        # `signal` stays the module-level import: a function-scope import
+        # here makes it local for the whole of main(), and the SIGTERM/
+        # SIGINT registration below would raise UnboundLocalError on
+        # every startup (v0.7.16 release blocker, caught by gate 2).
         import faulthandler
-        import signal
+
         faulthandler.register(signal.SIGUSR1, file=sys.stderr)
     if not 0 <= args.port <= 65535:
         parser.error("port must be between 0 and 65535")
