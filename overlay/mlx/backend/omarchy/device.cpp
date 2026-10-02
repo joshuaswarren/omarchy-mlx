@@ -915,8 +915,11 @@ Device::Device(uint32_t physical_device_index) {
     family_props2.pNext = &family_priorities;
     if (hw.queue_global_priority &&
         it.GetPhysicalDeviceQueueFamilyProperties2) {
-      it.GetPhysicalDeviceQueueFamilyProperties2(
-          pd, caps_.queue_family_index, &family_props2);
+      // Core-1.1 takes a pointer to the family index (and to the
+      // properties2 array; one element here). The core signature mirrors
+      // the KHR_promoted ext: get the count + one family in pNext chain.
+      uint32_t family = caps_.queue_family_index;
+      it.GetPhysicalDeviceQueueFamilyProperties2(pd, &family, &family_props2);
       for (uint32_t i = 0; i < family_priorities.priorityCount; ++i) {
         if (family_priorities.priorities[i] == *wanted) {
           qci.pNext = &global_priority;
