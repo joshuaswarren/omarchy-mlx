@@ -66,9 +66,11 @@ identity digest) for the M2 post-window run.
 
 ## Calibration data (M2, T6021, Honeykrisp)
 
-Sources: `artifacts/m2-4b-calibration.log`,
-`artifacts/m2-4b-budget{0,40000}-profile.jsonl`,
-`artifacts/m2-9b-budget{0,40000}-profile.jsonl`.
+Sources: `~/.local/share/apple-silicon-lab/artifacts/SubmitCap/20261002-submission-cap-19/m2-4b-calibration.log`,
+`.../m2-4b-budget{0,40000}-profile.jsonl`,
+`.../m2-9b-budget{0,40000}-profile.jsonl` (large profile JSONLs live in
+the private lab notebook per the public-repo blob-gate policy;
+AGENTS.md / privacy hook).
 
 Benchmark rule satisfied: gpu-turn tickets; reported wall runs were taken
 with `cat /proc/loadavg < 0.5` and `cat /proc/pressure/cpu` `avg10 = 0`.
