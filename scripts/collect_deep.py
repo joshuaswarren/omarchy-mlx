@@ -94,6 +94,18 @@ ANE_DMESG_LINE_BYTES = 160
 ANE_DMESG_FAULTS = 32
 ANE_DMESG_PATTERN = r"ane_t6021|ane|apple-dart|apple-mailbox|pmgr"
 ANE_FAULT_PATTERN = (r"fault|error|timeout|abort|oops|warn|bug|call trace")
+ANE_IDLE_WAIT_S = 300
+ANE_IDLE_POLL_S = 5
+ANE_UNTESTED_STEPS = (
+    "To submit a judged row for an untested chip, install omarchy-ane-dkms "
+    "and add that chip's opt-in key from the omarchy-ane README table to "
+    "/etc/omarchy-platform/dtb-overlays.opt-in. For T6020, T6022 and T8112, "
+    "run sudo omarchy-ane-firmware-fetch first. Then run sudo "
+    "omarchy-ane-dt apply and reboot. From an omarchy-mlx checkout, run "
+    "python3 scripts/collect_deep.py --ane-smoke --submit. The collector "
+    "runs the smoke when the chip is idle (load < 0.5, PSI 0); no fixed "
+    "uptime is required.")
+
 # Identity strip list for the raw devicetree text member (same keys as
 # the macOS probe strip list).
 DT_STRIP_PROPS = re.compile(
@@ -466,18 +478,35 @@ def _omarchy_ane_check(redactor):
     rec = run_tool(["omarchy-ane-check"], redactor,
                    label="omarchy-ane-check", timeout=120)
     if not rec["available"]:
-        return {"available": False,
-                "unavailable": "omarchy-ane-check not installed"}
+        reason = "omarchy-ane-check not installed"
+        return {"available": False, "installed": False,
+                "reason": reason, "unavailable": reason,
+                "exit": None, "status": "unavailable",
+                "untested": False, "lines": []}
     lines = [line[:ANE_DMESG_LINE_BYTES]
              for line in rec["stdout"].splitlines()][:40]
     return {
         "available": True,
+        "installed": True,
         "exit": rec["exit_code"],
         "status": "ready" if rec["exit_code"] == 0 else "FAILED",
         "untested": "untested" in rec["stdout"].lower(),
         "lines": lines,
     }
 
+
+def _linux_ane_soc():
+    """Return the Apple SoC from the running devicetree compatible list."""
+    try:
+        with open("/sys/firmware/devicetree/base/compatible", "rb") as fh:
+            compatibles = fh.read(4096).split(b"\0")
+    except OSError:
+        return None
+    for compatible in compatibles:
+        match = re.fullmatch(rb"apple,(t[0-9]+)", compatible)
+        if match:
+            return match.group(1).decode("ascii")
+    return None
 
 def _omarchy_ane_module(redactor):
     """The bound ane* module: version, srcversion, params; loaded flag."""
@@ -523,7 +552,11 @@ def _omarchy_ane_module(redactor):
                     break
     except OSError:
         pass
-    module = dict(modules[0]) if modules else {
+    soc = _linux_ane_soc()
+    expected = "ane_t6021" if soc in {"t6020", "t6021", "t6022", "t8112"} else "ane"
+    selected = next((item for item in modules if item["name"] == expected),
+                    modules[0] if modules else None)
+    module = dict(selected) if selected else {
         "available": False, "unavailable": "no /sys/module/ane* module"}
     return {"module": module, "modules": [m["name"] for m in modules],
             "loaded_line": loaded}
@@ -567,8 +600,6 @@ def _omarchy_ane_optin():
         return []
 
 
-# The packaged ANE smoke runner (omarchy-ane). w73 ships the final
-# command name; override with MLX_OMARCHY_ANE_SMOKE_RUNNER until then.
 ANE_SMOKE_RUNNER = "omarchy-ane-smoke"
 
 
@@ -585,15 +616,16 @@ def _omarchy_ane_smoke(redactor):
     """
     runner_name = os.environ.get("MLX_OMARCHY_ANE_SMOKE_RUNNER",
                                  ANE_SMOKE_RUNNER)
-    smoke = {"available": False, "name": "add-fixture",
-             "chip": None, "sha256": [], "golden_sha256": None,
-             "errors": 0, "min_ms": None, "median_ms": None,
-             "exit": None,
+    smoke = {"available": False, "attempted": False,
+             "name": "add-fixture", "chip": None, "sha256": [],
+             "golden_sha256": None, "errors": 0, "min_ms": None,
+             "median_ms": None, "exit": None,
              "reason": f"smoke runner '{runner_name}' not shipped in "
                        "omarchy-ane yet"}
     runner = shutil.which(runner_name)
     if runner is None:
         return smoke
+    smoke["attempted"] = True
     rec = run_tool([runner_name], redactor,
                    label=runner_name, timeout=120)
     smoke["exit"] = rec["exit_code"]
@@ -619,6 +651,7 @@ def _omarchy_ane_smoke(redactor):
                                  if rec["exit_code"] == 1 else None))
         return smoke
     if rec["exit_code"] == 2:
+        smoke["attempted"] = False
         smoke["reason"] = stderr_line or rec["stdout"][:256] or \
             "runner reported unavailable"
         return smoke
@@ -647,14 +680,13 @@ def _ane_kernel_log(redactor):
     lines = [line[:ANE_DMESG_LINE_BYTES]
              for line in rec["stdout"].splitlines()]
     fault_re = re.compile(ANE_FAULT_PATTERN, re.I)
-    # Faults are drawn from the FULL filtered stream, not only the kept
-    # first window: a late-boot fault is exactly what promotion needs.
-    faults = [line[:ANE_DMESG_LINE_BYTES]
-              for line in rec["stdout"].splitlines()
-              if fault_re.search(line)]
+    fault_candidates = [line[:ANE_DMESG_LINE_BYTES]
+                        for line in rec["stdout"].splitlines()
+                        if fault_re.search(line)]
     return {"source": source if lines else None,
             "dmesg": lines[:ANE_DMESG_LINES],
-            "dmesg_faults": faults[:ANE_DMESG_FAULTS]}
+            # Keep the subsystem prefix; the promotion checker classifies.
+            "dmesg_faults": fault_candidates[:ANE_DMESG_FAULTS]}
 
 
 def _ane_interrupts_sample():
@@ -793,19 +825,37 @@ def section_ane(redactor, repo, ws, smoke):
     out["module"] = module_state["module"]
     out["modules"] = module_state["modules"]
     out["loaded_line"] = module_state["loaded_line"]
+    out["installed"] = bool(out["check"].get("installed")
+                            and module_state["module"].get("available") is not False)
+    if not out["installed"]:
+        out["installed_reason"] = (
+            out["check"].get("reason") or
+            module_state["module"].get("unavailable") or
+            "omarchy-ane driver is not loaded")
     out["firmware"] = _omarchy_ane_firmware(redactor)
     out["opt_in"] = _omarchy_ane_optin()
     out["uptime_s"] = _uptime_s()
     out["boot_id"] = _boot_id()
-    smoke_result = {"requested": False}
+    smoke_result = {"requested": False, "attempted": False}
     if smoke:
-        if out["check"].get("status") == "ready":
-            smoke_result = _omarchy_ane_smoke(redactor)
+        smoke_result = {"requested": True, "attempted": False,
+                        "available": False}
+        if not out["installed"]:
+            smoke_result["reason"] = out["installed_reason"]
+        elif out["check"].get("status") != "ready":
+            smoke_result["reason"] = "omarchy-ane-check is not ready"
         else:
-            smoke_result = {"requested": True, "available": False,
-                            "reason": "omarchy-ane-check is not ready; "
-                                      "the smoke needs omarchy-ane "
-                                      "installed and the module bound"}
+            idle = _wait_for_ane_idle()
+            smoke_result.update({
+                "load1": idle.get("load1"),
+                "psi_cpu_avg10": idle.get("psi_cpu_avg10"),
+                "idle_checks": idle.get("checks", []),
+            })
+            if idle["idle"]:
+                smoke_result.update(_omarchy_ane_smoke(redactor))
+                smoke_result["requested"] = True
+            else:
+                smoke_result["reason"] = "not run: busy"
     out["smoke"] = smoke_result
     kernel_log = _ane_kernel_log(redactor)
     out["dmesg"] = kernel_log["dmesg"]
@@ -814,8 +864,8 @@ def section_ane(redactor, repo, ws, smoke):
     out["iomem"] = _ane_iomem_ranges(redactor)
     out["reserved_memory"] = collect_quick._ane_reserved_memory(
         redactor, max_nodes=32)
-    out["interrupts"] = _ane_interrupts(redactor, smoke_result.get(
-        "available") is True)
+    out["interrupts"] = _ane_interrupts(redactor,
+                                          smoke_result.get("attempted") is True)
     out["packages"] = _ane_packages(redactor)
     out["host"] = {
         "cpu_online": _cpu_online(),
@@ -869,6 +919,68 @@ def _ls_grep(redactor, directory, needle):
     if rec["exit_code"] != 0:
         return {"unavailable": "ls failed"}
     return [line[:256] for line in rec["stdout"].splitlines()][:16]
+
+def _ane_smoke_guidance(ane):
+    """Return instructions for an untested chip or busy smoke retry."""
+    if not isinstance(ane, dict) or ane.get("platform") != "Linux":
+        return []
+    messages = []
+    check = ane.get("check") or {}
+    if (check.get("untested") and check.get("status") != "ready"
+            and any("overlay applies only when" in line
+                    for line in check.get("lines") or [])):
+        messages.append(ANE_UNTESTED_STEPS)
+    smoke = ane.get("smoke") or {}
+    if smoke.get("reason") == "not run: busy":
+        messages.append("Smoke not run: busy. Run again when the machine is idle.")
+    return messages
+
+
+def _ane_idle_state():
+    """Read load average and CPU PSI; both must be available to run smoke."""
+    try:
+        load1 = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        load1 = None
+    psi_cpu_avg10 = None
+    try:
+        with open("/proc/pressure/cpu", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("some "):
+                    match = re.search(r"(?:^| )avg10=([0-9]+(?:\.[0-9]+)?)", line)
+                    if match:
+                        psi_cpu_avg10 = float(match.group(1))
+                    break
+    except OSError:
+        pass
+    idle = (load1 is not None and psi_cpu_avg10 is not None
+            and load1 < 0.5 and psi_cpu_avg10 == 0)
+    result = {"load1": load1, "psi_cpu_avg10": psi_cpu_avg10,
+              "idle": idle}
+    if not idle:
+        result["reason"] = (
+            "load/CPU PSI unavailable" if load1 is None or psi_cpu_avg10 is None
+            else "machine remained busy")
+    return result
+
+
+def _wait_for_ane_idle(timeout_s=ANE_IDLE_WAIT_S):
+    """Wait at most five minutes for load < 0.5 and CPU PSI avg10 == 0."""
+    started = time.monotonic()
+    checks = []
+    while True:
+        state = _ane_idle_state()
+        state["waited_s"] = int(time.monotonic() - started)
+        checks.append({key: state.get(key) for key in
+                       ("load1", "psi_cpu_avg10", "idle", "waited_s")})
+        state["checks"] = checks
+        if state["idle"]:
+            return state
+        remaining = timeout_s - state["waited_s"]
+        if remaining <= 0:
+            state["reason"] = "not run: busy"
+            return state
+        time.sleep(min(ANE_IDLE_POLL_S, remaining))
 
 
 def _uptime_s():
@@ -1289,6 +1401,8 @@ def main():
         else "mlx-omarchy-deep.tar.gz"
     manifest, data, payload = finalize(files, unavailable, redaction,
                                        archive_name, os.path.abspath(args.repo))
+    for message in _ane_smoke_guidance(_ane_result(files)) if args.ane_smoke else []:
+        print(message)
     print_preview(manifest, data, archive_name, bool(args.out))
     if args.out:
         with open(args.out, "wb") as fh:

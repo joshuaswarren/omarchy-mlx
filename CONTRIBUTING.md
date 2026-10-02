@@ -180,6 +180,10 @@ untested chip (payload schema v2):
   records an explicit unavailable reason. The smoke never loads or
   unloads modules and never writes.
 
+#### Turn on the ANE for your chip
+
+For an untested chip without its driver, the collector prints the turn-on steps in [docs/contribute-data.md](docs/contribute-data.md#turn-on-the-ane-for-your-chip). `--ane-smoke` waits for load1 < 0.5 and CPU PSI avg10 = 0.00, polling every 5 seconds for up to 300 seconds. If the machine stays busy, it records each load/PSI decision, does not run the smoke, and leaves the row unjudged.
+
 #### macOS setup
 
 On an Apple Silicon Mac, use native MLX with a Python version supported

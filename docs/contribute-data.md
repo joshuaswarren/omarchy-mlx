@@ -42,6 +42,15 @@ The one-paragraph version:
   power topology) Linux can't, and vice versa — the pair is worth more
   than either alone.
 
+## Turn on the ANE for your chip
+
+To submit a judged row for an untested chip, install omarchy-ane-dkms and add that chip's opt-in
+key from the omarchy-ane README table to /etc/omarchy-platform/dtb-overlays.opt-in. For T6020,
+T6022 and T8112, run sudo omarchy-ane-firmware-fetch first. Then run sudo omarchy-ane-dt apply
+and reboot. From an omarchy-mlx checkout, run python3 scripts/collect_deep.py --ane-smoke
+--submit. The collector runs the smoke when the chip is idle (load < 0.5, PSI 0); no fixed
+uptime is required.
+
 ## Timing note
 
 Grab the **latest release** before running. If we've just announced a

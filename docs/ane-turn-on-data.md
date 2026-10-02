@@ -109,29 +109,34 @@ untested machine now supplies all of them.
 
 ## Promotion rule (mirrors the omarchy-ane README, which is authoritative)
 
-> A SoC moves from opt-in to on-by-default on **3 passing community
-> smoke rows** with **0 failing rows**, where the rows must span
-> **3 distinct `machine_id`s, 2 distinct `owner_id`s, 2 distinct
-> boards, and 2 distinct kernel releases**.
+> A SoC moves from opt-in to on-by-default after **one passing community
+> smoke row** and no unresolved failing row. One passing row plus one failing
+> row on an opt-in SoC is **CONFLICT**; do not promote until the failure is
+> explained or superseded.
 >
-> Every passing row must have:
+> A passing row must have:
 > - `check.exit == 0` and `check.status == "ready"`;
-> - `module.name` equal to the chip's driver module;
-> - empty `dmesg_faults` and no ANE/DART/mailbox fault line in `dmesg`;
-> - `uptime_s >= 1800`;
-> - smoke: all 20 add-fixture calls bit-exact, `errors == 0`, and
->   `golden_sha256 == 94041b7cc10a66dfd76ecfd469728ad9d66f68b508f4a9744ce41208d6a4de0b`.
+> - `installed == true` and `module.name` equal to the chip's driver module;
+> - an attempted 20-call add-fixture smoke with every output bit-exact and
+>   `errors == 0`;
+> - no ANE/DART/mailbox fault line in `dmesg`.
 >
-> Regression: an on-by-default chip (t8103, t6001, t6021) reverts to
-> opt-in when its **latest row by `received_at`** has
-> `check.exit != 0` or `check.status != "ready"`, or a non-empty
-> `dmesg_faults` / any ANE fault line in `dmesg`; it clears again on a
-> clean row.
+> The collector runs the smoke only when load1 is `< 0.5` and CPU PSI
+> `avg10 == 0.00`. It polls every 5 seconds for up to 300 seconds. If the
+> machine remains busy, it records every load/PSI decision and sets
+> `smoke.attempted == false`; the row is not judged, not failed.
+>
+> Regression: for an on-by-default chip, a latest unclean row can revert it
+> to opt-in. Rows without an installed driver or an attempted smoke are not
+> judged. A failing smoke row remains a failure; an unavailable or busy smoke
+> is not a failure.
 
-The collector keeps recording exactly the fields this check reads:
-`received_at`, `check.{exit,status}`, `dmesg_faults`, `dmesg`,
-`module.name`, `machine_id`, `owner_id`, `uptime_s`, boot compatible,
-and kernel. The post-smoke `/proc/interrupts` sample is recorded but
+The checker needs `received_at`, `check.{exit,status}`, `installed`,
+`dmesg_faults`, `dmesg`, `module.name`, `machine_id`, `owner_id`, the
+smoke result and its attempted state, boot compatible, and kernel. The
+collector also records `uptime_s` as host context, but it is not a gate.
+`smoke.idle_checks` records `load1`, `psi_cpu_avg10`, and the idle decision
+for every poll. The post-smoke `/proc/interrupts` sample is recorded but
 not judged.
 
 Smoke fixture availability (omarchy-ane 50958be): the H14-family chips

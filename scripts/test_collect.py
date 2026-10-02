@@ -20,7 +20,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -2216,13 +2216,94 @@ class OmarchyAneBlockTests(unittest.TestCase):
         self.assertTrue(out["untested"])
         self.assertEqual(len(out["lines"]), 3)
 
+    def test_check_reports_installed_state_for_ready_check(self):
+        rec = {"available": True, "exit_code": 0, "error": None,
+               "stdout": "omarchy-ane-check: ready", "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec):
+            out = cd._omarchy_ane_check(cc.Redactor())
+        self.assertTrue(out["installed"])
+        self.assertEqual(out["status"], "ready")
+    def test_module_name_selects_driver_for_current_soc(self):
+        with patch.object(cd, "_linux_ane_soc", return_value="t6021"), \
+                patch.object(cd.os, "listdir", side_effect=lambda path:
+                    ["ane", "ane_t6021"] if path == "/sys/module" else []), \
+                patch("builtins.open", side_effect=OSError):
+            out = cd._omarchy_ane_module(cc.Redactor())
+        self.assertEqual(out["module"]["name"], "ane_t6021")
+        self.assertEqual(out["modules"], ["ane", "ane_t6021"])
+
+    def test_untested_chip_prints_exact_owner_steps(self):
+        messages = cd._ane_smoke_guidance({
+            "platform": "Linux",
+            "check": {"untested": True, "status": "FAILED",
+                      "lines": ["UNTESTED SoC: t6020. driver not run. "
+                                "Its overlay applies only when key is present"]}})
+        self.assertEqual(messages, [cd.ANE_UNTESTED_STEPS])
+        self.assertEqual(cd.ANE_UNTESTED_STEPS,
+            "To submit a judged row for an untested chip, install "
+            "omarchy-ane-dkms and add that chip's opt-in key from the "
+            "omarchy-ane README table to /etc/omarchy-platform/"
+            "dtb-overlays.opt-in. For T6020, T6022 and T8112, run sudo "
+            "omarchy-ane-firmware-fetch first. Then run sudo "
+            "omarchy-ane-dt apply and reboot. From an omarchy-mlx checkout, "
+            "run python3 scripts/collect_deep.py --ane-smoke --submit. "
+            "The collector runs the smoke when the chip is idle (load < "
+            "0.5, PSI 0); no fixed uptime is required.")
+    def test_busy_smoke_prints_one_retry_hint(self):
+        messages = cd._ane_smoke_guidance({
+            "platform": "Linux",
+            "smoke": {"reason": "not run: busy"}})
+        self.assertEqual(messages, [
+            "Smoke not run: busy. Run again when the machine is idle."])
+
+    def test_idle_gate_requires_load_below_half_and_zero_psi(self):
+        with patch("builtins.open", mock_open(read_data=
+                "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")), \
+                patch.object(cd.os, "getloadavg", return_value=(0.49, 0.2, 0.1)):
+            self.assertTrue(cd._ane_idle_state()["idle"])
+        with patch("builtins.open", mock_open(read_data=
+                "some avg10=0.01 avg60=0.00 avg300=0.00 total=1\n")), \
+                patch.object(cd.os, "getloadavg", return_value=(0.1, 0.1, 0.1)):
+            self.assertFalse(cd._ane_idle_state()["idle"])
+
+    def test_idle_wait_records_each_decision_and_retries_every_five_seconds(self):
+        busy = {"load1": 0.7, "psi_cpu_avg10": 0.2, "idle": False}
+        idle = {"load1": 0.1, "psi_cpu_avg10": 0.0, "idle": True}
+        with patch.object(cd, "_ane_idle_state", side_effect=[busy, idle]), \
+                patch.object(cd.time, "monotonic", side_effect=[0, 0, 5, 5]), \
+                patch.object(cd.time, "sleep") as sleep:
+            result = cd._wait_for_ane_idle(timeout_s=5)
+        self.assertTrue(result["idle"])
+        self.assertEqual(result["checks"], [
+            {"load1": 0.7, "psi_cpu_avg10": 0.2, "idle": False, "waited_s": 0},
+            {"load1": 0.1, "psi_cpu_avg10": 0.0, "idle": True, "waited_s": 5},
+        ])
+        sleep.assert_called_once_with(5)
+
+    def test_idle_timeout_marks_smoke_not_run_busy(self):
+        with patch.object(cd, "_ane_idle_state", return_value={
+                "load1": 0.8, "psi_cpu_avg10": 0.4, "idle": False}), \
+                patch.object(cd.time, "monotonic", return_value=0):
+            result = cd._wait_for_ane_idle(timeout_s=0)
+        self.assertEqual(result["reason"], "not run: busy")
+        self.assertEqual(result["checks"][0]["load1"], 0.8)
+
+    def test_non_ane_fault_candidate_keeps_subsystem_prefix(self):
+        line = "dcp-rtkit: error waiting for ane response"
+        fake = {"exit_code": 0, "error": None, "stdout": line,
+                "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=fake):
+            out = cd._ane_kernel_log(cc.Redactor())
+        self.assertEqual(out["dmesg_faults"], [line])
+
     def test_check_absent_is_unavailable_not_omitted(self):
         with patch.object(cd, "run_tool", return_value={
                 "available": False, "exit_code": None, "error": "not-found",
                 "stdout": "", "stderr": "", "argv": []}):
             out = cd._omarchy_ane_check(cc.Redactor())
         self.assertFalse(out["available"])
-        self.assertIn("not installed", out["unavailable"])
+        self.assertFalse(out["installed"])
+        self.assertIn("not installed", out["reason"])
 
     def test_smoke_without_runner_says_so(self):
         with patch.object(cd.shutil, "which", return_value=None):
@@ -2262,6 +2343,7 @@ class OmarchyAneBlockTests(unittest.TestCase):
                     "argv": []}):
             out = cd._omarchy_ane_smoke(cc.Redactor())
         self.assertTrue(out["available"])
+        self.assertTrue(out["attempted"])
         self.assertEqual(out["errors"], 3)
         self.assertEqual(len(out["sha256"]), 17)
         self.assertIn("differed", out["reason"])
@@ -2275,6 +2357,7 @@ class OmarchyAneBlockTests(unittest.TestCase):
                     "argv": []}):
             out = cd._omarchy_ane_smoke(cc.Redactor())
         self.assertFalse(out["available"])
+        self.assertFalse(out["attempted"])
         self.assertIn("no fixture", out["reason"])
 
     def test_kernel_log_keeps_first_window_and_fault_subset(self):
@@ -2372,7 +2455,8 @@ class AneSectionUnavailableMarks(unittest.TestCase):
     def test_linux_section_runs_read_only_and_reports(self):
         with tempfile.TemporaryDirectory() as ws, \
                 patch.object(cd, "_omarchy_ane_check", return_value={
-                    "available": False,
+                    "available": False, "installed": False,
+                    "reason": "omarchy-ane-check not installed",
                     "unavailable": "omarchy-ane-check not installed"}), \
                 patch.object(cd, "_omarchy_ane_module", return_value={
                     "module": {"available": False,
@@ -2385,9 +2469,12 @@ class AneSectionUnavailableMarks(unittest.TestCase):
                 patch.object(cd, "_ane_interrupts", return_value=[]), \
                 patch.object(cd, "_ane_packages", return_value={
                     "unavailable": "pacman not available"}):
-            out = cd.section_ane(cc.Redactor(), cd.REPO, ws, smoke=False)
+            out = cd.section_ane(cc.Redactor(), cd.REPO, ws, smoke=True)
         self.assertTrue(out["available"])
-        self.assertEqual(out["smoke"], {"requested": False})
+        self.assertFalse(out["installed"])
+        self.assertEqual(out["smoke"]["requested"], True)
+        self.assertEqual(out["smoke"]["attempted"], False)
+        self.assertIn("not installed", out["smoke"]["reason"])
         self.assertIn("not installed", out["check"]["unavailable"])
         self.assertEqual(out["reserved_memory"]["found"], False)
         self.assertFalse(any(v == "written" for v in [1]))
