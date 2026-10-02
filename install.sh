@@ -98,6 +98,14 @@ install_system() {
   local site_dir
   site_dir="$(printf '%s\n' "$venv"/lib/python3.*/site-packages)"
   [[ -d $site_dir ]] || die "no site-packages under $venv"
+
+  # The staged share tree becomes the package. A recipe (or a human) that
+  # swaps ANE bytes into it after the wheel install — a locally rebuilt
+  # libane-strict.so or worker — must fail HERE, not ship a package whose
+  # worker seal refuses its own pin at first transcribe.
+  say "Verifying staged runtime assets against the wheel pin"
+  python3 "$ROOT/scripts/verify_runtime_assets.py" \
+    "$site_dir/mlx/share/mlx-omarchy/parakeet-1"
   local pkg
   for pkg in $SERVE_PACKAGES; do
     [[ -d "$serve_src/$pkg" ]] || die "serve package missing: $serve_src/$pkg"

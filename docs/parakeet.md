@@ -189,6 +189,21 @@ the frozen end-to-end expectations (transcript, token ids, `encoder_hidden`,
 mel, 104 emissions, `cpu_tensor_events` 0). Non-aarch64 wheels install the
 CLIs without the arm64 payloads.
 
+The pin is enforced at every boundary where the bytes could drift, so a
+mismatched tree fails before it ships rather than at first transcribe:
+`scripts/build-wheel.sh` verifies the share tree it packages
+(`scripts/verify_runtime_assets.py`), `install.sh --system` verifies the
+staged venv, the packaging example runs the same check in `check()`
+(`packaging/PKGBUILD.example`), and the worker seal re-authenticates every
+consumed byte at session open. If a rebuild legitimately changes
+`libane-strict.so` (a new pinned `omarchy-ane` commit), update the pin and
+its provenance in the same commit — never package a tree its own pin does
+not name. When the worker refuses a seal mismatch, the CLI prints the
+expected/actual digests plus the diagnosis: the wheel RECORD still matching
+the pin means the installed file was modified after install (reinstall);
+the RECORD matching the actual bytes means the release artifact itself is
+broken (re-cut it).
+
 ```bash
 mlx-omarchy-parakeet download              # fetch + verify the pinned reference (~475 MB) and fixture
 mlx-omarchy-parakeet verify                # re-hash the cache and the fixture

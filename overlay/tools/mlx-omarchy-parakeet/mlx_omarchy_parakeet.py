@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import stat
 import subprocess
 import sys
@@ -297,6 +298,80 @@ def _load_pin() -> dict:
             f"hosts only"
         )
     return json.loads(pin_path.read_text())
+
+
+# The worker's refusal text (mlx-omarchy-ane-worker main.cpp): the sealed
+# image's digest, the file name, and the pin digest it was bound to.
+_SEAL_MISMATCH_RE = re.compile(
+    r"sealed (\S+) sha256 ([0-9a-f]{64}) does not match the pin ([0-9a-f]{64})"
+)
+
+
+def _share_asset_path(share: Path, name: str) -> Path | None:
+    candidates = [share / "libane" / name]
+    bundles = share / "bundles"
+    if bundles.is_dir():
+        candidates += sorted(bundles.glob(f"*/{name}"))
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _wheel_record_sha(name: str) -> str | None:
+    """The sha256 the installed wheel's RECORD still claims for `name`."""
+    import base64
+    from importlib.metadata import files
+
+    try:
+        dist_files = files("mlx") or ()
+    except Exception:  # no wheel metadata (source checkout): unknown
+        return None
+    for entry in dist_files:
+        if not str(entry).endswith(f"/{name}"):
+            continue
+        value = (getattr(entry, "hash", None) or "").split("=", 1)[-1]
+        if not value:
+            return None
+        try:
+            padded = f"{value}{'=' * (-len(value) % 4)}"
+            return base64.urlsafe_b64decode(padded).hex()
+        except Exception:
+            return None
+    return None
+
+
+def _seal_advice(name: str, actual: str, expected: str,
+                 disk_sha: str | None, record_sha: str | None) -> str:
+    if record_sha == expected and disk_sha == actual:
+        return (
+            f"the installed {name} was modified after installation: it now "
+            f"hashes {actual}, while the wheel it was installed from still "
+            f"pins {expected} (the wheel RECORD matches the pin). Reinstall "
+            f"omarchy-mlx (or rebuild the venv from the release wheel); do "
+            f"not edit installed ANE runtime bytes in place, and never "
+            f"package a staged tree its own pin does not name."
+        )
+    if record_sha == actual and disk_sha == actual:
+        return (
+            f"the installed wheel itself shipped {name} {actual} against "
+            f"its own pin {expected}: the release artifact is internally "
+            f"inconsistent. Re-cut the release; the wheel build must run "
+            f"scripts/verify_runtime_assets.py on the share tree it ships."
+        )
+    return (
+        f"the installed {name} hashes {disk_sha or 'unknown'} and the wheel "
+        f"RECORD claims {record_sha or 'unknown'} against pin {expected}: "
+        f"mixed state. Reinstall omarchy-mlx from a verified release wheel."
+    )
+
+
+def _explain_seal_mismatch(message: str) -> str | None:
+    """Turn a worker seal refusal into expected/actual plus the fix."""
+    match = _SEAL_MISMATCH_RE.search(message)
+    if match is None:
+        return None
+    name, actual, expected = match.groups()
+    path = _share_asset_path(_share_dir(), name)
+    disk_sha = _sha256_file(path) if path is not None else None
+    return _seal_advice(name, actual, expected, disk_sha, _wheel_record_sha(name))
 
 
 def _check_ane_capability() -> None:
@@ -1363,4 +1438,11 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (ReferenceError, TranscribeRefusal) as error:
         print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    except Exception as error:  # seal refusals surface as ResidentWorkerError
+        advice = _explain_seal_mismatch(str(error))
+        if advice is None:
+            raise
+        print(f"error: {advice}", file=sys.stderr)
+        print(f"worker refusal: {error}", file=sys.stderr)
         raise SystemExit(1)

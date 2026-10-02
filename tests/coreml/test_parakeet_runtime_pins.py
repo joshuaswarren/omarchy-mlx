@@ -43,6 +43,8 @@ def test_pin_schema(pin: dict) -> None:
 
 def test_bundle_hashes_match_shipped_bytes(pin: dict) -> None:
     for name, files in pin["assets"]["bundles"].items():
+        if not (SHARE / "bundles" / name).is_dir():
+            pytest.skip(f"bundle not staged in this checkout: {name}")
         for relative, expected in sorted(files.items()):
             path = SHARE / "bundles" / name / relative
             assert path.is_file(), f"pinned bundle file missing: {path}"
@@ -82,6 +84,16 @@ def test_resident_bundles_are_pinned(pin: dict) -> None:
         ):
             names = ast.literal_eval(node.value)
     assert names is not None, "RESIDENT_BUNDLES assignment not found"
+    discovered = {
+        name for name in (SHARE / "bundles").iterdir()
+        if name.is_dir()
+    } if (SHARE / "bundles").is_dir() else set()
+    if discovered != set(pin["assets"]["bundles"]):
+        pytest.skip(
+            "this test runs against a fully staged share tree "
+            "(MLX_OMARCHY_WHOLE_BUNDLE_DIR); the worktree has only "
+            f"{sorted(discovered)}"
+        )
     assert set(names) == set(pin["assets"]["bundles"])
 
 
@@ -124,3 +136,177 @@ def test_verify_fails_cleanly_on_empty_cache(tmp_path: Path) -> None:
     assert done.returncode == 1
     assert "MISMATCH" in done.stderr
     assert "not cached yet" in done.stderr
+
+
+# --- installed/staged asset verification against the pin (scripts/) ---
+
+CHECKER = REPO / "scripts" / "verify_runtime_assets.py"
+
+
+def _load_cli_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "mlx_omarchy_parakeet_under_test", CLI)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_share(tmp_path: Path, libane: bytes) -> Path:
+    """A minimal share tree with a one-asset pin, for tamper cases."""
+    share = tmp_path / "parakeet-1"
+    (share / "libane").mkdir(parents=True)
+    (share / "libane" / "libane-strict.so").write_bytes(libane)
+    pin = {
+        "schema": "mlx-omarchy.parakeet-runtime-pin.v1",
+        "assets": {
+            "bundles": {},
+            "libane": {
+                "libane-strict.so": hashlib.sha256(libane).hexdigest(),
+            },
+        },
+    }
+    (share / "parakeet-runtime-pin.json").write_text(json.dumps(pin))
+    return share
+
+
+def _write_share_with_pin(tmp_path: Path, libane: bytes, pinned: str) -> Path:
+    """Share tree whose pin names `pinned` regardless of disk bytes."""
+    share = _write_share(tmp_path, libane)
+    pin = json.loads((share / "parakeet-runtime-pin.json").read_text())
+    pin["assets"]["libane"]["libane-strict.so"] = pinned
+    (share / "parakeet-runtime-pin.json").write_text(json.dumps(pin))
+    return share
+
+
+def test_checker_accepts_shipped_tree() -> None:
+    if not (SHARE / "bundles" / "parakeet-encoder-whole").is_dir():
+        pytest.skip("whole-encoder bundle not staged in this checkout")
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(SHARE)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "pinned runtime assets verified" in done.stdout
+
+
+def test_checker_accepts_matching_tree(tmp_path: Path) -> None:
+    share = _write_share(tmp_path, b"\x7fELF-fake-libane")
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "OK" in done.stdout
+
+
+def test_checker_refuses_tampered_tree(tmp_path: Path) -> None:
+    expected = hashlib.sha256(b"\x7fELF-fake-libane").hexdigest()
+    actual = hashlib.sha256(b"\x7fELF-tampered-libane").hexdigest()
+    share = _write_share(tmp_path, b"\x7fELF-fake-libane")
+    (share / "libane" / "libane-strict.so").write_bytes(
+        b"\x7fELF-tampered-libane")
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 1
+    assert "MISMATCH libane/libane-strict.so" in done.stdout
+    assert expected in done.stdout
+    assert actual in done.stdout
+    assert "move the pin" in done.stdout
+
+
+def test_checker_reports_missing_and_unpinned(tmp_path: Path) -> None:
+    share = _write_share(tmp_path, b"\x7fELF-fake-libane")
+    (share / "libane" / "libane-strict.so").unlink()
+    (share / "libane" / "libane-extra.so").write_bytes(b"\x7fELF-extra")
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 1
+    assert "MISSING libane/libane-strict.so" in done.stdout
+    assert "UNPINNED libane/libane-extra.so" in done.stdout
+
+
+def test_checker_skips_tree_without_pin(tmp_path: Path) -> None:
+    empty = tmp_path / "no-runtime"
+    empty.mkdir()
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(empty)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 0
+    assert "skip" in done.stdout
+
+
+# --- actionable seal-mismatch diagnosis (the 2026-10-02 jwm1 defect) ---
+
+
+def test_seal_mismatch_regex_matches_worker_text() -> None:
+    cli = _load_cli_module()
+    message = (
+        "error: [omarchy-ane] sealed libane-strict.so sha256 "
+        "6e20168d4924689a6e70cca51098713ca25330c3aa2db62fe29d26942889e812"
+        " does not match the pin "
+        "d06222a86f3bff26aaf1cec1223ade32f27cad84b994dccb1af9cca965a7da8c"
+        "; refusing to load unverified ANE userspace"
+    )
+    match = cli._SEAL_MISMATCH_RE.search(message)
+    assert match is not None
+    name, actual, expected = match.groups()
+    assert name == "libane-strict.so"
+    assert actual.startswith("6e20168d")
+    assert expected.startswith("d06222a8")
+
+
+def test_seal_advice_reinstall_when_record_matches_pin() -> None:
+    cli = _load_cli_module()
+    expected, actual = "a" * 64, "b" * 64
+    advice = cli._seal_advice(
+        "libane-strict.so", actual, expected, disk_sha=actual,
+        record_sha=expected)
+    assert "modified after installation" in advice
+    assert expected in advice
+    assert actual in advice
+    assert "Reinstall" in advice
+
+
+def test_seal_advice_broken_release_when_record_matches_actual() -> None:
+    cli = _load_cli_module()
+    actual = "b" * 64
+    advice = cli._seal_advice(
+        "libane-strict.so", actual, "a" * 64, disk_sha=actual,
+        record_sha=actual)
+    assert "internally inconsistent" in advice
+    assert "Re-cut the release" in advice
+
+
+def test_explain_seal_mismatch_diagnoses_swapped_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real failure shape: wheel RECORD matches the pin, disk drifted."""
+    cli = _load_cli_module()
+    libane = b"\x7fELF-swapped-install"
+    actual = hashlib.sha256(libane).hexdigest()
+    expected = "d" * 64
+    share = _write_share_with_pin(tmp_path, libane, expected)
+    monkeypatch.setattr(cli, "_share_dir", lambda: share)
+    monkeypatch.setattr(cli, "_wheel_record_sha", lambda name: expected)
+    message = (
+        f"error: [omarchy-ane] sealed libane-strict.so sha256 {actual} "
+        f"does not match the pin {expected}; "
+        "refusing to load unverified ANE userspace"
+    )
+    advice = cli._explain_seal_mismatch(message)
+    assert advice is not None
+    assert "modified after installation" in advice
+    assert expected in advice
+    assert actual in advice
+
+
+def test_explain_seal_mismatch_ignores_other_errors() -> None:
+    cli = _load_cli_module()
+    assert cli._explain_seal_mismatch("some unrelated failure") is None

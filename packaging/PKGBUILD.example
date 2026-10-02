@@ -47,14 +47,24 @@ build() {
 }
 
 check() {
-  cd "mlx-omarchy-$pkgver"
+  cd "omarchy-mlx-$pkgver"
   # Import smoke in the sandbox; the GPU matmul smoke needs a device and
   # stays a post-install step on qualified hardware. numpy and
   # google.protobuf must be present in the venv: the Parakeet transcribe
   # path imports them (mlx-omarchy-parakeet), and a venv missing them
   # fails only at first transcribe.
-  "stage/usr/lib/omarchy-mlx/venv/bin/python" \
+  "$srcdir/stage/usr/lib/omarchy-mlx/venv/bin/python" \
     -c 'import mlx.core, mlx_omarchy_paths, mlx_omarchy_serve, numpy, google.protobuf'
+
+  # ANE runtime integrity: the staged share tree must still match the
+  # wheel's own parakeet-runtime-pin.json. A stage whose libane-strict.so
+  # or worker was swapped after install.sh (e.g. a locally rebuilt ANE
+  # surface for a driver-ABI arm) passes the import smoke and then bricks
+  # the product: the worker seal refuses the pin mismatch at first
+  # transcribe (omarchy-mlx 0.7.10-1 on jwm1, 2026-10-02). Fail the
+  # package build here instead.
+  python3 scripts/verify_runtime_assets.py \
+    "$srcdir/stage/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx/share/mlx-omarchy/parakeet-1"
 }
 
 package() {

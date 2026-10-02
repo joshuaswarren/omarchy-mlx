@@ -87,6 +87,14 @@ echo "== stage whole-encoder bundle =="
 source "$ROOT/packaging/stage-whole-bundle.sh"
 stage_whole_bundle "$WORK_DIR"
 
+# The share tree ships verbatim into the wheel, so a dirty working copy
+# (e.g. a locally rebuilt libane-strict.so that never moved the pin) would
+# become a published wheel whose own worker seal refuses it. Fail here,
+# at the build, with expected/actual digests.
+echo "== verify pinned runtime assets =="
+python3 "$ROOT/scripts/verify_runtime_assets.py" \
+  "$WORK_DIR/mlx/tools/mlx-omarchy-parakeet/share/mlx-omarchy/parakeet-1"
+
 echo "== build venv ($VENV_DIR) =="
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   python3 -m venv --system-site-packages "$VENV_DIR"
