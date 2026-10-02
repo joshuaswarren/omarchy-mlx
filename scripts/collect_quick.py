@@ -87,7 +87,7 @@ def _devicetree(redactor):
     out = {"model": None, "compatible": None}
     model = _read_dt_file("model")
     if model:
-        out["model"] = redactor.apply(model.strip("\x00\n"))
+        out["model"] = redactor.apply(model.strip("\x00\n"), field="model")
     compat = _read_dt_file("compatible")
     if compat:
         parts = [p for p in compat.split("\x00") if p]
@@ -537,7 +537,7 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
             break
     model = _read_dt_file("model", base)
     boot = {
-        "model": redactor.apply(model.strip("\x00\n")[:256])
+        "model": redactor.apply(model.strip("\x00\n")[:256], field="model")
         if model else None,
         "compatible": (_dt_strings(
             _read_dt_raw("compatible", base) or b"") or [])[:8] or None,

@@ -52,6 +52,38 @@ PROBE_STREAM_CHARS = 2_000_000
 GENERIC_HOST_PIECES = frozenset(
     ("host", "localhost", "local", "linux", "omarchy", "mac", "lan"))
 
+# Payload fields whose values come from the device tree or IORegistry,
+# not from the user: marketing names, chip/board identifiers, machine
+# models. Restricted aliases (below) never redact inside these fields —
+# `Apple MacBook Air (13-inch, M3, 2024)` must survive a host called
+# `m3-air` or `neo` (#27 follow-up). Every other PII kind is still
+# redacted inside them.
+EXEMPT_NAME_FIELDS = frozenset((
+    "model", "chip", "chip_name", "board", "board_id", "board_name",
+    "compatible", "product", "product_name", "machine_model",
+    "machine_name", "model_identifier", "hw_model", "marketing_name",
+))
+
+# Marketing-name words: an alias equal to one of these — or shorter
+# than 6 characters, or a tNNNN chip id — is RESTRICTED: whole-word
+# matches in free text only (logs, paths, streams), never the name
+# fields above. The full hostname and long derived aliases are never
+# restricted: they still never leak anywhere.
+MODEL_TOKENS = frozenset((
+    "m1", "m2", "m3", "m4", "m5", "m6", "pro", "max", "ultra", "air",
+    "neo", "mac", "book", "macbook", "studio", "mini", "imac", "apple",
+))
+_MODEL_CHIP_RE = re.compile(r"t\d{4}")
+
+
+def _restricted_alias(alias):
+    """True when `alias` may only redact free text, never the name
+    fields: short aliases and marketing-name words are exactly the
+    tokens those fields are made of."""
+    lowered = alias.lower()
+    return (len(lowered) < 6 or lowered in MODEL_TOKENS
+            or bool(_MODEL_CHIP_RE.fullmatch(lowered)))
+
 
 def host_aliases(hostname):
     """Short names someone plausibly derives from `hostname`.
@@ -127,6 +159,16 @@ class Redactor:
         self._note("ipv4")
         return "[redacted-ip4]"
 
+    def _alias_sub(self, match, field=None, restricted=False, kind="hostname_alias"):
+        # A restricted alias (short, or a marketing-name word) never
+        # touches the device-tree/IORegistry name fields; everything
+        # else about it behaves like any other alias.
+        if restricted and isinstance(field, str) \
+                and field.lower() in EXEMPT_NAME_FIELDS:
+            return match.group(0)
+        self._note(kind)
+        return "[host]"
+
     def _build_rules(self):
         rules = []
 
@@ -184,23 +226,38 @@ class Redactor:
             ))
         rx(r"(?<![\w.-])/(?:home|Users)/[^/\s:\"'@]+", "home_path", "[home]")
         # Live host and user names, last, so path placeholders above win.
+        # A short or model-word hostname is RESTRICTED: it never
+        # redacts inside the device-tree/IORegistry name fields, or
+        # `Apple MacBook Neo` dies to a host called `neo`.
         if self.hostname and len(self.hostname) >= 2:
+            hostname_restricted = _restricted_alias(self.hostname)
+
+            def host_fn(match, field=None, _r=hostname_restricted):
+                return self._alias_sub(match, field, _r, kind="hostname")
+            host_fn._needs_field = True
             rules.append((
                 re.compile(r"(?<![\w.-])" + re.escape(self.hostname) +
                            r"(?![\w.-])", re.IGNORECASE),
-                self._replace("hostname", "[host]"),
+                host_fn,
             ))
         # Derived short names survive whole-token redaction inside unit
         # files and paths (`/etc/systemd/system/<alias>-ane.service`,
         # quoted verbatim by the journal). Match them as a substring of
         # a token: the neighbor on each side must be non-alphanumeric,
         # so hex runs (`0xdeadbeef` against a `dead`-ish alias) and
-        # longer words are never corrupted. Longest first.
+        # longer words are never corrupted. Longest first. Restricted
+        # aliases (short, or a marketing-name word) are field-aware:
+        # never the name fields.
         for alias in host_aliases(self.hostname):
+            alias_restricted = _restricted_alias(alias)
+
+            def alias_fn(match, field=None, _r=alias_restricted):
+                return self._alias_sub(match, field, _r)
+            alias_fn._needs_field = True
             rules.append((
                 re.compile(r"(?<![A-Za-z0-9])" + re.escape(alias) +
                            r"(?![A-Za-z0-9])", re.IGNORECASE),
-                self._replace("hostname_alias", "[host]"),
+                alias_fn,
             ))
         # The user name is PII inside a hyphenated token too
         # (`/tmp/steve-build`, `build-steve/out`), so `-` is not a boundary
@@ -224,7 +281,7 @@ class Redactor:
             return {key: self.apply_value(item, field=key)
                     for key, item in value.items()}
         if isinstance(value, list):
-            return [self.apply_value(item) for item in value]
+            return [self.apply_value(item, field=field) for item in value]
         return value
 
     def apply(self, text, *, field=None):
@@ -233,6 +290,8 @@ class Redactor:
         for pattern, repl in self._rules:
             if repl == self._ipv4_sub:
                 text = pattern.sub(lambda match: self._ipv4_sub(match, field), text)
+            elif getattr(repl, "_needs_field", False):
+                text = pattern.sub(lambda match: repl(match, field), text)
             else:
                 text = pattern.sub(repl, text)
         return text

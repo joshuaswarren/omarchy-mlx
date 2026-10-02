@@ -51,52 +51,131 @@ const IBOOT_VALUE_RE = /^iboot-\d+(?:\.\d+)+$/i;
 const IBOOT_BARE_IPV4_RE = /^iboot-\d{1,3}(?:\.\d{1,3}){3}$/i;
 // Inside the free-text boot_chain field only explicit `ibootN=`
 // assignments are exempt — never a bare `iBoot-…` token, which can
-// carry a disguised address (iBoot-10151. + RFC1918 octets, assembly
-// elided to keep the privacy hook happy).
+// carry a disguised address (assembly of the example elided for the
+// privacy hook).
 const BOOT_CHAIN_TOKEN_RE = /\biboot\d+=(iboot-\d+(?:\.\d+)+)(?=\s|$)/gi;
+
+// Marketing-name words: a host alias equal to one of these — or
+// shorter than 6 characters, or a tNNNN chip id — is RESTRICTED to
+// free text (the exempt name fields are blanked for its pass), never
+// the device-tree/IORegistry names. Long aliases are unrestricted:
+// they still match everywhere, name fields included.
+const MODEL_TOKENS: Record<string, true> = {
+  m1: true,
+  m2: true,
+  m3: true,
+  m4: true,
+  m5: true,
+  m6: true,
+  pro: true,
+  max: true,
+  ultra: true,
+  air: true,
+  neo: true,
+  mac: true,
+  book: true,
+  macbook: true,
+  studio: true,
+  mini: true,
+  imac: true,
+  apple: true,
+};
+const MODEL_CHIP_RE = /^t\d{4}$/;
+
+// Mirror of the collector's EXEMPT_NAME_FIELDS: device-tree /
+// IORegistry marketing names and identifiers. These values do not come
+// from the user, so restricted aliases never match inside them.
+export const EXEMPT_NAME_FIELDS: Record<string, true> = {
+  model: true,
+  chip: true,
+  "chip_name": true,
+  board: true,
+  "board_id": true,
+  "board_name": true,
+  compatible: true,
+  product: true,
+  "product_name": true,
+  "machine_model": true,
+  "machine_name": true,
+  "model_identifier": true,
+  "hw_model": true,
+  "marketing_name": true,
+};
 
 function isExemptIbootValue(value: string): boolean {
   return IBOOT_VALUE_RE.test(value) && !IBOOT_BARE_IPV4_RE.test(value);
 }
 
-// Copy of `payload` where firmware-version values that the IPv4 rule
-// would misread as addresses are blanked out (same length, so the
-// scanned text keeps its shape). Key-scoped: exact firmware keys at
-// any depth, plus explicit ibootN= assignments inside boot_chain.
-export function blankFirmwareVersions<T>(payload: T): T {
+function restrictedAlias(alias: string): boolean {
+  const lower = alias.toLowerCase();
+  return lower.length < 6 || MODEL_TOKENS[lower] === true ||
+    MODEL_CHIP_RE.test(lower);
+}
+
+// Copy of `payload` with selected string values blanked to same-length
+// whitespace, so the scanned text keeps its shape:
+//   firmware — blank exempt iBoot version values (both scans);
+//   names    — additionally blank the exempt name fields (the
+//              restricted-alias pass).
+function blankRegions(payload: unknown, names: boolean): unknown {
   const clone = structuredClone(payload);
-  const walk = (node: unknown): void => {
+  const walk = (node: unknown, key: string | null): void => {
     if (Array.isArray(node)) {
-      node.forEach(walk);
+      node.forEach((item) => walk(item, key));
       return;
     }
     if (node === null || typeof node !== "object") return;
-    for (const [key, value] of Object.entries(node)) {
+    for (const [childKey, value] of Object.entries(node)) {
       if (typeof value !== "string") {
-        walk(value);
+        walk(value, childKey);
         continue;
       }
-      if (FIRMWARE_VERSION_KEYS[key] && isExemptIbootValue(value)) {
-        (node as Record<string, unknown>)[key] = " ".repeat(value.length);
-      } else if (key === "boot_chain") {
-        (node as Record<string, unknown>)[key] = value.replace(
+      if (FIRMWARE_VERSION_KEYS[childKey] && isExemptIbootValue(value)) {
+        (node as Record<string, unknown>)[childKey] = " ".repeat(value.length);
+      } else if (key === null && childKey === "boot_chain") {
+        (node as Record<string, unknown>)[childKey] = value.replace(
           BOOT_CHAIN_TOKEN_RE,
           (token) => " ".repeat(token.length),
         );
+      } else if (names && EXEMPT_NAME_FIELDS[childKey]) {
+        (node as Record<string, unknown>)[childKey] = " ".repeat(value.length);
       }
     }
   };
-  walk(clone);
+  walk(clone, null);
   return clone;
 }
 
-// The entry point used for submissions: key-scoped firmware exemptions,
-// then the ordinary scan.
+// The entry point used for submissions. Two scans, merged by kind:
+//   A — unrestricted aliases only, over the whole (firmware-blanked)
+//       payload: long aliases match everywhere, name fields included,
+//       and every non-alias kind is covered exactly once.
+//   B — restricted aliases only, with the exempt name fields blanked:
+//       short and model-word aliases match free text only. B is
+//       folded in as hostname_alias hits; its other kinds duplicate A.
 export function scanPiiPayload(
   payload: unknown,
   hostAliases: string[] = [],
 ): PiiKinds | null {
-  return scanPii(JSON.stringify(blankFirmwareVersions(payload)), hostAliases);
+  const aliases = parseHostAliases(
+    Array.isArray(hostAliases) ? hostAliases.join(",") : null,
+  );
+  const unrestricted = aliases.filter((a) => !restrictedAlias(a));
+  const restricted = aliases.filter(restrictedAlias);
+  const firmwareBlanked = blankRegions(payload, false);
+  const merged = scanPii(JSON.stringify(firmwareBlanked), unrestricted);
+  const restrictedScan = scanPii(
+    JSON.stringify(blankRegions(firmwareBlanked, true)),
+    restricted,
+  );
+  if (restrictedScan?.hostname_alias) {
+    const mergedHits = merged?.hostname_alias ?? 0;
+    const total = mergedHits + restrictedScan.hostname_alias;
+    if (total > 0) {
+      return { ...(merged ?? {}), hostname_alias: total };
+    }
+  }
+  return merged;
 }
 
 // Header carrying the collector redactor's derived short host names

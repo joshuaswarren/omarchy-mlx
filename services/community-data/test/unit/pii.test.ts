@@ -174,6 +174,27 @@ describe("server-side PII scan", () => {
     expect(scanPiiPayload({ boot_chain: assigned })).toEqual({ ipv4: 1 });
   });
 
+  test("short host aliases keep marketing names intact", () => {
+    // `macbook` — the derived fragment that mangled the M2 Pro row —
+    // inside the exempt model field: never a rejection, the name comes
+    // from the device tree.
+    expect(scanPiiPayload({
+      model: "Apple MacBook Pro (14-inch, M2 Pro, 2023)",
+    }, ["macbook"])).toBeNull();
+    // Free text: whole-word alias is still the host, still refused.
+    expect(scanPiiPayload({
+      dmesg: ["Oct  1 macbook systemd[1]: Started."],
+    }, ["macbook"])).toHaveProperty("hostname_alias");
+    // Long aliases never leak anywhere, not even in name fields.
+    expect(scanPiiPayload({
+      model: "joshuas desk setup",
+    }, ["joshuas"])).toHaveProperty("hostname_alias");
+    // Other PII kinds inside a name field are still caught.
+    expect(scanPiiPayload({
+      model: "uuid 123e4567-e89b-12d3-a456-426614174000",
+    })).toHaveProperty("uuid");
+  });
+
   test("host alias inside a systemd unit path is refused", () => {
     const line =
       '"dmesg":["Oct  1 21:58:41 [host] systemd[1]: ' +

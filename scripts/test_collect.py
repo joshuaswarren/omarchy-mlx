@@ -1889,6 +1889,63 @@ class VersionQuadSurvivesRedaction(unittest.TestCase):
         self.assertEqual(red.counts.get("ipv4"), 1)
 
 
+class AliasNeverCorruptsModelNames(unittest.TestCase):
+    """Restricted aliases (short, model words, chip ids) redact free
+    text only; the device-tree/IORegistry name fields survive. The
+    2026-10-02 rows shipped `Apple MacBook [host]` because a full
+    hostname of `neo` (or the derived `macbook` fragment) redacted
+    inside the marketing name."""
+
+    def test_short_hostname_keeps_model_intact(self):
+        red = cc.Redactor(hostname="neo", username="joshua")
+        out = red.apply_value({
+            "model": "Apple MacBook Neo",
+            "chip": "apple,t8140",
+        })
+        self.assertEqual(out["model"], "Apple MacBook Neo")
+        self.assertEqual(out["chip"], "apple,t8140")
+        self.assertEqual(red.counts.get("hostname", 0), 0)
+        # Free text: whole-word `neo` is still the host, still redacted.
+        self.assertIn("[host]", red.apply("Oct  1 neo systemd[1]: Started."))
+        self.assertEqual(red.counts.get("hostname"), 1)
+
+    def test_m3_host_keeps_marketing_model(self):
+        red = cc.Redactor(hostname="m3", username="joshua")
+        out = red.apply_value({
+            "model": "Apple MacBook Air (13-inch, M3, 2024)",
+            "dmesg": "Oct  1 21:58:41 m3 kernel: ANE probed",
+        })
+        self.assertEqual(out["model"], "Apple MacBook Air (13-inch, M3, 2024)")
+        self.assertIn("[host] kernel", out["dmesg"])
+
+    def test_fragment_alias_macbook_keeps_model_and_compatible(self):
+        # hostname `macbook-air` derives the fragment alias `macbook` —
+        # the exact word marketing names are made of (the 2026-10-02
+        # M2 Pro row shipped `Apple [host] Pro` from this).
+        red = cc.Redactor(hostname="macbook-air", username="joshua")
+        self.assertIn("macbook", cc.host_aliases("macbook-air"))
+        out = red.apply_value({
+            "model": "Apple MacBook Pro (14-inch, M2 Pro, 2023)",
+            "compatible": ["apple,t6020", "macbook-board"],
+        })
+        self.assertEqual(out["model"], "Apple MacBook Pro (14-inch, M2 Pro, 2023)")
+        self.assertEqual(out["compatible"], ["apple,t6020", "macbook-board"])
+        self.assertIn("[host]", red.apply("the macbook chassis temp"))
+
+    def test_long_alias_still_redacts_everywhere(self):
+        red = cc.Redactor(hostname="joshuas-studio", username="joshua")
+        self.assertIn("joshuas", cc.host_aliases("joshuas-studio"))
+        out = red.apply_value({"model": "joshuas desk setup"})
+        self.assertIn("[host]", out["model"])
+
+    def test_chip_shaped_alias_is_restricted(self):
+        red = cc.Redactor(hostname="t8122-lab", username="joshua")
+        self.assertIn("t8122", cc.host_aliases("t8122-lab"))
+        out = red.apply_value({"model": "t8122 reference board"})
+        self.assertEqual(out["model"], "t8122 reference board")
+        self.assertIn("[host]", red.apply("t8122 booted"))
+
+
 class PrimaryGpuSelection(unittest.TestCase):
     """Honeykrisp must win over llvmpipe.
 
