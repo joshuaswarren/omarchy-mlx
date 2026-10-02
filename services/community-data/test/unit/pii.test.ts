@@ -65,6 +65,48 @@ describe("server-side PII scan", () => {
     expect(scanPii('"kernel":"6.9.1-asahi"')).toBeNull();
   });
 
+  test("iBoot firmware versions in both deep summary fields pass", () => {
+    expect(scanPii(JSON.stringify({
+      boot_chain: "iboot2=iBoot-10151.140.19.700.2",
+      ane_port_detail: { devicetree: { boot: { chosen: {
+        "asahi,iboot2-version": "iBoot-10151.140.19.700.2",
+        "asahi,system-fw-version": "iBoot-20712.1.2.0.0",
+      } } } },
+    }))).toBeNull();
+  });
+
+  test("firmware exception does not hide addresses or CIDR suffixes", () => {
+    for (const value of [
+      "iBoot-10151.140.19.700.2 gateway 198.51.100.7",
+      "iBoot-198.51.100.7",
+      "iBoot-20712.1.2.0.0/8",
+      "driver version: 198.51.100.7",
+      "iBoot-1.2.3.4.198.51.100.7",
+      "iBoot-999.1.2.198.51.100.7",
+      "iBoot-1.198.51.100.7",
+      "iBoot-999.1.2.3.4.198.51.100.7",
+      "prefixiBoot-10151.140.19.700.2",
+      "iBoot-10151.192.168.1.5",
+      "iBoot-20712.198.51.100.7",
+    ]) {
+      expect(scanPii(JSON.stringify({ boot_chain: value }))).toHaveProperty("ipv4");
+    }
+  });
+
+  test("firmware recognition accepts consistent case variants", () => {
+    for (const prefix of ["iBoot", "IBOOT", "Iboot", "iboot"]) {
+      expect(scanPii(JSON.stringify({ boot_chain:
+        `${prefix}-10151.140.19.700.2` }))).toBeNull();
+    }
+  });
+
+  test("distant firmware tokens do not exempt later addresses", () => {
+    const value = "iBoot-10151.140.19.700.2 " + "x".repeat(1024) +
+      " 198.51.100.7";
+    expect(scanPii(JSON.stringify({ boot_chain: value }))).toEqual({ ipv4: 1 });
+    expect(scanPii("198.51.100.7 ".repeat(20000))).toEqual({ ipv4: 50 });
+  });
+
   test("host alias inside a systemd unit path is refused", () => {
     const line =
       '"dmesg":["Oct  1 21:58:41 [host] systemd[1]: ' +

@@ -32,6 +32,12 @@ const PII_RE = new RegExp(
   "i",
 );
 const MAX_REPORTED_HITS = 50;
+// Observed collector firmware values only. Shape-based exceptions can
+// disguise an address as version components, even with a large build ID.
+const IBOOT_VERSIONS = new Set([
+  "iboot-10151.140.19.700.2",
+  "iboot-20712.1.2.0.0",
+]);
 
 // Header carrying the collector redactor's derived short host names
 // (X-MLX-Host-Aliases). Request-only: scanned against the summary,
@@ -77,6 +83,29 @@ export function scanPii(text: string, hostAliases: string[] = []): PiiKinds | nu
     const groups = match.groups ?? {};
     const kind = Object.keys(groups).find((k) => groups[k] !== undefined);
     if (kind === undefined) continue;
+    if (kind === "ipv4") {
+      // iBoot firmware uses long dotted version chains. The IPv4 regex
+      // can match a four-component suffix (10151.140.19.700.2), which
+      // the collector intentionally preserves. Recognize only the known
+      // firmware values above. Unrecognized versions remain subject to
+      // the PII scan until evidence establishes another safe exception.
+      // Bound both search and parsing so each candidate costs at most
+      // 256 characters, including on a payload full of dotted quads.
+      const windowStart = Math.max(0, match.index - 128);
+      const window = text.slice(windowStart, match.index + 128);
+      const start = window.toLowerCase().lastIndexOf("iboot-", match.index - windowStart);
+      if (start >= 0) {
+        const version = /^iBoot-(\d{1,8})(?:\.\d{1,3}){4}(?![\w./-])/i.exec(
+          window.slice(start),
+        );
+        const previous = text[windowStart + start - 1];
+        if (version && IBOOT_VERSIONS.has(version[0].toLowerCase()) &&
+            (!previous || !/[\w.-]/.test(previous)) &&
+            windowStart + start + version[0].length >= match.index + match[0].length) {
+          continue;
+        }
+      }
+    }
     kinds[kind] = (kinds[kind] ?? 0) + 1;
     hits++;
     if (hits >= MAX_REPORTED_HITS) break;
