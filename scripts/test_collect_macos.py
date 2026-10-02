@@ -715,5 +715,62 @@ class AneProbeCodeTests(unittest.TestCase):
                          "0x8e08c000")
 
 
+class AneDumpStreamCapTests(unittest.TestCase):
+    """The deep dump probe's stdout IS the JSON payload: the generic
+    200,000-char stream cap truncated it mid-JSON on a real T6002
+    (213,659 chars) and probe_ane_dump reported bad-dump-json, so the
+    macOS ane block could never publish (2026-10-02, Mac13,2)."""
+
+    def _oversized_stdout(self):
+        marker = "ANE-DUMP-CAP-MARKER-0123456789"
+        detail = {
+            "available": True,
+            "nodes": [{"path": "/arm-io/ane0", "name": "ane0",
+                       "compatible": ["ane,t8103"],
+                       "props": {"reg": {"hex": "00" * 64},
+                                 "name": "ANE0-" + "x" * 16}}],
+            "aic": {"path": "/arm-io/aic", "props": {}},
+            "classes": ["H11ANEIn"], "kexts": [], "firmware": [],
+            "tunables": {}, "raw_text": marker + "y" * 300_000,
+            "truncated": [], "stripped": [],
+        }
+        line = json.dumps(detail, sort_keys=True)
+        # The marker rides inside raw_text: the transport cap is the
+        # only thing under test, and it must not clip real payload.
+        return line, marker
+
+    def test_oversized_dump_json_survives_capture(self):
+        stdout, marker = self._oversized_stdout()
+        self.assertGreater(len(stdout), cc.MAX_STREAM_CHARS)
+        with patch.object(cm, "run_python_probe", return_value={
+                "available": True, "exit_code": 0, "error": None,
+                "stderr": "", "stdout": stdout}) as run:
+            result = cm.probe_ane_dump(cc.Redactor())
+        self.assertTrue(result["available"])
+        self.assertEqual(result["dump"]["nodes"][0]["name"], "ane0")
+        self.assertIn(marker, json.dumps(result["dump"]))
+        self.assertGreaterEqual(run.call_args.kwargs.get("max_chars", 0),
+                                len(stdout))
+
+    def test_dump_probe_gets_probe_stream_headroom(self):
+        with patch.object(cm, "run_python_probe", return_value={
+                "available": True, "exit_code": 0, "error": None,
+                "stderr": "", "stdout": json.dumps({"available": True})}) \
+                as run:
+            cm.probe_ane_dump(cc.Redactor())
+        self.assertEqual(run.call_args.kwargs.get("max_chars"),
+                         cc.PROBE_STREAM_CHARS)
+
+    def test_generic_tool_capture_keeps_default_cap(self):
+        long_line = "z" * (cc.MAX_STREAM_CHARS + 10)
+        with patch.object(cc.shutil, "which", return_value="/bin/x"), \
+                patch.object(cc.subprocess, "run", return_value=Mock(
+                    returncode=0, stdout=long_line, stderr="")):
+            record = cc.run_tool(["x"], cc.Redactor(), label="cap-probe")
+        self.assertIn("[truncated:", record["stdout"])
+        self.assertLess(len(record["stdout"]),
+                        cc.MAX_STREAM_CHARS + 200)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -5,7 +5,8 @@ import json
 import platform
 
 import bench_matrix
-from collect_common import run_tool, run_python_probe
+from collect_common import (run_tool, run_python_probe,
+                            PROBE_STREAM_CHARS)
 
 
 def not_applicable():
@@ -1016,7 +1017,8 @@ def probe_ane_dump(redactor):
     deep collector stores it as an archive member.
     """
     rec = run_python_probe(ANE_MACOS_DUMP_PROBE, redactor,
-                           label="ane-dt dump macos", timeout=240)
+                           label="ane-dt dump macos", timeout=240,
+                           max_chars=PROBE_STREAM_CHARS)
     if rec["exit_code"] != 0 or not rec["stdout"].strip():
         return {"available": False, "error": rec["error"]
                 or rec["stderr"][:256] or "dump probe exit %s"
