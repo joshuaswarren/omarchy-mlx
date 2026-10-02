@@ -35,6 +35,7 @@ import stat
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 _TOOLS = str(Path(__file__).resolve().parents[1])
@@ -473,44 +474,8 @@ def _transcribe(args) -> int:
     return 0 if passed else 1
 
 
-def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
-                  share, scratch_root, out, pinned, prior) -> tuple:
-    """mel -> ANE islands -> TDT -> transcript, then the checks.
-
-    `pinned` selects the golden contract (per-item sha equality against
-    pin["e2e"]); any other audio takes the general contract (finite,
-    on-device, mask-consistent, deterministic across repeats). Returns
-    (passed, token_ids, transcript).
-    """
-    import numpy as np
-
-    import mlx.core as mx
-    from importlib.metadata import distribution
-
-    from coreml.parakeet_tdt import DecoderStep, JointDecision, tdt_decode
-    from coreml.tokenizer import ParakeetTokenizer
-    from coreml.vulkan_decoder import load_decoder
-    from coreml.vulkan_decoder_step import pack_step_weights, run_step
-    from coreml.vulkan_mel import extract_chunk_features, trace_snapshot
-    from coreml import vulkan_encoder as encoder_module
-
-    mx.set_default_device(mx.gpu)
-    # A larger buffer cache keeps the TDT chain's per-step temporaries (and the
-    # pre-warm outputs) from being re-created and re-mapped every step: on jwm1
-    # tdt_decode 137.8 -> 133.4 ms, and without it the pre-warm's cached outputs
-    # made TDT ~10 ms slower. MLX_OMARCHY_PK_CACHE_MB overrides (0 keeps the default).
-    _cache_mb = int(os.environ.get("MLX_OMARCHY_PK_CACHE_MB", "1024"))
-    if _cache_mb > 0:
-        mx.set_cache_limit(_cache_mb << 20)
-
-    contract = lock.numerical_contract
-    if contract is None:
-        raise TranscribeRefusal("the reference lock has no frozen numerical contract")
-    tokenizer_sha = next(
-        item.sha256 for item in lock.files if item.path == "tokenizer.json"
-    )
-    expected = pin["e2e"]
-
+def _stage_recorder() -> tuple:
+    """Named wall-clock/GPU-counter stage wrapper plus its record list."""
     stages_records: list[dict] = []
 
     def stage(name: str, snapshot, work):
@@ -527,7 +492,13 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         })
         return result
 
-    # ------------------------------------------------------------- 1. audio
+    return stage, stages_records
+
+
+def _load_audio(lock, fixture) -> tuple:
+    """Decode the fixture to a 16 kHz mono float32 waveform on the GPU."""
+    import mlx.core as mx
+
     def stage_audio():
         pcm, rate, decoder_name = _decode_audio(fixture)
         if rate != lock.audio.sample_rate:
@@ -538,21 +509,26 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             waveform = mx.array(pcm).astype(mx.float32) / 32768.0
         mx.eval(waveform)
         return waveform, pcm.size, decoder_name
+    return stage_audio()
 
-    waveform, sample_count, decoder_name = stage("audio_load", trace_snapshot,
-                                                 stage_audio)
-    warm = _GpuWarm(mx)
-    warm.start()
 
-    # ------------------------------------------- 2. chunks (30 s windows)
+def _plan_chunks(sample_count: int) -> tuple[list[int], bool]:
+    """30 s window starts over the decoded stream; single-chunk shortcut."""
     from coreml.vulkan_mel import CHUNK_SAMPLES
+
 
     if sample_count <= 0:
         raise TranscribeRefusal("audio decodes to zero samples")
     chunk_starts = list(range(0, int(sample_count), CHUNK_SAMPLES))
-    single = len(chunk_starts) == 1
 
-    # ----------------------------------------------------------- 3. encoder
+    return chunk_starts, len(chunk_starts) == 1
+
+
+def _open_encoder(args, pin, lock, cache_dir, worker, share,
+                  scratch_root) -> tuple:
+    """ANE island, verified encoder source, and the MIL runner over them."""
+    from coreml import vulkan_encoder as encoder_module
+
     deadline_ms = int(args.deadline_ms)
     island = encoder_module.AneIsland(
         worker, share / "libane" / "libane-strict.so",
@@ -566,55 +542,65 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         source / "model.mil", source / "model-root", island,
     )
 
-    # ------------------------------------------- 4. decoder, joint, control
-    decoder = stage(
-        "decoder_load", trace_snapshot,
-        lambda: load_decoder(cache_dir / "decoder.mlpackage"),
-    )
-    fused_packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
-    warm.stop()
-    import numpy as np
+    return island, source, runner
 
-    from coreml.vulkan_decoder_step import _JOINT_OUT, _VOCAB, _WINDOW_SLOTS
 
-    counts = {"decoder_calls": 0, "joint_calls": 0}
-    decoder_ns = 0
-    joint_ns = 0
-    frame_holder = [0]
-    enc_holder = [None]
-    valid_frames = 0
-    fused = {"frame": None, "state": None, "tok": None, "dur": None}
-    # Speculative joint window: the decoder step's submit also evaluates the
-    # joint head for the next `spec_frames` frames against the new state,
-    # so frame-entry joints (blank runs, max-symbol roll-over) resolve from
-    # already-synced logits without another submit.
-    spec = {"base": None, "state": None, "host": None}
-    # Diagnostic knob (MLX_OMARCHY_TDT_SPEC=off): disable the speculative
-    # joint window so every joint is evaluated fresh against its own state
-    # — the same semantics as the macOS reference GreedyTDTDecoder. Default
-    # remains the speculative path; this exists to bisect numeric
-    # divergences, not as a supported mode.
-    spec_frames = 0 if _env_off("MLX_OMARCHY_TDT_SPEC") else _WINDOW_SLOTS
+class _TdtControl:
+    """Mutable TDT control state shared by the decoder/joint callbacks.
 
-    def _begin_chunk(encoder_hidden):
-        enc_holder[0] = encoder_hidden
-        frame_holder[0] = 0
-        fused.update(frame=None, state=None, tok=None, dur=None)
-        spec.update(base=None, state=None, host=None)
-        return int(encoder_hidden.shape[1])
+    Holds the speculative-joint window, the fused decoder-step outputs,
+    and the honest host-callback counters the run report consumes.
+    """
 
-    def _spec_decision(frame_index, decoder_state):
-        host = spec["host"]
-        if host is None or spec["state"] is not decoder_state:
+    def __init__(self, fused_packed, scratch_root):
+        from coreml.vulkan_decoder_step import _WINDOW_SLOTS
+
+        self.fused_packed = fused_packed
+        self.scratch_root = scratch_root
+        self.counts = {"decoder_calls": 0, "joint_calls": 0}
+        self.decoder_ns = 0
+        self.joint_ns = 0
+        self.frame_holder = [0]
+        self.enc_holder = [None]
+        self.valid_frames = 0
+        self.fused = {"frame": None, "state": None, "tok": None, "dur": None}
+        # Speculative joint window: the decoder step's submit also evaluates the
+        # joint head for the next `spec_frames` frames against the new state,
+        # so frame-entry joints (blank runs, max-symbol roll-over) resolve from
+        # already-synced logits without another submit.
+        self.spec = {"base": None, "state": None, "host": None}
+        # Diagnostic knob (MLX_OMARCHY_TDT_SPEC=off): disable the speculative
+        # joint window so every joint is evaluated fresh against its own state
+        # — the same semantics as the macOS reference GreedyTDTDecoder. Default
+        # remains the speculative path; this exists to bisect numeric
+        # divergences, not as a supported mode.
+        self.spec_frames = 0 if _env_off("MLX_OMARCHY_TDT_SPEC") else _WINDOW_SLOTS
+
+    def begin_chunk(self, encoder_hidden):
+        self.enc_holder[0] = encoder_hidden
+        self.frame_holder[0] = 0
+        self.fused.update(frame=None, state=None, tok=None, dur=None)
+        self.spec.update(base=None, state=None, host=None)
+        self.valid_frames = int(encoder_hidden.shape[1])
+        return self.valid_frames
+
+    def _spec_decision(self, frame_index, decoder_state):
+        import numpy as np
+
+        from coreml.parakeet_tdt import JointDecision
+        from coreml.vulkan_decoder_step import _JOINT_OUT, _VOCAB
+
+        host = self.spec["host"]
+        if host is None or self.spec["state"] is not decoder_state:
             return None
-        offset = frame_index - spec["base"]
+        offset = frame_index - self.spec["base"]
         if not 0 <= offset < host.shape[0]:
             return None
         row = host[offset]
         tok_row = row[:_VOCAB]
         if os.environ.get("MLX_OMARCHY_JOINT_MARGINS"):
             top2 = np.sort(tok_row)[-2:]
-            with open(scratch_root / "joint-margins.log", "a") as fh:
+            with open(self.scratch_root / "joint-margins.log", "a") as fh:
                 fh.write(json.dumps({"frame": frame_index,
                                      "margin": float(top2[1] - top2[0]),
                                      "pick": int(np.argmax(tok_row)),
@@ -625,57 +611,96 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             int(np.argmax(row[_VOCAB:_JOINT_OUT])),
         )
 
-    def decoder_callback(token_id, current_hidden, current_cell):
-        nonlocal decoder_ns
-        counts["decoder_calls"] += 1
+    def decoder_callback(self, token_id, current_hidden, current_cell):
+        import numpy as np
+
+        import mlx.core as mx
+        from coreml.parakeet_tdt import DecoderStep
+        from coreml.vulkan_decoder_step import run_step
+
+        self.counts["decoder_calls"] += 1
         started = time.monotonic_ns()
         state_out, tok, dur, _, _, window = run_step(
-            fused_packed, current_hidden, current_cell, token_id,
-            enc_holder[0], frame_holder[0],
-            spec_frames=spec_frames, spec_valid=valid_frames,
+            self.fused_packed, current_hidden, current_cell, token_id,
+            self.enc_holder[0], self.frame_holder[0],
+            spec_frames=self.spec_frames, spec_valid=self.valid_frames,
         )
         mx.eval(state_out)
-        decoder_ns += time.monotonic_ns() - started
+        self.decoder_ns += time.monotonic_ns() - started
         dec_state = state_out[0:640].reshape(1, 640)
-        fused["frame"] = frame_holder[0]
-        fused["state"] = dec_state
-        fused["tok"] = tok
-        fused["dur"] = dur
-        spec["base"] = frame_holder[0] + 1
-        spec["state"] = dec_state
+        self.fused["frame"] = self.frame_holder[0]
+        self.fused["state"] = dec_state
+        self.fused["tok"] = tok
+        self.fused["dur"] = dur
+        self.spec["base"] = self.frame_holder[0] + 1
+        self.spec["state"] = dec_state
         # Materialize the window on the host now: the per-row slice in
         # _spec_decision would otherwise be a lazy GPU copy paying its own
         # dispatch + submit per frame-entry joint.
-        spec["host"] = np.asarray(window) if window is not None else None
+        self.spec["host"] = np.asarray(window) if window is not None else None
         return DecoderStep(
             dec_state,
             state_out[640:1920].reshape(2, 1, 640),
             state_out[1920:3200].reshape(2, 1, 640),
         )
 
-    def joint_callback(frame_index, decoder_state):
-        nonlocal joint_ns
-        counts["joint_calls"] += 1
-        frame_holder[0] = frame_index
+    def joint_callback(self, frame_index, decoder_state):
+        import numpy as np
+
+        import mlx.core as mx
+        from coreml.parakeet_tdt import JointDecision
+        from coreml.vulkan_decoder_step import run_step
+
+        self.counts["joint_calls"] += 1
+        self.frame_holder[0] = frame_index
         started = time.monotonic_ns()
-        if fused["frame"] == frame_index and fused["state"] is decoder_state:
-            joint_ns += time.monotonic_ns() - started
-            return JointDecision(fused["tok"], fused["dur"])
-        decision = _spec_decision(frame_index, decoder_state)
+        if self.fused["frame"] == frame_index and self.fused["state"] is decoder_state:
+            self.joint_ns += time.monotonic_ns() - started
+            return JointDecision(self.fused["tok"], self.fused["dur"])
+        decision = self._spec_decision(frame_index, decoder_state)
         if decision is not None:
-            joint_ns += time.monotonic_ns() - started
+            self.joint_ns += time.monotonic_ns() - started
             return decision
         state_out, tok, dur, _, _, window = run_step(
-            fused_packed, None, None, 0, enc_holder[0], frame_index,
+            self.fused_packed, None, None, 0, self.enc_holder[0], frame_index,
             skip_lstm=True, dec_in=decoder_state,
-            spec_frames=spec_frames, spec_valid=valid_frames,
+            spec_frames=self.spec_frames, spec_valid=self.valid_frames,
         )
         mx.eval(state_out)
-        joint_ns += time.monotonic_ns() - started
-        spec["base"] = frame_index + 1
-        spec["state"] = decoder_state
-        spec["host"] = np.asarray(window) if window is not None else None
+        self.joint_ns += time.monotonic_ns() - started
+        self.spec["base"] = frame_index + 1
+        self.spec["state"] = decoder_state
+        self.spec["host"] = np.asarray(window) if window is not None else None
         return JointDecision(tok, dur)
+
+@dataclass
+class _ChunkDecode:
+    """Per-chunk decoder accumulators and final geometry."""
+
+    mel_parts: list
+    hidden_parts: list
+    mask_parts: list
+    token_ids: list
+    frame_indices: list
+    all_durations: list
+    prev_state: tuple
+    decode_path: str
+    fallback_reason: str
+    chain_final: int | None
+    chain_slots: int | None
+    frame_base: int
+    last_mask_valid: int
+    last_window: int
+
+
+def _decode_chunks(island, runner, control, stage, lock, waveform,
+                   chunk_starts, single, pinned) -> _ChunkDecode:
+    """mel -> encoder -> TDT per 30 s chunk; closes the island when done."""
+    import numpy as np
+
+    import mlx.core as mx
+    from coreml.parakeet_tdt import tdt_decode
+    from coreml.vulkan_mel import CHUNK_SAMPLES, extract_chunk_features, trace_snapshot
 
     def stage_mel(chunk_wave):
         def work():
@@ -697,16 +722,15 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
 
     def stage_tdt(hidden, cell, chunk_hidden, chunk_valid_frames):
         return lambda: tdt_decode(
-            packed=fused_packed,
+            packed=control.fused_packed,
             encoder=chunk_hidden,
             valid_frames=chunk_valid_frames,
             config=lock.tdt,
             initial_hidden=hidden,
             initial_cell=cell,
-            run_decoder=decoder_callback,
-            run_joint=joint_callback,
+            run_decoder=control.decoder_callback,
+            run_joint=control.joint_callback,
         )
-
     mel_parts: list = []
     hidden_parts: list = []
     mask_parts: list = []
@@ -761,7 +785,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             last_window = window
             decode_hidden = (encoder_hidden if decode_frames == window
                              else encoder_hidden[:, :decode_frames, :])
-            valid_frames = _begin_chunk(decode_hidden)
+            control.begin_chunk(decode_hidden)
 
             # The CoreML reference (GreedyTDTDecoder.decode, called once per
             # chunk by Pipeline.swift) zeroes hidden/cell at the start of
@@ -796,39 +820,73 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                 mask_parts.append(encoder_mask)
     finally:
         island.close()
+    return _ChunkDecode(
+        mel_parts=mel_parts,
+        hidden_parts=hidden_parts,
+        mask_parts=mask_parts,
+        token_ids=token_ids,
+        frame_indices=frame_indices,
+        all_durations=all_durations,
+        prev_state=prev_state,
+        decode_path=decode_path,
+        fallback_reason=fallback_reason,
+        chain_final=chain_final,
+        chain_slots=chain_slots,
+        frame_base=frame_base,
+        last_mask_valid=last_mask_valid,
+        last_window=last_window,
+    )
+
+
+def _collect_tdt(chunk: _ChunkDecode, single: bool) -> tuple:
+    """Flatten the chunk accumulators into one TdtOutput plus host arrays."""
+    import numpy as np
 
     from coreml.parakeet_tdt import TdtOutput
 
+
     tdt = TdtOutput(
-        token_ids=token_ids,
-        frame_indices=frame_indices,
-        durations=all_durations,
-        hidden=prev_state[0],
-        cell=prev_state[1],
-        decode_path=decode_path,
-        fallback_reason=fallback_reason,
-        final_frame=chain_final,
-        slots_used=chain_slots,
+        token_ids=chunk.token_ids,
+        frame_indices=chunk.frame_indices,
+        durations=chunk.all_durations,
+        hidden=chunk.prev_state[0],
+        cell=chunk.prev_state[1],
+        decode_path=chunk.decode_path,
+        fallback_reason=chunk.fallback_reason,
+        final_frame=chunk.chain_final,
+        slots_used=chunk.chain_slots,
     )
-    mel_host = (np.asarray(mel_parts[0]) if single else
-                np.concatenate([np.asarray(p) for p in mel_parts], axis=0))
-    hidden_host = (np.asarray(hidden_parts[0]).astype(np.float32) if single else
-                   np.concatenate([np.asarray(p) for p in hidden_parts],
+    mel_host = (np.asarray(chunk.mel_parts[0]) if single else
+                np.concatenate([np.asarray(p) for p in chunk.mel_parts], axis=0))
+    hidden_host = (np.asarray(chunk.hidden_parts[0]).astype(np.float32) if single else
+                   np.concatenate([np.asarray(p) for p in chunk.hidden_parts],
                                   axis=1).astype(np.float32))
-    mask_host = (np.asarray(mask_parts[0]).astype(np.int32) if single else
-                 np.concatenate([np.asarray(p) for p in mask_parts],
+    mask_host = (np.asarray(chunk.mask_parts[0]).astype(np.int32) if single else
+                 np.concatenate([np.asarray(p) for p in chunk.mask_parts],
                                 axis=1).astype(np.int32))
 
-    # ----------------------------------------------------------- 5. tokenizer
+    return tdt, mel_host, hidden_host, mask_host
+
+
+def _detokenize(cache_dir, tokenizer_sha, token_ids) -> tuple:
+    """Load the pinned tokenizer and decode the token stream."""
+    from coreml.tokenizer import ParakeetTokenizer
+
     def stage_tokenizer():
         tokenizer = ParakeetTokenizer.load(
             cache_dir / "tokenizer.json", expected_sha256=tokenizer_sha
         )
-        return tokenizer, tokenizer.decode(tdt.token_ids)
+        return tokenizer, tokenizer.decode(token_ids)
 
-    tokenizer, transcript = stage("detokenize", trace_snapshot, stage_tokenizer)
+    return stage_tokenizer()
 
-    # ------------------------------------------------------- 6. pin checks
+
+def _pin_checks(pinned, expected, contract, tdt, transcript, mel_host,
+                hidden_host, mask_host, runner, island, chunk, lock,
+                chunk_count, prior) -> list:
+    """Golden per-item sha checks, or the general-audio contract."""
+    import numpy as np
+
     checks = []
 
     def check(name: str, passed: bool, detail) -> None:
@@ -889,7 +947,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                "inf": int(np.isinf(hidden_host).sum())})
         monotone = all(a <= b for a, b in
                        zip(tdt.frame_indices, tdt.frame_indices[1:]))
-        in_window = all(0 <= f < frame_base for f in tdt.frame_indices)
+        in_window = all(0 <= f < chunk.frame_base for f in tdt.frame_indices)
         check("frame_stream",
               len(actual_tokens) == len(tdt.frame_indices)
               == len(tdt.durations) and monotone and in_window,
@@ -897,18 +955,18 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                "frames": len(tdt.frame_indices),
                "durations": len(tdt.durations),
                "monotone": monotone, "in_window": in_window,
-               "decoded_frames": frame_base, "chunks": len(chunk_starts)})
+               "decoded_frames": chunk.frame_base, "chunks": chunk_count})
         all_valid = all(
             int(np.asarray(m).sum()) == int(np.asarray(m).shape[-1])
-            for m in mask_parts)
+            for m in chunk.mask_parts)
         check("decode_geometry",
-              0 < frame_base <= last_window * len(chunk_starts)
-              and frame_base == sum(
+              0 < chunk.frame_base <= chunk.last_window * chunk_count
+              and chunk.frame_base == sum(
                   min(int(np.asarray(m).sum()), int(m.shape[-1]))
-                  for m in mask_parts),
-              {"decoded_frames": frame_base,
-               "mask_valid": last_mask_valid,
-               "window": last_window,
+                  for m in chunk.mask_parts),
+              {"decoded_frames": chunk.frame_base,
+               "mask_valid": chunk.last_mask_valid,
+               "window": chunk.last_window,
                # Both implementations (Linux mel frontend and the macOS
                # CoreML reference) emit an all-valid mask by design, so the
                # decoded frame count equals the window count; the mask is
@@ -924,6 +982,14 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                   {"tokens_equal": actual_tokens == prior[0],
                    "transcript_equal": transcript == prior[1]})
 
+    return checks
+
+
+def _write_outputs(out, waveform, mel_host, hidden_host, mask_host,
+                   transcript, actual_tokens, tdt) -> None:
+    """Write the transcript artifacts exactly as the contract pins them."""
+    import numpy as np
+
     np.save(out / "waveform.npy", np.asarray(waveform))
     np.save(out / "mel.npy", mel_host)
     np.save(out / "encoder_hidden.npy", hidden_host)
@@ -934,6 +1000,17 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         "frame_indices": list(tdt.frame_indices),
         "durations": list(tdt.durations),
     }, indent=2) + "\n")
+
+
+def _golden_report(pin, passed, pinned, lock, fixture, audio_sha, sample_count,
+                   decoder_name, chunk_count, source, tokenizer,
+                   stages_records, control, runner, tdt, chunk, island, worker,
+                   share, checks, transcript) -> dict:
+    """Build the transcribe report document (caller writes it)."""
+    import mlx.core as mx
+    from importlib.metadata import distribution
+
+    from coreml.vulkan_mel import CHUNK_SAMPLES
 
     libmlx = Path(distribution("mlx-omarchy").locate_file("mlx/lib/libmlx.so"))
     passed = all(item["pass"] for item in checks)
@@ -962,7 +1039,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                 "samples": int(sample_count),
                 "sample_rate": lock.audio.sample_rate,
                 "decoder": decoder_name,
-                "chunks": len(chunk_starts),
+                "chunks": chunk_count,
                 "chunk_samples": CHUNK_SAMPLES,
                 "pinned_fixture": pinned,
             },
@@ -981,8 +1058,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         "timing": {
             "total_pipeline_ms": round(
                 sum(r["wall_ns"] for r in stages_records) / 1e6, 3),
-            "decoder_total_ms": round(decoder_ns / 1e6, 3),
-            "joint_total_ms": round(joint_ns / 1e6, 3),
+            "decoder_total_ms": round(control.decoder_ns / 1e6, 3),
+            "joint_total_ms": round(control.joint_ns / 1e6, 3),
         },
         "execution": {
             "ane_mode": True,
@@ -991,8 +1068,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
             "encoder_ane_ops": runner.ane_ops,
             "encoder_layers": runner.layers,
             "cpu_tensor_events": runner.cpu_tensor_events,
-            "decoder_calls": counts["decoder_calls"],
-            "joint_calls": counts["joint_calls"],
+            "decoder_calls": control.counts["decoder_calls"],
+            "joint_calls": control.counts["joint_calls"],
             # Scope honesty: these two counters increment only in the host
             # control-loop callbacks. On the default gpu-chain decode the
             # whole loop runs device-side and the honest work counters are
@@ -1003,9 +1080,9 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                                      == "host" else "device-chain"),
             "chain_final_frame": tdt.final_frame,
             "chain_slots_used": tdt.slots_used,
-            "valid_encoder_frames": frame_base,
-            "encoder_mask_valid_frames": last_mask_valid,
-            "encoder_window_frames": last_window,
+            "valid_encoder_frames": chunk.frame_base,
+            "encoder_mask_valid_frames": chunk.last_mask_valid,
+            "encoder_window_frames": chunk.last_window,
             "control": tdt.decode_path,
             "tdt_fallback_reason": tdt.fallback_reason,
         },
@@ -1039,6 +1116,86 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         "verification": {"pin_schema": pin["schema"], "checks": checks},
         "transcript": transcript,
     }
+    return report
+
+
+def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
+                  share, scratch_root, out, pinned, prior) -> tuple:
+    """mel -> ANE islands -> TDT -> transcript, then the checks.
+
+    `pinned` selects the golden contract (per-item sha equality against
+    pin["e2e"]); any other audio takes the general contract (finite,
+    on-device, mask-consistent, deterministic across repeats). Returns
+    (passed, token_ids, transcript).
+    """
+    import mlx.core as mx
+    from coreml.vulkan_decoder import load_decoder
+    from coreml.vulkan_decoder_step import pack_step_weights
+    from coreml.vulkan_mel import trace_snapshot
+
+    mx.set_default_device(mx.gpu)
+    # A larger buffer cache keeps the TDT chain's per-step temporaries (and the
+    # pre-warm outputs) from being re-created and re-mapped every step: on jwm1
+    # tdt_decode 137.8 -> 133.4 ms, and without it the pre-warm's cached outputs
+    # made TDT ~10 ms slower. MLX_OMARCHY_PK_CACHE_MB overrides (0 keeps the default).
+    _cache_mb = int(os.environ.get("MLX_OMARCHY_PK_CACHE_MB", "1024"))
+    if _cache_mb > 0:
+        mx.set_cache_limit(_cache_mb << 20)
+
+    contract = lock.numerical_contract
+    if contract is None:
+        raise TranscribeRefusal("the reference lock has no frozen numerical contract")
+    tokenizer_sha = next(
+        item.sha256 for item in lock.files if item.path == "tokenizer.json"
+    )
+    expected = pin["e2e"]
+
+    stage, stages_records = _stage_recorder()
+
+    # ------------------------------------------------------------- 1. audio
+    waveform, sample_count, decoder_name = stage(
+        "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
+    warm = _GpuWarm(mx)
+    warm.start()
+
+    # ------------------------------------------- 2. chunks (30 s windows)
+    chunk_starts, single = _plan_chunks(sample_count)
+
+    # ----------------------------------------------------------- 3. encoder
+    island, source, runner = _open_encoder(
+        args, pin, lock, cache_dir, worker, share, scratch_root)
+
+    # ------------------------------------------- 4. decoder, joint, control
+    decoder = stage(
+        "decoder_load", trace_snapshot,
+        lambda: load_decoder(cache_dir / "decoder.mlpackage"),
+    )
+    fused_packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
+    warm.stop()
+    control = _TdtControl(fused_packed, scratch_root)
+
+    chunk = _decode_chunks(island, runner, control, stage, lock, waveform,
+                           chunk_starts, single, pinned)
+    tdt, mel_host, hidden_host, mask_host = _collect_tdt(chunk, single)
+
+    # ----------------------------------------------------------- 5. tokenizer
+    tokenizer, transcript = stage(
+        "detokenize", trace_snapshot,
+        lambda: _detokenize(cache_dir, tokenizer_sha, tdt.token_ids))
+
+    # ------------------------------------------------------- 6. pin checks
+    checks = _pin_checks(pinned, expected, contract, tdt, transcript,
+                         mel_host, hidden_host, mask_host, runner, island,
+                         chunk, lock, len(chunk_starts), prior)
+
+    actual_tokens = list(tdt.token_ids)
+    _write_outputs(out, waveform, mel_host, hidden_host, mask_host,
+                   transcript, actual_tokens, tdt)
+    passed = all(item["pass"] for item in checks)
+    report = _golden_report(
+        pin, passed, pinned, lock, fixture, audio_sha, sample_count, decoder_name,
+        len(chunk_starts), source, tokenizer, stages_records, control,
+        runner, tdt, chunk, island, worker, share, checks, transcript)
     (out / "transcribe-report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps({
