@@ -70,6 +70,21 @@ def check_pinned(server_module) -> str:
 
 EXPECTED_TOKENIZE_SIGNATURE = ("self", "tokenizer", "request", "args")
 
+TTFT_TRACE_ENV = "MLX_OMARCHY_TTFT_TRACE"
+_ttft_armed = {"first_chunk": False}
+
+
+def _ttft_trace(event: str, **fields) -> None:
+    """One JSON line per request boundary when MLX_OMARCHY_TTFT_TRACE=1.
+
+    Timestamps are time.monotonic() seconds, comparable across processes on
+    one host; the assistant's ttft-phases.jsonl uses the same clock."""
+    if os.environ.get(TTFT_TRACE_ENV) != "1":
+        return
+    fields["event"] = event
+    fields["t"] = time.monotonic()
+    print("[ttft] " + json.dumps(fields), flush=True)
+
 
 def install(server_module, limit: int) -> None:
     generator = server_module.ResponseGenerator
@@ -116,6 +131,8 @@ def install(server_module, limit: int) -> None:
                 f"({max_tokens}) exceeds the admitted context budget of {limit}; "
                 "lower the prompt or max_tokens"
             )
+        _ttft_armed["first_chunk"] = True
+        _ttft_trace("tokenized", prompt=len(prompt), max_tokens=max_tokens)
         return result
 
     generator._tokenize = capped
@@ -301,7 +318,11 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
         def next(self, *args, **kwargs):
             gate._before_step()
             try:
-                return self._real.next(*args, **kwargs)
+                result = self._real.next(*args, **kwargs)
+                if _ttft_armed["first_chunk"]:
+                    _ttft_armed["first_chunk"] = False
+                    _ttft_trace("first_chunk")
+                return result
             finally:
                 gate._after_step()
 
