@@ -1,5 +1,6 @@
 #!/bin/sh
 # pre-commit hook: block staged private content (see scripts/privacy_check.py).
+id="$HOME/.config/git/identity-check"; if [ -x "$id" ]; then "$id" || exit 1; fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 CHECK="$HERE/../privacy_check.py"
 REPO=$(git rev-parse --show-toplevel) || exit 1
