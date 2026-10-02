@@ -95,7 +95,21 @@ predictor + decoder compute per segment, which the conv fix already
 accelerates where it can. The serve path's per-segment cost is the
 real synthesis compute, not an artifact.
 
-### Serve-path worker (the real Synthesis class, NO gdb — Main's repeated
+### Whole-sentence probe: one-infer IS faster than the iterated pipeline
+`whole_sentence_probe.py` on the same wheel, same process:
+
+| path | wall | audio | notes |
+|---|---|---|---|
+| A-iterated (upstream pipeline) | 3.313 s | 3.975 s | pipeline yields 1 Result |
+| B-whole-sentence (1 concatenated-phoneme infer) | 2.839 s | 3.975 s | 14% faster |
+| corr(A, B) | 0.9894 | | fp32 accumulation-order difference |
+
+One-infer is 0.47 s faster (14%) because it eliminates the per-segment
+generator overhead (yield/resume, Python generator frame switching, the
+mx.compile call overhead for each sub-segment). The conv speedup is
+already inside both measurements.
+
+### Serve-path worker (the real Synthesis class, NO gdb)
 request to confirm the numbers aren't artifacts of ptrace overhead)
 Re-run timing under load 0.00–0.41, PSI cpu avg10 = 0.00, no gdb.
 Streaming RTF is the only metric that makes sense for a streaming
