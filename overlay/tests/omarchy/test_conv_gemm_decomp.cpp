@@ -82,8 +82,12 @@ TEST_CASE("conv1d gemm decomposition matches cpu reference") {
     array x(xd.begin(), Shape{1, c.L, c.ci}, float32);
     array w(wd.begin(), Shape{c.co, c.k, c.ci}, float32);
 
-    array got = conv1d(x, w, /*stride=*/1, /*padding=*/c.pad, Stream(gpu));
-    array want = conv1d(x, w, /*stride=*/1, /*padding=*/c.pad, Stream(cpu));
+    array got = conv1d(
+        x, w, /*stride=*/1, /*padding=*/c.pad, /*dilation=*/1, /*groups=*/1,
+        Stream(gpu));
+    array want = conv1d(
+        x, w, /*stride=*/1, /*padding=*/c.pad, /*dilation=*/1, /*groups=*/1,
+        Stream(cpu));
     auto got_v = flat(got, Stream(gpu));
     auto want_v = flat(want, Stream(cpu));
     CHECK_EQ(got_v.size(), want_v.size());
@@ -128,9 +132,13 @@ TEST_CASE("conv1d gemm decomposition agrees with direct gpu path") {
   array w(wd.begin(), Shape{co, k, ci}, float32);
   // Same batch-0 rows through both paths.
   auto x1 = slice(x, {0, 0, 0}, {1, L, ci}, Stream(gpu));
-  array fast = conv1d(x1, w, 1, pad, Stream(gpu));
+  array fast =
+      conv1d(x1, w, 1, pad, /*dilation=*/1, /*groups=*/1, Stream(gpu));
   array ref = slice(
-      conv1d(x, w, 1, pad, Stream(gpu)), {0, 0, 0}, {1, L, co}, Stream(gpu));
+      conv1d(x, w, 1, pad, /*dilation=*/1, /*groups=*/1, Stream(gpu)),
+      {0, 0, 0},
+      {1, L, co},
+      Stream(gpu));
   auto got = flat(fast, Stream(gpu));
   auto want = flat(ref, Stream(gpu));
   double max_err = 0.0;
