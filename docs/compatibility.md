@@ -710,14 +710,14 @@ A Supported row must link every applicable record.
   and GQA-shape dk are fd-clean on the same runs. Under investigation;
   the defect lives in the composed backward chain (standalone matmul
   repros are clean at the exact operand configs).
-- Fused SDPA VJP: gated off for all shapes (2088e1c6a) pending
-  dq/dk/dv finite-difference parity at rep=1, 2, 4 on real hardware.
-  The GQA gate predates this (db30ab6ec). dk at rep=1 is
-  hardware-proven correct against host finite differences (M2 G14X,
-  three-way with the exact doctest seeds); dv at rep=1 (post
-  operand-fix) and dk/dv at rep>1 (the GQA reduce/matmul shortfall)
-  remain unproven. No user is served fused SDPA training gradients
-  until the parity gate flips.
+- Fused SDPA VJP: serves rep=1 (H == Hk) on the float dtypes -
+  dq/dk/dv finite-difference-proven on M2 G14X real hardware
+  (b4152c19; the fd legs in omarchy_fast_ops_tests measure the fused
+  path). GQA (rep > 1) stays composed: the fused dk/dv run ~0.7x short
+  of host finite differences at rep=2 (GQA reduce/matmul shortfall,
+  under investigation). Composed SDPA backward dk has its own known
+  defect at rep=1 shapes 5x7/4x4/6x9 (may_fail fd doctest, see above)
+  - GQA rep>1 training hits that path until either fix lands.
 - Fused gated-delta-net (GDN) VJP: serving GQA shapes, fd-verified
   against the composed reference on M2 G14X (doctest "fused gdn vjp
   matches the composed reference at GQA shapes").
