@@ -53,8 +53,16 @@ def post_turn(runtime, cid, body, home):
     def _status():
         try:
             snap = call("GET", "/api/status", runtime=runtime)
-            return {"setup": (snap.get("setup") or {}).get("state"),
-                    "children": [(c.get("role"), c.get("alive")) for c in (snap.get("children") or [])]}
+            convs = call("GET", "/api/conversations", runtime=runtime)
+            out = {"setup": (snap.get("setup") or {}).get("state"),
+                   "conversations": convs if isinstance(convs, list) else convs}
+            if isinstance(convs, list):
+                for conv in convs[:3]:
+                    rec = call("GET", f"/api/conversations/{conv['id']}", runtime=runtime)
+                    heads = [(m.get("role"), m.get("status"),
+                              (m.get("content") or "")[:60]) for m in rec.get("messages") or []]
+                    out.setdefault("messages", []).append({conv["id"][:8]: heads})
+            return out
         except Exception as error:
             return {"status_error": str(error)[:120]}
     try:
