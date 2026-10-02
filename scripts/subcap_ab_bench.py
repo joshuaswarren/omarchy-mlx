@@ -36,36 +36,57 @@ from pathlib import Path
 
 
 DECODE_DRIVER = """
-import os, sys, time, argparse
+import os, sys, time, argparse, hashlib, json
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 import mlx.core as mx
-from mlx_lm import load, generate
+from mlx_lm import load
+from mlx_lm.generate import stream_generate
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
-ap.add_argument("--tokens", type=int, required=True)
-ap.add_argument("--prefill-tokens", type=int, required=True)
+ap.add_argument("--mode", choices=["decode", "prefill"], required=True)
+ap.add_argument("--tokens", type=int, default=64)
+ap.add_argument("--prefill-tokens", type=int, default=256)
 ap.add_argument("--prompt", required=True)
 args = ap.parse_args()
-# Warmup: ensure compile + caches populated
-_ = generate(model, tok, prompt="hello", max_tokens=4, verbose=False) if False else None
 model, tok = load(args.model)
-_ = generate(model, tok, prompt="hello", max_tokens=4, verbose=False)
-t0 = time.monotonic()
-resp = generate(
-    model, tok,
-    prompt=args.prompt,
-    max_tokens=args.tokens,
-    prefill_step_size=args.prefill_tokens,
-    verbose=False,
-)
-t1 = time.monotonic()
-ids = [int(getattr(r, "token", r)) for r in resp]
-# Greedy identity digest (matches bench_decode.py).
-import hashlib
-h = hashlib.sha256()
-h.update(",".join(str(i) for i in ids).encode("ascii"))
-print(f"decode_tps={args.tokens / (t1 - t0):.4f} tokens={args.tokens} "
-      f"wall={t1 - t0:.4f}s ids_sha256_16={h.hexdigest()[:16]}", flush=True)
+
+
+def ids_digest(ids):
+    h = hashlib.sha256()
+    h.update(",".join(str(int(i)) for i in ids).encode("ascii"))
+    return h.hexdigest()[:16]
+
+
+if args.mode == "decode":
+    # Warmup: compile paths before the timed pass.
+    for _ in stream_generate(model, tok, prompt="hi", max_tokens=2):
+        pass
+    ids = []
+    t0 = time.monotonic()
+    for r in stream_generate(model, tok, prompt=args.prompt,
+                             max_tokens=args.tokens):
+        ids.append(int(r.token))
+    t1 = time.monotonic()
+    # Rate over inter-token gaps (n-1): the first gap includes the
+    # prompt prefill in mlx-lm's generate loop, identically in both
+    # arms, so the medians stay comparable.
+    tps = (len(ids) - 1) / (t1 - t0)
+    print(json.dumps({"mode": "decode", "tps": tps, "n": len(ids),
+                      "ids_sha256_16": ids_digest(ids),
+                      "mx_version": mx.__version__}))
+else:
+    words = args.prompt.split()
+    rep = max(1, args.prefill_tokens // max(1, len(words)))
+    long_prompt = " ".join(words * rep)
+    n_tok = len(tok.encode(long_prompt))
+    t0 = time.monotonic()
+    for _ in stream_generate(model, tok, prompt=long_prompt, max_tokens=1):
+        pass
+    t1 = time.monotonic()
+    print(json.dumps({"mode": "prefill", "prompt_tokens": n_tok,
+                      "wall_s": t1 - t0, "tps": n_tok / (t1 - t0),
+                      "mx_version": mx.__version__}))
 """
 
 
@@ -93,32 +114,31 @@ def stamp_of(python):
     return out.stdout.strip()
 
 
-def run_pass(python, model, prompt, tokens, prefill_tokens):
+def run_pass(python, model, prompt, tokens, prefill_tokens, mode):
     script = Path(tempfile.gettempdir()) / "subcap_ab_driver.py"
     script.write_text(DECODE_DRIVER)
     env = os.environ.copy()
-    # Force the cap off (or default) by clearing env overrides where needed.
+    # Keep the arm's env clean: BATCH_WORK must come from the wheel's
+    # baked default; QUEUE_PRIORITY from the arm's setting.
     env.pop("MLX_OMARCHY_BATCH_WORK", None)
-    env.pop("MLX_OMARCHY_PROFILE_PATH", None)
+    env.pop("MLX_OMARCHY_GPU_PROFILE", None)
     out = subprocess.run(
         [python, str(script),
          "--model", model,
+          "--mode", mode,
           "--tokens", str(tokens),
           "--prefill-tokens", str(prefill_tokens),
           "--prompt", prompt],
-        env=env, capture_output=True, text=True, timeout=600)
+        env=env, capture_output=True, text=True, timeout=900)
     if out.returncode != 0:
         print("stderr:", out.stderr[-1500:])
-        raise RuntimeError("driver failed")
+        raise RuntimeError(f"driver failed ({mode})")
     for line in out.stdout.splitlines():
-        if line.startswith("decode_tps="):
-            parts = line.split()
-            d = {}
-            for p in parts[1:]:
-                k, v = p.split("=", 1)
-                d[k] = v
-            return d
-    raise RuntimeError(f"no decode_tps line; stdout={out.stdout}")
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError(f"no json line; stdout={out.stdout[-800:]}")
 
 
 def main():
@@ -149,28 +169,43 @@ def main():
     results = []
     for pair in range(args.pairs):
         for arm, python in (("A", pa), ("B", pb)):
-            d = run_pass(python, args.model, args.prompt, args.tokens,
-                         args.prefill_tokens)
-            d["arm"] = arm
-            d["pair"] = pair
-            results.append(d)
-            print(f"pair={pair} arm={arm} {d}")
+            for mode in ("decode", "prefill"):
+                d = run_pass(python, args.model, args.prompt, args.tokens,
+                             args.prefill_tokens, mode)
+                d["arm"] = arm
+                d["pair"] = pair
+                results.append(d)
+                print(f"pair={pair} arm={arm} {mode} {json.dumps(d)}",
+                      flush=True)
     with open(args.out, "w") as f:
         json.dump(results, f, indent=2)
 
-    a_tps = [float(r["decode_tps"]) for r in results if r["arm"] == "A"]
-    b_tps = [float(r["decode_tps"]) for r in results if r["arm"] == "B"]
-    a_ids = [r["ids_sha256_16"] for r in results if r["arm"] == "A"]
-    b_ids = [r["ids_sha256_16"] for r in results if r["arm"] == "B"]
+    def medians(mode, key):
+        vals = {arm: [float(r[key]) for r in results
+                      if r["arm"] == arm and r["mode"] == mode]
+                for arm in ("A", "B")}
+        return {arm: statistics.median(v) for arm, v in vals.items() if v}
+
+    dec = medians("decode", "tps")
+    pre = medians("prefill", "tps")
+    a_ids = {r["ids_sha256_16"] for r in results
+             if r["arm"] == "A" and r["mode"] == "decode"}
+    b_ids = {r["ids_sha256_16"] for r in results
+             if r["arm"] == "B" and r["mode"] == "decode"}
     print("\n=== SUMMARY ===")
-    print(f"A median decode tok/s: {statistics.median(a_tps):.4f}")
-    print(f"B median decode tok/s: {statistics.median(b_tps):.4f}")
-    pct = (statistics.median(b_tps) - statistics.median(a_tps)) / statistics.median(a_tps) * 100
-    print(f"B vs A: {pct:+.2f}%")
-    print(f"A ids sha256_16 set: {set(a_ids)}")
-    print(f"B ids sha256_16 set: {set(b_ids)}")
-    if set(a_ids) != set(b_ids):
-        raise SystemExit("FAIL: greedy identity diverged across arms")
+    print(f"decode  tok/s medians: A={dec.get('A'):.4f} B={dec.get('B'):.4f}"
+          if dec.get("A") and dec.get("B") else f"decode medians: {dec}")
+    if dec.get("A"):
+        pct = (dec["B"] - dec["A"]) / dec["A"] * 100
+        print(f"decode B vs A: {pct:+.2f}%")
+    if pre.get("A") and pre.get("B"):
+        ppct = (pre["B"] - pre["A"]) / pre["A"] * 100
+        print(f"prefill tok/s medians: A={pre['A']:.1f} B={pre['B']:.1f} "
+              f"({ppct:+.2f}%)")
+    print(f"A ids set: {a_ids}")
+    print(f"B ids set: {b_ids}")
+    if not a_ids or not b_ids or a_ids != b_ids:
+        raise SystemExit(f"FAIL: greedy identity diverged: A={a_ids} B={b_ids}")
     print("PASS: greedy identity bit-identical across A and B")
 
 
