@@ -265,8 +265,33 @@ target_compile_options(omarchy_conv_tests
                        PRIVATE ${SANITIZER_COMPILE_FLAGS})
 target_link_options(omarchy_conv_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
+add_executable(omarchy_conv_gemm_decomp_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_conv_gemm_decomp.cpp)
+target_link_libraries(omarchy_conv_gemm_decomp_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_conv_gemm_decomp_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_conv_gemm_decomp_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+add_executable(omarchy_encoder_barrier_scope_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_encoder_barrier_scope.cpp)
+target_link_libraries(omarchy_encoder_barrier_scope_tests
+                      PRIVATE mlx doctest)
+target_compile_options(omarchy_encoder_barrier_scope_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_encoder_barrier_scope_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
 doctest_discover_tests(omarchy_conv_tests)
 add_test(NAME omarchy_conv_tests COMMAND omarchy_conv_tests)
+
+doctest_discover_tests(omarchy_conv_gemm_decomp_tests)
+add_test(NAME omarchy_conv_gemm_decomp_tests
+         COMMAND omarchy_conv_gemm_decomp_tests)
+
+doctest_discover_tests(omarchy_encoder_barrier_scope_tests)
+add_test(NAME omarchy_encoder_barrier_scope_tests
+         COMMAND omarchy_encoder_barrier_scope_tests)
 
 add_executable(omarchy_complex_ops_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_complex_ops.cpp)
