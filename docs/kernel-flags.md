@@ -21,6 +21,12 @@ A/B gating and qualification, not for normal operation.
 ## mlx-lm serve patches (vendored in `patches/`, applied by
 `scripts/apply-mlx-lm-patches.sh`, wired into `install.sh`)
 
+- `patches/mlx-lm-0.32/` — the same series rebuilt for the mlx-lm 0.32 API
+  line (commit 94cdcae, the pin oMLX uses), so oMLX can run on the Omarchy
+  stack. The apply script picks it when `mlx_lm.generate` defines
+  `StopSequences`. conv-ring has no 0.32 port; the script refuses
+  `MLX_OMARCHY_CONV_RING=1` there before touching the venv. Receipt:
+  receipts/2026-10-02-mlx-lm-0.32-series.
 - `mlx-lm-gated-delta-fast-route.patch` — **default ON.** Routes
   `mx.fast.gated_delta_update` in mlx-lm 0.31.3 to the fused kernel in the
   mlx-omarchy wheel. Required for the measured serve numbers.

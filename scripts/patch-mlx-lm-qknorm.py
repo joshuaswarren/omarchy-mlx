@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Fold the GDN q/k rms_norm_scaled pair into mx.fast.gdn_conv_update
 (F4, the gdn_conv_decode.comp epilogue). Idempotent patch for mlx-lm
-0.31.3 venvs, mirroring patch-mlx-lm-rope-norm.py. Site: GatedDeltaNet.
+0.31.3 venvs and for the 0.32 line (patches/mlx-lm-0.32), mirroring
+patch-mlx-lm-rope-norm.py. Site: GatedDeltaNet.
 __call__ in qwen3_5.py (the only model file with the gdn_conv_update
 fast branch).
 
@@ -46,7 +47,7 @@ CONV_NEW = """        and hasattr(mx.fast, "gdn_conv_update")
                     qk_key_dim=self.key_dim,
                     qk_scale_q=inv_scale_qk * inv_scale_qk,
                     qk_scale_k=inv_scale_qk,
-                    qk_eps=1e-6,
+                    qk_eps={qk_eps},
                 )
                 qknorm_fused = True
             else:
@@ -75,6 +76,15 @@ NORM_NEW = """        state = cache[1] if cache else None
         ):
 """
 
+# mlx-lm 0.32 moved the pair into gated_delta.normalize_qk and scales its eps by
+# inv_scale**2 (rms_norm adds eps to mean(x^2), the reference l2norm to sum(x^2)),
+# so the fused epilogue must get that same eps.
+NORM_OLD_032 = """        q, k = normalize_qk(q, k, inv_scale=self.head_k_dim**-0.5, eps=1e-6)
+"""
+NORM_NEW_032 = """        if not qknorm_fused:  # else q/k norms are folded into the gdn_conv_update epilogue
+            q, k = normalize_qk(q, k, inv_scale=self.head_k_dim**-0.5, eps=1e-6)
+"""
+
 MARKER = "MLX_OMARCHY_GDN_QKNORM_FUSE"
 
 venv = sys.argv[1] if len(sys.argv) > 1 else "."
@@ -92,7 +102,11 @@ if "\nimport os\n" not in text:
         sys.exit("import anchor missing in " + q)
     text = text.replace(anchor, anchor + "\nimport os\n", 1)
     print("added os import:", q)
-for old, new in ((CONV_OLD, CONV_NEW), (NORM_OLD, NORM_NEW)):
+if NORM_OLD_032 in text:
+    pairs = ((CONV_OLD, CONV_NEW.format(qk_eps="1e-6 * inv_scale_qk * inv_scale_qk")), (NORM_OLD_032, NORM_NEW_032))
+else:
+    pairs = ((CONV_OLD, CONV_NEW.format(qk_eps="1e-6")), (NORM_OLD, NORM_NEW))
+for old, new in pairs:
     if old not in text:
         sys.exit("unrecognized content in " + q + "; refusing to patch")
     text = text.replace(old, new, 1)
