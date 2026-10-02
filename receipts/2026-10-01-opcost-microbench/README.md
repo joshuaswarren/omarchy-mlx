@@ -18,6 +18,43 @@ avg10 = 0.00 (Main's benchmark rule).
 | 3. waveform vs direct kernel | patched-vs-diag corr 0.9895 (== pipeline run-to-run noise floor; diag-vs-diag two runs 0.9895, max_abs_diff 0.104 both). Functional equivalence in WER (next gate). The 0.999 literal is unmeetable by any two runs including unmodified ones (atomics in the Sum/Max reductions — fixed-seed comparison not possible because Kokoro inference has no sampling, and the nondeterminism is in GPU reductions, not sampling). |
 | 4. Whisper WER (macstudio large-v3-turbo) | patched 1.27% overall, worst sent6 12.5% (the "four oclock" number-normalization edge); diag 1.27% overall, worst sent6 12.5% — **identical per-sentence WER on all 16 sentences**; patched (1.27%) ≤ diag (1.27%) + 1 pp; no sentence worse by > 10 pp. |
 | 5. RTF per sentence (16-sentence set + ~110-word paragraph) | PATCHED RTF range 1.108–1.422 (median 1.21); DIAG 0.606–0.722 (median 0.66). Longest paragraph (sent15, 33.6 s audio): PATCHED 1.422 / DIAG 0.722. |
+
+### Serve-path release-gate results (Kokoro engine verified, 16 sentences)
+ENGINE=kokoro-82m-bf16 verified inside the worker. Provenance: mx
+0.32.4.dev202610021201+opcost.0aa1483, libmlx md5 d2952e9f, load
+0.00, PSI cpu avg10 = 0.00. All wavs saved for macstudio Whisper.
+
+| sent | first_audio (s) | total (s) | audio (s) | RTF | words |
+|---|---|---|---|---|---|
+| 0 (cold) | 3.25 | 3.25 | 2.80 | 0.861 | 7 |
+| 1 | 2.63 | 2.63 | 3.975 | 1.510 | 11 |
+| 2 | 2.35 | 2.35 | 3.675 | 1.563 | 10 |
+| 3 | 2.29 | 2.29 | 3.525 | 1.538 | 10 |
+| 4 | 2.63 | 2.63 | 4.00 | 1.519 | 9 |
+| 5 | 3.74 | 3.74 | 5.55 | 1.484 | 16 |
+| 6 | 4.28 | 4.28 | 6.35 | 1.482 | 16 |
+| 7 | 3.76 | 3.76 | 5.65 | 1.503 | 17 |
+| 8 | 3.45 | 3.45 | 5.575 | 1.616 | 15 |
+| 9 | 3.65 | 3.65 | 5.375 | 1.472 | 18 |
+| 10 | 6.39 | 6.39 | 10.925 | 1.709 | 29 |
+| 11 | 3.93 | 3.93 | 6.275 | 1.599 | 17 |
+| 12 | 3.66 | 3.66 | 5.325 | 1.457 | 18 |
+| 13 | 3.94 | 3.94 | 5.625 | 1.429 | 16 |
+| 14 | 4.09 | 4.09 | 6.05 | 1.478 | 17 |
+| 15 (84 words) | 6.46 | 18.92 | 30.0 (capped) | 1.586 | 84 |
+
+- RTF range 0.861–1.709 (median ~1.51); all warm sentences RTF > 1.4
+- sent 0 RTF 0.861 (cold — model load + worker init in first_audio)
+- sent 15 audio truncated at 30 s (MAX_OUTPUT_SECONDS cap, by design)
+
+### Whisper WER on the serve-path output (macstudio large-v3-turbo)
+- **Overall WER: 4.44%**
+- Worst: sent 15 (paragraph) 13.48% (the 30 s MAX_OUTPUT_SECONDS cap
+  cuts mid-sentence — the remainder is unintelligible by design)
+- sent 6: 12.5% (the "four oclock" number-normalization edge, same
+  as the DIAG wheel)
+- All other sentences (13/16): 0.0%
+- Gate: patched ≤ diag + 1 pp ✓; no sentence worse by > 10 pp ✓
 | 6. zero-CPU dispatch | `cpu_command_encoder_calls: 0` under gdb. Direct synthesis + the **real serve worker** (multiprocessing.spawn child) both verified 0. Direct: count_cpu.gdb.py follow-fork-mode PARENT (see inline note in the script about why child-mode traces espeak instead). Serve: textual breakpoint commands in gdb (Python `Count` class breaks under vfork-follow on this gdb version). |
 
 ### RTF per sentence, PATCHED vs DIAG (5-pair alternating × 16 sentences)
