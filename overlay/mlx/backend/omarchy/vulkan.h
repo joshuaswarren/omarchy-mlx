@@ -93,6 +93,11 @@ struct InstanceTable {
       nullptr};
   PFN_vkGetPhysicalDeviceQueueFamilyProperties
       GetPhysicalDeviceQueueFamilyProperties{nullptr};
+  // Optional (core 1.1): loaded best-effort for the global-priority
+  // queue family query; its absence only disables the low-priority
+  // request, never device creation.
+  PFN_vkGetPhysicalDeviceQueueFamilyProperties2
+      GetPhysicalDeviceQueueFamilyProperties2{nullptr};
   PFN_vkCreateDevice CreateDevice{nullptr};
   PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR
       GetPhysicalDeviceCooperativeMatrixPropertiesKHR{nullptr};

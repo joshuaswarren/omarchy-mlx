@@ -453,6 +453,14 @@ void CommandEncoder::dispatch_compute_pipeline(
   group_count_x = std::min(group_count_x, kMaxComputeGroupCountX);
   group_count_y = std::min(group_count_y, kMaxComputeGroupCountX);
   group_count_z = std::min(group_count_z, kMaxComputeGroupCountX);
+  // Bounded GPU-time proxy for the work budget (encoder.h): the open
+  // batch's summed work-group counts. Each factor is already clamped to
+  // kMaxComputeGroupCountX, so the product fits uint64_t; accumulate
+  // saturating so a pathologic sequence cannot wrap.
+  const uint64_t groups = static_cast<uint64_t>(group_count_x) *
+      group_count_y * group_count_z;
+  batch_work_ =
+      UINT64_MAX - batch_work_ > groups ? batch_work_ + groups : UINT64_MAX;
 
   auto& dt = vk::device_table();
   VkDescriptorSet descriptor_set = acquire_descriptor_set(compute);
@@ -875,6 +883,7 @@ void CommandEncoder::submit() {
       batch_buffers_.clear();
       recording_ = false;
       node_count_ = 0;
+      batch_work_ = 0;
       wait_semaphores_.clear();
       signal_semaphores_.clear();
       completed_handlers_.clear();
@@ -927,6 +936,7 @@ void CommandEncoder::submit() {
 
   recording_ = false;
   node_count_ = 0;
+  batch_work_ = 0;
   wait_semaphores_.clear();
   signal_semaphores_.clear();
   completed_handlers_.clear();

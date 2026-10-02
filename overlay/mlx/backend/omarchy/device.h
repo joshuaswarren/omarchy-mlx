@@ -99,6 +99,13 @@ struct CapabilityReport {
   // feature is on, and the device lists an 8x8x8 all-fp32 subgroup shape.
   // Honeykrisp advertises this behind AGX_SIMDMAT; llvmpipe does not.
   bool cooperative_matrix_f32_8{false};
+  // True when the device lists VK_EXT_global_priority. Lets the backend
+  // request a lower-than-default queue priority so MLX submissions yield
+  // queue arbitration to the desktop compositor between submissions
+  // (issue #19). Device creation additionally checks the compute queue
+  // family's reported priorities and silently keeps the default when the
+  // requested one is absent.
+  bool queue_global_priority{false};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};

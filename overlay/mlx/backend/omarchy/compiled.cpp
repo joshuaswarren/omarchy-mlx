@@ -460,15 +460,29 @@ void eval_compiled_tape(
       // completes. Output buffers live with the graph instead.
       encoder.add_temporary(outs[0]);
     }
-    if (per_node_submit) {
-      // MLX_OMARCHY_TAPE_PER_NODE_SUBMIT (diagnostic): submit after every
-      // node, matching eager's op-granular command-buffer shape while
-      // running the tape's own code path. Each submission waits on this
-      // stream's previous completion, so the tape serializes exactly as
-      // an eager chain would. If the Honeykrisp corruption disappears
-      // under this switch, the defect lives in many-dispatches-per-
-      // command-buffer; if it persists, the command buffer is innocent
-      // and the tape's resource handling stays suspect.
+    // MLX_OMARCHY_TAPE_PER_NODE_SUBMIT (diagnostic): submit after every
+    // node, matching eager's op-granular command-buffer shape while
+    // running the tape's own code path. Each submission waits on this
+    // stream's previous completion, so the tape serializes exactly as
+    // an eager chain would. If the Honeykrisp corruption disappears
+    // under this switch, the defect lives in many-dispatches-per-
+    // command-buffer; if it persists, the command buffer is innocent
+    // and the tape's resource handling stays suspect.
+    //
+    // Without that flag: node/work budgets (MLX_OMARCHY_BATCH_NODES /
+    // MLX_OMARCHY_BATCH_WORK, issue #19). The decoder's compiled tape is
+    // one primitive eval, so without a check here a whole decode step -
+    // or a whole prefill tape - is one submission and holds the queue
+    // for its full length. Splitting is scheduling only: each submission
+    // waits on this stream's previous completion, and the scheduler task
+    // opened for the tape's batch in eval() stays balanced (its one
+    // completion handler rides the first submission).
+    if (per_node_submit ||
+        omarchy::batch_over_budget(
+            encoder.nodes(),
+            encoder.batch_work(),
+            omarchy::batch_node_budget(),
+            omarchy::batch_work_budget())) {
       encoder.commit();
     }
   }

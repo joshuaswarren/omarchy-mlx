@@ -92,7 +92,31 @@ around prompt processing and the first token of `generate_step`, so pipelined
 decode keeps one submit per token (a constant early first batch cost decode
 about 1%); `MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT=1` disables the patch's behavior.
 Measured on jwm1 (T8103): qwen38 protocol TTFT 0.1844 -> 0.1590 s (-13.8%),
-decode64 41.62 -> 41.48 tok/s, digests unchanged.
+decode64 41.48 tok/s, digests unchanged.
+
+Per-submission GPU-time cap (issue #19): one queue submission holds the GPU
+until it finishes and the desktop compositor only gets the queue between
+submissions, so a ~78 ms submission hitches the desktop for about nine frames
+at 120 Hz while 2-6 ms submissions stay smooth (same GPU busy fraction;
+reporter's OpenGL measurement). `MLX_OMARCHY_BATCH_WORK=<groups>` bounds each
+submission to an estimated GPU cost: the open batch is submitted once its
+summed dispatch work-group counts reach the budget. The default
+(`<DEFAULT>` groups) is calibrated on the M2 Max so a 4B decode step splits
+into ~2-6 ms submissions; a single dispatch larger than the budget still runs
+whole (splitting happens between dispatches), and copies/fills ride the node
+and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap (headless
+boxes). Scheduling only: every submission already waits on the stream's
+previous completion, so splitting preserves order and results are
+bit-identical (digest evidence in `receipts/2026-10-02-submission-cap-19`).
+
+Queue priority (issue #19, where the driver supports it): when the device
+lists `VK_EXT_global_priority` and the compute queue family reports the
+requested priority, the backend chains `LOW` into the queue so desktop work
+wins arbitration between MLX submissions; otherwise the default priority is
+kept silently. `MLX_OMARCHY_QUEUE_PRIORITY=medium` requests MEDIUM instead;
+`off`, `default`, or `0` keeps the unchained queue. Measured exposure:
+Honeykrisp lists `VK_EXT_global_priority` rev 2 on the M2 Max (T6021) and
+M1 Max (T6001).
 
 ## Build the wheel
 
