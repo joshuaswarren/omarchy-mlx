@@ -573,10 +573,13 @@ ANE_SMOKE_RUNNER = "omarchy-ane-smoke"
 def _omarchy_ane_smoke(redactor):
     """Opt-in ANE smoke: the packaged add-fixture runner.
 
-    Runs a shipped ~22 KB Apple-minted add ANEC 20 times, bit-exact
-    against a pinned golden hash; exit 0 = all 20 bit-exact, exit 2 =
-    unavailable. Consent is checked by the caller. Bounded timeout;
-    never loads or unloads modules, never writes.
+    Runs the shipped add ANEC 20 times. Exit 0 = all bit-exact; exit 1
+    = ran but some calls failed (parse the JSON anyway and keep it:
+    available true with errors > 0 is exactly what the promotion check
+    must see); exit 2 = unavailable for this SoC. stdout is exactly one
+    JSON line; stderr one "omarchy-ane-smoke: ..." line used as the
+    reason. Consent is checked by the caller; bounded timeout; never
+    loads or unloads modules, never writes.
     """
     runner_name = os.environ.get("MLX_OMARCHY_ANE_SMOKE_RUNNER",
                                  ANE_SMOKE_RUNNER)
@@ -592,24 +595,32 @@ def _omarchy_ane_smoke(redactor):
     rec = run_tool([runner_name], redactor,
                    label=runner_name, timeout=120)
     smoke["exit"] = rec["exit_code"]
-    if rec["exit_code"] == 2:
-        smoke["reason"] = rec["stderr"][:256] or \
-            rec["stdout"][:256] or "runner reported unavailable"
-        return smoke
-    if rec["exit_code"] == 0:
+    stderr_line = rec["stderr"].strip().splitlines()[-1] \
+        if rec["stderr"].strip() else ""
+    if rec["exit_code"] in (0, 1):
         try:
             parsed = json.loads(rec["stdout"].strip().splitlines()[-1])
         except (ValueError, IndexError):
-            smoke["reason"] = "runner printed no JSON summary"
+            smoke["reason"] = stderr_line or \
+                "runner printed no JSON summary"
             return smoke
-        for key in ("name", "chip", "sha256", "golden_sha256",
-                    "errors", "min_ms", "median_ms"):
+        for key in ("name", "chip", "available", "sha256",
+                    "golden_sha256", "errors", "min_ms", "median_ms",
+                    "reason"):
             if key in parsed:
                 smoke[key] = parsed[key]
-        smoke["available"] = True
-        smoke["reason"] = None
+        smoke["available"] = bool(parsed.get("available",
+                                             rec["exit_code"] == 0))
+        smoke["reason"] = (str(parsed.get("reason"))
+                           [:256] if parsed.get("reason")
+                           else (stderr_line[:256]
+                                 if rec["exit_code"] == 1 else None))
         return smoke
-    smoke["reason"] = rec["stderr"][:256] or "exit %s" % rec["exit_code"]
+    if rec["exit_code"] == 2:
+        smoke["reason"] = stderr_line or rec["stdout"][:256] or \
+            "runner reported unavailable"
+        return smoke
+    smoke["reason"] = stderr_line or "exit %s" % rec["exit_code"]
     return smoke
 
 

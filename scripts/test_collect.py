@@ -2098,6 +2098,24 @@ class OmarchyAneBlockTests(unittest.TestCase):
         self.assertEqual(out["golden_sha256"], "cd" * 32)
         self.assertEqual(out["median_ms"], 101.5)
 
+    def test_smoke_exit_1_keeps_the_failed_run(self):
+        runner_out = json.dumps({
+            "name": "add-fixture", "chip": "t6021", "available": True,
+            "sha256": ["ab" * 32] * 17,
+            "golden_sha256": "cd" * 32, "errors": 3,
+            "min_ms": 100.1, "median_ms": 101.5})
+        with patch.object(cd.shutil, "which", return_value="/usr/bin/x"), \
+                patch.object(cd, "run_tool", return_value={
+                    "available": True, "exit_code": 1, "error": None,
+                    "stdout": runner_out,
+                    "stderr": "omarchy-ane-smoke: 3 calls differed",
+                    "argv": []}):
+            out = cd._omarchy_ane_smoke(cc.Redactor())
+        self.assertTrue(out["available"])
+        self.assertEqual(out["errors"], 3)
+        self.assertEqual(len(out["sha256"]), 17)
+        self.assertIn("differed", out["reason"])
+
     def test_smoke_exit_2_is_unavailable(self):
         with patch.object(cd.shutil, "which", return_value="/usr/bin/x"), \
                 patch.object(cd, "run_tool", return_value={

@@ -36,8 +36,11 @@ Linux (`ane_port_detail` plus the new turn-on blocks):
   version, srcversion, parameters), `firmware` (`/lib/firmware/apple/ane`
   hashes), `opt_in` (the `ane-*` keys of
   `/etc/omarchy-platform/dtb-overlays.opt-in`), `smoke` (only with
-  `--ane-smoke`; runs the packaged `omarchy-ane-smoke` runner when it
-  exists and otherwise records `available: false` with the reason),
+  `--ane-smoke`; runs the packaged `omarchy-ane-smoke` runner — one
+  JSON line on stdout, one `omarchy-ane-smoke: ...` line on stderr;
+  exit 0 = all 20 calls bit-exact, exit 1 = ran with failures and the
+  JSON is kept with `errors > 0`, exit 2 = unavailable for this SoC —
+  and otherwise records `available: false` with the reason),
   `uptime_s`, the first 200 filtered kernel-log lines (160 B each) with
   the fault subset, `/proc/interrupts` samples (idle pair 10 s apart, a
   third after the smoke), package versions, and host facts.
@@ -103,35 +106,42 @@ reserved-memory, firmware hashes, the `omarchy_ane` promotion block, and
 a smoke result**. One Linux deep run + one macOS deep run on any
 untested machine now supplies all of them.
 
-## Promotion rule (proposed text for the omarchy-ane README)
+## Promotion rule (mirrors the omarchy-ane README, which is authoritative)
 
-> A SoC moves from opt-in to on-by-default when **N = 3** independent
-> community smoke rows agree:
+> A SoC moves from opt-in to on-by-default on **3 passing community
+> smoke rows** with **0 failing rows**, where the rows must span
+> **3 distinct `machine_id`s, 2 distinct `owner_id`s, 2 distinct
+> boards, and 2 distinct kernel releases**.
 >
-> 1. **N = 3 passing `omarchy_ane` rows per chip**, from **≥ 2 distinct
->    machines** (one machine flaking three times does not count), each
->    with `check.status == "ready"`, the module bound, and
->    `smoke.available == true`.
-> 2. **Bit-exact add-fixture output**: each row's `smoke.sha256` (20
->    fp16 output hashes of the shipped ~22 KB Apple-minted add ANEC,
->    run 20 times by the packaged `omarchy-ane-smoke` runner) equals the
->    runner-reported `golden_sha256`, with `smoke.errors == 0` and
->    `smoke.name == "add-fixture"`. The whole-encoder hash stays a
->    developer-side golden; it is never a collector field.
-> 3. **No faults**: `dmesg_faults` empty in the smoke window and no new
->    fault lines in the post-smoke `/proc/interrupts` sample;
->    `machine_id` values must be distinct across the rows used.
+> Every passing row must have:
+> - `check.exit == 0` and `check.status == "ready"`;
+> - `module.name` equal to the chip's driver module;
+> - empty `dmesg_faults` and no ANE/DART/mailbox fault line in `dmesg`;
+> - `uptime_s >= 1800`;
+> - smoke: all 20 add-fixture calls bit-exact, `errors == 0`, and
+>   `golden_sha256 == 94041b7cc10a66dfd76ecfd469728ad9d66f68b508f4a9744ce41208d6a4de0b`.
 >
-> Rationale: one row proves the constants; two machines prove the board
-> topologies (pmgr paths, DART instances, mailbox line) generalize
-> within a chip family; three runs prove the boot is repeatable. A chip
-> with a single macOS row and no Linux row (t6002, t6022 today) cannot
-> satisfy the rule — the overlay generator needs the Linux pmgr
-> topology to translate the SET base's high bits.
->
-> Regression: any chip whose latest row shows `check.status != "ready"`
-> or a non-empty `dmesg_faults` reverts to opt-in until a clean row
-> lands.
+> Regression: an on-by-default chip (t8103, t6001, t6021) reverts to
+> opt-in when its **latest row by `received_at`** has
+> `check.exit != 0` or `check.status != "ready"`, or a non-empty
+> `dmesg_faults` / any ANE fault line in `dmesg`; it clears again on a
+> clean row.
+
+The collector keeps recording exactly the fields this check reads:
+`received_at`, `check.{exit,status}`, `dmesg_faults`, `dmesg`,
+`module.name`, `machine_id`, `owner_id`, `uptime_s`, boot compatible,
+and kernel. The post-smoke `/proc/interrupts` sample is recorded but
+not judged.
+
+Smoke fixture availability (omarchy-ane 50958be): the H14-family chips
+t6020 / t6021 / t6022 / t8112 run `fixtures/h14-anec/add` (20,800 B,
+sha256 `b416b9d1...`, mil-hwx-compiler output, encoder
+h14-oracle-parity). M1-family (t8103 / t6000 / t6001 / t6002) currently
+exit 2 — no H13 (M1-family) add fixture has run through
+`omarchy-ane-run` yet. Next steps on the omarchy-ane side: commit the
+mil-hwx-compiler rung-1 add package as `fixtures/h13-anec/add`, run it
+20x via `ane-run --check add` on a T8103 or T6001, and add the H13
+chips + golden to the smoke.
 
 Send corrections or an override only through the omarchy-ane lane
 (w73); this file describes the collector side.

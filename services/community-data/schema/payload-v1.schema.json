@@ -874,7 +874,9 @@
                         "integer",
                         "null"
                       ],
-                      "minimum": 0
+                      "minimum": 0,
+                      "maximum": 20,
+                      "description": "20 - bit-exact calls; 0 = every call matched the golden."
                     },
                     "min_ms": {
                       "type": [
