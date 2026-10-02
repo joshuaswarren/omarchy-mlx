@@ -80,9 +80,9 @@ build, no mlx-omarchy wheel, and downloads no models:
 ```bash
 python3 scripts/collect_quick.py
 
-# or print it and publish it in one command:
-python3 scripts/collect_quick.py \
-  --submit https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
+# or print it and publish it in one command (--submit defaults to the
+# public community endpoint; pass a URL to target another one):
+python3 scripts/collect_quick.py --submit
 ```
 
 The command prints one JSON report: CPU and memory, kernel, Apple
@@ -194,8 +194,7 @@ python3.14 -m venv ~/.venvs/mlx-collect-macos
 
 # Generate, preview, and submit a report:
 ~/.venvs/mlx-collect-macos/bin/python scripts/collect_deep.py \
-  --out mlx-macos-reference.tar.gz \
-  --submit https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
+  --out mlx-macos-reference.tar.gz --submit
 ```
 
 You can also use a Python interpreter that already imports native MLX,
@@ -276,8 +275,7 @@ Prerequisites, in order:
 
    # publish in the same command (--submit requires --out):
    ~/.venvs/mlx-collect/bin/python scripts/collect_deep.py \
-     --out mlx-omarchy-deep.tar.gz \
-     --submit https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
+     --out mlx-omarchy-deep.tar.gz --submit
    ```
 
 The archive is deterministic: the same workspace produces the same bytes

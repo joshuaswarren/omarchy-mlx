@@ -1208,12 +1208,16 @@ def section_child(name, ws, repo, smoke=False):
 
 
 def main():
+    import collect_submit
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", metavar="FILE",
                     help="write the archive after the preview (default: "
                          "preview only)")
-    ap.add_argument("--submit", metavar="URL", default=None,
-                    help="upload the redacted archive to this endpoint "
+    ap.add_argument("--submit", nargs="?", default=None,
+                    const=collect_submit.DEFAULT_ENDPOINT, metavar="URL",
+                    help="upload the redacted archive to the public "
+                         "community endpoint (the default URL) or to URL, "
                          "after the preview")
     ap.add_argument("--repo", default=REPO,
                     help="repository root (default: parent of scripts/)")
@@ -1311,7 +1315,7 @@ def maybe_submit(args, data, archive_name, out_path, payload):
     if endpoint is None:
         if out_path:
             print(f"[receipt] done; nothing was uploaded. To share it, rerun with "
-                  f"--submit {collect_submit.DEFAULT_ENDPOINT} or send {out_path} "
+                  f"--submit or send {out_path} "
                   f"and its .submission.md by hand.")
         return 0
     if not out_path:

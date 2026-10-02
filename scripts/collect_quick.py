@@ -909,12 +909,16 @@ def collect(probes=None):
 
 
 def main():
+    import collect_submit
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", metavar="FILE",
                     help="also write the JSON report to FILE")
-    ap.add_argument("--submit", metavar="URL", default=None,
-                    help="publish this report to the community endpoint "
-                         "after printing it")
+    ap.add_argument("--submit", nargs="?", default=None,
+                    const=collect_submit.DEFAULT_ENDPOINT, metavar="URL",
+                    help="publish this report to the public community "
+                         "endpoint (the default URL) or to URL, after "
+                         "printing it")
     args = ap.parse_args()
     report = collect()
     text = dump_json(report)

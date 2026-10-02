@@ -10,6 +10,14 @@ the unblock.
 
 ## What to do
 
+The short version — clone, then submit with one command (`--submit`
+already defaults to the public community endpoint):
+
+```bash
+python3 scripts/collect_quick.py --submit                        # ten seconds
+python3 scripts/collect_deep.py --out mlx-omarchy-deep.tar.gz --submit
+```
+
 Everything you need — exact commands for Linux/Omarchy and for macOS,
 what gets collected, and how redaction works — is in the
 [README's **Contributing** section](../README.md#contributing), with more

@@ -186,6 +186,10 @@ git clone https://github.com/joshuaswarren/omarchy-mlx.git
 cd omarchy-mlx
 python3 scripts/collect_quick.py    # quick capture, Linux
 python3 scripts/collect_deep.py     # deep capture, Linux and macOS
+
+# add --submit to publish. It already targets the public endpoint; the
+# deep run also needs --out FILE:
+python3 scripts/collect_deep.py --out mlx-omarchy-deep.tar.gz --submit
 ```
 
 On a dual-boot Mac, run `collect_deep.py` under macOS and under

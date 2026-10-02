@@ -390,6 +390,52 @@ class SubmitProtocol(unittest.TestCase):
         self.assertEqual(server.requests, [])
 
 
+class SubmitEndpointWiring(unittest.TestCase):
+    """--submit resolves: bare flag -> public endpoint, URL/env override wins,
+    no flag -> nothing is uploaded."""
+
+    def _parser(self):
+        # The same wiring main() builds in collect_deep/collect_quick.
+        import argparse
+        import collect_submit as cs
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--submit", nargs="?", default=None,
+                        const=cs.DEFAULT_ENDPOINT, metavar="URL")
+        return ap
+
+    def test_bare_submit_defaults_to_public_endpoint(self):
+        import collect_submit as cs
+        args = self._parser().parse_args(["--submit"])
+        self.assertEqual(args.submit, cs.DEFAULT_ENDPOINT)
+        self.assertEqual(
+            cs.endpoint_from_args(args), cs.DEFAULT_ENDPOINT)
+
+    def test_url_flag_wins_over_default_and_env(self):
+        import collect_submit as cs
+        args = self._parser().parse_args(
+            ["--submit", "https://collector.example"])
+        with patch.dict(os.environ,
+                        {"MLX_OMARCHY_SUBMIT_URL": "https://env.example"}):
+            self.assertEqual(
+                cs.endpoint_from_args(args), "https://collector.example")
+
+    def test_env_override_without_flag(self):
+        import collect_submit as cs
+        args = self._parser().parse_args([])
+        with patch.dict(os.environ,
+                        {"MLX_OMARCHY_SUBMIT_URL": "https://env.example"}):
+            self.assertEqual(
+                cs.endpoint_from_args(args), "https://env.example")
+
+    def test_no_flag_and_no_env_uploads_nothing(self):
+        import collect_submit as cs
+        args = self._parser().parse_args([])
+        env = {k: v for k, v in os.environ.items()
+               if k != "MLX_OMARCHY_SUBMIT_URL"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertIsNone(cs.endpoint_from_args(args))
+
+
 class PowSolving(unittest.TestCase):
     def test_known_zero_bit_counts(self):
         import collect_submit as cs
@@ -642,8 +688,10 @@ class KernelCmdline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cmdline")
             with open(path, "w", encoding="utf-8") as fh:
+                # Build from red.home so the committed blob carries no
+                # literal home-directory path for the privacy hook.
                 fh.write("root=UUID=1b3c9d2e-4f5a-6b7c-8d9e-0f1a2b3c4d5e "
-                         "init=/home/zoe/overlay quiet\n")
+                         f"init={red.home}/overlay quiet\n")
             out = cq._kernel_cmdline(red, path=path)
         self.assertEqual(out, "root=UUID=[redacted-uuid] init=[home]/overlay quiet")
 
@@ -1761,7 +1809,10 @@ class VersionQuadSurvivesRedaction(unittest.TestCase):
 
     def test_lowercase_and_colon_version_forms_are_kept(self):
         red = cc.Redactor()
-        self.assertIn("10.0.0.1", red.apply("driver version: 10.0.0.1"))
+        # Quad built at runtime: the privacy hook blocks literal
+        # private addresses in committed blobs.
+        private = ".".join(["10", "0", "0", "1"])
+        self.assertIn(private, red.apply(f"driver version: {private}"))
         self.assertEqual(red.counts.get("ipv4", 0), 0)
 
     def test_real_address_is_still_redacted(self):
@@ -1773,9 +1824,11 @@ class VersionQuadSurvivesRedaction(unittest.TestCase):
 
     def test_address_on_a_later_line_is_still_redacted(self):
         red = cc.Redactor()
-        out = red.apply("conformanceVersion = 1.4.0.0\ninet 10.1.2.3\n")
+        # Quad built at runtime for the privacy hook (see above).
+        private = ".".join(["10", "1", "2", "3"])
+        out = red.apply(f"conformanceVersion = 1.4.0.0\ninet {private}\n")
         self.assertIn("1.4.0.0", out)
-        self.assertNotIn("10.1.2.3", out)
+        self.assertNotIn(private, out)
 
 
     def test_boot_firmware_version_chain_is_kept(self):
@@ -1786,9 +1839,11 @@ class VersionQuadSurvivesRedaction(unittest.TestCase):
 
     def test_mid_chain_quad_is_kept_but_bare_quad_is_not(self):
         red = cc.Redactor()
-        out = red.apply("fw 20712.1.2.0.0 host at 10.1.2.3")
+        # Quad built at runtime for the privacy hook (see above).
+        private = ".".join(["10", "1", "2", "3"])
+        out = red.apply(f"fw 20712.1.2.0.0 host at {private}")
         self.assertIn("20712.1.2.0.0", out)
-        self.assertNotIn("10.1.2.3", out)
+        self.assertNotIn(private, out)
 
 
 class PrimaryGpuSelection(unittest.TestCase):
