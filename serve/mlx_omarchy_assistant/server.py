@@ -162,6 +162,7 @@ class AssistantServer(ThreadingHTTPServer):
                     self.setup_state = {"state": "preparing", "stage": str(stage), "detail": detail}
 
             def run():
+                state = None
                 try:
                     if self._synthesis:
                         self._synthesis.close()
@@ -181,13 +182,16 @@ class AssistantServer(ThreadingHTTPServer):
                         if not speech.get("verified"):
                             raise ValueError(speech.get("reason") or "Approve the speech recognition download")
                     result = self.manager.start()
-                    with self.mutex:
-                        self.setup_state = {"state": "complete", "ready_offline": result.get("ready_offline", False)}
+                    state = {"state": "complete", "ready_offline": result.get("ready_offline", False)}
                 except Exception as error:
-                    with self.mutex:
-                        self.setup_state = {"state": "error", "message": str(error)[:1000]}
+                    state = {"state": "error", "message": str(error)[:1000]}
                 finally:
                     self.coordinator.gpu.release()
+                    # Publish the outcome only once the GPU lock is released:
+                    # a client that sees "complete" must never race the
+                    # release and take a spurious 409 on its first turn.
+                    with self.mutex:
+                        self.setup_state = state
 
             self.setup_thread = threading.Thread(target=run, daemon=True)
             self.setup_thread.start()
@@ -202,19 +206,23 @@ class AssistantServer(ThreadingHTTPServer):
             self.setup_state = {"state": "preparing", "stage": "Resume saved pair"}
 
             def run():
+                state = None
                 try:
                     self.manager.adopt_saved()
                     result = self.manager.start()
-                    with self.mutex:
-                        self.setup_state = {"state": "complete",
-                                            "ready_offline": result.get("ready_offline", False)}
+                    state = {"state": "complete",
+                             "ready_offline": result.get("ready_offline", False)}
                 except Exception as error:
                     message = str(error)[:1000]
                     absent = "no saved pair lock" in message
-                    with self.mutex:
-                        self.setup_state = {"state": "absent" if absent else "error", "message": message}
+                    state = {"state": "absent" if absent else "error", "message": message}
                 finally:
                     self.coordinator.gpu.release()
+                    # Publish the outcome only once the GPU lock is released:
+                    # a client that sees "complete" must never race the
+                    # release and take a spurious 409 on its first turn.
+                    with self.mutex:
+                        self.setup_state = state
 
             self.setup_thread = threading.Thread(target=run, daemon=True)
             self.setup_thread.start()

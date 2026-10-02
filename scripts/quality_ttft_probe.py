@@ -30,6 +30,21 @@ from quality27b_perf_api import Assistant, call, submit_turn  # noqa: E402
 FILLER = ("The quick brown fox jumps over the lazy dog. " * 30).strip()
 
 
+def post_turn(runtime, cid, body):
+    """Submit a turn; retry once on a 409 that races setup teardown."""
+    import urllib.error
+    try:
+        return call("POST", f"/api/conversations/{cid}/turns", body, runtime=runtime)
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")[:200]
+        if error.code != 409:
+            raise RuntimeError(f"turn refused HTTP {error.code}: {detail}") from error
+        time.sleep(0.5)
+        result = call("POST", f"/api/conversations/{cid}/turns", body, runtime=runtime)
+        print(f"  submit retried once after 409: {detail}", flush=True)
+        return result
+
+
 def loadavg():
     with open("/proc/loadavg") as f:
         parts = f.read().split()
@@ -203,7 +218,13 @@ def main():
     session = {"label": args.label, "repo_serve": args.repo_serve,
                "home": home, "runs": []}
 
+    def stamp(msg):
+        print(f"[{time.monotonic() - T0:7.1f}s] {msg}", flush=True)
+
+    T0 = time.monotonic()
+    stamp(f"session start label={args.label}")
     quiet_gate(args.quiet_wait_s)
+    stamp("quiet gate passed")
     with open("/proc/sys/kernel/random/boot_id") as f:
         session["boot_id"] = f.read().strip()
     session["uname"] = os.uname().release
@@ -220,7 +241,9 @@ def main():
     pair = Assistant("quality", home, args.repo_serve)
     do_setup = pair.boot_id_mismatch()
     session["did_setup"] = do_setup
+    stamp(f"assistant start do_setup={do_setup}")
     pair.start(do_setup)
+    stamp("application.json present")
 
     setup_deadline = time.monotonic() + (1500 if do_setup else 180)
     state = {}
@@ -233,8 +256,10 @@ def main():
             raise RuntimeError(f"setup error: {state}")
         time.sleep(1)
     session["setup_state"] = state.get("state")
+    stamp(f"setup state={state.get('state')}")
 
     tok = load_tokenizer(pair.runtime)
+    stamp("tokenizer loaded")
 
     def tok_count(text):
         if tok is not None:
@@ -277,8 +302,7 @@ def main():
         drain = SseDrain(cid, pair.runtime)
         t0 = time.monotonic()
         body = {"text": text, "mode": "chat", "max_tokens": max_tokens}
-        turn = call("POST", f"/api/conversations/{cid}/turns", body,
-                    runtime=pair.runtime)["turn_id"]
+        turn = post_turn(pair.runtime, cid, body)["turn_id"]
         stop = threading.Event()
         beat = threading.Thread(target=heartbeat_loop,
                                 args=(cid, turn, stop), daemon=True)
