@@ -174,8 +174,10 @@ untested chip (payload schema v2):
   optional m1n1 ADT dump attachment (`--adt-dump FILE`, capped 2 MiB).
 - **Opt-in smoke** (`--ane-smoke`): macOS runs a tiny CoreML add model
   20 times (min/median ms); Linux runs the packaged
-  `omarchy-ane-smoke` runner when omarchy-ane ships it and otherwise
-  records an explicit unavailable reason. The smoke never loads or
+  `omarchy-ane-smoke` add-fixture runner (exit 0 = all 20 runs
+  bit-exact against the runner-reported `golden_sha256`; exit 2 =
+  unavailable) when omarchy-ane ships it, and otherwise records an
+  explicit unavailable reason. The smoke never loads or
   unloads modules and never writes.
 
 #### macOS setup

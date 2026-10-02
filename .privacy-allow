@@ -32,3 +32,5 @@ c83fcd529ee10234660b232ac8381b0a353ecbad  scripts/test_collect_macos.py
 5c534434017ff173b2fa78bccc538ada09115826  tests/test_wheel_pins.py
 e788f421d04cee3fb76170d4ca635691865ec4ec  scripts/test_collect.py
 968d2565dbb52181d4749f00e7221e16bc6b1dc9  scripts/test_collect_macos.py
+d1b064f031dfdab101175dab0107b462eddea5f9  scripts/test_collect.py
+968d2565dbb52181d4749f00e7221e16bc6b1dc9  scripts/test_collect_macos.py

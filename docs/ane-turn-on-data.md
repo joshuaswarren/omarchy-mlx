@@ -112,10 +112,12 @@ untested machine now supplies all of them.
 >    machines** (one machine flaking three times does not count), each
 >    with `check.status == "ready"`, the module bound, and
 >    `smoke.available == true`.
-> 2. **Bit-exact encoder output**: each row's `smoke.sha256` (20 fp16
->    output hashes of the packaged parakeet-encoder add fixture) equals
->    the golden `fca96f13...` recorded in this README, with
->    `smoke.errors == 0`.
+> 2. **Bit-exact add-fixture output**: each row's `smoke.sha256` (20
+>    fp16 output hashes of the shipped ~22 KB Apple-minted add ANEC,
+>    run 20 times by the packaged `omarchy-ane-smoke` runner) equals the
+>    runner-reported `golden_sha256`, with `smoke.errors == 0` and
+>    `smoke.name == "add-fixture"`. The whole-encoder hash stays a
+>    developer-side golden; it is never a collector field.
 > 3. **No faults**: `dmesg_faults` empty in the smoke window and no new
 >    fault lines in the post-smoke `/proc/interrupts` sample;
 >    `machine_id` values must be distinct across the rows used.

@@ -317,11 +317,13 @@
         ],
         "smoke": {
           "available": false,
+          "chip": "t6021",
           "errors": 0,
           "exit": null,
+          "golden_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
           "median_ms": null,
           "min_ms": null,
-          "name": "parakeet-encoder",
+          "name": "add-fixture",
           "reason": "not shipped yet",
           "requested": false,
           "sha256": []

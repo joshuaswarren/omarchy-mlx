@@ -2078,13 +2078,14 @@ class OmarchyAneBlockTests(unittest.TestCase):
         with patch.object(cd.shutil, "which", return_value=None):
             out = cd._omarchy_ane_smoke(cc.Redactor())
         self.assertFalse(out["available"])
-        self.assertEqual(out["name"], "parakeet-encoder")
+        self.assertEqual(out["name"], "add-fixture")
         self.assertIn("not shipped", out["reason"])
 
     def test_smoke_with_runner_parses_the_contract(self):
         runner_out = json.dumps({
-            "name": "parakeet-encoder",
+            "name": "add-fixture", "chip": "t6021",
             "sha256": ["ab" * 32] * 20,
+            "golden_sha256": "cd" * 32,
             "errors": 0, "min_ms": 100.1, "median_ms": 101.5})
         with patch.object(cd.shutil, "which", return_value="/usr/bin/x"), \
                 patch.object(cd, "run_tool", return_value={
@@ -2093,7 +2094,20 @@ class OmarchyAneBlockTests(unittest.TestCase):
             out = cd._omarchy_ane_smoke(cc.Redactor())
         self.assertTrue(out["available"])
         self.assertEqual(out["sha256"], ["ab" * 32] * 20)
+        self.assertEqual(out["chip"], "t6021")
+        self.assertEqual(out["golden_sha256"], "cd" * 32)
         self.assertEqual(out["median_ms"], 101.5)
+
+    def test_smoke_exit_2_is_unavailable(self):
+        with patch.object(cd.shutil, "which", return_value="/usr/bin/x"), \
+                patch.object(cd, "run_tool", return_value={
+                    "available": True, "exit_code": 2, "error": None,
+                    "stdout": "",
+                    "stderr": b"no fixture for this SoC".decode(),
+                    "argv": []}):
+            out = cd._omarchy_ane_smoke(cc.Redactor())
+        self.assertFalse(out["available"])
+        self.assertIn("no fixture", out["reason"])
 
     def test_kernel_log_keeps_first_window_and_fault_subset(self):
         lines = [f"line {i} ane" for i in range(250)]
@@ -2113,7 +2127,7 @@ class OmarchyAneBlockTests(unittest.TestCase):
                            "status": "ready", "untested": False,
                            "lines": ["ready"]},
                  "module": {"available": True, "name": "ane"},
-                 "smoke": {"available": False, "name": "parakeet-encoder"},
+                 "smoke": {"available": False, "name": "add-fixture"},
                  "dmesg_faults": ["fault one"],
                  "dmesg": ["x" * 160] * 400}
         out = cc._cap_omarchy_ane(block, cc.Redactor(), max_bytes=4096)

@@ -846,6 +846,21 @@
                       ],
                       "maxLength": 64
                     },
+                    "chip": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64
+                    },
+                    "golden_sha256": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9a-f]{64}$",
+                      "description": "The pinned golden hash the packaged add fixture must match; pinned by omarchy-ane, echoed by the runner. The whole-encoder hash stays a developer-side golden, never a collector field."
+                    },
                     "sha256": {
                       "type": "array",
                       "items": {

@@ -565,36 +565,50 @@ def _omarchy_ane_optin():
         return []
 
 
-def _omarchy_ane_smoke(redactor):
-    """Opt-in ANE smoke: the packaged parakeet-encoder runner.
+# The packaged ANE smoke runner (omarchy-ane). w73 ships the final
+# command name; override with MLX_OMARCHY_ANE_SMOKE_RUNNER until then.
+ANE_SMOKE_RUNNER = "omarchy-ane-smoke"
 
-    Runs only when omarchy-ane ships a smoke runner (consent flag is
-    checked by the caller). Until it ships: available=false with the
-    reason, exactly as the wire contract requires. Never loads or
-    unloads modules, never writes.
+
+def _omarchy_ane_smoke(redactor):
+    """Opt-in ANE smoke: the packaged add-fixture runner.
+
+    Runs a shipped ~22 KB Apple-minted add ANEC 20 times, bit-exact
+    against a pinned golden hash; exit 0 = all 20 bit-exact, exit 2 =
+    unavailable. Consent is checked by the caller. Bounded timeout;
+    never loads or unloads modules, never writes.
     """
-    smoke = {"available": False, "name": "parakeet-encoder",
-             "sha256": [], "errors": 0, "min_ms": None, "median_ms": None,
-             "reason": "parakeet-encoder smoke not shipped in omarchy-ane "
-                       "yet"}
-    runner = shutil.which("omarchy-ane-smoke")
+    runner_name = os.environ.get("MLX_OMARCHY_ANE_SMOKE_RUNNER",
+                                 ANE_SMOKE_RUNNER)
+    smoke = {"available": False, "name": "add-fixture",
+             "chip": None, "sha256": [], "golden_sha256": None,
+             "errors": 0, "min_ms": None, "median_ms": None,
+             "exit": None,
+             "reason": f"smoke runner '{runner_name}' not shipped in "
+                       "omarchy-ane yet"}
+    runner = shutil.which(runner_name)
     if runner is None:
         return smoke
-    rec = run_tool(["omarchy-ane-smoke"], redactor,
-                   label="omarchy-ane-smoke", timeout=300)
-    smoke["reason"] = None
+    rec = run_tool([runner_name], redactor,
+                   label=runner_name, timeout=120)
     smoke["exit"] = rec["exit_code"]
+    if rec["exit_code"] == 2:
+        smoke["reason"] = rec["stderr"][:256] or \
+            rec["stdout"][:256] or "runner reported unavailable"
+        return smoke
     if rec["exit_code"] == 0:
         try:
             parsed = json.loads(rec["stdout"].strip().splitlines()[-1])
-            for key in ("name", "sha256", "errors", "min_ms", "median_ms"):
-                if key in parsed:
-                    smoke[key] = parsed[key]
-            smoke["available"] = True
-            return smoke
         except (ValueError, IndexError):
             smoke["reason"] = "runner printed no JSON summary"
             return smoke
+        for key in ("name", "chip", "sha256", "golden_sha256",
+                    "errors", "min_ms", "median_ms"):
+            if key in parsed:
+                smoke[key] = parsed[key]
+        smoke["available"] = True
+        smoke["reason"] = None
+        return smoke
     smoke["reason"] = rec["stderr"][:256] or "exit %s" % rec["exit_code"]
     return smoke
 
@@ -1198,7 +1212,7 @@ def main():
                     help="override the per-section timeout in seconds")
     ap.add_argument("--ane-smoke", action="store_true",
                     help="opt-in ANE smoke (Linux: the packaged "
-                         "parakeet-encoder runner when omarchy-ane ships "
+                         "add-fixture runner when omarchy-ane ships it; "
                          "it; macOS: a tiny CoreML add model). Never "
                          "loads or unloads modules, never writes.")
     ap.add_argument("--adt-dump", metavar="FILE", default=None,

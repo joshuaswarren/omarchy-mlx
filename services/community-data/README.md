@@ -90,6 +90,40 @@ npx wrangler deploy
 workers.dev fronting 403s default non-browser user agents, which is why
 the collector sends `User-Agent: mlx-omarchy-collector/1`.
 
+## Redeploying after a schema change (schema v2, 2026-10)
+
+The live worker validates submissions against the schema baked at
+deploy time. A schema change (new payload fields, a new
+`schema_version`) is only real once the worker is redeployed; until
+then every current-collector submit 422s with `schema_invalid` (the
+2026-09-17 `ane_port` incident). There is no CI deploy step: deploys
+are manual and owned by **Joshua** (the Cloudflare account token lives
+only on esper at `~/.config/cloudflare/thewarrens-co.env`; an agent
+session may run the commands from esper with that env, but the run is
+Joshua's call).
+
+```sh
+# From a checkout at the commit that changed the schema (esper):
+cd services/community-data
+npm install
+bun test test/unit                       # must be green first
+set -a; . ~/.config/cloudflare/thewarrens-co.env; set +a
+export CLOUDFLARE_API_TOKEN=$CF_API_TOKEN CLOUDFLARE_ACCOUNT_ID=$CF_ACCOUNT_ID
+npx wrangler deploy
+npm run check:schema                     # compares /v1/schema to the repo files
+```
+
+`check:schema` (scripts/check_schema_identity.py) must print OK; if it
+reports a stale deploy, the worker answered with the OLD identity —
+re-run `wrangler deploy` and check again. Then confirm from any
+machine: `curl -A omarchy-check
+https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/schema`
+must report `schema_versions: [1, 2]` and the `fields_sha256` from
+`scripts/compute_schema_identity.py` at the deployed commit. The
+scheduled `.github/workflows/community-data.yml` also runs the identity
+check against the live worker on every mirror run and fails loudly on
+drift.
+
 ## Local development and tests (no credentials needed)
 
 ```sh
