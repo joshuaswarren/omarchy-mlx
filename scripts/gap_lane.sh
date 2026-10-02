@@ -9,14 +9,15 @@ cd /tmp/CardLatency
 LOG=/tmp/CardLatency/gap_lane.log
 say() { echo "gap $(date -u +%FT%TZ) $*" >> "$LOG"; }
 recorded() { python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['prompts']))" "$1" 2>/dev/null || echo 0; }
-T=19
+T=${TICKET_MIN:-14}
 
 say "lane start boot $(cat /proc/sys/kernel/random/boot_id) kernel $(uname -r)"
 
 # 0. final-build (levers + wrap) card timing, both pairs: refreshes the
 #    receipt's after numbers so the 4B row includes the wrap
-if [ ! -f /tmp/CardLatency/decompose_compact4b_final.json ] \
-   || [ ! -f /tmp/CardLatency/decompose_everyday9b_final.json ]; then
+#    (set SKIP_FINAL=1 to defer it behind the dev/v4 stages)
+if [ "${SKIP_FINAL:-0}" != "1" ] && { [ ! -f /tmp/CardLatency/decompose_compact4b_final.json ] \
+   || [ ! -f /tmp/CardLatency/decompose_everyday9b_final.json ]; }; then
   ./lane_wait.sh $T ./ticket_card_final.sh >> "$LOG" 2>&1
 fi
 
