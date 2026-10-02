@@ -73,21 +73,64 @@ nondeterminism lives in the GPU's Sum/Max reductions, not in
 sampling. The 0.999 corr gate applies to within-process warm
 subsequent runs, which both wheels satisfy.
 
-### Serve-path worker (the real Synthesis class, 3 sentences)
-- sent 0: first_audio 4.49 s (cold; includes model load + worker
-  spawn), total 14.20 s, audio 2.96 s, streaming RTF 0.21
-  (chunks arrive faster than the worker can drain — chunks
-  themselves are also GPU-bound).
-- sent 1: first_audio 1.27 s (warm), total 16.69 s, audio 4.40 s,
-  streaming RTF 0.26.
-- sent 10: first_audio 4.36 s, total 52.30 s, audio 12.32 s,
-  streaming RTF 0.24.
-- (sent 15 hits the worker's intentional 30 s output cap —
-  VoiceOutputLimitError, by design, not a kernel issue. Replace
-  the `MAX_OUTPUT_SECONDS` constant in the serve repo to enable
-  longer outputs.)
-- zero-CPU on the spawn-method worker: textual-breakpoint gdb trace,
-  `cpu_command_encoder_calls: 0` through sent 0.
+### Serve-path worker (the real Synthesis class, NO gdb — Main's repeated
+request to confirm the numbers aren't artifacts of ptrace overhead)
+Re-run timing under load 0.00–0.41, PSI cpu avg10 = 0.00, no gdb.
+Streaming RTF is the only metric that makes sense for a streaming
+worker; the *kernel* RTF (script mode) is 1.21 and still stands. The
+serve-path wall is dominated by per-segment synthesis (the worker
+yields after KokoroPipeline.infer completes for each segment), not
+by IPC or chunking cadence.
+
+| variant | sentence | first_audio (s) | total (s) | audio (s) | chunks | streaming RTF |
+|---|---|---|---|---|---|---|
+| diag (29cba8e) | sent 0 (2.8 s text) | 4.60 | 17.06 | 3.12 | 10 | 0.183 |
+| patched (opcost.0aa1483) | sent 0 | 4.24 | 12.61 | 2.56 | 8 | 0.203 |
+| diag | sent 1 (4.0 s text) | 1.54 | 20.95 | 4.64 | 15 | 0.221 |
+| patched | sent 1 | 1.27 | 21.16 | 5.60 | 17 | 0.265 |
+| patched | sent 10 (10.9 s text) | 1.28 | 53.40 | 13.84 | 45 | 0.259 |
+| diag | sent 10 | 1.34 (typical) | >120 (timed out at 2 min) | — | — | — |
+
+Observation: the patched wheel's per-segment synth *is* faster (sent 0
+8 chunks at 1.2 s gap vs diag 10 chunks; sent 1 PATCHED wall 21.2 s
+for 5.6 s audio vs DIAG 21.0 s for 4.6 s audio) but the streaming RTF
+is essentially unchanged because the worker's per-segment infer cost
+is dominated by KokoroPipeline.infer's other ops (phoneme encoder,
+duration predictor, iSTFT, BERT-style layers), not the
+1-D conv our fast path accelerates. The conv speedup (121→9.3 ms per
+the 19081×128 k=11 shape) is in there, but the ~1.2 s-per-segment
+wall means the conv accounts for a small fraction of the per-segment
+synth time.
+
+Where the wall goes (sent 1 patched, per-segment timing):
+- model load + worker init: ~3 s (cold, sent 0 only)
+- first-infer: ~3 s (sent 0 only)
+- per-segment wall: ~1.2 s for 320 ms audio ≈ **3.75x slower than
+  realtime per segment**; the rest of the Kokoro pipeline
+  (inference, not the conv) dominates
+- inter-chunk worker delivery: ~ms
+
+So the user-visible serve path is **NOT yet real time** because the
+synthesis-segment cost (not the conv) dominates wall. The conv fix is
+necessary and the script-mode RTF gate stands, but the release cannot
+claim "serve-path real time" until the segment-level synth cost is
+brought under ~320 ms/segment (i.e., the other KokoroPipeline.infer
+ops land a per-segment fast path). That work is out of scope for
+this lane (it lives in the mlx_audio KokoroPipeline.infer call path
+and in the serve repo's segmenter).
+
+Release impact: ship the conv fix as v0.7.14 with the existing
+direct-synthesis real-time claim (the conv is the bottleneck in the
+direct path). The serve-path real-time claim must wait for a
+following lane that tackles the per-segment infer cost. docs/serve.md
+wording for this release: "1-D conv is no longer the synthesis
+bottleneck on M2; Kokoro real time in the direct-synthesis path;
+serve-path per-segment cost is now the bottleneck and is tracked
+separately."
+
+### zero-CPU on the serve worker
+Still 0 calls (count_cpu_textual.gdb.py, detach-on-fork on so the
+parent runs free under ptrace).
 
 ### Blast radius
 The fast path triggers ONLY on: rank-1, groups=1, unit stride, unit
