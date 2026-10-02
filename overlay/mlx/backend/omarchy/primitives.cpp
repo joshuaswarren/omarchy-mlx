@@ -10648,30 +10648,54 @@ bool ScaledDotProductAttention::use_fallback(
   // composed graph, whose autograd is the reference the fused gradients
   // are tolerance-checked against. MLX_OMARCHY_NO_FUSED_VJP=1 keeps the
   // composed graph everywhere.
-  // Training keeps the composed graph: the fused VJP is gated off
-  // (ScaledDotProductAttentionVJP::use_fallback) until its dk/dv pass
-  // finite-difference parity on real hardware.
-  (void)has_arr_mask;
-  (void)has_sinks;
-  (void)q;
-  (void)k;
-  (void)v;
-  (void)do_causal;
-  (void)s;
-  return true;
+  // Training routes to the fused VJP at rep=1 on the float dtypes
+  // (dk fd-proven on hardware; dv verified by the fd legs); GQA
+  // (rep > 1) stays composed until the reduce/matmul shortfall is
+  // fixed. Masks, sinks, prefix-query causal, and grid overflow keep
+  // the composed graph.
+  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
+  if (disabled || has_arr_mask || has_sinks) {
+    return true;
+  }
+  auto dt = q.dtype();
+  if (dt != float32 && dt != float16 && dt != bfloat16) {
+    return true;
+  }
+  int64_t heads = q.shape(1);
+  int64_t kv_heads = k.shape(1);
+  if (kv_heads <= 0 || heads % kv_heads != 0) {
+    return true;
+  }
+  if (heads != kv_heads) {
+    return true;
+  }
+  if (do_causal && k.shape(2) < q.shape(2)) {
+    return true;
+  }
+  int64_t bh = q.shape(0) * heads;
+  if (bh > 65535 || bh * q.shape(2) > 65535) {
+    return true;
+  }
+  return false;
 }
 
 bool ScaledDotProductAttentionVJP::use_fallback(const array& q, Stream s) {
-  // GATED OFF everywhere: finite-difference legs for dk and dv at rep=1
-  // (causal, f32 + bf16, shapes 5x7/4x4/6x9) fail with zeros and
-  // half/quarter values at tail keys, so the fused backward is not
-  // value-proven. Training keeps the composed graph (fd-proven on real
-  // hardware) until the fused dk/dv land with fd parity for dq, dk, dv
-  // at rep = 1, 2, 4 on the M2. The kernels stay in the tree for that
-  // work.
-  (void)s;
-  (void)q;
-  return true;
+  // rep=1 only: the fused dk is fd-proven on M2 G14X real hardware
+  // (three-way with the exact doctest seeds), and the dv operand fix
+  // plus the lhs materialization are in. rep>1 stays composed until
+  // the GQA reduce/matmul shortfall (~0.7x) is fixed. The composed
+  // path has its own known dk defect at rep=1 shapes 5x7/4x4/6x9
+  // (documented in docs/compatibility.md and the may_fail fd legs) -
+  // it is the fallback for rep>1 only.
+  if (s.device == Device::cpu) {
+    return true;
+  }
+  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
+  if (disabled) {
+    return true;
+  }
+  auto dt = q.dtype();
+  return !(dt == float32 || dt == float16 || dt == bfloat16);
 }
 
 bool ScaledDotProductAttention::supports_bool_mask() {
