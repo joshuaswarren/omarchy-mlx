@@ -7,6 +7,7 @@ import {
   expectedChunkLength,
 } from "./caps";
 import { sha256Hex } from "./hash";
+import { coerceToSchema } from "./coerce";
 import { ALIAS_HEADER, parseHostAliases, scanPii } from "./pii";
 import { verifyPow } from "./pow";
 import { SchemaNode, validateSchemaRoot } from "./schema";
@@ -91,14 +92,27 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
   }
   const init = checked.value;
 
+  const schema = init.payload.kind === "omarchy-mac-e2e" ? payloadE2ESchema : payloadSchema;
+  // Tolerance for v0.7.14 macOS collectors (#24, #26): decode/split their
+  // hex- and NUL-encoded dt_nodes strings and cut over-long strings to the
+  // schema's own maxLength, before validating. The schema and its identity
+  // hash are untouched; every change is logged and echoed as `coerced`.
+  const coerced = coerceToSchema(init.payload, schema);
+  if (coerced.length > 0) {
+    console.log(`coerced payload fields (${coerced.length}):`, JSON.stringify(coerced));
+  }
+  const audit = coerced.length > 0 ? { coerced } : {};
+
   const summaryText = JSON.stringify(init.payload);
   if (summaryText.length > MAX_PAYLOAD_BYTES) {
     return errorResponse(413, "payload_too_large", { limit: MAX_PAYLOAD_BYTES });
   }
-  const schema = init.payload.kind === "omarchy-mac-e2e" ? payloadE2ESchema : payloadSchema;
   const schemaErrors = validateSchemaRoot(init.payload, schema);
   if (schemaErrors.length > 0) {
-    return errorResponse(422, "schema_invalid", { errors: schemaErrors.slice(0, 20) });
+    return errorResponse(422, "schema_invalid", {
+      errors: schemaErrors.slice(0, 20),
+      ...audit,
+    });
   }
 
   const pow = await verifyPow(init.content_sha256, (body as Record<string, unknown>).pow, MIN_POW_BITS);
@@ -122,6 +136,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
       content_sha256: init.content_sha256,
       missing_chunks: [],
       receipt_url: receiptUrl(new URL(request.url).origin, init.content_sha256),
+      ...audit,
     });
   }
 
@@ -152,6 +167,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
       content_sha256: init.content_sha256,
       missing_chunks: missing,
       receipt_url: receiptUrl(new URL(request.url).origin, init.content_sha256),
+      ...audit,
     });
   }
 
@@ -185,6 +201,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
     content_sha256: init.content_sha256,
     missing_chunks: missing,
     receipt_url: receiptUrl(new URL(request.url).origin, init.content_sha256),
+    ...audit,
   });
 }
 
