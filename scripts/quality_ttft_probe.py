@@ -41,12 +41,10 @@ def dump_threads(home, once=[False]):
     if once[0]:
         return
     once[0] = True
-    spy = os.path.expanduser("~/agents/QualityTtft/py-spy")
     for pid in assistant_pids(home):
-        out = subprocess.run(["sudo", "-n", spy, "dump", "--pid", str(pid)],
-                             capture_output=True, text=True, timeout=30)
-        print(f"--- py-spy dump pid={pid} rc={out.returncode}\n"
-              f"{(out.stdout or out.stderr)[:4000]}", flush=True)
+        subprocess.run(["kill", "-USR1", str(pid)], capture_output=True)
+        print(f"--- SIGUSR1 sent to pid={pid}", flush=True)
+        time.sleep(1.0)
 
 
 def post_turn(runtime, cid, body, home):
