@@ -206,8 +206,11 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
         break
 
     if status != 200:
+        detail = decoded.get("detail")
+        suffix = f" {json.dumps(detail)[:2048]}" if detail else ""
         raise SubmitError(
-            f"initiate failed with HTTP {status}: {decoded.get('error')}")
+            f"initiate failed with HTTP {status}: {decoded.get('error')}"
+            f"{suffix}")
 
     if decoded.get("status") == "duplicate":
         return _receipt(decoded, deduplicated=True, status=status)

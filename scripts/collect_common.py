@@ -405,6 +405,24 @@ def _bounded_pmgr_blocks(blocks, truncated, max_blocks=8, max_children=256):
     return kept
 
 
+# Payload schema for every `truncated` marker list: at most 16 items,
+# each at most 64 characters.
+MARKER_MAX_ITEMS = 16
+MARKER_MAX_LEN = 64
+
+
+def bound_markers(markers, cap_marker="truncated:cap"):
+    """Fit a `truncated` marker list to the payload schema.
+
+    Each marker is cut to MARKER_MAX_LEN; past MARKER_MAX_ITEMS the
+    list stops at the cap and its last slot says so (`cap_marker`).
+    """
+    items = [str(m)[:MARKER_MAX_LEN] for m in markers or []]
+    if len(items) > MARKER_MAX_ITEMS:
+        items = items[:MARKER_MAX_ITEMS - 1] + [cap_marker]
+    return items
+
+
 # Payload budget for the whole ane_port_detail block. 64 KiB covered
 # the old devicetree-only content; deep rows also carry the 48 KiB
 # omarchy_ane promotion block, so the deep path raises the budget
@@ -474,6 +492,10 @@ def _cap_port_detail(port, redactor, max_bytes=PORT_DETAIL_MAX_BYTES):
     # re-redact. The legacy Linux devicetree keys do not apply.
     if src_macos is not None:
         out = {"macos": _walk(src_macos)}
+        if isinstance(out["macos"], dict) and \
+                isinstance(out["macos"].get("truncated"), list):
+            out["macos"]["truncated"] = bound_markers(
+                out["macos"]["truncated"])
         if truncated or _size(out) > max_bytes:
             out["truncated"] = (truncated or [])[:15] + \
                 ["macos:over_budget"]

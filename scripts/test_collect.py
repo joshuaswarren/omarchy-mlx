@@ -354,6 +354,17 @@ class SubmitProtocol(unittest.TestCase):
         self.assertEqual(bodies[0]["pow"]["difficulty"], 18)
         self.assertEqual(bodies[1]["pow"]["difficulty"], 20)
 
+    def test_initiate_failure_reports_server_detail(self):
+        import collect_submit as cs
+        errors = ["$.ane_port_detail.macos.dt_nodes[1].instance: "
+                  "longer than 64 characters"]
+        server = SubmitProtocol.FakeServer(initiate=[
+            (422, {"error": "schema_invalid", "detail": {"errors": errors}})])
+        with self.assertRaises(cs.SubmitError) as ctx:
+            self.run_submit(server)
+        self.assertIn("schema_invalid", str(ctx.exception))
+        self.assertIn(errors[0], str(ctx.exception))
+
     def test_chunk_failure_raises_and_mentions_resume(self):
         import collect_submit as cs
         server = SubmitProtocol.FakeServer(

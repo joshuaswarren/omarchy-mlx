@@ -6,7 +6,7 @@ import platform
 
 import bench_matrix
 from collect_common import (run_tool, run_python_probe,
-                            PROBE_STREAM_CHARS)
+                            PROBE_STREAM_CHARS, bound_markers)
 
 
 def not_applicable():
@@ -46,12 +46,27 @@ MAX_REG_BYTES = 4096   # v0.6.5: 64 could not carry a real pmgr reg
 MAX_RANGES = 256       # t602x pmgr reg = 73 ranges; t6002 = 241
 
 
-def _text(value):
+def _raw_text(value):
     if isinstance(value, list) and len(value) == 1:
         value = value[0]
     if isinstance(value, bytes):
         value = value.split(b"\x00")[0].decode("utf-8", "replace")
-    return str(value)[:128] if value is not None else None
+    return str(value) if value is not None else None
+
+
+def _text(value):
+    value = _raw_text(value)
+    return value[:128] if value is not None else None
+
+
+# Payload schema: every `truncated` item is at most 64 characters.
+MAX_MARKER = 64
+
+
+def _marker(head, name, tail=""):
+    # "<head>:<name><tail>" within MAX_MARKER; only the node name is cut.
+    room = max(0, MAX_MARKER - len(head) - len(tail) - 1)
+    return "%s:%s%s" % (head, (name or "?")[:room], tail)
 
 
 def _ascii(value):
@@ -99,8 +114,8 @@ def _reg(node):
     raw = node.get("reg") or node.get("IODeviceMemory")
     if isinstance(raw, bytes):
         if len(raw) > MAX_REG_BYTES:
-            out["truncated"].append("reg_bytes:%s" % _text(
-                node.get("name")))
+            out["truncated"].append(_marker("reg_bytes",
+                                            _text(node.get("name"))))
             raw = raw[:MAX_REG_BYTES]
         return raw.hex()
     return None
@@ -117,7 +132,7 @@ def _reg_ranges(node):
     if isinstance(raw, bytes):
         cell = 8 if len(raw) % 16 == 0 else 4
         if len(raw) % (2 * cell):
-            out["truncated"].append("reg_ranges:%s" % (name or "?"))
+            out["truncated"].append(_marker("reg_ranges", name))
             return None
         vals = [int.from_bytes(raw[i:i + cell], "little")
                 for i in range(0, len(raw), cell)]
@@ -135,7 +150,7 @@ def _reg_ranges(node):
     ranges = ["0x%x/0x%x" % (base, size) for base, size in pairs]
     if len(ranges) > MAX_RANGES:
         out["truncated"].append(
-            "reg_ranges:%s:%d" % (name or "?", total))
+            _marker("reg_ranges", name, ":%d" % total))
         ranges = ranges[:MAX_RANGES]
     return ranges or None
 
@@ -211,6 +226,23 @@ _DT_KEYS = ("name", "compatible", "reg", "interrupts", "interrupt-names",
             "dapf-instance-0", "dart-id", "dart-options", "role",
             "device_type", "ranges", "#address-cells", "#size-cells")
 MAX_DT_HEX = 8192
+# Keys the payload schema types as string arrays (dt_nodes items in
+# services/community-data/schema/payload-v1.schema.json). As OSData they
+# arrive NUL-separated (M5 sends `compatible` this way), so split them
+# into strings instead of hex-encoding them.
+_DT_STRING_LISTS = ("compatible", "interrupt-names")
+# Schema maxLength per item of those string arrays.
+_DT_ITEM_LEN = {"compatible": 256, "interrupt-names": 128}
+# Schema maxLength for string-typed dt_nodes keys tighter than the hex
+# cap; anything longer is cut on this side and recorded in `truncated`.
+_DT_MAX_LEN = {"name": 128, "ane-type": 256, "ane-subtype": 256,
+               "ane-id": 64, "die-id": 64, "die-ane-id": 64,
+               "clock-gates": 4096, "power-gates": 4096,
+               "iommu-parent": 256, "vm-base": 64, "vm-size": 64,
+               "page-size": 64, "sids": 4096, "bypass-15": 256,
+               "instance": 64, "dapf-instance-0": 4096, "dart-id": 64,
+               "dart-options": 256, "role": 128, "device_type": 128,
+               "ranges": 4096}
 
 
 def _full_value(value, truncated, depth=0):
@@ -243,6 +275,18 @@ def _full_value(value, truncated, depth=0):
     return _text(value)
 
 
+def _dt_strings(texts, total, key, name, truncated):
+    # A schema string array: at most 16 items, each cut to the schema's
+    # per-item maxLength; both cuts are recorded, never silent.
+    if total > 16:
+        truncated.append(_marker("list:" + key, name))
+    cap = _DT_ITEM_LEN[key]
+    kept = [t for t in texts[:16] if t]
+    if any(len(t) > cap for t in kept):
+        truncated.append(_marker("len:" + key, name))
+    return [t[:cap] for t in kept] or None
+
+
 def _dt_entry(node, path, truncated):
     # One whitelisted IODeviceTree node; binary values as hex.
     name = _text(node.get("name"))
@@ -252,9 +296,18 @@ def _dt_entry(node, path, truncated):
         if value is None:
             continue
         out_key = "phandle" if key == "AAPL,phandle" else key
-        if isinstance(value, bytes):
+        if isinstance(value, bytes) and key in _DT_STRING_LISTS:
+            parts = [p.decode("utf-8", "replace")
+                     for p in value.split(b"\x00") if p]
+            entry[out_key] = _dt_strings(parts, len(parts), key, name,
+                                         truncated)
+        elif isinstance(value, list) and key in _DT_STRING_LISTS:
+            parts = [_raw_text(v) for v in value[:16]]
+            entry[out_key] = _dt_strings([t for t in parts if t],
+                                         len(value), key, name, truncated)
+        elif isinstance(value, bytes):
             if len(value) > MAX_DT_HEX:
-                truncated.append("hex:%s:%s" % (key, name or "?"))
+                truncated.append(_marker("hex:" + key, name))
                 value = value[:MAX_DT_HEX]
             entry[out_key] = value.hex()
         elif isinstance(value, list):
@@ -263,11 +316,16 @@ def _dt_entry(node, path, truncated):
             else:
                 texts = [_text(v) for v in value[:16]]
                 if len(value) > 16:
-                    truncated.append("list:%s:%s" % (key, name or "?"))
+                    truncated.append(_marker("list:" + key, name))
                 kept = [t for t in texts if t is not None]
                 entry[out_key] = kept or None
         else:
             entry[out_key] = _text(value)
+        cap = _DT_MAX_LEN.get(out_key)
+        if (cap is not None and isinstance(entry[out_key], str)
+                and len(entry[out_key]) > cap):
+            truncated.append(_marker("len:" + key, name))
+            entry[out_key] = entry[out_key][:cap]
     return entry
 
 
@@ -1000,8 +1058,10 @@ def probe_ane_port(redactor):
                "powermetrics", "truncated", "driver", "platform",
                "compiler", "set_base_candidate")
               if key in detail}
-    return {"available": bool(detail.get("available")),
-            "macos": redactor.apply_value(detail)}
+    macos = redactor.apply_value(detail)
+    if "truncated" in macos:
+        macos["truncated"] = bound_markers(macos["truncated"])
+    return {"available": bool(detail.get("available")), "macos": macos}
 
 
 def probe_ane_dump(redactor):

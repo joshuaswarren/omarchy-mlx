@@ -8,6 +8,7 @@ from importlib.metadata import FileHash, PackagePath
 import io
 import json
 import plistlib
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -23,6 +24,83 @@ import collect_macos as cm
 import collect_quick as cq
 import mlx_provenance as prov
 import test_collect as legacy_tests
+
+
+
+def _schema_errors(value, schema, path="$"):
+    """Python twin of services/community-data/src/schema.ts: the same
+    keywords, interpreted the same way, so a test can assert what the
+    endpoint would answer."""
+    errors = []
+
+    def is_type(v, t):
+        if t == "object":
+            return isinstance(v, dict)
+        if t == "array":
+            return isinstance(v, list)
+        if t == "string":
+            return isinstance(v, str)
+        if t == "integer":
+            return (isinstance(v, int) and not isinstance(v, bool)) or (
+                isinstance(v, float) and v.is_integer())
+        if t == "number":
+            return isinstance(v, (int, float)) and not isinstance(v, bool)
+        if t == "boolean":
+            return isinstance(v, bool)
+        if t == "null":
+            return v is None
+        return False
+
+    def walk(v, node, at):
+        if "type" in node:
+            types = node["type"] if isinstance(node["type"], list) \
+                else [node["type"]]
+            if not any(is_type(v, t) for t in types):
+                errors.append("%s: expected type %s" % (at, " | ".join(types)))
+                return
+        if "const" in node and v != node["const"]:
+            errors.append("%s: must equal %r" % (at, node["const"]))
+        if "enum" in node and v not in node["enum"]:
+            errors.append("%s: must be one of %r" % (at, node["enum"]))
+        if isinstance(v, (dict, list)):
+            entries = list(v.items()) if isinstance(v, dict) else \
+                [(str(i), x) for i, x in enumerate(v)]
+            keys = [k for k, _ in entries]
+            for key in node.get("required", []):
+                if key not in keys:
+                    errors.append("%s: missing required property %s"
+                                  % (at, key))
+            props = node.get("properties", {})
+            extra = node.get("additionalProperties")
+            for key, item in entries:
+                if key in props:
+                    walk(item, props[key], "%s.%s" % (at, key))
+                elif extra is False:
+                    errors.append("%s: additional property %s is not "
+                                  "allowed" % (at, key))
+                elif isinstance(extra, dict):
+                    walk(item, extra, "%s.%s" % (at, key))
+            if isinstance(v, list) and "maxItems" in node and \
+                    len(v) > node["maxItems"]:
+                errors.append("%s: more than %d items"
+                              % (at, node["maxItems"]))
+        if isinstance(v, list) and isinstance(node.get("items"), dict):
+            for i, item in enumerate(v):
+                walk(item, node["items"], "%s[%d]" % (at, i))
+        if isinstance(v, str):
+            if "maxLength" in node and len(v) > node["maxLength"]:
+                errors.append("%s: longer than %d characters"
+                              % (at, node["maxLength"]))
+            if "pattern" in node and not re.search(node["pattern"], v):
+                errors.append("%s: does not match %s" % (at, node["pattern"]))
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if "minimum" in node and v < node["minimum"]:
+                errors.append("%s: less than %s" % (at, node["minimum"]))
+            if "maximum" in node and v > node["maximum"]:
+                errors.append("%s: greater than %s" % (at, node["maximum"]))
+
+    walk(value, schema, path)
+    return errors
 
 
 class MacHostTests(unittest.TestCase):
@@ -687,6 +765,147 @@ class AneProbeCodeTests(unittest.TestCase):
         self.assertIsNone(out["pmgr_nodes"][0]["reg_ranges_total"])
         self.assertEqual(len(out["ane_nodes"][0]["reg_ranges"]), 256)
         self.assertIn("reg_ranges:ane0:257", out["truncated"])
+
+    def test_m5_bytes_compatible_and_long_instance_fit_schema(self):
+        # M5 Max (macOS) shape: `compatible` and `interrupt-names` arrive
+        # as NUL-separated OSData and `instance` is a blob longer than the
+        # schema's 64-character cap. These used to ship as hex strings
+        # and an overlong instance, and the endpoint answered 422.
+        ane = {"name": b"ane0",
+               "compatible": b"ane,t8142\x00ane,t8140\x00\x00",
+               "interrupt-names": b"irq0\x00irq1\x00",
+               "instance": bytes(range(48)),  # 96 hex characters
+               "IORegistryEntryChildren": []}
+        many = {"name": b"dart-ane0",
+                "compatible": b"\x00".join(b"c%d" % i for i in range(20)),
+                "IORegistryEntryChildren": []}
+        service = {"IORegistryEntryChildren": [ane, many]}
+
+        def fake_run(argv, capture_output=None, timeout=None):
+            class P:
+                returncode = 0
+                stderr = b""
+                stdout = b""
+            p = P()
+            a = list(argv)
+            if a[:3] == ["ioreg", "-a", "-p"]:
+                p.stdout = plistlib.dumps(service)
+            elif a[:2] == ["ioreg", "-a"] and a[2] == "-rc":
+                p.stdout = plistlib.dumps([])
+            else:
+                raise AssertionError(a)
+            return p
+
+        ns = {}
+        with patch("subprocess.run", side_effect=fake_run):
+            exec(compile(cm.ANE_PROBE_CODE, "<probe>", "exec"), ns)
+        out = ns["out"]
+        nodes = {n["path"].rsplit("/", 1)[-1]: n for n in out["dt_nodes"]}
+        self.assertEqual(nodes["ane0"]["compatible"],
+                         ["ane,t8142", "ane,t8140"])
+        self.assertEqual(nodes["ane0"]["interrupt-names"], ["irq0", "irq1"])
+        self.assertEqual(nodes["ane0"]["instance"],
+                         bytes(range(48)).hex()[:64])
+        self.assertIn("len:instance:ane0", out["truncated"])
+        self.assertEqual(nodes["dart-ane0"]["compatible"],
+                         ["c%d" % i for i in range(16)])
+        self.assertIn("list:compatible:dart-ane0", out["truncated"])
+
+        schema_path = (Path(__file__).resolve().parent.parent / "services" /
+                       "community-data" / "schema" / "payload-v1.schema.json")
+        item = json.loads(schema_path.read_text())["properties"][
+            "ane_port_detail"]["properties"]["macos"]["properties"][
+            "dt_nodes"]["items"]["properties"]
+        types = {"string": str, "array": list, "null": type(None)}
+        for node in out["dt_nodes"]:
+            for key, value in node.items():
+                rule = item.get(key)
+                if rule is None:
+                    continue
+                allowed = rule["type"] if isinstance(rule["type"], list) \
+                    else [rule["type"]]
+                self.assertTrue(any(isinstance(value, types[t])
+                                    for t in allowed), (key, value))
+                if isinstance(value, str):
+                    self.assertLessEqual(len(value), rule["maxLength"], key)
+                if isinstance(value, list):
+                    self.assertLessEqual(len(value), rule["maxItems"], key)
+                    for v in value:
+                        self.assertIsInstance(v, str)
+                        self.assertLessEqual(len(v),
+                                             rule["items"]["maxLength"], key)
+
+    def test_whole_macos_block_with_many_long_values_fits_schema(self):
+        # 18 ANE-family nodes with 120+ character names, each carrying an
+        # overlong instance/sids/vm-base, 20 compatible entries (one of
+        # 300 characters) and long interrupt-names. Unbounded, these
+        # produce well over 16 truncation markers, most longer than 64
+        # characters, and the endpoint answered 422 again.
+        def node(i):
+            name = ("ane-%02d-" % i + "x" * 120).encode()
+            return {"name": name,
+                    "compatible": b"\x00".join(
+                        [b"c" * 300] + [b"ane,t81%02d" % j
+                                        for j in range(19)]),
+                    "interrupt-names": [b"i" * 200, b"irq1"],
+                    "instance": bytes(range(48)),
+                    "sids": bytes(3000),
+                    "vm-base": bytes(40),
+                    "IORegistryEntryChildren": []}
+        service = {"IORegistryEntryChildren": [node(i) for i in range(18)]}
+        h11 = [{"IONameMatched": "ane,t8142", "FirmwareLoaded": True,
+                "DeviceProperties": {"ANEDevicePropertyNumANECores": 16}}]
+
+        def fake_run(argv, capture_output=None, timeout=None):
+            class P:
+                returncode = 0
+                stderr = b""
+                stdout = b""
+            p = P()
+            a = list(argv)
+            if a[:3] == ["ioreg", "-a", "-p"]:
+                p.stdout = plistlib.dumps(service)
+            elif a[:2] == ["ioreg", "-a"] and a[2] == "-rc":
+                p.stdout = plistlib.dumps(h11 if a[3] == "H11ANEIn" else [])
+            else:
+                raise AssertionError(a)
+            return p
+
+        ns = {}
+        stdout = io.StringIO()
+        with patch("subprocess.run", side_effect=fake_run), \
+                contextlib.redirect_stdout(stdout):
+            exec(compile(cm.ANE_PROBE_CODE, "<probe>", "exec"), ns)
+        raw = ns["out"]
+        # The fixture really overflows the marker list.
+        self.assertGreater(len(raw["truncated"]), 16)
+        self.assertTrue(all(len(m) <= 64 for m in raw["truncated"]))
+        self.assertIn("len:compatible:ane-00-" + "x" * 42,
+                      raw["truncated"])
+        self.assertIn("len:interrupt-names:ane-00-" + "x" * 37,
+                      raw["truncated"])
+        first = raw["dt_nodes"][0]
+        self.assertEqual(len(first["compatible"]), 16)
+        self.assertEqual(first["compatible"][0], "c" * 256)
+        self.assertEqual(first["interrupt-names"], ["i" * 128, "irq1"])
+
+        with patch.object(cm, "run_python_probe", return_value={
+                "available": True, "exit_code": 0, "error": None,
+                "stderr": "", "stdout": stdout.getvalue()}):
+            port = cm.probe_ane_port(cc.Redactor())
+        macos = port["macos"]
+        self.assertEqual(len(macos["truncated"]), 16)
+        self.assertEqual(macos["truncated"][-1], "truncated:cap")
+
+        quick = json.loads(json.dumps(legacy_tests.BuildPayload.QUICK))
+        quick["ane_port"] = port
+        payload = cc.build_payload("deep", quick, {},
+                                   redactor=cc.Redactor())
+        self.assertIn("macos", payload["ane_port_detail"])
+        schema_path = (Path(__file__).resolve().parent.parent / "services" /
+                       "community-data" / "schema" / "payload-v1.schema.json")
+        schema = json.loads(schema_path.read_text())
+        self.assertEqual(_schema_errors(payload, schema), [])
 
     def test_probe_ane_port_passes_new_blocks_through(self):
         payload = json.dumps({
