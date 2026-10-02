@@ -105,6 +105,21 @@ ANE_UNTESTED_STEPS = (
     "python3 scripts/collect_deep.py --ane-smoke --submit. The collector "
     "runs the smoke when the chip is idle (load < 0.5, PSI 0); no fixed "
     "uptime is required.")
+ANE_UNTESTED_STEPS_INTREE = (
+    "To submit a judged row for an untested chip on a kernel that ships "
+    "the ANE driver in-tree: userspace + smoke + firmware fetch only; do "
+    "not install omarchy-ane-dkms. Add that chip's opt-in key from the "
+    "omarchy-ane README table to /etc/omarchy-platform/"
+    "dtb-overlays.opt-in. For T6020, T6022 and T8112, run sudo "
+    "omarchy-ane-firmware-fetch first. Then run sudo omarchy-ane-dt apply "
+    "and reboot. From an omarchy-mlx checkout, run python3 "
+    "scripts/collect_deep.py --ane-smoke --submit. The collector runs the "
+    "smoke when the chip is idle (load < 0.5, PSI 0); no fixed uptime is "
+    "required.")
+ANE_DTBS_KERNEL_NOTE = (
+    "DTBS= is set in /etc/default/update-m1n1, so m1n1 boots the kernel's "
+    "own device trees: the overlay opt-in has no effect, and the chip is "
+    "enabled only by its node in the kernel DT.")
 
 # Identity strip list for the raw devicetree text member (same keys as
 # the macOS probe strip list).
@@ -603,6 +618,103 @@ def _omarchy_ane_module(redactor):
             "loaded_line": loaded}
 
 
+def _classify_ane_module_file(path):
+    """intree | dkms from the module file's installed path.
+
+    A file under the kernel package's own tree (.../kernel/drivers/
+    accel/ane/ for the ANE driver) ships with the kernel: intree. A file
+    under updates/, extra/, or any dkms-owned path is out-of-tree: dkms.
+    Anything else is treated as out-of-tree (dkms) because intree claims
+    proof the kernel package built it.
+    """
+    lowered = path.lower()
+    if "/updates/" in lowered or "/extra/" in lowered or "dkms" in lowered:
+        return "dkms"
+    if "/kernel/" in lowered:
+        return "intree"
+    return "dkms"
+
+
+def _ane_module_is_builtin(module_name, kver):
+    """True when /lib/modules/<kver>/modules.builtin lists the module."""
+    try:
+        with open("/lib/modules/%s/modules.builtin" % kver,
+                  "r", encoding="utf-8") as fh:
+            for line in fh:
+                if re.search(r"/%s\.ko(\.(xz|zst|gz|bz2))?$"
+                             % re.escape(module_name), line.strip()):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _ane_driver_source(redactor, module_name, kver=None):
+    """driver_source + evidence for the bound ANE module (read-only).
+
+    intree: the module file lives in the kernel package's tree, or the
+    module is built in (listed in modules.builtin, or /sys/module/<m>
+    with no file anywhere). dkms: the file lives under updates/, extra/,
+    or a dkms path. none: no ANE driver module bound.
+    """
+    kver = kver or os.uname().release
+    evidence = {"module_file": None, "builtin": False}
+    if not module_name:
+        return "none", evidence
+    rec = run_tool(["modinfo", "-n", module_name], redactor,
+                   label="modinfo -n %s" % module_name, timeout=15)
+    if rec["exit_code"] == 0 and rec["stdout"].strip():
+        path = rec["stdout"].strip().splitlines()[-1]
+        evidence["module_file"] = redactor.apply(path[:512])
+        return _classify_ane_module_file(path), evidence
+    if _ane_module_is_builtin(module_name, kver) \
+            or os.path.isdir("/sys/module/%s" % module_name):
+        evidence["builtin"] = True
+        return "intree", evidence
+    return "none", evidence
+
+
+def _ane_dtbs_source(path="/etc/default/update-m1n1"):
+    """kernel | overlay | unknown from the DTBS= line (read-only).
+
+    A non-empty DTBS= pins update-m1n1 to the kernel's own DTBs, so the
+    omarchy-ane overlay opt-in has no effect. An empty or absent DTBS
+    leaves the omarchy-ane-dt hook free to swap in its overlay copies.
+    No file at all leaves the answer unknown.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return "unknown"
+    for line in lines:
+        stripped = line.strip()
+        if not re.match(r"(?:export\s+)?DTBS=", stripped):
+            continue
+        value = stripped.split("=", 1)[1].strip().strip("\"'")
+        return "kernel" if value else "overlay"
+    return "overlay"
+
+
+def _kernel_ships_ane_driver(kver=None):
+    """True when the running kernel carries drivers/accel/ane in-tree."""
+    kver = kver or os.uname().release
+    base = "/lib/modules/%s" % kver
+    for name in ("modules.builtin", "modules.dep"):
+        try:
+            with open(os.path.join(base, name), "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if "/accel/ane/" in line:
+                        return True
+        except OSError:
+            continue
+    try:
+        return bool(os.listdir(os.path.join(base,
+                                            "kernel/drivers/accel/ane")))
+    except OSError:
+        return False
+
+
 def _omarchy_ane_firmware(redactor):
     """[{path, sha256}] for /lib/firmware/apple/ane/*."""
     root = "/lib/firmware/apple/ane"
@@ -867,6 +979,9 @@ def section_ane(redactor, repo, ws, smoke):
     out["module"] = module_state["module"]
     out["modules"] = module_state["modules"]
     out["loaded_line"] = module_state["loaded_line"]
+    out["driver_source"], out["driver_source_evidence"] = \
+        _ane_driver_source(redactor, module_state["module"].get("name"))
+    out["dtbs_source"] = _ane_dtbs_source()
     out["installed"] = bool(out["check"].get("installed")
                             and module_state["module"].get("available") is not False)
     if not out["installed"]:
@@ -962,6 +1077,20 @@ def _ls_grep(redactor, directory, needle):
         return {"unavailable": "ls failed"}
     return [line[:256] for line in rec["stdout"].splitlines()][:16]
 
+def _ane_untested_steps(kernel_intree, dtbs_source):
+    """The untested-chip steps; one wording source, two branches.
+
+    On a kernel that ships drivers/accel/ane in-tree the chip needs
+    userspace + smoke + firmware fetch only, never omarchy-ane-dkms.
+    When DTBS= pins m1n1 to the kernel's own DTBs, the overlay opt-in
+    has no effect and only the kernel DT node can enable the chip.
+    """
+    steps = ANE_UNTESTED_STEPS_INTREE if kernel_intree else ANE_UNTESTED_STEPS
+    if dtbs_source == "kernel":
+        steps += " " + ANE_DTBS_KERNEL_NOTE
+    return steps
+
+
 def _ane_smoke_guidance(ane):
     """Return instructions for an untested chip or busy smoke retry."""
     if not isinstance(ane, dict) or ane.get("platform") != "Linux":
@@ -971,7 +1100,8 @@ def _ane_smoke_guidance(ane):
     if (check.get("untested") and check.get("status") != "ready"
             and any("overlay applies only when" in line
                     for line in check.get("lines") or [])):
-        messages.append(ANE_UNTESTED_STEPS)
+        messages.append(_ane_untested_steps(_kernel_ships_ane_driver(),
+                                            _ane_dtbs_source()))
     smoke = ane.get("smoke") or {}
     if smoke.get("reason") == "not run: busy":
         messages.append("Smoke not run: busy. Run again when the machine is idle.")

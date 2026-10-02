@@ -139,6 +139,26 @@ collector also records `uptime_s` as host context, but it is not a gate.
 for every poll. The post-smoke `/proc/interrupts` sample is recorded but
 not judged.
 
+`driver_source` says how the bound ANE module was produced: `intree` when
+the module file lives in the kernel package's tree
+(`.../kernel/drivers/accel/ane/`) or the module is built in (listed in
+`modules.builtin`, or `/sys/module/<m>` present with no file anywhere);
+`dkms` when it lives under `updates/`, `extra/`, or a dkms path; `none`
+when no ANE driver is bound. `driver_source_evidence` keeps the proof:
+the module file path (home paths and hostnames redacted) and the `builtin`
+flag. `dtbs_source` reads the `DTBS=` line of
+`/etc/default/update-m1n1` read-only: a non-empty value is `kernel` (m1n1
+boots the kernel's own DTBs, so the overlay opt-in has no effect and only
+the kernel DT node can enable the chip), empty or absent is `overlay`, a
+missing file is `unknown`. Per issue #155, a row with
+`driver_source == "intree"`, the chip's driver bound, a 20/20 bit-exact
+smoke, and no faults is judged exactly like a dkms row; the omarchy-ane
+checker (w73) owns that verdict and its wording. The untested-chip steps
+the collector prints branch on both facts: on an in-tree kernel it says
+userspace + smoke + firmware fetch only and never omarchy-ane-dkms, and
+when `dtbs_source == "kernel"` it appends that the overlay opt-in has no
+effect.
+
 Smoke fixture availability (omarchy-ane 50958be): the H14-family chips
 t6020 / t6021 / t6022 / t8112 run `fixtures/h14-anec/add` (20,800 B,
 sha256 `b416b9d1...`, mil-hwx-compiler output, encoder

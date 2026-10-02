@@ -51,12 +51,29 @@ The one-paragraph version:
 
 ## Turn on the ANE for your chip
 
-To submit a judged row for an untested chip, install omarchy-ane-dkms and add that chip's opt-in
-key from the omarchy-ane README table to /etc/omarchy-platform/dtb-overlays.opt-in. For T6020,
-T6022 and T8112, run sudo omarchy-ane-firmware-fetch first. Then run sudo omarchy-ane-dt apply
-and reboot. From an omarchy-mlx checkout, run python3 scripts/collect_deep.py --ane-smoke
---submit. The collector runs the smoke when the chip is idle (load < 0.5, PSI 0); no fixed
-uptime is required.
+The collector prints the steps that match your kernel. One wording source:
+`scripts/collect_deep.py`. Both variants, plus the one override:
+
+- Kernel without the in-tree ANE driver: "To submit a judged row for an untested
+  chip, install omarchy-ane-dkms and add that chip's opt-in key from the
+  omarchy-ane README table to /etc/omarchy-platform/dtb-overlays.opt-in. For
+  T6020, T6022 and T8112, run sudo omarchy-ane-firmware-fetch first. Then run
+  sudo omarchy-ane-dt apply and reboot. From an omarchy-mlx checkout, run
+  python3 scripts/collect_deep.py --ane-smoke --submit. The collector runs the
+  smoke when the chip is idle (load < 0.5, PSI 0); no fixed uptime is required."
+- Kernel that ships the ANE driver in-tree: "To submit a judged row for an
+  untested chip on a kernel that ships the ANE driver in-tree: userspace + smoke
+  + firmware fetch only; do not install omarchy-ane-dkms. Add that chip's opt-in
+  key from the omarchy-ane README table to
+  /etc/omarchy-platform/dtb-overlays.opt-in. For T6020, T6022 and T8112, run
+  sudo omarchy-ane-firmware-fetch first. Then run sudo omarchy-ane-dt apply and
+  reboot. From an omarchy-mlx checkout, run python3 scripts/collect_deep.py
+  --ane-smoke --submit. The collector runs the smoke when the chip is idle
+  (load < 0.5, PSI 0); no fixed uptime is required."
+- "DTBS= is set in /etc/default/update-m1n1, so m1n1 boots the kernel's own
+  device trees: the overlay opt-in has no effect, and the chip is enabled only
+  by its node in the kernel DT." The collector appends that sentence when the
+  DTBS= line there is not empty.
 
 ## Timing note
 

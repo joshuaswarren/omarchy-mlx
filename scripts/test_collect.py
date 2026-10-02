@@ -2333,11 +2333,14 @@ class OmarchyAneBlockTests(unittest.TestCase):
         self.assertEqual(out["modules"], ["ane", "ane_t6021"])
 
     def test_untested_chip_prints_exact_owner_steps(self):
-        messages = cd._ane_smoke_guidance({
-            "platform": "Linux",
-            "check": {"untested": True, "status": "FAILED",
-                      "lines": ["UNTESTED SoC: t6020. driver not run. "
-                                "Its overlay applies only when key is present"]}})
+        with patch.object(cd, "_kernel_ships_ane_driver", return_value=False), \
+                patch.object(cd, "_ane_dtbs_source", return_value="overlay"):
+            messages = cd._ane_smoke_guidance({
+                "platform": "Linux",
+                "check": {"untested": True, "status": "FAILED",
+                          "lines": ["UNTESTED SoC: t6020. driver not run. "
+                                    "Its overlay applies only when key is "
+                                    "present"]}})
         self.assertEqual(messages, [cd.ANE_UNTESTED_STEPS])
         self.assertEqual(cd.ANE_UNTESTED_STEPS,
             "To submit a judged row for an untested chip, install "
@@ -2349,12 +2352,155 @@ class OmarchyAneBlockTests(unittest.TestCase):
             "run python3 scripts/collect_deep.py --ane-smoke --submit. "
             "The collector runs the smoke when the chip is idle (load < "
             "0.5, PSI 0); no fixed uptime is required.")
+        self.assertEqual(cd.ANE_UNTESTED_STEPS_INTREE,
+            "To submit a judged row for an untested chip on a kernel that "
+            "ships the ANE driver in-tree: userspace + smoke + firmware "
+            "fetch only; do not install omarchy-ane-dkms. Add that chip's "
+            "opt-in key from the omarchy-ane README table to "
+            "/etc/omarchy-platform/dtb-overlays.opt-in. For T6020, T6022 "
+            "and T8112, run sudo omarchy-ane-firmware-fetch first. Then "
+            "run sudo omarchy-ane-dt apply and reboot. From an "
+            "omarchy-mlx checkout, run python3 scripts/collect_deep.py "
+            "--ane-smoke --submit. The collector runs the smoke when the "
+            "chip is idle (load < 0.5, PSI 0); no fixed uptime is "
+            "required.")
+    def test_untested_steps_branch_on_intree_kernel_and_dtbs(self):
+        text = cd._ane_untested_steps(True, "overlay")
+        self.assertIn("userspace + smoke + firmware fetch only; do not "
+                      "install omarchy-ane-dkms", text)
+        self.assertNotIn("overlay opt-in has no effect", text)
+        text = cd._ane_untested_steps(False, "overlay")
+        self.assertIn("To submit a judged row for an untested chip, "
+                      "install omarchy-ane-dkms", text)
+        self.assertNotIn("overlay opt-in has no effect", text)
+        text = cd._ane_untested_steps(True, "kernel")
+        self.assertIn("the overlay opt-in has no effect, and the chip is "
+                      "enabled only by its node in the kernel DT", text)
+    def test_smoke_guidance_picks_intree_and_dtbs_branches(self):
+        ane = {"platform": "Linux",
+               "check": {"untested": True, "status": "FAILED",
+                         "lines": ["Its overlay applies only when key"]}}
+        with patch.object(cd, "_kernel_ships_ane_driver", return_value=True), \
+                patch.object(cd, "_ane_dtbs_source", return_value="kernel"):
+            messages = cd._ane_smoke_guidance(ane)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("do not install omarchy-ane-dkms", messages[0])
+        self.assertIn("overlay opt-in has no effect", messages[0])
+    def test_kernel_ships_ane_driver_reads_kernel_lists(self):
+        with patch("builtins.open", mock_open(read_data=
+                "kernel/drivers/accel/ane/ane.ko.zst: \n")), \
+                patch.object(cd.os, "listdir", return_value=[]):
+            self.assertTrue(cd._kernel_ships_ane_driver("6.9.0"))
+        with patch("builtins.open", mock_open(read_data=
+                "kernel/other/thing.ko: \n")), \
+                patch.object(cd.os, "listdir", side_effect=OSError):
+            self.assertFalse(cd._kernel_ships_ane_driver("6.9.0"))
     def test_busy_smoke_prints_one_retry_hint(self):
         messages = cd._ane_smoke_guidance({
             "platform": "Linux",
             "smoke": {"reason": "not run: busy"}})
         self.assertEqual(messages, [
             "Smoke not run: busy. Run again when the machine is idle."])
+
+    def test_module_file_classifies_intree_and_dkms(self):
+        self.assertEqual(cd._classify_ane_module_file(
+            "/usr/lib/modules/6.9/kernel/drivers/accel/ane/ane.ko.zst"),
+            "intree")
+        for path in ("/usr/lib/modules/6.9/updates/dkms/ane/ane.ko",
+                     "/usr/lib/modules/6.9/updates/ane-t6021/ane_t6021.ko",
+                     "/usr/lib/modules/6.9/extra/ane.ko.xz",
+                     "/usr/lib/modules/6.9/vulkan/ane.ko"):
+            self.assertEqual(cd._classify_ane_module_file(path), "dkms",
+                             path)
+    def test_builtin_listing_matches_exact_module_name(self):
+        with patch("builtins.open", mock_open(read_data=
+                "kernel/drivers/accel/ane/ane.ko\nkernel/other.ko\n")):
+            self.assertTrue(cd._ane_module_is_builtin("ane", "6.9.0"))
+        with patch("builtins.open", mock_open(read_data=
+                "kernel/drivers/accel/ane/ane_t6021.ko.zst\n")):
+            self.assertTrue(cd._ane_module_is_builtin("ane_t6021", "6.9.0"))
+        with patch("builtins.open", mock_open(read_data=
+                "kernel/drivers/accel/ane/ane_t6021.ko\n")):
+            self.assertFalse(cd._ane_module_is_builtin("ane", "6.9.0"))
+    def test_driver_source_none_without_bound_module(self):
+        source, evidence = cd._ane_driver_source(cc.Redactor(), None,
+                                                 kver="6.9.0")
+        self.assertEqual(source, "none")
+        self.assertEqual(evidence, {"module_file": None, "builtin": False})
+    def test_driver_source_intree_from_kernel_tree_file(self):
+        rec = {"available": True, "exit_code": 0, "error": None,
+               "stdout": "/usr/lib/modules/6.9/kernel/drivers/accel/ane/"
+                         "ane.ko.zst\n",
+               "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec):
+            source, evidence = cd._ane_driver_source(cc.Redactor(), "ane",
+                                                     kver="6.9.0")
+        self.assertEqual(source, "intree")
+        self.assertFalse(evidence["builtin"])
+        self.assertEqual(evidence["module_file"],
+                         "/usr/lib/modules/6.9/kernel/drivers/accel/ane/"
+                         "ane.ko.zst")
+    def test_driver_source_dkms_from_updates_path(self):
+        rec = {"available": True, "exit_code": 0, "error": None,
+               "stdout": "/usr/lib/modules/6.9/updates/dkms/ane/ane_t6021."
+                         "ko\n",
+               "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec):
+            source, evidence = cd._ane_driver_source(cc.Redactor(),
+                                                     "ane_t6021",
+                                                     kver="6.9.0")
+        self.assertEqual(source, "dkms")
+        self.assertFalse(evidence["builtin"])
+        self.assertEqual(evidence["module_file"],
+                         "/usr/lib/modules/6.9/updates/dkms/ane/ane_t6021"
+                         ".ko")
+    def test_driver_source_builtin_when_modinfo_fails(self):
+        rec = {"available": True, "exit_code": 1, "error": "missing",
+               "stdout": "", "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec), \
+                patch.object(cd, "_ane_module_is_builtin", return_value=True):
+            source, evidence = cd._ane_driver_source(cc.Redactor(), "ane",
+                                                     kver="6.9.0")
+        self.assertEqual(source, "intree")
+        self.assertTrue(evidence["builtin"])
+        self.assertIsNone(evidence["module_file"])
+    def test_driver_source_builtin_when_sys_module_has_no_file(self):
+        rec = {"available": True, "exit_code": 1, "error": "missing",
+               "stdout": "", "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec), \
+                patch.object(cd, "_ane_module_is_builtin",
+                             return_value=False), \
+                patch.object(cd.os.path, "isdir", return_value=True):
+            source, evidence = cd._ane_driver_source(cc.Redactor(), "ane",
+                                                     kver="6.9.0")
+        self.assertEqual(source, "intree")
+        self.assertTrue(evidence["builtin"])
+    def test_driver_source_none_when_module_nowhere(self):
+        rec = {"available": True, "exit_code": 1, "error": "missing",
+               "stdout": "", "stderr": "", "argv": []}
+        with patch.object(cd, "run_tool", return_value=rec), \
+                patch.object(cd, "_ane_module_is_builtin",
+                             return_value=False), \
+                patch.object(cd.os.path, "isdir", return_value=False):
+            source, evidence = cd._ane_driver_source(cc.Redactor(), "ane",
+                                                     kver="6.9.0")
+        self.assertEqual(source, "none")
+        self.assertFalse(evidence["builtin"])
+        self.assertIsNone(evidence["module_file"])
+    def test_dtbs_source_from_update_m1n1_line(self):
+        cases = [
+            ('DTBS="/lib/modules/6.9-ARCH/dtbs"\n', "kernel"),
+            ("export DTBS=/boot/dtbs\n", "kernel"),
+            ("DTBS=\n", "overlay"),
+            ("OTHER=yes\n", "overlay"),
+            ("# DTBS=/boot/dtbs\n", "overlay"),
+            ("", "overlay"),
+        ]
+        for content, expected in cases:
+            with patch("builtins.open", mock_open(read_data=content)):
+                self.assertEqual(cd._ane_dtbs_source(), expected, content)
+        with patch("builtins.open", side_effect=OSError):
+            self.assertEqual(cd._ane_dtbs_source(), "unknown")
 
     def test_idle_gate_requires_load_below_half_and_zero_psi(self):
         with patch("builtins.open", mock_open(read_data=
@@ -2568,10 +2714,17 @@ class AneSectionUnavailableMarks(unittest.TestCase):
                              return_value=(None, "dtc unavailable")), \
                 patch.object(cd, "_ane_interrupts", return_value=[]), \
                 patch.object(cd, "_ane_packages", return_value={
-                    "unavailable": "pacman not available"}):
+                    "unavailable": "pacman not available"}), \
+                patch.object(cd, "_ane_driver_source", return_value=(
+                    "none", {"module_file": None, "builtin": False})), \
+                patch.object(cd, "_ane_dtbs_source", return_value="unknown"):
             out = cd.section_ane(cc.Redactor(), cd.REPO, ws, smoke=True)
         self.assertTrue(out["available"])
         self.assertFalse(out["installed"])
+        self.assertEqual(out["driver_source"], "none")
+        self.assertEqual(out["driver_source_evidence"],
+                         {"module_file": None, "builtin": False})
+        self.assertEqual(out["dtbs_source"], "unknown")
         self.assertEqual(out["smoke"]["requested"], True)
         self.assertEqual(out["smoke"]["attempted"], False)
         self.assertIn("not installed", out["smoke"]["reason"])
