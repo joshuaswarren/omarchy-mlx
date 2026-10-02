@@ -1818,75 +1818,101 @@ class EncoderRunner:
     # ------------------------------------------------------------------- ops
 
     def apply(self, stmt: Statement) -> mx.array:
+        handler = self._OP_HANDLERS.get(stmt.op)
+        if handler is None:
+            raise EncoderRunError(
+                f"unimplemented op {stmt.op!r} ({stmt.dtype} {stmt.shape})"
+            )
+        return handler(self, stmt)
+
+    def _apply_cast(self, stmt: Statement) -> mx.array:
         op, kwargs = stmt.op, stmt.kwargs
         tensor = self.tensor
+        target = self.scalar(kwargs["dtype"])
+        if target not in MX_DTYPES:
+            raise EncoderRunError(f"cast dtype {target}")
+        return tensor(kwargs["x"]).astype(MX_DTYPES[target])
 
-        if op == "cast":
-            target = self.scalar(kwargs["dtype"])
-            if target not in MX_DTYPES:
-                raise EncoderRunError(f"cast dtype {target}")
-            return tensor(kwargs["x"]).astype(MX_DTYPES[target])
-        if op == "expand_dims":
-            out = tensor(kwargs["x"])
-            for axis in sorted(self.ints(kwargs["axes"])):
-                out = mx.expand_dims(out, axis)
-            return out
-        if op == "squeeze":
-            return mx.squeeze(tensor(kwargs["x"]), axis=tuple(self.ints(kwargs["axes"])))
-        if op in ("reduce_sum", "reduce_min", "reduce_max"):
-            axes = tuple(self.ints(kwargs["axes"]))
-            keep = self.bools(kwargs["keep_dims"])[0]
-            fn = {"reduce_sum": mx.sum, "reduce_min": mx.min, "reduce_max": mx.max}[op]
-            return fn(tensor(kwargs["x"]), axis=axes, keepdims=keep)
-        if op in ("add", "sub", "mul"):
-            x, y = tensor(kwargs["x"]), tensor(kwargs["y"])
-            if x.dtype == mx.bool_ and y.dtype == mx.bool_:
-                if op != "mul":
-                    raise EncoderRunError(f"bool {op}")
-                return mx.logical_and(x, y)
-            if x.dtype == mx.int32 and y.dtype == mx.int32:
-                raw = {"add": x + y, "sub": x - y, "mul": x * y}[op]
-                return raw.astype(mx.int32)
-            fused = _pw(op, x, y)
-            if fused is not None:
-                return fused
-            fx, fy = x.astype(mx.float32), y.astype(mx.float32)
-            return {"add": fx + fy, "sub": fx - fy, "mul": fx * fy}[op].astype(mx.float16)
-        if op == "floor_div":
-            x, y = tensor(kwargs["x"]), tensor(kwargs["y"])
-            if x.dtype == mx.int32 and y.dtype == mx.int32:
-                return mx.floor(x.astype(mx.float32) / y.astype(mx.float32)).astype(mx.int32)
-            return mx.floor(
-                x.astype(mx.float32) / y.astype(mx.float32)
-            ).astype(mx.float16)
-        if op == "floor":
-            return mx.floor(tensor(kwargs["x"]).astype(mx.float32)).astype(mx.float16)
-        if op == "less":
-            return mx.less(tensor(kwargs["x"]), tensor(kwargs["y"]))
-        if op == "logical_not":
-            return mx.logical_not(tensor(kwargs["x"]))
-        if op == "logical_and":
-            return mx.logical_and(tensor(kwargs["x"]), tensor(kwargs["y"]))
-        if op == "relu":
-            return mx.maximum(tensor(kwargs["x"]).astype(mx.float32), 0.0).astype(mx.float16)
-        if op == "sigmoid":
-            x = tensor(kwargs["x"])
-            if x.dtype == mx.float16:
-                n = x.size
-                out = _sigmoid_kernel()(
-                    inputs=[x],
-                    output_shapes=[(n,)],
-                    output_dtypes=[mx.float16],
-                    grid=(n, 1, 1),
-                    threadgroup=(256, 1, 1),
-                    stream=mx.gpu,
-                )[0]
-                return mx.reshape(out, x.shape)
-            return mx.sigmoid(x.astype(mx.float32)).astype(mx.float16)
-        if op == "silu":
-            x = tensor(kwargs["x"])
+    def _apply_expand_dims(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        out = tensor(kwargs["x"])
+        for axis in sorted(self.ints(kwargs["axes"])):
+            out = mx.expand_dims(out, axis)
+        return out
+
+    def _apply_squeeze(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.squeeze(tensor(kwargs["x"]), axis=tuple(self.ints(kwargs["axes"])))
+
+    def _apply_reduce(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        axes = tuple(self.ints(kwargs["axes"]))
+        keep = self.bools(kwargs["keep_dims"])[0]
+        fn = {"reduce_sum": mx.sum, "reduce_min": mx.min, "reduce_max": mx.max}[op]
+        return fn(tensor(kwargs["x"]), axis=axes, keepdims=keep)
+
+    def _apply_arith(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        x, y = tensor(kwargs["x"]), tensor(kwargs["y"])
+        if x.dtype == mx.bool_ and y.dtype == mx.bool_:
+            if op != "mul":
+                raise EncoderRunError(f"bool {op}")
+            return mx.logical_and(x, y)
+        if x.dtype == mx.int32 and y.dtype == mx.int32:
+            raw = {"add": x + y, "sub": x - y, "mul": x * y}[op]
+            return raw.astype(mx.int32)
+        fused = _pw(op, x, y)
+        if fused is not None:
+            return fused
+        fx, fy = x.astype(mx.float32), y.astype(mx.float32)
+        return {"add": fx + fy, "sub": fx - fy, "mul": fx * fy}[op].astype(mx.float16)
+
+    def _apply_floor_div(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        x, y = tensor(kwargs["x"]), tensor(kwargs["y"])
+        if x.dtype == mx.int32 and y.dtype == mx.int32:
+            return mx.floor(x.astype(mx.float32) / y.astype(mx.float32)).astype(mx.int32)
+        return mx.floor(
+            x.astype(mx.float32) / y.astype(mx.float32)
+        ).astype(mx.float16)
+
+    def _apply_floor(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.floor(tensor(kwargs["x"]).astype(mx.float32)).astype(mx.float16)
+
+    def _apply_less(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.less(tensor(kwargs["x"]), tensor(kwargs["y"]))
+
+    def _apply_logical_not(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.logical_not(tensor(kwargs["x"]))
+
+    def _apply_logical_and(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.logical_and(tensor(kwargs["x"]), tensor(kwargs["y"]))
+
+    def _apply_relu(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.maximum(tensor(kwargs["x"]).astype(mx.float32), 0.0).astype(mx.float16)
+
+    def _apply_sigmoid(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        x = tensor(kwargs["x"])
+        if x.dtype == mx.float16:
             n = x.size
-            out = _silu_kernel()(
+            out = _sigmoid_kernel()(
                 inputs=[x],
                 output_shapes=[(n,)],
                 output_dtypes=[mx.float16],
@@ -1895,128 +1921,96 @@ class EncoderRunner:
                 stream=mx.gpu,
             )[0]
             return mx.reshape(out, x.shape)
-        if op == "transpose":
-            x = tensor(kwargs["x"])
-            perm = [a % x.ndim for a in self.ints(kwargs["perm"])]
-            return mx.contiguous(mx.transpose(x, perm))
-        if op == "reshape":
-            return mx.reshape(tensor(kwargs["x"]), self.ints(kwargs["shape"]))
-        if op == "tile":
-            return mx.tile(tensor(kwargs["x"]), self.ints(kwargs["reps"]))
-        if op == "concat":
-            axis = self.ints(kwargs["axis"])[0]
-            if "values" in kwargs:
-                names = split_top(kwargs["values"].strip("() "))
-            else:
-                names = [
-                    kwargs[key]
-                    for key in sorted(
-                        (k for k in kwargs if re.fullmatch(r"x\d+", k)),
-                        key=lambda k: int(k[1:]),
-                    )
-                ]
-            return mx.concatenate([tensor(n) for n in names], axis=axis)
-        if op == "linear":
-            # fp16 leftover datapath, batched. Default path: one custom
-            # coopmat dispatch (_linear_f16_coopmat_kernel) produces every
-            # 16-wide block's fp32 partial rounded once to fp16 — the same
-            # rounding the f32 batched matmul + fp16 partials chain
-            # applied — and _leftover_chain_kernel applies the landed
-            # rounding: each block's fp16 partial accumulates in fp16
-            # ascending, one dispatch. Byte-identical to the f32-partials
-            # batched path (exact fp16->fp32 widening, identical staging
-            # values, MMA sequence, and drain); the fp32 matmul route
-            # below stays as the guard fallback.
-            x = tensor(kwargs["x"])
-            weight = tensor(kwargs["weight"])
-            k = int(x.shape[-1])
-            if k % 16:
-                raise EncoderRunError(f"linear K {k} not a multiple of 16")
-            blocks = k // 16
-            rows = 1
-            for dim in x.shape[:-1]:
-                rows *= dim
-            n_out = int(weight.shape[0])
-            if (
-                x.dtype == mx.float16
-                and weight.dtype == mx.float16
-                and 1 <= rows <= 65535 * 32
-                and blocks <= 65535
-                and n_out <= 65535 * 32
-            ):
-                lhs = mx.reshape(x, (rows, k))
-                rhs = mx.reshape(weight, (n_out, k))
-                partials = _linear_f16_coopmat_kernel()(
-                    inputs=[lhs, rhs],
-                    output_shapes=[(blocks, rows, n_out)],
-                    output_dtypes=[mx.float16],
-                    grid=((n_out + 31) // 32 * 32, (rows + 31) // 32, blocks),
-                    threadgroup=(32, 1, 1),
-                    stream=mx.gpu,
-                )[0]
-                silu_index = (
-                    self.linear_silu.get(stmt.index) if CHAIN_FUSION_ENABLED else None
+        return mx.sigmoid(x.astype(mx.float32)).astype(mx.float16)
+
+    def _apply_silu(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        x = tensor(kwargs["x"])
+        n = x.size
+        out = _silu_kernel()(
+            inputs=[x],
+            output_shapes=[(n,)],
+            output_dtypes=[mx.float16],
+            grid=(n, 1, 1),
+            threadgroup=(256, 1, 1),
+            stream=mx.gpu,
+        )[0]
+        return mx.reshape(out, x.shape)
+
+    def _apply_transpose(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        x = tensor(kwargs["x"])
+        perm = [a % x.ndim for a in self.ints(kwargs["perm"])]
+        return mx.contiguous(mx.transpose(x, perm))
+
+    def _apply_reshape(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.reshape(tensor(kwargs["x"]), self.ints(kwargs["shape"]))
+
+    def _apply_tile(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        return mx.tile(tensor(kwargs["x"]), self.ints(kwargs["reps"]))
+
+    def _apply_concat(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        axis = self.ints(kwargs["axis"])[0]
+        if "values" in kwargs:
+            names = split_top(kwargs["values"].strip("() "))
+        else:
+            names = [
+                kwargs[key]
+                for key in sorted(
+                    (k for k in kwargs if re.fullmatch(r"x\d+", k)),
+                    key=lambda k: int(k[1:]),
                 )
-                bias_arr = tensor(kwargs["bias"]) if "bias" in kwargs else None
-                if (
-                    CHAIN_FUSION_ENABLED
-                    and bias_arr is not None
-                    and bias_arr.dtype == mx.float16
-                    and n_out % 2 == 0
-                ):
-                    if silu_index is not None:
-                        out = _leftover_chain_bias_silu_kernel()(
-                            inputs=[partials, bias_arr],
-                            output_shapes=[(rows, n_out)],
-                            output_dtypes=[mx.float16],
-                            grid=(rows * (n_out // 2), 1, 1),
-                            threadgroup=(256, 1, 1),
-                            stream=mx.gpu,
-                        )[0]
-                        return mx.reshape(out, tuple(x.shape[:-1]) + (n_out,))
-                    out = _leftover_chain_bias_kernel()(
-                        inputs=[partials, bias_arr],
-                        output_shapes=[(rows, n_out)],
-                        output_dtypes=[mx.float16],
-                        grid=(rows * (n_out // 2), 1, 1),
-                        threadgroup=(256, 1, 1),
-                        stream=mx.gpu,
-                    )[0]
-                    return mx.reshape(out, tuple(x.shape[:-1]) + (n_out,))
-                if silu_index is not None:
-                    # The fused silu will not happen; let the standalone
-                    # silu statement execute.
-                    self.silu_done.discard(silu_index)
-                out = _leftover_chain_kernel()(
-                    inputs=[partials],
-                    output_shapes=[(rows, n_out)],
-                    output_dtypes=[mx.float16],
-                    grid=(rows * n_out, 1, 1),
-                    threadgroup=(256, 1, 1),
-                    stream=mx.gpu,
-                )[0]
-                out = mx.reshape(out, tuple(x.shape[:-1]) + (n_out,))
-                if "bias" in kwargs:
-                    out = out.astype(mx.float32) + tensor(kwargs["bias"]).astype(
-                        mx.float32
-                    )
-                return out.astype(mx.float16)
-            xb = mx.transpose(mx.reshape(x, (rows, blocks, 16)), (1, 0, 2)).astype(
-                mx.float32
-            )  # [K/16, M, 16]
-            wb = mx.transpose(
-                mx.reshape(weight, (weight.shape[0], blocks, 16)), (1, 2, 0)
-            ).astype(mx.float32)  # [K/16, 16, N]
-            partials = xb @ wb  # [K/16, M, N] fp32
-            out = _leftover_chain_kernel()(
-                inputs=[partials],
-                output_shapes=[(rows, weight.shape[0])],
+            ]
+        return mx.concatenate([tensor(n) for n in names], axis=axis)
+
+    def _apply_linear(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        # fp16 leftover datapath, batched. Default path: one custom
+        # coopmat dispatch (_linear_f16_coopmat_kernel) produces every
+        # 16-wide block's fp32 partial rounded once to fp16 — the same
+        # rounding the f32 batched matmul + fp16 partials chain
+        # applied — and _leftover_chain_kernel applies the landed
+        # rounding: each block's fp16 partial accumulates in fp16
+        # ascending, one dispatch. Byte-identical to the f32-partials
+        # batched path (exact fp16->fp32 widening, identical staging
+        # values, MMA sequence, and drain); the fp32 matmul route
+        # below stays as the guard fallback.
+        x = tensor(kwargs["x"])
+        weight = tensor(kwargs["weight"])
+        k = int(x.shape[-1])
+        if k % 16:
+            raise EncoderRunError(f"linear K {k} not a multiple of 16")
+        blocks = k // 16
+        rows = 1
+        for dim in x.shape[:-1]:
+            rows *= dim
+        n_out = int(weight.shape[0])
+        if (
+            x.dtype == mx.float16
+            and weight.dtype == mx.float16
+            and 1 <= rows <= 65535 * 32
+            and blocks <= 65535
+            and n_out <= 65535 * 32
+        ):
+            lhs = mx.reshape(x, (rows, k))
+            rhs = mx.reshape(weight, (n_out, k))
+            partials = _linear_f16_coopmat_kernel()(
+                inputs=[lhs, rhs],
+                output_shapes=[(blocks, rows, n_out)],
                 output_dtypes=[mx.float16],
-                grid=(rows * weight.shape[0], 1, 1),
-                threadgroup=(256, 1, 1),
+                grid=((n_out + 31) // 32 * 32, (rows + 31) // 32, blocks),
+                threadgroup=(32, 1, 1),
                 stream=mx.gpu,
             )[0]
-            out = mx.reshape(out, tuple(x.shape[:-1]) + (weight.shape[0],))
             silu_index = (
                 self.linear_silu.get(stmt.index) if CHAIN_FUSION_ENABLED else None
             )
@@ -2025,20 +2019,73 @@ class EncoderRunner:
                 CHAIN_FUSION_ENABLED
                 and bias_arr is not None
                 and bias_arr.dtype == mx.float16
-                and weight.shape[0] % 2 == 0
+                and n_out % 2 == 0
             ):
                 if silu_index is not None:
                     out = _leftover_chain_bias_silu_kernel()(
                         inputs=[partials, bias_arr],
-                        output_shapes=[(rows, weight.shape[0])],
+                        output_shapes=[(rows, n_out)],
                         output_dtypes=[mx.float16],
-                        grid=(rows * (weight.shape[0] // 2), 1, 1),
+                        grid=(rows * (n_out // 2), 1, 1),
                         threadgroup=(256, 1, 1),
                         stream=mx.gpu,
                     )[0]
-                    out = mx.reshape(out, tuple(x.shape[:-1]) + (weight.shape[0],))
-                    return out
+                    return mx.reshape(out, tuple(x.shape[:-1]) + (n_out,))
                 out = _leftover_chain_bias_kernel()(
+                    inputs=[partials, bias_arr],
+                    output_shapes=[(rows, n_out)],
+                    output_dtypes=[mx.float16],
+                    grid=(rows * (n_out // 2), 1, 1),
+                    threadgroup=(256, 1, 1),
+                    stream=mx.gpu,
+                )[0]
+                return mx.reshape(out, tuple(x.shape[:-1]) + (n_out,))
+            if silu_index is not None:
+                # The fused silu will not happen; let the standalone
+                # silu statement execute.
+                self.silu_done.discard(silu_index)
+            out = _leftover_chain_kernel()(
+                inputs=[partials],
+                output_shapes=[(rows, n_out)],
+                output_dtypes=[mx.float16],
+                grid=(rows * n_out, 1, 1),
+                threadgroup=(256, 1, 1),
+                stream=mx.gpu,
+            )[0]
+            out = mx.reshape(out, tuple(x.shape[:-1]) + (n_out,))
+            if "bias" in kwargs:
+                out = out.astype(mx.float32) + tensor(kwargs["bias"]).astype(
+                    mx.float32
+                )
+            return out.astype(mx.float16)
+        xb = mx.transpose(mx.reshape(x, (rows, blocks, 16)), (1, 0, 2)).astype(
+            mx.float32
+        )  # [K/16, M, 16]
+        wb = mx.transpose(
+            mx.reshape(weight, (weight.shape[0], blocks, 16)), (1, 2, 0)
+        ).astype(mx.float32)  # [K/16, 16, N]
+        partials = xb @ wb  # [K/16, M, N] fp32
+        out = _leftover_chain_kernel()(
+            inputs=[partials],
+            output_shapes=[(rows, weight.shape[0])],
+            output_dtypes=[mx.float16],
+            grid=(rows * weight.shape[0], 1, 1),
+            threadgroup=(256, 1, 1),
+            stream=mx.gpu,
+        )[0]
+        out = mx.reshape(out, tuple(x.shape[:-1]) + (weight.shape[0],))
+        silu_index = (
+            self.linear_silu.get(stmt.index) if CHAIN_FUSION_ENABLED else None
+        )
+        bias_arr = tensor(kwargs["bias"]) if "bias" in kwargs else None
+        if (
+            CHAIN_FUSION_ENABLED
+            and bias_arr is not None
+            and bias_arr.dtype == mx.float16
+            and weight.shape[0] % 2 == 0
+        ):
+            if silu_index is not None:
+                out = _leftover_chain_bias_silu_kernel()(
                     inputs=[partials, bias_arr],
                     output_shapes=[(rows, weight.shape[0])],
                     output_dtypes=[mx.float16],
@@ -2048,103 +2095,155 @@ class EncoderRunner:
                 )[0]
                 out = mx.reshape(out, tuple(x.shape[:-1]) + (weight.shape[0],))
                 return out
-            if silu_index is not None:
-                # The fused silu will not happen; let the standalone
-                # silu statement execute.
-                self.silu_done.discard(silu_index)
-            if "bias" in kwargs:
-                out = out.astype(mx.float32) + tensor(kwargs["bias"]).astype(mx.float32)
-            return out.astype(mx.float16)
-        if op == "matmul":
-            a = tensor(kwargs["x"]).astype(mx.float32)
-            b = tensor(kwargs["y"]).astype(mx.float32)
-            if self.bools(kwargs["transpose_x"])[0]:
-                a = mx.swapaxes(a, -1, -2)
-            if self.bools(kwargs["transpose_y"])[0]:
-                b = mx.swapaxes(b, -1, -2)
-            return (a @ b).astype(mx.float16)
-        if op == "conv":
-            return self.apply_conv(kwargs)
-        if op == "layer_norm":
-            axes = tuple(self.ints(kwargs["axes"]))
-            x = tensor(kwargs["x"])
-            if axes != (-1,) or x.ndim != 3 or x.shape[-1] != 1024:
-                raise EncoderRunError(
-                    f"layer_norm form {x.shape} axes {axes} is not the pinned "
-                    "encoder envelope"
-                )
-            # Two mx.mean reductions keep the ReduceF32 dispatches and their
-            # chunked order bit-identical; the standalone kernels only replace
-            # the elementwise chain around them, in the same fp32 ops with the
-            # same single fp16 rounding at the end.
-            rows = x.size // 1024
-            n = x.size
-            xf = _ln_cast_kernel()(
-                inputs=[x], output_shapes=[(n,)], output_dtypes=[mx.float32],
-                grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
+            out = _leftover_chain_bias_kernel()(
+                inputs=[partials, bias_arr],
+                output_shapes=[(rows, weight.shape[0])],
+                output_dtypes=[mx.float16],
+                grid=(rows * (weight.shape[0] // 2), 1, 1),
+                threadgroup=(256, 1, 1),
+                stream=mx.gpu,
             )[0]
-            mean = mx.mean(mx.reshape(xf, (rows, 1024)), axis=-1, keepdims=True)
-            t2 = _ln_sq_kernel()(
-                inputs=[xf, mean], output_shapes=[(n,)], output_dtypes=[mx.float32],
-                grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
-            )[0]
-            var = mx.mean(mx.reshape(t2, (rows, 1024)), axis=-1, keepdims=True)
-            gamma = tensor(kwargs["gamma"]) if "gamma" in kwargs else None
-            beta = tensor(kwargs["beta"]) if "beta" in kwargs else None
-            if gamma is None or beta is None:
-                raise EncoderRunError("layer_norm without gamma/beta")
-            eps_arr = mx.array([float(self.scalar(kwargs["epsilon"]))], dtype=mx.float32)
-            y = _ln_tail_kernel()(
-                inputs=[xf, mean, var, gamma, beta, eps_arr],
-                output_shapes=[(n,)], output_dtypes=[mx.float16],
-                grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
-            )[0]
-            return mx.reshape(y, x.shape)
-        if op == "softmax":
-            axis = self.ints(kwargs["axis"])[0]
-            x = tensor(kwargs["x"])
-            if axis % x.ndim != x.ndim - 1 or x.ndim != 4 or x.shape[-1] != 375:
-                raise EncoderRunError(
-                    f"softmax form {x.shape} axis {axis} is not the pinned "
-                    "encoder envelope"
-                )
-            # The exact ReduceF16 max and the fp32 ReduceF32 sum keep the
-            # reduction dispatches; exp and the final divide fuse around them
-            # with the same fp32 arithmetic and the same boundary rounding.
-            rows = x.size // 375
-            n = x.size
-            rowmax = mx.max(x, axis=-1, keepdims=True)
-            e = _sm_exp_kernel()(
-                inputs=[x, rowmax], output_shapes=[(n,)], output_dtypes=[mx.float32],
-                grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
-            )[0]
-            rowsum = mx.sum(mx.reshape(e, (rows, 375)), axis=-1, keepdims=True)
-            y = _sm_div_kernel()(
-                inputs=[e, rowsum], output_shapes=[(n,)], output_dtypes=[mx.float16],
-                grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
-            )[0]
-            return mx.reshape(y, x.shape)
-        if op == "select":
-            cond = tensor(kwargs["cond"])
-            a = tensor(kwargs["a"]).astype(mx.float32)
-            b = tensor(kwargs["b"]).astype(mx.float32)
-            return mx.where(cond, a, b).astype(mx.float16)
-        if op == "pad":
-            mode = self.scalar(kwargs["mode"])
-            if mode != "constant":
-                raise EncoderRunError(f"pad mode {mode}")
-            pad = self.ints(kwargs["pad"])
-            value = float(self.scalar(kwargs["constant_val"]))
-            x = tensor(kwargs["x"])
-            pairs = [(pad[i], pad[i + 1]) for i in range(0, len(pad), 2)]
-            pairs = pairs[-x.ndim :]
-            widths = [(0, 0)] * (x.ndim - len(pairs)) + pairs
-            return mx.pad(
-                x.astype(mx.float32), widths, constant_values=value
-            ).astype(mx.float16)
-        if op == "slice_by_index":
-            return self.apply_slice(kwargs)
-        raise EncoderRunError(f"unimplemented op {op!r} ({stmt.dtype} {stmt.shape})")
+            out = mx.reshape(out, tuple(x.shape[:-1]) + (weight.shape[0],))
+            return out
+        if silu_index is not None:
+            # The fused silu will not happen; let the standalone
+            # silu statement execute.
+            self.silu_done.discard(silu_index)
+        if "bias" in kwargs:
+            out = out.astype(mx.float32) + tensor(kwargs["bias"]).astype(mx.float32)
+        return out.astype(mx.float16)
+
+    def _apply_matmul(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        a = tensor(kwargs["x"]).astype(mx.float32)
+        b = tensor(kwargs["y"]).astype(mx.float32)
+        if self.bools(kwargs["transpose_x"])[0]:
+            a = mx.swapaxes(a, -1, -2)
+        if self.bools(kwargs["transpose_y"])[0]:
+            b = mx.swapaxes(b, -1, -2)
+        return (a @ b).astype(mx.float16)
+
+    def _apply_layer_norm(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        axes = tuple(self.ints(kwargs["axes"]))
+        x = tensor(kwargs["x"])
+        if axes != (-1,) or x.ndim != 3 or x.shape[-1] != 1024:
+            raise EncoderRunError(
+                f"layer_norm form {x.shape} axes {axes} is not the pinned "
+                "encoder envelope"
+            )
+        # Two mx.mean reductions keep the ReduceF32 dispatches and their
+        # chunked order bit-identical; the standalone kernels only replace
+        # the elementwise chain around them, in the same fp32 ops with the
+        # same single fp16 rounding at the end.
+        rows = x.size // 1024
+        n = x.size
+        xf = _ln_cast_kernel()(
+            inputs=[x], output_shapes=[(n,)], output_dtypes=[mx.float32],
+            grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
+        )[0]
+        mean = mx.mean(mx.reshape(xf, (rows, 1024)), axis=-1, keepdims=True)
+        t2 = _ln_sq_kernel()(
+            inputs=[xf, mean], output_shapes=[(n,)], output_dtypes=[mx.float32],
+            grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
+        )[0]
+        var = mx.mean(mx.reshape(t2, (rows, 1024)), axis=-1, keepdims=True)
+        gamma = tensor(kwargs["gamma"]) if "gamma" in kwargs else None
+        beta = tensor(kwargs["beta"]) if "beta" in kwargs else None
+        if gamma is None or beta is None:
+            raise EncoderRunError("layer_norm without gamma/beta")
+        eps_arr = mx.array([float(self.scalar(kwargs["epsilon"]))], dtype=mx.float32)
+        y = _ln_tail_kernel()(
+            inputs=[xf, mean, var, gamma, beta, eps_arr],
+            output_shapes=[(n,)], output_dtypes=[mx.float16],
+            grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
+        )[0]
+        return mx.reshape(y, x.shape)
+
+    def _apply_softmax(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        axis = self.ints(kwargs["axis"])[0]
+        x = tensor(kwargs["x"])
+        if axis % x.ndim != x.ndim - 1 or x.ndim != 4 or x.shape[-1] != 375:
+            raise EncoderRunError(
+                f"softmax form {x.shape} axis {axis} is not the pinned "
+                "encoder envelope"
+            )
+        # The exact ReduceF16 max and the fp32 ReduceF32 sum keep the
+        # reduction dispatches; exp and the final divide fuse around them
+        # with the same fp32 arithmetic and the same boundary rounding.
+        rows = x.size // 375
+        n = x.size
+        rowmax = mx.max(x, axis=-1, keepdims=True)
+        e = _sm_exp_kernel()(
+            inputs=[x, rowmax], output_shapes=[(n,)], output_dtypes=[mx.float32],
+            grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
+        )[0]
+        rowsum = mx.sum(mx.reshape(e, (rows, 375)), axis=-1, keepdims=True)
+        y = _sm_div_kernel()(
+            inputs=[e, rowsum], output_shapes=[(n,)], output_dtypes=[mx.float16],
+            grid=(n, 1, 1), threadgroup=(256, 1, 1), stream=mx.gpu,
+        )[0]
+        return mx.reshape(y, x.shape)
+
+    def _apply_select(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        cond = tensor(kwargs["cond"])
+        a = tensor(kwargs["a"]).astype(mx.float32)
+        b = tensor(kwargs["b"]).astype(mx.float32)
+        return mx.where(cond, a, b).astype(mx.float16)
+
+    def _apply_pad(self, stmt: Statement) -> mx.array:
+        op, kwargs = stmt.op, stmt.kwargs
+        tensor = self.tensor
+        mode = self.scalar(kwargs["mode"])
+        if mode != "constant":
+            raise EncoderRunError(f"pad mode {mode}")
+        pad = self.ints(kwargs["pad"])
+        value = float(self.scalar(kwargs["constant_val"]))
+        x = tensor(kwargs["x"])
+        pairs = [(pad[i], pad[i + 1]) for i in range(0, len(pad), 2)]
+        pairs = pairs[-x.ndim :]
+        widths = [(0, 0)] * (x.ndim - len(pairs)) + pairs
+        return mx.pad(
+            x.astype(mx.float32), widths, constant_values=value
+        ).astype(mx.float16)
+
+    _OP_HANDLERS = {
+        "cast": _apply_cast,
+        "expand_dims": _apply_expand_dims,
+        "squeeze": _apply_squeeze,
+        "reduce_sum": _apply_reduce,
+        "reduce_min": _apply_reduce,
+        "reduce_max": _apply_reduce,
+        "add": _apply_arith,
+        "sub": _apply_arith,
+        "mul": _apply_arith,
+        "floor_div": _apply_floor_div,
+        "floor": _apply_floor,
+        "less": _apply_less,
+        "logical_not": _apply_logical_not,
+        "logical_and": _apply_logical_and,
+        "relu": _apply_relu,
+        "sigmoid": _apply_sigmoid,
+        "silu": _apply_silu,
+        "transpose": _apply_transpose,
+        "reshape": _apply_reshape,
+        "tile": _apply_tile,
+        "concat": _apply_concat,
+        "linear": _apply_linear,
+        "matmul": _apply_matmul,
+        "conv": lambda self, stmt: self.apply_conv(stmt.kwargs),
+        "layer_norm": _apply_layer_norm,
+        "softmax": _apply_softmax,
+        "select": _apply_select,
+        "pad": _apply_pad,
+        "slice_by_index": lambda self, stmt: self.apply_slice(stmt.kwargs),
+    }
 
     def apply_conv(self, kwargs: dict) -> mx.array:
         """MIL conv is NCHW; MLX conv is NHWC. Spatial rank 1 lifts to unit H."""
