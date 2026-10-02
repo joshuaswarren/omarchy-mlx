@@ -222,8 +222,9 @@ class VoiceChoiceRouteTests(unittest.TestCase):
         self.assertEqual(status, 200)
         payload = json.loads(data)
         pack = payload["voice"]["synthesis"]["pack"]
-        self.assertEqual(pack["voice"], "aiden")
-        self.assertEqual(pack["voice_default"], "aiden")
+        self.assertEqual(pack["voice"], "af_heart")
+        self.assertEqual(pack["voice_default"], "af_heart")
+        self.assertEqual(pack["id"], "kokoro-82m-bf16")
         ids = [opt["id"] for opt in pack["voice_options"]]
         self.assertEqual(set(ids),
                          {"aiden", "ryan", "serena", "vivian", "uncle_fu",

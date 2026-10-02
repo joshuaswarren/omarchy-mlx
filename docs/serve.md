@@ -149,7 +149,8 @@ transcript insertion, TTS start/finish/truncate/resume, preview, and the
 voice-state machine; seven accessibility defects were found and fixed
 ([voice screen-reader receipt](../receipts/2026-10-02-voice-screen-reader/README.md)).
 
-**Voice output — Qwen3-TTS stays below real time; Kokoro measures real time on the fixed wheel and awaits the owner's listen.** The default Qwen3-TTS pack
+**Voice output — Kokoro-82M is the default engine (owner decision, 2026-10-02); Qwen3-TTS stays below real time as the second engine.** The
+Qwen3-TTS pack
 measures median RTF 0.22–0.23 (audio s over wall s) against the 1.2
 threshold, with the named floor of about 87 ms of GPU compute per talker step
 ([speech output speed
@@ -172,9 +173,19 @@ the limit); v0.7.17 is the first release that runs it end to end — its cut
 carries the in-shader trig reduction and the conv decomposition, and its
 release-battery serve-path smoke measured RTF 0.981 through the real
 Synthesis class (smoke scope, not real-time qualification)
-([v0.7.17 receipt](../receipts/2026-10-02-v0717-release.md)). Kokoro still
-ships behind the picker,
-is not the default, and is not qualified — the owner has not listened to it
+([v0.7.17 receipt](../receipts/2026-10-02-v0717-release.md)). The owner
+decided on 2026-10-02 that Kokoro-82M is the default speech-output engine
+with voice af_heart and no listening step, so the unset voice choice now
+resolves to Kokoro everywhere (first-run setup downloads the 329 MB Kokoro
+pack, not the 1.7 GB Qwen3-TTS pack); an explicitly saved voice choice
+still wins, and Qwen3-TTS stays as the selectable second engine. Voice
+output stays **unqualified** in status text: the frozen gates it still
+misses are the real-time RTF threshold (serve path measures about 1.51
+against the 1.2 gate), the 1.5 s first-audio design target (2.29–6.46 s;
+needs vocoder output streaming), and a durable qualification receipt bound
+to the Kokoro pack revision and wheel hash (`record_qualification` has not
+run for the default engine). A pre-0.7.17 wheel is refused at Kokoro load
+with an upgrade message instead of a backend crash
 ([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
 Voice as a whole stays unqualified: it needs both directions.
 
@@ -259,7 +270,7 @@ explicit-CPU-stream finding above.
 |---|---|---|
 | 1 | Routing latency decision: does the 250 ms gate measure the Laya head call (p95 347 ms, fails) or the shipped head-free path (p95 43 ms, passes)? | Automatic routing stays off until decided. |
 | 2 | Quality design budget: first text is the engine prompt path on the resident pair (~6.4 s for a 300-token prompt vs the 2 s budget); the lever is engine-side prefill and first-decode-step work, and stable-prefix cache reuse is a memory-admission gate decision. | The Quality pair cannot qualify against a budget it misses. |
-| 3 | Kokoro default decision: the owner listens; first audio is 2.3–6.6 s against the 1.5 s design target (needs vocoder output streaming). | Kokoro stays non-default and unqualified; voice output stays unqualified either way until a route is picked. |
+| 3 | Voice output first audio: 2.3–6.6 s against the 1.5 s design target (needs vocoder output streaming). Kokoro default decided by the owner 2026-10-02: Kokoro-82M default engine, af_heart default voice, no listening step; Qwen3-TTS stays as the selectable second engine. | Voice output stays unqualified: the RTF gate (serve path ~1.51 vs 1.2), the first-audio target, and a `record_qualification` receipt for the default engine are all still open. |
 | 4 | Pair-level qualification: no pair has passed the full gate set; chart cards wait 53.8 s (27B) / 115.9 s (9B) to a visible component, and the 4B's fence never validates. | Nothing is qualified; `recommended` stays false everywhere. |
 | 5 | G13G (jwm1) Mesa arm of pin candidate `e7631595df6`, plus the T8103 16-bit selection doctest and standing battery. | The Mesa pin and the Attn128 chip matrix each wait on that host. |
 

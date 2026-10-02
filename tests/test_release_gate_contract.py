@@ -138,6 +138,15 @@ class ReleaseGateHarnessTests(unittest.TestCase):
         self.assertIn("SERVING_VENV", g7c)
         self.assertIn("REFUSE", g7c)
 
+    def test_g8_exercises_the_unset_default_path(self):
+        """Gate 8 must prove the shipped default: Kokoro + af_heart with no
+        voice argument and no saved choice — never an explicit set_voice."""
+        driver = (self.HARNESS / "g8-kokoro-driver.py").read_text()
+        self.assertNotIn("set_voice", driver)
+        self.assertIn("kokoro-82m-bf16", driver)
+        self.assertIn("af_heart", driver)
+        self.assertIn('voice.json', driver)
+
 
 if __name__ == "__main__":
     unittest.main()

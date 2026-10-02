@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Gate 8 driver: Kokoro synth of the reference sentence through the
-installed release wheel. The Synthesis worker is spawned (multiprocessing),
-so ALL driver work must live under the __main__ guard. The voice-pack home
-comes from MLX_OMARCHY_TTS_HOME (set by g8-kokoro.sh)."""
+"""Gate 8 driver: the DEFAULT speech path through the installed release
+wheel — Kokoro-82M with voice af_heart, no voice argument and no saved
+choice anywhere. The Synthesis worker is spawned (multiprocessing), so ALL
+driver work must live under the __main__ guard. The voice-pack home comes
+from MLX_OMARCHY_TTS_HOME (set by g8-kokoro.sh)."""
 import io
 import os
 import sys
@@ -13,13 +14,23 @@ from pathlib import Path
 
 
 def main() -> int:
+    from mlx_omarchy_assistant import synthesis
     from mlx_omarchy_assistant.synthesis import Synthesis
 
     sentence = "Your meeting starts at nine, and the review follows at eleven."
     home = Path(os.environ["MLX_OMARCHY_TTS_HOME"])
+    choice = home / "voice" / "voice.json"
+    if choice.exists():
+        choice.unlink()  # gate proves the unset default, not a saved pick
     s = Synthesis(home)
     print("PREPARE", s.prepare(True), flush=True)
-    s.set_voice("af_heart")  # Kokoro engine
+    pack = s.status()["pack"]
+    print("DEFAULT_ENGINE", pack["id"], "DEFAULT_VOICE", pack["voice"],
+          flush=True)
+    assert pack["id"] == "kokoro-82m-bf16", pack["id"]
+    assert pack["voice"] == "af_heart", pack["voice"]
+    assert pack["voice_default"] == "af_heart", pack["voice_default"]
+    assert s.current_voice() == "af_heart", s.current_voice()
 
     def load_and_psi():
         load = open("/proc/loadavg").read().split()[:3]
@@ -33,7 +44,7 @@ def main() -> int:
 
     before = load_and_psi()
     t0 = time.monotonic()
-    wav = s.synthesize(sentence, threading.Event())
+    wav = s.synthesize(sentence, threading.Event())  # NO voice argument
     wall = time.monotonic() - t0
     after = load_and_psi()
 

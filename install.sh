@@ -394,8 +394,18 @@ python3 -m venv --clear "$VENV"
 if (( VOICE )); then
   say "Installing voice dependencies (mlx-audio $MLX_AUDIO_VERSION, no deps)"
   "$VENV/bin/pip" install --quiet --no-deps "mlx-audio==$MLX_AUDIO_VERSION"
+  # The default speech engine is Kokoro-82M (pins mirror KOKORO_PACK's
+  # runtime.requires/constraints in serve/mlx_omarchy_assistant/synthesis.py;
+  # tests/test_install_sh_contract.py enforces the mirror). misaki's English
+  # G2P runs through the espeakng-loader user-space wheel (libespeak-ng +
+  # data, no root); en_core_web_sm ships as a GitHub release wheel because
+  # it has no PyPI package.
   "$VENV/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "numpy>=1.26.4" \
-    "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0"
+    "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0" \
+    "misaki==0.7.4" "num2words==0.5.14" "spacy>=3.8.0" "phonemizer>=3.2.1" \
+    "espeakng-loader==0.2.4"
+  "$VENV/bin/pip" install --quiet \
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 fi
 
 # 4b. Vendored mlx-lm serve patches. The apply script decides which patches

@@ -7,6 +7,7 @@ faked here; the tests pin the honest-refusal behavior instead.
 """
 
 import array
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -1163,7 +1164,7 @@ class KokoroEngineTests(unittest.TestCase):
         self.kpack, self.kcontent = make_kokoro_fixture_pack()
         self.qpack, self.qcontent = make_fixture_pack()
         self.enterContext(mock.patch.object(
-            synthesis, "VOICE_ENGINES", (self.qpack, self.kpack)))
+            synthesis, "VOICE_ENGINES", (self.kpack, self.qpack)))
         self.enterContext(mock.patch.object(synthesis, "MP_START_METHOD",
                                             "fork"))
         self.accel = {"available": True, "device": "Device(gpu, 0)",
@@ -1196,8 +1197,8 @@ class KokoroEngineTests(unittest.TestCase):
     def test_voice_options_group_by_engine(self):
         options = synthesis.voice_options()
         engines = [o["engine"] for o in options]
-        self.assertEqual(engines[0], self.qpack["id"])
-        self.assertEqual(engines[-1], self.kpack["id"])
+        self.assertEqual(engines[0], self.kpack["id"])
+        self.assertEqual(engines[-1], self.qpack["id"])
         kokoro = [o for o in options if o["engine"] == self.kpack["id"]]
         self.assertEqual([o["id"] for o in kokoro],
                          ["af_heart", "af_bella", "am_michael"])
@@ -1229,11 +1230,11 @@ class KokoroEngineTests(unittest.TestCase):
         by_id = {e["id"]: e for e in status["engines"]}
         self.assertEqual(set(by_id), {self.qpack["id"], self.kpack["id"]})
         self.assertTrue(by_id[self.kpack["id"]]["usable"])
-        self.assertEqual(status["pack"]["engine"], self.qpack["id"])
-        self.s.set_voice("am_michael")
+        self.assertEqual(status["pack"]["engine"], self.kpack["id"])
+        self.s.set_voice("aiden")
         with self._green()[0], self._green()[1]:
             status = self.s.status()
-        self.assertEqual(status["pack"]["engine"], self.kpack["id"])
+        self.assertEqual(status["pack"]["engine"], self.qpack["id"])
 
     def test_kokoro_request_keeps_its_own_resident_worker(self):
         import hashlib as _hl
@@ -1258,23 +1259,141 @@ class KokoroEngineTests(unittest.TestCase):
         with self._green()[0], self._green()[1], \
                 mock.patch.object(synthesis, "_worker_main", echo):
             list(self.s.synthesize_chunks("hi", threading.Event()))
-            qpid = self.s._worker.process.pid
-            self.assertEqual(self.s._worker.pack_id, self.qpack["id"])
-            self.s.set_voice("af_bella")
+            kpid = self.s._worker.process.pid
+            self.assertEqual(self.s._worker.pack_id, self.kpack["id"])
+            self.s.set_voice("aiden")
+            with self.assertRaises(synthesis.VoiceAssetsMissingError):
+                list(self.s.synthesize_chunks("there", threading.Event()))
+            self.s.prepare(approve_download=True, fetch=self._fetch(
+                {**self.qcontent, **self.kcontent}))
             chunks = list(self.s.synthesize_chunks("there",
                                                     threading.Event()))
-            kpid = self.s._worker.process.pid
+            qpid = self.s._worker.process.pid
             self.assertEqual(chunks[0].data,
-                             _hl.sha256(b"af_bella").digest()[:16])
-            self.assertNotEqual(kpid, qpid)  # second engine, own worker
-            self.s.set_voice("af_bella")
+                             _hl.sha256(b"aiden").digest()[:16])
+            self.assertNotEqual(qpid, kpid)  # second engine, own worker
             list(self.s.synthesize_chunks("again", threading.Event()))
-            self.assertEqual(self.s._worker.process.pid, kpid)  # resident
+            self.assertEqual(self.s._worker.process.pid, qpid)  # resident
             engines = list(self.s._workers)
-            self.assertEqual(engines, [self.qpack["id"], self.kpack["id"]])
+            self.assertEqual(engines, [self.kpack["id"], self.qpack["id"]])
             self.s.close()
         self.assertIsNone(self.s._worker)
         self.assertEqual(self.s._workers, {})
+
+    def test_fresh_home_defaults_to_kokoro_af_heart(self):
+        """Unset choice resolves to VOICE_ENGINES[0] with af_heart; reading
+        the default never writes a saved choice."""
+        self.assertEqual(self.s.current_voice(), "af_heart")
+        self.assertFalse((self.home / "voice" / "voice.json").exists())
+        self.assertEqual(self.s._current_engine()["id"], self.kpack["id"])
+        self.assertEqual(self.s.assets_dir().name, self.kpack["id"])
+
+    def test_saved_qwen_choice_wins_over_new_default(self):
+        """An existing install with an explicit Qwen3-TTS voice keeps it."""
+        choice = self.home / "voice" / "voice.json"
+        choice.parent.mkdir(parents=True)
+        choice.write_text(json.dumps({"voice": "serena"}))
+        self.assertEqual(self.s.current_voice(), "serena")
+        self.assertEqual(self.s._current_engine()["id"], self.qpack["id"])
+        fresh = synthesis.Synthesis(self.home)
+        self.assertEqual(fresh.current_voice(), "serena")
+
+    def test_setup_downloads_default_pack_and_saved_engine_only(self):
+        """First run fetches the Kokoro pack; a saved Qwen choice adds it."""
+        calls = []
+        self.s.prepare(approve_download=True,
+                       fetch=lambda url, dest: (calls.append(url),
+                                                self._fetch(
+                                                    {**self.qcontent,
+                                                     **self.kcontent})
+                                                (url, dest))[-1])
+        self.assertTrue(calls, "default pack must download on first run")
+        qwen_urls = [u for u in calls if self.qpack["repo"] in u]
+        self.assertEqual(qwen_urls, [],
+                         "unset choice must not download the second engine")
+        self.assertEqual(self.s.assets_dir().name, self.kpack["id"])
+        choice = self.home / "voice" / "voice.json"
+        choice.write_text(json.dumps({"voice": "serena"}))
+        calls.clear()
+        self.s.prepare(approve_download=True,
+                       fetch=lambda url, dest: (calls.append(url),
+                                                self._fetch(
+                                                    {**self.qcontent,
+                                                     **self.kcontent})
+                                                (url, dest))[-1])
+        self.assertIn(self.qpack["repo"], "".join(calls),
+                      "saved choice pulls its engine's pack")
+
+    def test_setup_refusal_names_default_pack_bytes_only(self):
+        result = self.s.prepare(approve_download=False,
+                                fetch=self._fetch({**self.qcontent,
+                                                   **self.kcontent}))
+        self.assertFalse(result["downloaded"])
+        self.assertIn(str(self.kpack["asset_bytes"]), result["reason"])
+        self.assertNotIn(str(self.qpack["asset_bytes"]), result["reason"])
+
+    def test_status_honest_unqualified_without_receipt(self):
+        """usable never implies qualified: no receipt, no qualified flag."""
+        self.s.prepare(approve_download=True, fetch=self._fetch(
+            {**self.qcontent, **self.kcontent}))
+        with self._green()[0], self._green()[1]:
+            status = self.s.status()
+        self.assertEqual(status["state"], "usable")
+        qualification = status["qualification"]
+        self.assertFalse(qualification["qualified"])
+        self.assertIn("no qualification receipt", qualification["reason"])
+
+    def test_kokoro_backend_gate_refuses_trig_limited_wheel(self):
+        """Functional gate: a backend that still refuses large-argument sin
+        gets the named upgrade error, not a mid-synthesis crash."""
+        import types
+
+        def refusing_sin(x, *args, **kwargs):
+            raise RuntimeError("[omarchy] Sin argument magnitude 200000.0 "
+                               "exceeds the built-in accuracy limit 100000")
+
+        fake = types.SimpleNamespace(
+            sin=refusing_sin,
+            array=lambda *a, **k: object(),
+            float32="float32")
+        with self.assertRaises(
+                synthesis.VoiceDependencyMissingError) as ctx:
+            synthesis._kokoro_backend_gate(fake)
+        self.assertIn("0.7.17", str(ctx.exception))
+        self.assertIn("upgrade the wheel", str(ctx.exception))
+
+    def test_kokoro_backend_gate_passes_reducing_wheel(self):
+        import types
+
+        fake = types.SimpleNamespace(
+            sin=lambda x, *args, **kwargs: 0.5,
+            array=lambda *a, **k: object(),
+            float32="float32")
+        self.assertIsNone(synthesis._kokoro_backend_gate(fake))
+
+    def test_kokoro_runtime_names_missing_g2p_runtime(self):
+        """Without the G2P wheels the refusal names the fix (dev host has
+        neither mlx nor espeakng-loader; the gate and trig setup are
+        stubbed, mirroring a prepared backend)."""
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(
+                synthesis, "_kokoro_backend_gate"))
+            stack.enter_context(mock.patch.object(
+                synthesis, "_kokoro_install_trig_reduction"))
+            with self.assertRaises(
+                    synthesis.VoiceDependencyMissingError) as ctx:
+                synthesis._kokoro_runtime("unused")
+        self.assertIn("G2P runtime missing", str(ctx.exception))
+
+    def test_kokoro_trig_refusal_translates_to_upgrade_error(self):
+        raw = RuntimeError("[omarchy] Sin argument magnitude 127261.73 "
+                           "exceeds the built-in accuracy limit 100000")
+        translated = synthesis._kokoro_backend_refusal(raw)
+        self.assertIsInstance(translated, synthesis.VoiceError)
+        self.assertIn("0.7.17", str(translated))
+        self.assertIn("upgrade the wheel", str(translated))
+        other = synthesis._kokoro_backend_refusal(ValueError("unrelated"))
+        self.assertIsInstance(other, ValueError)
 
 
 class FastCodecSamplerTests(unittest.TestCase):

@@ -5,6 +5,7 @@ import platform
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,38 @@ class InstallerContractTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(list(home.iterdir()), [])
+
+
+class VoiceDependencyContractTests(unittest.TestCase):
+    """install.sh --voice must carry every pin the default engine declares,
+    so the shipped installer can never drift from KOKORO_PACK's runtime."""
+
+    def test_voice_install_covers_default_engine_pins(self):
+        sys.path.insert(0, str(ROOT / "serve"))
+        from mlx_omarchy_assistant import synthesis
+
+        text = installer_text()
+        for name, constraint in \
+                synthesis.KOKORO_PACK["runtime"]["constraints"].items():
+            if name == "en-core-web-sm":
+                self.assertIn(f"en_core_web_sm-{constraint.removeprefix('==')}",
+                              text,
+                              "install.sh must pin the en_core_web_sm wheel")
+            elif name == "mlx_audio":
+                version = re.search(r'^MLX_AUDIO_VERSION=(\S+)', text,
+                                    re.M)
+                self.assertIsNotNone(version,
+                                     "install.sh must define MLX_AUDIO_VERSION")
+                self.assertEqual(
+                    version.group(1), constraint.removeprefix("=="),
+                    "install.sh MLX_AUDIO_VERSION must match the default "
+                    "engine's mlx-audio pin")
+            else:
+                self.assertIn(f"{name}{constraint}", text,
+                              f"install.sh --voice must pin {name}{constraint}")
+
+
+ROOT = INSTALLER.parents[1]
 
 
 class AneSmokeGateTests(unittest.TestCase):

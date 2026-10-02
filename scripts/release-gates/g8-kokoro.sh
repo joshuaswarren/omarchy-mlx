@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Gate 8 — Kokoro smoke end to end through the installed release wheel.
+# Gate 8 — DEFAULT speech path end to end through the installed release
+# wheel: Kokoro-82M with voice af_heart, no voice argument, no saved choice.
 # Honest scope: the RTF here includes the first model load; it proves the
-# engine boots and the pipeline is wired, NOT real-time qualification.
+# default path boots and the pipeline is wired, NOT real-time qualification.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 P="$GATE_HOME/.local/share/mlx-omarchy"
