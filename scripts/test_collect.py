@@ -218,9 +218,10 @@ class SubmitProtocol(unittest.TestCase):
     """The chunked resumable v1 wire protocol, against a scripted fake."""
 
     class FakeResponse:
-        def __init__(self, status, payload):
+        def __init__(self, status, payload, headers=None):
             self.status = status
             self._payload = payload
+            self.headers = headers or {}
 
         def read(self):
             return json.dumps(self._payload).encode("utf-8")
@@ -235,7 +236,7 @@ class SubmitProtocol(unittest.TestCase):
         """Routes by URL shape, records every request and chunk body."""
 
         def __init__(self, probe=(404, {}), initiate=None, chunk=None,
-                     complete=None):
+                     complete=None, response_headers=None):
             import collect_submit as cs
             self.probe = probe
             self.initiate = list(initiate or
@@ -244,6 +245,7 @@ class SubmitProtocol(unittest.TestCase):
             self.chunk = chunk or (200, {"status": "stored"})
             self.complete = complete or (200, {"status": "stored",
                                                "receipt_url": "http://r/1"})
+            self.response_headers = response_headers or {}
             self.requests = []
             self.chunk_bodies = {}
             self.archive = bytes(range(256)) * (cs.CHUNK_BYTES // 256 * 2 + 1)
@@ -266,7 +268,8 @@ class SubmitProtocol(unittest.TestCase):
                 status, payload = self.complete
             else:
                 raise AssertionError(f"unexpected URL {url}")
-            return SubmitProtocol.FakeResponse(status, payload)
+            return SubmitProtocol.FakeResponse(status, payload,
+                                               self.response_headers)
 
     def run_submit(self, server, **kwargs):
         import collect_submit as cs
@@ -364,6 +367,24 @@ class SubmitProtocol(unittest.TestCase):
             self.run_submit(server)
         self.assertIn("schema_invalid", str(ctx.exception))
         self.assertIn(errors[0], str(ctx.exception))
+
+    def test_failure_includes_full_body_and_request_id(self):
+        import collect_submit as cs
+        errors = ["$.ane_port_detail.macos.dt_nodes[0].compatible: "
+                  "expected type array | null"]
+        server = SubmitProtocol.FakeServer(
+            initiate=[(422, {"error": "schema_invalid",
+                             "detail": {"errors": errors}})],
+            response_headers={"cf-ray": "8f6a1e2b_" + "x" * 8})
+        with self.assertRaises(cs.SubmitError) as ctx:
+            self.run_submit(server)
+        message = str(ctx.exception)
+        # The contributor sees the server's whole answer, field paths
+        # included, plus the request id to quote in a report.
+        self.assertIn("schema_invalid", message)
+        self.assertIn(errors[0], message)
+        self.assertIn("HTTP 422", message)
+        self.assertIn("8f6a1e2b_", message)
 
     def test_chunk_failure_raises_and_mentions_resume(self):
         import collect_submit as cs

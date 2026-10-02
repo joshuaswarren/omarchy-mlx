@@ -58,14 +58,25 @@ class SubmitError(RuntimeError):
 
 
 def _request(urlopen, req, timeout):
+    """(status, body, request_id): the request id is the server's
+    cf-ray header, so a contributor report is actionable."""
     try:
         with urlopen(req, timeout=timeout) as resp:
             body = resp.read()
-            return resp.status, body
+            return resp.status, body, resp.headers.get("cf-ray")
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()
+        return exc.code, exc.read(), exc.headers.get("cf-ray")
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         raise SubmitError(f"endpoint unreachable: {exc}") from exc
+
+
+def _server_note(status, body, request_id, cap=2048):
+    """Full server response for error messages, plus the request id."""
+    text = body.decode("utf-8", "replace").strip()
+    if len(text) > cap:
+        text = text[:cap] + "…"
+    note = f"server said: {text}" if text else "server sent an empty body"
+    return f"{note} (HTTP {status}, request {request_id or 'unknown'})"
 
 
 def sha256_hex(data):
@@ -157,7 +168,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     digest = sha256_hex(data)
     chunks = chunk_archive(data)
 
-    status, body = _request(
+    status, body, request_id = _request(
         urlopen,
         urllib.request.Request(
             f"{base}/v1/submit/{digest}", headers=_headers(token)),
@@ -165,7 +176,9 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     if status == 200:
         return _receipt(_decode(body), deduplicated=True, status=status)
     if status != 404:
-        raise SubmitError(f"dedup probe failed with HTTP {status}")
+        raise SubmitError(
+            f"dedup probe failed with HTTP {status}: "
+            f"{_server_note(status, body, request_id)}")
 
     difficulty = POW_DIFFICULTY
     initiate_headers = {"Content-Type": "application/json"}
@@ -189,7 +202,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
                 "difficulty": difficulty,
             },
         }
-        status, body = _request(
+        status, body, request_id = _request(
             urlopen,
             urllib.request.Request(
                 f"{base}/v1/submit",
@@ -206,11 +219,9 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
         break
 
     if status != 200:
-        detail = decoded.get("detail")
-        suffix = f" {json.dumps(detail)[:2048]}" if detail else ""
         raise SubmitError(
-            f"initiate failed with HTTP {status}: {decoded.get('error')}"
-            f"{suffix}")
+            f"initiate failed with HTTP {status}: "
+            f"{_server_note(status, body, request_id)}")
 
     if decoded.get("status") == "duplicate":
         return _receipt(decoded, deduplicated=True, status=status)
@@ -219,7 +230,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
 
     for idx in decoded.get("missing_chunks", []):
         piece = chunks[idx][1]
-        cstatus, cbody = _request(
+        cstatus, cbody, request_id = _request(
             urlopen,
             urllib.request.Request(
                 f"{base}/v1/submit/{digest}/chunk/{idx}",
@@ -232,9 +243,10 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
         if cstatus != 200:
             raise SubmitError(
                 f"chunk {idx} failed with HTTP {cstatus}: "
-                f"{cdecoded.get('error')}; re-run to resume")
+                f"{_server_note(cstatus, cbody, request_id)}; "
+                f"re-run to resume")
 
-    fstatus, fbody = _request(
+    fstatus, fbody, request_id = _request(
         urlopen,
         urllib.request.Request(
             f"{base}/v1/submit/{digest}/complete",
@@ -245,11 +257,12 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     fdecoded = _decode(fbody)
     if fstatus == 409 and fdecoded.get("error") == "incomplete":
         raise SubmitError(
-            f"server still misses chunks {fdecoded.get('missing_chunks')}; "
-            f"re-run to resume")
+            f"server still misses chunks {fdecoded.get('missing_chunks')}: "
+            f"{_server_note(fstatus, fbody, request_id)}; re-run to resume")
     if fstatus != 200:
         raise SubmitError(
-            f"complete failed with HTTP {fstatus}: {fdecoded.get('error')}")
+            f"complete failed with HTTP {fstatus}: "
+            f"{_server_note(fstatus, fbody, request_id)}")
     return _receipt(fdecoded, deduplicated=False, status=fstatus)
 
 
@@ -274,7 +287,7 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
             f"{MAX_PAYLOAD_BYTES} bytes; it stays local")
     digest = sha256_hex(body)
 
-    status, raw = _request(
+    status, raw, request_id = _request(
         urlopen,
         urllib.request.Request(
             f"{base}/v1/submit/{digest}", headers=_headers(token)),
@@ -282,7 +295,9 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     if status == 200:
         return _receipt(_decode(raw), deduplicated=True, status=status)
     if status != 404:
-        raise SubmitError(f"dedup probe failed with HTTP {status}")
+        raise SubmitError(
+            f"dedup probe failed with HTTP {status}: "
+            f"{_server_note(status, raw, request_id)}")
 
     difficulty = POW_DIFFICULTY
     decoded = {}
@@ -302,7 +317,7 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
                 "difficulty": difficulty,
             },
         }
-        status, raw = _request(
+        status, raw, request_id = _request(
             urlopen,
             urllib.request.Request(
                 f"{base}/v1/submit",
@@ -320,7 +335,8 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
 
     if status != 200:
         raise SubmitError(
-            f"submit failed with HTTP {status}: {decoded.get('error')}")
+            f"submit failed with HTTP {status}: "
+            f"{_server_note(status, raw, request_id)}")
     return _receipt(decoded,
                     deduplicated=decoded.get("status") == "duplicate",
                     status=status)

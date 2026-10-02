@@ -93,13 +93,19 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
   const init = checked.value;
 
   const schema = init.payload.kind === "omarchy-mac-e2e" ? payloadE2ESchema : payloadSchema;
-  // Tolerance for v0.7.14 macOS collectors (#24, #26): decode/split their
-  // hex- and NUL-encoded dt_nodes strings and cut over-long strings to the
-  // schema's own maxLength, before validating. The schema and its identity
-  // hash are untouched; every change is logged and echoed as `coerced`.
-  const coerced = coerceToSchema(init.payload, schema);
+  // Tolerance for v0.7.14+ collectors (#24, #26, and the M3 422 of
+  // 14:21Z): coerce hex/NUL encodings, then sanitize the diagnostic
+  // blocks — anything still schema-invalid is parked under the root's
+  // `unparsed` (capped) and dropped from the stored payload, so one
+  // bad diagnostic value can never reject a submission. The schema and
+  // its identity hash are untouched; every action is logged and echoed
+  // as `coerced`.
+  const { changes: coerced, unparsed } = coerceToSchema(init.payload, schema);
   if (coerced.length > 0) {
-    console.log(`coerced payload fields (${coerced.length}):`, JSON.stringify(coerced));
+    console.log(
+      `coerced payload fields (${coerced.length}, unparked ${Object.keys(unparsed).length}):`,
+      JSON.stringify(coerced),
+    );
   }
   const audit = coerced.length > 0 ? { coerced } : {};
 
