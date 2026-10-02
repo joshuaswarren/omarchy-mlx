@@ -30,6 +30,29 @@ env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --help >>"$LOG" 2>&1
 gate_log "$LOG" "LAUNCHER_HELP_EXIT $?"
 
+# Serve-entry startup check from the INSTALLED home (the release lane
+# stages serve files from an explicit list; v0.7.15 shipped without
+# perf_placement.py and every user install died at serve startup with
+# ModuleNotFoundError). Replicates the launcher environment and executes
+# the exact import pair the serve shim runs at startup — no server start,
+# no model download. SERVE_ENTRY_OK is REQUIRED for a green gate.
+P="$GATE_HOME/.local/share/mlx-omarchy"
+env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" PYTHONPATH="$P" \
+  "$P/venv/bin/python" -c '
+import importlib
+importlib.import_module("mlx_omarchy_serve._mlxlm_server")
+importlib.import_module("mlx_omarchy_serve.catalog")
+importlib.import_module("mlx_omarchy_serve.budget")
+try:
+    from mlx_omarchy_serve.perf_placement import apply_from_env
+except ImportError:
+    from perf_placement import apply_from_env
+print("serve entry imports OK")
+' >>"$LOG" 2>&1
+SERVE_RC=$?
+gate_log "$LOG" "SERVE_ENTRY_EXIT $SERVE_RC"
+[[ $SERVE_RC -eq 0 ]] || rc=1
+
 if [[ -x "$GATE_HOME/.local/bin/mlx-omarchy-parakeet" ]]; then
   gate_log "$LOG" "PARAKEET_LAUNCHER staged"
   env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \

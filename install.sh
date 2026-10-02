@@ -465,7 +465,7 @@ curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_p
   -o "$PREFIX/mlx_omarchy_paths.py"
 SERVE_PKG="$PREFIX/mlx_omarchy_serve"
 mkdir -p "$SERVE_PKG"
-for serve_file in __init__.py catalog.py budget.py __main__.py _mlxlm_server.py catalog.json; do
+for serve_file in __init__.py catalog.py budget.py perf_placement.py export_fit_table.py __main__.py _mlxlm_server.py catalog.json; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_serve/$serve_file" \
     -o "$SERVE_PKG/$serve_file"
 done

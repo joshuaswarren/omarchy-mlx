@@ -189,10 +189,59 @@ class ServeCliContractTests(unittest.TestCase):
         end = text.index('# 5d. MLX Chat assistant')
         return text[start:end]
 
+    def test_installer_per_file_lists_cover_the_source_trees(self):
+        """Every file in a serve package's source tree must appear in the
+        installer's per-file fetch list for that package.
+
+        Regression: v0.7.15's release lane staged serve files from a
+        hardcoded list that lacked perf_placement.py, so every user-style
+        install died at serve startup with ModuleNotFoundError even though
+        the module shipped in the repo and the --system lane (whole-dir
+        copy) carried it. This test compares each `for X_file in ...`
+        list in install.sh against the actual directory contents, so a
+        new module without a list update fails here, not on a user box.
+        """
+        installer = installer_text()
+        # var name -> (source dir relative to repo root, strip prefix for
+        # static lists). One entry per per-file curl list in install.sh.
+        lists = {
+            "serve_file": ("serve/mlx_omarchy_serve", ""),
+            "laya_file": ("serve/mlx_omarchy_laya", ""),
+            "bonsai2_file": ("serve/mlx_omarchy_bonsai2", ""),
+            "assistant_file": ("serve/mlx_omarchy_assistant", ""),
+            "assistant_static": ("serve/mlx_omarchy_assistant/static", ""),
+        }
+        for var, (src_rel, _) in lists.items():
+            match = re.search(
+                rf"for {var} in ([^;]+); do", installer)
+            self.assertIsNotNone(match, f"no per-file list for {var}")
+            listed = set(match.group(1).split())
+            if var == "assistant_static":
+                static_root = INSTALLER.parent / src_rel
+                expected = {str(p.relative_to(static_root))
+                            for p in static_root.rglob("*") if p.is_file()}
+            else:
+                expected = {p.name for p in (INSTALLER.parent / src_rel).iterdir()
+                            if p.is_file()}
+            # Repo documentation (CONTRACT.md, README*) deliberately stays
+            # in-repo; the installer never ships it. ids_probe.py is a
+            # bench-only, env-gated hook (its docstring: default OFF) that
+            # the bonsai2 shim imports lazily only when a bench env var is
+            # set; it is not part of a user install.
+            expected -= {n for n in expected
+                         if n == "CONTRACT.md" or n.startswith("README")
+                         or n == "ids_probe.py"}
+            self.assertEqual(
+                expected, listed,
+                f"{var} list out of sync with {src_rel}: "
+                f"missing_from_list={sorted(expected - listed)} "
+                f"stale_in_list={sorted(listed - expected)}")
+
+
     def test_serve_package_fetched_from_pinned_release_tag(self):
         section = self.serve_section()
         self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_serve/$serve_file"', section)
-        for member in ("__init__.py", "catalog.py", "budget.py", "__main__.py", "_mlxlm_server.py", "catalog.json"):
+        for member in ("__init__.py", "catalog.py", "budget.py", "perf_placement.py", "export_fit_table.py", "__main__.py", "_mlxlm_server.py", "catalog.json"):
             self.assertIn(member, section.split("for serve_file in", 1)[1].split(";", 1)[0],
                           f"missing catalog/package file {member}")
         self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_laya/$laya_file"', section)
