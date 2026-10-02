@@ -1140,15 +1140,31 @@ class Coordinator:
 
         Never executes model output: JSON parse plus schema validation only.
         A rejected envelope is never rendered; the caller reports it.
+        A fence body that is one bare component object (the model dropped
+        the {"version", "components"} wrapper -- 2026-10-02 card-latency
+        receipt) is wrapped deterministically and must then pass the same
+        validators; nothing else is normalized.
         """
-        from .components import validate_components
+        from .components import validate_components, ENVELOPE_VERSION
         try:
-            components = validate_components(json.loads(envelope))
-            if component_count + len(components) > 32:
-                raise ValueError("Too many generated components")
-            return components
-        except (ValueError, TypeError, KeyError):
+            parsed = json.loads(envelope)
+        except (ValueError, TypeError):
             return None
+        try:
+            components = validate_components(parsed)
+        except (ValueError, TypeError, KeyError):
+            if not (isinstance(parsed, dict)
+                    and "version" not in parsed and "components" not in parsed
+                    and isinstance(parsed.get("type"), str)):
+                return None
+            try:
+                components = validate_components(
+                    {"version": ENVELOPE_VERSION, "components": [parsed]})
+            except (ValueError, TypeError, KeyError):
+                return None
+        if component_count + len(components) > 32:
+            return None
+        return components
 
     def _emit_raw_fallback(self, cid, turn, raw_text_parts, marker):
         """Surface the model's own output as text when its interface failed.

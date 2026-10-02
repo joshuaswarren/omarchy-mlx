@@ -11,7 +11,7 @@ git -C $W archive origin/main serve | ssh $H "tar -x -C $D/base"
 for build in base after; do
   [ "$build" = after ] && rsync -a --delete --exclude __pycache__ $W/serve/ $H:$D/$build/serve/
   rsync -a $W/scripts/pair_memory_v2.py $W/scripts/card_timing_boot.py \
-        $W/scripts/card_decompose.py $W/scripts/run_card_latency_suite.py \
+        $W/scripts/card_decompose.py \
         $W/scripts/mlx_provenance.py $W/scripts/dev_subset.py \
         $H:$D/$build/scripts/
   rsync -a $W/tests/fixtures/cards_dev.json $W/tests/fixtures/cards_held_out_v4.json \

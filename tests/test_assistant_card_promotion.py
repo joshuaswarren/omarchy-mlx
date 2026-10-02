@@ -8,6 +8,7 @@ promotion needs a user request for the artifact, prose requests and fenced
 code are inert, and hostile input costs linear time.
 """
 
+import json
 import sys
 import time
 import unittest
@@ -54,6 +55,39 @@ class CoordinatorPromotionTests(unittest.TestCase):
         self.assertEqual(len(cards), 1)
         self.assertEqual([i["text"] for i in cards[0]["items"]], ["x"])
         self.assertNotIn("(from reply)", cards[0].get("title", ""))
+
+    def test_bare_component_fence_is_wrapped_and_validated(self):
+        chart = json.dumps({
+            "type": "chart", "kind": "bar",
+            "series": [{"id": "s1", "label": "Population", "unit": "M",
+                        "source": "user message", "estimate": False,
+                        "values": [{"label": "Paris", "value": 2.1},
+                                   {"label": "Tokyo", "value": 13.9}]}]})
+        reply = "```assistant-ui\n" + chart + "\n```\n"
+        _, _, record = self.chat(reply, "show a chart of populations")
+        cards = self.cards(record)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["type"], "chart")
+        self.assertEqual(len(cards[0]["series"][0]["values"]), 2)
+
+    def test_bare_component_that_fails_validation_stays_rejected(self):
+        bad = json.dumps({"type": "chart", "kind": "bar", "series": [
+            {"id": "s1", "label": "P", "unit": "M", "source": "x",
+             "estimate": False,
+             "values": [{"label": "Paris", "value": 2.1}]}]})
+        _, _, record = self.chat("```assistant-ui\n" + bad + "\n```\n",
+                                 "show a chart of populations")
+        self.assertEqual(self.cards(record), [])
+
+    def test_bare_list_and_non_component_bodies_stay_rejected(self):
+        two = json.dumps([{"type": "checklist", "items": []},
+                          {"type": "facts", "cards": []}])
+        _, _, record = self.chat("```assistant-ui\n" + two + "\n```\n",
+                                 "give me cards")
+        self.assertEqual(self.cards(record), [])
+        _, _, record = self.chat("```assistant-ui\n{\"a\": 1}\n```\n",
+                                 "give me cards")
+        self.assertEqual(self.cards(record), [])
 
     def test_card_follows_the_streamed_text(self):
         reply = "Pack these:\n- [ ] tent\n- [x] stove\n- [ ] water\n"
