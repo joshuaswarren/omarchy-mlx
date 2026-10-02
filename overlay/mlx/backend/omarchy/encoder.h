@@ -104,7 +104,7 @@ inline int batch_node_budget() {
 // waits use ALL_COMMANDS stage masks (batching note above), so splitting
 // at any dispatch boundary preserves every dependency and results stay
 // bit-identical.
-inline constexpr uint64_t kBatchWorkBudget = 0; // SET AFTER CALIBRATION
+inline constexpr uint64_t kBatchWorkBudget = 40000;
 inline uint64_t batch_work_budget() {
   static const uint64_t v = []() {
     const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");

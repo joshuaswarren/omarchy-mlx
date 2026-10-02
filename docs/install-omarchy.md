@@ -101,7 +101,7 @@ at 120 Hz while 2-6 ms submissions stay smooth (same GPU busy fraction;
 reporter's OpenGL measurement). `MLX_OMARCHY_BATCH_WORK=<groups>` bounds each
 submission to an estimated GPU cost: the open batch is submitted once its
 summed dispatch work-group counts reach the budget. The default
-(`<DEFAULT>` groups) is calibrated on the M2 Max so a 4B decode step splits
+(`40000` groups) is calibrated on the M2 Max so a 4B decode step splits
 into ~2-6 ms submissions; a single dispatch larger than the budget still runs
 whole (splitting happens between dispatches), and copies/fills ride the node
 and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap (headless
