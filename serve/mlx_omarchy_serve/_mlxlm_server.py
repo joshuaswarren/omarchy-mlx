@@ -574,6 +574,25 @@ def main() -> None:
     if probe_wanted:
         install_ids_probe(server_module)
         print("shim: ids probe installed", file=sys.stderr, flush=True)
+    pct = getattr(server_module, "_process_control_tokens", None)
+    if pct is not None and getattr(pct, "_omarchy_ttft_wrapped", False) is False:
+        def traced_pct(ctx, token_stream, _orig=pct):
+            stream = _orig(ctx, token_stream)
+            first = True
+
+            def traced():
+                nonlocal first
+                for gen in stream:
+                    if first:
+                        first = False
+                        _ttft_trace("first_control_yield",
+                                    buffer=max((len(s) for s in (ctx.sequences or ())),
+                                               default=0))
+                    yield gen
+            return traced()
+
+        traced_pct._omarchy_ttft_wrapped = True
+        server_module._process_control_tokens = traced_pct
     server_module.main()
 
 

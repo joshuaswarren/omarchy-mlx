@@ -30,19 +30,55 @@ from quality27b_perf_api import Assistant, call, submit_turn  # noqa: E402
 FILLER = ("The quick brown fox jumps over the lazy dog. " * 30).strip()
 
 
-def post_turn(runtime, cid, body):
+def assistant_pids(home):
+    out = subprocess.run(["bash", "-c",
+                          f"pgrep -af 'mlx_omarchy_assistant' | grep {os.path.realpath(home)} || true"],
+                         capture_output=True, text=True).stdout
+    return [int(line.split()[0]) for line in out.splitlines() if line.split()]
+
+
+def dump_threads(home, once=[False]):
+    if once[0]:
+        return
+    once[0] = True
+    spy = os.path.expanduser("~/agents/QualityTtft/py-spy")
+    for pid in assistant_pids(home):
+        out = subprocess.run(["sudo", "-n", spy, "dump", "--pid", str(pid)],
+                             capture_output=True, text=True, timeout=30)
+        print(f"--- py-spy dump pid={pid} rc={out.returncode}\n"
+              f"{(out.stdout or out.stderr)[:4000]}", flush=True)
+
+
+def post_turn(runtime, cid, body, home):
     """Submit a turn; retry once on a 409 that races setup teardown."""
     import urllib.error
+    def _status():
+        try:
+            snap = call("GET", "/api/status", runtime=runtime)
+            return {"setup": (snap.get("setup") or {}).get("state"),
+                    "children": [(c.get("role"), c.get("alive")) for c in (snap.get("children") or [])]}
+        except Exception as error:
+            return {"status_error": str(error)[:120]}
     try:
         return call("POST", f"/api/conversations/{cid}/turns", body, runtime=runtime)
     except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", "replace")[:200]
+        detail = error.read().decode("utf-8", "replace")[:300]
         if error.code != 409:
             raise RuntimeError(f"turn refused HTTP {error.code}: {detail}") from error
-        time.sleep(0.5)
-        result = call("POST", f"/api/conversations/{cid}/turns", body, runtime=runtime)
-        print(f"  submit retried once after 409: {detail}", flush=True)
-        return result
+        print(f"  submit 409: {detail} status={_status()} ps={ps_snapshot()}",
+              flush=True)
+        dump_threads(home)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            time.sleep(1.0)
+            try:
+                return call("POST", f"/api/conversations/{cid}/turns", body, runtime=runtime)
+            except urllib.error.HTTPError as retry_error:
+                detail2 = retry_error.read().decode("utf-8", "replace")[:300]
+                if retry_error.code != 409:
+                    raise RuntimeError(f"turn refused HTTP {retry_error.code}: {detail2}") from retry_error
+                print(f"  submit 409 again: {detail2} status={_status()}", flush=True)
+        raise RuntimeError(f"turn still 409 after 20s: {detail2}")
 
 
 def loadavg():
@@ -74,6 +110,33 @@ def quiet_gate(max_wait_s):
                     "waited_s": round(waited, 1), "gate": "NOT_QUIET"}
         time.sleep(2.0)
         waited = time.monotonic() - start
+
+
+def ps_snapshot():
+    """All mlx-related processes with pid, start time, and argv head."""
+    out = subprocess.run(["bash", "-c",
+                          "ps -eo pid=,lstart=,args= | grep -E "
+                          "'mlx_omarchy_assistant|_mlxlm_server|mlx_omarchy_laya' | grep -v grep"],
+                         capture_output=True, text=True).stdout
+    return [line.strip()[:200] for line in out.splitlines()]
+
+
+def saved_streaming(home):
+    """Conversations with a message still marked streaming (orphan turns)."""
+    found = []
+    hist = os.path.join(home, "assistant", "history")
+    try:
+        for name in os.listdir(hist):
+            try:
+                record = json.load(open(os.path.join(hist, name)))
+            except (OSError, ValueError):
+                continue
+            for m in record.get("messages") or []:
+                if m.get("status") == "streaming":
+                    found.append(name)
+    except OSError:
+        pass
+    return found
 
 
 def kill_pair_tree(home):
@@ -238,12 +301,15 @@ def main():
         capture_output=True, text=True, timeout=120)
     session["provenance"] = (prov.stdout or prov.stderr).strip()[-2000:]
 
+    session["ps_before"] = ps_snapshot()
+    session["streaming_before"] = saved_streaming(home)
+    stamp(f"ps_before={session['ps_before']} streaming={session['streaming_before']}")
     pair = Assistant("quality", home, args.repo_serve)
     do_setup = pair.boot_id_mismatch()
     session["did_setup"] = do_setup
     stamp(f"assistant start do_setup={do_setup}")
     pair.start(do_setup)
-    stamp("application.json present")
+    stamp(f"application.json present ps={ps_snapshot()}")
 
     setup_deadline = time.monotonic() + (1500 if do_setup else 180)
     state = {}
@@ -302,7 +368,7 @@ def main():
         drain = SseDrain(cid, pair.runtime)
         t0 = time.monotonic()
         body = {"text": text, "mode": "chat", "max_tokens": max_tokens}
-        turn = post_turn(pair.runtime, cid, body)["turn_id"]
+        turn = post_turn(pair.runtime, cid, body, home)["turn_id"]
         stop = threading.Event()
         beat = threading.Thread(target=heartbeat_loop,
                                 args=(cid, turn, stop), daemon=True)
@@ -351,6 +417,7 @@ def main():
     for i in range(args.runs):
         one_turn(f"run_{i}", prompt, args.max_tokens, True)
 
+    session["ps_after"] = ps_snapshot()
     session["load_after"] = loadavg()
     session["psi_after"] = psi_cpu()
     try:
