@@ -674,6 +674,8 @@ class Coordinator:
         speech_capable = False
         try:
             from .components import SCHEMA_PROMPT, validate_components
+            from .card_promotion import extract_text as _promote_card
+            from .card_promotion import stream_prefix_card
             pair = self.manager.start()
             phase("pair_start")
             if cancel.is_set():
@@ -744,6 +746,11 @@ class Coordinator:
             #    (PairGates card-defect-compact4b, 2026-10-01).
             saw_visible_text = False      # did any text event reach the UI?
             saw_visible_component = False  # did any validated component reach the UI?
+            # Stream-time card promotion (2026-10-02): emit the promoted card
+            # as soon as a closed markdown block completes instead of holding
+            # it to the end of the reply.  One card max, same rules.
+            promote_boundary = 0
+            promote_done = False
             # Cooperative TTS scheduling: probe the chat worker's yield gate
             # and, when present, park generation at chunk boundaries so
             # queued speak requests can synthesize between chunks. Without
@@ -826,6 +833,27 @@ class Coordinator:
                             self.store.emit(cid, turn, "text", {"text": ready})
                             reply_text_parts.append(ready)
                             saw_visible_text = True
+                            if mode == "chat" and not promote_done:
+                                seen = "".join(reply_text_parts)
+                                candidate, promote_boundary = stream_prefix_card(
+                                    seen, user_text, promote_boundary)
+                                if candidate is not None:
+                                    try:
+                                        validated = validate_components(
+                                            {"version": 1,
+                                             "components": [candidate]})
+                                    except Exception:
+                                        validated = None
+                                    if validated:
+                                        promote_done = True
+                                        for component in validated:
+                                            component_count += 1
+                                            trusted = dict(
+                                                component, id=uuid.uuid4().hex,
+                                                turn_id=turn, revision=1)
+                                            self.store.emit(
+                                                cid, turn, "component", trusted)
+                                            saw_visible_component = True
                             if not dumped_ttft:
                                 dumped_ttft = True
                                 phase("first_text_emitted")
@@ -872,7 +900,6 @@ class Coordinator:
             # payloads of their own).  Hostile, oversize, or empty replies
             # return None from extract_text and emit nothing.
             if (not cancel.is_set() and mode == "chat" and component_count == 0):
-                from .card_promotion import extract_text as _promote_card
                 reply_text = "".join(reply_text_parts)
                 promoted = _promote_card(reply_text, user_text)
                 if promoted is not None:

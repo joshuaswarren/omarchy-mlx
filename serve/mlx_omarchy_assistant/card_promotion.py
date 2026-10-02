@@ -452,3 +452,61 @@ def extract_text(reply: str, user_text: str = "") -> dict | None:
             component["title"] = _KIND_TITLES[kind] + _SOURCE_SUFFIX
             return component
     return None
+
+
+STREAM_MIN_NEW_CHARS = 64
+
+
+_TRAILING_BLOCK_KINDS = ("table", "item", "heading")
+
+
+def _open_tail_start(text: str) -> int:
+    """Index where the still-growing trailing markdown block starts.
+
+    A reply that ends inside a table row, a list item or under a heading
+    has that trailing block still open: promoting from it could render a
+    half-written structure.  The closed prefix is everything before it.
+    """
+    lines = text.split("\n")
+
+    def kind(line):
+        s = line.lstrip()
+        if not s:
+            return "blank"
+        if s.startswith("|"):
+            return "table"
+        if s.startswith("#"):
+            return "heading"
+        if re.match(r"(?:[-*+]|\d{1,9}[.)])[ \t]", s):
+            return "item"
+        return "prose"
+
+    last = kind(lines[-1]) if lines else "prose"
+    if last not in _TRAILING_BLOCK_KINDS:
+        return len(text) - len(lines[-1]) if lines[-1] else len(text)
+    i = len(lines) - 1
+    while i >= 0 and kind(lines[i]) == last:
+        i -= 1
+    return sum(len(line) + 1 for line in lines[:i + 1])
+
+
+def stream_prefix_card(text: str, user_text: str,
+                       last_boundary: int) -> tuple[dict | None, int]:
+    """Card from the closed prefix of a still-streaming reply.
+
+    Promotion may fire before the reply ends: everything before the open
+    trailing block (see ``_open_tail_start``) is closed, so a table still
+    streaming is excluded and cannot be promoted half-written.  A new
+    attempt needs at least STREAM_MIN_NEW_CHARS of fresh closed text so a
+    long reply costs a handful of linear scans, not one per chunk.
+
+    Returns ``(component, boundary)``; component is None when the closed
+    prefix holds no card.  The same requested_kinds gate and builders as
+    ``extract_text`` apply -- no rule is relaxed for early emission.
+    """
+    if not isinstance(text, str):
+        return None, last_boundary
+    boundary = _open_tail_start(text)
+    if boundary <= last_boundary or boundary - last_boundary < STREAM_MIN_NEW_CHARS:
+        return None, max(last_boundary, boundary)
+    return extract_text(text[:boundary], user_text), boundary

@@ -18,7 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
 from mlx_omarchy_assistant import card_promotion, components  # noqa: E402
-from mlx_omarchy_assistant.card_promotion import extract_text, requested_kinds  # noqa: E402
+from mlx_omarchy_assistant.card_promotion import (extract_text,  # noqa: E402
+                                                  requested_kinds,
+                                                  stream_prefix_card)
 
 from tests import test_assistant_generation as harness  # noqa: E402
 
@@ -228,6 +230,115 @@ class RuleTests(unittest.TestCase):
                 started = time.monotonic()
                 extract_text(reply, user)
                 self.assertLess(time.monotonic() - started, 2.0, reply[:20])
+
+
+TABLE = ("| Winter wheat | frost resistant | high yield |\n"
+         "| Spring barley | early sown | steady yield |\n"
+         "| Oats | modest input | reliable yield |\n")
+CLOSED = "Compare these varieties:\n\n| Crop | Trait | Yield |\n|---|---|---|\n" + TABLE + "\n"
+
+
+class StreamPrefixCardTests(unittest.TestCase):
+    USER = "compare these cereals in a table"
+
+    def test_closed_table_promotes_before_reply_ends(self):
+        seen = CLOSED
+        card, boundary = stream_prefix_card(seen, self.USER, 0)
+        self.assertIsNotNone(card)
+        self.assertEqual(card["type"], "comparison")
+        _valid(card)
+        self.assertEqual(boundary, len(seen))
+
+    def test_open_table_tail_is_never_promoted_half_written(self):
+        seen = "Compare these varieties:\n\n| Crop | Trait | Yield |\n|---|---|---|\n" \
+               "| Winter wheat | frost resistant | high yield |\n| Spring ba"
+        card, boundary = stream_prefix_card(seen, self.USER, 0)
+        self.assertIsNone(card)
+        # the boundary sits before the streaming table, so the closed
+        # prefix alone holds no card
+        self.assertLess(boundary, len(seen))
+        self.assertIsNone(extract_text(seen[:boundary], self.USER))
+
+    def test_throttle_needs_fresh_text_between_attempts(self):
+        seen = CLOSED
+        _, boundary = stream_prefix_card(seen, self.USER, 0)
+        again, same = stream_prefix_card(seen, self.USER, boundary)
+        self.assertIsNone(again)
+        self.assertEqual(same, boundary)
+
+    def test_no_request_never_promotes(self):
+        card, _ = stream_prefix_card(CLOSED, "tell me about cereals", 0)
+        self.assertIsNone(card)
+
+    def test_same_rules_as_end_of_reply(self):
+        streamed, _ = stream_prefix_card(CLOSED, self.USER, 0)
+        self.assertEqual(streamed, extract_text(CLOSED, self.USER))
+
+    def test_short_text_never_attempts(self):
+        text = "Short.\n\n"
+        card, boundary = stream_prefix_card(text, self.USER, 0)
+        self.assertIsNone(card)
+        # the boundary may advance past the short closed prefix; a later
+        # attempt rescans it because the prefix is text[:boundary]
+        self.assertEqual(boundary, len(text))
+
+
+class StreamTimePromotionTests(unittest.TestCase):
+    """Coordinator-level: the card lands as a component event while the
+    reply is still streaming, before the final text event."""
+    setUp = harness.GenerationTests.setUp
+    cid = harness.GenerationTests.cid
+    tearDown = harness.GenerationTests.tearDown
+    run_turn = harness.GenerationTests.run_turn
+
+    def events(self, cid, turn):
+        return [e for e in self.coord.store.events(cid, 0)
+                if e["turn_id"] == turn]
+
+    def test_component_emitted_while_reply_streams(self):
+        cid = self.cid()
+        chunks = [CLOSED[:40], CLOSED[40:120], CLOSED[120:], "\nClosing note."]
+        script = [(0, delta(c)) for c in chunks] + [(0, finish("stop"))]
+        self.worker.scripts = [script]
+        turn, record = self.run_turn(cid, {"text": "compare these cereals in a table"})
+        events = self.events(cid, turn)
+        kinds = [e["type"] for e in events]
+        self.assertIn("component", kinds)
+        last_text = max(i for i, e in enumerate(events) if e["type"] == "text")
+        comp_index = kinds.index("component")
+        self.assertLess(comp_index, last_text,
+                        "component must precede the final text event")
+        self.assertEqual(len(record["messages"][-1].get("components") or []), 1)
+
+    def test_reply_ending_mid_table_still_promotes_once_at_end(self):
+        cid = self.cid()
+        body = ("Compare these varieties:\n\n| Crop | Trait | Yield |\n|---|---|---|\n"
+                + TABLE)
+        script = [(0, delta(body[:60])), (0, delta(body[60:])), (0, finish("stop"))]
+        self.worker.scripts = [script]
+        turn, record = self.run_turn(cid, {"text": "compare these cereals in a table"})
+        events = self.events(cid, turn)
+        kinds = [e["type"] for e in events]
+        self.assertEqual(kinds.count("component"), 1)
+        first_text = min(i for i, e in enumerate(events) if e["type"] == "text"
+                         and "| Crop" in e["data"].get("text", "")) if any(
+            e["type"] == "text" and "| Crop" in e["data"].get("text", "")
+            for e in events) else None
+        comp_indexes = [i for i, e in enumerate(events) if e["type"] == "component"]
+        if first_text is not None:
+            self.assertGreater(comp_indexes[0], first_text,
+                               "an open table must not promote half-written")
+        self.assertEqual(len(record["messages"][-1].get("components") or []), 1)
+
+    def test_plain_reply_never_gains_a_stream_card(self):
+        cid = self.cid()
+        script = [(0, delta("Cereals are grasses.\n\nMore prose.\n\nEven more.")),
+                  (0, finish("stop"))]
+        self.worker.scripts = [script]
+        turn, record = self.run_turn(cid, {"text": "tell me about cereals"})
+        kinds = [e["type"] for e in self.events(cid, turn)]
+        self.assertNotIn("component", kinds)
+        self.assertEqual(record["messages"][-1].get("components") or [], [])
 
 
 if __name__ == "__main__":

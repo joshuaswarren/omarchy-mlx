@@ -680,16 +680,26 @@ phased plan; facts, key points, summary of facts, N facts about X. Do NOT emit a
 fence for general "explain", "what is", "why", "how" questions, or for any \
 explanatory prose reply -- reply in plain text only.
 
-When the user did ask for a structured artifact, end your reply with EXACTLY \
-ONE fenced code block tagged assistant-ui containing one JSON object, and keep \
-the readable answer as plain text outside the block:
+When the user did ask for a structured artifact, BEGIN your reply with \
+EXACTLY ONE fenced code block tagged assistant-ui containing one JSON object, \
+then add at most two short sentences of plain text after it. Emit the card \
+first so it can render immediately; never put explanatory prose before the \
+block.
 
 ```assistant-ui
 {{"version": {ENVELOPE_VERSION}, "components": [ ... ]}}
 ```
 
+The fence contains exactly that one JSON object with the two keys "version" \
+and "components" -- never a bare component, never prose or a second fence. \
+The fence tag is exactly assistant-ui (never json, text or another tag).
+
 The block must be complete, valid JSON. Bounds: at most {MAX_COMPONENTS} components, \
 {MAX_FORM_FIELDS} form fields per form, {MAX_DATA_VALUES} total table/chart values. \
+Keep the card compact: only the rows, points or entries the user asked for, \
+short labels and short text fields, no padding. A chart of comparable items \
+is ONE series with one value per item (every series needs at least 2 values); \
+use several series only for groups sharing the same value labels. \
 If the card would not fit or would be incomplete, omit it entirely and answer in text.
 
 Never put HTML, CSS, JavaScript, SVG, image URLs or shell commands anywhere in the \
