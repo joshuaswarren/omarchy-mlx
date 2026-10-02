@@ -40,6 +40,10 @@ SCHEMA_VERSION = 2
 
 MAX_STREAM_LINES = 400
 MAX_STREAM_CHARS = 200_000
+# A probe whose stdout IS the JSON payload needs headroom above the
+# generic stream cap: capping mid-JSON makes the payload unparseable
+# (the macOS ane-dt dump probe emitted 213,659 chars on a real T6002).
+PROBE_STREAM_CHARS = 2_000_000
 
 # Hostname pieces that are generic OS/project words, not machine
 # identity. Redacting them would mangle `omarchy-*` paths and every
@@ -234,15 +238,16 @@ class Redactor:
         return text
 
 
-def cap_stream(text):
+def cap_stream(text, max_chars=None):
     """Cap one captured output stream so archives stay small."""
     if text is None:
         return ""
+    limit = MAX_STREAM_CHARS if max_chars is None else max_chars
     lines = text.splitlines()
     total = len(lines)
     kept = lines[:MAX_STREAM_LINES]
-    out = "\n".join(kept)[:MAX_STREAM_CHARS]
-    if total > MAX_STREAM_LINES or len(text) > MAX_STREAM_CHARS:
+    out = "\n".join(kept)[:limit]
+    if total > MAX_STREAM_LINES or len(text) > limit:
         out += f"\n[truncated: {total} lines, {len(text)} chars captured]"
     return out
 
@@ -252,7 +257,8 @@ def redact_argv(argv, redactor):
     return [redactor.apply(str(a)) for a in argv]
 
 
-def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None):
+def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None,
+             max_chars=None):
     """Run one external command; record absence, timeout, and output.
 
     Returns a dict. Never raises for a missing binary or a timeout.
@@ -283,8 +289,10 @@ def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None):
             env=env,
         )
         record["exit_code"] = proc.returncode
-        record["stdout"] = redactor.apply(cap_stream(proc.stdout or ""))
-        record["stderr"] = redactor.apply(cap_stream(proc.stderr or ""))
+        record["stdout"] = redactor.apply(cap_stream(proc.stdout or "",
+                                                     max_chars=max_chars))
+        record["stderr"] = redactor.apply(cap_stream(proc.stderr or "",
+                                                     max_chars=max_chars))
     except subprocess.TimeoutExpired:
         record["error"] = f"timeout after {timeout}s"
     except OSError as exc:
@@ -294,7 +302,8 @@ def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None):
     return record
 
 
-def run_python_probe(code, redactor, label, timeout=120, env=None):
+def run_python_probe(code, redactor, label, timeout=120, env=None,
+                     max_chars=None):
     """Run a python snippet in a child interpreter, bounded."""
     return run_tool(
         [sys.executable, "-c", code],
@@ -302,6 +311,7 @@ def run_python_probe(code, redactor, label, timeout=120, env=None):
         label=label,
         timeout=timeout,
         env=env,
+        max_chars=max_chars,
     )
 
 

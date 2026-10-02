@@ -669,7 +669,8 @@ class OrdinaryChatUnaffectedTests(unittest.TestCase):
             def decision(self, pair, payload):
                 self.decision_calls += 1
                 return {}
-            def chat(self, pair, messages, max_tokens, cancel, yield_headers=None):
+            def chat(self, pair, messages, max_tokens, cancel, phases=None,
+                     yield_headers=None):
                 self.chat_calls += 1
                 yield ("delta", "ok")
                 yield ("finish", "stop")

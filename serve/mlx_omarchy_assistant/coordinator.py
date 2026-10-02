@@ -408,8 +408,17 @@ class LocalModels:
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
             self.tokenizer_path = path
-        return len(self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
-                                                      enable_thinking=False))
+        encoded = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
+                                                     enable_thinking=False)
+        # transformers >= 5 returns a BatchEncoding here (measured: len()==2
+        # — input_ids + attention_mask), older ones a flat id list; a batched
+        # shape wraps ids in one more list. len() of the container silently
+        # admitted every turn at 2 prompt tokens.
+        if not isinstance(encoded, list):
+            encoded = encoded["input_ids"]
+        if encoded and isinstance(encoded[0], list):
+            encoded = encoded[0]
+        return len(encoded)
 
     def decision(self, pair, payload):
         connection = self._connect(pair["decision_url"])
@@ -426,7 +435,7 @@ class LocalModels:
         finally:
             self.close_connection()
 
-    def chat(self, pair, messages, max_tokens, cancel, yield_headers=None):
+    def chat(self, pair, messages, max_tokens, cancel, phases=None, yield_headers=None):
         connection = self._connect(pair["chat_url"])
         model = str((pair.get("model_paths") or {}).get("chat") or pair["chat_model"])
         # Greedy decoding loops on the 2B model ("Extra socks" until the token cap);
@@ -441,7 +450,11 @@ class LocalModels:
                 headers.update(yield_headers)
             connection.request("POST", "/v1/chat/completions", json.dumps(payload),
                                headers)
+            if phases is not None:
+                phases["chat_sent"] = time.monotonic()
             response = connection.getresponse()
+            if phases is not None:
+                phases["chat_headers"] = time.monotonic()
             if response.status != 200:
                 detail = response.read(8192).decode("utf-8", "replace")
                 raise RuntimeError("Chat worker refused the request (HTTP %d): %s"
@@ -520,6 +533,7 @@ class _RoutingWorker:
 
 class Coordinator:
     def __init__(self, home, manager, store=None):
+        self.home = Path(home)
         self.store = store if store is not None else ConversationStore(home)
         self.manager = manager
         self.models = LocalModels(manager)
@@ -567,7 +581,8 @@ class Coordinator:
             raise BusyError("Another local response is active. Wait or stop it before sending")
         try:
             turn = self.store.begin(cid, payload.get("text"))
-            job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid}
+            job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
+                   "ttft": {"phases": {"submit": time.monotonic()}}}
             with self.lock:
                 self.turns[turn] = job
             thread = threading.Thread(target=self._run, args=(cid, turn, payload, maximum, job), daemon=True)
@@ -630,8 +645,29 @@ class Coordinator:
             new_payload.update(mode="compare", options=options, criteria=criteria)
         return new_payload
 
+    def _ttft_dump(self, cid, turn, mode, phases):
+        """Append one line of per-phase TTFT timestamps to the assistant logs.
+
+        Phases hold time.monotonic() seconds (comparable across the assistant
+        and worker processes on one host); "prompt_tokens" is a token count.
+        Logging must never break a turn."""
+        try:
+            logs = self.home / "assistant" / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            record = {"turn": turn, "conversation": cid, "mode": mode, "phases": phases}
+            with open(logs / "ttft-phases.jsonl", "a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, allow_nan=False) + "\n")
+        except (OSError, ValueError):
+            pass
+
     def _run(self, cid, turn, payload, maximum, job):
         cancel = job["cancel"]
+        ttft = job.get("ttft")
+        phases = ttft["phases"] if ttft else None
+
+        def phase(name):
+            if phases is not None:
+                phases[name] = time.monotonic()
         failed = False
         speech_client = None
         speech_secret = None
@@ -639,6 +675,7 @@ class Coordinator:
         try:
             from .components import SCHEMA_PROMPT, validate_components
             pair = self.manager.start()
+            phase("pair_start")
             if cancel.is_set():
                 return
             record = self.store.get(cid)
@@ -662,6 +699,7 @@ class Coordinator:
             messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
                          + (SCHEMA_PROMPT if full_schema else "")}]
             messages.extend(self._selected_history(record, turn))
+            phase("prompt_built")
             if mode in ("compare", "decide"):
                 path = pair["model_paths"]["decision"]
                 if mode == "compare":
@@ -675,17 +713,21 @@ class Coordinator:
                     raw = self.models.decision(pair, request)
                     result = typed_results(payload.get("questions"), raw.get("answers", {}), payload["text"])
                 self.store.emit(cid, turn, "decision", result)
+                phase("decision_done")
                 note = ("Explain this supplied Laya result without changing its choice. "
                         if mode == "compare" else
                         "Explain these supplied Laya results without changing any of them. ")
                 messages[0]["content"] += ("\n" + note
                                            + "If abstained, say that it abstained. Its confidence is not factual accuracy. "
                                            + json.dumps(result, ensure_ascii=False))
-            allowance, required = self._admit_output(pair, messages, maximum, mode)
+            allowance, required = self._admit_output(pair, messages, maximum, mode,
+                                                     phases=phases)
+            phase("admit_done")
             pair = self.manager.status()
             self.store.emit(cid, turn, "status", {"state": "generating", "context_tokens": required,
                                                  "context_limit": pair["context_tokens"],
                                                  "output_tokens": allowance})
+            phase("generating_status_emitted")
             buffer = ""
             component_buffer = None
             component_count = 0
@@ -714,10 +756,13 @@ class Coordinator:
             except (OSError, ValueError):
                 speech_client = None
                 speech_capable = False
+            phase("yield_probe_done")
             stream = self.models.chat(
-                pair, messages, allowance, cancel,
+                pair, messages, allowance, cancel, phases=phases,
                 yield_headers=({YIELD_SECRET_HEADER: speech_secret}
                                if speech_capable else None))
+            first_chunk_seen = False
+            dumped_ttft = phases is None
             try:
                 while True:
                     if speech_capable:
@@ -727,6 +772,9 @@ class Coordinator:
                         event = next(stream)
                     except StopIteration:
                         break
+                    if not first_chunk_seen:
+                        first_chunk_seen = True
+                        phase("first_chunk")
                     if event[0] == "finish":
                         finish_reason = event[1]
                         continue
@@ -778,6 +826,10 @@ class Coordinator:
                             self.store.emit(cid, turn, "text", {"text": ready})
                             reply_text_parts.append(ready)
                             saw_visible_text = True
+                            if not dumped_ttft:
+                                dumped_ttft = True
+                                phase("first_text_emitted")
+                                self._ttft_dump(cid, turn, mode, phases)
                         buffer = buffer[-keep:] if keep else ""
                         break
             finally:
@@ -931,7 +983,7 @@ class Coordinator:
                     messages.append({"role": "user", "content": message["content"]})
         return messages
 
-    def _admit_output(self, pair, messages, maximum, mode):
+    def _admit_output(self, pair, messages, maximum, mode, phases=None):
         """Token-count the complete prompt and admit prompt + allowance.
 
         An explicit max_tokens is a promise: honored exactly, or the turn
@@ -942,6 +994,9 @@ class Coordinator:
         Returns (allowance, required prompt+allowance token count).
         """
         prompt = self.models.count(pair["model_paths"]["chat"], messages)
+        if phases is not None:
+            phases["count_done"] = time.monotonic()
+            phases["prompt_tokens"] = prompt
         ceiling = maximum if maximum is not None else TASK_OUTPUT_ALLOWANCE.get(mode, TASK_OUTPUT_ALLOWANCE["chat"])
         context = self.manager.ensure_context(prompt + ceiling)
         if context.get("ok"):

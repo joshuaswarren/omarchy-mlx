@@ -85,6 +85,49 @@ inline int batch_node_budget() {
   }();
   return v;
 }
+// Estimated GPU time per submission, in dispatch work-groups. A queue
+// submission monopolizes the GPU until it finishes: the compositor gets
+// the queue only between submissions, so one long submission makes the
+// desktop hitch for its whole length (issue #19: ~78 ms submissions
+// stutter, 2-6 ms stay smooth, same GPU busy fraction). Dispatch
+// durations are not cheaply measurable at record time, so the evaluator
+// flushes the open batch once its summed work-group counts reach this
+// budget. The default is calibrated so a 4B decode step splits into
+// ~2-6 ms submissions on the calibration host (measured groups per token
+// and per-group cost in receipts/2026-10-02-submission-cap-19). A single
+// dispatch whose group count alone exceeds the budget still runs whole:
+// splitting happens between dispatches. Copies and fills are not
+// counted; the node and byte budgets keep those batches bounded.
+// MLX_OMARCHY_BATCH_WORK=<groups> overrides; =0 turns the work cap off
+// (node and byte budgets still apply). Scheduling only: every submission
+// already waits on this stream's previous completion and cross-submission
+// waits use ALL_COMMANDS stage masks (batching note above), so splitting
+// at any dispatch boundary preserves every dependency and results stay
+// bit-identical.
+inline constexpr uint64_t kBatchWorkBudget = 0; // SET AFTER CALIBRATION
+inline uint64_t batch_work_budget() {
+  static const uint64_t v = []() {
+    const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
+    if (!e) {
+      return kBatchWorkBudget;
+    }
+    long long n = std::atoll(e);
+    return n > 0 ? static_cast<uint64_t>(n) : 0;
+  }();
+  return v;
+}
+// The one flush predicate for the open batch, shared by the eager
+// evaluator (eval.cpp) and the compiled-tape recorder (compiled.cpp) so
+// both close batches at the same points. omarchy_runtime_tests drives it
+// deterministically with synthetic dispatch sequences and asserts the
+// number of submissions and their boundaries; no GPU involved.
+inline bool batch_over_budget(
+    int nodes,
+    uint64_t work,
+    int node_budget,
+    uint64_t work_budget) {
+  return nodes >= node_budget || (work_budget > 0 && work >= work_budget);
+}
 // Byte budget for the same batch: freed intermediates stay pinned in the
 // allocator quarantine until their batch submits and drains, so the open
 // batch may hold at most 1/16 of the allocator memory limit in such bytes
@@ -159,6 +202,12 @@ class MLX_API CommandEncoder {
   // behind one open command buffer.
   int nodes() const {
     return node_count_;
+  }
+
+  // Summed dispatch work-group counts of the open batch: the bounded
+  // GPU-time proxy the work budget flushes on (batch_work_budget).
+  uint64_t batch_work() const {
+    return batch_work_;
   }
 
   // True when nothing is recorded, nothing is queued for submission, and
@@ -362,6 +411,7 @@ class MLX_API CommandEncoder {
   VkCommandBuffer cmd_{VK_NULL_HANDLE};
   bool recording_{false};
   int node_count_{0};
+  uint64_t batch_work_{0};
   uint64_t last_completion_{0};
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};

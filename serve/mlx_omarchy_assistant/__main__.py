@@ -121,6 +121,12 @@ def main(argv=None):
                         help="load the saved pair at login and keep both models resident")
     parser.add_argument("--yes", action="store_true", help="approve downloading the explicitly selected pair")
     args = parser.parse_args(argv)
+    if os.environ.get("MLX_OMARCHY_TTFT_TRACE") == "1":
+        # Diagnostic: SIGUSR1 dumps every thread's stack to stderr so a
+        # stuck turn or a busy GPU lock can be attributed from outside.
+        import faulthandler
+        import signal
+        faulthandler.register(signal.SIGUSR1, file=sys.stderr)
     if not 0 <= args.port <= 65535:
         parser.error("port must be between 0 and 65535")
     if args.once and not args.prompt:

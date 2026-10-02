@@ -70,6 +70,21 @@ def check_pinned(server_module) -> str:
 
 EXPECTED_TOKENIZE_SIGNATURE = ("self", "tokenizer", "request", "args")
 
+TTFT_TRACE_ENV = "MLX_OMARCHY_TTFT_TRACE"
+_ttft_armed = {"first_chunk": False}
+
+
+def _ttft_trace(event: str, **fields) -> None:
+    """One JSON line per request boundary when MLX_OMARCHY_TTFT_TRACE=1.
+
+    Timestamps are time.monotonic() seconds, comparable across processes on
+    one host; the assistant's ttft-phases.jsonl uses the same clock."""
+    if os.environ.get(TTFT_TRACE_ENV) != "1":
+        return
+    fields["event"] = event
+    fields["t"] = time.monotonic()
+    print("[ttft] " + json.dumps(fields), flush=True)
+
 
 def install(server_module, limit: int) -> None:
     generator = server_module.ResponseGenerator
@@ -95,6 +110,7 @@ def install(server_module, limit: int) -> None:
         )
 
     def capped(self, tokenizer, request, args):
+        _ttft_t0 = time.monotonic()
         result = original(self, tokenizer, request, args)
         prompt = result[0]
         # Upstream semantics (verified in the pinned source): the HTTP
@@ -116,6 +132,9 @@ def install(server_module, limit: int) -> None:
                 f"({max_tokens}) exceeds the admitted context budget of {limit}; "
                 "lower the prompt or max_tokens"
             )
+        _ttft_armed["first_chunk"] = True
+        _ttft_trace("tokenized", prompt=len(prompt), max_tokens=max_tokens,
+                    tokenize_s=round(time.monotonic() - _ttft_t0, 3))
         return result
 
     generator._tokenize = capped
@@ -301,7 +320,11 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
         def next(self, *args, **kwargs):
             gate._before_step()
             try:
-                return self._real.next(*args, **kwargs)
+                result = self._real.next(*args, **kwargs)
+                if _ttft_armed["first_chunk"]:
+                    _ttft_armed["first_chunk"] = False
+                    _ttft_trace("first_chunk")
+                return result
             finally:
                 gate._after_step()
 
@@ -553,6 +576,25 @@ def main() -> None:
     if probe_wanted:
         install_ids_probe(server_module)
         print("shim: ids probe installed", file=sys.stderr, flush=True)
+    pct = getattr(server_module, "_process_control_tokens", None)
+    if pct is not None and getattr(pct, "_omarchy_ttft_wrapped", False) is False:
+        def traced_pct(ctx, token_stream, _orig=pct):
+            stream = _orig(ctx, token_stream)
+            first = True
+
+            def traced():
+                nonlocal first
+                for gen in stream:
+                    if first:
+                        first = False
+                        _ttft_trace("first_control_yield",
+                                    buffer=max((len(s) for s in (ctx.sequences or ())),
+                                               default=0))
+                    yield gen
+            return traced()
+
+        traced_pct._omarchy_ttft_wrapped = True
+        server_module._process_control_tokens = traced_pct
     server_module.main()
 
 

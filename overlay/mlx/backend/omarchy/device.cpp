@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <optional>
+#include <string_view>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <memory>
@@ -29,6 +31,29 @@ namespace mlx::core::omarchy {
 
 namespace {
 constexpr uint32_t kVulkan13 = VK_API_VERSION_1_3;
+
+// MLX_OMARCHY_QUEUE_PRIORITY (device.h, issue #19): "low" (default) or
+// "medium" selects a global queue priority below the desktop's default;
+// "off"/"default"/"0" keeps the unchained queue. Anything else keeps the
+// default. Returns nullopt when no priority should be requested.
+std::optional<VkQueueGlobalPriorityEXT> requested_global_priority() {
+  const char* e = std::getenv("MLX_OMARCHY_QUEUE_PRIORITY");
+  if (e == nullptr) {
+    return VK_QUEUE_GLOBAL_PRIORITY_LOW_EXT;
+  }
+  std::string_view v(e);
+  if (v == "off" || v == "default" || v == "0") {
+    return std::nullopt;
+  }
+  if (v == "medium") {
+    return VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT;
+  }
+  if (v == "low") {
+    return VK_QUEUE_GLOBAL_PRIORITY_LOW_EXT;
+  }
+  return std::nullopt;
+}
+
 
 // MLX_OMARCHY_NO_BUFFER_CACHE (diagnostic, docs/install-omarchy.md).
 // Declared here because Runtime::init_impl sets it; the exported
@@ -337,6 +362,9 @@ CapabilityReport collect_capabilities(
                 e.extensionName, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) ==
             0) {
           has_coopmat_ext = cm.cooperativeMatrix == VK_TRUE;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
+          caps.queue_global_priority = true;
         }
       }
     }
@@ -466,6 +494,10 @@ bool Runtime::init_impl() {
       reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
           vk::GetInstanceProcAddr(
               instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+  it.GetPhysicalDeviceQueueFamilyProperties2 =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties2>(
+          vk::GetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceQueueFamilyProperties2"));
   it.CreateDevice = reinterpret_cast<PFN_vkCreateDevice>(
       vk::GetInstanceProcAddr(instance, "vkCreateDevice"));
   it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR =
@@ -861,6 +893,43 @@ Device::Device(uint32_t physical_device_index) {
   qci.queueCount = 1;
   qci.pQueuePriorities = &priority;
 
+  // Lower queue priority (issue #19): a submission runs to completion
+  // before the compositor gets the queue, so MLX also loses arbitration
+  // against the desktop for every submission it queues. Where the driver
+  // exposes VK_EXT_global_priority AND the compute queue family lists the
+  // requested priority, request LOW so desktop work wins; MLX GPU time
+  // is bounded by the submission work budget either way.
+  // MLX_OMARCHY_QUEUE_PRIORITY = "off"|"default" restores the unchained
+  // queue; "medium" requests MEDIUM. Any unmet condition (extension
+  // absent, priority not reported for this family, loader lacks the 1.1
+  // family query) silently keeps the default priority: the request must
+  // never fail device creation.
+  VkDeviceQueueGlobalPriorityCreateInfoKHR global_priority{
+      VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR};
+  if (auto wanted = requested_global_priority()) {
+    global_priority.globalPriority = *wanted;
+    VkQueueFamilyGlobalPriorityPropertiesKHR family_priorities{
+        VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR};
+    VkQueueFamilyProperties2 family_props2{
+        VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2};
+    family_props2.pNext = &family_priorities;
+    if (hw.queue_global_priority &&
+        it.GetPhysicalDeviceQueueFamilyProperties2) {
+      it.GetPhysicalDeviceQueueFamilyProperties2(
+          pd, caps_.queue_family_index, &family_props2);
+      for (uint32_t i = 0; i < family_priorities.priorityCount; ++i) {
+        if (family_priorities.priorities[i] == *wanted) {
+          qci.pNext = &global_priority;
+          break;
+        }
+      }
+    }
+  }
+  std::vector<const char*> priority_exts;
+  if (qci.pNext != nullptr) {
+    priority_exts.push_back("VK_EXT_global_priority");
+  }
+
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   dci.pNext = &enabled2;
   dci.queueCreateInfoCount = 1;
@@ -875,11 +944,43 @@ Device::Device(uint32_t physical_device_index) {
   if (hw.cooperative_matrix_f32_8) {
     device_exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
   }
+  device_exts.insert(
+      device_exts.end(), priority_exts.begin(), priority_exts.end());
   if (!device_exts.empty()) {
     dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
     dci.ppEnabledExtensionNames = device_exts.data();
   }
-  VKX_CHECK(it.CreateDevice(pd, &dci, nullptr, &device_));
+  VkResult create_res = it.CreateDevice(pd, &dci, nullptr, &device_);
+  // Some drivers advertise the extension but refuse the specific value
+  // (e.g. VK_ERROR_NOT_PERMITTED for HIGH/REALTIME on a non-privileged
+  // caller, or the driver only supports a subset of priority values).
+  // Retain the silent fallback contract by dropping the priority chain
+  // and the extension and retrying exactly once. An extension the device
+  // lists is the contract for the family to list its priorities; an
+  // unsupported priority value is a separate, transient refusal.
+  if (create_res != VK_SUCCESS && qci.pNext != nullptr) {
+    qci.pNext = nullptr;
+    device_exts.clear();
+    if (hw.shader_atomic_float_add) {
+      device_exts.push_back("VK_EXT_shader_atomic_float");
+    }
+    if (hw.cooperative_matrix_f32_8) {
+      device_exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+    }
+    if (!device_exts.empty()) {
+      dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
+      dci.ppEnabledExtensionNames = device_exts.data();
+    } else {
+      dci.enabledExtensionCount = 0;
+      dci.ppEnabledExtensionNames = nullptr;
+    }
+    std::fprintf(
+        stderr,
+        "[omarchy] driver refused requested queue priority; falling back "
+        "to default (set MLX_OMARCHY_QUEUE_PRIORITY=off to silence)\n");
+    create_res = it.CreateDevice(pd, &dci, nullptr, &device_);
+  }
+  VKX_CHECK(create_res);
 
   auto& dt = vk::device_table();
   dt.GetDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
