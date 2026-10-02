@@ -8,7 +8,7 @@ import {
 } from "./caps";
 import { sha256Hex } from "./hash";
 import { coerceToSchema } from "./coerce";
-import { ALIAS_HEADER, parseHostAliases, scanPii } from "./pii";
+import { ALIAS_HEADER, parseHostAliases, scanPiiPayload } from "./pii";
 import { verifyPow } from "./pow";
 import { SchemaNode, validateSchemaRoot } from "./schema";
 import * as store from "./store";
@@ -127,7 +127,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
     return errorResponse(status, pow.code, { min_difficulty: MIN_POW_BITS });
   }
 
-  const pii = scanPii(summaryText, parseHostAliases(request.headers.get(ALIAS_HEADER)));
+  const pii = scanPiiPayload(init.payload, parseHostAliases(request.headers.get(ALIAS_HEADER)));
   if (pii !== null) {
     return errorResponse(422, "pii_detected", { kinds: pii });
   }

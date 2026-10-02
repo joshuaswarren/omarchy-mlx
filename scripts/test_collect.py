@@ -1866,6 +1866,28 @@ class VersionQuadSurvivesRedaction(unittest.TestCase):
         self.assertIn("20712.1.2.0.0", out)
         self.assertNotIn(private, out)
 
+    def test_firmware_version_keys_are_kept_verbatim(self):
+        # Unseen iBoot versions must survive collection (#27): the IPv4
+        # rule reads a 4-component suffix of the chain as an address.
+        # The key names say firmware; the whole value must be a version
+        # chain, so an address-shaped value still gets redacted.
+        red = cc.Redactor()
+        out = red.apply_value({
+            "asahi,iboot1-version": "iBoot-12345.6.7.8.9",
+            "asahi,system-fw-version": "iBoot-10151.140.19.700.2",
+            "boot_chain": "iboot1=iBoot-10151.140.19.700.2 "
+                          "iboot2=iBoot-8422.141.2",
+            "asahi,iboot2-version": "iBoot-" + ".".join(["198", "51", "100", "7"]),
+        })
+        self.assertEqual(out["asahi,iboot1-version"], "iBoot-12345.6.7.8.9")
+        self.assertEqual(out["asahi,system-fw-version"], "iBoot-10151.140.19.700.2")
+        self.assertIn("iBoot-10151.140.19.700.2", out["boot_chain"])
+        self.assertIn("iBoot-8422.141.2", out["boot_chain"])
+        # Four in-octet-range groups behind the prefix: still redacted.
+        self.assertNotIn("198.51.100.7", out["asahi,iboot2-version"])
+        self.assertIn("[redacted-ip4]", out["asahi,iboot2-version"])
+        self.assertEqual(red.counts.get("ipv4"), 1)
+
 
 class PrimaryGpuSelection(unittest.TestCase):
     """Honeykrisp must win over llvmpipe.

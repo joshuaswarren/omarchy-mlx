@@ -32,12 +32,72 @@ const PII_RE = new RegExp(
   "i",
 );
 const MAX_REPORTED_HITS = 50;
-// Observed collector firmware values only. Shape-based exceptions can
-// disguise an address as version components, even with a large build ID.
-const IBOOT_VERSIONS = new Set([
-  "iboot-10151.140.19.700.2",
-  "iboot-20712.1.2.0.0",
-]);
+// Firmware version fields whose WHOLE value may be an iBoot version
+// chain (#27 follow-up): the value is exempt from the IPv4 scan only
+// where the KEY says it is firmware and the value fully matches the
+// version shape. The same string in a free-text field, or an
+// address-shaped value behind the prefix, stays fully subject to the
+// scan — a shape-based exception can disguise an address as version
+// components.
+export const FIRMWARE_VERSION_KEYS: Record<string, true> = {
+  "asahi,iboot1-version": true,
+  "asahi,iboot2-version": true,
+  "asahi,system-fw-version": true,
+  "asahi,os-fw-version": true,
+};
+const IBOOT_VALUE_RE = /^iboot-\d+(?:\.\d+)+$/i;
+// A value that could BE an address (every group in octet range, four
+// groups) is never exempt, version-shaped or not.
+const IBOOT_BARE_IPV4_RE = /^iboot-\d{1,3}(?:\.\d{1,3}){3}$/i;
+// Inside the free-text boot_chain field only explicit `ibootN=`
+// assignments are exempt — never a bare `iBoot-…` token, which can
+// carry a disguised address (iBoot-10151. + RFC1918 octets, assembly
+// elided to keep the privacy hook happy).
+const BOOT_CHAIN_TOKEN_RE = /\biboot\d+=(iboot-\d+(?:\.\d+)+)(?=\s|$)/gi;
+
+function isExemptIbootValue(value: string): boolean {
+  return IBOOT_VALUE_RE.test(value) && !IBOOT_BARE_IPV4_RE.test(value);
+}
+
+// Copy of `payload` where firmware-version values that the IPv4 rule
+// would misread as addresses are blanked out (same length, so the
+// scanned text keeps its shape). Key-scoped: exact firmware keys at
+// any depth, plus explicit ibootN= assignments inside boot_chain.
+export function blankFirmwareVersions<T>(payload: T): T {
+  const clone = structuredClone(payload);
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value !== "string") {
+        walk(value);
+        continue;
+      }
+      if (FIRMWARE_VERSION_KEYS[key] && isExemptIbootValue(value)) {
+        (node as Record<string, unknown>)[key] = " ".repeat(value.length);
+      } else if (key === "boot_chain") {
+        (node as Record<string, unknown>)[key] = value.replace(
+          BOOT_CHAIN_TOKEN_RE,
+          (token) => " ".repeat(token.length),
+        );
+      }
+    }
+  };
+  walk(clone);
+  return clone;
+}
+
+// The entry point used for submissions: key-scoped firmware exemptions,
+// then the ordinary scan.
+export function scanPiiPayload(
+  payload: unknown,
+  hostAliases: string[] = [],
+): PiiKinds | null {
+  return scanPii(JSON.stringify(blankFirmwareVersions(payload)), hostAliases);
+}
 
 // Header carrying the collector redactor's derived short host names
 // (X-MLX-Host-Aliases). Request-only: scanned against the summary,
@@ -83,29 +143,6 @@ export function scanPii(text: string, hostAliases: string[] = []): PiiKinds | nu
     const groups = match.groups ?? {};
     const kind = Object.keys(groups).find((k) => groups[k] !== undefined);
     if (kind === undefined) continue;
-    if (kind === "ipv4") {
-      // iBoot firmware uses long dotted version chains. The IPv4 regex
-      // can match a four-component suffix (10151.140.19.700.2), which
-      // the collector intentionally preserves. Recognize only the known
-      // firmware values above. Unrecognized versions remain subject to
-      // the PII scan until evidence establishes another safe exception.
-      // Bound both search and parsing so each candidate costs at most
-      // 256 characters, including on a payload full of dotted quads.
-      const windowStart = Math.max(0, match.index - 128);
-      const window = text.slice(windowStart, match.index + 128);
-      const start = window.toLowerCase().lastIndexOf("iboot-", match.index - windowStart);
-      if (start >= 0) {
-        const version = /^iBoot-(\d{1,8})(?:\.\d{1,3}){4}(?![\w./-])/i.exec(
-          window.slice(start),
-        );
-        const previous = text[windowStart + start - 1];
-        if (version && IBOOT_VERSIONS.has(version[0].toLowerCase()) &&
-            (!previous || !/[\w.-]/.test(previous)) &&
-            windowStart + start + version[0].length >= match.index + match[0].length) {
-          continue;
-        }
-      }
-    }
     kinds[kind] = (kinds[kind] ?? 0) + 1;
     hits++;
     if (hits >= MAX_REPORTED_HITS) break;

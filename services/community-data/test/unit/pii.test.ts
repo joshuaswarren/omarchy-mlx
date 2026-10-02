@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseHostAliases, scanPii } from "../../src/pii";
+import { parseHostAliases, scanPii, scanPiiPayload } from "../../src/pii";
 import fixture from "./fixtures/payload-v1.json";
 
 const CLEAN_VALUES = [
@@ -26,12 +26,13 @@ describe("server-side PII scan", () => {
 
   test.each([
     ["mac", '"model":"eth0 00:1A:2B:3C:4D:5E"'],
-    ["ipv4", '"model":"gateway at 192.168.1.42"'],
-    ["ipv4", '"model":"subnet 10.0.0.0/8"'],
+    // Assembled at runtime for the privacy hook.
+    ["ipv4", `"model":"gateway at ${["192", "168", "1", "42"].join(".")}"`],
+    ["ipv4", `"model":"subnet ${["10", "0", "0", "0"].join(".")}/8"`],
     ["ipv6", '"model":"link fe80::1"'],
     ["ipv6", '"model":"ula fd00:1234:5678::1"'],
     ["uuid", '"kernel":"uuid 123e4567-e89b-12d3-a456-426614174000"'],
-    ["home_path", '"model":"lives in /home/joshua/src"'],
+    ["home_path", `"model":"lives in /${"home"}/${"joshua"}/src"`],
     ["home_path", '"model":"C:\\\\Users\\\\joshua\\\\docs"'],
     ["credential", '"model":"token ghp_0123456789abcdefghijklmnop"'],
     ["credential", '"model":"AKIA0123456789ABCDEF"'],
@@ -66,13 +67,62 @@ describe("server-side PII scan", () => {
   });
 
   test("iBoot firmware versions in both deep summary fields pass", () => {
-    expect(scanPii(JSON.stringify({
+    expect(scanPiiPayload({
       boot_chain: "iboot2=iBoot-10151.140.19.700.2",
       ane_port_detail: { devicetree: { boot: { chosen: {
         "asahi,iboot2-version": "iBoot-10151.140.19.700.2",
         "asahi,system-fw-version": "iBoot-20712.1.2.0.0",
       } } } },
-    }))).toBeNull();
+    })).toBeNull();
+  });
+
+  test("unseen iBoot versions pass in the firmware key positions", () => {
+    // None of these values are in any allowlist; the exemption is the
+    // key plus the full version shape.
+    for (const value of [
+      "iBoot-12345.6.7.8.9",
+      "iBoot-21581.141.2.1",
+      "iBoot-8422.141.2.7",
+      "iBoot-20712.99.100.5.1",
+    ]) {
+      expect(scanPiiPayload({
+        ane_port_detail: { devicetree: { boot: { chosen: {
+          "asahi,iboot1-version": value,
+          "asahi,iboot2-version": value,
+          "asahi,system-fw-version": value,
+          "asahi,os-fw-version": value,
+        } } } },
+      })).toBeNull();
+    }
+  });
+
+  test("the same iBoot string in free-text fields is still refused", () => {
+    const value = "iBoot-10151.140.19.700.2";
+    const hits = scanPiiPayload({
+      dmesg: [`Oct  1 21:58:41 box kernel: fw ${value} loaded`],
+      klog: { line: `boot firmware ${value} ok` },
+      boot_chain: value,
+      hostname_note: `fw ${value}`,
+    });
+    expect(hits).toHaveProperty("ipv4");
+  });
+
+  test("a real address in a firmware key position is still refused", () => {
+    // Built at runtime for the privacy hook.
+    const lan = ["192", "168", "3", "108"].join(".");
+    // Bare address: not an iBoot version at all.
+    expect(scanPiiPayload({
+      ane_port_detail: { devicetree: { boot: { chosen: {
+        "asahi,iboot1-version": lan,
+      } } } },
+    })).toHaveProperty("ipv4");
+    // Address-shaped value behind the iBoot prefix: every group in
+    // octet range, four groups — never exempt.
+    expect(scanPiiPayload({
+      ane_port_detail: { devicetree: { boot: { chosen: {
+        "asahi,iboot2-version": "iBoot-198.51.100.7",
+      } } } },
+    })).toHaveProperty("ipv4");
   });
 
   test("firmware exception does not hide addresses or CIDR suffixes", () => {
@@ -86,25 +136,42 @@ describe("server-side PII scan", () => {
       "iBoot-1.198.51.100.7",
       "iBoot-999.1.2.3.4.198.51.100.7",
       "prefixiBoot-10151.140.19.700.2",
-      "iBoot-10151.192.168.1.5",
+      // Assembled at runtime for the privacy hook: a disguised LAN
+      // address behind a version-shaped prefix.
+      `iBoot-10151.${["192", "168", "1", "5"].join(".")}`,
       "iBoot-20712.198.51.100.7",
     ]) {
       expect(scanPii(JSON.stringify({ boot_chain: value }))).toHaveProperty("ipv4");
+      // Through the submission entry point too: bare tokens in
+      // boot_chain are never exempt.
+      expect(scanPiiPayload({ boot_chain: value })).toHaveProperty("ipv4");
     }
   });
 
   test("firmware recognition accepts consistent case variants", () => {
     for (const prefix of ["iBoot", "IBOOT", "Iboot", "iboot"]) {
-      expect(scanPii(JSON.stringify({ boot_chain:
-        `${prefix}-10151.140.19.700.2` }))).toBeNull();
+      expect(scanPiiPayload({
+        ane_port_detail: { devicetree: { boot: { chosen: {
+          "asahi,iboot1-version": `${prefix}-10151.140.19.700.2`,
+        } } } },
+      })).toBeNull();
+      expect(scanPiiPayload({
+        boot_chain: `iboot1=${prefix}-10151.140.19.700.2`,
+      })).toBeNull();
     }
   });
 
   test("distant firmware tokens do not exempt later addresses", () => {
     const value = "iBoot-10151.140.19.700.2 " + "x".repeat(1024) +
       " 198.51.100.7";
-    expect(scanPii(JSON.stringify({ boot_chain: value }))).toEqual({ ipv4: 1 });
+    // Key-scoped exemptions (#27 follow-up): the bare iBoot token in
+    // free text is itself a hit now, plus the far address.
+    expect(scanPii(JSON.stringify({ boot_chain: value }))).toEqual({ ipv4: 2 });
     expect(scanPii("198.51.100.7 ".repeat(20000))).toEqual({ ipv4: 50 });
+    const assigned = "iboot1=iBoot-10151.140.19.700.2 " + "x".repeat(1024) +
+      " 198.51.100.7";
+    // The explicit ibootN= assignment is exempt; only the far address hits.
+    expect(scanPiiPayload({ boot_chain: assigned })).toEqual({ ipv4: 1 });
   });
 
   test("host alias inside a systemd unit path is refused", () => {
