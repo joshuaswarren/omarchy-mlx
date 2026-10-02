@@ -73,6 +73,28 @@ nondeterminism lives in the GPU's Sum/Max reductions, not in
 sampling. The 0.999 corr gate applies to within-process warm
 subsequent runs, which both wheels satisfy.
 
+### Per-stage probe: mx.compile re-trace hypothesis REFUTED
+Main's hypothesis (the ~1.2 s/segment cost is mx.compile re-tracing on
+varying shapes) is refuted by direct measurement on the M2
+(`per_stage_probe.py`, diag wheel, load 0.00, PSI 0):
+
+| measurement | phonemes | infer wall | audio |
+|---|---|---|---|
+| same-ps call 1 | 30 | 3.29 s | 2.05 s |
+| same-ps call 2 (same shape) | 30 | 3.20 s | 2.05 s |
+| same-length different ps | 34 | 3.81 s | 2.38 s |
+| different length | 66 | 6.21 s | 4.20 s |
+| different length 2 | 86 | 7.63 s | 5.20 s |
+| compile-off (same 66-ps) | 66 | 6.39 s | 4.20 s |
+
+The second call on the SAME shape is NOT faster (3.20 vs 3.29 s) —
+mx.compile is not re-tracing. Compile-off is the same speed (6.39 vs
+6.21 s) — compile is not the cost. The per-call cost SCALES LINEARLY
+with phoneme count (~95 ms/phoneme) — this is the actual bert +
+predictor + decoder compute per segment, which the conv fix already
+accelerates where it can. The serve path's per-segment cost is the
+real synthesis compute, not an artifact.
+
 ### Serve-path worker (the real Synthesis class, NO gdb — Main's repeated
 request to confirm the numbers aren't artifacts of ptrace overhead)
 Re-run timing under load 0.00–0.41, PSI cpu avg10 = 0.00, no gdb.
