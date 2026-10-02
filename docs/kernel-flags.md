@@ -22,19 +22,27 @@ A/B gating and qualification, not for normal operation.
 `scripts/apply-mlx-lm-patches.sh`, wired into `install.sh`)
 
 - `patches/mlx-lm-0.32/` — the same series rebuilt for the mlx-lm 0.32 API
-  line (commit 94cdcae, the pin oMLX uses), so oMLX can run on the Omarchy
+  line (commit 94cdcae, the pin oMLX uses; the PyPI 0.32.0 wheel carries
+  byte-identical patch-site files), so oMLX can run on the Omarchy
   stack. The apply script picks it when `mlx_lm.generate` defines
   `StopSequences`. conv-ring has no 0.32 port; the script refuses
   `MLX_OMARCHY_CONV_RING=1` there before touching the venv. Receipt:
-  receipts/2026-10-02-mlx-lm-0.32-series.
+  receipts/2026-10-02-mlx-lm-032. Token note: the 0.32 stack does not
+  reproduce the 0.31.3 stack bit-for-bit on every prompt (upstream
+  rescaled the q/k-norm eps, and the raw decode route is conditional);
+  on the T6001 10-prompt contract corpus, 3/10 Qwen3.8-2B prompts flip
+  one near-tie token. The quality gate (harness v2 GSM8K/IFE vs the
+  shipping stack) passed within its pre-declared noise band, which is
+  what the acceptance bar below requires for a token change; 4B/9B are
+  bit-identical and perf is neutral.
 - `mlx-lm-gated-delta-fast-route.patch` — **default ON.** Routes
   `mx.fast.gated_delta_update` in mlx-lm 0.31.3 to the fused kernel in the
   mlx-omarchy wheel. Required for the measured serve numbers.
 - `mlx-lm-convring.patch` — **default OFF.** Rolling conv-state ring; enable
   per venv with `MLX_OMARCHY_CONV_RING=1 scripts/apply-mlx-lm-patches.sh
   /path/to/venv`.
-- `mlx-lm-greedy-prune.patch` — **not applied yet** (no jwm1 A/B so far;
-  see receipts/2026-09-23-vocab-prune.md). Greedy decode steps
+- `mlx-lm-greedy-prune.patch` — **default ON** (jwm1 A/B in
+  receipts/2026-09-23-vocab-prune.md). Greedy decode steps
   (default sampler, no logits processors, one input token) of tied
   4-bit/group-64 Qwen3.5-family heads take `mx.fast.greedy_quantized_argmax`:
   a certified bound on a 3-bit code sketch skips the rows that cannot hold

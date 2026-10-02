@@ -30,6 +30,13 @@
 # optdepends=(omarchy-ane-dkms: ANE execution on qualified chips)
 # makedepends=(python)
 
+# The venv ships with the wheel's exact bytes: makepkg's default ELF
+# strip would break the provenance gate for every packaged install
+# (RECORD describes the wheel's unstripped files), so strip is disabled
+# entirely. Measured cost on the aarch64 wheel: 3.2 MB of 25.3 MB for
+# libmlx.so (~0.3% of the installed tree) - see package() below.
+options=(!strip)
+
 build() {
   cd "mlx-omarchy-$pkgver"
 
@@ -69,6 +76,14 @@ check() {
 
 package() {
   cp -a "$srcdir/stage/usr" "$pkgdir/usr"
+  # options=(!strip) above: the venv ships with the wheel's exact bytes.
+  # Stripping here (makepkg's default does) saves 3.2 MB of a 25.3 MB
+  # libmlx.so (~0.3% of the installed tree) and breaks the provenance
+  # gate: scripts/mlx_provenance.py hashes the loaded libmlx.so against
+  # the wheel RECORD, so every stripped packaged install reported
+  # mismatch and nothing on a packaged host could be quoted as evidence
+  # (omarchy-mlx 0.7.10-1 on the M1 test host, 2026-10-02). Keep the
+  # installed tree byte-identical to the release wheel instead.
   # The venv is built directly at its final absolute path, so the venv's
   # own scripts and the staged launchers already point at /usr/lib/omarchy-mlx.
   # No shebang fixups are needed.

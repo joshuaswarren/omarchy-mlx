@@ -601,6 +601,19 @@ earlier two-leg run that day measured the mlx_lm.server leg at 9.33
 tok/s versus 10.36 in the four-leg run; the four-leg numbers are the
 canonical comparison because every leg shared that window.
 
+Current oMLX numbers (receipts/2026-10-02-mlx-lm-032): oMLX 0.7.0 needs
+the mlx-lm 0.32 API, so it runs on the Omarchy stack only over
+`patches/mlx-lm-0.32/`. On an M2 Max test host with Qwen3.8-2B-4bit
+(477-token prompt + 128 generated, single streamed request, `--no-cache`),
+the PR author measured oMLX on the 0.32 series at 79.3 decode tok/s with
+a 510 ms first token, against 51.2 tok/s / 3,622 ms on unpatched
+mlx-lm 94cdcae. The in-process serving engine on the M1 Max test host
+shows no regression from the series itself (decode and prefill within
+±0.5% of the 0.31.3 stack on the 2B/4B/9B contract models; 4B/9B greedy
+tokens bit-identical). A token-level caveat applies to Qwen3.8-2B: see
+`docs/kernel-flags.md` (0.32 series) — near-tie flips vs the 0.31.3
+stack, quality-gated within noise.
+
 The raw runs of that comparison predate this checkout's receipt set. These
 measurements establish
 nothing about current-generation models: they predate Qwen3.8
