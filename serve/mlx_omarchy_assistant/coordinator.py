@@ -408,8 +408,17 @@ class LocalModels:
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
             self.tokenizer_path = path
-        return len(self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
-                                                      enable_thinking=False))
+        encoded = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
+                                                     enable_thinking=False)
+        # transformers >= 5 returns a BatchEncoding here (measured: len()==2
+        # — input_ids + attention_mask), older ones a flat id list; a batched
+        # shape wraps ids in one more list. len() of the container silently
+        # admitted every turn at 2 prompt tokens.
+        if not isinstance(encoded, list):
+            encoded = encoded["input_ids"]
+        if encoded and isinstance(encoded[0], list):
+            encoded = encoded[0]
+        return len(encoded)
 
     def decision(self, pair, payload):
         connection = self._connect(pair["decision_url"])
