@@ -114,6 +114,38 @@ TEST_CASE("conv1d gemm decomposition matches cpu reference") {
   }
 }
 
+TEST_CASE("conv1d gemm decomposition falls back to direct kernel over cap") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream gpu = new_stream(Device::gpu);
+  Stream cpu = new_stream(Device::cpu);
+  // A tiny cap forces the direct conv.comp kernel for every shape; the
+  // numeric contract must hold through the fallback too (allocation
+  // failure / long inputs must degrade, never corrupt).
+  setenv("MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES", "1", 1);
+  std::mt19937 rng(23);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  int L = 48, ci = 8, co = 8, k = 5, pad = 2;
+  std::vector<float> xd(L * ci);
+  std::vector<float> wd(co * k * ci);
+  for (auto& v : xd) v = dist(rng);
+  for (auto& v : wd) v = 0.1f * dist(rng);
+  array x(xd.begin(), Shape{1, L, ci}, float32);
+  array w(wd.begin(), Shape{co, k, ci}, float32);
+  array got = conv1d(x, w, 1, pad, Stream(gpu));
+  array want = conv1d(x, w, 1, pad, Stream(cpu));
+  auto got_v = flat(got, Stream(gpu));
+  auto want_v = flat(want, Stream(cpu));
+  unsetenv("MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES");
+  double max_err = 0.0;
+  for (size_t i = 0; i < want_v.size() && i < got_v.size(); ++i) {
+    max_err = std::max(
+        max_err, static_cast<double>(std::abs(got_v[i] - want_v[i])));
+  }
+  CHECK(max_err < 1e-3);
+}
+
 TEST_CASE("conv1d gemm decomposition agrees with direct gpu path") {
   if (!compute_available()) {
     return;

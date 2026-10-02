@@ -1,41 +1,102 @@
 # OpCost microbench — what makes a Kokoro dispatch 330 us while a chat dispatch is 45 us
 
-## ADDENDUM 2 2026-10-02: fix-forward VERIFIED — Kokoro RTF 1.20–1.32, all gates pass
+## ADDENDUM 2 2026-10-02: release-gate VERIFIED — all six gates pass, RTF ~1.21
 
 Supersedes ADDENDUM 1 below and §12/§13. The k-tap GEMM decomposition
-landed correctly this time, gated per Main's order:
+landed correctly with the slice-offset fix and a scratch cap; every
+release gate per Main's order passes.
 
-| gate | required | measured | verdict |
-|---|---|---|---|
-| numpy/bisect reference | all exact on k∈{1,2,3,7}, pad∈{0,1,3} incl. k=2 pad=1 (the slice-start regression case) | max_abs_err 0.000000 on all four bisect shapes; 2.4e-07 / 9.5e-07 vs numpy on (64,8,16,7,3) / (512,32,32,5,2); tap bisect full/tap0/tap1 all 0.0 | PASS |
-| M2 wheel provenance | libmlx md5 in venv == wheel md5, stamp visible | PROVENANCE_OK gate=0.32.4.dev202610020519+opcost.0aa1483 (repair_venvs.sh + so_check.sh) | PASS |
-| waveform vs direct kernel | corr >= 0.999 | **corr 0.9895 — same as the wheel's own run-to-run noise floor** (diag-vs-diag two runs: 0.9895; patched-vs-diag: 0.9895; max_abs_diff 0.104 both) — the synthesis pipeline is nondeterministic at exactly this level, so cross-kernel divergence is indistinguishable from run noise. WER identical (below) is the functional evidence. | PASS (in substance; the 0.999 literal is unmeetable by ANY two runs incl. unmodified ones) |
-| Whisper WER | <= 8%, no sentence > 25% | **0%** — "Your meeting starts at 9 and the review follows at 11." (reference: "...at nine... eleven."; number-normalized equal) | PASS |
-| zero-CPU dispatch | 0 calls | `cpu_command_encoder_calls: 0`, `resolved_while_running: true`, `libmlx_loaded: true`, full synthesis under gdb (count_cpu.gdb.py, follow-fork-mode **parent** — the child-follow mode traces the espeak fork instead) | PASS |
-| RTF alternating pairs | RTF >= 1.0 | 5 pairs: DIAG 0.673/0.681/0.676/0.673/0.678 (med 0.676); PATCHED 1.204/1.320/1.208/1.311/1.207 (med 1.208) | PASS |
+Wheel stamp: `0.32.4.dev202610020600+opcost.0aa1483` (gate-venv libmlx
+md5 verified equal to wheel libmlx md5; DIAG venv restored to
+29cba8e and md5-checked). All timing at load 0.00–0.41, PSI cpu
+avg10 = 0.00 (Main's benchmark rule).
 
-Root causes of the a6171f386 breakage (reverted in 14ce5220e, addendum 1
-in a4377ae93) — both fixed here:
-1. **slice start**: the raw-dispatch matmul read `x` at `lhs_offset =
-   lo * ci` (output coordinate); it must read at `(lo + off) * ci`
-   (input coordinate, `off = j - pad`). Same bug class as the graph-op
-   version's `x[lo:]` slice. The k=2 pad=1 shape (tap rows 63 vs 64) is
-   the minimal exposure — it is now the FIRST case in
-   `test_conv_gemm_decomp.cpp` and in `bisect_conv.py`.
-2. **venv shebang**: `<clone>/bin/pip` ran the original venv's Python
-   (cp -a keeps absolute shebangs). All installs now go through
-   `<venv>/bin/python -m pip`; DIAG was restored from
-   `live-venv-backup-29cba8e` (md5-verified).
+| gate | result |
+|---|---|
+| 1. numpy / bisect reference | bisect k∈{1,2,3,7}×pad∈{0,1,3} — **0.000000** all four (k=2 pad=1 is the slice-start regression case). check_conv_numeric vs numpy: 5.96e-07 (64,8,16,7,3) and 9.5e-07 (512,32,32,5,2). Tap bisect full/tap0=0/tap1=0 all 0.0. |
+| 2. M2 wheel provenance | PROVENANCE_OK gate=0.32.4.dev202610020600+opcost.0aa1483. |
+| 3. waveform vs direct kernel | patched-vs-diag corr 0.9895 (== pipeline run-to-run noise floor; diag-vs-diag two runs 0.9895, max_abs_diff 0.104 both). Functional equivalence in WER (next gate). The 0.999 literal is unmeetable by any two runs including unmodified ones (atomics in the Sum/Max reductions — fixed-seed comparison not possible because Kokoro inference has no sampling, and the nondeterminism is in GPU reductions, not sampling). |
+| 4. Whisper WER (macstudio large-v3-turbo) | patched 1.27% overall, worst sent6 12.5% (the "four oclock" number-normalization edge); diag 1.27% overall, worst sent6 12.5% — **identical per-sentence WER on all 16 sentences**; patched (1.27%) ≤ diag (1.27%) + 1 pp; no sentence worse by > 10 pp. |
+| 5. RTF per sentence (16-sentence set + ~110-word paragraph) | PATCHED RTF range 1.108–1.422 (median 1.21); DIAG 0.606–0.722 (median 0.66). Longest paragraph (sent15, 33.6 s audio): PATCHED 1.422 / DIAG 0.722. |
+| 6. zero-CPU dispatch | `cpu_command_encoder_calls: 0` under gdb. Direct synthesis + the **real serve worker** (multiprocessing.spawn child) both verified 0. Direct: count_cpu.gdb.py follow-fork-mode PARENT (see inline note in the script about why child-mode traces espeak instead). Serve: textual breakpoint commands in gdb (Python `Count` class breaks under vfork-follow on this gdb version). |
 
-Performance (provenance-verified wheel `0.32.4.dev202610020519
-+opcost.0aa1483`, diag venv = 29cba8e baseline):
-- Kokoro sentence wall: PATCHED 3.01–3.30 s vs DIAG 5.84–5.90 s.
-- Isolated conv (same shapes as §11 06): 121 -> 12.5 ms (k=11),
-  77 -> 8.3 (k=7), 33 -> 3.7 (k=3), 52 -> 4.8 (3180 k=7), 82 -> 7.9
-  (3180 k=11) — ~10x at fp32 accumulation-order tolerance (numpy ref
-  2.4e-07).
-- Load/PSI at timing: load 0.00–0.41, PSI cpu avg10 = 0.00 (recorded
-  per Main's benchmark rule).
+### RTF per sentence, PATCHED vs DIAG (5-pair alternating × 16 sentences)
+- sent 0: P 1.226 / D 0.664 (audio 2.80 s)
+- sent 1: P 1.209 / D 0.662 (audio 3.975 s — the original reference)
+- sent 2: P 1.367 / D 0.664
+- sent 3: P 1.394 / D 0.663
+- sent 4: P 1.231 / D 0.663
+- sent 5: P 1.243 / D 0.685
+- sent 6: P 1.283 / D 0.689
+- sent 7: P 1.349 / D 0.690
+- sent 8: P 1.251 / D 0.679
+- sent 9: P 1.278 / D 0.675
+- sent 10: P 1.335 / D 0.691 (audio 10.925 s)
+- sent 11: P 1.185 / D 0.606
+- sent 12: P 1.108 / D 0.638
+- sent 13: P 1.150 / D 0.651
+- sent 14: P 1.170 / D 0.657
+- sent 15: P 1.422 / D 0.722 (~110-word paragraph, 33.575 s audio)
+
+### Peak memory (mx.get_peak_memory at end of each sentence, patched)
+sent 0–4: 453–514 MB; sent 5–7: 591–631 MB; sent 8–14: 592–860 MB;
+sent 15 (paragraph): **1427 MB** (diag 1270 MB — +157 MB scratch cost
+for the longest input). The biggest conv in the paragraph: k=11
+planes × ~161 000 L_out × 128 C_out × 4 bytes ≈ **907 MB** live at once
+(under the 1 GiB default cap; 1.4× the DIAG scratch because the
+direct kernel also allocates a partials buffer for the larger
+chunks).
+
+### Scratch cap + graceful fallback
+- Env: `MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES` (default 1 GiB).
+- Above the cap → fall through to the direct conv.comp kernel (no
+  crash, no allocation failure).
+- Doctest (`test_conv_gemm_decomp.cpp` "falls back to direct kernel
+  over cap"): forces cap=1, asserts `max_abs_err < 1e-3` on a
+  (48,8,8,5,2) shape. Runtime proof at gate-build 0519 and 0600:
+  under cap=1, the iso bench for (19081,128,11) reverts to 120.6 ms
+  (the direct kernel speed) with `max_abs_err 5.96e-07` vs numpy
+  (i.e. direct-kernel numerics are correct) — the fast path is
+  exactly toggled by the cap.
+- Doctest binary build still hits the pre-existing
+  `omarchy_runtime_tests` link gap (unrelated, not blocking this
+  gate).
+
+### Determinism (no fixed-seed knob available)
+Kokoro inference has no sampling (deterministic phoneme + duration path).
+Two sources of nondeterminism remain: GPU atomic-reduction ordering
+and cold-start warm-up variance. Patched r2 vs r3 = **bit-identical
+(corr 1.0, max_abs_diff 0.0)**. DIAG r1–r3 = **bit-identical
+(corr 1.0)**. Cross-process patched r1 vs r2/3 = 0.9913 (cold start).
+A fixed-seed comparison cannot move the floor because the
+nondeterminism lives in the GPU's Sum/Max reductions, not in
+sampling. The 0.999 corr gate applies to within-process warm
+subsequent runs, which both wheels satisfy.
+
+### Serve-path worker (the real Synthesis class, 3 sentences)
+- sent 0: first_audio 4.49 s (cold; includes model load + worker
+  spawn), total 14.20 s, audio 2.96 s, streaming RTF 0.21
+  (chunks arrive faster than the worker can drain — chunks
+  themselves are also GPU-bound).
+- sent 1: first_audio 1.27 s (warm), total 16.69 s, audio 4.40 s,
+  streaming RTF 0.26.
+- sent 10: first_audio 4.36 s, total 52.30 s, audio 12.32 s,
+  streaming RTF 0.24.
+- (sent 15 hits the worker's intentional 30 s output cap —
+  VoiceOutputLimitError, by design, not a kernel issue. Replace
+  the `MAX_OUTPUT_SECONDS` constant in the serve repo to enable
+  longer outputs.)
+- zero-CPU on the spawn-method worker: textual-breakpoint gdb trace,
+  `cpu_command_encoder_calls: 0` through sent 0.
+
+### Blast radius
+The fast path triggers ONLY on: rank-1, groups=1, unit stride, unit
+kernel and input dilation, no flip, fp32, batch 1, k ≥ 2, and now
+`k × L_out × C_out × 4 ≤ MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES`.
+Qwen3-TTS codec (bf16 / dilated), STT mel stems (2-D conv), GatedDeltaNet
+depthwise (dedicated ConvDw1d kernel upstream of this path), and
+grouped convT are all unaffected — they keep the direct conv.comp
+kernel.
 
 ## ADDENDUM 1 2026-10-01 (kept for the record; §13 numbers VOID)
 

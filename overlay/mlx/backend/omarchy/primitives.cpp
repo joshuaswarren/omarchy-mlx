@@ -4359,6 +4359,19 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     const int pad = pad_lo_axis(0);
     const int ci = in_channels;
     const int co = out_channels;
+    // Scratch cap: the k planes cost k * L_out * co * 4 bytes live at
+    // once. Above the cap (MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES,
+    // default 1 GiB) fall back to the direct kernel instead of
+    // stressing the allocator on very long inputs.
+    const int64_t scratch_bytes =
+        static_cast<int64_t>(k) * L_out * co * static_cast<int64_t>(4);
+    int64_t cap = 1ll << 30;
+    if (const char* v = std::getenv("MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES")) {
+      cap = std::atoll(v);
+    }
+    if (scratch_bytes > cap) {
+      // Fall through to the direct kernel below.
+    } else {
     const int64_t plane = static_cast<int64_t>(L_out) * co;
     // Scratch planes: tap j occupies scratch[j, lo_j : hi_j, :]; the
     // rest stays zero so the plane reduce needs no per-row masks.
@@ -4470,6 +4483,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
         CopyType::General,
         out.primitive().stream());
     return;
+    }  // scratch cap else
   }
 
   params.count = total;
