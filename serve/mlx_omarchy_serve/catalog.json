@@ -795,6 +795,7 @@
       "decision_model": "laya-mlx",
       "priority": 2,
       "max_questions": 8,
+      "first_text_budget_ms": 6500,
       "routing_policy": "1",
       "qualification": {"status": "untested", "receipt": null, "date": null}
     },

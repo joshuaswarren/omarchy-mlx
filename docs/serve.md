@@ -57,7 +57,13 @@ prefill 46.8 to 316.9 tok/s) and the release wheel `+06711ad` (the earlier live
 wheel returned non-finite logits on long GDN prompts) — the 2B is last on every
 quality proxy measured (0/8 native cards, GSM8K 11/20, IFE 17/20) while the 9B
 (0.78 s TTFT) and the 4B (0.44 s) hold the 2.0 s first-text budget ([chat-model
-bench](../receipts/2026-09-30-chat-model-bench/README.md)).
+bench](../receipts/2026-09-30-chat-model-bench/README.md)). First-text budgets
+are per pair: a pair without a catalog `first_text_budget_ms` keeps the 2.0 s
+interactive default, and Quality carries 6500 ms — relaxed by owner decision
+2026-10-02 to the measured figure (about 6.4 s median for a 300-token prompt,
+[TTFT phase receipt](../receipts/2026-10-02-quality-ttft/README.md)); the
+engine prefill lane is working to bring it down, and the budget tightens as it
+improves. The setup screen labels Quality as slower.
 
 Unless a row names another build, every number below was measured on the M2 Max
 (T6021, 96 GB). The bench, card, routing, and speech runs used the v0.7.6
@@ -69,7 +75,7 @@ the paired-memory, card-timing, and idle-GPU runs used the harness at main
 |---|---|---|---|
 | Cards, HELD-OUT v4 (frozen; pass needs 15/18 valid, 0 spurious) | 16/18, 0 spurious — pass | 18/18, 0 spurious — pass | 18/18, 0 spurious — pass |
 | First-text p95, chosen config, stock kernel | 1.05 s — pass | 0.66 s — pass | not part of this gate |
-| First text on the real card prompt, engine level | 0.78 s — within the 2.0 s design budget | 0.44 s — within | 2.45 s — over budget |
+| First text on the real card prompt, engine level | 0.78 s — within the 2.0 s design budget | 0.44 s — within | 2.45 s — within the 6.5 s tier budget (owner decision 2026-10-02; misses the original 2.0 s design target) |
 | Paired memory peak over baseline (whole system; nine valid runs) | 9.5 GiB idle (one run 13.4 with page cache) | 5.2–6.8 GiB | 17.3–18.4 GiB |
 | Backend peak (chat worker allocator) | 5.5 GiB | 2.9 GiB | 15.9 GiB |
 | Tier fit | 16 GB and 96 GB (one 16 GB run borderline) | 16 GB and 96 GB | 96 GB only |
@@ -99,13 +105,20 @@ against — the earlier silent empty reply on the 4B is fixed. What remains on
 the 4B is the model's own invalid fence, a model- or card-format change, not
 a coordinator one.
 
-**Quality performance — the design budget is not met, on an idle GPU.** The
+**Quality performance — the tier budget is the measured figure; the original
+2.0 s design target is not met.** Owner decision 2026-10-02: the Quality
+pair's first-text budget is relaxed to 6.5 s (catalog `first_text_budget_ms`),
+the measured figure for a 300-token prompt ([TTFT phase
+receipt](../receipts/2026-10-02-quality-ttft/README.md)); the UI labels the
+tier as slower, and the engine prefill lane keeps working to reduce it — the
+budget tightens again as that work lands. The
 quiet-window run (no other render-node holder, `fuser` empty before and after;
 [pair gates receipt](../receipts/2026-09-30-pair-gates/README.md)): prefill
 42 tok/s at a 600-token prompt and 76 tok/s at 2,100 tokens (about 25 % under
 the 97–103 tok/s the same model does alone on the GPU in ModelBench, the cost
 of the resident assistant and Laya workers); TTFT 6.31 s for the real
-300-token chat prompt — about 3× the 2 s design budget. The 2026-10-02
+300-token chat prompt — about 3× the original 2.0 s design target. The
+2026-10-02
 [TTFT phase receipt](../receipts/2026-10-02-quality-ttft/README.md) instrumented
 every phase and corrected the earlier attribution: the coordinator's whole
 per-turn path (pair start, history, admission, speech probe, request dispatch)
@@ -269,7 +282,7 @@ explicit-CPU-stream finding above.
 | # | Item | Why it blocks |
 |---|---|---|
 | 1 | Routing latency decision: does the 250 ms gate measure the Laya head call (p95 347 ms, fails) or the shipped head-free path (p95 43 ms, passes)? | Automatic routing stays off until decided. |
-| 2 | Quality design budget: first text is the engine prompt path on the resident pair (~6.4 s for a 300-token prompt vs the 2 s budget); the lever is engine-side prefill and first-decode-step work, and stable-prefix cache reuse is a memory-admission gate decision. | The Quality pair cannot qualify against a budget it misses. |
+| 2 | Quality tier budget (owner decision 2026-10-02): the tier budget is now the measured figure, 6.5 s for a 300-token prompt (catalog `first_text_budget_ms`; the original design target was 2.0 s), and the UI labels Quality as slower. The lever to tighten it is engine-side prefill and first-decode-step work; stable-prefix cache reuse is a memory-admission gate decision. The budget tightens again as that work lands. | Quality stays unqualified pending the full gate set (row 4); the relaxed budget is the tier's honest bound, not a pass. |
 | 3 | Voice output first audio: 2.3–6.6 s against the 1.5 s design target (needs vocoder output streaming). Kokoro default decided by the owner 2026-10-02: Kokoro-82M default engine, af_heart default voice, no listening step; Qwen3-TTS stays as the selectable second engine. | Voice output stays unqualified: the RTF gate (serve path ~1.51 vs 1.2), the first-audio target, and a `record_qualification` receipt for the default engine are all still open. |
 | 4 | Pair-level qualification: no pair has passed the full gate set; chart cards wait 53.8 s (27B) / 115.9 s (9B) to a visible component, and the 4B's fence never validates. | Nothing is qualified; `recommended` stays false everywhere. |
 | 5 | G13G (jwm1) Mesa arm of pin candidate `e7631595df6`, plus the T8103 16-bit selection doctest and standing battery. | The Mesa pin and the Attn128 chip matrix each wait on that host. |

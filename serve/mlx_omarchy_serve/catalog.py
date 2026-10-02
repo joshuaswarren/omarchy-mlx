@@ -75,6 +75,10 @@ MAX_PAIRS = 8
 # restart) and is NOT implied by its models' single-model receipts.
 PAIR_FIELDS = ("id", "label", "chat_model", "decision_model", "priority",
                "max_questions", "routing_policy", "qualification")
+# Optional per-pair first-text budget in ms. A pair without the field keeps
+# the assistant's 2.0 s interactive default (assistant/pairs.py); the only
+# shipped override is Quality at 6500 (owner decision 2026-10-02, the
+# measured figure in receipts/2026-10-02-quality-ttft).
 # Optional per-pair measured selection evidence: measured task quality and
 # decode latency bound to a chip, the chat runtime backend, and the exact
 # pinned revisions. Absent means unqualified for automatic selection —
@@ -327,7 +331,8 @@ def validate_catalog(obj) -> None:
     seen_pair_priorities: set[int] = set()
     for i, pair in enumerate(pairs):
         where = f"pairs[{i}]"
-        _check_keys(pair, PAIR_FIELDS, where, optional=("extension",))
+        _check_keys(pair, PAIR_FIELDS, where,
+                    optional=("extension", "first_text_budget_ms"))
         _check_str(pair["id"], f"{where}.id", 64, ID_PATTERN)
         if pair["id"] in seen_pair_ids:
             _fail(f"{where}.id: duplicate pair id {pair['id']!r}")
@@ -339,6 +344,9 @@ def validate_catalog(obj) -> None:
             _fail(f"{where}.priority: duplicate pair priority {pair['priority']}")
         seen_pair_priorities.add(pair["priority"])
         _check_int(pair["max_questions"], f"{where}.max_questions", 1, 64)
+        if "first_text_budget_ms" in pair:
+            _check_positive_number(pair["first_text_budget_ms"],
+                                   f"{where}.first_text_budget_ms")
         for field, kind in (("chat_model", "chat"), ("decision_model", "decisions")):
             ref = pair[field]
             if ref not in model_by_id:

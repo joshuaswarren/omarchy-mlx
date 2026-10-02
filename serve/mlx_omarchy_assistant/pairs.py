@@ -225,7 +225,11 @@ def _pair_evidence(pair: dict) -> dict | None:
 
 # Design-fixed interactive bound: p95 first visible answer within 2 seconds
 # (128-token prompt, 256-token response). A bound the measurement must meet,
-# never a measurement itself.
+# never a measurement itself. Default for every pair that does not carry an
+# explicit catalog first_text_budget_ms; Quality overrides it with 6500 ms
+# (owner decision 2026-10-02, the measured figure in
+# receipts/2026-10-02-quality-ttft — tightened again as engine prefill work
+# lands).
 FIRST_VISIBLE_P95_MS = 2000.0
 
 
@@ -300,10 +304,11 @@ def _evidence_refusal(pair: dict, chat: dict, decision: dict,
     if runtime is not None:
         return runtime
     latency = evidence["latency"]
-    if latency["first_visible_p95_ms"] > FIRST_VISIBLE_P95_MS:
+    bound_ms = pair.get("first_text_budget_ms", FIRST_VISIBLE_P95_MS)
+    if latency["first_visible_p95_ms"] > bound_ms:
         return (f"{pid}: measured first-visible p95 "
                 f"{latency['first_visible_p95_ms']} ms exceeds the "
-                f"{FIRST_VISIBLE_P95_MS:.0f} ms interactive bound")
+                f"{bound_ms:.0f} ms interactive bound")
     if latency["decode_tokens_per_sec"] < latency["target_tokens_per_sec"]:
         return (f"{pid}: measured decode {latency['decode_tokens_per_sec']} "
                 f"tok/s misses the qualified interactive target "
@@ -320,7 +325,8 @@ def select_pair(pair_records, model_entries, *, preference: str,
     measured decode latency from the pair's selection evidence, only when
     that evidence is scoped to this chip, this exact mlx runtime (extension +
     loaded libmlx.so RECORD hashes), and the pinned revisions, and only past
-    the pair release gate, the 2000 ms first-visible bound, and a byte-based
+    the pair release gate, the pair's first-visible bound (catalog
+    first_text_budget_ms, default 2000 ms), and a byte-based
     memory admission. Curated priority is the final tie-break, never the
     ranking criterion; weight size and parameter count are never quality.
     Without valid scoped evidence the refusal is named — development
@@ -603,7 +609,8 @@ class PairManager:
                  "chat_model": p["chat_model"],
                  "decision_model": p["decision_model"],
                  "priority": p["priority"],
-                 "qualification": p["qualification"]}
+                 "qualification": p["qualification"],
+                 "first_text_budget_ms": p.get("first_text_budget_ms")}
                 for p in (self.catalog.get("pairs") or [])]
 
     def _pair(self, pair_id: str) -> dict:

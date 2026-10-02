@@ -489,6 +489,37 @@ function collectText(node, out) {
 }
 
 {
+  // The slower-first-text note renders inside the pair radio's label — so it
+  // is part of the radio's accessible name — and only for pairs that ship an
+  // explicit first_text_budget_ms.
+  const mount = document.createElement("div");
+  const status = {
+    state: "setup",
+    pairs: [
+      { id: "everyday", label: "Everyday", chat_model: "X",
+        decision_model: "Y", qualification: { status: "ready" } },
+      { id: "quality", label: "Quality", chat_model: "Z",
+        decision_model: "Y", qualification: { status: "ready" },
+        first_text_budget_ms: 6500 },
+    ],
+    recommended_pair: "everyday",
+    context: { max_tokens: 8192, step_tokens: 512 },
+    voice: { state: "missing" },
+    download_components: [],
+    total_download_bytes: 0,
+    download_has_unknown: false,
+  };
+  renderSetup(mount, status, { onSubmit: () => {}, onCancel: () => {} });
+  const slowLabel = mount.querySelector("label[for=pair-quality]");
+  const fastLabel = mount.querySelector("label[for=pair-everyday]");
+  assert.ok(slowLabel && fastLabel, "both pair cards must render");
+  assert.ok(collectText(slowLabel).includes("Slower: about 6 s to first words"),
+    "the slower note must sit inside the pair label (accessible name)");
+  assert.equal(collectText(fastLabel).includes("Slower"), false,
+    "pairs without an explicit budget must not carry the slower note");
+}
+
+{
   // Voice controls: keyboard operability of the mic button.
   // Space/Enter arrive as click with detail 0 (no pointer events); the
   // pointer latch must stay the only owner of pointer-driven toggles so

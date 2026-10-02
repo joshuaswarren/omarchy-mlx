@@ -492,7 +492,8 @@ export class App {
     const label = document.getElementById("ready-badge-label");
     if (status && status.active_pair) {
       chip.hidden = false;
-      chip.textContent = status.active_pair.label || status.active_pair.id;
+      const slower = status.active_pair.first_text_budget_ms ? " (slower)" : "";
+      chip.textContent = (status.active_pair.label || status.active_pair.id) + slower;
     } else {
       chip.hidden = true;
     }

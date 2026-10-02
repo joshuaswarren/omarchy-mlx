@@ -89,6 +89,7 @@ def fixture_catalog():
     quality = {
         "id": "quality", "label": "Quality", "chat_model": CHAT_BIG_ID,
         "decision_model": DECISION_ID, "priority": 1, "max_questions": 8,
+        "first_text_budget_ms": 6500,
         "routing_policy": "1",
         "qualification": {"status": "untested", "receipt": None, "date": None},
     }
@@ -370,6 +371,27 @@ class CatalogPairSchemaTests(unittest.TestCase):
         with self.assertRaises(catalog.CatalogError):
             catalog.validate_catalog(cat)
 
+    def test_pair_first_text_budget_field(self):
+        # Optional per-pair first-text budget in ms; only positive numbers.
+        cat = fixture_catalog()
+        cat["pairs"][0]["first_text_budget_ms"] = 2000
+        catalog.validate_catalog(cat)
+        for bad in (0, -1, "2000", True, None):
+            broken = fixture_catalog()
+            broken["pairs"][0]["first_text_budget_ms"] = bad
+            with self.assertRaises(catalog.CatalogError):
+                catalog.validate_catalog(broken)
+
+    def test_bundled_quality_pair_carries_the_relaxed_budget(self):
+        # Owner decision 2026-10-02: Quality's first-text budget is the
+        # measured 6.5 s figure; every other pair keeps the 2.0 s default
+        # by not carrying the field at all (one definition per value).
+        quality = next(p for p in self.bundled["pairs"] if p["id"] == "quality")
+        self.assertEqual(quality["first_text_budget_ms"], 6500)
+        for pair in self.bundled["pairs"]:
+            if pair["id"] != "quality":
+                self.assertNotIn("first_text_budget_ms", pair, pair["id"])
+
     def test_pair_referencing_missing_model_rejected(self):
         cat = fixture_catalog()
         cat["pairs"][0]["chat_model"] = "not-a-model"
@@ -584,6 +606,36 @@ class SelectionEvidenceTests(unittest.TestCase):
             self._pick(cat)
         message = str(ctx.exception)
         self.assertIn("first-visible p95", message)
+        self.assertIn("2000", message)
+
+    def test_first_text_budget_pair_field_replaces_default(self):
+        # The per-pair catalog budget replaces the 2000 ms default for that
+        # pair only (owner decision 2026-10-02: Quality ships 6500 ms, the
+        # measured figure). Each pair is judged against its own bound.
+        cat = selection_catalog()
+        quality = next(p for p in cat["pairs"] if p["id"] == "quality")
+        quality["first_text_budget_ms"] = 6500
+        evidence = quality["extension"]["selection_evidence"]
+        evidence["quality"]["score"] = 0.99  # best measured quality
+        evidence["latency"]["first_visible_p95_ms"] = 2600.0
+        # 2600 ms exceeds the old flat bound but sits inside Quality's own,
+        # so the best-quality pair stays selectable.
+        self.assertEqual(self._pick(cat)["id"], "quality")
+        # Past ITS OWN 6500 ms bound the same evidence refuses, and the pair
+        # falls back to the next-best valid candidate.
+        evidence["latency"]["first_visible_p95_ms"] = 6600.0
+        self.assertEqual(self._pick(cat)["id"], "everyday")
+        # With every pair over its own bound, the joined refusal names each
+        # pair's budget (6500 for Quality, 2000 for the rest).
+        for pair in cat["pairs"]:
+            bound = 6500 if pair["id"] == "quality" else 2000
+            pair["extension"]["selection_evidence"]["latency"][
+                "first_visible_p95_ms"] = bound + 100
+        with self.assertRaises(pairs.PairError) as ctx:
+            self._pick(cat)
+        message = str(ctx.exception)
+        self.assertIn("first-visible p95", message)
+        self.assertIn("6500", message)
         self.assertIn("2000", message)
 
     def test_evidence_on_untested_pair_is_not_enough(self):
@@ -1034,6 +1086,11 @@ class PairManagerTests(BasePairTest):
         self.assertEqual(len(status["pairs"]), 2)
         everyday = next(p for p in status["pairs"] if p["id"] == "everyday")
         self.assertEqual(everyday["qualification"]["status"], "untested")
+        # The per-pair first-text budget rides to the UI: Quality carries the
+        # shipped 6500 ms override, pairs on the 2 s default carry none.
+        quality = next(p for p in status["pairs"] if p["id"] == "quality")
+        self.assertIsNone(everyday["first_text_budget_ms"])
+        self.assertEqual(quality["first_text_budget_ms"], 6500)
 
     def test_ready_offline_requires_a_named_receipt(self):
         pair = {"id": "everyday",

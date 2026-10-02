@@ -75,9 +75,16 @@ export function renderSetup(mount, status, { onSubmit, onCancel }) {
         `Decisions: ${pair.decision_model}`,
         `Qualification: ${qualification}`,
       ];
+      // Pairs that ship an explicit first_text_budget_ms are slower than the
+      // 2 s interactive default; say so inside the label so the note is part
+      // of the radio's accessible name.
+      const slower = pair.first_text_budget_ms
+        ? el("p", {}, `Slower: about ${Math.floor(pair.first_text_budget_ms / 1000)} s to first words`)
+        : null;
       list.appendChild(el("label", { class: "setup__pair", for: id },
         el("h4", {}, pair.label || pair.id),
         el("p", {}, meta.join(" · ")),
+        slower,
         input));
     }
     sectionPair.appendChild(list);
