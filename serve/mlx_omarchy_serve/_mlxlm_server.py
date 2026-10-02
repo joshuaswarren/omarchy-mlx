@@ -110,6 +110,7 @@ def install(server_module, limit: int) -> None:
         )
 
     def capped(self, tokenizer, request, args):
+        _ttft_t0 = time.monotonic()
         result = original(self, tokenizer, request, args)
         prompt = result[0]
         # Upstream semantics (verified in the pinned source): the HTTP
@@ -132,7 +133,8 @@ def install(server_module, limit: int) -> None:
                 "lower the prompt or max_tokens"
             )
         _ttft_armed["first_chunk"] = True
-        _ttft_trace("tokenized", prompt=len(prompt), max_tokens=max_tokens)
+        _ttft_trace("tokenized", prompt=len(prompt), max_tokens=max_tokens,
+                    tokenize_s=round(time.monotonic() - _ttft_t0, 3))
         return result
 
     generator._tokenize = capped
