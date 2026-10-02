@@ -388,11 +388,18 @@ def main():
         drain.close()
         fvt = None
         text_out = ""
+        turn_error = None
         for etype, data, ts in drain.events:
             if etype == "text":
                 if fvt is None and data.get("text"):
                     fvt = ts - t0
                 text_out += data.get("text") or ""
+            elif etype == "error":
+                turn_error = json.dumps(data)[:400]
+            elif etype == "status" and isinstance(data, dict) \
+                    and data.get("state") in ("invalid_component", "empty_reply",
+                                              "output_truncated", "disagreement"):
+                turn_error = turn_error or json.dumps(data)[:200]
         phases = None
         if measure:
             time.sleep(0.5)  # emit flush
