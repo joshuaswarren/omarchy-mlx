@@ -269,6 +269,7 @@ def main():
                 pass
 
     def one_turn(label, text, max_tokens, measure):
+        nonlocal engine_offset
         cid = call("POST", "/api/conversations", {"save": False},
                    runtime=pair.runtime)["id"]
         gate = quiet_gate(args.quiet_wait_s) if measure else {"skipped": True}
