@@ -9,7 +9,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
-const BASE = "http://127.0.0.1:8799";
+const PORT = Number(process.env.SMOKE_PORT ?? 8799);
+const BASE = "http://127.0.0.1:" + PORT;
 const SERVICE = join(import.meta.dir, "..");
 const STATE = join(SERVICE, ".wrangler", "smoke-state");
 const WRANGLER = join(SERVICE, "node_modules", ".bin", "wrangler");
@@ -194,6 +195,34 @@ scenario("full multi-chunk submission publishes and serves", async () => {
   return `receipt ${init.body.receipt_url}`;
 });
 
+scenario("Linux ANE probe remains inline in a published local row", async () => {
+  const archive = makeArchive(1, 23);
+  const probe = {
+    schema_version: 1, soc: "t6000", board: "air", model: "MacBook Air",
+    compatible: ["apple,t6000"], ane_nodes: [], dart_ane_nodes: [],
+    pmgr_ane_nodes: [], mailbox_nodes: [], unknown_ane_like: [],
+    kernel: { release: "6.17", version: "Linux" }, cmdline: "quiet",
+    cmdline_dropped: 0, modules: [], interrupts: [], accel: [],
+    platform_devices: [], genpd: [], debug_ane: [], packages: [],
+    installed: { driver_loaded: false }, dmesg: { matched: 0, lines: [] },
+    check: { rc: 0, lines: [], lines_total: 0 },
+    firmware: { rc: 0, lines: [], lines_total: 0 },
+    soc_table: { table: "t6000", compared: true, match: true, dt_vs_table: [] },
+    unreadable: [], elapsed_ms: 12, truncated: false,
+  };
+  const init = await initiate(archive, { payload: payload({ ane_linux: { ane_probe: probe } }) });
+  expect(init.res.status === 200, "probe initiate " + init.res.status + ": " + JSON.stringify(init.body));
+  await uploadChunk(init.sha, 0, archive);
+  const fin = await complete(init.sha);
+  expect(fin.res.status === 200, "probe complete " + fin.res.status);
+  const response = await fetch(BASE + "/v1/results/" + init.sha);
+  const doc = await response.json();
+  expect(doc.summary.ane_linux.ane_probe.board === "air", "probe board was not stored inline");
+  expect(doc.summary.ane_linux.ane_probe.model === "MacBook Air", "probe model was not stored inline");
+  expect(doc.summary.unparsed === undefined, "valid probe was parked under unparsed");
+  return "synthetic local probe stored inline";
+});
+
 scenario("e2e kind initiates and publishes (regression: kind CHECK dropped the row)", async () => {
   const archive = makeArchive(1, 9);
   const e2ePayload = { ...payload(), kind: "omarchy-mac-e2e", test_id: "smoke", install_path: "encrypted", asahi_image: "Minimal BTRFS", encryption: true, boot_separate: true, overall: "PASS" };
@@ -366,7 +395,7 @@ scenario("/v1/schema reports the worker's schema identity", async () => {
   const res = await fetch(`${BASE}/v1/schema`);
   expect(res.status === 200, `schema ${res.status}`);
   const body = await res.json();
-  expect(typeof body.schema_version === "number", "schema_version missing");
+  expect(JSON.stringify(body.schema_versions) === "[1,2]", "schema_versions missing");
   expect(typeof body.fields_sha256 === "string", "fields_sha256 missing");
   expect(typeof body.schema_sha256 === "string", "schema_sha256 missing");
   expect(body.fields_sha256.length === 64, `fields_sha256 length ${body.fields_sha256.length}`);
@@ -459,7 +488,7 @@ async function main() {
 
   console.log("== starting wrangler dev (local) ==");
   const dev = spawn(WRANGLER, [
-    "dev", "--local", "--port", "8799", "--ip", "127.0.0.1",
+    "dev", "--local", "--port", String(PORT), "--ip", "127.0.0.1",
     "--persist-to", STATE,
   ], { cwd: SERVICE, stdio: ["ignore", "pipe", "pipe"] });
   dev.stderr.on("data", (d) => process.stderr.write(d));

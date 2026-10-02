@@ -28,15 +28,16 @@ The one-paragraph version:
 - **No install, ten seconds (Linux/Omarchy):** the quick collector
   captures the ANE device-tree data and submits with one command —
   see [quick mode](../README.md#contributing).
-- **Full report (either OS):** `scripts/collect_deep.py` adds the
-  correctness sweep, the benchmark numbers, and the ANE turn-on blocks
-  (macOS IODeviceTree dump with identity keys stripped; Linux
-  reserved-memory, mailbox, firmware hashes and the `omarchy_ane`
-  promotion block). It shows you the exact redacted payload and sends
-  nothing without your explicit `--submit`. An ANE smoke result can be
-  added with `--ane-smoke`; it never loads or unloads modules and
-  never writes. What each chip's rows already cover, and the
-  promotion rule, are in [ane-turn-on-data.md](ane-turn-on-data.md).
+- **Full report (either OS):** scripts/collect_deep.py adds the
+  correctness sweep, benchmark numbers and ANE turn-on blocks. Linux
+  includes reserved-memory, mailbox, firmware hashes, the omarchy_ane
+  promotion block, and ane_linux.ane_probe: a read-only, privacy-redacted
+  ANE topology and install diagnostic. Its 8 KiB output field list is
+  documented in [omarchy-ane's probe guide](https://github.com/joshuawarren/omarchy-ane/blob/main/docs/ane-probe.md).
+  The server keeps it inline for querying. The report previews the exact
+  redacted payload and sends nothing without --submit. An ANE smoke result
+  can be added with --ane-smoke; it never loads or unloads modules and
+  never writes. See [ane-turn-on-data.md](ane-turn-on-data.md) for coverage.
 - **Dual-booters, you're gold:** run it under macOS *and* Omarchy on the
   same machine and submit both. The macOS side sees data (IORegistry,
   power topology) Linux can't, and vice versa — the pair is worth more
@@ -45,8 +46,8 @@ The one-paragraph version:
   sanitizes any diagnostics block it cannot parse into an `unparsed`
   field instead of rejecting the row, and the collector prints the
   server's full error body if a submit fails, so you see exactly why.
-  The row schema is unchanged ([v0.7.17 release
-  receipt](../receipts/2026-10-02-v0717-release.md), commit `4c59e3fa7`).
+  The worker still accepts schema versions 1 and 2; the new probe field
+  updates the schema identity without changing that version list.
 
 ## Turn on the ANE for your chip
 

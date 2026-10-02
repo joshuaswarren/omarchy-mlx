@@ -317,7 +317,7 @@ def redact_argv(argv, redactor):
 
 
 def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None,
-             max_chars=None):
+             max_chars=None, redact_output=True):
     """Run one external command; record absence, timeout, and output.
 
     Returns a dict. Never raises for a missing binary or a timeout.
@@ -348,10 +348,10 @@ def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None,
             env=env,
         )
         record["exit_code"] = proc.returncode
-        record["stdout"] = redactor.apply(cap_stream(proc.stdout or "",
-                                                     max_chars=max_chars))
-        record["stderr"] = redactor.apply(cap_stream(proc.stderr or "",
-                                                     max_chars=max_chars))
+        stdout = cap_stream(proc.stdout or "", max_chars=max_chars)
+        stderr = cap_stream(proc.stderr or "", max_chars=max_chars)
+        record["stdout"] = redactor.apply(stdout) if redact_output else stdout
+        record["stderr"] = redactor.apply(stderr) if redact_output else stderr
     except subprocess.TimeoutExpired:
         record["error"] = f"timeout after {timeout}s"
     except OSError as exc:

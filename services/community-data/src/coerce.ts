@@ -14,10 +14,9 @@ import { SchemaNode, validateSchema } from "./schema";
 //             reject is parked as capped JSON under the payload root's
 //             `unparsed` key and replaced by null / removed, so only
 //             identity, privacy, size and schema_version can 422.
-// The schema file and its identity hash stay untouched: the root
-// object has no additionalProperties:false, so the extra `unparsed`
-// key validates as-is. Every action is recorded for the response
-// `coerced` field and the worker log.
+// The canonical schema and its baked identity are recomputed together;
+// the root object allows the capped unparsed diagnostic map. Every action
+// is recorded for the response's coerced field and the worker log.
 
 const MAX_RECORDED = 50;
 const UNPARSED_ENTRY_CHARS = 1024;
@@ -123,6 +122,12 @@ function walk(
   ctx: Ctx,
   diagnostic: boolean,
 ): unknown {
+  if (path === "$.ane_linux.ane_probe" && typeof value === "object" &&
+      value !== null && !Array.isArray(value) &&
+      new TextEncoder().encode(JSON.stringify(value)).byteLength > 8192) {
+    park(ctx, path, value, "exceeds 8192 UTF-8 bytes");
+    return REMOVE;
+  }
   if (value === null || value === undefined) return value;
 
   if (typeof value === "string") {

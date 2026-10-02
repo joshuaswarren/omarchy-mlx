@@ -2792,6 +2792,11 @@
             "maxLength": 64
           },
           "maxItems": 16
+        },
+        "ane_probe": {
+          "type": "object",
+          "description": "Read-only omarchy-ane-probe output; UTF-8 JSON is capped at 8192 bytes by the sanitizer.",
+          "additionalProperties": true
         }
       }
     },

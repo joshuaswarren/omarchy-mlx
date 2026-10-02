@@ -2579,5 +2579,49 @@ class AneSectionUnavailableMarks(unittest.TestCase):
         self.assertEqual(out["reserved_memory"]["found"], False)
         self.assertFalse(any(v == "written" for v in [1]))
 
+
+class AneProbeCollectorTests(unittest.TestCase):
+    def call_probe(self, rec, hostname="air"):
+        with patch.object(cd, "run_tool", return_value=rec) as run:
+            value = cd._omarchy_ane_probe(cc.Redactor(hostname=hostname))
+        self.assertEqual(run.call_args.args[0], ["omarchy-ane-probe", "--json"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
+        self.assertFalse(run.call_args.kwargs["redact_output"])
+        return value
+
+    def test_development_host_capture_is_a_real_probe_document(self):
+        with open(os.path.join(os.path.dirname(__file__), "testdata",
+                               "ane-probe-dev-x86.json"), encoding="utf-8") as fh:
+            probe = json.load(fh)
+        result = self.call_probe({"available": True, "stdout": json.dumps(probe),
+                                  "stderr": "", "exit_code": 0})
+        self.assertTrue(result["available"])
+        self.assertEqual(result["schema_version"], 1)
+        self.assertTrue(any(line.startswith("device-tree: no /proc/device-tree")
+                            for line in result["unreadable"]))
+
+    def test_probe_json_is_redacted_without_corrupting_short_name_fields(self):
+        probe = {"schema_version": 1, "board": "air", "model": "MacBook Air",
+                 "soc": "t6000", "dmesg": {"matched": 1, "lines": ["host air " + ".".join(("10", "0", "0", "1"))]}}
+        result = self.call_probe({"available": True, "stdout": json.dumps(probe),
+                                  "stderr": "", "exit_code": 0})
+        self.assertTrue(result["available"])
+        self.assertEqual(result["board"], "air")
+        self.assertEqual(result["model"], "MacBook Air")
+        self.assertIn("[redacted-ip4]", result["dmesg"]["lines"][0])
+
+    def test_absent_garbage_timeout_and_oversize(self):
+        self.assertFalse(self.call_probe({"available": False, "error": "missing"})["available"])
+        garbage = self.call_probe({"available": True, "stdout": "not json", "stderr": "bad", "exit_code": 0})
+        self.assertFalse(garbage["available"])
+        timeout = self.call_probe({"available": True, "error": "timeout after 15s"})
+        self.assertTrue(timeout["truncated"])
+        oversized = {"schema_version": 1, "dmesg": {"lines": ["x" * 9000]},
+                     "genpd": "text", "debug_ane": "text"}
+        bounded = self.call_probe({"available": True, "stdout": json.dumps(oversized),
+                                   "stderr": "", "exit_code": 0})
+        self.assertTrue(bounded["available"])
+        self.assertTrue(bounded["truncated"])
+        self.assertLessEqual(len(json.dumps(bounded, separators=(",", ":")).encode()), 8192)
 if __name__ == "__main__":
     unittest.main(verbosity=2)

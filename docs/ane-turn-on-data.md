@@ -151,3 +151,16 @@ chips + golden to the smoke.
 
 Send corrections or an override only through the omarchy-ane lane
 (w73); this file describes the collector side.
+
+### Linux probe detail
+
+Deep Linux rows also carry ane_linux.ane_probe, the read-only JSON from
+omarchy-ane-probe --json (15-second timeout, 8 KiB cap). It adds SoC,
+board/model/compatible identity, ANE/DART/pmgr/mailbox topology, kernel
+and command-line allowlist, modules and interrupts, accelerator/platform
+devices, power domains, debug state, package/install state, filtered dmesg,
+check and firmware results, SoC-table comparison, unreadable reasons and
+elapsed time. See omarchy-ane's
+[docs/ane-probe.md](https://github.com/joshuaswarren/omarchy-ane/blob/main/docs/ane-probe.md)
+for the complete field contract. It complements the existing omarchy_ane
+promotion block; it does not replace it.

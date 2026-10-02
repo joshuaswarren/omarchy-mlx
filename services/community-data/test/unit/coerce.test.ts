@@ -257,3 +257,53 @@ describe("coerceToSchema never rejects diagnostics", () => {
     ).toBe(true);
   });
 });
+
+describe("inline Linux ANE probe", () => {
+  const shaped = {
+    schema_version: 1, soc: "t6000", board: "air", model: "MacBook Air",
+    compatible: ["apple,t6000"], ane_nodes: [], dart_ane_nodes: [],
+    pmgr_ane_nodes: [], mailbox_nodes: [], unknown_ane_like: [],
+    kernel: { release: "6.17", version: "Linux" }, cmdline: "quiet",
+    cmdline_dropped: [], modules: [], interrupts: [], accel: [],
+    platform_devices: [], genpd: [], debug_ane: [], packages: [],
+    installed: { driver_loaded: false }, dmesg: { matched: 0, lines: [] },
+    check: { rc: 0, lines: [], lines_total: 0 },
+    firmware: { rc: 0, lines: [], lines_total: 0 },
+    soc_table: { table: "t6000", compared: true, match: true, dt_vs_table: [] },
+    unreadable: [], elapsed_ms: 12, truncated: false,
+  };
+  const withProbe = (probe: unknown) => {
+    const payload = structuredClone(fixture);
+    payload.ane_linux = { ane_probe: probe };
+    return payload;
+  };
+
+  test("keeps a real-shaped probe inline and leaves absent probes alone", () => {
+    const payload = withProbe(shaped);
+    const result = coerceToSchema(payload, schema);
+    expect(result.unparsed).toEqual({});
+    expect(payload.ane_linux.ane_probe).toEqual(shaped);
+    expect(validateSchemaRoot(payload, schema)).toEqual([]);
+    const absent = structuredClone(fixture);
+    const absentResult = coerceToSchema(absent, schema);
+    expect(absentResult.unparsed).toEqual({});
+  });
+
+  test("parks garbage and oversized objects, preserving valid sibling data", () => {
+    const garbage = withProbe("not an object");
+    const garbageResult = coerceToSchema(garbage, schema);
+    expect(garbage.ane_linux.ane_probe).toBeUndefined();
+    expect(Object.keys(garbageResult.unparsed)).toContain("$.ane_linux.ane_probe");
+    const oversized = withProbe({ ...shaped, dmesg: "x".repeat(9000) });
+    const oversizedResult = coerceToSchema(oversized, schema);
+    expect(oversized.ane_linux.ane_probe).toBeUndefined();
+    expect(Object.keys(oversizedResult.unparsed)).toContain("$.ane_linux.ane_probe");
+  });
+
+  test("keeps short host aliases in board and model name fields", () => {
+    const payload = withProbe({ ...shaped, board: "air", model: "MacBook Air" });
+    coerceToSchema(payload, schema);
+    expect(payload.ane_linux.ane_probe.board).toBe("air");
+    expect(payload.ane_linux.ane_probe.model).toBe("MacBook Air");
+  });
+});

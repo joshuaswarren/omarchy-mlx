@@ -28,7 +28,7 @@ export const SCHEMA_IDENTITY = {
   fields_sha256:
     "47a5e33ad5d3356bb386f8075e59695d8e8e0901b6ec640920ea68dfdb679e4f",
   schema_sha256:
-    "24c4f7afa5a636c22d8349a0efd8267662c9299c5744b7e8adc9f5cf4e4099e9",
+    "1e0da02331a359753d70638b5d1fb6e6183c77f6b800a742e80ed915ec87c6ea",
 };
 
 const CACHEABLE = "public, max-age=60";
@@ -97,9 +97,9 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
   // 14:21Z): coerce hex/NUL encodings, then sanitize the diagnostic
   // blocks — anything still schema-invalid is parked under the root's
   // `unparsed` (capped) and dropped from the stored payload, so one
-  // bad diagnostic value can never reject a submission. The schema and
-  // its identity hash are untouched; every action is logged and echoed
-  // as `coerced`.
+  // bad diagnostic value can never reject a submission. Schema identity
+  // is recomputed from the canonical files; every action is logged and
+  // echoed as coerced.
   const { changes: coerced, unparsed } = coerceToSchema(init.payload, schema);
   if (coerced.length > 0) {
     console.log(

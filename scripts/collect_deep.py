@@ -493,6 +493,47 @@ def _omarchy_ane_check(redactor):
         "untested": "untested" in rec["stdout"].lower(),
         "lines": lines,
     }
+ANE_PROBE_MAX_BYTES = 8 * 1024
+ANE_PROBE_TEXT_FIELDS = ("dmesg", "genpd", "debug_ane")
+
+
+def _omarchy_ane_probe(redactor):
+    rec = run_tool(["omarchy-ane-probe", "--json"], redactor,
+                   label="omarchy-ane-probe", timeout=15,
+                   max_chars=64 * 1024, redact_output=False)
+    if not rec["available"]:
+        return {"available": False,
+                "reason": rec.get("error") or "omarchy-ane-probe not installed"}
+    if rec.get("error"):
+        return {"available": False, "error": redactor.apply(rec["error"]),
+                "truncated": True}
+    try:
+        probe = json.loads(rec["stdout"])
+    except (TypeError, json.JSONDecodeError):
+        stderr = (rec.get("stderr") or "omarchy-ane-probe returned non-JSON output")
+        return {"available": False, "error": redactor.apply(stderr.splitlines()[0]),
+                "truncated": "[truncated:" in rec.get("stdout", "")}
+    if not isinstance(probe, dict):
+        return {"available": False, "error": "omarchy-ane-probe output is not an object"}
+    probe = redactor.apply_value(probe)
+    probe["available"] = True
+    truncated = bool(probe.get("truncated"))
+    size = lambda: len(json.dumps(probe, separators=(",", ":")).encode())
+    if size() > ANE_PROBE_MAX_BYTES:
+        for key in ANE_PROBE_TEXT_FIELDS:
+            if key in probe and probe[key] is not None:
+                probe[key] = None
+                truncated = True
+                if size() <= ANE_PROBE_MAX_BYTES:
+                    break
+    if truncated:
+        probe["truncated"] = True
+    if size() > ANE_PROBE_MAX_BYTES:
+        return {"available": False, "error": "omarchy-ane-probe output exceeds 8 KiB",
+                "truncated": True}
+    return probe
+
+
 
 
 def _linux_ane_soc():
@@ -821,6 +862,7 @@ def section_ane(redactor, repo, ws, smoke):
     out["machine_id"] = _install_token("machine-id")
     out["owner_id"] = _install_token("owner-id")
     out["check"] = _omarchy_ane_check(redactor)
+    out["ane_probe"] = _omarchy_ane_probe(redactor)
     module_state = _omarchy_ane_module(redactor)
     out["module"] = module_state["module"]
     out["modules"] = module_state["modules"]
