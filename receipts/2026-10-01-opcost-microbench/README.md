@@ -1,5 +1,98 @@
 # OpCost microbench — what makes a Kokoro dispatch 330 us while a chat dispatch is 45 us
 
+## ADDENDUM 2026-10-01 (post-mortem, supersedes §13 RTF claim)
+
+The `RTF 1.24 / 1.83x faster` numbers in **§13 04** came from a
+prompt-injection-flavoured provenance failure and a numeric bug, NOT
+from a correct Kokoro wall drop. Treat §13 04 as VOID and disregard
+the related wall/RTF figures and the §12 implementation summary.
+
+What went wrong (numbered for grep):
+
+1. **Wheel provenance failure.** `cp -a mlx-tts-fix-venv gate-venv`
+   preserved the absolute shebang inside `bin/pip`, so my `pip install`
+   commands ran the ORIGINAL venv's Python and installed into
+   mlx-tts-fix-venv (the DIAG baseline venv). I overwrote the baseline
+   twice before noticing. The "5 alternating pairs" in §13 04 was a
+   STALE-wheel A/B: a `numpy` reference check on the committed wheel
+   showed `max_abs_err = 4.67` on a (64, 8, 16, 7, 3) conv — i.e. the
+   committed fast-path produced values 8x off the truth, not 1e-5. The
+   first gate A/B (the one printed in §13 04) had no verifiable md5
+   match and the second gate A/B was discarded; both are now retracted.
+   Restored the DIAG baseline from `live-venv-backup-29cba8e` by file
+   copy and verified md5; `repair_venvs.sh` (and `fix_gate_venv.sh`)
+   use `<venv>/bin/python -m pip` to avoid the shebang hazard.
+
+2. **Numeric bug in the slice start.** The committed
+   `Convolution::eval_gpu` fast path sliced the input at output
+   coordinate `lo` when it should have sliced at input coordinate
+   `lo + off` where `off = j - pad`. Numpy's `array[lo:]` silently
+   clamps the end, which hid the bug in small tests where `lo + rows`
+   accidentally fell inside the array extent. Caught on
+   `(64, 8, 16, 2, 1)` — the k=2 pad=1 case: tap 0 should read
+   `x[0 : 0 + rows] = x[0:rows]` but the code asked for `x[lo : lo + rows]`
+   with `lo = 1`, producing a 63-row slice instead of 64 and a
+   `reshape size 504 into shape (64, 8)` error inside `mx.eval`.
+
+3. **Second pivot hit the omarchy backend's scalar-fill guard.** When I
+   abandoned the hand-rolled raw dispatch path and used graph ops
+   inside `eval_gpu` (`mx::slice` / `transpose` / `matmul` /
+   `concatenate`), `mx::zeros` triggered
+   `[omarchy] GPU-in-flight scalar fill is not implemented for the
+   Omarchy Vulkan backend`. Replaced with a raw
+   `allocate_omarchy` + `fill_buffer` to obtain the zero pad, but the
+   correct slice offset and a clean M2 rebuild + verified-provenance
+   gate never fit inside the remaining budget.
+
+4. **The narrow-barrier-scope A/B is also void** (same provenance
+   failure). The barrier theory is refuted by isolated-conv-time ==
+   with-barrier ms in §11 06, so the encoder barrier scope work should be
+   treated as low priority (or shelved entirely) until the conv path
+   is correct.
+
+What is still MEASURED-but-NUMERICALLY-UNVERIFIED (the only truth from
+the broken run):
+
+- Isolated conv timing on the Kokoro shapes shows the direct
+  `conv.comp` kernel IS the sink (mean 41.4 ms per conv × 97 = ~4.0 s,
+  worst 196 ms).
+- The k-tap GEMM decomposition is 13x faster on the SAME shape
+  inputs (121 ms -> 9.3 ms, 77 -> 5.6, 33 -> 3.4, 22.6 -> 1.7) with
+  `max_abs_err ≈ 1e-5` at fp32 vs a Python prototype using graph ops
+  (`opcost_bench/conv_gemm_decomp.py`). This is measured-but-numerically-
+  unverified on the C++ port.
+- The 3 zero-code host toggles (cache off, unconditional barriers, no-
+  buffer-cache) move Kokoro wall < 1% in the DIAG-only A/B (§6).
+  Host encode is only 0.259 s of the 5.04 s GPU-domain wall (§5).
+
+The fix-forward plan that should be re-validated on a clean wheel, in
+order, before any wall/RTF number touches the receipt again:
+
+1. numpy-reference doctest FIRST (many k/pad/L shapes incl. Kokoro
+   shapes, `max_abs_err <= 1e-4`) passing on the dev-box CPU
+   reference and in-backend (`opcost_bench/check_conv_numeric.py` +
+   the `k1pad.py` / `bisect_k2.py` / `bisect_conv.py` bisects). The
+   slice-offset bug in (3) above would have shown up there; the k=1
+   case alone (L=64, k=1, pad=0) is necessary but not sufficient.
+2. Build the M2 wheel with verified provenance (`repair_venvs.sh`,
+   `bash ~/agents/OpCost/so_check.sh`, gate-venv `libmlx.md5` ==
+   wheel `libmlx.md5`).
+3. Waveform compare patched vs direct kernel (corr >= 0.999) on the
+   same sentence + same x/w. The numpy-ref check is necessary but
+   not sufficient because the backend may add host-side reshape
+   paths (transpose axes, dummy dim squeezing) that the reference
+   test doesn't exercise.
+4. Whisper WER on macstudio on the standard sentence set
+   (Whisper large-v3-turbo, ≤ 8% overall and no sentence > 25%,
+   per `receipts/2026-09-30-speech-output-kokoro`).
+5. Zero-CPU gdb trace (`receipts/2026-09-30-pair-gates/harness/
+   count_cpu.gdb.py`).
+7. 5 alternating pairs round-robin A/B (gpu-turn queue; ReleaseV077 may
+   hold it for v0.7.12 — ask via the queue).
+
+No wall / RTF / speedup number belongs in this receipt (or anywhere
+in `docs/`) until the output audio is verified.
+
 This receipt records a single-sentence microbench sweep on jw14m2-linux that
 tried to reproduce Kokoro's per-dispatch cost in isolation, plus three zero-
 code Kokoro A/Bs that toggled backend knobs (cache off, unconditional
