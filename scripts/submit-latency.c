@@ -53,12 +53,32 @@ int main(int argc, char** argv) {
     fprintf(stderr, "vkCreateInstance failed\n");
     return 2;
   }
-  uint32_t ndev = 1;
-  VkPhysicalDevice pd;
-  if (vkEnumeratePhysicalDevices(instance, &ndev, &pd) != VK_SUCCESS ||
-      ndev == 0) {
-    fprintf(stderr, "no physical device\n");
+  uint32_t ndev = 0;
+  VkResult enum_res = vkEnumeratePhysicalDevices(instance, &ndev, NULL);
+  if (enum_res != VK_SUCCESS || ndev == 0) {
+    fprintf(stderr, "no physical devices res=%d ndev=%u\n",
+            (int)enum_res, ndev);
     return 2;
+  }
+  VkPhysicalDevice* devs = (VkPhysicalDevice*)calloc(ndev, sizeof(*devs));
+  enum_res = vkEnumeratePhysicalDevices(instance, &ndev, devs);
+  if (enum_res != VK_SUCCESS && enum_res != VK_INCOMPLETE) {
+    fprintf(stderr, "enumerate failed res=%d\n", (int)enum_res);
+    return 2;
+  }
+  // Pick the Apple (Honeykrisp) device: the same GPU the MLX decode
+  // runs on; llvmpipe would measure a CPU queue, not the shared GPU.
+  VkPhysicalDevice pd = VK_NULL_HANDLE;
+  for (uint32_t i = 0; i < ndev; ++i) {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(devs[i], &props);
+    fprintf(stderr, "device[%u]: %s\n", i, props.deviceName);
+    if (strstr(props.deviceName, "Apple") != NULL) {
+      pd = devs[i];
+    }
+  }
+  if (pd == VK_NULL_HANDLE) {
+    pd = devs[0];
   }
   uint32_t qfam = 0, nq = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, NULL);

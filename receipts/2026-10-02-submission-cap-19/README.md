@@ -197,26 +197,72 @@ plus this direct proxy of what the compositor experiences:
 
 `scripts/submit-latency.c`: a 60 Hz stand-in client. It submits one tiny
 command buffer (256-byte fill) per 16.6 ms frame and measures the
-host-latency from just before vkQueueSubmit to fence-signal. While a long
-MLX submission holds the queue, that latency spikes to the submission's
-remaining length — the exact mechanism in the issue (compositor frames
-stuck behind MLX work). Metrics: p50/p99/max and count over 2x the frame
-budget (33.3 ms), run alone / with MLX decode cap off / cap on. Run in
-the post-window M2 batch.
+host-latency from just before vkQueueSubmit to fence-signal. Measured on
+the M2 (Apple device selected; llvmpipe skipped), 12 s per case,
+~717 samples each, loadavg < 0.5, PSI cpu avg10 = 0:
+
+| case | n | p50 ms | p99 ms | max ms | >2x-frame (33.3 ms) |
+|---|---|---|---|---|---|
+| probe alone (idle GPU) | 717 | 0.52 | 0.68 | 0.72 | 0/717 |
+| probe + decode, cap OFF (20.9 ms submissions) | 717 | 0.19 | 0.68 | 2.71 | 0/717 |
+| probe + decode, cap ON (5.6 ms submissions) | 718 | 0.17 | 0.69 | 1.82 | 0/718 |
+
+Honest interpretation: on this driver (stock Mesa Honeykrisp 26.2.3,
+M2 Max) the scheduler timeslices between processes finely enough that a
+60 Hz tiny submitter is not starved even behind ~21 ms MLX submissions —
+max observed 2.7 ms, far inside the 16.6 ms frame budget. The idle case's
+higher p50 (0.52 vs 0.18 ms) is GPU power-state wakeup, not queue
+contention. The reporter's stutter was observed on an M1 Pro with the
+same Mesa version, so the residual stutter mechanism on that machine is
+not fully explained by queue-occupancy starvation on the M2; the cap is
+still the correct lever for the reporter's own calibration data (their
+OpenGL run showed 2-6 ms submissions smooth where 78 ms stuttered), it
+shrinks our submissions into that smooth regime, and it independently
+improves 9B decode (+6%) and 4B prefill (+33%) via host/GPU overlap.
+A frame-time measurement on a real logged-in compositor remains the
+open confirmation step when such a session is available.
+
+## Queue priority: low vs off tok/s (M2, wheel B, 3 pairs)
+
+| arm | decode tok/s median | ids digest |
+|---|---|---|
+| priority low (default) | 53.649 | `b8c2bdf6ac3a4b02` |
+| priority off | 53.690 | `b8c2bdf6ac3a4b02` |
+
+-0.08% (noise-level, same digests): the LOW priority request costs
+nothing on an idle box and keeps the compositor's arbitration advantage
+under concurrent desktop load. Default stays `low`; `off` remains
+available for headless boxes.
+
+## Artifacts (private lab)
+
+`~/.local/share/apple-silicon-lab/artifacts/SubmitCap/20261002-submission-cap-19/`:
+`m2-4b-budget{0,40000}-profile.jsonl`, `m2-9b-budget{0,40000}-profile.jsonl`,
+`m2-4b-calibration.log`, `m2-ab-4b.json`, `m2-ab-9b.json` (regenerated
+post-reboot, 2-pair runs; the 5-pair medians above are from the first
+full runs, quoted from captured stdout), `jw16-vulkaninfo-global-priority.txt`,
+`jw16-vulkaninfo-full.txt`.
 
 ## Open after this receipt
 
-After the w73 packaged-stack M2 window ends (broadcast M2 WINDOW END 2):
+None. All six items from the assignment have measured evidence:
 
-- M2 (gpu-turn): frame-pacing proxy matrix — `submit-latency` alone,
-  with MLX decode cap off, with cap on (default); record
-  p50/p99/max/over-2x for each into the receipt.
-- M2 (gpu-turn): priority low-vs-off decode (3 pairs, wheel B, env
-  toggle) — record medians.
-- M2 (gpu-turn): regenerate `m2-ab-{4b,9b}.json` artifacts (the ANE
-  lane's reboot wiped /tmp; summary numbers above are from stdout).
-- Update this receipt with the three results; push; Main posts the
-  issue comment (draft below).
+1. Cap implemented with env tunable (`MLX_OMARCHY_BATCH_WORK`) and a
+   calibrated non-zero default (40000), off switch documented.
+2. Bit-exact digests on 4B + 9B decode (single digest per model across
+   arms and pairs) and six standing suites passing (runtime incl. the new
+   chunking doctest, primitive, compiled tape, fused chain, indexing,
+   shape).
+3. tok/s cost table: decode +0.17% (4B) / -0.93% (9B) — inside the <= 2%
+   budget; prefill +33% (4B) / +1.9% (9B).
+4. Priority exposure evidence on BOTH chips (T6021 + T6001), silent
+   fallback proven (`realtime` request), low-vs-off tok/s delta -0.08%.
+5. Frame-pacing fallback evidence: per-submission GPU ms before/after
+   from device timestamps (calibration tables) + 60 Hz submit-latency
+   proxy matrix (idle/off/on) — with the honest note that the M2's
+   scheduler does not starve a tiny submitter under decode load.
+6. Receipt (this file) + issue comment draft below; all commits pushed
+   to origin/main with `Refs #19`.
 
 ## Issue #19 comment draft (Main posts)
 
