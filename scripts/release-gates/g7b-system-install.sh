@@ -26,10 +26,12 @@ gate_log "$LOG" "== staged tree readback =="
 SITE=$(echo "$DEST"/usr/lib/omarchy-mlx/venv/lib/python3.*/site-packages)
 for f in usr/bin/mlx-omarchy usr/bin/mlx-omarchy-chat usr/bin/mlx-omarchy-parakeet \
          usr/lib/systemd/user/mlx-omarchy-chat.service \
-         usr/share/applications/mlx-omarchy-chat.desktop usr/share/omarchy-mlx/paths.sh \
-         "$SITE/mlx_omarchy_paths.py"; do
+         usr/share/applications/mlx-omarchy-chat.desktop usr/share/omarchy-mlx/paths.sh; do
   [[ -e "$DEST/$f" ]] && gate_log "$LOG" "STAGED_OK $f" || { gate_log "$LOG" "STAGED_MISSING $f"; RC=1; }
 done
+# Absolute site-packages entry (SITE already resolves under $DEST).
+[[ -e "$SITE/mlx_omarchy_paths.py" ]] && gate_log "$LOG" "STAGED_OK site-packages/mlx_omarchy_paths.py" \
+  || { gate_log "$LOG" "STAGED_MISSING site-packages/mlx_omarchy_paths.py"; RC=1; }
 if grep -R -l -E "$DEST|$VDIR" "$DEST/usr/bin/" >/dev/null 2>&1; then
   gate_log "$LOG" "LAUNCHER_PATH_LEAK yes"; RC=1
 else
