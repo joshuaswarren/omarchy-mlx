@@ -265,6 +265,18 @@ target_compile_options(omarchy_conv_tests
                        PRIVATE ${SANITIZER_COMPILE_FLAGS})
 target_link_options(omarchy_conv_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
+add_executable(omarchy_conv_gemm_decomp_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_conv_gemm_decomp.cpp)
+target_link_libraries(omarchy_conv_gemm_decomp_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_conv_gemm_decomp_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_conv_gemm_decomp_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_conv_gemm_decomp_tests)
+add_test(NAME omarchy_conv_gemm_decomp_tests
+         COMMAND omarchy_conv_gemm_decomp_tests)
+
 doctest_discover_tests(omarchy_conv_tests)
 add_test(NAME omarchy_conv_tests COMMAND omarchy_conv_tests)
 

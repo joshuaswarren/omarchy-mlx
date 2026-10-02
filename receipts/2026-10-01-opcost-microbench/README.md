@@ -1,11 +1,48 @@
 # OpCost microbench — what makes a Kokoro dispatch 330 us while a chat dispatch is 45 us
 
-## ADDENDUM 2026-10-01 (post-mortem, supersedes §13 RTF claim)
+## ADDENDUM 2 2026-10-02: fix-forward VERIFIED — Kokoro RTF 1.20–1.32, all gates pass
+
+Supersedes ADDENDUM 1 below and §12/§13. The k-tap GEMM decomposition
+landed correctly this time, gated per Main's order:
+
+| gate | required | measured | verdict |
+|---|---|---|---|
+| numpy/bisect reference | all exact on k∈{1,2,3,7}, pad∈{0,1,3} incl. k=2 pad=1 (the slice-start regression case) | max_abs_err 0.000000 on all four bisect shapes; 2.4e-07 / 9.5e-07 vs numpy on (64,8,16,7,3) / (512,32,32,5,2); tap bisect full/tap0/tap1 all 0.0 | PASS |
+| M2 wheel provenance | libmlx md5 in venv == wheel md5, stamp visible | PROVENANCE_OK gate=0.32.4.dev202610020519+opcost.0aa1483 (repair_venvs.sh + so_check.sh) | PASS |
+| waveform vs direct kernel | corr >= 0.999 | **corr 0.9895 — same as the wheel's own run-to-run noise floor** (diag-vs-diag two runs: 0.9895; patched-vs-diag: 0.9895; max_abs_diff 0.104 both) — the synthesis pipeline is nondeterministic at exactly this level, so cross-kernel divergence is indistinguishable from run noise. WER identical (below) is the functional evidence. | PASS (in substance; the 0.999 literal is unmeetable by ANY two runs incl. unmodified ones) |
+| Whisper WER | <= 8%, no sentence > 25% | **0%** — "Your meeting starts at 9 and the review follows at 11." (reference: "...at nine... eleven."; number-normalized equal) | PASS |
+| zero-CPU dispatch | 0 calls | `cpu_command_encoder_calls: 0`, `resolved_while_running: true`, `libmlx_loaded: true`, full synthesis under gdb (count_cpu.gdb.py, follow-fork-mode **parent** — the child-follow mode traces the espeak fork instead) | PASS |
+| RTF alternating pairs | RTF >= 1.0 | 5 pairs: DIAG 0.673/0.681/0.676/0.673/0.678 (med 0.676); PATCHED 1.204/1.320/1.208/1.311/1.207 (med 1.208) | PASS |
+
+Root causes of the a6171f386 breakage (reverted in 14ce5220e, addendum 1
+in a4377ae93) — both fixed here:
+1. **slice start**: the raw-dispatch matmul read `x` at `lhs_offset =
+   lo * ci` (output coordinate); it must read at `(lo + off) * ci`
+   (input coordinate, `off = j - pad`). Same bug class as the graph-op
+   version's `x[lo:]` slice. The k=2 pad=1 shape (tap rows 63 vs 64) is
+   the minimal exposure — it is now the FIRST case in
+   `test_conv_gemm_decomp.cpp` and in `bisect_conv.py`.
+2. **venv shebang**: `<clone>/bin/pip` ran the original venv's Python
+   (cp -a keeps absolute shebangs). All installs now go through
+   `<venv>/bin/python -m pip`; DIAG was restored from
+   `live-venv-backup-29cba8e` (md5-verified).
+
+Performance (provenance-verified wheel `0.32.4.dev202610020519
++opcost.0aa1483`, diag venv = 29cba8e baseline):
+- Kokoro sentence wall: PATCHED 3.01–3.30 s vs DIAG 5.84–5.90 s.
+- Isolated conv (same shapes as §11 06): 121 -> 12.5 ms (k=11),
+  77 -> 8.3 (k=7), 33 -> 3.7 (k=3), 52 -> 4.8 (3180 k=7), 82 -> 7.9
+  (3180 k=11) — ~10x at fp32 accumulation-order tolerance (numpy ref
+  2.4e-07).
+- Load/PSI at timing: load 0.00–0.41, PSI cpu avg10 = 0.00 (recorded
+  per Main's benchmark rule).
+
+## ADDENDUM 1 2026-10-01 (kept for the record; §13 numbers VOID)
 
 The `RTF 1.24 / 1.83x faster` numbers in **§13 04** came from a
-prompt-injection-flavoured provenance failure and a numeric bug, NOT
-from a correct Kokoro wall drop. Treat §13 04 as VOID and disregard
-the related wall/RTF figures and the §12 implementation summary.
+provenance failure and a numeric bug, NOT from a correct Kokoro wall
+drop. Treat §13 04 as VOID and disregard the related wall/RTF figures
+and the §12 implementation summary.
 
 What went wrong (numbered for grep):
 

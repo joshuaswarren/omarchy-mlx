@@ -4332,6 +4332,146 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
         omarchy::compute_dispatch_group_count(total));
     return;
   }
+
+  // 1-D k-tap GEMM decomposition (2026-10-01 OpCost receipt): the direct
+  // conv.comp kernel is memory-bound per output element and measured
+  // 22-121 ms on the Kokoro vocoder shapes while the same convolution as
+  // k shifted (L_out x C_in) @ (C_in x C_out) matmuls measures 1.7-9.3 ms
+  // (13x) with max_abs_err ~1e-5 at fp32. Rank-1, groups=1, unit stride,
+  // unit kernel and input dilation, no kernel flip, fp32, batch 1:
+  // out[l, o] = sum_j x[l + j - pad, :] @ w[:, j, :]^T.
+  //
+  // Built as plain graph ops (slice/reshape/transpose/matmul/
+  // concatenate/add — the validated python prototype's graph) and driven
+  // with a host join per conv, so the per-tap matmuls ride the standard
+  // dispatch_matmul path instead of hand-set params. Edge rows keep
+  // fewer taps via per-tap slice bounds; the zero pads are raw
+  // allocate+fill_buffer because mx::zeros inside eval_gpu hits the
+  // GPU-in-flight scalar-fill guard. Anything else (2-D/3-D, groups,
+  // flip, strides, dilations, non-f32) keeps the direct kernel below.
+  if (spatial == 1 && groups_ == 1 && !flip_ && out.dtype() == float32 &&
+      batch == 1 && axis_or_one(kernel_strides_, 0) == 1u &&
+      axis_or_one(kernel_dilation_, 0) == 1u &&
+      axis_or_one(input_dilation_, 0) == 1u && kern_ext[0] >= 2) {
+    const int L_in = in_ext[0];
+    const int L_out = out.shape(1);
+    const int k = kern_ext[0];
+    const int pad = pad_lo_axis(0);
+    const int ci = in_channels;
+    const int co = out_channels;
+    const int64_t plane = static_cast<int64_t>(L_out) * co;
+    // Scratch planes: tap j occupies scratch[j, lo_j : hi_j, :]; the
+    // rest stays zero so the plane reduce needs no per-row masks.
+    // Per tap: one (rows, ci) @ (ci, co) matmul into a compact temp
+    // (output_offset 0 — the only layout the matmul kernel's own
+    // dispatch_matmul ever uses), then a strided copy into the plane.
+    // lhs reads x rows [lo + off, lo + off + rows) — INPUT coordinates
+    // (lo/hi are output coordinates; off = j - pad shifts the window).
+    array scratch(
+        Shape{k, L_out, co}, float32, nullptr, {});
+    scratch.set_data(allocate_omarchy(scratch.nbytes()));
+    encoder.add_temporary(scratch);
+    encoder.fill_buffer(binding(scratch).buffer, 0u, scratch.nbytes(), 0);
+
+    auto matmul_kernel = omarchy::ComputeKernel::MatmulF32;
+    for (int j = 0; j < k; ++j) {
+      const int off = j - pad;
+      const int lo = std::max(-off, 0);
+      const int hi = std::min(L_out, L_in - off);
+      const int rows = hi - lo;
+      if (rows <= 0) {
+        continue;
+      }
+      const int x_lo = lo + off;  // input-coordinate row start
+      array tmp(
+          Shape{rows, co}, float32, nullptr, {});
+      tmp.set_data(allocate_omarchy(tmp.nbytes()));
+      encoder.add_temporary(tmp);
+      omarchy::ComputeParams mm;
+      mm.count = checked_u32(
+          static_cast<int64_t>(rows) * co, "Convolution", out);
+      mm.output_size = mm.count;
+      mm.reduce_size = checked_u32(ci, "Convolution", out);
+      mm.matrix_m = checked_u32(rows, "Convolution", out);
+      mm.matrix_n = checked_u32(co, "Convolution", out);
+      mm.matrix_k = mm.reduce_size;
+      mm.flags = 1u;
+      // lhs: x[0, x_lo : x_lo + rows, :] — (rows, ci) row-major.
+      mm.lhs_gap = mm.matrix_k;
+      // rhs: w[:, j, :] — (co, ci) rows at stride k * ci; the kernel
+      // reads B[n, k_idx] = rhs[n * rhs_gap + k_idx], i.e. A @ B^T.
+      mm.rhs_gap = checked_u32(static_cast<int64_t>(k) * ci, "Convolution", out);
+      mm.lhs_offset =
+          checked_item_offset(x, x.size(), "Convolution", out) +
+          static_cast<uint32_t>(static_cast<int64_t>(x_lo) * ci);
+      mm.rhs_offset =
+          checked_item_offset(w, w.size(), "Convolution", out) +
+          static_cast<uint32_t>(static_cast<int64_t>(j) * ci);
+      mm.output_offset =
+          checked_item_offset(tmp, tmp.size(), "Convolution", out);
+      mm.lhs_size = checked_u32(x.size(), "Convolution", out);
+      mm.rhs_size = checked_u32(w.size(), "Convolution", out);
+      std::array<omarchy::ComputeBinding, 4> bindings{
+          binding(x), binding(w), binding(tmp), binding(tmp)};
+      encoder.dispatch_compute(
+          matmul_kernel,
+          bindings,
+          mm,
+          matrix_group_count(mm.matrix_n),
+          matrix_group_count(mm.matrix_m),
+          1u);
+      // Move the compact result into its plane rows.
+      copy_gpu_inplace(
+          tmp,
+          scratch,
+          Shape{rows, co},
+          Strides{co, 1},
+          Strides{co, 1},
+          0,
+          static_cast<int64_t>(j) * plane + static_cast<int64_t>(lo) * co,
+          CopyType::General,
+          out.primitive().stream());
+    }
+
+    // Reduce the k planes into out with elementwise adds. Plane views
+    // share the scratch storage; the chain allocates each partial.
+    auto make_plane = [&](int j) {
+      array plane_arr(Shape{L_out, co}, float32, nullptr, {});
+      plane_arr.copy_shared_buffer(
+          scratch,
+          Strides{co, 1},
+          {true, true, false},
+          static_cast<size_t>(plane),
+          static_cast<size_t>(j) * plane);
+      encoder.add_temporary(plane_arr);
+      return plane_arr;
+    };
+    array acc = make_plane(0);
+    for (int j = 1; j < k; ++j) {
+      array next(Shape{L_out, co}, float32, nullptr, {});
+      dispatch_elementwise(
+          name(),
+          AddOperation,
+          {acc, make_plane(j)},
+          next,
+          out.primitive().stream());
+      acc = next;
+    }
+    // acc is (L_out, co) row-major; out is (1, L_out, co) row-major.
+    out.set_data(allocate_omarchy(out.nbytes()));
+    copy_gpu_inplace(
+        acc,
+        out,
+        Shape{L_out, co},
+        Strides{co, 1},
+        Strides{co, 1},
+        0,
+        0,
+        CopyType::General,
+        out.primitive().stream());
+    return;
+  }
+
   params.count = total;
   params.reduce_size = checked_u32(in_channels_per_group, "Convolution", out);
   params.lhs_offset = checked_item_offset(x, x.size(), "Convolution", out);
