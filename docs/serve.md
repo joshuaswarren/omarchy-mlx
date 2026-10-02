@@ -1,7 +1,7 @@
 # Local generation and HTTP serving on Omarchy
 
 The installer includes the serving CLI, Laya decision server, and Bonsai server packages.
-The v0.7.10 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
+The v0.7.14 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
 Installed code and a successful generation request do not establish model or assistant qualification.
 
 ## Current application boundary
@@ -111,7 +111,9 @@ every phase and corrected the earlier attribution: the coordinator's whole
 per-turn path (pair start, history, admission, speech probe, request dispatch)
 is ~3 ms of the 6.4 s; the cost is the engine's own prompt path — prefill of
 the full 325-token prompt at the resident-pair rate plus the first decode
-step — not coordinator code; visible
+step — not coordinator code; the same receipt fixed context admission,
+which had counted every prompt as 2 tokens (`cd216fdc0`: `count()` took the
+length of transformers 5's `BatchEncoding`); visible
 decode about 5.4 tok/s (about 4× the superseded shared-GPU estimate of
 1.4 tok/s, which that run's contention produced); card-turn first text
 2.6–14.4 s. A shared-GPU run 1 (73–81 tok/s prefill, ~1.4 tok/s decode) is
@@ -131,7 +133,7 @@ held-out suite is now spent.
 On the 192-clip corpus with the pinned `parakeet-tdt-0.6b-v3` (`ed2b7e8c…`):
 WER 3.42 % test-clean (≤ 6 %), 2.92 % test-other (≤ 14 %), 4.39 % accented
 (≤ 20 %), and 11.43 % in 0 dB babble (≤ 30 %); silence and pink noise returned
-silence and pink noise returned empty on 10 of 10 each ([speech input
+empty on 10 of 10 each ([speech input
 receipt](../receipts/2026-09-30-speech-input-gpu/README.md)). The test-clean
 figure scores one 30.04 s clip through the product's 30.0 s cut; counted as a
 refusal, test-clean is 8.15 % and fails. The recognition worker made 0
@@ -147,29 +149,29 @@ transcript insertion, TTS start/finish/truncate/resume, preview, and the
 voice-state machine; seven accessibility defects were found and fixed
 ([voice screen-reader receipt](../receipts/2026-10-02-voice-screen-reader/README.md)).
 
-**Voice output — the real-time threshold is not met, for either engine.** The
-default Qwen3-TTS pack measures median RTF 0.22–0.23 (audio s over wall s)
-against the 1.2 threshold, and the named floor is about 87 ms of GPU compute
-per talker step — about 5.2 s of GPU work per 5 s of audio at 12.5 Hz, at
-43–47 µs per dispatch ([speech output speed
+**Voice output — Qwen3-TTS stays below real time; Kokoro measures real time on the fixed wheel and awaits the owner's listen.** The default Qwen3-TTS pack
+measures median RTF 0.22–0.23 (audio s over wall s) against the 1.2
+threshold, with the named floor of about 87 ms of GPU compute per talker step
+([speech output speed
 receipt](../receipts/2026-09-30-speech-output-speed/README.md) and
-[NAMED-FLOOR](../receipts/2026-09-30-speech-output-speed/NAMED-FLOOR.md)). The
-Attn128 fused head_dim-128 decode attention cuts a full frame from 4,244 to
-3,362 dispatches (167–176 to 134–137 ms p50) — still about 2.3× the
-1,488-dispatch budget for RTF 1.2
-([Attn128](../receipts/2026-09-30-attn128/README.md)). Per Main's direction the
-floor ships: Qwen3-TTS stays for non-real-time synthesis, with a streaming
-first sentence audible in about 1.4 s. The Kokoro-82M second engine fails its
-own frozen thresholds, and the conv-shader lane is closed with a named floor:
-RTF 0.73 on the production driver, with conv kernels at 0.2 % of GPU time and
-the gap to chat decode in per-dispatch cost, 330 µs versus 45 µs ([Kokoro conv
-receipt](../receipts/2026-10-01-kokoro-conv/README.md)). A microbenchmark
-sweep puts that cost at GPU job boundaries in the command buffer, not in any
-host-side pattern its toggles touch; the fix levers live in the omarchy
-encoder and are a follow-up ticket ([OpCost
-receipt](../receipts/2026-10-01-opcost-microbench/README.md)). Kokoro ships
-behind the picker, is not the default, and is not recommended; the owner
-listens before any decision ([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
+[NAMED-FLOOR](../receipts/2026-09-30-speech-output-speed/NAMED-FLOOR.md)); the
+Attn128 fused decode attention narrows its dispatch gap and does not close it
+([Attn128](../receipts/2026-09-30-attn128/README.md)). Kokoro-82M is measured
+real time after the conv k-tap GEMM decomposition: direct RTF about 1.21
+median (range 1.108–1.422; the same wheel without the fix measures 0.66), and
+through the real serve worker with the Kokoro engine verified, RTF about 1.51
+median over 16 sentences (warm sentences above 1.4), first audio 2.29–6.46 s,
+Whisper WER 4.44 % overall with 13 of 16 sentences at 0.0 % (the worst is the
+paragraph capped at 30 s mid-sentence), peak memory 1427 MB on that
+paragraph, and 0 CPU dispatches in the serve worker ([OpCost receipt,
+ADDENDUM 2](../receipts/2026-10-01-opcost-microbench/README.md)). The
+receipt retracts the earlier serve-path streaming numbers (RTF 0.20–0.27) as
+Qwen3-TTS runs mislabeled as Kokoro. A wheel from before this work refuses
+Kokoro serve-path synthesis at the trig accuracy gate (Sin magnitude above
+the limit); the gate wheel with the conv decomposition (stamp
+`opcost.0aa1483`) runs it end to end. Kokoro still ships behind the picker,
+is not the default, and is not qualified — the owner has not listened to it
+([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
 Voice as a whole stays unqualified: it needs both directions.
 
 **Zero-CPU traces.** The chat (2B), decision, TTS, and 9B GDN chat paths each
@@ -252,19 +254,20 @@ explicit-CPU-stream finding above.
 | # | Item | Why it blocks |
 |---|---|---|
 | 1 | Routing latency decision: does the 250 ms gate measure the Laya head call (p95 347 ms, fails) or the shipped head-free path (p95 43 ms, passes)? | Automatic routing stays off until decided. |
-| 2 | TTS real-time route: Qwen3-TTS RTF 0.22–0.23 vs 1.2; Kokoro RTF 0.73 floor; the 330 µs-vs-45 µs per-dispatch substrate gap has an open microbenchmark lane and no fix yet. | No engine meets its real-time threshold; voice output stays unqualified. |
-| 3 | Pair qualification and the card format: no pair has passed the full gate set; chart cards take 53.8 s (27B) and 115.9 s (9B) to a visible component, and the 4B's fence never validates. | Nothing is qualified; `recommended` stays false everywhere. |
-| 4 | Mesa pin: land `e7631595df6` after its G13G arm runs (G14X +9.3 % prefill-2048, G13X parity already pass). | The omacom Mesa package pin waits on the last chip gate. |
-| 5 | G13G (T8103) runs: the 16-bit selection doctest at `353701235` or later, and the standing battery on the reinstalled host. | Closes the last box in the Attn128 chip matrix and refreshes the G13G battery record. |
+| 2 | Quality design budget: first text is the engine prompt path on the resident pair (~6.4 s for a 300-token prompt vs the 2 s budget); the lever is engine-side prefill and first-decode-step work, and stable-prefix cache reuse is a memory-admission gate decision. | The Quality pair cannot qualify against a budget it misses. |
+| 3 | Kokoro default decision: the owner listens; first audio is 2.3–6.6 s against the 1.5 s design target (needs vocoder output streaming). | Kokoro stays non-default and unqualified; voice output stays unqualified either way until a route is picked. |
+| 4 | Pair-level qualification: no pair has passed the full gate set; chart cards wait 53.8 s (27B) / 115.9 s (9B) to a visible component, and the 4B's fence never validates. | Nothing is qualified; `recommended` stays false everywhere. |
+| 5 | G13G (jwm1) Mesa arm of pin candidate `e7631595df6`, plus the T8103 16-bit selection doctest and standing battery. | The Mesa pin and the Attn128 chip matrix each wait on that host. |
 
 No pair is qualified. All catalog entries keep `recommended: false`.
 
 The one-line installer ships MLX Chat from the promoted release tag. The
-current release is v0.7.13 (published 2026-10-02; draft-first: every gate ran
-against the uploaded draft, then the release was published and promoted;
-[receipt](../receipts/2026-10-02-v0713-release.md)). The v0.7.7 and v0.7.8
-drafts failed their installed-from-release gates and were never published
-([cut log](../receipts/2026-10-01-v077-release.md)). The repository is now
+current release is v0.7.14 ([receipt](../receipts/2026-10-02-v0714-release.md),
+which discloses that its packaged-ANE-worker gate ran after publish; every
+other gate ran before). Releases are cut draft-first: assets are verified as a
+draft, installed-from-release gates run, and a draft that fails a gate is
+deleted unpublished (the v0.7.7/v0.7.8 cut log records two such failures;
+[receipt](../receipts/2026-10-01-v077-release.md)). The repository is now
 `joshuaswarren/omarchy-mlx`; the Python package names are unchanged.
 v0.7.13 is a privacy patch release: the community-data collector redacts
 hostname-derived aliases from dmesg/journal unit paths before submission

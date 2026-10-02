@@ -234,8 +234,8 @@ digests (`7fd25a869ff21678` and `635bc7f4bbaa48a4`) with matching binary
 provenance. The bf16 digest was later shown to repeat corrupt output, so
 it is not a correctness pass. Development source `2f54fcb` fixes stale
 layout metadata after bf16 RoPE promotion; its pinned eager reply matches
-native through EOS, but not the full forced continuation. See the
-[M1 fix receipt](../receipts/2026-09-04-bf16-rope-layout-m1.json).
+native through EOS, but not the full forced continuation. The M1 fix
+receipt for this change is not in this checkout.
 The integer checks do not establish complete dtype coverage or native
 Metal equivalence. No integer speedup is claimed.
 
@@ -273,6 +273,7 @@ padding, bias, FP16 host-reference checks at `1e-3`, grouped (groups
 shape rules asserted), input-dilated, the grouped transposed
 combination, and the half-precision grouped cases against the
 general upstream slow_conv host reference.
+Rank-1 float32 convolutions (groups 1, unit kernel and input dilation, no flip, batch 1, kernel length 2 or more) also have a k-tap GEMM decomposition fast path; it engages only while its scratch buffer fits `MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES` (default 1 GiB) and falls back to the direct kernel above the cap or outside that shape window, so dilated, bf16/grouped, and transposed convolutions keep the direct kernel ([OpCost receipt, ADDENDUM 2](../receipts/2026-10-01-opcost-microbench/README.md): Kokoro RTF 0.66 to about 1.21 median, waveform correlation 0.9895 — the pipeline's own run-to-run noise floor — per-sentence WER identical to the direct kernel, repeat runs bit-identical).
 `mx.conv3d` and conv3d-with-transposed-or-grouped refuse with the
 named `3-D Convolution` error.
 `mx.log` passes the gate for FP32, FP16, and BF16 through the elementwise
@@ -315,7 +316,7 @@ uniform path composes pass the same gate.
 The softmax gradient passes the gate.
 `value_and_grad` of sum(softmax(x) * x) matches a host reference within 1e-4 through the keepdims-sum broadcast views.
 Dtype-converting strided copy, rank greater than 4, and negative strides stay unsupported with named errors.
-The [M1 development gate receipt](../receipts/2026-08-31-m1-development-gates.md) records 20/20 primitive cases on Honeykrisp.
+The M1 development gate for these primitives recorded 20/20 cases on Honeykrisp; its receipt is not in this checkout.
 The pinned upstream matrix remains open.
 `mx.concatenate` and `mx.slice_update` pass the development gate through the shared strided-copy engine.
 Concatenate copies each input into an output window.

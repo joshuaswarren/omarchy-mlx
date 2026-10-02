@@ -28,6 +28,23 @@ architectures install the CLIs without the arm64 payloads. The Parakeet
 product surface — `download`, `verify`, `transcribe` — is documented in
 [docs/parakeet.md](parakeet.md#installed-product-wheel).
 
+Two 2026-10-02 fixes apply to installs from main and the next release after
+v0.7.14 (`receipts/2026-10-02-parakeet-deps`, `receipts/2026-10-02-libane-pin`):
+
+- `mlx-omarchy-parakeet transcribe` runs on an installed system without
+  manual pip installs. The pre-fix launcher carried a source-tree shebang and
+  had no staged venv launcher, so it resolved the system `python3` and failed
+  with missing `numpy` / `google.protobuf` even though the venv contained
+  both. On an installed 0.7.x system built before the fix, run the CLI
+  through its owning interpreter:
+  `/usr/lib/omarchy-mlx/venv/bin/python .../mlx/bin/mlx-omarchy-parakeet transcribe`.
+  The packaging recipe's `check()` now imports the transcribe deps so a
+  broken venv fails at build time.
+- The whole-encoder share tree is seal-verified: the v0.7.14 aarch64 wheel's
+  11 pinned files (libane, pin json, bundles) match `parakeet-runtime-pin.json`
+  with no mismatches, and a seal mismatch now reports the parsed mismatch by
+  name instead of a raw traceback (`scripts/verify_runtime_assets.py`).
+
 ## Development override
 
 `MLX_OMARCHY_ALLOW_NON_APPLE=1` allows a desktop or software Vulkan driver,
@@ -48,7 +65,8 @@ Development builds use tiled quantized prefill by default. Set
 decode still uses GEMV. This change is not in the v0.3.5 wheels.
 The experimental `MLX_OMARCHY_ROPE_BF16_DIRECT` and
 `MLX_OMARCHY_SDPA_BF16_FAST` flags remain off: both changed generated
-token IDs on M1. See the [hardware gate receipt](../receipts/2026-09-04-m1-performance-gates.md).
+token IDs on M1. The hardware gate receipt for that A/B is not in this
+checkout.
 
 Compiled-tape elementwise chains and exact eager SwiGLU graphs
 (`gate * sigmoid(gate) * up`) fuse into one dispatch by default. The eager
@@ -107,7 +125,14 @@ whole (splitting happens between dispatches), and copies/fills ride the node
 and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap (headless
 boxes). Scheduling only: every submission already waits on the stream's
 previous completion, so splitting preserves order and results are
-bit-identical (digest evidence in `receipts/2026-10-02-submission-cap-19`).
+bit-identical (greedy ids digests identical in every A/B pair;
+`receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max at the
+default: a 4B decode step drops from p50 20.9 ms to 5.6 ms per submission
+(decode tok/s −0.15 %), the 9B from 49.6 ms to 4.4 ms (+6 % decode).
+Honest limit: frame pacing was not measured on a real logged-in compositor —
+none was available; the evidence is submission-length histograms plus a
+60 Hz tiny-submit probe whose worst host latency was 2.7 ms even with the
+cap off on the idle M2.
 
 Queue priority (issue #19, where the driver supports it): when the device
 lists `VK_EXT_global_priority` and the compute queue family reports the
@@ -128,7 +153,17 @@ lands on the E cluster and pays the frequency ramp at request start;
 see `receipts/2026-10-02-perf-hold`). `MLX_OMARCHY_UCLAMP_MIN=0` disables;
 any other value sets the clamp. On kernels that refuse the call
 (`EPERM`/`EINVAL` — e.g. hosts without uclamp support) the serve logs
-one stderr line and serves unchanged.
+one stderr line and serves unchanged. Measured A/B on both Macs with the
+published v0.7.14 wheel: prefill +1.0–2.3 % and first-token rate +0.3–2.7 %
+by route, decode unchanged, greedy digests identical everywhere; the w71
+lane's ≥6 % first-token numbers were taken against an idle-decayed P cluster,
+a machine state that did not recur in this A/B. The power-profiles-daemon
+route this replaces is infeasible on Apple Silicon — ppd 0.30 offers only
+placeholder profiles (no `performance`), holds are polkit-gated to
+seat-active sessions, and a successful hold moves no governor — so the
+in-process clamp is the supported route and a narrow sudoers+helper governor
+flip remains the documented fallback for a kernel that refuses
+`sched_setattr` (`receipts/2026-10-02-perf-hold`).
 
 ## Build the wheel
 
@@ -180,10 +215,8 @@ The fork branch [`honeykrisp-omarchy`](https://github.com/joshuaswarren/mesa-1/t
 fixes all four in the compiler and turns the G13 8x8x8 matrix unit on by
 default, so an unmodified wheel runs dense f32 matmul on cooperative
 matrices. Every workaround stays in the shaders for stock Mesa; the fork
-only removes the need for them. Driver receipts: the
-[integration receipt](../receipts/hk/2026-09-08-honeykrisp-omarchy-integration.json)
-(25/25 suites, every reproducer) and the
-[package receipt](../receipts/2026-09-08-honeykrisp-package.json).
+only removes the need for them. The fork's integration receipt (25/25
+suites, every reproducer) and package receipt are not in this checkout.
 
 `packaging/mesa-honeykrisp-omarchy/PKGBUILD` builds the fork as a pacman
 package that replaces `mesa`. It is the asahi-alarm `mesa` recipe
