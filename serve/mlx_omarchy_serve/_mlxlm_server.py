@@ -595,6 +595,17 @@ def main() -> None:
 
         traced_pct._omarchy_ttft_wrapped = True
         server_module._process_control_tokens = traced_pct
+    # Serving placement (no root): raise uclamp_min on THIS startup thread
+    # before the HTTP server and decode threads spawn, so every serving
+    # thread inherits the P-cluster boost hint (stock governors). Silent
+    # fallback: EPERM / old kernel / off switch -> serving is unchanged.
+    try:
+        from .perf_placement import apply_from_env
+    except ImportError:
+        from perf_placement import apply_from_env
+    applied, detail = apply_from_env()
+    print(f"shim: uclamp placement {'applied' if applied else 'skipped'} "
+          f"({detail})", file=sys.stderr, flush=True)
     server_module.main()
 
 

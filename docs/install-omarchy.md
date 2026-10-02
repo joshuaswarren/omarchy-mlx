@@ -118,6 +118,18 @@ kept silently. `MLX_OMARCHY_QUEUE_PRIORITY=medium` requests MEDIUM instead;
 Honeykrisp lists `VK_EXT_global_priority` rev 2 on the M2 Max (T6021) and
 M1 Max (T6001).
 
+Serving placement (`MLX_OMARCHY_UCLAMP_MIN`, default 1024): the serve raises
+`uclamp_min` on its startup thread through an unprivileged
+`sched_setattr` call, so every serving thread inherits the scheduler's
+P-cluster boost hint under the stock `schedutil` governor — first-token
+latency recovers most of the performance-governor gain without touching
+any governor or needing root (mechanism: the submit thread otherwise
+lands on the E cluster and pays the frequency ramp at request start;
+see `receipts/2026-10-02-perf-hold`). `MLX_OMARCHY_UCLAMP_MIN=0` disables;
+any other value sets the clamp. On kernels that refuse the call
+(`EPERM`/`EINVAL` — e.g. hosts without uclamp support) the serve logs
+one stderr line and serves unchanged.
+
 ## Build the wheel
 
 1. Install the build tools: Python 3.10 or newer with `venv`, `cmake` 3.25 or
