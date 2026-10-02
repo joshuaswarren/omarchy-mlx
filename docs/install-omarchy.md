@@ -28,8 +28,9 @@ architectures install the CLIs without the arm64 payloads. The Parakeet
 product surface — `download`, `verify`, `transcribe` — is documented in
 [docs/parakeet.md](parakeet.md#installed-product-wheel).
 
-Two 2026-10-02 fixes apply to installs from main and the next release after
-v0.7.14 (`receipts/2026-10-02-parakeet-deps`, `receipts/2026-10-02-libane-pin`):
+Two fixes shipped in v0.7.17 (`receipts/2026-10-02-parakeet-deps`,
+`receipts/2026-10-02-libane-pin`; installs from v0.7.17 or later carry
+both):
 
 - `mlx-omarchy-parakeet transcribe` runs on an installed system without
   manual pip installs. The pre-fix launcher carried a source-tree shebang and
@@ -163,7 +164,12 @@ placeholder profiles (no `performance`), holds are polkit-gated to
 seat-active sessions, and a successful hold moves no governor — so the
 in-process clamp is the supported route and a narrow sudoers+helper governor
 flip remains the documented fallback for a kernel that refuses
-`sched_setattr` (`receipts/2026-10-02-perf-hold`).
+`sched_setattr` (`receipts/2026-10-02-perf-hold`). The payoff is
+conditional on the P cluster's idle state: an independent jwm1 run on an
+idle-decayed cluster measured pf512 first-token 0.1424 to 0.1303 s
+(−8.7 %) and ttft rate +10.5 % with exact digests, reported in the
+receipt's addendum ("reported by the jwm1 lane, notebook entry H219; not
+re-measured here").
 
 ## Build the wheel
 

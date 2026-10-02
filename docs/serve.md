@@ -1,7 +1,7 @@
 # Local generation and HTTP serving on Omarchy
 
 The installer includes the serving CLI, Laya decision server, and Bonsai server packages.
-The v0.7.14 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
+The v0.7.17 installer contains all three, plus the MLX Chat assistant. Old installations need an explicit update.
 Installed code and a successful generation request do not establish model or assistant qualification.
 
 ## Current application boundary
@@ -168,8 +168,12 @@ ADDENDUM 2](../receipts/2026-10-01-opcost-microbench/README.md)). The
 receipt retracts the earlier serve-path streaming numbers (RTF 0.20–0.27) as
 Qwen3-TTS runs mislabeled as Kokoro. A wheel from before this work refuses
 Kokoro serve-path synthesis at the trig accuracy gate (Sin magnitude above
-the limit); the gate wheel with the conv decomposition (stamp
-`opcost.0aa1483`) runs it end to end. Kokoro still ships behind the picker,
+the limit); v0.7.17 is the first release that runs it end to end — its cut
+carries the in-shader trig reduction and the conv decomposition, and its
+release-battery serve-path smoke measured RTF 0.981 through the real
+Synthesis class (smoke scope, not real-time qualification)
+([v0.7.17 receipt](../receipts/2026-10-02-v0717-release.md)). Kokoro still
+ships behind the picker,
 is not the default, and is not qualified — the owner has not listened to it
 ([Kokoro receipt](../receipts/2026-09-30-speech-output-kokoro/README.md)).
 Voice as a whole stays unqualified: it needs both directions.
@@ -262,18 +266,29 @@ explicit-CPU-stream finding above.
 No pair is qualified. All catalog entries keep `recommended: false`.
 
 The one-line installer ships MLX Chat from the promoted release tag. The
-current release is v0.7.14 ([receipt](../receipts/2026-10-02-v0714-release.md),
-which discloses that its packaged-ANE-worker gate ran after publish; every
-other gate ran before). Releases are cut draft-first: assets are verified as a
-draft, installed-from-release gates run, and a draft that fails a gate is
-deleted unpublished (the v0.7.7/v0.7.8 cut log records two such failures;
-[receipt](../receipts/2026-10-01-v077-release.md)). The repository is now
-`joshuaswarren/omarchy-mlx`; the Python package names are unchanged.
-v0.7.13 is a privacy patch release: the community-data collector redacts
-hostname-derived aliases from dmesg/journal unit paths before submission
-and the service scans submissions for the same aliases
-(`scripts/collect_deep.py`, `services/community-data/src/pii.ts`); the
-worker redeploy is a separate packaging step.
+current release is v0.7.17, published and promoted Latest on 2026-10-02 from
+cut `a33a4e395` ([receipt](../receipts/2026-10-02-v0717-release.md)). It is
+the first release that ships the installer serve file-list fix, the Parakeet
+transcribe self-healing deps and staged launcher, the build-time runtime-asset
+checker with parsed seal errors, the per-submission cap and queue priority
+(issue #19), `MLX_OMARCHY_UCLAMP_MIN` placement, the in-shader Cody-Waite
+trig reduction (`6cbf55d8f`) and the conv k-tap GEMM decomposition
+(`8db7abb73`) that make Kokoro run end to end, the voice accessibility
+fixes, and the bare `--submit` collector default (the server-side tolerance
+for older collectors was already live). Two earlier cuts were burned
+unpublished by the draft gate battery, as designed: v0.7.15 missed
+`perf_placement.py` in the release-lane serve file list (serve startup died
+on every user install) and v0.7.16 carried a function-scope `import signal`
+that raised `UnboundLocalError` at every assistant startup, caught by gate 2.
+No asset of either was published ([receipt](../receipts/2026-10-02-v0717-release.md)).
+Releases are cut draft-first: assets are verified as a draft, the
+installed-from-release gate battery runs, and a draft that fails is deleted
+unpublished. The repository is now `joshuaswarren/omarchy-mlx`; the Python
+package names are unchanged. v0.7.13 is a privacy patch release: the
+community-data collector redacts hostname-derived aliases from dmesg/journal
+unit paths before submission and the service scans submissions for the same
+aliases (`scripts/collect_deep.py`, `services/community-data/src/pii.ts`);
+the worker redeploy is a separate packaging step.
 
 ### Voice options
 

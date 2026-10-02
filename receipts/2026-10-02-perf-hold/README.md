@@ -292,3 +292,17 @@ each).
 - Only the two Omarchy Apple Silicon hosts were probed; ppd's
   uselessness here is Apple-Silicon-specific (no platform_profile,
   placeholder driver) and does not generalize to x86 laptops.
+
+## Addendum (2026-10-02, reported by the jwm1 lane; notebook entry H219; not re-measured here)
+
+w71's independent jwm1 run on the v0.7.15-lane release venv measured the
+uclamp lever against an idle-decayed P cluster — the machine state this
+ticket's own A/B never hit — and saw the full effect this ticket could
+not produce: pf512 first-token 0.1424 to 0.1303 s (**−8.7 %**), ttft rate
+**+10.5 %**, ordered digests exact, prefill and decode unchanged. Read
+together with the body above, the lever's payoff is conditional on the
+P cluster's idle state: PerfHold's same-host A/B (co-tenant load, P
+cluster never decayed) measured +0.3–2.7 % ttft rate and +1.0–2.3 %
+prefill with zero regressions; w71's decayed-cluster run measured −8.7 %
+first-token and +10.5 % ttft rate. The shipped default (`1024`) is
+harmless in both states and pays in the decayed one.

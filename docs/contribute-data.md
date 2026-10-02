@@ -41,6 +41,12 @@ The one-paragraph version:
   same machine and submit both. The macOS side sees data (IORegistry,
   power topology) Linux can't, and vice versa — the pair is worth more
   than either alone.
+- **A broken or partial capture can't hurt a submission:** the server
+  sanitizes any diagnostics block it cannot parse into an `unparsed`
+  field instead of rejecting the row, and the collector prints the
+  server's full error body if a submit fails, so you see exactly why.
+  The row schema is unchanged ([v0.7.17 release
+  receipt](../receipts/2026-10-02-v0717-release.md), commit `4c59e3fa7`).
 
 ## Turn on the ANE for your chip
 
