@@ -55,6 +55,15 @@ ENGINE=kokoro-82m-bf16 verified inside the worker. Provenance: mx
   as the DIAG wheel)
 - All other sentences (13/16): 0.0%
 - Gate: patched ≤ diag + 1 pp ✓; no sentence worse by > 10 pp ✓
+
+### Voice-sample rendering: cancelled by owner decision
+The owner delegated the Kokoro voice selection to the default (af_heart)
+without a listening step. The voice-sample rendering task was cancelled
+before any files were produced on macstudio. The
+`serve/synth_overrides.py` and `tests/test_synth_overrides.py` files
+on the dev box remain available for a future voice-comparison lane if
+the owner requests one.
+
 | 6. zero-CPU dispatch | `cpu_command_encoder_calls: 0` under gdb. Direct synthesis + the **real serve worker** (multiprocessing.spawn child) both verified 0. Direct: count_cpu.gdb.py follow-fork-mode PARENT (see inline note in the script about why child-mode traces espeak instead). Serve: textual breakpoint commands in gdb (Python `Count` class breaks under vfork-follow on this gdb version). |
 
 ### RTF per sentence, PATCHED vs DIAG (5-pair alternating × 16 sentences)
