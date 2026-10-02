@@ -25,6 +25,7 @@ suite() {  # pair build tag out
     say "v4 $tag $pair attempt $attempt ($(recorded "$out")/36)"
     ./lane_wait.sh $T ./ticket_v4_suite.sh "$pair" "$build" "$tag" >> "$LOG" 2>&1
     sync
+    sleep 15
   done
   say "v4 $tag $pair stopped at $(recorded "$out")/36"
 }
