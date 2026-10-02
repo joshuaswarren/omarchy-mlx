@@ -1,0 +1,10 @@
+# scenario: voice-record-transcript (keyboard start, stop, transcript insertion)
+# total utterances: 7
+
+[06:13:45.085308] tab 
+[06:13:45.113612] Microphone push button.
+[06:13:45.113651] Press and hold, or click to latch, to record.
+[06:13:45.283154] space 
+[06:13:46.806535] space 
+[06:13:46.899341] Transcribing…
+[06:13:48.436057] Message entry Transcribe the stub sentence, please.

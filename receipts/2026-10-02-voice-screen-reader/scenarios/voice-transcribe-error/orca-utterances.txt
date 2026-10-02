@@ -1,0 +1,13 @@
+# scenario: voice-transcribe-error (transcribe endpoint 500 -> error announcement)
+# total utterances: 10
+
+[06:14:06.003040] tab 
+[06:14:06.019601] Classify or score toggle button not pressed.
+[06:14:06.194822] tab 
+[06:14:06.216339] Microphone push button.
+[06:14:06.216388] Press and hold, or click to latch, to record.
+[06:14:06.390849] space 
+[06:14:06.696785] Recording started. Press Escape to cancel.
+[06:14:07.631158] space 
+[06:14:07.756436] Transcribing…
+[06:14:07.937340] Transcribe failed: transcribe failed (500)

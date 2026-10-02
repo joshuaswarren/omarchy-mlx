@@ -1,6 +1,6 @@
 import { cancelTurn, heartbeat, openConversation, transcribe } from "./api.js";
 import { renderComponent, plainText as plainTextComponent } from "./genui.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderMarkdown, splitSentences } from "./markdown.js";
 import { el, announce } from "./dom.js";
 import { swallow } from "./util.js";
 
@@ -91,6 +91,15 @@ export class ConversationView {
       if (msg.content) text.appendChild(renderMarkdown(msg.content));
       bubble.appendChild(text);
       this.lastTextNode = text;
+      // A completed bubble must keep its read-aloud control after a
+      // reload: the sentences are split from the stored content, so the
+      // control works exactly like one created during a live turn. It is
+      // also the resume target when speech playback truncates.
+      this.lastAssistantBubble = bubble;
+      bubble.appendChild(this._readAloudMeta(bubble));
+      bubble._mlxSentences = splitSentences(msg.content || "")
+        .map((s, i) => [i + 1, s]);
+      bubble._mlxTurnId = msg.turn_id || "";
     } else {
       bubble.appendChild(el("div", { class: "message__text" },
         renderMarkdown(msg.content || "")));
@@ -157,6 +166,14 @@ export class ConversationView {
     return bubble;
   }
 
+  _readAloudMeta(bubble) {
+    const meta = el("div", { class: "message__meta" });
+    const readBtn = el("button", { type: "button",
+      onClick: () => this._readBubbleAloud(bubble, readBtn) }, "Read aloud");
+    meta.appendChild(readBtn);
+    return meta;
+  }
+
   appendAssistant() {
     // One live bubble per turn: status events must not stack empty bubbles.
     if (this.lastAssistantBubble && this._liveTurnId === (this.activeTurnId || "")) {
@@ -168,11 +185,7 @@ export class ConversationView {
     bubble._mlxSentences = [];
     bubble._mlxTurnId = this.activeTurnId || "";
     this._liveTurnId = this.activeTurnId || "";
-    const meta = el("div", { class: "message__meta" });
-    const readBtn = el("button", { type: "button",
-      onClick: () => this._readBubbleAloud(bubble, readBtn) }, "Read aloud");
-    meta.appendChild(readBtn);
-    bubble.appendChild(meta);
+    bubble.appendChild(this._readAloudMeta(bubble));
     this.logEl.appendChild(bubble);
     this.lastTextNode = bubble.querySelector(".message__text");
     this.lastAssistantBubble = bubble;

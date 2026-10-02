@@ -1,0 +1,1528 @@
+                                name='Dictation: Voice ready' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations='member of'
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes='name-from:contents, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:false, relevant:additions text'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2, 0]
+
+06:15:22.254406 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:22.254640 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.254683 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:22.254908 - CHROMIUM: [static | Dictation: Voice ready] believed to be static text leaf
+06:15:22.254914 - CHROMIUM: Ignoring because child is static text leaf
+06:15:22.254969 - EVENT MANAGER: locusOfFocus: [menu item | Answer length: automatic] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.254975 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:22.254977 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:22.254980 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:22.254982 - EVENT MANAGER: _inFocusMode: True
+06:15:22.254983 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:22.254985 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0025
+^^^^^ PROCESS OBJECT EVENT object:children-changed:add ^^^^^
+
+
+06:15:22.255217 - EVENT MANAGER: object:children-changed:add for [status bar | Voice status] in [application | Chromium] (1, 0, [static | Speech: Voice ready])
+06:15:22.255346 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:22.255477 - EVENT MANAGER: Queueing object:children-changed:add [status bar | Voice status] (1,0,[static | Speech: Voice ready]) from [application | Chromium]
+06:15:22.255703 - EVENT MANAGER: Dequeued object:children-changed:add [status bar | Voice status] (1,0,[static | Speech: Voice ready]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:add vvvvv
+06:15:22.255757 - OBJECT EVENT: object:children-changed:add (1, 0, [static | Speech: Voice ready])
+                                app.name='Chromium' name='Voice status' role='status bar'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, class:composer__voice-status, explicit-name:true, name-from:attribute, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, xml-roles:status, tag:div, display:flex'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2]
+
+                                ANY DATA:
+                                name='Speech: Voice ready' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations='member of'
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes='name-from:contents, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:false, relevant:additions text'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2, 1]
+
+06:15:22.257109 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:22.257181 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.257190 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:22.257355 - CHROMIUM: [static | Speech: Voice ready] believed to be static text leaf
+06:15:22.257360 - CHROMIUM: Ignoring because child is static text leaf
+06:15:22.257407 - EVENT MANAGER: locusOfFocus: [menu item | Answer length: automatic] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.257412 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:22.257414 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:22.257416 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:22.257418 - EVENT MANAGER: _inFocusMode: True
+06:15:22.257420 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:22.257421 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0017
+^^^^^ PROCESS OBJECT EVENT object:children-changed:add ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=628226251
+                 time=1790921722.937249
+                 keyType=action
+                 clickCount=1
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+06:15:22.937387 - HOST_APP: [application | Chromium]
+06:15:22.937462 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:22.937503 - LOCATION: [menu item | Answer length: automatic]
+06:15:22.937593 - CONSUME:  False (No handler)
+06:15:22.937626 - DEFAULT: Interrupting presentation
+06:15:22.937699 - BRAILLE: Refresh. Pan: False target: 0
+06:15:22.937708 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:22.937712 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:22.937740 - BRAILLE: Line 0: 'Output allowance in tokens Answer length: automatic combo box' focusOffset: 0 [[0, 27], [27, 58], [58, 61]]
+06:15:22.937743 - BRAILLE: Cursor offset in line string is: 27
+06:15:22.937746 - BRAILLE: Current range: (27, 59). Target cell: 0.
+06:15:22.937750 - BRAILLE LINE:  'Output allowance in tokens Answer length: automatic combo box'
+06:15:22.937807 -      VISIBLE:  'Answer length: automatic combo b', cursor=1
+06:15:22.937821 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:22.937824 - BRAILLE: Need to initialize first.
+06:15:22.937828 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:22.937836 - BRAILLE: WINDOWPATH=None
+06:15:22.937839 - BRAILLE: XDG_VTNR=None
+06:15:22.937841 - BRAILLE: Attempting connection with BrlAPI.
+06:15:22.937954 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:22.938113 - WEB: Flushing live region messages
+06:15:22.938137 - DEFAULT: Presenting keyboard event
+06:15:22.938150 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+06:15:22.938161 - SPEECH OUTPUT: 'tab ' {'established': False}
+06:15:22.938179 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:22.938181 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:22.938183 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:22.938184 - INPUT EVENT: _inFocusMode: True
+06:15:22.938186 - INPUT EVENT: _focusModeIsSticky: False
+06:15:22.938188 - INPUT EVENT: _browseModeIsSticky: False
+06:15:22.938192 - TOTAL PROCESSING TIME: 0.0009
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+06:15:22.944005 - EVENT MANAGER: object:state-changed:focused for [entry | Message] in [application | Chromium] (0, 0, 0)
+06:15:22.944081 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:22.944203 - EVENT MANAGER: Queueing object:state-changed:focused [entry | Message] (0,0,0) from [application | Chromium]
+
+06:15:22.946586 - EVENT MANAGER: object:state-changed:focused for [toggle button | Compare options] in [application | Chromium] (1, 0, 0)
+06:15:22.946668 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:22.946747 - EVENT MANAGER: Queueing object:state-changed:focused [toggle button | Compare options] (1,0,0) from [application | Chromium]
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=628226258
+                 time=1790921722.947020
+                 keyType=action
+                 clickCount=1
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+06:15:22.947064 - HOST_APP: [application | Chromium]
+06:15:22.947113 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:22.947149 - LOCATION: [menu item | Answer length: automatic]
+06:15:22.947155 - CONSUME:  False (Is release for last non-modifier keyevent)
+06:15:22.947167 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:22.947169 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:22.947172 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:22.947173 - INPUT EVENT: _inFocusMode: True
+06:15:22.947175 - INPUT EVENT: _focusModeIsSticky: False
+06:15:22.947177 - INPUT EVENT: _browseModeIsSticky: False
+06:15:22.947180 - TOTAL PROCESSING TIME: 0.0002
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+06:15:22.947282 - EVENT MANAGER: Dequeued object:state-changed:focused [entry | Message] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+06:15:22.947297 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Message' role='entry'
+                                description=''
+                                states='editable enabled focusable multi line sensitive showing visible selectable text'
+                                relations=''
+                                actions='activate showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hyperlink Text'
+                                attributes='text-model:a1, text-align:left, id:composer-text, class:composer__textarea, explicit-name:true, name-from:attribute, placeholder:Type a message. Enter sends, Shift+Enter adds a newline., tag:textarea, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 0]
+
+06:15:22.948469 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+06:15:22.948866 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.948884 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:22.948914 - WEB: Ignoring because event source lost focus
+06:15:22.948990 - EVENT MANAGER: locusOfFocus: [menu item | Answer length: automatic] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.948998 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:22.949001 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:22.949002 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:22.949004 - EVENT MANAGER: _inFocusMode: True
+06:15:22.949006 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:22.949008 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0017
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+06:15:22.949141 - EVENT MANAGER: Dequeued object:state-changed:focused [toggle button | Compare options] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+06:15:22.949152 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Compare options' role='toggle button'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='check showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:compare-btn, class:btn btn--ghost, name-from:contents, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 0]
+
+06:15:22.949912 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+06:15:22.950232 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.950254 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:22.951183 - WEB: Not event from context replicant. locusOfFocus [menu item | Answer length: automatic] is not dead.
+06:15:22.951202 - WEB: Getting caret context for None
+06:15:22.951532 - WEB: Caret context is [menu item | Answer length: automatic], 0 (focus: [menu item | Answer length: automatic])
+06:15:22.951582 - WEB: Deferring to other scripts for handling non-document source
+06:15:22.951587 - CHROMIUM: Passing along event to default script
+06:15:22.952853 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --disable-dev-shm-usage --enable-remote-extensions --load-extension= http://127.0.0.1:8765/index.html --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=/srv/logs/chromium-profile/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=/srv/logs/fake-mic-silence.wav 
+06:15:22.953006 - INFO: [frame | MLX Chat - Chromium] can be active window
+06:15:22.953062 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.953216 - ORCA: Changing locusOfFocus from [menu item | Answer length: automatic] to [toggle button | Compare options]. Notify: True
+06:15:22.953481 - WEB: Treating [toggle button | Compare options] as non-text: named object treated as whole.
+06:15:22.954235 - WEB: updating braille for unhandled navigation type [toggle button | Compare options]
+06:15:22.954325 - WEB: Generating braille for document object [toggle button | Compare options]
+06:15:22.954528 - WEB: [toggle button | Compare options] is focus mode widget because it's a toolbar descendant
+06:15:22.954722 - BRAILLE GENERATOR: Starting focused generation for [toggle button | Compare options] (<enum ATSPI_ROLE_TOGGLE_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0005  ---->  labelOrName=[Compare options]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+                  GENERATION TIME: 0.0003  ---->  roleName=[toggle button]
+                  GENERATION TIME: 0.0001  ---->  toggleState=[& y]
+06:15:22.955803 - BRAILLE: Not contracting 'Compare options toggle button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0012
+                  BRAILLE GENERATOR: Results: 
+                  'Component: '& y Compare options toggle button', 0'
+06:15:22.955851 - BRAILLE: Refresh. Pan: True target: 0
+06:15:22.955856 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:22.955962 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:22.955974 - BRAILLE: Line 0: '& y Compare options toggle button' focusOffset: 0 [[0, 27], [27, 33]]
+06:15:22.955976 - BRAILLE: Cursor offset in line string is: 0
+06:15:22.955982 - BRAILLE: Adjusting offset to 0 (unhandled condition)
+06:15:22.955986 - BRAILLE: Current range: (0, 32). Target cell: 0.
+06:15:22.955989 - BRAILLE LINE:  '& y Compare options toggle button'
+06:15:22.956036 -      VISIBLE:  '& y Compare options toggle butto', cursor=1
+06:15:22.956050 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:22.956052 - BRAILLE: Need to initialize first.
+06:15:22.956056 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:22.956062 - BRAILLE: WINDOWPATH=None
+06:15:22.956065 - BRAILLE: XDG_VTNR=None
+06:15:22.956067 - BRAILLE: Attempting connection with BrlAPI.
+06:15:22.956176 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:22.956426 - ORCA: Region of interest: [toggle button | Compare options] (0, 0)
+06:15:22.956566 - WEB: New focus [toggle button | Compare options] is not a special case. Generating speech.
+06:15:22.956670 - WEB: Generating speech for document object [toggle button | Compare options]
+06:15:22.956871 - INFO: Getting text attributes for [toggle button | Compare options] (chars: 0-15)
+06:15:22.956966 - INFO: Attributes at 0: ['bg-color:222,225,231', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:47,51,64', 'family-name:Liberation Mono'] (0-15)
+06:15:22.956974 - INFO: 1 attribute ranges found in 0.0001s
+06:15:22.957067 - SPEECH GENERATOR: Starting unfocused generation for [toggle button | Compare options] (<enum ATSPI_ROLE_TOGGLE_BUTTON of type Atspi.Role>)
+06:15:22.957311 - DEFAULT: Not in SayAll
+06:15:22.957493 - INFO: Looking for common ancestor of [toggle button | Compare options] and [menu item | Answer length: automatic]
+06:15:22.957628 - INFO: Common ancestor of [toggle button | Compare options] and [menu item | Answer length: automatic] is [tool bar | Composer controls]
+06:15:22.957634 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0007  ---->  oldAncestors=[]
+06:15:22.957964 - DEFAULT: Not in SayAll
+06:15:22.958132 - INFO: Looking for common ancestor of [menu item | Answer length: automatic] and [toggle button | Compare options]
+06:15:22.958268 - INFO: Common ancestor of [menu item | Answer length: automatic] and [toggle button | Compare options] is [tool bar | Composer controls]
+06:15:22.958274 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0006  ---->  newAncestors=[]
+06:15:22.958693 - SPEECH GENERATOR: default voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  labelOrName=[Compare options]
+06:15:22.958796 - DEFAULT: Not in SayAll
+06:15:22.958931 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  roleName=[toggle button]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+06:15:22.959141 - SPEECH GENERATOR: state voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0001  ---->  toggleState=[not pressed]
+                  GENERATION TIME: 0.0001  ---->  availability=[]
+                  GENERATION TIME: 0.0001  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0004  ---->  accelerator=[]
+                  GENERATION TIME: 0.0002  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0002  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0001  ---->  clickable=[]
+                  GENERATION TIME: 0.0001  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0003  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0002  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0001  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0001  ---->  tutorial=[]
+                  GENERATION TIME: 0.0003  ---->  description=[]
+                  GENERATION TIME: 0.0001  ---->  hasPopup=[]
+                  COMPLETION TIME: 0.0044
+                  SPEECH GENERATOR: Results: 
+                  'Compare options' 
+                  '{'established': False}' 
+                  'toggle button' 
+                  '{'established': False}' 
+                  'not pressed' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'PAUSE'
+06:15:22.961483 - WEB: Speech generation for document object [toggle button | Compare options] complete.
+06:15:22.961505 - SPEECH: Last spoke 4.5382 seconds ago
+06:15:22.961524 - SPEECH OUTPUT: 'Compare options toggle button not pressed.'{'established': False}
+06:15:22.962063 - DEFAULT: Not in SayAll
+06:15:22.962180 - WEB: [toggle button | Compare options] is focus mode widget because it's a toolbar descendant
+06:15:22.962227 - WEB: Using focus mode because [toggle button | Compare options] is a focus mode widget
+06:15:22.962285 - EVENT MANAGER: locusOfFocus: [toggle button | Compare options] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:22.962296 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:22.962298 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:22.962300 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:22.962302 - EVENT MANAGER: _inFocusMode: True
+06:15:22.962304 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:22.962306 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0132
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=628226446
+                 time=1790921723.132188
+                 keyType=action
+                 clickCount=2
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+06:15:23.132298 - HOST_APP: [application | Chromium]
+06:15:23.132366 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:23.132407 - LOCATION: [toggle button | Compare options]
+06:15:23.132411 - CONSUME:  False (No handler)
+06:15:23.132420 - DEFAULT: Interrupting presentation
+06:15:23.132424 - WEB: Flushing live region messages
+06:15:23.132439 - DEFAULT: Presenting keyboard event
+06:15:23.132455 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+06:15:23.132469 - SPEECH OUTPUT: 'tab ' {'established': False}
+06:15:23.132524 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:23.132527 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:23.132529 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:23.132531 - INPUT EVENT: _inFocusMode: True
+06:15:23.132532 - INPUT EVENT: _focusModeIsSticky: False
+06:15:23.132534 - INPUT EVENT: _browseModeIsSticky: False
+06:15:23.132537 - TOTAL PROCESSING TIME: 0.0003
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=628226454
+                 time=1790921723.140227
+                 keyType=action
+                 clickCount=2
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+06:15:23.140459 - HOST_APP: [application | Chromium]
+06:15:23.140604 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:23.140719 - LOCATION: [toggle button | Compare options]
+06:15:23.140731 - CONSUME:  False (Is release for last non-modifier keyevent)
+06:15:23.140983 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:23.140994 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:23.141000 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:23.141005 - INPUT EVENT: _inFocusMode: True
+06:15:23.141010 - INPUT EVENT: _focusModeIsSticky: False
+06:15:23.141014 - INPUT EVENT: _browseModeIsSticky: False
+06:15:23.141023 - TOTAL PROCESSING TIME: 0.0008
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+06:15:23.142894 - EVENT MANAGER: object:state-changed:focused for [toggle button | Compare options] in [application | Chromium] (0, 0, 0)
+06:15:23.142975 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.143212 - EVENT MANAGER: Queueing object:state-changed:focused [toggle button | Compare options] (0,0,0) from [application | Chromium]
+
+06:15:23.144410 - EVENT MANAGER: object:state-changed:focused for [toggle button | Classify or score] in [application | Chromium] (1, 0, 0)
+06:15:23.144529 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.144634 - EVENT MANAGER: Queueing object:state-changed:focused [toggle button | Classify or score] (1,0,0) from [application | Chromium]
+06:15:23.144882 - EVENT MANAGER: Dequeued object:state-changed:focused [toggle button | Compare options] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+06:15:23.144897 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Compare options' role='toggle button'
+                                description=''
+                                states='enabled focusable sensitive showing visible'
+                                relations=''
+                                actions='check showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:compare-btn, class:btn btn--ghost, name-from:contents, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 0]
+
+06:15:23.145691 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+06:15:23.146198 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.146245 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.146282 - WEB: Ignoring because event source lost focus
+06:15:23.146451 - EVENT MANAGER: locusOfFocus: [toggle button | Compare options] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.146473 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.146477 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.146479 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.146481 - EVENT MANAGER: _inFocusMode: True
+06:15:23.146484 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.146488 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0016
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+06:15:23.146665 - EVENT MANAGER: Dequeued object:state-changed:focused [toggle button | Classify or score] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+06:15:23.146679 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Classify or score' role='toggle button'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='check showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:analyze-btn, class:btn btn--ghost, name-from:contents, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 1]
+
+06:15:23.147627 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+06:15:23.148004 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.148018 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.148265 - WEB: Not event from context replicant. locusOfFocus [toggle button | Compare options] is not dead.
+06:15:23.148272 - WEB: Getting caret context for None
+06:15:23.148480 - WEB: Caret context is [toggle button | Compare options], 0 (focus: [toggle button | Compare options])
+06:15:23.148523 - WEB: Deferring to other scripts for handling non-document source
+06:15:23.148527 - CHROMIUM: Passing along event to default script
+06:15:23.149833 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --disable-dev-shm-usage --enable-remote-extensions --load-extension= http://127.0.0.1:8765/index.html --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=/srv/logs/chromium-profile/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=/srv/logs/fake-mic-silence.wav 
+06:15:23.150031 - INFO: [frame | MLX Chat - Chromium] can be active window
+06:15:23.150199 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.150404 - ORCA: Changing locusOfFocus from [toggle button | Compare options] to [toggle button | Classify or score]. Notify: True
+06:15:23.150699 - WEB: Treating [toggle button | Classify or score] as non-text: named object treated as whole.
+06:15:23.151200 - WEB: updating braille for unhandled navigation type [toggle button | Classify or score]
+06:15:23.151254 - WEB: Generating braille for document object [toggle button | Classify or score]
+06:15:23.151417 - WEB: [toggle button | Classify or score] is focus mode widget because it's a toolbar descendant
+06:15:23.151577 - BRAILLE GENERATOR: Starting focused generation for [toggle button | Classify or score] (<enum ATSPI_ROLE_TOGGLE_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0005  ---->  labelOrName=[Classify or score]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+                  GENERATION TIME: 0.0003  ---->  roleName=[toggle button]
+                  GENERATION TIME: 0.0001  ---->  toggleState=[& y]
+06:15:23.152567 - BRAILLE: Not contracting 'Classify or score toggle button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0011
+                  BRAILLE GENERATOR: Results: 
+                  'Component: '& y Classify or score toggle button', 0'
+06:15:23.152609 - BRAILLE: Refresh. Pan: True target: 0
+06:15:23.152614 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:23.152617 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:23.152625 - BRAILLE: Line 0: '& y Classify or score toggle button' focusOffset: 0 [[0, 29], [29, 35]]
+06:15:23.152628 - BRAILLE: Cursor offset in line string is: 0
+06:15:23.152634 - BRAILLE: Adjusting offset to 0 (unhandled condition)
+06:15:23.152637 - BRAILLE: Current range: (0, 32). Target cell: 0.
+06:15:23.152640 - BRAILLE LINE:  '& y Classify or score toggle button'
+06:15:23.152694 -      VISIBLE:  '& y Classify or score toggle but', cursor=1
+06:15:23.152707 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:23.152709 - BRAILLE: Need to initialize first.
+06:15:23.152712 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:23.152789 - BRAILLE: WINDOWPATH=None
+06:15:23.152794 - BRAILLE: XDG_VTNR=None
+06:15:23.152796 - BRAILLE: Attempting connection with BrlAPI.
+06:15:23.152897 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:23.153142 - ORCA: Region of interest: [toggle button | Classify or score] (0, 0)
+06:15:23.153281 - WEB: New focus [toggle button | Classify or score] is not a special case. Generating speech.
+06:15:23.153370 - WEB: Generating speech for document object [toggle button | Classify or score]
+06:15:23.153569 - INFO: Getting text attributes for [toggle button | Classify or score] (chars: 0-17)
+06:15:23.153669 - INFO: Attributes at 0: ['bg-color:222,225,231', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:47,51,64', 'family-name:Liberation Mono'] (0-17)
+06:15:23.153677 - INFO: 1 attribute ranges found in 0.0001s
+06:15:23.153773 - SPEECH GENERATOR: Starting unfocused generation for [toggle button | Classify or score] (<enum ATSPI_ROLE_TOGGLE_BUTTON of type Atspi.Role>)
+06:15:23.154020 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0004  ---->  oldAncestors=[]
+06:15:23.154303 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0003  ---->  newAncestors=[]
+06:15:23.154747 - SPEECH GENERATOR: default voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  labelOrName=[Classify or score]
+06:15:23.154859 - DEFAULT: Not in SayAll
+06:15:23.155015 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  roleName=[toggle button]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+06:15:23.155237 - SPEECH GENERATOR: state voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0001  ---->  toggleState=[not pressed]
+                  GENERATION TIME: 0.0001  ---->  availability=[]
+                  GENERATION TIME: 0.0001  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0002  ---->  accelerator=[]
+                  GENERATION TIME: 0.0001  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0001  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0001  ---->  clickable=[]
+                  GENERATION TIME: 0.0001  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0002  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0001  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0001  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0001  ---->  tutorial=[]
+                  GENERATION TIME: 0.0003  ---->  description=[]
+                  GENERATION TIME: 0.0001  ---->  hasPopup=[]
+                  COMPLETION TIME: 0.0033
+                  SPEECH GENERATOR: Results: 
+                  'Classify or score' 
+                  '{'established': False}' 
+                  'toggle button' 
+                  '{'established': False}' 
+                  'not pressed' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'PAUSE'
+06:15:23.157043 - WEB: Speech generation for document object [toggle button | Classify or score] complete.
+06:15:23.157055 - SPEECH: Last spoke 0.1955 seconds ago
+06:15:23.157070 - SPEECH OUTPUT: 'Classify or score toggle button not pressed.'{'established': False}
+06:15:23.157447 - DEFAULT: Not in SayAll
+06:15:23.157543 - WEB: [toggle button | Classify or score] is focus mode widget because it's a toolbar descendant
+06:15:23.157585 - WEB: Using focus mode because [toggle button | Classify or score] is a focus mode widget
+06:15:23.157637 - EVENT MANAGER: locusOfFocus: [toggle button | Classify or score] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.157643 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.157645 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.157647 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.157649 - EVENT MANAGER: _inFocusMode: True
+06:15:23.157651 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.157653 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0110
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=628226642
+                 time=1790921723.328035
+                 keyType=action
+                 clickCount=3
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+06:15:23.328133 - HOST_APP: [application | Chromium]
+06:15:23.328199 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:23.328238 - LOCATION: [toggle button | Classify or score]
+06:15:23.328243 - CONSUME:  False (No handler)
+06:15:23.328250 - DEFAULT: Interrupting presentation
+06:15:23.328255 - WEB: Flushing live region messages
+06:15:23.328266 - DEFAULT: Presenting keyboard event
+06:15:23.328279 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+06:15:23.328290 - SPEECH OUTPUT: 'tab ' {'established': False}
+06:15:23.328340 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:23.328343 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:23.328345 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:23.328347 - INPUT EVENT: _inFocusMode: True
+06:15:23.328349 - INPUT EVENT: _focusModeIsSticky: False
+06:15:23.328351 - INPUT EVENT: _browseModeIsSticky: False
+06:15:23.328354 - TOTAL PROCESSING TIME: 0.0003
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=628226652
+                 time=1790921723.338233
+                 keyType=action
+                 clickCount=3
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+06:15:23.338570 - HOST_APP: [application | Chromium]
+06:15:23.339301 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:23.339502 - LOCATION: [toggle button | Classify or score]
+06:15:23.339523 - CONSUME:  False (Is release for last non-modifier keyevent)
+06:15:23.339569 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:23.339579 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:23.339589 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:23.339598 - INPUT EVENT: _inFocusMode: True
+06:15:23.339605 - INPUT EVENT: _focusModeIsSticky: False
+06:15:23.339613 - INPUT EVENT: _browseModeIsSticky: False
+06:15:23.339626 - TOTAL PROCESSING TIME: 0.0014
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+06:15:23.345382 - EVENT MANAGER: object:state-changed:focused for [toggle button | Classify or score] in [application | Chromium] (0, 0, 0)
+06:15:23.345481 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.345804 - EVENT MANAGER: Queueing object:state-changed:focused [toggle button | Classify or score] (0,0,0) from [application | Chromium]
+
+06:15:23.348371 - EVENT MANAGER: object:state-changed:focused for [push button | Microphone] in [application | Chromium] (1, 0, 0)
+06:15:23.348484 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.348588 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Microphone] (1,0,0) from [application | Chromium]
+06:15:23.348860 - EVENT MANAGER: Dequeued object:state-changed:focused [toggle button | Classify or score] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+06:15:23.349039 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Classify or score' role='toggle button'
+                                description=''
+                                states='enabled focusable sensitive showing visible'
+                                relations=''
+                                actions='check showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:analyze-btn, class:btn btn--ghost, name-from:contents, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 1]
+
+06:15:23.349934 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+06:15:23.350297 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.350313 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.350346 - WEB: Ignoring because event source lost focus
+06:15:23.350404 - EVENT MANAGER: locusOfFocus: [toggle button | Classify or score] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.350411 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.350413 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.350415 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.350417 - EVENT MANAGER: _inFocusMode: True
+06:15:23.350419 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.350420 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0016
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+06:15:23.350558 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Microphone] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+06:15:23.350571 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Microphone' role='push button'
+                                description='Press and hold, or click to latch, to record'
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:mic-btn, class:btn btn--ghost, name-from:contents, description-from:tooltip, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 2]
+
+06:15:23.351293 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+06:15:23.351592 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.351606 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.351874 - WEB: Not event from context replicant. locusOfFocus [toggle button | Classify or score] is not dead.
+06:15:23.351882 - WEB: Getting caret context for None
+06:15:23.352107 - WEB: Caret context is [toggle button | Classify or score], 0 (focus: [toggle button | Classify or score])
+06:15:23.352151 - WEB: Deferring to other scripts for handling non-document source
+06:15:23.352156 - CHROMIUM: Passing along event to default script
+06:15:23.353410 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --disable-dev-shm-usage --enable-remote-extensions --load-extension= http://127.0.0.1:8765/index.html --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=/srv/logs/chromium-profile/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=/srv/logs/fake-mic-silence.wav 
+06:15:23.353600 - INFO: [frame | MLX Chat - Chromium] can be active window
+06:15:23.353683 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.353847 - ORCA: Changing locusOfFocus from [toggle button | Classify or score] to [push button | Microphone]. Notify: True
+06:15:23.354128 - WEB: Treating [push button | Microphone] as non-text: named object treated as whole.
+06:15:23.354722 - WEB: updating braille for unhandled navigation type [push button | Microphone]
+06:15:23.354784 - WEB: Generating braille for document object [push button | Microphone]
+06:15:23.354954 - WEB: [push button | Microphone] is focus mode widget because it's a toolbar descendant
+06:15:23.355116 - BRAILLE GENERATOR: Starting focused generation for [push button | Microphone] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0007  ---->  labelAndName=[Microphone]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+                  GENERATION TIME: 0.0003  ---->  roleName=[push button]
+06:15:23.356375 - BRAILLE: Not contracting 'Microphone push button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0013
+                  BRAILLE GENERATOR: Results: 
+                  'Component: 'Microphone push button', 0'
+06:15:23.356444 - BRAILLE: Refresh. Pan: True target: 0
+06:15:23.356450 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:23.356452 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:23.356459 - BRAILLE: Line 0: 'Microphone push button' focusOffset: 0 [[0, 22]]
+06:15:23.356462 - BRAILLE: Cursor offset in line string is: 0
+06:15:23.356465 - BRAILLE: Not adjusting offset 0. Cursor offset fits on display.
+06:15:23.356468 - BRAILLE: Current range: (0, 32). Target cell: 0.
+06:15:23.356470 - BRAILLE LINE:  'Microphone push button'
+06:15:23.356518 -      VISIBLE:  'Microphone push button', cursor=1
+06:15:23.356532 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:23.356534 - BRAILLE: Need to initialize first.
+06:15:23.356538 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:23.356544 - BRAILLE: WINDOWPATH=None
+06:15:23.356547 - BRAILLE: XDG_VTNR=None
+06:15:23.356549 - BRAILLE: Attempting connection with BrlAPI.
+06:15:23.356673 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:23.356927 - ORCA: Region of interest: [push button | Microphone] (0, 0)
+06:15:23.357157 - WEB: New focus [push button | Microphone] is not a special case. Generating speech.
+06:15:23.357264 - WEB: Generating speech for document object [push button | Microphone]
+06:15:23.357701 - INFO: Getting text attributes for [push button | Microphone] (chars: 0-10)
+06:15:23.357838 - INFO: Attributes at 0: ['bg-color:222,225,231', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:47,51,64', 'family-name:Liberation Mono'] (0-10)
+06:15:23.357849 - INFO: 1 attribute ranges found in 0.0001s
+06:15:23.357945 - SPEECH GENERATOR: Starting unfocused generation for [push button | Microphone] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+06:15:23.358243 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0004  ---->  oldAncestors=[]
+06:15:23.358520 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0004  ---->  newAncestors=[]
+06:15:23.358955 - SPEECH GENERATOR: default voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0002  ---->  labelAndName=[Microphone]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+06:15:23.359151 - DEFAULT: Not in SayAll
+06:15:23.359297 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  roleName=[push button]
+                  GENERATION TIME: 0.0001  ---->  availability=[]
+                  GENERATION TIME: 0.0001  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0002  ---->  accelerator=[]
+                  GENERATION TIME: 0.0001  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0001  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0001  ---->  clickable=[]
+                  GENERATION TIME: 0.0001  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0002  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0001  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0001  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0001  ---->  tutorial=[]
+06:15:23.360829 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  description=[Press and hold, or click to latch, to record]
+                  GENERATION TIME: 0.0001  ---->  hasPopup=[]
+                  COMPLETION TIME: 0.0031
+                  SPEECH GENERATOR: Results: 
+                  'Microphone' 
+                  '{'established': False}' 
+                  'push button' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'Press and hold, or click to latch, to record' 
+                  '{'established': False}' 
+                  'PAUSE'
+06:15:23.361000 - WEB: Speech generation for document object [push button | Microphone] complete.
+06:15:23.361008 - SPEECH: Last spoke 0.2040 seconds ago
+06:15:23.361020 - SPEECH OUTPUT: 'Microphone push button.'{'established': False}
+06:15:23.361056 - SPEECH OUTPUT: 'Press and hold, or click to latch, to record.'{'established': False}
+06:15:23.361383 - DEFAULT: Not in SayAll
+06:15:23.361473 - WEB: [push button | Microphone] is focus mode widget because it's a toolbar descendant
+06:15:23.361514 - WEB: Using focus mode because [push button | Microphone] is a focus mode widget
+06:15:23.361562 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.361567 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.361569 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.361571 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.361573 - EVENT MANAGER: _inFocusMode: True
+06:15:23.361574 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.361576 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0110
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=32
+                 hw_code=65
+                 modifiers=0
+                 event_string=(space)
+                 keyval_name=(space)
+                 timestamp=628226840
+                 time=1790921723.526074
+                 keyType=space
+                 clickCount=1
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'space' (65) vvvvv
+06:15:23.526163 - HOST_APP: [application | Chromium]
+06:15:23.526224 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:23.526262 - LOCATION: [push button | Microphone]
+06:15:23.526266 - CONSUME:  False (No handler)
+06:15:23.526272 - DEFAULT: Interrupting presentation
+06:15:23.526277 - WEB: Flushing live region messages
+06:15:23.526292 - DEFAULT: Presenting keyboard event
+06:15:23.526305 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+06:15:23.526318 - SPEECH OUTPUT: 'space ' {'established': False}
+06:15:23.526362 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:23.526365 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:23.526366 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:23.526368 - INPUT EVENT: _inFocusMode: True
+06:15:23.526370 - INPUT EVENT: _focusModeIsSticky: False
+06:15:23.526372 - INPUT EVENT: _browseModeIsSticky: False
+06:15:23.526375 - TOTAL PROCESSING TIME: 0.0003
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'space' (65) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=32
+                 hw_code=65
+                 modifiers=0
+                 event_string=(space)
+                 keyval_name=(space)
+                 timestamp=628226850
+                 time=1790921723.535173
+                 keyType=space
+                 clickCount=1
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'space' (65) vvvvv
+06:15:23.535257 - HOST_APP: [application | Chromium]
+06:15:23.535317 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:23.535355 - LOCATION: [push button | Microphone]
+06:15:23.535359 - CONSUME:  False (Is release for last non-modifier keyevent)
+06:15:23.535370 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:23.535372 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:23.535374 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:23.535376 - INPUT EVENT: _inFocusMode: True
+06:15:23.535378 - INPUT EVENT: _focusModeIsSticky: False
+06:15:23.535380 - INPUT EVENT: _browseModeIsSticky: False
+06:15:23.535382 - TOTAL PROCESSING TIME: 0.0002
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'space' (65) ^^^^^
+
+
+06:15:23.544024 - EVENT MANAGER: object:property-change:accessible-name for [push button | Listening…] in [application | Chromium] (0, 0, Listening…)
+06:15:23.544075 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.544347 - EVENT MANAGER: Queueing object:property-change:accessible-name [push button | Listening…] (0,0,Listening…) from [application | Chromium]
+06:15:23.544899 - EVENT MANAGER: Dequeued object:property-change:accessible-name [push button | Listening…] (0,0,Listening…) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:property-change:accessible-name vvvvv
+06:15:23.544949 - OBJECT EVENT: object:property-change:accessible-name (0, 0, Listening…)
+                                app.name='Chromium' name='Listening…' role='push button'
+                                description='Press and hold, or click to latch, to record'
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:mic-btn, class:btn btn--ghost recording-indicator, name-from:contents, description-from:tooltip, tag:button, display:flex'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 2]
+
+06:15:23.548151 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:23.548223 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.548233 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.548306 - EVENT MANAGER: locusOfFocus: [push button | Listening…] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.548313 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.548315 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.548317 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.548319 - EVENT MANAGER: _inFocusMode: True
+06:15:23.548320 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.548322 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0034
+^^^^^ PROCESS OBJECT EVENT object:property-change:accessible-name ^^^^^
+
+
+06:15:23.697398 - EVENT MANAGER: object:text-changed:insert for [section | ] in [application | Chromium] (0, 42, Recording started. Press Escape to cancel.)
+06:15:23.697551 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.697673 - EVENT MANAGER: Queueing object:text-changed:insert [section | ] (0,42,Recording started. Press Escape to cancel.) from [application | Chromium]
+
+06:15:23.698201 - EVENT MANAGER: object:children-changed:add for [section | ] in [application | Chromium] (0, 0, [static | Recording started. Press Escape to cancel.])
+06:15:23.698328 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:23.698453 - EVENT MANAGER: Queueing object:children-changed:add [section | ] (0,0,[static | Recording started. Press Escape to cancel.]) from [application | Chromium]
+06:15:23.698667 - EVENT MANAGER: Dequeued object:children-changed:add [section | ] (0,0,[static | Recording started. Press Escape to cancel.]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:add vvvvv
+06:15:23.698727 - OBJECT EVENT: object:children-changed:add (0, 0, [static | Recording started. Press Escape to cancel.])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:live-region, class:visually-hidden, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, tag:div, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3]
+
+                                ANY DATA:
+                                name='Recording started. Press Escape to cancel.' role='static'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations='member of'
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes='name-from:contents, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:false, relevant:additions text'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3, 0]
+
+06:15:23.699907 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:23.699976 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.699985 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.700155 - CHROMIUM: [static | Recording started. Press Escape to cancel.] believed to be static text leaf
+06:15:23.700161 - CHROMIUM: Ignoring because child is static text leaf
+06:15:23.700210 - EVENT MANAGER: locusOfFocus: [push button | Listening…] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.700217 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.700219 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.700221 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.700223 - EVENT MANAGER: _inFocusMode: True
+06:15:23.700225 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.700227 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0016
+^^^^^ PROCESS OBJECT EVENT object:children-changed:add ^^^^^
+
+06:15:23.700298 - EVENT MANAGER: Dequeued object:text-changed:insert [section | ] (0,42,Recording started. Press Escape to cancel.) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:text-changed:insert vvvvv
+06:15:23.700309 - OBJECT EVENT: object:text-changed:insert (0, 42, Recording started. Press Escape to cancel.)
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:live-region, class:visually-hidden, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, tag:div, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3]
+
+06:15:23.700857 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:23.700923 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.700932 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:23.701701 - WEB: Event to be handled as live region
+06:15:23.702420 - EVENT MANAGER: locusOfFocus: [push button | Listening…] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:23.702431 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:23.702434 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:23.702436 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:23.702438 - EVENT MANAGER: _inFocusMode: True
+06:15:23.702440 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:23.702441 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0021
+^^^^^ PROCESS OBJECT EVENT object:text-changed:insert ^^^^^
+
+
+vvvvv PRESENT LIVE REGION MESSAGE vvvvv
+06:15:23.813671 - SETTINGS MANAGER: Setting runtime settings.
+06:15:23.813744 - SETTINGS MANAGER: Runtime settings set.
+06:15:23.813763 - SETTINGS MANAGER: Setting runtime settings.
+06:15:23.813774 - SETTINGS MANAGER: Runtime settings set.
+06:15:23.813799 - SPEECH: Last spoke 0.4528 seconds ago
+06:15:23.813842 - SPEECH OUTPUT: 'Recording started. Press Escape to cancel.'{'established': False}
+06:15:23.813966 - SETTINGS MANAGER: Setting runtime settings.
+06:15:23.813979 - SETTINGS MANAGER: Runtime settings set.
+06:15:23.813988 - SETTINGS MANAGER: Setting runtime settings.
+06:15:23.813997 - SETTINGS MANAGER: Runtime settings set.
+06:15:23.814101 - BRAILLE: Not contracting ' Recording started. Press Escape to cancel.' because contracted braille is not enabled.
+06:15:23.814169 - BRAILLE: Refresh. Pan: True target: 0
+06:15:23.814184 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:23.814195 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:23.814224 - BRAILLE: Line 0: ' Recording started. Press Escape to cancel.' focusOffset: 0 [[0, 26], [26, 43]]
+06:15:23.814235 - BRAILLE: Cursor offset in line string is: -1
+06:15:23.814245 - BRAILLE: Current range: (0, 32). Target cell: 0.
+06:15:23.814256 - BRAILLE LINE:  ' Recording started. Press Escape to cancel.'
+06:15:23.814322 -      VISIBLE:  ' Recording started. Press Escape', cursor=0
+06:15:23.814359 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:23.814367 - BRAILLE: Need to initialize first.
+06:15:23.814377 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:23.814396 - BRAILLE: WINDOWPATH=None
+06:15:23.814405 - BRAILLE: XDG_VTNR=None
+06:15:23.814410 - BRAILLE: Attempting connection with BrlAPI.
+06:15:23.814623 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:23.815016 - LIVE REGIONS: messages in queue: 0
+^^^^^ PRESENT LIVE REGION MESSAGE ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=32
+                 hw_code=65
+                 modifiers=0
+                 event_string=(space)
+                 keyval_name=(space)
+                 timestamp=628228369
+                 time=1790921725.055702
+                 keyType=space
+                 clickCount=1
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'space' (65) vvvvv
+06:15:25.055976 - HOST_APP: [application | Chromium]
+06:15:25.056205 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:25.056360 - LOCATION: [push button | Listening…]
+06:15:25.056385 - CONSUME:  False (No handler)
+06:15:25.056411 - DEFAULT: Interrupting presentation
+06:15:25.056457 - BRAILLE: Refresh. Pan: False target: 0
+06:15:25.056476 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:25.056489 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:25.056554 - BRAILLE: Line 0: 'Microphone push button' focusOffset: 0 [[0, 22]]
+06:15:25.056565 - BRAILLE: Cursor offset in line string is: 0
+06:15:25.056576 - BRAILLE: Current range: (0, 32). Target cell: 0.
+06:15:25.056588 - BRAILLE LINE:  'Microphone push button'
+06:15:25.056747 -      VISIBLE:  'Microphone push button', cursor=1
+06:15:25.056809 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:25.056820 - BRAILLE: Need to initialize first.
+06:15:25.056834 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:25.056861 - BRAILLE: WINDOWPATH=None
+06:15:25.056876 - BRAILLE: XDG_VTNR=None
+06:15:25.056884 - BRAILLE: Attempting connection with BrlAPI.
+06:15:25.057124 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:25.057633 - WEB: Flushing live region messages
+06:15:25.057715 - DEFAULT: Presenting keyboard event
+06:15:25.057760 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+06:15:25.057800 - SPEECH OUTPUT: 'space ' {'established': False}
+06:15:25.057885 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:25.057898 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:25.057906 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:25.057914 - INPUT EVENT: _inFocusMode: True
+06:15:25.057922 - INPUT EVENT: _focusModeIsSticky: False
+06:15:25.057932 - INPUT EVENT: _browseModeIsSticky: False
+06:15:25.057944 - TOTAL PROCESSING TIME: 0.0022
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'space' (65) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=32
+                 hw_code=65
+                 modifiers=0
+                 event_string=(space)
+                 keyval_name=(space)
+                 timestamp=628228376
+                 time=1790921725.062781
+                 keyType=space
+                 clickCount=1
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'space' (65) vvvvv
+06:15:25.063343 - HOST_APP: [application | Chromium]
+06:15:25.063526 - WINDOW:   [frame | MLX Chat - Chromium]
+06:15:25.063687 - LOCATION: [push button | Listening…]
+06:15:25.063709 - CONSUME:  False (Is release for last non-modifier keyevent)
+06:15:25.063750 - INPUT EVENT: _lastCommandWasCaretNav: False
+06:15:25.063758 - INPUT EVENT: _lastCommandWasStructNav: False
+06:15:25.063765 - INPUT EVENT: _lastCommandWasMouseButton: False
+06:15:25.063771 - INPUT EVENT: _inFocusMode: True
+06:15:25.063777 - INPUT EVENT: _focusModeIsSticky: False
+06:15:25.063784 - INPUT EVENT: _browseModeIsSticky: False
+06:15:25.063794 - TOTAL PROCESSING TIME: 0.0010
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'space' (65) ^^^^^
+
+
+06:15:25.083802 - EVENT MANAGER: object:children-changed:remove for [section | ] in [application | Chromium] (0, 0, [static | ])
+06:15:25.084064 - EVENT MANAGER: Locus of focus: [push button | Microphone]
+06:15:25.084156 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:25.084298 - EVENT MANAGER: Queueing object:children-changed:remove [section | ] (0,0,[static | ]) from [application | Chromium]
+06:15:25.084558 - EVENT MANAGER: Dequeued object:children-changed:remove [section | ] (0,0,[static | ]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:remove vvvvv
+06:15:25.084615 - OBJECT EVENT: object:children-changed:remove (0, 0, [static | ])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:live-region, class:visually-hidden, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, tag:div, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3]
+
+                                ANY DATA:
+                                name='' role='static'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions=''
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes=''
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3, -1]
+
+06:15:25.085638 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:25.085721 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.085731 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:25.085806 - CHROMIUM: Ignoring because child is static text leaf
+06:15:25.085854 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.085860 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:25.085863 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:25.085865 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:25.085867 - EVENT MANAGER: _inFocusMode: True
+06:15:25.085869 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:25.085871 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0013
+^^^^^ PROCESS OBJECT EVENT object:children-changed:remove ^^^^^
+
+
+06:15:25.086061 - EVENT MANAGER: object:text-changed:delete for [section | ] in [application | Chromium] (0, 42, Recording started. Press Escape to cancel.)
+06:15:25.086078 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:25.086166 - EVENT MANAGER: Queueing object:text-changed:delete [section | ] (0,42,Recording started. Press Escape to cancel.) from [application | Chromium]
+
+06:15:25.086472 - EVENT MANAGER: object:text-changed:insert for [section | ] in [application | Chromium] (0, 19, No speech detected.)
+06:15:25.086490 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:25.086581 - EVENT MANAGER: Queueing object:text-changed:insert [section | ] (0,19,No speech detected.) from [application | Chromium]
+
+06:15:25.086763 - EVENT MANAGER: object:property-change:accessible-name for [push button | Microphone] in [application | Chromium] (0, 0, Microphone)
+06:15:25.086777 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:25.086862 - EVENT MANAGER: Queueing object:property-change:accessible-name [push button | Microphone] (0,0,Microphone) from [application | Chromium]
+
+06:15:25.087086 - EVENT MANAGER: object:children-changed:add for [section | ] in [application | Chromium] (0, 0, [static | No speech detected.])
+06:15:25.087396 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:25.087528 - EVENT MANAGER: Queueing object:children-changed:add [section | ] (0,0,[static | No speech detected.]) from [application | Chromium]
+06:15:25.087695 - EVENT MANAGER: Dequeued object:text-changed:delete [section | ] (0,42,Recording started. Press Escape to cancel.) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:text-changed:delete vvvvv
+06:15:25.087706 - OBJECT EVENT: object:text-changed:delete (0, 42, Recording started. Press Escape to cancel.)
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:live-region, class:visually-hidden, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, tag:div, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3]
+
+06:15:25.088241 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:25.088302 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.088310 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:25.088379 - WEB: Ignoring deletion from live region
+06:15:25.088427 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.088432 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:25.088434 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:25.088436 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:25.088438 - EVENT MANAGER: _inFocusMode: True
+06:15:25.088439 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:25.088442 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0007
+^^^^^ PROCESS OBJECT EVENT object:text-changed:delete ^^^^^
+
+06:15:25.088555 - EVENT MANAGER: Dequeued object:text-changed:insert [section | ] (0,19,No speech detected.) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:text-changed:insert vvvvv
+06:15:25.088565 - OBJECT EVENT: object:text-changed:insert (0, 19, No speech detected.)
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:live-region, class:visually-hidden, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, tag:div, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3]
+
+06:15:25.089252 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:25.089327 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.089338 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:25.090377 - WEB: Event to be handled as live region
+06:15:25.091103 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.091115 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:25.091117 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:25.091119 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:25.091121 - EVENT MANAGER: _inFocusMode: True
+06:15:25.091124 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:25.091125 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0026
+^^^^^ PROCESS OBJECT EVENT object:text-changed:insert ^^^^^
+
+06:15:25.091244 - EVENT MANAGER: Dequeued object:property-change:accessible-name [push button | Microphone] (0,0,Microphone) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:property-change:accessible-name vvvvv
+06:15:25.091256 - OBJECT EVENT: object:property-change:accessible-name (0, 0, Microphone)
+                                app.name='Chromium' name='Microphone' role='push button'
+                                description='Press and hold, or click to latch, to record'
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:mic-btn, class:btn btn--ghost, name-from:contents, description-from:tooltip, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 1, 2]
+
+06:15:25.091904 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:25.091966 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.091975 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:25.092034 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.092039 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:25.092041 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:25.092043 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:25.092045 - EVENT MANAGER: _inFocusMode: True
+06:15:25.092047 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:25.092049 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0008
+^^^^^ PROCESS OBJECT EVENT object:property-change:accessible-name ^^^^^
+
+06:15:25.092190 - EVENT MANAGER: Dequeued object:children-changed:add [section | ] (0,0,[static | No speech detected.]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:add vvvvv
+06:15:25.092239 - OBJECT EVENT: object:children-changed:add (0, 0, [static | No speech detected.])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:live-region, class:visually-hidden, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, tag:div, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3]
+
+                                ANY DATA:
+                                name='No speech detected.' role='static'
+                                description=''
+                                states='enabled sensitive visible'
+                                relations='member of'
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes='name-from:contents, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:false, relevant:additions text'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 3, 0]
+
+06:15:25.093400 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:25.093472 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.093480 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:25.093640 - CHROMIUM: [static | No speech detected.] believed to be static text leaf
+06:15:25.093645 - CHROMIUM: Ignoring because child is static text leaf
+06:15:25.093699 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:25.093704 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:25.093706 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:25.093708 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:25.093710 - EVENT MANAGER: _inFocusMode: True
+06:15:25.093712 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:25.093713 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0015
+^^^^^ PROCESS OBJECT EVENT object:children-changed:add ^^^^^
+
+
+vvvvv PRESENT LIVE REGION MESSAGE vvvvv
+06:15:25.202199 - SETTINGS MANAGER: Setting runtime settings.
+06:15:25.202285 - SETTINGS MANAGER: Runtime settings set.
+06:15:25.202306 - SETTINGS MANAGER: Setting runtime settings.
+06:15:25.202319 - SETTINGS MANAGER: Runtime settings set.
+06:15:25.202352 - SPEECH: Last spoke 1.3885 seconds ago
+06:15:25.202410 - SPEECH OUTPUT: 'No speech detected.'{'established': False}
+06:15:25.202880 - SETTINGS MANAGER: Setting runtime settings.
+06:15:25.202973 - SETTINGS MANAGER: Runtime settings set.
+06:15:25.202991 - SETTINGS MANAGER: Setting runtime settings.
+06:15:25.203005 - SETTINGS MANAGER: Runtime settings set.
+06:15:25.203157 - BRAILLE: Not contracting ' No speech detected.' because contracted braille is not enabled.
+06:15:25.203256 - BRAILLE: Refresh. Pan: True target: 0
+06:15:25.203280 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+06:15:25.203298 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+06:15:25.203333 - BRAILLE: Line 0: ' No speech detected.' focusOffset: 0 [[0, 20]]
+06:15:25.203348 - BRAILLE: Cursor offset in line string is: -1
+06:15:25.203362 - BRAILLE: Current range: (0, 32). Target cell: 0.
+06:15:25.203378 - BRAILLE LINE:  ' No speech detected.'
+06:15:25.203476 -      VISIBLE:  ' No speech detected.', cursor=0
+06:15:25.203552 - BRAILLE: Enabling braille. BrlAPI running: False
+06:15:25.203568 - BRAILLE: Need to initialize first.
+06:15:25.203588 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff801fcb80>
+06:15:25.203628 - BRAILLE: WINDOWPATH=None
+06:15:25.203648 - BRAILLE: XDG_VTNR=None
+06:15:25.203698 - BRAILLE: Attempting connection with BrlAPI.
+06:15:25.204062 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+06:15:25.204745 - LIVE REGIONS: messages in queue: 0
+^^^^^ PRESENT LIVE REGION MESSAGE ^^^^^
+
+
+06:15:26.232247 - EVENT MANAGER: object:children-changed:remove for [section | ] in [application | Chromium] (0, 0, [static | ])
+06:15:26.232600 - EVENT MANAGER: Locus of focus: [push button | Microphone]
+06:15:26.232778 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.233763 - EVENT MANAGER: Queueing object:children-changed:remove [section | ] (0,0,[static | ]) from [application | Chromium]
+06:15:26.235336 - EVENT MANAGER: Dequeued object:children-changed:remove [section | ] (0,0,[static | ]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:remove vvvvv
+06:15:26.235529 - OBJECT EVENT: object:children-changed:remove (0, 0, [static | ])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:ready-badge-label, class:topbar__badge-label, tag:span, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 2, 0]
+
+                                ANY DATA:
+                                name='' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions=''
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes=''
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 2, 0, -1]
+
+06:15:26.239467 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:26.239647 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.239710 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:26.239896 - CHROMIUM: Ignoring because child is static text leaf
+06:15:26.240026 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.240044 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:26.240050 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:26.240055 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:26.240060 - EVENT MANAGER: _inFocusMode: True
+06:15:26.240065 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:26.240069 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0047
+^^^^^ PROCESS OBJECT EVENT object:children-changed:remove ^^^^^
+
+
+06:15:26.240843 - EVENT MANAGER: object:children-changed:remove for [section | ] in [application | Chromium] (0, 0, [static | ])
+06:15:26.241047 - EVENT MANAGER: Locus of focus: [push button | Microphone]
+06:15:26.241107 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.241248 - EVENT MANAGER: Queueing object:children-changed:remove [section | ] (0,0,[static | ]) from [application | Chromium]
+06:15:26.241477 - EVENT MANAGER: Dequeued object:children-changed:remove [section | ] (0,0,[static | ]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:remove vvvvv
+06:15:26.241531 - OBJECT EVENT: object:children-changed:remove (0, 0, [static | ])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:pair-chip, class:topbar__pair, tag:span, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 1]
+
+                                ANY DATA:
+                                name='' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions=''
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes=''
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 1, -1]
+
+06:15:26.242666 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:26.242726 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.242736 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:26.242801 - CHROMIUM: Ignoring because child is static text leaf
+06:15:26.242849 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.242854 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:26.242857 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:26.242858 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:26.242860 - EVENT MANAGER: _inFocusMode: True
+06:15:26.242862 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:26.242864 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0014
+^^^^^ PROCESS OBJECT EVENT object:children-changed:remove ^^^^^
+
+
+06:15:26.243038 - EVENT MANAGER: object:children-changed:remove for [status bar | Voice status] in [application | Chromium] (1, 0, [static | ])
+06:15:26.243135 - EVENT MANAGER: Locus of focus: [push button | Microphone]
+06:15:26.243186 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.243306 - EVENT MANAGER: Queueing object:children-changed:remove [status bar | Voice status] (1,0,[static | ]) from [application | Chromium]
+06:15:26.243516 - EVENT MANAGER: Dequeued object:children-changed:remove [status bar | Voice status] (1,0,[static | ]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:remove vvvvv
+06:15:26.243565 - OBJECT EVENT: object:children-changed:remove (1, 0, [static | ])
+                                app.name='Chromium' name='Voice status' role='status bar'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, class:composer__voice-status, explicit-name:true, name-from:attribute, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, xml-roles:status, tag:div, display:flex'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2]
+
+                                ANY DATA:
+                                name='' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions=''
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes=''
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2, -1]
+
+06:15:26.244587 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:26.244649 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.244665 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:26.244723 - CHROMIUM: Ignoring because child is static text leaf
+06:15:26.244769 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.244774 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:26.244776 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:26.244777 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:26.244779 - EVENT MANAGER: _inFocusMode: True
+06:15:26.244781 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:26.244783 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0013
+^^^^^ PROCESS OBJECT EVENT object:children-changed:remove ^^^^^
+
+
+06:15:26.244933 - EVENT MANAGER: object:children-changed:remove for [status bar | Voice status] in [application | Chromium] (0, 0, [static | ])
+06:15:26.245025 - EVENT MANAGER: Locus of focus: [push button | Microphone]
+06:15:26.245075 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.245198 - EVENT MANAGER: Queueing object:children-changed:remove [status bar | Voice status] (0,0,[static | ]) from [application | Chromium]
+06:15:26.245389 - EVENT MANAGER: Dequeued object:children-changed:remove [status bar | Voice status] (0,0,[static | ]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:remove vvvvv
+06:15:26.245437 - OBJECT EVENT: object:children-changed:remove (0, 0, [static | ])
+                                app.name='Chromium' name='Voice status' role='status bar'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, class:composer__voice-status, explicit-name:true, name-from:attribute, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, xml-roles:status, tag:div, display:flex'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2]
+
+                                ANY DATA:
+                                name='' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions=''
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes=''
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2, -1]
+
+06:15:26.246443 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:26.246504 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.246513 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:26.246567 - CHROMIUM: Ignoring because child is static text leaf
+06:15:26.246613 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.246617 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:26.246619 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:26.246621 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:26.246623 - EVENT MANAGER: _inFocusMode: True
+06:15:26.246625 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:26.246675 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0013
+^^^^^ PROCESS OBJECT EVENT object:children-changed:remove ^^^^^
+
+
+06:15:26.246866 - EVENT MANAGER: object:children-changed:add for [section | ] in [application | Chromium] (0, 0, [static | Everyday (fast)])
+06:15:26.246974 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.247100 - EVENT MANAGER: Queueing object:children-changed:add [section | ] (0,0,[static | Everyday (fast)]) from [application | Chromium]
+06:15:26.247283 - EVENT MANAGER: Dequeued object:children-changed:add [section | ] (0,0,[static | Everyday (fast)]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:add vvvvv
+06:15:26.247331 - OBJECT EVENT: object:children-changed:add (0, 0, [static | Everyday (fast)])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:pair-chip, class:topbar__pair, tag:span, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 1]
+
+                                ANY DATA:
+                                name='Everyday (fast)' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes='name-from:contents'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 1, 0]
+
+06:15:26.248403 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:26.248456 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.248465 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:26.248615 - CHROMIUM: [static | Everyday (fast)] believed to be static text leaf
+06:15:26.248621 - CHROMIUM: Ignoring because child is static text leaf
+06:15:26.248670 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.248674 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:26.248676 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:26.248678 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:26.248680 - EVENT MANAGER: _inFocusMode: True
+06:15:26.248681 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:26.248683 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0014
+^^^^^ PROCESS OBJECT EVENT object:children-changed:add ^^^^^
+
+
+06:15:26.248854 - EVENT MANAGER: object:children-changed:add for [section | ] in [application | Chromium] (0, 0, [static | Ready offline])
+06:15:26.248961 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.249085 - EVENT MANAGER: Queueing object:children-changed:add [section | ] (0,0,[static | Ready offline]) from [application | Chromium]
+06:15:26.249266 - EVENT MANAGER: Dequeued object:children-changed:add [section | ] (0,0,[static | Ready offline]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:add vvvvv
+06:15:26.249313 - OBJECT EVENT: object:children-changed:add (0, 0, [static | Ready offline])
+                                app.name='Chromium' name='' role='section'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, id:ready-badge-label, class:topbar__badge-label, tag:span, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 2, 0]
+
+                                ANY DATA:
+                                name='Ready offline' role='static'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Text'
+                                attributes='name-from:contents'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 2, 0, 0]
+
+06:15:26.250431 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+06:15:26.250478 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.250486 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+06:15:26.250638 - CHROMIUM: [static | Ready offline] believed to be static text leaf
+06:15:26.250642 - CHROMIUM: Ignoring because child is static text leaf
+06:15:26.250690 - EVENT MANAGER: locusOfFocus: [push button | Microphone] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff916dad50>
+06:15:26.250694 - EVENT MANAGER: _lastCommandWasCaretNav: False
+06:15:26.250695 - EVENT MANAGER: _lastCommandWasStructNav: False
+06:15:26.250697 - EVENT MANAGER: _lastCommandWasMouseButton: False
+06:15:26.250699 - EVENT MANAGER: _inFocusMode: True
+06:15:26.250701 - EVENT MANAGER: _focusModeIsSticky: False
+06:15:26.250702 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0014
+^^^^^ PROCESS OBJECT EVENT object:children-changed:add ^^^^^
+
+
+06:15:26.250867 - EVENT MANAGER: object:children-changed:add for [status bar | Voice status] in [application | Chromium] (0, 0, [static | Dictation: Voice ready])
+06:15:26.250960 - EVENT MANAGER: Not ignoring due to lack of cause
+06:15:26.251078 - EVENT MANAGER: Queueing object:children-changed:add [status bar | Voice status] (0,0,[static | Dictation: Voice ready]) from [application | Chromium]
+06:15:26.251265 - EVENT MANAGER: Dequeued object:children-changed:add [status bar | Voice status] (0,0,[static | Dictation: Voice ready]) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:children-changed:add vvvvv
+06:15:26.251311 - OBJECT EVENT: object:children-changed:add (0, 0, [static | Dictation: Voice ready])
+                                app.name='Chromium' name='Voice status' role='status bar'
+                                description=''
+                                states='enabled sensitive showing visible'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, class:composer__voice-status, explicit-name:true, name-from:attribute, container-busy:false, container-atomic:true, container-relevant:additions text, container-live:polite, atomic:true, relevant:additions text, live:polite, xml-roles:status, tag:div, display:flex'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 2, 1, 2]
+
+                                ANY DATA:

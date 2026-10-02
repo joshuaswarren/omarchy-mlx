@@ -63,4 +63,19 @@ assert.equal(stops[1].reason, "user");
 assert.equal(stops[1].duration, 1);
 assert.equal(new DataView(await stops[1].blob.arrayBuffer()).getUint32(40, true), 16000 * 2);
 
+// Truncation announces once per turn even when both cap paths trip; a
+// resume (reset) re-arms it.
+const { SpeakQueue } = await import("../../serve/mlx_omarchy_assistant/static/js/voice.js");
+{
+  let truncations = 0;
+  const queue = new SpeakQueue();
+  queue.attachHooks({ onTruncate: () => { truncations += 1; } });
+  queue._markTruncated();
+  queue._markTruncated();
+  assert.equal(truncations, 1, "duplicate cap paths must announce once");
+  queue.reset();
+  queue._markTruncated();
+  assert.equal(truncations, 2, "resume must re-arm the truncation event");
+}
+
 console.log("voice recorder js tests passed");

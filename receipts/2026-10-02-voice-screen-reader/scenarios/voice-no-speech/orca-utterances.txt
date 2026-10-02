@@ -1,0 +1,12 @@
+# scenario: voice-no-speech (silent fake mic -> client silence gate announcement)
+# total utterances: 9
+
+[06:15:23.132469] tab 
+[06:15:23.157070] Classify or score toggle button not pressed.
+[06:15:23.328290] tab 
+[06:15:23.361020] Microphone push button.
+[06:15:23.361056] Press and hold, or click to latch, to record.
+[06:15:23.526318] space 
+[06:15:23.813842] Recording started. Press Escape to cancel.
+[06:15:25.057800] space 
+[06:15:25.202410] No speech detected.

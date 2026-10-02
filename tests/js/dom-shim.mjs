@@ -33,7 +33,16 @@ function makeElement(tag) {
       node[name] = val === "" ? true : val;
     },
     getAttribute(name) { return node.attributes[name]; },
-    appendChild(child) { node.children.push(child); child.parent = node; return child; },
+    appendChild(child) {
+      // Real DOM move semantics: appending detaches from the previous
+      // parent, or `while (parent.firstChild) frag.appendChild(...)` spins.
+      if (child.parent) {
+        child.parent.children = child.parent.children.filter((c) => c !== child);
+      }
+      node.children.push(child);
+      child.parent = node;
+      return child;
+    },
     append(...kids) { for (const k of kids) { node.children.push(k); k.parent = node; } },
     remove() {
       const p = node.parent;
@@ -54,6 +63,15 @@ function makeElement(tag) {
     focus() { node.focusCount += 1; },
     setPointerCapture() {},
     getContext: () => null,
+    set innerHTML(html) {
+      // No-parse stand-in: markdown render tests only assert el()-built
+      // nodes, never innerHTML-produced subtrees.
+      node.children.push({ tagName: "div", children: [], text: String(html), parent: node });
+    },
+    get firstChild() { return node.children[0] || null; },
+    get firstElementChild() {
+      return node.children.find((c) => c && c.tagName && !c.tagName.startsWith("#")) || null;
+    },
     classList: {
       add(...names) { for (const n of names) if (!node.className.includes(n)) node.className = (node.className + " " + n).trim(); },
       remove(...names) { for (const n of names) node.className = node.className.split(/\s+/).filter((c) => c !== n).join(" "); },
@@ -87,6 +105,7 @@ export function installShim() {
   globalThis.document = {
     createElement: makeElement,
     createTextNode: (text) => ({ text: String(text) }),
+    createDocumentFragment: () => makeElement("#fragment"),
     getElementById: () => null,
     body: makeElement("body"),
   };

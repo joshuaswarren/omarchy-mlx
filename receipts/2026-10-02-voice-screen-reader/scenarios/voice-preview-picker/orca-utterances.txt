@@ -1,0 +1,53 @@
+# scenario: voice-preview-picker (Details drawer: voice picker change + Preview + Escape closes)
+# total utterances: 50
+
+[06:39:01.130182] tab 
+[06:39:01.175884] Output allowance in tokens combo box.
+[06:39:01.175919] Answer length: automatic.
+[06:39:01.175937] opens menu
+[06:39:01.328385] tab 
+[06:39:01.351472] Send push button.
+[06:39:01.520217] tab 
+[06:39:01.558749] Skip to message box link.
+[06:39:01.559674] Browse mode
+[06:39:01.716361] tab 
+[06:39:01.748219] banner
+[06:39:01.748284] Start a new conversation push button.
+[06:39:01.918539] tab 
+[06:39:01.951659] Open conversation history push button.
+[06:39:01.951685] opens dialog
+[06:39:01.952287] Focus mode
+[06:39:02.112889] tab 
+[06:39:02.152083] Prepare another computer or install an offline bundle push button.
+[06:39:02.152103] opens dialog
+[06:39:02.302162] tab 
+[06:39:02.332571] Open model and memory details push button.
+[06:39:02.332595] opens dialog
+[06:39:02.503132] return 
+[06:39:02.554182] Model and memory details dialog
+[06:39:02.554239] form
+[06:39:02.554260] Close details push button.
+[06:39:02.555085] Browse mode
+[06:39:02.747852] region Voice picker
+[06:39:02.747899] Reply voice combo box collapsed
+[06:39:02.747926] Kokoro panel.
+[06:39:02.747943] Heart - American English (default)
+[06:39:02.748960] Focus mode
+[06:39:04.042297] tab 
+[06:39:04.063281] Reply voice combo box.
+[06:39:04.063304] Heart - American English (default)
+[06:39:04.063317] opens menu
+[06:39:04.260019] Kokoro panel.
+[06:39:04.260103] Heart - American English (default)
+[06:39:05.072191] tab 
+[06:39:05.093092] Preview push button.
+[06:39:05.093122] Preview speaks one fixed sentence in the selected voice.
+[06:39:05.093737] Browse mode
+[06:39:05.276355] return 
+[06:39:08.305802] escape 
+[06:39:08.448760] Voice set to Bella.
+[06:39:08.558094] Voice status Dictation: Voice readySpeech: Voice ready
+[06:39:09.344089] tab 
+[06:39:09.381155] leaving banner.
+[06:39:09.381220] main content
+[06:39:09.381251] Read aloud push button.

@@ -109,7 +109,7 @@ export function buildComposer({
     pointerStartX = event.clientX; pointerStartY = event.clientY;
     micBtn.setPointerCapture(event.pointerId);
   });
-  micBtn.addEventListener("pointerup", () => {
+  micBtn.addEventListener("pointerup", (event) => {
     if (micBtn.disabled) return;
     const dt = Date.now() - pointerDownAt;
     const dx = Math.abs(event.clientX - pointerStartX);
@@ -122,6 +122,20 @@ export function buildComposer({
     }
   });
   micBtn.addEventListener("pointercancel", () => stopMic());
+  // Keyboard activation fires click with detail 0 and never a pointer
+  // event, so Space/Enter must toggle the same latch the pointer uses.
+  micBtn.addEventListener("click", (event) => {
+    if (micBtn.disabled || event.detail !== 0) return;
+    latch = !latch;
+    if (latch) startMic(); else stopMic();
+  });
+  micBtn.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (!isRecording || !isRecording()) return;
+    event.preventDefault();
+    resetMicUi();
+    if (onMicCancel) onMicCancel();
+  });
 
   async function startMic() {
     if (micBtn.disabled) return;
@@ -356,6 +370,7 @@ export function buildComposer({
 function voiceTitle(state) {
   switch (state) {
     case "ready": return "Press and hold, or click to latch, to record";
+    case "usable": return "Voice input is usable, but no recorded acceptance run qualifies this machine yet";
     case "unqualified": return "Voice is not qualified on this machine";
     case "missing": return "Voice pack is missing";
     default: return "Voice status unknown";
@@ -365,6 +380,7 @@ function voiceTitle(state) {
 function voiceLabel(state) {
   switch (state) {
     case "ready": return "Voice ready";
+    case "usable": return "Voice usable, unqualified";
     case "unqualified": return "Voice unqualified";
     case "missing": return "Voice pack missing";
     default: return "Voice unknown";

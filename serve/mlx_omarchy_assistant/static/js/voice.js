@@ -339,8 +339,7 @@ export class SpeakQueue {
       this._completedSeqs = new Set();
     }
     if (this._totalDecoded >= PLAYBACK_CAP) {
-      this._truncated = true;
-      if (this._onTruncate) this._onTruncate();
+      this._markTruncated();
       return;
     }
     if (this._inFlight >= QUEUE_LIMIT) {
@@ -355,6 +354,15 @@ export class SpeakQueue {
 
   _setSpeaking(active) {
     if (this._onSpeakingChange) this._onSpeakingChange(active);
+  }
+
+  _markTruncated() {
+    // Truncation is one event per turn: the enqueue budget check and the
+    // in-stream cap can both trip during the same playback, and the
+    // live-region announcement must not repeat.
+    if (this._truncated) return;
+    this._truncated = true;
+    if (this._onTruncate) this._onTruncate();
   }
 
   _kickRetry() {
@@ -435,9 +443,8 @@ export class SpeakQueue {
               const samples = pcm16leToFloat32(b64);
               const duration = samples.length / rate;
               if (self._totalDecoded + duration > PLAYBACK_CAP) {
-                self._truncated = true;
                 abort.abort();
-                if (self._onTruncate) self._onTruncate();
+                self._markTruncated();
                 return;
               }
               const buffer = ctx.createBuffer(1, samples.length, rate);

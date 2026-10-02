@@ -1,0 +1,63 @@
+# scenario: tts-truncate-resume (Continue reading resumes the truncated queue)
+# total utterances: 60
+
+[06:37:45.037432] tab 
+[06:37:45.067432] History & constraints push button.
+[06:37:45.226086] tab 
+[06:37:45.255751] Output allowance in tokens combo box.
+[06:37:45.255814] Answer length: automatic.
+[06:37:45.255837] opens menu
+[06:37:45.419072] tab 
+[06:37:45.447600] Send push button.
+[06:37:45.617934] tab 
+[06:37:45.651163] Skip to message box link.
+[06:37:45.652528] Browse mode
+[06:37:45.823677] tab 
+[06:37:45.855008] banner
+[06:37:45.855068] Start a new conversation push button.
+[06:37:46.022715] tab 
+[06:37:46.050603] Open conversation history push button.
+[06:37:46.050683] opens dialog
+[06:37:46.051858] Focus mode
+[06:37:46.223289] tab 
+[06:37:46.239262] Prepare another computer or install an offline bundle push button.
+[06:37:46.239305] opens dialog
+[06:37:46.423713] tab 
+[06:37:46.447003] Open model and memory details push button.
+[06:37:46.447053] opens dialog
+[06:37:46.625313] tab 
+[06:37:46.662013] leaving banner.
+[06:37:46.662082] main content
+[06:37:46.662107] Read aloud push button.
+[06:37:46.663035] Browse mode
+[06:37:46.829727] return 
+[06:37:46.955359] Reading reply aloud.
+[06:37:47.057011] Speech paused at the playback limit. Continue reading is available.
+[06:37:57.875591] tab 
+[06:37:57.925093] information
+[06:37:57.925130] Message entry Type a message. Enter sends, Shift+Enter adds a newline.
+[06:37:57.925750] Focus mode
+[06:37:58.071058] tab 
+[06:37:58.096481] Composer controls tool bar
+[06:37:58.096513] Compare options toggle button not pressed.
+[06:37:58.272120] tab 
+[06:37:58.301362] Classify or score toggle button not pressed.
+[06:37:58.465530] tab 
+[06:37:58.486463] Microphone push button.
+[06:37:58.486506] Press and hold, or click to latch, to record.
+[06:37:58.665223] tab 
+[06:37:58.690802] Conversation mode check box not checked.
+[06:37:58.850719] tab 
+[06:37:58.880100] History & constraints push button.
+[06:37:59.037705] tab 
+[06:37:59.061436] Output allowance in tokens combo box.
+[06:37:59.061467] Answer length: automatic.
+[06:37:59.061479] opens menu
+[06:37:59.220479] tab 
+[06:37:59.239527] Send push button.
+[06:37:59.410443] tab 
+[06:37:59.428230] Continue reading the response aloud push button.
+[06:37:59.429715] Browse mode
+[06:37:59.584592] return 
+[06:37:59.711121] Continuing to read aloud.
+[06:37:59.863234] Speech paused at the playback limit. Continue reading is available.

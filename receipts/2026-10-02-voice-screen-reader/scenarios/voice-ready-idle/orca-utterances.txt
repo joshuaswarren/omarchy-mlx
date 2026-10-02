@@ -1,0 +1,47 @@
+# scenario: voice-ready-idle (Tab through controls (voice-ready))
+# total utterances: 44
+
+[06:12:23.057363] tab 
+[06:12:23.082853] Classify or score toggle button not pressed.
+[06:12:23.289444] tab 
+[06:12:23.309862] Microphone push button.
+[06:12:23.309895] Press and hold, or click to latch, to record.
+[06:12:23.520894] tab 
+[06:12:23.544784] Conversation mode check box not checked.
+[06:12:23.760907] tab 
+[06:12:23.782721] History & constraints push button.
+[06:12:23.994982] tab 
+[06:12:24.019846] Output allowance in tokens combo box.
+[06:12:24.019891] Answer length: automatic.
+[06:12:24.019905] opens menu
+[06:12:24.227518] tab 
+[06:12:24.254760] Send push button.
+[06:12:24.469235] tab 
+[06:12:24.493842] Skip to message box link.
+[06:12:24.494635] Browse mode
+[06:12:24.694202] tab 
+[06:12:24.726534] banner
+[06:12:24.726582] Start a new conversation push button.
+[06:12:24.907967] tab 
+[06:12:24.925403] Open conversation history push button.
+[06:12:24.925440] opens dialog
+[06:12:24.926031] Focus mode
+[06:12:25.134960] tab 
+[06:12:25.153124] Prepare another computer or install an offline bundle push button.
+[06:12:25.153163] opens dialog
+[06:12:25.359395] tab 
+[06:12:25.385278] Open model and memory details push button.
+[06:12:25.385307] opens dialog
+[06:12:25.588433] tab 
+[06:12:25.629915] leaving banner.
+[06:12:25.629965] main content
+[06:12:25.629982] information
+[06:12:25.629995] Message entry Type a message. Enter sends, Shift+Enter adds a newline.
+[06:12:25.811410] tab 
+[06:12:25.847778] Composer controls tool bar
+[06:12:25.847818] Compare options toggle button not pressed.
+[06:12:26.050884] tab 
+[06:12:26.087909] Classify or score toggle button not pressed.
+[06:12:26.276540] tab 
+[06:12:26.299354] Microphone push button.
+[06:12:26.299394] Press and hold, or click to latch, to record.

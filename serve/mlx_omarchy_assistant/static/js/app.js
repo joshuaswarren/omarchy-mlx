@@ -31,7 +31,6 @@ export class App {
 
     this.recorder = new Recorder({
       onMeter: () => {},
-      onTick: (elapsed) => announce(this.live, `Recording ${elapsed.toFixed(1)} seconds`),
       onWarn: () => announce(this.live, "About to hit the 30 second limit."),
       onStop: ({ blob, peakRms, reason }) => this._handleRecordingStop(blob, peakRms, reason),
       onDeviceLost: () => this._handleDeviceLost(),
@@ -52,8 +51,10 @@ export class App {
       },
       onError: (err) => announce(this.live, `Speech failed: ${err.message || "unknown error"}`),
       onSpeakingChange: (active) => {
+        const was = this.speakerSpeaking;
         this.speakerSpeaking = active;
         if (this.composer) this.composer.setSpeaking(active);
+        if (active && !was) announce(this.live, "Reading reply aloud.");
       },
     });
     this.speakReplies = false;
@@ -448,7 +449,10 @@ export class App {
       onStopSpeaking: () => this.stopSpeaking(),
       onDraft: (text) => this.onSend({ text, mode: "draft" }),
       onOpenContext: () => this._openContextDrawer(),
-      onMicStart: async () => { await this.recorder.start(); },
+      onMicStart: async () => {
+        await this.recorder.start();
+        this._micMessage("Recording started. Press Escape to cancel.");
+      },
       onMicStop: async () => { await this.recorder.stop(); },
       onMicCancel: async () => {
         await this.recorder.cancel();

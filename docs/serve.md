@@ -126,7 +126,7 @@ held-out suite is now spent.
 On the 192-clip corpus with the pinned `parakeet-tdt-0.6b-v3` (`ed2b7e8c…`):
 WER 3.42 % test-clean (≤ 6 %), 2.92 % test-other (≤ 14 %), 4.39 % accented
 (≤ 20 %), and 11.43 % in 0 dB babble (≤ 30 %); silence and pink noise returned
-empty on 10 of 10 each ([speech input
+silence and pink noise returned empty on 10 of 10 each ([speech input
 receipt](../receipts/2026-09-30-speech-input-gpu/README.md)). The test-clean
 figure scores one 30.04 s clip through the product's 30.0 s cut; counted as a
 refusal, test-clean is 8.15 % and fails. The recognition worker made 0
@@ -135,8 +135,12 @@ are fixed: 3 of 96 clear-speech uploads returned nothing, and the voiced-clip
 retry returns 0 of 96; padding every request and dithering the clip were
 measured and rejected. Browser run, n=30 after the fix: 0 empty, p50 861.8 ms,
 p95 1397.8 ms against the 2 s budget, and the 375/1440 px scenarios (permission
-denied, device loss, 30 s limit, cancel) pass. The Orca pass below covers the
-UI states; no screen-reader run has driven a live dictation.
+denied, device loss, 30 s limit, cancel) pass. The voice-screen reader
+receipt below now drives every state under real Orca, recording the
+verbatim utterances for keyboard start, Stop, Escape, error, transcribing,
+transcript insertion, TTS start/finish/truncate/resume, preview, and the
+voice-state machine; seven accessibility defects were found and fixed
+([voice screen-reader receipt](../receipts/2026-10-02-voice-screen-reader/README.md)).
 
 **Voice output — the real-time threshold is not met, for either engine.** The
 default Qwen3-TTS pack measures median RTF 0.22–0.23 (audio s over wall s)
@@ -200,12 +204,25 @@ offline `--system` stage ran green inside a network namespace on T6001 with 36
 vendored aarch64 wheels; two bugs were found on hardware and fixed test-first
 ([system install receipt](../receipts/2026-09-30-system-install-hw/README.md)).
 
-**Screen reader — pass.** A real Orca run drove the static UI through ten
-states (setup, chat stream, escape, decision, card, compare, drawers, voice
-unavailable, error, offline chip) in a container, with utterances captured
-verbatim. One defect was found and fixed: the setup checkbox announced
-"invalid entry." until `setup.js` set `aria-invalid="false"` ([receipt](../receipts/2026-09-30-screen-reader/README.md)).
-Landmark, heading, and table navigation are not exercisable in that container.
+**Screen reader — pass (extended to the voice features).** Two real Orca
+runs drove the static UI through every state in an isolated container.
+The earlier run (Orca 3.38.4) covered setup, chat stream/escape,
+decision, card, compare, drawers, voice unavailable, error, offline chip
+([receipt](../receipts/2026-09-30-screen-reader/README.md)); the second run
+(Orca 43.1, which ships the full web script) drove the current UI at
+origin/main through the voice path: ready/missing/unqualified/usable
+states, keyboard dictation start/stop/Escape, transcript insertion and
+focus, transcribing 500, no-speech client gate, TTS playback (read aloud,
+Stop speaking, play-to-end, truncation + Continue reading), and the voice
+preview in the Details drawer ([voice screen-reader
+receipt](../receipts/2026-10-02-voice-screen-reader/README.md)). Seven
+a11y defects were found and fixed in this pass: the mic button was
+pointer-only (no Space/Enter start), Escape cancelled only from the
+textarea (no cancel from the focused mic), the recorder tick announced a
+10 Hz polite-region flood, TTS playback start had no announcement, the
+recognition state "usable" was unlabeled, history assistant bubbles
+had no Read aloud control (and no `lastAssistantBubble` for
+truncation), and `SpeakQueue` announced the truncation event twice.
 
 Defects these runs found and fixed in source: chat requests carry a repetition
 penalty of 1.1 because greedy decoding looped on the 2B until the token cap;
@@ -213,7 +230,13 @@ the STT worker made 152 CPU-stream calls through a float64 filterbank built at
 models-package import until the worker registered that package without running
 its `__init__`; the recorder requested browser noise suppression, which doubled
 the captured level (median 2.14×) until it asked for unprocessed audio; the
-voiced-clip retry above; and the card-reply fix (`003823df5`, in `a1251aaa`)
+the voice screen-reader pass added a click handler for keyboard dictation start, an
+Escape keydown handler on the focused mic button, replaced a 10 Hz polite
+live-region flood from the recorder tick with a single "Recording started."
+announcement, announced the false-to-true edge of TTS playback, named the
+"usable" recognition state in the status region and the mic title, rendered
+the Read aloud control on history assistant bubbles, and deduplicated the
+playback-cap truncation announcement. The card-reply fix (`003823df5`, in `a1251aaa`)
 that shows an invalid fence as raw text and guards the empty reply. Still
 open: the 4B's fenced card output keeps failing component validation (model
 behavior — the user gets the notice and raw text, not a card), and the

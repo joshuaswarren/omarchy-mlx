@@ -488,4 +488,112 @@ function collectText(node, out) {
     "Chromium AX does not surface 'invalid entry' to screen readers");
 }
 
+{
+  // Voice controls: keyboard operability of the mic button.
+  // Space/Enter arrive as click with detail 0 (no pointer events); the
+  // pointer latch must stay the only owner of pointer-driven toggles so
+  // a physical click never double-fires.
+  let micStarted = 0, micStopped = 0, micCancelled = 0;
+  let recording = false;
+  const composer = buildComposer({
+    onSend: () => true,
+    onCancel: () => {},
+    onStopSpeaking: () => {},
+    onDraft: () => {},
+    onOpenContext: () => {},
+    onMicStart: async () => { micStarted += 1; recording = true; },
+    onMicStop: async () => { micStopped += 1; recording = false; },
+    onMicCancel: async () => { micCancelled += 1; recording = false; },
+    onMicResult: () => {},
+    voiceStates: { recognition: "ready", synthesis: "ready" },
+    onConversationModeChange: () => {},
+    isRecording: () => recording,
+    isBusy: () => false,
+    isSpeaking: () => false,
+  });
+  const wrap = composer.wrap;
+  const micBtn = wrap.querySelector("#mic-btn");
+  const keyEvent = (key) => ({ key, preventDefault() {} });
+  assert.equal(micBtn.disabled, false, "ready recognition must enable the mic");
+
+  micBtn._fire("click", { detail: 0 });               // keyboard Space/Enter
+  assert.equal(micStarted, 1, "keyboard click must start dictation");
+  assert.equal(micBtn.textContent, "Listening…");
+
+  micBtn._fire("click", { detail: 0 });
+  assert.equal(micStopped, 1, "second keyboard click must stop dictation");
+  assert.equal(micBtn.textContent, "Microphone");
+
+  micBtn._fire("click", { detail: 1 });               // pointer-click twin
+  assert.equal(micStarted, 1, "synthetic pointer click must not toggle; pointer latch owns pointer events");
+
+  // Escape cancels from the mic button itself (focus lives there after a
+  // keyboard start; the textarea Escape handler is unreachable from it).
+  micBtn._fire("click", { detail: 0 });
+  assert.ok(recording, "recording active for the Escape test");
+  micBtn._fire("keydown", keyEvent("Escape"));
+  assert.equal(micCancelled, 1, "Escape on the focused mic button must cancel recording");
+  assert.equal(micBtn.textContent, "Microphone", "cancelled recording must reset the button");
+  assert.equal(recording, false);
+
+  // Escape from the composer textarea keeps its existing cancel path.
+  micBtn._fire("click", { detail: 0 });
+  const textarea = wrap.querySelector("#composer-text");
+  textarea._fire("keydown", keyEvent("Escape"));
+  assert.equal(micCancelled, 2, "textarea Escape must still cancel recording");
+}
+
+{
+  // The recognition state vocabulary must never render as "Voice unknown"
+  // while the server can emit it: "usable" (probe ok, no acceptance
+  // receipt) is named and explained, and keeps the mic disabled.
+  const composer = buildComposer({
+    onSend: () => true, onCancel: () => {}, onStopSpeaking: () => {},
+    onDraft: () => {}, onOpenContext: () => {},
+    voiceStates: { recognition: "usable", synthesis: "unqualified" },
+    isRecording: () => false, isBusy: () => false, isSpeaking: () => false,
+  });
+  const wrap = composer.wrap;
+  const micBtn = wrap.querySelector("#mic-btn");
+  assert.equal(collectText(micBtn), "Microphone");
+  assert.equal(micBtn.disabled, true,
+    "usable-but-unqualified recognition keeps dictation off");
+  assert.match(micBtn.title, /usable/i,
+    "the mic title must name the usable state, not 'Voice status unknown'");
+  const statusText = collectText(wrap.querySelector(".composer__voice-status"));
+  assert.match(statusText, /Dictation: Voice usable, unqualified/);
+  assert.match(statusText, /Speech: Voice unqualified/);
+}
+
+{
+  // Completed assistant bubbles keep their Read aloud control after a
+  // reload: the control is rendered for history messages with sentences
+  // split from stored content, so TTS is reachable without a live turn.
+  const { ConversationView } = await import(
+    "../../serve/mlx_omarchy_assistant/static/js/chat.js");
+  const jumpChip = document.createElement("button");
+  const view = new ConversationView({
+    conversation: { id: "conv", messages: [
+      { role: "user", content: "Say two things.", turn_id: "t0",
+        status: "complete" },
+      { role: "assistant", content: "One sentence here. A second sentence.",
+        turn_id: "t0", status: "complete" },
+    ] },
+    recorder: null, speaker: { enqueue() {}, stop() {} }, live: null,
+    jumpChip,
+  });
+  const mount = document.createElement("div");
+  view.renderInto(mount);
+  const bubbles = mount.querySelectorAll("article");
+  assert.equal(bubbles.length, 2);
+  const readBtn = bubbles[1].querySelector("button");
+  assert.ok(readBtn, "history assistant bubble must render a Read aloud button");
+  assert.equal(collectText(readBtn), "Read aloud");
+  assert.deepEqual(
+    bubbles[1]._mlxSentences.map(([, s]) => s),
+    ["One sentence here.", "A second sentence."]);
+  // The user bubble must not grow a read-aloud control.
+  assert.equal(bubbles[0].querySelector("button"), null);
+}
+
 console.log("assistant ui js tests passed");
