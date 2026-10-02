@@ -105,8 +105,13 @@ quiet-window run (no other render-node holder, `fuser` empty before and after;
 42 tok/s at a 600-token prompt and 76 tok/s at 2,100 tokens (about 25 % under
 the 97–103 tok/s the same model does alone on the GPU in ModelBench, the cost
 of the resident assistant and Laya workers); TTFT 6.31 s for the real
-300-token chat prompt — about 3× the 2 s design budget, of which about
-3.5 s is coordinator overhead on top of the 2.81 s engine-level TTFT; visible
+300-token chat prompt — about 3× the 2 s design budget. The 2026-10-02
+[TTFT phase receipt](../receipts/2026-10-02-quality-ttft/README.md) instrumented
+every phase and corrected the earlier attribution: the coordinator's whole
+per-turn path (pair start, history, admission, speech probe, request dispatch)
+is ~3 ms of the 6.4 s; the cost is the engine's own prompt path — prefill of
+the full 325-token prompt at the resident-pair rate plus the first decode
+step — not coordinator code; visible
 decode about 5.4 tok/s (about 4× the superseded shared-GPU estimate of
 1.4 tok/s, which that run's contention produced); card-turn first text
 2.6–14.4 s. A shared-GPU run 1 (73–81 tok/s prefill, ~1.4 tok/s decode) is
