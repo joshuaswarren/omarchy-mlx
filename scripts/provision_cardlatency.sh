@@ -17,7 +17,7 @@ for build in base after; do
   rsync -a $W/tests/fixtures/cards_dev.json $W/tests/fixtures/cards_held_out_v4.json \
         $H:$D/$build/scripts/
 done
-rsync -a $W/scripts/lane_wait.sh $W/scripts/ticket_card_decompose.sh \
+rsync -a $W/scripts/lane_wait.sh $W/scripts/ticket_card_decompose.sh $W/scripts/ticket_card_final.sh \
       $W/scripts/ticket_card_after.sh $W/scripts/ticket_dev_suite.sh \
       $W/scripts/ticket_v4_suite.sh $H:$D/
 ssh $H "mkdir -p $D/receipt"

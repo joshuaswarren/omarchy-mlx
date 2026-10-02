@@ -13,6 +13,13 @@ T=19
 
 say "lane start boot $(cat /proc/sys/kernel/random/boot_id) kernel $(uname -r)"
 
+# 0. final-build (levers + wrap) card timing, both pairs: refreshes the
+#    receipt's after numbers so the 4B row includes the wrap
+if [ ! -f /tmp/CardLatency/decompose_compact4b_final.json ] \
+   || [ ! -f /tmp/CardLatency/decompose_everyday9b_final.json ]; then
+  ./lane_wait.sh $T ./ticket_card_final.sh >> "$LOG" 2>&1
+fi
+
 for pair in compact4b everyday9b; do
   [ "$(recorded /tmp/CardLatency/dev_cand_${pair}.json)" -ge 15 ] && continue
   ./lane_wait.sh $T ./ticket_dev_suite.sh "$pair" >> "$LOG" 2>&1
