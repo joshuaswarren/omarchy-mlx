@@ -1,97 +1,80 @@
-# v2 community-data submission smoke: blocked by a redaction finding — no row submitted
+# v2 community-data submission smoke: one accepted v2 row, live-verified
 
 Lane: SubmitV2. Pre-registered private notebook entry + raw artifacts with SHA256SUMS
 back every claim here (private lab; host placeholders below).
 
 ## Status
 
-**BLOCKED before submit.** The v0.7.12 deep collector on the M1 Max Omarchy host
-(T6001) produced a fully valid schema v2 payload, but the redaction grep found the
-host's short fleet alias surviving inside journal-quoted systemd unit paths. Per the
-task's defect rule, the submission was NOT made: zero rows were sent, the live service
-was never written to, and no workaround was applied.
+**COMPLETE.** One schema v2 deep row from the M1 Max Omarchy host (T6001) is accepted
+and served by the live service, verified field-by-field through the public API.
+Blocked once by a host-alias redaction leak (see first receipt in this directory's
+history / the fix commit), fixed, then resubmitted clean.
 
-## What ran
+## Provenance
 
-All commands on the M1 Max Omarchy host (placeholders; `<url>` is the documented
-service origin):
+- Leak fix: commit `0afee96eb` on main ("collect: redact hostname-derived aliases in
+  paths and mirror the scan server-side") — collector substring redaction for
+  hostname-derived aliases + request-only alias header the service scans against.
+  Suites: collector python 169 OK (128 deep + 41 macOS; also fixed a latent
+  `__main__`-block placement that silently skipped 24 tail tests in the documented
+  direct run), service bun 81 OK (78 + 3 new), privacy hook clean (3 re-pinned
+  synthetic fixture blobs).
+- Submitted scripts: git archive of the fix commit; collector `collect_common.py`
+  sha256 `7236b318a68ec18ea55d005e1de24834f5b72f9b9ef1072fbebb49ffd6ddfe62` verified
+  identical on the host before the run.
+- Pre-flight: preview + in-process payload dry build on the host — alias grep 0,
+  `redaction_summary` shows the new `hostname_alias: 1` counter working.
+- Benchmark-timing rule: this row carries NO timing numbers (no mlx wheel installed;
+  correctness/benchmark/profile sections record explicit `available: false`), so no
+  load/PSI gate applies to any number here.
 
-```bash
-# scripts/ from tag v0.7.12 (== commit 8995ddf2e7d463a9ffc30854da21f74f632768bd),
-# deployed via git archive; collector sha256 e90d0c4a3f2fe6995f9a4db5e9750cd4721c136106610ea1374da642ade1f808
-python3 scripts/collect_deep.py --out /var/tmp/SubmitV2/preview.tar.gz   # preview, no upload
-# in-process dry build of the exact submit payload (run_sections → assemble_files →
-# finalize with the upload step omitted) → payload-inspect.json
-# SUBMISSION STEP INTENTIONALLY NOT RUN — see Defect
-```
+## Submission
 
-- Preview: exit 0, ~11 s. `schema_version: 2`, `sections_unavailable:
-  [correctness, benchmark, profile]` (no mlx wheel installed — expected), archive
-  23828 bytes, sha256 `37b34b4a3b16c3e94f4e7a2fa2108530c0e595043e7b80d0dad744ebaaf8fc53`.
-- Post-state verified: `ane` module load state and module parameters identical before
-  and after; no reboot, no GPU use; host footprint limited to `/var/tmp/SubmitV2`.
+- Command (placeholders): `python3 scripts/collect_deep.py --out …/submit.tar.gz
+  --submit <service-origin>` — passing `--submit` is the documented consent.
+- Row sha256 / content address:
+  `66091f89cef62b35e6215c68404ef93a872568810c36ffbf560f7d002219db75`
+- Receipt URL: `<service-origin>/v1/results/66091f89cef62b35e6215c68404ef93a872568810c36ffbf560f7d002219db75`
+- Upload answer: stored, `deduplicated=false`.
 
-## Schema v2 field presence (assembled payload, `kind: deep`)
+## Live round-trip (GET /v1/results/<sha>, custom User-Agent)
 
-| Field | Present | Value / shape |
+| Field | Sent | Served |
 |---|---|---|
-| `schema_version` | yes | `2` |
-| `ane_linux` | yes | available; full deep block |
-| `ane_port_detail` | yes | full structure incl. devicetree |
-| `…runtime.omarchy_ane.machine_id` | yes | derived 12-hex token |
-| `…runtime.omarchy_ane.owner_id` | yes | derived 12-hex token |
-| `…runtime.omarchy_ane.check` | yes | available, exit 0, status `ready` |
-| `…runtime.omarchy_ane.module` | yes | name/params/srcversion/version |
-| `…runtime.omarchy_ane.firmware` | yes | explicit unavailable: no firmware dir |
-| `…runtime.omarchy_ane.uptime_s` | yes | integer |
-| `…runtime.omarchy_ane.dmesg_faults` | yes | 1 fault line |
-| `…runtime.omarchy_ane.smoke` | yes | `{requested: false}` (see note) |
-| `devicetree.mailbox` | yes | present |
-| `devicetree.reserved_memory` | yes | 25 children |
-| `devicetree.dtb_sha256` | null | with `dtb_sha256_error: "needs root"` — collector never sudo, as required |
+| `schema_version` / `kind` | 2 / deep | 2 / deep |
+| `chip` / `model` / arch, kernel | apple,t6001 / MacBook Pro (16-inch, M1 Max, 2021) / aarch64 | identical |
+| `ane_linux.available` | true | true |
+| `runtime.omarchy_ane.machine_id` / `owner_id` | derived 12-hex tokens | identical |
+| `runtime.omarchy_ane.check` | exit 0, status ready | identical |
+| `runtime.omarchy_ane.module` | ane 0.2.0.r14.g87f427f + params | identical |
+| `runtime.omarchy_ane.firmware` | explicit unavailable (no firmware dir) | identical |
+| `runtime.omarchy_ane.uptime_s` / `dmesg_faults` | integer / 1 line | identical |
+| `runtime.omarchy_ane.smoke` | `{requested: false}` (no `--ane-smoke`; documented contract) | identical |
+| `devicetree.mailbox` / `reserved_memory` | present / 25 children | identical |
+| `devicetree.dtb_sha256` | null + `dtb_sha256_error: "needs root"` (never sudo) | identical |
+| `ane_linux.interrupts` | 2 idle phases × 14 lines | identical |
+| alias grep over served row | — | 0 |
 
-Smoke note: without `--ane-smoke` the released contract is `{"requested": false}`
-(`test_collect.py:2240`). The `{available: false, reason: "…not shipped in omarchy-ane
-yet"}` shape is produced only with the opt-in flag. Not a code defect; the task's field
-list quoted the opt-in shape.
+`ane_soc_from_collect.py <row.json>`: runs, groups the row under t6001, and REFUSES
+overlay generation with the documented gate — the SET candidate only comes from a
+macOS deep row, and this is a Linux-only row. The Linux side it did ingest is sane:
+ane node `soc/ane@…` (`apple,t6000-ane`), `interrupts = <0 0 770 4>` — decimal AIC
+encoding (IRQ 770, flags 4), no hex garbage; `/proc/interrupts` samples carry decimal
+IRQ numbers. ane0/die-0 overlay pick is pending a macOS row by design, not a defect.
 
-## Redaction check (counts only)
+## Consumer notes (observed, not defects)
 
-Greps over the assembled payload and every archive member:
+- `query_community_data.py --source remote --json --kind deep --chip t6001 list`
+  shows the row (4 t6001 deep rows). The task's literal `--chip M1` matches nothing:
+  the filter matches SoC/model strings (`apple,t6001`), not marketing names. Full
+  unfiltered list: 43 rows.
+- The dataset mirror (`/v1/dataset/latest.jsonl`, 97 rows) intentionally strips
+  `ane_port_detail` (store.ts keeps per-row detail only at `/v1/results/<sha>`);
+  `ane_linux` itself round-trips through the mirror.
 
-| Pattern | Hits |
-|---|---|
-| full hostname | 0 |
-| user name | 0 |
-| LAN prefixes (both home subnets) | 0 |
-| MAC address pattern | 0 |
-| Tailscale CGNAT address / literal | 0 |
-| `serial-number` property | 0 |
-| other identity substrings (user first/last, host model aliases, peer hostnames) | 0 |
-| **host short fleet alias (strict prefix of the hostname)** | **3** |
+## Redaction counts (submitted row)
 
-The 3 hits are the same journal line quoted in three places (`ane_linux.dmesg`,
-`ane_port_detail.runtime.dmesg`, `…omarchy_ane.dmesg`): systemd validating a
-host-admin-created unit file whose name embeds the host alias. The Redactor replaced
-the hostname token with `[host]` (47 replacements) but its rule is a whole-token match
-on the full hostname (`scripts/collect_common.py:143-147`), so a derived alias inside a
-path never matches. The service-side PII scan mirrors the collector patterns
-(`services/community-data/src/pii.ts`), so the row would have been accepted and
-published with the alias.
-
-## Defect
-
-Host-alias survival in redaction: any identifier derived from the hostname (admin-chosen
-unit names, path components) passes both the collector redactor and the service PII
-scan. Suggested fix: redact hostname-prefix aliases (e.g. also replace the hostname's
-leading token before a `-`/`.` boundary) and mirror it in `pii.ts`; add a regression
-fixture quoting a unit path. Optional hardening: ship the dry-build payload inspection
-used here (`finalize` minus upload) as a `--dry-build` flag so any contributor can grep
-before consenting.
-
-## Not done (blocked by the defect)
-
-No submission, hence no row sha256, no live `GET /v1/results/<sha256>` round-trip, no
-`query_community_data.py` visibility check, no `ane_soc_from_collect.py` run on a
-submitted row. The private notebook entry carries the exact next discriminator; rerun
-this procedure unchanged once the redactor fix lands.
+hostname 47, hostname_alias 1 (the new counter), ipv4 10; user names, MACs, UUIDs,
+serials, LAN/Tailscale addresses: 0 occurrences in the served row. Smoke field spec
+corrected in `docs/ane-turn-on-data.md`: without `--ane-smoke` the field is always
+present as `{requested: false}`.
