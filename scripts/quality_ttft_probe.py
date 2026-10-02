@@ -414,14 +414,16 @@ def main():
                "fvt_s": round(fvt, 3) if fvt is not None else None,
                "text_len": len(text_out), "text_head": text_out[:400],
                "gate": gate, "phases": phases,
-               "engine_lines": engine_lines if measure else None}
+               "engine_lines": engine_lines if measure else None,
+               "turn_error": turn_error}
         if measure:
             run["load_after"] = loadavg()
             run["psi_after"] = psi_cpu()
             session["runs"].append(run)
-            f = run["fvt_s"]
-            print(f"  {label}: fvt={f:.3f}s wall={run['wall_s']}s "
-                  f"text_len={len(text_out)} load1={gate.get('load1')}", flush=True)
+            ftxt = f"{run['fvt_s']:.3f}" if run["fvt_s"] is not None else "None"
+            print(f"  {label}: fvt={ftxt}s wall={run['wall_s']}s "
+                  f"text_len={len(text_out)} load1={gate.get('load1')}"
+                  + (f" ERROR={turn_error}" if turn_error else ""), flush=True)
         return run
 
     for i in range(args.warmup):
