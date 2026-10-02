@@ -1,0 +1,593 @@
+{
+  "label": "quality27b-perf",
+  "uname": "7.1.13-3-1-ARCH",
+  "results": [
+    {
+      "label": "prefill_512",
+      "wall_s": 14.55,
+      "first_visible_text_s": 14.502,
+      "first_visible_component_s": null,
+      "text_tokens": 1,
+      "decode_tok_s": 20.234,
+      "text_len": 3,
+      "status": "complete",
+      "prompt_chars": 2699,
+      "prompt_tokens": 600,
+      "max_tokens": 1,
+      "mode": "chat",
+      "reply_head": "The",
+      "events_captured": 5,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1078.594015377
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 3, \"context_limit\": 262144, \"output_tokens\": 1}",
+          "ts": 1079.095264597
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"The\"}",
+          "ts": 1093.094120854
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"output_truncated\", \"message\": \"The response reached the output allowance. Send Continue to keep going.\", \"continue\": true}",
+          "ts": 1093.102496041
+        },
+        {
+          "type": "done",
+          "data_head": "{\"stopped\": false}",
+          "ts": 1093.10257271
+        }
+      ],
+      "components": []
+    },
+    {
+      "label": "prefill_2048",
+      "wall_s": 27.6,
+      "first_visible_text_s": null,
+      "first_visible_component_s": null,
+      "text_tokens": 1,
+      "decode_tok_s": null,
+      "text_len": 3,
+      "status": "complete",
+      "prompt_chars": 9449,
+      "prompt_tokens": 2100,
+      "max_tokens": 1,
+      "mode": "chat",
+      "reply_head": "The",
+      "events_captured": 2,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1093.148787558
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 3, \"context_limit\": 262144, \"output_tokens\": 1}",
+          "ts": 1093.151306919
+        }
+      ],
+      "components": []
+    },
+    {
+      "label": "ttft_170",
+      "wall_s": 11.54,
+      "first_visible_text_s": 6.305,
+      "first_visible_component_s": null,
+      "text_tokens": 24,
+      "decode_tok_s": 4.585,
+      "text_len": 108,
+      "status": "complete",
+      "prompt_chars": 1349,
+      "prompt_tokens": 300,
+      "max_tokens": 64,
+      "mode": "chat",
+      "reply_head": "The provided text consists of the sentence \"The quick brown fox jumps over the lazy dog.\" repeated 31 times.",
+      "events_captured": 26,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1120.76025612
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 66, \"context_limit\": 262144, \"output_tokens\": 64}",
+          "ts": 1120.760620712
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"The\"}",
+          "ts": 1127.063435022
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" provided\"}",
+          "ts": 1127.277148793
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" text\"}",
+          "ts": 1127.495514637
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" consists\"}",
+          "ts": 1127.704871051
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" of\"}",
+          "ts": 1127.918653848
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" the\"}",
+          "ts": 1128.261579588
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" sentence\"}",
+          "ts": 1128.4595505
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" \\\"\"}",
+          "ts": 1128.663097339
+        }
+      ],
+      "components": []
+    },
+    {
+      "label": "decode_128_after_512",
+      "wall_s": 15.55,
+      "first_visible_text_s": 9.975,
+      "first_visible_component_s": null,
+      "text_tokens": 24,
+      "decode_tok_s": 4.302,
+      "text_len": 108,
+      "status": "complete",
+      "prompt_chars": 2699,
+      "prompt_tokens": 600,
+      "max_tokens": 128,
+      "mode": "chat",
+      "reply_head": "The provided text consists of the sentence \"The quick brown fox jumps over the lazy dog.\" repeated 68 times.",
+      "events_captured": 24,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1132.30367747
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 130, \"context_limit\": 262144, \"output_tokens\": 128}",
+          "ts": 1132.304581784
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"The\"}",
+          "ts": 1142.277948856
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" provided\"}",
+          "ts": 1142.491186993
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" text\"}",
+          "ts": 1142.700897047
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" consists\"}",
+          "ts": 1142.91736316
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" of\"}",
+          "ts": 1143.130962164
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" the\"}",
+          "ts": 1143.339584219
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" sentence\"}",
+          "ts": 1143.544072345
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" \\\"\"}",
+          "ts": 1143.761165343
+        }
+      ],
+      "components": []
+    },
+    {
+      "label": "card_turn_1",
+      "wall_s": 49.64,
+      "first_visible_text_s": 13.755,
+      "first_visible_component_s": null,
+      "text_tokens": 22,
+      "decode_tok_s": 0.613,
+      "text_len": 109,
+      "status": "complete",
+      "prompt_chars": 69,
+      "prompt_tokens": 30,
+      "max_tokens": 256,
+      "mode": "chat",
+      "reply_head": "Here is a bar chart comparing the populations of Paris, Tokyo, and Lagos based on the figures you provided.\n\n",
+      "events_captured": 8,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1147.863151055
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 258, \"context_limit\": 262144, \"output_tokens\": 256}",
+          "ts": 1147.864595255
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"Here\"}",
+          "ts": 1161.616543973
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" is\"}",
+          "ts": 1161.822861864
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" a\"}",
+          "ts": 1162.070489111
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" bar\"}",
+          "ts": 1162.291579986
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" chart\"}",
+          "ts": 1162.519431551
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" comparing\"}",
+          "ts": 1162.754031301
+        }
+      ],
+      "components": [
+        "chart"
+      ]
+    },
+    {
+      "label": "card_turn_2",
+      "wall_s": 75.24,
+      "first_visible_text_s": 14.349,
+      "first_visible_component_s": null,
+      "text_tokens": 12,
+      "decode_tok_s": 0.197,
+      "text_len": 57,
+      "status": "complete",
+      "prompt_chars": 138,
+      "prompt_tokens": 70,
+      "max_tokens": 256,
+      "mode": "chat",
+      "reply_head": "Here is the bar chart of monthly rainfall for the year.\n\n",
+      "events_captured": 5,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1197.510068029
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 258, \"context_limit\": 262144, \"output_tokens\": 256}",
+          "ts": 1197.510570414
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"Here\"}",
+          "ts": 1211.857740651
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" is\"}",
+          "ts": 1212.160991073
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" the\"}",
+          "ts": 1212.372484404
+        }
+      ],
+      "components": [
+        "chart"
+      ]
+    },
+    {
+      "label": "card_turn_3",
+      "wall_s": 16.05,
+      "first_visible_text_s": 3.541,
+      "first_visible_component_s": null,
+      "text_tokens": 54,
+      "decode_tok_s": 4.316,
+      "text_len": 162,
+      "status": "complete",
+      "prompt_chars": 96,
+      "prompt_tokens": 37,
+      "max_tokens": 256,
+      "mode": "chat",
+      "reply_head": "Here is the timeline of events based on the information provided:\n\n*   **2020**: Founding\n*   **2021**: First model\n*   **2023**: Series A\n*   **2024**: Expansion",
+      "events_captured": 54,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1272.755754656
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 258, \"context_limit\": 262144, \"output_tokens\": 256}",
+          "ts": 1272.755812199
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"Here\"}",
+          "ts": 1276.295330919
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" is\"}",
+          "ts": 1276.503852811
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" the\"}",
+          "ts": 1276.733073688
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" timeline\"}",
+          "ts": 1276.93546531
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" of\"}",
+          "ts": 1277.20128316
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" events\"}",
+          "ts": 1277.402421929
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" based\"}",
+          "ts": 1277.632185056
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" on\"}",
+          "ts": 1277.862258973
+        }
+      ],
+      "components": [
+        "timeline"
+      ]
+    },
+    {
+      "label": "card_turn_4",
+      "wall_s": 57.19,
+      "first_visible_text_s": 2.555,
+      "first_visible_component_s": null,
+      "text_tokens": 245,
+      "decode_tok_s": 4.484,
+      "text_len": 1054,
+      "status": "complete",
+      "prompt_chars": 45,
+      "prompt_tokens": 9,
+      "max_tokens": 256,
+      "mode": "chat",
+      "reply_head": "Here is a comprehensive checklist for launching a new website, organized by phase to ensure nothing is missed.\n\n### Phase 1: Pre-Launch Planning & Strategy\n- [ ] **Define Goals:** Clearly state what t",
+      "events_captured": 59,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1288.812867732
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 258, \"context_limit\": 262144, \"output_tokens\": 256}",
+          "ts": 1288.814080459
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"Here\"}",
+          "ts": 1291.36630665
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" is\"}",
+          "ts": 1291.601325842
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" a\"}",
+          "ts": 1291.841787482
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" comprehensive\"}",
+          "ts": 1292.22629129
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" checklist\"}",
+          "ts": 1292.411421442
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" for\"}",
+          "ts": 1292.627493719
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" launching\"}",
+          "ts": 1292.843657116
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" a\"}",
+          "ts": 1293.146319701
+        }
+      ],
+      "components": [
+        "checklist"
+      ]
+    },
+    {
+      "label": "card_turn_5",
+      "wall_s": 55.18,
+      "first_visible_text_s": 13.578,
+      "first_visible_component_s": null,
+      "text_tokens": 12,
+      "decode_tok_s": 0.288,
+      "text_len": 66,
+      "status": "complete",
+      "prompt_chars": 87,
+      "prompt_tokens": 16,
+      "max_tokens": 256,
+      "mode": "chat",
+      "reply_head": "Here's a customer feedback form with the three requested fields:\n\n",
+      "events_captured": 9,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1346.005835994
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 258, \"context_limit\": 262144, \"output_tokens\": 256}",
+          "ts": 1346.007587933
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"Here\"}",
+          "ts": 1359.582792582
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"'s\"}",
+          "ts": 1359.783255172
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" a\"}",
+          "ts": 1360.052990444
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" customer\"}",
+          "ts": 1360.260102779
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" feedback\"}",
+          "ts": 1360.482047922
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" form\"}",
+          "ts": 1360.704340777
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" with\"}",
+          "ts": 1360.929256116
+        }
+      ],
+      "components": [
+        "form"
+      ]
+    },
+    {
+      "label": "card_pop_defect_prompt",
+      "wall_s": 45.66,
+      "first_visible_text_s": 13.524,
+      "first_visible_component_s": null,
+      "text_tokens": 22,
+      "decode_tok_s": 0.685,
+      "text_len": 109,
+      "status": "complete",
+      "prompt_chars": 69,
+      "prompt_tokens": 30,
+      "max_tokens": 256,
+      "mode": "chat",
+      "reply_head": "Here is a bar chart comparing the populations of Paris, Tokyo, and Lagos based on the figures you provided.\n\n",
+      "events_captured": 8,
+      "events_sample": [
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"working\"}",
+          "ts": 1401.189908973
+        },
+        {
+          "type": "status",
+          "data_head": "{\"state\": \"generating\", \"context_tokens\": 258, \"context_limit\": 262144, \"output_tokens\": 256}",
+          "ts": 1401.191354572
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \"Here\"}",
+          "ts": 1414.712655422
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" is\"}",
+          "ts": 1414.955385894
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" a\"}",
+          "ts": 1415.474976536
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" bar\"}",
+          "ts": 1415.675232053
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" chart\"}",
+          "ts": 1415.900377748
+        },
+        {
+          "type": "text",
+          "data_head": "{\"text\": \" comparing\"}",
+          "ts": 1416.162940925
+        }
+      ],
+      "components": [
+        "chart"
+      ]
+    }
+  ]
+}

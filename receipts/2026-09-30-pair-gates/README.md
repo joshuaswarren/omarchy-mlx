@@ -17,9 +17,9 @@ fixed harness at `origin/main a1251aaa` (invalid-fence raw-text
 fallback + empty-reply guard). All nine runs report `run_valid:
 true`.
 
-Quality idle-GPU perf: run 1 measured on the shared GPU (earlier).
-An idle-GPU rerun is NOT yet landed; the numbers below are the
-shared-GPU run, labeled as such.
+Quality idle-GPU perf: COMPLETE (quiet window, boot 5498f953, fuser
+empty before and after). Per-pair card timing (4B/9B/27B with
+first-visible text/component splits) also COMPLETE on the same boot.
 
 ## Compliance
 
@@ -245,38 +245,43 @@ the 4 k turn context).
 All nine v3 runs report `run_valid: true` (all core phases valid, all
 card turns complete with visible text).
 
-### Card-turn latency per pair (total wall; first-visible text where captured)
+### Card-turn latency per pair (quiet boot 5498f953, idle render node)
 
-The card turn is the user-visible latency surface. The memory harness
-polls the assembled conversation record and (from this revision on)
-reads the `/events` stream for the first `text` event; the v3 runs
-below recorded wall only, so first-visible text is shown for the
-Quality pair from the SSE-instrumented perf harness and marked
-"not captured" for the 4B and 9B pairs.
+`scripts/card_timing_boot.py` submits the identical card prompt to
+each pair on one boot and reads the SSE stream with a reconnecting
+cursor (the server closes each events connection after 15 s, so a
+single-connection reader misses everything after that — this is why
+earlier runs show `first_visible_text: not captured`).
 
-| pair | card wall (3 runs, s) | first_visible_text (s) | text_len | visible component |
-|---|---|---|---|---|
-| compact4b (4B) | 88.1 / 90.1 / 94.1 | not captured (memory harness) | 857 each | none (prose fallback text) |
-| everyday9b (9B) | 122.2 / 117.2 / 113.2 | not captured (memory harness) | 109 each | chart |
-| quality27b (27B) | 49.1 / 53.1 / 49.1 | 13.4 / 14.4 / 3.2 / 2.6 / 13.3 across the perf harness's five card prompts | 57–1054 | chart |
+| pair | wall (s) | first_visible_text (s) | first_visible_component (s) | visible text | component |
+|---|---|---|---|---|---|
+| compact4b (4B) | 91.33 | 90.92 | — (none) | 857 chars (fallback notice + raw output), 255 tok | none — fence invalid; coordinator emitted `invalid_component` + raw text |
+| everyday9b (9B) | 116.29 | **5.75** | 115.89 | 109 chars / 22 tok | chart |
+| quality27b (27B) | 54.25 | **20.51** | 53.76 | 109 chars / 22 tok | chart |
 
-Decode tok/s over the card turn (text_len / (wall − fvt), Quality
-pair from the perf harness): 109/(48.15−13.37) ≈ 3.1 tok/s,
-57/(77.72−14.41) ≈ 0.9 tok/s, 162/(16.05−3.22) ≈ 12.6 tok/s,
-1054/(57.68−2.55) ≈ 19.1 tok/s, 66/(55.68−13.28) ≈ 1.6 tok/s. For the
-4B and 9B pairs wall is measured but the fvt split is not, so their
-decode rate cannot be separated from prefill+decision latency in
-these runs; `scripts/pair_memory_v2.py` now records
-`first_visible_text_s` for any rerun.
+What each wait is made of, from the event timestamps:
 
-What dominates the card turn, from the split the data allows: the
-27B card turn spends 2.6–14.4 s before the first token shows
-(prefill plus the Laya decision pass plus coordinator setup), then
-streams at 0.9–19.1 tok/s depending on how much the model writes
-(text_len 57–1054). The 9B card turn's 113–122 s wall with only 109
-characters of output means the time is going somewhere other than
-visible text streaming; the memory harness does not split it, and
-this receipt does not guess.
+- **4B**: the user sees nothing for the whole turn. The model emits
+  its fenced block; validation fails at ~90.9 s and the coordinator
+  shows the `invalid_component` notice plus the raw output at that
+  moment. The wait is model load + full generation + fence
+  validation; no partial output is shown while the fence is being
+  buffered. Decode rate is not separable (the fallback lands as one
+  burst).
+- **9B**: prose streams from 5.7 s ("Here is a bar chart of…"), then
+  the model spends ~110 s emitting the fenced chart payload, which
+  stays invisible until it validates at 115.9 s. The wait is NOT
+  prefill (generation started at 0.2 s) and NOT prose decode — it is
+  card-payload generation + validation with no user feedback after
+  the prose.
+- **27B**: prose from 20.5 s (coordinator setup + Laya decision +
+  prefill dominate this first turn), chart payload completes at
+  53.8 s. Same shape as the 9B with roughly half the payload wait.
+
+The release-relevant number is `first_visible_component_s`: ~54 s
+(27B) and ~116 s (9B) for a chart card, and never (4B, invalid
+fence). A spinner-on-prose UX would hide most of it; a card-format
+that streams/validates incrementally would remove it.
 
 `pair_resident_cost` (idle_before - baseline) is much smaller than
 the backend peak because the model weights are mmap'd lazily; the
@@ -293,97 +298,89 @@ run-invalid) measured the same pairs but with a broken card phase.
 Those runs are kept in git history only; the v3 numbers above are the
 receipt.
 
-## Quality pair on idle GPU — run 1 (shared GPU; idle rerun still pending)
+## Quality pair on idle GPU — MEASURED (quiet window, boot 5498f953)
 
-Measured 2026-10-01 on jw14m2-linux (T6021, 96 GB) with
-`scripts/quality27b_perf_api.py` driven entirely through the assistant
-HTTP API. Resumed the saved 27B pair home (skipping setup, since
-pair-locks were on disk). Run 1 of 1.
+Measured 2026-10-02 00:55-00:59 CDT on jw14m2-linux (T6021, 96 GB) with
+`scripts/idle_quality27b_perf.sh` under `gpu-turn -m 30`, after the
+release gates finished and w73 confirmed no reboots. `fuser
+/dev/dri/renderD128` empty before AND after; loadavg recorded both
+ways (before 1.92 2.28 1.36, after 2.31 1.36 1.17); the 27B pair home
+was resumed (boot-id mismatch → one setup pass inside the ticket).
 
-**This run is a shared-GPU measurement, not an idle-GPU
-measurement.** The `fuser /dev/dri/renderD128` check before the run
-showed other tenants on the render node; the absolute numbers below
-therefore include that contention. An idle-GPU rerun (fuser empty
-before AND after) has not landed yet — that is the open item.
+Prompt sizes are tokenizer-measured. The exact-token builder appends
+whole filler sentences, so it overshoots the target by up to one
+filler: the "512" prompt measures 600 tokens, the "2048" prompt 2100,
+the "170" TTFT prompt 300 (Qwen tokenizer, prompt recorded per turn).
+Rates below use the measured counts.
 
-Note on the prompt sizes used here vs the labels: my labels
-`prefill_512` and `prefill_2048` mean "the 5408-token prompt" and
-"the 20956-token prompt" respectively, because `filler * 18` and
-`filler * 70` expand to those token counts with the Qwen3.8 tokenizer
-plus the coordinator's system prompt. The prefill rates below use
-those actual token counts.
-
-Note on the harness's `first_visible_text_s` for `prefill_512`:
-`None`, because `max_tokens=1` produces a single 1-token completion
-with no intermediate `text` SSE event; the harness tracks
-`first_visible_text_s` from the SSE stream. For `prefill_2048`,
-`status=stopped, text_len=0` is the harness's per-turn 600 s deadline
-— prefill completed (20956 tokens in ~258 s), but the per-turn timeout
-in `quality27b_perf_api.wait_turn_with_events` (default 600 s)
-fired before the post-prefill one-token decode completed, so the
-status is reported as `stopped` rather than `complete`. That is a harness
-limitation, not a product bug.
-
-### Quality 27B perf run 1 (measured via assistant API)
-
-- baseline sys_used = 7193.6 MiB (before assistant launched; other
-  resident processes like the previous perf ticket's orphan Laya
-  included; the harness kills those on its own EXIT, so this baseline
-  is the actual pre-pair load)
-- idle_before sys_used = 9050.4 MiB (pair loaded, no turn yet)
-- pair_resident_cost = 1856.8 MiB (idle_before - baseline)
-- peak over baseline = 19,724.9 MiB (with max_tokens=1, only prefill
-  is exercised; this is the 27B weights + KV/activation workspace
-  at 4096 context)
-- backend peak = 19,607.4 MiB (from `mx.get_peak_memory` via the
-  side-effect patcher's `/v1/internal/memory` route)
-- pair_lock_context_tokens = 262,144
-
-| turn | walls (s) | first_visible_text_s (s) | text_len | status | prefill rate |
+| turn | prompt tok | wall (s) | first visible text (s) | output | rate |
 |---|---|---|---|---|---|
-| ttft_170 (967 tokens input) | 43.65 | None (no `text` SSE event for `max_tokens=1`) | 107 | complete | 27 tok/s prefill + 1 decode |
-| prefill_512 (5408 tokens input) | 74.27 | None (max_tokens=1, no `text` SSE event) | 3 | complete | 73 tok/s prefill |
-| prefill_2048 (20,956 tokens input) | 257.99 | None (max_tokens=1, no `text` SSE event) | 0 | stopped (harness per-turn timeout 600 s; prefill completed, decode did not) | 81 tok/s prefill |
-| decode_128_after_512 (5408 input + 128 decode) | 75.26 | None | 107 | complete | decode = 107 tokens / (wall - prefill) ≈ 1.4 tok/s |
-| card_turn_1 (card cue "population") | 48.15 | 13.366 | 109 | complete | card component returned, text_len=109 |
-| card_turn_2 (card cue "bar chart") | 77.72 | 14.407 | 57 | complete | card component returned, text_len=57 |
-| card_turn_3 (card cue "timeline") | 16.05 | 3.216 | 162 | complete | card component returned, text_len=162 |
-| card_turn_4 (card cue "checklist") | 57.68 | 2.552 | 1054 | complete | card component returned, text_len=1054 |
-| card_turn_5 (card cue "form") | 55.68 | 13.284 | 66 | complete | card component returned, text_len=66 |
-| card_pop_defect_prompt (card cue "population", same as card_turn_1) | 48.65 | 13.832 | 109 | complete | card component returned, text_len=109 |
+| prefill (max_tokens=1) | 600 | 14.55 | 14.50 | 1 token | **42 tok/s prefill** (600/14.4) |
+| prefill (max_tokens=1) | 2100 | 27.60 | n/a (no text event at max_tokens=1) | 1 token | **76 tok/s prefill** (2100/27.5) |
+| ttft | 300 | 11.54 | **6.31** | 108 chars | — |
+| decode after 600-tok prompt | 600 | 15.55 | 9.98 | 108 chars (~30 tok) | ~5.4 tok/s visible decode (30/5.6) |
+| card_turn_1 (chart) | 30 | 49.64 | 13.76 | 109 chars | chart component |
+| card_turn_2 (bar chart) | 70 | 75.24 | 14.35 | 57 chars | chart component |
+| card_turn_3 (timeline) | 37 | 16.05 | 3.54 | 162 chars | timeline component |
+| card_turn_4 (checklist) | 9 | 57.19 | 2.56 | 1054 chars | checklist component |
+| card_turn_5 (form) | 16 | 55.18 | 13.58 | 66 chars | form component |
+| card_pop (repeat of turn 1) | 30 | 45.66 | 13.52 | 109 chars | chart component |
 
-### Comparison against design budgets and ModelBench
+All ten turns status=complete. First-visible component timestamps are
+not captured by this harness's SSE reader (it still uses a single
+15 s-limited connection; the reader that does capture them is
+`card_timing_boot.py`, used for the per-pair table below).
 
-- Design budget: first_visible_text_s p95 ≤ 2 s. NOT met for the 27B
-  Quality pair on the shared M2 GPU at these prompt sizes (10-14 s for
-  first-visible-text across card turns; 3.2 s for the timeline card).
+### Comparison against design budgets and ModelBench (idle run)
+
+- Design budget: first_visible_text p95 ≤ 2 s. The 27B idle TTFT for
+  a 300-token prompt is 6.3 s — about 3× the budget. Card-turn first
+  text lands at 2.6–14.4 s depending on how much prose precedes the
+  card payload. Still NOT met, now on an idle node with exact-token
+  prompts.
 - ModelBench engine-level TTFT for a 240-token prompt was 2.81 s
-  (`receipts/2026-09-30-chat-model-bench`). The assistant API
-  measured TTFT in this run is 10-14 s because the API turn includes
-  the coordinator overhead (system prompt, Laya decision-card prefill
-  + decode wait, speech-yield gate, KV-cache warm-up after idle).
-- 27B 4-bit prefill alone-on-GPU is ~97-103 tok/s (ModelBench). With
-  the assistant + Laya workers resident, my measured prefill is
-  73-81 tok/s — about 75-85% of the alone-on-GPU rate.
+  (`receipts/2026-09-30-chat-model-bench`). The assistant-API turn
+  adds coordinator overhead (system prompt, Laya decision prefill +
+  decode, speech-yield gate) on top of model prefill: 6.3 − 2.8 ≈
+  3.5 s of product overhead on a comparable prompt.
+- 27B-4bit prefill on the idle node: 76 tok/s at 2100 tokens
+  (ModelBench alone-on-GPU was 97-103 tok/s; the assistant + Laya
+  workers resident cost ~25%).
+- 27B decode: ~5.4 tok/s visible on the decode turn (108 chars of a
+  128-token allowance — the model stopped at EOS well before the cap;
+  earlier shared-GPU estimate was ~1.4 tok/s, so idle decode is
+  ~4× the shared-GPU figure).
 
-### Card defect recap (preliminary, deeper root-cause pending)
+Artifacts: `receipts/2026-09-30-pair-gates/raw/quiet-idle-27b-perf/`
+(quality27b-idle.json, launch.log with fuser/loadavg receipts,
+COMPLETE). The earlier shared-GPU run 1 remains in
+`receipts/2026-09-30-pair-gates/raw/quality27b-perf/` for comparison;
+its numbers are superseded by this idle run.
 
-The card turns with 27B all returned card components in this run
-(text_len ≥ 57, fvt 2.5-14.4 s). The 4B card turn in compact4b
-run 1 returned `status=complete, text_len=0, components=[]` — silent
-empty reply. The 9B card turn in everyday9b run 1 returned
-`status=stopped, text_len=109` (stopped earlier, returned content).
-The card_pop_defect_prompt for 27B returned `text_len=109` (fine),
-so the 27B is not affected. Card defect capture from the 4B and 9B
-runs is in `receipts/2026-09-30-pair-gates/raw/compact4b-memory-test/`
-and `everyday9b-run1/`; SSE events captured=0 for the 4B card turn
-(the harness's `wait_turn_with_events` consumed the events before
-recording them — the bug is in the harness, not the product;
-fixing the harness to also record events when status=complete with
-text_len=0 is in flight).
+### Shared-GPU run 1 (2026-10-01, superseded by the idle run above)
 
-Artifact: `receipts/2026-09-30-pair-gates/raw/quality27b-perf/` (10 turns,
-COMPLETE sentinel on M2 disk).
+Kept for comparison. Same harness before the exact-token fix: labels
+`prefill_512`/`prefill_2048` were 5408/20956-token prompts
+(`filler * 18` / `filler * 70`); measured prefill 73-81 tok/s,
+ttft_170 (967-token prompt) wall 43.65 s, decode ≈ 1.4 tok/s, card
+turns fvt 2.5-14.4 s, `prefill_2048` hit the harness's 600 s
+per-turn deadline after prefill completed (harness limitation).
+Full table in git history and
+`receipts/2026-09-30-pair-gates/raw/quality27b-perf/`.
+
+### Card defect recap (resolved by coordinator a1251aaa)
+
+The original defect: the 4B card turn returned `status=complete,
+text_len=0` (invalid fence swallowed, empty reply). The coordinator
+fix (raw-text fallback + empty-reply guard) resolved the empty-reply
+symptom: every card turn in the nine v3 memory runs and all three
+quiet-boot card timings returns visible text. What remains on the 4B
+is the upstream model behavior: it still emits a fenced block that
+fails component validation, so the user sees the coordinator's
+invalid_component notice plus the raw output instead of a rendered
+card (see the card-timing table below). The 9B and 27B produce valid
+cards.
+
 
 ## Memory admission target (catalog, budget.py)
 
@@ -442,14 +439,19 @@ were rejected; the harness's revised 3.6 k-char long-context turn fits.
 
 ## Open items
 
-1. Quality idle-GPU perf rerun: run `scripts/quality27b_perf_api.py`
-   under `gpu-turn` with `fuser /dev/dri/renderD128` empty before AND
-   after, and record loadavg. The shared-GPU run above stays labeled
-   as such until that rerun lands.
-2. Long-context (2 k token) chat turn is not in the v3 memory
+1. Long-context (2 k token) chat turn is not in the v3 memory
    script's phase list (the phase is plain/long-context/compare/card
    with the long-context prompt at ~3.6 k chars ≈ 1 k tokens). A
    true ~2 k-token long-context phase would need a separate run.
+2. The idle-perf harness's SSE reader still uses a single 15
+   s-limited events connection, so `first_visible_component_s` is
+   None for its card turns (the reconnecting reader lives in
+   `card_timing_boot.py`). The 27B component latency on this boot
+   comes from the card-timing run: 53.8 s.
+3. The 4B's fenced card output still fails component validation
+   (model behavior, not coordinator): users see the
+   `invalid_component` notice plus raw text instead of a card.
+   Upstream fix is a model or card-format change, not a harness one.
 
 ## Files
 
