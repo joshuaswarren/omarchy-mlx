@@ -154,6 +154,19 @@ print(next(p for root in mlx.__path__
   else
     die "the installed wheel provides no mlx/bin/mlx-omarchy-info; cannot stage the info launcher"
   fi
+  # The parakeet CLI is a data file with an `env python3` shebang; run it
+  # through this venv's interpreter so the vendored numpy/protobuf are
+  # the ones that load. aarch64 wheels only — absent elsewhere by design.
+  if para="$("$venv/bin/python" -I -c 'import os, mlx
+print(next(p for root in mlx.__path__
+           if os.access(p := os.path.join(root, "bin", "mlx-omarchy-parakeet"), os.X_OK)))' 2>/dev/null)"; then
+    para_final="${para#"$dest_root"}"
+    printf '#!/usr/bin/env bash\nexec "%s/bin/python" %q "$@"\n' \
+      "$final_venv" "$para_final" >"$bindir/mlx-omarchy-parakeet"
+    chmod +x "$bindir/mlx-omarchy-parakeet"
+  else
+    say "note: no mlx/bin/mlx-omarchy-parakeet in this wheel (aarch64-only runtime); launcher skipped"
+  fi
   install -m 755 "$ROOT/packaging/mlx-omarchy-retire-legacy" "$bindir/$RETIRE_CMD"
   local sharedir="${dest_root%/}$SYSTEM_SHARE_PREFIX"
   install -d -m 755 "$sharedir"
@@ -198,7 +211,7 @@ EOF
 
   say "System tree staged under ${dest_root:-/}"
   echo "  venv:      $venv"
-  echo "  launchers: $bindir/{mlx-omarchy,mlx-omarchy-demo,mlx-omarchy-chat,mlx-omarchy-serve,mlx-omarchy-info,$RETIRE_CMD,omarchy-mlx-serve}"
+  echo "  launchers: $bindir/{mlx-omarchy,mlx-omarchy-demo,mlx-omarchy-chat,mlx-omarchy-serve,mlx-omarchy-info,mlx-omarchy-parakeet,$RETIRE_CMD,omarchy-mlx-serve}"
   echo "  unit:      $unitdir/$UNIT_NAME (staged only; never enabled at build time)"
   echo "  desktop:   $appsdir/mlx-omarchy-chat.desktop"
   echo "  packaging: the recipe declares pacman depends=(python=$PYTHON_VERSION openblas lapack blas)"
@@ -421,6 +434,18 @@ print(next(p for root in mlx.__path__
            if os.access(p := os.path.join(root, "bin", "mlx-omarchy-info"), os.X_OK)))')
 printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$INFO" >"$BIN/mlx-omarchy-info"
 chmod +x "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info"
+
+# Parakeet CLI through this venv's interpreter: the wheel ships it as a
+# data file with an `env python3` shebang, which would otherwise bind to
+# the system python (no numpy/protobuf). aarch64 wheels only.
+if PARA=$("$VENV/bin/python" -I -c 'import os, mlx
+print(next(p for root in mlx.__path__
+           if os.access(p := os.path.join(root, "bin", "mlx-omarchy-parakeet"), os.X_OK)))' 2>/dev/null); then
+  printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' "$VENV/bin/python" "$PARA" >"$BIN/mlx-omarchy-parakeet"
+  chmod +x "$BIN/mlx-omarchy-parakeet"
+else
+  say "note: no mlx/bin/mlx-omarchy-parakeet in this wheel (aarch64-only runtime); launcher skipped"
+fi
 
 # 5b. Serve CLI: catalog-driven serving with memory admission and an
 #     approve-first download gate. The package ships from the same release

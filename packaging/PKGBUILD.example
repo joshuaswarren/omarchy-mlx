@@ -8,7 +8,7 @@
 # Layout produced (name table of record: serve/mlx_omarchy_paths.py):
 #   /usr/lib/omarchy-mlx/venv/                     private venv, built offline
 #   /usr/lib/omarchy-mlx/chat.py                   terminal demo entry
-#   /usr/bin/mlx-omarchy{,-demo,-chat,-serve,-info}
+#   /usr/bin/mlx-omarchy{,-demo,-chat,-serve,-info,-parakeet}
 #   /usr/bin/mlx-omarchy-retire-legacy             legacy $HOME cleanup
 #   /usr/bin/omarchy-mlx-serve                     command-center launcher
 #   /usr/lib/systemd/user/mlx-omarchy-chat.service staged, never enabled
@@ -49,9 +49,12 @@ build() {
 check() {
   cd "mlx-omarchy-$pkgver"
   # Import smoke in the sandbox; the GPU matmul smoke needs a device and
-  # stays a post-install step on qualified hardware.
+  # stays a post-install step on qualified hardware. numpy and
+  # google.protobuf must be present in the venv: the Parakeet transcribe
+  # path imports them (mlx-omarchy-parakeet), and a venv missing them
+  # fails only at first transcribe.
   "stage/usr/lib/omarchy-mlx/venv/bin/python" \
-    -c 'import mlx.core, mlx_omarchy_paths, mlx_omarchy_serve'
+    -c 'import mlx.core, mlx_omarchy_paths, mlx_omarchy_serve, numpy, google.protobuf'
 }
 
 package() {

@@ -65,8 +65,9 @@ def _wheel_bytes() -> None:
         make_wheel(
             vendor / f"mlx_omarchy-0.0.0.dev0+fake-{PYTAG}-{PYTAG}-linux_x86_64.whl",
             "mlx-omarchy", "0.0.0.dev0+fake", f"{PYTAG}-{PYTAG}-linux_x86_64",
-            {"mlx/__init__.py": "", "mlx/bin/mlx-omarchy-info": "#!/bin/sh\necho fake-info\n"},
-            exec_files=("mlx/bin/mlx-omarchy-info",),
+            {"mlx/__init__.py": "", "mlx/bin/mlx-omarchy-info": "#!/bin/sh\necho fake-info\n",
+             "mlx/bin/mlx-omarchy-parakeet": "#!/usr/bin/env python3\nprint('fake-parakeet')\n"},
+            exec_files=("mlx/bin/mlx-omarchy-info", "mlx/bin/mlx-omarchy-parakeet"),
         )
         make_wheel(
             vendor / "fakelib-1.0-py3-none-any.whl",
@@ -248,6 +249,7 @@ class SystemStageTest(unittest.TestCase):
         self.assertTrue((self.stage / "usr/lib/omarchy-mlx/venv/bin/python").exists())
         for launcher in ("mlx-omarchy", "mlx-omarchy-demo", "mlx-omarchy-chat",
                          "mlx-omarchy-serve", "mlx-omarchy-info",
+                         "mlx-omarchy-parakeet",
                          "mlx-omarchy-retire-legacy", "omarchy-mlx-serve"):
             self.assertTrue((self.stage / "usr/bin" / launcher).is_file(), launcher)
         self.assertTrue((self.stage / "usr/lib/systemd/user/mlx-omarchy-chat.service").is_file())
@@ -272,8 +274,27 @@ class SystemStageTest(unittest.TestCase):
         self.assertIn('exec "/usr/lib/omarchy-mlx/venv/bin/python" -m mlx_omarchy_assistant', chat)
         info = (self.stage / "usr/bin/mlx-omarchy-info").read_text()
         self.assertIn("/usr/lib/omarchy-mlx/venv/lib/python3.", info)
+        parakeet = (self.stage / "usr/bin/mlx-omarchy-parakeet").read_text()
+        self.assertIn('exec "/usr/lib/omarchy-mlx/venv/bin/python"', parakeet)
+        self.assertIn("mlx/bin/mlx-omarchy-parakeet", parakeet)
         desktop = (self.stage / "usr/share/applications/mlx-omarchy-chat.desktop").read_text()
         self.assertIn("Exec=/usr/bin/mlx-omarchy-chat", desktop)
+
+    def test_staged_parakeet_launcher_runs_the_wheel_cli(self):
+        # The staged launcher embeds the final /usr prefix (like every
+        # staged launcher here), so the sandbox exec goes through the
+        # staged venv python and the staged CLI file it names.
+        staged_cli = next(
+            (self.stage / "usr/lib/omarchy-mlx/venv").glob(
+                "lib/python3.*/site-packages/mlx/bin/mlx-omarchy-parakeet")
+        )
+        result = subprocess.run(
+            [str(self.stage / "usr/lib/omarchy-mlx/venv/bin/python"),
+             str(staged_cli)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "fake-parakeet")
 
     def test_staged_venv_serves_and_discovers(self):
         venv_python = self.stage / "usr/lib/omarchy-mlx/venv/bin/python"

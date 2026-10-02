@@ -61,16 +61,12 @@ class TranscribeRefusal(RuntimeError):
 
 
 _TRANSCRIBE_DEPS = ("numpy", "google.protobuf")
+_PIP_NAMES = {"numpy": "numpy", "google.protobuf": "protobuf"}
+_REEXEC_GUARD = "MLX_OMARCHY_PARAKEET_REEXEC"
+_SYSTEM_VENV_PYTHON = Path("/usr/lib/omarchy-mlx/venv/bin/python")
 
 
-def _check_runtime_deps() -> None:
-    """Refuse with the exact install line when deps are missing.
-
-    The wheel deliberately declares no hard dependencies (the upstream
-    packaging contract), so the product names them instead of failing
-    with an import traceback mid-run. soundfile is optional: FLAC
-    decode falls back to ffmpeg when it is absent.
-    """
+def _missing_runtime_deps() -> list[str]:
     import importlib
 
     missing = []
@@ -79,13 +75,96 @@ def _check_runtime_deps() -> None:
             importlib.import_module(module)
         except ImportError:
             missing.append(module)
-    if missing:
-        raise TranscribeRefusal(
-            "missing runtime dependencies for transcribe: "
-            f"{', '.join(missing)}; install them with "
-            "`pip install numpy protobuf` "
-            "(ffmpeg handles FLAC decode when soundfile is absent)"
+    return missing
+
+
+def _installing_venv_python(installed_file: Path | None = None) -> Path | None:
+    """Interpreter of the environment this installed CLI file belongs to.
+
+    The wheel ships this CLI as data under
+    ``<env>/lib/python*/site-packages/mlx/bin/`` with a
+    ``#!/usr/bin/env python3`` shebang, so direct execution can land on a
+    system interpreter that has none of the owning environment's
+    packages (every Omarchy system python lacks numpy/protobuf). The
+    environment that owns the file always sits five parents up; the dev
+    checkout layout does not, so the candidate simply fails the
+    existence check there.
+    """
+    candidate = (installed_file or Path(__file__)).resolve().parents[5] \
+        / "bin" / "python"
+    if not (candidate.is_file() and os.access(candidate, os.X_OK)):
+        return None
+    # Same raw path means we already run under the owning environment.
+    # Never resolve(): a venv python is a symlink to the very CPython
+    # binary a system python3 may point at — the environments differ
+    # (their site-packages), the binary does not.
+    if candidate == Path(sys.executable):
+        return None
+    return candidate
+
+
+def _venv_has_deps(venv_python: Path, missing: list[str]) -> bool:
+    probe = "import " + ", ".join(missing)
+    try:
+        subprocess.run(
+            [str(venv_python), "-I", "-c", probe],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=True,
         )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _missing_deps_message(missing: list[str]) -> str:
+    pip_line = f"{sys.executable} -m pip install " + " ".join(
+        _PIP_NAMES.get(module, module) for module in missing
+    )
+    message = (
+        "missing runtime dependencies for transcribe: "
+        f"{', '.join(missing)}; this launcher ran under "
+        f"{sys.executable}, which does not have them; install them with "
+        f"`{pip_line}` "
+        "(ffmpeg handles FLAC decode when soundfile is absent)"
+    )
+    if (_SYSTEM_VENV_PYTHON.is_file()
+            and _SYSTEM_VENV_PYTHON != Path(sys.executable)):
+        message += (
+            f"; the system package's runtime interpreter is "
+            f"{_SYSTEM_VENV_PYTHON}"
+        )
+    return message
+
+
+def _check_runtime_deps() -> None:
+    """Refuse with the exact install line when deps are missing.
+
+    The wheel deliberately declares no hard dependencies (the upstream
+    packaging contract) and every sanctioned install path (vendor lock,
+    system package) already carries numpy and protobuf inside its venv.
+    The failure mode is interpreter binding, not packaging: this CLI is
+    a data file whose ``env python3`` shebang can resolve outside the
+    owning venv. When the current interpreter lacks a dep and the
+    owning venv's python has it, re-exec under that python once;
+    otherwise name the exact repair instead of failing with an import
+    traceback mid-run. soundfile is optional: FLAC decode falls back to
+    ffmpeg when it is absent.
+    """
+    missing = _missing_runtime_deps()
+    if not missing:
+        return
+    venv_python = _installing_venv_python()
+    if (venv_python is not None
+            and not os.environ.get(_REEXEC_GUARD)
+            and _venv_has_deps(venv_python, missing)):
+        os.execve(
+            str(venv_python),
+            [str(venv_python), str(Path(__file__).resolve()), *sys.argv[1:]],
+            dict(os.environ, **{_REEXEC_GUARD: "1"}),
+        )
+    raise TranscribeRefusal(_missing_deps_message(missing))
 
 
 def _bin_dir() -> Path:
