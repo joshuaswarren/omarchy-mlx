@@ -3,6 +3,8 @@ import payloadSchemaJson from "../../schema/payload-v1.schema.json";
 import { SchemaNode, validateSchemaRoot } from "../../src/schema";
 import { coerceToSchema } from "../../src/coerce";
 import fixtureValue from "./fixtures/payload-v1.json";
+import identityOnlyProbeValue from "../../../../scripts/testdata/ane-probe-identity-only.json";
+import devProbeValue from "../../../../scripts/testdata/ane-probe-dev-x86.json";
 
 // SAFETY: payload-v1.schema.json is the repo's own checked-in schema,
 // byte-verified by schema-identity.test.ts.
@@ -287,6 +289,16 @@ describe("inline Linux ANE probe", () => {
     const absent = structuredClone(fixture);
     const absentResult = coerceToSchema(absent, schema);
     expect(absentResult.unparsed).toEqual({});
+  });
+
+  test("keeps real and identity-only probe captures inline", () => {
+    for (const probe of [devProbeValue, identityOnlyProbeValue]) {
+      const payload = withProbe(structuredClone(probe));
+      const result = coerceToSchema(payload, schema);
+      expect(result.unparsed).toEqual({});
+      expect(payload.ane_linux.ane_probe).toEqual(probe);
+      expect(validateSchemaRoot(payload, schema)).toEqual([]);
+    }
   });
 
   test("parks garbage and oversized objects, preserving valid sibling data", () => {

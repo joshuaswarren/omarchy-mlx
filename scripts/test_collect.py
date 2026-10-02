@@ -2600,6 +2600,16 @@ class AneProbeCollectorTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("device-tree: no /proc/device-tree")
                             for line in result["unreadable"]))
 
+    def test_identity_only_size_fallback_is_a_valid_probe_document(self):
+        with open(os.path.join(os.path.dirname(__file__), "testdata",
+                               "ane-probe-identity-only.json"), encoding="utf-8") as fh:
+            probe = json.load(fh)
+        result = self.call_probe({"available": True, "stdout": json.dumps(probe),
+                                  "stderr": "", "exit_code": 0})
+        self.assertTrue(result["available"])
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["unreadable"], probe["unreadable"])
+
     def test_probe_json_is_redacted_without_corrupting_short_name_fields(self):
         probe = {"schema_version": 1, "board": "air", "model": "MacBook Air",
                  "soc": "t6000", "dmesg": {"matched": 1, "lines": ["host air " + ".".join(("10", "0", "0", "1"))]}}
