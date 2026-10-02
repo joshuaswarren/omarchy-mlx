@@ -161,7 +161,6 @@ class AssistantServer(ThreadingHTTPServer):
         threading.Thread(target=self._prewarm_run, daemon=True).start()
 
     def _prewarm_run(self) -> None:
-        import os
         cancel = self._prewarm_cancel
         try:
             grant = self.coordinator.speech.enter(cancel)
@@ -171,7 +170,7 @@ class AssistantServer(ThreadingHTTPServer):
             return
         try:
             ok = self.synthesis.prime(cancel)
-        except Exception as exc:
+        except Exception:
             ok = False
         finally:
             grant.release()
