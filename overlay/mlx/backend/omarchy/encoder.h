@@ -264,24 +264,6 @@ class MLX_API CommandEncoder {
     return device_;
   }
 
-  // Barrier scope for record_dependency_barrier. The omarchy backend
-  // only emits compute dispatches and transfer-style fills/copies, so
-  // the narrow COMPUTE|TRANSFER stage set is sufficient (and lets Mesa
-  // skip the heaviest VM/cache maintenance on each barrier — see
-  // receipts/2026-10-01-opcost-microbench). The legacy AllCommands
-  // stage set remains reachable via MLX_OMARCHY_BARRIER_STAGE=all.
-  enum class BarrierScope {
-    ComputeTransfer,
-    AllCommands,
-  };
-  struct VkMemoryBarrierBaseScope {
-    VkPipelineStageFlags srcStages;
-    VkPipelineStageFlags dstStages;
-    VkAccessFlags srcAccess;
-    VkAccessFlags dstAccess;
-  };
-  static BarrierScope barrier_scope();
-  static VkMemoryBarrierBaseScope barrier_access_masks();
   uint64_t last_submitted_completion() const {
     return last_completion_;
   }
@@ -395,28 +377,6 @@ class MLX_API CommandEncoder {
   std::vector<std::shared_ptr<void>> retired_pools_;
   std::vector<std::function<void()>> completed_handlers_;
 };
-
-// Pure mask computation for a barrier scope. The omarchy backend records
-// only compute dispatches and transfer-style fills/copies, so the narrow
-// COMPUTE|TRANSFER stage set with MEMORY access masks is a correct and
-// sufficient dependency; ALL_COMMANDS remains available as the rollback
-// scope (MLX_OMARCHY_BARRIER_STAGE=all). constexpr so the doctest covers
-// the logic without linking the backend.
-constexpr CommandEncoder::VkMemoryBarrierBaseScope barrier_masks_for_scope(
-    CommandEncoder::BarrierScope scope) {
-  if (scope == CommandEncoder::BarrierScope::AllCommands) {
-    return {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-            VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
-            VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT};
-  }
-  return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-              VK_PIPELINE_STAGE_TRANSFER_BIT,
-          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-              VK_PIPELINE_STAGE_TRANSFER_BIT,
-          VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
-          VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT};
-}
 
 MLX_API CommandEncoder& get_command_encoder(Stream s);
 std::unordered_map<int, CommandEncoder>& get_command_encoders();

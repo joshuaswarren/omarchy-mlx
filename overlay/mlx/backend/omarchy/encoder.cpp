@@ -66,25 +66,6 @@ bool CommandEncoder::gated_barriers() {
   return on;
 }
 
-CommandEncoder::BarrierScope CommandEncoder::barrier_scope() {
-  // Default remains the pre-2026-10-01 ALL_COMMANDS scope: the OpCost
-  // lane's controlled A/B for the narrow scope was void (wheel provenance
-  // could not be verified) and the barrier path was cleared as the
-  // Kokoro cost anyway (isolated conv == conv after barrier, so the
-  // barrier is not the differentiator). MLX_OMARCHY_BARRIER_STAGE=compute
-  // opts into the narrow COMPUTE|TRANSFER scope for experiments.
-  const char* v = std::getenv("MLX_OMARCHY_BARRIER_STAGE");
-  if (v != nullptr && std::string(v) == "compute") {
-    return BarrierScope::ComputeTransfer;
-  }
-  return BarrierScope::AllCommands;
-}
-
-CommandEncoder::VkMemoryBarrierBaseScope
-CommandEncoder::barrier_access_masks() {
-  return barrier_masks_for_scope(barrier_scope());
-}
-
 bool CommandEncoder::batch_needs_barrier(
     std::span<const TrackedRange> reads,
     std::span<const TrackedRange> writes) const {
@@ -118,23 +99,18 @@ bool CommandEncoder::batch_needs_barrier(
 }
 
 void CommandEncoder::record_dependency_barrier() {
-  // The widest needed dependency on this backend: only compute dispatches
-  // and transfer-style fill/copy are emitted, so COMPUTE|TRANSFER is a
-  // strict narrowing of ALL_COMMANDS. The narrow scope is the default
-  // since 2026-10-01 — the ALL_COMMANDS path forced Mesa's heaviest
-  // VM/cache maintenance on each barrier and showed up as 41-196 ms
-  // stalls on barrier-flagged Convolutions in the Kokoro per-dispatch
-  // profile (9,253 barriers over 78 submissions, 4.5 s of GPU-domain
-  // span inside the 5.0 s wall). MLX_OMARCHY_BARRIER_STAGE=all keeps the
-  // legacy scope reachable as a rollback.
-  auto masks = barrier_access_masks();
+  // The heaviest correct dependency: all commands, all memory access,
+  // both directions. The tracker restarts after it because the barrier
+  // orders everything recorded before it.
   VkMemoryBarrier full{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-  full.srcAccessMask = masks.srcAccess;
-  full.dstAccessMask = masks.dstAccess;
+  full.srcAccessMask =
+      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+  full.dstAccessMask =
+      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
   vk::device_table().CmdPipelineBarrier(
       cmd_,
-      masks.srcStages,
-      masks.dstStages,
+      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
       0,
       1,
       &full,
