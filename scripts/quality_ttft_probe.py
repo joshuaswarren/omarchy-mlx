@@ -183,17 +183,30 @@ def kill_pair_tree(home):
 
 
 class SseDrain:
-    """Open the events SSE stream before submit; collect timestamped events."""
+    """Follow the events SSE stream, reconnecting past the server's 15 s
+    stream cap the same way the product UI does (cursor = last sequence)."""
 
     def __init__(self, cid, runtime, after_seq=0):
-        rt = json.load(open(runtime))
-        self.conn = http.client.HTTPConnection("127.0.0.1", rt["port"], timeout=600)
-        self.conn.request("GET", f"/api/conversations/{cid}/events?after={after_seq}",
-                          headers={"Cookie": rt["cookie"]})
-        self.response = self.conn.getresponse()
+        self.cid = cid
+        self.rt = json.load(open(runtime))
+        self.cursor = after_seq
         self.buf = b""
         self.events = []
         self.error = None
+        self.done = False
+        self._connect()
+
+    def _connect(self):
+        try:
+            self.conn.close()
+        except (OSError, AttributeError):
+            pass
+        self.conn = http.client.HTTPConnection("127.0.0.1", self.rt["port"],
+                                               timeout=600)
+        self.conn.request("GET",
+                          f"/api/conversations/{self.cid}/events?after={self.cursor}",
+                          headers={"Cookie": self.rt["cookie"]})
+        self.response = self.conn.getresponse()
 
     def read_until_done(self, timeout_s=300, stop=None):
         started = time.monotonic()
@@ -201,11 +214,17 @@ class SseDrain:
             if stop is not None and stop.is_set():
                 self.error = "stopped"
                 return
-            chunk = self.response.read1(65536) if hasattr(self.response, "read1") \
-                else self.response.read(65536)
+            try:
+                chunk = self.response.read1(65536) if hasattr(self.response, "read1") \
+                    else self.response.read(65536)
+            except (OSError, http.client.HTTPException) as exc:
+                chunk = b""
+                self.error = f"read: {exc}"[:120]
             if not chunk:
-                self.error = "stream closed"
-                return
+                if self.done:
+                    return
+                self._connect()
+                continue
             self.buf += chunk
             while b"\n\n" in self.buf:
                 block, self.buf = self.buf.split(b"\n\n", 1)
@@ -213,9 +232,11 @@ class SseDrain:
                     if not line.startswith(b"data:"):
                         continue
                     event = json.loads(line[5:])
+                    self.cursor = max(self.cursor, int(event.get("sequence") or 0))
                     self.events.append((event.get("type"), event.get("data") or {},
                                         time.monotonic()))
                     if event.get("type") in ("done", "error"):
+                        self.done = True
                         return
 
     def close(self):
