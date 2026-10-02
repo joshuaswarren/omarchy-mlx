@@ -105,6 +105,18 @@ class MacHostTests(unittest.TestCase):
         self.assertNotIn("private-host", output)
         self.assertIn("[home]/data", output)
 
+    def test_host_alias_inside_macos_capture_paths_is_redacted(self):
+        # macOS captures quote paths too (kextstat/ioreg output); the
+        # derived short name must not survive there either.
+        red = cc.Redactor(hostname="privhost-200", username="private-user",
+                          home="/Users/private-user")
+        line = ("kextstat: /Library/Extensions/privhost-ane.kext "
+                "loaded by privhost-200")
+        out = red.apply(line)
+        self.assertIn("[host]-ane.kext", out)
+        self.assertNotIn("privhost-200", out)
+        self.assertEqual(red.counts.get("hostname_alias"), 1)
+
 
 class ReviewRegressionTests(unittest.TestCase):
     def test_structured_redaction_preserves_schema_keys(self):

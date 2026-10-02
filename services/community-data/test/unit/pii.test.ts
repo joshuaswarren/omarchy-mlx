@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { scanPii } from "../../src/pii";
+import { parseHostAliases, scanPii } from "../../src/pii";
 import fixture from "./fixtures/payload-v1.json";
 
 const CLEAN_VALUES = [
@@ -63,5 +63,29 @@ describe("server-side PII scan", () => {
 
   test("kernel version strings do not false-positive as IPv4", () => {
     expect(scanPii('"kernel":"6.9.1-asahi"')).toBeNull();
+  });
+
+  test("host alias inside a systemd unit path is refused", () => {
+    const line =
+      '"dmesg":["Oct  1 21:58:41 [host] systemd[1]: ' +
+      '/etc/systemd/system/box1-ane.service:9: Ignoring"]';
+    const kinds = scanPii(line, ["box1", "box1-max"]);
+    expect(kinds).not.toBeNull();
+    expect(Object.keys(kinds as object)).toContain("hostname_alias");
+    // The same line passes when no aliases ride the request.
+    expect(scanPii(line)).toBeNull();
+  });
+
+  test("hex runs and longer words do not match an alias", () => {
+    expect(scanPii('"iomem":"0xdeadbeef beefcake"', ["deadbeef"])).toBeNull();
+  });
+
+  test("alias parsing filters junk and caps the list", () => {
+    expect(parseHostAliases("box1, x, ab, ok-name99, BOX1")).toEqual([
+      "box1",
+      "ok-name99",
+    ]);
+    expect(parseHostAliases(null)).toEqual([]);
+    expect(parseHostAliases("a,".repeat(40) + "last1").length).toBeLessThanOrEqual(16);
   });
 });

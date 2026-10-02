@@ -41,6 +41,46 @@ SCHEMA_VERSION = 2
 MAX_STREAM_LINES = 400
 MAX_STREAM_CHARS = 200_000
 
+# Hostname pieces that are generic OS/project words, not machine
+# identity. Redacting them would mangle `omarchy-*` paths and every
+# `Linux ...` log line on default hosts — the same reason the
+# whole-token hostname rule keeps `-` as a boundary.
+GENERIC_HOST_PIECES = frozenset(
+    ("host", "localhost", "local", "linux", "omarchy", "mac", "lan"))
+
+
+def host_aliases(hostname):
+    """Short names someone plausibly derives from `hostname`.
+
+    The first dotted label itself, its `-` fragments of length >= 4,
+    and digit-bearing truncation prefixes of the label down to length
+    4 (`jw16` for `jw16mbp1` is exactly how short fleet aliases are
+    born). Prefixes must contain a digit: an alphabetic 4-letter head
+    like `dead` (of `deadbeef-live`) is a common word, and redacting
+    it standalone would corrupt unrelated text. Generic pieces are
+    dropped. Longest first, so a longer alias is never partially eaten
+    by a shorter one.
+    """
+    aliases = set()
+    first = (hostname or "").split(".")[0].lower()
+    if len(first) < 4 or first in GENERIC_HOST_PIECES:
+        return []
+    for n in range(len(first), 3, -1):
+        piece = first[:n].rstrip("-")
+        if (len(piece) >= 4 and piece not in GENERIC_HOST_PIECES
+                and any(c.isdigit() for c in piece)):
+            aliases.add(piece)
+    for part in first.split("-"):
+        if len(part) >= 4 and part not in GENERIC_HOST_PIECES:
+            aliases.add(part)
+    return sorted(aliases, key=len, reverse=True)
+
+
+def local_hostname():
+    """This machine's host name; collectors import no network modules,
+    so the only socket use lives here and in `Redactor`."""
+    return socket.gethostname()
+
 
 class Redactor:
     """Replace personally identifying strings with typed placeholders."""
@@ -145,6 +185,18 @@ class Redactor:
                 re.compile(r"(?<![\w.-])" + re.escape(self.hostname) +
                            r"(?![\w.-])", re.IGNORECASE),
                 self._replace("hostname", "[host]"),
+            ))
+        # Derived short names survive whole-token redaction inside unit
+        # files and paths (`/etc/systemd/system/<alias>-ane.service`,
+        # quoted verbatim by the journal). Match them as a substring of
+        # a token: the neighbor on each side must be non-alphanumeric,
+        # so hex runs (`0xdeadbeef` against a `dead`-ish alias) and
+        # longer words are never corrupted. Longest first.
+        for alias in host_aliases(self.hostname):
+            rules.append((
+                re.compile(r"(?<![A-Za-z0-9])" + re.escape(alias) +
+                           r"(?![A-Za-z0-9])", re.IGNORECASE),
+                self._replace("hostname_alias", "[host]"),
             ))
         # The user name is PII inside a hyphenated token too
         # (`/tmp/steve-build`, `build-steve/out`), so `-` is not a boundary

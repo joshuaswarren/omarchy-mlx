@@ -125,8 +125,22 @@ def _headers(token, extra=None):
     return headers
 
 
+# Request-only header carrying the redactor's derived short host names.
+# The service scans the summary against them and refuses a payload that
+# still carries one; the header itself is never stored or echoed, so
+# the alias list does not enter the public record.
+ALIAS_HEADER = "X-MLX-Host-Aliases"
+
+
+def alias_header_value(aliases):
+    """One header value from `collect_common.host_aliases` output."""
+    clean = [a for a in (aliases or [])
+             if isinstance(a, str) and 4 <= len(a) <= 64][:16]
+    return ",".join(clean) if clean else None
+
+
 def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
-           token=None):
+           token=None, aliases=None):
     """Submit one archive; returns {"url", "deduplicated", "status"}.
 
     `urlopen` is injectable for tests. Resumable: re-invoking after a
@@ -154,6 +168,10 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
         raise SubmitError(f"dedup probe failed with HTTP {status}")
 
     difficulty = POW_DIFFICULTY
+    initiate_headers = {"Content-Type": "application/json"}
+    alias_value = alias_header_value(aliases)
+    if alias_value:
+        initiate_headers[ALIAS_HEADER] = alias_value
     for attempt in range(2):
         initiate = {
             "schema_version": payload.get("schema_version", 1),
@@ -176,7 +194,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
             urllib.request.Request(
                 f"{base}/v1/submit",
                 data=json.dumps(initiate).encode("utf-8"),
-                headers=_headers(token, {"Content-Type": "application/json"}),
+                headers=_headers(token, initiate_headers),
                 method="POST"),
             timeout)
         decoded = _decode(body)
@@ -233,7 +251,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
 
 
 def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
-                   token=None):
+                   token=None, aliases=None):
     """Publish a payload-only report: no archive, one round trip.
 
     The quick report is small and self-describing, so the endpoint takes
@@ -265,6 +283,10 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
 
     difficulty = POW_DIFFICULTY
     decoded = {}
+    quick_headers = {"Content-Type": "application/json"}
+    alias_value = alias_header_value(aliases)
+    if alias_value:
+        quick_headers[ALIAS_HEADER] = alias_value
     for _attempt in range(2):
         initiate = {
             "schema_version": payload.get("schema_version", 1),
@@ -282,7 +304,7 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
             urllib.request.Request(
                 f"{base}/v1/submit",
                 data=json.dumps(initiate).encode("utf-8"),
-                headers=_headers(token, {"Content-Type": "application/json"}),
+                headers=_headers(token, quick_headers),
                 method="POST"),
             timeout)
         decoded = _decode(raw)

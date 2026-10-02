@@ -36,3 +36,6 @@ d1b064f031dfdab101175dab0107b462eddea5f9  scripts/test_collect.py
 968d2565dbb52181d4749f00e7221e16bc6b1dc9  scripts/test_collect_macos.py
 3e7e4ec85cb116410e80f70fcdc6dad29bdab1ed  scripts/test_collect.py
 968d2565dbb52181d4749f00e7221e16bc6b1dc9  scripts/test_collect_macos.py
+7821ea05b31e5b50004ed7987cc6e9b08572a8e7  scripts/test_collect.py
+735d25fb1050f9b447df15019cba21496633273d  scripts/test_collect_macos.py
+aabf93115829b2e7b80ad7be0c7a1d86f6073e0b  services/community-data/test/unit/pii.test.ts

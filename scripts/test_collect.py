@@ -1637,6 +1637,71 @@ class HyphenAdjacentUserName(unittest.TestCase):
                          "steven stevex user=[user]")
 
 
+class HostnameAliasRedaction(unittest.TestCase):
+    """A short name derived from the host label is still the host name.
+
+    Found in the wild: a host-admin systemd unit named after the host's
+    short fleet alias, quoted verbatim by the journal inside dmesg
+    captures. The whole-token hostname rule cannot see it.
+    """
+
+    def setUp(self):
+        self.red = cc.Redactor(hostname="box1-max-aa", username="steve",
+                               home="/home/steve")
+
+    def test_derivation_covers_label_fragments_and_prefixes(self):
+        aliases = cc.host_aliases("box1-max-aa")
+        self.assertIn("box1-max-aa", aliases)
+        self.assertIn("box1-max", aliases)
+        self.assertIn("box1", aliases)
+        # Generic pieces never become aliases.
+        self.assertNotIn("linux", aliases)
+        # Shortest allowed length is 4; longest first.
+        self.assertEqual(aliases[0], "box1-max-aa")
+        self.assertTrue(all(len(a) >= 4 for a in aliases))
+        # Truncation prefixes must carry a digit; an alphabetic head
+        # like `dead` (of `deadbeef-live`) is a common word.
+        dead = cc.host_aliases("deadbeef-live")
+        self.assertNotIn("dead", dead)
+        self.assertIn("deadbeef", dead)
+        self.assertIn("jw16", cc.host_aliases("jw16mbp1-linux"))
+        self.assertNotIn("linux", cc.host_aliases("jw16mbp1-linux"))
+        self.assertEqual(cc.host_aliases("omarchy"), [])
+        self.assertEqual(cc.host_aliases(""), [])
+
+    def test_alias_inside_unit_path_is_redacted(self):
+        line = ("Oct  1 21:58:41 systemd[1]: "
+                "/etc/systemd/system/box1-ane.service:9: "
+                "Ignoring unknown escape sequences")
+        out = self.red.apply(line)
+        self.assertIn("/etc/systemd/system/[host]-ane.service:9", out)
+        self.assertNotIn("box1", out)
+        self.assertEqual(self.red.counts.get("hostname_alias"), 1)
+
+    def test_full_hostname_token_still_redacted(self):
+        out = self.red.apply("nfs mount from box1-max-aa done")
+        self.assertEqual(out, "nfs mount from [host] done")
+
+    def test_hex_runs_and_longer_words_are_not_corrupted(self):
+        red = cc.Redactor(hostname="deadbeef-live", username="steve",
+                          home="/home/steve")
+        text = "iomap 0xdeadbeef beefcake deadbeef-live reg dead"
+        out = red.apply(text)
+        self.assertIn("0xdeadbeef", out)
+        self.assertIn("beefcake", out)
+        # `dead` is an alphabetic head, not a digit-bearing truncation:
+        # the standalone word survives.
+        self.assertIn(" reg dead", out)
+        self.assertNotIn("deadbeef-live", out)
+        self.assertEqual(red.counts.get("hostname"), 1)
+
+    def test_default_hostname_derives_no_aliases(self):
+        red = cc.Redactor(hostname="omarchy", username="steve",
+                          home="/home/steve")
+        text = "omarchy-ane.service; Linux version 7.1.13"
+        self.assertEqual(red.apply(text), text)
+
+
 class SingleNetworkModule(unittest.TestCase):
     def test_only_collect_submit_imports_urllib(self):
         base = os.path.dirname(os.path.abspath(__file__))
@@ -1860,8 +1925,27 @@ class PayloadOnlySubmit(unittest.TestCase):
         self.assertEqual(fake.requests, [])
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    def test_alias_header_rides_the_initiate(self):
+        import collect_submit as cs
+        fake = self.Fake()
+        receipt = cs.submit_payload("http://e.example", self.PAYLOAD,
+                                    urlopen=fake.open,
+                                    aliases=["box1-max-aa", "box1"])
+        self.assertEqual(receipt["url"], "http://r/q")
+        post = [r for r in fake.requests if r.get_method() == "POST"][0]
+        sent = {k.lower(): v for k, v in post.headers.items()}
+        self.assertEqual(sent.get(cs.ALIAS_HEADER.lower()),
+                         "box1-max-aa,box1")
+
+    def test_alias_header_omitted_when_no_aliases(self):
+        import collect_submit as cs
+        fake = self.Fake()
+        cs.submit_payload("http://e.example", self.PAYLOAD, urlopen=fake.open)
+        post = [r for r in fake.requests if r.get_method() == "POST"][0]
+        sent = {k.lower(): v for k, v in post.headers.items()}
+        self.assertIsNone(sent.get(cs.ALIAS_HEADER.lower()))
+
+
 
 
 class MailboxAndReservedMemoryCapture(unittest.TestCase):
@@ -2241,3 +2325,6 @@ class AneSectionUnavailableMarks(unittest.TestCase):
         self.assertIn("not installed", out["check"]["unavailable"])
         self.assertEqual(out["reserved_memory"]["found"], False)
         self.assertFalse(any(v == "written" for v in [1]))
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

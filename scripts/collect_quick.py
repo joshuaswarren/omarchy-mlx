@@ -39,7 +39,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import collect_macos
 from collect_common import (SCHEMA_VERSION, Redactor, build_payload,
-                            dump_json, json_bytes, run_tool)
+                            dump_json, host_aliases, json_bytes, run_tool,
+                            local_hostname)
 
 DT_BASE = "/sys/firmware/devicetree/base"
 
@@ -945,7 +946,8 @@ def maybe_submit(args, report):
         return 0
     try:
         receipt = collect_submit.submit_payload(
-            endpoint, payload, token=collect_submit.token_from_env())
+            endpoint, payload, token=collect_submit.token_from_env(),
+            aliases=host_aliases(local_hostname()))
     except collect_submit.SubmitError as exc:
         print(f"[submit] FAILED: {exc}", file=sys.stderr)
         return 4

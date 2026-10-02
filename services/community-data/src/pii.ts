@@ -33,9 +33,44 @@ const PII_RE = new RegExp(
 );
 const MAX_REPORTED_HITS = 50;
 
-export function scanPii(text: string): PiiKinds | null {
+// Header carrying the collector redactor's derived short host names
+// (X-MLX-Host-Aliases). Request-only: scanned against the summary,
+// never stored, logged, or echoed, so the alias list itself stays out
+// of the public record.
+export const ALIAS_HEADER = "X-MLX-Host-Aliases";
+const MAX_ALIASES = 16;
+const ALIAS_RE = /^[a-z0-9][a-z0-9._-]{3,63}$/;
+
+export function parseHostAliases(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  for (const piece of raw.split(",")) {
+    const alias = piece.trim().toLowerCase();
+    if (ALIAS_RE.test(alias)) seen.add(alias);
+    if (seen.size >= MAX_ALIASES) break;
+  }
+  return [...seen];
+}
+
+export function scanPii(text: string, hostAliases: string[] = []): PiiKinds | null {
+  const aliases = parseHostAliases(
+    Array.isArray(hostAliases) ? hostAliases.join(",") : null,
+  ).slice(0, MAX_ALIASES);
+  let source = PII_RE.source;
+  if (aliases.length > 0) {
+    // Mirror of the collector's derived-alias rule: an alias may sit
+    // inside a longer token (`/etc/systemd/system/<alias>-ane.service`),
+    // so both neighbors must be non-alphanumeric; hex runs and longer
+    // words never match. Longest first so a shorter prefix cannot eat
+    // a longer alias at the same position.
+    const alternation = [...aliases]
+      .sort((a, b) => b.length - a.length)
+      .map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|");
+    source += `|(?<hostname_alias>(?<![A-Za-z0-9])(?:${alternation})(?![A-Za-z0-9]))`;
+  }
+  const re = new RegExp(source, PII_RE.flags + "g");
   const kinds: PiiKinds = {};
-  const re = new RegExp(PII_RE.source, PII_RE.flags + "g");
   let match: RegExpExecArray | null;
   let hits = 0;
   while ((match = re.exec(text)) !== null) {

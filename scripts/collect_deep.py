@@ -65,8 +65,10 @@ from collect_common import (
     archive_bytes,
     build_manifest,
     build_payload,
+    host_aliases,
     is_native_macos,
     json_bytes,
+    local_hostname,
     read_text,
     run_tool,
 )
@@ -1322,8 +1324,10 @@ def maybe_submit(args, data, archive_name, out_path, payload):
         print(f"[submit] declined; {out_path} stays local")
         return 0
     try:
-        receipt = collect_submit.submit(endpoint, data, payload,
-                                        token=collect_submit.token_from_env())
+        receipt = collect_submit.submit(
+            endpoint, data, payload,
+            token=collect_submit.token_from_env(),
+            aliases=host_aliases(local_hostname()))
     except collect_submit.SubmitError as exc:
         print(f"[submit] FAILED: {exc}", file=sys.stderr)
         print(f"[submit] local output preserved: {out_path}", file=sys.stderr)
