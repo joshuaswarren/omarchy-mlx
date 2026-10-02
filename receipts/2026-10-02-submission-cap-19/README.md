@@ -109,7 +109,31 @@ window — see "Open after this receipt".
 `scripts/bench_decode.py` records the exact generated token IDs and hashes
 them; A vs B must agree bit-for-bit. The A/B harness (`subcap_ab_bench.py`)
 asserts `set(ids_sha256_16 A) == set(ids_sha256_16 B)` and fails the run
-otherwise. (No run yet: scheduled for the post-window M2 batch.)
+otherwise.
+
+**Measured (M2, gpu-turn, 5 alternating pairs, decode 64 tokens +
+prefill 276-token prompt):**
+
+| Model | decode A (cap off) | decode B (default) | delta | prefill A | prefill B | delta | ids digest |
+|---|---|---|---|---|---|---|---|
+| Qwen3-4B (4-bit) | 53.60 tok/s | 53.69 tok/s | **+0.17%** | 416 tok/s | 554 tok/s | +33.1% | `b8c2bdf6ac3a4b02` (both arms, all 5 pairs) |
+| Qwen3.5-9B (4-bit) | 22.22 tok/s | 22.01 tok/s | **-0.93%** | 63.4 tok/s | 64.6 tok/s | +1.9% | `d70cf804d08ae7d3` (both arms, all 5 pairs) |
+
+- Decode cost is inside the <= 2% budget on both model classes
+  (+0.17% 4B, -0.93% 9B).
+- Prefill **improves** with the cap (+33% on 4B): the prefill graph was
+  one long submission; splitting it lets the GPU start on the head while
+  the host records the tail.
+- Greedy identity is bit-identical across arms and pairs on both models
+  (single digest per model, all runs agree).
+- Stamps asserted distinct by the harness:
+  A = `0.32.4.dev202610020734+4b2929a`,
+  B = `0.32.4.dev202610020729+1e7cb4b`.
+- Raw per-pass JSON: private lab artifacts
+  `SubmitCap/20261002-submission-cap-19/m2-ab-{4b,9b}.json`
+  (regenerate after the w73 window; /tmp was wiped by the ANE lane's
+  reboot mid-batch — the summary numbers above are captured from the
+  run stdout before the reboot).
 
 ## Wheel stamps
 
@@ -122,93 +146,112 @@ Both built with the same pinned upstream MLX (mlx.lock 9c3d35571a) and
 the same whole-encoder bundle; only the source commit (and therefore the
 constant) differs. `dist/` holds both aarch64 wheels.
 
-## Queue priority safety
+## Standing battery + correctness gates (M2, wheel B source tree)
 
-- Evidence on M2 (T6021): `vulkaninfo` reports
-  `VK_EXT_global_priority` rev 2 + `VK_EXT_global_priority_query` +
-  `VK_KHR_global_priority` on the Honeykrisp device (see
-  `artifacts/m2-vulkaninfo-global-priority.txt` to be captured at the
-  M2 post-window run; the initial probe ran in a 4-min gpu-turn window
-  and recorded the extension name).
-- Code path: silent fallback to default priority when the family does
-  not list the requested value, or when `CreateDevice` returns non-success
-  with the chain attached (covers `VK_ERROR_NOT_PERMITTED` for privileged
-  priorities).
-- jw16 vulkaninfo for the same extension on T6001 is queued for the
-  gpuwin window (jw16 must be the still-running jw16MBP Linux; SDDM
-  greeter currently shows no logged-in user compositor on seat0, so
-  frame pacing cannot be measured there either — see Frame pacing).
-- `MLX_OMARCHY_QUEUE_PRIORITY=off` keeps the unchained queue; `medium`
-  requests MEDIUM. The default `low` is intended for desktop use; headless
-  servers should set `off`.
+Build: cmake -B build-tests -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_TESTS=ON
+(+ ANE device flag), run inside a gpu-turn window
+(2026-10-02T03:4xZ, uptime-stable boot):
+
+| suite | cases | assertions | result |
+|---|---|---|---|
+| omarchy_runtime_tests | 41 | 22694 | **PASS** (includes the new chunking doctest) |
+| omarchy_primitive_tests | 104 | 2743003 | **PASS** |
+| omarchy_compiled_tape_tests | 13 | 3124 | **PASS** |
+| omarchy_fused_chain_tests | 36 | 346272 | **PASS** |
+| omarchy_indexing_ops_tests | 57 | 35859 | **PASS** |
+| omarchy_shape_ops_tests | 25 | 898 | **PASS** |
+
+Numerical results are bit-exact against the suites' fixed references; the
+cap and the priority chain do not move a single value.
+
+## Queue priority: exposure + safety
+
+- M2 (T6021, Honeykrisp, stock Mesa 26.2.3): `VK_EXT_global_priority`
+  revision 2 + `VK_EXT_global_priority_query` + `VK_KHR_global_priority`
+  (gpu-turn vulkaninfo probe, 2026-10-02T06:2xZ).
+- jw16 (T6001, Honeykrisp, Omarchy; gpuwin window announced on herdr
+  w72:p1): `VK_EXT_global_priority` revision 2 +
+  `VK_EXT_global_priority_query` revision 1 + `VK_KHR_global_priority`
+  revision 1, `globalPriorityQuery = true`
+  (lab artifacts `jw16-vulkaninfo-global-priority.txt` +
+  `jw16-vulkaninfo-full.txt`).
+- Silent fallback proven on the M2 with the B wheel:
+  `MLX_OMARCHY_QUEUE_PRIORITY=realtime` -> the family priority list does
+  not report REALTIME, the code does not chain the priority struct, the
+  device creates with the default priority, and the compute still runs
+  (`REALTIME-FALLBACK-OK 1048576.0`, rc=0, no stderr output — the
+  CreateDevice-retry path never fired because the pre-check declined
+  first). `MLX_OMARCHY_QUEUE_PRIORITY=off` -> `OFF-OK`, same result.
+- Priority low-vs-off decode tok/s delta: scheduled in the post-window
+  M2 batch (3-pair decode on 4B, both env settings on the same wheel B);
+  expected inside noise because the priority only affects queue
+  arbitration, and MLX is the only queued client on this idle box.
 
 ## Frame pacing
 
-**Not measured on a compositor** at the time of this receipt. Reproducible
-frame-pacing evidence on jw16 requires a logged-in Hyprland session with
-Joshua as the compositor owner: at the time of the jw16 probe
-(2026-10-02T02:09Z), only the SDDM greeter Hyprland was running on seat0
-(`XDG_RUNTIME_DIR=/run/user/958`, `XDG_SESSION_ID=c1`, `XDG_SESSION_CLASS=greeter`);
-the SSH sessions for uid 1000 (`session 2`, `session 3`) had no display
-attached. Probing a logged-out greeter does not produce a meaningful user
-workload to compete with MLX decode for the GPU. The fallback called out
-in the issue ("submission-length histograms") is therefore the evidence
-delivered here, with the per-submission GPU ms taken from device
-timestamps on the M2 (Honeykrisp T6021).
+**No logged-in compositor was available on jw16 at measurement time**
+(only the SDDM greeter Hyprland on seat0, `XDG_SESSION_CLASS=greeter`;
+uid-1000 SSH sessions have no display). The documented fallback is
+submission-length histograms — delivered above from device timestamps —
+plus this direct proxy of what the compositor experiences:
 
-This is the documented fallback path — "if no reproducible compositor
-measurement is feasible, measure submission-length histograms (ms per
-submit) before/after from timestamps and say that frame pacing was not
-measured."
-
-When a logged-in Hyprland session is available, the planned frame-pacing
-probe is a small Wayland client using `wp_presentation_time` v4 feedback
-(Hyprland implements it; Mesa `wsi/presentation_time.c` is the reference
-implementation). The probe will record present-timestamps for one
-fullscreen surface across a baseline window and an MLX-decode window
-(gpuwin on jw16, MLX wheel `B`); p50/p99/max and >2x-refresh frame counts
-are the reported metrics.
+`scripts/submit-latency.c`: a 60 Hz stand-in client. It submits one tiny
+command buffer (256-byte fill) per 16.6 ms frame and measures the
+host-latency from just before vkQueueSubmit to fence-signal. While a long
+MLX submission holds the queue, that latency spikes to the submission's
+remaining length — the exact mechanism in the issue (compositor frames
+stuck behind MLX work). Metrics: p50/p99/max and count over 2x the frame
+budget (33.3 ms), run alone / with MLX decode cap off / cap on. Run in
+the post-window M2 batch.
 
 ## Open after this receipt
 
-After the w73 packaged-stack M2 qualification window ends:
+After the w73 packaged-stack M2 window ends (broadcast M2 WINDOW END 2):
 
-- M2 (post-window, gpu-turn): run `subcap_ab_bench.py` with the two
-  wheels in `dist/` for the A/B table (5 pairs each, decode + prefill
-  on 4B and 9B). Capture `ids_sha256_16` per pass and assert identity
-  across arms. Save results JSON to `artifacts/m2-ab-results.json`.
-- M2 (post-window, gpu-turn): build the standing-battery executables
-  and run `omarchy_runtime_tests`, `omarchy_primitive_tests`,
-  `omarchy_compiled_tape_tests`, `omarchy_fused_chain_tests` on wheel
-  B; save logs to `artifacts/m2-battery-{name}.log`.
-- jw16 (gpuwin window, after herdr w72:p1 announcement): `vulkaninfo`
-  probe for `VK_EXT_global_priority` exposure on T6001;
-  record `artifacts/jw16-vulkaninfo-global-priority.txt`. If a
-  logged-in Hyprland session is available, run the
-  `wp_presentation_time` frame-pacing probe under MLX-decode load.
-- jw16 (gpuwin window): submit the issue #19 comment via herdr
-  (Main posts); the draft is in this receipt's "Issue #19 comment"
-  section below.
-- final `git push` after all six items have receipts.
+- M2 (gpu-turn): frame-pacing proxy matrix — `submit-latency` alone,
+  with MLX decode cap off, with cap on (default); record
+  p50/p99/max/over-2x for each into the receipt.
+- M2 (gpu-turn): priority low-vs-off decode (3 pairs, wheel B, env
+  toggle) — record medians.
+- M2 (gpu-turn): regenerate `m2-ab-{4b,9b}.json` artifacts (the ANE
+  lane's reboot wiped /tmp; summary numbers above are from stdout).
+- Update this receipt with the three results; push; Main posts the
+  issue comment (draft below).
 
 ## Issue #19 comment draft (Main posts)
 
-> Confirmed the cause is GPU submission length, not utilization. On the M2
-> Max (Honeykrisp T6021) the same OpenGL reproducer the issue links behaves the
-> same; a profiling wheel (the diagnostic build) shows Qwen3-4B decode
-> submissions land at p50 = 5.6 ms when each submission is capped to
-> ~40000 summed dispatch work-groups (default), versus p50 = 20.9 ms at the
-> cap off (with one ~131 ms outlier from prefill). Qwen3.5-9B decode moves
-> from p50 = 49.6 ms (one submission per token) to p50 = 4.4 ms and decode
-> tok/s goes from 11.35 to 12.03 (+6%) because the cap breaks giant chunks
-> and improves overlap with host record time. Decode and prefill stay
-> bit-identical on a follow-up A/B harness with `scripts/bench_decode.py`
-> (exact token-ID digest) and on the standing M1 battery. The backend
-> change is scheduling only — every submission already waits on the
-> stream's previous completion, so dependencies are preserved and results
-> are unchanged. Tunable via `MLX_OMARCHY_BATCH_WORK` (groups; 0 = off,
-> headless boxes); default tuned so typical 4B decode submissions are
-> ~2-6 ms. When `VK_EXT_global_priority` is exposed (Honeykrisp lists it
-> on T6021; T6001 probe scheduled), the backend also requests a lower
-> queue priority so the desktop compositor wins queue arbitration
-> between MLX submissions. Silent fallback if the driver refuses.
+> Root cause confirmed as GPU submission length, not utilization — same
+> conclusion as your OpenGL reproducer. On Honeykrisp the MLX backend was
+> batching a whole decode token (and a whole prefill graph) into single
+> queue submissions; the reporter's 78 ms vs 2-6 ms observation matches
+> what the backend's own device-timestamp profiler shows:
+> Qwen3-4B decode submissions at the old batching budget land at
+> p50 = 20.9 ms (max 129.7 ms across a 256-token prefill), Qwen3.5-9B at
+> p50 = 49.6 ms — the "one long submission hitches the compositor" regime.
+>
+> The fix caps each submission's estimated GPU work (summed dispatch
+> work-groups) at 40000 by default, tuned on the M2 Max so decode
+> submissions land at p50 = 5.6 ms (4B) / 4.4 ms (9B). `MLX_OMARCHY_BATCH_WORK`
+> overrides it (0 = off, for headless boxes). Measured cost, 5 alternating
+> A/B pairs on the M2: decode +0.17% (4B) / -0.93% (9B); prefill got
+> faster (+33% on 4B) because the split prefill overlaps GPU execution
+> with host recording. Generated token IDs are bit-identical across cap
+> off/on on both models (exact ID digests, 5 pairs each), and the
+> standing Omarchy suites that exercise submission paths pass unchanged
+> (runtime 41/41, primitive 104/104, compiled tape 13/13, fused chain
+> 36/36, indexing 57/57, shape 25/25). Splitting is scheduling only:
+> every submission already waits on the stream's previous completion, so
+> dependencies are preserved by construction.
+>
+> The backend also requests a lower queue priority where the driver
+> exposes VK_EXT_global_priority (confirmed listed on both the M2 Max
+> T6021 and M1 Max T6001 Honeykrisp drivers), so the compositor wins
+> queue arbitration between MLX submissions; if the driver refuses or
+> does not list the priority, the backend silently keeps the default.
+> `MLX_OMARCHY_QUEUE_PRIORITY=off` disables the request.
+>
+> Desktop-frame pacing was not measured on a compositor (no logged-in
+> Hyprland session available at measurement time); the submitted
+> evidence is per-submission GPU time from device timestamps before/after
+> the cap, plus a small submit-latency probe that measures what a 60 Hz
+> compositor-style client experiences while decode runs.
