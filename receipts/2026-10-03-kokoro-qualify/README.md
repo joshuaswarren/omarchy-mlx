@@ -107,10 +107,73 @@ Because durations, F0 and N now come from the whole-sentence prediction,
 bars 1–3 measure only the windowing/frozen-statistics error, by
 construction.
 
-## Round 2 — the frame-sliced streamer (re-render)
+## Round 2 — the frame-sliced streamer (jw16 lab render, OLD wheel, ctx 8)
 
-TBD after the re-render (16 pairs + same-seed floor, product entry point,
-timing recorded).
+Re-rendered on the jw16 lab host (v0.7.22-era product wheel, boot-recorded
+in the lab log; ctx sweep 4/8/16 — 4 failed exactness, 8 chosen). 48 wavs
+(16 main + 16 stream + 16 floor); floor = whole-call seed k vs k+100.
+
+| bar | result | verdict |
+|---|---|---|
+| 1 duration ≤ 2 % | median 0.000 % — the shared-timeline fix removes the prosody-island shortening entirely | pass |
+| 2 F0 ≥ 0.95, ≤ 20 cents | corr median 0.990, cents median 10 — medians pass, but `f0_all_pass` false: some pairs sit below 0.95 | partial |
+| 3 MCD ≤ floor + 1 dB (≈ 33) | median 126.7 dB — still ~4× the allowed bound despite identical timelines | FAIL |
+| 5 clicks | not all boundaries within the whole-call distribution | FAIL |
+| 6 silence ≤ 100 ms | max 98.1 ms | pass |
+
+Round-1's duration/prosody failure is fixed by construction; the
+spectral/click bars are not met yet. The remaining suspect is the
+utterance-slice decode itself (context 8 aligned frames may be short of
+the low-stack + stage-0 receptive field, and each slice resets the
+harmonic-source phase — sample-level correlation vs the whole call is ~0
+at every context tried), i.e. the decoder needs deeper context or a
+phase-continuous source treatment before the objective bars can pass.
+WER for this render was not run (bar 4 last measured 3/216 both arms on
+round 1's render).
+
+## Decision — NOT QUALIFIED (2026-10-03)
+
+Bars 3 and 5 fail on the best current build (design C, old wheel), and the
+TrigContract finding (wrong in-shader sine/cosine constants for
+1e4–1e7 arguments, which Kokoro's source phase reaches) means every
+pre-fix render — whole-call included — carries engine-level spectral error
+anyway; qualification is only meaningful on the fixed engine
+(builds ≥ 79a53e388; v0.7.24). The objective receipt therefore has NOT
+been written; voice output stays unqualified in status.
+
+Recommendation for v0.7.24's default: whole-call decoding
+(`MLX_OMARCHY_KOKORO_STREAM=0`) for the default sentence path. Measured
+trade-off on the M2 serve path (run-004, same boot): whole-call first
+audio median 1.445 s (max 1.66 s — passes the 1.5 s design target on the
+median, thinly) with 50/60 runs starving playback (69.5 s starved);
+streamed (design B, r4) first audio 1.065 s with 0 underruns but fails the
+objective spectral bars. The streamed flag stays as the opt-in
+(`MLX_OMARCHY_KOKORO_STREAM=1`) until bars 2/3/5 pass on the trig-fixed
+engine; the frame-sliced design C is the right shape (duration exact by
+construction) and the remaining work is decoder-context depth and
+source-phase continuity, tuned on the disjoint calibration corpus.
+
+## What objective bars cannot show — NO HUMAN LISTENED
+
+At the owner's direction this qualification attempt is objective; no human
+listened. F0/MCD/click/WER/silence bars cannot hear prosody naturalness, an
+unnatural but consistent intonation, or voice quality that WER still
+transcribes. A listening A/B remains an owner option and is not a gate.
+
+## Provenance
+
+Round 1: run-004 pairs (main `e8a02e9b8` + stream tree, wheel v0.7.17-era
+product build, M2 lab host, boot `3d3b1e2e`), analyzed on the dev box
+(numpy 1.26.4, scipy 1.13.1, librosa 0.10.2, private venv). Round 2:
+jw16 lab host, wheel `0.32.4.dev202610031525+58724762` (v0.7.22 release
+asset, sha256 `bb8e31ac…f188b` verified), mlx-audio 0.5.6, pack
+`kokoro-82m-bf16` 328,684,463 B hash-verified via `Synthesis.prepare`,
+streamer build = `agent/kokoro-qualify-wip` @ e25a4607b + F0-rate/corpus
+fixes; suites `scripts/kokoro_objective_ab.py` (unit-tested). Trig-fixed
+render (candidate wheel `…+trigcontract.79a53e388`) was prepared; its
+16-pair render did not complete in this run (venv dependency sequencing) —
+the decisive fixed-engine numbers remain to be produced, and the
+qualification binds to that engine identity when they exist.
 
 ## Qualification receipt and status
 
@@ -130,4 +193,3 @@ consistent intonation, or voice quality that WER still transcribes; the
 pad-silence bar tolerates up to 100 ms per join by design. A listening A/B
 remains open as an owner option; it is not a gate for this receipt.
 
-TBD: provenance block (wheels, commits, pack revision, render host details).

@@ -279,7 +279,8 @@ class KokoroStreamer:
 
         def emit_upto(pos: int):
             nonlocal pending, pending_start
-            if pos > pending_start and pos - pending_start <= pending.size:
+            pos = min(pos, pending_start + pending.size)
+            if pos > pending_start:
                 piece, pending = (pending[:pos - pending_start],
                                   pending[pos - pending_start:])
                 pending_start = pos
@@ -292,53 +293,50 @@ class KokoroStreamer:
             # F0/N are predicted at twice the aligned-frame rate
             # (the decoder's F0_conv/N_conv stride 2 halves them back).
             f0a, f0b = 2 * ctx0, 2 * ctx1
-            audio = self._render(asr[:, :, ctx0:ctx1],
-                                 F0_curve[:, f0a:f0b] if F0_curve.ndim == 2
-                                 else F0_curve[:, :, f0a:f0b],
-                                 N_curve[:, f0a:f0b] if N_curve.ndim == 2
-                                 else N_curve[:, :, f0a:f0b],
-                                 s, voice)
             start = ctx0 * FRAME_SAMPLES
-            if k > 0:
-                cut = first * FRAME_SAMPLES
-                half = fade // 2
-                b0 = cut - half - pending_start
-                c0 = cut - half - start
-                width = min(fade, pending.size - b0, audio.size - c0)
-                if width <= 0:  # cannot happen with adjacent ranges; be exact
-                    yield from emit_upto(start)
-                else:
-                    yield from emit_upto(cut - half)
-                    # Linear gain ramp: the two renders derive from the SAME
-                    # whole-sentence features and agree within context error,
-                    # so equal-power gains would add a spurious +3 dB bump.
-                    t = (np.arange(width) + 0.5) / width
-                    a, b = pending[b0:b0 + width], audio[c0:c0 + width]
-                    mix = a + t * (b - a)
-                    pending = pending[b0 + width:]
-                    pending_start = cut - half + width
-                    yield np.ascontiguousarray(mix)
-            # stream this render, holding back the next seam's fade band
             hold = fade // 2 if k < len(ranges) - 1 else 0
-            yield from emit_upto(end * FRAME_SAMPLES - hold)
-            pending = np.concatenate([pending, audio[end * FRAME_SAMPLES
-                                                     - hold - pending_start:]])
-            pending_start = end * FRAME_SAMPLES - hold
+            cut_to = min(end * FRAME_SAMPLES - hold,
+                         start + (ctx1 - ctx0) * FRAME_SAMPLES)
+            faded = k == 0
+            for piece in self._render_pieces(
+                    asr[:, :, ctx0:ctx1],
+                    F0_curve[:, f0a:f0b] if F0_curve.ndim == 2
+                    else F0_curve[:, :, f0a:f0b],
+                    N_curve[:, f0a:f0b] if N_curve.ndim == 2
+                    else N_curve[:, :, f0a:f0b],
+                    s, voice):
+                if k > 0 and not faded:
+                    cut = first * FRAME_SAMPLES
+                    half = fade // 2
+                    b0 = cut - half - pending_start
+                    c0 = cut - half - start
+                    width = min(fade, pending.size - b0, piece.size - c0)
+                    if width > 0:
+                        # Linear gain ramp: the two renders derive from the
+                        # SAME whole-sentence features, so equal-power gains
+                        # would add a spurious +3 dB bump.
+                        t = (np.arange(width) + 0.5) / width
+                        a, b = pending[b0:b0 + width], piece[c0:c0 + width]
+                        pending = np.concatenate([pending[:b0], a + t * (b - a)])
+                        faded = True
+                        piece = piece[c0 + width:]
+                pending = np.concatenate([pending, piece])
+                yield from emit_upto(cut_to)
         yield from emit_upto(pending_start + pending.size)
 
-    def _render(self, asr, F0_curve, N_curve, s, voice: str) -> "object":
-        """Float32 audio over one context slice: the unchanged decoder for
-        one-window utterances, else windowed last-stage decoding."""
+    def _render_pieces(self, asr, F0_curve, N_curve, s, voice: str):
+        """Yield float32 window pieces over one context slice: the unchanged
+        decoder for one-window utterances, else windowed last-stage decoding."""
         import mlx.core as mx
         import numpy as np
         if int(asr.shape[2]) <= WINDOW_FRAMES:
-            return self._whole(asr, F0_curve, N_curve, s)
+            yield self._whole(asr, F0_curve, N_curve, s)
+            return
         self._table["current"] = self._stats[voice]
         try:
-            pieces = list(self._decode(asr, F0_curve, N_curve, s))
+            yield from self._decode(asr, F0_curve, N_curve, s)
         finally:
             self._table["current"] = None
-        return np.concatenate(pieces) if len(pieces) > 1 else pieces[0]
 
     def _whole(self, asr, F0_curve, N_curve, s, keep=None):
         """The unchanged decoder over one short utterance."""

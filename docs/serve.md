@@ -660,4 +660,4 @@ operational in that comparison. Its `/v1/models` ID may be an internal
 hash rather than a Hugging Face repository name.
 
 Other historical loader experiments, including the specialized Bonsai
-runtime, are not drop-in HTTP-serving recommendations.
+runtime, are not drop-in HTTP-serving recommendations. The streamed path's utterance cuts re-predicted per-utterance prosody, so an objective A/B (duration, aligned F0, DTW MCD, clicks, pad silence; [objective qualification attempt](../receipts/2026-10-03-kokoro-qualify/README.md)) FAILED it on the spectral bars, and the TrigContract review found the in-shader sine/cosine constants wrong for Kokoro's source-phase range on every build through v0.7.23 — tainting whole-call audio too. The 2026-10-03 frame-sliced rewrite fixes duration exactly by construction but still misses the spectral and click bars; voice output stays unqualified, the streamed flag stays opt-in pending a passing run on the trig-fixed engine (v0.7.24), and the whole-call default remains until then.
