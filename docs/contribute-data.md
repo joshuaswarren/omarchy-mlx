@@ -84,6 +84,8 @@ The collector prints the steps that match your kernel. One wording source:
 
 ## Test the Neural Engine on a base M2 (T8112)
 
+<a id="test-the-neural-engine-on-a-base-m2-t8112"></a>
+
 Base M2 only: a MacBook Air 13" or 15", a 13" MacBook Pro, or a Mac mini with
 the base M2 (T8112). Not M2 Pro, not M2 Max, not M2 Ultra. The opt-in key is
 `ane-t8112`
