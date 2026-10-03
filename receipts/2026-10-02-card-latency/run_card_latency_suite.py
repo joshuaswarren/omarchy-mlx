@@ -275,7 +275,10 @@ def main():
             components = (message or {}).get("components") or []
             types = [c.get("type") for c in components]
             elapsed = time.monotonic() - started
-            expect = prompt["expect"]
+            # cards_dev-generation fixtures carry no per-prompt "expect";
+            # the category alone decides (card-worthy vs plain/near-miss).
+            expect = prompt.get("expect") or (
+                "card" if prompt["category"] == "card-worthy" else "none")
             kinds_valid = any(t in VALID_CARD_KINDS for t in types)
             passed = (expect == "card" and kinds_valid) or (
                 expect == "none" and not kinds_valid)

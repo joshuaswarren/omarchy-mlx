@@ -46,6 +46,6 @@ $V receipt/run_card_latency_suite.py \
   --repo-serve /tmp/CardLatency/$BUILD/serve \
   --suite /tmp/CardLatency/$BUILD/scripts/cards_held_out_v4.json \
   --tag "$TAG" \
-  --out /tmp/CardLatency/v4_${TAG}_${PAIR}.json \
+  --out /tmp/CardLatency/v4_${TAG}_${LABEL}.json \
   --budget-s 1500
 echo "== v4 $PAIR $BUILD done $(date -u +%FT%TZ)"
