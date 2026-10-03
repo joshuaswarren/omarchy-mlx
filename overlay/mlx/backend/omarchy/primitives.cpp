@@ -7485,9 +7485,16 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // so all arms are digest-identical to the shipped kernel; the M16
       // twins (small low-occupancy grids, raster order irrelevant) and
       // the non-FullN builds are out of scope and ignore the envs.
-      //   MLX_OMARCHY_QMM_RASTER=swap|2|4|8  workgroup rasterization order
+      //   MLX_OMARCHY_QMM_RASTER=swap|2|4|8  explicit rasterization order
       //   MLX_OMARCHY_QMM_TWON=1            two column tiles per A load
       //   MLX_OMARCHY_QMM_PERSIST=<rows>    cap m-axis launch extent
+      //   MLX_OMARCHY_QMM_NO_RASTER=1       shipped raster (opt-out)
+      // Landed default (receipts/2026-10-03-prefill-axes): group-of-GM=4
+      // rasterization for multi-row-tile grids - G13C A/B +2.4% (2B
+      // pf1024), +4.4% (9B pf512), +3.7% (9B pf1024) wall prefill with
+      // bit-exact digests; G13G confirmation in the same receipt. The
+      // single-row-tile case keeps the shipped mapping (nothing to
+      // regroup).
       omarchy::ComputeKernel qmm_kernel;
       uint32_t grid_x = n_groups;
       uint32_t grid_y = m_groups;
@@ -7495,6 +7502,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       bool env_routed = false;
       const char* twon_env = std::getenv("MLX_OMARCHY_QMM_TWON");
       const char* raster_env = std::getenv("MLX_OMARCHY_QMM_RASTER");
+      const bool default_g4 = coopmat_rows == 32u && full_n &&
+          params.matrix_m > 32u &&
+          std::getenv("MLX_OMARCHY_QMM_NO_RASTER") == nullptr;
       if (coopmat_rows == 32u && full_n) {
         if (twon_env != nullptr && twon_env[0] == '1' &&
             (params.matrix_n % 64u) == 0u) {
@@ -7521,6 +7531,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
             grid_y = 1u;
             env_routed = true;
           }
+        } else if (default_g4) {
+          constexpr uint32_t gm = 4u;
+          qmm_kernel =
+              omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG4;
+          grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
+          grid_y = 1u;
+          env_routed = true;
         }
       }
       if (!env_routed) {
