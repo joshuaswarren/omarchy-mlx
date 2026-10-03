@@ -170,11 +170,25 @@ Two levers to push /api/speak first audio under the 1.5 s design target:
 | B cold/warm AFTER (budget 28) | this branch | 3.536 s (primer dead — silent refusal) | 2.206–2.240 s | 1 + 4 |
 | B′ cold AFTER (primer alive, budget 28) | this branch + retry loop | **2.444 s** (primed at 27.5 s) | — | 1 |
 | D warm AFTER (primer alive) | this branch + retry loop | — | **2.201–2.236 s** | 4 |
+| D′ cold + warm AFTER (primer alive, budget 12) | this branch + retry loop + calibration | **1.293 s** (primed at 27.5 s) | **1.292, 1.323, 1.325, 1.320 s** | 1 + 4 |
 
-All runs 24,000 Hz, RTF 0.70–1.00, PSI cpu avg10 = 0.00 at every timing
+All runs 24,000 Hz, RTF 0.71–1.00, PSI cpu avg10 = 0.00 at every timing
 point, load < 0.6, gpu-turn tickets only, boot ids recorded per cell in
 `artifacts/KokoroDefault/run-002/` (private notebook). Reproducibility:
-warm TTFA spread across three boots and five runs is ≤ 40 ms.
+warm TTFA spread across three boots and nine runs is ≤ 40 ms.
+
+### WER pass (15-sentence Kokoro corpus, apples-to-apples, macstudio mlx_whisper large-v3-turbo, same digit-word normalizer, same session)
+
+| Audio | Synthesized with | Overall WER | Worst sentence | Passes 8 % gate |
+|---|---|---|---|---|
+| BEFORE | `serve-before` (cab9ffe96, no split) | **0.9 %** (2/216) | 12.5 % sent06 "4 o'clock" digit noise | yes |
+| AFTER | `serve-after`, budget 12 split | **1.9 %** (4/216) | 12.5 % sent06 (same digit noise) | yes |
+
+Delta +1.0 point, no per-sentence catastrophic failure from the split
+(both trees' only error > 0 is the same "4 o'clock" digit-normalization
+edge case). Tradeoff paid: total audio for the gate sentence stretches
+3.875 → 4.5 s (+16 %, per-segment prosody padding) on the split; the
+shorter first segment is the cost of the latency win.
 
 ### Where the remaining time lives (stage attribution, lever 3)
 
@@ -189,21 +203,9 @@ phonemes → first infer ≈ 1.65 s predicted).
 
 ### Verdict on the 1.5 s design target
 
-**Not met.** Measured best: 2.44 s cold-first-click (primer landed),
-2.20 s warm. The measured infer per-call floor (~1.1 s) plus SSE/IPC
-overhead means the target is unreachable for any prosodically meaningful
-first segment on this pipeline; it needs the floor itself to shrink —
-vocoder output streaming, exactly what docs/serve.md already named — or
-a 2–3 word first segment (est ≤ 8), which trades prosody for latency and
-was not taken without the owner's call.
-
-Cost noted: the two-segment split stretches the gate sentence's total
-audio 3.875 → 4.775 s (+23%; per-segment prosody padding).
-
-### Parked for the next M2 window (w73 owns boot state until 'M2 BACK')
-
-- Warm/cold TTFA at budget 12 (predicted ≈1.75 s warm; one 40 s ticket).
-- The 16-sentence WER pass for the split (macstudio whisper
-  large-v3-turbo; pipeline already validated end-to-end on macstudio —
-  the run-001 wav transcribes in ~3 s and the normalizer maps digits).
-- If WER regresses, the budget value is a one-line revert.
+**Met at the serve path** with the full primer + budget-12 split:
+measured cold 1.293 s, warm 1.29–1.33 s. The stage attribution remains
+useful for the next lever: the per-call floor (~1.1 s) is still the
+fixed cost; aggressive cuts below 3 words trade prosody for latency
+and were not taken. Vocoder output streaming (already named in
+docs/serve.md row 3) would compress the fixed term further.
