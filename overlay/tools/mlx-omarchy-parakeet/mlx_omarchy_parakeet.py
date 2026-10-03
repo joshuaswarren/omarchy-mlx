@@ -77,6 +77,15 @@ def _pk_timing_extra_on() -> bool:
     )
 
 
+def _pk_seal_trace_on() -> bool:
+    """MLX_OMARCHY_ANE_SEAL_TRACE=1: keep the worker scratch so the
+    resident-worker.stderr seal waterfall (read_hash/copy/seal ms)
+    survives the run — without it the trace is deleted with the scratch."""
+    return os.environ.get("MLX_OMARCHY_ANE_SEAL_TRACE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 class TranscribeRefusal(RuntimeError):
     """The installed runtime cannot or must not run; the reason is named."""
 
@@ -653,7 +662,7 @@ def _transcribe(args) -> int:
                 passed = False
             prior = (tokens, transcript)
         finally:
-            if not args.keep_scratch:
+            if not args.keep_scratch and not _pk_seal_trace_on():
                 shutil.rmtree(scratch_root, ignore_errors=True)
     return 0 if passed else 1
 
