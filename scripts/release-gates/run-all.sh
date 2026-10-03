@@ -27,8 +27,8 @@ fi
 
 LOCAL_GATES=(g1-clean-install g2-online-9b g3-online-4b-card g4-offline g5-laya
              g6-codec g7a-packaged-icd g7b-system-install g8-kokoro
-             g9-speak-queue g10-kokoro-primer g11-card-9b)
-JW16_GATES=(g7c-ane-worker-verify g7d-fresh-transcribe)
+             g9-speak-queue g10-kokoro-primer g11-card-9b g12-kokoro-stream)
+JW16_GATES=(g7c-ane-worker-verify g7d-fresh-transcribe g13-gdn-maskless)
 
 FAILED=0
 for g in "${LOCAL_GATES[@]}"; do

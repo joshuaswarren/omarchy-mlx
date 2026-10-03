@@ -33,6 +33,7 @@
 : "${TTS_PACK_HOME:=${HOME}/mlx-tts-home}"
 : "${PY_AARCH64:=python3.14}"
 : "${INSTALL_TREE:=$GATE_ROOT/${TAG}-worktree}"
+: "${GATE_WORKTREE:=$HOME/src/mlx-omarchy-v0715}"
 : "${GATE_INSTALL_PATH:=/usr/local/bin:/usr/bin:/bin}"
 : "${SERVING_VENV:=}"
 
