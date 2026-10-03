@@ -3379,6 +3379,120 @@ TEST_CASE("sdpa vjp dk dv match finite differences at rep=1 (path per gate)" *
   run(1, 2, 5, 7, 8, bfloat16);
 }
 
+// Shared fd harness for the fused SDPA VJP doctests: runs the full vjp
+// (dq, dk, dv) at one rep=1 shape against host central differences.
+static void sdpa_vjp_fd_case(
+  int B,
+  int qL,
+  int kL,
+  int D,
+  bool causal) {
+  if (!compute_available()) {
+  return;
+  }
+  Stream stream = gpu_stream();
+  const int H = 1;
+  const float scale = 1.0f / std::sqrt(float(D));
+  auto qd = pattern((size_t)B * H * qL * D, 0x510 + qL * 7 + D);
+  auto kd = pattern((size_t)B * H * kL * D, 0x520 + kL * 5 + D);
+  auto vd = pattern((size_t)B * H * kL * D, 0x530 + kL * 3 + D);
+  array q(qd.begin(), Shape{B, H, qL, D}, float32);
+  array k(kd.begin(), Shape{B, H, kL, D}, float32);
+  array v(vd.begin(), Shape{B, H, kL, D}, float32);
+  std::string mask = causal ? "causal" : "";
+  auto fun = [&](const std::vector<array>& in) {
+    return sum(
+        fast::scaled_dot_product_attention(
+            in[0], in[1], in[2], scale, mask, {}, std::nullopt, false,
+            stream),
+        stream);
+  };
+  auto grads = value_and_grad(fun, {0, 1, 2})({q, k, v}).second;
+  auto gq = flat(grads[0], stream);
+  auto gk = flat(grads[1], stream);
+  auto gv = flat(grads[2], stream);
+  auto qf = flat(q, stream);
+  const std::vector<float> kf(kd.begin(), kd.end());
+  const std::vector<float> vf(vd.begin(), vd.end());
+  auto objective = [&](const std::vector<float>& qq,
+                       const std::vector<float>& kk,
+                       const std::vector<float>& vv) {
+    auto out = host_sdpa(qq, kk, vv, B, H, H, qL, kL, D, scale, causal);
+    double acc = 0;
+    for (double x : out) {
+      acc += x;
+    }
+    return acc;
+  };
+  const double h = 1e-2;
+  auto leg = [&](const std::vector<float>& got,
+                 const std::vector<float>& base_words,
+                 const std::vector<int>& spots,
+                 const std::string& name) {
+    for (int idx : spots) {
+      std::vector<float> plus = base_words, minus = base_words;
+      plus[idx] = static_cast<float>(plus[idx] + h);
+      minus[idx] = static_cast<float>(minus[idx] - h);
+      double fd;
+      if (name == "dq") {
+        fd = (objective(plus, kf, vf) - objective(minus, kf, vf)) /
+            (2.0 * h);
+      } else if (name == "dk") {
+        fd = (objective(qf, plus, vf) - objective(qf, minus, vf)) /
+            (2.0 * h);
+      } else {
+        fd = (objective(qf, kf, plus) - objective(qf, kf, minus)) /
+            (2.0 * h);
+      }
+      require_close(
+          std::vector<float>{got[idx]},
+          std::vector<double>{fd},
+          2e-2,
+          "sdpa vjp " + name + "[" + std::to_string(idx) + "] " +
+              std::to_string(B) + "x" + std::to_string(qL) + "x" +
+              std::to_string(kL) + "x" + std::to_string(D) +
+              (causal ? " causal" : ""));
+    }
+  };
+  auto spots_for = [&](int rows) {
+    return std::vector<int>{0, D - 1, (rows - 1) * D};
+  };
+  leg(gq, qf, spots_for(qL), "dq");
+  leg(gk, kf, spots_for(kL), "dk");
+  leg(gv, vf, spots_for(kL), "dv");
+}
+// The fused SDPA VJP's own lane: every shape it serves is rep=1 (H ==
+// Hk) on the float dtypes. The lane's crash (SmallVector 'size() >
+// index' at the dK/dV tile construction when the GQA split was a
+// no-op) is fixed; these are the neighbors whose fd legs are clean on
+// both llvmpipe and M1 Max hardware.
+TEST_CASE("sdpa vjp fd parity across degenerate rep=1 shapes (dq dk dv)") {
+  sdpa_vjp_fd_case(1, 1, 1, 4, false);
+  sdpa_vjp_fd_case(2, 1, 2, 4, false);
+  sdpa_vjp_fd_case(2, 1, 2, 4, true);
+  sdpa_vjp_fd_case(2, 5, 7, 8, false);
+  sdpa_vjp_fd_case(1, 2, 2, 64, false);
+}
+
+// Known-failing value defects the new coverage surfaced (2026-10-03;
+// llvmpipe and, for the qL=1 zeros, jw16 M1 Max hardware; both build
+// types; separate signatures):
+// 1. qL == 1 with kL > 1 maskless: dk and dv come back all zero while
+//    dq and the forward stay correct (dS provably nonzero via dq).
+// 2. B == 1 with kL == 5: dk[0] and dv spots return exact zeros /
+//    uniform-looking values against fd at maskless (1,2,5,4) and
+//    causal (1,3,5,8).
+// Standalone probes of the obvious suspects (matmul with inner dim 1,
+// General copies of the {kL,1} transposed views) are clean, so the
+// defect lives in the composition. See docs/known-defects.md "SDPA
+// backward fused VJP value defects at small rep=1 shapes".
+TEST_CASE("sdpa vjp fd parity at small rep=1 shapes (known defects)" *
+          doctest::may_fail(true)) {
+  sdpa_vjp_fd_case(1, 1, 2, 4, false);
+  sdpa_vjp_fd_case(1, 2, 5, 4, false);
+  sdpa_vjp_fd_case(1, 3, 5, 8, true);
+}
+
 // Fused GDN VJP (upstream #4565) - bf16, Dk=Dv=128, GQA repeat, T crossing
 // the per-16-token checkpoint boundary, vs the composed per-token
 // recursion. Tolerance pinned at 2e-2 (bf16 outputs) and 1e-3 for the
