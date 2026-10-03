@@ -13737,12 +13737,13 @@ void ScaledDotProductAttentionVJP::eval_gpu(
   copy_gpu(dq5, dq, CopyType::Vector, s);
 
   // dK = dS^T Q and dV = P^T dO per query head, GQA-summed into the
-  // KV-head outputs.
-  Shape tile_shape = q5.shape();
-  tile_shape[3] = kL;
-  tile_shape[4] = D;
+  // KV-head outputs. The tiles share the score plane's rank: 5-D with
+  // the GQA group axis, plain 4-D at rep=1 where head_split was a
+  // no-op, so derive them from S instead of assuming a rank.
+  Shape tile_shape = S.shape();
+  tile_shape.back() = D;
   array dkt(tile_shape, float32, nullptr, {});
-  tile_shape[4] = Dv;
+  tile_shape.back() = Dv;
   array dvt(tile_shape, float32, nullptr, {});
   dkt.set_data(allocate_omarchy(dkt.nbytes()));
   dvt.set_data(allocate_omarchy(dvt.nbytes()));
