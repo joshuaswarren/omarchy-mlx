@@ -1,5 +1,8 @@
 #version 460
 
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_trig.h"
+
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 //
@@ -177,8 +180,8 @@ void rope_side(
   float position = params.alpha * (float(t) + offset);
   float inv_freq = exp(-float(i) * params.beta);
   float theta = position * inv_freq;
-  float cos_t = rope_round(cos(theta));
-  float sin_t = rope_round(sin(theta));
+  float cos_t = rope_round(omarchy_trig_cos(theta));
+  float sin_t = rope_round(omarchy_trig_sin(theta));
   // Row-contiguous inputs fold the batch into the matrix axis
   // (matrix = T*D per mat, time = D); the head/seq transposed 4D view
   // keeps a per-head matrix stride and a per-time stride of N*D, with

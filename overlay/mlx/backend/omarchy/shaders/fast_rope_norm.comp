@@ -64,6 +64,9 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
 
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_trig.h"
+
 layout(set = 0, binding = 0, std430) readonly buffer Input {
   uint values[];
 } input_data;
@@ -282,8 +285,8 @@ void main() {
         uint i = d % half_dims;
         float inv_freq = exp(-float(i) * params.beta);
         float theta = position * inv_freq;
-        float cos_t = rope_round(cos(theta));
-        float sin_t = rope_round(sin(theta));
+        float cos_t = rope_round(omarchy_trig_cos(theta));
+        float sin_t = rope_round(omarchy_trig_sin(theta));
         float x1 = rounded[i];
         float x2 = rounded[i + half_dims];
         float xa = rope_round(x1 * cos_t);
@@ -305,10 +308,10 @@ void main() {
     uint i1 = i0 + 1u;
     float inv0 = exp(-float(i0) * params.beta);
     float inv1 = exp(-float(i1) * params.beta);
-    float cos0 = rope_round(cos(position * inv0));
-    float sin0 = rope_round(sin(position * inv0));
-    float cos1 = rope_round(cos(position * inv1));
-    float sin1 = rope_round(sin(position * inv1));
+    float cos0 = rope_round(omarchy_trig_cos(position * inv0));
+    float sin0 = rope_round(omarchy_trig_sin(position * inv0));
+    float cos1 = rope_round(omarchy_trig_cos(position * inv1));
+    float sin1 = rope_round(omarchy_trig_sin(position * inv1));
     float xa = rounded[i0];
     float xb = rounded[i0 + half_dims];
     float xc = rounded[i1];

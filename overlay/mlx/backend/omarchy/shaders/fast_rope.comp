@@ -73,6 +73,9 @@
 
 #version 460
 
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_trig.h"
+
 #ifdef USE_FP16
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
@@ -252,10 +255,10 @@ void main() {
         float inv0 = exp(-float(i0) * params.beta);
         float inv1 = exp(-float(i1) * params.beta);
 #endif
-        float cos0 = rope_round(cos(position * inv0));
-        float sin0 = rope_round(sin(position * inv0));
-        float cos1 = rope_round(cos(position * inv1));
-        float sin1 = rope_round(sin(position * inv1));
+        float cos0 = rope_round(omarchy_trig_cos(position * inv0));
+        float sin0 = rope_round(omarchy_trig_sin(position * inv0));
+        float cos1 = rope_round(omarchy_trig_cos(position * inv1));
+        float sin1 = rope_round(omarchy_trig_sin(position * inv1));
         uint in_base;
         if (head_seq_transpose) {
           in_base = b * (time * params.in_strides[1]) +
@@ -320,8 +323,8 @@ void main() {
         float inv_freq = exp(-float(i) * params.beta);
 #endif
         float theta = position * inv_freq;
-        float cos_t = rope_round(cos(theta));
-        float sin_t = rope_round(sin(theta));
+        float cos_t = rope_round(omarchy_trig_cos(theta));
+        float sin_t = rope_round(omarchy_trig_sin(theta));
         uint in_row = in_base;
         float x1 = rope_load(
             params.lhs_offset + in_row + (2u * i) * params.in_strides[2]);
@@ -358,8 +361,8 @@ void main() {
             float inv_freq = exp(-float(i) * params.beta);
 #endif
             float theta = position * inv_freq;
-            float cos_t = rope_round(cos(theta));
-            float sin_t = rope_round(sin(theta));
+            float cos_t = rope_round(omarchy_trig_cos(theta));
+            float sin_t = rope_round(omarchy_trig_sin(theta));
             uint x1_index = in_base + i * params.in_strides[2];
             uint x2_index = x1_index + half_dims * params.in_strides[2];
             float x1 = rope_load(params.lhs_offset + x1_index);
@@ -414,8 +417,8 @@ void main() {
       float inv_freq = exp(-float(i) * params.beta);
 #endif
       float theta = position * inv_freq;
-      float cos_t = rope_round(cos(theta));
-      float sin_t = rope_round(sin(theta));
+      float cos_t = rope_round(omarchy_trig_cos(theta));
+      float sin_t = rope_round(omarchy_trig_sin(theta));
       uint in_base;
       if (head_seq_transpose) {
         in_base = b * (time * params.in_strides[1]) +
@@ -464,8 +467,8 @@ void main() {
       float inv_freq = exp(-float(i) * params.beta);
 #endif
       float theta = position * inv_freq;
-      float cos_t = rope_round(cos(theta));
-      float sin_t = rope_round(sin(theta));
+      float cos_t = rope_round(omarchy_trig_cos(theta));
+      float sin_t = rope_round(omarchy_trig_sin(theta));
       uint in_base;
       if (head_seq_transpose) {
         in_base = b * (time * params.in_strides[1]) +

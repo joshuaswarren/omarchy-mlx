@@ -77,6 +77,7 @@ function(omarchy_shader name source)
       COMMAND "${OMARCHY_GLSLC}" -O --target-env=vulkan1.3 ${ARGN}
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
       VERBATIM)
   else()
     add_custom_command(
@@ -85,6 +86,7 @@ function(omarchy_shader name source)
       COMMAND "${OMARCHY_GLSLANG}" -V -Os --target-env vulkan1.3 ${ARGN}
               "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${spirv}"
       DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/shaders/omarchy_trig.h"
       VERBATIM)
   endif()
   add_custom_command(

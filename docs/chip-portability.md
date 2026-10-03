@@ -44,8 +44,10 @@ linalg/sort/reduce shared budgets all sit at or under the 16 KiB spec floor;
 the 25-slot binding budget is `min(budget, device limits)` with a named throw
 past the limit (`device.cpp:815-821`, `encoder.cpp:413-421`); the allocator's
 non-coherent fallback does explicit flush/invalidate (`allocator.h:20-24`);
-`kTrigArgumentLimit` is a device-independent contract, measured as such
-(`primitives.cpp:4132-4136`); timeline-semaphore absence refuses the device
+`kTrigArgumentLimit` (5e5) is a device-independent contract, measured as
+such, and is enforced in-shader by the shared Cody-Waite reduction
+(`shaders/omarchy_trig.h`) with NaN above it; the host check that
+remains is the fused-RoPE factor bound; timeline-semaphore absence refuses the device
 (`device.cpp:442-448`).
 
 ## 2. The smallest capability-keyed change for each finding

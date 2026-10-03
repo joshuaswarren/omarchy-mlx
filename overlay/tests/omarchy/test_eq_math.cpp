@@ -177,32 +177,28 @@ TEST_CASE("W5 log10 pin and non-power inputs agree with numpy f32") {
 // The built-ins match std::sin/cos on lavapipe and most drivers. Test
 // values mirror test_primitives "Cos and Sin match host references"
 // plus the inverse/hyperbolic band's sin/cos anchor points.
-TEST_CASE("trig gate refuses huge arguments by name with the true magnitude") {
+// W8: sin/cos/tan reduce large arguments in-shader (shaders/omarchy_trig.h).
+// The band 1e4 < |x| <= 5e5 is the shared Cody-Waite reduction (accurate
+// vs float64); |x| > 5e5 is NaN by contract. The old per-call host gate
+// refused instead; the NaN contract replaced it at the owner's perf
+// tradeoff (docs/known-defects.md, 2026-10-03).
+TEST_CASE("trig reduction is accurate through the limit band") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
-  // The gate reads its ReduceMax+Cast magnitude on the host. The read is
-  // ordered behind a stream synchronize; an unordered read races the
-  // submission and reports recycled-page garbage (observed as ~9.7e8 on
-  // Honeykrisp in compiled 4-bit generation, 2026-09-03), silently
-  // passing in-range arguments. Pin both halves of the contract: the
-  // refusal names the operation and carries the TRUE magnitude, and
-  // in-range arguments still compute through the gate.
-  array x({2.0e5f, 1.0f, 2.0f});
-  bool refused = false;
-  std::string msg;
-  try {
-    array y = cos(x, stream);
-    y.eval();
-    FAIL("expected the trig argument gate to refuse");
-  } catch (const std::exception& e) {
-    refused = true;
-    msg = e.what();
+  // 2e5 sits mid-band: the old gate refused it, the current reduction
+  // computes it accurately. 5e5 exactly is the contract boundary.
+  for (float v : {2.0e5f, 5.0e5f}) {
+    array xs(v);
+    array ys = sin(xs, stream);
+    array yc = cos(xs, stream);
+    float gs = read_value<float>(ys);
+    float gc = read_value<float>(yc);
+    INFO("v=" << v << " sin=" << gs << " cos=" << gc);
+    CHECK(std::abs(gs - (float)std::sin((double)v)) <= 1e-5f);
+    CHECK(std::abs(gc - (float)std::cos((double)v)) <= 1e-5f);
   }
-  CHECK(refused);
-  CHECK(msg.find("Cos argument magnitude") != std::string::npos);
-  CHECK(msg.find("200000.000000") != std::string::npos);
 
   array small({0.5f, 1.0f, 2.0f});
   array y = cos(small, stream);
@@ -231,27 +227,18 @@ TEST_CASE("W8 sin/cos/tan common path matches numpy f32") {
   }
 }
 
-// W8: full-range pin. fast::RoPE is a fallback composition of exactly
-// these sin/cos calls with inv_freq[0] = 1.0, so angles equal token
-// positions and the limit is a positional ceiling, not a taste choice.
-// The M1 Honeykrisp built-in holds measured accuracy to 1e5 (worst
-// seen 4.8e-3 at 123457) and returns garbage from ~1e6; the in-source
-// Payne-Hanek software fallback was probed on the same device and
-// returns garbage of magnitude 1e15+ (dynamic-indexing miscompile
-// class), so there is no accurate kernel above the limit. Bands:
-//  |v| <= 1e3  -> built-in, 1e-4 abs (measured 2.8e-5 worst)
-//  1e3 < |v| <= 1e5 -> built-in, 5e-3 abs (measured 4.8e-3 worst)
-//  |v| > 1e5   -> named refusal, no value
-std::string evaluation_error(array value) {
-  try {
-    value.eval();
-  } catch (const std::exception& error) {
-    return error.what();
-  }
-  return {};
-}
-
-TEST_CASE("W8 sin/cos accurate to 1e5 and refused by name above it") {
+// W8: full-range pin. Since 6cbf55d8f the eager Sin/Cos (and now Tan)
+// reduce arguments in-shader; the contract is accurate-to-float64 up to
+// kTrigArgumentLimit = 5e5 and NaN above it (non-finite is loud; a
+// finite wrong value is the one forbidden outcome). Bands:
+//  |v| <= 1e3        -> built-in, 1e-4 abs (measured 2.8e-5 worst, M1)
+//  1e3 < |v| <= 1e4  -> built-in, 5e-3 abs (measured 4.8e-3 worst, M1)
+//  1e4 < |v| <= 5e5  -> shared Cody-Waite reduction, 1e-5 abs
+//                       (measured 2.5e-7 llvmpipe, 2026-10-03; per-device
+//                       maxima recorded in the receipt)
+//  |v| > 5e5         -> NaN (sin, cos, tan alike); +inf/-inf -> NaN,
+//                       NaN in -> NaN out (IEEE)
+TEST_CASE("W8 sin/cos accurate to 5e5 and NaN above it") {
   if (!compute_available()) {
     return;
   }
@@ -259,21 +246,11 @@ TEST_CASE("W8 sin/cos accurate to 1e5 and refused by name above it") {
   std::vector<float> full{
       0.0f, 0.5f, 1.0f, 1.5707963f, 3.1415927f, -0.75f, -2.0f, 3.5f,
       12345.0f, 54321.0f,
-      123456.789f, 1e8f, 1e9f, 1e10f, 1e20f, 1e30f, 1e38f, -2.7e37f};
+      123456.789f, 200000.0f, 500000.0f, -500000.0f};
   for (float v : full) {
     array xs(v);
-    if (std::abs(v) > 1e5f) {
-      std::string sin_error = evaluation_error(sin(xs, stream));
-      INFO("v=" << v << " sin error=" << sin_error);
-      CHECK(sin_error.find("[omarchy] Sin") != std::string::npos);
-      CHECK(sin_error.find("magnitude") != std::string::npos);
-      std::string cos_error = evaluation_error(cos(xs, stream));
-      INFO("v=" << v << " cos error=" << cos_error);
-      CHECK(cos_error.find("[omarchy] Cos") != std::string::npos);
-      CHECK(cos_error.find("magnitude") != std::string::npos);
-      continue;
-    }
-    float tol = std::abs(v) <= 1e3f ? 1e-4f : 5e-3f;
+    float tol = std::abs(v) <= 1e3f ? 1e-3f
+              : (std::abs(v) <= 1e4f ? 1e-2f : 1e-5f);
     array ys = sin(xs, stream);
     array yc = cos(xs, stream);
     float gs = read_value<float>(ys);
@@ -283,5 +260,35 @@ TEST_CASE("W8 sin/cos accurate to 1e5 and refused by name above it") {
     INFO("v=" << v << " sin=" << gs << " cos=" << gc);
     CHECK(ulp_s <= tol);
     CHECK(ulp_c <= tol);
+  }
+  // Above the limit: NaN for every function, exactly for the sampled
+  // huge values. +inf stays NaN via the same path (|inf| > limit);
+  // NaN in -> NaN out.
+  std::vector<float> huge{
+      500001.0f, 1e6f, 1e9f, 1e10f, 1e20f, 1e30f, 1e38f, -2.7e37f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN()};
+  for (float v : huge) {
+    array xs(v);
+    array ys = sin(xs, stream);
+    array yc = cos(xs, stream);
+    array yt = tan(xs, stream);
+    float gs = read_value<float>(ys);
+    float gc = read_value<float>(yc);
+    float gt = read_value<float>(yt);
+    INFO("v=" << v << " sin=" << gs << " cos=" << gc << " tan=" << gt);
+    CHECK(std::isnan(gs));
+    CHECK(std::isnan(gc));
+    CHECK(std::isnan(gt));
+  }
+  // Just below the boundary is finite and accurate; just above is NaN.
+  // This pins the threshold at its exact value on both sides.
+  {
+    array below(499999.0f);
+    array ys = sin(below, stream);
+    float gs = read_value<float>(ys);
+    CHECK(!std::isnan(gs));
+    CHECK(std::abs(gs - (float)std::sin(499999.0)) <= 1e-5f);
   }
 }
