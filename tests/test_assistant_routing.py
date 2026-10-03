@@ -1,15 +1,18 @@
 """Focused unit tests for the routing module.
 
 The held-out suite test (`tests/test_assistant_routing_suite.py`) pins
-the suite shape and rejects automatic mode by default. This file
-exercises the routing module's internal logic with a fake Laya worker:
-deadline behavior, timeout accounting, invalid output, over-budget
-material, threshold logic, flag off/on, and that ordinary chat latency
-is unaffected (the routing call returns before the GPU is acquired).
+the suite shape (the held-out set is spent and never re-evaluated).
+This file exercises the routing module's internal logic with a fake
+Laya worker: deadline behavior, timeout accounting, invalid output,
+over-budget material, threshold logic, the default-ON gate (kill switch
+and saved explicit choice), the honest routing status, and that ordinary
+chat latency is unaffected (the routing call returns before the GPU is
+acquired).
 """
 
 import dataclasses
 import json
+import os
 import sys
 import tempfile
 import uuid
@@ -18,6 +21,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "serve"))
 
@@ -31,9 +35,10 @@ from mlx_omarchy_assistant.routing import (  # noqa: E402
     fit_route_question,
 )
 from mlx_omarchy_assistant.coordinator import (  # noqa: E402
+    ROUTING_ENV,
     Coordinator,
     _RoutingWorker,
-    _routing_gate_enabled,
+    _routing_disabled_reason,
 )
 
 
@@ -388,40 +393,63 @@ class _ManagerWithPair:
 
 
 class RoutingGateFlagTests(unittest.TestCase):
-    def test_gate_off_when_no_pair(self):
+    """Routing is ON by default; the kill switch and a saved explicit
+    choice turn it off."""
+
+    def test_default_on_without_any_evidence(self):
+        for status in (None, {}, {"extension": {}},
+                       {"extension": {"selection_evidence": {"quality": 1.0}}}):
+            manager = _ManagerWithPair(status)
+            self.assertIsNone(_routing_disabled_reason(manager))
+
+    def test_default_on_with_stale_or_partial_routing_evidence(self):
+        for routing in ({"gate": "on", "policy_version": "9"},
+                        {"gate": "on", "suite_sha256": "abc"},
+                        {}):
+            manager = _ManagerWithPair(
+                {"extension": {"selection_evidence": {"routing": routing}}})
+            self.assertIsNone(_routing_disabled_reason(manager))
+
+    def test_env_kill_switch_disables(self):
         manager = _ManagerWithPair(None)
-        self.assertFalse(_routing_gate_enabled(manager))
+        with mock.patch.dict(os.environ, {ROUTING_ENV: "0"}):
+            reason = _routing_disabled_reason(manager)
+        self.assertIn(ROUTING_ENV, reason)
 
-    def test_gate_off_when_pair_has_no_evidence(self):
-        manager = _ManagerWithPair({"extension": {}})
-        self.assertFalse(_routing_gate_enabled(manager))
+    def test_env_kill_switch_accepts_only_off_values(self):
+        manager = _ManagerWithPair(None)
+        for value in ("1", "on", "yes", "", "  "):
+            with mock.patch.dict(os.environ, {ROUTING_ENV: value}):
+                self.assertIsNone(_routing_disabled_reason(manager))
+        for value in ("0", "off", "false", "no", "OFF"):
+            with mock.patch.dict(os.environ, {ROUTING_ENV: value}):
+                self.assertIsNotNone(_routing_disabled_reason(manager))
 
-    def test_gate_off_when_evidence_lacks_routing_block(self):
-        manager = _ManagerWithPair({"extension": {"selection_evidence": {"quality": 1.0}}})
-        self.assertFalse(_routing_gate_enabled(manager))
+    def test_saved_explicit_off_wins_over_default(self):
+        manager = _ManagerWithPair(
+            {"extension": {"selection_evidence": {"routing": {"gate": "off"}}}})
+        reason = _routing_disabled_reason(manager)
+        self.assertIn("turned off for this pair", reason)
 
-    def test_gate_off_when_receipt_missing(self):
-        manager = _ManagerWithPair({"extension": {"selection_evidence": {"routing": {
-            "gate": "on", "suite_sha256": "abc", "policy_version": "1",
-        }}}})
-        self.assertFalse(_routing_gate_enabled(manager))
+    def test_env_kill_switch_beats_saved_explicit_on(self):
+        manager = _ManagerWithPair(
+            {"extension": {"selection_evidence": {"routing": {"gate": "on"}}}})
+        with mock.patch.dict(os.environ, {ROUTING_ENV: "0"}):
+            reason = _routing_disabled_reason(manager)
+        self.assertIn(ROUTING_ENV, reason)
 
-    def test_gate_off_when_policy_version_mismatch(self):
-        manager = _ManagerWithPair({"extension": {"selection_evidence": {"routing": {
-            "gate": "on", "suite_sha256": "abc", "receipt": "/p/r.md", "policy_version": "9",
-        }}}})
-        self.assertFalse(_routing_gate_enabled(manager))
+    def test_broken_manager_status_does_not_disable(self):
+        class Broken:
+            def status(self):
+                raise RuntimeError("no pair")
 
-    def test_gate_on_when_all_fields_present_and_match(self):
-        manager = _ManagerWithPair({"extension": {"selection_evidence": {"routing": {
-            "gate": "on", "suite_sha256": "abc", "receipt": "/p/r.md",
-            "policy_version": ROUTING_POLICY.version,
-        }}}})
-        self.assertTrue(_routing_gate_enabled(manager))
+        self.assertIsNone(_routing_disabled_reason(Broken()))
 
 
 class CoordinatorSubmitAutoTests(unittest.TestCase):
-    """The submit() entrypoint refuses automatic mode until the gate is ON."""
+    """Automatic mode is ON by default; it is refused only by the kill
+    switch or a saved explicit choice, and degrades to chat whenever the
+    head cannot answer."""
 
     def _stopped_manager(self):
         class Stopped:
@@ -443,26 +471,44 @@ class CoordinatorSubmitAutoTests(unittest.TestCase):
 
         return Stopped()
 
-    def _on_manager(self):
-        m = self._stopped_manager()
-        m.status = lambda: {"extension": {"selection_evidence": {"routing": {
-            "gate": "on", "suite_sha256": "abc", "receipt": "/p/r.md",
-            "policy_version": ROUTING_POLICY.version,
-        }}}}  # type: ignore[assignment]
-        return m
+    def test_auto_mode_rejected_when_saved_off(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        manager = self._stopped_manager()
+        manager.status = lambda: {"extension": {"selection_evidence": {"routing": {
+            "gate": "off"}}}}  # type: ignore[assignment]
+        app = Coordinator(Path(directory.name), manager)
+        self.addCleanup(app.close)
+        with self.assertRaises(ValueError) as caught:
+            app.submit("unused", {"text": "Pick the right option.", "mode": "auto"})
+        self.assertIn("turned off for this pair", str(caught.exception))
 
-    def test_auto_mode_rejected_when_gate_off(self):
+    def test_auto_mode_rejected_by_env_kill_switch(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         app = Coordinator(Path(directory.name), self._stopped_manager())
         self.addCleanup(app.close)
-        with self.assertRaises(ValueError):
-            app.submit("unused", {"text": "Pick the right option.", "mode": "auto"})
+        with mock.patch.dict(os.environ, {ROUTING_ENV: "0"}):
+            with self.assertRaises(ValueError) as caught:
+                app.submit("unused", {"text": "Pick the right option.", "mode": "auto"})
+        self.assertIn(ROUTING_ENV, str(caught.exception))
+
+    def test_auto_mode_default_on_for_fresh_home(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Coordinator(Path(directory.name), self._stopped_manager())
+        self.addCleanup(app.close)
+        # No evidence, no env var: the auto turn is admitted (it degrades
+        # to chat when the head cannot answer; the plain-chat test below
+        # pins that path).
+        cid = app.store.create()["id"]
+        turn = app.submit(cid, {"text": "Tell me a story.", "mode": "auto"})
+        self.assertTrue(turn)
 
     def test_auto_mode_plain_chat_turn_uses_chat_model_without_a_head_call(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        manager = self._on_manager()
+        manager = self._stopped_manager()
 
         class FakeModels:
             def __init__(self):
@@ -502,7 +548,7 @@ class CoordinatorSubmitAutoTests(unittest.TestCase):
     def test_auto_mode_without_alternatives_is_clarify_not_compare(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        manager = self._on_manager()
+        manager = self._stopped_manager()
 
         class FakeModels:
             def __init__(self):
@@ -540,7 +586,7 @@ class CoordinatorSubmitAutoTests(unittest.TestCase):
     def test_auto_mode_routes_to_compare_when_options_present(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        manager = self._on_manager()
+        manager = self._stopped_manager()
 
         # Stub the routing module's evaluate_route so we can verify the
         # coordinator dispatches into the compare path without needing a
@@ -632,6 +678,121 @@ class CoordinatorSubmitAutoTests(unittest.TestCase):
                 break
             time.sleep(0.02)
         self.assertTrue(decision_seen, "decision event not emitted on auto->compare")
+
+
+class RoutingStatusTests(unittest.TestCase):
+    """The status API reports routing state honestly: gate decision, head
+    readiness, and the measured last head call."""
+
+    def _manager(self, status):
+        class Managed:
+            def status(self):
+                return status
+            def start(self):
+                return {"model_paths": {"decision": "/tmp/fake-decision"},
+                        "decision_url": "http://127.0.0.1:1/",
+                        "chat_url": "http://127.0.0.1:1/",
+                        "context_tokens": 4096}
+            def stop(self):
+                return {"stopped": True, "retained": []}
+            def ensure_context(self, required_tokens):
+                return {"ok": True, "context_tokens": max(required_tokens, 4096),
+                        "requested": required_tokens, "changed": False}
+        return Managed()
+
+    def test_fresh_home_reports_enabled_with_no_head_and_no_last_call(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Coordinator(Path(directory.name), self._manager(None))
+        self.addCleanup(app.close)
+        state = app.routing_status()
+        self.assertTrue(state["enabled"])
+        self.assertIsNone(state["disabled_reason"])
+        self.assertFalse(state["head_ready"])
+        self.assertIsNone(state["last_head_ms"])
+        self.assertIsNone(state["last_route"])
+        self.assertEqual(state["policy_version"], ROUTING_POLICY.version)
+
+    def test_head_ready_requires_a_ready_pair(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        idle = self._manager({"state": "idle"})
+        ready = self._manager({"state": "ready",
+                               "decision_url": "http://127.0.0.1:1/"})
+        app = Coordinator(Path(directory.name), idle)
+        self.addCleanup(app.close)
+        self.assertFalse(app.routing_status()["head_ready"])
+        app.manager = ready  # type: ignore[assignment]
+        state = app.routing_status()
+        self.assertTrue(state["head_ready"])
+        self.assertEqual(state["pair_state"], "ready")
+
+    def test_env_kill_switch_is_reported(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Coordinator(Path(directory.name), self._manager(None))
+        self.addCleanup(app.close)
+        with mock.patch.dict(os.environ, {ROUTING_ENV: "0"}):
+            state = app.routing_status()
+        self.assertFalse(state["enabled"])
+        self.assertIn(ROUTING_ENV, state["disabled_reason"])
+        self.assertFalse(state["head_ready"])
+
+    def test_last_call_reports_route_and_measured_head_ms(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Coordinator(Path(directory.name), self._manager(None))
+        self.addCleanup(app.close)
+
+        class FakeModels:
+            def count(self, path, messages):
+                return 1
+            def decision(self, pair, payload):
+                return {"answers": {"route": {
+                    "type": "choice",
+                    "choice": "structured_decision",
+                    "probabilities": {"conversation": 0.1,
+                                      "structured_decision": 0.8,
+                                      "clarify": 0.1},
+                    "rl_agent": {"act_probability": 0.9},
+                    "confidence": 0.5,
+                }}}
+            def close_connection(self):
+                pass
+
+        app.models = app.router.models = FakeModels()  # type: ignore[assignment]
+        cid = app.store.create()["id"]
+        # Grey turn: grammatical options, no explicit label — the head is called.
+        app.submit(cid, {"text": "Help me choose between the tram and the ferry.",
+                         "mode": "auto"})
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if app.routing_status()["last_route"] is not None:
+                break
+            time.sleep(0.02)
+        state = app.routing_status()
+        self.assertEqual(state["last_route"], "structured_decision")
+        self.assertIsInstance(state["last_head_ms"], float)
+        self.assertGreater(state["last_head_ms"], 0.0)
+        self.assertFalse(state["last_timed_out"])
+        self.assertTrue(state["last_at"])
+
+    def test_deterministic_route_reports_no_head_ms(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Coordinator(Path(directory.name), self._manager(None))
+        self.addCleanup(app.close)
+        cid = app.store.create()["id"]
+        app.submit(cid, {"text": "Tell me a story.", "mode": "auto"})
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if app.routing_status()["last_route"] is not None:
+                break
+            time.sleep(0.02)
+        state = app.routing_status()
+        self.assertIsNone(state["last_route"])
+        self.assertEqual(state["last_reason"], "no_decision_structure")
+        self.assertIsNone(state["last_head_ms"])
 
 
 class OrdinaryChatUnaffectedTests(unittest.TestCase):
