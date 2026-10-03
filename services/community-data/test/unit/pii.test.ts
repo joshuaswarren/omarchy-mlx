@@ -96,6 +96,26 @@ describe("server-side PII scan", () => {
     }
   });
 
+  test("mBoot first-stage firmware versions pass like iBoot", () => {
+    // M2 Air (J413) reports iboot1 as mBoot-; this exact submission was
+    // refused with pii_detected {ipv4: 2}.
+    expect(scanPiiPayload({
+      boot_chain: "iboot1=mBoot-20457.40.150.0.1 iboot2=iBoot-8422.141.2",
+      ane_port_detail: { devicetree: { boot: { chosen: {
+        "asahi,iboot1-version": "mBoot-20457.40.150.0.1",
+        "asahi,iboot2-version": "iBoot-8422.141.2",
+      } } } },
+    })).toBeNull();
+    // The address guards apply to the mBoot prefix too.
+    expect(scanPiiPayload({
+      ane_port_detail: { devicetree: { boot: { chosen: {
+        "asahi,iboot1-version": "mBoot-198.51.100.7",
+      } } } },
+    })).toHaveProperty("ipv4");
+    expect(scanPiiPayload({ boot_chain: "mBoot-20457.40.150.0.1" }))
+      .toHaveProperty("ipv4");
+  });
+
   test("the same iBoot string in free-text fields is still refused", () => {
     const value = "iBoot-10151.140.19.700.2";
     const hits = scanPiiPayload({

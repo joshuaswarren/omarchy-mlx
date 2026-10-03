@@ -38,22 +38,24 @@ const MAX_REPORTED_HITS = 50;
 // version shape. The same string in a free-text field, or an
 // address-shaped value behind the prefix, stays fully subject to the
 // scan — a shape-based exception can disguise an address as version
-// components.
+// components. Newer first-stage firmware reports itself as `mBoot-`
+// rather than `iBoot-` (M2 Air: mBoot-20457.40.150.0.1); both prefixes
+// get the same treatment.
 export const FIRMWARE_VERSION_KEYS: Record<string, true> = {
   "asahi,iboot1-version": true,
   "asahi,iboot2-version": true,
   "asahi,system-fw-version": true,
   "asahi,os-fw-version": true,
 };
-const IBOOT_VALUE_RE = /^iboot-\d+(?:\.\d+)+$/i;
+const IBOOT_VALUE_RE = /^[im]boot-\d+(?:\.\d+)+$/i;
 // A value that could BE an address (every group in octet range, four
 // groups) is never exempt, version-shaped or not.
-const IBOOT_BARE_IPV4_RE = /^iboot-\d{1,3}(?:\.\d{1,3}){3}$/i;
+const IBOOT_BARE_IPV4_RE = /^[im]boot-\d{1,3}(?:\.\d{1,3}){3}$/i;
 // Inside the free-text boot_chain field only explicit `ibootN=`
 // assignments are exempt — never a bare `iBoot-…` token, which can
 // carry a disguised address (assembly of the example elided for the
 // privacy hook).
-const BOOT_CHAIN_TOKEN_RE = /\biboot\d+=(iboot-\d+(?:\.\d+)+)(?=\s|$)/gi;
+const BOOT_CHAIN_TOKEN_RE = /\biboot\d+=([im]boot-\d+(?:\.\d+)+)(?=\s|$)/gi;
 
 // Marketing-name words: a host alias equal to one of these — or
 // shorter than 6 characters, or a tNNNN chip id — is RESTRICTED to
