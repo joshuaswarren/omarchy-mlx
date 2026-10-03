@@ -215,13 +215,23 @@ class ResidentAneWorker:
             if sock is not None:
                 self._channel_kind = "socket"
                 self._socket = sock
+                # The daemon's supervised worker runs in --relay-bypass
+                # mode: the splice(2) pump between the unix socket and
+                # the resident's channel fd forwards raw wire bytes with
+                # no parsing. The line-based protocol ("batch N\n",
+                # "submit NAME --inline ... --emit ...\n") is a
+                # relay-side artifact and never reaches the child.
+                # Force relay_bypass=True here so submit / begin_batch
+                # / end_batch / close all use the raw protocol the
+                # daemon actually forwards.
+                self.relay_bypass = True
                 started = time.monotonic_ns()
                 # The daemon replays one composite banner per accepted
                 # client: `daemon session pid=... deadline_ms=...
-                # bundles=N\n`. The private-subprocess path consumed one
-                # banner per bundle + the relay-bypass-ready line, but
-                # the daemon's stdout is its log, not its wire channel,
-                # so the client gets one line instead.
+                # bundles=N\n`. The private-subprocess path consumed
+                # one banner per bundle + the relay-bypass-ready line,
+                # but the daemon's stdout is its log, not its wire
+                # channel, so the client gets one line instead.
                 line = self._readline("daemon session banner")
                 if not line.startswith("daemon session "):
                     self._die(

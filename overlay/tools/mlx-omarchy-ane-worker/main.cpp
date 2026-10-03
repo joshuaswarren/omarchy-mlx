@@ -868,10 +868,29 @@ int lock_at(const std::string& lock_path) {
 // serve_resident_bypass, but the source/sink fds are the connected
 // client socket and the resident channel. Half-duplex; one poll()
 // moves bytes in whichever direction is ready.
-int run_socket_pump(int client_fd, int channel_fd) {
+//
+// Client-side EOF is NOT forwarded to the channel. In --relay-bypass
+// mode one client equals one session, so SHUT_WR to the resident is
+// the close signal; in daemon mode the channel fd is the persistent
+// session and shutting it down would make worker_main exit after the
+// first client, leaving a defunct child and a dead session for the
+// next caller.
+//
+// After the client closes its write side, the pump must keep the
+// channel open until the resident finishes the current response
+// (e.g. the `released` token after a wire `close`). The pump breaks
+// when the channel EOFs, when the write to the client fails, or when
+// the child dies. It does NOT time out after a quiet period: the
+// resident is allowed to take as long as its deadline to respond,
+// and the pump's only purpose is to glue the two fds together.
+int run_socket_pump(int client_fd, int channel_fd, bool& resident_alive) {
   bool client_open = true;
   bool channel_open = true;
+  bool client_done = false;
   for (;;) {
+    short events = 0;
+    if (client_open) events |= POLLIN;
+    if (channel_open) events |= POLLIN;
     struct pollfd fds[2] = {
         {client_fd, static_cast<short>(client_open ? POLLIN : 0), 0},
         {channel_fd, static_cast<short>(channel_open ? POLLIN : 0), 0},
@@ -885,15 +904,29 @@ int run_socket_pump(int client_fd, int channel_fd) {
       ssize_t moved =
           ::splice(client_fd, nullptr, channel_fd, nullptr, 1 << 16, 0);
       if (moved > 0) continue;
-      (void)::shutdown(channel_fd, SHUT_WR);
+      // Client EOF / closed write side. Keep the channel open; the
+      // supervised child stays alive for the next client.
+      client_done = true;
       client_open = false;
+      // Re-enter the loop to drain the resident's response, but stop
+      // polling client_fd -- the client may close at any moment and
+      // a write to a closed peer surfaces as EPIPE.
+      continue;
     }
     if (channel_open && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
       ssize_t moved =
           ::splice(channel_fd, nullptr, client_fd, nullptr, 1 << 16, 0);
       if (moved > 0) continue;
+      // The resident closed its end: the supervised child exited and
+      // took the session with it. The daemon cannot serve further
+      // clients on this session.
       channel_open = false;
+      resident_alive = false;
+      break;
     }
+    // No more events to handle and we are waiting on a half-closed
+    // pipe: stop.
+    (void)events;
     if (!client_open && !channel_open) break;
   }
   return 0;
@@ -1153,10 +1186,24 @@ int serve_resident_daemon(
         continue;
       }
     }
-    (void)run_socket_pump(client_fd, channel_fd);
+    // Per-client pump. `resident_alive` stays true when the client
+    // simply disconnected; it flips to false when the supervised
+    // child exits and takes the session with it, which is a hard
+    // failure the daemon cannot recover from (the seal contract and
+    // the device programs belong to that child).
+    bool resident_alive = true;
+    (void)run_socket_pump(client_fd, channel_fd, resident_alive);
     // Half-close the client so the next accept can succeed cleanly.
     ::shutdown(client_fd, SHUT_RDWR);
     ::close(client_fd);
+    if (!resident_alive) {
+      std::fprintf(
+          stderr,
+          "[omarchy-ane] daemon: resident exited mid-session; refusing "
+          "further clients (pid=%lld)\n",
+          static_cast<long long>(worker.resident_pid()));
+      break;
+    }
   }
 
   // Cleanup on every exit path: unbind the socket, release the
