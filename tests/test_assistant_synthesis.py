@@ -1396,6 +1396,99 @@ class KokoroEngineTests(unittest.TestCase):
         self.assertIsInstance(other, ValueError)
 
 
+class FirstSegmentTests(unittest.TestCase):
+    """TTFA budget: first pass short, clause boundaries preferred."""
+
+    def test_short_text_is_untouched(self):
+        first, rest = synthesis._first_segment("Ready.")
+        self.assertEqual((first, rest), ("Ready.", ""))
+
+    def test_empty_text(self):
+        self.assertEqual(synthesis._first_segment("   "), ("", ""))
+
+    def test_long_text_cuts_at_word_boundary_under_budget(self):
+        text = ("The meeting starts at nine and the review follows at "
+                "eleven so please bring the draft")
+        first, rest = synthesis._first_segment(text)
+        self.assertTrue(first)
+        self.assertTrue(rest)
+        self.assertLessEqual(synthesis._phoneme_estimate(first),
+                             synthesis._FIRST_SEGMENT_BUDGET)
+        self.assertEqual(f"{first} {rest}".split(), text.split(),
+                         "no word lost or reordered at the cut")
+        self.assertTrue(first[-1].isalnum() or first[-1] in ".,;:!?",
+                        "cut lands on a word boundary")
+
+    def test_clause_boundary_preferred_when_it_fits(self):
+        text = ("Review the draft, then send it. The meeting starts at "
+                "nine and the review follows at eleven.")
+        first, rest = synthesis._first_segment(text)
+        self.assertTrue(first.endswith("draft") or first.endswith(","),
+                        first)
+        self.assertTrue(rest.startswith("then send it"))
+        self.assertEqual(f"{first} {rest}".split(), text.split())
+
+
+class PrimerTests(unittest.TestCase):
+    """prime(): best-effort pre-warm that proves a warm worker or refuses."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.pack, self.content = make_fixture_pack()
+        self.enterContext(mock.patch.object(
+            synthesis, "VOICE_ENGINES", (self.pack,)))
+        self.enterContext(mock.patch.object(synthesis, "MP_START_METHOD",
+                                            "fork"))
+        self.accel = {"available": True, "device": "Device(gpu, 0)",
+                      "detail": ""}
+        self.deps = {"present": ["mlx"], "missing": [], "detail": {}}
+        self.s = synthesis.Synthesis(self.home)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _green(self):
+        return (mock.patch.object(synthesis, "probe_accelerator",
+                                  return_value=self.accel),
+                mock.patch.object(synthesis, "probe_dependencies",
+                                  return_value=self.deps))
+
+    def _static_fetch(self, url, dest):
+        for entry in self.pack["files"]:
+            expected = (f"https://huggingface.co/{self.pack['repo']}/"
+                        f"resolve/{self.pack['revision']}/{entry['name']}")
+            if url == expected:
+                dest.write_bytes(self.content[entry["name"]])
+
+    def test_prime_refuses_without_assets(self):
+        with self._green()[0], self._green()[1]:
+            self.assertFalse(self.s.prime(threading.Event()))
+        self.assertIsNone(self.s._worker)
+
+    def test_prime_proves_warm_worker(self):
+        def echo(conn, assets_dir):
+            while True:
+                try:
+                    msg = conn.recv()
+                except (EOFError, OSError):
+                    break
+                if msg.get("type") == "shutdown":
+                    break
+                if msg.get("type") == "speak":
+                    conn.send({"type": "chunk", "id": msg["id"],
+                               "sample_rate": 24000, "data": b"\x00\x00"})
+                    conn.send({"type": "done", "id": msg["id"]})
+
+        self.s.prepare(approve_download=True, fetch=self._static_fetch)
+        with self._green()[0], self._green()[1], \
+                mock.patch.object(synthesis, "_worker_main", echo):
+            self.assertTrue(self.s.prime(threading.Event()))
+            self.assertTrue(self.s._generated_once)
+            self.assertIsNotNone(self.s._worker)
+            self.s.close()
+
+
 class FastCodecSamplerTests(unittest.TestCase):
     """The Qwen3-TTS draw goes through the Gumbel sampler for one request."""
 

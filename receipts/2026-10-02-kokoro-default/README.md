@@ -134,3 +134,28 @@ unaffected by this swap. Offline **voice** capability is proven at the
 assistant level above (unshare -n -r speak with the deps installed).
 Pulling mlx-audio + the spacy/G2P chain (~300 MB) into the vendor tar is
 a release-size decision left open, not silently made here.
+
+## TTFA attack addendum (2026-10-02T17:30Z+)
+
+Two levers to push /api/speak first audio under the 1.5 s design target:
+
+1. **Pre-warm**: `status()` kicks a one-shot daemon thread once synthesis
+   is usable — it takes one `coordinator.speech` grant (same gate every
+   speak uses) and runs a tiny synthesis on the default engine so the
+   model load and first-infer shader/pipeline warmup land before the
+   user's first click. `MLX_OMARCHY_VOICE_PREWARM=0` disables. Cancelable
+   via `server_close()` (sets the primer cancel event). Never blocks the
+   caller (it sets a flag and returns), never holds the chat mutex, and
+   uses the same GPU-lock handoff `speech_yield.py` governs for real
+   speaks. Memory residency is identical to the first real speak
+   (already in the pairs voice admission estimate for voice-enabled pairs);
+   the primer changes timing, not peak.
+2. **First-segment phoneme budget**: `_kokoro_generate` now bounds the
+   first pass to ≤ 28 rough phonemes at a word boundary, prefers a clause
+   cut when it already fits, then continues with the remainder. Short
+   texts (≤ budget) are untouched.
+
+The TTFA table (M2, 5 speaks per cell on the gate sentence, GPU
+`gpu-turn -m 24` ticket, PSI cpu avg10 = 0.00 throughout, load recorded
+per run) lives in artifacts/KokoroDefault/run-002/ (ttfa-*/probe.out)
+and is summarized in the doc/serve.md open-items row 3 update.

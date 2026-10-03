@@ -8,6 +8,7 @@ import contextlib
 import hmac
 import json
 import mimetypes
+import os
 import secrets
 import threading
 import time
@@ -57,6 +58,8 @@ class AssistantServer(ThreadingHTTPServer):
         self.setup_thread = None
         self.transfer_thread = None
         self.transfer_state = {"state": "idle"}
+        self._prewarm_started = False
+        self._prewarm_cancel = threading.Event()
         self.audio_kind: str | None = None
         self.audio_identity: tuple[str, str] | None = None
         self.audio_cancel = threading.Event()
@@ -132,6 +135,7 @@ class AssistantServer(ThreadingHTTPServer):
                                "state": "ready" if ready else "unqualified",
                                "detail": "Speech readiness is verified separately for input and output.",
                                "download_bytes": synthesis.get("memory", {}).get("asset_bytes")}
+            self._maybe_prewarm(synthesis)
             if self.setup_state:
                 result["setup"] = dict(self.setup_state)
                 if self.setup_state["state"] == "preparing":
@@ -141,6 +145,38 @@ class AssistantServer(ThreadingHTTPServer):
                 elif self.setup_state["state"] == "error":
                     result["error"] = self.setup_state["message"]
             return result
+
+    def _maybe_prewarm(self, synthesis) -> None:
+        """One-shot voice pre-warm: once synthesis is usable, start the
+        Kokoro worker and run a tiny synthesis in the background so the
+        first real read-aloud does not pay model load + first-infer
+        warmup. Never blocks the caller; MLX_OMARCHY_VOICE_PREWARM=0
+        disables; respects the speech yield rules (one speak-class GPU
+        grant, refused when generation holds the GPU)."""
+        if os.environ.get("MLX_OMARCHY_VOICE_PREWARM", "1") == "0":
+            return
+        if self._prewarm_started or not synthesis.get("usable"):
+            return
+        self._prewarm_started = True
+        threading.Thread(target=self._prewarm_run, daemon=True).start()
+
+    def _prewarm_run(self) -> None:
+        import os
+        cancel = self._prewarm_cancel
+        try:
+            grant = self.coordinator.speech.enter(cancel)
+        except Exception:
+            grant = None
+        if grant is None:
+            return
+        try:
+            ok = self.synthesis.prime(cancel)
+        except Exception as exc:
+            ok = False
+        finally:
+            grant.release()
+        if os.environ.get("MLX_OMARCHY_VOICE_PREWARM", "1") != "0":
+            print(f"PREWARM_RESULT ok={ok}", flush=True)
 
     def setup(self, body):
         if set(body) - {"pair_id", "approve_download", "preference", "context_tokens", "voice"}:
@@ -274,6 +310,7 @@ class AssistantServer(ThreadingHTTPServer):
 
     def server_close(self):
         self.audio_cancel.set()
+        self._prewarm_cancel.set()
         if self.transfer_thread and self.transfer_thread.is_alive():
             self.transfer_thread.join(timeout=10)
             if self.transfer_thread.is_alive():

@@ -776,15 +776,54 @@ def _kokoro_runtime(assets_dir: str):
     return pipe
 
 
+# Time-to-first-audio budget for the first model pass, in rough phonemes
+# (English averages ~3 per word; per-word estimate is len*0.6 rounded up).
+# The remainder streams in order right behind it.
+_FIRST_SEGMENT_BUDGET = 28
+
+
+def _phoneme_estimate(text: str) -> int:
+    return sum(max(1, round(len(word) * 0.6)) for word in text.split())
+
+
+def _first_segment(text: str,
+                   budget: int = _FIRST_SEGMENT_BUDGET) -> tuple[str, str]:
+    """Split read-aloud text so the first synthesis pass is short.
+
+    Prefers the first clause boundary when it already fits the budget;
+    otherwise cuts at the word boundary that keeps the estimate under it.
+    Returns (first, rest); rest is empty when no cut is needed.
+    """
+    text = text.strip()
+    if not text:
+        return "", ""
+    if _phoneme_estimate(text) <= budget:
+        return text, ""
+    clause = _CLAUSE_SPLIT.split(text, maxsplit=1)
+    if len(clause) == 2 and clause[0].strip() \
+            and _phoneme_estimate(clause[0]) <= budget:
+        return clause[0].strip(), text[len(clause[0]):].lstrip(" \t,;:")
+    taken: list[str] = []
+    spent = 0
+    for word in text.split():
+        cost = max(1, round(len(word) * 0.6))
+        if taken and spent + cost > budget:
+            break
+        taken.append(word)
+        spent += cost
+    first = " ".join(taken)
+    return first, text[len(first):].lstrip()
+
+
 def _kokoro_generate(pipe, text: str, voice: str) -> Iterator:
     """Yield float32 numpy chunks, one per phoneme chunk the pipeline makes.
 
-    The first clause is synthesized as its own segment so the first audio
-    chunk is short (TTFA), then the remainder follows in order.
+    The first segment is bounded to a small phoneme budget so the first
+    model pass is short (TTFA), then the remainder follows in order.
     """
     import numpy as np
-    pieces = _CLAUSE_SPLIT.split(text.strip(), maxsplit=1)
-    for piece in (p for p in pieces if p.strip()):
+    first, rest = _first_segment(text)
+    for piece in ((first, rest) if rest else (first,)):
         for result in pipe(piece, voice=voice, speed=1.0):
             audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
             if audio.size:
@@ -988,6 +1027,7 @@ class Synthesis:
         self._req_counter = 0
         self._sample_rate = None
         self._last_error: str | None = None
+        self._prime_done = False
 
     def assets_dir(self) -> Path:
         return self.home / "voice" / VOICE_ENGINES[0]["id"]
@@ -1171,6 +1211,7 @@ class Synthesis:
             "usable": state in ("usable", "ready"),
             "ready": state == "ready",
             "generated": self._generated_once,
+            "primed": self._prime_done,
             "busy": self._slots > 0,
             "worker": {"alive": worker_alive,
                        "pid": self._worker.process.pid if self._worker
@@ -1568,6 +1609,25 @@ class Synthesis:
             wav.setframerate(rate)
             wav.writeframes(samples.tobytes())
         return buffer.getvalue()
+
+    def prime(self, cancel: threading.Event) -> bool:
+        """Pre-warm the default engine: start the resident worker and run
+        one tiny synthesis so model load and first-infer warmup are paid
+        before real speech is requested. Best effort: returns False on any
+        refusal instead of raising; a real speak behaves exactly as before.
+        """
+        try:
+            self._guard()
+        except VoiceError:
+            return False
+        try:
+            for _ in self.synthesize_chunks("Ready.", cancel):
+                pass
+        except (SynthesisCancelled, VoiceError):
+            return False
+        if self._generated_once:
+            self._prime_done = True
+        return self._prime_done
 
     def close(self) -> None:
         """Release worker residency; returns only once each child is dead."""

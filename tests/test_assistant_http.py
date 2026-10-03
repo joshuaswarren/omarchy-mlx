@@ -1,9 +1,12 @@
 import http.client
 import json
+import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from mlx_omarchy_assistant.server import AssistantServer, voice_ready
 
@@ -176,6 +179,52 @@ class VoiceReadyTests(unittest.TestCase):
         self.assertFalse(voice_ready({"ready": True}, "unqualified"))
         self.assertFalse(voice_ready({"ready": True}, "missing"))
         self.assertTrue(voice_ready({"ready": True, "qualified": True}, "ready"))
+
+
+class PrewarmTriggerTests(unittest.TestCase):
+    """status() kicks the one-shot voice pre-warm once synthesis is usable;
+    the env off-switch disables; subsequent polls do not re-prime."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.server = AssistantServer(("127.0.0.1", 0), Path(self.temp.name))
+
+    def tearDown(self):
+        self.server._prewarm_cancel.set()
+        self.server.server_close()
+        self.temp.cleanup()
+
+    def test_prewarm_disabled_by_env_and_fires_once(self):
+        released = []
+        grant = mock.Mock()
+        grant.release.side_effect = lambda: released.append(1)
+        self.server._coordinator = mock.Mock()
+        self.server._coordinator.speech = mock.Mock()
+        self.server._coordinator.speech.enter.return_value = grant
+        prime_calls = []
+        self.server._synthesis = mock.Mock()
+        self.server._synthesis.status.return_value = {"usable": True}
+        self.server._synthesis.prime.side_effect = \
+            lambda cancel: prime_calls.append(cancel) or True
+        with mock.patch.dict(os.environ,
+                             {"MLX_OMARCHY_VOICE_PREWARM": "0"}):
+            self.server._maybe_prewarm({"usable": True})
+            self.assertEqual(self.server._coordinator.speech.enter.call_count,
+                             0)
+        os.environ.pop("MLX_OMARCHY_VOICE_PREWARM", None)
+        self.server._maybe_prewarm({"usable": False})
+        self.assertEqual(self.server._coordinator.speech.enter.call_count,
+                         0)
+        self.server._maybe_prewarm({"usable": True})
+        deadline = time.monotonic() + 5
+        while not prime_calls and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(prime_calls), 1)
+        self.assertTrue(released)
+        self.server._maybe_prewarm({"usable": True})
+        time.sleep(0.2)
+        self.assertEqual(len(prime_calls), 1,
+                         "second status poll must not re-prime")
 
 
 class VoiceChoiceRouteTests(unittest.TestCase):
