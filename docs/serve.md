@@ -36,7 +36,7 @@ Preparation collects the app, speech tools, installed dependency pins, runtime w
 It follows version markers and requested extras, and refuses missing required dependencies.
 Export-plan failures leave the inspection control available for retry.
 Installation validates the archive and stages a venv without network access before replacing the active files.
-Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. On-hardware pacing qualification is still pending.
+Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. The browser requests one sentence at a time, in order, starts the next request as soon as the previous stream closes, and schedules every chunk on one audio playhead, so sentences never overlap or reorder and synthesis of the next sentence overlaps playback of the current one. On-hardware pacing qualification is still pending.
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
 Automatic decision routing is off by default. Its gate now passes on the measured head call ([gate status](#per-pair-gate-status-2026-10-01)); turning it on is the owner's decision. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.

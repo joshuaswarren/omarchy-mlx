@@ -6,9 +6,11 @@
 // /api/transcribe. The recording hard-caps at 30 seconds, warns at 25, and
 // never auto-starts; tab close stops the mic.
 //
-// TTS serialises /api/speak requests to a queue of two, plays each WAV
-// through a Web Audio AudioBuffer, caps cumulative decoded playback at 10s
-// per turn and offers "Continue reading" if the queue was truncated.
+// TTS requests one sentence at a time from /api/speak, in order, and starts
+// the next request the moment the previous stream closes, so synthesis of
+// sentence N+1 overlaps playback of sentence N. Every chunk is scheduled on
+// one shared Web Audio playhead. Cumulative decoded playback caps at 10s per
+// turn and "Continue reading" resumes after the cap.
 
 import { streamSpeak, transcribe } from "./api.js";
 import { asString, asNumber } from "./util.js";
@@ -16,7 +18,6 @@ import { asString, asNumber } from "./util.js";
 const SAMPLE_RATE = 16000;
 const MAX_DURATION = 30;
 const WARN_DURATION = 25;
-const QUEUE_LIMIT = 2;
 const PLAYBACK_CAP = 10;
 const RETRY_INTERVAL_MS = 2000;
 const CHUNK_MARGIN_S = 0.03;
@@ -299,15 +300,15 @@ export class SpeakQueue {
   constructor() {
     this._ctx = null;
     this._sources = [];      // scheduled AudioBufferSourceNodes (live + pending)
-    this._queue = [];        // sentences waiting to start (limit QUEUE_LIMIT)
-    this._pending = [];      // busy-parked sentences on a bounded retry timer
-    this._inFlight = 0;
+    this._queue = [];        // sentences waiting for their request, in order
+    this._active = false;    // the server serialises speech: one stream at a time
+    this._playhead = 0;      // AudioContext time where the next chunk starts
+    this._retryTimer = null;
     this._truncated = false;
     this._totalDecoded = 0;
     this._turnId = null;
     this._abort = null;
     this._epoch = 0;
-    this._retryTimer = null;
     this._completedSeqs = new Set();
     this._onTruncate = null;
     this._onAudioDone = null;
@@ -342,14 +343,8 @@ export class SpeakQueue {
       this._markTruncated();
       return;
     }
-    if (this._inFlight >= QUEUE_LIMIT) {
-      this._queue.push({ turnId, sentenceSequence, text });
-      return;
-    }
-    this._inFlight += 1;
-    this._speak(turnId, sentenceSequence, text).catch((err) => {
-      if (this._onError) this._onError(err);
-    });
+    this._queue.push({ turnId, sentenceSequence, text, attempts: 0 });
+    this._pump();
   }
 
   _setSpeaking(active) {
@@ -365,131 +360,121 @@ export class SpeakQueue {
     if (this._onTruncate) this._onTruncate();
   }
 
-  _kickRetry() {
-    if (this._retryTimer || this._stopped) return;
-    if (this._pending.length === 0) return;
-    this._retryTimer = window.setInterval(() => this._retryPending(), RETRY_INTERVAL_MS);
-  }
-
-  _retryPending() {
-    if (this._stopped || this._pending.length === 0) {
-      this._clearRetry();
+  _pump() {
+    if (this._stopped || this._active || this._retryTimer) return;
+    if (this._totalDecoded >= PLAYBACK_CAP && this._queue.length > 0) {
+      this._queue = [];
+      this._markTruncated();
+    }
+    const item = this._queue.shift();
+    if (!item) {
+      this._settle();
       return;
     }
-    if (this._inFlight >= QUEUE_LIMIT) return;
-    const item = this._pending.shift();
+    this._active = true;
+    this._setSpeaking(true);
+    this._speak(item).catch((err) => {
+      this._active = false;
+      if (this._onError) this._onError(err);
+      this._pump();
+    });
+  }
+
+  _settle() {
+    if (this._active || this._retryTimer || this._queue.length > 0 || this._sources.length > 0) return;
+    this._setSpeaking(false);
+    if (this._onAudioDone) this._onAudioDone({ truncated: this._truncated });
+  }
+
+  _park(item) {
+    // GPU busy before the stream started: retry the same sentence first,
+    // on a bounded timer. Speak requests only — never a model turn.
     item.attempts += 1;
     if (item.attempts > MAX_SPEAK_RETRIES) {
       if (this._onError) {
         this._onError(new Error("Speech worker stayed busy; sentence dropped from the read queue"));
       }
+      this._pump();
       return;
     }
-    this._inFlight += 1;
-    this._speak(item.turnId, item.sentenceSequence, item.text).catch((err) => {
-      if (this._onError) this._onError(err);
-    });
+    this._queue.unshift(item);
+    if (this._sources.length === 0) this._setSpeaking(false);
+    this._retryTimer = window.setTimeout(() => {
+      this._retryTimer = null;
+      this._pump();
+    }, RETRY_INTERVAL_MS);
   }
 
   _clearRetry() {
     if (this._retryTimer) {
-      window.clearInterval(this._retryTimer);
+      window.clearTimeout(this._retryTimer);
       this._retryTimer = null;
     }
   }
 
-  async _speak(turnId, sentenceSequence, text) {
+  _play(ctx, epoch, sentenceSequence, data, abort) {
+    const b64 = asString(data && data.data);
+    if (b64 === undefined) return;
+    const rate = asNumber(data && data.sample_rate) || 16000;
+    const samples = pcm16leToFloat32(b64);
+    const duration = samples.length / rate;
+    if (this._totalDecoded + duration > PLAYBACK_CAP) {
+      abort.abort();
+      this._markTruncated();
+      return;
+    }
+    const buffer = ctx.createBuffer(1, samples.length, rate);
+    buffer.getChannelData(0).set(samples);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    const at = Math.max(ctx.currentTime + CHUNK_MARGIN_S, this._playhead);
+    this._playhead = at + duration;
+    src.start(at);
+    this._totalDecoded += duration;
+    this._sources.push(src);
+    src.onended = () => {
+      if (epoch !== this._epoch) return;
+      this._sources = this._sources.filter((s) => s !== src);
+      this._completedSeqs.add(sentenceSequence);
+      this._settle();
+    };
+  }
+
+  async _speak(item) {
     const epoch = this._epoch;
-    this._setSpeaking(true);
     const abort = new AbortController();
     this._abort = abort;
     const ctx = await this._ctxLazy();
-    let nextTime = ctx.currentTime + CHUNK_MARGIN_S;
-    let streamClosed = false;
-    let pendingChunks = 0;
     let streamError = null;
-    const self = this;
-
-    const tryFinish = () => {
-      if (epoch !== self._epoch) return;
-      if (!streamClosed || pendingChunks > 0) return;
-      self._inFlight -= 1;
-      const next = self._queue.shift();
-      if (next && !self._stopped) {
-        self._inFlight += 1;
-        self._speak(next.turnId, next.sentenceSequence, next.text).catch((err) => {
-          if (self._onError) self._onError(err);
-        });
-        return;
-      }
-      if (self._pending.length > 0) self._kickRetry();
-      if (self._inFlight <= 0) {
-        self._setSpeaking(false);
-        if (self._onAudioDone) self._onAudioDone({ truncated: self._truncated });
-      }
-    };
-
     try {
       await streamSpeak(
-        { conversation_id: this._conversationId, turn_id: turnId,
-          text, sentence_sequence: sentenceSequence },
+        { conversation_id: this._conversationId, turn_id: item.turnId,
+          text: item.text, sentence_sequence: item.sentenceSequence },
         { signal: abort.signal,
           onEvent: ({ event, data }) => {
-            if (epoch !== self._epoch) return;
+            if (epoch !== this._epoch) return;
             if (event === "audio") {
-              const b64 = asString(data && data.data);
-              if (b64 === undefined) return;
-              const rate = asNumber(data && data.sample_rate) || 16000;
-              const samples = pcm16leToFloat32(b64);
-              const duration = samples.length / rate;
-              if (self._totalDecoded + duration > PLAYBACK_CAP) {
-                abort.abort();
-                self._markTruncated();
-                return;
-              }
-              const buffer = ctx.createBuffer(1, samples.length, rate);
-              buffer.getChannelData(0).set(samples);
-              const src = ctx.createBufferSource();
-              src.buffer = buffer;
-              src.connect(ctx.destination);
-              const at = Math.max(ctx.currentTime + CHUNK_MARGIN_S, nextTime);
-              nextTime = at + duration;
-              src.start(at);
-              self._totalDecoded += duration;
-              pendingChunks += 1;
-              self._sources.push(src);
-              src.onended = () => {
-                self._sources = self._sources.filter((s) => s !== src);
-                self._completedSeqs.add(sentenceSequence);
-                pendingChunks -= 1;
-                tryFinish();
-              };
+              this._play(ctx, epoch, item.sentenceSequence, data, abort);
             } else if (event === "error") {
               streamError = new Error(asString(data && data.message) || "Speech failed");
             }
           } });
     } catch (err) {
+      if (epoch !== this._epoch) return;
       if (err && err.code === "busy") {
-        // GPU busy before the stream started: park on the bounded retry
-        // timer. Speak requests only — never a model turn.
-        this._pending.push({ turnId, sentenceSequence, text, attempts: 0 });
-        this._kickRetry();
-        this._inFlight -= 1;
-        if (this._inFlight <= 0) this._setSpeaking(false);
+        this._active = false;
+        this._park(item);
         return;
       }
       if (!(err && err.name === "AbortError") && this._onError) {
         this._onError(err);
       }
-      this._inFlight -= 1;
-      if (this._inFlight <= 0) this._setSpeaking(false);
-      return;
     }
-    if (streamError && epoch === this._epoch && this._onError) {
-      this._onError(streamError);
-    }
-    streamClosed = true;
-    tryFinish();
+    if (epoch !== this._epoch) return;
+    if (streamError && this._onError) this._onError(streamError);
+    this._active = false;
+    this._pump();
   }
 
   setConversationId(id) { this._conversationId = id; }
@@ -498,7 +483,6 @@ export class SpeakQueue {
     this._epoch += 1;
     this._stopped = true;
     this._clearRetry();
-    this._pending = [];
     if (this._abort) { try { this._abort.abort(); } catch {} }
     for (const src of this._sources) {
       try { src.stop(); } catch {}
@@ -506,7 +490,8 @@ export class SpeakQueue {
     }
     this._sources = [];
     this._queue = [];
-    this._inFlight = 0;
+    this._active = false;
+    this._playhead = 0;
     this._setSpeaking(false);
   }
 
