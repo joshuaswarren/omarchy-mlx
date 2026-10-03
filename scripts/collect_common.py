@@ -75,6 +75,23 @@ MODEL_TOKENS = frozenset((
 ))
 _MODEL_CHIP_RE = re.compile(r"t\d{4}")
 
+# Device-tree / IORegistry property NAMES that carry machine identity:
+# the serial family (serial-number, mlb-serial-number, board-serial,
+# serial-index, IOPlatformSerialNumber), unique-chip/ecid/mlb, and
+# UUID/UDID token names. Value blanking is not enough for these: the
+# property and its shape survive, and a multi-cell value keeps every
+# token after the first (2026-10-03 contributor reports: a serial
+# fragment reached the endpoint and the worker refused the row). Such
+# properties are REMOVED whole, and each removal is tallied in the
+# redaction summary.
+IDENTITY_PROP_RE = re.compile(
+    r"(?i)(serial|(^|[-_,])mlb([-_,]|$)|ecid|unique-chip|udid|uuid)")
+
+
+def is_identity_prop(name):
+    """True when a property NAME matches the serial / unique-id family."""
+    return bool(IDENTITY_PROP_RE.search(name))
+
 
 def _restricted_alias(alias):
     """True when `alias` may only redact free text, never the name

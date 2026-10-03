@@ -66,6 +66,7 @@ from collect_common import (
     build_manifest,
     build_payload,
     host_aliases,
+    is_identity_prop,
     is_native_macos,
     json_bytes,
     local_hostname,
@@ -121,11 +122,12 @@ ANE_DTBS_KERNEL_NOTE = (
     "own device trees: the overlay opt-in has no effect, and the chip is "
     "enabled only by its node in the kernel DT.")
 
-# Identity strip list for the raw devicetree text member (same keys as
-# the macOS probe strip list).
+# Label-keep list for the raw devicetree text member: identity props are
+# REMOVED whole via `is_identity_prop` (serial/uuid/udid/mlb/ecid/
+# unique-chip family); these remaining shapes are not personal on their
+# own, so the line stays with its value dropped.
 DT_STRIP_PROPS = re.compile(
-    r"(?i)^(serial-number|unique-chip-id|unique-chip|ecid|mlb|"
-    r"mac-address|local-mac-address|device-uuid|linux,usable-memory-range"
+    r"(?i)^(mac-address|local-mac-address|linux,usable-memory-range"
     r"|wifi-.*|bluetooth-.*|fv-.*|.*-hash)$")
 MAX_RAW_DUMP_BYTES = 1024 * 1024
 MAX_ADT_DUMP_BYTES = 2 * 1024 * 1024
@@ -870,8 +872,9 @@ def _ane_linux_dt_text(redactor, ws):
     """Archive member: dtc text of the booted tree, stripped, capped.
 
     Uses dtc when present; a missing dtc is recorded, not fatal.
-    Identity props are dropped from the TEXT so the raw member obeys
-    the same strip list as everything else.
+    Identity props (serial/uuid/udid family) are dropped from the TEXT
+    line-by-line and tallied, so the raw member carries no property,
+    name, or value fragment.
     """
     rec = run_tool(["dtc", "-q", "-I", "fs", "-O", "dts",
                     collect_quick.DT_BASE], redactor,
@@ -883,6 +886,9 @@ def _ane_linux_dt_text(redactor, ws):
         stripped = line.strip()
         if "=" in stripped:
             label = stripped.split("=", 1)[0].strip().strip('";')
+            if is_identity_prop(label):
+                redactor._note("additional_identity_properties_removed")
+                continue
             if DT_STRIP_PROPS.match(label):
                 kept.append(f"\t{label}; // [stripped]")
                 continue
@@ -1575,7 +1581,7 @@ def main():
                                        archive_name, os.path.abspath(args.repo))
     for message in _ane_smoke_guidance(_ane_result(files)) if args.ane_smoke else []:
         print(message)
-    print_preview(manifest, data, archive_name, bool(args.out))
+    print_preview(manifest, data, archive_name, bool(args.out or args.submit))
     if args.out:
         with open(args.out, "wb") as fh:
             fh.write(data)
@@ -1595,7 +1601,10 @@ def main():
 
 
 def maybe_submit(args, data, archive_name, out_path, payload):
-    """Upload only after explicit consent; never without a local copy."""
+    """Upload only after explicit consent; without --out the archive
+    is staged in a temp file (removed after a successful upload and
+    kept when the upload fails, so the contributor can retry or attach
+    it)."""
     import collect_submit
     endpoint = collect_submit.endpoint_from_args(args)
     if endpoint is None:
@@ -1604,14 +1613,26 @@ def maybe_submit(args, data, archive_name, out_path, payload):
                   f"--submit or send {out_path} "
                   f"and its .submission.md by hand.")
         return 0
+    temp_path = None
     if not out_path:
-        print("[submit] no --out file; refusing to upload without keeping "
-              "a local copy", file=sys.stderr)
-        return 4
+        # Bare --submit: stage the bytes in the user's tmp dir so the
+        # upload has a local artifact. Kept on failure for retry/attach,
+        # removed on success or decline.
+        fd, temp_path = tempfile.mkstemp(
+            prefix="mlx-omarchy-deep-", suffix=".tar.gz")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        out_path = temp_path
+        print(f"[submit] staged archive at {out_path} "
+              f"(temporary; removed after upload)")
     digest = hashlib.sha256(data).hexdigest()
     if not args.submit and not collect_submit.confirm_interactive(
             endpoint, archive_name, digest):
-        print(f"[submit] declined; {out_path} stays local")
+        if temp_path is not None:
+            os.unlink(temp_path)
+            print("[submit] declined; temporary archive removed")
+        else:
+            print(f"[submit] declined; {out_path} stays local")
         return 0
     try:
         receipt = collect_submit.submit(
@@ -1620,8 +1641,12 @@ def maybe_submit(args, data, archive_name, out_path, payload):
             aliases=host_aliases(local_hostname()))
     except collect_submit.SubmitError as exc:
         print(f"[submit] FAILED: {exc}", file=sys.stderr)
-        print(f"[submit] local output preserved: {out_path}", file=sys.stderr)
+        print(f"[submit] local output preserved: {out_path}",
+              file=sys.stderr)
         return 4
+    if temp_path is not None:
+        os.unlink(temp_path)
+        print(f"[submit] uploaded; temporary archive {temp_path} removed")
     print(f"[receipt] public URL: {receipt['url']} "
           f"(deduplicated={receipt['deduplicated']})")
     return 0

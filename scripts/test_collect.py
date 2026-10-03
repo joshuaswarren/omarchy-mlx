@@ -13,6 +13,8 @@ import gzip
 import hashlib
 import io
 import json
+import argparse
+import contextlib
 import os
 import re
 import stat
@@ -2786,5 +2788,183 @@ class AneProbeCollectorTests(unittest.TestCase):
         self.assertTrue(bounded["available"])
         self.assertTrue(bounded["truncated"])
         self.assertLessEqual(len(json.dumps(bounded, separators=(",", ":")).encode()), 8192)
+
+
+class DtcSerialRemovalTests(unittest.TestCase):
+    """dtc-format dts: identity props (serial/uuid/udid family) must be
+    REMOVED whole from the ane-linux-dt.txt member, with a count
+    landing in the redactor tally. Other strip-list props keep their
+    label-only behavior unchanged (2026-10-03: value blanking left
+    multi-cell serial fragments and a serial-index VALUE entirely
+    visible — pii_detected serial x3)."""
+
+    DUMP = (
+        "/dts-v1/;\n\n/ {\n"
+        "    compatible = \"apple,t8103\";\n"
+        "    model = \"Apple MacBook Pro (13-inch, M1, 2020)\";\n"
+        "    serial-number = <0x12345678 0x9abcdef0>;\n"
+        "    mlb-serial-number = \"F5KXY123456\";\n"
+        "    board-serial = \"C02XY9876543\";\n"
+        "    serial-index = <0x00000002>;\n"
+        "    chosen { boot-args = \"quiet\"; };\n"
+        "    soc { ane@26a000000 { compatible = \"apple,ane\";\n"
+        "                          reg = <0x26 0xa000000 0x0 0x100000>;\n"
+        "                          mac-address = [41 42 43 44 45 46]; }; };\n"
+        "};\n"
+    )
+
+    def _run(self, ws):
+        rec = {"label": "dtc devicetree text", "argv": ["dtc"], "available": True,
+               "exit_code": 0, "error": None, "stderr": "", "stdout": self.DUMP}
+        with patch.object(cd, "run_tool", return_value=rec):
+            red = cc.Redactor()
+            ok, _err = cd._ane_linux_dt_text(red, ws)
+            return ok, red, open(os.path.join(ws, "ane-linux-dt.txt")).read()
+
+    def test_serial_family_properties_removed_whole(self):
+        with tempfile.TemporaryDirectory() as ws:
+            ok, red, text = self._run(ws)
+        self.assertTrue(ok)
+        lowered = text.lower()
+        for forbidden in ("serial-number", "mlb-serial-number", "board-serial",
+                          "serial-index", "0x9abcdef0", "0x00000002",
+                          "c02xy9876543", "f5kxy123456"):
+            self.assertNotIn(forbidden, lowered,
+                             f"leak in dtc text: {forbidden!r}")
+        # non-identity strip list still keeps the label as [stripped].
+        self.assertIn("mac-address; // [stripped]", text)
+        # identity removals are tallied; original serial notes from
+        # run_tool are gone now that the loop runs before redaction.
+        self.assertEqual(
+            red.counts.get("additional_identity_properties_removed"), 4)
+
+    def test_unchanged_for_benign_props(self):
+        with tempfile.TemporaryDirectory() as ws:
+            _ok, _red, text = self._run(ws)
+        # Benign structural lines survive untouched.
+        for kept in ("compatible = \"apple,t8103\"",
+                     "model = \"Apple MacBook Pro",
+                     "boot-args = \"quiet\"",
+                     "reg = <0x26 0xa000000 0x0 0x100000>"):
+            self.assertIn(kept, text)
+
+
+class DtPropsIdentityRemoval(unittest.TestCase):
+    """_dt_props must drop identity-named property files entirely
+    (one choke point for the ane scan and the reserved-memory walks)
+    and tally the removal. Values from a real /proc/device-tree byte
+    dump are read; we just never decode them."""
+
+    def test_serial_and_uuid_files_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node = os.path.join(tmp, "soc", "ane@26a000000")
+            os.makedirs(node, exist_ok=True)
+            # Synthetic but realistic DT property file shapes.
+            for name, raw in (
+                ("compatible", b"apple,ane\x00"),
+                ("reg", (0x26).to_bytes(4, "big") +
+                        (0xa000000).to_bytes(4, "big") +
+                        (0x0).to_bytes(4, "big") +
+                        (0x100000).to_bytes(4, "big")),
+                ("serial-number", b"C02XY9876543\x00"),
+                ("mlb-serial-number", b"F5KXY123456\x00"),
+                ("board-serial", b"C02ZZ1122334\x00"),
+                ("device-uuid", b"a1b2c3d4-e5f6-7890-abcd-ef1234567890\x00"),
+                ("apple,udid-cache", b"UDID000000000\x00"),
+            ):
+                with open(os.path.join(node, name), "wb") as fh:
+                    fh.write(raw)
+            red = cc.Redactor()
+            props = cq._dt_props(node, red)
+        self.assertIn("compatible", props)
+        self.assertIn("reg", props)
+        self.assertNotIn("serial-number", props)
+        self.assertNotIn("mlb-serial-number", props)
+        self.assertNotIn("board-serial", props)
+        self.assertNotIn("device-uuid", props)
+        self.assertNotIn("apple,udid-cache", props)
+        self.assertEqual(
+            red.counts.get("additional_identity_properties_removed"), 5)
+
+
+class BareSubmitStagingTests(unittest.TestCase):
+    """`--submit` without `--out` stages the archive in a temp file,
+    uploads it, and removes the temp on success; the failure path keeps
+    the file and prints its path (2026-10-03: bare --submit refused with
+    exit 4 before the upload was attempted)."""
+
+    def _capture(self, args, out_path=None, **overrides):
+        import collect_submit as cs
+        saved = {k: getattr(cs, k) for k in overrides}
+        for k, v in overrides.items():
+            setattr(cs, k, v)
+        err, out = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            try:
+                code = cd.maybe_submit(args, b"archive-bytes",
+                                       "mlx-omarchy-deep.tar.gz",
+                                       out_path, {})
+            except SystemExit as e:
+                code = e.code
+        for k, v in saved.items():
+            setattr(cs, k, v)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_bare_submit_failure_keeps_temp_file(self):
+        import collect_submit as cs
+        def _raise(*a, **k):
+            raise cs.SubmitError("endpoint unreachable")
+        code, _out, err = self._capture(
+            argparse.Namespace(submit="http://127.0.0.1:9", out=None),
+            submit=_raise)
+        self.assertEqual(code, 4)
+        match = re.search(r"local output preserved: (\S+)", err)
+        self.assertIsNotNone(match,
+                             "no preserved path message on upload failure")
+        path = match.group(1)
+        try:
+            self.assertTrue(os.path.exists(path),
+                            f"temp archive not kept: {path}")
+            self.assertIn("FAILED: endpoint unreachable", err)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_bare_submit_success_removes_temp_file(self):
+        def _ok(*a, **k):
+            return {"url": "http://r/x", "deduplicated": False, "status": 200}
+        code, out, _err = self._capture(
+            argparse.Namespace(submit="http://endpoint.example", out=None),
+            submit=_ok)
+        self.assertEqual(code, 0)
+        match = re.search(r"temporary archive (\S+) removed", out)
+        self.assertIsNotNone(match,
+                             "no temp-removed message on success")
+        self.assertFalse(os.path.exists(match.group(1)),
+                         f"temp archive not removed: {match.group(1)}")
+        self.assertIn("public URL: http://r/x", out)
+
+    def test_with_out_path_bypasses_temp_staging(self):
+        """Existing --out behavior is unchanged: no temp file, no
+        staging message, no removal."""
+        def _ok(*a, **k):
+            return {"url": "http://r/y", "deduplicated": False, "status": 200}
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+            out_path = f.name
+        try:
+            code, stdout, _err = self._capture(
+                argparse.Namespace(submit="http://endpoint.example",
+                                   out=out_path),
+                out_path=out_path,
+                submit=_ok)
+            self.assertEqual(code, 0)
+            self.assertNotIn("staged archive at", stdout)
+            self.assertNotIn("temporary archive", stdout)
+            self.assertTrue(os.path.exists(out_path),
+                            "explicit --out file should remain after upload")
+        finally:
+            if os.path.exists(out_path):
+                os.remove(out_path)
 if __name__ == "__main__":
     unittest.main(verbosity=2)

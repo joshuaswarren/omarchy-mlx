@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import collect_macos
 from collect_common import (SCHEMA_VERSION, Redactor, build_payload,
+                            is_identity_prop,
                             dump_json, host_aliases, json_bytes, run_tool,
                             local_hostname)
 
@@ -303,6 +304,9 @@ def _dt_props(node_dir, redactor, cap=16):
     for name in sorted(os.listdir(node_dir)):
         path = os.path.join(node_dir, name)
         if not os.path.isfile(path):
+            continue
+        if is_identity_prop(name):
+            redactor._note("additional_identity_properties_removed")
             continue
         try:
             with open(path, "rb") as fh:

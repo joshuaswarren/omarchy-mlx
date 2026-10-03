@@ -991,5 +991,41 @@ class AneDumpStreamCapTests(unittest.TestCase):
                         cc.MAX_STREAM_CHARS + 200)
 
 
+class MacOsIodtStripListTests(unittest.TestCase):
+    """The macOS probe's strip predicate (embedded in the probe source
+    string ANE_PROBE_HELPERS, executed on the Mac via run_python_probe)
+    must remove the serial / unique-id family whole: mlb-serial and
+    IOPlatformSerialNumber are the lived-reported leaks (2026-10-03:
+    value-blanked keys kept their shape, the server saw `serial x3`).
+    The shared `is_identity_prop` predicate is the reference list; the
+    embedded source is asserted to express the same family."""
+
+    IDENTITY_KEYS = ("serial-number", "Serial-Number",
+                     "mlb-serial-number", "MLB-Serial-Number",
+                     "board-serial", "serial-index",
+                     "IOPlatformSerialNumber",
+                     "IOPlatformUUID", "IOPlatformUDID",
+                     "device-uuid", "boot-uuid",
+                     "foo-udid", "x-uuid-y")
+    BENIGN_KEYS = ("compatible", "reg", "name", "interrupt-controller",
+                   "device_type", "mac-address", "local-mac-address",
+                   "wifi-fw-hash", "bluetooth-version")
+
+    def test_shared_identity_predicate_classifies_correctly(self):
+        for key in self.IDENTITY_KEYS:
+            self.assertTrue(cc.is_identity_prop(key),
+                            f"shared predicate misses: {key!r}")
+        for key in self.BENIGN_KEYS:
+            self.assertFalse(cc.is_identity_prop(key),
+                             f"shared predicate over-strips: {key!r}")
+
+    def test_embedded_probe_predicate_expresses_serial_family(self):
+        # The probe runs on the Mac; its strip list is plain Python
+        # inside ANE_PROBE_HELPERS. Assert the family is covered.
+        self.assertIn('"serial" in k', cm.ANE_PROBE_HELPERS)
+        self.assertIn('"udid" in k', cm.ANE_PROBE_HELPERS)
+        self.assertIn('"uuid" in k', cm.ANE_PROBE_HELPERS)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

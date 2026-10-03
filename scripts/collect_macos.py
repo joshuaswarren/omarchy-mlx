@@ -185,7 +185,11 @@ _STRIP_SUFFIX = "-hash"
 def _is_stripped_key(key):
     k = key.lower()
     return (k in _STRIP_EXACT
-            or k.startswith(_STRIP_PREFIX) or k.endswith(_STRIP_SUFFIX))
+            or k.startswith(_STRIP_PREFIX) or k.endswith(_STRIP_SUFFIX)
+            # Serial / unique-id family beyond the exact list:
+            # mlb-serial-number, IOPlatformSerialNumber, board-serial,
+            # *-udid, *-uuid. Removed whole, never value-blanked.
+            or "serial" in k or "udid" in k or "uuid" in k)
 
 
 def _strip_props(props, stripped):
