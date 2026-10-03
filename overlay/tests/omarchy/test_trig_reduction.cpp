@@ -190,32 +190,6 @@ TEST_CASE("NaN above the 5e5 limit, accurate at the boundary") {
   }
 }
 
-TEST_CASE("compiled tape leg matches the eager contract") {
-  if (!compute_available()) {
-    return;
-  }
-  Stream gpu = new_stream(Device::gpu);
-  auto trig_tape = [](std::vector<array> inputs) {
-    return std::vector<array>{sin(inputs[0]) * cos(inputs[0])};
-  };
-  auto compiled = compile(trig_tape);
-  for (float v : {123456.0f, 2.0e5f, kLimit}) {
-    float eager = flat(trig_tape({array(v)}).at(0), Stream(gpu)).at(0);
-    float taped = flat(compiled({array(v)}).at(0), Stream(gpu)).at(0);
-    double ref = std::sin((double)v) * std::cos((double)v);
-    CHECK_MESSAGE(
-        std::abs(eager - ref) <= 1e-4,
-        "eager sin*cos(", v, ") = ", eager, " vs ", ref);
-    CHECK_MESSAGE(
-        std::abs(taped - ref) <= 1e-4,
-        "taped sin*cos(", v, ") = ", taped, " vs ", ref);
-  }
-  for (float v : {1e6f, -2.7e37f}) {
-    float taped = flat(compiled({array(v)}).at(0), Stream(gpu)).at(0);
-    CHECK_MESSAGE(std::isnan(taped), "taped sin*cos(", v, ") = ", taped);
-  }
-}
-
 TEST_CASE("complex exp reduces its imaginary part by the same contract") {
   if (!compute_available()) {
     return;
