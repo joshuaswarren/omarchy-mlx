@@ -40,6 +40,6 @@ $V receipt/run_card_latency_suite.py \
   --repo-serve /tmp/CardLatency/after/serve \
   --suite /tmp/CardLatency/dev_subset.json \
   --tag cand-dev \
-  --out /tmp/CardLatency/dev_cand_${PAIR}.json \
+  --out /tmp/CardLatency/dev_cand_${LABEL}.json \
   --budget-s 1380
 echo "== dev-suite $PAIR done $(date -u +%FT%TZ)"
