@@ -96,17 +96,18 @@ window per ticket (uptime/loadavg/PSI recorded on the M2).
 Gate: valid cards >= 15/18, 0 spurious, first-text p95 <= 2.0 s budget,
 time-to-first-component median/p95 improved.
 
-### Compact 4B — COMPLETE
+### Compact 4B — COMPLETE (three builds)
 
-| gate | base | candidate 1 |
-|---|---|---|
-| valid cards | **18/18** | **18/18** |
-| spurious | **0/18** | **0/18** |
-| first-component median | 32.49 s | **8.16 s** |
-| first-component p95 | 43.87 s | **21.11 s** |
-| first-text median | 0.51 s | 0.66 s |
-| first-text p95 (all 36) | 1.20 s | **2.20 s** |
-| misses | none | none |
+| gate | base | candidate 1 (not shipped) | **shipped (promotion + wrap)** |
+|---|---|---|---|
+| valid cards | **18/18** | **18/18** | **18/18** |
+| spurious | **0/18** | **0/18** | **0/18** |
+| first-component median | 32.49 s | 8.16 s | **7.26 s** |
+| first-component p95 | 43.87 s | 21.11 s | **15.44 s** |
+| first-text median | 0.51 s | 0.66 s | 0.66 s |
+| first-text p95 (all 36) | 1.20 s | 2.20 s | **1.18 s** |
+| first-text p95 (ordinary prompts) | 0.51 s | 1.90 s | **0.52 s** |
+| misses | none | none | none |
 
 First-text p95 (all 36) reads 2.20 s against the 2.0 s budget — read the
 number before judging it. The three >2 s prompts (v4-13, v4-15 facts,
@@ -170,18 +171,16 @@ latency is prefill-bound, not prompt-wording-bound: no wording change can
 move it. For scale, candidate 1's 9B dev p95 was 0.93 s — its sample set
 caught neither warmup prompt.
 
-**Shipped state (Main's decision rule for a failed candidate): stream-time
-promotion + the envelope wrap, WITHOUT the prompt change.** components.py
-is back to the pre-change prompt; the coordinator promotes markdown cards
-at the closed-block boundary and wraps bare-component fences. This build
-did not get its own held-out run: it differs from base only in coordinator
-timing (the same deterministic cards, emitted earlier) and in the wrap
-(rescues bare-component fences — a shape that occurred in zero of base's
-72 held-out rows), so base's validity counts are expected to carry; the
-magnitude of the markdown-card component-time gain on held-out prompts is
-unquantified until the next gate run. Candidate 1's numbers above stand as
-the measured bound of what the prompt change would have bought, and as the
-reason it is not shipped.
+**Shipped build — held-out confirmation (4B COMPLETE, 9B in flight).** The
+shipped build (stream-time promotion + envelope wrap, original prompt, main
+4f0cd58f9) ran the frozen v4 once on the 4B: **18/18 valid, 0 spurious,
+first-component median 7.26 s (base 32.49), p95 15.44 s (base 43.87),
+first-text p95 1.18 s (base 1.20; ordinary-chat prompts 0.52 s)** — every
+gate passes, and the markdown-card component win does not cost prose
+latency (with the original prompt the prose streams first AND the card
+promotes mid-stream). The 9B confirmation was parked at 2/36 rows by the
+04:50Z M2 reservation (both landed rows pass; component 12.4/9.9 s vs base
+median 37.1 s) and resumes at M2 FREE.
 
 ### 9B per-prompt validity (candidate 1, the borderline run)
 
