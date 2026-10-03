@@ -1,8 +1,20 @@
-// Server-side PII rejection scan: defense in depth behind the
-// collector's local redaction. Scans the JSON-serialized summary text;
-// on any hit the submission is REFUSED, never stored. Patterns mirror
-// the collector's Redactor so a string the collector would have
-// redacted is also refused server-side if redaction was bypassed.
+// Server-side PII scan: defense in depth behind the collector's local
+// redaction. Two modes over the same regex set:
+//
+//   scanPiiPayload  — report hits, refuse the submission (legacy reject
+//                     path; hard-rejects below are unchanged).
+//   redactPiiPayload — find hits, rewrite matched substrings in the
+//                     payload text with typed placeholders (same style
+//                     the collector's Redactor uses), and return the
+//                     cleaned payload plus the kind counts. Tally
+//                     objects (redaction_summary, _redaction) are
+//                     blanked before the scan so their keys/counts
+//                     never trip the same patterns. The owner directive
+//                     (2026-10-03): "the worker must STRIP PII instead
+//                     of REJECTING it"; redact+store with counts is
+//                     the new default, scan is kept for callers that
+//                     need reject semantics (none today, kept for
+//                     tests).
 //
 // Matches are reported as kind counts only; matched text is never
 // echoed back, so the error response cannot leak the PII itself.
@@ -230,4 +242,314 @@ export function scanPii(text: string, hostAliases: string[] = []): PiiKinds | nu
     if (match[0].length === 0) re.lastIndex++;
   }
   return hits > 0 ? kinds : null;
+}
+
+// ---------------------------------------------------------------------------
+// Strip-instead-of-reject path (owner directive, 2026-10-03):
+//   1. Run the same scan against the payload text.
+//   2. If clean, return payload unchanged and kinds=null (no extra
+//      `pii_redacted` shape in the response).
+//   3. Otherwise blank the tally objects (redaction_summary, any
+//      _redaction sub-object) in a structured clone so their keys/
+//      counts cannot trip the same patterns; rewrite the JSON text by
+//      replacing every matched substring with the kind's placeholder;
+//      JSON-parse the cleaned text back. Tally counts are not
+//      re-emitted here — the kind counts are the answer, and the
+//      stored summary still carries the redaction_summary the
+//      collector wrote (blanked to whitespace to avoid re-tripping).
+//
+// Placeholders mirror the collector's Redactor (collect_common.py):
+//   mac → [redacted-mac]
+//   ipv4 → [redacted-ip4]
+//   ipv6 → [redacted-ip6]
+//   uuid → [redacted-uuid]
+//   serial → [redacted]
+//   home_path → [home]
+//   hostname → [host]
+//   hostname_alias → [host]
+//   credential → [redacted]
+export type RedactResult = {
+  payload: unknown;
+  kinds: PiiKinds;
+};
+
+const TALLY_KEYS: Record<string, true> = {
+  redaction_summary: true,
+  _redaction: true,
+};
+
+const PLACEHOLDERS: Record<string, string> = {
+  mac: "[redacted-mac]",
+  ipv4: "[redacted-ip4]",
+  ipv6: "[redacted-ip6]",
+  uuid: "[redacted-uuid]",
+  serial: "[redacted]",
+  home_path: "[home]",
+  hostname: "[host]",
+  hostname_alias: "[host]",
+  credential: "[redacted]",
+};
+
+// JSON object KEYS whose ENTIRE value is identity material — the same
+// family the collector's is_identity_prop removes whole (serial*,
+// *-serial, mlb-serial-*, ecid, unique-chip-*, *udid*, *uuid*). A
+// regex value match can never be trusted for these: a multi-cell dtc
+// value `<0x12345678 0x9abcdef0>` leaves the second cell behind when
+// only the first token is rewritten (2026-10-03 owner directive:
+// NEVER store the raw value — key-based whole-value replacement).
+const IDENTITY_KEY_RE =
+  /(serial|(^|[-_,"'])mlb([-_"']|$)|ecid|unique-chip|udid|uuid)/i;
+
+// Remove whole property STATEMENTS from dtc/dts-shaped text: any line
+// whose property label (left of the first '=') matches the identity
+// family is dropped entirely, so multi-cell `<a b>`, byte-array
+// `[..]`, and quoted-string values cannot leave fragments. Runs on
+// RAW string values (after JSON.parse), so JSON-escaped `\n`/`\"`
+// forms are handled by the parse, not by the filter.
+function stripDtcStatements(text: string): { text: string; removed: number } {
+  if (!text.includes("=")) return { text, removed: 0 };
+  const out: string[] = [];
+  let removed = 0;
+  for (const line of text.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq < 0) {
+      out.push(line);
+      continue;
+    }
+    const label = line.slice(0, eq).trim().replace(/["';]+$/, "");
+    if (IDENTITY_KEY_RE.test(label)) {
+      removed++;
+      continue;
+    }
+    out.push(line);
+  }
+  return { text: out.join("\n"), removed };
+}
+
+// Structural pass over the payload clone: (a) identity-keyed entries
+// get their WHOLE value replaced with "[redacted]" (any shape —
+// string, number, cell/byte array, nested object); (b) every string
+// value goes through the dtc statement filter, so embedded dumps
+// lose identity property lines entirely. Counts land in the serial /
+// uuid kinds so the pii_redacted response reflects structural strips
+// even when the regex scan then finds nothing.
+function stripIdentityValues(payload: unknown): {
+  clone: unknown;
+  serial: number;
+  uuid: number;
+} {
+  const clone = structuredClone(payload);
+  let serial = 0;
+  let uuid = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    for (const key of Object.keys(node as Record<string, unknown>)) {
+      const record = node as Record<string, unknown>;
+      const value = record[key];
+      if (IDENTITY_KEY_RE.test(key)) {
+        record[key] = "[redacted]";
+        if (/uuid|udid/i.test(key)) uuid++;
+        else serial++;
+        continue;
+      }
+      if (typeof value === "string") {
+        const cleaned = stripDtcStatements(value);
+        if (cleaned.removed > 0) {
+          record[key] = cleaned.text;
+          serial += cleaned.removed;
+        }
+        continue;
+      }
+      walk(value);
+    }
+  };
+  walk(clone);
+  return { clone, serial, uuid };
+}
+
+function blankTallies(payload: unknown): unknown {
+  const clone = structuredClone(payload);
+  const walk = (node: unknown, key: string | null): void => {
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, key));
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    for (const [childKey, value] of Object.entries(node)) {
+      if (key !== null && TALLY_KEYS[key] === true) {
+        // Parent is a tally container: blank every value (preserve
+        // keys/structure so downstream readers see a sane shape) so
+        // the pattern scan never sees raw counts. Strings are
+        // blanked with same-length spaces; numbers become short
+        // strings (so the JSON stays valid AND the `serial":NN`
+        // pattern cannot fire — the value is now a quoted
+        // single-digit string, not a digit run).
+        if (typeof value === "string") {
+          (node as Record<string, unknown>)[childKey] = " ".repeat(value.length);
+        } else if (typeof value === "number") {
+          (node as Record<string, unknown>)[childKey] = "0";
+        } else if (typeof value === "boolean") {
+          (node as Record<string, unknown>)[childKey] = "0";
+        } else if (value && typeof value === "object") {
+          walk(value, "tally-leaf");
+        }
+      } else if (TALLY_KEYS[childKey] === true) {
+        // The container itself: walk its children with the tally key
+        // set so each value is blanked.
+        walk(value, childKey);
+      } else {
+        walk(value, childKey);
+      }
+    }
+  };
+  walk(clone, null);
+  return clone;
+}
+
+function buildScanner(hostAliases: string[]): {
+  re: RegExp;
+  count: (k: string) => number;
+} {
+  // We replicate the scanPii regex assembly so we can iterate over
+  // every match (scanPii collapses to a count map). hostAliases
+  // need the same alternation rules.
+  const aliases = parseHostAliases(hostAliases.join(",")).slice(0, MAX_ALIASES);
+  let source = PII_RE.source;
+  if (aliases.length > 0) {
+    const alternation = [...aliases]
+      .sort((a, b) => b.length - a.length)
+      .map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|");
+    source += `|(?<hostname_alias>(?<![A-Za-z0-9])(?:${alternation})(?![A-Za-z0-9]))`;
+  }
+  const re = new RegExp(source, PII_RE.flags + "g");
+  return { re, count: () => 0 };
+}
+
+function kindOf(match: RegExpExecArray): string | null {
+  const groups = match.groups ?? {};
+  for (const k of Object.keys(groups)) {
+    if (groups[k] !== undefined) return k;
+  }
+  return null;
+}
+
+// Replace every PII match inside ONE string value with the kind's
+// placeholder and count the kinds. Value-level rewriting can never
+// span JSON structure (keys, colons, braces), so the result is valid
+// JSON by construction — no padded-placeholder arithmetic, no
+// re-parse gamble.
+function rewriteValueText(
+  text: string,
+  source: string,
+): { text: string; kinds: PiiKinds } {
+  const re = new RegExp(source, PII_RE.flags + "g");
+  const kinds: PiiKinds = {};
+  const out: string[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  let safety = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (++safety > 50_000) break;
+    const k = kindOf(match);
+    if (k === null) {
+      re.lastIndex = match.index + Math.max(1, match[0].length);
+      continue;
+    }
+    out.push(text.slice(cursor, match.index));
+    out.push(PLACEHOLDERS[k] ?? "[redacted]");
+    cursor = match.index + match[0].length;
+    re.lastIndex = cursor;
+    if (match[0].length === 0) re.lastIndex++;
+    kinds[k] = (kinds[k] ?? 0) + 1;
+  }
+  out.push(text.slice(cursor));
+  return { text: out.join(""), kinds };
+}
+
+export function redactPiiPayload(
+  payload: unknown,
+  hostAliases: string[] = [],
+): RedactResult {
+  const talliesBlank = blankTallies(payload);
+  // Structural pass FIRST: identity-keyed values replaced whole,
+  // dtc statements dropped from string values. This is the only
+  // guard that removes multi-cell serial material completely
+  // (regex value matches leave trailing cells behind).
+  const identity = stripIdentityValues(talliesBlank);
+  // The rewrite runs over the firmware-blanked clone, so exempt
+  // iBoot-version values can neither inflate the counts nor be
+  // mangled.
+  const firmwareBlanked = blankRegions(identity.clone, false);
+  const aliases = parseHostAliases(hostAliases.join(","));
+  const unrestricted = aliases.filter((a) => !restrictedAlias(a));
+  const restricted = aliases.filter(restrictedAlias);
+
+  // Full-pattern source with unrestricted aliases folded in (they
+  // match everywhere, name fields included).
+  let unrestrictedSource = PII_RE.source;
+  if (unrestricted.length > 0) {
+    const alternation = [...unrestricted]
+      .sort((a, b) => b.length - a.length)
+      .map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|");
+    unrestrictedSource +=
+      `|(?<hostname_alias>(?<![A-Za-z0-9])(?:${alternation})(?![A-Za-z0-9]))`;
+  }
+
+  const kinds: PiiKinds = {};
+  if (identity.serial > 0) kinds.serial = (kinds.serial ?? 0) + identity.serial;
+  if (identity.uuid > 0) kinds.uuid = (kinds.uuid ?? 0) + identity.uuid;
+
+  // Per-value rewrite: unrestricted patterns apply to every string
+  // value; restricted (short / marketing-word) aliases apply only to
+  // free text — never the exempt name fields.
+  const walk = (node: unknown, key: string | null): void => {
+    if (Array.isArray(node)) {
+      node.forEach((item) => walk(item, key));
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    for (const [childKey, value] of Object.entries(node)) {
+      if (typeof value === "string") {
+        let current = value;
+        const hit = rewriteValueText(current, unrestrictedSource);
+        current = hit.text;
+        for (const [k, v] of Object.entries(hit.kinds)) {
+          kinds[k] = (kinds[k] ?? 0) + v;
+        }
+        if (restricted.length > 0 && !EXEMPT_NAME_FIELDS[childKey]) {
+          const aliasSource =
+            `(?<hostname_alias>(?<![A-Za-z0-9])(?:${[...restricted]
+              .sort((a, b) => b.length - a.length)
+              .map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+              .join("|")})(?![A-Za-z0-9]))`;
+          const aliasHit = rewriteValueText(current, aliasSource);
+          current = aliasHit.text;
+          for (const [k, v] of Object.entries(aliasHit.kinds)) {
+            kinds[k] = (kinds[k] ?? 0) + v;
+          }
+        }
+        if (current !== value) {
+          // SAFETY: node came from Object.entries on a walked object,
+          // so assigning back through the same key preserves shape.
+          (node as Record<string, unknown>)[childKey] = current;
+        }
+        continue;
+      }
+      walk(value, childKey);
+    }
+  };
+  walk(firmwareBlanked, null);
+
+  if (Object.keys(kinds).length === 0) {
+    // SAFETY: an empty kinds map IS the null contract — callers treat
+    // "no hits" identically to the legacy scan's null return.
+    return { payload, kinds: null as unknown as PiiKinds };
+  }
+  return { payload: firmwareBlanked, kinds };
 }

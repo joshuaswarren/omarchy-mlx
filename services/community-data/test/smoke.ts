@@ -3,7 +3,7 @@
 //
 // Covers: full multi-chunk submission, resumed upload (only missing
 // chunks), replay dedupe, hash mismatch, oversize archive, oversize
-// chunk, failed/absent proof of work, PII refusal, incomplete complete,
+// chunk, failed/absent proof of work, PII strip (row stored clean), incomplete complete,
 // archive round-trip, cron cache rebuild, and GC of stale submissions.
 import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
@@ -335,7 +335,11 @@ scenario("weak and absent proof of work are rejected", async () => {
   return `weak=${weak.body.error} absent=${absent.body.error}`;
 });
 
-scenario("MAC address in payload is refused, nothing stored", async () => {
+scenario("MAC address in payload is stripped, row stored clean", async () => {
+  // Owner directive 2026-10-03: STRIP PII instead of REJECTING. The
+  // row is accepted (200), the stored copy carries the placeholder,
+  // and the response carries the per-kind counts. The raw MAC value
+  // is readable nowhere afterwards.
   const archive = makeArchive(1, 6);
   const sha = sha256Hex(archive);
   const res = await fetch(`${BASE}/v1/submit`, {
@@ -350,12 +354,19 @@ scenario("MAC address in payload is refused, nothing stored", async () => {
       pow: { nonce: solvePow(sha), difficulty: POW_BITS },
     }),
   });
-  expect(res.status === 422, `expected 422, got ${res.status}`);
+  expect(res.status === 200, `expected 200, got ${res.status}`);
   const body = await res.json();
-  expect(body.error === "pii_detected", JSON.stringify(body));
-  const check = await fetch(`${BASE}/v1/results/${sha}`);
-  expect(check.status === 404, "refused payload became readable");
-  return `error=${body.error} kinds=${JSON.stringify(body.detail.kinds)}`;
+  expect(body.status === "stored", JSON.stringify(body));
+  expect(JSON.stringify(body.pii_redacted) === '{"mac":1}',
+    `pii_redacted ${JSON.stringify(body.pii_redacted)}`);
+  const record = await fetch(`${BASE}/v1/results/${sha}`);
+  expect(record.status === 200, "stripped row not readable");
+  const doc = await record.json();
+  const summaryText = JSON.stringify(doc.summary);
+  expect(summaryText.includes("00:1A:2B:3C:4D:5E") === false,
+    "raw MAC stored");
+  expect(summaryText.includes("[redacted-mac]"), "placeholder missing");
+  return `stored clean, pii_redacted=${JSON.stringify(body.pii_redacted)}`;
 });
 
 scenario("completing with a chunk missing returns 409 and stays invisible", async () => {

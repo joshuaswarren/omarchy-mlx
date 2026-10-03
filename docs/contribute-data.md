@@ -48,6 +48,13 @@ The one-paragraph version:
   server's full error body if a submit fails, so you see exactly why.
   The worker still accepts schema versions 1 and 2; the new probe field
   updates the schema identity without changing that version list.
+- **PII handling, end to end (v0.7.23+):** the collector removes every
+  serial / unique-id property from the dtc dump and the IORegistry dump
+  before writing, and the server defensively scans every payload. If
+  the scan still finds a leak (an old collector, a free-text note, a
+  hostname mDNS suffix), the worker **strips** the matched value and
+  stores the cleaned copy with `pii_redacted: {kind: n}` counts in the
+  response. Nothing PII-shaped ever lands in the public row.
 
 ## Turn on the ANE for your chip
 

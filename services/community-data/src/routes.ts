@@ -8,7 +8,8 @@ import {
 } from "./caps";
 import { sha256Hex } from "./hash";
 import { coerceToSchema } from "./coerce";
-import { ALIAS_HEADER, parseHostAliases, scanPiiPayload } from "./pii";
+import { ALIAS_HEADER, parseHostAliases, redactPiiPayload, scanPiiPayload } from "./pii";
+import { sanitizeArchiveBlob } from "./archive_sanitize";
 import { verifyPow } from "./pow";
 import { SchemaNode, validateSchemaRoot } from "./schema";
 import * as store from "./store";
@@ -109,10 +110,6 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
   }
   const audit = coerced.length > 0 ? { coerced } : {};
 
-  const summaryText = JSON.stringify(init.payload);
-  if (summaryText.length > MAX_PAYLOAD_BYTES) {
-    return errorResponse(413, "payload_too_large", { limit: MAX_PAYLOAD_BYTES });
-  }
   const schemaErrors = validateSchemaRoot(init.payload, schema);
   if (schemaErrors.length > 0) {
     return errorResponse(422, "schema_invalid", {
@@ -128,8 +125,32 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
   }
 
   const pii = scanPiiPayload(init.payload, parseHostAliases(request.headers.get(ALIAS_HEADER)));
+  let piiRedacted: Record<string, number> | null = null;
+  let storedPayload: unknown = init.payload;
   if (pii !== null) {
-    return errorResponse(422, "pii_detected", { kinds: pii });
+    // Owner directive 2026-10-03: STRIP PII instead of REJECTING. The
+    // worker scrubs matched substrings in the payload, stores the
+    // cleaned copy, and returns the redaction counts to the client.
+    // Hard rejects (size, schema, schema_version, identity) are
+    // unchanged above.
+    try {
+      const out = redactPiiPayload(init.payload, parseHostAliases(request.headers.get(ALIAS_HEADER)));
+      storedPayload = out.payload;
+      piiRedacted = out.kinds;
+    } catch (exc) {
+      // redactPiiPayload rewrites per string value, so it cannot
+      // produce invalid JSON; any throw is a bug — fail closed so
+      // the raw payload never lands in storage.
+      return errorResponse(500, "pii_redaction_failed",
+        { reason: (exc as Error).message });
+    }
+    console.log(`pii_redacted ${init.content_sha256} ${JSON.stringify(piiRedacted)}`);
+  }
+
+  // Sized AFTER the strip: the stored summary is what must fit.
+  const summaryText = JSON.stringify(storedPayload);
+  if (summaryText.length > MAX_PAYLOAD_BYTES) {
+    return errorResponse(413, "payload_too_large", { limit: MAX_PAYLOAD_BYTES });
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -142,6 +163,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
       content_sha256: init.content_sha256,
       missing_chunks: [],
       receipt_url: receiptUrl(new URL(request.url).origin, init.content_sha256),
+      ...(piiRedacted ? { pii_redacted: piiRedacted } : {}),
       ...audit,
     });
   }
@@ -173,6 +195,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
       content_sha256: init.content_sha256,
       missing_chunks: missing,
       receipt_url: receiptUrl(new URL(request.url).origin, init.content_sha256),
+      ...(piiRedacted ? { pii_redacted: piiRedacted } : {}),
       ...audit,
     });
   }
@@ -193,6 +216,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
     summary: summaryText,
     archive: init.archive,
     powDifficulty: pow.difficulty,
+    piiRedacted: piiRedacted,
   });
   if (row.published === 1) {
     // A published row must be visible to readers immediately; the hourly
@@ -207,6 +231,7 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
     content_sha256: init.content_sha256,
     missing_chunks: missing,
     receipt_url: receiptUrl(new URL(request.url).origin, init.content_sha256),
+    ...(piiRedacted ? { pii_redacted: piiRedacted } : {}),
     ...audit,
   });
 }
@@ -256,6 +281,42 @@ async function handleChunk(
 }
 
 async function handleComplete(sha: string, request: Request, env: Env): Promise<Response> {
+  // Sanitize the archive blob BEFORE publishing, but only when the
+  // initiate step recorded a PII strip — clean submissions publish
+  // exactly as uploaded (idempotent re-rewrite would change chunk
+  // hashes and break handleChunk's declared-vs-stored comparison).
+  const row = await store.getSubmission(env.DB, sha);
+  let archiveWithheld = false;
+  if (row !== null && row.pii_redacted !== null) {
+    const chunks = await store.archiveChunks(env.DB, sha);
+    if (chunks.length > 0) {
+      const totalLen = chunks.reduce((n, b) => n + b.byteLength, 0);
+      const assembled = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of chunks) { assembled.set(new Uint8Array(c), off); off += c.byteLength; }
+      const out = await sanitizeArchiveBlob(assembled);
+      if (out.ok) {
+        const newTotal = out.bytes.byteLength;
+        const chunkBytes = row.archive_chunk_bytes ?? newTotal;
+        const newCount = Math.ceil(newTotal / chunkBytes);
+        const newHashes: string[] = [];
+        for (let i = 0; i < newCount; i++) {
+          const start = i * chunkBytes;
+          const end = Math.min(newTotal, start + chunkBytes);
+          newHashes.push(await sha256Hex(out.bytes.subarray(start, end)));
+        }
+        await store.replaceArchive(env.DB, sha,
+          out.bytes.buffer.slice(out.bytes.byteOffset, out.bytes.byteOffset + out.bytes.byteLength),
+          { total_bytes: newTotal, chunk_bytes: chunkBytes,
+            chunk_count: newCount, chunk_sha256: newHashes });
+        console.log(`pii_archive_rewritten ${sha} ${newTotal} bytes`);
+      } else {
+        await store.withholdArchive(env.DB, sha);
+        archiveWithheld = true;
+        console.log(`pii_archive_withheld ${sha} code=${out.code} reason=${out.reason}`);
+      }
+    }
+  }
   const outcome = await store.completeSubmission(
     env.DB,
     sha,
@@ -275,6 +336,7 @@ async function handleComplete(sha: string, request: Request, env: Env): Promise<
     status: outcome.status,
     content_sha256: sha,
     receipt_url: receiptUrl(new URL(request.url).origin, sha),
+    ...(archiveWithheld ? { archive_withheld_pii: true } : {}),
   });
 }
 

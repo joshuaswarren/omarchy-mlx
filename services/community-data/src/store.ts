@@ -1,4 +1,5 @@
 import { CACHE_PART_CHARS, SCHEMA_VERSIONS } from "./caps";
+import { sha256Hex } from "./hash";
 
 export interface SubmissionRow {
   content_sha256: string;
@@ -22,13 +23,47 @@ export interface SubmissionRow {
   pow_difficulty: number;
   published: number;
   published_at: number | null;
+  pii_redacted: string | null;
 }
 
 const SUBMISSION_COLS =
   "content_sha256, received_at, updated_at, kind, schema_version, arch, " +
   "model, chip, kernel, mesa_driver, mesa_device, mlx_version, mlx_device, " +
   "summary, archive_total_bytes, archive_chunk_bytes, archive_chunk_count, " +
+  "archive_chunk_sha256, pow_difficulty, published, published_at, pii_redacted";
+
+// Pre-0003 shape (migration 0003 not yet applied). The row reads fall
+// back to this list when the live D1 rejects `pii_redacted`, so a
+// code deploy that lands before its migration degrades to "no PII
+// strip recorded" instead of 500-ing every read (2026-10-03 incident:
+// 28563f55 selected the column on a DB without it; every
+// /v1/results/<sha> 500-ed for ~25 min).
+const SUBMISSION_COLS_LEGACY =
+  "content_sha256, received_at, updated_at, kind, schema_version, arch, " +
+  "model, chip, kernel, mesa_driver, mesa_device, mlx_version, mlx_device, " +
+  "summary, archive_total_bytes, archive_chunk_bytes, archive_chunk_count, " +
   "archive_chunk_sha256, pow_difficulty, published, published_at";
+
+const NO_SUCH_COLUMN_RE = /no such column/i;
+
+async function selectSubmissionRow(
+  db: D1Database,
+  sql: (cols: string) => string,
+  sha: string,
+): Promise<SubmissionRow | null> {
+  try {
+    const row = await db.prepare(sql(SUBMISSION_COLS)).bind(sha)
+      .first<SubmissionRow>();
+    return row ?? null;
+  } catch (exc) {
+    if (!NO_SUCH_COLUMN_RE.test(String((exc as Error).message ?? exc))) {
+      throw exc;
+    }
+    const row = await db.prepare(sql(SUBMISSION_COLS_LEGACY)).bind(sha)
+      .first<SubmissionRow>();
+    return row ? { ...row, pii_redacted: null } : null;
+  }
+}
 
 export type PublishOutcome =
   | { ok: true; status: "stored" | "duplicate" }
@@ -40,25 +75,24 @@ export async function getSubmission(
   db: D1Database,
   sha: string,
 ): Promise<SubmissionRow | null> {
-  const row = await db
-    .prepare(`SELECT ${SUBMISSION_COLS} FROM submissions WHERE content_sha256 = ?1`)
-    .bind(sha)
-    .first<SubmissionRow>();
-  return row ?? null;
+  return selectSubmissionRow(
+    db,
+    (cols) => `SELECT ${cols} FROM submissions WHERE content_sha256 = ?1`,
+    sha,
+  );
 }
 
 export async function getPublished(
   db: D1Database,
   sha: string,
 ): Promise<SubmissionRow | null> {
-  const row = await db
-    .prepare(
-      `SELECT ${SUBMISSION_COLS} FROM submissions
+  return selectSubmissionRow(
+    db,
+    (cols) =>
+      `SELECT ${cols} FROM submissions
        WHERE content_sha256 = ?1 AND published = 1`,
-    )
-    .bind(sha)
-    .first<SubmissionRow>();
-  return row ?? null;
+    sha,
+  );
 }
 
 export type InitiateFields = {
@@ -82,6 +116,7 @@ export type InitiateFields = {
     chunk_sha256: string[];
   } | null;
   powDifficulty: number;
+  piiRedacted: Record<string, number> | null;
 };
 
 /**
@@ -92,40 +127,85 @@ export async function initiateSubmission(
   db: D1Database,
   f: InitiateFields,
 ): Promise<SubmissionRow> {
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO submissions (
-         content_sha256, received_at, updated_at, kind, schema_version,
-         arch, model, chip, kernel, mesa_driver, mesa_device, mlx_version,
-         mlx_device, summary, archive_total_bytes, archive_chunk_bytes,
-         archive_chunk_count, archive_chunk_sha256, pow_difficulty,
-         published, published_at
-       ) VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                 ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
-    )
-    .bind(
-      f.contentSha,
-      f.now,
-      f.kind,
-      f.schemaVersion,
-      f.arch,
-      f.model,
-      f.chip,
-      f.kernel,
-      f.mesaDriver,
-      f.mesaDevice,
-      f.mlxVersion,
-      f.mlxDevice,
-      f.summary,
-      f.archive?.total_bytes ?? null,
-      f.archive?.chunk_bytes ?? null,
-      f.archive?.chunk_count ?? null,
-      f.archive ? JSON.stringify(f.archive.chunk_sha256) : null,
-      f.powDifficulty,
-      f.archive ? 0 : 1,
-      f.archive ? null : f.now,
-    )
-    .run();
+  const piiValue = f.piiRedacted ? JSON.stringify(f.piiRedacted) : null;
+  try {
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO submissions (
+           content_sha256, received_at, updated_at, kind, schema_version,
+           arch, model, chip, kernel, mesa_driver, mesa_device, mlx_version,
+           mlx_device, summary, archive_total_bytes, archive_chunk_bytes,
+           archive_chunk_count, archive_chunk_sha256, pow_difficulty,
+           published, published_at, pii_redacted
+         ) VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                   ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)`,
+      )
+      .bind(
+        f.contentSha,
+        f.now,
+        f.kind,
+        f.schemaVersion,
+        f.arch,
+        f.model,
+        f.chip,
+        f.kernel,
+        f.mesaDriver,
+        f.mesaDevice,
+        f.mlxVersion,
+        f.mlxDevice,
+        f.summary,
+        f.archive?.total_bytes ?? null,
+        f.archive?.chunk_bytes ?? null,
+        f.archive?.chunk_count ?? null,
+        f.archive ? JSON.stringify(f.archive.chunk_sha256) : null,
+        f.powDifficulty,
+        f.archive ? 0 : 1,
+        f.archive ? null : f.now,
+        piiValue,
+      )
+      .run();
+  } catch (exc) {
+    if (!NO_SUCH_COLUMN_RE.test(String((exc as Error).message ?? exc))) {
+      throw exc;
+    }
+    // Pre-0003 D1: store the row without the strip record. The strip
+    // itself already happened in memory; only the audit column is
+    // missing until the migration lands.
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO submissions (
+           content_sha256, received_at, updated_at, kind, schema_version,
+           arch, model, chip, kernel, mesa_driver, mesa_device, mlx_version,
+           mlx_device, summary, archive_total_bytes, archive_chunk_bytes,
+           archive_chunk_count, archive_chunk_sha256, pow_difficulty,
+           published, published_at
+         ) VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                   ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
+      )
+      .bind(
+        f.contentSha,
+        f.now,
+        f.kind,
+        f.schemaVersion,
+        f.arch,
+        f.model,
+        f.chip,
+        f.kernel,
+        f.mesaDriver,
+        f.mesaDevice,
+        f.mlxVersion,
+        f.mlxDevice,
+        f.summary,
+        f.archive?.total_bytes ?? null,
+        f.archive?.chunk_bytes ?? null,
+        f.archive?.chunk_count ?? null,
+        f.archive ? JSON.stringify(f.archive.chunk_sha256) : null,
+        f.powDifficulty,
+        f.archive ? 0 : 1,
+        f.archive ? null : f.now,
+      )
+      .run();
+  }
   const row = await getSubmission(db, f.contentSha);
   if (row === null) {
     throw new Error("initiate: insert succeeded but row is missing");
@@ -259,6 +339,74 @@ export async function archiveChunks(
     .bind(sha)
     .all<{ bytes: ArrayBuffer }>();
   return results.map((r) => r.bytes);
+}
+
+/**
+ * Replace the stored archive for an existing (unpublished) row:
+ * chunk the new bytes, delete the old chunks, insert the new ones,
+ * and update the row's archive metadata. Used by the archive
+ * sanitizer on the strip path.
+ */
+export async function replaceArchive(
+  db: D1Database,
+  sha: string,
+  newBytes: ArrayBuffer,
+  shape: {
+    total_bytes: number;
+    chunk_bytes: number;
+    chunk_count: number;
+    chunk_sha256: string[];
+  },
+): Promise<void> {
+  await db.batch([
+    db.prepare("DELETE FROM chunks WHERE content_sha256 = ?1").bind(sha),
+    db.prepare(
+      `UPDATE submissions SET
+         archive_total_bytes = ?2,
+         archive_chunk_bytes = ?3,
+         archive_chunk_count = ?4,
+         archive_chunk_sha256 = ?5,
+         updated_at = ?6
+       WHERE content_sha256 = ?1`,
+    ).bind(sha, shape.total_bytes, shape.chunk_bytes, shape.chunk_count,
+            JSON.stringify(shape.chunk_sha256),
+            Math.floor(Date.now() / 1000)),
+  ]);
+  for (let i = 0; i < shape.chunk_count; i++) {
+    const start = i * shape.chunk_bytes;
+    const end = Math.min(newBytes.byteLength, start + shape.chunk_bytes);
+    const slice = new Uint8Array(newBytes.slice(start, end));
+    const hash = await sha256Hex(slice);
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO chunks (content_sha256, idx, chunk_sha256, bytes)
+         VALUES (?1, ?2, ?3, ?4)`,
+      )
+      .bind(sha, i, hash, slice)
+      .run();
+  }
+}
+
+/**
+ * Withhold the archive for a row: delete every stored chunk and
+ * null the archive columns. The summary (already cleaned) stays.
+ */
+export async function withholdArchive(
+  db: D1Database,
+  sha: string,
+): Promise<void> {
+  await db.batch([
+    db.prepare("DELETE FROM chunks WHERE content_sha256 = ?1").bind(sha),
+    db.prepare(
+      `UPDATE submissions SET
+         archive_total_bytes = NULL,
+         archive_chunk_bytes = NULL,
+         archive_chunk_count = NULL,
+         archive_chunk_sha256 = NULL,
+         updated_at = ?2
+       WHERE content_sha256 = ?1`,
+    ).bind(sha, Math.floor(Date.now() / 1000)),
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +599,11 @@ export async function rebuildCaches(db: D1Database, now: number): Promise<number
     {
       generated_at: generatedAt,
       count: lines.length,
-      text: `{"generated_at":"${generatedAt}","schema_versions":${JSON.stringify(SCHEMA_VERSIONS)},"count":${lines.length},"results":[${lines.join(",")}]`,
+      // The closing brace is part of the template: the served body
+      // must parse as JSON standalone (2026-10-03: the index shipped
+      // without the root's closing brace, so strict consumers failed
+      // at EOF while latest.jsonl parsed fine).
+      text: `{"generated_at":"${generatedAt}","schema_versions":${JSON.stringify(SCHEMA_VERSIONS)},"count":${lines.length},"results":[${lines.join(",")}]}`,
     },
     now,
   );

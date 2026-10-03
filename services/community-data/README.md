@@ -24,7 +24,7 @@ always `{"error": <machine code>, "detail": ...}`.
 
 | Route | Behavior |
 |---|---|
-| `POST /v1/submit` | Initiate. Body: `{schema_version, kind, content_sha256, payload, archive, pow}`. Verifies proof of work, validates the summary against the pinned schema, scans it for PII (refuses on any hit), enforces caps. Returns `{status: "awaiting_chunks"\|"stored"\|"duplicate", content_sha256, missing_chunks, receipt_url}`. |
+| `POST /v1/submit` | Initiate. Body: `{schema_version, kind, content_sha256, payload, archive, pow}`. Verifies proof of work, validates the summary against the pinned schema, scans it for PII, enforces caps. On PII hits the worker STRIPS matched values from the payload and stores the cleaned copy (it does not refuse; the 422 `pii_detected` path is removed). Returns `{status: "awaiting_chunks"\|"stored"\|"duplicate", content_sha256, missing_chunks, receipt_url, pii_redacted?: {kind: n}}` — `pii_redacted` rides the response only when a strip happened. |
 | `POST /v1/submit/<sha>/chunk/<idx>` | One raw octet-stream chunk. Idempotent; verifies the received bytes against the hash declared at initiate. Returns `{status, idx, missing_chunks}`. |
 | `POST /v1/submit/<sha>/complete` | Publishes when every chunk is present and every stored hash matches the declared hash. `409 {error:"incomplete", missing_chunks}` otherwise. |
 | `GET /v1/submit/<sha>` | Dedup probe: `200 {status:"duplicate", receipt_url}` or `404`. |
@@ -109,7 +109,27 @@ npm install
 bun test test/unit                       # must be green first
 set -a; . ~/.config/cloudflare/thewarrens-co.env; set +a
 export CLOUDFLARE_API_TOKEN=$CF_API_TOKEN CLOUDFLARE_ACCOUNT_ID=$CF_ACCOUNT_ID
+
+# 1. Migrations BEFORE the code deploy. The deployed worker reads the
+#    columns its code expects; deploying code that selects a column
+#    the remote D1 lacks 500s every row read (2026-10-03 incident:
+#    28563f55 selected pii_redacted pre-migration and every
+#    /v1/results/<sha> returned 500 for ~25 min).
+npx wrangler d1 migrations list mlx-omarchy-community --remote
+npx wrangler d1 migrations apply mlx-omarchy-community --remote
+
+# 2. Deploy the worker. RECORD THE PREVIOUS VERSION ID first — it is
+#    the rollback target:
+#      prev=$(npx wrangler deployments list | head -5)  # note the id
+#      echo "$(date -u +%FT%TZ) deploy <new-id> prev=<prev-id>" >> deploy.log
+#    Rollback is: npx wrangler rollback            # to the previous deployment
+#    (or `npx wrangler rollback <version-id>` for a specific one).
 npx wrangler deploy
+
+# 3. Post-deploy smoke: schema, index, and three row reads; any
+#    failure auto-rolls the worker back.
+scripts/post_deploy_smoke.sh
+
 npm run check:schema                     # compares /v1/schema to the repo files
 ```
 
