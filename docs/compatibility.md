@@ -26,7 +26,7 @@ records 104/104 transcript agreement on its fixture. This does not
 qualify full-encoder ANE coverage or macOS performance parity.
 
 Apple M2 Max (T6021, t6021-test-host) GPU is verified third-silicon on Mesa
-Honeykrisp / Vulkan 1.4.354 ([`ane-linux-experiments/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md)).
+Honeykrisp / Vulkan 1.4.354 ([`ane-linux-experiments/receipts/2026-09-23-m2-gpu-qwen38/README.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-23-m2-gpu-qwen38/README.md)).
 t6021-test-host Linux on kernel 7.1.13-3-1-ARCH was ANE_UNBOUND, with no
 `/dev/accel/accel0`. On 2026-09-28, kernel `7.1.13-ARCH-polltx` bound
 `ane_t6021_rtclient`. With the nap-prevention bit set, legacy `CONFIG_GET`

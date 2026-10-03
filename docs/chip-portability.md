@@ -129,7 +129,7 @@ git hash + driverUUID + `mlx-omarchy-info` full dump), never on the chip name.
 - **M1 Max (T6001, t6001-test-host) ANE**: qualified (104/104 Parakeet E2E on v0.6.0;
   recerted 4773.8 ms `.ane` on v0.7.1 in [`ane-linux-experiments/receipts/2026-09-19-parakeet-e2e-v071-t6001-test-host.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-19-parakeet-e2e-v071-t6001-test-host.md)).
 - **M2 Max (T6021, t6021-test-host) GPU**: verified third-silicon on Honeykrisp /
-  Vulkan 1.4.354 ([`ane-linux-experiments/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md));
+  Vulkan 1.4.354 ([`ane-linux-experiments/receipts/2026-09-23-m2-gpu-qwen38/README.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-23-m2-gpu-qwen38/README.md));
   t6021-test-host Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND, no
   `/dev/accel/accel0`.
 - **M2 Max (T6021, t6021-test-host) ANE**: **NOT live-inference-qualified** on the

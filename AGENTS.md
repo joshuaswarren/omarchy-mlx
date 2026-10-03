@@ -104,7 +104,7 @@ M1 ANE / Parakeet numbers in this tree are historical dated evidence from
 prior m1-test-host Linux boots. t6001-test-host (T6001) Linux ANE is live. t6021-test-host (T6021)
 Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND, no
 `/dev/accel/accel0`. T6021 GPU is qualified
-([`ane-linux-experiments/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md));
+([`ane-linux-experiments/receipts/2026-09-23-m2-gpu-qwen38/README.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-23-m2-gpu-qwen38/README.md));
 T6021 ANE is **not** live-inference-qualified on the Linux driver
 (macOS-side numbers are macOS CoreML / `aned` measurements, not Linux
 execution). Apple GPU and Apple ANE are separate lanes.
