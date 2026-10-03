@@ -71,6 +71,13 @@ apply mlx-lm-gated-delta-fast-route.patch
 # per-token fallback without this; A/B 42 -> 317 tok/s prefill 512 on M2.
 apply mlx-lm-gated-delta-fast-route-repeat.patch
 apply mlx-lm-gated-delta-raw.patch
+# Serve-path GDN prefill fallback fix: the batched route's ArraysCache sets
+# left_padding=[0]*B even unpadded, so make_mask hands an all-True mask into
+# gated_delta_update and the fused coopmat prefill loses its maskless gate
+# (two-pass scan fallback, ~11x/layer on the 27B serve path). make_mask now
+# returns None when the mask is provably all-valid (host-known mirror);
+# padded batches keep the mask. Kill switch MLX_OMARCHY_SSM_MASKLESS=0.
+python3 "$ROOT/scripts/patch-mlx-lm-ssm-maskless.py" "$VENV"
 apply mlx-lm-greedy-prune.patch
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
 # bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
