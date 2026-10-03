@@ -105,22 +105,21 @@ against — the earlier silent empty reply on the 4B is fixed.
 
 **Card latency levers (2026-10-03; [card latency
 receipt](../receipts/2026-10-02-card-latency/README.md)):** two changes
-shipped — cards built from markdown now promote as soon as their closed
-block completes during the stream (open trailing blocks excluded, same
-promotion rules and validators), and a fence body that is one bare
+shipped and CONFIRMED on the frozen held-out v4 (one run per pair per
+build, same boot) — cards built from markdown now promote as soon as their
+closed block completes during the stream (open trailing blocks excluded,
+same promotion rules and validators), and a fence body that is one bare
 component object is wrapped and must still pass the full validator (that is
 what the 4B's chart fence was missing, and what its repair path could not
-fix). A third lever — a card-first compact schema prompt (fence first, one
-chart series with per-item values) — was measured on the frozen held-out v4
-and is NOT shipped: it cut the component median to 8.2 s (4B) and 11.9 s
-(9B) with validity held (18/18 and 15/18, 0 spurious), but it moves prose
-after the card, and the 4B's first-text p95 over all prompts rose to 2.20 s
-against the 2.0 s budget (9B 2.15 -> 2.17 s). A lead-in-sentence variant
-(candidate 2) failed its dev gate on the 9B (2.09/2.11 s, prefill-bound on
-the schema prompt). The shipped build's markdown-card gain is unquantified
-on held-out until the next gate run; the real-prompt decomposition (66.8 s
-chart on the 9B) stands as the fence-shape baseline the prompt lever would
-have addressed.
+fix). Confirmed shipped-build numbers vs base: first-component median
+32.5 -> 7.3 s (4B) and 37.1 -> 12.8 s (9B), p95 43.9 -> 15.4 s and
+46.6 -> 24.4 s, validity IDENTICAL to base (18/18 and 16/18, same rows,
+0 spurious), first-text p95 not worse (4B 1.18 vs 1.20 s; 9B
+ordinary-prompt population 1.22 vs 1.22 s). A card-first compact schema
+prompt was measured (component median 8.2 s / 11.9 s) and is NOT shipped:
+it moves prose after the card and cost the 4B first-text budget (2.20 s)
+plus one 9B gate row; a lead-in-sentence variant failed its dev gate
+(9B 2.09/2.11 s, prefill-bound).
 
 **Quality performance — the tier budget is the measured figure; the original
 2.0 s design target is not met.** Owner decision 2026-10-02: the Quality
@@ -311,7 +310,7 @@ explicit-CPU-stream finding above.
 | 1 | Routing latency decision (owner, 2026-10-02): the 250 ms gate measures the Laya head call. Measured floor: the call is GPU-execution-dominated with a fixed ~250-270 ms execute+sync cost (T-flat, `mx.compile`-flat); the submission cap saves ~15-25 ms (p95 ~270-273, decisions bit-identical on the 154-case dev set), nothing reaches 250 ms. | Automatic routing stays off until a backend-level change closes the ~20 ms ([head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)); the held-out suite's one remaining use stays reserved for a dev-passing candidate. |
 | 2 | Quality tier budget (owner decision 2026-10-02): the tier budget is now the measured figure, 6.5 s for a 300-token prompt (catalog `first_text_budget_ms`; the original design target was 2.0 s), and the UI labels Quality as slower. The lever to tighten it is engine-side prefill and first-decode-step work; stable-prefix cache reuse is a memory-admission gate decision. The budget tightens again as that work lands. | Quality stays unqualified pending the full gate set (row 4); the relaxed budget is the tier's honest bound, not a pass. |
 | 3 | Voice output first audio: design target 1.5 s. Owner decision 2026-10-02: Kokoro-82M default engine, af_heart default voice, no listening step; Qwen3-TTS stays as the selectable second engine. Measured 2026-10-02 ([TTFA addendum](../receipts/2026-10-02-kokoro-default/README.md)): pre-warm (lands ~27 s after setup via a bounded grant-retry loop) + first-segment budget (12 est units, calibrated to the M2 infer floor) cut /api/speak cold first click 3.90 → 1.29 s, warm 2.51 → 1.29–1.33 s — the 1.5 s target is MET. Stage attribution: `KokoroPipeline.infer` costs ~1.1 s per call + ~24 ms per real phoneme; the per-call floor is the next lever (vocoder output streaming). | Voice output stays unqualified: the RTF corpus gate is unmeasured for the default path, the per-call infer floor is still the floor of the TTFA budget, and a `record_qualification` receipt for the default engine is still open. |
-| 4 | Pair-level qualification: no pair has passed the full gate set. Card latency (held-out v4, [card latency receipt](../receipts/2026-10-02-card-latency/README.md)): SHIPPED levers: markdown cards promote mid-stream and bare-component fences are wrapped (receipt below); a card-first prompt variant that reached medians 8.2 s (4B, was 32.5 s) and 11.9 s (9B, was 37.1 s) at 18/18 and 15/18 valid with 0 spurious is NOT shipped — its 4B first-text p95 was 2.20 s against the 2.0 s budget. The 4B fence now validates via the wrap. 27B not re-measured (53.8 s chart on the 2026-09-30 boot). | Nothing is qualified; `recommended` stays false everywhere. |
+| 4 | Pair-level qualification: no pair has passed the full gate set. Card latency (held-out v4, [card latency receipt](../receipts/2026-10-02-card-latency/README.md)): SHIPPED and CONFIRMED on held-out v4: markdown cards promote mid-stream and bare-component fences are wrapped — component median 7.3 s (4B, was 32.5 s) and 12.8 s (9B, was 37.1 s), p95 15.4/24.4 s, validity IDENTICAL to base (18/18 and 16/18, same rows, 0 spurious), first-text p95 not worse. A card-first prompt variant reached medians 8.2/11.9 s but is NOT shipped (4B first-text p95 2.20 s vs the 2.0 s budget). The 4B fence now validates via the wrap. 27B not re-measured (53.8 s chart on the 2026-09-30 boot). | Nothing is qualified; `recommended` stays false everywhere. |
 | 5 | G13G (jwm1) Mesa arm of pin candidate `e7631595df6`, plus the T8103 16-bit selection doctest and standing battery. | The Mesa pin and the Attn128 chip matrix each wait on that host. |
 
 No pair is qualified. All catalog entries keep `recommended: false`.

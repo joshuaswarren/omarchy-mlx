@@ -5,7 +5,7 @@ set -euo pipefail
 W=$(cd "$(dirname "$0")/.." && pwd)
 H=${CARDLATENCY_HOST:-jw14m2-linux}
 D=${CARDLATENCY_DIR:-/tmp/CardLatency}
-ssh $H "mkdir -p $D/base/serve $D/base/scripts $D/after/serve $D/after/scripts"
+ssh $H "mkdir -p $D/base/serve $D/base/scripts $D/after/serve $D/after/scripts $D/after2/serve $D/after2/scripts $D/after3/serve $D/after3/scripts $D/receipt"
 # base/serve must be pristine origin/main -- never the lever worktree.
 git -C $W archive origin/main serve | ssh $H "tar -x -C $D/base"
 for build in base after after2 after3; do

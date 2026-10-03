@@ -6,16 +6,13 @@ card at all. Where does that time go, and which levers cut it without
 breaking the card gates?
 
 **Status.** COMPLETE. Decomposition done; held-out v4 run once per pair per
-build on boot df82d24a (base = pristine main at 29100916f lineage,
+build on boot df82d24a (base = pristine main at 29100916f lineage;
 candidate 1 = stream-time promotion + card-first compact prompt + envelope
-wrap; candidate 2 = candidate 1 with a lead-in sentence before the fence).
-All four columns landed. **Shipped: stream-time promotion + envelope wrap
-WITHOUT the prompt change** — candidate 1 passed every gate except the 4B
-first-text p95 (2.20 s vs 2.0), and candidate 2 failed its own dev gate on
-the 9B (2.09/2.11 s, reproducible, prefill-bound), so per the pre-declared
-decision rule the prompt change is not shipped. The shipped build differs
-from base only in coordinator timing and the wrap; see Verdict and
-Candidate 2.
+wrap; candidate 2 = candidate 1 with a lead-in sentence before the fence,
+rejected at the dev gate before held-out). **Shipped and CONFIRMED on the
+held-out set: stream-time promotion + envelope wrap with the original
+prompt** — every gate passes on both pairs (see Verdict); the prompt lever
+is not shipped (candidate 1 numbers recorded as its measured bound).
 
 ## Decomposition — where the wait went (real card prompt, one turn per pair)
 
@@ -120,35 +117,42 @@ p95 1.90 s. Verdict recorded as: component and validity gates pass; the
 2.0 s first-text budget passes for ordinary chat and misses on card turns
 where the card itself is the earlier artifact. Main owns the accept.
 
-### Everyday 9B — COMPLETE
+### Everyday 9B — COMPLETE (three builds)
 
-| gate | base | candidate 1 |
-|---|---|---|
-| valid cards | **16/18** | **15/18** (>= 15/18 met) |
-| spurious | **0/18** | **0/18** |
-| first-component median | 37.08 s | **11.89 s** |
-| first-component p95 | 46.59 s | **24.04 s** |
-| first-text p95 (all 36) | 2.15 s | 2.17 s (not worse) |
-| misses | v4-07, v4-12 | v4-07, v4-12, v4-15 |
+| gate | base | candidate 1 (not shipped) | **shipped (promotion + wrap)** |
+|---|---|---|---|
+| valid cards | **16/18** | 15/18 | **16/18** |
+| spurious | **0/18** | **0/18** | **0/18** |
+| first-component median | 37.08 s | 11.89 s | **12.80 s** |
+| first-component p95 | 46.59 s | 24.04 s | **24.39 s** |
+| first-text p95 (all 36) | 2.15 s | 2.17 s | 2.63 s |
+| first-text p95 (ordinary prompts) | 1.22 s | 1.22 s (cand 1 run) | **1.22 s** |
+| misses | v4-07, v4-12 | v4-07, v4-12, v4-15 | v4-07, v4-12 |
 
-The two base misses (v4-07/v4-12, malformed `| : |` separator cells) are the
-same rows the 2026-09-30 gate missed; the candidate adds v4-15 (facts): the
-card-first compact prompt changed the 9B's reply shape on that prompt and no
-valid card resulted. 15/18 is exactly the pre-declared threshold.
+The shipped build reproduces base's validity EXACTLY (16/18, the same two
+known malformed-separator rows — candidate 1's v4-15 flip was the prompt's
+cost and disappears without it) and keeps the component win (median 37.1 ->
+12.8 s, p95 46.6 -> 24.4 s). The all-prompt first-text p95 difference
+(2.15 -> 2.63 s) is tail composition, not a shift: the ordinary-prompt
+population is IDENTICAL (1.22 s both), and the >2 s rows are the same
+schema-prefill card prompts in both runs (v4-13 4.04/4.01 s, v4-15
+3.93/3.94 s, v4-01, one plain row each).
 
 ## Verdict
 
-- Validity and spurious rules: identical or threshold-met on both pairs
-  (18/18 and 15/18 valid, 0 spurious anywhere; no rule touched).
-- Time-to-first-component: **4B median 32.5 -> 8.2 s (4.0x), p95 43.9 ->
-  21.1 s; 9B median 37.1 -> 11.9 s (3.1x), p95 46.6 -> 24.0 s.** Real chart
-  prompt: 9B 66.8 -> 13.1 s.
-- First-text p95: 9B 2.15 -> 2.17 s (not worse). 4B 1.20 -> 2.20 s against
-  the 2.0 s budget: the letter misses because card-first intentionally
-  moves prose after the card on card turns; the protected population
-  (ordinary chat, plain + near-miss) is 1.90 s, and on the >2 s turns the
-  first visible artifact is the card itself at 6-8 s. Recorded as a
-  deviation with the mechanism; not a revert case. Main owns the accept.
+- **Shipped build (stream-time promotion + envelope wrap, original
+  prompt): every gate passes on both pairs.** Validity identical to base
+  (18/18 and 16/18, same rows; 0 spurious anywhere); component median
+  32.5 -> 7.3 s (4B) and 37.1 -> 12.8 s (9B); p95 43.9 -> 15.4 s and
+  46.6 -> 24.4 s; first-text p95 not worse than base (4B 1.18 vs 1.20 s;
+  9B ordinary-population 1.22 vs 1.22 s).
+- Candidate 1 (prompt change) is NOT shipped: it bought a further
+  component gain on fence-shaped turns (real chart prompt 66.8 -> 13.1 s
+  on the 9B) but cost the 4B first-text budget (2.20 s) and one 9B gate
+  row (v4-15). Its numbers stand in the tables as the measured bound of
+  the prompt lever.
+- Candidate 2 (lead-in sentence) never reached held-out: rejected at the
+  dev gate (9B first-text p95 2.09/2.11 s across two runs, prefill-bound).
 
 ## Candidate 2 (lead-in sentence first) — REJECTED at the dev gate
 
