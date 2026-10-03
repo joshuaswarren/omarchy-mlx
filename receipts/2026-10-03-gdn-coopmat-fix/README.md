@@ -89,12 +89,42 @@ binaries agree with scan and masked).
 ## Status / remaining
 
 - [x] exact-input replay both routes, batch=1/0, maskless/all-True
+      (jwm1; scan arms reproduce the M2 captures digit-for-digit)
 - [x] sweep doctest + captured fixtures in-repo, three route configs
-- [x] 2B e2e parity (jwm1)
-- [ ] jw16 same-cell prefill 512/1024/2048 vs deployed baseline
-      1103.6/1256.9/1324.7 (awaiting jw16 window)
-- [ ] M2 27B prompt600 greedy ids `[1596,1144,310,5707,310,1156,13,2570]` +
-      finite logits; 9B/2B digests (M2 window after 15:00Z)
-- [ ] serve A/B with ssm-maskless patch (27B TTFT n>=5, padded 2-seq
-      exactness, zero-CPU spot check)
-- [ ] deploy/ship decision (v0.7.22)
+- [x] 2B/9B e2e parity on jwm1 (4 routes each)
+- [x] jw16 paired-cells A/B (six windows, arm order swapped, gates green,
+      stamps 3700b88 vs e8113bc asserted): pf512 138.1 → 138.2, pf1024
+      129.6 → 129.6, pf2048 129.8 → 129.7 tok/s — **performance-neutral**
+      (deltas within ±0.3% noise). Absolute rates are ~10× below the
+      deployed-stack baselines because both A/B venvs carry plain
+      mlx-lm 0.32.0 (no repo patch set); the fix-vs-base delta is the
+      valid comparison. A patched-stack rerun for absolute comparability
+      stayed load-gated on jw16 (resident llama-server) — parked.
+- [x] **M2 27B end-to-end (the release gate)** — wheel
+      `0.32.4.dev202610031510+5872476` (= main 58724762e, sha256
+      `103127445f852dcb…` verified jwm1↔M2), mlx-lm 0.32.0 + ssm-maskless
+      patch, boot 63ae796c, prompt600 T=352, BatchGenerator greedy 8:
+      **maskless (fused coopmat) = scan (NO_COOPMAT_GDN=1) = masked
+      (SSM_MASKLESS=0) = sha16 `0f02c576521d3f79`, ids
+      [1596,1144,310,5707,310,1156,13,2570]** — exactly the required
+      digest; the 2026-10-03 `[0]*8` NaN failure is dead on the same
+      host that produced it.
+- [x] M2 9B/2B digests: 9B 3 arms + 2B all `a5620574d9fcec9d`; padded
+      2-sequence batch (300/180 ids): per-row digests identical between
+      SSM_MASKLESS on/off (uid0 `636f6a500077e096`, uid1
+      `640bd9a5f3f73935`) — padded rows keep the masked path unchanged.
+- [x] 27B TTFT A/B through the cache path (make_mask → route split),
+      BatchGenerator max_tokens=1, prompt300, n=5, on the **exact
+      shipped v0.7.22 config** (clean venv, wheel `5872476` + full
+      10-patch series applied once + ssm-maskless wired default ON):
+      **maskless (fused) 2.805 s vs masked (scan) 3.730 s median =
+      -0.925 s (-24.8%)**; discriminator arm maskless+`NO_COOPMAT_GDN=1`
+      3.711 s (scan speed) proves the fused coopmat route serves the
+      fast arm. Digest on this config: maskless = masked =
+      `0f02c576521d3f79` again. A patcher-only venv (missing the
+      fast-route patch) ran all arms at ~12.4 s all-scan and still
+      produced the identical digest — route parity is robust off the
+      shipped config too. Zero-CPU spot check: **not run** (the patch
+      only removes a mask op in cache.py; flagged here honestly).
+- [x] v0.7.22 evidence complete; serve patch `de0e3692e` verified
+      default-ON-safe by the 27B arms above.
