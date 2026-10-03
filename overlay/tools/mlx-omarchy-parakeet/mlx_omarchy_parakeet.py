@@ -57,6 +57,25 @@ from coreml.reference import (  # noqa: E402
 RECEIPT_SCHEMA = "mlx-omarchy.parakeet-download-receipt.v1"
 REPORT_SCHEMA = "mlx-omarchy.parakeet-transcribe.v1"
 
+# Jw16ParakeetWarm: env-gated waterfall instrumentation (no logic changes).
+# MLX_OMARCHY_PK_WATERFALL=1 emits a one-line stderr summary of stages at the
+# end of each transcribe invocation (cold + warm --repeat visibility).
+# MLX_OMARCHY_PK_TIMING_EXTRA=1 records the additional stages
+# (startup_to_main, island_open, outputs_write) into the report.
+_BOOT_T0 = time.monotonic()
+
+
+def _pk_waterfall_on() -> bool:
+    return os.environ.get("MLX_OMARCHY_PK_WATERFALL", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _pk_timing_extra_on() -> bool:
+    return os.environ.get("MLX_OMARCHY_PK_TIMING_EXTRA", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
 
 class TranscribeRefusal(RuntimeError):
     """The installed runtime cannot or must not run; the reason is named."""
@@ -658,6 +677,34 @@ def _stage_recorder() -> tuple:
         return result
 
     return stage, stages_records
+
+
+def _emit_waterfall_stderr(report: dict, out, stages_records: list) -> None:
+    """Print a one-line-per-stage summary on stderr (env-gated)."""
+    parts = []
+    for rec in stages_records:
+        parts.append(f"{rec['stage']}={rec['wall_ms']:.1f}ms")
+    total = round(sum(r["wall_ns"] for r in stages_records) / 1e6, 3)
+    sys.stderr.write(
+        "[pk-waterfall] out=" + str(out) + " total_staged=" +
+        f"{total:.1f}ms | " + " ".join(parts) + "\n"
+    )
+
+
+def _record_lifetime_stage(stages_records: list, name: str, snapshot) -> None:
+    """Record a stage with wall_ns = now - module-import time.
+
+    Used for `startup_to_main` (covers process start + all imports + pin/lock
+    load + capability check + cache verify)."""
+    before = snapshot()
+    elapsed = time.monotonic_ns() - int(_BOOT_T0 * 1e9)
+    after = snapshot()
+    stages_records.append({
+        "stage": name,
+        "wall_ns": elapsed,
+        "wall_ms": round(elapsed / 1e6, 3),
+        "gpu_counter_delta": {k: after[k] - before[k] for k in after},
+    })
 
 
 def _load_audio(lock, fixture) -> tuple:
@@ -1319,6 +1366,8 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     stage, stages_records = _stage_recorder()
 
     # ------------------------------------------------------------- 1. audio
+    if _pk_timing_extra_on():
+        _record_lifetime_stage(stages_records, "startup_to_main", trace_snapshot)
     waveform, sample_count, decoder_name = stage(
         "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
     warm = _GpuWarm(mx)
@@ -1328,8 +1377,14 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     chunk_starts, single = _plan_chunks(sample_count)
 
     # ----------------------------------------------------------- 3. encoder
-    island, source, runner = _open_encoder(
-        args, pin, lock, cache_dir, worker, share, scratch_root)
+    if _pk_timing_extra_on():
+        island, source, runner = stage(
+            "island_open", trace_snapshot,
+            lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
+                                   scratch_root))
+    else:
+        island, source, runner = _open_encoder(
+            args, pin, lock, cache_dir, worker, share, scratch_root)
 
     # ------------------------------------------- 4. decoder, joint, control
     decoder = stage(
@@ -1355,15 +1410,33 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
                          chunk, lock, len(chunk_starts), prior)
 
     actual_tokens = list(tdt.token_ids)
-    _write_outputs(out, waveform, mel_host, hidden_host, mask_host,
-                   transcript, actual_tokens, tdt)
-    passed = all(item["pass"] for item in checks)
-    report = _golden_report(
-        pin, passed, pinned, lock, fixture, audio_sha, sample_count, decoder_name,
-        len(chunk_starts), source, tokenizer, stages_records, control,
-        runner, tdt, chunk, island, worker, share, checks, transcript)
-    (out / "transcribe-report.json").write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if _pk_timing_extra_on():
+        def _outputs_work():
+            _write_outputs(out, waveform, mel_host, hidden_host, mask_host,
+                           transcript, actual_tokens, tdt)
+            passed_local = all(item["pass"] for item in checks)
+            report_local = _golden_report(
+                pin, passed_local, pinned, lock, fixture, audio_sha,
+                sample_count, decoder_name, len(chunk_starts), source,
+                tokenizer, stages_records, control, runner, tdt, chunk,
+                island, worker, share, checks, transcript)
+            (out / "transcribe-report.json").write_text(
+                json.dumps(report_local, indent=2, sort_keys=True) + "\n")
+            return report_local
+        report = stage("outputs_write", trace_snapshot, _outputs_work)
+        passed = all(item["pass"] for item in checks)
+    else:
+        _write_outputs(out, waveform, mel_host, hidden_host, mask_host,
+                       transcript, actual_tokens, tdt)
+        passed = all(item["pass"] for item in checks)
+        report = _golden_report(
+            pin, passed, pinned, lock, fixture, audio_sha, sample_count, decoder_name,
+            len(chunk_starts), source, tokenizer, stages_records, control,
+            runner, tdt, chunk, island, worker, share, checks, transcript)
+        (out / "transcribe-report.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if _pk_waterfall_on():
+        _emit_waterfall_stderr(report, out, stages_records)
     print(json.dumps({
         "status": report["status"],
         "checks_failed": [c["check"] for c in checks if not c["pass"]],
