@@ -626,6 +626,15 @@ bf16→f32 cast pass loses a further 22-25% prefill at M=512/1024 with
 identical digests). Receipt:
 `receipts/2026-10-03-prefill-gap/README.md`.
 
+Honeykrisp `pack_64_4x16` pipeline-create defect fixed in the Mesa fork
+(2026-10-03): `agent/pack64-lowering` sets `lower_pack_64_4x16` so the op stays
+in the split form the backend emits as collects; the FSB fused-layout bench went
+from 433.7M `Unhandled ALU op` stderr lines and a dead pipeline to a created
+pipeline with bit-exact results on all nine shapes (widedep 239,487 to
+192,279 ns/layer = 215.0 to 267.7 GB/s), decode digests byte-identical and
+tok/s neutral in a 5-pair A/B, and the primitive/matmul suites unchanged
+(104/104 and 22/22). Receipt: `receipts/2026-10-03-mesa-pack64/README.md`.
+
 ### Prefill glue kernels
 
 Three kernels take the f16/bf16 prefill work that ran on general
