@@ -1,8 +1,12 @@
 # Prefill gap on jwm1 (T8103/G13G): ledger reproduction, per-op profile, roofline, staged-A qmm lever
 
 Date: 2026-10-03. Chip: Apple M1 (G13G B1), 8 GPU cores, 16 GB. Kernel
-7.1.12-2-7-ARCH, boot `92c5b211…` for every timed run below (uptime 8-10 h;
-settled). Host names and addresses are redacted per the public-repo rule;
+7.1.12-2-7-ARCH, boot `16b7c4a8…` for every timed run below — the release
+baseline started ~15 min after that boot (the previous boot ended in
+w71's H237 reboot at ~17:1xZ), settled by the recorded idle gates
+(load1 0.01-0.46, PSI <= 0.05 per cell) rather than by uptime; numbers
+match the prior settled-boot ledger within 0.3%. Host names and addresses
+are redacted per the public-repo rule;
 the private lab notebook holds unredacted transcripts and SHA256SUMS
 (`entries/PrefillGap/20261003T152000Z-jwm1-prefill-gap-profile-lever.md`).
 Provenance printed beside every measurement
@@ -127,13 +131,44 @@ unchanged with the env unset. Conclusion for the lane: the X32
 cast+direct-global-A route is the right prefill route on G13G; the cast
 pass is not prefill headroom.
 
-Version fact for the release lane: on current main (`22cdc6da5`, v0.7.22
-draft) the 2B pf digest on G13G is `a4ebce784981475a`, not the v0.7.21 pin
-`bc519c03c4ef5fd1` — content landed between `e8a02e9b` and `22cdc6da5`
-changed the default-route greedy digest (ctl == staged, and ctl -1.3%
-vs release wall, so it is a numerics re-pin, not a perf regression).
+Version fact for the release lane: on current main (`22cdc6da5`, after the
+v0.7.22 cut at `58724762e`) the 2B pf digest on G13G is
+`a4ebce784981475a`, not the v0.7.21/v0.7.22 pin `bc519c03c4ef5fd1`.
+This is content between `58724762e` and `22cdc6da5` (GDN FLT_MIN floor +
+wave-barrier hardening, ssm-maskless serve patch), NOT the lever: the
+added block is a pure env-gated early return (with the env unset the
+default path is byte-identical code), and ctl == staged in every cell.
 
-## 5. Closed axes (do not re-run)
+## 5. Next axes (proposed, in the order they should be tried)
+
+1. **A-operand cache behaviour across row tiles** (bit-exact, no numerics
+   gate): the coopmat grid is (n_groups, m_groups) with x-linear
+   workgroup order, so all workgroups sharing a 32-row A tile are
+   adjacent (good A reuse), but each weight slab is re-read by the
+   m_groups=16 row tiles spread across the whole kernel — weights
+   stream from DRAM m_groups times per op. Concrete experiment: (a)
+   re-profile with the 4-join pattern (H110 style; this driver's
+   single-join timestamps are unusable — §3) to get trustworthy per-op
+   ms on the current wheel; (b) an m-major dispatch variant
+   (`dispatch(m_groups, n_groups)` swap plus in-shader index swap;
+   bit-exact) to flip which operand streams, 5 alternating pairs +
+   digests on jwm1. If neither direction moves >= 1.5%, the streaming
+   order is not the limiter and the axis closes.
+2. **qmm coopmat issue quality** (numerator of the 0.916x): the shipped
+   kernel runs one 32x32 output tile per workgroup with a single
+   dependent K chain; the two untried shapes that keep the per-output k
+   chain bit-exact are (a) a two-n-tile workgroup (64x32 output,
+   4 subgroups, each subgroup owning its own n-tile's w_s staging —
+   halves the weight re-reads without raising per-subgroup accumulator
+   pressure, unlike the rejected 64-row H6), and (b) persistent
+   workgroups looping over m tiles so the w_s dequant amortizes across
+   row tiles. Both are env-gated shader variants + the standing A/B
+   protocol (5 alternating pairs, digest identity, jwm1, >= 1.5% to
+   land). If both lose like every predecessor, the residual gap is in
+   honeykrisp's coopmat lowering and belongs to the Mesa lane
+   (joshuaswarren/mesa-1).
+
+## 6. Closed axes (do not re-run)
 
 64-row tile 0.939x (H6), STEP_K 32/64 0.897/0.880x (H7), SG4 0.978x (H13),
 staged-A at M<=16 +15.5 ms TTFT (H111), split-K M16 (H106/107/109),
