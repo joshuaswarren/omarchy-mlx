@@ -96,15 +96,15 @@ Omarchy; its Linux ANE qualification ladder has Step 5 closed — full-ASR
 104/104 across two bit-exact repeats on the fork driver and a 10/10
 perf battery (encoder AC median 5217.4 ms vs 259.9 ms macOS same-encoder
 divisor, cross-OS indicative, no parity claim;
-[`ane-linux-experiments` 3babdb5](https://github.com/joshuawarren/ane-linux-experiments/commit/3babdb5)
+[`ane-linux-experiments` 3babdb5](https://github.com/joshuaswarren/ane-linux-experiments/commit/3babdb5)
 /
-[119b954](https://github.com/joshuawarren/ane-linux-experiments/commit/119b954)).
+[119b954](https://github.com/joshuaswarren/ane-linux-experiments/commit/119b954)).
 Hybrid partition and full-encoder coverage are pending. Pre-provisioning
 M1 ANE / Parakeet numbers in this tree are historical dated evidence from
 prior m1-test-host Linux boots. t6001-test-host (T6001) Linux ANE is live. t6021-test-host (T6021)
 Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND, no
 `/dev/accel/accel0`. T6021 GPU is qualified
-([`ane-linux-experiments/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuawarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md));
+([`ane-linux-experiments/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-18-t6021-test-host-third-vulkan-device.md));
 T6021 ANE is **not** live-inference-qualified on the Linux driver
 (macOS-side numbers are macOS CoreML / `aned` measurements, not Linux
 execution). Apple GPU and Apple ANE are separate lanes.

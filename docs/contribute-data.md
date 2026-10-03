@@ -33,7 +33,7 @@ The one-paragraph version:
   includes reserved-memory, mailbox, firmware hashes, the omarchy_ane
   promotion block, and ane_linux.ane_probe: a read-only, privacy-redacted
   ANE topology and install diagnostic. Its 8 KiB output field list is
-  documented in [omarchy-ane's probe guide](https://github.com/joshuawarren/omarchy-ane/blob/main/docs/ane-probe.md).
+  documented in [omarchy-ane's probe guide](https://github.com/joshuaswarren/omarchy-ane/blob/main/docs/ane-probe.md).
   The server keeps it inline for querying. The report previews the exact
   redacted payload and sends nothing without --submit. An ANE smoke result
   can be added with --ane-smoke; it never loads or unloads modules and
