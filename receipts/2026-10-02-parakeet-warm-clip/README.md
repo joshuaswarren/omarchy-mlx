@@ -137,10 +137,25 @@ emissions, 0 failed checks, `cpu_tensor_events=0`, report `transport`
 calls on one daemon: 20/20 match, all `transport=daemon`, wall median
 848.6 ms (max 876.5), open median 0.31 ms.
 
-The remaining ~480 ms of wall outside the pipeline is client process
-start, imports and the strict cache rehash. Setting
-`MLX_OMARCHY_PK_TRUST_CACHE=1` (L1) removes the ~240 ms rehash; that
-combination was not timed in this run.
+About 480 ms of the daemon-arm wall falls outside the pipeline: client
+process start, imports, and the strict cache rehash. A second interleaved
+run on the same boot set `MLX_OMARCHY_PK_TRUST_CACHE=1` (L1) in both arms
+(n=10 per arm; load1 ≤ 0.44, PSI avg10 ≤ 0.18 and 0.00 on most calls):
+
+| median / p95, ms | private + L1 | daemon + L1 |
+|---|---|---|
+| per-call wall | 1727.2 / 1769.1 | **623.0 / 652.8** |
+| session open | 830.9 | 0.3 |
+| encoder_ane | 970.9 | 140.5 |
+| total_pipeline | 1208.8 | 378.4 |
+
+Both arms 10/10 match with the same sha, 104 emissions, no failed checks
+and `cpu_tensor_events=0`. With both levers on, a warm `transcribe` takes
+623 ms instead of 1939 ms (−68%). What remains is about 245 ms of
+process start and imports, plus the pipeline. The pipeline is the ANE
+encoder at its exec floor (~140 ms) plus GPU TDT decode (~137 ms),
+decoder load (~43 ms), mel (~34 ms), detokenize (~12 ms) and audio load
+(~6 ms).
 
 ### Resilience and device state (same boot)
 
