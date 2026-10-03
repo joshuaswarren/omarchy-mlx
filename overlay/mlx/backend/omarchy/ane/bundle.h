@@ -103,6 +103,11 @@ MLX_API AneBundle load_bundle_snapshot(
 MLX_API std::string sha256_hex(const uint8_t* data, size_t size);
 MLX_API std::string sha256_file(const std::filesystem::path& path);
 
+// Unit-test hook: when true, hashing pins the scalar compress path even
+// where the CPU reports the ARMv8 crypto extension, so the FIPS vectors
+// exercise both implementations in one suite run.
+MLX_API void sha256_force_scalar_compress(bool force);
+
 // Snapshot one regular file from `directory_fd` into a sealed memfd and
 // return it with the digest of the sealed bytes. The digest is computed
 // during the copy, the write seal is applied afterwards, and F_GET_SEALS

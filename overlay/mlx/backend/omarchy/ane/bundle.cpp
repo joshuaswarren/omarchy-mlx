@@ -15,6 +15,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -313,8 +314,13 @@ void sha256_compress_scalar(uint32_t state[8], const uint8_t block[64]) {
   state[7] += h;
 }
 
+// Unit-test hook: pin the scalar compress path even when the CPU reports
+// the crypto extension, so one suite run exercises both implementations
+// against the same FIPS vectors. Never set outside tests.
+thread_local bool g_sha256_force_scalar = false;
+
 void sha256_compress(uint32_t state[8], const uint8_t block[64]) {
-  if (sha256_crypto_available()) {
+  if (sha256_crypto_available() && !g_sha256_force_scalar) {
 #if defined(ANE_SHA256_AARCH64)
     sha256_compress_crypto(state, block);
     return;
@@ -388,6 +394,10 @@ Sha256Context sha256_begin() {
 }
 
 } // namespace
+
+void sha256_force_scalar_compress(bool force) {
+  g_sha256_force_scalar = force;
+}
 
 std::string sha256_hex(const uint8_t* data, size_t size) {
   Sha256Context context = sha256_begin();
@@ -477,6 +487,16 @@ AneSealedFile sealed_file_at(int directory_fd, const std::string& name) {
   // lands and F_GET_SEALS confirms it.
   constexpr size_t kSealChunk = 4u << 20; // 4 MiB
   constexpr int kSealSlots = 2;
+  // Waterfall decomposition (Jw16ParakeetWarm/SealFast): timers only,
+  // gated so the shipped path stays branch-free after first check. The
+  // read span contains read+hash; the copy span is the writer thread's
+  // wall (they overlap; the seal total is the lower bound).
+  static const bool kSealTrace = [] {
+    const char* value = std::getenv("MLX_OMARCHY_ANE_SEAL_TRACE");
+    return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  const auto trace_start = kSealTrace ? std::chrono::steady_clock::now()
+                                      : std::chrono::steady_clock::time_point{};
   struct SealSlot {
     std::vector<uint8_t> buffer;
     size_t size = 0;
@@ -543,6 +563,8 @@ AneSealedFile sealed_file_at(int directory_fd, const std::string& name) {
   };
 
   long long read_index = 0;
+  const auto read_start = kSealTrace ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
   for (;;) {
     // Two slots: before reusing slot (read_index % kSealSlots), the
     // previous pass over it must be fully written.
@@ -581,13 +603,19 @@ AneSealedFile sealed_file_at(int directory_fd, const std::string& name) {
     step_cv.notify_all();
     ++read_index;
   }
+  const auto read_end = kSealTrace ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
   writer.join();
+  const auto copy_end = kSealTrace ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
   if (worker_error) {
     std::rethrow_exception(worker_error);
   }
 
   const std::string digest = sha256_pad_and_digest(context);
   const int wanted = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+  const auto seal_start = kSealTrace ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
   if (::lseek(snapshot.get(), 0, SEEK_SET) < 0 ||
       ::fcntl(snapshot.get(), F_ADD_SEALS, wanted) != 0) {
     throw bundle_error(
@@ -597,6 +625,23 @@ AneSealedFile sealed_file_at(int directory_fd, const std::string& name) {
   if (actual < 0 || (actual & wanted) != wanted) {
     throw bundle_error(
         "sealed snapshot " + name + " did not take the write seal");
+  }
+  if (kSealTrace) {
+    const auto seal_end = std::chrono::steady_clock::now();
+    const auto ms = [](auto from, auto to) {
+      return std::chrono::duration<double, std::milli>(to - from).count();
+    };
+    std::fprintf(
+        stderr,
+        "[omarchy-ane] seal-trace %s bytes=%lld read_hash_ms=%.1f "
+        "copy_ms=%.1f seal_ms=%.1f total_ms=%.1f\n",
+        name.c_str(),
+        static_cast<long long>(status.st_size),
+        ms(trace_start, read_end),
+        ms(read_end, copy_end),
+        ms(seal_start, seal_end),
+        ms(trace_start, seal_end));
+    std::fflush(stderr);
   }
   return AneSealedFile(snapshot.release(), digest);
 }

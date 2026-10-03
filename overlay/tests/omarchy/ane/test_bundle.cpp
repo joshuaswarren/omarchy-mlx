@@ -312,33 +312,45 @@ void check_error(Function&& function, const std::string& expected) {
 TEST_CASE("sha256 digests survive the active compress path") {
   // The compress step dispatches at runtime (ARMv8 crypto when the CPU
   // reports it, the scalar path otherwise). These FIPS 180-4 answers pin
-  // whichever path the host took, across the padding boundaries where a
-  // block-compression rewrite breaks first.
-  CHECK(sha256_hex(nullptr, 0) ==
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-  CHECK(sha256_hex(reinterpret_cast<const uint8_t*>("abc"), 3) ==
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-  std::string big(1000, 'a');
-  CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(big.data()), big.size()) ==
-        "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
-  for (const auto& [size, want] : std::array<std::pair<size_t, const char*>, 9>{
-           {{1, "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"},
-            {3, "9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0"},
-            {55, "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"},
-            {56, "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"},
-            {63, "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34"},
-            {64, "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"},
-            {65, "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0"},
-            {119, "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb"},
-            {120, "2f3d335432c70b580af0e8e1b3674a7c020d683aa5f73aaaedfdc55af904c21c"}}}) {
-    std::string block(size, 'a');
-    INFO("size=", size);
-    CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(block.data()),
-                     block.size()) == want);
-  }
-  std::string tail(1024 * 1024, '\x5a');
-  CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(tail.data()), tail.size()) ==
-        "bf63d8a95fcc2e64619813aae35fdcbe871fdd9264caa3f365eb3aed0f679129");
+  // BOTH implementations against each other on every host, across the
+  // padding boundaries where a block-compression rewrite breaks first.
+  const auto check_vectors = [](const char* label) {
+    INFO(label);
+    CHECK(sha256_hex(nullptr, 0) ==
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(sha256_hex(reinterpret_cast<const uint8_t*>("abc"), 3) ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    std::string big(1000, 'a');
+    CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(big.data()), big.size()) ==
+          "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
+    for (const auto& [size, want] :
+         std::array<std::pair<size_t, const char*>, 9>{
+             {{1, "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"},
+              {3, "9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0"},
+              {55, "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"},
+              {56, "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"},
+              {63, "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34"},
+              {64, "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"},
+              {65, "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0"},
+              {119, "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb"},
+              {120, "2f3d335432c70b580af0e8e1b3674a7c020d683aa5f73aaaedfdc55af904c21c"}}}) {
+      std::string block(size, 'a');
+      INFO("size=", size);
+      CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(block.data()),
+                       block.size()) == want);
+    }
+    std::string tail(1024 * 1024, '\x5a');
+    CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(tail.data()), tail.size()) ==
+          "bf63d8a95fcc2e64619813aae35fdcbe871fdd9264caa3f365eb3aed0f679129");
+    std::string million(1000 * 1000, 'a');
+    CHECK(sha256_hex(reinterpret_cast<const uint8_t*>(million.data()),
+                     million.size()) ==
+          "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+  };
+  check_vectors("dispatched compress path");
+  sha256_force_scalar_compress(true);
+  check_vectors("pinned scalar compress path");
+  sha256_force_scalar_compress(false);
 }
 
 TEST_CASE("valid multi-program bundle preserves dispatch and bindings") {
@@ -1415,6 +1427,15 @@ bool fd_is_sealed_memfd(int fd) {
   return ::fcntl(fd, F_GET_SEALS) >= 0;
 }
 
+// Unsets one env var on destruction so a failed CHECK cannot leak state
+// into later tests in the same process.
+struct EnvGuard {
+  const char* name;
+  explicit EnvGuard(const char* n) : name(n) {}
+  void set(const char* value) { ::setenv(name, value, 1); }
+  ~EnvGuard() { ::unsetenv(name); }
+};
+
 } // namespace
 
 TEST_CASE("user-owned bundle always takes the sealed snapshot") {
@@ -1465,6 +1486,68 @@ TEST_CASE("tampered payload is refused with a matching sidecar absent") {
   auto bytes = read_bytes(fixture.dir.path() / "program-0.anec");
   bytes[64] ^= 0xFF;
   write_file(fixture.dir.path() / "program-0.anec", bytes);
+  std::vector<AneSealedFile> sealed;
+  check_error(
+      [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+      "does not match the pin");
+}
+
+TEST_CASE("truncated, appended, and rewritten-manifest bundles are refused") {
+  Fixture fixture;
+  fixture.write();
+  StampSidecarGuard sidecar;
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace("manifest.json", sha256_file(fixture.dir.path() / "manifest.json"));
+
+  SUBCASE("truncated payload") {
+    auto bytes = read_bytes(fixture.dir.path() / "program-0.anec");
+    bytes.resize(bytes.size() - 128);
+    write_file(fixture.dir.path() / "program-0.anec", bytes);
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+        "does not match the pin");
+  }
+  SUBCASE("appended payload bytes") {
+    auto bytes = read_bytes(fixture.dir.path() / "program-1.anec");
+    bytes.push_back(0x00);
+    write_file(fixture.dir.path() / "program-1.anec", bytes);
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+        "does not match the pin");
+  }
+  SUBCASE("tampered manifest content under a correct manifest pin") {
+    // The manifest's pinned digest is stale after the rewrite: the sealed
+    // manifest hash no longer matches the pin even though the file is
+    // structurally valid JSON.
+    auto manifest = read_bytes(fixture.dir.path() / "manifest.json");
+    std::string text(manifest.begin(), manifest.end());
+    const size_t where = text.find("\"release_asset\"");
+    REQUIRE(where != std::string::npos);
+    text[where] = 'X';
+    write_file(fixture.dir.path() / "manifest.json", text);
+    std::vector<AneSealedFile> sealed;
+    check_error(
+        [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+        "manifest.json sha256");
+  }
+}
+
+TEST_CASE("OMARCHY_ANE_SEAL_VERIFY keeps the pin refusal on tampered bytes") {
+  Fixture fixture;
+  fixture.write();
+  StampSidecarGuard sidecar;
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace("manifest.json", sha256_file(fixture.dir.path() / "manifest.json"));
+  // Worst-case sidecar: a row naming the tampered file's current identity
+  // with the pin digest. Forced verification must hash anyway and refuse.
+  auto bytes = read_bytes(fixture.dir.path() / "program-0.anec");
+  bytes[64] ^= 0xFF;
+  write_file(fixture.dir.path() / "program-0.anec", bytes);
+  sidecar.seed(fixture.dir.path() / "program-0.anec", pin.at("program-0.anec"));
+  EnvGuard force("OMARCHY_ANE_SEAL_VERIFY");
+  force.set("1");
   std::vector<AneSealedFile> sealed;
   check_error(
       [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
