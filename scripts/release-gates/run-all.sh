@@ -56,14 +56,22 @@ scp -q "$(gate_wheel)" "$(gate_vtar)" "$JW16_SSH:/tmp/${TAG}-assets/" || exit 2
 [[ -n "${G7D_OVERLAY_CLI:-}" ]] && scp -q "$G7D_OVERLAY_CLI" "$JW16_SSH:/tmp/${TAG}-overlay-cli.py"
 ssh "$JW16_SSH" "tar -xzf /tmp/${TAG}-release-gates.tgz -C /tmp && mv /tmp/$(basename "$GATES_DIR") /tmp/omarchy-release-gates"
 
+# g13's compile stage is CPU-only: build the doctest binary over plain ssh
+# BEFORE the windows so the gpuwin window only runs it.
+echo "=== g13-gdn-maskless (jw16 build stage, no gpuwin) ==="
+if ssh "$JW16_SSH" "TAG='$TAG' GATE_WORKTREE='$GATE_WORKTREE' LOG_DIR='/tmp/${TAG}-gate-logs' bash /tmp/omarchy-release-gates/g13-gdn-maskless.sh build"; then RC=0; else RC=$?; fi
+echo "g13-gdn-maskless_build_RC=$RC" >> "$DONE"
+echo "g13-gdn-maskless build RC=$RC"
+[[ $RC -eq 0 ]] || FAILED=1
+
 if command -v herdr >/dev/null 2>&1; then
-  herdr pane send-text w72:p1 "Release0715: starting jw16 gpuwin windows for $TAG gates 7c/7d (llm-inference pauses, auto-restore)" || true
+  herdr pane send-text w72:p1 "Release0715: starting jw16 gpuwin windows for $TAG gates 7c/7d/13 (llm-inference pauses, auto-restore)" || true
   herdr pane send-keys w72:p1 Enter || true
 fi
 
 for g in "${JW16_GATES[@]}"; do
   echo "=== $g (jw16 gpuwin) ==="
-  ENV_PREFIX="TAG='$TAG' ASSETS_DIR='/tmp/${TAG}-assets' LOG_DIR='/tmp/${TAG}-gate-logs' PY_AARCH64='$PY_AARCH64'"
+  ENV_PREFIX="TAG='$TAG' ASSETS_DIR='/tmp/${TAG}-assets' LOG_DIR='/tmp/${TAG}-gate-logs' PY_AARCH64='$PY_AARCH64' GATE_WORKTREE='$GATE_WORKTREE'"
   [[ -n "$SERVING_VENV" ]] && ENV_PREFIX+=" SERVING_VENV='$SERVING_VENV'"
   if [[ "$g" == g7d-* && -n "${G7D_OVERLAY_CLI:-}" ]]; then
     ENV_PREFIX+=" G7D_OVERLAY_CLI='/tmp/${TAG}-overlay-cli.py'"
