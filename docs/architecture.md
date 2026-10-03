@@ -67,7 +67,7 @@ The Vulkan backend owns these responsibilities:
 - Runtime fusion compilation and a content-addressed shader cache
 - Backend traces that name each primitive and execution device
 
-BF16 RMSNorm, scaled and gated normalization, GDN decode normalization, and RoPE normalization use the Apple-style row reduction by default. Set `MLX_OMARCHY_NORM_APPLE=0` to restore the previous reduction paths.
+BF16 RMSNorm, scaled and gated normalization, GDN decode normalization, and RoPE normalization use the Apple-style row reduction by default when the device has 32-lane subgroup arithmetic and the row shape measured faster with it (256-wide rows at any row count; 2048-wide rows up to 64 rows). The same shape guard applies to the fused rope+norm and GDN epilogue selections, so fused and composed paths always share one reduction order. Set `MLX_OMARCHY_NORM_APPLE=0` (or `off`, `false`, `no`) to restore the previous reduction paths.
 M1 Vulkan reports FP16 support but lacks native BF16, FP4, integer dot-product, and matrix-core operations.
 The backend must implement MLX storage and arithmetic semantics with Vulkan packing and conversion.
 A missing native format does not permit CPU fallback.

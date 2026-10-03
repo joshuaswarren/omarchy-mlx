@@ -17,11 +17,11 @@
 +// calls into the same dispatch (the model's q = rms_norm_scaled(q, None,
 +// inv_scale^2, eps); k = rms_norm_scaled(k, None, inv_scale, eps) over
 +// 128-channel head-rows of the first 2*qk_key_dim channels). The fused
-+// kernel reproduces the FastNormGatedBF16 mode-1 reduction and rounding
++// kernel reproduces the composed rms_norm_scaled reduction and rounding
 +// exactly; the fallback composes the exact model ops. The wrapper refuses
 +// qk work it cannot fuse (loudly, per the omarchy error contract): the
-+// kernel needs count % 256 == 0 and qk_key_dim % 256 == 0, and the caller
-+// guarantees head_dim == 128.
++// kernel needs count % 256 == 0, C % 256 == 0 and qk_key_dim % 128 == 0;
++// the caller guarantees head_dim == 128.
 +MLX_API std::vector<array> gdn_conv_update(
 +    const array& state,
 +    const array& x,
@@ -229,8 +229,8 @@
 +            channels (128-channel head rows; the model's
 +            q = rms_norm_scaled(q, None, inv_scale**2, eps),
 +            k = rms_norm_scaled(k, None, inv_scale, eps)). Bit-exact to
-+            the composed norm pair; requires qk_key_dim % 256 == 0 and
-+            B*C % 256 == 0 and refuses loudly otherwise.
++            the composed norm pair; requires qk_key_dim % 128 == 0,
++            C % 256 == 0 and B*C % 256 == 0 and refuses loudly otherwise.
 +            Args:
 +                state: Conv state [B, K-1, C]
 +                x: Decode row [B, 1, C]

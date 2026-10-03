@@ -75,9 +75,48 @@ namespace mlx::core {
 
 namespace {
 
-bool apple_norm_enabled() {
-  const char* env = std::getenv("MLX_OMARCHY_NORM_APPLE");
-  return env == nullptr || std::strcmp(env, "0") != 0;
+// Width/rows dispatch guard for the Apple row reduction, measured on jw16
+// (M1 Max, paired interleaved same-binary A/B, notebook lane Jw16NormApple3):
+// - width 128 loses 13-31% on the gated/scaled kernels and ~9% on the GDN
+//   decode epilogue, so 128 stays on the deployed kernels;
+// - widths 256 and 2048 win at decode row counts (direct rms_norm up to
+//   -43%, fused rope+norm at the model's 8x256 q/k shape -20%);
+// - width 2048 loses from 128 rows up (rms_norm 1.00x at 128, 1.34x at 256,
+//   gated 1.20x at 128, 1.91x at 256, 2.06x at 512) while winning below
+//   (0.58-0.87x through 64 rows), so 2048 keeps the Apple reduction only
+//   at <= 64 rows.
+// Every norm selection (direct, scaled, gated, fused rope+norm, GDN
+// epilogue) shares this one predicate, so the fused kernel and the
+// composed fallback chain always pick the same row-reduction order and
+// stay bit-identical at every shape.
+bool apple_norm_shape_selected(size_t row_length, size_t rows) {
+  if (row_length != 256u && row_length != 2048u) {
+    return false;
+  }
+  return row_length != 2048u || rows <= 64u;
+}
+
+bool apple_norm_enabled(
+    const omarchy::Device& device,
+    size_t row_length,
+    size_t rows) {
+  if (std::getenv("MLX_OMARCHY_NORM_APPLE") != nullptr &&
+      !omarchy::env_flag("MLX_OMARCHY_NORM_APPLE")) {
+    return false;
+  }
+  const auto& caps = device.capabilities();
+  bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  omarchy::capsim::require_backed(
+      device,
+      caps,
+      subgroup_ready,
+      "*NormApple*",
+      "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+      (device.hardware_capabilities().subgroup_size == 32u &&
+       (device.hardware_capabilities().subgroup_operations &
+        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+  return subgroup_ready && apple_norm_shape_selected(row_length, rows);
 }
 
 // Keep in lockstep with the switch in shaders/elementwise.comp.
@@ -11836,7 +11875,9 @@ void RMSNorm::eval_gpu(
         omarchy::ComputeKernel::FastRmsNormF32,
         omarchy::ComputeKernel::FastRmsNormF16,
         omarchy::ComputeKernel::FastRmsNormBF16);
-    if (out.dtype() == bfloat16 && apple_norm_enabled()) {
+    if (out.dtype() == bfloat16 &&
+        apple_norm_enabled(
+            encoder.device(), row_length, x.size() / row_length)) {
       kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
     }
   }
@@ -11853,8 +11894,9 @@ bool RMSNormGated::use_fallback(Stream s) {
 
 // Fused GDN decode chain epilogue: rms_norm + silu(gate)*normed in one
 // dispatch (mode 0). Bit-exact to the composed
-// FastRmsNormBF16 -> CastBF16F32 x2 -> FusedChainF32(sigmoid,mul,mul)
-// -> CastF32BF16 sequence because every intermediate the composed path
+// FastRmsNorm(Apple)BF16 -> CastBF16F32 x2 -> FusedChainF32(sigmoid,mul,mul)
+// -> CastF32BF16 sequence because both paths pick the same row reduction
+// through apple_norm_enabled() and every intermediate the composed path
 // rounds to bf16 is rounded identically here; see fast_norm_gated.comp.
 void RMSNormGated::eval_gpu(
     const std::vector<array>& inputs,
@@ -11896,8 +11938,8 @@ void RMSNormGated::eval_gpu(
   params.aux_offset = checked_item_offset(gate, gate.size(), tag, out);
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(gate), binding(out)};
-  const bool apple_norm = apple_norm_enabled() &&
-      (row_length == 128 || row_length == 2048);
+  const bool apple_norm = apple_norm_enabled(
+      encoder.device(), row_length, out.size() / row_length);
   encoder.dispatch_compute(
       apple_norm ? omarchy::ComputeKernel::FastNormGatedOnlyAppleBF16
                  : omarchy::ComputeKernel::FastNormGatedOnlyBF16,
@@ -11911,7 +11953,7 @@ bool RMSNormScaled::use_fallback(Stream s) {
 }
 
 // Fused rms_norm + scalar multiply (mode 1): replaces
-// FastRmsNormBF16 + ElementwiseBF16(mul) with the bf16-rounded scalar
+// FastRmsNorm(Apple)BF16 + ElementwiseBF16(mul) with the bf16-rounded scalar
 // the graph's promote cast materializes; the shader re-rounds
 // params.beta with the same RNE, so no scalar buffer is bound.
 void RMSNormScaled::eval_gpu(
@@ -11947,8 +11989,8 @@ void RMSNormScaled::eval_gpu(
   params.lhs_size = checked_u32(w.size(), tag, out);
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(out), binding(out)};
-  const bool apple_norm = apple_norm_enabled() &&
-      (row_length == 128 || row_length == 2048);
+  const bool apple_norm = apple_norm_enabled(
+      encoder.device(), row_length, out.size() / row_length);
   encoder.dispatch_compute(
       apple_norm ? omarchy::ComputeKernel::FastNormGatedAppleBF16
                  : omarchy::ComputeKernel::FastNormGatedBF16,
@@ -12049,7 +12091,12 @@ void GdnConvUpdate::eval_gpu(
       binding(out),
       binding(state_out)};
   uint32_t groups = (params.count + 255u) / 256u;
-  const bool apple_norm = apple_norm_enabled() && qk_key_dim() > 0;
+  // The fused epilogue reproduces the composed rms_norm pair at the 128-wide
+  // q/k halves; apple_norm_shape_selected() serves 128 from the deployed
+  // kernels, so the epilogue follows it to keep fused == composed.
+  const bool apple_norm =
+      qk_key_dim() > 0 &&
+      apple_norm_enabled(encoder.device(), size_t{128}, size_t{params.count});
   encoder.dispatch_compute(
       apple_norm ? omarchy::ComputeKernel::GdnConvDecodeAppleBF16
                  : omarchy::ComputeKernel::GdnConvDecodeBF16,
@@ -12711,6 +12758,7 @@ void RoPE::eval_gpu(
     params.aux_offset =
         checked_item_offset(inputs.at(2), inputs.at(2).size(), tag, out);
   }
+  // The no-freqs shader variants declare three bindings; the freqs slot
   // doubles the offset binding like the scalar-weight norm kernels do.
   // The bfloat16 shader legs read and store packed bf16 words with the
   // repo's constant-shift form (commit cf68e7d): a uint16_t-typed block
@@ -12732,7 +12780,13 @@ void RoPE::eval_gpu(
       binding(norm_weight)};
   omarchy::ComputeKernel kernel;
   if (fuse_norm) {
-    kernel = apple_norm_enabled()
+    // row_length rides reduce_size (== D) and the row count is B*N*T; the
+    // shared shape guard keeps the fused kernel's row-reduction order
+    // identical to the composed rms_norm the fallback would select.
+    kernel = apple_norm_enabled(
+                 encoder.device(),
+                 static_cast<size_t>(params.reduce_size),
+                 static_cast<size_t>(params.count))
         ? omarchy::ComputeKernel::FastRopeNormAppleBF16
         : omarchy::ComputeKernel::FastRopeNormBF16;
   } else if (direct_bf16) {

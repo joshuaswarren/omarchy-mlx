@@ -19,10 +19,16 @@
 //   reproducing FastRmsNormBF16 -> ElementwiseBF16(mul) with the
 //   bf16-rounded scalar the promote cast materializes.
 //
-// Row geometry and the float32 reduction order are identical to
-// fast_norm.comp: one 256-thread workgroup per row, shared-memory tree
-// reduction, grid-stride row loop. eps arrives in params.alpha, the
-// mode-1 scalar in params.beta.
+// Row geometry and the float32 reduction order are identical to the
+// RMSNorm kernel the composed path selects: one 256-thread workgroup per
+// row, grid-stride row loop. The default build copies fast_norm.comp's
+// shared-memory tree. APPLE_REDUCTION copies fast_norm_apple.comp: 2048-wide
+// rows read eight contiguous values per thread, other rows stride by 256,
+// and both sum through 32-lane subgroups and eight shared partials. The
+// host dispatch guard (apple_norm_shape_selected, primitives.cpp) decides
+// which build serves a given (width, rows) shape so the fused kernel and
+// the composed chain always share one reduction order. eps
+// arrives in params.alpha, the mode-1 scalar in params.beta.
 
 #version 460
 #ifdef APPLE_REDUCTION
@@ -107,6 +113,30 @@ layout(push_constant) uniform Params {
 #ifdef APPLE_REDUCTION
 shared float subgroup_values[8];
 shared float apple_norm;
+
+void store_normed(uint row, uint row_length, uint index, float value,
+                  float norm, float scale) {
+  float weight =
+      (params.lhs_size == 1u)
+          ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+          : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+  precise float norm_weight = norm * weight;
+  precise float result = value * norm_weight;
+  float normed = WIDEN(STORE_VALUE(result));
+  float out_value;
+  if (IS_GATED) {
+    uint gate_index = params.aux_offset + row * row_length + index;
+    float gate = WIDEN(gate_data.values[gate_index]);
+    float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    out_value = prod;
+  } else {
+    out_value = normed * scale;
+  }
+  output_data.values[params.output_offset + row * row_length + index] =
+      STORE_VALUE(out_value);
+}
 #else
 shared float block_values[256];
 #endif
@@ -133,16 +163,22 @@ void main() {
     uint start = params.lhs_offset + row * row_length;
 
 #ifdef APPLE_REDUCTION
+    bool contiguous = row_length == 8u * threads;
     float cached_x[8];
     float local_sq = 0.0;
-    for (uint read = 0u; read < 8u; ++read) {
-      uint index = thread * 8u + read;
-      float value = index < row_length
-          ? LOAD_VALUE(input_data.values[start + index])
-          : 0.0;
-      cached_x[read] = value;
-      precise float square = value * value;
-      local_sq += square;
+    if (contiguous) {
+      for (uint read = 0u; read < 8u; ++read) {
+        float value = LOAD_VALUE(input_data.values[start + thread * 8u + read]);
+        cached_x[read] = value;
+        precise float square = value * value;
+        local_sq += square;
+      }
+    } else {
+      for (uint index = thread; index < row_length; index += threads) {
+        float value = LOAD_VALUE(input_data.values[start + index]);
+        precise float square = value * value;
+        local_sq += square;
+      }
     }
     float subgroup_sum = subgroupAdd(local_sq);
     if (gl_SubgroupInvocationID == 0u) {
@@ -159,32 +195,17 @@ void main() {
     barrier();
     float norm = apple_norm;
     barrier();
-    for (uint read = 0u; read < 8u; ++read) {
-      uint index = thread * 8u + read;
-      if (index >= row_length) {
-        continue;
+    if (contiguous) {
+      for (uint read = 0u; read < 8u; ++read) {
+        store_normed(row, row_length, thread * 8u + read, cached_x[read],
+                     norm, scale);
       }
-      float value = cached_x[read];
-      float weight =
-          (params.lhs_size == 1u)
-              ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-              : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-      precise float norm_weight = norm * weight;
-      precise float result = value * norm_weight;
-      float normed = WIDEN(STORE_VALUE(result));
-      float out_value;
-      if (IS_GATED) {
-        uint gate_index = params.aux_offset + row * row_length + index;
-        float gate = WIDEN(gate_data.values[gate_index]);
-        float sigmoid_value = 1.0 / (1.0 + exp(-gate));
-        precise float silu = gate * sigmoid_value;
-        precise float prod = silu * normed;
-        out_value = prod;
-      } else {
-        out_value = normed * scale;
+    } else {
+      for (uint index = thread; index < row_length; index += threads) {
+        store_normed(row, row_length, index,
+                     LOAD_VALUE(input_data.values[start + index]), norm,
+                     scale);
       }
-      output_data.values[params.output_offset + row * row_length + index] =
-          STORE_VALUE(out_value);
     }
 #else
     float local_sq = 0.0;
@@ -203,20 +224,38 @@ void main() {
     float mean_square = block_values[0] / float(row_length);
     barrier();
     float norm = inversesqrt(mean_square + eps);
+
     for (uint index = thread; index < row_length; index += threads) {
       float value = LOAD_VALUE(input_data.values[start + index]);
       float weight =
           (params.lhs_size == 1u)
               ? LOAD_VALUE(weight_data.values[params.rhs_offset])
               : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+      // The reference FastRmsNormBF16 kernel compiles this product as
+      // value * (norm * weight); the shader compiler is free to reassociate a
+      // plain fmul chain differently in this kernel, which flipped ~5e-6 of
+      // outputs by one bf16 ulp. precise pins the association to the reference's
+      // (measured: 0 mismatches over 5.4M elements; the source order gave 25).
       precise float norm_weight = norm * weight;
       precise float result = value * norm_weight;
+      // The normed value the composed path stores and its consumers
+      // widen: round once to the storage dtype, then widen exactly.
       float normed = WIDEN(STORE_VALUE(result));
       float out_value;
       if (IS_GATED) {
         uint gate_index = params.aux_offset + row * row_length + index;
         float gate = WIDEN(gate_data.values[gate_index]);
+        // silu(gate) then silu * normed, left-associated exactly like the
+        // composed sigmoid -> mul -> mul chain. mlx-lm's _precise_swiglu
+        // (and this primitive's C++ fallback) run that chain in float32
+        // (gate.astype(float32)) and round ONCE at the end, so nothing is
+        // rounded to the storage dtype between the sigmoid and the final
+        // multiply. (An earlier revision of this file rounded sigmoid and
+        // silu to bf16, which flipped ~36% of outputs by one ulp against
+        // the composed path: receipts/2026-09-28-jwm1-gdn-qk-scaled.md.)
         float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+        // precise: keep the composed chain's association (gate * sigmoid) * normed;
+        // without it the compiler reassociated the product (7e-6 of outputs off).
         precise float silu = gate * sigmoid_value;
         precise float prod = silu * normed;
         out_value = prod;
@@ -226,6 +265,7 @@ void main() {
       output_data.values[params.output_offset + row * row_length + index] =
           STORE_VALUE(out_value);
     }
+    barrier();
 #endif
   }
 }

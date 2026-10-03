@@ -69,8 +69,14 @@ layout(set = 0, binding = 4, std430) buffer StateOut {
 // the stride 64->1 tree per half reproduces the mode-1 tree association
 // exactly (its stride-128 step only ever adds +0.0). The wrapper gates
 // count % 256 == 0 (one element per thread, one grid-stride iteration —
-// the in-loop barriers deadlock otherwise) and key_dim % 128 == 0 (the q|k
-// boundary may fall inside a workgroup, but it stays on a 128-lane half).
+// the in-loop barriers deadlock otherwise), channels % 256 == 0, and
+// key_dim % 128 == 0 (the q|k boundary may fall inside a workgroup, but it
+// stays on a 128-lane half). APPLE_REDUCTION sums each half with four
+// 32-lane subgroups and one second subgroup sum, the order
+// FastNormGatedAppleBF16 uses for a 128-wide row. The host dispatch guard
+// (apple_norm_shape_selected, primitives.cpp) serves the 128-wide halves
+// from the deployed kernel, so this build runs only if that guard ever
+// widens to 128.
 shared float norm_block[256];
 
 // Field order must match the fixed omarchy::ComputeParams layout the
