@@ -95,5 +95,39 @@ class PhonemeSegmentTests(unittest.TestCase):
         self.assertEqual(kokoro_stream.phoneme_segments("hˈɛlO."), ["hˈɛlO."])
 
 
+class CutFrameTests(unittest.TestCase):
+    """Frame-level utterance cuts from the whole-sentence predicted
+    durations: vocab-filtered token mapping and full coverage."""
+
+    def test_boundaries_derive_phoneme_segments(self):
+        ps = "wˈɜrd wˈʌnx tuː ðɪːŋz ɐnd ʌp."  # 30 chars, multi-word
+        cuts = kokoro_stream.segment_boundaries(ps, budget=10)
+        rebuilt = kokoro_stream.phoneme_segments(ps, budget=10)
+        edges = [0] + cuts + [len(ps)]
+        self.assertEqual(rebuilt,
+                         [ps[a:b].strip() for a, b in zip(edges, edges[1:])
+                          if ps[a:b].strip()])
+        self.assertTrue(all(0 < c < len(ps) for c in cuts))
+        self.assertEqual(ps[cuts[0]], " ")    # cut lands between words
+        self.assertNotEqual(ps[cuts[0] - 1], " ")
+
+    def test_cut_frames_map_vocab_filtered_tokens(self):
+        vocab = {"a": 1, "b": 2, "c": 3, "d": 4}
+        ps = "ab.cd"                       # every char in vocab, no spaces
+        pred_dur = [9, 1, 2, 3, 4, 7]      # pad + a,b,c,d + pad
+        frames = kokoro_stream.cut_frames(ps, vocab, pred_dur, [2])
+        self.assertEqual(frames, [12])     # 9 pad + 1 + 2
+        self.assertEqual(kokoro_stream.utterance_ranges([12], 26),
+                         [(0, 12), (12, 26)])
+
+    def test_ranges_cover_every_frame(self):
+        self.assertEqual(kokoro_stream.utterance_ranges([], 5), [(0, 5)])
+        self.assertEqual(kokoro_stream.utterance_ranges([3, 3, 0, 9, 2], 9),
+                         [(0, 2), (2, 3), (3, 9)])
+        covered = [r for rs in kokoro_stream.utterance_ranges([4, 7], 9)
+                   for r in rs]
+        self.assertEqual(sorted(set(covered)), [0, 4, 7, 9])
+
+
 if __name__ == "__main__":
     unittest.main()

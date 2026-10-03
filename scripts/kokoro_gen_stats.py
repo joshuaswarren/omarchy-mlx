@@ -49,7 +49,8 @@ def main():
     pack = Path(sys.argv[1])
     out = Path(sys.argv[2]) if len(sys.argv) > 2 else \
         Path(__file__).resolve().parents[1] / "serve" / "mlx_omarchy_assistant" / "kokoro_gen_stats.npz"
-    from mlx_omarchy_assistant.kokoro_stream import last_stage_adains, segment_inputs
+    from mlx_omarchy_assistant.kokoro_stream import (
+        UTTERANCE_CONTEXT_FRAMES, last_stage_adains, sentence_inputs)
     from mlx_omarchy_assistant.synthesis import KOKORO_PACK, _kokoro_runtime
     import mlx.core as mx
     import mlx.nn as nn
@@ -81,9 +82,16 @@ def main():
         sums = {name: [0.0, 0.0] for name in layers}
         count = 0
         for text in CORPUS:
-            for asr, F0, N, s, _keep in segment_inputs(pipe, text, voice):
-                mx.eval(decoder(asr, F0, N, s))
-                count += 1
+            for asr, F0, N, s, ranges in sentence_inputs(pipe, text, voice):
+                frames = int(asr.shape[2])
+                for first, end in ranges:
+                    c0 = max(0, first - UTTERANCE_CONTEXT_FRAMES)
+                    c1 = min(frames, end + UTTERANCE_CONTEXT_FRAMES)
+                    mx.eval(decoder(
+                        asr[:, :, c0:c1],
+                        F0[:, c0:c1] if F0.ndim == 2 else F0[:, :, c0:c1],
+                        N[:, c0:c1] if N.ndim == 2 else N[:, :, c0:c1], s))
+                    count += 1
                 missing = set(layers) - set(seen)
                 if missing:
                     raise SystemExit(f"layers not reached: {sorted(missing)[:3]}")

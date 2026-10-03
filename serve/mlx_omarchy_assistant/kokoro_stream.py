@@ -1,34 +1,17 @@
 """Streamed Kokoro decoding: audio leaves the worker while the vocoder runs.
-
-KokoroPipeline returns no audio until the whole decoder has run over a
-whole phoneme chunk. This module keeps mlx_audio 0.5.6's own G2P, chunking,
-front half and decoder layers, and changes only the schedule:
-
-1. Each phoneme chunk is cut at word boundaries into utterances of about
-   SEGMENT_PHONEMES phonemes (~2 s of audio), so no utterance's up-front
-   work delays the first audio or outruns the audio already queued. The
-   silence the model predicts for an utterance's boundary pad tokens is
-   trimmed to PAD_KEEP_FRAMES at each such cut, so a cut adds no pause.
-2. Per utterance, the low-rate decoder stack and the generator's first
-   upsampling stage run over the whole utterance. Stage 0 carries almost
-   all of the per-utterance AdaIN statistics error a window would make
-   (2026-10-03: exact stage-0 statistics lift corr vs the whole call from
-   0.971 to 0.994, the run-to-run floor is 0.990), so it stays exact.
-3. The generator's last stage (~61% of decoder cost) runs in windows of
-   WINDOW_FRAMES aligned frames with CONTEXT_FRAMES of context per side,
-   trimmed; its AdaIN layers use frozen per-voice statistics calibrated on
-   a fixed corpus (scripts/kokoro_gen_stats.py, shipped in STATS_FILE).
-   Each window's audio is yielded as soon as it is computed.
-
-An utterance that fits in one window runs the whole decoder unchanged
-(bit-identical to the whole call at the same cost), and
-MLX_OMARCHY_KOKORO_STREAM=0 turns the schedule off entirely: the pipeline
-then decodes each phoneme chunk in one whole call, as upstream does.
-
-Alignment (measured shapes): one aligned frame = 600 samples = 20 stage-0
-frames = 120 harmonic frames; the generator reflection-pads one frame on
+…
 the left before its last stage, so window audio sample s is utterance
 sample 5 * f0 + s, f0 = 0 for the first window else 120 * c0 + 1.
+
+Utterance cuts are FRAME-level: the pipeline front half (bert, duration
+predictor, alignment, text encoder) runs ONCE over the chunk's whole
+phoneme string, so predicted durations, F0 and N are exactly the
+whole-call prediction, and each utterance is a frame range of that shared
+timeline. Utterances decode with aligned-frame context on both sides and
+join through a linear-gain crossfade; the seam renders share the same
+features, so equal-power gains would add a spurious +3 dB bump.
+stats=None keeps upstream's whole-call decoding
+(the MLX_OMARCHY_KOKORO_STREAM=0 kill switch).
 """
 from __future__ import annotations
 
@@ -38,11 +21,24 @@ from pathlib import Path
 from typing import Iterator
 
 SEGMENT_PHONEMES = 29
-PAD_KEEP_FRAMES = 1
 WINDOW_FRAMES = 24
 CONTEXT_FRAMES = 1
+UTTERANCE_CONTEXT_FRAMES = 8
+SEAM_FADE_SAMPLES = 240
 FRAME_SAMPLES = 600
 STATS_FILE = Path(__file__).with_name("kokoro_gen_stats.npz")
+
+
+def streamer_binding() -> dict:
+    """Hashes binding a qualification receipt to this streamer build: the
+    module itself and the frozen statistics file it loads."""
+    import hashlib
+    return {
+        "kokoro_stream_sha256": hashlib.sha256(
+            Path(__file__).read_bytes()).hexdigest(),
+        "kokoro_gen_stats_sha256": hashlib.sha256(
+            STATS_FILE.read_bytes()).hexdigest(),
+    }
 
 
 def last_stage_adains(decoder) -> dict:
@@ -97,25 +93,66 @@ def load_stats(path: Path, voices, revision: str) -> dict:
             for voice, layers in stats.items()}
 
 
+def segment_boundaries(ps: str, budget: int = SEGMENT_PHONEMES) -> list[int]:
+    """ps character positions after which to cut, choosing word boundaries
+    of about `budget` phonemes, preferring a cut after punctuation once a
+    segment is past 60% of the budget."""
+    cuts: list[int] = []
+    pos = 0
+    size = 0
+    for word in ps.split(" "):
+        if word:
+            pos += len(word)
+            size += len(word)
+            if size >= budget or (size >= 0.6 * budget and word[-1] in ",;:.!?"):
+                cuts.append(pos)
+                size = 0
+        pos += 1
+    if cuts:
+        tail = ps[cuts[-1] + 1:].split()
+        if sum(map(len, tail)) < budget / 3:
+            cuts.pop()
+    return cuts
+
+
 def phoneme_segments(ps: str, budget: int = SEGMENT_PHONEMES) -> list[str]:
     """Cut a phoneme string at word boundaries into utterances of about
-    `budget` phonemes, preferring a cut after punctuation once a segment
-    is past 60% of the budget; a tail under a third of the budget joins
-    the segment before it."""
-    words = ps.split()
-    segments: list[list[str]] = [[]]
-    size = 0
-    for word in words:
-        segments[-1].append(word)
-        size += len(word)
-        if size >= budget or (size >= 0.6 * budget and word[-1] in ",;:.!?"):
-            segments.append([])
-            size = 0
-    if not segments[-1]:
-        segments.pop()
-    if len(segments) > 1 and sum(map(len, segments[-1])) < budget / 3:
-        segments[-2].extend(segments.pop())
-    return [" ".join(seg) for seg in segments]
+    `budget` phonemes; a tail under a third of the budget joins the
+    segment before it."""
+    cuts = [0] + segment_boundaries(ps, budget) + [len(ps)]
+    return [ps[a:b].strip() for a, b in zip(cuts, cuts[1:]) if ps[a:b].strip()]
+
+
+def cut_frames(ps: str, vocab: dict, pred_dur, cuts: list[int]) -> list[int]:
+    """Absolute aligned-frame position after each ps cut position.
+
+    The model's input tokens are the ps characters present in the vocab
+    (in order) between two pad tokens, and pred_dur carries one duration
+    per input token, so a cut after ps character c lands on the frame
+    boundary that closes the vocab characters up to c."""
+    import numpy as np
+    cum = np.cumsum(np.asarray(pred_dur))
+    frames = []
+    for cut in cuts:
+        n = sum(1 for ch in ps[:cut] if ch in vocab)
+        frames.append(int(cum[1 + n - 1]))
+    return frames
+
+
+def utterance_ranges(cut_positions: list[int], frames: int) -> list[tuple[int, int]]:
+    """[(first, end)] aligned-frame ranges covering [0, frames), one per
+    utterance, in order."""
+    edges = [f for f in cut_positions if 0 < f < frames]
+    edges = sorted(set(edges))
+    ranges = []
+    first = 0
+    for end in edges:
+        if end > first:
+            ranges.append((first, end))
+            first = end
+    if first < frames:
+        ranges.append((first, frames))
+    return ranges or [(0, frames)]
 
 
 class _DecoderInputs:
@@ -130,10 +167,12 @@ class _DecoderInputs:
         return mx.zeros((1, 2))
 
 
-def segment_inputs(pipe, text: str, voice: str) -> Iterator[tuple]:
-    """(asr, F0, N, s, keep) per utterance, in order, from the pipeline's
-    own English G2P, chunking and front half; `keep` = (first, end) aligned
-    frames to play."""
+def sentence_inputs(pipe, text: str, voice: str) -> Iterator[tuple]:
+    """(asr, F0, N, s, ranges) per pipeline chunk, in order.
+
+    The pipeline's own English G2P, chunking and front half run ONCE over
+    each chunk's whole phoneme string; `ranges` are the utterance frame
+    ranges cut from the shared predicted timeline."""
     pack = pipe.load_voice(voice)
     model = pipe.model
     decoder, capture = model.decoder, _DecoderInputs()
@@ -144,17 +183,17 @@ def segment_inputs(pipe, text: str, voice: str) -> Iterator[tuple]:
                 continue
             _, tokens = pipe.g2p(graphemes)
             for _gs, ps, _tks in pipe.en_tokenize(tokens):
-                segments = phoneme_segments(ps[:510]) if ps else []
-                for k, segment in enumerate(segments):
-                    capture.inputs = None
-                    out = model(segment, pack[len(segment) - 1], 1, return_output=True)
-                    if capture.inputs is None:
-                        continue
-                    frames = int(capture.inputs[0].shape[2])
-                    lead, trail = int(out.pred_dur[0]), int(out.pred_dur[-1])
-                    first = max(0, lead - PAD_KEEP_FRAMES) if k > 0 else 0
-                    end = frames - (max(0, trail - PAD_KEEP_FRAMES) if k < len(segments) - 1 else 0)
-                    yield (*capture.inputs, (first, max(first, end)))
+                if not ps:
+                    continue
+                cuts = segment_boundaries(ps[:510])
+                capture.inputs = None
+                out = model(ps[:510], pack[len(ps[:510]) - 1], 1,
+                            return_output=True)
+                if capture.inputs is None or out.pred_dur is None:
+                    continue
+                frames = int(capture.inputs[0].shape[2])
+                positions = cut_frames(ps[:510], model.vocab, out.pred_dur, cuts)
+                yield (*capture.inputs, utterance_ranges(positions, frames))
     finally:
         model.decoder = decoder
 
@@ -224,15 +263,79 @@ class KokoroStreamer:
             return
         if voice not in self._stats:
             raise ValueError(f"no frozen generator statistics for voice {voice}")
-        for asr, F0, N, s, keep in segment_inputs(self.pipe, text, voice):
-            if int(asr.shape[2]) <= WINDOW_FRAMES:
-                yield self._whole(asr, F0, N, s, keep)
-                continue
-            self._table["current"] = self._stats[voice]
-            try:
-                yield from self._decode(asr, F0, N, s, keep)
-            finally:
-                self._table["current"] = None
+        for asr, F0, N, s, ranges in sentence_inputs(self.pipe, text, voice):
+            yield from self._stream_ranges(asr, F0, N, s, voice, ranges)
+
+    def _stream_ranges(self, asr, F0_curve, N_curve, s, voice: str,
+                       ranges: list[tuple[int, int]]) -> Iterator:
+        """Decode each utterance range with aligned-frame context and join
+        neighbours through an equal-power crossfade."""
+        import mlx.core as mx
+        import numpy as np
+        frames = int(asr.shape[2])
+        fade = min(SEAM_FADE_SAMPLES, UTTERANCE_CONTEXT_FRAMES * FRAME_SAMPLES)
+        pending = np.zeros(0, dtype=np.float32)
+        pending_start = 0
+
+        def emit_upto(pos: int):
+            nonlocal pending, pending_start
+            if pos > pending_start and pos - pending_start <= pending.size:
+                piece, pending = (pending[:pos - pending_start],
+                                  pending[pos - pending_start:])
+                pending_start = pos
+                if piece.size:
+                    yield np.ascontiguousarray(piece)
+
+        for k, (first, end) in enumerate(ranges):
+            ctx0 = max(0, first - UTTERANCE_CONTEXT_FRAMES)
+            ctx1 = min(frames, end + UTTERANCE_CONTEXT_FRAMES)
+            audio = self._render(asr[:, :, ctx0:ctx1],
+                                 F0_curve[:, ctx0:ctx1] if F0_curve.ndim == 2
+                                 else F0_curve[:, :, ctx0:ctx1],
+                                 N_curve[:, ctx0:ctx1] if N_curve.ndim == 2
+                                 else N_curve[:, :, ctx0:ctx1],
+                                 s, voice)
+            start = ctx0 * FRAME_SAMPLES
+            if k > 0:
+                cut = first * FRAME_SAMPLES
+                half = fade // 2
+                b0 = cut - half - pending_start
+                c0 = cut - half - start
+                width = min(fade, pending.size - b0, audio.size - c0)
+                if width <= 0:  # cannot happen with adjacent ranges; be exact
+                    yield from emit_upto(start)
+                else:
+                    yield from emit_upto(cut - half)
+                    # Linear gain ramp: the two renders derive from the SAME
+                    # whole-sentence features and agree within context error,
+                    # so equal-power gains would add a spurious +3 dB bump.
+                    t = (np.arange(width) + 0.5) / width
+                    a, b = pending[b0:b0 + width], audio[c0:c0 + width]
+                    mix = a + t * (b - a)
+                    pending = pending[b0 + width:]
+                    pending_start = cut - half + width
+                    yield np.ascontiguousarray(mix)
+            # stream this render, holding back the next seam's fade band
+            hold = fade // 2 if k < len(ranges) - 1 else 0
+            yield from emit_upto(end * FRAME_SAMPLES - hold)
+            pending = np.concatenate([pending, audio[end * FRAME_SAMPLES
+                                                     - hold - pending_start:]])
+            pending_start = end * FRAME_SAMPLES - hold
+        yield from emit_upto(pending_start + pending.size)
+
+    def _render(self, asr, F0_curve, N_curve, s, voice: str) -> "object":
+        """Float32 audio over one context slice: the unchanged decoder for
+        one-window utterances, else windowed last-stage decoding."""
+        import mlx.core as mx
+        import numpy as np
+        if int(asr.shape[2]) <= WINDOW_FRAMES:
+            return self._whole(asr, F0_curve, N_curve, s)
+        self._table["current"] = self._stats[voice]
+        try:
+            pieces = list(self._decode(asr, F0_curve, N_curve, s))
+        finally:
+            self._table["current"] = None
+        return np.concatenate(pieces) if len(pieces) > 1 else pieces[0]
 
     def _whole(self, asr, F0_curve, N_curve, s, keep=None):
         """The unchanged decoder over one short utterance."""

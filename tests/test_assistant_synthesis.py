@@ -572,6 +572,65 @@ class QualificationTests(unittest.TestCase):
                 self.assertFalse(
                     self.s.status()["qualification"]["qualified"])
 
+    def _objective_receipt(self):
+        return {"listener_verified": False, "objective_verified": True,
+                "objective_results": {"duration_all_pass": True,
+                                      "f0_corr_median": 0.98,
+                                      "mcd_sentence_median_db": 29.4},
+                "verification_basis": "owner directive 2026-10-03: "
+                                      "objective qualification, no human "
+                                      "listening",
+                "cpu_tensor_dispatches": 0,
+                "latency_receipt": {"first_audio_median_s": 1.07,
+                                    "rtf_median": 1.28},
+                "receipt_source": "receipts/2026-10-03-kokoro-qualify"}
+
+    def test_objective_receipt_qualifies_without_a_listener(self):
+        accel_patch, deps_patch, bin_patch = self._green()
+        with accel_patch, deps_patch, bin_patch:
+            result = self.s.record_qualification(self._objective_receipt())
+            self.assertTrue(self.s.status()["qualification"]["qualified"])
+        stored = json.loads(Path(result["path"]).read_text())
+        self.assertFalse(stored["listener_verified"])
+        self.assertTrue(stored["objective_verified"])
+        self.assertEqual(stored["verification_basis"],
+                         self._objective_receipt()["verification_basis"])
+        self.assertIn("kokoro_stream_sha256", stored)
+        self.assertIn("kokoro_gen_stats_sha256", stored)
+        # survives restart like a listener receipt
+        fresh = synthesis.Synthesis(self.home)
+        accel_patch, deps_patch, bin_patch = self._green()
+        with accel_patch, deps_patch, bin_patch:
+            self.assertTrue(fresh.status()["qualification"]["qualified"])
+
+    def test_objective_receipt_requires_results_and_basis(self):
+        accel_patch, deps_patch, bin_patch = self._green()
+        without_results = {k: v for k, v in self._objective_receipt().items()
+                           if k != "objective_results"}
+        without_basis = {k: v for k, v in self._objective_receipt().items()
+                         if k != "verification_basis"}
+        with accel_patch, deps_patch, bin_patch:
+            for bad in (without_results, without_basis,
+                        {**self._objective_receipt(),
+                         "objective_results": {}}):
+                with self.assertRaises(ValueError):
+                    self.s.record_qualification(bad)
+        self.assertFalse(self.s.status()["qualification"]["qualified"])
+
+    def test_streamer_change_invalidates_objective_receipt(self):
+        from mlx_omarchy_assistant import kokoro_stream
+        accel_patch, deps_patch, bin_patch = self._green()
+        with accel_patch, deps_patch, bin_patch:
+            self.s.record_qualification(self._objective_receipt())
+            self.assertTrue(self.s.status()["qualification"]["qualified"])
+            stale = {**kokoro_stream.streamer_binding(),
+                     "kokoro_stream_sha256": "f" * 64}
+            with mock.patch.object(kokoro_stream, "streamer_binding",
+                                   return_value=stale):
+                status = self.s.status()["qualification"]
+            self.assertFalse(status["qualified"])
+            self.assertIn("kokoro_stream", status["reason"])
+
     def test_legacy_extension_only_receipt_is_not_qualified(self):
         """Receipts tied only to the Python extension fail closed."""
         legacy = {"pack_revision": self.pack["revision"],

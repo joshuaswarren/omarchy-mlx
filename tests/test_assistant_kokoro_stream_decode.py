@@ -107,5 +107,66 @@ class StreamedDecodeTests(unittest.TestCase):
                 a.norm = originals[n]
 
 
+@unittest.skipIf(Decoder is None, "mlx / mlx_audio not installed")
+class SeamJoinTests(unittest.TestCase):
+    """_stream_ranges composes context-overlapped utterance renders into
+    exactly the whole-call audio when the renderer itself is exact, and
+    never emits more or fewer samples than the shared timeline."""
+
+    def _streamer(self):
+        return kokoro_stream.KokoroStreamer(
+            SimpleNamespace(model=SimpleNamespace(decoder=self.dec)), None)
+
+    def test_exact_renders_join_bit_exact(self):
+        import numpy as np
+        streamer = self._streamer()
+        frames = 40
+        rng = np.random.default_rng(5)
+        whole = rng.standard_normal(frames * kokoro_stream.FRAME_SAMPLES
+                                    ).astype(np.float32) * 0.1
+        ranges = [(0, 15), (15, 27), (27, frames)]
+        expected_slices = [(0, 23), (7, 35), (19, frames)]
+        calls = iter(expected_slices)
+
+        def exact_render(asr, F0, N, s, voice):
+            a, b = next(calls)
+            return whole[a * kokoro_stream.FRAME_SAMPLES:
+                         b * kokoro_stream.FRAME_SAMPLES]
+
+        streamer._render = exact_render
+        got = np.concatenate(list(streamer._stream_ranges(
+            None, np.zeros((1, frames), np.float32),
+            np.zeros((1, frames), np.float32), None, "af_heart", ranges)))
+        self.assertEqual(got.shape, whole.shape)
+        self.assertTrue(np.array_equal(got, whole),
+                        "exact context renders reproduce the whole call")
+
+    def test_seam_step_stays_inside_the_render_error(self):
+        import numpy as np
+        streamer = self._streamer()
+        frames = 40
+        rng = np.random.default_rng(6)
+        whole = rng.standard_normal(frames * kokoro_stream.FRAME_SAMPLES
+                                    ).astype(np.float32) * 0.1
+        ranges = [(0, 15), (15, frames)]
+        err = 1e-3
+        calls = iter([(0, 23), (7, frames)])
+
+        def noisy_render(asr, F0, N, s, voice):
+            a, b = next(calls)
+            piece = whole[a * kokoro_stream.FRAME_SAMPLES:
+                          b * kokoro_stream.FRAME_SAMPLES]
+            return piece + rng.standard_normal(piece.shape).astype(np.float32) * err
+
+        streamer._render = noisy_render
+        got = np.concatenate(list(streamer._stream_ranges(
+            None, np.zeros((1, frames), np.float32),
+            np.zeros((1, frames), np.float32), None, "af_heart", ranges)))
+        seam = 15 * kokoro_stream.FRAME_SAMPLES
+        band = np.abs(np.diff(got[seam - 300:seam + 300]))
+        self.assertLess(float(band.max()), 10 * err,
+                        "the crossfade keeps the seam step within render noise")
+
+
 if __name__ == "__main__":
     unittest.main()

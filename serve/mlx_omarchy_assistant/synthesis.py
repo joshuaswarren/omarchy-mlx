@@ -1185,7 +1185,8 @@ class Synthesis:
             receipt = None
         absent = {"qualified": False, "receipt": None,
                   "reason": "no qualification receipt (audible listener "
-                            "check, zero CPU tensor dispatches, latency "
+                            "check or pre-registered objective checks, "
+                            "zero CPU tensor dispatches, latency "
                             "measurement)"}
         if not isinstance(receipt, dict):
             return absent
@@ -1201,6 +1202,14 @@ class Synthesis:
             "assets_verified": assets["verified"],
             "accelerator": accel["available"],
         }
+        binding = receipt.get("kokoro_stream_sha256")
+        if binding is not None:
+            from .kokoro_stream import streamer_binding
+            current = streamer_binding()
+            checks["kokoro_stream"] = binding == current["kokoro_stream_sha256"]
+            checks["kokoro_gen_stats"] = (
+                receipt.get("kokoro_gen_stats_sha256")
+                == current["kokoro_gen_stats_sha256"])
         failed = [name for name, ok in checks.items() if not ok]
         if failed:
             reason_detail = backend.get("detail")
@@ -1214,10 +1223,15 @@ class Synthesis:
     def record_qualification(self, receipt: dict) -> dict:
         """Write a durable hardware qualification receipt (parent-owned run).
 
-        Required facts: listener_verified true, cpu_tensor_dispatches zero,
-        a non-empty latency_receipt, and receipt_source naming the run log.
-        The mlx binary hash and pinned model hash are computed here, so the
-        receipt qualifies only the exact binary+model pair it measured.
+        Two accepted forms: a listener-verified receipt (listener_verified
+        true), or, per the owner's 2026-10-03 direction, an OBJECTIVE
+        receipt (objective_verified true) whose objective_results carry the
+        pre-registered measurements in place of a human listener; either
+        way cpu_tensor_dispatches must be zero, with a non-empty
+        latency_receipt and a receipt_source naming the run log. The mlx
+        binary hash, the pinned model hash, and the streamer build hashes
+        are computed here, so the receipt qualifies only the exact
+        binary+model+streamer triple it measured.
         """
         missing = [key for key in ("listener_verified", "cpu_tensor_dispatches",
                                    "latency_receipt", "receipt_source")
@@ -1225,10 +1239,21 @@ class Synthesis:
         if missing:
             raise ValueError("qualification receipt missing: "
                              + ", ".join(missing))
-        if receipt["listener_verified"] is not True \
-                or receipt["cpu_tensor_dispatches"] != 0:
+        objective = receipt.get("objective_verified") is True
+        if receipt["listener_verified"] is not True and not objective:
             raise ValueError("qualification receipt not passed: listener "
-                             "check must be true and CPU dispatches zero")
+                             "check must be true or the receipt must be "
+                             "objective_verified")
+        if receipt["cpu_tensor_dispatches"] != 0:
+            raise ValueError("qualification receipt not passed: CPU "
+                             "dispatches must be zero")
+        results = receipt.get("objective_results")
+        if objective and (not isinstance(results, dict) or not results):
+            raise ValueError("objective qualification receipt needs "
+                             "objective_results")
+        if objective and not (receipt.get("verification_basis") or "").strip():
+            raise ValueError("objective qualification receipt needs a "
+                             "verification_basis naming the authorization")
         if not receipt["latency_receipt"] or not receipt["receipt_source"]:
             raise ValueError("qualification receipt needs a latency figure "
                              "and a receipt source")
@@ -1237,6 +1262,7 @@ class Synthesis:
             raise ValueError(
                 "cannot tie qualification to the mlx backend: "
                 + (backend.get("detail") or backend["verified"]))
+        from .kokoro_stream import streamer_binding
         model_pin = _model_pin()
         record = {
             "pack_revision": VOICE_ENGINES[0]["revision"],
@@ -1249,7 +1275,12 @@ class Synthesis:
                      if f["label"] == "mlx.core extension"), None),
             },
             "mlx_version": backend["mx_version"],
-            "listener_verified": True,
+            "listener_verified": receipt["listener_verified"] is True,
+            "objective_verified": objective,
+            **({"objective_results": results,
+                "verification_basis": receipt["verification_basis"]}
+               if objective else {}),
+            **streamer_binding(),
             "cpu_tensor_dispatches": receipt["cpu_tensor_dispatches"],
             "latency_receipt": receipt["latency_receipt"],
             "receipt_source": receipt["receipt_source"],
