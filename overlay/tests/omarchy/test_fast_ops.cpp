@@ -410,10 +410,15 @@ TEST_CASE("fused norm forward on f16 and bf16 storage") {
 // rope(rms_norm(x, weight, eps), ...) (mlx/fast.h), and the Apple
 // row-reduction shares one reduction order with the composed kernels at
 // every shape it serves, so flipping MLX_OMARCHY_NORM_APPLE must not
-// move a single bit either. Sweep the dispatch-predicate edges: the
-// 128-wide q/k rows (never Apple-selected), the 256 any-rows and
-// 2048/rows<=64 selections with the 65-row boundary, the prefill
-// widths, and odd widths, across all three storage dtypes.
+// move a single bit either. The backend fuse gate (mlx/fast.cpp
+// "omarchy fence") only accepts bf16, non-traditional, D <= 256 with
+// even D and a contiguous last axis; anything else throws the named
+// refusal (the model path pre-filters through the python gate). Sweep
+// the dispatch-predicate edges across fuseable cells: the 128-wide q/k
+// rows (never Apple-selected), the 256 any-rows selections with the
+// 64/65-row boundary, and even prefill widths; pin refusals for
+// non-bf16 dtypes, D > 256, and odd widths (they must throw, never
+// silently fall back to a plain rope with the norm skipped).
 TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
   if (!compute_available()) {
     return;
@@ -430,16 +435,15 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
       {128, 256},
       {256, 1},
       {256, 9},
-      {65, 3},
-      {127, 3},
-      {2047, 9},
-      {2048, 64},
-      {2048, 65},
-      {2560, 9},
-      {3584, 9},
-      {4096, 9},
-      {8192, 9}};
-  auto bits_equal = [&stream](const array& a, const array& b, const char* what) {
+      {68, 3},
+      {124, 3},
+      {204, 9},
+      {252, 9},
+      {256, 64},
+      {256, 65},
+      {248, 9}};
+  auto bits_equal = [&stream](const array& a, const array& b,
+                              const char* what) {
     array a32 = astype(a, float32, stream);
     array b32 = astype(b, float32, stream);
     eval(a32);
@@ -452,43 +456,78 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
       CHECK_EQ(pa[i], pb[i]);
     }
   };
-  for (Dtype dtype : {float32, float16, bfloat16}) {
-    for (const Cell& cell : cells) {
-      auto x_data = pattern(
-          static_cast<size_t>(cell.rows) * cell.width, cell.width + 31);
-      auto w_data = pattern(cell.width, cell.width + 47);
-      array x = astype(
-          array(
-              x_data.data(),
-              Shape{1, cell.rows, 1, cell.width},
-              float32),
-          dtype,
-          stream);
-      array w = astype(
-          array(w_data.data(), Shape{cell.width}, float32),
-          dtype,
-          stream);
-      array fused = fast::rope_rms_norm(
-          x, cell.width, w, eps, false, 10000.0f, 1.0f, 0, stream);
-      array composed = fast::rope(
-          fast::rms_norm(x, w, eps, stream),
-          cell.width,
-          false,
-          10000.0f,
-          1.0f,
-          0);
-      INFO("cell width=", cell.width, " rows=", cell.rows);
-      bits_equal(fused, composed, "fused vs composed");
-      // Forcing the composed reductions with the kill switch must keep
-      // the same bits (shared order, not a different rounding).
-      setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
-      array fused_off = fast::rope_rms_norm(
-          x, cell.width, w, eps, false, 10000.0f, 1.0f, 0, stream);
-      eval(fused_off);
-      unsetenv("MLX_OMARCHY_NORM_APPLE");
-      bits_equal(fused, fused_off, "default vs NORM_APPLE=0");
-    }
+  for (const Cell& cell : cells) {
+    auto x_data = pattern(
+        static_cast<size_t>(cell.rows) * cell.width, cell.width + 31);
+    auto w_data = pattern(cell.width, cell.width + 47);
+    array x = astype(
+        array(
+            x_data.data(),
+            Shape{1, cell.rows, 1, cell.width},
+            float32),
+        bfloat16,
+        stream);
+    array w = astype(
+        array(w_data.data(), Shape{cell.width}, float32),
+        bfloat16,
+        stream);
+    array fused = fast::rope_rms_norm(
+        x, cell.width, w, eps, false, 10000.0f, 1.0f, 0, stream);
+    array composed = fast::rope(
+        fast::rms_norm(x, w, eps, stream),
+        cell.width,
+        false,
+        10000.0f,
+        1.0f,
+        0);
+    INFO("cell width=", cell.width, " rows=", cell.rows);
+    bits_equal(fused, composed, "fused vs composed");
+    // Forcing the composed reductions with the kill switch must keep
+    // the same bits (shared order, not a different rounding).
+    setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
+    array fused_off = fast::rope_rms_norm(
+        x, cell.width, w, eps, false, 10000.0f, 1.0f, 0, stream);
+    eval(fused_off);
+    unsetenv("MLX_OMARCHY_NORM_APPLE");
+    bits_equal(fused, fused_off, "default vs NORM_APPLE=0");
   }
+  // The omarchy fence: non-bf16 dtypes, D > 256, and odd-width legs
+  // must throw the named refusal (the python gate pre-filters them out
+  // of the model path; the C++ wrapper refuses loudly rather than
+  // silently running a plain rope with the norm skipped).
+  auto throws_named = [&](Dtype dtype, int width, int rows) {
+    auto x_data = pattern(rows * width, 333u + uint32_t(width));
+    auto w_data = pattern(width, 337u + uint32_t(width));
+    array x = astype(
+        array(x_data.data(), Shape{1, rows, 1, width}, float32),
+        dtype,
+        stream);
+    array w = astype(
+        array(w_data.data(), Shape{width}, float32), dtype, stream);
+    try {
+      auto y = fast::rope_rms_norm(
+          x, width, w, eps, false, 10000.0f, 1.0f, 0, stream);
+      eval(y);
+    } catch (const std::exception& e) {
+      return strstr(e.what(), "leg cannot fuse") != nullptr;
+    }
+    return false;
+  };
+  CHECK_MESSAGE(
+      throws_named(float32, 257, 9),
+      "f32 rope_rms_norm leg must refuse with the named fuse error");
+  CHECK_MESSAGE(
+      throws_named(float16, 128, 9),
+      "f16 rope_rms_norm leg must refuse with the named fuse error");
+  CHECK_MESSAGE(
+      throws_named(bfloat16, 512, 9),
+      "D=512 rope_rms_norm leg must refuse with the named fuse error");
+  CHECK_MESSAGE(
+      throws_named(bfloat16, 65, 3),
+      "odd width 65 rope_rms_norm leg must refuse with the named fuse error");
+  CHECK_MESSAGE(
+      throws_named(bfloat16, 127, 3),
+      "odd width 127 rope_rms_norm leg must refuse with the named fuse error");
 }
 
 TEST_CASE("RMSNormVJP matches finite differences and the composed formula") {

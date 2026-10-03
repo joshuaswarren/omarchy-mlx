@@ -148,3 +148,54 @@ The GDN epilogue call at `primitives.cpp:12100` with `row_length=128` therefore 
 
 ## Release
 - Yes, shaders changed. Recommend a v0.7.23 release candidate after the blocker is resolved (branch content: Apple-reduction row kernel family + subgroup capability gate + measured (width, rows) shape predicate + GDN qk-epilogue C%128 guard relaxation + doctests).
+## Final standing-suite state at landing (2026-10-03, post-ruling)
+
+| Suite | Result |
+|---|---|
+| omarchy_fused_chain_tests | 36/36 PASS |
+| omarchy_primitive_tests | 104/104 PASS |
+| omarchy_runtime_tests | 41/41 PASS |
+| omarchy_gdn_fast_route_repeat_tests | 3/3 PASS (after the conditioned-inputs + argmax-agreement test fix below) |
+| omarchy_capability_sim_tests | 5 profiles x 7/7 PASS (incl. the new apple-norm subgroup-gate case on every profile) |
+| omarchy_fast_ops_tests | 10/11 — the one failure is the PRE-EXISTING sdpa-backward composed-VJP SIGABRT (see below) |
+
+### GDN test fix (per Main's ruling)
+The d95e88363 case used unnormalized random k/beta/g; the recurrence grows by
+orders of magnitude (state max_val 489) and amplifies bf16 differences between
+two CORRECT implementations exponentially over 32 tokens. Evidence: an fp64
+recurrence reference shows BOTH fused and composed match fp64 to ~4.5e-3 on
+conditioned inputs, and match each other to ~4.9e-4 there, while a different
+conditioned seed set amplifies the path divergence to ~30x the output magnitude.
+Fix: the wild-input case now checks finiteness only (no-NaN/no-Inf for y and
+final state); a new conditioned case (L2-normalized k/q rows, g in (0.3, 0.999),
+beta in (0, 1)) asserts per-token argmax agreement >= 95% between fused and
+composed on y and final state — the model-relevant equivalence, which
+bit-exact bf16 recurrence cannot provide.
+
+### Pre-existing known-failing at landing (reproduced on clean main, same binary behavior)
+- omarchy_fast_ops_tests "scaled_dot_product_attention backward matches finite
+  differences": SIGABRT `SmallVector<int,10>::operator[] assertion 'size() >
+  index' failed` (mlx/small_vector.h:315) in the composed SDPA VJP graph at
+  B=2 H=1 qL=2 D=4 f32. Repro on clean main:
+  `/var/tmp/NormAppleOwner/clean-main/.work/mlx/tests/omarchy/omarchy_fast_ops_tests
+  --test-case=*backward*matches*` -> same SIGABRT at that tree's line 817.
+  Standalone repro /tmp/sdpa_repro.cpp on jw16 (links clean-main libmlx) shows
+  the SAME vjp call PASSES outside the test binary — the crash is
+  test-context-dependent (state left by an earlier case in the binary), which
+  narrows the fix lane's search. Filed: docs/known-defects.md (2026-10-03,
+  assigned).
+
+### rope_rms_norm doctest final shape
+The fuse gate (mlx/fast.cpp omarchy fence) accepts bf16, non-traditional,
+D <= 256, even D, contiguous last axis; the RoPE kernel additionally refuses
+D % 4 != 0 ("odd rotation pair"). The sweep uses D in {64,68,124,128,204,248,
+252,256} x rows {1,3,9,64,65,256} and pins the named refusals for f32, f16,
+D=512, and odd widths 65/127 (they must throw "leg cannot fuse", never
+silently skip the norm).
+
+### Cleanup
+Scratch on jw16 under /var/tmp/NormAppleOwner/ and nap3o-venv (jw16 home):
+named cleaner = NormAppleOwner; receipt-worthy outputs archived to
+macstudio:/Volumes/Turbo/oracle-mint-scratch/laptop-archive-20261003/jw16/ with
+sha256 before deletion (switch-digest, prefill-digest, paired-cells,
+teacher-forced, greedy-ids, family-gate, suites logs, w79 wheel).
