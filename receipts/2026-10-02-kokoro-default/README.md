@@ -209,3 +209,34 @@ useful for the next lever: the per-call floor (~1.1 s) is still the
 fixed cost; aggressive cuts below 3 words trade prosody for latency
 and were not taken. Vocoder output streaming (already named in
 docs/serve.md row 3) would compress the fixed term further.
+
+### RTF / playout protocol (alternating cells, one M2 boot)
+
+Main's correction run: BEFORE (budget 28, no primer retry) and AFTER (this
+branch) alternated over 3 rounds on boot `df82d24a`. Each round ran the
+15-sentence corpus through a chat echo turn and then `/api/speak` to
+completion. RTF = audio seconds / wall seconds. Recomputed from the hashed
+`*.probe.out` files (lab run-002, `SHA256SUMS-rtf`, all OK):
+
+| Tree | Sentence runs | RTF median | TTFA median | Runs with RTF < 1.0 |
+|---|---|---|---|---|
+| BEFORE | 45 | 1.295 | 2.416 s | 3 |
+| AFTER | 44 | 1.272 | 1.553 s | 5 |
+
+The split buys TTFA and costs a little RTF, because every extra infer call
+pays the ~1.1 s per-call floor. Gap-free playout at TTFA ≤ 1.5 s is not
+reachable with whole-call inference. A first call that fits 1.5 s yields
+at most ~1.1 s of audio, and any second call costs at least 1.1 s.
+
+Two items from this run are void:
+
+- **Underrun counts.** The probe's playout simulation started the buffer
+  at zero and never added the first chunk's duration. Every second chunk
+  therefore counted as an underrun, with the whole inter-chunk gap counted
+  as starvation. The probe did not log per-chunk arrivals, so the counts
+  cannot be recomputed. The next protocol run uses a fixed simulation.
+- **Paragraph item.** The probe sent the 114-word paragraph as one
+  `/api/speak` request, which the UI never does (it sends one sentence per
+  request). One Kokoro chunk of that length ran past the 15 s inter-chunk
+  timeout, and the worker reset in all 6 cells. The next run speaks the
+  paragraph sentence by sentence, as the UI does.
