@@ -4117,8 +4117,10 @@ TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain")
 // exactly the route the variants twin. Each arm reruns the same tree with
 // one env set; the outputs must be bit-equal (a workgroup-to-tile remap or
 // a shared A-tile load never touches a per-output ascending-k chain).
-// Routing itself (which kernel id each env selects) is proven per arm in
-// the on-device GPU_PROFILE dispatch census, not here.
+// The landed default (multi-row-tile grids -> G4 order) is itself an arm
+// against the shipped mapping. Routing itself (which kernel id each env
+// selects) is proven per arm in the on-device GPU_PROFILE dispatch
+// census, not here.
 TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
   if (!compute_available()) {
     return;
@@ -4139,10 +4141,13 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
     const char* key;
     const char* value;
   };
+  // The baseline pins the SHIPPED rasterization order via the opt-out
+  // env, so the pin keeps holding the shipped mapping even though the
+  // landed default routes multi-row-tile grids to the G4 order.
   const Variant variants[] = {
+      {"default-g4", nullptr, nullptr},
       {"raster-swap", "MLX_OMARCHY_QMM_RASTER", "swap"},
       {"raster-g2", "MLX_OMARCHY_QMM_RASTER", "2"},
-      {"raster-g4", "MLX_OMARCHY_QMM_RASTER", "4"},
       {"raster-g8", "MLX_OMARCHY_QMM_RASTER", "8"},
       {"twon", "MLX_OMARCHY_QMM_TWON", "1"},
       {"persist-4", "MLX_OMARCHY_QMM_PERSIST", "4"},
@@ -4190,11 +4195,17 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
         const uint16_t* p = out.data<uint16_t>();
         return std::vector<uint16_t>(p, p + out.size());
       };
+      setenv("MLX_OMARCHY_QMM_NO_RASTER", "1", 1);
       const std::vector<uint16_t> baseline = run_bits();
+      unsetenv("MLX_OMARCHY_QMM_NO_RASTER");
       for (const auto& v : variants) {
-        setenv(v.key, v.value, 1);
+        if (v.key != nullptr) {
+          setenv(v.key, v.value, 1);
+        }
         std::vector<uint16_t> got = run_bits();
-        unsetenv(v.key);
+        if (v.key != nullptr) {
+          unsetenv(v.key);
+        }
         REQUIRE_EQ(got.size(), baseline.size());
         size_t mismatches = 0;
         size_t first = 0;
