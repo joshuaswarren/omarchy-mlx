@@ -553,6 +553,7 @@ def _omarchy_ane_probe(redactor):
 
 
 
+
 def _linux_ane_soc():
     """Return the Apple SoC from the running devicetree compatible list."""
     try:

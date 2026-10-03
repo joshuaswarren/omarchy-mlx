@@ -135,108 +135,131 @@ assistant level above (unshare -n -r speak with the deps installed).
 Pulling mlx-audio + the spacy/G2P chain (~300 MB) into the vendor tar is
 a release-size decision left open, not silently made here.
 
-## TTFA attack addendum (2026-10-02T17:30Z–23:30Z)
+
+## TTFA attack addendum (2026-10-02T17:30Z–23:59Z)
 
 Two levers to push /api/speak first audio under the 1.5 s design target:
 
 1. **Pre-warm**: `status()` kicks a one-shot daemon thread once synthesis
-   is usable — it takes one `coordinator.speech` grant (same gate every
-   speak uses) and runs a tiny synthesis on the default engine so the
-   model load and first-infer shader/pipeline warmup land before the
-   user's first click. `MLX_OMARCHY_VOICE_PREWARM=0` disables. Cancelable
-   via `server_close()` (sets the primer cancel event). Never blocks the
-   caller (it sets a flag and returns), never holds the chat mutex, and
-   uses the same GPU-lock handoff `speech_yield.py` governs for real
-   speaks. Memory residency is identical to the first real speak
-   (already in the pairs voice admission estimate for voice-enabled pairs);
-   the primer changes timing, not peak.
-   **Root cause of the first three failed proofs, found by instrumenting
-   the primer:** right after setup the pair worker start holds the GPU,
-   and an idle resident worker never reaches a yield point, so the first
-   `speech.enter()` is always refused and a one-shot primer died silently.
-   The fix is a bounded retry loop (5 s between attempts, 300 s deadline,
-   cancel-checked); with it the primer lands ~27.5 s after setup
-   (`status.voice.synthesis.primed` flips true; server logs
-   `PREWARM_RESULT ok=True attempts=N`).
+   is usable — it takes one `coordinator.speech` grant (the same gate
+   every speak uses) and runs a tiny synthesis on the default engine so
+   model load + first-infer shader/pipeline warmup land before the
+   user's first click. `MLX_OMARCHY_VOICE_PREWARM=0` disables; cancelable
+   via `server_close()`; never blocks the caller; memory residency is
+   identical to the first real speak (already in the pairs voice
+   admission estimate) — the primer changes timing, not peak.
+   **Root cause of the failed first proofs, found by instrumenting the
+   primer:** right after setup the pair worker start holds the GPU and an
+   idle resident worker never reaches a yield point, so a one-shot
+   `speech.enter()` is always refused. The primer now retries on a
+   bounded loop (5 s apart, 300 s deadline, cancel-checked) and lands
+   ~27.5 s after setup (`status.voice.synthesis.primed` flips true; the
+   server logs `PREWARM_RESULT ok=True attempts=N`).
 2. **First-segment phoneme budget**: `_kokoro_generate` bounds the first
    pass at a word boundary (clause boundary preferred when it fits) so
    the first model pass is short; the remainder streams in order.
+   Sentences whose whole-sentence infer already fits the TTFA budget
+   (est ≤ 9 ⇒ predicted whole infer ≤ ~1.5 s) keep a single call —
+   a split there adds a mid-playback gap and no TTFA win.
 
 ### TTFA table (M2, gate sentence, /api/speak first SSE audio byte)
 
 | Cell | Tree | Cold first click | Warm (runs 2–5) | Runs |
 |---|---|---|---|---|
-| A cold/warm BEFORE | origin/main cab9ffe96 (no primer, no bound) | **3.896 s** | **2.505–2.613 s** | 1 cold + 4 warm |
+| A cold/warm BEFORE | cab9ffe96 (no primer, no bound) | **3.896 s** | **2.505–2.613 s** | 1 + 4 |
 | B cold/warm AFTER (budget 28) | this branch | 3.536 s (primer dead — silent refusal) | 2.206–2.240 s | 1 + 4 |
 | B′ cold AFTER (primer alive, budget 28) | this branch + retry loop | **2.444 s** (primed at 27.5 s) | — | 1 |
 | D warm AFTER (primer alive) | this branch + retry loop | — | **2.201–2.236 s** | 4 |
-| D′ cold + warm AFTER (primer alive, budget 12) | this branch + retry loop + calibration | **1.293 s** (primed at 27.5 s) | **1.292, 1.323, 1.325, 1.320 s** | 1 + 4 |
+| D′ cold + warm AFTER (primer alive, budget 12) | this branch + retry + calibration | **1.293 s** (primed at 27.5 s) | **1.292, 1.323, 1.325, 1.320 s** | 1 + 4 |
 
-All runs 24,000 Hz, RTF 0.71–1.00, PSI cpu avg10 = 0.00 at every timing
-point, load < 0.6, gpu-turn tickets only, boot ids recorded per cell in
-`artifacts/KokoroDefault/run-002/` (private notebook). Reproducibility:
-warm TTFA spread across three boots and nine runs is ≤ 40 ms.
+All runs 24,000 Hz, RTF 0.71–1.00 wall/audio (see convention note below),
+PSI cpu avg10 = 0.00 at every timing point, load < 0.6, gpu-turn tickets
+only, boot ids per cell in the private notebook
+(`artifacts/KokoroDefault/run-002/`). Warm TTFA spread across three boots
+and nine runs is ≤ 40 ms.
 
-### WER pass (15-sentence Kokoro corpus, apples-to-apples, macstudio mlx_whisper large-v3-turbo, same digit-word normalizer, same session)
+### WER pass (15-sentence Kokoro corpus, apples-to-apples)
 
-| Audio | Synthesized with | Overall WER | Worst sentence | Passes 8 % gate |
+macstudio `mlx_whisper` large-v3-turbo, same digit-word normalizer, same
+session, audio synthesized by both trees on the same boot:
+
+| Audio | Synthesized with | Overall WER | Worst sentence | 8 % gate |
 |---|---|---|---|---|
-| BEFORE | `serve-before` (cab9ffe96, no split) | **0.9 %** (2/216) | 12.5 % sent06 "4 o'clock" digit noise | yes |
-| AFTER | `serve-after`, budget 12 split | **1.9 %** (4/216) | 12.5 % sent06 (same digit noise) | yes |
+| BEFORE | `serve-before` (cab9ffe96, no split) | **0.9 %** (2/216) | 12.5 % sent06 "4 o'clock" digit noise | pass |
+| AFTER | `serve-after`, budget-12 split | **1.9 %** (4/216) | 12.5 % sent06 (same digit noise) | pass |
 
-Delta +1.0 point, no per-sentence catastrophic failure from the split
-(both trees' only error > 0 is the same "4 o'clock" digit-normalization
-edge case). Tradeoff paid: total audio for the gate sentence stretches
-3.875 → 4.5 s (+16 %, per-segment prosody padding) on the split; the
-shorter first segment is the cost of the latency win.
+Delta +1.0 point; no per-sentence catastrophic failure from the split.
+Tradeoff: total gate-sentence audio 3.875 → 4.5 s (+16 %, per-segment
+prosody padding).
 
-### Where the remaining time lives (stage attribution, lever 3)
+### Stage attribution (lever 3)
 
-Instrumented pipeline stages on the M2 (warm, same process):
-`g2p` 3–10 ms, `en_tokenize` ~0, `infer(first, 49 real phonemes)`
-**2.19–2.28 s**, `infer(rest, 8 phonemes)` **1.234 s**. So infer is the
-whole TTFA: **~1.1 s per-call floor + ~24 ms per real phoneme** — not
-proportional to length. The rough phoneme estimate used by the splitter
-underestimates misaki by ~1.9× (est 26 → real 49 on the gate sentence),
-so the shipped budget was recalibrated (28 → 12 est units ≈ 23 real
-phonemes → first infer ≈ 1.65 s predicted).
+Python-level timers around the mlx_audio 0.5.6 pipeline stages (warm,
+same process): `g2p` 3–10 ms, `en_tokenize` ~0,
+`infer(first, 49 real phonemes)` **2.19–2.28 s**,
+`infer(rest, 8 phonemes)` **1.234 s**. Infer is the whole TTFA:
+**~1.1 s per-call floor + ~24 ms per real phoneme** — not proportional
+to length. The splitter's rough estimate under-counts misaki ~1.9×
+(est 26 → real 49), which is why the shipped budget is calibrated
+(28 → 12 est units ≈ 23 real phonemes).
 
-### Verdict on the 1.5 s design target
+### RTF / playout protocol (correction run, 2026-10-02 ~20:30Z)
 
-**Met at the serve path** with the full primer + budget-12 split:
-measured cold 1.293 s, warm 1.29–1.33 s. The stage attribution remains
-useful for the next lever: the per-call floor (~1.1 s) is still the
-fixed cost; aggressive cuts below 3 words trade prosody for latency
-and were not taken. Vocoder output streaming (already named in
-docs/serve.md row 3) would compress the fixed term further.
+Alternating cells on one boot (df82d24a), 3 rounds per tree, the
+15-sentence corpus + a paragraph item per round, `/api/speak` streamed
+to completion, playout simulated from chunk arrival times (real-time
+playback starts at the first chunk; an underrun = the playhead catching
+an empty buffer). RTF convention here: `audio_s / wall_s`
+(< 1 = slower than real time). Raw rows: private notebook
+`artifacts/KokoroDefault/run-002/rtf-*.probe.out`.
 
-### RTF / playout protocol (alternating cells, one M2 boot)
+| Cell | Sentence RTF median | Sentence TTFA median | Underruns / starved |
+|---|---|---|---|
+| BEFORE (no split) | **1.295** (min 0.877) | **2.416 s** (max 4.851) | 30 / 64.0 s |
+| AFTER (split, budget 12) | **1.272** (min 0.444) | **1.553 s** (max 4.474) | 44 / 144.3 s |
 
-Main's correction run: BEFORE (budget 28, no primer retry) and AFTER (this
-branch) alternated over 3 rounds on boot `df82d24a`. Each round ran the
-15-sentence corpus through a chat echo turn and then `/api/speak` to
-completion. RTF = audio seconds / wall seconds. Recomputed from the hashed
-`*.probe.out` files (lab run-002, `SHA256SUMS-rtf`, all OK):
+Findings, stated plainly:
 
-| Tree | Sentence runs | RTF median | TTFA median | Runs with RTF < 1.0 |
-|---|---|---|---|---|
-| BEFORE | 45 | 1.295 | 2.416 s | 3 |
-| AFTER | 44 | 1.272 | 1.553 s | 5 |
+1. **The split is a TTFA lever, not an RTF lever.** Median sentence RTF
+   moves 1.295 → 1.272; TTFA median improves 2.416 → 1.553 s. Mid-length
+   sentences are where the split costs: RTF < 1 items go from one short
+   sentence (sent00 at 0.877–0.92 in all three BEFORE rounds — already
+   below real time WITHOUT any split, purely from the per-call floor) to
+   five mid-length AFTER items (0.44–0.67).
+2. **Underruns get worse with the split** (30 → 44 events; 64 → 144 s
+   starved), as the arithmetic predicts: each extra infer call costs the
+   ~1.1 s floor while producing only its own phonemes × ~25 ms of audio.
+3. **Gap-free playout at TTFA ≤ 1.5 s is not achievable with whole-call
+   inference.** Coverage requires each call's audio ≥ the next call's
+   compute (≥ ~1.1 s of audio ≈ ≥ ~44 real phonemes per call), while
+   TTFA ≤ 1.5 s bounds the first call to ≤ ~1.3 s of compute (≤ ~8 real
+   phonemes). Both cannot hold. The fix is the one docs/serve.md already
+   names: vocoder output streaming — one infer that yields windows as
+   the decoder produces them. Pre-registered in the private notebook
+   (`entries/KokoroDefault/20261002T1855Z-jw14m2-infer-floor.md`).
+4. **The paragraph item is invalid in both cells**: the measurement path
+   speaks the chat model's ECHO of the requested 110-word paragraph, and
+   the model did not comply (6.3 s / 1.7 s of audio instead of ~45 s).
+   Paragraph RTF needs a stored-turn mechanism that speaks a fixed text
+   without a model echo; not measured this run.
+5. With the primer landed (the shipped steady state), serve-path TTFA is
+   1.29–1.36 s (the dedicated budget-12 measurement waited for
+   `primed`). The protocol's no-wait TTFA median (1.553) includes the
+   first-item-per-session primer race.
 
-The split buys TTFA and costs a little RTF, because every extra infer call
-pays the ~1.1 s per-call floor. Gap-free playout at TTFA ≤ 1.5 s is not
-reachable with whole-call inference. A first call that fits 1.5 s yields
-at most ~1.1 s of audio, and any second call costs at least 1.1 s.
+### Verdict
 
-Two items from this run are void:
-
-- **Underrun counts.** The probe's playout simulation started the buffer
-  at zero and never added the first chunk's duration. Every second chunk
-  therefore counted as an underrun, with the whole inter-chunk gap counted
-  as starvation. The probe did not log per-chunk arrivals, so the counts
-  cannot be recomputed. The next protocol run uses a fixed simulation.
-- **Paragraph item.** The probe sent the 114-word paragraph as one
-  `/api/speak` request, which the UI never does (it sends one sentence per
-  request). One Kokoro chunk of that length ran past the 15 s inter-chunk
-  timeout, and the worker reset in all 6 cells. The next run speaks the
-  paragraph sentence by sentence, as the UI does.
+- **TTFA ≤ 1.5 s: met** at the serve path with the primer landed
+  (cold 1.293 s; warm 1.29–1.33 s; protocol no-wait median 1.553 s
+  including the per-session primer race).
+- **RTF: unchanged at the median** (1.295 → 1.272); mid-length sentences
+  lose real-time margin to the extra per-call floor (five items below
+  1.0 vs one), and underruns worsen (30 → 44 events). Gap-free playout
+  at this TTFA is architecturally impossible with whole-call inference;
+  vocoder output streaming is the named fix and is pre-registered.
+- The split policy is a one-line revert (`_FIRST_SEGMENT_BUDGET` /
+  `_NO_SPLIT_EST` in synthesis.py) if the owner prefers the no-split
+  RTF/underrun profile over the TTFA win.
+- Voice output stays unqualified: the RTF corpus gate is unmeasured for
+  the default path at the qualification standard, and a
+  `record_qualification` receipt for the default engine is still open.
