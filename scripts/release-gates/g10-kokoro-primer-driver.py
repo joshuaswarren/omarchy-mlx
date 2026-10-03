@@ -30,7 +30,7 @@ def say(text):
 
 
 def call(method, path, body=None, timeout=60):
-    rt = json.load(open(RUNTIME))
+    rt = wait_runtime()
     base = f"http://127.0.0.1:{rt['port']}"
     req = urllib.request.Request(
         base + path, data=None if body is None else json.dumps(body).encode(),
@@ -38,6 +38,20 @@ def call(method, path, body=None, timeout=60):
                                 "Origin": base, "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
+
+
+def wait_runtime(deadline_s=1200.0):
+    """The assistant writes application.json only after its models load
+    (minutes on a cold cache); poll instead of crashing on the first read.
+    """
+    started = time.monotonic()
+    while True:
+        try:
+            return json.load(open(RUNTIME))
+        except FileNotFoundError:
+            if time.monotonic() - started > deadline_s:
+                raise
+            time.sleep(1)
 
 
 def wait_setup():
