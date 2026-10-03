@@ -229,6 +229,32 @@ the pin means the installed file was modified after install (reinstall);
 the RECORD matching the actual bytes means the release artifact itself is
 broken (re-cut it).
 
+The seal itself is a single read pass: the SHA-256 runs inline with the
+read (ARMv8 crypto instructions when the CPU reports them, the scalar
+implementation otherwise — both are pinned against the same FIPS vectors
+in the unit suite), while an ordered writer thread drains the previous
+chunk into the sealed memfd. The write seal is applied after the last
+byte and `F_GET_SEALS` must confirm it, so the digest always describes
+exactly the immutable bytes the session consumes.
+
+Per-process cost knobs (all opt-in, default behavior unchanged):
+
+* `MLX_OMARCHY_ANE_SEAL_TRACE=1` — the worker logs one line per sealed
+  file (`read_hash_ms` / `copy_ms` / `seal_ms`) for fresh-process
+  decomposition.
+* `OMARCHY_ANE_SEAL_VERIFY=1` — force the full read+hash+snapshot on
+  every open, bypassing the identity-keyed digest sidecar below.
+* Digest sidecar (`~/.cache/mlx-omarchy/ane-digest-cache.txt`,
+  `MLX_OMARCHY_ANE_DIGEST_CACHE=0` disables,
+  `MLX_OMARCHY_ANE_DIGEST_CACHE_PATH` relocates): identity-keyed
+  (`path|dev|ino|size|mtime_ns|ctime_ns`) digest memoization. The
+  source descriptor is handed to the session without a snapshot ONLY
+  where the process could not have modified the bytes even in
+  principle — the file AND every parent directory of the canonical
+  path are root-owned and not group/other-writable — AND the sidecar
+  carries this identity's digest equal to the pin. Any user-owned
+  install always takes the full sealed snapshot.
+
 ```bash
 mlx-omarchy-parakeet download              # fetch + verify the pinned reference (~475 MB) and fixture
 mlx-omarchy-parakeet verify                # re-hash the cache and the fixture
