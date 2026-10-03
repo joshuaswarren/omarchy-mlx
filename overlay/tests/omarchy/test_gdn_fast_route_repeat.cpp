@@ -39,6 +39,7 @@
 #include "mlx/ops.h"
 #include "mlx/random.h"
 #include "mlx/stream.h"
+#include "mlx/transforms.h"
 
 using namespace mlx::core;
 using mlx::core::omarchy::trace::counters;
@@ -244,7 +245,7 @@ TEST_CASE("gdn_conv_update qk epilogue runs the routed C % 256 == 128 geometry")
   auto parts = split(act, {key_dim, 2 * key_dim}, -1, s);
   auto norm_one = [&](const array& part, float scale) {
     auto r = reshape(part, Shape{B, 1, key_dim / 128, 128}, s);
-    array n = rms_norm_scaled(r, std::nullopt, scale, 1e-6f, s);
+    array n = fast::rms_norm_scaled(r, std::nullopt, scale, 1e-6f, s);
     return reshape(n, part.shape(), s);
   };
   array ref = concatenate(

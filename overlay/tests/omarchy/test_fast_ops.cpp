@@ -476,8 +476,7 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
           false,
           10000.0f,
           1.0f,
-          0,
-          stream);
+          0);
       INFO("cell width=", cell.width, " rows=", cell.rows);
       bits_equal(fused, composed, "fused vs composed");
       // Forcing the composed reductions with the kill switch must keep
