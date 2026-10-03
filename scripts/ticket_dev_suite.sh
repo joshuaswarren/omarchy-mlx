@@ -8,6 +8,9 @@ case "$LABEL" in
   everyday9b) PAIR=everyday ;;
   *) echo "unknown label $LABEL" >&2; exit 64 ;;
 esac
+BUILD=${BUILD:-after}
+TAG=${TAG:-cand-dev}
+OUT=${OUT:-/tmp/CardLatency/dev_cand_${LABEL}.json}
 cd /tmp/CardLatency
 {
   echo "== dev-suite $PAIR start $(date -u +%FT%TZ)"
@@ -37,9 +40,9 @@ V=~/.local/share/mlx-omarchy/venv/bin/python
 $V receipt/run_card_latency_suite.py \
   --pair "$PAIR" \
   --home ~/agents/PairGates/homes/"$LABEL" \
-  --repo-serve /tmp/CardLatency/after/serve \
+  --repo-serve /tmp/CardLatency/$BUILD/serve \
   --suite /tmp/CardLatency/dev_subset.json \
-  --tag cand-dev \
-  --out /tmp/CardLatency/dev_cand_${LABEL}.json \
+  --tag "$TAG" \
+  --out "$OUT" \
   --budget-s 1380
 echo "== dev-suite $PAIR done $(date -u +%FT%TZ)"
