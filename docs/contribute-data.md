@@ -82,6 +82,83 @@ The collector prints the steps that match your kernel. One wording source:
   by its node in the kernel DT." The collector appends that sentence when the
   DTBS= line there is not empty.
 
+## Test the Neural Engine on a base M2 (T8112)
+
+Base M2 only: a MacBook Air 13" or 15", a 13" MacBook Pro, or a Mac mini with
+the base M2 (T8112). Not M2 Pro, not M2 Max, not M2 Ultra. The opt-in key is
+`ane-t8112`
+([omarchy-ane chip table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage)).
+
+Read this first. The overlay path needs an `omarchy-mac-boot` that applies
+device-tree overlays
+([omacom/omarchy-mac#677](https://github.com/omacom/omarchy-mac/pull/677),
+not merged as of 2026-10-03). Stock Omarchy ships an older one, so
+`omarchy-ane-dt apply` refuses, and per the packaging PR a DKMS module fails
+the `omarchy update` boot check on it
+([omacom/omarchy-pkgs#745](https://github.com/omacom/omarchy-pkgs/pull/745),
+which waits for #677). Until #677 merges, the omarchy-mac-boot bump is
+published, and #745 merges, this test is not supported on stock Omarchy.
+After #745 merges, step 1 is `sudo pacman -S omarchy-ane-dkms`.
+
+If your `omarchy-mac-boot` already applies overlays (a build with #677), run
+these six steps in order.
+
+1. Install the driver package. `omarchy-ane-dkms` is not in the repos yet, so
+   build it from PR #745. The recipe currently builds the v0.4.2 source; #745
+   bumps to newer tags after merge.
+
+   ```sh
+   git clone https://github.com/omacom/omarchy-pkgs && cd omarchy-pkgs && git fetch origin pull/745/head:ane && git checkout ane && cd pkgbuilds/omarchy-ane-dkms && makepkg -si
+   ```
+
+   You need `base-devel` and `git`. `makepkg -si` installs the rest (`dkms`,
+   `dtc`, `python`, `libdrm`, `fakeroot`, `linux-aurora-headers`).
+2. Add the opt-in key:
+
+   ```sh
+   echo ane-t8112 | sudo tee -a /etc/omarchy-platform/dtb-overlays.opt-in
+   ```
+3. Fetch the ANE firmware. T8112 loads its own image, and the install hook
+   covers only the M2 Max:
+
+   ```sh
+   sudo omarchy-ane-firmware-fetch
+   ```
+4. Apply the overlay, rebuild m1n1, reboot:
+
+   ```sh
+   sudo omarchy-ane-dt apply
+   sudo update-m1n1
+   sudo reboot
+   ```
+5. Check:
+
+   ```sh
+   omarchy-ane-check --smoke
+   ```
+
+   Expect the last line `omarchy-ane-check: ready` and a smoke line that ends
+   `20/20 calls bit-exact`.
+6. From a checkout of the latest omarchy-mlx release (v0.7.23 or newer), run:
+
+   ```sh
+   python3 scripts/collect_deep.py --ane-smoke --submit
+   ```
+
+   The collector runs the smoke when the chip is idle (load < 0.5, PSI 0);
+   it waits up to 300 s and no fixed uptime is required. One passing row
+   promotes T8112 from opt-in ([ane-turn-on-data.md](ane-turn-on-data.md)).
+
+If `/etc/default/update-m1n1` has a non-empty `DTBS=` line (some custom
+kernels), m1n1 boots the kernel's own device trees, the opt-in has no effect,
+and `omarchy-ane-dt apply` refuses. The stock linux-aurora kernel has no ANE
+node, so that setup is not supported for this test. The collector prints the
+same note ([Turn on the ANE for your chip](#turn-on-the-ane-for-your-chip)).
+
+If anything fails, open an issue on
+[joshuaswarren/omarchy-ane](https://github.com/joshuaswarren/omarchy-ane/issues)
+with the full `omarchy-ane-check --smoke` output.
+
 ## Timing note
 
 Grab the **latest release** before running. If we've just announced a
