@@ -11406,7 +11406,7 @@ void GatedDeltaUpdate::eval_gpu(
   // MLX_OMARCHY_NO_COOPMAT_GDN=1.
   constexpr uint32_t kGdnCoopmatMinTokens = 64;
   static const bool coopmat_gdn_disabled =
-      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN");
   // Round-trip-diet batch variant of the coopmat GDN prefill kernel
   // (default ON; MLX_OMARCHY_GDN_BATCH=0 is the kill switch back to the
   // deployed kernel): restructures staging/barriers only; per-element

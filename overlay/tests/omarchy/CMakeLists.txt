@@ -217,6 +217,16 @@ target_link_options(omarchy_gdn_fast_route_repeat_tests
 doctest_discover_tests(omarchy_gdn_fast_route_repeat_tests)
 add_test(NAME omarchy_gdn_fast_route_repeat_tests
          COMMAND omarchy_gdn_fast_route_repeat_tests)
+add_executable(omarchy_gdn_maskless_correctness_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_maskless_correctness.cpp)
+target_link_libraries(omarchy_gdn_maskless_correctness_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_maskless_correctness_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_maskless_correctness_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_gdn_maskless_correctness_tests)
+add_test(NAME omarchy_gdn_maskless_correctness_tests
+         COMMAND omarchy_gdn_maskless_correctness_tests)
 
 add_executable(omarchy_linalg_ops_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_linalg_ops.cpp)
