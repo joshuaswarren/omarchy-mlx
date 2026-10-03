@@ -16,12 +16,12 @@ gate_refuse_existing "$ASSIST"
 mkdir -p "$ASSIST"
 
 python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  flock -x -w 300 "$GPU_LOCK" timeout -k 60 2400 \
+  flock -x -w 900 "$GPU_LOCK" timeout -k 60 2400 \
   env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" HF_HOME="$HF_CACHE" \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --home "$ASSIST" --no-browser --pair everyday --yes \
   >"$LOG.server" 2>&1 &
 PID=$!
-python3 "$GATES_DIR/g10-kokoro-driver.py" "$ASSIST" "$LOG"
+python3 "$GATES_DIR/g10-kokoro-primer-driver.py" "$ASSIST" "$LOG"
 RC=$?
 
 PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' \
