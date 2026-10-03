@@ -133,10 +133,60 @@ cases, default and forced) on dev box + jw16.
 
 ## Known gap (follow-up, one line)
 
-The shipped CLI spawns the worker with `stderr=subprocess.DEVNULL`
-(`mlx_omarchy_parakeet.py:133`), so `MLX_OMARCHY_ANE_SEAL_TRACE` output is
-discarded in the packaged path — the trace needs a one-line stderr-routing
-change (or a worker `--trace-file`) to be observable end-to-end.
+~~The shipped CLI spawns the worker with `stderr=subprocess.DEVNULL`~~
+CORRECTED on re-read: the resident worker's stderr goes to
+`<scratch>/resident-worker.stderr` (ane_resident.py:186), which was deleted
+with the scratch at exit — the trace WAS observable but not durable. Fixed
+in `4fc39d4be`: `MLX_OMARCHY_ANE_SEAL_TRACE=1` now keeps the scratch
+(no default-path change; `--keep-scratch` also works).
+
+## Root-chain stamp results (system-install layout, real package modes)
+
+jwm1, 2026-10-03T19:28Z (`/var/tmp/sealfast/root-ab-jwm1.log`): the whole
+bundle copied to `/pk-root/parakeet-encoder-whole` (dir must carry the
+bundle's pin name — the CLI asset gate keys on it), root:root, **dirs 0755
+/ files 0644** (normal package modes; the predicate only refuses
+group/other WRITE bits). First process full-seals and writes the USER
+sidecar (natural creation — no installer stamp needed); then 9 pairs
+alternating stamp-hit vs `OMARCHY_ANE_SEAL_VERIFY=1`, fresh process each,
+golden-checked per cell, seal-trace via kept scratch:
+
+| arm | n | wall median | seal (trace) | golden |
+|---|---|---:|---|---|
+| stamp-hit (root chain, sidecar) | 9 (9/9 hits) | **1899 ms** | skipped entirely (no 458 MB seal line) | match/104/db501a8c every cell |
+| forced full seal | 9 | 2231 ms | `read_hash_ms=310.9 copy_ms=0.6 total_ms=311.9` | match/104/db501a8c every cell |
+
+**Stamp-hit saves −332 ms/process (−14.9%) on a system install** — the
+entire read+hash+memfd seal disappears; the copy overlap is already
+near-perfect (`copy_ms=0.6` of a 312 ms pass), so the pipelined seal is
+read+hash-bound at the hardware floor and the stamp is the only lever that
+removes it. Sidecar creation is natural (first process), the sidecar lives
+in the user's cache, and it is safe there BECAUSE the chain is root-owned:
+a same-uid writer cannot alter the file bytes, so a forged row can only
+skip hashing the true pinned bytes.
+
+Integrity under the stamp: root tamper (`b[8192] ^= 0xFF` as root) →
+**rc=1, "does not match the pin"** — the identity tuple moved, the stamp
+did not mask it; post-restore full-seals once and returns to match/104.
+
+Also answered: real package modes (0755/0644) PASS the
+`root_owned_readonly_chain` predicate — 0444/0555 is not required.
+
+## Standing suite on jw16 (whole-battery build, niced, CPU-only)
+
+24 of 25 suites green (`standing-suite.log`): including
+`omarchy_ane_bundle_tests` 8215 assertions PASS on the dual-path build.
+`omarchy_eq_math_tests` 33 failures — trig-argument error-message content
+(`sin/cos` on v=-2.7e37 expected a "[omarchy] …magnitude…" contract
+string; the build emits none). No file overlap with this branch (the diff
+touches bundle.cpp/h, test_bundle.cpp, the CLI, docs, receipts only);
+diagnosed as pre-existing on this host/build, not caused by SealFast.
+Because Main's merge gate was "whole suite green", `agent/seal-fast` is
+NOT merged to main pending that call.
+
+jw16 root-chain stamp A/B: first attempt hit missing venv deps (numpy/
+protobuf — install step lived only on jwm1); deps installed, window
+re-queued (`root-jw16-window3.log`).
 
 ## Post-state
 
