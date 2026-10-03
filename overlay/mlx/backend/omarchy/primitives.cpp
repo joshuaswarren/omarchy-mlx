@@ -12070,11 +12070,15 @@ void GdnConvUpdate::eval_gpu(
   }
   if (qk_key_dim() > 0) {
     // F4: the q/k rms_norm_scaled pair folds into the kernel epilogue. Each
-    // workgroup owns two adjacent 128-channel rows; q/k boundaries align
-    // when qk_key_dim is a multiple of 128. Require one grid-stride iteration
-    // and 256-channel group boundaries so each reduction half contains one
-    // complete row. Refuse unsupported geometry rather than skip the epilogue.
-    if (qk_key_dim() % 128 != 0 || params.reduce_size % 256u != 0u ||
+    // workgroup owns two adjacent 128-channel halves; a half stays inside
+    // one conv row exactly when reduce_size is a multiple of 128, q/k
+    // boundaries align when qk_key_dim is a multiple of 128, and one
+    // grid-stride iteration holds when count is a multiple of 256.
+    // scripts/patch-mlx-lm-qknorm.py routes key_dim % 256 == 0 with
+    // B*C % 256 == 0 and does not constrain C % 256, so C % 256 == 128
+    // (e.g. key_dim 256 + value 128) must run, not refuse. Refuse
+    // unsupported geometry rather than skip the epilogue.
+    if (qk_key_dim() % 128 != 0 || params.reduce_size % 128u != 0u ||
         params.count % 256u != 0u) {
       omarchy::unsupported(tag + " qk-norm epilogue geometry", out);
     }

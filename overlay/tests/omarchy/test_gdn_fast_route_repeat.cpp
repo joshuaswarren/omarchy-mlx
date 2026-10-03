@@ -204,3 +204,95 @@ TEST_CASE("gdn fast path: Hk != Hv repeats q/k before fast dispatch") {
       max_val,
       ")");
 }
+
+// Regression pin for the no-mistakes round-2 finding
+// gdn-qk-c256-guard-mismatch: scripts/patch-mlx-lm-qknorm.py routes to
+// the fused op when head_k_dim == 128, key_dim % 256 == 0 and
+// B*C % 256 == 0, without constraining C % 256. C = 640 (key_dim 256 +
+// 128 value channels) passes that route with an even batch and must
+// RUN: the epilogue halves need C % 128 == 0 only. The host guard used
+// to refuse this geometry with omarchy::unsupported.
+TEST_CASE("gdn_conv_update qk epilogue runs the routed C % 256 == 128 geometry") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  const int B = 2;
+  const int C = 640;
+  const int K = 4;
+  const int key_dim = 256;
+  const float inv = 1.0f / std::sqrt(128.0f);
+
+  auto state_data = pattern(static_cast<size_t>(B) * (K - 1) * C, 11);
+  auto x_data = pattern(static_cast<size_t>(B) * C, 12);
+  auto w_data = pattern(static_cast<size_t>(C) * K, 13);
+  array state = astype(
+      array(state_data.data(), Shape{B, K - 1, C}, float32), bfloat16, s);
+  array x = astype(
+      array(x_data.data(), Shape{B, 1, C}, float32), bfloat16, s);
+  array weight = astype(
+      array(w_data.data(), Shape{C, K, 1}, float32), bfloat16, s);
+
+  std::vector<array> out =
+      fast::gdn_conv_update(state, x, weight, true, key_dim, inv * inv, inv, 1e-6f, s);
+  REQUIRE(out.size() == 2);
+  eval(out[0]);
+  eval(out[1]);
+
+  // Composed reference: the exact ops the model fallback runs.
+  array ci = concatenate({state, x}, 1, s);
+  array conv = conv1d(ci, weight, 1, 0, 1, C, s);
+  array act = conv * sigmoid(conv, s);
+  auto parts = split(act, {key_dim, 2 * key_dim}, -1, s);
+  auto norm_one = [&](const array& part, float scale) {
+    auto r = reshape(part, Shape{B, 1, key_dim / 128, 128}, s);
+    array n = rms_norm_scaled(r, std::nullopt, scale, 1e-6f, s);
+    return reshape(n, part.shape(), s);
+  };
+  array ref = concatenate(
+      {norm_one(parts[0], inv * inv),
+       norm_one(parts[1], inv),
+       parts[2]},
+      -1,
+      s);
+  array ref_state = slice(ci, Shape{0, 1, 0}, Shape{B, ci.shape(1), C}, s);
+  eval(ref);
+  eval(ref_state);
+
+  // The carry-out state moves as raw bits.
+  array got_state32 = astype(out[1], float32, s);
+  array ref_state32 = astype(ref_state, float32, s);
+  eval(got_state32);
+  eval(ref_state32);
+  REQUIRE(got_state32.shape() == ref_state32.shape());
+  const float* gs = got_state32.data<float>();
+  const float* rs = ref_state32.data<float>();
+  for (size_t i = 0; i < got_state32.size(); ++i) {
+    INFO("state bit mismatch at ", i, " got=", gs[i], " ref=", rs[i]);
+    CHECK_EQ(gs[i], rs[i]);
+  }
+
+  // Output: the fused path reproduces the composed rounding; allow two
+  // bf16 steps of relative slack for the standalone conv1d kernel's
+  // tap accumulation order.
+  array got32 = astype(out[0], float32, s);
+  array ref32 = astype(ref, float32, s);
+  eval(got32);
+  eval(ref32);
+  const float* g = got32.data<float>();
+  const float* r = ref32.data<float>();
+  double worst = 0.0;
+  for (size_t i = 0; i < got32.size(); ++i) {
+    double denom = std::max(
+        1e-3,
+        std::max(std::abs(static_cast<double>(g[i])),
+                 std::abs(static_cast<double>(r[i]))));
+    worst = std::max(
+        worst,
+        std::abs(static_cast<double>(g[i]) - static_cast<double>(r[i])) / denom);
+  }
+  INFO("worst relative deviation ", worst);
+  CHECK_MESSAGE(
+      worst <= 0.02,
+      "fused vs composed worst relative deviation ",
+      worst,
+      " exceeds two bf16 steps");
+}

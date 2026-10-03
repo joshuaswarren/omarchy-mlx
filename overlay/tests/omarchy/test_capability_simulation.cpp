@@ -697,6 +697,115 @@ TEST_CASE("sdpa decode routes per the profile") {
             << " (backed=" << coopmat_backed() << ")\n";
 }
 
+// NormApple: the Apple row-reduction kernels may be selected only under
+// subgroup_size == 32 + subgroup ARITHMETIC, and only at the measured
+// (width, rows) shapes. Under every profile the result must be the
+// composed chain bit-for-bit (shared reduction order), and a simulated
+// gate claim the hardware cannot back refuses loudly at dispatch — that
+// is the gate refusing on a non-Apple GPU by construction.
+TEST_CASE("apple norm selection follows the subgroup gate") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& c = caps();
+  const auto& h = hw();
+  const bool claimed_ready = c.subgroup_size == 32u &&
+      (c.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  const bool hw_ready = h.subgroup_size == 32u &&
+      (h.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+
+  auto lattice = [](size_t count, uint32_t seed) {
+    std::vector<float> v(count);
+    uint32_t s = seed;
+    for (size_t i = 0; i < count; ++i) {
+      s = s * 1664525u + 1013904223u;
+      v[i] = static_cast<float>(static_cast<double>(s % 20000u) / 10000.0) -
+          1.0f;
+    }
+    return v;
+  };
+
+  if (claimed_ready && !hw_ready) {
+    // Non-Apple device leg: the profile claims 32+ARITHMETIC the runtime
+    // hardware cannot back; the dispatch site must refuse by name.
+    auto x_data = lattice(9 * 2048, 71);
+    array x = astype(
+        array(x_data.data(), Shape{9, 2048}, float32), bfloat16, stream);
+    array w = astype(
+        array(lattice(2048, 72).data(), Shape{2048}, float32),
+        bfloat16,
+        stream);
+    bool threw = false;
+    try {
+      array y = fast::rms_norm(x, w, 1e-6f, stream);
+      eval(y);
+    } catch (const std::exception& e) {
+      threw = true;
+      CHECK_MESSAGE(
+          strstr(e.what(), "subgroup") != nullptr,
+          "refusal names the axis: ",
+          e.what());
+    }
+    REQUIRE(threw);
+    return;
+  }
+
+  // Gate closed (subgroup-size-64, no-cooperative-matrix) or open
+  // (m1 profiles on backed hardware): width 128 is never Apple-selected
+  // (measured shape predicate), width 2048 rows 9 is selected only when
+  // the gate is open. Either way the kill switch keeps the same bits.
+  for (int width : {128, 2048}) {
+    auto x_data = lattice(9 * width, 73);
+    auto w_data = lattice(width, 74);
+    array x = astype(
+        array(x_data.data(), Shape{9, width}, float32), bfloat16, stream);
+    array w = astype(
+        array(w_data.data(), Shape{width}, float32), bfloat16, stream);
+    array on = fast::rms_norm(x, w, 1e-6f, stream);
+    eval(on);
+    setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
+    array off = fast::rms_norm(x, w, 1e-6f, stream);
+    eval(off);
+    unsetenv("MLX_OMARCHY_NORM_APPLE");
+    array on32 = astype(on, float32, stream);
+    array off32 = astype(off, float32, stream);
+    eval(on32);
+    eval(off32);
+    REQUIRE(on32.shape() == off32.shape());
+    const float* po = on32.data<float>();
+    const float* pf = off32.data<float>();
+    double worst_bits = 0.0;
+    double worst_val = 0.0;
+    for (int r = 0; r < 9; ++r) {
+      double sum = 0.0;
+      for (int col = 0; col < width; ++col) {
+        double xv = x_data[r * width + col];
+        sum += xv * xv;
+      }
+      double invrs = 1.0 / std::sqrt(sum / width + 1e-6);
+      for (int col = 0; col < width; ++col) {
+        size_t i = size_t(r) * width + col;
+        double want = x_data[i] * invrs * w_data[col];
+        worst_bits = std::max(
+            worst_bits,
+            std::abs(static_cast<double>(po[i]) - static_cast<double>(pf[i])));
+        worst_val = std::max(
+            worst_val,
+            std::abs(static_cast<double>(po[i]) - want));
+      }
+    }
+    INFO("width ", width, " worst default-vs-off ", worst_bits);
+    CHECK_EQ(worst_bits, 0.0);
+    CHECK_MESSAGE(
+        worst_val <= 5e-2,
+        "width ",
+        width,
+        " worst vs host math ",
+        worst_val);
+  }
+}
+
 int main(int argc, char** argv) {
   // --- Unit checks that need no device, run before any backend init.
   {
