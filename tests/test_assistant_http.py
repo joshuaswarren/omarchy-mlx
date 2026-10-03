@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from mlx_omarchy_assistant import server as server_module
 from mlx_omarchy_assistant.server import AssistantServer, voice_ready
 
 
@@ -225,6 +226,37 @@ class PrewarmTriggerTests(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(len(prime_calls), 1,
                          "second status poll must not re-prime")
+
+    def test_prewarm_retries_until_grant_succeeds(self):
+        """While the pair worker start holds the GPU the scheduler refuses
+        the primer; the bounded retry loop must land it once the GPU
+        frees instead of giving up."""
+        results = [None, None, "grant"]
+        grants = []
+
+        def enter(cancel):
+            r = results.pop(0) if results else "grant"
+            if r == "grant":
+                grant = mock.Mock()
+                grant.release.side_effect = lambda: grants.append(1)
+                return grant
+            return None
+
+        prime_calls = []
+        self.server._coordinator = mock.Mock()
+        self.server._coordinator.speech = mock.Mock()
+        self.server._coordinator.speech.enter.side_effect = enter
+        self.server._synthesis = mock.Mock()
+        self.server._synthesis.prime.side_effect = \
+            lambda cancel: prime_calls.append(cancel) or True
+        with mock.patch.object(server_module, "PREWARM_RETRY_SECONDS", 0.01):
+            self.server._maybe_prewarm({"usable": True})
+            deadline = time.monotonic() + 5
+            while not prime_calls and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(len(prime_calls), 1)
+        self.assertEqual(self.server._coordinator.speech.enter.call_count, 3)
+        self.assertTrue(grants)
 
 
 class VoiceChoiceRouteTests(unittest.TestCase):

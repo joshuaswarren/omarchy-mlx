@@ -26,6 +26,9 @@ CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; 
 # Fixed preview sentence: short, all-ASCII so the worker asks for the English
 # language token, and never longer than 8 seconds at the slowest voice.
 PREVIEW_SENTENCE = "Hello. This is a short preview of the selected voice."
+# Seconds between pre-warm grant retries while the pair worker start holds
+# the GPU (an idle resident worker never reaches a yield point).
+PREWARM_RETRY_SECONDS = 5.0
 
 
 
@@ -158,24 +161,37 @@ class AssistantServer(ThreadingHTTPServer):
         if self._prewarm_started or not synthesis.get("usable"):
             return
         self._prewarm_started = True
+        print("PREWARM kicked", flush=True)
         threading.Thread(target=self._prewarm_run, daemon=True).start()
 
     def _prewarm_run(self) -> None:
+        """Bounded retry loop: right after setup the pair worker start
+        holds the GPU (an idle resident worker never yields), so the first
+        enter() is refused; once the load releases the lock, the next
+        enter succeeds. Bounded by deadline and the cancel event."""
         cancel = self._prewarm_cancel
-        try:
-            grant = self.coordinator.speech.enter(cancel)
-        except Exception:
-            grant = None
-        if grant is None:
+        deadline = time.monotonic() + 300.0
+        attempt = 0
+        while time.monotonic() < deadline and not cancel.is_set():
+            attempt += 1
+            try:
+                grant = self.coordinator.speech.enter(cancel)
+            except Exception as exc:
+                print(f"PREWARM enter failed: {exc!r}", flush=True)
+                return
+            if grant is None:
+                time.sleep(PREWARM_RETRY_SECONDS)
+                continue
+            try:
+                ok = self.synthesis.prime(cancel)
+            except Exception as exc:
+                print(f"PREWARM prime raised: {exc!r}", flush=True)
+                ok = False
+            finally:
+                grant.release()
+            print(f"PREWARM_RESULT ok={ok} attempts={attempt}", flush=True)
             return
-        try:
-            ok = self.synthesis.prime(cancel)
-        except Exception:
-            ok = False
-        finally:
-            grant.release()
-        if os.environ.get("MLX_OMARCHY_VOICE_PREWARM", "1") != "0":
-            print(f"PREWARM_RESULT ok={ok}", flush=True)
+        print(f"PREWARM gave up after {attempt} attempts", flush=True)
 
     def setup(self, body):
         if set(body) - {"pair_id", "approve_download", "preference", "context_tokens", "voice"}:

@@ -135,7 +135,7 @@ assistant level above (unshare -n -r speak with the deps installed).
 Pulling mlx-audio + the spacy/G2P chain (~300 MB) into the vendor tar is
 a release-size decision left open, not silently made here.
 
-## TTFA attack addendum (2026-10-02T17:30Z+)
+## TTFA attack addendum (2026-10-02T17:30Z–23:30Z)
 
 Two levers to push /api/speak first audio under the 1.5 s design target:
 
@@ -150,12 +150,60 @@ Two levers to push /api/speak first audio under the 1.5 s design target:
    speaks. Memory residency is identical to the first real speak
    (already in the pairs voice admission estimate for voice-enabled pairs);
    the primer changes timing, not peak.
-2. **First-segment phoneme budget**: `_kokoro_generate` now bounds the
-   first pass to ≤ 28 rough phonemes at a word boundary, prefers a clause
-   cut when it already fits, then continues with the remainder. Short
-   texts (≤ budget) are untouched.
+   **Root cause of the first three failed proofs, found by instrumenting
+   the primer:** right after setup the pair worker start holds the GPU,
+   and an idle resident worker never reaches a yield point, so the first
+   `speech.enter()` is always refused and a one-shot primer died silently.
+   The fix is a bounded retry loop (5 s between attempts, 300 s deadline,
+   cancel-checked); with it the primer lands ~27.5 s after setup
+   (`status.voice.synthesis.primed` flips true; server logs
+   `PREWARM_RESULT ok=True attempts=N`).
+2. **First-segment phoneme budget**: `_kokoro_generate` bounds the first
+   pass at a word boundary (clause boundary preferred when it fits) so
+   the first model pass is short; the remainder streams in order.
 
-The TTFA table (M2, 5 speaks per cell on the gate sentence, GPU
-`gpu-turn -m 24` ticket, PSI cpu avg10 = 0.00 throughout, load recorded
-per run) lives in artifacts/KokoroDefault/run-002/ (ttfa-*/probe.out)
-and is summarized in the doc/serve.md open-items row 3 update.
+### TTFA table (M2, gate sentence, /api/speak first SSE audio byte)
+
+| Cell | Tree | Cold first click | Warm (runs 2–5) | Runs |
+|---|---|---|---|---|
+| A cold/warm BEFORE | origin/main cab9ffe96 (no primer, no bound) | **3.896 s** | **2.505–2.613 s** | 1 cold + 4 warm |
+| B cold/warm AFTER (budget 28) | this branch | 3.536 s (primer dead — silent refusal) | 2.206–2.240 s | 1 + 4 |
+| B′ cold AFTER (primer alive, budget 28) | this branch + retry loop | **2.444 s** (primed at 27.5 s) | — | 1 |
+| D warm AFTER (primer alive) | this branch + retry loop | — | **2.201–2.236 s** | 4 |
+
+All runs 24,000 Hz, RTF 0.70–1.00, PSI cpu avg10 = 0.00 at every timing
+point, load < 0.6, gpu-turn tickets only, boot ids recorded per cell in
+`artifacts/KokoroDefault/run-002/` (private notebook). Reproducibility:
+warm TTFA spread across three boots and five runs is ≤ 40 ms.
+
+### Where the remaining time lives (stage attribution, lever 3)
+
+Instrumented pipeline stages on the M2 (warm, same process):
+`g2p` 3–10 ms, `en_tokenize` ~0, `infer(first, 49 real phonemes)`
+**2.19–2.28 s**, `infer(rest, 8 phonemes)` **1.234 s**. So infer is the
+whole TTFA: **~1.1 s per-call floor + ~24 ms per real phoneme** — not
+proportional to length. The rough phoneme estimate used by the splitter
+underestimates misaki by ~1.9× (est 26 → real 49 on the gate sentence),
+so the shipped budget was recalibrated (28 → 12 est units ≈ 23 real
+phonemes → first infer ≈ 1.65 s predicted).
+
+### Verdict on the 1.5 s design target
+
+**Not met.** Measured best: 2.44 s cold-first-click (primer landed),
+2.20 s warm. The measured infer per-call floor (~1.1 s) plus SSE/IPC
+overhead means the target is unreachable for any prosodically meaningful
+first segment on this pipeline; it needs the floor itself to shrink —
+vocoder output streaming, exactly what docs/serve.md already named — or
+a 2–3 word first segment (est ≤ 8), which trades prosody for latency and
+was not taken without the owner's call.
+
+Cost noted: the two-segment split stretches the gate sentence's total
+audio 3.875 → 4.775 s (+23%; per-segment prosody padding).
+
+### Parked for the next M2 window (w73 owns boot state until 'M2 BACK')
+
+- Warm/cold TTFA at budget 12 (predicted ≈1.75 s warm; one 40 s ticket).
+- The 16-sentence WER pass for the split (macstudio whisper
+  large-v3-turbo; pipeline already validated end-to-end on macstudio —
+  the run-001 wav transcribes in ~3 s and the normalizer maps digits).
+- If WER regresses, the budget value is a one-line revert.

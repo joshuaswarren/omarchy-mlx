@@ -776,10 +776,15 @@ def _kokoro_runtime(assets_dir: str):
     return pipe
 
 
-# Time-to-first-audio budget for the first model pass, in rough phonemes
-# (English averages ~3 per word; per-word estimate is len*0.6 rounded up).
-# The remainder streams in order right behind it.
-_FIRST_SEGMENT_BUDGET = 28
+# Time-to-first-audio budget for the first model pass, in rough phonemes.
+# Calibrated on the M2 (2026-10-02): misaki emits ~1.9 phonemes per unit of
+# len(word)*0.6 (49 real for an est of 26 on the gate sentence), and
+# KokoroPipeline.infer costs ~1.1 s per call + ~24 ms per real phoneme, so
+# est 12 (~23 real phonemes) puts the first infer near ~1.65 s. The floor
+# (~1.1 s per call) means the 1.5 s design target needs either a 2-3 word
+# first segment or the infer floor itself shrinking (vocoder output
+# streaming). The remainder streams in order right behind it.
+_FIRST_SEGMENT_BUDGET = 12
 
 
 def _phoneme_estimate(text: str) -> int:
