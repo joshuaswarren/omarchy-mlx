@@ -29,7 +29,7 @@ llvmpipe) stayed green since the kernels landed on 2026-10-01.
 
 ## Fix
 
-`fb0aac16c` - derive the tile shapes from the score plane's rank:
+`6ebdb4d53` - derive the tile shapes from the score plane's rank:
 
 ```cpp
 Shape tile_shape = S.shape();
@@ -55,7 +55,7 @@ Dev box (llvmpipe, asserts-enabled Debug):
   pre-existing rope deltas (below).
 
 jw16 G13C (M1 Max) hardware, one gpuwin window, asserts-enabled build
-of eaf0fb5a4 + fb0aac16c:
+of eaf0fb5a4 + 6ebdb4d53:
 
 | suite | result |
 |---|---|
@@ -72,7 +72,7 @@ probe_finish=length, active).
 
 ## New coverage and new defects
 
-The fd sweep harness (`tests: fd sweep ...`, 02df7071f) pins dq/dk/dv
+The fd sweep harness (`tests: fd sweep ...`, 495b0323d) pins dq/dk/dv
 against host central differences at rep=1 neighbors: B=1/2, qL=1/2/5,
 kL=1/2/5/7, D=4/8/64, causal and maskless. It surfaced two value
 defects in the fused VJP, now may_fail doctests with signatures
@@ -112,7 +112,7 @@ inside eval_gpu at (1,1,2,4).
   M2): skipped - M2 is booked by w73 and was not available this turn;
   the earlier lane already recorded the Q4-tile LoRA blocker
   separately.
-- jw16 rerun with the final sweep commit (02df7071f): the jw16 battery
-  ran fb0aac16c (the fix); the sweep's strict legs are
+- jw16 rerun with the final sweep commit (495b0323d): the jw16 battery
+  ran 6ebdb4d53 (the fix); the sweep's strict legs are
   dev-box-validated and hardware-consistent; the may_fail legs are
   the documentation.

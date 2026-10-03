@@ -737,7 +737,7 @@ A Supported row must link every applicable record.
   dq/dk/dv finite-difference-proven on M2 G14X real hardware
   (b4152c19; the fd legs in omarchy_fast_ops_tests measure the fused
   path). 2026-10-03: the tile-shape crash at rep=1 (SmallVector
-  'size() > index' in asserts-enabled builds) is fixed (fb0aac16c) and
+  'size() > index' in asserts-enabled builds) is fixed (6ebdb4d53) and
   the rep=1 fd sweep now covers B=1/2, qL=1/2/5, kL=1/2/5/7, D=4/8/64,
   causal and maskless. Two value defects remain open at small shapes
   (qL=1 kL>1 all-zero dk/dv, hardware-confirmed; B=1 kL=5 zero spots,
