@@ -56,12 +56,11 @@ def main() -> int:
     print(f"KOKORO_SMOKE audio_s={seconds:.3f} wall_s={wall:.3f} rtf={rtf:.3f}")
     print(f"LOAD before={before[0]} after={after[0]} "
           f"PSI_CPU_AVG10 before={before[1]} after={after[1]}")
-    # The TTFA first-segment split (88f53f61b) changed the synthesized
-    # duration of this sentence: 4.325 s pre-split (v0.7.17/19) vs ~4.63 s
-    # post-split (segment boundary padding). The smoke's contract is
-    # "full sentence synthesized, no truncation, near-real-time wall" —
-    # not an exact duration pin, so the window tracks the shipped
-    # pipeline.
+    # Streamed decoding cuts a sentence into ~2 s utterances, each with the
+    # model's own boundary padding, so its duration differs from one whole
+    # call (4.325 s on v0.7.17/19). The smoke's contract is "full sentence
+    # synthesized, no truncation, near-real-time wall" — not an exact
+    # duration pin, so the window tracks the shipped pipeline.
     ok = 3.5 < seconds < 5.5 and wall < 5.5
     print("KOKORO_SMOKE", "PASS" if ok else "FAIL")
     return 0 if ok else 1

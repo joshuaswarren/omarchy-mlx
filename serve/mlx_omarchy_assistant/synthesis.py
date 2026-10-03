@@ -436,7 +436,6 @@ def to_wav_bytes(samples, sample_rate: int,
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _URL_PATTERN = re.compile(r"\b(?:https?://|www\.)\S+")
-_CLAUSE_SPLIT = re.compile(r"(?<=[,;:])\s+")
 
 
 def split_sentences(text: str) -> list[str]:
@@ -776,63 +775,16 @@ def _kokoro_runtime(assets_dir: str):
     return pipe
 
 
-# Time-to-first-audio budget for the first model pass, in rough phonemes.
-# Calibrated on the M2 (2026-10-02): misaki emits ~1.9 phonemes per unit of
-# len(word)*0.6 (49 real for an est of 26 on the gate sentence), and
-# KokoroPipeline.infer costs ~1.1 s per call + ~24 ms per real phoneme, so
-# est 12 (~23 real phonemes) puts the first infer near ~1.65 s. The floor
-# (~1.1 s per call) means the 1.5 s design target needs either a 2-3 word
-# first segment or the infer floor itself shrinking (vocoder output
-# streaming). The remainder streams in order right behind it.
-_FIRST_SEGMENT_BUDGET = 12
-
-
-def _phoneme_estimate(text: str) -> int:
-    return sum(max(1, round(len(word) * 0.6)) for word in text.split())
-
-
-def _first_segment(text: str,
-                   budget: int = _FIRST_SEGMENT_BUDGET) -> tuple[str, str]:
-    """Split read-aloud text so the first synthesis pass is short.
-
-    Prefers the first clause boundary when it already fits the budget;
-    otherwise cuts at the word boundary that keeps the estimate under it.
-    Returns (first, rest); rest is empty when no cut is needed.
-    """
-    text = text.strip()
-    if not text:
-        return "", ""
-    if _phoneme_estimate(text) <= budget:
-        return text, ""
-    clause = _CLAUSE_SPLIT.split(text, maxsplit=1)
-    if len(clause) == 2 and clause[0].strip() \
-            and _phoneme_estimate(clause[0]) <= budget:
-        return clause[0].strip(), text[len(clause[0]):].lstrip(" \t,;:")
-    taken: list[str] = []
-    spent = 0
-    for word in text.split():
-        cost = max(1, round(len(word) * 0.6))
-        if taken and spent + cost > budget:
-            break
-        taken.append(word)
-        spent += cost
-    first = " ".join(taken)
-    return first, text[len(first):].lstrip()
-
-
-def _kokoro_generate(pipe, text: str, voice: str) -> Iterator:
-    """Yield float32 numpy chunks, one per phoneme chunk the pipeline makes.
-
-    The first segment is bounded to a small phoneme budget so the first
-    model pass is short (TTFA), then the remainder follows in order.
-    """
-    import numpy as np
-    first, rest = _first_segment(text)
-    for piece in ((first, rest) if rest else (first,)):
-        for result in pipe(piece, voice=voice, speed=1.0):
-            audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
-            if audio.size:
-                yield audio
+def _kokoro_streamer(assets_dir: str):
+    """The Kokoro pipeline wrapped for streamed decoding (kokoro_stream):
+    audio leaves per generator window instead of per whole phoneme chunk.
+    MLX_OMARCHY_KOKORO_STREAM=0 keeps upstream's whole-call decoding."""
+    from .kokoro_stream import STATS_FILE, KokoroStreamer, load_stats
+    pipe = _kokoro_runtime(assets_dir)
+    if os.environ.get("MLX_OMARCHY_KOKORO_STREAM", "1") == "0":
+        return KokoroStreamer(pipe, None)
+    stats = load_stats(STATS_FILE, KOKORO_PACK["voices"], KOKORO_PACK["revision"])
+    return KokoroStreamer(pipe, stats)
 
 
 def _worker_main(conn, assets_dir: str) -> None:
@@ -875,15 +827,14 @@ def _worker_main(conn, assets_dir: str) -> None:
                 _worker_guard(assets_dir, pack)
                 if pack["id"] == KOKORO_PACK["id"]:
                     if kokoro is None:
-                        kokoro = _kokoro_runtime(assets_dir)
-                        rate = int(getattr(kokoro.model, "sample_rate", 24000))
+                        kokoro = _kokoro_streamer(assets_dir)
+                        rate = int(getattr(kokoro.pipe.model, "sample_rate", 24000))
                         conn.send({"type": "loaded", "sample_rate": rate})
                     import numpy as np
                     voice = resolve_voice(msg.get("voice", pack["voice"]))
                     cap = int(rate * MAX_OUTPUT_SECONDS)
                     produced = 0
-                    for chunk in _kokoro_generate(kokoro, msg["text"].strip(),
-                                                  voice):
+                    for chunk in kokoro(msg["text"].strip(), voice):
                         if cancelled:
                             break
                         room = cap - produced

@@ -1396,39 +1396,6 @@ class KokoroEngineTests(unittest.TestCase):
         self.assertIsInstance(other, ValueError)
 
 
-class FirstSegmentTests(unittest.TestCase):
-    """TTFA budget: first pass short, clause boundaries preferred."""
-
-    def test_short_text_is_untouched(self):
-        first, rest = synthesis._first_segment("Ready.")
-        self.assertEqual((first, rest), ("Ready.", ""))
-
-    def test_empty_text(self):
-        self.assertEqual(synthesis._first_segment("   "), ("", ""))
-
-    def test_long_text_cuts_at_word_boundary_under_budget(self):
-        text = ("The meeting starts at nine and the review follows at "
-                "eleven so please bring the draft")
-        first, rest = synthesis._first_segment(text)
-        self.assertTrue(first)
-        self.assertTrue(rest)
-        self.assertLessEqual(synthesis._phoneme_estimate(first),
-                             synthesis._FIRST_SEGMENT_BUDGET)
-        self.assertEqual(f"{first} {rest}".split(), text.split(),
-                         "no word lost or reordered at the cut")
-        self.assertTrue(first[-1].isalnum() or first[-1] in ".,;:!?",
-                        "cut lands on a word boundary")
-
-    def test_clause_boundary_preferred_when_it_fits(self):
-        text = ("Review the draft, then send it. The meeting starts at "
-                "nine and the review follows at eleven.")
-        first, rest = synthesis._first_segment(text)
-        self.assertTrue(first.endswith("draft") or first.endswith(","),
-                        first)
-        self.assertTrue(rest.startswith("then send it"))
-        self.assertEqual(f"{first} {rest}".split(), text.split())
-
-
 class PrimerTests(unittest.TestCase):
     """prime(): best-effort pre-warm that proves a warm worker or refuses."""
 
