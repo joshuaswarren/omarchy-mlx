@@ -51,6 +51,8 @@ class LayaEngine:
         # relabels its reservation "resident" (admission-honest co-serving)
         for w in self.weights.values():
             mx.eval(w)
+        self.rope = laya_model.rope_tables(self.enc_cfg, self.max_len)
+        mx.eval(self.rope)
 
     @property
     def model_id(self) -> str:
@@ -78,6 +80,7 @@ class LayaEngine:
         logits, act = laya_model.forward(
             self.weights,
             self.enc_cfg,
+            self.rope,
             mx.array(b["input_ids"]),
             mx.array(b["attention_mask"]),
             mx.array(b["marker_pos"]),

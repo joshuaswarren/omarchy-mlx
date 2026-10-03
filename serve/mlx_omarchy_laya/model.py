@@ -112,12 +112,23 @@ def _linear(x, w, b=None):
     return x @ w.T + (b if b is not None else 0)
 
 
-def _rope_cos_sin(seq_len: int, head_dim: int, theta: float, dtype):
-    """HF ModernBERT rotary: inv_freq = theta**-(2i/d); emb = [freqs, freqs]."""
-    inv_freq = mx.power(theta, -(mx.arange(0, head_dim, 2, dtype=mx.float32) / head_dim))
-    freqs = mx.outer(mx.arange(seq_len, dtype=mx.float32), inv_freq)
-    emb = mx.concatenate([freqs, freqs], axis=-1)
-    return emb.cos().astype(dtype), emb.sin().astype(dtype)
+def rope_tables(cfg: EncoderConfig, max_len: int) -> dict:
+    """HF ModernBERT rotary tables, float32, positions 0..max_len-1, one
+    (cos, sin) pair per theta: inv_freq = theta**-(2i/d); emb = [freqs, freqs].
+
+    Built once at engine load. Row t depends only on t and theta, so a
+    gathered row is bit-identical to recomputing it for a shorter sequence,
+    and a request never evaluates cos/sin (each evaluation is a trig-argument
+    readback that stalls the GPU).
+    """
+    hd = cfg.head_dim
+    tables = {}
+    for theta in {cfg.local_rope_theta, cfg.global_rope_theta}:
+        inv_freq = mx.power(theta, -(mx.arange(0, hd, 2, dtype=mx.float32) / hd))
+        freqs = mx.outer(mx.arange(max_len, dtype=mx.float32), inv_freq)
+        emb = mx.concatenate([freqs, freqs], axis=-1)
+        tables[theta] = (emb.cos(), emb.sin())
+    return tables
 
 
 def _rotate_half(x):
@@ -140,7 +151,7 @@ def _additive_pad_mask(attention_mask, dtype):
 # --------------------------------------------------------------------------- encoder
 
 
-def _encoder_attention(x, w, prefix, cfg, is_local, positions, pad_bias):
+def _encoder_attention(x, w, prefix, cfg, is_local, positions, pad_bias, rope):
     B, T, D = x.shape
     H, hd = cfg.num_attention_heads, cfg.head_dim
     qkv = _linear(x, w[f"{prefix}.attn.Wqkv.weight"])
@@ -149,9 +160,9 @@ def _encoder_attention(x, w, prefix, cfg, is_local, positions, pad_bias):
     k = qkv[:, :, 1].transpose(0, 2, 1, 3)
     v = qkv[:, :, 2].transpose(0, 2, 1, 3)
     theta = cfg.local_rope_theta if is_local else cfg.global_rope_theta
-    cos, sin = _rope_cos_sin(T, hd, theta, x.dtype)
-    cos = cos[positions]
-    sin = sin[positions]
+    cos, sin = rope[theta]
+    cos = cos[positions].astype(x.dtype)
+    sin = sin[positions].astype(x.dtype)
     q, k = _apply_rope(q, k, cos, sin)
     scores = (q @ k.transpose(0, 1, 3, 2)) * (hd ** -0.5)
     if is_local:
@@ -181,8 +192,9 @@ def _gelu(x):
     return 0.5 * x * (1.0 + mx.erf(x / mx.sqrt(2.0)))
 
 
-def encoder_forward(w, cfg, input_ids, attention_mask):
-    """ModernBERT body. input_ids [B, T] int32, attention_mask [B, T] 0/1.
+def encoder_forward(w, cfg, input_ids, attention_mask, rope):
+    """ModernBERT body. input_ids [B, T] int32, attention_mask [B, T] 0/1,
+    rope from rope_tables() covering at least T positions.
 
     Returns last_hidden_state [B, T, D] after final_norm.
     """
@@ -197,7 +209,7 @@ def encoder_forward(w, cfg, input_ids, attention_mask):
             h = x
         else:
             h = _layer_norm(x, w[f"{p}.attn_norm.weight"], None, cfg.norm_eps)
-        x = x + _encoder_attention(h, w, p, cfg, is_local[i], positions, pad_bias)
+        x = x + _encoder_attention(h, w, p, cfg, is_local[i], positions, pad_bias, rope)
         x = x + _encoder_mlp(_layer_norm(x, w[f"{p}.mlp_norm.weight"], None, cfg.norm_eps), w, p)
     return _layer_norm(x, w["encoder.final_norm.weight"], None, cfg.norm_eps)
 
@@ -259,6 +271,7 @@ def decision_head(w, hidden, attention_mask, marker_pos, marker_mask, qtype, hea
     return logits, act_logits
 
 
-def forward(w, cfg, input_ids, attention_mask, marker_pos, marker_mask, qtype, head_layers: int):
-    hidden = encoder_forward(w, cfg, input_ids, attention_mask)
+def forward(w, cfg, rope, input_ids, attention_mask, marker_pos, marker_mask, qtype,
+            head_layers: int):
+    hidden = encoder_forward(w, cfg, input_ids, attention_mask, rope)
     return decision_head(w, hidden, attention_mask, marker_pos, marker_mask, qtype, head_layers)

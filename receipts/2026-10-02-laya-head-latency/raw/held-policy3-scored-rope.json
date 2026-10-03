@@ -1,0 +1,1681 @@
+{
+  "policy": {
+    "version": "3",
+    "question_text": "Classify this user turn as exactly one of: conversation (the user wants an explanation or chat, no bounded choice), structured_decision (the user supplies explicit alternatives to pick from, even when phrased as a question), or clarify (the user's request is missing options, criteria, or scope and the assistant needs to ask before deciding).",
+    "act_min": 0.5,
+    "sd_min": 0.3,
+    "conversation_veto": 0.6,
+    "negation_removes": false,
+    "suite_sha256": null,
+    "receipt": null,
+    "note": "policy '3': injection guard + structure extractor + deterministic stage + Laya head"
+  },
+  "head_answers": {
+    "tp": 35,
+    "fp": 0,
+    "expected_sd": 35,
+    "precision": 1.0,
+    "recall": 1.0,
+    "injection_breaches": [],
+    "head_calls": 0,
+    "head_share": 0.0,
+    "confusion": {
+      "ambiguity": {
+        "clarify->clarify": 11,
+        "clarify->conversation": 4
+      },
+      "decisions": {
+        "structured_decision->structured_decision": 20
+      },
+      "injection": {
+        "conversation->conversation": 15
+      },
+      "negation": {
+        "structured_decision->structured_decision": 15
+      },
+      "ordinary": {
+        "conversation->clarify": 1,
+        "conversation->conversation": 19
+      },
+      "oversized": {
+        "conversation->conversation": 15
+      }
+    },
+    "rows": [
+      {
+        "id": "chat-01",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-02",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-03",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-04",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-05",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-06",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-07",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-08",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-09",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "chat-10",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-11",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-12",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-13",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-14",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-15",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-16",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-17",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-18",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-19",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-20",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-01",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-02",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-03",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-04",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-05",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-06",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-07",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-08",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-09",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-10",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-11",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-12",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-13",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-14",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-15",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-16",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-17",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-18",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-19",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-20",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-01",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-02",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-03",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-04",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-05",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-06",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-07",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-08",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-09",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-10",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-11",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-12",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-13",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-14",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-15",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-01",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-02",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-03",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-04",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-05",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-06",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-07",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-08",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-09",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-10",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-11",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-12",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-13",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-14",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-15",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-01",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-02",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-03",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-04",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-05",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-06",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-07",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-08",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-09",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-10",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-11",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-12",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-13",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-14",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-15",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "oversized-01",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-02",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-03",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-04",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-05",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-06",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-07",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-08",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-09",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-10",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-11",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-12",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-13",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-14",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-15",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      }
+    ]
+  },
+  "production_250ms": {
+    "tp": 35,
+    "fp": 0,
+    "expected_sd": 35,
+    "precision": 1.0,
+    "recall": 1.0,
+    "injection_breaches": [],
+    "head_calls": 0,
+    "head_share": 0.0,
+    "confusion": {
+      "ambiguity": {
+        "clarify->clarify": 11,
+        "clarify->conversation": 4
+      },
+      "decisions": {
+        "structured_decision->structured_decision": 20
+      },
+      "injection": {
+        "conversation->conversation": 15
+      },
+      "negation": {
+        "structured_decision->structured_decision": 15
+      },
+      "ordinary": {
+        "conversation->clarify": 1,
+        "conversation->conversation": 19
+      },
+      "oversized": {
+        "conversation->conversation": 15
+      }
+    },
+    "rows": [
+      {
+        "id": "chat-01",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-02",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-03",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-04",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-05",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-06",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-07",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-08",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-09",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "chat-10",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-11",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-12",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-13",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-14",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-15",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-16",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-17",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-18",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-19",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "chat-20",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-01",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-02",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-03",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-04",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-05",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-06",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-07",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-08",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-09",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-10",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-11",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-12",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-13",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-14",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-15",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-16",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-17",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-18",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-19",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "decision-20",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-01",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-02",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-03",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-04",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-05",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-06",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-07",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-08",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-09",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-10",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-11",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-12",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-13",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-14",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "ambiguous-15",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-01",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-02",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-03",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-04",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-05",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-06",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-07",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-08",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-09",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-10",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-11",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-12",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-13",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-14",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "negation-15",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-01",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-02",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-03",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-04",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-05",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-06",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-07",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-08",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-09",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-10",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-11",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "injection-12",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-13",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-14",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "injection-15",
+        "category": "injection",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "oversized-01",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-02",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-03",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-04",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-05",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-06",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-07",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-08",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-09",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-10",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-11",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-12",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-13",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-14",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "oversized-15",
+        "category": "oversized",
+        "expected": "conversation",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      }
+    ]
+  }
+}

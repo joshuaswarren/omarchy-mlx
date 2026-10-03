@@ -46,7 +46,7 @@ def host_state(server_pid=None):
     others = 0
     for line in out.splitlines()[1:]:
         parts = line.split(None, 1)
-        if parts[0] not in me or len(parts) < 2:
+        if len(parts) < 2 or parts[0] in me:
             continue
         exe = Path(parts[1].split()[0]).name  # executable, not full cmdline
         if exe.startswith("python") or exe.startswith("mlx"):
@@ -103,7 +103,7 @@ def run_phases(args, hs):
     engine = LayaEngine(args.model, dtype=mx.float16)
 
     def fwd(ids, att, mp_, mm, qt):
-        return laya_model.forward(engine.weights, engine.enc_cfg,
+        return laya_model.forward(engine.weights, engine.enc_cfg, engine.rope,
                                   ids, att, mp_, mm, qt, engine.head_layers)
 
     if args.compile:

@@ -38,7 +38,7 @@ Export-plan failures leave the inspection control available for retry.
 Installation validates the archive and stages a venv without network access before replacing the active files.
 Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. On-hardware pacing qualification is still pending.
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
-Automatic decision routing stays off; [gate status](#per-pair-gate-status-2026-10-01) has the measured reason. The held-out suite is now spent. Explicit **Compare options** is unaffected.
+Automatic decision routing is off by default. Its gate now passes on the measured head call ([gate status](#per-pair-gate-status-2026-10-01)); turning it on is the owner's decision. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
 The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
 
@@ -148,25 +148,25 @@ decode about 5.4 tok/s (about 4× the superseded shared-GPU estimate of
 2.6–14.4 s. A shared-GPU run 1 (73–81 tok/s prefill, ~1.4 tok/s decode) is
 kept in the receipt for comparison and is superseded.
 
-**Routing — the held-out suite passed on precision; routing stays off.** Frozen
-policy 3 (commit `50ca49fae`) scored precision 1.000 (35/35, 0 false
-positives), recall 1.000, and 0 of 15 injection cases routed to a decision; the
-head was called on 0 of 100 held-out turns. The shipped head-free decision path
-runs at p95 43 ms on the M2 CPU. The Laya head call itself took p95 347 ms
-(p50 309 ms, 100 warm calls) against the 250 ms warm deadline. The owner
-decided the gate measures the head call, so the latency criterion fails:
-decomposition shows the call is GPU-execution-dominated (mx.eval p50 278 ms
-of a 296 ms wall; host prep and HTTP together under 6 ms), and the cost is a
-fixed floor — flat over sequence length (91-163 tokens) and unreduced by
-`mx.compile`. The submission-cap lever (`MLX_OMARCHY_BATCH_WORK`, decisions
-bit-identical on all 154 dev cases) reliably saves ~15-25 ms and brings warm
-p95 to ~270-273 ms, with splitting below ~10k work-groups costing ~50 ms; no
-configuration reached 250 ms. Routing stays off until a backend-level change
-closes the remaining ~20 ms ([routing
-receipt](../receipts/2026-09-30-routing-gate/README.md), [head-latency
-receipt](../receipts/2026-10-02-laya-head-latency/README.md)). The held-out
-suite is spent and its single remaining use is reserved for a candidate that
-passes the dev measurement; none exists yet.
+**Routing — the gate passes; routing stays off by default.** Frozen policy 3
+(commit `50ca49fae`) scored precision 1.000 (35/35, 0 false positives) and
+0 of 15 injection cases routed to a decision on the held-out suite. The
+owner decided the 250 ms gate measures the Laya head call. That call took
+p95 347 ms on 2026-09-30. A GPU profile showed why: the encoder rebuilt its
+rotary cos/sin table on all 28 layers, and each `cos`/`sin` passes a
+trig-argument gate that stalls the GPU for a host readback (784 such joins
+in 14 calls). The tables are now built once at engine load, with
+bit-identical values. With the submission cap at its shipping default
+(`MLX_OMARCHY_BATCH_WORK=40000`), the warm head call takes **p95 196.8 ms**
+(p50 186.9 ms, 100 warm calls on dev turns, same harness as the gate). The
+held-out suite's one remaining use ran with that configuration: precision
+35/35, 0/15 injections, head answers bit-identical to the 2026-09-30 run on
+all 100 cases, and p95 195.4 ms on the 85 turns the fit check sends to the
+head. Compilation, worker dtype, and the cap alone did not reach 250 ms
+([routing receipt](../receipts/2026-09-30-routing-gate/README.md),
+[head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)).
+The measured run used the cap wheel; the rope change on the installed
+release wheel without the cap has not been measured.
 
 **Voice input — every frozen threshold passed; not qualified as a pair gate.**
 On the 192-clip corpus with the pinned `parakeet-tdt-0.6b-v3` (`ed2b7e8c…`):
@@ -307,7 +307,7 @@ explicit-CPU-stream finding above.
 
 | # | Item | Why it blocks |
 |---|---|---|
-| 1 | Routing latency decision (owner, 2026-10-02): the 250 ms gate measures the Laya head call. Measured floor: the call is GPU-execution-dominated with a fixed ~250-270 ms execute+sync cost (T-flat, `mx.compile`-flat); the submission cap saves ~15-25 ms (p95 ~270-273, decisions bit-identical on the 154-case dev set), nothing reaches 250 ms. | Automatic routing stays off until a backend-level change closes the ~20 ms ([head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)); the held-out suite's one remaining use stays reserved for a dev-passing candidate. |
+| 1 | Routing enablement (owner): the 250 ms gate measures the Laya head call, and it passes, p95 196.8 ms on dev turns with the held-out gate re-passed (35/35, 0/15) and answers bit-identical. Measured with the cap wheel at its shipping default; the next release wheel carries both changes. | Automatic routing stays off by default until the owner turns it on ([head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)). |
 | 2 | Quality tier budget (owner decision 2026-10-02): the tier budget is now the measured figure, 6.5 s for a 300-token prompt (catalog `first_text_budget_ms`; the original design target was 2.0 s), and the UI labels Quality as slower. The lever to tighten it is engine-side prefill and first-decode-step work; stable-prefix cache reuse is a memory-admission gate decision. The budget tightens again as that work lands. | Quality stays unqualified pending the full gate set (row 4); the relaxed budget is the tier's honest bound, not a pass. |
 | 3 | Voice output first audio: design target 1.5 s. Owner decision 2026-10-02: Kokoro-82M default engine, af_heart default voice, no listening step; Qwen3-TTS stays as the selectable second engine. Measured 2026-10-02 ([TTFA addendum](../receipts/2026-10-02-kokoro-default/README.md)): pre-warm (lands ~27 s after setup via a bounded grant-retry loop) + first-segment budget (12 est units, calibrated to the M2 infer floor) cut /api/speak cold first click 3.90 → 1.29 s, warm 2.51 → 1.29–1.33 s — the 1.5 s target is MET. Stage attribution: `KokoroPipeline.infer` costs ~1.1 s per call + ~24 ms per real phoneme; the per-call floor is the next lever (vocoder output streaming). | Voice output stays unqualified: the RTF corpus gate is unmeasured for the default path, the per-call infer floor is still the floor of the TTFA budget, and a `record_qualification` receipt for the default engine is still open. |
 | 4 | Pair-level qualification: no pair has passed the full gate set. Card latency (held-out v4, [card latency receipt](../receipts/2026-10-02-card-latency/README.md)): SHIPPED and CONFIRMED on held-out v4: markdown cards promote mid-stream and bare-component fences are wrapped — component median 7.3 s (4B, was 32.5 s) and 12.8 s (9B, was 37.1 s), p95 15.4/24.4 s, validity IDENTICAL to base (18/18 and 16/18, same rows, 0 spurious), first-text p95 not worse. A card-first prompt variant reached medians 8.2/11.9 s but is NOT shipped (4B first-text p95 2.20 s vs the 2.0 s budget). The 4B fence now validates via the wrap. 27B not re-measured (53.8 s chart on the 2026-09-30 boot). | Nothing is qualified; `recommended` stays false everywhere. |

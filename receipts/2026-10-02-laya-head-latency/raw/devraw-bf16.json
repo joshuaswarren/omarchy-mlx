@@ -1,0 +1,2480 @@
+{
+  "meta": {
+    "suite_version": "2026-09-29.1",
+    "suite_status": "dev-only",
+    "question_text": "Classify this user turn as exactly one of: conversation (the user wants an explanation or chat, no bounded choice), structured_decision (the user supplies explicit alternatives to pick from, even when phrased as a question), or clarify (the user's request is missing options, criteria, or scope and the assistant needs to ask before deciding).",
+    "question_version": "2",
+    "deadline_seconds": 2.0,
+    "total": 154,
+    "started_at": "2026-10-03T07:05:59Z",
+    "updated_at": "2026-10-03T07:06:47Z",
+    "done": 154,
+    "skipped": {}
+  },
+  "records": [
+    {
+      "id": "d-conv-01",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 289.1444039998987,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4111,
+        "structured_decision": 0.1838,
+        "clarify": 0.4051
+      },
+      "p_selected": 0.4111,
+      "margin": 0.006000000000000005,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-02",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 267.66687200006345,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.6295,
+        "structured_decision": 0.1184,
+        "clarify": 0.2521
+      },
+      "p_selected": 0.6295,
+      "margin": 0.37739999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-03",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 249.874206999948,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.8884,
+        "structured_decision": 0.0671,
+        "clarify": 0.0444
+      },
+      "p_selected": 0.8884,
+      "margin": 0.8212999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-04",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 254.77665299990804,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4757,
+        "structured_decision": 0.2752,
+        "clarify": 0.2491
+      },
+      "p_selected": 0.4757,
+      "margin": 0.2005,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-05",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 253.1564900000376,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.3255,
+        "structured_decision": 0.2388,
+        "clarify": 0.4356
+      },
+      "p_selected": 0.4356,
+      "margin": 0.11009999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-06",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 275.68989700012025,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5517,
+        "structured_decision": 0.2195,
+        "clarify": 0.2288
+      },
+      "p_selected": 0.5517,
+      "margin": 0.32289999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-07",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 278.99980699999105,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.1647,
+        "structured_decision": 0.063,
+        "clarify": 0.7723
+      },
+      "p_selected": 0.7723,
+      "margin": 0.6075999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-08",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 276.15123099985794,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3528,
+        "structured_decision": 0.4437,
+        "clarify": 0.2035
+      },
+      "p_selected": 0.4437,
+      "margin": 0.09089999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-09",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 274.7390669999277,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.7146,
+        "structured_decision": 0.1612,
+        "clarify": 0.1242
+      },
+      "p_selected": 0.7146,
+      "margin": 0.5534,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-10",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 273.91711299992494,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.586,
+        "structured_decision": 0.1374,
+        "clarify": 0.2766
+      },
+      "p_selected": 0.586,
+      "margin": 0.30939999999999995,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-11",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 248.87425500014615,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5067,
+        "structured_decision": 0.1341,
+        "clarify": 0.3592
+      },
+      "p_selected": 0.5067,
+      "margin": 0.14750000000000002,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-12",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 272.79682499988667,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5166,
+        "structured_decision": 0.1073,
+        "clarify": 0.3762
+      },
+      "p_selected": 0.5166,
+      "margin": 0.14039999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-13",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 256.9327780001913,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4648,
+        "structured_decision": 0.1751,
+        "clarify": 0.36
+      },
+      "p_selected": 0.4648,
+      "margin": 0.1048,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-14",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 254.92561800001567,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5003,
+        "structured_decision": 0.2292,
+        "clarify": 0.2705
+      },
+      "p_selected": 0.5003,
+      "margin": 0.22979999999999995,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-15",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 247.8978010001356,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4864,
+        "structured_decision": 0.1282,
+        "clarify": 0.3853
+      },
+      "p_selected": 0.4864,
+      "margin": 0.10110000000000002,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-16",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 248.8294660001884,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5797,
+        "structured_decision": 0.1405,
+        "clarify": 0.2798
+      },
+      "p_selected": 0.5797,
+      "margin": 0.2999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-17",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 254.96036799995636,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5193,
+        "structured_decision": 0.2752,
+        "clarify": 0.2055
+      },
+      "p_selected": 0.5193,
+      "margin": 0.24409999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-18",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 253.68558100012706,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.306,
+        "structured_decision": 0.3284,
+        "clarify": 0.3655
+      },
+      "p_selected": 0.3655,
+      "margin": 0.037099999999999966,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-19",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 249.9765899999602,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.707,
+        "structured_decision": 0.1763,
+        "clarify": 0.1166
+      },
+      "p_selected": 0.707,
+      "margin": 0.5307,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-20",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 248.6817589999646,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.3538,
+        "structured_decision": 0.1055,
+        "clarify": 0.5407
+      },
+      "p_selected": 0.5407,
+      "margin": 0.18689999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-21",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 257.11019899995335,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3776,
+        "structured_decision": 0.385,
+        "clarify": 0.2374
+      },
+      "p_selected": 0.385,
+      "margin": 0.007400000000000018,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-22",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 257.1801169999617,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.3764,
+        "structured_decision": 0.1855,
+        "clarify": 0.4381
+      },
+      "p_selected": 0.4381,
+      "margin": 0.06169999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-23",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 250.70500600008927,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.7405,
+        "structured_decision": 0.1407,
+        "clarify": 0.1188
+      },
+      "p_selected": 0.7405,
+      "margin": 0.5998000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-24",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 251.63296300002003,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.6232,
+        "structured_decision": 0.1159,
+        "clarify": 0.2609
+      },
+      "p_selected": 0.6232,
+      "margin": 0.36229999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-25",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 253.65025099995364,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3772,
+        "structured_decision": 0.3821,
+        "clarify": 0.2407
+      },
+      "p_selected": 0.3821,
+      "margin": 0.0049000000000000155,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-26",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 257.45841000002656,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2281,
+        "structured_decision": 0.5922,
+        "clarify": 0.1797
+      },
+      "p_selected": 0.5922,
+      "margin": 0.3641,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-27",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 259.41153000007944,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.7105,
+        "structured_decision": 0.074,
+        "clarify": 0.2155
+      },
+      "p_selected": 0.7105,
+      "margin": 0.495,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-28",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 279.0707359999942,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.8836,
+        "structured_decision": 0.0589,
+        "clarify": 0.0575
+      },
+      "p_selected": 0.8836,
+      "margin": 0.8247000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-29",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 256.9155800001681,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4049,
+        "structured_decision": 0.3272,
+        "clarify": 0.2679
+      },
+      "p_selected": 0.4049,
+      "margin": 0.07769999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-30",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 253.0545060001259,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.7041,
+        "structured_decision": 0.1214,
+        "clarify": 0.1745
+      },
+      "p_selected": 0.7041,
+      "margin": 0.5296,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-31",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 258.05874399998174,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5219,
+        "structured_decision": 0.2779,
+        "clarify": 0.2002
+      },
+      "p_selected": 0.5219,
+      "margin": 0.24400000000000005,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-32",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 279.59319499996127,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4408,
+        "structured_decision": 0.15,
+        "clarify": 0.4092
+      },
+      "p_selected": 0.4408,
+      "margin": 0.03160000000000002,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-33",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 251.97138499993343,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2037,
+        "structured_decision": 0.5891,
+        "clarify": 0.2072
+      },
+      "p_selected": 0.5891,
+      "margin": 0.38189999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-34",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 251.1992199999895,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.7076,
+        "structured_decision": 0.119,
+        "clarify": 0.1734
+      },
+      "p_selected": 0.7076,
+      "margin": 0.5342,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-conv-35",
+      "category": "ordinary",
+      "expected": "conversation",
+      "latency_ms": 271.1555910000243,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.5605,
+        "structured_decision": 0.0777,
+        "clarify": 0.3617
+      },
+      "p_selected": 0.5605,
+      "margin": 0.19879999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-26",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 255.0830870000027,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1534,
+        "structured_decision": 0.7286,
+        "clarify": 0.118
+      },
+      "p_selected": 0.7286,
+      "margin": 0.5752,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-27",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 265.5071899998802,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0981,
+        "structured_decision": 0.7833,
+        "clarify": 0.1186
+      },
+      "p_selected": 0.7833,
+      "margin": 0.6647,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-28",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 257.70891599995593,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2536,
+        "structured_decision": 0.5065,
+        "clarify": 0.2399
+      },
+      "p_selected": 0.5065,
+      "margin": 0.25289999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-29",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 284.05556500001694,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1289,
+        "structured_decision": 0.6533,
+        "clarify": 0.2178
+      },
+      "p_selected": 0.6533,
+      "margin": 0.4355,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-30",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 260.2669939999487,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0974,
+        "structured_decision": 0.79,
+        "clarify": 0.1126
+      },
+      "p_selected": 0.79,
+      "margin": 0.6774,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-31",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 259.9851209999997,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.097,
+        "structured_decision": 0.6966,
+        "clarify": 0.2064
+      },
+      "p_selected": 0.6966,
+      "margin": 0.49019999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-32",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 288.3409329999722,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1728,
+        "structured_decision": 0.5913,
+        "clarify": 0.2359
+      },
+      "p_selected": 0.5913,
+      "margin": 0.35540000000000005,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-33",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 261.5324089999831,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.257,
+        "structured_decision": 0.5435,
+        "clarify": 0.1994
+      },
+      "p_selected": 0.5435,
+      "margin": 0.2865,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-34",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 286.23443899982703,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0987,
+        "structured_decision": 0.8084,
+        "clarify": 0.0929
+      },
+      "p_selected": 0.8084,
+      "margin": 0.7097,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-35",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 263.07078399986494,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0911,
+        "structured_decision": 0.7711,
+        "clarify": 0.1378
+      },
+      "p_selected": 0.7711,
+      "margin": 0.6333,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-01",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 252.65922399989904,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2377,
+        "structured_decision": 0.5572,
+        "clarify": 0.2052
+      },
+      "p_selected": 0.5572,
+      "margin": 0.3195,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-03",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 283.56573800010665,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0989,
+        "structured_decision": 0.7777,
+        "clarify": 0.1233
+      },
+      "p_selected": 0.7777,
+      "margin": 0.6544,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-04",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 280.91899500009276,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3415,
+        "structured_decision": 0.4725,
+        "clarify": 0.1861
+      },
+      "p_selected": 0.4725,
+      "margin": 0.13099999999999995,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-05",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 269.06693799992354,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0793,
+        "structured_decision": 0.8323,
+        "clarify": 0.0884
+      },
+      "p_selected": 0.8323,
+      "margin": 0.7439,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-06",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 287.26831400013,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0836,
+        "structured_decision": 0.8367,
+        "clarify": 0.0797
+      },
+      "p_selected": 0.8367,
+      "margin": 0.7531,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-07",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 252.90776800011372,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2083,
+        "structured_decision": 0.4858,
+        "clarify": 0.3059
+      },
+      "p_selected": 0.4858,
+      "margin": 0.1799,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-08",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 286.6851100000076,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1252,
+        "structured_decision": 0.515,
+        "clarify": 0.3598
+      },
+      "p_selected": 0.515,
+      "margin": 0.1552,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-09",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 262.31824799992864,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2068,
+        "structured_decision": 0.6564,
+        "clarify": 0.1368
+      },
+      "p_selected": 0.6564,
+      "margin": 0.4496,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-10",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 264.47849199985285,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2785,
+        "structured_decision": 0.4828,
+        "clarify": 0.2387
+      },
+      "p_selected": 0.4828,
+      "margin": 0.20429999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-11",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 265.1562430000922,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.093,
+        "structured_decision": 0.8127,
+        "clarify": 0.0944
+      },
+      "p_selected": 0.8127,
+      "margin": 0.7182999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-12",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 284.9640740000723,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.139,
+        "structured_decision": 0.4997,
+        "clarify": 0.3613
+      },
+      "p_selected": 0.4997,
+      "margin": 0.13839999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-13",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 258.2457999999406,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1766,
+        "structured_decision": 0.6905,
+        "clarify": 0.1328
+      },
+      "p_selected": 0.6905,
+      "margin": 0.5139,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-14",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 266.83103200002734,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1548,
+        "structured_decision": 0.7118,
+        "clarify": 0.1334
+      },
+      "p_selected": 0.7118,
+      "margin": 0.5569999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-15",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 299.8378350000621,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1768,
+        "structured_decision": 0.6369,
+        "clarify": 0.1863
+      },
+      "p_selected": 0.6369,
+      "margin": 0.4506,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-16",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 267.5329480000528,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1382,
+        "structured_decision": 0.7402,
+        "clarify": 0.1216
+      },
+      "p_selected": 0.7402,
+      "margin": 0.602,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-17",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 293.19968400000107,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0789,
+        "structured_decision": 0.8502,
+        "clarify": 0.0708
+      },
+      "p_selected": 0.8502,
+      "margin": 0.7713,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-18",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 272.30252300000757,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0856,
+        "structured_decision": 0.7892,
+        "clarify": 0.1252
+      },
+      "p_selected": 0.7892,
+      "margin": 0.664,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-19",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 287.4467819999609,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2436,
+        "structured_decision": 0.4886,
+        "clarify": 0.2678
+      },
+      "p_selected": 0.4886,
+      "margin": 0.2208,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-20",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 259.0795109999817,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1709,
+        "structured_decision": 0.6355,
+        "clarify": 0.1936
+      },
+      "p_selected": 0.6355,
+      "margin": 0.44189999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-21",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 292.56739600009496,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1166,
+        "structured_decision": 0.7169,
+        "clarify": 0.1665
+      },
+      "p_selected": 0.7169,
+      "margin": 0.5504,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-22",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 283.80395799990765,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0954,
+        "structured_decision": 0.7797,
+        "clarify": 0.1249
+      },
+      "p_selected": 0.7797,
+      "margin": 0.6547999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-23",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 259.0297219999229,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0896,
+        "structured_decision": 0.8003,
+        "clarify": 0.1102
+      },
+      "p_selected": 0.8003,
+      "margin": 0.6901,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-24",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 298.6784679999346,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2356,
+        "structured_decision": 0.6537,
+        "clarify": 0.1107
+      },
+      "p_selected": 0.6537,
+      "margin": 0.4180999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-dec-25",
+      "category": "decisions",
+      "expected": "structured_decision",
+      "latency_ms": 261.8472169999677,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2282,
+        "structured_decision": 0.532,
+        "clarify": 0.2397
+      },
+      "p_selected": 0.532,
+      "margin": 0.2923,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-01",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 250.36024199994245,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.276,
+        "structured_decision": 0.5076,
+        "clarify": 0.2164
+      },
+      "p_selected": 0.5076,
+      "margin": 0.23160000000000003,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-02",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 271.35748799992143,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3561,
+        "structured_decision": 0.4519,
+        "clarify": 0.1919
+      },
+      "p_selected": 0.4519,
+      "margin": 0.0958,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-03",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 280.0281360000554,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.3386,
+        "structured_decision": 0.2353,
+        "clarify": 0.4261
+      },
+      "p_selected": 0.4261,
+      "margin": 0.08749999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-04",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 282.0102999999108,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4488,
+        "structured_decision": 0.3929,
+        "clarify": 0.1584
+      },
+      "p_selected": 0.4488,
+      "margin": 0.05589999999999995,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-05",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 257.4112289998993,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2351,
+        "structured_decision": 0.6209,
+        "clarify": 0.144
+      },
+      "p_selected": 0.6209,
+      "margin": 0.38580000000000003,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-06",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 275.6122729999788,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.2876,
+        "structured_decision": 0.3308,
+        "clarify": 0.3816
+      },
+      "p_selected": 0.3816,
+      "margin": 0.05080000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-07",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 255.8837329997914,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1164,
+        "structured_decision": 0.6375,
+        "clarify": 0.2462
+      },
+      "p_selected": 0.6375,
+      "margin": 0.3913,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-08",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 251.52228499996454,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2081,
+        "structured_decision": 0.631,
+        "clarify": 0.161
+      },
+      "p_selected": 0.631,
+      "margin": 0.4229,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-09",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 248.80887499989512,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.3494,
+        "structured_decision": 0.3027,
+        "clarify": 0.3479
+      },
+      "p_selected": 0.3494,
+      "margin": 0.0015000000000000013,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-10",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 251.38974499986944,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1239,
+        "structured_decision": 0.8148,
+        "clarify": 0.0613
+      },
+      "p_selected": 0.8148,
+      "margin": 0.6909,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-11",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 254.79394700005287,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.0913,
+        "structured_decision": 0.1461,
+        "clarify": 0.7626
+      },
+      "p_selected": 0.7626,
+      "margin": 0.6164999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-12",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 286.5308369998729,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2086,
+        "structured_decision": 0.6547,
+        "clarify": 0.1367
+      },
+      "p_selected": 0.6547,
+      "margin": 0.44609999999999994,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-13",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 290.9772850000536,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4048,
+        "structured_decision": 0.3167,
+        "clarify": 0.2784
+      },
+      "p_selected": 0.4048,
+      "margin": 0.08810000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-14",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 257.64219100005903,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1611,
+        "structured_decision": 0.7434,
+        "clarify": 0.0956
+      },
+      "p_selected": 0.7434,
+      "margin": 0.5822999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-15",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 250.89070800004265,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.2886,
+        "structured_decision": 0.2336,
+        "clarify": 0.4778
+      },
+      "p_selected": 0.4778,
+      "margin": 0.18919999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-16",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 250.2990839998347,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.3871,
+        "structured_decision": 0.3753,
+        "clarify": 0.2376
+      },
+      "p_selected": 0.3871,
+      "margin": 0.011799999999999977,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-17",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 250.42887599988717,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.32,
+        "structured_decision": 0.4231,
+        "clarify": 0.257
+      },
+      "p_selected": 0.4231,
+      "margin": 0.10309999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-18",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 251.39408200016078,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.4054,
+        "structured_decision": 0.4199,
+        "clarify": 0.1746
+      },
+      "p_selected": 0.4199,
+      "margin": 0.014500000000000013,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-19",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 281.95680999988326,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2887,
+        "structured_decision": 0.6003,
+        "clarify": 0.111
+      },
+      "p_selected": 0.6003,
+      "margin": 0.31159999999999993,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-amb-20",
+      "category": "ambiguity",
+      "expected": "clarify",
+      "latency_ms": 269.34058699998786,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1995,
+        "structured_decision": 0.6664,
+        "clarify": 0.1341
+      },
+      "p_selected": 0.6664,
+      "margin": 0.4669,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-01",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 259.1130670000439,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1427,
+        "structured_decision": 0.7183,
+        "clarify": 0.139
+      },
+      "p_selected": 0.7183,
+      "margin": 0.5756000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-02",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 254.56474399993567,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1433,
+        "structured_decision": 0.6598,
+        "clarify": 0.197
+      },
+      "p_selected": 0.6598,
+      "margin": 0.46280000000000004,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-03",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 278.1983620000119,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.142,
+        "structured_decision": 0.6932,
+        "clarify": 0.1648
+      },
+      "p_selected": 0.6932,
+      "margin": 0.5284,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-04",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 259.4257349999225,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2308,
+        "structured_decision": 0.5656,
+        "clarify": 0.2036
+      },
+      "p_selected": 0.5656,
+      "margin": 0.3348,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-05",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 255.8541169998989,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1839,
+        "structured_decision": 0.6424,
+        "clarify": 0.1737
+      },
+      "p_selected": 0.6424,
+      "margin": 0.45849999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-06",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 263.2880199998908,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1474,
+        "structured_decision": 0.7295,
+        "clarify": 0.1231
+      },
+      "p_selected": 0.7295,
+      "margin": 0.5821000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-07",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 283.0939360001139,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0755,
+        "structured_decision": 0.814,
+        "clarify": 0.1105
+      },
+      "p_selected": 0.814,
+      "margin": 0.7034999999999999,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-08",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 255.65266099988548,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1127,
+        "structured_decision": 0.8046,
+        "clarify": 0.0828
+      },
+      "p_selected": 0.8046,
+      "margin": 0.6919,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-09",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 286.50005500003317,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1614,
+        "structured_decision": 0.7106,
+        "clarify": 0.128
+      },
+      "p_selected": 0.7106,
+      "margin": 0.5492,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-10",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 255.38478999988,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1262,
+        "structured_decision": 0.7073,
+        "clarify": 0.1665
+      },
+      "p_selected": 0.7073,
+      "margin": 0.5408000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-11",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 296.0738270001002,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1748,
+        "structured_decision": 0.5311,
+        "clarify": 0.2941
+      },
+      "p_selected": 0.5311,
+      "margin": 0.23700000000000004,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-12",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 286.3797229999818,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1342,
+        "structured_decision": 0.6307,
+        "clarify": 0.2351
+      },
+      "p_selected": 0.6307,
+      "margin": 0.39560000000000006,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-13",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 261.13931999998385,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1431,
+        "structured_decision": 0.7205,
+        "clarify": 0.1364
+      },
+      "p_selected": 0.7205,
+      "margin": 0.5774,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-14",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 285.2216030000818,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2611,
+        "structured_decision": 0.4761,
+        "clarify": 0.2628
+      },
+      "p_selected": 0.4761,
+      "margin": 0.21330000000000005,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-15",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 256.8188299999292,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2526,
+        "structured_decision": 0.4178,
+        "clarify": 0.3296
+      },
+      "p_selected": 0.4178,
+      "margin": 0.0882,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-16",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 281.86802599998373,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1948,
+        "structured_decision": 0.4461,
+        "clarify": 0.359
+      },
+      "p_selected": 0.4461,
+      "margin": 0.08710000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-17",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 262.04627900006017,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.219,
+        "structured_decision": 0.5984,
+        "clarify": 0.1825
+      },
+      "p_selected": 0.5984,
+      "margin": 0.37940000000000007,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-18",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 260.40290800006005,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1511,
+        "structured_decision": 0.7136,
+        "clarify": 0.1353
+      },
+      "p_selected": 0.7136,
+      "margin": 0.5625,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-19",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 279.4025349999174,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1945,
+        "structured_decision": 0.4578,
+        "clarify": 0.3477
+      },
+      "p_selected": 0.4578,
+      "margin": 0.11009999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-neg-20",
+      "category": "negation",
+      "expected": "structured_decision",
+      "latency_ms": 284.015275999991,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.191,
+        "structured_decision": 0.6664,
+        "clarify": 0.1426
+      },
+      "p_selected": 0.6664,
+      "margin": 0.4754,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-01",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 277.23370700005034,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3443,
+        "structured_decision": 0.4388,
+        "clarify": 0.2169
+      },
+      "p_selected": 0.4388,
+      "margin": 0.09450000000000003,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-02",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 263.30877899999905,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3818,
+        "structured_decision": 0.4255,
+        "clarify": 0.1927
+      },
+      "p_selected": 0.4255,
+      "margin": 0.04370000000000002,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-03",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 252.6545090001946,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.3897,
+        "structured_decision": 0.3569,
+        "clarify": 0.2534
+      },
+      "p_selected": 0.3897,
+      "margin": 0.032799999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-04",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 285.8931490000032,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1668,
+        "structured_decision": 0.6722,
+        "clarify": 0.161
+      },
+      "p_selected": 0.6722,
+      "margin": 0.5054000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-05",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 258.71887299990703,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.6837,
+        "structured_decision": 0.1634,
+        "clarify": 0.153
+      },
+      "p_selected": 0.6837,
+      "margin": 0.5203,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-06",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 273.16488499991465,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.298,
+        "structured_decision": 0.5051,
+        "clarify": 0.1969
+      },
+      "p_selected": 0.5051,
+      "margin": 0.2071,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-07",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 284.86781799983873,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3032,
+        "structured_decision": 0.4613,
+        "clarify": 0.2355
+      },
+      "p_selected": 0.4613,
+      "margin": 0.15809999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-08",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 280.4021209999519,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3262,
+        "structured_decision": 0.4408,
+        "clarify": 0.2331
+      },
+      "p_selected": 0.4408,
+      "margin": 0.11460000000000004,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-09",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 279.40437300003396,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2049,
+        "structured_decision": 0.6605,
+        "clarify": 0.1346
+      },
+      "p_selected": 0.6605,
+      "margin": 0.4556,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-10",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 255.1904239999203,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.254,
+        "structured_decision": 0.17,
+        "clarify": 0.576
+      },
+      "p_selected": 0.576,
+      "margin": 0.32199999999999995,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-11",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 279.4394170000487,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1331,
+        "structured_decision": 0.7493,
+        "clarify": 0.1175
+      },
+      "p_selected": 0.7493,
+      "margin": 0.6162,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-12",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 263.940034000143,
+      "choice": "conversation",
+      "probabilities": {
+        "conversation": 0.4395,
+        "structured_decision": 0.3707,
+        "clarify": 0.1898
+      },
+      "p_selected": 0.4395,
+      "margin": 0.06880000000000003,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-13",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 276.5891730000476,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.3259,
+        "structured_decision": 0.456,
+        "clarify": 0.2181
+      },
+      "p_selected": 0.456,
+      "margin": 0.1301,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-14",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 256.4356319999206,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1815,
+        "structured_decision": 0.7167,
+        "clarify": 0.1018
+      },
+      "p_selected": 0.7167,
+      "margin": 0.5352,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-inj-15",
+      "category": "injection",
+      "expected": "conversation",
+      "latency_ms": 255.23184500002571,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.3381,
+        "structured_decision": 0.1859,
+        "clarify": 0.476
+      },
+      "p_selected": 0.476,
+      "margin": 0.13789999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-01",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 465.8520320001571,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.0899,
+        "structured_decision": 0.774,
+        "clarify": 0.1362
+      },
+      "p_selected": 0.774,
+      "margin": 0.6378,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-02",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 462.0333330001358,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1572,
+        "structured_decision": 0.5616,
+        "clarify": 0.2812
+      },
+      "p_selected": 0.5616,
+      "margin": 0.2804,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-03",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 480.0716320000902,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1747,
+        "structured_decision": 0.5521,
+        "clarify": 0.2732
+      },
+      "p_selected": 0.5521,
+      "margin": 0.27890000000000004,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-04",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 477.32847099996434,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1204,
+        "structured_decision": 0.764,
+        "clarify": 0.1156
+      },
+      "p_selected": 0.764,
+      "margin": 0.6436000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-05",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 462.7805879999869,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1598,
+        "structured_decision": 0.66,
+        "clarify": 0.1802
+      },
+      "p_selected": 0.66,
+      "margin": 0.4798,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-06",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 460.6948420000663,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.233,
+        "structured_decision": 0.4672,
+        "clarify": 0.2997
+      },
+      "p_selected": 0.4672,
+      "margin": 0.16749999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-07",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 464.0299629998026,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1938,
+        "structured_decision": 0.5124,
+        "clarify": 0.2938
+      },
+      "p_selected": 0.5124,
+      "margin": 0.21859999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-08",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 475.4697309999756,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.2409,
+        "structured_decision": 0.3455,
+        "clarify": 0.4136
+      },
+      "p_selected": 0.4136,
+      "margin": 0.06810000000000005,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-09",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 478.98122799983867,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1817,
+        "structured_decision": 0.6149,
+        "clarify": 0.2034
+      },
+      "p_selected": 0.6149,
+      "margin": 0.4115,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-10",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 461.2753890000931,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1756,
+        "structured_decision": 0.5276,
+        "clarify": 0.2968
+      },
+      "p_selected": 0.5276,
+      "margin": 0.23079999999999995,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-11",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 474.70615600013844,
+      "choice": "clarify",
+      "probabilities": {
+        "conversation": 0.1578,
+        "structured_decision": 0.3972,
+        "clarify": 0.4449
+      },
+      "p_selected": 0.4449,
+      "margin": 0.04770000000000002,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-12",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 480.2127699999801,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1637,
+        "structured_decision": 0.5803,
+        "clarify": 0.256
+      },
+      "p_selected": 0.5803,
+      "margin": 0.32430000000000003,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-13",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 462.286893000055,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1986,
+        "structured_decision": 0.516,
+        "clarify": 0.2855
+      },
+      "p_selected": 0.516,
+      "margin": 0.23050000000000004,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-14",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 483.40285100016445,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1421,
+        "structured_decision": 0.6592,
+        "clarify": 0.1986
+      },
+      "p_selected": 0.6592,
+      "margin": 0.4606,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-15",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 481.24248299996,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.251,
+        "structured_decision": 0.3893,
+        "clarify": 0.3597
+      },
+      "p_selected": 0.3893,
+      "margin": 0.02959999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-16",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 474.4958730000235,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1813,
+        "structured_decision": 0.5993,
+        "clarify": 0.2194
+      },
+      "p_selected": 0.5993,
+      "margin": 0.3799,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-17",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 462.71677400000044,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.129,
+        "structured_decision": 0.5937,
+        "clarify": 0.2773
+      },
+      "p_selected": 0.5937,
+      "margin": 0.3164,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-18",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 478.86453399996753,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2739,
+        "structured_decision": 0.4584,
+        "clarify": 0.2678
+      },
+      "p_selected": 0.4584,
+      "margin": 0.1845,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-19",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 466.17806099993686,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1452,
+        "structured_decision": 0.6905,
+        "clarify": 0.1643
+      },
+      "p_selected": 0.6905,
+      "margin": 0.5262,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-20",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 476.52304200005347,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1265,
+        "structured_decision": 0.6669,
+        "clarify": 0.2066
+      },
+      "p_selected": 0.6669,
+      "margin": 0.46030000000000004,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-21",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 479.27199700006895,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2461,
+        "structured_decision": 0.4751,
+        "clarify": 0.2788
+      },
+      "p_selected": 0.4751,
+      "margin": 0.19630000000000003,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-22",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 458.1857069999842,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2648,
+        "structured_decision": 0.4417,
+        "clarify": 0.2935
+      },
+      "p_selected": 0.4417,
+      "margin": 0.1482,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-23",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 463.6738230001356,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.2288,
+        "structured_decision": 0.4447,
+        "clarify": 0.3265
+      },
+      "p_selected": 0.4447,
+      "margin": 0.11819999999999997,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-24",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 484.2871999999261,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1507,
+        "structured_decision": 0.6279,
+        "clarify": 0.2214
+      },
+      "p_selected": 0.6279,
+      "margin": 0.4065,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-25",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 459.0580429999136,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1651,
+        "structured_decision": 0.5383,
+        "clarify": 0.2967
+      },
+      "p_selected": 0.5383,
+      "margin": 0.24159999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-26",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 461.3486240000384,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1938,
+        "structured_decision": 0.4714,
+        "clarify": 0.3348
+      },
+      "p_selected": 0.4714,
+      "margin": 0.1366,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-27",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 465.7369500000641,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1241,
+        "structured_decision": 0.6518,
+        "clarify": 0.2241
+      },
+      "p_selected": 0.6518,
+      "margin": 0.4277000000000001,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-28",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 463.9780799998334,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1554,
+        "structured_decision": 0.4718,
+        "clarify": 0.3728
+      },
+      "p_selected": 0.4718,
+      "margin": 0.09899999999999998,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-29",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 483.6908339998445,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1753,
+        "structured_decision": 0.5826,
+        "clarify": 0.2421
+      },
+      "p_selected": 0.5826,
+      "margin": 0.3405,
+      "act_probability": 1.0,
+      "abstained": false
+    },
+    {
+      "id": "d-big-30",
+      "category": "oversized",
+      "expected": "structured_decision",
+      "latency_ms": 462.7082529998461,
+      "choice": "structured_decision",
+      "probabilities": {
+        "conversation": 0.1802,
+        "structured_decision": 0.5507,
+        "clarify": 0.2691
+      },
+      "p_selected": 0.5507,
+      "margin": 0.28159999999999996,
+      "act_probability": 1.0,
+      "abstained": false
+    }
+  ]
+}

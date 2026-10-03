@@ -8,6 +8,7 @@ numerical comparison against pinned upstream torch lives in
 tests/test_laya_reference.py (env-gated).
 """
 
+import importlib.util
 import json
 import os
 import struct
@@ -85,6 +86,33 @@ class RenderingTests(unittest.TestCase):
     def test_serialize_state_dumps_objects_without_ascii_escaping(self):
         self.assertEqual(serialize_state({"a": "é"}), '{"a": "é"}')
         self.assertEqual(serialize_state("raw"), "raw")
+
+
+@unittest.skipUnless(importlib.util.find_spec("mlx") is not None, "mlx not installed")
+class RopeTableTests(unittest.TestCase):
+    """The load-time rotary tables must equal the per-sequence HF formula
+    bit for bit, or the head's answers change."""
+
+    def test_table_rows_equal_per_length_formula(self):
+        import mlx.core as mx
+        from mlx_omarchy_laya import model as laya_model
+
+        cfg = laya_model.EncoderConfig(
+            hidden_size=1024, num_attention_heads=16, num_hidden_layers=1,
+            intermediate_size=2624, norm_eps=1e-5, local_attention=128,
+            global_attn_every_n_layers=3, layer_types=["full_attention"],
+            global_rope_theta=160000.0, local_rope_theta=10000.0)
+        tables = laya_model.rope_tables(cfg, 512)
+        hd = cfg.head_dim
+        for theta in (10000.0, 160000.0):
+            cos, sin = tables[theta]
+            for T in (1, 96, 163, 512):
+                inv_freq = mx.power(theta, -(mx.arange(0, hd, 2, dtype=mx.float32) / hd))
+                freqs = mx.outer(mx.arange(T, dtype=mx.float32), inv_freq)
+                emb = mx.concatenate([freqs, freqs], axis=-1)
+                self.assertTrue(np.array_equal(np.array(cos[:T]), np.array(emb.cos())))
+                self.assertTrue(np.array_equal(np.array(sin[:T]), np.array(emb.sin())))
+
 
 
 @unittest.skipUnless(CONVERTED and Path(CONVERTED).exists(), "LAYA_MLX_CKPT not set; download/convert first")

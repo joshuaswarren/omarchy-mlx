@@ -46,10 +46,25 @@ for round in $(seq 1 "$ROUNDS"); do
     envs=${spec#*:}
     declare -a ENV_KV=()
     [ "$envs" != "$name" ] && IFS=',' read -ra ENV_KV <<< "$envs"
+    # LAYA_DTYPE=<float16|bfloat16|float32> and LAYA_SERVE=<serve dir> in an
+    # arm spec select that arm's worker --dtype and code tree; neither is
+    # passed through as env.
+    dtype=float16
+    arm_serve=$SERVE
+    declare -a SRV_ENV=()
+    for kv in "${ENV_KV[@]}"; do
+      case "$kv" in
+        LAYA_DTYPE=*) dtype=${kv#LAYA_DTYPE=} ;;
+        LAYA_SERVE=*) arm_serve=${kv#LAYA_SERVE=} ;;
+        *) SRV_ENV+=("$kv") ;;
+      esac
+    done
     tag="${name}-r${round}"
     state "$tag-before"
-    env "${ENV_KV[@]}" PYTHONPATH="$SERVE" "$PY" -m mlx_omarchy_laya.server \
-      --model "$MODEL" --host 127.0.0.1 --port "$PORT" --dtype float16 \
+    sha256sum "$arm_serve/mlx_omarchy_laya/model.py" "$arm_serve/mlx_omarchy_laya/api.py" \
+      > "$OUT/code-$tag.txt"
+    env "${SRV_ENV[@]}" PYTHONPATH="$arm_serve" "$PY" -m mlx_omarchy_laya.server \
+      --model "$MODEL" --host 127.0.0.1 --port "$PORT" --dtype "$dtype" \
       --max-questions 8 "${EXTRA_SRV[@]}" > "$OUT/server-$tag.log" 2>&1 &
     WPID=$!
     up=0
