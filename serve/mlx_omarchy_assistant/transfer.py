@@ -885,6 +885,198 @@ def _hash_file(path: Path) -> tuple[str, int]:
     return h.hexdigest(), size
 
 
+class _BundleBuilder:
+    """Accumulates payload files, blobs, and license rollups for one
+    export_bundle run; the per-stage add_* helpers validate exactly as the
+    original inline closures did."""
+
+    def __init__(self):
+        self.files: dict[str, dict] = {}
+        self.sources: dict[str, Path] = {}
+        self.blobs: dict[str, bytes] = {}
+        self.license_rollup: dict[str, dict] = {}
+
+    def add_file(self, rel: str, src: Path) -> int:
+        _check_rel(rel)
+        if rel in self.files:
+            raise TransferError(f"duplicate payload path: {rel}")
+        digest, size = _hash_file(src)
+        if size > MAX_FILE_BYTES:
+            raise TransferError(f"file exceeds {MAX_FILE_BYTES} bytes: {src}")
+        self.files[rel] = {"sha256": digest, "size": size}
+        self.sources[rel] = src
+        return size
+
+    def add_blob(self, rel: str, data: bytes) -> int:
+        _check_rel(rel)
+        if rel in self.files:
+            raise TransferError(f"duplicate payload path: {rel}")
+        self.files[rel] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+        self.blobs[rel] = data
+        return len(data)
+
+    def add_pair(self, entry: dict, approved: set[str]) -> dict:
+        """Stage one conversation pair: lock validation, license approval,
+        and every model artifact file under models[role].path."""
+        lock = entry["lock"]
+        _validate_lock(lock)
+        pair_id = lock["pair_id"]
+        if "pair_id" in entry and entry["pair_id"] != pair_id:
+            raise TransferError(f"pair_id mismatch: {entry['pair_id']!r} vs lock {pair_id!r}")
+        if pair_id in (WHEELS_TOP, "voice"):
+            raise TransferError(f"pair_id {pair_id!r} is reserved")
+        if not approved:
+            raise LicenseNotApproved("export requested with no approved licenses")
+        pair_bytes = 0
+        count = 0
+        pair_bytes += self.add_blob(f"{pair_id}/lock.json",
+                                    json.dumps(lock, sort_keys=True, indent=1).encode())
+        count += 1
+        pair_licenses = set()
+        for model_id, lic in sorted(lock["licenses"].items()):
+            if lic not in approved:
+                raise LicenseNotApproved(
+                    f"pair {pair_id}: license {lic!r} for {model_id} is not approved"
+                )
+        for role, model in lock["models"].items():
+            directory = Path(model["path"])
+            if not directory.is_dir():
+                raise TransferError(f"pair {pair_id} role {role}: artifact dir missing: {directory}")
+            lic = lock["licenses"].get(model["id"])
+            if lic is None:
+                raise TransferError(f"pair {pair_id}: no license for model {model['id']!r}")
+            pair_licenses.add(lic)
+            rollup = self.license_rollup.setdefault(lic, {"models": [], "bytes": 0})
+            if model["id"] not in rollup["models"]:
+                rollup["models"].append(model["id"])
+            for name, path in _walk_artifact(directory):
+                pair_bytes += self.add_file(f"{pair_id}/{role}/{name}", path)
+                count += 1
+                rollup["bytes"] += self.files[f"{pair_id}/{role}/{name}"]["size"]
+        return {
+            "pair_id": pair_id,
+            "arch": list(lock["chip"]["arch"]),
+            "licenses": sorted(pair_licenses),
+            "file_count": count,
+            "bytes": pair_bytes,
+        }
+
+    def add_voice_pack(self, pack_dir: Path, approved: set[str],
+                       pair_ids: set[str]) -> dict:
+        """Stage one voice pack against its manifest.json receipt; pack files
+        travel verbatim and are cross-checked against that receipt."""
+        pack_dir = Path(pack_dir)
+        receipt_path = pack_dir / "manifest.json"
+        if not receipt_path.is_file():
+            raise TransferError(f"voice pack missing manifest.json: {pack_dir}")
+        receipt = json.loads(receipt_path.read_text())
+        pack_id = receipt.get("pack_id")
+        if not isinstance(pack_id, str) or not _safe_name(pack_id):
+            raise TransferError(f"voice pack manifest has invalid pack_id: {pack_dir}")
+        if pack_id in pair_ids:
+            raise TransferError(f"voice pack id collides with a pair id: {pack_id}")
+        lic = receipt.get("license")
+        if not isinstance(lic, str) or not lic:
+            raise TransferError(f"voice pack {pack_id} has no license in manifest.json")
+        if lic not in approved:
+            raise LicenseNotApproved(f"voice pack {pack_id}: license {lic!r} is not approved")
+        listed = receipt.get("files") or {}
+        rollup = self.license_rollup.setdefault(lic, {"models": [], "bytes": 0})
+        if pack_id not in rollup["models"]:
+            rollup["models"].append(pack_id)
+        pack_bytes = self.add_blob(f"voice/{pack_id}/manifest.json", receipt_path.read_bytes())
+        count = 1
+        for name, path in _walk_artifact(pack_dir):
+            if name == "manifest.json":
+                continue
+            expected = listed.get(name)
+            if expected is None:
+                raise TransferError(
+                    f"voice pack {pack_id}: file {name} is not listed in manifest.json"
+                )
+            rel = f"voice/{pack_id}/{name}"
+            size = self.add_file(rel, path)
+            if size != expected.get("bytes") or self.files[rel]["sha256"] != expected.get("sha256"):
+                raise TransferError(
+                    f"voice pack {pack_id}: {name} does not match manifest.json "
+                    "(bytes/sha256)"
+                )
+            pack_bytes += size
+            count += 1
+        rollup["bytes"] += pack_bytes
+        return {
+            "pack_id": pack_id,
+            "license": lic,
+            "file_count": count,
+            "bytes": pack_bytes,
+        }
+
+
+def _collect_wheel_entries(builder: _BundleBuilder, plats: dict, wheelhouse: Path,
+                           wheels: dict[str, dict],
+                           allow_incomplete: bool) -> tuple[list[dict], list[str]]:
+    """Stage the runtime wheels; returns (entries, missing names). Missing
+    wheels raise WheelhouseIncomplete unless allow_incomplete."""
+    wheelhouse = Path(wheelhouse)
+    wheel_entries: list[dict] = []
+    missing = []
+    for canon, entry in sorted(wheels.items()):
+        fname = entry["wheel"]
+        if not (wheelhouse / fname).is_file():
+            missing.append(f"{canon}=={entry.get('version')} ({fname})")
+            continue
+        reason = _wheel_matches_platform(fname, plats)
+        if reason:
+            raise PlatformMismatch(reason)
+        rel = f"{WHEELS_TOP}/{fname}"
+        size = builder.add_file(rel, wheelhouse / fname)
+        prepared = entry.get("sha256")
+        if prepared and builder.files[rel]["sha256"] != prepared:
+            raise WheelhouseIncomplete(
+                f"wheel {fname} does not match the prepared sha256 "
+                f"({canon}=={entry.get('version')})"
+            )
+        wheel_entries.append({"name": fname, "sha256": builder.files[rel]["sha256"], "size": size})
+    if missing:
+        listing = ", ".join(sorted(missing))
+        if not allow_incomplete:
+            raise WheelhouseIncomplete(f"runtime wheelhouse incomplete; missing: {listing}")
+    return wheel_entries, missing
+
+
+def _write_bundle_zip(out_path: Path, manifest: dict, builder: _BundleBuilder,
+                      progress) -> None:
+    """Write the bundle zip atomically: manifest first, then every staged
+    payload sorted by path, reporting progress in bytes."""
+    out_path = Path(out_path)
+    files = builder.files
+    total = sum(e["size"] for e in files.values())
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, suffix=".zip.tmp")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_STORED) as zf:
+            mzi = zipfile.ZipInfo(MANIFEST_NAME)
+            mzi.external_attr = (stat.S_IFREG | 0o644) << 16
+            zf.writestr(mzi, json.dumps(manifest, sort_keys=True, indent=1))
+            done = 0
+            for rel in sorted(files):
+                if rel in builder.blobs:
+                    zf.writestr(rel, builder.blobs[rel])
+                else:
+                    zf.write(builder.sources[rel], arcname=rel)
+                done += files[rel]["size"]
+                if progress:
+                    progress(done, total, rel)
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def export_bundle(
     out_path: Path,
     *,
@@ -913,156 +1105,19 @@ def export_bundle(
     """
     plats = dict(platform_info) if platform_info else local_platform()
     approved = set(approved_licenses)
-    files: dict[str, dict] = {}
-    sources: dict[str, Path] = {}
-    blobs: dict[str, bytes] = {}
-    license_rollup: dict[str, dict] = {}
-    pair_summaries: list[dict] = []
-    voice_summaries: list[dict] = []
-
-    def add_file(rel: str, src: Path) -> int:
-        _check_rel(rel)
-        if rel in files:
-            raise TransferError(f"duplicate payload path: {rel}")
-        digest, size = _hash_file(src)
-        if size > MAX_FILE_BYTES:
-            raise TransferError(f"file exceeds {MAX_FILE_BYTES} bytes: {src}")
-        files[rel] = {"sha256": digest, "size": size}
-        sources[rel] = src
-        return size
-
-    def add_blob(rel: str, data: bytes) -> int:
-        _check_rel(rel)
-        if rel in files:
-            raise TransferError(f"duplicate payload path: {rel}")
-        files[rel] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
-        blobs[rel] = data
-        return len(data)
-
-    for entry in pairs:
-        lock = entry["lock"]
-        _validate_lock(lock)
-        pair_id = lock["pair_id"]
-        if "pair_id" in entry and entry["pair_id"] != pair_id:
-            raise TransferError(f"pair_id mismatch: {entry['pair_id']!r} vs lock {pair_id!r}")
-        if pair_id in (WHEELS_TOP, "voice"):
-            raise TransferError(f"pair_id {pair_id!r} is reserved")
-        if not approved:
-            raise LicenseNotApproved("export requested with no approved licenses")
-        pair_bytes = 0
-        count = 0
-        pair_bytes += add_blob(f"{pair_id}/lock.json",
-                               json.dumps(lock, sort_keys=True, indent=1).encode())
-        count += 1
-        pair_licenses = set()
-        for model_id, lic in sorted(lock["licenses"].items()):
-            if lic not in approved:
-                raise LicenseNotApproved(
-                    f"pair {pair_id}: license {lic!r} for {model_id} is not approved"
-                )
-        for role, model in lock["models"].items():
-            directory = Path(model["path"])
-            if not directory.is_dir():
-                raise TransferError(f"pair {pair_id} role {role}: artifact dir missing: {directory}")
-            lic = lock["licenses"].get(model["id"])
-            if lic is None:
-                raise TransferError(f"pair {pair_id}: no license for model {model['id']!r}")
-            pair_licenses.add(lic)
-            rollup = license_rollup.setdefault(lic, {"models": [], "bytes": 0})
-            if model["id"] not in rollup["models"]:
-                rollup["models"].append(model["id"])
-            for name, path in _walk_artifact(directory):
-                pair_bytes += add_file(f"{pair_id}/{role}/{name}", path)
-                count += 1
-                rollup["bytes"] += files[f"{pair_id}/{role}/{name}"]["size"]
-        pair_summaries.append({
-            "pair_id": pair_id,
-            "arch": list(lock["chip"]["arch"]),
-            "licenses": sorted(pair_licenses),
-            "file_count": count,
-            "bytes": pair_bytes,
-        })
-
-    for pack_dir in voice:
-        pack_dir = Path(pack_dir)
-        receipt_path = pack_dir / "manifest.json"
-        if not receipt_path.is_file():
-            raise TransferError(f"voice pack missing manifest.json: {pack_dir}")
-        receipt = json.loads(receipt_path.read_text())
-        pack_id = receipt.get("pack_id")
-        if not isinstance(pack_id, str) or not _safe_name(pack_id):
-            raise TransferError(f"voice pack manifest has invalid pack_id: {pack_dir}")
-        if pack_id in {p["pair_id"] for p in pair_summaries}:
-            raise TransferError(f"voice pack id collides with a pair id: {pack_id}")
-        lic = receipt.get("license")
-        if not isinstance(lic, str) or not lic:
-            raise TransferError(f"voice pack {pack_id} has no license in manifest.json")
-        if lic not in approved:
-            raise LicenseNotApproved(f"voice pack {pack_id}: license {lic!r} is not approved")
-        listed = receipt.get("files") or {}
-        rollup = license_rollup.setdefault(lic, {"models": [], "bytes": 0})
-        if pack_id not in rollup["models"]:
-            rollup["models"].append(pack_id)
-        pack_bytes = add_blob(f"voice/{pack_id}/manifest.json", receipt_path.read_bytes())
-        count = 1
-        for name, path in _walk_artifact(pack_dir):
-            if name == "manifest.json":
-                continue
-            expected = listed.get(name)
-            if expected is None:
-                raise TransferError(
-                    f"voice pack {pack_id}: file {name} is not listed in manifest.json"
-                )
-            rel = f"voice/{pack_id}/{name}"
-            size = add_file(rel, path)
-            if size != expected.get("bytes") or files[rel]["sha256"] != expected.get("sha256"):
-                raise TransferError(
-                    f"voice pack {pack_id}: {name} does not match manifest.json "
-                    "(bytes/sha256)"
-                )
-            pack_bytes += size
-            count += 1
-        rollup["bytes"] += pack_bytes
-        voice_summaries.append({
-            "pack_id": pack_id,
-            "license": lic,
-            "file_count": count,
-            "bytes": pack_bytes,
-        })
-
-    wheel_entries: list[dict] = []
-    wheelhouse = Path(wheelhouse)
-    missing = []
-    for canon, entry in sorted(wheels.items()):
-        fname = entry["wheel"]
-        if not (wheelhouse / fname).is_file():
-            missing.append(f"{canon}=={entry.get('version')} ({fname})")
-            continue
-        reason = _wheel_matches_platform(fname, plats)
-        if reason:
-            raise PlatformMismatch(reason)
-        rel = f"{WHEELS_TOP}/{fname}"
-        size = add_file(rel, wheelhouse / fname)
-        prepared = entry.get("sha256")
-        if prepared and files[rel]["sha256"] != prepared:
-            raise WheelhouseIncomplete(
-                f"wheel {fname} does not match the prepared sha256 "
-                f"({canon}=={entry.get('version')})"
-            )
-        wheel_entries.append({"name": fname, "sha256": files[rel]["sha256"], "size": size})
-    if missing:
-        listing = ", ".join(sorted(missing))
-        if not allow_incomplete:
-            raise WheelhouseIncomplete(f"runtime wheelhouse incomplete; missing: {listing}")
-
-    total = sum(e["size"] for e in files.values())
-    if len(files) > MAX_FILES:
+    builder = _BundleBuilder()
+    pair_summaries = [builder.add_pair(entry, approved) for entry in pairs]
+    pair_ids = {summary["pair_id"] for summary in pair_summaries}
+    voice_summaries = [builder.add_voice_pack(pack_dir, approved, pair_ids)
+                       for pack_dir in voice]
+    wheel_entries, missing = _collect_wheel_entries(
+        builder, plats, wheelhouse, wheels, allow_incomplete)
+    if len(builder.files) > MAX_FILES:
         raise TransferError(f"bundle exceeds {MAX_FILES} files")
-    bundle_id = uuid.uuid4().hex[:12]
     manifest = {
         "format": TRANSFER_FORMAT,
         "version": FORMAT_VERSION,
-        "bundle_id": bundle_id,
+        "bundle_id": uuid.uuid4().hex[:12],
         "created_at": now or _iso_now(),
         "platform": plats,
         "wheels_complete": not missing,
@@ -1072,37 +1127,13 @@ def export_bundle(
                          for canon, entry in sorted(wheels.items())
                          if entry.get("version")},
         "probe_imports": list(probe_imports),
-        "total_bytes": total,
+        "total_bytes": sum(e["size"] for e in builder.files.values()),
         "pairs": pair_summaries,
         "licenses": {lic: {"models": sorted(v["models"]), "bytes": v["bytes"]}
-                     for lic, v in license_rollup.items()},
-        "files": files,
+                     for lic, v in builder.license_rollup.items()},
+        "files": builder.files,
     }
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, suffix=".zip.tmp")
-    os.close(fd)
-    try:
-        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_STORED) as zf:
-            mzi = zipfile.ZipInfo(MANIFEST_NAME)
-            mzi.external_attr = (stat.S_IFREG | 0o644) << 16
-            zf.writestr(mzi, json.dumps(manifest, sort_keys=True, indent=1))
-            done = 0
-            for rel in sorted(files):
-                if rel in blobs:
-                    zf.writestr(rel, blobs[rel])
-                else:
-                    zf.write(sources[rel], arcname=rel)
-                done += files[rel]["size"]
-                if progress:
-                    progress(done, total, rel)
-        os.replace(tmp_name, out_path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    _write_bundle_zip(out_path, manifest, builder, progress)
     return manifest
 
 
