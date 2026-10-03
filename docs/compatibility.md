@@ -616,6 +616,16 @@ reference case at the Qwen shapes passes under the qmm tile anchor
 bound with the same max error as the tile to three digits; receipt
 `receipts/2026-09-08-qmm-prefill-coopmat.json`.
 
+Settled-boot parity on T8103 at the v0.7.21 ledger cells (2026-10-03):
+pf512 prefill 419.4 tok/s = 0.916x of same-machine macOS (457.6) and
+pf1024 420.9 = 0.918x (458.7), short-prompt TTFT 0.1307 s = 1.046x
+(0.125 s), qwen38 digests pinned — the residual gap sits inside the
+coopmat qmm kernel's issue quality (compute-regime at these M, every
+tile/staging knob measured negative; the staged-A route that skips the
+bf16→f32 cast pass loses a further 22-25% prefill at M=512/1024 with
+identical digests). Receipt:
+`receipts/2026-10-03-prefill-gap/README.md`.
+
 ### Prefill glue kernels
 
 Three kernels take the f16/bf16 prefill work that ran on general
