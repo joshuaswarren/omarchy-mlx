@@ -169,6 +169,35 @@ decoder load (~43 ms), mel (~34 ms), detokenize (~12 ms) and audio load
 | idle timer (3 s) | `idle exit`, `daemon released programs=1`, socket and lock removed, device free |
 | dmesg, ANE device `26bc04000.ane` and DART, whole boot | 0 fault/error/timeout lines; last ANE lines are boot-time (6.7 s) |
 
+### jw16 (M1 Max, T6001), one gpuwin window, interleaved n=10 per arm
+
+Release wheel `0.32.4.dev202610021752+539d870e` (sha256 `721020b0…`,
+v0.7.19), libane `d06222a8…` (pin), worker built from origin/main with
+the same sha256 as jwm1 (`fa6c856a…`). gpuwin stopped llm-inference for
+the window and restored it afterwards (`RESTORE health_ok=1
+probe_finish=length`). Load1 was 0.63–1.55 and PSI avg10 ≤ 0.32 during
+the calls, because the serving host had just stopped. The idle gate was
+not met: the A/B is interleaved, so the delta is comparable, but the
+absolute times are not idle-gated.
+
+| median / p95, ms | private (default) | daemon attached |
+|---|---|---|
+| per-call wall | 2213.3 / 2229.7 | **1082.7 / 1107.8** |
+| session open | 889.1 / 898.8 | **0.3 / 0.3** |
+| encoder_ane | 1330.7 / 1340.4 | **442.1 / 445.9** |
+| `ane.exec_ms` | 440.3 / 440.4 | 440.4 / 441.0 |
+| total_pipeline | 1515.5 / 1521.9 | **627.3 / 634.7** |
+| tdt_decode | 98.6 / 101.6 | 98.8 / 101.6 |
+
+Both arms 10/10 match: sha `db501a8c…`, 104 emissions, no failed checks,
+`cpu_tensor_events=0`. Per-call wall −1130.6 ms (−51%); the encoder stage
+reaches T6001's whole-encoder ANE exec floor (~440 ms). The resilience
+script passed in the same window. Client kill -9 left the session intact.
+Daemon kill -9 mid-run gave client rc=1, left 0 workers and accel0 free,
+and the next call fell back to private and matched. The restarted daemon
+matched, and the idle exit released programs. dmesg showed 0 ANE/DART
+fault lines.
+
 ### Correction (2026-10-03): the earlier "20/20 shipped" claim
 
 The previous version of this section (commits `be30c0143`/`b933d8124`)
