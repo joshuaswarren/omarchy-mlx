@@ -107,51 +107,51 @@ Because durations, F0 and N now come from the whole-sentence prediction,
 bars 1–3 measure only the windowing/frozen-statistics error, by
 construction.
 
-## Round 2 — the frame-sliced streamer (jw16 lab render, OLD wheel, ctx 8)
+## Round 2 — corrected instrument recompute + trig-fixed engine (FINAL, 2026-10-03T23:5xZ)
 
-Re-rendered on the jw16 lab host (v0.7.22-era product wheel, boot-recorded
-in the lab log; ctx sweep 4/8/16 — 4 failed exactness, 8 chosen). 48 wavs
-(16 main + 16 stream + 16 floor); floor = whole-call seed k vs k+100.
+Main directive: validate the instrument first. Controlled pairs
+(`scripts/kokoro_mcd_validation.py`) proved the original MCD INVALID: a
++40 dB-SNR copy of the SAME wav scored 84 dB (gain/noise sensitivity, no
+single coefficient dominating). The corrected instrument applies
+per-utterance CMVN to MFCC coefficients 1–24 (same band-DTW, same dB
+constant) and validates at: self 0.0, +40 dB 8.1, +20 dB 18.5, 1-sample
+delay 0.06, different text 29.6, same-text re-render floor 3.6–4.0 dB.
+Re-registered bar (dated; changed because the instrument was invalid, not
+because a result failed): per-pair MCD ≤ max(3 dB, floor median + 1 dB).
 
-| bar | result | verdict |
-|---|---|---|
-| 1 duration ≤ 2 % | median 0.000 % — the shared-timeline fix removes the prosody-island shortening entirely | pass |
-| 2 F0 ≥ 0.95, ≤ 20 cents | corr median 0.990, cents median 10 — medians pass, but `f0_all_pass` false: some pairs sit below 0.95 | partial |
-| 3 MCD ≤ floor + 1 dB (≈ 33) | median 126.7 dB — still ~4× the allowed bound despite identical timelines | FAIL |
-| 5 clicks | not all boundaries within the whole-call distribution | FAIL |
-| 6 silence ≤ 100 ms | max 98.1 ms | pass |
+| bar (corrected) | round 1 (M2, design B) | round 2 (jw16, design C, old wheel) | round 2 (trig-fixed wheel, design C) |
+|---|---|---|---|
+| 1 duration ≤ 2 % | FAIL 8.2 % median | **pass 0.000 %** | **pass 0.000 %** |
+| 2 F0 ≥ 0.95 / ≤ 20 ¢ | FAIL 0.477 / 140 ¢ | medians pass (0.991 / 10 ¢); sent03 0.919 fails | same |
+| 3 MCD ≤ floor + 1 dB | FAIL 18.4 dB median (floor 3.6 cross-host, labeled) | **FAIL 11.83 median (9.8–15.4) vs 5.04** | **FAIL 11.83** |
+| 4 WER | pass 4/216 vs 3/216 | **pass 2/216 vs 3/216** | identical audio (deltas below) |
+| 5 clicks | FAIL sent09 step 0.388 > 0.375 | FAIL sent11 flux 16.19 > 14.01 (step 0.143 passes) | same |
+| 6 silence ≤ 100 ms | pass | pass 98.1 ms | pass |
 
-Round-1's duration/prosody failure is fixed by construction; the
-spectral/click bars are not met yet. The remaining suspect is the
-utterance-slice decode itself (context 8 aligned frames may be short of
-the low-stack + stage-0 receptive field, and each slice resets the
-harmonic-source phase — sample-level correlation vs the whole call is ~0
-at every context tried), i.e. the decoder needs deeper context or a
-phase-continuous source treatment before the objective bars can pass.
-WER for this render was not run (bar 4 last measured 3/216 both arms on
-round 1's render).
+Fixed-vs-buggy whole-call deltas (same texts, same seeds, the two wheels
+head-to-head): MCD 0.0004 dB, F0 corr 1.000, duration 0.000 — **the
+TrigContract fix is audio-neutral on this corpus and voice** (af_heart's
+source phase does not reach the broken 1e4–1e7 region on these renders),
+so the fixed engine inherits design C's numbers unchanged and the
+trig-fixed wheel does not change Kokoro's audible output here.
 
-## Decision — NOT QUALIFIED (2026-10-03)
+## Decision — NOT QUALIFIED (final, on the trig-fixed engine)
 
-Bars 3 and 5 fail on the best current build (design C, old wheel), and the
-TrigContract finding (wrong in-shader sine/cosine constants for
-1e4–1e7 arguments, which Kokoro's source phase reaches) means every
-pre-fix render — whole-call included — carries engine-level spectral error
-anyway; qualification is only meaningful on the fixed engine
-(builds ≥ 79a53e388; v0.7.24). The objective receipt therefore has NOT
-been written; voice output stays unqualified in status.
+On the decisive engine (trig-fixed build 79a53e388, wheel-verified in
+venv2): bars 2 (per-pair sent03), 3 (every pair, 2.3–3× the allowed
+bound) and 5 (sent11 flux) fail; bars 1, 4, 6 pass. The objective receipt
+has NOT been written; voice output stays unqualified in status.
 
-Recommendation for v0.7.24's default: whole-call decoding
-(`MLX_OMARCHY_KOKORO_STREAM=0`) for the default sentence path. Measured
-trade-off on the M2 serve path (run-004, same boot): whole-call first
-audio median 1.445 s (max 1.66 s — passes the 1.5 s design target on the
-median, thinly) with 50/60 runs starving playback (69.5 s starved);
-streamed (design B, r4) first audio 1.065 s with 0 underruns but fails the
-objective spectral bars. The streamed flag stays as the opt-in
-(`MLX_OMARCHY_KOKORO_STREAM=1`) until bars 2/3/5 pass on the trig-fixed
-engine; the frame-sliced design C is the right shape (duration exact by
-construction) and the remaining work is decoder-context depth and
-source-phase continuity, tuned on the disjoint calibration corpus.
+Design C's remaining spectral gap is uniform (~8–11 dB over the
+same-text floor on every sentence), consistent with the frozen-statistics
+windowing error plus slice-context limits — the next lever is deeper
+context / source-phase-continuous slicing, tuned on the disjoint
+calibration corpus. Default policy for v0.7.24 per Main: the streamed
+path ships UNCHANGED as default with voice unqualified and the
+`MLX_OMARCHY_KOKORO_STREAM=0` kill switch; the whole-call alternative
+fails the gap-free playout requirement (50/60 starved runs) that the
+streamed path passes, so neither default flip is justified by these
+numbers.
 
 ## What objective bars cannot show — NO HUMAN LISTENED
 

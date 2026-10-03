@@ -70,7 +70,7 @@ def boundaries_from_probe(probe_path: Path) -> dict[str, dict[str, list[int]]]:
             event = json.loads(line)
         except ValueError:
             continue
-        if event.get("event") != "item" or "chunks" not in event:
+        if event.get("event") != "item" or not event.get("chunks"):
             continue
         utt, win, sent, cum = [], [], [], 0
         seq = event["chunks"][0]["seq"]
@@ -212,13 +212,23 @@ def f0_metrics(fa: np.ndarray, va: np.ndarray, fb: np.ndarray, vb: np.ndarray
 def aligned_frames_cost(a: np.ndarray, b: np.ndarray, band_rad: float = 0.15
                         ) -> tuple[np.ndarray, np.ndarray]:
     """(per-aligned-frame cost along the path, path) from a band-constrained
-    (Sakoe-Chiba) DTW over 24-coefficient MFCC frames, c0 excluded."""
+    (Sakoe-Chiba) DTW over CMVN-normalized 24-coefficient MFCC frames, c0
+    excluded.
+
+    Instrument correction (Main directive 2026-10-03, validated on
+    controlled pairs, scripts/kokoro_mcd_validation.py): without per-utterance
+    mean+variance normalization the coefficient L2 explodes on any gain or
+    noise difference (a +40 dB-SNR copy of the SAME wav scored 84 dB). With
+    CMVN: self 0.0, +40 dB 8.1, +20 dB 18.5, 1-sample delay 0.06, different
+    text 29.6, same-text re-render 3.6 dB — the textbook ranges."""
     import librosa
     from scipy.spatial.distance import cdist
     ma = librosa.feature.mfcc(y=a, sr=SR, n_fft=1024, hop_length=256,
                               n_mels=80, n_mfcc=25)[1:]
     mb = librosa.feature.mfcc(y=b, sr=SR, n_fft=1024, hop_length=256,
                               n_mels=80, n_mfcc=25)[1:]
+    ma = (ma - ma.mean(axis=1, keepdims=True)) / (ma.std(axis=1, keepdims=True) + 1e-8)
+    mb = (mb - mb.mean(axis=1, keepdims=True)) / (mb.std(axis=1, keepdims=True) + 1e-8)
     cost = cdist(ma.T, mb.T, metric="euclidean")
     import librosa.sequence
     _, path = librosa.sequence.dtw(C=cost, band_rad=band_rad)
