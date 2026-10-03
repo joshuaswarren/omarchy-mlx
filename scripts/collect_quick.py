@@ -383,25 +383,17 @@ def _ane_reserved_memory(redactor, base=DT_BASE, max_nodes=32):
     return out
 
 
-def _ane_port_devicetree(redactor, base=DT_BASE,
-                         fdt_path="/sys/firmware/fdt"):
-    """Everything a contributor needs to port omarchy-ane to this SoC.
+def _ane_scan_nodes(redactor, base):
+    """One device-tree walk classifying every node: ANE-family nodes,
+    DARTs, the ANE mailbox, pmgr blocks/domains, AIC, and the phandle map.
 
-    Captures the ane node(s) in full (MMIO reg, reg-names, IRQs, iommus,
-    power-domains, status, compatible), every DART node with its full
-    props (reg ranges, #iommu-cells, interrupts), the COMPLETE pmgr
-    offset topology (block reg plus every power-controller child with
-    node name / label / compatible), the ANE-labelled pmgr subset, the
-    AIC compatible, structured boot provenance (all asahi,* /chosen
-    properties, model, root compatible), and the sha256 of the booted
-    DTB so a submission's tree is reproducible across kernels.
-
-    The pmgr offset map is what derives the ANE SET-block base on a new
-    SoC: on the known-good references the driver constant equals the
-    pmgr block base + 0xc000 (t8103 0x23b700000 -> 0x23b70c000, t6001
-    0x28e080000 -> 0x28e08c000), and no power-controller node exists at
-    that offset. A tree with NO ane node still dumps DART/PMGR/AIC:
-    that is exactly what authoring the overlay requires.
+    Generic ANE-family match: node names vary per generation (ane@,
+    dart-ane@, iop-ane@, ane-ascwrap@, mailbox-ane@, M5 exclave nodes)
+    and compatibles carry ascwrap-v6 / t8020-ane style markers, so match
+    patterns, not fixed names. The tree root itself never matches by name
+    (a temp dir's random name must not decide this). Children of a pmgr
+    block are power domains (ane_sys / ane_set* pwrstates), captured via
+    pmgr_domains below - never the ANE device itself.
     """
     ane_nodes = {}
     darts = {}
@@ -419,14 +411,6 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         ph = _dt_u32s(_read_dt_raw("phandle", dirpath) or b"")
         if ph:
             phandles[ph[0]] = rel
-        # Generic ANE-family match: node names vary per generation
-        # (ane@, dart-ane@, iop-ane@, ane-ascwrap@, mailbox-ane@, M5
-        # exclave nodes) and compatibles carry ascwrap-v6 / t8020-ane
-        # style markers, so match patterns, not fixed names. The tree
-        # root itself never matches by name (a temp dir's random name
-        # must not decide this). Children of a pmgr block are power
-        # domains (ane_sys / ane_set* pwrstates), captured via
-        # pmgr_domains below - never the ANE device itself.
         named = rel != "." and bool(re.search(
             r"(?:^|/)[^/]*(?:ane|ascwrap|exclave)[^/]*$", dirpath))
         hit = [t for t in compat
@@ -490,9 +474,13 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         if aic is None and any(t in ("apple,aic", "apple,aic2")
                                or t.endswith("-aic") for t in compat):
             aic = {"path": rel, "compatible": compat[:8]}
-    # Resolve iommu phandles to DART paths so the contributor does not
-    # have to do phandle arithmetic by hand. Each entry is one phandle
-    # plus #iommu-cells specifiers from the target DART.
+    return ane_nodes, darts, mailbox, phandles, pmgr_domains, pmgr_blocks, aic
+
+
+def _ane_resolve_iommus(ane_nodes, darts, phandles):
+    """Resolve iommu phandles to DART paths so the contributor does not
+    have to do phandle arithmetic by hand. Each entry is one phandle
+    plus #iommu-cells specifiers from the target DART. Mutates ane_nodes."""
     for props in ane_nodes.values():
         iommus = props.get("iommus")
         if not isinstance(iommus, list):
@@ -512,17 +500,23 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
                     isinstance(ncells[0], int):
                 i += ncells[0]
         props["iommus_resolved"] = resolved
-    # Flat ANE reg/size view: present when the DT declares the node
-    # (M1 family), explicitly None when it does not (t602x).
+
+
+def _ane_reg_view(ane_nodes):
+    """Flat ANE reg/size view: present when the DT declares the node
+    (M1 family), explicitly None when it does not (t602x)."""
     ane_reg = []
     for props in ane_nodes.values():
         regs = props.get("reg")
         if isinstance(regs, list):
             ane_reg.extend(r for r in regs if isinstance(r, str))
-    ane_reg = ane_reg[:8] or None
-    # Boot provenance as structured fields: every asahi,* property under
-    # /chosen (m1n1 stages, iBoot, system/os FW), plus model and root
-    # compatible. Strings pass the redactor like every free-text field.
+    return ane_reg[:8] or None
+
+
+def _ane_boot_provenance(redactor, base):
+    """Boot provenance as structured fields: every asahi,* property under
+    /chosen (m1n1 stages, iBoot, system/os FW), plus model and root
+    compatible. Strings pass the redactor like every free-text field."""
     chosen = {}
     for name in sorted(os.listdir(os.path.join(base, "chosen"))
                        if os.path.isdir(os.path.join(base, "chosen"))
@@ -536,33 +530,35 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         if len(chosen) >= 32:
             break
     model = _read_dt_file("model", base)
-    boot = {
+    return {
         "model": redactor.apply(model.strip("\x00\n")[:256], field="model")
         if model else None,
         "compatible": (_dt_strings(
             _read_dt_raw("compatible", base) or b"") or [])[:8] or None,
         "chosen": chosen or None,
     }
-    # DTB identity: hash only, never the blob, so a submission's device
-    # tree is reproducible/comparable across kernels. /sys/firmware/fdt
-    # is root-only on every shipped kernel (59 published rows carry
-    # null); the explicit reason is recorded, and the collector never
-    # calls sudo itself.
+
+
+def _dtb_identity(fdt_path):
+    """DTB identity: hash only, never the blob, so a submission's device
+    tree is reproducible/comparable across kernels. /sys/firmware/fdt
+    is root-only on every shipped kernel (59 published rows carry
+    null); the explicit reason is recorded, and the collector never
+    calls sudo itself."""
     try:
         with open(fdt_path, "rb") as fh:
-            dtb_sha256 = hashlib.sha256(fh.read()).hexdigest()
+            return hashlib.sha256(fh.read()).hexdigest(), None
     except PermissionError:
-        dtb_sha256 = None
-        dtb_sha256_error = "needs root"
+        return None, "needs root"
     except OSError:
-        dtb_sha256 = None
-        dtb_sha256_error = "unreadable"
-    else:
-        dtb_sha256_error = None
-    # Ship only the phandles the porting data actually resolves: the
-    # iommus / power-domains cells of the ane nodes and DARTs. The full
-    # map runs to hundreds of entries on t600x and blew the 64 KiB
-    # payload budget before the DARTs it exists to explain did.
+        return None, "unreadable"
+
+
+def _referenced_phandles(ane_nodes, darts, phandles):
+    """Ship only the phandles the porting data actually resolves: the
+    iommus / power-domains cells of the ane nodes and DARTs. The full
+    map runs to hundreds of entries on t600x and blew the 64 KiB
+    payload budget before the DARTs it exists to explain did."""
     referenced = set()
     for props in list(ane_nodes.values()) + list(darts.values()):
         for key in ("iommus", "power-domains"):
@@ -570,13 +566,17 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
             if isinstance(cells, list):
                 referenced.update(c for c in cells
                                   if isinstance(c, int) and c in phandles)
-    # SET-candidate labeling (Linux side): the ane_set* power-controller
-    # children are 4-byte pwrstate CELLS (t602x cluster at pmgr+0x4000),
-    # never the SET MMIO window. The device tree cannot source the SET
-    # base: it needs the macOS driver-window capture (macos.
-    # set_base_candidate with driver_window_confirms=true) or an m1n1
-    # ANE.ps_map probe. Same field name as the macOS side so a generator
-    # can never conflate the pwrstate cluster with the SET candidate.
+    return referenced
+
+
+def _ane_set_base_candidate(pmgr_domains):
+    """SET-candidate labeling (Linux side): the ane_set* power-controller
+    children are 4-byte pwrstate CELLS (t602x cluster at pmgr+0x4000),
+    never the SET MMIO window. The device tree cannot source the SET
+    base: it needs the macOS driver-window capture (macos.
+    set_base_candidate with driver_window_confirms=true) or an m1n1
+    ANE.ps_map probe. Same field name as the macOS side so a generator
+    can never conflate the pwrstate cluster with the SET candidate."""
     ane_pwrstate_cells = [
         {"label": e["label"],
          "offset": int(e["path"].rsplit("@", 1)[-1], 16)}
@@ -584,7 +584,7 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         if e.get("label") and "@" in (e.get("path") or "")
         and e["path"].rsplit("@", 1)[-1].isalnum()
     ][:16]
-    set_base_candidate = {
+    return {
         "status": "not_available_from_device_tree",
         "ane_pwrstate_cells": ane_pwrstate_cells,
         "note": "ane_set* entries are 4-byte power-controller pwrstate "
@@ -592,6 +592,35 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
                 "from a macOS set_base_candidate (driver_window_confirms) "
                 "or m1n1 ANE.ps_map, never from these offsets",
     }
+
+
+def _ane_port_devicetree(redactor, base=DT_BASE,
+                         fdt_path="/sys/firmware/fdt"):
+    """Everything a contributor needs to port omarchy-ane to this SoC.
+
+    Captures the ane node(s) in full (MMIO reg, reg-names, IRQs, iommus,
+    power-domains, status, compatible), every DART node with its full
+    props (reg ranges, #iommu-cells, interrupts), the COMPLETE pmgr
+    offset topology (block reg plus every power-controller child with
+    node name / label / compatible), the ANE-labelled pmgr subset, the
+    AIC compatible, structured boot provenance (all asahi,* /chosen
+    properties, model, root compatible), and the sha256 of the booted
+    DTB so a submission's tree is reproducible across kernels.
+
+    The pmgr offset map is what derives the ANE SET-block base on a new
+    SoC: on the known-good references the driver constant equals the
+    pmgr block base + 0xc000 (t8103 0x23b700000 -> 0x23b70c000, t6001
+    0x28e080000 -> 0x28e08c000), and no power-controller node exists at
+    that offset. A tree with NO ane node still dumps DART/PMGR/AIC:
+    that is exactly what authoring the overlay requires.
+    """
+    ane_nodes, darts, mailbox, phandles, pmgr_domains, pmgr_blocks, aic = \
+        _ane_scan_nodes(redactor, base)
+    _ane_resolve_iommus(ane_nodes, darts, phandles)
+    ane_reg = _ane_reg_view(ane_nodes)
+    boot = _ane_boot_provenance(redactor, base)
+    dtb_sha256, dtb_sha256_error = _dtb_identity(fdt_path)
+    referenced = _referenced_phandles(ane_nodes, darts, phandles)
     return {
         "ane_node_present": bool(ane_nodes),
         "ane_nodes": ane_nodes,
@@ -603,7 +632,7 @@ def _ane_port_devicetree(redactor, base=DT_BASE,
         "pmgr_domains": pmgr_domains[:64],
         "pmgr_blocks": pmgr_blocks[:8],
         "aic": aic,
-        "set_base_candidate": set_base_candidate,
+        "set_base_candidate": _ane_set_base_candidate(pmgr_domains),
         "phandles": {str(k): phandles[k] for k in sorted(referenced)},
         "boot": boot,
         "dtb_sha256": dtb_sha256,
