@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 #include <initializer_list>
 #include <optional>
 #include <numeric>
@@ -7478,17 +7479,80 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       qmm_bindings[0] = binding(x_f32);
       const bool full_n = (params.matrix_n % 32u) == 0u &&
           std::getenv("MLX_OMARCHY_QMM_NO_FULLN") == nullptr;
-      omarchy::ComputeKernel qmm_kernel = coopmat_rows == 16u
-          ? (full_n ? omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN
-                    : omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32)
-          : (full_n ? omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullN
-                    : omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32);
+      // Prefill-axes experiments (receipts/2026-10-03-prefill-axes): env-
+      // selected rasterization-order / issue-quality twins of the 32-row
+      // FullN route. Every twin keeps the per-output ascending-k chain,
+      // so all arms are digest-identical to the shipped kernel; the M16
+      // twins (small low-occupancy grids, raster order irrelevant) and
+      // the non-FullN builds are out of scope and ignore the envs.
+      //   MLX_OMARCHY_QMM_RASTER=swap|2|4|8  workgroup rasterization order
+      //   MLX_OMARCHY_QMM_TWON=1            two column tiles per A load
+      //   MLX_OMARCHY_QMM_PERSIST=<rows>    cap m-axis launch extent
+      omarchy::ComputeKernel qmm_kernel;
+      uint32_t grid_x = n_groups;
+      uint32_t grid_y = m_groups;
+      bool m_axis_x = false;
+      bool env_routed = false;
+      const char* twon_env = std::getenv("MLX_OMARCHY_QMM_TWON");
+      const char* raster_env = std::getenv("MLX_OMARCHY_QMM_RASTER");
+      if (coopmat_rows == 32u && full_n) {
+        if (twon_env != nullptr && twon_env[0] == '1' &&
+            (params.matrix_n % 64u) == 0u) {
+          qmm_kernel =
+              omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNTwoN;
+          grid_x = n_groups / 2u;
+          env_routed = true;
+        } else if (raster_env != nullptr && raster_env[0] != '\0') {
+          const std::string_view raster{raster_env};
+          if (raster == "swap") {
+            qmm_kernel =
+                omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterSwap;
+            std::swap(grid_x, grid_y);
+            m_axis_x = true;
+            env_routed = true;
+          } else if (raster == "2" || raster == "4" || raster == "8") {
+            const uint32_t gm = uint32_t(raster[0] - '0');
+            qmm_kernel = raster == "2"
+                ? omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG2
+                : raster == "4"
+                ? omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG4
+                : omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG8;
+            grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
+            grid_y = 1u;
+            env_routed = true;
+          }
+        }
+      }
+      if (!env_routed) {
+        qmm_kernel = coopmat_rows == 16u
+            ? (full_n
+                   ? omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN
+                   : omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32)
+            : (full_n
+                   ? omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullN
+                   : omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32);
+      }
+      const char* persist_env = std::getenv("MLX_OMARCHY_QMM_PERSIST");
+      if (persist_env != nullptr && persist_env[0] != '\0') {
+        // Cap the m-axis launch extent; the shader's grid-stride tile
+        // loops cover the remaining tiles (persistent workgroups). The
+        // shipped mapping loops rows with stride gl_NumWorkGroups.y, so
+        // this works with the shipped kernels too.
+        const uint32_t cap = std::strtoul(persist_env, nullptr, 10);
+        if (cap != 0u) {
+          if (m_axis_x) {
+            grid_x = std::min(grid_x, cap);
+          } else {
+            grid_y = std::min(grid_y, cap);
+          }
+        }
+      }
       encoder.dispatch_compute(
           qmm_kernel,
           qmm_bindings,
           params,
-          std::min(n_groups, omarchy::kMaxComputeGroupCountX),
-          std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+          std::min(grid_x, omarchy::kMaxComputeGroupCountX),
+          std::min(grid_y, omarchy::kMaxComputeGroupCountX),
           1u);
       return;
     }

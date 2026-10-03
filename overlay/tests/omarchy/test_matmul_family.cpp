@@ -4107,3 +4107,112 @@ TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain")
     CHECK_EQ(digest, pin.digest);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Prefill-axes twins (receipts/2026-10-03-prefill-axes): the rasterization
+// order and issue-quality variants of the X32 FullN prefill route must be
+// byte-identical to the shipped route on every shape they can be selected
+// for - odd M across 16..2048 and the K,N of the pinned 2B/4B/9B models.
+// The Qwen3.8-class snapshots are bf16-hybrid (q4/g64, bf16 scales/biases),
+// exactly the route the variants twin. Each arm reruns the same tree with
+// one env set; the outputs must be bit-equal (a workgroup-to-tile remap or
+// a shared A-tile load never touches a per-output ascending-k chain).
+// Routing itself (which kernel id each env selects) is proven per arm in
+// the on-device GPU_PROFILE dispatch census, not here.
+TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_device =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  if (!coopmat_device || std::getenv("MLX_OMARCHY_NO_COOPMAT") != nullptr) {
+    skip("prefill-axes twins run on the coopmat X32 route only");
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  constexpr int group_size = 64;
+  constexpr int bits = 4;
+  struct Variant {
+    const char* name;
+    const char* key;
+    const char* value;
+  };
+  const Variant variants[] = {
+      {"raster-swap", "MLX_OMARCHY_QMM_RASTER", "swap"},
+      {"raster-g2", "MLX_OMARCHY_QMM_RASTER", "2"},
+      {"raster-g4", "MLX_OMARCHY_QMM_RASTER", "4"},
+      {"raster-g8", "MLX_OMARCHY_QMM_RASTER", "8"},
+      {"twon", "MLX_OMARCHY_QMM_TWON", "1"},
+      {"persist-4", "MLX_OMARCHY_QMM_PERSIST", "4"},
+      {"persist-8", "MLX_OMARCHY_QMM_PERSIST", "8"},
+  };
+
+  unsigned seed = 407u;
+  for (auto [k, n] : {std::pair{2048, 2048}, std::pair{2048, 6144},
+           std::pair{6144, 2048}, std::pair{2560, 9728},
+           std::pair{9728, 2560}, std::pair{4096, 4096},
+           std::pair{4096, 12288}, std::pair{12288, 4096}}) {
+    const int words_per_row = k / (32 / bits);
+    const int groups_per_row = k / group_size;
+    std::mt19937 gen(seed++);
+    std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights weights =
+        host_affine_quantize(matrix, n, k, group_size, bits);
+    // bf16-hybrid: the pinned models store scales and biases in bf16;
+    // x is bf16, so the op routes through CastBF16F32 + X32 FullN.
+    weights.scales = round_trip(stream, weights.scales, bfloat16);
+    weights.biases = round_trip(stream, weights.biases, bfloat16);
+    array w_words(weights.words.begin(), Shape{n, words_per_row}, uint32);
+    array scales(
+        weights.scales.begin(), Shape{n, groups_per_row}, bfloat16);
+    array biases(
+        weights.biases.begin(), Shape{n, groups_per_row}, bfloat16);
+
+    for (int m :
+         {17, 63, 65, 127, 129, 255, 257, 511, 513, 1023, 1025, 2047}) {
+      std::vector<float> x_values(static_cast<size_t>(m) * k);
+      for (auto& value : x_values) {
+        value = dist(gen);
+      }
+      array x(x_values.begin(), Shape{m, k}, bfloat16);
+
+      auto run_bits = [&]() {
+        array out = quantized_matmul(
+            x, w_words, scales, biases, true, group_size, bits, "affine",
+            stream);
+        out.eval();
+        const uint16_t* p = out.data<uint16_t>();
+        return std::vector<uint16_t>(p, p + out.size());
+      };
+      const std::vector<uint16_t> baseline = run_bits();
+      for (const auto& v : variants) {
+        setenv(v.key, v.value, 1);
+        std::vector<uint16_t> got = run_bits();
+        unsetenv(v.key);
+        REQUIRE_EQ(got.size(), baseline.size());
+        size_t mismatches = 0;
+        size_t first = 0;
+        for (size_t i = 0; i < got.size(); ++i) {
+          if (got[i] != baseline[i]) {
+            if (mismatches == 0) {
+              first = i;
+            }
+            ++mismatches;
+          }
+        }
+        INFO("variant=", v.name, " m=", m, " k=", k, " n=", n,
+             " first_mismatch_index=", first, " got=", got[first],
+             " baseline=", baseline[first]);
+        CHECK_EQ(mismatches, size_t{0});
+      }
+    }
+    std::cout << "[prefill-axes] k=" << k << " n=" << n
+              << " all 7 twin arms bit-identical, m in {17..2047 odd}\n";
+  }
+}

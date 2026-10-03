@@ -400,6 +400,15 @@ omarchy_shader(qmm_coopmat_x32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1)
 omarchy_shader(qmm_coopmat_m16_x32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16)
 omarchy_shader(qmm_coopmat_x32_fn shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1)
 omarchy_shader(qmm_coopmat_m16_x32_fn shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1)
+# Prefill-axes twins of the x32 FullN route (receipts/2026-10-03-prefill-axes):
+# rasterization-order and issue-quality variants; same per-output ascending-k
+# chain, so all are digest-identical to the shipped kernels by construction.
+# Env-selected in primitives.cpp (MLX_OMARCHY_QMM_RASTER / _TWON / _PERSIST).
+omarchy_shader(qmm_coopmat_x32_fn_rswap shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_SWAP=1)
+omarchy_shader(qmm_coopmat_x32_fn_g2 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=2)
+omarchy_shader(qmm_coopmat_x32_fn_g4 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4)
+omarchy_shader(qmm_coopmat_x32_fn_g8 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=8)
+omarchy_shader(qmm_coopmat_x32_fn_twon shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DTWO_N=1)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
 omarchy_shader(matmul_fma_bf16 shaders/matmul_fma_bf16.comp)

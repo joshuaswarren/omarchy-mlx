@@ -785,6 +785,18 @@ enum class ComputeKernel : uint16_t {
   FastNormGatedOnlyAppleBF16,
   FastRopeNormAppleBF16,
   GdnConvDecodeAppleBF16,
+  // Prefill-axes rasterization / issue-quality twins of the x32 FullN
+  // prefill route (receipts/2026-10-03-prefill-axes): a different
+  // workgroup-to-tile mapping (RasterSwap / RasterG2/G4/G8) or two
+  // column tiles per A-tile load (TwoN), same per-output ascending-k
+  // f32 chain - all digest-identical to the shipped kernels by
+  // construction. Env-selected (MLX_OMARCHY_QMM_RASTER / _TWON /
+  // _PERSIST in primitives.cpp). Append-only profile ids.
+  QmmPrefillCoopmatBF16X32FullNRasterSwap,
+  QmmPrefillCoopmatBF16X32FullNRasterG2,
+  QmmPrefillCoopmatBF16X32FullNRasterG4,
+  QmmPrefillCoopmatBF16X32FullNRasterG8,
+  QmmPrefillCoopmatBF16X32FullNTwoN,
   Count,
 };
 
