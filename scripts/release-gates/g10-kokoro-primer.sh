@@ -6,7 +6,7 @@
 # invalidates the TTFA number.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
-LOG="$LOG_DIR/g9-kokoro-primer.log"
+LOG="$LOG_DIR/g10-kokoro-primer.log"
 ASSIST="$GATE_ROOT/${TAG}-assist-primer"
 : > "$LOG"
 gate_begin "$LOG"
