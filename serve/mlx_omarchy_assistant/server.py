@@ -431,245 +431,306 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def _dispatch(self):
+        """Route by (verb, path). Exact endpoints live in _ROUTES, the
+        conversation subtree in _conversation, static files in _static.
+        Unmatched verbs fall through to the same KeyError -> 404 as before."""
         parsed = urlsplit(self.path)
         path = unquote(parsed.path)
         parts = path.strip("/").split("/")
-        app = self.server
-        if self.command == "POST" and path == "/api/session":
-            body = self._body()
-            token = body.get("token")
-            with app.mutex:
-                if not isinstance(token, str) or not app.bootstrap or not hmac.compare_digest(token, app.bootstrap):
-                    return self._json(401, {"error": "This launch link expired. Reopen MLX Chat"})
-                app.bootstrap = None
-            return self._json(200, {"csrf": app.csrf, "session_id": app.cookie_name}, cookie=True)
-        if self.command == "GET" and path == "/api/session":
-            return self._json(200, {"csrf": app.csrf, "session_id": app.cookie_name})
-        if self.command == "GET" and path == "/api/status":
-            return self._json(200, app.status())
-        if self.command == "POST" and path == "/api/launch":
-            self._body()
-            with app.mutex:
-                app.bootstrap = secrets.token_urlsafe(32)
-                token = app.bootstrap
-            return self._json(200, {"token": token})
-        if self.command == "GET" and path == "/api/theme":
-            from .theme import read_theme
-            return self._json(200, asdict(read_theme()))
-        if self.command == "POST" and path == "/api/resume":
-            self._body()
-            app.resume()
-            return self._json(202, {"state": "preparing"})
-        if self.command == "POST" and path == "/api/setup":
-            app.setup(self._body())
-            return self._json(202, {"state": "preparing"})
+        handler = self._ROUTES.get((self.command, path))
+        if handler is not None:
+            return handler(self, parsed)
         if path == "/api/transfer":
-            if self.command == "GET":
-                with app.mutex:
-                    return self._json(200, dict(app.transfer_state))
-            if self.command == "POST":
-                app.transfer(self._body())
-                return self._json(202, {"state": "running"})
-        if path == "/api/conversations":
-            if self.command == "GET":
-                return self._json(200, {"conversations": app.store.list()})
-            if self.command == "POST":
-                body = self._body()
-                return self._json(201, app.store.create(save=body.get("save", False)))
-        if len(parts) >= 3 and parts[:2] == ["api", "conversations"]:
-            cid = parts[2]
-            record = app.store.get(cid)
-            tail = parts[3:] if len(parts) > 3 else []
-            if not tail:
-                if self.command == "GET":
-                    return self._json(200, record)
-                if self.command == "DELETE":
-                    app.store.delete(cid)
-                    return self._json(200, {"deleted": True})
-                if self.command == "PATCH":
-                    return self._json(200, app.store.set_saved(cid, self._body().get("save")))
-            if self.command == "GET" and tail == ["export"]:
-                return self._json(200, record)
-            if self.command == "POST" and tail == ["context"]:
-                body = self._body()
-                if set(body) != {"selected_turn_ids", "pinned_constraints"}:
-                    raise ValueError("Provide selected turn IDs and pinned constraints only")
-                return self._json(200, app.store.set_context(
-                    cid, body["selected_turn_ids"], body["pinned_constraints"]))
-            if self.command == "POST" and tail == ["turns"]:
-                return self._json(202, {"turn_id": app.coordinator.submit(cid, self._body())})
-            if self.command == "POST" and tail in (["cancel"], ["heartbeat"]):
-                turn = self._body().get("turn_id")
-                if not isinstance(turn, str):
-                    raise ValueError("Missing turn ID")
-                if tail == ["cancel"]:
-                    app.coordinator.cancel(cid, turn)
-                    if app.audio_kind == "tts" and app.audio_identity == (cid, turn):
-                        app.audio_cancel.set()
-                else:
-                    app.coordinator.heartbeat(cid, turn)
-                return self._json(200, {"ok": True})
-            if self.command == "POST" and tail == ["actions"]:
-                return self._json(202, {"turn_id": app.coordinator.action(cid, self._body())})
-            if self.command == "GET" and tail == ["events"]:
-                after = int(parse_qs(parsed.query).get("after", ["0"])[0])
-                app.store.events(cid, after)
-                self._headers(200, "text/event-stream")
-                self.send_header("Connection", "close")
-                self.end_headers()
-                deadline = time.monotonic() + 15
-                while time.monotonic() < deadline:
-                    try:
-                        events = app.store.events(cid, after)
-                    except (EventGap, KeyError):
-                        break
-                    for event in events:
-                        raw = json.dumps(event, ensure_ascii=False, allow_nan=False)
-                        self.wfile.write(f"id: {event['sequence']}\nevent: {event['type']}\ndata: {raw}\n\n".encode())
-                        after = event["sequence"]
-                    if events:
-                        self.wfile.flush()
-                    if not app.store.get(cid)["active_turn"]:
-                        break
-                    with app.store.changed:
-                        app.store.changed.wait(timeout=1)
-                self.close_connection = True
-                return
-        if self.command == "POST" and path == "/api/voice/cancel":
-            kind = self._body().get("kind")
-            if kind not in ("tts", "stt"):
-                raise ValueError("Choose tts or stt cancellation")
-            if app.audio_kind == kind:
-                app.audio_cancel.set()
-            return self._json(200, {"stopped": True})
-        if self.command == "POST" and path in ("/api/voice", "/api/voice/preview"):
+            response = self._transfer()
+            if response is not None:
+                return response
+        elif path == "/api/conversations":
+            response = self._conversations()
+            if response is not None:
+                return response
+        elif len(parts) >= 3 and parts[:2] == ["api", "conversations"]:
+            return self._conversation(parts[2], parts[3:] if len(parts) > 3 else [], parsed)
+        elif self.command == "GET" and not path.startswith("/api/"):
+            return self._static(path)
+        raise KeyError("Endpoint not found")
+
+    def _session_post(self, parsed):
+        body = self._body()
+        token = body.get("token")
+        app = self.server
+        with app.mutex:
+            if not isinstance(token, str) or not app.bootstrap or not hmac.compare_digest(token, app.bootstrap):
+                return self._json(401, {"error": "This launch link expired. Reopen MLX Chat"})
+            app.bootstrap = None
+        return self._json(200, {"csrf": app.csrf, "session_id": app.cookie_name}, cookie=True)
+
+    def _session_get(self, parsed):
+        app = self.server
+        return self._json(200, {"csrf": app.csrf, "session_id": app.cookie_name})
+
+    def _status(self, parsed):
+        return self._json(200, self.server.status())
+
+    def _launch(self, parsed):
+        app = self.server
+        self._body()
+        with app.mutex:
+            app.bootstrap = secrets.token_urlsafe(32)
+            token = app.bootstrap
+        return self._json(200, {"token": token})
+
+    def _theme(self, parsed):
+        from .theme import read_theme
+        return self._json(200, asdict(read_theme()))
+
+    def _resume(self, parsed):
+        self._body()
+        self.server.resume()
+        return self._json(202, {"state": "preparing"})
+
+    def _setup(self, parsed):
+        self.server.setup(self._body())
+        return self._json(202, {"state": "preparing"})
+
+    def _transfer(self):
+        """/api/transfer for GET and POST; None on other verbs (falls
+        through to the 404 exactly as the old cascade did)."""
+        app = self.server
+        if self.command == "GET":
+            with app.mutex:
+                return self._json(200, dict(app.transfer_state))
+        if self.command == "POST":
+            app.transfer(self._body())
+            return self._json(202, {"state": "running"})
+        return None
+
+    def _conversations(self):
+        """/api/conversations for GET and POST; None on other verbs."""
+        app = self.server
+        if self.command == "GET":
+            return self._json(200, {"conversations": app.store.list()})
+        if self.command == "POST":
             body = self._body()
-            if path == "/api/voice":
-                requested = body.get("voice")
-                if not isinstance(requested, str):
-                    raise ValueError("voice must be one of the pack speakers")
-                try:
-                    return self._json(200, app.synthesis.set_voice(requested))
-                except synthesis.VoiceError as exc:
-                    raise ValueError(str(exc)) from exc
-            # Preview: synthesise one fixed sentence in the current voice and
-            # hand the PCM16LE back to the client (single JSON envelope, not
-            # SSE) so a one-shot playback does not need a conversation.
-            if not app.audio_lock.acquire(blocking=False):
-                raise BusyError("Another speech operation is active")
-            try:
-                if not app.manager.status().get("voice", {}).get("requested"):
-                    raise ValueError(
-                        "Enable voice in model setup before using speech")
-                app.audio_cancel = threading.Event()
-                app.audio_kind = "tts"
-                grant = app.coordinator.speech.enter(app.audio_cancel)
-                if grant is None:
-                    raise BusyError(
-                        "Speech is waiting for the current model operation")
-                rate = None
-                pcm = array.array("h")
-                try:
-                    chunks = app.synthesis.synthesize_chunks(
-                        PREVIEW_SENTENCE, app.audio_cancel)
-                    with contextlib.closing(chunks) as stream:
-                        for chunk in stream:
-                            if app.audio_cancel.is_set():
-                                break
-                            if rate is None:
-                                rate = chunk.sample_rate
-                            pcm.frombytes(chunk.data)
-                finally:
-                    grant.release()
-                    app.audio_kind = None
-                    app.audio_identity = None
-                if not pcm or rate is None:
-                    raise synthesis.VoiceError(
-                        "preview produced no audio")
-                encoded = base64.b64encode(pcm.tobytes()).decode("ascii")
-                return self._json(200, {"sample_rate": int(rate),
-                                        "encoding": "pcm16le",
-                                        "data": encoded})
-            finally:
-                app.audio_lock.release()
-        if self.command == "POST" and path in ("/api/transcribe", "/api/speak"):
-            raw = self._body(binary=path == "/api/transcribe")
-            if not app.audio_lock.acquire(blocking=False):
-                raise BusyError("Another speech operation is active")
-            grant = None
-            try:
-                if not app.manager.status().get("voice", {}).get("requested"):
-                    raise ValueError("Enable voice in model setup before using speech")
-                app.audio_cancel = threading.Event()
-                app.audio_kind = "stt" if path == "/api/transcribe" else "tts"
-                if path == "/api/transcribe":
-                    # Recognition runs on its own qualified runtime and does
-                    # not interleave with generation; keep the plain busy
-                    # rejection while a model operation holds the GPU.
-                    if not app.coordinator.gpu.acquire(blocking=False):
-                        raise BusyError("Speech is waiting for the current model operation")
-                    try:
-                        text = app.recognition.transcribe(raw, app.audio_cancel)
-                    finally:
-                        app.coordinator.gpu.release()
-                    return self._json(200, {"text": text})
-                cid, turn = raw.get("conversation_id"), raw.get("turn_id")
-                if not isinstance(cid, str) or not isinstance(turn, str):
-                    raise ValueError("Speech requires a conversation and turn ID")
-                record = app.store.get(cid)
-                text = raw.get("text")
-                message = next((m for m in record["messages"] if m["turn_id"] == turn and m["role"] == "assistant"), None)
-                if not isinstance(text, str) or not text.strip() or len(text) > 4000 or not message or text not in message["content"]:
-                    raise ValueError("Read aloud only visible answer text")
-                sequence = raw.get("sentence_sequence")
-                if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
-                    raise ValueError("Invalid speech sentence sequence")
-                grant = app.coordinator.speech.enter(app.audio_cancel)
-                if grant is None:
-                    raise BusyError("Speech is waiting for the current model operation")
-                app.audio_identity = (cid, turn)
-                identity = {"conversation_id": cid, "turn_id": turn, "sentence_sequence": sequence}
-                self._headers(200, "text/event-stream")
-                self.send_header("Connection", "close")
-                self.end_headers()
+            return self._json(201, app.store.create(save=body.get("save", False)))
+        return None
 
-                def send_audio_event(kind, data):
-                    payload = json.dumps(dict(identity, **data), allow_nan=False)
-                    self.wfile.write(f"event: {kind}\ndata: {payload}\n\n".encode())
-                    self.wfile.flush()
-
-                try:
-                    with contextlib.closing(app.synthesis.synthesize_chunks(text, app.audio_cancel)) as chunks:
-                        for chunk in chunks:
-                            if app.audio_cancel.is_set():
-                                break
-                            send_audio_event("audio", {"sample_rate": chunk.sample_rate, "encoding": "pcm16le",
-                                            "data": base64.b64encode(chunk.data).decode("ascii")})
-                    send_audio_event("done", {"stopped": app.audio_cancel.is_set()})
-                except (BrokenPipeError, ConnectionResetError):
+    def _conversation(self, cid, tail, parsed):
+        """/api/conversations/{cid}[...] subtree: record read/delete/patch,
+        export, context selection, turns, cancel/heartbeat, actions, SSE."""
+        app = self.server
+        record = app.store.get(cid)
+        if not tail:
+            if self.command == "GET":
+                return self._json(200, record)
+            if self.command == "DELETE":
+                app.store.delete(cid)
+                return self._json(200, {"deleted": True})
+            if self.command == "PATCH":
+                return self._json(200, app.store.set_saved(cid, self._body().get("save")))
+        if self.command == "GET" and tail == ["export"]:
+            return self._json(200, record)
+        if self.command == "POST" and tail == ["context"]:
+            body = self._body()
+            if set(body) != {"selected_turn_ids", "pinned_constraints"}:
+                raise ValueError("Provide selected turn IDs and pinned constraints only")
+            return self._json(200, app.store.set_context(
+                cid, body["selected_turn_ids"], body["pinned_constraints"]))
+        if self.command == "POST" and tail == ["turns"]:
+            return self._json(202, {"turn_id": app.coordinator.submit(cid, self._body())})
+        if self.command == "POST" and tail in (["cancel"], ["heartbeat"]):
+            turn = self._body().get("turn_id")
+            if not isinstance(turn, str):
+                raise ValueError("Missing turn ID")
+            if tail == ["cancel"]:
+                app.coordinator.cancel(cid, turn)
+                if app.audio_kind == "tts" and app.audio_identity == (cid, turn):
                     app.audio_cancel.set()
-                except Exception as error:
-                    send_audio_event("error", {"message": str(error)[:1000]})
-                self.close_connection = True
-                return
-            finally:
-                if grant is not None:
-                    grant.release()
-                app.audio_identity = None
-                app.audio_kind = None
-                app.audio_lock.release()
-        if self.command == "GET" and not path.startswith("/api/"):
-            static = Path(__file__).with_name("static").resolve()
-            target = (static / ("index.html" if path == "/" else path.lstrip("/"))).resolve()
-            if not target.is_relative_to(static) or not target.is_file():
-                raise KeyError("Page not found")
-            content = target.read_bytes()
-            mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
-            self._headers(200, mime, len(content))
+            else:
+                app.coordinator.heartbeat(cid, turn)
+            return self._json(200, {"ok": True})
+        if self.command == "POST" and tail == ["actions"]:
+            return self._json(202, {"turn_id": app.coordinator.action(cid, self._body())})
+        if self.command == "GET" and tail == ["events"]:
+            after = int(parse_qs(parsed.query).get("after", ["0"])[0])
+            app.store.events(cid, after)
+            self._headers(200, "text/event-stream")
+            self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(content)
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                try:
+                    events = app.store.events(cid, after)
+                except (EventGap, KeyError):
+                    break
+                for event in events:
+                    raw = json.dumps(event, ensure_ascii=False, allow_nan=False)
+                    self.wfile.write(f"id: {event['sequence']}\nevent: {event['type']}\ndata: {raw}\n\n".encode())
+                    after = event["sequence"]
+                if events:
+                    self.wfile.flush()
+                if not app.store.get(cid)["active_turn"]:
+                    break
+                with app.store.changed:
+                    app.store.changed.wait(timeout=1)
+            self.close_connection = True
             return
         raise KeyError("Endpoint not found")
+
+    def _voice_cancel(self, parsed):
+        app = self.server
+        kind = self._body().get("kind")
+        if kind not in ("tts", "stt"):
+            raise ValueError("Choose tts or stt cancellation")
+        if app.audio_kind == kind:
+            app.audio_cancel.set()
+        return self._json(200, {"stopped": True})
+
+    def _voice(self, parsed):
+        """POST /api/voice (voice selection) and /api/voice/preview (one
+        synthesised sentence handed back as PCM16LE in one JSON envelope)."""
+        app = self.server
+        path = unquote(urlsplit(self.path).path)
+        body = self._body()
+        if path == "/api/voice":
+            requested = body.get("voice")
+            if not isinstance(requested, str):
+                raise ValueError("voice must be one of the pack speakers")
+            try:
+                return self._json(200, app.synthesis.set_voice(requested))
+            except synthesis.VoiceError as exc:
+                raise ValueError(str(exc)) from exc
+        # Preview: synthesise one fixed sentence in the current voice and
+        # hand the PCM16LE back to the client (single JSON envelope, not
+        # SSE) so a one-shot playback does not need a conversation.
+        if not app.audio_lock.acquire(blocking=False):
+            raise BusyError("Another speech operation is active")
+        try:
+            if not app.manager.status().get("voice", {}).get("requested"):
+                raise ValueError(
+                    "Enable voice in model setup before using speech")
+            app.audio_cancel = threading.Event()
+            app.audio_kind = "tts"
+            grant = app.coordinator.speech.enter(app.audio_cancel)
+            if grant is None:
+                raise BusyError(
+                    "Speech is waiting for the current model operation")
+            rate = None
+            pcm = array.array("h")
+            try:
+                chunks = app.synthesis.synthesize_chunks(
+                    PREVIEW_SENTENCE, app.audio_cancel)
+                with contextlib.closing(chunks) as stream:
+                    for chunk in stream:
+                        if app.audio_cancel.is_set():
+                            break
+                        if rate is None:
+                            rate = chunk.sample_rate
+                        pcm.frombytes(chunk.data)
+            finally:
+                grant.release()
+                app.audio_kind = None
+                app.audio_identity = None
+            if not pcm or rate is None:
+                raise synthesis.VoiceError(
+                    "preview produced no audio")
+            encoded = base64.b64encode(pcm.tobytes()).decode("ascii")
+            return self._json(200, {"sample_rate": int(rate),
+                                    "encoding": "pcm16le",
+                                    "data": encoded})
+        finally:
+            app.audio_lock.release()
+
+    def _speech(self, parsed):
+        """POST /api/transcribe (recognition) and /api/speak (read aloud
+        as an SSE audio stream)."""
+        app = self.server
+        path = unquote(urlsplit(self.path).path)
+        raw = self._body(binary=path == "/api/transcribe")
+        if not app.audio_lock.acquire(blocking=False):
+            raise BusyError("Another speech operation is active")
+        grant = None
+        try:
+            if not app.manager.status().get("voice", {}).get("requested"):
+                raise ValueError("Enable voice in model setup before using speech")
+            app.audio_cancel = threading.Event()
+            app.audio_kind = "stt" if path == "/api/transcribe" else "tts"
+            if path == "/api/transcribe":
+                # Recognition runs on its own qualified runtime and does
+                # not interleave with generation; keep the plain busy
+                # rejection while a model operation holds the GPU.
+                if not app.coordinator.gpu.acquire(blocking=False):
+                    raise BusyError("Speech is waiting for the current model operation")
+                try:
+                    text = app.recognition.transcribe(raw, app.audio_cancel)
+                finally:
+                    app.coordinator.gpu.release()
+                return self._json(200, {"text": text})
+            return self._read_aloud(app, raw)
+        finally:
+            if grant is not None:
+                grant.release()
+            app.audio_identity = None
+            app.audio_kind = None
+            app.audio_lock.release()
+
+    def _read_aloud(self, app, raw):
+        """The /api/speak half of _speech: validate visible answer text,
+        enter the speech scheduler, and stream synthesised audio as SSE."""
+        cid, turn = raw.get("conversation_id"), raw.get("turn_id")
+        if not isinstance(cid, str) or not isinstance(turn, str):
+            raise ValueError("Speech requires a conversation and turn ID")
+        record = app.store.get(cid)
+        text = raw.get("text")
+        message = next((m for m in record["messages"] if m["turn_id"] == turn and m["role"] == "assistant"), None)
+        if not isinstance(text, str) or not text.strip() or len(text) > 4000 or not message or text not in message["content"]:
+            raise ValueError("Read aloud only visible answer text")
+        sequence = raw.get("sentence_sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            raise ValueError("Invalid speech sentence sequence")
+        grant = app.coordinator.speech.enter(app.audio_cancel)
+        if grant is None:
+            raise BusyError("Speech is waiting for the current model operation")
+        app.audio_identity = (cid, turn)
+        identity = {"conversation_id": cid, "turn_id": turn, "sentence_sequence": sequence}
+        try:
+            self._headers(200, "text/event-stream")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            def send_audio_event(kind, data):
+                payload = json.dumps(dict(identity, **data), allow_nan=False)
+                self.wfile.write(f"event: {kind}\ndata: {payload}\n\n".encode())
+                self.wfile.flush()
+
+            try:
+                with contextlib.closing(app.synthesis.synthesize_chunks(text, app.audio_cancel)) as chunks:
+                    for chunk in chunks:
+                        if app.audio_cancel.is_set():
+                            break
+                        send_audio_event("audio", {"sample_rate": chunk.sample_rate, "encoding": "pcm16le",
+                                        "data": base64.b64encode(chunk.data).decode("ascii")})
+                send_audio_event("done", {"stopped": app.audio_cancel.is_set()})
+            except (BrokenPipeError, ConnectionResetError):
+                app.audio_cancel.set()
+            except Exception as error:
+                send_audio_event("error", {"message": str(error)[:1000]})
+            self.close_connection = True
+        finally:
+            grant.release()
+
+    def _static(self, path):
+        """Static files under the packaged static/ directory, index.html
+        at the root; anything escaping the tree or missing raises 404."""
+        static = Path(__file__).with_name("static").resolve()
+        target = (static / ("index.html" if path == "/" else path.lstrip("/"))).resolve()
+        if not target.is_relative_to(static) or not target.is_file():
+            raise KeyError("Page not found")
+        content = target.read_bytes()
+        mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
+        self._headers(200, mime, len(content))
+        self.end_headers()
+        self.wfile.write(content)
+        return
 
     def _handle(self):
         try:
@@ -692,3 +753,18 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = _handle
     do_PATCH = _handle
     do_DELETE = _handle
+
+    _ROUTES = {
+        ("POST", "/api/session"): _session_post,
+        ("GET", "/api/session"): _session_get,
+        ("GET", "/api/status"): _status,
+        ("POST", "/api/launch"): _launch,
+        ("GET", "/api/theme"): _theme,
+        ("POST", "/api/resume"): _resume,
+        ("POST", "/api/setup"): _setup,
+        ("POST", "/api/voice/cancel"): _voice_cancel,
+        ("POST", "/api/voice"): _voice,
+        ("POST", "/api/voice/preview"): _voice,
+        ("POST", "/api/transcribe"): _speech,
+        ("POST", "/api/speak"): _speech,
+    }
