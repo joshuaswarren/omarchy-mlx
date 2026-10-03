@@ -865,7 +865,7 @@ every Release battery (M2 G14X, jw16 G13C, dev-box llvmpipe) stayed
 green while asserts-enabled builds aborted. NormApple's original jw16
 abort is retained in receipts/2026-10-03-norm-apple.
 
-Fix (fb0aac16c): derive the tile shapes from the score plane -
+Fix (6ebdb4d53): derive the tile shapes from the score plane -
 `Shape tile_shape = S.shape(); tile_shape.back() = D;` - one
 rank-agnostic construction for both routes; no guard, no special case.
 Evidence: asserts-enabled builds run the case clean standalone and in
