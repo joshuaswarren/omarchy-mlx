@@ -111,14 +111,31 @@ rope bit-equality legs in test_fast_ops.cpp.
   On serve checkouts that carry the in-graph patch, all Kokoro trig
   arguments stay below 1e4 and hit the raw built-in band, bit-identical
   by construction.
-- Suite battery (eq_math, trig_reduction, primitive, fused_chain,
-  compiled_tape, runtime) on the Apple GPUs: recorded in the notebook
-  entry (artifacts/TrigContract/) — run state at landing is below.
+- Suite battery on jwm1 (M1, old Mesa 109060099 - the strictest device,
+  fresh-boot run 2026-10-03 ~16:09Z, under /tmp/m1-gpu.lock):
+  omarchy_eq_math_tests 7/7 cases 128/128 assertions (the rewritten
+  band + boundary + NaN contract), omarchy_trig_reduction_tests 4/4
+  49/49 (bands, tan, NaN/boundary, complex exp), omarchy_primitive_tests
+  104/104, omarchy_fused_chain_tests 36/36, omarchy_compiled_tape_tests
+  13/13, omarchy_runtime_tests 41/41. An earlier jwm1 attempt died with
+  a host reboot 36 s in (up 0 min at 16:08Z; unrelated holder bench on
+  the lock at the time) - the clean rerun after boot is the table above.
+  The jw16 window ran the same battery with a mangled loop (no results);
+  jw16's device leg is the probe table instead. Open item: compile() of
+  a dedicated sin*cos tape segfaults on jwm1 (removed from the doctest;
+  belongs to the compiled-tape lane - the tape suite's unary legs pin
+  the same routing).
 
-## Known llvmpipe deltas (handed off from SdpaVjpFix, being verified)
+## Known llvmpipe deltas (handed off from SdpaVjpFix; rerun pending)
 
 Three fast_ops doctests show 1-bf16-ulp fused-vs-composed deltas on
 dev-box llvmpipe since the Cody-Waite wiring (their bisect:
-receipts/2026-10-03-sdpa-vjp-fix, §Attributions; all green on jw16).
-79a53e388 puts both sides through the same wrapper; the dev-box rerun
-of the three named cases on this wheel is recorded in the notebook.
+receipts/2026-10-03-sdpa-vjp-fix, §Attributions; all green on jw16
+hardware). 79a53e388 puts both sides through the same wrapper, so the
+fused and composed paths are again the same function. The dev-box
+rerun of the three named cases on this wheel was NOT completed in this
+window (the jw16/jwm1 legs consumed the GPU budget) and is the one
+open verification item. The captured deltas are small-argument,
+finite, one-bf16-ulp schedule noise - the llvmpipe class of the
+documented inexact-reassociation defects; the hardware suites are the
+contract of record.
