@@ -179,13 +179,18 @@ void main() {
 
     // gamma_log over the chunk (lanes >= valid contribute 0, so the
     // prefix stays at the last valid token — the partial-chunk decay
-    // target, matching the Metal kernel).
+    // target, matching the Metal kernel). Floor at FLT_MIN, not 1e-6:
+    // real gates reach 5.9e-11, and a 1e-6 floor mis-states their decay
+    // by ~1.7e4; FLT_MIN keeps log finite (max |log| 87.3) so every
+    // log-difference stays <= 0 and no factor can overflow, while g = 0
+    // (softplus underflow) still decays fully instead of NaN-ing on
+    // inf - inf.
     float gv = 0.0;
     if (lane < valid) {
       float graw = g_f32
           ? g_buf_f.v[g_off + (t0 + lane) * hv + head]
           : bf16_load(g_buf.v[g_off + (t0 + lane) * hv + head]);
-      gv = log(max(graw, 1e-6f));
+      gv = log(max(graw, 1.17549435e-38f));
     }
     if (lane < C) {
       gamma_s[sg][lane] = subgroupInclusiveAdd(gv);

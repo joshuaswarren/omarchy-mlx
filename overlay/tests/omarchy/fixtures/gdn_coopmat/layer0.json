@@ -1,0 +1,53 @@
+{
+ "source": "gdn27b-maskless-coopmat-inputs.layer0.npz",
+ "source_sha256": "7e9325fb7493573644384aee582b9bec26828920181e484243403b438cf276e6",
+ "heads": [
+  29,
+  8
+ ],
+ "T": 351,
+ "Dk": 128,
+ "Dv": 128,
+ "layout": "heads-first [H, T, D]; tensors bf16 stored as raw u16 little-endian bit patterns; g f32 raw; initial state zeros",
+ "files": {
+  "layer0.q.bf16": {
+   "dtype": "bf16-u16le",
+   "shape": [
+    2,
+    351,
+    128
+   ]
+  },
+  "layer0.k.bf16": {
+   "dtype": "bf16-u16le",
+   "shape": [
+    2,
+    351,
+    128
+   ]
+  },
+  "layer0.v.bf16": {
+   "dtype": "bf16-u16le",
+   "shape": [
+    2,
+    351,
+    128
+   ]
+  },
+  "layer0.beta.bf16": {
+   "dtype": "bf16-u16le",
+   "shape": [
+    2,
+    351,
+    1
+   ]
+  },
+  "layer0.g.f32": {
+   "dtype": "f32le",
+   "shape": [
+    2,
+    351
+   ]
+  }
+ }
+}

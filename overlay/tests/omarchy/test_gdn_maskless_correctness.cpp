@@ -8,6 +8,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -167,4 +168,139 @@ TEST_CASE("GDN maskless prefill preserves fp64 final state across route boundary
       check_case(T, rep, stream);
     }
   }
+}
+
+// Real captured Qwen3.5-27B prefill operands (two-head subset: the NaN head
+// 29 plus a control head), checked in under fixtures/gdn_coopmat. These are
+// the exact operands of the 2026-10-03 defect captures: layer0 exercises
+// large-v / small-g ranges, layer12 carries g down to 5.9e-11 (below the
+// old 1e-6 gate floor) in head 29. The fused coopmat route must match the
+// fp64 per-token reference at the same tolerance the scan route achieves.
+#ifndef GDN_FIXTURE_DIR
+#define GDN_FIXTURE_DIR "fixtures/gdn_coopmat"
+#endif
+
+namespace {
+
+struct FixtureTensors {
+  std::vector<float> q, k, v, g, beta;  // token-major [T * Hv * kD] / [T * Hv]
+};
+
+std::vector<float> load_bf16_bits(
+    const std::string& path, const std::vector<int>& shape) {
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in.good());
+  size_t count = 1;
+  for (int d : shape) count *= d;
+  std::vector<uint16_t> bits(count);
+  in.read(reinterpret_cast<char*>(bits.data()), count * sizeof(uint16_t));
+  REQUIRE_EQ(static_cast<size_t>(in.gcount()), count * sizeof(uint16_t));
+  std::vector<float> out(count);
+  for (size_t i = 0; i < count; ++i) {
+    uint32_t wide = static_cast<uint32_t>(bits[i]) << 16;
+    out[i] = std::bit_cast<float>(wide);
+  }
+  return out;
+}
+
+std::vector<float> load_f32(
+    const std::string& path, const std::vector<int>& shape) {
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in.good());
+  size_t count = 1;
+  for (int d : shape) count *= d;
+  std::vector<float> out(count);
+  in.read(reinterpret_cast<char*>(out.data()), count * sizeof(float));
+  REQUIRE_EQ(static_cast<size_t>(in.gcount()), count * sizeof(float));
+  return out;
+}
+
+// [H, T, D] fixture files -> token-major [T * H * D] vectors.
+FixtureTensors load_fixture(const std::string& tag) {
+  const std::string dir = GDN_FIXTURE_DIR;
+  std::vector<int> qkv_shape = {2, 351, kD};
+  std::vector<int> gate_shape = {2, 351};
+  FixtureTensors fx;
+  auto heads_first = [](std::vector<float> data, int heads, int tokens, int dim) {
+    std::vector<float> out(data.size());
+    for (int h = 0; h < heads; ++h)
+      for (int t = 0; t < tokens; ++t)
+        for (int d = 0; d < dim; ++d)
+          out[(static_cast<size_t>(t) * heads + h) * dim + d] =
+              data[(static_cast<size_t>(h) * tokens + t) * dim + d];
+    return out;
+  };
+  fx.q = heads_first(load_bf16_bits(dir + "/" + tag + ".q.bf16", qkv_shape), 2, 351, kD);
+  fx.k = heads_first(load_bf16_bits(dir + "/" + tag + ".k.bf16", qkv_shape), 2, 351, kD);
+  fx.v = heads_first(load_bf16_bits(dir + "/" + tag + ".v.bf16", qkv_shape), 2, 351, kD);
+  fx.beta = heads_first(load_bf16_bits(dir + "/" + tag + ".beta.bf16", gate_shape), 2, 351, 1);
+  fx.g = heads_first(load_f32(dir + "/" + tag + ".g.f32", gate_shape), 2, 351, 1);
+  return fx;
+}
+
+void check_fixture(const std::string& tag, double state_tol, Stream stream) {
+  const FixtureTensors fx = load_fixture(tag);
+  const int T = 351;
+  const int Hv = 2;
+  const Reference ref = reference(fx.q, fx.k, fx.v, fx.g, fx.beta, T, Hv);
+
+  auto mk = [&](const std::vector<float>& data, int rows, int cols, bool bf) {
+    array a = array(data.begin(), Shape{1, rows, cols}, float32, stream);
+    return bf ? astype(a, bfloat16, stream) : a;
+  };
+  array q = mk(fx.q, T * Hv, kD, true);
+  array k = mk(fx.k, T * Hv, kD, true);
+  array v = mk(fx.v, T * Hv, kD, true);
+  // [1, T, Hv] gate layout from the token-major vector.
+  auto gates = [&](const std::vector<float>& data, bool bf) {
+    std::vector<float> perm(data.size());
+    for (int t = 0; t < T; ++t)
+      for (int h = 0; h < Hv; ++h) perm[t * Hv + h] = data[t * Hv + h];
+    return mk(perm, T, Hv, bf);
+  };
+  array g = gates(fx.g, false);
+  array beta = gates(fx.beta, true);
+  array h0 = zeros({1, Hv, kD, kD}, float32, stream);
+  array mask = ones({1, T}, bool_, stream);
+  q.eval(); k.eval(); v.eval(); g.eval(); beta.eval(); h0.eval(); mask.eval();
+  omarchy::get_command_encoder(stream).synchronize("gdn_fixture_inputs");
+
+  const std::string label = "GDN fixture " + tag;
+  for (bool with_mask : {false, true}) {
+    auto out = with_mask
+        ? fast::gated_delta_update(q, k, v, g, beta, h0, mask, stream)
+        : fast::gated_delta_update(q, k, v, g, beta, h0, std::nullopt, stream);
+    const std::string arm = with_mask ? " masked" : " maskless";
+    std::vector<float> y = materialize_f32(out[0], stream);
+    std::vector<float> st = materialize_f32(out[1], stream);
+    double nan_count = 0;
+    double state_err = 0;
+    for (size_t i = 0; i < st.size(); ++i) {
+      if (!std::isfinite(st[i]) || !std::isfinite(y[i])) nan_count += 1;
+    }
+    CHECK_MESSAGE(nan_count == 0, label + arm + " NaN/inf count=", nan_count);
+    for (size_t i = 0; i < st.size(); ++i) {
+      state_err = std::max(state_err, std::abs(static_cast<double>(st[i]) - ref.state[i]));
+    }
+    CHECK_MESSAGE(state_err <= state_tol, label + arm + " state max_abs=", state_err, " tol=", state_tol);
+    // y is bf16 output on O(1..10^2) values: 8 bf16 quanta of the reference.
+    double y_err = 0;
+    double y_bad = 0;
+    for (size_t i = 0; i < y.size(); ++i) {
+      double quantum = std::max(std::abs(ref.y[i]) * 0x1p-8, 0x1p-10);
+      double err = std::abs(static_cast<double>(y[i]) - ref.y[i]);
+      y_err = std::max(y_err, err);
+      if (err > 8 * quantum) y_bad += 1;
+    }
+    CHECK_MESSAGE(y_bad == 0, label + arm + " y over-quanta count=", y_bad, " max_abs=", y_err);
+  }
+}
+
+} // namespace
+
+TEST_CASE("GDN coopmat prefill matches fp64 on captured 27B operands") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  check_fixture("layer0", 5e-5, stream);
+  check_fixture("layer12", 1e-5, stream);
 }

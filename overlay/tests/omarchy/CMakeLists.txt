@@ -219,6 +219,8 @@ add_test(NAME omarchy_gdn_fast_route_repeat_tests
          COMMAND omarchy_gdn_fast_route_repeat_tests)
 add_executable(omarchy_gdn_maskless_correctness_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_maskless_correctness.cpp)
+target_compile_definitions(omarchy_gdn_maskless_correctness_tests
+                           PRIVATE GDN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gdn_coopmat")
 target_link_libraries(omarchy_gdn_maskless_correctness_tests PRIVATE mlx doctest)
 target_compile_options(omarchy_gdn_maskless_correctness_tests
                        PRIVATE ${SANITIZER_COMPILE_FLAGS})

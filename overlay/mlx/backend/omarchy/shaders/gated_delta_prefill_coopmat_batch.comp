@@ -214,13 +214,16 @@ void main() {
 
     // gamma_log over the chunk (lanes >= valid contribute 0, so the
     // prefix stays at the last valid token — the partial-chunk decay
-    // target, matching the Metal kernel).
+    // target, matching the Metal kernel). FLT_MIN floor, not 1e-6: real
+    // gates reach 5.9e-11 (mis-stated ~1.7e4 by a 1e-6 floor); the
+    // smaller floor keeps every log-difference <= 0 and finite, and
+    // g = 0 decays fully instead of NaN-ing on inf - inf.
     float gv = 0.0;
     if (lane < valid) {
       float graw = g_f32
           ? g_buf_f.v[g_off + (t0 + lane) * hv + head]
           : bf16_load(g_buf.v[g_off + (t0 + lane) * hv + head]);
-      gv = log(max(graw, 1e-6f));
+      gv = log(max(graw, 1.17549435e-38f));
     }
     if (lane < C) {
       gamma_s[sg][lane] = subgroupInclusiveAdd(gv);
@@ -371,10 +374,11 @@ void main() {
     barrier();
 
     // State update in 4-slice waves: stage four K slices (decayed by the
-    // chunk-end decay), then per slice MMA -> shared store -> FMA. The FMA
-    // reads only the lane's own store-mapped elements, so no barrier sits
-    // between the store and the FMA; the next wave's staging writes kgc_all
-    // only, which no live read references.
+    // chunk-end decay), then per slice MMA -> shared store -> subgroup
+    // barrier -> FMA, where the FMA reads only the lane's own
+    // store-mapped elements (the e0 = lane*2 round-trip convention this
+    // kernel's staging already relies on), so the 48 per-step barriers
+    // become 4 plus one subgroup barrier per slice.
     for (uint wave = 0u; wave < KSTEPS / 4u; ++wave) {
       for (uint j = 0u; j < 4u; ++j) {
         uint kk = wave * 4u + j;
@@ -396,11 +400,19 @@ void main() {
         coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd =
             coopMatMulAdd(mat_a, mat_b2, zero);
         coopMatStore(kd, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+        // The store's lane-to-element mapping is implementation-defined,
+        // so the FMA below can read elements another lane just stored:
+        // order the subgroup's shared accesses explicitly.
+        subgroupBarrier();
         s_state[sg][kk * 64u + e0] =
             s_state[sg][kk * 64u + e0] * gamC + rt_b[sg][e0];
         s_state[sg][kk * 64u + e0 + 1u] =
             s_state[sg][kk * 64u + e0 + 1u] * gamC + rt_b[sg][e0 + 1u];
       }
+      // Close the wave: without this, a fast lane could reach the next
+      // wave's kgc_all staging writes while a sibling lane's coopMatLoad
+      // reads of the previous wave are still pending.
+      subgroupBarrier();
     }
   }
 
