@@ -110,7 +110,7 @@ class VoiceDependencyContractTests(unittest.TestCase):
                               f"install.sh --voice must pin {name}{constraint}")
 
 
-ROOT = INSTALLER.parents[1]
+ROOT = INSTALLER.parents[0]
 
 
 class AneSmokeGateTests(unittest.TestCase):
@@ -425,6 +425,9 @@ class SocGateTests(unittest.TestCase):
 
     def test_serve_catalog_arches_cover_the_m1_family(self):
         import importlib.util
+        # catalog.py does `import mlx_omarchy_paths`, a top-level serve
+        # module: put serve/ on the path or the exec fails under unittest.
+        sys.path.insert(0, str(INSTALLER.parent / "serve"))
         spec = importlib.util.spec_from_file_location(
             "mlx_omarchy_serve_catalog",
             INSTALLER.parent / "serve/mlx_omarchy_serve/catalog.py")
