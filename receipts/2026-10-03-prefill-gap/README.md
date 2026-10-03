@@ -138,6 +138,13 @@ This is content between `58724762e` and `22cdc6da5` (GDN FLT_MIN floor +
 wave-barrier hardening, ssm-maskless serve patch), NOT the lever: the
 added block is a pure env-gated early return (with the env unset the
 default path is byte-identical code), and ctl == staged in every cell.
+Closed empirically on the post-macOS boot (`797d839e…`, settled): the
+**published v0.7.22 wheel** (`0.32.4.dev202610031525+58724762`, private
+venv, no env flags) reproduces the pin — pf512 digest
+`bc519c03c4ef5fd1`, prefill 413.8 tok/s, TTFT 0.1306 s (0.904x / 1.045x
+vs macOS; ~1.3% under the v0.7.21 settled read, single cell). The
+`a4ebce784981475a` digest therefore belongs to main content after the
+v0.7.22 cut and must be re-pinned by whoever ships it.
 
 ## 5. Next axes (proposed, in the order they should be tried)
 
