@@ -244,22 +244,15 @@ void check_fixture(const std::string& tag, double state_tol, Stream stream) {
   const int Hv = 2;
   const Reference ref = reference(fx.q, fx.k, fx.v, fx.g, fx.beta, T, Hv);
 
-  auto mk = [&](const std::vector<float>& data, int rows, int cols, bool bf) {
-    array a = array(data.begin(), Shape{1, rows, cols}, float32);
+  auto mk = [&](const std::vector<float>& data, Shape shape, bool bf) {
+    array a = array(data.begin(), shape, float32);
     return bf ? astype(a, bfloat16, stream) : a;
   };
-  array q = mk(fx.q, T * Hv, kD, true);
-  array k = mk(fx.k, T * Hv, kD, true);
-  array v = mk(fx.v, T * Hv, kD, true);
-  // [1, T, Hv] gate layout from the token-major vector.
-  auto gates = [&](const std::vector<float>& data, bool bf) {
-    std::vector<float> perm(data.size());
-    for (int t = 0; t < T; ++t)
-      for (int h = 0; h < Hv; ++h) perm[t * Hv + h] = data[t * Hv + h];
-    return mk(perm, T, Hv, bf);
-  };
-  array g = gates(fx.g, false);
-  array beta = gates(fx.beta, true);
+  array q = mk(fx.q, Shape{1, T, Hv, kD}, true);
+  array k = mk(fx.k, Shape{1, T, Hv, kD}, true);
+  array v = mk(fx.v, Shape{1, T, Hv, kD}, true);
+  array g = mk(fx.g, Shape{1, T, Hv}, false);
+  array beta = mk(fx.beta, Shape{1, T, Hv}, true);
   array h0 = zeros({1, Hv, kD, kD}, float32, stream);
   array mask = ones({1, T}, bool_, stream);
   q.eval(); k.eval(); v.eval(); g.eval(); beta.eval(); h0.eval(); mask.eval();
