@@ -1,11 +1,12 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// Bounded ANE worker CLI (plan sections 24-27). One invocation is one
+// Bounded ANE worker CLI (plan sections 24-27). The one-shot form is one
 // supervised execution of one bundle: load programs, run the dispatch
 // plan for N iterations inside a wall-clock deadline, verify expected
-// outputs byte-exactly when asked, release, exit. There is no server,
-// no socket, and no state between invocations.
+// outputs byte-exactly when asked, release, exit. --serve and
+// --relay-bypass keep one session for their parent process; --daemon
+// keeps one session for successive clients on an owner-only unix socket.
 
 #include "mlx/backend/omarchy/ane/bundle.h"
 #include "mlx/backend/omarchy/ane/worker.h"
@@ -806,29 +807,12 @@ int serve_resident_bypass(
 }
 
 // Resident daemon: same prologue as serve_resident_bypass (one private
-// child, one bundle load, one device load), but the byte pump moves
-// bytes between the resident's socketpair and an externally-bound unix
-// socket. One client at a time; the listen loop terminates after
-// --idle-time-ms without a connection, on SIGTERM, or on SIGINT. The
-// device fd and the resident buffer objects belong to this process for
-// its whole lifetime -- nothing escapes through the socket but wire
-// protocol bytes, and the worker never sees the client identity.
-//
-// AGENTS.md hardware safety per mode:
-//   - one new failure mode per branch:
-//     bind:      EACCES / EADDRINUSE refusal (single-instance lock + 0600)
-//     accept:    EMFILE / ECONNABORTED (transient, continue)
-//     ready:     EPIPE / client close (close client fd, return to idle)
-//     idle:      poll() timeout (close session, release device, exit 0)
-//     signal:    SIGTERM / SIGINT (same as idle exit)
-//     spawn:     --stop kills pid; graceful child close + socket unlink
-//   - bounded timeouts:
-//     poll() idle timeout = --idle-time-ms
-//     connect-time check on the single-instance lock before bind
-//   - device state before/after:
-//     logged as `resident pid=...` on open and `daemon released pid=...`
-//     on close. The resident child's waitpid reaps deterministically;
-//     no orphan child leaves the device held across daemon exits.
+// child, one bundle load, one device load, seals checked before device
+// load), but successive clients reach the session over an owner-only
+// unix socket. One client at a time; the loop ends on --idle-time-ms
+// without a connection, SIGTERM/SIGINT, or a lost session. The device
+// fd and resident buffer objects stay with this process; only wire
+// protocol bytes cross the socket.
 namespace {
 
 // Async-signal-safe shutdown flag: SIGTERM / SIGINT handler writes 1,
@@ -864,72 +848,183 @@ int lock_at(const std::string& lock_path) {
   return fd;
 }
 
-// Replace `daemon pump` core: the same splice loop as
-// serve_resident_bypass, but the source/sink fds are the connected
-// client socket and the resident channel. Half-duplex; one poll()
-// moves bytes in whichever direction is ready.
+// Payload length from a "<tag> <name> <len>" frame header; 0 when the
+// header is malformed (the resident refuses it with a named failure).
+size_t frame_payload_length(const std::string& header) {
+  auto space = header.rfind(' ');
+  if (space == std::string::npos) return 0;
+  try {
+    return static_cast<size_t>(std::stoull(header.substr(space + 1)));
+  } catch (...) {
+    return 0;
+  }
+}
+
+bool send_all(int fd, const char* data, size_t size) {
+  while (size > 0) {
+    ssize_t written = ::send(fd, data, size, MSG_NOSIGNAL);
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    data += written;
+    size -= static_cast<size_t>(written);
+  }
+  return true;
+}
+
+enum class DetachResult { SessionIntact, SessionLost };
+
+// One client of the daemon. Bytes move with read/write, not splice:
+// splice needs one end to be a pipe, and here both ends are sockets.
+// The pump tracks the resident wire framing in both directions
+// ("submit"/"in <len>"+payload/"run" requests; "iter"/"out
+// <len>"+payload/"done"/"failed:" responses) so it knows where a
+// request cycle stands when the client goes away:
 //
-// Client-side EOF is NOT forwarded to the channel. In --relay-bypass
-// mode one client equals one session, so SHUT_WR to the resident is
-// the close signal; in daemon mode the channel fd is the persistent
-// session and shutting it down would make worker_main exit after the
-// first client, leaving a defunct child and a dead session for the
-// next caller.
-//
-// After the client closes its write side, the pump must keep the
-// channel open until the resident finishes the current response
-// (e.g. the `released` token after a wire `close`). The pump breaks
-// when the channel EOFs, when the write to the client fails, or when
-// the child dies. It does NOT time out after a quiet period: the
-// resident is allowed to take as long as its deadline to respond,
-// and the pump's only purpose is to glue the two fds together.
-int run_socket_pump(int client_fd, int channel_fd, bool& resident_alive) {
+//   - a client "close" at a cycle boundary is a detach: the daemon
+//     answers "released" itself and never forwards it, because the
+//     resident treats "close" as release-and-exit for the session;
+//   - client EOF between cycles leaves the session intact;
+//   - client EOF after "run" (client killed mid-submit) drains and
+//     discards the in-flight response, bounded by the deadline, so the
+//     next client never reads a stale reply;
+//   - client EOF inside a partially written request poisons the
+//     resident's input stream, so the session is torn down.
+DetachResult run_framed_pump(
+    int client_fd,
+    int channel_fd,
+    long deadline_ms,
+    std::vector<char>& buffer) {
+  enum class Cycle { Idle, Request, Await };
+  Cycle cycle = Cycle::Idle;
+  std::string client_line;
+  std::string reply_line;
+  size_t client_payload = 0;
+  size_t reply_payload = 0;
   bool client_open = true;
-  bool channel_open = true;
-  bool client_done = false;
+  std::string forward;
   for (;;) {
-    short events = 0;
-    if (client_open) events |= POLLIN;
-    if (channel_open) events |= POLLIN;
+    if (!client_open) {
+      if (cycle == Cycle::Idle && client_payload == 0) {
+        return DetachResult::SessionIntact;
+      }
+      if (cycle == Cycle::Request || client_payload > 0) {
+        return DetachResult::SessionLost;
+      }
+    }
+    int timeout_ms = client_open ? -1 : static_cast<int>(deadline_ms + 5000);
     struct pollfd fds[2] = {
         {client_fd, static_cast<short>(client_open ? POLLIN : 0), 0},
-        {channel_fd, static_cast<short>(channel_open ? POLLIN : 0), 0},
+        {channel_fd, POLLIN, 0},
     };
-    int ready = ::poll(fds, 2, -1);
+    int ready = ::poll(fds, 2, timeout_ms);
     if (ready < 0) {
       if (errno == EINTR) continue;
-      break;
+      return DetachResult::SessionLost;
     }
-    if (client_open && (fds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
-      ssize_t moved =
-          ::splice(client_fd, nullptr, channel_fd, nullptr, 1 << 16, 0);
-      if (moved > 0) continue;
-      // Client EOF / closed write side. Keep the channel open; the
-      // supervised child stays alive for the next client.
-      client_done = true;
-      client_open = false;
-      // Re-enter the loop to drain the resident's response, but stop
-      // polling client_fd -- the client may close at any moment and
-      // a write to a closed peer surfaces as EPIPE.
+    if (ready == 0) {
+      return DetachResult::SessionLost;  // in-flight reply never finished
+    }
+    if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
+      ssize_t got = ::read(channel_fd, buffer.data(), buffer.size());
+      if (got < 0 && errno == EINTR) continue;
+      if (got <= 0) {
+        return DetachResult::SessionLost;  // resident exited
+      }
+      const char* cursor = buffer.data();
+      size_t left = static_cast<size_t>(got);
+      bool resident_failed = false;
+      while (left > 0) {
+        if (reply_payload > 0) {
+          size_t take = std::min(reply_payload, left);
+          reply_payload -= take;
+          cursor += take;
+          left -= take;
+          continue;
+        }
+        auto* newline =
+            static_cast<const char*>(std::memchr(cursor, '\n', left));
+        if (newline == nullptr) {
+          reply_line.append(cursor, left);
+          break;
+        }
+        reply_line.append(cursor, static_cast<size_t>(newline - cursor));
+        size_t consumed = static_cast<size_t>(newline - cursor) + 1;
+        cursor += consumed;
+        left -= consumed;
+        if (reply_line.compare(0, 4, "out ") == 0) {
+          reply_payload = frame_payload_length(reply_line);
+        } else if (reply_line == "done") {
+          cycle = Cycle::Idle;
+        } else if (reply_line.compare(0, 7, "failed:") == 0) {
+          cycle = Cycle::Idle;
+          resident_failed = true;  // the resident exits after a failure
+        }
+        reply_line.clear();
+      }
+      if (client_open &&
+          !send_all(client_fd, buffer.data(), static_cast<size_t>(got))) {
+        client_open = false;
+      }
+      if (resident_failed) {
+        return DetachResult::SessionLost;
+      }
       continue;
     }
-    if (channel_open && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
-      ssize_t moved =
-          ::splice(channel_fd, nullptr, client_fd, nullptr, 1 << 16, 0);
-      if (moved > 0) continue;
-      // The resident closed its end: the supervised child exited and
-      // took the session with it. The daemon cannot serve further
-      // clients on this session.
-      channel_open = false;
-      resident_alive = false;
-      break;
+    if (client_open && (fds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
+      ssize_t got = ::read(client_fd, buffer.data(), buffer.size());
+      if (got < 0 && errno == EINTR) continue;
+      if (got <= 0) {
+        client_open = false;
+        continue;
+      }
+      forward.clear();
+      const char* cursor = buffer.data();
+      size_t left = static_cast<size_t>(got);
+      while (left > 0) {
+        if (client_payload > 0) {
+          size_t take = std::min(client_payload, left);
+          forward.append(cursor, take);
+          client_payload -= take;
+          cursor += take;
+          left -= take;
+          continue;
+        }
+        auto* newline =
+            static_cast<const char*>(std::memchr(cursor, '\n', left));
+        if (newline == nullptr) {
+          client_line.append(cursor, left);  // held until complete
+          break;
+        }
+        client_line.append(cursor, static_cast<size_t>(newline - cursor));
+        size_t consumed = static_cast<size_t>(newline - cursor) + 1;
+        cursor += consumed;
+        left -= consumed;
+        if (client_line == "close" && cycle == Cycle::Idle) {
+          if (!send_all(client_fd, "released\n", 9)) {
+            client_open = false;
+          }
+        } else {
+          if (client_line.compare(0, 7, "submit ") == 0) {
+            cycle = Cycle::Request;
+          } else if (client_line.compare(0, 3, "in ") == 0) {
+            client_payload = frame_payload_length(client_line);
+          } else if (client_line == "run") {
+            cycle = Cycle::Await;
+          }
+          forward.append(client_line);
+          forward.push_back('\n');
+        }
+        client_line.clear();
+      }
+      if (!forward.empty() &&
+          !send_all(channel_fd, forward.data(), forward.size())) {
+        return DetachResult::SessionLost;
+      }
+      continue;
     }
-    // No more events to handle and we are waiting on a half-closed
-    // pipe: stop.
-    (void)events;
-    if (!client_open && !channel_open) break;
   }
-  return 0;
 }
 
 } // namespace
@@ -959,9 +1054,8 @@ int serve_resident_daemon(
       "backend is linked\n");
   return 70;
 #else
-  // SIGPIPE is blocked for the whole process: the only writer in this
-  // process is the splice loop, and a peer dying mid-pump must surface
-  // as EPIPE on splice(), not a process-killing SIGPIPE.
+  // SIGPIPE is blocked for the whole process: a peer dying mid-pump must
+  // surface as EPIPE on send(), not as a process-killing signal.
   sigset_t pipe_mask;
   sigemptyset(&pipe_mask);
   sigaddset(&pipe_mask, SIGPIPE);
@@ -1112,6 +1206,8 @@ int serve_resident_daemon(
   // Accept loop with idle timeout. The pump is single-threaded and
   // serves one client at a time, so concurrent callers serialize at
   // accept(); the listen backlog of 1 reflects the same.
+  std::vector<char> pump_buffer(1 << 20);
+  bool session_lost = false;
   while (!g_daemon_stop) {
     struct pollfd listen_poll = {listen_fd, POLLIN, 0};
     int ready = ::poll(&listen_poll, 1, static_cast<int>(idle_time_ms));
@@ -1159,14 +1255,9 @@ int serve_resident_daemon(
         continue;
       }
     }
-    // Per-client handshake: the client expects to read the resident
-    // banners that the supervised worker emitted at startup. The
-    // daemon printed them to stdout (so the operator can see them in
-    // the log), but the wire channel is the socket now, so the
-    // client never saw them. Replay one composite line that carries
-    // the load reports and the relay-bypass banner the client would
-    // have read from stdin/stdout in the private-subprocess path;
-    // splice() begins on the next byte the client writes.
+    // Per-client handshake: the supervised worker's load banners went
+    // to the daemon log at startup, so each client gets one composite
+    // line before its first request.
     char banner[256];
     int banner_len = std::snprintf(
         banner,
@@ -1175,33 +1266,26 @@ int serve_resident_daemon(
         static_cast<unsigned>(worker.resident_pid()),
         static_cast<int>(deadline_ms),
         session.bundles.size());
-    if (banner_len > 0) {
-      ssize_t nw = ::send(client_fd, banner, static_cast<size_t>(banner_len), 0);
-      if (nw < 0) {
-        std::fprintf(
-            stderr,
-            "[omarchy-ane] daemon: send banner: %s\n",
-            std::strerror(errno));
-        ::close(client_fd);
-        continue;
-      }
+    if (banner_len <= 0 ||
+        !send_all(client_fd, banner, static_cast<size_t>(banner_len))) {
+      ::close(client_fd);
+      continue;
     }
-    // Per-client pump. `resident_alive` stays true when the client
-    // simply disconnected; it flips to false when the supervised
-    // child exits and takes the session with it, which is a hard
-    // failure the daemon cannot recover from (the seal contract and
-    // the device programs belong to that child).
-    bool resident_alive = true;
-    (void)run_socket_pump(client_fd, channel_fd, resident_alive);
-    // Half-close the client so the next accept can succeed cleanly.
+    DetachResult detach =
+        run_framed_pump(client_fd, channel_fd, deadline_ms, pump_buffer);
     ::shutdown(client_fd, SHUT_RDWR);
     ::close(client_fd);
-    if (!resident_alive) {
+    if (detach == DetachResult::SessionLost) {
+      // The resident exited, failed a submit, or saw a partial request
+      // it can no longer frame. Serving another client on it could
+      // hand out a stale or corrupt reply; exit so clients fall back
+      // to the private path until the daemon is restarted.
       std::fprintf(
           stderr,
-          "[omarchy-ane] daemon: resident exited mid-session; refusing "
-          "further clients (pid=%lld)\n",
+          "[omarchy-ane] daemon: session lost (resident pid=%lld); "
+          "refusing further clients\n",
           static_cast<long long>(worker.resident_pid()));
+      session_lost = true;
       break;
     }
   }
@@ -1227,7 +1311,7 @@ int serve_resident_daemon(
       static_cast<long long>(worker.resident_pid()),
       closed.released_programs);
   std::fflush(stdout);
-  return 0;
+  return session_lost ? 1 : 0;
 #endif
 }
 

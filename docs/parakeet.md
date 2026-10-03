@@ -166,13 +166,19 @@ the sidecar, so the same refusal the strict path would raise still fires.
 Default unset keeps the strict re-hash that `download` / `verify` always
 use.
 
-`transcribe` may also opt into a long-running resident daemon across CLI
-invocations with `MLX_OMARCHY_PK_KEEP_WORKER=1` AND
-`MLX_OMARCHY_ANE_SOCK=PATH` (the daemon binds the socket in 0600 mode,
-single-instance, owner-only, and exits cleanly on `--idle-time-ms`
-default, SIGTERM, or `--stop`). On connect failure the client silently
-falls back to the private-subprocess path above; never hangs (connect
-timeout 1 s) and never escalates to the caller.
+`transcribe` can also attach to a resident daemon that keeps the sealed
+ANE session loaded across CLI calls. Start it with
+`mlx-omarchy-ane-worker --daemon --socket PATH --idle-time-ms N` (same
+`--libane`, `--bundle` and `--seal-expect` arguments as `--serve`), then
+set `MLX_OMARCHY_PK_KEEP_WORKER=1` and `MLX_OMARCHY_ANE_SOCK=PATH`. The
+socket is mode 0600, owner-only and single-instance. The daemon exits on
+its idle timer, SIGTERM, `--stop --socket PATH`, or a lost session (a
+client killed mid-request, a failed submit, or resident exit). The client
+connects within 1 s or falls back to a private worker, and the report
+records which one it used in `ane.session.transport`. On jwm1 this cuts
+a warm `transcribe` from 1939 ms to 853 ms per call (median), with the
+encoder stage at the ANE exec floor; see
+[the receipt](../receipts/2026-10-02-parakeet-warm-clip/README.md).
 
 ## Golden capture
 

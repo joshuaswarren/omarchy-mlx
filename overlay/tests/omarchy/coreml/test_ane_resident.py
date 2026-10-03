@@ -389,5 +389,149 @@ class ResidentAneWorkerTest(unittest.TestCase):
             )
 
 
+class _FakeDaemon:
+    """A unix-socket stand-in for `mlx-omarchy-ane-worker --daemon`.
+
+    Per client: one `daemon session` banner, then the raw resident
+    frames. A submit echoes its concatenated inputs as output `y`; a
+    `close` is answered with `released` the way the real daemon answers
+    a detach, and the next client is served on the same session.
+    """
+
+    def __init__(self, path: Path):
+        import socket
+        import threading
+
+        self.path = path
+        self.clients = 0
+        self.submits = 0
+        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._server.bind(str(path))
+        self._server.listen(1)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self._server.accept()
+            except OSError:
+                return
+            self.clients += 1
+            with conn, conn.makefile("rwb") as stream:
+                stream.write(b"daemon session pid=1 deadline_ms=2000 bundles=2\n")
+                stream.flush()
+                payload = b""
+                for raw in stream:
+                    line = raw.rstrip(b"\n")
+                    if line.startswith(b"in "):
+                        payload += stream.read(int(line.rsplit(b" ", 1)[1]))
+                    elif line == b"run":
+                        self.submits += 1
+                        stream.write(b"iter\nout y %d\n" % len(payload))
+                        stream.write(payload + b"done\n")
+                        stream.flush()
+                        payload = b""
+                    elif line == b"close":
+                        stream.write(b"released\n")
+                        stream.flush()
+
+    def stop(self):
+        self._server.close()
+
+
+class DaemonAttachTest(unittest.TestCase):
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.worker = self.root / "fake-worker"
+        self.worker.write_text("".join(_FAKE_WORKER))
+        self.worker.chmod(0o755)
+        self.ledger = self.root / "ledger.txt"
+        self.bundles = {"A": self.root / "bundles" / "island-a"}
+        self.bundles["A"].mkdir(parents=True)
+        self.sock = self.root / "ane.sock"
+        import os
+
+        os.environ["MLX_FAKE_MODE"] = "ok"
+        os.environ["MLX_FAKE_LEDGER"] = str(self.ledger)
+
+    def tearDown(self):
+        self._temporary.cleanup()
+
+    def _session(self, daemon_socket=None):
+        return ResidentAneWorker(
+            worker=self.worker,
+            libane=self.root / "libane.so",
+            bundles=self.bundles,
+            scratch=self.root / "scratch",
+            deadline_ms=2000,
+            daemon_socket=daemon_socket,
+        )
+
+    def _worker_starts(self) -> int:
+        if not self.ledger.exists():
+            return 0
+        return self.ledger.read_text().split().count("start")
+
+    def test_attach_serves_consecutive_clients_without_spawning(self):
+        daemon = _FakeDaemon(self.sock)
+        try:
+            for marker in (b"\x11" * 4, b"\x22" * 4):
+                session = self._session(daemon_socket=self.sock)
+                session.start()
+                self.assertEqual(session.transport, "daemon")
+                results = session.submit(
+                    bundle="A", tag="L00", inputs={"q": marker, "k": marker},
+                    outputs=("y",),
+                )
+                self.assertEqual(results["y"], marker + marker)
+                self.assertEqual(session.close()["released"], "released")
+        finally:
+            daemon.stop()
+        self.assertEqual(daemon.clients, 2)
+        self.assertEqual(daemon.submits, 2)
+        self.assertEqual(self._worker_starts(), 0)
+
+    def test_missing_socket_falls_back_to_a_private_worker(self):
+        session = self._session(daemon_socket=self.sock)
+        with session:
+            self.assertEqual(session.transport, "private")
+            results = session.submit(
+                bundle="A", tag="L00", inputs={"q": b"\x01"}, outputs=("y",),
+            )
+            self.assertEqual(results["y"], b"\x01")
+        self.assertEqual(self._worker_starts(), 1)
+
+    def test_stale_socket_falls_back_within_the_connect_bound(self):
+        import socket
+
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(str(self.sock))
+        stale.close()  # socket file remains, nothing listens
+        started = time.monotonic()
+        session = self._session(daemon_socket=self.sock)
+        with session:
+            self.assertEqual(session.transport, "private")
+        self.assertLess(time.monotonic() - started, 5.0)
+        self.assertEqual(self._worker_starts(), 1)
+
+    def test_daemon_is_opt_in_even_when_the_socket_env_is_set(self):
+        import os
+
+        daemon = _FakeDaemon(self.sock)
+        os.environ.pop("MLX_OMARCHY_PK_KEEP_WORKER", None)
+        os.environ["MLX_OMARCHY_ANE_SOCK"] = str(self.sock)
+        try:
+            session = self._session()
+            with session:
+                self.assertEqual(session.transport, "private")
+        finally:
+            os.environ.pop("MLX_OMARCHY_ANE_SOCK", None)
+            daemon.stop()
+        self.assertEqual(daemon.clients, 0)
+        self.assertEqual(self._worker_starts(), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

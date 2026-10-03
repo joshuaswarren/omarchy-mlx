@@ -194,8 +194,13 @@ class ResidentAneWorker:
     # ------------------------------------------------------------ lifecycle
     @property
     def alive(self) -> bool:
-        """True while the worker subprocess is up (protocol-level)."""
-        return self._process is not None
+        """True while the session's transport is open (protocol-level)."""
+        return self._process is not None or self._socket is not None
+
+    @property
+    def transport(self) -> str:
+        """"daemon" when attached to a resident daemon, else "private"."""
+        return "daemon" if self._channel_kind == "socket" else "private"
 
     def start(self) -> None:
         if self._process is not None or self._socket is not None:

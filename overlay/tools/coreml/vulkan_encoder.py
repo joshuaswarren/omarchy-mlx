@@ -956,6 +956,10 @@ class AneIsland:
             "ANE_ISLAND_PRIVATE_SESSION", ""
         ).strip().lower() not in ("1", "true", "yes", "on")
         self.session_reused = False
+        # "daemon" when the session attached to a resident daemon
+        # (MLX_OMARCHY_PK_KEEP_WORKER), "private" for a worker spawned
+        # by this process; None until the first submit opens a session.
+        self.session_transport = None
         self.session_open_ns = 0
         self.session_close_ns = 0
         self._session_shared = False
@@ -1054,11 +1058,9 @@ class AneIsland:
             self._session_shared = True
             self.session_reused = session is not None
         if session is None:
-            # daemon_socket: when MLX_OMARCHY_PK_KEEP_WORKER=1 AND
-            # MLX_OMARCHY_ANE_SOCK is set, the ResidentAneWorker
-            # constructor reads those env vars and probes the daemon
-            # first, falling back silently to the private-subprocess
-            # path on any connect failure.
+            # With MLX_OMARCHY_PK_KEEP_WORKER=1 and MLX_OMARCHY_ANE_SOCK
+            # set, start() attaches to the resident daemon and falls back
+            # to a private worker on any connect failure.
             session = ResidentAneWorker(
                 worker=Path(self.worker),
                 libane=Path(self.libane),
@@ -1073,8 +1075,10 @@ class AneIsland:
                 self._session_shared = True
         session.begin_batch(self._batch_deadline_ms)
         self.batch_open_ns = time.monotonic_ns() - started
+        self.session_transport = session.transport
         if not self.session_reused:
-            self.worker_starts += 1
+            if session.transport == "private":
+                self.worker_starts += 1
             self.session_open_ns = self.batch_open_ns
         self.submissions += 1
         self._session = session

@@ -92,117 +92,111 @@ window.)
 | pipeline rep 1    | 1182-1321 | decoder_load 44 + audio 7 + mel 33 + encoder_ane 947 (session open 806 inside) + tdt 137 + detok 15 |
 | pipeline rep 2-11 | 395-456 | session reused; sum of stages ≈ the report's total_pipeline_ms |
 
-## Identified-but-not-shipped next lever
+## L3: persistent ANE worker daemon across CLI invocations
 
-The bigger remaining warm-clip cell is the per-invocation ANE session
-open (`ane.session.open_ms` 806-1127 ms on rep 1 of each invocation).
-The `AneIsland` shared-session singleton already amortizes inside one
-process; a persistent ANE worker daemon across CLI invocations would
-save ~806 ms per invocation. Defer until the L1 env-gated path is
-through the back-up and the daemon design can prove one new failure
-mode at a time (ANE device fd + resident BOs do not survive a child
-exit; the daemon must own them with an idle-timeout shutdown, per
-AGENTS.md hardware safety).
+Opt-in with `MLX_OMARCHY_PK_KEEP_WORKER=1` and
+`MLX_OMARCHY_ANE_SOCK=PATH`; default off. The daemon,
+`mlx-omarchy-ane-worker --daemon --socket PATH --idle-time-ms N`, opens
+the same sealed resident session `--serve` opens (libane pin and bundle
+hashes checked at daemon start), binds `PATH` in mode 0600, refuses
+cross-uid peers (SO_PEERCRED), holds a single-instance `flock` on
+`PATH.lock`, and serves one client at a time. It exits on the idle
+timer, SIGTERM/SIGINT, `--stop`, or a lost session. The client
+attaches with a 1 s connect bound and falls back to a private worker on
+any connect failure.
 
-## L3 follow-up: persistent ANE worker daemon across CLI invocations
+### Measured on jwm1 (T8103), same boot, interleaved A/B, n=10 per arm
 
-Source-of-truth: branch `ParakeetWarm` at `b4ff86d13` (origin/main),
-worktree `~/.config/superpowers/worktrees/mlx-omarchy/ParakeetWarm`.
+Boot `92c5b211-0b3b-4840-80c6-f6dc0062aae4`, uptime 1:12–1:16, load1
+0.00–0.39 and PSI cpu some avg10 0.00 before every call. Venv rebuilt
+from `mlx_omarchy-0.32.4.dev202610012048+6cff5ea` (provenance:
+core/libmlx match the wheel RECORD), plus the L1/L3 Python files and a
+worker built from this tree (sha256 `fa6c856a…`). Each call is a fresh
+`transcribe` process; wall is launch to exit. Order DPDP… (D = daemon,
+P = private).
 
-### Design
+| median / p95, ms | private (default) | daemon attached |
+|---|---|---|
+| per-call wall | 1938.8 / 1970.0 | **852.7 / 860.2** |
+| `ane.session.open_ms` | 827.9 / 830.7 | **0.3 / 0.4** |
+| `encoder_ane` stage | 968.2 / 970.8 | **141.4 / 142.3** |
+| `ane.exec_ms` | 138.7 / 139.0 | 139.7 / 140.6 |
+| `total_pipeline_ms` | 1204.8 / 1216.1 | **372.1 / 376.6** |
+| audio_load | 6.4 / 6.6 | 6.4 / 7.1 |
+| decoder_load | 43.3 / 45.5 | 43.3 / 44.6 |
+| mel_frontend | 33.1 / 34.0 | 33.6 / 35.0 |
+| tdt_decode | 139.0 / 141.6 | 136.5 / 137.9 |
+| detokenize | 14.3 / 22.1 | 11.6 / 11.9 |
 
-`mlx-omarchy-ane-worker --daemon --socket PATH --idle-time-ms N`
-opens the same resident session `--serve` opens, binds a unix socket
-at `PATH` (mode 0600), takes a single-instance `flock` on
-`PATH.lock`, writes its pid to `PATH.pid`, then enters a one-client
-listen loop with `poll(idle-time-ms)` timeout. On accept: SO_PEERCRED
-refuses cross-uid peers; one banner line (`daemon session pid=...
-deadline_ms=... bundles=N\n`) is sent on the socket; `splice(2)` pumps
-bytes between the socket and the resident's socketpair end (the
-`--relay-bypass` pump, lifted into `run_socket_pump`). One client at a
-time; concurrent callers serialize at `accept()`. SIGTERM, SIGINT, and
-the idle timeout all break the loop, call `worker.close()` to release
-device programs, unlink the socket and lock, and exit 0.
+With the daemon attached, the encoder stage sits at the ANE exec floor
+(141.4 ms stage vs 139.7 ms exec). Per-call wall drops by 1086 ms
+(−56%). Both arms: 10/10 `status=match`, transcript sha
+`db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790`, 104
+emissions, 0 failed checks, `cpu_tensor_events=0`, report `transport`
+`daemon` vs `private` as intended. A separate run of 20 sequential daemon
+calls on one daemon: 20/20 match, all `transport=daemon`, wall median
+848.6 ms (max 876.5), open median 0.31 ms.
 
-`--stop --socket PATH` reads `PATH.pid` and SIGTERMs the daemon so
-its cleanup path runs end-to-end (socket unlink, lock release,
-resident close). No protocol change — the client never sends a magic
-byte; the daemon exits only on signal or idle.
+The remaining ~480 ms of wall outside the pipeline is client process
+start, imports and the strict cache rehash. Setting
+`MLX_OMARCHY_PK_TRUST_CACHE=1` (L1) removes the ~240 ms rehash; that
+combination was not timed in this run.
 
-### Python client
+### Resilience and device state (same boot)
 
-`ResidentAneWorker.__init__` accepts `daemon_socket=` (or reads
-`MLX_OMARCHY_ANE_SOCK` when `MLX_OMARCHY_PK_KEEP_WORKER=1`). `start()`
-tries a one-second connect via `_try_connect_daemon()`; on success
-`_channel_kind = "socket"`, all IO methods (`_write_bytes`,
-`_readline`, `_read_exact`, `_fill`) branch to the socket, `_die` /
-`_finish` / `_terminate` close the socket without killing the daemon.
-On any connect failure (no listener, stale socket, permission denied,
-timeout) `start()` silently falls back to the private-subprocess
-path — never hangs, never escalates to the caller. Default unset
-preserves the existing single-CLI path bit-exactly.
+| case | result |
+|---|---|
+| kill -9 a client at 0.55 / 0.65 / 0.75 s, then a new call | next call `match`, `transport=daemon`: session survives |
+| kill -9 the daemon at 0.50 / 0.55 / 0.60 s (inside the ANE submit) | client exits rc=1 within ~1 s with a named refusal, no report written, no hang |
+| after the daemon kill | 0 worker processes, `/dev/accel/accel0` has no holder; the supervised child exits on channel EOF |
+| next call while the stale socket file exists | connect refused, falls back to private, `match` |
+| restarted daemon | stale socket replaced, next two calls `match` over `daemon` |
+| idle timer (3 s) | `idle exit`, `daemon released programs=1`, socket and lock removed, device free |
+| dmesg, ANE device `26bc04000.ane` and DART, whole boot | 0 fault/error/timeout lines; last ANE lines are boot-time (6.7 s) |
 
-### Hardware test (jwm1, T8103, MesaParity venv, commit be30c0143 on origin/main)
+### Correction (2026-10-03): the earlier "20/20 shipped" claim
 
-20 sequential transcribes against a single daemon
-(`MLX_OMARCHY_PK_KEEP_WORKER=1`, `MLX_OMARCHY_ANE_SOCK=…`,
-idle-time-ms 900 000) all return `status=match`,
-`transcript_sha=db501a8c…`, 7/7 golden pin checks pass,
-`cpu_tensor_events=0`, `ane.exec_ms=141`, `total_pipeline_ms
-~1216`. Per-invocation:
-`ane.worker_starts=1` (the daemon owns the session and the
-device fd); the Python client's `ResidentAneWorker` connects to
-the daemon, reads the per-client banner, runs the splice pump
-for the duration of the request, and tears down without taking
-the device down. Idle-timeout exit verified: with
-`--idle-time-ms 5000` and no clients, the daemon logs
-`idle exit after 5000 ms` and `daemon released programs=1`,
-unlinks the socket, and releases the lock. The
-hardware-attached end-to-end now matches the design.
+The previous version of this section (commits `be30c0143`/`b933d8124`)
+reported 20/20 daemon-attached matches with `total_pipeline_ms ~1216`
+and `session.open_ms ~840`. Those numbers are the private-worker cost.
+INFERENCE: those calls fell back silently to the private worker, because
+the daemon they reached could not forward a request. The report had no
+transport field, so the fallback was invisible. Two defects remained in
+that code:
 
-### Root causes that were fixed in commit `be30c0143`
+1. The pump used `splice(2)`, which requires one end to be a pipe. Both
+   daemon ends are sockets, so every splice failed with EINVAL, and the
+   pump read that as client EOF.
+2. The client's detach sent the wire `close`, which `resident_child_loop`
+   handles as "release the device and exit". That ended the shared
+   session after the first client.
 
-1. **The pump's `shutdown(channel_fd, SHUT_WR)` on client EOF killed
-   the supervised child after the first client.** In
-   `--relay-bypass` mode one client equals one session, so
-   `SHUT_WR` to the resident is the close signal; in `--daemon`
-   mode the channel fd IS the persistent session. The fix:
-   `run_socket_pump` no longer forwards client EOF to the channel.
-   The supervised child stays alive between clients. The pump
-   breaks when the channel EOFs or the write to the client fails,
-   not on a quiet-period timeout. `resident_alive` reports the
-   supervised child's lifetime; when the child EOFs its end, the
-   outer accept loop breaks and the daemon exits non-zero rather
-   than silently advertising a dead session.
+The current pump moves bytes with read/write and tracks the wire
+framing in both directions. A client `close` at a cycle boundary is
+answered `released` by the daemon and never forwarded. Client EOF
+between cycles keeps the session. Client EOF after `run` drains and
+discards the in-flight reply, bounded by the deadline. Client EOF inside
+a partly written request, a `failed:` reply, or resident EOF loses the
+session, and the daemon exits non-zero instead of serving a stale or
+corrupt reply. The report now carries `ane.session.transport`, and a
+daemon attach no longer counts as a worker start.
 
-2. **The Python client defaulted to `relay_bypass=False`** (the
-   line-based protocol: `batch N\n`, `submit NAME --inline ...`). The
-   daemon's supervised worker is in `--relay-bypass` mode and
-   expects raw wire frames. The fix: when `start()` attaches via
-   the unix socket, force `relay_bypass=True` so submit /
-   begin_batch / end_batch / close all use the raw protocol the
-   daemon forwards through the splice pump.
+### Files
 
-### Files added (committed to `ParakeetWarm`)
-
-- `overlay/tools/mlx-omarchy-ane-worker/main.cpp` — `--daemon` mode
-  (serve_resident_daemon + run_socket_pump + stop_resident_daemon +
-  signal handlers + single-instance lock), `--stop` mode,
-  `--idle-time-ms`, `--socket PATH`, per-client handshake banner;
-  back-compat with `--serve`, `--relay-bypass`, the one-shot form.
-- `overlay/tools/coreml/ane_resident.py` — `daemon_socket=` /
-  `daemon_connect_ms=` constructor args; `_try_connect_daemon()`
-  helper; socket-mode IO in `_write_bytes` / `_fill`; session-open
-  checks in `submit` / `begin_batch` / `end_batch` accept either
-  `_process` or `_socket`; `close()` does the wire-protocol
-  shutdown without tearing down the daemon; `relay_bypass`
-  forced to True on socket attach.
-- `overlay/tools/coreml/vulkan_encoder.py` — comment-only.
-- `docs/parakeet.md` — the daemon paragraph in the Downloader
-  section.
-- `scripts/daemon-bench.py` — 20-pass bench (one summary line per
-  invocation, transcribe-report.json per rep).
-- `scripts/daemon-test2.py` — smaller debugging harness.
+- `overlay/tools/mlx-omarchy-ane-worker/main.cpp`: `--daemon`,
+  `--stop`, the framed pump (`run_framed_pump`), single-instance lock,
+  peer-uid check.
+- `overlay/tools/coreml/ane_resident.py`: daemon attach with fallback,
+  `transport`, `alive` covers the socket transport.
+- `overlay/tools/coreml/vulkan_encoder.py`: `session_transport`.
+- `overlay/tools/mlx-omarchy-parakeet/mlx_omarchy_parakeet.py`:
+  `ane.session.transport` in the report.
+- `overlay/tests/omarchy/coreml/test_ane_resident.py`: attach serves
+  consecutive clients without spawning; missing socket and stale socket
+  fall back; the daemon stays opt-in when only the socket env is set.
+- `scripts/` in this receipt: the A/B, 20-call, resilience and kill-sweep
+  harnesses used above. They hard-code the jwm1 scratch paths of this
+  run.
 
 ## Hardware / safety
 

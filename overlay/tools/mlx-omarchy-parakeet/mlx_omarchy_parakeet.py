@@ -1263,6 +1263,7 @@ def _golden_report(pin, passed, pinned, lock, fixture, audio_sha, sample_count,
             "session": {
                 "shared": island.share_session,
                 "reused": island.session_reused,
+                "transport": island.session_transport,
                 "open_ms": round(island.session_open_ns / 1e6, 3),
                 "batch_open_ms": round(island.batch_open_ns / 1e6, 3),
                 "close_ms": round(island.session_close_ns / 1e6, 3),
