@@ -112,14 +112,32 @@ MLX_API std::string sha256_file(const std::filesystem::path& path);
 MLX_API AneSealedFile sealed_file_at(int directory_fd, const std::string& name);
 
 // The load-boundary seal: every file the session consumes (manifest.json
-// and each manifest payload of `dir`) is snapshotted into a sealed memfd,
-// hashed, and bound to `expected` (file name -> sha256) before any parse
-// that can reach execution. Every consumed file needs an expectation and
-// every expectation needs a consumed file; a mismatch, a missing pin, an
-// unknown file, or a link is a refusal. The returned bundle's program and
-// weights paths point at the sealed images (/proc/self/fd/<fd>); the
-// appended AneSealedFile entries own those descriptors and must outlive
-// the bundle and the device session that consumes it.
+// and each manifest payload of `dir`) is hashed and bound to `expected`
+// (file name -> sha256) before any parse that can reach execution. Every
+// consumed file needs an expectation and every expectation needs a
+// consumed file; a mismatch, a missing pin, an unknown file, or a link is
+// a refusal. The returned bundle's program and weights paths point at the
+// consumed images (/proc/self/fd/<fd>); the appended AneSealedFile entries
+// own those descriptors and must outlive the bundle and the device session
+// that consumes them.
+//
+// Per-file shape: the default is the sealed memfd snapshot (sealed_file_at,
+// above) — the snapshot closes the check-then-use window because the hash
+// describes exactly the immutable bytes the session reads. The snapshot's
+// read pass overlaps the memfd copy (hash inline, writer thread drains the
+// previous chunk), so the TOCTOU guarantee costs near the sha256 floor.
+// Warm-path exception (Main review, 2026-10-03): the source descriptor is
+// handed over without a snapshot ONLY when the canonical file AND every
+// parent directory are root-owned and not group/other-writable — bytes the
+// process could not modify even in principle — AND the identity-keyed
+// digest sidecar (path|dev|ino|size|mtime_ns|ctime_ns, the same store the
+// unsealed path uses) carries this exact identity's digest equal to the
+// pin. Any identity change, a missing or stale entry, or
+// OMARCHY_ANE_SEAL_VERIFY (truthy: 1/true/yes/on) restores the full sealed
+// snapshot; the pin comparison runs in both paths. The sidecar remains a
+// mismatch detector for accidental corruption or stale deploys, not an
+// anti-tamper boundary: it adds no capability the writer of a root-owned
+// read-only chain (root only) did not already have.
 MLX_API AneBundle load_bundle_sealed(
     const std::filesystem::path& dir,
     const std::map<std::string, std::string>& expected,

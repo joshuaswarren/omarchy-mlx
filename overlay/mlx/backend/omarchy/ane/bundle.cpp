@@ -15,6 +15,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -467,36 +469,123 @@ AneSealedFile sealed_file_at(int directory_fd, const std::string& name) {
     throw bundle_error(
         "sealed snapshot memfd_create " + name + ": " + std::strerror(errno));
   }
+
+  // Single read pass, three consumers: the file read feeds an ordered
+  // writer (into the memfd) while the hash runs inline, so the copy
+  // overlaps the next chunk's read. The digest still describes exactly
+  // the sealed bytes: the write seal is applied after the last byte
+  // lands and F_GET_SEALS confirms it.
+  constexpr size_t kSealChunk = 4u << 20; // 4 MiB
+  constexpr int kSealSlots = 2;
+  struct SealSlot {
+    std::vector<uint8_t> buffer;
+    size_t size = 0;
+    SealSlot() { buffer.resize(kSealChunk); }
+  };
+  std::vector<SealSlot> slots(kSealSlots);
   Sha256Context context = sha256_begin();
-  std::array<uint8_t, 64 * 1024> bytes{};
+  std::exception_ptr worker_error;
+  std::mutex step_mutex;
+  std::condition_variable step_cv;
+  long long written_index = -1; // last chunk the writer finished
+  long long hashed_index = -1;  // last chunk dispatched to the writer
+  bool write_eof = false;
+
+  std::thread writer([&] {
+    long long index = 0;
+    for (;;) {
+      {
+        std::unique_lock<std::mutex> lock(step_mutex);
+        step_cv.wait(lock, [&] {
+          return hashed_index >= index || write_eof || worker_error != nullptr;
+        });
+        if (worker_error != nullptr || hashed_index < index) {
+          return; // error path or eof with no more dispatched chunks
+        }
+      }
+      SealSlot& slot = slots[size_t(index % kSealSlots)];
+      size_t done = 0;
+      while (done < slot.size) {
+        ssize_t result = ::write(
+            snapshot.get(), slot.buffer.data() + done, slot.size - done);
+        if (result < 0 && errno == EINTR) {
+          continue;
+        }
+        if (result <= 0) {
+          std::lock_guard<std::mutex> lock(step_mutex);
+          if (!worker_error) {
+            worker_error = std::make_exception_ptr(bundle_error(
+                "sealed snapshot write " + name + ": " +
+                std::strerror(errno)));
+          }
+          step_cv.notify_all();
+          return;
+        }
+        done += size_t(result);
+      }
+      {
+        std::lock_guard<std::mutex> lock(step_mutex);
+        written_index = index;
+      }
+      step_cv.notify_all();
+      ++index;
+    }
+  });
+
+  auto fail = [&](const char* what) {
+    std::lock_guard<std::mutex> lock(step_mutex);
+    if (!worker_error) {
+      worker_error = std::make_exception_ptr(
+          bundle_error(std::string("sealed snapshot ") + what + " " + name +
+                       ": " + std::strerror(errno)));
+    }
+    step_cv.notify_all();
+  };
+
+  long long read_index = 0;
   for (;;) {
-    ssize_t count = ::read(source.get(), bytes.data(), bytes.size());
-    if (count == 0) {
-      break;
+    // Two slots: before reusing slot (read_index % kSealSlots), the
+    // previous pass over it must be fully written.
+    if (read_index >= kSealSlots) {
+      std::unique_lock<std::mutex> lock(step_mutex);
+      step_cv.wait(lock, [&] {
+        return written_index >= read_index - kSealSlots ||
+            worker_error != nullptr;
+      });
+      if (worker_error != nullptr) {
+        break;
+      }
+    }
+    SealSlot& slot = slots[size_t(read_index % kSealSlots)];
+    ssize_t count = ::read(source.get(), slot.buffer.data(), slot.buffer.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
     }
     if (count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      throw bundle_error(
-          "sealed snapshot read " + name + ": " + std::strerror(errno));
+      fail("read");
+      break;
     }
+    if (count == 0) {
+      std::lock_guard<std::mutex> lock(step_mutex);
+      write_eof = true;
+      step_cv.notify_all();
+      break;
+    }
+    slot.size = size_t(count);
     context.total += size_t(count);
-    sha256_feed(context, bytes.data(), size_t(count));
-    size_t written = 0;
-    while (written < size_t(count)) {
-      ssize_t result =
-          ::write(snapshot.get(), bytes.data() + written, size_t(count) - written);
-      if (result < 0 && errno == EINTR) {
-        continue;
-      }
-      if (result <= 0) {
-        throw bundle_error(
-            "sealed snapshot write " + name + ": " + std::strerror(errno));
-      }
-      written += size_t(result);
+    sha256_feed(context, slot.buffer.data(), slot.size);
+    {
+      std::lock_guard<std::mutex> lock(step_mutex);
+      hashed_index = read_index;
     }
+    step_cv.notify_all();
+    ++read_index;
   }
+  writer.join();
+  if (worker_error) {
+    std::rethrow_exception(worker_error);
+  }
+
   const std::string digest = sha256_pad_and_digest(context);
   const int wanted = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
   if (::lseek(snapshot.get(), 0, SEEK_SET) < 0 ||
@@ -518,17 +607,19 @@ struct DigestCacheKey {
   uint64_t ino;
   uint64_t size;
   uint64_t mtime_ns;
+  uint64_t ctime_ns;
 
   std::string serialize() const {
-    char hex[64];
+    char hex[96];
     std::snprintf(
         hex,
         sizeof(hex),
-        "|%llx|%llx|%llx|%llx",
+        "|%llx|%llx|%llx|%llx|%llx",
         static_cast<unsigned long long>(dev),
         static_cast<unsigned long long>(ino),
         static_cast<unsigned long long>(size),
-        static_cast<unsigned long long>(mtime_ns));
+        static_cast<unsigned long long>(mtime_ns),
+        static_cast<unsigned long long>(ctime_ns));
     return path + hex;
   }
 
@@ -1288,30 +1379,31 @@ std::map<DigestCacheKey, std::string> load_digest_cache_disk() {
     }
     std::string key = line.substr(0, sep);
     std::string digest = line.substr(sep + 1);
-    // Key layout: <path>|<dev>|<ino>|<size>|<mtime_ns> — split at the LAST
-    // four pipes; the path itself may contain anything but the digest tail
-    // and pipe count are validated structurally.
+    // Key layout: <path>|<dev>|<ino>|<size>|<mtime_ns>|<ctime_ns> — split
+    // at the LAST five pipes; the path itself may contain anything but the
+    // digest tail and pipe count are validated structurally.
     std::vector<size_t> pipes;
     for (size_t i = key.size(); i-- > 0;) {
       if (key[i] == '|') {
         pipes.push_back(i);
-        if (pipes.size() == 4) {
+        if (pipes.size() == 5) {
           break;
         }
       }
     }
-    if (pipes.size() != 4) {
+    if (pipes.size() != 5) {
       continue;
     }
     DigestCacheKey parsed;
-    parsed.path = key.substr(0, pipes[3]);
+    parsed.path = key.substr(0, pipes[4]);
     const auto field = [&](size_t n) -> uint64_t {
       return std::strtoull(key.c_str() + pipes[n] + 1, nullptr, 16);
     };
-    parsed.dev = field(3);
-    parsed.ino = field(2);
-    parsed.size = field(1);
-    parsed.mtime_ns = field(0);
+    parsed.dev = field(4);
+    parsed.ino = field(3);
+    parsed.size = field(2);
+    parsed.mtime_ns = field(1);
+    parsed.ctime_ns = field(0);
     entries.emplace(std::move(parsed), std::move(digest));
   }
   return entries;
@@ -1333,6 +1425,107 @@ void store_digest_cache_disk(
   output << serialized_key << ' ' << digest << '\n';
 }
 
+// Identity key for a currently-open file: path plus the stat tuple the
+// cache treats as content identity. Any in-place rewrite moves ctime_ns;
+// a replace moves inode; a truncate/append moves size and mtime_ns.
+DigestCacheKey digest_key_for(
+    const std::filesystem::path& path,
+    const struct ::stat& st) {
+#if defined(__APPLE__)
+  const uint64_t mtime_ns = uint64_t(st.st_mtimespec.tv_sec) * 1000000000ull +
+      uint64_t(st.st_mtimespec.tv_nsec);
+  const uint64_t ctime_ns = uint64_t(st.st_ctimespec.tv_sec) * 1000000000ull +
+      uint64_t(st.st_ctimespec.tv_nsec);
+#else
+  const uint64_t mtime_ns = uint64_t(st.st_mtim.tv_sec) * 1000000000ull +
+      uint64_t(st.st_mtim.tv_nsec);
+  const uint64_t ctime_ns = uint64_t(st.st_ctim.tv_sec) * 1000000000ull +
+      uint64_t(st.st_ctim.tv_nsec);
+#endif
+  return DigestCacheKey{
+      path.string(),
+      uint64_t(st.st_dev),
+      uint64_t(st.st_ino),
+      uint64_t(st.st_size),
+      mtime_ns,
+      ctime_ns};
+}
+
+// Fast-path eligibility (Main review, 2026-10-03): the source-fd hand-off
+// closes the check-then-use window only when the process could not modify
+// the bytes even in principle — the file AND every parent directory of the
+// canonical path are root-owned and not group/other-writable. A user-owned
+// bundle (any venv install, any $HOME) always takes the full sealed
+// snapshot.
+bool root_owned_readonly_chain(const std::filesystem::path& path) {
+  std::error_code ec;
+  const std::filesystem::path real = std::filesystem::weakly_canonical(path, ec);
+  if (ec) {
+    return false;
+  }
+  for (auto part = real; ; part = part.parent_path()) {
+    struct ::stat st {};
+    if (::stat(part.c_str(), &st) != 0) {
+      return false;
+    }
+    if (st.st_uid != 0 || (st.st_mode & 022) != 0) {
+      return false;
+    }
+    if (part.parent_path() == part) {
+      break; // reached the root directory
+    }
+  }
+  return true;
+}
+
+// True when the seal must ignore the digest sidecar and always hash.
+// OMARCHY_ANE_SEAL_VERIFY set to a truthy value (1/true/yes/on,
+// case-insensitive) forces the full sealed read+hash on every open.
+bool seal_stamp_forced_full() {
+  const char* value = std::getenv("OMARCHY_ANE_SEAL_VERIFY");
+  if (value == nullptr) {
+    return false;
+  }
+  std::string lowered(value);
+  for (char& c : lowered) {
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return lowered == "1" || lowered == "true" || lowered == "yes" ||
+      lowered == "on";
+}
+
+// Sidecar lookup without hashing: process memory first, then the disk
+// sidecar. Empty string means "no cached digest for this identity".
+std::string cached_digest_lookup(const DigestCacheKey& key) {
+  if (!digest_cache_enabled()) {
+    return {};
+  }
+  std::lock_guard<std::mutex> lock(g_digest_cache_mutex);
+  auto it = g_digest_cache.find(key);
+  if (it != g_digest_cache.end()) {
+    return it->second;
+  }
+  auto disk = load_digest_cache_disk();
+  auto dit = disk.find(key);
+  if (dit == disk.end()) {
+    return {};
+  }
+  g_digest_cache.emplace(key, dit->second);
+  return dit->second;
+}
+
+void store_cached_digest(const DigestCacheKey& key, const std::string& digest) {
+  if (!digest_cache_enabled()) {
+    return;
+  }
+  const std::string serialized = key.serialize();
+  std::lock_guard<std::mutex> lock(g_digest_cache_mutex);
+  g_digest_cache.emplace(key, digest);
+  if (auto sidecar = digest_cache_path(); !sidecar.empty()) {
+    store_digest_cache_disk(sidecar, serialized, digest);
+  }
+}
+
 // Returns the payload digest, re-hashing only when the kill-switch forces it,
 // the file identity has no cached digest, or the sidecar has no entry. The
 // returned digest is always compared against the manifest expectation by the
@@ -1342,44 +1535,14 @@ std::string sha256_file_cached(const std::filesystem::path& path) {
   if (::stat(path.c_str(), &st) != 0) {
     throw bundle_error("cannot stat file " + path.string());
   }
-#if defined(__APPLE__)
-  const uint64_t mtime_ns = uint64_t(st.st_mtimespec.tv_sec) * 1000000000ull +
-      uint64_t(st.st_mtimespec.tv_nsec);
-#else
-  const uint64_t mtime_ns = uint64_t(st.st_mtim.tv_sec) * 1000000000ull +
-      uint64_t(st.st_mtim.tv_nsec);
-#endif
-  DigestCacheKey key{
-      path.string(),
-      uint64_t(st.st_dev),
-      uint64_t(st.st_ino),
-      uint64_t(st.st_size),
-      mtime_ns};
+  DigestCacheKey key = digest_key_for(path, st);
   if (digest_cache_enabled()) {
-    std::lock_guard<std::mutex> lock(g_digest_cache_mutex);
-    auto it = g_digest_cache.find(key);
-    if (it != g_digest_cache.end()) {
-      return it->second;
-    }
-    // Not in this process: consult the sidecar (small file, only on a
-    // process's first use of a bundle). Stale entries are harmless — the
-    // digest is verified against the manifest below.
-    auto disk = load_digest_cache_disk();
-    auto dit = disk.find(key);
-    if (dit != disk.end()) {
-      g_digest_cache.emplace(key, dit->second);
-      return dit->second;
+    if (std::string cached = cached_digest_lookup(key); !cached.empty()) {
+      return cached;
     }
   }
   std::string digest = sha256_file(path);
-  if (digest_cache_enabled()) {
-    const std::string serialized = key.serialize();
-    std::lock_guard<std::mutex> lock(g_digest_cache_mutex);
-    g_digest_cache.emplace(std::move(key), digest);
-    if (auto sidecar = digest_cache_path(); !sidecar.empty()) {
-      store_digest_cache_disk(sidecar, serialized, digest);
-    }
-  }
+  store_cached_digest(key, digest);
   return digest;
 }
 
@@ -1540,8 +1703,60 @@ AneBundle load_bundle_sealed(
   // The manifest is sealed first: the parse, the directory contract, and
   // every payload decision below consume the sealed image, so a manifest
   // rewrite after this point cannot change what this session loads.
+  // stamp fast path (Jw16ParakeetWarm): when the identity-keyed digest
+  // sidecar carries a digest for this exact (dev, ino, size, mtime_ns,
+  // ctime_ns) tuple and it equals the pin, the per-process read+hash+memfd
+  // pass is skipped and the already-open source descriptor is handed to the
+  // session directly. Any identity change, a missing/stale entry, or
+  // OMARCHY_ANE_SEAL_VERIFY forces the full sealed snapshot below; the
+  // digest is still compared against the pin in both paths, so the sidecar
+  // only removes work on a verified identity, never the comparison.
+  const auto seal_one = [&](const std::string& name) {
+    const std::string expected_digest = expected.at(name);
+    AneSealedFile image;
+    bool sealed_from_source = false;
+    if (!seal_stamp_forced_full() &&
+        root_owned_readonly_chain(dir / name)) {
+      UniqueFd source(
+          ::openat(directory.get(), name.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+      if (source.get() >= 0) {
+        struct ::stat status {};
+        if (::fstat(source.get(), &status) == 0 && S_ISREG(status.st_mode)) {
+          const std::string cached = cached_digest_lookup(
+              digest_key_for(dir / name, status));
+          if (cached == expected_digest && !cached.empty()) {
+            image = AneSealedFile(source.release(), cached);
+            sealed_from_source = true;
+          }
+        }
+      }
+    }
+    if (!sealed_from_source) {
+      image = sealed_file_at(directory.get(), name);
+      struct ::stat status {};
+      if (::fstat(image.fd, &status) == 0) {
+        // Record the freshly verified digest under this identity so the
+        // next process can take the fast path. The memfd copy has the
+        // same content bytes but its own identity; key on the source.
+        UniqueFd source(
+            ::openat(directory.get(), name.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+        if (source.get() >= 0 && ::fstat(source.get(), &status) == 0 &&
+            S_ISREG(status.st_mode)) {
+          store_cached_digest(digest_key_for(dir / name, status), image.sha256);
+        }
+      }
+    }
+    if (image.sha256 != expected_digest) {
+      throw bundle_error(
+          "sealed " + name + " sha256 " + image.sha256 +
+          " does not match the pin " + expected_digest +
+          "; refusing to execute unverified bytes");
+    }
+    return image;
+  };
+
   const size_t manifest_slot = sealed.size();
-  sealed.push_back(sealed_file_at(directory.get(), "manifest.json"));
+  sealed.push_back(seal_one("manifest.json"));
   const std::string manifest_path =
       "/proc/self/fd/" + std::to_string(sealed[manifest_slot].fd);
   if (sealed[manifest_slot].sha256 != expected.at("manifest.json")) {
@@ -1620,14 +1835,8 @@ AneBundle load_bundle_sealed(
   std::map<std::string, std::filesystem::path> sealed_paths;
   std::map<std::filesystem::path, std::string> known_digests;
   for (const auto& payload : manifest.payloads) {
-    sealed.push_back(sealed_file_at(directory.get(), payload.path));
+    sealed.push_back(seal_one(payload.path));
     AneSealedFile& image = sealed.back();
-    if (image.sha256 != expected.at(payload.path)) {
-      throw bundle_error(
-          "sealed " + payload.path + " sha256 " + image.sha256 +
-          " does not match the pin " + expected.at(payload.path) +
-          "; refusing to execute unverified bytes");
-    }
     const std::string sealed_path = "/proc/self/fd/" + std::to_string(image.fd);
     sealed_paths.emplace(payload.path, sealed_path);
     known_digests.emplace(sealed_path, image.sha256);

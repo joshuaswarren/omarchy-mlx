@@ -913,6 +913,7 @@ struct SidecarGuard {
     setenv("MLX_OMARCHY_ANE_DIGEST_CACHE_PATH",
            (dir.path() / "sidecar.txt").string().c_str(), 1);
   }
+  ~SidecarGuard() { unsetenv("MLX_OMARCHY_ANE_DIGEST_CACHE_PATH"); }
   std::filesystem::path sidecar() const { return dir.path() / "sidecar.txt"; }
 };
 
@@ -926,8 +927,10 @@ TEST_CASE("digest cache skips re-hash on unchanged file identity") {
   fixture.write();
   REQUIRE(load_bundle(fixture.dir.path()).programs.size() == 2);
 
-  // Same size, same mtime, different content: the documented identity-keyed
-  // trade — a cache hit serves the previously verified digest.
+  // Same size, same mtime, different content: since the key carries
+  // ctime_ns (Jw16ParakeetWarm, Main review 2026-10-03) an in-place
+  // rewrite always moves ctime — the documented same-mtime trade is
+  // reversed and the change is caught by a full re-verify.
   const auto payload = fixture.dir.path() / "program-0.anec";
   struct ::stat st {};
   REQUIRE(::stat(payload.c_str(), &st) == 0);
@@ -935,7 +938,8 @@ TEST_CASE("digest cache skips re-hash on unchanged file identity") {
                            {st.st_mtim.tv_sec, st.st_mtim.tv_nsec}};
   write_file(payload, anec_bytes('Z'));
   REQUIRE(::utimensat(AT_FDCWD, payload.c_str(), times, 0) == 0);
-  CHECK(load_bundle(fixture.dir.path()).programs.size() == 2);
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); }, "program-0.anec sha256 mismatch");
 
   // Same content change with a NEW mtime: cache miss, full re-verify, the
   // mismatch against the manifest is caught.
@@ -943,14 +947,14 @@ TEST_CASE("digest cache skips re-hash on unchanged file identity") {
   check_error(
       [&] { load_bundle(fixture.dir.path()); }, "program-0.anec sha256 mismatch");
 
-  // The sidecar was primed (2 initial) plus the re-verified miss (1); a
-  // cache hit adds no line.
+  // The sidecar was primed (2 initial) plus one row per re-verified miss
+  // (2); a hit adds no line.
   std::ifstream input(sidecar.sidecar());
   std::vector<std::string> lines;
   for (std::string line; std::getline(input, line);) {
     lines.push_back(line);
   }
-  REQUIRE(lines.size() == 3);
+  REQUIRE(lines.size() == 4);
   // Every line must carry the full identity key — a moved-from key would
   // serialize an empty path and silently never hit across processes.
   for (const auto& line : lines) {
@@ -984,9 +988,12 @@ TEST_CASE("digest cache kill-switch forces full verification") {
         [&] { load_bundle(fixture.dir.path()); }, "program-0.anec sha256 mismatch");
   }
 
-  // Any other value keeps the cache enabled: stale identity is served.
+  // Any other value keeps the cache enabled: the rewrite moved ctime, so
+  // the identity no longer matches the primed row and the re-hash runs —
+  // the content change is caught on the cache path too.
   setenv("MLX_OMARCHY_ANE_DIGEST_CACHE", "1", 1);
-  CHECK(load_bundle(fixture.dir.path()).programs.size() == 2);
+  check_error(
+      [&] { load_bundle(fixture.dir.path()); }, "program-0.anec sha256 mismatch");
   unsetenv("MLX_OMARCHY_ANE_DIGEST_CACHE");
 }
 
@@ -999,24 +1006,6 @@ TEST_CASE("digest cache sidecar serves a fresh process without re-hash") {
   fixture.write();
   const auto payload = fixture.dir.path() / "program-0.anec";
 
-  // helper: identity key line for the CURRENT file state
-  auto key_line = [&](const std::string& digest) {
-    struct ::stat st {};
-    REQUIRE(::stat(payload.c_str(), &st) == 0);
-    char line[512];
-    std::snprintf(
-        line,
-        sizeof(line),
-        "%s|%llx|%llx|%llx|%llx %s\n",
-        payload.c_str(),
-        static_cast<unsigned long long>(st.st_dev),
-        static_cast<unsigned long long>(st.st_ino),
-        static_cast<unsigned long long>(st.st_size),
-        static_cast<unsigned long long>(st.st_mtim.tv_sec) * 1000000000ull +
-            static_cast<unsigned long long>(st.st_mtim.tv_nsec),
-        digest.c_str());
-    return std::string(line);
-  };
   auto bump_mtime = [&] {
     struct ::stat st {};
     REQUIRE(::stat(payload.c_str(), &st) == 0);
@@ -1026,24 +1015,45 @@ TEST_CASE("digest cache sidecar serves a fresh process without re-hash") {
     REQUIRE(::utimensat(AT_FDCWD, payload.c_str(), times, 0) == 0);
   };
 
+  // helper: identity key line for the CURRENT file state (5 fields incl.
+  // ctime_ns — the format the Jw16ParakeetWarm key carries)
+  auto key_line = [&](const std::string& digest) {
+    struct ::stat st {};
+    REQUIRE(::stat(payload.c_str(), &st) == 0);
+    char line[512];
+    std::snprintf(
+        line,
+        sizeof(line),
+        "%s|%llx|%llx|%llx|%llx|%llx %s\n",
+        payload.c_str(),
+        static_cast<unsigned long long>(st.st_dev),
+        static_cast<unsigned long long>(st.st_ino),
+        static_cast<unsigned long long>(st.st_size),
+        static_cast<unsigned long long>(st.st_mtim.tv_sec) * 1000000000ull +
+            static_cast<unsigned long long>(st.st_mtim.tv_nsec),
+        static_cast<unsigned long long>(st.st_ctim.tv_sec) * 1000000000ull +
+            static_cast<unsigned long long>(st.st_ctim.tv_nsec),
+        digest.c_str());
+    return std::string(line);
+  };
+
   // 1. Correct sidecar entry, no prior in-process state: the fresh process
   // serves the digest from the sidecar and the bundle loads.
   write_file(sidecar.sidecar(), key_line(fixture.digest(0)));
   CHECK(load_bundle(fixture.dir.path()).programs.size() == 2);
 
-  // 2. A sidecar entry with a WRONG digest under a NEW identity must be
-  // caught: the cached digest is always compared against the manifest.
+  // 2. A sidecar entry whose digest is WRONG under the NEW identity (the
+  // rewrite moved ctime, so the step-1 memory row can never hit) must be
+  // caught: a disk-sidecar hit still faces the manifest comparison.
   bump_mtime();
   write_file(sidecar.sidecar(), key_line(std::string(64, '0')));
   check_error(
       [&] { load_bundle(fixture.dir.path()); }, "program-0.anec sha256 mismatch");
 
-  // 3. Kill-switch ignores every cache: correct sidecar restored, payload
-  // tampered with the identity preserved — the forced re-hash catches what
-  // the cache would have served.
+  // 3. Kill-switch ignores every cache: correct sidecar row for the
+  // tampered identity — the forced re-hash catches what a hit would
+  // have served.
   write_file(payload, anec_bytes('Z'));
-  bump_mtime();
-  bump_mtime();
   write_file(sidecar.sidecar(), key_line(fixture.digest(0)));
   setenv("MLX_OMARCHY_ANE_DIGEST_CACHE", "0", 1);
   check_error(
@@ -1357,5 +1367,155 @@ TEST_CASE("load_bundle_sealed enforces the directory contract") {
               fixture.dir.path() / "absent", pin, sealed);
         },
         "bundle directory not found");
+  }
+}
+
+// ---------------------------------------------------------------------
+// Seal stamp fast path (Jw16ParakeetWarm, Main review 2026-10-03):
+// eligibility, forged/stale sidecars, force env, root-owned chain.
+
+namespace {
+
+// Unique sidecar path per test; resets the kill-switch and force env.
+struct StampSidecarGuard {
+  TempDir dir;
+  std::filesystem::path path = dir.path() / "sidecar.txt";
+  StampSidecarGuard() {
+    ::unsetenv("MLX_OMARCHY_ANE_DIGEST_CACHE");
+    ::unsetenv("OMARCHY_ANE_SEAL_VERIFY");
+    ::setenv("MLX_OMARCHY_ANE_DIGEST_CACHE_PATH", path.c_str(), 1);
+  }
+  ~StampSidecarGuard() { ::unsetenv("MLX_OMARCHY_ANE_DIGEST_CACHE_PATH"); }
+
+  // Seed one identity row: identity of `path` now -> `digest`.
+  void seed(const std::filesystem::path& file, const std::string& digest) {
+    struct ::stat st {};
+    REQUIRE(::stat(file.c_str(), &st) == 0);
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    char hex[96];
+    std::snprintf(
+        hex,
+        sizeof(hex),
+        "|%llx|%llx|%llx|%llx|%llx",
+        static_cast<unsigned long long>(st.st_dev),
+        static_cast<unsigned long long>(st.st_ino),
+        static_cast<unsigned long long>(st.st_size),
+        static_cast<unsigned long long>(
+            uint64_t(st.st_mtim.tv_sec) * 1000000000ull +
+            uint64_t(st.st_mtim.tv_nsec)),
+        static_cast<unsigned long long>(
+            uint64_t(st.st_ctim.tv_sec) * 1000000000ull +
+            uint64_t(st.st_ctim.tv_nsec)));
+    out << file.string() << hex << ' ' << digest << '\n';
+    REQUIRE(out.good());
+  }
+};
+
+bool fd_is_sealed_memfd(int fd) {
+  return ::fcntl(fd, F_GET_SEALS) >= 0;
+}
+
+} // namespace
+
+TEST_CASE("user-owned bundle always takes the sealed snapshot") {
+  Fixture fixture;
+  fixture.write();
+  StampSidecarGuard sidecar;
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace("manifest.json", sha256_file(fixture.dir.path() / "manifest.json"));
+
+  // Even with a perfectly correct sidecar row for every consumed file,
+  // a user-owned chain must never hand the source fd to the session:
+  // the process could rewrite those bytes after the check.
+  for (const auto& [name, digest] : pin) {
+    sidecar.seed(fixture.dir.path() / name, digest);
+  }
+  std::vector<AneSealedFile> sealed;
+  AneBundle bundle = load_bundle_sealed(fixture.dir.path(), pin, sealed);
+  REQUIRE(sealed.size() == pin.size());
+  for (const AneSealedFile& image : sealed) {
+    CHECK(fd_is_sealed_memfd(image.fd));
+  }
+}
+
+TEST_CASE("forged sidecar identity on a user-owned bundle is ignored") {
+  Fixture fixture;
+  fixture.write();
+  StampSidecarGuard sidecar;
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace("manifest.json", sha256_file(fixture.dir.path() / "manifest.json"));
+  // Forged row: the manifest.json identity paired with program-0's pin
+  // digest. The lookup hits the identity, the digest differs from the
+  // manifest pin, so the fast path is refused and the full snapshot runs.
+  sidecar.seed(
+      fixture.dir.path() / "manifest.json", pin.at("program-0.anec"));
+  std::vector<AneSealedFile> sealed;
+  AneBundle bundle = load_bundle_sealed(fixture.dir.path(), pin, sealed);
+  for (const AneSealedFile& image : sealed) {
+    CHECK(fd_is_sealed_memfd(image.fd));
+  }
+}
+
+TEST_CASE("tampered payload is refused with a matching sidecar absent") {
+  Fixture fixture;
+  fixture.write();
+  StampSidecarGuard sidecar;
+  std::map<std::string, std::string> pin = full_pin(fixture);
+  pin.emplace("manifest.json", sha256_file(fixture.dir.path() / "manifest.json"));
+  auto bytes = read_bytes(fixture.dir.path() / "program-0.anec");
+  bytes[64] ^= 0xFF;
+  write_file(fixture.dir.path() / "program-0.anec", bytes);
+  std::vector<AneSealedFile> sealed;
+  check_error(
+      [&] { load_bundle_sealed(fixture.dir.path(), pin, sealed); },
+      "does not match the pin");
+}
+
+TEST_CASE("OMARCHY_ANE_SEAL_VERIFY forces the sealed snapshot") {
+  const char* root_bundle = ::getenv("PK_SEAL_TEST_ROOT_BUNDLE");
+  if (root_bundle == nullptr) {
+    MESSAGE("skip: no root-owned fixture (set PK_SEAL_TEST_ROOT_BUNDLE)");
+    return;
+  }
+  StampSidecarGuard sidecar;
+  const std::filesystem::path dir(root_bundle);
+  std::map<std::string, std::string> pin;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    pin.emplace(
+        entry.path().filename().string(), sha256_file(entry.path()));
+  }
+  for (const auto& [name, digest] : pin) {
+    sidecar.seed(dir / name, digest);
+  }
+  ::setenv("OMARCHY_ANE_SEAL_VERIFY", "1", 1);
+  std::vector<AneSealedFile> sealed;
+  AneBundle bundle = load_bundle_sealed(dir, pin, sealed);
+  for (const AneSealedFile& image : sealed) {
+    CHECK(fd_is_sealed_memfd(image.fd));
+  }
+  ::unsetenv("OMARCHY_ANE_SEAL_VERIFY");
+}
+
+TEST_CASE("root-owned read-only chain takes the source-fd fast path") {
+  const char* root_bundle = ::getenv("PK_SEAL_TEST_ROOT_BUNDLE");
+  if (root_bundle == nullptr) {
+    MESSAGE("skip: no root-owned fixture (set PK_SEAL_TEST_ROOT_BUNDLE)");
+    return;
+  }
+  StampSidecarGuard sidecar;
+  const std::filesystem::path dir(root_bundle);
+  std::map<std::string, std::string> pin;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    pin.emplace(
+        entry.path().filename().string(), sha256_file(entry.path()));
+  }
+  for (const auto& [name, digest] : pin) {
+    sidecar.seed(dir / name, digest);
+  }
+  std::vector<AneSealedFile> sealed;
+  AneBundle bundle = load_bundle_sealed(dir, pin, sealed);
+  REQUIRE(sealed.size() == pin.size());
+  for (const AneSealedFile& image : sealed) {
+    CHECK_FALSE(fd_is_sealed_memfd(image.fd));
   }
 }
