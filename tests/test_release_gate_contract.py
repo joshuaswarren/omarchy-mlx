@@ -56,6 +56,8 @@ class ReleaseGateHarnessTests(unittest.TestCase):
         "gate-probe.py",
         "gate3-card-runner.py",
         "g8-kokoro-driver.py",
+        "g9-speak-queue-driver.py",
+        "g9-speak-queue.sh",
         "g1-clean-install.sh",
         "g2-online-9b.sh",
         "g3-online-4b-card.sh",
@@ -78,7 +80,8 @@ class ReleaseGateHarnessTests(unittest.TestCase):
     RUN_ORDER = (
         "g1-clean-install", "g2-online-9b", "g3-online-4b-card", "g4-offline",
         "g5-laya", "g6-codec", "g7a-packaged-icd", "g7b-system-install",
-        "g8-kokoro", "g7c-ane-worker-verify", "g7d-fresh-transcribe",
+        "g8-kokoro", "g9-speak-queue", "g7c-ane-worker-verify",
+        "g7d-fresh-transcribe",
     )
     GOLDEN_TRANSCRIPT_SHA = (
         "db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790"

@@ -8,6 +8,7 @@
 #
 # Order: g1 install, g2 online-9B, g3 online-4B card, g4 offline, g5 laya,
 #        g6 codec, g7a packaged-ICD, g7b system install, g8 kokoro,
+#        g9 read-aloud playout (headless Chromium, no GPU),
 #        then on the jw16 ANE host: g7c packaged-ANE-worker verify,
 #        g7d fresh-image parakeet transcribe (each in its own gpuwin window,
 #        announced to the jw16 coordination pane first).
@@ -25,7 +26,8 @@ if [[ "$(gate_disk_free_gib)" -lt 25 ]]; then
 fi
 
 LOCAL_GATES=(g1-clean-install g2-online-9b g3-online-4b-card g4-offline g5-laya
-             g6-codec g7a-packaged-icd g7b-system-install g8-kokoro)
+             g6-codec g7a-packaged-icd g7b-system-install g8-kokoro
+             g9-speak-queue)
 JW16_GATES=(g7c-ane-worker-verify g7d-fresh-transcribe)
 
 FAILED=0

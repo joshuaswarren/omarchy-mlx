@@ -33,7 +33,8 @@ Gate homes (all under `$GATE_ROOT`, one naming scheme): `$TAG-gate-home`
 **g3** online 4B + SSE card → **g4** offline (unshare namespace) → **g5**
 Laya manifest pin → **g6** TTS codec regression (installed wheel) → **g7a**
 packaged-ICD fixture contract → **g7b** offline system install + staged-tree
-readback → **g8** Kokoro smoke → on the jw16 ANE host, each in its own
+readback → **g8** Kokoro smoke → **g9** read-aloud playout (headless
+Chromium, no GPU) → on the jw16 ANE host, each in its own
 gpuwin window announced to the jw16 coordination pane first: **g7c** packaged
 ANE worker verify, **g7d** fresh-image parakeet transcribe.
 
@@ -54,6 +55,7 @@ DRAFT. Gate runners must NEVER set `MLX_OMARCHY_PAIR_DEV_QUALIFICATION`
 | g6 | installed venv, tag tests tarball, voice pack | codec unittest OK, zero skips |
 | g7a | system ICD + `$TAG-sysinst` prefix | `icd_source=packaged`, expected sha == driver sha |
 | g7b | vendor tar, `$INSTALL_TREE/install.sh` | offline `--system` install exit 0; staged tree incl. `usr/bin/mlx-omarchy-parakeet`; no launcher path leaks |
+| g9 | g1 home's installed `static/js`, a Chromium-family browser (`GATE_CHROMIUM` or PATH) | four sentences against a serialising fake `/api/speak` on the real Web Audio clock: `SPEAK_QUEUE_SMOKE PASS` = in order, 0 overlaps, 0 gaps, 0 busy retries, one audio-done after the last chunk; no browser = exit 2 |
 | g7c | draft wheel + vendor tar on jw16 | private venv; packaged `verify` golden e2e: status match, all pin checks pass, `ane_mode=true`, `cpu_tensor_events=0` |
 | g7d | draft wheel + vendor tar + staged reference cache on jw16 (or a CLI file in cpu mode) | user-style `transcribe` of the pinned fixture: exit 0 twice (entry + `python3 -S`), golden transcript sha match, `ane_mode=true`, old failure string ABSENT |
 
