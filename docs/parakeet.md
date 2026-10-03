@@ -155,6 +155,17 @@ Tests: `python3 -m pytest tests/coreml/ -q`.
 
 Cache layout: `$MLX_OMARCHY_CACHE_DIR|~/.cache/mlx-omarchy/parakeet-reference/<model-repo>/<revision>/`.
 
+`transcribe` may opt into a stamp-aware fast verify with
+`MLX_OMARCHY_PK_TRUST_CACHE=1`: a sidecar of the actual SHA-256s of every
+locked file (`.verified-hashes`, written by `download` / `verify` /
+`transcribe` after every successful hash) and the manifest size stamp
+(`.manifest-stamp`) replace the full sweep on the next call. The stamp is
+checked against each file's mtime and size; any post-verify write or
+recorded-vs-lock hash drift falls through to a full verify and refreshes
+the sidecar, so the same refusal the strict path would raise still fires.
+Default unset keeps the strict re-hash that `download` / `verify` always
+use.
+
 ## Golden capture
 
 Bulk capture data lives **outside git** at

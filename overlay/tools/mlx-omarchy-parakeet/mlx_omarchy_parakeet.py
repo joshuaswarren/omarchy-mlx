@@ -51,6 +51,7 @@ from coreml.reference import (  # noqa: E402
     ReferenceLock,
     default_cache_root,
     model_cache_dir,
+    verify_cache_with_stamp,
 )
 
 RECEIPT_SCHEMA = "mlx-omarchy.parakeet-download-receipt.v1"
@@ -585,7 +586,17 @@ def _transcribe(args) -> int:
 
     lock = ReferenceLock.load()
     cache_dir = _cache_dir(lock)
-    ok, mismatches = fetch.verify_cache(cache_dir, lock)
+    # Opt-in fast verify on `transcribe`. With MLX_OMARCHY_PK_TRUST_CACHE=1
+    # the sidecar stamps written by `download`/`verify` short-circuit the
+    # full SHA-256 sweep; a stamp miss, size drift, or hash drift falls
+    # through to a real hash and refreshes the stamps. Default unset keeps
+    # the strict re-hash that `download`/`verify` always used.
+    trust_stamp = os.environ.get(
+        "MLX_OMARCHY_PK_TRUST_CACHE", ""
+    ).strip().lower() not in ("", "0", "off", "false", "no")
+    ok, mismatches = verify_cache_with_stamp(
+        cache_dir, lock, trust_stamp=trust_stamp,
+    )
     if not ok:
         raise TranscribeRefusal(
             "the reference cache does not verify against the lock; run "

@@ -50,6 +50,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")  # git commit / HF revision sha1
 CACHE_STAMP_NAME = ".manifest-stamp"
 CACHE_HASHES_NAME = ".sha256sums"
+CACHE_VERIFIED_NAME = ".verified-hashes"
 LOCK_NAME = "parakeet-reference.lock"
 
 
@@ -401,10 +402,136 @@ def verify_cache(cache_dir: Path, lock: ReferenceLock) -> tuple[bool, list[str]]
     return ok, mismatches
 
 
+def trust_cache(
+    cache_dir: Path, lock: ReferenceLock
+) -> tuple[bool, list[str]]:
+    """Validate the cache without re-reading the file contents.
+
+    Returns ``(ok, mismatches)`` without raising. ``ok`` is True ONLY
+    when every locked file is present, its size matches, its mtime is
+    no newer than the ``.verified-hashes`` sidecar's mtime, and the
+    sidecar's recorded hash agrees with the lock's pinned sha256. The
+    sidecar's mtime is the moment the last successful verify finished;
+    any cache write or partial download that bumps a file's mtime past
+    that point is detected here without opening the file. The recorded
+    hash sanity-check pins the sidecar to the lock, so a sidecar from
+    an older revision cannot pass against the current lock.
+    """
+    mismatches: list[str] = []
+    verified_path = cache_dir / CACHE_VERIFIED_NAME
+    if not verified_path.is_file():
+        mismatches.append(
+            f"missing-stamp: {CACHE_VERIFIED_NAME} "
+            f"(run `mlx-omarchy-parakeet verify` to refresh)")
+        return False, mismatches
+    try:
+        sidecar_mtime_ns = verified_path.stat().st_mtime_ns
+        verified_lines = verified_path.read_text(encoding="utf-8").splitlines()
+    except OSError as ex:
+        mismatches.append(f"stamp-read-fail: {ex}")
+        return False, mismatches
+    recorded = {}
+    for line in verified_lines:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        try:
+            sha, _, path = line.partition("  ")
+            recorded[path] = sha
+        except ValueError:
+            mismatches.append(f"verified-hashes-malformed: {line!r}")
+    if mismatches:
+        return False, mismatches
+    for f in lock.files:
+        p = cache_dir / f.path
+        if not p.is_file():
+            mismatches.append(f"missing: {f.path}")
+            continue
+        try:
+            st = p.stat()
+        except OSError as ex:
+            mismatches.append(f"stat-fail: {f.path}: {ex}")
+            continue
+        if st.st_size != f.size:
+            mismatches.append(
+                f"size-mismatch: {f.path}: lock={f.size}, "
+                f"actual={st.st_size}")
+            continue
+        if st.st_mtime_ns > sidecar_mtime_ns:
+            mismatches.append(
+                f"newer-than-stamp: {f.path} "
+                f"(file mtime={st.st_mtime_ns}, "
+                f"sidecar mtime={sidecar_mtime_ns})")
+            continue
+        side_sha = recorded.get(f.path)
+        if side_sha is None:
+            mismatches.append(f"sha-stamp-missing: {f.path}")
+            continue
+        if side_sha != f.sha256:
+            mismatches.append(
+                f"sha-stamp-mismatch: {f.path}: sidecar={side_sha}, "
+                f"lock={f.sha256}")
+    return (not mismatches), mismatches
+
+
+def verify_cache_with_stamp(
+    cache_dir: Path,
+    lock: ReferenceLock,
+    *,
+    trust_stamp: bool,
+) -> tuple[bool, list[str]]:
+    """``verify_cache`` unless ``trust_stamp`` lets the sidecar win.
+
+    When ``trust_stamp`` is True and :func:`trust_cache` validates every
+    locked file from the verified-hashes sidecar's mtime and recorded
+    hash, the full SHA-256 sweep is skipped. A trust failure (missing
+    stamp, size mismatch, mtime drift, recorded-vs-lock hash drift) falls
+    through to :func:`verify_cache` and refreshes the sidecar so a
+    later stamp-only run can take it. With ``trust_stamp`` False the
+    call is a straight ``verify_cache`` and stamps are ignored — same
+    behavior as before this wrapper existed.
+    """
+    if trust_stamp:
+        ok, mismatches = trust_cache(cache_dir, lock)
+        if ok:
+            return True, []
+        ok, mismatches = verify_cache(cache_dir, lock)
+        if ok:
+            record_verified_hashes(cache_dir, lock)
+            record_stamps(cache_dir, lock)
+        return ok, mismatches
+    return verify_cache(cache_dir, lock)
+
+
+def record_verified_hashes(
+    cache_dir: Path, lock: ReferenceLock
+) -> None:
+    """Hash every pinned file and write ``.verified-hashes``.
+
+    Each line is ``<actual_sha256>  <path>``, the bytes that were on disk
+    the moment this ran. ``trust_cache`` uses the sidecar's mtime to
+    detect any post-verify write and the recorded hash to bind the
+    sidecar to the current lock's pins.
+    """
+    hash_lines = []
+    for f in lock.files:
+        p = cache_dir / f.path
+        if not p.is_file():
+            continue
+        hash_lines.append(f"{sha256_file(p)}  {f.path}\n")
+    (cache_dir / CACHE_VERIFIED_NAME).write_text(
+        "".join(hash_lines), encoding="utf-8"
+    )
+
+
 def record_stamps(cache_dir: Path, lock: ReferenceLock) -> None:
     """Write sidecar receipt files after a successful verify.
 
-    Receipts only: verification never consults them.
+    ``.manifest-stamp`` and ``.sha256sums`` mirror the lock for human
+    readers (and ``sha256sum -c``); ``.verified-hashes`` records the
+    actual bytes SHA captured at the same moment so the opt-in stamp
+    trust path on ``transcribe`` can short-circuit re-hashing on a
+    follow-up run without losing tamper coverage.
     """
     stamp_lines = []
     hash_lines = []
@@ -417,3 +544,4 @@ def record_stamps(cache_dir: Path, lock: ReferenceLock) -> None:
     (cache_dir / CACHE_HASHES_NAME).write_text(
         "".join(hash_lines), encoding="utf-8"
     )
+    record_verified_hashes(cache_dir, lock)

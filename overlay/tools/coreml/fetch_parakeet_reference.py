@@ -52,6 +52,7 @@ from reference import (  # noqa: E402
     tree_url,
     validate_lock,
     verify_cache,
+    verify_cache_with_stamp,
 )
 
 _CHUNK = 1 << 20
