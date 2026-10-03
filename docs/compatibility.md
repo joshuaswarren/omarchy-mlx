@@ -721,7 +721,7 @@ A Supported row must link every applicable record.
 (7) Record the repeated-request stability result.
 (8) Link the clean-install command output.
 
-## Training gradients status (2026-10-01)
+## Training gradients status (2026-10-03)
 
 - Composed SDPA backward: dk is wrong at specific elements (last-dim of
   early keys, head-1 last-key) at rep=1 shapes 5x7, 4x4, and 6x9 on
@@ -729,15 +729,23 @@ A Supported row must link every applicable record.
   "fused sdpa vjp dk dv match finite differences at rep=1"). dq, dv,
   and GQA-shape dk are fd-clean on the same runs. Under investigation;
   the defect lives in the composed backward chain (standalone matmul
-  repros are clean at the exact operand configs).
+  repros are clean at the exact operand configs). The 2026-10-03
+  SdpaVjpFix fd sweep reproduces the same element signature on
+  llvmpipe at additional rep=1 shapes (e.g. 1x2x5x4, 2x5x7x8) - the
+  defect is broader than the three documented shapes.
 - Fused SDPA VJP: serves rep=1 (H == Hk) on the float dtypes -
   dq/dk/dv finite-difference-proven on M2 G14X real hardware
   (b4152c19; the fd legs in omarchy_fast_ops_tests measure the fused
-  path). GQA (rep > 1) stays composed: the fused dk/dv run ~0.7x short
+  path). 2026-10-03: the tile-shape crash at rep=1 (SmallVector
+  'size() > index' in asserts-enabled builds) is fixed (fb0aac16c) and
+  the rep=1 fd sweep now covers B=1/2, qL=1/2/5, kL=1/2/5/7, D=4/8/64,
+  causal and maskless. Two value defects remain open at small shapes
+  (qL=1 kL>1 all-zero dk/dv, hardware-confirmed; B=1 kL=5 zero spots,
+  llvmpipe) - see docs/known-defects.md; qL=1 is decode geometry, so
+  backward through a single-query step loses dk/dv until fixed.
+  GQA (rep > 1) stays composed: the fused dk/dv run ~0.7x short
   of host finite differences at rep=2 (GQA reduce/matmul shortfall,
-  under investigation). Composed SDPA backward dk has its own known
-  defect at rep=1 shapes 5x7/4x4/6x9 (may_fail fd doctest, see above)
-  - GQA rep>1 training hits that path until either fix lands.
+  under investigation).
 - Fused gated-delta-net (GDN) VJP: serving GQA shapes, fd-verified
   against the composed reference on M2 G14X (doctest "fused gdn vjp
   matches the composed reference at GQA shapes").
