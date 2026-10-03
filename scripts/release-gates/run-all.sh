@@ -27,8 +27,10 @@ fi
 
 LOCAL_GATES=(g1-clean-install g2-online-9b g3-online-4b-card g4-offline g5-laya
              g6-codec g7a-packaged-icd g7b-system-install g8-kokoro
-             g9-speak-queue g10-kokoro-primer g11-card-9b g12-kokoro-stream)
-JW16_GATES=(g7c-ane-worker-verify g7d-fresh-transcribe g13-gdn-maskless)
+             g9-speak-queue g10-kokoro-primer g11-card-9b g12-kokoro-stream
+             g14-routing)
+JW16_GATES=(g7c-ane-worker-verify g7d-fresh-transcribe g13-gdn-maskless
+            g15-trig)
 
 FAILED=0
 for g in "${LOCAL_GATES[@]}"; do
@@ -56,12 +58,12 @@ scp -q "$(gate_wheel)" "$(gate_vtar)" "$JW16_SSH:/tmp/${TAG}-assets/" || exit 2
 [[ -n "${G7D_OVERLAY_CLI:-}" ]] && scp -q "$G7D_OVERLAY_CLI" "$JW16_SSH:/tmp/${TAG}-overlay-cli.py"
 ssh "$JW16_SSH" "tar -xzf /tmp/${TAG}-release-gates.tgz -C /tmp && mv /tmp/$(basename "$GATES_DIR") /tmp/omarchy-release-gates"
 
-# g13's compile stage is CPU-only: build the doctest binary over plain ssh
-# BEFORE the windows so the gpuwin window only runs it.
-echo "=== g13-gdn-maskless (jw16 build stage, no gpuwin) ==="
-if ssh "$JW16_SSH" "TAG='$TAG' GATE_WORKTREE='$GATE_WORKTREE' LOG_DIR='/tmp/${TAG}-gate-logs' bash /tmp/omarchy-release-gates/g13-gdn-maskless.sh build"; then RC=0; else RC=$?; fi
-echo "g13-gdn-maskless_build_RC=$RC" >> "$DONE"
-echo "g13-gdn-maskless build RC=$RC"
+# g13/g15's compile stages are CPU-only: build the doctest binaries over
+# plain ssh BEFORE the windows so the gpuwin windows only run them.
+echo "=== jw16 build stage: g13 g15 test binaries (no gpuwin) ==="
+if ssh "$JW16_SSH" "TAG='$TAG' GATE_WORKTREE='$GATE_WORKTREE' LOG_DIR='/tmp/${TAG}-gate-logs' bash /tmp/omarchy-release-gates/g13-gdn-maskless.sh build && TAG='$TAG' GATE_WORKTREE='$GATE_WORKTREE' LOG_DIR='/tmp/${TAG}-gate-logs' bash /tmp/omarchy-release-gates/g15-trig.sh build"; then RC=0; else RC=$?; fi
+echo "jw16_build_stage_RC=$RC" >> "$DONE"
+echo "jw16 build stage RC=$RC"
 [[ $RC -eq 0 ]] || FAILED=1
 
 if command -v herdr >/dev/null 2>&1; then
