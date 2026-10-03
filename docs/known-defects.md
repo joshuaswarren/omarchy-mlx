@@ -939,7 +939,11 @@ is exact in float32 - `C1 = 6.28125 = 201*2^-5`, exact for every
 down to the contract value 5e5) - plus a dyadic `2^-9` term (exact for
 all k) and two f32 correction terms, in a `precise` three-subtract
 chain. Measured max abs error in the reduction band 1e4..5e5:
-2.5e-7 (llvmpipe), 2.5e-7 (jwm1 M1), 2.5e-7 (jw16 M1 Max). Above 5e5
+2.5e-7 (llvmpipe), 2.5e-7 (jw16 M1 Max), and 2.0e-7 in the far band on
+jwm1 (M1) - though jwm1's older-Mesa built-in sin/cos adds up to
+6.9e-4 at some reduced arguments (measured, stable across runs), the
+same argument-dependent error its built-in band already documents.
+Above 5e5
 the wrappers return NaN: a non-finite result is loud, a finite wrong
 value is forbidden. Below 1e4 the raw built-in is kept bit-identically
 (Kokoro's in-graph reduction leaves its arguments under 1e4, and Laya's
