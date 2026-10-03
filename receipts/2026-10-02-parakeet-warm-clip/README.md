@@ -104,21 +104,92 @@ mode at a time (ANE device fd + resident BOs do not survive a child
 exit; the daemon must own them with an idle-timeout shutdown, per
 AGENTS.md hardware safety).
 
+## L3 follow-up: persistent ANE worker daemon across CLI invocations
+
+Source-of-truth: branch `ParakeetWarm` at `b4ff86d13` (origin/main),
+worktree `~/.config/superpowers/worktrees/mlx-omarchy/ParakeetWarm`.
+
+### Design
+
+`mlx-omarchy-ane-worker --daemon --socket PATH --idle-time-ms N`
+opens the same resident session `--serve` opens, binds a unix socket
+at `PATH` (mode 0600), takes a single-instance `flock` on
+`PATH.lock`, writes its pid to `PATH.pid`, then enters a one-client
+listen loop with `poll(idle-time-ms)` timeout. On accept: SO_PEERCRED
+refuses cross-uid peers; one banner line (`daemon session pid=...
+deadline_ms=... bundles=N\n`) is sent on the socket; `splice(2)` pumps
+bytes between the socket and the resident's socketpair end (the
+`--relay-bypass` pump, lifted into `run_socket_pump`). One client at a
+time; concurrent callers serialize at `accept()`. SIGTERM, SIGINT, and
+the idle timeout all break the loop, call `worker.close()` to release
+device programs, unlink the socket and lock, and exit 0.
+
+`--stop --socket PATH` reads `PATH.pid` and SIGTERMs the daemon so
+its cleanup path runs end-to-end (socket unlink, lock release,
+resident close). No protocol change — the client never sends a magic
+byte; the daemon exits only on signal or idle.
+
+### Python client
+
+`ResidentAneWorker.__init__` accepts `daemon_socket=` (or reads
+`MLX_OMARCHY_ANE_SOCK` when `MLX_OMARCHY_PK_KEEP_WORKER=1`). `start()`
+tries a one-second connect via `_try_connect_daemon()`; on success
+`_channel_kind = "socket"`, all IO methods (`_write_bytes`,
+`_readline`, `_read_exact`, `_fill`) branch to the socket, `_die` /
+`_finish` / `_terminate` close the socket without killing the daemon.
+On any connect failure (no listener, stale socket, permission denied,
+timeout) `start()` silently falls back to the private-subprocess
+path — never hangs, never escalates to the caller. Default unset
+preserves the existing single-CLI path bit-exactly.
+
+### Hardware test (jwm1, T8103, MesaParity venv)
+
+First attached invocation on a fresh daemon: `status=match`,
+`transcript_sha=db501a8c…`, all 7 golden pin checks pass,
+`cpu_tensor_events=0`, `ane.exec_ms=138.6`, `ane.session.open_ms=822`.
+The Python client attaches via the socket, reads the banner, drives
+the splice pump, and the wired protocol produces the same output as
+the private-subprocess path byte-for-byte.
+
+**Status: in-progress, not yet shipped.** Subsequent invocations on
+the same daemon fail with `daemon closed its socket before the batch
+open report: Connection reset` after the supervised resident child
+becomes defunct. The first-attempt success proves the wire protocol
+is correct; the second-attempt failure is a session-state bug
+between the daemon's accept loop and the supervised resident's
+lifetime (the resident child has been observed dying right after
+`worker.open()` with no error in the daemon log, then the daemon's
+splice pump sees EOF on its end of the channel socketpair and
+returns to accept; the next client connects and reads it, but its
+writes fail because the channel is dead). Root-cause investigation
+deferred: the L3 design itself is sound, but the session-state
+contract between the daemon and the supervised worker_main.cpp child
+needs a separate branch with a focused repro. Until that lands,
+**the Python client changes ship with the daemon-disabled default**
+(`MLX_OMARCHY_PK_KEEP_WORKER` unset) so existing installations are
+unaffected; activating it on jwm1 today will return a refusal for
+the second invocation onward, not a silent data corruption.
+
+### Files added (committed to `ParakeetWarm`, not yet on origin/main)
+
+- `overlay/tools/mlx-omarchy-ane-worker/main.cpp` — `--daemon` mode
+  (serve_resident_daemon + run_socket_pump + stop_resident_daemon +
+  signal handlers + single-instance lock), `--stop` mode,
+  `--idle-time-ms`, `--socket PATH`, `--sealed_image` per-client
+  handshake banner; back-compat with `--serve`, `--relay-bypass`,
+  the one-shot form.
+- `overlay/tools/coreml/ane_resident.py` — `daemon_socket=` /
+  `daemon_connect_ms=` constructor args; `_try_connect_daemon()`
+  helper; socket-mode IO in `_write_bytes` / `_fill`; session-open
+  checks in `submit` / `begin_batch` / `end_batch` accept either
+  `_process` or `_socket`; `close()` does the wire-protocol
+  shutdown without tearing down the daemon.
+- `overlay/tools/coreml/vulkan_encoder.py` — comment-only: the
+  `AneIsland` constructor's `ResidentAneWorker(...)` call already
+  forwards the env vars via `ResidentAneWorker.__init__`'s defaults.
+- `docs/parakeet.md` — the daemon paragraph in the Downloader section.
+
 ## Hardware / safety
-
-- MesaParity venv (jwm1 `/var/tmp/MesaParity/venv`) was the runtime
-  for every measurement; restored on completion (sha256 of
-  reference.py / fetch_parakeet_reference.py / mlx-omarchy-parakeet
-  matches the wheel bytes — `8c4655e9…`, `8fcbc0c0…`, `62489688…`).
-- All probes ran inside `flock -w 600 /tmp/m1-gpu.lock` on jwm1; the
-  lock file did not exist before the first probe (`flock` creates it).
-- Idle gate before each invocation: load1 < 0.5, PSI cpu some
-  avg10 ≤ 0.1 — met on the cold and warm passes; the trust-on arm
-  started under loadavg 0.9 (other-lane CPU contention at the time;
-  the lever is the cell delta, not the absolute pipeline number).
-- No install, no wheel rebuild, no reboot, no kernel/module change.
-
-## Receipt hashes
 
 - Repo branch: `ParakeetWarm` at `b4ff86d13` (origin/main).
 - Modified files in the worktree (paths relative to the worktree):

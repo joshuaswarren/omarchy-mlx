@@ -1054,6 +1054,11 @@ class AneIsland:
             self._session_shared = True
             self.session_reused = session is not None
         if session is None:
+            # daemon_socket: when MLX_OMARCHY_PK_KEEP_WORKER=1 AND
+            # MLX_OMARCHY_ANE_SOCK is set, the ResidentAneWorker
+            # constructor reads those env vars and probes the daemon
+            # first, falling back silently to the private-subprocess
+            # path on any connect failure.
             session = ResidentAneWorker(
                 worker=Path(self.worker),
                 libane=Path(self.libane),

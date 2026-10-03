@@ -14,14 +14,26 @@ this client, it only ever reads jobs from its own stdin, every submit is
 bounded by the worker's wall-clock deadline, and a failure is reported
 and ends the session -- never retried.
 
-Payloads travel inline on the worker stdin and stdout. They do not
-go through host files.
+When ``MLX_OMARCHY_PK_KEEP_WORKER=1`` AND ``MLX_OMARCHY_ANE_SOCK`` is
+set, the client first tries to attach to a long-running
+``--daemon --socket PATH`` instance (which holds the device fd and
+resident BOs across CLI invocations). On connect failure (no daemon,
+stale socket, permission refusal, timeout) the client silently falls
+back to the private-subprocess path above -- never hangs, never
+escalates to the caller. The daemon, when present, owns the device and
+the seal contract; the client never opens ``/dev/accel/accel0`` in this
+mode.
+
+Payloads travel inline on the worker stdin and stdout (private-subprocess
+path) or the daemon's unix socket (daemon path). They do not go
+through host files.
 """
 
 from __future__ import annotations
 
 import os
 import select
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -64,6 +76,16 @@ class ResidentAneWorker:
     ``submit`` takes and returns raw bytes; tensor packing, dtypes and
     array conversion stay with the caller, exactly as with the
     one-process-per-submit path.
+
+    When ``daemon_socket`` is set (or ``MLX_OMARCHY_PK_KEEP_WORKER=1`` +
+    ``MLX_OMARCHY_ANE_SOCK`` is set), ``start()`` first tries a one-
+    second connect to the daemon. On success the session is an attach
+    to a long-running daemon: every submit is a wire-protocol round
+    trip over the unix socket, the worker subprocess never spawns here,
+    and the device fd + BOs belong to the daemon. On any connect
+    failure (no listener, stale socket, permission refused, timeout)
+    ``start()`` silently falls back to the private-subprocess path so
+    a missing daemon never escalates to the caller.
     """
 
     def __init__(
@@ -77,6 +99,8 @@ class ResidentAneWorker:
         relay_bypass: bool | None = None,
         seal_expects: Mapping[str, Mapping[str, str]] | None = None,
         seal_libane_sha: str | None = None,
+        daemon_socket: str | os.PathLike[str] | None = None,
+        daemon_connect_ms: int = 1000,
     ):
         if not bundles:
             raise ResidentWorkerError("a resident session needs at least one bundle")
@@ -117,6 +141,27 @@ class ResidentAneWorker:
         }
         self.seal_libane_sha = seal_libane_sha
 
+        # Daemon attach (opt-in, default off). When the env vars are
+        # both set, ``start()`` first tries a bounded connect to the
+        # daemon at MLX_OMARCHY_ANE_SOCK; on any failure it silently
+        # falls back to the private-subprocess path. A direct
+        # ``daemon_socket=...`` parameter overrides the env for
+        # tests; passing daemon_socket="" disables the env probe even
+        # when the env vars are present.
+        if daemon_socket is None:
+            env_keep = os.environ.get(
+                "MLX_OMARCHY_PK_KEEP_WORKER", ""
+            ).lower() not in ("", "0", "off", "false")
+            env_sock = os.environ.get("MLX_OMARCHY_ANE_SOCK", "")
+            self.daemon_socket = (
+                Path(env_sock) if env_keep and env_sock else None
+            )
+        elif str(daemon_socket) == "":
+            self.daemon_socket = None
+        else:
+            self.daemon_socket = Path(daemon_socket)
+        self.daemon_connect_ms = int(daemon_connect_ms)
+
         # Counters in the shape the parity harness reports (section 42).
         self.submissions = 0
         self.batch_opens = 0
@@ -132,9 +177,15 @@ class ResidentAneWorker:
         self.close_ns = 0
         self.log: list[dict] = []
 
+        # Transport: subprocess.Popen (private subprocess path) or a
+        # connected unix socket (daemon attach). Exactly one is live at
+        # any moment; ``_channel_kind`` selects which IO methods use.
         self._process: subprocess.Popen | None = None
+        self._socket: socket.socket | None = None
+        self._channel_kind: str = "process"  # "process" or "socket"
         self._stderr_path = self.scratch / "resident-worker.stderr"
         self._stderr = None
+        self._stderr_tail_buf: str = ""
         self._banner: list[str] = []
         self._inbox = bytearray()
         self._batch_until: float | None = None
@@ -147,8 +198,49 @@ class ResidentAneWorker:
         return self._process is not None
 
     def start(self) -> None:
-        if self._process is not None:
+        if self._process is not None or self._socket is not None:
             raise ResidentWorkerError("resident session is already started")
+        # Try the daemon first when both are opted in: an existing
+        # --daemon --socket PATH instance already holds the device fd
+        # and the resident BOs, so connecting to it skips the per-CLI
+        # ~800 ms bundle-load + device-program-load cost. Any failure
+        # here falls through silently to the private-subprocess path:
+        # the caller does not see a refused run because the daemon
+        # happens to be absent.
+        if self.daemon_socket is not None:
+            sock = _try_connect_daemon(
+                self.daemon_socket,
+                connect_ms=self.daemon_connect_ms,
+            )
+            if sock is not None:
+                self._channel_kind = "socket"
+                self._socket = sock
+                started = time.monotonic_ns()
+                # The daemon replays one composite banner per accepted
+                # client: `daemon session pid=... deadline_ms=...
+                # bundles=N\n`. The private-subprocess path consumed one
+                # banner per bundle + the relay-bypass-ready line, but
+                # the daemon's stdout is its log, not its wire channel,
+                # so the client gets one line instead.
+                line = self._readline("daemon session banner")
+                if not line.startswith("daemon session "):
+                    self._die(
+                        f"expected the daemon session banner, got {line!r}"
+                    )
+                self._banner.append(line)
+                # Mirror the per-bundle-load counter the private path
+                # reports so session_reused and the cross-process stats
+                # stay comparable.
+                self.bundle_loads = len(self.bundles)
+                self.start_ns = time.monotonic_ns() - started
+                # daemon attach: there is no per-session worker_starts
+                # increment -- the daemon is a long-running peer, not a
+                # spawn of this client. The submit counters still
+                # record every job the client routes.
+                return
+        # Daemon connect failed; close any handle the helper left
+        # open and fall through to the private-subprocess path.
+        self._channel_kind = "process"
         self.scratch.mkdir(parents=True, exist_ok=True)
         argv = [
             str(self.worker),
@@ -198,9 +290,31 @@ class ResidentAneWorker:
         self.start_ns = time.monotonic_ns() - started
 
     def close(self) -> dict:
-        if self._process is None:
+        if self._process is None and self._socket is None:
             raise ResidentWorkerError("no resident session is open")
         started = time.monotonic_ns()
+        if self._channel_kind == "socket":
+            # Daemon attach: the daemon outlives this client, so we
+            # only close our end of the connection. The wire protocol
+            # is identical to the relay-bypass private-subprocess
+            # path: send "close\n", the daemon's pump half-closes its
+            # write side and the resident returns "released\n" on the
+            # read side. We do NOT close the daemon or terminate it --
+            # that is what `mlx-omarchy-ane-worker --stop --socket PATH`
+            # is for.
+            self._write_bytes(b"close\n")
+            try:
+                self._socket.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+            line = self._readline("release report")
+            if line != "released":
+                self._die(
+                    f"expected the daemon-released token, got {line!r}"
+                )
+            self.close_ns = time.monotonic_ns() - started
+            self._finish()
+            return {"released": line, "exit": 0}
         if self.relay_bypass:
             # In bypass mode the resident's wire protocol is the
             # session boundary. Send "close\n" on stdin, expect
@@ -245,7 +359,7 @@ class ResidentAneWorker:
         return self
 
     def __exit__(self, kind, value, traceback) -> None:
-        if self._process is None:
+        if self._process is None and self._socket is None:
             return
         if kind is None:
             self.close()
@@ -268,7 +382,7 @@ class ResidentAneWorker:
         per submit -- more than the process launch residency saves -- so
         the file round trip is gone and only the bytes cross.
         """
-        if self._process is None:
+        if self._process is None and self._socket is None:
             raise ResidentWorkerError("no resident session is open")
         if bundle not in self.bundles:
             raise ResidentWorkerError(f"unknown resident bundle {bundle!r}")
@@ -389,7 +503,7 @@ class ResidentAneWorker:
         model is unchanged: a missed deadline or one failed submit ends
         the session and is reported, never retried.
         """
-        if self._process is None:
+        if self._process is None and self._socket is None:
             raise ResidentWorkerError("no resident session is open")
         if deadline_ms <= 0:
             raise ResidentWorkerError("a batch scope needs a positive deadline")
@@ -412,7 +526,7 @@ class ResidentAneWorker:
 
     def end_batch(self) -> int:
         """Close the batch scope; returns the rounds the batch served."""
-        if self._process is None:
+        if self._process is None and self._socket is None:
             raise ResidentWorkerError("no resident session is open")
         if self._batch_until is None:
             raise ResidentWorkerError("no batch scope is open")
@@ -455,6 +569,16 @@ class ResidentAneWorker:
         self._write_bytes((line + "\n").encode())
 
     def _write_bytes(self, payload: bytes) -> None:
+        if self._channel_kind == "socket":
+            assert self._socket is not None
+            try:
+                self._socket.sendall(payload)
+            except (BrokenPipeError, ConnectionResetError, OSError) as error:
+                self._die(
+                    f"daemon closed its socket before the job was sent: "
+                    f"{error}"
+                )
+            return
         assert self._process is not None and self._process.stdin is not None
         try:
             self._process.stdin.write(payload)
@@ -464,8 +588,6 @@ class ResidentAneWorker:
 
     def _fill(self, what: str) -> None:
         """Read whatever the worker has ready, inside the client guard."""
-        assert self._process is not None and self._process.stdout is not None
-        stream = self._process.stdout
         deadline = time.monotonic() + (self.deadline_ms + _CLIENT_GRACE_MS) / 1000
         if self._batch_until is not None:
             deadline = self._batch_until + _CLIENT_GRACE_MS / 1000
@@ -477,6 +599,33 @@ class ResidentAneWorker:
                     f"resident worker did not produce the {what} within "
                     f"{self.deadline_ms + _CLIENT_GRACE_MS} ms"
                 )
+            if self._channel_kind == "socket":
+                sock = self._socket
+                assert sock is not None
+                try:
+                    ready, _, _ = select.select([sock], [], [], remaining)
+                except (OSError, ValueError):
+                    self._die(
+                        f"daemon socket became unreadable while waiting for "
+                        f"the {what}"
+                    )
+                if not ready:
+                    continue
+                try:
+                    chunk = sock.recv(1 << 20)
+                except (OSError, ConnectionResetError) as error:
+                    self._die(
+                        f"daemon closed its socket before the {what}: "
+                        f"{error}"
+                    )
+                if not chunk:
+                    self._die(
+                        f"daemon closed its socket before the {what}"
+                    )
+                self._inbox += chunk
+                return
+            assert self._process is not None and self._process.stdout is not None
+            stream = self._process.stdout
             ready, _, _ = select.select([stream], [], [], remaining)
             if not ready:
                 continue
@@ -506,6 +655,12 @@ class ResidentAneWorker:
         return payload
 
     def _stderr_tail(self, limit: int = 400) -> str:
+        if self._channel_kind == "socket":
+            # Daemon attach: the worker's stderr is owned by the
+            # daemon, not by this client. The daemon's own log is the
+            # place to look for diagnostics; the client only sees
+            # wire-protocol errors here.
+            return ""
         if self._stderr is not None:
             self._stderr.flush()
         try:
@@ -514,6 +669,9 @@ class ResidentAneWorker:
             return ""
 
     def _terminate(self) -> None:
+        if self._channel_kind == "socket":
+            self._finish()
+            return
         process = self._process
         if process is None:
             return
@@ -523,6 +681,17 @@ class ResidentAneWorker:
         self._finish()
 
     def _finish(self) -> None:
+        if self._channel_kind == "socket":
+            sock = self._socket
+            self._socket = None
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            # The daemon lives; we don't touch stderr.
+            self._channel_kind = "process"
+            return
         process = self._process
         if process is not None:
             for stream in (process.stdin, process.stdout):
@@ -556,3 +725,50 @@ def _loaded_programs(line: str) -> int:
         return int(digits)
     except ValueError:
         return 0
+
+
+def _try_connect_daemon(
+    socket_path: "Path | str",
+    *,
+    connect_ms: int,
+) -> "socket.socket | None":
+    """Best-effort connect to a resident daemon. Never raises.
+
+    Returns the connected socket on success; returns None on every
+    failure mode (no socket file, stale socket, permission refusal,
+    timeout). The caller silently falls back to the private-subprocess
+    path so a missing daemon is never the caller's problem.
+    """
+    path = Path(socket_path)
+    if not path.exists():
+        return None
+    deadline = time.monotonic() + max(0, connect_ms) / 1000
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        # Bound the connect so a hung daemon never hangs the client.
+        # ``settimeout`` is a wall-clock cap, not a poll loop: select()
+        # in _fill() and the deadline-driven guards continue to work.
+        sock.settimeout(max(0.001, max(0, connect_ms) / 1000))
+        sock.connect(str(path))
+    except (OSError, ConnectionRefusedError):
+        sock.close()
+        return None
+    except socket.timeout:
+        sock.close()
+        return None
+    # Disable the connect-time timeout so the resident may serve a
+    # long job; _fill() enforces deadline_ms + grace_ms against the
+    # session clock instead.
+    try:
+        sock.settimeout(None)
+    except OSError:
+        sock.close()
+        return None
+    # _fill() still owns the remaining time. If connect took most of
+    # the budget, mark the client guard with whatever is left so the
+    # first read does not time out immediately.
+    del deadline
+    return sock

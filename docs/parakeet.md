@@ -166,6 +166,14 @@ the sidecar, so the same refusal the strict path would raise still fires.
 Default unset keeps the strict re-hash that `download` / `verify` always
 use.
 
+`transcribe` may also opt into a long-running resident daemon across CLI
+invocations with `MLX_OMARCHY_PK_KEEP_WORKER=1` AND
+`MLX_OMARCHY_ANE_SOCK=PATH` (the daemon binds the socket in 0600 mode,
+single-instance, owner-only, and exits cleanly on `--idle-time-ms`
+default, SIGTERM, or `--stop`). On connect failure the client silently
+falls back to the private-subprocess path above; never hangs (connect
+timeout 1 s) and never escalates to the caller.
+
 ## Golden capture
 
 Bulk capture data lives **outside git** at

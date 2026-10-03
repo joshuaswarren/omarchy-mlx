@@ -31,7 +31,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/file.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #endif
 
@@ -68,7 +70,24 @@ int usage() {
       "           each emitted output comes back as 'out NAME BYTES'\n"
       "           plus its raw bytes, before the job status line\n"
       "         submits between 'batch DEADLINE_MS' and 'batch-end' are\n"
-      "           one deadline-bounded unit; a miss ends the session\n");
+      "           one deadline-bounded unit; a miss ends the session\n"
+      "\n"
+      "daemon form (one process, one bundle load, one unix-socket at\n"
+      "MLX_OMARCHY_ANE_SOCK serving one client at a time, idle\n"
+      "shutdown when no client connects for --idle-time-ms; the\n"
+      "device fd and resident buffer objects belong to the daemon\n"
+      "for its whole lifetime):\n"
+      "  mlx-omarchy-ane-worker --daemon --libane PATH\n"
+      "       --socket PATH --bundle NAME=DIR [--bundle NAME=DIR]...\n"
+      "       [--deadline-ms N] [--iterations N] [--idle-time-ms N]\n"
+      "       [--seal-expect BUNDLE:FILE=SHA256]...\n"
+      "       [--seal-expect-libane FILE=SHA256]\n"
+      "  client side:\n"
+      "  mlx-omarchy-ane-worker --stop --socket PATH\n"
+      "\n"
+      "every mode except the one-shot form requires --libane and at\n"
+      "least one --bundle; --serve, --relay-bypass, --daemon and\n"
+      "--stop are mutually exclusive\n");
   return 64;
 }
 
@@ -786,6 +805,424 @@ int serve_resident_bypass(
 #endif
 }
 
+// Resident daemon: same prologue as serve_resident_bypass (one private
+// child, one bundle load, one device load), but the byte pump moves
+// bytes between the resident's socketpair and an externally-bound unix
+// socket. One client at a time; the listen loop terminates after
+// --idle-time-ms without a connection, on SIGTERM, or on SIGINT. The
+// device fd and the resident buffer objects belong to this process for
+// its whole lifetime -- nothing escapes through the socket but wire
+// protocol bytes, and the worker never sees the client identity.
+//
+// AGENTS.md hardware safety per mode:
+//   - one new failure mode per branch:
+//     bind:      EACCES / EADDRINUSE refusal (single-instance lock + 0600)
+//     accept:    EMFILE / ECONNABORTED (transient, continue)
+//     ready:     EPIPE / client close (close client fd, return to idle)
+//     idle:      poll() timeout (close session, release device, exit 0)
+//     signal:    SIGTERM / SIGINT (same as idle exit)
+//     spawn:     --stop kills pid; graceful child close + socket unlink
+//   - bounded timeouts:
+//     poll() idle timeout = --idle-time-ms
+//     connect-time check on the single-instance lock before bind
+//   - device state before/after:
+//     logged as `resident pid=...` on open and `daemon released pid=...`
+//     on close. The resident child's waitpid reaps deterministically;
+//     no orphan child leaves the device held across daemon exits.
+namespace {
+
+// Async-signal-safe shutdown flag: SIGTERM / SIGINT handler writes 1,
+// the accept loop reads it. A single atomic byte is enough because the
+// only writer is a signal handler and the only reader is the listen
+// loop on the same thread.
+volatile sig_atomic_t g_daemon_stop = 0;
+
+void g_signal_set_stop(int) {
+  g_daemon_stop = 1;
+}
+
+// Bounded `flock` to keep a second --daemon invocation from claiming
+// the same socket. Returns the held fd on success or -1 on failure;
+// the caller owns the lifetime of the held fd.
+int lock_at(const std::string& lock_path) {
+  int fd = ::open(
+      lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+  if (fd < 0) {
+    return -1;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    int saved = errno;
+    ::close(fd);
+    errno = saved;
+    return -1;
+  }
+  // Rewrite the lock file with this process's pid for diagnostics.
+  if (::ftruncate(fd, 0) == 0) {
+    std::string pid_line = std::to_string(::getpid()) + "\n";
+    (void)::write(fd, pid_line.data(), pid_line.size());
+  }
+  return fd;
+}
+
+// Replace `daemon pump` core: the same splice loop as
+// serve_resident_bypass, but the source/sink fds are the connected
+// client socket and the resident channel. Half-duplex; one poll()
+// moves bytes in whichever direction is ready.
+int run_socket_pump(int client_fd, int channel_fd) {
+  bool client_open = true;
+  bool channel_open = true;
+  for (;;) {
+    struct pollfd fds[2] = {
+        {client_fd, static_cast<short>(client_open ? POLLIN : 0), 0},
+        {channel_fd, static_cast<short>(channel_open ? POLLIN : 0), 0},
+    };
+    int ready = ::poll(fds, 2, -1);
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (client_open && (fds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
+      ssize_t moved =
+          ::splice(client_fd, nullptr, channel_fd, nullptr, 1 << 16, 0);
+      if (moved > 0) continue;
+      (void)::shutdown(channel_fd, SHUT_WR);
+      client_open = false;
+    }
+    if (channel_open && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+      ssize_t moved =
+          ::splice(channel_fd, nullptr, client_fd, nullptr, 1 << 16, 0);
+      if (moved > 0) continue;
+      channel_open = false;
+    }
+    if (!client_open && !channel_open) break;
+  }
+  return 0;
+}
+
+} // namespace
+
+int serve_resident_daemon(
+    const std::vector<std::pair<std::string, std::string>>& bundle_args,
+    const std::string& libane_path,
+    long deadline_ms,
+    long iterations,
+    long idle_time_ms,
+    const std::map<std::string, std::map<std::string, std::string>>&
+        seal_expects,
+    const std::map<std::string, std::string>& seal_libane_expect,
+    const std::string& socket_path) {
+#ifndef MLX_OMARCHY_ANE_DEVICE
+  (void)bundle_args;
+  (void)libane_path;
+  (void)deadline_ms;
+  (void)iterations;
+  (void)idle_time_ms;
+  (void)seal_expects;
+  (void)seal_libane_expect;
+  (void)socket_path;
+  std::fprintf(
+      stderr,
+      "this binary was built without MLX_OMARCHY_ANE_DEVICE; no device "
+      "backend is linked\n");
+  return 70;
+#else
+  // SIGPIPE is blocked for the whole process: the only writer in this
+  // process is the splice loop, and a peer dying mid-pump must surface
+  // as EPIPE on splice(), not a process-killing SIGPIPE.
+  sigset_t pipe_mask;
+  sigemptyset(&pipe_mask);
+  sigaddset(&pipe_mask, SIGPIPE);
+  ::pthread_sigmask(SIG_BLOCK, &pipe_mask, nullptr);
+
+  // Signal handlers: SIGTERM and SIGINT set a flag the accept loop
+  // reads. Async-signal-safe; the only writer is the kernel's signal
+  // delivery path.
+  struct sigaction action {};
+  action.sa_handler = g_signal_set_stop;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = 0;
+  ::sigaction(SIGTERM, &action, nullptr);
+  ::sigaction(SIGINT, &action, nullptr);
+
+  // Single-instance lock: refuse to start if another daemon already
+  // holds this socket path. The lock is on `<socket>.lock`; the
+  // socket itself is unlinked and re-bound below.
+  const std::string lock_path = socket_path + ".lock";
+  int lock_fd = lock_at(lock_path);
+  if (lock_fd < 0) {
+    std::fprintf(
+        stderr,
+        "[omarchy-ane] daemon: cannot take instance lock at %s: %s\n",
+        lock_path.c_str(), std::strerror(errno));
+    return 73;
+  }
+
+  // Stale socket: a previous run may have crashed before unlinking the
+  // socket file. unlink(2) only the socket, not the lock file -- the
+  // lock is held by THIS fd's file table entry, not by the on-disk
+  // inode, so unlinking the socket does not release the lock.
+  ::unlink(socket_path.c_str());
+
+  // Open the resident session: same prologue as --serve / --relay-bypass.
+  // The seal contract holds end to end: every bundle and the device
+  // library are sealed and bound to the pin BEFORE device load.
+  ResidentSession session = open_resident_session(
+      bundle_args, libane_path, deadline_ms, iterations, seal_expects,
+      seal_libane_expect);
+  AneWorker& worker = *session.worker;
+
+  AneWorkerReport opened = worker.open(session.bundles, session.session_names);
+  if (opened.status != AneWorkerStatus::Completed) {
+    std::fprintf(
+        stderr, "resident open failed: %s\n", opened.detail.c_str());
+    ::close(lock_fd);
+    ::unlink(lock_path.c_str());
+    return 1;
+  }
+  std::printf(
+      "daemon ready pid=%lld socket=%s idle_time_ms=%ld\n",
+      static_cast<long long>(worker.resident_pid()), socket_path.c_str(),
+      idle_time_ms);
+  std::fflush(stdout);
+
+  // Bind the unix socket. Mode 0600: only the owning user (this
+  // process's euid) can connect. umask is set before bind so the mode
+  // is honored regardless of the inherited umask; restored after bind.
+  mode_t saved_umask = ::umask(0077);
+  int listen_fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (listen_fd < 0) {
+    int saved_errno = errno;
+    ::umask(saved_umask);
+    std::fprintf(
+        stderr, "[omarchy-ane] daemon: socket(): %s\n",
+        std::strerror(saved_errno));
+    worker.close();
+    ::close(lock_fd);
+    ::unlink(lock_path.c_str());
+    return 1;
+  }
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  if (socket_path.size() >= sizeof(addr.sun_path)) {
+    ::close(listen_fd);
+    ::umask(saved_umask);
+    std::fprintf(
+        stderr, "[omarchy-ane] daemon: socket path too long: %s\n",
+        socket_path.c_str());
+    worker.close();
+    ::close(lock_fd);
+    ::unlink(lock_path.c_str());
+    return 1;
+  }
+  std::strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
+  if (::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    int saved_errno = errno;
+    ::close(listen_fd);
+    ::umask(saved_umask);
+    std::fprintf(
+        stderr, "[omarchy-ane] daemon: bind(%s): %s\n",
+        socket_path.c_str(), std::strerror(saved_errno));
+    worker.close();
+    ::close(lock_fd);
+    ::unlink(lock_path.c_str());
+    return 1;
+  }
+  ::umask(saved_umask);
+  // Belt-and-suspenders: chmod after bind in case the umask was wider
+  // than expected (e.g. inherited from the caller).
+  ::chmod(socket_path.c_str(), 0600);
+  // Refuse to accept if our effective uid is not the socket's owner
+  // -- the bind may have created a file owned by a different uid if
+  // the parent dir is sticky or the caller had an unusual umask.
+  struct stat socket_stat {};
+  if (::stat(socket_path.c_str(), &socket_stat) == 0) {
+    if (socket_stat.st_uid != ::geteuid() ||
+        (socket_stat.st_mode & 0777) != 0600) {
+      ::close(listen_fd);
+      ::unlink(socket_path.c_str());
+      worker.close();
+      ::close(lock_fd);
+      ::unlink(lock_path.c_str());
+      std::fprintf(
+          stderr,
+          "[omarchy-ane] daemon: refusing to serve a socket with "
+          "uid=%d mode=%o\n",
+          socket_stat.st_uid, unsigned(socket_stat.st_mode & 0777));
+      return 1;
+    }
+  }
+  if (::listen(listen_fd, 1) != 0) {
+    int saved_errno = errno;
+    ::close(listen_fd);
+    ::unlink(socket_path.c_str());
+    worker.close();
+    ::close(lock_fd);
+    ::unlink(lock_path.c_str());
+    std::fprintf(
+        stderr, "[omarchy-ane] daemon: listen: %s\n",
+        std::strerror(saved_errno));
+    return 1;
+  }
+
+  int channel_fd = worker.channel_fd();
+  if (channel_fd < 0) {
+    ::close(listen_fd);
+    ::unlink(socket_path.c_str());
+    worker.close();
+    ::close(lock_fd);
+    ::unlink(lock_path.c_str());
+    std::fprintf(
+        stderr, "[omarchy-ane] daemon: no resident channel\n");
+    return 1;
+  }
+
+  // Accept loop with idle timeout. The pump is single-threaded and
+  // serves one client at a time, so concurrent callers serialize at
+  // accept(); the listen backlog of 1 reflects the same.
+  while (!g_daemon_stop) {
+    struct pollfd listen_poll = {listen_fd, POLLIN, 0};
+    int ready = ::poll(&listen_poll, 1, static_cast<int>(idle_time_ms));
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (ready == 0) {
+      std::fprintf(
+          stderr, "[omarchy-ane] daemon: idle exit after %ld ms\n",
+          idle_time_ms);
+      break;
+    }
+    sockaddr_un client_addr{};
+    socklen_t client_addr_len = sizeof(client_addr);
+    int client_fd = ::accept4(
+        listen_fd, reinterpret_cast<sockaddr*>(&client_addr),
+        &client_addr_len, SOCK_CLOEXEC);
+    if (client_fd < 0) {
+      if (errno == EINTR) continue;
+      // EMFILE / ECONNABORTED: transient, accept the next one.
+      if (errno == EMFILE || errno == ENFILE || errno == ECONNABORTED ||
+          errno == EAGAIN) {
+        continue;
+      }
+      std::fprintf(
+          stderr, "[omarchy-ane] daemon: accept: %s\n",
+          std::strerror(errno));
+      break;
+    }
+    // Owner check on the peer: a unix socket client is identified by
+    // its connecting end's creds. Reject a cross-uid connection so a
+    // single-user install does not become a co-tenant service.
+    ucred creds{};
+    socklen_t creds_len = sizeof(creds);
+    if (::getsockopt(
+            client_fd, SOL_SOCKET, SO_PEERCRED, &creds, &creds_len) == 0) {
+      if (creds.uid != ::geteuid()) {
+        std::fprintf(
+            stderr,
+            "[omarchy-ane] daemon: refusing peer uid=%d pid=%d "
+            "(expected uid=%d)\n",
+            int(creds.uid), int(creds.pid), int(::geteuid()));
+        ::close(client_fd);
+        continue;
+      }
+    }
+    // Per-client handshake: the client expects to read the resident
+    // banners that the supervised worker emitted at startup. The
+    // daemon printed them to stdout (so the operator can see them in
+    // the log), but the wire channel is the socket now, so the
+    // client never saw them. Replay one composite line that carries
+    // the load reports and the relay-bypass banner the client would
+    // have read from stdin/stdout in the private-subprocess path;
+    // splice() begins on the next byte the client writes.
+    char banner[256];
+    int banner_len = std::snprintf(
+        banner,
+        sizeof(banner),
+        "daemon session pid=%u deadline_ms=%d bundles=%zu\n",
+        static_cast<unsigned>(worker.resident_pid()),
+        static_cast<int>(deadline_ms),
+        session.bundles.size());
+    if (banner_len > 0) {
+      ssize_t nw = ::send(client_fd, banner, static_cast<size_t>(banner_len), 0);
+      if (nw < 0) {
+        std::fprintf(
+            stderr,
+            "[omarchy-ane] daemon: send banner: %s\n",
+            std::strerror(errno));
+        ::close(client_fd);
+        continue;
+      }
+    }
+    (void)run_socket_pump(client_fd, channel_fd);
+    // Half-close the client so the next accept can succeed cleanly.
+    ::shutdown(client_fd, SHUT_RDWR);
+    ::close(client_fd);
+  }
+
+  // Cleanup on every exit path: unbind the socket, release the
+  // instance lock, close the resident session. Order matters: the
+  // resident close has to come before the lock release, otherwise a
+  // racing --daemon would observe the lock free, try to bind the
+  // still-resident socket, and race with this process's last writes.
+  ::close(listen_fd);
+  ::unlink(socket_path.c_str());
+  AneWorkerReport closed = worker.close();
+  ::close(lock_fd);
+  ::unlink(lock_path.c_str());
+  if (closed.status != AneWorkerStatus::Completed) {
+    std::fprintf(
+        stderr, "[omarchy-ane] daemon: resident close failed: %s\n",
+        closed.detail.c_str());
+    return 1;
+  }
+  std::printf(
+      "daemon released pid=%lld programs=%d\n",
+      static_cast<long long>(worker.resident_pid()),
+      closed.released_programs);
+  std::fflush(stdout);
+  return 0;
+#endif
+}
+
+// --stop: read `<socket_path>.pid` and SIGTERM the daemon so its
+// cleanup path runs end to end (socket unlink, lock release, resident
+// close). The actual exit value is reported by the daemon's exit
+// message over the wire in a future revision; today we trust the pid
+// file and the SIGTERM.
+int stop_resident_daemon(const std::string& socket_path) {
+  const std::string pid_path = socket_path + ".pid";
+  std::ifstream stream(pid_path);
+  if (!stream) {
+    std::fprintf(
+        stderr, "[omarchy-ane] stop: cannot read %s\n", pid_path.c_str());
+    return 1;
+  }
+  std::string pid_line;
+  std::getline(stream, pid_line);
+  if (pid_line.empty()) {
+    std::fprintf(
+        stderr, "[omarchy-ane] stop: empty pid in %s\n", pid_path.c_str());
+    return 1;
+  }
+  long pid = 0;
+  try {
+    pid = std::stol(pid_line);
+  } catch (...) {
+    std::fprintf(
+        stderr, "[omarchy-ane] stop: malformed pid in %s\n", pid_path.c_str());
+    return 1;
+  }
+  if (::kill(static_cast<pid_t>(pid), SIGTERM) != 0) {
+    std::fprintf(
+        stderr, "[omarchy-ane] stop: kill(%ld, SIGTERM): %s\n", pid,
+        std::strerror(errno));
+    return 1;
+  }
+  std::printf("daemon stop signalled pid=%ld\n", pid);
+  std::fflush(stdout);
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -795,6 +1232,10 @@ int main(int argc, char** argv) {
   long iterations = 1;
   bool serve = false;
   bool relay_bypass = false;
+  bool daemon_mode = false;
+  bool stop_mode = false;
+  long idle_time_ms = 60000;
+  std::string socket_path;
   std::vector<std::pair<std::string, std::string>> resident_bundles;
   std::map<std::string, std::string> input_files;
   std::map<std::string, std::string> expect_files;
@@ -815,6 +1256,14 @@ int main(int argc, char** argv) {
       serve = true;
     } else if (flag == "--relay-bypass") {
       relay_bypass = true;
+    } else if (flag == "--daemon") {
+      daemon_mode = true;
+    } else if (flag == "--stop") {
+      stop_mode = true;
+    } else if (flag == "--socket") {
+      socket_path = value();
+    } else if (flag == "--idle-time-ms") {
+      idle_time_ms = std::stol(value());
     } else if (flag == "--bundle") {
       auto assignment = value();
       std::string name;
@@ -882,19 +1331,60 @@ int main(int argc, char** argv) {
       return usage();
     }
   }
+  // --stop is independent of --libane / bundles; it only reads the
+  // pid file at <socket_path>.pid.
+  if (stop_mode) {
+    if (socket_path.empty()) {
+      std::fprintf(
+          stderr, "--stop requires --socket PATH\n");
+      return usage();
+    }
+    return stop_resident_daemon(socket_path);
+  }
   if (libane_path.empty()) {
     return usage();
   }
-  if (serve || relay_bypass) {
+  if (serve || relay_bypass || daemon_mode) {
     if (resident_bundles.empty()) {
       std::fprintf(
-          stderr, "--serve requires at least one --bundle NAME=DIR\n");
+          stderr, "--serve / --relay-bypass / --daemon require at "
+                  "least one --bundle NAME=DIR\n");
       return usage();
     }
-    if (serve && relay_bypass) {
+    int mode_count =
+        (serve ? 1 : 0) + (relay_bypass ? 1 : 0) + (daemon_mode ? 1 : 0);
+    if (mode_count > 1) {
       std::fprintf(
-          stderr, "--serve and --relay-bypass are mutually exclusive\n");
+          stderr, "--serve, --relay-bypass and --daemon are mutually "
+                  "exclusive\n");
       return usage();
+    }
+    if (daemon_mode) {
+      if (socket_path.empty()) {
+        std::fprintf(
+            stderr, "--daemon requires --socket PATH\n");
+        return usage();
+      }
+      if (idle_time_ms <= 0) {
+        std::fprintf(
+            stderr, "--daemon requires --idle-time-ms N with N > 0\n");
+        return usage();
+      }
+      // The instance-lock / connect protocol calls retain the seal
+      // contract end to end. Write the pid file before binding so a
+      // racing --stop sees a complete daemon entry.
+      std::ofstream pid_file(socket_path + ".pid");
+      if (pid_file) {
+        pid_file << ::getpid() << "\n";
+        pid_file.flush();
+        pid_file.close();
+        ::chmod((socket_path + ".pid").c_str(), 0600);
+      }
+      int rc = serve_resident_daemon(
+          resident_bundles, libane_path, deadline_ms, iterations,
+          idle_time_ms, seal_expects, seal_libane_expect, socket_path);
+      ::unlink((socket_path + ".pid").c_str());
+      return rc;
     }
     // A pinned name that is not part of this session would silently
     // leave that bundle unpinned: refuse instead of guessing.
@@ -928,7 +1418,8 @@ int main(int argc, char** argv) {
   }
   if (!seal_expects.empty() || !seal_libane_expect.empty()) {
     std::fprintf(
-        stderr, "--seal-expect requires --serve or --relay-bypass\n");
+        stderr,
+        "--seal-expect requires --serve, --relay-bypass or --daemon\n");
     return usage();
   }
   if (!resident_bundles.empty()) {
