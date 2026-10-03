@@ -289,11 +289,14 @@ class KokoroStreamer:
         for k, (first, end) in enumerate(ranges):
             ctx0 = max(0, first - UTTERANCE_CONTEXT_FRAMES)
             ctx1 = min(frames, end + UTTERANCE_CONTEXT_FRAMES)
+            # F0/N are predicted at twice the aligned-frame rate
+            # (the decoder's F0_conv/N_conv stride 2 halves them back).
+            f0a, f0b = 2 * ctx0, 2 * ctx1
             audio = self._render(asr[:, :, ctx0:ctx1],
-                                 F0_curve[:, ctx0:ctx1] if F0_curve.ndim == 2
-                                 else F0_curve[:, :, ctx0:ctx1],
-                                 N_curve[:, ctx0:ctx1] if N_curve.ndim == 2
-                                 else N_curve[:, :, ctx0:ctx1],
+                                 F0_curve[:, f0a:f0b] if F0_curve.ndim == 2
+                                 else F0_curve[:, :, f0a:f0b],
+                                 N_curve[:, f0a:f0b] if N_curve.ndim == 2
+                                 else N_curve[:, :, f0a:f0b],
                                  s, voice)
             start = ctx0 * FRAME_SAMPLES
             if k > 0:

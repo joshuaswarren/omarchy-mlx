@@ -87,10 +87,11 @@ def main():
                 for first, end in ranges:
                     c0 = max(0, first - UTTERANCE_CONTEXT_FRAMES)
                     c1 = min(frames, end + UTTERANCE_CONTEXT_FRAMES)
+                    fa, fb = 2 * c0, 2 * c1  # F0/N are at twice the frame rate
                     mx.eval(decoder(
                         asr[:, :, c0:c1],
-                        F0[:, c0:c1] if F0.ndim == 2 else F0[:, :, c0:c1],
-                        N[:, c0:c1] if N.ndim == 2 else N[:, :, c0:c1], s))
+                        F0[:, fa:fb] if F0.ndim == 2 else F0[:, :, fa:fb],
+                        N[:, fa:fb] if N.ndim == 2 else N[:, :, fa:fb], s))
                     count += 1
                 missing = set(layers) - set(seen)
                 if missing:

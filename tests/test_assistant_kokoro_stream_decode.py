@@ -113,6 +113,13 @@ class SeamJoinTests(unittest.TestCase):
     exactly the whole-call audio when the renderer itself is exact, and
     never emits more or fewer samples than the shared timeline."""
 
+    @classmethod
+    def setUpClass(cls):
+        mx.random.seed(7)
+        cls.dec = Decoder(dim_in=512, style_dim=128, dim_out=80,
+                          **KOKORO_ISTFTNET)
+        cls.dec.update(tree_map(lambda p: p * 0.03, cls.dec.parameters()))
+
     def _streamer(self):
         return kokoro_stream.KokoroStreamer(
             SimpleNamespace(model=SimpleNamespace(decoder=self.dec)), None)
