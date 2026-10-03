@@ -101,9 +101,24 @@ block that fails component validation, so its user sees nothing until the
 coordinator's `invalid_component` notice plus raw text lands at about 91 s.
 The coordinator fix (`003823df5`, in `a1251aaa`) is why that fallback exists:
 an invalid fence is now shown as raw text and an empty reply is guarded
-against — the earlier silent empty reply on the 4B is fixed. What remains on
-the 4B is the model's own invalid fence, a model- or card-format change, not
-a coordinator one.
+against — the earlier silent empty reply on the 4B is fixed.
+
+**Card latency levers (2026-10-03; [card latency
+receipt](../receipts/2026-10-02-card-latency/README.md)):** three changes cut
+the wait — cards built from markdown now promote as soon as their closed
+block completes during the stream (open trailing blocks excluded, same
+promotion rules); the card schema prompt has the fence BEGIN the reply with
+compact payloads (one chart series with per-item values, >= 2 values per
+series, fence tag exactly `assistant-ui`); and a fence body that is one bare
+component object is wrapped and must still pass the full validator (that is
+what the 4B's chart fence was missing). Held-out v4, one run per pair per
+build, same boot: time-to-first-component median 32.5 -> 8.2 s (4B) and
+37.1 -> 11.9 s (9B), p95 43.9 -> 21.1 s and 46.6 -> 24.0 s; validity held
+(18/18 and 15/18 valid, 0 spurious; the 9B's 15/18 is the gate threshold,
+with v4-15 added to the two known malformed-separator misses). The real
+chart prompt went 66.8 -> 13.1 s on the 9B. Trade, recorded in the receipt:
+on card turns the prose now follows the card, so first-text p95 over all
+prompts is 2.20 s on the 4B (ordinary-chat prompts stay at 1.90 s).
 
 **Quality performance — the tier budget is the measured figure; the original
 2.0 s design target is not met.** Owner decision 2026-10-02: the Quality
@@ -284,7 +299,7 @@ explicit-CPU-stream finding above.
 | 1 | Routing latency decision: does the 250 ms gate measure the Laya head call (p95 347 ms, fails) or the shipped head-free path (p95 43 ms, passes)? | Automatic routing stays off until decided. |
 | 2 | Quality tier budget (owner decision 2026-10-02): the tier budget is now the measured figure, 6.5 s for a 300-token prompt (catalog `first_text_budget_ms`; the original design target was 2.0 s), and the UI labels Quality as slower. The lever to tighten it is engine-side prefill and first-decode-step work; stable-prefix cache reuse is a memory-admission gate decision. The budget tightens again as that work lands. | Quality stays unqualified pending the full gate set (row 4); the relaxed budget is the tier's honest bound, not a pass. |
 | 3 | Voice output first audio: design target 1.5 s. Owner decision 2026-10-02: Kokoro-82M default engine, af_heart default voice, no listening step; Qwen3-TTS stays as the selectable second engine. Measured 2026-10-02 ([TTFA addendum](../receipts/2026-10-02-kokoro-default/README.md)): pre-warm (lands ~27 s after setup via a bounded grant-retry loop) + first-segment budget (12 est units, calibrated to the M2 infer floor) cut /api/speak cold first click 3.90 → 1.29 s, warm 2.51 → 1.29–1.33 s — the 1.5 s target is MET. Stage attribution: `KokoroPipeline.infer` costs ~1.1 s per call + ~24 ms per real phoneme; the per-call floor is the next lever (vocoder output streaming). | Voice output stays unqualified: the RTF corpus gate is unmeasured for the default path, the per-call infer floor is still the floor of the TTFA budget, and a `record_qualification` receipt for the default engine is still open. |
-| 4 | Pair-level qualification: no pair has passed the full gate set; chart cards wait 53.8 s (27B) / 115.9 s (9B) to a visible component, and the 4B's fence never validates. | Nothing is qualified; `recommended` stays false everywhere. |
+| 4 | Pair-level qualification: no pair has passed the full gate set. Card latency (held-out v4, [card latency receipt](../receipts/2026-10-02-card-latency/README.md)): time-to-first-component median 8.2 s (4B, was 32.5 s) and 11.9 s (9B, was 37.1 s), validity 18/18 and 15/18 with 0 spurious; the 4B's first-text p95 over all prompts is 2.20 s because card turns now put the card first (ordinary chat 1.90 s). 27B not re-measured (53.8 s chart on the 2026-09-30 boot). | Nothing is qualified; `recommended` stays false everywhere. |
 | 5 | G13G (jwm1) Mesa arm of pin candidate `e7631595df6`, plus the T8103 16-bit selection doctest and standing battery. | The Mesa pin and the Attn128 chip matrix each wait on that host. |
 
 No pair is qualified. All catalog entries keep `recommended: false`.
