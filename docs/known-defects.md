@@ -840,23 +840,69 @@ Named `[omarchy] ... is not implemented` errors remain the honest failure mode. 
 
 `fast::scaled_dot_product_attention` on float16 inputs stores attention scores in f16 with f32 accumulation inside the kernel, so scaled scores above 65504 saturate to inf and softmax turns the row into NaN, while the f32/bf16 composition stays finite: the trigger is extreme but valid f16 activations (an untuned fine-tune reaches it; normalised models do not). The additive causal/padding mask uses the f16 finite maximum (-65504), not -inf, so fully masked rows stay defined and match the f32 path. This matches upstream Metal's f16 SDPA, which has the same storage cap; run f32/bf16 if you need overflow-immune attention. Reproduction and tolerance evidence: [receipt](../receipts/2026-09-04-sdpa-f16-scores-rework.md) and `scripts/sdpa_equivalence.py` (fully-masked-row and overflow-boundary cases).
 
-## SDPA backward composed VJP crash at tiny shapes (2026-10-03, assigned)
+## SDPA backward VJP crash at tiny shapes - fixed 2026-10-03 (SdpaVjpFix)
 
-`omarchy_fast_ops_tests --test-case="*backward*matches*"` aborts with
+`omarchy_fast_ops_tests --test-case="*backward*matches*"` aborted with
 `SmallVector<int, 10>::operator[] assertion 'size() > index' failed`
-(mlx/small_vector.h:315) inside the composed ScaledDotProductAttentionVJP
-graph. Minimal shape: B=2, H=1, qL=2, D=4, f32, `vjp(fun, {q, k, v}, {cot})`
-where fun is `fast::scaled_dot_product_attention` (scale = 1/sqrt(D), no
-mask). Reproduces identically on clean origin/main (no NormApple overlay):
-built in /var/tmp/NormAppleOwner/clean-main, binary
-`omarchy_fast_ops_tests --test-case=*backward*matches*` — same SIGABRT.
-The fused SDPA VJP itself is fd-verified on real hardware for rep=1 (see
-the VJP entry in docs/compatibility.md); this crash is in the COMPOSED
-backward graph that runs when the fused VJP declines (Hk != Hv or
-non-bf16), i.e. the autograd path training uses at small/GQA shapes.
-Minimal standalone repro: /tmp/sdpa_repro.cpp on jw16 (links clean-main
-libmlx; run with LD_LIBRARY_PATH set to the clean-main build dir).
-Status: ASSIGNED to a fix lane 2026-10-03; not a NormApple regression
-(NormApple touches only the norm/rope/GDN-conv paths). Landing of the
-NormApple family (v0.7.23 RC) proceeds with this case listed as
-pre-existing known-failing.
+(mlx/small_vector.h:315). Minimal shape: B=2, H=1, qL=2, D=4, f32,
+`vjp(fun, {q, k, v}, {cot})` where fun is
+`fast::scaled_dot_product_attention` (scale = 1/sqrt(D), no mask).
+Reproduced identically on clean origin/main and in a standalone repro
+linked against the same assert-enabled library, on llvmpipe - not test
+pollution; the earlier "passes outside the test binary" observation came
+from a standalone linked against an NDEBUG build, where the defect is a
+silent out-of-bounds write instead of an abort.
+
+Mechanism (from the gdb stack, SdpaVjpFix lane 2026-10-03): the crash
+was in the FUSED VJP primitive, `ScaledDotProductAttentionVJP::eval_gpu`,
+not the composed graph - at this shape the fused VJP serves (rep=1,
+f32, GPU). The dK/dV tile shapes were built by indexing a fixed 5-D
+layout (`tile_shape[3] = kL; tile_shape[4] = D`); at rep=1 the GQA head
+split is a no-op so q5 and the tiles are 4-D and `tile_shape[4]` wrote
+past the end of the Shape. In NDEBUG builds the write lands in unused
+inline storage and the still-correct 4-D shapes flow on, which is why
+every Release battery (M2 G14X, jw16 G13C, dev-box llvmpipe) stayed
+green while asserts-enabled builds aborted. NormApple's original jw16
+abort is retained in receipts/2026-10-03-norm-apple.
+
+Fix (fb0aac16c): derive the tile shapes from the score plane -
+`Shape tile_shape = S.shape(); tile_shape.back() = D;` - one
+rank-agnostic construction for both routes; no guard, no special case.
+Evidence: asserts-enabled builds run the case clean standalone and in
+the suite on llvmpipe; on jw16 G13C hardware the fixed tree runs the
+full omarchy_fast_ops_tests 40/40 (SUCCESS; the 12 failing assertions
+are the pre-existing may_fail composed-dk legs, unchanged) plus
+primitive 104/104, runtime 41/41, fused_chain 36/36, compiled_tape
+13/13, matmul_family 22/22, gdn_fast_route_repeat 3/3, llm-inference
+restored after the window (health_ok=1).
+
+Follow-up entry: the same fd harness surfaced value defects in the
+fused VJP at small shapes - see "SDPA backward fused VJP value defects
+at small rep=1 shapes" below.
+
+## SDPA backward fused VJP value defects at small rep=1 shapes (2026-10-03, open)
+
+The fd sweep added with the crash fix
+(`sdpa vjp fd parity across degenerate rep=1 shapes`) found two value
+signatures in the FUSED VJP, distinct from each other and from the
+documented composed-chain dk defect:
+
+1. `qL == 1` with `kL > 1` maskless (e.g. B=1, H=1, qL=1, kL=2, D=4,
+   f32): dk and dv come back all zero while dq and the forward are
+   correct. dS is provably nonzero (dq = dS K is right), so the zero
+   appears in the dK/dV stage. Confirmed on dev-box llvmpipe AND jw16
+   M1 Max hardware (identical zeros; forward 0.297208 vs host 0.297208;
+   dq 0.0056/0.0430/0.0169/0.0039 matches host on both).
+2. `B == 1` with `kL == 5`: dk[0]/dk[16] return exact 0 and dv spots
+   return exact 0.5 / -0.35765 against fd at (1,2,5,4) maskless and
+   (1,3,5,8) causal - llvmpipe only so far (hardware not yet probed).
+
+Ruled out by standalone probes (all clean): plain matmul with inner
+dim 1; General copies of the {kL, qL=1} transposed views through both
+the public ops and the primitive's copy_gpu path. The defects live in
+the eval_gpu composition. The failing shapes are pinned in the may_fail
+doctest `sdpa vjp fd parity at small rep=1 shapes (known defects)`
+(plus a strict dq pin at qL=1 so a fix cannot regress it). LoRA/decode
+impact: qL=1 is the decode geometry - a fine-tune backward through a
+single-query step silently loses dk/dv today. Next lever: instrument
+s_t_dense/p_t_dense and the dkt/dvt buffers inside eval_gpu at (1,1,2,4).
