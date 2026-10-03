@@ -38,7 +38,7 @@ Export-plan failures leave the inspection control available for retry.
 Installation validates the archive and stages a venv without network access before replacing the active files.
 Speech scheduling now interleaves: a queued read-aloud parks generation at a real decode boundary and synthesizes between chunks, with bounded waits and an honest busy refusal when the pause cannot be proven. The browser requests one sentence at a time, in order, starts the next request as soon as the previous stream closes, and schedules every chunk on one audio playhead, so sentences never overlap or reorder and synthesis of the next sentence overlaps playback of the current one. On-hardware pacing qualification is still pending.
 The [hardware smoke receipt](../receipts/2026-09-27-offline-assistant/receipt.json) records failed and incomplete gates, not release proof.
-Automatic decision routing is off by default. Its gate now passes on the measured head call ([gate status](#per-pair-gate-status-2026-10-01)); turning it on is the owner's decision. Explicit **Compare options** is unaffected.
+Automatic decision routing is ON by default (owner decision 2026-10-03; [release receipt](../receipts/2026-10-03-routing-on/README.md)). The kill switch is the environment variable `MLX_OMARCHY_ROUTING`: set it to `0` (also `off`, `false`, or `no`) in the assistant's service environment to disable, or save an explicit `gate: "off"` in the pair's selection evidence; both beat the default. Explicit **Compare options** is unaffected.
 Long-context admission still needs measured workspace and latency curves for each chip/runtime.
 The complete [design](plans/2026-09-27-offline-assistant-design.md) remains binding.
 
@@ -148,25 +148,36 @@ decode about 5.4 tok/s (about 4× the superseded shared-GPU estimate of
 2.6–14.4 s. A shared-GPU run 1 (73–81 tok/s prefill, ~1.4 tok/s decode) is
 kept in the receipt for comparison and is superseded.
 
-**Routing — the gate passes; routing stays off by default.** Frozen policy 3
+**Routing — ON by default (owner decision 2026-10-03).** Frozen policy 3
 (commit `50ca49fae`) scored precision 1.000 (35/35, 0 false positives) and
-0 of 15 injection cases routed to a decision on the held-out suite. The
-owner decided the 250 ms gate measures the Laya head call. That call took
-p95 347 ms on 2026-09-30. A GPU profile showed why: the encoder rebuilt its
-rotary cos/sin table on all 28 layers, and each `cos`/`sin` passes a
-trig-argument gate that stalls the GPU for a host readback (784 such joins
-in 14 calls). The tables are now built once at engine load, with
-bit-identical values. With the submission cap at its shipping default
-(`MLX_OMARCHY_BATCH_WORK=40000`), the warm head call takes **p95 196.8 ms**
-(p50 186.9 ms, 100 warm calls on dev turns, same harness as the gate). The
-held-out suite's one remaining use ran with that configuration: precision
-35/35, 0/15 injections, head answers bit-identical to the 2026-09-30 run on
-all 100 cases, and p95 195.4 ms on the 85 turns the fit check sends to the
-head. Compilation, worker dtype, and the cap alone did not reach 250 ms
+0 of 15 injection cases routed to a decision on the held-out suite, and the
+warm head call meets the 250 ms deadline: p95 196.8 ms (p50 186.9 ms, 100
+warm calls on dev turns), held-out re-passed once with the rope-table head —
+35/35 precision, 0/15 injections, answers bit-identical to the 2026-09-30
+run, p95 195.4 ms on the 85 turns the fit check sends to the head
 ([routing receipt](../receipts/2026-09-30-routing-gate/README.md),
 [head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)).
-The measured run used the cap wheel; the rope change on the installed
-release wheel without the cap has not been measured.
+On that evidence the owner turned automatic routing on by default for every
+pair, starting with v0.7.23 ([release
+receipt](../receipts/2026-10-03-routing-on/README.md)). The kill switch is
+the environment variable `MLX_OMARCHY_ROUTING` (`0`/`off`/`false`/`no`
+disables for the assistant process); a saved explicit `gate: "off"` in the
+pair's selection evidence also disables; both beat the default. Policy 3,
+its thresholds, and the 250 ms warm deadline are unchanged. Routing
+degrades silently to the chat model — never an error, never a blocked
+turn — when the decision model is not set up, when its worker is starting
+or unreachable, when the material does not fit the decision model's
+512-token limit, or when a head call misses the deadline or is already in
+flight. The head is the pair's own Laya decision worker, so routing adds
+no resident memory beyond the pair memory already admitted (peaks in the
+table above; the 16 GB tier runs the Compact pair, measured peak
+5.2–6.8 GiB). `/api/status` reports the state honestly: `routing.enabled`,
+`routing.disabled_reason`, `routing.head_ready` (true only when a pair is
+resident with a decision worker), and the last head call (`last_head_ms`,
+`last_route`, `last_timed_out`, `last_at`). Ordinary chat never runs the
+router. Standing limit: the measured runs used the cap wheel; the rope
+change on the installed release wheel without the cap has not been
+measured.
 
 **Voice input — every frozen threshold passed; not qualified as a pair gate.**
 On the 192-clip corpus with the pinned `parakeet-tdt-0.6b-v3` (`ed2b7e8c…`):
@@ -307,7 +318,7 @@ explicit-CPU-stream finding above.
 
 | # | Item | Why it blocks |
 |---|---|---|
-| 1 | Routing enablement (owner): the 250 ms gate measures the Laya head call, and it passes, p95 196.8 ms on dev turns with the held-out gate re-passed (35/35, 0/15) and answers bit-identical. Measured with the cap wheel at its shipping default; the next release wheel carries both changes. | Automatic routing stays off by default until the owner turns it on ([head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)). |
+| 1 | CLOSED (owner decision 2026-10-03): automatic routing is ON by default from v0.7.23, kill switch `MLX_OMARCHY_ROUTING=0` ([release receipt](../receipts/2026-10-03-routing-on/README.md)). The gate had passed: head p95 196.8 ms on dev turns, held-out re-passed 35/35 with 0/15 injections and bit-identical answers ([head-latency receipt](../receipts/2026-10-02-laya-head-latency/README.md)). | Nothing — decided and shipped; see the [Routing section](#routing--on-by-default-owner-decision-2026-10-03). |
 | 2 | Quality tier budget (owner decision 2026-10-02): the tier budget is now the measured figure, 6.5 s for a 300-token prompt (catalog `first_text_budget_ms`; the original design target was 2.0 s), and the UI labels Quality as slower. The lever to tighten it is engine-side prefill and first-decode-step work; stable-prefix cache reuse is a memory-admission gate decision. The budget tightens again as that work lands. | Quality stays unqualified pending the full gate set (row 4); the relaxed budget is the tier's honest bound, not a pass. |
 | 3 | Voice output first audio: design target 1.5 s. Owner decision 2026-10-02: Kokoro-82M default engine, af_heart default voice, no listening step; Qwen3-TTS stays as the selectable second engine. Since 2026-10-03 the voice worker streams the decoder ([streamed decoding receipt](../receipts/2026-10-03-kokoro-stream/README.md)): sentences are cut into ~2 s utterances, the generator's last stage runs in 600 ms windows with frozen per-voice statistics, and audio leaves per window. M2 serve path, 15 sentences + a 6-sentence paragraph: first audio median 1.07 s (max 1.29 s), sentence RTF 1.28, 0 underruns (the previous whole-call path with the text split starved playback in 50 of 60 sentence runs), WER 3/216 (the same utterances decoded whole: 3/216), mlx peak memory 392 MB vs 709 MB; corr vs the whole decode 0.988 against a same-wheel run-to-run floor of 0.990. `MLX_OMARCHY_KOKORO_STREAM=0` restores whole-call decoding. | Voice output stays unqualified: the statistics sit just below the run-to-run floor, the ~2 s utterance cuts change prosody at the cuts (a listening A/B is pending), and a `record_qualification` receipt for the default engine is still open. |
 | 4 | Pair-level qualification: no pair has passed the full gate set. Card latency (held-out v4, [card latency receipt](../receipts/2026-10-02-card-latency/README.md)): SHIPPED and CONFIRMED on held-out v4: markdown cards promote mid-stream and bare-component fences are wrapped — component median 7.3 s (4B, was 32.5 s) and 12.8 s (9B, was 37.1 s), p95 15.4/24.4 s, validity IDENTICAL to base (18/18 and 16/18, same rows, 0 spurious), first-text p95 not worse. A card-first prompt variant reached medians 8.2/11.9 s but is NOT shipped (4B first-text p95 2.20 s vs the 2.0 s budget). The 4B fence now validates via the wrap. 27B not re-measured (53.8 s chart on the 2026-09-30 boot). | Nothing is qualified; `recommended` stays false everywhere. |

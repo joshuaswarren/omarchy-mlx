@@ -1,0 +1,2 @@
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+MLX Chat is running at http://127.0.0.1:8777/ (open it through the launcher)
