@@ -245,7 +245,7 @@ void check_fixture(const std::string& tag, double state_tol, Stream stream) {
   const Reference ref = reference(fx.q, fx.k, fx.v, fx.g, fx.beta, T, Hv);
 
   auto mk = [&](const std::vector<float>& data, int rows, int cols, bool bf) {
-    array a = array(data.begin(), Shape{1, rows, cols}, float32, stream);
+    array a = array(data.begin(), Shape{1, rows, cols}, float32);
     return bf ? astype(a, bfloat16, stream) : a;
   };
   array q = mk(fx.q, T * Hv, kD, true);
@@ -278,11 +278,11 @@ void check_fixture(const std::string& tag, double state_tol, Stream stream) {
     for (size_t i = 0; i < st.size(); ++i) {
       if (!std::isfinite(st[i]) || !std::isfinite(y[i])) nan_count += 1;
     }
-    CHECK_MESSAGE(nan_count == 0, label + arm + " NaN/inf count=", nan_count);
+    CHECK_MESSAGE(nan_count == 0, label << arm << " NaN/inf count=" << nan_count);
     for (size_t i = 0; i < st.size(); ++i) {
       state_err = std::max(state_err, std::abs(static_cast<double>(st[i]) - ref.state[i]));
     }
-    CHECK_MESSAGE(state_err <= state_tol, label + arm + " state max_abs=", state_err, " tol=", state_tol);
+    CHECK_MESSAGE(state_err <= state_tol, label << arm << " state max_abs=" << state_err << " tol=" << state_tol);
     // y is bf16 output on O(1..10^2) values: 8 bf16 quanta of the reference.
     double y_err = 0;
     double y_bad = 0;
@@ -292,7 +292,7 @@ void check_fixture(const std::string& tag, double state_tol, Stream stream) {
       y_err = std::max(y_err, err);
       if (err > 8 * quantum) y_bad += 1;
     }
-    CHECK_MESSAGE(y_bad == 0, label + arm + " y over-quanta count=", y_bad, " max_abs=", y_err);
+    CHECK_MESSAGE(y_bad == 0, label << arm << " y over-quanta count=" << y_bad << " max_abs=" << y_err);
   }
 }
 
