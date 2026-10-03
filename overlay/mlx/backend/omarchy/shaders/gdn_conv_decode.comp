@@ -1,4 +1,8 @@
 #version 460
+#ifdef APPLE_REDUCTION
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
 
 // GDN decode conv: the conv_input = concat(state, x) materialization is
 // folded into the depthwise conv read (T == 1), and the shifted
@@ -65,9 +69,8 @@ layout(set = 0, binding = 4, std430) buffer StateOut {
 // the stride 64->1 tree per half reproduces the mode-1 tree association
 // exactly (its stride-128 step only ever adds +0.0). The wrapper gates
 // count % 256 == 0 (one element per thread, one grid-stride iteration —
-// the in-loop barriers deadlock otherwise) and key_dim % 256 == 0 (each
-// workgroup's two rows carry the same scale; the q|k boundary falls on a
-// workgroup edge).
+// the in-loop barriers deadlock otherwise) and key_dim % 128 == 0 (the q|k
+// boundary may fall inside a workgroup, but it stays on a 128-lane half).
 shared float norm_block[256];
 
 // Field order must match the fixed omarchy::ComputeParams layout the
@@ -135,6 +138,41 @@ void main() {
       // Per-workgroup two-half 128-row rms-norm*scale over the stored
       // values (fast_norm_gated.comp mode 1, F4). The norm input is the
       // value this dispatch stores and the composed norm kernel re-widens.
+#ifdef APPLE_REDUCTION
+      uint thread = gl_LocalInvocationID.x;
+      uint half_id = thread / 128u;
+      float norm_value = LOAD_VALUE(activated);
+      float subgroup_sum = subgroupAdd(norm_value * norm_value);
+      if (gl_SubgroupInvocationID == 0u) {
+        norm_block[gl_SubgroupID] = subgroup_sum;
+      }
+      barrier();
+      float partial = gl_SubgroupID == half_id * 4u &&
+              gl_SubgroupInvocationID < 4u
+          ? norm_block[half_id * 4u + gl_SubgroupInvocationID]
+          : 0.0;
+      float row_sum = subgroupAdd(partial);
+      if (gl_SubgroupID == half_id * 4u &&
+          gl_SubgroupInvocationID == 0u) {
+        float eps = uintBitsToFloat(params.matrix_k);
+        norm_block[8u + half_id] =
+            inversesqrt(row_sum / 128.0 + eps);
+      }
+      barrier();
+      float norm = norm_block[8u + half_id];
+      barrier();
+      uint channel_head = channel / 128u;
+      if (channel_head < params.rhs_size / 128u * 2u) {
+        uint scale_bits = (channel_head < params.rhs_size / 128u)
+            ? params.matrix_m
+            : params.matrix_n;
+        float scale =
+            LOAD_VALUE(bf16_store(uintBitsToFloat(scale_bits)));
+        precise float result = norm_value * (norm * 1.0);
+        float normed = LOAD_VALUE(bf16_store(result));
+        activated = bf16_store(normed * scale);
+      }
+#else
       uint thread = gl_LocalInvocationID.x;
       uint half_id = thread / 128u;
       uint slot = thread % 128u;
@@ -168,6 +206,7 @@ void main() {
         float normed = LOAD_VALUE(bf16_store(result));
         activated = bf16_store(normed * scale);
       }
+#endif
     }
     output_data.values[work_index] = activated;
     for (uint row = 0u; row + 1u < km1; ++row) {

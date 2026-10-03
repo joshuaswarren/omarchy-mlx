@@ -2,32 +2,11 @@
 // SPDX-License-Identifier: MIT
 //
 // Fused q/k RMSNorm + rotary embedding (the attention rope_rms_norm route).
-// One workgroup owns one rotation row (b, *, t) of D elements: the row RMS
-// reduction is reproduced EXACTLY from shaders/fast_norm.comp (strided f32
-// local_sq, stride-128..1 shared-memory pairing with barriers, mean =
-// block[0] / float(row_length) f32 divide, norm = inversesqrt(mean + eps),
-// (value * norm) * weight, one bf16 RNE round), and the rotary math is
-// reproduced EXACTLY from the production bf16 main in shaders/fast_rope.comp
-// (rope_round intermediates, exp(-i * beta) inv-frequencies, scalar-offset
-// position, packed 32-bit output words). The normalized values are rounded
-// to bf16 BEFORE the rotation consumes them, which is what the composed
-// rms_norm -> rope chain does across the kernel boundary, so the output is
-// bit-identical to it. The passthrough tail (dims < D) carries the
-// normalized-rounded values where the unfused kernel carries raw inputs.
-//
-// Bit-exactness recipe (DecodeGap9 / DecodeGap2): the squared register from
-// the reduction phase is THROWN AWAY; the output multiply chain re-loads
-// `value` from input_data after the reduction barrier, matching production
-// fast_norm.comp's output loop exactly. The multiply chain is in the
-// EXACT order production's compiled SPIR-V emits: (weight * norm) * value
-// (verified in artifacts/Jw16DecodeGap9/nir-diffs/); reordering to
-// (value * norm) * weight shifts the bf16 rounding boundary by 1 ULP at
-// the rounding tie line, which is what DecodeGap8 W2 gate observed (9
-// mismatches per 1M output bytes on model-q-prefill-t512-off{0,600}).
-// `precise` on `norm`, `value`, `weight`, `weight_norm` prevents
-// nir_opt_reassociate from folding the chain and breaks any FMA contraction
-// across the bf16 rounding site (25 NoContraction decorations emitted by
-// glslangValidator).
+// One workgroup owns one rotation row. The default variant keeps the
+// deployed RMSNorm reduction; APPLE_REDUCTION replaces it with a 32-lane
+// subgroup sum, eight shared partials, and a second subgroup sum. Both
+// variants round normalized values to bf16 before the same rotary arithmetic.
+// Apple reduction is default-on; set MLX_OMARCHY_NORM_APPLE=0 to disable it.
 //
 // Push-constant mapping (ComputeParams fields), identical to fast_rope.comp
 // plus two reused fields — ComputeParams is pushed whole (128 bytes, the
@@ -49,6 +28,10 @@
 // words with constant shifts and select chains for input, weight, and output.
 
 #version 460
+#ifdef APPLE_REDUCTION
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
 
 layout(set = 0, binding = 0, std430) readonly buffer Input {
   uint values[];
@@ -90,6 +73,9 @@ layout(push_constant) uniform Params {
 } params;
 
 shared float block_values[256];
+#ifdef APPLE_REDUCTION
+shared float subgroup_values[8];
+#endif
 shared float rounded[256];
 
 float rope_load(uint abs_index) {
@@ -144,12 +130,35 @@ void main() {
   }
   uint out_row = t * params.out_strides[1] + mat * params.out_strides[0];
 
-  // fast_norm.comp reduction tree, verbatim: one f32 sum-of-squares per
-  // thread (threads past the row length contribute exactly the same 0.0 the
-  // fast_norm grid-stride loop produces), stride-128..1 shared pairing with
-  // a barrier per step, f32 divide by the row length, inversesqrt.
-  // The squared register lives ONLY in this block; it is discarded below
-  // (the production kernel discards it after the reduction tree too).
+#ifdef APPLE_REDUCTION
+  precise float value = (thread < row_length)
+      ? rope_load(params.lhs_offset + in_base + thread)
+      : 0.0;
+  precise float squared = value * value;
+  float subgroup_sum = subgroupAdd(squared);
+  if (gl_SubgroupInvocationID == 0u) {
+    subgroup_values[gl_SubgroupID] = subgroup_sum;
+  }
+  barrier();
+  float partial = gl_SubgroupID == 0u && gl_SubgroupInvocationID < 8u
+      ? subgroup_values[gl_SubgroupInvocationID]
+      : 0.0;
+  float row_sum = subgroupAdd(partial);
+  if (gl_LocalInvocationIndex == 0u) {
+    block_values[0] = row_sum;
+  }
+  barrier();
+  float mean_square = block_values[0] / float(row_length);
+  precise float norm = inversesqrt(mean_square + eps);
+  barrier();
+  precise float weight = (thread < row_length)
+      ? weight_load(params.aux_offset + thread)
+      : 0.0;
+  precise float weight_norm = weight * norm;
+  rounded[thread] = (thread < row_length) ? rope_round(value * weight_norm)
+                                          : 0.0;
+  barrier();
+#else
   float squared = 0.0;
   if (thread < row_length) {
     squared = rope_load(params.lhs_offset + in_base + thread);
@@ -207,6 +216,7 @@ void main() {
   rounded[thread] = (thread < row_length) ? rope_round(value * weight_norm)
                                           : 0.0;
   barrier();
+#endif
 
   // Production bf16 word math from fast_rope.comp with shared[] standing in
   // for the loads. Threads own one output word each; word pairs of one row.

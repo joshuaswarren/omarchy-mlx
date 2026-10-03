@@ -5,10 +5,10 @@ Prints per-cell medians, % delta, digest pin matches, kb hash diffs, logits gate
 import json, os, sys
 
 PINS = {
-    "d64": "c84b3e7a", "d128": "07c515e0", "d256": "c6aabbf0", "d512": "5c120987",
+    "d64": "c84b3e7a", "d128": "8e7b5dd9", "d256": "7824b835", "d512": "eaaa7206",
     "pf512": "100a61b62470",
 }
-LOGITS_PINS = {"512": "f771c4265f88", "1024": "ce24f3b4ce42", "2048": "b8c4e14f8f8a"}
+LOGITS_PINS = {"512": "00d7ed153c08", "1024": "2a89e403678b", "2048": "9e540a29a347"}
 
 def load(path):
     with open(path) as f:

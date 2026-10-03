@@ -1,0 +1,150 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Apple-tree BF16 RMSNorm kernel, default enabled; set
+// MLX_OMARCHY_NORM_APPLE=0 to restore the deployed reduction path. Mirrors
+// Apple `rms_single_row` in
+// `mlx/backend/metal/kernels/rms_norm.metal` (commit 9c3d35571).
+//   - one threadgroup per row (256 threads),
+//   - per-thread CONTIGUOUS N_READS=8 loads in pass 1, held in a register
+//     array, never reloaded in the output pass,
+//   - cross-lane reduction = hardware subgroupSum (32 lanes per subgroup, 8
+//     subgroups per WG) + 1 second-level shared stage of 8 partials +
+//     subgroupSum again = 3 threadgroup barriers,
+//   - weight loaded once per output element (from registers if scalar),
+//
+// The RMS formula matches the deployed path; reduction order differs. `precise`
+// prevents implicit FMA in sum-of-squares.
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  STORAGE_TYPE values[];
+} input_data;
+layout(set = 0, binding = 1, std430) readonly buffer Weight {
+  STORAGE_TYPE values[];
+} weight_data;
+#ifdef LAYER_NORM
+layout(set = 0, binding = 2, std430) readonly buffer Bias {
+  STORAGE_TYPE values[];
+} bias_data;
+#endif
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+} params;
+
+const uint SIMD = 32u;
+const uint N_READS = 8u;          // 256 * 8 = 2048 (the deployed norm class row length)
+shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint sub_id = thread / SIMD;     // 0..7
+  uint lane = thread % SIMD;       // 0..31
+  uint row_length = params.reduce_size;
+  float eps = params.alpha;
+
+  for (uint row = gl_WorkGroupID.x; row < params.output_size;
+       row += gl_NumWorkGroups.x) {
+    uint start = params.lhs_offset + row * row_length;
+
+    float reg_x[N_READS];
+    precise float reg_sq = 0.0;
+    if (row_length == N_READS * 256u) {
+      uint base = thread * N_READS;
+      for (uint i = 0u; i < N_READS; ++i) {
+        reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
+        reg_sq += reg_x[i] * reg_x[i];
+      }
+    } else {
+      for (uint index = thread; index < row_length; index += 256u) {
+        reg_sq += LOAD_VALUE(input_data.values[start + index]) *
+                  LOAD_VALUE(input_data.values[start + index]);
+      }
+    }
+
+    float sub_partial = subgroupAdd(reg_sq);
+    if (lane == 0u) {
+      s_partial[sub_id] = sub_partial;
+    }
+    barrier();
+    float total;
+    if (sub_id == 0u) {
+      float v = (lane < 8u) ? s_partial[lane] : 0.0;
+      total = subgroupAdd(v);
+      if (lane == 0u) {
+        s_partial[0] = total;
+      }
+    }
+    barrier();
+    float mean_square = s_partial[0] / float(row_length);
+    float norm = inversesqrt(mean_square + eps);
+
+    if (row_length == N_READS * 256u) {
+      uint base = thread * N_READS;
+      for (uint i = 0u; i < N_READS; ++i) {
+        uint index = base + i;
+        float value = reg_x[i];
+        float weight =
+            (params.lhs_size == 1u)
+                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+        precise float norm_weight = norm * weight;
+        precise float result = value * norm_weight;
+        output_data.values[params.output_offset + row * row_length + index] =
+            STORE_VALUE(result);
+      }
+    } else {
+      for (uint index = thread; index < row_length; index += 256u) {
+        float value = LOAD_VALUE(input_data.values[start + index]);
+        float weight =
+            (params.lhs_size == 1u)
+                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
+                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+        precise float norm_weight = norm * weight;
+        precise float result = value * norm_weight;
+        output_data.values[params.output_offset + row * row_length + index] =
+            STORE_VALUE(result);
+      }
+    }
+    barrier();
+  }
+}

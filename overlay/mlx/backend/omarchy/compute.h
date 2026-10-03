@@ -774,6 +774,17 @@ enum class ComputeKernel : uint16_t {
   SdpaVjpReduceF32,
   SdpaVjpReduceF16,
   SdpaVjpReduceBF16,
+  // Jw16NormApple: Apple-tree RMS norm port (one WG per row, per-thread
+  // CONTIGUOUS N_READS=8 loads held in registers, subgroupSum + 1
+  // second-level shared + subgroupSum, 3 barriers; reduction ORDER differs
+  // from the deployed tree; admissible under the w76 numerics policy).
+  FastRmsNormAppleBF16,
+  // Apple-tree reductions for the fused decode RMSNorm epilogues. Same
+  // 32-lane subgroup + shared partial structure as FastRmsNormAppleBF16.
+  FastNormGatedAppleBF16,
+  FastNormGatedOnlyAppleBF16,
+  FastRopeNormAppleBF16,
+  GdnConvDecodeAppleBF16,
   Count,
 };
 

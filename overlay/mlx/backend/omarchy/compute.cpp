@@ -233,6 +233,7 @@
 #include "fast_rope_f32.h"
 #include "fast_rope_freqs_bf16.h"
 #include "fast_rope_norm_bf16.h"
+#include "fast_rope_norm_apple_bf16.h"
 #include "fast_rope_freqs_f16.h"
 #include "fast_rope_freqs_f32.h"
 #include "scan_f16.h"
@@ -313,7 +314,10 @@
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
 #include "fast_norm_gated_bf16.h"
 #include "fast_norm_gated_only_bf16.h"
+#include "fast_norm_gated_apple_bf16.h"
+#include "fast_norm_gated_only_apple_bf16.h"
 #include "gdn_conv_decode_bf16.h"
+#include "gdn_conv_decode_apple_bf16.h"
 #include "qmm_vec_greedy_bf16.h"
 #include "qmm_tile_bf16.h"
 #include "qmm_tile_f16.h"
@@ -440,6 +444,7 @@
 #include "fast_rms_norm_f32.h"
 #include "fast_rms_norm_f16.h"
 #include "fast_rms_norm_bf16.h"
+#include "fast_rms_norm_apple_bf16.h"
 #include "fast_layer_norm_f32.h"
 #include "fast_layer_norm_f16.h"
 #include "fast_layer_norm_bf16.h"
@@ -996,6 +1001,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rms_norm_f16, fast_rms_norm_f16_size};
     case ComputeKernel::FastRmsNormBF16:
       return {fast_rms_norm_bf16, fast_rms_norm_bf16_size};
+    case ComputeKernel::FastRmsNormAppleBF16:
+      return {fast_rms_norm_apple_bf16, fast_rms_norm_apple_bf16_size};
     case ComputeKernel::FastLayerNormF32:
       return {fast_layer_norm_f32, fast_layer_norm_f32_size};
     case ComputeKernel::FastLayerNormF16:
@@ -1062,6 +1069,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rope_freqs_bf16, fast_rope_freqs_bf16_size};
     case ComputeKernel::FastRopeNormBF16:
       return {fast_rope_norm_bf16, fast_rope_norm_bf16_size};
+    case ComputeKernel::FastRopeNormAppleBF16:
+      return {fast_rope_norm_apple_bf16, fast_rope_norm_apple_bf16_size};
     case ComputeKernel::CrossEntropyBF16:
       return {fast_cross_entropy_bf16, fast_cross_entropy_bf16_size};
     case ComputeKernel::Fp8ToF32:
@@ -1323,10 +1332,17 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           gated_delta_prefill_coopmat_batch_bf16_size};
     case ComputeKernel::FastNormGatedBF16:
       return {fast_norm_gated_bf16, fast_norm_gated_bf16_size};
+    case ComputeKernel::FastNormGatedAppleBF16:
+      return {fast_norm_gated_apple_bf16, fast_norm_gated_apple_bf16_size};
     case ComputeKernel::FastNormGatedOnlyBF16:
       return {fast_norm_gated_only_bf16, fast_norm_gated_only_bf16_size};
+    case ComputeKernel::FastNormGatedOnlyAppleBF16:
+      return {fast_norm_gated_only_apple_bf16,
+              fast_norm_gated_only_apple_bf16_size};
     case ComputeKernel::GdnConvDecodeBF16:
       return {gdn_conv_decode_bf16, gdn_conv_decode_bf16_size};
+    case ComputeKernel::GdnConvDecodeAppleBF16:
+      return {gdn_conv_decode_apple_bf16, gdn_conv_decode_apple_bf16_size};
     case ComputeKernel::QmmVecGreedyBF16:
       return {qmm_vec_greedy_bf16, qmm_vec_greedy_bf16_size};
     case ComputeKernel::QmmPrefillFmaF16:

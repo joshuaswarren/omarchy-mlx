@@ -75,6 +75,11 @@ namespace mlx::core {
 
 namespace {
 
+bool apple_norm_enabled() {
+  const char* env = std::getenv("MLX_OMARCHY_NORM_APPLE");
+  return env == nullptr || std::strcmp(env, "0") != 0;
+}
+
 // Keep in lockstep with the switch in shaders/elementwise.comp.
 enum ElementwiseOperation : uint32_t {
   AddOperation,
@@ -11831,6 +11836,9 @@ void RMSNorm::eval_gpu(
         omarchy::ComputeKernel::FastRmsNormF32,
         omarchy::ComputeKernel::FastRmsNormF16,
         omarchy::ComputeKernel::FastRmsNormBF16);
+    if (out.dtype() == bfloat16 && apple_norm_enabled()) {
+      kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+    }
   }
   encoder.dispatch_compute(
       kernel,
@@ -11888,8 +11896,11 @@ void RMSNormGated::eval_gpu(
   params.aux_offset = checked_item_offset(gate, gate.size(), tag, out);
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(gate), binding(out)};
+  const bool apple_norm = apple_norm_enabled() &&
+      (row_length == 128 || row_length == 2048);
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::FastNormGatedOnlyBF16,
+      apple_norm ? omarchy::ComputeKernel::FastNormGatedOnlyAppleBF16
+                 : omarchy::ComputeKernel::FastNormGatedOnlyBF16,
       bindings,
       params,
       std::min(params.output_size, omarchy::kMaxComputeGroupCountX));
@@ -11936,15 +11947,14 @@ void RMSNormScaled::eval_gpu(
   params.lhs_size = checked_u32(w.size(), tag, out);
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x), binding(w), binding(out), binding(out)};
+  const bool apple_norm = apple_norm_enabled() &&
+      (row_length == 128 || row_length == 2048);
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::FastNormGatedBF16,
+      apple_norm ? omarchy::ComputeKernel::FastNormGatedAppleBF16
+                 : omarchy::ComputeKernel::FastNormGatedBF16,
       bindings,
       params,
       std::min(params.output_size, omarchy::kMaxComputeGroupCountX));
-}
-
-bool GdnConvUpdate::use_fallback(Stream s) {
-  return false;
 }
 
 // GDN decode conv: the state++x concatenation folds into the conv read.
@@ -12017,14 +12027,13 @@ void GdnConvUpdate::eval_gpu(
     params.flags |= 1u;
   }
   if (qk_key_dim() > 0) {
-    // F4: the q/k rms_norm_scaled pair folds into the kernel epilogue
-    // (flag bit 1; fast_norm_gated mode-1 semantics per head-row of 128
-    // channels). The shared-memory reduction tree requires one element
-    // per thread with exactly one grid-stride iteration, and the
-    // per-head-row scale must be workgroup-uniform (key_dim % 256 == 0
-    // puts the q|k boundary on a workgroup edge). Refuse loudly outside
-    // that geometry — never silently skip the epilogue on a fused call.
-    if (qk_key_dim() % 256 != 0 || params.count % 256u != 0u) {
+    // F4: the q/k rms_norm_scaled pair folds into the kernel epilogue. Each
+    // workgroup owns two adjacent 128-channel rows; q/k boundaries align
+    // when qk_key_dim is a multiple of 128. Require one grid-stride iteration
+    // and 256-channel group boundaries so each reduction half contains one
+    // complete row. Refuse unsupported geometry rather than skip the epilogue.
+    if (qk_key_dim() % 128 != 0 || params.reduce_size % 256u != 0u ||
+        params.count % 256u != 0u) {
       omarchy::unsupported(tag + " qk-norm epilogue geometry", out);
     }
     params.flags |= 2u;
@@ -12040,8 +12049,10 @@ void GdnConvUpdate::eval_gpu(
       binding(out),
       binding(state_out)};
   uint32_t groups = (params.count + 255u) / 256u;
+  const bool apple_norm = apple_norm_enabled() && qk_key_dim() > 0;
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::GdnConvDecodeBF16,
+      apple_norm ? omarchy::ComputeKernel::GdnConvDecodeAppleBF16
+                 : omarchy::ComputeKernel::GdnConvDecodeBF16,
       bindings,
       params,
       std::min(groups, omarchy::kMaxComputeGroupCountX),
@@ -12700,7 +12711,6 @@ void RoPE::eval_gpu(
     params.aux_offset =
         checked_item_offset(inputs.at(2), inputs.at(2).size(), tag, out);
   }
-  // The no-freqs shader variants declare three bindings; the freqs slot
   // doubles the offset binding like the scalar-weight norm kernels do.
   // The bfloat16 shader legs read and store packed bf16 words with the
   // repo's constant-shift form (commit cf68e7d): a uint16_t-typed block
@@ -12722,7 +12732,9 @@ void RoPE::eval_gpu(
       binding(norm_weight)};
   omarchy::ComputeKernel kernel;
   if (fuse_norm) {
-    kernel = omarchy::ComputeKernel::FastRopeNormBF16;
+    kernel = apple_norm_enabled()
+        ? omarchy::ComputeKernel::FastRopeNormAppleBF16
+        : omarchy::ComputeKernel::FastRopeNormBF16;
   } else if (direct_bf16) {
     kernel = with_freqs ? omarchy::ComputeKernel::FastRopeFreqsBF16
                         : omarchy::ComputeKernel::FastRopeBF16;
