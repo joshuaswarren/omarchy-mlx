@@ -6,6 +6,7 @@ import concurrent.futures
 import http.client
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -35,35 +36,44 @@ MIN_AUTO_ALLOWANCE = 256
 FULL_CARD_CUES = re.compile(r"\b(charts?|graphs?|forms?|decisions?|options?|facts?|sources?)\b", re.IGNORECASE)
 REPETITION_PENALTY = 1.1
 
-# Routing gate hook. The flag defaults OFF; only flipping it on after a
-# held-out suite passes (recorded in the notebook and pinned on the pair)
-# lets `submit(mode="auto")` succeed.
+# Automatic decision routing is ON by default (owner decision 2026-10-03;
+# gate evidence: receipts/2026-09-30-routing-gate and
+# receipts/2026-10-02-laya-head-latency, release receipt
+# receipts/2026-10-03-routing-on). Precedence: the MLX_OMARCHY_ROUTING
+# kill switch wins over everything; a saved explicit `gate: "off"` in the
+# pair's selection evidence wins over the default; with no explicit choice
+# the gate is ON. Routing still degrades silently to the chat model
+# whenever the head cannot answer inside the warm deadline (head module
+# missing or not loaded, deadline miss, a call already in flight, or
+# material that does not fit the decision model's 512-token limit).
+ROUTING_ENV = "MLX_OMARCHY_ROUTING"
+_ROUTING_OFF_VALUES = ("0", "off", "false", "no")
 ROUTING_GATE_OFF = "off"
-ROUTING_GATE_ON = "on"
 
 
-def _routing_gate_enabled(manager) -> bool:
-    """Whether the live pair record has the routing gate turned ON.
+def _routing_env_off() -> bool:
+    return os.environ.get(ROUTING_ENV, "").strip().lower() in _ROUTING_OFF_VALUES
 
-    Reads the manager's currently selected pair record, never a static
-    catalog entry: routing approval is per-pair evidence (the suite
-    sha256 and the receipt path), not a global flag.
-    """
+
+def _routing_saved_off(status) -> bool:
+    extension = (status or {}).get("extension") or {}
+    routing = (extension.get("selection_evidence") or {}).get("routing")
+    return isinstance(routing, dict) and routing.get("gate") == ROUTING_GATE_OFF
+
+
+def _routing_disabled_reason(manager) -> str | None:
+    """Why an `auto` turn must not route, or None when routing is enabled."""
+    if _routing_env_off():
+        return ("Automatic routing is disabled by %s=0. Unset it to "
+                "re-enable, or use explicit Compare options." % ROUTING_ENV)
     try:
         status = manager.status()
     except Exception:
-        return False
-    extension = (status or {}).get("extension") or {}
-    evidence = extension.get("selection_evidence") or {}
-    routing = evidence.get("routing")
-    if not isinstance(routing, dict):
-        return False
-    return (routing.get("gate") == ROUTING_GATE_ON
-            and isinstance(routing.get("suite_sha256"), str)
-            and bool(routing.get("suite_sha256").strip())
-            and isinstance(routing.get("receipt"), str)
-            and bool(routing.get("receipt").strip())
-            and routing.get("policy_version") == ROUTING_POLICY.version)
+        return None
+    if _routing_saved_off(status):
+        return ("Automatic routing is turned off for this pair. Use explicit "
+                "Compare options, or set the mode to chat or decide.")
+    return None
 
 DRAFT_PROMPT = (
     "Extract a comparison draft from the user's request. Reply with ONLY one JSON "
@@ -585,6 +595,8 @@ class Coordinator:
         self.manager = manager
         self.models = LocalModels(manager)
         self.router = _RoutingWorker(manager)
+        self._routing_lock = threading.Lock()
+        self._last_routing = None
         self.gpu = threading.Lock()
         self.speech = SpeechYieldScheduler(self.gpu)
         self.lock = threading.RLock()
@@ -606,11 +618,10 @@ class Coordinator:
         mode = payload.get("mode", "chat")
         if mode not in ("chat", "compare", "decide", "draft", "auto"):
             raise ValueError("Unknown turn mode")
-        if mode == "auto" and not _routing_gate_enabled(self.manager):
-            raise ValueError(
-                "Automatic routing stays disabled until the held-out routing suite passes. "
-                "Use explicit Compare options or change the mode to chat/decide."
-            )
+        if mode == "auto":
+            reason = _routing_disabled_reason(self.manager)
+            if reason:
+                raise ValueError(reason)
         maximum = payload.get("max_tokens")
         if maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int)
                                     or not 1 <= maximum <= 262144):
@@ -666,6 +677,7 @@ class Coordinator:
             new_payload = dict(payload)
             new_payload["mode"] = "chat"
             new_payload["routing"] = routing
+            self._record_routing(routing)
             return new_payload
         routing = self._auto_route(pair, payload["text"])
         new_payload = dict(payload)
@@ -682,15 +694,58 @@ class Coordinator:
             if not (2 <= len(options) <= 8 and isinstance(criteria, str) and criteria.strip()):
                 routing["route"] = "clarify"
                 routing["reason"] = "missing_options_or_criteria"
+                self._record_routing(routing)
                 return new_payload
             try:
                 decision_request(pair["model_paths"]["decision"], payload["text"], options, criteria)
             except DecisionInputError:
                 routing["route"] = None
                 routing["reason"] = "material_does_not_fit"
+                self._record_routing(routing)
                 return new_payload
             new_payload.update(mode="compare", options=options, criteria=criteria)
+        self._record_routing(routing)
         return new_payload
+
+    def _record_routing(self, routing):
+        """Remember the last routing attempt so the status API can report it."""
+        record = dict(routing)
+        record["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._routing_lock:
+            self._last_routing = record
+
+    def routing_status(self, manager_status=None):
+        """Honest routing state for /api/status.
+
+        `enabled` is the live gate decision (kill switch and saved explicit
+        choice applied). `head_ready` is true only when a pair is resident
+        and its decision worker (the Laya head) has a URL; routing turns
+        degrade to chat whenever that is false. `last_head_ms` is the
+        measured wall time of the last head call — None when the last
+        routing attempt never reached the head.
+        """
+        reason = _routing_disabled_reason(self.manager)
+        if manager_status is None:
+            try:
+                manager_status = self.manager.status()
+            except Exception:
+                manager_status = None
+        state = manager_status or {}
+        with self._routing_lock:
+            last = dict(self._last_routing) if self._last_routing else None
+        return {
+            "enabled": reason is None,
+            "disabled_reason": reason,
+            "policy_version": ROUTING_POLICY.version,
+            "head_ready": reason is None and state.get("state") == "ready"
+                          and bool(state.get("decision_url")),
+            "pair_state": state.get("state"),
+            "last_head_ms": last.get("latency_ms") if last else None,
+            "last_route": last.get("route") if last else None,
+            "last_reason": last.get("reason") if last else None,
+            "last_timed_out": last.get("timed_out") if last else None,
+            "last_at": last.get("at") if last else None,
+        }
 
     def _ttft_dump(self, cid, turn, mode, phases):
         """Append one line of per-phase TTFT timestamps to the assistant logs.

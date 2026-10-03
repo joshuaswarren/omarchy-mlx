@@ -1,11 +1,15 @@
 """Frozen held-out routing suite. Spent: evaluated once on 2026-09-30 with
-routing policy 3 (receipts/2026-09-30-routing-gate). Automatic routing stays
-off. The bytes are pinned by sha256; never edit the cases."""
+routing policy 3 (receipts/2026-09-30-routing-gate) and once on 2026-10-03
+with the rope-table head (receipts/2026-10-02-laya-head-latency). It is
+spent for this candidate and is never re-evaluated here; only the bytes
+are pinned by sha256. Automatic routing is ON by default since the owner
+decision of 2026-10-03 (receipts/2026-10-03-routing-on)."""
 
 import hashlib
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -39,14 +43,50 @@ class RoutingSuiteTests(unittest.TestCase):
             if case["category"] == "oversized":
                 self.assertGreater(len(case["text"]), 2000)
 
-    def test_automatic_mode_is_rejected(self):
+    def test_automatic_mode_is_admitted_by_default(self):
+        """Owner decision 2026-10-03: routing is ON by default. A turn the
+        deterministic stage resolves on its own (choice wording, fewer
+        than two options) routes to clarify and never calls the head."""
         class Stopped:
+            def status(self):
+                return None
+            def start(self):
+                return {"model_paths": {"decision": "/tmp/fake-decision"},
+                        "decision_url": "http://127.0.0.1:1/",
+                        "chat_url": "http://127.0.0.1:1/",
+                        "context_tokens": 4096}
             def stop(self):
                 return {"stopped": True, "retained": []}
+            def ensure_context(self, required_tokens):
+                return {"ok": True, "context_tokens": max(required_tokens, 4096),
+                        "requested": required_tokens, "changed": False}
 
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         app = Coordinator(Path(directory.name), Stopped())
         self.addCleanup(app.close)
-        with self.assertRaises(ValueError):
-            app.submit("unused", {"text": "Pick the right option.", "mode": "auto"})
+
+        class NoDecision:
+            calls = 0
+            def count(self, path, messages):
+                return 1
+            def decision(self, pair, payload):
+                NoDecision.calls += 1
+                return {}
+            def close_connection(self):
+                pass
+
+        app.models = app.router.models = NoDecision()
+        cid = app.store.create()["id"]
+        app.submit(cid, {"text": "Pick the right option.", "mode": "auto"})
+        deadline = time.monotonic() + 2.0
+        routing = None
+        while time.monotonic() < deadline:
+            events = app.store.events(cid, 0)
+            routing = next((e for e in events if e["type"] == "routing"), None)
+            if routing is not None:
+                break
+            time.sleep(0.02)
+        self.assertIsNotNone(routing, "routing event missing")
+        self.assertEqual(routing["data"]["route"], "clarify")
+        self.assertEqual(NoDecision.calls, 0)

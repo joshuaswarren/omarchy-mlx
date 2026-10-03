@@ -138,6 +138,7 @@ class AssistantServer(ThreadingHTTPServer):
                                "state": "ready" if ready else "unqualified",
                                "detail": "Speech readiness is verified separately for input and output.",
                                "download_bytes": synthesis.get("memory", {}).get("asset_bytes")}
+            result["routing"] = self.coordinator.routing_status(source)
             self._maybe_prewarm(synthesis)
             if self.setup_state:
                 result["setup"] = dict(self.setup_state)
