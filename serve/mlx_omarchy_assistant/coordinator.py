@@ -531,6 +531,53 @@ class _RoutingWorker:
         self.pool.shutdown(wait=True, cancel_futures=True)
 
 
+# The fenced assistant-ui envelope marker, shared by the _run phase helpers.
+_UI_MARKER = "```assistant-ui\n"
+
+
+class _TurnSetup:
+    """What _open_turn admitted for one streaming turn (explicit outputs)."""
+
+    __slots__ = ("pair", "mode", "user_text", "messages", "result",
+                 "allowance", "required")
+
+    def __init__(self, pair, mode, user_text, messages, result, allowance,
+                 required):
+        self.pair = pair
+        self.mode = mode
+        self.user_text = user_text
+        self.messages = messages
+        self.result = result
+        self.allowance = allowance
+        self.required = required
+
+
+class _TurnStream:
+    """Mutable per-turn streaming state shared by the _run phase helpers."""
+
+    __slots__ = ("mode", "user_text", "buffer", "component_buffer",
+                 "component_count", "repaired", "finish_reason",
+                 "reply_text_parts", "raw_text_parts", "saw_visible_text",
+                 "saw_visible_component", "promote_boundary", "promote_done",
+                 "dumped_ttft")
+
+    def __init__(self, mode, user_text, dumped_ttft):
+        self.mode = mode
+        self.user_text = user_text
+        self.buffer = ""
+        self.component_buffer = None
+        self.component_count = 0
+        self.repaired = False
+        self.finish_reason = None
+        self.reply_text_parts = []
+        self.raw_text_parts = []
+        self.saw_visible_text = False
+        self.saw_visible_component = False
+        self.promote_boundary = 0
+        self.promote_done = False
+        self.dumped_ttft = dumped_ttft
+
+
 class Coordinator:
     def __init__(self, home, manager, store=None):
         self.home = Path(home)
@@ -661,6 +708,9 @@ class Coordinator:
             pass
 
     def _run(self, cid, turn, payload, maximum, job):
+        """One admitted turn: open, stream, finalize, release.
+
+        Each phase lives in its own helper; the order here is the behavior."""
         cancel = job["cancel"]
         ttft = job.get("ttft")
         phases = ttft["phases"] if ttft else None
@@ -673,300 +723,331 @@ class Coordinator:
         speech_secret = None
         speech_capable = False
         try:
-            from .components import SCHEMA_PROMPT, validate_components
-            from .card_promotion import extract_text as _promote_card
-            from .card_promotion import stream_prefix_card
-            pair = self.manager.start()
-            phase("pair_start")
-            if cancel.is_set():
+            setup = self._open_turn(cid, turn, payload, maximum, cancel, phases, phase)
+            if setup is None:
                 return
-            record = self.store.get(cid)
-            refused = record.get("context_error")
-            if refused:
-                raise ValueError("Saved history selection is invalid; inference is blocked until it is repaired: %s"
-                                 % refused)
-            mode = payload.get("mode", "chat")
-            result = None
-            if mode == "draft":
-                self._run_draft(cid, turn, pair, payload, maximum, cancel)
-                return
-            # Emit the recorded routing decision (if any) so the UI can
-            # show how the auto-route was chosen.
-            if "routing" in payload:
-                self.store.emit(cid, turn, "routing", payload["routing"])
-            user_text = payload.get("text") or ""
-            full_schema = (mode in ("compare", "decide")
-                           or bool(FULL_CARD_CUES.search(user_text))
-                           or _model_emits_fenced_cards(pair.get("chat_model") or ""))
-            messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
-                         + (SCHEMA_PROMPT if full_schema else "")}]
-            messages.extend(self._selected_history(record, turn))
-            phase("prompt_built")
-            if mode in ("compare", "decide"):
-                path = pair["model_paths"]["decision"]
-                if mode == "compare":
-                    request = decision_request(path, payload["text"], payload.get("options"), payload.get("criteria"))
-                    raw = self.models.decision(pair, request)
-                    result = validate_decision(raw.get("answers", {}).get("comparison"), payload["options"])
-                    result.update({"criteria": payload["criteria"], "model": "laya-mlx",
-                                   "input_scope": payload["text"]})
-                else:
-                    request = typed_questions_request(path, payload["text"], payload.get("questions"))
-                    raw = self.models.decision(pair, request)
-                    result = typed_results(payload.get("questions"), raw.get("answers", {}), payload["text"])
-                self.store.emit(cid, turn, "decision", result)
-                phase("decision_done")
-                note = ("Explain this supplied Laya result without changing its choice. "
-                        if mode == "compare" else
-                        "Explain these supplied Laya results without changing any of them. ")
-                messages[0]["content"] += ("\n" + note
-                                           + "If abstained, say that it abstained. Its confidence is not factual accuracy. "
-                                           + json.dumps(result, ensure_ascii=False))
-            allowance, required = self._admit_output(pair, messages, maximum, mode,
-                                                     phases=phases)
-            phase("admit_done")
-            pair = self.manager.status()
-            self.store.emit(cid, turn, "status", {"state": "generating", "context_tokens": required,
-                                                 "context_limit": pair["context_tokens"],
-                                                 "output_tokens": allowance})
-            phase("generating_status_emitted")
-            buffer = ""
-            component_buffer = None
-            component_count = 0
-            repaired = False
-            finish_reason = None
-            marker = "```assistant-ui\n"
-            # Mirror every chunk the user sees so card_promotion can derive
-            # a card from the exact text the UI rendered.  We never
-            # promote when the model already emitted a valid fenced block.
-            reply_text_parts: list[str] = []
-            raw_text_parts: list[str] = []  # every chunk the model emitted,
-            #    kept even after a fence starts so an invalid/truncated fence
-            #    can still surface the model's own output for the user
-            #    (PairGates card-defect-compact4b, 2026-10-01).
-            saw_visible_text = False      # did any text event reach the UI?
-            saw_visible_component = False  # did any validated component reach the UI?
-            # Stream-time card promotion (2026-10-02): emit the promoted card
-            # as soon as a closed markdown block completes instead of holding
-            # it to the end of the reply.  One card max, same rules.
-            promote_boundary = 0
-            promote_done = False
-            # Cooperative TTS scheduling: probe the chat worker's yield gate
-            # and, when present, park generation at chunk boundaries so
-            # queued speak requests can synthesize between chunks. Without
-            # the gate (standalone or foreign worker) speaks stay busy —
-            # never a fake pause.
-            try:
-                speech_client = YieldClient(pair["chat_url"])
-                speech_secret = uuid.uuid4().hex
-                speech_capable = speech_client.probe(speech_secret)
-            except (OSError, ValueError):
-                speech_client = None
-                speech_capable = False
+            speech_client, speech_secret, speech_capable = self._probe_yield(setup.pair)
             phase("yield_probe_done")
             stream = self.models.chat(
-                pair, messages, allowance, cancel, phases=phases,
+                setup.pair, setup.messages, setup.allowance, cancel, phases=phases,
                 yield_headers=({YIELD_SECRET_HEADER: speech_secret}
                                if speech_capable else None))
-            first_chunk_seen = False
-            dumped_ttft = phases is None
+            state = _TurnStream(setup.mode, setup.user_text, dumped_ttft=phases is None)
             try:
-                while True:
-                    if speech_capable:
-                        self.speech.yield_point(speech_client, speech_secret,
-                                                cancel)
-                    try:
-                        event = next(stream)
-                    except StopIteration:
-                        break
-                    if not first_chunk_seen:
-                        first_chunk_seen = True
-                        phase("first_chunk")
-                    if event[0] == "finish":
-                        finish_reason = event[1]
-                        continue
-                    text = event[1]
-                    raw_text_parts.append(text)
-                    if cancel.is_set():
-                        break
-                    buffer += text
-                    while buffer:
-                        if component_buffer is not None:
-                            end = buffer.find("```")
-                            if end < 0:
-                                if len(buffer.encode()) > 65536:
-                                    raise ValueError("Generated interface exceeds the 64 KiB limit")
-                                break
-                            envelope, buffer = buffer[:end], buffer[end + 3:]
-                            component_buffer = None
-                            components = self._validated(envelope, component_count, turn)
-                            if components is None and not repaired and not cancel.is_set():
-                                repaired = True
-                                components = self._repair_components(pair, envelope, allowance,
-                                                                     cancel, component_count)
-                            if components:
-                                for component in components:
-                                    component_count += 1
-                                    trusted = dict(component, id=uuid.uuid4().hex, turn_id=turn, revision=1)
-                                    self.store.emit(cid, turn, "component", trusted)
-                                    saw_visible_component = True
-                            elif not cancel.is_set():
-                                self.store.emit(cid, turn, "status", {"state": "invalid_component",
-                                    "message": "The generated interface was invalid."})
-                                self._emit_raw_fallback(cid, turn, raw_text_parts, marker)
-                            continue
-                        start = buffer.find(marker)
-                        if start >= 0:
-                            if start:
-                                self.store.emit(cid, turn, "text", {"text": buffer[:start]})
-                                reply_text_parts.append(buffer[:start])
-                                saw_visible_text = True
-                            buffer = buffer[start + len(marker):]
-                            component_buffer = ""
-                            continue
-                        keep = 0
-                        for length in range(1, min(len(buffer), len(marker) - 1) + 1):
-                            if buffer.endswith(marker[:length]):
-                                keep = length
-                        ready = buffer[:-keep] if keep else buffer
-                        if ready:
-                            self.store.emit(cid, turn, "text", {"text": ready})
-                            reply_text_parts.append(ready)
-                            saw_visible_text = True
-                            if mode == "chat" and not promote_done:
-                                seen = "".join(reply_text_parts)
-                                candidate, promote_boundary = stream_prefix_card(
-                                    seen, user_text, promote_boundary)
-                                if candidate is not None:
-                                    try:
-                                        validated = validate_components(
-                                            {"version": 1,
-                                             "components": [candidate]})
-                                    except Exception:
-                                        validated = None
-                                    if validated:
-                                        promote_done = True
-                                        for component in validated:
-                                            component_count += 1
-                                            trusted = dict(
-                                                component, id=uuid.uuid4().hex,
-                                                turn_id=turn, revision=1)
-                                            self.store.emit(
-                                                cid, turn, "component", trusted)
-                                            saw_visible_component = True
-                            if not dumped_ttft:
-                                dumped_ttft = True
-                                phase("first_text_emitted")
-                                self._ttft_dump(cid, turn, mode, phases)
-                        buffer = buffer[-keep:] if keep else ""
-                        break
+                self._consume_stream(cid, turn, setup.pair, setup.allowance, cancel,
+                                     phases, phase, state, stream,
+                                     speech_client, speech_secret, speech_capable)
             finally:
                 stream.close()
-            # Finish rules (card-defect fix, 2026-10-01): anything still buffered
-            # when the stream ends must reach the user as text.
-            if buffer and component_buffer is None:
-                self.store.emit(cid, turn, "text", {"text": buffer})
-                reply_text_parts.append(buffer)
-                saw_visible_text = True
-            if component_buffer is not None:
-                # Unterminated fence: repair once or surface the raw text.
-                if not repaired and not cancel.is_set():
-                    repaired = True
-                    components = self._repair_components(pair, buffer, allowance,
-                                                         cancel, component_count)
-                    if components:
-                        for component in components:
-                            component_count += 1
-                            trusted = dict(component, id=uuid.uuid4().hex, turn_id=turn, revision=1)
-                            self.store.emit(cid, turn, "component", trusted)
-                            saw_visible_component = True
-                        component_buffer = None
-                if component_buffer is not None:
-                    self.store.emit(cid, turn, "status", {"state": "invalid_component",
-                        "message": "The interface was incomplete; the model output is shown below."})
-                    self._emit_raw_fallback(cid, turn, raw_text_parts, marker)
-            if finish_reason == "length" and not cancel.is_set():
-                # The model ran out of tokens mid-reply.  A truncated fence is
-                # as bad as an invalid one from the user's point of view; show
-                # the raw text and offer to continue.
-                if component_buffer is not None:
-                    self._emit_raw_fallback(cid, turn, raw_text_parts, marker)
-                self.store.emit(cid, turn, "status", {"state": "output_truncated",
-                    "message": "The response reached the output allowance. Send Continue to keep going.",
-                    "continue": True})
-            # Card promotion: when the model emitted no valid fenced block,
-            # try to derive one card from the rendered markdown.  Only chat
-            # turns are eligible (compare/decide/draft produce structured
-            # payloads of their own).  Hostile, oversize, or empty replies
-            # return None from extract_text and emit nothing.
-            if (not cancel.is_set() and mode == "chat" and component_count == 0):
-                reply_text = "".join(reply_text_parts)
-                promoted = _promote_card(reply_text, user_text)
-                if promoted is not None:
-                    try:
-                        validated = validate_components(
-                            {"version": 1, "components": [promoted]})
-                    except Exception:
-                        validated = None
-                    if validated:
-                        for component in validated:
-                            component_count += 1
-                            trusted = dict(component, id=uuid.uuid4().hex,
-                                           turn_id=turn, revision=1)
-                            self.store.emit(cid, turn, "component", trusted)
-                            saw_visible_component = True
-            # Card-defect catch-all: if the turn ended with no visible text
-            # and no validated component, emit a short explanation.  Without
-            # this the user sees an empty reply (12d8d9c0b).
-            if (not saw_visible_text and not saw_visible_component
-                    and not cancel.is_set() and not failed):
-                msg = ("The model produced no readable reply this turn "
-                       "(no text and no rendered interface).")
-                self.store.emit(cid, turn, "text", {"text": msg})
-                self.store.emit(cid, turn, "status",
-                                 {"state": "empty_reply",
-                                    "message": "Turn completed without a visible reply."})
-
-            if (mode in ("compare", "decide") and not cancel.is_set()
-                    and explanation_disagrees(result,
-                                              self.store.get(cid)["messages"][-1].get("content", ""))):
-                notice = "The explanation disagrees with the Laya result. The Laya result is unchanged."
-                self.store.emit(cid, turn, "text", {"text": "\n" + notice})
-                self.store.emit(cid, turn, "status", {"state": "disagreement"})
+            self._flush_stream_tail(cid, turn, setup.pair, setup.allowance, cancel, state)
+            self._promote_final_card(cid, turn, setup.mode, setup.user_text, cancel, state)
+            self._guard_turn_end(cid, turn, setup.mode, setup.result, cancel, state)
         except Exception as error:
             failed = True
             if not cancel.is_set():
                 self.store.emit(cid, turn, "error", {"code": type(error).__name__, "message": str(error)[:1000]})
         finally:
-            # Serve queued speak requests one last time while the workers
-            # still live; when the gate is gone (or the worker already died)
-            # refuse them promptly instead of leaving the queue to time out.
-            try:
-                if speech_capable:
-                    try:
-                        self.speech.yield_point(speech_client, speech_secret,
-                                                threading.Event())
-                    except Exception:
-                        self.speech.refuse_pending()
-                else:
-                    self.speech.refuse_pending()
-            except Exception:
-                pass
-            try:
-                if cancel.is_set() or failed:
-                    try:
-                        report = self.manager.stop()
-                        if not report.get("stopped"):
-                            raise RuntimeError("Unverified worker exits: " + str(report.get("retained", [])))
-                    except Exception as error:
-                        self.failure = "Worker shutdown failed; restart the assistant: " + str(error)
-                        self.store.emit(cid, turn, "error", {"code": "WorkerShutdown", "message": self.failure})
-                self.store.finish(cid, turn, stopped=cancel.is_set() or failed)
-            finally:
-                with self.lock:
-                    self.turns.pop(turn, None)
-                self.gpu.release()
+            self._release_turn(cid, turn, cancel, failed,
+                               speech_client, speech_secret, speech_capable)
 
+    def _open_turn(self, cid, turn, payload, maximum, cancel, phases, phase):
+        """Admission and setup: start workers, validate saved history, build
+        the prompt, run structured decisions, and token-admit the allowance.
+
+        Returns a _TurnSetup, or None when the turn ends before streaming
+        (cancel before start, or a draft turn completed by _run_draft)."""
+        from .components import SCHEMA_PROMPT
+        pair = self.manager.start()
+        phase("pair_start")
+        if cancel.is_set():
+            return None
+        record = self.store.get(cid)
+        refused = record.get("context_error")
+        if refused:
+            raise ValueError("Saved history selection is invalid; inference is blocked until it is repaired: %s"
+                             % refused)
+        mode = payload.get("mode", "chat")
+        result = None
+        if mode == "draft":
+            self._run_draft(cid, turn, pair, payload, maximum, cancel)
+            return None
+        # Emit the recorded routing decision (if any) so the UI can
+        # show how the auto-route was chosen.
+        if "routing" in payload:
+            self.store.emit(cid, turn, "routing", payload["routing"])
+        user_text = payload.get("text") or ""
+        full_schema = (mode in ("compare", "decide")
+                       or bool(FULL_CARD_CUES.search(user_text))
+                       or _model_emits_fenced_cards(pair.get("chat_model") or ""))
+        messages = [{"role": "system", "content": "Answer the user using their supplied facts. "
+                     + (SCHEMA_PROMPT if full_schema else "")}]
+        messages.extend(self._selected_history(record, turn))
+        phase("prompt_built")
+        if mode in ("compare", "decide"):
+            path = pair["model_paths"]["decision"]
+            if mode == "compare":
+                request = decision_request(path, payload["text"], payload.get("options"), payload.get("criteria"))
+                raw = self.models.decision(pair, request)
+                result = validate_decision(raw.get("answers", {}).get("comparison"), payload["options"])
+                result.update({"criteria": payload["criteria"], "model": "laya-mlx",
+                               "input_scope": payload["text"]})
+            else:
+                request = typed_questions_request(path, payload["text"], payload.get("questions"))
+                raw = self.models.decision(pair, request)
+                result = typed_results(payload.get("questions"), raw.get("answers", {}), payload["text"])
+            self.store.emit(cid, turn, "decision", result)
+            phase("decision_done")
+            note = ("Explain this supplied Laya result without changing its choice. "
+                    if mode == "compare" else
+                    "Explain these supplied Laya results without changing any of them. ")
+            messages[0]["content"] += ("\n" + note
+                                       + "If abstained, say that it abstained. Its confidence is not factual accuracy. "
+                                       + json.dumps(result, ensure_ascii=False))
+        allowance, required = self._admit_output(pair, messages, maximum, mode,
+                                                 phases=phases)
+        phase("admit_done")
+        pair = self.manager.status()
+        self.store.emit(cid, turn, "status", {"state": "generating", "context_tokens": required,
+                                             "context_limit": pair["context_tokens"],
+                                             "output_tokens": allowance})
+        phase("generating_status_emitted")
+        return _TurnSetup(pair, mode, user_text, messages, result, allowance, required)
+
+    def _probe_yield(self, pair):
+        """Cooperative TTS scheduling: probe the chat worker's yield gate.
+        Returns (client, secret, capable); incapable means speaks stay busy —
+        never a fake pause."""
+        speech_client = None
+        speech_secret = None
+        speech_capable = False
+        try:
+            speech_client = YieldClient(pair["chat_url"])
+            speech_secret = uuid.uuid4().hex
+            speech_capable = speech_client.probe(speech_secret)
+        except (OSError, ValueError):
+            speech_client = None
+            speech_capable = False
+        return speech_client, speech_secret, speech_capable
+
+    def _consume_stream(self, cid, turn, pair, allowance, cancel, phases, phase,
+                        state, stream, speech_client, speech_secret, speech_capable):
+        """Generation stream loop: park at chunk boundaries for queued speaks,
+        then drain every event into store emits. Mutates `state`."""
+        first_chunk_seen = False
+        while True:
+            if speech_capable:
+                self.speech.yield_point(speech_client, speech_secret,
+                                        cancel)
+            try:
+                event = next(stream)
+            except StopIteration:
+                break
+            if not first_chunk_seen:
+                first_chunk_seen = True
+                phase("first_chunk")
+            if event[0] == "finish":
+                state.finish_reason = event[1]
+                continue
+            text = event[1]
+            state.raw_text_parts.append(text)
+            if cancel.is_set():
+                break
+            state.buffer += text
+            self._drain_buffer(cid, turn, pair, allowance, cancel, phases,
+                               phase, state)
+
+    def _drain_buffer(self, cid, turn, pair, allowance, cancel, phases, phase, state):
+        """Split state.buffer at component fences, emitting text and validated
+        components; runs stream-time card promotion on chat text. Leaves a
+        partial trailing fence marker in the buffer."""
+        from .components import validate_components
+        from .card_promotion import stream_prefix_card
+        buffer = state.buffer
+        while buffer:
+            if state.component_buffer is not None:
+                end = buffer.find("```")
+                if end < 0:
+                    if len(buffer.encode()) > 65536:
+                        raise ValueError("Generated interface exceeds the 64 KiB limit")
+                    break
+                envelope, buffer = buffer[:end], buffer[end + 3:]
+                state.component_buffer = None
+                components = self._validated(envelope, state.component_count, turn)
+                if components is None and not state.repaired and not cancel.is_set():
+                    state.repaired = True
+                    components = self._repair_components(pair, envelope, allowance,
+                                                         cancel, state.component_count)
+                if components:
+                    for component in components:
+                        state.component_count += 1
+                        trusted = dict(component, id=uuid.uuid4().hex, turn_id=turn, revision=1)
+                        self.store.emit(cid, turn, "component", trusted)
+                        state.saw_visible_component = True
+                elif not cancel.is_set():
+                    self.store.emit(cid, turn, "status", {"state": "invalid_component",
+                        "message": "The generated interface was invalid."})
+                    self._emit_raw_fallback(cid, turn, state.raw_text_parts, _UI_MARKER)
+                continue
+            start = buffer.find(_UI_MARKER)
+            if start >= 0:
+                if start:
+                    self.store.emit(cid, turn, "text", {"text": buffer[:start]})
+                    state.reply_text_parts.append(buffer[:start])
+                    state.saw_visible_text = True
+                buffer = buffer[start + len(_UI_MARKER):]
+                state.component_buffer = ""
+                continue
+            keep = 0
+            for length in range(1, min(len(buffer), len(_UI_MARKER) - 1) + 1):
+                if buffer.endswith(_UI_MARKER[:length]):
+                    keep = length
+            ready = buffer[:-keep] if keep else buffer
+            if ready:
+                self.store.emit(cid, turn, "text", {"text": ready})
+                state.reply_text_parts.append(ready)
+                state.saw_visible_text = True
+                if state.mode == "chat" and not state.promote_done:
+                    seen = "".join(state.reply_text_parts)
+                    candidate, state.promote_boundary = stream_prefix_card(
+                        seen, state.user_text, state.promote_boundary)
+                    if candidate is not None:
+                        try:
+                            validated = validate_components(
+                                {"version": 1,
+                                 "components": [candidate]})
+                        except Exception:
+                            validated = None
+                        if validated:
+                            state.promote_done = True
+                            for component in validated:
+                                state.component_count += 1
+                                trusted = dict(
+                                    component, id=uuid.uuid4().hex,
+                                    turn_id=turn, revision=1)
+                                self.store.emit(
+                                    cid, turn, "component", trusted)
+                                state.saw_visible_component = True
+                if not state.dumped_ttft:
+                    state.dumped_ttft = True
+                    phase("first_text_emitted")
+                    self._ttft_dump(cid, turn, state.mode, phases)
+            buffer = buffer[-keep:] if keep else ""
+            break
+        state.buffer = buffer
+
+    def _flush_stream_tail(self, cid, turn, pair, allowance, cancel, state):
+        """Finish rules (card-defect fix, 2026-10-01): anything still buffered
+        when the stream ends must reach the user as text; an unterminated or
+        truncated fence surfaces the raw text instead of a broken interface."""
+        if state.buffer and state.component_buffer is None:
+            self.store.emit(cid, turn, "text", {"text": state.buffer})
+            state.reply_text_parts.append(state.buffer)
+            state.saw_visible_text = True
+        if state.component_buffer is not None:
+            # Unterminated fence: repair once or surface the raw text.
+            if not state.repaired and not cancel.is_set():
+                state.repaired = True
+                components = self._repair_components(pair, state.buffer, allowance,
+                                                     cancel, state.component_count)
+                if components:
+                    for component in components:
+                        state.component_count += 1
+                        trusted = dict(component, id=uuid.uuid4().hex, turn_id=turn, revision=1)
+                        self.store.emit(cid, turn, "component", trusted)
+                        state.saw_visible_component = True
+                    state.component_buffer = None
+            if state.component_buffer is not None:
+                self.store.emit(cid, turn, "status", {"state": "invalid_component",
+                    "message": "The interface was incomplete; the model output is shown below."})
+                self._emit_raw_fallback(cid, turn, state.raw_text_parts, _UI_MARKER)
+        if state.finish_reason == "length" and not cancel.is_set():
+            # The model ran out of tokens mid-reply.  A truncated fence is
+            # as bad as an invalid one from the user's point of view; show
+            # the raw text and offer to continue.
+            if state.component_buffer is not None:
+                self._emit_raw_fallback(cid, turn, state.raw_text_parts, _UI_MARKER)
+            self.store.emit(cid, turn, "status", {"state": "output_truncated",
+                "message": "The response reached the output allowance. Send Continue to keep going.",
+                "continue": True})
+
+    def _promote_final_card(self, cid, turn, mode, user_text, cancel, state):
+        """Card promotion: when the model emitted no valid fenced block,
+        try to derive one card from the rendered markdown.  Only chat
+        turns are eligible (compare/decide/draft produce structured
+        payloads of their own).  Hostile, oversize, or empty replies
+        return None from extract_text and emit nothing."""
+        from .components import validate_components
+        from .card_promotion import extract_text as _promote_card
+        if (not cancel.is_set() and mode == "chat" and state.component_count == 0):
+            reply_text = "".join(state.reply_text_parts)
+            promoted = _promote_card(reply_text, user_text)
+            if promoted is not None:
+                try:
+                    validated = validate_components(
+                        {"version": 1, "components": [promoted]})
+                except Exception:
+                    validated = None
+                if validated:
+                    for component in validated:
+                        state.component_count += 1
+                        trusted = dict(component, id=uuid.uuid4().hex,
+                                       turn_id=turn, revision=1)
+                        self.store.emit(cid, turn, "component", trusted)
+                        state.saw_visible_component = True
+
+    def _guard_turn_end(self, cid, turn, mode, result, cancel, state):
+        """Post-stream guards: the empty-reply catch-all (12d8d9c0b) and the
+        compare/decide explanation-disagreement notice."""
+        # Card-defect catch-all: if the turn ended with no visible text
+        # and no validated component, emit a short explanation.  Without
+        # this the user sees an empty reply (12d8d9c0b).
+        if (not state.saw_visible_text and not state.saw_visible_component
+                and not cancel.is_set()):
+            msg = ("The model produced no readable reply this turn "
+                   "(no text and no rendered interface).")
+            self.store.emit(cid, turn, "text", {"text": msg})
+            self.store.emit(cid, turn, "status",
+                             {"state": "empty_reply",
+                                "message": "Turn completed without a visible reply."})
+
+        if (mode in ("compare", "decide") and not cancel.is_set()
+                and explanation_disagrees(result,
+                                          self.store.get(cid)["messages"][-1].get("content", ""))):
+            notice = "The explanation disagrees with the Laya result. The Laya result is unchanged."
+            self.store.emit(cid, turn, "text", {"text": "\n" + notice})
+            self.store.emit(cid, turn, "status", {"state": "disagreement"})
+
+    def _release_turn(self, cid, turn, cancel, failed,
+                      speech_client, speech_secret, speech_capable):
+        """The _run finally block: serve queued speak requests one last time
+        while the workers still live (refusing them promptly when the gate is
+        gone or the worker already died), stop workers after a failure, close
+        the turn, and give the GPU back."""
+        try:
+            if speech_capable:
+                try:
+                    self.speech.yield_point(speech_client, speech_secret,
+                                            threading.Event())
+                except Exception:
+                    self.speech.refuse_pending()
+            else:
+                self.speech.refuse_pending()
+        except Exception:
+            pass
+        try:
+            if cancel.is_set() or failed:
+                try:
+                    report = self.manager.stop()
+                    if not report.get("stopped"):
+                        raise RuntimeError("Unverified worker exits: " + str(report.get("retained", [])))
+                except Exception as error:
+                    self.failure = "Worker shutdown failed; restart the assistant: " + str(error)
+                    self.store.emit(cid, turn, "error", {"code": "WorkerShutdown", "message": self.failure})
+            self.store.finish(cid, turn, stopped=cancel.is_set() or failed)
+        finally:
+            with self.lock:
+                self.turns.pop(turn, None)
+            self.gpu.release()
     def _selected_history(self, record, turn):
         """Chat messages for the admitted history, per the context contract.
 
