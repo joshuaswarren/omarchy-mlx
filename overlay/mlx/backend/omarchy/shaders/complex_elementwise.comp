@@ -1,4 +1,5 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+
 // Complex64 elementwise kernel. One element is a vec2 (re, im) in a
 // std430 storage buffer, the same paired-float layout the FFT kernels
 // use, so a complex64 item is two consecutive float32 words and every
@@ -21,6 +22,9 @@
 // and a stride of 0 broadcasts the axis.
 
 #version 460
+
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_trig.h"
 
 layout(local_size_x = 256) in;
 
@@ -469,7 +473,7 @@ void main() {
           vec2 t = vec2(rhs.x * mag - rhs.y * arg,
                         rhs.x * arg + rhs.y * mag);
           float ex = exp(t.x);
-          value = vec2(ex * cos(t.y), ex * sin(t.y));
+          value = vec2(ex * omarchy_trig_cos(t.y), ex * omarchy_trig_sin(t.y));
         }
         break;
       }
@@ -482,7 +486,7 @@ void main() {
           value = vec2(0.0);
         } else {
           float ex = exp(lhs.x);
-          value = vec2(ex * cos(lhs.y), ex * sin(lhs.y));
+          value = vec2(ex * omarchy_trig_cos(lhs.y), ex * omarchy_trig_sin(lhs.y));
         }
         break;
       }
@@ -490,8 +494,8 @@ void main() {
         // sin(a + bi) = (sin a cosh b, cos a sinh b); glibc csinf uses
         // the same formula for |b| under ~88 (exp(b) finite). The test
         // magnitudes stay well within that range.
-        float sa = sin(lhs.x);
-        float ca = cos(lhs.x);
+        float sa = omarchy_trig_sin(lhs.x);
+        float ca = omarchy_trig_cos(lhs.x);
         float sh = sinh(lhs.y);
         float ch = cosh(lhs.y);
         value = vec2(sa * ch, ca * sh);
@@ -500,8 +504,8 @@ void main() {
       case 10: {
         // cos(a + bi) = (cos a cosh b, -sin a sinh b), matching
         // std::cos(complex) and glibc ccosf.
-        float sa = sin(lhs.x);
-        float ca = cos(lhs.x);
+        float sa = omarchy_trig_sin(lhs.x);
+        float ca = omarchy_trig_cos(lhs.x);
         float sh = sinh(lhs.y);
         float ch = cosh(lhs.y);
         value = vec2(ca * ch, -sa * sh);
@@ -539,7 +543,7 @@ void main() {
           vec2 diff = minv - maxv;
           vec2 cexp = diff.x == NEG_INF
               ? vec2(0.0)
-              : vec2(exp(diff.x) * cos(diff.y), exp(diff.x) * sin(diff.y));
+              : vec2(exp(diff.x) * omarchy_trig_cos(diff.y), exp(diff.x) * omarchy_trig_sin(diff.y));
           vec2 one_plus = cexp + vec2(1.0, 0.0);
           // log(1+z): magnitude log and quadrant-aware argument; the
           // (0, 0) argument is 0 by convention (SPIR-V leaves raw
@@ -554,8 +558,8 @@ void main() {
       }
       case 12:
       case 13: {
-        float sx = sin(lhs.y);
-        float cx = cos(lhs.y);
+        float sx = omarchy_trig_sin(lhs.y);
+        float cx = omarchy_trig_cos(lhs.y);
         if (abs(lhs.x) <= 1.0) {
           float sh = sinh(lhs.x);
           float ch = cosh(lhs.x);
@@ -586,8 +590,8 @@ void main() {
         float a = tangent ? lhs.y : lhs.x;
         float b = tangent ? lhs.x : lhs.y;
         vec2 pair;
-        float sb = sin(b);
-        float cb = cos(b);
+        float sb = omarchy_trig_sin(b);
+        float cb = omarchy_trig_cos(b);
         if (abs(a) < 1.0) {
           float sh = sinh(a);
           float denominator = sh * sh + cb * cb;

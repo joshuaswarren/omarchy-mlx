@@ -15,6 +15,9 @@
 // defines it.
 #version 460
 
+#extension GL_GOOGLE_include_directive : require
+#include "omarchy_trig.h"
+
 #if defined(USE_FP16) || defined(USE_BF16) || defined(USE_I16) ||              \
     defined(USE_U16)
 #extension GL_EXT_shader_16bit_storage : require
@@ -227,7 +230,10 @@ ACC_TYPE combine(ACC_TYPE acc, ACC_TYPE next, uint operation) {
       return maxv;
     }
     float m = exp(minv.x - maxv.x);
-    vec2 dexp = vec2(m * cos(minv.y - maxv.y), m * sin(minv.y - maxv.y));
+    // The imaginary-part difference is unbounded (data), so the trig
+    // goes through the shared reduction: accurate to 5e5, NaN above.
+    vec2 dexp = vec2(m * omarchy_trig_cos(minv.y - maxv.y),
+                     m * omarchy_trig_sin(minv.y - maxv.y));
     vec2 one_plus = dexp + vec2(1.0, 0.0);
     float arg = (one_plus.x == 0.0 && one_plus.y == 0.0)
         ? 0.0

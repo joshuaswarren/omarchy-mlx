@@ -4654,83 +4654,35 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     output_base += tile_count;
   }
 }
-// The GLSL built-in sin/cos keep upstream-grade accuracy only for
+// The GLSL built-in sin/cos/tan keep upstream-grade accuracy only for
 // arguments the driver's range reduction survives. Measured on the M1
 // Honeykrisp (scalar sweep, 2026-09-02): built-in error 2.8e-5 at 1e3,
 // 4.5e-4 at 12345, 4.8e-3 at 123457, then 1e-2 and worse toward 1e6
 // and total collapse from there; llvmpipe stays accurate far higher,
-// but the gate is one device-independent contract. kTrigArgumentLimit
-// is 1e5, chosen for the consumer that matters: fast::RoPE is a
-// fallback composition of exactly these sin/cos calls with
-// inv_freq[0] = 1.0, so the limit is the positional ceiling - 1e5
-// covers Qwen-class 32k contexts with 3x margin while refusing the
-// band where the built-in returns garbage (error 1e-2 and collapsing).
-// An in-shader Payne-Hanek fallback was probed on the same device and
-// returns garbage of magnitude 1e15+ (its carry chain rides the
-// dynamic-indexing shapes this driver miscompiles), so it stays dead
-// code. Above the limit the op refuses by name; the compatibility
-// matrix counts Sin/Cos as partial with the magnitude named error.
-constexpr float kTrigArgumentLimit = 1.0e5f;
+// but the limit is one device-independent contract. Since OpCost's
+// 6cbf55d8f the eager Sin/Cos/Tan paths and every fused path that
+// evaluates trig reduce arguments in-shader (shaders/omarchy_trig.h,
+// Cody-Waite with C1 = 6.28125): accurate vs float64 to
+// kTrigArgumentLimit and NaN above it, so the constant is now the
+// reduction's proven envelope - k * C1 is exact in float32 for every
+// |k| <= 83468, i.e. every argument up to 524447, rounded down to 5e5
+// with margin - not the raw built-in's. fast::RoPE still refuses at
+// this bound on the host (a one-time check of the offset/freqs
+// factors, no per-call readback) because its fused kernels compute
+// theta from positions and would rather error loudly than hand a
+// magnitude above the envelope to the reduction. The previous
+// trig_argument_gate (a full GPU sync + host read per sin/cos call,
+// removed by 6cbf55d8f) stayed dead until this change deleted it; its
+// accuracy history lives in docs/known-defects.md.
+constexpr float kTrigArgumentLimit = 5.0e5f;
 
-void trig_argument_gate(
-    const std::string& name,
-    const std::vector<array>& inputs,
-    const array& out) {
-  Stream stream = out.primitive().stream();
-  // An empty argument has no magnitude to gate; the max over its
-  // size-0 axes would throw upstream. The elementwise kernel below
-  // treats the empty output as a no-op.
-  if (inputs.at(0).size() == 0) {
-    return;
-  }
-  array magnitude = astype(
-      max(abs(inputs.at(0), stream), stream), float32, stream);
-  const bool trace_gate =
-      std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr;
-  if (trace_gate) {
-    fprintf(stderr, "[rtmod] GATE tid=%lu %s enter\n", (unsigned long)syscall(SYS_gettid), name.c_str());
-  }
-  // Record the magnitude graph into the open batch without the nested
-  // blocking eval: a nested eval()'s epilogue skips the signal+commit at
-  // eval_nest_depth > 1 (settle semantics), so its synchronizer wait
-  // could never be satisfied and parked the dispatching thread until the
-  // watchdog fired - the F1 burst signature. settle() schedules the nodes
-  // into the open command buffer; the synchronize() below submits that
-  // batch and orders the mapped read, which is the ordering this gate
-  // actually needs.
-  settle({magnitude});
-  if (trace_gate) {
-    fprintf(stderr, "[rtmod] GATE tid=%lu %s post-eval\n", (unsigned long)syscall(SYS_gettid), name.c_str());
-  }
-  // The magnitude is read on the host, so the stream must be ordered
-  // here: array::item() is eval() plus an immediate mapped read with no
-  // completion wait, and an unordered read races this gate's own
-  // submission — on hardware it returned recycled-page garbage
-  // (~1e9) instead of the real magnitude, aborting compiled 4-bit
-  // generation (observed 2026-09-03, first hardware run of the compiled
-  // path; llvmpipe executes synchronously and masked it). Same pattern
-  // as the reduce host checks: host reads behind a synchronize.
-  omarchy::get_command_encoder(stream).synchronize("trig_argument_gate");
-  float worst = magnitude.item<float>();
-  if (worst > kTrigArgumentLimit) {
-    throw std::runtime_error(
-        "[omarchy] " + name + " argument magnitude " +
-        std::to_string(worst) + " exceeds the built-in accuracy limit " +
-        std::to_string(kTrigArgumentLimit) +
-        " on this backend: the Vulkan driver's sin/cos range reduction"
-        " is untrusted above it, the software Payne-Hanek fallback"
-        " miscompiles on this driver, and no other accurate kernel"
-        " exists. No silent wrong value and no silent CPU fallback"
-        " occurs. Run it on an explicit CPU stream to use the CPU"
-        " implementation.");
-  }
-}
 void Cos::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.dtype() == complex64) {
     // Upstream std::cos(complex) goes through glibc ccosf, which is
-    // (cos a cosh b, -sin a sinh b) for normal-range inputs; the
-    // float trig argument gate is irrelevant to the complex path
-    // because the accuracy loss it guards against does not apply.
+    // (cos a cosh b, -sin a sinh b) for normal-range inputs. The
+    // complex shader mirrors that formula and takes the same shared
+    // omarchy_trig_* reduction for its real-part sin/cos, so the
+    // accuracy contract is identical to the float path.
     dispatch_complex(
         name(), ComplexCos, inputs, out, out.primitive().stream());
     return;
@@ -10363,11 +10315,11 @@ void Sin::eval_gpu(const std::vector<array>& inputs, array& out) {
         name(), ComplexSin, inputs, out, out.primitive().stream());
     return;
   }
-  // The in-shader Cody-Waite reduction (elementwise.comp) handles
-  // large arguments; the old trig_argument_gate (a full GPU sync +
-  // host read per sin/cos call) is no longer needed. The shader
-  // produces NaN above 1e9 where even the 3-term reduction exceeds
-  // its stated accuracy.
+  // The shared in-shader Cody-Waite reduction (shaders/omarchy_trig.h)
+  // handles large arguments: accurate vs float64 up to kTrigArgumentLimit
+  // and NaN above it. The old trig_argument_gate (a full GPU sync +
+  // host read per sin/cos call) is gone; its history and the owner's
+  // perf-tradeoff note are in docs/known-defects.md.
   dispatch_elementwise(
       name(), SinOperation, inputs, out, out.primitive().stream());
 }
@@ -12522,13 +12474,13 @@ void rope_trig_gate(
   if (bound > kTrigArgumentLimit) {
     throw std::runtime_error(
         "[omarchy] " + name + " rotational argument magnitude " +
-        std::to_string(bound) + " exceeds the built-in accuracy limit " +
+        std::to_string(bound) + " exceeds the trig reduction limit " +
         std::to_string(kTrigArgumentLimit) +
-        " on this backend: the fused kernel computes sin/cos with the"
-        " Vulkan driver's built-in, whose range reduction is untrusted"
-        " above it, and the software Payne-Hanek fallback miscompiles on"
-        " this driver. No silent wrong value occurs. Run it on an explicit"
-        " CPU stream to use the CPU implementation.");
+        " on this backend: the fused kernel reduces sin/cos arguments"
+        " in-shader (shaders/omarchy_trig.h), which is accurate only up"
+        " to this bound and returns NaN above it; the host bound check"
+        " refuses instead of dispatching above the envelope. Run it on an"
+        " explicit CPU stream to use the CPU implementation.");
   }
 }
 

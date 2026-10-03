@@ -906,3 +906,83 @@ doctest `sdpa vjp fd parity at small rep=1 shapes (known defects)`
 impact: qL=1 is the decode geometry - a fine-tune backward through a
 single-query step silently loses dk/dv today. Next lever: instrument
 s_t_dense/p_t_dense and the dkt/dvt buffers inside eval_gpu at (1,1,2,4).
+## 2026-10-03: OpCost's in-shader Cody-Waite constants were wrong; the honest contract is accurate-to-5e5, NaN above (fixed this change)
+
+OpCost's `6cbf55d8f` removed the per-call `trig_argument_gate` (a full
+GPU pipeline drain + host read per sin/cos call - the Kokoro serve-path
+stall) and put a Cody-Waite reduction into `elementwise.comp` with a NaN
+above 1e9. The intent was right, the constants were not, and the
+contract tests (33 assertions) still pinned the old refusal, so the
+release was silent about it. Measured on jw16 (M1 Max), jwm1 (M1),
+and llvmpipe, 1e5 random f32 samples per decade plus edges, vs float64
+(`receipts/2026-10-03-trig-contract/`):
+
+- `C2 = -6.7792634e-8` does not satisfy `C1 + C2 ≈ 2*pi`: the residual
+  is `-1.0705e-7`, so every reduced argument carried a phase error of
+  `|k| * 1.07e-7` on top of the `k*C1` rounding error (`C1` was the full
+  24-bit float32 rounding of 2*pi, so `k*C1` is inexact for every
+  `|k| >= 2`). Max abs error of the shipping form: 5.2e-3 at decade
+  1e4-1e5, 4.5e-2 at 1e5-1e6, 6.0e-1 at 1e6-1e7 - silently wrong finite
+  values across the whole band OpCost's comment called accurate, and
+  the 1e9 NaN threshold had no measured basis. (OpCost's own commit
+  message recorded 1.7e-3 at 1e5 "adequate for Snake" - the numbers
+  were known, the contract text was not updated.)
+- The Kokoro serve path never saw this because
+  `_kokoro_install_trig_reduction` (serve `synthesis.py`) pre-reduces
+  arguments in-graph with the CORRECT constants (C1 = 6.28125) before
+  the shader runs. The Laya/eager world did.
+
+The fix (this change): one shared GLSL header
+`shaders/omarchy_trig.h` with a Cody-Waite family whose `k*C1` product
+is exact in float32 - `C1 = 6.28125 = 201*2^-5`, exact for every
+`|k| <= 83468` (every argument up to 524447; the constant is rounded
+down to the contract value 5e5) - plus a dyadic `2^-9` term (exact for
+all k) and two f32 correction terms, in a `precise` three-subtract
+chain. Measured max abs error in the reduction band 1e4..5e5:
+2.5e-7 (llvmpipe), 2.5e-7 (jwm1 M1), 2.5e-7 (jw16 M1 Max). Above 5e5
+the wrappers return NaN: a non-finite result is loud, a finite wrong
+value is forbidden. Below 1e4 the raw built-in is kept bit-identically
+(Kokoro's in-graph reduction leaves its arguments under 1e4, and Laya's
+rope angles live there; both keep their exact bit patterns - the band below 1e4
+calls the same built-in as before; the serve-path corr and Laya dev-set checks in the receipt verify this end to end).
+
+- The eager refusal was replaced by the NaN contract deliberately:
+  keeping a loud per-call host error requires reading each argument
+  array's magnitude on the host, which is the GPU-sync cost OpCost's
+  change removed (784 joins per 14 Laya forwards; the Kokoro serve-path
+  stall). The owner approved that trade when the change landed in
+  v0.7.21+. Every other consumer-facing error path keeps a host check
+  where the magnitude is knowable without a readback (the fused-RoPE
+  factor bound still refuses by name at the same 5e5).
+- Every path that evaluates trig of an unbounded argument now carries
+  the same reduction: eager Sin/Cos/Tan (elementwise.comp), complex
+  exp/sin/cos/sinh/cosh/tan/tanh/asin/acos real-part trig
+  (complex_elementwise.comp - the old "the gate is irrelevant to the
+  complex path" comment was wrong on GPU: glibc's correctly-reduced
+  complex trig is a CPU property), the complex logsumexp scan
+  (scan_general.comp), and the fused rope kernels
+  (fast_rope/fast_rope_norm/fast_trio) - the rope wrap also restores
+  the fused-vs-eager bit equality OpCost's change silently broke above
+  1e4. FFT twiddles are folded to [0, pi/4] by construction (exact at
+  every quarter turn) and stay on the raw built-in. Fused chains have
+  no trig opcodes. The LITE elementwise build excludes trig by opcode
+  index (ops 0-10 only; the host never routes Sin/Cos to it).
+- `tan` joins the contract via `sin(r)/cos(r)` on the reduced argument
+  (the built-in tan has the same unbounded-argument defect and never
+  had a gate).
+- An fma-based variant (C1 = 6.0, three explicit fma terms) was probed
+  and is dead: the earlier fma-probe result was a constant-folding
+  artifact (NIR strength-reduces `a*3` to `a+a+a`), and with runtime
+  operands the measured band errors match the unfused model
+  (1.5e-2 at 1e6 on jw16), so fused fma cannot be assumed on
+  Honeykrisp. The Payne-Hanek software fallback remains dead
+  (dynamic-indexing miscompile class, 2026-09-02); the k-splitting
+  idea was probed and is broken by design (the split leaves a
+  ~4e5-magnitude intermediate whose subtractions round at ulp/2 ~
+  0.016).
+- jw16's newer Mesa (109060195) has an accurate built-in sin/cos to 1e9
+  (3-5e-8 measured); jwm1's (109060099) still collapses from 1e3
+  (7.1e-4 at decade 1e3-1e4). The contract stays device-independent on
+  purpose: the same constants must produce the same answer class on
+  both, and the built-in bands keep their documented (measured)
+  tolerances in the tests.

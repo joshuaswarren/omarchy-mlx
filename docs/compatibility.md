@@ -84,7 +84,9 @@ fail-closed device gate, the discovery-time `disable_compile()` hook,
 and the `MLX_OMARCHY_ALLOW_UNSAFE_COMPILE` override were retired with
 the fix. bf16 tapes run per-node (the 2026-09-02 bf16 gate above was
 the same stale-shape defect, lifted 2026-09-18), fused bf16 chains are
-fenced separately, and the trigonometric domain gate is unchanged.
+fenced separately, and the trig domain gate is now the shared in-shader
+Cody-Waite reduction (accurate to 5e5, NaN above; the 2026-10-03
+entry in known-defects.md).
 Full record:
 [known-defects.md](known-defects.md) and
 `receipts/2026-09-03-stale-shape-tape-corruption.md`. Compiled-versus-
