@@ -32,7 +32,7 @@ import os
 import sys
 from pathlib import Path
 
-REPO = "joshuawarren/mlx-omarchy"
+REPO = "joshuaswarren/omarchy-mlx"
 HOME_PREFIX_NAME = "mlx-omarchy"
 SYSTEM_PREFIX = "/usr/lib/omarchy-mlx"
 SYSTEM_SHARE_PREFIX = "/usr/share/omarchy-mlx"
