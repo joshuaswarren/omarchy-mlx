@@ -6,7 +6,6 @@ text_len>0, pre-start baseline, post-teardown baseline.
 Usage: pair_memory_v2.py --pair-id <catalog_pair_id> --home <dir> --repo-serve <dir> --label <name> --out <json>
 """
 import argparse
-import hashlib
 import json
 import os
 import signal
@@ -14,131 +13,17 @@ import subprocess
 import sys
 import threading
 import time
-import http.client
 import urllib.error
 import urllib.request
 
-
-def parse_meminfo():
-    out = {}
-    with open("/proc/meminfo") as f:
-        for line in f:
-            if ":" in line:
-                k, _, v = line.partition(":")
-                out[k.strip()] = v.strip()
-    return out
-
-
-def meminfo_bytes(mi, key):
-    s = mi.get(key)
-    if not s:
-        return 0
-    parts = s.split()
-    n = int(parts[0])
-    if len(parts) > 1 and parts[1].lower() == "kb":
-        n *= 1024
-    return n
-
-
-def children_of(pid):
-    seen = {pid}
-    frontier = [pid]
-    while frontier:
-        new = []
-        for p in frontier:
-            try:
-                with open(f"/proc/{p}/task/{p}/children") as f:
-                    data = f.read().strip()
-            except (FileNotFoundError, ProcessLookupError):
-                data = ""
-            for c in data.split():
-                if c.isdigit():
-                    ci = int(c)
-                    if ci not in seen:
-                        seen.add(ci)
-                        new.append(ci)
-        frontier = new
-    return seen
-
-
-def rss_kb(pid):
-    try:
-        with open(f"/proc/{pid}/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) * 1024
-    except (FileNotFoundError, ProcessLookupError):
-        return None
-
-
-def pss_kb(pid):
-    try:
-        with open(f"/proc/{pid}/smaps_rollup") as f:
-            for line in f:
-                if line.startswith("Pss:"):
-                    return int(line.split()[1]) * 1024
-    except (FileNotFoundError, ProcessLookupError):
-        return None
-
-
-def drm_bytes(pid):
-    total = 0
-    found = []
-    try:
-        for fd in os.listdir(f"/proc/{pid}/fd"):
-            try:
-                tgt = os.readlink(f"/proc/{pid}/fd/{fd}")
-            except (FileNotFoundError, ProcessLookupError, PermissionError):
-                continue
-            if "renderD" not in tgt:
-                continue
-            found.append(fd)
-    except (FileNotFoundError, ProcessLookupError, PermissionError):
-        pass
-    return {"drm_renderD_fds": len(found), "drm_allocated_bytes": total}
-
-
-def backend_peak(chat_port):
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", chat_port, timeout=5)
-        conn.request("GET", "/v1/internal/memory")
-        r = conn.getresponse()
-        body = r.read()
-        conn.close()
-        return json.loads(body)
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def sample(label, assistant_pid, chat_port):
-    mi = parse_meminfo()
-    pids = children_of(assistant_pid) if assistant_pid else {0}
-    per_pid = {}
-    rss_total = 0
-    pss_total = 0
-    for p in pids:
-        if p == 0:
-            continue
-        r = rss_kb(p)
-        s = pss_kb(p)
-        if r is not None:
-            rss_total += r
-        if s is not None:
-            pss_total += s
-        per_pid[p] = {"rss": r, "pss": s}
-    return {
-        "phase": label,
-        "t": time.time(),
-        "uname": subprocess.check_output(["uname", "-r"]).decode().strip(),
-        "meminfo": {k: mi.get(k) for k in ("MemTotal", "MemAvailable", "MemFree")},
-        "system_used_bytes": meminfo_bytes(mi, "MemTotal") - meminfo_bytes(mi, "MemAvailable"),
-        "pids": sorted(pids),
-        "rss_total": rss_total,
-        "pss_total": pss_total,
-        "per_pid": per_pid,
-        "drm_per_pid": {p: drm_bytes(p) for p in pids if p > 0},
-        "backend_peak": backend_peak(chat_port) if chat_port else None,
-    }
+from pair_memory_common import (
+    call,
+    capture_baseline_top_rss,
+    find_chat_port,
+    read_context_tokens,
+    sample,
+    wait_for_setup,
+)
 
 
 class Assistant:
@@ -305,23 +190,7 @@ def main():
     args = ap.parse_args()
 
     # Pre-start baseline BEFORE the assistant launches.
-    baseline = sample("baseline_before_assistant", 0, None)
-    proc_rss = []
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
-            continue
-        r = rss_kb(int(d))
-        if r is not None and r > 50 * 1024 * 1024:
-            try:
-                with open(f"/proc/{d}/cmdline") as f:
-                    cmd = f.read().replace("\0", " ").strip()[:160]
-            except Exception:
-                cmd = "?"
-            proc_rss.append({"pid": int(d), "rss_bytes": r, "cmd": cmd})
-    proc_rss.sort(key=lambda x: -x["rss_bytes"])
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    with open(args.out.replace(".json", "-baseline-top-rss.json"), "w") as f:
-        json.dump(proc_rss[:15], f, indent=2)
+    baseline = capture_baseline_top_rss(args.out.replace(".json", "-baseline-top-rss.json"))
     print(f"baseline sys_used={baseline['system_used_bytes']/2**20:.1f} MiB", flush=True)
 
     pair = Assistant(args.pair_id, args.home, args.repo_serve)
@@ -329,48 +198,16 @@ def main():
     print(f"do_setup={do_setup}", flush=True)
     pair.start(do_setup)
 
-    setup_deadline = time.monotonic() + (1500 if do_setup else 180)
-    while time.monotonic() < setup_deadline:
-        state = call("GET", "/api/status", runtime_path=pair.runtime).get("setup") or {}
-        if state.get("state") == "complete":
-            break
-        if state.get("state") == "error":
-            pair.kill()
-            raise RuntimeError(f"setup error: {state}")
-        if state.get("state") == "absent":
-            pair.kill()
-            pair.start(do_setup=True)
-            setup_deadline = time.monotonic() + 1500
-        time.sleep(1)
+    wait_for_setup(pair, pair.runtime, do_setup, fail_on_timeout=False)
     print("setup complete", flush=True)
 
-    # Find chat worker port from the LAST "Starting httpd at" line.
-    chat_log = os.path.join(args.home, "assistant", "logs", f"{args.pair_id}-chat.log")
-    chat_port = None
-    chat_deadline = time.monotonic() + 120
-    while time.monotonic() < chat_deadline:
-        if os.path.exists(chat_log):
-            last = None
-            for line in open(chat_log, errors="replace"):
-                if "Starting httpd at" in line:
-                    last = line
-            if last:
-                chat_port = last.rsplit(" ", 1)[-1].strip().rstrip(".")
-        if chat_port:
-            break
-        time.sleep(1)
+    chat_port = find_chat_port(args.home, args.pair_id)
     print(f"chat port: {chat_port}", flush=True)
 
     samples = [baseline, sample("idle_before", pair.server.pid, chat_port)]
 
     # Read pair_lock context_tokens.
-    context_tokens = None
-    try:
-        lock = json.load(open(os.path.join(
-            args.home, "assistant", "pair-locks", f"{args.pair_id}.json")))
-        context_tokens = lock.get("context_tokens")
-    except Exception:
-        pass
+    context_tokens = read_context_tokens(args.home, args.pair_id)
 
     phases = [
         ("plain_chat", "Hello. Reply briefly.", "chat", 64, None, None),
