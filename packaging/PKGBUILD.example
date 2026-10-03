@@ -28,7 +28,7 @@
 
 # depends=(python=3.14 openblas lapack blas glibc gcc-libs)
 # optdepends=(omarchy-ane-dkms: ANE execution on qualified chips)
-# makedepends=(python)
+# makedepends=(python dtc)   # dtc: packaging/build-dtbo.sh (opt-in GPU overlay)
 
 # The venv ships with the wheel's exact bytes: makepkg's default ELF
 # strip would break the provenance gate for every packaged install
@@ -76,6 +76,9 @@ check() {
 
 package() {
   cp -a "$srcdir/stage/usr" "$pkgdir/usr"
+  # Opt-in device tree overlay (docs/gpu-base-pstate.md): inert until the owner
+  # adds "gpu-pstate-t8103" to /etc/omarchy-platform/dtb-overlays.opt-in.
+  bash "$srcdir/mlx-omarchy-$pkgver/packaging/build-dtbo.sh" "$pkgdir"
   # options=(!strip) above: the venv ships with the wheel's exact bytes.
   # Stripping here (makepkg's default does) saves 3.2 MB of a 25.3 MB
   # libmlx.so (~0.3% of the installed tree) and breaks the provenance
