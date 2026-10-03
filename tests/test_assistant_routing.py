@@ -762,7 +762,10 @@ class RoutingStatusTests(unittest.TestCase):
 
         app.models = app.router.models = FakeModels()  # type: ignore[assignment]
         cid = app.store.create()["id"]
-        # Grey turn: grammatical options, no explicit label — the head is called.
+        # Grey turn: grammatical options, no explicit label — the head is
+        # called and measured. The head's structured_decision is then
+        # downgraded to clarify because the turn carries no criteria; the
+        # status reports the route the user actually got, plus the head ms.
         app.submit(cid, {"text": "Help me choose between the tram and the ferry.",
                          "mode": "auto"})
         deadline = time.monotonic() + 2.0
@@ -771,7 +774,8 @@ class RoutingStatusTests(unittest.TestCase):
                 break
             time.sleep(0.02)
         state = app.routing_status()
-        self.assertEqual(state["last_route"], "structured_decision")
+        self.assertEqual(state["last_route"], "clarify")
+        self.assertEqual(state["last_reason"], "missing_options_or_criteria")
         self.assertIsInstance(state["last_head_ms"], float)
         self.assertGreater(state["last_head_ms"], 0.0)
         self.assertFalse(state["last_timed_out"])
