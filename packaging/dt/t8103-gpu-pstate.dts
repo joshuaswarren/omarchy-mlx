@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: GPL-2.0+ OR MIT
+/*
+ * Overlay state: opt-in ("gpu-pstate-t8103" in /etc/omarchy-platform/dtb-overlays.opt-in).
+ *
+ * Raises the AGX firmware's base performance state on T8103 (Apple M1) from 1
+ * (396 MHz) to 6 (1278 MHz, the top of the 396/528/720/924/1128/1278 MHz OPP
+ * table). The GPU firmware starts every burst from its base state and ramps;
+ * on a GPU that was idle for 100 ms to 2 s that ramp is the whole post-pause
+ * penalty on the first request. Measured on a MacBookPro17,1 (j293), Qwen3.8-2B:
+ *   - TTFT after a 100 / 500 / 2000 ms pause: 118.1 / 119.0 / 126.0 ms
+ *     -> 110.4 / 110.3 / 115.4 ms (-9 ms, -8 %); H245, H247.
+ *   - idle power (180 s median, SMC Total System Power): 3536 mW stock vs
+ *     3529 mW base pstate 6; a 1 Hz sparse request load drew +26 mW (+0.34 %),
+ *     inside the 24 mW run-to-run spread of the stock arms.
+ *   - back-to-back throughput (decode, prefill) is unchanged and the output
+ *     digests are exact: the firmware is already at the top state under load.
+ * Only T8103 has been measured. T6001 and T6021 have other OPP tables and
+ * other GPU node names; each needs its own overlay and its own A/B before it
+ * ships. The default stays stock until those exist.
+ *
+ * The target is the node the stock board device trees (t8103-*.dtb) define as
+ * /soc/gpu@206400000. The property is read by the firmware at GPU init, so it
+ * takes effect at the next boot, after update-m1n1 has rebuilt boot.bin.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	omarchy,opt-in = "gpu-pstate-t8103";
+
+	fragment@0 {
+		target-path = "/soc/gpu@206400000";
+
+		__overlay__ {
+			apple,perf-base-pstate = <6>;
+		};
+	};
+};
