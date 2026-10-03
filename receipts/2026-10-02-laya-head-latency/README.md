@@ -124,6 +124,10 @@ call, so production never sends them to the head.
 `PYTHONPATH=serve python3 -m unittest discover -s tests -q` on the dev box:
 982 tests, 0 failures, the 15 pre-existing laya/bonsai2 environment errors,
 26 skipped (`RopeTableTests` skips there because the dev box has no mlx).
+`RopeTableTests` passed on an M1 Max (T6001) with the Omarchy GPU backend
+(wheel `0.32.3+5b18306`, provenance `verified: match`, tree `5b8b6c586`):
+table rows are bitwise equal to the per-length formula for both rope
+thetas at T = 1, 96, 163 and 512.
 
 ## Files
 
