@@ -5,11 +5,17 @@ the card component; the 4B (Compact) showed nothing for ~91 s and then no
 card at all. Where does that time go, and which levers cut it without
 breaking the card gates?
 
-**Status.** COMPLETE. Decomposition done; levers shipped and measured;
-held-out v4 run once per pair per build on boot df82d24a (base = pristine
-main at 29100916f lineage, candidate = the levers below, both declared in
-the notebook before the runs). All four columns landed; one honest
-deviation (4B first-text p95) recorded in the verdict with its mechanism.
+**Status.** COMPLETE. Decomposition done; held-out v4 run once per pair per
+build on boot df82d24a (base = pristine main at 29100916f lineage,
+candidate 1 = stream-time promotion + card-first compact prompt + envelope
+wrap; candidate 2 = candidate 1 with a lead-in sentence before the fence).
+All four columns landed. **Shipped: stream-time promotion + envelope wrap
+WITHOUT the prompt change** — candidate 1 passed every gate except the 4B
+first-text p95 (2.20 s vs 2.0), and candidate 2 failed its own dev gate on
+the 9B (2.09/2.11 s, reproducible, prefill-bound), so per the pre-declared
+decision rule the prompt change is not shipped. The shipped build differs
+from base only in coordinator timing and the wrap; see Verdict and
+Candidate 2.
 
 ## Decomposition — where the wait went (real card prompt, one turn per pair)
 
@@ -77,7 +83,11 @@ in SCHEMA_PROMPT exist because of that measured failure.
 
 ## HELD-OUT v4 — one run per pair per build (boot df82d24a, frozen sha `7f807008...`)
 
-Harness: `receipts/2026-10-02-card-latency/run_card_latency_suite.py`
+"base" = pristine main; "candidate 1" = stream-time promotion + card-first
+compact prompt + envelope wrap (NOT shipped — see Verdict); "candidate 2"
+= candidate 1 with a lead-in sentence before the fence (rejected at the
+dev gate; no held-out run). Harness:
+`receipts/2026-10-02-card-latency/run_card_latency_suite.py`
 (scoring identical to `receipts/2026-09-30-card-promotion/run_suite.py`,
 plus per-prompt first-text / first-component timestamps from the SSE
 stream). max_tokens 700, real HTTP turns, resumable checkpoints, quiet
@@ -88,7 +98,7 @@ time-to-first-component median/p95 improved.
 
 ### Compact 4B — COMPLETE
 
-| gate | base (29100916f) | candidate (levers) |
+| gate | base | candidate 1 |
 |---|---|---|
 | valid cards | **18/18** | **18/18** |
 | spurious | **0/18** | **0/18** |
@@ -111,7 +121,7 @@ where the card itself is the earlier artifact. Main owns the accept.
 
 ### Everyday 9B — COMPLETE
 
-| gate | base (29100916f) | candidate (levers) |
+| gate | base | candidate 1 |
 |---|---|---|
 | valid cards | **16/18** | **15/18** (>= 15/18 met) |
 | spurious | **0/18** | **0/18** |
@@ -138,6 +148,51 @@ valid card resulted. 15/18 is exactly the pre-declared threshold.
   (ordinary chat, plain + near-miss) is 1.90 s, and on the >2 s turns the
   first visible artifact is the card itself at 6-8 s. Recorded as a
   deviation with the mechanism; not a revert case. Main owns the accept.
+
+## Candidate 2 (lead-in sentence first) — REJECTED at the dev gate
+
+Main rejected candidate 1 on the first-text gate and directed candidate 2:
+ONE short lead-in sentence before the fence, then the card, then at most
+one more sentence. Declared in the notebook before iteration; iterated ONLY
+on the cards_dev subset. Dev result (candidate build `after2`):
+
+| pair | first-text p95 | valid | spurious | component median |
+|---|---|---|---|---|
+| compact4b | 1.19 s PASS | 4/5 (80%) | 0/10 | 8.58 s |
+| everyday9b run 1 | **2.09 s FAIL** | 4/5 | 0/10 | 13.09 s |
+| everyday9b run 2 (pre-declared variance probe) | **2.11 s FAIL** | 4/5 | 0/10 | 13.24 s |
+
+The 9B fails reproducibly, 0.09-0.11 s over the budget. Both runs' tails
+are the same two prompts: dev-01 (~2.1 s, the first turn after the server
+boots — model-map warmup) and dev-10 (~4.6 s, the only dev prompt carrying
+a full-card cue, so it pays the ~700-token schema prefill on the 9B). The
+latency is prefill-bound, not prompt-wording-bound: no wording change can
+move it. For scale, candidate 1's 9B dev p95 was 0.93 s — its sample set
+caught neither warmup prompt.
+
+**Shipped state (Main's decision rule for a failed candidate): stream-time
+promotion + the envelope wrap, WITHOUT the prompt change.** components.py
+is back to the pre-change prompt; the coordinator promotes markdown cards
+at the closed-block boundary and wraps bare-component fences. This build
+did not get its own held-out run: it differs from base only in coordinator
+timing (the same deterministic cards, emitted earlier) and in the wrap
+(rescues bare-component fences — a shape that occurred in zero of base's
+72 held-out rows), so base's validity counts are expected to carry; the
+magnitude of the markdown-card component-time gain on held-out prompts is
+unquantified until the next gate run. Candidate 1's numbers above stand as
+the measured bound of what the prompt change would have bought, and as the
+reason it is not shipped.
+
+### 9B per-prompt validity (candidate 1, the borderline run)
+
+Passing 15: v4-01..v4-06, v4-08..v4-11, v4-13, v4-14, v4-16, v4-17, v4-18
+(all card-worthy except the two above) — plus all 18 plain and near-miss
+rows clean. Failing: v4-07 and v4-12 (comparison tables with malformed
+`| : |` separator cells — the same two rows the 2026-09-30 gate missed, a
+known rule gap left unfixed to avoid tuning on held-out) and v4-15 (facts:
+the card-first compact prompt changed the 9B's reply shape and no valid
+card resulted — the direct cost of candidate 1's prompt, and the row that
+pushed 16/18 down to the 15/18 threshold).
 
 ## Dev-subset validity check (candidate build, cards_dev subset, 15 prompts per pair)
 

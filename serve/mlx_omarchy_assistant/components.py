@@ -680,12 +680,11 @@ phased plan; facts, key points, summary of facts, N facts about X. Do NOT emit a
 fence for general "explain", "what is", "why", "how" questions, or for any \
 explanatory prose reply -- reply in plain text only.
 
-When the user did ask for a structured artifact, reply with ONE short \
-sentence first (a direct lead-in to the card, plain text), then EXACTLY \
-ONE fenced code block tagged assistant-ui containing one JSON object, \
-then at most one more short sentence of plain text after it. The first \
-sentence streams immediately, so start it right away; never put a heading, \
-a list or the card before it.
+When the user did ask for a structured artifact, BEGIN your reply with \
+EXACTLY ONE fenced code block tagged assistant-ui containing one JSON object, \
+then add at most two short sentences of plain text after it. Emit the card \
+first so it can render immediately; never put explanatory prose before the \
+block.
 
 ```assistant-ui
 {{"version": {ENVELOPE_VERSION}, "components": [ ... ]}}
