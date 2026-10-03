@@ -74,6 +74,15 @@ def main() -> int:
     setup_s, _ = wait_setup()
     say(f"SETUP_COMPLETE {setup_s:.1f}s")
 
+    # Enable voice the way a user does (setup with voice:true): this
+    # prepares synthesis + recognition and puts voice in the pair plan,
+    # which is what arms the primer. Without it, /api/speak refuses
+    # (voice not requested) and primed never fires.
+    call("POST", "/api/setup", {"pair_id": "everyday",
+                                "approve_download": True, "voice": True})
+    setup_s, _ = wait_setup()
+    say(f"VOICE_SETUP_COMPLETE {setup_s:.1f}s")
+
     primed = False
     t0 = time.monotonic()
     while time.monotonic() - t0 < PRIMED_TIMEOUT_S:
