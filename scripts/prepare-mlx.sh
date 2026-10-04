@@ -92,6 +92,11 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # numbers, so this one is applied with fuzz 3 (context still verified).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=3 \
   < "$ROOT/patches/mlx-fast-greedy-argmax.patch"
+# Symmetric-int8 matmul with runtime-quantized activations
+# (fast::Int8Matmul; the TensorFold MiniMax-H3 W8A8 path). Composed
+# fallback in fast.cpp, Vulkan kernel via shaders/int8_matmul.comp.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-int8-matmul.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
