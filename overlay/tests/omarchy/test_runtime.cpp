@@ -882,6 +882,154 @@ TEST_CASE("dispatch bindings stamp their owners against the open batch") {
   alloc.free(dst);
 }
 
+TEST_CASE("wave levels schedule hazards into strictly ordered waves") {
+  using omarchy::TrackedRange;
+  using omarchy::WaveNode;
+  // The scheduler treats VkBuffer as an opaque key: fake handles suffice.
+  auto buf = [](uintptr_t v) {
+    return reinterpret_cast<VkBuffer>(v);
+  };
+  auto rng = [](VkBuffer b, uint64_t off, uint64_t end) {
+    return TrackedRange{b, static_cast<VkDeviceSize>(off),
+                        static_cast<VkDeviceSize>(end)};
+  };
+  // Owning node builder: WaveNode holds non-owning spans, so the range
+  // vectors must outlive the wave_levels call (same contract as
+  // emit_pending, whose spans point into the buffered PendingNodes).
+  struct Owned {
+    std::vector<TrackedRange> reads;
+    std::vector<TrackedRange> writes;
+  };
+  auto to_nodes = [](std::vector<Owned>& owned) {
+    std::vector<WaveNode> nodes;
+    nodes.reserve(owned.size());
+    for (auto& o : owned) {
+      nodes.push_back({o.reads, o.writes});
+    }
+    return nodes;
+  };
+  // Property checker: (a) no hazard pair shares a wave, (b) every hazard
+  // edge crosses waves (later level > earlier level), (c) each level is
+  // the earliest legal wave: 0 without hazard sources, else
+  // 1 + max(level of hazard sources).
+  auto check = [](std::span<const WaveNode> nodes,
+                  std::span<const uint32_t> level) {
+    auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
+      return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
+    };
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      uint32_t expect = 0;
+      for (size_t j = 0; j < i; ++j) {
+        bool raw = false, war = false, waw = false;
+        for (const auto& r : nodes[i].reads) {
+          for (const auto& w : nodes[j].writes) {
+            raw = raw || overlaps(r, w);
+          }
+        }
+        for (const auto& w : nodes[i].writes) {
+          for (const auto& tw : nodes[j].writes) {
+            waw = waw || overlaps(w, tw);
+          }
+          for (const auto& tr : nodes[j].reads) {
+            war = war || overlaps(w, tr);
+          }
+        }
+        bool hazard = raw || waw || war;
+        if (hazard) {
+          REQUIRE(level[i] > level[j]);
+        }
+        if (hazard) {
+          expect = std::max(expect, level[j] + 1);
+        }
+      }
+      CHECK(level[i] == expect);
+      for (size_t k = i + 1; k < nodes.size(); ++k) {
+        if (level[i] == level[k]) {
+          // Mirror the hazard test on the ordered pair (i earlier).
+          bool hazard = false;
+          for (const auto& r : nodes[k].reads) {
+            for (const auto& w : nodes[i].writes) {
+              hazard = hazard || overlaps(r, w);
+            }
+          }
+          for (const auto& w : nodes[k].writes) {
+            for (const auto& tw : nodes[i].writes) {
+              hazard = hazard || overlaps(w, tw);
+            }
+            for (const auto& tr : nodes[i].reads) {
+              hazard = hazard || overlaps(w, tr);
+            }
+          }
+          CHECK_FALSE(hazard);
+        }
+      }
+    }
+  };
+
+  // Read-read sharing stays in one wave.
+  {
+    VkBuffer b = buf(0x1000);
+    std::vector<Owned> owned = {
+        {{}, {rng(b, 0, 64)}},   // producer writes b
+        {{rng(b, 0, 64)}, {}},   // consumer 1 reads b
+        {{rng(b, 0, 64)}, {}},   // consumer 2 reads b
+    };
+    std::vector<WaveNode> nodes = to_nodes(owned);
+    auto level = omarchy::wave_levels(nodes);
+    const std::vector<uint32_t> want = {0, 1, 1};
+    CHECK(level == want);
+    check(nodes, level);
+  }
+  // RAW, WAR and WAW each force one wave of separation.
+  {
+    VkBuffer b = buf(0x2000);
+    std::vector<Owned> owned = {
+        {{rng(b, 0, 64)}, {}},   // reader
+        {{}, {rng(b, 0, 64)}},   // WAR writer
+        {{}, {rng(b, 0, 64)}},   // WAW writer
+        {{rng(b, 0, 64)}, {}},   // RAW reader
+    };
+    std::vector<WaveNode> nodes = to_nodes(owned);
+    auto level = omarchy::wave_levels(nodes);
+    const std::vector<uint32_t> want = {0, 1, 2, 3};
+    CHECK(level == want);
+    check(nodes, level);
+  }
+  // Disjoint ranges of one buffer do not hazard; independent work hoists
+  // ahead of the dependent tail (the wave win: 4 nodes, 2 waves).
+  {
+    VkBuffer b = buf(0x3000);
+    VkBuffer c = buf(0x4000);
+    std::vector<Owned> owned = {
+        {{}, {rng(b, 0, 100)}},        // A writes b[0,100)
+        {{}, {rng(c, 0, 100)}},        // B writes c (independent)
+        {{rng(b, 0, 100)}, {}},        // C reads b (needs A)
+        {{}, {rng(b, 200, 300)}},      // D writes b[200,300) (independent of A)
+    };
+    std::vector<WaveNode> nodes = to_nodes(owned);
+    auto level = omarchy::wave_levels(nodes);
+    const std::vector<uint32_t> want = {0, 0, 1, 0};
+    CHECK(level == want);
+    check(nodes, level);
+  }
+  // Diamond: one producer, two consumers, one join writer closes at the
+  // wave after both consumers (WAW on the producer, WAR on the reads).
+  {
+    VkBuffer b = buf(0x5000);
+    std::vector<Owned> owned = {
+        {{}, {rng(b, 0, 64)}},
+        {{rng(b, 0, 64)}, {}},
+        {{rng(b, 0, 64)}, {}},
+        {{}, {rng(b, 0, 64)}},
+    };
+    std::vector<WaveNode> nodes = to_nodes(owned);
+    auto level = omarchy::wave_levels(nodes);
+    const std::vector<uint32_t> want = {0, 1, 1, 2};
+    CHECK(level == want);
+    check(nodes, level);
+  }
+}
+
 TEST_CASE("buffer round trip through the Vulkan encoder") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
