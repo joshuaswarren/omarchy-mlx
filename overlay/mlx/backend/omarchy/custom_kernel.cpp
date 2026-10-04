@@ -201,7 +201,12 @@ void translate_c_style_casts(std::string& code) {
       {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"}, {"int", "int"},
       {"uint", "uint"}, {"float", "float"}, {"bool", "bool"},
       {"int32_t", "int"}, {"uint32_t", "uint"},
-      {"int64_t", "int64_t"}, {"uint64_t", "uint64_t"},
+      // GLSL SSBO subscripts take 32-bit integers only (glslang rejects
+      // 64-bit index expressions even with the int64 extension), so 64-bit
+      // index casts narrow to uint. Buffers above 2^32 elements are out of
+      // scope for this translation and still fail later, by name, if the
+      // kernel does other 64-bit arithmetic with them.
+      {"int64_t", "uint"}, {"uint64_t", "uint"},
       {"size_t", "uint"},
   };
   size_t search_from = 0;
@@ -232,11 +237,20 @@ void translate_c_style_casts(std::string& code) {
       consumed = end - next + 1;
     } else if (std::isalnum(static_cast<unsigned char>(code[next])) ||
                code[next] == '_') {
+      // An identifier argument extends through any call chain it applies
+      // to: `(int8_t)clamp(a, b)` must become `int8_t(clamp(a, b))`, not
+      // `int8_t(clamp)(a, b)`.
       size_t end = next;
-      while (end < code.size() &&
-             (std::isalnum(static_cast<unsigned char>(code[end])) ||
-              code[end] == '_')) {
-        end++;
+      bool scanning = true;
+      while (scanning && end < code.size()) {
+        const char c = code[end];
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+          end++;
+        } else if (c == '(') {
+          end = matching_delimiter(code, end, '(', ')') + 1;
+        } else {
+          scanning = false;
+        }
       }
       argument = code.substr(next, end - next);
       consumed = end - next;
@@ -594,6 +608,8 @@ Translation translate_msl(
   replace_all(body, "simd_shuffle_up", "subgroupShuffleUp");
   replace_all(body, "simd_shuffle_xor", "subgroupShuffleXor");
   replace_all(body, "simd_shuffle", "subgroupShuffle");
+  // MSL round-half-to-even.
+  replace_word(body, "rint", "roundEven");
   replace_word(body, "constexpr", "const");
   translate_types(body);
 
