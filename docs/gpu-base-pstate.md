@@ -72,7 +72,17 @@ prints `6`. To turn it off, remove the line from the opt-in file and rebuild.
   short bursts at a high base state on battery separately from whole-machine
   power.
 - Other properties of the same node (`apple,perf-tgt-utilization`,
-  filter and gain constants) are not changed. They are the subject of H248.
+  filter and gain constants) are not changed by this overlay.
+- Packaged path verified on one M1 (H248): the built overlay, the opt-in line,
+  `update-m1n1` and a reboot gave `apple,perf-base-pstate` = 6 with the
+  target-utilization value and the ANE node unchanged. Removing the files,
+  running `update-m1n1` and rebooting restored base state 1 and the stock
+  `boot.bin` hash. The ANE smoke did not run in that boot (it is not in the
+  0.4.0 package). A separate lab-overlay boot with base state 6 passed the ANE
+  smoke 20 of 20 (H246).
+- Other base states on the same chip (H248): base 4 removes 62-65% of the
+  post-pause latency penalty, base 3 removes 38%, and target-utilization 40
+  removes 30% and moves no sustained cell. Base 6 is the shipped value.
 
 ## Package
 
