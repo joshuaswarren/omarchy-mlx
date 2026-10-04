@@ -146,6 +146,8 @@ struct MlxOmarchyTraceSnapshot {
   uint64_t omarchy_finalize_calls;
   uint64_t commit_calls_with_work;
   uint64_t commit_calls_noop;
+  uint64_t barriers_emitted;
+  uint64_t barriers_skipped;
 };
 
 #ifdef MLX_OMARCHY_GPU_PROFILING

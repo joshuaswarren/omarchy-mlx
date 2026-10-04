@@ -100,6 +100,17 @@ records digest `dbf70497`, +2.9% decode) on the dependency-tracked Honeykrisp
 driver; other SoCs should re-run their own digest gate. Skip and emit counts
 appear in the GPU profile and in the runtime-test trace counters.
 
+Wave scheduling (scheduling only; results are bit-identical):
+`MLX_OMARCHY_WAVE_SCHED=1` buffers the open batch's dispatches, copies, and
+fills instead of recording them in tape order, and records them at submit in
+greedy earliest-wave order — one full dependency barrier per wave, tape order
+preserved within a wave. A node joins the current wave only when it has no
+RAW/WAW/WAR overlap (exact byte ranges, SPIR-V reflected read/write split)
+with any earlier node, so hazards stay ordered exactly as in tape order and
+outputs are unchanged; hazard-free nodes run concurrently instead of
+serializing behind barriers their tape neighbors induced. Requires gated
+barriers. Off by default until its jw16 A/B lands.
+
 Submit batching (scheduling only; results are bit-identical): the open batch is
 submitted at 4096 nodes or at the byte budget. `MLX_OMARCHY_BATCH_NODES=<n>`
 overrides the node budget. `MLX_OMARCHY_BATCH_FIRST=<n>` submits the first batch
