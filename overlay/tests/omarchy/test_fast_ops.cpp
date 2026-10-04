@@ -2894,18 +2894,27 @@ TEST_CASE("fused rope offset sweep validates every tolerance band") {
     }
   }
 
-  // The gate boundary itself: one step past theta 1e5 the fused path
-  // refuses by name - the top of the sweep confirms the gate fires,
-  // not that the kernel is accurate there.
+  // The gate boundary itself: one step past the 5e5 reduction envelope
+  // (kTrigArgumentLimit, de34407c1) the fused path refuses by name - the
+  // top of the sweep confirms the gate fires, not that the kernel is
+  // accurate there. The fence text names the trig reduction limit since
+  // the Cody-Waite rework; the pre-5e5 offsets (1e5) are inside the
+  // envelope now and must NOT refuse.
   Shape dshape{1, 1, 4, 16};
   array x = astype(rope_input(dshape, 179), float32, stream);
-  array past_gate = array(100000, int32);
+  array inside_new_envelope = array(200000, int32);
+  auto accepted = caught_message([&] {
+    fast::rope(x, 16, false, 10000.0f, 1.0f, inside_new_envelope, std::nullopt, stream)
+        .eval();
+  });
+  CHECK(accepted.find("exceeds the trig reduction limit") == std::string::npos);
+  array past_gate = array(600000, int32);
   auto message = caught_message([&] {
     fast::rope(x, 16, false, 10000.0f, 1.0f, past_gate, std::nullopt, stream)
         .eval();
   });
   CHECK(message.find("[omarchy] RoPE") != std::string::npos);
-  CHECK(message.find("exceeds the built-in accuracy limit") !=
+  CHECK(message.find("exceeds the trig reduction limit") !=
         std::string::npos);
 }
 
@@ -2934,13 +2943,13 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
   require_close(flat(got, stream), widen(flat(want, stream)), 1e-2,
                 "rope 32k-class position");
 
-  array over_limit = array(200000, int32);
+  array over_limit = array(1000000, int32);
   auto message = caught_message([&] {
     fast::rope(x, 16, false, 10000.0f, 1.0f, over_limit, std::nullopt, stream)
         .eval();
   });
   CHECK(message.find("[omarchy] RoPE") != std::string::npos);
-  CHECK(message.find("exceeds the built-in accuracy limit") != std::string::npos);
+  CHECK(message.find("exceeds the trig reduction limit") != std::string::npos);
   // The freqs leg carries the same gate: tiny freqs blow the bound up.
   array tiny_freqs = full({8}, 1e-8f, float32, stream);
   auto freqs_message = caught_message([&] {
@@ -2948,7 +2957,7 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
         .eval();
   });
   CHECK(
-      freqs_message.find("exceeds the built-in accuracy limit") !=
+      freqs_message.find("exceeds the trig reduction limit") !=
       std::string::npos);
 }
 
