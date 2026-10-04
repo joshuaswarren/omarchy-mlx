@@ -3587,17 +3587,6 @@ static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
       name.find("G13C") == std::string::npos;
 }
 
-// Stream-based twin for primitive-level per-chip policy (use_fallback).
-// The omarchy backend owns one Vulkan device per process (index 0); CPU
-// streams never take the fused route anyway.
-inline bool g13_legacy_stream(Stream s) {
-  if (s.device == Device::cpu) {
-    return false;
-  }
-  const auto& name = omarchy::device(0).capabilities().device_name;
-  return name.find("G13") != std::string::npos &&
-      name.find("G13C") == std::string::npos;
-}
 
 static bool gdn_decode_tile_enabled(omarchy::CommandEncoder& encoder) {
   int override_value = decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE");
@@ -10976,13 +10965,7 @@ bool GatedDeltaUpdate::use_fallback(
   // fused kernels apply load+skip, so a mask no longer forces the
   // composed fallback on its own.
   (void)has_mask;
-  // Hk<Hv uses the composed chain unless the mlx-lm patch explicitly
-  // repeats q/k under MLX_OMARCHY_GDN_RAW_REPEAT=1. Keep G13 legacy parts
-  // composed by default; the tile override selects the opt-in fused
-  // implementation consistently with the dispatch-path selection.
-  const int tile_override = decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE");
-  const bool g13_legacy = tile_override < 0 && g13_legacy_stream(s);
-  return Dk != 128 || Dv != 128 || Hk != Hv || g13_legacy;
+  return Dk != 128 || Dv != 128 || Hk != Hv;
 }
 
 // Gradient of the gated delta update (upstream #4565): the fused backward
