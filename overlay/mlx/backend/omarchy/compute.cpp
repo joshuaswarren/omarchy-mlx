@@ -339,6 +339,9 @@
 #include "qmm_coopmat_x32_fn_g4.h"
 #include "qmm_coopmat_x32_fn_g8.h"
 #include "qmm_coopmat_x32_fn_twon.h"
+#include "qmm_coopmat_x32_fn_g4_chunk.h"
+#include "qmm_coopmat_x32_fn_g4_pad.h"
+#include "qmm_coopmat_x32_fn_g4_chunk_pad.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
@@ -1329,6 +1332,13 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_x32_fn_g8, qmm_coopmat_x32_fn_g8_size};
     case ComputeKernel::QmmPrefillCoopmatBF16X32FullNTwoN:
       return {qmm_coopmat_x32_fn_twon, qmm_coopmat_x32_fn_twon_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNChunk:
+      return {qmm_coopmat_x32_fn_g4_chunk, qmm_coopmat_x32_fn_g4_chunk_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad:
+      return {qmm_coopmat_x32_fn_g4_pad, qmm_coopmat_x32_fn_g4_pad_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNChunkPad:
+      return {qmm_coopmat_x32_fn_g4_chunk_pad,
+              qmm_coopmat_x32_fn_g4_chunk_pad_size};
     case ComputeKernel::GatedDeltaDecodeBF16:
       return {gated_delta_decode_bf16, gated_delta_decode_bf16_size};
     case ComputeKernel::GatedDeltaDecodeBF16Pf:

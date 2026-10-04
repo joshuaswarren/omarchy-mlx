@@ -807,6 +807,15 @@ enum class ComputeKernel : uint16_t {
   GatedDeltaDecodeBF16Composed,
   GatedDeltaDecodeBF16UntiledComposed,
   GatedDeltaDecodeBF16PfComposed,
+  // QmmPeak twins of the g4 route (receipts/2026-10-04-qmm-roofline):
+  // whole-chunk B dequant behind one fence (Chunk) and a padded shared
+  // B-tile row stride (LdsPad), same per-output ascending-k f32 chain
+  // - digest-identical to the shipped kernels by construction.
+  // Env-selected (MLX_OMARCHY_QMM_CHUNK / _LDSPAD in primitives.cpp).
+  // Append-only profile ids.
+  QmmPrefillCoopmatBF16X32FullNChunk,
+  QmmPrefillCoopmatBF16X32FullNLdsPad,
+  QmmPrefillCoopmatBF16X32FullNChunkPad,
   Count,
 };
 
