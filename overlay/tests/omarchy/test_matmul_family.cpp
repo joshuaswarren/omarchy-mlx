@@ -4267,26 +4267,29 @@ TEST_CASE("qmm prefill cast dedup is bit-identical and never stale") {
   }
   // Three distinct weight matrices: a memo bug that served one
   // consumer's f32 bytes to another cannot hide behind identical
-  // outputs.
-  std::vector<std::vector<float>> matrices(3);
-  std::vector<array> w_words(3);
-  std::vector<array> scales(3);
-  std::vector<array> biases(3);
+  // outputs. (mlx::core::array has no default constructor, so the
+  // per-index vectors grow by move instead of sizing up front.)
+  std::vector<array> w_words;
+  std::vector<array> scales;
+  std::vector<array> biases;
+  w_words.reserve(3);
+  scales.reserve(3);
+  biases.reserve(3);
   for (int r = 0; r < 3; ++r) {
-    matrices[r].resize(static_cast<size_t>(n) * k);
-    for (auto& value : matrices[r]) {
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
       value = dist(gen);
     }
     HostQuantizedWeights weights =
-        host_affine_quantize(matrices[r], n, k, group_size, bits);
+        host_affine_quantize(matrix, n, k, group_size, bits);
     weights.scales = round_trip(stream, weights.scales, bfloat16);
     weights.biases = round_trip(stream, weights.biases, bfloat16);
-    w_words[r] = array(
-        weights.words.begin(), Shape{n, words_per_row}, uint32);
-    scales[r] = array(
-        weights.scales.begin(), Shape{n, groups_per_row}, bfloat16);
-    biases[r] = array(
-        weights.biases.begin(), Shape{n, groups_per_row}, bfloat16);
+    w_words.push_back(
+        array(weights.words.begin(), Shape{n, words_per_row}, uint32));
+    scales.push_back(
+        array(weights.scales.begin(), Shape{n, groups_per_row}, bfloat16));
+    biases.push_back(
+        array(weights.biases.begin(), Shape{n, groups_per_row}, bfloat16));
   }
   array x(x_values.begin(), Shape{m, k}, bfloat16);
 
