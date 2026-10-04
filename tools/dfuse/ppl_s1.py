@@ -36,20 +36,17 @@ def score(env_on):
         if len(ids) < 8:
             continue
         cache = make_prompt_cache(model)
-        # S=1 decode scoring: feed every token as its own single-token step
-        # so each GDN layer runs the decode kernel (route-sensitive).
-        prev = None
-        for t in ids:
-            if prev is None:
-                logits = model(mx.array([[t]], dtype=mx.int32), cache=cache)
-            else:
-                logits = model(mx.array([[prev]], dtype=mx.int32), cache=cache)
+        # S=1 decode scoring: feed token i, score token i+1. Every step is a
+        # single-token decode forward (route-sensitive). The original probe
+        # fed token 0 and scored P(token0 | token0) — a self-referential term
+        # biased identically in both arms; fixed 2026-10-04 (GduBar audit).
+        for i in range(len(ids) - 1):
+            logits = model(mx.array([[ids[i]]], dtype=mx.int32), cache=cache)
             last = logits[:, -1, :].astype(mx.float32)
-            lp = last[0, t] - mx.logsumexp(last, axis=-1)[0]
+            lp = last[0, ids[i + 1]] - mx.logsumexp(last, axis=-1)[0]
             mx.eval(lp)
             total += -float(lp)
             count += 1
-            prev = t
     mean_nll = total / max(count, 1)
     return {"mean_nll_per_token": mean_nll, "tokens": count,
             "exp_mean_nll": float(mx.exp(mx.array(mean_nll)))}
