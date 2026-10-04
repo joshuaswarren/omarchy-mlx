@@ -240,6 +240,10 @@ void translate_c_style_casts(std::string& code) {
       // An identifier argument extends through any call chain it applies
       // to: `(int8_t)clamp(a, b)` must become `int8_t(clamp(a, b))`, not
       // `int8_t(clamp)(a, b)`.
+      // The replacement span is recomputed from the FINAL end below; the
+      // scanner previously advanced search_from past a span that no longer
+      // matched the string after earlier replacements (heap corruption,
+      // 'free(): invalid next size' on the H3 _QUANTIZE kernel).
       size_t end = next;
       bool scanning = true;
       while (scanning && end < code.size()) {
