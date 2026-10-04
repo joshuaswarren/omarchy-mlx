@@ -270,6 +270,10 @@
 #include "qmm_vec_q4_word_f16.h"
 #include "qmm_vec_q4_word_f32.h"
 #include "qmm_vec_q4_word_subgroup_bf16.h"
+#include "qmm_vec_q4_word_subgroup_f16_g42.h"
+#include "qmm_vec_q4_word_subgroup_f16_g81.h"
+#include "qmm_vec_q4_word_subgroup_bf16_g42.h"
+#include "qmm_vec_q4_word_subgroup_bf16_g81.h"
 #include "qmm_vec_q4_word_subgroup_f16.h"
 #include "qmm_vec_q4_word_subgroup_f32.h"
 #include "qmm_vec_q4_multi_bf16.h"
@@ -277,6 +281,12 @@
 #include "qmm_vec_q4_multi_f32.h"
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
+#include "qmm_vec_q4_multi_subgroup_f16_g42.h"
+#include "qmm_vec_q4_multi_subgroup_f16_g81.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_g42.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_g81.h"
+#include "qmm_vec_q4_multi_outgate_bf16_g42.h"
+#include "qmm_vec_q4_multi_outgate_bf16_g81.h"
 #include "qmm_vec_q4_multi_subgroup_f16.h"
 #include "qmm_vec_q4_multi_subgroup_f32.h"
 #include "sdpa_decode_native_f16.h"
@@ -1298,6 +1308,22 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16,
           qmm_vec_q4_word_subgroup_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupF16G42:
+      return {
+          qmm_vec_q4_word_subgroup_f16_g42,
+          qmm_vec_q4_word_subgroup_f16_g42_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16G42:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_g42,
+          qmm_vec_q4_word_subgroup_bf16_g42_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupF16G81:
+      return {
+          qmm_vec_q4_word_subgroup_f16_g81,
+          qmm_vec_q4_word_subgroup_f16_g81_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16G81:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_g81,
+          qmm_vec_q4_word_subgroup_bf16_g81_size};
     case ComputeKernel::QmmTileF32:
       return {qmm_tile_f32, qmm_tile_f32_size};
     case ComputeKernel::QmmTileF16:
@@ -1460,6 +1486,30 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_outgate_bf16,
           qmm_vec_q4_multi_outgate_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupF16G42:
+      return {
+          qmm_vec_q4_multi_subgroup_f16_g42,
+          qmm_vec_q4_multi_subgroup_f16_g42_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16G42:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_g42,
+          qmm_vec_q4_multi_subgroup_bf16_g42_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupF16G81:
+      return {
+          qmm_vec_q4_multi_subgroup_f16_g81,
+          qmm_vec_q4_multi_subgroup_f16_g81_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16G81:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_g81,
+          qmm_vec_q4_multi_subgroup_bf16_g81_size};
+    case ComputeKernel::QmmVecQ4MultiOutgateBF16G42:
+      return {
+          qmm_vec_q4_multi_outgate_bf16_g42,
+          qmm_vec_q4_multi_outgate_bf16_g42_size};
+    case ComputeKernel::QmmVecQ4MultiOutgateBF16G81:
+      return {
+          qmm_vec_q4_multi_outgate_bf16_g81,
+          qmm_vec_q4_multi_outgate_bf16_g81_size};
     case ComputeKernel::SdpaDecodeNativeF16:
       return {sdpa_decode_native_f16, sdpa_decode_native_f16_size};
     case ComputeKernel::SdpaDecodeNativeBF16:

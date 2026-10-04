@@ -817,6 +817,22 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
   QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // Qmv geometry twins of the Q4 word subgroup decode kernels
+  // (MLX_OMARCHY_QMV_GEOM, default off): 42 = ROWS_PER_SLOT 4 x
+  // SLOTS_PER_GROUP 2 (64 threads, the Metal qmv_fast workgroup shape),
+  // 81 = ROWS_PER_SLOT 8 x SLOTS_PER_GROUP 1 (32 threads). Same 8 rows
+  // per workgroup, same words per lane, same subgroupAdd pairing -
+  // bit-identical outputs. Append-only profile ids.
+  QmmVecQ4WordSubgroupF16G42,
+  QmmVecQ4WordSubgroupBF16G42,
+  QmmVecQ4WordSubgroupF16G81,
+  QmmVecQ4WordSubgroupBF16G81,
+  QmmVecQ4MultiSubgroupF16G42,
+  QmmVecQ4MultiSubgroupBF16G42,
+  QmmVecQ4MultiSubgroupF16G81,
+  QmmVecQ4MultiSubgroupBF16G81,
+  QmmVecQ4MultiOutgateBF16G42,
+  QmmVecQ4MultiOutgateBF16G81,
   Count,
 };
 

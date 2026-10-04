@@ -76,6 +76,32 @@ namespace mlx::core {
 
 namespace {
 
+// Qmv workgroup-geometry A/B (MLX_OMARCHY_QMV_GEOM, default off). The
+// shipped Q4 word subgroup kernels run ROWS_PER_SLOT 2 x SLOTS_PER_GROUP 4
+// (128 threads, 8 rows per workgroup); Metal's qmv_fast runs 2 simdgroups x
+// 4 rows per simdgroup (64 threads, same 8 rows). "42" selects the Metal
+// shape (4 rows per slot, 2 slots), "81" one slot of 8 rows (32 threads).
+// Every variant keeps 8 rows per workgroup, the same words per lane, the
+// same quad order, and the same subgroupAdd pairing, so each output row's
+// accumulation chain is unchanged: bit-identical outputs (pinned by the
+// qmv_ab digest check). Unset or any other value keeps the shipped kernels.
+int qmv_geom_variant() {
+  static const int variant = [] {
+    const char* env = std::getenv("MLX_OMARCHY_QMV_GEOM");
+    if (env == nullptr) {
+      return 0;
+    }
+    if (std::strcmp(env, "42") == 0) {
+      return 42;
+    }
+    if (std::strcmp(env, "81") == 0) {
+      return 81;
+    }
+    return 0;
+  }();
+  return variant;
+}
+
 // Width/rows dispatch guard for the Apple row reduction, measured on jw16
 // (M1 Max, paired interleaved same-binary A/B, notebook lane Jw16NormApple3):
 // - width 128 loses 13-31% on the gated/scaled kernels and ~9% on the GDN
@@ -7386,7 +7412,22 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     // Eligibility was computed before dense normalization because the packed
     // f16 input view also requires a 16-byte-aligned x row.
-    auto vec_kernel = subgroup_ready
+    int qmv_geom = qmv_geom_variant();
+    bool geom_ready = use_q4_word && subgroup_ready && qmv_geom != 0 &&
+        (out.dtype() == float16 || out.dtype() == bfloat16);
+    auto vec_kernel = geom_ready
+        ? (qmv_geom == 42
+              ? select_float_kernel(
+                    out.dtype(),
+                    omarchy::ComputeKernel::QmmVecQ4WordSubgroupF16G42,
+                    omarchy::ComputeKernel::QmmVecQ4WordSubgroupF16G42,
+                    omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16G42)
+              : select_float_kernel(
+                    out.dtype(),
+                    omarchy::ComputeKernel::QmmVecQ4WordSubgroupF16G81,
+                    omarchy::ComputeKernel::QmmVecQ4WordSubgroupF16G81,
+                    omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16G81))
+        : subgroup_ready
         ? select_float_kernel(
               out.dtype(),
               use_q4_word
@@ -8049,8 +8090,29 @@ bool dispatch_quantized_gemv_group(
     bindings[kQmmVecMultiBindings + 1] = binding(outgate->gate);
     bindings[kQmmVecMultiBindings + 2] = binding(outgate->x);
   }
+  // MLX_OMARCHY_QMV_GEOM twins: same per-row arithmetic, different
+  // rows-per-slot split (see qmv_geom_variant). f16/bf16 only; the
+  // out-gate fold exists only in bf16.
+  int qmv_geom = qmv_geom_variant();
+  bool geom_ready = subgroup_ready && qmv_geom != 0 &&
+      (dtype == float16 || dtype == bfloat16);
   auto kernel = outgate != nullptr
-      ? ComputeKernel::QmmVecQ4MultiOutgateBF16
+      ? (geom_ready && dtype == bfloat16
+            ? (qmv_geom == 42 ? ComputeKernel::QmmVecQ4MultiOutgateBF16G42
+                              : ComputeKernel::QmmVecQ4MultiOutgateBF16G81)
+            : ComputeKernel::QmmVecQ4MultiOutgateBF16)
+      : geom_ready
+      ? (qmv_geom == 42
+            ? select_float_kernel(
+                  dtype,
+                  ComputeKernel::QmmVecQ4MultiSubgroupF16G42,
+                  ComputeKernel::QmmVecQ4MultiSubgroupF16G42,
+                  ComputeKernel::QmmVecQ4MultiSubgroupBF16G42)
+            : select_float_kernel(
+                  dtype,
+                  ComputeKernel::QmmVecQ4MultiSubgroupF16G81,
+                  ComputeKernel::QmmVecQ4MultiSubgroupF16G81,
+                  ComputeKernel::QmmVecQ4MultiSubgroupBF16G81))
       : subgroup_ready
       ? select_float_kernel(
             dtype,
