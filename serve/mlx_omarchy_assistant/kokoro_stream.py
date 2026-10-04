@@ -269,13 +269,25 @@ class KokoroStreamer:
     def _stream_ranges(self, asr, F0_curve, N_curve, s, voice: str,
                        ranges: list[tuple[int, int]]) -> Iterator:
         """Decode each utterance range with aligned-frame context and join
-        neighbours through an equal-power crossfade."""
+        neighbours through a linear-gain crossfade."""
         import mlx.core as mx
         import numpy as np
         frames = int(asr.shape[2])
         fade = min(SEAM_FADE_SAMPLES, UTTERANCE_CONTEXT_FRAMES * FRAME_SAMPLES)
         pending = np.zeros(0, dtype=np.float32)
         pending_start = 0
+
+        # The harmonic source and its STFT are built ONCE over the whole
+        # chunk so every utterance slice inherits the absolute source phase
+        # (a per-slice rebuild resets the phase accumulator and decorrelates
+        # the slice audio from the whole call).
+        gen = self.decoder.generator
+        f0_up = gen.f0_upsamp(F0_curve[:, None].transpose(0, 2, 1))
+        source, _, _ = gen.m_source(f0_up)
+        source = mx.squeeze(source.transpose(0, 2, 1), axis=1)
+        mag, phase = gen.stft.transform(source)
+        har = mx.concatenate([mag, phase], axis=1).swapaxes(2, 1)
+        mx.eval(har)
 
         def emit_upto(pos: int):
             nonlocal pending, pending_start
@@ -304,7 +316,7 @@ class KokoroStreamer:
                     else F0_curve[:, :, f0a:f0b],
                     N_curve[:, f0a:f0b] if N_curve.ndim == 2
                     else N_curve[:, :, f0a:f0b],
-                    s, voice):
+                    s, voice, har, ctx0):
                 if k > 0 and not faded:
                     cut = first * FRAME_SAMPLES
                     half = fade // 2
@@ -324,9 +336,14 @@ class KokoroStreamer:
                 yield from emit_upto(cut_to)
         yield from emit_upto(pending_start + pending.size)
 
-    def _render_pieces(self, asr, F0_curve, N_curve, s, voice: str):
+    def _render_pieces(self, asr, F0_curve, N_curve, s, voice: str,
+                       har=None, ctx0: int = 0):
         """Yield float32 window pieces over one context slice: the unchanged
-        decoder for one-window utterances, else windowed last-stage decoding."""
+        decoder for one-window utterances, else windowed last-stage decoding.
+
+        `har` is the whole-chunk harmonic STFT and `ctx0` the slice's first
+        aligned frame, so every window reads the source at its ABSOLUTE
+        position (phase-continuous with the whole call)."""
         import mlx.core as mx
         import numpy as np
         if int(asr.shape[2]) <= WINDOW_FRAMES:
@@ -334,7 +351,7 @@ class KokoroStreamer:
             return
         self._table["current"] = self._stats[voice]
         try:
-            yield from self._decode(asr, F0_curve, N_curve, s)
+            yield from self._decode(asr, F0_curve, N_curve, s, har, ctx0)
         finally:
             self._table["current"] = None
 
@@ -348,7 +365,8 @@ class KokoroStreamer:
         audio = np.asarray(audio).reshape(-1)[FRAME_SAMPLES * first:FRAME_SAMPLES * end]
         return np.ascontiguousarray(audio, dtype=np.float32)
 
-    def _decode(self, asr, F0_curve, N_curve, s, keep=None) -> Iterator:
+    def _decode(self, asr, F0_curve, N_curve, s, har_abs=None, ctx0: int = 0,
+                keep=None) -> Iterator:
         import mlx.core as mx
         import numpy as np
         gen = self.decoder.generator
@@ -356,16 +374,29 @@ class KokoroStreamer:
         source, _, _ = gen.m_source(f0_up)
         source = mx.squeeze(source.transpose(0, 2, 1), axis=1)
         mag, phase = gen.stft.transform(source)
-        har = mx.concatenate([mag, phase], axis=1).swapaxes(2, 1)
-        x = self._first_stage(self._low_stack(asr, F0_curve, N_curve, s), s, har)
-        mx.eval(har, x)
+        har_local = mx.concatenate([mag, phase], axis=1).swapaxes(2, 1)
+        if har_abs is not None:
+            # Absolute-position harmonic STFT: the slice reads the source at
+            # its whole-call position (phase-continuous); the locally built
+            # graph is used only for its lazy shape and never evaluated.
+            har_use = har_abs[:, 120 * ctx0:120 * ctx0 + har_local.shape[1]]
+            import json as _json
+            print(_json.dumps({"event": "har_shapes", "frames": int(asr.shape[2]),
+                               "ctx0": ctx0,
+                               "har_abs": list(har_abs.shape),
+                               "har_local": list(har_local.shape)}), flush=True)
+        else:
+            har_use = har_local
+        x = self._first_stage(self._low_stack(asr, F0_curve, N_curve, s), s,
+                              har_use)
+        mx.eval(har_use, x)
         frames = int(asr.shape[2])
         p0, end = keep or (0, frames)
         while p0 < end:
             p1 = min(end, p0 + WINDOW_FRAMES)
             c0 = max(0, p0 - CONTEXT_FRAMES)
             c1 = min(frames, p1 + CONTEXT_FRAMES)
-            audio, f0 = self._last_stage(x, s, har, c0, c1)
+            audio, f0 = self._last_stage(x, s, har_use, c0, c1)
             piece = audio[FRAME_SAMPLES * p0 - 5 * f0:FRAME_SAMPLES * p1 - 5 * f0]
             if piece.size:
                 yield np.ascontiguousarray(piece, dtype=np.float32)
