@@ -6,22 +6,17 @@ Upstream: ml-explore/mlx-lm `caed1943d38ecb58f6e466a72bed98310c9d45a5` (#1904), 
 
 ## Behavioral proof
 
-The model-free regression test (`tests/test_mlxlm_tool_call_args.py`) extracts the real `process_message_content` function from the installed `mlx_lm/server.py` AST. It tests object-valued arguments and the existing JSON-string path without importing MLX or constructing a model/tokenizer.
+The regression test (`tests/test_mlxlm_tool_call_args.py`) is self-contained and always runs: it writes the verbatim upstream 0.31.3 `process_message_content` region (byte-identical to the shipped file's hunk context) into a temp tree, applies `patches/mlx-lm-tool-call-arguments.patch` with the installer's exact `patch --strip=1 --forward --fuzz=0` invocation, executes the pristine function (asserting the bug: dict arguments raise `TypeError`, string arguments decode), then executes the patched function (asserting dict arguments pass through and string arguments still decode). No installed mlx-lm is required on the box running the test.
 
-RED, pristine mlx-lm 0.31.3:
+A second layer runs the same assertions against a real installed server module when one is discoverable, honoring `MLX_LM_SERVER_PY` (explicit file), `MLX_LM_VENV` (venv root), or the running interpreter's prefix; the test skips with that reason when no `mlx_lm/server.py` is found.
 
-```text
-MLX_LM_VENV=/tmp/mlxlm1904-red .../python -m unittest tests/test_mlxlm_tool_call_args.py -v
-ERROR: test_object_arguments_are_preserved
-TypeError: the JSON object must be str, bytes or bytearray, not dict
-String-argument test: ok
-```
-
-GREEN, patched mlx-lm 0.31.3:
+Observed modes:
 
 ```text
-Ran 2 tests in 0.021s
-OK
+default (no installed mlx-lm):    patched-snippet ok, installed test skipped
+MLX_LM_VENV=pristine 0.31.3:      FAILED errors=1 (installed tree reproduces the bug)
+MLX_LM_VENV=patched 0.31.3:       OK
+MLX_LM_SERVER_PY=0.32-line file:  OK
 ```
 
 ## Fresh install and repository contracts
@@ -29,6 +24,8 @@ OK
 A clean venv was created with `python3 -m venv`, followed by `pip install --no-deps mlx-lm==0.31.3`. `scripts/apply-mlx-lm-patches.sh <venv>` applied the new patch and all existing default patches (exit 0), and both parser regression tests passed against the installed patched module (repeated on a second clean venv after the apply-script change).
 
 `python3 -m unittest tests.test_install_sh_contract tests.test_serve_bootstrap`: 41 tests passed, including both `PatcherCoverageTests` cases and the installer patch-fetch contract.
+
+Full dev-box discovery (`python3 -m unittest discover -s tests -t .`): 1019 tests, 30 skipped, 16 problem tests — all 16 in the bonsai2/laya modules and all caused by `ModuleNotFoundError: No module named 'mlx'` (the aarch64-only wheel is absent on this x86 box). A pristine origin/main checkout fails the same module set with the identical `failures=3, errors=13` tally, so these are pre-existing environment-dependent tests, not regressions from this change; the remaining 1003 tests pass.
 
 ## Rerun idempotence fix (was pre-existing at v0.7.27)
 
