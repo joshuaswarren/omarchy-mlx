@@ -389,8 +389,6 @@ class PatcherCoverageTests(unittest.TestCase):
             "dev twin of patches/mlx-lm-qwen35-gdn-conv.patch (applied via apply())",
         "patch-mlx-lm-qwen35-gdn-norm.py":
             "dev twin of patches/mlx-lm-qwen35-gated-norm.patch (applied via apply())",
-        "patch-mlx-lm-gdn-raw-repeat.py":
-            "opt-in helper (MLX_OMARCHY_GDN_RAW_REPEAT, default 0); repo-only until a default flip lands",
         "patch-mlx-lm-qwen3next-qgate-split.py":
             "experiment patcher, not part of any install path",
         "patch-mlx-lm-swiglu-eager.py":

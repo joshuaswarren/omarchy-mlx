@@ -136,3 +136,11 @@ python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"
 # 2026-10-04-jw16-decode-dispatchfuse.md). Kill switch
 # MLX_OMARCHY_ROPE_NORM_FUSE=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
+# GDN raw-decode GQA repeat (Hk<Hv models, e.g. Qwen3.5-9B): expands q/k to
+# the value-head count so the fused GatedDeltaUpdate kernel fires instead of
+# the composed per-token fallback (~700 small dispatches/token). Default ON
+# since 2026-10-04: 9B decode +31..35% with the order-matched kernel
+# (free-run greedy identity 100%, TF agreement 99.39%, per-op fp64 error
+# identical to composed; receipts/2026-10-04-jw16-decode-dispatchfuse.md
+# addenda 2-3). Kill switch MLX_OMARCHY_GDN_RAW_REPEAT=0.
+python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"

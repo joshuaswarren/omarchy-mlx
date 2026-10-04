@@ -9,13 +9,15 @@ fall through to the composed per-token fallback: ~700 extra small
 dispatches per decoded token (AsType/Multiply/Sum/Subtract F32 soup, per
 the 2026-10-03 3-model census).
 
-This patch expands q/k to the value-head count before the dispatch when
-the caller opts in with MLX_OMARCHY_GDN_RAW_REPEAT=1 (default 0: the
-exact existing dispatch order). The repeat is a bit-exact copy; the fused
-kernel is the equivalence-reference pair of the composed fallback (the
-same pairing the 2B serves with), so per-head math on the repeated q/k is
-identical. Greedy digests may still move on near-ties: run the numerics
-gate (greedy >= 95% identical, ppl within 0.1%) before landing.
+This patch expands q/k to the value-head count before the dispatch
+(MLX_OMARCHY_GDN_RAW_REPEAT, default 1 = on since 2026-10-04: the
+order-matched fused kernel is bit-identical to the composed chain on
+captured operands and free-running greedy identity is 100% at d512; kill
+switch =0 restores the exact pre-land dispatch). The repeat is a bit-exact
+copy; the fused kernel's arithmetic matches the composed fallback's order
+and rounding sites, so per-op fp64 error is identical to composed.
+Teacher-forced gate at the land: 99.39% top-1 agreement over 5120
+positions, all 31 disagreements <= 1 bf16 ULP, ppl delta -0.049%.
 Idempotent; refuses unrecognized content. Usage: patch <venv>
 """
 import glob
