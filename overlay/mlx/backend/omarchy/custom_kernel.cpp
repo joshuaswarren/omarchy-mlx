@@ -34,6 +34,8 @@
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/unsupported.h"
 
+#include "translation_version.h"
+
 namespace mlx::core::fast {
 namespace {
 
@@ -1011,7 +1013,20 @@ const std::vector<uint32_t>& cached_compile(const std::string& glsl) {
 // version must be bumped whenever any translate_* pass changes its output.
 constexpr char kTranslationCacheMagic[] = "MLXOTR1";
 constexpr size_t kTranslationCacheMagicSize = 8;
-constexpr char kTranslationCacheVersion[] = "1";
+constexpr char kTranslationCacheVersion[] = "2";
+
+// Stamp of the translation pipeline itself, generated at build time from
+// the SHA-256 of this source file (see omarchy_shader translation_version
+// rule in CMakeLists.txt). Without it a rebuilt binary with changed
+// translation logic would keep serving stale cached GLSL from an earlier
+// binary: the identity of a kernel alone does not describe the translator
+// that renders it. Observed live 2026-10-04: translator fixes stayed
+// invisible until MLX_OMARCHY_SPIRV_CACHE=0 because old .tr entries
+// matched by identity.
+#ifndef MLX_OMARCHY_TRANSLATOR_SOURCE_SHA
+#define MLX_OMARCHY_TRANSLATOR_SOURCE_SHA "unknown"
+#endif
+constexpr char kTranslatorSourceSha[] = MLX_OMARCHY_TRANSLATOR_SOURCE_SHA;
 
 std::string translation_cache_path(const std::string& identity) {
   const std::string root = spirv_cache_root();
@@ -1020,6 +1035,8 @@ std::string translation_cache_path(const std::string& identity) {
   }
   std::string material = "mlx-omarchy custom kernel translation ";
   material += kTranslationCacheVersion;
+  material += " ";
+  material += kTranslatorSourceSha;
   material += "\n";
   material += identity;
   return root + "/" +
