@@ -12,6 +12,9 @@ for attempt in $(seq 1 15); do
   li=${load1%%.*}; lf=${load1#*.}00
   psi=$(cat /proc/pressure/cpu)
   case "$psi" in *"some avg10=0.00"*) ;; *) echo "attempt $attempt: PSI $psi"; sleep 360; continue;; esac
+  sleep 8
+  psi2=$(cat /proc/pressure/cpu)
+  case "$psi2" in *"some avg10=0.00"*) ;; *) echo "attempt $attempt: PSI spike $psi2"; sleep 300; continue;; esac
   if (( $((10#$li * 100 + 10#${lf:0:2})) >= 500 )); then echo "attempt $attempt: load $load1"; sleep 300; continue; fi
   echo "attempt $attempt: gates pass (load $load1, psi ok) - launching window $(date -u +%FT%TZ)"
   bash "$BUILD/tools/fuse2b/w1c.sh" >> "$LOG" 2>&1
