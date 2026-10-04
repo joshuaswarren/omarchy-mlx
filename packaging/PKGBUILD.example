@@ -77,7 +77,7 @@ check() {
 package() {
   cp -a "$srcdir/stage/usr" "$pkgdir/usr"
   # Opt-in device tree overlay (docs/gpu-base-pstate.md): inert until the owner
-  # adds "gpu-pstate-t8103" to /etc/omarchy-platform/dtb-overlays.opt-in.
+  # adds "gpu-pstate-t8103" to /etc/omarchy-mac-boot/dtb-overlays.opt-in.
   bash "$srcdir/mlx-omarchy-$pkgver/packaging/build-dtbo.sh" "$pkgdir"
   # options=(!strip) above: the venv ships with the wheel's exact bytes.
   # Stripping here (makepkg's default does) saves 3.2 MB of a 25.3 MB

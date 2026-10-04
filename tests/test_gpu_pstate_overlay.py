@@ -37,7 +37,7 @@ class GpuPstateOverlayTests(unittest.TestCase):
             root = Path(temp)
             dest = root / "pkg"
             subprocess.run(["bash", str(BUILD), str(dest)], check=True, capture_output=True)
-            dtbo = dest / "usr/share/omarchy-platform/dtb-overlays/t8103/omarchy-gpu-pstate.dtbo"
+            dtbo = dest / "usr/lib/omarchy-mac-boot/dtb-overlays/t8103/omarchy-gpu-pstate.dtbo"
             self.assertTrue(dtbo.is_file())
             key = subprocess.run(["fdtget", "-t", "s", str(dtbo), "/", "omarchy,opt-in"],
                                  check=True, capture_output=True, text=True).stdout.strip()

@@ -100,7 +100,7 @@ ANE_IDLE_POLL_S = 5
 ANE_UNTESTED_STEPS = (
     "To submit a judged row for an untested chip, install omarchy-ane-dkms "
     "and add that chip's opt-in key from the omarchy-ane README table to "
-    "/etc/omarchy-platform/dtb-overlays.opt-in. For T6020, T6022 and T8112, "
+    "/etc/omarchy-mac-boot/dtb-overlays.opt-in. For T6020, T6022 and T8112, "
     "run sudo omarchy-ane-firmware-fetch first. Then run sudo "
     "omarchy-ane-dt apply and reboot. From an omarchy-mlx checkout, run "
     "python3 scripts/collect_deep.py --ane-smoke --submit. The collector "
@@ -110,7 +110,7 @@ ANE_UNTESTED_STEPS_INTREE = (
     "To submit a judged row for an untested chip on a kernel that ships "
     "the ANE driver in-tree: userspace + smoke + firmware fetch only; do "
     "not install omarchy-ane-dkms. Add that chip's opt-in key from the "
-    "omarchy-ane README table to /etc/omarchy-platform/"
+    "omarchy-ane README table to /etc/omarchy-mac-boot/"
     "dtb-overlays.opt-in. For T6020, T6022 and T8112, run sudo "
     "omarchy-ane-firmware-fetch first. Then run sudo omarchy-ane-dt apply "
     "and reboot. From an omarchy-mlx checkout, run python3 "
@@ -748,7 +748,7 @@ def _omarchy_ane_firmware(redactor):
 def _omarchy_ane_optin():
     """The ane-* keys of the overlay opt-in file (keys only)."""
     try:
-        with open("/etc/omarchy-platform/dtb-overlays.opt-in",
+        with open("/etc/omarchy-mac-boot/dtb-overlays.opt-in",
                   "r", encoding="utf-8") as fh:
             return [line.strip()[:128] for line in fh
                     if line.strip().startswith("ane-")][:32]
