@@ -318,6 +318,7 @@
 #include "fast_norm_gated_only_apple_bf16.h"
 #include "gdn_conv_decode_bf16.h"
 #include "gdn_conv_decode_apple_bf16.h"
+#include "gdn_conv_delta_decode_bf16.h"
 #include "qmm_vec_greedy_bf16.h"
 #include "qmm_tile_bf16.h"
 #include "qmm_tile_f16.h"
