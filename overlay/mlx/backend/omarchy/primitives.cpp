@@ -6966,6 +6966,83 @@ void QRF::eval_gpu(
   encoder.dispatch_compute(
       omarchy::ComputeKernel::LinalgQrF32, bindings, params, batch);
 }
+namespace mlx::core::omarchy {
+namespace {
+// PrefillCast cast memo: one entry per slot, LRU-2. Keyed on the input
+// array's node identity + buffer + item offset + byte size; entries pin
+// the input and f32 buffers with strong refs, so neither can be freed
+// (and a recycled raw address cannot alias a live key) while a served
+// entry could still be read. Cleared at every completion join
+// (encoder.cpp) — each synchronous eval pass ends there — so an entry
+// can never be served after the input's bytes could have been
+// rewritten. Single-threaded: MLX evaluates one primitive at a time on
+// the stream's encoder thread, matching the file's other statics.
+struct QmmCastMemoEntry {
+  const void* encoder;
+  uint64_t id;
+  const void* buffer;
+  uint32_t item_offset;
+  size_t bytes;
+  array input;
+  array f32;
+};
+std::array<std::optional<QmmCastMemoEntry>, 2>& qmm_cast_memo_slots() {
+  static std::array<std::optional<QmmCastMemoEntry>, 2> slots;
+  return slots;
+}
+} // namespace
+
+bool qmm_cast_dedup_enabled() {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_CAST_DEDUP");
+  return env != nullptr && env[0] == '1';
+}
+
+void qmm_cast_memo_clear() {
+  auto& slots = qmm_cast_memo_slots();
+  slots[0].reset();
+  slots[1].reset();
+}
+
+bool qmm_cast_memo_get(
+    const CommandEncoder& encoder,
+    const array& x,
+    uint32_t item_offset,
+    array& out_f32) {
+  auto& slots = qmm_cast_memo_slots();
+  for (int i = 0; i < 2; ++i) {
+    auto& slot = slots[i];
+    if (slot && slot->encoder == &encoder && slot->id == x.id() &&
+        slot->buffer == x.data_shared_ptr().get() &&
+        slot->item_offset == item_offset && slot->bytes == x.nbytes()) {
+      out_f32 = slot->f32;
+      if (i == 1) {
+        std::swap(slots[0], slots[1]);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+void qmm_cast_memo_put(
+    const CommandEncoder& encoder,
+    const array& x,
+    uint32_t item_offset,
+    const array& f32) {
+  auto& slots = qmm_cast_memo_slots();
+  slots[1].reset();
+  std::swap(slots[0], slots[1]);
+  slots[0] = QmmCastMemoEntry{
+      &encoder,
+      static_cast<uint64_t>(x.id()),
+      x.data_shared_ptr().get(),
+      item_offset,
+      x.nbytes(),
+      x,
+      f32};
+}
+} // namespace mlx::core::omarchy
+
 void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   const std::string tag = name();
   // Non-affine modes pass three inputs, so the mode check must land
@@ -7447,30 +7524,50 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // path), then the shader coopMatLoads A tiles straight from the
       // f32 buffer - the x_s shared tile, its per-lane staging stores
       // and address math never run.
-      array x_f32(x_d.shape(), float32, nullptr, {});
-      array::Flags xf_flags;
-      xf_flags.contiguous = true;
-      xf_flags.row_contiguous = true;
-      xf_flags.col_contiguous = x_f32.size() <= 1;
-      x_f32.set_data(
-          allocate_omarchy(x_f32.nbytes()),
-          x_f32.size(),
-          Strides{1},
-          xf_flags,
-          0);
-      encoder.add_temporary(x_f32);
-      {
-        omarchy::ComputeParams cparams;
-        cparams.count = checked_u32(x_d.size(), tag, out);
-        cparams.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, out);
-        cparams.output_offset = 0;
-        std::array<omarchy::ComputeBinding, 3> cbindings{
-            binding(x_d), binding(x_d), binding(x_f32)};
-        encoder.dispatch_compute(
-            omarchy::ComputeKernel::CastBF16F32,
-            cbindings,
-            cparams,
-            omarchy::compute_dispatch_group_count(cparams.count));
+      //
+      // MLX_OMARCHY_QMM_CAST_DEDUP=1 memoizes the widening per evaluator
+      // pass: q/k/v (and gate/up) qmms receive the SAME producer buffer,
+      // so the identical CastBF16F32 pass would otherwise run 2-3 times
+      // per group. One cast per unique input per pass deletes the
+      // repeats; entries die at every completion join and hold strong
+      // refs, so no stale bytes can be served. Default off; A/B in
+      // receipts/2026-10-04-prefill-cast-census.
+      const uint32_t x_offset = checked_item_offset(x_d, x_d.size(), tag, out);
+      array x_f32;
+      bool x_f32_new = true;
+      if (omarchy::qmm_cast_dedup_enabled()) {
+        x_f32_new =
+            !omarchy::qmm_cast_memo_get(encoder, x_d, x_offset, x_f32);
+      }
+      if (x_f32_new) {
+        x_f32 = array(x_d.shape(), float32, nullptr, {});
+        array::Flags xf_flags;
+        xf_flags.contiguous = true;
+        xf_flags.row_contiguous = true;
+        xf_flags.col_contiguous = x_f32.size() <= 1;
+        x_f32.set_data(
+            allocate_omarchy(x_f32.nbytes()),
+            x_f32.size(),
+            Strides{1},
+            xf_flags,
+            0);
+        encoder.add_temporary(x_f32);
+        {
+          omarchy::ComputeParams cparams;
+          cparams.count = checked_u32(x_d.size(), tag, out);
+          cparams.lhs_offset = x_offset;
+          cparams.output_offset = 0;
+          std::array<omarchy::ComputeBinding, 3> cbindings{
+              binding(x_d), binding(x_d), binding(x_f32)};
+          encoder.dispatch_compute(
+              omarchy::ComputeKernel::CastBF16F32,
+              cbindings,
+              cparams,
+              omarchy::compute_dispatch_group_count(cparams.count));
+        }
+        if (omarchy::qmm_cast_dedup_enabled()) {
+          omarchy::qmm_cast_memo_put(encoder, x_d, x_offset, x_f32);
+        }
       }
       // The cast writes a fresh buffer: offset 0 in f32 elements, and
       // every x offset the shader could see is even by construction.

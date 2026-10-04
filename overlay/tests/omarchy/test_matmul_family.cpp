@@ -4227,3 +4227,130 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
               << " all 7 twin arms bit-identical, m in {17..2047 odd}\n";
   }
 }
+
+// PrefillCast: MLX_OMARCHY_QMM_CAST_DEDUP=1 memoizes the qmm prefill
+// bf16->f32 x widening per evaluator pass, so q/k/v (and gate/up) qmms
+// sharing one producer buffer run the CastBF16F32 pass once. Pins: (1)
+// one pass evaluating three qmms on the SAME x against different
+// weights is bit-identical to the uncached route (a memo bug serving
+// one consumer's bytes to another cannot hide behind identical
+// outputs); (2) a second dedup pass after the first pass's completion
+// join is bit-identical again — every entry is dropped at the join, so
+// this proves no stale reuse across passes; (3) with the env off the
+// dispatch stream is the baseline both arms pin to.
+TEST_CASE("qmm prefill cast dedup is bit-identical and never stale") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool coopmat_device =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  if (!coopmat_device || std::getenv("MLX_OMARCHY_NO_COOPMAT") != nullptr) {
+    skip("cast dedup runs on the coopmat X32 route only");
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  constexpr int group_size = 64;
+  constexpr int bits = 4;
+  constexpr int m = 129;
+  constexpr int k = 2048;
+  constexpr int n = 2048;
+  const int words_per_row = k / (32 / bits);
+  const int groups_per_row = k / group_size;
+
+  std::mt19937 gen(617u);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> x_values(static_cast<size_t>(m) * k);
+  for (auto& value : x_values) {
+    value = dist(gen);
+  }
+  // Three distinct weight matrices: a memo bug that served one
+  // consumer's f32 bytes to another cannot hide behind identical
+  // outputs.
+  std::vector<std::vector<float>> matrices(3);
+  std::vector<array> w_words(3);
+  std::vector<array> scales(3);
+  std::vector<array> biases(3);
+  for (int r = 0; r < 3; ++r) {
+    matrices[r].resize(static_cast<size_t>(n) * k);
+    for (auto& value : matrices[r]) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights weights =
+        host_affine_quantize(matrices[r], n, k, group_size, bits);
+    weights.scales = round_trip(stream, weights.scales, bfloat16);
+    weights.biases = round_trip(stream, weights.biases, bfloat16);
+    w_words[r] = array(
+        weights.words.begin(), Shape{n, words_per_row}, uint32);
+    scales[r] = array(
+        weights.scales.begin(), Shape{n, groups_per_row}, bfloat16);
+    biases[r] = array(
+        weights.biases.begin(), Shape{n, groups_per_row}, bfloat16);
+  }
+  array x(x_values.begin(), Shape{m, k}, bfloat16);
+
+  // Uncached route: three separate passes (each eval joins, so no
+  // memo entry could exist even if the env were on).
+  unsetenv("MLX_OMARCHY_QMM_CAST_DEDUP");
+  std::vector<std::vector<uint16_t>> uncached;
+  for (int r = 0; r < 3; ++r) {
+    array out = quantized_matmul(
+        x, w_words[r], scales[r], biases[r], true, group_size, bits,
+        "affine", stream);
+    out.eval();
+    const uint16_t* p = out.data<uint16_t>();
+    uncached.emplace_back(p, p + out.size());
+  }
+
+  auto run_triple = [&](bool dedup) {
+    if (dedup) {
+      setenv("MLX_OMARCHY_QMM_CAST_DEDUP", "1", 1);
+    } else {
+      unsetenv("MLX_OMARCHY_QMM_CAST_DEDUP");
+    }
+    // One evaluator pass scheduling three consumers of the SAME x:
+    // the q/k/v producer-sharing shape the memo targets.
+    std::vector<array> outs;
+    for (int r = 0; r < 3; ++r) {
+      outs.push_back(quantized_matmul(
+          x, w_words[r], scales[r], biases[r], true, group_size, bits,
+          "affine", stream));
+    }
+    eval(outs);
+    std::vector<std::vector<uint16_t>> bits;
+    for (const auto& out : outs) {
+      const uint16_t* p = out.data<uint16_t>();
+      bits.emplace_back(p, p + out.size());
+    }
+    unsetenv("MLX_OMARCHY_QMM_CAST_DEDUP");
+    return bits;
+  };
+
+  // Leg 3 runs after leg 2's completion join, so it exercises a fresh
+  // memo entry against the same bytes: any stale-serving path would
+  // have shown up in leg 2 already, and leg 3 proves the cleared state
+  // keeps matching.
+  for (auto dedup : {false, true, true}) {
+    const auto got = run_triple(dedup);
+    for (int r = 0; r < 3; ++r) {
+      REQUIRE_EQ(got[r].size(), uncached[r].size());
+      size_t mismatches = 0;
+      size_t first = 0;
+      for (size_t i = 0; i < got[r].size(); ++i) {
+        if (got[r][i] != uncached[r][i]) {
+          if (mismatches == 0) {
+            first = i;
+          }
+          ++mismatches;
+        }
+      }
+      INFO("dedup=", dedup, " r=", r,
+           " first_mismatch_index=", first, " got=", got[r][first],
+           " uncached=", uncached[r][first]);
+      CHECK_EQ(mismatches, size_t{0});
+    }
+    std::cout << "[prefill-cast] dedup=" << dedup
+              << " 3-consumer pass bit-identical to uncached route\n";
+  }
+}

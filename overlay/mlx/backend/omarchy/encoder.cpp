@@ -192,6 +192,10 @@ void CommandEncoder::join_last_completion(const char* reason) {
   uint64_t wait_t1 = prof::get().profiling() ? prof::host_ns() : 0;
   last_completion_ = 0;
   omarchy::allocator().invalidate_noncoherent(device_.handle());
+  // The join completed every in-flight submission: buffers the qmm cast
+  // memo pins are past their last GPU read, and the next evaluator pass
+  // may rewrite any array, so the memo must not outlive this point.
+  qmm_cast_memo_clear();
   uint64_t inval_t2 = prof::get().profiling() ? prof::host_ns() : 0;
   prof::get().on_join(this, value, join_t0, wait_t1, inval_t2, reason);
 }

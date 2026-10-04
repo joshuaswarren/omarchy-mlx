@@ -432,4 +432,10 @@ MLX_API CommandEncoder& get_command_encoder(Stream s);
 std::unordered_map<int, CommandEncoder>& get_command_encoders();
 std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
 
+// PrefillCast: drops the qmm prefill bf16->f32 cast memo (see
+// primitives.cpp). Entries pin input and temporary buffers with strong
+// refs and must never be served after the pass that wrote them could
+// have been left, so every completion join clears them.
+void qmm_cast_memo_clear();
+
 } // namespace mlx::core::omarchy
