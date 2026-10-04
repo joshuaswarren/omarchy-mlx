@@ -310,6 +310,7 @@ class ServeCliContractTests(unittest.TestCase):
             self.assertRegex(helper, r"^[a-z0-9_-]+\.py$",
                              f"helper {helper} does not match the installer fetch pattern")
 
+
     def test_serve_launcher_sets_pythonpath_and_module(self):
         text = self.serve_section()
         self.assertIn('"$BIN/mlx-omarchy-serve"', text)
@@ -357,6 +358,77 @@ class ServeCliContractTests(unittest.TestCase):
         self.assertIn("serve/mlx_omarchy_serve/$serve_file", section)
         self.assertNotIn("cron", section)
         self.assertNotIn("systemd-run", section)
+
+
+class PatcherCoverageTests(unittest.TestCase):
+    """Every mlx-lm patcher in scripts/ must be accounted for by the installer.
+
+    Regression class: v0.7.15 burned because the serve installer list missed
+    a file, and the v0.7.25 draft cut caught the sibling defect one level
+    up: scripts/patch-mlx-lm-qwen3-rope-norm.py sat in the tree while
+    apply-mlx-lm-patches.sh (the file install.sh greps to derive the helper
+    fetch list) never invoked it, so a fresh install would silently ship
+    without the default-ON qwen3 dense rope-norm fold. This test fails when
+    a scripts/patch-mlx-lm-*.py is neither invoked by the apply script nor
+    explicitly classified below, when a classification names a file that no
+    longer exists, and when an invoked patcher would be missed by the
+    installer's derive-from-the-script fetch loop.
+    """
+
+    # Patchers intentionally NOT invoked by apply-mlx-lm-patches.sh, with
+    # the reason each is safe to leave out of a fresh install. Audit table
+    # with per-item fresh-install status: the release receipt.
+    NOT_INVOKED = {
+        "patch-mlx-lm-convring.py":
+            "dev twin of patches/mlx-lm-convring.patch; conv-ring ships OFF and the .patch is the shipped path",
+        "patch-mlx-lm-gdn.py":
+            "dev twin of patches/mlx-lm-gated-delta-fast-route.patch (applied via apply())",
+        "patch-mlx-lm-gdn-raw.py":
+            "dev twin of patches/mlx-lm-gated-delta-raw.patch (applied via apply())",
+        "patch-mlx-lm-qwen35-gdn-conv.py":
+            "dev twin of patches/mlx-lm-qwen35-gdn-conv.patch (applied via apply())",
+        "patch-mlx-lm-qwen35-gdn-norm.py":
+            "dev twin of patches/mlx-lm-qwen35-gated-norm.patch (applied via apply())",
+        "patch-mlx-lm-gdn-raw-repeat.py":
+            "opt-in helper (MLX_OMARCHY_GDN_RAW_REPEAT, default 0); repo-only until a default flip lands",
+        "patch-mlx-lm-qwen3next-qgate-split.py":
+            "experiment patcher, not part of any install path",
+        "patch-mlx-lm-swiglu-eager.py":
+            "experiment patcher, not part of any install path",
+    }
+
+    def invoked_patchers(self):
+        apply = (INSTALLER.parent / "scripts" / "apply-mlx-lm-patches.sh").read_text()
+        return set(re.findall(r"scripts/(patch-mlx-lm-[a-z0-9-]+\.py)", apply))
+
+    def test_every_patcher_is_invoked_or_classified(self):
+        patchers = sorted(p.name for p in
+                          (INSTALLER.parent / "scripts").glob("patch-mlx-lm-*.py"))
+        self.assertGreaterEqual(len(patchers), 4)
+        invoked = self.invoked_patchers()
+        unaccounted = [p for p in patchers
+                       if p not in invoked and p not in self.NOT_INVOKED]
+        self.assertEqual(
+            unaccounted, [],
+            "patchers neither invoked by apply-mlx-lm-patches.sh nor classified "
+            f"in NOT_INVOKED (wire them into the install path or classify them): "
+            f"{unaccounted}")
+        stale = [p for p in self.NOT_INVOKED if p not in patchers]
+        self.assertEqual(stale, [],
+                         f"NOT_INVOKED classifies files that no longer exist: {stale}")
+
+    def test_every_invoked_patcher_is_fetched_by_the_installer(self):
+        text = installer_text()
+        section = text.split("Applying mlx-lm serve patches", 1)[1]
+        self.assertIn("grep -oE 'scripts/[a-z0-9_-]+\\.py'", section)
+        self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/$s"', section)
+        # Simulate the installer's exact fetch grep over the apply script:
+        # whatever it would download must cover every invoked patcher.
+        fetched = set(re.findall(r"scripts/([a-z0-9_-]+\.py)",
+                                 (INSTALLER.parent / "scripts" / "apply-mlx-lm-patches.sh").read_text()))
+        missing = self.invoked_patchers() - fetched
+        self.assertEqual(missing, set(),
+                         f"invoked patchers the installer fetch loop would miss: {missing}")
 
 
 class AssistantInstallTests(unittest.TestCase):
