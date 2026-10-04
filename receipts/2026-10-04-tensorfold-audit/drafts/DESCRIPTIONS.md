@@ -33,3 +33,22 @@ reports the measured memory need instead. `bash -n` clean.
 
 TensorFold is Apache-2.0 (relicensed from MIT at v0.6.0). These patches are
 original work; no TensorFold code is copied into the MIT omarchy-mlx repo.
+
+## keys-Mac-TensorFold-MiniMax-H3-MLX, branch `omarchy-text-rows` (added 2026-10-04 late)
+
+`--dump-text-rows` / `--text-rows`: encode the prompt once on a big host
+(the 63 GiB encoder never becomes resident on the small one) and
+`--dump-latents` / `--latents-in`: denoise on a big host, decode on a small
+one. Latents serialize the full `Latents` dataclass (arrays in the
+safetensors payload, scalars — including the packed `Layout` — in a JSON
+sidecar) and rebuild bit-identically on load. Verified live on the reference
+host: `text: 519 rows in 0.0s` with `--text-rows`, latents round trip 7
+tensors + sidecar.
+
+## drowzeys/TensorFold (fork), branch `omarchy-h3-int8` (added)
+
+`Int8MLP.from_state`: wrap an already-quantized state saved after a swap on
+another host without re-quantizing (bit-identical weights, same
+`quantize_weight` code, only the swapping host differs). Enables the
+~25.8 GiB int8 DiT checkpoint (saved on the reference host) to run on hosts
+that cannot hold the 62 GiB bf16 DiT at swap time.
