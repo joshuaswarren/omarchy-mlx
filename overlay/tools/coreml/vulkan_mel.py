@@ -24,6 +24,7 @@ from functools import cache
 from pathlib import Path
 from typing import NamedTuple
 
+from trace_abi import trace_snapshot  # shared ctypes mirror + ABI size guard
 from vulkan_mel_constants import (
     DATA_B64,
     DATA_SHA256,
@@ -58,19 +59,6 @@ class VulkanMelResult(NamedTuple):
     encoder_features: object
     encoder_mask: object
     stages: dict[str, object]
-
-
-class _TraceSnapshot(ctypes.Structure):
-    _fields_ = [
-        ("gpu_primitive_dispatches", ctypes.c_uint64),
-        ("vk_submissions", ctypes.c_uint64),
-        ("vk_buffer_copies", ctypes.c_uint64),
-        ("vk_buffer_fills", ctypes.c_uint64),
-        ("vk_compute_dispatches", ctypes.c_uint64),
-        ("omarchy_finalize_calls", ctypes.c_uint64),
-        ("commit_calls_with_work", ctypes.c_uint64),
-        ("commit_calls_noop", ctypes.c_uint64),
-    ]
 
 
 def _mlx():
@@ -1201,22 +1189,6 @@ def extract_chunk_features(waveform, *, capture_stages: bool = False) -> VulkanM
         }
     return VulkanMelResult(mel, mask, encoder_features, encoder_mask, stages)
 
-
-@cache
-def _trace_function():
-    distribution = importlib.metadata.distribution("mlx-omarchy")
-    library_path = distribution.locate_file("mlx/lib/libmlx.so")
-    library = ctypes.CDLL(str(library_path))
-    function = library.mlx_omarchy_trace_snapshot
-    function.argtypes = [ctypes.POINTER(_TraceSnapshot)]
-    function.restype = None
-    return function
-
-
-def trace_snapshot() -> dict[str, int]:
-    snapshot = _TraceSnapshot()
-    _trace_function()(ctypes.byref(snapshot))
-    return {name: int(getattr(snapshot, name)) for name, _ in snapshot._fields_}
 
 def _comparison_stages(result, np):
     mask = np.asarray(result.mask)

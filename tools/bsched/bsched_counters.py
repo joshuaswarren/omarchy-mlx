@@ -43,6 +43,15 @@ def _lib():
         if not os.path.exists(so):
             raise SystemExit(f"libmlx.so not found at {so}")
         _LIB = ctypes.CDLL(so)
+        _LIB.mlx_omarchy_trace_snapshot_abi_size.argtypes = []
+        _LIB.mlx_omarchy_trace_snapshot_abi_size.restype = ctypes.c_uint64
+        expected = int(_LIB.mlx_omarchy_trace_snapshot_abi_size())
+        if ctypes.sizeof(Snapshot) != expected:
+            raise SystemExit(
+                f"Snapshot mirror is {ctypes.sizeof(Snapshot)} bytes but "
+                f"libmlx writes {expected}: stale mirror would corrupt the "
+                "heap; update the field list to match trace.h"
+            )
         _LIB.mlx_omarchy_trace_snapshot.argtypes = [
             ctypes.POINTER(Snapshot)
         ]

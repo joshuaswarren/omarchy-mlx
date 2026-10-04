@@ -50,6 +50,43 @@ ls -la "$SITE/mlx-omarchy-ane-worker" "$SITE/mlx-omarchy-parakeet" "$SITE/mlx-om
 RC=${PIPESTATUS[0]}
 gate_log "$LOG" "VERIFY_EXIT $RC"
 
+# Packaged-flow ABI + GC regression (2026-10-04 wave-scheduler crash): the
+# trace snapshot must be read through the SHIPPED mirror module with its ABI
+# size guard, then mlx arrays, a short eval chain, and repeated GC passes
+# with the wave scheduler ON — the exact flow whose silent struct-growth
+# overflow killed the worker at its first GC pass.
+gate_log "$LOG" "G7C_TRACE_ABI_BEGIN"
+MLX_OMARCHY_WAVE_SCHED=1 "$P/venv/bin/python3" - "$(dirname "$SITE")" 2>&1 | tee -a "$LOG" <<'PY'
+import ctypes, gc, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "coreml"))
+from trace_abi import TraceSnapshot, trace_snapshot, library_path
+lib = ctypes.CDLL(library_path())
+probe = lib.mlx_omarchy_trace_snapshot_abi_size
+probe.argtypes = []
+probe.restype = ctypes.c_uint64
+size = int(probe())
+mirror = ctypes.sizeof(TraceSnapshot)
+assert size == mirror, f"ABI drift: libmlx writes {size} bytes, mirror is {mirror}"
+import mlx.core as mx
+before = trace_snapshot()
+xs = [mx.ones((64, 64), dtype=mx.float32) for _ in range(8)]
+acc = xs[0]
+for x in xs[1:]:
+    acc = acc + x
+mx.eval(acc)
+del xs, acc
+for _ in range(5):
+    gc.collect()
+after = trace_snapshot()
+print(f"trace_abi ok size={size} wave={os.environ.get('MLX_OMARCHY_WAVE_SCHED')} "
+      f"dispatches={after['gpu_primitive_dispatches'] - before['gpu_primitive_dispatches']} "
+      f"emitted={after['barriers_emitted'] - before['barriers_emitted']} "
+      f"skipped={after['barriers_skipped'] - before['barriers_skipped']}")
+PY
+RCABI=${PIPESTATUS[0]}
+gate_log "$LOG" "G7C_TRACE_ABI_EXIT $RCABI"
+[[ $RCABI -ne 0 ]] && RC=$RCABI
+
 REPORT=$(ls -t "$HOME"/.cache/mlx-omarchy/parakeet-reference/transcriptions/*/transcribe-report.json \
              "$HOME"/.cache/mlx-omarchy/transcriptions/*/transcribe-report.json 2>/dev/null | head -1)
 gate_log "$LOG" "REPORT_PATH=$REPORT"

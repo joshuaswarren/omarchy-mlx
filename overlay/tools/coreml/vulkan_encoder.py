@@ -60,6 +60,8 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
+from trace_abi import trace_snapshot  # shared ctypes mirror + ABI size guard
+
 BLOB_MAGIC = 0xDEADBEEF
 
 # Kill-switch for the fused chain+bias(+silu) epilogue: byte-identical when
@@ -134,42 +136,12 @@ class EncoderRunError(RuntimeError):
     """The run cannot continue; the reason is named."""
 
 
-class _TraceSnapshot(ctypes.Structure):
-    _fields_ = [
-        ("gpu_primitive_dispatches", ctypes.c_uint64),
-        ("vk_submissions", ctypes.c_uint64),
-        ("vk_buffer_copies", ctypes.c_uint64),
-        ("vk_buffer_fills", ctypes.c_uint64),
-        ("vk_compute_dispatches", ctypes.c_uint64),
-        ("omarchy_finalize_calls", ctypes.c_uint64),
-        ("commit_calls_with_work", ctypes.c_uint64),
-        ("commit_calls_noop", ctypes.c_uint64),
-    ]
-
-
-@cache
-def _trace_function():
-    distribution = importlib.metadata.distribution("mlx-omarchy")
-    library_path = distribution.locate_file("mlx/lib/libmlx.so")
-    library = ctypes.CDLL(str(library_path))
-    function = library.mlx_omarchy_trace_snapshot
-    function.argtypes = [ctypes.POINTER(_TraceSnapshot)]
-    function.restype = None
-    return function
-
-
 def vm_rss_kb() -> int:
     """Resident set size in KiB from /proc, for leak-watch evidence."""
     for line in Path("/proc/self/status").read_text().split("\n"):
         if line.startswith("VmRSS:"):
             return int(line.split()[1])
     return 0
-
-
-def trace_snapshot() -> dict[str, int]:
-    snapshot = _TraceSnapshot()
-    _trace_function()(ctypes.byref(snapshot))
-    return {name: int(getattr(snapshot, name)) for name, _ in snapshot._fields_}
 
 
 def split_top(text: str) -> list[str]:

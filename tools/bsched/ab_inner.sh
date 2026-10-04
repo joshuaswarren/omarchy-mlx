@@ -40,7 +40,10 @@ import mlx.core  # noqa
 import os
 pkg = os.path.dirname(os.path.abspath(mlx.core.__file__))
 so = os.path.join(pkg, "lib", "libmlx.so")
-lib = ctypes.CDLL(so); lib.mlx_omarchy_trace_snapshot.argtypes = [ctypes.POINTER(S)]
+lib = ctypes.CDLL(so); lib.mlx_omarchy_trace_snapshot_abi_size.argtypes = []; lib.mlx_omarchy_trace_snapshot_abi_size.restype = ctypes.c_uint64
+_abi = int(lib.mlx_omarchy_trace_snapshot_abi_size())
+if ctypes.sizeof(S) != _abi: raise SystemExit(f"mirror {ctypes.sizeof(S)} != libmlx {_abi}: stale mirror, update S fields")
+lib.mlx_omarchy_trace_snapshot.argtypes = [ctypes.POINTER(S)]
 s0, s1 = S(), S(); lib.mlx_omarchy_trace_snapshot(ctypes.byref(s0))
 import mlx.core as mx
 x = mx.ones(64); (x * 2).item() if False else mx.eval(x * 2)
