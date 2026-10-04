@@ -97,20 +97,52 @@ shared float sdelta[128];
 // delta * k[i] each rounded once.
 shared float skg[128];
 
-float gdn_kv_walk(uint sbase, uint dk) {
+// Composed-chain order (C++ raw fallback): state_next = state*g rounded
+// per element, kv term = state_next*k rounded per element, serial ascending
+// sum from 0.0 (ReduceF32 single-chunk order). Bit 9 = C++-fallback-
+// equivalent arithmetic (A_log-f32 models); the default keeps the
+// Metal-kernel fma association (k*g precomputed, fma accumulate).
+float gdn_kv_walk(uint sbase, uint dk, float g, bool mlx_order) {
   float kv = 0.0f;
   uint q = sbase >> 2u;
   for (uint i = 0u; i < dk; i += 8u) {
     vec4 a = s_in.v[q + (i >> 2u)];
     vec4 b = s_in.v[q + (i >> 2u) + 1u];
-    kv = fma(a.x, skg[i], kv);
-    kv = fma(a.y, skg[i + 1u], kv);
-    kv = fma(a.z, skg[i + 2u], kv);
-    kv = fma(a.w, skg[i + 3u], kv);
-    kv = fma(b.x, skg[i + 4u], kv);
-    kv = fma(b.y, skg[i + 5u], kv);
-    kv = fma(b.z, skg[i + 6u], kv);
-    kv = fma(b.w, skg[i + 7u], kv);
+    if (mlx_order) {
+      precise float t0 = a.x * g;
+      precise float t1 = a.y * g;
+      precise float t2 = a.z * g;
+      precise float t3 = a.w * g;
+      precise float t4 = b.x * g;
+      precise float t5 = b.y * g;
+      precise float t6 = b.z * g;
+      precise float t7 = b.w * g;
+      precise float c0 = t0 * sk[i];
+      precise float c1 = t1 * sk[i + 1u];
+      precise float c2 = t2 * sk[i + 2u];
+      precise float c3 = t3 * sk[i + 3u];
+      precise float c4 = t4 * sk[i + 4u];
+      precise float c5 = t5 * sk[i + 5u];
+      precise float c6 = t6 * sk[i + 6u];
+      precise float c7 = t7 * sk[i + 7u];
+      kv += c0;
+      kv += c1;
+      kv += c2;
+      kv += c3;
+      kv += c4;
+      kv += c5;
+      kv += c6;
+      kv += c7;
+    } else {
+      kv = fma(a.x, skg[i], kv);
+      kv = fma(a.y, skg[i + 1u], kv);
+      kv = fma(a.z, skg[i + 2u], kv);
+      kv = fma(a.w, skg[i + 3u], kv);
+      kv = fma(b.x, skg[i + 4u], kv);
+      kv = fma(b.y, skg[i + 5u], kv);
+      kv = fma(b.z, skg[i + 6u], kv);
+      kv = fma(b.w, skg[i + 7u], kv);
+    }
   }
   return kv;
 }
@@ -120,31 +152,88 @@ float gdn_dk_term(float sd, float kk) {
   return t;
 }
 
-float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd) {
+float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd,
+                      bool mlx_order) {
   float o = 0.0f;
   uint qi = sbase >> 2u;
   uint qo = obase >> 2u;
   for (uint i = 0u; i < dk; i += 8u) {
     vec4 a = s_in.v[qi + (i >> 2u)];
     vec4 b = s_in.v[qi + (i >> 2u) + 1u];
-    float n0 = fma(a.x, g, gdn_dk_term(sd, sk[i]));
-    float n1 = fma(a.y, g, gdn_dk_term(sd, sk[i + 1u]));
-    float n2 = fma(a.z, g, gdn_dk_term(sd, sk[i + 2u]));
-    float n3 = fma(a.w, g, gdn_dk_term(sd, sk[i + 3u]));
-    float n4 = fma(b.x, g, gdn_dk_term(sd, sk[i + 4u]));
-    float n5 = fma(b.y, g, gdn_dk_term(sd, sk[i + 5u]));
-    float n6 = fma(b.z, g, gdn_dk_term(sd, sk[i + 6u]));
-    float n7 = fma(b.w, g, gdn_dk_term(sd, sk[i + 7u]));
+    precise float d0 = gdn_dk_term(sd, sk[i]);
+    precise float d1 = gdn_dk_term(sd, sk[i + 1u]);
+    precise float d2 = gdn_dk_term(sd, sk[i + 2u]);
+    precise float d3 = gdn_dk_term(sd, sk[i + 3u]);
+    precise float d4 = gdn_dk_term(sd, sk[i + 4u]);
+    precise float d5 = gdn_dk_term(sd, sk[i + 5u]);
+    precise float d6 = gdn_dk_term(sd, sk[i + 6u]);
+    precise float d7 = gdn_dk_term(sd, sk[i + 7u]);
+    precise float n0;
+    precise float n1;
+    precise float n2;
+    precise float n3;
+    precise float n4;
+    precise float n5;
+    precise float n6;
+    precise float n7;
+    if (mlx_order) {
+      // Composed chain: ns = (state*g) + (delta*k), each op rounded
+      // separately - no fma contraction.
+      precise float s_g0 = a.x * g;
+      precise float s_g1 = a.y * g;
+      precise float s_g2 = a.z * g;
+      precise float s_g3 = a.w * g;
+      precise float s_g4 = b.x * g;
+      precise float s_g5 = b.y * g;
+      precise float s_g6 = b.z * g;
+      precise float s_g7 = b.w * g;
+      n0 = s_g0 + d0;
+      n1 = s_g1 + d1;
+      n2 = s_g2 + d2;
+      n3 = s_g3 + d3;
+      n4 = s_g4 + d4;
+      n5 = s_g5 + d5;
+      n6 = s_g6 + d6;
+      n7 = s_g7 + d7;
+    } else {
+      n0 = fma(a.x, g, d0);
+      n1 = fma(a.y, g, d1);
+      n2 = fma(a.z, g, d2);
+      n3 = fma(a.w, g, d3);
+      n4 = fma(b.x, g, d4);
+      n5 = fma(b.y, g, d5);
+      n6 = fma(b.z, g, d6);
+      n7 = fma(b.w, g, d7);
+    }
     s_out.v[qo + (i >> 2u)] = vec4(n0, n1, n2, n3);
     s_out.v[qo + (i >> 2u) + 1u] = vec4(n4, n5, n6, n7);
-    o = fma(n0, sq[i], o);
-    o = fma(n1, sq[i + 1u], o);
-    o = fma(n2, sq[i + 2u], o);
-    o = fma(n3, sq[i + 3u], o);
-    o = fma(n4, sq[i + 4u], o);
-    o = fma(n5, sq[i + 5u], o);
-    o = fma(n6, sq[i + 6u], o);
-    o = fma(n7, sq[i + 7u], o);
+    if (mlx_order) {
+      precise float p0 = n0 * sq[i];
+      precise float p1 = n1 * sq[i + 1u];
+      precise float p2 = n2 * sq[i + 2u];
+      precise float p3 = n3 * sq[i + 3u];
+      precise float p4 = n4 * sq[i + 4u];
+      precise float p5 = n5 * sq[i + 5u];
+      precise float p6 = n6 * sq[i + 6u];
+      precise float p7 = n7 * sq[i + 7u];
+      o += p0;
+      o += p1;
+      o += p2;
+      o += p3;
+      o += p4;
+      o += p5;
+      o += p6;
+      o += p7;
+    } else {
+      o = fma(n0, sq[i], o);
+      o = fma(n1, sq[i + 1u], o);
+      o = fma(n2, sq[i + 2u], o);
+      o = fma(n3, sq[i + 3u], o);
+      o = fma(n4, sq[i + 4u], o);
+      o = fma(n5, sq[i + 5u], o);
+      o = fma(n6, sq[i + 6u], o);
+      o = fma(n7, sq[i + 7u], o);
+    }
   }
   return o;
 }
@@ -223,11 +312,13 @@ void main() {
   }
   barrier();
 
-  float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk);
+  float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk, g,
+                             (params.flags & 512u) != 0u);
   float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
   sdelta[row] = delta;
   barrier();
 
-  float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row]);
+  float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row],
+                                (params.flags & 512u) != 0u);
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 }
