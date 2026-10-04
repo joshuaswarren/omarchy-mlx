@@ -46,6 +46,41 @@ if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 && "$SERIES" != "patches" ]]; then
   echo "error: conv-ring has no mlx-lm 0.32 port (experimental, off by default); unset MLX_OMARCHY_CONV_RING" >&2
   exit 6
 fi
+# A patch whose own reverse no longer matches can still be proven applied:
+# a LATER patch of this series reverse-matching is content evidence the
+# series already ran on this tree (later patches insert into the same
+# regions and rewrite earlier patches' added lines, so exact reverse
+# matching only survives for the last patch per region). No later reverse
+# match means this tree never got that far and the loud error stands,
+# which is what catches a wrong mlx-lm version.
+SERIES_PATCHES=(
+  mlx-lm-tool-call-arguments.patch
+  mlx-lm-gated-delta-fast-route.patch
+  mlx-lm-gated-delta-fast-route-repeat.patch
+  mlx-lm-gated-delta-raw.patch
+  mlx-lm-greedy-prune.patch
+  mlx-lm-qwen35-qk-scaled.patch
+  mlx-lm-qwen35-gdn-conv.patch
+  mlx-lm-conv-silu.patch
+  mlx-lm-qwen35-gated-norm.patch
+  mlx-lm-ttft-early-submit.patch
+  mlx-lm-convring.patch
+  mlx-lm-last-logits.patch
+)
+series_already_applied() {
+  local name="$1" other i=0 j
+  for j in "${SERIES_PATCHES[@]}"; do
+    [[ "$j" == "$name" ]] && break
+    i=$((i + 1))
+  done
+  for ((j = i + 1; j < ${#SERIES_PATCHES[@]}; j++)); do
+    other="$ROOT/$SERIES/${SERIES_PATCHES[$j]}"
+    [[ -f "$other" ]] || continue
+    patch --dry-run --directory="$SITE" --strip=1 --reverse \
+      < "$other" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
 apply() {
   local name="$1"
   if [[ ! -f "$ROOT/$SERIES/$name" ]]; then
@@ -60,6 +95,8 @@ apply() {
   elif patch --dry-run --directory="$SITE" --strip=1 --reverse \
       < "$ROOT/$SERIES/$name" >/dev/null 2>&1; then
     echo "already applied: $name"
+  elif series_already_applied "$name"; then
+    echo "already applied: $name (hunks rewritten by later patches in this series)"
   else
     echo "patch does not apply (mlx-lm version mismatch?): $name" >&2
     return 1
