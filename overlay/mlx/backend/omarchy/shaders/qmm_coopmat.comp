@@ -11,7 +11,7 @@
 // stores/unpack and address arithmetic are deleted. The B (weight)
 // side keeps its shared staging in every build: the data is packed
 // 4-bit nibbles and cannot feed coopMatLoad, so w_s, the dequant
-// stores and the two per-step barriers remain. The output drain
+// stores remain. The output drain
 // reuses the staging scratch (idle past the k loop and large enough
 // for the four 8x8 blocks).
 //
@@ -47,7 +47,8 @@
 
 // QmmPeak variants (receipts/2026-10-04-qmm-roofline), X_F32 FullN
 // builds only, env-selected in primitives.cpp:
-// - LDS_PAD: the shared B-tile row stride becomes TILE_N + 4 f32. At
+// - LDS_PAD (landed default; MLX_OMARCHY_QMM_LDSPAD=0 is the kill
+//   switch): the shared B-tile row stride becomes TILE_N + 4 f32. At
 //   stride 32 every row of a coopMatLoad'd 8x8 B block lands on the
 //   same LDS banks (8-way conflict per block under the row-major lane
 //   mapping); +4 shifts each row by 4 banks. Values, addresses'

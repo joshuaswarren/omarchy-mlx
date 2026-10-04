@@ -811,7 +811,8 @@ enum class ComputeKernel : uint16_t {
   // whole-chunk B dequant behind one fence (Chunk) and a padded shared
   // B-tile row stride (LdsPad), same per-output ascending-k f32 chain
   // - digest-identical to the shipped kernels by construction.
-  // Env-selected (MLX_OMARCHY_QMM_CHUNK / _LDSPAD in primitives.cpp).
+  // Env-selected (MLX_OMARCHY_QMM_CHUNK / _LDSPAD in primitives.cpp;
+  // the padded stride is the landed default, =0 opts out).
   // Append-only profile ids.
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
