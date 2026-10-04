@@ -56,7 +56,7 @@ gate_log "$LOG" "VERIFY_EXIT $RC"
 # with the wave scheduler ON — the exact flow whose silent struct-growth
 # overflow killed the worker at its first GC pass.
 gate_log "$LOG" "G7C_TRACE_ABI_BEGIN"
-MLX_OMARCHY_WAVE_SCHED=1 "$P/venv/bin/python3" - "$(dirname "$SITE")" 2>&1 | tee -a "$LOG" <<'PY'
+MLX_OMARCHY_WAVE_SCHED=1 "$P/venv/bin/python3" - "$(dirname "$SITE")" <<'PY' 2>&1 | tee -a "$LOG"
 import ctypes, gc, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "coreml"))
 from trace_abi import TraceSnapshot, trace_snapshot, library_path
