@@ -7548,11 +7548,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         // ascending-k chain (doctest-pinned); both default OFF.
         const char* chunk_env = std::getenv("MLX_OMARCHY_QMM_CHUNK");
         const char* pad_env = std::getenv("MLX_OMARCHY_QMM_LDSPAD");
-        const bool chunk_on =
-            !env_routed && chunk_env != nullptr && chunk_env[0] == '1';
-        const bool pad_on =
-            !env_routed && pad_env != nullptr && pad_env[0] == '1';
-        if ((chunk_on || pad_on) && default_g4) {
+        const bool chunk_on = chunk_env != nullptr && chunk_env[0] == '1';
+        const bool pad_on = pad_env != nullptr && pad_env[0] == '1';
+        if ((chunk_on || pad_on) && default_g4 && raster_env == nullptr) {
           constexpr uint32_t gm = 4u;
           const uint32_t chunk_bytes = (32u * 16u + 64u * 32u) * 4u;
           const uint32_t pad_bytes = (32u * 16u + 16u * 36u) * 4u;
