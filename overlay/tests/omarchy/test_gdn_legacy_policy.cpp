@@ -154,8 +154,9 @@ bool simulated_legacy() {
   auto it = info.find("device_name");
   REQUIRE(it != info.end());
   const auto& name = std::get<std::string>(it->second);
-  REQUIRE_MESSAGE(name.find("G13") != std::string::npos &&
-                      name.find("G13C") == std::string::npos,
+  const bool legacy = name.find("G13") != std::string::npos &&
+      name.find("G13C") == std::string::npos;
+  REQUIRE_MESSAGE(legacy,
                   "capability simulation did not apply the legacy device "
                   "name; got '", name, "'");
   return true;
