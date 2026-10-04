@@ -220,3 +220,42 @@ Main's four items: (1) wired + coverage test updated (cd4a8c6f9, 26/26);
 this receipt); (3) this fresh-install section; (4) 27B N/A (qwen3_moe has
 no GDN; no qwen3_5-family 27B checkpoint on jw16). Land sha for the v0.7.26
 cut: main cd4a8c6f9 (packaging) with the kernel at d86ea8815.
+
+## Addendum 5 2026-10-04T11:0xZ — H257 root cause (jwm1): perrow variant; fix partial, free-run bar not yet met there
+
+ROOT CAUSE (confirmed): jwm1 (G13G) is a g13_legacy_part —
+gdn_decode_tile_enabled sends it to gated_delta_decode_perrow.comp (the
+G13 legacy walk), the one GDU variant the order-match did not cover. SPV
+evidence: the old perrow compiled with 0 OpFma AND 0 NoContraction
+decorations — glslc emitted unprotected mul/add chains, so the driver is
+free to contract; jwm1's older Mesa contracts (free-run identity 38.95%,
+first divergence median ~87 tokens — systematic, not tie-flips), jw16's
+newer Mesa happened to keep the order. jw16's tiled kernel carries
+precise-derived NoContraction, hence bit-exact there.
+
+FIX (032a69328, on the agent branch): perrow walks rewritten to the
+composed order with precise on every product and add (state_next = state*g;
+kv = serial ascending sum of s_g*k from 0.0; delta = (v-kv)*beta; ns =
+s_g + delta*k; out = serial sum of ns*q). New SPV: 23 NoContraction, 0
+OpFma.
+
+VERIFICATION ON JW16 (forced legacy path, MLX_OMARCHY_GDN_DECODE_TILE=0,
+diag wheel +diag.dfuse.032a69328):
+- captured-operand composed-vs-fused: BIT-IDENTICAL (single step).
+- free-running greedy identity, 5 prompts x 512: 53.2% mean — prompts 0/3
+  100%, prompts 1/2/4 diverge at tokens 23/41/256. IMPROVED over jwm1's
+  38.95% but DOES NOT meet the 95% bar: at least one more perrow
+  divergence source remains (candidates: a residual contraction site the
+  older driver honors despite NoContraction, or a non-walk difference in
+  the perrow kernel vs the C++ fallback — e.g. gate/logaddexp lowering on
+  G13).
+- tiled path untouched and re-verified: 9B d64 26d569c8, 2B d64 cb3e8770
+  (pins hold; jw16 serving unaffected).
+
+STATUS: jw16/G14-class (tiled) = landed, bit-exact, serving. jwm1/G13
+(perrow) = the route's free-run bar is NOT yet met; w71 should run jwm1
+with MLX_OMARCHY_GDN_RAW_REPEAT=0 until the perrow iteration completes
+(TF 99.53% already passed there pre-fix, so the near-tie class is fine —
+the free-run recurrence amplifies the perrow-only arithmetic difference).
+Next iteration: per-row intermediate dump (kv/delta/ns) on a diverging
+prompt, bisect walk vs gates on G13 Mesa.
