@@ -1358,6 +1358,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gdn_conv_decode_bf16, gdn_conv_decode_bf16_size};
     case ComputeKernel::GdnConvDecodeAppleBF16:
       return {gdn_conv_decode_apple_bf16, gdn_conv_decode_apple_bf16_size};
+    case ComputeKernel::GdnConvDeltaDecodeBF16:
+      return {gdn_conv_delta_decode_bf16, gdn_conv_delta_decode_bf16_size};
     case ComputeKernel::QmmVecGreedyBF16:
       return {qmm_vec_greedy_bf16, qmm_vec_greedy_bf16_size};
     case ComputeKernel::QmmPrefillFmaF16:
