@@ -4,6 +4,7 @@
 #include "mlx/backend/omarchy/encoder.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string_view>
 #include <unistd.h>
@@ -30,6 +31,380 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
   }
   VkDeviceSize end = offset + size;
   return end < offset ? UINT64_MAX : end;
+}
+
+// MLX_OMARCHY_DEBUG_REPEAT_<CLASS>=k / MLX_OMARCHY_DEBUG_EMPTY=k
+// (diagnostic instrument, default off — see
+// receipts/2026-10-04-prefill-sensitivity). REPEAT re-issues every
+// dispatch of one kernel class k-1 extra times back-to-back with the
+// same bound pipeline, descriptor set, push constants, and grid, so the
+// kernel recomputes identical values from unchanged inputs (all
+// repeatable classes are idempotent; generation digests must stay
+// bit-identical). The added GPU time per class is therefore
+// (k-1) x that class's busy time plus per-dispatch turnaround, and the
+// marginal wall response d(wall)/d(extra) reads directly as
+// on-critical-path (~1) vs overlapped (~0). EMPTY records k extra
+// 1-workgroup binding-free null-kernel dispatches after every dispatch
+// to price pure per-dispatch turnover inside a real graph.
+// Repeats/empties are not MLX work: no work-budget, hazard-tracker,
+// profiler, or dispatch-counter updates, and they refuse wave-sched
+// mode (which buffers nodes instead of recording, so the injection
+// would silently no-op).
+enum class DebugClass : uint8_t {
+  Qmm = 0,
+  Sdpa,
+  Gdn,
+  Rms,
+  Rope,
+  Cast,
+  Copy,
+  Ew,
+  Softmax,
+  Matmul,
+  Other,
+  Count
+};
+
+DebugClass debug_class_of(ComputeKernel kernel) {
+  switch (kernel) {
+    case ComputeKernel::QmmF32:
+    case ComputeKernel::QmmF16:
+    case ComputeKernel::QmmBF16:
+    case ComputeKernel::QmmVecF32:
+    case ComputeKernel::QmmVecF16:
+    case ComputeKernel::QmmVecBF16:
+    case ComputeKernel::QmmVecSubgroupF32:
+    case ComputeKernel::QmmVecSubgroupF16:
+    case ComputeKernel::QmmVecSubgroupBF16:
+    case ComputeKernel::QmmTileF32:
+    case ComputeKernel::QmmTileF16:
+    case ComputeKernel::QmmTileBF16:
+    case ComputeKernel::QmmFpF32:
+    case ComputeKernel::QmmFpF16:
+    case ComputeKernel::QmmFpBF16:
+    case ComputeKernel::QmmVecFpF32:
+    case ComputeKernel::QmmVecFpF16:
+    case ComputeKernel::QmmVecFpBF16:
+    case ComputeKernel::QmmVecSubgroupFpF32:
+    case ComputeKernel::QmmVecSubgroupFpF16:
+    case ComputeKernel::QmmVecSubgroupFpBF16:
+    case ComputeKernel::QmmTileFpF32:
+    case ComputeKernel::QmmTileFpF16:
+    case ComputeKernel::QmmTileFpBF16:
+    case ComputeKernel::GatherQmmF32:
+    case ComputeKernel::GatherQmmF16:
+    case ComputeKernel::GatherQmmBF16:
+    case ComputeKernel::GatherQmmNbF32:
+    case ComputeKernel::GatherQmmNbF16:
+    case ComputeKernel::GatherQmmNbBF16:
+    case ComputeKernel::GatherQmmNbFpF32:
+    case ComputeKernel::GatherQmmNbFpF16:
+    case ComputeKernel::GatherQmmNbFpBF16:
+    case ComputeKernel::GatherQmmNbFpHgsF32:
+    case ComputeKernel::GatherQmmNbFpHgsF16:
+    case ComputeKernel::GatherQmmNbFpHgsBF16:
+    case ComputeKernel::QmmVecQ4WordF32:
+    case ComputeKernel::QmmVecQ4WordF16:
+    case ComputeKernel::QmmVecQ4WordBF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupF32:
+    case ComputeKernel::QmmVecQ4WordSubgroupF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16:
+    case ComputeKernel::QmmTileRbF16:
+    case ComputeKernel::QmmPrefillCoopmatF16:
+    case ComputeKernel::QmmVecQ4MultiF32:
+    case ComputeKernel::QmmVecQ4MultiF16:
+    case ComputeKernel::QmmVecQ4MultiBF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupF32:
+    case ComputeKernel::QmmVecQ4MultiSubgroupF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
+    case ComputeKernel::QmmTileRbPreciseF16:
+    case ComputeKernel::QmmPrefillFmaF16:
+    case ComputeKernel::QmmPrefillFmaL16C4F16:
+    case ComputeKernel::QmmPrefillFmaL8C4F16:
+    case ComputeKernel::QmmPrefillFmaPreciseF16:
+    case ComputeKernel::MatmulVecMultiBF16:
+    case ComputeKernel::QmmPrefillCoopmatM16F16:
+    case ComputeKernel::QmmPrefillCoopmatBF16:
+    case ComputeKernel::QmmPrefillCoopmatM16BF16:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32:
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullN:
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN:
+    case ComputeKernel::QmmVecGreedyBF16:
+    case ComputeKernel::QmmVecQ4MultiOutgateBF16:
+    case ComputeKernel::GatherMmF32:
+    case ComputeKernel::GatherMmF16:
+    case ComputeKernel::GatherMmBF16:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterSwap:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG2:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG4:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG8:
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNTwoN:
+      return DebugClass::Qmm;
+    case ComputeKernel::SdpaDecodeNativeF16:
+    case ComputeKernel::SdpaDecodeNativeBF16:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP1F16:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP2F16:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd256:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd32:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd96:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd128:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd160:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd192:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd224:
+    case ComputeKernel::SdpaDecodeNativeF16Hd128:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP1F16Hd128:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP2F16Hd128:
+    case ComputeKernel::PartitionSmallKF32:
+    case ComputeKernel::PartitionSmallKF16:
+    case ComputeKernel::PartitionSmallKBF16:
+    case ComputeKernel::SdpaVjpOdoF32:
+    case ComputeKernel::SdpaVjpOdoF16:
+    case ComputeKernel::SdpaVjpOdoBF16:
+    case ComputeKernel::SdpaVjpDsF32:
+    case ComputeKernel::SdpaVjpLseF32:
+    case ComputeKernel::SdpaVjpReduceF32:
+    case ComputeKernel::SdpaVjpReduceF16:
+    case ComputeKernel::SdpaVjpReduceBF16:
+    case ComputeKernel::MatmulF32CoopmatQkBF16:
+    case ComputeKernel::MatmulF32CoopmatPvBF16:
+      return DebugClass::Sdpa;
+    case ComputeKernel::GatedDeltaDecodeBF16:
+    case ComputeKernel::GatedDeltaPrefillBF16:
+    case ComputeKernel::GatedDeltaPrefillCoopmatBF16:
+    case ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16:
+    case ComputeKernel::GdnConvDecodeBF16:
+    case ComputeKernel::GatedDeltaDecodeBF16Untiled:
+    case ComputeKernel::GatedDeltaDecodeBF16Pf:
+    case ComputeKernel::GdnVjpSaveBF16:
+    case ComputeKernel::GdnVjpBF16:
+    case ComputeKernel::GdnConvDecodeAppleBF16:
+    case ComputeKernel::ConvDw1dF32:
+    case ComputeKernel::ConvDw1dF16:
+    case ComputeKernel::ConvDw1dBF16:
+      return DebugClass::Gdn;
+    case ComputeKernel::FastRmsNormF32:
+    case ComputeKernel::FastRmsNormF16:
+    case ComputeKernel::FastRmsNormBF16:
+    case ComputeKernel::FastLayerNormF32:
+    case ComputeKernel::FastLayerNormF16:
+    case ComputeKernel::FastLayerNormBF16:
+    case ComputeKernel::FastRmsNormVjpDxF32:
+    case ComputeKernel::FastRmsNormVjpDxF16:
+    case ComputeKernel::FastRmsNormVjpDxBF16:
+    case ComputeKernel::FastLayerNormVjpDxF32:
+    case ComputeKernel::FastLayerNormVjpDxF16:
+    case ComputeKernel::FastLayerNormVjpDxBF16:
+    case ComputeKernel::FastRmsNormVjpDwF32:
+    case ComputeKernel::FastRmsNormVjpDwF16:
+    case ComputeKernel::FastRmsNormVjpDwBF16:
+    case ComputeKernel::FastLayerNormVjpDwF32:
+    case ComputeKernel::FastLayerNormVjpDwF16:
+    case ComputeKernel::FastLayerNormVjpDwBF16:
+    case ComputeKernel::FastRmsNormVjpDwReduceF32:
+    case ComputeKernel::FastRmsNormVjpDwReduceF16:
+    case ComputeKernel::FastRmsNormVjpDwReduceBF16:
+    case ComputeKernel::FastNormGatedBF16:
+    case ComputeKernel::FastNormGatedOnlyBF16:
+    case ComputeKernel::FastTrioNormF16:
+    case ComputeKernel::FastRmsNormAppleBF16:
+    case ComputeKernel::FastNormGatedAppleBF16:
+    case ComputeKernel::FastNormGatedOnlyAppleBF16:
+      return DebugClass::Rms;
+    case ComputeKernel::FastRopeF32:
+    case ComputeKernel::FastRopeF16:
+    case ComputeKernel::FastRopeBF16:
+    case ComputeKernel::FastRopeFreqsF32:
+    case ComputeKernel::FastRopeFreqsF16:
+    case ComputeKernel::FastRopeFreqsBF16:
+    case ComputeKernel::FastRopeNormBF16:
+    case ComputeKernel::FastTrioRopePairF16:
+    case ComputeKernel::FastRopeNormAppleBF16:
+      return DebugClass::Rope;
+    case ComputeKernel::CastF16F32:
+    case ComputeKernel::CastBoolF32:
+    case ComputeKernel::CastBoolI32:
+    case ComputeKernel::CastBoolF16:
+    case ComputeKernel::CastBoolBF16:
+    case ComputeKernel::CastF32F16:
+    case ComputeKernel::CastBF16F32:
+    case ComputeKernel::CastF32BF16:
+    case ComputeKernel::CastBF16F16:
+    case ComputeKernel::CastF16BF16:
+    case ComputeKernel::CastI32F32:
+    case ComputeKernel::CastU32F32:
+    case ComputeKernel::CastF32I32:
+    case ComputeKernel::CastI32F16:
+    case ComputeKernel::CastF16I32:
+    case ComputeKernel::CastI32BF16:
+    case ComputeKernel::CastBF16I32:
+    case ComputeKernel::CastF32Complex64:
+    case ComputeKernel::CastI32Complex64:
+    case ComputeKernel::CastU32Complex64:
+    case ComputeKernel::CastBoolComplex64:
+    case ComputeKernel::CastF16Complex64:
+    case ComputeKernel::CastBF16Complex64:
+    case ComputeKernel::CastComplex64F32:
+    case ComputeKernel::CastIntW1W1:
+    case ComputeKernel::CastIntW1W2:
+    case ComputeKernel::CastIntW1W4:
+    case ComputeKernel::CastIntW1W8:
+    case ComputeKernel::CastIntW2W1:
+    case ComputeKernel::CastIntW2W2:
+    case ComputeKernel::CastIntW2W4:
+    case ComputeKernel::CastIntW2W8:
+    case ComputeKernel::CastIntW4W1:
+    case ComputeKernel::CastIntW4W2:
+    case ComputeKernel::CastIntW4W4:
+    case ComputeKernel::CastIntW4W8:
+    case ComputeKernel::CastIntW8W1:
+    case ComputeKernel::CastIntW8W2:
+    case ComputeKernel::CastIntW8W4:
+    case ComputeKernel::CastIntW8W8:
+    case ComputeKernel::QuantizeF32:
+    case ComputeKernel::QuantizeF16:
+    case ComputeKernel::QuantizeBF16:
+    case ComputeKernel::DequantF32:
+    case ComputeKernel::DequantF16:
+    case ComputeKernel::DequantBF16:
+    case ComputeKernel::QuantizeFpF32:
+    case ComputeKernel::QuantizeFpF16:
+    case ComputeKernel::QuantizeFpBF16:
+    case ComputeKernel::DequantFpF32:
+    case ComputeKernel::DequantFpF16:
+    case ComputeKernel::DequantFpBF16:
+    case ComputeKernel::Fp8ToF32:
+    case ComputeKernel::Fp8ToF16:
+    case ComputeKernel::Fp8ToBF16:
+    case ComputeKernel::Fp8FromF32:
+    case ComputeKernel::Fp8FromF16:
+    case ComputeKernel::Fp8FromBF16:
+      return DebugClass::Cast;
+    case ComputeKernel::CopyGeneralF32:
+    case ComputeKernel::CopyGeneralF16:
+    case ComputeKernel::CopyGeneralBF16:
+    case ComputeKernel::CopyGeneralU32:
+    case ComputeKernel::CopyGeneralBool:
+    case ComputeKernel::CopyGeneralU8:
+    case ComputeKernel::CopyGeneralU16:
+    case ComputeKernel::CopyGeneralU64:
+    case ComputeKernel::CopyGeneralComplex64:
+      return DebugClass::Copy;
+    case ComputeKernel::ElementwiseF32:
+    case ComputeKernel::ElementwiseF16:
+    case ComputeKernel::ElementwiseBF16:
+    case ComputeKernel::ElementwiseI32:
+    case ComputeKernel::ElementwiseU32:
+    case ComputeKernel::ElementwiseI8:
+    case ComputeKernel::ElementwiseU8:
+    case ComputeKernel::ElementwiseI16:
+    case ComputeKernel::ElementwiseU16:
+    case ComputeKernel::ElementwiseI64:
+    case ComputeKernel::ElementwiseU64:
+    case ComputeKernel::ElementwiseLiteF32:
+    case ComputeKernel::ElementwiseLiteF16:
+    case ComputeKernel::ElementwiseLiteBF16:
+    case ComputeKernel::BinaryVecF16:
+    case ComputeKernel::BinaryVecBF16:
+    case ComputeKernel::UnaryVecF16:
+    case ComputeKernel::UnaryVecBF16:
+    case ComputeKernel::SiluF16:
+    case ComputeKernel::SiluBF16:
+    case ComputeKernel::SwigluF16:
+    case ComputeKernel::SwigluBF16:
+    case ComputeKernel::FastTrioSwigluF16:
+    case ComputeKernel::FusedChainF32:
+    case ComputeKernel::FusedChainBF16:
+    case ComputeKernel::HadamardF32:
+    case ComputeKernel::HadamardF16:
+    case ComputeKernel::HadamardBF16:
+    case ComputeKernel::ComplexElementwise:
+    case ComputeKernel::ComplexReal:
+    case ComputeKernel::ComplexImag:
+    case ComputeKernel::ComplexAbs:
+    case ComputeKernel::ComplexAbsAsComplex:
+      return DebugClass::Ew;
+    case ComputeKernel::SoftmaxF32:
+    case ComputeKernel::SoftmaxF16:
+    case ComputeKernel::SoftmaxBF16:
+    case ComputeKernel::LogSumExpF32:
+    case ComputeKernel::LogSumExpF16:
+    case ComputeKernel::LogSumExpBF16:
+      return DebugClass::Softmax;
+    case ComputeKernel::MatmulF32:
+    case ComputeKernel::MatmulF32Coopmat:
+    case ComputeKernel::MatmulF16:
+    case ComputeKernel::MatmulBF16:
+    case ComputeKernel::MatmulVecF32:
+    case ComputeKernel::MatmulVecF16:
+    case ComputeKernel::MatmulVecBF16:
+    case ComputeKernel::MatmulComplex64:
+    case ComputeKernel::MatmulBF16Coopmat:
+    case ComputeKernel::MatmulRbF16:
+    case ComputeKernel::MatmulBf16Fma:
+    case ComputeKernel::MatmulBf16FmaL16C4:
+    case ComputeKernel::SegmentedMmF32:
+    case ComputeKernel::SegmentedMmF16:
+    case ComputeKernel::SegmentedMmBF16:
+      return DebugClass::Matmul;
+    default:
+      return DebugClass::Other;
+  }
+}
+
+uint32_t debug_env_count(const char* name) {
+  const char* v = std::getenv(name);
+  if (v == nullptr) {
+    return 0;
+  }
+  long n = std::strtol(v, nullptr, 10);
+  if (n < 0) {
+    return 0;
+  }
+  return static_cast<uint32_t>(std::min<long>(n, 4096));
+}
+
+struct DebugRepeatConfig {
+  uint32_t repeat[static_cast<size_t>(DebugClass::Count) - 1]{};
+  uint32_t empty{0};
+
+  bool any() const {
+    for (uint32_t r : repeat) {
+      if (r > 0) {
+        return true;
+      }
+    }
+    return empty > 0;
+  }
+};
+
+const DebugRepeatConfig& debug_repeat_config() {
+  static const DebugRepeatConfig cfg = []() {
+    DebugRepeatConfig c;
+    c.repeat[static_cast<size_t>(DebugClass::Qmm)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_QMM");
+    c.repeat[static_cast<size_t>(DebugClass::Sdpa)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_SDPA");
+    c.repeat[static_cast<size_t>(DebugClass::Gdn)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_GDN");
+    c.repeat[static_cast<size_t>(DebugClass::Rms)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_RMS");
+    c.repeat[static_cast<size_t>(DebugClass::Rope)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_ROPE");
+    c.repeat[static_cast<size_t>(DebugClass::Cast)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_CAST");
+    c.repeat[static_cast<size_t>(DebugClass::Copy)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_COPY");
+    c.repeat[static_cast<size_t>(DebugClass::Ew)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_EW");
+    c.repeat[static_cast<size_t>(DebugClass::Softmax)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_SOFTMAX");
+    c.repeat[static_cast<size_t>(DebugClass::Matmul)] =
+        debug_env_count("MLX_OMARCHY_DEBUG_REPEAT_MATMUL");
+    c.empty = debug_env_count("MLX_OMARCHY_DEBUG_EMPTY");
+    return c;
+  }();
+  return cfg;
 }
 
 } // namespace
@@ -561,6 +936,13 @@ void CommandEncoder::dispatch_compute_pipeline(
     uint32_t group_count_x,
     uint32_t group_count_y,
     uint32_t group_count_z) {
+  if (wave_sched() && debug_repeat_config().any()) {
+    throw std::invalid_argument(
+        "[omarchy] MLX_OMARCHY_DEBUG_REPEAT_* / MLX_OMARCHY_DEBUG_EMPTY "
+        "inject recorded dispatches and require MLX_OMARCHY_WAVE_SCHED=0 "
+        "(wave-sched buffers nodes, so the injection would silently "
+        "no-op).");
+  }
   if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
     fprintf(stderr,
             "[rtmod] DISPATCH kernel=%d count=%u gx=%u gy=%u gz=%u\n",
@@ -824,6 +1206,44 @@ void CommandEncoder::dispatch_compute_pipeline(
 
   node_count_++;
   trace::counters().vk_compute_dispatches++;
+
+  // Injected-work sensitivity probe (diagnostic, default off): the
+  // real dispatch above left the pipeline, descriptor set, and push
+  // constants bound, so a repeat is exactly one more CmdDispatch of
+  // the same command — the kernel recomputes identical values from
+  // unchanged inputs into the same outputs. Not counted anywhere:
+  // no profiler node, no tracker range, no work-budget, no dispatch
+  // counter.
+  const auto& dbg = debug_repeat_config();
+  if (dbg.any()) {
+    uint8_t cls = static_cast<uint8_t>(debug_class_of(profile_kernel));
+    uint32_t total = cls < (static_cast<uint8_t>(DebugClass::Count) - 1)
+        ? dbg.repeat[cls]
+        : 0;
+    for (uint32_t r = 1; r < total; ++r) {
+      dt.CmdDispatch(cmd_, group_count_x, group_count_y, group_count_z);
+    }
+    if (dbg.empty > 0) {
+      VkPipeline null_pipeline = compute.pipeline(ComputeKernel::DebugNull);
+      // The null shader touches nothing; bind an allocated (never
+      // written) set so no unbound-descriptor edge exists.
+      VkDescriptorSet null_set = acquire_descriptor_set(compute);
+      dt.CmdBindPipeline(
+          cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, null_pipeline);
+      dt.CmdBindDescriptorSets(
+          cmd_,
+          VK_PIPELINE_BIND_POINT_COMPUTE,
+          compute.pipeline_layout(),
+          0,
+          1,
+          &null_set,
+          0,
+          nullptr);
+      for (uint32_t r = 0; r < dbg.empty; ++r) {
+        dt.CmdDispatch(cmd_, 1, 1, 1);
+      }
+    }
+  }
 }
 
 void CommandEncoder::emit_pending() {

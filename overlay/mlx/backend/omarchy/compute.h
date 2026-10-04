@@ -797,6 +797,10 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNRasterG4,
   QmmPrefillCoopmatBF16X32FullNRasterG8,
   QmmPrefillCoopmatBF16X32FullNTwoN,
+  // Binding-free 1-workgroup null kernel (shaders/debug_null.comp) for
+  // the injected-work sensitivity probe (MLX_OMARCHY_DEBUG_EMPTY).
+  // Append-only profile id.
+  DebugNull,
   Count,
 };
 

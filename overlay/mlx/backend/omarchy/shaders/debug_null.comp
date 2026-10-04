@@ -1,0 +1,8 @@
+// Injected-work sensitivity probe: binding-free null compute kernel.
+// One workgroup, no bindings, no memory access, no barriers it could
+// carry. MLX_OMARCHY_DEBUG_EMPTY records k of these after every real
+// dispatch to price per-dispatch turnover inside a real graph. Never
+// selected by any primitive.
+#version 450
+layout(local_size_x = 1) in;
+void main() {}

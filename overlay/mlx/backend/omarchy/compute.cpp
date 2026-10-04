@@ -505,6 +505,7 @@
 #include "fill_u64.h"
 #include "fill_u16.h"
 #include "compare_u64.h"
+#include "debug_null.h"
 
 namespace mlx::core::omarchy {
 
@@ -561,6 +562,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {cast_bf16_i32, cast_bf16_i32_size};
     case ComputeKernel::CastU32F32:
       return {cast_u32_f32, cast_u32_f32_size};
+    case ComputeKernel::DebugNull:
+      return {debug_null, debug_null_size};
     case ComputeKernel::ArgReduceF32:
       return {argreduce_f32, argreduce_f32_size};
     case ComputeKernel::ArgReduceF16:
