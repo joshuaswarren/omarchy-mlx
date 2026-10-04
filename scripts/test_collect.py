@@ -2347,7 +2347,7 @@ class OmarchyAneBlockTests(unittest.TestCase):
         self.assertEqual(cd.ANE_UNTESTED_STEPS,
             "To submit a judged row for an untested chip, install "
             "omarchy-ane-dkms and add that chip's opt-in key from the "
-            "omarchy-ane README table to /etc/omarchy-platform/"
+            "omarchy-ane README table to /etc/omarchy-mac-boot/"
             "dtb-overlays.opt-in. For T6020, T6022 and T8112, run sudo "
             "omarchy-ane-firmware-fetch first. Then run sudo "
             "omarchy-ane-dt apply and reboot. From an omarchy-mlx checkout, "
@@ -2359,7 +2359,7 @@ class OmarchyAneBlockTests(unittest.TestCase):
             "ships the ANE driver in-tree: userspace + smoke + firmware "
             "fetch only; do not install omarchy-ane-dkms. Add that chip's "
             "opt-in key from the omarchy-ane README table to "
-            "/etc/omarchy-platform/dtb-overlays.opt-in. For T6020, T6022 "
+            "/etc/omarchy-mac-boot/dtb-overlays.opt-in. For T6020, T6022 "
             "and T8112, run sudo omarchy-ane-firmware-fetch first. Then "
             "run sudo omarchy-ane-dt apply and reboot. From an "
             "omarchy-mlx checkout, run python3 scripts/collect_deep.py "

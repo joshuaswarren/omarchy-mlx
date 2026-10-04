@@ -42,17 +42,15 @@ the energy side is carried by T8103 H247: no idle cost, +26 mW (0.34 %) at
 
 ## Turn it on
 
-On a system with `omarchy-mac-boot` (which consumes `/usr/share/omarchy-platform/dtb-overlays`
-plus `/etc/omarchy-platform/dtb-overlays.opt-in`):
+On a system with `omarchy-mac-boot` (which consumes `/usr/lib/omarchy-mac-boot/dtb-overlays`
+plus `/etc/omarchy-mac-boot/dtb-overlays.opt-in`):
 
 ```
-echo gpu-pstate-t6001 | sudo tee -a /etc/omarchy-platform/dtb-overlays.opt-in
+echo gpu-pstate-t6001 | sudo tee -a /etc/omarchy-mac-boot/dtb-overlays.opt-in
 ```
 
-then rebuild the boot device tree (`omarchy-ane-dt apply` on systems with
-`omarchy-ane-dkms` without omarchy-mac-boot — it merges the overlay into its
-`/var/lib/omarchy-ane/dtbs/KERNEL/` board copy — or let omarchy-mac-boot do
-it) and reboot. Check after the reboot:
+then run `sudo update-m1n1` (omarchy-mac-boot builds `boot.bin` from the
+overlaid board trees) and reboot. Check after the reboot:
 
 ```
 od -An -tu4 --endian=big /sys/firmware/devicetree/base/soc/gpu@406400000/apple,perf-base-pstate
@@ -72,6 +70,6 @@ prints `        6`. To turn it off, remove the line and rebuild.
 
 `packaging/dt/t6001-gpu-pstate.dts` is the source. `packaging/build-dtbo.sh
 "$pkgdir"` compiles it to
-`usr/share/omarchy-platform/dtb-overlays/t6001/omarchy-gpu-pstate.dtbo`.
+`usr/lib/omarchy-mac-boot/dtb-overlays/t6001/omarchy-gpu-pstate.dtbo`.
 `tests/test_gpu_pstate_t6001.py` builds the overlay and merges it into a
 minimal board tree.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+ OR MIT
 /*
- * Overlay state: opt-in ("gpu-pstate-t8103" in /etc/omarchy-platform/dtb-overlays.opt-in).
+ * Overlay state: opt-in ("gpu-pstate-t8103" in /etc/omarchy-mac-boot/dtb-overlays.opt-in).
  *
  * Raises the AGX firmware's base performance state on T8103 (Apple M1) from 1
  * (396 MHz) to 6 (1278 MHz, the top of the 396/528/720/924/1128/1278 MHz OPP
