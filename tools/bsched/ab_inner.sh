@@ -92,7 +92,7 @@ while [ "$round" -le "$ROUNDS" ]; do
       for arm in $order; do
         label="${TAG}_d${depth}_p${prefill}_${arm}_r${round}"
         run_arm "$arm" "$label" "$depth" "$prefill"
-        echo "$label $(digest_of "$OUT/$label.json") $(tps_of "$OUT/$label.json")" >> "$OUT/pairs.jsonl"
+        echo "$label $(digest_of "$OUT/$label.json") $(rate_of "$OUT/$label.json" decode_tok_rate)" >> "$OUT/pairs.jsonl"
       done
       ctl_label="${TAG}_d${depth}_p${prefill}_ctl_r${round}"
       cand_label="${TAG}_d${depth}_p${prefill}_cand_r${round}"
