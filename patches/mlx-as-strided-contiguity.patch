@@ -1,0 +1,101 @@
+# Upstream: ml-explore/mlx 831164aca3ba51522141b0d9dc2a8fd0f931de01 (#4575)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/backend/common/common.cpp b/mlx/backend/common/common.cpp
+index f9d3c76e..dbea6d16 100644
+--- a/mlx/backend/common/common.cpp
++++ b/mlx/backend/common/common.cpp
+@@ -21,25 +21,33 @@ void AsStrided::eval(const std::vector<array>& inputs, array& out) {
+         "AsStrided must be used with row contiguous arrays only.");
+   }
+ 
+-  auto [no_bsx_size, row_contiguous, col_contiguous] =
+-      check_contiguity(shape_, strides_);
++  auto [_, row_contiguous, col_contiguous] = check_contiguity(shape_, strides_);
+ 
+   int64_t l = 0, h = 0;
+-  bool has_negative_stride = false;
++  std::vector<std::pair<int64_t, int>> dims;
+   for (int i = 0; i < strides_.size(); i++) {
+     auto delta = strides_[i] * (shape_[i] - 1);
+     if (strides_[i] >= 0) {
+       h += delta;
+     } else {
+       l += delta;
+-      has_negative_stride |= shape_[i] > 1;
++    }
++    if (shape_[i] > 1 && strides_[i] != 0) {
++      dims.emplace_back(strides_[i], shape_[i]);
+     }
+   }
+   size_t data_size = out.size() == 0 ? 0 : (h - l) + 1;
+ 
++  std::sort(dims.begin(), dims.end());
++  int64_t expected_stride = 1;
++  bool dense = true;
++  for (auto [stride, size] : dims) {
++    dense &= stride == expected_stride;
++    expected_stride *= size;
++  }
++
+   auto flags = in.flags();
+-  flags.contiguous =
+-      out.size() == 0 || (!has_negative_stride && no_bsx_size == data_size);
++  flags.contiguous = out.size() == 0 || dense;
+   flags.row_contiguous = row_contiguous;
+   flags.col_contiguous = col_contiguous;
+ 
+diff --git a/mlx/backend/common/slicing.cpp b/mlx/backend/common/slicing.cpp
+index cad2fd61..e2723fb8 100644
+--- a/mlx/backend/common/slicing.cpp
++++ b/mlx/backend/common/slicing.cpp
+@@ -30,7 +30,8 @@ void shared_buffer_slice(
+   auto flags = in.flags();
+   flags.row_contiguous = is_row_contiguous;
+   flags.col_contiguous = is_col_contiguous;
+-  flags.contiguous = (no_bsx_size == data_size);
++  flags.contiguous = is_row_contiguous || is_col_contiguous ||
++      (flags.contiguous && no_bsx_size == data_size);
+ 
+   out.copy_shared_buffer(in, out_strides, flags, data_size, data_offset);
+ }
+diff --git a/tests/ops_tests.cpp b/tests/ops_tests.cpp
+index 977d25c7..b2cdbe27 100644
+--- a/tests/ops_tests.cpp
++++ b/tests/ops_tests.cpp
+@@ -359,6 +359,22 @@ TEST_CASE("test slice") {
+   out = slice(x, {3, 0}, {-5, 2}, {-1, 1});
+   eval(out);
+   CHECK_EQ(out.data_size(), 8);
++
++  x = as_strided(square(arange(16, float32)), {3, 2, 2}, {1, 1, 5}, 0);
++  out = slice(x, {0, 0, 0}, {2, 2, 2});
++  eval(out);
++  CHECK_EQ(out.data_size(), 8);
++  CHECK_FALSE(out.flags().contiguous);
++  CHECK_EQ(sum(out).item<float>(), 152.0f);
++
++  x = reshape(arange(6), {2, 3});
++  x = slice(x, {1, 0}, {-3, 3}, {-1, 1});
++  out = slice(x, {1, 0}, {-3, 3}, {-1, 1});
++  eval(out);
++  CHECK(out.flags().contiguous);
++  CHECK(out.flags().row_contiguous);
++  CHECK(array_equal(reshape(transpose(out), {-1}), array({0, 3, 1, 4, 2, 5}))
++            .item<bool>());
+ }
+ 
+ TEST_CASE("test slice update") {
+@@ -2959,6 +2975,13 @@ TEST_CASE("test as_strided op") {
+   CHECK_EQ(y.data_size(), 10);
+   CHECK_FALSE(y.flags().contiguous);
+ 
++  auto xf = square(arange(16, float32));
++  y = as_strided(xf, {2, 2, 2}, {1, 1, 5}, 0);
++  eval(y);
++  CHECK_EQ(y.data_size(), 8);
++  CHECK_FALSE(y.flags().contiguous);
++  CHECK_EQ(sum(y).item<float>(), 152.0f);
++
+   x = reshape(x, {2, 5}); // 0 1 2 3 ...
+   x = transpose(x, {1, 0}); // 0 5 1 6 2 7 ...
+   y = as_strided(x, {3, 3}, {2, 1}, 1);
