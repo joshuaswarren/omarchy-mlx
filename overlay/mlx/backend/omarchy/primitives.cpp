@@ -12153,6 +12153,162 @@ void GdnConvUpdate::eval_gpu(
       1);
 }
 
+bool GdnConvDeltaUpdate::use_fallback(Stream s) {
+  return false;
+}
+
+// Fused GDN decode conv + gated-delta state update: one dispatch replaces
+// GdnConvUpdate (conv + silu + ring + the F4 q/k rms_norm_scaled epilogue)
+// and the GatedDeltaUpdate raw-gates decode walk. Every arithmetic body in
+// shaders/gdn_conv_delta_decode.comp is one of those two kernels verbatim,
+// and the walk consumes the same bf16 patterns the composed chain stores
+// and re-widens, so fused == composed bit for bit; the captured-operand
+// doctest and the production digest pins carry the proof. Geometries the
+// kernel does not serve (and the apple_norm selection) compose the exact
+// model chain through the primitive's fallback.
+void GdnConvDeltaUpdate::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  // inputs: conv_state, state, x (qkv row), conv weight, a, b, A_log,
+  // dt_bias. Outputs: y [B,1,Hv,128] bf16, conv state out [B,K-1,C] bf16,
+  // state out [B,Hv,128,128] f32.
+  array conv_state = inputs.at(0);
+  array state_g = inputs.at(1);
+  array in_x = inputs.at(2);
+  array in_w = inputs.at(3);
+  array a_in = inputs.at(4);
+  array b_in = inputs.at(5);
+  array A_log = inputs.at(6);
+  array dt_bias = inputs.at(7);
+  // Materialize any strided/offset input into a dense temporary (same trap
+  // as the GDN conv and decode kernels: nonzero storage offsets read
+  // garbage through flat bindings).
+  bool any_strided = false;
+  for (const auto& x : inputs) {
+    any_strided = any_strided || !x.flags().row_contiguous || x.offset() != 0;
+  }
+  if (any_strided) {
+    std::vector<array> dense;
+    dense.reserve(inputs.size());
+    for (const auto& x : inputs) {
+      if (x.flags().row_contiguous && x.offset() == 0) {
+        dense.push_back(x);
+      } else {
+        dense.push_back(contiguous_copy_gpu(x, s));
+        encoder.add_temporary(dense.back());
+      }
+    }
+    conv_state = dense[0];
+    state_g = dense[1];
+    in_x = dense[2];
+    in_w = dense[3];
+    a_in = dense[4];
+    b_in = dense[5];
+    A_log = dense[6];
+    dt_bias = dense[7];
+  }
+  array& out = outputs.at(0);
+  array& conv_state_out = outputs.at(1);
+  array& state_out = outputs.at(2);
+  const int B = in_x.shape(0);
+  const int C = in_x.shape(2);
+  const int K = in_w.shape(1);
+  const int Hv = b_in.shape(-1);
+  const int Hk = qk_key_dim() / 128;
+  const int Dk = 128;
+  const int Dv = 128;
+  bool fused_ready = B == 1 && in_x.shape(1) == 1 && Dk == 128 && Dv == 128 &&
+      conv_state.shape(1) == in_w.shape(1) - 1 &&
+      conv_state.shape(2) == C && in_w.shape(0) == C &&
+      in_w.shape(2) == 1 && C == 2 * qk_key_dim() + Hv * 128 &&
+      qk_key_dim() % 128 == 0 && Hv % Hk == 0 &&
+      conv_state.dtype() == bfloat16 && in_x.dtype() == bfloat16 &&
+      in_w.dtype() == bfloat16 && a_in.dtype() == bfloat16 &&
+      b_in.dtype() == bfloat16 &&
+      (A_log.dtype() == bfloat16 || A_log.dtype() == float32) &&
+      dt_bias.dtype() == bfloat16 && state_g.dtype() == float32 &&
+      out.dtype() == bfloat16 && conv_state_out.dtype() == bfloat16 &&
+      state_out.dtype() == float32;
+  // Only the non-Apple mode-1 norm tree is implemented in the fused
+  // kernel; the apple_norm selection composes (the fallback chain is the
+  // deployed pair of kernels, bit-exact by construction).
+  if (fused_ready && apple_norm_enabled(
+                         encoder.device(),
+                         size_t{128},
+                         static_cast<size_t>(B) * static_cast<size_t>(C))) {
+    fused_ready = false;
+  }
+  if (!fused_ready) {
+    auto result = fallback_(inputs);
+    settle(result);
+    encoder.synchronize("gdn_conv_delta_fallback");
+    outputs.at(0).copy_shared_buffer(result.at(0));
+    outputs.at(1).copy_shared_buffer(result.at(1));
+    outputs.at(2).copy_shared_buffer(result.at(2));
+    return;
+  }
+  out.set_data(allocate_omarchy(out.nbytes()));
+  conv_state_out.set_data(allocate_omarchy(conv_state_out.nbytes()));
+  state_out.set_data(allocate_omarchy(state_out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  omarchy::ComputeParams params;
+  params.operation = checked_u32(K, tag, out);
+  params.lhs_size = checked_u32(K - 1, tag, out);
+  params.rhs_size = checked_u32(static_cast<size_t>(qk_key_dim()), tag, out);
+  params.reduce_size = checked_u32(C, tag, out);
+  params.count = checked_u32(static_cast<size_t>(B) * C, tag, out);
+  // The q/k norm eps rides `output_size` as raw f32 bits (the field is
+  // unused by this kernel; `count` stays a real element count for the
+  // profiler).
+  params.output_size = std::bit_cast<uint32_t>(qk_eps());
+  params.lhs_offset = checked_item_offset(conv_state, conv_state.size(), tag, out);
+  params.rhs_offset = checked_item_offset(in_x, in_x.size(), tag, out);
+  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+  params.shape[1] = checked_item_offset(state_g, state_g.size(), tag, out);
+  params.shape[2] = checked_item_offset(state_out, state_out.size(), tag, out);
+  // A_log f32 rides flag bit 9; the shader indexes u16 words, so the item
+  // offset doubles for an f32 A_log (GatedDeltaUpdate convention).
+  params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
+  if (A_log.dtype() == float32) {
+    params.in_strides[0] *= 2u;
+    params.flags |= 512u;
+  }
+  params.in_strides[1] = checked_item_offset(dt_bias, dt_bias.size(), tag, out);
+  if (activates()) {
+    params.flags |= 1u;
+  }
+  params.flags |= 8u;  // raw gates
+  if (qk_key_dim() > 0) {
+    params.flags |= 2u;  // q/k norm fold
+  }
+  std::array<omarchy::ComputeBinding, 11> bindings{
+      binding(conv_state),      // 0 conv state in
+      binding(in_x),            // 1 x (qkv row)
+      binding(in_w),            // 2 conv weight
+      binding(a_in),            // 3 a
+      binding(b_in),            // 4 b
+      binding(state_g),         // 5 state in
+      binding(out),             // 6 y out
+      binding(state_out),       // 7 state out
+      binding(A_log),           // 8 A_log
+      binding(dt_bias),         // 9 dt bias
+      binding(conv_state_out)}; // 10 conv state out
+  encoder.dispatch_compute(
+      omarchy::ComputeKernel::GdnConvDeltaDecodeBF16,
+      bindings,
+      params,
+      static_cast<uint32_t>(Hv),
+      static_cast<uint32_t>(Dv / 32),
+      1);
+}
+
 bool LayerNorm::use_fallback(Stream s) {
   return false;
 }

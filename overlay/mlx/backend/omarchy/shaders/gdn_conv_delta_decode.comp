@@ -1,0 +1,303 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// GDN decode fused conv + gated-delta state update (GdnConvDeltaUpdate,
+// T=1). One dispatch replaces gdn_conv_decode.comp (conv + silu + ring
+// write + the F4 q/k rms_norm_scaled epilogue) and gated_delta_decode.comp
+// (the raw-gates decode walk): the workgroup computes its head's conv taps
+// in registers, applies silu and the per-head q/k norms with the exact
+// arithmetic and rounding of those two kernels, then runs the decode walk
+// on the in-register values. The conv output never reaches memory.
+//
+// Bit-exactness contract: every arithmetic body below is copied verbatim
+// from gdn_conv_decode.comp (conv tap accumulation, silu rounding chain,
+// the mode-1 128-row norm tree, the raw-bit ring copy) and
+// gated_delta_decode.comp (gate prologue, shared staging, both walk
+// associations, store rounding). The values the walk consumes are the same
+// bf16 bit patterns the composed chain stores to conv_out and re-widens.
+// The proof obligation (fused == composed, bit for bit) is carried by the
+// captured-operand doctest and the production digest pins, not assumed.
+//
+// Geometry (dispatch-gated): B == 1, T == 1, Dk == Dv == 128, K taps from
+// params, qk_key_dim % 128 == 0, Hv % Hk == 0, C = 2*qk_key_dim + Hv*128.
+// One workgroup per (head, 32-row block): the head's v row, its q row, and
+// its k row are exactly the 128 channels each lane covers, so the q and k
+// norm reductions are per-workgroup, identical to the F4 epilogue's halves.
+//
+// Push constants (fields reused from the fixed omarchy::ComputeParams):
+//   operation   K (conv taps)
+//   lhs_size    K - 1 (state rows)
+//   rhs_size    qk_key_dim
+//   reduce_size C (2*qk_key_dim + Hv*128)
+//   count       B*C (profiler info)
+//   output_size q/k norm eps as raw f32 bits (unused otherwise)
+//   matrix_m/n  Dk / Dv (128)
+//   matrix_k    Hv
+//   alpha/beta  q/k norm scales as f32 (bits taken in-shader)
+//   lhs_offset  conv state offset      rhs_offset  x (qkv row) offset
+//   aux_offset  b offset               shape[0]    a offset
+//   shape[1]    state in offset        shape[2]    state out offset
+//   output_offset y offset
+//   in_strides[0] A_log offset (x2 for f32 A_log, flag bit 9)
+//   in_strides[1] dt_bias offset
+//   flags       bit 0 activate, bit 2 qk fold, bit 8 raw gates,
+//               bit 9 f32 A_log
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer ConvState  { uint16_t v[]; } conv_state;
+layout(set = 0, binding = 1, std430) readonly buffer XBuf       { uint16_t v[]; } x_buf;
+layout(set = 0, binding = 2, std430) readonly buffer ConvW      { uint16_t v[]; } conv_w;
+layout(set = 0, binding = 3, std430) readonly buffer ABuf       { uint16_t v[]; } a_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf       { uint16_t v[]; } b_buf;
+layout(set = 0, binding = 5, std430) readonly buffer SIn        { float    v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf      { uint16_t v[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer         SOut        { float    v[]; } s_out;
+layout(set = 0, binding = 8, std430) readonly buffer ALogBuf    { uint16_t v[]; } alog_buf;
+layout(set = 0, binding = 9, std430) readonly buffer DtBuf      { uint16_t v[]; } dt_buf;
+layout(set = 0, binding = 10, std430) buffer        ConvStateOut{ uint16_t v[]; } conv_state_out;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;   // Dk
+  uint matrix_n;   // Dv
+  uint matrix_k;   // Hv
+  uint flags;
+  float alpha;     // q norm scale
+  float beta_f;    // k norm scale
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+// Depthwise conv tap accumulation for one channel: the gdn_conv_decode.comp
+// body verbatim (f32 widen, left-associated sum, weight [c*K + tap]).
+float conv_tap(uint batch_base_state, uint x_base, uint channel, uint km1) {
+  float accumulator = 0.0;
+  for (uint tap = 0u; tap < params.operation; ++tap) {
+    float value = tap < km1
+        ? bf16_load(conv_state.v[batch_base_state + tap * params.reduce_size + channel])
+        : bf16_load(x_buf.v[x_base + channel]);
+    accumulator += value *
+        bf16_load(conv_w.v[channel * params.operation + tap]);
+  }
+  return accumulator;
+}
+
+// The gdn_conv_decode.comp silu chain verbatim: the conv output rounds to
+// bf16 first, then sigmoid and the product each round exactly like the
+// composed sigmoid -> multiply nodes.
+uint16_t silu_chain(float accumulator) {
+  uint16_t conv_out = bf16_store(accumulator);
+  float value = bf16_load(conv_out);
+  float sigmoid_value = 1.0 / (1.0 + exp(-value));
+  uint16_t sig_b = bf16_store(sigmoid_value);
+  float silu = value * bf16_load(sig_b);
+  return bf16_store(silu);
+}
+
+// fast_norm_gated.comp mode-1 tree over one 128-row (the F4 epilogue's
+// per-half sequence, shared block, stride 64->1), followed by the exact
+// scale/rounding chain of the F4 epilogue.
+shared float norm_block[128];
+uint16_t norm_scaled_row(uint lane, uint16_t value_bits, uint scale_bits, float eps) {
+  norm_block[lane] = bf16_load(value_bits) * bf16_load(value_bits);
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      norm_block[lane] += norm_block[lane + stride];
+    }
+    barrier();
+  }
+  float mean_square = norm_block[0] / 128.0;
+  float norm = inversesqrt(mean_square + eps);
+  float scale = bf16_load(bf16_store(uintBitsToFloat(scale_bits)));
+  precise float result = bf16_load(value_bits) * (norm * 1.0);
+  float normed = bf16_load(bf16_store(result));
+  // The q and k phases run back to back on one shared block; this barrier
+  // orders every lane's final read of this phase ahead of the next phase's
+  // first write (the tree barriers above do not cover it).
+  barrier();
+  return bf16_store(normed * scale);
+}
+
+// Gate prologue: gated_delta_decode.comp gdn_gates verbatim (raw-gates
+// mode), reading a from a_buf and b from b_buf.
+vec2 gdn_gates(uint head) {
+  float g;
+  float beta;
+  float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+  float beta_f = 1.0f / (1.0f + exp(-b_in));
+  beta = bf16_load(bf16_store(beta_f));
+  float a_in = bf16_load(a_buf.v[params.shape[0] + head]);
+  float a_log;
+  if ((params.flags & 512u) != 0u) {
+    uint base = params.in_strides[0] + 2u * head;
+    a_log = uintBitsToFloat(uint(alog_buf.v[base]) |
+                            (uint(alog_buf.v[base + 1u]) << 16u));
+  } else {
+    a_log = bf16_load(alog_buf.v[params.in_strides[0] + head]);
+  }
+  float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
+  float x = bf16_load(bf16_store(a_in + dt));
+  float u = 1.0f + exp(-abs(x));
+  float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+  float sp_raw = max(x, 0.0f) + l1p;
+  float sp = ((params.flags & 512u) != 0u) ? sp_raw
+                                           : bf16_load(bf16_store(sp_raw));
+  g = exp(-(exp(a_log) * sp));
+  return vec2(g, beta);
+}
+
+const uint ROWS = 32u;
+const uint TILE_STRIDE = 129u;
+
+shared float sk[128];
+shared float sq[128];
+shared float skg[128];
+shared float sv[128];
+shared float tile[ROWS * TILE_STRIDE];
+
+float gdn_kv_walk(uint trow, uint dk, float g, bool mlx_order) {
+  float kv_acc = 0.0f;
+  for (uint i = 0u; i < dk; ++i) {
+    if (mlx_order) {
+      precise float s_g = tile[trow + i] * g;
+      precise float term = s_g * sk[i];
+      kv_acc += term;
+    } else {
+      kv_acc += tile[trow + i] * skg[i];
+    }
+  }
+  return kv_acc;
+}
+
+float gdn_decay_add(float s, float g, float dk_term) {
+  return s * g + dk_term;
+}
+
+void main() {
+  uint dk = params.matrix_m;
+  uint dv = params.matrix_n;
+  uint hv = params.matrix_k;
+  uint qk_key_dim = params.rhs_size;
+  uint hk_count = qk_key_dim / 128u;
+  uint head = gl_WorkGroupID.x;
+  uint row0 = gl_WorkGroupID.y * ROWS;
+  uint lane = gl_LocalInvocationID.x;
+  if (head >= hv) {
+    return;
+  }
+  uint hk = head / (hv / hk_count);
+  uint km1 = params.lhs_size;
+  uint channels = params.reduce_size;
+  uint batch_base_state = 0u;  // B == 1 (dispatch-gated)
+  uint x_base = params.rhs_offset;
+  uint q_c0 = hk * 128u;
+  uint k_c0 = qk_key_dim + hk * 128u;
+  uint v_c0 = 2u * qk_key_dim + head * 128u;
+
+  vec2 gates = gdn_gates(head);
+  float g = gates.x;
+  float beta = gates.y;
+
+  // Conv + silu for this lane's q, k, and v channels: the exact bodies of
+  // gdn_conv_decode.comp.
+  uint16_t qb = silu_chain(conv_tap(batch_base_state, x_base, q_c0 + lane, km1));
+  uint16_t kb = silu_chain(conv_tap(batch_base_state, x_base, k_c0 + lane, km1));
+  uint16_t vb = silu_chain(conv_tap(batch_base_state, x_base, v_c0 + lane, km1));
+
+  if ((params.flags & 2u) != 0u) {
+    float eps = uintBitsToFloat(params.output_size);
+    qb = norm_scaled_row(lane, qb, floatBitsToUint(params.alpha), eps);
+    kb = norm_scaled_row(lane, kb, floatBitsToUint(params.beta_f), eps);
+  }
+  // The walk consumes exactly the bf16 patterns the composed chain stores
+  // to conv_out and re-widens.
+  sq[lane] = bf16_load(qb);
+  sk[lane] = bf16_load(kb);
+  sv[lane] = bf16_load(vb);
+  skg[lane] = sk[lane] * g;
+
+  uint head_base = head * dv * dk;
+  uint tile_base = params.shape[1] + head_base + row0 * dk;
+  for (uint r = 0u; r < ROWS; ++r) {
+    tile[r * TILE_STRIDE + lane] = s_in.v[tile_base + r * dk + lane];
+  }
+  barrier();
+
+  if (lane < ROWS) {
+    uint row = row0 + lane;
+    uint trow = lane * TILE_STRIDE;
+    bool mlx_order = (params.flags & 512u) != 0u;
+    float kv_acc = gdn_kv_walk(trow, dk, g, mlx_order);
+    // v arrives from the shared conv row (the bf16 pattern the composed
+    // chain's GDU kernel re-widens from memory).
+    precise float delta = (sv[row] - kv_acc) * beta;
+
+    float o_acc = 0.0f;
+    for (uint i = 0u; i < dk; ++i) {
+      precise float dk_term = delta * sk[i];
+      precise float ns;
+      if (mlx_order) {
+        precise float s_g = tile[trow + i] * g;
+        ns = s_g + dk_term;
+      } else {
+        ns = gdn_decay_add(tile[trow + i], g, dk_term);
+      }
+      tile[trow + i] = ns;
+      precise float o_term = ns * sq[i];
+      o_acc += o_term;
+    }
+    y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
+  }
+  barrier();
+  uint out_base = params.shape[2] + head_base + row0 * dk;
+  for (uint r = 0u; r < ROWS; ++r) {
+    s_out.v[out_base + r * dk + lane] = tile[r * TILE_STRIDE + lane];
+  }
+
+  // Ring carry-out: the gdn_conv_decode.comp raw-bit copy verbatim, for
+  // this lane's q, k, and v channels.
+  uint state_row_base = batch_base_state;
+  for (uint seg = 0u; seg < 3u; ++seg) {
+    uint channel = (seg == 0u) ? (q_c0 + lane)
+                 : (seg == 1u) ? (k_c0 + lane)
+                               : (v_c0 + lane);
+    uint base = state_row_base + channel;
+    for (uint row = 0u; row + 1u < km1; ++row) {
+      conv_state_out.v[base + row * channels] =
+          conv_state.v[base + (row + 1u) * channels];
+    }
+    conv_state_out.v[base + (km1 - 1u) * channels] =
+        x_buf.v[x_base + channel];
+  }
+}

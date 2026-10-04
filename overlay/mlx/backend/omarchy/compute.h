@@ -797,6 +797,15 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNRasterG4,
   QmmPrefillCoopmatBF16X32FullNRasterG8,
   QmmPrefillCoopmatBF16X32FullNTwoN,
+  // GdnConvDelta fused decode (shaders/gdn_conv_delta_decode.comp): the
+  // GDN decode conv (taps, silu, ring write, the F4 q/k rms_norm_scaled
+  // epilogue) and the raw-gates gated-delta decode walk in one dispatch;
+  // every arithmetic body is the two deployed kernels' verbatim (see the
+  // shader header). Bit-identity fused vs composed is proven by the
+  // captured-operand doctest and the production digest pins. The
+  // apple_norm selection composes (fallback) instead: only the non-Apple
+  // norm tree is implemented here. Append-only profile id.
+  GdnConvDeltaDecodeBF16,
   Count,
 };
 

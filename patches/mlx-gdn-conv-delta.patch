@@ -1,0 +1,282 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -166,6 +166,31 @@
+     float qk_eps = 0.0f,
+     StreamOrDevice s = {});
+ 
++// GDN decode fused conv + state update (T == 1): one dispatch replaces
++// gdn_conv_update (conv + silu + ring + the q/k rms_norm_scaled pair) and
++// gated_delta_update_raw. The kernel computes the conv taps, silu, and the
++// per-head q/k norms with the exact arithmetic and rounding of the two
++// deployed kernels, then runs the gated-delta decode walk on the in-register
++// values, so the fused result is bit-identical to the composed chain.
++// Requires the decode geometry the fused kernel serves (head dims 128,
++// qk_key_dim % 128 == 0, Hv % Hk == 0); everything else composes the exact
++// model ops (gdn_conv_update -> split/reshape -> gated_delta_update_raw).
++MLX_API std::vector<array> gdn_conv_delta_update(
++    const array& conv_state,
++    const array& state,
++    const array& x,
++    const array& weight,
++    const array& a_in,
++    const array& b_in,
++    const array& A_log,
++    const array& dt_bias,
++    bool activate = true,
++    int qk_key_dim = 0,
++    float qk_scale_q = 0.0f,
++    float qk_scale_k = 0.0f,
++    float qk_eps = 0.0f,
++    StreamOrDevice s = {});
++
+ // Greedy token of a transposed affine-quantized projection: the index
+ // argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
+ // logits = quantized_matmul(x, w, scales, biases, transpose=true).
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1658,6 +1658,107 @@
+       /* inputs */ std::vector<array>{state, x, weight});
+ }
+ 
++std::vector<array> gdn_conv_delta_update(
++    const array& conv_state,
++    const array& state,
++    const array& x,
++    const array& weight,
++    const array& a_in,
++    const array& b_in,
++    const array& A_log,
++    const array& dt_bias,
++    bool activate,
++    int qk_key_dim,
++    float qk_scale_q,
++    float qk_scale_k,
++    float qk_eps,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (qk_key_dim <= 0 || qk_key_dim % 128 != 0) {
++    throw std::invalid_argument(
++        "gdn_conv_delta_update requires qk_key_dim > 0 and a multiple of 128");
++  }
++  // Fallback composes the exact chain the fused dispatch replaces:
++  // gdn_conv_update (conv + silu + ring + the q/k rms_norm_scaled pair),
++  // the per-head split/reshape, and the raw-gates decode update. Every
++  // intermediate is the model's own op output, so the composition is the
++  // deployed decode path verbatim.
++  auto fallback = [s, activate, qk_key_dim, qk_scale_q, qk_scale_k, qk_eps](
++                      std::vector<array> inputs) {
++    auto conv = gdn_conv_update(
++        inputs[0],
++        inputs[2],
++        inputs[3],
++        activate,
++        qk_key_dim,
++        qk_scale_q,
++        qk_scale_k,
++        qk_eps,
++        s);
++    auto& conv_out = conv[0];
++    int b = conv_out.shape(0);
++    int t = conv_out.shape(1);
++    int value_dim = conv_out.shape(2) - 2 * qk_key_dim;
++    int hv = inputs[5].shape(-1);
++    int hk = qk_key_dim / 128;
++    int head_k = qk_key_dim / hk;
++    if (value_dim % hv != 0) {
++      throw std::invalid_argument(
++          "gdn_conv_delta_update value_dim is not a multiple of the value "
++          "head count");
++    }
++    int head_v = value_dim / hv;
++    auto parts = split(conv_out, Shape{qk_key_dim, 2 * qk_key_dim}, -1, s);
++    auto q = reshape(parts[0], Shape{b, t, hk, head_k}, s);
++    auto k = reshape(parts[1], Shape{b, t, hk, head_k}, s);
++    auto v = reshape(parts[2], Shape{b, t, hv, head_v}, s);
++    auto r = gated_delta_update_raw(
++        q,
++        k,
++        v,
++        inputs[4],
++        inputs[5],
++        inputs[6],
++        inputs[7],
++        inputs[1],
++        std::nullopt,
++        s);
++    return std::vector<array>{r[0], conv[1], r[1]};
++  };
++  if (GdnConvDeltaUpdate::use_fallback(
++          conv_state, state, x, weight, a_in, b_in, A_log, dt_bias, s)) {
++    return fallback({conv_state, state, x, weight, a_in, b_in, A_log, dt_bias});
++  }
++  // The primitive's fixed output shapes assume 128-wide heads and the
++  // value segment = Hv * 128; anything else composes (the exact chain the
++  // fused route replaces).
++  int value_dim = x.shape(2) - 2 * qk_key_dim;
++  int hv_check = b_in.shape(-1);
++  if (value_dim <= 0 || value_dim != hv_check * 128 ||
++      hv_check % a_in.shape(-1) != 0) {
++    return fallback({conv_state, state, x, weight, a_in, b_in, A_log, dt_bias});
++  }
++  int B = x.shape(0);
++  int C = x.shape(2);
++  int K = weight.shape(1);
++  int Hv = b_in.shape(-1);
++  return array::make_arrays(
++      /* output shapes */
++      {{B, 1, Hv, 128}, {B, K - 1, C}, {B, Hv, 128, 128}},
++      /* dtypes */ {bfloat16, bfloat16, float32},
++      /* primitive */
++      std::make_shared<GdnConvDeltaUpdate>(
++          s,
++          fallback,
++          activate,
++          qk_key_dim,
++          qk_scale_q,
++          qk_scale_k,
++          qk_eps),
++      /* inputs */
++      std::vector<array>{conv_state, state, x, weight, a_in, b_in, A_log, dt_bias});
++}
++
+ 
+ std::vector<array> GatedDeltaUpdate::vjp(
+     const std::vector<array>& primals,
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -616,6 +616,81 @@
+   float qk_eps_{0.0f};
+ };
+ 
++class GdnConvDeltaUpdate : public Custom {
++ public:
++  GdnConvDeltaUpdate(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      bool activate,
++      int qk_key_dim,
++      float qk_scale_q,
++      float qk_scale_k,
++      float qk_eps)
++      : Custom(stream, std::move(fallback)),
++        activate_{activate},
++        qk_key_dim_{qk_key_dim},
++        qk_scale_q_{qk_scale_q},
++        qk_scale_k_{qk_scale_k},
++        qk_eps_{qk_eps} {}
++  // Backend-defined: the fused path never composes.
++  static bool use_fallback(Stream s);
++  // Fused decode geometry (T == 1): the omarchy kernel serves head dims
++  // 128 with the conv state concatenation folded into the read. The value
++  // segment must be Hv * 128 so the primitive's fixed output shapes are
++  // exact; everything else composes the exact model ops.
++  static bool use_fallback(
++      const array& conv_state,
++      const array& state,
++      const array& x,
++      const array& weight,
++      const array& a_in,
++      const array& b_in,
++      const array& A_log,
++      const array& dt_bias,
++      Stream s) {
++    return x.ndim() != 3 || conv_state.ndim() != 3 || weight.ndim() != 3 ||
++        state.ndim() != 4 || x.shape(1) != 1 || x.dtype() != bfloat16 ||
++        conv_state.dtype() != bfloat16 || weight.dtype() != bfloat16 ||
++        state.dtype() != float32 || a_in.dtype() != bfloat16 ||
++        b_in.dtype() != bfloat16 ||
++        (A_log.dtype() != bfloat16 && A_log.dtype() != float32) ||
++        dt_bias.dtype() != bfloat16 || x.shape(0) != conv_state.shape(0) ||
++        x.shape(2) != conv_state.shape(2) ||
++        conv_state.shape(1) != weight.shape(1) - 1 || weight.shape(2) != 1 ||
++        weight.shape(0) != x.shape(2);
++  }
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++  bool activates() const {
++    return activate_;
++  }
++  int qk_key_dim() const {
++    return qk_key_dim_;
++  }
++  float qk_scale_q() const {
++    return qk_scale_q_;
++  }
++  float qk_scale_k() const {
++    return qk_scale_k_;
++  }
++  float qk_eps() const {
++    return qk_eps_;
++  }
++  DEFINE_NAME(GdnConvDeltaUpdate)
++  DEFINE_INPUT_OUTPUT_SHAPE()
++
++ private:
++  bool activate_{false};
++  int qk_key_dim_{0};
++  float qk_scale_q_{0.0f};
++  float qk_scale_k_{0.0f};
++  float qk_eps_{0.0f};
++};
++
+ class GatedDeltaUpdateVJP : public Custom {
+  public:
+   GatedDeltaUpdateVJP(
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -623,6 +623,51 @@
+                 Tuple of (conv_out [B, 1, C], new_state [B, K-1, C])
+         )");
+   m.def(
++      "gdn_conv_delta_update",
++      &mlx::core::fast::gdn_conv_delta_update,
++      "conv_state"_a,
++      "state"_a,
++      "x"_a,
++      "weight"_a,
++      "a"_a,
++      "b"_a,
++      "A_log"_a,
++      "dt_bias"_a,
++      "activate"_a = true,
++      "qk_key_dim"_a = 0,
++      "qk_scale_q"_a = 0.0,
++      "qk_scale_k"_a = 0.0,
++      "qk_eps"_a = 0.0,
++      "stream"_a = nb::none(), // optional, defaults to None
++      R"(
++            GDN decode fused conv + gated-delta state update (T == 1). One
++            dispatch replaces gdn_conv_update (conv + silu + the ring state
++            write + the q/k rms_norm_scaled pair) and
++            gated_delta_update_raw. The fused kernel reproduces both
++            deployed kernels' arithmetic and rounding exactly, so the
++            result is bit-identical to the composed chain; any geometry the
++            kernel does not serve composes the exact model ops.
++            Args:
++                conv_state: Conv state [B, K-1, C]
++                state: GDN state [B, Hv, 128, 128] (float32)
++                x: Decode row [B, 1, C] with C = 2*qk_key_dim + value_dim
++                weight: Depthwise conv weight [C, K, 1]
++                a: Gating input a [B, 1, Hv]
++                b: Gating input b [B, 1, Hv]
++                A_log: Per-head A_log [Hv] (bf16 or f32)
++                dt_bias: Per-head dt_bias [Hv] (bf16)
++                activate: Apply silu to the conv output inside the same
++                    dispatch (the model's nn.silu).
++                qk_key_dim: GDN key dimension (q and k channel count).
++                qk_scale_q: q norm scale (the model's inv_scale**2).
++                qk_scale_k: k norm scale (the model's inv_scale).
++                qk_eps: q/k norm epsilon.
++            Returns:
++                Tuple of (out [B, 1, Hv, 128],
++                          new_conv_state [B, K-1, C],
++                          new_state [B, Hv, 128, 128])
++        )");
++  m.def(
+       "metal_kernel",
+       [](const std::string& name,
+          const std::vector<std::string>& input_names,

@@ -92,6 +92,12 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # numbers, so this one is applied with fuzz 3 (context still verified).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=3 \
   < "$ROOT/patches/mlx-fast-greedy-argmax.patch"
+# GDN decode chain: the conv + gated-delta update in one decode dispatch
+# (GdnConvDeltaDecodeBF16 backend kernel). Applied after greedy-argmax:
+# the fast.h insertion point sits between gdn_conv_update and
+# greedy_quantized_argmax, so its context is the post-greedy tree.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-gdn-conv-delta.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"

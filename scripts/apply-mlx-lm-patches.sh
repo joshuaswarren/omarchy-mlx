@@ -130,6 +130,14 @@ python3 "$ROOT/scripts/patch-mlx-lm-rope-norm.py" "$VENV"
 # (kill switch =0). Python patcher (GNU patch 2.8 on this host
 # fails byte-verified hunks, DecodeFuse3).
 python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"
+# GDN decode conv + gated-delta update in one dispatch (F7): the fused
+# route replaces gdn_conv_update + gated_delta_update_raw behind
+# MLX_OMARCHY_GDN_CONV_DELTA (default OFF until its A/B lands; the patched
+# chain without the env is the exact existing dispatches). Requires the
+# qknorm branch above; bit-exact by construction (both kernels' bodies
+# verbatim in gdn_conv_delta_decode.comp), proven by the captured-operand
+# doctest and the production digest pins.
+python3 "$ROOT/scripts/patch-mlx-lm-gdn-conv-delta.py" "$VENV"
 # Qwen3 dense rope-norm fold (qwen3.py attention site; the F3 fold ported
 # to the dense file code shape). Default ON since 2026-10-04: bit-exact,
 # 4B decode +4.18..+4.86% across d64-d512 (receipts/
