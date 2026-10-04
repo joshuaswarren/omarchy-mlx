@@ -1,0 +1,333 @@
+# omlx platform-gate patch 02: rewire the ~25 mx.metal gate sites
+# License: SPDX-Apache-2.0 -- upstream files keep their SPDX headers; gate predicates
+# now delegate to omlx._compat_gate.custom_kernels_available() which is True on
+# both macOS Metal (passes through mx.metal.is_available) and omarchy-mlx (canary probe).
+# Target commit: jundot/omlx 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40 (v0.7.0).
+--- a/omlx/engine/dflash.py
++++ b/omlx/engine/dflash.py
+@@ -41,6 +41,15 @@
+ from ..utils.model_loading import maybe_apply_pre_load_patches
+ from ..utils.proc_memory import get_phys_footprint
+ from ..utils.tokenizer import create_streaming_detokenizer
++try:
++    from omlx._compat_gate import custom_kernels_available as _cka
++    from omlx._compat_gate import set_wired_limit_enabled as _wire_enabled
++    from omlx._compat_gate import device_info_keys as _device_info_keys
++except ImportError:  # platform-gate patch not applied
++    _cka = lambda: mx.metal.is_available()
++    _wire_enabled = lambda: mx.metal.is_available()
++    _device_info_keys = lambda: mx.device_info() if hasattr(mx, "device_info") else {}
++
+ from .base import (
+     ActivityTrackingMixin,
+     BaseEngine,
+@@ -520,10 +529,10 @@
+ 
+     def _acquire_wired_limit(self) -> None:
+         """Mirror BatchGenerator's recommended working-set wired limit."""
+-        if self._wired_limit_owned or not mx.metal.is_available():
++        if self._wired_limit_owned or not _wire_enabled():
+             return
+         recommended = int(
+-            mx.device_info().get("max_recommended_working_set_size", 0) or 0
++            _device_info_keys().get("max_recommended_working_set_size", 0) or 0
+         )
+         if recommended <= 0:
+             raise RuntimeError("MLX did not report a recommended working set size")
+--- a/omlx/memory_monitor.py
++++ b/omlx/memory_monitor.py
+@@ -32,8 +32,9 @@
+ # Check if MLX Metal is available
+ try:
+     import mlx.core as mx
+-
+-    HAS_MLX_METAL = mx.metal.is_available()
++    from omlx._compat_gate import custom_kernels_available as _cka
++
++    HAS_MLX_METAL = _cka()
+ except ImportError:
+     HAS_MLX_METAL = False
+     mx = None
+--- a/omlx/patches/bailing_hybrid/bailing_hybrid_model.py
++++ b/omlx/patches/bailing_hybrid/bailing_hybrid_model.py
+@@ -7,6 +7,7 @@
+ from typing import Any, Dict, Optional, Tuple, Union
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ import mlx.nn as nn
+ 
+ from .activations import swiglu
+@@ -405,7 +406,7 @@
+     if (
+         head_dim % 32 == 0
+         and mx.default_device() == mx.gpu
+-        and mx.metal.is_available()
++        and _cka()
+     ):
+         output, state = gated_delta_kernel(q, k, v, decay, beta, state, mask)
+     else:
+--- a/omlx/patches/deepseek_v4/hyper_connection.py
++++ b/omlx/patches/deepseek_v4/hyper_connection.py
+@@ -3,6 +3,7 @@
+ from typing import Tuple
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ import mlx.nn as nn
+ 
+ from omlx.patches.deepseek_v4.decode_consistency import matmul as decode_matmul
+@@ -20,7 +21,7 @@
+        cast to float4 is a free hardware conversion.
+     4. FMA CHAINS: collapse uses fused multiply-add for 3 of 4 terms.
+     """
+-    if mx.default_device() != mx.gpu or not mx.metal.is_available():
++    if mx.default_device() != mx.gpu or not _cka():
+         return None
+ 
+     source = """
+@@ -240,7 +241,7 @@
+         use_ops = (
+             self.training
+             or mx.default_device() != mx.gpu
+-            or not mx.metal.is_available()
++            or not _cka()
+         )
+         hc_func = _hc_ops if use_ops else _hc_kernel
+ 
+--- a/omlx/patches/gemma4_verify_kernel.py
++++ b/omlx/patches/gemma4_verify_kernel.py
+@@ -32,6 +32,7 @@
+ import logging
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -343,7 +344,7 @@
+     global _availability
+     if _availability is None:
+         try:
+-            if not mx.metal.is_available():
++            if not _cka():
+                 _availability = False
+             else:
+                 q = mx.zeros((1, 8, 2, 512), dtype=mx.float16)
+--- a/omlx/patches/glm53_kda_prework.py
++++ b/omlx/patches/glm53_kda_prework.py
+@@ -30,6 +30,7 @@
+ import os
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ from .glm53_kda_recurrence import kda_recurrence
+ 
+@@ -229,7 +230,7 @@
+         or inputs.shape[1] < _GLM53_KDA_PREFILL_MIN_ROWS
+         or inputs.dtype != mx.bfloat16
+         or mx.default_device() != mx.gpu
+-        or not mx.metal.is_available()
++        or not _cka()
+         or getattr(module, "conv_kernel_size", 0) != 4
+         or getattr(module, "head_dim", 0) != 128
+         or not getattr(module, "num_heads", 0)
+--- a/omlx/patches/glm_moe_dsa/sparse_mla.py
++++ b/omlx/patches/glm_moe_dsa/sparse_mla.py
+@@ -6,13 +6,14 @@
+ from typing import Optional
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ from .kernels import fast as glm_fast
+ 
+ 
+ @lru_cache(maxsize=None)
+ def _make_topk_indices_to_block_masks_kernel():
+-    if not mx.metal.is_available():
++    if not _cka():
+         return None
+ 
+     source = r"""
+@@ -226,7 +227,7 @@
+ 
+ @lru_cache(maxsize=None)
+ def _make_index_score_reduce_kernel():
+-    if not mx.metal.is_available():
++    if not _cka():
+         return None
+ 
+     source = r"""
+--- a/omlx/patches/m5_gather_qmm.py
++++ b/omlx/patches/m5_gather_qmm.py
+@@ -73,6 +73,7 @@
+ import os
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ from omlx.custom_kernels.nax import is_nax_available
+ 
+@@ -108,7 +109,7 @@
+     global _defective
+     if _defective is not None:
+         return _defective
+-    if not mx.metal.is_available():
++    if not _cka():
+         _defective = False
+         return False
+     n, e, out_dim, k = 64, 8, 64, 96
+--- a/omlx/patches/qwen35_fa256_attention.py
++++ b/omlx/patches/qwen35_fa256_attention.py
+@@ -22,6 +22,7 @@
+ import time
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ from omlx.custom_kernels.nax import is_nax_available
+ from omlx.custom_kernels.qwen35_prefill import fast as _fa256_fast
+@@ -157,7 +158,7 @@
+     # it must not be inspected before the quantized-cache check declines.
+     if queries.ndim != 4 or queries.shape[-2] < _MIN_ROUTE_Q_LEN:
+         return False
+-    if not mx.metal.is_available() or _has_quantized_cache(cache):
++    if not _cka() or _has_quantized_cache(cache):
+         return False
+     if sinks is not None:
+         return False
+--- a/omlx/patches/qwen35_gdn_chunked.py
++++ b/omlx/patches/qwen35_gdn_chunked.py
+@@ -33,6 +33,7 @@
+ import os
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -45,7 +46,7 @@
+         return True
+     if os.environ.get("OMLX_GDN_KERNEL", "1") == "0":
+         return False
+-    if not mx.metal.is_available():
++    if not _cka():
+         return False
+ 
+     try:
+--- a/omlx/patches/qwen35_gdn_prework.py
++++ b/omlx/patches/qwen35_gdn_prework.py
+@@ -39,6 +39,7 @@
+ import sys
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ import mlx.nn as nn
+ from mlx_lm.models.gated_delta import normalize_qk
+ 
+@@ -1734,7 +1735,7 @@
+     apply_qwen35_vlm_qk_norm_patch()
+     if _PATCHED:
+         return True
+-    if not mx.metal.is_available():
++    if not _cka():
+         return False
+ 
+     from mlx_vlm.models.qwen3_5 import language as q35
+--- a/omlx/patches/qwen35_moe_routed_decode.py
++++ b/omlx/patches/qwen35_moe_routed_decode.py
+@@ -80,6 +80,7 @@
+ from typing import NamedTuple
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ import mlx.nn as nn
+ import numpy as np
+ 
+@@ -811,7 +812,7 @@
+     Needs ``qwen35_moe_router`` applied first: the fast arm reuses its fused
+     routing launch, so it selects the same experts with the same scores as
+     the body it replaces."""
+-    if not _ENABLED or not mx.metal.is_available():
++    if not _ENABLED or not _cka():
+         return False
+     try:
+         from mlx_vlm.models.qwen3_5_moe import language as vlm_moe
+--- a/omlx/patches/qwen35_moe_router.py
++++ b/omlx/patches/qwen35_moe_router.py
+@@ -48,6 +48,7 @@
+ from functools import wraps
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -655,7 +656,7 @@
+     experts, and shared expert; prefill rows and sharded runs keep the
+     original body untouched."""
+     global _ENGAGED_LOGGED
+-    if not mx.metal.is_available():
++    if not _cka():
+         return False
+     _ensure_vlm_verify_patch()
+     try:
+--- a/omlx/patches/qwen35_moe_weighted_sum.py
++++ b/omlx/patches/qwen35_moe_weighted_sum.py
+@@ -17,6 +17,7 @@
+ from typing import Any
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ from .m5_gather_qmm import fused_gate_up_activation
+ from .moe_routes import sort_routes
+@@ -54,7 +55,7 @@
+         return False
+     if os.environ.get("OMLX_QWEN35_MOE_WEIGHTED_SUM", "1") == "0":
+         return False
+-    if not mx.metal.is_available():
++    if not _cka():
+         return False
+     if getattr(self, "sharding_group", None) is not None:
+         return False
+--- a/omlx/patches/qwen35_verify_sdpa_split.py
++++ b/omlx/patches/qwen35_verify_sdpa_split.py
+@@ -45,6 +45,7 @@
+ import struct
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ from .qwen35_verify_qmm import is_row_exact_armed
+ 
+@@ -909,7 +910,7 @@
+     global _PATCHED
+     if _PATCHED:
+         return True
+-    if not mx.metal.is_available():
++    if not _cka():
+         return False
+ 
+     try:
+--- a/omlx/patches/sdpa256_attention.py
++++ b/omlx/patches/sdpa256_attention.py
+@@ -24,6 +24,7 @@
+ import os
+ 
+ import mlx.core as mx
++from omlx._compat_gate import custom_kernels_available as _cka
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -205,7 +206,7 @@
+         and mask == "causal"
+         and queries.shape[-2] > keys.shape[-2]
+     )
+-    if mx.metal.is_available() and native_shape and _NATIVE_FORCE_FUSED:
++    if _cka() and native_shape and _NATIVE_FORCE_FUSED:
+         try:
+             return mx.fast.scaled_dot_product_attention(
+                 queries,

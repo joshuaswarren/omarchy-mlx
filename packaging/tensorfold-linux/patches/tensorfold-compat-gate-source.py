@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Capability probe for TensorFold custom-kernel paths (omarchy-mlx port patch).
+
+This module is added to TensorFold by
+``packaging/tensorfold-linux/apply-platform-gate.sh``.  Its job is one
+question: given the current Python process, will an
+``mx.fast.metal_kernel`` JIT compile actually succeed on this backend?
+
+macOS Metal answers directly via ``mx.metal.is_available()``.  The
+omarchy-mlx backend routes ``mx.fast.metal_kernel`` through its own
+MSL-to-GLSL translator while keeping ``mx.metal.is_available()``
+permanently False per the product contract; on that backend the gate
+is answered by a one-time canary compile/run of a trivial kernel,
+returning False on any failure.  The macOS path answers identically
+because we check it first and return early.
+
+M5-specific gates (``generation()`` / ``tensor_units()`` / NAX
+variants in ``families/deepseek_v4`` and ``families/glm5_next``) are
+NOT re-routed through here: those decisions are Metal-specific by
+design and stay ``n/a`` on M1/M2 hosts per the parity matrix.
+
+The shape mirrors ``omlx._compat_gate`` so the two patches have
+parallel, well-documented probes; pattern origin was TensorFoldPort's
+``device.custom_kernels`` canary-probe commit (``f5d1111`` on
+``tf-drowz``), generalized from a Metal-only ``device`` module to a
+standalone module so the family kernels don't all need to import
+``device`` (which would create a dependency cycle in some files).
+
+Public surface:
+  custom_kernels() -> bool
+
+Probes are cached at module level via ``functools.cache``; per-call
+cost is one dict lookup after the first invocation.
+"""
+
+from __future__ import annotations
+
+import functools
+
+import mlx.core as mx
+
+
+@functools.cache
+def custom_kernels() -> bool:
+    """Whether ``mx.fast.metal_kernel`` will actually compile on this backend.
+
+    On macOS Metal this returns ``mx.metal.is_available()`` unchanged.
+    On other MLX builds (omarchy-mlx's Vulkan backend, the product
+    contract keeps ``mx.metal.is_available()`` False) we answer the
+    gate with a one-time canary compile/run of a trivial kernel and
+    cache the result; any failure short-circuits to False.
+
+    Callers must be running under ``mx.gpu`` already -- the original
+    gates all carried the ``mx.default_device() == mx.gpu`` conjunct,
+    which we keep at the call sites so this helper stays pure.
+    """
+    if mx.metal.is_available():
+        return True
+    try:
+        canary = mx.fast.metal_kernel(
+            name="tensorfold_custom_kernel_gate",
+            input_names=["a"],
+            output_names=["o"],
+            source="o[thread_position_in_grid.x] = a[thread_position_in_grid.x] + 1.0f;",
+        )
+        out = canary(
+            inputs=[mx.zeros(4, dtype=mx.float32)],
+            output_shapes=[(4,)],
+            output_dtypes=[mx.float32],
+            grid=(4, 1, 1),
+            threadgroup=(4, 1, 1),
+            stream=mx.gpu,
+        )[0]
+        mx.eval(out)
+        return bool(out[3] == 1.0)
+    except Exception:
+        return False
+
+
+def device_info():
+    """Best-effort device info that the TF gates key off.
+
+    Falls through to ``mx.metal.device_info()`` only when the omarchy
+    ``mx.device_info`` is missing; preserves the existing
+    ``hasattr(mx, "device_info")`` pattern the upstream TF code uses.
+    """
+    if hasattr(mx, "device_info"):
+        return mx.device_info()
+    return mx.metal.device_info()
+
+
+__all__ = ["custom_kernels", "device_info"]

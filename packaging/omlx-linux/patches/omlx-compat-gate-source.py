@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Capability probe for omlx custom-kernel paths (omarchy-mlx port patch).
+
+This module is added to omlx by ``packaging/omlx-linux/apply-platform-gate.sh``.
+Its job is one question: given the current Python process, will an
+``mx.fast.metal_kernel`` JIT compile actually succeed on this backend?
+
+macOS Metal answers directly via ``mx.metal.is_available()``.  The
+omarchy-mlx backend routes ``mx.fast.metal_kernel`` through its own
+MSL-to-GLSL translator while keeping ``mx.metal.is_available()``
+permanently False per the product contract; on that backend the gate
+is answered by a one-time canary compile/run of a trivial kernel,
+returning False on any failure.  The macOS path answers identically
+to ``mx.metal.is_available()`` because we check it first and return
+early.
+
+M5-specific gates (NAX variant, applegpu_g17+ tensor units) are NOT
+re-routed through here: those decisions are Metal-specific by design
+and stay ``n/a`` on M1/M2 hosts per the parity matrix.  This helper
+answers the *can a custom kernel run here* question only.
+
+Public surface:
+  custom_kernels_available() -> bool
+  set_wired_limit_enabled() -> bool   # mx.set_wired_limit accepts
+  device_info_keys() -> dict          # best-effort omarchy-side keys
+
+Probes are cached at module level via ``functools.cache``; per-call
+cost is one dict lookup after the first invocation.
+"""
+
+from __future__ import annotations
+
+import functools
+import platform
+from typing import Any
+
+import mlx.core as mx
+
+
+@functools.cache
+def custom_kernels_available() -> bool:
+    """Whether ``mx.fast.metal_kernel`` will actually compile on this backend.
+
+    On macOS Metal this returns ``mx.metal.is_available()`` unchanged.
+    On other MLX builds (omarchy-mlx's Vulkan backend, the product
+    contract keeps ``mx.metal.is_available()`` False) we answer the
+    gate with a one-time canary compile/run of a trivial kernel and
+    cache the result; any failure short-circuits to False.
+
+    Callers must be running under ``mx.gpu`` already -- the original
+    gates all carried the ``mx.default_device() == mx.gpu`` conjunct,
+    which we keep at the call sites so this helper stays pure.
+    """
+    if mx.metal.is_available():
+        return True
+    try:
+        canary = mx.fast.metal_kernel(
+            name="omlx_custom_kernel_gate",
+            input_names=["a"],
+            output_names=["o"],
+            source="o[thread_position_in_grid.x] = a[thread_position_in_grid.x] + 1.0f;",
+        )
+        out = canary(
+            inputs=[mx.zeros(4, dtype=mx.float32)],
+            output_shapes=[(4,)],
+            output_dtypes=[mx.float32],
+            grid=(4, 1, 1),
+            threadgroup=(4, 1, 1),
+            stream=mx.gpu,
+        )[0]
+        mx.eval(out)
+        return bool(out[3] == 1.0)
+    except Exception:
+        return False
+
+
+@functools.cache
+def set_wired_limit_enabled() -> bool:
+    """Whether the backend accepts ``mx.set_wired_limit``.
+
+    omarchy-mlx allocator provides the plumbing (audit row 1.1);
+    the omLX Metal backend owns the working-set accounting.  This
+    helper only short-circuits to False when running on a CPU default
+    device, where set_wired_limit is meaningless.
+    """
+    if mx.default_device() != mx.gpu:
+        return False
+    if not custom_kernels_available():
+        return False
+    try:
+        mx.set_wired_limit(mx.set_wired_limit(0))
+        return True
+    except Exception:
+        return False
+
+
+@functools.cache
+def device_info_keys() -> dict[str, Any]:
+    """Best-effort device info that the gates key off.
+
+    On macOS Metal this is ``mx.device_info()``.  On omarchy-mlx the
+    gpu::device_info overlay reports memory + architecture; the
+    ``max_recommended_working_set_size`` key the dflash wired-limit
+    gate relies on is the one runtime probe still owed (#7 lane), so
+    until that probe lands we return 0 for it on Linux and let the
+    caller fall back to its existing branch.
+    """
+    info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+    if not isinstance(info, dict):
+        return {}
+    if platform.system() != "Darwin":
+        info.setdefault("max_recommended_working_set_size", 0)
+    return info
+
+
+def is_omarchy() -> bool:
+    """True when running under the omarchy-mlx backend (Linux + Vulkan).
+
+    Used by the mac_ver gate in qwen35_prefill.fast to keep its
+    NAX-variant check on the macOS path it was designed for and to
+    return False (graceful no-op) on Linux.
+    """
+    return platform.system() != "Darwin"
+
+
+__all__ = [
+    "custom_kernels_available",
+    "set_wired_limit_enabled",
+    "device_info_keys",
+    "is_omarchy",
+]
