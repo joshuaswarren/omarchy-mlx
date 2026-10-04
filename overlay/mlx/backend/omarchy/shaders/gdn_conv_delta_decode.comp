@@ -124,30 +124,19 @@ uint16_t silu_chain(float accumulator) {
   return bf16_store(silu);
 }
 
-// fast_norm_gated.comp mode-1 tree over one 128-row (the F4 epilogue's
-// per-half sequence, shared block, stride 64->1), followed by the exact
-// scale/rounding chain of the F4 epilogue.
+// fast_norm_gated.comp mode-1 reduction constants (F4): the tree runs
+// INLINE in main() below — every shipped kernel keeps barrier() in main,
+// never in called helpers.
+
+const uint ROWS = 32u;
+const uint TILE_STRIDE = 129u;
+
 shared float norm_block[128];
-uint16_t norm_scaled_row(uint lane, uint16_t value_bits, uint scale_bits, float eps) {
-  norm_block[lane] = bf16_load(value_bits) * bf16_load(value_bits);
-  barrier();
-  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
-    if (lane < stride) {
-      norm_block[lane] += norm_block[lane + stride];
-    }
-    barrier();
-  }
-  float mean_square = norm_block[0] / 128.0;
-  float norm = inversesqrt(mean_square + eps);
-  float scale = bf16_load(bf16_store(uintBitsToFloat(scale_bits)));
-  precise float result = bf16_load(value_bits) * (norm * 1.0);
-  float normed = bf16_load(bf16_store(result));
-  // The q and k phases run back to back on one shared block; this barrier
-  // orders every lane's final read of this phase ahead of the next phase's
-  // first write (the tree barriers above do not cover it).
-  barrier();
-  return bf16_store(normed * scale);
-}
+shared float sk[128];
+shared float sq[128];
+shared float skg[128];
+shared float sv[128];
+shared float tile[ROWS * TILE_STRIDE];
 
 // Gate prologue: gated_delta_decode.comp gdn_gates verbatim (raw-gates
 // mode), reading a from a_buf and b from b_buf.
@@ -176,15 +165,6 @@ vec2 gdn_gates(uint head) {
   g = exp(-(exp(a_log) * sp));
   return vec2(g, beta);
 }
-
-const uint ROWS = 32u;
-const uint TILE_STRIDE = 129u;
-
-shared float sk[128];
-shared float sq[128];
-shared float skg[128];
-shared float sv[128];
-shared float tile[ROWS * TILE_STRIDE];
 
 float gdn_kv_walk(uint trow, uint dk, float g, bool mlx_order) {
   float kv_acc = 0.0f;
@@ -237,8 +217,46 @@ void main() {
 
   if ((params.flags & 2u) != 0u) {
     float eps = uintBitsToFloat(params.output_size);
-    qb = norm_scaled_row(lane, qb, floatBitsToUint(params.alpha), eps);
-    kb = norm_scaled_row(lane, kb, floatBitsToUint(params.beta_f), eps);
+    // F4 q/k norm phases, inline (mode-1 tree, stride 64->1; the same
+    // association and rounding chain as the gdn_conv_decode epilogue).
+    // Phase 1: q row.
+    norm_block[lane] = bf16_load(qb) * bf16_load(qb);
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        norm_block[lane] += norm_block[lane + stride];
+      }
+      barrier();
+    }
+    {
+      float mean_square = norm_block[0] / 128.0;
+      float norm = inversesqrt(mean_square + eps);
+      float scale = bf16_load(bf16_store(floatBitsToUint(params.alpha)));
+      precise float result = bf16_load(qb) * (norm * 1.0);
+      float normed = bf16_load(bf16_store(result));
+      qb = bf16_store(normed * scale);
+    }
+    // Order phase 1's read of norm_block ahead of phase 2's first write.
+    barrier();
+    // Phase 2: k row.
+    norm_block[lane] = bf16_load(kb) * bf16_load(kb);
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        norm_block[lane] += norm_block[lane + stride];
+      }
+      barrier();
+    }
+    {
+      float mean_square = norm_block[0] / 128.0;
+      float norm = inversesqrt(mean_square + eps);
+      float scale = bf16_load(bf16_store(floatBitsToUint(params.beta_f)));
+      precise float result = bf16_load(kb) * (norm * 1.0);
+      float normed = bf16_load(bf16_store(result));
+      kb = bf16_store(normed * scale);
+    }
+    // Order phase 2's read ahead of the shared sk/sq/sv writes below.
+    barrier();
   }
   // The walk consumes exactly the bf16 patterns the composed chain stores
   // to conv_out and re-widens.
