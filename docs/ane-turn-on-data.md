@@ -35,7 +35,7 @@ Linux (`ane_port_detail` plus the new turn-on blocks):
   UNTESTED flag, output lines), `module` (`ane` / `ane_t6021` with
   version, srcversion, parameters), `firmware` (`/lib/firmware/apple/ane`
   hashes), `opt_in` (the `ane-*` keys of
-  `/etc/omarchy-platform/dtb-overlays.opt-in`), `smoke` (always
+  `/etc/omarchy-mac-boot/dtb-overlays.opt-in`), `smoke` (always
   present: `{requested: false}` without `--ane-smoke`; with the flag
   it runs the packaged `omarchy-ane-smoke` runner — one
   JSON line on stdout, one `omarchy-ane-smoke: ...` line on stderr;

@@ -49,13 +49,12 @@ not move the macOS comparison cells**, which run back to back.
 ## Turn it on
 
 ```
-echo gpu-pstate-t8103 | sudo tee -a /etc/omarchy-platform/dtb-overlays.opt-in
+echo gpu-pstate-t8103 | sudo tee -a /etc/omarchy-mac-boot/dtb-overlays.opt-in
 ```
 
-then let the overlay consumer rebuild the boot device tree and reboot
-(`omarchy-ane-dt apply` on a system with `omarchy-ane-dkms`, or the newer
-`omarchy-mac-boot`, which applies `/usr/share/omarchy-platform/dtb-overlays`
-itself; both read the opt-in file). Check after the reboot:
+then run `sudo update-m1n1` (omarchy-mac-boot builds `boot.bin` from the
+overlaid board trees in `/usr/lib/omarchy-mac-boot/dtb-overlays` and reads the
+opt-in file) and reboot. Check after the reboot:
 
 ```
 od -An -tu4 --endian=big /sys/firmware/devicetree/base/soc/gpu@206400000/apple,perf-base-pstate
@@ -100,6 +99,6 @@ Details: `docs/gpu-base-pstate-t6001.md`.
 
 `packaging/dt/t8103-gpu-pstate.dts` is the source. `packaging/build-dtbo.sh
 "$pkgdir"` compiles it to
-`usr/share/omarchy-platform/dtb-overlays/t8103/omarchy-gpu-pstate.dtbo`. The
+`usr/lib/omarchy-mac-boot/dtb-overlays/t8103/omarchy-gpu-pstate.dtbo`. The
 recipe needs `dtc` at build time. `tests/test_gpu_pstate_overlay.py` builds the
 overlay and merges it into a minimal board tree.

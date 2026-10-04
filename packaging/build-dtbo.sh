@@ -1,17 +1,17 @@
 #!/bin/bash
 # Compile the device tree overlays in packaging/dt for a package recipe:
-#   packaging/dt/PREFIX-NAME.dts  ->  DESTDIR/usr/share/omarchy-platform/dtb-overlays/PREFIX/omarchy-NAME.dtbo
+#   packaging/dt/PREFIX-NAME.dts  ->  DESTDIR/usr/lib/omarchy-mac-boot/dtb-overlays/PREFIX/omarchy-NAME.dtbo
 # PREFIX selects the board device trees by file name (t8103 = every t8103-*.dtb).
-# The directory is the one omarchy-ane installs into and omarchy-mac-boot /
-# omarchy-ane-dt apply from. An overlay whose root has the string
+# omarchy-mac-boot ships the directory empty; a package drops overlays into it
+# and update-m1n1 builds boot.bin from the overlaid copies. An overlay whose root has the string
 # "omarchy,opt-in" is applied only when that string is a line of
-# /etc/omarchy-platform/dtb-overlays.opt-in; the owner writes that file.
+# /etc/omarchy-mac-boot/dtb-overlays.opt-in; the owner writes that file.
 # For a recipe: packaging/build-dtbo.sh "$pkgdir"   (needs dtc and fdtget)
 set -euo pipefail
 shopt -s nullglob
 destdir=${1:?usage: build-dtbo.sh DESTDIR}
 here=$(dirname -- "$(realpath -- "$0")")
-overlay_dir=usr/share/omarchy-platform/dtb-overlays
+overlay_dir=usr/lib/omarchy-mac-boot/dtb-overlays
 n=0
 for src in "$here"/dt/*.dts; do
 	base=${src##*/}

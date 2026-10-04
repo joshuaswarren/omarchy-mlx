@@ -204,7 +204,7 @@ The collector prints the steps that match your kernel. One wording source:
 
 - Kernel without the in-tree ANE driver: "To submit a judged row for an untested
   chip, install omarchy-ane-dkms and add that chip's opt-in key from the
-  omarchy-ane README table to /etc/omarchy-platform/dtb-overlays.opt-in. For
+  omarchy-ane README table to /etc/omarchy-mac-boot/dtb-overlays.opt-in. For
   T6020, T6022 and T8112, run sudo omarchy-ane-firmware-fetch first. Then run
   sudo omarchy-ane-dt apply and reboot. From an omarchy-mlx checkout, run
   python3 scripts/collect_deep.py --ane-smoke --submit. The collector runs the
@@ -213,7 +213,7 @@ The collector prints the steps that match your kernel. One wording source:
   untested chip on a kernel that ships the ANE driver in-tree: userspace + smoke
   + firmware fetch only; do not install omarchy-ane-dkms. Add that chip's opt-in
   key from the omarchy-ane README table to
-  /etc/omarchy-platform/dtb-overlays.opt-in. For T6020, T6022 and T8112, run
+  /etc/omarchy-mac-boot/dtb-overlays.opt-in. For T6020, T6022 and T8112, run
   sudo omarchy-ane-firmware-fetch first. Then run sudo omarchy-ane-dt apply and
   reboot. From an omarchy-mlx checkout, run python3 scripts/collect_deep.py
   --ane-smoke --submit. The collector runs the smoke when the chip is idle
