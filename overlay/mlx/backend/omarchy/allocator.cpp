@@ -410,9 +410,23 @@ void clear_cache() {
   omarchy::allocator().clear_cache();
 }
 
-// Wired limits are a Metal feature; Omarchy has no equivalent (same as CUDA).
-size_t set_wired_limit(size_t) {
-  return 0;
+// Wired limits are a Metal feature; Omarchy has no equivalent (same as
+// CUDA): there is no GPU-private RAM to wire, no MTL residency set, and
+// mlock(2) would only pin CPU pages that the Vulkan allocator does not
+// need pinned. We expose the API as an honest documented no-op that
+// remembers the most recently requested value and returns the previously
+// stored one, so oMLX's BatchGenerator pair
+// (acquire: set_wired_limit(recommended); later restore: set_wired_limit(prev))
+// round-trips correctly and an "unset" state is distinguishable from "set
+// to 0". Callers that depend on wired residency must surface their
+// requirement through hardware-level detection, not this no-op.
+size_t set_wired_limit(size_t limit) {
+  static std::mutex mutex;
+  static size_t previous = 0;
+  std::lock_guard<std::mutex> lk(mutex);
+  size_t prev = previous;
+  previous = limit;
+  return prev;
 }
 
 } // namespace mlx::core

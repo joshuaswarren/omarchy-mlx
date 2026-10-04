@@ -520,3 +520,22 @@ foreach(_capsim_profile IN ITEMS
                        ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                        TIMEOUT 1800)
 endforeach()
+
+# HwProbe device_info parity (matrix lane #7, rows A15/A19/B9). Tests
+# the public keys oMLX (dflash, oq, memory_monitor) and TensorFold
+# (kernels/device.py, threads.py, prefill_mm.py) read on real Apple
+# silicon and on a dev-box llvmpipe path (MLX_OMARCHY_ALLOW_NON_APPLE=1).
+add_executable(omarchy_device_info_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_device_info_real_values.cpp)
+target_link_libraries(omarchy_device_info_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_device_info_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_device_info_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_device_info_tests)
+add_test(NAME omarchy_device_info_tests COMMAND omarchy_device_info_tests)
+set_tests_properties(omarchy_device_info_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 120)
