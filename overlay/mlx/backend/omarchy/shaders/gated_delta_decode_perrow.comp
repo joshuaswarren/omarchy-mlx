@@ -115,7 +115,17 @@ void main() {
     float beta_f = 1.0f / (1.0f + exp(-b_in));
     beta = bf16_load(bf16_store(beta_f));
     float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
-    float a_log = bf16_load(alog_buf.v[params.in_strides[0] + head]);
+    // A_log: flag bit 9 selects an f32 A_log (Qwen3.5-9B conversion) read
+    // as two little-endian u16 words - the same f32 word the eager chain's
+    // astype(f32) leaves untouched, so no rounding difference.
+    float a_log;
+    if ((params.flags & 512u) != 0u) {
+      uint base = params.in_strides[0] + 2u * head;
+      a_log = uintBitsToFloat(uint(alog_buf.v[base]) |
+                              (uint(alog_buf.v[base + 1u]) << 16u));
+    } else {
+      a_log = bf16_load(alog_buf.v[params.in_strides[0] + head]);
+    }
     // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
     float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
     // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
