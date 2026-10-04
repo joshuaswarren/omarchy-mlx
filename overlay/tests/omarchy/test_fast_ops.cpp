@@ -590,8 +590,20 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
       "fused vjp dw equals composed chain vjp dw");
 
   // Reference 2: host central differences in double over the bf16-quantized
-  // primals. Rows are the (b, h, t) rows of the (B, H, T, D) layout; pairs
-  // (d, d + half) rotate by theta = t * base^(-d) (non-traditional).
+  // primals — the objective quantizes each perturbed point back to bf16,
+  // because that is what the kernel actually consumes. Rows are the
+  // (b, h, t) rows of the (B, H, T, D) layout; pairs (d, d + half) rotate
+  // by theta = t * base^(-d) (non-traditional).
+  auto bf16_round = [](double v) {
+    float f = static_cast<float>(v);
+    uint32_t bits;
+    std::memcpy(&bits, &f, sizeof(bits));
+    uint32_t lsb = (bits >> 16) & 1u;
+    bits += 0x7FFFu + lsb;
+    bits &= 0xFFFF0000u;
+    std::memcpy(&f, &bits, sizeof(f));
+    return static_cast<double>(f);
+  };
   std::vector<double> xq = widen(flat(x_pre, stream)); // (B, T, H, D) rows
   std::vector<double> wq = widen(flat(w, stream));
   std::vector<double> cq = widen(flat(cot, stream)); // (B, H, T, D)
@@ -605,14 +617,16 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
           size_t xrow = ((b * T + t) * H + h) * D;
           double ms = 0.0;
           for (int d = 0; d < D; ++d) {
-            ms += xs[xrow + d] * xs[xrow + d];
+            double xv = bf16_round(xs[xrow + d]);
+            ms += xv * xv;
           }
           double rnorm = 1.0 / std::sqrt(ms / D + eps);
           for (int d = 0; d < half; ++d) {
             double theta = double(t) * inv_freq(d);
             double c = std::cos(theta), s = std::sin(theta);
-            double n0 = xs[xrow + d] * rnorm * ws[d];
-            double n1 = xs[xrow + d + half] * rnorm * ws[d + half];
+            double n0 = bf16_round(xs[xrow + d]) * rnorm * bf16_round(ws[d]);
+            double n1 =
+                bf16_round(xs[xrow + d + half]) * rnorm * bf16_round(ws[d + half]);
             size_t crow = ((b * H + h) * T + t) * D;
             loss += cq[crow + d] * (n0 * c - n1 * s);
             loss += cq[crow + d + half] * (n0 * s + n1 * c);
