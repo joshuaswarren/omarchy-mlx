@@ -11652,6 +11652,80 @@ void GatedDeltaUpdate::eval_gpu(
       1);
 }
 
+bool Int8Matmul::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+// Symmetric-int8 matmul, shaders/int8_matmul.comp. X and W are read as
+// uint word views (4 int8 bytes per word, sign extended in-shader), so the
+// route needs no 8-bit storage capability; accumulation is exact int32 per
+// group with float32 group sums, matching the composed fallback bit for
+// bit. Spare ComputeParams::shape[0..2] carry the XS / WS / B element
+// offsets (see the shader header).
+void Int8Matmul::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  array x = inputs.at(0);
+  array xscale = inputs.at(1);
+  array w = inputs.at(2);
+  array wscale = inputs.at(3);
+  array bias = inputs.at(4);
+  array& out = outputs.at(0);
+  std::optional<array> x_temp;
+  std::optional<array> w_temp;
+  std::optional<array> xs_temp;
+  std::optional<array> ws_temp;
+  std::optional<array> b_temp;
+  const array& xd = ensure_dense(x, x.flags().row_contiguous, x_temp, encoder, s);
+  const array& wd = ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  const array& xsd = ensure_dense(
+      xscale, xscale.flags().row_contiguous, xs_temp, encoder, s);
+  const array& wsd = ensure_dense(
+      wscale, wscale.flags().row_contiguous, ws_temp, encoder, s);
+  const array& bd = ensure_dense(bias, bias.flags().row_contiguous, b_temp, encoder, s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0 || xd.size() == 0) {
+    return;
+  }
+  if (xd.offset() % 4 != 0 || wd.offset() % 4 != 0) {
+    omarchy::unsupported(tag + " int8 word alignment", out);
+  }
+  const bool fused = swiglu();
+  const uint32_t rows = static_cast<uint32_t>(xd.shape(0));
+  const uint32_t n =
+      fused ? static_cast<uint32_t>(wd.shape(0) / 2)
+            : static_cast<uint32_t>(wd.shape(0));
+  omarchy::ComputeParams params;
+  params.count = checked_u32(static_cast<uint64_t>(rows) * n, tag, out);
+  params.reduce_size = checked_u32(static_cast<uint64_t>(group()), tag, out);
+  params.lhs_offset = checked_item_offset(xd, xd.size(), tag, out);
+  params.rhs_offset = checked_item_offset(wd, wd.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.matrix_m = rows;
+  params.matrix_n = n;
+  params.matrix_k =
+      checked_u32(static_cast<uint64_t>(xd.shape(1)), tag, out);
+  params.flags = fused ? 1u : 0u;
+  params.shape[0] = checked_item_offset(xsd, xsd.size(), tag, out);
+  params.shape[1] = checked_item_offset(wsd, wsd.size(), tag, out);
+  params.shape[2] = checked_item_offset(bd, bd.size(), tag, out);
+  std::array<omarchy::ComputeBinding, 6> bindings{
+      binding(xd),
+      binding(xsd),
+      binding(wd),
+      binding(wsd),
+      binding(bd),
+      binding(out)};
+  encoder.dispatch_compute(
+      omarchy::ComputeKernel::Int8MatmulOp,
+      bindings,
+      params,
+      omarchy::compute_dispatch_group_count(params.count));
+}
+
 bool GreedyQuantizedArgmax::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }

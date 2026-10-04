@@ -432,6 +432,16 @@ target_link_options(omarchy_sdpa_decode_fused_tests
                     PRIVATE ${SANITIZER_LINK_FLAGS})
 add_test(NAME omarchy_sdpa_decode_fused_tests
          COMMAND omarchy_sdpa_decode_fused_tests)
+
+add_executable(omarchy_int8_matmul_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_int8_matmul.cpp)
+target_link_libraries(omarchy_int8_matmul_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_int8_matmul_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_int8_matmul_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_int8_matmul_tests
+         COMMAND omarchy_int8_matmul_tests)
 # FuseDecodeChains: fused elementwise-chain compiled-versus-eager
 # equivalence tests plus dispatch-collapse and bf16-refusal guards.
 add_executable(omarchy_fused_chain_tests

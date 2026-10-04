@@ -162,6 +162,8 @@ std::string glsl_type(const std::string& msl_type) {
   return found->second;
 }
 
+void translate_as_type(std::string& code);
+
 void translate_types(std::string& code) {
   const std::vector<std::pair<std::string, std::string>> replacements = {
       {"float4", "vec4"},
@@ -187,14 +189,45 @@ void translate_types(std::string& code) {
       code,
       std::regex(R"(static_cast\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\(([^()]*)\))"),
       "$1($2)");
-  code = std::regex_replace(
-      code,
-      std::regex(R"(as_type\s*<\s*uint\s*>\s*\(([^()]*)\))"),
-      "floatBitsToUint($1)");
-  code = std::regex_replace(
-      code,
-      std::regex(R"(as_type\s*<\s*float\s*>\s*\(([^()]*)\))"),
-      "uintBitsToFloat($1)");
+  translate_as_type(code);
+}
+
+void translate_as_type(std::string& code) {
+  // as_type<Dest>(src) is a bitcast; src may contain nested parentheses, so
+  // match the argument by balanced delimiters rather than a flat regex.
+  static const std::unordered_map<std::string, std::string> bitcasts = {
+      {"float", "uintBitsToFloat"},
+      {"uint", "floatBitsToUint"},
+      {"uint32_t", "floatBitsToUint"},
+      {"int", "floatBitsToInt"},
+      {"int32_t", "floatBitsToInt"},
+  };
+  size_t search_from = 0;
+  while (true) {
+    const auto marker = code.find("as_type<", search_from);
+    if (marker == std::string::npos) {
+      return;
+    }
+    const auto open_angle = marker + 8;
+    const auto close_angle = code.find('>', open_angle);
+    if (close_angle == std::string::npos) {
+      return;
+    }
+    const auto destination = trim(code.substr(open_angle, close_angle - open_angle));
+    const auto mapped = bitcasts.find(destination);
+    if (mapped == bitcasts.end()) {
+      throw std::runtime_error("unsupported MSL feature `as_type<" + destination + ">`");
+    }
+    const auto open_paren = code.find('(', close_angle + 1);
+    if (open_paren == std::string::npos) {
+      return;
+    }
+    const auto close_paren = matching_delimiter(code, open_paren, '(', ')');
+    code.replace(
+        marker, close_paren - marker + 1,
+        mapped->second + "(" + code.substr(open_paren + 1, close_paren - open_paren - 1) + ")");
+    search_from = marker;
+  }
 }
 
 std::vector<Parameter> parse_parameters(const std::string& signature) {
@@ -500,9 +533,50 @@ Translation translate_msl(
   replace_word(body, "constexpr", "const");
   translate_types(body);
 
+  bool needs_bfloat = false;
+
+  // _Pragma("clang loop unroll(full)") and friends are optimization hints
+  // with no GLSL equivalent; dropping them keeps the loop semantics.
+  body = std::regex_replace(body, std::regex(R"(_Pragma\s*\([^()]*\))"), "");
+  replace_all(header, "_Pragma", "_MLX_NO_PRAGMA");
+  header = std::regex_replace(header, std::regex(R"(_MLX_NO_PRAGMA\s*\([^()]*\))"), "");
+
+  // The `device` address space has no GLSL meaning; buffer parameters are
+  // already macro aliases for SSBO data, so the keyword is redundant.
+  replace_word(body, "device", "");
+  replace_word(header, "device", "");
+
+  // `const T* name = BUFFER;` re-declares a buffer base under another name.
+  // Drop the statement: the parameter macro already provides that alias.
+  body = std::regex_replace(
+      body,
+      std::regex(
+          R"(const\s+[A-Za-z_][A-Za-z0-9_]*\s*\*\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)"),
+      "");
+
+  // Explicit bfloat(expr) casts round through bfloat16; keep the value in the
+  // float domain with a round-trip helper so later float math stays exact.
+  if (body.find("bfloat") != std::string::npos) {
+    body = std::regex_replace(
+        body, std::regex(R"(\bbfloat\s*\()"), "_mlx_bf16_round(");
+    replace_word(body, "bfloat", "float");
+    needs_bfloat = true;
+  }
+
+  // Any surviving pointer declaration or pointer arithmetic has no GLSL
+  // translation; fail by name rather than emit a broken shader.
+  if (std::regex_search(
+          body,
+          std::regex(
+              R"(const\s+[A-Za-z_][A-Za-z0-9_]*\s*\*|\bsize_t\b)"))) {
+    throw std::runtime_error(
+        "unsupported MSL feature `device pointer arithmetic` is not "
+        "implemented for the Omarchy Vulkan backend");
+  }
+
   std::string shared_declarations;
   const std::regex shared_pattern(
-      R"(threadgroup\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([0-9]+)\s*\]\s*;)");
+      R"(threadgroup\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([^\[\];]+)\s*\]\s*;)");
   std::smatch shared_match;
   while (std::regex_search(body, shared_match, shared_pattern)) {
     shared_declarations += "shared " + glsl_type(shared_match[1].str()) + " " +
@@ -565,11 +639,12 @@ Translation translate_msl(
     elem_search = position + helper.size();
   }
 
-  bool needs_bfloat = false;
   bool needs_int8 = false;
   bool needs_int16 = false;
   bool needs_int64 = false;
-  bool needs_subgroup = body.find("subgroup") != std::string::npos;
+  bool needs_subgroup = body.find("subgroup") != std::string::npos ||
+      body.find("gl_Subgroup") != std::string::npos ||
+      body.find("gl_NumSubgroups") != std::string::npos;
   std::string declarations;
   std::string macros;
   for (size_t index = 0; index < parameters.size(); ++index) {
@@ -640,7 +715,8 @@ Translation translate_msl(
   glsl << declarations << shared_declarations;
   if (needs_bfloat) {
     glsl << "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
-         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n";
+         << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
+         << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n";
   }
   glsl << header << "\n" << element_helpers << macros;
   glsl << "void main() {\n"
