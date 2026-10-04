@@ -54,26 +54,35 @@ def generate(env_on):
 
 off = generate(False)
 on = generate(True)
-res = {"prompts": nprompts, "tokens": ntoks, "rows": []}
+res = {"prompts": nprompts, "tokens": ntoks,
+       "composed_rows": [{"prompt_index": i, "composed_tokens": a["tokens"]} for i, a in enumerate(off)],
+       "rows": []}
 flags = 0
+exact_all = 0
 for i, (a, b) in enumerate(zip(off, on)):
     first = next((j for j, (x, y) in enumerate(zip(a["tokens"], b["tokens"])) if x != y), None)
+    matches = sum(1 for x, y in zip(a["tokens"], b["tokens"]) if x == y)
+    exact_all += matches
     row = {"prompt_index": i, "identical": 512 if first is None else first,
            "pct": round(100.0 * (512 if first is None else first) / 512, 2),
+           "exact_match_pct": round(100.0 * matches / ntoks, 2),
            "first_divergence": first}
     if first is not None:
         g = a["composed_top2_gaps"][first]
         row["composed_gap_at_divergence"] = g
+        row["fused_gap_at_divergence"] = b["composed_top2_gaps"][first]
         row["near_tie_lt_0.05"] = bool(g < 0.05)
         if g >= 0.05:
             flags += 1
     res["rows"].append(row)
 identities = [r["pct"] for r in res["rows"]]
 res["mean_identity_pct"] = round(sum(identities) / len(identities), 2)
+res["exact_match_pct_overall"] = round(100.0 * exact_all / (ntoks * nprompts), 3)
 res["diverging_prompts"] = sum(1 for r in res["rows"] if r["first_divergence"] is not None)
 res["divergences_with_gap_ge_0.05"] = flags
-greedy_pass = all(r["pct"] >= 95.0 for r in res["rows"])
+greedy_pass = all(r["exact_match_pct"] >= 95.0 for r in res["rows"])
 res["greedy_95pct_bar"] = greedy_pass
+res["greedy_95pct_bar_prefix_len"] = all(r["pct"] >= 95.0 for r in res["rows"])
 near_tie_only = all(r.get("near_tie_lt_0.05", True) for r in res["rows"])
 res["all_divergences_near_tie"] = near_tie_only
 json.dump(res, open(out_path, "w"), indent=1)

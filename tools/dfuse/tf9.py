@@ -57,7 +57,7 @@ def main():
     payload = {"model": args.model, "mx_version": mx.__version__,
                "backend": str(mx.default_device()),
                "prompt_sha256": hashlib.sha256(json.dumps(prompts, ensure_ascii=False).encode()).hexdigest(),
-               "gdn_raw_repeat": os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0"),
+               "gdn_raw_repeat": os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1"),
                "prompts": results}
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(payload, f)
