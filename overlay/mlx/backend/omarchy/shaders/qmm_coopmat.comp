@@ -45,6 +45,39 @@
 //   A-side global loads and their dependency chain halve per output
 //   pair. Needs a second w_s tile (shared budget 4 KiB -> 8 KiB).
 
+// QmmPeak variants (receipts/2026-10-04-qmm-roofline), X_F32 FullN
+// builds only, env-selected in primitives.cpp:
+// - LDS_PAD: the shared B-tile row stride becomes TILE_N + 4 f32. At
+//   stride 32 every row of a coopMatLoad'd 8x8 B block lands on the
+//   same LDS banks (8-way conflict per block under the row-major lane
+//   mapping); +4 shifts each row by 4 banks. Values, addresses'
+//   contents and MAC order are unchanged - bit-exact by construction.
+// - CHUNK_DEQ: the whole 64-wide group is dequantized into a 64-row
+//   shared tile with ONE fence, then the 8 (step, ks) MAC iterations
+//   run without further barriers (the shipped body fences twice per
+//   16-wide step). Same dequant values, same per-output ascending-k
+//   chain - bit-exact by construction.
+#if defined(CHUNK_DEQ) && (!defined(FULL_N) || !defined(X_F32))
+#error "CHUNK_DEQ twins the X_F32 FullN route only"
+#endif
+#if defined(LDS_PAD) && defined(X_BF16)
+#error "LDS_PAD is an X_F32-route experiment; X_BF16 staging is out of scope"
+#endif
+#if (defined(CHUNK_DEQ) || defined(LDS_PAD)) && defined(TWO_N)
+#error "TWO_N keeps its own second tile; chunk/pad combos are out of scope"
+#endif
+
+#ifdef LDS_PAD
+#define QMM_W_STRIDE (TILE_N + 4u)
+#else
+#define QMM_W_STRIDE (TILE_N)
+#endif
+#ifdef CHUNK_DEQ
+#define QMM_W_ROWS (CHUNK_K)
+#else
+#define QMM_W_ROWS (STEP_K)
+#endif
+
 #ifndef TILE_ROWS
 #define TILE_ROWS 32
 #endif
@@ -162,12 +195,14 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-// One 16x32 f32 weight tile. The output drain uses the staging
-// scratch (w_s here; x_s in the X_BF16 build) as scratch.
+// One (16- or 64-)x(32- or 36-) f32 weight tile. The output drain
+// uses the staging scratch (w_s here; x_s in the X_BF16 build) as
+// scratch; the drain's flat indices stay far below QMM_W_ROWS *
+// QMM_W_STRIDE in every build.
 #ifdef X_BF16
 shared float x_s[TILE_M * STEP_K];
 #endif
-shared float w_s[STEP_K * TILE_N];
+shared float w_s[QMM_W_ROWS * QMM_W_STRIDE];
 
 // Workgroup-lane scalars the tile body reads; set once in main().
 uint g_lid;
@@ -232,26 +267,87 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       scale = SCALE_LOAD(scales.values[scale_row + chunk]);
       bias = SCALE_LOAD(biases.values[bias_row + chunk]);
     }
+#ifdef CHUNK_DEQ
+    // Whole-chunk dequant into the shared tile (rows 0..63), one
+    // fence, then every (step, ks) MAC iteration of the chunk runs
+    // without further barriers. FULL_N is compile-time guaranteed, so
+    // the column_ok predication drops out (same as the FullN builds).
+    for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
+      uint k_base = chunk * CHUNK_K + step * STEP_K;
+      uint packed = input_w.values[w_row + k_base / 8u + g_wpart];
+      uint w_base = step * STEP_K * QMM_W_STRIDE +
+          8u * g_wpart * QMM_W_STRIDE + g_wcol;
+      w_s[w_base + 0u * QMM_W_STRIDE] = scale * float(packed & 0xFu) + bias;
+      w_s[w_base + 1u * QMM_W_STRIDE] =
+          scale * float((packed >> 4u) & 0xFu) + bias;
+      w_s[w_base + 2u * QMM_W_STRIDE] =
+          scale * float((packed >> 8u) & 0xFu) + bias;
+      w_s[w_base + 3u * QMM_W_STRIDE] =
+          scale * float((packed >> 12u) & 0xFu) + bias;
+      w_s[w_base + 4u * QMM_W_STRIDE] =
+          scale * float((packed >> 16u) & 0xFu) + bias;
+      w_s[w_base + 5u * QMM_W_STRIDE] =
+          scale * float((packed >> 20u) & 0xFu) + bias;
+      w_s[w_base + 6u * QMM_W_STRIDE] =
+          scale * float((packed >> 24u) & 0xFu) + bias;
+      w_s[w_base + 7u * QMM_W_STRIDE] =
+          scale * float(packed >> 28u) + bias;
+    }
+    barrier();
+    for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
+      uint k_base = chunk * CHUNK_K + step * STEP_K;
+      for (uint ks = 0u; ks < STEP_K / MAT; ++ks) {
+        coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+            mat_a[SUBGROUP_ROW_BLOCKS];
+        for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+          // Rows past matrix_m are never stored, but the load must
+          // stay in bounds: clamp to the last real row.
+          uint row = row_base + (g_sub_rb + rb) * MAT;
+          row = min(row, params.matrix_m - 1u);
+          coopMatLoad(
+              mat_a[rb], input_x.values,
+              x_slice + row * params.matrix_k + k_base + ks * MAT,
+              params.matrix_k,
+              gl_CooperativeMatrixLayoutRowMajor);
+        }
+        coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
+        uint k_row = step * STEP_K + ks * MAT;
+        for (uint cb = 0u; cb < 4u; ++cb) {
+          coopMatLoad(
+              mat_b[cb], w_s, k_row * QMM_W_STRIDE + cb * MAT,
+              QMM_W_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+          for (uint cb = 0u; cb < 4u; ++cb) {
+            acc[rb][cb] =
+                coopMatMulAdd(mat_a[rb], mat_b[cb], acc[rb][cb]);
+          }
+        }
+      }
+    }
+    barrier();
+#else
     for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
       uint k_base = chunk * CHUNK_K + step * STEP_K;
       // One packed word per lane covers the 16x32 weight tile.
       uint packed = column_ok
           ? input_w.values[w_row + k_base / 8u + g_wpart] : 0u;
-      uint w_base = 8u * g_wpart * TILE_N + g_wcol;
-      w_s[w_base + 0u * TILE_N] = scale * float(packed & 0xFu) + bias;
-      w_s[w_base + 1u * TILE_N] =
+      uint w_base = 8u * g_wpart * QMM_W_STRIDE + g_wcol;
+      w_s[w_base + 0u * QMM_W_STRIDE] = scale * float(packed & 0xFu) + bias;
+      w_s[w_base + 1u * QMM_W_STRIDE] =
           scale * float((packed >> 4u) & 0xFu) + bias;
-      w_s[w_base + 2u * TILE_N] =
+      w_s[w_base + 2u * QMM_W_STRIDE] =
           scale * float((packed >> 8u) & 0xFu) + bias;
-      w_s[w_base + 3u * TILE_N] =
+      w_s[w_base + 3u * QMM_W_STRIDE] =
           scale * float((packed >> 12u) & 0xFu) + bias;
-      w_s[w_base + 4u * TILE_N] =
+      w_s[w_base + 4u * QMM_W_STRIDE] =
           scale * float((packed >> 16u) & 0xFu) + bias;
-      w_s[w_base + 5u * TILE_N] =
+      w_s[w_base + 5u * QMM_W_STRIDE] =
           scale * float((packed >> 20u) & 0xFu) + bias;
-      w_s[w_base + 6u * TILE_N] =
+      w_s[w_base + 6u * QMM_W_STRIDE] =
           scale * float((packed >> 24u) & 0xFu) + bias;
-      w_s[w_base + 7u * TILE_N] = scale * float(packed >> 28u) + bias;
+      w_s[w_base + 7u * QMM_W_STRIDE] =
+          scale * float(packed >> 28u) + bias;
 #ifdef X_BF16
       // X_WORDS half-word loads per lane cover the TILE_ROWS x 16 x tile.
       uint x_words[TILE_M / 8u];
@@ -309,8 +405,8 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #endif
         for (uint cb = 0u; cb < 4u; ++cb) {
           coopMatLoad(
-              mat_b[cb], w_s, ks * MAT * TILE_N + cb * MAT, TILE_N,
-              gl_CooperativeMatrixLayoutRowMajor);
+              mat_b[cb], w_s, ks * MAT * QMM_W_STRIDE + cb * MAT,
+              QMM_W_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
         }
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
           for (uint cb = 0u; cb < 4u; ++cb) {
@@ -321,6 +417,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       }
       barrier();
     }
+#endif
   }
 
   // One subgroup stores each 8-row block it owns; duplicated column

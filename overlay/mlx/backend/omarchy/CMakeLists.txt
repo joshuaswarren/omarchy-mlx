@@ -412,6 +412,13 @@ omarchy_shader(qmm_coopmat_x32_fn_g2 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF
 omarchy_shader(qmm_coopmat_x32_fn_g4 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4)
 omarchy_shader(qmm_coopmat_x32_fn_g8 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=8)
 omarchy_shader(qmm_coopmat_x32_fn_twon shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DTWO_N=1)
+# QmmPeak twins of the g4 route (receipts/2026-10-04-qmm-roofline):
+# CHUNK_DEQ dequantizes the whole 64-wide group behind one fence;
+# LDS_PAD pads the shared B-tile row stride to kill the stride-32 LDS
+# bank conflicts. Same values and per-output ascending-k chain.
+omarchy_shader(qmm_coopmat_x32_fn_g4_chunk shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DCHUNK_DEQ=1)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1)
+omarchy_shader(qmm_coopmat_x32_fn_g4_chunk_pad shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DCHUNK_DEQ=1 -DLDS_PAD=1)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
 omarchy_shader(matmul_fma_bf16 shaders/matmul_fma_bf16.comp)

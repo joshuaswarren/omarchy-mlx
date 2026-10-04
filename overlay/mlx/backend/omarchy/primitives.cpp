@@ -7540,6 +7540,39 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           grid_y = 1u;
           env_routed = true;
         }
+        // QmmPeak twins (receipts/2026-10-04-qmm-roofline), evaluated
+        // only where the landed g4 default applies so each arm changes
+        // exactly one thing vs ctl: MLX_OMARCHY_QMM_CHUNK=1 dequantizes
+        // the whole 64-wide group behind one fence; MLX_OMARCHY_QMM_LDSPAD=1
+        // pads the shared B-tile row stride. Both keep the per-output
+        // ascending-k chain (doctest-pinned); both default OFF.
+        const char* chunk_env = std::getenv("MLX_OMARCHY_QMM_CHUNK");
+        const char* pad_env = std::getenv("MLX_OMARCHY_QMM_LDSPAD");
+        const bool chunk_on =
+            !env_routed && chunk_env != nullptr && chunk_env[0] == '1';
+        const bool pad_on =
+            !env_routed && pad_env != nullptr && pad_env[0] == '1';
+        if ((chunk_on || pad_on) && default_g4) {
+          constexpr uint32_t gm = 4u;
+          const uint32_t chunk_bytes = (32u * 16u + 64u * 32u) * 4u;
+          const uint32_t pad_bytes = (32u * 16u + 16u * 36u) * 4u;
+          const uint32_t chunk_pad_bytes = (32u * 16u + 64u * 36u) * 4u;
+          const uint32_t need = chunk_on
+              ? (pad_on ? chunk_pad_bytes : chunk_bytes)
+              : pad_bytes;
+          if (need <= coopmat_caps.max_compute_shared_memory_size) {
+            qmm_kernel = chunk_on
+                ? (pad_on
+                       ? omarchy::ComputeKernel::
+                             QmmPrefillCoopmatBF16X32FullNChunkPad
+                       : omarchy::ComputeKernel::
+                             QmmPrefillCoopmatBF16X32FullNChunk)
+                : omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad;
+            grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
+            grid_y = 1u;
+            env_routed = true;
+          }
+        }
       }
       if (!env_routed) {
         qmm_kernel = coopmat_rows == 16u

@@ -4140,18 +4140,27 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
     const char* name;
     const char* key;
     const char* value;
+    const char* key2;
+    const char* value2;
   };
   // The baseline pins the SHIPPED rasterization order via the opt-out
   // env, so the pin keeps holding the shipped mapping even though the
   // landed default routes multi-row-tile grids to the G4 order.
   const Variant variants[] = {
-      {"default-g4", nullptr, nullptr},
-      {"raster-swap", "MLX_OMARCHY_QMM_RASTER", "swap"},
-      {"raster-g2", "MLX_OMARCHY_QMM_RASTER", "2"},
-      {"raster-g8", "MLX_OMARCHY_QMM_RASTER", "8"},
-      {"twon", "MLX_OMARCHY_QMM_TWON", "1"},
-      {"persist-4", "MLX_OMARCHY_QMM_PERSIST", "4"},
-      {"persist-8", "MLX_OMARCHY_QMM_PERSIST", "8"},
+      {"default-g4", nullptr, nullptr, nullptr, nullptr},
+      {"raster-swap", "MLX_OMARCHY_QMM_RASTER", "swap", nullptr, nullptr},
+      {"raster-g2", "MLX_OMARCHY_QMM_RASTER", "2", nullptr, nullptr},
+      {"raster-g8", "MLX_OMARCHY_QMM_RASTER", "8", nullptr, nullptr},
+      {"twon", "MLX_OMARCHY_QMM_TWON", "1", nullptr, nullptr},
+      {"persist-4", "MLX_OMARCHY_QMM_PERSIST", "4", nullptr, nullptr},
+      {"persist-8", "MLX_OMARCHY_QMM_PERSIST", "8", nullptr, nullptr},
+      {"ldspad", "MLX_OMARCHY_QMM_LDSPAD", "1", nullptr, nullptr},
+      {"chunk", "MLX_OMARCHY_QMM_CHUNK", "1", nullptr, nullptr},
+      {"chunk-pad",
+       "MLX_OMARCHY_QMM_CHUNK",
+       "1",
+       "MLX_OMARCHY_QMM_LDSPAD",
+       "1"},
   };
 
   unsigned seed = 407u;
@@ -4202,9 +4211,15 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
         if (v.key != nullptr) {
           setenv(v.key, v.value, 1);
         }
+        if (v.key2 != nullptr) {
+          setenv(v.key2, v.value2, 1);
+        }
         std::vector<uint16_t> got = run_bits();
         if (v.key != nullptr) {
           unsetenv(v.key);
+        }
+        if (v.key2 != nullptr) {
+          unsetenv(v.key2);
         }
         REQUIRE_EQ(got.size(), baseline.size());
         size_t mismatches = 0;
@@ -4224,6 +4239,6 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
       }
     }
     std::cout << "[prefill-axes] k=" << k << " n=" << n
-              << " all 7 twin arms bit-identical, m in {17..2047 odd}\n";
+              << " all 10 twin arms bit-identical, m in {17..2047 odd}\n";
   }
 }
