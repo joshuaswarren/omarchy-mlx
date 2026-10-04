@@ -1,0 +1,16 @@
+diff --git a/omlx/cli.py b/omlx/cli.py
+index a40b7e0d..e6e8d361 100644
+--- a/omlx/cli.py
++++ b/omlx/cli.py
+@@ -437,7 +437,10 @@ def serve_command(args):
+         # with mx.synchronize()). See issue #300.
+         import mlx.core as mx
+ 
+-        total_mem = mx.device_info().get("memory_size", 0)
++        # omarchy (Linux/Vulkan) device_info exposes "total_memory"; Metal
++        # exposes "memory_size". Same unified-RAM semantic, both honest.
++        info = mx.device_info()
++        total_mem = int(info.get("memory_size") or info.get("total_memory") or 0)
+         if total_mem > 0:
+             mx.set_cache_limit(total_mem)
+ 
