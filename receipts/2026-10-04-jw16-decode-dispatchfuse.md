@@ -337,3 +337,37 @@ w71 bundle: tools/dfuse/h257_jwm1_runner.sh (+ free_run_gaps.py, ppl_s1.py,
 gdu_fp64_probe.py, analyze_w1.py — all on main) with env knobs H257_PY /
 H257_MODEL / H257_PROMPTS10 / H257_OUT; runs the three owner-bar
 measurements on jwm1 under the lock.
+
+## Addendum 8 2026-10-04T14:1xZ — 3-arm experiment: tiled == perrow; both diverge from composed; measurement instability identified
+
+3-arm free-run (route OFF composed / ON-tiled / ON-legacy-perrow, forced
+via MLX_OMARCHY_GDN_DECODE_TILE, diag wheel +diag.dfuse.ece1a1a97, 2
+prompts x 256): tiled and perrow produce IDENTICAL trajectories (same
+identity, same first divergence per prompt: fd 168 / fd 8) — the two
+kernels agree with each other — yet BOTH diverge from the composed
+fallback (tiled 65.6%/3.9%, perrow identical), with composed top-2 gap
+0.125 (1 bf16 ULP) at the flips.
+
+This contradicts the earlier within-window measurement (tiled vs composed
+100% over 5x512 on wheel b3d0eb316) and reframes the finding: the fused
+kernels (tiled AND perrow, both order-matched) agree with each other and
+with composed on single captured steps, but the LONG-DEPTH free-run
+comparison between a fused trajectory and the composed trajectory is
+UNSTABLE across builds/environments — divergence onset (8 vs 23 vs 168)
+and even the direction of the comparison vary with the compiled wheel.
+The 9B d512 free-run digest was already recorded environment-sensitive
+(addendum 6). The GDU divergence begins at 1-ULP near-tie flips and
+cascades chaotically; it is not attributable to one broken operation in
+one kernel variant.
+
+OPERATIONAL CONSEQUENCE (unchanged by this addendum): the deployed
+per-chip policy (G13 = composed, G14+ = fused) is the stable
+configuration; the d64 pin (26d569c8) is the stable production reference;
+long-depth 9B digests are environment-sensitive regardless of route.
+The honest statement for the owner: the fused GDU kernels (tiled and pf)
+agree with each other and match composed bit-for-bit on single steps, but
+long-depth free-run trajectories on the 9B diverge between ANY two
+builds/environments at 1-ULP near-ties — including tiled-vs-composed — so
+"bit-exact free-run at d512" is not an achievable bar on this model
+without pinning the exact wheel binary; near-tie-class equivalence (TF
+99.39-99.53%, ppl -0.05..-0.08%) is what the evidence supports.
