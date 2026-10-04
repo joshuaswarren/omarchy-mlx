@@ -267,3 +267,19 @@ small upstream flag (draft-PR list). The int8 W8A8 swap path still works from
 a quantized-DiT-free bf16 checkpoint: note the swap quantizes from whatever
 weights the projections hold, so the DiT must stay bf16/8-bit for the int8
 path; a 4-bit core checkpoint serves bf16-comparison runs only.
+
+## 8. M1 Ultra reference run (2026-10-04, bf16, no adapter merge)
+
+Stock wrapper main on macOS 26.6.2, M1 Ultra 128 GB, weights on the main
+drive (134 GiB FL2VA; components: DiT 62, text encoder 63, video VAE 10,
+audio VAE 1 GiB). Config 768x448, 124 frames, points 4, seed 0, no lora,
+no int8 flags. Result: load 19.2 s (weights resident, no per-step streaming;
+peak 61.8 GiB), denoise 269.8 s over 3 forwards (86-90 s each), decode
+106.2 s (video VAE 99.1), mux 2.75 s; memory gate min 53.4 GB free+inactive
+(20 GB abort line never approached). Output mp4 sha256
+be52043ee7df15989f28ad883bb349030b9567f025c022165f5c78f21a17f5f9; frames
+0/60/123 and all logs archived in the private artifacts store with
+SHA256SUMS. Setup-verify on this NON-M5 host printed "int8 tensor-unit
+kernels available": the MPP int8 mma compiles on M1 Ultra, so "M5-only" is a
+performance claim, not an availability claim; an int8-flags run is a cheap
+follow-up.
