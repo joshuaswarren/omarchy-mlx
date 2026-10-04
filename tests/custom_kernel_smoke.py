@@ -389,6 +389,60 @@ class CustomKernelSmoke(unittest.TestCase):
                 f"size {size}, group {group}",
             )
 
+    def test_c_style_casts_with_call_chain_arg(self):
+        """C-style scalar casts `(int8_t)clamp(int(rint(...)), -127, 127)`
+        must translate to functional form `int8_t(clamp(int(rint(...)), -127, 127))`,
+        and `(int64_t)row` must narrow to `uint(row)` for SSBO subscripts. This
+        is the construct the H3 _QUANTIZE kernel uses; on Omarchy the cast
+        scanner is the only translator pass that handles it.
+
+        The shape mirrors the per-(row, group) threadgroup of the H3 quantize
+        kernel: 4 rows, 2 groups of 256 channels, 1 element per lane. The
+        per-row max scales are written to XS; the rounded int8 outputs land
+        in Q. The reference uses the same arithmetic on the host.
+        (KernelBattery, 2026-10-04; receipts under
+        receipts/2026-10-04-omlx-tensorfold-parity/MATRIX.md row A26.)
+        """
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_c_style_cast_quantize",
+            input_names=["X", "M"],
+            output_names=["Q", "XS"],
+            source=(
+                "constexpr int GROUP = 256;\n"
+                "constexpr int K = 512;\n"
+                "const int row = threadgroup_position_in_grid.y;\n"
+                "const int g = threadgroup_position_in_grid.x;\n"
+                "const int first = g * GROUP + thread_position_in_threadgroup.x;\n"
+                "float v = row < M ? float(X[(int64_t)row * K + first]) : 0.0f;\n"
+                "const float scale = 1.0f / 127.0f;\n"
+                "if (thread_position_in_threadgroup.x == 0)"
+                "  XS[row * 2 + g] = scale;\n"
+                "Q[(int64_t)row * K + first] ="
+                " (int8_t)clamp(int(rint(v * scale)), -127, 127);\n"
+            ),
+        )
+        values = mx.arange(4 * 512, dtype=mx.float32).reshape(4, 512)
+        rows_mx = mx.array([4], dtype=mx.int32)
+        q, xs = kernel(
+            inputs=[values, rows_mx],
+            output_shapes=[(4, 512), (4, 2)],
+            output_dtypes=[mx.int8, mx.float32],
+            grid=(2, 4, 1),
+            threadgroup=(256, 1, 1),
+            stream=mx.gpu,
+        )
+        mx.eval(q, xs)
+        ref_scale = 1.0 / 127.0
+        ref_q = (values * ref_scale).round().clip(-127, 127).astype(mx.int8)
+        self.assertTrue(
+            mx.all(q == ref_q).item(),
+            "c-style cast kernel output did not match reference",
+        )
+        self.assertTrue(
+            mx.all(xs == ref_scale).item(),
+            "c-style cast kernel did not write per-(row, group) scale",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

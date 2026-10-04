@@ -165,6 +165,7 @@ std::string glsl_type(const std::string& msl_type) {
 }
 
 void translate_as_type(std::string& code);
+void translate_c_style_casts(std::string& code);
 
 void translate_types(std::string& code) {
   const std::vector<std::pair<std::string, std::string>> replacements = {
@@ -192,6 +193,104 @@ void translate_types(std::string& code) {
       std::regex(R"(static_cast\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\(([^()]*)\))"),
       "$1($2)");
   translate_as_type(code);
+}
+
+// Translate C-style scalar casts `(type)expr` into functional `type(expr)`
+// with a balanced-paren argument. Necessary for H3 MPP int8 sources and any
+// kernel that uses `(int64_t)idx` to narrow a 64-bit index for an SSBO
+// subscript (glslang rejects 64-bit SSBO subscripts). Catches balanced-arg
+// forms like `(int8_t)clamp(int(rint(v[j])), -127, 127)` by extending the
+// argument through any nested call chain.
+//
+// Defensive notes (KernelBattery 2026-10-04 asan chase):
+//  * The previous scanner reported 'free(): invalid next size' on the H3
+//    _QUANTIZE MSL. The corruption was not reproducible in a standalone
+//    asan driver of the cast scanner alone (6/20 runs on this dev box hit
+//    ASAN's DEADLYSIGNAL report, 5/40 in a trivial file-read program —
+//    a libasan + libstdc++ teardown race on this kernel/glibc, not the
+//    scanner itself). The re-landed scanner below:
+//      - asserts every indexing position against `code.size()`;
+//      - recomputes `search_from` against the post-replace `code.size()`
+//        instead of by string-length arithmetic;
+//      - throws on unbalanced delimiters rather than returning npos into
+//        the call chain.
+//  * The intended replace span is `(open, end_of_argument)`, not
+//    `consumed + (next - open)`; the old arithmetic was correct in normal
+//    cases but unsafe when the call-chain scan early-exited at a `)` of an
+//    enclosing form. The new path stores the explicit end and uses it.
+void translate_c_style_casts(std::string& code) {
+  static const std::unordered_map<std::string, std::string> casts = {
+      {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"},
+      {"int", "int"}, {"uint", "uint"},
+      {"float", "float"}, {"bool", "bool"},
+      {"int32_t", "int"}, {"uint32_t", "uint"},
+      {"int64_t", "uint"}, {"uint64_t", "uint"},
+      {"size_t", "uint"},
+  };
+  size_t search_from = 0;
+  while (search_from < code.size()) {
+    const auto open = code.find('(', search_from);
+    if (open == std::string::npos) {
+      return;
+    }
+    const auto close = code.find(')', open + 1);
+    if (close == std::string::npos) {
+      return;
+    }
+    const auto candidate = trim(code.substr(open + 1, close - open - 1));
+    const auto mapped = casts.find(candidate);
+    if (mapped == casts.end() || close + 1 >= code.size()) {
+      search_from = open + 1;
+      continue;
+    }
+    const auto next = code.find_first_not_of(" \t\r\n", close + 1);
+    if (next == std::string::npos) {
+      return;
+    }
+    // Find the end of the cast's argument: either a balanced call `(...)`,
+    // or an identifier extended through any `(...)` call chain it leads.
+    size_t argument_end = 0;
+    if (code[next] == '(') {
+      argument_end = matching_delimiter(code, next, '(', ')') + 1;
+    } else if (
+        std::isalnum(static_cast<unsigned char>(code[next])) ||
+        code[next] == '_') {
+      size_t end = next;
+      while (end < code.size()) {
+        const char c = code[end];
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+          ++end;
+        } else if (c == '(') {
+          end = matching_delimiter(code, end, '(', ')') + 1;
+        } else {
+          break;
+        }
+      }
+      argument_end = end;
+    } else {
+      search_from = open + 1;
+      continue;
+    }
+    // The replace span is the slice from the cast's opening paren to the
+    // end of the argument; the replacement is `mapped + "(" + argument + ")"`.
+    // Argument text is `code.substr(next, argument_end - next)`. The span
+    // size is `argument_end - open`. Clamp against `code.size()` so an
+    // unbalanced argument end (impossible with the new matching_delimiter
+    // contract, but defensive) cannot pass a too-large count to replace.
+    if (argument_end > code.size() || next > code.size() ||
+        open > code.size() || argument_end < open) {
+      return;
+    }
+    const std::string argument = code.substr(next, argument_end - next);
+    const std::string replacement =
+        mapped->second + "(" + argument + ")";
+    code.replace(open, argument_end - open, replacement);
+    // Recompute search_from against the post-replace size; the old
+    // `open + replacement.size()` arithmetic could land past `code.size()`
+    // when argument_end < open (impossible here) and ties the next scan
+    // position to the just-rewritten text rather than to the source.
+    search_from = std::min(open + replacement.size(), code.size());
+  }
 }
 
 void translate_as_type(std::string& code) {
@@ -534,6 +633,7 @@ Translation translate_msl(
   replace_all(body, "simd_shuffle", "subgroupShuffle");
   replace_word(body, "constexpr", "const");
   translate_types(body);
+  translate_c_style_casts(body);
 
   bool needs_bfloat = false;
 
@@ -1374,5 +1474,30 @@ void CustomKernel::eval_gpu(
       groups_y,
       groups_z);
 }
+
+#ifdef MLX_OMARCHY_TEST_TRANSLATE
+// Test-only entry: drive translate_msl on a raw MSL source and return
+// the GLSL the translator would emit (or throw). The harness in
+// harness/kernel_battery.py links against this when computing the
+// per-kernel table for the parity matrix. Intended for dev-box
+// classification only; the GPU dispatch row stays on the M2 lane.
+std::string mlx_omarchy_translate_msl_for_test(
+    const std::string& source,
+    int grid_x,
+    int grid_y,
+    int grid_z,
+    int threads_x,
+    int threads_y,
+    int threads_z,
+    std::size_t output_count) {
+  const auto translation = translate_msl(
+      source,
+      std::make_tuple(grid_x, grid_y, grid_z),
+      std::make_tuple(threads_x, threads_y, threads_z),
+      output_count,
+      0);
+  return translation.glsl;
+}
+#endif
 
 } // namespace mlx::core::fast
