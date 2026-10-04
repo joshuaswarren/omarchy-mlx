@@ -34,7 +34,7 @@ DISPATCH_NEW = """    # mlx-omarchy decode fast-route (GQA repeat): the fused ra
     # route instead of the composed per-token fallback. Gate:
     # MLX_OMARCHY_GDN_RAW_REPEAT (default 0 = exact existing dispatch).
     if (
-        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0") == "1"
+        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1") == "1"
         and use_kernel
         and q.shape[1] == 1
         and q.shape[-1] == 128
