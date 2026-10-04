@@ -10,7 +10,8 @@ LOG="$LOG_DIR/g8-kokoro.log"
 : > "$LOG"
 gate_begin "$LOG"
 
-"$P/venv/bin/pip" install --quiet "mlx-audio==0.5.6" >>"$LOG" 2>&1
+"$P/venv/bin/pip" install --quiet --no-deps "mlx-audio==0.5.6" >>"$LOG" 2>&1
+"$P/venv/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "scipy>=1.10.0" "tqdm>=4.67.1" >>"$LOG" 2>&1
 "$P/venv/bin/pip" install --quiet "espeakng-loader" "phonemizer" "misaki" "num2words" "spacy" >>"$LOG" 2>&1
 "$P/venv/bin/pip" install --quiet \
   "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" >>"$LOG" 2>&1 \
