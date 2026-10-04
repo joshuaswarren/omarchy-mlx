@@ -384,7 +384,9 @@ identity" claim did not reproduce on the published bytes.
 The earlier land/default-ON statements and addendum 8's operational
 consequence are superseded for the release default. Set
 `MLX_OMARCHY_GDN_RAW_REPEAT=0` on v0.7.26; v0.7.27 defaults it OFF on
-- all chips. The fused route remains an explicit `=1` opt-in. Decode
-  improved by 31-35% on G14-class and 35-43% on G13; the observed free-run
-  divergences were at a 1-bf16-ULP gap (0.125), above the 0.05 near-tie
-  threshold. See `receipts/2026-10-04-gdu-bar-audit/README.md`.
+all chips in the mlx-lm patcher. The C++ per-chip `use_fallback` policy
+is unchanged from v0.7.26 so other fused GDN dispatches keep their prior
+behavior. The fused raw-repeat route remains an explicit `=1` opt-in.
+Decode improved by 31-35% on G14-class and 35-43% on G13; the observed
+free-run divergences were at a 1-bf16-ULP gap (0.125), above the explicit
+0.05 cutoff. See `receipts/2026-10-04-gdu-bar-audit/README.md`.
