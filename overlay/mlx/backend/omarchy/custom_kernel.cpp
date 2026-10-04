@@ -194,80 +194,6 @@ void translate_types(std::string& code) {
   translate_as_type(code);
 }
 
-void translate_c_style_casts(std::string& code) {
-  // C-style scalar casts `(type)expr` become functional `type(expr)` with a
-  // balanced-paren argument, the same treatment as as_type bitcasts.
-  static const std::unordered_map<std::string, std::string> casts = {
-      {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"}, {"int", "int"},
-      {"uint", "uint"}, {"float", "float"}, {"bool", "bool"},
-      {"int32_t", "int"}, {"uint32_t", "uint"},
-      // GLSL SSBO subscripts take 32-bit integers only (glslang rejects
-      // 64-bit index expressions even with the int64 extension), so 64-bit
-      // index casts narrow to uint. Buffers above 2^32 elements are out of
-      // scope for this translation and still fail later, by name, if the
-      // kernel does other 64-bit arithmetic with them.
-      {"int64_t", "uint"}, {"uint64_t", "uint"},
-      {"size_t", "uint"},
-  };
-  size_t search_from = 0;
-  while (true) {
-    const auto open = code.find('(', search_from);
-    if (open == std::string::npos) {
-      return;
-    }
-    const auto close = code.find(')', open + 1);
-    if (close == std::string::npos) {
-      return;
-    }
-    const auto candidate = trim(code.substr(open + 1, close - open - 1));
-    const auto mapped = casts.find(candidate);
-    if (mapped == casts.end() || close + 1 >= code.size()) {
-      search_from = open + 1;
-      continue;
-    }
-    const auto next = code.find_first_not_of(" \t\r\n", close + 1);
-    if (next == std::string::npos) {
-      return;
-    }
-    std::string argument;
-    size_t consumed = 0;
-    if (code[next] == '(') {
-      const auto end = matching_delimiter(code, next, '(', ')');
-      argument = code.substr(next, end - next + 1);
-      consumed = end - next + 1;
-    } else if (std::isalnum(static_cast<unsigned char>(code[next])) ||
-               code[next] == '_') {
-      // An identifier argument extends through any call chain it applies
-      // to: `(int8_t)clamp(a, b)` must become `int8_t(clamp(a, b))`, not
-      // `int8_t(clamp)(a, b)`.
-      // The replacement span is recomputed from the FINAL end below; the
-      // scanner previously advanced search_from past a span that no longer
-      // matched the string after earlier replacements (heap corruption,
-      // 'free(): invalid next size' on the H3 _QUANTIZE kernel).
-      size_t end = next;
-      bool scanning = true;
-      while (scanning && end < code.size()) {
-        const char c = code[end];
-        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
-          end++;
-        } else if (c == '(') {
-          end = matching_delimiter(code, end, '(', ')') + 1;
-        } else {
-          scanning = false;
-        }
-      }
-      argument = code.substr(next, end - next);
-      consumed = end - next;
-    } else {
-      search_from = open + 1;
-      continue;
-    }
-    code.replace(open, consumed + (next - open),
-                 mapped->second + "(" + argument + ")");
-    search_from = open + mapped->second.size() + argument.size() + 2;
-  }
-}
-
 void translate_as_type(std::string& code) {
   // as_type<Dest>(src) is a bitcast; src may contain nested parentheses, so
   // match the argument by balanced delimiters rather than a flat regex.
@@ -391,8 +317,6 @@ void resolve_kernel_templates(
     replace_word(body, name, value);
   }
 }
-
-void translate_c_style_casts(std::string& code);
 
 void translate_header(std::string& header) {
   // Metal-only includes and namespace usings have no GLSL meaning; kernels
@@ -632,8 +556,6 @@ Translation translate_msl(
   body = std::regex_replace(body, std::regex(R"(#include\s*[<\"][^>\"]*[>\"])"), "");
   body = std::regex_replace(
       body, std::regex(R"(using\s+namespace\s+[A-Za-z0-9_:]+\s*;)"), "");
-  translate_c_style_casts(body);
-
   // Metal implicitly narrows the uint thread attributes to int; GLSL does
   // not. In int-declared assignments, wrap each builtin swizzle with int()
   // so mixed arithmetic stays int, as the MSL source intended. Uses that
