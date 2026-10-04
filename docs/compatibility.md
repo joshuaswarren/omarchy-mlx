@@ -789,8 +789,9 @@ A Supported row must link every applicable record.
 - The fused raw route remains available as `MLX_OMARCHY_GDN_RAW_REPEAT=1`; it
   is off by default on all chips after the published v0.7.26 wheel failed
   the free-run acceptance bar. The 9B decode gain is +31-35% on G14-class
-  hardware and +35-43% on G13, with 1-ULP near-tie divergences; measured
-  identity was 29.43% over 10 prompts x 512 tokens.
+  hardware and +35-43% on G13; measured identity was 29.43% over 10 prompts
+  x 512 tokens, with six divergences at a 1-bf16-ULP gap (0.125), above the
+  0.05 near-tie threshold.
 - Per-op fp64 and S=1 PPL checks passed; free-run bar 2 failed (six of ten
   first divergences had composed top-2 gap 0.125). See
   `receipts/2026-10-04-gdu-bar-audit/README.md` and the v0.7.27 release

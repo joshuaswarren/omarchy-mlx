@@ -170,8 +170,8 @@ prompts x 512 tokens; six first divergences had a composed top-2 gap of
 checks passed, but the free-run gate failed.
 
 Set `MLX_OMARCHY_GDN_RAW_REPEAT=1` to opt in. It measured +31-35% 9B
-decode on G14-class hardware and +35-43% on G13, with 1-ULP near-tie
-free-run divergence.
+decode on G14-class hardware and +35-43% on G13. Free-run divergences
+occurred at a 1-bf16-ULP gap (0.125), above the 0.05 near-tie threshold.
 
 ## How it works
 
