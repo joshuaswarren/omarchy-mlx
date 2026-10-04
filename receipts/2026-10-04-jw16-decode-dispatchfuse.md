@@ -259,3 +259,45 @@ with MLX_OMARCHY_GDN_RAW_REPEAT=0 until the perrow iteration completes
 the free-run recurrence amplifies the perrow-only arithmetic difference).
 Next iteration: per-row intermediate dump (kv/delta/ns) on a diverging
 prompt, bisect walk vs gates on G13 Mesa.
+
+## Addendum 6 2026-10-04T12:3xZ — perrow_pf port; divergence narrowed to a 1-ulp state store; per-chip policy is the recommendation
+
+- Perrow_pf port (ece1a1a97): the composed-order walk ported to
+  gated_delta_decode_perrow_pf.comp behind bit 9 (vec4 loads kept, per-op
+  precise, serial ascending sums; fma path kept for bf16-A_log models).
+  New pf SPV: 41 NoContraction. This variant is the G13 DEFAULT path
+  (GDN_PF defaults ON; the dispatch at primitives.cpp:11487 picks
+  GatedDeltaDecodeBF16Pf for Dk,Dv %4==0 — correcting my earlier
+  "opt-in only" note).
+- Forced-legacy verification on jw16 (TILE=0, PF default, diag wheel
+  +diag.dfuse.ece1a1a97): captured-operand single-step BIT-IDENTICAL;
+  free-run greedy identity 31.99% (5x512); perf +41.9..43.3% (d64
+  40.9-41.1 vs composed 28.6; d512 39.8 vs 28.0) — the pf variant is
+  faster than composed AND faster than the scalar fused (+31%).
+- Divergence narrowed (per-step operand capture on a diverging prompt,
+  first mismatch at the SECOND GDU call of the first token): the fused
+  perrow_pf OUTPUT matches composed exactly at that step, but the STORED
+  STATE differs by ~1 ulp at 39946 of 524288 positions (7.6%, scattered,
+  value-dependent; sample: composed == fused to f32 print precision at the
+  first diff site, i.e. a last-bit difference). The recurrence compounds
+  these state ulps into the free-run divergence. The residual 1-ulp source
+  is in the G13-path kernel/driver arithmetic (suspect: jwm1-class
+  contraction/reassociation not fully suppressed by NoContraction on the
+  older Mesa, or an exp/logaddexp gate lowering difference) — it does NOT
+  appear for the tiled kernel on G14-class Mesa (bit-exact, 100%).
+- RECOMMENDATION (implemented + deployed): per-chip default policy in
+  GatedDeltaUpdate::use_fallback (d36d16822/f601aa7fb) — g13_legacy_part
+  streams keep the composed chain (bit-exact, ~28.5 tok/s on the 9B);
+  G14-class and newer keep the fused route (bit-exact on tiled, ~37.8
+  tok/s, +31-32%). jwm1 gets the +42-43% pf variant only as an explicit
+  opt-in (MLX_OMARCHY_GDN_RAW_REPEAT=1) pending an owner accept of the
+  near-tie free-run divergence, or a G13-Mesa-side root cause (upstream
+  candidate for joshuaswarren/mesa-1: NoContraction honoring in the
+  legacy-part backend).
+- Verified on jw16 (deployed f601aa7fb wheel, no env): 9B d64 26d569c8 @
+  37.82, d512 f3092ae2 @ 36.74, 2B d64 cb3e8770 @ 107.16, 2B d512
+  c98adbc3 @ 100.37. NOTE: the 9B d512 free-run digest is
+  environment-sensitive across builds (f36dab24/e7884f81/f3092ae2
+  recorded) while d64 is stable — a pre-existing long-depth near-tie
+  sensitivity of the 9B model, separate from the route; the d64 pin is
+  the stable production reference.
