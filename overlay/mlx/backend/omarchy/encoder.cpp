@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/encoder.h"
-#include <algorithm>
-#include <cstdio>
 #include <stdexcept>
-#include <string_view>
 #include <unistd.h>
 #include <sys/syscall.h>
 
@@ -33,105 +30,6 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
 }
 
 } // namespace
-
-std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes) {
-  const size_t n = nodes.size();
-  std::vector<uint32_t> level(n, 0);
-  // Earlier nodes touching each buffer, so a node only range-checks
-  // against nodes that could possibly hazard it.
-  std::unordered_map<VkBuffer, std::vector<uint32_t>> touchers;
-  auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
-    return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
-  };
-  std::vector<uint32_t> candidates;
-  for (size_t i = 0; i < n; ++i) {
-    candidates.clear();
-    for (const auto& r : nodes[i].reads) {
-      if (auto it = touchers.find(r.buffer); it != touchers.end()) {
-        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
-      }
-    }
-    for (const auto& r : nodes[i].writes) {
-      if (auto it = touchers.find(r.buffer); it != touchers.end()) {
-        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
-      }
-    }
-    std::sort(candidates.begin(), candidates.end());
-    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-    uint32_t wave = 0;
-    for (uint32_t j : candidates) {
-      const WaveNode& earlier = nodes[j];
-      bool hazard = false;
-      for (const auto& r : nodes[i].reads) {
-        for (const auto& w : earlier.writes) {
-          if (overlaps(r, w)) {
-            hazard = true;
-            break;
-          }
-        }
-      }
-      for (const auto& w : nodes[i].writes) {
-        if (hazard) {
-          break;
-        }
-        for (const auto& tw : earlier.writes) {
-          if (overlaps(w, tw)) {
-            hazard = true;
-            break;
-          }
-        }
-        if (hazard) {
-          break;
-        }
-        for (const auto& tr : earlier.reads) {
-          if (overlaps(w, tr)) {
-            hazard = true;
-            break;
-          }
-        }
-      }
-      if (hazard) {
-        wave = std::max(wave, level[j] + 1);
-      }
-    }
-    level[i] = wave;
-    for (const auto& r : nodes[i].reads) {
-      touchers[r.buffer].push_back(static_cast<uint32_t>(i));
-    }
-    for (const auto& r : nodes[i].writes) {
-      touchers[r.buffer].push_back(static_cast<uint32_t>(i));
-    }
-  }
-  return level;
-}
-
-bool CommandEncoder::wave_sched() {
-  // MLX_OMARCHY_WAVE_SCHED (docs/install-omarchy.md): default off. When on
-  // (and only with gated barriers — wave mode rides the same SPIR-V access
-  // reflection and tracker), dispatch/copy/fill nodes buffer at arrival
-  // and submit() records the batch in greedy earliest-wave order with one
-  // full dependency barrier between waves. Reordering is numerics-inert:
-  // a node's inputs are final once its hazard sources complete, and every
-  // hazard source of a node sits in a strictly earlier wave.
-  static const bool on = []() {
-    const char* e = std::getenv("MLX_OMARCHY_WAVE_SCHED");
-    return e != nullptr && env_flag("MLX_OMARCHY_WAVE_SCHED") &&
-        gated_barriers();
-  }();
-  return on;
-}
-
-bool CommandEncoder::wave_diag() {
-  // MLX_OMARCHY_WAVE_DIAG (census diagnostic): per flush, classify the
-  // edge that determined each node's wave (RAW/WAW/WAR against the
-  // max-level hazard source) and print a compact histogram. Counts only;
-  // inert for recording.
-  static const bool on = []() {
-    const char* e = std::getenv("MLX_OMARCHY_WAVE_DIAG");
-    return e != nullptr && env_flag("MLX_OMARCHY_WAVE_DIAG");
-  }();
-  return on;
-}
 
 bool CommandEncoder::export_dep_masks() {
   // MLX_OMARCHY_EXPORT_DEP_MASKS (design 22b395d phase 1): default ON
@@ -348,21 +246,6 @@ void CommandEncoder::copy_buffer(
     VkDeviceSize size,
     VkDeviceSize src_offset,
     VkDeviceSize dst_offset) {
-  if (wave_sched()) {
-    PendingNode& node = pending_.emplace_back();
-    node.kind = PendingNode::Kind::Copy;
-    node.prim = trace::current_prim();
-    node.src = src;
-    node.dst = dst;
-    node.size = size;
-    node.src_offset = src_offset;
-    node.dst_offset = dst_offset;
-    node.rd[node.nr++] = {src, src_offset, tracked_range_end(src_offset, size)};
-    node.wr[node.nw++] = {dst, dst_offset, tracked_range_end(dst_offset, size)};
-    node_count_++;
-    trace::counters().vk_buffer_copies++;
-    return;
-  }
   ensure_recording();
   // The tape-full diagnostic forces the heaviest dependency around the
   // copy and restarts tracking either way.
@@ -397,19 +280,6 @@ void CommandEncoder::fill_buffer(
     uint32_t value,
     VkDeviceSize size,
     VkDeviceSize offset) {
-  if (wave_sched()) {
-    PendingNode& node = pending_.emplace_back();
-    node.kind = PendingNode::Kind::Fill;
-    node.prim = trace::current_prim();
-    node.dst = dst;
-    node.size = size;
-    node.write_offset = offset;
-    node.value = value;
-    node.wr[node.nw++] = {dst, offset, tracked_range_end(offset, size)};
-    node_count_++;
-    trace::counters().vk_buffer_fills++;
-    return;
-  }
   ensure_recording();
   if (tape_full_barriers()) {
     record_dependency_barrier();
@@ -615,43 +485,6 @@ void CommandEncoder::dispatch_compute_pipeline(
       nullptr);
   trace::counters().vk_descriptor_update_writes += bindings.size();
 
-  if (wave_sched()) {
-    // Buffer the node; submit() records it in wave order (emit_pending).
-    // Everything order-independent happens here: binding-owner pinning,
-    // work accounting, descriptor allocation and writing.
-    PendingNode& node = pending_.emplace_back();
-    node.kind = PendingNode::Kind::Dispatch;
-    node.prim = trace::current_prim();
-    node.tape = in_tape_recording ? 1u : 0u;
-    node.host_t0 = prof::get().profiling() ? prof::host_ns() : 0;
-    node.pipeline = pipeline;
-    node.profile_kernel = profile_kernel;
-    for (size_t i = 0; i < bindings.size(); ++i) {
-      node.bindings[i] = bindings[i];
-    }
-    node.binding_count = static_cast<uint32_t>(bindings.size());
-    node.params = params;
-    node.group_count_x = group_count_x;
-    node.group_count_y = group_count_y;
-    node.group_count_z = group_count_z;
-    node.descriptor_set = descriptor_set;
-    const auto access = compute.binding_access(pipeline);
-    for (size_t i = 0; i < bindings.size(); ++i) {
-      TrackedRange range{bindings[i].buffer,
-                         bindings[i].offset,
-                         tracked_range_end(bindings[i].offset, bindings[i].range)};
-      if (((access.read_mask >> i) & 1u) != 0u) {
-        node.rd[node.nr++] = range;
-      }
-      if (((access.write_mask >> i) & 1u) != 0u) {
-        node.wr[node.nw++] = range;
-      }
-    }
-    node_count_++;
-    trace::counters().vk_compute_dispatches++;
-    return;
-  }
-
   ensure_recording();
   uint64_t host_t0 = prof::get().profiling() ? prof::host_ns() : 0;
   // MLX_OMARCHY_TAPE_FULL_BARRIERS (diagnostic, docs/install-omarchy.md):
@@ -826,197 +659,9 @@ void CommandEncoder::dispatch_compute_pipeline(
   trace::counters().vk_compute_dispatches++;
 }
 
-void CommandEncoder::emit_pending() {
-  if (pending_.empty()) {
-    return;
-  }
-  auto& dt = vk::device_table();
-  auto& compute = device_.compute();
-  ensure_recording();
-
-  std::vector<WaveNode> nodes;
-  nodes.reserve(pending_.size());
-  for (const auto& p : pending_) {
-    nodes.push_back({{p.rd.data(), p.nr}, {p.wr.data(), p.nw}});
-  }
-  const std::vector<uint32_t> levels = wave_levels(nodes);
-  uint32_t waves = 0;
-  for (uint32_t l : levels) {
-    waves = std::max(waves, l);
-  }
-
-  if (wave_diag()) {
-    // Classify the level-determining edge of every node: which access
-    // class (RAW/WAW/WAR) against the deepest hazard source forces this
-    // node into its wave. Nodes at level 0 are unforced.
-    auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
-      return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
-    };
-    uint64_t hist[4] = {0, 0, 0, 0}; // none, raw, waw, war
-    uint64_t depth_sum = 0;
-    for (size_t i = 0; i < pending_.size(); ++i) {
-      depth_sum += levels[i];
-      if (levels[i] == 0) {
-        hist[0]++;
-        continue;
-      }
-      uint32_t best = 0;
-      for (size_t j = 0; j < i; ++j) {
-        if (levels[j] + 1 == levels[i]) {
-          best = static_cast<uint32_t>(j);
-          // keep the LAST node one wave below; any is representative
-        }
-      }
-      const WaveNode& src = nodes[best];
-      bool raw = false, waw = false, war = false;
-      for (const auto& r : nodes[i].reads) {
-        for (const auto& w : src.writes) {
-          raw = raw || overlaps(r, w);
-        }
-      }
-      for (const auto& w : nodes[i].writes) {
-        for (const auto& tw : src.writes) {
-          waw = waw || overlaps(w, tw);
-        }
-        for (const auto& tr : src.reads) {
-          war = war || overlaps(w, tr);
-        }
-      }
-      hist[raw ? 1 : (waw ? 2 : (war ? 3 : 0))]++;
-    }
-    std::fprintf(
-        stderr,
-        "[wave-diag] nodes=%zu waves=%u levels_sum=%llu class "
-        "none=%llu raw=%llu waw=%llu war=%llu\n",
-        pending_.size(),
-        waves + 1,
-        static_cast<unsigned long long>(depth_sum),
-        static_cast<unsigned long long>(hist[0]),
-        static_cast<unsigned long long>(hist[1]),
-        static_cast<unsigned long long>(hist[2]),
-        static_cast<unsigned long long>(hist[3]));
-    std::fflush(stderr);
-  }
-
-  // The batch-head dependency: a freshly begun command buffer records its
-  // first barrier before any command (host writes, allocator flush, the
-  // previous submission's writes), exactly like the tape-order path.
-  const bool head_needs_barrier = !head_synced_;
-  const std::string_view submit_prim = trace::current_prim();
-
-  for (uint32_t w = 0; w <= waves; ++w) {
-    bool barrier_owed = (w > 0) || head_needs_barrier;
-    for (size_t i = 0; i < pending_.size(); ++i) {
-      if (levels[i] != w) {
-        continue;
-      }
-      // One full dependency barrier per wave, on the wave head; every
-      // later node of the wave rides it hazard-free.
-      bool preceded_by_barrier = barrier_owed;
-      if (barrier_owed) {
-        record_dependency_barrier();
-        trace::counters().barriers_emitted++;
-        prof::get().on_barrier(true);
-        barrier_owed = false;
-      } else {
-        trace::counters().barriers_skipped++;
-        prof::get().on_barrier(false);
-      }
-      const PendingNode& node = pending_[i];
-      if (node.kind == PendingNode::Kind::Dispatch) {
-        if (tape_full_barriers()) {
-          // Diagnostic: the heaviest dependency before every dispatch
-          // (degenerates the wave schedule; not counted as a decision).
-          record_dependency_barrier();
-          preceded_by_barrier = true;
-        }
-        prof::get().before_dispatch(
-            this, current_slot_, cmd_, preceded_by_barrier);
-        VkPipelineLayout pipeline_layout = compute.pipeline_layout();
-        dt.CmdBindPipeline(
-            cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, node.pipeline);
-        dt.CmdBindDescriptorSets(
-            cmd_,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            pipeline_layout,
-            0,
-            1,
-            &node.descriptor_set,
-            0,
-            nullptr);
-        dt.CmdPushConstants(
-            cmd_,
-            pipeline_layout,
-            VK_SHADER_STAGE_COMPUTE_BIT,
-            0,
-            sizeof(node.params),
-            &node.params);
-        dt.CmdDispatch(
-            cmd_,
-            node.group_count_x,
-            node.group_count_y,
-            node.group_count_z);
-        trace::current_prim() = node.prim;
-        prof::get().after_dispatch(
-            this,
-            current_slot_,
-            cmd_,
-            node.profile_kernel,
-            node.params,
-            std::span<const ComputeBinding>(
-                node.bindings.data(), node.binding_count),
-            node.group_count_x,
-            node.group_count_y,
-            node.group_count_z,
-            node.host_t0 != 0 ? prof::host_ns() - node.host_t0 : 0,
-            node.tape);
-        trace::current_prim() = submit_prim;
-        if (export_dep_masks()) {
-          // A node that rode its wave's barrier is provably disjoint from
-          // everything since that barrier (the level assignment proved no
-          // hazard against any earlier node); a wave-head node recorded
-          // the barrier itself.
-          uint32_t usc_signature = 0;
-          for (uint32_t b = 0; b < node.nr + node.nw; ++b) {
-            const TrackedRange& r =
-                b < node.nr ? node.rd[b] : node.wr[b - node.nr];
-            usc_signature = usc_signature * 31 +
-                uint32_t((uintptr_t)r.buffer ^ r.offset ^ r.end);
-          }
-          dep_records_.push_back(
-              {static_cast<uint32_t>(preceded_by_barrier ? 0 : 1),
-               static_cast<uint32_t>(
-                   (dep_have_prev_ && usc_signature != dep_prev_signature_)
-                       ? 1
-                       : 0),
-               ++dep_seq_});
-          dep_prev_signature_ = usc_signature;
-          dep_have_prev_ = 1;
-        }
-      } else if (node.kind == PendingNode::Kind::Copy) {
-        VkBufferCopy region{};
-        region.srcOffset = node.src_offset;
-        region.dstOffset = node.dst_offset;
-        region.size = node.size;
-        dt.CmdCopyBuffer(cmd_, node.src, node.dst, 1, &region);
-      } else {
-        dt.CmdFillBuffer(
-            cmd_, node.dst, node.write_offset, node.size, node.value);
-      }
-      for (uint32_t r = 0; r < node.nr; ++r) {
-        tracked_reads_.push_back(node.rd[r]);
-      }
-      for (uint32_t r = 0; r < node.nw; ++r) {
-        tracked_writes_.push_back(node.wr[r]);
-      }
-    }
-  }
-  pending_.clear();
-}
-
 void CommandEncoder::commit() {
-  if (!recording_ && pending_.empty() && wait_semaphores_.empty() &&
-      signal_semaphores_.empty() && completed_handlers_.empty()) {
+  if (!recording_ && wait_semaphores_.empty() && signal_semaphores_.empty() &&
+      completed_handlers_.empty()) {
     trace::counters().commit_calls_noop++;
     if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
       fprintf(stderr, "[rtmod] COMMIT-NOOP\n");
@@ -1053,9 +698,6 @@ void CommandEncoder::submit() {
   if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr, "[rtmod] SUBMIT-ENTER tid=%lu\n", (unsigned long)syscall(SYS_gettid));
   }
-  // Wave scheduling: record the buffered nodes into the command buffer
-  // now, in wave order, before the readback barrier and EndCommandBuffer.
-  emit_pending();
   bool was_recording = recording_;
   uint64_t submit_t0 = prof::get().profiling() ? prof::host_ns() : 0;
   uint64_t close_t = 0;
@@ -1239,7 +881,6 @@ void CommandEncoder::submit() {
       // batch's buffer stamps are harmless: those buffers stay alive via
       // their arrays or the quarantine.
       batch_buffers_.clear();
-      pending_.clear();
       recording_ = false;
       node_count_ = 0;
       batch_work_ = 0;
@@ -1296,7 +937,6 @@ void CommandEncoder::submit() {
   recording_ = false;
   node_count_ = 0;
   batch_work_ = 0;
-  pending_.clear();
   wait_semaphores_.clear();
   signal_semaphores_.clear();
   completed_handlers_.clear();

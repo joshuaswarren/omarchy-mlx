@@ -205,8 +205,6 @@ mlx_omarchy_trace_snapshot(
   out->omarchy_finalize_calls = c.omarchy_finalize_calls.load();
   out->commit_calls_with_work = c.commit_calls_with_work.load();
   out->commit_calls_noop = c.commit_calls_noop.load();
-  out->barriers_emitted = c.barriers_emitted.load();
-  out->barriers_skipped = c.barriers_skipped.load();
 }
 
 #ifdef MLX_OMARCHY_GPU_PROFILING
