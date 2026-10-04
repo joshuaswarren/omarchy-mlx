@@ -283,3 +283,15 @@ SHA256SUMS. Setup-verify on this NON-M5 host printed "int8 tensor-unit
 kernels available": the MPP int8 mma compiles on M1 Ultra, so "M5-only" is a
 performance claim, not an availability claim; an int8-flags run is a cheap
 follow-up.
+
+## 9. M1 Ultra int8-flags run (in progress at entry time)
+
+Config identical to the bf16 reference plus --int8-mlp --int8-qkv --int8-out.
+Log confirms the INT8 PATH TAKEN on M1 Ultra: "int8 MLP in 50 blocks",
+"int8 attention projections: 100" — the MPP int8 mma compiles and runs on
+this NON-M5 host. Per-step cost so far: 106.1/104.7/104.7 s vs the bf16
+reference's 90.0/87.4/86.1 s — int8 is ~17% SLOWER per forward on M1 Ultra,
+consistent with "M5-only" being a tensor-unit performance claim. Memory
+notably lower during denoise (68-71 GB free+inactive vs 53-57 GB bf16 — the
+int8 resident set is smaller). Comparison (PSNR/rel-L2 vs bf16 frames
+0/60/123) lands with the output hash in the artifacts store.
