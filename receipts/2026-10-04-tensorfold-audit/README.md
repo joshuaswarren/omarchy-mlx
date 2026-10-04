@@ -309,3 +309,14 @@ asan-built CPython, or a small asan-built C++ driver that exercises
 `fast::CustomKernel::eval_gpu` directly. The corrupting site is inside the
 cast scanner's replace/span arithmetic (commit f64c97681 reverted it from
 the build; the experimental scanner lives in later WIP commits).
+
+## 11. M2 run staging state (2026-10-04 late)
+
+Leg 1 of the shipment complete and manifest-verified on the dev relay
+(int8-dit 7 shards 25.8 GiB + text rows 5.3 MB + int8 latents 5.1 MB +
+sidecar; 10/10 sha256 OK). Leg 2 (dev -> M2, resumable) waits for the M2 to
+return from the Thunderbolt macOS window. The M2 ticket script is staged
+(int8_matmul numeric validation vs fp64; VAE decode deferred until VAEs
+ship). Wheel coordination: the shared M2 wheel must be built from main
+793546208+ (int8_matmul landed in 33ff979ed); flagged to Main — an older
+base silently misses the op.
