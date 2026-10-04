@@ -13,6 +13,7 @@ PROMPTS=${BS_PROMPTS:?missing BS_PROMPTS}
 BENCH=${BS_BENCH:?missing BS_BENCH}
 TAG=${BS_TAG:-m}
 ROUNDS=${BS_ROUNDS:-5}
+PASSES=${BS_PASSES:-1}
 DEPTHS=${BS_DEPTHS:-"64 512"}
 PREFILLS=${BS_PREFILLS:-"512"}
 TOOLS=$(cd "$(dirname "$0")" && pwd)
@@ -59,7 +60,7 @@ run_arm() { # arm label depth prefill
     MLX_OMARCHY_GDN_F16_STATE=0 \
     "$PY" "$BENCH" --model "$MODEL" --prompts "$PROMPTS" --limit 1 \
       --new-tokens "$depth" --prefill-tokens "$prefill" --warmup 1 \
-      --passes 1 --label "$label" --out "$OUT/$label.json" > "$OUT/$label.log" 2>&1
+      --passes "$PASSES" --label "$label" --out "$OUT/$label.json" > "$OUT/$label.log" 2>&1
 }
 
 digest_of() {
