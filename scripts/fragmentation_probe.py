@@ -49,6 +49,8 @@ def make_counter_reader():
                 "omarchy_finalize_calls",
                 "commit_calls_with_work",
                 "commit_calls_noop",
+                "barriers_emitted",
+                "barriers_skipped",
             )
         ]
 
