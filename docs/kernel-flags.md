@@ -38,6 +38,11 @@ A/B gating and qualification, not for normal operation.
 - `mlx-lm-gated-delta-fast-route.patch` — **default ON.** Routes
   `mx.fast.gated_delta_update` in mlx-lm 0.31.3 to the fused kernel in the
   mlx-omarchy wheel. Required for the measured serve numbers.
+- `patch-mlx-lm-gdn-raw-repeat.py` — **default OFF on all chips.** Set
+  `MLX_OMARCHY_GDN_RAW_REPEAT=1` to opt in to the Qwen3.5-9B fused raw decode
+  route (+31-35% measured decode); v0.7.26's 10 x 512 free-run audit found
+  29.43% prefix identity and six first divergences with a 0.125 composed
+  top-2 gap, so the route does not meet the free-run acceptance bar.
 - `mlx-lm-convring.patch` — **default OFF.** Rolling conv-state ring; enable
   per venv with `MLX_OMARCHY_CONV_RING=1 scripts/apply-mlx-lm-patches.sh
   /path/to/venv`.

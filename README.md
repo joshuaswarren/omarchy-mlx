@@ -161,6 +161,18 @@ mlx-omarchy-parakeet transcribe recording.wav -o out/
 printed: missing assets, a hash mismatch, or no ANE. The contract is
 in [docs/parakeet.md](docs/parakeet.md).
 
+## Qwen3.5-9B fused GDN decode
+
+The fused raw decode route is **off by default on every chip**. The
+v0.7.26 published-wheel audit found 29.43% prefix identity over 10
+prompts x 512 tokens; six first divergences had a composed top-2 gap of
+0.125, above the 0.05 near-tie cutoff. Per-op fp64 and S=1 perplexity
+checks passed, but the free-run gate failed.
+
+Set `MLX_OMARCHY_GDN_RAW_REPEAT=1` to opt in. It measured +31-35% 9B
+decode on G14-class hardware and +35-43% on G13, with 1-ULP near-tie
+free-run divergence.
+
 ## How it works
 
 MLX lowers your graph to Vulkan compute and runs it on the Apple GPU.

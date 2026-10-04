@@ -371,3 +371,19 @@ builds/environments at 1-ULP near-ties — including tiled-vs-composed — so
 "bit-exact free-run at d512" is not an achievable bar on this model
 without pinning the exact wheel binary; near-tie-class equivalence (TF
 99.39-99.53%, ppl -0.05..-0.08%) is what the evidence supports.
+## Addendum 9 2026-10-04 — published v0.7.26 audit supersedes default-ON conclusion
+
+GduBar independently audited the published v0.7.26 wheel on jw16's native
+tiled path. The 10-prompt x 512-token free-run result was 29.43% prefix
+identity, with 6/10 first divergences at composed top-2 gap 0.125. This
+fails the owner's bar 2 (>=95% greedy identity, or every divergence with
+composed gap <0.05). Per-op fp64 passed; S=1 PPL changed -0.0721% on the
+measured 49-token sample. The earlier "bit-exact/order-matched 100%
+identity" claim did not reproduce on the published bytes.
+
+The earlier land/default-ON statements and addendum 8's operational
+consequence are superseded for the release default. Set
+`MLX_OMARCHY_GDN_RAW_REPEAT=0` on v0.7.26; v0.7.27 defaults it OFF on
+all chips. The fused route remains an explicit `=1` opt-in. Decode
+improved by 31-35% on G14-class and 35-43% on G13, with 1-ULP near-tie
+free-run divergence. See `receipts/2026-10-04-gdu-bar-audit/README.md`.
