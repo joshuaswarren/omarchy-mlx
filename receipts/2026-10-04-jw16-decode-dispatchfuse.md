@@ -162,3 +162,39 @@ d64 26d569c8 (unchanged), d128 2bbf33d4 (unchanged), d256 0279994b
 suites: GDN-relevant omarchy test binaries re-run on the deployed wheel
 (results in the notebook artifacts); deploy-verify on the serving venv with
 no env.
+
+## Addendum 3 2026-10-04T07:3xZ — order-matched kernel lands; packaging wired for v0.7.26; corrections
+
+CORRECTIONS (supersede earlier contradictory lines): addendum 1's "default
+stays OFF" and the pre-land prose describing GDN_RAW_REPEAT as opt-in are
+superseded — the default flipped ON at 111b61da2 (in the v0.7.25 tag) after
+the teacher-forced gate passed, and this addendum wires the patcher into the
+install path so fresh installs actually get it (v0.7.25 shipped it
+repo-only: apply-mlx-lm-patches.sh did not invoke the patcher and
+PatcherCoverageTests classified it NOT_INVOKED — the gap Release0725's
+audit caught).
+
+ORDER-MATCHED KERNEL (main d86ea8815, commit b3d0eb316 lineage): the tiled
+GDU decode kernel's walks now reproduce the composed C++ fallback's
+arithmetic exactly when bit 9 is set (A_log f32 models): state_next =
+state*g rounded per element, kv/out = two-operand products serially summed
+ascending from 0.0 (the ReduceF32 single-chunk order), no fma contraction.
+Measured on jw16 (diag wheel +diag.dfuse.b3d0eb316):
+- captured-operand composed-vs-fused: BIT-IDENTICAL (out/state max_abs
+  equal to 17 digits);
+- free-running greedy identity, 5 prompts x 512 tokens: 100.0%;
+- retained speed: +31.9/+32.0/+31.5% at d64 and +31.0/+31.0% at d512
+  (order-matching costs ~3 points of the +34%, keeps ~91%);
+- 2B (bf16 A_log, bit 9 unset) arithmetic unchanged byte-for-byte; all 2B
+  production pins re-verified on the deployed wheel earlier this lane.
+
+PACKAGING (this commit): apply-mlx-lm-patches.sh invokes
+scripts/patch-mlx-lm-gdn-raw-repeat.py (after the qwen3 rope-norm line), so
+install.sh's derive-from-the-script fetch list ships it;
+PatcherCoverageTests drops the NOT_INVOKED entry; the patcher docstring now
+states default ON with the =0 kill switch in one voice.
+
+27B: qwen3_moe.py has zero gated_delta/GDN references (full attention) and
+no qwen3_5-family 27B checkpoint exists on jw16 (only Qwen3.8-27B-4bit =
+qwen3_moe, Qwen3.6-27B-mxfp4, Ternary-Bonsai-2-27B) — the route does not
+apply; nothing to gate.
