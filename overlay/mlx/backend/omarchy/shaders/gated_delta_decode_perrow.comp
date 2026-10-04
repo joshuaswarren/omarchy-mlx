@@ -157,20 +157,32 @@ void main() {
   uint head_base = head * dv * dk;
   uint row_base = head_base + row * dk;
 
+  // Composed-chain order and rounding sites (the C++ raw fallback), with
+  // precise on every product and add: without the decorations the older
+  // G13 Mesa contracts these chains into fma and the fused kernel stops
+  // being bit-identical to the composed path (H257: jwm1 free-run identity
+  // 38.95% vs jw16 100%). kv: s_g = state*g (rounded), term = s_g*k
+  // (rounded), serial ascending sum from 0.0 (ReduceF32 single-chunk
+  // order). Update: ns = s_g + delta*k, each op rounded separately.
   float kv_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
-    kv_acc += s_in.v[params.shape[1] + row_base + i] * g * sk[i];
+    precise float s_g = s_in.v[params.shape[1] + row_base + i] * g;
+    precise float term = s_g * sk[i];
+    kv_acc += term;
   }
-  float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
+  precise float d0 = bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc;
+  precise float delta = d0 * beta;
   sdelta[row] = delta;
   barrier();
 
   float o_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
-    float s = s_in.v[params.shape[1] + row_base + i] * g;
-    float ns = s + sdelta[row] * sk[i];
+    precise float s_g = s_in.v[params.shape[1] + row_base + i] * g;
+    precise float dk_term = delta * sk[i];
+    precise float ns = s_g + dk_term;
     s_out.v[params.shape[2] + head_base + row * dk + i] = ns;
-    o_acc += ns * sq[i];
+    precise float o_term = ns * sq[i];
+    o_acc += o_term;
   }
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 }
