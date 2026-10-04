@@ -63,11 +63,23 @@ od -An -tu4 --endian=big /sys/firmware/devicetree/base/soc/gpu@206400000/apple,p
 
 prints `6`. To turn it off, remove the line from the opt-in file and rebuild.
 
+## T6001 (M1 Max)
+
+A second overlay, opt-in key `gpu-pstate-t6001`, sets base state 6 on
+`/soc/gpu@406400000`. The A/B on an M1 Max (greedy decode and prefill, Qwen3.8-2B, one boot per arm, stock bookends to bound
+boot-to-boot drift) found no throughput change: decode at 512 tokens moved by
+-0.32% to +0.08% across base 6, base 4 and target-utilization 40 and 60, and
+prefill stayed within 0.2%. Greedy digests matched in every arm. The time to
+first token after a pause fell with base 6 from 88.6, 88.6 and 91.7 ms to 84.4,
+83.9 and 86.6 ms at gaps of 100, 500 and 2000 ms (about 5%). Base 4 gave about
+half of that. Target-utilization 40 and 60 changed nothing. The chip stays on stock by default.
+Details: `docs/gpu-base-pstate-t6001.md`.
+
 ## Limits
 
-- Only T8103 has been measured. T6001 (M1 Max) and T6021 (M2 Max) have other
-  OPP tables and node names. Each chip gets its own overlay after its own A/B.
-  The default stays stock until those exist.
+- T8103 and T6001 have been measured. T6021 (M2 Max) has another OPP table and
+  node name and gets its own overlay after its own A/B. The default stays
+  stock.
 - The effect is a latency gain after a pause. Nobody has measured the energy of
   short bursts at a high base state on battery separately from whole-machine
   power.
