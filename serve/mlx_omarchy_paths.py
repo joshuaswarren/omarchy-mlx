@@ -32,6 +32,13 @@ import os
 import sys
 from pathlib import Path
 
+# Every launcher imports this module before anything imports transformers,
+# so this is the one place to silence transformers' one-line advisory that
+# prints when torch is absent ("PyTorch was not found. Models won't be
+# available ..."). mlx-omarchy uses transformers for tokenizers only and
+# intentionally ships no torch. setdefault defers to an explicit value.
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+
 REPO = "joshuaswarren/omarchy-mlx"
 HOME_PREFIX_NAME = "mlx-omarchy"
 SYSTEM_PREFIX = "/usr/lib/omarchy-mlx"
