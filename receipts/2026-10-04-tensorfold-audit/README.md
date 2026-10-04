@@ -295,3 +295,17 @@ consistent with "M5-only" being a tensor-unit performance claim. Memory
 notably lower during denoise (68-71 GB free+inactive vs 53-57 GB bf16 — the
 int8 resident set is smaller). Comparison (PSNR/rel-L2 vs bf16 frames
 0/60/123) lands with the output hash in the artifacts store.
+
+## 10. Heap-corruption debug state (C-cast scanner, quarantined)
+
+Reproduction (dev box): TensorFold H3 `quantize_rows` (the `_QUANTIZE`
+custom kernel) through the current branch build aborts with
+`free(): invalid next size (fast)` x2 during eval. ASAN follow-up: an
+asan-flagged wheel was built and run under `LD_PRELOAD=libasan.so`, but the
+asan interceptor CHECK (`real___cxa_throw == 0`) fires first because the
+interpreter is not asan-built; the throw under investigation is
+`compile_glsl`'s glslang failure path. Proper harness (next session):
+asan-built CPython, or a small asan-built C++ driver that exercises
+`fast::CustomKernel::eval_gpu` directly. The corrupting site is inside the
+cast scanner's replace/span arithmetic (commit f64c97681 reverted it from
+the build; the experimental scanner lives in later WIP commits).
