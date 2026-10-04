@@ -110,6 +110,22 @@ const SimulationProfile kProfiles[] = {
         0,
         -1,
     },
+    {
+        "m1-g13-legacy",
+        "honeykrisp_fork",
+        "Base-M1 (G13G) device name over the runtime capability set: "
+        "every G13-legacy kernel selection (GDN perrow decode, walk "
+        "prefetch off) takes its legacy arm; no capability axis changes",
+        -1,
+        0,
+        kAllSubgroupOps,
+        -1,
+        0,
+        0,
+        0,
+        -1,
+        "Apple M1 (G13G B1)",
+    },
 };
 
 std::string lowered(const char* v) {
@@ -189,6 +205,9 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   }
   if (profile.atomic_float_add >= 0) {
     caps.shader_atomic_float_add = profile.atomic_float_add != 0;
+  }
+  if (profile.device_name != nullptr) {
+    caps.device_name = profile.device_name;
   }
   caps.simulated = true;
   caps.simulation_profile = profile.name;

@@ -45,6 +45,7 @@ constexpr const char* kM1Stock = "m1-stock-no-coopmat";
 constexpr const char* kSubgroup64 = "subgroup-size-64";
 constexpr const char* kSmallSmem = "small-shared-memory";
 constexpr const char* kNoCoopmat = "no-cooperative-matrix";
+constexpr const char* kG13Legacy = "m1-g13-legacy";
 
 std::string g_profile;
 
@@ -287,7 +288,13 @@ TEST_CASE("capability report is stamped with the active profile") {
   // Hardware truth stays hardware: unstamped, same physical device.
   const auto& h = hw();
   REQUIRE_FALSE(h.simulated);
-  CHECK(h.device_name == c.device_name);
+  // m1-g13-legacy pins the device_name axis (the G13-legacy kernel
+  // selections key on it); every other profile inherits it.
+  if (profile_is(kG13Legacy)) {
+    CHECK(c.device_name == std::string("Apple M1 (G13G B1)"));
+  } else {
+    CHECK(h.device_name == c.device_name);
+  }
   CHECK(h.driver_name == c.driver_name);
 
   // Axis expectations per profile (docs/compatibility-matrix.md rows).
@@ -317,6 +324,11 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK((c.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) == 0);
     CHECK((c.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) ==
         0);
+  } else if (profile_is(kG13Legacy)) {
+    CHECK_EQ(c.subgroup_size, h.subgroup_size);
+    CHECK(c.cooperative_matrix_f32_8 == h.cooperative_matrix_f32_8);
+    CHECK(c.subgroup_operations == h.subgroup_operations);
+    CHECK_EQ(c.max_compute_shared_memory_size, h.max_compute_shared_memory_size);
   } else {
     FAIL("unhandled profile ", g_profile);
   }
@@ -828,9 +840,9 @@ int main(int argc, char** argv) {
     }
     unsetenv("MLX_OMARCHY_CAPS_SIM");
 
-    // Registry sanity: the five documented profiles exist.
-    for (const char* name :
-         {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem, kNoCoopmat}) {
+    // Registry sanity: the six documented profiles exist.
+    for (const char* name : {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem,
+                             kNoCoopmat, kG13Legacy}) {
       if (omarchy::capsim::find(name) == nullptr) {
         std::cerr << "unit: profile missing from registry: " << name
                   << "\n";
@@ -874,6 +886,15 @@ int main(int argc, char** argv) {
     if (none.cooperative_matrix_f32_8 || none.subgroup_size != 64 ||
         (none.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0) {
       std::cerr << "unit: no-cooperative-matrix delta wrong\n";
+      return 1;
+    }
+    auto legacy = omarchy::capsim::apply(
+        hw_report, *omarchy::capsim::find(kG13Legacy));
+    if (legacy.device_name != "Apple M1 (G13G B1)" ||
+        legacy.subgroup_size != 64 || legacy.cooperative_matrix_f32_8 ||
+        legacy.max_compute_shared_memory_size != 65536 ||
+        legacy.subgroup_operations != VK_SUBGROUP_FEATURE_BASIC_BIT) {
+      std::cerr << "unit: m1-g13-legacy delta wrong\n";
       return 1;
     }
     std::cout << "unit: profile registry + apply() deltas OK\n";
