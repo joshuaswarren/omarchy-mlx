@@ -133,8 +133,10 @@ TEST_CASE("conv1d gemm decomposition falls back to direct kernel over cap") {
   for (auto& v : wd) v = 0.1f * dist(rng);
   array x(xd.begin(), Shape{1, L, ci}, float32);
   array w(wd.begin(), Shape{co, k, ci}, float32);
-  array got = conv1d(x, w, 1, pad, Stream(gpu));
-  array want = conv1d(x, w, 1, pad, Stream(cpu));
+  array got = conv1d(
+      x, w, 1, pad, /*dilation=*/1, /*groups=*/1, Stream(gpu));
+  array want = conv1d(
+      x, w, 1, pad, /*dilation=*/1, /*groups=*/1, Stream(cpu));
   auto got_v = flat(got, Stream(gpu));
   auto want_v = flat(want, Stream(cpu));
   unsetenv("MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES");
