@@ -79,6 +79,9 @@ struct SimulationProfile {
   uint32_t workgroup_size_x;
   // Axis atomic_float_add. -1 = inherit, 0/1 = set.
   int atomic_float_add;
+  // Axis device_name: the reported name, which the G13-legacy kernel
+  // selections key on. nullptr = inherit.
+  const char* device_name = nullptr;
 };
 
 // The registered profiles, in registry order. docs/new-chip-bringup.md
