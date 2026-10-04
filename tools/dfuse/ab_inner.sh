@@ -8,7 +8,7 @@ set -euo pipefail
 DF_OUT=${DF_OUT:?missing DF_OUT}
 DF_PLAN=${DF_PLAN:?missing DF_PLAN}
 PY=${DF_CTL_PY:-/var/tmp/v072-venv-fused/bin/python}
-CANDPY=/var/tmp/dfuse-cand/bin/python
+CANDPY=${DF_CAND_PY:-/var/tmp/dfuse-cand/bin/python}
 BENCH=${HOME}/bench-scripts/qwen38-mlx-bench.py
 PROMPTS=${HOME}/bench-scripts/qwen38-2b-prompts.jsonl
 HF=${HOME}/.cache/huggingface/hub
@@ -25,6 +25,9 @@ printf "DF_PLAN=%s\n" "$DF_PLAN" >> "$DF_OUT/gates.txt"
 "$PY" -m pip show mlx-omarchy | sed -n 2p > "$DF_OUT/ctl-stamp.txt"
 "$CANDPY" -m pip show mlx-omarchy | sed -n 2p > "$DF_OUT/cand-stamp.txt"
 cmp -s "$DF_OUT/ctl-stamp.txt" "$DF_OUT/cand-stamp.txt" && { echo "STAMP COLLISION"; exit 1; }
+PROV=${DF_PROV:-/var/tmp/dfuse-build/scripts/mlx_provenance.py}
+"$PY" "$PROV" > "$DF_OUT/ctl-provenance.txt" 2>&1 || { echo "ctl provenance refused"; exit 1; }
+"$CANDPY" "$PROV" > "$DF_OUT/cand-provenance.txt" 2>&1 || { echo "cand provenance refused"; exit 1; }
 
 M2B=$HF/models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381
 M4B=$(ls -d $HF/models--mlx-community--Qwen3-4B-Instruct-2507-4bit/snapshots/*/ | head -1)
@@ -75,6 +78,7 @@ for spec in "${SPECS[@]}"; do
     ctl9b) run_one "${f[0]}" "${f[1]}" ctl "${f[3]:-1}" "$M9B" ;;
     on9b)  run_one "${f[0]}" "${f[1]}" on  "${f[3]:-1}" "$M9B" MLX_OMARCHY_GDN_RAW_REPEAT=1 ;;
     neu9b) run_one "${f[0]}" "${f[1]}" neu "${f[3]:-1}" "$M9B" ;;
+    off9b) run_one "${f[0]}" "${f[1]}" on  "${f[3]:-1}" "$M9B" MLX_OMARCHY_GDN_RAW_REPEAT=0 ;;
     ctl2b) run_one "${f[0]}" "${f[1]}" ctl "${f[3]:-1}" "$M2B" ;;
     on2b)  run_one "${f[0]}" "${f[1]}" on  "${f[3]:-1}" "$M2B" MLX_OMARCHY_ROPE_NORM_FUSE=1 ;;
     neu2b) run_one "${f[0]}" "${f[1]}" neu "${f[3]:-1}" "$M2B" ;;
