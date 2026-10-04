@@ -255,3 +255,15 @@ against this baseline, not against a claim of zero failures.
    kept with sha256.
 4. M2 Max host (gpu-turn window): gates patched to warnings, int8 ON, PSNR/SSIM
    + audio metrics vs the macOS reference.
+
+## 7. Weight component sizes (macstudio FL2VA, measured 2026-10-04)
+
+transformer (DiT) 62 GiB bf16, text_encoder 63 GiB, video_vae 10 GiB,
+audio_vae 1 GiB. M2 (~48 GiB free) cannot hold any bf16 combination; the
+feasible Omarchy configuration is a quantized DiT (the reference repo's own
+4-bit core + 8-bit AdaLN recipe) plus pre-encoded prompt conditioning
+(skipping the 63 GiB encoder), ~30 GiB resident — the pre-encoding needs a
+small upstream flag (draft-PR list). The int8 W8A8 swap path still works from
+a quantized-DiT-free bf16 checkpoint: note the swap quantizes from whatever
+weights the projections hold, so the DiT must stay bf16/8-bit for the int8
+path; a 4-bit core checkpoint serves bf16-comparison runs only.
