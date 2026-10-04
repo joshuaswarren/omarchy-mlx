@@ -98,6 +98,26 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=3 \
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-int8-matmul.patch"
 
+# Backend-generic upstream fixes, applied in upstream first-parent order.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-view-offset.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-eval-cleanup-deadlock.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-shared-buffer-reshape-contiguity.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-view-last-axis-stride.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-view-contiguity-flags.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-multioptimizer-empty-group.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-as-strided-contiguity.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-aligned-array-pointer.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-vmap-scatter-axis.patch"
+
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
 trap - EXIT
