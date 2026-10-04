@@ -607,7 +607,7 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
   std::vector<double> xq = widen(flat(x_pre, stream)); // (B, T, H, D) rows
   std::vector<double> wq = widen(flat(w, stream));
   std::vector<double> cq = widen(flat(cot, stream)); // (B, H, T, D)
-  auto inv_freq = [&](int j) { return std::pow(base, -double(j)); };
+  auto inv_freq = [&](int j) { return std::pow(base, -double(j) / half); };
   auto objective = [&](const std::vector<double>& xs, const std::vector<double>& ws) {
     double loss = 0.0;
     for (int b = 0; b < B; ++b) {
