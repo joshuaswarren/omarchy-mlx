@@ -1,0 +1,14 @@
+# Upstream: ml-explore/mlx-lm caed1943d38ecb58f6e466a72bed98310c9d45a5 (#1904)
+# mlx-lm is MIT licensed; this patch changes no upstream license or notice.
+--- a/mlx_lm/server.py
++++ b/mlx_lm/server.py
+@@ -150,7 +150,8 @@ def process_message_content(messages):
+             for tool_call in tool_calls:
+                 if func := tool_call.get("function"):
+                     if args := func.get("arguments"):
+-                        func["arguments"] = json.loads(args)
++                        if isinstance(args, str):
++                            func["arguments"] = json.loads(args)
+ 
+ 
+ @dataclass

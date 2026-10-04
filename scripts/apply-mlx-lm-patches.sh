@@ -65,6 +65,7 @@ apply() {
     return 1
   fi
 }
+apply mlx-lm-tool-call-arguments.patch
 apply mlx-lm-gated-delta-fast-route.patch
 # GDN fast-route Hk!=Hv repeat: Qwen3.5-9B (Hk=16, Hv=32) hit the composed
 # per-token fallback without this; A/B 42 -> 317 tok/s prefill 512 on M2.
