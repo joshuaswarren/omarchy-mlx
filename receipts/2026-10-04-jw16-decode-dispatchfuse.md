@@ -301,3 +301,39 @@ prompt, bisect walk vs gates on G13 Mesa.
   recorded) while d64 is stable — a pre-existing long-depth near-tie
   sensitivity of the 9B model, separate from the route; the d64 pin is
   the stable production reference.
+
+## Addendum 7 2026-10-04T13:3xZ — owner-bar measurement on jw16 forced-legacy: bar (2) FAILS; G13 stays composed
+
+Owner bar for flipping the 9B fused route default ON on G13, measured on
+jw16 FORCED LEGACY (TILE=0, PF default = the exact jwm1 kernel, diag wheel
++diag.dfuse.ece1a1a97), artifacts artifacts/DispatchFuse/h257bar/:
+
+1. per-op error vs fp64 (captured operands, stored-state AND output):
+   composed vs fp64 and fused vs fp64 are IDENTICAL to 17 digits (out
+   max_abs 1.625e-3 both; state max_abs 1.608e-2 both) — neither worse.
+   The single-step kernel is bit-exact vs composed on the captured state.
+2. free-run greedy identity + near-tie rule: FAIL. Mean identity 19.49%
+   over 10 prompts x 512; 9/10 prompts diverge (first divergence 13-99
+   tokens); composed-path top-2 gap AT the divergence: 6 of 9 divergences
+   at 0.125 (1 bf16 ULP at |logit| ~25-32 — above the 0.05 owner bar), 3
+   below. NOT near-tie-only by the stated rule.
+3. S=1 decode-route-sensitive PPL: mean NLL 4.36090 (composed) vs
+   4.35744 (fused) = -0.079% — within the 0.1% bar. (The earlier
+   prefill-length PPL probe was route-blind; this S=1 variant scores
+   token-by-token so the decode kernel runs per step.)
+
+VERDICT per the stated rule: bar (2) fails -> G13 (jwm1 and any
+g13_legacy_part) keeps the composed chain as default (deployed per-chip
+policy d36d16822/f601aa7fb). The diverging operation is isolated to the
+perrow_pf OUTPUT (o_t) sum: at the first free-run divergence the GDN state
+matches while the output flips at a 1-ULP gap — i.e. the perrow_pf o_t
+accumulation differs from the composed ReduceF32 sum on certain value
+patterns even with NoContraction decorations on this Mesa family. Next
+chase (queued): dump the composed out-sum's actual ReduceF32 dispatch
+chunking for the 9B shapes and match the pf accumulation to the TRUE
+chunk order (not the assumed single-chunk serial).
+
+w71 bundle: tools/dfuse/h257_jwm1_runner.sh (+ free_run_gaps.py, ppl_s1.py,
+gdu_fp64_probe.py, analyze_w1.py — all on main) with env knobs H257_PY /
+H257_MODEL / H257_PROMPTS10 / H257_OUT; runs the three owner-bar
+measurements on jwm1 under the lock.
