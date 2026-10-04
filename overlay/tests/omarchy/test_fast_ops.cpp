@@ -16,6 +16,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -658,6 +659,76 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
   // central difference tracks the smooth derivative well inside 0.09.
   require_close(flat(f_grads[0], stream), fd_dx_view, 0.09, "fused vjp dx finite difference");
   require_close(flat(f_grads[1], stream), fd_dw, 0.09, "fused vjp dw finite difference");
+}
+
+TEST_CASE("weightless rms_norm_scaled vjp trains (qwen3.5 qk-scaled path)") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // The qwen3.5 qk-scaled patch calls mx.fast.rms_norm_scaled(q, None,
+  // scale, eps): a WEIGHTLESS scaled norm. Its fused forward ran fine
+  // while the fallback fed the {1} 0-D placeholder to fast::rms_norm,
+  // which refuses 0-D weights — every first backward threw
+  // "[rms_norm] (*weight) must have 1 dimension but has 0 dimensions."
+  // This case is that backward, at op level.
+  const int B = 1, H = 2, T = 5, D = 16;
+  const float eps = 1e-6f;
+  auto x_data = pattern(B * H * T * D, 53);
+  auto c_data = pattern(B * H * T * D, 59);
+  array x = array(x_data.begin(), Shape{B, H, T, D}, float32)
+                .astype(bfloat16, stream);
+  array cot = array(c_data.begin(), Shape{B, H, T, D}, float32)
+                  .astype(bfloat16, stream);
+
+  auto fun = [&](const std::vector<array>& ins) {
+    return std::vector<array>{
+        fast::rms_norm_scaled(ins[0], std::nullopt, 0.7f, eps, stream)};
+  };
+  auto scaled = vjp(fun, std::vector<array>{x}, {cot});
+  auto& grads = scaled.second;
+  REQUIRE(grads.size() == 1);
+  CHECK(std::all_of(
+      flat(grads[0], stream).begin(),
+      flat(grads[0], stream).end(),
+      [](float v) { return std::isfinite(v); }));
+
+  // Contract: the scaled vjp equals the vjp of the composed chain
+  // 0.7 * rms_norm(x, no weight, eps) — the graph the fallback must
+  // differentiate.
+  auto fun_comp = [&](const std::vector<array>& ins) {
+    auto n = fast::rms_norm(ins[0], std::nullopt, eps, stream);
+    return std::vector<array>{
+        multiply(array(0.7f, float32), n, stream)};
+  };
+  auto comp = vjp(fun_comp, std::vector<array>{x}, {cot});
+  require_close(
+      flat(grads[0], stream),
+      widen(flat(comp.second[0], stream)),
+      1e-5,
+      "weightless scaled vjp equals composed chain vjp");
+
+  // The weighted leg still routes the real weight (regression guard).
+  auto w_data = pattern(D, 61);
+  array w = array(w_data.begin(), Shape{D}, float32)
+                .astype(bfloat16, stream);
+  auto fun_w = [&](const std::vector<array>& ins) {
+    return std::vector<array>{
+        fast::rms_norm_scaled(ins[0], ins[1], 0.7f, eps, stream)};
+  };
+  auto weighted = vjp(fun_w, std::vector<array>{x, w}, {cot});
+  REQUIRE(weighted.second.size() == 2);
+  auto [outputs, want_grads] = vjp(
+      [&](const std::vector<array>& ins) {
+        return std::vector<array>{
+            multiply(array(0.7f, float32), fast::rms_norm(ins[0], ins[1], eps, stream), stream)};
+      },
+      std::vector<array>{x, w}, {cot});
+  require_close(
+      flat(weighted.second[0], stream),
+      widen(flat(want_grads[0], stream)),
+      1e-5,
+      "weighted scaled vjp dx equals composed");
 }
 
 TEST_CASE("RMSNormVJP matches finite differences and the composed formula") {
