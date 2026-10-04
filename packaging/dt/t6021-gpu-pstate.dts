@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-2.0+ OR MIT
+/*
+ * Overlay state: opt-in ("gpu-pstate-t6021" in /etc/omarchy-mac-boot/dtb-overlays.opt-in).
+ *
+ * Raises the AGX firmware's base performance state on T6021 (Apple M2 Max)
+ * from 1 (444 MHz) to 6 (1236 MHz) of the
+ * off/444/612/808/968/1110/1236/1338/1398 MHz OPP table.
+ *
+ * 6 is NOT the top state. The top state is 8 (1398 MHz), and 8 is the wrong
+ * value here: on the M2 Max (j414c, ABA, three stock boots against one boot
+ * per overlay arm) base 8 removed the post-pause penalty too, but it lowered
+ * back-to-back decode 1.8-1.9 % and prefill 3.3 %, slowed a request after a
+ * 20 ms gap by 2.5 ms, and raised idle power by ~170 mW. Base 6 kept every
+ * sustained cell within 0.1 % of stock. Do not copy the T8103 or T6001 habit
+ * of "set the top state" to this SoC.
+ *
+ * The GPU firmware starts every burst from its base state and ramps; on a GPU
+ * that was idle for 100 ms to 2 s that ramp is the post-pause penalty on the
+ * first request (T8103: H237/H245/H247; T6001: Jw16Dvfs; T6021: H253,
+ * docs/gpu-base-pstate-t6021.md).
+ *
+ * The target is the node the stock board device trees (t6021-*.dtb) define as
+ * /soc/gpu@406400000 (compatible apple,agx-t6021), the same node the kernel
+ * driver parses for apple,perf-base-pstate and passes to the firmware, which
+ * reads it at GPU init. It takes effect at the next boot, after update-m1n1
+ * has rebuilt boot.bin. Only T6021 is claimed here; T6020 and T8112 have other
+ * OPP tables and need their own overlay and A/B.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	omarchy,opt-in = "gpu-pstate-t6021";
+
+	fragment@0 {
+		target-path = "/soc/gpu@406400000";
+
+		__overlay__ {
+			apple,perf-base-pstate = <6>;
+		};
+	};
+};
