@@ -16,6 +16,7 @@ ROUNDS=${BS_ROUNDS:-5}
 DEPTHS=${BS_DEPTHS:-"64 512"}
 PREFILLS=${BS_PREFILLS:-"512"}
 TOOLS=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$OUT"
 
 test ! -e /var/tmp/JW16_MAINTENANCE
 uptime_s=$(cut -d. -f1 /proc/uptime); test "$uptime_s" -ge 360
@@ -36,8 +37,9 @@ class S(ctypes.Structure):
     _fields_ = [(n, ctypes.c_uint64) for n in (
         "a","b","c","d","e","f","g","h","barriers_emitted","barriers_skipped")]
 import mlx.core  # noqa
-import mlx, os
-so = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(mlx.__file__))), "mlx", "lib", "libmlx.so")
+import os
+pkg = os.path.dirname(os.path.abspath(mlx.core.__file__))
+so = os.path.join(pkg, "lib", "libmlx.so")
 lib = ctypes.CDLL(so); lib.mlx_omarchy_trace_snapshot.argtypes = [ctypes.POINTER(S)]
 s0, s1 = S(), S(); lib.mlx_omarchy_trace_snapshot(ctypes.byref(s0))
 import mlx.core as mx

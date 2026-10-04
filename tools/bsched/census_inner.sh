@@ -11,6 +11,7 @@ PROMPTS=${BS_PROMPTS:?missing BS_PROMPTS}
 BENCH=${BS_BENCH:?missing BS_BENCH}
 CELLS=${BS_CELLS:?missing BS_CELLS}
 TOOLS=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$OUT"
 
 test ! -e /var/tmp/JW16_MAINTENANCE
 uptime_s=$(cut -d. -f1 /proc/uptime); test "$uptime_s" -ge 360

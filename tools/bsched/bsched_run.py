@@ -22,6 +22,8 @@ def main():
     argv = sys.argv[3:]
     before = snapshot()
     sys.argv = [bench] + argv
+    # `python bench.py` puts the script's dir on sys.path; run_path does not.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(bench)))
     try:
         runpy.run_path(bench, run_name="__main__")
     except SystemExit as e:
