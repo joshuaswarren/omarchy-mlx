@@ -130,6 +130,43 @@ float gdn_decay_add(float s, float g, float dk_term) {
   return s * g + dk_term;
 }
 
+// LogAddExp(0, x) exactly as elementwise.comp case 32 compiles it: same
+// statements, no `precise`, so the compiler makes the same choices inside
+// it that it makes in the composed chain's LogAddExp kernel.
+float gdn_log1p_ew(float v) {
+  float u = 1.0f + v;
+  if (u == 1.0f) {
+    return v;
+  }
+  return log(u) * (v / (u - 1.0f));
+}
+
+float gdn_softplus_ew(float x) {
+  float value = max(0.0f, x);
+  if (!isnan(value) && !isinf(value)) {
+    value += gdn_log1p_ew(exp(-abs(0.0f - x)));
+  }
+  return value;
+}
+
+// g = exp(-(exp(A_log) * softplus(x))) as the C++ raw fallback runs it:
+// LogAddExp, Exp, Multiply, Negative, Exp, five kernels whose results are
+// stored f32 between launches. `precise` on each later op keeps those
+// rounding sites; without it the compiler folded the negate and the exp
+// lowering's log2(e) scale into the product (g off by 1-2 ulp on ~4 of 32
+// heads, enough to break model-level identity). The softplus body stays
+// imprecise in its own function (glslang stops `precise` propagation at
+// the call) because the elementwise kernel compiles it imprecise.
+float gdn_g_composed(float x, float a_log) {
+  float sp = gdn_softplus_ew(x);
+  precise float e = exp(a_log);
+  precise float p = e * sp;
+  precise float n = -p;
+  precise float g = exp(n);
+  return g;
+}
+
+
 // Gate prologue (g, beta) for one head.
 vec2 gdn_gates(uint head) {
   float g;
@@ -159,27 +196,22 @@ vec2 gdn_gates(uint head) {
     // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
     float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
     // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
-    // bf16) and softplus(x) to bf16; replicate those roundings exactly.
+    // bf16); the widen is exact.
     float x = bf16_load(bf16_store(a_in + dt));
-    // softplus = logaddexp(0, x): the eager chain lowers nn.softplus to
-    // LogAddExp, computed here with the elementwise kernel's exact
-    // formula max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected
-    // ratio form, log(u) * x / (u - 1)), then rounded to bf16.
-    float u = 1.0f + exp(-abs(x));
-    float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
-    // The C++ raw fallback (fast.cpp) keeps softplus in f32 (logaddexp
-    // output is f32); the python eager chain rounds it to bf16. Bit 9
-    // (f32 A_log) selects the models whose serving reference is the C++
-    // fallback - keep sp f32 there so the fused path is bit-identical to
-    // the composed chain those models actually run. bf16-A_log models
-    // (Qwen3.8) keep the bf16 round and their shipped numerics.
-    float sp_raw = max(x, 0.0f) + l1p;
-    float sp = ((params.flags & 512u) != 0u) ? sp_raw
-                                             : bf16_load(bf16_store(sp_raw));
-    // The eager chain keeps g in f32 end to end (compute_g returns f32);
-    // exp(A_log) and the product stay f32, so no bf16 round here: the
-    // bf16 roundings the eager path applies are on x, sp, and beta.
-    g = exp(-(exp(a_log) * sp));
+    if ((params.flags & 512u) != 0u) {
+      // Bit 9 (f32 A_log) selects the models whose serving reference is
+      // the C++ raw fallback, whose softplus output stays f32.
+      g = gdn_g_composed(x, a_log);
+    } else {
+      // softplus = logaddexp(0, x) with the elementwise kernel's formula
+      // max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected ratio form,
+      // log(u) * x / (u - 1)), rounded to bf16 as the python eager chain
+      // rounds it (bf16-A_log models, Qwen3.8: their shipped numerics).
+      float u = 1.0f + exp(-abs(x));
+      float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+      float sp = bf16_load(bf16_store(max(x, 0.0f) + l1p));
+      g = exp(-(exp(a_log) * sp));
+    }
   } else {
     g = bf16_load(g_buf.v[params.shape[0] + head]);
     beta = bf16_load(b_buf.v[params.aux_offset + head]);
