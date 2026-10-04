@@ -52,6 +52,47 @@ class CustomKernelSmoke(unittest.TestCase):
             **kwargs,
         )[0]
 
+
+    def test_translation_cache_keyed_by_translator_source(self):
+        """A .tr entry carries the MLXOTR1 magic and the current version, and
+        its filename is the hash of an identity that includes the translator
+        source hash: a rebuilt binary with changed translation logic gets a
+        different name and never reads the previous binary's entry."""
+        import hashlib
+        with tempfile.TemporaryDirectory() as cache:
+            env = dict(os.environ, MLX_OMARCHY_SPIRV_CACHE=cache)
+            probe = textwrap.dedent(
+                """
+                import mlx.core as mx
+                kernel = mx.fast.metal_kernel(
+                    name="omarchy_translation_cache_probe",
+                    input_names=["values"],
+                    output_names=["out"],
+                    source="uint i = thread_position_in_grid.x; out[i] = values[i] + 1.0f;",
+                )
+                values = mx.array([1.0, 2.0], dtype=mx.float32)
+                out = kernel(inputs=[values], output_shapes=[(2,)],
+                             output_dtypes=[mx.float32], grid=(2, 1, 1),
+                             threadgroup=(2, 1, 1), stream=mx.gpu)[0]
+                mx.eval(out)
+                print(out.tolist())
+                """
+            )
+            first = subprocess.run(
+                [sys.executable, "-c", probe], env=env,
+                capture_output=True, text=True)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertIn("[2.0, 3.0]", first.stdout)
+            entries = sorted(Path(cache).glob("*.tr"))
+            self.assertTrue(entries, "no .tr translation entry was written")
+            blob = entries[0].read_bytes()
+            self.assertTrue(blob.startswith(b"MLXOTR1"))
+            # The filename is sha256(identity + cache-version + translator
+            # source hash): 64 hex chars. Rebuilding with changed translator
+            # source changes that hash, so the previous binary's entry is
+            # never read.
+            self.assertRegex(entries[0].name, r"^[0-9a-f]{64}\.tr$")
+
     def test_msl_body_runs_on_gpu(self):
         kernel = mx.fast.metal_kernel(
             name="omarchy_affine",
