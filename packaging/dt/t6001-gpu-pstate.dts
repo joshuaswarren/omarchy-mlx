@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-2.0+ OR MIT
+/*
+ * Overlay state: opt-in ("gpu-pstate-t6001" in /etc/omarchy-platform/dtb-overlays.opt-in).
+ *
+ * Raises the AGX firmware's base performance state on T6001 (Apple M1 Max)
+ * from 1 (388.8 MHz) to 6 (1296 MHz, the top of the
+ * off/388.8/486/648/777.6/972/1296 MHz OPP table). The GPU firmware starts
+ * every burst from its base state and ramps; on a GPU that was idle for
+ * 100 ms to 2 s that ramp is the whole post-pause penalty on the first
+ * request (T8103: H237/H245/H247, -9 ms TTFT after a pause, no measurable
+ * energy or back-to-back throughput cost).
+ *
+ * Measured on the M1 Max (MacBookPro18,2-class, T6001) A/B: see
+ * docs/gpu-base-pstate-t6001.md and the lane receipt. Only T6001 is claimed
+ * here; T6021 needs its own overlay and its own A/B. The default stays stock
+ * until the owner turns the opt-in key on.
+ *
+ * The target is the node the stock board device trees (t6001-*.dtb) define as
+ * /soc/gpu@406400000 (the same node the kernel driver parses for
+ * apple,perf-base-pstate / apple,perf-tgt-utilization; drivers/gpu/drm/asahi
+ * hw/mod.rs passes both to the firmware, which reads them at GPU init). It
+ * takes effect at the next boot, after update-m1n1 has rebuilt boot.bin.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	omarchy,opt-in = "gpu-pstate-t6001";
+
+	fragment@0 {
+		target-path = "/soc/gpu@406400000";
+
+		__overlay__ {
+			apple,perf-base-pstate = <6>;
+		};
+	};
+};
