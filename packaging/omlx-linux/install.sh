@@ -73,6 +73,8 @@ python3 -m pip --version >/dev/null 2>&1 || { echo "error: python3 -m pip unavai
   echo "error: this script must run from an omarchy-mlx checkout (need scripts/ and patches/)" >&2
   exit 2
 }
+[[ -f $SCRIPT_DIR/apply-platform-gate.sh ]] || {
+  echo "error: apply-platform-gate.sh missing in $SCRIPT_DIR" >&2; exit 2; }
 
 PYVER="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 IGNORE_PY=()
@@ -103,7 +105,10 @@ if [[ -n $(git -C "$OMLX_DIR" status --porcelain) ]]; then
   exit 3
 fi
 
-echo "==> applying Linux compat patches"
+echo "==> applying platform-gate series (16 gate sites across mx.metal.is_available() calls)"
+bash "$SCRIPT_DIR/apply-platform-gate.sh" "$OMLX_DIR"
+
+echo "==> applying Linux compat patches (3 macOS-only helpers)"
 for p in "$SCRIPT_DIR"/patches/*.patch; do
   if git -C "$OMLX_DIR" apply --check "$p" 2>/dev/null; then
     git -C "$OMLX_DIR" apply "$p"
