@@ -9,6 +9,11 @@
 // every case therefore starts by proving a real two-rank group, which makes
 // a lone run FAIL instead of passing vacuously.
 //
+// On a host with a usable GPU device the collectives below evaluate as
+// omarchy GPU operations (host transport, GPU reductions, GPU contiguous
+// copies). A GPU-less environment cannot run these GPU value tests; they
+// are not CPU fallback tests.
+//
 // run-two-rank.sh launches this binary twice with MLX_RANK=0 and MLX_RANK=1
 // against a localhost hostfile and requires BOTH processes green. Each
 // process verifies its own side of every case; the send/recv case closes
@@ -26,10 +31,10 @@
 #include <vector>
 
 #include "mlx/array.h"
-#include "mlx/transforms.h"
 #include "mlx/distributed/distributed.h"
 #include "mlx/distributed/ops.h"
 #include "mlx/ops.h"
+#include "mlx/transforms.h"
 
 using namespace mlx::core;
 
@@ -101,6 +106,24 @@ TEST_CASE("all_max and all_min return the elementwise extremes on both ranks") {
   CHECK_EQ(got_min, want_min);
 }
 
+TEST_CASE("all_min uses lexicographic complex64 order") {
+  auto group = distributed::init();
+  if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
+    FAIL("expected a two-rank ring group");
+  }
+  int rank = group.rank();
+  std::vector<complex64_t> mine = rank == 0
+      ? std::vector<complex64_t>{{1.0f, 5.0f}, {-2.0f, 3.0f}, {0.0f, 0.0f}}
+      : std::vector<complex64_t>{{1.0f, 4.0f}, {-2.0f, 4.0f}, {-1.0f, 7.0f}};
+  array x = array(mine.data(), Shape{3}, complex64);
+  array y = distributed::all_min(x);
+  eval(y);
+  const auto* got = y.data<complex64_t>();
+  CHECK_EQ(got[0], complex64_t(1.0f, 4.0f));
+  CHECK_EQ(got[1], complex64_t(-2.0f, 3.0f));
+  CHECK_EQ(got[2], complex64_t(-1.0f, 7.0f));
+}
+
 TEST_CASE("all_gather concatenates both contributions in rank order") {
   auto group = distributed::init();
   if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
@@ -153,26 +176,85 @@ TEST_CASE("send and recv move an exact vector from rank 0 to rank 1") {
   CHECK_EQ(got_total, std::vector<float>{checksum});
 }
 
-TEST_CASE("sum_scatter is refused by the ring transport at two ranks") {
+TEST_CASE("sum_scatter reduces each chunk into its owning rank") {
   auto group = distributed::init();
   if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
     FAIL("expected a two-rank ring group");
   }
   int rank = group.rank();
-  // Upstream's Linux-linkable transports refuse sum_scatter: ring.cpp
-  // throws "[ring] sum_scatter not supported." and mpi.cpp throws "[mpi]
-  // sum_scatter not yet implemented.". Only Darwin-only jaccl implements
-  // it (jaccl.cpp sum_scatter via group_->sum_scatter), which is why the
-  // primitive stays Mac-usable and in the denominator while remaining
-  // unprovable here. The primitive constructs at two ranks and the
-  // refusal fires at eval on both. If this pin ever fails, this repo
-  // gained a sum_scatter-capable transport and ReduceScatter must be
-  // re-derived for coverage.
+  // out_r = sum over ranks of in_j[chunk_r]: chunk 0 reduces into rank 0,
+  // chunk 1 into rank 1. Neither output chunk equals an input chunk, so
+  // passing the identity short-circuit is impossible here. This replaces
+  // the former transport-refusal pin: the omarchy GPU path implements
+  // ReduceScatter returns the summed chunk owned by this rank.
   std::vector<float> mine = (rank == 0)
       ? std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}
       : std::vector<float>{10.0f, 20.0f, 30.0f, 40.0f};
+  std::vector<float> want = (rank == 0)
+      ? std::vector<float>{11.0f, 22.0f}
+      : std::vector<float>{33.0f, 44.0f};
   array x = array(mine.data(), {4}, float32);
   eval(x);
   array y = distributed::sum_scatter(x);
-  CHECK_THROWS_AS(eval(y), std::runtime_error);
+  auto got = values(y);
+  CHECK_EQ(y.shape()[0], 2);
+  CHECK_EQ(y.dtype(), x.dtype());
+  CHECK_EQ(got, want);
+}
+
+TEST_CASE("all_sum covers int32 and the lazy input path") {
+  auto group = distributed::init();
+  if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
+    FAIL("expected a two-rank ring group");
+  }
+  int rank = group.rank();
+  // int32 rides the int elementwise kernels, not the float path.
+  std::vector<int32_t> mine = (rank == 0)
+      ? std::vector<int32_t>{1, 2, -3}
+      : std::vector<int32_t>{10, 20, -30};
+  std::vector<int32_t> both = {11, 22, -33};
+  array x = array(mine.data(), {3}, int32);
+  eval(x);
+  array y = distributed::all_sum(x);
+  eval(y);
+  CHECK_EQ(y.dtype(), int32);
+  CHECK_EQ(
+      std::vector<int32_t>(y.data<int32_t>(), y.data<int32_t>() + 3), both);
+
+  // Lazy producer: the input graph node is never evaluated before the
+  // collective. This pins the synchronize-before-transport ordering in
+  // AllReduce::eval_gpu - the producing GPU work must complete before
+  // the ring reads the mapped bytes.
+  std::vector<float> fmine = (rank == 0)
+      ? std::vector<float>{1.0f, 0.5f}
+      : std::vector<float>{2.0f, 4.0f};
+  array fx = array(fmine.data(), {2}, float32);
+  array lazy = fx + fx; // deliberately NOT evaluated here
+  array ly = distributed::all_sum(lazy);
+  auto got = values(ly);
+  std::vector<float> want = (rank == 0)
+      ? std::vector<float>{6.0f, 9.0f}
+      : std::vector<float>{6.0f, 9.0f};
+  CHECK_EQ(got, want);
+}
+
+TEST_CASE("all_sum covers bfloat16 with exact representable sums") {
+  auto group = distributed::init();
+  if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
+    FAIL("expected a two-rank ring group");
+  }
+  int rank = group.rank();
+  // Every value and every pairwise sum is exactly representable in
+  // bfloat16 (4 mantissa bits), so the comparison is exact.
+  std::vector<float> mine = (rank == 0)
+      ? std::vector<float>{1.0f, 2.0f, -4.0f}
+      : std::vector<float>{8.0f, 16.0f, 0.25f};
+  std::vector<float> both = {9.0f, 18.0f, -3.75f};
+  array xf = array(mine.data(), {3}, float32);
+  array x = astype(xf, bfloat16);
+  eval(x);
+  array y = distributed::all_sum(x);
+  CHECK_EQ(y.dtype(), bfloat16);
+  auto gotf = values(astype(y, float32));
+  CHECK_EQ(gotf, both);
 }

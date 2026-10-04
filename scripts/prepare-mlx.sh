@@ -46,6 +46,12 @@ cp -r --preserve=mode "$ROOT/overlay/." "$STAGING_DIR/"
 find "$STAGING_DIR" -newermt '@0' -exec touch {} +
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-build.patch"
+# Distributed primitives run as accelerator-side GPU operations on the
+# omarchy backend: the ring communication stream follows the GPU device and
+# the transport bodies run inline on accelerator streams. The reduction
+# arithmetic itself stays in the omarchy backend (overlay), never here.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-ring-gpu-transport.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-no-silent-cpu-fallback.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \

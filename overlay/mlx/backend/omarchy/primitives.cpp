@@ -1444,8 +1444,10 @@ void dispatch_int_elementwise_to(
     uint32_t operation,
     const array& lhs,
     const array& rhs,
-    array& out) {
-  auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
+    array& out,
+    const Stream* explicit_stream = nullptr) {
+  const Stream& s = explicit_stream ? *explicit_stream : out.primitive().stream();
+  auto& encoder = omarchy::get_command_encoder(s);
   uint32_t count = checked_u32(out.size(), name, out);
   omarchy::ComputeParams params;
   params.count = count;
@@ -1481,7 +1483,8 @@ void dispatch_int_elementwise(
     const std::string& name,
     uint32_t operation,
     const std::vector<array>& inputs,
-    array& out) {
+    array& out,
+    const Stream* explicit_stream = nullptr) {
   const array& in_lhs = inputs.at(0);
   const bool binary = inputs.size() == 2;
   const array& in_rhs = binary ? inputs.at(1) : in_lhs;
@@ -1530,7 +1533,8 @@ void dispatch_int_elementwise(
              !is_word_dtype(out.dtype())) {
     omarchy::unsupported(name + " dtype", out);
   }
-  auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
+  const Stream& s = explicit_stream ? *explicit_stream : out.primitive().stream();
+  auto& encoder = omarchy::get_command_encoder(s);
   if (out.dtype() == int16 || out.dtype() == uint16) {
     const auto& capabilities = encoder.device().capabilities();
     if (!capabilities.storage_buffer_16bit_access ||
@@ -1549,14 +1553,14 @@ void dispatch_int_elementwise(
       in_lhs.flags().contiguous,
       lhs_temp,
       encoder,
-      out.primitive().stream());
+      s);
   const array& rhs = binary
       ? ensure_dense(
             in_rhs,
             in_rhs.flags().contiguous,
             rhs_temp,
             encoder,
-            out.primitive().stream())
+            s)
       : lhs;
   auto binary_type = omp_binary_op_type(lhs, rhs);
   // Broadcast views inherit contiguous=true while data_size < size; the
@@ -1569,7 +1573,7 @@ void dispatch_int_elementwise(
   if (out.size() == 0) {
     return;
   }
-  dispatch_int_elementwise_to(name, operation, lhs, rhs, out);
+  dispatch_int_elementwise_to(name, operation, lhs, rhs, out, explicit_stream);
 }
 
 // Sort and ArgSort accept float32/float16/bfloat16/complex64 plus the
@@ -3255,6 +3259,7 @@ enum ComplexOperation : uint32_t {
   ComplexLog2,
   ComplexLog10,
   ComplexRound,
+  ComplexMinimum,
 };
 
 // The params fill and dispatch behind the complex64 elementwise
@@ -14252,11 +14257,341 @@ void Quantize::eval_gpu(
 } // namespace fast
 
 namespace distributed {
-OMARCHY_UNSUPPORTED_MULTI(AllReduce)
-OMARCHY_UNSUPPORTED_MULTI(AllGather)
-OMARCHY_UNSUPPORTED_MULTI(Send)
-OMARCHY_UNSUPPORTED_MULTI(Recv)
-OMARCHY_UNSUPPORTED_MULTI(ReduceScatter)
+
+// Distributed primitives evaluate on the accelerator stream (the ring
+// communication stream follows Device::gpu when the omarchy backend is
+// present - patches/mlx-ring-gpu-transport.patch). The product contract
+// keeps every tensor operation on the GPU: the ring transport moves bytes
+// between ranks on the host (communication is host-side transport, not a
+// tensor primitive), while reductions and contiguous copies run as
+// omarchy kernels.
+//
+// Ordering and coherency: omarchy allocations are persistently mapped
+// host-visible memory (coherent on Apple Silicon; on non-coherent heaps
+// the encoder flushes before each submit and invalidates after fence
+// waits, allocator.h). The order enforced here is: gpu::synchronize
+// (producing GPU work submitted and complete, mappings current) -> host
+// transport reads and writes -> GPU dispatches (the next submit flushes
+// non-coherent host writes for device reads). Host-written outputs (Recv,
+// AllGather) need no extra step: the next submit orders device reads.
+//
+// AllReduce and ReduceScatter gather every rank's contribution through the
+// ring (all_gather; this rank's own segment is copied in by the transport
+// itself) and then reduce the axis-0 segments as a chain of GPU
+// elementwise kernels - upstream's CPU SumOp/MaxOp/MinOp loops over the
+// ring segments would be CPU tensor operations and are never called. The
+// chain needs one binary kernel per remaining rank and no intermediate
+// synchronize: every gathered byte is resident before the first dispatch.
+namespace {
+
+array distributed_contiguous(const array& in, const Stream& s) {
+  if (in.flags().row_contiguous) {
+    return in;
+  }
+  return contiguous_copy_gpu(in, s);
+}
+
+// The reduction arithmetic as omarchy elementwise kernels, mirroring the
+// Add / Maximum / Minimum eval_gpu dtype routing exactly.
+void distributed_reduce(
+    const std::string& name,
+    AllReduce::ReduceType reduce_type,
+    const array& lhs,
+    const array& rhs,
+    array& out,
+    const Stream& s) {
+  if (out.dtype() == complex64) {
+    switch (reduce_type) {
+      case AllReduce::Sum:
+        dispatch_complex(name, ComplexAdd, {lhs, rhs}, out, s);
+        return;
+      case AllReduce::Max:
+        dispatch_complex(name, ComplexMaximum, {lhs, rhs}, out, s);
+        return;
+      case AllReduce::Min:
+        dispatch_complex(name, ComplexMinimum, {lhs, rhs}, out, s);
+        return;
+      default:
+        omarchy::unsupported(name + " complex64 dtype", out);
+    }
+  }
+  if (out.dtype() == bool_) {
+    switch (reduce_type) {
+      case AllReduce::Sum:
+        // Upstream bool add is the logical or over {0,1}.
+        dispatch_int_elementwise(name, IntBitwiseOrOperation, {lhs, rhs}, out, &s);
+        return;
+      case AllReduce::Max:
+        dispatch_int_elementwise(name, IntMaximumOperation, {lhs, rhs}, out, &s);
+        return;
+      default:
+        // Bool minimum is the logical and over {0,1}.
+        dispatch_int_elementwise(name, IntMinimumOperation, {lhs, rhs}, out, &s);
+        return;
+    }
+  }
+  if (is_int_elementwise_dtype(out.dtype())) {
+    switch (reduce_type) {
+      case AllReduce::Sum:
+        dispatch_int_elementwise(name, IntAddOperation, {lhs, rhs}, out, &s);
+        return;
+      case AllReduce::Max:
+        dispatch_int_elementwise(name, IntMaximumOperation, {lhs, rhs}, out, &s);
+        return;
+      default:
+        dispatch_int_elementwise(name, IntMinimumOperation, {lhs, rhs}, out, &s);
+        return;
+    }
+  }
+  switch (reduce_type) {
+    case AllReduce::Sum:
+      dispatch_elementwise(name, AddOperation, {lhs, rhs}, out, s);
+      return;
+    case AllReduce::Max:
+      dispatch_elementwise(name, MaximumOperation, {lhs, rhs}, out, s);
+      return;
+    default:
+      dispatch_elementwise(name, MinimumOperation, {lhs, rhs}, out, s);
+      return;
+  }
+}
+
+// Zero-copy axis-0 segment view of a gathered row-contiguous buffer:
+// segment k spans elements [k * seg_size, (k + 1) * seg_size).
+array distributed_segment(
+    const array& gathered,
+    const Shape& shape,
+    size_t seg_size,
+    size_t offset,
+    const Stream& s) {
+  array seg(allocate_omarchy(0), shape, gathered.dtype());
+  seg.copy_shared_buffer(
+      gathered,
+      seg.strides(),
+      seg.flags(),
+      seg_size,
+      static_cast<int64_t>(offset));
+  omarchy::get_command_encoder(s).add_temporary(gathered);
+  return seg;
+}
+
+} // namespace
+
+void AllReduce::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  auto s = stream();
+  auto& out = outputs[0];
+  switch (reduce_type_) {
+    case AllReduce::Sum:
+    case AllReduce::Max:
+    case AllReduce::Min:
+      break;
+    default:
+      omarchy::unsupported(name(), out);
+  }
+
+  auto in = distributed_contiguous(inputs[0], s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (in.size() == 0) {
+    return;
+  }
+  auto& encoder = omarchy::get_command_encoder(s);
+  auto& group = this->group();
+  auto group_impl = group.raw_group();
+  const int ranks = group.size();
+  if (ranks <= 1) {
+    copy_gpu_inplace(
+        in, out, in.shape(), in.strides(), out.strides(), 0, 0,
+        CopyType::General, s);
+    return;
+  }
+  const int connections = group_impl->ring_all_reduce_connections();
+  if (connections <= 0) {
+    omarchy::unsupported(name(), out);
+  }
+
+  // Upstream RingGroup pads tiny inputs to one element per rank, then trims
+  // the result. The padding stays on the GPU and is only transport data.
+  size_t elements = in.size();
+  const bool padded = elements < static_cast<size_t>(ranks);
+  array work = out;
+  if (padded) {
+    elements = static_cast<size_t>(ranks);
+    work = array(Shape{static_cast<int>(elements)}, in.dtype(), nullptr, {});
+    work.set_data(allocate_omarchy(work.nbytes()));
+    encoder.fill_buffer(binding(work).buffer, 0u, work.nbytes(), 0);
+    array input_flat = distributed_segment(
+        in, Shape{static_cast<int>(in.size())}, in.size(), 0, s);
+    array work_flat = distributed_segment(
+        work, Shape{static_cast<int>(in.size())}, in.size(), 0, s);
+    copy_gpu_inplace(
+        input_flat, work_flat, input_flat.shape(), input_flat.strides(),
+        work_flat.strides(), 0, 0, CopyType::General, s);
+    encoder.add_temporary(work);
+  } else {
+    copy_gpu_inplace(
+        in, out, in.shape(), in.strides(), out.strides(), 0, 0,
+        CopyType::General, s);
+  }
+
+  gpu::synchronize(s);
+  const size_t element_bytes = work.nbytes() / elements;
+  const size_t total_bytes = elements * element_bytes;
+  const size_t n_reduces = std::max(
+      std::min(
+          static_cast<size_t>(connections),
+          total_bytes / (static_cast<size_t>(ranks) * 262144)),
+      size_t(1));
+  const size_t step = (elements + n_reduces - 1) / n_reduces;
+
+  for (size_t lane = 0; lane < n_reduces; ++lane) {
+    const size_t base = lane * step;
+    const size_t lane_elements =
+        std::min(elements, (lane + 1) * step) - base;
+    const size_t segment_size = (lane_elements + ranks - 1) / ranks;
+    const size_t buffer_size = std::max(
+        size_t(32768),
+        std::min(size_t(8 * 1024 * 1024) / element_bytes, segment_size / 2));
+    const size_t packets = (segment_size + buffer_size - 1) / buffer_size;
+    const int direction = (lane % 2) ? -1 : 1;
+    const int connection = static_cast<int>(lane / 2);
+    int send_segment = group.rank();
+    int recv_segment = (group.rank() + direction + ranks) % ranks;
+
+    for (int phase = 0; phase < 2; ++phase) {
+      for (int hop = 0; hop < ranks - 1; ++hop) {
+        const size_t send_start = base + send_segment * segment_size;
+        const size_t send_stop = std::min(
+            base + lane_elements, base + (send_segment + 1) * segment_size);
+        const size_t recv_start = base + recv_segment * segment_size;
+        const size_t recv_stop = std::min(
+            base + lane_elements, base + (recv_segment + 1) * segment_size);
+        for (size_t packet = 0; packet < packets; ++packet) {
+          const size_t send_first = std::min(send_start + packet * buffer_size, send_stop);
+          const size_t send_last = std::min(send_start + (packet + 1) * buffer_size, send_stop);
+          const size_t recv_first = std::min(recv_start + packet * buffer_size, recv_stop);
+          const size_t recv_last = std::min(recv_start + (packet + 1) * buffer_size, recv_stop);
+          const size_t send_count = send_last - send_first;
+          const size_t recv_count = recv_last - recv_first;
+          array send_view = distributed_segment(
+              work, Shape{static_cast<int>(send_count)}, send_count,
+              send_first, s);
+          array recv_view = distributed_segment(
+              work, Shape{static_cast<int>(recv_count)}, recv_count,
+              recv_first, s);
+          array received(
+              allocate_omarchy(recv_count * element_bytes),
+              Shape{static_cast<int>(recv_count)}, in.dtype());
+          array& receive_target = (phase == 0) ? received : recv_view;
+
+          gpu::synchronize(s);
+          group_impl->ring_exchange(
+              send_view, receive_target, connection, direction, s);
+          if (phase == 0 && recv_count != 0) {
+            array reduced(
+                allocate_omarchy(recv_count * element_bytes),
+                Shape{static_cast<int>(recv_count)}, in.dtype());
+            distributed_reduce(
+                name(), reduce_type_, recv_view, received, reduced, s);
+            copy_gpu_inplace(
+                reduced, recv_view, reduced.shape(), reduced.strides(),
+                recv_view.strides(), 0, 0, CopyType::General, s);
+            encoder.add_temporary(reduced);
+          }
+          encoder.add_temporary(received);
+        }
+        send_segment = (send_segment + ranks + direction) % ranks;
+        recv_segment = (recv_segment + ranks + direction) % ranks;
+      }
+    }
+  }
+
+  if (padded) {
+    array result_flat = distributed_segment(
+        work, Shape{static_cast<int>(in.size())}, in.size(), 0, s);
+    array out_flat = distributed_segment(
+        out, Shape{static_cast<int>(in.size())}, in.size(), 0, s);
+    copy_gpu_inplace(
+        result_flat, out_flat, result_flat.shape(), result_flat.strides(),
+        out_flat.strides(), 0, 0, CopyType::General, s);
+  }
+}
+
+void AllGather::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  auto s = stream();
+  auto in = distributed_contiguous(inputs[0], s);
+  gpu::synchronize(s);
+  auto& out = outputs[0];
+  out.set_data(allocate_omarchy(out.nbytes()));
+  // Pure byte transport, including this rank's own segment.
+  detail::all_gather(group(), in, out, s);
+}
+
+void Send::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  auto s = stream();
+  auto in = distributed_contiguous(inputs[0], s);
+  gpu::synchronize(s);
+  detail::send(group(), in, dst_, s);
+  outputs[0].copy_shared_buffer(inputs[0]);
+}
+
+void Recv::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  auto s = stream();
+  auto& out = outputs[0];
+  out.set_data(allocate_omarchy(out.nbytes()));
+  // The peer's bytes land directly in the mapped output buffer; the next
+  // submit orders device reads (flush for non-coherent heaps).
+  detail::recv(group(), out, src_, s);
+}
+
+void ReduceScatter::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  if (reduce_type_ != ReduceScatter::Sum) {
+    // Upstream's transports only implement scatter sum.
+    omarchy::unsupported(std::string(name()) + " reduce type", outputs[0]);
+  }
+  auto s = stream();
+  auto& out = outputs[0];
+  auto in = distributed_contiguous(inputs[0], s);
+  gpu::synchronize(s);
+  if (in.size() == 0) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+    return;
+  }
+  auto& group = this->group();
+  int n = group.size();
+  Shape gathered_shape = in.shape();
+  gathered_shape[0] *= n;
+  array gathered(allocate_omarchy(in.nbytes() * n), gathered_shape, in.dtype());
+  detail::all_gather(group, in, gathered, s);
+  // Select each source rank's chunk as a zero-copy segment view, then
+  // reduce those chunks into this rank's output. Internal buffers are
+  // pinned as encoder temporaries like AllReduce.
+  auto& encoder = omarchy::get_command_encoder(s);
+  encoder.add_temporary(gathered);
+  array acc = distributed_segment(gathered, out.shape(), out.size(), static_cast<size_t>(group.rank()) * out.size(), s);
+  for (int k = 1; k < n; k++) {
+    array seg = distributed_segment(gathered, out.shape(), out.size(), static_cast<size_t>(k) * in.size() + static_cast<size_t>(group.rank()) * out.size(), s);
+    if (k == n - 1) {
+      out.set_data(allocate_omarchy(out.nbytes()));
+      distributed_reduce(name(), AllReduce::Sum, acc, seg, out, s);
+    } else {
+      array next(allocate_omarchy(out.nbytes()), out.shape(), in.dtype());
+      distributed_reduce(name(), AllReduce::Sum, acc, seg, next, s);
+      encoder.add_temporary(next);
+      acc = std::move(next);
+    }
+  }
+}
+
 } // namespace distributed
 
 } // namespace mlx::core

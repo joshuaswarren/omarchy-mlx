@@ -520,6 +520,13 @@ void main() {
         value = ge ? lhs : rhs;
         break;
       }
+      case 27: {
+        // Lexicographic minimum matches upstream complex64 ordering.
+        bool lt = (lhs.x < rhs.x) ||
+            (lhs.x == rhs.x && lhs.y < rhs.y);
+        value = lt ? lhs : rhs;
+        break;
+      }
       case 6: {
         // Upstream complex LogAddExp: maxval + log1p(exp(minval -
         // maxval)) over the lexicographic (real, then imaginary)

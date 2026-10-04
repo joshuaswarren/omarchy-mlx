@@ -1,0 +1,157 @@
+--- a/mlx/distributed/distributed_impl.h
++++ b/mlx/distributed/distributed_impl.h
+@@ -30,6 +30,10 @@
+   virtual void all_min(const array& input, array& output, Stream stream) = 0;
+   virtual void
+   sum_scatter(const array& input, array& output, Stream stream) = 0;
++  virtual int ring_all_reduce_connections() const { return 0; }
++  virtual void ring_exchange(const array&, array&, int, int, Stream) {
++    throw std::runtime_error("[distributed] ring exchange is unsupported");
++  }
+ };
+ 
+ /* Define the MLX stream that the communication should happen in. */
+--- a/mlx/distributed/ring/ring.cpp
++++ b/mlx/distributed/ring/ring.cpp
+@@ -8,6 +8,7 @@
+ #include <algorithm>
+ #include <chrono>
+ #include <fstream>
++#include <functional>
+ #include <future>
+ #include <iostream>
+ #include <list>
+@@ -32,6 +33,28 @@
+ 
+ namespace mlx::core::distributed::ring {
+ 
++namespace {
++
++// The ring transport bodies are host-side code: they move bytes through
++// sockets and mapped buffers. On a CPU communication stream they are
++// dispatched through the CPU command encoder exactly as upstream. On an
++// accelerator stream - the omarchy backend evaluates the distributed
++// primitives on the GPU stream - the CPU command encoder does not exist
++// for that stream, so the body runs inline on the calling thread. The
++// accelerator's eval_gpu synchronizes its stream before the transport and
++// after every GPU reduction step, so inline execution is correctly
++// ordered with the device work.
++void dispatch_transport(Stream stream, std::function<void()> body) {
++  if (stream.device == Device::cpu) {
++    auto& encoder = cpu::get_command_encoder(stream);
++    encoder.dispatch(std::move(body));
++  } else {
++    body();
++  }
++}
++
++} // namespace
++
+ constexpr const size_t ALL_SUM_SIZE = 8 * 1024 * 1024;
+ constexpr const size_t ALL_SUM_BUFFERS = 2;
+ constexpr const int CONN_ATTEMPTS = 5;
+@@ -429,7 +452,13 @@
+   }
+ 
+   Stream communication_stream(StreamOrDevice s) override {
++#ifdef MLX_OMARCHY_BACKEND
++    // Never let a distributed tensor primitive fall back to the CPU. The
++    // host-side ring only transports bytes; reductions and copies run on GPU.
++    return to_stream(s, Device::gpu);
++#else
+     return to_stream(s, Device::cpu);
++#endif
+   }
+ 
+   int rank() override {
+@@ -440,6 +469,41 @@
+     return size_;
+   }
+ 
++
++  int ring_all_reduce_connections() const override {
++    return static_cast<int>(sockets_right_.size() + sockets_left_.size());
++  }
++
++  void ring_exchange(
++      const array& send_array,
++      array& recv_array,
++      int connection,
++      int direction,
++      Stream stream) override {
++    if (connection < 0 ||
++        connection >= static_cast<int>(sockets_right_.size()) ||
++        (direction != -1 && direction != 1)) {
++      throw std::invalid_argument("[ring] invalid GPU ring exchange");
++    }
++    int socket_send = direction < 0 ? sockets_right_[connection]
++                                    : sockets_left_[connection];
++    int socket_recv = direction < 0 ? sockets_left_[connection]
++                                    : sockets_right_[connection];
++    dispatch_transport(
++        stream,
++        [this,
++         socket_send,
++         socket_recv,
++         send_array,
++         recv_array,
++         send_nbytes = send_array.nbytes(),
++         recv_nbytes = recv_array.nbytes()]() mutable {
++          auto sent = comm_.send(socket_send, send_array.data<char>(), send_nbytes);
++          auto received = comm_.recv(socket_recv, recv_array.data<char>(), recv_nbytes);
++          sent.get();
++          received.get();
++        });
++  }
+   void all_sum(const array& input, array& output, Stream stream) override {
+     dispatch_all_types(output.dtype(), [&](auto type_tag) {
+       using T = MLX_GET_TYPE(type_tag);
+@@ -466,10 +530,7 @@
+   }
+ 
+   void all_gather(const array& input, array& output, Stream stream) override {
+-    auto& encoder = cpu::get_command_encoder(stream);
+-    encoder.set_input_array(input);
+-    encoder.set_output_array(output);
+-    encoder.dispatch([input_ptr = input.data<char>(),
++    dispatch_transport(stream, [input_ptr = input.data<char>(),
+                       nbytes = input.nbytes(),
+                       output_ptr = output.data<char>(),
+                       this]() {
+@@ -503,9 +564,8 @@
+   }
+ 
+   void send(const array& input, int dst, Stream stream) override {
+-    auto& encoder = cpu::get_command_encoder(stream);
+-    encoder.set_input_array(input);
+-    encoder.dispatch(
++    dispatch_transport(
++        stream,
+         [input_ptr = input.data<char>(), nbytes = input.nbytes(), dst, this]() {
+           int right = (rank_ + 1) % size_;
+           int left = (rank_ + size_ - 1) % size_;
+@@ -524,9 +584,8 @@
+   }
+ 
+   void recv(array& out, int src, Stream stream) override {
+-    auto& encoder = cpu::get_command_encoder(stream);
+-    encoder.set_output_array(out);
+-    encoder.dispatch(
++    dispatch_transport(
++        stream,
+         [out_ptr = out.data<char>(), nbytes = out.nbytes(), src, this]() {
+           // NOTE: We 'll check the sockets with the opposite order of send so
+           // that they work even with 2 nodes where left and right is the same
+@@ -560,9 +619,9 @@
+       ReduceOp reduce_op) {
+     auto in_ptr = input.data<char>();
+     auto out_ptr = output.data<char>();
+-    auto& encoder = cpu::get_command_encoder(stream);
+-    encoder.set_output_array(output);
+-    encoder.dispatch([in_ptr, out_ptr, size = input.size(), this, reduce_op]() {
++    dispatch_transport(
++        stream,
++        [in_ptr, out_ptr, size = input.size(), this, reduce_op]() {
+       // If the input data cannot be split into size_ segments then copy it and
+       // all reduce a local buffer prefilled with 0s.
+       size_t nbytes = size * sizeof(T);

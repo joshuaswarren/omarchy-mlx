@@ -1,15 +1,16 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// Distributed contract after the MLX_BUILD_CPU=ON unlock (f449ed2). The
-// ring transport is compiled and linked: MLX_BUILD_CPU compiles
-// mlx/distributed/ring/ring.cpp and the upstream CPU backend whose
-// backend/cpu/distributed.cpp implements real eval_cpu bodies for all five
-// primitives (AllReduce, AllGather, Send, Recv, ReduceScatter). Ring pins
-// the communication stream to the CPU device
-// (ring.cpp RingGroup::communication_stream -> to_stream(s, Device::cpu)),
-// so these primitives can never dispatch on an omarchy stream; no eval_gpu
-// exists for them and none should.
+// Distributed contract after the GPU-stream cutover. The ring transport
+// is compiled and linked (MLX_BUILD_CPU=ON compiles
+// mlx/distributed/ring/ring.cpp and the upstream CPU backend). On a host
+// with a usable GPU device the ring communication stream is the
+// accelerator stream (patches/mlx-ring-gpu-transport.patch:
+// RingGroup::communication_stream -> to_stream(s, Device::gpu)), and the
+// five distributed primitives evaluate as
+// omarchy GPU operations (overlay/mlx/backend/omarchy/primitives.cpp,
+// namespace distributed): host-side byte transport; tensor arithmetic
+// stays on the GPU. A missing GPU cannot select upstream CPU tensor eval.
 //
 // A single-process run forms NO multi-rank group: without MLX_HOSTFILE and
 // MLX_RANK, init() yields the singleton EmptyGroup (size 1), upstream's op
