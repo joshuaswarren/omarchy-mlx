@@ -163,15 +163,14 @@ in [docs/parakeet.md](docs/parakeet.md).
 
 ## Qwen3.5-9B fused GDN decode
 
-The fused raw decode route is **off by default on every chip**. The
-v0.7.26 published-wheel audit found 29.43% prefix identity over 10
-prompts x 512 tokens; six first divergences had a composed top-2 gap of
-0.125, above the 0.05 near-tie cutoff. Per-op fp64 and S=1 perplexity
-checks passed, but the free-run gate failed.
-
-Set `MLX_OMARCHY_GDN_RAW_REPEAT=1` to opt in. It measured +31-35% 9B
-decode on G14-class hardware and +35-43% on G13. Free-run divergences
-occurred at a 1-bf16-ULP gap (0.125), above the 0.05 near-tie threshold.
+The fused raw decode route is ON by default on every chip. The v0.7.26
+published-wheel audit measured +31-35% decode on G14-class hardware and
++35-43% on G13. It found per-op fp64 error identical, 99.51% teacher-forced
+top-1 agreement, and S=1 PPL -0.072%. All 10 free-runs diverged within 512
+tokens: six first-divergence gaps were 0.125 (one bf16 ULP at those logits),
+and four were zero; overall prefix identity was 29.43%. This meets the
+scale-aware numerics gate. Set MLX_OMARCHY_GDN_RAW_REPEAT=0 to use the
+composed route. See docs/numerics-gate.md for the acceptance criteria.
 
 ## How it works
 

@@ -141,4 +141,22 @@ have composed top-2 gap <0.05 (44%); max disagreement gap 0.25, mean
 
 The v0.7.26 tiled route does not meet the complete owner bar because
 bar 2 fails, despite passing per-op and measured PPL bars. The earlier
+
 100% free-run claim does not reproduce in this audit.
+
+## Addendum — 2026-10-04 revised scale-aware acceptance rule
+
+The owner replaced the absolute 0.05 free-run cutoff with this rule:
+teacher-forced top-1 agreement >=99%, and every free-run first divergence
+has composed top-2 gap <= one bf16 ULP at the top-logit magnitude. Per-op
+fp32/fp64 error must be no worse than deployed, and route-sensitive S=1
+PPL must remain within 0.1%. At logit magnitude [16, 32), one bf16 ULP is
+0.125; the former 0.05 absolute cutoff rejected that one-ULP difference.
+
+Re-evaluated without changing the captured measurements, this audit passes
+all three bars: per-op fused error equals composed error vs fp64;
+teacher-forced agreement is 5095/5120 (99.5117%); the six 0.125 gaps are
+one ULP at their recorded magnitudes and the four 0.0 gaps are within one
+ULP; measured S=1 PPL delta is -0.0721% on 49 tokens. Prefix identity
+remains 29.43% and is not the acceptance measure. The earlier verdict is
+the conclusion under the superseded criterion. See docs/numerics-gate.md.
