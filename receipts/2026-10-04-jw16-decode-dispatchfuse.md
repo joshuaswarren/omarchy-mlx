@@ -198,3 +198,25 @@ states default ON with the =0 kill switch in one voice.
 no qwen3_5-family 27B checkpoint exists on jw16 (only Qwen3.8-27B-4bit =
 qwen3_moe, Qwen3.6-27B-mxfp4, Ternary-Bonsai-2-27B) — the route does not
 apply; nothing to gate.
+
+## Addendum 4 2026-10-04T08:1xZ — v0.7.26 packaging verified by fresh install; dispatch counts
+
+Fresh-install check (clean venv + wheel d86ea8815 + apply-mlx-lm-patches.sh
+from cd4a8c6f9, the installer path): the apply invokes the gdn-raw-repeat
+patcher; 9B decode on the fresh venv:
+- default (no env): d64 37.50 tok/s (+31.6% vs the =0 arm in the same
+  window), d512 36.47; digests recorded (d64 26d569c8, d512 e7884f81 — the
+  d512 digest includes main's accepted qmm_coopmat wheel delta vs the
+  pre-land census pins, not a route difference: same-wheel OFF-vs-ON
+  identity is 100%).
+- MLX_OMARCHY_GDN_RAW_REPEAT=0 (kill switch): d64 28.49 tok/s (composed
+  rate), digest identical to the default arm (order-matched = bit-exact).
+- dispatch counts on the diag wheel (d64 run): route ON = 1776 fused
+  GatedDeltaUpdate dispatches and 179520 soup-class dispatches; route =0 =
+  0 fused and 207936 soup — the default fires the fused kernel and the =0
+  kill switch restores the composed fallback exactly.
+Main's four items: (1) wired + coverage test updated (cd4a8c6f9, 26/26);
+(2) one-voice default-ON docs (patcher docstring, apply-script comment,
+this receipt); (3) this fresh-install section; (4) 27B N/A (qwen3_moe has
+no GDN; no qwen3_5-family 27B checkpoint on jw16). Land sha for the v0.7.26
+cut: main cd4a8c6f9 (packaging) with the kernel at d86ea8815.
