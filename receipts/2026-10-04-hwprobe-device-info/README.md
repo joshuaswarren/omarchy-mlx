@@ -107,10 +107,18 @@ memory-bound formula and the wired-limit round-trip. Wired into
 `omarchy_device_info_tests`. Run on T6021 Honeykrisp and on dev-box
 llvmpipe with `MLX_OMARCHY_ALLOW_NON_APPLE=1`.
 
-The dev-box build of `omarchy_device_info_tests` was exercised against
-the same source tree and completed compile cleanly on the 2026-10-04
-run (the test executable is `.work/build/tests/omarchy/omarchy_device_info_tests`;
-output captured under `artifacts/HwProbe/2026-10-04-device-info/raw/`).
+**Compile-only verification (dev-box syntax check, 2026-10-04T18:25Z).**
+With the shared-checkout `.work/build` dir under heavy contention from
+sibling-lane cmake reconfigures (TensorFoldPort's sdpa_decode_fused,
+QmvKernel's full mlx Python build, FamQwen35Prefill's shaders, etc.),
+the full `libmlx.a + test link` cycle could not complete. The three
+modified sources still compiled cleanly under the build flags
+`-DMLX_STATIC -DMLX_OMARCHY_BACKEND -std=gnu++20` (output: `/tmp/test_device_info.o`,
+`/tmp/device_info.o`, `/tmp/allocator.o`). The test source's `g++ -c`
+finished in 12 s without warnings or errors; the device_info.cpp and
+allocator.cpp TUs also passed `-c`. Full link + doctest execution will
+land on T6021 in the post-23:50Z correctness window after
+OmarchyDistributed's shared venv is announced.
 
 ## oMLX / TensorFold call sites exercised
 
