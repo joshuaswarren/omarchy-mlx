@@ -3588,8 +3588,13 @@ static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
 }
 
 // Stream-based twin for primitive-level per-chip policy (use_fallback).
+// The omarchy backend owns one Vulkan device per process (index 0); CPU
+// streams never take the fused route anyway.
 inline bool g13_legacy_stream(Stream s) {
-  const auto& name = omarchy::device(s.device).capabilities().device_name;
+  if (s.device == Device::cpu) {
+    return false;
+  }
+  const auto& name = omarchy::device(0).capabilities().device_name;
   return name.find("G13") != std::string::npos &&
       name.find("G13C") == std::string::npos;
 }
