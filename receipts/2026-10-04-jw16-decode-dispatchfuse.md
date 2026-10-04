@@ -408,3 +408,80 @@ one ULP; S=1 PPL changes -0.0721% on the measured 49-token sample. The
 The v0.7.27 mlx-lm patcher defaults the route ON on every chip; set
 MLX_OMARCHY_GDN_RAW_REPEAT=0 to select composed behavior. The C++ per-chip
 policy remains unchanged from v0.7.26. Release decision: retain default ON.
+
+## Addendum 11 2026-10-04 — root cause found: the fused gate prologue; 9B fused GDU bit-exact to composed (10x512 free-run 100%)
+
+This corrects addendum 8: bit-exact free-run at d512 is achievable. The
+divergence came from one deterministic arithmetic difference, not from
+build noise.
+
+Method (tools/dfuse/bitexact_bisect.py, agent/jw16-decode-dispatchfuse):
+a route-OFF free-run of the 9B captures every T=1 GDU call (operands,
+input state, composed out/state bits). Each call is then replayed
+through the fused route with the same operands and input state. A
+route-OFF replay control was bit-identical in every run (24/24).
+
+- Shipped tiled kernel (v0.7.26), prompt 1, 12 tokens: 254 of 288 calls
+  differ, starting at call 0. The claim that captured operands were
+  bit-identical was false.
+- Stage attribution (tools/dfuse/gdu_stage_dump.py): the composed kv and
+  o sums are serial ascending, and a numpy emulation of the shader order
+  seeded with the composed g/beta reproduces composed exactly. The fused
+  state differs only on whole heads (4 of 32), with beta exact and g off
+  by 1-2 f32 ulp. The compiler folded the negate and exp's log2(e) scale
+  into exp(A_log)*softplus; composed runs that chain as five kernels with
+  an f32 store between each.
+- Fix: softplus goes in an imprecise function that copies
+  elementwise.comp, and each later op is `precise`. Making the whole
+  chain `precise` is worse (265-268 of 288 calls differ), because the
+  composed LogAddExp kernel is compiled imprecise.
+- jw16 result: per-call replay is 288/288 bit-identical on the tiled,
+  perrow_pf and perrow kernels (4 prompts). On GduBar's harness
+  (free_run_gaps.py, 10x512, tiled), mean identity and exact-position
+  agreement are both 100.0%, with 0 diverging prompts (v0.7.26: 29.43%).
+  Under addendum 10's bar this route therefore has no free-run divergence
+  at all on jw16.
+
+Artifacts: apple-silicon-lab artifacts/DispatchFuse/20261004-bitexact-gate-chain/.
+
+## Addendum 12 2026-10-04 — bit-9-unset paths restored byte-identical to v0.7.26 (2B G13G digest regression)
+
+w71 found that the v0.7.27 candidate (679ef2a) changed 2B digests on
+G13G (d64 5a397602 against pin eee1cf96; d128/d256/pf512 also moved).
+The cause was fe2b1d883 and ece1a1a97. Both edited the shared
+perrow/perrow_pf sources behind a runtime bit-9 branch, and the
+restructure changed codegen of the bit-9-unset path that the 2B runs.
+My unlanded tiled gate fix did the same on jw16: in my own
+non-regression run, 2B ids moved against a same-lineage control wheel.
+
+Fix ee83df76c: each decode shader is now a GNU `diff -D GDN_COMPOSED_ORDER`
+merge. The default build is the 56488ba21 (v0.7.26) source,
+token-for-token. The composed-order build is three new kernels
+(*Composed), which primitives.cpp dispatches only for flag bit 9
+(A_log f32). Evidence on jw16, wheel dfuse.e74427b6e:
+- SPIR-V that the build ships for the default tiled, perrow and
+  perrow_pf kernels: byte-identical to 56488ba21's sources compiled with
+  glslc 2026.3 (also byte-identical under glslangValidator). The
+  composed kernels are byte-identical to the addendum-11 sources.
+- 2B bench digests, v0.7.26 venv vs the fix (same venv lineage),
+  identical on every arm. d64 cb3e8770 (pin) on tiled, perrow_pf and
+  perrow; d128 a9a7eef8 tiled and 21691e38 perrow_pf/perrow. 4B d64
+  e2c919be (pin). These cells are digest-only (load 1.68 at window
+  start).
+- 9B composed kernels: per-call replay 288/288 bit-identical on all
+  three arms.
+
+## Addendum 13 2026-10-04 — legacy-part dispatch guard
+
+679ef2a08 (Release0727) removed the d36d16822 chip term from
+GatedDeltaUpdate::use_fallback. That term had sent every GDN dispatch on
+G13 parts to the composed chain (9B pf512 91.7 -> 24.5 tok/s on jwm1).
+The capsim commit in this push adds a device_name axis and an
+m1-g13-legacy profile (also registered with the capability-sim ctest).
+tests/omarchy/test_gdn_legacy_policy.cpp fails if Hk==Hv decode (raw or
+gated) or Hk==Hv prefill falls back on that simulated part. On jw16,
+the clause-free tree gives raw decode 1 dispatch vs 26 for the composed
+reference, gated decode 1 vs 18, and prefill T=32 1 vs 546. With the
+clause reinstated in scratch, the test fails all 3 cases (24/16/544),
+while fast_route_repeat, maskless and prefill_profile stay green.
+capability_sim_tests pass 7/7 under m1-honeykrisp-fork and m1-g13-legacy.
