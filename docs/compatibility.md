@@ -784,3 +784,14 @@ A Supported row must link every applicable record.
 - 4B dense (q/k norms + rope unfolded): decode barriers 370.2 -> 334.3/token (-9.7%) and wall **+3.2 % at d64 / +2.8 % at d512, two windows, disjoint min-max, n=5 pairs each** — verified win; 4B serving hosts opt in via the env.
 - 2B hybrid (closed axis, negative): the decode graph is a 0.90-density RAW chain (120,766 RAW forcing edges, 0 WAW/WAR over 130,588 nodes; 223.1 -> 223.0 barriers/token) — nothing is reorderable after the fused-GEMV/gated-norm/fused-GDN work; wall flat (-0.25..+0.09 %). Prefill barriers -8.4 %/pass move wall only +0.82 % (pf512) / -0.09 % (pf1024): prefill barrier cost hides behind GPU busy. NOT landed default-on for the 2B; a default-ON flip needs the 2B addressed first. The 2B decode lever on this axis is fewer RAW edges (fusion), not their order.
 - Receipts: receipts/2026-10-04-jw16-wave-sched.md. Source: agent/wave-sched (f0f806120 + 5a0819ae8).
+
+## 2026-10-04 — 9B fused GDN decode default OFF
+- The fused raw route remains available as `MLX_OMARCHY_GDN_RAW_REPEAT=1`; it
+  is off by default on all chips after the published v0.7.26 wheel failed
+  the free-run acceptance bar. The 9B decode gain is +31-35% on G14-class
+  hardware and +35-43% on G13, with 1-ULP near-tie divergences; measured
+  identity was 29.43% over 10 prompts x 512 tokens.
+- Per-op fp64 and S=1 PPL checks passed; free-run bar 2 failed (six of ten
+  first divergences had composed top-2 gap 0.125). See
+  `receipts/2026-10-04-gdu-bar-audit/README.md` and the v0.7.27 release
+  receipt. The installer still applies the patcher, whose gate defaults to 0.

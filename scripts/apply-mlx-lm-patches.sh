@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Apply the vendored mlx-lm serve patches to a venv's mlx_lm package.
 #
-# GDN fast route + GDN raw route: ON by default. The fast route sends
-# gated-delta updates to mx.fast.gated_delta_update; the raw route adds the
-# T==1 decode dispatch to mx.fast.gated_delta_update_raw (measured on
-# t8103: decode 17.46 -> 36.37 tok/s, pin dbf704971617fdfc identical to
-# t6001). Both self-guard on hasattr, falling back to the upstream kernel
-# when the entry point is absent.
+# GDN fast route is ON by default; the 9B GDN raw route is opt-in via
+# MLX_OMARCHY_GDN_RAW_REPEAT=1. The fast route sends gated-delta updates to
+# mx.fast.gated_delta_update; the raw route adds T==1 decode dispatch to
+# mx.fast.gated_delta_update_raw. Both self-guard on hasattr, falling back
+# to the upstream kernel when the entry point is absent.
 # Greedy vocab prune: ON by default. Tied 4-bit/g64 lm_head decode steps
 # go to mx.fast.greedy_quantized_argmax; the patch itself no-ops on any
 # other head and MLX_OMARCHY_NO_GREEDY_PRUNE=1 restores the upstream step.
@@ -137,10 +136,8 @@ python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"
 # MLX_OMARCHY_ROPE_NORM_FUSE=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # GDN raw-decode GQA repeat (Hk<Hv models, e.g. Qwen3.5-9B): expands q/k to
-# the value-head count so the fused GatedDeltaUpdate kernel fires instead of
-# the composed per-token fallback (~700 small dispatches/token). Default ON
-# since 2026-10-04: 9B decode +31..35% with the order-matched kernel
-# (free-run greedy identity 100%, TF agreement 99.39%, per-op fp64 error
-# identical to composed; receipts/2026-10-04-jw16-decode-dispatchfuse.md
-# addenda 2-3). Kill switch MLX_OMARCHY_GDN_RAW_REPEAT=0.
+# the value-head count so the fused GatedDeltaUpdate kernel can fire instead
+# of the composed per-token fallback (~700 small dispatches/token). Default
+# OFF on every chip because v0.7.26 failed the free-run numerics bar; =1
+# opts into +31..35% 9B decode with observed near-tie divergence.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
