@@ -12,6 +12,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -138,6 +139,32 @@ inline bool batch_over_budget(
 // batch against Honeykrisp's 7.56 GiB heap without this (2026-09-08).
 inline constexpr size_t kBatchByteBudgetDivisor = 16;
 
+// One tracked buffer byte-range of the dependency tracker (start
+// saturates at the address space; see tracked_range_end).
+struct TrackedRange {
+  VkBuffer buffer;
+  VkDeviceSize offset;
+  VkDeviceSize end;
+};
+
+// One buffered node's access sets for wave scheduling: the byte ranges a
+// node reads and writes (SPIR-V reflected readonly/writeonly split).
+struct WaveNode {
+  std::span<const TrackedRange> reads;
+  std::span<const TrackedRange> writes;
+};
+
+// Greedy earliest-wave schedule for one batch: level[i] is the smallest
+// wave index such that every earlier tape node that node i hazards sits
+// in a strictly smaller wave. A hazard is RAW (i reads a range an earlier
+// node writes), WAW, or WAR (i writes a range an earlier node reads) over
+// the exact tracked byte ranges. Nodes of equal level are pairwise
+// hazard-free, so a stream that emits waves in tape order with one full
+// dependency barrier between waves preserves every dependency of the tape
+// order while letting hazard-free nodes run concurrently. Public so tests
+// can assert the schedule contract without a device.
+MLX_API std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes);
+
 class MLX_API CommandEncoder {
  public:
   explicit CommandEncoder(Device& device);
@@ -219,7 +246,7 @@ class MLX_API CommandEncoder {
   // still owes a batch flush takes the queued path, which submits and
   // releases.
   bool idle() const {
-    return !recording_ && wait_semaphores_.empty() &&
+    return !recording_ && pending_.empty() && wait_semaphores_.empty() &&
         signal_semaphores_.empty() && completed_handlers_.empty() &&
         batch_buffers_.empty();
   }
@@ -366,20 +393,64 @@ class MLX_API CommandEncoder {
   void submit();
 
   // Dependency-gated barrier state (MLX_OMARCHY_GATED_BARRIERS, default
-  // off). Buffer ranges recorded by the open batch since the last
+  // ON since 2026-09-29; set 0 to restore the unconditional pre+post
+  // barriers). Buffer ranges recorded by the open batch since the last
   // barrier: a node skips its barrier only when neither its reads nor
-  // its writes overlap an unsynced range. Dispatch bindings carry no
-  // read/write split, so they are tracked as both. head_synced_ is the
-  // batch-head dependency: the first node of a freshly begun command
-  // buffer always records a barrier so host writes and the allocator's
-  // noncoherent flush keep exactly the visibility the unconditional
-  // path provides.
-  struct TrackedRange {
-    VkBuffer buffer;
-    VkDeviceSize offset;
-    VkDeviceSize end;
-  };
+  // its writes overlap an unsynced range. Dispatch bindings carry the
+  // SPIR-V reflected read/write split, so read-read pairs skip.
+  // head_synced_ is the batch-head dependency: the first node of a
+  // freshly begun command buffer always records a barrier so host writes
+  // and the allocator's noncoherent flush keep exactly the visibility
+  // the unconditional path provides.
   static bool gated_barriers();
+
+  // Wave scheduling (MLX_OMARCHY_WAVE_SCHED, default off; requires gated
+  // barriers). Arrival-ordered nodes buffered by the open batch instead
+  // of recording straight into the command buffer; submit() records them
+  // in wave_levels() order with one full dependency barrier between
+  // waves. A hazard-free node therefore runs concurrently with its wave
+  // instead of serializing behind a barrier its tape neighbors induced.
+  struct PendingNode {
+    enum class Kind : uint8_t { Dispatch, Copy, Fill };
+    Kind kind{Kind::Dispatch};
+    // Profiler attribution, captured at arrival (emit happens later, at
+    // submit): the evaluating primitive's name and the tape flag.
+    std::string_view prim{};
+    uint32_t tape{0};
+    uint64_t host_t0{0};
+    // Dispatch payload:
+    VkPipeline pipeline{VK_NULL_HANDLE};
+    ComputeKernel profile_kernel{};
+    std::array<ComputeBinding, kComputeBindingBudget> bindings{};
+    uint32_t binding_count{0};
+    ComputeParams params{};
+    uint32_t group_count_x{1};
+    uint32_t group_count_y{1};
+    uint32_t group_count_z{1};
+    VkDescriptorSet descriptor_set{VK_NULL_HANDLE};
+    // Copy/fill payload:
+    VkBuffer src{VK_NULL_HANDLE};
+    VkBuffer dst{VK_NULL_HANDLE};
+    VkDeviceSize size{0};
+    VkDeviceSize src_offset{0};
+    VkDeviceSize dst_offset{0};
+    VkDeviceSize write_offset{0};
+    uint32_t value{0};
+    // Hazard access sets (exact tracked ranges):
+    std::array<TrackedRange, kComputeBindingBudget> rd{};
+    std::array<TrackedRange, kComputeBindingBudget> wr{};
+    uint32_t nr{0};
+    uint32_t nw{0};
+  };
+  std::vector<PendingNode> pending_;
+  static bool wave_sched();
+  static bool wave_diag();
+  // Record the buffered nodes in wave order (wave_levels), one full
+  // dependency barrier between waves plus the batch-head barrier, and
+  // update the tracker exactly like the tape-order path. Called from
+  // submit() before the command buffer is closed.
+  void emit_pending();
+
   /* Phase-1 dependency-export (design 22b395d): per-dispatch records
    * computed from the GATED_BARRIERS tracker, stored host-side, not
    * consumed yet (the driver learns nothing until phase 2). */
