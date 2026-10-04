@@ -9,7 +9,8 @@ On macOS Metal this answers exactly as before. Other MLX builds route
 through a one-time canary compile, so family kernels activate without
 weakening the Metal path. The M5 tensor-unit detection in `generation()` is
 untouched (Metal-specific by design). Six gate sites rewired; all
-syntax-checked.
+syntax-checked. Net chain: 7 files, +74/-8 (device.py helper + five gate
+files + import lines).
 
 ## drowzeys/TensorFold (fork), branch `omarchy-h3-int8` (on top of gate-probe)
 
