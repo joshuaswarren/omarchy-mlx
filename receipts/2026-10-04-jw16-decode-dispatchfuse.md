@@ -371,3 +371,80 @@ builds/environments at 1-ULP near-ties — including tiled-vs-composed — so
 "bit-exact free-run at d512" is not an achievable bar on this model
 without pinning the exact wheel binary; near-tie-class equivalence (TF
 99.39-99.53%, ppl -0.05..-0.08%) is what the evidence supports.
+
+## Addendum 9 2026-10-04 — root cause: the fused gate prologue; 9B fused GDU bit-exact to composed (10x512 free-run 100%)
+
+CORRECTION to addendum 8: bit-exact free-run at d512 IS achievable. The
+divergence was one deterministic arithmetic difference, not build noise.
+
+Method (tools/dfuse/bitexact_bisect.py): route-OFF free-run of the 9B
+capturing every T=1 GDU call (operands, input state, composed out/state
+bits); then each captured call replayed through the fused route with the
+same operands and input state. A route-OFF replay control must be
+bit-identical, and it was (24/24 in every run).
+
+- Shipped tiled kernel (v0.7.26 venv), prompt 1, 12 tokens: 254/288 calls
+  differ, from call 0 (token 0, GDN layer 0). The earlier claim that the
+  kernel was bit-identical on captured operands was false.
+- Stage attribution on call 0 (tools/dfuse/gdu_stage_dump.py): an op-by-op
+  MLX replica of the C++ fallback equals the composed bits. The composed kv
+  and o reductions are serial ascending (100% match; pairwise/strided/
+  chunked 13-21%). A numpy emulation of the shader's order, seeded with
+  the composed GPU g/beta, reproduces composed exactly. The fused state
+  differs on whole heads only (4 of 32 heads, 512 rows), which places
+  the fault in the gate prologue. Per-head search: beta is exact; g is
+  off by -2/-1/-1/+1 f32 ulp. On head 6, softplus == x exactly, so the
+  error is in exp(-(exp(A_log)*sp)): the compiler folded the negate and
+  exp's log2(e) scale into the product, while composed runs that chain
+  as five kernels with f32 stores between them.
+- Variant sweep (diag wheel 0d35dc45a, 3 prompts each): V1 (softplus in
+  an imprecise function that copies elementwise.comp case 32, with each
+  later op `precise`) gave 312/312 OK on every prompt. V2 (whole chain
+  `precise`) gave 265-268/288 DIFF, worse than the baseline's 230-254,
+  because composed compiles LogAddExp imprecise.
+- Fix 849b109eb: V1 is the bit-9 prologue in the tiled, perrow and
+  perrow_pf shaders. In the perrow pair, g and beta also move into
+  functions, because an inline prologue in main() inherits the walks'
+  `precise` through glslang's backward propagation (the V2 failure).
+  The bf16-A_log (non-bit-9) paths are unchanged.
+
+Verification on jw16 (wheel 0.32.4.dev202610041520+dfuse.849b109eb,
+default env = route ON):
+- Per-call replay, prompts 1/0/3/5: 288/288 bit-identical on all three
+  kernels (tiled; perrow_pf via DECODE_TILE=0; perrow with GDN_PF=0
+  added). The 12-token route-ON free-run equals composed in all 12 cells.
+- Owner bar 2 with GduBar's harness (free_run_gaps.py, 10 prompts x 512,
+  tiled): mean identity 100.0%, exact-position 100.0%, 0 diverging
+  prompts. GduBar measured 29.43% on the shipped v0.7.26 wheel.
+
+Artifacts: apple-silicon-lab artifacts/DispatchFuse/20261004-bitexact-gate-chain/
+(SHA256SUMS).
+
+## Addendum 10 2026-10-04 — per-chip policy defect (d36d16822) corrected
+
+w71 reported, via Main, that the use_fallback clause from d36d16822 turned
+the fused GDN route off for EVERY model on G13 legacy parts (9B pf512
+91.7 -> 24.5 tok/s on jwm1; the RAW_REPEAT=1 opt-in did nothing).
+Confirmed in code: GatedDeltaUpdate::use_fallback is the single gate for
+every GDN primitive launch. It covers both fast.cpp entries
+(gated_delta_update and gated_delta_update_raw), decode and prefill, for
+any model, and the primitive cannot tell the q/k-repeat route from a
+native Hk==Hv call.
+
+Corrected policy (89a4f1e85): use_fallback is back to the v0.7.26
+contract (Dk==Dv==128, Hk==Hv) with no chip term, and g13_legacy_stream
+is deleted. The legacy-part policy lives only in the mlx-lm patcher,
+which owns the expansion. Unset: no expansion on G13-legacy device names.
+=1: expansion on every part. =0: never. Venvs patched by the previous
+release upgrade in place. The patcher's default value is Release0727's
+call. capability_sim gains a device_name axis and an m1-g13-legacy
+profile. tests/omarchy/test_gdn_legacy_policy.cpp fails if Hk==Hv decode
+(raw or gated) or Hk==Hv prefill falls back on that simulated part.
+
+On jw16 the fix arm passes: raw decode 1 vs 26 composed dispatches, gated
+decode 1 vs 18, prefill T=32 1 vs 546. The GDN suites pass
+(fast_route_repeat 3849, maskless 152, prefill_profile 4 assertions).
+Negative control (the old clause reinstated in the jw16 scratch tree
+only): the new test fails 3/3 cases (Hk==Hv takes 24/16/544 dispatches),
+while those three existing suites still pass. Only the new test catches
+this defect.
