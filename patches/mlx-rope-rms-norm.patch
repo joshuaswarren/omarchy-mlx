@@ -49,7 +49,7 @@
    auto& x = inputs[0];
    auto& offset = inputs[1];
    if (x.ndim() < 3) {
-@@ -531,10 +533,51 @@
+@@ -531,10 +533,63 @@
          << " but got shape " << inputs[2].shape() << ".";
      throw std::invalid_argument(msg.str());
    }
@@ -71,10 +71,22 @@
 +                   norm_eps,
 +                   s](std::vector<array> inputs) {
      auto x = inputs[0];
++    // The weight must come from inputs, not the capture, whenever it was
++    // pushed: mlx::core::vjp traces this lambda with tracer arrays for the
++    // primals, and a captured array enters that trace as a constant, which
++    // silently zeroes the weight gradient (found by the rope_rms_norm vjp
++    // doctest). The wrapper always pushes the weight when set, so
++    // inputs.size() == 3 covers both the fused and the fallback paths.
++    array weight_in;
++    bool use_weight = false;
++    if (norm_weight) {
++      weight_in = (inputs.size() == 3) ? inputs[2] : *norm_weight;
++      use_weight = true;
++    }
 +    // Compose the exact eager chain the fused route replaces: the row-wise
 +    // RMS norm first (rows of the last axis, weight and eps as given), then
 +    // the rope above on the normalized values.
-+    if (norm_weight) {
++    if (use_weight) {
 +      // The reference path runs rms_norm on the row-contiguous (B, T, H, D)
 +      // input and only then transposes to (B, H, T, D) for the rotation.
 +      // Calling rms_norm on the already-transposed (B, H, T, D) view sends a
@@ -91,19 +103,19 @@
 +        if (!x_t.flags().row_contiguous) {
 +          x_t = contiguous(x_t, false, s);
 +        }
-+        x = rms_norm(x_t, norm_weight, norm_eps, s);
++        x = rms_norm(x_t, weight_in, norm_eps, s);
 +        x = transpose(x, std::vector<int>{0, 2, 1, 3}, s);
 +        if (!x.flags().row_contiguous) {
 +          x = contiguous(x, false, s);
 +        }
 +      } else {
-+        x = rms_norm(x, norm_weight, norm_eps, s);
++        x = rms_norm(x, weight_in, norm_eps, s);
 +      }
 +    }
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -566,8 +609,9 @@
+@@ -566,8 +621,9 @@
            s);
      };
  
@@ -115,7 +127,7 @@
      auto theta = multiply(expand_dims(positions, -1, s), inv_freqs, s);
      auto coss = astype(cos(theta, s), t, s);
      auto sins = astype(sin(theta, s), t, s);
-@@ -618,17 +662,104 @@
+@@ -618,17 +674,104 @@
      }
    };
    auto stream = to_stream(s);
@@ -223,7 +235,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -677,6 +808,14 @@
+@@ -677,6 +820,14 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -238,7 +250,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -707,7 +846,8 @@
+@@ -707,7 +858,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
