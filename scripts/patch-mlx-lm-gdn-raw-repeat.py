@@ -9,12 +9,12 @@ fall through to the composed per-token fallback: ~700 extra small
 dispatches per decoded token (AsType/Multiply/Sum/Subtract F32 soup, per
 the 2026-10-03 3-model census).
 
-This patch expands q/k to the value-head count before the dispatch
-(MLX_OMARCHY_GDN_RAW_REPEAT, default 0 = off; set to 1 to opt in). The
-fused route improves 9B decode by 31-35%, but the published v0.7.26
-free-run audit found only 29.43% prefix identity over 10 prompts x 512
-tokens, with six first divergences at a composed top-2 gap of 0.125.
-Per-op fp64 and S=1 PPL gates passed; the free-run gate failed.
+This patch expands q/k to the value-head count before the dispatch.
+MLX_OMARCHY_GDN_RAW_REPEAT defaults to 1; set it to 0 to use the
+composed path. The 9B route's free-run tokens can differ from the
+composed path, but the updated bf16-ULP numerics bar accepts the measured
+divergences: >=99% teacher-forced top-1 agreement and every free-run
+first divergence within one bf16 ULP, alongside per-op fp64 and PPL gates.
 Idempotent; refuses unrecognized content. Usage: patch <venv>
 """
 import glob
@@ -31,9 +31,9 @@ DISPATCH_NEW = """    # mlx-omarchy decode fast-route (GQA repeat): the fused ra
     # kernel requires Hk == Hv (omarchy GatedDeltaUpdate::use_fallback);
     # expand q/k to the value-head count so Hk<Hv models take the fused
     # route instead of the composed per-token fallback. Gate:
-    # MLX_OMARCHY_GDN_RAW_REPEAT (default OFF; set to 1 to opt in).
+    # MLX_OMARCHY_GDN_RAW_REPEAT (default ON; set to 0 to opt out).
     if (
-        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0") == "1"
+        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1") != "0"
         and use_kernel
         and q.shape[1] == 1
         and q.shape[-1] == 128

@@ -389,4 +389,22 @@ is unchanged from v0.7.26 so other fused GDN dispatches keep their prior
 behavior. The fused raw-repeat route remains an explicit `=1` opt-in.
 Decode improved by 31-35% on G14-class and 35-43% on G13; the observed
 free-run divergences were at a 1-bf16-ULP gap (0.125), above the explicit
-0.05 cutoff. See `receipts/2026-10-04-gdu-bar-audit/README.md`.
+0.05 cutoff. See receipts/2026-10-04-gdu-bar-audit/README.md.
+
+## Addendum 10 2026-10-04 — owner replaces absolute cutoff with bf16-ULP bar
+
+The owner clarified the acceptance rule: teacher-forced top-1 agreement
+must be at least 99%; each free-run first divergence must have composed
+top-2 gap no larger than one bf16 ULP at the top-logit magnitude; per-op
+error remains no worse than deployed and route-sensitive S=1 PPL remains
+within 0.1%. At |logit| in [16, 32), one bf16 ULP is 0.125, so the former
+0.05 absolute threshold incorrectly rejected a one-ULP difference.
+
+Under this revised bar, the published v0.7.26 jw16 results pass: fp64
+errors are identical; teacher-forced agreement is 5095/5120 (99.51%);
+the six 0.125 and four 0.0 first-divergence gaps are each no more than
+one ULP; S=1 PPL changes -0.0721% on the measured 49-token sample. The
+29.43% prefix identity remains a true observation, not a pass criterion.
+The v0.7.27 mlx-lm patcher defaults the route ON on every chip; set
+MLX_OMARCHY_GDN_RAW_REPEAT=0 to select composed behavior. The C++ per-chip
+policy remains unchanged from v0.7.26. Release decision: retain default ON.

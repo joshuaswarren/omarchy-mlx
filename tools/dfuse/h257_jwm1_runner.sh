@@ -31,7 +31,7 @@ env MLX_OMARCHY_GDN_RAW_REPEAT=1 MLX_OMARCHY_GDN_DECODE_TILE=0 \
   > "$OUT/fp64.log" 2>&1 || echo "fp64 FAILED"
 cat "$OUT/fp64.json" 2>/dev/null || tail -5 "$OUT/fp64.log"
 
-echo "== (2) free-run 10x512, composed top-2 gap at each first divergence"
+echo "== (2) free-run 10x512, composed top-2 gap vs bf16 ULP at each first divergence"
 env MLX_OMARCHY_GDN_RAW_REPEAT=1 MLX_OMARCHY_GDN_DECODE_TILE=0 \
   "$PY" "$HERE/free_run_gaps.py" "$MODEL" "$OUT/free-run-gaps.json" 10 512 \
   > "$OUT/gaps.log" 2>&1 || echo "gaps FAILED"
@@ -39,8 +39,8 @@ python3 - <<'PYEOF'
 import json
 r = json.load(open(f"{__import__('os').environ['H257_OUT']}/free-run-gaps.json"))
 print("mean_identity_pct:", r["mean_identity_pct"])
-print("greedy_95pct_bar:", r["greedy_95pct_bar"])
-print("divergences_with_gap_ge_0.05:", r["divergences_with_gap_ge_0.05"])
+print("exact_match_pct_overall:", r["exact_match_pct_overall"])
+print("all_divergences_within_one_bf16_ulp:", r["all_divergences_within_one_bf16_ulp"])
 for row in r["rows"]:
     if row["first_divergence"] is not None:
         print(row)

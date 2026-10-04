@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Apply the vendored mlx-lm serve patches to a venv's mlx_lm package.
 #
-# GDN fast route is ON by default; the 9B GDN raw route is opt-in via
-# MLX_OMARCHY_GDN_RAW_REPEAT=1. The fast route sends gated-delta updates to
-# mx.fast.gated_delta_update; the raw route adds T==1 decode dispatch to
-# mx.fast.gated_delta_update_raw. Both self-guard on hasattr, falling back
-# to the upstream kernel when the entry point is absent.
+# GDN fast route and raw 9B decode route are ON by default. Set
+# MLX_OMARCHY_GDN_RAW_REPEAT=0 to opt out of raw decode. The fast route sends
+# gated-delta updates to mx.fast.gated_delta_update; the raw route adds T==1
+# decode dispatch to mx.fast.gated_delta_update_raw. Both self-guard on
+# hasattr, falling back to the upstream kernel when the entry point is absent.
 # Greedy vocab prune: ON by default. Tied 4-bit/g64 lm_head decode steps
 # go to mx.fast.greedy_quantized_argmax; the patch itself no-ops on any
 # other head and MLX_OMARCHY_NO_GREEDY_PRUNE=1 restores the upstream step.
@@ -138,6 +138,6 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # GDN raw-decode GQA repeat (Hk<Hv models, e.g. Qwen3.5-9B): expands q/k to
 # the value-head count so the fused GatedDeltaUpdate kernel can fire instead
 # of the composed per-token fallback (~700 small dispatches/token). Default
-# OFF on every chip because v0.7.26 failed the free-run numerics bar; =1
-# opts into +31..35% 9B decode with observed near-tie divergence.
+# ON on every chip; set MLX_OMARCHY_GDN_RAW_REPEAT=0 to opt out. The 9B
+# route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
