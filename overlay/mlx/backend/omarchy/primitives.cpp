@@ -7543,14 +7543,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         // QmmPeak twins (receipts/2026-10-04-qmm-roofline), evaluated
         // only where the landed g4 default applies so each arm changes
         // exactly one thing vs ctl: MLX_OMARCHY_QMM_CHUNK=1 dequantizes
-        // the whole 64-wide group behind one fence; MLX_OMARCHY_QMM_LDSPAD=1
-        // pads the shared B-tile row stride. Both keep the per-output
-        // ascending-k chain (doctest-pinned); both default OFF.
+        // the whole 64-wide group behind one fence; the shared B-tile
+        // row stride is padded by default (bank-conflict fix, bit-exact
+        // doctest-pinned, +2-3% G14C / +0.9% G13G model prefill) and
+        // MLX_OMARCHY_QMM_LDSPAD=0 is the kill switch back to the
+        // unpadded stride. An unpadded chunk arm needs LDSPAD=0 too.
         const char* chunk_env = std::getenv("MLX_OMARCHY_QMM_CHUNK");
         const char* pad_env = std::getenv("MLX_OMARCHY_QMM_LDSPAD");
         const bool chunk_on = chunk_env != nullptr && chunk_env[0] == '1';
-        const bool pad_on = pad_env != nullptr && pad_env[0] == '1';
-        if ((chunk_on || pad_on) && default_g4 && raster_env == nullptr) {
+        const bool pad_on = !(pad_env != nullptr && pad_env[0] == '0');
+        if ((chunk_on || pad_on) && default_g4 && raster_env == nullptr &&
+            twon_env == nullptr) {
           constexpr uint32_t gm = 4u;
           const uint32_t chunk_bytes = (32u * 16u + 64u * 32u) * 4u;
           const uint32_t pad_bytes = (32u * 16u + 16u * 36u) * 4u;

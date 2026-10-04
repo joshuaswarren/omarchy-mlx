@@ -4145,17 +4145,21 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
   };
   // The baseline pins the SHIPPED rasterization order via the opt-out
   // env, so the pin keeps holding the shipped mapping even though the
-  // landed default routes multi-row-tile grids to the G4 order.
+  // landed default routes multi-row-tile grids to the G4 order. The
+  // shared B-tile row stride is padded by default (QmmPeak), so the
+  // baseline also sets the LDSPAD kill switch to 0: the pin holds the
+  // shipped unpadded kernel, and the default (no-env) arm proves the
+  // padded default bit-identical to it.
   const Variant variants[] = {
-      {"default-g4", nullptr, nullptr, nullptr, nullptr},
+      {"default-g4-pad", nullptr, nullptr, nullptr, nullptr},
       {"raster-swap", "MLX_OMARCHY_QMM_RASTER", "swap", nullptr, nullptr},
       {"raster-g2", "MLX_OMARCHY_QMM_RASTER", "2", nullptr, nullptr},
       {"raster-g8", "MLX_OMARCHY_QMM_RASTER", "8", nullptr, nullptr},
       {"twon", "MLX_OMARCHY_QMM_TWON", "1", nullptr, nullptr},
       {"persist-4", "MLX_OMARCHY_QMM_PERSIST", "4", nullptr, nullptr},
       {"persist-8", "MLX_OMARCHY_QMM_PERSIST", "8", nullptr, nullptr},
-      {"ldspad", "MLX_OMARCHY_QMM_LDSPAD", "1", nullptr, nullptr},
-      {"chunk", "MLX_OMARCHY_QMM_CHUNK", "1", nullptr, nullptr},
+      {"ldspad0", "MLX_OMARCHY_QMM_LDSPAD", "0", nullptr, nullptr},
+      {"chunk", "MLX_OMARCHY_QMM_CHUNK", "1", "MLX_OMARCHY_QMM_LDSPAD", "0"},
       {"chunk-pad",
        "MLX_OMARCHY_QMM_CHUNK",
        "1",
@@ -4205,8 +4209,10 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
         return std::vector<uint16_t>(p, p + out.size());
       };
       setenv("MLX_OMARCHY_QMM_NO_RASTER", "1", 1);
+      setenv("MLX_OMARCHY_QMM_LDSPAD", "0", 1);
       const std::vector<uint16_t> baseline = run_bits();
       unsetenv("MLX_OMARCHY_QMM_NO_RASTER");
+      unsetenv("MLX_OMARCHY_QMM_LDSPAD");
       for (const auto& v : variants) {
         if (v.key != nullptr) {
           setenv(v.key, v.value, 1);
