@@ -441,6 +441,14 @@ Pre-fusion ANE partitioning and compiled-cache tests remain open.
 The runtime has no CPU tensor fallback.
 The release build and backend trace prove this state.
 See the [v0.1.0 M1 runtime receipt](https://github.com/joshuaswarren/omarchy-mlx/releases/download/v0.2.0/mlx-omarchy-v0.1.0-m1-runtime.txt).
+The v0.7.24 release stack was traced under gdb on the M2 Max across the
+ecosystem workflows — the Kokoro streamed render (two sentences, default
+pack), the GDN maskless doctest binary (2/2 cases, 152/152 assertions),
+9B chat (32 tokens), and 27B chat (first tokens) — and every GPU arm
+recorded zero calls to the CPU command-encoder entry
+(`mlx::core::cpu::get_command_encoder`), while the explicit-CPU-stream
+positive control on the same harness recorded 2 (release-gate close:
+[zero-CPU trace receipt](../receipts/2026-10-04-zero-cpu-trace/README.md)).
 
 Explicit exclusions are in progress.
 Named errors now cover unsupported linear algebra, `float64`, and complex dtypes in the development gate.
