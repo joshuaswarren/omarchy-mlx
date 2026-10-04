@@ -75,6 +75,7 @@ GUARD_OLD = """        q, k, v = [
                 [self.head_k_dim, self.head_k_dim, self.head_v_dim],
             )
         ]
+
         state = cache[1] if cache else None
         inv_scale = k.shape[-1] ** -0.5
         if qknorm_fused:
@@ -88,6 +89,7 @@ GUARD_OLD = """        q, k, v = [
         else:
             q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
             k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+
         out, state = gated_delta_update(
             q,
             k,
@@ -100,6 +102,7 @@ GUARD_OLD = """        q, k, v = [
             mask,
             use_kernel=not self.training,
         )
+
         if cache is not None:
             cache[1] = state
             cache.advance(S)
@@ -117,6 +120,7 @@ GUARD_NEW = """        if gdu_fused:
                     [self.head_k_dim, self.head_k_dim, self.head_v_dim],
                 )
             ]
+
             state = cache[1] if cache else None
             inv_scale = k.shape[-1] ** -0.5
             if qknorm_fused:
@@ -125,13 +129,12 @@ GUARD_NEW = """        if gdu_fused:
                 q.dtype == mx.bfloat16
                 and hasattr(mx.fast, "rms_norm_scaled")
             ):
-                q = mx.fast.rms_norm_scaled(
-                    q, None, inv_scale * inv_scale, 1e-6
-                )
+                q = mx.fast.rms_norm_scaled(q, None, inv_scale * inv_scale, 1e-6)
                 k = mx.fast.rms_norm_scaled(k, None, inv_scale, 1e-6)
             else:
                 q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
                 k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+
             out, state = gated_delta_update(
                 q,
                 k,
@@ -144,6 +147,7 @@ GUARD_NEW = """        if gdu_fused:
                 mask,
                 use_kernel=not self.training,
             )
+
             if cache is not None:
                 cache[1] = state
                 cache.advance(S)
