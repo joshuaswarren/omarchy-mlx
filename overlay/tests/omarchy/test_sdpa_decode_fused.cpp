@@ -651,3 +651,137 @@ TEST_CASE("hd128 decode shapes without a compiled width keep the composition") {
       0.01,
       "head_dim 100 falls through to the composition");
 }
+
+namespace {
+
+// FamDecodeFast: Qwen3.5-class full-attention decode shape - head_dim 256,
+// GQA 16 query heads over 4 kv heads, strided capacity-backed KV views.
+// The bf16 two-pass split-KV pair (SdpaDecodeNativeTwoPassP1/P2BF16Hd256)
+// owns the keys past the one-pass arm's window; its parity contract is
+// the f32-score composition within f32 accumulation order, not bit
+// identity (the fold reorders the softmax sum), so the assertions here
+// are tolerance-based with the measured worst-case printed.
+constexpr int kHd256 = 256;
+constexpr int kHd256Heads = 16;
+constexpr int kHd256KvHeads = 4;
+constexpr float kHd256Scale = 1.0f / std::sqrt(float(kHd256));
+
+HdCacheInputs make_hd256_cache(int keys, int capacity, Stream stream) {
+  array q = astype(
+      hd_pattern_values(kHd256Heads * kHd256, 11), bfloat16, stream);
+  q = reshape(q, Shape{1, kHd256Heads, 1, kHd256}, stream);
+  array k_cache = astype(
+      hd_pattern_values(kHd256KvHeads * capacity * kHd256, 22),
+      bfloat16,
+      stream);
+  k_cache = reshape(k_cache, Shape{1, kHd256KvHeads, capacity, kHd256}, stream);
+  array v_cache = astype(
+      hd_pattern_values(kHd256KvHeads * capacity * kHd256, 33),
+      bfloat16,
+      stream);
+  v_cache = reshape(v_cache, Shape{1, kHd256KvHeads, capacity, kHd256}, stream);
+  array k = slice(
+      k_cache, {0, 0, 0, 0}, {1, kHd256KvHeads, keys, kHd256}, stream);
+  array v = slice(
+      v_cache, {0, 0, 0, 0}, {1, kHd256KvHeads, keys, kHd256}, stream);
+  q.eval();
+  k.eval();
+  v.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  return HdCacheInputs{std::move(q), std::move(k), std::move(v)};
+}
+
+array hd256_composition(const HdCacheInputs& in, int keys, Stream stream) {
+  array q32 = multiply(
+      astype(in.q, float32, stream), array(kHd256Scale), stream);
+  array k32 = astype(in.k, float32, stream);
+  array v32 = astype(in.v, float32, stream);
+  array qs = reshape(
+      q32,
+      Shape{1, kHd256KvHeads, kHd256Heads / kHd256KvHeads, 1, kHd256},
+      stream);
+  array kt = swapaxes(
+      reshape(k32, Shape{1, kHd256KvHeads, 1, keys, kHd256}, stream),
+      -1,
+      -2,
+      stream);
+  array vs = reshape(v32, Shape{1, kHd256KvHeads, 1, keys, kHd256}, stream);
+  array scores = matmul(qs, kt, stream);
+  array probs = softmax(scores, std::vector<int>{-1}, false, stream);
+  array result = matmul(probs, vs, stream);
+  return astype(
+      reshape(result, Shape{1, kHd256Heads, 1, kHd256}, stream),
+      bfloat16,
+      stream);
+}
+
+void require_hd256_close(const HdCacheInputs& in, int keys, Stream stream) {
+  auto got = flat(hd_sdpa(in, stream), stream);
+  auto want = flat(hd256_composition(in, keys, stream), stream);
+  REQUIRE_EQ(got.size(), want.size());
+  double worst = 0.0;
+  int agree = 0;
+  for (size_t index = 0; index < want.size(); ++index) {
+    double diff = std::abs(static_cast<double>(got[index]) - want[index]);
+    worst = std::max(worst, diff);
+    uint32_t a;
+    uint32_t b;
+    std::memcpy(&a, &got[index], 4);
+    std::memcpy(&b, &want[index], 4);
+    agree += a == b;
+  }
+  MESSAGE("hd256 keys ", keys, ": max abs diff ", worst, ", bf16 words "
+                                                        "identical ",
+          agree, "/", want.size());
+  CHECK_MESSAGE(
+      worst <= 0.01,
+      "hd256 two-pass vs composition max abs diff ",
+      worst,
+      " at keys ",
+      keys);
+}
+
+} // namespace
+
+// Window contract (kDecodeBf16Windows, width 256): one-pass inside
+// [12, 7168] (one dispatch, bit-identical - unchanged by this route),
+// two-pass split-KV past it (two dispatches, tolerance agreement).
+TEST_CASE("hd256 bf16 decode rides the two-pass split-KV past the window") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // Inside the window: the one-pass arm is untouched.
+  for (int keys : {13, 128, 512, 2048}) {
+    CAPTURE(keys);
+    HdCacheInputs in = make_hd256_cache(keys, keys < 512 ? 512 : keys, stream);
+    uint64_t dispatches =
+        dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+    MESSAGE("hd256 keys ", keys, " dispatches ", dispatches);
+    if (dispatches == 1) {
+      require_hd256_close(in, keys, stream);
+    } else {
+      // Route refused on this device (shared/stream limits): the
+      // composition answers, agreement still exercised.
+      require_hd256_close(in, keys, stream);
+    }
+  }
+
+  // Past the window: two dispatches and composition agreement. The
+  // engagement probe keeps the assertions honest on devices where the
+  // two-pass leg cannot run.
+  HdCacheInputs probe = make_hd256_cache(7169, 8192, stream);
+  bool twopass_ready =
+      dispatches_for([&] { return hd_sdpa(probe, stream); }, stream) == 2;
+  for (int keys : {7169, 8192}) {
+    CAPTURE(keys);
+    HdCacheInputs in = make_hd256_cache(keys, keys, stream);
+    if (twopass_ready) {
+      uint64_t dispatches =
+          dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+      CHECK_EQ(dispatches, 2);
+    }
+    require_hd256_close(in, keys, stream);
+  }
+}

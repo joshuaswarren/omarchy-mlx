@@ -13182,6 +13182,27 @@ void ScaledDotProductAttention::eval_gpu(
   };
   constexpr DecodeBf16Window kDecodeBf16Windows[] = {
       {64, 256, 2048}, {128, 1, 7168}, {256, 12, 7168}};
+  // FamDecodeFast: hd256 keys past the one-pass window ride the bf16
+  // two-pass split-KV pair instead of falling to the ~10-dispatch
+  // f32-score composition. The pair's shared need is only the pass-2
+  // 32x32 f32 transpose, so it engages on devices (software drivers
+  // included) where the one-pass arm's 7168-key f32 stream does not fit.
+  // Unlike the one-pass arm it reorders f32 sums against the
+  // composition, so it is a numerics-gate route, not a digest-neutral
+  // one. Block policy is decode_fast's 'd'-GPU formula (~256-key
+  // contiguous chunks, 32-64 blocks, capped at 256).
+  constexpr uint32_t kTwoPassBf16Hd256SharedBytes = 32u * 32u * sizeof(float);
+  const bool decode_bf16_twopass_ready =
+      decode_caps.max_compute_work_group_invocations >= 1024u &&
+      decode_caps.max_compute_work_group_size[0] >= 1024u &&
+      decode_caps.max_compute_shared_memory_size >=
+          kTwoPassBf16Hd256SharedBytes;
+  // decode_fast csrc/sdpa_decode.cpp 'd' policy: ~256-key contiguous
+  // chunks per block, 32-64 blocks for parallelism, capped at 256.
+  auto bf16_two_pass_blocks = [](uint32_t k_len) {
+    uint32_t b = (((k_len + 255u) / 256u + 31u) / 32u) * 32u;
+    return std::min(256u, std::max(k_len >= 4096u ? 64u : 32u, b));
+  };
   // Perf-only k window: bitwise identity holds for every k (both routes
   // store identical words), so the boundary cannot move a token - only the
   // wall. Width 64 keeps the measured 256..2048 window from the original
@@ -13204,7 +13225,8 @@ void ScaledDotProductAttention::eval_gpu(
           decode_bf16_shared_required;
   const bool decode_bf16_probe = q.dtype() == bfloat16;
   const bool decode_route_ready =
-      decode_bf16_probe ? decode_bf16_ready : decode_subgroup_ready;
+      decode_bf16_probe ? (decode_bf16_ready || decode_bf16_twopass_ready)
+                        : decode_subgroup_ready;
   // Width-keyed engagement window lookup; only meaningful for the bf16
   // arm. f16 routes engage unconditionally on their compiled widths.
   const DecodeBf16Window* decode_window = nullptr;
@@ -13228,7 +13250,10 @@ void ScaledDotProductAttention::eval_gpu(
                decode_window != nullptr)) &&
       k_len > 0 &&
       (q.dtype() != bfloat16 ||
-          (k_len >= decode_window->k_min && k_len <= decode_window->k_max)) &&
+          (k_len >= decode_window->k_min &&
+           (k_len <= decode_window->k_max
+               ? decode_bf16_ready
+               : (head_dim == 256 && decode_bf16_twopass_ready)))) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
     // f16 lanes carry SDPA_DIM/64 dim pairs; the bf16 arm's shared layout
@@ -13293,9 +13318,12 @@ void ScaledDotProductAttention::eval_gpu(
     params.alpha = scale_;
     // Native M1 Max switches to 64 two-pass blocks at 1024 keys and 128
     // above it; zero selects the one-pass 32-SIMD decode kernel. bf16
-    // always runs one-pass (see above).
+    // runs one-pass inside its measured window and the two-pass split-KV
+    // pair past it (the gate admitted this call on that leg alone).
     params.flags = decode_bf16
-        ? 0u
+        ? (head_dim == 256 && k_len > decode_window->k_max
+               ? bf16_two_pass_blocks(k_len)
+               : 0u)
         : (k_len > 1024 ? 128u : (k_len == 1024 ? 64u : 0u));
     params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
     params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
@@ -13319,8 +13347,48 @@ void ScaledDotProductAttention::eval_gpu(
           "cooperative_matrix_fp32_8x8x8+workgroup_limits+"
           "shared_memory_limit_bytes",
           encoder.device().hardware_capabilities().cooperative_matrix_f32_8);
+    if (decode_bf16 && params.flags != 0u) {
+      // bf16 two-pass split-KV (hd256 only compiled width): pass 1 grids
+      // heads x blocks, each 32-lane workgroup walking its key block with
+      // the fused arm's online-softmax chain and storing f32 block
+      // partials (max, sum, per-lane output pairs); pass 2 folds them per
+      // head and narrows once through the cast.comp RNE bf16 store. The
+      // f16 pair's bit-identity argument does not transfer - this pair's
+      // contract is the f32-score composition within f32 accumulation
+      // order (numerics-gate route, engaged past kTwoPassBf16Hd256Floor).
+      const uint32_t blocks = params.flags;
+      // Scratch words per head: blocks max + blocks sum +
+      // blocks*32*PAIRS*2 f32 output-pair words, the bf16
+      // SCRATCH_STRIDE_FACTOR layout in the shaders.
+      const uint64_t scratch_words = static_cast<uint64_t>(heads) * blocks *
+          (2u +
+           2u * 32u * (static_cast<uint32_t>(head_dim) / 64u));
+      array scratch(
+          Shape{static_cast<int>(scratch_words)}, uint32, nullptr, {});
+      scratch.set_data(allocate_omarchy(scratch.nbytes()));
+      encoder.add_temporary(scratch);
+      std::array<omarchy::ComputeBinding, 4> pass1_bindings{
+          binding(q), binding(k), binding(v), binding(scratch)};
+      omarchy::ComputeParams pass1_params = params;
+      pass1_params.count = checked_u32(scratch_words, tag, out);
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP1BF16Hd256,
+          pass1_bindings,
+          pass1_params,
+          params.matrix_m,
+          blocks);
+      std::array<omarchy::ComputeBinding, 2> pass2_bindings{
+          binding(scratch), binding(out)};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaDecodeNativeTwoPassP2BF16Hd256,
+          pass2_bindings,
+          params,
+          params.matrix_m);
+      return;
+    }
     if (params.flags != 0u) {
-      // Native-shape per-block two-pass (f16 only; bf16 always one-pass).
+      // Native-shape per-block two-pass (f16; the bf16 hd256 twin runs
+      // the branch above with the same grid and scratch structure).
       // The fused kernel keeps one workgroup per head, so its walk runs
       // k/32 sequential key-steps per subgroup no matter how the blocks
       // split; native Metal instead grids heads x blocks with one 32-thread

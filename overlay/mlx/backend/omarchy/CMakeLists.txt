@@ -341,6 +341,10 @@ omarchy_shader(sdpa_decode_native_p1_f16 shaders/sdpa_decode_native_p1.comp)
 omarchy_shader(sdpa_decode_native_p2_f16 shaders/sdpa_decode_native_p2.comp)
 omarchy_shader(sdpa_decode_native_p1_f16_hd128 shaders/sdpa_decode_native_p1.comp -DSDPA_DIM=128)
 omarchy_shader(sdpa_decode_native_p2_f16_hd128 shaders/sdpa_decode_native_p2.comp -DSDPA_DIM=128)
+# FamDecodeFast: bf16 two-pass split-KV at the Qwen3.5 full-attention width
+# (f32 partial pairs, single RNE output narrowing; see the p1/p2 comments).
+omarchy_shader(sdpa_decode_native_p1_bf16_hd256 shaders/sdpa_decode_native_p1.comp -DBF16_IO=1 -DSDPA_DIM=256)
+omarchy_shader(sdpa_decode_native_p2_bf16_hd256 shaders/sdpa_decode_native_p2.comp -DBF16_IO=1 -DSDPA_DIM=256)
 # Attn128: one-dispatch small-k wide-row value Partition (the mx.topk route).
 omarchy_shader(partition_smallk_f32 shaders/partition_smallk.comp)
 omarchy_shader(partition_smallk_f16 shaders/partition_smallk.comp -DF16_IO=1)

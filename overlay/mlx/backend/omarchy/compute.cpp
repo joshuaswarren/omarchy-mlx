@@ -293,6 +293,8 @@
 #include "sdpa_decode_native_p2_f16.h"
 #include "sdpa_decode_native_p1_f16_hd128.h"
 #include "sdpa_decode_native_p2_f16_hd128.h"
+#include "sdpa_decode_native_p1_bf16_hd256.h"
+#include "sdpa_decode_native_p2_bf16_hd256.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -1490,6 +1492,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaDecodeNativeTwoPassP2F16Hd128:
       return {
           sdpa_decode_native_p2_f16_hd128, sdpa_decode_native_p2_f16_hd128_size};
+    case ComputeKernel::SdpaDecodeNativeTwoPassP1BF16Hd256:
+      return {
+          sdpa_decode_native_p1_bf16_hd256,
+          sdpa_decode_native_p1_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeNativeTwoPassP2BF16Hd256:
+      return {
+          sdpa_decode_native_p2_bf16_hd256,
+          sdpa_decode_native_p2_bf16_hd256_size};
     case ComputeKernel::PartitionSmallKF32:
       return {partition_smallk_f32, partition_smallk_f32_size};
     case ComputeKernel::PartitionSmallKF16:

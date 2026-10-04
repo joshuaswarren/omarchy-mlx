@@ -8,8 +8,13 @@
 // exp factors, the shared-memory transpose, the SIMD reductions, and the
 // f16 output-pair stores - is the fused kernel's pass-2 code unchanged,
 // so the two-dispatch pair is bit-identical to the fused two-pass it
-// replaces. One 1024-thread workgroup per head, as before. f16 only: the
-// bf16 arm always runs one-pass (see the fused kernel comment).
+// replaces. One 1024-thread workgroup per head, as before.
+//
+// The bf16 compile (-DBF16_IO, FamDecodeFast 2026-10-04) reads the f32
+// partial pairs pass 1 stored and narrows once through the cast.comp RNE
+// bf16 pair - the same single rounding the f32-score composition applies
+// to its matmul result. Parity contract: the composition within f32
+// accumulation order (see the pass 1 comment).
 
 #version 460
 
@@ -18,15 +23,24 @@
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef BF16_IO
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
 
 layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Scratch {
   uint values[];
 } scratch_data;
+#ifdef BF16_IO
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+#else
 layout(set = 0, binding = 1, std430) writeonly buffer Output {
   float16_t values[];
 } output_data;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -64,7 +78,25 @@ const float FINITE_MIN = -3.4028234663852886e38;
 #define SDPA_DIM 64u
 #endif
 const uint PAIRS = SDPA_DIM / 64u;
+#ifdef BF16_IO
+// f32 partial pairs: matches the pass 1 stride (2 words per lane pair).
+const uint SCRATCH_STRIDE_FACTOR = 2u + 2u * SIMD * PAIRS;
+#else
 const uint SCRATCH_STRIDE_FACTOR = 2u + SIMD * PAIRS;
+#endif
+
+#ifdef BF16_IO
+// The cast.comp RNE store, verbatim: bf16 bits are the f32 top half with
+// round-to-nearest-even, the same single narrowing the composition's cast
+// pass applies.
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#endif
 
 shared float s_outputs[SIMD * SIMD];
 
@@ -82,8 +114,13 @@ void store_pair(
   if (lane == 0u) {
     uint out_base = params.output_offset + head * SDPA_DIM +
         pair * 64u + 2u * gl_SubgroupID;
+#ifdef BF16_IO
+    output_data.values[out_base] = bf16_store(x / denominator);
+    output_data.values[out_base + 1u] = bf16_store(y / denominator);
+#else
     output_data.values[out_base] = float16_t(x / denominator);
     output_data.values[out_base + 1u] = float16_t(y / denominator);
+#endif
   }
 }
 
@@ -122,10 +159,19 @@ void main() {
     for (uint block = sgid; block < blocks; block += SIMD) {
       float factor = native_exp(
           uintBitsToFloat(scratch_data.values[head_base + block]) - merged_max);
+#ifdef BF16_IO
+      uint pair_base = head_base + 2u * blocks +
+          (p * blocks + block) * (2u * SIMD) + 2u * lane;
+      float partial_x = uintBitsToFloat(scratch_data.values[pair_base]);
+      float partial_y = uintBitsToFloat(scratch_data.values[pair_base + 1u]);
+#else
       vec2 partial = unpackHalf2x16(scratch_data.values[
           head_base + 2u * blocks + (p * blocks + block) * SIMD + lane]);
-      o0 = fma(factor, partial.x, o0);
-      o1 = fma(factor, partial.y, o1);
+      float partial_x = partial.x;
+      float partial_y = partial.y;
+#endif
+      o0 = fma(factor, partial_x, o0);
+      o1 = fma(factor, partial_y, o1);
     }
     s_outputs[lane * SIMD + sgid] = o0;
     barrier();

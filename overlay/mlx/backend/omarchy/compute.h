@@ -817,6 +817,15 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
   QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // FamDecodeFast: bf16 two-pass split-KV decode SDPA at the Qwen3.5
+  // full-attention width (shaders/sdpa_decode_native_p1/p2.comp compiled
+  // with -DBF16_IO=1 -DSDPA_DIM=256; f32 block partials, single RNE
+  // output narrowing; parity contract = the f32-score composition within
+  // f32 accumulation order). Closes the long-context decode leg the
+  // one-pass bf16 arm's measured window leaves to the composition.
+  // Append-only profile ids.
+  SdpaDecodeNativeTwoPassP1BF16Hd256,
+  SdpaDecodeNativeTwoPassP2BF16Hd256,
   Count,
 };
 

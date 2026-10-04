@@ -18,8 +18,17 @@
 // shared memory: the f32 block max, the f32 exp sum, and the 32 packed f16
 // output-pair words. Pass 2 (sdpa_decode_native_p2.comp) folds them with
 // the fused kernel's pass-2 code unchanged, so the pair is bit-identical
-// to the fused two-pass it replaces. f16 only: the bf16 arm always runs
-// one-pass (see the fused kernel comment).
+// to the fused two-pass it replaces.
+//
+// The bf16 compile (-DBF16_IO, FamDecodeFast 2026-10-04) keeps the same
+// block structure but widens loads exactly (bf16 bits are the f32 top
+// half) and stores each output pair as two f32 words instead of packed
+// f16 - the composition's probs*V accumulation is f32, so f16-packed
+// partials would round twice where the fallback rounds once. Pass 2 folds
+// the f32 partials and narrows once through the cast.comp RNE pair, the
+// same single rounding the f32-score composition applies. Its parity
+// contract is therefore the composition within f32 accumulation order,
+// not the fused f16 two-pass.
 
 #version 460
 
@@ -27,9 +36,23 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef BF16_IO
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
+#ifdef BF16_IO
+layout(set = 0, binding = 0, std430) readonly buffer Query {
+  uint16_t values[];
+} query_data;
+layout(set = 0, binding = 1, std430) readonly buffer Key {
+  uint16_t values[];
+} key_data;
+layout(set = 0, binding = 2, std430) readonly buffer Value {
+  uint16_t values[];
+} value_data;
+#else
 layout(set = 0, binding = 0, std430) readonly buffer Query {
   float16_t values[];
 } query_data;
@@ -39,6 +62,7 @@ layout(set = 0, binding = 1, std430) readonly buffer Key {
 layout(set = 0, binding = 2, std430) readonly buffer Value {
   float16_t values[];
 } value_data;
+#endif
 layout(set = 0, binding = 3, std430) writeonly buffer Scratch {
   uint values[];
 } scratch_data;
@@ -78,9 +102,24 @@ const float FINITE_MIN = -3.4028234663852886e38;
 #define SDPA_DIM 64u
 #endif
 const uint PAIRS = SDPA_DIM / 64u;
+#ifdef BF16_IO
+// f32 partial pairs: two words per lane pair, so the per-(head, block)
+// stride doubles against the packed-f16 layout. Shared with pass 2; keep
+// the two shaders' layouts in lockstep.
+const uint SCRATCH_STRIDE_FACTOR = 2u + 2u * SIMD * PAIRS;
+#else
 const uint SCRATCH_STRIDE_FACTOR = 2u + SIMD * PAIRS;
+#endif
 
+#ifdef BF16_IO
+// The cast.comp widening, verbatim: the bf16 bits are the f32 top half.
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+#define LD16(x) bf16_load(x)
+#else
 #define LD16(x) float(x)
+#endif
 
 float native_exp(float x) {
   return exp(x);
@@ -157,8 +196,15 @@ void main() {
         floatBitsToUint(sum_exp_score);
   }
   for (uint p = 0u; p < PAIRS; ++p) {
+#ifdef BF16_IO
+    uint pair_base = head_base + 2u * blocks +
+        (p * blocks + block) * (2u * SIMD) + 2u * lane;
+    scratch_data.values[pair_base] = floatBitsToUint(o0[p]);
+    scratch_data.values[pair_base + 1u] = floatBitsToUint(o1[p]);
+#else
     scratch_data.values[head_base + 2u * blocks +
                         (p * blocks + block) * SIMD + lane] =
         packHalf2x16(vec2(o0[p], o1[p]));
+#endif
   }
 }
