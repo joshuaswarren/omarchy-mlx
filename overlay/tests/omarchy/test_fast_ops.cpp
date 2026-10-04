@@ -589,68 +589,58 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
       1e-5,
       "fused vjp dw equals composed chain vjp dw");
 
-  // Reference 2: host central differences in double over the bf16-quantized
-  // primals — the objective quantizes each perturbed point back to bf16,
-  // because that is what the kernel actually consumes. Rows are the
-  // (b, h, t) rows of the (B, H, T, D) layout; pairs (d, d + half) rotate
-  // by theta = t * base^(-d) (non-traditional).
-  auto bf16_round = [](double v) {
-    float f = static_cast<float>(v);
-    uint32_t bits;
-    std::memcpy(&bits, &f, sizeof(bits));
-    uint32_t lsb = (bits >> 16) & 1u;
-    bits += 0x7FFFu + lsb;
-    bits &= 0xFFFF0000u;
-    std::memcpy(&f, &bits, sizeof(f));
-    return static_cast<double>(f);
-  };
+  // Reference 2: finite differences through the DEVICE f32 composed chain
+  // (the same rms_norm + rope ops the fused bf16 kernel reproduces, at
+  // float32 so the reference has no bf16 output quantization). Each
+  // perturbed point is the bf16-quantized primal cast up: that is the
+  // input domain the kernel consumes. Rows are the (b, h, t) rows of the
+  // (B, H, T, D) layout; pairs (d, d + half) rotate by theta =
+  // t * base^(-d/half) inside the kernels — the FD does not need that
+  // closed form, it differentiates the composed graph directly.
   std::vector<double> xq = widen(flat(x_pre, stream)); // (B, T, H, D) rows
   std::vector<double> wq = widen(flat(w, stream));
-  std::vector<double> cq = widen(flat(cot, stream)); // (B, H, T, D)
-  auto inv_freq = [&](int j) { return std::pow(base, -double(j) / half); };
+  auto x32 = astype(x, float32, stream);
+  auto w32 = astype(w, float32, stream);
+  auto cot32 = astype(cot, float32, stream);
   auto objective = [&](const std::vector<double>& xs, const std::vector<double>& ws) {
-    double loss = 0.0;
+    // xs arrives in the (B, T, H, D) storage order of x_pre; the rope
+    // consumes the (B, H, T, D) logical layout the model site feeds.
+    std::vector<float> reordered(B * H * T * D);
     for (int b = 0; b < B; ++b) {
-      for (int h = 0; h < H; ++h) {
-        for (int t = 0; t < T; ++t) {
-          // normalized row from the (B, T, H, D) storage of x
-          size_t xrow = ((b * T + t) * H + h) * D;
-          double ms = 0.0;
+      for (int t = 0; t < T; ++t) {
+        for (int h = 0; h < H; ++h) {
           for (int d = 0; d < D; ++d) {
-            double xv = bf16_round(xs[xrow + d]);
-            ms += xv * xv;
-          }
-          double rnorm = 1.0 / std::sqrt(ms / D + eps);
-          for (int d = 0; d < half; ++d) {
-            double theta = double(t) * inv_freq(d);
-            double c = std::cos(theta), s = std::sin(theta);
-            double n0 = bf16_round(xs[xrow + d]) * rnorm * bf16_round(ws[d]);
-            double n1 =
-                bf16_round(xs[xrow + d + half]) * rnorm * bf16_round(ws[d + half]);
-            size_t crow = ((b * H + h) * T + t) * D;
-            loss += cq[crow + d] * (n0 * c - n1 * s);
-            loss += cq[crow + d + half] * (n0 * s + n1 * c);
+            reordered[((b * H + h) * T + t) * D + d] =
+                static_cast<float>(xs[((b * T + t) * H + h) * D + d]);
           }
         }
       }
     }
-    return loss;
+    auto xs32 = array(reordered.begin(), Shape{B * H * T * D}, float32, stream);
+    auto ws32 = astype(
+        array(ws.begin(), Shape{D}, float32, stream), float32, stream);
+    auto n = fast::rms_norm(xs32, w32, eps, stream);
+    auto y = fast::rope(
+        n, D, false, base, 1.0f, off, std::nullopt, stream);
+    return sum(multiply(astype(y, float32, stream), cot32, stream), stream);
+  };
+  auto obj_scalar = [&](const std::vector<double>& p) {
+    auto v = objective(p, wq);
+    return static_cast<double>(flat(v, stream)[0]);
   };
   const double hstep = 0.25;
-  std::vector<double> fd_dx = widen(flat(f_grads[0], stream)); // shape only
-  fd_dx.assign(xq.size(), 0.0);
+  std::vector<double> fd_dx(xq.size(), 0.0);
   for (size_t i = 0; i < xq.size(); ++i) {
-    fd_dx[i] = central_difference(xq, i, hstep, [&](const std::vector<double>& p) {
-      return objective(p, wq);
-    });
+    fd_dx[i] = central_difference(xq, i, hstep, obj_scalar);
   }
   std::vector<double> fd_dw(D, 0.0);
   for (int d = 0; d < D; ++d) {
     fd_dw[d] = central_difference(wq, d, hstep, [&](const std::vector<double>& p) {
-      return objective(xq, p);
+      return static_cast<double>(flat(objective(xq, p), stream)[0]);
     });
   }
-  // bf16 output quantization of the kernel adds ~ULP/(2h) noise per element.
+  // The bf16 kernel rounds its outputs; h=0.25 spans many ULPs, so the
+  // central difference tracks the smooth derivative well inside 0.09.
   require_close(flat(f_grads[0], stream), fd_dx, 0.09, "fused vjp dx finite difference");
   require_close(flat(f_grads[1], stream), fd_dw, 0.09, "fused vjp dw finite difference");
 }
