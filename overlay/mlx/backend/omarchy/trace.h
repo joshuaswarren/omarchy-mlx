@@ -181,6 +181,14 @@ extern "C" __attribute__((visibility("default"))) void
 mlx_omarchy_trace_snapshot(
     mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot* out);
 
+// Byte size of MlxOmarchyTraceSnapshot as built into this library. ctypes
+// readers compare their mirror against this before reading: the writer
+// fills the struct field-by-field, so a mirror smaller than the library's
+// struct overflows by 16 bytes per appended field (the 2026-10-04 wave
+// scheduler GC double-track crash). Size drift fails loudly instead.
+extern "C" __attribute__((visibility("default"))) std::uint64_t
+mlx_omarchy_trace_snapshot_abi_size(void);
+
 #ifdef MLX_OMARCHY_GPU_PROFILING
 extern "C" __attribute__((visibility("default"))) void
 mlx_omarchy_prim_dump(const char* path);

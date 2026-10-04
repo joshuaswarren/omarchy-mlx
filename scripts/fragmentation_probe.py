@@ -55,6 +55,15 @@ def make_counter_reader():
         ]
 
     lib = ctypes.CDLL(str(so))
+    lib.mlx_omarchy_trace_snapshot_abi_size.argtypes = []
+    lib.mlx_omarchy_trace_snapshot_abi_size.restype = ctypes.c_uint64
+    expected = int(lib.mlx_omarchy_trace_snapshot_abi_size())
+    if ctypes.sizeof(Snapshot) != expected:
+        raise SystemExit(
+            f"Snapshot mirror is {ctypes.sizeof(Snapshot)} bytes but libmlx "
+            f"writes {expected}: stale mirror would corrupt the heap; update "
+            "the field list to match trace.h"
+        )
     lib.mlx_omarchy_trace_snapshot.argtypes = [ctypes.POINTER(Snapshot)]
     lib.mlx_omarchy_trace_snapshot.restype = None
     snap = Snapshot()

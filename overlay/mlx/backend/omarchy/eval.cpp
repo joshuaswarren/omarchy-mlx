@@ -209,6 +209,11 @@ mlx_omarchy_trace_snapshot(
   out->barriers_skipped = c.barriers_skipped.load();
 }
 
+extern "C" __attribute__((visibility("default"))) std::uint64_t
+mlx_omarchy_trace_snapshot_abi_size(void) {
+  return sizeof(mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot);
+}
+
 #ifdef MLX_OMARCHY_GPU_PROFILING
 extern "C" __attribute__((visibility("default"))) void
 mlx_omarchy_prim_dump(const char* path) {
