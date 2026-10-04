@@ -49,7 +49,7 @@
    auto& x = inputs[0];
    auto& offset = inputs[1];
    if (x.ndim() < 3) {
-@@ -531,10 +533,63 @@
+@@ -531,10 +533,61 @@
          << " but got shape " << inputs[2].shape() << ".";
      throw std::invalid_argument(msg.str());
    }
@@ -77,16 +77,14 @@
 +    // silently zeroes the weight gradient (found by the rope_rms_norm vjp
 +    // doctest). The wrapper always pushes the weight when set, so
 +    // inputs.size() == 3 covers both the fused and the fallback paths.
-+    array weight_in;
-+    bool use_weight = false;
++    std::optional<array> weight_in;
 +    if (norm_weight) {
 +      weight_in = (inputs.size() == 3) ? inputs[2] : *norm_weight;
-+      use_weight = true;
 +    }
 +    // Compose the exact eager chain the fused route replaces: the row-wise
 +    // RMS norm first (rows of the last axis, weight and eps as given), then
 +    // the rope above on the normalized values.
-+    if (use_weight) {
++    if (weight_in) {
 +      // The reference path runs rms_norm on the row-contiguous (B, T, H, D)
 +      // input and only then transposes to (B, H, T, D) for the rotation.
 +      // Calling rms_norm on the already-transposed (B, H, T, D) view sends a
@@ -115,7 +113,7 @@
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -566,8 +621,9 @@
+@@ -566,8 +619,9 @@
            s);
      };
  
@@ -127,7 +125,7 @@
      auto theta = multiply(expand_dims(positions, -1, s), inv_freqs, s);
      auto coss = astype(cos(theta, s), t, s);
      auto sins = astype(sin(theta, s), t, s);
-@@ -618,17 +674,104 @@
+@@ -618,17 +672,104 @@
      }
    };
    auto stream = to_stream(s);
@@ -235,7 +233,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -677,6 +820,14 @@
+@@ -677,6 +818,14 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -250,7 +248,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -707,7 +858,8 @@
+@@ -707,7 +856,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
