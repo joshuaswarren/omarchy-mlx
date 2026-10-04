@@ -194,6 +194,62 @@ void translate_types(std::string& code) {
   translate_as_type(code);
 }
 
+void translate_c_style_casts(std::string& code) {
+  // C-style scalar casts `(type)expr` become functional `type(expr)` with a
+  // balanced-paren argument, the same treatment as as_type bitcasts.
+  static const std::unordered_map<std::string, std::string> casts = {
+      {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"}, {"int", "int"},
+      {"uint", "uint"}, {"float", "float"}, {"bool", "bool"},
+      {"int32_t", "int"}, {"uint32_t", "uint"},
+      {"int64_t", "int64_t"}, {"uint64_t", "uint64_t"},
+      {"size_t", "uint"},
+  };
+  size_t search_from = 0;
+  while (true) {
+    const auto open = code.find('(', search_from);
+    if (open == std::string::npos) {
+      return;
+    }
+    const auto close = code.find(')', open + 1);
+    if (close == std::string::npos) {
+      return;
+    }
+    const auto candidate = trim(code.substr(open + 1, close - open - 1));
+    const auto mapped = casts.find(candidate);
+    if (mapped == casts.end() || close + 1 >= code.size()) {
+      search_from = open + 1;
+      continue;
+    }
+    const auto next = code.find_first_not_of(" \t\r\n", close + 1);
+    if (next == std::string::npos) {
+      return;
+    }
+    std::string argument;
+    size_t consumed = 0;
+    if (code[next] == '(') {
+      const auto end = matching_delimiter(code, next, '(', ')');
+      argument = code.substr(next, end - next + 1);
+      consumed = end - next + 1;
+    } else if (std::isalnum(static_cast<unsigned char>(code[next])) ||
+               code[next] == '_') {
+      size_t end = next;
+      while (end < code.size() &&
+             (std::isalnum(static_cast<unsigned char>(code[end])) ||
+              code[end] == '_')) {
+        end++;
+      }
+      argument = code.substr(next, end - next);
+      consumed = end - next;
+    } else {
+      search_from = open + 1;
+      continue;
+    }
+    code.replace(open, consumed + (next - open),
+                 mapped->second + "(" + argument + ")");
+    search_from = open + mapped->second.size() + argument.size() + 2;
+  }
+}
+
 void translate_as_type(std::string& code) {
   // as_type<Dest>(src) is a bitcast; src may contain nested parentheses, so
   // match the argument by balanced delimiters rather than a flat regex.
@@ -318,8 +374,13 @@ void resolve_kernel_templates(
   }
 }
 
+void translate_c_style_casts(std::string& code);
+
 void translate_header(std::string& header) {
-  replace_all(header, "#include <metal_stdlib>", "");
+  // Metal-only includes and namespace usings have no GLSL meaning; kernels
+  // that actually use the included APIs fail later on their own tokens.
+  header = std::regex_replace(header, std::regex(R"(#include\s*[<\"][^>\"]*[>\"])"), "");
+  header = std::regex_replace(header, std::regex(R"(using\s+namespace\s+\w+\s*;)"), "");
   replace_all(header, "using namespace metal;", "");
   replace_all(header, "metal::precise::", "");
   replace_all(header, "metal::fast::", "");
@@ -547,6 +608,9 @@ Translation translate_msl(
   // already macro aliases for SSBO data, so the keyword is redundant.
   replace_word(body, "device", "");
   replace_word(header, "device", "");
+  body = std::regex_replace(body, std::regex(R"(#include\s*[<\"][^>\"]*[>\"])"), "");
+  body = std::regex_replace(body, std::regex(R"(using\s+namespace\s+\w+\s*;)"), "");
+  translate_c_style_casts(body);
 
   // `const T* name = BUFFER;` re-declares a buffer base under another name.
   // Drop the statement: the parameter macro already provides that alias.
@@ -680,6 +744,12 @@ Translation translate_msl(
     needs_int64 = needs_int64 || parameter.type == "int64_t" ||
         parameter.type == "uint64_t";
   }
+
+  // Cast-generated constructors may need widths no buffer parameter carries.
+  needs_int8 = needs_int8 || body.find("int8_t(") != std::string::npos ||
+      body.find("uint8_t(") != std::string::npos;
+  needs_int64 = needs_int64 || body.find("int64_t(") != std::string::npos ||
+      body.find("uint64_t(") != std::string::npos;
 
   if (body.find("threadgroup") != std::string::npos ||
       body.find("memory_order") != std::string::npos ||
