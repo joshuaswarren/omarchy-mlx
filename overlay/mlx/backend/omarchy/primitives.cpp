@@ -3587,6 +3587,13 @@ static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
       name.find("G13C") == std::string::npos;
 }
 
+// Stream-based twin for primitive-level per-chip policy (use_fallback).
+inline bool g13_legacy_stream(Stream s) {
+  const auto& name = omarchy::device(s.device).capabilities().device_name;
+  return name.find("G13") != std::string::npos &&
+      name.find("G13C") == std::string::npos;
+}
+
 static bool gdn_decode_tile_enabled(omarchy::CommandEncoder& encoder) {
   int override_value = decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE");
   return override_value >= 0 ? override_value != 0
@@ -10964,7 +10971,16 @@ bool GatedDeltaUpdate::use_fallback(
   // fused kernels apply load+skip, so a mask no longer forces the
   // composed fallback on its own.
   (void)has_mask;
-  return Dk != 128 || Dv != 128 || Hk != Hv;
+  // Per-chip default policy (H257): G13 legacy parts run the composed
+  // chain — their older Mesa contracts the perrow walk's chains despite
+  // NoContraction, so the fused raw kernel is not bit-exact there (jwm1
+  // free-run greedy identity 38.95% vs 100% on tiled G14 parts; TF
+  // agreement 99.53%). G14-class and newer parts (tiled kernel) keep the
+  // fused route. MLX_OMARCHY_GDN_DECODE_TILE overrides consistently with
+  // the dispatch-path selection.
+  const int tile_override = decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE");
+  const bool g13_legacy = tile_override < 0 && g13_legacy_stream(s);
+  return Dk != 128 || Dv != 128 || Hk != Hv || g13_legacy;
 }
 
 // Gradient of the gated delta update (upstream #4565): the fused backward
