@@ -24,6 +24,15 @@
 // final state store stay f32; the output store rounds to bf16 RNE, the same
 // store cast.comp applies everywhere. See receipts/2026-09-21-gdn-decode-fused.
 
+// GDN_COMPOSED_ORDER builds a separate kernel (the *Composed entries in
+// compute.h) that primitives.cpp dispatches only for flag bit 9 (A_log f32,
+// the Qwen3.5-9B raw route): C++-fallback rounding sites in the gate chain
+// and the walks, bit-identical to the composed chain. The default build
+// (no define) is the v0.7.26 source token-for-token: leave the
+// `#ifndef GDN_COMPOSED_ORDER` branches untouched. bf16-A_log models
+// (Qwen3.8 2B/4B) depend on their exact codegen, and restructuring shared
+// code changed their greedy output on G13 Mesa even with the same math.
+
 #version 460
 
 #extension GL_EXT_shader_16bit_storage : require
@@ -87,6 +96,43 @@ shared float sk[128];
 shared float sq[128];
 shared float sdelta[128];
 
+#ifdef GDN_COMPOSED_ORDER
+// Bit-9 gate chain in functions: glslang propagates `precise` backward
+// through everything feeding a precise value inside one function, so an
+// inline prologue in main() would inherit the walks' `precise` and stop
+// matching the composed kernels. See gated_delta_decode.comp for the
+// rounding-site rationale; these three functions are verbatim copies.
+float gdn_log1p_ew(float v) {
+  float u = 1.0f + v;
+  if (u == 1.0f) {
+    return v;
+  }
+  return log(u) * (v / (u - 1.0f));
+}
+
+float gdn_softplus_ew(float x) {
+  float value = max(0.0f, x);
+  if (!isnan(value) && !isinf(value)) {
+    value += gdn_log1p_ew(exp(-abs(0.0f - x)));
+  }
+  return value;
+}
+
+float gdn_g_composed(float x, float a_log) {
+  float sp = gdn_softplus_ew(x);
+  precise float e = exp(a_log);
+  precise float p = e * sp;
+  precise float n = -p;
+  precise float g = exp(n);
+  return g;
+}
+
+// sigmoid(b) rounded to bf16 as the Sigmoid kernel computes it (imprecise).
+float gdn_beta_ew(float b_in) {
+  return bf16_load(bf16_store(1.0f / (1.0f + exp(-b_in))));
+}
+
+#endif /* GDN_COMPOSED_ORDER */
 void main() {
   uint dk = params.matrix_m;
   uint dv = params.matrix_n;
@@ -112,8 +158,17 @@ void main() {
     // bf16 (the same roundings the eager chain applies before the kernel
     // widened the bf16 values exactly).
     float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+#ifndef GDN_COMPOSED_ORDER
     float beta_f = 1.0f / (1.0f + exp(-b_in));
     beta = bf16_load(bf16_store(beta_f));
+#else /* GDN_COMPOSED_ORDER */
+    if ((params.flags & 512u) != 0u) {
+      beta = gdn_beta_ew(b_in);
+    } else {
+      float beta_f = 1.0f / (1.0f + exp(-b_in));
+      beta = bf16_load(bf16_store(beta_f));
+    }
+#endif /* GDN_COMPOSED_ORDER */
     float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
     // A_log: flag bit 9 selects an f32 A_log (Qwen3.5-9B conversion) read
     // as two little-endian u16 words - the same f32 word the eager chain's
@@ -129,8 +184,13 @@ void main() {
     // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
     float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
     // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
+#ifndef GDN_COMPOSED_ORDER
     // bf16) and softplus(x) to bf16; replicate those roundings exactly.
+#else /* GDN_COMPOSED_ORDER */
+    // bf16); the widen is exact.
+#endif /* GDN_COMPOSED_ORDER */
     float x = bf16_load(bf16_store(a_in + dt));
+#ifndef GDN_COMPOSED_ORDER
     // softplus = logaddexp(0, x): the eager chain lowers nn.softplus to
     // LogAddExp, computed here with the elementwise kernel's exact
     // formula max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected
@@ -150,6 +210,22 @@ void main() {
     // exp(A_log) and the product stay f32, so no bf16 round here: the
     // bf16 roundings the eager path applies are on x, sp, and beta.
     g = exp(-(exp(a_log) * sp));
+#else /* GDN_COMPOSED_ORDER */
+    if ((params.flags & 512u) != 0u) {
+      // Bit 9 (f32 A_log) selects the models whose serving reference is
+      // the C++ raw fallback, whose softplus output stays f32.
+      g = gdn_g_composed(x, a_log);
+    } else {
+      // softplus = logaddexp(0, x) with the elementwise kernel's formula
+      // max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected ratio form,
+      // log(u) * x / (u - 1)), rounded to bf16 as the python eager chain
+      // rounds it (bf16-A_log models, Qwen3.8: their shipped numerics).
+      float u = 1.0f + exp(-abs(x));
+      float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+      float sp = bf16_load(bf16_store(max(x, 0.0f) + l1p));
+      g = exp(-(exp(a_log) * sp));
+    }
+#endif /* GDN_COMPOSED_ORDER */
   } else {
     g = bf16_load(g_buf.v[params.shape[0] + head]);
     beta = bf16_load(b_buf.v[params.aux_offset + head]);
@@ -157,6 +233,7 @@ void main() {
   uint head_base = head * dv * dk;
   uint row_base = head_base + row * dk;
 
+#ifdef GDN_COMPOSED_ORDER
   // Composed-chain order and rounding sites (the C++ raw fallback), with
   // precise on every product and add: without the decorations the older
   // G13 Mesa contracts these chains into fma and the fused kernel stops
@@ -164,25 +241,43 @@ void main() {
   // 38.95% vs jw16 100%). kv: s_g = state*g (rounded), term = s_g*k
   // (rounded), serial ascending sum from 0.0 (ReduceF32 single-chunk
   // order). Update: ns = s_g + delta*k, each op rounded separately.
+#endif /* GDN_COMPOSED_ORDER */
   float kv_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
+#ifndef GDN_COMPOSED_ORDER
+    kv_acc += s_in.v[params.shape[1] + row_base + i] * g * sk[i];
+#else /* GDN_COMPOSED_ORDER */
     precise float s_g = s_in.v[params.shape[1] + row_base + i] * g;
     precise float term = s_g * sk[i];
     kv_acc += term;
+#endif /* GDN_COMPOSED_ORDER */
   }
+#ifndef GDN_COMPOSED_ORDER
+  float delta = (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
+#else /* GDN_COMPOSED_ORDER */
   precise float d0 = bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc;
   precise float delta = d0 * beta;
+#endif /* GDN_COMPOSED_ORDER */
   sdelta[row] = delta;
   barrier();
 
   float o_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
+#ifndef GDN_COMPOSED_ORDER
+    float s = s_in.v[params.shape[1] + row_base + i] * g;
+    float ns = s + sdelta[row] * sk[i];
+#else /* GDN_COMPOSED_ORDER */
     precise float s_g = s_in.v[params.shape[1] + row_base + i] * g;
     precise float dk_term = delta * sk[i];
     precise float ns = s_g + dk_term;
+#endif /* GDN_COMPOSED_ORDER */
     s_out.v[params.shape[2] + head_base + row * dk + i] = ns;
+#ifndef GDN_COMPOSED_ORDER
+    o_acc += ns * sq[i];
+#else /* GDN_COMPOSED_ORDER */
     precise float o_term = ns * sq[i];
     o_acc += o_term;
+#endif /* GDN_COMPOSED_ORDER */
   }
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 }

@@ -797,6 +797,13 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNRasterG4,
   QmmPrefillCoopmatBF16X32FullNRasterG8,
   QmmPrefillCoopmatBF16X32FullNTwoN,
+  // GDN decode, composed-order specializations (the three decode shaders
+  // built with -DGDN_COMPOSED_ORDER=1): dispatched only for flag bit 9
+  // (A_log f32) so the default kernels stay the v0.7.26 binaries.
+  // Append-only profile ids.
+  GatedDeltaDecodeBF16Composed,
+  GatedDeltaDecodeBF16UntiledComposed,
+  GatedDeltaDecodeBF16PfComposed,
   Count,
 };
 

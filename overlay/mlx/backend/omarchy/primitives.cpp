@@ -11465,10 +11465,19 @@ void GatedDeltaUpdate::eval_gpu(
         decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
     const bool gdn_pf = gdn_pf_env && (params.shape[1] % 4u) == 0u &&
         (params.shape[2] % 4u) == 0u;
+    // Flag bit 9 (A_log f32) takes the composed-order specializations; the
+    // default kernels stay the v0.7.26 binaries for every other model.
+    const bool composed = (params.flags & 512u) != 0u;
+    const omarchy::ComputeKernel kernel = decode_tile
+        ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
+                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
+        : gdn_pf
+        ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed
+                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
+        : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
+                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled);
     encoder.dispatch_compute(
-        decode_tile ? omarchy::ComputeKernel::GatedDeltaDecodeBF16
-                    : (gdn_pf ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf
-                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled),
+        kernel,
         bindings,
         params,
         static_cast<uint32_t>(Hv),
