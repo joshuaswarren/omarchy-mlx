@@ -11272,11 +11272,14 @@ void GatedDeltaUpdate::eval_gpu(
       v.dtype() == bfloat16 && h0.dtype() == float32 &&
       outputs.at(0).dtype() == bfloat16 && outputs.at(1).dtype() == float32;
   if (raw_gates_mode) {
-    // Raw-gates contract: a/b/A_log/dt_bias bf16 (the Qwen3.8 checkpoint
-    // stores dt_bias bf16); decode only (the fast.cpp caller routes
+    // Raw-gates contract: a/b/dt_bias bf16 (the Qwen3.8 checkpoint);
+    // A_log bf16 or f32 (the Qwen3.5-9B conversion stores it f32 - the
+    // eager chain's astype(f32) makes the f32 word the exact same value
+    // the kernel reads); decode only (the fast.cpp caller routes
     // T > 1 to the precomputed-gates scan).
     fused_ready = fused_ready && T == 1 && a_in.dtype() == bfloat16 &&
-        b_in.dtype() == bfloat16 && A_log.dtype() == bfloat16 &&
+        b_in.dtype() == bfloat16 &&
+        (A_log.dtype() == bfloat16 || A_log.dtype() == float32) &&
         dt_bias.dtype() == bfloat16;
   } else {
     fused_ready = fused_ready && beta.dtype() == bfloat16;
@@ -11431,7 +11434,13 @@ void GatedDeltaUpdate::eval_gpu(
       // in_strides[0..1]; flag bit 8 selects the raw-gates prologue.
       params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
       params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+      // A_log f32 rides flag bit 9; the shader indexes u16 words, so the
+      // item offset doubles for an f32 A_log.
       params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
+      if (A_log.dtype() == float32) {
+        params.in_strides[0] *= 2u;
+        params.flags |= 512u;
+      }
       params.in_strides[1] =
           checked_item_offset(dt_bias, dt_bias.size(), tag, out);
       params.flags |= 8u;

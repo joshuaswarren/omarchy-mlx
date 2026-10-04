@@ -9,7 +9,11 @@ case "$PLAN_NAME" in
   wB) DF_PLAN="b-d128-r1-on:128:on4b;b-d128-r1-ctl:128:ctl4b;b-d128-r2-on:128:on4b;b-d128-r2-ctl:128:ctl4b;b-d128-r3-on:128:on4b;b-d128-r3-ctl:128:ctl4b;b-d128-r4-on:128:on4b;b-d128-r4-ctl:128:ctl4b;b-d128-r5-on:128:on4b;b-d128-r5-ctl:128:ctl4b" ;;
   wC) DF_PLAN="c-d256-r1-on:256:on4b;c-d256-r1-ctl:256:ctl4b;c-d256-r2-on:256:on4b;c-d256-r2-ctl:256:ctl4b;c-d256-r3-on:256:on4b;c-d256-r3-ctl:256:ctl4b;c-d256-r4-on:256:on4b;c-d256-r4-ctl:256:ctl4b;c-d256-r5-on:256:on4b;c-d256-r5-ctl:256:ctl4b" ;;
   wD) DF_PLAN="d-d512-r1-on:512:on4b;d-d512-r1-ctl:512:ctl4b;d-d512-r2-on:512:on4b;d-d512-r2-ctl:512:ctl4b;d-d512-r3-on:512:on4b;d-d512-r3-ctl:512:ctl4b;d-d512-r4-on:512:on4b;d-d512-r4-ctl:512:ctl4b;d-d512-r5-on:512:on4b;d-d512-r5-ctl:512:ctl4b" ;;
-  wE) DF_PLAN="e-ctl2-d64:64:ctl4b:3;e-d64-cand3:64:on4b:3" ;;
+  w9A) DF_PLAN="n9-d64:64:neu9b:1;9-d64-r1-ctl:64:ctl9b;9-d64-r1-on:64:on9b;9-d64-r2-ctl:64:ctl9b;9-d64-r2-on:64:on9b;9-d64-r3-ctl:64:ctl9b;9-d64-r3-on:64:on9b;9-d64-r4-ctl:64:ctl9b;9-d64-r4-on:64:on9b;9-d64-r5-ctl:64:ctl9b;9-d64-r5-on:64:on9b" ;;
+  w9B) DF_PLAN="9-d128-r1-on:128:on9b;9-d128-r1-ctl:128:ctl9b;9-d128-r2-on:128:on9b;9-d128-r2-ctl:128:ctl9b;9-d128-r3-on:128:on9b;9-d128-r3-ctl:128:ctl9b;9-d128-r4-on:128:on9b;9-d128-r4-ctl:128:ctl9b;9-d128-r5-on:128:on9b;9-d128-r5-ctl:128:ctl9b" ;;
+  w9C) DF_PLAN="9-d256-r1-on:256:on9b;9-d256-r1-ctl:256:ctl9b;9-d256-r2-on:256:on9b;9-d256-r2-ctl:256:ctl9b;9-d256-r3-on:256:on9b;9-d256-r3-ctl:256:ctl9b;9-d256-r4-on:256:on9b;9-d256-r4-ctl:256:ctl9b;9-d256-r5-on:256:on9b;9-d256-r5-ctl:256:ctl9b" ;;
+  w9D) DF_PLAN="9-d512-r1-on:512:on9b;9-d512-r1-ctl:512:ctl9b;9-d512-r2-on:512:on9b;9-d512-r2-ctl:512:ctl9b;9-d512-r3-on:512:on9b;9-d512-r3-ctl:512:ctl9b;9-d512-r4-on:512:on9b;9-d512-r4-ctl:512:ctl9b;9-d512-r5-on:512:on9b;9-d512-r5-ctl:512:ctl9b" ;;
+  w2A) DF_PLAN="n2-d64:64:neu2b:1;2-d64-r1-ctl:64:ctl2b;2-d64-r1-on:64:on2b;2-d64-r2-ctl:64:ctl2b;2-d64-r2-on:64:on2b;2-d64-r3-ctl:64:ctl2b;2-d64-r3-on:64:on2b;2-d64-r4-ctl:64:ctl2b;2-d64-r4-on:64:on2b;2-d64-r5-ctl:64:ctl2b;2-d64-r5-on:64:on2b" ;;
   *) echo "unknown plan $PLAN_NAME"; exit 2 ;;
 esac
 test ! -e /var/tmp/JW16_MAINTENANCE
