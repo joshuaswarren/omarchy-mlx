@@ -380,7 +380,8 @@ void translate_header(std::string& header) {
   // Metal-only includes and namespace usings have no GLSL meaning; kernels
   // that actually use the included APIs fail later on their own tokens.
   header = std::regex_replace(header, std::regex(R"(#include\s*[<\"][^>\"]*[>\"])"), "");
-  header = std::regex_replace(header, std::regex(R"(using\s+namespace\s+\w+\s*;)"), "");
+  header = std::regex_replace(
+      header, std::regex(R"(using\s+namespace\s+[A-Za-z0-9_:]+\s*;)"), "");
   replace_all(header, "using namespace metal;", "");
   replace_all(header, "metal::precise::", "");
   replace_all(header, "metal::fast::", "");
@@ -609,8 +610,32 @@ Translation translate_msl(
   replace_word(body, "device", "");
   replace_word(header, "device", "");
   body = std::regex_replace(body, std::regex(R"(#include\s*[<\"][^>\"]*[>\"])"), "");
-  body = std::regex_replace(body, std::regex(R"(using\s+namespace\s+\w+\s*;)"), "");
+  body = std::regex_replace(
+      body, std::regex(R"(using\s+namespace\s+[A-Za-z0-9_:]+\s*;)"), "");
   translate_c_style_casts(body);
+
+  // Metal implicitly narrows the uint thread attributes to int; GLSL does
+  // not. In int-declared assignments, wrap each builtin swizzle with int()
+  // so mixed arithmetic stays int, as the MSL source intended. Uses that
+  // must stay uint (grid guards) live in translator-generated guards and in
+  // uint-declared statements, which this leaves untouched.
+  {
+    std::istringstream lines(body);
+    std::string line;
+    std::string rebuilt;
+    const std::regex int_decl(R"(^\s*(?:const\s+)?int\s+[A-Za-z_]\w*\s*=.*)");
+    const std::regex swizzle(R"(gl_[A-Za-z]+\.[xyz])");
+    while (std::getline(lines, line)) {
+      if (std::regex_search(line, int_decl) &&
+          std::regex_search(line, swizzle)) {
+        line = std::regex_replace(
+            line, swizzle, "int($&)");
+      }
+      rebuilt += line;
+      rebuilt.push_back('\n');
+    }
+    body = rebuilt;
+  }
 
   // `const T* name = BUFFER;` re-declares a buffer base under another name.
   // Drop the statement: the parameter macro already provides that alias.
