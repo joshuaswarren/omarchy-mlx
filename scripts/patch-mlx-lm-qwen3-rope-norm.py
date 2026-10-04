@@ -14,8 +14,8 @@ rope, no scaling). Usage: python3 patch-mlx-lm-qwen3-rope-norm.py /venv
 import glob
 import sys
 
-IMPORT_OLD = "from __future__ import annotations\n"
-IMPORT_NEW = "from __future__ import annotations\nimport os\n"
+IMPORT_OLD = "from typing import Any, Dict, Optional, Union\n"
+IMPORT_NEW = "from typing import Any, Dict, Optional, Union\nimport os\n"
 
 NORM_OLD = """        queries, keys, values = self.q_proj(x), self.k_proj(x), self.v_proj(x)
 
