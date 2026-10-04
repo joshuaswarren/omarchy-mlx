@@ -1,0 +1,60 @@
+diff --git a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+index 60fed7b..0097aa1 100644
+--- a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+@@ -155,9 +155,25 @@ def _mdims(rows: int, padded: int) -> mx.array:
+     return _dims[key]
+ 
+ 
+-def available() -> bool:
+-    """Whether this GPU compiles and runs the int8 tensor-unit kernel."""
++def _native_op() -> bool:
++    """Whether this MLX build ships the omarchy-native ``mx.fast.int8_matmul`` (Vulkan W8A8)."""
++
++    return hasattr(mx.fast, "int8_matmul")
+ 
++
++def available() -> bool:
++    """Whether this GPU compiles and runs the int8 tensor-unit kernel (or the backend's native W8A8 op)."""
++
++    if _native_op():
++        try:
++            x = mx.zeros((TILE, TILE), dtype=mx.int8)
++            out = mx.fast.int8_matmul(
++                x, mx.ones((TILE, 1)), x, mx.ones((TILE,)), mx.zeros((TILE,)),
++                group=TILE, swiglu=False)
++            mx.eval(out)
++            return bool(out[0, 0] == 0.0)
++        except (RuntimeError, ValueError):
++            return False
+     try:
+         x = mx.zeros((TILE, TILE), dtype=mx.int8)
+         mx.eval(int8_linear(x, mx.ones((TILE, 1)), x, mx.ones((TILE,)), TILE, TILE))
+@@ -205,6 +221,13 @@ def int8_linear(xq: mx.array, xscale: mx.array, wq: mx.array, wscale: mx.array,
+     padded, k = xq.shape
+     n = wq.shape[0]
+     _check(padded, k, n, group)
++    if _native_op():
++        zero_bias = mx.zeros((n,), dtype=mx.float32)
++        out = mx.fast.int8_matmul(
++            xq, xscale, wq, wscale,
++            bias.astype(mx.float32) if bias is not None else zero_bias,
++            group=group, swiglu=False)
++        return out[:rows]
+     kind, extra = ("linear", []) if bias is None else ("linear_bias", [bias])
+     return _kernel(kind, n, k, group)(inputs=[xq, xscale, wq, wscale, *extra, _mdims(rows, padded)],
+                                       grid=(n // TILE * 256, padded // TILE, 1), threadgroup=(256, 1, 1),
+@@ -221,6 +244,13 @@ def int8_swiglu(xq: mx.array, xscale: mx.array, wq: mx.array, wscale: mx.array,
+     padded, k = xq.shape
+     n = wq.shape[0] // 2
+     _check(padded, k, n, k)
++    if _native_op():
++        zero_bias = mx.zeros((2 * n,), dtype=mx.float32)
++        out = mx.fast.int8_matmul(
++            xq, xscale, wq, wscale,
++            bias.astype(mx.float32) if bias is not None else zero_bias,
++            group=k, swiglu=True)
++        return out[:rows]
+     kind, extra = ("swiglu", []) if bias is None else ("swiglu_bias", [bias])
+     return _kernel(kind, n, k, k)(inputs=[xq, xscale, wq, wscale, *extra, _mdims(rows, padded)],
+                                   grid=(n // TILE * 256, padded // TILE, 1), threadgroup=(256, 1, 1),

@@ -1,0 +1,135 @@
+diff --git a/src/tensorfold/kernels/device.py b/src/tensorfold/kernels/device.py
+index 24650f1..cb1fea9 100644
+--- a/src/tensorfold/kernels/device.py
++++ b/src/tensorfold/kernels/device.py
+@@ -23,6 +23,40 @@ def generation() -> int:
+     return int(found.group(1)) if found else 0
+ 
+ 
++@functools.cache
++def custom_kernels() -> bool:
++    """Whether this backend runs ``mx.fast.metal_kernel`` custom kernels.
++
++    macOS Metal answers directly. Other MLX builds (Omarchy's Vulkan
++    backend) route the same Python API through their own shader path while
++    ``mx.metal.is_available()`` stays false, so the gate is answered by a
++    one-time canary kernel instead of by the backend's namespace.
++    """
++
++    if mx.default_device() != mx.gpu:
++        return False
++    if mx.metal.is_available():
++        return True
++    try:
++        canary = mx.fast.metal_kernel(
++            name="tensorfold_custom_kernel_gate",
++            input_names=["a"],
++            output_names=["o"],
++            source="o[thread_position_in_grid.x] = a[thread_position_in_grid.x] + 1.0f;",
++        )
++        out = canary(
++            inputs=[mx.zeros(4, dtype=mx.float32)],
++            output_shapes=[(4,)],
++            output_dtypes=[mx.float32],
++            grid=(4, 1, 1),
++            threadgroup=(4, 1, 1),
++            stream=mx.gpu,
++        )[0]
++        mx.eval(out)
++        return bool(out[3] == 1.0)
++    except Exception:
++        return False
++
+ def tensor_units() -> bool:
+     """Whether this GPU has the M5 generation's tensor units."""
+ 
+diff --git a/src/tensorfold/kernels/glm/flash/v1/fused.py b/src/tensorfold/kernels/glm/flash/v1/fused.py
+index f142873..dfc4294 100644
+--- a/src/tensorfold/kernels/glm/flash/v1/fused.py
++++ b/src/tensorfold/kernels/glm/flash/v1/fused.py
+@@ -9,6 +9,7 @@ import mlx.core as mx
+ 
+ from tensorfold.kernels.glm.flash.v1 import kernels as K
+ from tensorfold.kernels.glm.flash.v1 import widths as W
++from tensorfold.kernels import device
+ 
+ MAX_ROWS = 16
+ SQ_FMA = 0
+@@ -40,7 +41,7 @@ _kernels: dict[str, Any] = {}
+ 
+ 
+ def metal() -> bool:
+-    return mx.default_device() == mx.gpu and mx.metal.is_available()
++    return mx.default_device() == mx.gpu and device.custom_kernels()
+ 
+ 
+ def _kernel(name: str, source: str, inputs: list[str], outputs: list[str]) -> Any:
+diff --git a/src/tensorfold/kernels/glm/flash/v1/kda.py b/src/tensorfold/kernels/glm/flash/v1/kda.py
+index f0dae8a..94f5b19 100644
+--- a/src/tensorfold/kernels/glm/flash/v1/kda.py
++++ b/src/tensorfold/kernels/glm/flash/v1/kda.py
+@@ -282,7 +282,7 @@ TY = 32
+ 
+ 
+ def metal() -> bool:
+-    return mx.default_device() == mx.gpu and mx.metal.is_available()
++    return mx.default_device() == mx.gpu and device.custom_kernels()
+ 
+ 
+ def _kernel() -> Any:
+diff --git a/src/tensorfold/kernels/glm/flash/v1/kernels.py b/src/tensorfold/kernels/glm/flash/v1/kernels.py
+index f127bd9..64481c7 100644
+--- a/src/tensorfold/kernels/glm/flash/v1/kernels.py
++++ b/src/tensorfold/kernels/glm/flash/v1/kernels.py
+@@ -9,6 +9,7 @@ import mlx.core as mx
+ 
+ from tensorfold.kernels import inputs
+ from tensorfold.kernels.glm.flash.v1 import widths as W
++from tensorfold.kernels import device
+ 
+ # MLX's one-row 4-bit matvec a simdgroup lane (as Flash Next's qmv_rows, bit for bit), 16 inputs a 512 block
+ _HEADER = r"""
+@@ -348,7 +349,7 @@ _kernels: dict[str, Any] = {}
+ 
+ 
+ def metal() -> bool:
+-    return mx.default_device() == mx.gpu and mx.metal.is_available()
++    return mx.default_device() == mx.gpu and device.custom_kernels()
+ 
+ 
+ def _kernel(name: str, source: str, inputs: list[str], outputs: list[str], header: str = "") -> Any:
+diff --git a/src/tensorfold/kernels/glm/flash/v1/sparse_attention.py b/src/tensorfold/kernels/glm/flash/v1/sparse_attention.py
+index 9f28737..97f6508 100644
+--- a/src/tensorfold/kernels/glm/flash/v1/sparse_attention.py
++++ b/src/tensorfold/kernels/glm/flash/v1/sparse_attention.py
+@@ -79,7 +79,7 @@ _kernel_obj: dict[str, Any] = {}
+ 
+ 
+ def metal() -> bool:
+-    return mx.default_device() == mx.gpu and mx.metal.is_available()
++    return mx.default_device() == mx.gpu and device.custom_kernels()
+ 
+ 
+ def _kernel() -> Any:
+diff --git a/src/tensorfold/kernels/qwen/dense/v1/lane_gdn.py b/src/tensorfold/kernels/qwen/dense/v1/lane_gdn.py
+index 69ba55f..e567204 100644
+--- a/src/tensorfold/kernels/qwen/dense/v1/lane_gdn.py
++++ b/src/tensorfold/kernels/qwen/dense/v1/lane_gdn.py
+@@ -189,7 +189,7 @@ def _tn_array(t: int, n: int) -> mx.array:
+ 
+ def _step_kernel_kh():
+     global _STEP_KERNEL_KH
+-    if _STEP_KERNEL_KH is None and mx.metal.is_available():
++    if _STEP_KERNEL_KH is None and device.custom_kernels():
+         _STEP_KERNEL_KH = mx.fast.metal_kernel(
+             name="tensorfold_lane_gdn_step_kh",
+             input_names=["q", "k", "v", "log_g", "beta", "s0kq", "log_prev", "k_hist", "d_hist",
+@@ -219,7 +219,7 @@ def _gates(a_log: mx.array, dt_bias: mx.array, a: mx.array, b: mx.array) -> tupl
+ 
+ def _step_kernel():
+     global _STEP_KERNEL
+-    if _STEP_KERNEL is None and mx.metal.is_available():
++    if _STEP_KERNEL is None and device.custom_kernels():
+         _STEP_KERNEL = mx.fast.metal_kernel(
+             name="tensorfold_lane_gdn_step",
+             input_names=["q", "k", "v", "log_g", "beta", "s0kq", "log_prev", "k_hist", "d_hist",

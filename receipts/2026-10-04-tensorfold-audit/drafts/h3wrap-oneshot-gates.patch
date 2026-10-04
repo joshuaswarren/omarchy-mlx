@@ -1,0 +1,25 @@
+diff --git a/oneshot-setup.sh b/oneshot-setup.sh
+index 00c095b..0051a59 100755
+--- a/oneshot-setup.sh
++++ b/oneshot-setup.sh
+@@ -30,10 +30,16 @@ ok()  { echo "  ✓ $*"; }
+ step(){ echo; echo "==> $*"; }
+ 
+ step "Preflight"
+-[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || die "Apple silicon macOS only"
+-CHIP=$(sysctl -n machdep.cpu.brand_string); RAM=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+-ok "$CHIP, macOS $(sw_vers -productVersion), ${RAM} GB"
+-[ "$RAM" -ge 128 ] || die "needs 128 GB+ unified memory: the float32 adapter merge peaks at 103 GB (measured on 256 GB only)"
++if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
++  CHIP=$(sysctl -n machdep.cpu.brand_string); RAM=$(( $(sysctl -n hw.memsize) / 1073741824 ))
++  ok "$CHIP, macOS $(sw_vers -productVersion), ${RAM} GB"
++else
++  CHIP="unknown-$(uname -s)-$(uname -m)"; RAM="$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo 2>/dev/null || echo unknown)"
++  echo "  ! not Apple silicon macOS ($CHIP, ${RAM} GB): continuing; Metal-only steps skip themselves via the kernel gates"
++fi
++if [ "${RAM:-0}" -lt 128 ] 2>/dev/null; then
++  echo "  ! ${RAM} GB < 128 GB: the float32 adapter merge peaks at 103 GB (measured on 256 GB only); skip the merge or the engine refuses at run time if memory is short"
++fi
+ case "$CHIP" in *M5*) ok "M5: int8 kernels on the tensor units";;
+   *) echo "  ! $CHIP is not M5: the int8 kernels need Metal 4 tensor operations; without them the engine runs bfloat16 and the README numbers do not apply";; esac
+ export PATH="/opt/homebrew/bin:$PATH"
