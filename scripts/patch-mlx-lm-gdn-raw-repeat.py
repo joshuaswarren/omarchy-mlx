@@ -9,16 +9,21 @@ fall through to the composed per-token fallback: ~700 extra small
 dispatches per decoded token (AsType/Multiply/Sum/Subtract F32 soup, per
 the 2026-10-03 3-model census).
 
-This patch expands q/k to the value-head count before the dispatch
-(MLX_OMARCHY_GDN_RAW_REPEAT, default 1 = on since 2026-10-04: the
-order-matched fused kernel is bit-identical to the composed chain on
-captured operands and free-running greedy identity is 100% at d512; kill
-switch =0 restores the exact pre-land dispatch). The repeat is a bit-exact
-copy; the fused kernel's arithmetic matches the composed fallback's order
-and rounding sites, so per-op fp64 error is identical to composed.
-Teacher-forced gate at the land: 99.39% top-1 agreement over 5120
-positions, all 31 disagreements <= 1 bf16 ULP, ppl delta -0.049%.
-Idempotent; refuses unrecognized content. Usage: patch <venv>
+This patch expands q/k to the value-head count before the dispatch. The
+repeat is a bit-exact copy, and the fused kernel's gate chain and walks
+keep the composed fallback's rounding sites (per-call replay of live 9B
+operands: 288/288 calls bit-identical on the tiled, perrow_pf and perrow
+kernels).
+
+Gate MLX_OMARCHY_GDN_RAW_REPEAT: "1" expands on every part, "0" never
+expands (the exact composed dispatch). Unset: on, except G13 legacy parts
+(device_name contains G13 but not G13C), which keep the composed chain:
+the expansion route is unmeasured for bit-exactness on their older Mesa.
+This is the only per-chip GDN policy. GatedDeltaUpdate::use_fallback
+carries none, because it gates every GDN launch, not just this route.
+
+Idempotent; upgrades the previous release's block; refuses unrecognized
+content. Usage: patch <venv>
 """
 import glob
 import sys
@@ -34,9 +39,9 @@ DISPATCH_NEW = """    # mlx-omarchy decode fast-route (GQA repeat): the fused ra
     # kernel requires Hk == Hv (omarchy GatedDeltaUpdate::use_fallback);
     # expand q/k to the value-head count so Hk<Hv models take the fused
     # route instead of the composed per-token fallback. Gate:
-    # MLX_OMARCHY_GDN_RAW_REPEAT (default 0 = exact existing dispatch).
+    # MLX_OMARCHY_GDN_RAW_REPEAT (see _gdn_raw_repeat_on).
     if (
-        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1") == "1"
+        _gdn_raw_repeat_on()
         and use_kernel
         and q.shape[1] == 1
         and q.shape[-1] == 128
@@ -52,17 +57,30 @@ DISPATCH_NEW = """    # mlx-omarchy decode fast-route (GQA repeat): the fused ra
         return gated_delta_ops(q, k, v, g, beta, state, mask)
 """
 
+# The previous release's gate lines (env default "1", no chip policy).
+COND_PREV = '        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1") == "1"\n'
+COND_NEW = "        _gdn_raw_repeat_on()\n"
+NOTE_PREV = "    # MLX_OMARCHY_GDN_RAW_REPEAT (default 0 = exact existing dispatch).\n"
+NOTE_NEW = "    # MLX_OMARCHY_GDN_RAW_REPEAT (see _gdn_raw_repeat_on).\n"
 
-def patch_file(path, old, new, marker):
-    text = open(path).read()
-    if marker in text:
-        print("already patched:", path)
-        return
-    if old not in text:
-        sys.exit("unrecognized content in " + path + "; refusing to patch")
-    open(path, "w").write(text.replace(old, new, 1))
-    print("patched:", path)
+HELPER_ANCHOR = "\ndef gated_delta_update("
+HELPER = '''
+_GDN_G13_LEGACY = None
 
+
+def _gdn_raw_repeat_on():
+    # MLX_OMARCHY_GDN_RAW_REPEAT: "1" expands q/k on every part, "0" never.
+    # Unset: on, except G13 legacy parts, which keep the composed chain.
+    value = os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "")
+    if value:
+        return value == "1"
+    global _GDN_G13_LEGACY
+    if _GDN_G13_LEGACY is None:
+        name = str(mx.device_info().get("device_name", ""))
+        _GDN_G13_LEGACY = "G13" in name and "G13C" not in name
+    return not _GDN_G13_LEGACY
+
+'''
 
 venv = sys.argv[1] if len(sys.argv) > 1 else "."
 site = glob.glob(venv.rstrip("/") + "/lib/python3*/site-packages/mlx_lm/models")
@@ -72,15 +90,23 @@ site = site[0]
 
 g = site + "/gated_delta.py"
 text = open(g).read()
-if "MLX_OMARCHY_GDN_RAW_REPEAT" in text:
+if "def _gdn_raw_repeat_on(" in text:
     print("already patched:", g)
+    sys.exit(0)
+if text.count(COND_PREV) == 1 and text.count(NOTE_PREV) == 1:
+    text = text.replace(COND_PREV, COND_NEW, 1).replace(NOTE_PREV, NOTE_NEW, 1)
+elif "MLX_OMARCHY_GDN_RAW_REPEAT" in text:
+    sys.exit("unrecognized raw-repeat block in " + g + "; refusing to patch")
 else:
     if text.count(DISPATCH_OLD) != 1:
         sys.exit("dispatch anchor not unique in " + g + "; refusing to patch")
-    if IMPORT_NEW not in text:
-        if text.count(IMPORT_OLD) != 1:
-            sys.exit("unrecognized import block in " + g + "; refusing to patch")
-        text = text.replace(IMPORT_OLD, IMPORT_NEW, 1)
     text = text.replace(DISPATCH_OLD, DISPATCH_NEW, 1)
-    open(g, "w").write(text)
-    print("patched:", g)
+if IMPORT_NEW not in text:
+    if text.count(IMPORT_OLD) != 1:
+        sys.exit("unrecognized import block in " + g + "; refusing to patch")
+    text = text.replace(IMPORT_OLD, IMPORT_NEW, 1)
+if text.count(HELPER_ANCHOR) != 1:
+    sys.exit("gated_delta_update anchor not unique in " + g + "; refusing to patch")
+text = text.replace(HELPER_ANCHOR, HELPER + HELPER_ANCHOR, 1)
+open(g, "w").write(text)
+print("patched:", g)
