@@ -105,6 +105,15 @@ string — then rerun with `G7D_OVERLAY_CLI=<origin/main CLI>` — it must pass.
 
 ## Past harness pitfalls (why the conventions exist)
 
+0. **Fresh-dir wheel builds only** — every release wheel builds in a FRESH
+   work dir (`MLX_OMARCHY_WORK_DIR` pointing at a never-before-used path)
+   from a clean checkout of the cut sha. The in-source cmake build state
+   of a previous sha's build must never be reused: a mixed-object
+   `libmlx.so` looks like a working wheel until a GC-heavy process dies
+   in it (2026-10-04: a reused build dir produced a wheel whose failure
+   mode was blamed on the code for an hour before the pristine rebuild
+   settled it).
+
 1. **Gate-home naming split** — early batteries mixed `$TAG-gate-home` and
    per-gate homes, so g2/g3 ran against whatever install g1 last left and a
    "pass" proved nothing. One `$TAG`-prefixed scheme, every gate refuses
