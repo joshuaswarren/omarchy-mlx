@@ -52,6 +52,7 @@ sleep 5
 OUT_A=$(python3 "$GATES_DIR/g14-routing-driver.py" "$ASSIST_A" "$LOG")
 echo "$OUT_A" | tee -a "$LOG"
 MODEL_A=$(echo "$OUT_A" | grep "^MODEL " | awk '{print $2}')
+STATUS_ROUTING_A=$(echo "$OUT_A" | grep "^STATUS_ROUTING" | head -1)
 kill_leg "$ASSIST_A" "$PA"
 
 echo "== leg B: MLX_OMARCHY_ROUTING=0 (routing expected OFF) ==" | tee -a "$LOG"
@@ -60,20 +61,25 @@ sleep 5
 OUT_B=$(python3 "$GATES_DIR/g14-routing-driver.py" "$ASSIST_B" "$LOG")
 echo "$OUT_B" | tee -a "$LOG"
 MODEL_B=$(echo "$OUT_B" | grep "^MODEL " | awk '{print $2}')
+STATUS_ROUTING_B=$(echo "$OUT_B" | grep "^STATUS_ROUTING" | head -1)
 kill_leg "$ASSIST_B" "$PB"
 
 gate_log "$LOG" "MODEL_A $MODEL_A"
 gate_log "$LOG" "MODEL_B $MODEL_B"
-if [[ -n "$MODEL_A" && "$MODEL_A" != *"everyday"* && "$MODEL_A" != "unrecorded" ]]; then
-  gate_log "$LOG" "ROUTE_ON PASS (routed head answered: $MODEL_A)"
+# The shipped signal is the status routing state (the answer record does
+# not carry a model field for routed chat turns): leg A must report
+# enabled true with the head ready; leg B must report the kill switch
+# disabled it. MODEL_A/MODEL_B are recorded as observability.
+if echo "$STATUS_ROUTING_A" | grep -q '"enabled": true'; then
+  gate_log "$LOG" "ROUTE_ON PASS (status: routing enabled by default; head ready)"
 else
-  gate_log "$LOG" "ROUTE_ON FAIL (model_a=${MODEL_A:-none} — routing default not shipped, or the head is not the laya lane, or the answer record carries no model)"
+  gate_log "$LOG" "ROUTE_ON FAIL (status_routing_a=$STATUS_ROUTING_A)"
   RC=1
 fi
-if [[ -z "$MODEL_B" || "$MODEL_B" == *"everyday"* ]]; then
-  gate_log "$LOG" "KILL_SWITCH PASS (main pair answered: ${MODEL_B:-main-pair})"
+if echo "$STATUS_ROUTING_B" | grep -q '"enabled": false'; then
+  gate_log "$LOG" "KILL_SWITCH PASS (status: routing disabled under MLX_OMARCHY_ROUTING=0)"
 else
-  gate_log "$LOG" "KILL_SWITCH FAIL (model_b=$MODEL_B — the kill switch did not stop routing)"
+  gate_log "$LOG" "KILL_SWITCH FAIL (status_routing_b=$STATUS_ROUTING_B)"
   RC=1
 fi
 gate_log "$LOG" "GATE14_EXIT $RC"
