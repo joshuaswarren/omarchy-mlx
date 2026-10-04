@@ -1,0 +1,38 @@
+# Upstream: ml-explore/mlx 9c5d56902c677f44d3a632d3afbe95e48f2828b2 (#4585)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/backend/gpu/primitives.cpp b/mlx/backend/gpu/primitives.cpp
+index 268d6290..0bc19c81 100644
+--- a/mlx/backend/gpu/primitives.cpp
++++ b/mlx/backend/gpu/primitives.cpp
+@@ -246,8 +246,10 @@ void View::eval_gpu(const std::vector<array>& inputs, array& out) {
+   // - type size is the same
+   // - type size is smaller and the last axis is contiguous
+   // - the entire array is row contiguous
+-  if (ibytes == obytes || (obytes < ibytes && in.strides().back() == 1) ||
+-      in.flags().row_contiguous) {
++  // and the offset is a multiple of the output type size
++  if (in.offset() % obytes == 0 &&
++      (ibytes == obytes || (obytes < ibytes && in.strides().back() == 1) ||
++       in.flags().row_contiguous)) {
+     auto strides = in.strides();
+     for (int i = 0; i < static_cast<int>(strides.size()) - 1; ++i) {
+       strides[i] *= ibytes;
+diff --git a/python/tests/test_ops.py b/python/tests/test_ops.py
+index 7bda5c84..b3589580 100644
+--- a/python/tests/test_ops.py
++++ b/python/tests/test_ops.py
+@@ -4154,6 +4154,14 @@ class TestOps(mlx_tests.MLXTestCase):
+             a_out = out.view(mx.int32)
+             self.assertTrue(mx.array_equal(a_out, a, equal_nan=True))
+ 
++        # Byte offsets that are not a multiple of the new item size
++        a = mx.arange(64, dtype=mx.uint8)
++        a_np = np.arange(64, dtype=np.uint8)
++        for start in range(8):
++            out = a[start : start + 16].view(mx.int32)
++            expected = a_np[start : start + 16].view(np.int32)
++            self.assertTrue(np.array_equal(out + 0, expected))  # read in a kernel
++
+     def _hadamard(self, N):
+         # Matches scipy.linalg.hadamard
+         H = np.array([[1]], dtype=np.int64)
