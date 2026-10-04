@@ -733,8 +733,14 @@ MLX-Audio must pass one public speech workflow.
 `mlxcel` must pass one native Rust generation request.
 No application gate has started.
 
-## Release evidence
+## LoRA fine-tuning (tuner)
 
+| model class | status on T6021 host (v0.7.26 wheel + rope-vjp fix) |
+| --- | --- |
+| dense attention (Qwen3/Qwen3-4B-2507 class, q/k rope-norm fold) | TRAINING VERIFIED end to end: 10-iteration LoRA (rank 8) on the bundled mlx-lm tuner, loss 7.315 -> 2.884, adapter saved (`adapters.safetensors` sha256 ff7f5047…), greedy generation moves base -> adapter ("The capital of France is Paris." -> "Paris."), peak 2.444 GB train / 2.359 GB generate; zero CPU tensor dispatch on the traced training and both generation processes (`cpu_command_encoder_calls = 0`) |
+| hybrid GDN (Qwen3.5/Qwen3.8 class) | BLOCKED by a pre-existing backward defect independent of the rope-norm fold: `[rms_norm] (*weight) must have 1 dimension but has 0 dimensions.` during fused-graph backward (reproduces on the published v0.7.26 stack with `MLX_OMARCHY_ROPE_NORM_FUSE=0`; suspected RMSNormGated fallback weight slot in `mlx/fast.cpp`). The earlier fence `[RoPE::vjp] vjp through the fused rms-norm rope is not supported.` is FIXED (agent/m2lane-rope-vjp; doctest "rope_rms_norm vjp matches the composed chain and host differences" green on hardware); receipt receipts/2026-10-04-m2-lora-smoke/README.md |
+
+## Release evidence
 A Supported row must link every applicable record.
 
 (1) Link the source commit and wheel hash.
