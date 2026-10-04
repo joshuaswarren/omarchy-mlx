@@ -33,7 +33,7 @@ Baseline: MLX 0.32.3, commit `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` (`mlx.lo
 - CPU-only Linux dev-box build compiled `libmlx.a` and the targeted Omarchy test binaries. The default aggregate build reaches the unrelated `omarchy_ane_runtime_tests` link failure because the private ANE runtime implementation is unavailable in this checkout. A targeted build of `omarchy_capability_sim_tests`, `omarchy_runtime_tests`, `omarchy_primitive_tests`, `omarchy_fast_ops_tests`, and other selected targets succeeded.
 - Capability simulation profiles: all six profile invocations passed (7/7 test cases each).
 - `omarchy_runtime_tests`, `omarchy_fast_ops_tests`, and `omarchy_primitive_tests` returned success. This workstation has no qualifying Vulkan device; GPU cases were skipped, so these are not GPU-behavior proof.
-- Full standing M1 GPU battery and 2B/4B/9B output-digest comparison remain unverified. Main instructed that jw16 is being reinstalled; no jw16 interaction was attempted. Shaders and Vulkan runtime must be built/tested on jw16 after it is available. Do not release before that hardware gate and Main's v0.7.27-published confirmation.
+- Full standing M1 GPU battery and 2B/4B/9B output-digest comparison were first run on the M2 (jw14m2-linux) at the orchestrator's assignment because jw16 was being reinstalled; see the M2 sections below. v0.7.27 published at 2026-10-04T18:54:25Z; the freeze is over.
 - Two test-only `conv1d` calls in `overlay/tests/omarchy/test_conv_gemm_decomp.cpp` were corrected to pass explicit dilation/groups because the pinned source signature otherwise treated Stream as dilation and prevented compiling the suite.
 
 ## M2 hardware verification (jw14m2-linux, Apple M2 Max, 2026-10-04)
@@ -65,3 +65,29 @@ All 20 REF/CAND cells returned rc=0 with byte-equal digests. REF digests reprodu
 **Standing battery:** results appended below after the chained gpu-turn windows.
 
 ## M2 battery results
+
+Standing battery, backport wheel build (`bc0703c`), real Vulkan device (Apple M2 Max, G14X-class driver), via chained gpu-turn windows:
+
+- 25/26 suites green: runtime 42/42, primitive 104/104, matmul_family 23/23, kv_ops 16/16, indexing 57/57, reduce 34/34, shape 25/25, linalg 30/30, copy_offset 26/26, distributed 9/9, compiled_tape 13/13, fft_ops 19/19, fft_general 14/14, eig 9/9, take_fill 8/8, conv 13/13, complex 34/34, select_layout 13/13, fast_regression 2/2, scatter_determinism 21/21, eq_math 7/7, fused_chain 36/36, error_contract 3/3, ane_bundle 48/48.
+- `omarchy_capability_sim_tests`: all six profiles 7/7 (m1-honeykrisp-fork, m1-stock-no-coopmat, subgroup-size-64, small-shared-memory, no-cooperative-matrix, m1-g13-legacy).
+- `omarchy_fast_ops_tests`: 42 cases, 40 passed, **2 failed** — triaged below; **not caused by the backport** (identical failure on the origin/main base tree, same host, same driver; see A/B).
+
+## Failure triage: omarchy_fast_ops_tests (A/B vs origin/main base)
+
+Selected the three implicated cases (`-tc`) and ran them on BOTH trees on the same M2 host:
+
+| tree | result |
+|---|---|
+| origin/main `33ff979ed` (no backport patches), base build | rc=1 — 3 cases selected: 1 passed, 2 failed (39 skipped of the full suite) |
+| backport `bc0703c`-lineage build | rc=1 — same 3 cases: 1 passed (the allowed-to-fail SDPA case), 2 failed (identical rope cases) |
+
+1. **`fused rope offset sweep validates every tolerance band`** and **`fused rope refuses beyond the trig argument limit by name`**: pre-existing test/message drift on main, hardware-independent. `de34407c1` ("trig: one honest contract…") rewrote the gate's refusal text to "exceeds the **trig reduction** limit" (`overlay/mlx/backend/omarchy/primitives.cpp`, `rope_trig_gate`), but both test cases still grep the old string "exceeds the **built-in accuracy** limit" (0 occurrences of the old text in the gate on main; 3 in the tests). The gate itself fires correctly. Out of scope for this backport; the test strings need a follow-up fix on main.
+2. **`sdpa vjp dk dv match finite differences at rep=1 (path per gate)`**: the documented OPEN fused-VJP value defects (`docs/known-defects.md`, "SDPA backward fused VJP value defects at small rep=1 shapes") — doctest counts it allowed-to-fail. This M2 run is the first hardware probe of the `B=1, kL=5` signature (previously llvmpipe-only); the failure signatures match the pinned defects.
+
+Conclusion: no backport patch breaks any battery suite; nothing to drop. Zero-CPU evidence in this block: the release-path wheel compiles the CPU primitive fallback refusal in (`mlx-no-silent-cpu-fallback.patch`) and `omarchy_error_contract_tests` passed with it active; the full ecosystem workflow trace (Zero-CPU counter walk) was not re-run in this window and remains a release-gate item.
+
+## Limits
+
+- jw16 (M1 Max) was unavailable (reinstall); the standing battery ran on the M2 per the orchestrator's assignment. The 2B/4B digest REF side reproduces the jw16 receipt pins exactly, which cross-checks the M2 numerics against the jw16 pins where they overlap.
+- 9B d512 digest differs from the jw16-era `0315217f` pin on BOTH sides equally (host numerics); REF==CAND holds on every cell.
+- The two pre-existing rope test/string mismatches and the open SDPA VJP value defects remain open on main, unchanged by this landing.
