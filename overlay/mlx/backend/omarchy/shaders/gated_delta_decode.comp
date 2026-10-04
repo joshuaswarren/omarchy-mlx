@@ -106,11 +106,21 @@ shared float sq[128];
 shared float skg[128];
 shared float tile[ROWS * TILE_STRIDE];
 
-// kv = sum over ascending i of s[i] * (k[i] * g), contracted per step.
-float gdn_kv_walk(uint trow, uint dk) {
+// kv = the composed chain's order: state_next = state*g rounded per element,
+// kv term = state_next*k rounded per element, then the ReduceF32 serial
+// ascending sum from 0.0. Selected by bit 9 (C++-fallback-equivalent
+// arithmetic, the A_log-f32 models); the default walk keeps the
+// Metal-kernel-equivalent association (k*g precomputed).
+float gdn_kv_walk(uint trow, uint dk, float g, bool mlx_order) {
   float kv_acc = 0.0f;
   for (uint i = 0u; i < dk; ++i) {
-    kv_acc += tile[trow + i] * skg[i];
+    if (mlx_order) {
+      precise float s_g = tile[trow + i] * g;
+      precise float term = s_g * sk[i];
+      kv_acc += term;
+    } else {
+      kv_acc += tile[trow + i] * skg[i];
+    }
   }
   return kv_acc;
 }
@@ -204,16 +214,26 @@ void main() {
   if (lane < ROWS) {
     uint row = row0 + lane;
     uint trow = lane * TILE_STRIDE;
-    float kv_acc = gdn_kv_walk(trow, dk);
+    bool mlx_order = (params.flags & 512u) != 0u;
+    float kv_acc = gdn_kv_walk(trow, dk, g, mlx_order);
     precise float delta =
         (bf16_load(v_buf.v[params.aux_size + head * dv + row]) - kv_acc) * beta;
 
     float o_acc = 0.0f;
     for (uint i = 0u; i < dk; ++i) {
       precise float dk_term = delta * sk[i];
-      float ns = gdn_decay_add(tile[trow + i], g, dk_term);
+      precise float ns;
+      if (mlx_order) {
+        // Composed chain: ns = (state*g) + (delta*k), each product rounded
+        // separately, the add rounded - no fma contraction.
+        precise float s_g = tile[trow + i] * g;
+        ns = s_g + dk_term;
+      } else {
+        ns = gdn_decay_add(tile[trow + i], g, dk_term);
+      }
       tile[trow + i] = ns;
-      o_acc += ns * sq[i];
+      precise float o_term = ns * sq[i];
+      o_acc += o_term;
     }
     y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
   }
