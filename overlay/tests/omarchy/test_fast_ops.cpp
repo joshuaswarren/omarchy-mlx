@@ -639,9 +639,24 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
       return static_cast<double>(flat(objective(xq, p), stream)[0]);
     });
   }
+  // The FD differentiates x_pre's STORAGE order (B, T, H, D); the vjp
+  // gradient has the rope VIEW's order (B, H, T, D). Permute the FD into
+  // the view order before comparing — otherwise every t>=1 element is
+  // compared against the wrong row.
+  std::vector<double> fd_dx_view(xq.size(), 0.0);
+  for (int b = 0; b < B; ++b) {
+    for (int t = 0; t < T; ++t) {
+      for (int h = 0; h < H; ++h) {
+        for (int d = 0; d < D; ++d) {
+          fd_dx_view[((b * H + h) * T + t) * D + d] =
+              fd_dx[((b * T + t) * H + h) * D + d];
+        }
+      }
+    }
+  }
   // The bf16 kernel rounds its outputs; h=0.25 spans many ULPs, so the
   // central difference tracks the smooth derivative well inside 0.09.
-  require_close(flat(f_grads[0], stream), fd_dx, 0.09, "fused vjp dx finite difference");
+  require_close(flat(f_grads[0], stream), fd_dx_view, 0.09, "fused vjp dx finite difference");
   require_close(flat(f_grads[1], stream), fd_dw, 0.09, "fused vjp dw finite difference");
 }
 
