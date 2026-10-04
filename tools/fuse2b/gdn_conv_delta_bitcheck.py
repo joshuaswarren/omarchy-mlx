@@ -107,8 +107,10 @@ def case(name, a_log_dtype=mx.bfloat16, seed_salt=""):
     }
     if not all(row[k] for k in
                ("out_bit_identical", "ring_bit_identical", "state_bit_identical")):
-        on = np.array(r_out, dtype=np.float32) - np.array(f_out, dtype=np.float32)
-        row["out_max_abs_diff"] = float(np.abs(on).max())
+        for nm, r, f in (("out", r_out, f_out), ("ring", r_ring, f_ring), ("state", r_state, f_state)):
+            rd = np.array(r.astype(mx.float32), dtype=np.float64)
+            fd = np.array(f.astype(mx.float32), dtype=np.float64)
+            row[nm + "_max_abs_diff"] = float(np.abs(rd - fd).max())
     results[name] = row
     print(json.dumps(row))
 
