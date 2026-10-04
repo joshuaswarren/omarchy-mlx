@@ -1,0 +1,441 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused causal-prefill scaled-dot-product attention for head_dim=256, GQA,
+// bf16 storage. Replaces the composed graph (MatmulF32CoopmatQkBF16 ->
+// softmax_suffix -> MatmulF32CoopmatPvBF16) with one dispatch on the shapes
+// the omarchy backend's prefill attention currently serves (Qwen3.5-2B/9B
+// 4-bit affine: head_dim=256, GQA 8/2 or 16/4, q_len>=2 causal prefill,
+// no array mask, no sinks, !output_logsumexp). The per-row f32 max / l
+// accumulators and the per-row (Q_TILE, D_v) output live in registers
+// across the key-axis sweep, so the materialized S intermediate
+// (D_k x T_q bf16 + f32 scores) and the round trip disappear.
+//
+// Algorithm: flash-attention 2 (Dao et al. 2022) outer/inner tiling.
+// Q_TILE=16 query rows per workgroup, K_TILE=32 keys per inner step,
+// D_v=256 per output row. Shared-mem footprint (Q bf16 8 KiB, K/V bf16
+// 16 KiB reused, P f32 2 KiB = 26 KiB total) fits the G13/G14 device
+// 32 KiB shared-memory limit with margin.
+//
+// The bf16 store uses the cast.comp round-to-nearest-even helper
+// (uintBitsToFloat((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16u)), so
+// the stored output matches the composed graph's bf16 cast word-for-word
+// for every input the dispatch gate accepts.
+//
+// The dispatch gate mirrors ScaledDotProductAttention::use_fallback:
+// bf16, head_dim==256, GQA (heads % kv_heads == 0), causal, no array
+// mask, no sinks, !output_logsumexp, kv_len >= q_len, bh<=65535 and
+// bh*q_len<=65535. Out-of-gate prefill (e.g. fp16 input, head_dim 128)
+// keeps the composed graph; the same composition this kernel
+// reproduces. The two existing decode arms (SdpaDecodeNativeBF16Hd256
+// for q_len=1, the composed graph for the rest) are unchanged.
+//
+// Translator-allowed subset: buffers, threadgroup memory, barriers,
+// subgroup reductions (max/add), bf16 loads/stores via uint16_t views,
+// fma. No simdgroup_matrix; the inner K_TILE loop uses a scalar dot
+// product against the staged Q and K_TILE, then a scalar P x V dot.
+// The workgroup is 32 threads, so each lane owns one (or a small
+// block of) query rows; the per-row max / sum reductions collect
+// directly into one lane per row (one row per lane when Q_TILE==32,
+// two rows per lane when Q_TILE==16; the second-row reduction uses
+// a shared-mem cross-lane exchange via the s_p row's first column).
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+#ifndef SDPA_DIM
+#define SDPA_DIM 256u
+#endif
+// Query tile per workgroup. 16 rows keep the per-row f32 (D_v=256)
+// output accumulator (16 * 256 * 4 = 16 KiB) at half the register
+// budget; the bf16 Q stage is 16 * 256 * 2 = 8 KiB. Per-row m and l
+// live in scalar registers; the row_o[] per-row lives across 16
+// f32 values, comfortably register-resident on G13/G14.
+const uint Q_TILE = 16u;
+// Key tile per inner step. 32 keys * 256 head_dim * 2 bytes (bf16
+// stage) = 16 KiB, reused for K then V. K_TILE=32 means T_k/32
+// inner steps (T_k=1024 -> 32 steps; T_k=2048 -> 64 steps); the
+// per-step QK^T inner loop is 16 rows * 32 keys * 256 dim = 131K
+// fma and the PV loop is 16 rows * 32 keys * 256 dim = 131K fma.
+const uint K_TILE = 32u;
+const uint SIMD = 32u;
+
+layout(set = 0, binding = 0, std430) readonly buffer Query {
+  uint16_t values[];
+} query_data;
+layout(set = 0, binding = 1, std430) readonly buffer Key {
+  uint16_t values[];
+} key_data;
+layout(set = 0, binding = 2, std430) readonly buffer Value {
+  uint16_t values[];
+} value_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const float FINITE_MIN = -3.4028234663852886e38;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16u);
+}
+
+shared uint16_t s_q[Q_TILE * SDPA_DIM];
+shared uint16_t s_k[K_TILE * SDPA_DIM];
+shared float s_p[Q_TILE * K_TILE];
+
+void main() {
+  const uint lane = gl_LocalInvocationID.x;
+  const uint group_q = gl_WorkGroupID.x;   // q_row tile
+  const uint head_bh = gl_WorkGroupID.y;   // flat (B * H_q)
+
+  const uint q_rows_total = params.matrix_m;  // T_q
+  const uint k_total = params.matrix_k;      // T_k
+  const uint q_start = group_q * Q_TILE;
+  if (q_start >= q_rows_total) {
+    return;
+  }
+  const uint q_count = min(Q_TILE, q_rows_total - q_start);
+
+  const uint q_b = head_bh / params.matrix_n;  // batch
+  const uint q_h = head_bh - q_b * params.matrix_n;  // head
+  // GQA: heads == kv_heads * repeats. The dispatch stores `repeats`
+  // in shape[0] so a workgroup's q head maps to the kv head
+  // kv_h_idx = q_h / repeats. The single-head (no GQA) path has
+  // repeats == 1 and kv_h_idx == q_h.
+  const uint repeats = max(1u, params.shape[0]);
+  const uint kv_h_idx = q_h / repeats;
+
+  // Each lane owns the rows [2*lane, 2*lane + 1] when Q_TILE=16 < SIMD.
+  // The two-row reduction collects via a shared-mem exchange at the
+  // end of each tile.
+  const uint my_row0 = 2u * lane;
+  const uint my_row1 = 2u * lane + 1u;
+  const bool row0_valid = my_row0 < q_count;
+  const bool row1_valid = my_row1 < q_count;
+
+  // Load this workgroup's Q block into shared once. Q is reused on
+  // every K_TILE inner step, so the bf16 stage pays for itself.
+  // Stride layout (matches the dispatch):
+  //   in_strides[0] = Q batch stride
+  //   shape[1]      = Q head stride
+  //   in_strides[1] = Q row stride
+  //   in_strides[3] = 1 (Q dim stride; gate enforces 1)
+  for (uint i = lane; i < Q_TILE * SDPA_DIM; i += SIMD) {
+    const uint r = i / SDPA_DIM;
+    const uint d = i - r * SDPA_DIM;
+    if (r < q_count) {
+      const uint q_token = q_start + r;
+      const uint q_off = params.lhs_offset +
+          q_b * params.in_strides[0] +
+          q_h * params.shape[1] +
+          q_token * params.in_strides[1] +
+          d * params.in_strides[3];
+      s_q[i] = query_data.values[q_off];
+    } else {
+      s_q[i] = uint16_t(0u);
+    }
+  }
+  barrier();
+
+  // Per-row running stats, one set per owned row. Initialized so the
+  // first K_TILE can fold unconditionally: rescale = 0 when row_max
+  // is -inf, so the running output contributes nothing on the first
+  // tile.
+  float row0_max = FINITE_MIN;
+  float row0_sum = 0.0;
+  float row1_max = FINITE_MIN;
+  float row1_sum = 0.0;
+  // Per-row (D_v) output accumulators, register-resident across the
+  // key-axis sweep. Two rows per lane.
+  float row0_o[SDPA_DIM];
+  float row1_o[SDPA_DIM];
+  for (uint d = 0; d < SDPA_DIM; ++d) {
+    row0_o[d] = 0.0;
+    row1_o[d] = 0.0;
+  }
+
+  // Causal: a query at token q can only see keys at token <= q. The
+  // composed graph's causal_offset rides shape[3] as a signed u32
+  // (k_len - q_len, two's complement).
+  int causal_off = int(params.shape[3]);
+
+  for (uint k0 = 0; k0 < k_total; k0 += K_TILE) {
+    const uint k_count = min(K_TILE, k_total - k0);
+
+    // Stage K_TILE x D_k of K (bf16) into s_k.
+    // Stride layout:
+    //   in_strides[0] = K batch stride (== Q batch stride on the
+    //     prompt-prefill cache layout; the dispatch stores the
+    //     single shared batch stride here)
+    //   shape[2]      = K head stride (== V head stride)
+    //   in_strides[2] = K row stride
+    //   in_strides[3] = 1 (K dim stride; gate enforces 1)
+    for (uint i = lane; i < K_TILE * SDPA_DIM; i += SIMD) {
+      const uint r = i / SDPA_DIM;
+      const uint d = i - r * SDPA_DIM;
+      if (r < k_count) {
+        const uint k_row = k0 + r;
+        const uint k_off = params.rhs_offset +
+            q_b * params.in_strides[0] +
+            kv_h_idx * params.shape[2] +
+            k_row * params.in_strides[2] +
+            d * params.in_strides[3];
+        s_k[i] = key_data.values[k_off];
+      } else {
+        s_k[i] = uint16_t(0u);
+      }
+    }
+    barrier();
+
+    // Compute the (Q_TILE, K_TILE) score tile. Each lane owns two
+    // rows; the inner K_TILE loop is a per-row dot product against
+    // the bf16-staged Q and K, widened to f32 at the fma. The
+    // masked (causal-out-of-range) scores get FINITE_MIN so the
+    // online softmax's exp(score - row_max) contributes 0 and the
+    // row_max never picks them up.
+    if (row0_valid) {
+      const uint r = my_row0;
+      const uint q_token = q_start + r;
+      const int admissible = int(q_token) + causal_off;
+      for (uint c = 0; c < k_count; ++c) {
+        const int k_idx = int(k0) + int(c);
+        if (k_idx > admissible) {
+          s_p[r * K_TILE + c] = FINITE_MIN;
+          continue;
+        }
+        float acc = 0.0;
+        for (uint d = 0; d < SDPA_DIM; d += 8u) {
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 0u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 0u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 1u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 1u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 2u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 2u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 3u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 3u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 4u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 4u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 5u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 5u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 6u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 6u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 7u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 7u]), acc);
+        }
+        // alpha rides the same scaling the composition's q*scale pass
+        // applies; the q*scale is a single f32 product, so the bf16
+        // scores are widened to f32, multiplied by alpha once, and
+        // feed softmax in f32.
+        s_p[r * K_TILE + c] = acc * params.alpha;
+      }
+    }
+    if (row1_valid) {
+      const uint r = my_row1;
+      const uint q_token = q_start + r;
+      const int admissible = int(q_token) + causal_off;
+      for (uint c = 0; c < k_count; ++c) {
+        const int k_idx = int(k0) + int(c);
+        if (k_idx > admissible) {
+          s_p[r * K_TILE + c] = FINITE_MIN;
+          continue;
+        }
+        float acc = 0.0;
+        for (uint d = 0; d < SDPA_DIM; d += 8u) {
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 0u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 0u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 1u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 1u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 2u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 2u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 3u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 3u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 4u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 4u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 5u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 5u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 6u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 6u]), acc);
+          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 7u]),
+              bf16_load(s_k[c * SDPA_DIM + d + 7u]), acc);
+        }
+        s_p[r * K_TILE + c] = acc * params.alpha;
+      }
+    }
+    barrier();
+
+    // Online softmax update for both owned rows.
+    for (uint rr = 0u; rr < 2u; ++rr) {
+      const uint r = (rr == 0u) ? my_row0 : my_row1;
+      const bool valid = (rr == 0u) ? row0_valid : row1_valid;
+      if (!valid) continue;
+      float tile_max = FINITE_MIN;
+      for (uint c = 0; c < k_count; ++c) {
+        float v = s_p[r * K_TILE + c];
+        if (v > tile_max) tile_max = v;
+      }
+      float old_max = (rr == 0u) ? row0_max : row1_max;
+      float new_max = max(old_max, tile_max);
+      float tile_sum = 0.0;
+      for (uint c = 0; c < k_count; ++c) {
+        tile_sum += exp(s_p[r * K_TILE + c] - new_max);
+      }
+      float rescale = (old_max > FINITE_MIN) ? exp(old_max - new_max) : 0.0;
+      float new_sum = rescale * ((rr == 0u) ? row0_sum : row1_sum) + tile_sum;
+      if (rr == 0u) {
+        for (uint d = 0; d < SDPA_DIM; ++d) {
+          row0_o[d] = rescale * row0_o[d];
+        }
+        row0_max = new_max;
+        row0_sum = new_sum;
+      } else {
+        for (uint d = 0; d < SDPA_DIM; ++d) {
+          row1_o[d] = rescale * row1_o[d];
+        }
+        row1_max = new_max;
+        row1_sum = new_sum;
+      }
+    }
+    barrier();
+
+    // Stage V (K_TILE x D_v, bf16) into s_k (K is already consumed).
+    // Same stride layout as K; the kv head index rides kv_h_idx =
+    // q_h / repeats via the GQA regroup.
+    for (uint i = lane; i < K_TILE * SDPA_DIM; i += SIMD) {
+      const uint r = i / SDPA_DIM;
+      const uint d = i - r * SDPA_DIM;
+      if (r < k_count) {
+        const uint v_row = k0 + r;
+        const uint v_off = params.aux_offset +
+            q_b * params.in_strides[0] +
+            kv_h_idx * params.shape[2] +
+            v_row * params.in_strides[2] +
+            d * params.in_strides[3];
+        s_k[i] = value_data.values[v_off];
+      } else {
+        s_k[i] = uint16_t(0u);
+      }
+    }
+    barrier();
+
+    // Fold exp(s_p - row_max) * V into row_o for both owned rows.
+    for (uint rr = 0u; rr < 2u; ++rr) {
+      const uint r = (rr == 0u) ? my_row0 : my_row1;
+      const bool valid = (rr == 0u) ? row0_valid : row1_valid;
+      if (!valid) continue;
+      const float row_max_v = (rr == 0u) ? row0_max : row1_max;
+      for (uint c = 0; c < k_count; ++c) {
+        float w = exp(s_p[r * K_TILE + c] - row_max_v);
+        if (w == 0.0) continue;
+        if (rr == 0u) {
+          for (uint d = 0; d < SDPA_DIM; d += 8u) {
+            row0_o[d + 0u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 0u]),
+                row0_o[d + 0u]);
+            row0_o[d + 1u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 1u]),
+                row0_o[d + 1u]);
+            row0_o[d + 2u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 2u]),
+                row0_o[d + 2u]);
+            row0_o[d + 3u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 3u]),
+                row0_o[d + 3u]);
+            row0_o[d + 4u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 4u]),
+                row0_o[d + 4u]);
+            row0_o[d + 5u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 5u]),
+                row0_o[d + 5u]);
+            row0_o[d + 6u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 6u]),
+                row0_o[d + 6u]);
+            row0_o[d + 7u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 7u]),
+                row0_o[d + 7u]);
+          }
+        } else {
+          for (uint d = 0; d < SDPA_DIM; d += 8u) {
+            row1_o[d + 0u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 0u]),
+                row1_o[d + 0u]);
+            row1_o[d + 1u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 1u]),
+                row1_o[d + 1u]);
+            row1_o[d + 2u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 2u]),
+                row1_o[d + 2u]);
+            row1_o[d + 3u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 3u]),
+                row1_o[d + 3u]);
+            row1_o[d + 4u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 4u]),
+                row1_o[d + 4u]);
+            row1_o[d + 5u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 5u]),
+                row1_o[d + 5u]);
+            row1_o[d + 6u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 6u]),
+                row1_o[d + 6u]);
+            row1_o[d + 7u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 7u]),
+                row1_o[d + 7u]);
+          }
+        }
+      }
+    }
+    barrier();
+  }
+
+  // Final normalize and bf16 store. row_sum > 0 (at least one
+  // admissible key per row in causal mode), so 1/row_sum is finite.
+  if (row0_valid) {
+    const uint r = my_row0;
+    const float inv_sum = 1.0 / row0_sum;
+    const uint q_token = q_start + r;
+    for (uint d = 0; d < SDPA_DIM; ++d) {
+      const uint out_off = params.output_offset +
+          q_b * params.out_strides[0] +
+          q_h * params.out_strides[1] +
+          q_token * params.out_strides[2] +
+          d * params.out_strides[3];
+      output_data.values[out_off] =
+          bf16_store(row0_o[d] * inv_sum);
+    }
+  }
+  if (row1_valid) {
+    const uint r = my_row1;
+    const float inv_sum = 1.0 / row1_sum;
+    const uint q_token = q_start + r;
+    for (uint d = 0; d < SDPA_DIM; ++d) {
+      const uint out_off = params.output_offset +
+          q_b * params.out_strides[0] +
+          q_h * params.out_strides[1] +
+          q_token * params.out_strides[2] +
+          d * params.out_strides[3];
+      output_data.values[out_off] =
+          bf16_store(row1_o[d] * inv_sum);
+    }
+  }
+}

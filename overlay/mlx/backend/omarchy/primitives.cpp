@@ -13369,6 +13369,93 @@ void ScaledDotProductAttention::eval_gpu(
         params.matrix_m);
     return;
   }
+
+  // Fused flash-2 prefill attention at head_dim=256 GQA bf16 causal
+  // (shaders/sdpa_prefill_flash256.comp -DSDPA_DIM=256). Engages on
+  // the shapes the composed graph would otherwise route to
+  // MatmulF32CoopmatQkBF16 + softmax_suffix + MatmulF32CoopmatPvBF16
+  // (the bf16_direct path below) — same input/output contract, same
+  // bf16 storage, same alpha, but one dispatch with no materialized
+  // S intermediate and no round trip through the scores buffer.
+  // Gate: bf16 in/out, head_dim==256, GQA, causal prefill, no array
+  // mask, no sinks, !output_logsumexp, kv_len >= q_len, and the
+  // composed graph's bh<=65535 + bh*q_len<=65535 grid limit. The
+  // kill switch MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 keeps the
+  // composed graph for regression; MLX_OMARCHY_SDPA_PREFILL_FLASH256
+  // unset (default) engages the kernel on the gate.
+  static const bool prefill_flash_env =
+      std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH256") == nullptr ||
+      omarchy::env_flag("MLX_OMARCHY_SDPA_PREFILL_FLASH256");
+  const bool prefill_flash_ready = prefill_flash_env &&
+      q.dtype() == bfloat16 && v.dtype() == bfloat16 &&
+      out.dtype() == bfloat16 && head_dim == 256 && v_dim == 256 &&
+      repeats >= 1 && (heads % kv_heads) == 0 &&
+      do_causal_ && inputs.size() == 3 && !has_sinks_ &&
+      !output_logsumexp_ && q_len >= 2 && k_len >= uint32_t(q_len) &&
+      batch == 1;
+  if (prefill_flash_ready) {
+    const auto& flash_caps = encoder.device().capabilities();
+    constexpr uint32_t kFlashSharedBytes =
+        (16u * 256u + 32u * 256u) * 2u + 16u * 32u * 4u;  // ~26 KiB
+    const int64_t bh = static_cast<int64_t>(batch) * heads;
+    if (flash_caps.subgroup_size == 32u &&
+        flash_caps.max_compute_work_group_invocations >= 32u &&
+        flash_caps.max_compute_work_group_size[0] >= 32u &&
+        flash_caps.max_compute_shared_memory_size >= kFlashSharedBytes &&
+        bh <= 65535 && bh * q_len <= 65535) {
+      out.set_data(allocate_omarchy(out.nbytes()));
+      omarchy::ComputeParams params;
+      params.count = checked_u32(out.size(), tag, out);
+      params.matrix_m = checked_u32(q_len, tag, out);
+      params.matrix_n = checked_u32(static_cast<uint32_t>(heads), tag, out);
+      params.matrix_k = checked_u32(k_len, tag, out);
+      params.alpha = scale_;
+      params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+      params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+      params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+      params.output_offset = checked_item_offset(out, out.size(), tag, out);
+      // Stride layout: each operand has its own batch/head/row
+      // strides; Q, K, V live in separate buffers with separate
+      // head axes. Pack as
+      //   shape[0] = repeats (GQA regroup)
+      //   shape[1] = Q head stride
+      //   shape[2] = K head stride (== V head stride)
+      //   shape[3] = causal_offset (k_len - q_len as signed u32)
+      //   in_strides[0] = Q batch stride (== K batch stride, == V
+      //     batch stride on the prompt-prefill cache layout)
+      //   in_strides[1] = Q row stride
+      //   in_strides[2] = K row stride (== V row stride)
+      //   in_strides[3] = K dim stride (== 1 by the dispatch gate)
+      // The shader adds a per-dim `* 1`; the gate keeps the dim
+      // stride = 1 for Q, K, V.
+      params.shape[0] = checked_u32(static_cast<uint32_t>(repeats), tag, out);
+      params.shape[1] = checked_u32(q.strides()[1], tag, out);
+      params.shape[2] = checked_u32(k.strides()[1], tag, out);
+      params.shape[3] = static_cast<uint32_t>(
+          static_cast<int32_t>(static_cast<int>(k_len) - q_len));
+      params.in_strides[0] = checked_u32(q.strides()[0], tag, out);
+      params.in_strides[1] = checked_u32(q.strides()[2], tag, out);
+      params.in_strides[2] = checked_u32(k.strides()[2], tag, out);
+      params.in_strides[3] = checked_u32(k.strides()[3], tag, out);
+      // out_strides mirror the (B, H, T_q, D_v) output.
+      params.out_strides[0] = checked_u32(out.strides()[0], tag, out);
+      params.out_strides[1] = checked_u32(out.strides()[1], tag, out);
+      params.out_strides[2] = checked_u32(out.strides()[2], tag, out);
+      params.out_strides[3] = checked_u32(out.strides()[3], tag, out);
+      std::array<omarchy::ComputeBinding, 4> bindings{
+          binding(q), binding(k), binding(v), binding(out)};
+      const uint32_t q_tiles = (static_cast<uint32_t>(q_len) + 16u - 1u) / 16u;
+      const uint32_t grid_y = static_cast<uint32_t>(bh);
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaPrefillFlash256BF16,
+          bindings,
+          params,
+          q_tiles,
+          grid_y,
+          1u);
+      return;
+    }
+  }
   // GQA regroup as pure stride views, so a non-contiguous cache
   // slice rides its own strides straight into the matmul;
   // reshape_in_eval would copy - it only views row-contiguous

@@ -282,6 +282,7 @@
 #include "sdpa_decode_native_f16.h"
 #include "sdpa_decode_native_bf16.h"
 #include "sdpa_decode_native_bf16_hd256.h"
+#include "sdpa_prefill_flash256_bf16.h"
 #include "sdpa_decode_native_bf16_hd32.h"
 #include "sdpa_decode_native_bf16_hd96.h"
 #include "sdpa_decode_native_bf16_hd128.h"
@@ -1466,6 +1467,9 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_native_bf16, sdpa_decode_native_bf16_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd256:
       return {sdpa_decode_native_bf16_hd256, sdpa_decode_native_bf16_hd256_size};
+    case ComputeKernel::SdpaPrefillFlash256BF16:
+      return {
+          sdpa_prefill_flash256_bf16, sdpa_prefill_flash256_bf16_size};
     case ComputeKernel::SdpaDecodeNativeTwoPassP1F16:
       return {sdpa_decode_native_p1_f16, sdpa_decode_native_p1_f16_size};
     case ComputeKernel::SdpaDecodeNativeTwoPassP2F16:

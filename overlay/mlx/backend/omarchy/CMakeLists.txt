@@ -327,6 +327,7 @@ omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGR
 omarchy_shader(sdpa_decode_native_f16 shaders/sdpa_decode_native.comp)
 omarchy_shader(sdpa_decode_native_bf16 shaders/sdpa_decode_native.comp -DBF16_IO=1)
 omarchy_shader(sdpa_decode_native_bf16_hd256 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=256)
+omarchy_shader(sdpa_prefill_flash256_bf16 shaders/sdpa_prefill_flash256.comp -DSDPA_DIM=256)
 # Attn128: the composition-exact bf16 arm compiles per query width; the f16
 # arm compiles per 64-wide dim-pair count (PAIRS), so head_dim 128 has an
 # f16 twin and every multiple of 32 up to 256 has a bf16 twin.
