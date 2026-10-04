@@ -817,6 +817,32 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
   QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // Bonsai 1-bit / 2-bit decode kernels (shaders/bonsai_qmv_q1.comp,
+  // shaders/bonsai_qmv_wide.comp, shaders/bonsai_dequant_q1.comp):
+  // omarchy-native Vulkan equivalents of oMLX custom_kernels/bonsai
+  // (1-bit affine and small-batch M=2..5 paths the shipped
+  // qmm_vec.comp q4 word shaders do not cover; uint8 packed Bonsai
+  // weights are not addressable through the existing uint32 word
+  // reader). Append-only profile ids.
+  BonsaiQ1QmvSubgroupF32,
+  BonsaiQ1QmvSubgroupF16,
+  BonsaiQ1QmvSubgroupBF16,
+  BonsaiQ1QmvTreeF32,
+  BonsaiQ1QmvTreeF16,
+  BonsaiQ1QmvTreeBF16,
+  BonsaiQ1DequantF32,
+  BonsaiQ1DequantF16,
+  BonsaiQ1DequantBF16,
+  // Wide (M=2..5) Bonsai decode, bits=1 or bits=2. ROWS_PER_SLOT in
+  // {2, 3, 4, 5}, encoded by the shader build name suffix.
+  BonsaiQmvWideSubgroupBF16R2,
+  BonsaiQmvWideSubgroupBF16R3,
+  BonsaiQmvWideSubgroupBF16R4,
+  BonsaiQmvWideSubgroupBF16R5,
+  BonsaiQmvWideSubgroupF16R2,
+  BonsaiQmvWideSubgroupF16R3,
+  BonsaiQmvWideSubgroupF16R4,
+  BonsaiQmvWideSubgroupF16R5,
   Count,
 };
 
@@ -872,6 +898,15 @@ struct ComputeParams {
   // materialization.
   uint32_t lhs_gap{0};
   uint32_t rhs_gap{0};
+  // Reserved tail (32 bytes) for fast::CustomKernel scalar arguments.
+  // The on-the-wire push-constant range covers only the populated fields
+  // above (ComputeRuntime uses two VkPushConstantRange entries: a 128-
+  // byte range for the live fields and a 32-byte range at offset 128
+  // for this tail). Native kernels leave the tail zero.  Custom-kernel
+  // translators pack up to 8 scalars here: float bitcast to uint, int
+  // and bool as-is. See overlay/mlx/backend/omarchy/custom_kernel.cpp
+  // `CustomKernel::eval_gpu` for the packing contract.
+  uint32_t scalar_args[8]{};
 };
 
 class ComputeRuntime {
