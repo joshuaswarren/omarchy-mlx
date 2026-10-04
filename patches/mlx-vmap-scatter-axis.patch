@@ -1,0 +1,77 @@
+# Upstream: ml-explore/mlx 25532871329fe4cafdada9fa0941a1cdbfb3a9f2 (#4322)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/primitives.cpp b/mlx/primitives.cpp
+index 9555bd99..57798d77 100644
+--- a/mlx/primitives.cpp
++++ b/mlx/primitives.cpp
+@@ -4639,14 +4639,19 @@ std::pair<std::vector<array>, std::vector<int>> Scatter::vmap(
+     // Clone updates along the vmap dimension so they can be applied to each
+     // source tensor in the vmap.
+     auto& updates = inputs.back();
++    int idx_ndim = static_cast<int>(inputs[1].ndim());
++    int upd_src_ax = idx_ndim + src_ax;
+     if (vmap_axes.back() < 0) {
+-      updates = expand_dims(
+-          updates, {0, static_cast<int>(inputs[1].ndim())}, stream());
++      updates = expand_dims(updates, {0, upd_src_ax}, stream());
+       updates = repeat(updates, vmap_size, 0, stream());
+     } else {
+-      updates =
+-          expand_dims(updates, static_cast<int>(inputs[1].ndim()), stream());
+-      updates = moveaxis(updates, vmap_axes.back(), 0, stream());
++      int upd_vmap_ax = vmap_axes.back();
++      // expand_dims shifts any axis at or after the insertion point
++      if (upd_vmap_ax >= upd_src_ax) {
++        upd_vmap_ax++;
++      }
++      updates = expand_dims(updates, upd_src_ax, stream());
++      updates = moveaxis(updates, upd_vmap_ax, 0, stream());
+     }
+   }
+ 
+diff --git a/python/tests/test_vmap.py b/python/tests/test_vmap.py
+index 355cddd2..f9589376 100644
+--- a/python/tests/test_vmap.py
++++ b/python/tests/test_vmap.py
+@@ -560,6 +560,41 @@ class TestVmap(mlx_tests.MLXTestCase):
+         expected = mx.array([[2.0, 3.0, 4.0], [2.0, 3.0, 4.0]])
+         self.assertTrue(mx.allclose(out, expected))
+ 
++    def test_vmap_scatter_higher_rank(self):
++        # The vmap axis becomes an extra scattered source axis, so the
++        # singleton added to the updates has to land at that axis rather than
++        # at the front of the source dims. Only shows up for a vmap axis >= 2,
++        # where the misplaced singleton actually reorders a non-unit dim.
++        def unstack(x, axis):
++            return [s.squeeze(axis) for s in mx.split(x, x.shape[axis], axis=axis)]
++
++        for shape in [(2, 3), (2, 3, 4), (2, 3, 4, 5)]:
++            n = 1
++            for d in shape:
++                n *= d
++            a = mx.arange(n, dtype=mx.float32).reshape(shape)
++
++            fns = {
++                "add_derived": lambda x: x.at[mx.array([0])].add(x[:1]),
++                "add_const": lambda x: x.at[mx.array([0])].add(
++                    mx.ones((1,) + tuple(x.shape[1:]), dtype=x.dtype)
++                ),
++                "add_dup": lambda x: x.at[mx.array([0, 0])].add(
++                    mx.ones((2,) + tuple(x.shape[1:]), dtype=x.dtype)
++                ),
++                "maximum": lambda x: x.at[mx.array([0])].maximum(x[:1] + 1.0),
++            }
++            for name, fn in fns.items():
++                for ax in range(len(shape)):
++                    out = mx.vmap(fn, in_axes=ax, out_axes=ax)(a)
++                    expected = mx.stack([fn(s) for s in unstack(a, ax)], axis=ax)
++                    self.assertEqual(
++                        out.shape, expected.shape, f"{name} ax{ax} {shape}"
++                    )
++                    self.assertTrue(
++                        mx.array_equal(out, expected), f"{name} ax{ax} {shape}"
++                    )
++
+         # Multiple indices
+         def scatter(a):
+             a[mx.array([0, 1]), mx.array([0, 1])] = mx.array((1.0, 1.0))
