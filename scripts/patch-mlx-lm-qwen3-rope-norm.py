@@ -2,7 +2,7 @@
 """Fold the qwen3 (dense) attention q/k RMSNorm into mx.fast.rope_rms_norm,
 mirroring scripts/patch-mlx-lm-rope-norm.py (F3) which targets qwen3_next.py.
 
-The fused branch is gated on MLX_OMARCHY_ROPE_NORM_FUSE=1 (default 0: the
+The fused branch is gated on MLX_OMARCHY_ROPE_NORM_FUSE (default 1 = on, landed 2026-10-04 at +4.18..+4.86% bit-exact; set =0 to run
 exact eager chain runs; kill switch =0 at any time). Bit-identical by the
 same contract as F3: the fused kernel reproduces the fast RMSNorm reduction
 tree and rounds normalized values to bf16 before rotation consumes them,
@@ -44,7 +44,7 @@ NORM_NEW = """        queries, keys, values = self.q_proj(x), self.k_proj(x), se
         # below (bit-identical by construction); the backend fence refuses
         # non-fuseable legs loudly.
         if (
-            os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "0") == "1"
+            os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "1") == "1"
             and queries.dtype == mx.bfloat16
             and hasattr(mx.fast, "rope_rms_norm")
         ):
