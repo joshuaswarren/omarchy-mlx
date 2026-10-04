@@ -1,0 +1,102 @@
+diff --git a/omlx/utils/hardware.py b/omlx/utils/hardware.py
+index 1b08ab59..0c6d6224 100644
+--- a/omlx/utils/hardware.py
++++ b/omlx/utils/hardware.py
+@@ -18,6 +18,7 @@ import re
+ import subprocess
+ import sys
+ from dataclasses import dataclass
++from pathlib import Path
+ from typing import Optional
+ 
+ try:
+@@ -64,6 +65,22 @@ def get_chip_name() -> str:
+     Returns:
+         Chip name (e.g., "Apple M4 Pro") or "Apple Silicon" as fallback.
+     """
++    if sys.platform != "darwin":
++        # Linux: Apple Silicon under a Linux kernel exposes the board model
++        # string in the device tree ("Apple M2 Max", ...). Other hosts report
++        # honestly that the chip is unknown instead of guessing an Apple part.
++        try:
++            model = (
++                Path("/proc/device-tree/model")
++                .read_text(encoding="utf-8", errors="replace")
++                .strip()
++                .strip("\x00")
++            )
++            if model:
++                return model
++        except OSError:
++            pass
++        return f"Unknown ({platform.system()} {platform.machine()})"
+     try:
+         result = subprocess.run(
+             [_SYSCTL, "-n", "machdep.cpu.brand_string"],
+@@ -81,13 +98,25 @@ def get_total_memory_bytes() -> int:
+     Get total unified memory in bytes.
+ 
+     Fallback chain:
+-    1. sysctl hw.memsize (most reliable)
+-    2. mlx.metal.device_info()["memory_size"]
+-    3. DEFAULT_MEMORY_BYTES (8GB)
++    1. Linux: /proc/meminfo MemTotal (unified-memory model: the GPU draws
++       from the same physical RAM, so total system RAM is the budget)
++    2. sysctl hw.memsize (macOS, most reliable)
++    3. mlx.metal.device_info()["memory_size"]
++    4. DEFAULT_MEMORY_BYTES (8GB)
+ 
+     Returns:
+         Total memory in bytes.
+     """
++    if sys.platform != "darwin":
++        try:
++            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
++                if line.startswith("MemTotal:"):
++                    kb = int(line.split()[1])
++                    if kb > 0:
++                        return kb * 1024
++        except (OSError, ValueError, IndexError):
++            pass
++
+     # Primary: sysctl
+     try:
+         result = subprocess.run(
+@@ -120,6 +149,16 @@ def get_total_memory_gb() -> float:
+     return get_total_memory_bytes() / (1024**3)
+ 
+ 
++def device_total_memory(info: dict) -> int:
++    """Total unified memory in bytes from an mx.device_info() dict.
++
++    Metal builds report "memory_size"; the omarchy (Linux/Vulkan) build
++    reports "total_memory". Same unified-RAM semantic on Apple Silicon.
++    Returns 0 when neither key carries a positive value.
++    """
++    return int(info.get("memory_size") or info.get("total_memory") or 0)
++
++
+ def get_max_working_set_bytes() -> int:
+     """
+     Get max_recommended_working_set_size from MLX Metal.
+@@ -301,7 +340,8 @@ def parse_chip_info(chip_string: str) -> tuple[str, str]:
+     """
+     match = re.search(r"M(\d+)\s*(Pro|Max|Ultra)?", chip_string)
+     if not match:
+-        return ("M1", "")
++        # Honest unknown: inventing "M1" misroutes chip-conditional behavior.
++        return ("Unknown", "")
+     chip_name = f"M{match.group(1)}"
+     chip_variant = match.group(2) or ""
+     return (chip_name, chip_variant)
+@@ -326,7 +366,9 @@ def compute_owner_hash(
+ 
+ 
+ def get_os_version() -> str:
+-    """Get macOS version string (e.g. 'macOS 15.2')."""
++    """Get the OS version string (e.g. 'macOS 15.2' or 'Linux 6.12.1')."""
++    if sys.platform != "darwin":
++        return f"Linux {platform.release()}"
+     try:
+         mac_ver = platform.mac_ver()[0]
+         if mac_ver:
