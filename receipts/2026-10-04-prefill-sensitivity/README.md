@@ -109,8 +109,12 @@ all red-gated by ambient load (zero green timed rows); they are not a valid
   `mlx_provenance.py` verified=match at every window top; prompts
   `qwen38-2b-prompts.jsonl` sha256 prefix `9299a3b2fc136a4c`; model shards
   head-hashed before the 9B windows.
-- Raw rows and scratch archival are not yet confirmed in this receipt; the
-  working files remain on jw16 under `/var/tmp/prefillsens`.
+- Raw JSONL, stderr, provenance snapshots, and local harness copies are in the
+  private lab `artifacts/PrefillSens/` with a checked `SHA256SUMS`. Selected
+  jw16 logs/JSONL/scripts were archived to macstudio
+  `laptop-archive-20261004/PrefillSens/evidence.tar.gz`; local and remote SHA256
+  matched (`8fc730ee64c683a2dba1874d8eb7fcb9340d6273d1beddc843bce24ddcddd3e3`).
+  The allowlist cleanup removed `/var/tmp/prefillsens` after archive verification.
 - Output digests were identical across the recorded 2B control/arm comparisons
   (`080a0ce2a3eeace4` and `01c02431b17a0616` prefixes).
 - Load-gate honesty: W2/W5/W7/W8 pf1024 arms and one W3 pass ran under
