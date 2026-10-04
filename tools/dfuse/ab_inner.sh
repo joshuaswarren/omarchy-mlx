@@ -7,7 +7,7 @@
 set -euo pipefail
 DF_OUT=${DF_OUT:?missing DF_OUT}
 DF_PLAN=${DF_PLAN:?missing DF_PLAN}
-PY=/var/tmp/v072-venv-fused/bin/python
+PY=${DF_CTL_PY:-/var/tmp/v072-venv-fused/bin/python}
 CANDPY=/var/tmp/dfuse-cand/bin/python
 BENCH=${HOME}/bench-scripts/qwen38-mlx-bench.py
 PROMPTS=${HOME}/bench-scripts/qwen38-2b-prompts.jsonl

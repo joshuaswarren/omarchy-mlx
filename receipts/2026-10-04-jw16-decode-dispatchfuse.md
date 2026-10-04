@@ -91,3 +91,38 @@ d512 56.46; 9B d64 28.65 / d512 28.02 tok/s. New greedy digest pins
 - mlx_provenance: serving wheel b581d5c version_match=true (pre-land);
   candidate wheels stamped per commit (`+dfuse.<sha>`, diag builds carry the
   `+diag.` marker); stamps asserted distinct per A/B.
+
+## Addendum 2026-10-04T06:0xZ — land executed; 9B A/B measured; gate verdict
+
+- LANDED + DEPLOYED: main 15547ef8f (rebased tip aae57ea0e + receipt; ls-remote
+  verified); serving venv /var/tmp/v072-venv-fused wheel
+  0.32.4.dev202610040439+dfuse.15547ef8f (wheel sha256
+  3990d3a478302b38...0910d8; rollback
+  /var/tmp/v072-venv-fused.pre-20261004T000642) + patch set (qwen3 rope-norm
+  fold default ON; gdn raw-repeat default OFF). Deploy-verify on the serving
+  venv, NO env: 4B d64 e2c919be / d512 fff6d03b, 2B d64 cb3e8770 (all exact
+  pins); llm-inference restored, health ok.
+- 2B 1-pass d512 digest note: the 1-pass digest moved 619360bf -> 8bd69d6d
+  with the land; the 512-token output_ids are IDENTICAL position-for-position
+  (0 differing tokens, diff receipt in the notebook artifacts), and all four
+  2B production 5-pass pins hold exactly (c84b3e7a / 07c515e0 / c6aabbf0 /
+  5c120987) on the deployed wheel. The 1-pass canon difference is a
+  record-metadata artifact, not numerics; open question only for the digest
+  tooling, not the serving stack.
+- 9B GDU raw route A/B (ctl = pre-land serving stack
+  v072-venv-fused.pre-20261004T000642, on = deployed wheel +
+  MLX_OMARCHY_GDN_RAW_REPEAT=1; 5 alternating pairs per cell):
+
+  | depth | ctl median | on median | paired delta | greedy identical |
+  |---|---|---|---|---|
+  | d64 | 28.58 | 38.54 | **+34.8%** | 100% |
+  | d128 | 28.53 | 38.51 | **+35.0%** | 100% |
+  | d256 | 28.58 | 38.45 | **+34.5%** | 100% |
+  | d512 | 28.08 | 37.56 | **+33.8%** | **72.66%** (first divergence at token 316) |
+
+  ppl probe (49 teacher-forced tokens): mean NLL 11.31236 (composed) vs
+  11.30684 (fused) = -0.049% — within the 0.1% bar.
+  NUMERICS GATE VERDICT: the greedy >=95% bar FAILS at d512 (72.66%), so per
+  the pre-registered rule the GDN_RAW_REPEAT default stays OFF (opt-in env).
+  The measured +33.8..+35.0% greedy-identical-through-d256 result stands in
+  the record for an owner decision on accepting the d512 near-tie divergence.
