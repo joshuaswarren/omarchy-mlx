@@ -35,3 +35,33 @@ Baseline: MLX 0.32.3, commit `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` (`mlx.lo
 - `omarchy_runtime_tests`, `omarchy_fast_ops_tests`, and `omarchy_primitive_tests` returned success. This workstation has no qualifying Vulkan device; GPU cases were skipped, so these are not GPU-behavior proof.
 - Full standing M1 GPU battery and 2B/4B/9B output-digest comparison remain unverified. Main instructed that jw16 is being reinstalled; no jw16 interaction was attempted. Shaders and Vulkan runtime must be built/tested on jw16 after it is available. Do not release before that hardware gate and Main's v0.7.27-published confirmation.
 - Two test-only `conv1d` calls in `overlay/tests/omarchy/test_conv_gemm_decomp.cpp` were corrected to pass explicit dilation/groups because the pinned source signature otherwise treated Stream as dilation and prevented compiling the suite.
+
+## M2 hardware verification (jw14m2-linux, Apple M2 Max, 2026-10-04)
+
+Host: aarch64 Apple Silicon (M2 Max, Asahi Linux), 12 cores, glslc present. Lane-held GPU windows through `gpu-turn` FIFO tickets (≤25 min each); no reboot, no module reload. jw16 was unavailable (reinstall).
+
+**Wheels (distinct stamps asserted per the A/B stamp rule):**
+
+| side | wheel | sha256 (prefix) | stamp |
+|---|---|---|---|
+| REF (published v0.7.27) | `mlx_omarchy-0.32.4.dev202610041653+6edd258-cp314-cp314-linux_aarch64.whl` | verified against release `SHA256SUMS` | `+6edd258` |
+| CAND (this backport) | `mlx_omarchy-0.32.4.dev202610041920+bc0703c-cp314-cp314-linux_aarch64.whl` | 416,342,801 bytes | `+bc0703c` (branch tip) |
+
+Both built with `scripts/build-wheel.sh` (`DEV_RELEASE=1`, `CMAKE_BUILD_PARALLEL_LEVEL=8`, niced, whole-encoder bundle staged with manifest `08769793…` / program `13c74423…` matching the runtime pin). REF venv = release wheel + `mlx-lm==0.31.3`; CAND venv = identical stack with only the mlx-omarchy wheel swapped (same `mlx-lm` both sides).
+
+**Greedy digests (1-pass protocol, `tools/dfuse/pins_window.sh` adapted with 9B cells; `ordered_records_sha256`, first 16 hex):**
+
+| model | arm | depth | REF (v0.7.27) | CAND (backport) | equal | receipt pin |
+|---|---|---|---|---|---|---|
+| 2B | tiled/pf/perrow | 64 | `cb3e87705c65497c` | same | yes | `cb3e8770` |
+| 2B | tiled/pf/perrow | 128 | `a9a7eef85227ed13` | same | yes | — |
+| 4B | default | 64 | `e2c919be0fe285c6` | same | yes | `e2c919be` |
+| 4B | default | 512 | `fff6d03be28a2ef9` | same | yes | `fff6d03b` |
+| 9B | default | 64 | `26d569c86af27c5b` | same | yes | `26d569c8` |
+| 9B | default | 512 | `b899ccced74a77ea` | same | yes | `0315217f` (jw16) |
+
+All 20 REF/CAND cells returned rc=0 with byte-equal digests. REF digests reproduce the jw16 receipt pins on 2B d64, 4B d64/d512 and 9B d64; the 9B d512 digest differs from the jw16-era `0315217f` on BOTH sides equally — a host/driver numeric difference on the longer decode horizon, not a backport delta (the gate is REF==CAND on the same host, which holds everywhere).
+
+**Standing battery:** results appended below after the chained gpu-turn windows.
+
+## M2 battery results
