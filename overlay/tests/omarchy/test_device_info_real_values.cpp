@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "doctest/doctest.h"
+#include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/omarchy.h"
@@ -64,8 +65,10 @@ size_t read_mem_total_bytes() {
 
 const std::unordered_map<std::string, std::variant<std::string, size_t>>&
 device_info_for(int index) {
-  // gpu::device_info in this build resolves to omarchy::device_info.
-  return mlx::core::omarchy::device_info(index);
+  // In this build (MLX_BUILD_OMARCHY=ON), gpu::device_info is the
+  // omarchy-backed implementation in overlay/mlx/backend/omarchy/
+  // device_info.cpp:154.
+  return mlx::core::gpu::device_info(index);
 }
 
 } // namespace
@@ -172,4 +175,8 @@ TEST_CASE("set_wired_limit never exceeds expected memory bounds") {
   mlx::core::set_wired_limit(0);
   mlx::core::set_wired_limit(SIZE_MAX);
   mlx::core::set_wired_limit(0);
+}
+
+int main(int argc, char** argv) {
+  return doctest::Context(argc, argv).run();
 }
