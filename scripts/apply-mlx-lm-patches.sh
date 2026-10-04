@@ -130,3 +130,9 @@ python3 "$ROOT/scripts/patch-mlx-lm-rope-norm.py" "$VENV"
 # (kill switch =0). Python patcher (GNU patch 2.8 on this host
 # fails byte-verified hunks, DecodeFuse3).
 python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"
+# Qwen3 dense rope-norm fold (qwen3.py attention site; the F3 fold ported
+# to the dense file code shape). Default ON since 2026-10-04: bit-exact,
+# 4B decode +4.18..+4.86% across d64-d512 (receipts/
+# 2026-10-04-jw16-decode-dispatchfuse.md). Kill switch
+# MLX_OMARCHY_ROPE_NORM_FUSE=0.
+python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
