@@ -1,0 +1,29 @@
+diff --git a/omlx/process_memory_enforcer.py b/omlx/process_memory_enforcer.py
+index 85609b98..38f7d8c6 100644
+--- a/omlx/process_memory_enforcer.py
++++ b/omlx/process_memory_enforcer.py
+@@ -30,6 +30,7 @@ import asyncio
+ import inspect
+ import logging
+ import os
++import platform
+ import subprocess
+ import time
+ from contextlib import suppress
+@@ -269,6 +270,16 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
+                 suggestion // (1024**2),
+             )
+         else:
++            if sys.platform != "darwin":
++                # No iogpu wired-limit sysctl exists off macOS. Say what the
++                # guard actually budgets against instead of staying silent.
++                logger.info(
++                    "No Metal wired-limit API on %s: the memory guard "
++                    "budgets against unified system RAM (from "
++                    "/proc/meminfo/sysconf) and mx.set_wired_limit is a "
++                    "no-op on this backend",
++                    platform.system(),
++                )
+             logger.debug(
+                 "Skipping mx.set_wired_limit because iogpu.wired_limit_mb is "
+                 "unset (target=%s, Apple cap=%s)",
