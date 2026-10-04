@@ -1,0 +1,64 @@
+# Upstream: ml-explore/mlx 6a1b7f778fa720e4502f56449c3adcf1438a1e86 (#4588)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/backend/cpu/primitives.cpp b/mlx/backend/cpu/primitives.cpp
+index f70a2740..b4854f07 100644
+--- a/mlx/backend/cpu/primitives.cpp
++++ b/mlx/backend/cpu/primitives.cpp
+@@ -384,8 +384,16 @@ void View::eval_cpu(const std::vector<array>& inputs, array& out) {
+     if (obytes < ibytes) {
+       strides.back() = 1;
+     }
++    auto flags = in.flags();
++    if (ibytes != obytes) {
++      // Last axis size can change contiguity
++      auto [_, row_contiguous, col_contiguous] =
++          check_contiguity(out.shape(), strides);
++      flags.row_contiguous = row_contiguous;
++      flags.col_contiguous = col_contiguous;
++    }
+     out.copy_shared_buffer(
+-        in, strides, in.flags(), in.data_size() * ibytes / obytes);
++        in, strides, flags, in.data_size() * ibytes / obytes);
+   } else {
+     auto tmp = array(
+         in.shape(), in.dtype() == bool_ ? uint8 : in.dtype(), nullptr, {});
+diff --git a/mlx/backend/gpu/primitives.cpp b/mlx/backend/gpu/primitives.cpp
+index 72da082c..bf17029f 100644
+--- a/mlx/backend/gpu/primitives.cpp
++++ b/mlx/backend/gpu/primitives.cpp
+@@ -259,8 +259,16 @@ void View::eval_gpu(const std::vector<array>& inputs, array& out) {
+     if (obytes < ibytes) {
+       strides.back() = 1;
+     }
++    auto flags = in.flags();
++    if (ibytes != obytes) {
++      // Last axis size can change contiguity
++      auto [_, row_contiguous, col_contiguous] =
++          check_contiguity(out.shape(), strides);
++      flags.row_contiguous = row_contiguous;
++      flags.col_contiguous = col_contiguous;
++    }
+     out.copy_shared_buffer(
+-        in, strides, in.flags(), in.data_size() * ibytes / obytes);
++        in, strides, flags, in.data_size() * ibytes / obytes);
+   } else {
+     auto tmp = array(in.shape(), in.dtype(), nullptr, {});
+     tmp.set_data(allocator::malloc(tmp.nbytes()));
+diff --git a/python/tests/test_ops.py b/python/tests/test_ops.py
+index dd22c329..64a7e495 100644
+--- a/python/tests/test_ops.py
++++ b/python/tests/test_ops.py
+@@ -4175,6 +4175,13 @@ class TestOps(mlx_tests.MLXTestCase):
+             expected = a_np[start : start + 16].view(np.int32)
+             self.assertTrue(np.array_equal(out + 0, expected))  # read in a kernel
+ 
++        # View of an (n, 1) array
++        a = mx.arange(4, dtype=mx.int32).reshape(4, 1).view(mx.int16)
++        b = mx.arange(8, dtype=mx.int16).reshape(2, 4).T
++        expected = np.arange(4, dtype=np.int32).reshape(4, 1).view(np.int16)
++        expected = expected + np.arange(8, dtype=np.int16).reshape(2, 4).T
++        self.assertTrue(np.array_equal(a + b, expected))
++
+     def _hadamard(self, N):
+         # Matches scipy.linalg.hadamard
+         H = np.array([[1]], dtype=np.int64)
