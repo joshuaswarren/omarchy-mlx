@@ -645,6 +645,21 @@ pipeline with bit-exact results on all nine shapes (widedep 239,487 to
 tok/s neutral in a 5-pair A/B, and the primitive/matmul suites unchanged
 (104/104 and 22/22). Receipt: `receipts/2026-10-03-mesa-pack64/README.md`.
 
+QmmPeak bank-conflict fix in the qmm prefill kernel (2026-10-04): at the
+shipped stride 32 every row of a coopMatLoad'ed 8x8 weight block lands on
+the same LDS banks, so the shared B-tile row stride is now `TILE_N + 4`
+(`shaders/qmm_coopmat.comp`, G4 route). Values, MAC order, and every
+stored word are unchanged - the matmul-family doctest pins the default
+route bit-identical to the unpadded kernel across eight model K,N shapes
+and odd M 17..2047, and model-level activation/logits digests matched the
+shipped route in every A/B pair. Measured model prefill: +2-3% wall on
+G14C (2B/4B/9B, pf512/pf1024; one noisy 4B pf1024 cell mixed) and +0.9%
+on G13G (30/30 positive blocks). `MLX_OMARCHY_QMM_LDSPAD=0` is the kill
+switch back to the unpadded stride; the 256-byte shared increase keeps
+the 32x16 A tile within every supported budget. The whole-chunk dequant
+twins (CHUNK_DEQ, CHUNK+PAD) measured negative (-16% to -29%) and stay
+env-only. Receipt: `receipts/2026-10-04-qmm-roofline/README.md`.
+
 ### Prefill glue kernels
 
 Three kernels take the f16/bf16 prefill work that ran on general
