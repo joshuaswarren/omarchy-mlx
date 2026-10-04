@@ -485,3 +485,24 @@ reference, gated decode 1 vs 18, and prefill T=32 1 vs 546. With the
 clause reinstated in scratch, the test fails all 3 cases (24/16/544),
 while fast_route_repeat, maskless and prefill_profile stay green.
 capability_sim_tests pass 7/7 under m1-honeykrisp-fork and m1-g13-legacy.
+
+## Addendum 14 2026-10-04 — 9B decode with the Composed kernels: bit-identical to composed at d512, +30-31%, speed-neutral vs v0.7.26 fused
+
+jw16, run_ab.sh with 1-pass bench cells. Gates were checked at each
+window start: wX0 load 0.32, wX1 load 0.42, PSI avg10 0.00, uptime
+>53000 s. Provenance verified=match on both sides. The candidate is
+0.32.4.dev202610041622+dfuse.e74427b6e (the ee83df76c source), with
+the route ON (venv patched at v0.7.26).
+
+| depth | composed (=0, cand) | v0.7.26 fused (same venv lineage) | cand fused | cand vs composed | cand vs v0.7.26 fused |
+|---|---:|---:|---:|---:|---:|
+| d64 | 28.64 (26d569c8, wX1) | 37.41 (26d569c8, wX0) | 37.43 wX1 / 37.45 wX0 (26d569c8) | +30.7% (wX1) | +0.11% (wX0, 5 pairs, -0.32..+0.38) |
+| d128 | 28.55 (2bbf33d4, wX1) | n/a | 37.39 (2bbf33d4, wX1) | +31.0% | n/a |
+| d512 | 27.96 (f0e4d84e, wX3) | 36.45 (e7884f81, wX3) | 36.44 (f0e4d84e, wX3) | +30.3% | -0.03% (wX3, 5 pairs) |
+
+At d512 the fused digest now equals composed (f0e4d84e). The v0.7.26
+fused kernel diverges there (e7884f81). Against the serving venv
+(f601aa7fb, a different mlx-lm patch lineage), the candidate measured
+-0.85%/-0.74% at d64/d128. The same-lineage control shows that gap
+comes from the venv, not the kernel.
+Artifacts: 20261004-bitexact-gate-chain/ab-wX{0,1,3}-*.
