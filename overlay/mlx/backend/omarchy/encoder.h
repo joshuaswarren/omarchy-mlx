@@ -444,6 +444,7 @@ class MLX_API CommandEncoder {
   };
   std::vector<PendingNode> pending_;
   static bool wave_sched();
+  static bool wave_diag();
   // Record the buffered nodes in wave order (wave_levels), one full
   // dependency barrier between waves plus the batch-head barrier, and
   // update the tracker exactly like the tape-order path. Called from

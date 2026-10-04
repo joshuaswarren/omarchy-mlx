@@ -3,6 +3,7 @@
 
 #include "mlx/backend/omarchy/encoder.h"
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 #include <string_view>
 #include <unistd.h>
@@ -116,6 +117,18 @@ bool CommandEncoder::wave_sched() {
     const char* e = std::getenv("MLX_OMARCHY_WAVE_SCHED");
     return e != nullptr && env_flag("MLX_OMARCHY_WAVE_SCHED") &&
         gated_barriers();
+  }();
+  return on;
+}
+
+bool CommandEncoder::wave_diag() {
+  // MLX_OMARCHY_WAVE_DIAG (census diagnostic): per flush, classify the
+  // edge that determined each node's wave (RAW/WAW/WAR against the
+  // max-level hazard source) and print a compact histogram. Counts only;
+  // inert for recording.
+  static const bool on = []() {
+    const char* e = std::getenv("MLX_OMARCHY_WAVE_DIAG");
+    return e != nullptr && env_flag("MLX_OMARCHY_WAVE_DIAG");
   }();
   return on;
 }
@@ -830,6 +843,59 @@ void CommandEncoder::emit_pending() {
   uint32_t waves = 0;
   for (uint32_t l : levels) {
     waves = std::max(waves, l);
+  }
+
+  if (wave_diag()) {
+    // Classify the level-determining edge of every node: which access
+    // class (RAW/WAW/WAR) against the deepest hazard source forces this
+    // node into its wave. Nodes at level 0 are unforced.
+    auto overlaps = [](const TrackedRange& a, const TrackedRange& b) {
+      return a.buffer == b.buffer && a.offset < b.end && b.offset < a.end;
+    };
+    uint64_t hist[4] = {0, 0, 0, 0}; // none, raw, waw, war
+    uint64_t depth_sum = 0;
+    for (size_t i = 0; i < pending_.size(); ++i) {
+      depth_sum += levels[i];
+      if (levels[i] == 0) {
+        hist[0]++;
+        continue;
+      }
+      uint32_t best = 0;
+      for (size_t j = 0; j < i; ++j) {
+        if (levels[j] + 1 == levels[i]) {
+          best = static_cast<uint32_t>(j);
+          // keep the LAST node one wave below; any is representative
+        }
+      }
+      const WaveNode& src = nodes[best];
+      bool raw = false, waw = false, war = false;
+      for (const auto& r : nodes[i].reads) {
+        for (const auto& w : src.writes) {
+          raw = raw || overlaps(r, w);
+        }
+      }
+      for (const auto& w : nodes[i].writes) {
+        for (const auto& tw : src.writes) {
+          waw = waw || overlaps(w, tw);
+        }
+        for (const auto& tr : src.reads) {
+          war = war || overlaps(w, tr);
+        }
+      }
+      hist[raw ? 1 : (waw ? 2 : (war ? 3 : 0))]++;
+    }
+    std::fprintf(
+        stderr,
+        "[wave-diag] nodes=%zu waves=%u levels_sum=%llu class "
+        "none=%llu raw=%llu waw=%llu war=%llu\n",
+        pending_.size(),
+        waves + 1,
+        static_cast<unsigned long long>(depth_sum),
+        static_cast<unsigned long long>(hist[0]),
+        static_cast<unsigned long long>(hist[1]),
+        static_cast<unsigned long long>(hist[2]),
+        static_cast<unsigned long long>(hist[3]));
+    std::fflush(stderr);
   }
 
   // The batch-head dependency: a freshly begun command buffer records its

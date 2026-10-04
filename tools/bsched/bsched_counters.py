@@ -36,10 +36,10 @@ _LIB = None
 def _lib():
     global _LIB
     if _LIB is None:
-        import mlx  # noqa: F401 - ensures the extension is loaded
+        import mlx.core as mc  # noqa: F401 - ensures the extension is loaded
 
-        base = os.path.dirname(os.path.dirname(os.path.abspath(mlx.__file__)))
-        so = os.path.join(base, "mlx", "lib", "libmlx.so")
+        pkg = os.path.dirname(os.path.abspath(mc.__file__))
+        so = os.path.join(pkg, "lib", "libmlx.so")
         if not os.path.exists(so):
             raise SystemExit(f"libmlx.so not found at {so}")
         _LIB = ctypes.CDLL(so)
