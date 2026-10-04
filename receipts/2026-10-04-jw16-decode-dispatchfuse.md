@@ -126,3 +126,39 @@ d512 56.46; 9B d64 28.65 / d512 28.02 tok/s. New greedy digest pins
   the pre-registered rule the GDN_RAW_REPEAT default stays OFF (opt-in env).
   The measured +33.8..+35.0% greedy-identical-through-d256 result stands in
   the record for an owner decision on accepting the d512 near-tie divergence.
+
+## Addendum 2 2026-10-04T06:4xZ — 9B raw route lands default ON after the teacher-forced gate
+
+Main's direction: judge the 9B route by teacher-forced agreement, not
+free-running identity (after a first divergence the free-run comparison is
+meaningless by construction). Results (NormApple H244 methodology, 10 fixed
+prompts x 512 teacher tokens = 5120 positions, comparator verbatim from
+artifacts/Jw16NormApple2):
+
+- top-1 agreement 99.39% (5089/5120) — bar >= 99%: PASS
+- 31 disagreements, every one a near-tie: max gap 1.0 bf16 ULP, mean 0.32,
+  zero over the allowed gap — bar near-tie-only: PASS
+- ppl delta -0.049% (mean NLL 11.31236 composed vs 11.30684 fused) — bar
+  0.1%: PASS
+- token-316 free-run divergence: teacher-forcing the last common prefix shows
+  the composed path's top-2 gap at the divergence position is 0.0 (a dead
+  tie at bf16 precision) — the flip is a tie-break, near-tie by definition.
+- per-op accuracy on captured real operands (first decode call, captured
+  via dispatcher monkeypatch): fused kernel vs fp64 reference is
+  BIT-IDENTICAL in error to the composed path vs fp64 (out max_abs
+  1.625e-3, state 1.608e-2 both) — fused no worse: PASS. (Real-model
+  operands are small enough that the reduction-order difference seen on
+  synthetic N(0,0.5) stress shapes does not appear.)
+- 27B sanity: qwen3_moe.py has zero gated_delta/GDN references (full
+  attention) — the route does not apply to the served 27B. Report-only.
+
+LAND: `MLX_OMARCHY_GDN_RAW_REPEAT` default ON (kill switch =0) in
+scripts/patch-mlx-lm-gdn-raw-repeat.py; applicability enforced twice (the
+patcher's decode/bf16/Dk=Dv=128/Hv%Hk==0/Hk!=Hv fence and the backend's
+Hk==Hv + A_log-dtype contract), so non-GDN and bf16-A_log models are
+untouched by construction. 9B digest re-pins (route ON, 1-pass protocol):
+d64 26d569c8 (unchanged), d128 2bbf33d4 (unchanged), d256 0279994b
+(unchanged), d512 f36dab24 (re-pinned; was 0315217f composed). Standing
+suites: GDN-relevant omarchy test binaries re-run on the deployed wheel
+(results in the notebook artifacts); deploy-verify on the serving venv with
+no env.
