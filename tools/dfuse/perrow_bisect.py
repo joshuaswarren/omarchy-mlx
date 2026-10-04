@@ -124,18 +124,15 @@ res = {"first_state_mismatch_step": first_bad, "token_divergence": tok_div,
        "captured_sets": len(captured), "mx": mx.__version__}
 json.dump(res, open(f"{out_dir}/bisect.json", "w"), indent=1)
 
-# Phase 4: if we have operands captured BEFORE the mismatch, single-step both
-# routes on the earliest captured set and diff.
-if captured:
-    ops = captured[0]
-
-    def to_arr(x):
-        return x
-
+# Phase 4: single-step both routes on EVERY captured set; report the first
+# mismatching step and save its operands.
+set_route(True)
+first_diff = None
+for idx, ops in enumerate(captured):
     set_route(False)
     out_c, st_c = orig_gdu(ops["q"], ops["k"], ops["v"], ops["a"], ops["b"],
-                           ops["A_log"], ops["dt"], ops["state"], ops["mask"],
-                           True)
+                           ops["A_log"], ops["dt"], ops["state"],
+                           ops.get("mask"), True)
     mx.eval(out_c, st_c)
     set_route(True)
     Hk, Hv = ops["q"].shape[-2], ops["v"].shape[-2]
@@ -144,10 +141,23 @@ if captured:
     out_f, st_f = mx.fast.gated_delta_update_raw(qr, kr, ops["v"], ops["a"],
                                                  ops["b"], ops["A_log"],
                                                  ops["dt"], ops["state"],
-                                                 ops["mask"])
+                                                 ops.get("mask"))
     mx.eval(out_f, st_f)
-    same = (np.array(out_c.view(mx.uint16)) == np.array(out_f.view(mx.uint16))).all() \
-        and (np.array(st_c.view(mx.uint32)) == np.array(st_f.view(mx.uint32))).all()
-    res["first_captured_set_single_step_bit_identical"] = bool(same)
-    print("single-step on captured[0] bit-identical:", bool(same), flush=True)
-    json.dump(res, open(f"{out_dir}/bisect.json", "w"), indent=1)
+    same_out = (np.array(out_c.view(mx.uint16)) == np.array(out_f.view(mx.uint16))).all()
+    same_st = (np.array(st_c.view(mx.uint32)) == np.array(st_f.view(mx.uint32))).all()
+    if not (same_out and same_st):
+        first_diff = idx
+        np.savez(f"{out_dir}/diverging-operands-{idx}.npz",
+                 **{k: np.array(v.astype(mx.float32)) for k, v in ops.items()})
+        oc = np.array(out_c.astype(mx.float32))
+        of = np.array(out_f.astype(mx.float32))
+        sc = np.array(st_c.astype(mx.float32))
+        sf = np.array(st_f.astype(mx.float32))
+        d_out = float(np.abs(oc.astype(np.float64) - of.astype(np.float64)).max())
+        d_st = float(np.abs(sc.astype(np.float64) - sf.astype(np.float64)).max())
+        print(f"first single-step mismatch at captured[{idx}]: "
+              f"out_max_abs={d_out} state_max_abs={d_st}", flush=True)
+        break
+res["first_single_step_mismatch"] = first_diff
+json.dump(res, open(f"{out_dir}/bisect.json", "w"), indent=1)
+print("bisect done, first_diff =", first_diff, flush=True)

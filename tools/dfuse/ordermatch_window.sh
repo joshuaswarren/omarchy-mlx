@@ -20,8 +20,10 @@ case $(cat /proc/pressure/cpu) in *"some avg10=0.00"*) ;; *) echo "PSI gate"; ex
 printf "host=%s boot=%s\n" "$(hostname)" "$(cat /proc/sys/kernel/random/boot_id)" > "$O/gates.txt"
 
 echo "== 1) captured-operand bit identity"
-env -u MLX_OMARCHY_GDN_RAW_REPEAT "$C" /var/tmp/dfuse/gdu_fp64_probe.py --compare \
-  /var/tmp/dfuse/tf9/gdu-operands.npz "$O/fp64-ordermatch.json" > "$O/fp64.log" 2>&1 || echo "fp64 probe FAILED"
+env -u MLX_OMARCHY_GDN_RAW_REPEAT MLX_OMARCHY_GDN_DECODE_TILE=0 MLX_OMARCHY_GDN_PF=0 \
+  "$C" /var/tmp/dfuse/gdu_fp64_probe.py --capture "$O/gdu-operands.npz" > "$O/capture.log" 2>&1 || echo "capture FAILED"
+env -u MLX_OMARCHY_GDN_RAW_REPEAT MLX_OMARCHY_GDN_DECODE_TILE=0 "$C" /var/tmp/dfuse/gdu_fp64_probe.py --compare \
+  "$O/gdu-operands.npz" "$O/fp64-ordermatch.json" > "$O/fp64.log" 2>&1 || echo "fp64 probe FAILED"
 python3 - <<'PYEOF'
 import json
 r = json.load(open("/var/tmp/dfuse/ordermatch/fp64-ordermatch.json"))
@@ -32,7 +34,7 @@ print("BIT-IDENTICAL:", c == f and cs == fs)
 PYEOF
 
 echo "== 2) free-running greedy identity (5 prompts x 512)"
-env MLX_OMARCHY_GDN_RAW_REPEAT=1 "$C" /var/tmp/dfuse/free_run_identity.py "$M9B" "$O/identity.json" 5 \
+env MLX_OMARCHY_GDN_RAW_REPEAT=1 MLX_OMARCHY_GDN_DECODE_TILE=0 "$C" /var/tmp/dfuse/free_run_identity.py "$M9B" "$O/identity.json" 5 \
   > "$O/identity.log" 2>&1 || echo "identity FAILED"
 tail -2 "$O/identity.log"
 
@@ -41,7 +43,7 @@ pair() { # tag depth
   env -u MLX_OMARCHY_GDN_RAW_REPEAT "$OLD" "$B" --model "$M9B" --prompts "$P" --limit 1 --warmup 1 \
     --passes 1 --new-tokens "$2" --prefill-tokens 512 --label "om-$1-ctl" --out "$O/om-$1-ctl.json" \
     > "$O/om-$1-ctl.log" 2>&1
-  env MLX_OMARCHY_GDN_RAW_REPEAT=1 "$C" "$B" --model "$M9B" --prompts "$P" --limit 1 --warmup 1 \
+  env MLX_OMARCHY_GDN_RAW_REPEAT=1 MLX_OMARCHY_GDN_DECODE_TILE=0 "$C" "$B" --model "$M9B" --prompts "$P" --limit 1 --warmup 1 \
     --passes 1 --new-tokens "$2" --prefill-tokens 512 --label "om-$1-on" --out "$O/om-$1-on.json" \
     > "$O/om-$1-on.log" 2>&1
   python3 - "$O/om-$1-ctl.json" "$O/om-$1-on.json" "$1" <<'PYEOF'
