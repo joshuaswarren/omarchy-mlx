@@ -369,6 +369,35 @@ omarchy_shader(qmm_vec_q4_multi_token8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -D
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)
+# Bonsai 1-bit affine decode (M=1, decode), uint8 packed weights
+# (8 values/byte). The Bonsai extension's qmv_fast kernel; omarchy's
+# stock qmm_vec.comp q4 word path reads uint32 and cannot index into
+# the 8/byte layout, so this is a separate shader. Subgroup reduction
+# is the landed default (Honeykrisp gen-15+ reports subgroupSize==32);
+# the tree fallback compiles for the capability-report gate (see
+# BonsaiQ1QmvTree* in compute.h).
+omarchy_shader(bonsai_q1_qmv_subgroup_f32 shaders/bonsai_qmv_q1.comp -DUSE_SUBGROUP=1)
+omarchy_shader(bonsai_q1_qmv_subgroup_f16 shaders/bonsai_qmv_q1.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1)
+omarchy_shader(bonsai_q1_qmv_subgroup_bf16 shaders/bonsai_qmv_q1.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1)
+omarchy_shader(bonsai_q1_qmv_tree_f32 shaders/bonsai_qmv_q1.comp)
+omarchy_shader(bonsai_q1_qmv_tree_f16 shaders/bonsai_qmv_q1.comp -DUSE_FP16=1)
+omarchy_shader(bonsai_q1_qmv_tree_bf16 shaders/bonsai_qmv_q1.comp -DUSE_BF16=1)
+# Bonsai 1-bit affine dequantize (uint8 -> dtype), Bonsai native pack.
+omarchy_shader(bonsai_q1_dequant_f32 shaders/bonsai_dequant_q1.comp)
+omarchy_shader(bonsai_q1_dequant_f16 shaders/bonsai_dequant_q1.comp -DUSE_FP16=1)
+omarchy_shader(bonsai_q1_dequant_bf16 shaders/bonsai_dequant_q1.comp -DUSE_BF16=1)
+# Bonsai small-batch decode (M=2..5). The bit-width rides in
+# params.operation (1 or 2); pack factor derives from it. Subgroup
+# reduction only; tree path compiles out as out-of-scope (decode is
+# by-row and not the bottleneck at M=2..5).
+omarchy_shader(bonsai_qmv_wide_subgroup_bf16_r2 shaders/bonsai_qmv_wide.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=2)
+omarchy_shader(bonsai_qmv_wide_subgroup_bf16_r3 shaders/bonsai_qmv_wide.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=3)
+omarchy_shader(bonsai_qmv_wide_subgroup_bf16_r4 shaders/bonsai_qmv_wide.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=4)
+omarchy_shader(bonsai_qmv_wide_subgroup_bf16_r5 shaders/bonsai_qmv_wide.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=5)
+omarchy_shader(bonsai_qmv_wide_subgroup_f16_r2 shaders/bonsai_qmv_wide.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=2)
+omarchy_shader(bonsai_qmv_wide_subgroup_f16_r3 shaders/bonsai_qmv_wide.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=3)
+omarchy_shader(bonsai_qmv_wide_subgroup_f16_r4 shaders/bonsai_qmv_wide.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=4)
+omarchy_shader(bonsai_qmv_wide_subgroup_f16_r5 shaders/bonsai_qmv_wide.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DROWS_PER_SLOT=5)
 omarchy_shader(sdpa_decode_native_f16 shaders/sdpa_decode_native.comp)
 omarchy_shader(sdpa_decode_native_bf16 shaders/sdpa_decode_native.comp -DBF16_IO=1)
 omarchy_shader(sdpa_decode_native_bf16_hd256 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=256)

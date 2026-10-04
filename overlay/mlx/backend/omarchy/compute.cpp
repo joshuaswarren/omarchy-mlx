@@ -336,6 +336,23 @@
 #include "gdn_conv_decode_bf16.h"
 #include "gdn_conv_decode_apple_bf16.h"
 #include "qmm_vec_greedy_bf16.h"
+#include "bonsai_q1_qmv_subgroup_f32.h"
+#include "bonsai_q1_qmv_subgroup_f16.h"
+#include "bonsai_q1_qmv_subgroup_bf16.h"
+#include "bonsai_q1_qmv_tree_f32.h"
+#include "bonsai_q1_qmv_tree_f16.h"
+#include "bonsai_q1_qmv_tree_bf16.h"
+#include "bonsai_q1_dequant_f32.h"
+#include "bonsai_q1_dequant_f16.h"
+#include "bonsai_q1_dequant_bf16.h"
+#include "bonsai_qmv_wide_subgroup_bf16_r2.h"
+#include "bonsai_qmv_wide_subgroup_bf16_r3.h"
+#include "bonsai_qmv_wide_subgroup_bf16_r4.h"
+#include "bonsai_qmv_wide_subgroup_bf16_r5.h"
+#include "bonsai_qmv_wide_subgroup_f16_r2.h"
+#include "bonsai_qmv_wide_subgroup_f16_r3.h"
+#include "bonsai_qmv_wide_subgroup_f16_r4.h"
+#include "bonsai_qmv_wide_subgroup_f16_r5.h"
 #include "qmm_tile_bf16.h"
 #include "qmm_tile_f16.h"
 #include "qmm_tile_rb_f16.h"
@@ -1473,6 +1490,49 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gdn_conv_decode_apple_bf16, gdn_conv_decode_apple_bf16_size};
     case ComputeKernel::QmmVecGreedyBF16:
       return {qmm_vec_greedy_bf16, qmm_vec_greedy_bf16_size};
+    case ComputeKernel::BonsaiQ1QmvSubgroupF32:
+      return {bonsai_q1_qmv_subgroup_f32, bonsai_q1_qmv_subgroup_f32_size};
+    case ComputeKernel::BonsaiQ1QmvSubgroupF16:
+      return {bonsai_q1_qmv_subgroup_f16, bonsai_q1_qmv_subgroup_f16_size};
+    case ComputeKernel::BonsaiQ1QmvSubgroupBF16:
+      return {bonsai_q1_qmv_subgroup_bf16,
+              bonsai_q1_qmv_subgroup_bf16_size};
+    case ComputeKernel::BonsaiQ1QmvTreeF32:
+      return {bonsai_q1_qmv_tree_f32, bonsai_q1_qmv_tree_f32_size};
+    case ComputeKernel::BonsaiQ1QmvTreeF16:
+      return {bonsai_q1_qmv_tree_f16, bonsai_q1_qmv_tree_f16_size};
+    case ComputeKernel::BonsaiQ1QmvTreeBF16:
+      return {bonsai_q1_qmv_tree_bf16, bonsai_q1_qmv_tree_bf16_size};
+    case ComputeKernel::BonsaiQ1DequantF32:
+      return {bonsai_q1_dequant_f32, bonsai_q1_dequant_f32_size};
+    case ComputeKernel::BonsaiQ1DequantF16:
+      return {bonsai_q1_dequant_f16, bonsai_q1_dequant_f16_size};
+    case ComputeKernel::BonsaiQ1DequantBF16:
+      return {bonsai_q1_dequant_bf16, bonsai_q1_dequant_bf16_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R2:
+      return {bonsai_qmv_wide_subgroup_bf16_r2,
+              bonsai_qmv_wide_subgroup_bf16_r2_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R3:
+      return {bonsai_qmv_wide_subgroup_bf16_r3,
+              bonsai_qmv_wide_subgroup_bf16_r3_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R4:
+      return {bonsai_qmv_wide_subgroup_bf16_r4,
+              bonsai_qmv_wide_subgroup_bf16_r4_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R5:
+      return {bonsai_qmv_wide_subgroup_bf16_r5,
+              bonsai_qmv_wide_subgroup_bf16_r5_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R2:
+      return {bonsai_qmv_wide_subgroup_f16_r2,
+              bonsai_qmv_wide_subgroup_f16_r2_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R3:
+      return {bonsai_qmv_wide_subgroup_f16_r3,
+              bonsai_qmv_wide_subgroup_f16_r3_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R4:
+      return {bonsai_qmv_wide_subgroup_f16_r4,
+              bonsai_qmv_wide_subgroup_f16_r4_size};
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R5:
+      return {bonsai_qmv_wide_subgroup_f16_r5,
+              bonsai_qmv_wide_subgroup_f16_r5_size};
     case ComputeKernel::QmmPrefillFmaF16:
       return {qmm_fma_f16, qmm_fma_f16_size};
     case ComputeKernel::MatmulBF16Coopmat:
@@ -1757,15 +1817,28 @@ ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit)
   VKX_CHECK(dt.CreateDescriptorSetLayout(
       device_, &descriptor_info, nullptr, &descriptor_layout_));
 
-  VkPushConstantRange push_range{};
-  push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-  push_range.size = sizeof(ComputeParams);
+  VkPushConstantRange push_ranges[2]{};
+  push_ranges[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  // First range covers the live fields of ComputeParams (everything up to
+  // scalar_args). Vulkan only guarantees 128 bytes of push-constant space;
+  // 128 here matches that contract exactly so every physical device
+  // accepts the layout. The reserved tail (scalar_args) is exposed
+  // through a second range, sized to its actual storage (32 bytes) and
+  // offset to 128 so the layout stays within the device-dependent band
+  // (128..256). Native kernels ignore the second range; fast::CustomKernel
+  // kernels declare a separate `layout(push_constant) uniform Scalars { ... };`
+  // block in the translated GLSL and read scalar names from it.
+  push_ranges[0].offset = 0;
+  push_ranges[0].size = 128;
+  push_ranges[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  push_ranges[1].offset = 128;
+  push_ranges[1].size = 32;
   VkPipelineLayoutCreateInfo pipeline_info{
       VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
   pipeline_info.setLayoutCount = 1;
   pipeline_info.pSetLayouts = &descriptor_layout_;
-  pipeline_info.pushConstantRangeCount = 1;
-  pipeline_info.pPushConstantRanges = &push_range;
+  pipeline_info.pushConstantRangeCount = 2;
+  pipeline_info.pPushConstantRanges = push_ranges;
   try {
     VKX_CHECK(dt.CreatePipelineLayout(
         device_, &pipeline_info, nullptr, &pipeline_layout_));

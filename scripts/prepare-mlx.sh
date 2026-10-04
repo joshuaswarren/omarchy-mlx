@@ -97,6 +97,15 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=3 \
 # fallback in fast.cpp, Vulkan kernel via shaders/int8_matmul.comp.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-int8-matmul.patch"
+# Bonsai 1-bit / 2-bit affine decode kernels
+# (fast::BonsaiQ1AffineQmv, fast::BonsaiQmvWide, fast::BonsaiQ1Dequantize):
+# omarchy-native Vulkan equivalents of oMLX custom_kernels/bonsai. The
+# 1-bit uint8 Bonsai pack is not addressable through the qmm_vec.comp
+# uint32 word reader, so these are dedicated shaders
+# (shaders/bonsai_qmv_q1.comp, shaders/bonsai_qmv_wide.comp,
+# shaders/bonsai_dequant_q1.comp). Composed fallback in fast.cpp.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-bonsai-qmv.patch"
 
 # Backend-generic upstream fixes, applied in upstream first-parent order.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
