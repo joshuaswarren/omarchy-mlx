@@ -362,6 +362,12 @@ omarchy_shader(gated_delta_prefill_coopmat_batch2_bf16 shaders/gated_delta_prefi
 # State-wave restructure (MLX_OMARCHY_GDN_STATEWAVE=1; H297/H298 stage table:
 # the state update is 44% of the G13G chunk walk). Default OFF.
 omarchy_shader(gated_delta_prefill_coopmat_batch4_bf16 shaders/gated_delta_prefill_coopmat_batch4.comp)
+# BENCH-ONLY shared-footprint sweep (MLX_OMARCHY_GDN_SWEEP=0/1/2; wrong
+# results, timing only — decides whether the 8-wave residency model is
+# shared-bound). Default never dispatched.
+omarchy_shader(gdn_sweep_32k shaders/gdn_shared_sweep.comp -DBULK_FLOATS=8000)
+omarchy_shader(gdn_sweep_16k shaders/gdn_shared_sweep.comp -DBULK_FLOATS=4000)
+omarchy_shader(gdn_sweep_8k shaders/gdn_shared_sweep.comp -DBULK_FLOATS=2000)
 # BENCH-ONLY stage-ablation kernels (MLX_OMARCHY_GDN_STUB=1..7; wrong results
 # by design, timing only; see receipts/2026-10-05-gdn-prefill). Default builds
 # never dispatch them.

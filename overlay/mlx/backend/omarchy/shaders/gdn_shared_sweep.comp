@@ -1,0 +1,176 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// BENCH-ONLY shared-footprint sweep (MLX_OMARCHY_GDN_SWEEP=0/1/2 -> BULK
+// floats 8000/4000/2000 = 32/16/8 KiB per workgroup). Same workgroup
+// geometry and per-chunk phase structure as the batch4 prefill kernel
+// (64 WGs x 128 threads over (head, Dv-slice), 8-token chunks, per-sg
+// shared round trips + 8x8x8 coopmat MMAs + state-like FMA passes), but
+// every array is one bulk region sized by the knob and the data is
+// meaningless. Wrong results by design — it measures whether dispatch time
+// moves when per-WG shared allows more than one WG per core, which decides
+// whether the 8-wave residency model is shared-bound. Never dispatched
+// without the env; never a default.
+
+#version 460
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#ifndef BULK_FLOATS
+#error "sweep shader built without BULK_FLOATS"
+#endif
+
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+// Same 11-slot declaration shape as the real kernel so the dispatch
+// binding mapper sees an identical layout; only YBuf/SOut are read.
+layout(set = 0, binding = 0, std430) readonly buffer QBuf { uint w[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf { uint w[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf { uint w[]; } v_buf;
+layout(set = 0, binding = 3, std430) readonly buffer GBuf { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf { uint16_t v[]; } b_buf;
+layout(set = 0, binding = 5, std430) readonly buffer SIn { float v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint w[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer SOut { float v[]; } s_out;
+layout(set = 0, binding = 8, std430) readonly buffer MBuf { uint8_t v[]; } m_buf;
+layout(set = 0, binding = 9, std430) readonly buffer GBufF { float v[]; } g_buf_f;
+layout(set = 0, binding = 10, std430) buffer Snap { float v[]; } snap;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta_f;
+  uint dims;   // T
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint chunk;
+  uint chunks;
+} params;
+
+const uint C = 8u;
+const uint KSTEPS = 16u;
+
+// One bulk region per simdgroup, sized by the sweep knob. batch4's real
+// arrays total ~32000 B per workgroup; BULK_FLOATS 8000/4000/2000 mirror
+// that at 32/16/8 KiB.
+shared float bulk[4][BULK_FLOATS / 4u];
+
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> mat_a;
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> mat_b;
+
+uint bf16_pack(float lo, float hi) {
+  uint lb = floatBitsToUint(lo);
+  uint hb = floatBitsToUint(hi);
+  lb = (lb + 0x7fffu + ((lb >> 16) & 1u)) >> 16;
+  hb = (hb + 0x7fffu + ((hb >> 16) & 1u)) >> 16;
+  return (hb << 16) | (lb & 0xffffu);
+}
+
+void main() {
+  const uint sg = gl_SubgroupID;
+  const uint lane = gl_SubgroupInvocationID;
+  const uint head = gl_WorkGroupID.x;
+  const uint T = params.dims;
+  const uint e0 = lane * 2u;
+  const uint r0 = e0 / 8u;
+  const uint c0 = e0 % 8u;
+  const uint bpr = BULK_FLOATS / 4u;  // floats per sg region
+
+  // Init the region (so the round trips read defined values).
+  for (uint i = 0u; i + e0 + 1u < bpr; i += 64u) {
+    bulk[sg][i + e0] = float(i + e0);
+    bulk[sg][i + e0 + 1u] = float(i + e0 + 1u);
+  }
+  barrier();
+
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> acc =
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> zero =
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+
+  float gamma_s[8];
+  for (uint j = 0u; j < C; ++j) {
+    gamma_s[j] = float(j) * 0.01f;
+  }
+
+  for (uint t0 = 0u; t0 < T; t0 += C) {
+    // loop-1-like: 16 steps x [3 shared round trips + 3 MMAs on one
+    // accumulator chain + 1 barrier], tiles backed by bulk[sg].
+    for (uint kk = 0u; kk < KSTEPS; ++kk) {
+      uint offA = ((kk * 224u) % (bpr - 256u));
+      uint offB = offA + 64u;
+      coopMatLoad(mat_a, bulk[sg], offA, 8, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatLoad(mat_b, bulk[sg], offB, 8, gl_CooperativeMatrixLayoutColumnMajor);
+      acc = coopMatMulAdd(mat_a, mat_b, acc);
+      coopMatLoad(mat_a, bulk[sg], offA + 128u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      acc = coopMatMulAdd(mat_a, mat_b, acc);
+      coopMatLoad(mat_a, bulk[sg], offA + 192u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      acc = coopMatMulAdd(mat_a, mat_b, acc);
+      barrier();
+    }
+
+    // middle-like: 6 round trips with elementwise passes between them.
+    for (uint j = 0u; j < 6u; ++j) {
+      uint off = ((t0 * 3u + j * 97u) % (bpr - 64u));
+      coopMatStore(acc, bulk[sg], off, 8, gl_CooperativeMatrixLayoutRowMajor);
+      barrier();
+      float v0 = bulk[sg][off + e0] * gamma_s[r0];
+      float v1 = bulk[sg][off + e0 + 1u] * gamma_s[c0];
+      barrier();
+      bulk[sg][off + e0] = v0;
+      bulk[sg][off + e0 + 1u] = v1;
+      barrier();
+      coopMatLoad(acc, bulk[sg], off, 8, gl_CooperativeMatrixLayoutRowMajor);
+    }
+
+    // state-like: 16 slices x [MMA from bulk + store + subgroup barrier +
+    // FMA] in 4-slice waves (the batch4 structure).
+    for (uint wave = 0u; wave < KSTEPS / 4u; ++wave) {
+      for (uint j = 0u; j < 4u; ++j) {
+        uint off = ((wave * 4u + j) * 251u) % (bpr - 64u);
+        coopMatLoad(mat_a, bulk[sg], off, 8, gl_CooperativeMatrixLayoutColumnMajor);
+        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd =
+            coopMatMulAdd(mat_a, mat_b, zero);
+        coopMatStore(kd, bulk[sg], off, 8, gl_CooperativeMatrixLayoutRowMajor);
+        subgroupBarrier();
+        bulk[sg][off + e0] = bulk[sg][off + e0] * 0.999f + bulk[sg][off + e0];
+        bulk[sg][off + e0 + 1u] =
+            bulk[sg][off + e0 + 1u] * 0.999f + bulk[sg][off + e0 + 1u];
+      }
+      subgroupBarrier();
+    }
+
+    // y-like store per chunk row.
+    if (r0 < C) {
+      y_buf.w[((t0 + r0) * params.matrix_k + head) * 64u + e0] =
+          bf16_pack(bulk[sg][e0], bulk[sg][e0 + 1u]);
+    }
+    barrier();
+  }
+
+  // Terminal state-like write.
+  for (uint kk = 0u; kk < KSTEPS; ++kk) {
+    s_out.v[(head * 4u + sg) * 1024u + kk * 64u + e0] = bulk[sg][kk * 8u + e0];
+    s_out.v[(head * 4u + sg) * 1024u + kk * 64u + e0 + 1u] =
+        bulk[sg][kk * 8u + e0 + 1u];
+  }
+}

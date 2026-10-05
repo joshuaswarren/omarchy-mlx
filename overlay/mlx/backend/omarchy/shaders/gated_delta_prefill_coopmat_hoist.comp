@@ -1,14 +1,14 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 //
-// Hoisted GDN prefill recurrence (GDN_HOIST pass B). The state-independent
-// K.K^T / Q.K^T accumulators run in the parallel pass A
-// (gated_delta_prefill_kktqkt.comp) with the shipped loop-1 sequence; this
-// kernel loads the f32 tiles from the Snap binding (exact round trip) and
-// keeps only the state-dependent work: gamma/beta staging, the
+// Hoisted GDN prefill recurrence on the batch4 (state-wave) body — pass B
+// of MLX_OMARCHY_GDN_HOIST. Pass A (gated_delta_prefill_kktqkt.comp)
+// computes the state-independent K.K^T / Q.K^T tiles for every chunk in
+// parallel with the shipped loop-1 sequence; this kernel loads the f32
+// tiles from the Snap binding and keeps the state-dependent work: the
 // (gamma beta K).S / (gamma Q).S loop, the Neumann inverse, delta, out and
-// the state update — the batch kernel's per-element arithmetic in the same
-// order. staging_kq drops the raw k/q shared tiles (pass A owns them).
+// the batch4 state-wave update. Per-element arithmetic and per-accumulator
+// order unchanged (f32 tile round trip is exact).
 
 #version 460
 
@@ -371,12 +371,11 @@ void main() {
     }
     barrier();
 
-    // State update in 4-slice waves: stage four K slices (decayed by the
-    // chunk-end decay), then per slice MMA -> shared store -> subgroup
-    // barrier -> FMA, where the FMA reads only the lane's own
-    // store-mapped elements (the e0 = lane*2 round-trip convention this
-    // kernel's staging already relies on), so the 48 per-step barriers
-    // become 4 plus one subgroup barrier per slice.
+    // State update in 4-slice waves, restructured: stage four K slices,
+    // then 4 loads + 4 independent MMAs, one barrier so every lane's load
+    // has completed, 4 stores into the dead kgc_all regions, one barrier,
+    // then the four FMAs. Same per-slice arithmetic as the batch kernel's
+    // per-slice rounds; 2 SG barriers per wave instead of 5.
     for (uint wave = 0u; wave < KSTEPS / 4u; ++wave) {
       for (uint j = 0u; j < 4u; ++j) {
         uint kk = wave * 4u + j;
@@ -392,24 +391,40 @@ void main() {
         kgc_all[sg][j * 64u + e0 + 1u] = kv1 * dec_r0;
       }
       barrier();
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd0;
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd1;
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd2;
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd3;
+      coopMatLoad(mat_a, kgc_all[sg], 0u, 8, gl_CooperativeMatrixLayoutColumnMajor);
+      kd0 = coopMatMulAdd(mat_a, mat_b2, zero);
+      coopMatLoad(mat_a, kgc_all[sg], 64u, 8, gl_CooperativeMatrixLayoutColumnMajor);
+      kd1 = coopMatMulAdd(mat_a, mat_b2, zero);
+      coopMatLoad(mat_a, kgc_all[sg], 128u, 8, gl_CooperativeMatrixLayoutColumnMajor);
+      kd2 = coopMatMulAdd(mat_a, mat_b2, zero);
+      coopMatLoad(mat_a, kgc_all[sg], 192u, 8, gl_CooperativeMatrixLayoutColumnMajor);
+      kd3 = coopMatMulAdd(mat_a, mat_b2, zero);
+      // Every lane's loads must complete before any lane's store reuses
+      // the operand regions.
+      subgroupBarrier();
+      coopMatStore(kd0, kgc_all[sg], 0u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatStore(kd1, kgc_all[sg], 64u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatStore(kd2, kgc_all[sg], 128u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatStore(kd3, kgc_all[sg], 192u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      // The store's lane-to-element mapping is implementation-defined, so
+      // the FMAs below can read elements another lane just stored: order
+      // the subgroup's shared accesses explicitly (one barrier for all
+      // four slices).
+      subgroupBarrier();
       for (uint j = 0u; j < 4u; ++j) {
         uint kk = wave * 4u + j;
-        coopMatLoad(mat_a, kgc_all[sg], j * 64u, 8, gl_CooperativeMatrixLayoutColumnMajor);
-        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd =
-            coopMatMulAdd(mat_a, mat_b2, zero);
-        coopMatStore(kd, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
-        // The store's lane-to-element mapping is implementation-defined,
-        // so the FMA below can read elements another lane just stored:
-        // order the subgroup's shared accesses explicitly.
-        subgroupBarrier();
         s_state[sg][kk * 64u + e0] =
-            s_state[sg][kk * 64u + e0] * gamC + rt_b[sg][e0];
+            s_state[sg][kk * 64u + e0] * gamC + kgc_all[sg][j * 64u + e0];
         s_state[sg][kk * 64u + e0 + 1u] =
-            s_state[sg][kk * 64u + e0 + 1u] * gamC + rt_b[sg][e0 + 1u];
+            s_state[sg][kk * 64u + e0 + 1u] * gamC + kgc_all[sg][j * 64u + e0 + 1u];
       }
-      // Close the wave: without this, a fast lane could reach the next
-      // wave's kgc_all staging writes while a sibling lane's coopMatLoad
-      // reads of the previous wave are still pending.
+      // Close the wave: a fast lane must not reach the next wave's
+      // kgc_all staging writes while a sibling lane's stores of this wave
+      // are still pending (the FMAs read them).
       subgroupBarrier();
     }
   }

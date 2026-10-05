@@ -11557,6 +11557,14 @@ void GatedDeltaUpdate::eval_gpu(
   // wave instead of 5; per-slice arithmetic unchanged. Opt-in
   // (MLX_OMARCHY_GDN_STATEWAVE=1) until the jwm1 stage readout.
   static const bool gdn_statewave_env = omarchy::env_flag("MLX_OMARCHY_GDN_STATEWAVE");
+  // Shared-footprint sweep (GdnPrefill2-ablate): MLX_OMARCHY_GDN_SWEEP=0/1/2
+  // dispatches a bench shadow kernel with 32/16/8 KiB shared per WG —
+  // measures whether the 64-WG dispatch time moves with per-WG shared
+  // (occupancy) at identical geometry and phase structure. WRONG RESULTS.
+  static const int gdn_sweep_env = []() {
+    const char* e = std::getenv("MLX_OMARCHY_GDN_SWEEP");
+    return e ? std::atoi(e) : -1;
+  }();
   // Stage-ablation stubs (GdnPrefill2-ablate): MLX_OMARCHY_GDN_STUB=1..7
   // selects a bench kernel that truncates one stage class of the batch kernel
   // (1 NO_LOOPK, 2 NO_LOOPS, 3 NO_NEUMANN, 4 NO_DELTA, 5 NO_OUT, 6 NO_STATE,
@@ -11607,6 +11615,18 @@ void GatedDeltaUpdate::eval_gpu(
         binding(out),    // 8 MBuf - unused (maskless gate)
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
+    if (gdn_sweep_env >= 0 && gdn_sweep_env <= 2) {
+      encoder.dispatch_compute(
+            gdn_sweep_env == 0 ? omarchy::ComputeKernel::GdnSweep32k
+            : gdn_sweep_env == 1 ? omarchy::ComputeKernel::GdnSweep16k
+                                 : omarchy::ComputeKernel::GdnSweep8k,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv),
+        Dv / 32,
+        1);
+      return;
+    }
     if (gdn_stub_env >= 1 && gdn_stub_env <= 7) {
       encoder.dispatch_compute(
         gdn_stub_env == 1 ? omarchy::ComputeKernel::GdnStubNoloopk

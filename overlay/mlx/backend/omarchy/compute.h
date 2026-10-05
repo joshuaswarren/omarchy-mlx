@@ -692,6 +692,9 @@ enum class ComputeKernel : uint16_t {
   // 4-slice wave pays 2 subgroup barriers instead of 5; per-slice
   // arithmetic unchanged. MLX_OMARCHY_GDN_STATEWAVE.
   GatedDeltaPrefillCoopmatBatch4BF16,
+  GdnSweep32k,
+  GdnSweep16k,
+  GdnSweep8k,
   GdnStubNoloopk,
   GdnStubNoloops,
   GdnStubNoneumann,
