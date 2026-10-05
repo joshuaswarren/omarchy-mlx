@@ -1347,7 +1347,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
     const array& x = node.inputs()[0];
     if (x.ndim() < 2 || x.shape(-2) < 1 ||
-        x.shape(-2) > static_cast<int>(kQmmVecTokenRowsMax) ||
+        x.shape(-2) > 8 ||
         x.size() !=
             static_cast<size_t>(x.shape(-2)) *
                 static_cast<size_t>(x.shape(-1))) {
