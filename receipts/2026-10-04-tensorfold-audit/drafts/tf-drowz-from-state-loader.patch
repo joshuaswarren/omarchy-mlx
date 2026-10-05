@@ -1,0 +1,26 @@
+diff --git a/src/tensorfold/families/h3/weights.py b/src/tensorfold/families/h3/weights.py
+index adc9116..8302c73 100644
+--- a/src/tensorfold/families/h3/weights.py
++++ b/src/tensorfold/families/h3/weights.py
+@@ -147,10 +147,19 @@ def load_int8_dit(state_dir, blocks: int | None = None):
+     from .dit import Block, H3DiT
+ 
+     state_dir = Path(state_dir)
+-    index = json.loads((state_dir / "index.json").read_text())
+     config = DiTConfig.from_dict(json.loads((state_dir / "transformer-config.json").read_text()))
+     state: dict = {}
+-    for name, _ in index["files"]:
++    if (state_dir / "index.json").exists():
++        index = json.loads((state_dir / "index.json").read_text())
++        files = [name for name, _ in index["files"]]
++    else:
++        # Base/delta manifest layout: the M2 holds the non-swapped base plus
++        # the swapped-weights delta, each with its own sha256 manifest.
++        files = []
++        for manifest in ("base-manifest.json", "delta-manifest.json"):
++            entries = json.loads((state_dir / manifest).read_text())["files"]
++            files.extend(entry["name"] for entry in entries)
++    for name in files:
+         state.update(mx.load(str(state_dir / name)))
+ 
+     skeleton = DiTConfig(**{**config.__dict__, "num_layers": 0})

@@ -1,59 +1,78 @@
 diff --git a/h3_generate.py b/h3_generate.py
-index 190dc25..ee9660f 100644
+index fcc9cf1..6a68041 100644
 --- a/h3_generate.py
 +++ b/h3_generate.py
-@@ -147,6 +147,14 @@ def main():
-     parser.add_argument("--float-vae", action="store_true", help="video decoder in float32, without int8 kernels")
-     parser.add_argument("--first-frame", default=None, help="image the clip starts from (image to video)")
+@@ -149,6 +149,10 @@ def main():
      parser.add_argument("--parity", action="store_true")
-+    parser.add_argument("--dump-text-rows", default=None,
-+                        help="encode the prompt, save the conditioning tensors to PATH and exit before the DiT load")
-+    parser.add_argument("--dump-latents", default=None,
-+                        help="save the denoised latents to PATH (pair with --latents-in on a small host)")
-+    parser.add_argument("--latents-in", default=None,
-+                        help="load denoised latents saved by --dump-latents and skip the denoise")
-+    parser.add_argument("--text-rows", default=None,
-+                        help="load conditioning tensors saved by --dump-text-rows instead of running the text encoder")
-     args = parser.parse_args()
+     parser.add_argument("--dump-text-rows", default=None,
+                         help="encode the prompt, save the conditioning tensors to PATH and exit before the DiT load")
++    parser.add_argument("--int8-from-state", default=None,
++                        help="load the DiT from a saved swapped int8 state dir (index.json + shards) instead of the bf16 checkpoint")
++    parser.add_argument("--blocks", type=int, default=None,
++                        help="keep only the first N blocks (measurements)")
+     parser.add_argument("--dump-latents", default=None,
+                         help="save the denoised latents to PATH (pair with --latents-in on a small host)")
+     parser.add_argument("--latents-in", default=None,
+@@ -191,20 +195,33 @@ def main():
+     print(f"[tensorfold] text: {text.shape[1]} rows in {text_seconds:.1f}s", flush=True)
  
-     root = h3.pipeline_root(args.model_dir)
-@@ -159,7 +167,22 @@ def main():
- 
-         image = prepare_keyframe_image(Image.open(args.first_frame).convert("RGB"), args.height, args.width,
-                                        stretch=True)
--    text, tags = encode_text(root, prompt, image)
-+    if args.text_rows:
-+        loaded = mx.load(args.text_rows)
-+        text, tags = loaded["text"], loaded.get("tags")
+     started = time.perf_counter()
+-    dit = load_dit(args.model_dir)
+-    for spec in args.lora:
+-        path, _, strength = spec.partition(":")
+-        print(f"[tensorfold] {merge(dit, path, float(strength or 1.0))}", flush=True)
+-    if args.int8_mlp:
+-        print(f"[tensorfold] int8 MLP in {int8_mlp(dit)} blocks", flush=True)
+-    if args.int8_qkv or args.int8_out:
+-        changed = int8_attention(dit, qkv=args.int8_qkv, out=args.int8_out, fused=not args.unfused_qkv)
+-        print(f"[tensorfold] int8 attention projections: {changed}", flush=True)
+-    rounded = settle(dit)
+-    if rounded and args.lora:
+-        print(f"[tensorfold] {rounded} adapted projections rounded to bfloat16 (not on an int8 kernel)", flush=True)
++    if args.latents_in:
++        # Decode-only: the DiT is never needed, so a small host skips the
++        # 62 GiB load and the int8 swap entirely.
++        dit = None
++        print("[tensorfold] latents-in: skipping the DiT load (decode-only)", flush=True)
 +    else:
-+        text, tags = encode_text(root, prompt, image)
-+        if args.dump_text_rows:
-+            payload = {"text": text}
-+            if isinstance(tags, mx.array):
-+                payload["tags"] = tags
-+            elif isinstance(tags, np.ndarray):
-+                payload["tags"] = mx.array(tags)
-+            else:
-+                payload["tags"] = mx.array(np.asarray(tags))
-+            mx.save_safetensors(args.dump_text_rows, payload)
-+            print(f"[tensorfold] text rows dumped to {args.dump_text_rows}; exiting before the DiT load", flush=True)
-+            return
-     condition = None
-     if image is not None:
-         condition = encode_first_frame(root, image, args.width, args.height,
-@@ -188,10 +211,46 @@ def main():
-     if args.subset:
++        if args.int8_from_state:
++            from tensorfold.families.h3.weights import load_int8_dit
++
++            dit = load_int8_dit(args.int8_from_state, blocks=args.blocks)
++            print(f"[tensorfold] int8 DiT loaded from state {args.int8_from_state}", flush=True)
++        else:
++            dit = load_dit(args.model_dir)
++    if dit is not None:
++        for spec in args.lora:
++            path, _, strength = spec.partition(":")
++            print(f"[tensorfold] {merge(dit, path, float(strength or 1.0))}", flush=True)
++        if args.int8_mlp:
++            print(f"[tensorfold] int8 MLP in {int8_mlp(dit)} blocks", flush=True)
++        if args.int8_qkv or args.int8_out:
++            changed = int8_attention(dit, qkv=args.int8_qkv, out=args.int8_out, fused=not args.unfused_qkv)
++            print(f"[tensorfold] int8 attention projections: {changed}", flush=True)
++        rounded = settle(dit)
++        if rounded and args.lora:
++            print(f"[tensorfold] {rounded} adapted projections rounded to bfloat16 (not on an int8 kernel)", flush=True)
+     load_seconds = time.perf_counter() - started
+-    if args.parity:
++    if args.parity and dit is not None:
+         parity(root, dit, args, text, tags)
+ 
+     points, subset = args.points, None
+@@ -212,13 +229,17 @@ def main():
          points, subset = parse_subset(args.subset)
      started = time.perf_counter()
--    latents = denoise(dit, text, tags, args.width, args.height, args.frames, points, args.seed, subset,
--                      release=not args.keep_adaln, condition=condition,
--                      keyframes=("first",) if condition is not None else (),
--                      on_step=lambda i, n, s: print(f"[tensorfold] step {i}/{n} {s:.2f}s", flush=True))
-+    if args.latents_in:
+     if args.latents_in:
+-        from tensorfold.families.h3.sampler import Latents, Layout
 +        from tensorfold.families.h3.packing import Layout
 +        from tensorfold.families.h3.sampler import Latents
-+        loaded = mx.load(args.latents_in)
-+        scalars = json.loads(Path(args.latents_in + ".json").read_text())
+         loaded = mx.load(args.latents_in)
+         scalars = json.loads(Path(args.latents_in + ".json").read_text())
+-        packed = scalars.pop("packed")
+-        import importlib
+-        layout_cls = getattr(importlib.import_module("tensorfold.families.h3.sampler"), "Layout")
+-        packed = layout_cls(**packed) if isinstance(packed, dict) else packed
 +        packed = Layout(rows=scalars.pop("packed_rows"),
 +                        position_ids=loaded.pop("packed_position_ids"),
 +                        tags=loaded.pop("packed_tags"),
@@ -61,18 +80,14 @@ index 190dc25..ee9660f 100644
 +                        audio_rows=loaded.pop("packed_audio_rows"),
 +                        text_rows=loaded.pop("packed_text_rows"),
 +                        condition_video_rows=scalars.pop("packed_condition_video_rows"))
-+        latents = Latents(**{**loaded, "packed": packed, **scalars})
-+        print(f"[tensorfold] latents loaded from {args.latents_in}; denoise skipped", flush=True)
-+    else:
-+        latents = denoise(dit, text, tags, args.width, args.height, args.frames, points, args.seed, subset,
-+                          release=not args.keep_adaln, condition=condition,
-+                          keyframes=("first",) if condition is not None else (),
-+                          on_step=lambda i, n, s: print(f"[tensorfold] step {i}/{n} {s:.2f}s", flush=True))
-+        if args.dump_latents:
-+            import dataclasses
-+            payload, scalars = {}, {}
-+            for field in dataclasses.fields(latents):
-+                value = getattr(latents, field.name)
+         latents = Latents(**{**loaded, "packed": packed, **scalars})
+         print(f"[tensorfold] latents loaded from {args.latents_in}; denoise skipped", flush=True)
+     else:
+@@ -231,14 +252,19 @@ def main():
+             payload, scalars = {}, {}
+             for field in dataclasses.fields(latents):
+                 value = getattr(latents, field.name)
+-                if isinstance(value, mx.array):
 +                if field.name == "packed":
 +                    for pf in dataclasses.fields(value):
 +                        pv = getattr(value, pf.name)
@@ -81,39 +96,15 @@ index 190dc25..ee9660f 100644
 +                        else:
 +                            scalars["packed_" + pf.name] = pv
 +                elif isinstance(value, mx.array):
-+                    payload[field.name] = value
+                     payload[field.name] = value
+-                elif isinstance(value, list) and value and all(isinstance(v, float) for v in value):
+-                    scalars[field.name] = value
+-                elif isinstance(value, (int, float)):
 +                elif isinstance(value, list):
+                     scalars[field.name] = value
+                 else:
+-                    scalars[field.name] = repr(value)
 +                    scalars[field.name] = value
-+                else:
-+                    scalars[field.name] = value
-+            mx.save_safetensors(args.dump_latents, payload)
-+            Path(args.dump_latents + ".json").write_text(json.dumps(scalars))
-+            print(f"[tensorfold] latents dumped to {args.dump_latents} ({sorted(payload)})", flush=True)
-     denoise_seconds = time.perf_counter() - started
-     del dit
-     gc.collect()
-diff --git a/oneshot-setup.sh b/oneshot-setup.sh
-index 00c095b..0051a59 100755
---- a/oneshot-setup.sh
-+++ b/oneshot-setup.sh
-@@ -30,10 +30,16 @@ ok()  { echo "  ✓ $*"; }
- step(){ echo; echo "==> $*"; }
- 
- step "Preflight"
--[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || die "Apple silicon macOS only"
--CHIP=$(sysctl -n machdep.cpu.brand_string); RAM=$(( $(sysctl -n hw.memsize) / 1073741824 ))
--ok "$CHIP, macOS $(sw_vers -productVersion), ${RAM} GB"
--[ "$RAM" -ge 128 ] || die "needs 128 GB+ unified memory: the float32 adapter merge peaks at 103 GB (measured on 256 GB only)"
-+if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
-+  CHIP=$(sysctl -n machdep.cpu.brand_string); RAM=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-+  ok "$CHIP, macOS $(sw_vers -productVersion), ${RAM} GB"
-+else
-+  CHIP="unknown-$(uname -s)-$(uname -m)"; RAM="$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo 2>/dev/null || echo unknown)"
-+  echo "  ! not Apple silicon macOS ($CHIP, ${RAM} GB): continuing; Metal-only steps skip themselves via the kernel gates"
-+fi
-+if [ "${RAM:-0}" -lt 128 ] 2>/dev/null; then
-+  echo "  ! ${RAM} GB < 128 GB: the float32 adapter merge peaks at 103 GB (measured on 256 GB only); skip the merge or the engine refuses at run time if memory is short"
-+fi
- case "$CHIP" in *M5*) ok "M5: int8 kernels on the tensor units";;
-   *) echo "  ! $CHIP is not M5: the int8 kernels need Metal 4 tensor operations; without them the engine runs bfloat16 and the README numbers do not apply";; esac
- export PATH="/opt/homebrew/bin:$PATH"
+             mx.save_safetensors(args.dump_latents, payload)
+             Path(args.dump_latents + ".json").write_text(json.dumps(scalars))
+             print(f"[tensorfold] latents dumped to {args.dump_latents} ({sorted(payload)})", flush=True)
