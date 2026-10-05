@@ -798,6 +798,17 @@ void translate_header(std::string& header) {
           R"(using\s+namespace\s+[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*\s*;)"),
       "");
   replace_all(header, "using namespace metal;", "");
+  // After resolve_kernel_templates has substituted concrete types for
+  // template parameters, 'template <typename T>' declarations in the
+  // header become vestigial (GLSL has no C++ templates; the functions
+  // are effectively monomorphized by the type substitution). Strip the
+  // template prefix so the functions become regular GLSL functions.
+  // Without this, the QMV header's 'template <typename T> inline float
+  // load_vector(...)' triggers 'unsupported user header declaration'.
+  header = std::regex_replace(
+      header, std::regex(R"(template\s*<\s*typename\s+[A-Za-z_][A-Za-z0-9_]*\s*>\s*)"),
+      "");
+  replace_all(header, "using namespace metal;", "");
   replace_all(header, "metal::precise::", "");
   replace_all(header, "metal::fast::", "");
   replace_all(header, "metal::", "");
