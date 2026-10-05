@@ -328,7 +328,7 @@ PY
 # ---------------------------------------------------------------------------
 a15() {
   leg_begin a15
-  start_server "$Q4B" --memory-guard --memory-guard-gb 8
+  start_server "$Q4B" --memory-guard balanced --memory-guard-gb 8
   grep -i 'Process memory enforcer started' "$ART/server.log" || fail "no enforcer startup line"
   grep -i 'Process memory enforcer started' "$ART/server.log" | head -1
   BASELINE=$(grep -oiE 'Baseline memory set: [0-9.]+ [KMG]B' "$ART/server.log" | head -1)
