@@ -102,6 +102,11 @@ class VulkanAllocator : public allocator::Allocator {
     std::unique_lock lk(mutex_);
     return gc_limit_;
   }
+  size_t set_gc_limit(size_t limit) {
+    std::unique_lock lk(mutex_);
+    std::swap(gc_limit_, limit);
+    return limit;
+  }
   size_t set_cache_limit(size_t limit);
   void clear_cache();
 

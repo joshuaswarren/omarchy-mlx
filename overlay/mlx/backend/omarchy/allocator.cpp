@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -19,10 +20,20 @@ namespace mlx::core {
 namespace omarchy {
 
 constexpr size_t kPageSize = 4096;
+constexpr size_t kPowerOfTwoBinThreshold = 1u << 20;
 
 size_t round_size(size_t size) {
   if (size <= kPageSize) {
     return kPageSize;
+  }
+  if (size > kPowerOfTwoBinThreshold) {
+    size_t bin = kPowerOfTwoBinThreshold;
+    while (bin < size && bin <= SIZE_MAX / 2) {
+      bin *= 2;
+    }
+    if (bin >= size) {
+      return bin;
+    }
   }
   return kPageSize * ((size + kPageSize - 1) / kPageSize);
 }
@@ -51,21 +62,24 @@ void poison_freed_buffer(void* data, size_t size) {
   }
 }
 
-// Test-only hook: the next N vkAllocateMemory calls return
-// VK_ERROR_OUT_OF_DEVICE_MEMORY so the OOM-retry path is observable
-// without mocking the device table. Negative N = forever. Zero = off.
-// Set via MLX_OMARCHY_TEST_OOM_REMAINING; consulted only when set.
-int& test_oom_remaining() {
-  static int remaining = 0;
-  static bool initialized = false;
-  if (!initialized) {
-    const char* env = std::getenv("MLX_OMARCHY_TEST_OOM_REMAINING");
-    if (env != nullptr) {
-      remaining = std::atoi(env);
-    }
-    initialized = true;
+// Test-only hook: simulate one or more vkAllocateMemory OOM results.
+bool consume_test_oom() {
+  const char* env = std::getenv("MLX_OMARCHY_TEST_OOM_REMAINING");
+  if (env == nullptr || *env == '\0') {
+    return false;
   }
-  return remaining;
+  char* end = nullptr;
+  long remaining = std::strtol(env, &end, 10);
+  if (end == env || remaining <= 0) {
+    return false;
+  }
+  if (remaining == 1) {
+    unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
+  } else {
+    std::string next = std::to_string(remaining - 1);
+    setenv("MLX_OMARCHY_TEST_OOM_REMAINING", next.c_str(), 1);
+  }
+  return true;
 }
 
 uint32_t VulkanAllocator::find_memory_type(
@@ -202,13 +216,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
   mai.allocationSize = reqs.size;
   mai.memoryTypeIndex = type_index;
   VkResult alloc_result = VK_SUCCESS;
-  if (test_oom_remaining() > 0 || test_oom_remaining() < 0) {
-    // Test hook: simulate driver OOM. The decrement happens in the
-    // real call below, so the test sees the gate fire on the next
-    // malloc and the retry succeed.
-    if (test_oom_remaining() > 0) {
-      test_oom_remaining() -= 1;
-    }
+  if (consume_test_oom()) {
     alloc_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
   } else {
     alloc_result =
@@ -216,13 +224,6 @@ Buffer VulkanAllocator::malloc(size_t size) {
   }
   if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
       alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
-    // OOM retry: drop the entire reuse cache (caches are pure reuse; the
-    // driver sees no more memory available than we do) and try once more.
-    // Mirrors Metal's behavior: a malloc that the heap cannot satisfy
-    // even after a cache flush is a hard error. Vulkan has no
-    // `MTLHeap`-equivalent that could give us partial sub-allocation, so
-    // one retry is the correct number — a second failure means the
-    // driver genuinely cannot satisfy this request.
     {
       std::unique_lock rl(mutex_);
       buffer_cache_.clear();
