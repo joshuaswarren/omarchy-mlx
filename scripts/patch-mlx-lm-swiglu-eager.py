@@ -23,9 +23,26 @@ OLD = """@partial(mx.compile, shapeless=True)
 def swiglu(gate, x):
     return nn.silu(gate) * x
 """
-NEW = """def swiglu(gate, x):
+NEW = """import os as _omarchy_os
+
+
+def _omarchy_make_compiled_swiglu():
+    @partial(mx.compile, shapeless=True)
+    def _f(gate, x):
+        return nn.silu(gate) * x
+
+    return _f
+
+
+_omarchy_compiled_swiglu = _omarchy_make_compiled_swiglu()
+
+
+def swiglu(gate, x):
     # mlx-omarchy swiglu-eager patch: eager, uncompiled silu so the GEMV
     # planner sees Multiply(Multiply(gate, Sigmoid(gate)), x) and folds it.
+    # MLX_OMARCHY_SWIGLU_EAGER=0 restores the compiled upstream path.
+    if _omarchy_os.getenv("MLX_OMARCHY_SWIGLU_EAGER") == "0":
+        return _omarchy_compiled_swiglu(gate, x)
     return (gate * mx.sigmoid(gate)) * x
 """
 MARKER = "swiglu-eager patch"
