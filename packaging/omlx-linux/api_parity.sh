@@ -68,6 +68,8 @@ echo "[$(ts)] === api_parity start | base=$BASE model=$MODEL out=$OUT ==="
 if (( START )); then
   [[ -n $VENV && -x $VENV/bin/omlx ]] || { echo "--start needs --venv with omlx installed"; exit 2; }
   export HOME="${HOME:-/tmp/omlx-home}"
+  # Weights live in the ticket HOME's cache; never trigger a re-download.
+  export HF_HUB_CACHE="${HF_HUB_CACHE:-$HOME/.cache/huggingface/hub}"
   # MCP config for a18 (echo server lives next to this script)
   HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   PYBIN="$VENV/bin/python"
@@ -319,7 +321,7 @@ for p in glob.glob(pat):
 want = os.environ.get("WANTCFG", "").replace("--", "/").lower()
 best = None
 for name, cfg in hits:
-    if want and want in name.lower():
+    if want and want in name.replace("--", "/").lower():
         best = cfg
         break
 if best is None and len(hits) == 1:
@@ -407,7 +409,7 @@ sec_a13() {
   echo "[$(ts)] --- A13: model profiles, per-model settings, alias, type override ---"
   ALIAS=parity-alias-model
   code=$(curl -s -o a13_alias.json -w '%{http_code}' --max-time 15 -X PUT \
-    "$BASE/api/models/$MODEL/settings" -H 'content-type: application/json' \
+    "$BASE/admin/api/models/$MODEL/settings" -H 'content-type: application/json' \
     -d "{\"model_alias\":\"$ALIAS\"}")
   if [[ $code == 401 ]]; then skip "A13 admin API" "401 — server has an API key; rerun loopback without auth"; return; fi
   [[ $code == 200 ]] && ok "A13 PUT settings model_alias 200" || bad "A13 PUT settings model_alias 200 (http $code)"
@@ -426,7 +428,7 @@ assert d["choices"][0]["message"]["content"].strip(), d' \
     && ok "A13 chat request by alias serves" || bad "A13 chat request by alias serves"
 
   code=$(curl -s -o a13_profile.json -w '%{http_code}' --max-time 15 -X POST \
-    "$BASE/api/models/$MODEL/profiles" -H 'content-type: application/json' \
+    "$BASE/admin/api/models/$MODEL/profiles" -H 'content-type: application/json' \
     -d '{"name":"parity","display_name":"Parity","settings":{"temperature":0.5},"expose_as_model":true}')
   [[ $code == 200 ]] && ok "A13 create profile expose_as_model 200" || bad "A13 create profile expose_as_model 200 (http $code)"
 
@@ -454,7 +456,7 @@ assert d["choices"][0]["message"]["content"].strip(), d' \
   fi
 
   code=$(curl -s -o a13_apply.json -w '%{http_code}' --max-time 15 -X POST \
-    "$BASE/api/models/$MODEL/profiles/parity/apply")
+    "$BASE/admin/api/models/$MODEL/profiles/parity/apply")
   python3 -c '
 import json, sys
 d = json.load(open("a13_apply.json"))
@@ -465,7 +467,7 @@ sys.exit(0 if s.get("temperature") == 0.5 else 1)' \
 
   # type override round-trip (setting visible, then reset)
   code=$(curl -s -o a13_type.json -w '%{http_code}' --max-time 15 -X PUT \
-    "$BASE/api/models/$MODEL/settings" -H 'content-type: application/json' \
+    "$BASE/admin/api/models/$MODEL/settings" -H 'content-type: application/json' \
     -d '{"model_type_override":"llm"}')
   python3 -c '
 import json, sys
@@ -476,8 +478,8 @@ sys.exit(0 if (st.get("model_type_override") == "llm") else 1)' \
     || bad "A13 model_type_override accepted+persisted (http $code)"
 
   # cleanup: restore defaults so repeated runs start clean
-  curl -s --max-time 15 -X POST "$BASE/api/models/$MODEL/settings/reset" -o /dev/null
-  curl -s --max-time 15 -X DELETE "$BASE/api/models/$MODEL/profiles/parity" -o /dev/null
+  curl -s --max-time 15 -X POST "$BASE/admin/api/models/$MODEL/settings/reset" -o /dev/null
+  curl -s --max-time 15 -X DELETE "$BASE/admin/api/models/$MODEL/profiles/parity" -o /dev/null
   echo "[$(ts)] a13 cleanup: settings reset + profile deleted"
 }
 
@@ -516,17 +518,50 @@ PY
 
   # MCP: only meaningful when this script started the server with --mcp-config
   if [[ $START == 1 ]]; then
+    # The model can SIMULATE a tool result from the prompt text (run-3 lesson:
+    # SDK missing -> 0 tools -> model answered "Simulated echo tool response:
+    # parity-ok"). Require the server log to show the echo server actually
+    # connected with >0 tools, then require the content check.
+    if grep -qE "Failed to connect to MCP server 'echo'|MCP initialized with 0 tools" server.log; then
+      bad "A18 MCP echo tool round-trip via chat (server log shows MCP not connected: see server.log)"
+    else
+    # omlx surfaces MCP tools as OpenAI tool_calls (run-4 evidence: echo__echo
+    # called with exactly {"text": "parity-ok"}, finish_reason=tool_calls).
+    # Complete the round trip: feed the tool result back, require the reply.
     curl -s --max-time 120 "$BASE/v1/chat/completions" -H 'content-type: application/json' \
-      -d "{\"model\":\"$MODEL\",\"temperature\":0,\"messages\":[{\"role\":\"user\",\"content\":\"Call the echo tool with the exact text parity-ok and then reply with exactly what the tool returned.\"}]}" \
-      -o a18_mcp.json
+      -d "{\"model\":\"$MODEL\",\"temperature\":0,\"messages\":[{\"role\":\"user\",\"content\":\"Call the echo tool with the exact text parity-ok.\"}]}" \
+      -o a18_mcp_t1.json
     python3 - <<'PY'
 import json
+d = json.load(open("a18_mcp_t1.json"))
+msg = d["choices"][0]["message"]
+tcs = msg.get("tool_calls") or []
+assert tcs, f"no tool_calls in turn 1: {str(msg)[:200]}"
+tc = tcs[0]
+assert tc["function"]["name"] == "echo__echo", tc["function"]
+args = json.loads(tc["function"]["arguments"])
+assert "parity-ok" in str(args), args
+out = {"id": tc["id"], "args": args}
+json.dump(out, open("a18_mcp_state.json", "w"))
+print("PASS-DETAIL a18 mcp turn1: echo__echo", args)
+PY
+    if [[ $? -eq 0 ]]; then
+      TCID=$(python3 -c 'import json; print(json.load(open("a18_mcp_state.json"))["id"])')
+      curl -s --max-time 120 "$BASE/v1/chat/completions" -H 'content-type: application/json' \
+        -d "{\"model\":\"$MODEL\",\"temperature\":0,\"messages\":[{\"role\":\"user\",\"content\":\"Call the echo tool with the exact text parity-ok.\"},{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"$TCID\",\"type\":\"function\",\"function\":{\"name\":\"echo__echo\",\"arguments\":\"{\\\"text\\\": \\\"parity-ok\\\"}\"}}],\"content\":null},{\"role\":\"tool\",\"tool_call_id\":\"$TCID\",\"content\":\"echo:parity-ok\"}]}" \
+        -o a18_mcp.json
+      python3 - <<'PY'
+import json
 d = json.load(open("a18_mcp.json"))
-txt = d["choices"][0]["message"]["content"] or ""
-assert "parity-ok" in txt, f"echo result missing from response: {txt[:200]!r}"
+txt = (d["choices"][0]["message"] or {}).get("content") or ""
+assert "parity-ok" in txt, f"echo result missing from reply: {txt[:200]!r}"
 print("PASS-DETAIL a18 mcp echo:", txt[:120].replace(chr(10), " "))
 PY
-    [[ $? -eq 0 ]] && ok "A18 MCP echo tool round-trip via chat" || bad "A18 MCP echo tool round-trip via chat"
+      [[ $? -eq 0 ]] && ok "A18 MCP echo tool round-trip via chat" || bad "A18 MCP echo tool round-trip via chat"
+    else
+      bad "A18 MCP tool_calls turn 1 (see a18_mcp_t1.json)"
+    fi
+    fi
   else
     skip "A18 MCP round-trip" "server not started by this script; rerun with --start"
   fi
@@ -535,8 +570,13 @@ PY
 # ============================== A31 ==============================
 sec_a31() {
   echo "[$(ts)] --- A31: web search tool + usage history ---"
+  # Correction (pre-registration amended 2026-10-05T1130Z): omlx serves web search
+  # as SERVER-SIDE endpoints for the admin chat UI; websearch_routes.py:11-12
+  # states these tools are never merged into /v1/chat/completions tool lists, so
+  # a chat-injection test was a wrong premise. The row is tested via the
+  # server-side search endpoints + usage history.
   code=$(curl -s -o a31_searchtest.json -w '%{http_code}' --max-time 60 -X POST \
-    "$BASE/api/web-search/test" -H 'content-type: application/json' \
+    "$BASE/admin/api/web-search/test" -H 'content-type: application/json' \
     -d '{"provider":"ddgs","max_results":3}')
   python3 - <<'PY'
 import json
@@ -546,23 +586,25 @@ res = d.get("results") or []
 print("PASS-DETAIL a31 web-search/test: ok=%s n=%d err=%s" % (ok_, len(res), (d.get("error") or {}).get("message", "")))
 raise SystemExit(0 if (ok_ and res) else 1)
 PY
-  [[ $? -eq 0 ]] && ok "A31 server-side web search returns real results (http $code)" \
-    || bad "A31 server-side web search returns real results (http $code, body in a31_searchtest.json)"
+  [[ $? -eq 0 ]] && ok "A31 admin web-search/test returns real results (http $code)" \
+    || bad "A31 admin web-search/test returns real results (http $code, body in a31_searchtest.json)"
 
-  curl -s --max-time 150 "$BASE/v1/chat/completions" -H 'content-type: application/json' \
-    -d "{\"model\":\"$MODEL\",\"temperature\":0,\"messages\":[{\"role\":\"user\",\"content\":\"Use the web_search tool with the query \\\"Albert Einstein year of birth\\\" and report the year the tool gives.\"}]}" \
-    -o a31_chat.json
+  code=$(curl -s -o a31_websearch.json -w '%{http_code}' --max-time 60 -X POST \
+    "$BASE/v1/web/search" -H 'content-type: application/json' \
+    -d '{"query":"Albert Einstein year of birth"}')
   python3 - <<'PY'
-import json, re
-d = json.load(open("a31_chat.json"))
-txt = d["choices"][0]["message"]["content"] or ""
-m = re.search(r"\b(18|19|20)\d{2}\b", txt)
-assert m, f"no year in response: {txt[:200]!r}"
-print("PASS-DETAIL a31 chat search: year=%s in %r" % (m.group(0), txt[:100]))
+import json
+d = json.load(open("a31_websearch.json"))
+ok_ = d.get("ok")
+res = d.get("results") or []
+print("PASS-DETAIL a31 /v1/web/search: ok=%s n=%d first=%r" % (
+    ok_, len(res), (res[0].get("title"), res[0].get("snippet", "")[:60]) if res else None))
+raise SystemExit(0 if (ok_ and res) else 1)
 PY
-  [[ $? -eq 0 ]] && ok "A31 chat triggers server-side search path" || bad "A31 chat triggers server-side search path (body in a31_chat.json)"
+  [[ $? -eq 0 ]] && ok "A31 server-side /v1/web/search returns real results (http $code)" \
+    || bad "A31 server-side /v1/web/search returns real results (http $code, body in a31_websearch.json)"
 
-  curl -s --max-time 15 "$BASE/api/usage?range=today&include_details=true" -o a31_usage.json
+  curl -s --max-time 15 "$BASE/admin/api/usage?range=today&include_details=true" -o a31_usage.json
   python3 - <<'PY'
 import json
 d = json.load(open("a31_usage.json"))

@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
                 ids.append(EXPOSED)
             return self._json({"object": "list", "data": [
                 {"id": i, "object": "model", "max_model_len": REAL_CONTEXT} for i in ids]})
-        if self.path.startswith("/api/usage"):
+        if "/api/usage" in self.path:
             return self._json({"range": "today", "enabled": True,
                                "models": {MODELS[0]: [STATE["usage_rows"], 10, 10]},
                                "totals": [STATE["usage_rows"], 10, 10]})
@@ -67,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"detail": "not found"}, 404)
 
     def do_PUT(self):
-        if "/settings" in self.path:
+        if "/settings" in self.path and "/models/" in self.path:
             b = self._body()
             if "model_alias" in b:
                 STATE["alias_set"] = bool(b["model_alias"])
@@ -92,16 +92,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"object": "list", "data": [
                 {"object": "embedding", "index": i, "embedding": v}
                 for i, v in enumerate(vecs)], "model": "embed", "usage": {"prompt_tokens": 9}})
+        if p in ("/v1/web/search",):
+            return self._json({"ok": True, "results": [
+                {"title": "Albert Einstein - Wikipedia", "url": "https://example.org/einstein",
+                 "snippet": "Albert Einstein was born on 14 March 1879."}]})
         if p == "/v1/rerank":
             return self._json({"results": [
                 {"index": 0, "relevance_score": 0.93}, {"index": 1, "relevance_score": 0.02}]})
-        if p == "/api/web-search/test":
+        if p in ("/api/web-search/test", "/admin/api/web-search/test"):
             return self._json({"ok": True, "results": [
                 {"title": "Albert Einstein", "url": "https://example.org/einstein",
                  "snippet": "Born 1879"}]})
         if p.endswith("/profiles/parity/apply"):
             return self._json({"model_id": MODELS[0], "settings": {"temperature": 0.5}})
-        if p.endswith("/profiles") and p.startswith("/api/models/"):
+        if p.endswith("/profiles") and p.startswith(("/api/models/", "/admin/api/models/")):
             b = self._body()
             if b.get("expose_as_model"):
                 STATE["profile_created"] = True
