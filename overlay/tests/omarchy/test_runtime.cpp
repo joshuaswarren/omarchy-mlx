@@ -880,10 +880,8 @@ TEST_CASE(
   alloc.set_cache_limit(ceiling);
   alloc.clear_cache();
 
-  // Each iteration mallocs a size that grows by 64 KiB (different
-  // size class per step) and frees the previous block. With a sane
-  // cap the cache stays near the ceiling; without the cap (the
-  // pre-fix behavior) it would grow unbounded across the loop.
+  // Requests grow by 64 KiB per iteration; power-of-two bins reuse
+  // storage across neighboring shapes while the GC ceiling bounds the pool.
   std::vector<omarchy::VulkanBuffer*> live;
   for (int i = 0; i < 64; ++i) {
     size_t sz = (1u << 20) + static_cast<size_t>(i) * (64u << 10);

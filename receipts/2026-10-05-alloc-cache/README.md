@@ -1,6 +1,6 @@
 # A20 server repro after the alloc-cache fix
 
-- M2 (jw14m2-linux / T6021 / Honeykrisp), lane tree at the standard
+- Apple Silicon M2 (Honeykrisp Vulkan heap; host redacted), lane tree at the standard
   golden-clone location on top of `/var/tmp/golden-wheel` (golden at
   origin `23d1ca6e`, warm `60f80d2` build, plus the heap-budget
   wired_limit patch `8f8d32956` ported in, plus the AllocCache patch
