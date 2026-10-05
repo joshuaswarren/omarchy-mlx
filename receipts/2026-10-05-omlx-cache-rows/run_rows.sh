@@ -57,11 +57,11 @@ start_server() { # start_server <model-id> [extra serve args...]
   # Own base path per run: never touch the shared /tmp/omlx-home/.omlx state
   # (other lanes read-only reuse this venv; their settings.json stays intact).
   export OMLX_BASE_PATH=/tmp/omlx-rows/home-$PORT
-  mkdir -p "$OMLX_BASE_PATH/.omlx"
+  mkdir -p "$OMLX_BASE_PATH"
   # Discovery scans model.model_dirs; the HF-hub path is scanned READ-ONLY
   # (models--Org--Name entries resolve via _resolve_hf_cache_entry).
   printf '{"auth": {"skip_api_key_verification": true}, "model": {"model_dirs": ["%s"]}, "huggingface": {"hf_cache_enabled": true}}\n' "$HFHUB" \
-    > "$OMLX_BASE_PATH/.omlx/settings.json"
+    > "$OMLX_BASE_PATH/settings.json"
   log "starting server: $model $*"
   nohup "$VENV/bin/omlx" serve --model "$model" --host 127.0.0.1 --port "$PORT" \
     "$@" >> "$ART/server.log" 2>&1 &
