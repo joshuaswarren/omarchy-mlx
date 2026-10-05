@@ -3664,6 +3664,206 @@ TEST_CASE("qmm tile matches host reference and qmm.comp across prefill shapes") 
   }
 }
 
+TEST_CASE("qmm non-transposed small-k zone matches host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& capabilities = omarchy::device(0).capabilities();
+  if (!capabilities.shader_float16 ||
+      !capabilities.storage_buffer_16bit_access) {
+    skip("Vulkan device lacks required FP16 shader and storage features.");
+    return;
+  }
+
+  // Host dot in double precision against a [k, n] non-transposed packed
+  // weight: word (row, col / pack) holds the codes along n.
+  auto host_nt_matmul = [](const HostQuantizedWeights& w,
+                           const std::vector<float>& x,
+                           int m,
+                           int n,
+                           int k,
+                           int group_size,
+                           int bits) {
+    int pack = 32 / bits;
+    int words_per_row = n / pack;
+    int groups = n / group_size;
+    uint32_t mask = (1u << bits) - 1u;
+    std::vector<float> out(static_cast<size_t>(m) * n);
+    for (int row = 0; row < m; ++row) {
+      for (int column = 0; column < n; ++column) {
+        double acc = 0.0;
+        for (int inner = 0; inner < k; ++inner) {
+          uint32_t code =
+              (w.words[inner * words_per_row + column / pack] >>
+              ((column % pack) * bits)) &
+              mask;
+          double dequant =
+              static_cast<double>(code) *
+              w.scales[inner * groups + column / group_size] +
+              w.biases[inner * groups + column / group_size];
+          acc += host_at(x, row * k + inner) * dequant;
+        }
+        out[static_cast<size_t>(row) * n + column] = static_cast<float>(acc);
+      }
+    }
+    return out;
+  };
+
+  auto finite_max = [](const std::vector<float>& values, double& max_abs) {
+    max_abs = 0.0;
+    for (float v : values) {
+      if (!std::isfinite(v)) {
+        return false;
+      }
+      max_abs = std::max(max_abs, static_cast<double>(std::fabs(v)));
+    }
+    return true;
+  };
+
+  // One non-transposed case: batched=false builds x [m, k] against a
+  // 2D weight, batched_shared pairs x [B, m, k] with the shared 2D
+  // weight, and batched_paired builds a 3D weight one slice per batch
+  // index. The bound mirrors the transposed anchor: fp32 matmul
+  // accumulation plus one storage-dtype rounding per output element.
+  auto run_nt_case = [&](Dtype dtype,
+                         int group_size,
+                         int bits,
+                         int m,
+                         int n,
+                         int k,
+                         int batch,
+                         bool paired,
+                         unsigned seed) {
+    int storage_mantissa_bits =
+        dtype == float32 ? 23 : (dtype == float16 ? 10 : 7);
+    int pack = 32 / bits;
+    // Non-transposed packing runs along n: w is [K, n * bits / 32]
+    // with scales/biases [K, n / group_size]; n must be a group
+    // multiple for the shape contract.
+    int words_per_row = n / pack;
+    int groups = n / group_size;
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+    std::vector<float> matrix(static_cast<size_t>(k) * n);
+    std::vector<float> x_values(
+        static_cast<size_t>(batch) * m * k);
+    for (auto& value : matrix) {
+      value = dist(gen);
+    }
+    for (auto& value : x_values) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights host =
+        host_affine_quantize(matrix, k, n, group_size, bits);
+    auto round_trip = [&](const std::vector<float>& values) {
+      array device(
+          values.begin(), Shape{static_cast<int>(values.size())}, float32);
+      return readback_f32(
+          stream, astype(astype(device, dtype, stream), float32, stream));
+    };
+    HostQuantizedWeights rounded = host;
+    rounded.scales = round_trip(host.scales);
+    rounded.biases = round_trip(host.biases);
+    std::vector<float> x_rt = round_trip(x_values);
+    std::vector<float> expected =
+        host_nt_matmul(rounded, x_rt, batch * m, n, k, group_size, bits);
+
+    // A paired 3D weight carries one full copy of the quantized matrix
+    // per batch slice; both slices are equal, so the host reference
+    // stays the single-matrix product over batch * m rows.
+    HostQuantizedWeights paired_words = rounded;
+    if (paired) {
+      paired_words.words.insert(
+          paired_words.words.end(),
+          rounded.words.begin(),
+          rounded.words.end());
+      paired_words.scales.insert(
+          paired_words.scales.end(),
+          rounded.scales.begin(),
+          rounded.scales.end());
+      paired_words.biases.insert(
+          paired_words.biases.end(),
+          rounded.biases.begin(),
+          rounded.biases.end());
+    }
+    auto words_shape = Shape{k, words_per_row};
+    auto params_shape = Shape{k, groups};
+    if (paired) {
+      words_shape.insert(words_shape.begin(), batch);
+      params_shape.insert(params_shape.begin(), batch);
+    }
+    array x(
+        x_rt.begin(),
+        Shape{batch * m, k},
+        dtype);
+    array w_words(paired_words.words.begin(), words_shape, uint32);
+    array w_scales(paired_words.scales.begin(), params_shape, dtype);
+    array w_biases(paired_words.biases.begin(), params_shape, dtype);
+    // A rank-3 x rides the broadcast/pairing contracts of the eval; a
+    // paired weight needs the matching rank.
+    if (batch > 1) {
+      x = reshape(x, Shape{batch, m, k}, stream);
+    }
+    array out = quantized_matmul(
+        x, w_words, w_scales, w_biases, /*transpose=*/false, group_size,
+        bits, "affine", stream);
+    INFO("nt case dtype=" << dtype << " bits=" << bits
+         << " group_size=" << group_size << " m=" << m << " n=" << n
+         << " k=" << k << " batch=" << batch << " paired=" << paired);
+    const auto error = evaluation_error(out);
+    REQUIRE_MESSAGE(error.empty(), error);
+    REQUIRE_EQ(
+        out.shape(),
+        batch > 1 ? Shape{batch, m, n} : Shape{m, n});
+    std::vector<float> device_values = readback_f32(stream, out);
+    REQUIRE_EQ(device_values.size(), expected.size());
+    double out_max = 0.0;
+    REQUIRE_MESSAGE(
+        finite_max(device_values, out_max), "non-finite qmm nt output");
+    double m_bound = std::max(out_max * 2.0, 1.0);
+    double ops = 3.0 * k + 1.0;
+    double bound = ops * m_bound * std::ldexp(1.0, -23) +
+        m_bound * std::ldexp(1.0, -(storage_mantissa_bits + 1));
+    bound = std::max(bound, 1e-6);
+    double max_diff = 0.0;
+    size_t worst = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      double d =
+          std::fabs(static_cast<double>(device_values[i]) - expected[i]);
+      if (d > max_diff) {
+        max_diff = d;
+        worst = i;
+      }
+    }
+    INFO("nt worst=" << worst << " diff=" << max_diff
+         << " bound=" << bound);
+    CHECK(max_diff <= bound);
+  };
+
+  // The bf16 composed zone: every affine bit width the route serves,
+  // group sizes 32/64/128, aligned and straddling m, and the k = 64,
+  // n = 2048 projection class the 2B hybrid backward trips on.
+  for (auto [group_size, bits] :
+       std::vector<std::pair<int, int>>{
+           {32, 4}, {64, 4}, {128, 4}, {32, 8}, {64, 8}}) {
+    int k = std::min(2 * group_size, 128);
+    run_nt_case(bfloat16, group_size, bits, 17, 128, k, 1, false, 101);
+    run_nt_case(bfloat16, group_size, bits, 33, 128, 128, 1, false, 103);
+  }
+  run_nt_case(bfloat16, 64, 4, 32, 2048, 64, 1, false, 107);
+  // Rank-3 x: one shared 2D weight broadcast across the batch, and one
+  // 3D weight paired slice per batch index.
+  run_nt_case(bfloat16, 64, 4, 17, 128, 128, 2, false, 109);
+  run_nt_case(bfloat16, 64, 4, 17, 128, 128, 2, true, 113);
+  // The routes this change did not touch stay pinned: f16 and f32 keep
+  // the direct tile route, and bits 2 bf16 passes it, all inside the
+  // same k <= 128 non-transposed zone.
+  run_nt_case(float16, 64, 4, 17, 128, 128, 1, false, 127);
+  run_nt_case(float32, 64, 4, 17, 128, 128, 1, false, 131);
+  run_nt_case(bfloat16, 32, 2, 17, 128, 128, 1, false, 137);
+}
+
 TEST_CASE(
     "qmm packed-word register-block prefill matches baseline tile and host") {
   if (!compute_available() || !float16_available()) {
