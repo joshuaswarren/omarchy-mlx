@@ -249,6 +249,36 @@ consistent with the flat-vs-M dispatch math above. Numbers for MidM:
 midm_ab.json (+28c87d5 stamp recorded). The full re-check repeats when rows
 9..16 land (then M=16 verify should engage the fused path end to end).
 
+### Engagement census (server path, +28c87d5, window E ticket)
+
+Ran the omlx SERVER twice (DFlash ON via ModelSettingsManager, then OFF) as
+separate processes under MLX_OMARCHY_TRACE_DISPATCH, one 128-token stream
+request each; kernel ids decoded via compute.h @28c87d5 (ComputeKernel enum,
+declaration order). Result: **MidM's `SdpaDecodeRowsBF16Hd128` ENGAGED —
+2,628 dispatches in the ON phase (~38/cycle ≈ attention per layer) — with no
+wall change** (server stream request 9.8 tok/s, acceptance 43.0%, 73 cycles;
+in-process block-8/16 verify 147.6/148.3 ms per cycle, unchanged).
+`QmmVecQ4MultiToken*` = 0 as expected (planner gates the qmm token route to
+rows ≤ 8; DFlash verify runs 16-position blocks). OFF control: 48,637
+dispatches, zero fused, deterministic across runs.
+
+The census also names the dispatch-budget lever MidM asked for next: on the
+ON phase, **`CastBF16F32` = 18,791 (23.2%) and `CopyGeneralBF16` = 11,740
+(14.5%) of all dispatches** — casts and copies, not GEMMs — alongside
+`QmmPrefillCoopmatM16BF16X32FullN` 18,539 (22.9%), `FastRmsNormBF16` 7,496,
+`BinaryVecBF16` 6,048, `FastRopeNormBF16` 5,472, `SwigluBF16` 3,096. Per
+cycle ≈ 272 casts + 170 copies + 269 qmm + ~350 elementwise/norm/rope ≈
+1,070 dispatches. Per Main's verdict logic (engaged + no wall change), the
+next step is MidM's diag build (MLX_OMARCHY_GPU_PROFILE is compile-time
+gated; per-kernel GPU time needs it) — and the cast/copy fusion families
+are the highest-count fusion targets. Secondary notes: acceptance 43% here
+vs 69.5% in the first A7 sample is PROMPT-dependent (different probe
+prompt), not a config delta — closes that earlier question. The server's
+per-request `phases[]` line counts verify enqueue-only (~418 ms total over
+73 cycles) and is NOT comparable to the in-process per-cycle verify_us
+(~148 ms) which includes the drain; tok/s and wall are the comparable
+quantities.
+
 ## Artifacts
 
 - dev box: `/tmp/a7-artifacts/` (16 responses, both server logs, compare.json,
