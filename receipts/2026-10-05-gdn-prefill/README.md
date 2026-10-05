@@ -259,3 +259,19 @@ e0-pair convention). Prediction for the jwm1 readout: -15..-30 us/chunk
 jwm1 arms for the next window (branch tip 71ba9e19d): no-env / HOIST=1
 (T>=512 shapes only) / STATEWAVE=1 / STATEWAVE=1+BATCH2=1, plus the stub
 sweep for continuity; pins must hold on every non-stub arm.
+
+## H300 batch4 brace miss and the compile-check upgrade
+
+batch4 @210d1f55b did not compile (missing chunk-loop closing brace from the
+state-wave splice; w71 fixed locally in his scratch and ran). Fixed @
+174abd59d. Root cause, plainly: my splice replaced a block that INCLUDED the
+chunk-loop closing brace with one that did not, and nothing compiled the
+result. That is the second compile miss in a row; the process answer is that
+glslc 16.6.0 EXISTS on the dev box (/usr/local/bin/glslc — the
+"glslangValidator-only" note in AGENTS.md is stale), so check_gdn_variants.sh
+now does a REAL glslc compile (-O --target-env=vulkan1.3, exact CMake -D set)
+of every GDN variant shader: batch/batch2/batch4/kktqkt/hoist/scan/decode
+family + all 7 stubs, plus the define cross-check and the primitives.cpp
+syntax check. All green on 174abd59d (22/22 compiles OK). If glslc is ever
+absent the script falls back to balance + preprocess and prints
+NOT A COMPILE.
