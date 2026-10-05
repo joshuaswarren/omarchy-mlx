@@ -829,6 +829,8 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiToken16SubgroupBF16,
   QmmVecQ4MultiToken4BF16,
   QmmVecQ4MultiToken16BF16,
+  QmmVecQ4MultiToken8SubgroupBF16,
+  QmmVecQ4MultiToken8BF16,
   // Multi-token causal decode attention (q_len 2..16): per-row
   // single-query arm over the visible key prefix; append-only id.
   SdpaDecodeRowsBF16Hd128,

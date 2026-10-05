@@ -719,6 +719,11 @@ void main() {
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
   uint token_count = params.matrix_m;
+  // Two-pass rows 9..16: out_strides[0] is this pass's first token row
+  // (0 for rows 0..7, 8 for rows 8..15); each pass runs the identical
+  // token8 chain over its own half, so per-row bit-identity holds and
+  // the token16 unroll is never compiled into the shipped path.
+  uint row0 = params.out_strides[0];
   uint n0 = params.shape[0];
   uint n1 = params.shape[1];
   uint n2 = params.shape[2];
@@ -863,7 +868,7 @@ void main() {
         uint column_r = column + r;
         if (column_r < n) {
           float rounded = ROUND_STORAGE(acc_t[m][r]);
-          uint out_index = m * n + column_r;
+          uint out_index = (row0 + m) * n + column_r;
           if (which == 0u) {
             output0.values[out_index] = STORE_VALUE(rounded);
           } else if (which == 1u) {
