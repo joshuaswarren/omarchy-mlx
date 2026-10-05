@@ -27,12 +27,15 @@ inline constexpr uint32_t kComputeBindingFloor = 4;
 // that budget refuse by name instead of dispatching. The spec floor is why
 // the pre-2026-09-02 four-slot constant was portable, not a device ceiling:
 // real drivers report orders of magnitude more.
-// Twenty-five slots fit the widest kernel today: the multi-weight decode
+// Thirty-eight slots fit the widest kernel today: the persistent MLP tail
+// (PersistentTailBF16) binds the multi-weight decode layout plus the norm
+// stage's in/weight/out, the x_mid/x_norm stage inputs, and the grid
+// barrier sync word (kPersistentTailBindingCount); the multi-weight decode
 // GEMV binds x plus, per weight, packed words, scales, biases, the
 // output, an Add addend, and the Add output (kQmmVecMultiBindings); the
 // out-gate prologue variant adds three more. The triple-index scatter
 // needs six.
-inline constexpr uint32_t kComputeBindingBudget = 28;
+inline constexpr uint32_t kComputeBindingBudget = 38;
 // Bindings of the QmmVecQ4Multi kernels and their per-weight stride.
 // Four weights cover a GatedDeltaNet layer's qkv/z/a/b projections of one
 // normed row in one dispatch.

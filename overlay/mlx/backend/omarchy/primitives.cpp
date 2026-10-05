@@ -8253,6 +8253,14 @@ bool dispatch_persistent_mlp_tail(
   const auto& caps = encoder.device().capabilities();
   if (encoder.device().compute().binding_limit() <
           kPersistentTailBindingCount) {
+    static const bool once = [] {
+      std::fprintf(
+          stderr,
+          "[persistent-mlp] refused: device binding budget below %u\n",
+          kPersistentTailBindingCount);
+      return true;
+    }();
+    (void)once;
     return false;
   }
   bool subgroup_ready = caps.subgroup_size == 32u &&
