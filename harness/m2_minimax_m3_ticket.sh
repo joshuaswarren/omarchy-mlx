@@ -88,7 +88,7 @@ PY
 "$PRIVATE_VENV/bin/python" - <<'PY'
 import mlx.core as mx
 print("mlx:", mx.__version__)
-print("gpu backend alive:", mx.device(mx.gpu))
+print("default device:", mx.default_device())
 PY
 
 # The battery is lane-local (tests/test_minimax_m3_parity.py); run it from
