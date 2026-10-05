@@ -143,11 +143,14 @@ for r in range(PADDED):
             v = np.zeros(GROUP, dtype=np.float32)  # padded rows read 0.0f
         else:
             v = x_ref[r, gi * GROUP:(gi + 1) * GROUP]
-        top = max(float(np.max(np.abs(v))), 1e-12)
-        scale = top / 127.0
+        # float32-exact reference: every op below is IEEE-754 binary32,
+        # matching the shader ops (max exact; / and * round identically;
+        # np.round is half-to-even like rint).
+        top = max(np.float32(np.max(np.abs(v))), np.float32(1e-12))
+        scale = np.float32(top / np.float32(127.0))
         ref_xs[r, gi] = scale
         ref_q[r, gi * GROUP:(gi + 1) * GROUP] = np.clip(
-            np.round(v * (1.0 / scale)), -127, 127).astype(np.int8)
+            np.round(v * (np.float32(1.0) / scale)), -127, 127).astype(np.int8)
 
 q_match = bool(np.array_equal(got_q, ref_q))
 xs_exact = bool(np.array_equal(got_xs, ref_xs))
