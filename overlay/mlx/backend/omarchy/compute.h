@@ -700,6 +700,14 @@ enum class ComputeKernel : uint16_t {
   // MLX_OMARCHY_GDN_HOIST=0.
   GatedDeltaPrefillKktqkt,
   GatedDeltaPrefillCoopmatHoistBF16,
+  // GDN prefill C=16 chunk coopmat variant (Jwm1Parity follow-up to
+  // GdnPrefill2's HOIST: a second C=16 attempt on the post-HOIST body,
+  // not the e1b569cad one — same block-2x2 structure but with the
+  // C=8-double-buffered staging folded in). Chunk-form rounding moves
+  // the bf16 output digest; per-op error vs fp64 must be no worse than
+  // the C=8 kernels, per docs/numerics-gate.md. Selected only by
+  // MLX_OMARCHY_GDN_CHUNK16. Append-only profile id.
+  GatedDeltaPrefillCoopmatChunk16BF16,
   // Fused RMSNorm + SwiGLU-gate / RMSNorm + scalar-multiply epilogues
   // for the GDN decode chain (bf16). Mode 0 replaces
   // FastRmsNormBF16 + CastBF16F32 x2 + FusedChainF32(sigmoid,mul,mul)

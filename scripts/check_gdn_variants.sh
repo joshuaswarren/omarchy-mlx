@@ -17,6 +17,7 @@ expected = {
     "gated_delta_prefill_coopmat_bf16": "gated_delta_prefill_coopmat.comp",
     "gated_delta_prefill_kktqkt": "gated_delta_prefill_kktqkt.comp",
     "gated_delta_prefill_coopmat_hoist_bf16": "gated_delta_prefill_coopmat_hoist.comp",
+    "gated_delta_prefill_coopmat_chunk16_bf16": "gated_delta_prefill_coopmat_c16.comp",
 }
 pairs = re.findall(r"omarchy_shader\(\s*([\w]+)\s+shaders/([\w.]+)([^)]*)\)", text)
 found = {name: (filename, args) for name, filename, args in pairs}

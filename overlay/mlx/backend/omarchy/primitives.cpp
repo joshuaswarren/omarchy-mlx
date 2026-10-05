@@ -11225,6 +11225,16 @@ inline constexpr size_t kGdnCoopmatSharedBytes = 24832;
 // with the old per-step K slice removed.
 inline constexpr size_t kGdnCoopmatBatchSharedBytes = 32000;
 
+// Shared bytes of the C=16 chunk coopmat variant (Jwm1Parity second
+// attempt, see portfolio entry): raw-only k/q staging for both halves
+// (4 KiB), a 4-slice both-half wave array (2 KiB), a 5-tile wide round
+// trip (4 KiB), the parked Tinv/delta tiles and scratch (6 KiB), the
+// state (16 KiB), and prefix arrays. Fits the G13C 32 KiB workgroup
+// limit. The first attempt (e1b569cad) measured 33-50% slower on G13C;
+// see entries/Jw16GdnBlock16 and receipts/2026-10-05-gdn-chunk16 for
+// the re-pin rationale.
+inline constexpr size_t kGdnCoopmatC16SharedBytes = 32256;
+
 // Gated delta nets (upstream 0.32.3): the fused GatedDeltaDecodeBF16 kernel
 // serves the decode shape (T=1, no mask, square heads, bf16 activations,
 // f32 state); everything else - prefill token chunks, masks, f16/f32
@@ -11798,15 +11808,68 @@ void GatedDeltaUpdate::eval_gpu(
   static const bool gdn_hoist_env =
       std::getenv("MLX_OMARCHY_GDN_HOIST") == nullptr ||
       omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
+  // C=16 chunk coopmat variant (Jwm1Parity follow-up to GdnPrefill2's
+  // HOIST: a second C=16 attempt on the post-HOIST body, not the
+  // e1b569cad one — same block-2x2 structure). Default OFF; chunk-form
+  // rounding moves the bf16 output digest, so it goes through the
+  // numerics-gate re-pin path (docs/numerics-gate.md) and the -25% G13G
+  // gate vs HOIST. Kill switch MLX_OMARCHY_GDN_CHUNK16=0.
+  static const bool gdn_chunk16_env = omarchy::env_flag("MLX_OMARCHY_GDN_CHUNK16");
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
       gdn_caps.cooperative_matrix_f32_8 && gdn_caps.subgroup_size == 32u;
   const bool gdn_batch = gdn_coopmat && gdn_batch_env &&
       kGdnCoopmatBatchSharedBytes <= gdn_caps.max_compute_shared_memory_size;
+  const bool gdn_chunk16 = gdn_coopmat && gdn_chunk16_env &&
+      kGdnCoopmatC16SharedBytes <= gdn_caps.max_compute_shared_memory_size;
   const bool gdn_coopmat_base =
       gdn_coopmat &&
       (kGdnCoopmatSharedBytes <= gdn_caps.max_compute_shared_memory_size);
+  // CHUNK16 fires before HOIST/batch when its env is set; the second
+  // C=16 attempt is a contract-class change (chunk-form rounding moves
+  // the bf16 output digest by construction; numerics-gate re-pin
+  // required).
+  if (gdn_chunk16) {
+    omarchy::ComputeParams params;
+    params.count = Dv;
+    params.lhs_size = checked_u32(q.data_size(), tag, out);
+    params.rhs_size = checked_u32(h0.data_size(), tag, out);
+    params.output_size = checked_u32(hf.data_size(), tag, out);
+    params.matrix_m = checked_u32(Dk, tag, out);
+    params.matrix_n = checked_u32(Dv, tag, out);
+    params.matrix_k = checked_u32(Hv, tag, out);
+    params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+    params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+    params.aux_size = checked_item_offset(v, v.size(), tag, out);
+    params.aux_offset = checked_item_offset(beta, beta.size(), tag, out);
+    params.output_offset = checked_item_offset(out, out.size(), tag, out);
+    params.shape[0] = checked_item_offset(g, g.size(), tag, out);
+    params.shape[1] = checked_item_offset(h0, h0.size(), tag, out);
+    params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
+    params.dims = static_cast<uint32_t>(T);
+    params.flags = (g.dtype() == float32 ? 4u : 0u);
+    std::array<omarchy::ComputeBinding, 11> bindings{
+        binding(q),      // 0 QBuf
+        binding(k),      // 1 KBuf
+        binding(v),      // 2 VBuf
+        binding(g),      // 3 GBuf
+        binding(beta),   // 4 BBuf
+        binding(h0),     // 5 SIn
+        binding(out),    // 6 YBuf
+        binding(hf),     // 7 SOut
+        binding(out),    // 8 MBuf - unused (maskless gate)
+        binding(g),      // 9 GBufF - unused when g is bf16
+        binding(out)};   // 10 Snap - unused (single pass)
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GatedDeltaPrefillCoopmatChunk16BF16,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv),
+        Dv / 32,
+        1);
+    return;
+  }
   if (gdn_batch || gdn_coopmat_base) {
     omarchy::ComputeParams params;
     params.count = Dv;

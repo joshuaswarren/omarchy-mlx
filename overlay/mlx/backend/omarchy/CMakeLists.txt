@@ -380,6 +380,13 @@ omarchy_shader(
 # see receipts/2026-10-05-gdn-prefill.
 omarchy_shader(gated_delta_prefill_kktqkt shaders/gated_delta_prefill_kktqkt.comp)
 omarchy_shader(gated_delta_prefill_coopmat_hoist_bf16 shaders/gated_delta_prefill_coopmat_hoist.comp)
+# GDN prefill C=16 chunk coopmat variant (default OFF;
+# MLX_OMARCHY_GDN_CHUNK16=1 selects it over the batch / hoist kernels).
+# Block 2x2 Neumann inverse of (I+N) with TR=0; same per-element
+# arithmetic as the C=8 kernels. See receipts/2026-10-05-gdn-chunk16.
+omarchy_shader(
+    gated_delta_prefill_coopmat_chunk16_bf16
+    shaders/gated_delta_prefill_coopmat_c16.comp)
 # VjpKernels: fused backward kernels for SDPA (upstream #4563) and the
 # gated delta update (upstream #4565). One gated_delta_vjp.comp source
 # builds the state-recall pass (save) and the backward pass.
