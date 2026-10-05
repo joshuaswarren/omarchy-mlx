@@ -220,11 +220,19 @@ MSL feature 'simdgroup_matrix' … (dtype=bfloat16, shape=[16,1024])`.
 
 Candidate fixes, ranked: (1) cut dispatch count on the multi-token forward
 (mx.compile/fusion of elementwise chains — dflash runtime patch layer or
-backend); (2) backend dispatch batching on Honeykrisp; (3) block-size
-amortization as a stopgap — cost is flat in M, so larger draft blocks raise
-tokens/cycle (sweep queued; result to be appended). Note the runtime's
-adaptive block policy shrank 16→4, the wrong direction under a flat
-per-cycle cost — a dflash-side policy note for the upstream draft.
+backend); (2) backend dispatch batching on Honeykrisp; (3) ~~block-size
+amortization~~ **measured NOT viable**: the z-lab b16 drafter clamps the block
+at its trained 16 (`block_tokens` 32/64 requested → `block_seen_max` 16), and
+verify stays ~146-149 ms from block 8 through 16 — in-process throughput
+9.8-10.0 tok/s across the whole sweep (blk_sweep.json), matching the server's
+10.59. The dispatch-bound route can only be fixed by reducing dispatches
+(MidM's multi-row fused kernel lane) or backend batching. Secondary: the
+runtime's adaptive block policy shrank 16→4, the wrong direction under a flat
+per-cycle cost — a dflash-side policy note for the upstream draft. Also
+recorded: offline in-process acceptance 46% vs the omlx server's 69.5% for
+the same pair+prompts — the offline runtime config differs from the serve
+path (draft window/sink or capture config), worth one look before anyone
+compares acceptance numbers across the two paths.
 
 ## Artifacts
 
