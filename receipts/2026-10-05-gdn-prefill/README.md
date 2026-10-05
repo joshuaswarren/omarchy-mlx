@@ -117,3 +117,44 @@ bash golden_rebuild.sh   # then pip install dist/*.whl into the cloned venv
 <venv>/bin/python gdn_micro2.py                    # ship
 MLX_OMARCHY_GDN_BATCH2=1 <venv>/bin/python gdn_micro2.py
 ```
+
+## Addendum (same session): the kkt/qkt hoist lands its gates (branch agent/GdnPrefill2-b)
+
+Pass A `gated_delta_prefill_kktqkt.comp` (grid Hv x Dv/32 x chunks): the
+state-independent K.K^T / Q.K^T accumulators for EVERY chunk in parallel,
+each workgroup running the shipped loop-1 sequence per simdgroup (ascending
+kk, same staged tiles and row/column loads — the redundant per-slice
+computation is what preserves the accumulation order). Tiles ride the Snap
+binding as f32 (exact round trip): layout (chunk*Hv + head)*(Dv/32)*512 +
+sg*128, kkt at +0, qkt at +64. Pass B
+`gated_delta_prefill_coopmat_hoist.comp`: the batch2 recurrence with the
+loop-1 kkt/qkt MMAs replaced by tile loads. `MLX_OMARCHY_GDN_HOIST=1`
+opt-in (default OFF; kill switch unset/=0).
+
+Gates (T6021 lane build @ agent/GdnPrefill2-b 14558faaa):
+- Determinism: T=64 hoist x3 identical, hash == ship (the first cut had a
+  scratch-stride bug — 128 not 512 f32 per (chunk,head,wgY) block — that
+  let concurrent pass-A workgroups overwrite each other's tiles: T=64 hoist
+  hashes differed run to run; T<=16 scheduled stably and hid it. The
+  bit-identity doctest plus a run-to-run determinism check are now standing
+  gates for every multi-dispatch kernel here.)
+- Captured-operand doctest: BIT-IDENTICAL 4/4 (out AND state, both layers).
+- 2B greedy digest, same wheel OFF vs ON: d512 9789a28bbbb5723a ==
+  (token-identical).
+- Perf (3 interleaved pairs, clean gates): T=512 fast-op 33.98/34.52/34.88
+  vs ship 37.56/37.47/37.88 ms (-9.3% median); T=1024 65.71/66.39/67.13 vs
+  73.27/73.31/73.40 (-10.0%). Disjoint medians, every pair wins.
+
+Decode T=1 profile (item 3, M2, production raw-gates entry, fallback-lines 0
+= fused fires): tiled 0.102 ms/call raw; perrow forced 0.095 — and jwm1
+0.095 full — decode does NOT scale with part size: it is fixed-cost-bound
+(per-call turnaround + 2 MB f32 state round trip at ~20 GB/s effective; the
+kernel body is 1 dispatch, 64 wgs, 2 barriers). Lever class for the ~1
+ms/token decode gap: neighborhood dispatch fusion at T=1 (conv1d-update +
+gating + GDU + norm -> 1-2 dispatches; 229 dispatches/token on the 2B), not
+kernel-internal work.
+
+G13G expectations (theory, to verify with w71): the hoist removes 2 of 4
+loop-1 MMAs plus the raw k/q staging from the serial chain but keeps 16
+loopS barriers — a smaller relative win than on T6021; the diet composes
+(additive, both envs independent).
