@@ -433,7 +433,8 @@ void main() {
       // kgc_all staging writes while a sibling lane's stores of this wave
       // are still pending (the FMAs read them).
       subgroupBarrier();
-      }
+    }
+  }
 
   // Terminal state slice: hf[(head*Dv + dv0 + c)*Dk + kk*8 + r]; the
   // lane's element pair sits Dk apart (dv stride).
