@@ -810,11 +810,12 @@ TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
   // fires on a predictable size. Save and restore the prior value.
   const size_t saved_gc = alloc.get_gc_limit();
   const size_t saved_cache = alloc.get_cache_limit();
+  const size_t saved_memory = alloc.get_memory_limit();
   // Pick a small ceiling so we can drive active + cache over it
   // without carving through the device's real heap.
   const size_t ceiling = 8u << 20;
+  alloc.set_gc_limit(ceiling);
   alloc.set_cache_limit(ceiling);
-  alloc.set_memory_limit(ceiling);
   alloc.clear_cache();
 
   const size_t before = alloc.get_active_memory();
@@ -837,7 +838,8 @@ TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
 
   alloc.clear_cache();
   alloc.set_cache_limit(saved_cache);
-  alloc.set_memory_limit(saved_cache);
+  alloc.set_gc_limit(saved_gc);
+  alloc.set_memory_limit(saved_memory);
   CHECK(alloc.get_active_memory() == before);
 }
 
@@ -872,9 +874,10 @@ TEST_CASE(
   auto& alloc = omarchy::allocator();
   const size_t saved_gc = alloc.get_gc_limit();
   const size_t saved_cache = alloc.get_cache_limit();
+  const size_t saved_memory = alloc.get_memory_limit();
   const size_t ceiling = 32u << 20;
+  alloc.set_gc_limit(ceiling);
   alloc.set_cache_limit(ceiling);
-  alloc.set_memory_limit(ceiling);
   alloc.clear_cache();
 
   // Each iteration mallocs a size that grows by 64 KiB (different
@@ -886,6 +889,9 @@ TEST_CASE(
     size_t sz = (1u << 20) + static_cast<size_t>(i) * (64u << 10);
     auto* b = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(sz).ptr());
     REQUIRE(b != nullptr);
+    size_t bin = 1u << 20;
+    while (bin < sz) bin *= 2;
+    CHECK(b->size == bin);
     if (!live.empty()) {
       alloc.free(allocator::Buffer{live.back()});
       live.pop_back();
@@ -899,7 +905,8 @@ TEST_CASE(
   }
   alloc.clear_cache();
   alloc.set_cache_limit(saved_cache);
-  alloc.set_memory_limit(saved_cache);
+  alloc.set_gc_limit(saved_gc);
+  alloc.set_memory_limit(saved_memory);
   CHECK(alloc.get_gc_limit() == saved_gc);
 }
 
