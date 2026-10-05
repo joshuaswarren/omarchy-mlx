@@ -316,6 +316,13 @@
 #include "gated_delta_prefill_coopmat_bf16.h"
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
 #include "gated_delta_prefill_coopmat_batch2_bf16.h"
+#include "gdn_stub_noloopk.h"
+#include "gdn_stub_noloops.h"
+#include "gdn_stub_noneumann.h"
+#include "gdn_stub_nodelta.h"
+#include "gdn_stub_noout.h"
+#include "gdn_stub_nostate.h"
+#include "gdn_stub_skeleton.h"
 #include "gated_delta_prefill_kktqkt.h"
 #include "gated_delta_prefill_coopmat_hoist_bf16.h"
 #include "fast_norm_gated_bf16.h"
@@ -1378,6 +1385,20 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_prefill_coopmat_batch2_bf16,
           gated_delta_prefill_coopmat_batch2_bf16_size};
+    case ComputeKernel::GdnStubNoloopk:
+      return {gdn_stub_noloopk, gdn_stub_noloopk_size};
+    case ComputeKernel::GdnStubNoloops:
+      return {gdn_stub_noloops, gdn_stub_noloops_size};
+    case ComputeKernel::GdnStubNoneumann:
+      return {gdn_stub_noneumann, gdn_stub_noneumann_size};
+    case ComputeKernel::GdnStubNodelta:
+      return {gdn_stub_nodelta, gdn_stub_nodelta_size};
+    case ComputeKernel::GdnStubNoout:
+      return {gdn_stub_noout, gdn_stub_noout_size};
+    case ComputeKernel::GdnStubNostate:
+      return {gdn_stub_nostate, gdn_stub_nostate_size};
+    case ComputeKernel::GdnStubSkeleton:
+      return {gdn_stub_skeleton, gdn_stub_skeleton_size};
     case ComputeKernel::GatedDeltaPrefillKktqkt:
       return {
           gated_delta_prefill_kktqkt,

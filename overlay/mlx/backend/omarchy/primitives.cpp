@@ -11553,6 +11553,14 @@ void GatedDeltaUpdate::eval_gpu(
   // sequence); pass B runs the recurrence off the f32 tiles. Opt-in
   // (MLX_OMARCHY_GDN_HOIST=1) until gated.
   static const bool gdn_hoist_env = omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
+  // Stage-ablation stubs (GdnPrefill2-ablate): MLX_OMARCHY_GDN_STUB=1..7
+  // selects a bench kernel that truncates one stage class of the batch kernel
+  // (1 NO_LOOPK, 2 NO_LOOPS, 3 NO_NEUMANN, 4 NO_DELTA, 5 NO_OUT, 6 NO_STATE,
+  // 7 SKELETON). WRONG RESULTS by design — timing only, never a default.
+  static const int gdn_stub_env = []() {
+    const char* e = std::getenv("MLX_OMARCHY_GDN_STUB");
+    return e ? std::atoi(e) : 0;
+  }();
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
@@ -11595,6 +11603,25 @@ void GatedDeltaUpdate::eval_gpu(
         binding(out),    // 8 MBuf - unused (maskless gate)
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
+    if (gdn_stub_env >= 1 && gdn_stub_env <= 7) {
+      encoder.dispatch_compute(
+        gdn_stub_env == 1 ? omarchy::ComputeKernel::GdnStubNoloopk
+        : gdn_stub_env == 2 ? omarchy::ComputeKernel::GdnStubNoloops
+        : gdn_stub_env == 3 ? omarchy::ComputeKernel::GdnStubNoneumann
+        : gdn_stub_env == 4 ? omarchy::ComputeKernel::GdnStubNodelta
+        : gdn_stub_env == 5 ? omarchy::ComputeKernel::GdnStubNoout
+        : gdn_stub_env == 6 ? omarchy::ComputeKernel::GdnStubNostate
+        : gdn_stub_env == 7 ? omarchy::ComputeKernel::GdnStubSkeleton
+        : gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
+        : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
+                    : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv),
+        Dv / 32,
+        1);
+      return;
+    }
     if (gdn_hoist_env) {
       // Pass A: kkt/qkt tiles for every chunk, one workgroup per
       // (head, Dv-slice, chunk). Snap binding carries the f32 tiles.
