@@ -2,8 +2,8 @@
 
 Lane: GridBarrier (worker). Branch `agent/GridBarrier` (this file's tree).
 Continues jwm1-parity H136/H137a/H137b. Notebook pre-registrations:
-`apple-silicon-lab/entries/GridBarrier/20261005T033000Z-jwm1-gridbarrier-stress-h285.md` (H288)
-and `20261005T033500Z-jw14m2-gridbarrier-h286.md` (H289).
+`apple-silicon-lab/entries/GridBarrier/20261005T033000Z-jwm1-gridbarrier-stress-h288.md` (H288)
+and `20261005T033500Z-jw14m2-gridbarrier-h289.md` (H289).
 
 ## Premise and what is already measured (prior receipts, not re-run here)
 
@@ -32,7 +32,7 @@ and `20261005T033500Z-jw14m2-gridbarrier-h286.md` (H289).
    G to 512), stress at the working G, and the H137b pair A/B with PAIR_GS up to 384 — the
    decisive question: with ~4.75x the cores, does the real GEMV kernel's residency cover the
    256 tiles so the persistent form stops losing MLP?
-3. If H289 Q4 passes (bit-exact AND fused <= ref - 10 us): pre-register H287, the fused
+3. If H289 Q4 passes (bit-exact AND fused <= ref - 10 us): pre-register H290, the fused
    layer-tail prototype (MLP tail: norm -> gate/up GEMV -> swiglu -> down GEMV + residual, or
    attn o-proj + residual + norm; 2-3 internal barriers), bit-exact vs the separate kernels
    with identical accumulation orders, then the 2B decode A/B on the affected chip(s).
