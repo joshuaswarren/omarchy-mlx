@@ -317,6 +317,7 @@
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
 #include "gated_delta_prefill_coopmat_batch2_bf16.h"
 #include "gated_delta_prefill_coopmat_batch4_bf16.h"
+#include "gated_delta_prefill_coopmat_batch5_bf16.h"
 #include "gdn_sweep_32k.h"
 #include "gdn_sweep_16k.h"
 #include "gdn_sweep_8k.h"
@@ -1393,6 +1394,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_prefill_coopmat_batch4_bf16,
           gated_delta_prefill_coopmat_batch4_bf16_size};
+    case ComputeKernel::GatedDeltaPrefillCoopmatBatch5BF16:
+      return {
+          gated_delta_prefill_coopmat_batch5_bf16,
+          gated_delta_prefill_coopmat_batch5_bf16_size};
     case ComputeKernel::GdnSweep32k:
       return {gdn_sweep_32k, gdn_sweep_32k_size};
     case ComputeKernel::GdnSweep16k:

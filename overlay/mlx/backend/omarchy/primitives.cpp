@@ -11557,6 +11557,12 @@ void GatedDeltaUpdate::eval_gpu(
   // wave instead of 5; per-slice arithmetic unchanged. Opt-in
   // (MLX_OMARCHY_GDN_STATEWAVE=1) until the jwm1 stage readout.
   static const bool gdn_statewave_env = omarchy::env_flag("MLX_OMARCHY_GDN_STATEWAVE");
+  // State-in-registers variant (GdnPrefill2-ablate): shared 32000 ->
+  // ~15600 B => 2 WGs/core (H302 sweep). Loop 1 splits into loopK/loopS
+  // (per-accumulator order unchanged); the state slice lives in 32
+  // per-lane f32 with on-demand S-tile staging. Opt-in
+  // (MLX_OMARCHY_GDN_STATEREGS=1) until doctest + micro gates.
+  static const bool gdn_stateregs_env = omarchy::env_flag("MLX_OMARCHY_GDN_STATEREGS");
   // Shared-footprint sweep (GdnPrefill2-ablate): MLX_OMARCHY_GDN_SWEEP=0/1/2
   // dispatches a bench shadow kernel with 32/16/8 KiB shared per WG —
   // measures whether the 64-WG dispatch time moves with per-WG shared
@@ -11683,7 +11689,8 @@ void GatedDeltaUpdate::eval_gpu(
       return;
     }
     encoder.dispatch_compute(
-        gdn_statewave_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch4BF16
+        gdn_stateregs_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch5BF16
+        : gdn_statewave_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch4BF16
         : gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
         : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
                     : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
