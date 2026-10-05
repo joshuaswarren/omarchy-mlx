@@ -51,6 +51,23 @@ void poison_freed_buffer(void* data, size_t size) {
   }
 }
 
+// Test-only hook: the next N vkAllocateMemory calls return
+// VK_ERROR_OUT_OF_DEVICE_MEMORY so the OOM-retry path is observable
+// without mocking the device table. Negative N = forever. Zero = off.
+// Set via MLX_OMARCHY_TEST_OOM_REMAINING; consulted only when set.
+int& test_oom_remaining() {
+  static int remaining = 0;
+  static bool initialized = false;
+  if (!initialized) {
+    const char* env = std::getenv("MLX_OMARCHY_TEST_OOM_REMAINING");
+    if (env != nullptr) {
+      remaining = std::atoi(env);
+    }
+    initialized = true;
+  }
+  return remaining;
+}
+
 uint32_t VulkanAllocator::find_memory_type(
     uint32_t type_bits,
     VkMemoryPropertyFlags required) const {
@@ -83,7 +100,15 @@ VulkanAllocator::VulkanAllocator()
           [this](VulkanBuffer* buf) { destroy_buffer(buf); }) {
   size_t total = is_available() ? capability_report(0).total_memory : 0;
   memory_limit_ = total > 0 ? (total / 100) * 90 : (1ull << 32);
-  cache_limit_ = 32ul << 20; // 32 MB default cache limit
+  // Metal's `gc_limit_` is `min(0.95 * max_rec, 0.95 * memsize)` —
+  // Honeykrisp has no separate max-recommended, so the ceiling is
+  // 0.95 of the host-visible heap. cache_limit_ matches the same
+  // fraction; a single number drives both the malloc gate and the
+  // free-side pool cap, so changing one or the other never gets them
+  // out of sync.
+  size_t ceiling = total > 0 ? (total / 100) * 95 : (1ull << 32);
+  gc_limit_ = ceiling;
+  cache_limit_ = ceiling;
 }
 
 Buffer VulkanAllocator::malloc(size_t size) {
@@ -123,6 +148,18 @@ Buffer VulkanAllocator::malloc(size_t size) {
   size_t effective_limit = std::max(memory_limit_, wired_limit_);
   if (active_memory_ + size > effective_limit) {
     buffer_cache_.clear();
+  }
+  // Working-set ceiling (Metal: `gc_limit_`): keep active + cache + this
+  // request under the ceiling by releasing the reuse cache before we ask
+  // the driver. This is the A20 fix — without it, KV-cache growth across
+  // decode steps adds a fresh size class per step and the cache keeps
+  // every prior class around, climbing into the Honeykrisp heap until
+  // vkAllocateMemory returns OOM. The ceiling is set to 95% of
+  // total_memory in the constructor and is shared with `cache_limit_`,
+  // so the free-side cap and the malloc-side gate can never disagree.
+  if (active_memory_ + buffer_cache_.cache_size() + size > gc_limit_) {
+    buffer_cache_.release_cached_buffers(
+        active_memory_ + buffer_cache_.cache_size() + size - gc_limit_);
   }
   lk.unlock();
 
@@ -164,7 +201,43 @@ Buffer VulkanAllocator::malloc(size_t size) {
   VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   mai.allocationSize = reqs.size;
   mai.memoryTypeIndex = type_index;
-  VKX_CHECK(dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory));
+  VkResult alloc_result = VK_SUCCESS;
+  if (test_oom_remaining() > 0 || test_oom_remaining() < 0) {
+    // Test hook: simulate driver OOM. The decrement happens in the
+    // real call below, so the test sees the gate fire on the next
+    // malloc and the retry succeed.
+    if (test_oom_remaining() > 0) {
+      test_oom_remaining() -= 1;
+    }
+    alloc_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+  } else {
+    alloc_result =
+        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+  }
+  if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+      alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+    // OOM retry: drop the entire reuse cache (caches are pure reuse; the
+    // driver sees no more memory available than we do) and try once more.
+    // Mirrors Metal's behavior: a malloc that the heap cannot satisfy
+    // even after a cache flush is a hard error. Vulkan has no
+    // `MTLHeap`-equivalent that could give us partial sub-allocation, so
+    // one retry is the correct number — a second failure means the
+    // driver genuinely cannot satisfy this request.
+    {
+      std::unique_lock rl(mutex_);
+      buffer_cache_.clear();
+    }
+    alloc_result =
+        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+  }
+  if (alloc_result != VK_SUCCESS) {
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    throw std::runtime_error(
+        "[omarchy] vkAllocateMemory failed: " +
+        std::string(vk::result_string(alloc_result)) +
+        " (request=" + std::to_string(size) + " bytes; cache released)");
+  }
   VKX_CHECK(
       dt.BindBufferMemory(device().handle(), buf->buffer, buf->memory, 0));
   VKX_CHECK(dt.MapMemory(
@@ -235,8 +308,18 @@ void VulkanAllocator::free(Buffer buffer) {
     buffer_cache_.recycle_to_cache(buf);
     return;
   }
-  // The lock stays held: destroy_buffer deregisters the buffer from
-  // noncoherent_ under the same lock the cache paths already hold.
+  // Cache cap is exceeded: mirroring Metal's free(), drop this freed
+  // buffer instead of letting the pool grow without bound. A20
+  // evidence: cache_memory reached 47.1 GB because every freed
+  // buffer passed the old `cache_size + sz <= cap` test (the cap
+  // defaulted to 32 MB but the test compared against `cache_limit_`
+  // while the in-process ceiling came from `gc_limit_` — when
+  // `cache_limit_` is 32 MB the test fails correctly, but before
+  // this patch the test was the only thing limiting growth, and
+  // poison runs / longer sessions can still see the cache climb
+  // because the LRU never trims a freed block; here we release).
+  // destroy_buffer deregisters from noncoherent_ under the same
+  // lock the cache paths already hold.
   destroy_buffer(buf);
 }
 
@@ -266,6 +349,9 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
       }
       buffer_cache_.recycle_to_cache(buf);
     } else {
+      // Cache cap exceeded (see free()): drop instead of recycling so
+      // an idle but long-lived process cannot park buffers here
+      // forever. Same destroy_buffer lock holding rules.
       destroy_buffer(buf);
     }
   }

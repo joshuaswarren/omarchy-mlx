@@ -41,6 +41,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <vector>
 #include "doctest/doctest.h"
 #include "mlx/backend/cpu/device_info.h"
 #include "mlx/backend/gpu/copy.h"
@@ -779,6 +780,127 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
   alloc.set_memory_limit(saved_limit);
   CHECK(alloc.set_wired_limit(0) == (64u << 30));
   CHECK(alloc.get_active_memory() == before);
+}
+
+TEST_CASE("get/set cache_limit round-trips and exposes the default") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  // Default cache limit is non-zero (the constructor wires it to the
+  // working-set ceiling, 0.95 * total_memory on Honeykrisp).
+  CHECK(alloc.get_cache_limit() > 0);
+  const size_t prev = alloc.get_cache_limit();
+  CHECK(alloc.set_cache_limit(64u << 20) == prev);
+  CHECK(alloc.get_cache_limit() == (64u << 20));
+  // Restore the prior value.
+  alloc.set_cache_limit(prev);
+  CHECK(alloc.get_cache_limit() == prev);
+}
+
+TEST_CASE("malloc releases cache before reaching the working-set ceiling") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+
+  // Bring the working-set ceiling down to a known value so the gate
+  // fires on a predictable size. Save and restore the prior value.
+  const size_t saved_gc = alloc.get_gc_limit();
+  const size_t saved_cache = alloc.get_cache_limit();
+  // Pick a small ceiling so we can drive active + cache over it
+  // without carving through the device's real heap.
+  const size_t ceiling = 8u << 20;
+  alloc.set_cache_limit(ceiling);
+  alloc.set_memory_limit(ceiling);
+  alloc.clear_cache();
+
+  const size_t before = alloc.get_active_memory();
+  // Fill the cache with one block.
+  auto* blk = static_cast<omarchy::VulkanBuffer*>(
+      alloc.malloc(4u << 20).ptr());
+  REQUIRE(blk != nullptr);
+  alloc.free(allocator::Buffer{blk});
+  REQUIRE(alloc.get_cache_memory() >= (4u << 20));
+
+  // A fresh allocation that would push active + cache + size past
+  // the ceiling must release the cache before vkAllocateMemory; the
+  // malloc itself still succeeds (the gate only releases, it never
+  // fabricates a driver failure).
+  auto* fresh = static_cast<omarchy::VulkanBuffer*>(
+      alloc.malloc(8u << 20).ptr());
+  REQUIRE(fresh != nullptr);
+  CHECK(alloc.get_cache_memory() < (4u << 20));
+  alloc.free(allocator::Buffer{fresh});
+
+  alloc.clear_cache();
+  alloc.set_cache_limit(saved_cache);
+  alloc.set_memory_limit(saved_cache);
+  CHECK(alloc.get_active_memory() == before);
+}
+
+TEST_CASE(
+    "malloc retries once with a cleared cache on VK_ERROR_OUT_OF_DEVICE_MEMORY") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  // Inject exactly one OOM on the next vkAllocateMemory; the retry
+  // path must drop the cache and call vkAllocateMemory a second time,
+  // which then succeeds and returns a real buffer.
+  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1", 1);
+  alloc.clear_cache();
+  const size_t before_active = alloc.get_active_memory();
+  auto* buf =
+      static_cast<omarchy::VulkanBuffer*>(alloc.malloc(1u << 20).ptr());
+  REQUIRE(buf != nullptr);
+  CHECK(buf->memory != VK_NULL_HANDLE);
+  CHECK(alloc.get_active_memory() == before_active + (1u << 20));
+  alloc.free(allocator::Buffer{buf});
+  unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
+}
+
+TEST_CASE(
+    "cache stays bounded under a shape-changing alloc/free loop") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  const size_t saved_gc = alloc.get_gc_limit();
+  const size_t saved_cache = alloc.get_cache_limit();
+  const size_t ceiling = 32u << 20;
+  alloc.set_cache_limit(ceiling);
+  alloc.set_memory_limit(ceiling);
+  alloc.clear_cache();
+
+  // Each iteration mallocs a size that grows by 64 KiB (different
+  // size class per step) and frees the previous block. With a sane
+  // cap the cache stays near the ceiling; without the cap (the
+  // pre-fix behavior) it would grow unbounded across the loop.
+  std::vector<omarchy::VulkanBuffer*> live;
+  for (int i = 0; i < 64; ++i) {
+    size_t sz = (1u << 20) + static_cast<size_t>(i) * (64u << 10);
+    auto* b = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(sz).ptr());
+    REQUIRE(b != nullptr);
+    if (!live.empty()) {
+      alloc.free(allocator::Buffer{live.back()});
+      live.pop_back();
+    }
+    live.push_back(b);
+  }
+  // Cache must be at or below the cap.
+  CHECK(alloc.get_cache_memory() <= ceiling);
+  for (auto* b : live) {
+    alloc.free(allocator::Buffer{b});
+  }
+  alloc.clear_cache();
+  alloc.set_cache_limit(saved_cache);
+  alloc.set_memory_limit(saved_cache);
+  CHECK(alloc.get_gc_limit() == saved_gc);
 }
 
 TEST_CASE(
