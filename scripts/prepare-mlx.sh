@@ -133,7 +133,7 @@ header = (source / "mlx/fast.h").read_text()
 bindings = (source / "python/src/fast.cpp").read_text()
 refs = set(re.findall(r"&\s*(?:mx::)?fast::([A-Za-z_]\w*)|(?:mx::)?fast::([A-Za-z_]\w*)\s*\(", bindings))
 names = {name for pair in refs for name in pair if name}
-missing = sorted(name for name in names if not re.search(re.escape(name) + r"\s*\(", header))
+missing = sorted(name for name in names if not re.search(r"MLX_API\s+(?:array|std::vector<array>|CustomKernelFunction)\s+" + re.escape(name) + r"\s*\(", header))
 if missing:
     print("prepare-mlx: missing mlx/fast.h declarations for: " + ", ".join(missing), file=sys.stderr)
     raise SystemExit(1)
