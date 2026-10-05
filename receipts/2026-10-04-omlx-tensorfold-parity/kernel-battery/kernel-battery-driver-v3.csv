@@ -1,0 +1,88 @@
+source,file,name,line,ttf_status,ttf_error,gmsl,msl_size
+omlx,qwen35_verify_sdpa_split.py,omlx_verify_attn_wide_partial,336,reject,unsupported MSL feature `simdgroup_matrix`,simdgroup_matrix,5045
+omlx,qwen35_verify_sdpa_split.py,omlx_verify_attn_wide_combine,345,accept,,,717
+omlx,qwen35_verify_sdpa_split.py,omlx_verify_attn_gqa_partial,575,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,matmul2d_descriptor,4867
+omlx,qwen35_verify_sdpa_split.py,omlx_verify_attn_gqa_combine,583,accept,,,806
+omlx,qwen35_verify_sdpa_split.py,omlx_chain_attn_partial,745,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2434
+omlx,qwen35_verify_sdpa_split.py,omlx_chain_attn_combine,752,accept,,,593
+omlx,qwen35_verify_qmm.py,omlx_verify_group_sums,874,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,295
+omlx,qwen35_verify_qmm.py,omlx_verify_add_rms,1372,accept,,,1996
+omlx,qwen35_moe_router.py,omlx_qwen35_moe_router_topk,227,reject,unsupported MSL syntax remains after translation,,1916
+omlx,qwen35_moe_router.py,omlx_qwen35_moe_router_gemv_row,386,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,396
+omlx,qwen35_moe_router.py,omlx_qwen35_moe_router_softmax_topk_row,466,accept,,,1242
+omlx,qwen35_moe_router.py,omlx_qwen35_moe_combine_row,596,accept,,,766
+omlx,qwen35_moe_router.py,omlx_qwen35_moe_router_gemv_window,414,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,395
+omlx,m5_gather_qmm_nax.py,omlx_gqmm_tile_scan,1260,accept,,,353
+omlx,qwen35_packed_linear.py,omlx_qwen35_packed_small,328,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,matmul2d_descriptor,4915
+omlx,qwen35_packed_linear.py,omlx_qwen35_packed_matvec,335,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2254
+omlx,qwen35_packed_linear.py,omlx_qwen35_packed_reduce,341,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,292
+omlx,qwen35_packed_linear.py,omlx_qwen35_packed_gemm,347,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3382
+omlx,glm53_kda_prework.py,omlx_glm53_kda_prefill_prework,160,accept,,,3181
+omlx,glm53_kda_prework.py,omlx_glm53_kda_prefill_norm_gate,166,accept,,,1101
+omlx,qwen35_gdn_prework.py,omlx_qwen35_gdn_prework,750,accept,,,4782
+omlx,qwen35_gdn_prework.py,omlx_qwen4_gdn_decode_prework,799,accept,,,3750
+omlx,qwen35_gdn_prework.py,omlx_qwen4_gdn_decode_norm_gate,1047,accept,,,822
+omlx,qwen35_gdn_prework.py,omlx_qwen4_gdn_decode_step,1088,reject,unsupported buffer type `T`,,6741
+omlx,moe_verify_gather.py,<fstring>,291,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2941
+omlx,batch_generator.py,omlx_mtp_candidate_sample,1855,reject,unsupported MSL syntax remains after translation,,1585
+omlx,qwen35_verify_attention.py,omlx_qwen_verify_ragged_sdpa,132,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3714
+omlx,indexer_nax.py,omlx_glm_dsa_indexer_scores_nax,183,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,matmul2d_descriptor,5115
+omlx,sparse_mla_nax.py,omlx_glm_sparse_mla_nax_v2,331,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,matmul2d_descriptor,11392
+omlx,msa.py,minimax_m3_msa_csr_k1_scalar,511,accept,,,4342
+omlx,msa.py,minimax_m3_msa_csr_k1_simd,631,accept,,,3179
+omlx,msa.py,minimax_m3_msa_csr_k1_simd_packed,728,accept,,,3493
+omlx,msa.py,minimax_m3_msa_csr_k2_combine,826,accept,,,1308
+omlx,msa.py,minimax_m3_msa_topk_select,879,accept,,,3683
+omlx,msa.py,minimax_m3_msa_decode_b1_simd,991,accept,,,2351
+omlx,msa.py,minimax_m3_msa_csr_k1_steel_mma,103,reject,unsupported MSL syntax remains after translation,,10133
+omlx,decode_kernels.py,glm5_moe_shared_gate_up_swiglu,543,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,1057
+omlx,decode_kernels.py,glm5_hc_mix_rms_gemv_row,1076,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2046
+omlx,decode_kernels.py,glm5_dsa_decode_scores,1196,reject,unsupported MSL feature `simdgroup_matrix`,simdgroup_matrix,2472
+omlx,decode_kernels.py,glm5_dsa_topk_rows,1353,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3270
+omlx,decode_kernels.py,glm5_dsa_expand_topk,1413,accept,,,743
+omlx,decode_kernels.py,glm5_dsa_gather_selected,1476,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,630
+omlx,decode_kernels.py,glm5_router_select,2157,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2173
+omlx,decode_kernels.py,glm5_hc_expand_one_token,2352,accept,,matmul2d_descriptor,1905
+omlx,decode_kernels.py,glm5_hc_post_comb_mm,2732,reject,unsupported buffer type `vec4`,matmul2d_descriptor,2214
+omlx,decode_kernels.py,glm5_sigmoid_probe,1555,accept,,,135
+omlx,language.py,inkling_banded_mask,122,accept,,,1117
+omlx,language.py,omlx_inkling_sconv_decode,253,accept,,,1255
+omlx,language.py,omlx_inkling_moe_route,621,accept,,,1984
+omlx,language.py,omlx_inkling_moe_down_combine,671,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,1504
+omlx,switch_layers.py,<fstring>,155,reject,unsupported MSL syntax remains after translation,,1511
+omlx,verify_qmv.py,omlx_deepseek_verify_qmv_exact,300,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,4226
+omlx,verify_qmv.py,omlx_deepseek_verify_gemv_exact,312,accept,,,2167
+omlx,verify_qmv.py,omlx_deepseek_verify_multi_qmv_exact,334,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2445
+omlx,hyper_connection.py,hc_sinkhorn_collapse,153,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,5169
+omlx,wsdpa_attention.py,dsv4_wsdpa,141,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3361
+omlx,wsdpa_attention.py,dsv4_wsdpa_topk,255,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3543
+omlx,qsa_nax.py,omlx_qwen4_qsa_nax_query_attention,371,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,matmul2d_descriptor|mpp::tensor_ops,12643
+omlx,hc_projection.py,omlx_qwen4_hc_hybrid_qmv,310,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3044
+omlx,language.py,omlx_qwen4_depthwise_conv1d,3457,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,623
+omlx,qsa_fast.py,omlx_qwen4_masked_decode_sdpa_1,637,accept,,,2900
+omlx,qsa_fast.py,omlx_qwen4_masked_decode_sdpa_2,646,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,1826
+omlx,sdpa_flash.py,omlx_sdpa_flash_pass1,364,reject,unsupported MSL feature `simdgroup_matrix`,simdgroup_matrix,10929
+omlx,sdpa_flash.py,omlx_sdpa_flash_pass2,375,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,671
+omlx,decode_fast.py,omlx_mimo_router_gemv,414,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2204
+omlx,decode_fast.py,omlx_mimo_router_select,478,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,904
+omlx,decode_fast.py,omlx_mimo_qkv_rope_split,488,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,1788
+omlx,moe_decode.py,omlx_mxfp4_gate_up_swiglu,220,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2352
+omlx,moe_decode.py,omlx_mxfp4_down,231,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,1708
+omlx,hyper_connection.py,deepseek_v41_sinkhorn,35,accept,,,873
+omlx,hyper_connection.py,deepseek_v41_hc_post,91,accept,,,510
+omlx,hyper_connection.py,deepseek_v41_hc_pre_norm,150,accept,,,1276
+omlx,routing.py,v41_unpermute_reduce,22,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,279
+omlx,kernels.py,deepseek_v41_tile_topk,534,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3353
+omlx,kernels.py,deepseek_v41_sorted_topk_merge,606,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,2701
+omlx,head.py,v41_bf16_head_fp32_output,30,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,735
+omlx,gdn.py,omlx_gdn_chunk_intra,318,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,6568
+omlx,gdn.py,omlx_gdn_chunk_scan,325,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,4243
+omlx,dflash_drafter.py,omlx_dflash2_conv,105,accept,,,501
+omlx,dflash_drafter.py,omlx_dflash2_select,799,reject,unsupported MSL syntax remains after translation,,3406
+tf,lane_gdn.py,tensorfold_lane_gdn_step_kh,193,accept,,,3000
+tf,lane_gdn.py,tensorfold_lane_gdn_step,223,reject,unsupported MSL syntax remains after translation,,2478
+tf,lane_tree.py,<fstring>,112,accept,,,2253
+tf,lane_tree.py,<fstring>,118,accept,,,1667
+tf,lane_attention.py,<anon>,198,accept,,,947
+tf,sparse_attention.py,<fstring>,89,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,3002
+tf,kda.py,<fstring>,292,reject,unsupported MSL feature `device pointer arithmetic` is not implemented for the Omarchy Vulkan backend,,8049
