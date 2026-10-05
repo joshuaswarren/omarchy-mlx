@@ -38,20 +38,22 @@ Owner: OmlxCache (worker). Pre-registered 2026-10-05; twin notebook entry at
 
 ```sh
 # 0) one-time venv refresh to the post-fix state (inside the first ticket)
+scp -q ~/.config/superpowers/worktrees/mlx-omarchy/OmlxCache/receipts/2026-10-05-omlx-cache-rows/run_rows.sh \
+  jw14m2-linux:/tmp/omlx-rows/run_rows.sh
 ssh -o ConnectTimeout=8 jw14m2-linux
 #   install.sh (packaging/omlx-linux) as landed, then:
 #   /tmp/omlx-home/.venvs/omlx/bin/pip install --no-deps 'mlx-lm==0.31.3'
 #   re-apply mlx-lm patch series (scripts/apply-mlx-lm-patches.sh)
 #   + install the v0.7.28-class wheel (>= 48ce2b25f) when Release0728 delivers it
 # 1) tickets (gpu-turn FIFO, one leg each, <= 12 min):
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a4     # needs the post-fix wheel
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a15    # 0004 receipt (enforcer+baseline)
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a5
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a6
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a20    # after a15 (uses its accounting context)
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a21
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a8
-receipts/2026-10-05-omlx-cache-rows/run_rows.sh a14    # longest (85 s idle wait), run last
+/tmp/omlx-rows/run_rows.sh a4     # needs the post-fix wheel
+/tmp/omlx-rows/run_rows.sh a15    # 0004 receipt (enforcer+baseline)
+/tmp/omlx-rows/run_rows.sh a5
+/tmp/omlx-rows/run_rows.sh a6
+/tmp/omlx-rows/run_rows.sh a20    # after a15 (uses its accounting context)
+/tmp/omlx-rows/run_rows.sh a21
+/tmp/omlx-rows/run_rows.sh a8
+/tmp/omlx-rows/run_rows.sh a14    # longest (85 s idle wait), run last
 # artifacts land in /tmp/omlx-rows/<leg>-<ts>/ on the M2; copy back with
 # scp -r jw14m2-linux:/tmp/omlx-rows/<leg>-* artifacts/OmlxCache/
 ```
