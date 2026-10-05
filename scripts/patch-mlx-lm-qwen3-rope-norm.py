@@ -43,6 +43,15 @@ NORM_NEW = """        queries, keys, values = self.q_proj(x), self.k_proj(x), se
         # switch: MLX_OMARCHY_ROPE_NORM_FUSE=0 runs the exact eager chain
         # below (bit-identical by construction); the backend fence refuses
         # non-fuseable legs loudly.
+        # SpecPrefill installs RoPE wrappers (_PositionMappedRoPE has no
+        # attribute delegation; _OffsetAdjustedRoPE remaps offsets) whose
+        # __call__ semantics the fused kernel cannot reproduce: it rotates
+        # at the contiguous cache offset, not at the mapped or adjusted
+        # positions the wrapper exists to provide. Any wrapped rope must
+        # take the composed chain below. Reading self.rope.dims directly on
+        # the wrapper raised AttributeError and crashed sparse prefill
+        # (A8, 2026-10-05). Genuine stock ropes carry .dims and never
+        # carry _original.
         if (
             # qwen3 dense rope-norm fold. Kill switches (any of these
             # disables the fold and falls through to the bit-identical
@@ -60,6 +69,8 @@ NORM_NEW = """        queries, keys, values = self.q_proj(x), self.k_proj(x), se
             )
             and queries.dtype == mx.bfloat16
             and hasattr(mx.fast, "rope_rms_norm")
+            and getattr(self.rope, "dims", None) is not None
+            and not hasattr(self.rope, "_original")
         ):
             offset_pos = cache.offset if cache is not None else 0
             queries = mx.fast.rope_rms_norm(
@@ -103,6 +114,23 @@ NORM_NEW = """        queries, keys, values = self.q_proj(x), self.k_proj(x), se
 """
 
 
+# Migration for already-patched installs: the wrap-fallback gate added
+# 2026-10-05 (A8). Files patched before it carry the gate without the two
+# wrapper conditions; upgrade them in place (idempotent).
+GATE_OLD = (
+    '            and queries.dtype == mx.bfloat16\n'
+    '            and hasattr(mx.fast, "rope_rms_norm")\n'
+    '        ):'
+)
+GATE_NEW = (
+    '            and queries.dtype == mx.bfloat16\n'
+    '            and hasattr(mx.fast, "rope_rms_norm")\n'
+    '            and getattr(self.rope, "dims", None) is not None\n'
+    '            and not hasattr(self.rope, "_original")\n'
+    '        ):'
+)
+
+
 def patch_file(path, old, new, marker):
     text = open(path).read()
     if marker in text:
@@ -123,7 +151,16 @@ site = site[0]
 q = site + "/qwen3.py"
 text = open(q).read()
 if "MLX_OMARCHY_ROPE_NORM_FUSE" in text:
-    print("already patched:", q)
+    if GATE_NEW in text:
+        print("already patched:", q)
+    elif text.count(GATE_OLD) == 1:
+        open(q, "w").write(text.replace(GATE_OLD, GATE_NEW, 1))
+        print("upgraded wrap-fallback gate:", q)
+    else:
+        sys.exit(
+            "patched qwen3.py without the expected fused gate; refusing to "
+            "upgrade " + q
+        )
 else:
     if IMPORT_NEW not in text:
         if text.count(IMPORT_OLD) != 1:

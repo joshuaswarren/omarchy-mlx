@@ -82,6 +82,24 @@ class RopeNormFenceSpecTests(unittest.TestCase):
         self.skipTest("qwen3 interim fence dropped with the "
                       "v0.7.28 op-layer fix")
 
+    def test_qwen3_wrap_fallback_gate_present(self):
+        # A8 (2026-10-05): SpecPrefill wraps attn.rope in
+        # _PositionMappedRoPE (no attribute delegation) /
+        # _OffsetAdjustedRoPE (offset remap). The fused kernel rotates at
+        # the contiguous cache offset and cannot honor either wrapper, and
+        # a direct self.rope.dims on the wrapper raised AttributeError,
+        # crashing sparse prefill. The gate must therefore dispatch the
+        # fold only for genuine stock ropes (.dims present, _original
+        # absent) and fall through to the composed chain for wrappers.
+        self.assertIn('getattr(self.rope, "dims", None) is not None',
+            self.qwen3,
+            msg="qwen3 fold gate must require .dims on the rope (wrappers "
+                "without it must fall through, not raise)")
+        self.assertIn('not hasattr(self.rope, "_original")',
+            self.qwen3,
+                msg="qwen3 fold gate must exclude specprefill rope wrappers "
+                    "(_original carriers)")
+
     def test_qwen3_next_offset_type_fence_present(self):
         # REMOVED 2026-10-05: same op-layer fix; this lane dropped its
         # qwen3_next interim fence in the same window.
