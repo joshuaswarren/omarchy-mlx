@@ -1,3 +1,42 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -48,6 +48,35 @@
+     const std::optional<array>& freqs = std::nullopt,
+     StreamOrDevice s = {});
+ 
++// rope + row RMS norm fused (the attention q/k q_norm/k_norm -> rope chain):
++// the row-wise RMS normalization `rms_norm(x, weight, eps)` is computed
++// inside the rope dispatch and the rotation consumes the rounded normalized
++// values, so the result is bit-identical to
++// `rope(rms_norm(x, weight, eps), ...)` while saving one dependent dispatch
++// per call. Freqs are not supported (base variant only); everything the
++// backend cannot fuse composes the exact eager chain via the fallback.
++MLX_API array rope_rms_norm(
++    const array& x,
++    int dims,
++    const array& weight,
++    float eps,
++    bool traditional,
++    std::optional<float> base,
++    float scale,
++    int offset,
++    StreamOrDevice s = {});
++
++MLX_API array rope_rms_norm(
++    const array& x,
++    int dims,
++    const array& weight,
++    float eps,
++    bool traditional,
++    std::optional<float> base,
++    float scale,
++    const array& offset,
++    StreamOrDevice s = {});
++
+ /** Computes: O = softmax(Q @ K.T) @ V **/
+ MLX_API array scaled_dot_product_attention(
+     const array& queries,
+
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
 @@ -472,7 +472,9 @@
@@ -11,7 +50,7 @@
    auto& x = inputs[0];
    auto& offset = inputs[1];
    if (x.ndim() < 3) {
-@@ -531,10 +533,64 @@
+@@ -531,10 +533,55 @@
          << " but got shape " << inputs[2].shape() << ".";
      throw std::invalid_argument(msg.str());
    }
@@ -36,19 +75,10 @@
 +    // Compose the exact eager chain the fused route replaces: the row-wise
 +    // RMS norm first (rows of the last axis, weight and eps as given), then
 +    // the rope above on the normalized values.
-+    // The weight must come from inputs, not the capture, whenever it was
-+    // pushed: mlx::core::vjp traces this lambda with tracer arrays for the
-+    // primals, and a captured array enters that trace as a constant, which
-+    // silently zeroes the weight gradient (found by the rope_rms_norm vjp
-+    // doctest). The wrapper always pushes the weight when set, so
-+    // inputs.size() == 3 covers both the fused and the fallback paths.
 +    std::optional<array> weight_in;
 +    if (norm_weight) {
 +      weight_in = (inputs.size() == 3) ? inputs[2] : *norm_weight;
 +    }
-+    // Compose the exact eager chain the fused route replaces: the row-wise
-+    // RMS norm first (rows of the last axis, weight and eps as given), then
-+    // the rope above on the normalized values.
 +    if (weight_in) {
 +      // The reference path runs rms_norm on the row-contiguous (B, T, H, D)
 +      // input and only then transposes to (B, H, T, D) for the rotation.
@@ -78,7 +108,7 @@
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -566,8 +622,14 @@
+@@ -566,8 +613,14 @@
            s);
      };
  
@@ -94,7 +124,7 @@
      auto theta = multiply(expand_dims(positions, -1, s), inv_freqs, s);
      auto coss = astype(cos(theta, s), t, s);
      auto sins = astype(sin(theta, s), t, s);
-@@ -618,17 +680,104 @@
+@@ -618,17 +671,104 @@
      }
    };
    auto stream = to_stream(s);
@@ -202,7 +232,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -677,6 +826,14 @@
+@@ -677,6 +817,14 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -217,7 +247,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -707,7 +864,8 @@
+@@ -707,7 +855,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&
@@ -227,6 +257,7 @@
  }
  
  /** Computes: O = softmax(Q @ K.T) @ V **/
+
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
 @@ -226,13 +226,17 @@
@@ -272,6 +303,7 @@
  };
  
  class ScaledDotProductAttention : public Custom {
+
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
 @@ -257,6 +257,56 @@
