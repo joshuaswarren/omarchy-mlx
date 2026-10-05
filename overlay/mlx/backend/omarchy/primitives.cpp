@@ -8071,8 +8071,9 @@ bool dispatch_quantized_gemv_group(
 
 namespace {
 
-// PersistentTail device state: one probe, one scratch, one sticky gate.
-// The backend is single-device; all fields ride one mutex.
+// PersistentTail device state: one probe, one sticky gate, one gbb
+// scratch PER STREAM (a barrier scratch shared across streams would
+// race another stream's in-flight tail). The backend is single-device.
 struct PersistentTailState {
   std::mutex mu;
   bool attempted{false};
@@ -8081,7 +8082,7 @@ struct PersistentTailState {
   uint32_t g_fit{0};
   uint32_t gprs{0};
   uint32_t cores{0};
-  std::optional<array> scratch;
+  std::unordered_map<int, std::optional<array>> scratch;
 };
 
 PersistentTailState persistent_tail_state;
@@ -8382,17 +8383,22 @@ bool dispatch_persistent_mlp_tail(
       plan.swiglu_out, fold_strides, fold_flags, up.data_size(), 0);
   // Scratch: [0] arrival counter, [1] generation, [2] timeout flag.
   // Zeroed before every dispatch; read back in a completion handler.
+  // Keyed per stream: two streams' tails must not share a barrier word.
   VkBuffer scratch_buffer = VK_NULL_HANDLE;
   uint32_t* scratch_host = nullptr;
+  // Cheap handle copy of the stream's scratch (survives map rehash).
+  std::optional<array> scratch_array;
   {
     std::lock_guard<std::mutex> lk(st.mu);
-    if (!st.scratch) {
+    auto& slot = st.scratch[stream.index];
+    if (!slot) {
       array scratch(Shape{3}, uint32, nullptr, {});
       scratch.set_data(allocator().malloc(3 * sizeof(uint32_t)));
-      st.scratch = std::move(scratch);
+      slot = std::move(scratch);
     }
-    auto* buffer = static_cast<const omarchy::VulkanBuffer*>(
-        st.scratch->buffer().ptr());
+    scratch_array = slot;
+    auto* buffer =
+        static_cast<const omarchy::VulkanBuffer*>(slot->buffer().ptr());
     scratch_buffer = buffer->buffer;
     scratch_host = static_cast<uint32_t*>(buffer->data);
   }
@@ -8448,7 +8454,7 @@ bool dispatch_persistent_mlp_tail(
   bindings[34] = binding(plan.norm_out);  // norm out (writeonly)
   bindings[35] = binding(plan.swiglu_out);  // x_mid (dn stage x)
   bindings[36] = binding(plan.norm_out);  // x_norm (gu stage x)
-  bindings[37] = binding(*st.scratch);    // gbb_sync
+  bindings[37] = binding(*scratch_array);  // gbb_sync
   encoder.fill_buffer(scratch_buffer, 0, 3 * sizeof(uint32_t), 0);
   encoder.dispatch_compute(
       ComputeKernel::PersistentTailBF16,
