@@ -664,6 +664,10 @@ enum class ComputeKernel : uint16_t {
   // FULL_N twins (matrix_n % 32 == 0): column_ok compiled out.
   QmmPrefillCoopmatBF16X32FullN,
   QmmPrefillCoopmatM16BF16X32FullN,
+  // M16 LDS_PAD / CHUNK_DEQ twins (q16 verify lever); append-only ids.
+  QmmPrefillCoopmatM16BF16X32FullNLdsPad,
+  QmmPrefillCoopmatM16BF16X32FullNChunk,
+  QmmPrefillCoopmatM16BF16X32FullNChunkPad,
   // Native-shape two-pass long-context decode SDPA (f16): pass 1 runs one
   // 32-thread workgroup per (head, block) - native Metal's
   // sdpa_vector_2pass_1 grid - and writes the fused kernel's exact f16/f32

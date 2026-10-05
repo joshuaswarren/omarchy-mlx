@@ -7586,6 +7586,33 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         }
       }
       if (!env_routed) {
+        // M16 LDS_PAD / CHUNK_DEQ env-gated twins (q16 verify lever):
+        // MLX_OMARCHY_QMM_M16_LDSPAD=1 -> the padded-stride M16 twin;
+        // MLX_OMARCHY_QMM_M16_CHUNK=1 -> the whole-group dequant twin;
+        // both -> the combined twin. Same per-output ascending-k chain
+        // (the tile body is unchanged; only the staging and fence
+        // pattern differ), so the pick does not move results.
+        const char* m16_pad = full_n && coopmat_rows == 16u
+            ? std::getenv("MLX_OMARCHY_QMM_M16_LDSPAD") : nullptr;
+        const char* m16_chunk = full_n && coopmat_rows == 16u
+            ? std::getenv("MLX_OMARCHY_QMM_M16_CHUNK") : nullptr;
+        const bool m16_use_pad = m16_pad != nullptr && m16_pad[0] == '1';
+        const bool m16_use_chunk = m16_chunk != nullptr && m16_chunk[0] == '1';
+        if (coopmat_rows == 16u && full_n && (m16_use_pad || m16_use_chunk)) {
+          if (m16_use_pad && m16_use_chunk) {
+            qmm_kernel = omarchy::ComputeKernel::
+                QmmPrefillCoopmatM16BF16X32FullNChunkPad;
+          } else if (m16_use_chunk) {
+            qmm_kernel = omarchy::ComputeKernel::
+                QmmPrefillCoopmatM16BF16X32FullNChunk;
+          } else {
+            qmm_kernel = omarchy::ComputeKernel::
+                QmmPrefillCoopmatM16BF16X32FullNLdsPad;
+          }
+          env_routed = true;
+        }
+      }
+      if (!env_routed) {
         qmm_kernel = coopmat_rows == 16u
             ? (full_n
                    ? omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN

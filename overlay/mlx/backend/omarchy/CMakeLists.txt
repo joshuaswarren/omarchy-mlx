@@ -427,6 +427,11 @@ omarchy_shader(qmm_coopmat_x32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1)
 omarchy_shader(qmm_coopmat_m16_x32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16)
 omarchy_shader(qmm_coopmat_x32_fn shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1)
 omarchy_shader(qmm_coopmat_m16_x32_fn shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1)
+# M16 LDS_PAD / CHUNK_DEQ twins (Main-ordered q16 verify lever): bank-conflict
+# fix and whole-group dequant behind one fence; same per-output k chain.
+omarchy_shader(qmm_coopmat_m16_x32_fn_ldspad shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DLDS_PAD=1)
+omarchy_shader(qmm_coopmat_m16_x32_fn_chunk shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DCHUNK_DEQ=1)
+omarchy_shader(qmm_coopmat_m16_x32_fn_chunk_pad shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DLDS_PAD=1 -DCHUNK_DEQ=1)
 # Prefill-axes twins of the x32 FullN route (receipts/2026-10-03-prefill-axes):
 # rasterization-order and issue-quality variants; same per-output ascending-k
 # chain, so all are digest-identical to the shipped kernels by construction.
