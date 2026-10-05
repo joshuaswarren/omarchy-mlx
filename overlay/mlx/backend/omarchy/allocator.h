@@ -76,6 +76,15 @@ class VulkanAllocator : public allocator::Allocator {
     std::swap(memory_limit_, limit);
     return limit;
   }
+  size_t get_wired_limit() const {
+    std::unique_lock lk(mutex_);
+    return wired_limit_;
+  }
+  size_t set_wired_limit(size_t limit) {
+    std::unique_lock lk(mutex_);
+    std::swap(wired_limit_, limit);
+    return limit;
+  }
   size_t get_cache_memory() const {
     std::unique_lock lk(mutex_);
     return buffer_cache_.cache_size();
@@ -140,6 +149,7 @@ class VulkanAllocator : public allocator::Allocator {
 
   mutable std::mutex mutex_;
   size_t memory_limit_;
+  size_t wired_limit_{0};
   size_t cache_limit_;
   size_t active_memory_{0};
   size_t peak_memory_{0};
