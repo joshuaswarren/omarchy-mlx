@@ -91,7 +91,10 @@ def test_enforcer_patch_logs_verbatim_honest_message():
              / "0003-linux-enforcer-no-wired-limit-log.patch").read_text()
     assert "unified system RAM" in patch
     assert "no-op" in patch
-    assert 'sys.platform != "darwin"' in patch
+    # platform.system() — the module has no `import sys`; a sys.platform
+    # check here is a NameError at server start (caught live on the M2).
+    assert 'platform.system() != "Darwin"' in patch
+    assert "+import platform" in patch
 
 
 def test_enforcer_patch_keeps_darwin_branch():

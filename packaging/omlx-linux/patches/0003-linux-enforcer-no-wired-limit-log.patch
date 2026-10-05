@@ -1,5 +1,5 @@
 diff --git a/omlx/process_memory_enforcer.py b/omlx/process_memory_enforcer.py
-index 85609b98..38f7d8c6 100644
+index 85609b98..d27ad708 100644
 --- a/omlx/process_memory_enforcer.py
 +++ b/omlx/process_memory_enforcer.py
 @@ -30,6 +30,7 @@ import asyncio
@@ -14,7 +14,7 @@ index 85609b98..38f7d8c6 100644
                  suggestion // (1024**2),
              )
          else:
-+            if sys.platform != "darwin":
++            if platform.system() != "Darwin":
 +                # No iogpu wired-limit sysctl exists off macOS. Say what the
 +                # guard actually budgets against instead of staying silent.
 +                logger.info(
