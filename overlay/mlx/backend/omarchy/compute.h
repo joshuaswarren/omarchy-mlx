@@ -704,19 +704,6 @@ enum class ComputeKernel : uint16_t {
   // its order matches the composed path, so the route is bit-identical
   // to the composition it replaces). Append-only profile id.
   SdpaDecodeNativeBF16Hd256,
-  // Fused flash-2 causal prefill attention at head_dim=256 GQA bf16
-  // (shaders/sdpa_prefill_flash256.comp -DSDPA_DIM=256): one
-  // 32-thread workgroup per (B, H_q, q_row_tile) with Q_TILE=32 query
-  // rows, K_TILE=64 keys per inner step, online softmax (f32 max and
-  // l accumulators per row, register-resident across the sweep), no
-  // materialized S intermediate. Replaces the composed
-  // MatmulF32CoopmatQkBF16 + softmax_suffix + MatmulF32CoopmatPvBF16
-  // graph on the dispatch-gate shapes (bf16, head_dim==256, GQA,
-  // causal prefill, no array mask, no sinks, !output_logsumexp,
-  // kv_len >= q_len, bh<=65535 and bh*q_len<=65535). Kill switch:
-  // MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 keeps the composed graph for
-  // regression. Append-only profile id.
-  SdpaPrefillFlash256BF16,
   // Greedy-argmax decode head (qmm_vec.comp QMM_VEC_GREEDY): bounds,
   // compaction, exact survivor columns, selection, and the flagged full
   // path, one kernel selected per stage. Append-only profile id.
@@ -830,6 +817,19 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
   QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // Fused flash-2 causal prefill attention at head_dim=256 GQA bf16
+  // (shaders/sdpa_prefill_flash256.comp -DSDPA_DIM=256): one
+  // 32-thread workgroup per (B, H_q, q_row_tile) with Q_TILE=16 query
+  // rows, K_TILE=32 keys per inner step, online softmax (f32 max and
+  // l accumulators per row, register-resident across the sweep), no
+  // materialized S intermediate. Replaces the composed
+  // MatmulF32CoopmatQkBF16 + softmax_suffix + MatmulF32CoopmatPvBF16
+  // graph on the dispatch-gate shapes (bf16, head_dim==256, GQA,
+  // causal prefill, no array mask, no sinks, !output_logsumexp,
+  // kv_len >= q_len, bh<=65535 and bh*q_len<=65535). Kill switch:
+  // MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 keeps the composed graph for
+  // regression. Append-only profile id.
+  SdpaPrefillFlash256BF16,
   Count,
 };
 
