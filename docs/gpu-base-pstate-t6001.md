@@ -42,6 +42,10 @@ the energy side is carried by T8103 H247: no idle cost, +26 mW (0.34 %) at
 
 ## Turn it on
 
+First run `scripts/check-dtbs-override.sh`: a `DTBS=` setting in
+`/etc/default/update-m1n1` makes `update-m1n1` ignore this opt-in silently
+(see docs/gpu-base-pstate.md for the check and the temporary-override recipe).
+
 On a system with `omarchy-mac-boot` (which consumes `/usr/lib/omarchy-mac-boot/dtb-overlays`
 plus `/etc/omarchy-mac-boot/dtb-overlays.opt-in`):
 

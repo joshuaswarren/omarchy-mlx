@@ -62,6 +62,10 @@ Base 7 and base 5 were not measured.
 
 ## Turn it on
 
+First run `scripts/check-dtbs-override.sh`: a `DTBS=` setting in
+`/etc/default/update-m1n1` makes `update-m1n1` ignore this opt-in silently
+(see docs/gpu-base-pstate.md for the check and the temporary-override recipe).
+
 On a system with `omarchy-mac-boot` (which consumes
 `/usr/lib/omarchy-mac-boot/dtb-overlays` plus
 `/etc/omarchy-mac-boot/dtb-overlays.opt-in`):
