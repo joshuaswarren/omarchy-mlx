@@ -115,3 +115,20 @@ only, VENP + swiglu-eager; libmlx identical). Dispatch-counter diagnostic
 
 H295 recommendation unchanged: swiglu-eager stays an experiment patcher
 (bit-exact, ~0% e2e on this stack).
+
+## Lane decision (Main, 2026-10-05 ~13:35Z): PARKED — thesis falsified on G14C at 2B decode
+
+- The persistent tail stays default OFF (MLX_OMARCHY_PERSISTENT_MLP unset;
+  kill switch =0). No M2 window will be spent proving the predicted ~0.
+- What would re-open it: w71's same swiglu-fold A/B on jwm1 (G13G). If the
+  hop model holds there (>= +2% for -24 dispatches/token), the persistent
+  tail re-opens M1-only — with the known constraint that the real-kernel
+  ceiling (96) is below the tile knee, so it would need a different split
+  (smaller G or a partial-tail form) before any A/B.
+- Standing verified value from this lane, independent of the parked thesis:
+  the integration is bit-exact-by-construction and provably inert by
+  default (every 2B/4B ledger pin reproduced with the gate off); the
+  G-fit-probe + sticky-timeout scaffolding is in the tree for any future
+  persistent-kernel route; and the dispatch-counter methodology
+  (trace-snapshot probes + per-venv marker checks) is the fleet tool that
+  settled H295 in one ticket.
