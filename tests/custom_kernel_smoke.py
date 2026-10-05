@@ -578,7 +578,7 @@ class CustomKernelSmoke(unittest.TestCase):
                 "tv += inversesqrt(float(2)) * 0.0f;\n"
             ),
         )
-        qkv = mx.array([1.0, 2.0, 3.0, 4.0], dtype=mx.bfloat16)
+        qkv = mx.array([1.0, 2.0, 1.0, 2.0], dtype=mx.bfloat16)
         conv_w = mx.array([0.5, 0.25], dtype=mx.bfloat16)
         act_out, state_out = kernel(
             inputs=[qkv, conv_w],
