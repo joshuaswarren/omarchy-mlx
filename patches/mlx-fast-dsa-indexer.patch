@@ -88,15 +88,11 @@
   public:
    GatedDeltaUpdate(
 --- a/mlx/fast.cpp	2026-10-04 19:27:25.582611806 -0500
-+++ b/mlx/fast.cpp	2026-10-04 19:26:37.841068079 -0500
-@@ -1937,6 +1937,122 @@
++++ b/mlx/fast.cpp	2026-10-04 20:36:49.075511811 -0500
+@@ -1937,6 +1937,115 @@
    return std::move(outputs[0]);
  }
  
-+
-+bool DsaIndexerScores::use_fallback(Stream s) {
-+  return s.device == Device::cpu;
-+}
 +
 +array dsa_indexer_scores(
 +    const array& queries,
@@ -151,7 +147,7 @@
 +  // Accumulation and masking run in float32; the only 16-bit round is
 +  // the final store, which matches the metal kernel's contract.
 +  std::function<std::vector<array>(std::vector<array>)> fallback =
-+      [s, causal, causal_q_offset, mask_ratio, H, D](
++      [s, causal, causal_q_offset, mask_ratio, B, L, H, D](
 +          std::vector<array> inputs) {
 +        auto dt = inputs[0].dtype();
 +        array floor_min = astype(
@@ -159,37 +155,34 @@
 +        // scores [B, H, L, K] via batched matmul over the head axis.
 +        array scores = matmul(
 +            inputs[0], swapaxes(inputs[1], -1, -2, s), s);
-+        int Lq = scores.shape(2);
 +        int Kk = scores.shape(3);
 +        int off = causal_q_offset;
 +        array l_idx = expand_dims(
-+            expand_dims(arange(Lq, uint32, s), 0, s), -1, s);
++            expand_dims(arange(L, int32, s), 0, s), -1, s);
 +        array c_idx = expand_dims(
-+            expand_dims(arange(Kk, uint32, s), 0, s), 0, s);
++            expand_dims(arange(Kk, int32, s), 0, s), 0, s);
 +        std::vector<array> masks;
 +        if (mask_ratio > 0) {
 +          array thr = floor_divide(
-+              array(off + 1, uint32, s) + l_idx,
-+              array(mask_ratio, uint32, s),
-+              s);
++              array(off + 1) + l_idx, array(mask_ratio), s);
 +          masks.push_back(less(c_idx, thr, s));
 +        }
 +        if (causal) {
 +          masks.push_back(
-+              less_equal(c_idx, array(off, uint32, s) + l_idx, s));
++              less_equal(c_idx, array(off) + l_idx, s));
 +        }
 +        array valid = masks[0];
 +        for (size_t i = 1; i < masks.size(); ++i) {
 +          valid = logical_and(valid, masks[i], s);
 +        }
 +        array masked = where(valid, scores, floor_min, s);
-+        array relu = maximum(masked, array(0.0f, float32, s), s);
++        array relu = maximum(masked, array(0.0f), s);
 +        array wq = reshape(
 +            transpose(
-+                reshape(inputs[2], {B, 1, Lq, H}, s),
++                reshape(inputs[2], {B, 1, L, H}, s),
 +                {0, 3, 1, 2},
 +                s),
-+            {B, H, Lq, 1},
++            {B, H, L, 1},
 +            s);
 +        array weighted = multiply(relu, wq, s);
 +        array out = sum(weighted, 1, true, s);
@@ -214,7 +207,7 @@
    return (
 --- a/mlx/backend/no_gpu/primitives.cpp
 +++ b/mlx/backend/no_gpu/primitives.cpp
-@@ -193,3 +193,4 @@
+@@ -193,4 +193,5 @@
  NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
  NO_GPU_USE_FALLBACK(Int8Matmul)
 +NO_GPU_USE_FALLBACK(DsaIndexerScores)
