@@ -7810,7 +7810,7 @@ bool dispatch_quantized_gemv_group(
   uint32_t rows = 1;
   if (x.ndim() >= 2 && x.shape(-2) > 1) {
     if (token_multi_disabled || dtype != bfloat16 ||
-        x.shape(-2) > 8u) {
+        x.shape(-2) > kQmmVecTokenRowsMax) {
       return false;
     }
     token_route = true;
