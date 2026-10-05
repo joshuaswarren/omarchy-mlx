@@ -347,3 +347,27 @@ smoke on Qwen3-4B (one single-shot, one 4-concurrent; compare
 sha256 of the digest-prompt's content; expect equal). The 9B and
 2B path is blocked on the omarchy-backend Metal-kernel gap
 (separate milestone, KernelBattery has the glslang error).
+
+## ADDENDUM (2026-10-05, RopeNormBatch root cause): the fence is interim
+
+RopeNormBatch root-caused the broadcast crash to the C++/shader
+layer, not the Python patchers: in `patches/mlx-rope-rms-norm.patch`,
+the rope() fallback lambda reads `inputs.size()==3 ? inputs[2] :
+default_inv_freqs()`. For `rope_rms_norm`, `inputs[2]` is the NORM
+WEIGHT (D elements), not freqs (D/2). With D=128 the fallback built
+(B,1,T,128) trig and broadcast against (B,H,T,64) rotation halves —
+exactly the observed `[broadcast_shapes] (2,8,1,64) and (2,1,1,128)`.
+B=1 never hit the fallback (fused GPU path), which is why every
+single-request smoke was clean.
+
+Their fix (new hunk in mlx-rope-rms-norm.patch selecting
+default_inv_freqs() when norm_weight is set; the C++ op keeps
+internal routing: fused for offset.size()==1, composed fallback
+inside the op for size>1) lands in the v0.7.28 wheel. The
+`isinstance(cache.offset, int) + B == 1` conjuncts on BOTH Python
+patchers are an INTERIM guard until that wheel ships; they come off
+in the same commit that updates
+`tests/test_rope_norm_fence_spec.py` (which pins the interim fence
+contract). The per-patcher kill envs and the composed-fallback
+else-branch assertions in that test are independent of the fence
+and stay.
