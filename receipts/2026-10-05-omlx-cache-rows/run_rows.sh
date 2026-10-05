@@ -240,7 +240,10 @@ PY
   code=$(jsonput s1.json "/api/models/$DSC/settings" \
     '{"specprefill_enabled": true, "specprefill_draft_model": "'"$DRAFT"'", "specprefill_threshold": 256, "specprefill_keep_pct": 0.5}')
   [ "$code" = 200 ] || fail "settings PUT HTTP $code: $(head -c 300 s1.json)"
-  log "specprefill settings applied (draft=$DRAFT)"
+  log "specprefill settings applied (draft=$DRAFT); reloading engine (scheduler reads settings at init)"
+  jsonpost ur1.json "/api/models/$DSC/unload" '{}' >/dev/null
+  code=$(jsonpost rl1.json "/api/models/$DSC/load" '{}'); [ "$code" = 200 ] || fail "reload after settings HTTP $code"
+  sleep 5
   code=$(jsonpost out_on.json /v1/chat/completions @body_ref.json); [ "$code" = 200 ] || fail "specprefill leg HTTP $code"
   log "specprefill (on): sha=$(sha out_on.json) (approximation by design; equality not asserted)"
   grep -i 'specprefill' "$ART/server.log" | head -8 || log "note: no specprefill log lines — SCORING PATH MAY NOT HAVE FIRED, recorded as suspicious"
@@ -349,10 +352,16 @@ PY
   log "tq off: sha=$(sha out_off.json)"
   code=$(jsonput s8.json "/api/models/$Q4B/settings" '{"turboquant_kv_enabled": true, "turboquant_kv_bits": 8}')
   [ "$code" = 200 ] || fail "tq settings PUT HTTP $code: $(head -c 300 s8.json)"
+  jsonpost ur8.json "/api/models/$Q4B/unload" '{}' >/dev/null
+  code=$(jsonpost rl8.json "/api/models/$Q4B/load" '{}'); [ "$code" = 200 ] || fail "reload after tq PUT HTTP $code"
+  sleep 5
   code=$(jsonpost out_b8.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "tq bits=8 leg HTTP $code"
   log "tq bits=8: sha=$(sha out_b8.json)"
   code=$(jsonput s4.json "/api/models/$Q4B/settings" '{"turboquant_kv_bits": 4}')
   [ "$code" = 200 ] || fail "tq bits=4 PUT HTTP $code"
+  jsonpost ur4.json "/api/models/$Q4B/unload" '{}' >/dev/null
+  code=$(jsonpost rl4.json "/api/models/$Q4B/load" '{}'); [ "$code" = 200 ] || fail "reload after bits=4 PUT HTTP $code"
+  sleep 5
   code=$(jsonpost out_b4.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "tq bits=4 leg HTTP $code"
   log "tq bits=4: sha=$(sha out_b4.json)"
   grep -i 'turboquant' "$ART/server.log" | head -5 || fail "no turboquant lines in server.log — cache wrap not exercised"
