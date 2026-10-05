@@ -317,10 +317,6 @@
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
 #include "gated_delta_prefill_coopmat_batch2_bf16.h"
 #include "gated_delta_prefill_coopmat_batch4_bf16.h"
-#include "gated_delta_prefill_coopmat_batch5_bf16.h"
-#include "gdn_sweep_32k.h"
-#include "gdn_sweep_16k.h"
-#include "gdn_sweep_8k.h"
 #include "gdn_stub_noloopk.h"
 #include "gdn_stub_noloops.h"
 #include "gdn_stub_noneumann.h"
@@ -1394,16 +1390,6 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_prefill_coopmat_batch4_bf16,
           gated_delta_prefill_coopmat_batch4_bf16_size};
-    case ComputeKernel::GatedDeltaPrefillCoopmatBatch5BF16:
-      return {
-          gated_delta_prefill_coopmat_batch5_bf16,
-          gated_delta_prefill_coopmat_batch5_bf16_size};
-    case ComputeKernel::GdnSweep32k:
-      return {gdn_sweep_32k, gdn_sweep_32k_size};
-    case ComputeKernel::GdnSweep16k:
-      return {gdn_sweep_16k, gdn_sweep_16k_size};
-    case ComputeKernel::GdnSweep8k:
-      return {gdn_sweep_8k, gdn_sweep_8k_size};
     case ComputeKernel::GdnStubNoloopk:
       return {gdn_stub_noloopk, gdn_stub_noloopk_size};
     case ComputeKernel::GdnStubNoloops:
