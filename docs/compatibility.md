@@ -186,17 +186,23 @@ storage-floor mask produced ("f16 causal attention equals the additive
 storage-floor mask bit for bit", `omarchy_primitive_tests`).
 Decode shapes at head_dim 128 have a fused one-dispatch arm: the bf16 arm is bit-identical to the f32-score composition at every measured k (doctests at k ∈ {12, 34, 93, 263, 512, 7200}; engagement window `{1, 7168}`), and the f16 arm keeps the hd64 arm's ≤ 0.01 tolerance; other widths and windows keep the composition (`omarchy_sdpa_decode_fused_tests`).
 `mx.quantized_matmul` passes the gate for the mlx-lm Linear shape:
-affine mode, 4-bit and 8-bit codes, group sizes 32 and 64, transposed
-packed weights `[N, K * bits / 32]`, and f32, f16, and bf16 activations.
-The kernel dequantizes in registers with per-group scale and bias,
-accumulates in float32, and matches a double-precision host reference
-and a dequantized dense matmul on the same device within `2e-4` for
+affine mode, bits 2/3/4/5/6/8, group sizes 32, 64, and 128, transposed
+and non-transposed packed weights, rank-2 and rank-3 (paired or
+broadcast) weights, and f32, f16, and bf16 activations. The direct
+routes dequantize in registers with per-group scale and bias,
+accumulate in float32, and match a double-precision host reference and
+a dequantized dense matmul on the same device within `2e-4` for
 float32. Leading x dims flatten into M when x is row-contiguous.
-Scales and biases pack as two halves of one buffer binding, built by
-two device copies. Other modes, other bits and group sizes,
-non-transposed weights, rank-3 weights, and non-row-contiguous operands
-fail with the named `QuantizedMatmul mode`, `bits`, `group size`,
-`transpose`, `weight layout`, and `non-contiguous input` errors.
+Scales and biases bind as two separate streams, indexed by the shaders
+from their own storage offsets. The bf16 non-transposed tile's
+accumulation order diverges from the dense bf16 matmul reference by one
+output ULP at K <= 128 (upstream tolerance 1.5e-3 is tighter), so that
+zone composes the existing GPU kernels instead: the affine Dequant
+kernel materializes the weight and the dense matmul kernel contracts
+against it (`MLX_OMARCHY_NO_QMM_NT_COMPOSED=1` restores the named
+`QuantizedMatmul bf16 non-transposed tile` refusal). Unsupported inputs
+fail with the named `QuantizedMatmul bits`, `group size`,
+`weight layout`, `scales dtype`, `scales shape`, and `shape` errors.
 `mx.dequantize` passes the gate for the affine mode that QuantizedEmbedding
 feeds: 4-bit and 8-bit codes, group sizes 32 and 64, packed uint32 words,
 and f16 or f32 scales and biases. One kernel thread owns one packed word,
