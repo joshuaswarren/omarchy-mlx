@@ -774,6 +774,10 @@ Translation translate_msl(
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
   replace_all(body, "simd_sum", "subgroupAdd");
   replace_all(body, "simd_max", "subgroupMax");
+  // MSL rint() rounds half-to-even in the current direction; GLSL
+  // roundEven() is the same function. Needed by the H3 _QUANTIZE kernel
+  // (int8 rounding of activations) and any quantize-style kernel.
+  replace_word(body, "rint", "roundEven");
   body = std::regex_replace(
       body,
       std::regex(R"(float16_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
