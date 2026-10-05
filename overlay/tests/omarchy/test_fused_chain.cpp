@@ -1706,7 +1706,7 @@ TEST_CASE("token-multi q4 gemv group is per-row bit-identical to the single-row 
   // (k, n_qkv, n_down) covers the qmv_fast tile (k%512==0), the single
   // word tile, and an n past the 8-column guard.
   for (auto [k, n_qkv] : {std::pair<int, int>{896, 512}, {448, 130}}) {
-    for (int tokens : {2, 3, 4, 5, 16}) {
+    for (int tokens : {2, 3, 4, 5, 8, 9, 12, 16}) {
       auto model = make_token_model(n_qkv, k, bfloat16, stream);
       array x = astype(
           random::normal(Shape{tokens, k}, float32, std::nullopt, stream),

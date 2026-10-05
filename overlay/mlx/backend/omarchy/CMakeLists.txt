@@ -332,6 +332,10 @@ omarchy_shader(qmm_vec_q4_multi_token16_subgroup_bf16 shaders/qmm_vec.comp -DUSE
 # box bit-identity gate runs on these.
 omarchy_shader(qmm_vec_q4_multi_token4_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4)
 omarchy_shader(qmm_vec_q4_multi_token16_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DQMM_VEC_TOKENS=1 -DM_TOKENS=16)
+# token8: the shipped multi-token geometry - rows 5..8 run one token8
+# pass, rows 9..16 run two (the token16 unroll miscompiles on AGX).
+omarchy_shader(qmm_vec_q4_multi_token8_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
+omarchy_shader(qmm_vec_q4_multi_token8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)

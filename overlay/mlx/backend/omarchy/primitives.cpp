@@ -7938,9 +7938,13 @@ bool dispatch_quantized_gemv_group(
   }
   params.operation = 4u;
   params.reduce_size = 64u;
-  // Token route: matrix_m carries the live token count; the single-row
-  // route keeps 1 (the kv-window block below may still override it).
-  params.matrix_m = token_route ? rows : 1u;
+  // Token route: rows 1..4 ride token4, rows 5..8 token8, rows 9..16 TWO
+  // token8 passes (the token16 unroll miscompiles on AGX; per-row chains
+  // are independent so two halves are bit-identical to one 16-row pass).
+  // matrix_m carries the live pass token count; the single-row route
+  // keeps 1 (the kv-window block below may still override it).
+  const uint32_t pass_rows = token_route ? std::min(rows, 8u) : rows;
+  params.matrix_m = token_route ? pass_rows : 1u;
   // Multi-token Add epilogues read the addend with a per-token row
   // stride: n for a full (rows, n) residual, 0 for a broadcast bias.
   if (token_route) {
@@ -8113,8 +8117,8 @@ bool dispatch_quantized_gemv_group(
       : token_route
       ? (rows > 4
             ? (subgroup_ready
-                  ? ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16
-                  : ComputeKernel::QmmVecQ4MultiToken16BF16)
+                  ? ComputeKernel::QmmVecQ4MultiToken8SubgroupBF16
+                  : ComputeKernel::QmmVecQ4MultiToken8BF16)
             : (subgroup_ready
                   ? ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16
                   : ComputeKernel::QmmVecQ4MultiToken4BF16))
@@ -8129,6 +8133,22 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiF32,
             ComputeKernel::QmmVecQ4MultiF16,
             ComputeKernel::QmmVecQ4MultiBF16);
+  if (token_route && rows > 8u) {
+    // Pass 1: rows 0..7; pass 2: rows 8..15 via lhs_offset += 8*k and
+    // out_strides[0] = 8 (the shader's row base). The addend row-stride
+    // contract has no row base, so a folded two-pass group composes
+    // instead (the fold is off at rows>1 by default).
+    for (auto& member : members) {
+      if (member.epilogue) {
+        return false;
+      }
+    }
+    encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+    params.lhs_offset += pass_rows * static_cast<uint32_t>(k);
+    params.out_strides[0] = pass_rows;
+    encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+    return true;
+  }
   encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
   return true;
 }
