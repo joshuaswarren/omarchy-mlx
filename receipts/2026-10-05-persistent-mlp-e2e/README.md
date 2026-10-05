@@ -67,3 +67,28 @@ libmlx.so sha256 3f3df85f193aded13d95fbda36e96f41ed398274b9ec1c1ff2718c542746e7c
 - Everything captured is in artifacts/PersistMlp/ (archive
   36c8e0c5f6ccfdafb584f0b248cdbf7e2bb31e9c6c2d589e36b8eab03e8c815a) and the
   notebook entry, including the negative results.
+
+## Addendum: window E (12:00-12:35Z)
+
+- H295 swiglu-eager fold A/B (5 alternating pairs per cell, gate OFF, same
+  wheel, per-pair digest equality hard-gated):
+  2B d64 ctl=109.04 on=108.94 median=+0.03%; 2B d512 ctl=107.17 on=107.02
+  median=-0.08%; 4B d64 ctl=65.01 on=65.02 median=+0.03%. Digests EQUAL
+  every pair (bit-exact). Verdict: PERF FLAT (the fold's claimed ~1
+  dispatch per MLP layer does not show on this stack — barrier round cost
+  and dispatch-swap overhead net neutral). Below the >=1.5% graduation bar.
+  Recommendation: keep scripts/patch-mlx-lm-swiglu-eager.py as an
+  experiment patcher (tests/test_install_sh_contract.py:394 label stays).
+- H294 persistent-tail route on hardware: PROBE FAILED on the M2 Honeykrisp
+  (vkGetPipelineExecutablePropertiesKHR returned no stat with name
+  matching 'gpr' or 'regist'; the ladder logged "probe failed; shipped path"
+  four times — 2 OFF + 2 ON). Counters OFF==ON (route did not fire). Need
+  to enumerate Honeykrisp's actual stat names on this chip and broaden
+  the ladder's name match (or switch to a runtime G-fit microbench).
+- Persistent-tail A/B d64/d512: not run — h294-ab.sh line-13 bug (forward
+  reference to cell() under set -e); needs to be restructured for the
+  next window.
+- Compliance: M2 cleaned up (persistmlp-wheel + persistmlp-venv +
+  persistmlp-venv-nofold removed; 27 GB free); artifacts archived
+  ~/h294/h294-run.tgz sha256
+  a23dbf40dd08a07d6d9a006657875d95960a56a4822b81c0bd4e8c31ae1523e0.
