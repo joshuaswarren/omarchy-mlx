@@ -77,12 +77,15 @@ class RopeNormFenceSpecTests(unittest.TestCase):
             msg="shared kill env default must remain on (1)")
 
     def test_qwen3_offset_type_fence_present(self):
-        # The v0.7.27 root cause: cache.offset is an mx.array in
-        # BatchGenerator; the kernel requires a Python int.
-        self.assertRegex(self.qwen3,
-            r"isinstance\(cache\.offset, int\)",
-            msg="qwen3 patcher must gate the fold on "
-                "isinstance(cache.offset, int)")
+        # SEQUENCING NOTE (2026-10-05): the qwen3-half fence pin was
+        # REMOVED so RopeNormBatch's C++ op-layer fix (which removes
+        # the interim fence from the qwen3 patcher) can land without a
+        # red window on main. The qwen3_next-half pin below stays
+        # until THIS lane drops its interim fence with the v0.7.28
+        # wheel. Root cause and fix ownership: see
+        # receipts/2026-10-04-omlx-linux/README.md ADDENDUM.
+        self.skipTest("qwen3 fence pin removed for the RopeNormBatch "
+                      "C++-fix landing; qwen3_next pin still active")
 
     def test_qwen3_next_offset_type_fence_present(self):
         self.assertRegex(self.qwen3_next,
@@ -91,8 +94,9 @@ class RopeNormFenceSpecTests(unittest.TestCase):
                 "isinstance(cache.offset, int)")
 
     def test_qwen3_B_eq_1_fence_present(self):
-        self.assertRegex(self.qwen3, r"and B == 1",
-            msg="qwen3 patcher must gate the fold on B == 1")
+        # Same sequencing note as the offset-type pin above.
+        self.skipTest("qwen3 fence pin removed for the RopeNormBatch "
+                      "C++-fix landing; qwen3_next pin still active")
 
     def test_qwen3_next_B_eq_1_fence_present(self):
         self.assertRegex(self.qwen3_next, r"and B == 1",
