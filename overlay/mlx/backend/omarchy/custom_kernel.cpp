@@ -927,6 +927,27 @@ Translation translate_msl(
     const std::tuple<int, int, int>& threadgroup,
     size_t output_count,
     int compile_mode) {
+  const auto marker = source.find("[[kernel]] void ");
+  if (marker == std::string::npos) {
+    throw std::runtime_error("generated MSL kernel entry point is missing");
+  }
+  const auto arguments_open = source.find('(', marker);
+  const auto arguments_close =
+      matching_delimiter(source, arguments_open, '(', ')');
+  const auto body_open = source.find('{', arguments_close);
+  if (body_open == std::string::npos) {
+    throw std::runtime_error("generated MSL kernel body is missing");
+  }
+  const auto body_close = matching_delimiter(source, body_open, '{', '}');
+  const auto parameters = parse_parameters(
+      source.substr(arguments_open + 1, arguments_close - arguments_open - 1));
+  if (output_count == 0 || output_count > parameters.size()) {
+    throw std::runtime_error("generated MSL output arity is invalid");
+  }
+
+  std::string header;
+  std::string body = source.substr(body_open + 1, body_close - body_open - 1);
+  resolve_kernel_templates(source, marker, header, body);
   // Strip MSL comments (// line and /* block */). Comments can contain
   // Metal keywords ('// One threadgroup per row' in the Qwen3.5 MoE
   // router kernel) that would trigger the final guard's substring check
@@ -954,28 +975,6 @@ Translation translate_msl(
       search = block_start;
     }
   }
-
-  const auto marker = source.find("[[kernel]] void ");
-  if (marker == std::string::npos) {
-    throw std::runtime_error("generated MSL kernel entry point is missing");
-  }
-  const auto arguments_open = source.find('(', marker);
-  const auto arguments_close =
-      matching_delimiter(source, arguments_open, '(', ')');
-  const auto body_open = source.find('{', arguments_close);
-  if (body_open == std::string::npos) {
-    throw std::runtime_error("generated MSL kernel body is missing");
-  }
-  const auto body_close = matching_delimiter(source, body_open, '{', '}');
-  const auto parameters = parse_parameters(
-      source.substr(arguments_open + 1, arguments_close - arguments_open - 1));
-  if (output_count == 0 || output_count > parameters.size()) {
-    throw std::runtime_error("generated MSL output arity is invalid");
-  }
-
-  std::string header;
-  std::string body = source.substr(body_open + 1, body_close - body_open - 1);
-  resolve_kernel_templates(source, marker, header, body);
   translate_header(header);
 
   const std::vector<std::string> forbidden = {
