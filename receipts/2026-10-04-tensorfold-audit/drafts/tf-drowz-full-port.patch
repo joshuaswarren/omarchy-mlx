@@ -1,0 +1,385 @@
+diff --git a/src/tensorfold/families/h3/dit.py b/src/tensorfold/families/h3/dit.py
+index 45151dd..4ff1581 100644
+--- a/src/tensorfold/families/h3/dit.py
++++ b/src/tensorfold/families/h3/dit.py
+@@ -87,6 +87,10 @@ class Attention(nn.Module):
+         return q, k, v
+ 
+     def mix(self, q: mx.array, k: mx.array, v: mx.array) -> mx.array:
++        # Match macOS semantics exactly: all-bf16 sdpa regardless of upstream
++        # promotion (an f32 rope/norm on some mlx builds would otherwise
++        # materialize f32 scores and trip the u32 index limit).
++        q, k, v = q.astype(v.dtype), k.astype(v.dtype), v
+         out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
+         batch, _, rows, _ = out.shape
+         return out.transpose(0, 2, 1, 3).reshape(batch, rows, self.heads * self.head_dim)
+@@ -118,7 +122,12 @@ class Modulation(nn.Module):
+         self.linear = nn.Linear(config.time_embed_dim, features, bias=True)
+ 
+     def __call__(self, temb: mx.array) -> mx.array:
+-        return self.linear(nn.silu(temb).astype(self.linear.weight.dtype))
++        weight = self.linear.weight
++        if getattr(weight, "dtype", None) == mx.uint32:
++            # quantized linear: keep the activation in bf16, the layer does
++            # its own dequantize-matmul
++            return self.linear(nn.silu(temb).astype(mx.bfloat16))
++        return self.linear(nn.silu(temb).astype(weight.dtype))
+ 
+     def tables(self, temb: mx.array) -> tuple[mx.array, ...]:
+         flat = self(temb).reshape(-1, 6 * self.hidden).astype(mx.bfloat16)
+@@ -163,7 +172,11 @@ class Block(nn.Module):
+         self.mlp = FeedForward(config)
+         self.adaln_proj = Modulation(config, config.adaln_out_features)
+ 
+-    def __call__(self, x: mx.array, tables: tuple[mx.array, ...], rows: mx.array, rotary) -> mx.array:
++    def __call__(self, x: mx.array, tables: tuple[mx.array, ...] | None, rows: mx.array, rotary) -> mx.array:
++        if tables is None:
++            # lazy modulation: project this block's tables from the stored
++            # timestep embedding (the projections stay resident at int8)
++            tables = self.adaln_proj.tables(self._temb)
+         shift_a, scale_a, gate_a, shift_m, scale_m, gate_m = tables
+         h = self.norm1(x) * (1.0 + scale_a[rows]) + shift_a[rows]
+         x = x + (gate_a[rows] * self.attn(h, rotary)).astype(x.dtype)
+@@ -191,9 +204,10 @@ class FinalLayer(nn.Module):
+ class H3DiT(nn.Module):
+     """MiniMax H3 joint video and audio transformer; parameter names equal the checkpoint's tensor names."""
+ 
+-    def __init__(self, config: DiTConfig):
++    def __init__(self, config: DiTConfig, lazy_tables: bool = False):
+         super().__init__()
+         self.config = config
++        self.lazy_tables = lazy_tables
+         patch = config.latents_dim * config.patch_size[0] * config.patch_size[1] * config.patch_size[2]
+         self.video_patch_proj = nn.Linear(patch, config.hidden_size, bias=True)
+         self.audio_patch_proj = nn.Linear(config.audio_latents_dim, config.hidden_size, bias=True)
+@@ -209,9 +223,18 @@ class H3DiT(nn.Module):
+ 
+         The tables depend only on the schedule, so a run needs them computed once. ``release`` then drops
+         the projection weights (about 24 GiB), after which only this timestep table can be served.
++
++        With ``lazy_tables`` the tables are never cached: each block projects
++        its own six tables per call from the stored timestep embedding (the
++        projections stay resident), trading compute for ~24 GiB of heap.
+         """
+ 
+         temb = self.time_embedder(timestep_embedding(timestep, self.config.timestep_input_dim))
++        if self.lazy_tables:
++            for block in self.blocks:
++                block._temb = temb
++            self._modulation = (timestep, None, None)
++            return temb.nbytes
+         tables = []
+         for block in self.blocks:
+             tables.append(block.adaln_proj.tables(temb))
+@@ -230,10 +253,14 @@ class H3DiT(nn.Module):
+         """(per-block tables, final table) for ``timestep``, from the cache when it was built for the same table."""
+ 
+         cached = self._modulation
+-        if cached is not None and (cached[0] is timestep or (cached[0].shape == timestep.shape
++        if cached is not None and self.lazy_tables:
++            if cached[0] is timestep or (cached[0].shape == timestep.shape
++                                         and bool(mx.all(cached[0] == timestep).item())):
++                return None, None
++        if cached is not None and not self.lazy_tables and (cached[0] is timestep or (cached[0].shape == timestep.shape
+                                                               and bool(mx.all(cached[0] == timestep).item()))):
+             return cached[1], cached[2]
+-        if self.final_layer.adaln_proj.linear is None:
++        if not self.lazy_tables and self.final_layer.adaln_proj.linear is None:
+             raise ValueError("the AdaLN projections were released; this model only serves its cached timesteps")
+         temb = self.time_embedder(timestep_embedding(timestep, self.config.timestep_input_dim))
+         return ([block.adaln_proj.tables(temb) for block in self.blocks],
+diff --git a/src/tensorfold/families/h3/weights.py b/src/tensorfold/families/h3/weights.py
+index 8b83d05..fa4e8b5 100644
+--- a/src/tensorfold/families/h3/weights.py
++++ b/src/tensorfold/families/h3/weights.py
+@@ -123,3 +123,109 @@ def int8_attention(model, qkv: bool = True, out: bool = True, fused: bool = True
+             changed += 1
+     mx.clear_cache()
+     return changed
++
++
++def load_int8_dit(state_dir, blocks: int | None = None):
++    """The DiT assembled from a saved swapped state (see kernels/minimax/h3/v1).
++
++    Peak memory is the int8 state plus one bf16 block: the skeleton is built
++    with zero layers, then each block is constructed once, its projections
++    wrapped from the saved state (``from_state`` — bit-identical to the swap
++    that produced it), and only then appended. ``state_dir`` holds the
++    base/delta manifests, the shard files, and ``transformer-config.json``.
++    """
++
++    import json
++    from pathlib import Path
++
++    from tensorfold.kernels.minimax.h3.v1 import mlp_int8
++
++    import mlx.core as mx
++
++    from .dit import Block, H3DiT
++
++    state_dir = Path(state_dir)
++    config = DiTConfig.from_dict(json.loads((state_dir / "transformer-config.json").read_text()))
++    state: dict = {}
++    if (state_dir / "index.json").exists():
++        index = json.loads((state_dir / "index.json").read_text())
++        files = [name for name, _ in index["files"]]
++    else:
++        # Base/delta manifest layout: the small host holds the non-swapped
++        # base plus the swapped-weights delta, each with its own manifest.
++        files = []
++        for manifest in ("base-manifest.json", "delta-manifest.json"):
++            entries = json.loads((state_dir / manifest).read_text())["files"]
++            files.extend(entry["name"] for entry in entries)
++    for name in files:
++        state.update(mx.load(str(state_dir / name)))
++
++    skeleton = DiTConfig(**{**config.__dict__, "num_layers": 0})
++    model = H3DiT(skeleton)
++
++    layers = config.num_layers if blocks is None else min(blocks, config.num_layers)
++    built = []
++    for i in range(layers):
++        prefix = f"blocks.{i}."
++        block = Block(config)
++        block.mlp = mlp_int8.Int8MLP.from_state(
++            state[prefix + "mlp.w1"], state[prefix + "mlp.s1"],
++            state[prefix + "mlp.w2"], state[prefix + "mlp.s2"],
++            state.get(prefix + "mlp.b1"), state.get(prefix + "mlp.b2"))
++        attention = block.attn
++        # The fused QKV state loads as an unfused int8 Linear: the fused rows
++        # are interleaved per head exactly like the checkpoint's qkv_proj, and
++        # the unfused attention path applies the same q/k norms and rotary in
++        # plain mlx. The fused MSL kernel stays macOS-only.
++        if prefix + "attn.fused_qkv.w" in state:
++            attention.qkv_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.fused_qkv.w"], state[prefix + "attn.fused_qkv.s"], None,
++                group=config.hidden_size)
++        elif prefix + "attn.qkv_proj.w" in state:
++            attention.qkv_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.qkv_proj.w"], state[prefix + "attn.qkv_proj.s"], None,
++                group=config.hidden_size)
++        if prefix + "attn.out_proj.w" in state:
++            attention.out_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.out_proj.w"], state[prefix + "attn.out_proj.s"], None)
++        built.append(block)
++    model.blocks = built
++
++    # One strict load applies the plain parameters (norms, AdaLN, embeddings,
++    # refiner, final layer) and re-applies the int8 arrays identically.
++    # rope.inv_freq is recomputed at runtime and absent from the state.
++    def load_key(key: str) -> str:
++        if ".fused_qkv." in key:
++            # The fused state loads under the unfused qkv_proj name; the rows
++            # are identical (interleaved per head) and the norms/rotary ride
++            # the plain attention path.
++            return key.replace("attn.fused_qkv.", "attn.qkv_proj.")
++        return key
++
++    model.load_weights([(load_key(k), v) for k, v in state.items()
++                        if load_key(k) != "rope.inv_freq"
++                        and not load_key(k).endswith(".norms")])
++
++    # 8-bit AdaLN projections (the published recipe): official QuantizedLinear
++    # from the bf16 weights pulled back out of the loaded state.
++    import mlx.nn as nn
++
++    adaln_weights = {k: v for k, v in state.items()
++                     if k.endswith((".adaln_proj.linear.weight", ".adaln_proj.linear.bias"))}
++
++    adaln_by_index = {}
++
++    def requantize_adaln(module, prefix=None):
++        if prefix is None:
++            return
++        weight = adaln_weights[prefix + ".linear.weight"]
++        bias = adaln_weights.get(prefix + ".linear.bias")
++        module.linear = nn.QuantizedLinear.from_linear(
++            nn.Linear(weight.shape[1], weight.shape[0], bias=bias is not None), bits=8, group_size=64)
++        if bias is not None:
++            module.linear.bias = bias.astype(mx.bfloat16)
++
++    for i, block in enumerate(model.blocks):
++        requantize_adaln(block.adaln_proj, prefix=f"blocks.{i}.adaln_proj")
++    requantize_adaln(model.final_layer.adaln_proj, prefix="final_layer.adaln_proj")
++    return model
+diff --git a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+index 0097aa1..5edf673 100644
+--- a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+@@ -10,15 +10,16 @@ from __future__ import annotations
+ import hashlib
+ from typing import Any
+ 
++import numpy as np
++
+ import mlx.core as mx
++import mlx.nn as nn
+ 
+ TILE = 128            # rows, output columns and K per tensor-unit tile
+ FC2_GROUP = 1024      # input channels sharing one activation scale on the fc2 input
+ QMAX = 127.0
+ 
+ _HEADER = r"""
+-#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+-using namespace mpp::tensor_ops;
+ """
+ 
+ _PRELUDE = r"""
+@@ -192,6 +193,25 @@ def quantize_weight(weight: mx.array) -> tuple[mx.array, mx.array]:
+     return q, scale
+ 
+ 
++def _NATIVE() -> bool:
++    """Whether this MLX build ships the omarchy-native int8 matmul."""
++
++    return hasattr(mx.fast, "int8_matmul")
++
++
++def quantize_rows_native(x: mx.array, group: int) -> tuple[mx.array, mx.array]:
++    """(M, K) -> int8 (M, K) + float32 (M, K / group) scales, same math as the
++    MSL quantize kernel (per-group max magnitude / 127, round-to-nearest)."""
++
++    m, k = x.shape
++    groups = x.reshape(m, k // group, group).astype(mx.float32)
++    top = mx.abs(groups).max(axis=-1, keepdims=True)
++    top = mx.maximum(top, mx.array(1e-12, mx.float32))
++    scale = top / 127.0
++    q = mx.round(groups / scale).astype(mx.int8)
++    return q.reshape(m, k), scale.reshape(m, k // group)
++
++
+ def quantize_rows(x: mx.array, group: int) -> tuple[mx.array, mx.array, int]:
+     """(M, K) activations -> (MP, K) int8 padded to whole tiles, (MP, K / group) float32 scales, and M.
+ 
+@@ -257,7 +277,7 @@ def int8_swiglu(xq: mx.array, xscale: mx.array, wq: mx.array, wscale: mx.array,
+                                   output_shapes=[(rows, n)], output_dtypes=[mx.bfloat16])[0]
+ 
+ 
+-class Int8MLP:
++class Int8MLP(nn.Module):
+     """``fc2(silu(gate) * value)`` with ``[gate; value] = fc1(x)``, both projections in int8."""
+ 
+     def __init__(self, fc1_weight: mx.array, fc2_weight: mx.array, fc2_group: int = FC2_GROUP,
+@@ -275,8 +295,45 @@ class Int8MLP:
+         self.b2 = None if fc2_bias is None else fc2_bias.astype(mx.float32)
+         mx.eval(self.w1, self.s1, self.w2, self.s2, *[b for b in (self.b1, self.b2) if b is not None])
+ 
++    @classmethod
++    def from_state(cls, w1: mx.array, s1: mx.array, w2: mx.array, s2: mx.array,
++                   b1: mx.array | None = None, b2: mx.array | None = None,
++                   fc2_group: int = FC2_GROUP) -> "Int8MLP":
++        """Wrap an already-quantized state (saved after a swap on another host) without re-quantizing.
++
++        The int8 weights and float32 scales are bit-identical to the normal swap path
++        because they were produced by the same quantize_weight code; only the host that
++        performed the swap differs.
++        """
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        # Attribute semantics match __init__: width is fc2's output dim
++        # (w2 columns = the ff dim; w1 carries the fused [gate; value] rows),
++        # hidden is fc1's input dim (w2 rows); the fc2 activation group
++        # divides width.
++        self.width = w2.shape[1]
++        self.hidden = w2.shape[0]
++        self.fc2_group = fc2_group if self.width % fc2_group == 0 else self.width
++        self.w1, self.s1, self.w2, self.s2 = w1, s1, w2, s2
++        self.b1 = None if b1 is None else b1.astype(mx.float32)
++        self.b2 = None if b2 is None else b2.astype(mx.float32)
++        return self
++
+     def __call__(self, x: mx.array) -> mx.array:
+         lead = x.shape[:-1]
++        if _NATIVE():
++            rows = int(np.prod(x.shape[:-1], dtype=np.int64) if x.ndim > 1 else 1)
++            flat = x.reshape(rows, self.hidden)
++            xq, xs = quantize_rows_native(flat, self.hidden)
++            hidden = mx.fast.int8_matmul(xq, xs, self.w1, self.s1,
++                                         self.b1 if self.b1 is not None else mx.zeros((self.w1.shape[0],), mx.float32),
++                                         group=self.hidden, swiglu=True)
++            hq, hs = quantize_rows_native(hidden, self.fc2_group)
++            out = mx.fast.int8_matmul(hq, hs, self.w2, self.s2,
++                                      self.b2 if self.b2 is not None else mx.zeros((self.w2.shape[0],), mx.float32),
++                                      group=self.fc2_group, swiglu=False)
++            return out.reshape(*lead, -1).astype(x.dtype)
+         xq, xs, rows = quantize_rows(x.reshape(-1, self.hidden), self.hidden)
+         hidden = int8_swiglu(xq, xs, self.w1, self.s1, rows, self.b1)
+         hq, hs, rows = quantize_rows(hidden, self.fc2_group)
+@@ -284,7 +341,7 @@ class Int8MLP:
+         return out.reshape(*lead, -1).astype(x.dtype)
+ 
+ 
+-class Int8Linear:
++class Int8Linear(nn.Module):
+     """A projection in int8: activations quantized per row and ``group`` channels, weights per output channel."""
+ 
+     def __init__(self, weight: mx.array, group: int = FC2_GROUP, bias: mx.array | None = None) -> None:
+@@ -297,7 +354,27 @@ class Int8Linear:
+         self.b = None if bias is None else bias.astype(mx.float32)
+         mx.eval(self.w, self.s, *([] if self.b is None else [self.b]))
+ 
++    @classmethod
++    def from_state(cls, w: mx.array, s: mx.array, b: mx.array | None, group: int = FC2_GROUP) -> "Int8Linear":
++        """Wrap an already-quantized state saved after a swap on another host (bit-identical, no re-quantize)."""
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.width = w.shape[1]
++        self.group = group if self.width % group == 0 else self.width
++        self.w, self.s = w, s
++        self.b = None if b is None else b.astype(mx.float32)
++        return self
++
+     def __call__(self, x: mx.array) -> mx.array:
+         lead = x.shape[:-1]
++        if _NATIVE():
++            rows = int(np.prod(x.shape[:-1], dtype=np.int64) if x.ndim > 1 else 1)
++            flat = x.reshape(rows, self.width)
++            xq, xs = quantize_rows_native(flat, self.group)
++            out = mx.fast.int8_matmul(xq, xs, self.w, self.s,
++                                      self.b if self.b is not None else mx.zeros((self.w.shape[0],), mx.float32),
++                                      group=self.group, swiglu=False)
++            return out.reshape(*lead, -1).astype(x.dtype)
+         xq, xs, rows = quantize_rows(x.reshape(-1, self.width), self.group)
+         return int8_linear(xq, xs, self.w, self.s, rows, self.group, self.b).reshape(*lead, -1).astype(x.dtype)
+diff --git a/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py b/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
+index 5a72c9d..c80a7b1 100644
+--- a/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
+@@ -10,6 +10,7 @@ import hashlib
+ from typing import Any
+ 
+ import mlx.core as mx
++import mlx.nn as nn
+ 
+ from .mlp_int8 import _HEADER, _PRELUDE, TILE, _check, _mdims, quantize_rows, quantize_weight
+ 
+@@ -79,7 +80,7 @@ def _kernel(n: int, k: int, rotary: int, eps: float) -> Any:
+     return run
+ 
+ 
+-class Int8QKV:
++class Int8QKV(nn.Module):
+     """``Attention.qkv`` in one kernel: int8 projection, q/k RMSNorm and rotary, head-major outputs."""
+ 
+     def __init__(self, qkv_weight: mx.array, q_norm_weight: mx.array, k_norm_weight: mx.array, heads: int,
+@@ -93,6 +94,18 @@ class Int8QKV:
+         self.norms = mx.stack([q_norm_weight, k_norm_weight]).astype(mx.float32)
+         mx.eval(self.w, self.s, self.norms)
+ 
++    @classmethod
++    def from_state(cls, w: mx.array, s: mx.array, norms: mx.array, heads: int, head_dim: int,
++                   eps: float = 1e-5) -> "Int8QKV":
++        """Wrap an already-quantized fused-QKV state saved after a swap on another host."""
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.heads, self.head_dim, self.eps = heads, head_dim, float(eps)
++        self.hidden = w.shape[1]
++        self.w, self.s, self.norms = w, s, norms
++        return self
++
+     def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> tuple[mx.array, mx.array, mx.array]:
+         """q, k, v as (1, heads, rows, head_dim) from x (1, rows, hidden) and rotary tables (rows, rotary)."""
+ 
