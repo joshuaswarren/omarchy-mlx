@@ -688,6 +688,9 @@ enum class ComputeKernel : uint16_t {
   // Barrier-diet-2 variant of the batch prefill kernel (staging/sync
   // structure only; per-element arithmetic identical). MLX_OMARCHY_GDN_BATCH2.
   GatedDeltaPrefillCoopmatBatch2BF16,
+  // Subgroup-scope barrier variant (GdnPrefill2-ablate): keeps the diet
+  // arithmetic, narrows every per-chunk barrier to Subgroup scope.
+  GatedDeltaPrefillCoopmatBatch3BF16,
   GdnStubNoloopk,
   GdnStubNoloops,
   GdnStubNoneumann,

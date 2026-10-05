@@ -11612,7 +11612,9 @@ void GatedDeltaUpdate::eval_gpu(
         : gdn_stub_env == 5 ? omarchy::ComputeKernel::GdnStubNoout
         : gdn_stub_env == 6 ? omarchy::ComputeKernel::GdnStubNostate
         : gdn_stub_env == 7 ? omarchy::ComputeKernel::GdnStubSkeleton
-        : gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
+        
+            gdn_sgsync_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch3BF16 :
+            gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
         : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
                     : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
         bindings,
@@ -11659,7 +11661,8 @@ void GatedDeltaUpdate::eval_gpu(
       return;
     }
     encoder.dispatch_compute(
-        gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
+            gdn_sgsync_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch3BF16 :
+            gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
         : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
                     : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
         bindings,
