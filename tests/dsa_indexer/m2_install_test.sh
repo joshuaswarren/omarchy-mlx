@@ -26,10 +26,4 @@ PYEOF
 echo "wheel: $WHEEL"
 sha256sum "$WHEEL"
 sha256sum "$PRIV"/lib/python3.14/site-packages/mlx/lib/libmlx.so 2>/dev/null || true
-
-# Correctness ticket body: native kernel parity vs fp32 + composed.
-cd "$HOME/dsa-build"
-"$PRIV"/bin/python -c 'import mlx.core as mx; print("device:", mx.default_device())'
-"$PRIV"/bin/python native_parity.py --out /var/tmp/FamGlmDsa-native-parity.csv --trials 15 \
-  > /var/tmp/FamGlmDsa-native-parity.log 2>&1 || true
-tail -30 /var/tmp/FamGlmDsa-native-parity.log
+echo "INSTALL DONE (run native parity under gpu-turn separately)"
