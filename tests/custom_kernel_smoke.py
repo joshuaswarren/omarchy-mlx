@@ -572,7 +572,7 @@ class CustomKernelSmoke(unittest.TestCase):
                 "bfloat16_t sy = bfloat16_t(1) / (bfloat16_t(1) + exp(abs(conv)));\n"
                 "const bfloat16_t act = conv * ((conv < bfloat16_t(0)) ? sy : bfloat16_t(1) - sy);\n"
                 "activated[0] = act;\n"
-                "act_out[i] = activated[0] * float(scale);\n"
+                "act_out[i] = activated[0];\n"
                 "state_out[i] = act;\n"
                 "float tv = float(act);\n"
                 "tv += inversesqrt(float(2)) * 0.0f;\n"
