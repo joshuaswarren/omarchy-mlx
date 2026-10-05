@@ -102,3 +102,53 @@ target; the M2 ticket decides.
 4. Perf (M2, quiet box, provenance lines): forward wall q1/q4/q16 before vs
    after; dispatch counts per step; DFlash ON/OFF tok/s per the A7
    procedure.
+
+## M2 build receipt (2026-10-05)
+
+- Branch agent/midm-forward rebased on origin/main (ca195e620); wheel
+  `mlx_omarchy-0.32.4.dev202610050436+b87e8cd-cp314-cp314-linux_aarch64.whl`
+  built by the golden recipe on the M2 (staged clone /var/tmp/midm-wheel,
+  golden_rebuild.sh incremental over the 60f80d2 warm objects); stamp
+  b87e8cd = the intended commit. Venv /var/tmp/midm-venv (reflink clone of
+  golden-venv + --force-reinstall of the wheel).
+- glslc compile check: `omarchy_shaders` target green in the M2 build log
+  (four token blobs + sdpa rows blob compiled by the M2's compiler).
+- Digest gate: A/B greedy digest (3 prompts x 64 tokens, Qwen3-4B) golden
+  venv (60f80d2, routes off) vs midm venv (b87e8cd, routes on) — decode
+  M=1 must be byte-stable; ticket A output appended below when the turn
+  lands.
+
+## M2 verification results (2026-10-05, Apple GPU, tickets on the live GPU)
+
+- SDPA rows: ALL PASS — per-row bit-identity vs single-query decode over
+  the visible prefix for q_len 3/4/16, GQA reps 2 and 4, kv_len 17/20/40
+  (kv not 16-aligned). The verify-attention route is proven on the M2.
+- QMM token: 11/12 cells PASS. ONE DETERMINISTIC divergence (reproduced
+  identically across two runs): k=896 n=512 tokens=16, row 0, the
+  residual-fold output, 1 element (column 34) of 8192. Not a race (same
+  element every run); llvmpipe (tree column) passes the same cell. The
+  token16 SUBGROUP build differs from the single-token kernel at exactly
+  one fold output - root cause not isolated within this session's budget.
+  Suspects: AGX contraction of the unrolled token loop's accumulator
+  chain vs the single-token kernel (cf. the QMM_VEC_MULTI epilogue
+  comment: "a float16_t round trip in registers does not survive the
+  AGX compiler"), or in_strides indexing on member 1.
+- Greedy digest A/B: SKIPPED in ticket A (script ran with a stale model
+  path); decode M=1 is untouched by the diff (same kernels, same fences),
+  but the A/B receipt is still owed.
+- Timing ticket (fwd walls q1/4/16 + dispatch census + GDN trace):
+  submitted, log /tmp/midm_ticket_b2.log on the M2; results append here.
+
+## Landing decision
+
+The mid-M bar is per-row bit-identity + a clear speed win. QMM token is
+ONE element short of the bit-identity bar on the M2 (subgroup column,
+tokens=16), so NOTHING is merged to main; the branch stays
+agent/midm-forward with both routes default-ON for continued debugging
+(each has its own kill switch: MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0,
+MLX_OMARCHY_SDPA_DECODE_ROWS=0; SDPA rows is fully green and could land
+independently of the qmm token column). Main decides: land SDPA rows
+now, hold both, or gate the qmm token column off until the fold
+divergence is root-caused.
+
+
