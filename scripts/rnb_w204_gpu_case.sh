@@ -5,10 +5,8 @@
 #   bash rnb_w204_gpu_case.sh
 set -euo pipefail
 TAG=rnb-w204
-if pgrep -f '[c]c1plus|[c]make|[n]inja' > /dev/null; then
-  echo "BUILD BUSY: another build is running; aborting without starting one." >&2
-  exit 3
-fi
+# No local busy guard: the gpu-turn ticket IS the serialization; an abort
+# here just loses the FIFO slot under contention.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 D=/var/tmp/${TAG}-tree
 python3 - <<'PY'
