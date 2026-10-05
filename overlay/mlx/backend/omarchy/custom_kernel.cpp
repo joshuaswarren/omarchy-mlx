@@ -317,9 +317,19 @@ void translate_c_style_casts(std::string& code) {
 void translate_device_pointer_aliases(
     std::string& body,
     const std::vector<Parameter>& parameters) {
-  static const std::regex alias_pattern(
-      R"((?:const\s+device\s+(?:const\s+)?|device\s+(?:const\s+)?)"
-      R"([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]+?);)");
+  // Three rigid per-order declaration patterns. GCC's ECMAScript engine
+  // mis-binds groups when an alternation and optional const are combined
+  // (it shifted the type/name groups by one on
+  // 'const device uchar* krow = ...'), so no nested optionals here.
+  // Group 1 = pointee type, group 2 = alias name, group 3 = initializer.
+  static const std::regex alias_patterns[] = {
+      std::regex(
+          R"(const\s+device\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+      std::regex(
+          R"(device\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+      std::regex(
+          R"(device\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+  };
   struct Alias {
     std::string base;
     std::string offset;
@@ -338,55 +348,61 @@ void translate_device_pointer_aliases(
   bool progressed = true;
   while (progressed) {
     progressed = false;
-    for (std::sregex_iterator it(body.begin(), body.end(), alias_pattern), end;
-         it != end; ++it) {
-      const auto type = (*it)[1].str();
-      const auto name = (*it)[2].str();
-      if (aliases.count(name)) {
-        continue;
+    for (const auto& alias_pattern : alias_patterns) {
+      for (std::sregex_iterator it(body.begin(), body.end(), alias_pattern),
+               end;
+           it != end; ++it) {
+        const auto type = (*it)[1].str();
+        const auto name = (*it)[2].str();
+        if (aliases.count(name)) {
+          continue;
+        }
+        std::string init = trim((*it)[3].str());
+        // Strip a leading C-style device-pointer cast: `(const device T*)`.
+        static const std::regex cast_prefix(
+            R"(^\(\s*(?:const\s+)?device\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
+        init = std::regex_replace(init, cast_prefix, "");
+        // Split BASE (+ EXPR)?.
+        static const std::regex base_offset(
+            R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\s*([^;]+))?)");
+        std::smatch parts;
+        if (!std::regex_match(init, parts, base_offset)) {
+          throw std::runtime_error(
+              "unsupported MSL feature `device pointer arithmetic` is not "
+              "implemented for the Omarchy Vulkan backend");
+        }
+        const auto base = parts[1].str();
+        std::string offset = parts[2].matched ? trim(parts[2].str()) : "0";
+        const bool base_is_parameter = parameter_exists(base);
+        const bool base_is_alias = aliases.count(base) > 0;
+        if (!base_is_parameter && !base_is_alias) {
+          // Aliased through a function call or another buffer expression:
+          // fail by name rather than guess.
+          throw std::runtime_error(
+              "unsupported MSL feature `device pointer arithmetic` is not "
+              "implemented for the Omarchy Vulkan backend");
+        }
+        if (is_vector_type(type)) {
+          throw std::runtime_error(
+              "unsupported MSL feature `device pointer alias of vector type "
+              "`" + type + "*` is not implemented for the Omarchy Vulkan "
+              "backend");
+        }
+        if (base_is_alias) {
+          const auto& parent = aliases[base];
+          offset = "(" + parent.offset + " + " + offset + ")";
+          aliases[name] = {parent.base, offset};
+        } else {
+          aliases[name] = {base, offset};
+        }
+        body.replace(
+            static_cast<size_t>(it->position()), it->length(), "");
+        progressed = true;
+        break;  // iterators invalidated by the erase; rescan
       }
-      std::string init = trim((*it)[3].str());
-      // Strip a leading C-style device-pointer cast: `(const device T*)`.
-      static const std::regex cast_prefix(
-          R"(^\(\s*(?:const\s+)?device\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
-      init = std::regex_replace(init, cast_prefix, "");
-      // Split BASE (+ EXPR)?.
-      static const std::regex base_offset(
-          R"(^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\s*([\s\S]+))?$)");
-      std::smatch parts;
-      if (!std::regex_match(init, parts, base_offset)) {
-        throw std::runtime_error(
-            "unsupported MSL feature `device pointer arithmetic` is not "
-            "implemented for the Omarchy Vulkan backend");
+      if (progressed) {
+        break;
       }
-      const auto base = parts[1].str();
-      std::string offset = parts[2].matched ? trim(parts[2].str()) : "0";
-      const bool base_is_parameter = parameter_exists(base);
-      const bool base_is_alias = aliases.count(base) > 0;
-      if (!base_is_parameter && !base_is_alias) {
-        // Aliased through a function call or another buffer expression:
-        // fail by name rather than guess.
-        throw std::runtime_error(
-            "unsupported MSL feature `device pointer arithmetic` is not "
-            "implemented for the Omarchy Vulkan backend");
-      }
-      if (is_vector_type(type)) {
-        throw std::runtime_error(
-            "unsupported MSL feature `device pointer alias of vector type "
-            "`" + type + "*` is not implemented for the Omarchy Vulkan "
-            "backend");
-      }
-      if (base_is_alias) {
-        const auto& parent = aliases[base];
-        offset = "(" + parent.offset + " + " + offset + ")";
-        aliases[name] = {parent.base, offset};
-      } else {
-        aliases[name] = {base, offset};
-      }
-      body.replace(
-          static_cast<size_t>(it->position()), it->length(), "");
-      progressed = true;
-      break;  // iterators invalidated by the erase; rescan
     }
   }
   for (const auto& [name, alias] : aliases) {
@@ -816,13 +832,25 @@ Translation translate_msl(
 
   // MSL allows any integer expression as a condition (`if (flag)`); GLSL
   // requires a bool. Wrap the narrow forms — a bare identifier, an indexed
-  // element, or a zero-argument call — in (!= 0). Compound conditions
-  // (comparisons, && / ||, !) do not match this pattern and need no wrap.
+  // element, or a zero-argument call — in _mlx_nonzero(...), whose
+  // overloads accept bool (identity), int/uint (!= 0) and float (!= 0.0f):
+  // a plain `!= 0` would break bool conditions ('bool' != 'int' has no
+  // overload in GLSL — the templates/bfloat smoke case hit this).
+  // Compound conditions (comparisons, && / ||, !) do not match this
+  // pattern and need no wrap.
+  std::string condition_helpers;
   body = std::regex_replace(
       body,
       std::regex(
           R"(\b(if|while)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*(\s*\[[^\[\]]*\])?(\(\))?)\s*\))"),
-      "$1 (($2) != 0)");
+      [&condition_helpers](const std::smatch& m) {
+        condition_helpers =
+            "bool _mlx_nonzero(bool v) { return v; }\n"
+            "bool _mlx_nonzero(int v) { return v != 0; }\n"
+            "bool _mlx_nonzero(uint v) { return v != 0u; }\n"
+            "bool _mlx_nonzero(float v) { return v != 0.0f; }\n";
+        return m[1].str() + " (_mlx_nonzero(" + m[2].str() + "))";
+      });
 
   bool needs_bfloat = false;
 
@@ -975,6 +1003,18 @@ Translation translate_msl(
     needs_int64 = needs_int64 || parameter.type == "int64_t" ||
         parameter.type == "uint64_t";
   }
+  // The body can reference 16/64-bit types the parameters never name —
+  // e.g. a local `const uint16_t m = ...` in the bf16 pack/unpack idiom
+  // (Qwen3.5-2B GDN, OmlxLinux M2 repro 2026-10-05). Without the
+  // extension the type is unknown and glslang fails with 'syntax error,
+  // unexpected IDENTIFIER' on the declaration.
+  needs_int8 = needs_int8 || body.find("int8_t") != std::string::npos ||
+      body.find("uint8_t") != std::string::npos;
+  needs_int16 = needs_int16 || body.find("int16_t") != std::string::npos ||
+      body.find("uint16_t") != std::string::npos ||
+      body.find("float16_t") != std::string::npos;
+  needs_int64 = needs_int64 || body.find("int64_t") != std::string::npos ||
+      body.find("uint64_t") != std::string::npos;
 
   if (body.find("threadgroup") != std::string::npos ||
       body.find("memory_order") != std::string::npos ||
@@ -1006,7 +1046,7 @@ Translation translate_msl(
          << "#extension GL_KHR_shader_subgroup_arithmetic : require\n"
          << "#extension GL_KHR_shader_subgroup_shuffle : require\n";
   }
-  glsl << "#define MLX_FAST_MATH " << (compile_mode == 2 ? 1 : 0) << "\n";
+  glsl << "#define __FAST_MATH__ " << (compile_mode == 2 ? 1 : 0) << "\n";
   glsl << "layout(local_size_x=" << local_x << ", local_size_y=" << local_y
        << ", local_size_z=" << local_z << ") in;\n";
   glsl << declarations << shared_declarations;
@@ -1015,7 +1055,7 @@ Translation translate_msl(
          << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
          << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n";
   }
-  glsl << header << "\n" << element_helpers << macros;
+  glsl << header << "\n" << element_helpers << condition_helpers << macros;
   glsl << "void main() {\n"
        << "if (gl_GlobalInvocationID.x >= " << grid_x
        << "u || gl_GlobalInvocationID.y >= " << grid_y
