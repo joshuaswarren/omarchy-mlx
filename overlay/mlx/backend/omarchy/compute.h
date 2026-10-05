@@ -850,6 +850,14 @@ enum class ComputeKernel : uint16_t {
   // composed route's f32 score matrix exceeds the uint32 element or
   // descriptor byte limits. Append-only profile id.
   SdpaPrefillFlashBF16Hd128,
+  // Cooperative-matrix twin of the flash prefill above
+  // (shaders/sdpa_prefill_flash_coopmat.comp): 8x8x8 f32 coopmat
+  // QK^T and PV, bf16 H3 shape, online softmax via the diagonal-D
+  // matmul rescale; gated by MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT
+  // (default OFF until numerics/determinism/live-context/perf gates
+  // pass; see receipts/2026-10-05-long-sdpa-coopmat). Append-only
+  // profile id.
+  SdpaPrefillFlashCoopmatBF16Hd128,
   Count,
 };
 

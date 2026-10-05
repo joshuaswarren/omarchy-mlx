@@ -355,6 +355,11 @@ omarchy_shader(sdpa_decode_rows_bf16_hd128 shaders/sdpa_decode_native.comp -DBF1
 # Attn128 long-L prefill: flash-style online-softmax bf16 SDPA
 # (shaders/sdpa_prefill_flash.comp); hd128 first (H3 joint attention).
 omarchy_shader(sdpa_prefill_flash_bf16_hd128 shaders/sdpa_prefill_flash.comp -DSDPA_HD=128)
+# Attn128 long-L prefill cooperative-matrix twin: bf16 H3 shape,
+# online softmax, 8x8x8 f32 coopmat QK^T and PV; gated by
+# MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT (default OFF until every
+# gate passes; see receipts/2026-10-05-long-sdpa-coopmat).
+omarchy_shader(sdpa_prefill_flash_coopmat_bf16_hd128 shaders/sdpa_prefill_flash_coopmat.comp -DSDPA_HD=128)
 omarchy_shader(sdpa_decode_native_bf16_hd160 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=160)
 omarchy_shader(sdpa_decode_native_bf16_hd192 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=192)
 omarchy_shader(sdpa_decode_native_bf16_hd224 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=224)

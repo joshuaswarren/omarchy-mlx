@@ -92,6 +92,14 @@ void set_flash_enabled(bool enabled) {
   }
 }
 
+void set_coopmat_enabled(bool enabled) {
+  if (enabled) {
+    setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT", "1", 1);
+  } else {
+    setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT", "0", 1);
+  }
+}
+
 array sdpa(array q, array k, array v, Stream stream) {
   return fast::scaled_dot_product_attention(
       std::move(q),
@@ -115,8 +123,10 @@ Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream st
   auto qw = flat(q, stream);
   auto kw = flat(k, stream);
   auto vw = flat(v, stream);
-  int b = q.shape(0), h = q.shape(1), lq = q.shape(2), lk = k.shape(2);
-  float scale = 1.0f / std::sqrt(static_cast<float>(kHd));
+  const int b = q.shape(0), h = q.shape(1), kv_heads = k.shape(1);
+  const int lq = q.shape(2), lk = k.shape(2);
+  const int kv_repeats = h / kv_heads;
+  const double scale = 1.0 / std::sqrt(static_cast<double>(kHd));
   Fp64Ref ref;
   ref.out.resize(static_cast<size_t>(b) * h * lq * kHd);
   double accum_sq = 0.0;
@@ -131,7 +141,8 @@ Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream st
             dot += static_cast<double>(
                        qw[((size_t)(bi * h + hi) * lq + i) * kHd + d]) *
                 static_cast<double>(
-                    kw[((size_t)(bi * h + hi) * lk + j) * kHd + d]);
+                    kw[((size_t)(bi * kv_heads + hi / kv_repeats) * lk + j) *
+                       kHd + d]);
           }
           scores[j] = dot * scale;
           m = std::max(m, scores[j]);
@@ -146,7 +157,8 @@ Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream st
           for (int j = 0; j < lk; ++j) {
             o += scores[j] *
                 static_cast<double>(
-                    vw[((size_t)(bi * h + hi) * lk + j) * kHd + d]);
+                    vw[((size_t)(bi * kv_heads + hi / kv_repeats) * lk + j) *
+                       kHd + d]);
           }
           o /= sum;
           size_t index = ((size_t)(bi * h + hi) * lq + i) * kHd + d;
@@ -171,6 +183,68 @@ double rel_l2_error(
     sq += diff * diff;
   }
   return std::sqrt(sq) / ref.rel_l2;
+}
+
+// Sampled-row fp64 attention at the H3 shape: full-K softmax per
+// sampled row only, so L=13365 stays tractable in a test. Rows sample
+// the ragged q-tile tails and the deep interior.
+double sampled_h3_rel_l2(
+    const std::vector<float>& got,
+    const array& q,
+    const array& k,
+    const array& v,
+    Stream stream) {
+  const auto qw = flat(q, stream);
+  const auto kw = flat(k, stream);
+  const auto vw = flat(v, stream);
+  const int heads = q.shape(1);
+  const int lq = q.shape(2);
+  const int lk = k.shape(2);
+  const int kv_heads = k.shape(1);
+  const int repeats = heads / kv_heads;
+  const int sample_rows[] = {0, 1, 128, 4096, 8192, 13364};
+  const double scale = 1.0 / std::sqrt(static_cast<double>(kHd));
+  std::vector<double> scores(lk);
+  double error_sq = 0.0;
+  double norm_sq = 0.0;
+  for (int hi = 0; hi < heads; ++hi) {
+    for (int row : sample_rows) {
+      if (row >= lq) {
+        continue;
+      }
+      double max_score = -std::numeric_limits<double>::infinity();
+      for (int j = 0; j < lk; ++j) {
+        double dot = 0.0;
+        for (int d = 0; d < kHd; ++d) {
+          const size_t qi = (static_cast<size_t>(hi) * lq + row) * kHd + d;
+          const size_t ki =
+              (static_cast<size_t>(hi / repeats) * lk + j) * kHd + d;
+          dot += static_cast<double>(qw[qi]) * static_cast<double>(kw[ki]);
+        }
+        scores[j] = dot * scale;
+        max_score = std::max(max_score, scores[j]);
+      }
+      double sum = 0.0;
+      for (double& score : scores) {
+        score = std::exp(score - max_score);
+        sum += score;
+      }
+      for (int d = 0; d < kHd; ++d) {
+        double expected = 0.0;
+        for (int j = 0; j < lk; ++j) {
+          const size_t vi =
+              (static_cast<size_t>(hi / repeats) * lk + j) * kHd + d;
+          expected += scores[j] * static_cast<double>(vw[vi]);
+        }
+        expected /= sum;
+        const size_t oi = (static_cast<size_t>(hi) * lq + row) * kHd + d;
+        const double diff = static_cast<double>(got[oi]) - expected;
+        error_sq += diff * diff;
+        norm_sq += expected * expected;
+      }
+    }
+  }
+  return std::sqrt(error_sq / norm_sq);
 }
 
 
@@ -211,6 +285,140 @@ TEST_CASE("flash bf16 prefill defaults to score-memory safety, not sequence leng
 
 
 } // namespace
+
+bool flash_coopmat_device_ready(Stream stream) {
+  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+  if (!caps.cooperative_matrix_f32_8 || caps.subgroup_size != 32u ||
+      caps.max_compute_work_group_size[0] < 64u ||
+      caps.max_compute_work_group_invocations < 64u ||
+      caps.max_compute_shared_memory_size < 20000u) {
+    printf("Skipping: no coopmat 8x8 f32 device with required workgroup/shared limits\n");
+    return false;
+  }
+  return true;
+}
+
+TEST_CASE("coopmat flash bf16 prefill matches fp64 on ragged tiles") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!flash_coopmat_device_ready(stream)) {
+    return;
+  }
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
+  set_flash_enabled(true);
+  const int lengths[] = {16, 17, 31, 32, 33, 48, 53, 64, 200, 384};
+  for (int length : lengths) {
+    array q = make_bf16({1, 2, length, kHd}, 101 + length, stream);
+    array k = make_bf16({1, 2, length, kHd}, 201 + length, stream);
+    array v = make_bf16({1, 2, length, kHd}, 301 + length, stream);
+    const auto ref = fp64_reference(q, k, v, stream);
+
+    set_coopmat_enabled(true);
+    const auto coop = flat(sdpa(q, k, v, stream), stream);
+    const auto coop_repeat_1 = flat(sdpa(q, k, v, stream), stream);
+    const auto coop_repeat_2 = flat(sdpa(q, k, v, stream), stream);
+    set_coopmat_enabled(false);
+
+    const auto scalar = flat(sdpa(q, k, v, stream), stream);
+    set_flash_enabled(false);
+    const auto composed = flat(sdpa(q, k, v, stream), stream);
+
+    const double coop_err = rel_l2_error(coop, ref);
+    const double scalar_err = rel_l2_error(scalar, ref);
+    const double composed_err = rel_l2_error(composed, ref);
+    CHECK_MESSAGE(coop == coop_repeat_1,
+        "coopmat output differs from run 2 at L=", length);
+    CHECK_MESSAGE(coop == coop_repeat_2,
+        "coopmat output differs from run 3 at L=", length);
+    CHECK_MESSAGE(coop_err <= scalar_err + 1e-6,
+        "coopmat rel-L2 ", coop_err, " exceeds scalar ", scalar_err,
+        " at L=", length);
+    CHECK_MESSAGE(coop_err <= composed_err + 1e-6,
+        "coopmat rel-L2 ", coop_err, " exceeds composed ", composed_err,
+        " at L=", length);
+  }
+  array q_gqa = make_bf16({2, 4, 17, kHd}, 417, stream);
+  array k_gqa = make_bf16({2, 2, 33, kHd}, 418, stream);
+  array v_gqa = make_bf16({2, 2, 33, kHd}, 419, stream);
+  const auto gqa_ref = fp64_reference(q_gqa, k_gqa, v_gqa, stream);
+  set_coopmat_enabled(true);
+  const auto gqa_coop = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
+  const auto gqa_repeat_1 = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
+  const auto gqa_repeat_2 = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
+  set_coopmat_enabled(false);
+  const auto gqa_scalar = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
+  set_flash_enabled(false);
+  const auto gqa_composed = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
+  const double gqa_coop_err = rel_l2_error(gqa_coop, gqa_ref);
+  CHECK(gqa_coop == gqa_repeat_1);
+  CHECK(gqa_coop == gqa_repeat_2);
+  CHECK(gqa_coop_err <= rel_l2_error(gqa_scalar, gqa_ref) + 1e-6);
+  CHECK(gqa_coop_err <= rel_l2_error(gqa_composed, gqa_ref) + 1e-6);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT");
+  set_flash_enabled(true);
+}
+
+TEST_CASE("coopmat H3-length bf16 prefill matches sampled fp64 rows") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!flash_coopmat_device_ready(stream)) {
+    return;
+  }
+  constexpr int length = 13365;
+  array q = make_bf16({1, 56, length, kHd}, 5601, stream);
+  array k = make_bf16({1, 56, length, kHd}, 5602, stream);
+  array v = make_bf16({1, 56, length, kHd}, 5603, stream);
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
+  set_flash_enabled(true);
+  set_coopmat_enabled(true);
+  const auto coop = flat(sdpa(q, k, v, stream), stream);
+  const auto repeat_1 = flat(sdpa(q, k, v, stream), stream);
+  const auto repeat_2 = flat(sdpa(q, k, v, stream), stream);
+  set_coopmat_enabled(false);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  const double err = sampled_h3_rel_l2(coop, q, k, v, stream);
+  CHECK(coop == repeat_1);
+  CHECK(coop == repeat_2);
+  CHECK_MESSAGE(err <= 0.00167, "sampled H3 rel-L2 exceeds scalar target: ", err);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT");
+  set_flash_enabled(true);
+}
+
+TEST_CASE("coopmat flash bf16 prefill stays within composed error at L<=4096") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!flash_coopmat_device_ready(stream)) {
+    return;
+  }
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
+  const int lengths[] = {2048, 4096};
+  for (int length : lengths) {
+    array q = make_bf16({1, 2, length, kHd}, 2201 + length, stream);
+    array k = make_bf16({1, 2, length, kHd}, 3201 + length, stream);
+    array v = make_bf16({1, 2, length, kHd}, 4201 + length, stream);
+    set_flash_enabled(true);
+    set_coopmat_enabled(true);
+    const auto coop = flat(sdpa(q, k, v, stream), stream);
+    set_coopmat_enabled(false);
+    set_flash_enabled(false);
+    const auto composed = flat(sdpa(q, k, v, stream), stream);
+    const double coop_err = sampled_h3_rel_l2(coop, q, k, v, stream);
+    const double composed_err = sampled_h3_rel_l2(composed, q, k, v, stream);
+    CHECK_MESSAGE(coop_err <= composed_err + 1e-6,
+        "coopmat sampled rel-L2 ", coop_err, " exceeds composed ",
+        composed_err, " at L=", length);
+  }
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT");
+  set_flash_enabled(true);
+}
 
 TEST_CASE("flash bf16 prefill matches the composition on tile-boundary shapes") {
   if (!compute_available()) {

@@ -1,0 +1,269 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+#ifndef SDPA_HD
+#define SDPA_HD 128
+#endif
+
+const uint HD = uint(SDPA_HD);
+const uint HD_WORDS = HD / 2u;
+const uint Q_TILE = 16u;
+const uint K_TILE = 8u;
+const uint WG_SIZE = 64u;
+const uint SG_COUNT = 2u;
+const uint MAT = 8u;
+const uint HD_TILES = HD / MAT;
+const float NEG_INF = -3.4028234663852886e38;
+
+layout(local_size_x = WG_SIZE) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Query { uvec4 q4[]; };
+layout(set = 0, binding = 1, std430) readonly buffer Key { uvec4 k4[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Value { uvec4 v4[]; };
+layout(set = 0, binding = 3, std430) writeonly buffer OutWords { uint words[]; };
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+} params;
+
+// Shared bytes at SDPA_HD=128: Q 4096, K 2048, V 2048, A/B staging
+// 1024, scores/probabilities 1024, O 8192, rescale matrices 512, and
+// row max/sum/correction 192: 19136 bytes.
+shared uint s_q[Q_TILE * HD_WORDS];
+shared uint s_k[K_TILE * HD_WORDS];
+shared uint s_v[K_TILE * HD_WORDS];
+shared float s_a[SG_COUNT][MAT * MAT];
+shared float s_b[SG_COUNT][MAT * MAT];
+shared float s_scores[Q_TILE * K_TILE];
+shared float s_prob[Q_TILE * K_TILE];
+shared float s_out[Q_TILE * HD];
+shared float s_diag[SG_COUNT][MAT * MAT];
+shared float s_max[Q_TILE];
+shared float s_sum[Q_TILE];
+shared float s_corr[Q_TILE];
+
+float bf16_unpack(uint word, uint half_index) {
+  return uintBitsToFloat((half_index == 0u ? word << 16u : word & 0xffff0000u));
+}
+
+uint bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return (bits >> 16u) | 0x40u;
+  }
+  return (bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u;
+}
+
+void main() {
+  const uint sg = gl_SubgroupID;
+  const uint lane = gl_SubgroupInvocationID;
+  const uint e = lane * 2u;
+  const uint row_in_mat = e / MAT;
+  const uint col_pair = e % MAT;
+  const uint head = gl_WorkGroupID.y;
+  const uint heads = gl_NumWorkGroups.y;
+  const uint batch = gl_WorkGroupID.z;
+  const uint repeats = max(params.rhs_gap, 1u);
+  const uint kv_head = head / repeats;
+  const uint lq = params.matrix_m;
+  const uint lk = params.matrix_n;
+  const uint q_row0 = (params.dims + gl_WorkGroupID.x) * Q_TILE;
+  const uint64_t q_base = uint64_t(params.lhs_offset) +
+      uint64_t(batch) * uint64_t(params.q_batchstride) +
+      uint64_t(head) * uint64_t(params.q_headstride);
+  const uint64_t k_base = uint64_t(params.rhs_offset) +
+      uint64_t(batch) * uint64_t(params.k_batchstride) +
+      uint64_t(kv_head) * uint64_t(params.k_headstride);
+  const uint64_t v_base = uint64_t(params.aux_offset) +
+      uint64_t(batch) * uint64_t(params.v_batchstride) +
+      uint64_t(kv_head) * uint64_t(params.v_headstride);
+  const uint64_t o_base = uint64_t(params.output_offset) +
+      (uint64_t(batch) * uint64_t(heads) + uint64_t(head)) *
+          uint64_t(lq) * HD;
+
+  for (uint i = gl_LocalInvocationIndex.x; i < Q_TILE * HD_WORDS; i += WG_SIZE) {
+    const uint r = i / HD_WORDS;
+    const uint w = i % HD_WORDS;
+    const uint64_t src = (q_base + uint64_t(q_row0 + r) *
+        uint64_t(params.q_rowstride)) / 2u + w;
+    s_q[i] = q_row0 + r < lq ? q4[uint(src / 4u)][uint(src % 4u)] : 0u;
+  }
+  if (gl_LocalInvocationIndex < Q_TILE) {
+    s_max[gl_LocalInvocationIndex] = NEG_INF;
+    s_sum[gl_LocalInvocationIndex] = 0.0;
+    s_corr[gl_LocalInvocationIndex] = 1.0;
+  }
+  barrier();
+
+  coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+      o_acc[HD_TILES];
+  for (uint cb = 0u; cb < HD_TILES; ++cb) {
+    o_acc[cb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+        gl_MatrixUseAccumulator>(0.0);
+  }
+
+  const uint kv_tiles = (lk + K_TILE - 1u) / K_TILE;
+  for (uint tile = 0u; tile < kv_tiles; ++tile) {
+    const uint key0 = tile * K_TILE;
+    for (uint i = gl_LocalInvocationIndex.x; i < K_TILE * HD_WORDS;
+         i += WG_SIZE) {
+      const uint r = i / HD_WORDS;
+      const uint w = i % HD_WORDS;
+      const uint64_t ki = (k_base + uint64_t(key0 + r) *
+          uint64_t(params.k_rowstride)) / 2u + w;
+      const uint64_t vi = (v_base + uint64_t(key0 + r) *
+          uint64_t(params.v_rowstride)) / 2u + w;
+      const bool valid = key0 + r < lk;
+      s_k[i] = valid ? k4[uint(ki / 4u)][uint(ki % 4u)] : 0u;
+      s_v[i] = valid ? v4[uint(vi / 4u)][uint(vi % 4u)] : 0u;
+    }
+    barrier();
+
+    coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+        qk_acc = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+            gl_MatrixUseAccumulator>(0.0);
+    for (uint ks = 0u; ks < HD_TILES; ++ks) {
+      const uint d0 = ks * MAT;
+      const uint qrow = sg * MAT + row_in_mat;
+      const uint qword = d0 + col_pair;
+      const uint qw = s_q[qrow * HD_WORDS + qword / 2u];
+      s_a[sg][e] = bf16_unpack(qw, 0u);
+      s_a[sg][e + 1u] = bf16_unpack(qw, 1u);
+
+      const uint d = d0 + row_in_mat;
+      const uint kw0 = s_k[col_pair * HD_WORDS + d / 2u];
+      const uint kw1 = s_k[(col_pair + 1u) * HD_WORDS + d / 2u];
+      s_b[sg][e] = bf16_unpack(kw0, d & 1u);
+      s_b[sg][e + 1u] = bf16_unpack(kw1, d & 1u);
+      subgroupBarrier();
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> a;
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> b;
+      coopMatLoad(a, s_a[sg], 0, MAT, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatLoad(b, s_b[sg], 0, MAT, gl_CooperativeMatrixLayoutRowMajor);
+      qk_acc = coopMatMulAdd(a, b, qk_acc);
+      subgroupBarrier();
+    }
+    coopMatStore(qk_acc, s_scores, sg * MAT * K_TILE, K_TILE,
+        gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+
+    if (sg == 0u && lane < Q_TILE) {
+      const uint row = lane;
+      const uint base = row * K_TILE;
+      float m_tile = NEG_INF;
+      for (uint j = 0u; j < K_TILE; ++j) {
+        const uint key = key0 + j;
+        const float score = key < lk ? s_scores[base + j] * params.alpha : NEG_INF;
+        s_scores[base + j] = score;
+        m_tile = max(m_tile, score);
+      }
+      const float old_max = s_max[row];
+      const float new_max = max(old_max, m_tile);
+      const float correction = new_max == old_max ? 1.0 : exp(old_max - new_max);
+      float tile_sum = 0.0;
+      for (uint j = 0u; j < K_TILE; ++j) {
+        const float p = exp(s_scores[base + j] - new_max);
+        s_prob[base + j] = p;
+        tile_sum += p;
+      }
+      s_sum[row] = s_sum[row] * correction + tile_sum;
+      s_max[row] = new_max;
+      s_corr[row] = correction;
+    }
+    barrier();
+
+    for (uint i = lane; i < MAT * MAT; i += 32u) {
+      const uint r = i / MAT;
+      const uint c = i % MAT;
+      s_diag[sg][i] = r == c ? s_corr[sg * MAT + r] : 0.0;
+    }
+    subgroupBarrier();
+
+    coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> diag;
+    coopMatLoad(diag, s_diag[sg], 0, MAT, gl_CooperativeMatrixLayoutRowMajor);
+    coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> prob;
+    coopMatLoad(prob, s_prob, sg * MAT * K_TILE, K_TILE,
+        gl_CooperativeMatrixLayoutRowMajor);
+
+    for (uint cb = 0u; cb < HD_TILES; ++cb) {
+      coopMatStore(o_acc[cb], s_out, sg * MAT * HD + cb * MAT, HD,
+          gl_CooperativeMatrixLayoutRowMajor);
+    }
+    subgroupBarrier();
+    for (uint cb = 0u; cb < HD_TILES; ++cb) {
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> old_o;
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+          scaled = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(0.0);
+      coopMatLoad(old_o, s_out, sg * MAT * HD + cb * MAT, HD,
+          gl_CooperativeMatrixLayoutRowMajor);
+      scaled = coopMatMulAdd(diag, old_o, scaled);
+
+      const uint key = row_in_mat;
+      const uint col = cb * MAT + col_pair;
+      const uint vw = s_v[key * HD_WORDS + col / 2u];
+      s_b[sg][e] = bf16_unpack(vw, 0u);
+      s_b[sg][e + 1u] = bf16_unpack(vw, 1u);
+      subgroupBarrier();
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> v;
+      coopMatLoad(v, s_b[sg], 0, MAT, gl_CooperativeMatrixLayoutRowMajor);
+      o_acc[cb] = coopMatMulAdd(prob, v, scaled);
+      subgroupBarrier();
+    }
+    for (uint cb = 0u; cb < HD_TILES; ++cb) {
+      coopMatStore(o_acc[cb], s_out, sg * MAT * HD + cb * MAT, HD,
+          gl_CooperativeMatrixLayoutRowMajor);
+    }
+    subgroupBarrier();
+  }
+
+  for (uint i = lane; i < MAT * HD_WORDS; i += 32u) {
+    const uint row = sg * MAT + i / HD_WORDS;
+    const uint word = i % HD_WORDS;
+    const uint qrow = q_row0 + row;
+    if (qrow < lq) {
+      const float inv_sum = 1.0 / s_sum[row];
+      const uint packed = (bf16_store(s_out[row * HD + word * 2u + 1u] * inv_sum) << 16u) |
+          bf16_store(s_out[row * HD + word * 2u] * inv_sum);
+      const uint64_t dst = (o_base + uint64_t(qrow) *
+          uint64_t(params.o_rowstride)) / 2u + word;
+      words[uint(dst)] = packed;
+    }
+  }
+}

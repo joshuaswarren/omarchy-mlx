@@ -13705,7 +13705,15 @@ void ScaledDotProductAttention::eval_gpu(
   // Kill switch: MLX_OMARCHY_SDPA_PREFILL_FLASH=0. By default, use
   // flash when the composed f32 score matrix exceeds 2^30 elements or
   // would exceed 25% of the device heap. MIN_L is an explicit A/B override.
+  // The cooperative-matrix twin (shaders/sdpa_prefill_flash_coopmat.comp)
+  // takes the same shape but uses 8x8x8 f32 coopmat QK^T/PV and a
+  // diagonal-D matmul rescale; MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT=1
+  // selects it inside this same route (default OFF; the scalar kernel is
+  // the production reference until the coopmat gates pass — see
+  // receipts/2026-10-05-long-sdpa-coopmat).
   const char* prefill_flash_env = std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  const bool prefill_flash_coopmat_env =
+      omarchy::env_flag("MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT");
   const char* prefill_flash_min_l_env =
       std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
   uint32_t prefill_flash_min_l = 0;
@@ -13722,6 +13730,17 @@ void ScaledDotProductAttention::eval_gpu(
       flash_caps.max_compute_work_group_size[0] >= 256u &&
       flash_caps.max_compute_work_group_invocations >= 256u &&
       flash_caps.max_compute_shared_memory_size >= 28928u;
+  // Coopmat variant: subgroupSize == 32 and the 8x8x8 f32 shape are
+  // the load-bearing constraints (qmm_coopmat / matmul_coopmat use
+  // the same gate). The kernel's declared shared arrays sum to
+  // 19136 B; the gate keeps alignment headroom.
+  constexpr uint32_t kFlashCoopmatSharedBytes = 20000u;
+  const bool flash_coopmat_route_ready =
+      flash_caps.cooperative_matrix_f32_8 &&
+      flash_caps.subgroup_size == 32u &&
+      flash_caps.max_compute_work_group_size[0] >= 64u &&
+      flash_caps.max_compute_work_group_invocations >= 64u &&
+      flash_caps.max_compute_shared_memory_size >= kFlashCoopmatSharedBytes;
   const uint64_t flash_score_elements =
       static_cast<uint64_t>(batch) * heads * q_len * k_len;
   const bool score_exceeds_heap_budget = flash_caps.total_memory > 0 &&
@@ -13773,6 +13792,48 @@ void ScaledDotProductAttention::eval_gpu(
         strided_extent(k, 2) > kFlashMaxElements ||
         strided_extent(v, 2) > kFlashMaxElements) {
       omarchy::unsupported("attention flash prefill operand elements " + tag, out);
+    }
+    // Cooperative-matrix twin: same engagement conditions, selected by
+    // MLX_OMARCHY_SDPA_PREFILL_FLASH_COOPMAT=1 and the coopmat
+    // capability gate above. One 16-row q tile per dispatch.
+    if (prefill_flash_coopmat_env && flash_coopmat_route_ready) {
+      out.set_data(allocate_omarchy(out.nbytes()));
+      omarchy::ComputeParams coopmat_params;
+      coopmat_params.matrix_m = checked_u32(q_len, tag, out);
+      coopmat_params.matrix_n = checked_u32(k_len, tag, out);
+      coopmat_params.alpha = scale_;
+      coopmat_params.rhs_gap = checked_u32(repeats, tag, out);
+      coopmat_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+      coopmat_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+      coopmat_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+      coopmat_params.output_offset =
+          checked_item_offset(out, out.size(), tag, out);
+      coopmat_params.q_rowstride = checked_u32(q.strides()[2], tag, out);
+      coopmat_params.k_rowstride = checked_u32(k.strides()[2], tag, out);
+      coopmat_params.v_rowstride = checked_u32(v.strides()[2], tag, out);
+      coopmat_params.o_rowstride = checked_u32(out.strides()[2], tag, out);
+      coopmat_params.q_headstride = checked_u32(q.strides()[1], tag, out);
+      coopmat_params.k_headstride = checked_u32(k.strides()[1], tag, out);
+      coopmat_params.v_headstride = checked_u32(v.strides()[1], tag, out);
+      coopmat_params.q_batchstride = checked_u32(q.strides()[0], tag, out);
+      coopmat_params.k_batchstride = checked_u32(k.strides()[0], tag, out);
+      coopmat_params.v_batchstride = checked_u32(v.strides()[0], tag, out);
+      std::array<omarchy::ComputeBinding, 4> coopmat_bindings{
+          binding(q), binding(k), binding(v), binding(out)};
+      constexpr int kCoopmatRowsPerTile = 16;
+      const int coopmat_q_tiles =
+          (q_len + kCoopmatRowsPerTile - 1) / kCoopmatRowsPerTile;
+      for (int tile = 0; tile < coopmat_q_tiles; ++tile) {
+        coopmat_params.dims = checked_u32(tile, tag, out);
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::SdpaPrefillFlashCoopmatBF16Hd128,
+            coopmat_bindings,
+            coopmat_params,
+            1u,
+            static_cast<uint32_t>(heads),
+            static_cast<uint32_t>(batch));
+      }
+      return;
     }
     out.set_data(allocate_omarchy(out.nbytes()));
     omarchy::ComputeParams params;
