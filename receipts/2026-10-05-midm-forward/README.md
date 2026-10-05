@@ -240,3 +240,81 @@ Artifacts: /tmp/midm_gpu_on.ndjson on the M2 (50,210 events; meta
 period_ns=1.0); analysis in this receipt; diag wheel in the midm-diag
 staged tree (dist, +ae1e1da, profiling compiled in; the omlx census
 venv has it installed).
+
+
+## M16 X32 FullN dequant overhead - analysis (dev box, while M2 builds paused)
+
+Qwen3-4B q16 verify forward dispatches QmmPrefillCoopmatM16BF16X32FullN
+(shaders/qmm_coopmat.comp @ -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1).
+HostOverhead's single-submit profile measured it at 106.0 ms over 253
+dispatches (419 us each, ~21 GB/s effective vs ~60 GB/s M2 memory ceiling;
+2.86x off the 37 ms weight-read floor). Three concrete inefficiencies
+in the M16 X32 path that explain the gap and are the same kernel family
+that serves prefill M>=17 chunks, so a fix helps prefill too.
+
+### 1. Dequant done 8 nibbles at a time into shared, but the dequant
+fan-out is serialized per chunk step
+
+Per chunk (CHUNK_K=64): the shader loops step in {0..3} (CHUNK_K/STEP_K)
+and per step dequantizes 8 nibbles from ONE packed word (lanes pack
+1 word each) into w_s at w_base = step*STEP_K*QMM_W_STRIDE + ... then
+barrier(); then coopMatLoads mat_a and mat_b from w_s. Each step
+re-reads the SAME 8 nibbles from one packed word - the FIRST dequant
+in the chunk dequantizes word 0 of the chunk; the SECOND step
+dequantizes word 1 of the chunk, etc. The dequant-to-shared step
+itself is 8 scalar float ops per lane per step = 64 fmas per chunk
+per lane + a barrier. With CHUNK_K=64 the loop runs 4 times per
+chunk. There is no overlap of dequant with mat_a loads. The
+q4_word single-weight path (QmmVecQ4Word*) dequantizes in registers
+inside the per-lane k-chain with no shared round-trip; that path is
+at the M=1 weight-read floor; the coopmat path's dequant-in-shared
+is a fixed per-tile tax.
+
+### 2. TILE_M=16 + local_size=64 -> only 8 lanes of one subgroup, low
+occupancy on M2's wide 32-lane subgroup
+
+TILE_M=16, local_size_x=64 -> 2 workgroup rows per tile, lane split is
+4 lanes per row block (MAT=8 -> 4 groups of 16 lanes for SUBGROUP_ROW_BLOCKS=2).
+M2's subgroup size is 32, so a 16-lane row block under-fills it; the
+second row block in the workgroup competes for the SAME subgroup slots
+(serialized per subgroup ops - subgroupAdd etc). Net: one workgroup
+spins one row block then the other on the same SIMD; effective
+throughput is ~half of TILE_M=32. Doubling TILE_M to 32 (the M32 bf16
+twin) at the M16 forward position would need a fallback path (the
+host picks TILE_M by group count vs core count, M16 falls to the
+smaller tile specifically when the grid would not fill the wide
+parts). For q_len=16, the M32 tile is the right geometry and would
+roughly double throughput on this dispatch.
+
+### 3. X_F32 forced a CastBF16F32 dispatch per qmm in the same phase
+(burns dispatch slots, not GPU time)
+
+The M16 X32 path needs a fresh f32 x buffer (the shader coopMatLoads
+A from f32). The host pre-allocates x_f32 and dispatches a separate
+CastBF16F32(x, x_f32) before each qmm (primitives.cpp:7447-7473).
+This is the 23% of dispatch count in HostOverhead's earlier census.
+It is pure dispatch-count noise (0.2% of GPU time), but it IS the
+extra dispatch HostOverhead's A7 found 23.2% of total. The lever here
+is for the host to AMORTIZE the cast across the three weight-sharing
+qmm dispatches (qkv-group + wo + gate-up + down) in the same layer
+by fusing it onto the group's prefill-time plan; the cast must
+happen once per layer, not per qmm.
+
+### Levers (in Main's ordered priority)
+
+1. **Restore the two-pass token8 for rows 9..16** (Main ordered; bit-identity
+   preserved, weight bytes read twice ~74 ms floor vs 106 today,
+   aim ~-30% on the QMM composed time; do commit abed11fe2; M2
+   build pending after 'JWM1 PMP DONE').
+2. **Token16 single-pass without the AGX divergence** (the real lever toward
+   the 37 ms floor; bisect levers in receipt: ROWS_PER_SLOT=1, per-row
+   if-bodies, token12 twin).
+3. **M16 -> M32 tile for q_len 16**: add a probe path that picks TILE_M=32
+   when M<=16 and group count is small (the wider tile is what the
+   M16 X32 path was MEANT to fall back from - it picks the small tile
+   specifically when the grid under-fills; for the q16 verify position
+   the grid is exactly wide enough to be worth the M32 launch - one
+   fast A/B with the existing qmm_coopmat_bf16 blob (same source, no
+   new compile)).
+4. **Fuse the bf16->f32 cast across the layer's qmm group** (dispatch
+   count wins, GPU time flat; collapses the 23% cast dispatch share).
