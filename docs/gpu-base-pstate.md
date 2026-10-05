@@ -211,6 +211,42 @@ first token after a pause fell with base 6 from 88.6, 88.6 and 91.7 ms to 84.4,
 half of that. Target-utilization 40 and 60 changed nothing. The chip stays on stock by default.
 Details: `docs/gpu-base-pstate-t6001.md`.
 
+## How users get GPU base pstate 6
+
+Three ways exist. Today, only the documented manual override (c) works on an
+install that carries a `DTBS=` stanza; the packaged opt-in works elsewhere.
+
+(a) Make the boot hook honor the opt-in even with a DTBS stanza. Root cause,
+from the omarchy-mac-boot sources: the packaged
+`/etc/default/update-m1n1` calls `dtb_overlays_update_m1n1` as its last line,
+and that call sets `DTBS` to the overlay-merged tree list. The aurora-sep
+installer appends its own `DTBS=` line at the end of the file, so its
+assignment runs after the call and the last write wins. The library also
+returns silently when `DTBS` is already set. Direction adopted for the
+boot-package lane: merge the overlays after the final assignment (for
+example a RETURN trap that re-runs the merge once the whole file is read),
+and teach the library to apply overlays to whatever `DTBS` list the config
+left instead of bailing; keep the C-locale determinism. T8103 has the
+measured data to ship this default-on (H245/H247: first token after a
+100 ms-2 s pause about 9 ms faster, +26 mW at 1 Hz sparse load, none at
+idle or saturation); T6001 and T6021 stay opt-in keys. Risk: the boot check
+must reproduce the same merge, and a failed merge must keep the
+"stays as the kernel shipped it" rule. Patch draft: the private receipt
+`2026-10-05-overlay-hook/`.
+
+(b) Change the default in the shipped device tree or the driver. Rejected:
+it removes the opt-in, it would raise the base state on every chip at once
+including T6021, whose base 6 is unmeasured, and a kernel or DT default has
+no one-file rollback.
+
+(c) The temporary DTBS override documented above. Manual, works today,
+revertible in the same session.
+
+Measured so far: the base-6 kernel-side and decode-side effects are M1
+(T8103) numbers only (H291). T6001 measured no throughput change from any
+base state. T6021 is unmeasured for base 6. Energy: only the 1 Hz sparse
+cell is measured (+26 mW on T8103); battery runtime is unmeasured.
+
 ## Limits
 
 - T8103 and T6001 have been measured. T6021 (M2 Max) has another OPP table and
