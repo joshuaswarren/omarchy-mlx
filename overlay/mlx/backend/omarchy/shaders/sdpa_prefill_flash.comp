@@ -1,0 +1,307 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// Flash-style bf16 SDPA prefill (online softmax, scores never
+// materialized). Built for the H3 joint-attention shape: q_len =
+// k_len = 13365, heads = 56, head_dim 128, where the composed route
+// dies twice - the f32 score matrix (B*H*L*L elements) passes neither
+// the uint32 element guard nor Honeykrisp's uint32 descriptor byte
+// range (core dump at 15 GB of scores, 2026-10-05 repro).
+//
+// One 256-lane workgroup owns a 32-query-row tile of one head for the
+// whole K walk. K and V stream through 32-key shared tiles; the score
+// tile (32x32 f32, 4 KiB) doubles as the P tile in place. Online
+// softmax state (m, l, corr) lives per row in shared; the sub==0 lane
+// computes stats and writes P once - the other seven lanes never
+// exponentiate (the famqwen flash-256 v2 lesson: per-lane recompute
+// of stats and weights is exp-bound and redundant).
+//
+// Lane ownership: lane = 8*row + sub. Phase 1 (QK^T) splits the 32
+// keys into per-sub eighths (4 keys each, dim loop outer so the q
+// word unpacks once per 8 FMAs). Phase 2 (PV) splits the output
+// columns into per-sub eighths: each lane accumulates its row's
+// 16-column slice in acc[16], written with loop bounds small enough
+// that glslang promotes every element to a register - the acc array
+// must NOT reach SPIR-V private memory (checked against the compiled
+// .spv; matmul_fma_bf16.comp ships the same promotion and sustains
+// 2.3 TFLOP/s scalar FMA).
+//
+// Arithmetic: bf16 widened exactly at use (16-bit left shift), f32
+// dot ascending in d, scale applied to the dot product before the
+// online max (the composed alpha placement), f32 exp/sum/rescale, one
+// f32 division by the final row sum, bf16 round-to-nearest-even word
+// packing out (bf16_store matches matmul_fma_bf16.comp).
+//
+// Numerics note: the online (streaming) max/sum reassociates the
+// composed softmax's single-pass max/sum, so outputs are not
+// bit-identical to the composed route - the gate is per-op error vs
+// fp64 no worse than the composed path (docs/numerics-gate.md), plus
+// run-to-run identity (fixed tile order, no atomics, no cross-grid
+// reduction).
+//
+// Dispatch shape: grid = (q_tiles_in_dispatch, heads, batch); the
+// caller loops q tiles in chunks so no dispatch runs longer than the
+// ~10 ms safe bound (the 38-core G14C executes one 32-row q tile
+// across all 56 heads in ~5 ms at the measured FMA ceiling).
+//
+// Limits: head_dim compiled via -DSDPA_HD (128 shipped); route
+// requires fully contiguous operands so the element guard
+// B*heads*L*hd < 2^31 keeps every buffer index inside uint32; the
+// u64 intermediates below exist so the element arithmetic cannot wrap
+// before that narrowing.
+
+#ifndef SDPA_HD
+#define SDPA_HD 128
+#endif
+
+const uint HD = uint(SDPA_HD);
+const uint HD_WORDS = HD / 2u;        // bf16 pairs per row
+const uint Q_TILE = 32u;
+const uint K_TILE = 32u;
+const uint WG = 256u;
+const uint SUB = 8u;                  // lanes per row
+const uint KEYS_PER_LANE = K_TILE / SUB;      // 4 keys (phase 1)
+const uint COL_WORDS = HD_WORDS / SUB;        // 8 words (phase 2)
+const uint ACC = COL_WORDS * 2u;              // 16 f32 accumulators
+// Most negative finite f32 (the decode kernels' FINITE_MIN): masked
+// keys store this and exp(NEGINF - m) underflows to exact 0.
+const float NEGINF = -3.4028234663852886e38;
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Query {
+  uvec4 q4[];
+};
+layout(set = 0, binding = 1, std430) readonly buffer Key {
+  uvec4 k4[];
+};
+layout(set = 0, binding = 2, std430) readonly buffer Value {
+  uvec4 v4[];
+};
+layout(set = 0, binding = 3, std430) writeonly buffer OutWords {
+  uint words[];
+};
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  // Row strides (elements) for non-contiguous views (e.g. H3's
+  // transpose(0,2,1,3) of a (B,S,H,3,HD) reshape). The H3 attention
+  // feeds Q/K/V as transpose views, not contiguous, so the kernel
+  // computes element addresses with these strides instead of hd.
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+} params;
+
+// bf16 in shared: raw u32 pair words. 3 x 8 KiB tiles + 4 KiB scores
+// + 3 x 32 stats floats = 28,928 bytes against the 32 KiB device
+// limit (one workgroup per core; the decode arm already ships near
+// this ceiling).
+shared uint s_q[Q_TILE * HD_WORDS];
+shared uint s_k[K_TILE * HD_WORDS];
+shared uint s_v[K_TILE * HD_WORDS];
+shared float s_s[Q_TILE * K_TILE];
+shared float s_m[Q_TILE];
+shared float s_l[Q_TILE];
+shared float s_c[Q_TILE];
+
+uint bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return (bits >> 16) | 0x40u;
+  }
+  return (bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16;
+}
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x;
+  const uint row = lid >> 3u;    // this lane's query row in the tile
+  const uint sub = lid & 7u;     // key eighth (phase 1) / col eighth (phase 2)
+  const uint head_id = gl_WorkGroupID.y;
+  const uint heads = gl_NumWorkGroups.y;
+  const uint batch = gl_WorkGroupID.z;
+  const uint repeats = max(params.rhs_gap, 1u);
+  const uint kv_heads = heads / repeats;
+  const uint kv_head = head_id / repeats;
+  const uint lq = params.matrix_m;
+  const uint lk = params.matrix_n;
+  const uint hd = HD;
+  const uint hdw = HD_WORDS;
+
+  // Base element offsets for this workgroup's (batch, head): any
+  // (B,H,S,HD) layout works (contiguous or the H3 qkv-packed
+  // transpose view); the host passes the real strides and enforces
+  // 8-element alignment of every row start. Host guards every sum
+  // below 2^31; the u64 math keeps the products exact before the
+  // narrowing.
+  const uint64_t q_base = uint64_t(params.lhs_offset) +
+      uint64_t(batch) * uint64_t(params.q_batchstride) +
+      uint64_t(head_id) * uint64_t(params.q_headstride);
+  const uint64_t kv_base = uint64_t(params.rhs_offset) +
+      uint64_t(batch) * uint64_t(params.k_batchstride) +
+      uint64_t(kv_head) * uint64_t(params.k_headstride);
+  const uint64_t v_base = uint64_t(params.aux_offset) +
+      uint64_t(batch) * uint64_t(params.v_batchstride) +
+      uint64_t(kv_head) * uint64_t(params.v_headstride);
+  const uint64_t o_base = uint64_t(params.output_offset) +
+      (uint64_t(batch) * uint64_t(heads) + uint64_t(head_id)) * uint64_t(lq) * hd;
+
+  // Stage the query tile once (32 rows x hd bf16). Invalid rows zero-fill.
+  {
+    const uint qt = params.dims + gl_WorkGroupID.x;
+    const uint q_row0 = qt * Q_TILE;
+    for (uint i = lid; i < Q_TILE * hdw; i += WG) {
+      uint r = i / hdw;
+      uint w = i % hdw;
+      uint64_t src = (q_base + uint64_t(q_row0 + r) * uint64_t(params.q_rowstride)) / 2u + w;
+      s_q[i] = (q_row0 + r < lq) ? q4[uint(src / 4u)][uint(src % 4u)] : 0u;
+    }
+  }
+
+  if (sub == 0u) {
+    s_m[row] = NEGINF;
+    s_l[row] = 0.0;
+    s_c[row] = 1.0;
+  }
+
+  const uint tiles = (lk + K_TILE - 1u) / K_TILE;
+  float acc[ACC];
+  for (uint i = 0u; i < ACC; ++i) {
+    acc[i] = 0.0;
+  }
+
+  for (uint t = 0u; t < tiles; ++t) {
+    const uint k_row0 = t * K_TILE;
+    // Stage this tile's K and V (32 rows x hd bf16 each, zero-filled).
+    for (uint i = lid; i < K_TILE * hdw; i += WG) {
+      uint r = i / hdw;
+      uint w = i % hdw;
+      uint64_t ksrc = (kv_base + uint64_t(k_row0 + r) * uint64_t(params.k_rowstride)) / 2u + w;
+      uint64_t vsrc = (v_base + uint64_t(k_row0 + r) * uint64_t(params.v_rowstride)) / 2u + w;
+      bool valid = k_row0 + r < lk;
+      s_k[i] = valid ? k4[uint(ksrc / 4u)][uint(ksrc % 4u)] : 0u;
+      s_v[i] = valid ? v4[uint(vsrc / 4u)][uint(vsrc % 4u)] : 0u;
+    }
+    barrier();
+
+    // Phase 1: this lane's 4 scores (dim loop outer, q unpacked once).
+    {
+      const uint j0 = sub * KEYS_PER_LANE;
+      float sc[KEYS_PER_LANE];
+      for (uint i = 0u; i < KEYS_PER_LANE; ++i) {
+        sc[i] = 0.0;
+      }
+      for (uint w = 0u; w < hdw; ++w) {
+        uint qw = s_q[row * hdw + w];
+        float q0 = uintBitsToFloat(qw << 16u);
+        float q1 = uintBitsToFloat(qw & 0xFFFF0000u);
+        for (uint i = 0u; i < KEYS_PER_LANE; ++i) {
+          uint kw = s_k[(j0 + i) * hdw + w];
+          sc[i] += q0 * uintBitsToFloat(kw << 16u);
+          sc[i] += q1 * uintBitsToFloat(kw & 0xFFFF0000u);
+        }
+      }
+      for (uint i = 0u; i < KEYS_PER_LANE; ++i) {
+        uint j = j0 + i;
+        s_s[row * K_TILE + j] =
+            (k_row0 + j < lk) ? sc[i] * params.alpha : NEGINF;
+      }
+    }
+    barrier();
+
+    // Stats + P once per row by the sub==0 lane; P lands where the
+    // scores were. corr is 1 when the max did not move (the NEGINF ==
+    // NEGINF case would NaN through exp otherwise).
+    if (sub == 0u) {
+      float m_tile = s_s[row * K_TILE];
+      for (uint j = 1u; j < K_TILE; ++j) {
+        m_tile = max(m_tile, s_s[row * K_TILE + j]);
+      }
+      float m_old = s_m[row];
+      float m_new = max(m_old, m_tile);
+      float corr = (m_new == m_old) ? 1.0 : exp(m_old - m_new);
+      float sum = 0.0;
+      for (uint j = 0u; j < K_TILE; ++j) {
+        float p = exp(s_s[row * K_TILE + j] - m_new);
+        s_s[row * K_TILE + j] = p;
+        sum += p;
+      }
+      s_l[row] = s_l[row] * corr + sum;
+      s_c[row] = corr;
+      s_m[row] = m_new;
+    }
+    barrier();
+
+    // Phase 2: rescale this lane's accumulator by the correction,
+    // then PV over the staged V tile. Constant-bound loops so the 16
+    // accumulators promote to registers (the famqwen spill class).
+    {
+      const float corr = s_c[row];
+      for (uint i = 0u; i < ACC; ++i) {
+        acc[i] *= corr;
+      }
+      const uint wbase = sub * COL_WORDS;
+      for (uint wi = 0u; wi < COL_WORDS; ++wi) {
+        float a0 = acc[wi * 2u];
+        float a1 = acc[wi * 2u + 1u];
+        for (uint j = 0u; j < K_TILE; ++j) {
+          float p = s_s[row * K_TILE + j];
+          uint vw = s_v[j * hdw + wbase + wi];
+          a0 += p * uintBitsToFloat(vw << 16u);
+          a1 += p * uintBitsToFloat(vw & 0xFFFF0000u);
+        }
+        acc[wi * 2u] = a0;
+        acc[wi * 2u + 1u] = a1;
+      }
+    }
+    barrier();
+  }
+
+  // Epilogue: divide by the row sum, pack bf16 pairs, store.
+  {
+    const uint qt = params.dims + gl_WorkGroupID.x;
+    const uint q_row0 = qt * Q_TILE;
+    if (q_row0 + row < lq) {
+      const float inv_l = 1.0 / s_l[row];
+      const uint wbase = sub * COL_WORDS;
+      for (uint wi = 0u; wi < COL_WORDS; ++wi) {
+        float o0 = acc[wi * 2u] * inv_l;
+        float o1 = acc[wi * 2u + 1u] * inv_l;
+        uint64_t dst = (o_base + uint64_t(q_row0 + row) * uint64_t(params.o_rowstride)) / 2u +
+            wbase + wi;
+        words[uint(dst)] =
+            bf16_store(o0) | (bf16_store(o1) << 16u);
+      }
+    }
+  }
+}

@@ -433,6 +433,19 @@ target_link_options(omarchy_sdpa_decode_fused_tests
 add_test(NAME omarchy_sdpa_decode_fused_tests
          COMMAND omarchy_sdpa_decode_fused_tests)
 
+# SdpaPrefillFlashBF16Hd128: the flash-style long-L prefill route agrees
+# with the f32-score composition at bf16 storage granularity, splits
+# dispatches per q tile, and refuses masks/causal to the composition.
+add_executable(omarchy_sdpa_prefill_flash_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_sdpa_prefill_flash.cpp)
+target_link_libraries(omarchy_sdpa_prefill_flash_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_sdpa_prefill_flash_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_sdpa_prefill_flash_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_sdpa_prefill_flash_tests
+         COMMAND omarchy_sdpa_prefill_flash_tests)
+
 add_executable(omarchy_int8_matmul_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_int8_matmul.cpp)
 target_link_libraries(omarchy_int8_matmul_tests PRIVATE mlx doctest)

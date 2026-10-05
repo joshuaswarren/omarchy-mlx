@@ -128,6 +128,7 @@ success unless `mx.__file__` is under the destination and the installed
     `models--SiddhJagani--Qwen3.8-2B-mlx-4Bit` snapshot** (that is the path
     the ledger used); the `mlx-community/` hub id does not resolve and
     burns ticket time on a 401.
+13. **`golden_rebuild.sh` only replays overlay/**. If a branch updates a file under `patches/`, `overlay` sync will not refresh the staged `.work/mlx` source. Use `prepare-mlx.sh` on a fresh clone/tree after checkout; it re-extracts the pinned tarball and reapplies all patches. Never run it on a warmed tree unless discarding that object's build is intended.
 
 ## Rebuilding a corrupted lane tree
 

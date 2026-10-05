@@ -845,6 +845,11 @@ enum class ComputeKernel : uint16_t {
   // Multi-token causal decode attention (q_len 2..16): per-row
   // single-query arm over the visible key prefix; append-only id.
   SdpaDecodeRowsBF16Hd128,
+  // Flash-style bf16 SDPA prefill (shaders/sdpa_prefill_flash.comp):
+  // online softmax, no materialized scores, for q_len where the
+  // composed route's f32 score matrix exceeds the uint32 element or
+  // descriptor byte limits. Append-only profile id.
+  SdpaPrefillFlashBF16Hd128,
   Count,
 };
 
@@ -900,6 +905,19 @@ struct ComputeParams {
   // materialization.
   uint32_t lhs_gap{0};
   uint32_t rhs_gap{0};
+  // Per-buffer row stride in elements for non-contiguous operands
+  // (the SdpaPrefillFlashBF16Hd128 kernel reads these for H3-style
+  // transpose views of Q/K/V; zero / default for contiguous inputs).
+  uint32_t q_rowstride{0};
+  uint32_t k_rowstride{0};
+  uint32_t v_rowstride{0};
+  uint32_t o_rowstride{0};
+  uint32_t q_headstride{0};
+  uint32_t k_headstride{0};
+  uint32_t v_headstride{0};
+  uint32_t q_batchstride{0};
+  uint32_t k_batchstride{0};
+  uint32_t v_batchstride{0};
 };
 
 class ComputeRuntime {

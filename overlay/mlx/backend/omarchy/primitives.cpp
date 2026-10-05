@@ -13691,6 +13691,134 @@ void ScaledDotProductAttention::eval_gpu(
         params.matrix_m);
     return;
   }
+  // Flash-style bf16 prefill for long sequences (H3 joint attention:
+  // q_len 13365, heads 56, hd 128). The composed route's f32 score
+  // matrix fails twice out there - past 2^30 elements the scores
+  // buffer leaves Honeykrisp's uint32 descriptor byte range (driver
+  // assert + core dump, 2026-10-05 repro at L=8192), and past 2^32
+  // elements the checked_u32 guard refuses it outright. The flash
+  // kernel materializes nothing: 32-row q tiles with online softmax,
+  // K/V streamed through shared tiles, dispatches split per q tile so
+  // no single dispatch approaches the ~40 ms firmware timer (56
+  // workgroups run one q tile across all heads in ~5-12 ms on the
+  // 38-core G14C).
+  // Kill switch: MLX_OMARCHY_SDPA_PREFILL_FLASH=0. By default, use
+  // flash when the composed f32 score matrix exceeds 2^30 elements or
+  // would exceed 25% of the device heap. MIN_L is an explicit A/B override.
+  const char* prefill_flash_env = std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  const char* prefill_flash_min_l_env =
+      std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  uint32_t prefill_flash_min_l = 0;
+  if (prefill_flash_min_l_env != nullptr) {
+    unsigned long long parsed = 0;
+    if (prefill_flash_min_l_env[0] != '\0' &&
+        (parsed = std::strtoull(prefill_flash_min_l_env, nullptr, 10)) > 0 &&
+        parsed <= 0xffffffffull) {
+      prefill_flash_min_l = static_cast<uint32_t>(parsed);
+    }
+  }
+  const auto& flash_caps = encoder.device().capabilities();
+  const bool flash_route_ready =
+      flash_caps.max_compute_work_group_size[0] >= 256u &&
+      flash_caps.max_compute_work_group_invocations >= 256u &&
+      flash_caps.max_compute_shared_memory_size >= 28928u;
+  const uint64_t flash_score_elements =
+      static_cast<uint64_t>(batch) * heads * q_len * k_len;
+  const bool score_exceeds_heap_budget = flash_caps.total_memory > 0 &&
+      flash_score_elements > flash_caps.total_memory / (4u * sizeof(float));
+  const bool flash_wants =
+      flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
+      (prefill_flash_min_l > 0 &&
+       q_len >= static_cast<int>(prefill_flash_min_l));
+  if ((prefill_flash_env == nullptr ||
+          std::strcmp(prefill_flash_env, "0") != 0) &&
+      flash_route_ready && flash_wants && inputs.size() == 3 &&
+      !do_causal_ && !has_sinks_ && !output_logsumexp_ && q_len > 1 &&
+      q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+      v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
+      head_dim == 128 && v_dim == 128 && k_len > 0 &&
+      q.strides()[3] == 1 && k.strides()[3] == 1 &&
+      v.strides()[3] == 1 && out.strides()[3] == 1 &&
+      out.strides()[2] == v_dim &&
+      // The kernel addresses every row as base + batch*batch_stride +
+      // head*head_stride + row*row_stride, so any (B,H,S,HD) layout
+      // works (contiguous or the H3 qkv-packed transpose view) as long
+      // as every row start stays 8-element aligned for the uvec4 loads
+      // and 2-element aligned for the packed output stores.
+      q.strides()[0] % 8 == 0 && q.strides()[1] % 8 == 0 &&
+      q.strides()[2] % 8 == 0 && k.strides()[0] % 8 == 0 &&
+      k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 &&
+      v.strides()[0] % 8 == 0 && v.strides()[1] % 8 == 0 &&
+      v.strides()[2] % 8 == 0 &&
+      checked_item_offset(q, q.size(), tag, out) % 8 == 0 &&
+      checked_item_offset(k, k.size(), tag, out) % 8 == 0 &&
+      checked_item_offset(v, v.size(), tag, out) % 8 == 0 &&
+      checked_item_offset(out, out.size(), tag, out) % 2 == 0) {
+    // Element guard: every buffer the kernel indexes stays inside
+    // uint32 (the scores matrix never exists). Extents from the
+    // actual strides: batch stride * batch + head stride * heads +
+    // row stride * rows + one row.
+    constexpr uint64_t kFlashMaxElements = 1ull << 31;
+    const auto strided_extent = [](const array& a, int rows_axis) {
+      return static_cast<uint64_t>(a.strides()[0]) *
+              static_cast<uint64_t>(a.shape(0)) +
+          static_cast<uint64_t>(a.strides()[1]) *
+              static_cast<uint64_t>(a.shape(1)) +
+          static_cast<uint64_t>(a.strides()[2]) *
+              static_cast<uint64_t>(a.shape(2)) +
+          static_cast<uint64_t>(a.strides()[3]) *
+              static_cast<uint64_t>(a.shape(3));
+    };
+    if (strided_extent(q, 2) > kFlashMaxElements ||
+        strided_extent(k, 2) > kFlashMaxElements ||
+        strided_extent(v, 2) > kFlashMaxElements) {
+      omarchy::unsupported("attention flash prefill operand elements " + tag, out);
+    }
+    out.set_data(allocate_omarchy(out.nbytes()));
+    omarchy::ComputeParams params;
+    params.matrix_m = checked_u32(q_len, tag, out);
+    params.matrix_n = checked_u32(k_len, tag, out);
+    params.alpha = scale_;
+    // rhs_gap carries the GQA repeat count; dims carries the base q
+    // tile of each dispatch; all offsets are 0 for contiguous inputs
+    // (guarded above). q/k/v row strides support the H3 transpose
+    // view (qkv_proj reshape + transpose(0,2,1,3)): with the row
+    // stride equal to head_dim, the kernel reads rows contiguously
+    // within the transposed view even though the array's overall
+    // contiguous flag is false.
+    params.rhs_gap = checked_u32(repeats, tag, out);
+    params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+    params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+    params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+    params.output_offset = checked_item_offset(out, out.size(), tag, out);
+    params.q_rowstride = checked_u32(q.strides()[2], tag, out);
+    params.k_rowstride = checked_u32(k.strides()[2], tag, out);
+    params.v_rowstride = checked_u32(v.strides()[2], tag, out);
+    params.o_rowstride = checked_u32(out.strides()[2], tag, out);
+    params.q_headstride = checked_u32(q.strides()[1], tag, out);
+    params.k_headstride = checked_u32(k.strides()[1], tag, out);
+    params.v_headstride = checked_u32(v.strides()[1], tag, out);
+    params.q_batchstride = checked_u32(q.strides()[0], tag, out);
+    params.k_batchstride = checked_u32(k.strides()[0], tag, out);
+    params.v_batchstride = checked_u32(v.strides()[0], tag, out);
+    std::array<omarchy::ComputeBinding, 4> flash_bindings{
+        binding(q), binding(k), binding(v), binding(out)};
+    constexpr int kFlashRowsPerTile = 32;
+    const int q_tiles = (q_len + kFlashRowsPerTile - 1) / kFlashRowsPerTile;
+    // One q tile per dispatch: all heads ride the same dispatch, the
+    // firmware timer stays ~5-12 ms per dispatch at full shape.
+    for (int tile = 0; tile < q_tiles; ++tile) {
+      params.dims = checked_u32(tile, tag, out);
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaPrefillFlashBF16Hd128,
+          flash_bindings,
+          params,
+          1u,
+          static_cast<uint32_t>(heads),
+          static_cast<uint32_t>(batch));
+    }
+    return;
+  }
   // GQA regroup as pure stride views, so a non-contiguous cache
   // slice rides its own strides straight into the matmul;
   // reshape_in_eval would copy - it only views row-contiguous

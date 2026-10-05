@@ -352,6 +352,9 @@ omarchy_shader(sdpa_decode_native_bf16_hd128 shaders/sdpa_decode_native.comp -DB
 # (head, row); each row runs the single-query arm over its visible key
 # prefix, so every row is bit-identical to that row decoded alone.
 omarchy_shader(sdpa_decode_rows_bf16_hd128 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=128 -DSDPA_ROWS=1)
+# Attn128 long-L prefill: flash-style online-softmax bf16 SDPA
+# (shaders/sdpa_prefill_flash.comp); hd128 first (H3 joint attention).
+omarchy_shader(sdpa_prefill_flash_bf16_hd128 shaders/sdpa_prefill_flash.comp -DSDPA_HD=128)
 omarchy_shader(sdpa_decode_native_bf16_hd160 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=160)
 omarchy_shader(sdpa_decode_native_bf16_hd192 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=192)
 omarchy_shader(sdpa_decode_native_bf16_hd224 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=224)
