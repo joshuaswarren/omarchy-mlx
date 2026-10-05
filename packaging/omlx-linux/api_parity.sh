@@ -287,12 +287,15 @@ PY
 lines = open("a3_keepalive.sse").read().splitlines()
 ka = [i for i, l in enumerate(lines) if l.startswith(": keep-alive")]
 pings = [i for i, l in enumerate(lines) if l.startswith("event: ping")]
+keepdata = [i for i, l in enumerate(lines)
+            if l.startswith("data: ") and '"model":"keepalive"' in l.replace(" ", "")]
 data = [i for i, l in enumerate(lines) if l.startswith("data: ") and l != "data: [DONE]"]
 assert data, "no data chunks at all"
 last_data = data[-1]
-ka_before = [i for i in ka if i < last_data]
-assert ka_before or pings, f"no keep-alive comments/pings (lines={len(lines)})"
-print("PASS-DETAIL a3 keepalive: %d comments, %d pings before last data chunk" % (len(ka_before), len(pings)))
+before = [i for i in ka + pings + keepdata if i < last_data]
+assert before, f"no keep-alive frames in any wire form (comments={len(ka)} pings={len(pings)} keepdata={len(keepdata)})"
+print("PASS-DETAIL a3 keepalive: %d frames before last data chunk (comments=%d pings=%d noop-chunks=%d)"
+      % (len(before), len(ka), len(pings), len(keepdata)))
 PY
   [[ $? -eq 0 ]] && ok "A3 SSE keep-alive observed in long stream" || bad "A3 SSE keep-alive observed in long stream"
 

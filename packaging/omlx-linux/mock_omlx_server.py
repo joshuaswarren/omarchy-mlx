@@ -133,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             for w in ["Red,", " blue,", " yellow", " —", " the", " primary", " colors."]:
-                self.wfile.write(b": keep-alive\n\n")
+                self.wfile.write(sse_chunk(cid, "keepalive", {"role": "assistant", "content": ""}).encode())
                 self.wfile.write(sse_chunk(cid, b["model"], {"content": w}).encode())
                 self.wfile.flush()
                 time.sleep(0.05)
