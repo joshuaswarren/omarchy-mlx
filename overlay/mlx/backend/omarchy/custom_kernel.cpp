@@ -747,11 +747,29 @@ void resolve_kernel_templates(
       throw std::runtime_error("generated MSL kernel template parameter is invalid");
     }
     const auto name = trim(declaration_parts[index].substr(name_position + 1));
-    auto value = value_parts[index];
+    auto value = trim(value_parts[index]);
     if (declaration_parts[index].find("bool") != std::string::npos) {
       value = value == "0" ? "false" : "true";
     } else if (declaration_parts[index].find("typename") != std::string::npos) {
-      value = glsl_type(value);
+      // Metal promotes bfloat16_t LOCALS to fp32 for arithmetic; mirroring
+      // that means a typename instantiated as any bf16 representation
+      // substitutes float, not the uint16_t storage type. Buffer parameters
+      // keep uint16_t storage (buffer_declaration uses glsl_type separately)
+      // and narrow via _mlx_float_to_bf16 at stores. Without this, the
+      // Qwen3.5-2B GDN decode leg emits 'uint16_t sy = uint16_t(1) /
+      // (uint16_t(1) + exp(abs(conv)));' — integer math where Metal
+      // computes in fp32.
+      // Integer/bool template values (HK=16, L2=true) pass through as-is;
+      // only type names (alphabetic first char) map through glsl_type.
+      if (value == "bfloat16_t" || value == "bfloat16" || value == "uint16_t") {
+        value = "float";
+      } else if (value == "true" || value == "false" ||
+                 std::isdigit(static_cast<unsigned char>(value.front()))) {
+        // boolean and numeric template values pass through unchanged
+      } else if (!value.empty() &&
+                 std::isalpha(static_cast<unsigned char>(value.front()))) {
+        value = glsl_type(value);
+      }
     }
     replace_word(header, name, value);
     replace_word(body, name, value);
