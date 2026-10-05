@@ -310,6 +310,7 @@ TEST_CASE("coopmat flash bf16 prefill matches fp64 on ragged tiles") {
   set_flash_enabled(true);
   const int lengths[] = {16, 17, 31, 32, 33, 48, 53, 64, 200, 384};
   for (int length : lengths) {
+    set_flash_enabled(true);
     array q = make_bf16({1, 2, length, kHd}, 101 + length, stream);
     array k = make_bf16({1, 2, length, kHd}, 201 + length, stream);
     array v = make_bf16({1, 2, length, kHd}, 301 + length, stream);
@@ -343,6 +344,7 @@ TEST_CASE("coopmat flash bf16 prefill matches fp64 on ragged tiles") {
   array k_gqa = make_bf16({2, 2, 33, kHd}, 418, stream);
   array v_gqa = make_bf16({2, 2, 33, kHd}, 419, stream);
   const auto gqa_ref = fp64_reference(q_gqa, k_gqa, v_gqa, stream);
+  set_flash_enabled(true);
   set_coopmat_enabled(true);
   const auto gqa_coop = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
   const auto gqa_repeat_1 = flat(sdpa(q_gqa, k_gqa, v_gqa, stream), stream);
