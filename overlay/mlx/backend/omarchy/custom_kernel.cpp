@@ -789,6 +789,19 @@ Translation translate_msl(
   translate_c_style_casts(body);
   translate_device_pointer_aliases(body, parameters);
 
+  // MSL implicitly narrows uint to int in scalar declarations
+  // (`const int first = g * GROUP + thread_position_in_threadgroup.x;`);
+  // GLSL 460 rejects the implicit conversion. Wrap every const-int
+  // declaration's initializer in int(...), which is a no-op on int
+  // expressions and the same modulo-wrap as MSL's conversion on uint
+  // ones. (H3 _QUANTIZE line `const int first = ...x * PER;` and the
+  // kernel-battery cast smoke test both need this; found live on the
+  // M2 correctness ticket, 2026-10-05.)
+  body = std::regex_replace(
+      body,
+      std::regex(R"(\b(const\s+int\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
+      "$1int($2)$3");
+
   bool needs_bfloat = false;
 
   // _Pragma("clang loop unroll(full)") and friends are optimization hints
