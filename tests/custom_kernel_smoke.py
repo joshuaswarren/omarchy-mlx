@@ -490,8 +490,9 @@ class CustomKernelSmoke(unittest.TestCase):
         )
         values = mx.arange(1, 9, dtype=mx.float32)
         out = self.call(kernel, [values], values.shape, values.dtype)
-        expected = [float(x) * 2.0 if i + 2 < 8 else 0.0
-                    for i, x in enumerate(range(1, 9))]
+        expected = [float(v) * 2.0 if i + 2 < 8 else 0.0
+                    for i, v in enumerate(values.tolist())
+                    for v in [values.tolist()[i + 2] if i + 2 < 8 else 0.0]]
         self.assertEqual(out.tolist(), expected)
 
     def test_device_pointer_alias_offset_composition(self):
@@ -511,8 +512,9 @@ class CustomKernelSmoke(unittest.TestCase):
         )
         values = mx.arange(1, 9, dtype=mx.float32)
         out = self.call(kernel, [values], values.shape, values.dtype)
-        expected = [float(x) + 1.0 if i + 4 < 8 else 0.0
-                    for i, x in enumerate(range(1, 9))]
+        expected = [float(values.tolist()[i + 4]) + 1.0
+                    if i + 4 < 8 else 0.0
+                    for i in range(8)]
         self.assertEqual(out.tolist(), expected)
 
     def test_const_uint16_from_float_declaration(self):
