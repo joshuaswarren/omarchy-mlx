@@ -1361,12 +1361,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // until root-caused the token route plans WITHOUT epilogues and the
     // residual/bias adds ride their separate eager dispatches. The fold
     // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
-    const char* token_fold_env =
-        x.shape(-2) > 1 ? std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD")
-                        : nullptr;
-    const bool fold_ok =
-        x.shape(-2) == 1 ||
-        (token_fold_env != nullptr && std::strcmp(token_fold_env, "0") != 0);
     auto [it, inserted] = by_x.try_emplace(x.id());
     if (inserted) {
       x_order.push_back(x.id());
@@ -1385,6 +1379,16 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     if (x_rows > 1) {
       x_has_plan = false;
     }
+    // The multi-token Add epilogue fold has one deterministic divergence
+    // on the AGX subgroup column (k=896 n=512 tokens=16, one element);
+    // until root-caused the token route plans WITHOUT epilogues and the
+    // residual/bias adds ride their separate eager dispatches. The fold
+    // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
+    const char* token_fold_env =
+        x_rows > 1 ? std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") : nullptr;
+    const bool fold_ok =
+        x_rows == 1 ||
+        (token_fold_env != nullptr && std::strcmp(token_fold_env, "0") != 0);
     for (size_t start = 0; start < nodes.size();
          start += kQmmVecMultiWeights) {
       GemvGroup group;
