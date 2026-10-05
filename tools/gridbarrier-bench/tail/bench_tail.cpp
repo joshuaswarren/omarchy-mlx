@@ -265,8 +265,9 @@ static VkShaderModule build(const char* src, const char* defs) {
   unlink(spv.c_str());
   VkShaderModuleCreateInfo mi{};
   mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-  mi.codeSize = ss.str().size();
-  mi.pCode = (const uint32_t*)ss.str().data();
+  const std::string code_str = ss.str();
+  mi.codeSize = code_str.size();
+  mi.pCode = (const uint32_t*)code_str.data();
   VkShaderModule m;
   if (g_vk.CreateShaderModule(g_vk.dev, &mi, nullptr, &m) != VK_SUCCESS)
     die("CreateShaderModule");
@@ -439,6 +440,8 @@ int main() {
   db = mk((uint64_t)kOut * (kMid / 64) * 2);
 
   auto bind = [&](VkDescriptorSet set, uint32_t b, MB& m) {
+    // H293 deviation 2: skip bindings the fused layout does not declare (the original wrote 25-29, 32, 33, 38-40 = UB, driver SIGSEGV at -O2)
+    if (set == sets[S_FU] && std::find(bs_fused.begin(), bs_fused.end(), b) == bs_fused.end()) return;
     VkDescriptorBufferInfo bi{m.buf, 0, VK_WHOLE_SIZE};
     VkWriteDescriptorSet w{};
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -604,6 +607,7 @@ int main() {
     VkCommandBufferBeginInfo bi{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     g_vk.BeginCommandBuffer(cmd, &bi);
+    for (uint32_t r = 0; r < rounds; ++r) {
     g_vk.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_norm);
     g_vk.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         layout_norm, 0, 1, &sets[S_NORM], 0, nullptr);
@@ -625,6 +629,7 @@ int main() {
         sizeof(Params), &pd);
     g_vk.CmdDispatch(cmd, pd.count, 1, 1);
     full_barrier();
+    }
     g_vk.EndCommandBuffer(cmd);
     return submit();
   };
