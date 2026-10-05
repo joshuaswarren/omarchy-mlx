@@ -77,20 +77,28 @@ the boundary shape and the 65537 chunk-fit shape.
 
 ## Remaining for A25d DONE
 
-1. Root-cause the boundary NaN, drop the env gate, extend the parity grid
-   to the boundary.
-2. M2 (T6021/G13C) wheel build + op-level parity spot + the decode ledger:
+1. M2 (T6021/G13C) op-level parity receipts + the decode ledger:
    tok/s + peak transient at kv 64/512/4096/8192, family ON vs OFF
    (MLX_OMARCHY_SDPA_DECODE_NATIVE=0), Qwen3.5-9B-MLX-4bit bench_decode
    per-context; then the window-table re-measure this data implies
    (the {256,12,7168} upper bound is exactly what the two-pass replaces).
-3. Teacher-forced top-1 / free-run gap / PPL numerics-gate per
+2. Teacher-forced top-1 / free-run gap / PPL numerics-gate per
    docs/numerics-gate.md for the route as deployed.
+
+## M2 artifacts (T6021, built 2026-10-05)
+
+- Wheel: mlx_omarchy-0.32.4.dev202610050044+famdecodefast.74538d14b
+  (sha256 7d0e60f1a4fbfc160965f2e234743dc83336eeefcbcb55db03a07bd8ba978ff7),
+  built on jw14m2 via Main's incremental recipe in /var/tmp/FamDecodeFast-wheel,
+  installed with `python -m pip` into the private venv /var/tmp/fdf-venv
+  (venv libmlx.so sha256 2e1c2a3b870cf3e64bd8214e12b5200120c163102b0feff8c1664934f57163c3).
+- Op-level correctness ticket: gpu-turn FIFO (log /var/tmp/fdf-ticket.log);
+  timing ledger queued for the post-03:00Z window.
 
 ## Provenance
 
-- Repo: joshuaswarren/omarchy-mlx, branch agent/famdecodefast
-  (2437b4f91 -> 2e3dea274), base origin/main 14bf031a1.
+- Repo: joshuaswarren/omarchy-mlx, branch agent/famdecodefast (pushed),
+  head 74538d14b, base origin/main 14bf031a1.
 - oMLX reference read-only: ~/src/omlx @ 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40.
 - Dev box: x86 PVE guest, kernel 6.17.2-1-pve, glslang 12.0.0 + glslang
   16.6 (glslc path), lavapipe ICD via staged prefix.
