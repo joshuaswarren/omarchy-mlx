@@ -1356,6 +1356,17 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     if (x.shape(-2) > 1 && !gemv_token_multi_enabled()) {
       continue;
     }
+    // The multi-token Add epilogue fold has one deterministic divergence
+    // on the AGX subgroup column (k=896 n=512 tokens=16, one element);
+    // until root-caused the token route plans WITHOUT epilogues and the
+    // residual/bias adds ride their separate eager dispatches. The fold
+    // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
+    const char* token_fold_env =
+        x.shape(-2) > 1 ? std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD")
+                        : nullptr;
+    const bool fold_ok =
+        x.shape(-2) == 1 ||
+        (token_fold_env != nullptr && std::strcmp(token_fold_env, "0") != 0);
     auto [it, inserted] = by_x.try_emplace(x.id());
     if (inserted) {
       x_order.push_back(x.id());
@@ -1385,7 +1396,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         if (auto consumer = single_consumer.find(node.id());
             consumer != single_consumer.end()) {
           const array* add = consumer->second;
-          if (is_op(add, typeid(Add)) && add->inputs().size() == 2 &&
+          if (fold_ok && is_op(add, typeid(Add)) &&
+              add->inputs().size() == 2 &&
               add->dtype() == node.dtype() &&
               add->size() ==
                   static_cast<size_t>(x_rows) * node.size() &&
