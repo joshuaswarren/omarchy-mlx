@@ -418,7 +418,26 @@ void resolve_kernel_templates(
 }
 
 void translate_header(std::string& header) {
+  // Any #include has no GLSL meaning: the OMARCHY ICD compiles the shader
+  // standalone, and a kernel that actually calls the included APIs fails
+  // later on its own tokens (metal_stdlib helpers are mapped above; MPP
+  // tensor ops surface as matmul2d_descriptor / tensor<> in the body and
+  // fail GLSL compilation by name). Stripping all includes keeps pure
+  // marker includes -- e.g. the H3 _QUANTIZE kernel's
+  // MetalPerformancePrimitives include, which its body never uses --
+  // from blocking an otherwise translatable kernel.
+  header = std::regex_replace(
+      header, std::regex(R"(#include\s*[<\"][^>\"]*[>\"])"), "");
   replace_all(header, "#include <metal_stdlib>", "");
+  // Namespace-qualified using-directives (using namespace mpp::tensor_ops;)
+  // have no GLSL equivalent; strip the whole directive. Unqualified using
+  // declarations survive and fail later by name if they reference
+  // Metal-only symbols.
+  header = std::regex_replace(
+      header,
+      std::regex(
+          R"(using\s+namespace\s+[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*\s*;)"),
+      "");
   replace_all(header, "using namespace metal;", "");
   replace_all(header, "metal::precise::", "");
   replace_all(header, "metal::fast::", "");
