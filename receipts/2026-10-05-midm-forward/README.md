@@ -467,3 +467,31 @@ token count.
 
 The composed M16 coopmat is the correct fallback. Lever C (M16->M32
 tile) and lever D (cast fusion) are the evidence-backed paths forward.
+
+
+## SPEED TEST: token route SLOWER than composed (final verdict)
+
+| q_len | route OFF (composed M16) | route ON (token4/8) | delta |
+|---|---|---|---|
+| q1 | 19.6 ms | 20.3 ms | +4% |
+| q4 | 132.2 ms | 132.2 ms | 0% |
+| q8 | 128.9 ms | 143.7 ms | +11% SLOWER |
+| q16 | 132.9 ms | 148.5 ms | +12% SLOWER |
+
+ROOT CAUSE: the two-pass token8 reads weight bytes TWICE (one full
+weight-matrix pass per 8-row half), while the composed coopmat reads
+them ONCE and reuses the shared-memory weight tile across all 16 rows.
+The weight-traffic doubling outweighs dispatch-count savings. This
+explains A7's dispatch-count reduction not helping: the composed route
+is more GPU-efficient because of better weight-tile reuse.
+
+FINAL VERDICT: the token route is numerically SOUND (same fp64
+accuracy) but SLOWER than the composed coopmat for q_len >= 8. It
+stays OFF permanently for the q16 verify position. The correct lever
+for the 106 ms composed M16 qmm (21 GB/s) is inside the coopmat
+kernel: TILE_M=32 for q16, cast fusion, and dequant-in-shared
+optimization.
+
+The fp64 analysis and the speed test together close the multi-token
+GEMV investigation: numerically sound, performance-dominated by the
+composed route, permanently gated OFF.
