@@ -839,18 +839,17 @@ Translation translate_msl(
   // Compound conditions (comparisons, && / ||, !) do not match this
   // pattern and need no wrap.
   std::string condition_helpers;
-  body = std::regex_replace(
-      body,
-      std::regex(
-          R"(\b(if|while)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*(\s*\[[^\[\]]*\])?(\(\))?)\s*\))"),
-      [&condition_helpers](const std::smatch& m) {
-        condition_helpers =
-            "bool _mlx_nonzero(bool v) { return v; }\n"
-            "bool _mlx_nonzero(int v) { return v != 0; }\n"
-            "bool _mlx_nonzero(uint v) { return v != 0u; }\n"
-            "bool _mlx_nonzero(float v) { return v != 0.0f; }\n";
-        return m[1].str() + " (_mlx_nonzero(" + m[2].str() + "))";
-      });
+  static const std::regex integer_condition(
+      R"(\b(if|while)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*(\s*\[[^\[\]]*\])?(\(\))?)\s*\))");
+  if (std::regex_search(body, integer_condition)) {
+    condition_helpers =
+        "bool _mlx_nonzero(bool v) { return v; }\n"
+        "bool _mlx_nonzero(int v) { return v != 0; }\n"
+        "bool _mlx_nonzero(uint v) { return v != 0u; }\n"
+        "bool _mlx_nonzero(float v) { return v != 0.0f; }\n";
+    body = std::regex_replace(body, integer_condition,
+                              "$1 (_mlx_nonzero($2))");
+  }
 
   bool needs_bfloat = false;
 
