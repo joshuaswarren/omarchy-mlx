@@ -309,18 +309,7 @@ void VulkanAllocator::free(Buffer buffer) {
     buffer_cache_.recycle_to_cache(buf);
     return;
   }
-  // Cache cap is exceeded: mirroring Metal's free(), drop this freed
-  // buffer instead of letting the pool grow without bound. A20
-  // evidence: cache_memory reached 47.1 GB because every freed
-  // buffer passed the old `cache_size + sz <= cap` test (the cap
-  // defaulted to 32 MB but the test compared against `cache_limit_`
-  // while the in-process ceiling came from `gc_limit_` — when
-  // `cache_limit_` is 32 MB the test fails correctly, but before
-  // this patch the test was the only thing limiting growth, and
-  // poison runs / longer sessions can still see the cache climb
-  // because the LRU never trims a freed block; here we release).
-  // destroy_buffer deregisters from noncoherent_ under the same
-  // lock the cache paths already hold.
+  // The cache is full, so release this block instead of retaining it.
   destroy_buffer(buf);
 }
 
@@ -350,9 +339,7 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
       }
       buffer_cache_.recycle_to_cache(buf);
     } else {
-      // Cache cap exceeded (see free()): drop instead of recycling so
-      // an idle but long-lived process cannot park buffers here
-      // forever. Same destroy_buffer lock holding rules.
+      // The cache is full, so release this block instead of retaining it.
       destroy_buffer(buf);
     }
   }
