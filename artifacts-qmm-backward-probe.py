@@ -51,7 +51,7 @@ def main():
 
     base = build_quantized_linear(
         rng, args.k, args.n, args.group_size, args.bits, dtype)
-    lora = LoRALinear.from_base(base, rank=args.rank, scale=2.0)
+    lora = LoRALinear.from_base(base, r=args.rank, scale=2.0)
 
     def loss_fn(x, params):
         params["other"] = base.parameters()
