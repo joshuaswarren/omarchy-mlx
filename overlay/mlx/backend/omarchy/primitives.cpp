@@ -11544,6 +11544,10 @@ void GatedDeltaUpdate::eval_gpu(
   static const bool gdn_batch_env =
       std::getenv("MLX_OMARCHY_GDN_BATCH") == nullptr ||
       omarchy::env_flag("MLX_OMARCHY_GDN_BATCH");
+  // Barrier-diet-2 variant (GdnPrefill2): staging/sync structure only,
+  // per-element arithmetic identical to the batch kernel. Opt-in A/B lever
+  // (MLX_OMARCHY_GDN_BATCH2=1) until the cross-host gates pass.
+  static const bool gdn_batch2_env = omarchy::env_flag("MLX_OMARCHY_GDN_BATCH2");
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
@@ -11587,8 +11591,9 @@ void GatedDeltaUpdate::eval_gpu(
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
     encoder.dispatch_compute(
-        gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
-                  : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
+        gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
+        : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
+                    : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
         bindings,
         params,
         static_cast<uint32_t>(Hv),

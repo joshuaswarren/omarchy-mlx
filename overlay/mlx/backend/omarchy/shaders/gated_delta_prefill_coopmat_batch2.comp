@@ -1,0 +1,430 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Barrier-diet-2 variant of gated_delta_prefill_coopmat_batch.comp: identical
+// per-element arithmetic in identical order — only synchronization and
+// staging structure changes. Three restructures, bit-exact by construction:
+//
+// 1. gamma/beta ride subgroup shuffles of the SAME subgroupInclusiveAdd
+//    prefix the shipped kernel stores to gamma_s/beta_s; the per-chunk
+//    workgroup barrier and both arrays are gone.
+// 2. Middle-chain barrier diet: shared-memory hazards are ordered by the
+//    next chain barrier where provable (the N loads by the a1-store
+//    barrier, the msum load by the tinv/v_s barrier, the delta/tinv loads
+//    by the out-store barrier), so three workgroup barriers per chunk go.
+// 3. The msum round trip rides rt_a (free between the N loads and the
+//    qkt store), so the N^4 load and the msum store no longer share an
+//    array and their barrier goes.
+//
+// Everything else — chunk algebra, decay folding, Neumann inverse, y/state
+// writes, gates, contract — matches the batch kernel; read its header for
+// the math and the numeric contract.
+
+#version 460
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint w[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint w[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint w[]; } v_buf;
+layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+layout(set = 0, binding = 5, std430) readonly buffer SIn    { float    v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint w[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer         SOut { float    v[]; } s_out;
+layout(set = 0, binding = 8, std430) readonly buffer MBuf  { uint8_t  v[]; } m_buf;
+layout(set = 0, binding = 9, std430) readonly buffer GBufF { float     v[]; } g_buf_f;
+layout(set = 0, binding = 10, std430) buffer         Snap   { float    v[]; } snap;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;   // Dk (dispatch gate: 128)
+  uint matrix_n;   // Dv (dispatch gate: 128)
+  uint matrix_k;   // Hv
+  uint flags;      // bit2: g is f32
+  float alpha;
+  float beta_f;
+  uint dims;       // T
+  uint shape[4];   // [0]=g offset, [1]=h0 offset, [2]=hf offset
+  uint in_strides[4];
+  uint out_strides[4];
+  uint chunk;
+  uint chunks;
+} params;
+
+const uint C = 8u;       // Metal non-NAX chunk length
+const uint DK = 128u;
+const uint KSTEPS = DK / 8u;   // 16
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+float bf16_word_lo(uint word) {
+  return uintBitsToFloat((word & 0xffffu) << 16u);
+}
+
+float bf16_word_hi(uint word) {
+  return uintBitsToFloat(word & 0xffff0000u);
+}
+
+uint bf16_pack(float lo, float hi) {
+  uint lb = floatBitsToUint(lo);
+  uint hb = floatBitsToUint(hi);
+  if ((lb & 0x7fff0000u) == 0x7f800000u) lb = (lb & 0xffff0000u) | 0x40u;
+  else lb = (lb + 0x7fffu + ((lb >> 16) & 1u)) >> 16;
+  if ((hb & 0x7fff0000u) == 0x7f800000u) hb = (hb & 0xffff0000u) | 0x40u;
+  else hb = (hb + 0x7fffu + ((hb >> 16) & 1u)) >> 16;
+  return (hb << 16) | (lb & 0xffffu);
+}
+
+// Shared tiles. s_state: the simdgroup's sixteen 8x8 state slices.
+// s_k/s_kg/s_q/s_qg: double-buffered chunk-step staging ([parity][sg][64]).
+// kgc_all: four staged K slices per state-update wave. Byte budget
+// 32000 <= 32 KiB (dispatch gate kGdnCoopmatBatchSharedBytes).
+shared float s_state[4][KSTEPS * 64];
+shared float s_k[2][4][64];
+shared float s_kg[2][4][64];
+shared float s_q[2][4][64];
+shared float s_qg[2][4][64];
+shared float kgc_all[4][4 * 64];
+shared float v_s[4][64];
+shared float rt_a[4][64];               // round trip A (kkt, qkt, du, out)
+shared float rt_b[4][64];               // round trip B (m2, neumann, tinvv, ws, delta, kd)
+
+// Per-lane constants the staging helper reads (set once in main).
+uint g_sg;
+uint g_e0;
+uint g_r0;
+uint g_c0;
+uint g_koff;
+uint g_qoff;
+uint g_hv;
+uint g_head;
+uint g_valid;
+float g_bg_r0;
+float g_gam_r0;
+
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> mat_a;
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> mat_b;
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> mat_a2;
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> mat_b2;
+coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> acc;
+
+// Stage chunk-step kk's k/q tiles (raw and row-scaled) into parity p.
+// The k_t0/dec pair rides globals; callers barrier before loading from p.
+void stage_kq(uint t0v, uint kk, uint p) {
+  uint kbase = g_koff + (t0v + g_r0) * g_hv * DK + g_head * DK + kk * 8u + g_c0;
+  uint qbase = g_qoff + (t0v + g_r0) * g_hv * DK + g_head * DK + kk * 8u + g_c0;
+  float kv0 = 0.0;
+  float kv1 = 0.0;
+  float qv0 = 0.0;
+  float qv1 = 0.0;
+  if (g_r0 < g_valid) {
+    uint kw = k_buf.w[kbase >> 1u];
+    kv0 = bf16_word_lo(kw);
+    kv1 = bf16_word_hi(kw);
+    uint qw = q_buf.w[qbase >> 1u];
+    qv0 = bf16_word_lo(qw);
+    qv1 = bf16_word_hi(qw);
+  }
+  s_k[p][g_sg][g_e0] = kv0;
+  s_k[p][g_sg][g_e0 + 1u] = kv1;
+  s_kg[p][g_sg][g_e0] = kv0 * g_bg_r0;
+  s_kg[p][g_sg][g_e0 + 1u] = kv1 * g_bg_r0;
+  s_q[p][g_sg][g_e0] = qv0;
+  s_q[p][g_sg][g_e0 + 1u] = qv1;
+  s_qg[p][g_sg][g_e0] = qv0 * g_gam_r0;
+  s_qg[p][g_sg][g_e0 + 1u] = qv1 * g_gam_r0;
+}
+
+void main() {
+  const uint sg = gl_SubgroupID;
+  const uint lane = gl_SubgroupInvocationID;
+  const uint head = gl_WorkGroupID.x;
+  const uint dv0 = (gl_WorkGroupID.y * 4u + sg) * 8u;
+  const uint T = params.dims;
+  const uint hv = params.matrix_k;
+  const uint e0 = lane * 2u;
+  const uint r0 = e0 / 8u;
+  const uint c0 = e0 % 8u;   // the pair (e0, e0+1) shares row r0, cols c0, c0+1
+
+  g_sg = sg;
+  g_e0 = e0;
+  g_r0 = r0;
+  g_c0 = c0;
+  g_koff = params.rhs_offset;
+  g_qoff = params.lhs_offset;
+  g_hv = hv;
+  g_head = head;
+
+  const uint q_off = params.lhs_offset;
+  const uint k_off = params.rhs_offset;
+  const uint v_off = params.aux_size;
+  const uint b_off = params.aux_offset;
+  const uint g_off = params.shape[0];
+  const uint h0_off = params.shape[1];
+  const uint hf_off = params.shape[2];
+  const uint y_off = params.output_offset;
+  const bool g_f32 = (params.flags & 4u) != 0u;
+
+  // Identity tile (constant across the kernel).
+  rt_a[sg][e0] = (r0 == c0) ? 1.0 : 0.0;
+  rt_a[sg][e0 + 1u] = (r0 == c0 + 1u) ? 1.0 : 0.0;
+  barrier();
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> eye;
+  coopMatLoad(eye, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> zero =
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+
+  // Restore the state slice: tile[kk][r][c] = h0[(head*Dv + dv0 + c)*Dk + kk*8 + r].
+  // The lane's element pair (r0, c0), (r0, c0+1) sits Dk apart in memory.
+  for (uint kk = 0u; kk < KSTEPS; ++kk) {
+    uint idx = h0_off + (head * params.matrix_n + dv0 + c0) * DK + kk * 8u + r0;
+    s_state[sg][kk * 64u + e0] = s_in.v[idx];
+    s_state[sg][kk * 64u + e0 + 1u] = s_in.v[idx + DK];
+  }
+
+  for (uint t0 = 0u; t0 < T; t0 += C) {
+    const uint valid = min(C, T - t0);
+    g_valid = valid;
+
+    // gamma_log over the chunk (lanes >= valid contribute 0, so the
+    // prefix stays at the last valid token — the partial-chunk decay
+    // target, matching the Metal kernel). FLT_MIN floor, not 1e-6: real
+    // gates reach 5.9e-11 (mis-stated ~1.7e4 by a 1e-6 floor); the
+    // smaller floor keeps every log-difference <= 0 and finite, and
+    // g = 0 decays fully instead of NaN-ing on inf - inf.
+    float gv = 0.0;
+    if (lane < valid) {
+      float graw = g_f32
+          ? g_buf_f.v[g_off + (t0 + lane) * hv + head]
+          : bf16_load(g_buf.v[g_off + (t0 + lane) * hv + head]);
+      gv = log(max(graw, 1.17549435e-38f));
+    }
+    // Same subgroupInclusiveAdd prefix the shipped kernel stores to
+    // gamma_s; shuffles hand every lane the elements it would have read.
+    const float prefix = subgroupInclusiveAdd(gv);
+    const float beta_local = lane < valid
+        ? bf16_load(b_buf.v[b_off + (t0 + lane) * hv + head])
+        : 0.0f;
+
+    const float gamC = exp(subgroupShuffle(prefix, C - 1u));
+    const float beta_r0 = subgroupShuffle(beta_local, r0);
+    const float gam_r0 = exp(subgroupShuffle(prefix, r0));
+    g_bg_r0 = beta_r0 * gam_r0;
+    g_gam_r0 = gam_r0;
+    // Decay from token r0 to the chunk end, log-domain difference.
+    const float dec_r0 = r0 < valid
+        ? exp(subgroupShuffle(prefix, C - 1u) - subgroupShuffle(prefix, r0))
+        : 0.0;
+
+    // Loop 1: accumulate KK^T, Q.K^T, (gamma beta K).S and (gamma Q).S
+    // with double-buffered staging — chunk step kk+1 is staged into the
+    // shadow parity while step kk's matmuls consume the live parity.
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kkt =
+        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> qkt =
+        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> m2 =
+        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> tmp =
+        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+    stage_kq(t0, 0u, 0u);
+    barrier();
+    uint par = 0u;
+    for (uint kk = 0u; kk < KSTEPS; ++kk) {
+      if (kk + 1u < KSTEPS) {
+        stage_kq(t0, kk + 1u, par ^ 1u);
+      }
+      coopMatLoad(mat_b, s_k[par][sg], 0, 8, gl_CooperativeMatrixLayoutColumnMajor);
+      coopMatLoad(mat_a, s_k[par][sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+      kkt = coopMatMulAdd(mat_a, mat_b, kkt);
+      coopMatLoad(mat_a, s_q[par][sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+      qkt = coopMatMulAdd(mat_a, mat_b, qkt);
+      coopMatLoad(mat_a, s_kg[par][sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatLoad(mat_b2, s_state[sg], kk * 64u, 8, gl_CooperativeMatrixLayoutRowMajor);
+      m2 = coopMatMulAdd(mat_a, mat_b2, m2);
+      coopMatLoad(mat_a, s_qg[par][sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+      tmp = coopMatMulAdd(mat_a, mat_b2, tmp);
+      barrier();
+      par ^= 1u;
+    }
+
+    // N = strict_lower(diag(beta) . KK^T) * Gamma: one shared round trip.
+    coopMatStore(kkt, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    float n0 = rt_a[sg][e0];
+    float n1 = rt_a[sg][e0 + 1u];
+    rt_a[sg][e0] = (c0 < r0)
+        ? n0 * beta_r0 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0)) : 0.0;
+    rt_a[sg][e0 + 1u] = (c0 + 1u < r0)
+        ? n1 * beta_r0 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0 + 1u)) : 0.0;
+    barrier();
+    coopMatLoad(mat_a, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(mat_b, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    // No barrier: rt_a is not written again until the qkt store, which
+    // every path below reaches only after intervening barriers.
+
+    // Tinv = (I - N)(I + N^2 + N^4 + N^6), the exact (I+N)^-1 for
+    // strictly-lower-triangular N (N^8 = 0 at C = 8).
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> a1 =
+        coopMatMulAdd(mat_a, mat_b, zero);
+    coopMatStore(a1, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopMatLoad(mat_a2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(mat_b2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> a2 =
+        coopMatMulAdd(mat_a2, mat_b2, zero);
+    coopMatStore(a2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    // N^6 = N^2 . N^4: mat_a2 keeps N^2, only the B operand takes N^4.
+    // msum rides rt_a (free between the N loads and the qkt store), so
+    // this load and the msum store below do not share an array.
+    coopMatLoad(mat_b2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> a3 =
+        coopMatMulAdd(mat_a2, mat_b2, zero);
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> msum =
+        eye + a1 + a2 + a3;
+    coopMatStore(msum, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopMatLoad(mat_b, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    // No barrier: the tinv store below is to rt_b, and the msum load is
+    // ordered before the qkt store by the tinv/v_s barrier chain.
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> tinv =
+        msum - coopMatMulAdd(mat_a, mat_b, zero);
+    // Tinv feeds operand roles twice (U and WS chains): one round trip.
+    coopMatStore(tinv, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopMatLoad(mat_a2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+
+    // diag(beta) V rows, then delta = Tinv . (diag(beta) V - M2) with
+    // M2 = (diag(gamma beta) K) . S: one shared round trip for the
+    // difference (operand role). The v_s staging rides the same barrier
+    // that orders the tinv load against the rt_b store below.
+    uint vbase = v_off + (t0 + r0) * hv * params.matrix_n + head * params.matrix_n + dv0 + c0;
+    float vv0 = 0.0;
+    float vv1 = 0.0;
+    if (r0 < valid) {
+      uint vw = v_buf.w[vbase >> 1u];
+      vv0 = bf16_word_lo(vw);
+      vv1 = bf16_word_hi(vw);
+    }
+    v_s[sg][e0] = vv0 * beta_r0;
+    v_s[sg][e0 + 1u] = vv1 * beta_r0;
+    barrier();
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> bv;
+    coopMatLoad(bv, v_s[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(bv - m2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopMatLoad(mat_b, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> delta =
+        coopMatMulAdd(mat_a2, mat_b, zero);
+
+    // QKt tri: tril(Q.K^T) scaled elementwise by exp(gamma_log_r - gamma_log_c):
+    // one shared round trip. The column factor differs per element (c0 vs
+    // c0+1), so read gamma_log per column. No barrier before the qkt
+    // store: every prior rt_a reader was ordered off by an intervening
+    // barrier, and rt_b's pending loads by the barrier above.
+    coopMatStore(qkt, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    float qe0 = rt_a[sg][e0];
+    float qe1 = rt_a[sg][e0 + 1u];
+    rt_a[sg][e0] = (c0 <= r0)
+        ? qe0 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0)) : 0.0;
+    rt_a[sg][e0 + 1u] = (c0 + 1u <= r0)
+        ? qe1 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0 + 1u)) : 0.0;
+    barrier();
+    coopMatLoad(mat_a, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    // delta feeds the out and state-update matmuls: operand role. The
+    // store rides the barrier above (rt_b's pending readers were ordered
+    // off by it) and orders the load below via the next barrier.
+    coopMatStore(delta, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    coopMatLoad(mat_b2, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    // No barrier: the out MMA reads registers, and the next rt_b writer
+    // (the state-update kd store) is separated by the out/y barriers.
+
+    // y rows: out = QKt_tri . delta + (gamma Q).S
+    coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> out_t =
+        coopMatMulAdd(mat_a, mat_b2, tmp);
+    coopMatStore(out_t, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    if (r0 < valid) {
+      y_buf.w[(((t0 + r0) * hv + head) * params.matrix_n + dv0 + c0) >> 1u] =
+          bf16_pack(rt_a[sg][e0], rt_a[sg][e0 + 1u]);
+    }
+    barrier();
+
+    // State update in 4-slice waves: stage four K slices (decayed by the
+    // chunk-end decay), then per slice MMA -> shared store -> subgroup
+    // barrier -> FMA, where the FMA reads only the lane's own
+    // store-mapped elements (the e0 = lane*2 round-trip convention this
+    // kernel's staging already relies on), so the 48 per-step barriers
+    // become 4 plus one subgroup barrier per slice.
+    for (uint wave = 0u; wave < KSTEPS / 4u; ++wave) {
+      for (uint j = 0u; j < 4u; ++j) {
+        uint kk = wave * 4u + j;
+        uint kbase = k_off + (t0 + r0) * hv * DK + head * DK + kk * 8u + c0;
+        float kv0 = 0.0;
+        float kv1 = 0.0;
+        if (r0 < valid) {
+          uint kw = k_buf.w[kbase >> 1u];
+          kv0 = bf16_word_lo(kw);
+          kv1 = bf16_word_hi(kw);
+        }
+        kgc_all[sg][j * 64u + e0] = kv0 * dec_r0;
+        kgc_all[sg][j * 64u + e0 + 1u] = kv1 * dec_r0;
+      }
+      barrier();
+      for (uint j = 0u; j < 4u; ++j) {
+        uint kk = wave * 4u + j;
+        coopMatLoad(mat_a, kgc_all[sg], j * 64u, 8, gl_CooperativeMatrixLayoutColumnMajor);
+        coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kd =
+            coopMatMulAdd(mat_a, mat_b2, zero);
+        coopMatStore(kd, rt_b[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+        // The store's lane-to-element mapping is implementation-defined,
+        // so the FMA below can read elements another lane just stored:
+        // order the subgroup's shared accesses explicitly.
+        subgroupBarrier();
+        s_state[sg][kk * 64u + e0] =
+            s_state[sg][kk * 64u + e0] * gamC + rt_b[sg][e0];
+        s_state[sg][kk * 64u + e0 + 1u] =
+            s_state[sg][kk * 64u + e0 + 1u] * gamC + rt_b[sg][e0 + 1u];
+      }
+      // Close the wave: without this, a fast lane could reach the next
+      // wave's kgc_all staging writes while a sibling lane's coopMatLoad
+      // reads of the previous wave are still pending.
+      subgroupBarrier();
+    }
+  }
+
+  // Terminal state slice: hf[(head*Dv + dv0 + c)*Dk + kk*8 + r]; the
+  // lane's element pair sits Dk apart (dv stride).
+  for (uint kk = 0u; kk < KSTEPS; ++kk) {
+    uint idx = hf_off + (head * params.matrix_n + dv0 + c0) * DK + kk * 8u + r0;
+    s_out.v[idx] = s_state[sg][kk * 64u + e0];
+    s_out.v[idx + DK] = s_state[sg][kk * 64u + e0 + 1u];
+  }
+}
