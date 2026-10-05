@@ -183,6 +183,11 @@ void translate_types(std::string& code) {
       {"int2", "ivec2"},
       {"int32_t", "int"},
       {"uint32_t", "uint"},
+      // GLSL has no 16-bit integer scalars; MSL short/ushort hold small
+      // integers in these kernels (tile indices, e.g. TensorFold _LINEAR's
+      // `short erow[CAP]`), so the int-range mapping is value-exact.
+      {"short", "int"},
+      {"ushort", "uint"},
       {"half", "float16_t"},
   };
   for (const auto& [from, to] : replacements) {
@@ -806,6 +811,16 @@ Translation translate_msl(
       std::regex(R"(\b(const\s+int\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
       "$1int($2)$3");
 
+  // MSL allows any integer expression as a condition (`if (flag)`); GLSL
+  // requires a bool. Wrap the narrow forms — a bare identifier, an indexed
+  // element, or a zero-argument call — in (!= 0). Compound conditions
+  // (comparisons, && / ||, !) do not match this pattern and need no wrap.
+  body = std::regex_replace(
+      body,
+      std::regex(
+          R"(\b(if|while)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*(\s*\[[^\[\]]*\])?(\(\))?)\s*\))"),
+      "$1 (($2) != 0)");
+
   bool needs_bfloat = false;
 
   // _Pragma("clang loop unroll(full)") and friends are optimization hints
@@ -982,7 +997,7 @@ Translation translate_msl(
          << "#extension GL_KHR_shader_subgroup_arithmetic : require\n"
          << "#extension GL_KHR_shader_subgroup_shuffle : require\n";
   }
-  glsl << "#define __FAST_MATH__ " << (compile_mode == 2 ? 1 : 0) << "\n";
+  glsl << "#define MLX_FAST_MATH " << (compile_mode == 2 ? 1 : 0) << "\n";
   glsl << "layout(local_size_x=" << local_x << ", local_size_y=" << local_y
        << ", local_size_z=" << local_z << ") in;\n";
   glsl << declarations << shared_declarations;

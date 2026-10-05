@@ -515,6 +515,27 @@ class CustomKernelSmoke(unittest.TestCase):
                     for i, x in enumerate(range(1, 9))]
         self.assertEqual(out.tolist(), expected)
 
+    def test_ushort_type_and_integer_condition(self):
+        """MSL `ushort` maps to GLSL `uint` (GLSL has no 16-bit scalars;
+        the values are small integers), and a bare integer condition
+        `if (t)` wraps to `if ((t) != 0)` because GLSL requires bool.
+        Together they are the construct pair from the Qwen3.5-2B
+        repro (OmlxLinux, M2, 2026-10-05)."""
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_ushort_and_int_condition",
+            input_names=["values"],
+            output_names=["out"],
+            source=(
+                "ushort t = 3u;\n"
+                "uint i = thread_position_in_grid.x;\n"
+                "if (t) out[i] = values[i] + float(t);\n"
+                "else out[i] = values[i];\n"
+            ),
+        )
+        values = mx.arange(1, 9, dtype=mx.float32)
+        out = self.call(kernel, [values], values.shape, values.dtype)
+        self.assertEqual(out.tolist(), [float(x) + 3.0 for x in range(1, 9)])
+
     def test_device_pointer_alias_of_vector_type_is_named_refusal(self):
         """Vector-pointee aliases (`float4* p = ...`) change the indexing
         granularity (one index = four elements), so the rewrite refuses
