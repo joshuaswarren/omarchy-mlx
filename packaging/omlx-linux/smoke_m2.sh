@@ -8,7 +8,7 @@ ts() { date -u +%H:%M:%S.%3NZ; }
 
 VENV=/tmp/omlx-home/.venvs/omlx
 PORT=8900
-MODEL=mlx-community/Qwen3.5-2B-MLX-4bit
+MODEL=mlx-community--Qwen3.5-2B-MLX-4bit
 BASE=http://127.0.0.1:$PORT
 export HOME=/tmp/omlx-home
 # Reuse the pre-cached weights from the real user cache; the throwaway
@@ -91,7 +91,7 @@ P_SYS = "You are a careful assistant. Answer with a numbered list of exactly fiv
 P_USR = "Describe the water cycle."
 def body(prompt_override=None):
     msgs = [{"role":"system","content":P_SYS},{"role":"user","content":prompt_override or P_USR}]
-    return {"model":"mlx-community/Qwen3.5-2B-MLX-4bit","messages":msgs,"max_tokens":96,"temperature":0}
+    return {"model":"mlx-community--Qwen3.5-2B-MLX-4bit","messages":msgs,"max_tokens":96,"temperature":0}
 open("req_digest.json","w").write(json.dumps(body()))
 open("req_b1.json","w").write(json.dumps(body("Name three primary colors.")))
 open("req_b2.json","w").write(json.dumps(body("What is the capital of France?")))
@@ -137,8 +137,8 @@ if (( ELAPSED < 14 )); then
   python3 - <<'PY'
 import json
 long_ctx = ("The following reference passage is provided for context.\n\n" + ("Water evaporates, condenses, and precipitates in a closed loop. " * 40)) + "\n\nQuestion: "
-open("req_pfx1.json","w").write(json.dumps({"model":"mlx-community/Qwen3.5-2B-MLX-4bit","stream":True,"messages":[{"role":"user","content":long_ctx+"Summarize the passage in one sentence."}],"max_tokens":48,"temperature":0}))
-open("req_pfx2.json","w").write(json.dumps({"model":"mlx-community/Qwen3.5-2B-MLX-4bit","stream":True,"messages":[{"role":"user","content":long_ctx+"List the three stages mentioned."}],"max_tokens":48,"temperature":0}))
+open("req_pfx1.json","w").write(json.dumps({"model":"mlx-community--Qwen3.5-2B-MLX-4bit","stream":True,"messages":[{"role":"user","content":long_ctx+"Summarize the passage in one sentence."}],"max_tokens":48,"temperature":0}))
+open("req_pfx2.json","w").write(json.dumps({"model":"mlx-community--Qwen3.5-2B-MLX-4bit","stream":True,"messages":[{"role":"user","content":long_ctx+"List the three stages mentioned."}],"max_tokens":48,"temperature":0}))
 PY
   for n in 1 2; do
     S=$(date +%s.%N)
