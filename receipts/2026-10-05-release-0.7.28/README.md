@@ -239,7 +239,9 @@ re-test installs from the PUBLISHED release URL; see Publication.
   Honeykrisp); one short generation on the installed venv
   (mlx_lm, Qwen3-4B-Instruct-2507-4bit, 8 tokens, temp 0) under a
   5-minute gpu-turn ticket: output `OK.`, GEN_EXIT 0 (11:40:38Z).
-  Throwaway HOME deleted after capture (see cleanup).
+  Throwaway HOME deleted after capture; log copy archived in the lab
+  notebook at artifacts/Release0728/2026-10-05-v0728-battery/ (with both
+  verify outputs and the final SHA256SUMS).
 
 ## Known issues (unchanged, open)
 
