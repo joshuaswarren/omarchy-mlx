@@ -1,6 +1,6 @@
 # Omarchy distributed primitives on the GPU stream (2026-10-04)
 
-Status: dev-box and local two-rank M2 tests pass. The focused M2 two-rank Python test passed AllReduce sum/max/min across fp32/fp16/bf16/int32 and confirmed upstream ring split refusal on both ranks. Cross-version AllReduce with macOS MLX 0.32.2 passed earlier, but a later two-host 0.32.4↔0.32.2 transport gate timed out after 1200 seconds; no cross-version compatibility conclusion can be drawn from that attempt. M2+jwm1 pipeline and performance gates remain blocked on hardware scheduling and Main's release of jwm1.
+Status: dev-box and local two-rank M2 tests pass. The focused M2 two-rank Python test passed AllReduce sum/max/min across fp32/fp16/bf16/int32 and confirmed upstream ring split refusal on both ranks. The earlier M2↔macOS 0.32.4↔0.32.2 AllReduce pass used Tailscale, not the wired path. A later wired transport gate timed out after 1200 seconds; that attempt gave no compatibility conclusion. M2+jwm1 pipeline and performance gates remain blocked on hardware scheduling and Main's release of jwm1.
 
 ## What changed
 
@@ -43,7 +43,7 @@ The upstream v0.31.3 tag (commit ed1fca4cef15a824c5f1702c80f70b4cffc8e4dd) conta
 | M2 two-rank extended GPU smoke | both ranks pass complex64 Min and int32 sum_scatter with expected per-rank values |
 | M2 singleton GPU C++ suite | not run on M2; dev-box singleton suite above passed |
 | M2 local ring, focused Python AllReduce | pass: both ranks, sum/max/min × fp32/fp16/bf16/int32, 3 elements per input (uneven 2+1 segment split) |
-| Cross-version AllReduce, M2 0.32.4.dev202610042215 ↔ macOS 0.32.2 | pass both rank assignments; both ranks verified all 12 dtype/op combinations; macOS `Device(gpu, 0)`; memory pressure 70% free before test |
+| Cross-version AllReduce, M2 0.32.4.dev202610042215 ↔ macOS 0.32.2 (Tailscale path) | pass both rank assignments; both ranks verified all 12 dtype/op combinations; macOS `Device(gpu, 0)`; memory pressure 70% free before test |
 | macOS interop transport payload (derived from the 3-element inputs; not a throughput measurement) | each collective sends/receives 12 bytes for fp32/int32 or 6 bytes for fp16/bf16 per rank; 2 ring exchanges per collective (reduce + forward); 12 collectives / 24 exchanges per rank across the test |
 | M2–macOS two-host ring + sharded mlx-lm pipeline | not run; the two-host 0.32.4↔0.32.2 gate timed out, and jwm1 has not been released for the pipeline test |
 | Dev-box real-size gate dry-run, 2-rank 127.0.0.1 loopback, software Vulkan/Lavapipe, MLX 0.32.4 | pass both ranks, sizes 1/4/16 MiB; all_sum, all_gather, sum_scatter, Send/Recv values checked across full payloads; both exit 0. One-sample 16 MiB op times (rank 0/rank 1): all_sum 133.789/168.108 ms, all_gather 29.582/38.387 ms, sum_scatter 127.230/157.972 ms, send/recv roundtrip 280.334/295.888 ms. These are software-loopback timings, not Ethernet throughput. A first attempt exposed lazy Send/Recv requiring ordered eval; the gate now evals recv before the receiver sends and evals each send result. |
