@@ -558,7 +558,7 @@ class CustomKernelSmoke(unittest.TestCase):
         # verified by the dev-box driver + glslang test (q35_decode).
         kernel = mx.fast.metal_kernel(
             name="omarchy_bf16_locals_state",
-            input_names=["qkv", "conv_w", "scale"],
+            input_names=["qkv", "conv_w"],
             output_names=["act_out", "state_out"],
             source=(
                 "bfloat16_t activated[2];\n"
@@ -581,7 +581,7 @@ class CustomKernelSmoke(unittest.TestCase):
         qkv = mx.array([1.0, 2.0, 3.0, 4.0], dtype=mx.bfloat16)
         conv_w = mx.array([0.5, 0.25], dtype=mx.bfloat16)
         act_out, state_out = kernel(
-            inputs=[qkv, conv_w, mx.array(0.5, dtype=mx.bfloat16)],
+            inputs=[qkv, conv_w],
             grid=(2, 1, 1),
             threadgroup=(2, 1, 1),
             output_shapes=[(2,), (2,)],
