@@ -188,49 +188,43 @@ healthy, no starvation.
 Housekeeping: `/tmp/omlxdflash-venv` (abandoned python3.9 venv attempt) could
 not be removed (rm guard); macOS /tmp will reclaim it.
 
-## Perf decomposition (dev box, pre-reopen — from captured data + code map)
+## Perf decomposition (measured, 2026-10-05 post-reopen probes)
 
-Captured arithmetic, one profiled stream request (the only request with phase
-timings): generation wall 6.67 s (19.2 tok/s), 39 cycles, 128 tokens,
-acceptance 69.5%. Recorded phases: prefill 347.2 ms + draft 187.8 ms (first
-9.3 / incremental 178.5) + verify 130.0 ms + replay 0.3 ms + commit 5.2 ms =
-**670.5 ms accounted, ~6.0 s (90%) unattributed ≈ 154 ms/cycle**. The serving
-(non-stream) path is even slower (9.6–16.9 s per 128 tokens, 10.5–13.8 tok/s)
-and surfaces no phases (omlx gap above), so its mix may differ from the
-profiled path — the in-process cycle-trace instrument (below) resolves both.
+Cycle-trace instrument results (69-cycle 128-token DFlash run): the cycle wall
+is **GPU-route time, not host time** — verify 152 ms/cycle (80%), draft 34.5,
+accept 2.6, hidden 0.7, rollback 0.02, other 0.17 ms (host/Python negligible;
+yield pause 0.03 ms). The runtime's adaptive policy shrank blocks 16→4 and
+mean commit fell to 1.86 tok/cycle. Follow-up probes isolated the cause:
 
-Interpretation: draft (4.8 ms/cycle) + verify (3.3 ms/cycle) kernel time alone
-would put DFlash ~2x AHEAD of plain decode (15.9 ms/token). The wall is
-elsewhere. Candidate register, in the order the instruments will price it:
+| measurement | result |
+|---|---|
+| raw mlx-lm forward, q_len=1 | 25.4 ms |
+| raw forward, q_len=4 / q_len=16 | 144 / 130 ms (**flat**) |
+| prefill 154 tokens (server) | 347 ms (2.3 ms/token amortized) |
+| isolated mx.quantized_matmul M=16 (4-bit, gs64, K=2560→N=4096) | 0.99 ms |
+| isolated dense matmul M=16 | 2.7 ms |
+| isolated mx.fast.sdpa masked, q16 × kv160 | 0.41 ms |
+| swapping 252 qmm linears → dense (dflash verify-linear) | verify unchanged 136.6→137.1 ms; committed tokens bit-identical |
+| dispatch counts (MLX_OMARCHY_TRACE_DISPATCH) | decode step ~377, q16 step ~1,064 → **~118 µs/dispatch end-to-end (M≥2 route) vs ~45-66 µs (decode)** |
 
-1. **Per-cycle host↔device round-trips.** Acceptance length is control flow —
-   every cycle must read verify results back to the host (spec_epoch.py:
-   `verify_ids_host[:commit_count]`, `mx.eval(posterior)` / capture-row
-   `tolist()`). Each Vulkan fence round-trip drains the pipeline; several
-   per cycle at ~5–10 ms each would explain most of the 154 ms.
-2. **`yield_pause_us` / consumer coupling.** The cycle loop yields to the
-   async token consumer; CycleCompleteEvent carries `yield_pause_us` exactly
-   for this. The omlx side adds a per-token asyncio-queue + detokenizer hop
-   (the batched engine pays this too, but per token at 64 tok/s, not per
-   cycle against a 3.3-tok/cycle yield).
-3. **Python cycle body** — capture-row conversions (`_capture_rows_int`,
-   tolist per cycle), posterior top-k host copies, dict/tuple churn in the
-   ~400-line loop body.
-4. **Backend kernel suspects** (price with TRACE_DISPATCH counts, then
-   REPEAT arms): M=16 quantized matmul taking the qmm M<32 decode route;
-   q_len 16 SDPA composition against a full KV (no GDN anywhere — pure
-   attention); the 5-layer bf16 drafter's 16-position block forward.
+Root cause: **the multi-row (2≤M≤~64) forward route on the omarchy Vulkan
+backend is dispatch-bound** — per-dispatch end-to-end cost ~2.5x decode's,
+with trivial GPU compute per dispatch (all isolated ops are sub-2 ms; the
+whole q16 forward's compute is <30 ms). DFlash verify is one such forward per
+cycle, hence 137-152 ms, hence DFlash ON ~5.9x slower than plain despite 69.5%
+acceptance. This is a backend/KernelBattery-class finding, not a dflash or
+numerics bug. KernelBattery item: the M16 ktmpl qmm kernel
+(dflash-mlx verify_qmm.py, `_resolve_m16_ktmpl_variant`, 71f7c2c) crashes with
+the exact named error `[omarchy] fast::CustomKernel MSL subset: unsupported
+MSL feature 'simdgroup_matrix' … (dtype=bfloat16, shape=[16,1024])`.
 
-Instruments staged on the dev box, to run in one ≤8-min M2 ticket after the
-04:30Z reopen (`/tmp/omlxdflash-home/a7/{prof_a7.py,run_prof.sh}`):
-`prof_a7.py` runs the pair in-process with `DiagnosticsConfig(trace=TraceConfig(cycle_events=True))`
-and prints per-cycle `draft/verify/accept/hidden/rollback/OTHER/total` vs
-`cycle_wall_us` and `yield_pause_us` — `other_us` + the wall-vs-phase gap
-directly answer where the 90% sits. Pass 2 re-runs 32 tokens under
-`MLX_OMARCHY_TRACE_DISPATCH=1` and uniq-counts kernel names from backend
-stderr. The PrefillSens `MLX_OMARCHY_DEBUG_REPEAT_{QMM,SDPA,GDN}`/`EMPTY`
-arms (branch `agent/prefillsens-repeat`, needs the diag wheel) are probed for
-but deferred to a follow-up ticket once attribution names the class.
+Candidate fixes, ranked: (1) cut dispatch count on the multi-token forward
+(mx.compile/fusion of elementwise chains — dflash runtime patch layer or
+backend); (2) backend dispatch batching on Honeykrisp; (3) block-size
+amortization as a stopgap — cost is flat in M, so larger draft blocks raise
+tokens/cycle (sweep queued; result to be appended). Note the runtime's
+adaptive block policy shrank 16→4, the wrong direction under a flat
+per-cycle cost — a dflash-side policy note for the upstream draft.
 
 ## Artifacts
 
