@@ -139,16 +139,30 @@ target; the M2 ticket decides.
 - Timing ticket (fwd walls q1/4/16 + dispatch census + GDN trace):
   submitted, log /tmp/midm_ticket_b2.log on the M2; results append here.
 
-## Landing decision
+## Bisect result (fold OFF, wheel 58853e0)
 
-The mid-M bar is per-row bit-identity + a clear speed win. QMM token is
-ONE element short of the bit-identity bar on the M2 (subgroup column,
-tokens=16), so NOTHING is merged to main; the branch stays
-agent/midm-forward with both routes default-ON for continued debugging
-(each has its own kill switch: MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0,
-MLX_OMARCHY_SDPA_DECODE_ROWS=0; SDPA rows is fully green and could land
-independently of the qmm token column). Main decides: land SDPA rows
-now, hold both, or gate the qmm token column off until the fold
-divergence is root-caused.
+With the epilogue fold disabled at rows>1 (residual added by the separate
+eager add), the SAME element still diverges: the failure is in the RAW
+token16 GEMV output at (row 0, column 34), not the fold. tokens=8 PASSES
+on the same token16 blob; only token_count=16 fails -> the divergence is
+token-count-dependent, pointing at the AGX/glslc compilation of the
+16-row unrolled guarded loop (register allocation / spill of the
+`precise` accumulator set, or the `continue`-guarded unroll), not at the
+epilogue or in_strides. Next bisect levers: token16 with ROWS_PER_SLOT=1
+geometry, splitting the guard into per-row `if` bodies, or compiling
+token8+token12 twins; M2 A/B per lever.
+
+## Landing decision (updated)
+
+SDPA rows: fully green on the M2 (per-row bit-identity vs plain decode,
+q_len 3/4/16, GQA reps) + decode digest A/B vs golden 60f80d2 MATCHES
+byte-for-byte (3 prompts x 64 tokens, 55eb1b66fdf09fc4...). READY TO LAND
+independently (kill switch MLX_OMARCHY_SDPA_DECODE_ROWS).
+QMM token: the token16 column is NOT bit-identical on AGX (raw GEMV
+output, above) - the qmm token route should ship gated to token4 (rows
+<= 4) or fully off until the AGX unroll issue is fixed.
+Nothing is merged to main (release v0.7.28 cut from 5c15fbaea must not
+be touched; land after the tag per Main).
+
 
 
