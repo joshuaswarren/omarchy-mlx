@@ -413,7 +413,7 @@ class CustomKernelSmoke(unittest.TestCase):
                 "const int row = threadgroup_position_in_grid.y;\n"
                 "const int g = threadgroup_position_in_grid.x;\n"
                 "const int first = g * GROUP + thread_position_in_threadgroup.x;\n"
-                "float v = row < M ? float(X[(int64_t)row * K + first]) : 0.0f;\n"
+                "float v = row < M[0] ? float(X[(int64_t)row * K + first]) : 0.0f;\n"
                 "const float scale = 1.0f / 127.0f;\n"
                 "if (thread_position_in_threadgroup.x == 0)"
                 "  XS[row * 2 + g] = scale;\n"
