@@ -275,3 +275,21 @@ family + all 7 stubs, plus the define cross-check and the primitives.cpp
 syntax check. All green on 174abd59d (22/22 compiles OK). If glslc is ever
 absent the script falls back to balance + preprocess and prints
 NOT A COMPILE.
+
+## H301 follow-ups @ f02b93515
+
+- HOIST pass B regenerated from the batch4 body: MLX_OMARCHY_GDN_HOIST now
+  carries the state-wave state update, so HOIST stacks STATEWAVE's -5%
+  (expected ~-12% kernel at T>=512; e2e expectation scales with the kernel's
+  share). The batch2-body pass B is superseded (swap rule).
+- Shared-footprint sweep (MLX_OMARCHY_GDN_SWEEP=0/1/2 -> 32/16/8 KiB per WG):
+  a bench shadow kernel with the batch4 geometry/phase structure and a
+  compile-time bulk size. Run the three arms at T=512 on the same window;
+  time(sweep32k) vs time(sweep16k) answers shared-bound occupancy directly
+  (halving time = WGs/core scales with shared; flat = 1 WG/core regardless).
+  WRONG RESULTS by design; the real kernel's dispatch gates are untouched.
+- Loop-1 ILP (item 3): the four accumulators kkt/qkt/m2/tmp are ALREADY
+  independent chains interleaved per kk step — the ILP exists; splitting any
+  SINGLE accumulator (even/odd steps) reorders f32 additions and moves the
+  digests, which the owner bar forbids. No order-preserving ILP lever remains
+  in loop 1; the levers are occupancy (sweep) and the stacked HOIST.
