@@ -41,6 +41,19 @@ host-side byte movement over TCP. Verified on the wired path with M2 MLX
    sides.
 5. Send/Recv are lazy: evaluate the recv before the peer evaluates its send
    result, and evaluate each send result, or a 2-rank exchange can deadlock.
+   Symptom seen in a hand-rolled hop: ESTABLISHED both ways, 100% CPU, no
+   token — both ranks spinning without forcing the lazy graphs. Fixes, in
+   order of preference:
+   - Use the mlx-lm `sharded_load` pipeline path (verified); do not hand-roll
+     the hop. Reference driver:
+     `receipts/2026-10-05-omarchy-distributed/pipeline_generate.py`.
+   - If hand-rolling: after building `sent = mx.distributed.send(x, dst)`,
+     call `mx.eval(sent)`; build the recv and `mx.eval(received)` BEFORE the
+     peer's next step depends on it. Every collective result needs an eval
+     that orders it against the producer's compute.
+   - Never pass `stream=` to collectives; keep all compute on the default
+     device stream so the transport's pre-read synchronize covers the
+     producing kernels. Custom streams bypass that ordering guarantee.
 
 ## Queue-safe start handshake (gpu-turn hosts)
 
