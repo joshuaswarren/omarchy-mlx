@@ -265,24 +265,40 @@ patch application.
    the Metal→Vulkan translator's MSL subset coverage); the
    omlx-linux layer cannot fix it.
 
-## v0.7.27 product bug — attribution corrected (reverted)
+## v0.7.27 product bug — attribution corrected, proper fence landed
 
-The narrowing in this lane was confounded: the rope-norm
-patcher (F3, scripts/patch-mlx-lm-rope-norm.py) and the qwen3
-dense rope-norm patcher (DispatchFuse, scripts/patch-mlx-lm-
-qwen3-rope-norm.py) share the same `MLX_OMARCHY_ROPE_NORM_FUSE`
-env, so toggling it disables BOTH at once and the narrowing
-could not attribute the cache corruption to either one. A
-follow-up audit (Main) caught the mis-attribution. Qwen3-4B
+The prior narrowing was confounded: the rope-norm patcher
+(F3, scripts/patch-mlx-lm-rope-norm.py, targets qwen3_next.py)
+and the qwen3 dense rope-norm patcher (DispatchFuse, scripts/
+patch-mlx-lm-qwen3-rope-norm.py, targets qwen3.py) share the
+same `MLX_OMARCHY_ROPE_NORM_FUSE` env, so toggling it disables
+BOTH at once. Main's audit caught the mis-attribution. Qwen3-4B
 runs through `qwen3.py` (DispatchFuse's fold), NOT
-`qwen3_next.py` (F3's fold). The previous B==1 fence on
-scripts/patch-mlx-lm-rope-norm.py has been REVERTED from
-origin/main @ `68701c305`. The attribution is now:
-**unspecified between F3 (qwen3_next) and DispatchFuse (qwen3)**
-until a per-patcher env split is in place and the narrowing
-re-runs. The two-patch and cache.offset-type fences
-(B==1, int offset) are the right shape, but on the right
-patcher.
+`qwen3_next.py` (F3's fold).
+
+The fence on the WRONG patcher was reverted at `68701c305`
+and `6e1848c11` (the audit block in this section). The
+correct fix landed on origin/main @ `61e61e531`:
+
+  * Each patcher now reads its OWN kill env (qwen3:
+    `MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE`; qwen3_next:
+    `MLX_OMARCHY_QWEN3_NEXT_ROPE_NORM_FUSE`) with the shared
+    `MLX_OMARCHY_ROPE_NORM_FUSE` as the fallback. The per-
+    patcher envs allow attribution in the next ticket.
+  * Each patcher gates the fold on `(cache is None or
+    isinstance(cache.offset, int)) and B == 1`. The int-
+    offset check is the real fix: BatchGenerator passes
+    `cache.offset` as an mx.array even at B==1, and
+    `mx.fast.rope_rms_norm` requires a Python int. The
+    B==1 check stops the multi-request batched case.
+  * Else branch (composed chain) preserved on both patchers.
+
+Regression test: `tests/test_rope_norm_fence_spec.py`
+(RopeNormFenceSpecTests, 8 cases): per-patcher kill env
+present, offset-type fence present, B==1 fence present,
+composed-fallback else branch kept. The live 4-concurrent
+batch on the M2 is the real behavior test (scripted in
+`packaging/omlx-linux/smoke_narrow.sh` + `smoke_hypo2.sh`).
 
 
 The originally-pending "(B) 4-concurrent batch hits upstream cache
