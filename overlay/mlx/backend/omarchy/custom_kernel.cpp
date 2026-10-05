@@ -980,6 +980,39 @@ Translation translate_msl(
       body.find("gl_NumSubgroups") != std::string::npos;
   std::string declarations;
   std::string macros;
+  // MSL permits implicit uint->int in scalar declarations (`int d = elem
+  // % D;` with uint elem, as in the MiniMax M3 K2 combine); GLSL rejects
+  // the mixed-sign assignment outright. Wrap every integer scalar
+  // declaration's initializer in the matching constructor cast: it is a
+  // no-op when the expression already has the declared type, so the pass
+  // is safe on declarations that never needed it. Declarations with
+  // multiple comma declarators (`int a = 1, b = 2;`) are left alone —
+  // none of the supported kernels use them and wrapping the whole
+  // initializer would fold two declarators into one constructor call.
+  {
+    const std::regex int_decl(
+        R"(\b(int|uint)\s+([A-Za-z_]\w*)\s*=\s*([^;{}]+);)");
+    std::string rewritten;
+    auto begin = std::sregex_iterator(body.begin(), body.end(), int_decl);
+    auto end = std::sregex_iterator();
+    if (begin != end) {
+      size_t last = 0;
+      for (auto it = begin; it != end; ++it) {
+        const auto& m = *it;
+        const std::string rhs = m[3].str();
+        rewritten += body.substr(last, m.position() - last);
+        if (rhs.find(',') == std::string::npos) {
+          rewritten += m[1].str() + " " + m[2].str() + " = " + m[1].str() +
+              "(" + rhs + ");";
+        } else {
+          rewritten += m[0].str();
+        }
+        last = m.position() + m.length();
+      }
+      rewritten += body.substr(last);
+      body = std::move(rewritten);
+    }
+  }
   for (size_t index = 0; index < parameters.size(); ++index) {
     const auto& parameter = parameters[index];
     const bool output = index >= output_start;
@@ -1003,7 +1036,8 @@ Translation translate_msl(
             std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\]\s*=\s*([^;]+);)"),
             parameter.name + "[$1] = " + glsl_type(parameter.type) + "($2);");
       }
-      macros += "#define " + parameter.name + " _b" +
+      macros += "#define _mlx_arg" +
+          std::to_string(parameter.binding) + " _b" +
           std::to_string(parameter.binding) + ".data";
       if (parameter.scalar) {
         macros += "[0]";
@@ -1029,6 +1063,27 @@ Translation translate_msl(
       body.find("float16_t") != std::string::npos;
   needs_int64 = needs_int64 || body.find("int64_t") != std::string::npos ||
       body.find("uint64_t") != std::string::npos;
+  // Rename parameter tokens in the body to the safe internal aliases the
+  // macros above define. A parameter literally named `x` (or y/z/w/...)
+  // must not survive as a preprocessor macro: any GLSL swizzle spelled
+  // with the same letter (`gl_GlobalInvocationID.x`, `vec.y`) would
+  // expand through the alias and fail to compile (measured on the M2
+  // Honeykrisp ticket, 2026-10-04, test_three_float_scalars). The token
+  // match refuses names directly preceded by a '.' (swizzle position) or
+  // a word character. std::regex has no lookbehind, so the leading
+  // character is captured and re-emitted.
+  for (const auto& parameter : parameters) {
+    if (parameter.atomic || parameter.type == "bfloat16_t") {
+      // Those paths already rewrote every use to the storage name.
+      continue;
+    }
+    const std::string alias =
+        "_mlx_arg" + std::to_string(parameter.binding);
+    body = std::regex_replace(
+        body,
+        std::regex("(^|[^.\\w])" + regex_escape(parameter.name) + "(?!\\w)"),
+        "$1" + alias);
+  }
 
   if (body.find("threadgroup") != std::string::npos ||
       body.find("memory_order") != std::string::npos ||
@@ -1089,7 +1144,6 @@ Translation translate_msl(
        << body << "\n}\n";
   return {glsl.str(), parameters};
 }
-
 std::string find_executable(const std::string& name) {
   const char* path_value = std::getenv("PATH");
   if (path_value == nullptr) {

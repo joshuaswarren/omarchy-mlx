@@ -237,30 +237,31 @@ def _ref_msa_csr_k1_scalar(
 
 # Synthetic small problem.
 def _make_synthetic_k2q(total_q, total_k, h_kv, topk, h_q, block_size, d, seed=0):
-    rng = np.random.default_rng(seed)
-    row_ptr = np.zeros((h_kv, (total_k + block_size - 1) // block_size + 1), dtype=np.int32)
+    """Deterministic CSR fixture matching the K1 kernel contract.
+
+    Row r of head hkv covers edges [row_ptr[hkv, r], row_ptr[hkv, r+1]);
+    each edge packs (slot << 24) | q_idx. Query q selects blocks
+    {q % total_rows, (q + 1) % total_rows} in slot order, so every row is
+    non-empty, every query appears exactly `topk` times, and the binary
+    search inside the kernel has a well-defined answer for every edge.
+    """
+    total_rows = (total_k + block_size - 1) // block_size
+    row_ptr = np.zeros((h_kv, total_rows + 1), dtype=np.int32)
     qsplit = np.full((h_kv, total_q * topk), -1, dtype=np.int32)
-    edge = 0
     for hkv in range(h_kv):
-        row = 0
+        counts = np.zeros(total_rows, dtype=np.int64)
         for q_idx in range(total_q):
-            # Pick topk distinct blocks <= current block.
-            cur_block = q_idx // (block_size // 4)  # synthetic density
             for slot in range(topk):
-                # Round-robin through blocks [0, cur_block]
-                block = (q_idx * topk + slot) % (cur_block + 1)
-                qsplit[hkv, edge] = (slot << 24) | q_idx
-                edge += 1
-                row_ptr[hkv, row + 1] = edge
-            row += 1
-    # Build row_ptr cumulatively.
-    cum = 0
-    for hkv in range(h_kv):
-        for r in range(1, row_ptr.shape[1]):
-            if row_ptr[hkv, r] == 0:
-                row_ptr[hkv, r] = cum
-            else:
-                cum = row_ptr[hkv, r]
+                block = (q_idx + slot) % total_rows
+                counts[block] += 1
+        row_ptr[hkv, 1:] = np.cumsum(counts)
+        cursor = row_ptr[hkv, :-1].copy()
+        for q_idx in range(total_q):
+            for slot in range(topk):
+                block = (q_idx + slot) % total_rows
+                qsplit[hkv, cursor[block]] = (slot << 24) | q_idx
+                cursor[block] += 1
+        assert (cursor == row_ptr[hkv, 1:]).all()
     return row_ptr, qsplit
 
 
@@ -270,7 +271,7 @@ class TestMSAK1ScalarParity(unittest.TestCase):
 
     def test_k1_scalar_parity(self):
         total_q = 16
-        total_k = 128
+        total_k = 512
         h_kv = 2
         h_q = 8  # qhead_per_kv = 4
         d = 32
