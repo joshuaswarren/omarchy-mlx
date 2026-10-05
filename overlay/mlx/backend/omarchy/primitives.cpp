@@ -7799,12 +7799,16 @@ bool dispatch_quantized_gemv_group(
   // Token rows (verify / small-batch): 2..M_TOKENS route to the
   // multi-token column (bf16; the out-gate prologue and producer-direct
   // KV windows stay single-row contracts). The env is read live so tests
-  // can flip it between phases. Kill switch:
-  // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0 restores the single-row fence.
+  // can flip it between phases.
+  // OFF BY DEFAULT on AGX: the token8 kernel shows a deterministic
+  // data-dependent single-element divergence vs the single-token column
+  // (tokens=15 k=896 row 4 col 291; llvmpipe passes the same cell) —
+  // under bisect. Opt in with MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1;
+  // set to 0 (or leave unset) to compose at rows>1.
   const bool token_multi_disabled =
       []() {
         const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
-        return env != nullptr && std::strcmp(env, "0") == 0;
+        return env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0;
       }();
   bool token_route = false;
   uint32_t rows = 1;
