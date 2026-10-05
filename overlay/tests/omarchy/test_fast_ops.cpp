@@ -591,7 +591,7 @@ TEST_CASE("fused rope_rms_norm serves per-batch array offsets bit-exactly") {
         }
         array x = concatenate(xs, 0, stream);
         array reference = concatenate(refs, 0, stream);
-        array off = array(offs.data(), Shape{B}, int32, stream);
+        array off = array(offs.data(), Shape{B}, int32);
         array fused = fast::rope_rms_norm(
             x, D, w, eps, false, 10000.0f, 1.0f, off, stream);
         INFO("B=", B, " T=", T, " N=", N);
