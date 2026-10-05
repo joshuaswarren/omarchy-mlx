@@ -148,7 +148,7 @@ void main() {
 
   // [(chunk * Hv + head) * (Dv/32) + wgY] * 4 sg + sg, two 64-f32 tiles.
   uint base = ((gl_WorkGroupID.z * hv + head) * (params.matrix_n / 32u) +
-               gl_WorkGroupID.y) * 128u + sg * 128u;
+               gl_WorkGroupID.y) * 512u + sg * 128u;
   coopMatStore(kkt, snap.v, base, 8, gl_CooperativeMatrixLayoutRowMajor);
   coopMatStore(qkt, snap.v, base + 64u, 8, gl_CooperativeMatrixLayoutRowMajor);
 }

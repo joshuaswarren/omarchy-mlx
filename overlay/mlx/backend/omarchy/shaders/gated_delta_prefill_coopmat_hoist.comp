@@ -259,7 +259,7 @@ void main() {
     {
       uint base = ((t0 / C) * hv + head) * (params.matrix_n / 32u) +
                   gl_WorkGroupID.y;
-      base = base * 128u + sg * 128u;
+      base = base * 512u + sg * 128u;
       coopMatLoad(kkt, snap.v, base, 8, gl_CooperativeMatrixLayoutRowMajor);
       coopMatLoad(qkt, snap.v, base + 64u, 8, gl_CooperativeMatrixLayoutRowMajor);
     }
