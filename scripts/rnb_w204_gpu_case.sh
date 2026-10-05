@@ -11,6 +11,13 @@ if pgrep -f '[c]c1plus|[c]make|[n]inja' > /dev/null; then
 fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 D=/var/tmp/${TAG}-tree
+python3 - <<'PY'
+import shutil, os
+p = "/var/tmp/rnb-w204-tree"
+if os.path.isdir(p):
+    shutil.rmtree(p, ignore_errors=True)
+    print("pre-cleaned stale clone")
+PY
 if [ -d /var/tmp/golden-wheel ]; then
   bash /var/tmp/golden-clone-tree.sh "$D"
   SRC="$D/.work/mlx"
