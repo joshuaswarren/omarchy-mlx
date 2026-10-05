@@ -343,6 +343,9 @@
 #include "qmm_coopmat_m16_x32.h"
 #include "qmm_coopmat_x32_fn.h"
 #include "qmm_coopmat_m16_x32_fn.h"
+#include "qmm_coopmat_m16_x32_fn_ldspad.h"
+#include "qmm_coopmat_m16_x32_fn_chunk.h"
+#include "qmm_coopmat_m16_x32_fn_chunk_pad.h"
 #include "qmm_coopmat_x32_fn_rswap.h"
 #include "qmm_coopmat_x32_fn_g2.h"
 #include "qmm_coopmat_x32_fn_g4.h"
@@ -1331,6 +1334,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_x32_fn, qmm_coopmat_x32_fn_size};
     case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN:
       return {qmm_coopmat_m16_x32_fn, qmm_coopmat_m16_x32_fn_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNLdsPad:
+      return {
+          qmm_coopmat_m16_x32_fn_ldspad,
+          qmm_coopmat_m16_x32_fn_ldspad_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNChunk:
+      return {
+          qmm_coopmat_m16_x32_fn_chunk,
+          qmm_coopmat_m16_x32_fn_chunk_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNChunkPad:
+      return {
+          qmm_coopmat_m16_x32_fn_chunk_pad,
+          qmm_coopmat_m16_x32_fn_chunk_pad_size};
     case ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterSwap:
       return {qmm_coopmat_x32_fn_rswap, qmm_coopmat_x32_fn_rswap_size};
     case ComputeKernel::QmmPrefillCoopmatBF16X32FullNRasterG2:
