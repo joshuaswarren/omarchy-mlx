@@ -231,3 +231,31 @@ on the fix commit; batch3/stub GLSL remains glslc-verifiable only on
 hardware hosts. jwm1 4-arm + stub-sweep protocol unchanged (branch tip
 85d3d9cac supersedes aea4f4ce6 for w71's next window); reconcile with
 deviations.diff when H297 lands.
+
+## H297/H298 verdicts and the state-wave lever (batch4, MLX_OMARCHY_GDN_STATEWAVE)
+
+jwm1 readouts (bit-exact everywhere, hash probe + pins): HOIST -7.6% at
+T=512 / -8.8% at T=1024 but +2..18% below 512 -> now length-gated
+(T >= 512). BATCH2 -0.5% (H294 stands). SGSYNC +21% SLOWER at every T —
+falsified and DELETED (swap rule; the wave is not barrier-scope-bound).
+Stage stubs (us/chunk of 124.7): state update 44% (54.9), loopK kkt/qkt
+14.7% (18.3), loopS m2/tmp 16.5% (20.6), Neumann 2.1, delta 1.2, out 0.2,
+skeleton floor 36.5 (29%). The G13G walk is MMA-issue + state-update
+serialization bound.
+
+MMAs per chunk per simdgroup: loop1 64 (kkt/qkt/m2/tmp x16) + state 16 +
+middle 6 = 86 (344/WG). Metal's fused chunk issues ~102 per WG with ZERO
+shared round trips between them at ~63 ns each; ours stall on ~35 shared
+round trips + 38 WG barriers + 20 SG barriers (pre-fix).
+
+batch4 (@71ba9e19d): per 4-slice wave [4 loads + 4 independent MMAs] ->
+subgroupBarrier -> [4 stores into the dead kgc_all operand regions] ->
+subgroupBarrier -> [4 FMAs]. State block: 4 WG + 20 SG barriers -> 4 WG +
+12 SG; MMAs issue 4-wide. Per-slice arithmetic sequence unchanged
+(bit-exact by construction; store -> barrier -> read -> FMA on the same
+e0-pair convention). Prediction for the jwm1 readout: -15..-30 us/chunk
+(-12..-24% kernel T=512); falsifier <5%.
+
+jwm1 arms for the next window (branch tip 71ba9e19d): no-env / HOIST=1
+(T>=512 shapes only) / STATEWAVE=1 / STATEWAVE=1+BATCH2=1, plus the stub
+sweep for continuity; pins must hold on every non-stub arm.
