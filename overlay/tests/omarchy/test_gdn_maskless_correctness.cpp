@@ -164,7 +164,6 @@ void check_case(int T, int rep, Stream stream) {
   check_close(materialize_f32(masked[1], stream), ref.state, 2e-4, label + " masked state vs fp64");
 }
 
-} // namespace
 
 void check_case_nonzero_state(int T, int rep, Stream stream) {
   const int Hv = kHk * rep;
@@ -214,7 +213,6 @@ TEST_CASE("GDN prefill carries a non-zero initial state across the hoist boundar
   }
 }
 
-namespace {
 
 TEST_CASE("GDN maskless prefill preserves fp64 final state across route boundary") {
   if (!compute_available()) return;
