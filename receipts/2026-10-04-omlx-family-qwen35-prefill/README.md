@@ -146,3 +146,42 @@ path" requires in any case).
   accordingly).
 - `entries/ParityMatrix/2026-10-04T2215Z-devbox-omlx-tf-parity-matrix.md`
   (closed sibling).
+
+## 6. Dev-box lavapipe results (2026-10-05, pre-M2)
+
+Environment: x86_64 dev box, llvmpipe/lavapipe via a staged ICD prefix
+(`OMARCHY_MLX_SYSTEM_PREFIX` fake tree + `MLX_OMARCHY_ALLOW_NON_APPLE=1`),
+branch `agent/FamQwen35Prefill` at f289d60e3 (enum entry moved to the
+append-only end after first landing mid-enum).
+
+C++ numerics-gate doctest (`omarchy_fast_ops_tests`, test_fast_ops.cpp
+"sdpa prefill flash-256 is no worse than the composed path on Qwen3.5
+shapes"): **9,437,204 assertions, 0 failed**, three consecutive runs
+(two before the enum move, one after). Gate contract implemented:
+flash fp64-error no worse than the composed path (2x summation-order
+slack, 1e-2 absolute floor), per-element arm-to-arm bound
+(|f-c| <= 8 bf16 ULP + 1e-7), host fp64 reference consuming the same
+bf16-rounded inputs the device arms load.
+
+Python per-op A/B (`m2_gate_perop.py`, the M2 ticket payload):
+GATE_PEROP **PASS** on all four shapes (2B GQA 8/2, 9B GQA 16/4,
+qL=kL=512/1024, head_dim 256, causal bf16). composed.npz and flash.npz
+sha256 IDENTICAL (1c227ecb...) — the two arms are byte-equal on
+llvmpipe. max_abs vs fp64 ~1.95e-3 = bf16 output/probs quantization at
+unit scale, equal on both arms. Artifacts (private notebook):
+artifacts/FamQwen35Prefill/qwen35-prefill/.
+
+Test-design notes carried for the M2 run: (1) the host reference MUST
+consume bf16-rounded inputs — the fp32-original reference produced a
+symmetric common-mode input-cast error (~96 ULP, both arms, same
+elements) that is not a kernel defect; (2) per-element
+ULP-vs-fp64 bounds are not the gate contract at cancellation-heavy
+outputs (f32 accumulation vs f64, symmetric across arms); (3) on a
+serialized software driver both summation orders coincide, so
+engagement evidence on real silicon comes from a ULP-scale arm
+difference plus the timing leg, not from the lavapipe A/B.
+
+M2 work (incremental branch wheel from the od tree copy, private venv
+with shebang-safe install, per-op + TF/free-run/PPL gates, then the
+pf512/pf1024 ON-vs-OFF timing cells) is staged and queued for the
+post-03:00Z window per Main's schedule.
