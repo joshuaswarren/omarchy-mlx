@@ -1,0 +1,37 @@
+diff --git a/omlx/memory_monitor.py b/omlx/memory_monitor.py
+index c158f7a1..61ed7cae 100644
+--- a/omlx/memory_monitor.py
++++ b/omlx/memory_monitor.py
+@@ -39,6 +39,14 @@ except ImportError:
+     HAS_MLX_METAL = False
+     mx = None
+ 
++# The baseline-memory probe below only needs mx.get_active_memory(). The
++# omarchy (Linux/Vulkan) allocator provides it even when the custom-kernel
++# gate is closed, so probe that API directly instead of keying the baseline
++# on the custom-kernel gate.
++HAS_ACTIVE_MEMORY_PROBE = mx is not None and callable(
++    getattr(mx, "get_active_memory", None)
++)
++
+ # Mirrors MLX Metal ScaledDotProductAttention::use_fallback for the
+ # generation/inference path. Full prefill and short vector kernels support
+ # different head dimensions; unsupported cases fall back to an unfused
+@@ -311,7 +319,7 @@ class MemoryMonitor:
+         This allows accurate detection of memory pressure from KV cache growth
+         while ignoring static model memory.
+         """
+-        if HAS_MLX_METAL:
++        if HAS_ACTIVE_MEMORY_PROBE:
+             try:
+                 self._baseline_memory = mx.get_active_memory()
+                 logger.info(
+@@ -322,7 +330,7 @@ class MemoryMonitor:
+                 self._baseline_memory = 0
+         else:
+             self._baseline_memory = 0
+-            logger.warning("MLX Metal not available, baseline memory set to 0")
++            logger.warning("No active-memory probe available, baseline memory set to 0")
+ 
+     def set_request_stats(self, running: int, waiting: int) -> None:
+         """
