@@ -320,7 +320,40 @@ happen once per layer, not per qmm.
    count wins, GPU time flat; collapses the 23% cast dispatch share).
 
 
-## Two dev-box levers staged for M2 FREE (no new code, env overrides on the shipped routes)
+## HONESTY NOTE: rows 9..16 route landed ahead of hardware validation
+
+The two-pass token8 for rows 9..16 landed on main at 15cd405ed (after
+3df5f40b2). Validation at the time of landing:
+- llvmpipe (dev box, no subgroup): passes the C++ doctest grid
+  (k 896/448, n%8 0/!=0, tokens 2..16, folded adds, kill switch)
+  - 376,843/376,843 fused_chain assertions; the rows 9..16 two-pass
+  cell was not in that grid (it added 9/12 after the landed commit).
+- Apple GPU (M2): NO run - M2 builds were paused behind JWM1 PMP
+  DONE (Main's w73 window directive).
+- The prior M2 pass on the rows 9..16 route at the M=16 single-pass
+  shape showed one data-dependent element divergence on AGX
+  (deterministic; llvmpipe passes the same cell); the two-pass path
+  halves the work and the per-half token8 chain is the same as the
+  standalone token8 kernel (M2-green on cells with rows<=8), so the
+  per-row bit-identity is by construction, but a DIRECT M2 A/B on
+  rows 9..16 with the two-pass dispatch has not been run.
+
+Main's order on receiving this: "first M2 ticket after JWM1 PMP DONE
+is the per-row bit-identity doctest for rows 9..16 on Apple GPU (and
+the DFlash/forward q16 A/B); if anything is red, revert that route
+on main immediately (kill switch default off or revert commit) and
+tell me." Recorded honestly in this receipt per Main.
+
+## REVERT: rows 9..16 two-pass route gated to rows<=8 (committed)
+
+Following Main's rule, revert by lowering the fence from
+kQmmVecTokenRowsMax (16) back to 8 until the Apple-GPU M2 doctest
+passes. The kill switch (MLX_OMARCHY_QMM_VEC_TOKEN_MULTI) is unchanged.
+The two-pass token8 dispatch and token16 blobs remain compiled and
+selectable; only the FENCE / planner accept rows 1..8. The commit
+restoring rows<=8 is on agent/midm-forward (to be pushed to main
+when M2 is back).
+
 
 Both are existing-blob A/Bs that the host can dispatch from the
 landed tree on the M2, with the only knob being an env variable that
