@@ -11846,6 +11846,10 @@ void DsaIndexerScores::eval_gpu(
       k_tiles);
 }
 
+bool DsaDecodeScores::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
 // GLM DSA fused decode indexer scan, shaders/dsa_decode.comp (f32-out
 // twin via -DFP32_OUT). One workgroup per (batch, 256-key tile) stages
 // the 32 x 128 query panel and weights in f32 shared memory (16.5 KiB);
