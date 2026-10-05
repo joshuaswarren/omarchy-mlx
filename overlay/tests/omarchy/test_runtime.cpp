@@ -725,6 +725,62 @@ TEST_CASE("allocator tracks buffers and reuses the cache") {
   alloc.free(allocator::Buffer{c});
   CHECK(alloc.get_active_memory() == before);
 }
+
+TEST_CASE("memory and wired limits drive cache release, never fake failures") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+
+  // Wired limit round-trips through the allocator (dflash acquire/restore
+  // contract).
+  CHECK(alloc.set_wired_limit(0) == alloc.get_wired_limit());
+  CHECK(alloc.set_wired_limit(1u << 30) == 0);
+  CHECK(alloc.set_wired_limit(0) == (1u << 30));
+
+  const size_t saved_limit = alloc.get_memory_limit();
+  alloc.set_cache_limit(64u << 20);
+  alloc.clear_cache();
+  const size_t before = alloc.get_active_memory();
+
+  // Cache one 4 MiB block, then park the limit just above active memory so
+  // any fresh allocation exceeds it.
+  auto* blk = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(4u << 20).ptr());
+  REQUIRE(blk != nullptr);
+  alloc.free(allocator::Buffer{blk});
+  REQUIRE(alloc.get_cache_memory() == (4u << 20));
+  alloc.set_memory_limit(before + 1);
+
+  // Exceeding the limit releases the reuse cache (Metal semantics); the
+  // fresh allocation itself still succeeds — the limit never fabricates a
+  // driver failure the driver did not report.
+  auto* fresh = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(8u << 20).ptr());
+  REQUIRE(fresh != nullptr);
+  CHECK(alloc.get_cache_memory() == 0);
+  alloc.free(allocator::Buffer{fresh});
+  alloc.clear_cache();
+
+  // A raised wired limit lifts the effective ceiling: the same fresh
+  // allocation no longer forces a cache release.
+  auto* blk2 = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(4u << 20).ptr());
+  REQUIRE(blk2 != nullptr);
+  alloc.free(allocator::Buffer{blk2});
+  REQUIRE(alloc.get_cache_memory() == (4u << 20));
+  alloc.set_memory_limit(before + 1);
+  CHECK(alloc.set_wired_limit(64u << 30) == 0);
+  auto* fresh2 =
+      static_cast<omarchy::VulkanBuffer*>(alloc.malloc(8u << 20).ptr());
+  REQUIRE(fresh2 != nullptr);
+  CHECK(alloc.get_cache_memory() == (4u << 20));
+  alloc.free(allocator::Buffer{fresh2});
+
+  alloc.clear_cache();
+  alloc.set_memory_limit(saved_limit);
+  CHECK(alloc.set_wired_limit(0) == (64u << 30));
+  CHECK(alloc.get_active_memory() == before);
+}
+
 TEST_CASE(
     "freeing an in-flight buffer drops accounting but quarantines reuse") {
   if (!gpu::is_available()) {
