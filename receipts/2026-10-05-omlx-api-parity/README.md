@@ -46,16 +46,34 @@ Per-row acceptance (pre-registered; full detail in the notebook entry):
 | A18 | tool_calls parsed; response_format json_schema conforms; MCP echo round-trip (server started with --mcp-config) |
 | A31 | /api/web-search/test real results (ddgs, M2 internet); chat search path; /api/usage rows for this run |
 
-## A12 blocker (needs Main)
+## A12 models (approved by Main 2026-10-05 ~09:45Z; small, <2 GB each)
 
-No embedding/rerank model exists in any fleet HF cache (greps on M2, jwm1,
-macstudio 2026-10-05 ~09:07Z). Native loaders mean TWO small downloads suffice:
-`mlx-community/all-MiniLM-L6-v2` (~90 MB, BERT arch) and
-`mlx-community/Qwen3-Reranker-0.6B-4bit` (~0.6 GB, CausalLM reranker path,
-`omlx/models/reranker.py:6-11`). Requested from Main; a12 skips honestly until
-approved.
+No embedding/rerank model existed in any fleet HF cache (greps on M2, jwm1,
+macstudio 2026-10-05 ~09:07Z). Approved downloads, into the M2 HF cache after
+M2 FREE, with >=25 GiB disk free checked before and after (HF API verified):
+
+- `mlx-community/all-MiniLM-L6-v2-bf16` (~90 MB; substitution for the requested
+  `all-MiniLM-L6-v2`: that repo exposes no safetensors, and omlx requires
+  safetensors — models/embedding.py:399; -bf16 is the same BERT-arch model)
+- `mlx-community/Qwen3-Reranker-0.6B-4bit` (~0.4 GB, safetensors confirmed,
+  CausalLM reranker path, models/reranker.py:6-11)
+
+## M2 ticket plan (staged at jw14m2-linux:/tmp/omlxapi/, prepared 2026-10-05 ~09:45Z)
+
+1. `m2_ticket_setup.sh` — NO GPU ticket (CPU/disk/network): fresh detached
+   worktree of origin/main into /tmp/omlxapi/repo, v0.7.28 aarch64 wheel
+   (sha256 68bb536f… verified) via install.sh into the throwaway venv
+   /tmp/omlx-home/.venvs/omlx (/tmp was wiped; venv rebuilt).
+2. `m2_ticket_a_download.sh` — gpu-turn -m 6: the two model downloads (~0.5 GB).
+3. `m2_ticket_b_parity.sh` — gpu-turn -m 12: `api_parity.sh --start … all`
+   (serve on 127.0.0.1 with --mcp-config; runs a1,a2,a3,a12,a13,a18,a31; kills
+   its own server; parity.log + per-check evidence files remain in the run dir).
+
+Provenance basis: whatever the venv holds at run time is printed into the log
+(omlx 0.7.0 pin; mlx wheel = v0.7.28 line; mlx-lm patched series).
 
 ## Status
 
 - A1 A2 A3 A13 A18 A31: harness green on dev box; REAL receipt pending M2 run.
-- A12: harness green (mock); REAL receipt pending download approval + M2 run.
+- A12: harness green (mock); models approved; REAL receipt pending tickets above.
+
