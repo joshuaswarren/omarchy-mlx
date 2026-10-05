@@ -780,6 +780,11 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, size_t> reshape_redirect_roles;
   std::unordered_map<std::uintptr_t, size_t> rope_pair_roles;
   std::vector<RopePair> rope_pairs;
+  // Persistent MLP tail plans (MLX_OMARCHY_PERSISTENT_MLP): the norm
+  // node's id maps to its plan; the plan carries its gu/dn gemv-group
+  // indices, which the tail dispatch marks done.
+  std::unordered_map<std::uintptr_t, size_t> tail_roles;
+  std::vector<PersistentTailPlan> tail_plans;
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
@@ -1543,6 +1548,84 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
   }
+  // Persistent MLP tail plan (MLX_OMARCHY_PERSISTENT_MLP, default off).
+  // Pattern: RmsNorm(x) -> one {gate, up} group carrying the SwiGLU
+  // store fold -> one down group whose Add epilogue adds x back. When
+  // the whole pattern checks out at plan time, the norm node maps to a
+  // tail plan and fires the ONE PersistentTailBF16 dispatch (which
+  // writes x_norm, the fold product, the raw down row, and the summed
+  // output) at its eval; both gemv groups flip to done. Any dispatch-
+  // time refusal unwinds everything onto the shipped three-dispatch
+  // path (the norm node and both groups then evaluate ordinarily).
+  if (persistent_mlp_enabled()) {
+    for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
+      auto& gu = state->gemv_groups[gi];
+      if (gu.members.size() != 2 || !gu.swiglu_out || gu.outgate ||
+          gu.members[0].epilogue || gu.members[1].epilogue ||
+          gu.members[0].sum_window || gu.members[1].sum_window ||
+          gu.members[0].node.dtype() != bfloat16) {
+        continue;
+      }
+      for (size_t di = 0; di < state->gemv_groups.size(); ++di) {
+        if (di == gi) {
+          continue;
+        }
+        auto& dn = state->gemv_groups[di];
+        if (dn.members.size() != 1 || !dn.members[0].epilogue ||
+            dn.members[0].sum_window || dn.outgate ||
+            dn.members[0].node.dtype() != bfloat16) {
+          continue;
+        }
+        if (dn.members[0].node.inputs()[0].id() != gu.swiglu_out->id() ||
+            dn.members[0].addend->dtype() != bfloat16) {
+          continue;
+        }
+        const array& residual = *dn.members[0].addend;
+        // The norm node IS the gate/up group's shared x; its input must
+        // be the same residual the down Add reads back.
+        if (!is_op(&gu.members[0].node.inputs()[0], typeid(fast::RMSNorm))) {
+          continue;
+        }
+        const array& norm_node = gu.members[0].node.inputs()[0];
+        if (claimed.count(norm_node.id()) ||
+            norm_node.inputs().size() != 2 ||
+            norm_node.inputs()[0].id() != residual.id() ||
+            norm_node.dtype() != bfloat16 ||
+            norm_node.inputs()[1].dtype() != bfloat16 ||
+            norm_node.primitive().stream() !=
+                gu.members[0].node.primitive().stream()) {
+          continue;
+        }
+        // Shapes: one decode row of K bf16 elements; the weight covers
+        // the row. The dispatch re-checks readiness and the whole-dense
+        // buffer contracts; here only the graph shape is decided.
+        const array& tail_x = norm_node.inputs()[0];
+        if (tail_x.ndim() < 2 || tail_x.shape(-2) != 1 ||
+            tail_x.size() != static_cast<size_t>(tail_x.shape(-1)) ||
+            tail_x.size() == 0 || tail_x.size() % 64 != 0 ||
+            norm_node.inputs()[1].size() != tail_x.size() ||
+            residual.size() != tail_x.size()) {
+          continue;
+        }
+        float eps = static_cast<const fast::RMSNorm&>(norm_node.primitive())
+                        .state()
+                        .second;
+        state->tail_plans.emplace_back(
+            tail_x,
+            norm_node.inputs()[1],
+            eps,
+            norm_node,
+            *gu.swiglu_out,
+            gu.members,
+            dn.members[0],
+            gi,
+            di);
+        size_t index = state->tail_plans.size() - 1;
+        state->tail_roles.emplace(norm_node.id(), index);
+        break;
+      }
+    }
+  }
   std::unordered_map<std::uintptr_t, std::vector<const array*>> dense_by_x;
   std::vector<std::uintptr_t> dense_x_order;
   for (const auto& node : tape) {
@@ -1859,6 +1942,11 @@ bool fused_gemv_enabled() {
        env_flag("MLX_OMARCHY_FUSED_GEMV"));
 }
 
+bool persistent_mlp_enabled() {
+  const char* v = std::getenv("MLX_OMARCHY_PERSISTENT_MLP");
+  return v != nullptr && !(v[0] == '0' && v[1] == '\0');
+}
+
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue off
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
 bool fused_gemv_swiglu_enabled() {
@@ -1935,6 +2023,38 @@ void commit_values_kv_write(const array& sum_node) {
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
+  }
+  if (auto tail = eager_state->tail_roles.find(node.id());
+      tail != eager_state->tail_roles.end()) {
+    auto& plan = eager_state->tail_plans[tail->second];
+    if (plan.state == PersistentTailPlan::State::done) {
+      return true;
+    }
+    if (plan.state == PersistentTailPlan::State::failed) {
+      return false;
+    }
+    // A settle pass already ran the tail: both written outputs are
+    // resident, so the plan is simply closed.
+    if (plan.norm_out.status() == array::Status::evaluated &&
+        plan.dn_member.epilogue->status() == array::Status::evaluated) {
+      plan.state = PersistentTailPlan::State::done;
+      eager_state->gemv_groups[plan.gu_group].state =
+          GemvGroup::State::done;
+      eager_state->gemv_groups[plan.dn_group].state =
+          GemvGroup::State::done;
+      return true;
+    }
+    bool fired = dispatch_persistent_mlp_tail(plan, stream);
+    if (fired) {
+      plan.state = PersistentTailPlan::State::done;
+      eager_state->gemv_groups[plan.gu_group].state =
+          GemvGroup::State::done;
+      eager_state->gemv_groups[plan.dn_group].state =
+          GemvGroup::State::done;
+    } else {
+      plan.state = PersistentTailPlan::State::failed;
+    }
+    return fired;
   }
   if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
       rope_pair != eager_state->rope_pair_roles.end()) {

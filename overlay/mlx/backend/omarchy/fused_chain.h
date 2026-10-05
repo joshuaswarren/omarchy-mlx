@@ -256,4 +256,61 @@ bool fused_trio_enabled();
 // RoPE path unchanged. Defined in primitives.cpp beside
 // dispatch_quantized_gemv_group.
 bool dispatch_rope_pair(std::array<array, 2>& nodes, const Stream& stream);
+
+// Persistent decode MLP tail (H290 -> H294): ONE PersistentTailBF16
+// dispatch replacing the decode tail's three dispatches (fast_norm;
+// qmm_vec multi fold on [gate, up]; qmm_vec multi add on down). The
+// kernel runs the three stages over G tile-strided workgroups with two
+// in-kernel grid barriers; G comes from a startup probe of the real
+// pipeline's register pressure (HkTurnover formula), cross-checked with
+// the measured-good ceilings, and any timeout flag falls back sticky.
+// |x| is the norm input and the down Add's addend (residual); |norm_w|
+// the RMSNorm weight with |eps|; |norm_out| the x_norm buffer and
+// |swiglu_out| the x_mid buffer, both allocated and written by the
+// dispatch; |gu_members| is exactly [gate, up] without epilogues or
+// windows and |dn_member| the down projection with its Add epilogue
+// (addend == *x) and no window. gu_group/dn_group/state are planner
+// bookkeeping. Returns false having allocated nothing when any
+// contract check, the probe, or the sticky gate refuses; the caller
+// then takes the shipped three-dispatch path. Defined in
+// primitives.cpp beside dispatch_quantized_gemv_group.
+struct PersistentTailPlan {
+  PersistentTailPlan(
+      array x_,
+      array norm_w_,
+      float eps_,
+      array norm_out_,
+      array swiglu_out_,
+      std::vector<GemvFusionMember> gu_members_,
+      GemvFusionMember dn_member_,
+      size_t gu_group_,
+      size_t dn_group_)
+      : x(std::move(x_)),
+        norm_w(std::move(norm_w_)),
+        eps(eps_),
+        norm_out(std::move(norm_out_)),
+        swiglu_out(std::move(swiglu_out_)),
+        gu_members(std::move(gu_members_)),
+        dn_member(std::move(dn_member_)),
+        gu_group(gu_group_),
+        dn_group(dn_group_) {}
+  array x;
+  array norm_w;
+  float eps{0.0f};
+  array norm_out;
+  array swiglu_out;
+  std::vector<GemvFusionMember> gu_members;
+  GemvFusionMember dn_member;
+  size_t gu_group{0};
+  size_t dn_group{0};
+  enum class State : uint8_t { pending, done, failed } state{State::pending};
+};
+bool dispatch_persistent_mlp_tail(
+    PersistentTailPlan& plan,
+    const Stream& stream);
+
+// MLX_OMARCHY_PERSISTENT_MLP: route the decode MLP tail through the one
+// persistent dispatch. Default off (shipped three-dispatch path); =0 is
+// the kill switch.
+bool persistent_mlp_enabled();
 } // namespace mlx::core::omarchy

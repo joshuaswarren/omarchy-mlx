@@ -9,10 +9,12 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string_view>
 #include <initializer_list>
 #include <optional>
@@ -32,6 +34,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/fused_chain.h"
+#include "mlx/backend/omarchy/vulkan.h"
 #include "mlx/distributed/primitives.h"
 #include "mlx/fast_primitives.h"
 #include "mlx/backend/gpu/copy.h"
@@ -8063,6 +8066,414 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiF16,
             ComputeKernel::QmmVecQ4MultiBF16);
   encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+  return true;
+}
+
+namespace {
+
+// PersistentTail device state: one probe, one scratch, one sticky gate.
+// The backend is single-device; all fields ride one mutex.
+struct PersistentTailState {
+  std::mutex mu;
+  bool attempted{false};
+  bool probe_ok{false};
+  bool timed_out{false};
+  uint32_t g_fit{0};
+  uint32_t gprs{0};
+  uint32_t cores{0};
+  std::optional<array> scratch;
+};
+
+PersistentTailState persistent_tail_state;
+
+// Binding slot 37: [0] barrier arrival counter, [1] generation,
+// [2] sticky timeout flag (the shader ORs 1 under the bounded spin).
+constexpr uint32_t kPersistentTailBindingCount = 38;
+
+// SKU-conservative GPU core counts: the low SKU of each chip code, so a
+// high-SKU die only pushes the formula's G down (never above a measured
+// window). Unknown chip -> 0 and the route refuses.
+uint32_t persistent_tail_cores(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) {
+    return 8;  // T8103
+  }
+  if (device_name.find("G13C") != std::string::npos) {
+    return 24;  // T6001 low SKU
+  }
+  if (device_name.find("G13M") != std::string::npos) {
+    return 14;  // T6000 low SKU
+  }
+  if (device_name.find("G14C") != std::string::npos) {
+    return 30;  // T6021 low SKU
+  }
+  if (device_name.find("G14P") != std::string::npos) {
+    return 19;  // T6020
+  }
+  if (device_name.find("G14S") != std::string::npos) {
+    return 8;  // T6022 low SKU
+  }
+  return 0;
+}
+
+// H290/H293 measured-good real-kernel residency: clean G at the cap,
+// bounded-spin timeout above it. Chips without a measured window take
+// the formula alone (the timeout flag remains the safety net).
+uint32_t persistent_tail_measured_cap(const std::string& device_name) {
+  if (device_name.find("G13G") != std::string::npos) {
+    return 96;  // clean <= 96, timeout at 112
+  }
+  if (device_name.find("G14C") != std::string::npos) {
+    return 128;  // clean at 128, timeout at 256
+  }
+  return kMaxComputeGroupCountX;
+}
+
+// HkTurnover residency formula on the ACTUAL built pipeline:
+// G_fit = floor(cores * min(3072, floor(319488 / gprs)) / 256 threads).
+// gprs comes from VK_KHR_pipeline_executable_properties statistics on
+// PersistentTailBF16; any missing piece refuses the route.
+bool probe_persistent_tail_g(CommandEncoder& encoder, PersistentTailState& st) {
+  auto& device = encoder.device();
+  const auto& caps = device.hardware_capabilities();
+  st.cores = persistent_tail_cores(caps.device_name);
+  if (st.cores == 0) {
+    return false;
+  }
+  VkPipeline pipeline =
+      device.compute().pipeline(ComputeKernel::PersistentTailBF16);
+  if (pipeline == VK_NULL_HANDLE) {
+    return false;
+  }
+  auto* get_props =
+      reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
+          vk::device_table().GetDeviceProcAddr(
+              device.handle(), "vkGetPipelineExecutablePropertiesKHR"));
+  auto* get_stats =
+      reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+          vk::device_table().GetDeviceProcAddr(
+              device.handle(), "vkGetPipelineExecutableStatisticsKHR"));
+  if (get_props == nullptr || get_stats == nullptr) {
+    return false;
+  }
+  VkPipelineInfoKHR pipeline_info{
+      VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR,
+      nullptr,
+      pipeline};
+  uint32_t exec_count = 0;
+  if (get_props(device.handle(), &pipeline_info, &exec_count, nullptr) !=
+          VK_SUCCESS ||
+      exec_count == 0) {
+    return false;
+  }
+  std::vector<VkPipelineExecutablePropertiesKHR> execs(
+      exec_count,
+      VkPipelineExecutablePropertiesKHR{
+          VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+  if (get_props(device.handle(), &pipeline_info, &exec_count, execs.data()) !=
+      VK_SUCCESS) {
+    return false;
+  }
+  for (uint32_t index = 0; index < exec_count; ++index) {
+    VkPipelineExecutableInfoKHR exec_info{
+        VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR,
+        nullptr,
+        pipeline,
+        index};
+    uint32_t stat_count = 0;
+    if (get_stats(device.handle(), &exec_info, &stat_count, nullptr) !=
+        VK_SUCCESS) {
+      continue;
+    }
+    std::vector<VkPipelineExecutableStatisticKHR> stats(
+        stat_count,
+        VkPipelineExecutableStatisticKHR{
+            VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+    if (get_stats(device.handle(), &exec_info, &stat_count, stats.data()) !=
+        VK_SUCCESS) {
+      continue;
+    }
+    for (const auto& stat : stats) {
+      std::string name = stat.name;
+      for (auto& c : name) {
+        c = std::tolower(static_cast<unsigned char>(c));
+      }
+      bool is_gprs = name.find("gpr") != std::string::npos ||
+          name.find("regist") != std::string::npos;
+      if (!is_gprs) {
+        continue;
+      }
+      uint64_t value = 0;
+      if (stat.format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR) {
+        value = stat.value.u64;
+      } else if (
+          stat.format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR) {
+        value = stat.value.i64 > 0
+            ? static_cast<uint64_t>(stat.value.i64)
+            : 0;
+      } else {
+        continue;
+      }
+      // Sanity: agx register pressure is rows of half-registers; the
+      // observed fused-tail band is ~200-250. A value outside [32, 1024]
+      // is not a register statistic this formula can use.
+      if (value < 32 || value > 1024) {
+        continue;
+      }
+      st.gprs = static_cast<uint32_t>(value);
+      uint64_t threads_per_core = std::min<uint64_t>(
+          3072, 319488ull / st.gprs);
+      uint64_t g_formula = st.cores * threads_per_core / 256ull;
+      uint64_t g = std::min<uint64_t>(
+          g_formula, persistent_tail_measured_cap(caps.device_name));
+      if (g == 0 || g > kMaxComputeGroupCountX) {
+        return false;
+      }
+      st.g_fit = static_cast<uint32_t>(g);
+      std::fprintf(
+          stderr,
+          "[persistent-mlp] probe: %s cores=%u gprs=%u G_fit=%u\n",
+          caps.device_name.c_str(),
+          st.cores,
+          st.gprs,
+          st.g_fit);
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+bool dispatch_persistent_mlp_tail(
+    PersistentTailPlan& plan,
+    const Stream& stream) {
+  const std::string tag = "persistent_mlp_tail";
+  auto& encoder = get_command_encoder(stream);
+  const auto& caps = encoder.device().capabilities();
+  if (encoder.device().compute().binding_limit() <
+          kPersistentTailBindingCount) {
+    return false;
+  }
+  bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  if (!subgroup_ready) {
+    return false;
+  }
+  PersistentTailState& st = persistent_tail_state;
+  {
+    std::lock_guard<std::mutex> lk(st.mu);
+    if (st.timed_out) {
+      return false;
+    }
+    if (!st.attempted) {
+      st.attempted = true;
+      st.probe_ok = probe_persistent_tail_g(encoder, st);
+      if (!st.probe_ok) {
+        std::fprintf(
+            stderr,
+            "[persistent-mlp] probe failed; shipped path\n");
+      }
+    }
+    if (!st.probe_ok) {
+      return false;
+    }
+  }
+  const array& x = plan.x;
+  const array& norm_w = plan.norm_w;
+  if (plan.gu_members.size() != 2 || x.dtype() != bfloat16 ||
+      norm_w.dtype() != bfloat16 || plan.gu_members[0].epilogue ||
+      plan.gu_members[1].epilogue || plan.gu_members[0].sum_window ||
+      plan.gu_members[1].sum_window || !plan.dn_member.epilogue ||
+      !plan.dn_member.addend || plan.dn_member.sum_window) {
+    return false;
+  }
+  if (!whole_dense(x, x.size()) || !whole_dense(norm_w, norm_w.size()) ||
+      x.ndim() < 2 || x.shape(-2) != 1 || !input_ready(x, stream)) {
+    return false;
+  }
+  const int k = x.shape(-1);
+  if (k <= 0 || k % 64 != 0 || static_cast<size_t>(k) != x.size() ||
+      norm_w.size() != static_cast<size_t>(k)) {
+    return false;
+  }
+  // The qmm stages keep the production multi contract: affine 4-bit
+  // group-64 transposed weights, whole dense streams, ready inputs.
+  // The gu stage runs at K = k; the dn stage runs at K = the fold
+  // product length. `check_weight` mirrors dispatch_quantized_gemv_group
+  // for one node at its own K.
+  auto check_weight = [&](const array& node, int k_node) -> bool {
+    if (node.inputs().size() != 4 || node.dtype() != bfloat16 ||
+        node.primitive().stream() != stream ||
+        typeid(node.primitive()) != typeid(QuantizedMatmul)) {
+      return false;
+    }
+    auto [group_size, bits, mode, transpose] =
+        static_cast<const QuantizedMatmul&>(node.primitive()).state();
+    if (mode != QuantizationMode::Affine || !transpose || bits != 4 ||
+        group_size != 64) {
+      return false;
+    }
+    const array& w = node.inputs()[1];
+    const array& scales = node.inputs()[2];
+    const array& biases = node.inputs()[3];
+    if (w.dtype() != uint32 || w.ndim() != 2 || scales.dtype() != bfloat16 ||
+        biases.dtype() != bfloat16 || scales.shape() != biases.shape() ||
+        scales.ndim() != 2) {
+      return false;
+    }
+    const int n = w.shape(0);
+    if (n <= 0 || w.shape(1) != k_node / 8 || scales.shape(0) != n ||
+        scales.shape(1) != k_node / 64 ||
+        node.size() != static_cast<size_t>(n) || !whole_dense(w, w.size()) ||
+        !whole_dense(scales, scales.size()) ||
+        !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
+        !input_ready(scales, stream) || !input_ready(biases, stream)) {
+      return false;
+    }
+    return true;
+  };
+  const array& gate_in = plan.gu_members[0].node;
+  const array& up_in = plan.gu_members[1].node;
+  array& gate = plan.gu_members[0].node;
+  array& up = plan.gu_members[1].node;
+  array& down = plan.dn_member.node;
+  if (!check_weight(gate_in, k) || !check_weight(up_in, k) ||
+      up_in.size() != gate_in.size() ||
+      gate_in.inputs()[1].shape(0) != up_in.inputs()[1].shape(0)) {
+    return false;
+  }
+  const uint32_t n_gu = static_cast<uint32_t>(gate_in.size());
+  if (plan.dn_member.node.inputs()[0].id() != plan.swiglu_out.id() ||
+      plan.dn_member.addend->id() != x.id() ||
+      plan.swiglu_out.size() != n_gu ||
+      plan.swiglu_out.dtype() != bfloat16) {
+    return false;
+  }
+  if (!check_weight(down, static_cast<int>(n_gu))) {
+    return false;
+  }
+  array& add = *plan.dn_member.epilogue;
+  if (add.dtype() != bfloat16 || add.primitive().stream() != stream ||
+      add.size() != down.size()) {
+    return false;
+  }
+  const uint32_t n_dn = static_cast<uint32_t>(down.size());
+  if (n_gu > kMaxComputeGroupCountX || n_dn > kMaxComputeGroupCountX) {
+    return false;
+  }
+  // Contract satisfied: allocate every output, then bind.
+  plan.norm_out.set_data(allocate_omarchy(plan.norm_out.nbytes()));
+  plan.swiglu_out.set_data(allocate_omarchy(plan.swiglu_out.nbytes()));
+  down.set_data(allocate_omarchy(down.nbytes()));
+  add.set_data(allocate_omarchy(add.nbytes()));
+  // The fold aliases both projection outputs onto the product so their
+  // retained references stay valid (their only readers were the deleted
+  // swiglu dispatches).
+  Strides fold_strides(gate.ndim(), 1);
+  for (int i = gate.ndim() - 2; i >= 0; --i) {
+    fold_strides[i] = fold_strides[i + 1] * gate.shape(i + 1);
+  }
+  array::Flags fold_flags;
+  fold_flags.contiguous = true;
+  fold_flags.row_contiguous = true;
+  gate.copy_shared_buffer(
+      plan.swiglu_out, fold_strides, fold_flags, gate.data_size(), 0);
+  up.copy_shared_buffer(
+      plan.swiglu_out, fold_strides, fold_flags, up.data_size(), 0);
+  // Scratch: [0] arrival counter, [1] generation, [2] timeout flag.
+  // Zeroed before every dispatch; read back in a completion handler.
+  VkBuffer scratch_buffer = VK_NULL_HANDLE;
+  uint32_t* scratch_host = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(st.mu);
+    if (!st.scratch) {
+      array scratch(Shape{3}, uint32, nullptr, {});
+      scratch.set_data(allocator().malloc(3 * sizeof(uint32_t)));
+      st.scratch = std::move(scratch);
+    }
+    auto* buffer = static_cast<const omarchy::VulkanBuffer*>(
+        st.scratch->buffer().ptr());
+    scratch_buffer = buffer->buffer;
+    scratch_host = static_cast<uint32_t*>(buffer->data);
+  }
+  // Push-constant routing (persistent_tail.comp main):
+  //   gu stage rides flags/matrix_k/shape[0..1]; the norm stage rides
+  //   reduce_size/output_size/alpha; the dn stage rides out_strides
+  //   (n, add-epilogue flags bit 8+2, K). Every buffer is whole dense
+  //   at element 0, so all stage offsets are 0.
+  omarchy::ComputeParams params;
+  params.operation = 4u;
+  params.reduce_size = checked_u32(static_cast<size_t>(k), tag, plan.norm_out);
+  params.output_size = 1u;
+  params.matrix_m = 1u;
+  params.matrix_k = checked_u32(static_cast<size_t>(k), tag, plan.norm_out);
+  params.flags = 65536u;  // bit 16: paired-SwiGLU store fold (gu stage)
+  params.alpha = plan.eps;
+  params.shape[0] = n_gu;
+  params.shape[1] = n_gu;
+  params.out_strides[0] = n_dn;
+  params.out_strides[1] = 1024u;  // bit 8+2: dn Add epilogue
+  params.out_strides[2] = n_gu;   // dn K == swiglu_out length
+  const ComputeBinding filler = binding(x);
+  std::array<ComputeBinding, kPersistentTailBindingCount> bindings{};
+  bindings[0] = filler;
+  // Block 0: gate; block 1: up; both outputs alias the fold product.
+  bindings[1] = binding(gate.inputs()[1]);
+  bindings[2] = binding(gate.inputs()[2]);
+  bindings[3] = binding(gate.inputs()[3]);
+  bindings[4] = binding(plan.swiglu_out);
+  bindings[5] = filler;
+  bindings[6] = filler;
+  bindings[7] = binding(up.inputs()[1]);
+  bindings[8] = binding(up.inputs()[2]);
+  bindings[9] = binding(up.inputs()[3]);
+  bindings[10] = binding(plan.swiglu_out);
+  bindings[11] = filler;
+  bindings[12] = filler;
+  // Block 2 (the dn stage's remapped target): down weight, raw GEMV
+  // output, residual addend, summed output. Block 3 unused.
+  bindings[13] = binding(down.inputs()[1]);
+  bindings[14] = binding(down.inputs()[2]);
+  bindings[15] = binding(down.inputs()[3]);
+  bindings[16] = binding(down);
+  bindings[17] = binding(x);
+  bindings[18] = binding(add);
+  for (uint32_t i = 19; i < 30; ++i) {
+    bindings[i] = filler;
+  }
+  bindings[30] = binding(x);              // norm input
+  bindings[31] = binding(norm_w);         // norm weight
+  bindings[32] = filler;
+  bindings[33] = filler;
+  bindings[34] = binding(plan.norm_out);  // norm out (writeonly)
+  bindings[35] = binding(plan.swiglu_out);  // x_mid (dn stage x)
+  bindings[36] = binding(plan.norm_out);  // x_norm (gu stage x)
+  bindings[37] = binding(*st.scratch);    // gbb_sync
+  encoder.fill_buffer(scratch_buffer, 0, 3 * sizeof(uint32_t), 0);
+  encoder.dispatch_compute(
+      ComputeKernel::PersistentTailBF16,
+      bindings,
+      params,
+      st.g_fit,
+      1u,
+      1u);
+  // Lazy, bounded timeout readback: the scratch is the allocator's
+  // host-coherent UMA mapping. A set flag means a non-resident workgroup
+  // gave up inside the bounded spin (2^15 polls, far under the firmware
+  // 40 ms context-switch timeout) and the token's outputs are not
+  // trustworthy: disable the route sticky and say so loudly.
+  encoder.add_completed_handler([&st, scratch_host]() {
+    if (scratch_host[2] != 0u) {
+      std::lock_guard<std::mutex> lk(st.mu);
+      if (!st.timed_out) {
+        st.timed_out = true;
+        std::fprintf(
+            stderr,
+            "[persistent-mlp] timeout flag set; sticky fallback to the "
+            "shipped three-dispatch path\n");
+      }
+    }
+  });
   return true;
 }
 
