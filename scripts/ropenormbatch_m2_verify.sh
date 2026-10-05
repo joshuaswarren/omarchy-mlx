@@ -23,9 +23,10 @@ tail -4 /var/tmp/ropenormbatch-build.log
 WHEEL=$(ls -t dist/mlx_omarchy-*.whl | head -1)
 echo "== wheel: $WHEEL"
 
-echo "== private venv f1"
+echo "== private venv f1 (base has mlx_lm 0.31.3 for the behavior pytest)"
+BASE_VENV="${RNB_BASE_VENV:-$HOME/bench-qwen38-venv}"
 if [ ! -d /var/tmp/ropenormbatch-venv-f1 ]; then
-  cp -a /var/tmp/shared-omarchy-venv /var/tmp/ropenormbatch-venv-f1
+  cp -a "$BASE_VENV" /var/tmp/ropenormbatch-venv-f1
   /var/tmp/ropenormbatch-venv-f1/bin/python -m venv --upgrade /var/tmp/ropenormbatch-venv-f1
 fi
 /var/tmp/ropenormbatch-venv-f1/bin/python -m pip install --no-deps --force-reinstall -q "$WHEEL"
