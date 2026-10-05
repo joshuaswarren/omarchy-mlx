@@ -44,9 +44,30 @@ NORM_NEW = """        queries, keys, values = self.q_proj(x), self.k_proj(x), se
         # below (bit-identical by construction); the backend fence refuses
         # non-fuseable legs loudly.
         if (
-            os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "1") == "1"
+            # qwen3 dense rope-norm fold. Kill switches (any of these
+            # disables the fold and falls through to the bit-identical
+            # composed chain in the else branch):
+            #   * MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE=0  -- this patch only
+            #   * MLX_OMARCHY_ROPE_NORM_FUSE=0         -- qwen3 + qwen3_next
+            #   * batched cache (.offset is an mx.array) -- BatchGenerator
+            #     passes per-request array offsets even at B == 1, and
+            #     mx.fast.rope_rms_norm requires a Python-int offset
+            #     (the kernel is per-step, not per-request). v0.7.27.
+            #   * B > 1                                  -- multi-request
+            #     batched inference, same kernel-broadcast issue as the
+            #     cache offset mismatch but on a different axis.
+            # The composed chain is bit-identical and stays on every
+            # path the fold cannot serve; the +4.18..+4.86% decode win
+            # is preserved for plain single-request mlx_lm.server.
+            (
+                os.environ.get("MLX_OMARCHY_QWEN3_ROPE_NORM_FUSE",
+                                os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "1"))
+                == "1"
+            )
             and queries.dtype == mx.bfloat16
             and hasattr(mx.fast, "rope_rms_norm")
+            and (cache is None or isinstance(cache.offset, int))
+            and B == 1
         ):
             offset_pos = cache.offset if cache is not None else 0
             queries = mx.fast.rope_rms_norm(
