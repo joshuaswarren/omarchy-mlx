@@ -36,6 +36,9 @@ ART=
 log()  { echo "[$(date -u +%H:%M:%S.%3NZ)] $*"; }
 fail() { log "FAIL: $*"; stop_server; exit 1; }
 sha()  { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' "$1"; }
+# Greedy-equality digest: sha256 of (reasoning_content + content) + token counts.
+# NEVER hash the raw body: ids/created/timings differ between any two requests.
+cdig() { python3 -c 'import json,hashlib,sys; r=json.load(open(sys.argv[1])); m=r["choices"][0]["message"]; print(hashlib.sha256(((m.get("reasoning_content") or "")+(m.get("content") or "")).encode()).hexdigest()[:16], r["usage"]["completion_tokens"], r["usage"]["prompt_tokens"])' "$1"; }
 
 jsonpost() { # jsonpost <outfile> <path> <body>
   curl -sS --max-time 150 -o "$1" -w '%{http_code}' -X POST "$BASE$2" \
@@ -134,7 +137,7 @@ a4() {
   code=$(jsonpost out_single.json /v1/chat/completions @body_single.json)
   [ "$code" = 200 ] || fail "single digest request HTTP $code"
   grep -q '"content"' out_single.json || fail "single digest produced no content"
-  log "single digest OK: sha=$(sha out_single.json)"
+  log "single digest OK: $(cdig out_single.json)"
 
   for i in 0 1 2 3; do
     digest_body body_b$i.json "$Q4B"
@@ -147,9 +150,9 @@ a4() {
   for i in 0 1 2 3; do
     c=$(cat code_b$i.txt)
     [ "$c" = 200 ] || fail "batched request $i HTTP $c: $(head -c 300 out_b$i.json)"
-    s=$(sha out_b$i.json); s0=$(sha out_single.json)
-    [ "$s" = "$s0" ] || fail "GREEDY MISMATCH batch $i: $s != single $s0"
-    log "batch$i 200 sha=$s == single (GREEDY-EQUAL)"
+    d=$(cdig out_b$i.json); d0=$(cdig out_single.json)
+    [ "$d" = "$d0" ] || fail "GREEDY MISMATCH batch $i: $d != single $d0"
+    log "batch$i 200 digest=$d == single (GREEDY-EQUAL)"
   done
   grep -E 'broadcast_shapes|Cache corruption' "$ART/server.log" \
     && fail "corruption lines in server.log" || log "server.log: zero corruption lines"
@@ -175,7 +178,7 @@ PY
   mkbody body_seqB.json "$Q4B" "List the three stages named in the passage."
   code=$(jsonpost out_seqA.json /v1/chat/completions @body_seqA.json); [ "$code" = 200 ] || fail "seqA HTTP $code"
   code=$(jsonpost out_seqB.json /v1/chat/completions @body_seqB.json); [ "$code" = 200 ] || fail "seqB HTTP $code"
-  log "sequential refs: A=$(sha out_seqA.json) B=$(sha out_seqB.json)"
+  log "sequential refs: A=$(cdig out_seqA.json) B=$(cdig out_seqB.json)"
 
   start_server "$Q4B"
   mkbody body_cA.json "$Q4B" "Summarize the passage in one sentence."
@@ -185,8 +188,8 @@ PY
   wait $PA $PB || fail "concurrent prefix pair failed"
   [ "$(cat code_cA.txt)" = 200 ] || fail "cA HTTP $(cat code_cA.txt)"
   [ "$(cat code_cB.txt)" = 200 ] || fail "cB HTTP $(cat code_cB.txt)"
-  [ "$(sha out_cA.json)" = "$(sha out_seqA.json)" ] || fail "COW divergence A: $(sha out_cA.json) != $(sha out_seqA.json)"
-  [ "$(sha out_cB.json)" = "$(sha out_seqB.json)" ] || fail "COW divergence B: $(sha out_cB.json) != $(sha out_seqB.json)"
+  [ "$(cdig out_cA.json)" = "$(cdig out_seqA.json)" ] || fail "COW divergence A: $(cdig out_cA.json) != $(cdig out_seqA.json)"
+  [ "$(cdig out_cB.json)" = "$(cdig out_seqB.json)" ] || fail "COW divergence B: $(cdig out_cB.json) != $(cdig out_seqB.json)"
   log "COW check: divergent-suffix concurrent outputs byte-identical to sequential refs"
   grep -ciE 'paged|block' "$ART/server.log" >/dev/null \
     && grep -iE 'paged|block' "$ART/server.log" | head -5 || log "note: no paged/block log lines (recorded honestly)"
@@ -211,7 +214,7 @@ json.dump({"model":model,"messages":[{"role":"user","content":pre+"Summarize."}]
 PY
   T0=$(date +%s%3N)
   code=$(jsonpost out1.json /v1/chat/completions @body1.json); [ "$code" = 200 ] || fail "warm leg HTTP $code"
-  T1=$(date +%s%3N); log "prefix request 1: $((T1-T0)) ms sha=$(sha out1.json)"
+  T1=$(date +%s%3N); log "prefix request 1: $((T1-T0)) ms digest=$(cdig out1.json)"
   NFLY=$(find "$SSD" -type f | wc -l); NSAF=$(find "$SSD" -name '*.safetensors' | wc -l)
   log "ssd dir after req1: $NFLY files, $NSAF safetensors"
   [ "$NSAF" -ge 1 ] || log "note: no safetensors blocks yet (offload policy may be lazy) — recorded honestly"
@@ -220,8 +223,8 @@ PY
   start_server "$Q4B" --paged-ssd-cache-dir "$SSD" --hot-cache-max-size 64MB
   T2=$(date +%s%3N)
   code=$(jsonpost out2.json /v1/chat/completions @body1.json); [ "$code" = 200 ] || fail "post-restart HTTP $code"
-  T3=$(date +%s%3N); log "post-restart prefix request: $((T3-T2)) ms sha=$(sha out2.json)"
-  [ "$(sha out1.json)" = "$(sha out2.json)" ] || fail "post-restart digest diverged (cold tier restored wrong state)"
+  T3=$(date +%s%3N); log "post-restart prefix request: $((T3-T2)) ms digest=$(cdig out2.json)"
+  [ "$(cdig out1.json)" = "$(cdig out2.json)" ] || fail "post-restart digest diverged (cold tier restored wrong state)"
   if grep -qi 'restore' "$ART/server.log"; then grep -i 'restore' "$ART/server.log" | head -3
   else log "note: no explicit restore line; relying on digest equality + ssd file listing"; fi
   log "PASS a6: cold tier survived restart, digest identical"
@@ -245,7 +248,7 @@ json.dump({"model":model,"messages":[{"role":"user","content":pre+"Implement the
            "max_tokens":96,"temperature":0,"stream":False},open(out,"w"))
 PY
   code=$(jsonpost out_ref.json /v1/chat/completions @body_ref.json); [ "$code" = 200 ] || fail "reference leg HTTP $code"
-  log "reference (off): sha=$(sha out_ref.json)"
+  log "reference (off): digest=$(cdig out_ref.json)"
   code=$(jsonput s1.json "/api/models/$DSC/settings" \
     '{"specprefill_enabled": true, "specprefill_draft_model": "'"$DRAFT"'", "specprefill_threshold": 256, "specprefill_keep_pct": 0.5}')
   [ "$code" = 200 ] || fail "settings PUT HTTP $code: $(head -c 300 s1.json)"
@@ -254,7 +257,7 @@ PY
   code=$(jsonpost rl1.json "/api/models/$DSC/load" '{}'); [ "$code" = 200 ] || fail "reload after settings HTTP $code"
   sleep 5
   code=$(jsonpost out_on.json /v1/chat/completions @body_ref.json); [ "$code" = 200 ] || fail "specprefill leg HTTP $code"
-  log "specprefill (on): sha=$(sha out_on.json) (approximation by design; equality not asserted)"
+  log "specprefill (on): digest=$(cdig out_on.json) (approximation by design; equality not asserted)"
   grep -i 'specprefill' "$ART/server.log" | head -8 || log "note: no specprefill log lines — SCORING PATH MAY NOT HAVE FIRED, recorded as suspicious"
   grep -qi 'specprefill' "$ART/server.log" || fail "no specprefill activity in server.log — cannot count as exercised"
   log "PASS a8: specprefill request served with log evidence of the scoring path"
@@ -358,23 +361,23 @@ json.dump({"model":model,"messages":[{"role":"user","content":pre+"Summarize in 
            "max_tokens":96,"temperature":0,"stream":False},open(out,"w"))
 PY
   code=$(jsonpost out_off.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "baseline leg HTTP $code"
-  log "tq off: sha=$(sha out_off.json)"
+  log "tq off: digest=$(cdig out_off.json)"
   code=$(jsonput s8.json "/api/models/$Q4B/settings" '{"turboquant_kv_enabled": true, "turboquant_kv_bits": 8}')
   [ "$code" = 200 ] || fail "tq settings PUT HTTP $code: $(head -c 300 s8.json)"
   jsonpost ur8.json "/api/models/$Q4B/unload" '{}' >/dev/null
   code=$(jsonpost rl8.json "/api/models/$Q4B/load" '{}'); [ "$code" = 200 ] || fail "reload after tq PUT HTTP $code"
   sleep 5
   code=$(jsonpost out_b8.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "tq bits=8 leg HTTP $code"
-  log "tq bits=8: sha=$(sha out_b8.json)"
+  log "tq bits=8: digest=$(cdig out_b8.json)"
   code=$(jsonput s4.json "/api/models/$Q4B/settings" '{"turboquant_kv_bits": 4}')
   [ "$code" = 200 ] || fail "tq bits=4 PUT HTTP $code"
   jsonpost ur4.json "/api/models/$Q4B/unload" '{}' >/dev/null
   code=$(jsonpost rl4.json "/api/models/$Q4B/load" '{}'); [ "$code" = 200 ] || fail "reload after bits=4 PUT HTTP $code"
   sleep 5
   code=$(jsonpost out_b4.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "tq bits=4 leg HTTP $code"
-  log "tq bits=4: sha=$(sha out_b4.json)"
+  log "tq bits=4: digest=$(cdig out_b4.json)"
   grep -i 'turboquant' "$ART/server.log" | head -5 || fail "no turboquant lines in server.log — cache wrap not exercised"
-  [ "$(sha out_off.json)" = "$(sha out_b8.json)" ] \
+  [ "$(cdig out_off.json)" = "$(cdig out_b8.json)" ] \
     && log "bits=8 digest == off (near-lossless as documented)" \
     || log "note: bits=8 digest differs from off (recorded honestly)"
   log "PASS a20: TurboQuant applied at bits 8/4 with real completions and log evidence"
@@ -389,7 +392,7 @@ a21() {
   start_server "$DSC"
   chat_body c.json "$DSC" 64 "Write a Python function that reverses a list."
   code=$(jsonpost out_res.json /v1/chat/completions @c.json); [ "$code" = 200 ] || fail "resident leg HTTP $code"
-  log "resident: sha=$(sha out_res.json)"
+  log "resident: digest=$(cdig out_res.json)"
   code=$(jsonget st_res.json /api/models); [ "$code" = 200 ] || fail "status GET HTTP $code"
   code=$(jsonput s.json "/api/models/$DSC/settings" '{"moe_expert_offload_enabled": true, "moe_expert_offload_resident_fraction": 0.25}')
   [ "$code" = 200 ] || fail "offload settings PUT HTTP $code: $(head -c 300 s.json)"
@@ -397,8 +400,8 @@ a21() {
   sleep 20
   i=0; until curl -sS --max-time 2 "$BASE/health" >/dev/null 2>&1; do sleep 2; i=$((i+1)); [ $i -gt 60 ] && fail "server not healthy after offload reload"; done
   code=$(jsonpost out_off.json /v1/chat/completions @c.json); [ "$code" = 200 ] || fail "offload leg HTTP $code"
-  log "offload25: sha=$(sha out_off.json)"
-  [ "$(sha out_res.json)" = "$(sha out_off.json)" ] \
+  log "offload25: digest=$(cdig out_off.json)"
+  [ "$(cdig out_res.json)" = "$(cdig out_off.json)" ] \
     && log "BIT-IDENTICAL: offload does not change routing (doc claim holds)" \
     || fail "offload changed greedy output — accuracy-by-construction claim VIOLATED"
   grep -iE 'offload|resident' "$ART/server.log" | head -6 || log "note: no offload log lines (recorded)"
