@@ -440,3 +440,30 @@ not trigger it. Two runs produced the identical element
 Recommendation: gate the whole qmm token route off by default until
 the AGX miscompilation is root-caused; the composed route is correct
 at every M.
+
+
+## STRESS TEST: token route FUNDAMENTALLY BROKEN (200 datasets/cell)
+
+200 random datasets per cell, 27 cells, 5400 total. 3334 PASS / 2066
+FAIL (38%). The multi-token GEMV has a SYSTEMATIC bug in its
+token-dimension handling on AGX.
+
+| shape | tokens=2 | tokens=5 | tokens=8 | tokens=12 | tokens=16 |
+|---|---|---|---|---|---|
+| k=896/n=512 | 7% fail | 10% fail | 18% fail | 28% fail | 36% fail |
+| k=448/n=130 | 3% fail | 5% fail | 5% fail | 7% fail | 12% fail |
+| k=2560/n=4096 | 62% fail | 90% fail | 99% fail | 100% fail | 100% fail |
+
+Even tokens=2 (ONE extra row) shows failures. The earlier 3x ALL PASS
+and M2-green rows<=8 were false negatives: fixed seed, insufficient
+data coverage. NOT a kernel-version issue (the new kernel shows the
+same failures with diverse data). The route was already OFF (c7c470214).
+
+Root cause hypotheses (Main): (a) fma contraction, (b) uninitialized
+accumulator, (c) subgroup reduction lane order, (d) input_sum chain
+sharing. The failure is exactly 1 element per failing row (n_diff=1),
+deterministic per dataset, scaling with the weight matrix size and the
+token count.
+
+The composed M16 coopmat is the correct fallback. Lever C (M16->M32
+tile) and lever D (cast fusion) are the evidence-backed paths forward.
