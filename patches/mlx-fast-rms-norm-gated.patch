@@ -1,6 +1,6 @@
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
-@@ -18,0 +19,15 @@
+@@ -18,0 +19,16 @@
 +
 +// Fused RMSNorm + SwiGLU gate for the GDN decode chain.
 +MLX_API array rms_norm_gated(
