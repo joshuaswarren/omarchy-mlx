@@ -56,18 +56,17 @@ untouched routes in the same zone (f16, f32, bf16 bits 2).
 | suite / probe | machine | result |
 |---|---|---|
 | new nt test case | dev box (llvmpipe, staged rehearsal ICD, `MLX_OMARCHY_ALLOW_NON_APPLE=1`) | 1/1 case, 80/80 assertions |
-| `omarchy_matmul_family_tests` (full, 24 cases incl. new) | M2 Max (G14C), gpu-turn ticket | 24/24, 82,942,463 assertions (second run; first run had one order-transient failure of the jumbo f16 tile case `m=1023 n=4864 k=4864` which passes in isolation and passed in the rerun) |
-| `omarchy_primitive_tests`, dev-box full family sweep | in flight | recorded when landed |
+| `omarchy_matmul_family_tests` (full, 24 cases incl. new) | M2 Max (G14C), gpu-turn ticket | 24/24, 82,942,463 assertions (second run; first run had one order-transient failure of the jumbo f16 tile case `m=1023 n=4864 k=4864` which passed in isolation and in the rerun) |
+| `omarchy_matmul_family_tests` (full) | dev box (llvmpipe) | 24/24, 21,071,998 assertions |
+| `omarchy_matmul_family_tests` (full) | M1 Max (G13C) | 24/24; `omarchy_primitive_tests` 104/104, 2,743,003 assertions |
+| LoRA dx grad probe | dev box (llvmpipe; wheel `0.32.4.dev202610052022+875ad7ea`) | finite; max abs diff vs dense+same-LoRA reference 1.9073486e-6, bound 0.00391412; pass |
+| 2B LoRA training step / tok/s / peak memory | M2-bound | NOT RUN: awaiting Main's `M2 BACK` announcement after reset window; performance acceptance remains open |
 
 ## Provenance
 
-- Source: `agent/qmm-backward` `0ccc16b9`; no shader files added or
-  changed (nothing new to compile; existing `Dequant*`/matmul kernels
-  reused).
-- Wheel for the python probe: built with `DEV_RELEASE=1
-  MLX_OMARCHY_SOURCE_COMMIT=0ccc16b9` (stamped into the version).
-- Hosts: "M2 Max (G14C)" for the T6021 leg, "M1 Max (G13C)" for the T6001
-  leg (placeholder convention, no hostnames).
+- Source: `agent/qmm-backward` `63ca567ad` (latest probe-only commit; implementation is at `0ccc16b96`); no shader files added or changed (nothing new to compile; existing `Dequant*`/matmul kernels reused).
+- Wheel for the Python probe: built with `DEV_RELEASE=1` from implementation source `0ccc16b96`; version stamp `0.32.4.dev202610052022+875ad7ea` (probe refinements were committed afterward).
+- Hosts: `M2 Max (G14C)` for the T6021 leg, `M1 Max (G13C)` for the T6001 leg (placeholder convention, no hostnames).
 
 ## Notebook
 
