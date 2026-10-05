@@ -114,6 +114,16 @@ Buffer VulkanAllocator::malloc(size_t size) {
       return Buffer{buf};
     }
   }
+  // Honor caller-set limits the way the Metal allocator does: an
+  // allocation that would push active memory past the effective limit
+  // (max(memory limit, wired limit)) first releases the reuse cache.
+  // The vkAllocateMemory below stays the final arbiter — the limit
+  // triggers cache release; it never fabricates a failure the driver
+  // did not report.
+  size_t effective_limit = std::max(memory_limit_, wired_limit_);
+  if (active_memory_ + size > effective_limit) {
+    buffer_cache_.clear();
+  }
   lk.unlock();
 
   auto* buf = new VulkanBuffer{};
@@ -410,23 +420,17 @@ void clear_cache() {
   omarchy::allocator().clear_cache();
 }
 
-// Wired limits are a Metal feature; Omarchy has no equivalent (same as
-// CUDA): there is no GPU-private RAM to wire, no MTL residency set, and
-// mlock(2) would only pin CPU pages that the Vulkan allocator does not
-// need pinned. We expose the API as an honest documented no-op that
-// remembers the most recently requested value and returns the previously
-// stored one, so oMLX's BatchGenerator pair
-// (acquire: set_wired_limit(recommended); later restore: set_wired_limit(prev))
-// round-trips correctly and an "unset" state is distinguishable from "set
-// to 0". Callers that depend on wired residency must surface their
-// requirement through hardware-level detection, not this no-op.
+// Omarchy is unified memory: there is no GPU-private RAM to wire and
+// mlock(2) would only pin CPU pages the Vulkan allocator does not need
+// pinned. The wired limit is therefore a second allocator ceiling: while
+// it exceeds the memory limit (oMLX dflash acquire/restore raises it to
+// max_recommended_working_set_size during a load phase), the effective
+// limit becomes max(memory_limit, wired_limit) in malloc. The value is
+// remembered in the allocator and restore round-trips the previous
+// setting, so an "unset" state stays distinguishable from "set to 0".
+// vkAllocateMemory remains the final arbiter of what actually fits.
 size_t set_wired_limit(size_t limit) {
-  static std::mutex mutex;
-  static size_t previous = 0;
-  std::lock_guard<std::mutex> lk(mutex);
-  size_t prev = previous;
-  previous = limit;
-  return prev;
+  return omarchy::allocator().set_wired_limit(limit);
 }
 
 } // namespace mlx::core
