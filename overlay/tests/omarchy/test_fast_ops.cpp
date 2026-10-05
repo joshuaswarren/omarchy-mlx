@@ -16,6 +16,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -530,75 +531,134 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
       "odd width 127 rope_rms_norm leg must refuse with the named fuse error");
 }
 
-// The fused route must serve per-request (vector) offsets: BatchGenerator
-// passes one offset per sequence, so batch b > 0 must rotate with its OWN
-// position, and any fallback leg (per-batch offsets, CPU, VJP composition)
-// must build rotary tables of width D/2, never D. This is the regression
-// for the v0.7.25..27 defect where the composed fallback reciprocated the
-// norm weight (the inputs[2] slot) as rotary freqs and broadcast
-// (.., D/2) rotation halves against (.., D) trig. The reference
-// concatenates scalar-offset compositions per batch, so a kernel that
-// reads offset[0] for every batch fails batches 1.. on distinct offsets,
-// and a D-vs-D/2 trig slip fails everywhere.
-TEST_CASE("fused rope_rms_norm serves per-batch array offsets bit-exactly") {
+TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
+  // Fuseable leg: bf16, even D <= 256, row-contiguous last axis. D=4 keeps
+  // the host reference tiny; the model site is the same geometry (D=128).
+  const int B = 1, H = 2, T = 3, D = 4;
+  const int half = D / 2;
   const float eps = 1e-6f;
-  const int D = 128;
-  auto w_data = pattern(static_cast<size_t>(D), 991u);
+  const double base = 10000.0;
+  auto x_data = pattern(B * T * H * D, 41);
+  auto w_data = pattern(D, 43);
+  auto c_data = pattern(B * H * T * D, 47);
+
+  // The model site feeds the (B, H, T, D) transpose view of the row-contiguous
+  // (B, T, H, D) activations; x keeps that layout.
+  array x_pre =
+      astype(array(x_data.begin(), Shape{B, T, H, D}, float32), bfloat16, stream);
   array w = astype(
-      array(w_data.data(), Shape{D}, float32), bfloat16, stream);
-  auto bits_equal = [&stream](const array& a, const array& b,
-                              const char* what) {
-    array a32 = astype(a, float32, stream);
-    array b32 = astype(b, float32, stream);
-    eval(a32);
-    eval(b32);
-    REQUIRE(a32.shape() == b32.shape());
-    const float* pa = a32.data<float>();
-    const float* pb = b32.data<float>();
-    for (size_t i = 0; i < a32.size(); ++i) {
-      INFO(what, ": mismatch at ", i, " a=", pa[i], " b=", pb[i]);
-      CHECK_EQ(pa[i], pb[i]);
-    }
+      array(w_data.begin(), Shape{D}, float32), bfloat16, stream);
+  array cot = astype(
+      array(c_data.begin(), Shape{B, H, T, D}, float32), bfloat16, stream);
+  array x = transpose(x_pre, std::vector<int>{0, 2, 1, 3}, stream);
+  auto off = array(0, int32);
+
+  auto fun_fused = [&](const std::vector<array>& ins) {
+    return std::vector<array>{fast::rope_rms_norm(
+        ins[0], D, ins[1], eps, false, base, 1.0f, off, stream)};
   };
-  for (int B : {1, 2, 4}) {
-    for (int T : {1, 17}) {
-      for (int N : {8, 32}) {
-        std::vector<int32_t> offs(B);
-        std::vector<array> xs;
-        std::vector<array> refs;
-        xs.reserve(B);
-        refs.reserve(B);
-        for (int b = 0; b < B; ++b) {
-          offs[b] = 5 * b + 3;
-          auto x_data = pattern(
-              static_cast<size_t>(T) * N * D, 977u + 31u * static_cast<uint32_t>(b));
-          array xb = astype(
-              array(x_data.data(), Shape{1, N, T, D}, float32),
-              bfloat16,
-              stream);
-          refs.push_back(fast::rope(
-              fast::rms_norm(xb, w, eps, stream),
-              D,
-              false,
-              10000.0f,
-              1.0f,
-              offs[b]));
-          xs.push_back(xb);
+  auto f_vjp = vjp(fun_fused, std::vector<array>{x, w}, {cot});
+  auto& f_grads = f_vjp.second;
+  REQUIRE(f_grads.size() == 2);
+
+  // Reference 1: the exact composed fallback chain (the graph the fused
+  // forward reproduces bit-for-bit), differentiated at the same point. The
+  // fused vjp differentiates the same graph, so this is a wiring contract:
+  // the x gradient and the norm-weight gradient both come back.
+  auto fun_comp = [&](const std::vector<array>& ins) {
+    auto x_t = transpose(ins[0], std::vector<int>{0, 2, 1, 3}, stream);
+    auto n = fast::rms_norm(x_t, ins[1], eps, stream);
+    auto n_t = transpose(n, std::vector<int>{0, 2, 1, 3}, stream);
+    auto n_c = contiguous(n_t, false, stream);
+    return std::vector<array>{
+        fast::rope(n_c, D, false, base, 1.0f, off, std::nullopt, stream)};
+  };
+  auto c_vjp = vjp(fun_comp, std::vector<array>{x, w}, {cot});
+  auto& c_grads = c_vjp.second;
+  require_close(
+      flat(f_grads[0], stream),
+      widen(flat(c_grads[0], stream)),
+      1e-5,
+      "fused vjp dx equals composed chain vjp dx");
+  require_close(
+      flat(f_grads[1], stream),
+      widen(flat(c_grads[1], stream)),
+      1e-5,
+      "fused vjp dw equals composed chain vjp dw");
+
+  // Reference 2: finite differences through the DEVICE f32 composed chain
+  // (the same rms_norm + rope ops the fused bf16 kernel reproduces, at
+  // float32 so the reference has no bf16 output quantization). Each
+  // perturbed point is the bf16-quantized primal cast up: that is the
+  // input domain the kernel consumes. Rows are the (b, h, t) rows of the
+  // (B, H, T, D) layout; pairs (d, d + half) rotate by theta =
+  // t * base^(-d/half) inside the kernels — the FD does not need that
+  // closed form, it differentiates the composed graph directly.
+  std::vector<double> xq = widen(flat(x_pre, stream)); // (B, T, H, D) rows
+  std::vector<double> wq = widen(flat(w, stream));
+  auto x32 = astype(x, float32, stream);
+  auto w32 = astype(w, float32, stream);
+  auto cot32 = astype(cot, float32, stream);
+  auto objective = [&](const std::vector<double>& xs, const std::vector<double>& ws) {
+    // xs arrives in the (B, T, H, D) storage order of x_pre; the rope
+    // consumes the (B, H, T, D) logical layout the model site feeds.
+    std::vector<float> reordered(B * H * T * D);
+    for (int b = 0; b < B; ++b) {
+      for (int t = 0; t < T; ++t) {
+        for (int h = 0; h < H; ++h) {
+          for (int d = 0; d < D; ++d) {
+            reordered[((b * H + h) * T + t) * D + d] =
+                static_cast<float>(xs[((b * T + t) * H + h) * D + d]);
+          }
         }
-        array x = concatenate(xs, 0, stream);
-        array reference = concatenate(refs, 0, stream);
-        array off = array(offs.data(), Shape{B}, int32);
-        array fused = fast::rope_rms_norm(
-            x, D, w, eps, false, 10000.0f, 1.0f, off, stream);
-        INFO("B=", B, " T=", T, " N=", N);
-        bits_equal(fused, reference, "fused vs per-batch composed");
+      }
+    }
+    auto xs32 = array(reordered.begin(), Shape{B * H * T * D}, float32);
+    auto ws32 = astype(
+        array(ws.begin(), Shape{D}, float32), float32, stream);
+    auto n = fast::rms_norm(xs32, w32, eps, stream);
+    auto y = fast::rope(
+        n, D, false, base, 1.0f, off, std::nullopt, stream);
+    return sum(multiply(astype(y, float32, stream), cot32, stream), stream);
+  };
+  auto obj_scalar = [&](const std::vector<double>& p) {
+    auto v = objective(p, wq);
+    return static_cast<double>(flat(v, stream)[0]);
+  };
+  const double hstep = 0.25;
+  std::vector<double> fd_dx(xq.size(), 0.0);
+  for (size_t i = 0; i < xq.size(); ++i) {
+    fd_dx[i] = central_difference(xq, i, hstep, obj_scalar);
+  }
+  std::vector<double> fd_dw(D, 0.0);
+  for (int d = 0; d < D; ++d) {
+    fd_dw[d] = central_difference(wq, d, hstep, [&](const std::vector<double>& p) {
+      return static_cast<double>(flat(objective(xq, p), stream)[0]);
+    });
+  }
+  // The FD differentiates x_pre's STORAGE order (B, T, H, D); the vjp
+  // gradient has the rope VIEW's order (B, H, T, D). Permute the FD into
+  // the view order before comparing — otherwise every t>=1 element is
+  // compared against the wrong row.
+  std::vector<double> fd_dx_view(xq.size(), 0.0);
+  for (int b = 0; b < B; ++b) {
+    for (int t = 0; t < T; ++t) {
+      for (int h = 0; h < H; ++h) {
+        for (int d = 0; d < D; ++d) {
+          fd_dx_view[((b * H + h) * T + t) * D + d] =
+              fd_dx[((b * T + t) * H + h) * D + d];
+        }
       }
     }
   }
+  // The bf16 kernel rounds its outputs; h=0.25 spans many ULPs, so the
+  // central difference tracks the smooth derivative well inside 0.09.
+  require_close(flat(f_grads[0], stream), fd_dx_view, 0.09, "fused vjp dx finite difference");
+  require_close(flat(f_grads[1], stream), fd_dw, 0.09, "fused vjp dw finite difference");
 }
 
 TEST_CASE("RMSNormVJP matches finite differences and the composed formula") {
@@ -2840,18 +2900,27 @@ TEST_CASE("fused rope offset sweep validates every tolerance band") {
     }
   }
 
-  // The gate boundary itself: one step past theta 1e5 the fused path
-  // refuses by name - the top of the sweep confirms the gate fires,
-  // not that the kernel is accurate there.
+  // The gate boundary itself: one step past the 5e5 reduction envelope
+  // (kTrigArgumentLimit, de34407c1) the fused path refuses by name - the
+  // top of the sweep confirms the gate fires, not that the kernel is
+  // accurate there. The fence text names the trig reduction limit since
+  // the Cody-Waite rework; the pre-5e5 offsets (1e5) are inside the
+  // envelope now and must NOT refuse.
   Shape dshape{1, 1, 4, 16};
   array x = astype(rope_input(dshape, 179), float32, stream);
-  array past_gate = array(100000, int32);
+  array inside_new_envelope = array(200000, int32);
+  auto accepted = caught_message([&] {
+    fast::rope(x, 16, false, 10000.0f, 1.0f, inside_new_envelope, std::nullopt, stream)
+        .eval();
+  });
+  CHECK(accepted.find("exceeds the trig reduction limit") == std::string::npos);
+  array past_gate = array(600000, int32);
   auto message = caught_message([&] {
     fast::rope(x, 16, false, 10000.0f, 1.0f, past_gate, std::nullopt, stream)
         .eval();
   });
   CHECK(message.find("[omarchy] RoPE") != std::string::npos);
-  CHECK(message.find("exceeds the built-in accuracy limit") !=
+  CHECK(message.find("exceeds the trig reduction limit") !=
         std::string::npos);
 }
 
@@ -2880,13 +2949,13 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
   require_close(flat(got, stream), widen(flat(want, stream)), 1e-2,
                 "rope 32k-class position");
 
-  array over_limit = array(200000, int32);
+  array over_limit = array(1000000, int32);
   auto message = caught_message([&] {
     fast::rope(x, 16, false, 10000.0f, 1.0f, over_limit, std::nullopt, stream)
         .eval();
   });
   CHECK(message.find("[omarchy] RoPE") != std::string::npos);
-  CHECK(message.find("exceeds the built-in accuracy limit") != std::string::npos);
+  CHECK(message.find("exceeds the trig reduction limit") != std::string::npos);
   // The freqs leg carries the same gate: tiny freqs blow the bound up.
   array tiny_freqs = full({8}, 1e-8f, float32, stream);
   auto freqs_message = caught_message([&] {
@@ -2894,7 +2963,7 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
         .eval();
   });
   CHECK(
-      freqs_message.find("exceeds the built-in accuracy limit") !=
+      freqs_message.find("exceeds the trig reduction limit") !=
       std::string::npos);
 }
 

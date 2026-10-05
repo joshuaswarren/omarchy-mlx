@@ -1,7 +1,6 @@
-diff -r base/mlx/fast.cpp after/mlx/fast.cpp
---- a/mlx/fast.cpp	2026-09-23 11:42:38.546731558 -0500
-+++ b/mlx/fast.cpp	2026-09-23 11:42:07.916033689 -0500
-@@ -120,6 +120,129 @@
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -120,6 +120,139 @@
    return fallback({x, passed_weight})[0];
  }
  
@@ -111,8 +110,18 @@ diff -r base/mlx/fast.cpp after/mlx/fast.cpp
 +  auto s = to_stream(s_);
 +  // Bit-exact to `scale * mx.fast.rms_norm(x, weight, eps)`: the scalar
 +  // wraps as float32 and the multiply promotes exactly like the graph.
-+  auto fallback = [scale, eps, out_type, s](const std::vector<array>& inputs) {
-+    auto y = rms_norm(inputs[0], inputs[1], eps, s);
++  // The weightless leg (the qwen3.5 qk-scaled q/k path calls this with
++  // weight = None) must differentiate through a WEIGHTLESS rms_norm: the
++  // {1} placeholder is a 0-D array and fast::rms_norm refuses 0-D
++  // weights, so routing the placeholder through the fallback threw
++  // "[rms_norm] (*weight) must have 1 dimension but has 0 dimensions."
++  // on the first backward of every weightless scaled norm while the
++  // forward ran fused (found by the M2Lane 2B LoRA smoke, 2026-10-04).
++  const bool has_weight = weight.has_value();
++  auto fallback = [scale, eps, out_type, s, has_weight](
++                      const std::vector<array>& inputs) {
++    auto y = has_weight ? rms_norm(inputs[0], inputs[1], eps, s)
++                        : rms_norm(inputs[0], std::nullopt, eps, s);
 +    return std::vector<array>{multiply(array(scale, float32), y, s)};
 +  };
 +
@@ -131,7 +140,7 @@ diff -r base/mlx/fast.cpp after/mlx/fast.cpp
  std::vector<array> RMSNorm::vjp(
      const std::vector<array>& primals,
      const std::vector<array>& cotangents,
-@@ -182,6 +305,16 @@
+@@ -182,6 +315,16 @@
    return eps_ == a_other.eps_;
  }
  
@@ -148,41 +157,8 @@ diff -r base/mlx/fast.cpp after/mlx/fast.cpp
  bool RMSNormVJP::is_equivalent(const Primitive& other) const {
    const RMSNormVJP& a_other = static_cast<const RMSNormVJP&>(other);
    return eps_ == a_other.eps_;
-diff -r base/mlx/fast.h after/mlx/fast.h
---- a/mlx/fast.h	2026-09-23 11:42:38.546731558 -0500
-+++ b/mlx/fast.h	2026-09-23 11:41:22.675479925 -0500
-@@ -17,6 +17,28 @@
-     float eps,
-     StreamOrDevice s = {});
- 
-+// Fused RMSNorm + SwiGLU gate for the GDN decode chain: rms_norm(x,
-+// weight, eps) followed by silu(gate_f32) * y_f32, rounded once to the
-+// input dtype. The gate must have the same shape as x. The fused
-+// dispatch and the composed fallback are bit-exact to each other.
-+MLX_API array rms_norm_gated(
-+    const array& x,
-+    const array& gate,
-+    const array& weight,
-+    float eps,
-+    StreamOrDevice s = {});
-+
-+// Fused RMSNorm + scalar multiply: rms_norm(x, weight, eps) * scale with
-+// the scalar rounded to the storage dtype exactly like the equivalent
-+// graph's promote cast. The scale rides the primitive state, so the
-+// fused dispatch binds no scalar buffer.
-+MLX_API array rms_norm_scaled(
-+    const array& x,
-+    const std::optional<array>& weight,
-+    float scale,
-+    float eps,
-+    StreamOrDevice s = {});
-+
- MLX_API array layer_norm(
-     const array& x,
-     const std::optional<array>& weight,
-diff -r base/mlx/fast_primitives.h after/mlx/fast_primitives.h
---- a/mlx/fast_primitives.h	2026-09-23 11:42:38.547731549 -0500
-+++ b/mlx/fast_primitives.h	2026-09-23 11:41:22.675479925 -0500
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
 @@ -72,6 +72,66 @@
    float eps_;
  };
@@ -250,9 +226,8 @@ diff -r base/mlx/fast_primitives.h after/mlx/fast_primitives.h
  class RMSNormVJP : public Custom {
   public:
    RMSNormVJP(
-diff -r base/python/src/fast.cpp after/python/src/fast.cpp
---- a/python/src/fast.cpp	2026-09-23 11:42:38.547731549 -0500
-+++ b/python/src/fast.cpp	2026-09-23 11:42:19.849915977 -0500
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
 @@ -145,6 +145,63 @@
        )pbdoc");
  
