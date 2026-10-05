@@ -38,21 +38,17 @@ NORM_NEW = """        # mlx-omarchy rope-norm patch: fold the q/k RMSNorm into t
         # (bit-identical by construction); the backend fence refuses
         # non-fuseable legs loudly.
         if (
-            # qwen3_next rope-norm fold. Kill switches (any of these
-            # disables the fold and falls through to the bit-identical
-            # composed chain in the else branch):
+            # qwen3_next rope-norm fold. Kill switches (either disables
+            # the fold and falls through to the bit-identical composed
+            # chain in the else branch):
             #   * MLX_OMARCHY_QWEN3_NEXT_ROPE_NORM_FUSE=0  -- this patch
             #   * MLX_OMARCHY_ROPE_NORM_FUSE=0              -- qwen3 + qwen3_next
-            #   * batched cache (.offset is an mx.array) -- BatchGenerator
-            #     passes per-request array offsets even at B == 1, and
-            #     mx.fast.rope_rms_norm requires a Python-int offset
-            #     (the kernel is per-step, not per-request). v0.7.27.
-            #   * B > 1                                  -- multi-request
-            #     batched inference, same kernel-broadcast issue as the
-            #     cache offset mismatch but on a different axis.
-            # The composed chain is bit-identical and stays on every
-            # path the fold cannot serve; the decode win is preserved
-            # for plain single-request mlx_lm.server.
+            # Batched caches (mx.array offsets) and B > 1 are SAFE again
+            # as of the v0.7.28 wheel: RopeNormBatch's op-layer fix
+            # (rope_rms_norm per-request array offsets, the
+            # v0.7.25-27 B>1 crash) routes inside the C++ op, so the
+            # interim isinstance(cache.offset, int) + B == 1 fence this
+            # patcher carried is removed. Fixed 2026-10-05.
             (
                 os.environ.get("MLX_OMARCHY_QWEN3_NEXT_ROPE_NORM_FUSE",
                                 os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "1"))
@@ -60,8 +56,6 @@ NORM_NEW = """        # mlx-omarchy rope-norm patch: fold the q/k RMSNorm into t
             )
             and queries.dtype == mx.bfloat16
             and hasattr(mx.fast, "rope_rms_norm")
-            and (cache is None or isinstance(cache.offset, int))
-            and B == 1
         ):
             offset_pos = cache.offset if cache is not None else 0
             queries = mx.fast.rope_rms_norm(
