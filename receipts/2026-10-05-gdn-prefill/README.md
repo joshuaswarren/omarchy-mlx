@@ -293,3 +293,34 @@ NOT A COMPILE.
   SINGLE accumulator (even/odd steps) reorders f32 additions and moves the
   digests, which the owner bar forbids. No order-preserving ILP lever remains
   in loop 1; the levers are occupancy (sweep) and the stacked HOIST.
+
+## H302 verdicts: shared-bound confirmed; batch5 (STATEREGS) @ 8592ddc42
+
+Sweep (jwm1, T=512 ms/18): 32k 104.6 / 16k 45.8 / 8k 26.4 (2.29x, 3.96x = the
+wave ratios 8/4/2) — occupancy IS shared-bound; the shadow 32k arm ran at 0.73
+of the real kernel so real gains land somewhat smaller. HOIST (batch4 pass B)
+bit-exact -12.3% kernel T=512 / -13.7% T=1024, e2e pf512 +1.27%, sub-512
+unchanged. STATEWAVE -5% at every T.
+
+batch5 (MLX_OMARCHY_GDN_STATEREGS): the state slice in 32 per-lane f32;
+loop 1 split into loopK + loopS (per-accumulator ascending order unchanged);
+S tiles stage on demand via the plain-e0-store + coopMatLoad convention;
+v_s aliases onto s_k. Shared 32000 -> 15616 B => 2 WGs/core (waves 8 -> 4).
+LoopS manually unrolled 16x (a barrier inside the loop blocks unrolling;
+dynamic st_regs indexing verifiably spills to Private scratch — checked the
+SPIR-V before/after). The state block keeps batch4's wave restructure.
+
+Rejected options, with reasons (Main's list): (a) state in coopmat
+accumulators — an accumulator cannot become an A/B operand without a shared
+round trip, so every m2/tmp step would add one (and m2^T into the S
+accumulator still needs S^T as an A operand — same wall); (b) 2-sg
+workgroups — halving per-WG shared at half the threads leaves shared per
+THREAD unchanged: resident threads stay 128/core and the wave count does not
+move; (c) aliasing alone caps at ~4 KiB and cannot cross 16 KiB (the safe
+piece — v_s onto s_k — is folded into batch5).
+
+jwm1 arms for the next window (tip 8592ddc42): no-env / STATEREGS=1 /
+HOIST=1 / STATEREGS=1+HOIST=1, T in {64,128,512,1024}, pins must hold on
+every arm; plus the sweep arms (SWEEP=0/1/2) for the record. M2: the
+post-window ticket (queued 11:19Z) builds this tip — batch4/batch5 doctest +
+micro land there first.
