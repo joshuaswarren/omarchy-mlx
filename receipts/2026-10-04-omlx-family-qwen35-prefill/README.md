@@ -233,3 +233,35 @@ engaged but NOT shippable as a default route until the model-level
 gate passes; MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 (or simply not
 setting it — the default arm is ON only on the agent branch, not on
 main) keeps the composed path.
+
+## 7. v3 on T6021 + the open model-level defect (2026-10-05)
+
+v3 (row-lane stats + shared s_w; commit ee37fd09d, wheel 142a54cc on
+the golden-clone base): per-op GATE PASS on T6021 (4-shape battery),
+engagement 1052 ms/call at the probe shape (v2 1169 — the 32x exp
+elimination barely moved it; the dominant cost is the scalar staging
+loop and/or dynamic-indexed accumulators in local memory; a v4 with
+unrolled static-index accumulators + vectorized staging is the next
+step).
+
+Model-level gate: **FAIL, OPEN, signature IDENTICAL across v2 and v3**
+(TF top-1 agreement 41.7%, p0 pos0 top2_gap 1.125 — same numbers both
+generations). Full exoneration of the sdpa arithmetic: per-op sweep
+(15 shape classes once extended) <= 1 ULP; all 6 captured real-model
+calls replay bit-identically; live sdpa input tensors bit-identical
+between arms; model forward deterministic across processes; and the
+final discriminator — the first live call REPLACED with captured call0
+inputs — produced output **bit-identical to composed**. The divergence
+therefore appears only when the kernel runs inside the full live
+forward with its own surrounding dispatch context: deterministic,
+context-dependent, generation-independent. Remaining hypotheses are
+backend-level (encoder barrier/descriptor-lifetime/buffer-aliasing
+interaction specific to this kernel in a full-model command graph).
+
+Status per the honesty bar: NOT shippable as a default route. The arm
+exists only on agent/FamQwen35Prefill; main is unaffected;
+MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 is the documented kill switch for
+anyone on the branch. All evidence and the full debug harness are
+archived (receipts/.../tools/, notebook artifacts/) — a focused
+backend session (encoder barriers/descriptor lifetime for this kernel
+in the live command graph) is the named next step.
