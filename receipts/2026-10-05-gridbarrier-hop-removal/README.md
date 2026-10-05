@@ -37,6 +37,37 @@ and `20261005T033500Z-jw14m2-gridbarrier-h289.md` (H289).
    attn o-proj + residual + norm; 2-3 internal barriers), bit-exact vs the separate kernels
    with identical accumulation orders, then the 2B decode A/B on the affected chip(s).
 
+## The H290 fused tail (built 2026-10-05 ~05:00Z, hardware runs pending windows)
+
+Main's post-H287 directive ordered the prototype; HkTurnover's input doc
+(artifacts/HkTurnover/20261005-static-trace/GRIDBARRIER-INPUT-persistent-kernel.md)
+supplied the safety constants: bounded waits at 2^15 polls (~10 ms, far under the
+firmware cl_context_switch_timeout_ms = 40, initdata.rs:796-798) and the no-probe
+residency formula G_fit = floor(cores * min(3072, floor(319488/gprs)) / thr_per_WG)
+with VK_KHR_pipeline_executable_properties exposing gprs. This leg uses the measured
+probe (occupancy sweep) to size G; the executable-statistics dump (E-B validation,
+predicted gprs 209-249 for the H137b Q4 kernel) is queued as a follow-up cell.
+
+Tail = the 2B decode MLP tail, which production already ships as THREE dispatches:
+  1. fast_norm (rms, 256-thread WG, its reduction tree kept verbatim),
+  2. qmm_vec_q4_multi_subgroup_bf16 with the paired-SwiGLU epilogue (flags bit 16),
+  3. qmm_vec_q4_multi_subgroup_bf16 with the Add epilogue (flags bit 8+i) reading the
+     residual.
+The persistent form runs all three stages in ONE dispatch (local 256; the qmm stages
+re-laned to SLOTS_PER_GROUP=8 so per-row 32-lane chains are textually unchanged and the
+norm tree stays exact; tile-stride loops over co-resident workgroups; 2 software grid
+barriers). gen_tail.py generates the shader FROM the production sources with asserted
+anchors — stage functions, x-buffer indirection (GBBX), and the down stage's block-0 ->
+block-2 rewrite are mechanical seds; the add-epilogue flag for the remapped stage is
+bit 8+2 (1024). bench_tail.cpp A/Bs against the shipped three-dispatch chain compiled
+with the CMake defines and compares norm/mid/sum buffers separately.
+
+Dev-box status: fused_tail.comp compiles clean (glslangValidator, vulkan1.3, fused
+defines); the harness builds. lavapipe CANNOT create the production-shader pipelines
+(VK_ERROR_UNKNOWN from the 2022 llvmpipe at pipeline compile, isolated to the shader —
+minsub2-style probes create trivial pipelines fine), so no lvp numbers are claimed; the
+barrier skeleton itself did run on lvp (H288 notes). All H290 numbers are hardware.
+
 ## Tool (branch agent/GridBarrier)
 
 `tools/gridbarrier-bench/bench.cpp`: probe mode (H136/H137a method: G workgroups, R barriers,
