@@ -2,14 +2,19 @@
 
 ## Wheel installation
 
-The shared wheel is a local build, not yet a published URL. Use the shared M2 venv after Main announces its wheel path and SHA-256:
+The shared M2 venv is a read-only baseline. Never install into it. Copy it to a task-private path, immediately repair copied console-script shebangs, then install the wheel using that private venv's Python:
 
 ```sh
-/var/tmp/shared-omarchy-venv/bin/python -m pip install --no-deps \
+PRIVATE=/var/tmp/OmarchyDistributed-venv
+cp -a /var/tmp/shared-omarchy-venv "$PRIVATE"
+"$PRIVATE/bin/python" -m venv --upgrade "$PRIVATE"
+"$PRIVATE/bin/python" -m pip install --no-deps --force-reinstall \
   /var/tmp/od-distributed-wheel-20261004/dist/mlx_omarchy-*-cp314-cp314-linux_aarch64.whl
+"$PRIVATE/bin/python" -c 'import mlx.core as mx; print(mx.__file__, mx.__version__)'
+sha256sum "$PRIVATE/lib/python3.14/site-packages/mlx/lib/libmlx.so"
 ```
 
-Use `--no-deps` for this wheel and for `mlx-lm==0.31.3` in the same environment. The shared venv owns its pinned dependencies; do not let pip replace the Omarchy `mlx` module with a PyPI MLX build. Verify the installed build with `scripts/mlx_provenance.py` before a test.
+Verify that `mx.__file__` resolves under the private venv and that `libmlx.so` matches the wheel member; run `scripts/mlx_provenance.py` before testing. Use `--no-deps` for the wheel and `mlx-lm==0.31.3` to preserve pinned dependencies.
 
 ## Requesting and running on the M2
 
@@ -18,7 +23,7 @@ Book a time with Main through the OmarchyDistributed lane inbox. Include the req
 ```sh
 ~/bin/gpu-turn -m 20 -- env HOME="$HOME" \
   MLX_RANK=1 MLX_HOSTFILE=/path/to/hosts.json MLX_RING_VERBOSE=1 \
-  /var/tmp/shared-omarchy-venv/bin/python -m <consumer-entrypoint>
+  /var/tmp/OmarchyDistributed-venv/bin/python -m <consumer-entrypoint>
 ```
 
 Keep `HOME` explicit. Use `setsid nohup` with a log when the caller must survive SSH disconnects; do not leave a second GPU job running.
