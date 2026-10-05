@@ -162,3 +162,35 @@ MLX_OMARCHY_ALLOW_NON_APPLE=1 $(python -c 'import sys; print(sys.executable)') \
 - 2026-10-04 (this commit): v1 ships the indexer scores, top-k, and
   sparse MLA ops with the measured parity + speed table above. v2
   tracks the deferred list.
+
+## Addendum (same day, 2026-10-04 late): decode indexer scan ported
+
+`dsa_decode_scores` is now ported too (tests/dsa_indexer/
+decode_scores_omarchy.py). Two variants:
+
+- **fp32-chain port** (`dsa_decode_scores_omarchy`): the whole chain
+  in fp32 storage on omarchy - exactly the metal kernel's
+  fp32-accumulate contract with one final cast.
+- **composed variant** (`dsa_decode_scores_composed`): input-dtype
+  intermediates, i.e. the deployed fallback chain.
+
+Measured (tests/dsa_indexer/decode_parity_speed.csv, lavapipe,
+fp32 per-head-loop CPU reference with a different reduction order):
+the fp32-chain port is EXACT vs the reference (max abs diff 0.0 on
+every completed row, B=1 and B=2); the composed fallback deviates
+1.25e-01 at S=4096 bf16 (three extra 16-bit storage roundings on
+the [B,32,1,S] relu/weight intermediates). The port is strictly
+tighter numerically than the deployed fallback and no slower
+(0.69x-1.26x, median ~1.0x). The S=65536 dev-box row is flaky
+(lavapipe timeline hang, intermittent); the M2 run covers it on
+real hardware.
+
+## M2 correctness ticket: prepared, not yet submitted
+
+tests/dsa_indexer/m2_correctness_run.sh + large_shape_parity.py are
+ready: private copy of /var/tmp/shared-omarchy-venv, tests
+overlaid, prefill grid + lavapipe-hang-shape parity + decode grid +
+sparse MLA smoke, budget 20 min. The M2 run is the remaining
+acceptance step (real Apple GPU; also re-tests the big-matmul
+shapes the dev box cannot run). Submit via gpu-turn FIFO in a
+correctness window.
