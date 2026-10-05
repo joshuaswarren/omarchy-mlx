@@ -191,3 +191,52 @@ be touched; land after the tag per Main).
 
 
 
+
+
+## GPU-time census (ticket E2, diag wheel +ae1e1da with -DMLX_OMARCHY_GPU_PROFILING)
+
+Run: omlx server, DFlash ON, one 128-token stream (the A7 census recipe,
+MLX_OMARCHY_GPU_PROFILE=/tmp/midm_gpu_on.ndjson; 48,629 dispatch events).
+The DFlash summary line did not reach the server log copy in this run;
+wall-per-cycle taken from OmlxDflash's matched measurement (147.6 ms at
+block 8 / 148.3 at block 16).
+
+| kernel | count | GPU ms | % of GPU |
+|---|---|---|---|
+| QmmVecQ4MultiSubgroupBF16 (M=1 grouped GEMV: target verify AND drafter) | 18,576 | 1,401.2 | 52.4% |
+| FastRmsNormBF16 | 9,488 | 323.8 | 12.1% |
+| FastRopeNormBF16 | 9,359 | 287.0 | 10.7% |
+| SdpaDecodeNativeBF16Hd128 | 4,644 | 248.9 | 9.3% |
+| QmmPrefillCoopmatBF16X32FullN | 247 | 125.6 | 4.7% |
+| SwigluBF16 | 4,679 | 89.7 | 3.4% |
+| QmmVecQ4WordSubgroupBF16 | 129 | 84.1 | 3.1% |
+| LogSumExp+ArgReduce (acceptance) | 257 | 73.0 | 2.7% |
+| everything else (copies, casts, take, Pv/Qk, ...) | ~2,560 | 61.5 | 2.3% |
+| **sum GPU** | **48,629** | **2,674.8** | 100% |
+
+### Verdict
+
+1. sum(GPU) per cycle ~= 2,674.8 ms / ~69 cycles ~= **39 ms vs the
+   147.6 ms verify wall -> the verify cycle is ~26% GPU-busy,
+   ~74% host/submission-bound** (consistent with A7's 90%-host
+   decomposition and with PersistMlp's 0.0%-from-24-fewer-dispatches
+   counter-evidence). DISPATCH FUSION CANNOT WIN while the host gap
+   dominates; the first lever is the host serialization (acceptance
+   readback fence drain + consumer yield between phases), which belongs
+   to the omlx runtime lane.
+2. Of the GPU-busy time, the M=1 grouped GEMV is 52% (pure weight
+   bandwidth: each M=1 pass reads every weight byte for one row). The
+   lever THERE is multi-row GEMV (weight reads amortized over M rows) -
+   exactly the token column built here - which requires (a) the verify
+   rows 9..16 route (AGX token16 raw-output divergence) and (b) the
+   planner to form groups on the omlx verify tape at rows>8.
+3. The composed M=16 qmm (QmmPrefillCoopmat*) is only ~5% of GPU time:
+   a better M=16 qmm tile is NOT the lever (Main's hypothesis 1 is
+   falsified by this table).
+4. CastBF16F32: 23% of DISPATCH COUNT but 0.2% of GPU time - pure
+   dispatch-count noise; fusing casts wins nothing on GPU time.
+
+Artifacts: /tmp/midm_gpu_on.ndjson on the M2 (50,210 events; meta
+period_ns=1.0); analysis in this receipt; diag wheel in the midm-diag
+staged tree (dist, +ae1e1da, profiling compiled in; the omlx census
+venv has it installed).
