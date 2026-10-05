@@ -89,6 +89,19 @@ class VulkanAllocator : public allocator::Allocator {
     std::unique_lock lk(mutex_);
     return buffer_cache_.cache_size();
   }
+  size_t get_cache_limit() const {
+    std::unique_lock lk(mutex_);
+    return cache_limit_;
+  }
+  // Working-set ceiling (Metal: `gc_limit_`). When `active + cache + size`
+  // would exceed it, malloc releases cached buffers before allocating.
+  // Defaults to 95% of `total_memory` (Honeykrisp reports a single
+  // unified host-visible heap on Apple-UMA, so there is no separate
+  // "max_recommended_working_set_size" like Metal exposes).
+  size_t get_gc_limit() const {
+    std::unique_lock lk(mutex_);
+    return gc_limit_;
+  }
   size_t set_cache_limit(size_t limit);
   void clear_cache();
 
@@ -151,6 +164,12 @@ class VulkanAllocator : public allocator::Allocator {
   size_t memory_limit_;
   size_t wired_limit_{0};
   size_t cache_limit_;
+  // Metal's `gc_limit_`: working-set ceiling above which malloc
+  // proactively releases cached buffers. Defaults to 95% of the device
+  // host-visible heap (Honeykrisp's reported `total_memory`); oMLX can
+  // raise it with `set_memory_limit` when the dflash acquire raises the
+  // working set.
+  size_t gc_limit_;
   size_t active_memory_{0};
   size_t peak_memory_{0};
   mutable BufferCache<VulkanBuffer> buffer_cache_;
