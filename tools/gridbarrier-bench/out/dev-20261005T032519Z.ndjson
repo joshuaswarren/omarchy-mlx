@@ -1,0 +1,30 @@
+dev skeleton 20261005T032519Z GB_DEV=llvmpipe
+{"k":"device","i":0,"name":"llvmpipe (LLVM 15.0.6, 256 bits)","api":"1.3"}
+{"k":"meta","dev":"llvmpipe (LLVM 15.0.6, 256 bits)","ts_period_ns":1.000,"feat_vulkanMemoryModel":1,"feat_vulkanMemoryModelDeviceScope":0,"feat_shaderBufferInt64Atomics":1,"maxComputeWorkGroupCount":[65535,65535,65535],"maxComputeWorkGroupInvocations":1024}
+/opt/glslang-src/build/StandAlone/glslangValidator: Error: -f: expected hlsl_functionality1 (use -h for usage)
+/tmp/gbb-src-OGkz6O.comp
+/opt/glslang-src/build/StandAlone/glslangValidator: Error: -f: expected hlsl_functionality1 (use -h for usage)
+/tmp/gbb-src-QfixS8.comp
+{"k":"probe_rep","local":32,"G":1,"R":1,"rep":0,"wall_us":74607.7,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":1,"rep":1,"wall_us":150.3,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":1,"rep":2,"wall_us":169.2,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":1,"rep":3,"wall_us":157.4,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":1,"rep":4,"wall_us":192.5,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":2001,"rep":0,"wall_us":1429.5,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":2001,"rep":1,"wall_us":1429.2,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":2001,"rep":2,"wall_us":1458.6,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":2001,"rep":3,"wall_us":1400.0,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":1,"R":2001,"rep":4,"wall_us":1368.3,"timeout":0,"violations":0}
+{"k":"probe","local":32,"G":1,"slope_us_per_barrier":0.609,"min_wall_R1":150.3,"min_wall_R2001":1368.3,"timeouts":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":1,"rep":0,"wall_us":130.1,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":1,"rep":1,"wall_us":258.5,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":1,"rep":2,"wall_us":715.8,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":1,"rep":3,"wall_us":292.2,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":1,"rep":4,"wall_us":122.7,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":2001,"rep":0,"wall_us":4060.4,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":2001,"rep":1,"wall_us":2549.0,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":2001,"rep":2,"wall_us":1604.7,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":2001,"rep":3,"wall_us":2791.3,"timeout":0,"violations":0}
+{"k":"probe_rep","local":32,"G":2,"R":2001,"rep":4,"wall_us":1895.0,"timeout":0,"violations":0}
+{"k":"probe","local":32,"G":2,"slope_us_per_barrier":0.741,"min_wall_R1":122.7,"min_wall_R2001":1604.7,"timeouts":0,"violations":0}
+{"k":"probe_rep","local":32,"G":4,"R":1,"rep":0,"wall_us":1436.9,"timeout":0,"violations":0}

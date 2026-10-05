@@ -1,0 +1,8 @@
+dev skeleton 20261005T031828Z GB_DEV=llvmpipe
+{"k":"device","i":0,"name":"llvmpipe (LLVM 15.0.6, 256 bits)","api":"1.3"}
+{"k":"meta","dev":"À’v–`_","ts_period_ns":1.000,"feat_vulkanMemoryModel":1,"feat_vulkanMemoryModelDeviceScope":0,"feat_shaderBufferInt64Atomics":1,"maxComputeWorkGroupCount":[65535,65535,65535],"maxComputeWorkGroupInvocations":1024}
+/opt/glslang-src/build/StandAlone/glslangValidator: Error: -f: expected hlsl_functionality1 (use -h for usage)
+/tmp/gbb-src-9chuQy.comp
+/opt/glslang-src/build/StandAlone/glslangValidator: Error: -f: expected hlsl_functionality1 (use -h for usage)
+/tmp/gbb-src-kH8s7g.comp
+tools/gridbarrier-bench/run-dev.sh: line 16: 1811199 Segmentation fault      (core dumped) /tmp/gridbarrier-bench probe 32

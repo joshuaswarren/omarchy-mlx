@@ -1,0 +1,10 @@
+dev skeleton 20261005T031600Z GB_DEV=llvmpipe
+{"k":"meta","dev":"¿K*‚èY","ts_period_ns":1.000,"feat_vulkanMemoryModel":1,"feat_vulkanMemoryModelDeviceScope":0,"feat_shaderBufferInt64Atomics":1,"maxComputeWorkGroupCount":[65535,65535,65535],"maxComputeWorkGroupInvocations":1024}
+/opt/glslang-src/build/StandAlone/glslangValidator: Error: -f: expected hlsl_functionality1 (use -h for usage)
+gridbarrier-bench: glslc failed for shader:
+#version 450
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, std430) buffer Out { uint out_buf[]; };
+layout(push_constant) uniform PC { uint pc_val; } pc;
+void main() { if (gl_LocalInvocationIndex == 0u && gl_WorkGroupID.x == 0u) { for (uint i = 0u; i < 128u; ++i) out_buf[i] = 0u; } }
+
