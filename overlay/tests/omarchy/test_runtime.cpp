@@ -850,18 +850,23 @@ TEST_CASE(
     return;
   }
   auto& alloc = omarchy::allocator();
-  // Inject exactly one OOM on the next vkAllocateMemory; the retry
-  // path must drop the cache and call vkAllocateMemory a second time,
-  // which then succeeds and returns a real buffer.
-  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1", 1);
   alloc.clear_cache();
+  auto* cached =
+      static_cast<omarchy::VulkanBuffer*>(alloc.malloc(2u << 20).ptr());
+  REQUIRE(cached != nullptr);
+  alloc.free(allocator::Buffer{cached});
+  REQUIRE(alloc.get_cache_memory() >= (2u << 20));
+
+  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1", 1);
   const size_t before_active = alloc.get_active_memory();
   auto* buf =
-      static_cast<omarchy::VulkanBuffer*>(alloc.malloc(1u << 20).ptr());
+      static_cast<omarchy::VulkanBuffer*>(alloc.malloc(4u << 20).ptr());
   REQUIRE(buf != nullptr);
   CHECK(buf->memory != VK_NULL_HANDLE);
-  CHECK(alloc.get_active_memory() == before_active + (1u << 20));
+  CHECK(alloc.get_active_memory() == before_active + (4u << 20));
+  CHECK(alloc.get_cache_memory() == 0);
   alloc.free(allocator::Buffer{buf});
+  alloc.clear_cache();
   unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
 }
 
