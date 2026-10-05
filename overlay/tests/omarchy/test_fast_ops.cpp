@@ -457,6 +457,64 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
       CHECK_EQ(pa[i], pb[i]);
     }
   };
+  // Bit-exact everywhere except ONE documented rounding tie: at cell
+  // width=204 the two fp paths (G13 Honeykrisp and llvmpipe) flip a single
+  // bf16 element whose fp64 value sits EXACTLY midway between the two
+  // candidates (0.5 ULP each; G14C is bit-exact, 0/1836 disagreements).
+  // Both routes round the same fp64 value; their fp32 mean-square
+  // reduction order decides the tie. Per docs/numerics-gate.md the bar is
+  // error no worse than the composed path, so a disagreement is accepted
+  // only when it is that equidistant tie: at most one element, and for it
+  // |fused - fp64| == |composed - fp64| (within the fp32-rms reference
+  // noise), measured against a host-double reference of the same bf16
+  // inputs.
+  auto bits_equal_bounded = [&stream](const array& a, const array& b,
+                                      const std::vector<double>& ref,
+                                      const char* what) {
+    array a32 = astype(a, float32, stream);
+    array b32 = astype(b, float32, stream);
+    eval(a32);
+    eval(b32);
+    REQUIRE(a32.shape() == b32.shape());
+    const float* pa = a32.data<float>();
+    const float* pb = b32.data<float>();
+    int mismatches = 0;
+    for (size_t i = 0; i < a32.size(); ++i) {
+      if (pa[i] == pb[i]) {
+        continue;
+      }
+      ++mismatches;
+      INFO(what, ": non-tie mismatch at ", i, " fused=", pa[i],
+           " composed=", pb[i], " fp64=", ref[i]);
+      double df = std::fabs(ref[i] - (double)pa[i]);
+      double dc = std::fabs(ref[i] - (double)pb[i]);
+      double tie_eps = 1e-6 * std::max(1.0, std::fabs(ref[i]));
+      CHECK_LE(std::fabs(df - dc), tie_eps);
+      CHECK_LE(df, dc + tie_eps);
+      CHECK_LE(dc, df + tie_eps);
+    }
+    CHECK_LE(mismatches, 1);
+  };
+  // Host-double reference for the bounded comparison: at offset 0 with
+  // T == 1 the rotation is the identity (cos=1, sin=0), so the expected
+  // output is the fp64 rms_norm of the bf16-decoded inputs.
+  auto identity_rope_norm_ref = [](const std::vector<float>& xh,
+                                   const std::vector<float>& wh, int rows,
+                                   int width, float eps) {
+    std::vector<double> ref((size_t)rows * width);
+    for (int r = 0; r < rows; ++r) {
+      double ms = 0.0;
+      for (int c = 0; c < width; ++c) {
+        ms += std::pow((double)xh[(size_t)r * width + c], 2.0);
+      }
+      double rms = std::sqrt(ms / width + (double)eps);
+      for (int c = 0; c < width; ++c) {
+        ref[(size_t)r * width + c] =
+            (double)xh[(size_t)r * width + c] * (double)wh[c] / rms;
+      }
+    }
+    return ref;
+  };
   for (const Cell& cell : cells) {
     auto x_data = pattern(
         static_cast<size_t>(cell.rows) * cell.width, cell.width + 31);
@@ -482,7 +540,20 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
         1.0f,
         0);
     INFO("cell width=", cell.width, " rows=", cell.rows);
-    bits_equal(fused, composed, "fused vs composed");
+    // The bf16 flat views of the inputs feed the host-double tie check.
+    array xf = reshape(astype(x, float32), {x.size()});
+    array wf = reshape(astype(w, float32), {w.size()});
+    eval(xf);
+    eval(wf);
+    std::vector<double> ref = identity_rope_norm_ref(
+        std::vector<float>(
+            xf.data<float>(), xf.data<float>() + xf.size()),
+        std::vector<float>(
+            wf.data<float>(), wf.data<float>() + wf.size()),
+        cell.rows,
+        cell.width,
+        eps);
+    bits_equal_bounded(fused, composed, ref, "fused vs composed");
     // Forcing the composed reductions with the kill switch must keep
     // the same bits (shared order, not a different rounding).
     setenv("MLX_OMARCHY_NORM_APPLE", "0", 1);
