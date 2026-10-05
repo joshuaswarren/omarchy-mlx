@@ -499,3 +499,40 @@ exists for it; no silent CPU fallback occurs.
 Next: KernelBattery — pointer-arithmetic support (or an oMLX-side
 rewrite of `qwen35_gdn_conv` that avoids device pointer arithmetic)
 is the last named gap before the 2B row can gate.
+
+## ADDENDUM 4 (2026-10-05 13:39Z): on 009c23b the decode leg is down to ONE glslang error; shader captured
+
+Retested on the golden wheel
+`mlx_omarchy-0.32.4.dev202610050436+009c23b` (device-pointer-alias
+rewrite, vec<T,N>, size_t->uint, vec4-of-bf16 alias; fresh private
+venv via install.sh, mx verified). Decode-leg result (shape
+[1,1,16,128]): **one** glslang error remains (was five, then a
+pointer-arithmetic refusal, now a single conversion):
+
+```
+mlx-omarchy-custom-ugXYAN.comp:60: error: '=' : cannot convert from
+' temp float' to ' temp uint16_t'
+```
+
+The failing construct (line 60): the gated-delta sigmoid
+
+```
+uint16_t sy = uint16_t(1) / (uint16_t(1) + exp(abs(conv)));
+```
+
+`exp(abs(uint16_t))` promotes to float and the division yields
+float; glslang refuses the implicit float-to-uint16_t assignment.
+The file already carries the narrow helper (`_mlx_float_to_bf16`),
+so the translator needs to wrap float-producing subexpressions
+assigned to uint16_t — or promote the whole sigmoid expression to
+float and narrow once at the assignment.
+
+**Failing shader captured:**
+`qwen35-2b-custom-kernel-ugXYAN-009c23b.comp` (this directory),
+7454 bytes, sha256
+`3fe77e474844b72798314754d2feb8fe8c726aa03bdc22bd68a736d1503b9499`.
+
+Prefill leg note: the earlier pointer-arithmetic refusal on the
+[1,289,16,128] prefill leg is gone from this run's log — the
+009c23b rewrite cleared it; the decode leg is the last refusal
+observed.
