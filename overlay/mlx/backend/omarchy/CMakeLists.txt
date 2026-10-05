@@ -359,9 +359,9 @@ omarchy_shader(
 # Barrier-diet-2 GDN prefill variant (MLX_OMARCHY_GDN_BATCH2 A/B; see
 # receipts/2026-10-05-gdn-prefill).
 omarchy_shader(gated_delta_prefill_coopmat_batch2_bf16 shaders/gated_delta_prefill_coopmat_batch2.comp)
-# Subgroup-sync batch variant (MLX_OMARCHY_GDN_SGSYNC=1; see
-# receipts/2026-10-05-gdn-prefill residency analysis). Default OFF.
-omarchy_shader(gated_delta_prefill_coopmat_batch3_bf16 shaders/gated_delta_prefill_coopmat_batch3.comp)
+# State-wave restructure (MLX_OMARCHY_GDN_STATEWAVE=1; H297/H298 stage table:
+# the state update is 44% of the G13G chunk walk). Default OFF.
+omarchy_shader(gated_delta_prefill_coopmat_batch4_bf16 shaders/gated_delta_prefill_coopmat_batch4.comp)
 # BENCH-ONLY stage-ablation kernels (MLX_OMARCHY_GDN_STUB=1..7; wrong results
 # by design, timing only; see receipts/2026-10-05-gdn-prefill). Default builds
 # never dispatch them.

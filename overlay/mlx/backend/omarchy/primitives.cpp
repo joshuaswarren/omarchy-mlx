@@ -11553,6 +11553,10 @@ void GatedDeltaUpdate::eval_gpu(
   // sequence); pass B runs the recurrence off the f32 tiles. Opt-in
   // (MLX_OMARCHY_GDN_HOIST=1) until gated.
   static const bool gdn_hoist_env = omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
+  // State-wave restructure (GdnPrefill2-ablate): 2 SG barriers per state
+  // wave instead of 5; per-slice arithmetic unchanged. Opt-in
+  // (MLX_OMARCHY_GDN_STATEWAVE=1) until the jwm1 stage readout.
+  static const bool gdn_statewave_env = omarchy::env_flag("MLX_OMARCHY_GDN_STATEWAVE");
   // Stage-ablation stubs (GdnPrefill2-ablate): MLX_OMARCHY_GDN_STUB=1..7
   // selects a bench kernel that truncates one stage class of the batch kernel
   // (1 NO_LOOPK, 2 NO_LOOPS, 3 NO_NEUMANN, 4 NO_DELTA, 5 NO_OUT, 6 NO_STATE,
@@ -11561,11 +11565,6 @@ void GatedDeltaUpdate::eval_gpu(
     const char* e = std::getenv("MLX_OMARCHY_GDN_STUB");
     return e ? std::atoi(e) : 0;
   }();
-  // Subgroup-sync variant (GdnPrefill2-ablate): narrows every per-chunk
-  // barrier to subgroup scope; the one kernel-start barrier stays WG.
-  // Bit-exact by construction (every shared region is sg-private). Applies
-  // to the single-dispatch route only: MLX_OMARCHY_GDN_SGSYNC + HOIST == HOIST.
-  static const bool gdn_sgsync_env = omarchy::env_flag("MLX_OMARCHY_GDN_SGSYNC");
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
@@ -11624,7 +11623,10 @@ void GatedDeltaUpdate::eval_gpu(
         1);
       return;
     }
-    if (gdn_hoist_env) {
+    // Hoist pays its second dispatch + 8 MB scratch only on long prefills;
+    // measured G13G regression +2..18% at T=64..384 vs -7.6..-8.8% at
+    // T>=512 (H297/H298), so the route is length-gated.
+    if (gdn_hoist_env && T >= 512) {
       // Pass A: kkt/qkt tiles for every chunk, one workgroup per
       // (head, Dv-slice, chunk). Snap binding carries the f32 tiles.
       const uint32_t hoist_chunks =
@@ -11661,7 +11663,7 @@ void GatedDeltaUpdate::eval_gpu(
       return;
     }
     encoder.dispatch_compute(
-        gdn_sgsync_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch3BF16
+        gdn_statewave_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch4BF16
         : gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
         : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
                     : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
