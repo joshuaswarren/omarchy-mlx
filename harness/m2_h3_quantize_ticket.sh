@@ -161,6 +161,7 @@ print(json.dumps({
     "xs_exact": xs_exact,
     "xs_max_abs_diff": xs_max_diff,
     "q_mismatches": int(np.sum(got_q != ref_q)),
+    "q_max_abs_diff": int(np.max(np.abs(got_q.astype(np.int32) - ref_q.astype(np.int32)))),
     "got_q_sample": got_q[0, :4].tolist(),
     "ref_q_sample": ref_q[0, :4].tolist(),
     "source_sha256": hashlib.sha256(SOURCE.encode()).hexdigest(),
