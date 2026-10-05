@@ -226,11 +226,15 @@ device_info(int device_index) {
     // Marketing name and GPU core count come from the device tree, NOT
     // from Honeykrisp (which does not expose GPU cores). The chip-id
     // table is the only source: an unknown chip leaves both keys absent
-    // rather than reporting a guessed number.
-    static const std::string dt_compatible = read_dt_compatible();
-    if (!dt_compatible.empty()) {
+    // rather than reporting a guessed number. Compatible tokens are
+    // NUL-separated in the DT blob; interior NULs become single spaces
+    // so the reported string is a normal printable compatible list.
+    static const std::string dt_compatible_raw = read_dt_compatible();
+    if (!dt_compatible_raw.empty()) {
+      std::string dt_compatible = dt_compatible_raw;
+      std::replace(dt_compatible.begin(), dt_compatible.end(), '\0', ' ');
       info["chip_compatible"] = dt_compatible;
-      if (const ChipIdEntry* chip = find_chip_entry(dt_compatible)) {
+      if (const ChipIdEntry* chip = find_chip_entry(dt_compatible_raw)) {
         info["marketing_name"] = chip->marketing_name;
         info["gpu_cores"] = chip->gpu_cores;
       }

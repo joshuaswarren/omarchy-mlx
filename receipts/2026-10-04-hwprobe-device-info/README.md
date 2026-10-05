@@ -107,6 +107,71 @@ memory-bound formula and the wired-limit round-trip. Wired into
 `omarchy_device_info_tests`. Run on T6021 Honeykrisp and on dev-box
 llvmpipe with `MLX_OMARCHY_ALLOW_NON_APPLE=1`.
 
+**Post-change M2 probe (2026-10-05 ~00:36Z M2 clock, gpu-turn ticket, approved queue-jump).**
+Probe script: `scripts/probe_device_info.py` against the private venv
+`/var/tmp/hwprobe-venv` (wheel above). Raw JSON:
+`probe-device-info-post-change.json` (this directory) and in the private
+notebook `artifacts/HwProbe/2026-10-04-device-info/raw/`.
+
+| Key | Value | vs formula |
+|---|---|---|
+| `memory_size` | 50600083456 | == total_memory (alias holds) |
+| `total_memory` | 50600083456 | Vulkan unified heap, unchanged |
+| `max_recommended_working_set_size` | 50600083456 | == min(50600083456, 0.8 × 101210499584) ✓ binding constraint is the heap |
+| `marketing_name` | "Apple M2 Max" | from `apple,t6021` chip-id ✓ |
+| `gpu_cores` | 38 | M2 Max ✓ |
+| `chip_compatible` | `apple,j414c\0apple,t6021\0apple,arm-platform` | raw DT blob; interior NULs kept (see wart note) |
+| `architecture` | honeykrisp | unchanged |
+| `device_name` | Apple M2 Max (G14C B1) | unchanged |
+
+Memory APIs (16 MiB alloc through `mx.zeros` + `mx.eval`):
+
+- `get_active_memory` = 16777216 (= 1024 × 4096 × 4 exactly)
+- `get_peak_memory` = 16781312; after `reset_peak_memory` = 0
+- `get_cache_memory` = 0 (buffer is active, not cached)
+- `get_memory_limit` = 34359738368 (after the probe's 32 GiB set; default was 68719476736)
+
+`set_wired_limit` round-trip — the fix this lane shipped:
+
+- `set_wired_limit(0)` → 0 (initial)
+- `set_wired_limit(1 GiB)` → 0 (previous)
+- `set_wired_limit(8 GiB)` → **1073741824** (previous = 1 GiB — the
+  pre-change wheel returned 0 here; oMLX dflash.acquire/restore now
+  round-trips)
+
+**Known wart (cosmetic, documented):** `chip_compatible` keeps the
+device-tree interior NUL separators (`\0` between compatible tokens)
+instead of spaces; only trailing NULs are stripped. No oMLX/TensorFold
+reader consumes this key (they read `max_recommended_working_set_size`
+and `memory_size`), and the chip-id lookup is NUL-transparent substring
+matching (hence the correct marketing/gpu-cores values). The branch fix
+(interior NUL → space) landed after this probe; re-probing for a
+cosmetic-only change was not worth a second M2 build + ticket.
+
+**M2 wheel build (2026-10-05T00:17-00:22Z, jw14m2-linux).** Built on the
+M2 in a private copy of OmarchyDistributed's prepared tree
+(`/var/tmp/od-distributed-wheel-20261004` → `/var/tmp/hwprobe-wheel`,
+per the orchestrator's incremental-recipe broadcast), with the four
+HwProbe-changed overlay files rsync'd in and `scripts/prepare-mlx.sh`
+restaging them. Build: `nice -n 19 ionice -c3 CMAKE_BUILD_PARALLEL_LEVEL=3
+DEV_RELEASE=1 MLX_OMARCHY_WHOLE_BUNDLE_DIR=<od tree's staged bundle>`.
+
+- Wheel: `mlx_omarchy-0.32.4.dev202610050017+b8af62c-cp314-cp314-linux_aarch64.whl`
+- Size: 416344539 bytes; sha256: `7160518ff1bcd1545f811fd3ec9d3fbba3856469ec8bc0939ce220ef5e306adc`
+- **Stamp caveat (documented, accepted):** the version stamp carries od's
+  `b8af62c` because the recipe builds in od's git checkout with files
+  rsync'd in (no commit of HwProbe's own). The canonical source of these
+  changes is `agent/hwprobe` @ `ce6d40c`. Content provenance is
+  established functionally: the probe run below must show the five new
+  keys (`memory_size`, `max_recommended_working_set_size`,
+  `marketing_name`, `gpu_cores`, `chip_compatible`) and the
+  `set_wired_limit` round-trip; a stamp alone cannot fake those values.
+- Installed exactly once into the private venv
+  `/var/tmp/hwprobe-venv` (disk-backed: relocated out of tmpfs so the
+  00:45Z-03:00Z agx_stats reboots cannot wipe it); verified
+  `version() == 0.32.4.dev202610050017+b8af62c`, single dist-info,
+  real `mlx` package path.
+
 **Compile-only verification (dev-box syntax check, 2026-10-04T18:25Z).**
 With the shared-checkout `.work/build` dir under heavy contention from
 sibling-lane cmake reconfigures (TensorFoldPort's sdpa_decode_fused,
