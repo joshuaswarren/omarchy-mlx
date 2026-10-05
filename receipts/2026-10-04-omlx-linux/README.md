@@ -463,3 +463,39 @@ Repro: omlx serve + one Qwen3.5-2B chat request on the golden
 wheel; identical five errors (`/tmp/omlx-2b/server.log` on the M2).
 Ownership: KernelBattery (translator coverage for bf16 custom
 kernels with uint16 buffers + MSL implicit conversions + `short`).
+
+## ADDENDUM 3 (2026-10-05 12:16Z): Qwen3.5-2B on v0.7.28 — compile errors fixed; next gap is `device pointer arithmetic`
+
+Retested on the PUBLISHED v0.7.28 wheel (sha256 `68bb536f…` verified
+against the release; contains KernelBattery's translator fix
+`ca195e620` and RopeNormBatch's rope_rms_norm array-offset fix), with
+this lane's interim fence DROPPED (main @ `672f20911`; the venv's
+qwen3_next fold is unfenced — verified by grep).
+
+Result: **the five glslang compile errors are gone** (bf16 locals /
+stores / rsqrt / literal-conditions fix confirmed working end to end
+through oMLX). The failure is now a clean, named source-validation
+refusal — one step later in the same custom kernel:
+
+```
+RuntimeError: [omarchy] fast::CustomKernel MSL subset: unsupported MSL
+feature `device pointer arithmetic` is not implemented for the Omarchy
+Vulkan backend (dtype=bfloat16, shape=[1,289,16,128]). No GPU kernel
+exists for it; no silent CPU fallback occurs.
+```
+
+- Custom kernel compiles? **No** — but the failure moved from
+  "translator emits invalid GLSL" to "kernel source uses an
+  unsupported MSL feature" (device pointer arithmetic, prefill leg,
+  shape [1,289,16,128]).
+- Greedy batched==single digest on the 2B: **not run** — no
+  completions possible until the pointer-arithmetic gap is covered.
+- tok/s: n/a.
+- No .comp artifact exists for this state (refused at validation,
+  before shader write); the full kernel source for the translator is
+  the previously captured `qwen35-2b-custom-kernel-5DXfg5.comp`
+  (ADDENDUM 2) plus the oMLX qwen35_gdn_conv Metal source.
+
+Next: KernelBattery — pointer-arithmetic support (or an oMLX-side
+rewrite of `qwen35_gdn_conv` that avoids device pointer arithmetic)
+is the last named gap before the 2B row can gate.
