@@ -25,12 +25,12 @@ Keep `HOME` explicit. Use `setsid nohup` with a log when the caller must survive
 
 ## Ring environment
 
-Both processes use the same hostfile. It is a JSON array of hosts; each host entry is an array of one or more `ip:port` address strings. For a two-rank Mac-to-M2 ring, use rank 0 on the Mac and rank 1 on the M2. Rank 0 listens; rank 1 initiates the connection to rank 0, so the M2 is the connecting side. Replace the TEST-NET addresses below with the wired interface addresses and choose an unused TCP port allowed by the host firewall:
+Both processes use the same hostfile. It is a JSON array of hosts; each host entry is an array of one or more `ip:port` address strings. For a two-rank Mac-to-M2 ring, use rank 0 on the Mac and rank 1 on the M2. Both ranks open one outgoing and one incoming ring connection: rank 0 accepts rank 1's connection, then connects to rank 1; rank 1 connects to rank 0, then accepts rank 0's connection. Allow both directions through the host firewalls and choose unused listening ports for both hosts. Replace the TEST-NET addresses below with the wired interface addresses.
 
 ```json
-[["192.0.2.10:52000"], ["192.0.2.11:52000"]]
+[["192.0.2.10:52000"], ["192.0.2.11:52001"]]
 ```
 
-Set `MLX_HOSTFILE=/path/to/hosts.json` on both ranks and `MLX_RANK=0` on the Mac / `MLX_RANK=1` on the M2. Initialize with `mx.distributed.init(backend="ring")`. `MLX_RING_VERBOSE=1` enables ring connection logs; omit it for quiet runs. Keep the M2 tensor device as `mx.gpu`; distributed transport is host-side, but tensor operations must remain on the GPU.
+Set `MLX_HOSTFILE=/path/to/hosts.json` on both ranks and `MLX_RANK=0` on the Mac / `MLX_RANK=1` on the M2. Initialize with `mx.distributed.init(backend="ring")`. `MLX_RING_VERBOSE=1` logs which rank is accepting or connecting; capture TCP SYN/SYN-ACK logs as well when diagnosing endpoints. Keep the M2 tensor device as `mx.gpu`; distributed transport is host-side, but tensor operations must remain on the GPU.
 
 For the omarchy-cluster split-serve trial, the requested gateway endpoint is the M2 host on port 8020; keep its host name and model path in the private run configuration, not this repository.
