@@ -293,6 +293,140 @@ void translate_c_style_casts(std::string& code) {
   }
 }
 
+// Rewrite local device-pointer aliases into (buffer, offset) indexing.
+//
+// The MSL idiom `device const T* p = base + off; ... p[i]` (37 sites across
+// the pinned omlx/TensorFold kernels) has no GLSL form: GLSL has no pointer
+// type, but a `T* p = B + O` alias of a [[buffer]] parameter is exactly
+// `B[O + i]` at every use. This pass:
+//   1. finds declarations `((const)? device (const)? T* NAME = INIT;)`
+//      whose INIT is `(cast)? BASE (+ EXPR)?` with BASE a buffer parameter
+//      name (or another alias — offsets compose);
+//   2. deletes the declaration;
+//   3. rewrites every `NAME[EXPR]` to `BASE[(OFF) + (EXPR)]`;
+//   4. throws the exact named error when a vector-pointee alias (uint4*,
+//      bfloat4*, float4* — indexing granularity differs from the scalar
+//      buffer), an array of pointers, or any surviving bare use of the
+//      alias remains: those need a wider rewrite and must fail loudly,
+//      never silently mis-index.
+void translate_device_pointer_aliases(
+    std::string& body,
+    const std::vector<Parameter>& parameters) {
+  static const std::regex alias_pattern(
+      R"((?:const\s+)?device\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]+?);)");
+  struct Alias {
+    std::string base;
+    std::string offset;
+  };
+  std::unordered_map<std::string, Alias> aliases;
+  auto parameter_exists = [&](const std::string& name) {
+    return std::any_of(
+        parameters.begin(), parameters.end(),
+        [&](const Parameter& parameter) { return parameter.name == name; });
+  };
+  // Vector pointees change indexing granularity; reject by name.
+  auto is_vector_type = [](const std::string& type) {
+    return !type.empty() && type.find_first_of("234", type.size() - 1) ==
+        type.size() - 1;
+  };
+  bool progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (std::sregex_iterator it(body.begin(), body.end(), alias_pattern), end;
+         it != end; ++it) {
+      const auto type = (*it)[1].str();
+      const auto name = (*it)[2].str();
+      if (aliases.count(name)) {
+        continue;
+      }
+      std::string init = trim((*it)[3].str());
+      // Strip a leading C-style device-pointer cast: `(const device T*)`.
+      static const std::regex cast_prefix(
+          R"(^\(\s*(?:const\s+)?device\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
+      init = std::regex_replace(init, cast_prefix, "");
+      // Split BASE (+ EXPR)?.
+      static const std::regex base_offset(
+          R"(^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\s*([\s\S]+))?$)");
+      std::smatch parts;
+      if (!std::regex_match(init, parts, base_offset)) {
+        throw std::runtime_error(
+            "unsupported MSL feature `device pointer arithmetic` is not "
+            "implemented for the Omarchy Vulkan backend");
+      }
+      const auto base = parts[1].str();
+      std::string offset = parts[2].matched ? trim(parts[2].str()) : "0";
+      const bool base_is_parameter = parameter_exists(base);
+      const bool base_is_alias = aliases.count(base) > 0;
+      if (!base_is_parameter && !base_is_alias) {
+        // Aliased through a function call or another buffer expression:
+        // fail by name rather than guess.
+        throw std::runtime_error(
+            "unsupported MSL feature `device pointer arithmetic` is not "
+            "implemented for the Omarchy Vulkan backend");
+      }
+      if (is_vector_type(type)) {
+        throw std::runtime_error(
+            "unsupported MSL feature `device pointer alias of vector type "
+            "`" + type + "*` is not implemented for the Omarchy Vulkan "
+            "backend");
+      }
+      if (base_is_alias) {
+        const auto& parent = aliases[base];
+        offset = "(" + parent.offset + " + " + offset + ")";
+        aliases[name] = {parent.base, offset};
+      } else {
+        aliases[name] = {base, offset};
+      }
+      body.replace(
+          static_cast<size_t>(it->position()), it->length(), "");
+      progressed = true;
+      break;  // iterators invalidated by the erase; rescan
+    }
+  }
+  for (const auto& [name, alias] : aliases) {
+    size_t search_from = 0;
+    while (true) {
+      const auto position = body.find(name, search_from);
+      if (position == std::string::npos) {
+        break;
+      }
+      const bool left_ok = position == 0 ||
+          !(std::isalnum(static_cast<unsigned char>(body[position - 1])) ||
+            body[position - 1] == '_');
+      if (!left_ok) {
+        search_from = position + name.size();
+        continue;
+      }
+      const size_t after = position + name.size();
+      if (after >= body.size() ||
+          std::isalnum(static_cast<unsigned char>(body[after])) ||
+          body[after] == '_') {
+        // A longer identifier (e.g. base_weight) merely contains the name;
+        // but an alias at end-of-body has no indexing use left either.
+        if (after >= body.size()) {
+          throw std::runtime_error(
+              "unsupported MSL feature `device pointer arithmetic` is not "
+              "implemented for the Omarchy Vulkan backend");
+        }
+        search_from = position + name.size();
+        continue;
+      }
+      if (body[after] != '[') {
+        // Bare use (call argument, arithmetic, address-of): fail loudly.
+        throw std::runtime_error(
+            "unsupported MSL feature `device pointer arithmetic` is not "
+            "implemented for the Omarchy Vulkan backend");
+      }
+      const auto close = matching_delimiter(body, after, '[', ']');
+      const std::string inner = body.substr(after + 1, close - after - 1);
+      const std::string replacement =
+          alias.base + "[(" + alias.offset + ") + (" + inner + ")]";
+      body.replace(position, close - position + 1, replacement);
+      search_from = position + replacement.size();
+    }
+  }
+}
+
 void translate_as_type(std::string& code) {
   // as_type<Dest>(src) is a bitcast; src may contain nested parentheses, so
   // match the argument by balanced delimiters rather than a flat regex.
@@ -653,6 +787,7 @@ Translation translate_msl(
   replace_word(body, "constexpr", "const");
   translate_types(body);
   translate_c_style_casts(body);
+  translate_device_pointer_aliases(body, parameters);
 
   bool needs_bfloat = false;
 

@@ -469,6 +469,72 @@ class CustomKernelSmoke(unittest.TestCase):
         out = self.call(kernel, [values], values.shape, values.dtype)
         self.assertEqual(out.tolist(), [2.0, 4.0, 6.0, 8.0])
 
+    def test_device_pointer_alias_rewrites_to_indexing(self):
+        """`device const T* p = base + off; p[i]` is exactly `base[off + i]`
+        on the Omarchy backend: GLSL has no pointer type, so the alias
+        declaration is deleted and every indexed use splices the offset
+        into the buffer subscript. Bare/escaping uses of the alias and
+        vector-pointee aliases fail by name instead of mis-indexing.
+        (KernelBattery, 2026-10-05; matrix rows A26 + B1; 37 pinned sites
+        carry this idiom.)
+        """
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_device_ptr_alias",
+            input_names=["values"],
+            output_names=["out"],
+            source=(
+                "device const float* p = values + 2;\n"
+                "uint i = thread_position_in_grid.x;\n"
+                "out[i] = (i + 2u < 8u) ? p[i] * 2.0f : 0.0f;\n"
+            ),
+        )
+        values = mx.arange(1, 9, dtype=mx.float32)
+        out = self.call(kernel, [values], values.shape, values.dtype)
+        expected = [float(x) * 2.0 if i + 2 < 8 else 0.0
+                    for i, x in enumerate(range(1, 9))]
+        self.assertEqual(out.tolist(), expected)
+
+    def test_device_pointer_alias_offset_composition(self):
+        """A second alias derived from a first one composes the offsets:
+        `p = base + a; q = p + b; q[i]` is `base[(a) + ((b) + (i))]`.
+        """
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_device_ptr_alias_chain",
+            input_names=["values"],
+            output_names=["out"],
+            source=(
+                "device const float* p = values + 3;\n"
+                "device const float* q = p + 1;\n"
+                "uint i = thread_position_in_grid.x;\n"
+                "out[i] = (i + 4u < 8u) ? q[i] + 1.0f : 0.0f;\n"
+            ),
+        )
+        values = mx.arange(1, 9, dtype=mx.float32)
+        out = self.call(kernel, [values], values.shape, values.dtype)
+        expected = [float(x) + 1.0 if i + 4 < 8 else 0.0
+                    for i, x in enumerate(range(1, 9))]
+        self.assertEqual(out.tolist(), expected)
+
+    def test_device_pointer_alias_of_vector_type_is_named_refusal(self):
+        """Vector-pointee aliases (`float4* p = ...`) change the indexing
+        granularity (one index = four elements), so the rewrite refuses
+        them by name rather than emitting wrong indices.
+        """
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_device_ptr_alias_vector",
+            input_names=["values"],
+            output_names=["out"],
+            source=(
+                "device const float4* p = (device const float4*)values;\n"
+                "uint i = thread_position_in_grid.x;\n"
+                "out[i] = values[i];\n"
+            ),
+        )
+        values = mx.arange(1, 9, dtype=mx.float32)
+        with self.assertRaises(RuntimeError):
+            out = self.call(kernel, [values], values.shape, values.dtype)
+            mx.eval(out)
+
 
 if __name__ == "__main__":
     unittest.main()
