@@ -56,7 +56,7 @@ start_server() { # start_server <model-id> [extra serve args...]
   local model=$1; shift
   # Own base path per run: never touch the shared /tmp/omlx-home/.omlx state
   # (other lanes read-only reuse this venv; their settings.json stays intact).
-  export OMLX_BASE_PATH=/tmp/omlx-rows/home-$PORT
+  export OMLX_BASE_PATH=/tmp/omlx-rows/home-$PORT-$LEG
   mkdir -p "$OMLX_BASE_PATH"
   # Discovery scans model.model_dirs; the HF-hub path is scanned READ-ONLY
   # (models--Org--Name entries resolve via _resolve_hf_cache_entry).
@@ -240,28 +240,40 @@ a8() {
   leg_begin a8
   DRAFT=$(ls -d $HFHUB/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/*/ 2>/dev/null | head -1)
   [ -n "$DRAFT" ] || fail "draft model snapshot not found in HF cache"
-  start_server "$DSC"
+  local target=${OMLX_ROWS_SPECPREFILL_MODEL:-$DSC}
+  start_server "$target"
+  code=$(jsonput s0.json "/admin/api/models/$target/settings" '{"specprefill_enabled": false}'); [ "$code" = 200 ] || fail "disable stale SpecPrefill setting HTTP $code"
+  jsonpost ur0.json "/admin/api/models/$target/unload" '{}' >/dev/null
+  code=$(jsonpost rl0.json "/admin/api/models/$target/load" '{}'); [ "$code" = 200 ] || fail "reload disabled baseline HTTP $code"
+  sleep 5
   # reference leg: specprefill OFF
-  python3 - "$ART/body_ref.json" "$DSC" <<'PY'
+  python3 - "$ART/body_ref.json" "$target" <<'PY'
 import json,sys
 out,model=sys.argv[1:3]
-pre="def load_balancer(servers):\n    \"\"\"Route requests across servers with weighted round robin.\n    " + ("Handle edge cases: server down, weight zero, sticky sessions. " * 12) + "\"\"\"\n"
+pre=("def load_balancer(servers):\n" + ("Handle edge cases: server down, weight zero, sticky sessions. " * 32))
 json.dump({"model":model,"messages":[{"role":"user","content":pre+"Implement the function body."}],
            "max_tokens":96,"temperature":0,"stream":False},open(out,"w"))
 PY
   code=$(jsonpost out_ref.json /v1/chat/completions @body_ref.json); [ "$code" = 200 ] || fail "reference leg HTTP $code"
   log "reference (off): digest=$(cdig out_ref.json)"
-  code=$(jsonput s1.json "/admin/api/models/$DSC/settings" \
+  code=$(jsonput s1.json "/admin/api/models/$target/settings" \
     '{"specprefill_enabled": true, "specprefill_draft_model": "'"$DRAFT"'", "specprefill_threshold": 256, "specprefill_keep_pct": 0.5}')
   [ "$code" = 200 ] || fail "settings PUT HTTP $code: $(head -c 300 s1.json)"
   log "specprefill settings applied (draft=$DRAFT); reloading engine (scheduler reads settings at init)"
-  jsonpost ur1.json "/admin/api/models/$DSC/unload" '{}' >/dev/null
-  code=$(jsonpost rl1.json "/admin/api/models/$DSC/load" '{}'); [ "$code" = 200 ] || fail "reload after settings HTTP $code"
+  jsonpost ur1.json "/admin/api/models/$target/unload" '{}' >/dev/null
+  code=$(jsonpost rl1.json "/admin/api/models/$target/load" '{}'); [ "$code" = 200 ] || fail "reload after settings HTTP $code"
   sleep 5
-  code=$(jsonpost out_on.json /v1/chat/completions @body_ref.json); [ "$code" = 200 ] || fail "specprefill leg HTTP $code"
+  python3 - "$ART/body_on.json" "$target" <<'PY'
+import json,sys
+out,model=sys.argv[1:3]
+text=("Independent dispatch uses bounded queues, immutable request envelopes, monotonic lease clocks, explicit acknowledgments, retry budgets, and backpressure. " * 32)
+json.dump({"model":model,"messages":[{"role":"user","content":text+" Explain the dispatch flow."}],
+           "max_tokens":96,"temperature":0,"stream":False},open(out,"w"))
+PY
+  code=$(jsonpost out_on.json /v1/chat/completions @body_on.json); [ "$code" = 200 ] || fail "specprefill leg HTTP $code"
   log "specprefill (on): digest=$(cdig out_on.json) (approximation by design; equality not asserted)"
-  grep -i 'specprefill' "$ART/server.log" | head -8 || log "note: no specprefill log lines — SCORING PATH MAY NOT HAVE FIRED, recorded as suspicious"
-  grep -qi 'specprefill' "$ART/server.log" || fail "no specprefill activity in server.log — cannot count as exercised"
+  if grep -qi 'SpecPrefill sparse prefill failed' "$ART/server.log"; then fail "SpecPrefill scoring completed but sparse prefill failed; see server.log"; fi
+  grep -i 'specprefill: scored' "$ART/server.log" | head -8 || fail "no scored SpecPrefill tokens in server.log — scoring path not proven"
   log "PASS a8: specprefill request served with log evidence of the scoring path"
   leg_end
 }
@@ -276,7 +288,7 @@ a14() {
   # -> EnginePool must evict the LRU *unpinned* model = Q4B, and must refuse
   # to evict pinned Q05. TTL then unloads Q2B on idle.
   start_server "$Q4B" --memory-guard-gb 3
-  st() { jsonget "$ART/st_$1.json" /admin/api/models >/dev/null; python3 - "$ART/st_$1.json" <<'PY'
+  st() { jsonget "$ART/$1.json" /admin/api/models >/dev/null; python3 - "$ART/$1.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
 for m in d if isinstance(d,list) else d.get("models",[]):
@@ -351,33 +363,36 @@ a15() {
 # ---------------------------------------------------------------------------
 a20() {
   leg_begin a20
-  start_server "$Q4B"
+  local model=${OMLX_ROWS_TQ_MODEL:-$Q4B}
+  start_server "$model"
   P=$(prefix_prompt)
-  python3 - "$ART/body.json" "$Q4B" "$P" <<'PY'
+  python3 - "$ART/body.json" "$model" "$P" <<'PY'
 import json,sys
 out,model,pre=sys.argv[1:4]
 json.dump({"model":model,"messages":[{"role":"user","content":pre+"Summarize in two sentences."}],
            "max_tokens":96,"temperature":0,"stream":False},open(out,"w"))
 PY
-  code=$(jsonpost out_off.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "baseline leg HTTP $code"
-  log "tq off: digest=$(cdig out_off.json)"
-  code=$(jsonput s8.json "/admin/api/models/$Q4B/settings" '{"turboquant_kv_enabled": true, "turboquant_kv_bits": 8}')
+  code=$(jsonpost out_off.json /v1/chat/completions @body.json) || fail "baseline curl failed (HTTP $code)"; [ "$code" = 200 ] || fail "baseline leg HTTP $code"
+  off=$(cdig out_off.json) || fail "baseline response is not a complete chat-completion JSON body"
+  log "tq off: digest=$off"
+  code=$(jsonput s8.json "/admin/api/models/$model/settings" '{"turboquant_kv_enabled": true, "turboquant_kv_bits": 8}')
   [ "$code" = 200 ] || fail "tq settings PUT HTTP $code: $(head -c 300 s8.json)"
-  jsonpost ur8.json "/admin/api/models/$Q4B/unload" '{}' >/dev/null
-  code=$(jsonpost rl8.json "/admin/api/models/$Q4B/load" '{}'); [ "$code" = 200 ] || fail "reload after tq PUT HTTP $code"
+  jsonpost ur8.json "/admin/api/models/$model/unload" '{}' >/dev/null
+  code=$(jsonpost rl8.json "/admin/api/models/$model/load" '{}'); [ "$code" = 200 ] || fail "reload after tq PUT HTTP $code"
   sleep 5
-  code=$(jsonpost out_b8.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "tq bits=8 leg HTTP $code"
-  log "tq bits=8: digest=$(cdig out_b8.json)"
-  code=$(jsonput s4.json "/admin/api/models/$Q4B/settings" '{"turboquant_kv_bits": 4}')
+  code=$(jsonpost out_b8.json /v1/chat/completions @body.json) || fail "tq bits=8 curl failed (HTTP $code)"; [ "$code" = 200 ] || fail "tq bits=8 leg HTTP $code"
+  b8=$(cdig out_b8.json) || fail "bits=8 response is not a complete chat-completion JSON body"
+  log "tq bits=8: digest=$b8"
+  code=$(jsonput s4.json "/admin/api/models/$model/settings" '{"turboquant_kv_bits": 4}')
   [ "$code" = 200 ] || fail "tq bits=4 PUT HTTP $code"
-  jsonpost ur4.json "/admin/api/models/$Q4B/unload" '{}' >/dev/null
-  code=$(jsonpost rl4.json "/admin/api/models/$Q4B/load" '{}'); [ "$code" = 200 ] || fail "reload after bits=4 PUT HTTP $code"
+  jsonpost ur4.json "/admin/api/models/$model/unload" '{}' >/dev/null
+  code=$(jsonpost rl4.json "/admin/api/models/$model/load" '{}'); [ "$code" = 200 ] || fail "reload after bits=4 PUT HTTP $code"
   sleep 5
-  code=$(jsonpost out_b4.json /v1/chat/completions @body.json); [ "$code" = 200 ] || fail "tq bits=4 leg HTTP $code"
-  log "tq bits=4: digest=$(cdig out_b4.json)"
+  code=$(jsonpost out_b4.json /v1/chat/completions @body.json) || fail "tq bits=4 curl failed (HTTP $code)"; [ "$code" = 200 ] || fail "tq bits=4 leg HTTP $code"
+  b4=$(cdig out_b4.json) || fail "bits=4 response is not a complete chat-completion JSON body"
+  log "tq bits=4: digest=$b4"
   grep -i 'turboquant' "$ART/server.log" | head -5 || fail "no turboquant lines in server.log — cache wrap not exercised"
-  [ "$(cdig out_off.json)" = "$(cdig out_b8.json)" ] \
-    && log "bits=8 digest == off (near-lossless as documented)" \
+  [ "$off" = "$b8" ] \
     || log "note: bits=8 digest differs from off (recorded honestly)"
   log "PASS a20: TurboQuant applied at bits 8/4 with real completions and log evidence"
   leg_end
@@ -388,21 +403,22 @@ PY
 # ---------------------------------------------------------------------------
 a21() {
   leg_begin a21
-  start_server "$DSC"
-  chat_body c.json "$DSC" 64 "Write a Python function that reverses a list."
+  local model=${OMLX_ROWS_MOE_MODEL:-$DSC}
+  start_server "$model" --memory-guard-gb 42
+  chat_body c.json "$model" 64 "Write a Python function that reverses a list."
   code=$(jsonpost out_res.json /v1/chat/completions @c.json); [ "$code" = 200 ] || fail "resident leg HTTP $code"
-  log "resident: digest=$(cdig out_res.json)"
+  resident=$(cdig out_res.json) || fail "resident response is not valid completion JSON"
+  log "resident: digest=$resident"
   code=$(jsonget st_res.json /admin/api/models); [ "$code" = 200 ] || fail "status GET HTTP $code"
-  code=$(jsonput s.json "/admin/api/models/$DSC/settings" '{"moe_expert_offload_enabled": true, "moe_expert_offload_resident_fraction": 0.25}')
+  code=$(jsonput s.json "/admin/api/models/$model/settings" '{"moe_expert_offload_enabled": true, "moe_expert_offload_resident_fraction": 0.25}')
   [ "$code" = 200 ] || fail "offload settings PUT HTTP $code: $(head -c 300 s.json)"
   log "offload 25% set (engine reload triggered); waiting for healthy..."
   sleep 20
   i=0; until curl -sS --max-time 2 "$BASE/health" >/dev/null 2>&1; do sleep 2; i=$((i+1)); [ $i -gt 60 ] && fail "server not healthy after offload reload"; done
   code=$(jsonpost out_off.json /v1/chat/completions @c.json); [ "$code" = 200 ] || fail "offload leg HTTP $code"
-  log "offload25: digest=$(cdig out_off.json)"
-  [ "$(cdig out_res.json)" = "$(cdig out_off.json)" ] \
-    && log "BIT-IDENTICAL: offload does not change routing (doc claim holds)" \
-    || fail "offload changed greedy output — accuracy-by-construction claim VIOLATED"
+  offload=$(cdig out_off.json) || fail "offload response is not valid completion JSON"
+  log "offload25: digest=$offload"
+  [ "$resident" = "$offload" ]     && log "BIT-IDENTICAL: offload does not change routing (doc claim holds)"     || fail "offload changed greedy output — accuracy-by-construction claim VIOLATED"
   grep -iE 'offload|resident' "$ART/server.log" | head -6 || log "note: no offload log lines (recorded)"
   log "PASS a21: 25% residency MoE offload served bit-identical output"
   leg_end
@@ -419,15 +435,15 @@ Legs (one gpu-turn ticket each, <= 12 min):
        == sequential refs; model: Qwen3-4B
   a6   SSD cold tier: offload to --paged-ssd-cache-dir, restart, digest identical
        (+ restore log if emitted); model: Qwen3-4B; ~2155-token prefix
-  a8   SpecPrefill: settings on (draft=Qwen2.5-0.5B snapshot), long MoE prompt,
-       log evidence of scoring path; target: DeepSeek-Coder-V2-Lite (MoE 64 experts)
+  a8   SpecPrefill: >256-token uncached prompt; scoring and successful sparse prefill
+       required; model override OMLX_ROWS_SPECPREFILL_MODEL (default DeepSeek MoE)
   a14  multi-model: LRU eviction under --memory-guard-gb 3, pin keeps Qwen2.5-0.5B,
        ttl_seconds 75 unloads Qwen3.8-2B; via /api/models + admin settings API
   a15  memory guard: enforcer startup line + NONZERO 'Baseline memory set'
        (patch 0004) + /api/stats; model: Qwen3-4B
   a20  TurboQuant KV: bits=8 and bits=4 vs off on long prefix; log evidence of wrap
-  a21  MoE expert offload 25% residency: greedy output BIT-IDENTICAL vs resident
-       target: DeepSeek-Coder-V2-Lite
+  a21  supported cached MoE offload at 25% residency: valid JSON outputs and equal
+       greedy digest; override OMLX_ROWS_MOE_MODEL (default DeepSeek MoE)
 Env: OMLX_HOME (default /tmp/omlx-home), OMLX_ROWS_PORT (default 8900)
 EOF
 }
