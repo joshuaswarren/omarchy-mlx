@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import csv
 import json
 import os
@@ -73,6 +74,28 @@ KEYWORDS_REFUSED = (
     "intersection_function",
     "object_data",
 )
+
+# device-pointer alias classification (translate_device_pointer_aliases,
+# landed e22eaf199): scalar-pointee aliases rewrite to base[(off)+(i)];
+# vector-pointee aliases and pointer arrays stay exact-error (an alias
+# index spans a vector; arrays need a wider rewrite).
+PTR_ALIAS = re.compile(
+    r"\bdevice\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);")
+PTR_ARRAY = re.compile(
+    r"\bdevice\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*"
+    r"[A-Za-z_][A-Za-z0-9_]*\s*\[")
+VEC_SUFFIX = re.compile(r"[234]$")
+
+
+def ptr_alias_class(msl: str) -> str:
+    if PTR_ARRAY.search(msl):
+        return "ptr-array"
+    decls = PTR_ALIAS.findall(msl)
+    if not decls:
+        return "none"
+    return "vector" if any(VEC_SUFFIX.search(t) for t, _, _ in decls) \
+        else "scalar"
 
 
 @dataclass
@@ -281,6 +304,7 @@ def main() -> int:
                 "line": str(kern.line),
                 "kind": "mtk",
                 "gmsl_features": "|".join(kern.gmsl_features),
+                "ptr_alias": ptr_alias_class(kern.msllib),
                 "msl_size": str(len(kern.msllib)),
                 "ttf_status": "skip",
                 "ttf_error": "",
