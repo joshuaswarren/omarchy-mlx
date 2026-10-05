@@ -47,14 +47,17 @@ libmlx.so sha256 3f3df85f193aded13d95fbda36e96f41ed398274b9ec1c1ff2718c542746e7c
 - 2B d64 ON == the pin; 2B d128/d512 ON == OFF (see honest note below).
 - NOT yet demonstrated: the route firing. The counter probe shows OFF==ON
   identical (4144 vk_compute_dispatches / 16 tokens, 0 fills) with no
-  probe/refusal log line, so the ON arm took the shipped path: the planner's
-  pattern block refuses silently before dispatch_persistent_mlp_tail is
-  ever entered. Two real defects were found and fixed on the way (binding
-  budget 28 < 38 — the tail's 38 slots; per-stream gbb scratch); the
-  remaining refusal is one of the planner rungs and needs one instrumented
-  run (one-shot stderr ladder per rung) to name. 9B cells and the A/B are
-  pending on that fix. The M2 parked at 08:11Z (Main); no tickets after the
-  order; clones deleted per the parking directive.
+  probe/refusal log line, so the ON arm took the shipped path: mlx_lm's
+  swiglu() is mx.compile'd (Compiled node opaque to the planner's
+  Multiply-chain scan) and patch-mlx-lm-swiglu-eager.py is not in
+  apply-mlx-lm-patches.sh, so the SwiGLU store fold never plans and the
+  tail's `!gu.swiglu_out` rung refuses. Root cause named without hardware
+  (Main directive); fix staged: h294-build.sh applies the patcher to the
+  venv (idempotent, bit-exact, pins unchanged) + planner refusal ladder
+  behind MLX_OMARCHY_PERSISTENT_MLP_TRACE (commit 116fcae5c). 9B cells and
+  the A/B are pending on the post-window rerun. The M2 parked at 08:11Z
+  (Main); no tickets after the order; clones deleted per the parking
+  directive.
 
 ## Verdict against the pre-registration
 
