@@ -120,6 +120,7 @@ per-kernel on real dispatch. -->
 | A29 macOS menubar app (SwiftUI, usage history, auto-update) | apps/omlx-mac; README.md:261-268; docs/usage-analytics.md | yes (Swift/macOS) | known-fail: n/a on Linux | Admin web UI covers monitoring on omarchy; usage_history.py is server-side | Main (accept n/a) | n/a |
 | A30 ANE POC benches (qwen35_ane_{down_fused,down_output_split,gdn_split,prefill}) | benchmarks/qwen35_ane_*.py | macOS ANE experiments | n/a (macOS-only POCs, not shipped server features) | omarchy analog is the separate omarchy-ane lane — out of scope for these pins | Main (note) | n/a |
 | A31 Web search tool + usage history (server-side) | websearch.py:80; usage_history.py | no | untested | — | OmlxLinux | OPEN |
+05a3f4a0 (matrix: device-pointer-alias classification in the A26 battery note)
 
 ## B. TensorFold (main = v0.6.5, `609ca419`) features
 
