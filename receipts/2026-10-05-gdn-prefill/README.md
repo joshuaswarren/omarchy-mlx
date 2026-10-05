@@ -401,3 +401,8 @@ main ticket's micro section died on a missing script (the M2 reboots had
 wiped a staged file) and a separate long-prompt gate ticket — the original
 short-prompt e2e never fired the route (T < 512), so the pf gate above is
 the real e2e evidence.
+## Clean landing verification @ 041cd1156
+
+- M2 golden incremental build produced mlx_omarchy-0.32.4.dev202610050436+041cd11-cp314-cp314-linux_aarch64.whl; SHA256 45d1531f3982d97d32fb3bd578d567b7685f111be4335f050d044ba6911c0097.
+- On that wheel, layer0/layer12 outputs and states matched byte-for-byte in all four captured-operand comparisons. Greedy OFF vs default-ON digests matched at d64 (9ffb5e0a859a6a6c), d512 (9789a28bbbb5723a), and raw-prompt prefill with 1145 tokens (cabb841b008c3bc3). The last single pair took 0.664 s OFF and 0.651 s default-ON.
+- The M2 cache did not contain the Qwen3.8 9B snapshot, so a 9B d64 digest was not run.
