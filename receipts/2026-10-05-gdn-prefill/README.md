@@ -158,3 +158,34 @@ G13G expectations (theory, to verify with w71): the hoist removes 2 of 4
 loop-1 MMAs plus the raw k/q staging from the serial chain but keeps 16
 loopS barriers — a smaller relative win than on T6021; the diet composes
 (additive, both envs independent).
+
+## jwm1 decision pass — exact 4-arm command (Main, 2026-10-05; w71 runs)
+
+Build the wheel from `agent/GdnPrefill2-ablate` (superset: diet + hoist +
+ablation stubs; stubs are bench-only, never dispatched without the env).
+
+```bash
+# one ticket per arm; 3 gated repeats per arm (the h292 pattern), interleaved
+# ABBA if you want order-balance; gdn_micro2.py from artifacts/jwm1-parity/h292
+V=<your-venv>/bin/python
+# arm 1 shipped:
+env -u MLX_OMARCHY_GDN_BATCH2 -u MLX_OMARCHY_GDN_HOIST -u MLX_OMARCHY_GDN_STUB $V gdn_micro2.py
+# arm 2 diet:
+MLX_OMARCHY_GDN_BATCH2=1 $V gdn_micro2.py
+# arm 3 hoist:
+MLX_OMARCHY_GDN_HOIST=1 $V gdn_micro2.py
+# arm 4 both:
+MLX_OMARCHY_GDN_BATCH2=1 MLX_OMARCHY_GDN_HOIST=1 $V gdn_micro2.py
+# stage table (timing ONLY; outputs are garbage by design):
+for s in 1 2 3 4 5 6 7; do MLX_OMARCHY_GDN_STUB=$s $V gdn_micro2.py; done
+```
+
+Expected output format per arm (grep the fast-op column): `T= 512 full ... fast-op
+only <X> ms (min <Y>) per-call <Z>` — report per-call at T in {64,128,512,1024};
+the stage table readout is (arm1_fastop - stubN_fastop) per chunk =
+(us/call - stub_us/call) / 64. Digest pins MUST hold on arms 1-4 exactly
+(d64 eee1cf9635d6d4eb, d128 0756351401f5b3fb, d256 393a1cf303e9f362, pf512
+509c19201275dfcc); stub arms are digest-exempt (wrong by design).
+H294 note: BATCH2 measured -0.6% on jwm1 (7.932 -> 7.884 ms/call) — below the
+bar; arms 3/4 are the live question (the hoist moves work BETWEEN dispatches,
+the diet only removed barriers).
