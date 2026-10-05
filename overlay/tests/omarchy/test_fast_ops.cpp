@@ -1501,6 +1501,183 @@ TEST_CASE("scaled_dot_product_attention causal head dim 256 at kL 2048 and 4096"
   }
 }
 
+// Numerics-gate contract for the fused flash-2 prefill arm
+// (shaders/sdpa_prefill_flash256.comp, ComputeKernel::SdpaPrefillFlash256BF16):
+// per-op fp64 reference error is no worse than the composed
+// MatmulF32CoopmatQkBF16 + softmax_suffix + MatmulF32CoopmatPvBF16
+// path the arm replaces, on the Qwen3.5-2B and 9B prefill shapes
+// (GQA 8/2 + 16/4, head_dim=256, qL=512/1024, kL=qL). Both arms use the
+// same bf16 storage; the bf16 ULP at the measured output magnitude is
+// the comparison floor. The host reference consumes the SAME bf16
+// inputs the device arms consume (bf16 RNE of the fp32 pattern), so
+// the residual is f32 summation order only — the first lavapipe run
+// (2026-10-04) fed the fp32 originals to the host math and measured a
+// common-mode bf16 input-rounding error of up to ~96 ULP on BOTH arms
+// at the same elements, which is the input-cast signature, not a
+// kernel error. The flash-2 online-softmax summation order differs
+// from the composed path's, so the arm-to-arm assertion is "no worse
+// than composed" rather than "bit-identical". The kill switch
+// MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 keeps the composed path for the
+// regression comparison; the default engages the new arm.
+
+// Round-to-nearest-even fp32 -> bf16 -> fp64, the exact conversion the
+// CastF32BF16-style device store does (uintBitsToFloat of the top
+// half after RNE). The host reference must consume the same words the
+// device kernels load.
+double bf16_round(double value) {
+  uint32_t bits;
+  float f = static_cast<float>(value);
+  std::memcpy(&bits, &f, sizeof(bits));
+  if (f != f) {
+    bits = (bits >> 16) | 0x40u;
+  } else {
+    bits = (bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16;
+  }
+  uint32_t wide_bits = bits << 16;
+  float widened;
+  std::memcpy(&widened, &wide_bits, sizeof(widened));
+  return static_cast<double>(widened);
+}
+
+TEST_CASE(
+    "sdpa prefill flash-256 is no worse than the composed path on Qwen3.5 shapes") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  struct ShapeSpec {
+    int B, H, KV, qL, kL;
+  };
+  const std::vector<ShapeSpec> shapes = {
+      {1, 8, 2, 512, 512},    // Qwen3.5-2B pf512
+      {1, 8, 2, 1024, 1024},  // Qwen3.5-2B pf1024
+      {1, 16, 4, 512, 512},   // Qwen3.5-9B pf512
+      {1, 16, 4, 1024, 1024}, // Qwen3.5-9B pf1024
+  };
+  for (const auto& shape : shapes) {
+    const int B = shape.B;
+    const int H = shape.H;
+    const int KV = shape.KV;
+    const int qL = shape.qL;
+    const int kL = shape.kL;
+    const int D = 256;
+    const float scale = 1.0f / std::sqrt(float(D));
+    auto q_data = pattern(size_t(B) * H * qL * D, 311 + kL);
+    auto k_data = pattern(size_t(B) * KV * kL * D, 313 + kL);
+    auto v_data = pattern(size_t(B) * KV * kL * D, 317 + kL);
+    array q_bf = astype(
+        array(q_data.begin(), Shape{B, H, qL, D}, float32), bfloat16, stream);
+    array k_bf = astype(
+        array(k_data.begin(), Shape{B, KV, kL, D}, float32), bfloat16, stream);
+    array v_bf = astype(
+        array(v_data.begin(), Shape{B, KV, kL, D}, float32), bfloat16, stream);
+    q_bf.eval();
+    k_bf.eval();
+    v_bf.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    // Composed-path arm: kill switch forces the composed graph
+    // (MatmulF32CoopmatQkBF16 + softmax_suffix + MatmulF32CoopmatPvBF16).
+    setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH256", "0", 1);
+    array out_composed = fast::scaled_dot_product_attention(
+        q_bf, k_bf, v_bf, scale, "causal", {}, std::nullopt, false, stream);
+    out_composed.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    auto composed = flat(out_composed, stream);
+    // Fused flash-2 arm: unset the kill switch (default engages).
+    unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH256");
+    array out_flash = fast::scaled_dot_product_attention(
+        q_bf, k_bf, v_bf, scale, "causal", {}, std::nullopt, false, stream);
+    out_flash.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    auto flash = flat(out_flash, stream);
+    // Host double reference on the SAME bf16-rounded inputs the device
+    // arms load (bf16 RNE of the fp32 pattern); otherwise the input
+    // cast dominates the residual and both arms fail identically.
+    std::vector<double> q16(q_data.size()), k16(k_data.size()), v16(
+        v_data.size());
+    for (size_t i = 0; i < q_data.size(); ++i) {
+      q16[i] = bf16_round(static_cast<double>(q_data[i]));
+    }
+    for (size_t i = 0; i < k_data.size(); ++i) {
+      k16[i] = bf16_round(static_cast<double>(k_data[i]));
+    }
+    for (size_t i = 0; i < v_data.size(); ++i) {
+      v16[i] = bf16_round(static_cast<double>(v_data[i]));
+    }
+    std::vector<float> q16f(q16.begin(), q16.end());
+    std::vector<float> k16f(k16.begin(), k16.end());
+    std::vector<float> v16f(v16.begin(), v16.end());
+    auto host = host_sdpa(
+        q16f, k16f, v16f, B, H, KV, qL, kL, D, scale, true);
+    REQUIRE_EQ(composed.size(), host.size());
+    REQUIRE_EQ(flash.size(), host.size());
+    double max_abs_composed = 0.0;
+    double max_abs_flash = 0.0;
+    double max_rel_composed = 0.0;
+    double max_rel_flash = 0.0;
+    for (size_t i = 0; i < host.size(); ++i) {
+      double h = host[i];
+      double c = static_cast<double>(composed[i]);
+      double f = static_cast<double>(flash[i]);
+      // bf16 ULP at magnitude |h| (numerics-gate.md): spacing =
+      // 2^(floor(log2(|h|))-7). For |h| in [0, 2^-7) the ULP is
+      // 2^-23 (smallest normal subnormal-adjacent ULP); we floor
+      // log2 with a tiny epsilon to avoid log(0).
+      double mag = std::max(std::abs(h), 1e-30);
+      double ulp = std::ldexp(1.0, std::floor(std::log2(mag)) - 7.0);
+      double abs_c = std::abs(c - h);
+      double abs_f = std::abs(f - h);
+      double rel_c = abs_c / std::max(mag, 1.0);
+      double rel_f = abs_f / std::max(mag, 1.0);
+      max_abs_composed = std::max(max_abs_composed, abs_c);
+      max_abs_flash = std::max(max_abs_flash, abs_f);
+      max_rel_composed = std::max(max_rel_composed, rel_c);
+      max_rel_flash = std::max(max_rel_flash, rel_f);
+      // Both arms must hold within a small multiple of the bf16 ULP
+      // (the gate is "no worse than the deployed path" — composed
+      // is the deployed path; flash-256 is the new arm; we assert
+      // the looser 16x bf16 ULP bound per element so floating
+      // summation-order drift is allowed but still tiny).
+      CHECK_MESSAGE(
+          abs_c <= 16.0 * ulp,
+          "composed element ",
+          i,
+          " exceeds 16 bf16 ULP at |h|=",
+          mag,
+          " (ulp=",
+          ulp,
+          ", abs=",
+          abs_c,
+          ")");
+      CHECK_MESSAGE(
+          abs_f <= 16.0 * ulp,
+          "flash element ",
+          i,
+          " exceeds 16 bf16 ULP at |h|=",
+          mag,
+          " (ulp=",
+          ulp,
+          ", abs=",
+          abs_f,
+          ")");
+    }
+    // The strict gate: flash-256 is no worse than the composed path
+    // on this shape. The flash-2 algorithm's per-row running stats
+    // accumulate the same f32 products the composition accumulates
+    // (q*scale fma, exp(score - max) fma, p*v fma, 1/sum divide) in
+    // a different order, so the per-element error can move by a few
+    // ULPs; we cap the movement at 2x the composed path's per-element
+    // worst case AND we cap the max absolute error at 1e-2 (the
+    // numerics gate's loose floor for bf16 attention outputs).
+    INFO(
+        "shape B=" << B << " H=" << H << " KV=" << KV << " qL=" << qL
+                   << " kL=" << kL);
+    CHECK(max_abs_flash <= 1e-2);
+    CHECK(max_abs_flash <= 2.0 * std::max(max_abs_composed, 1e-30));
+    CHECK(max_rel_flash <= 2.0 * std::max(max_rel_composed, 1e-7));
+  }
+}
+
 TEST_CASE("scaled_dot_product_attention respects strided sink storage") {
   if (!compute_available()) {
     return;
