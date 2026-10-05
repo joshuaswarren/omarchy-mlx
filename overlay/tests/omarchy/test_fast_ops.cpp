@@ -620,7 +620,7 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
     auto xs32 = array(reordered.begin(), Shape{B, H, T, D}, float32);
     auto ws32 = astype(
         array(ws.begin(), Shape{D}, float32), float32, stream);
-    auto n = fast::rms_norm(xs32, w32, eps, stream);
+    auto n = fast::rms_norm(xs32, ws32, eps, stream);
     auto y = fast::rope(
         n, D, false, base, 1.0f, off, std::nullopt, stream);
     return sum(multiply(astype(y, float32, stream), cot32, stream), stream);
