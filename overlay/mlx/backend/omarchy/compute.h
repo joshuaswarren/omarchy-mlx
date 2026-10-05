@@ -607,6 +607,11 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupF32,
   QmmVecQ4MultiSubgroupF16,
   QmmVecQ4MultiSubgroupBF16,
+  // Fused persistent decode MLP tail (H290): norm + gate/up swiglu fold +
+  // down/add in one dispatch with in-kernel grid barriers. bf16 only;
+  // append-only profile id. Gated by MLX_OMARCHY_PERSISTENT_MLP and a
+  // real-pipeline occupancy probe; falls back to the three-dispatch chain.
+  PersistentTailBF16,
   // Non-contracted large-prefill fallback; appended to preserve profile ids.
   QmmTileRbPreciseF16,
   // Native-order single-query f16 attention; append-only profile id.
