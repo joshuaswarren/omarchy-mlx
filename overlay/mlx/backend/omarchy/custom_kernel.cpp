@@ -318,7 +318,8 @@ void translate_device_pointer_aliases(
     std::string& body,
     const std::vector<Parameter>& parameters) {
   static const std::regex alias_pattern(
-      R"((?:const\s+)?device\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]+?);)");
+      R"((?:const\s+device\s+(?:const\s+)?|device\s+(?:const\s+)?)"
+      R"([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]+?);)");
   struct Alias {
     std::string base;
     std::string offset;
