@@ -586,7 +586,7 @@ int main() {
   pf.shape[1] = kMid;
   pf.flags = 65536u;          // gu fold
   pf.out_strides[0] = kOut;   // dn_n
-  pf.out_strides[1] = 256u;   // dn_flags (add epilogue weight 0)
+  pf.out_strides[1] = 1024u;  // dn_flags: add epilogue for remapped weight 2 (bit 8+2)
   pf.out_strides[2] = kMid;   // dn_k
 
   auto submit = [&]() {
