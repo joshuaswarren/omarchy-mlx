@@ -25,6 +25,13 @@ else
   echo "FATAL: no /var/tmp/golden-wheel to clone; prepare a tree first" >&2
   exit 2
 fi
+# golden's staged tree predates current main; re-point and re-prepare so the
+# probe tests the current patches (Main: b226895dc fixed fast.h).
+cd "$D"
+git fetch origin main 2>&1 | tail -1
+git checkout -q -f origin/main
+echo "tree at $(git rev-parse --short=7 HEAD)"
+./scripts/prepare-mlx.sh
 cd "$SRC"
 cmake -DMLX_BUILD_TESTS=ON . > "/var/tmp/${TAG}-cmake.log" 2>&1
 nice -n 10 make -j4 omarchy_fast_ops_tests > "/var/tmp/${TAG}-build.log" 2>&1
