@@ -689,6 +689,13 @@ enum class ComputeKernel : uint16_t {
   // chunk staging, 4-slice state-update waves). Selected only by
   // MLX_OMARCHY_GDN_BATCH. Append-only profile id.
   GatedDeltaPrefillCoopmatBatchBF16,
+  // GDN prefill kkt/qkt hoist: pass A computes the state-independent
+  // K.K^T / Q.K^T tiles for every chunk in parallel (bit-identical loop-1
+  // sequence); pass B runs the recurrence off the f32 tiles on the
+  // state-wave body. Default ON for T >= 512; kill switch
+  // MLX_OMARCHY_GDN_HOIST=0.
+  GatedDeltaPrefillKktqkt,
+  GatedDeltaPrefillCoopmatHoistBF16,
   // Fused RMSNorm + SwiGLU-gate / RMSNorm + scalar-multiply epilogues
   // for the GDN decode chain (bf16). Mode 0 replaces
   // FastRmsNormBF16 + CastBF16F32 x2 + FusedChainF32(sigmoid,mul,mul)

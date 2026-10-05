@@ -1,0 +1,154 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// GDN prefill kkt/qkt precompute (the hoist's parallel pass, GDN_HOIST).
+// One workgroup per (head, Dv-slice, chunk) accumulates K.K^T and Q.K^T for
+// that chunk with EXACTLY the shipped loop-1 sequence (per-simdgroup
+// accumulator, ascending kk, the same row/column loads from the same staged
+// tiles), so the tiles are bit-identical to the fused kernel's; the four
+// Dv-slices redundantly compute the same (chunk, head) tiles — that
+// redundancy is what keeps the accumulation order unchanged. Results ride
+// the Snap binding as f32: layout per (chunk, head, wgY, sg) two 8x8
+// row-major tiles, kkt at +0 and qkt at +64.
+
+#version 460
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer QBuf { uint w[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf { uint w[]; } k_buf;
+layout(set = 0, binding = 10, std430) buffer Snap { float v[]; } snap;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta_f;
+  uint dims;       // T
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint chunk;      // unused here
+  uint chunks;
+} params;
+
+const uint C = 8u;
+const uint DK = 128u;
+const uint KSTEPS = DK / 8u;
+
+float bf16_word_lo(uint word) {
+  return uintBitsToFloat((word & 0xffffu) << 16u);
+}
+
+float bf16_word_hi(uint word) {
+  return uintBitsToFloat(word & 0xffff0000u);
+}
+
+shared float s_k[2][4][64];
+shared float s_q[2][4][64];
+
+uint g_sg;
+uint g_e0;
+uint g_r0;
+uint g_c0;
+uint g_koff;
+uint g_qoff;
+uint g_hv;
+uint g_head;
+uint g_valid;
+float g_bg_r0;  // unused here; keeps stage shape comparable
+float g_gam_r0;
+
+void stage_kq(uint t0v, uint kk, uint p) {
+  uint kbase = g_koff + (t0v + g_r0) * g_hv * DK + g_head * DK + kk * 8u + g_c0;
+  uint qbase = g_qoff + (t0v + g_r0) * g_hv * DK + g_head * DK + kk * 8u + g_c0;
+  float kv0 = 0.0;
+  float kv1 = 0.0;
+  float qv0 = 0.0;
+  float qv1 = 0.0;
+  if (g_r0 < g_valid) {
+    uint kw = k_buf.w[kbase >> 1u];
+    kv0 = bf16_word_lo(kw);
+    kv1 = bf16_word_hi(kw);
+    uint qw = q_buf.w[qbase >> 1u];
+    qv0 = bf16_word_lo(qw);
+    qv1 = bf16_word_hi(qw);
+  }
+  s_k[p][g_sg][g_e0] = kv0;
+  s_k[p][g_sg][g_e0 + 1u] = kv1;
+  s_q[p][g_sg][g_e0] = qv0;
+  s_q[p][g_sg][g_e0 + 1u] = qv1;
+}
+
+void main() {
+  const uint sg = gl_SubgroupID;
+  const uint lane = gl_SubgroupInvocationID;
+  const uint head = gl_WorkGroupID.x;
+  const uint T = params.dims;
+  const uint hv = params.matrix_k;
+  const uint e0 = lane * 2u;
+  const uint r0 = e0 / 8u;
+  const uint c0 = e0 % 8u;
+  const uint t0 = gl_WorkGroupID.z * C;
+  const uint valid = min(C, T - t0);
+
+  g_sg = sg;
+  g_e0 = e0;
+  g_r0 = r0;
+  g_c0 = c0;
+  g_koff = params.rhs_offset;
+  g_qoff = params.lhs_offset;
+  g_hv = hv;
+  g_head = head;
+  g_valid = valid;
+
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> mat_a;
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> mat_b;
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> kkt =
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+  coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> qkt =
+      coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(0.0);
+
+  stage_kq(t0, 0u, 0u);
+  barrier();
+  uint par = 0u;
+  for (uint kk = 0u; kk < KSTEPS; ++kk) {
+    if (kk + 1u < KSTEPS) {
+      stage_kq(t0, kk + 1u, par ^ 1u);
+    }
+    coopMatLoad(mat_b, s_k[par][sg], 0, 8, gl_CooperativeMatrixLayoutColumnMajor);
+    coopMatLoad(mat_a, s_k[par][sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    kkt = coopMatMulAdd(mat_a, mat_b, kkt);
+    coopMatLoad(mat_a, s_q[par][sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
+    qkt = coopMatMulAdd(mat_a, mat_b, qkt);
+    barrier();
+    par ^= 1u;
+  }
+
+  // [(chunk * Hv + head) * (Dv/32) + wgY] * 4 sg + sg, two 64-f32 tiles.
+  uint base = ((gl_WorkGroupID.z * hv + head) * (params.matrix_n / 32u) +
+               gl_WorkGroupID.y) * 512u + sg * 128u;
+  coopMatStore(kkt, snap.v, base, 8, gl_CooperativeMatrixLayoutRowMajor);
+  coopMatStore(qkt, snap.v, base + 64u, 8, gl_CooperativeMatrixLayoutRowMajor);
+}
