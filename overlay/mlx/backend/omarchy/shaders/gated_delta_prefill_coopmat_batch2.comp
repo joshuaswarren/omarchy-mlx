@@ -1,24 +1,25 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 //
-// Barrier-diet-2 variant of gated_delta_prefill_coopmat_batch.comp: identical
-// per-element arithmetic in identical order — only synchronization and
-// staging structure changes. Three restructures, bit-exact by construction:
+// Barrier-diet variant of gated_delta_prefill_coopmat_batch.comp: identical
+// per-element arithmetic in identical order — only synchronization structure
+// changes. GDN_BATCH2 candidate (GdnPrefill2 lane):
 //
-// 1. gamma/beta ride subgroup shuffles of the SAME subgroupInclusiveAdd
-//    prefix the shipped kernel stores to gamma_s/beta_s; the per-chunk
-//    workgroup barrier and both arrays are gone.
-// 2. Middle-chain barrier diet: shared-memory hazards are ordered by the
+// 1. Middle-chain barrier diet: shared-memory hazards are ordered by the
 //    next chain barrier where provable (the N loads by the a1-store
 //    barrier, the msum load by the tinv/v_s barrier, the delta/tinv loads
 //    by the out-store barrier), so three workgroup barriers per chunk go.
-// 3. The msum round trip rides rt_a (free between the N loads and the
-//    qkt store), so the N^4 load and the msum store no longer share an
-//    array and their barrier goes.
+// 2. The v_s staging folds under the tinv-load barrier (one more).
+// 3. The msum round trip rides rt_a (free between the N loads and the qkt
+//    store), so the N^4 load and the msum store do not share an array and
+//    their barrier goes.
+// 4. One kernel-start barrier covers the state restoration before loop 1's
+//    first cross-lane s_state read (the per-chunk gamma barrier used to).
 //
-// Everything else — chunk algebra, decay folding, Neumann inverse, y/state
-// writes, gates, contract — matches the batch kernel; read its header for
-// the math and the numeric contract.
+// gamma/beta keep the shipped shared-memory path: a bisect arm (batch2a)
+// proved the subgroup-shuffle distribution changes the prefix-sum bits on
+// this stack (32-lane inclusive scan != 8-active-lane scan) and is NOT
+// bit-exact. Everything else matches the batch kernel.
 
 #version 460
 
@@ -29,7 +30,6 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
-#extension GL_KHR_shader_subgroup_shuffle : require
 
 layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
 
@@ -110,6 +110,8 @@ shared float kgc_all[4][4 * 64];
 shared float v_s[4][64];
 shared float rt_a[4][64];               // round trip A (kkt, qkt, du, out)
 shared float rt_b[4][64];               // round trip B (m2, neumann, tinvv, ws, delta, kd)
+shared float gamma_s[4][8];             // log-domain prefix sums
+shared float beta_s[4][8];
 
 // Per-lane constants the staging helper reads (set once in main).
 uint g_sg;
@@ -203,6 +205,10 @@ void main() {
     s_state[sg][kk * 64u + e0] = s_in.v[idx];
     s_state[sg][kk * 64u + e0 + 1u] = s_in.v[idx + DK];
   }
+  // The shipped kernel's per-chunk gamma barrier covered this restoration
+  // before loop 1's first cross-lane s_state read; amortized over T/8
+  // chunks, so the per-chunk saving stands.
+  barrier();
 
   for (uint t0 = 0u; t0 < T; t0 += C) {
     const uint valid = min(C, T - t0);
@@ -221,22 +227,22 @@ void main() {
           : bf16_load(g_buf.v[g_off + (t0 + lane) * hv + head]);
       gv = log(max(graw, 1.17549435e-38f));
     }
-    // Same subgroupInclusiveAdd prefix the shipped kernel stores to
-    // gamma_s; shuffles hand every lane the elements it would have read.
-    const float prefix = subgroupInclusiveAdd(gv);
-    const float beta_local = lane < valid
-        ? bf16_load(b_buf.v[b_off + (t0 + lane) * hv + head])
-        : 0.0f;
+    if (lane < C) {
+      gamma_s[sg][lane] = subgroupInclusiveAdd(gv);
+      beta_s[sg][lane] = lane < valid
+          ? bf16_load(b_buf.v[b_off + (t0 + lane) * hv + head])
+          : 0.0f;
+    }
+    barrier();
 
-    const float gamC = exp(subgroupShuffle(prefix, C - 1u));
-    const float beta_r0 = subgroupShuffle(beta_local, r0);
-    const float gam_r0 = exp(subgroupShuffle(prefix, r0));
+    const float gamC = exp(gamma_s[sg][C - 1u]);
+    const float beta_r0 = beta_s[sg][r0];
+    const float gam_r0 = exp(gamma_s[sg][r0]);
     g_bg_r0 = beta_r0 * gam_r0;
     g_gam_r0 = gam_r0;
     // Decay from token r0 to the chunk end, log-domain difference.
-    const float dec_r0 = r0 < valid
-        ? exp(subgroupShuffle(prefix, C - 1u) - subgroupShuffle(prefix, r0))
-        : 0.0;
+    const float dec_r0 =
+        r0 < valid ? exp(gamma_s[sg][C - 1u] - gamma_s[sg][r0]) : 0.0;
 
     // Loop 1: accumulate KK^T, Q.K^T, (gamma beta K).S and (gamma Q).S
     // with double-buffered staging — chunk step kk+1 is staged into the
@@ -276,9 +282,9 @@ void main() {
     float n0 = rt_a[sg][e0];
     float n1 = rt_a[sg][e0 + 1u];
     rt_a[sg][e0] = (c0 < r0)
-        ? n0 * beta_r0 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0)) : 0.0;
+        ? n0 * beta_r0 * exp(gamma_s[sg][r0] - gamma_s[sg][c0]) : 0.0;
     rt_a[sg][e0 + 1u] = (c0 + 1u < r0)
-        ? n1 * beta_r0 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0 + 1u)) : 0.0;
+        ? n1 * beta_r0 * exp(gamma_s[sg][r0] - gamma_s[sg][c0 + 1u]) : 0.0;
     barrier();
     coopMatLoad(mat_a, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     coopMatLoad(mat_b, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
@@ -352,9 +358,9 @@ void main() {
     float qe0 = rt_a[sg][e0];
     float qe1 = rt_a[sg][e0 + 1u];
     rt_a[sg][e0] = (c0 <= r0)
-        ? qe0 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0)) : 0.0;
+        ? qe0 * exp(gamma_s[sg][r0] - gamma_s[sg][c0]) : 0.0;
     rt_a[sg][e0 + 1u] = (c0 + 1u <= r0)
-        ? qe1 * exp(subgroupShuffle(prefix, r0) - subgroupShuffle(prefix, c0 + 1u)) : 0.0;
+        ? qe1 * exp(gamma_s[sg][r0] - gamma_s[sg][c0 + 1u]) : 0.0;
     barrier();
     coopMatLoad(mat_a, rt_a[sg], 0, 8, gl_CooperativeMatrixLayoutRowMajor);
     // delta feeds the out and state-update matmuls: operand role. The
