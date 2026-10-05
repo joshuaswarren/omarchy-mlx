@@ -7,6 +7,7 @@ Expected on the shipped wheel: B>1 with array offset throws
 '[broadcast_shapes] (...64) and (...128)'; everything else bit-exact.
 Prints provenance first per repo test rules.
 """
+import hashlib
 import json
 import sys
 
@@ -14,6 +15,12 @@ import mlx.core as mx
 import mlx
 
 print("PROVENANCE mlx:", mlx.__file__, mx.__version__, flush=True)
+
+
+def out_hash(a) -> str:
+    a32 = mx.astype(a, mx.float32)
+    mx.eval(a32)
+    return hashlib.sha256(repr(a32.tolist()).encode()).hexdigest()[:16]
 
 H_Q, H_KV, D, EPS = 32, 8, 128, 1e-6
 BASE, SCALE = 1000000.0, 1.0
@@ -59,6 +66,8 @@ for B in (1, 2, 4):
                 mx.eval(r_q, r_k, f_q, f_k)
                 row["q_eq"] = bool(mx.array_equal(bits(f_q), bits(r_q)))
                 row["k_eq"] = bool(mx.array_equal(bits(f_k), bits(r_k)))
+                row["q_hash"] = out_hash(f_q)
+                row["ref_hash"] = out_hash(r_q)
             except Exception as e:  # noqa: BLE001 - repro records the throw
                 row["error"] = f"{type(e).__name__}: {e}"
             rows.append(row)
