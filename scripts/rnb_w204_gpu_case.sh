@@ -37,13 +37,18 @@ cmake -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON -DMLX_BUILD_METAL=OFF \
   > "/var/tmp/${TAG}-cmake.log" 2>&1
 nice -n 10 make -j4 omarchy_fast_ops_tests > "/var/tmp/${TAG}-build.log" 2>&1
 GUF=$(find "$SRC" -name libgguflib.a | head -1 || true)
-# link ladder: blas/lapack first, then without
+# link ladder: blas/lapack first, then openblas (Arch/T6021 golden trees:
+# libblas lacks cblas; openblas provides it), then bare
 if ! g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
   "$SRC/libmlx.a" $GUF -llapack -lblas -lpthread -ldl \
   -o "/var/tmp/${TAG}-probe" > "/var/tmp/${TAG}-link.log" 2>&1; then
-  g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
-    "$SRC/libmlx.a" $GUF -lpthread -ldl -o "/var/tmp/${TAG}-probe" \
-    > "/var/tmp/${TAG}-link.log" 2>&1
+  if ! g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
+    "$SRC/libmlx.a" $GUF -lopenblas -lpthread -ldl \
+    -o "/var/tmp/${TAG}-probe" >> "/var/tmp/${TAG}-link.log" 2>&1; then
+    g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
+      "$SRC/libmlx.a" $GUF -lpthread -ldl -o "/var/tmp/${TAG}-probe" \
+      >> "/var/tmp/${TAG}-link.log" 2>&1
+  fi
 fi
 echo "== probe on $(uname -m) GPU:"
 "/var/tmp/${TAG}-probe" 2>&1
