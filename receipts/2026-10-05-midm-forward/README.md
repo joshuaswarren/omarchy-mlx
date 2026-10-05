@@ -318,3 +318,66 @@ happen once per layer, not per qmm.
    new compile)).
 4. **Fuse the bf16->f32 cast across the layer's qmm group** (dispatch
    count wins, GPU time flat; collapses the 23% cast dispatch share).
+
+
+## Two dev-box levers staged for M2 FREE (no new code, env overrides on the shipped routes)
+
+Both are existing-blob A/Bs that the host can dispatch from the
+landed tree on the M2, with the only knob being an env variable that
+HostOverhead's perf lane can A/B and OmlxDflash's census can confirm.
+No new shader code, no new build, no dovetail into the M16 AGX work.
+Both are M2 quiet-box tickets (~3-5 min each, end-to-end per the
+census recipe).
+
+### Lever A. Force TILE_M=32 on the q16 verify position via the
+COOPMAT_WG_PER_CORE env
+
+At q_len=16, matrix_m=16, the coopmat_tile_rows pick returns 16 because
+`m_groups_32 * n_groups < target` (the grid is too small to fill the
+M2's part under the 6-workgroup-per-core floor). The M16 X32 kernel
+is dispatched. A knob override that says "treat the q16 verify as if
+the grid were wide" should pick M32 - except `apple_gpu_cores("Apple M2
+Max (G14C B1)")` returns 0 (the M2 is not in the table), so
+coopmat_tile_rows falls to 32u on unknown devices. So on the M2 the
+M32 path should already be selected for the q16 verify! Either
+device_name string changed (we see "Apple M2 Max (G14C B1)" in
+HostOverhead's NDJSON meta) and the table needs the M2 entry, OR
+some other branch is steering to M16. The M32 twin
+(qmm_coopmat_bf16 / _x32 / _x32_fn) is already built; the only delta
+is the device name match. M2 quiet-box test: confirm the chosen
+kernel in the diag profile (it would be the M32 FullN bf16 entry -
+NAME in the NDJSON 'p' field). If the M2 is picking M16, add the
+device-name entry in the table and re-measure; the A/B is the
+device-name edit vs none.
+
+### Lever B. Fuse the bf16->f32 cast across the layer's qmm group (cast
+is dispatched once per qmm in the X_F32 path)
+
+The host's M16 X32 path does a CastBF16F32(x, x_f32) per qmm (the
+QMM 1/7 dispatch share in HostOverhead's earlier census). For the
+three weight-sharing qmm dispatches in a layer (qkv, gate_up, down,
+wo) the cast produces the SAME f32 buffer. The dispatch_count win
+from fusing the cast is ~25% of total (the 23.2% cast share from
+A7's 80,903). The GPU time is flat (0.2% of GPU time) - this is a
+dispatch-count lever, not a GPU-time lever, so it does NOT show in
+HostOverhead's kernel-bound measurement; but it DOES help the 74%
+host-side gap the cycle is sitting in. Implementation: the cast is
+already a separate dispatch_quantize/gather step at the top of
+eval_gpu; promoting it to a FusedChain addend (e.g. one x_f32
+allocation per layer, re-bound across the qmm dispatches) is a
+planner-side change in fused_chain.cpp, not a shader change.
+HostOverhead's M2 profile will measure the kernel_count delta.
+
+### C (parallel). Tokens route - the real -30% lever (already in main)
++ token16 (the real -50% lever, dev-box work needed)
+
+Already on main: the two-pass token8 for rows 9..16 (commit abed11fe2
+= c4679abcb rebased to 3df5f40b2). The -30% target from Main is
+plausible (weight-bytes-read floor halves then double for the second
+pass: 2x ~37 ms ~= 74 ms vs the composed 106 ms = -30%); measure
+with the next A7 + ticket D run on the M2.
+
+Token16 single-pass (the bigger lever) still has the AGX raw-output
+divergence; the bisect levers remain ROWS_PER_SLOT=1, per-row
+if-bodies, token12 twin. All shader-side - dev-box work in
+progress (the rest of the budget is now accounted for).
