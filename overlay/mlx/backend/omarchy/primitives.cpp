@@ -11548,11 +11548,17 @@ void GatedDeltaUpdate::eval_gpu(
   // per-element arithmetic identical to the batch kernel. Opt-in A/B lever
   // (MLX_OMARCHY_GDN_BATCH2=1) until the cross-host gates pass.
   static const bool gdn_batch2_env = omarchy::env_flag("MLX_OMARCHY_GDN_BATCH2");
-  // kkt/qkt hoist (GdnPrefill2-b): pass A computes the state-independent
+  // kkt/qkt hoist (GdnPrefill2): pass A computes the state-independent
   // K.K^T / Q.K^T tiles for every chunk in parallel (bit-identical loop-1
-  // sequence); pass B runs the recurrence off the f32 tiles. Opt-in
-  // (MLX_OMARCHY_GDN_HOIST=1) until gated.
-  static const bool gdn_hoist_env = omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
+  // sequence); pass B runs the recurrence off the f32 tiles. DEFAULT ON
+  // for T >= 512 (M2 pf1145 e2e +1.84%, 5/5 disjoint pairs; kernel-only
+  // -12.3%/-13.7% T=512/1024 on G13G, -13.6%/-15.2% on G14C; digests
+  // equal at every depth; doctest bit-identical incl. a non-zero initial
+  // state; jwm1 pins exact). Kill switch: MLX_OMARCHY_GDN_HOIST=0 restores
+  // the shipped single-dispatch route exactly.
+  static const bool gdn_hoist_env =
+      std::getenv("MLX_OMARCHY_GDN_HOIST") == nullptr ||
+      omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
   // State-wave restructure (GdnPrefill2-ablate): 2 SG barriers per state
   // wave instead of 5; per-slice arithmetic unchanged. Opt-in
   // (MLX_OMARCHY_GDN_STATEWAVE=1) until the jwm1 stage readout.
