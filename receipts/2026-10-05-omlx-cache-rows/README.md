@@ -40,6 +40,11 @@ Owner: OmlxCache (worker). Pre-registered 2026-10-05; twin notebook entry at
 # 0) one-time venv refresh to the post-fix state (inside the first ticket)
 scp -q ~/.config/superpowers/worktrees/mlx-omarchy/OmlxCache/receipts/2026-10-05-omlx-cache-rows/run_rows.sh \
   jw14m2-linux:/tmp/omlx-rows/run_rows.sh
+#    v0.7.28-class wheel (A4 precondition), sha VERIFIED on the dev box 2026-10-05:
+#    mlx_omarchy-0.32.4.dev202610050725+5c15fba-cp314-cp314-linux_aarch64.whl
+#    sha256 68bb536fa4879ff6367b35617e800e9a3cfe1d35563458474ebdf33e2ce4c92d
+#    staged at /tmp/v0728-wheel/ here; scp to the M2 and assert the sha there
+#    before pip-install (draft release v0.7.28, tag 5c15fbaea = rope B>1 fix)
 ssh -o ConnectTimeout=8 jw14m2-linux
 #   install.sh (packaging/omlx-linux) as landed, then:
 #   /tmp/omlx-home/.venvs/omlx/bin/pip install --no-deps 'mlx-lm==0.31.3'
