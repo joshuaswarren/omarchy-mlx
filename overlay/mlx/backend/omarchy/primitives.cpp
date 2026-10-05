@@ -11561,6 +11561,11 @@ void GatedDeltaUpdate::eval_gpu(
     const char* e = std::getenv("MLX_OMARCHY_GDN_STUB");
     return e ? std::atoi(e) : 0;
   }();
+  // Subgroup-sync variant (GdnPrefill2-ablate): narrows every per-chunk
+  // barrier to subgroup scope; the one kernel-start barrier stays WG.
+  // Bit-exact by construction (every shared region is sg-private). Applies
+  // to the single-dispatch route only: MLX_OMARCHY_GDN_SGSYNC + HOIST == HOIST.
+  static const bool gdn_sgsync_env = omarchy::env_flag("MLX_OMARCHY_GDN_SGSYNC");
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
@@ -11611,12 +11616,7 @@ void GatedDeltaUpdate::eval_gpu(
         : gdn_stub_env == 4 ? omarchy::ComputeKernel::GdnStubNodelta
         : gdn_stub_env == 5 ? omarchy::ComputeKernel::GdnStubNoout
         : gdn_stub_env == 6 ? omarchy::ComputeKernel::GdnStubNostate
-        : gdn_stub_env == 7 ? omarchy::ComputeKernel::GdnStubSkeleton
-        
-            gdn_sgsync_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch3BF16 :
-            gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
-        : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
-                    : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
+        : omarchy::ComputeKernel::GdnStubSkeleton,
         bindings,
         params,
         static_cast<uint32_t>(Hv),
@@ -11661,8 +11661,8 @@ void GatedDeltaUpdate::eval_gpu(
       return;
     }
     encoder.dispatch_compute(
-            gdn_sgsync_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch3BF16 :
-            gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
+        gdn_sgsync_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch3BF16
+        : gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
         : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16
                     : omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBF16,
         bindings,

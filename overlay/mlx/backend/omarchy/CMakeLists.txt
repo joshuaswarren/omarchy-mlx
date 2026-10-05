@@ -365,12 +365,12 @@ omarchy_shader(gated_delta_prefill_coopmat_batch3_bf16 shaders/gated_delta_prefi
 # BENCH-ONLY stage-ablation kernels (MLX_OMARCHY_GDN_STUB=1..7; wrong results
 # by design, timing only; see receipts/2026-10-05-gdn-prefill). Default builds
 # never dispatch them.
-omarchy_shader(gdn_stub_noloopk shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NOLOOPK=1)
-omarchy_shader(gdn_stub_noloops shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NOLOOPS=1)
-omarchy_shader(gdn_stub_noneumann shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NONEUMANN=1)
-omarchy_shader(gdn_stub_nodelta shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NODELTA=1)
-omarchy_shader(gdn_stub_noout shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NOOUT=1)
-omarchy_shader(gdn_stub_nostate shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NOSTATE=1)
+omarchy_shader(gdn_stub_noloopk shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NO_LOOPK=1)
+omarchy_shader(gdn_stub_noloops shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NO_LOOPS=1)
+omarchy_shader(gdn_stub_noneumann shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NO_NEUMANN=1)
+omarchy_shader(gdn_stub_nodelta shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NO_DELTA=1)
+omarchy_shader(gdn_stub_noout shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NO_OUT=1)
+omarchy_shader(gdn_stub_nostate shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_NO_STATE=1)
 omarchy_shader(gdn_stub_skeleton shaders/gated_delta_prefill_coopmat_stub.comp -DSTUB_SKELETON=1)
 # GDN prefill kkt/qkt hoist (MLX_OMARCHY_GDN_HOIST; pass A parallel precompute
 # + pass B recurrence, see receipts/2026-10-05-gdn-prefill).
