@@ -3,6 +3,24 @@
 Date: 2026-10-04/05 (M2 window). Ticket: gpu-turn -m 12, 402 s wall including
 fresh private-venv copy + install + verify; battery itself 0.667 s.
 
+## Golden re-run (2026-10-05, rebase onto main @ 9f4f4f747)
+
+After KernelBattery's translator landed on main (60f80d2 golden base), this
+lane rebased and re-ran everything on the combined translator:
+
+- Wheel: `mlx_omarchy-0.32.4.dev202610050436+60f80d2` via the golden recipe
+  (`golden-clone-tree.sh` + `golden_rebuild.sh`, 42 s incremental),
+  installed `libmlx.so` sha256 `1d086f3263edbcc1d95a8fa0ea4ea273e8fccf4009a786c021980ee461bdd825`
+  (harness-verified == wheel-embedded), on a reflink clone of
+  `/var/tmp/golden-venv` (`MLX_OMARCHY_BASELINE_TAG=60f80d2` guard).
+- D2 battery: **6/6 OK** (0.854 s) on Device(gpu, 0).
+- `tests/custom_kernel_smoke.py` from main tip: **19/19 OK** (1.338 s) —
+  the translator combination (their cast scanner + pointer/alias passes,
+  my `_mlx_arg` param aliases + uint→int decl casts + INFINITY/NAN +
+  fast::/thread strips) passes main's full smoke suite.
+
+Landing gate met.
+
 ## Wheel provenance
 
 - Wheel: `mlx_omarchy-0.32.4.dev202610050059-cp314-cp314-linux_aarch64.whl`
