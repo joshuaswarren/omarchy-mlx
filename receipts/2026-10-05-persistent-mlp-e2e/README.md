@@ -92,3 +92,26 @@ libmlx.so sha256 3f3df85f193aded13d95fbda36e96f41ed398274b9ec1c1ff2718c542746e7c
   persistmlp-venv-nofold removed; 27 GB free); artifacts archived
   ~/h294/h294-run.tgz sha256
   a23dbf40dd08a07d6d9a006657875d95960a56a4822b81c0bd4e8c31ae1523e0.
+
+## Addendum 2 (13:13-13:30Z): H295 settled — fold engaged, thesis-bounding number recorded
+
+Published v0.7.28 wheel (68bb536f, sha-verified) in both venvs (VENB series
+only, VENP + swiglu-eager; libmlx identical). Dispatch-counter diagnostic
+(2B d64, gate OFF, 3 alternating 16-token samples, fixed sys.prefix probe):
+
+- ctl_nofold 259.0 dispatches/token; on_fold 235.0; delta -24.0 EXACTLY =
+  one per MLP layer x 24 -> the fold engaged; the H295 flat e2e result is
+  real, not a patch failure.
+- Implied per-removed-dispatch saving on M2/G14C at 2B decode: ~0 us
+  (d64: -8 us/token / 24 = -0.33 us; d512: -13 / 24 = -0.54 us; both
+  marginally negative, within +-0.4% noise; upper bound ~1.5 us).
+- The 21-27 us/dispatch dependent-hop estimate (jwm1 chain-dep-bench) does
+  not transfer to G14C at 2B decode; submission latency is hidden.
+- Thesis impact: bounds the H294 persistent-tail e2e win at ~0% on this
+  configuration by the same masking argument (48 dispatches/token of the
+  same class). Route stays default-OFF, bit-exact-by-construction.
+- First-run ctl=0 was a stale probe (hardcoded VENP libmlx glob; VENB read
+  a second instance's zeroed counters); fixed to sys.prefix-relative.
+
+H295 recommendation unchanged: swiglu-eager stays an experiment patcher
+(bit-exact, ~0% e2e on this stack).
