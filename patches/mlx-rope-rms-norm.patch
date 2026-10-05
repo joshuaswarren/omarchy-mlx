@@ -103,7 +103,23 @@
      auto shape = x.shape();
      if (x.ndim() == 3) {
        x = expand_dims(x, 1, s);
-@@ -751,17 +794,104 @@
+@@ -702,7 +745,13 @@
+     };
+ 
+-    auto inv_freqs =
+-        inputs.size() == 3 ? reciprocal(inputs[2], s) : default_inv_freqs();
++    // rope_rms_norm parks the norm weight in inputs[2] (the freqs slot).
++    // Reciprocating it built rotary tables of width D instead of D/2, so
++    // every fallback leg (per-batch offsets, CPU streams, VJP) crashed
++    // broadcasting (.., D/2) rotation halves against (.., D) trig.
++    auto inv_freqs =
++        norm_weight ? default_inv_freqs()
++                    : (inputs.size() == 3 ? reciprocal(inputs[2], s)
++                                          : default_inv_freqs());
+     auto theta = multiply(expand_dims(positions, -1, s), inv_freqs, s);
+     auto coss = astype(cos(theta, s), t, s);
+     auto sins = astype(sin(theta, s), t, s);
+@@ -751,17 +800,104 @@
      }
    };
    auto stream = to_stream(s);
@@ -211,7 +227,7 @@
  array rope(
      const array& x,
      int dims,
-@@ -810,6 +940,12 @@
+@@ -810,6 +946,12 @@
      const std::vector<int>& argnums,
      const std::vector<array>& outputs) {
    auto s = stream();
@@ -224,7 +240,7 @@
    auto fallback = [dims = dims_,
                     traditional = traditional_,
                     base = base_,
-@@ -840,7 +976,8 @@
+@@ -840,7 +982,8 @@
    return (
        dims_ == a_other.dims_ && base_ == a_other.base_ &&
        scale_ == a_other.scale_ && traditional_ == a_other.traditional_ &&

@@ -530,6 +530,77 @@ TEST_CASE("fused rope_rms_norm is bit-exact against the composed chain") {
       "odd width 127 rope_rms_norm leg must refuse with the named fuse error");
 }
 
+// The fused route must serve per-request (vector) offsets: BatchGenerator
+// passes one offset per sequence, so batch b > 0 must rotate with its OWN
+// position, and any fallback leg (per-batch offsets, CPU, VJP composition)
+// must build rotary tables of width D/2, never D. This is the regression
+// for the v0.7.25..27 defect where the composed fallback reciprocated the
+// norm weight (the inputs[2] slot) as rotary freqs and broadcast
+// (.., D/2) rotation halves against (.., D) trig. The reference
+// concatenates scalar-offset compositions per batch, so a kernel that
+// reads offset[0] for every batch fails batches 1.. on distinct offsets,
+// and a D-vs-D/2 trig slip fails everywhere.
+TEST_CASE("fused rope_rms_norm serves per-batch array offsets bit-exactly") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const float eps = 1e-6f;
+  const int D = 128;
+  auto w_data = pattern(static_cast<size_t>(D), 991u);
+  array w = astype(
+      array(w_data.data(), Shape{D}, float32), bfloat16, stream);
+  auto bits_equal = [&stream](const array& a, const array& b,
+                              const char* what) {
+    array a32 = astype(a, float32, stream);
+    array b32 = astype(b, float32, stream);
+    eval(a32);
+    eval(b32);
+    REQUIRE(a32.shape() == b32.shape());
+    const float* pa = a32.data<float>();
+    const float* pb = b32.data<float>();
+    for (size_t i = 0; i < a32.size(); ++i) {
+      INFO(what, ": mismatch at ", i, " a=", pa[i], " b=", pb[i]);
+      CHECK_EQ(pa[i], pb[i]);
+    }
+  };
+  for (int B : {1, 2, 4}) {
+    for (int T : {1, 17}) {
+      for (int N : {8, 32}) {
+        std::vector<int32_t> offs(B);
+        std::vector<array> xs;
+        std::vector<array> refs;
+        xs.reserve(B);
+        refs.reserve(B);
+        for (int b = 0; b < B; ++b) {
+          offs[b] = 5 * b + 3;
+          auto x_data = pattern(
+              static_cast<size_t>(T) * N * D, 977u + 31u * static_cast<uint32_t>(b));
+          array xb = astype(
+              array(x_data.data(), Shape{1, N, T, D}, float32),
+              bfloat16,
+              stream);
+          refs.push_back(fast::rope(
+              fast::rms_norm(xb, w, eps, stream),
+              D,
+              false,
+              10000.0f,
+              1.0f,
+              offs[b]));
+          xs.push_back(xb);
+        }
+        array x = concatenate(xs, 0, stream);
+        array reference = concatenate(refs, 0, stream);
+        array off = array(offs.data(), Shape{B}, int32, stream);
+        array fused = fast::rope_rms_norm(
+            x, D, w, eps, false, 10000.0f, 1.0f, off, stream);
+        INFO("B=", B, " T=", T, " N=", N);
+        bits_equal(fused, reference, "fused vs per-batch composed");
+      }
+    }
+  }
+}
+
 TEST_CASE("RMSNormVJP matches finite differences and the composed formula") {
   if (!compute_available()) {
     return;
