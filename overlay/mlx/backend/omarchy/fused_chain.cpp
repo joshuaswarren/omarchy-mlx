@@ -1557,13 +1557,56 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // output) at its eval; both gemv groups flip to done. Any dispatch-
   // time refusal unwinds everything onto the shipped three-dispatch
   // path (the norm node and both groups then evaluate ordinarily).
+  // MLX_OMARCHY_PERSISTENT_MLP_TRACE=1 prints a one-shot ladder line
+  // for the first few refusals (bounded, production silent).
+  const bool tail_trace = std::getenv("MLX_OMARCHY_PERSISTENT_MLP_TRACE") !=
+      nullptr;
+  int tail_trace_budget = 0;
   if (persistent_mlp_enabled()) {
+    if (tail_trace) {
+      std::fprintf(
+          stderr,
+          "[persistent-mlp] ladder: %zu gemv groups on the tape\n",
+          state->gemv_groups.size());
+      tail_trace_budget = 8;
+    }
     for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
       auto& gu = state->gemv_groups[gi];
-      if (gu.members.size() != 2 || !gu.swiglu_out || gu.outgate ||
-          gu.members[0].epilogue || gu.members[1].epilogue ||
-          gu.members[0].sum_window || gu.members[1].sum_window ||
-          gu.members[0].node.dtype() != bfloat16) {
+      const auto refuse = [&](const char* rung) {
+        if (tail_trace && tail_trace_budget > 0) {
+          --tail_trace_budget;
+          std::fprintf(
+              stderr,
+              "[persistent-mlp] ladder: gu group %zu refused at %s\n",
+              gi,
+              rung);
+        }
+      };
+      if (gu.members.size() != 2) {
+        refuse("members!=2");
+        continue;
+      }
+      if (!gu.swiglu_out) {
+        // Classic cause: mlx_lm's swiglu() still mx.compile'd (Compiled
+        // node is opaque to the Multiply-chain scan) — apply
+        // scripts/patch-mlx-lm-swiglu-eager.py to the venv.
+        refuse("no swiglu_out (fold not planned)");
+        continue;
+      }
+      if (gu.outgate) {
+        refuse("outgate");
+        continue;
+      }
+      if (gu.members[0].epilogue || gu.members[1].epilogue) {
+        refuse("gu member epilogue");
+        continue;
+      }
+      if (gu.members[0].sum_window || gu.members[1].sum_window) {
+        refuse("gu member window");
+        continue;
+      }
+      if (gu.members[0].node.dtype() != bfloat16) {
+        refuse("dtype!=bf16");
         continue;
       }
       for (size_t di = 0; di < state->gemv_groups.size(); ++di) {
@@ -1576,14 +1619,35 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             dn.members[0].node.dtype() != bfloat16) {
           continue;
         }
-        if (dn.members[0].node.inputs()[0].id() != gu.swiglu_out->id() ||
-            dn.members[0].addend->dtype() != bfloat16) {
+        if (dn.members[0].node.inputs()[0].id() != gu.swiglu_out->id()) {
+          if (tail_trace && tail_trace_budget > 0) {
+            --tail_trace_budget;
+            std::fprintf(
+                stderr,
+                "[persistent-mlp] ladder: dn group %zu x != swiglu_out\n",
+                di);
+          }
+          continue;
+        }
+        if (dn.members[0].addend->dtype() != bfloat16) {
+          if (tail_trace && tail_trace_budget > 0) {
+            --tail_trace_budget;
+            std::fprintf(
+                stderr,
+                "[persistent-mlp] ladder: dn addend dtype\n");
+          }
           continue;
         }
         const array& residual = *dn.members[0].addend;
         // The norm node IS the gate/up group's shared x; its input must
         // be the same residual the down Add reads back.
         if (!is_op(&gu.members[0].node.inputs()[0], typeid(fast::RMSNorm))) {
+          if (tail_trace && tail_trace_budget > 0) {
+            --tail_trace_budget;
+            std::fprintf(
+                stderr,
+                "[persistent-mlp] ladder: gu x is not a fast RMSNorm\n");
+          }
           continue;
         }
         const array& norm_node = gu.members[0].node.inputs()[0];
@@ -1594,6 +1658,24 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             norm_node.inputs()[1].dtype() != bfloat16 ||
             norm_node.primitive().stream() !=
                 gu.members[0].node.primitive().stream()) {
+          if (tail_trace && tail_trace_budget > 0) {
+            --tail_trace_budget;
+            std::fprintf(
+                stderr,
+                "[persistent-mlp] ladder: norm node contract "
+                "(claimed=%d inputs=%zu x-id-match=%d dtypes=%d/%d "
+                "stream=%d)\n",
+                static_cast<int>(claimed.count(norm_node.id())),
+                norm_node.inputs().size(),
+                static_cast<int>(
+                    norm_node.inputs()[0].id() == residual.id()),
+                static_cast<int>(norm_node.dtype() == bfloat16),
+                static_cast<int>(
+                    norm_node.inputs()[1].dtype() == bfloat16),
+                static_cast<int>(
+                    norm_node.primitive().stream() ==
+                    gu.members[0].node.primitive().stream()));
+          }
           continue;
         }
         // Shapes: one decode row of K bf16 elements; the weight covers
@@ -1605,6 +1687,18 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             tail_x.size() == 0 || tail_x.size() % 64 != 0 ||
             norm_node.inputs()[1].size() != tail_x.size() ||
             residual.size() != tail_x.size()) {
+          if (tail_trace && tail_trace_budget > 0) {
+            --tail_trace_budget;
+            std::fprintf(
+                stderr,
+                "[persistent-mlp] ladder: tail x shape "
+                "(ndim=%zu row=%d size=%zu w=%zu res=%zu)\n",
+                static_cast<size_t>(tail_x.ndim()),
+                static_cast<int>(tail_x.shape(-2)),
+                tail_x.size(),
+                norm_node.inputs()[1].size(),
+                residual.size());
+          }
           continue;
         }
         float eps = static_cast<const fast::RMSNorm&>(norm_node.primitive())
@@ -1622,6 +1716,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             di);
         size_t index = state->tail_plans.size() - 1;
         state->tail_roles.emplace(norm_node.id(), index);
+        if (tail_trace) {
+          std::fprintf(
+              stderr,
+              "[persistent-mlp] ladder: PLAN gu=%zu dn=%zu\n",
+              gi,
+              di);
+        }
         break;
       }
     }
