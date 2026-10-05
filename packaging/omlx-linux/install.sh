@@ -63,7 +63,13 @@ OMLX_DIR="${OMLX_DIR:-$HOME/.cache/omlx-linux/src/omlx}"
 for tool in git python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "error: $tool not found" >&2; exit 2; }
 done
-python3 -m pip --version >/dev/null 2>&1 || { echo "error: python3 -m pip unavailable" >&2; exit 2; }
+# Arch ships pip only inside venvs (bootstrapped by ensurepip); the system
+# interpreter has no `python3 -m pip`. Gate on ensurepip availability —
+# every pip invocation below is $VENV/bin/pip from the fresh venv.
+python3 -m ensurepip --version >/dev/null 2>&1 || {
+  echo "error: python3 -m ensurepip unavailable; cannot bootstrap a venv pip" >&2
+  exit 2
+}
 [[ -n $MLX_WHEEL ]] || {
   echo "error: --mlx-wheel PATH is required (the omarchy mlx wheel to install)" >&2
   exit 2
