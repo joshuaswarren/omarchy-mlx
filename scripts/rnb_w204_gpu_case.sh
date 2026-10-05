@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # width-204 rope_rms_norm cell: fused vs composed vs fp64 on this host's GPU.
 # Golden-clone a warm tree, build the test target (gives libmlx.a), compile
-# the probe against it, run, log, then delete the clone.
+# the probe against it, run, then delete the clone.
 #   bash rnb_w204_gpu_case.sh
 set -euo pipefail
 TAG=rnb-w204
@@ -11,7 +11,6 @@ if pgrep -f '[c]c1plus|[c]make|[n]inja' > /dev/null; then
 fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 D=/var/tmp/${TAG}-tree
-rm -rf "$D" 2>/dev/null || true
 if [ -d /var/tmp/golden-wheel ]; then
   bash /var/tmp/golden-clone-tree.sh "$D"
   SRC="$D/.work/mlx"
@@ -21,12 +20,16 @@ else
 fi
 cd "$SRC"
 cmake -DMLX_BUILD_TESTS=ON . > "/var/tmp/${TAG}-cmake.log" 2>&1
-nice -n 10 ninja -j4 omarchy_fast_ops_tests > "/var/tmp/${TAG}-build.log" 2>&1
-# link the probe with the same libs the test target uses (minus libmlx.a)
-LIBS=$(grep -A6 "^build tests/omarchy/omarchy_fast_ops_tests" build.ninja \
-  | tr ' ' '\n' | grep -E '\.so$|\.a$' | grep -v 'libmlx.a' | sort -u || true)
-g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
-  "$SRC/libmlx.a" $LIBS -lpthread -ldl -o "/var/tmp/${TAG}-probe" 2>&1 | head -5
+nice -n 10 make -j4 omarchy_fast_ops_tests > "/var/tmp/${TAG}-build.log" 2>&1
+GUF=$(find "$SRC" -name libgguflib.a | head -1 || true)
+# link ladder: blas/lapack first, then without
+if ! g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
+  "$SRC/libmlx.a" $GUF -llapack -lblas -lpthread -ldl \
+  -o "/var/tmp/${TAG}-probe" > "/var/tmp/${TAG}-link.log" 2>&1; then
+  g++ -std=gnu++20 -O2 -I "$SRC" "$HERE/rnb_w204_probe.cpp" \
+    "$SRC/libmlx.a" $GUF -lpthread -ldl -o "/var/tmp/${TAG}-probe" \
+    > "/var/tmp/${TAG}-link.log" 2>&1
+fi
 echo "== probe on $(uname -m) GPU:"
 "/var/tmp/${TAG}-probe" 2>&1
 echo "== done; results above; cleaning clone"
