@@ -74,10 +74,18 @@ Reference reference(
     const std::vector<float>& g,
     const std::vector<float>& beta,
     int T,
-    int Hv) {
+    int Hv,
+    const std::vector<float>& h0_data = {}) {
+  std::vector<double> initial(
+      static_cast<size_t>(Hv) * kD * kD, 0.0);
+  if (!h0_data.empty()) {
+    for (size_t i = 0; i < initial.size(); ++i) {
+      initial[i] = h0_data[i];
+    }
+  }
   Reference result{
       std::vector<double>(static_cast<size_t>(T) * Hv * kD),
-      std::vector<double>(static_cast<size_t>(Hv) * kD * kD, 0.0)};
+      std::move(initial)};
   std::vector<double> next(result.state.size());
   for (int t = 0; t < T; ++t) {
     for (int h = 0; h < Hv; ++h) {
@@ -158,11 +166,63 @@ void check_case(int T, int rep, Stream stream) {
 
 } // namespace
 
+void check_case_nonzero_state(int T, int rep, Stream stream) {
+  const int Hv = kHk * rep;
+  const size_t token_heads = static_cast<size_t>(T) * Hv;
+  const size_t activation_size = token_heads * kD;
+  auto q_data = values(activation_size, 0x10203040u + T + rep, 0.25f);
+  auto k_data = values(activation_size, 0x50607080u + T + rep, 0.25f);
+  auto v_data = values(activation_size, 0x90a0b0c0u + T + rep, 0.25f);
+  auto g_data = values(token_heads, 0xd0e0f000u + T + rep, 0.07f);
+  auto beta_data = values(token_heads, 0x12345678u + T + rep, 0.2f);
+  for (float& gate : g_data) gate = 0.92f + std::abs(gate);
+  for (float& rate : beta_data) rate = 0.3f + rate;
+  round_bf16(q_data);
+  round_bf16(k_data);
+  round_bf16(v_data);
+  round_bf16(beta_data);
+  // Production starts from zeros, but the recurrence is state-dependent:
+  // a non-zero initial state exercises the state path both routes carry.
+  auto h0_data = values(static_cast<size_t>(Hv) * kD * kD, 0xbeef1234u + T + rep, 0.1f);
+  const Reference ref = reference(q_data, k_data, v_data, g_data, beta_data, T, Hv, h0_data);
+
+  array q = astype(array(q_data.begin(), Shape{1, T, Hv, kD}, float32), bfloat16, stream);
+  array k = astype(array(k_data.begin(), Shape{1, T, Hv, kD}, float32), bfloat16, stream);
+  array v = astype(array(v_data.begin(), Shape{1, T, Hv, kD}, float32), bfloat16, stream);
+  array g = array(g_data.begin(), Shape{1, T, Hv}, float32);
+  array beta = astype(array(beta_data.begin(), Shape{1, T, Hv}, float32), bfloat16, stream);
+  array h0 = array(h0_data.begin(), Shape{1, Hv, kD, kD}, float32);
+  q.eval(); k.eval(); v.eval(); g.eval(); beta.eval(); h0.eval();
+  omarchy::get_command_encoder(stream).synchronize("gdn_maskless_inputs_nz");
+
+  auto out = fast::gated_delta_update(q, k, v, g, beta, h0, std::nullopt, stream);
+  const std::string label =
+      "GDN nz-state T=" + std::to_string(T) + " rep=" + std::to_string(rep);
+  check_close(materialize_f32(out[0], stream), ref.y, 0.02, label + " y vs fp64");
+  check_close(materialize_f32(out[1], stream), ref.state, 2e-4, label + " state vs fp64");
+}
+
+} // namespace
+
+TEST_CASE("GDN prefill carries a non-zero initial state across the hoist boundary") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  for (int rep : {1, 2}) {
+    for (int T : {512, 519}) {
+      check_case_nonzero_state(T, rep, stream);
+    }
+  }
+}
+
+namespace {
+
 TEST_CASE("GDN maskless prefill preserves fp64 final state across route boundary") {
   if (!compute_available()) return;
   Stream stream = gpu_stream();
   for (int rep : {1, 2, 3}) {
-    for (int T : {63, 64, 65, 96, 352}) {
+    // 512/519 cross the kkt/qkt-hoist boundary (default ON for T >= 512;
+    // MLX_OMARCHY_GDN_HOIST=0 restores the single-dispatch route).
+    for (int T : {63, 64, 65, 96, 352, 512, 519}) {
       CAPTURE(T);
       CAPTURE(rep);
       check_case(T, rep, stream);

@@ -375,6 +375,11 @@ omarchy_shader(gated_delta_prefill_coopmat_bf16 shaders/gated_delta_prefill_coop
 omarchy_shader(
     gated_delta_prefill_coopmat_batch_bf16
     shaders/gated_delta_prefill_coopmat_batch.comp)
+# GDN prefill kkt/qkt hoist (default ON for T >= 512; kill switch
+# MLX_OMARCHY_GDN_HOIST=0). Pass A parallel precompute + pass B recurrence;
+# see receipts/2026-10-05-gdn-prefill.
+omarchy_shader(gated_delta_prefill_kktqkt shaders/gated_delta_prefill_kktqkt.comp)
+omarchy_shader(gated_delta_prefill_coopmat_hoist_bf16 shaders/gated_delta_prefill_coopmat_hoist.comp)
 # VjpKernels: fused backward kernels for SDPA (upstream #4563) and the
 # gated delta update (upstream #4565). One gated_delta_vjp.comp source
 # builds the state-recall pass (save) and the backward pass.
