@@ -38,10 +38,13 @@ if [[ ! -d "$SHARED_VENV" ]]; then
   exit 2
 fi
 
-# Guard: the shared venv must be untouched (announced build +b8af62c).
+# Guard: the shared venv must be untouched (announced build). Default is
+# the 2026-10-04 shared venv (+b8af62c); the 2026-10-05 golden venv is
+# +60f80d2 — set MLX_OMARCHY_BASELINE_TAG accordingly.
+BASELINE_TAG="${MLX_OMARCHY_BASELINE_TAG:-b8af62c}"
 SHARED_VERSION="$("$SHARED_VENV/bin/python" -c 'import mlx.core as mx; print(mx.__version__)' 2>/dev/null || true)"
-if [[ "$SHARED_VERSION" != *+b8af62c* ]]; then
-  echo "shared venv mlx version is '$SHARED_VERSION', expected +b8af62c; \
+if [[ "$SHARED_VERSION" != *"$BASELINE_TAG"* ]]; then
+  echo "shared venv mlx version is '$SHARED_VERSION', expected +$BASELINE_TAG; \
 it may have been mutated — aborting instead of building on a drifted baseline" >&2
   exit 2
 fi
