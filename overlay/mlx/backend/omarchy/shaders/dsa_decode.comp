@@ -1,0 +1,125 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+// GLM DSA fused decode indexer scan (fast::DsaDecodeScores), the
+// omarchy native of omlx's dsa_decode_scores metallib kernel.
+//
+//   OUT[b, 0, 0, s] = sum_h max( sum_d Q[b,h,0,d] * K[b,0,s,d], 0 )
+//                          * W[b, h]
+//
+// fp32 accumulation end to end (the metal kernel's contract; strictly
+// tighter than the composed fallback's 16-bit [B,H,1,S] intermediates).
+// One workgroup per (batch, key-tile): the 32 x 128 query panel and the
+// 32 weights are staged in shared memory once; one thread per key
+// column carries 32 f32 accumulators (d-outer/h-inner; each K value
+// loads once per d). OUT dtype = input dtype (flags bit0 = fp32 out).
+// Shared footprint: 32*128 + 32 f32 = 16.5 KiB.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InQ {
+  uint16_t values[];
+} in_q;
+layout(set = 0, binding = 1, std430) readonly buffer InK {
+  uint16_t values[];
+} in_k;
+layout(set = 0, binding = 2, std430) readonly buffer InW {
+  uint16_t values[];
+} in_w;
+#ifdef FP32_OUT
+layout(set = 0, binding = 3, std430) buffer OutF32 {
+  float values[];
+} out_f32;
+#else
+layout(set = 0, binding = 3, std430) buffer Out16 {
+  uint16_t values[];
+} out_16;
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+// Routing:
+//   shape[0] = S (key length); shape[1] = B
+//   in_strides[0] = q batch stride (H*D)
+//   in_strides[1] = k batch stride (S*D)
+//   out_strides[0] = w batch stride (H)
+
+shared float qs[32 * 128];
+shared float ws[32];
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+float load_bf16(uint16_t raw) {
+  return unpackHalf2x16(uint(raw) << 16).x;
+}
+
+void main() {
+  const uint S = params.shape[0];
+  const uint b = gl_WorkGroupID.y;
+  const uint q_base = params.lhs_offset + b * params.in_strides[0];
+  for (uint i = gl_LocalInvocationID.x; i < 32u * 128u; i += 256u) {
+    qs[i] = load_bf16(in_q.values[q_base + i]);
+  }
+  const uint w_base = params.rhs_offset + b * params.out_strides[0];
+  for (uint i = gl_LocalInvocationID.x; i < 32u; i += 256u) {
+    ws[i] = load_bf16(in_w.values[w_base + i]);
+  }
+  barrier();
+
+  const uint s_idx = gl_WorkGroupID.x * 256u + gl_LocalInvocationID.x;
+  if (s_idx >= S) {
+    return;
+  }
+  const uint k_base = params.rhs_offset + b * params.in_strides[1]
+      + s_idx * 128u;
+
+  float acc[32];
+  for (uint h = 0u; h < 32u; ++h) {
+    acc[h] = 0.0;
+  }
+  for (uint d = 0u; d < 128u; ++d) {
+    const float kv = load_bf16(in_k.values[k_base + d]);
+    for (uint h = 0u; h < 32u; ++h) {
+      acc[h] += qs[h * 128u + d] * kv;
+    }
+  }
+  float total = 0.0;
+  for (uint h = 0u; h < 32u; ++h) {
+    total += max(acc[h], 0.0) * ws[h];
+  }
+#ifdef FP32_OUT
+  out_f32.values[params.output_offset + b * S + s_idx] = total;
+#else
+  out_16.values[params.output_offset + b * S + s_idx] = bf16_store(total);
+#endif
+}
