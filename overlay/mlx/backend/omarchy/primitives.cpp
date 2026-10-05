@@ -8134,18 +8134,23 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiF16,
             ComputeKernel::QmmVecQ4MultiBF16);
   if (token_route && rows > 8u) {
-    // Pass 1: rows 0..7; pass 2: rows 8..15 via lhs_offset += 8*k and
-    // out_strides[0] = 8 (the shader's row base). The addend row-stride
-    // contract has no row base, so a folded two-pass group composes
-    // instead (the fold is off at rows>1 by default).
+    // Pass 1: rows 0..7; pass 2: rows 8..rows-1 via lhs_offset += 8*k,
+    // out_strides[0] = 8, and matrix_m = rows - 8 (the shader's
+    // token_count guard bounds pass-2 writes to the real tail; without
+    // it a 9-row group would write rows 8..15 into a 9-row buffer).
+    // The addend row-stride contract has no row base, so a folded
+    // two-pass group composes instead (the fold is off at rows>1 by
+    // default).
     for (auto& member : members) {
       if (member.epilogue) {
         return false;
       }
     }
     encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
+    const uint32_t tail_rows = rows - pass_rows;
     params.lhs_offset += pass_rows * static_cast<uint32_t>(k);
     params.out_strides[0] = pass_rows;
+    params.matrix_m = tail_rows;
     encoder.dispatch_compute(kernel, bindings, params, total_groups, 1u, 1u);
     return true;
   }
