@@ -188,6 +188,50 @@ healthy, no starvation.
 Housekeeping: `/tmp/omlxdflash-venv` (abandoned python3.9 venv attempt) could
 not be removed (rm guard); macOS /tmp will reclaim it.
 
+## Perf decomposition (dev box, pre-reopen — from captured data + code map)
+
+Captured arithmetic, one profiled stream request (the only request with phase
+timings): generation wall 6.67 s (19.2 tok/s), 39 cycles, 128 tokens,
+acceptance 69.5%. Recorded phases: prefill 347.2 ms + draft 187.8 ms (first
+9.3 / incremental 178.5) + verify 130.0 ms + replay 0.3 ms + commit 5.2 ms =
+**670.5 ms accounted, ~6.0 s (90%) unattributed ≈ 154 ms/cycle**. The serving
+(non-stream) path is even slower (9.6–16.9 s per 128 tokens, 10.5–13.8 tok/s)
+and surfaces no phases (omlx gap above), so its mix may differ from the
+profiled path — the in-process cycle-trace instrument (below) resolves both.
+
+Interpretation: draft (4.8 ms/cycle) + verify (3.3 ms/cycle) kernel time alone
+would put DFlash ~2x AHEAD of plain decode (15.9 ms/token). The wall is
+elsewhere. Candidate register, in the order the instruments will price it:
+
+1. **Per-cycle host↔device round-trips.** Acceptance length is control flow —
+   every cycle must read verify results back to the host (spec_epoch.py:
+   `verify_ids_host[:commit_count]`, `mx.eval(posterior)` / capture-row
+   `tolist()`). Each Vulkan fence round-trip drains the pipeline; several
+   per cycle at ~5–10 ms each would explain most of the 154 ms.
+2. **`yield_pause_us` / consumer coupling.** The cycle loop yields to the
+   async token consumer; CycleCompleteEvent carries `yield_pause_us` exactly
+   for this. The omlx side adds a per-token asyncio-queue + detokenizer hop
+   (the batched engine pays this too, but per token at 64 tok/s, not per
+   cycle against a 3.3-tok/cycle yield).
+3. **Python cycle body** — capture-row conversions (`_capture_rows_int`,
+   tolist per cycle), posterior top-k host copies, dict/tuple churn in the
+   ~400-line loop body.
+4. **Backend kernel suspects** (price with TRACE_DISPATCH counts, then
+   REPEAT arms): M=16 quantized matmul taking the qmm M<32 decode route;
+   q_len 16 SDPA composition against a full KV (no GDN anywhere — pure
+   attention); the 5-layer bf16 drafter's 16-position block forward.
+
+Instruments staged on the dev box, to run in one ≤8-min M2 ticket after the
+04:30Z reopen (`/tmp/omlxdflash-home/a7/{prof_a7.py,run_prof.sh}`):
+`prof_a7.py` runs the pair in-process with `DiagnosticsConfig(trace=TraceConfig(cycle_events=True))`
+and prints per-cycle `draft/verify/accept/hidden/rollback/OTHER/total` vs
+`cycle_wall_us` and `yield_pause_us` — `other_us` + the wall-vs-phase gap
+directly answer where the 90% sits. Pass 2 re-runs 32 tokens under
+`MLX_OMARCHY_TRACE_DISPATCH=1` and uniq-counts kernel names from backend
+stderr. The PrefillSens `MLX_OMARCHY_DEBUG_REPEAT_{QMM,SDPA,GDN}`/`EMPTY`
+arms (branch `agent/prefillsens-repeat`, needs the diag wheel) are probed for
+but deferred to a follow-up ticket once attribution names the class.
+
 ## Artifacts
 
 - dev box: `/tmp/a7-artifacts/` (16 responses, both server logs, compare.json,
