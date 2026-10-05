@@ -443,6 +443,32 @@ class CustomKernelSmoke(unittest.TestCase):
             "c-style cast kernel did not write per-(row, group) scale",
         )
 
+    def test_mpp_header_marker_includes_are_stripped(self):
+        """A kernel whose header carries Metal-only marker includes and
+        namespace usings it never uses must still translate. This is the
+        H3 _QUANTIZE shape: `#include
+        <MetalPerformancePrimitives/MetalPerformancePrimitives.h>` +
+        `using namespace mpp::tensor_ops;` in the header, a body that uses
+        neither. Kernels whose bodies call MPP tensor ops still fail on
+        their own tokens (matmul2d_descriptor etc.), by name, at GLSL
+        compile. (KernelBattery, 2026-10-05; matrix rows B10 + A26.)
+        """
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_mpp_marker_header",
+            input_names=["values"],
+            output_names=["out"],
+            header=(
+                "#include <MetalPerformancePrimitives/"
+                "MetalPerformancePrimitives.h>\n"
+                "using namespace mpp::tensor_ops;\n"
+            ),
+            source="uint i = thread_position_in_grid.x;"
+                   " out[i] = values[i] * 2.0f;",
+        )
+        values = mx.array([1.0, 2.0, 3.0, 4.0], dtype=mx.float32)
+        out = self.call(kernel, [values], values.shape, values.dtype)
+        self.assertEqual(out.tolist(), [2.0, 4.0, 6.0, 8.0])
+
 
 if __name__ == "__main__":
     unittest.main()
