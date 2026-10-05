@@ -657,8 +657,8 @@ TEST_CASE("rope_rms_norm vjp matches the composed chain and host differences") {
   }
   // The bf16 kernel rounds its outputs; h=0.25 spans many ULPs, so the
   // central difference tracks the smooth derivative well inside 0.09.
-  require_close(flat(f_grads[0], stream), fd_dx_view, 0.20, "fused vjp dx finite difference");
-  require_close(flat(f_grads[1], stream), fd_dw, 0.20, "fused vjp dw finite difference (bf16 rounding + h=0.25 quantization noise); the composed-chain contract leg at 1e-5 is the primary dw proof");
+  require_close(flat(f_grads[0], stream), fd_dx_view, 0.09, "fused vjp dx finite difference");
+  require_close(flat(f_grads[1], stream), fd_dw, 0.09, "fused vjp dw finite difference");
 }
 
 TEST_CASE("RMSNormVJP matches finite differences and the composed formula") {
