@@ -264,3 +264,52 @@ patch application.
    it as a backend gap to HwProbe + OmarchyDistributed (they own
    the Metal→Vulkan translator's MSL subset coverage); the
    omlx-linux layer cannot fix it.
+
+## v0.7.27 product bug — qwen3 rope-norm fold (found and fixed in this lane)
+
+The originally-pending "(B) 4-concurrent batch hits upstream cache
+corruption" turned out to be **our patch series**, not upstream
+oMLX. Decisive narrowing on the M2, all on the omarchy Vulkan
+backend against the shared-omarchy-venv wheel
+`0.32.4.dev202610042317+b8af62c` and Qwen3-4B-Instruct-2507-4bit:
+
+| Run | rope-norm fuse | gdn-raw-repeat | 4-concurrent result | wall |
+|---|---|---|---|---|
+| **(a)** | OFF | OFF | **4/4 real completions** | 10.6 s |
+| **(b)** | OFF | default ON | **4/4 real completions** | 10.2 s |
+| **(c)** | default ON | OFF | 3/4 INTERNAL SERVER ERRORS | 4.7 s |
+
+The rope-norm fold is the guilty patcher. The gdn-raw-repeat
+patch is innocent. Single-decode requests work fine in all
+configurations; the corruption only fires when 2+ requests batch.
+
+**Root cause:** the fused `mx.fast.rope_rms_norm` kernel takes a
+broadcast view of the q/k RMSNorm + rope chain; under batched
+inference (`B > 1`, BatchGenerator) the second call's head_dim
+broadcasts against the first call's, producing the
+`[broadcast_shapes] (2,8,1,64) and (2,1,1,128)` cache-corruption
+error.
+
+**Fix:** gate the fused branch to `B == 1` (decode-only). The
+composed chain is bit-identical and stays on the `B > 1` batched
+path. A single request's `B` is the prompt batch, which the
+kernel handles correctly. Kill switch `MLX_OMARCHY_ROPE_NORM_FUSE=0`
+disables the fold entirely.
+
+**Branch:** `agent/OmlxLinux-rope-norm-patch` @ `3f126c41` on
+`joshuaswarren/omarchy-mlx`. One-line summary:
+`scripts/patch-mlx-lm-rope-norm.py` now gates the fused branch on
+`B == 1`; the else branch (the composed chain) handles `B > 1`
+unmodified. 4 regression tests in
+`tests/test_install_sh_contract.py::RopeNormB1FenceTests` pin the
+contract.
+
+## Numerics gate — closure path
+
+With the rope-norm fence, the 4-concurrent batch returns 4/4 real
+completions on Qwen3-4B. The greedy batched-vs-single digest
+equality check is now a single follow-up ticket: re-run the digest
+smoke on Qwen3-4B (one single-shot, one 4-concurrent; compare
+sha256 of the digest-prompt's content; expect equal). The 9B and
+2B path is blocked on the omarchy-backend Metal-kernel gap
+(separate milestone, KernelBattery has the glslang error).
