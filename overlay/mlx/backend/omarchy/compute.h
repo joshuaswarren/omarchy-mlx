@@ -40,6 +40,10 @@ inline constexpr uint32_t kQmmVecMultiWeights = 4;
 inline constexpr uint32_t kQmmVecMultiBindingsPerWeight = 6;
 inline constexpr uint32_t kQmmVecMultiBindings =
     1 + kQmmVecMultiWeights * kQmmVecMultiBindingsPerWeight;
+// Multi-token (verify / small-batch) GEMV route: the largest compiled
+// token dimension (the token16 blob); rows 2..16 route to the token
+// kernels, rows > 16 compose.
+inline constexpr uint32_t kQmmVecTokenRowsMax = 16;
 // The out-gate prologue adds three slots: the gate and pre-multiply
 // vectors it reads, and the materialized product (kQmmVecMultiBindings + 3).
 inline constexpr uint32_t kDenseVecMultiWeights = 3;
@@ -817,6 +821,17 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
   QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // Multi-token (verify / small-batch, q_len 2..16) grouped Q4 GEMV:
+  // the multi-weight kernel with the token dimension inside the k walk
+  // (per-row bit-identical to the single-token column); append-only
+  // profile ids.
+  QmmVecQ4MultiToken4SubgroupBF16,
+  QmmVecQ4MultiToken16SubgroupBF16,
+  QmmVecQ4MultiToken4BF16,
+  QmmVecQ4MultiToken16BF16,
+  // Multi-token causal decode attention (q_len 2..16): per-row
+  // single-query arm over the visible key prefix; append-only id.
+  SdpaDecodeRowsBF16Hd128,
   Count,
 };
 

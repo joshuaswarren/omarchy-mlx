@@ -189,16 +189,36 @@ void main() {
   uint repeats = params.matrix_m / params.matrix_n;
   uint kv_head = head / repeats;
   uint k_len = params.matrix_k;
+#ifdef SDPA_ROWS
+  // Multi-token verify rows: workgroup (head, row). The row's causal
+  // bound turns every scan below into exactly the single-query arm's
+  // arithmetic over the row's visible key prefix (keys 0..key_end-1),
+  // so each row is bit-identical to that row decoded alone at q_len=1
+  // with the same cache prefix. params.dims carries q_len,
+  // out_strides[0] the q row stride; out and q share the head stride
+  // (shape[0]).
+  uint row = gl_WorkGroupID.y;
+  uint key_end = params.matrix_k - params.dims + row + 1u;
+#else
+  uint row = 0u;
+  uint key_end = params.matrix_k;
+#endif
 
   if (thread < SDPA_DIM) {
+#ifdef SDPA_ROWS
+    s_qrow[thread] = params.alpha * bf16_load(
+        query_data.values[params.lhs_offset + head * params.shape[0] +
+            row * params.out_strides[0] + thread * params.shape[3]]);
+#else
     s_qrow[thread] = params.alpha * bf16_load(
         query_data.values[params.lhs_offset +
             head * params.shape[0] + thread * params.shape[3]]);
+#endif
   }
   barrier();
 
   // Scores over every key: ascending-d accumulation, matmul.comp order.
-  for (uint key = thread; key < k_len; key += 1024u) {
+  for (uint key = thread; key < key_end; key += 1024u) {
     uint k_base = params.rhs_offset + kv_head * params.shape[1] +
         key * params.shape[2];
     float accumulator = 0.0;
@@ -220,7 +240,7 @@ void main() {
   // Row max: strided scan then the 256-lane binary tree.
   if (thread < 256u) {
     float local_max = uintBitsToFloat(0xff800000u);
-    for (uint index = thread; index < k_len; index += 256u) {
+    for (uint index = thread; index < key_end; index += 256u) {
       float next = s_stream[index];
       if (isnan(next) || next > local_max) {
         local_max = next;
@@ -241,7 +261,7 @@ void main() {
   // Denominator: strided sequential exp-sum per lane, then the tree.
   if (thread < 256u) {
     float local_sum = 0.0;
-    for (uint index = thread; index < k_len; index += 256u) {
+    for (uint index = thread; index < key_end; index += 256u) {
       local_sum += exp(s_stream[index] - row_max);
     }
     s_tree[thread] = local_sum;
@@ -259,7 +279,7 @@ void main() {
   // Probs in place: exp recomputed from the stored f32 scores, exactly
   // as the normalize pass of softmax_suffix.comp does.
   if (thread < 256u) {
-    for (uint index = thread; index < k_len; index += 256u) {
+    for (uint index = thread; index < key_end; index += 256u) {
       s_stream[index] = exp(s_stream[index] - row_max) * normalizer;
     }
   }
@@ -275,7 +295,7 @@ void main() {
         d * params.in_strides[3];
     // Whole 16-key tiles: 16 independent V loads first, then the 16 in-order
     // FMAs (a 64-key block spilled the load registers and was 9x slower).
-    for (; key + 16u <= k_len; key += 16u) {
+    for (; key + 16u <= key_end; key += 16u) {
       float vv[16];
       for (uint index = 0u; index < 16u; ++index) {
         vv[index] = bf16_load(
@@ -286,8 +306,8 @@ void main() {
       }
     }
     for (uint index = 0u; index < 16u; ++index) {
-      float prob = key < k_len ? s_stream[key] : 0.0;
-      float value16 = key < k_len ? bf16_load(
+      float prob = key < key_end ? s_stream[key] : 0.0;
+      float value16 = key < key_end ? bf16_load(
           value_data.values[params.aux_offset +
               kv_head * params.in_strides[1] +
               key * params.in_strides[2] +
@@ -295,8 +315,13 @@ void main() {
       accumulator += prob * value16;
       ++key;
     }
+#ifdef SDPA_ROWS
+    output_data.values[params.output_offset + head * params.shape[0] +
+        row * SDPA_DIM + d] = bf16_store(1.0 * accumulator);
+#else
     output_data.values[params.output_offset + head * SDPA_DIM + d] =
         bf16_store(1.0 * accumulator);
+#endif
   }
   return;
 #else

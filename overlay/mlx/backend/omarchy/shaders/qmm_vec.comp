@@ -103,9 +103,13 @@ uint16_t bf16_store(float value) {
 #ifndef SLOTS_PER_GROUP
 #define SLOTS_PER_GROUP 8
 #endif
-#if ROWS_PER_SLOT != 1 && \
+#if ROWS_PER_SLOT != 1 && !defined(QMM_VEC_TOKENS) && \
     (!defined(USE_SUBGROUP) || !(defined(USE_FP16) || defined(USE_BF16)))
 #error "ROWS_PER_SLOT > 1 needs USE_SUBGROUP and a packed x view"
+#endif
+#if defined(QMM_VEC_TOKENS) && \
+    (ROWS_PER_SLOT != 2 || !defined(USE_BF16) || !defined(QMM_VEC_Q4_WORD))
+#error "QMM_VEC_TOKENS builds on the bf16 packed-x multi column"
 #endif
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
@@ -559,6 +563,85 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
   } \
 }
+// Multi-token (verify / small-batch) forms: the token (query-row)
+// dimension sits INSIDE the k walk so one weight-word load feeds every
+// token. Per token and slot column the chain is instruction-for-
+// instruction Q4_ROWS': same quad order into dot, same per-column
+// input_sum chain, same block epilogue fma, same subgroupAdd tree, same
+// rounding - so each row's result is bit-identical to that row computed
+// alone. params.matrix_m carries the live token count (1..M_TOKENS);
+// rows at or past it do no work (loads and stores are guarded, not
+// clamped). bf16 only: x quad words widen exactly like Q4_QUAD_LOAD_T.
+#define Q4_QUAD_LOAD_T(a, b, isum) \
+  float x0 = uintBitsToFloat(((a) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((a) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((b) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((b) & 0xFFFF0000u); \
+  isum += ((x0 + x1) + x2) + x3;
+#define Q4_TOK_DOT(dst, p) \
+  (dst) += fma(x3, Q4_NIB(p, 12u), \
+      fma(x2, Q4_NIB(p, 8u), \
+          fma(x1, Q4_NIB(p, 4u), \
+              x0 * Q4_NIB(p, 0u))))
+// One block (one or two weight words per lane step) for all tokens:
+// weight words load once, x quads load once per token and are shared by
+// every slot column; dot and input_sum accumulate per (column, token)
+// exactly as the single-token kernel's per-column chain does.
+#define Q4_TOK_BLOCK(W, S, B, words_this_step) { \
+  uint wa[ROWS_PER_SLOT]; \
+  uint wb[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+    if ((words_this_step) == 2u) { \
+      wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+    } \
+  } \
+  precise float dot_t[ROWS_PER_SLOT][M_TOKENS]; \
+  precise float input_sum_t[ROWS_PER_SLOT][M_TOKENS]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    for (uint m = 0u; m < M_TOKENS; ++m) { \
+      dot_t[r][m] = 0.0; \
+      input_sum_t[r][m] = 0.0; \
+    } \
+  } \
+  for (uint m = 0u; m < M_TOKENS; ++m) { \
+    if (m >= token_count) { \
+      continue; \
+    } \
+    uint x_row_m = params.lhs_offset + m * params.matrix_k; \
+    uvec4 xa = input_x.values[(x_row_m + w * 8u) / 8u]; \
+    uvec4 xb; \
+    if ((words_this_step) == 2u) { \
+      xb = input_x.values[(x_row_m + w * 8u + 8u) / 8u]; \
+    } \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      { Q4_QUAD_LOAD_T(xa.x, xa.y, input_sum_t[r][m]) \
+        uint p = wa[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
+      { Q4_QUAD_LOAD_T(xa.z, xa.w, input_sum_t[r][m]) \
+        uint p = wa[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
+      if ((words_this_step) == 2u) { \
+        { Q4_QUAD_LOAD_T(xb.x, xb.y, input_sum_t[r][m]) \
+          uint p = wb[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
+        { Q4_QUAD_LOAD_T(xb.z, xb.w, input_sum_t[r][m]) \
+          uint p = wb[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
+      } \
+    } \
+  } \
+  uint group = w / 8u; \
+  for (uint m = 0u; m < M_TOKENS; ++m) { \
+    if (m >= token_count) { \
+      continue; \
+    } \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      float scale = \
+          LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
+      float bias = \
+          LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
+      precise float bias_term = input_sum_t[r][m] * bias; \
+      acc_t[m][r] += fma(scale, dot_t[r][m], bias_term); \
+    } \
+  } \
+}
 #endif
 #endif
 
@@ -618,7 +701,204 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
                  : ((rounded) + LOAD_VALUE(addend##I.values[column]))); \
   } \
 }
-#if ROWS_PER_SLOT > 1
+#if defined(QMM_VEC_TOKENS)
+// Multi-token main: same workgroup -> weight partition, fold contract
+// and reduction structure as the single-token main, with the token
+// dimension inside the k walk (see Q4_TOK_BLOCK). Output and Add-
+// epilogue rows are strided by the weight's n; the epilogue addend row
+// stride arrives via params.in_strides[which] (n for a full addend, 0
+// for a row-broadcast bias). The kv-window and out-gate folds are not
+// built here (host never selects them for rows > 1).
+#if !defined(USE_BF16) || defined(USE_FP16) || \
+    !defined(QMM_VEC_Q4_WORD) || !defined(QMM_VEC_MULTI) || \
+    ROWS_PER_SLOT != 2 || defined(QMM_VEC_OUTGATE) || !defined(M_TOKENS)
+#error "QMM_VEC_TOKENS builds on the bf16 packed-x multi column only"
+#endif
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint token_count = params.matrix_m;
+  uint n0 = params.shape[0];
+  uint n1 = params.shape[1];
+  uint n2 = params.shape[2];
+  uint n3 = params.shape[3];
+  uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint workgroup = gl_WorkGroupID.x;
+  uint which;
+  uint n;
+  if ((params.flags & 65536u) != 0u) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0 + groups1) {
+    which = 1u;
+    workgroup -= groups0;
+    n = n1;
+  } else if (workgroup < groups0 + groups1 + groups2) {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  } else {
+    which = 3u;
+    workgroup -= groups0 + groups1 + groups2;
+    n = n3;
+  }
+  uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  uint w_base = 0u;
+  uint s_base = 0u;
+  uint b_base = 0u;
+  uint row_base[ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    row_base[r] = min(column + r, n - 1u);
+  }
+  precise float acc_t[M_TOKENS][ROWS_PER_SLOT];
+  for (uint m = 0u; m < M_TOKENS; ++m) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc_t[m][r] = 0.0;
+    }
+  }
+#ifdef USE_SUBGROUP
+#define Q4_TOK_REDUCE() { \
+    for (uint m = 0u; m < M_TOKENS; ++m) { \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        acc_t[m][r] = subgroupAdd(acc_t[m][r]); \
+      } \
+    } \
+  }
+#else
+// The plain build's five-round shared tree per (token, column), the same
+// order Q4_REDUCE runs for the single-token column; the slot lead lane
+// holds the total exactly like the single-token store contract.
+#define Q4_TOK_REDUCE() { \
+    for (uint m = 0u; m < M_TOKENS; ++m) { \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        reduce_scratch[lane] = acc_t[m][r]; \
+        barrier(); \
+        for (uint offset = 1u; offset < LANES; offset <<= 1u) { \
+          if ((lane_in_slot & (2u * offset - 1u)) == 0u) { \
+            reduce_scratch[lane] += reduce_scratch[lane + offset]; \
+          } \
+          barrier(); \
+        } \
+        acc_t[m][r] = reduce_scratch[lane]; \
+      } \
+    } \
+  }
+#endif
+#define Q4_TOK_ROWS(W, S, B) { \
+    if (column_active) { \
+      if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+        for (uint w = lane_in_slot * 2u; w < words_per_row; \
+             w += LANES * 2u) { \
+          Q4_TOK_BLOCK(W, S, B, 2u) \
+        } \
+      } else { \
+        for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+          Q4_TOK_BLOCK(W, S, B, 1u) \
+        } \
+      } \
+    } \
+  }
+  if ((params.flags & 65536u) != 0u) {
+    // SwiGLU store epilogue: weight 0 is the gate, weight 1 the up; the
+    // product row is silu(gate)*up rounded through ROUND_STORAGE exactly
+    // as the single-token path and swiglu.comp round it.
+    float gate_rounded[M_TOKENS][ROWS_PER_SLOT];
+    Q4_TOK_ROWS(input_w0, scales0, biases0)
+    Q4_TOK_REDUCE()
+    for (uint m = 0u; m < M_TOKENS; ++m) {
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        gate_rounded[m][r] = ROUND_STORAGE(acc_t[m][r]);
+      }
+    }
+    for (uint m = 0u; m < M_TOKENS; ++m) {
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        acc_t[m][r] = 0.0;
+      }
+    }
+    Q4_TOK_ROWS(input_w1, scales1, biases1)
+    Q4_TOK_REDUCE()
+    if (lane_in_slot == 0u) {
+      for (uint m = 0u; m < M_TOKENS; ++m) {
+        if (m >= token_count) {
+          continue;
+        }
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          if (column + r < n) {
+            float up_rounded = ROUND_STORAGE(acc_t[m][r]);
+            float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded[m][r])));
+            float silu = ROUND_STORAGE(gate_rounded[m][r] * sig);
+            output0.values[m * n + column + r] =
+                STORE_VALUE(ROUND_STORAGE(silu * up_rounded));
+          }
+        }
+      }
+    }
+    return;
+  }
+  if (which == 0u) {
+    Q4_TOK_ROWS(input_w0, scales0, biases0)
+  } else if (which == 1u) {
+    Q4_TOK_ROWS(input_w1, scales1, biases1)
+  } else if (which == 2u) {
+    Q4_TOK_ROWS(input_w2, scales2, biases2)
+  } else {
+    Q4_TOK_ROWS(input_w3, scales3, biases3)
+  }
+  Q4_TOK_REDUCE()
+  if (lane_in_slot == 0u) {
+    for (uint m = 0u; m < M_TOKENS; ++m) {
+      if (m >= token_count) {
+        continue;
+      }
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        uint column_r = column + r;
+        if (column_r < n) {
+          float rounded = ROUND_STORAGE(acc_t[m][r]);
+          uint out_index = m * n + column_r;
+          if (which == 0u) {
+            output0.values[out_index] = STORE_VALUE(rounded);
+          } else if (which == 1u) {
+            output1.values[out_index] = STORE_VALUE(rounded);
+          } else if (which == 2u) {
+            output2.values[out_index] = STORE_VALUE(rounded);
+          } else {
+            output3.values[out_index] = STORE_VALUE(rounded);
+          }
+          if ((params.flags & (256u << which)) != 0u) {
+            // Add epilogue: sum = rounded output + addend; the addend
+            // row stride is params.in_strides[which] (n for a full
+            // (tokens, n) addend, 0 for a broadcast bias vector). The
+            // stored value is read back exactly like Q4_MULTI_STORE.
+            uint addend_index = m * params.in_strides[which] + column_r;
+            if (which == 0u) {
+              sum0.values[out_index] = STORE_VALUE(
+                  rounded + LOAD_VALUE(addend0.values[addend_index]));
+            } else if (which == 1u) {
+              sum1.values[out_index] = STORE_VALUE(
+                  rounded + LOAD_VALUE(addend1.values[addend_index]));
+            } else if (which == 2u) {
+              sum2.values[out_index] = STORE_VALUE(
+                  rounded + LOAD_VALUE(addend2.values[addend_index]));
+            } else {
+              sum3.values[out_index] = STORE_VALUE(
+                  rounded + LOAD_VALUE(addend3.values[addend_index]));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#elif ROWS_PER_SLOT > 1
 // Multi-row main: same workgroup -> weight partition and fold contract as
 // the single-row main below (COLUMNS_PER_GROUP now spans every slot's
 // rows), each slot owning ROWS_PER_SLOT consecutive columns.

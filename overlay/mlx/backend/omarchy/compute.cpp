@@ -277,6 +277,10 @@
 #include "qmm_vec_q4_multi_f32.h"
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
+#include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
+#include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
+#include "qmm_vec_q4_multi_token4_bf16.h"
+#include "qmm_vec_q4_multi_token16_bf16.h"
 #include "qmm_vec_q4_multi_subgroup_f16.h"
 #include "qmm_vec_q4_multi_subgroup_f32.h"
 #include "sdpa_decode_native_f16.h"
@@ -285,6 +289,7 @@
 #include "sdpa_decode_native_bf16_hd32.h"
 #include "sdpa_decode_native_bf16_hd96.h"
 #include "sdpa_decode_native_bf16_hd128.h"
+#include "sdpa_decode_rows_bf16_hd128.h"
 #include "sdpa_decode_native_bf16_hd160.h"
 #include "sdpa_decode_native_bf16_hd192.h"
 #include "sdpa_decode_native_bf16_hd224.h"
@@ -1460,12 +1465,28 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_outgate_bf16,
           qmm_vec_q4_multi_outgate_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_subgroup_bf16,
+          qmm_vec_q4_multi_token4_subgroup_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token16_subgroup_bf16,
+          qmm_vec_q4_multi_token16_subgroup_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4BF16:
+      return {qmm_vec_q4_multi_token4_bf16, qmm_vec_q4_multi_token4_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken16BF16:
+      return {
+          qmm_vec_q4_multi_token16_bf16,
+          qmm_vec_q4_multi_token16_bf16_size};
     case ComputeKernel::SdpaDecodeNativeF16:
       return {sdpa_decode_native_f16, sdpa_decode_native_f16_size};
     case ComputeKernel::SdpaDecodeNativeBF16:
       return {sdpa_decode_native_bf16, sdpa_decode_native_bf16_size};
     case ComputeKernel::SdpaDecodeNativeBF16Hd256:
       return {sdpa_decode_native_bf16_hd256, sdpa_decode_native_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeRowsBF16Hd128:
+      return {sdpa_decode_rows_bf16_hd128, sdpa_decode_rows_bf16_hd128_size};
     case ComputeKernel::SdpaDecodeNativeTwoPassP1F16:
       return {sdpa_decode_native_p1_f16, sdpa_decode_native_p1_f16_size};
     case ComputeKernel::SdpaDecodeNativeTwoPassP2F16:
