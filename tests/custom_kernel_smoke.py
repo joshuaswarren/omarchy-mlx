@@ -433,7 +433,7 @@ class CustomKernelSmoke(unittest.TestCase):
         )
         mx.eval(q, xs)
         ref_scale = 1.0 / 127.0
-        ref_q = (values * ref_scale).round().clip(-127, 127).astype(mx.int8)
+        ref_q = mx.clip((values * ref_scale).round(), -127, 127).astype(mx.int8)
         self.assertTrue(
             mx.all(q == ref_q).item(),
             "c-style cast kernel output did not match reference",
