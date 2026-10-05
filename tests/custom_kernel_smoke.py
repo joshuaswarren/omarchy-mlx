@@ -515,6 +515,30 @@ class CustomKernelSmoke(unittest.TestCase):
                     for i, x in enumerate(range(1, 9))]
         self.assertEqual(out.tolist(), expected)
 
+    def test_const_uint16_from_float_declaration(self):
+        """`const uint16_t m = <float expr>` (the bf16 pack/unpack idiom)
+        wraps in an explicit uint16_t(...) conversion; GLSL 460 rejects
+        the implicit float->uint16_t. (Qwen3.5-2B GDN repro,
+        OmlxLinux M2 2026-10-05.)"""
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_const_u16_from_float",
+            input_names=["values"],
+            output_names=["out"],
+            source=(
+                "const uint16_t m = uint16_t(7u);\n"
+                "uint i = thread_position_in_grid.x;\n"
+                "float v = values[i] + float(m);\n"
+                "const int q = v > 3.0f ? 1 : 0;\n"
+                "out[i] = v + float(q);\n"
+            ),
+        )
+        values = mx.arange(1, 9, dtype=mx.float32)
+        out = self.call(kernel, [values], values.shape, values.dtype)
+        self.assertEqual(
+            out.tolist(),
+            [float(x) + 7.0 + (1.0 if x > 3 else 0.0) for x in range(1, 9)],
+        )
+
     def test_ushort_type_and_integer_condition(self):
         """MSL `ushort` maps to GLSL `uint` (GLSL has no 16-bit scalars;
         the values are small integers), and a bare integer condition
