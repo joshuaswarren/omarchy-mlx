@@ -53,4 +53,4 @@ The medians differ by 0.28%. Four of five allocator runs are within the prior wh
 
 `304d1237fefefa485c53403c826116b713f1467ce9a4ba38026c0841d2501372`
 
-Benchmark JSON files remain under `/var/tmp/alloc-cache-2b-final/` on the M2. The prior wheel is in `/var/tmp/golden-wheel/dist/`; the allocator wheel is in `/var/tmp/alloc-cache-fresh/dist/`.
+Benchmark JSON files remain under `/var/tmp/alloc-cache-2b-final/` on the M2. The fresh build checkout and wheel were removed after the build and measurements; the wheel hash above and benchmark results preserve their receipts.
