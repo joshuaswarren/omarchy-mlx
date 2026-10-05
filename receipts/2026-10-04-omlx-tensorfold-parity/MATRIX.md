@@ -8,13 +8,13 @@ Pins (shallow clones, verified this session):
 - **MCDMA main** — ashhart/MCDMA `e672c14ff9fc7b38994caf73025cf1588b4de74e` (2026-09-29).
 - omarchy-mlx base: origin/main `831f8fa03` at matrix creation (includes mx.fast.int8_matmul + translator extensions landed 2026-10-04).
 
-## Status counts (updated 2026-10-05, v1.3)
+## Status counts (updated 2026-10-05, v1.4)
 
 | Status | Rows | Rule |
 |---|---|---|
 | DONE (receipt) | 6 | receipt shows a REAL run of that feature on omarchy |
-| IN PROGRESS | 16 | lane spawned/working; no closure receipt yet |
-| OPEN | 27 | no owner work evidenced yet |
+| IN PROGRESS | 23 | lane spawned/working; no closure receipt yet |
+| OPEN | 20 | no owner work evidenced yet |
 | n/a | 5 | macOS/CUDA/M5-only by design (Lead acceptance pending where noted) |
 | **total** | **54** | A:35 B:13 C:6 |
 
@@ -62,9 +62,9 @@ Columns: feature | evidence (file:line at pinned commit) | needs Metal-only API?
 
 | Feature | Evidence | Metal-only? | omarchy today | Gap | Owner | Status |
 |---|---|---|---|---|---|---|
-| A1 OpenAI-compatible server (chat/completions, completions, embeddings, rerank, models) | README.md:269-281; omlx/server.py; api/ | no | untested | None known beyond stack alignment (#2) | OmlxApi | OPEN |
-| A2 Anthropic Messages API + adaptive thinking | README.md:269-281 (`/v1/messages`) | no | untested | — | OmlxApi | OPEN |
-| A3 Streaming usage stats, SSE keep-alive, Claude Code context reporting | README.md:202-205 | no | untested | — | OmlxApi | OPEN |
+| A1 OpenAI-compatible server (chat/completions, completions, embeddings, rerank, models) | README.md:269-281; omlx/server.py; api/ | no | untested | None known beyond stack alignment (#2) | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
+| A2 Anthropic Messages API + adaptive thinking | README.md:269-281 (`/v1/messages`) | no | untested | — | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
+| A3 Streaming usage stats, SSE keep-alive, Claude Code context reporting | README.md:202-205 | no | untested | — | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
 | A4 Continuous batching via mlx-lm BatchGenerator | README.md:198; cache/factory.py:8-9; adapter/output_parser.py:404; cli.py:414 | no (mlx-lm) | untested | omlx pins mlx-lm git `94cdcae1` (0.32 line, pyproject.toml:49); omarchy wheel ships 0.31.3 + `patches/mlx-lm-0.32/` — alignment + BatchGenerator smoke needed. omarchy-side dependency closed: `rope_rms_norm` B>1 broadcast crash (v0.7.25–27) fixed with per-request array offsets (`48ce2b25f`, receipt `receipts/2026-10-05-rope-norm-batch-fix/`); ships in the v0.7.28 draft, which oMLX's default exposure needs. Omarchy batched-decode numerics gate CLOSED on Qwen3-4B (greedy batched==single digest equality, `ad4f5c898`) | OmlxCache | OPEN |
 | A5 Paged KV + prefix sharing + copy-on-write | cache/prefix_cache.py:176 (BlockAwarePrefixCache), :1288; cache/paged_cache.py:142 | no | untested | — | OmlxCache | OPEN |
 | A6 SSD cold tier (safetensors offload, survives restart) | cache/paged_ssd_cache.py (PagedSSDCacheManager), README.md:187-197 | no | untested | — | OmlxCache | OPEN |
@@ -73,13 +73,13 @@ Columns: feature | evidence (file:line at pinned commit) | needs Metal-only API?
 | A9 VLM serving (mlx-vlm@ea79808; multi-image, MiMo video+audio) | README.md:183-186; pyproject.toml:116; patches/mlx_vlm_{glm5_next,minimax_m3,qwen4_exp}_compat (vendored); adapter/output_parser.py:413-420 | no (Python dep) | untested | Pinned mlx-vlm commit vs omarchy mlx 0.32.4-base — import + processor probe needed (#2) | OmlxModal (probe: HwProbe) | OPEN |
 | A10 OCR (DeepSeek-OCR, DOTS-OCR, GLM-OCR auto-detect) | README.md:183-186 (models table) | no | untested | — | OmlxModal | OPEN |
 | A11 Audio STT/TTS/STS via mlx-audio@49596ac (DeepFilterNet, MossFormer2, SAMAudio, LFM2.5-Audio) | engine/sts.py:109-192; pyproject.toml:118 | no | untested | Dep probe (#2); needs no Metal beyond stock ops | OmlxModal | OPEN |
-| A12 Native embeddings + rerank (BERT, BGE-M3, ModernBERT, XLM-R) | engine/embedding.py:101; engine/reranker.py:68; pyproject.toml:53 | no | untested | — | OmlxApi | OPEN |
-| A13 Model profiles + per-model settings + alias + type override | README.md:216-227; model_profiles.py; model_settings.py | no | untested | — | OmlxApi | OPEN |
+| A12 Native embeddings + rerank (BERT, BGE-M3, ModernBERT, XLM-R) | engine/embedding.py:101; engine/reranker.py:68; pyproject.toml:53 | no | untested | — | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
+| A13 Model profiles + per-model settings + alias + type override | README.md:216-227; model_profiles.py; model_settings.py | no | untested | — | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
 | A14 Multi-model serving: LRU eviction, pinning, per-model TTL, engine pool | README.md:206-215; engine_pool.py:323 (EnginePool), :2474; scheduler.py:1670 | no | untested | — | OmlxCache | OPEN |
 | A15 Memory guard / process memory enforcement + monitor | process_memory_enforcer.py:376; cluster/memory_guard.py:456; memory_monitor.py:36,313-325 | partial — `HAS_MLX_METAL = mx.metal.is_available()` memory_monitor.py:36 gates `mx.get_active_memory()` baseline (:313) → baseline 0, KV-growth accounting degraded on omarchy | untested | Gate patch (#1): omarchy allocator provides `get_active_memory`, so probe can be True; then runtime probe (#7). Allocator-side: HeapBudget measured the M2 VA window (cap 64 GiB, probeB) and rooted H3 load failures in RAM*0.5 + that window; fixes on branch `agent/heap-budget` (allocator wired-limit semantics + test) — probeC with HK_HEAP_FRACTION=0.75 pending a post-window M2 build (entry 2026-10-05T0751Z) | OmlxCache (gates: PlatformGate; probe: HwProbe; allocator: HeapBudget) | OPEN |
 | A16 Admin dashboard + chat + i18n + downloader + integrations | README.md:161-168,228-252; admin/routes.py:2392; admin/ web assets. Upstream mapping (OmlxAdmin, verified at v0.7.0): login routes.py:1815/1906, chat page :1862, HF download :7518, dashboard/static/templates/i18n under omlx/admin/ | no | untested | UI/API paths not Metal-only; PP/TG-style evidence needs real GPU+model. OmlxLinux M2 server receipt covers base install/server/chat only — not A16. OmlxAdmin added an unverified user guide + fresh-user-e2e command list, now on main as `6aea8bd96` (docs/omlx-linux.md, packaging/omlx-linux/{admin_ui_stub.py,fresh-user-e2e.sh}); no DONE claim. UI-only evidence 2026-10-05: stub-template login POST + dashboard model/HF/downloader/benchmark API GET paths exercised, four-width (375/768/1024/1440) login+dashboard captures without horizontal overflow — `receipts/2026-10-05-omlx-admin-ui/` (screenshots incl. login-ko-375). No real auth/model/benchmark; row stays OPEN | OmlxAdmin | OPEN |
 | A17 Benchmark panel (PP/TG, partial prefix-hit) | README.md:253-260; admin/routes.py:84 (benchmark import); admin/bench_corpora/ (manifest.json, code_mixed/code_python corpora). Upstream mapping (OmlxAdmin, verified at v0.7.0): benchmark handlers routes.py:8655-8870; BenchmarkRequest admin/benchmark.py:109-118; PP/TG result fields :1549-1553 | no | untested | Not Metal-only; measured PP/TG evidence requires real GPU/model run. **Semantics resolved by Lead (2026-10-05)**: expected v0.7.0 semantics = plain NO-cache PP/TG, exactly as admin/benchmark.py implements (UUID-unique prompts :543-545, :590-592, :2004-2008; `skip_cache_store=True` :759, :1103; cached-token warning :816-818); README.md:255's "partial prefix cache hit testing" overstates — recorded as an upstream doc note, not an omarchy gap. Prefix-cache behavior itself is row A5 (OmlxCache). **A17 closes when**: the panel runs end-to-end with a real model on the M2/jwm1 hosts AND the cached-token warning does not fire. README-wording fix drafted at `receipts/2026-10-04-omlx-tensorfold-parity/drafts/a17-benchmark-prefix-wording.md` (on main) | OmlxAdmin | OPEN |
-| A18 Tool calling (10 family formats), grammar/structured output, MCP | README.md:282-300; api/tool_calling.py:1993,2325; omlx/mcp/; mcp.example.json | no | untested | mlx-lm tool-call parser fix already in omarchy `patches/mlx-lm-0.32/` (MlxLm1904) | OmlxApi | OPEN |
+| A18 Tool calling (10 family formats), grammar/structured output, MCP | README.md:282-300; api/tool_calling.py:1993,2325; omlx/mcp/; mcp.example.json | no | untested | mlx-lm tool-call parser fix already in omarchy `patches/mlx-lm-0.32/` (MlxLm1904) | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
 | A19 oQ universal dynamic quantization (calibration-driven mixed precision) | docs/oQ_Quantization.md:1-6; oq.py | partial — `mx.metal.device_info()` fallback oq.py:4618 returns 1 GiB on omarchy (calibration memory sizing guess) | untested | device_info key probe (#7); otherwise pure mlx ops | OmlxModal | OPEN |
 | A20 TurboQuant KV cache | turboquant_kv.py; cache/prefix_cache.py:4289,4673 (`mlx_vlm.turboquant` import) | no | untested | Lives in the pinned mlx-vlm fork — arrives with #2 | OmlxCache | OPEN |
 | A21 MoE expert offload (stream from checkpoint safetensors, no converted copy) | docs/MoE_Expert_Offload.md:1-6; benchmarks/moe_offload_prefill_bench.py | no | untested | mmap slab reads are POSIX — expected portable | OmlxCache | OPEN |
@@ -119,7 +119,7 @@ per-kernel on real dispatch. -->
 | A28 Laguna mlxfast port (bit-exactness-gated Swift→Python ports) | docs/laguna-mlxfast-port-correctness.md:1-7; omlx/patches/laguna/ | unclassified per-commit (ledger-gated) | untested | Each port lands only with token/bit-exactness + measured win — run ledger on omarchy during #3 | OmlxModal | OPEN |
 | A29 macOS menubar app (SwiftUI, usage history, auto-update) | apps/omlx-mac; README.md:261-268; docs/usage-analytics.md | yes (Swift/macOS) | known-fail: n/a on Linux | Admin web UI covers monitoring on omarchy; usage_history.py is server-side | Main (accept n/a) | n/a |
 | A30 ANE POC benches (qwen35_ane_{down_fused,down_output_split,gdn_split,prefill}) | benchmarks/qwen35_ane_*.py | macOS ANE experiments | n/a (macOS-only POCs, not shipped server features) | omarchy analog is the separate omarchy-ane lane — out of scope for these pins | Main (note) | n/a |
-| A31 Web search tool + usage history (server-side) | websearch.py:80; usage_history.py | no | untested | — | OmlxApi | OPEN |
+| A31 Web search tool + usage history (server-side) | websearch.py:80; usage_history.py | no | untested | — | OmlxApi | IN PROGRESS (receipts/2026-10-05-omlx-api-parity/, main 9cbe481e9; real-GPU run queued M2 FREE; A12 also blocked on Main approval for 2 embed/rerank downloads) |
 05a3f4a0 (matrix: device-pointer-alias classification in the A26 battery note)
 
 ## B. TensorFold (main = v0.6.5, `609ca419`) features
@@ -165,6 +165,8 @@ Full audit: `receipts/2026-10-04-tensorfold-audit/README.md` (same commit; runti
 - No upstream PRs opened anywhere; no capacity/velocity claims made.
 
 ## Changelog
+
+- v1.4 (2026-10-05, OmlxApi report): A1, A2, A3, A12, A13, A18, A31 OPEN -> IN PROGRESS (dev-box protocol tests validated, supporting only; receipt receipts/2026-10-05-omlx-api-parity/ landed at main 9cbe481e9; pre-registered entry 20261005T0915Z; real-GPU receipt run queued for the M2 FREE window via packaging/omlx-linux/api_parity.sh; A12 additionally blocked on Main approval for two small embed/rerank model downloads). Counts: 6/23/20/5.
 
 - v1.3 (2026-10-05, Lead rulings): A17 semantics resolved — expected v0.7.0 behavior is plain no-cache PP/TG as coded; README.md:255 overstates (upstream doc note, not an omarchy gap); closure bar = panel e2e with a real model on M2/jwm1 and no cached-token warning. Prefix-cache behavior tracked in A5. Owner column rewritten to the 2026-10-05 owner table: OmlxApi (A1-A3,A12,A13,A18,A31), OmlxCache (A4-A6,A8,A14,A15,A20,A21), OmlxModal (A9-A11,A19,A28), OmlxAdmin (A16,A17), OmlxDflash/MidM (A7), OmarchyDistributed/ClusterAppBuild (A22-A24), KernelBattery/Fam* (A25a-e,A26,A27,B1); unchanged: PlatformGate (B2), HwProbe (B9), TensorFoldPort (B10,B11,B13), OmarchyDistributed (B8), McdmaLinux (C2,C3,C6). Counts unchanged 6/16/27/5.
 
