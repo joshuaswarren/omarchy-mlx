@@ -37,7 +37,7 @@ void pair_grid_barrier() {
     } else {
       uint spins = 0u;
       while (atomicAdd(pair_sync.v[1], 0u) == gen) {
-        if (++spins > 131072u) { atomicOr(pair_sync.v[2], 1u); break; }
+        if (++spins > 32768u) { atomicOr(pair_sync.v[2], 1u); break; }
       }
     }
   }

@@ -520,7 +520,7 @@ void main() {
       } else {
         uint spins = 0u;
         while (atomicAdd(out_buf[1], 0u) == gen) {
-          if (++spins > 131072u) { atomicOr(out_buf[2], 1u); break; }
+          if (++spins > 32768u) { atomicOr(out_buf[2], 1u); break; }
         }
       }
       if ((r & 63u) == 63u && w == 0u) {
@@ -613,7 +613,7 @@ void gbb_barrier(uint G) {
     } else {
       uint spins = 0u;
       while (atomicAdd(out_buf[1], 0u) == gen) {
-        if (++spins > 131072u) { atomicOr(out_buf[2], 1u); break; }
+        if (++spins > 32768u) { atomicOr(out_buf[2], 1u); break; }
       }
     }
   }
