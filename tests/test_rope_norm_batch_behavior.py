@@ -50,7 +50,13 @@ CONFIG = {
 def _qwen3_source() -> str:
     spec = importlib.util.find_spec("mlx_lm.models.qwen3")
     assert spec is not None and spec.origin is not None, "mlx_lm qwen3 not installed"
-    return Path(spec.origin).read_text()
+    src = Path(spec.origin).read_text()
+    assert "MLX_OMARCHY_ROPE_NORM_FUSE" not in src, (
+        "installed mlx_lm qwen3.py is already rope-norm patched; this test "
+        "needs the stock 0.31.3 file (reinstall mlx-lm==0.31.3 --no-deps) "
+        f"or its baseline is meaningless: {spec.origin}"
+    )
+    return src
 
 
 def _exec_qwen3(source: str, name: str) -> types.ModuleType:
