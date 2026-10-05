@@ -11764,6 +11764,10 @@ bool GreedyQuantizedArgmax::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }
 
+bool DsaIndexerScores::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
 // GLM DSA fused indexer scores, shaders/dsa_indexer.comp. One dispatch
 // per (batch, query-row) tile computes
 //   OUT[b,0,l,k] = sum_h max(sum_d Q[b,h,l,d]*K[b,0,k,d], 0) * W[b,l,h]
