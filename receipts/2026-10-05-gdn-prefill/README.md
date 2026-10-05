@@ -189,3 +189,29 @@ the stage table readout is (arm1_fastop - stubN_fastop) per chunk =
 H294 note: BATCH2 measured -0.6% on jwm1 (7.932 -> 7.884 ms/call) — below the
 bar; arms 3/4 are the live question (the hoist moves work BETWEEN dispatches,
 the diet only removed barriers).
+
+## Subgroup-sync variant batch3 (MLX_OMARCHY_GDN_SGSYNC) — on the ablate branch
+
+With 32 KiB shared per core and 32000 B per workgroup, the residency on
+both the M2 (G14C) and jwm1 (G13G) is EXACTLY 1 workgroup per core
+(floor(32768/32000) = 1). Registers don't bind below 24 WGs/core
+(floor(3072/threads_per_WG) = 24; threads/WG = 128). On G13G the 64 WGs
+therefore run in 8 sequential waves: wall 8.14 ms / layer per T=512 means
+each wave pays ~1.02 ms; per-WG serial chunk latency = 15.97 us.
+
+Every shared region this kernel touches is indexed [sg]: s_state, s_k/s_kg/s_q/s_qg
+double-buffered [parity][sg], kgc_all[sg], v_s[sg], rt_a[sg], rt_b[sg],
+gamma_s/beta_s[sg]. Downgrading every per-chunk workgroup barrier() to
+subgroupBarrier() (already used in the state waves) lets the four simdgroups
+run their round-trip chains independently. With 1 WG/core residency the
+4-way overlap is the only latency-hiding in the wave — exactly the lever
+H294's measurement opens.
+
+Branch: agent/GdnPrefill2-ablate @ e8e9efd7e (diet + hoist + batch3 + stubs +
+jwm1 4-arm command); default OFF for every new variant.
+
+The decode-side bar of the per-WG latency 15.97 us is what to chase next
+on G13G, with the 8-wave arithmetic: ~16 us/chunk per WG × 8 waves = the
+123 us observation. If batch3 lets the 4 simgs overlap their RT chains,
+the per-WG serial falls to ~6-8 us/chunk → wall ~55-65 us ≈ macOS Metal
+parity — a likely >1.5% bar on T=512.
