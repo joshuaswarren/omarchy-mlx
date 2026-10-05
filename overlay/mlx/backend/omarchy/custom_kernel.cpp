@@ -24,6 +24,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -197,10 +198,35 @@ void translate_types(std::string& code) {
       // `short erow[CAP]`), so the int-range mapping is value-exact.
       {"short", "int"},
       {"ushort", "uint"},
+      // size_t locals (oMLX GDN chunk kernels: 'const size_t row =
+      // (size_t)Hk * Dk') hold buffer offsets; the uint mapping is
+      // value-exact for every offset below 4 GiB, and the old
+      // blanket \bsize_t\b refusal blocked whole kernels that only
+      // used size_t for scalar index arithmetic.
+      {"size_t", "uint"},
       {"half", "float16_t"},
   };
   for (const auto& [from, to] : replacements) {
     replace_word(code, from, to);
+  }
+  // Metal's generic vec<T,N> (template kernels parameterized on the
+  // element type, e.g. 'const device vec<T,4>*' instantiated with
+  // bfloat16_t) maps to the GLSL vector of the promoted element — the
+  // bfloat16_t->float promotion above has already run, so the float
+  // forms cover the bf16 instantiation.
+  for (const auto& [from, to] : std::vector<std::pair<std::string,
+                                                     std::string>>{
+           {"vec<float,4>", "vec4"},
+           {"vec<float,3>", "vec3"},
+           {"vec<float,2>", "vec2"},
+           {"vec<int,4>", "ivec4"},
+           {"vec<int,3>", "ivec3"},
+           {"vec<int,2>", "ivec2"},
+           {"vec<uint,4>", "uvec4"},
+           {"vec<uint,3>", "uvec3"},
+           {"vec<uint,2>", "uvec2"},
+       }) {
+    replace_all(code, from, to);
   }
   code = std::regex_replace(
       code,
@@ -325,7 +351,8 @@ void translate_c_style_casts(std::string& code) {
 //      never silently mis-index.
 void translate_device_pointer_aliases(
     std::string& body,
-    const std::vector<Parameter>& parameters) {
+    const std::vector<Parameter>& parameters,
+    std::string& prologue_helpers) {
   // Three rigid per-order declaration patterns. GCC's ECMAScript engine
   // mis-binds groups when an alternation and optional const are combined
   // (it shifted the type/name groups by one on
@@ -344,16 +371,23 @@ void translate_device_pointer_aliases(
     std::string offset;
   };
   std::unordered_map<std::string, Alias> aliases;
+  std::unordered_set<std::string> vector_aliases;
   auto parameter_exists = [&](const std::string& name) {
     return std::any_of(
         parameters.begin(), parameters.end(),
         [&](const Parameter& parameter) { return parameter.name == name; });
   };
-  // Vector pointees change indexing granularity; reject by name.
+  // Vector pointees change indexing granularity; READ aliases of
+  // 4-element bf16 vectors are supported via the _mlx_bf16_to_float4
+  // helper (one alias index = four consecutive bf16 elements widened
+  // to a float vec4 — the 'float4(Kt4[d])' idiom in the oMLX GDN chunk
+  // kernels). Vector WRITES and other vector types still refuse: the
+  // elementwise scatter has no consumer here and must fail loudly.
   auto is_vector_type = [](const std::string& type) {
     return !type.empty() && type.find_first_of("234", type.size() - 1) ==
         type.size() - 1;
   };
+  bool vector_read_helpers = false;
   bool progressed = true;
   while (progressed) {
     progressed = false;
@@ -392,10 +426,33 @@ void translate_device_pointer_aliases(
               "implemented for the Omarchy Vulkan backend");
         }
         if (is_vector_type(type)) {
-          throw std::runtime_error(
-              "unsupported MSL feature `device pointer alias of vector type "
-              "`" + type + "*` is not implemented for the Omarchy Vulkan "
-              "backend");
+          // vec4-of-bf16 READ aliases are supported through the
+          // _mlx_bf16_to_float4 helper (below, at the use-rewrite);
+          // every other vector alias (writes, non-4 widths, non-bf16
+          // bases the helper cannot serve) still refuses by name.
+          const Alias probe{base_is_alias ? aliases[base].base : base,
+                            base_is_alias ? aliases[base].offset : offset};
+          const auto base_param = std::find_if(
+              parameters.begin(), parameters.end(),
+              [&](const Parameter& parameter) {
+                return parameter.name == probe.base;
+              });
+          const bool bf16_base = base_is_parameter &&
+              base_param != parameters.end() &&
+              base_param->type == "bfloat16_t";
+          if (type != "vec4" || !bf16_base) {
+            throw std::runtime_error(
+                "unsupported MSL feature `device pointer alias of vector type "
+                "`" + type + "*` is not implemented for the Omarchy Vulkan "
+                "backend");
+          }
+          aliases[name] = {probe.base, probe.offset};
+          // Mark as a vector alias: the use-rewrite emits the helper.
+          vector_aliases.insert(name);
+          body.replace(
+              static_cast<size_t>(it->position()), it->length(), "");
+          progressed = true;
+          break;  // iterators invalidated by the erase; rescan
         }
         if (base_is_alias) {
           const auto& parent = aliases[base];
@@ -415,7 +472,104 @@ void translate_device_pointer_aliases(
     }
   }
   for (const auto& [name, alias] : aliases) {
+    const bool is_vector_alias = vector_aliases.count(name) > 0;
     size_t search_from = 0;
+    // First: scalar-constructor casts on the alias — `float(NAME)`,
+    // `int(NAME)`, etc. (the Qwen3.5 GDN chunk kernels: `float(U0_o)`,
+    // `(float)U0_o[(size_t)j * Dv + d]`). Two forms:
+    //   (a) functional cast: `T(NAME)`, optionally with whitespace.
+    //       Rewrite to `T( base[(off)+0] )` (a first-element read).
+    //   (b) C-style cast over an indexed use: `(T)NAME[i]`.
+    //       Strip the `(T)` prefix so the indexed path below rewrites
+    //       `NAME[i]` normally; the cast stays wrapping the resulting
+    //       `base[(off)+i]` expression.
+    // The detection walks backward from the position right after NAME:
+    //   - if the next non-whitespace char is `(` and the chars before it
+    //     form a type token, this is a functional cast (a);
+    //   - if NAME is followed by `[`, the chars before NAME form a
+    //     parenthesised type token, and the chars immediately before
+    //     the `(` are `(` and a type token, this is a C-style cast
+    //     over an indexed use (b).
+    size_t p = 0;
+    while (true) {
+      const auto pos = body.find(name, p);
+      if (pos == std::string::npos) break;
+      p = pos + name.size();
+      const size_t after_name = pos + name.size();
+      while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+      if (p >= body.size()) continue;
+      if (body[p] == '(') {
+        // (a) functional cast
+        const auto close = matching_delimiter(body, p, '(', ')');
+        size_t e = pos;
+        while (e > 0 && (body[e - 1] == ' ' || body[e - 1] == '\t' ||
+                           body[e - 1] == '\n' || body[e - 1] == '\r'))
+          e--;
+        size_t tend = e;
+        while (e > 0 &&
+               (std::isalnum(static_cast<unsigned char>(body[e - 1])) ||
+                body[e - 1] == '_'))
+          e--;
+        if (e >= tend) continue;
+        if (e > 0 && (std::isalnum(static_cast<unsigned char>(body[e - 1])) ||
+                      body[e - 1] == '_'))
+          continue;
+        if (tend < body.size() &&
+            (std::isalnum(static_cast<unsigned char>(body[tend])) ||
+             body[tend] == '_' || body[tend] == '(' || body[tend] == '['))
+          continue;
+        const std::string cast_name = body.substr(e, tend - e);
+        body.replace(
+            e, close - e + 1,
+            cast_name + "(" + alias.base + "[(" + alias.offset + ") + 0u])");
+        const std::string repl =
+            cast_name + "(" + alias.base + "[(" + alias.offset + ") + 0u])";
+        p = e + repl.size();
+        continue;
+      }
+      if (body[p] == '[') {
+        // possibly (b) C-style cast `(T)NAME[i]`. Walk back past the
+        // type token then look for the open paren (skipping anything
+        // non-alphanumeric between them: e.g. `)` for the type's
+        // closing paren, or a template like `vec<T,4>`).
+        size_t paren = pos;
+        while (paren > 0 && (body[paren - 1] == ' ' || body[paren - 1] == '\t'))
+          paren--;
+        // skip any non-alnum chars between the type and '('
+        // (e.g. ')' of `(T)`, '>' of `vec<T,4>`, whitespace).
+        while (paren > 0 &&
+               !std::isalnum(static_cast<unsigned char>(body[paren - 1])) &&
+               body[paren - 1] != '(')
+          paren--;
+        // eat the type token (alnum / underscore)
+        while (paren > 0 &&
+               (std::isalnum(static_cast<unsigned char>(body[paren - 1])) ||
+                body[paren - 1] == '_'))
+          paren--;
+        // skip whitespace between the type token and '('
+        while (paren > 0 && (body[paren - 1] == ' ' || body[paren - 1] == '\t'))
+          paren--;
+        if (paren == 0 || body[paren - 1] != '(') continue;
+        const size_t open_paren = paren - 1;
+        const size_t close_paren = body.find(')', open_paren + 1);
+        if (close_paren == std::string::npos ||
+            close_paren > pos /* closing ')' must be before NAME */)
+          continue;
+        // type token between '(' and ')'
+        std::string t = trim(body.substr(open_paren + 1, close_paren - open_paren - 1));
+        if (t.empty()) continue;
+        if (!(std::isalnum(static_cast<unsigned char>(t.front())) || t.front() == '_') ||
+            !(std::isalnum(static_cast<unsigned char>(t.back())) || t.back() == '_'))
+          continue;
+        // strip the cast '(T)': from open_paren to close_paren inclusive
+        body.erase(open_paren, close_paren - open_paren + 1);
+        p = pos - (close_paren - open_paren + 1);  // rescan at NAME start
+        continue;
+      }
+      // not a cast form: handled by the indexed / bare-use path below.
+    }
+    // Then: indexed uses and bare (non-cast) uses follow the existing
+    // rewrite path below.
     while (true) {
       const auto position = body.find(name, search_from);
       if (position == std::string::npos) {
@@ -450,11 +604,33 @@ void translate_device_pointer_aliases(
       }
       const auto close = matching_delimiter(body, after, '[', ']');
       const std::string inner = body.substr(after + 1, close - after - 1);
-      const std::string replacement =
-          alias.base + "[(" + alias.offset + ") + (" + inner + ")]";
+      std::string replacement;
+      if (is_vector_alias) {
+        // One alias index spans four consecutive bf16 elements: widen
+        // them to a float vec4 (the float4(Kt4[d]) read idiom).
+        vector_read_helpers = true;
+        replacement = "_mlx_bf16_to_float4(" + alias.base + "[(" +
+            alias.offset + ") + (4u * (" + inner + "))], " + alias.base +
+            "[( " + alias.offset + ") + (4u * (" + inner + ")) + 1u], " +
+            alias.base + "[(" + alias.offset + ") + (4u * (" + inner +
+            ")) + 2u], " + alias.base + "[(" + alias.offset +
+            ") + (4u * (" + inner + ")) + 3u])";
+      } else {
+        replacement = alias.base + "[(" + alias.offset + ") + (" + inner +
+            ")]";
+      }
       body.replace(position, close - position + 1, replacement);
       search_from = position + replacement.size();
     }
+  }
+  if (vector_read_helpers) {
+    // Emitted into the GLSL prologue next to the other bf16 helpers
+    // (they define _mlx_bf16_to_float, which this helper calls).
+    prologue_helpers =
+        "vec4 _mlx_bf16_to_float4(uint16_t a, uint16_t b, uint16_t c, "
+        "uint16_t d) { return vec4(_mlx_bf16_to_float(a), "
+        "_mlx_bf16_to_float(b), _mlx_bf16_to_float(c), "
+        "_mlx_bf16_to_float(d)); }\n";
   }
 }
 
@@ -841,7 +1017,8 @@ Translation translate_msl(
   replace_word(body, "constexpr", "const");
   translate_types(body);
   translate_c_style_casts(body);
-  translate_device_pointer_aliases(body, parameters);
+  std::string vector_alias_helpers;
+  translate_device_pointer_aliases(body, parameters, vector_alias_helpers);
 
   // MSL implicitly narrows/widens in scalar declarations; GLSL 460
   // rejects implicit conversions. Wrap const scalar-declaration
@@ -924,12 +1101,13 @@ Translation translate_msl(
     needs_bfloat = true;
   }
 
-  // Any surviving pointer declaration or pointer arithmetic has no GLSL
-  // translation; fail by name rather than emit a broken shader.
+  // Any surviving pointer declaration has no GLSL translation; fail by
+  // name rather than emit a broken shader. (size_t is mapped to uint in
+  // translate_types, so it no longer trips this guard — the oMLX GDN
+  // chunk kernels use size_t for scalar offsets throughout.)
   if (std::regex_search(
           body,
-          std::regex(
-              R"(const\s+[A-Za-z_][A-Za-z0-9_]*\s*\*|\bsize_t\b)"))) {
+          std::regex(R"(const\s+[A-Za-z_][A-Za-z0-9_]*\s*\*)"))) {
     throw std::runtime_error(
         "unsupported MSL feature `device pointer arithmetic` is not "
         "implemented for the Omarchy Vulkan backend");
@@ -1164,7 +1342,7 @@ Translation translate_msl(
          << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
          << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n";
   }
-  glsl << header << "\n" << element_helpers << condition_helpers << macros;
+  glsl << header << "\n" << element_helpers << vector_alias_helpers << condition_helpers << macros;
   glsl << "void main() {\n"
        << "if (gl_GlobalInvocationID.x >= " << grid_x
        << "u || gl_GlobalInvocationID.y >= " << grid_y
