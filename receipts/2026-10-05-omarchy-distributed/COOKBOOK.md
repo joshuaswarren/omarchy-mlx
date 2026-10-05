@@ -44,7 +44,13 @@ host-side byte movement over TCP. Verified on the wired path with M2 MLX
 
 ## Queue-safe start handshake (gpu-turn hosts)
 
-- The GPU-side ticket script writes a marker file (e.g.
+- Prefer the **reversed handshake** when only one side is queue-gated: start
+  the unqueued rank first, confirm it is LISTENING (`lsof -iTCP:<port>`), then
+  submit the gpu-turn ticket for the gated rank. The ring gives a rank only
+  ~31 s of connect retries (5 attempts, 1–16 s backoff), so peer-start latency
+  must be removed from that budget, not covered by it.
+- Alternative when both sides need coordination: the GPU-side ticket script
+  writes a marker file (e.g.
   `/var/tmp/od-ring-ready`) the moment it acquires the lock, then starts its
   rank with its own accept/connect deadline (120 s observed sufficient).
 - A dev-box poller (5 s interval, hard cap) waits for the marker over ssh and
@@ -54,6 +60,17 @@ host-side byte movement over TCP. Verified on the wired path with M2 MLX
   `-e trace=connect,accept,accept4,bind,listen` and a tcpdump on the peer's
   port give connect/accept evidence. Distinct port pairs per attempt avoid
   TIME_WAIT refusals.
+
+## mlx-lm pipeline notes
+
+- `sharded_load` accepts a model only if the loaded model exposes
+  `.model.pipeline` (PipelineMixin). In mlx-lm 0.31.3 that is deepseek_v2,
+  deepseek_v3, glm4_moe, glm4_moe_lite, and ministral3 model_type — NOT
+  qwen2/qwen3, and not repos whose `model_type` is the mistral3 VLM wrapper
+  (e.g. the mlx-community Ministral-3-8B-Instruct-2512-4bit repo).
+- Verified end-to-end 2026-10-05: macstudio (stock 0.32.2) rank 0 + M2
+  (Omarchy wheel) rank 1, DeepSeek-Coder-V2-Lite-Instruct-4bit, greedy output
+  byte-identical on both ranks and equal to the M2 single-host baseline.
 
 ## Known upstream limits (do not claim these work)
 
