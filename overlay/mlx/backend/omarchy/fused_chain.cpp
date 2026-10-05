@@ -1903,12 +1903,13 @@ bool fused_gemv_swiglu_enabled() {
        env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
 }
 
-// MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0 keeps the grouped GEMV planner at
-// the strict single-row fence (q_len 2..16 composes); on by default.
+// MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1 opts the grouped GEMV planner into
+// rows 2..16 (the token column; OFF by default on AGX pending the
+// data-dependent divergence bisect).
 bool gemv_token_multi_enabled() {
-  return fused_gemv_enabled() &&
-      (std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI") == nullptr ||
-       env_flag("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI"));
+  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+  return fused_gemv_enabled() && env != nullptr && env[0] != '\0' &&
+      std::strcmp(env, "0") != 0;
 }
 
 bool fused_trio_enabled() {
