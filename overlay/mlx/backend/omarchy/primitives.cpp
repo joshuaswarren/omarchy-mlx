@@ -7586,19 +7586,30 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         }
       }
       if (!env_routed) {
-        // M16 route: the padded-stride (LDS_PAD) twin is the default
-        // (bank-conflict fix; measured -11% q16 verify on the M2,
-        // digest-equal, receipts/2026-10-05-midm-forward). The unpadded
-        // shipped blob remains reachable via
-        // MLX_OMARCHY_QMM_M16_NO_LDSPAD=1 for A/B. CHUNK_DEQ is
-        // env-gated (measured neutral at q16, worse combined with pad).
+        // M16 route: LDS_PAD (bank-conflict fix) is default on G14C
+        // (M2 Max; measured -11% q16 verify), unpadded on G13C and
+        // other parts (measured +1.1% marginal regression on G13C).
+        // Chip-conditional by device_name; env overrides for A/B.
+        // Digest-equal on both parts.
         const bool m16_fulln = full_n && coopmat_rows == 16u;
+        const std::string m16_dev_name =
+            encoder.device().capabilities().device_name;
+        const bool is_g14c =
+            m16_dev_name.find("G14C") != std::string::npos;
+        const bool default_pad = is_g14c;
         const char* m16_no_pad = m16_fulln
             ? std::getenv("MLX_OMARCHY_QMM_M16_NO_LDSPAD") : nullptr;
+        const char* m16_force_pad = m16_fulln
+            ? std::getenv("MLX_OMARCHY_QMM_M16_LDSPAD") : nullptr;
         const char* m16_chunk = m16_fulln
             ? std::getenv("MLX_OMARCHY_QMM_M16_CHUNK") : nullptr;
-        const bool m16_use_pad = m16_no_pad == nullptr ||
-            m16_no_pad[0] == '0';
+        bool m16_use_pad = default_pad;
+        if (m16_no_pad != nullptr && m16_no_pad[0] == '1') {
+          m16_use_pad = false;
+        }
+        if (m16_force_pad != nullptr && m16_force_pad[0] == '1') {
+          m16_use_pad = true;
+        }
         const bool m16_use_chunk = m16_chunk != nullptr &&
             m16_chunk[0] == '1';
         if (m16_fulln && m16_use_pad && m16_use_chunk) {
