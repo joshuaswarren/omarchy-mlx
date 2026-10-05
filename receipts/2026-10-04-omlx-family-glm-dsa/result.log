@@ -1,0 +1,79 @@
+== FamGlmDsa M2 correctness run ==
+host: jw14m2-linux
+date -u: Mon Oct  5 00:10:39 UTC 2026
+python: ~/dsa-fam-correctness/venv/bin/python
+mlx: 0.32.4.dev202610042317+b8af62c
+metal.is_available(): False
+default_device: Device(gpu, 0)
+== prefill parity grid ==
+[smoke-h32-bf16] B=1 H=32 L=64 K=64 dtype=mlx.core.bfloat16 causal=True mask_ratio=0
+  parity: composed=1.431e-01 omarchy=1.431e-01 inter=0.000e+00
+  speed:  composed=0.43ms omarchy=0.47ms ratio=1.083x
+[K=4L-h32-bf16-small] B=1 H=32 L=64 K=256 dtype=mlx.core.bfloat16 causal=True mask_ratio=0
+  parity: composed=1.110e-01 omarchy=1.110e-01 inter=0.000e+00
+  speed:  composed=0.73ms omarchy=0.85ms ratio=1.165x
+[small-h32-bf16] B=1 H=32 L=128 K=128 dtype=mlx.core.bfloat16 causal=True mask_ratio=0
+  parity: composed=1.036e-01 omarchy=1.036e-01 inter=0.000e+00
+  speed:  composed=1.04ms omarchy=1.05ms ratio=1.007x
+[K=4L-h32-bf16] B=1 H=32 L=128 K=512 dtype=mlx.core.bfloat16 causal=True mask_ratio=0
+  parity: composed=1.293e-01 omarchy=1.293e-01 inter=0.000e+00
+  speed:  composed=1.31ms omarchy=1.33ms ratio=1.012x
+[L256-h32-bf16] B=1 H=32 L=256 K=256 dtype=mlx.core.bfloat16 causal=True mask_ratio=0
+  parity: composed=1.037e-01 omarchy=1.037e-01 inter=0.000e+00
+  speed:  composed=1.32ms omarchy=1.33ms ratio=1.012x
+[smoke-h32-fp16] B=1 H=32 L=64 K=64 dtype=mlx.core.float16 causal=True mask_ratio=0
+  parity: composed=1.301e-02 omarchy=1.301e-02 inter=0.000e+00
+  speed:  composed=0.59ms omarchy=0.65ms ratio=1.113x
+[small-h32-fp16] B=1 H=32 L=128 K=128 dtype=mlx.core.float16 causal=True mask_ratio=0
+  parity: composed=1.632e-02 omarchy=1.632e-02 inter=0.000e+00
+  speed:  composed=1.07ms omarchy=1.09ms ratio=1.018x
+[pooled-ratio-16] B=1 H=32 L=256 K=256 dtype=mlx.core.bfloat16 causal=True mask_ratio=16
+  parity: composed=9.065e-02 omarchy=9.065e-02 inter=0.000e+00
+  speed:  composed=1.31ms omarchy=1.81ms ratio=1.382x
+
+Wrote 8 rows to parity_speed_m2.csv
+== large-shape parity (hang on lavapipe; real GPU here) ==
+[L1024-K1024-h32] B=1 H=32 L=1024 K=1024
+  diff=0.000e+00 finite=True fused=33ms composed=18ms
+[L1024-K1024-h64] B=1 H=64 L=1024 K=1024
+  diff=0.000e+00 finite=True fused=40ms composed=24ms
+[L1024-K4096-h32] B=1 H=32 L=1024 K=4096
+  diff=0.000e+00 finite=True fused=74ms composed=46ms
+[L1024-K4096-h64] B=1 H=64 L=1024 K=4096
+  diff=0.000e+00 finite=True fused=139ms composed=87ms
+[L512-K4096-h32] B=1 H=32 L=512 K=4096
+  diff=0.000e+00 finite=True fused=21ms composed=19ms
+[L1024-K16384-h32] B=1 H=32 L=1024 K=16384
+  diff=0.000e+00 finite=True fused=285ms composed=140ms
+
+Wrote 6 rows to large_parity_m2.csv
+== decode parity grid ==
+[S1024-bf16] B=1 S=1024 dtype=mlx.core.bfloat16 fp32_scores=False
+  parity vs fp32-ref: f32chain=0.000e+00 composed=1.250e-01 inter=1.250e-01
+  speed: composed=0.4ms f32chain=0.9ms ratio=2.250x
+[S4096-bf16] B=1 S=4096 dtype=mlx.core.bfloat16 fp32_scores=False
+  parity vs fp32-ref: f32chain=0.000e+00 composed=1.250e-01 inter=1.250e-01
+  speed: composed=0.4ms f32chain=1.2ms ratio=2.963x
+[S16384-bf16] B=1 S=16384 dtype=mlx.core.bfloat16 fp32_scores=False
+  parity vs fp32-ref: f32chain=0.000e+00 composed=1.250e-01 inter=1.250e-01
+  speed: composed=1.1ms f32chain=3.2ms ratio=2.818x
+[S65536-bf16] B=1 S=65536 dtype=mlx.core.bfloat16 fp32_scores=False
+  parity vs fp32-ref: f32chain=0.000e+00 composed=2.500e-01 inter=2.500e-01
+  speed: composed=2.8ms f32chain=11.2ms ratio=4.038x
+[S4096-bf16-of32] B=1 S=4096 dtype=mlx.core.bfloat16 fp32_scores=True
+  parity vs fp32-ref: f32chain=5.722e-06 composed=9.524e-02 inter=9.524e-02
+  speed: composed=0.5ms f32chain=1.0ms ratio=2.223x
+[S4096-fp16] B=1 S=4096 dtype=mlx.core.float16 fp32_scores=False
+  parity vs fp32-ref: f32chain=0.000e+00 composed=1.562e-02 inter=1.562e-02
+  speed: composed=0.9ms f32chain=1.6ms ratio=1.714x
+[S4096-bf16-B2] B=2 S=4096 dtype=mlx.core.bfloat16 fp32_scores=False
+  parity vs fp32-ref: f32chain=0.000e+00 composed=1.250e-01 inter=1.250e-01
+  speed: composed=0.7ms f32chain=1.7ms ratio=2.481x
+
+Wrote 7 rows to decode_parity_m2.csv
+== sparse MLA smoke ==
+topk selection matches sorted top-k: OK
+sparse MLA row 0: max abs diff vs dense slice ref = 9.766e-04
+sparse MLA smoke: OK
+== done ==
+date -u: Mon Oct  5 00:10:43 UTC 2026
