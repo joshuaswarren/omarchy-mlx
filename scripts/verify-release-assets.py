@@ -342,6 +342,10 @@ def main():
     ap.add_argument("--repo-root", default=None,
                     help="repo checkout for receipts/ and git tag "
                          "resolution (default: this script's repo)")
+    ap.add_argument("--platforms", default=None,
+                    help="comma-separated required-platform override for a "
+                         "release that intentionally ships fewer platforms "
+                         "than the stable default (e.g. linux_aarch64)")
     args = ap.parse_args()
     repo_root = Path(args.repo_root) if args.repo_root else \
         Path(__file__).resolve().parent.parent
@@ -425,7 +429,12 @@ def main():
         all_failures += failures
         all_findings += findings
     present = {wheel_platform(w) for w in wheels}
-    missing = [p for p in REQUIRED_PLATFORMS[is_diag] if p not in present]
+    required = ([p.strip() for p in args.platforms.split(",") if p.strip()]
+                if args.platforms else REQUIRED_PLATFORMS[is_diag])
+    if args.platforms:
+        print(f"\n== platform coverage override: required = "
+              f"{', '.join(required)} (recorded in the invocation)")
+    missing = [p for p in required if p not in present]
     if missing:
         where = "; ".join(f"{p} is built on {WHERE_BUILT[p]}"
                           for p in missing)
