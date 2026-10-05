@@ -234,6 +234,21 @@ the same pair+prompts — the offline runtime config differs from the serve
 path (draft window/sink or capture config), worth one look before anyone
 compares acceptance numbers across the two paths.
 
+### Post-MidM A/B (wheel +28c87d5, SDPA rows + qmm token rows 1..8 landed; rows 9..16 still compose)
+
+Ran in the 09:00Z-window ticket (03:07 CDT). **No measurable improvement on
+this path**: plain decode 57.8-58.0 tok/s (was 59-63 on b8af62c); forward
+walls q1 25-27 ms, q4 ~132-136 ms (first rep 218 ms), q8 ~134 ms, q16
+~127 ms — q8 is inside the landed rows-1..8 range yet still costs ~134 ms;
+DFlash block 8: verify 147.6 ms/cycle, 9.39 tok/s (was 146.4/9.76); block
+16: 148.3 ms, 10.0 tok/s (was 148.1/10.01); committed tokens bit-identical
+to all prior runs. Reading: either the fused rows do not engage for this
+model's shapes (GQA 32/8 heads, 4-bit qmm) or the mid-M cost is dispatch
+COUNT/submission overhead, which per-row kernel fusion does not reduce —
+consistent with the flat-vs-M dispatch math above. Numbers for MidM:
+midm_ab.json (+28c87d5 stamp recorded). The full re-check repeats when rows
+9..16 land (then M=16 verify should engage the fused path end to end).
+
 ## Artifacts
 
 - dev box: `/tmp/a7-artifacts/` (16 responses, both server logs, compare.json,
