@@ -377,3 +377,27 @@ a broken hybrid (silent no-op replaces — killed by Main at 13:04Z when
 window E started; my staging had skipped a mkdir which run 3 also needed).
 v3 fixes all three (bundle var, clear_stale.sh guard, mkdir -p +
 os.makedirs) and is the version archived here.
+
+## HOIST default-ON @ 9c9e3ed01 — all gates green (M2, this session)
+
+- pf1145 e2e (bench_decode --raw-prompt, 1145 prompt tokens, 5 alternating
+  pairs): ship 0.662-0.666 s vs hoist 0.650-0.651 s prefill wall = +1.84%
+  median, disjoint in all 5 pairs (route fires: T=1145 >= 512); greedy
+  digests cabb841b008c3bc3 identical in every pair.
+- Kernel-only micro (3 pairs): T=512 37.91/37.97/37.81 vs 32.70/32.81/32.15
+  ms (-13.6% median); T=1024 73.41/73.42/72.84 vs 62.08/62.27/62.24
+  (-15.2%). batch4 alone: -5.9%/-4.9%.
+- Digest gates at depth: d512 9789a28bbbb5723a ==, d1024 208aaf0bbc54093a
+  ==, d2048 fb9cf94fce01f338 == (decode-through-model, same wheel).
+- Captured-operand doctests: batch4 BIT-IDENTICAL 4/4, hoist BIT-IDENTICAL
+  4/4, hoist with a SEEDED NON-ZERO initial state BIT-IDENTICAL 4/4 (the
+  kernel-level state-path proof; zeros init alone does not exercise it).
+- jwm1 (w71 H301): kernel -12.3%/-13.7% at T=512/1024, e2e pf512 +1.27%,
+  sub-512 unchanged, all four pins exact.
+The flip: default ON, dispatch length-gated T >= 512, kill switch
+MLX_OMARCHY_GDN_HOIST=0 restores the shipped single-dispatch route exactly.
+Run-history addendum: the micro/e2e stage needed a recovery ticket after the
+main ticket's micro section died on a missing script (the M2 reboots had
+wiped a staged file) and a separate long-prompt gate ticket — the original
+short-prompt e2e never fired the route (T < 512), so the pf gate above is
+the real e2e evidence.
