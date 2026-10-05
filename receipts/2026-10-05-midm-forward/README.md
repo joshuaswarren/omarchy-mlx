@@ -414,3 +414,29 @@ Token16 single-pass (the bigger lever) still has the AGX raw-output
 divergence; the bisect levers remain ROWS_PER_SLOT=1, per-row
 if-bodies, token12 twin. All shader-side - dev-box work in
 progress (the rest of the budget is now accounted for).
+
+
+## Rows 9..16 doctest + token8 finding (wheel 1bec7bd, Apple GPU)
+
+Fence lifted to 16 (two-pass active) + the tail fix (pass 2
+matrix_m = rows - 8; see 1bec7bd4). Probe grid tokens 2..16.
+
+| tokens | k=896 n=512 | k=448 n=130 |
+|---|---|---|
+| 2,3,4,5,8 | PASS | PASS |
+| 9 | PASS | PASS |
+| 12 | PASS | PASS |
+| 15 | **FAIL row=4 out=0 col=291 n_diff=1** | PASS |
+| 16 | PASS | PASS |
+
+The tokens=15 failure is at row 4 - PASS-1 territory (token8 kernel,
+rows 0-7). Pass 1 dispatch parameters at tokens=15 are byte-identical
+to the tokens=8 run (which passed on different random data). The AGX
+data-dependent divergence is therefore in the TOKEN8 KERNEL ITSELF,
+not token16-specific; prior rows<=8 green passes used data that did
+not trigger it. Two runs produced the identical element
+(deterministic per data set).
+
+Recommendation: gate the whole qmm token route off by default until
+the AGX miscompilation is root-caused; the composed route is correct
+at every M.
