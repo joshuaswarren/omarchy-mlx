@@ -13184,14 +13184,22 @@ void ScaledDotProductAttention::eval_gpu(
       {64, 256, 2048}, {128, 1, 7168}, {256, 12, 7168}};
   // FamDecodeFast: hd256 keys past the one-pass window ride the bf16
   // two-pass split-KV pair instead of falling to the ~10-dispatch
-  // f32-score composition. The pair's shared need is only the pass-2
-  // 32x32 f32 transpose, so it engages on devices (software drivers
-  // included) where the one-pass arm's 7168-key f32 stream does not fit.
+  // f32-score composition. The pair uses no subgroup operations (they
+  // must run where subgroup_size != 32, e.g. software drivers); the
+  // shared need is pass 1's 32-float score reduce, so it engages on
+  // devices where the one-pass arm's 7168-key f32 stream does not fit.
   // Unlike the one-pass arm it reorders f32 sums against the
   // composition, so it is a numerics-gate route, not a digest-neutral
-  // one. Block policy is decode_fast's 'd'-GPU formula (~256-key
-  // contiguous chunks, 32-64 blocks, capped at 256).
-  constexpr uint32_t kTwoPassBf16Hd256SharedBytes = 32u * 32u * sizeof(float);
+  // one. Block policy is decode_fast's 'd'-GPU formula (~256-key chunks,
+  // 32-64 blocks) grown as needed to keep every chunk inside the shared
+  // stream (258 entries), capped at 4096.
+  // Opt-in until the boundary-shape NaN is root-caused (dev lavapipe:
+  // NaN in the last kv group's dims for k just past the window; see
+  // receipts/2026-10-04-omlx-family-decode_fast). Default OFF protects
+  // the token stream; the ledger and the parity test force it on.
+  const bool twopass_env = omarchy::env_flag(
+      "MLX_OMARCHY_SDPA_DECODE_TWOPASS_BF16");
+  constexpr uint32_t kTwoPassBf16Hd256SharedBytes = 128u;
   const bool decode_bf16_twopass_ready =
       decode_caps.max_compute_work_group_invocations >= 1024u &&
       decode_caps.max_compute_work_group_size[0] >= 1024u &&
@@ -13201,7 +13209,12 @@ void ScaledDotProductAttention::eval_gpu(
   // chunks per block, 32-64 blocks for parallelism, capped at 256.
   auto bf16_two_pass_blocks = [](uint32_t k_len) {
     uint32_t b = (((k_len + 255u) / 256u + 31u) / 32u) * 32u;
-    return std::min(256u, std::max(k_len >= 4096u ? 64u : 32u, b));
+    // Pass 1's shared score stream holds 258 entries, so the count also
+    // grows when the policy's chunk would not fit it.
+    if ((k_len + b - 1u) / b > 258u) {
+      b = (((k_len + 257u) / 258u + 31u) / 32u) * 32u;
+    }
+    return std::min(4096u, std::max(k_len >= 4096u ? 64u : 32u, b));
   };
   // Perf-only k window: bitwise identity holds for every k (both routes
   // store identical words), so the boundary cannot move a token - only the
@@ -13253,7 +13266,8 @@ void ScaledDotProductAttention::eval_gpu(
           (k_len >= decode_window->k_min &&
            (k_len <= decode_window->k_max
                ? decode_bf16_ready
-               : (head_dim == 256 && decode_bf16_twopass_ready)))) &&
+               : (head_dim == 256 && decode_bf16_twopass_ready &&
+                  twopass_env)))) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
     // f16 lanes carry SDPA_DIM/64 dim pairs; the bf16 arm's shared layout
@@ -13357,12 +13371,10 @@ void ScaledDotProductAttention::eval_gpu(
       // contract is the f32-score composition within f32 accumulation
       // order (numerics-gate route, engaged past kTwoPassBf16Hd256Floor).
       const uint32_t blocks = params.flags;
-      // Scratch words per head: blocks max + blocks sum +
-      // blocks*32*PAIRS*2 f32 output-pair words, the bf16
-      // SCRATCH_STRIDE_FACTOR layout in the shaders.
-      const uint64_t scratch_words = static_cast<uint64_t>(heads) * blocks *
-          (2u +
-           2u * 32u * (static_cast<uint32_t>(head_dim) / 64u));
+      // Scratch words per head: blocks max + blocks sum + blocks*head_dim
+      // f32 output words, the bf16 pass 1 [max, sum, o[head_dim]] layout.
+      const uint64_t scratch_words =
+          static_cast<uint64_t>(heads) * blocks * (2u + head_dim);
       array scratch(
           Shape{static_cast<int>(scratch_words)}, uint32, nullptr, {});
       scratch.set_data(allocate_omarchy(scratch.nbytes()));

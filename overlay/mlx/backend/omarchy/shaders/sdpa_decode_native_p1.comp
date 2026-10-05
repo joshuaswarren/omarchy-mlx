@@ -40,8 +40,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
+#ifdef BF16_IO
+layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+#else
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-
+#endif
 #ifdef BF16_IO
 layout(set = 0, binding = 0, std430) readonly buffer Query {
   uint16_t values[];
@@ -125,7 +128,22 @@ float native_exp(float x) {
   return exp(x);
 }
 
+// The bf16 leg runs on any device (lavapipe reports subgroup_size=8, and
+// a per-key cross-thread reduce was miscompiled there), so it borrows the
+// one-pass arm's phase structure at block scale instead: serial full-dot
+// scores into a shared stream, the same strided max/sum trees, and one
+// thread per output dim. Scratch per (head, block) is [max, sum, o[256]]
+// = 2 + SDPA_DIM words - pass 2 folds the blocks. The f16 arm keeps its
+// subgroupAdd path and its subgroup_size==32 gate.
+#ifdef BF16_IO
+shared float s_qrow[SDPA_DIM];
+shared float s_block[258];
+shared float s_tree[256];
+#endif
+
 void main() {
+#ifndef BF16_IO
+
   uint lane = gl_SubgroupInvocationID;
   uint head = gl_WorkGroupID.x;
   uint block = gl_WorkGroupID.y;
@@ -196,15 +214,125 @@ void main() {
         floatBitsToUint(sum_exp_score);
   }
   for (uint p = 0u; p < PAIRS; ++p) {
-#ifdef BF16_IO
-    uint pair_base = head_base + 2u * blocks +
-        (p * blocks + block) * (2u * SIMD) + 2u * lane;
-    scratch_data.values[pair_base] = floatBitsToUint(o0[p]);
-    scratch_data.values[pair_base + 1u] = floatBitsToUint(o1[p]);
-#else
     scratch_data.values[head_base + 2u * blocks +
                         (p * blocks + block) * SIMD + lane] =
         packHalf2x16(vec2(o0[p], o1[p]));
-#endif
   }
 }
+#else
+  uint thread = gl_LocalInvocationID.x;
+  uint head = gl_WorkGroupID.x;
+  uint block = gl_WorkGroupID.y;
+  uint blocks = params.flags;
+  uint repeats = params.matrix_m / params.matrix_n;
+  uint kv_head = head / repeats;
+  uint k_len = params.matrix_k;
+  uint chunk = (k_len + blocks - 1u) / blocks;
+
+  if (thread < SDPA_DIM) {
+    s_qrow[thread] = params.alpha * bf16_load(
+        query_data.values[params.lhs_offset +
+            head * params.shape[0] + thread * params.shape[3]]);
+  }
+  barrier();
+
+  // Scores for this block's strided keys: one full-width dot per key,
+  // 16-wide K tiles exactly as the one-pass arm issues them.
+  for (uint i = thread; i < chunk; i += 1024u) {
+    uint key = block + i * blocks;
+    uint k_base = params.rhs_offset + kv_head * params.shape[1] +
+        key * params.shape[2];
+    float accumulator = 0.0;
+    for (uint d = 0u; d < SDPA_DIM; d += 16u) {
+      float kv[16];
+      for (uint e = 0u; e < 16u; ++e) {
+        kv[e] = bf16_load(
+            key_data.values[k_base + (d + e) * params.in_strides[0]]);
+      }
+      for (uint e = 0u; e < 16u; ++e) {
+        accumulator += s_qrow[d + e] * kv[e];
+      }
+    }
+    s_block[i] = accumulator;
+  }
+  barrier();
+
+  // Row max over the block: strided scan then the 256-lane binary tree,
+  // the one-pass arm's code with s_block[i] in place of s_stream[key].
+  if (thread < 256u) {
+    float local_max = uintBitsToFloat(0xff800000u);
+    for (uint i = thread; i < chunk; i += 256u) {
+      float next = s_block[i];
+      if (isnan(next) || next > local_max) {
+        local_max = next;
+      }
+    }
+    s_tree[thread] = local_max;
+  }
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) {
+      s_tree[thread] = max(s_tree[thread], s_tree[thread + stride]);
+    }
+    barrier();
+  }
+  float row_max = s_tree[0];
+  barrier();
+
+  // Denominator: strided sequential exp-sum per lane, then the tree.
+  if (thread < 256u) {
+    float local_sum = 0.0;
+    for (uint i = thread; i < chunk; i += 256u) {
+      local_sum += exp(s_block[i] - row_max);
+    }
+    s_tree[thread] = local_sum;
+  }
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) {
+      s_tree[thread] += s_tree[thread + stride];
+    }
+    barrier();
+  }
+  float block_sum = s_tree[0];
+  barrier();
+
+  // Output dim per thread: ascending-key 16-wide V tiles with exact-zero
+  // tail padding, storing the unnormalized block partial so pass 2 folds
+  // with the exp(max_b - M) factors.
+  uint head_base = head * blocks * (2u + SDPA_DIM);
+  if (thread == 0u) {
+    scratch_data.values[head_base + block] = floatBitsToUint(row_max);
+    scratch_data.values[head_base + blocks + block] =
+        floatBitsToUint(block_sum);
+  }
+  if (thread < SDPA_DIM) {
+    uint d = thread;
+    float accumulator = 0.0;
+    uint i = 0u;
+    uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
+        d * params.in_strides[3];
+    for (; i + 16u <= chunk; i += 16u) {
+      float vv[16];
+      for (uint e = 0u; e < 16u; ++e) {
+        vv[e] = bf16_load(
+            value_data.values[v_base +
+                (block + (i + e) * blocks) * params.in_strides[2]]);
+      }
+      for (uint e = 0u; e < 16u; ++e) {
+        accumulator += exp(s_block[i + e] - row_max) * vv[e];
+      }
+    }
+    for (uint e = 0u; e < 16u; ++e) {
+      uint index = i + e;
+      if (index < chunk) {
+        accumulator += exp(s_block[index] - row_max) *
+            bf16_load(value_data.values[v_base +
+                (block + index * blocks) * params.in_strides[2]]);
+      }
+    }
+    scratch_data.values[head_base + 2u * blocks + block * SDPA_DIM + d] =
+        floatBitsToUint(accumulator);
+  }
+}
+#endif

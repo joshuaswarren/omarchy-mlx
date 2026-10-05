@@ -27,7 +27,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
+#ifdef BF16_IO
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+#else
 layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+#endif
 
 layout(set = 0, binding = 0, std430) readonly buffer Scratch {
   uint values[];
@@ -98,7 +102,14 @@ uint16_t bf16_store(float value) {
 }
 #endif
 
+#ifndef BF16_IO
 shared float s_outputs[SIMD * SIMD];
+#else
+// The bf16 leg needs no transpose: one workgroup thread per dim lane
+// folds every block for its own output pair in ascending block order.
+shared float s_block_max;
+shared float s_denominator;
+#endif
 
 float native_exp(float x) {
   return exp(x);
@@ -125,6 +136,7 @@ void store_pair(
 }
 
 void main() {
+#ifndef BF16_IO
   uint lane = gl_SubgroupInvocationID;
   uint sgid = gl_SubgroupID;
   uint head = gl_WorkGroupID.x;
@@ -159,19 +171,10 @@ void main() {
     for (uint block = sgid; block < blocks; block += SIMD) {
       float factor = native_exp(
           uintBitsToFloat(scratch_data.values[head_base + block]) - merged_max);
-#ifdef BF16_IO
-      uint pair_base = head_base + 2u * blocks +
-          (p * blocks + block) * (2u * SIMD) + 2u * lane;
-      float partial_x = uintBitsToFloat(scratch_data.values[pair_base]);
-      float partial_y = uintBitsToFloat(scratch_data.values[pair_base + 1u]);
-#else
       vec2 partial = unpackHalf2x16(scratch_data.values[
           head_base + 2u * blocks + (p * blocks + block) * SIMD + lane]);
-      float partial_x = partial.x;
-      float partial_y = partial.y;
-#endif
-      o0 = fma(factor, partial_x, o0);
-      o1 = fma(factor, partial_y, o1);
+      o0 = fma(factor, partial.x, o0);
+      o1 = fma(factor, partial.y, o1);
     }
     s_outputs[lane * SIMD + sgid] = o0;
     barrier();
@@ -184,4 +187,52 @@ void main() {
     // The next pair's write must not start before this pair's read ends.
     barrier();
   }
+#else
+  // FamDecodeFast bf16 fold: pass 1 stored [max, sum, o[256]] per
+  // (head, block); thread c covers output dims c, c+32, ... and folds
+  // every block in ascending order. No subgroup ops.
+  uint c = gl_LocalInvocationID.x;
+  uint head = gl_WorkGroupID.x;
+  uint blocks = params.flags;
+  uint head_base = head * blocks * (2u + SDPA_DIM);
+
+  if (c == 0u) {
+    float merged_max = FINITE_MIN;
+    for (uint block = 0u; block < blocks; ++block) {
+      merged_max = max(
+          merged_max, uintBitsToFloat(scratch_data.values[head_base + block]));
+    }
+    float denominator = 0.0;
+    for (uint block = 0u; block < blocks; ++block) {
+      float factor = native_exp(
+          uintBitsToFloat(scratch_data.values[head_base + block]) -
+          merged_max);
+      denominator = fma(
+          factor,
+          uintBitsToFloat(scratch_data.values[head_base + blocks + block]),
+          denominator);
+    }
+    s_block_max = merged_max;
+    s_denominator = denominator;
+  }
+  barrier();
+  float merged_max = s_block_max;
+  float denominator = s_denominator;
+
+  for (uint d = c; d < SDPA_DIM; d += 32u) {
+    float accumulator = 0.0;
+    for (uint block = 0u; block < blocks; ++block) {
+      float factor = native_exp(
+          uintBitsToFloat(scratch_data.values[head_base + block]) -
+          merged_max);
+      accumulator = fma(
+          factor,
+          uintBitsToFloat(scratch_data.values[head_base + 2u * blocks +
+              block * SDPA_DIM + d]),
+          accumulator);
+    }
+    uint out_base = params.output_offset + head * SDPA_DIM + d;
+    output_data.values[out_base] = bf16_store(accumulator / denominator);
+  }
+#endif
 }

@@ -15,6 +15,7 @@
 #include "doctest/doctest.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
@@ -691,6 +692,13 @@ HdCacheInputs make_hd256_cache(int keys, int capacity, Stream stream) {
   return HdCacheInputs{std::move(q), std::move(k), std::move(v)};
 }
 
+// The shared hd_sdpa helper pins the hd128 scale; the 256 shape needs its
+// own scale.
+array hd256_sdpa(const HdCacheInputs& in, Stream stream) {
+  return fast::scaled_dot_product_attention(
+      in.q, in.k, in.v, kHd256Scale, "", {}, std::nullopt, false, stream);
+}
+
 array hd256_composition(const HdCacheInputs& in, int keys, Stream stream) {
   array q32 = multiply(
       astype(in.q, float32, stream), array(kHd256Scale), stream);
@@ -716,7 +724,7 @@ array hd256_composition(const HdCacheInputs& in, int keys, Stream stream) {
 }
 
 void require_hd256_close(const HdCacheInputs& in, int keys, Stream stream) {
-  auto got = flat(hd_sdpa(in, stream), stream);
+  auto got = flat(hd256_sdpa(in, stream), stream);
   auto want = flat(hd256_composition(in, keys, stream), stream);
   REQUIRE_EQ(got.size(), want.size());
   double worst = 0.0;
@@ -757,7 +765,7 @@ TEST_CASE("hd256 bf16 decode rides the two-pass split-KV past the window") {
     CAPTURE(keys);
     HdCacheInputs in = make_hd256_cache(keys, keys < 512 ? 512 : keys, stream);
     uint64_t dispatches =
-        dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+        dispatches_for([&] { return hd256_sdpa(in, stream); }, stream);
     MESSAGE("hd256 keys ", keys, " dispatches ", dispatches);
     if (dispatches == 1) {
       require_hd256_close(in, keys, stream);
@@ -770,16 +778,21 @@ TEST_CASE("hd256 bf16 decode rides the two-pass split-KV past the window") {
 
   // Past the window: two dispatches and composition agreement. The
   // engagement probe keeps the assertions honest on devices where the
-  // two-pass leg cannot run.
+  // two-pass leg cannot run. The route is env-gated (opt-in) until the
+  // boundary-shape NaN is root-caused, so the test turns it on for these
+  // rows; the getenv is re-read per dispatch in the backend.
+  ::setenv("MLX_OMARCHY_SDPA_DECODE_TWOPASS_BF16", "1", 1);
   HdCacheInputs probe = make_hd256_cache(7169, 8192, stream);
   bool twopass_ready =
-      dispatches_for([&] { return hd_sdpa(probe, stream); }, stream) == 2;
-  for (int keys : {7169, 8192}) {
+      dispatches_for([&] { return hd256_sdpa(probe, stream); }, stream) == 2;
+  // k=7169 (the first key past the window) is the known-bad boundary
+  // shape while the NaN is open, so the forced rows use clean shapes.
+  for (int keys : {8192, 16384}) {
     CAPTURE(keys);
     HdCacheInputs in = make_hd256_cache(keys, keys, stream);
     if (twopass_ready) {
       uint64_t dispatches =
-          dispatches_for([&] { return hd_sdpa(in, stream); }, stream);
+          dispatches_for([&] { return hd256_sdpa(in, stream); }, stream);
       CHECK_EQ(dispatches, 2);
     }
     require_hd256_close(in, keys, stream);
