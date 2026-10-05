@@ -215,3 +215,19 @@ on G13G, with the 8-wave arithmetic: ~16 us/chunk per WG × 8 waves = the
 123 us observation. If batch3 lets the 4 simgs overlap their RT chains,
 the per-WG serial falls to ~6-8 us/chunk → wall ~55-65 us ≈ macOS Metal
 parity — a likely >1.5% bar on T=512.
+
+## Build-failure record (H297) and the standing pre-push check
+
+agent/GdnPrefill2-ablate @ aea4f4ce6 did not build on jwm1 (w71, H297):
+CMake passed -DSTUB_NOLOOPK where the stub tests STUB_NO_LOOPK; the sgsync
+selector was spliced into the stub ternary without ':' and its env flag was
+undeclared. Root cause on my side: the sgsync primitives edit failed its own
+anchor assert and the commit landed anyway; and nothing in my flow compiled
+either the shaders (local glslangValidator cannot do cooperative matrix) or
+the C++ before pushing. Fixed @ 85d3d9cac; scripts/check_gdn_variants.sh now
+cross-checks -D names vs shader conditionals and -fsyntax-only compiles the
+overlay primitives.cpp (overlay includes before .work). Both sections green
+on the fix commit; batch3/stub GLSL remains glslc-verifiable only on
+hardware hosts. jwm1 4-arm + stub-sweep protocol unchanged (branch tip
+85d3d9cac supersedes aea4f4ce6 for w71's next window); reconcile with
+deviations.diff when H297 lands.
