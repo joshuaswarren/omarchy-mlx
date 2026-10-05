@@ -927,6 +927,34 @@ Translation translate_msl(
     const std::tuple<int, int, int>& threadgroup,
     size_t output_count,
     int compile_mode) {
+  // Strip MSL comments (// line and /* block */). Comments can contain
+  // Metal keywords ('// One threadgroup per row' in the Qwen3.5 MoE
+  // router kernel) that would trigger the final guard's substring check
+  // even though they are not code. Stripping before all passes also
+  // prevents the type/token replacements from corrupting comment text.
+  {
+    size_t search = 0;
+    while (true) {
+      const auto line_start = body.find("//", search);
+      if (line_start == std::string::npos) break;
+      const auto line_end = body.find('\n', line_start);
+      const auto count = (line_end == std::string::npos)
+                             ? body.size() - line_start
+                             : line_end - line_start;
+      body.erase(line_start, count);
+      search = line_start;
+    }
+    search = 0;
+    while (true) {
+      const auto block_start = body.find("/*", search);
+      if (block_start == std::string::npos) break;
+      const auto block_end = body.find("*/", block_start + 2);
+      if (block_end == std::string::npos) break;
+      body.erase(block_start, block_end - block_start + 2);
+      search = block_start;
+    }
+  }
+
   const auto marker = source.find("[[kernel]] void ");
   if (marker == std::string::npos) {
     throw std::runtime_error("generated MSL kernel entry point is missing");
