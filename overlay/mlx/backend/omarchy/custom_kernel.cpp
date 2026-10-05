@@ -798,18 +798,22 @@ Translation translate_msl(
   translate_c_style_casts(body);
   translate_device_pointer_aliases(body, parameters);
 
-  // MSL implicitly narrows uint to int in scalar declarations
-  // (`const int first = g * GROUP + thread_position_in_threadgroup.x;`);
-  // GLSL 460 rejects the implicit conversion. Wrap every const-int
-  // declaration's initializer in int(...), which is a no-op on int
-  // expressions and the same modulo-wrap as MSL's conversion on uint
-  // ones. (H3 _QUANTIZE line `const int first = ...x * PER;` and the
-  // kernel-battery cast smoke test both need this; found live on the
-  // M2 correctness ticket, 2026-10-05.)
+  // MSL implicitly narrows/widens in scalar declarations; GLSL 460
+  // rejects implicit conversions. Wrap const scalar-declaration
+  // initializers in an explicit constructor of the declared type:
+  //  * const int from uint operands (H3 _QUANTIZE `const int first =
+  //    g * GROUP + thread_position_in_threadgroup.x * PER` — int() is a
+  //    no-op on int expressions, the same modulo-wrap as MSL on uint);
+  //  * const uint16_t/int16_t from float/uint operands (the bf16
+  //    pack/unpack idiom in the Qwen3.5-2B GDN kernel, OmlxLinux M2
+  //    repro 2026-10-05: float -> const uint16_t).
   body = std::regex_replace(
       body,
-      std::regex(R"(\b(const\s+int\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
-      "$1int($2)$3");
+      std::regex(
+          R"(\b(const\s+(?:int|uint|int16_t|uint16_t)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
+      [](const std::smatch& m) {
+        return m[1].str() + m[2].str() + "(" + m[3].str() + ")" + m[4].str();
+      });
 
   // MSL allows any integer expression as a condition (`if (flag)`); GLSL
   // requires a bool. Wrap the narrow forms — a bare identifier, an indexed
@@ -945,7 +949,13 @@ Translation translate_msl(
     } else if (parameter.atomic) {
       translate_atomic_parameter(body, parameter);
     } else {
-      if (output) {
+      // Indexed stores into a non-bfloat buffer of a narrower int type
+      // need the same explicit cast as outputs when the RHS is float.
+      // Cover bfloat16_t INPUT parameters as well as outputs: kernels
+      // store converted floats into bf16 state/KV caches passed as
+      // inputs (Qwen3.5 GDN state update, [1,1,16,128] bf16, seen in
+      // the OmlxLinux M2 repro 2026-10-05).
+      if (output || parameter.type == "bfloat16_t") {
         const auto escaped = regex_escape(parameter.name);
         body = std::regex_replace(
             body,
