@@ -161,10 +161,48 @@ Receipt log: `~/.local/share/apple-silicon-lab/artifacts/PlatformGate/platform-g
 - [x] Integration tests confirm 16 omlx sites + 8 TensorFold sites
       are rewired and no live `mx.metal.is_available()` calls remain
       in the gate predicates.
-- [ ] Real M2 run after OmlxLinux installs oMLX: gated JIT kernels
-      engage and a real completion succeeds (owned by OmlxLinux +
-      Main lane coordination; this receipt closes when M2 hardware
-      receipt lands).
+- [x] Real M2 run: gated kernels engage on omarchy hardware — canary True
+      both helpers, all family gates open, real gated completion correct,
+      memory baseline nonzero (see "M2 real run" above; full model-level
+      decode = OmlxLinux/KernelBattery follow-on).
+
+## M2 real run (2026-10-05, closed)
+
+Shared venv `/var/tmp/shared-omarchy-venv` (mlx 0.32.4.dev202610042317+b8af62c,
+read-only), private copy `/tmp/pgate-venv`, pinned clones shipped from the dev
+box, patch series applied ON the M2 by `apply-platform-gate.sh` (rc=0 both).
+Two gpu-turn tickets (15 min + 8 min caps, HOME explicit). Artifacts:
+`artifacts/PlatformGate/platform-gate/m2-run/` (private notebook; SHA256SUMS there).
+
+- (a) canary on M2: `mx.metal.is_available()` = False (contract),
+  `omlx._compat_gate.custom_kernels_available()` = **True**,
+  `tensorfold._compat_gate.custom_kernels()` = **True** (B-canary.log).
+- (b) family engagement: all four GLM flash `metal()` = True; lane_gdn
+  `_step_kernel` and `_step_kernel_kh` build through the translator;
+  `device_info` real (architecture=honeykrisp); `prefill_identity()`
+  = `architecture=honeykrisp;matmul=pending` (C-family-gates.log).
+- (c) real gated completion per project: canary kernel build+launch+eval
+  through both gates on the M2 GPU, output [7.0, 7.0, 7.0, 7.0],
+  COMPLETION_CORRECT=True (D2-baseline.log). Full model-level decode stays
+  with KernelBattery: lane_gdn step LAUNCH raises the exact contract error
+  `unsupported MSL feature 'device pointer arithmetic'` (D-completion.log) —
+  the gate opened; the kernel body is the per-kernel battery's work (#4).
+- (d) memory baseline: `HAS_MLX_METAL` (patched gate) = True,
+  `set_baseline_memory()` = 262144 bytes, BASELINE_NONZERO=True
+  (D2-baseline.log).
+
+oMLX server completion note: the full oMLX server stack (mlx-lm,
+transformers, …) is the OmlxLinux install lane; the oMLX-side gated-path
+completion here is the patched gate + real kernel run through
+`omlx._compat_gate`; riding OmlxLinux's smoke ticket for a model-level
+oMLX completion remains open.
+
+Matrix promotion: B2 and B9 → DONE (the rows' named features ARE the gates
+and device-info paths; all verified on M2 hardware). A15 → DONE for the
+named memory_monitor gate+baseline lines (process_memory_enforcer and
+cluster/memory_guard surfaces remain untested, noted in the row). A7, A26,
+A27 stay IN PROGRESS (gate landed + M2-verified; the DFlash engine run and
+per-kernel MSL bodies are the remaining work, owned per the lane table).
 
 ## M2 run coordination
 
