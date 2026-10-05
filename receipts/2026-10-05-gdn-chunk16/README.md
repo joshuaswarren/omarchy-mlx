@@ -79,6 +79,45 @@ branch is a recorded negative and CHUNK16 stays OFF permanently
 (swap rule: keeping the original attempt long after a refutation is
 hoarding).
 
+## VERDICT (M2, 2026-10-05T22:10Z): REFUTED — CHUNK16 stays OFF
+
+The M2 run ticket measured C=16 at -51%/-52% vs HOIST (T=512/1024
+kernel-only fast-op, 9 reps, median, quiet gates):
+
+| T    | ship (HOIST) fast-op | chunk16 fast-op | delta |
+|---|---|---|---|
+| 64   | 5.71 ms      | 9.33 ms    | -39% |
+| 128  | 10.30 ms     | 17.15 ms   | -40% |
+| 512  | 31.62 ms     | 64.45 ms   | -51% |
+| 1024 | 61.89 ms     | 129.78 ms  | -52% |
+
+Per-call at T=512: 1.757 ms (ship) vs 3.580 ms (chunk16) = 112
+us/chunk at C=16 vs 27 us/chunk at C=8 (7.0 us/token vs 3.4
+us/token = 2.07x per token). This matches the prior G13C measurement
+(110 vs 27.7 us/chunk at 2.0x per token) exactly — the regression is
+architecture-independent and structural.
+
+Determinism x3 (all four of layer0/12 × y/hf): IDENTICAL across 3
+runs. Captured-operand doctest: chunk16 y/hf DIFFER from ship on all
+four captures (the chunk-form rounding moves the digest by
+construction, as pre-registered) and chunk16_nz differs from
+chunk16 (the state path is exercised). The numerics gates were
+therefore not reachable: the kernel is 2x slower and the digest
+moves; both the -25% perf bar and the numerics re-pin path fail.
+
+The branch (agent/GdnChunk16 @ 89625076c, default OFF,
+MLX_OMARCHY_GDN_CHUNK16) is a recorded negative; the C=8 paths are
+byte-identical and no default flips. Swap rule: the second refutation
+closes the C=16 lever on this part class. The correct next structural
+lever for the G13G chunk walk is the cross-slice N/Tinv sharing via
+grid barrier (the GridBarrier/GduBar item the 2026-10-05-gdn-prefill
+receipt named), which keeps C=8 numerics.
+
+Artifacts (sealed SHA256SUMS, 34 entries):
+`artifacts/GdnChunk16/2026-10-05-build/` (build.log, run.log,
+doctest/*.SHA256 + binaries, micro/{ship,chunk16}.log). Notebook:
+`entries/GdnChunk16/20261005T214500Z-jw14m2-gdn-c16-redesign.md`.
+
 ## Reproduce (lane)
 
 ```sh
