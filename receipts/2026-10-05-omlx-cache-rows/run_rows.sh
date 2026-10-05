@@ -87,7 +87,7 @@ leg_begin() { # leg_begin <name>
 }
 leg_end() {
   log "=== leg $LEG END"
-  ( cd "$ART" && sha256sum $(ls | grep -v SHA256SUMS) > SHA256SUMS ) || true
+  ( cd "$ART" && find . -type f ! -name SHA256SUMS -exec sha256sum {} \; > SHA256SUMS ) || true
   stop_server
 }
 
