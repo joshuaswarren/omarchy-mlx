@@ -48,8 +48,11 @@ jsonget() { # jsonget <outfile> <path>
 
 start_server() { # start_server <model-id> [extra serve args...]
   local model=$1; shift
-  mkdir -p "$HOME/.omlx"
-  printf '{"auth": {"skip_api_key_verification": true}}\n' > "$HOME/.omlx/settings.json"
+  # Own base path per run: never touch the shared /tmp/omlx-home/.omlx state
+  # (other lanes read-only reuse this venv; their settings.json stays intact).
+  export OMLX_BASE_PATH=/tmp/omlx-rows/home-$PORT
+  mkdir -p "$OMLX_BASE_PATH/.omlx"
+  printf '{"auth": {"skip_api_key_verification": true}}\n' > "$OMLX_BASE_PATH/.omlx/settings.json"
   log "starting server: $model $*"
   nohup "$VENV/bin/omlx" serve --model "$model" --host 127.0.0.1 --port "$PORT" \
     "$@" >> "$ART/server.log" 2>&1 &
