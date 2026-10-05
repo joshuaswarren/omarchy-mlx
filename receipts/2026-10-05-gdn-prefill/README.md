@@ -354,3 +354,26 @@ depth (1-pass + 5-pass), and the captured-operand doctest INCLUDING a
 non-zero initial state case (H305 lesson: production starts from zeros; the
 kernel-level proof must cover the state path — the lane doctest now has a
 NONZERO_STATE mode, run in the M2 post-window ticket).
+
+## HOIST doctest harness (final; runs in the first post-window-E M2 slot)
+
+`postwindow_m2.sh` v3 (archived in the lab scripts dir; staged on the M2):
+fresh ablate clone + build-wheel (with the mandatory
+MLX_OMARCHY_WHOLE_BUNDLE_DIR), then:
+1. Captured-operand doctests, fixtures gdn_coopmat layer0+layer12, out AND
+   state, arms ship / batch4(STATEWAVE) / hoist(HOIST) — zeros init; plus
+   ship-nz / hoist-nz with a SEEDED NON-ZERO initial state (NONZERO_STATE
+   mode in gdn_doctest.py — the kernel-level state-path proof w71 asked
+   for; production zeros do not exercise it).
+2. Micro A/B: ship / batch4 / hoist, 3 gated pairs, T sweep.
+3. HOIST e2e gates: pf512 / pf1024 / pf2048 (bench_decode), greedy digest
+   equality required at every depth + prefill rate readout.
+Land bar for the default-ON flip (T>=512, kill switch MLX_OMARCHY_GDN_HOIST=0):
+pf1024 e2e >= +1.5%, pf512 non-negative, digests equal everywhere, doctest
+bit-identical including the non-zero-state case, jwm1 pins already exact.
+Run history this window: run 1 aborted (missing MLX_OMARCHY_WHOLE_BUNDLE_DIR
+in my staged script), run 2 aborted (stale lane dirs from run 1), run 3 was
+a broken hybrid (silent no-op replaces — killed by Main at 13:04Z when
+window E started; my staging had skipped a mkdir which run 3 also needed).
+v3 fixes all three (bundle var, clear_stale.sh guard, mkdir -p +
+os.makedirs) and is the version archived here.
