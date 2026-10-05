@@ -17,7 +17,10 @@
 #     marker is ABSENT from the installed qwen3.py before running.
 set -uo pipefail
 export HOME=${OMLX_HOME:-/tmp/omlx-home}
-export HF_HUB_CACHE="${HF_HUB_CACHE:-$HOME/.cache/huggingface/hub}"
+# Real HF hub cache on the host (read-only). Resolved by glob so no
+# username is committed; override with OMLX_ROWS_HF_HUB.
+HFHUB=${OMLX_ROWS_HF_HUB:-$(ls -d /home/*/.cache/huggingface/hub 2>/dev/null | head -1)}
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HFHUB}"
 VENV=$HOME/.venvs/omlx
 PORT=${OMLX_ROWS_PORT:-8900}
 BASE=http://127.0.0.1:$PORT
@@ -52,7 +55,10 @@ start_server() { # start_server <model-id> [extra serve args...]
   # (other lanes read-only reuse this venv; their settings.json stays intact).
   export OMLX_BASE_PATH=/tmp/omlx-rows/home-$PORT
   mkdir -p "$OMLX_BASE_PATH/.omlx"
-  printf '{"auth": {"skip_api_key_verification": true}}\n' > "$OMLX_BASE_PATH/.omlx/settings.json"
+  # Discovery scans model.model_dirs; the HF-hub path is scanned READ-ONLY
+  # (models--Org--Name entries resolve via _resolve_hf_cache_entry).
+  printf '{"auth": {"skip_api_key_verification": true}, "model": {"model_dirs": ["%s"]}, "huggingface": {"hf_cache_enabled": true}}\n' "$HFHUB" \
+    > "$OMLX_BASE_PATH/.omlx/settings.json"
   log "starting server: $model $*"
   nohup "$VENV/bin/omlx" serve --model "$model" --host 127.0.0.1 --port "$PORT" \
     "$@" >> "$ART/server.log" 2>&1 &
@@ -227,7 +233,7 @@ PY
 # ---------------------------------------------------------------------------
 a8() {
   leg_begin a8
-  DRAFT=$(ls -d $HOME/.cache/huggingface/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/*/ | head -1)
+  DRAFT=$(ls -d $HFHUB/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/*/ 2>/dev/null | head -1)
   [ -n "$DRAFT" ] || fail "draft model snapshot not found in HF cache"
   start_server "$DSC"
   # reference leg: specprefill OFF
