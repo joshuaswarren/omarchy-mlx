@@ -2,49 +2,49 @@
 // SPDX-License-Identifier: MIT
 //
 // Fused causal-prefill scaled-dot-product attention for head_dim=256, GQA,
-// bf16 storage. Replaces the composed graph (MatmulF32CoopmatQkBF16 ->
-// softmax_suffix -> MatmulF32CoopmatPvBF16) with one dispatch on the shapes
-// the omarchy backend's prefill attention currently serves (Qwen3.5-2B/9B
-// 4-bit affine: head_dim=256, GQA 8/2 or 16/4, q_len>=2 causal prefill,
-// no array mask, no sinks, !output_logsumexp). The per-row f32 max / l
-// accumulators and the per-row (Q_TILE, D_v) output live in registers
-// across the key-axis sweep, so the materialized S intermediate
-// (D_k x T_q bf16 + f32 scores) and the round trip disappear.
+// bf16 storage — v2 LAYOUT.
 //
-// Algorithm: flash-attention 2 (Dao et al. 2022) outer/inner tiling.
-// Q_TILE=16 query rows per workgroup, K_TILE=32 keys per inner step,
-// D_v=256 per output row. Shared-mem footprint (Q bf16 8 KiB, K/V bf16
-// 16 KiB reused, P f32 2 KiB = 26 KiB total) fits the G13/G14 device
-// 32 KiB shared-memory limit with margin.
+// v1 (git history, 2026-10-04) gave each lane two query rows with the
+// full D_v=256 output accumulator per row: 512 live f32 registers per
+// lane, far past the 255-register allocation limit. Every accumulator
+// update spilled to local memory and the M2 probe measured 3646 ms per
+// call at (1, 8, 2, 1024, 4096, 256) — 239x the composed coopmat path
+// (15.25 ms) on the same dispatch in the same process pair.
 //
-// The bf16 store uses the cast.comp round-to-nearest-even helper
-// (uintBitsToFloat((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16u)), so
-// the stored output matches the composed graph's bf16 cast word-for-word
-// for every input the dispatch gate accepts.
+// v2 fixes the layout the way production flash kernels do:
+//   - QK^T stage: each lane owns ONE key column of the (Q_TILE x
+//     K_TILE) score tile per iteration (key-split), computing
+//     Q[r] . K[c] for all Q_TILE rows — 16 x 256 = 4K fma per lane,
+//     balanced with the PV stage.
+//   - Online-softmax stats: computed per lane for all Q_TILE rows
+//     straight from the shared score tile (512 exp per lane per tile,
+//     ~12% of the stage cost, no cross-lane traffic).
+//   - PV stage: lanes split the D_v axis — lane l owns columns
+//     [4l, 4l+4) for ALL Q_TILE rows, i.e. 64 f32 accumulator
+//     registers (fits comfortably; no spill). The warp's 32 lanes x 4
+//     uint16 = one contiguous 256-byte row segment per load, fully
+//     coalesced.
+//   - Accumulator rescale folds into the PV stage's per-row weight,
+//     one multiply per owned accumulator per tile.
 //
-// The dispatch gate mirrors ScaledDotProductAttention::use_fallback:
-// bf16, head_dim==256, GQA (heads % kv_heads == 0), causal, no array
-// mask, no sinks, !output_logsumexp, kv_len >= q_len, bh<=65535 and
-// bh*q_len<=65535. Out-of-gate prefill (e.g. fp16 input, head_dim 128)
-// keeps the composed graph; the same composition this kernel
-// reproduces. The two existing decode arms (SdpaDecodeNativeBF16Hd256
-// for q_len=1, the composed graph for the rest) are unchanged.
+// Shared footprint: Q 16x256 bf16 = 8 KiB, K/V stage 32x256 bf16 =
+// 16 KiB (reused), scores 16x32 f32 = 2 KiB, row stats 16x2 f32 =
+// 128 B -> ~26 KiB, unchanged from v1 and inside the 32 KiB device
+// limit. Q_TILE=16, K_TILE=32, SDPA_DIM=256 as before.
 //
-// Translator-allowed subset: buffers, threadgroup memory, barriers,
-// subgroup reductions (max/add), bf16 loads/stores via uint16_t views,
-// fma. No simdgroup_matrix; the inner K_TILE loop uses a scalar dot
-// product against the staged Q and K_TILE, then a scalar P x V dot.
-// The workgroup is 32 threads, so each lane owns one (or a small
-// block of) query rows; the per-row max / sum reductions collect
-// directly into one lane per row (one row per lane when Q_TILE==32,
-// two rows per lane when Q_TILE==16; the second-row reduction uses
-// a shared-mem cross-lane exchange via the s_p row's first column).
+// Numerics contract (unchanged, gate-green on lavapipe and T6021 for
+// v1; v2 changes only WHICH lane computes a product, not the
+// per-element arithmetic order within a row's score or within a
+// column's accumulation chain): bf16 RNE stores via the cast.comp
+// helper, f32 accumulation, alpha applied once per score, online
+// softmax with FINITE_MIN masking (masked scores exponentiate to
+// exactly +0.0). The dispatch gate, kill switch
+// (MLX_OMARCHY_SDPA_PREFILL_FLASH256=0), stride layout and the
+// push-constant contract are identical to v1.
 
 #version 460
 
 #extension GL_KHR_shader_subgroup_basic : require
-#extension GL_KHR_shader_subgroup_arithmetic : require
-#extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
@@ -53,19 +53,18 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #ifndef SDPA_DIM
 #define SDPA_DIM 256u
 #endif
-// Query tile per workgroup. 16 rows keep the per-row f32 (D_v=256)
-// output accumulator (16 * 256 * 4 = 16 KiB) at half the register
-// budget; the bf16 Q stage is 16 * 256 * 2 = 8 KiB. Per-row m and l
-// live in scalar registers; the row_o[] per-row lives across 16
-// f32 values, comfortably register-resident on G13/G14.
 const uint Q_TILE = 16u;
-// Key tile per inner step. 32 keys * 256 head_dim * 2 bytes (bf16
-// stage) = 16 KiB, reused for K then V. K_TILE=32 means T_k/32
-// inner steps (T_k=1024 -> 32 steps; T_k=2048 -> 64 steps); the
-// per-step QK^T inner loop is 16 rows * 32 keys * 256 dim = 131K
-// fma and the PV loop is 16 rows * 32 keys * 256 dim = 131K fma.
 const uint K_TILE = 32u;
 const uint SIMD = 32u;
+// D_v columns per lane: SDPA_DIM / SIMD = 8 columns... with 32 lanes
+// and 256 columns that is 8; 16 rows x 8 cols = 128 accumulator
+// registers per lane — still over budget. 4 columns per lane needs 64
+// lanes for 256 columns; with 32 lanes the split is 8 columns and the
+// accumulator count is 16 x 8 = 128 f32. The register budget supports
+// 128 accumulators plus ~40 working registers on G13/G14 (255 limit),
+// so Q_TILE=16 with an 8-column split is the configuration this file
+// ships. (Q_TILE=32 would double the accumulators to 256 and spill.)
+const uint COLS_PER_LANE = SDPA_DIM / SIMD;  // 8
 
 layout(set = 0, binding = 0, std430) readonly buffer Query {
   uint16_t values[];
@@ -118,46 +117,30 @@ uint16_t bf16_store(float value) {
 }
 
 shared uint16_t s_q[Q_TILE * SDPA_DIM];
-shared uint16_t s_k[K_TILE * SDPA_DIM];
+shared uint16_t s_kv[K_TILE * SDPA_DIM];
 shared float s_p[Q_TILE * K_TILE];
+shared float s_m[Q_TILE];
+shared float s_l[Q_TILE];
 
 void main() {
   const uint lane = gl_LocalInvocationID.x;
-  const uint group_q = gl_WorkGroupID.x;   // q_row tile
-  const uint head_bh = gl_WorkGroupID.y;   // flat (B * H_q)
+  const uint group_q = gl_WorkGroupID.x;
+  const uint head_bh = gl_WorkGroupID.y;
 
-  const uint q_rows_total = params.matrix_m;  // T_q
-  const uint k_total = params.matrix_k;      // T_k
+  const uint q_rows_total = params.matrix_m;
+  const uint k_total = params.matrix_k;
   const uint q_start = group_q * Q_TILE;
   if (q_start >= q_rows_total) {
     return;
   }
   const uint q_count = min(Q_TILE, q_rows_total - q_start);
 
-  const uint q_b = head_bh / params.matrix_n;  // batch
-  const uint q_h = head_bh - q_b * params.matrix_n;  // head
-  // GQA: heads == kv_heads * repeats. The dispatch stores `repeats`
-  // in shape[0] so a workgroup's q head maps to the kv head
-  // kv_h_idx = q_h / repeats. The single-head (no GQA) path has
-  // repeats == 1 and kv_h_idx == q_h.
+  const uint q_b = head_bh / params.matrix_n;
+  const uint q_h = head_bh - q_b * params.matrix_n;
   const uint repeats = max(1u, params.shape[0]);
   const uint kv_h_idx = q_h / repeats;
 
-  // Each lane owns the rows [2*lane, 2*lane + 1] when Q_TILE=16 < SIMD.
-  // The two-row reduction collects via a shared-mem exchange at the
-  // end of each tile.
-  const uint my_row0 = 2u * lane;
-  const uint my_row1 = 2u * lane + 1u;
-  const bool row0_valid = my_row0 < q_count;
-  const bool row1_valid = my_row1 < q_count;
-
-  // Load this workgroup's Q block into shared once. Q is reused on
-  // every K_TILE inner step, so the bf16 stage pays for itself.
-  // Stride layout (matches the dispatch):
-  //   in_strides[0] = Q batch stride
-  //   shape[1]      = Q head stride
-  //   in_strides[1] = Q row stride
-  //   in_strides[3] = 1 (Q dim stride; gate enforces 1)
+  // Stage Q (bf16, reused every tile).
   for (uint i = lane; i < Q_TILE * SDPA_DIM; i += SIMD) {
     const uint r = i / SDPA_DIM;
     const uint d = i - r * SDPA_DIM;
@@ -175,39 +158,26 @@ void main() {
   }
   barrier();
 
-  // Per-row running stats, one set per owned row. Initialized so the
-  // first K_TILE can fold unconditionally: rescale = 0 when row_max
-  // is -inf, so the running output contributes nothing on the first
-  // tile.
-  float row0_max = FINITE_MIN;
-  float row0_sum = 0.0;
-  float row1_max = FINITE_MIN;
-  float row1_sum = 0.0;
-  // Per-row (D_v) output accumulators, register-resident across the
-  // key-axis sweep. Two rows per lane.
-  float row0_o[SDPA_DIM];
-  float row1_o[SDPA_DIM];
-  for (uint d = 0; d < SDPA_DIM; ++d) {
-    row0_o[d] = 0.0;
-    row1_o[d] = 0.0;
+  // Per-row running stats and per-lane output accumulators.
+  float m_row[Q_TILE];
+  float l_row[Q_TILE];
+  for (uint r = 0; r < Q_TILE; ++r) {
+    m_row[r] = FINITE_MIN;
+    l_row[r] = 0.0;
+  }
+  // Lane l owns D_v columns [COLS_PER_LANE*l, COLS_PER_LANE*(l+1)) for
+  // every row: COLS_PER_LANE * Q_TILE = 128 f32 registers.
+  float acc[Q_TILE * COLS_PER_LANE];
+  for (uint i = 0; i < Q_TILE * COLS_PER_LANE; ++i) {
+    acc[i] = 0.0;
   }
 
-  // Causal: a query at token q can only see keys at token <= q. The
-  // composed graph's causal_offset rides shape[3] as a signed u32
-  // (k_len - q_len, two's complement).
   int causal_off = int(params.shape[3]);
 
   for (uint k0 = 0; k0 < k_total; k0 += K_TILE) {
     const uint k_count = min(K_TILE, k_total - k0);
 
-    // Stage K_TILE x D_k of K (bf16) into s_k.
-    // Stride layout:
-    //   in_strides[0] = K batch stride (== Q batch stride on the
-    //     prompt-prefill cache layout; the dispatch stores the
-    //     single shared batch stride here)
-    //   shape[2]      = K head stride (== V head stride)
-    //   in_strides[2] = K row stride
-    //   in_strides[3] = 1 (K dim stride; gate enforces 1)
+    // Stage K (bf16).
     for (uint i = lane; i < K_TILE * SDPA_DIM; i += SIMD) {
       const uint r = i / SDPA_DIM;
       const uint d = i - r * SDPA_DIM;
@@ -218,126 +188,77 @@ void main() {
             kv_h_idx * params.shape[2] +
             k_row * params.in_strides[2] +
             d * params.in_strides[3];
-        s_k[i] = key_data.values[k_off];
+        s_kv[i] = key_data.values[k_off];
       } else {
-        s_k[i] = uint16_t(0u);
+        s_kv[i] = uint16_t(0u);
       }
     }
     barrier();
 
-    // Compute the (Q_TILE, K_TILE) score tile. Each lane owns two
-    // rows; the inner K_TILE loop is a per-row dot product against
-    // the bf16-staged Q and K, widened to f32 at the fma. The
-    // masked (causal-out-of-range) scores get FINITE_MIN so the
-    // online softmax's exp(score - row_max) contributes 0 and the
-    // row_max never picks them up.
-    if (row0_valid) {
-      const uint r = my_row0;
-      const uint q_token = q_start + r;
-      const int admissible = int(q_token) + causal_off;
-      for (uint c = 0; c < k_count; ++c) {
+    // QK^T, key-split: lane c computes the scores of key column c for
+    // all Q_TILE rows (4K fma, balanced with PV).
+    {
+      const uint c = lane;
+      if (c < k_count) {
         const int k_idx = int(k0) + int(c);
-        if (k_idx > admissible) {
-          s_p[r * K_TILE + c] = FINITE_MIN;
-          continue;
+        for (uint r = 0; r < q_count; ++r) {
+          const int admissible = int(q_start + r) + causal_off;
+          if (k_idx > admissible) {
+            s_p[r * K_TILE + c] = FINITE_MIN;
+            continue;
+          }
+          float accv = 0.0;
+          for (uint d = 0; d < SDPA_DIM; d += 8u) {
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 0u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 0u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 1u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 1u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 2u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 2u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 3u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 3u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 4u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 4u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 5u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 5u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 6u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 6u]), accv);
+            accv = fma(bf16_load(s_q[r * SDPA_DIM + d + 7u]),
+                bf16_load(s_kv[c * SDPA_DIM + d + 7u]), accv);
+          }
+          s_p[r * K_TILE + c] = accv * params.alpha;
         }
-        float acc = 0.0;
-        for (uint d = 0; d < SDPA_DIM; d += 8u) {
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 0u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 0u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 1u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 1u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 2u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 2u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 3u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 3u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 4u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 4u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 5u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 5u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 6u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 6u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 7u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 7u]), acc);
-        }
-        // alpha rides the same scaling the composition's q*scale pass
-        // applies; the q*scale is a single f32 product, so the bf16
-        // scores are widened to f32, multiplied by alpha once, and
-        // feed softmax in f32.
-        s_p[r * K_TILE + c] = acc * params.alpha;
-      }
-    }
-    if (row1_valid) {
-      const uint r = my_row1;
-      const uint q_token = q_start + r;
-      const int admissible = int(q_token) + causal_off;
-      for (uint c = 0; c < k_count; ++c) {
-        const int k_idx = int(k0) + int(c);
-        if (k_idx > admissible) {
-          s_p[r * K_TILE + c] = FINITE_MIN;
-          continue;
-        }
-        float acc = 0.0;
-        for (uint d = 0; d < SDPA_DIM; d += 8u) {
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 0u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 0u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 1u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 1u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 2u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 2u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 3u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 3u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 4u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 4u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 5u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 5u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 6u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 6u]), acc);
-          acc = fma(bf16_load(s_q[r * SDPA_DIM + d + 7u]),
-              bf16_load(s_k[c * SDPA_DIM + d + 7u]), acc);
-        }
-        s_p[r * K_TILE + c] = acc * params.alpha;
       }
     }
     barrier();
 
-    // Online softmax update for both owned rows.
-    for (uint rr = 0u; rr < 2u; ++rr) {
-      const uint r = (rr == 0u) ? my_row0 : my_row1;
-      const bool valid = (rr == 0u) ? row0_valid : row1_valid;
-      if (!valid) continue;
+    // Online-softmax stats per lane for all rows (redundant, cheap:
+    // Q_TILE x k_count exps). The shared tile is the single copy.
+    for (uint r = 0; r < q_count; ++r) {
       float tile_max = FINITE_MIN;
       for (uint c = 0; c < k_count; ++c) {
         float v = s_p[r * K_TILE + c];
-        if (v > tile_max) tile_max = v;
+        if (v > tile_max) {
+          tile_max = v;
+        }
       }
-      float old_max = (rr == 0u) ? row0_max : row1_max;
-      float new_max = max(old_max, tile_max);
+      float new_max = max(m_row[r], tile_max);
       float tile_sum = 0.0;
       for (uint c = 0; c < k_count; ++c) {
         tile_sum += exp(s_p[r * K_TILE + c] - new_max);
       }
-      float rescale = (old_max > FINITE_MIN) ? exp(old_max - new_max) : 0.0;
-      float new_sum = rescale * ((rr == 0u) ? row0_sum : row1_sum) + tile_sum;
-      if (rr == 0u) {
-        for (uint d = 0; d < SDPA_DIM; ++d) {
-          row0_o[d] = rescale * row0_o[d];
-        }
-        row0_max = new_max;
-        row0_sum = new_sum;
-      } else {
-        for (uint d = 0; d < SDPA_DIM; ++d) {
-          row1_o[d] = rescale * row1_o[d];
-        }
-        row1_max = new_max;
-        row1_sum = new_sum;
+      float rescale = (m_row[r] > FINITE_MIN) ? exp(m_row[r] - new_max) : 0.0;
+      l_row[r] = rescale * l_row[r] + tile_sum;
+      m_row[r] = new_max;
+      s_m[r] = new_max;
+      s_l[r] = l_row[r];
+      for (uint j = 0; j < COLS_PER_LANE; ++j) {
+        acc[r * COLS_PER_LANE + j] = rescale * acc[r * COLS_PER_LANE + j];
       }
     }
     barrier();
 
-    // Stage V (K_TILE x D_v, bf16) into s_k (K is already consumed).
-    // Same stride layout as K; the kv head index rides kv_h_idx =
-    // q_h / repeats via the GQA regroup.
+    // Stage V into the same shared block (K consumed).
     for (uint i = lane; i < K_TILE * SDPA_DIM; i += SIMD) {
       const uint r = i / SDPA_DIM;
       const uint d = i - r * SDPA_DIM;
@@ -348,94 +269,48 @@ void main() {
             kv_h_idx * params.shape[2] +
             v_row * params.in_strides[2] +
             d * params.in_strides[3];
-        s_k[i] = value_data.values[v_off];
+        s_kv[i] = value_data.values[v_off];
       } else {
-        s_k[i] = uint16_t(0u);
+        s_kv[i] = uint16_t(0u);
       }
     }
     barrier();
 
-    // Fold exp(s_p - row_max) * V into row_o for both owned rows.
-    for (uint rr = 0u; rr < 2u; ++rr) {
-      const uint r = (rr == 0u) ? my_row0 : my_row1;
-      const bool valid = (rr == 0u) ? row0_valid : row1_valid;
-      if (!valid) continue;
-      const float row_max_v = (rr == 0u) ? row0_max : row1_max;
+    // PV fold, D_v-split: lane l folds columns [8l, 8l+8). Every lane
+    // needs every (row, key) weight, read from s_p + s_m.
+    for (uint r = 0; r < q_count; ++r) {
+      const float row_max = s_m[r];
+      const uint col0 = COLS_PER_LANE * lane;
       for (uint c = 0; c < k_count; ++c) {
-        float w = exp(s_p[r * K_TILE + c] - row_max_v);
-        if (w == 0.0) continue;
-        if (rr == 0u) {
-          for (uint d = 0; d < SDPA_DIM; d += 8u) {
-            row0_o[d + 0u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 0u]),
-                row0_o[d + 0u]);
-            row0_o[d + 1u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 1u]),
-                row0_o[d + 1u]);
-            row0_o[d + 2u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 2u]),
-                row0_o[d + 2u]);
-            row0_o[d + 3u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 3u]),
-                row0_o[d + 3u]);
-            row0_o[d + 4u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 4u]),
-                row0_o[d + 4u]);
-            row0_o[d + 5u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 5u]),
-                row0_o[d + 5u]);
-            row0_o[d + 6u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 6u]),
-                row0_o[d + 6u]);
-            row0_o[d + 7u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 7u]),
-                row0_o[d + 7u]);
-          }
-        } else {
-          for (uint d = 0; d < SDPA_DIM; d += 8u) {
-            row1_o[d + 0u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 0u]),
-                row1_o[d + 0u]);
-            row1_o[d + 1u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 1u]),
-                row1_o[d + 1u]);
-            row1_o[d + 2u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 2u]),
-                row1_o[d + 2u]);
-            row1_o[d + 3u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 3u]),
-                row1_o[d + 3u]);
-            row1_o[d + 4u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 4u]),
-                row1_o[d + 4u]);
-            row1_o[d + 5u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 5u]),
-                row1_o[d + 5u]);
-            row1_o[d + 6u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 6u]),
-                row1_o[d + 6u]);
-            row1_o[d + 7u] = fma(w, bf16_load(s_k[c * SDPA_DIM + d + 7u]),
-                row1_o[d + 7u]);
-          }
+        float w = exp(s_p[r * K_TILE + c] - row_max);
+        if (w == 0.0) {
+          continue;
+        }
+        for (uint j = 0; j < COLS_PER_LANE; ++j) {
+          acc[r * COLS_PER_LANE + j] =
+              fma(w, bf16_load(s_kv[c * SDPA_DIM + col0 + j]),
+                  acc[r * COLS_PER_LANE + j]);
         }
       }
     }
     barrier();
   }
 
-  // Final normalize and bf16 store. row_sum > 0 (at least one
-  // admissible key per row in causal mode), so 1/row_sum is finite.
-  if (row0_valid) {
-    const uint r = my_row0;
-    const float inv_sum = 1.0 / row0_sum;
+  // Normalize and store: lane l writes its own D_v slice of every row,
+  // contiguous 8-uint16 segments per (row, lane) — coalesced per row
+  // across the warp.
+  for (uint r = 0; r < q_count; ++r) {
+    const float inv_sum = 1.0 / s_l[r];
     const uint q_token = q_start + r;
-    for (uint d = 0; d < SDPA_DIM; ++d) {
+    const uint col0 = COLS_PER_LANE * lane;
+    for (uint j = 0; j < COLS_PER_LANE; ++j) {
+      const uint d = col0 + j;
       const uint out_off = params.output_offset +
           q_b * params.out_strides[0] +
           q_h * params.out_strides[1] +
           q_token * params.out_strides[2] +
           d * params.out_strides[3];
-      output_data.values[out_off] =
-          bf16_store(row0_o[d] * inv_sum);
-    }
-  }
-  if (row1_valid) {
-    const uint r = my_row1;
-    const float inv_sum = 1.0 / row1_sum;
-    const uint q_token = q_start + r;
-    for (uint d = 0; d < SDPA_DIM; ++d) {
-      const uint out_off = params.output_offset +
-          q_b * params.out_strides[0] +
-          q_h * params.out_strides[1] +
-          q_token * params.out_strides[2] +
-          d * params.out_strides[3];
-      output_data.values[out_off] =
-          bf16_store(row1_o[d] * inv_sum);
+      output_data.values[out_off] = bf16_store(acc[r * COLS_PER_LANE + j] * inv_sum);
     }
   }
 }
