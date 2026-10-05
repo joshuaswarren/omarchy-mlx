@@ -542,6 +542,64 @@ class CustomKernelSmoke(unittest.TestCase):
             [float(x) + 7.0 + 1.0 for x in range(1, 9)],
         )
 
+    def test_bfloat16_locals_and_inplace_state_store(self):
+        """Metal promotes bfloat16_t LOCALS to fp32 for arithmetic and
+        rounds at bf16 buffer writes; the translation mirrors that:
+        body bf16 tokens become float, in-place stores into a bf16
+        state buffer narrow via round-to-nearest-even, scalar bf16
+        inputs read through _mlx_bf16_to_float, precise::rsqrt maps to
+        inversesqrt, and integer-literal conditions wrap. This is the
+        Qwen3.5-2B GDN conv+sigmoid construct set (OmlxLinux M2
+        repro; the golden wheel emitted uint16_t locals + integer
+        math for the same source)."""
+        kernel = mx.fast.metal_kernel(
+            name="omarchy_bf16_locals_state",
+            input_names=["qkv", "conv_w", "scale", "s_len"],
+            output_names=["act_out", "state_out"],
+            source=(
+                "T activated[2];\n"
+                "float acc = 0.0f;\n"
+                "uint i = thread_position_in_grid.x;\n"
+                "for (uint tap = 0; tap < 2; ++tap) {\n"
+                "  const T xv = qkv[i * 2 + tap];\n"
+                "  acc += float(xv) * float(conv_w[tap]);\n"
+                "}\n"
+                "const T conv = T(acc);\n"
+                "T sy = T(1) / (T(1) + metal::exp(metal::abs(conv)));\n"
+                "const T act = conv * ((conv < T(0)) ? sy : T(1) - sy);\n"
+                "activated[0] = act;\n"
+                "if (L2) {\n"
+                "  act_out[i] = activated[0] * float(scale);\n"
+                "} else {\n"
+                "  act_out[i] = activated[0];\n"
+                "}\n"
+                "state_out[i] = act;\n"
+                "float tv = float(act);\n"
+                "tv += metal::precise::rsqrt(float(2)) * 0.0f;\n"
+            ),
+            template=[("T", mx.bfloat16), ("L2", 1)],
+        )
+        qkv = mx.array([1.0, 2.0, 3.0, 4.0], dtype=mx.bfloat16)
+        conv_w = mx.array([0.5, 0.25], dtype=mx.bfloat16)
+        act_out, state_out = kernel(
+            inputs=[qkv, conv_w, mx.array(0.5, dtype=mx.bfloat16),
+                    mx.array(1, dtype=mx.int32)],
+            grid=(2, 1, 1),
+            threadgroup=(2, 1, 1),
+            output_shapes=[(2,), (2,)],
+            output_dtypes=[mx.bfloat16, mx.bfloat16],
+            stream=mx.gpu,
+        )
+        mx.eval(act_out, state_out)
+        # acc[0] = 1*0.5 + 2*0.25 = 1.0; sigmoid gate: sy = 1/(1+e^1);
+        # act = 1 * (sy if 1 < 0 else 1 - sy) = 1 - sy.
+        import math
+        sy = 1.0 / (1.0 + math.exp(1.0))
+        expected_act = 1.0 - sy
+        for got in (act_out.tolist(), state_out.tolist()):
+            for v in got:
+                self.assertLess(abs(float(v) - expected_act), 0.02)
+
     def test_ushort_type_and_integer_condition(self):
         """MSL `ushort` maps to GLSL `uint` (GLSL has no 16-bit scalars;
         the values are small integers), and a bare integer condition

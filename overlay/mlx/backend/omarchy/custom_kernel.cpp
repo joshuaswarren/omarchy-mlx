@@ -183,6 +183,15 @@ void translate_types(std::string& code) {
       {"int2", "ivec2"},
       {"int32_t", "int"},
       {"uint32_t", "uint"},
+      // Metal promotes bfloat16_t LOCALS to fp32 for arithmetic and
+      // rounds back at bf16 buffer writes; mirror that exactly: the
+      // body token becomes float, while bf16 buffer parameters keep
+      // uint16_t storage (buffer_declaration) and every load/store
+      // converts via _mlx_bf16_to_float / the _mlx_float_to_bf16 store
+      // casts. Integer uint16_t locals do integer math instead — the
+      // root cause of the Qwen3.5-2B GDN conv+sigmoid failure
+      // (OmlxLinux M2 repro: uint16_t(1) / (uint16_t(1) + exp(...))).
+      {"bfloat16_t", "float"},
       // GLSL has no 16-bit integer scalars; MSL short/ushort hold small
       // integers in these kernels (tile indices, e.g. TensorFold _LINEAR's
       // `short erow[CAP]`), so the int-range mapping is value-exact.
@@ -644,7 +653,23 @@ void translate_bfloat_parameter(
         body,
         std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\])"),
         "_mlx_bf16_to_float(" + storage + "[$1])");
+    // The read pass rewrote in-place stores into a bf16 INPUT buffer
+    // (state-cache updates, e.g. Qwen3.5 GDN recurrent_state) into
+    // '_mlx_bf16_to_float(slot) = rhs;' — an assignment to a call.
+    // Narrow instead: slot = _mlx_float_to_bf16(rhs), which is exactly
+    // the round-to-nearest-even bf16 store the MSL performed.
+    body = std::regex_replace(
+        body,
+        std::regex(
+            R"(_mlx_bf16_to_float\()" + regex_escape(storage) +
+            R"(\[([^\]]*)\]\)\s*=\s*([^;]+);)"),
+        storage + "[$1] = _mlx_float_to_bf16($2);");
     if (std::regex_search(body, std::regex("\\b" + escaped + R"(\s*\[)"))) {
+      throw std::runtime_error("unsupported bfloat16 buffer expression");
+    }
+    // Bare (non-indexed) uses — float(NAME) of a whole bf16 buffer — have
+    // no GLSL meaning either; the scalar form (&) is the supported route.
+    if (std::regex_search(body, std::regex("\\b" + escaped + "\\b"))) {
       throw std::runtime_error("unsupported bfloat16 buffer expression");
     }
   }
@@ -796,13 +821,16 @@ Translation translate_msl(
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
   replace_all(body, "simd_sum", "subgroupAdd");
   replace_all(body, "simd_max", "subgroupMax");
+  // MSL metal::precise::rsqrt survives the metal:: strip as rsqrt; GLSL
+  // names it inversesqrt. (Qwen3.5 GDN norm-gate, OmlxLinux M2 repro.)
+  replace_word(body, "rsqrt", "inversesqrt");
   // MSL rint() rounds half-to-even in the current direction; GLSL
   // roundEven() is the same function. Needed by the H3 _QUANTIZE kernel
   // (int8 rounding of activations) and any quantize-style kernel.
   replace_word(body, "rint", "roundEven");
   body = std::regex_replace(
       body,
-      std::regex(R"(float16_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+      std::regex(R"(\bfloat16_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
       "float16_t $1 = float16_t($2);");
   replace_all(body, "simd_min", "subgroupMin");
   replace_all(body, "simd_broadcast", "subgroupBroadcast");
@@ -840,7 +868,7 @@ Translation translate_msl(
   // pattern and need no wrap.
   std::string condition_helpers;
   static const std::regex integer_condition(
-      R"(\b(if|while)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*(\s*\[[^\[\]]*\])?(\(\))?)\s*\))");
+      R"(\b(if|while)\s*\(\s*(([A-Za-z_][A-Za-z0-9_]*|[0-9]+u?)(\s*\[[^\[\]]*\])?(\(\))?)\s*\))");
   if (std::regex_search(body, integer_condition)) {
     condition_helpers =
         "bool _mlx_nonzero(bool v) { return v; }\n"
