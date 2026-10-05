@@ -1,3 +1,22 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -18,0 +19,15 @@
++
++// Fused RMSNorm + SwiGLU gate for the GDN decode chain.
++MLX_API array rms_norm_gated(
++    const array& x,
++    const array& gate,
++    const array& weight,
++    float eps,
++    StreamOrDevice s = {});
++
++// Fused RMSNorm + scalar multiply.
++MLX_API array rms_norm_scaled(
++    const array& x,
++    const std::optional<array>& weight,
++    float scale,
++    float eps,
++    StreamOrDevice s = {});
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
 @@ -120,6 +120,139 @@
