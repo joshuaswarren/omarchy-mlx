@@ -536,3 +536,52 @@ Prefill leg note: the earlier pointer-arithmetic refusal on the
 [1,289,16,128] prefill leg is gone from this run's log — the
 009c23b rewrite cleared it; the decode leg is the last refusal
 observed.
+
+## ADDENDUM 5 (2026-10-05 14:3xZ): Qwen3.5-2B kernel compiles; numerics gate FAILS on the GDN hybrid path
+
+Golden wheel `mlx_omarchy-0.32.4.dev202610050436+faefb58` (KernelBattery's
+typename-promotion fix `9ee4fd1f5` included; fresh private venv via
+install.sh, mx verified). Qwen3.5-2B-MLX-4bit:
+
+### The custom kernel now COMPILES and generates
+
+Probe: "Name three primary colors." → real text, 32 tokens ("The
+three primary colors are **Red**, **Green**, and **Blue**.…").
+The `device pointer arithmetic` and sigmoid-conversion refusals are
+both cleared by `009c23b35` + `faefb580e`.
+
+### Greedy batched-vs-single digest: **FAIL** on the 2B
+
+Same harness that PASSED on Qwen3-4B (ADDENDUM "NUMERICS GATE
+CLOSED"): digest prompt, 5 slots, single vs batch0.
+
+| Run | sha256[:16] | len | tokens | tok/s |
+|---|---|---|---|---|
+| single | `3c7c266a366be354` | 398 | 92 | 56.47 |
+| batch0 (same prompt in the 4-batch) | `ad85dc161c92fcf1` | 415 | 94 | 15.82 |
+
+`GREEDY_BATCHED_EQ_SINGLE: False`.
+
+Divergence shape: the two texts share the first **380 characters**
+(four identical numbered sentences through "4. Water collects in ")
+and diverge in the final phrase — single: "feeding the cycle.",
+batched: "adding to the atmospheric moisture." — i.e. ~90 tokens of
+identical greedy decoding, then a divergent tail. The other three
+batch slots are individually sane (primary colors / Paris /
+one-to-five).
+
+Interpretation (labeled as inference): a late-decode divergence
+after ~90 identical tokens is the ULP-compounding signature — batched
+execution changes an accumulation order (or a GDN state-update
+route) somewhere in the hybrid stack, and the difference finally
+flips an argmax near the end of the generation. Owners to
+triangulate: omarchy-backend GDN kernels (KernelBattery) vs the
+mlx-lm GDN batched routes this wheel ships (gdn-raw-repeat /
+fast-route patches; RopeNormBatch) vs oMLX's ArraysCache left-padding
+handling for hybrid models. The 4B (dense, no GDN) passing the same
+harness localizes it to the hybrid path.
+
+Gate status: **MET on Qwen3-4B (dense); NOT MET on Qwen3.5-2B
+(GDN hybrid)**. Evidence files: /tmp/omlx-2b/{single,batch0..3}.json
+on the M2 (mtime 09:28 local), server log with per-request token
+counts, digests reproduced above from the on-disk bodies.
