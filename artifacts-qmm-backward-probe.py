@@ -48,32 +48,31 @@ def main():
     base.weight = w_q
     base.scales = scales.astype(dtype)
     base.biases = biases.astype(dtype)
-    # mlx-lm freezes the quantized base in the tuner; mirror that so the
-    # backward only differentiates the input (the dx leg) and the LoRA
-    # pieces, never the packed weight.
     base.freeze()
     lora = LoRALinear.from_base(base, r=args.rank, scale=2.0)
     lora.freeze()
     lora.unfreeze(keys=["lora_a", "lora_b"])
 
     def loss_fn(x):
-        y = lora(mx.array(x).astype(dtype))
+        y = lora(x.astype(dtype))
         return y.astype(mx.float32).square().mean()
 
-    grads = mx.grad(loss_fn)(x_np)
+    x_mx = mx.array(x_np)
+    grads = mx.grad(loss_fn)(x_mx)
     mx.eval(grads)
 
-    # Dense reference: identical graph with the dequantized weight, so
-    # the only difference is quantized vs dequantized matmul arithmetic.
     w_d = mx.dequantize(
         w_q, base.scales, base.biases,
         group_size=args.group_size, bits=args.bits)
+    lora_a = lora.lora_a
+    lora_b = lora.lora_b
 
     def dense_loss_fn(x):
-        y = (mx.array(x).astype(dtype) @ w_d.T).astype(mx.float32)
-        return y.square().mean()
+        xd = x.astype(dtype)
+        y = xd @ w_d.T + (2.0 * (xd @ lora_a @ lora_b)).astype(dtype)
+        return y.astype(mx.float32).square().mean()
 
-    dense_grads = mx.grad(dense_loss_fn)(x_np)
+    dense_grads = mx.grad(dense_loss_fn)(x_mx)
     mx.eval(dense_grads)
 
     g = np.asarray(grads, dtype=np.float32)
@@ -82,8 +81,6 @@ def main():
     max_abs = float(np.abs(g).max()) if finite else float("nan")
     max_diff = float(np.abs(g - r).max()) if finite else float("nan")
     ref_max = float(np.abs(r).max())
-    # Family bound: fp32 accumulation over the n-long contraction plus
-    # one storage-dtype rounding, on the reference magnitude.
     bound = max(
         (args.n + 2.0) * max(2.0 * ref_max, 1.0) * 2.0**-23
         + max(2.0 * ref_max, 1.0) * 2.0**-8,
