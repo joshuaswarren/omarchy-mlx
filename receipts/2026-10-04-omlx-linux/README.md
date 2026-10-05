@@ -371,3 +371,62 @@ in the same commit that updates
 contract). The per-patcher kill envs and the composed-fallback
 else-branch assertions in that test are independent of the fence
 and stay.
+
+## NUMERICS GATE CLOSED (2026-10-05, M2 reopened after reboot)
+
+Ticket: gpu-turn -m 12 (gate) + -m 6 (prefix), correctness only.
+Stack rebuilt post-reboot: private venv at /tmp/omlx-home/.venvs/omlx
+(fresh python3 -m venv — shebang verified `#!/tmp/omlx-home/.venvs/
+omlx/bin/python3`), omlx 0.7.0 @ 4d4f5a28, mlx-lm 0.31.4.dev132+
+g94cdcae13 with the CURRENT interim fences (verified by grep:
+`isinstance(cache.offset, int)` present in both qwen3.py and
+qwen3_next.py, per-patcher envs present), mlx-omarchy b8af62c
+(mx.__version__ verified). Shared venv untouched.
+
+### Greedy batched-vs-single digest equality — PASS
+
+Model: Qwen3-4B-Instruct-2507-4bit. Prompt: 5-sentence water-cycle
+(system+user, 37 tokens), max_tokens 96, temperature 0.
+
+| Run | sha256[:16] | len | tok/s |
+|---|---|---|---|
+| single | `f9725f86e5ba0558` | 421 | 64.09 |
+| batch0 (same prompt inside the 4-concurrent batch) | `f9725f86e5ba0558` | 421 | 13.07 |
+
+**GREEDY_BATCHED_EQ_SINGLE: True** — token-for-token identical.
+The other three batch slots also returned real completions
+("The three primary colors are red, blue, and yellow." /
+"The capital of France is Paris." / "One, two, three, four,
+five."), zero errors, zero cache corruption with the fences ON.
+Server-side log confirms all four completed (96/7/12/10 tokens,
+finish_reason length/stop/stop/stop).
+
+Run-note (honest): the ticket script itself was killed at the
+12-min wall by a bash `wait` bug — bare `wait` also waits for the
+never-exiting server job, so the script hung after the curls had
+already written their bodies at ~8 s. The gate comparison above was
+computed from the completed on-disk response bodies
+(/tmp/omlx-gate/*.json, mtime 23:50), not from live capture. The
+server log independently confirms every request completed before
+the kill. Fixed script: smoke_prefix.sh uses explicit pids.
+
+### Prefix-cache reuse + TTFT drop — PASS
+
+Sequential measurement (inline streaming, measure_prefix_ttft.py;
+the earlier concurrent probe's 0.000 s TTFT was a post-transfer
+measurement artifact and is discarded):
+
+| Request | TTFT | total |
+|---|---|---|
+| req1 (cold prefix, ~2.4 k tokens) | 1.766 s | 2.476 s |
+| req2 (warm prefix, different question) | **0.409 s** | 1.324 s |
+
+**TTFT drop: 1.357 s (warm = 23.2 % of cold, 4.3x).** Server-side
+`prefix_cache_lookup` hits logged (0.5 ms/2 lookups).
+
+### Gate status
+
+The assignment's numerics requirement — "greedy token equality of
+batched vs single-request on the M2" — is **met** on Qwen3-4B with
+the compat layer + interim fences. Qwen3.5-2B/9B remain blocked on
+the separate omarchy-backend Metal-kernel gap (KernelBattery).
