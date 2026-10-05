@@ -320,3 +320,12 @@ return from the Thunderbolt macOS window. The M2 ticket script is staged
 ship). Wheel coordination: the shared M2 wheel must be built from main
 793546208+ (int8_matmul landed in 33ff979ed); flagged to Main — an older
 base silently misses the op.
+
+## 12. M2 H3 ticket (2026-10-05 ~00:2xZ): PASS
+
+Shared wheel b8af62c (main + distributed branch; int8_matmul present). Under
+gpu-turn (nice -n 19): `mx.fast.int8_matmul` numeric validation on M2
+Honeykrisp REAL GPU — max|err| 0.415 vs one-bf16-round bound 0.560 (fp64
+reference) = PASS. First real-GPU validation of the landed op outside
+lavapipe. Ticket log ~/tfport/m2-h3-ticket.log on the M2. VAE decode deferred
+until the 11 GiB VAE weights ship to the M2 (Lead's disk call).
