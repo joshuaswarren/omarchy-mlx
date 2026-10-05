@@ -33,7 +33,10 @@ git checkout -q -f origin/main
 echo "tree at $(git rev-parse --short=7 HEAD)"
 ./scripts/prepare-mlx.sh
 cd "$SRC"
-cmake -DMLX_BUILD_TESTS=ON . > "/var/tmp/${TAG}-cmake.log" 2>&1
+cmake -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON -DMLX_BUILD_METAL=OFF \
+  -DMLX_BUILD_CUDA=OFF -DMLX_BUILD_TESTS=ON -DMLX_BUILD_EXAMPLES=OFF \
+  -DMLX_BUILD_BENCHMARKS=OFF -DCMAKE_BUILD_TYPE=Release . \
+  > "/var/tmp/${TAG}-cmake.log" 2>&1
 nice -n 10 make -j4 omarchy_fast_ops_tests > "/var/tmp/${TAG}-build.log" 2>&1
 GUF=$(find "$SRC" -name libgguflib.a | head -1 || true)
 # link ladder: blas/lapack first, then without
