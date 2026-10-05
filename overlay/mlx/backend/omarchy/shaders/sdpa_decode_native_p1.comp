@@ -227,7 +227,10 @@ void main() {
   uint repeats = params.matrix_m / params.matrix_n;
   uint kv_head = head / repeats;
   uint k_len = params.matrix_k;
-  uint chunk = (k_len + blocks - 1u) / blocks;
+  // This block's key count: keys are block + i*blocks, so the last blocks
+  // hold one fewer when k_len does not divide by blocks. Sizing every
+  // block by the global chunk read past the cache on short blocks.
+  uint chunk = (k_len - block + blocks - 1u) / blocks;
 
   if (thread < SDPA_DIM) {
     s_qrow[thread] = params.alpha * bf16_load(

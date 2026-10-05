@@ -13193,12 +13193,6 @@ void ScaledDotProductAttention::eval_gpu(
   // one. Block policy is decode_fast's 'd'-GPU formula (~256-key chunks,
   // 32-64 blocks) grown as needed to keep every chunk inside the shared
   // stream (258 entries), capped at 4096.
-  // Opt-in until the boundary-shape NaN is root-caused (dev lavapipe:
-  // NaN in the last kv group's dims for k just past the window; see
-  // receipts/2026-10-04-omlx-family-decode_fast). Default OFF protects
-  // the token stream; the ledger and the parity test force it on.
-  const bool twopass_env = omarchy::env_flag(
-      "MLX_OMARCHY_SDPA_DECODE_TWOPASS_BF16");
   constexpr uint32_t kTwoPassBf16Hd256SharedBytes = 128u;
   const bool decode_bf16_twopass_ready =
       decode_caps.max_compute_work_group_invocations >= 1024u &&
@@ -13266,8 +13260,7 @@ void ScaledDotProductAttention::eval_gpu(
           (k_len >= decode_window->k_min &&
            (k_len <= decode_window->k_max
                ? decode_bf16_ready
-               : (head_dim == 256 && decode_bf16_twopass_ready &&
-                  twopass_env)))) &&
+               : (head_dim == 256 && decode_bf16_twopass_ready)))) &&
       q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1) {
     const bool decode_bf16 = decode_bf16_probe;
     // f16 lanes carry SDPA_DIM/64 dim pairs; the bf16 arm's shared layout

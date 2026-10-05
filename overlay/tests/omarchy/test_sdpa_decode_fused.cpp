@@ -776,18 +776,15 @@ TEST_CASE("hd256 bf16 decode rides the two-pass split-KV past the window") {
     }
   }
 
-  // Past the window: two dispatches and composition agreement. The
-  // engagement probe keeps the assertions honest on devices where the
-  // two-pass leg cannot run. The route is env-gated (opt-in) until the
-  // boundary-shape NaN is root-caused, so the test turns it on for these
-  // rows; the getenv is re-read per dispatch in the backend.
-  ::setenv("MLX_OMARCHY_SDPA_DECODE_TWOPASS_BF16", "1", 1);
+  // Past the window: two dispatches and composition agreement, the
+  // boundary shape included (the first key past the window makes the
+  // last blocks short; pass 1 sizes each block's chunk from its own key
+  // count). The engagement probe keeps the assertions honest on devices
+  // where the two-pass leg cannot run.
   HdCacheInputs probe = make_hd256_cache(7169, 8192, stream);
   bool twopass_ready =
       dispatches_for([&] { return hd256_sdpa(probe, stream); }, stream) == 2;
-  // k=7169 (the first key past the window) is the known-bad boundary
-  // shape while the NaN is open, so the forced rows use clean shapes.
-  for (int keys : {8192, 16384}) {
+  for (int keys : {7169, 8192, 16384}) {
     CAPTURE(keys);
     HdCacheInputs in = make_hd256_cache(keys, keys, stream);
     if (twopass_ready) {
