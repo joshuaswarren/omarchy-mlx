@@ -185,3 +185,51 @@ M2 work (incremental branch wheel from the od tree copy, private venv
 with shebang-safe install, per-op + TF/free-run/PPL gates, then the
 pf512/pf1024 ON-vs-OFF timing cells) is staged and queued for the
 post-03:00Z window per Main's schedule.
+
+## 6. M2 results (2026-10-05, T6021 real silicon)
+
+Environment: jw14m2-linux, gpu-turn tickets per Main's queue discipline;
+branch wheel built on the golden-clone recipe (rebase 690dc50ad on main
+post-golden; wheel sha 1226e6d8, libmlx efb9ca45 — verified installed).
+
+Numerics:
+- Per-op A/B on the four Qwen3.5 shapes (2B GQA 8/2, 9B GQA 16/4,
+  qL=kL=512/1024, bf16 causal head_dim 256): **GATE_PEROP PASS** —
+  flash max-abs vs fp64 == composed max-abs (bf16 output quantization
+  ~1.95e-3 at unit scale, equal both arms), arm diff <= 1 bf16 ULP.
+- Shape sweep (10 classes: qL/kL 16..64 + ragged 53x117, tails and
+  non-multiples): max arm diff <= 0.000977 (1 ULP) everywhere.
+- Captured REAL model sdpa inputs (all 6 attention calls of one 2B
+  forward: bf16 (1,8,5,256)/(1,2,5,256), scale 0.0625, mask causal,
+  sinks None, contiguous): replayed outputs **bit-identical** between
+  arms; live sdpa input tensors bit-identical between arms.
+
+Performance (engagement probe, (1,8,2,1024,4096,256) causal):
+- v1 layout (2 rows/lane, 512 f32 accumulators): 3646 ms/call —
+  239x composed (register spill; the v1 register budget was past the
+  255-allocation limit).
+- v2 layout (D_v-split, 128 accumulators/lane): 1169-1172 ms/call —
+  76x composed (15.2-15.6 ms). Remaining gap under diagnosis: the
+  redundant per-lane softmax stats (32x exp amplification) and scalar
+  staging are the measured-suspect stages; a v3 with row-lane stats +
+  shared s_w weights is designed but not yet gated.
+
+Model-level gate (Qwen3.5-2B, teacher-forced + greedy free-run):
+**FAIL — OPEN DEFECT.** Flash-vs-composed TF top-1 agreement 40.6%,
+last-logit diffs 4.3-9.6 points, free-run digests differ; flash-vs-
+flash across processes is bit-deterministic (agreement 1.0), and the
+sdpa op itself is exonerated at op level (above). The divergence
+manifests ONLY in the live model forward with the flash arm engaged —
+isolated replays of every captured call are bit-identical. Leading
+hypothesis: a live-context-only hazard (adjacent-buffer corruption or
+a driver-level resource interaction), not sdpa arithmetic. Debug
+state: all capture/replay tooling + evidence in the notebook artifacts
+(m2_capture_all.py, live_capture.py, sweep/bisect scripts, tf2b npz).
+
+Per the assignment's honesty bar: the classic qwen35_prefill family on
+omarchy is numerics-covered by the EXISTING kernels for everything
+except fa256, and the new fa256 omarchy kernel is per-op correct and
+engaged but NOT shippable as a default route until the model-level
+gate passes; MLX_OMARCHY_SDPA_PREFILL_FLASH256=0 (or simply not
+setting it — the default arm is ON only on the agent branch, not on
+main) keeps the composed path.
