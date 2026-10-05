@@ -1,17 +1,14 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// SdpaPrefillFlashBF16Hd128, 2026-10-05. The flash-style bf16 prefill
-// route (online softmax, no materialized scores) must agree with the
-// f32-score composition it replaces on every tile-boundary shape, fall
-// through when anything outside its contract is asked (masks, causal,
-// f16, non-contiguous), keep its per-q-tile dispatch split, and be
-// run-to-run identical. The gate is per-op error vs an fp64 reference
-// no worse than the composed path's (docs/numerics-gate.md); online
-// softmax reassociates the sum, so agreement is at bf16 storage
-// granularity, not bit identity. Shapes cover the tile tails
-// (16/17/31/32/33/48/53/64, ragged q<k) where the famqwen flash probe
-// lived.
+// SdpaPrefillFlashBF16Hd128 and its explicitly gated cooperative-matrix twin.
+// Both routes use online softmax without materialized scores and must agree
+// with the f32-score composition they replace on tile-boundary shapes. They
+// must fall through for unsupported masks, causal mode, f16, and layouts.
+// Per-op error must stay within the fp64/composed gates in docs/numerics-gate.md;
+// online softmax reassociates sums, so agreement is at bf16 storage granularity,
+// not bit identity. Cases cover tile tails (16/17/31/32/33/48/53/64, ragged
+// q<k) where the famqwen flash probe lived.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
@@ -289,10 +286,10 @@ TEST_CASE("flash bf16 prefill defaults to score-memory safety, not sequence leng
 bool flash_coopmat_device_ready(Stream stream) {
   const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
   if (!caps.cooperative_matrix_f32_8 || caps.subgroup_size != 32u ||
-      caps.max_compute_work_group_size[0] < 64u ||
-      caps.max_compute_work_group_invocations < 64u ||
-      caps.max_compute_shared_memory_size < 20000u) {
-    printf("Skipping: no coopmat 8x8 f32 device with required workgroup/shared limits\n");
+      caps.max_compute_work_group_size[0] < 256u ||
+      caps.max_compute_work_group_invocations < 256u ||
+      caps.max_compute_shared_memory_size < 28928u) {
+    printf("Skipping: no coopmat device meeting flash route workgroup/shared limits\n");
     return false;
   }
   return true;
