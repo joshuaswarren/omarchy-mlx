@@ -1,15 +1,37 @@
 diff --git a/src/tensorfold/families/h3/weights.py b/src/tensorfold/families/h3/weights.py
-index adc9116..8302c73 100644
+index 8b83d05..8302c73 100644
 --- a/src/tensorfold/families/h3/weights.py
 +++ b/src/tensorfold/families/h3/weights.py
-@@ -147,10 +147,19 @@ def load_int8_dit(state_dir, blocks: int | None = None):
-     from .dit import Block, H3DiT
- 
-     state_dir = Path(state_dir)
--    index = json.loads((state_dir / "index.json").read_text())
-     config = DiTConfig.from_dict(json.loads((state_dir / "transformer-config.json").read_text()))
-     state: dict = {}
--    for name, _ in index["files"]:
+@@ -123,3 +123,97 @@ def int8_attention(model, qkv: bool = True, out: bool = True, fused: bool = True
+             changed += 1
+     mx.clear_cache()
+     return changed
++
++
++def load_int8_dit(state_dir, blocks: int | None = None):
++    """The DiT assembled from a saved swapped state (see kernels/minimax/h3/v1).
++
++    Peak memory is the int8 state plus one bf16 block: the skeleton is built
++    with zero layers, then each block is constructed once, its projections
++    wrapped from the saved state (``from_state`` — bit-identical to the swap
++    that produced it), its plain parameters (norms, AdaLN) loaded from the
++    same state, and only then appended. ``state_dir`` holds ``index.json``,
++    the shard files, and ``transformer-config.json``.
++    """
++
++    import json
++    from pathlib import Path
++
++    from tensorfold.kernels.minimax.h3.v1 import mlp_int8
++
++    import mlx.core as mx
++    from mlx.utils import tree_flatten
++
++    from .dit import Block, H3DiT
++
++    state_dir = Path(state_dir)
++    config = DiTConfig.from_dict(json.loads((state_dir / "transformer-config.json").read_text()))
++    state: dict = {}
 +    if (state_dir / "index.json").exists():
 +        index = json.loads((state_dir / "index.json").read_text())
 +        files = [name for name, _ in index["files"]]
@@ -21,6 +43,177 @@ index adc9116..8302c73 100644
 +            entries = json.loads((state_dir / manifest).read_text())["files"]
 +            files.extend(entry["name"] for entry in entries)
 +    for name in files:
-         state.update(mx.load(str(state_dir / name)))
++        state.update(mx.load(str(state_dir / name)))
++
++    skeleton = DiTConfig(**{**config.__dict__, "num_layers": 0})
++    model = H3DiT(skeleton)
++
++    layers = config.num_layers if blocks is None else min(blocks, config.num_layers)
++    int8_only = (".w1", ".s1", ".w2", ".s2", ".b1", ".b2")
++    built = []
++    for i in range(layers):
++        prefix = f"blocks.{i}."
++        block = Block(config)
++        block.mlp = mlp_int8.Int8MLP.from_state(
++            state[prefix + "mlp.w1"], state[prefix + "mlp.s1"],
++            state[prefix + "mlp.w2"], state[prefix + "mlp.s2"],
++            state.get(prefix + "mlp.b1"), state.get(prefix + "mlp.b2"))
++        attention = block.attn
++        if prefix + "attn.fused_qkv.w" in state:
++            from tensorfold.kernels.minimax.h3.v1.qkv_int8 import Int8QKV
++
++            attention.fused_qkv = Int8QKV.from_state(
++                state[prefix + "attn.fused_qkv.w"], state[prefix + "attn.fused_qkv.s"],
++                state[prefix + "attn.fused_qkv.norms"], config.num_attention_heads,
++                config.attention_head_dim, config.qk_norm_eps)
++            attention.qkv_proj = None
++        else:
++            attention.qkv_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.qkv_proj.w"], state[prefix + "attn.qkv_proj.s"], None,
++                group=config.hidden_size)
++        attention.out_proj = mlp_int8.Int8Linear.from_state(
++            state[prefix + "attn.out_proj.w"], state[prefix + "attn.out_proj.s"], None)
++        plain = {}
++        for key, value in state.items():
++            if not key.startswith(prefix):
++                continue
++            suffix = key[len(prefix):]
++            if suffix.startswith("mlp.") and suffix[4:] in (
++                    "w1", "s1", "w2", "s2", "b1", "b2", "fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"):
++                continue
++            if suffix.startswith("attn.") and (
++                    suffix.endswith((".w", ".s"))
++                    or suffix.startswith("fused_qkv.")
++                    or suffix in ("qkv_proj.weight", "out_proj.weight")):
++                continue
++            plain[suffix] = value
++        block.load_weights(list(plain.items()))
++        built.append(block)
++    model.blocks = built
++
++    rest = []
++    for key, value in state.items():
++        if key.startswith("blocks."):
++            continue
++        if key in ("rope.inv_freq",):
++            continue
++        rest.append((key, value))
++    model.load_weights(rest)
++    return model
+diff --git a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+index 0097aa1..5b65b1f 100644
+--- a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+@@ -11,6 +11,7 @@ import hashlib
+ from typing import Any
  
-     skeleton = DiTConfig(**{**config.__dict__, "num_layers": 0})
+ import mlx.core as mx
++import mlx.nn as nn
+ 
+ TILE = 128            # rows, output columns and K per tensor-unit tile
+ FC2_GROUP = 1024      # input channels sharing one activation scale on the fc2 input
+@@ -257,7 +258,7 @@ def int8_swiglu(xq: mx.array, xscale: mx.array, wq: mx.array, wscale: mx.array,
+                                   output_shapes=[(rows, n)], output_dtypes=[mx.bfloat16])[0]
+ 
+ 
+-class Int8MLP:
++class Int8MLP(nn.Module):
+     """``fc2(silu(gate) * value)`` with ``[gate; value] = fc1(x)``, both projections in int8."""
+ 
+     def __init__(self, fc1_weight: mx.array, fc2_weight: mx.array, fc2_group: int = FC2_GROUP,
+@@ -275,6 +276,27 @@ class Int8MLP:
+         self.b2 = None if fc2_bias is None else fc2_bias.astype(mx.float32)
+         mx.eval(self.w1, self.s1, self.w2, self.s2, *[b for b in (self.b1, self.b2) if b is not None])
+ 
++    @classmethod
++    def from_state(cls, w1: mx.array, s1: mx.array, w2: mx.array, s2: mx.array,
++                   b1: mx.array | None = None, b2: mx.array | None = None,
++                   fc2_group: int = FC2_GROUP) -> "Int8MLP":
++        """Wrap an already-quantized state (saved after a swap on another host) without re-quantizing.
++
++        The int8 weights and float32 scales are bit-identical to the normal swap path
++        because they were produced by the same quantize_weight code; only the host that
++        performed the swap differs.
++        """
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.width = w2.shape[0]
++        self.hidden = w1.shape[1]
++        self.fc2_group = fc2_group if self.width % fc2_group == 0 else self.width
++        self.w1, self.s1, self.w2, self.s2 = w1, s1, w2, s2
++        self.b1 = None if b1 is None else b1.astype(mx.float32)
++        self.b2 = None if b2 is None else b2.astype(mx.float32)
++        return self
++
+     def __call__(self, x: mx.array) -> mx.array:
+         lead = x.shape[:-1]
+         xq, xs, rows = quantize_rows(x.reshape(-1, self.hidden), self.hidden)
+@@ -284,7 +306,7 @@ class Int8MLP:
+         return out.reshape(*lead, -1).astype(x.dtype)
+ 
+ 
+-class Int8Linear:
++class Int8Linear(nn.Module):
+     """A projection in int8: activations quantized per row and ``group`` channels, weights per output channel."""
+ 
+     def __init__(self, weight: mx.array, group: int = FC2_GROUP, bias: mx.array | None = None) -> None:
+@@ -297,6 +319,18 @@ class Int8Linear:
+         self.b = None if bias is None else bias.astype(mx.float32)
+         mx.eval(self.w, self.s, *([] if self.b is None else [self.b]))
+ 
++    @classmethod
++    def from_state(cls, w: mx.array, s: mx.array, b: mx.array | None, group: int = FC2_GROUP) -> "Int8Linear":
++        """Wrap an already-quantized state saved after a swap on another host (bit-identical, no re-quantize)."""
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.width = w.shape[1]
++        self.group = group if self.width % group == 0 else self.width
++        self.w, self.s = w, s
++        self.b = None if b is None else b.astype(mx.float32)
++        return self
++
+     def __call__(self, x: mx.array) -> mx.array:
+         lead = x.shape[:-1]
+         xq, xs, rows = quantize_rows(x.reshape(-1, self.width), self.group)
+diff --git a/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py b/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
+index 5a72c9d..c80a7b1 100644
+--- a/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
+@@ -10,6 +10,7 @@ import hashlib
+ from typing import Any
+ 
+ import mlx.core as mx
++import mlx.nn as nn
+ 
+ from .mlp_int8 import _HEADER, _PRELUDE, TILE, _check, _mdims, quantize_rows, quantize_weight
+ 
+@@ -79,7 +80,7 @@ def _kernel(n: int, k: int, rotary: int, eps: float) -> Any:
+     return run
+ 
+ 
+-class Int8QKV:
++class Int8QKV(nn.Module):
+     """``Attention.qkv`` in one kernel: int8 projection, q/k RMSNorm and rotary, head-major outputs."""
+ 
+     def __init__(self, qkv_weight: mx.array, q_norm_weight: mx.array, k_norm_weight: mx.array, heads: int,
+@@ -93,6 +94,18 @@ class Int8QKV:
+         self.norms = mx.stack([q_norm_weight, k_norm_weight]).astype(mx.float32)
+         mx.eval(self.w, self.s, self.norms)
+ 
++    @classmethod
++    def from_state(cls, w: mx.array, s: mx.array, norms: mx.array, heads: int, head_dim: int,
++                   eps: float = 1e-5) -> "Int8QKV":
++        """Wrap an already-quantized fused-QKV state saved after a swap on another host."""
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.heads, self.head_dim, self.eps = heads, head_dim, float(eps)
++        self.hidden = w.shape[1]
++        self.w, self.s, self.norms = w, s, norms
++        return self
++
+     def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> tuple[mx.array, mx.array, mx.array]:
+         """q, k, v as (1, heads, rows, head_dim) from x (1, rows, hidden) and rotary tables (rows, rotary)."""
+ 
