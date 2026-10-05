@@ -139,6 +139,31 @@ target; the M2 ticket decides.
 - Timing ticket (fwd walls q1/4/16 + dispatch census + GDN trace):
   submitted, log /tmp/midm_ticket_b2.log on the M2; results append here.
 
+## Negative e2e result (OmlxDflash, 2026-10-05 ~08:0xZ) — RECEIPT
+
+OmlxDflash measured the final wheel (+28c87d5) on the A7 pair: NO e2e
+change. Forward q1 25-27 ms, q4 ~132-136, q8 ~134, q16 ~127 (before
+130-145); DFlash verify 147.6 ms/cycle (block 8), 148.3 (block 16);
+9.39/10.0 tok/s; tokens bit-identical. Two candidate explanations, to be
+separated by the engagement census (ticket D, staged at
+/tmp/midm_ticket_d.sh on the M2, run after 'M2 FREE'):
+1. the rows/token kernels do not engage on the real mlx-lm shape
+   (Qwen3-4B group 64 affine, GQA 32/8, hd128, qmm via
+   mx.quantized_matmul with M=4/8, real growing KV cache, bf16) - e.g.
+   the fused_chain planner gates (single_consumer, whole_dense,
+   input_ready, claimed) or the sdpa fence inputs fail on real tensor
+   provenance;
+2. they engage and the wall is dominated elsewhere (per A7: ~118
+   us/dispatch; the fold-off ship config leaves ~4 eager adds/layer plus
+   wo/down composing at rows>1 - the qmm token route saves only the
+   qkv+gate/up groups' 8 dispatches/layer, attention saves 2/layer).
+The census prints per-kernel counts per q-phase and flags
+TOKEN/ROWS-engaged vs COMPOSED kernels; the GPU-time diag build recipe
+(cmake -DCMAKE_CXX_FLAGS=-DMLX_OMARCHY_GPU_PROFILING on the staged build,
+MLX_OMARCHY_GPU_PROFILE=<ndjson>) is in the ticket for the
+per-kernel-time-vs-wall split. No win is claimed until forward q4/q8
+wall drops.
+
 ## Bisect result (fold OFF, wheel 58853e0)
 
 With the epilogue fold disabled at rows>1 (residual added by the separate
