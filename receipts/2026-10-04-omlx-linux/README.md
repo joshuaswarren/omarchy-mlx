@@ -430,3 +430,36 @@ The assignment's numerics requirement — "greedy token equality of
 batched vs single-request on the M2" — is **met** on Qwen3-4B with
 the compat layer + interim fences. Qwen3.5-2B/9B remain blocked on
 the separate omarchy-backend Metal-kernel gap (KernelBattery).
+
+## ADDENDUM 2 (2026-10-05): Qwen3.5-2B retested on the golden wheel — gap NOT covered there; failing shader captured
+
+KernelBattery's translator fix (main @ `60f80d2a0`) does not clear
+the Qwen3.5-2B custom-kernel gap. Retest against the golden wheel
+`mlx_omarchy-0.32.4.dev202610050436+60f80d2` (installed into the
+private oMLX venv via `python -m pip`, libmlx sha verified
+`d7c6096d…`): same failure, same five glslang errors.
+
+**Failing shader CAPTURED** for KernelBattery (the mlx runtime
+deletes the temp .comp right after the failed compile; a 0.2 s
+poll-watcher caught it):
+
+- File: `qwen35-2b-custom-kernel-5DXfg5.comp` (this directory),
+  6927 bytes, sha256 `d470ef415b137bc6843911890f30359a0fd271190140ab3d1a6b4555129d80b4`.
+- Content: the translated bf16 GDN conv+sigmoid kernel
+  (`_mlx_bf16_to_float`/`_mlx_float_to_bf16` helpers, a conv
+  accumulator, and the `1/(1+exp(|x|))` gated-delta sigmoid) —
+  i.e. the oMLX `qwen35_gdn_conv` Metal custom kernel after the
+  MSL→GLSL translation.
+- Failure sites for the translator:
+  - lines 50/55/56: MSL-style implicit float→`uint16_t`
+    assignments (`uint16_t xv = <float expr>`, `uint16_t conv =
+    uint16_t(acc)` pattern) — GLSL has no implicit conversion;
+  - line 56/59: bf16 arithmetic emitted on `uint16_t` operands
+    (`uint16_t(1) / (uint16_t(1) + exp(abs(conv)))`) — glslang
+    reads the divide in integer/boolean terms;
+  - line 76: the MSL type `short`, a reserved word in GLSL.
+
+Repro: omlx serve + one Qwen3.5-2B chat request on the golden
+wheel; identical five errors (`/tmp/omlx-2b/server.log` on the M2).
+Ownership: KernelBattery (translator coverage for bf16 custom
+kernels with uint16 buffers + MSL implicit conversions + `short`).
