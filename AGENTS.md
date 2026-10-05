@@ -177,8 +177,13 @@ Until then, update a row only when the linked receipt proves every named gate.
   because the two machines run different shader compilers. The build
   prefers `glslc` and falls back to `glslangValidator`
   (`overlay/mlx/backend/omarchy/CMakeLists.txt:10-27`). The x86
-  development box has only `glslangValidator` 12.0.0; m1-test-host has `glslc`
-  2026.3. The older validator accepts constructs the newer compiler
+  development box has `glslangValidator` 12.0.0 and a `glslc` shim
+  (`/usr/local/bin/glslc`: a 10-line script over a glslang 16.6.0 build in
+  `/opt/glslang-src`; it is NOT shaderc's glslc, but it is much closer to the
+  M1/M2 `glslc` 2026.3). Use the shim for every compile-only check of a new
+  shader (it compiles cooperative-matrix shaders but cannot run them).
+  m1-test-host has `glslc` 2026.3. The older 12.0.0 validator accepts
+  constructs the newer compiler
   rejects. On 2026-09-03 a fused RoPE shader read `gl_WorkGroupSize`
   with no `local_size` declaration, compiled clean here behind three
   green batteries, and broke the aarch64 wheel build on the M1.
