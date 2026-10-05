@@ -324,3 +324,33 @@ HOIST=1 / STATEREGS=1+HOIST=1, T in {64,128,512,1024}, pins must hold on
 every arm; plus the sweep arms (SWEEP=0/1/2) for the record. M2: the
 post-window ticket (queued 11:19Z) builds this tip — batch4/batch5 doctest +
 micro land there first.
+
+## H305 ownership: the sweep was confounded; occupancy model withdrawn
+
+H305 falsified batch5 (STATEREGS -2.8% vs predicted -25..-45%) and with it
+the H302 occupancy reading. Owned, dated: the sweep's shadow kernel scaled
+the shared-memory WORK with the footprint (bulk-region addressing
+`% (bpr - 256u)`), so 32/16/8 KiB measured work-size scaling, not occupancy.
+The "shared-bound occupancy / 1 WG/core" model is NOT established — the
+chunk walk is serial-chain latency bound (H297/H298 stub table stands:
+state 44%, loop MMAs ~31%, barriers/staging 29%). batch5 and the sweep
+shader are DELETED @ c5235246d (swap rule); falsifiers recorded.
+
+Lesson for every future sweep: the knob must vary ONLY the resource under
+test — a second variable (here, working-set size) makes the run a
+measurement of the knob's side effects.
+
+## HOIST default-ON preparation (land only after the M2 gates)
+
+Planned flip on the ablate branch (NOT applied until gates pass):
+`static const bool gdn_hoist_env = omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");`
+becomes the shipped default-ON pattern
+`static const bool gdn_hoist_env = std::getenv("MLX_OMARCHY_GDN_HOIST") == nullptr || omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");`
+(kill switch MLX_OMARCHY_GDN_HOIST=0), dispatch gate already length-limited
+to T >= 512, pass B on the batch4 body (stacked -12.3%/-13.7% kernel on
+jwm1, e2e pf512 +1.27%, sub-512 == none, pins exact). Gates before the flip:
+M2 pf1024 e2e >= +1.5% and pf512 non-negative, digest equality at every
+depth (1-pass + 5-pass), and the captured-operand doctest INCLUDING a
+non-zero initial state case (H305 lesson: production starts from zeros; the
+kernel-level proof must cover the state path — the lane doctest now has a
+NONZERO_STATE mode, run in the M2 post-window ticket).
