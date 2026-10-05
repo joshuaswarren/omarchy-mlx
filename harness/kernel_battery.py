@@ -104,6 +104,8 @@ class Kernel:
     file: str
     name: str
     msllib: str
+    input_names: list = field(default_factory=list)
+    output_names: list = field(default_factory=list)
     gmsl_features: list[str] = field(default_factory=list)
     template_args: dict[str, object] = field(default_factory=dict)
     line: int = 0
@@ -217,6 +219,12 @@ def extract_kernels(py_file: Path, source_tag: str) -> Iterator[Kernel]:
                 msllib = str(kw.value.value)
             elif kw.arg == "source" and isinstance(kw.value, ast.Name):
                 msllib = str_consts.get(kw.value.id, "")
+            elif kw.arg == "input_names" and isinstance(kw.value, ast.List):
+                input_names = [e.value for e in kw.value.elts
+                               if isinstance(e, ast.Constant)]
+            elif kw.arg == "output_names" and isinstance(kw.value, ast.List):
+                output_names = [e.value for e in kw.value.elts
+                                if isinstance(e, ast.Constant)]
             elif kw.arg == "template" and isinstance(kw.value, ast.Dict):
                 for k, v in zip(kw.value.keys, kw.value.values):
                     if isinstance(k, ast.Constant):
@@ -234,6 +242,8 @@ def extract_kernels(py_file: Path, source_tag: str) -> Iterator[Kernel]:
             file=str(py_file),
             name=name,
             msllib=msllib,
+            input_names=input_names,
+            output_names=output_names,
             gmsl_features=gmsl_features,
             template_args=template_args,
             line=call.lineno,
