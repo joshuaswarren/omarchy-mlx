@@ -61,6 +61,11 @@ fi
 
 "$PRIVATE_VENV/bin/python" -m pip install --no-deps --force-reinstall "$WHEEL" >/dev/null
 
+# The battery's CPU references use numpy; the shared venv does not carry
+# it, so install it into the private venv only (never the shared one).
+"$PRIVATE_VENV/bin/python" -c 'import numpy' 2>/dev/null \
+  || "$PRIVATE_VENV/bin/python" -m pip install numpy >/dev/null
+
 # Verification: the import must resolve INSIDE the private venv and the
 # installed libmlx.so must be byte-identical to the wheel's copy.
 RESOLVED="$("$PRIVATE_VENV/bin/python" -c 'import mlx.core as mx; print(mx.__file__)')"
