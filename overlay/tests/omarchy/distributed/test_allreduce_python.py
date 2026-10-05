@@ -4,9 +4,10 @@ import mlx.core as mx
 
 
 def test_allreduce_dtype_ops():
-    group = mx.distributed.init()
+    group = mx.distributed.init(backend="ring")
     rank = group.rank()
     assert group.size() == 2, f"expected two ranks, got {group.size()}"
+    assert mx.default_device() == mx.gpu, f"expected GPU, got {mx.default_device()}"
     values = [1, 4, -3] if rank == 0 else [10, 2, -1]
     cases = (
         (mx.float32, [11, 6, -4], [10, 4, -1], [1, 2, -3]),
@@ -30,5 +31,17 @@ def test_allreduce_dtype_ops():
     print(f"DISTRIBUTED_ALLREDUCE_OK rank={rank} size=2 dtypes=4 ops=3 elements=3")
 
 
+def test_ring_split_refuses_unsupported():
+    group = mx.distributed.init(backend="ring")
+    try:
+        group.split(group.rank() % 2)
+    except RuntimeError as error:
+        assert str(error) == "[ring] Group split not supported.", str(error)
+        print(f"DISTRIBUTED_SPLIT_REFUSAL_OK rank={group.rank()}")
+    else:
+        raise AssertionError("ring split should remain explicitly unsupported")
+
+
 if __name__ == "__main__":
     test_allreduce_dtype_ops()
+    test_ring_split_refuses_unsupported()
