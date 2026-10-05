@@ -25,15 +25,16 @@ The package README documents installer parameters and checks: [`packaging/omlx-l
 
 ## Start the server
 
-Use the venv and private HOME created by the installer. Set `HF_HUB_CACHE` to the existing Hugging Face cache when using pre-downloaded models, to avoid downloading model weights again.
+Use the venv and private HOME created by the installer. Keep the existing Hugging Face cache path separate from the private HOME so pre-downloaded weights remain visible and the server does not download them again. Start without `--model` when testing dashboard loading; this makes the Models panel perform the load.
 
 ```sh
+HOST_HOME="$HOME"
 export HOME=/path/to/omlx-home
-export HF_HUB_CACHE="$HOME/.cache/huggingface/hub"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HOST_HOME/.cache/huggingface/hub}"
 "$HOME/.venvs/omlx/bin/omlx" serve --host 127.0.0.1 --port 8900
 ```
 
-Open `http://127.0.0.1:8900/admin` in a browser on the same host. Keep the server bound to loopback unless you have configured authentication and network access intentionally. oMLX has a login page and supports API-key based admin login; see upstream `omlx/admin/routes.py` and the v0.7.0 admin interface.
+Open `http://127.0.0.1:8900/admin` in a browser on the same host. Keep the server bound to loopback unless you have configured authentication and network access intentionally. On loopback, oMLX may redirect directly to the dashboard; if it presents the login page, use the configured API key. See upstream `omlx/admin/routes.py` and the v0.7.0 admin interface.
 
 ## Fresh-user walkthrough
 
