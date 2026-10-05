@@ -810,10 +810,8 @@ Translation translate_msl(
   body = std::regex_replace(
       body,
       std::regex(
-          R"(\b(const\s+(?:int|uint|int16_t|uint16_t)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
-      [](const std::smatch& m) {
-        return m[1].str() + m[2].str() + "(" + m[3].str() + ")" + m[4].str();
-      });
+          R"(\b(const\s+(int|uint|int16_t|uint16_t)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
+      "$1$2($3)$4");
 
   // MSL allows any integer expression as a condition (`if (flag)`); GLSL
   // requires a bool. Wrap the narrow forms — a bare identifier, an indexed
