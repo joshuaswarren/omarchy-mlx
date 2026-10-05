@@ -1,6 +1,6 @@
 --- a/mlx/fast.h	2026-10-04 19:27:25.580611825 -0500
-+++ b/mlx/fast.h	2026-10-04 19:26:37.840068089 -0500
-@@ -221,6 +221,22 @@
++++ b/mlx/fast.h	2026-10-05 00:13:18.864702471 -0500
+@@ -221,6 +221,35 @@
      bool swiglu,
      StreamOrDevice s = {});
  
@@ -20,12 +20,25 @@
 +    int mask_ratio,
 +    StreamOrDevice s = {});
 +
++
++// GLM DSA fused decode indexer scan: OUT[b,0,0,s] =
++// sum_h max(sum_d Q[b,h,0,d] * K[b,0,s,d], 0) * W[b,h], fp32
++// accumulation with one final 16-bit round (fp32_scores=True stores
++// float32). Q [B,32,1,128], K [B,1,S,128], W [B,32], S >= 1024.
++// Reference: omlx dsa_decode_scores metallib kernel (Apache-2.0).
++MLX_API array dsa_decode_scores(
++    const array& queries,
++    const array& keys,
++    const array& weights,
++    bool fp32_scores,
++    StreamOrDevice s = {});
++
  using TemplateArg = std::variant<int, bool, Dtype>;
  using ScalarArg = std::variant<bool, int, float>;
  
 --- a/mlx/fast_primitives.h	2026-10-04 19:27:25.583611796 -0500
-+++ b/mlx/fast_primitives.h	2026-10-04 19:26:37.841068079 -0500
-@@ -572,6 +572,61 @@
++++ b/mlx/fast_primitives.h	2026-10-05 00:13:18.864702471 -0500
+@@ -572,6 +572,102 @@
    bool swiglu_;
  };
  
@@ -84,12 +97,53 @@
 +  int mask_ratio_;
 +};
 +
++
++// Inputs (queries, keys, weights); [B,1,1,S] output. See
++// fast::dsa_decode_scores. The composed fallback materializes the
++// [B,32,1,S] relu/weight intermediates in 16-bit storage; the Omarchy
++// GPU route accumulates in float32 shared-free registers and rounds
++// once at the store.
++class DsaDecodeScores : public Custom {
++ public:
++  DsaDecodeScores(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      bool fp32_scores)
++      : Custom(stream, std::move(fallback)), fp32_scores_(fp32_scores) {}
++
++  static bool use_fallback(Stream s);
++
++  bool fp32_scores() const {
++    return fp32_scores_;
++  }
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(DsaDecodeScores);
++  bool is_equivalent(const Primitive& other) const override {
++    const auto& p = static_cast<const DsaDecodeScores&>(other);
++    return p.fp32_scores_ == fp32_scores_;
++  }
++  auto state() const {
++    return std::make_tuple(nullptr, fp32_scores_);
++  }
++
++ private:
++  bool fp32_scores_;
++};
++
  class GatedDeltaUpdate : public Custom {
   public:
    GatedDeltaUpdate(
 --- a/mlx/fast.cpp	2026-10-04 19:27:25.582611806 -0500
-+++ b/mlx/fast.cpp	2026-10-04 20:36:49.075511811 -0500
-@@ -1937,6 +1937,115 @@
++++ b/mlx/fast.cpp	2026-10-05 00:13:18.865702462 -0500
+@@ -1937,6 +1937,185 @@
    return std::move(outputs[0]);
  }
  
@@ -202,20 +256,82 @@
 +  return std::move(outputs[0]);
 +}
 +
++
++array dsa_decode_scores(
++    const array& queries,
++    const array& keys,
++    const array& weights,
++    bool fp32_scores,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (queries.ndim() != 4 || keys.ndim() != 4 || weights.ndim() != 2) {
++    throw std::invalid_argument(
++        "[dsa_decode_scores] q/k must be 4D and weights 2D.");
++  }
++  int B = queries.shape(0);
++  int S = keys.shape(2);
++  int D = queries.shape(3);
++  if (queries.shape(1) != 32 || queries.shape(2) != 1 || D != 128) {
++    throw std::invalid_argument(
++        "[dsa_decode_scores] queries must be [B, 32, 1, 128].");
++  }
++  if (keys.shape(0) != B || keys.shape(1) != 1 || keys.shape(3) != D) {
++    throw std::invalid_argument(
++        "[dsa_decode_scores] keys must be [B, 1, S, 128].");
++  }
++  if (S < 1024) {
++    throw std::invalid_argument("[dsa_decode_scores] S must be >= 1024.");
++  }
++  if (weights.shape() != Shape{B, 32}) {
++    throw std::invalid_argument(
++        "[dsa_decode_scores] weights must be [B, 32].");
++  }
++  auto dtype = queries.dtype();
++  if (dtype != float16 && dtype != bfloat16) {
++    throw std::invalid_argument(
++        "[dsa_decode_scores] q/k/w must be float16 or bfloat16.");
++  }
++  if (keys.dtype() != dtype || weights.dtype() != dtype) {
++    throw std::invalid_argument("[dsa_decode_scores] dtype mismatch.");
++  }
++  std::function<std::vector<array>(std::vector<array>)> fallback =
++      [s, fp32_scores, B, S](std::vector<array> inputs) {
++        auto dt = inputs[0].dtype();
++        array q32 = astype(inputs[0], float32, s);
++        array k32 = astype(inputs[1], float32, s);
++        array w32 = astype(inputs[2], float32, s);
++        // [B, 32, 1, 128] @ [B, 1, 128, S] -> [B, 32, 1, S]
++        array acc = matmul(q32, swapaxes(k32, -1, -2, s), s);
++        acc = maximum(acc, array(0.0f), s);
++        array wb = reshape(w32, {B, 1, 1, 32}, s);
++        acc = multiply(acc, wb, s);
++        array out = sum(acc, 1, true, s);
++        array want = fp32_scores ? std::string("float32") : std::string();
++        (void)want;
++        if (fp32_scores) {
++          return std::vector<array>{out};
++        }
++        return std::vector<array>{astype(out, dt, s)};
++      };
++  bool routed = !DsaDecodeScores::use_fallback(s);
++  std::vector<array> inputs{queries, keys, weights};
++  if (!routed) {
++    return fallback(inputs)[0];
++  }
++  auto outputs = array::make_arrays(
++      {{B, 1, 1, S}},
++      {fp32_scores ? float32 : dtype},
++      std::make_shared<DsaDecodeScores>(s, fallback, fp32_scores),
++      std::move(inputs));
++  return std::move(outputs[0]);
++}
++
  bool Quantize::is_equivalent(const Primitive& other) const {
    const Quantize& p_other = static_cast<const Quantize&>(other);
    return (
---- a/mlx/backend/no_gpu/primitives.cpp
-+++ b/mlx/backend/no_gpu/primitives.cpp
-@@ -193,4 +193,5 @@
- NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
- NO_GPU_USE_FALLBACK(Int8Matmul)
-+NO_GPU_USE_FALLBACK(DsaIndexerScores)
- NO_GPU_USE_FALLBACK(CrossEntropy)
- NO_GPU_MULTI(CrossEntropyVJP)
 --- a/python/src/fast.cpp	2026-10-04 19:27:25.589611739 -0500
-+++ b/python/src/fast.cpp	2026-10-04 19:26:37.842068070 -0500
-@@ -646,6 +646,37 @@
++++ b/python/src/fast.cpp	2026-10-05 00:13:18.866702452 -0500
+@@ -646,6 +646,61 @@
                  bfloat16 [..., N] (swiglu: [..., N])
          )");
  
@@ -250,6 +366,39 @@
 +                [B, 1, L, K] float16/bfloat16
 +        )');
 +
++
++  m.def(
++      "dsa_decode_scores",
++      &mlx::core::fast::dsa_decode_scores,
++      "queries"_a,
++      "keys"_a,
++      "weights"_a,
++      nb::kw_only(),
++      "fp32_scores"_a = false,
++      "stream"_a = nb::none(),
++      R"(
++            GLM DSA fused decode indexer scan (omarchy native of the
++            omlx dsa_decode_scores family). Single query position.
++            OUT[b,0,0,s] = sum_h max(sum_d Q[b,h,0,d]*K[b,0,s,d], 0)
++                               * W[b,h]
++            fp32 accumulation, one round at the store (or fp32 out).
++            Args:
++                queries: [B, 32, 1, 128] float16/bfloat16 (post-RoPE)
++                keys: [B, 1, S, 128] float16/bfloat16
++                weights: [B, 32] float16/bfloat16
++                fp32_scores: store float32 instead of the input dtype
++            Returns:
++                [B, 1, 1, S]
++        )');
    m.def(
        "gdn_conv_update",
        &mlx::core::fast::gdn_conv_update,
+--- a/mlx/backend/no_gpu/primitives.cpp
++++ b/mlx/backend/no_gpu/primitives.cpp
+@@ -193,4 +193,6 @@
+ NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
+ NO_GPU_USE_FALLBACK(Int8Matmul)
++NO_GPU_USE_FALLBACK(DsaIndexerScores)
++NO_GPU_USE_FALLBACK(DsaDecodeScores)
+ NO_GPU_USE_FALLBACK(CrossEntropy)
+ NO_GPU_MULTI(CrossEntropyVJP)

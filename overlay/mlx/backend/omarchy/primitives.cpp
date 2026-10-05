@@ -11846,6 +11846,66 @@ void DsaIndexerScores::eval_gpu(
       k_tiles);
 }
 
+// GLM DSA fused decode indexer scan, shaders/dsa_decode.comp (f32-out
+// twin via -DFP32_OUT). One workgroup per (batch, 256-key tile) stages
+// the 32 x 128 query panel and weights in f32 shared memory (16.5 KiB);
+// one thread per key position carries 32 f32 accumulators. fp32
+// accumulation end to end, one round at the store - strictly tighter
+// than the composed fallback's 16-bit [B,32,1,S] intermediates.
+void DsaDecodeScores::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const auto& caps = encoder.device().capabilities();
+  array q = inputs.at(0);
+  array k = inputs.at(1);
+  array w = inputs.at(2);
+  array& out = outputs.at(0);
+  std::optional<array> q_temp;
+  std::optional<array> k_temp;
+  std::optional<array> w_temp;
+  const array& qd = ensure_dense(q, q.flags().row_contiguous, q_temp, encoder, s);
+  const array& kd = ensure_dense(k, k.flags().row_contiguous, k_temp, encoder, s);
+  const array& wd = ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0 || qd.size() == 0) {
+    return;
+  }
+  const int S = kd.shape(2);
+  const int B = qd.shape(0);
+  if (qd.offset() != 0 || kd.offset() != 0 || wd.offset() != 0) {
+    omarchy::unsupported(tag + " nonzero storage offset", out);
+  }
+  if (static_cast<size_t>(caps.max_compute_shared_memory_size) <
+      (32u * 128u + 32u) * sizeof(float)) {
+    omarchy::unsupported(tag + " shared memory for the query panel", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = checked_u32(static_cast<uint64_t>(B) * S, tag, out);
+  params.lhs_offset = checked_item_offset(qd, qd.size(), tag, out);
+  params.rhs_offset = checked_item_offset(kd, kd.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.flags = fp32_scores() ? 1u : 0u;
+  params.shape[0] = static_cast<uint32_t>(S);
+  params.shape[1] = static_cast<uint32_t>(B);
+  params.in_strides[0] =
+      checked_u32(static_cast<uint64_t>(32) * 128, tag, out); // q batch
+  params.in_strides[1] =
+      checked_u32(static_cast<uint64_t>(S) * 128, tag, out); // k batch
+  params.out_strides[0] = 32u; // w batch
+  std::array<omarchy::ComputeBinding, 4> bindings{
+      binding(qd), binding(kd), binding(wd), binding(out)};
+  encoder.dispatch_compute(
+      fp32_scores() ? omarchy::ComputeKernel::DsaDecodeScoresF32Op
+                    : omarchy::ComputeKernel::DsaDecodeScoresOp,
+      bindings,
+      params,
+      (static_cast<uint32_t>(S) + 255u) / 256u,
+      static_cast<uint32_t>(B));
+}
+
 // Greedy-argmax head, shaders/qmm_vec.comp QMM_VEC_GREEDY stages 0-7.
 // Its exact stage IS the QmmVecQ4WordSubgroupBF16 column, so the route
 // holds only where QuantizedMatmul::eval_gpu picks that kernel for the

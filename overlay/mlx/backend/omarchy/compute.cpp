@@ -364,6 +364,8 @@
 #include "fast_trio_swiglu_f16.h"
 #include "int8_matmul.h"
 #include "dsa_indexer.h"
+#include "dsa_decode.h"
+#include "dsa_decode_f32.h"
 #include "matmul_f32_coopmat_bf16.h"
 #include "qmm_tile_f32.h"
 #include "dequant_f32.h"
@@ -1443,6 +1445,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {int8_matmul, int8_matmul_size};
     case ComputeKernel::DsaIndexerScoresOp:
       return {dsa_indexer, dsa_indexer_size};
+    case ComputeKernel::DsaDecodeScoresOp:
+      return {dsa_decode, dsa_decode_size};
+    case ComputeKernel::DsaDecodeScoresF32Op:
+      return {dsa_decode_f32, dsa_decode_f32_size};
     case ComputeKernel::QmmVecQ4MultiF32:
       return {qmm_vec_q4_multi_f32, qmm_vec_q4_multi_f32_size};
     case ComputeKernel::QmmVecQ4MultiF16:

@@ -823,6 +823,10 @@ enum class ComputeKernel : uint16_t {
   // fused pre-ReLU; the H-wide score tensor never exists in memory.
   // Append-only profile id.
   DsaIndexerScoresOp,
+  // GLM DSA fused decode indexer scan (shaders/dsa_decode.comp);
+  // fast::DsaDecodeScores. Append-only profile ids.
+  DsaDecodeScoresOp,
+  DsaDecodeScoresF32Op,
   Count,
 };
 
