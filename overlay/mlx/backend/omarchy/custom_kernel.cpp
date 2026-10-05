@@ -864,6 +864,21 @@ Translation translate_msl(
   replace_word(body, "device", "");
   replace_word(header, "device", "");
 
+  // Bare `thread` locals (e.g. `thread float q_frag[4];`) are ordinary
+  // GLSL locals; the address-space qualifier has no counterpart. This
+  // runs after the threadgroup/shared pass above, and the word boundary
+  // keeps `threadgroup` and the translated `thread_*` attribute macros
+  // (which no longer contain a bare `thread` token) untouched.
+  replace_word(body, "thread", "");
+  replace_word(header, "thread", "");
+
+  // `fast::` is the Metal stdlib namespace some JIT kernels use
+  // (`fast::exp`, `fast::exp2`); GLSL builtins carry no namespace, so
+  // the qualifier just disappears. The `metal::` strips above have
+  // already removed the qualified forms.
+  replace_all(body, "fast::", "");
+  replace_all(header, "fast::", "");
+
   // `const T* name = BUFFER;` re-declares a buffer base under another name.
   // Drop the statement: the parameter macro already provides that alias.
   body = std::regex_replace(
@@ -1046,6 +1061,18 @@ Translation translate_msl(
          << "#extension GL_KHR_shader_subgroup_shuffle : require\n";
   }
   glsl << "#define __FAST_MATH__ " << (compile_mode == 2 ? 1 : 0) << "\n";
+  // MSL kernels use the C math-huge-value identifiers freely
+  // (`-INFINITY` causal guards in the MiniMax M3 attention kernels,
+  // `NAN` sentinels elsewhere). GLSL has neither identifier; the IEEE
+  // bit patterns are exact and fold as constant expressions.
+  if (body.find("INFINITY") != std::string::npos ||
+      header.find("INFINITY") != std::string::npos) {
+    glsl << "#define INFINITY uintBitsToFloat(0x7F800000u)\n";
+  }
+  if (body.find("NAN") != std::string::npos ||
+      header.find("NAN") != std::string::npos) {
+    glsl << "#define NAN uintBitsToFloat(0x7FC00000u)\n";
+  }
   glsl << "layout(local_size_x=" << local_x << ", local_size_y=" << local_y
        << ", local_size_z=" << local_z << ") in;\n";
   glsl << declarations << shared_declarations;
