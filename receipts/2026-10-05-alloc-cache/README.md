@@ -1,65 +1,56 @@
-# A20 server repro after the alloc-cache fix
+# Vulkan allocator cache fix — M2 verification
 
-- Apple Silicon M2 (Honeykrisp Vulkan heap; host redacted), lane tree at the standard
-  golden-clone location on top of `/var/tmp/golden-wheel` (golden at
-  origin `23d1ca6e`, warm `60f80d2` build, plus the heap-budget
-  wired_limit patch `8f8d32956` ported in, plus the AllocCache patch
-  on top).
-- Wheel: `mlx_omarchy-0.32.4.dev202610050436+23d1ca6-cp314-cp314-linux_aarch64.whl`
-  (incremental build).
-- Same Qwen3-4B 651-token / max_tokens 96 workload, same harness
-  (`/var/tmp/a20_server_probe.py` + `/var/tmp/a20site/sitecustomize.py`),
-  same one-model server config (TurboQuant 8-bit, memory guard off,
-  no-cache, no-hf-cache, max-concurrent 1).
-- The omlx venv was reinstalled against the new wheel (it had
-  `0.32.4.dev202610050725+5c15fba` before; now
-  `0.32.4.dev202610050436+23d1ca6`).
+## Build
 
-## Pre-registered pass criterion
+- Built a wheel from the fresh M2 checkout at allocator commit `f9500ec56` with `DEV_RELEASE=1`, CMake parallelism 4, and the repository's pinned MLX source bundle.
+- Wheel: `mlx_omarchy-0.32.4.dev202610051848+f9500ec-cp314-cp314-linux_aarch64.whl`.
+- SHA-256: `9acbd5fce64753f1c14d08e89e398538ad415e9eb1f8bc7d53d0a356dadbe2b4`.
+- Hardware was Apple M2 Max with a 50,600,083,456-byte Honeykrisp heap. The default working-set/cache ceiling is 95% of that heap (48,070,079,283 bytes; 44.76 GiB).
 
-HTTP 200 chat-completion response, non-empty completion, control file
-`request_success`, no `async_eval_failure` event in `memory.jsonl`.
+## M2 test suites
 
-## Result
+Built the Omarchy test targets in a separate Release CMake build with CPU and Omarchy enabled, and ran each on the GPU through `gpu-turn`:
 
-PASS.
+- `omarchy_runtime_tests`: 47/47 cases and 22,890/22,890 assertions passed. This includes cache growth across shape-changing allocations, the working-set release gate, memory/wired-limit behavior, and injected first-allocation OOM followed by a successful retry.
+- `omarchy_primitive_tests`: 104/104 cases and 2,743,003/2,743,003 assertions passed.
+- `omarchy_matmul_family_tests`: exit status 0.
+- `omarchy_fast_regression_tests`: exit status 0.
 
-- `control.txt`: `request_success`.
-- `response.json`: `status 200`, `elapsed_s 105.15`, `body 770` bytes,
-  `id chatcmpl-baaa462c`, real completion text.
-- `memory.jsonl`: 86 events, 0 `async_eval_failure` events, 0
-  `async_eval_failure_after_clear_cache` events.
-- `cache_memory` profile: 0 → 43.88 GiB (just before the first
-  `gc_limit_` release at step 26) → 0.84 GiB (release) → climbs
-  again to 42.22 → 0.87 → 15.43 (last `client_marker` after success).
-  This is the bounded cycle the gate forces: each decode step adds
-  ~1.6 GiB of KV-cache allocation; once `active + cache + size`
-  would cross 95 % of `total_memory` (47.13 GiB → ceiling 48.07 GiB),
-  `BufferCache::release_cached_buffers` evicts the LRU before the
-  next `vkAllocateMemory`.
-- `active_memory` 2.34 GiB peak, `peak_memory` 2.34 GiB (unchanged
-  from the failing baseline — the bug was a cache leak, not active
-  growth).
-- The OOM-retry path in `malloc` (release cache + retry once on
-  `VK_ERROR_OUT_OF_DEVICE_MEMORY` / `VK_ERROR_OUT_OF_HOST_MEMORY`)
-  was not triggered: the gc_limit gate freed enough headroom for
-  every step to succeed on the first try.
+The first runtime-test attempt exposed a pre-existing 32-bit test literal (`64u << 30`) that evaluated to zero. The test now uses a 64-bit literal and passes on the M2.
 
-## Artifacts
+## A20 oMLX request
 
-- `a20-single-server-memory.jsonl`: 86 events, 103,421 B.
-- `a20-single-server-response.json`: HTTP 200 + body + elapsed, 903 B.
-- `a20-single-server-body.json`: the 651-token request body, 3,365 B.
-- `control.txt`: `request_success`, 15 B.
-- `SHA256SUMS`: sha256 of the four captured files above.
+Replayed the existing one-model server harness with Qwen3-4B-Instruct-2507-4bit, TurboQuant KV 8-bit, memory guard off, one concurrent request, 651-token prompt, and `max_tokens=96`.
 
-## Replay command
+- Chat completion returned HTTP 200 with a non-empty response; `control.txt` was `request_success`.
+- Elapsed time: 98.24 s; response body: 779 bytes.
+- Profile: 88 memory events, no `async_eval_failure` events.
+- Maximum observed cache memory: 4,815,446,016 bytes (4.48 GiB), below the 44.76 GiB working-set ceiling.
+- Maximum active memory: 3,342,581,760 bytes (3.11 GiB); peak memory: 3,398,901,760 bytes (3.17 GiB).
+- The cached-buffer OOM retry was not needed for this request; its injected failure and successful retry are covered by the runtime test above.
 
-```sh
-cd /var/tmp && HOME=/tmp/omlxcache-home setsid nohup \
-  /usr/local/bin/gpu-turn -m 10 -- /var/tmp/run_a20.sh \
-  >>/var/tmp/a20-runner-new.log 2>&1 </dev/null & disown
-```
+Harness outputs remain under `/var/tmp/a20-single/` on the M2: `response.json`, `control.txt`, `memory.jsonl`, and `server.log`. The invocation used `/var/tmp/a20_server_probe.py` and its existing `/var/tmp/a20site/sitecustomize.py` instrumentation.
 
-`run_a20.sh` just sets `HOME` and execs the staged
-`a20_server_probe.py` under the rebuilt omlx venv.
+## Long generation
+
+Ran `mlx_lm.generate.stream_generate` with the same 4B model for exactly 2,000 generated tokens. The test processor masked EOS tokens so early termination could not shorten the run.
+
+- Result: 2,000 tokens, 8,183 response characters, 50.42 s.
+- Instrumentation recorded 8,028 memory events and no asynchronous evaluation failures.
+- Maximum observed cache memory: 335,482,880 bytes (320 MiB); maximum active memory: 3,711,918,080 bytes (3.46 GiB); peak memory: 3,717,070,848 bytes (3.46 GiB).
+- Output and profile remain under `/var/tmp/alloc-cache-longgen/` on the M2.
+
+## Decode performance and numerical identity
+
+Compared the prior `60f80d2` wheel with the `f9500ec` allocator wheel in the same oMLX venv. Each measurement used the same 2B d64 benchmark, 512-token prefill, 64 generated tokens, one warmup, and one measured pass. Five measurements were captured per wheel.
+
+| Wheel | Decode tokens/s (five runs) | Median |
+|---|---|---:|
+| Prior (`60f80d2`) | 107.81, 107.89, 108.66, 107.63, 108.04 | 107.89 |
+| Allocator (`f9500ec`) | 108.61, 95.85, 108.28, 108.19, 108.07 | 108.19 |
+
+The medians differ by 0.28%. Four of five allocator runs are within the prior wheel's observed range; one allocator run measured 95.85 tokens/s and is retained here rather than excluded. All ten runs produced the same ordered-record digest:
+
+`304d1237fefefa485c53403c826116b713f1467ce9a4ba38026c0841d2501372`
+
+Benchmark JSON files remain under `/var/tmp/alloc-cache-2b-final/` on the M2. The prior wheel is in `/var/tmp/golden-wheel/dist/`; the allocator wheel is in `/var/tmp/alloc-cache-fresh/dist/`.
