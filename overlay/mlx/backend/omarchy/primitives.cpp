@@ -7796,6 +7796,26 @@ bool dispatch_quantized_gemv_group(
   }
   const array& x = members[0].node.inputs().at(0);
   const Dtype dtype = members[0].node.dtype();
+  // Token rows (verify / small-batch): 2..M_TOKENS route to the
+  // multi-token column (bf16; the out-gate prologue and producer-direct
+  // KV windows stay single-row contracts). The env is read live so tests
+  // can flip it between phases. Kill switch:
+  // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0 restores the single-row fence.
+  const bool token_multi_disabled =
+      []() {
+        const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+        return env != nullptr && std::strcmp(env, "0") == 0;
+      }();
+  bool token_route = false;
+  uint32_t rows = 1;
+  if (x.ndim() >= 2 && x.shape(-2) > 1) {
+    if (token_multi_disabled || dtype != bfloat16 ||
+        x.shape(-2) > kQmmVecTokenRowsMax) {
+      return false;
+    }
+    token_route = true;
+    rows = static_cast<uint32_t>(x.shape(-2));
+  }
   bool subgroup_ready = caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   if (outgate != nullptr) {
@@ -7821,14 +7841,27 @@ bool dispatch_quantized_gemv_group(
       return false;
     }
   } else if (!float_dtype_supported(dtype, caps) || x.dtype() != dtype ||
-      x.ndim() < 2 || x.shape(-2) != 1 || !input_ready(x, stream) ||
+      x.ndim() < 2 || (!token_route && x.shape(-2) != 1) ||
+      !input_ready(x, stream) ||
       x.data_shared_ptr() == nullptr || !x.flags().row_contiguous ||
       x.offset() % x.itemsize() != 0) {
     return false;
   }
-  const int k = x.shape(-1);
-  if (k <= 0 || k % 64 != 0 || static_cast<size_t>(k) != x.size()) {
+  if (token_route && outgate != nullptr) {
     return false;
+  }
+  const int k = x.shape(-1);
+  if (k <= 0 || k % 64 != 0 ||
+      x.size() != static_cast<size_t>(rows) * static_cast<size_t>(k)) {
+    return false;
+  }
+  // The multi-token kernel has no producer-direct KV window contract.
+  if (token_route) {
+    for (auto& member : members) {
+      if (member.sum_window) {
+        return false;
+      }
+    }
   }
   ComputeParams params;
   uint32_t total_groups = 0;
@@ -7867,9 +7900,21 @@ bool dispatch_quantized_gemv_group(
     if (members[i].epilogue) {
       const array& add = *members[i].epilogue;
       const array& addend = *members[i].addend;
-      if (add.dtype() != dtype || add.size() != node.size() ||
+      // Token route: the epilogue spans every token row; the addend is
+      // either the full (rows, n) residual or the row-broadcast (n)
+      // bias vector (the shader takes the row stride from in_strides).
+      size_t addend_expected =
+          token_route && addend.size() != node.size()
+          ? static_cast<size_t>(rows) * node.size()
+          : node.size();
+      if (add.dtype() != dtype ||
+          add.size() != static_cast<size_t>(rows) * node.size() ||
           add.primitive().stream() != stream || addend.dtype() != dtype ||
-          !whole_dense(addend, node.size()) || !input_ready(addend, stream)) {
+          (addend.size() != node.size() &&
+           addend.size() !=
+               static_cast<size_t>(rows) * node.size()) ||
+          !whole_dense(addend, addend_expected) ||
+          !input_ready(addend, stream)) {
         return false;
       }
       params.flags |= 256u << i;
@@ -7893,7 +7938,21 @@ bool dispatch_quantized_gemv_group(
   }
   params.operation = 4u;
   params.reduce_size = 64u;
-  params.matrix_m = 1u;
+  // Token route: matrix_m carries the live token count; the single-row
+  // route keeps 1 (the kv-window block below may still override it).
+  params.matrix_m = token_route ? rows : 1u;
+  // Multi-token Add epilogues read the addend with a per-token row
+  // stride: n for a full (rows, n) residual, 0 for a broadcast bias.
+  if (token_route) {
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (members[i].epilogue && !members[i].sum_window) {
+        params.in_strides[i] = members[i].addend->size() ==
+                static_cast<size_t>(params.shape[i])
+            ? 0u
+            : params.shape[i];
+      }
+    }
+  }
   params.matrix_k = static_cast<uint32_t>(k);
   params.dims = static_cast<uint32_t>(members.size());
   uint64_t x_offset = x.offset() / x.itemsize();
@@ -8051,6 +8110,14 @@ bool dispatch_quantized_gemv_group(
   }
   auto kernel = outgate != nullptr
       ? ComputeKernel::QmmVecQ4MultiOutgateBF16
+      : token_route
+      ? (rows > 4
+            ? (subgroup_ready
+                  ? ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16
+                  : ComputeKernel::QmmVecQ4MultiToken16BF16)
+            : (subgroup_ready
+                  ? ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16
+                  : ComputeKernel::QmmVecQ4MultiToken4BF16))
       : subgroup_ready
       ? select_float_kernel(
             dtype,
@@ -13216,9 +13283,24 @@ void ScaledDotProductAttention::eval_gpu(
       }
     }
   }
+  // Multi-token verify rows (q_len 2..16, causal, bf16, hd128): one
+  // dispatch per (head, row); each row reproduces the single-query arm
+  // over its visible key prefix, so verify rows are bit-identical to
+  // the same tokens decoded alone. Read live; kill switch:
+  // MLX_OMARCHY_SDPA_DECODE_ROWS=0.
+  const bool sdpa_rows_disabled =
+      []() {
+        const char* env = std::getenv("MLX_OMARCHY_SDPA_DECODE_ROWS");
+        return env != nullptr && std::strcmp(env, "0") == 0;
+      }();
+  const bool sdpa_rows_route = decode_bf16_probe && !sdpa_rows_disabled &&
+      do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
+      head_dim == 128 && v_dim == head_dim && k_len >= q_len &&
+      k_len <= kDecodeBf16StreamKeys;
   if ((decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
       decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
-      !output_logsumexp_ && batch == 1 && q_len == 1 &&
+      !output_logsumexp_ && batch == 1 &&
+      (q_len == 1 || sdpa_rows_route) &&
       (q.dtype() == float16 || q.dtype() == bfloat16) &&
       ((q.dtype() == float16 &&
            ((head_dim == 64 && v_dim == 64) ||
@@ -13360,6 +13442,23 @@ void ScaledDotProductAttention::eval_gpu(
           pass2_bindings,
           params,
           params.matrix_m);
+      return;
+    }
+    if (sdpa_rows_route) {
+      // One dispatch per (head, row): gl_WorkGroupID.y selects the
+      // verify row; the kernel derives each row's causal key bound from
+      // dims (q_len) and walks the single-query arm over the visible
+      // prefix. out_strides[0] carries the q row stride (D); the
+      // output row stride is the compiled SDPA_DIM.
+      params.dims = checked_u32(q_len, tag, out);
+      params.out_strides[0] = checked_u32(q.strides()[2], tag, out);
+      params.out_strides[1] = checked_u32(out.strides()[2], tag, out);
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaDecodeRowsBF16Hd128,
+          bindings,
+          params,
+          params.matrix_m,
+          static_cast<uint32_t>(q_len));
       return;
     }
     encoder.dispatch_compute(

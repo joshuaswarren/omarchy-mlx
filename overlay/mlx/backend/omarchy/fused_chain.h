@@ -242,6 +242,10 @@ bool outgate_fold_enabled();
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
 bool fused_gemv_swiglu_enabled();
 
+// MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0 keeps the grouped GEMV planner at
+// the strict single-row fence (q_len 2..16 composes); on by default.
+bool gemv_token_multi_enabled();
+
 // Decode trio: MLX_OMARCHY_FUSED_TRIO=0 keeps f16 RMSNorm rows, the
 // fused SwiGLU chain dispatch, and RoPE pairs on their standalone
 // kernels and paths (the MLX_OMARCHY_FUSED_CHAIN gate also covers it).

@@ -1346,8 +1346,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       continue;
     }
     const array& x = node.inputs()[0];
-    if (x.ndim() < 2 || x.shape(-2) != 1 ||
-        x.size() != static_cast<size_t>(x.shape(-1))) {
+    if (x.ndim() < 2 || x.shape(-2) < 1 ||
+        x.shape(-2) > static_cast<int>(kQmmVecTokenRowsMax) ||
+        x.size() !=
+            static_cast<size_t>(x.shape(-2)) *
+                static_cast<size_t>(x.shape(-1))) {
+      continue;
+    }
+    if (x.shape(-2) > 1 && !gemv_token_multi_enabled()) {
       continue;
     }
     auto [it, inserted] = by_x.try_emplace(x.id());
@@ -1360,6 +1366,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const auto& nodes = by_x[x_id];
     auto plan_it = outgate_plans.find(x_id);
     bool x_has_plan = plan_it != outgate_plans.end();
+    // Token rows share the single-token group planner; the out-gate
+    // prologue is the one fold the token column does not carry, so a
+    // multi-row x never adopts an outgate plan (a dispatch-time refusal
+    // after adoption is fatal by contract).
+    const int x_rows = nodes.empty() ? 1 : nodes.front()->inputs()[0].shape(-2);
+    if (x_rows > 1) {
+      x_has_plan = false;
+    }
     for (size_t start = 0; start < nodes.size();
          start += kQmmVecMultiWeights) {
       GemvGroup group;
@@ -1372,7 +1386,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             consumer != single_consumer.end()) {
           const array* add = consumer->second;
           if (is_op(add, typeid(Add)) && add->inputs().size() == 2 &&
-              add->dtype() == node.dtype() && add->size() == node.size() &&
+              add->dtype() == node.dtype() &&
+              add->size() ==
+                  static_cast<size_t>(x_rows) * node.size() &&
               add->primitive().stream() == node.primitive().stream() &&
               !claimed.count(add->id())) {
             const array* other = add->inputs()[0].id() == node.id()
@@ -1380,11 +1396,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
                 : &add->inputs()[0];
             const array* other_node = lookup(*other);
             // A bias arrives as Broadcast(bias) to the row's rank, a
-            // view that adds no elements; it sits in the tape after
-            // the member in eval order, so read the bias itself.
+            // view that adds no elements at one row (and only repeats
+            // the n-vector across token rows at x_rows > 1); it sits in
+            // the tape after the member in eval order, so read the bias
+            // itself.
             if (is_op(other_node, typeid(Broadcast)) &&
                 other_node->inputs().size() == 1 &&
-                other_node->inputs()[0].size() == other_node->size() &&
+                other_node->inputs()[0].size() == node.size() &&
+                other_node->size() ==
+                    static_cast<size_t>(x_rows) * node.size() &&
                 other_node->inputs()[0].dtype() == other_node->dtype()) {
               other = &other_node->inputs()[0];
               other_node = lookup(*other);
@@ -1865,6 +1885,14 @@ bool fused_gemv_swiglu_enabled() {
   return fused_gemv_enabled() &&
       (std::getenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
        env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
+}
+
+// MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=0 keeps the grouped GEMV planner at
+// the strict single-row fence (q_len 2..16 composes); on by default.
+bool gemv_token_multi_enabled() {
+  return fused_gemv_enabled() &&
+      (std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI") == nullptr ||
+       env_flag("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI"));
 }
 
 bool fused_trio_enabled() {

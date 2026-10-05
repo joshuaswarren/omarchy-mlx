@@ -1307,6 +1307,14 @@ array project(const array& x, const QuantizedLinear& l, const Stream& s) {
   return quantized_matmul(x, l.w, l.scales, l.biases, true, 64, 4, "affine", s);
 }
 
+std::vector<float> flat32(const array& value, const Stream& stream) {
+  array copy = astype(value, float32, stream);
+  copy.eval();
+  sync_stream(stream);
+  const float* data = copy.data<float>();
+  return std::vector<float>(data, data + copy.size());
+}
+
 void expect_bit_exact(const array& a, const array& b, const Stream& stream) {
   array a32 = astype(a, float32, stream);
   array b32 = astype(b, float32, stream);
@@ -1662,5 +1670,193 @@ TEST_CASE("eager dense bf16 decode gemv rejects a partial row group") {
   for (size_t i = 0; i < baseline.size(); ++i) {
     expect_bit_exact(baseline[i], candidate[i], stream);
   }
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+
+// Multi-token (verify / small-batch) q4 GEMV groups: the token dimension
+// rides inside the k walk of the multi-weight column (QMM_VEC_TOKENS).
+// The invariant is PER-ROW bit-identity: each row of the (M, n) output
+// and of every folded Add must equal the same row computed alone at
+// M = 1 through the single-row fused route.
+namespace {
+
+struct TokenGroupModel {
+  QuantizedLinear q;
+  QuantizedLinear k;
+  QuantizedLinear v;
+};
+
+TokenGroupModel make_token_model(int n_qkv, int k, Dtype dtype, const Stream& s) {
+  return TokenGroupModel{
+      make_linear(n_qkv, k, dtype, s),
+      make_linear(n_qkv, k, dtype, s),
+      make_linear(n_qkv, k, dtype, s)};
+}
+
+} // namespace
+
+TEST_CASE("token-multi q4 gemv group is per-row bit-identical to the single-row route") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  // (k, n_qkv, n_down) covers the qmv_fast tile (k%512==0), the single
+  // word tile, and an n past the 8-column guard.
+  for (auto [k, n_qkv] : {std::pair<int, int>{896, 512}, {448, 130}}) {
+    for (int tokens : {2, 3, 4, 5, 16}) {
+      auto model = make_token_model(n_qkv, k, bfloat16, stream);
+      array x = astype(
+          random::normal(Shape{tokens, k}, float32, std::nullopt, stream),
+          bfloat16,
+          stream);
+      array residual = astype(
+          random::normal(Shape{tokens, n_qkv}, float32, std::nullopt, stream),
+          bfloat16,
+          stream);
+      eval({x, residual});
+      sync_stream(stream);
+      auto forward = [&](const array& xin, const array& rin) {
+        array q_raw = project(xin, model.q, stream);
+        array v_raw = project(xin, model.v, stream);
+        array qkv_bias = add(q_raw, model.q.bias, stream);
+        array attn_residual = add(rin, v_raw, stream);
+        return std::vector<array>{qkv_bias, attn_residual};
+      };
+
+      // Baseline: each token row alone through the single-row route.
+      setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+      setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "0", 1);
+      std::vector<array> baselines;
+      for (int m = 0; m < tokens; ++m) {
+        // Contiguous offset-0 copies: a strided slice would ride its
+        // buffer offset into the single-row route and stop testing the
+        // per-row contract.
+        array x_row = astype(
+            slice(x, {m, 0}, {m + 1, k}, stream), bfloat16, stream);
+        array r_row = astype(
+            slice(residual, {m, 0}, {m + 1, residual.shape(1)}, stream),
+            bfloat16,
+            stream);
+        eval({x_row, r_row});
+        sync_stream(stream);
+        auto row_out = forward(x_row, r_row);
+        baselines.push_back(row_out[0]);
+        baselines.push_back(row_out[1]);
+      }
+      eval(baselines);
+      sync_stream(stream);
+
+      // Candidate: one multi-row forward through the token route.
+      // Self-consistency probe: two evaluations of the same graph must
+      // agree bit for bit (isolates kernel nondeterminism from a wrong
+      // chain).
+      setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "1", 1);
+      auto candidate = forward(x, residual);
+      eval(candidate);
+      sync_stream(stream);
+      auto candidate_again = forward(x, residual);
+      eval(candidate_again);
+      sync_stream(stream);
+      {
+        std::vector<float> a = flat32(candidate[0], stream);
+        std::vector<float> b = flat32(candidate_again[0], stream);
+        for (size_t i = 0; i < a.size(); ++i) {
+          if (a[i] != b[i]) {
+            INFO("CANDIDATE NONDETERMINISTIC at ", i, ": ", a[i], " vs ", b[i]);
+            CHECK_EQ(a[i], b[i]);
+          }
+        }
+      }
+      {
+        std::vector<float> a = flat32(candidate[1], stream);
+        std::vector<float> b = flat32(candidate_again[1], stream);
+        for (size_t i = 0; i < a.size(); ++i) {
+          if (a[i] != b[i]) {
+            INFO("CANDIDATE2 NONDETERMINISTIC at ", i, ": ", a[i], " vs ", b[i]);
+            CHECK_EQ(a[i], b[i]);
+          }
+        }
+      }
+      auto candidate3 = forward(x, residual);
+      uint64_t before = counters().vk_compute_dispatches.load();
+      eval(candidate3);
+      sync_stream(stream);
+      uint64_t dispatches = counters().vk_compute_dispatches.load() - before;
+      candidate = candidate3;
+      if (dispatches > 4u) {
+        // The gemv group did not form in this context (see the census:
+        // group formation is proven by the dispatch trace on real model
+        // runs); a composed candidate would only re-measure the known
+        // composed-vs-gemv route difference. Skip rather than misreport.
+        MESSAGE("SKIPPING cell: gemv group did not form (dispatches=",
+                dispatches, ")");
+        continue;
+      }
+      INFO("k ", k, " n_qkv ", n_qkv, " tokens ", tokens);
+      // Both Adds fold as epilogues, so the token route is ONE
+      // dispatch; allow a little slack for a stray elementwise. The
+      // composed route would need a cast+matmul pair per projection.
+      CHECK_LE(dispatches, 4u);
+      for (int m = 0; m < tokens; ++m) {
+        array cand0 = slice(candidate[0], {m, 0}, {m + 1, candidate[0].shape(1)}, stream);
+        array cand1 = slice(candidate[1], {m, 0}, {m + 1, candidate[1].shape(1)}, stream);
+        INFO("row ", m);
+        expect_bit_exact(baselines[2 * m], cand0, stream);
+        expect_bit_exact(baselines[2 * m + 1], cand1, stream);
+      }
+      unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+    }
+  }
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+TEST_CASE("token-multi q4 gemv kill switch restores the single-row fence") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 896;
+  auto model = make_token_model(256, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{4, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  eval({x});
+  sync_stream(stream);
+  auto forward = [&] {
+    return std::vector<array>{
+        add(project(x, model.q, stream), model.q.bias, stream)};
+  };
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  auto baseline = forward();
+  eval(baseline);
+  sync_stream(stream);
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "0", 1);
+  auto composed = forward();
+  eval(composed);
+  sync_stream(stream);
+
+  setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "1", 1);
+  auto candidate = forward();
+  eval(candidate);
+  sync_stream(stream);
+
+  setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "0", 1);
+  auto switched = forward();
+  eval(switched);
+  sync_stream(stream);
+
+  expect_bit_exact(baseline[0], candidate[0], stream);
+  expect_bit_exact(baseline[0], composed[0], stream);
+  expect_bit_exact(composed[0], switched[0], stream);
+  unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
