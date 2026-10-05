@@ -11808,10 +11808,12 @@ void DsaIndexerScores::eval_gpu(
   if (qd.offset() != 0 || kd.offset() != 0 || wd.offset() != 0) {
     omarchy::unsupported(tag + " nonzero storage offset", out);
   }
-  // The shader stages the H x D query panel in float32 shared memory at
-  // the H=64 size (32 KiB panel + weights); hosts without it fall back.
-  if (static_cast<size_t>(caps.max_compute_shared_memory_size) <
-      (64u * 128u + 64u) * sizeof(float)) {
+  // The shader stages the H x D query panel in float32 shared memory;
+  // each H variant declares exactly its own panel, and the host gates on
+  // the device limit per variant.
+  const size_t shared_need =
+      (static_cast<size_t>(H) * 128u + static_cast<size_t>(H)) * sizeof(float);
+  if (static_cast<size_t>(caps.max_compute_shared_memory_size) < shared_need) {
     omarchy::unsupported(tag + " shared memory for the query panel", out);
   }
   omarchy::ComputeParams params;
@@ -11838,8 +11840,11 @@ void DsaIndexerScores::eval_gpu(
       binding(qd), binding(kd), binding(wd), binding(out)};
   uint32_t rows = params.matrix_m;
   uint32_t k_tiles = (static_cast<uint32_t>(K) + 255u) / 256u;
+  const omarchy::ComputeKernel kernel = (H == 32)
+      ? omarchy::ComputeKernel::DsaIndexerScoresH32Op
+      : omarchy::ComputeKernel::DsaIndexerScoresH64Op;
   encoder.dispatch_compute(
-      omarchy::ComputeKernel::DsaIndexerScoresOp,
+      kernel,
       bindings,
       params,
       rows,

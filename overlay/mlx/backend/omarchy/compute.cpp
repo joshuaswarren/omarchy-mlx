@@ -363,7 +363,8 @@
 #include "fast_trio_rope_pair_f16.h"
 #include "fast_trio_swiglu_f16.h"
 #include "int8_matmul.h"
-#include "dsa_indexer.h"
+#include "dsa_indexer_h32.h"
+#include "dsa_indexer_h64.h"
 #include "dsa_decode.h"
 #include "dsa_decode_f32.h"
 #include "matmul_f32_coopmat_bf16.h"
@@ -1443,8 +1444,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_trio_swiglu_f16, fast_trio_swiglu_f16_size};
     case ComputeKernel::Int8MatmulOp:
       return {int8_matmul, int8_matmul_size};
-    case ComputeKernel::DsaIndexerScoresOp:
-      return {dsa_indexer, dsa_indexer_size};
+    case ComputeKernel::DsaIndexerScoresH32Op:
+      return {dsa_indexer_h32, dsa_indexer_h32_size};
+    case ComputeKernel::DsaIndexerScoresH64Op:
+      return {dsa_indexer_h64, dsa_indexer_h64_size};
     case ComputeKernel::DsaDecodeScoresOp:
       return {dsa_decode, dsa_decode_size};
     case ComputeKernel::DsaDecodeScoresF32Op:

@@ -76,8 +76,11 @@ layout(push_constant) uniform Params {
 //   out_strides[0] = w batch stride (elements)
 // Buffers bind at 0 like every kernel here; offsets use lhs/rhs/output.
 
-shared float qs[64 * 128];
-shared float ws[64];
+#ifndef QS_H
+#define QS_H 64
+#endif
+shared float qs[QS_H * 128];
+shared float ws[QS_H];
 
 uint16_t bf16_store(float value) {
   uint bits = floatBitsToUint(value);

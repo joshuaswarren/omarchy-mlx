@@ -822,7 +822,8 @@ enum class ComputeKernel : uint16_t {
   // sum_h relu(q_h @ k^T) * w with the causal + pooled-ratio mask
   // fused pre-ReLU; the H-wide score tensor never exists in memory.
   // Append-only profile id.
-  DsaIndexerScoresOp,
+  DsaIndexerScoresH32Op,
+  DsaIndexerScoresH64Op,
   // GLM DSA fused decode indexer scan (shaders/dsa_decode.comp);
   // fast::DsaDecodeScores. Append-only profile ids.
   DsaDecodeScoresOp,
