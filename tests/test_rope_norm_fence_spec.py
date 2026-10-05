@@ -77,30 +77,24 @@ class RopeNormFenceSpecTests(unittest.TestCase):
             msg="shared kill env default must remain on (1)")
 
     def test_qwen3_offset_type_fence_present(self):
-        # SEQUENCING NOTE (2026-10-05): the qwen3-half fence pin was
-        # REMOVED so RopeNormBatch's C++ op-layer fix (which removes
-        # the interim fence from the qwen3 patcher) can land without a
-        # red window on main. The qwen3_next-half pin below stays
-        # until THIS lane drops its interim fence with the v0.7.28
-        # wheel. Root cause and fix ownership: see
-        # receipts/2026-10-04-omlx-linux/README.md ADDENDUM.
-        self.skipTest("qwen3 fence pin removed for the RopeNormBatch "
-                      "C++-fix landing; qwen3_next pin still active")
+        # REMOVED 2026-10-05: RopeNormBatch's C++ op-layer fix removed
+        # the interim fence from the qwen3 patcher (v0.7.28 wheel).
+        self.skipTest("qwen3 interim fence dropped with the "
+                      "v0.7.28 op-layer fix")
 
     def test_qwen3_next_offset_type_fence_present(self):
-        self.assertRegex(self.qwen3_next,
-            r"isinstance\(cache\.offset, int\)",
-            msg="qwen3_next patcher must gate the fold on "
-                "isinstance(cache.offset, int)")
+        # REMOVED 2026-10-05: same op-layer fix; this lane dropped its
+        # qwen3_next interim fence in the same window.
+        self.skipTest("qwen3_next interim fence dropped with the "
+                      "v0.7.28 op-layer fix")
 
     def test_qwen3_B_eq_1_fence_present(self):
-        # Same sequencing note as the offset-type pin above.
-        self.skipTest("qwen3 fence pin removed for the RopeNormBatch "
-                      "C++-fix landing; qwen3_next pin still active")
+        self.skipTest("qwen3 interim fence dropped with the "
+                      "v0.7.28 op-layer fix")
 
     def test_qwen3_next_B_eq_1_fence_present(self):
-        self.assertRegex(self.qwen3_next, r"and B == 1",
-            msg="qwen3_next patcher must gate the fold on B == 1")
+        self.skipTest("qwen3_next interim fence dropped with the "
+                      "v0.7.28 op-layer fix")
 
     def test_qwen3_preserves_composed_fallback(self):
         # The else branch (the bit-identical composed chain) must
