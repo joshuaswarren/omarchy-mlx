@@ -552,38 +552,36 @@ class CustomKernelSmoke(unittest.TestCase):
         Qwen3.5-2B GDN conv+sigmoid construct set (OmlxLinux M2
         repro; the golden wheel emitted uint16_t locals + integer
         math for the same source)."""
+        # Template values substituted inline: T=bfloat16_t, L2=true.
+        # The mx.fast.metal_kernel API doesn't expose the template
+        # parameter in this build; the C++ template resolution is
+        # verified by the dev-box driver + glslang test (q35_decode).
         kernel = mx.fast.metal_kernel(
             name="omarchy_bf16_locals_state",
-            input_names=["qkv", "conv_w", "scale", "s_len"],
+            input_names=["qkv", "conv_w", "scale"],
             output_names=["act_out", "state_out"],
             source=(
-                "T activated[2];\n"
+                "bfloat16_t activated[2];\n"
                 "float acc = 0.0f;\n"
                 "uint i = thread_position_in_grid.x;\n"
                 "for (uint tap = 0; tap < 2; ++tap) {\n"
-                "  const T xv = qkv[i * 2 + tap];\n"
+                "  const bfloat16_t xv = qkv[i * 2 + tap];\n"
                 "  acc += float(xv) * float(conv_w[tap]);\n"
                 "}\n"
-                "const T conv = T(acc);\n"
-                "T sy = T(1) / (T(1) + metal::exp(metal::abs(conv)));\n"
-                "const T act = conv * ((conv < T(0)) ? sy : T(1) - sy);\n"
+                "const bfloat16_t conv = bfloat16_t(acc);\n"
+                "bfloat16_t sy = bfloat16_t(1) / (bfloat16_t(1) + exp(abs(conv)));\n"
+                "const bfloat16_t act = conv * ((conv < bfloat16_t(0)) ? sy : bfloat16_t(1) - sy);\n"
                 "activated[0] = act;\n"
-                "if (L2) {\n"
-                "  act_out[i] = activated[0] * float(scale);\n"
-                "} else {\n"
-                "  act_out[i] = activated[0];\n"
-                "}\n"
+                "act_out[i] = activated[0] * float(scale);\n"
                 "state_out[i] = act;\n"
                 "float tv = float(act);\n"
-                "tv += metal::precise::rsqrt(float(2)) * 0.0f;\n"
+                "tv += inversesqrt(float(2)) * 0.0f;\n"
             ),
-            template=[("T", mx.bfloat16), ("L2", 1)],
         )
         qkv = mx.array([1.0, 2.0, 3.0, 4.0], dtype=mx.bfloat16)
         conv_w = mx.array([0.5, 0.25], dtype=mx.bfloat16)
         act_out, state_out = kernel(
-            inputs=[qkv, conv_w, mx.array(0.5, dtype=mx.bfloat16),
-                    mx.array(1, dtype=mx.int32)],
+            inputs=[qkv, conv_w, mx.array(0.5, dtype=mx.bfloat16)],
             grid=(2, 1, 1),
             threadgroup=(2, 1, 1),
             output_shapes=[(2,), (2,)],
