@@ -427,7 +427,7 @@ class CustomKernelSmoke(unittest.TestCase):
             inputs=[values, rows_mx],
             output_shapes=[(4, 512), (4, 2)],
             output_dtypes=[mx.int8, mx.float32],
-            grid=(2, 4, 1),
+            grid=(2 * 256, 4, 1),
             threadgroup=(256, 1, 1),
             stream=mx.gpu,
         )
