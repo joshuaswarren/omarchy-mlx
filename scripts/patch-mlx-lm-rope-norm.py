@@ -41,6 +41,22 @@ NORM_NEW = """        # mlx-omarchy rope-norm patch: fold the q/k RMSNorm into t
             os.environ.get("MLX_OMARCHY_ROPE_NORM_FUSE", "1") == "1"
             and queries.dtype == mx.bfloat16
             and hasattr(mx.fast, "rope_rms_norm")
+            # OmlxLinux lane, 2026-10-04: gate to B==1 (decode-only). The
+            # fused FastRopeNorm kernel takes a broadcast view of the
+            # q/k RMSNorm + rope chain; under batched inference (B>1,
+            # BatchGenerator) the second call's head_dim is broadcast
+            # against the first call's, producing the
+            # [broadcast_shapes] (2,8,1,64) and (2,1,1,128) cache
+            # corruption (v0.7.27 product bug found on Qwen3-4B against
+            # the omarchy Vulkan backend; original Qwen3-4B 4B smoke).
+            # The composed chain is bit-identical and stays on the
+            # request-critical decode (B==1) path; the fused fold is
+            # still on for prefill batching inside any single request
+            # (a single request's B is the prompt batch, which the
+            # kernel handles correctly). Escape hatch: the kill
+            # switch `MLX_OMARCHY_ROPE_NORM_FUSE=0` disables the fold
+            # entirely (B==1 too).
+            and B == 1
         ):
             offset_pos = cache.offset if cache is not None else 0
             queries = mx.fast.rope_rms_norm(
