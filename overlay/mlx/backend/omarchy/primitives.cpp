@@ -2932,6 +2932,75 @@ void dispatch_fp_dequantize(
       omarchy::compute_dispatch_group_count(params.count));
 }
 
+// Affine dequantize dispatch: packed uint32 words plus per-group
+// floating scales/biases to a dense floating output. Shared by
+// fast::Quantize's dequantize direction and the QuantizedMatmul
+// composed route; both callers validate dtypes and shapes first.
+void dispatch_affine_dequantize(
+    const std::string& tag,
+    const array& in_w,
+    const array& in_scales,
+    const array& in_biases,
+    array& out,
+    int bits,
+    int group_size,
+    const Stream& s) {
+  auto& encoder = omarchy::get_command_encoder(s);
+  std::optional<array> w_temp;
+  std::optional<array> scales_temp;
+  std::optional<array> biases_temp;
+  const array& w =
+      ensure_dense(in_w, in_w.flags().row_contiguous, w_temp, encoder, s);
+  const array& scales = ensure_dense(
+      in_scales, in_scales.flags().row_contiguous, scales_temp, encoder, s);
+  const array& biases = ensure_dense(
+      in_biases, in_biases.flags().row_contiguous, biases_temp, encoder, s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0 || w.size() == 0) {
+    return;
+  }
+  // One thread owns one packed unit: a uint32 word for bits 2/4/8, or
+  // one byte pack (3 bytes for bits 3/6, 5 bytes for bits 5) inside the
+  // little-endian byte stream. Every unit in a row-contiguous weight
+  // maps to a unique output span, so the unit load is linear in the
+  // thread index and the group parameters reuse one address for the
+  // whole unit.
+  bool byte_bits = (bits == 3 || bits == 5 || bits == 6);
+  uint32_t bytes_per_pack = byte_bits ? ((bits == 5) ? 5u : 3u) : 4u;
+  size_t words_per_row = w.shape(-1);
+  uint64_t groups_per_row = static_cast<uint64_t>(scales.shape(-1));
+  omarchy::ComputeParams params;
+  params.count =
+      checked_u32(w.size() * 4u / bytes_per_pack, tag, out);
+  params.operation = static_cast<uint32_t>(bits);
+  params.lhs_size = params.count;
+  params.rhs_size = checked_u32(scales.size(), tag, out);
+  params.reduce_size = static_cast<uint32_t>(group_size);
+  params.output_size = checked_u32(out.size(), tag, out);
+  params.lhs_offset = checked_item_offset(w, w.size(), tag, out);
+  params.rhs_offset = checked_item_offset(scales, scales.size(), tag, out);
+  params.aux_size = checked_u32(biases.size(), tag, out);
+  params.aux_offset = checked_item_offset(biases, biases.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.matrix_n =
+      checked_u32(static_cast<uint64_t>(words_per_row) * 4u / bytes_per_pack,
+          tag,
+          out);
+  params.matrix_k = checked_u32(groups_per_row, tag, out);
+  std::array<omarchy::ComputeBinding, 4> bindings{
+      binding(w), binding(scales), binding(biases), binding(out)};
+  auto kernel = select_float_kernel(
+      out.dtype(),
+      omarchy::ComputeKernel::DequantF32,
+      omarchy::ComputeKernel::DequantF16,
+      omarchy::ComputeKernel::DequantBF16);
+  encoder.dispatch_compute(
+      kernel,
+      bindings,
+      params,
+      omarchy::compute_dispatch_group_count(params.count));
+}
+
 // Fake-quantize a floating activation for the fp-mode qqmm paths:
 // quantize into packed codes plus scale bytes, then dequantize back to
 // the storage dtype, yielding dequant(quant(x)) exactly. The nvfp4
@@ -7314,13 +7383,39 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   // The bf16 non-transposed tile routes diverge from the dense bf16
   // matmul reference by one output ULP (2^-9 at the relevant magnitude;
-  // upstream tolerance 1.5e-3) on the upstream sweep's K <= 128 shapes
-  // (up to two 64-wide reduction blocks; K = 256 and K >= 512 pass, as
-  // do the m == 1 vec route and bits 2). Named refusal until the bf16 tile
-  // accumulation matches the matmul reference - never a wrong answer.
+  // upstream tolerance 1.5e-3) on the K <= 128 shapes (up to two 64-wide
+  // reduction blocks; K = 256 and K >= 512 pass, as do the m == 1 vec
+  // route and bits 2). Those shapes are the backward-of-quantized-linear
+  // (dx) leg of LoRA fine-tuning on small-out projections, so they are
+  // served by composing the existing GPU kernels: the affine Dequant
+  // kernel materializes w and the dense matmul kernel contracts dy
+  // against it, making the accumulation order the dense reference the
+  // sweep pins. MLX_OMARCHY_NO_QMM_NT_COMPOSED=1 restores the named
+  // refusal for A/B measurement.
   if (out.dtype() == bfloat16 && !transpose_ && m > 1 && bits_ != 2 &&
       k <= 128) {
-    omarchy::unsupported(tag + " bf16 non-transposed tile", out);
+    static const bool qmm_nt_composed_disabled =
+        omarchy::env_flag("MLX_OMARCHY_NO_QMM_NT_COMPOSED");
+    if (qmm_nt_composed_disabled) {
+      omarchy::unsupported(tag + " bf16 non-transposed tile", out);
+    }
+    if (out.size() == 0) {
+      out.set_data(allocate_omarchy(out.nbytes()));
+      return;
+    }
+    Shape deq_shape = w_d.shape();
+    deq_shape.back() = n;
+    if (x_d.ndim() != w_d.ndim()) {
+      // A rank-3 x with a shared 2D weight broadcasts one dequantized
+      // matrix across the batch.
+      deq_shape.insert(deq_shape.begin(), 1);
+    }
+    array deq(std::move(deq_shape), out.dtype(), nullptr, {});
+    dispatch_affine_dequantize(
+        tag, w_d, scales_d, biases_d, deq, bits_, group_size_, stream());
+    encoder.add_temporary(deq);
+    dispatch_matmul(tag, {x_d, deq}, out, 1.0f, 0.0f, false, stream());
+    return;
   }
 
   out.set_data(allocate_omarchy(out.nbytes()));
@@ -14422,57 +14517,8 @@ void Quantize::eval_gpu(
           in_scales.shape().begin())) {
     omarchy::unsupported(tag + " shape", out);
   }
-  std::optional<array> w_temp;
-  std::optional<array> scales_temp;
-  std::optional<array> biases_temp;
-  const array& w =
-      ensure_dense(in_w, in_w.flags().row_contiguous, w_temp, encoder, stream());
-  const array& scales = ensure_dense(
-      in_scales, in_scales.flags().row_contiguous, scales_temp, encoder, stream());
-  const array& biases = ensure_dense(
-      in_biases, in_biases.flags().row_contiguous, biases_temp, encoder, stream());
-  out.set_data(allocate_omarchy(out.nbytes()));
-  if (out.size() == 0 || w.size() == 0) {
-    return;
-  }
-  // One thread owns one packed unit: a uint32 word for bits 2/4/8, or
-  // one byte pack (3 bytes for bits 3/6, 5 bytes for bits 5) inside the
-  // little-endian byte stream. Every unit in a row-contiguous weight
-  // maps to a unique output span, so the unit load is linear in the
-  // thread index and the group parameters reuse one address for the
-  // whole unit.
-  bool byte_bits = (bits_ == 3 || bits_ == 5 || bits_ == 6);
-  uint32_t bytes_per_pack = byte_bits ? ((bits_ == 5) ? 5u : 3u) : 4u;
-  omarchy::ComputeParams params;
-  params.count =
-      checked_u32(w.size() * 4u / bytes_per_pack, tag, out);
-  params.operation = static_cast<uint32_t>(bits_);
-  params.lhs_size = params.count;
-  params.rhs_size = checked_u32(scales.size(), tag, out);
-  params.reduce_size = static_cast<uint32_t>(group_size_);
-  params.output_size = checked_u32(out.size(), tag, out);
-  params.lhs_offset = checked_item_offset(w, w.size(), tag, out);
-  params.rhs_offset = checked_item_offset(scales, scales.size(), tag, out);
-  params.aux_size = checked_u32(biases.size(), tag, out);
-  params.aux_offset = checked_item_offset(biases, biases.size(), tag, out);
-  params.output_offset = checked_item_offset(out, out.size(), tag, out);
-  params.matrix_n =
-      checked_u32(static_cast<uint64_t>(words_per_row) * 4u / bytes_per_pack,
-          tag,
-          out);
-  params.matrix_k = checked_u32(groups_per_row, tag, out);
-  std::array<omarchy::ComputeBinding, 4> bindings{
-      binding(w), binding(scales), binding(biases), binding(out)};
-  auto kernel = select_float_kernel(
-      out.dtype(),
-      omarchy::ComputeKernel::DequantF32,
-      omarchy::ComputeKernel::DequantF16,
-      omarchy::ComputeKernel::DequantBF16);
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
-      params,
-      omarchy::compute_dispatch_group_count(params.count));
+  dispatch_affine_dequantize(
+      tag, in_w, in_scales, in_biases, out, bits_, group_size_, stream());
 }
 
 
