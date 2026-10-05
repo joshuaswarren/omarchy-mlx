@@ -11548,6 +11548,11 @@ void GatedDeltaUpdate::eval_gpu(
   // per-element arithmetic identical to the batch kernel. Opt-in A/B lever
   // (MLX_OMARCHY_GDN_BATCH2=1) until the cross-host gates pass.
   static const bool gdn_batch2_env = omarchy::env_flag("MLX_OMARCHY_GDN_BATCH2");
+  // kkt/qkt hoist (GdnPrefill2-b): pass A computes the state-independent
+  // K.K^T / Q.K^T tiles for every chunk in parallel (bit-identical loop-1
+  // sequence); pass B runs the recurrence off the f32 tiles. Opt-in
+  // (MLX_OMARCHY_GDN_HOIST=1) until gated.
+  static const bool gdn_hoist_env = omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
   const auto& gdn_caps = encoder.device().capabilities();
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
@@ -11590,6 +11595,42 @@ void GatedDeltaUpdate::eval_gpu(
         binding(out),    // 8 MBuf - unused (maskless gate)
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
+    if (gdn_hoist_env) {
+      // Pass A: kkt/qkt tiles for every chunk, one workgroup per
+      // (head, Dv-slice, chunk). Snap binding carries the f32 tiles.
+      const uint32_t hoist_chunks =
+          (static_cast<uint32_t>(T) + 7u) / 8u;
+      size_t hoist_elems = static_cast<size_t>(Hv) * (Dv / 32) * 4 * 128 *
+          hoist_chunks;
+      array hoist_snap(Shape{static_cast<int>(hoist_elems)}, float32, nullptr, {});
+      array::Flags snap_flags;
+      snap_flags.contiguous = true;
+      snap_flags.row_contiguous = true;
+      hoist_snap.set_data(
+          allocate_omarchy(hoist_snap.nbytes()),
+          hoist_snap.size(),
+          Strides{1},
+          snap_flags,
+          0);
+      encoder.add_temporary(hoist_snap);
+      auto hoist_bindings = bindings;
+      hoist_bindings[10] = binding(hoist_snap);
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::GatedDeltaPrefillKktqkt,
+          hoist_bindings,
+          params,
+          static_cast<uint32_t>(Hv),
+          Dv / 32,
+          hoist_chunks);
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::GatedDeltaPrefillCoopmatHoistBF16,
+          hoist_bindings,
+          params,
+          static_cast<uint32_t>(Hv),
+          Dv / 32,
+          1);
+      return;
+    }
     encoder.dispatch_compute(
         gdn_batch2_env ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatch2BF16
         : gdn_batch ? omarchy::ComputeKernel::GatedDeltaPrefillCoopmatBatchBF16

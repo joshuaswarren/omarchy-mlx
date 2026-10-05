@@ -688,6 +688,10 @@ enum class ComputeKernel : uint16_t {
   // Barrier-diet-2 variant of the batch prefill kernel (staging/sync
   // structure only; per-element arithmetic identical). MLX_OMARCHY_GDN_BATCH2.
   GatedDeltaPrefillCoopmatBatch2BF16,
+  // GDN prefill hoist: pass A kkt/qkt precompute (parallel over chunks) and
+  // pass B recurrence. MLX_OMARCHY_GDN_HOIST.
+  GatedDeltaPrefillKktqkt,
+  GatedDeltaPrefillCoopmatHoistBF16,
   // Fused RMSNorm + SwiGLU-gate / RMSNorm + scalar-multiply epilogues
   // for the GDN decode chain (bf16). Mode 0 replaces
   // FastRmsNormBF16 + CastBF16F32 x2 + FusedChainF32(sigmoid,mul,mul)
