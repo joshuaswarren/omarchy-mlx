@@ -265,7 +265,25 @@ patch application.
    the Metal→Vulkan translator's MSL subset coverage); the
    omlx-linux layer cannot fix it.
 
-## v0.7.27 product bug — qwen3 rope-norm fold (found and fixed in this lane)
+## v0.7.27 product bug — attribution corrected (reverted)
+
+The narrowing in this lane was confounded: the rope-norm
+patcher (F3, scripts/patch-mlx-lm-rope-norm.py) and the qwen3
+dense rope-norm patcher (DispatchFuse, scripts/patch-mlx-lm-
+qwen3-rope-norm.py) share the same `MLX_OMARCHY_ROPE_NORM_FUSE`
+env, so toggling it disables BOTH at once and the narrowing
+could not attribute the cache corruption to either one. A
+follow-up audit (Main) caught the mis-attribution. Qwen3-4B
+runs through `qwen3.py` (DispatchFuse's fold), NOT
+`qwen3_next.py` (F3's fold). The previous B==1 fence on
+scripts/patch-mlx-lm-rope-norm.py has been REVERTED from
+origin/main @ `68701c305`. The attribution is now:
+**unspecified between F3 (qwen3_next) and DispatchFuse (qwen3)**
+until a per-patcher env split is in place and the narrowing
+re-runs. The two-patch and cache.offset-type fences
+(B==1, int offset) are the right shape, but on the right
+patcher.
+
 
 The originally-pending "(B) 4-concurrent batch hits upstream cache
 corruption" turned out to be **our patch series**, not upstream
@@ -296,8 +314,8 @@ path. A single request's `B` is the prompt batch, which the
 kernel handles correctly. Kill switch `MLX_OMARCHY_ROPE_NORM_FUSE=0`
 disables the fold entirely.
 
-**Branch:** `agent/OmlxLinux-rope-norm-patch` @ `3f126c41` on
-`joshuaswarren/omarchy-mlx`. One-line summary:
+**Branch:** reverted at `68701c305` on `joshuaswarren/omarchy-mlx`.
+Original misplaced B==1 fence (3f126c41, `36c6e145c`):
 `scripts/patch-mlx-lm-rope-norm.py` now gates the fused branch on
 `B == 1`; the else branch (the composed chain) handles `B > 1`
 unmodified. 4 regression tests in
