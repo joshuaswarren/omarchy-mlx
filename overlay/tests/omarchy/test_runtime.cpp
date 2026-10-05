@@ -769,7 +769,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
   alloc.free(allocator::Buffer{blk2});
   REQUIRE(alloc.get_cache_memory() == (4u << 20));
   alloc.set_memory_limit(before + 1);
-  CHECK(alloc.set_wired_limit(64u << 30) == 0);
+  CHECK(alloc.set_wired_limit(64ull << 30) == 0);
   auto* fresh2 =
       static_cast<omarchy::VulkanBuffer*>(alloc.malloc(8u << 20).ptr());
   REQUIRE(fresh2 != nullptr);
@@ -778,7 +778,7 @@ TEST_CASE("memory and wired limits drive cache release, never fake failures") {
 
   alloc.clear_cache();
   alloc.set_memory_limit(saved_limit);
-  CHECK(alloc.set_wired_limit(0) == (64u << 30));
+  CHECK(alloc.set_wired_limit(0) == (64ull << 30));
   CHECK(alloc.get_active_memory() == before);
 }
 
