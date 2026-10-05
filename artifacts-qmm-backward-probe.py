@@ -6,7 +6,7 @@ This is the kernel-level twin of the 2B LoRA smoke: one QuantizedLinear
 (group-64 4-bit, the fleet checkpoint layout) wrapped by
 mlx_lm.tuner LoRALinear.from_base, one forward, one mx.grad backward.
 The non-transposed quantized matmul (dy @ W) is the dx leg of that
-backward. Prints JSON lines: gradients vs a dequantized dense reference
+backward. Prints one JSON line: dx vs a dequantized dense reference
 (mx.dequantize + dense matmul), max abs difference, bound, finiteness.
 
 Run on the omarchy backend (MLX_OMARCHY_ALLOW_NON_APPLE=1 on the
@@ -20,16 +20,6 @@ import sys
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-
-
-def build_quantized_linear(rng, k, n, group_size, bits, dtype):
-    w = rng.normal(0.0, 0.02, size=(n, k)).astype(np.float32)
-    w_q, scales, biases = mx.quantize(mx.array(w), group_size, bits)
-    base = nn.QuantizedLinear(k, n, bias=False, group_size=group_size, bits=bits)
-    base.weight = w_q
-    base.scales = scales.astype(dtype)
-    base.biases = biases.astype(dtype)
-    return base
 
 
 def main():
@@ -49,37 +39,41 @@ def main():
 
     from mlx_lm.tuner.lora import LoRALinear
 
-    base = build_quantized_linear(
-        rng, args.k, args.n, args.group_size, args.bits, dtype)
+    w = rng.normal(0.0, 0.02, size=(args.n, args.k)).astype(np.float32)
+    w_q, scales, biases = mx.quantize(
+        mx.array(w), args.group_size, args.bits)
+    base = nn.QuantizedLinear(
+        args.k, args.n, bias=False,
+        group_size=args.group_size, bits=args.bits)
+    base.weight = w_q
+    base.scales = scales.astype(dtype)
+    base.biases = biases.astype(dtype)
+    # mlx-lm freezes the quantized base in the tuner; mirror that so the
+    # backward only differentiates the input (the dx leg) and the LoRA
+    # pieces, never the packed weight.
+    base.freeze()
     lora = LoRALinear.from_base(base, r=args.rank, scale=2.0)
+    lora.freeze()
+    lora.unfreeze(keys=["lora_a", "lora_b"])
 
-    def loss_fn(x, params):
-        params["other"] = base.parameters()
-        lora.update(params)
-        y = lora(mx.array(x_np).astype(dtype))
+    def loss_fn(x):
+        y = lora(mx.array(x).astype(dtype))
         return y.astype(mx.float32).square().mean()
 
-    grads = mx.grad(loss_fn, argnums=0)(
-        x_np, dict(lora.trainable_parameters()))
+    grads = mx.grad(loss_fn)(x_np)
     mx.eval(grads)
 
     # Dense reference: identical graph with the dequantized weight, so
     # the only difference is quantized vs dequantized matmul arithmetic.
     w_d = mx.dequantize(
-        base.weight, base.scales, base.biases,
+        w_q, base.scales, base.biases,
         group_size=args.group_size, bits=args.bits)
-    dense = nn.Linear(args.k, args.n, bias=False)
-    dense.weight = w_d
-    dense_weight = dense.parameters()["weight"]
 
-    def dense_loss_fn(x, params):
-        params["other"] = {"weight": dense_weight}
-        dense.update(params)
-        y = (mx.array(x_np).astype(dtype) @ dense.weight.T).astype(mx.float32)
+    def dense_loss_fn(x):
+        y = (mx.array(x).astype(dtype) @ w_d.T).astype(mx.float32)
         return y.square().mean()
 
-    dense_grads = mx.grad(dense_loss_fn, argnums=0)(
-        x_np, dict(dense.trainable_parameters()))
+    dense_grads = mx.grad(dense_loss_fn)(x_np)
     mx.eval(dense_grads)
 
     g = np.asarray(grads, dtype=np.float32)
