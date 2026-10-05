@@ -536,9 +536,10 @@ class CustomKernelSmoke(unittest.TestCase):
         )
         values = mx.arange(1, 9, dtype=mx.float32)
         out = self.call(kernel, [values], values.shape, values.dtype)
+        # v = values[i] + 7 >= 8 for every lane, so q is 1 everywhere.
         self.assertEqual(
             out.tolist(),
-            [float(x) + 7.0 + (1.0 if x > 3 else 0.0) for x in range(1, 9)],
+            [float(x) + 7.0 + 1.0 for x in range(1, 9)],
         )
 
     def test_ushort_type_and_integer_condition(self):
