@@ -1,0 +1,262 @@
+--- a/mlx/fast.h	2026-10-04 19:27:25.580611825 -0500
++++ b/mlx/fast.h	2026-10-04 19:26:37.840068089 -0500
+@@ -221,6 +221,22 @@
+     bool swiglu,
+     StreamOrDevice s = {});
+ 
++
++// GLM DSA fused indexer scores: OUT[b,0,l,k] =
++// sum_h max(sum_d Q[b,h,l,d] * K[b,0,k,d], 0) * W[b,l,h], with the
++// causal + pooled-ratio mask fused pre-ReLU. Q [B,H,L,128], K [B,1,K,128],
++// W [B,L,H], H in {32, 64}, bf16/f16. causal_q_offset < 0 means K - L.
++// Reference: omlx steel_dsa_indexer_score metallib family (Apache-2.0),
++// re-implemented.
++MLX_API array dsa_indexer_scores(
++    const array& queries,
++    const array& keys,
++    const array& weights,
++    bool causal,
++    int causal_q_offset,
++    int mask_ratio,
++    StreamOrDevice s = {});
++
+ using TemplateArg = std::variant<int, bool, Dtype>;
+ using ScalarArg = std::variant<bool, int, float>;
+ 
+--- a/mlx/fast_primitives.h	2026-10-04 19:27:25.583611796 -0500
++++ b/mlx/fast_primitives.h	2026-10-04 19:26:37.841068079 -0500
+@@ -572,6 +572,61 @@
+   bool swiglu_;
+ };
+ 
++
++// Inputs (queries, keys, weights); single 16-bit-float output. See
++// fast::dsa_indexer_scores. The composed fallback materializes three
++// [B,H,L,K] 16-bit passes (scores, relu, weighted) before the head
++// sum; the Omarchy GPU route fuses all of it into one dispatch
++// (shaders/dsa_indexer.comp) with float32 accumulation.
++class DsaIndexerScores : public Custom {
++ public:
++  DsaIndexerScores(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      bool causal,
++      int causal_q_offset,
++      int mask_ratio)
++      : Custom(stream, std::move(fallback)),
++        causal_(causal),
++        causal_q_offset_(causal_q_offset),
++        mask_ratio_(mask_ratio) {}
++
++  static bool use_fallback(Stream s);
++
++  bool causal() const {
++    return causal_;
++  }
++  int causal_q_offset() const {
++    return causal_q_offset_;
++  }
++  int mask_ratio() const {
++    return mask_ratio_;
++  }
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(DsaIndexerScores);
++  bool is_equivalent(const Primitive& other) const override {
++    const auto& p = static_cast<const DsaIndexerScores&>(other);
++    return p.causal_ == causal_ && p.causal_q_offset_ == causal_q_offset_ &&
++        p.mask_ratio_ == mask_ratio_;
++  }
++  auto state() const {
++    return std::make_tuple(nullptr, causal_, causal_q_offset_, mask_ratio_);
++  }
++
++ private:
++  bool causal_;
++  int causal_q_offset_;
++  int mask_ratio_;
++};
++
+ class GatedDeltaUpdate : public Custom {
+  public:
+   GatedDeltaUpdate(
+--- a/mlx/fast.cpp	2026-10-04 19:27:25.582611806 -0500
++++ b/mlx/fast.cpp	2026-10-04 19:26:37.841068079 -0500
+@@ -1937,6 +1937,122 @@
+   return std::move(outputs[0]);
+ }
+ 
++
++bool DsaIndexerScores::use_fallback(Stream s) {
++  return s.device == Device::cpu;
++}
++
++array dsa_indexer_scores(
++    const array& queries,
++    const array& keys,
++    const array& weights,
++    bool causal,
++    int causal_q_offset,
++    int mask_ratio,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (queries.ndim() != 4 || keys.ndim() != 4 || weights.ndim() != 3) {
++    throw std::invalid_argument(
++        "[dsa_indexer_scores] q/k must be 4D and weights 3D.");
++  }
++  int B = queries.shape(0);
++  int H = queries.shape(1);
++  int L = queries.shape(2);
++  int D = queries.shape(3);
++  if (keys.shape(0) != B || keys.shape(1) != 1 || keys.shape(3) != D) {
++    throw std::invalid_argument(
++        "[dsa_indexer_scores] keys must be [B, 1, K, D] matching queries.");
++  }
++  if (weights.shape() != Shape{B, L, H}) {
++    throw std::invalid_argument(
++        "[dsa_indexer_scores] weights must be [B, L, H].");
++  }
++  if (H != 32 && H != 64) {
++    throw std::invalid_argument(
++        "[dsa_indexer_scores] H must be 32 or 64.");
++  }
++  if (D != 128) {
++    throw std::invalid_argument("[dsa_indexer_scores] D must be 128.");
++  }
++  if (keys.shape(2) < 64) {
++    throw std::invalid_argument("[dsa_indexer_scores] K must be >= 64.");
++  }
++  auto dtype = queries.dtype();
++  if (dtype != float16 && dtype != bfloat16) {
++    throw std::invalid_argument(
++        "[dsa_indexer_scores] q/k/w must be float16 or bfloat16.");
++  }
++  if (keys.dtype() != dtype || weights.dtype() != dtype) {
++    throw std::invalid_argument("[dsa_indexer_scores] dtype mismatch.");
++  }
++  if (causal && causal_q_offset < 0) {
++    causal_q_offset = keys.shape(2) - L;
++  }
++  if (mask_ratio < 0) {
++    throw std::invalid_argument(
++        "[dsa_indexer_scores] mask_ratio must be >= 0.");
++  }
++  // Accumulation and masking run in float32; the only 16-bit round is
++  // the final store, which matches the metal kernel's contract.
++  std::function<std::vector<array>(std::vector<array>)> fallback =
++      [s, causal, causal_q_offset, mask_ratio, H, D](
++          std::vector<array> inputs) {
++        auto dt = inputs[0].dtype();
++        array floor_min = astype(
++            array(std::numeric_limits<float>::lowest()), dt, s);
++        // scores [B, H, L, K] via batched matmul over the head axis.
++        array scores = matmul(
++            inputs[0], swapaxes(inputs[1], -1, -2, s), s);
++        int Lq = scores.shape(2);
++        int Kk = scores.shape(3);
++        int off = causal_q_offset;
++        array l_idx = expand_dims(
++            expand_dims(arange(Lq, uint32, s), 0, s), -1, s);
++        array c_idx = expand_dims(
++            expand_dims(arange(Kk, uint32, s), 0, s), 0, s);
++        std::vector<array> masks;
++        if (mask_ratio > 0) {
++          array thr = floor_divide(
++              array(off + 1, uint32, s) + l_idx,
++              array(mask_ratio, uint32, s),
++              s);
++          masks.push_back(less(c_idx, thr, s));
++        }
++        if (causal) {
++          masks.push_back(
++              less_equal(c_idx, array(off, uint32, s) + l_idx, s));
++        }
++        array valid = masks[0];
++        for (size_t i = 1; i < masks.size(); ++i) {
++          valid = logical_and(valid, masks[i], s);
++        }
++        array masked = where(valid, scores, floor_min, s);
++        array relu = maximum(masked, array(0.0f, float32, s), s);
++        array wq = reshape(
++            transpose(
++                reshape(inputs[2], {B, 1, Lq, H}, s),
++                {0, 3, 1, 2},
++                s),
++            {B, H, Lq, 1},
++            s);
++        array weighted = multiply(relu, wq, s);
++        array out = sum(weighted, 1, true, s);
++        return std::vector<array>{out};
++      };
++  bool routed = !DsaIndexerScores::use_fallback(s);
++  std::vector<array> inputs{queries, keys, weights};
++  if (!routed) {
++    return fallback(inputs)[0];
++  }
++  auto outputs = array::make_arrays(
++      {{B, 1, L, keys.shape(2)}},
++      {dtype},
++      std::make_shared<DsaIndexerScores>(
++          s, fallback, causal, causal_q_offset, mask_ratio),
++      std::move(inputs));
++  return std::move(outputs[0]);
++}
++
+ bool Quantize::is_equivalent(const Primitive& other) const {
+   const Quantize& p_other = static_cast<const Quantize&>(other);
+   return (
+--- a/mlx/backend/no_gpu/primitives.cpp
++++ b/mlx/backend/no_gpu/primitives.cpp
+@@ -193,3 +193,4 @@
+ NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
+ NO_GPU_USE_FALLBACK(Int8Matmul)
++NO_GPU_USE_FALLBACK(DsaIndexerScores)
+ NO_GPU_USE_FALLBACK(CrossEntropy)
+ NO_GPU_MULTI(CrossEntropyVJP)
+--- a/python/src/fast.cpp	2026-10-04 19:27:25.589611739 -0500
++++ b/python/src/fast.cpp	2026-10-04 19:26:37.842068070 -0500
+@@ -646,6 +646,37 @@
+                 bfloat16 [..., N] (swiglu: [..., N])
+         )");
+ 
++
++  m.def(
++      "dsa_indexer_scores",
++      &mlx::core::fast::dsa_indexer_scores,
++      "queries"_a,
++      "keys"_a,
++      "weights"_a,
++      nb::kw_only(),
++      "causal"_a = true,
++      "causal_q_offset"_a = -1,
++      "mask_ratio"_a = 0,
++      "stream"_a = nb::none(),
++      R"(
++            GLM DSA fused indexer scores (omarchy native of the omlx
++            steel_dsa_indexer_score family).
++            OUT[b,0,l,k] = sum_h max(sum_d Q[b,h,l,d]*K[b,0,k,d], 0)
++                               * W[b,l,h]
++            with the causal and optional pooled-ratio mask fused
++            pre-ReLU (masked positions are exact 0). Dots accumulate
++            in float32; the only 16-bit round is the final store.
++            Args:
++                queries: [B, H, L, 128] float16/bfloat16
++                keys: [B, 1, K, 128] float16/bfloat16
++                weights: [B, L, H] float16/bfloat16
++                causal: apply the causal mask (default True)
++                causal_q_offset: query-row offset; -1 computes K - L
++                mask_ratio: pooled-ratio mask divisor (0 = disabled)
++            Returns:
++                [B, 1, L, K] float16/bfloat16
++        )');
++
+   m.def(
+       "gdn_conv_update",
+       &mlx::core::fast::gdn_conv_update,

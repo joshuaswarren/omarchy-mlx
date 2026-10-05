@@ -98,6 +98,13 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=3 \
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-int8-matmul.patch"
 
+# GLM DSA fused indexer scores (fast::DsaIndexerScores; the FamGlmDsa
+# lane). Composed fallback in fast.cpp, Vulkan kernel via
+# shaders/dsa_indexer.comp. Applies after int8 (its no_gpu hunk
+# context includes the Int8Matmul line).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-dsa-indexer.patch"
+
 # Backend-generic upstream fixes, applied in upstream first-parent order.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-view-offset.patch"

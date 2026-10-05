@@ -11764,6 +11764,84 @@ bool GreedyQuantizedArgmax::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }
 
+// GLM DSA fused indexer scores, shaders/dsa_indexer.comp. One dispatch
+// per (batch, query-row) tile computes
+//   OUT[b,0,l,k] = sum_h max(sum_d Q[b,h,l,d]*K[b,0,k,d], 0) * W[b,l,h]
+// with the causal + pooled-ratio mask fused pre-ReLU (masked stores are
+// exact 0 - the parity-tested contract of this lane's composed
+// fallback). The H-wide per-head score tensor never exists in memory;
+// dots accumulate in float32 and one bfloat16/fp16 round lands at the
+// store, which is strictly tighter than the fallback's three
+// materialized [B,H,L,K] 16-bit passes. Shape contract mirrors
+// omlx::glm_kernels::DSAIndexerScoresPrimitive: H in {32, 64}, D=128,
+// K >= 64, bf16/f16 row-contiguous inputs, W [B, L, H].
+void DsaIndexerScores::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const auto& caps = encoder.device().capabilities();
+  array q = inputs.at(0);
+  array k = inputs.at(1);
+  array w = inputs.at(2);
+  array& out = outputs.at(0);
+  std::optional<array> q_temp;
+  std::optional<array> k_temp;
+  std::optional<array> w_temp;
+  const array& qd = ensure_dense(q, q.flags().row_contiguous, q_temp, encoder, s);
+  const array& kd = ensure_dense(k, k.flags().row_contiguous, k_temp, encoder, s);
+  const array& wd = ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0 || qd.size() == 0) {
+    return;
+  }
+  const int H = qd.shape(1);
+  const int L = qd.shape(2);
+  const int D = qd.shape(3);
+  const int K = kd.shape(2);
+  const int B = qd.shape(0);
+  if (qd.offset() != 0 || kd.offset() != 0 || wd.offset() != 0) {
+    omarchy::unsupported(tag + " nonzero storage offset", out);
+  }
+  // The shader stages the H x D query panel in float32 shared memory at
+  // the H=64 size (32 KiB panel + weights); hosts without it fall back.
+  if (static_cast<size_t>(caps.max_compute_shared_memory_size) <
+      (64u * 128u + 64u) * sizeof(float)) {
+    omarchy::unsupported(tag + " shared memory for the query panel", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = checked_u32(static_cast<uint64_t>(B) * L * K, tag, out);
+  params.lhs_offset = checked_item_offset(qd, qd.size(), tag, out);
+  params.rhs_offset = checked_item_offset(kd, kd.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.flags = causal() ? 1u : 0u;
+  params.matrix_m = static_cast<uint32_t>(B * L); // workgroups per y-slice
+  params.shape[0] = static_cast<uint32_t>(H);
+  params.shape[1] = static_cast<uint32_t>(D);
+  params.shape[2] = static_cast<uint32_t>(L);
+  params.shape[3] = static_cast<uint32_t>(K);
+  params.in_strides[0] =
+      static_cast<uint32_t>(causal_q_offset()); // may exceed int range? no: K-L
+  params.in_strides[1] = static_cast<uint32_t>(mask_ratio());
+  params.in_strides[2] =
+      checked_u32(static_cast<uint64_t>(H) * L * D, tag, out); // q batch
+  params.in_strides[3] =
+      checked_u32(static_cast<uint64_t>(K) * D, tag, out); // k batch
+  params.out_strides[0] =
+      checked_u32(static_cast<uint64_t>(L) * H, tag, out); // w batch
+  std::array<omarchy::ComputeBinding, 4> bindings{
+      binding(qd), binding(kd), binding(wd), binding(out)};
+  uint32_t rows = params.matrix_m;
+  uint32_t k_tiles = (static_cast<uint32_t>(K) + 255u) / 256u;
+  encoder.dispatch_compute(
+      omarchy::ComputeKernel::DsaIndexerScoresOp,
+      bindings,
+      params,
+      rows,
+      k_tiles);
+}
+
 // Greedy-argmax head, shaders/qmm_vec.comp QMM_VEC_GREEDY stages 0-7.
 // Its exact stage IS the QmmVecQ4WordSubgroupBF16 column, so the route
 // holds only where QuantizedMatmul::eval_gpu picks that kernel for the

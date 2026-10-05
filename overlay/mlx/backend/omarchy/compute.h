@@ -817,6 +817,12 @@ enum class ComputeKernel : uint16_t {
   QmmPrefillCoopmatBF16X32FullNChunk,
   QmmPrefillCoopmatBF16X32FullNLdsPad,
   QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // GLM DSA fused indexer scores (shaders/dsa_indexer.comp);
+  // fast::DsaIndexerScores. One dispatch computes
+  // sum_h relu(q_h @ k^T) * w with the causal + pooled-ratio mask
+  // fused pre-ReLU; the H-wide score tensor never exists in memory.
+  // Append-only profile id.
+  DsaIndexerScoresOp,
   Count,
 };
 
