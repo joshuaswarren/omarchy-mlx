@@ -596,7 +596,16 @@ void dispatch_matmul(
     omarchy::unsupported("matrix batch rank " + name, out);
   }
 
-  out.set_data(allocate_omarchy(out.nbytes()));
+  // A caller may pass an output that already carries storage: the chunked
+  // SDPA's PV writes land in a shared-buffer view of the real output
+  // array. Allocating unconditionally here would detach that view from
+  // the output's buffer, so every kernel store would land in detached
+  // scratch while the output stayed zero-filled (the LongSdpaCoop3
+  // all-zero composed outputs, 2026-10-06). Views arrive with their
+  // buffer set; only fresh outputs allocate here.
+  if (out.buffer().ptr() == nullptr) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+  }
   if (out.size() == 0) {
     return;
   }
@@ -14137,6 +14146,105 @@ void ScaledDotProductAttention::eval_gpu(
       qs = regroup_view(q);
       k32 = regroup_view(k);
       v32 = regroup_view(v);
+    }
+    // Chunked composed for score buffers that would exceed the storage
+    // binding range: rows are independent, so the identical
+    // QK -> softmax -> PV chain runs per q-row chunk and the PV coopmat
+    // writes straight into the output's buffer through a row view (the
+    // kernel consumes params.output_offset; matmul_coopmat_bf16.comp
+    // adds it at the out_slice). Chunk rows are the largest power of two
+    // keeping the f32 score chunk under the cap (1 GiB default, the
+    // threshold where the unchunked composed still fits), so every shape
+    // that fits keeps dispatching the unchunked code below unchanged and
+    // byte-identically. MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES is the
+    // test-only knob: it lowers the cap (forcing multi-chunk at small
+    // shapes) and engages this path even when the unchunked route would
+    // fit, so a single fresh-process ticket can compare chunked and
+    // single-chunk output byte-for-byte. Non-causal, no mask, no sinks,
+    // single output; everything else keeps the routes below.
+    if (outputs.size() == 1 && !do_causal_ && inputs.size() == 3 &&
+        !has_sinks_ && q_len > 1) {
+      const uint64_t chunk_denom =
+          static_cast<uint64_t>(batch) * heads * k_len * sizeof(float);
+      uint64_t chunk_bytes_cap = 1ull << 30;
+      bool chunk_engaged = false;
+      if (const char* chunk_cap_env =
+              std::getenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+          chunk_cap_env != nullptr && chunk_cap_env[0] != '\0') {
+        char* endp = nullptr;
+        unsigned long long parsed = std::strtoull(chunk_cap_env, &endp, 10);
+        if (endp != chunk_cap_env && parsed > 0) {
+          chunk_bytes_cap = parsed;
+          chunk_engaged = true;
+        }
+      }
+      chunk_engaged = chunk_engaged ||
+          chunk_denom * static_cast<uint64_t>(q_len) > chunk_bytes_cap;
+      if (chunk_engaged) {
+        auto row_chunk_view = [&](const array& base, uint32_t row0,
+                                  uint32_t rows) {
+          const int row_axis = base.ndim() - 2;
+          Shape shape = base.shape();
+          shape[row_axis] = rows;
+          Strides strides = base.strides();
+          array view(std::move(shape), base.dtype(), nullptr, {});
+          view.copy_shared_buffer(
+              base,
+              strides,
+              {false, false, false},
+              view.size(),
+              static_cast<int64_t>(row0) * strides[row_axis]);
+          encoder.add_temporary(view);
+          return view;
+        };
+        uint32_t chunk_rows = 64u;
+        while (chunk_rows * 2u <= static_cast<uint32_t>(q_len) &&
+               chunk_denom * (chunk_rows * 2ull) <= chunk_bytes_cap) {
+          chunk_rows *= 2u;
+        }
+        array keys_t = swapaxes_in_eval(k32, -1, -2);
+        encoder.add_temporary(keys_t);
+        out.set_data(allocate_omarchy(out.nbytes()));
+        for (uint32_t row0 = 0; row0 < static_cast<uint32_t>(q_len);
+             row0 += chunk_rows) {
+          const uint32_t rows =
+              std::min(chunk_rows, static_cast<uint32_t>(q_len) - row0);
+          array qs_c = row_chunk_view(qs, row0, rows);
+          Shape score_shape = qs_c.shape();
+          score_shape.back() = k_len;
+          array scores_c(score_shape, float32, nullptr, {});
+          dispatch_matmul(
+              tag,
+              {qs_c, keys_t},
+              scores_c,
+              scale_,
+              0.0f,
+              false,
+              s,
+              {0u, CausalSkip::None},
+              omarchy::ComputeKernel::MatmulF32CoopmatQkBF16);
+          encoder.add_temporary(scores_c);
+          array probs_c(scores_c.shape(), float32, nullptr, {});
+          dispatch_softmax(
+              tag, scores_c, probs_c, s, nullptr, rows, false, 0);
+          encoder.add_temporary(probs_c);
+          // The PV store lands directly in the output slice:
+          // dispatch_matmul keeps out_c's shared buffer (allocation guard
+          // above) and the kernel writes at params.output_offset.
+          array out_c = row_chunk_view(out, row0, rows);
+          dispatch_matmul(
+              tag,
+              {probs_c, v32},
+              out_c,
+              1.0f,
+              0.0f,
+              false,
+              s,
+              {0u, CausalSkip::None},
+              omarchy::ComputeKernel::MatmulF32CoopmatPvBF16);
+        }
+        return;
+      }
     }
   } else {
     array q32 = to_f32(q);
