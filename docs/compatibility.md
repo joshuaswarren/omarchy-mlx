@@ -683,6 +683,18 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   per-output k order and zero padding as the 16x16 tile. Decode (`m == 1`)
   keeps the 16x16 tile and the GEMV paths. Test "register-blocked f16
   matmul matches the 16x16 tile bit for bit" (`omarchy_matmul_family_tests`).
+  Since 2026-10-06 it serves only the shapes `MatmulDirectF16` declines and
+  the causal attention shortcuts.
+- `MatmulDirectF16{Nn,Nt,Tn,Tt}` (`shaders/matmul_coopmat_direct.comp`):
+  the same f16 matmul contract on the 8x8x8 cooperative matrix with fp16
+  operands and an f32 accumulator, every operand tile loaded straight from
+  the buffers (no shared staging, no barriers), one build per orientation.
+  Requires `cooperative_matrix_f32_8` and `cooperative_matrix_f16_8` with
+  subgroup size 32, `m >= 32`, `n >= 32`, `k % 8 == 0`, even `n` (and even
+  `m` for a column-major lhs), no bias, no causal shortcut, and even element
+  offsets, gaps, and batch strides. Stored bits equal `MatmulRbF16` on the
+  M1; 4096^3 runs at 1.72 TFLOP/s against 0.60
+  (`receipts/2026-10-06-dense-f16-gemm-direct/`).
 - `SwigluF16/BF16` (`shaders/swiglu.comp`): the fused chain's
   sigmoid / multiply / multiply program with two direct leaves, four
   elements per thread with the interpreter's per-instruction rounding,
