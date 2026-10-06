@@ -1060,6 +1060,10 @@ bool dispatch_elementwise_windows(
         bindings[1], rhs, rhs_size, rhs_base, wparams.rhs_offset);
     wbindings[2] = window_operand(
         bindings[2], out, count, out_base, wparams.output_offset);
+    // The shader never reads the metadata slot here, but the encoder still
+    // range-checks every binding: point it at the (small) windowed lhs
+    // instead of the whole-buffer placeholder.
+    wbindings[3] = wbindings[0];
     encoder.dispatch_compute(
         kernel,
         wbindings,
