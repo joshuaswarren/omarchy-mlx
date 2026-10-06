@@ -3234,6 +3234,7 @@ void dispatch_gather_qmm(
   // no-bias variants. The bound global scale routes to the HGS
   // variants, whose fifth binding carries the float32 word.
   bool no_bias = !biases.has_value();
+  if (fp_mode && out_global_scale) {
     std::array<omarchy::ComputeBinding, 5> hgs_bindings{
         binding(x_d),
         binding(packed),
