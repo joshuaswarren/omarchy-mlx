@@ -89,6 +89,26 @@ Metal APIs are absent?". Patches:
   `test_omlx_q35_conv_fuse.py` (fused route engages on decode; fused
   output bit-equal to composed on the omarchy wheel; kill switch and
   multi-token chunks stay composed).
+- `patches/0007-omlx-laguna-rope-normalize.patch` — Laguna tokenizer
+  preflight fix. Laguna checkpoints ship `rope_parameters` as a
+  per-layer-type map (`full_attention` / `sliding_attention` dicts) plus
+  non-dict top-level scalars (`original_max_position_embeddings`);
+  Transformers 5.17 `validate_rope` (modeling_rope_utils.py:850) calls
+  `.get` on every value and aborts tokenizer config validation with
+  `'int' object has no attribute 'get'` before inference. The patch adds
+  `omlx/utils/laguna_rope.py`: `coerce_nested_rope_parameters` narrows such
+  mixed maps to the per-layer-type dicts (the shape the upstream
+  remote-code `LagunaConfig.__post_init__` produces), and
+  `install_rope_parameters_guard` wraps
+  `transformers.modeling_rope_utils.RotaryEmbeddingConfigMixin.validate_rope`
+  to apply that coercion first; `lm_load_compat` installs the guard before
+  every load, so both the preflight and mlx-lm's real tokenizer load pass
+  without enabling `trust_remote_code`. Flat rope maps and non-dict values
+  pass through untouched. Contract tests: `test_omlx_laguna_rope.py`
+  (coercion on the captured `fixtures/laguna-hf-config.json`, flat/non-dict
+  pass-through, guard delegation and idempotence — the transformers-wiring
+  tests skip on dev boxes without transformers and run on the target
+  venv).
 
 Tools in this layer:
 
