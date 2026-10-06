@@ -596,7 +596,16 @@ void dispatch_matmul(
     omarchy::unsupported("matrix batch rank " + name, out);
   }
 
-  out.set_data(allocate_omarchy(out.nbytes()));
+  // A caller may pass an output that already carries storage: the chunked
+  // SDPA's PV writes land in a shared-buffer view of the real output
+  // array. Allocating unconditionally here would detach that view from
+  // the output's buffer, so every kernel store would land in detached
+  // scratch while the output stayed zero-filled (the LongSdpaCoop3
+  // all-zero composed outputs, 2026-10-06). Views arrive with their
+  // buffer set; only fresh outputs allocate here.
+  if (out.buffer().ptr() == nullptr) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+  }
   if (out.size() == 0) {
     return;
   }
