@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/cpu/device_info.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
@@ -4447,4 +4448,90 @@ TEST_CASE("qmm prefill axes twins are bit-identical to the shipped route") {
     std::cout << "[prefill-axes] k=" << k << " n=" << n
               << " all 10 twin arms bit-identical, m in {17..2047 odd}\n";
   }
+}
+
+// The CPU quantized matmul full-row dot accumulates in float32 whatever
+// the activation dtype: at K=16384 a bfloat16 accumulator drifts several
+// percent from the double-precision dequant reference while every
+// 64-wide group dot stays correct, so the row result stops being the sum
+// of its group partials (reported at K=16384, bits=4, g=64, bf16, with
+// K=8192 and K=12288 still inside the bound). The odd 129-group case
+// pins the same contract on a non-power-of-two group count.
+TEST_CASE("cpu quantized matmul full-row dot matches host at large K") {
+  if (!cpu::is_available()) {
+    skip("no CPU backend");
+    return;
+  }
+  set_default_device(Device::cpu);
+  Stream cpu_stream = new_stream(Device::cpu);
+  std::mt19937 gen(16384);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+  auto cpu_round_trip = [&](const std::vector<float>& values, Dtype dtype) {
+    array f32(values.begin(),
+              Shape{static_cast<int>(values.size())},
+              float32);
+    array round = astype(astype(f32, dtype, cpu_stream), float32, cpu_stream);
+    round.eval();
+    synchronize(cpu_stream);
+    const float* data = round.data<float>();
+    return std::vector<float>(data, data + round.size());
+  };
+
+  auto run_case = [&](int k, int n, int group_size, int bits) {
+    CAPTURE(k);
+    CAPTURE(n);
+    CAPTURE(group_size);
+    CAPTURE(bits);
+    constexpr int m = 1;
+    int groups = k / group_size;
+    int pack = 32 / bits;
+    int words_per_row = k / pack;
+
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights host =
+        host_affine_quantize(matrix, n, k, group_size, bits);
+    std::vector<float> x_values(m * k);
+    for (auto& value : x_values) {
+      value = dist(gen);
+    }
+    // bf16 grid: the device sees bfloat16 activations, packed codes, and
+    // bfloat16 scales/biases; the host reference uses the same rounded
+    // values so the only difference under test is the accumulation dtype.
+    std::vector<float> x_bf = cpu_round_trip(x_values, bfloat16);
+    std::vector<float> scales_bf = cpu_round_trip(host.scales, bfloat16);
+    std::vector<float> biases_bf = cpu_round_trip(host.biases, bfloat16);
+    host.scales = scales_bf;
+    host.biases = biases_bf;
+
+    array x(x_bf.begin(), Shape{m, k}, bfloat16);
+    array w_words(host.words.begin(), Shape{n, words_per_row}, uint32);
+    array scales(scales_bf.begin(), Shape{n, groups}, bfloat16);
+    array biases(biases_bf.begin(), Shape{n, groups}, bfloat16);
+    array out = quantized_matmul(
+        x,
+        w_words,
+        scales,
+        biases,
+        /*transpose=*/true,
+        group_size,
+        bits,
+        "affine",
+        cpu_stream);
+    out = astype(out, float32, cpu_stream);
+    out.eval();
+    synchronize(cpu_stream);
+    std::vector<float> device(
+        out.data<float>(),
+        out.data<float>() + out.size());
+    auto expected =
+        host_quantized_matmul(host, x_bf, m, n, k, group_size, bits);
+    expect_close(device, expected, 5e-2);
+  };
+
+  run_case(16384, 8, 64, 4); // the reported failure: 256 groups, bf16
+  run_case(8256, 4, 64, 4); // 129-group tail: non-power-of-two group count
 }

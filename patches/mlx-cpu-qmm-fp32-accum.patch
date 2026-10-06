@@ -1,0 +1,210 @@
+--- a/mlx/backend/cpu/quantized.cpp
++++ b/mlx/backend/cpu/quantized.cpp
+@@ -11,6 +11,8 @@
+ #include "mlx/primitives.h"
+ #include "mlx/utils.h"
+ 
++#include <vector>
++
+ namespace mlx::core {
+ 
+ namespace {
+@@ -108,27 +110,33 @@
+   constexpr int bytes_per_pack = get_bytes_per_pack(bits);
+   constexpr int packs_in_group = group_size / pack_factor;
+ 
++  // The k-outer loop adds K terms to every output element; accumulating
++  // in T drifts several percent from the f64 reference at K=16384 for
++  // bfloat16, so each row accumulates in float32 and rounds once at the
++  // end. This matches _qmm_t_simd, which accumulates Simd<float, S>.
++  std::vector<float> acc(N, 0.0f);
+   for (int m = 0; m < M; m++) {
+     const uint8_t* w_local = (const uint8_t*)w;
+     const T* scales_local = scales;
+     const T* biases_local = biases;
+ 
+-    std::fill(result, result + N, 0);
++    std::fill(acc.begin(), acc.end(), 0.0f);
+ 
+     for (int k = 0; k < K; k++) {
+-      T* result_local = result;
+-      T xi = *x++;
++      float* result_local = acc.data();
++      float xi = static_cast<float>(*x++);
+ 
+       for (int n = 0; n < N; n += group_size) {
+-        T scale = *scales_local++;
+-        T bias = *biases_local++;
++        float scale = static_cast<float>(*scales_local++);
++        float bias = static_cast<float>(*biases_local++);
+         for (int ng = 0; ng < packs_in_group; ng++) {
+           if constexpr (bits == 3 || bits == 5 || bits == 6) {
+             T wl[pack_factor];
+             extract_bits<T, bits>(w_local, wl);
+ #pragma clang loop unroll(full)
+             for (int p = 0; p < pack_factor; p++) {
+-              (*result_local++) += xi * (scale * wl[p] + bias);
++              (*result_local++) +=
++                  xi * (scale * static_cast<float>(wl[p]) + bias);
+             }
+             w_local += bytes_per_pack;
+ 
+@@ -137,7 +145,7 @@
+ #pragma clang loop unroll(full)
+             for (int p = 0; p < pack_factor; p++) {
+               (*result_local++) +=
+-                  xi * (scale * static_cast<T>(wi & bitmask) + bias);
++                  xi * (scale * static_cast<float>(wi & bitmask) + bias);
+               if (bits != 8) {
+                 wi >>= bits;
+               }
+@@ -147,6 +155,9 @@
+       }
+     }
+ 
++    for (int n = 0; n < N; n++) {
++      result[n] = static_cast<T>(acc[n]);
++    }
+     result += N;
+   }
+ }
+@@ -174,10 +185,16 @@
+ 
+     for (int n = 0; n < N; n++) {
+       const T* x_local = x;
+-      T sum = 0;
++      // The row dot adds K terms; accumulating in T drifts several
++      // percent from the f64 reference at K=16384 for bfloat16, so the
++      // group partials and the row total accumulate in float32 and
++      // round once at the end. This matches _qmm_t_simd, which
++      // accumulates Simd<float, S>.
++      float sum = 0;
+       for (int k = 0; k < K; k += group_size) {
+-        T scale = *scales_local++;
+-        T bias = *biases_local++;
++        float scale = static_cast<float>(*scales_local++);
++        float bias = static_cast<float>(*biases_local++);
++        float gsum = 0;
+ 
+         for (int kw = 0; kw < packs_in_group; kw++) {
+           if constexpr (bits == 3 || bits == 5 || bits == 6) {
+@@ -185,7 +202,8 @@
+             extract_bits<T, bits>(w_local, wl);
+ #pragma clang loop unroll(full)
+             for (int p = 0; p < pack_factor; p++) {
+-              sum += x_local[p] * (scale * wl[p] + bias);
++              gsum += static_cast<float>(x_local[p]) *
++                  (scale * static_cast<float>(wl[p]) + bias);
+             }
+             w_local += bytes_per_pack;
+             x_local += pack_factor;
+@@ -194,16 +212,17 @@
+             uint8_t wi = *w_local++;
+ #pragma clang loop unroll(full)
+             for (int p = 0; p < pack_factor; p++) {
+-              sum +=
+-                  (*x_local++) * (scale * static_cast<T>(wi & bitmask) + bias);
++              gsum += static_cast<float>(*x_local++) *
++                  (scale * static_cast<float>(wi & bitmask) + bias);
+               if (bits != 8) {
+                 wi >>= bits;
+               }
+             }
+           }
+         }
++        sum += gsum;
+       }
+-      *result = sum;
++      *result = static_cast<T>(sum);
+       result++;
+     }
+ 
+@@ -458,32 +477,41 @@
+   constexpr int pack_factor = get_pack_factor(bits, 8);
+   constexpr int packs_in_group = group_size / pack_factor;
+ 
++  // The k-outer loop adds K terms to every output element; accumulating
++  // in T drifts several percent from the f64 reference at K=16384 for
++  // bfloat16, so each row accumulates in float32 and rounds once at the
++  // end. This matches fp_qmm_t_simd, which accumulates Simd<float, S>.
++  std::vector<float> acc(N, 0.0f);
+   for (int m = 0; m < M; m++) {
+     const uint8_t* w_local = (const uint8_t*)w;
+     const uint8_t* scales_local = scales;
+ 
+-    std::fill(result, result + N, 0);
++    std::fill(acc.begin(), acc.end(), 0.0f);
+ 
+     for (int k = 0; k < K; k++) {
+-      T* result_local = result;
+-      T xi = *x++;
++      float* result_local = acc.data();
++      float xi = static_cast<float>(*x++);
+ 
+       for (int n = 0; n < N; n += group_size) {
+-        T scale = dequantize_scale<T, group_size>(*scales_local++);
++        float scale =
++            dequantize_scale<float, group_size>(*scales_local++);
+         for (int ng = 0; ng < packs_in_group; ng++) {
+           if constexpr (bits == 4) {
+-            (*result_local++) +=
+-                xi * scale * static_cast<T>(FP4_LUT[w_local[0] & 0xf]);
++            (*result_local++) += xi * scale * FP4_LUT[w_local[0] & 0xf];
+             (*result_local++) +=
+-                xi * scale * static_cast<T>(FP4_LUT[(w_local[0] >> 4) & 0xf]);
++                xi * scale * FP4_LUT[(w_local[0] >> 4) & 0xf];
+           } else {
+             (*result_local++) +=
+-                xi * scale * static_cast<T>(detail::FromFP8{}(w_local[0]));
++                xi * scale * detail::FromFP8{}(w_local[0]);
+           }
+           w_local++;
+         }
+       }
+     }
++
++    for (int n = 0; n < N; n++) {
++      result[n] = static_cast<T>(acc[n]);
++    }
+     result += N;
+   }
+ }
+@@ -506,25 +534,31 @@
+ 
+     for (int n = 0; n < N; n++) {
+       const T* x_local = x;
+-      T sum = 0;
++      // The row dot adds K terms; accumulating in T drifts several
++      // percent from the f64 reference at K=16384 for bfloat16, so the
++      // group partials and the row total accumulate in float32 and
++      // round once at the end. This matches fp_qmm_t_simd, which
++      // accumulates Simd<float, S>.
++      float sum = 0;
+       for (int k = 0; k < K; k += group_size) {
+-        T scale = dequantize_scale<T, group_size>(*scales_local++);
++        float scale = dequantize_scale<float, group_size>(*scales_local++);
+ 
+-        T gsum = 0;
++        float gsum = 0;
+         for (int kw = 0; kw < packs_in_group; kw++) {
+           if constexpr (bits == 4) {
+-            gsum += (*x_local++) * static_cast<T>(FP4_LUT[w_local[0] & 0xf]);
++            gsum += static_cast<float>(*x_local++) * FP4_LUT[w_local[0] & 0xf];
+             gsum +=
+-                (*x_local++) * static_cast<T>(FP4_LUT[(w_local[0] >> 4) & 0xf]);
++                static_cast<float>(*x_local++) *
++                FP4_LUT[(w_local[0] >> 4) & 0xf];
+           } else {
+             gsum +=
+-                (*x_local++) * static_cast<T>(detail::FromFP8{}(w_local[0]));
++                static_cast<float>(*x_local++) * detail::FromFP8{}(w_local[0]);
+           }
+           w_local++;
+         }
+         sum += scale * gsum;
+       }
+-      *result = sum;
++      *result = static_cast<T>(sum);
+       result++;
+     }
+ 
