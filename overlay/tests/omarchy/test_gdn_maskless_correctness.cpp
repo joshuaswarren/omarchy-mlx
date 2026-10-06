@@ -395,3 +395,25 @@ TEST_CASE("GDN recur32 per-token route matches fp64 reference") {
     }
   }
 }
+
+TEST_CASE("GDN recur32 mode 2 covers short prefill TTFT shapes") {
+  if (!compute_available()) return;
+  EnvGuard guard("MLX_OMARCHY_GDN_RECUR32", "2");
+  Stream stream = gpu_stream();
+  // Route minimum is T >= 2 in this mode (T=1 is the decode kernel's);
+  // every T here takes the recur32 route maskless, while the masked arm
+  // of check_case keeps the exact scan route. Non-zero h0 covers
+  // mid-conversation prefill, the state-carrying TTFT case.
+  for (int rep : {1, 2, 3}) {
+    for (int T : {2, 3, 5, 11, 16, 31, 32, 33, 63}) {
+      CAPTURE(T);
+      CAPTURE(rep);
+      check_case(T, rep, stream);
+    }
+  }
+  for (int rep : {1, 2}) {
+    for (int T : {11, 63}) {
+      check_case_nonzero_state(T, rep, stream);
+    }
+  }
+}
