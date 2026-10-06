@@ -285,6 +285,13 @@ class CompletionDispatcher {
   std::vector<std::shared_ptr<void>> retired_temporaries_;
   uint64_t next_value_{0};
   uint64_t drained_value_{0};
+  // When drained_value_ last advanced. The idle tick releases the newest
+  // drained generation only after this has settled for one poll interval:
+  // while submissions are draining steadily (decode) the tick stays
+  // strictly behind, and once the queue goes quiet the final generation
+  // still recycles well inside the release contract.
+  std::chrono::steady_clock::time_point last_drain_at_{
+      std::chrono::steady_clock::time_point{}};
   std::mutex mutex_;
   std::mutex drain_mutex_;
   std::condition_variable cv_;
