@@ -1825,12 +1825,16 @@ void CompletionDispatcher::run() {
         // Honeykrisp can be after the last completion drained (the fence
         // lags the timeline observation). Keep running release passes
         // while fences are outstanding or blocks are parked, so
-        // recycling never depends on a later submission arriving.
+        // mid-generation frees never wait for the next submission. The
+        // pass gate stays strictly behind the newest drained generation
+        // (same threshold as free()'s direct path): the current
+        // generation's own blocks park until it ends, per the design.
         // drained_value_ is read under |mutex_|; the probes and the pass
         // run unlocked (they take allocator/execution locks, and free()
         // on another thread may hold an allocator lock while reading
         // dispatcher state).
-        uint64_t through = drained_value_;
+        uint64_t through =
+            drained_value_ > 0 ? drained_value_ - 1 : 0;
         lk.unlock();
         if (tick_execution_fences() ||
             omarchy::allocator().has_quarantined()) {
