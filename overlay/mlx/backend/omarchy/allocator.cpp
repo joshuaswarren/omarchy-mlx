@@ -54,6 +54,25 @@ bool poison_freed() {
   return enabled;
 }
 
+// MLX_OMARCHY_REUSE_LAG (diagnostic, docs/install-omarchy.md): extra
+// completion generations a freed buffer waits before it may be reused.
+// 0 (default) keeps the one-generation rule - a buffer stamped with
+// completion V may be recycled once generation V+1 is observed, which
+// assumes the driver's submit-final cleanup for V has run by then. If
+// cleanup for V can lag V+1's observation on some driver/timing, the
+// reuse cache hands out a block whose previous occupant is still being
+// written: the nondeterministic row-corruption NaN class. K widens the
+// quarantine by K generations; NaN gone at K>=1 pins the class and is
+// also the shape of the fix (lag reuse, not disable it).
+int reuse_lag() {
+  static const int lag = [] {
+    const char* v = std::getenv("MLX_OMARCHY_REUSE_LAG");
+    int n = v ? atoi(v) : 0;
+    return n < 0 ? 0 : (n > 16 ? 16 : n);
+  }();
+  return lag;
+}
+
 void poison_freed_buffer(void* data, size_t size) {
   auto* words = static_cast<uint32_t*>(data);
   size_t count = size / sizeof(uint32_t);
@@ -288,7 +307,8 @@ void VulkanAllocator::free(Buffer buffer) {
   // until the next submission.
   if (buf->completion != 0) {
     if (buf->completion == kPendingCompletion || !runtime_alive() ||
-        buf->completion + 1 > device().completions().drained_value()) {
+        buf->completion + 1 + reuse_lag() >
+            device().completions().drained_value()) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
       }
@@ -326,7 +346,7 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   std::vector<VulkanBuffer*> still_quarantined;
   for (auto* buf : quarantine_) {
     if (buf->completion == kPendingCompletion ||
-        buf->completion > cleanup_done_through) {
+        buf->completion + reuse_lag() > cleanup_done_through) {
       still_quarantined.push_back(buf);
       continue;
     }
