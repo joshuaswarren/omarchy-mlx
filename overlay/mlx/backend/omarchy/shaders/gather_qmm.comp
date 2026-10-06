@@ -114,10 +114,22 @@ layout(set = 0, binding = 6, std430) readonly buffer RhsIndices {
 layout(set = 0, binding = 4, std430) readonly buffer LhsIndices {
   uint values[];
 } lhs_indices_data;
-layout(set = 0, binding = 5, std430) readonly buffer RhsIndices {
+layout(set = 0, binding = 6, std430) readonly buffer RhsIndices {
   uint values[];
 } rhs_indices_data;
 #endif
+#endif
+
+// lhs/rhs index reads: the SEP variants read the dedicated index
+// buffers; every other variant (packed affine and fp) reads the packed
+// staging buffer. Defined at file scope: main() is shared by all
+// variants, including the fp ones whose parameter decoding differs.
+#ifdef SEP_PARAMS
+#define LHS_INDEX_AT(batch) lhs_indices_data.values[params.in_strides[1] + (batch)]
+#define RHS_INDEX_AT(batch) rhs_indices_data.values[params.out_strides[1] + (batch)]
+#else
+#define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
+#define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
 #endif
 
 layout(push_constant) uniform Params {
@@ -227,8 +239,6 @@ float decode_bias_param(uint byte_offset) {
 #endif
 
 #define BIAS_PARAM_AT(byte_offset) decode_bias_param(byte_offset)
-#define LHS_INDEX_AT(batch) lhs_indices_data.values[params.in_strides[1] + (batch)]
-#define RHS_INDEX_AT(batch) rhs_indices_data.values[params.out_strides[1] + (batch)]
 #else
 float decode_param(uint byte_offset) {
   uint word = packed_params.values[params.aux_offset + byte_offset / 4u];
@@ -246,8 +256,6 @@ float decode_param(uint byte_offset) {
 }
 
 #define BIAS_PARAM_AT(byte_offset) decode_param(params.shape[1] + (byte_offset))
-#define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
-#define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
 #endif
 
 #define DECODE_VALUE(q) float(q)
