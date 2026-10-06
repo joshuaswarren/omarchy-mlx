@@ -298,14 +298,6 @@ enum class ComputeKernel : uint16_t {
   GatherQmmNbF32,
   GatherQmmNbF16,
   GatherQmmNbBF16,
-  // Affine variants binding scales/biases/index buffers directly: no
-  // packed staging buffer, no fill/copy commands. Req "no_bias".
-  GatherQmmSepF32,
-  GatherQmmSepF16,
-  GatherQmmSepBF16,
-  GatherQmmNbSepF32,
-  GatherQmmNbSepF16,
-  GatherQmmNbSepBF16,
   // Subgroup gather variants: one workgroup per output element, K
   // split across lanes with a subgroupAdd reduction. The scalar
   // gather kernel is latency-bound at decode shapes (m == 1).

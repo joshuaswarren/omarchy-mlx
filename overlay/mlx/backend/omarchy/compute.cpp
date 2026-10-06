@@ -463,12 +463,6 @@
 #include "gather_qmm_nb_fp_hgs_f32.h"
 #include "gather_qmm_nb_fp_hgs_f16.h"
 #include "gather_qmm_nb_fp_hgs_bf16.h"
-#include "gather_qmm_sep_f32.h"
-#include "gather_qmm_sep_f16.h"
-#include "gather_qmm_sep_bf16.h"
-#include "gather_qmm_nb_sep_f32.h"
-#include "gather_qmm_nb_sep_f16.h"
-#include "gather_qmm_nb_sep_bf16.h"
 #include "gather_qmm_sub_f32.h"
 #include "gather_qmm_sub_f16.h"
 #include "gather_qmm_sub_bf16.h"
@@ -1022,20 +1016,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_bf16, gather_qmm_bf16_size};
     case ComputeKernel::GatherQmmNbF32:
       return {gather_qmm_nb_f32, gather_qmm_nb_f32_size};
-    case ComputeKernel::GatherQmmNbF16:
-      return {gather_qmm_nb_f16, gather_qmm_nb_f16_size};
-    case ComputeKernel::GatherQmmSepF32:
-      return {gather_qmm_sep_f32, gather_qmm_sep_f32_size};
-    case ComputeKernel::GatherQmmSepF16:
-      return {gather_qmm_sep_f16, gather_qmm_sep_f16_size};
-    case ComputeKernel::GatherQmmSepBF16:
-      return {gather_qmm_sep_bf16, gather_qmm_sep_bf16_size};
-    case ComputeKernel::GatherQmmNbSepF32:
-      return {gather_qmm_nb_sep_f32, gather_qmm_nb_sep_f32_size};
-    case ComputeKernel::GatherQmmNbSepF16:
-      return {gather_qmm_nb_sep_f16, gather_qmm_nb_sep_f16_size};
-    case ComputeKernel::GatherQmmNbSepBF16:
-      return {gather_qmm_nb_sep_bf16, gather_qmm_nb_sep_bf16_size};
+    case ComputeKernel::GatherQmmNbBF16:
+      return {gather_qmm_nb_bf16, gather_qmm_nb_bf16_size};
     case ComputeKernel::GatherQmmSubF32:
       return {gather_qmm_sub_f32, gather_qmm_sub_f32_size};
     case ComputeKernel::GatherQmmSubF16:
