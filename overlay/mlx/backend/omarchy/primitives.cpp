@@ -11799,23 +11799,33 @@ void GatedDeltaUpdate::eval_gpu(
   // per (hv, dv) row, Dk/32 = 4 f32 state elements per lane in registers,
   // plain sequential token loop - the Metal gated_delta_step shape. Read
   // per call (not a static): the correctness battery toggles this env per
-  // test case in-process. Default OFF; MLX_OMARCHY_GDN_RECUR32 selects:
+  // test case in-process. DEFAULT (env unset): mode 2 on G13 parts other
+  // than G13C (jwm1 M1 G13G is the measured part), off elsewhere until
+  // measured there. MLX_OMARCHY_GDN_RECUR32 selects:
+  //   0 (or 0/off/false/no): off - the shipped exact scan (T<64) and
+  //     chunked coopmat/hoist routes, bit-identical to before this flip.
   //   1 (or 1/on/true/yes): T >= 64 - the chunked coopmat kernel's
   //     territory (measured jwm1 G13G: 4.08 vs 6.87 ms/call at T=512).
   //   2: T >= 2 - every prefill shape the contract allows, the TTFT
   //     lever for short prompts (the exact 4-lane scan costs 58-94
   //     us/token there; T=11 is 748 us per call, 18 calls in a pf).
+  // Why default-on: the summation order is the macOS gated_delta_step
+  // order; fp64-reference error equals the default routes' (jwm1 G13G,
+  // T=2..1024, zero and non-zero state), long-prompt greedy tokens
+  // unchanged, 2B d64 tokens move toward the macOS tokens (3/5 vs 2/5
+  // prompts identical), kernel -41 % at T=512, pf512 +4.0 %, TTFT -8.4 %.
   // The kernel is single-pass (no snapshots, no chunk walk, grid is
   // T-independent), so small T carries no two-pass minimum. T=1 stays on
   // the decode kernel (decode_shape returns above). Outputs are NOT
   // bit-identical to the scan (subgroup reduction trees), so the env is
   // the A/B lever and the fp64 tolerance test is the numerics gate.
   const char* recur32_env = std::getenv("MLX_OMARCHY_GDN_RECUR32");
-  const int gdn_recur32_mode =
-      (recur32_env != nullptr && recur32_env[0] == '2' &&
-       recur32_env[1] == '\0')
-      ? 2
-      : (omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") ? 1 : 0);
+  const int gdn_recur32_default = (g13_legacy_part(encoder) && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN")) ? 2 : 0;
+  const int gdn_recur32_mode = recur32_env == nullptr
+      ? gdn_recur32_default
+      : ((recur32_env[0] == '2' && recur32_env[1] == '\0')
+             ? 2
+             : (omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") ? 1 : 0));
   const uint32_t gdn_recur32_min_t = gdn_recur32_mode == 2 ? 2u : 64u;
   const bool gdn_recur32 = gdn_recur32_mode != 0 && !has_mask &&
       g.ndim() == 3 && static_cast<uint32_t>(T) >= gdn_recur32_min_t &&
