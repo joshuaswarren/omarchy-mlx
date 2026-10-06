@@ -298,6 +298,15 @@ enum class ComputeKernel : uint16_t {
   GatherQmmNbF32,
   GatherQmmNbF16,
   GatherQmmNbBF16,
+  // Subgroup gather variants: one workgroup per output element, K
+  // split across lanes with a subgroupAdd reduction. The scalar
+  // gather kernel is latency-bound at decode shapes (m == 1).
+  GatherQmmSubF32,
+  GatherQmmSubF16,
+  GatherQmmSubBF16,
+  GatherQmmNbSubF32,
+  GatherQmmNbSubF16,
+  GatherQmmNbSubBF16,
   // Wave 8: FFT. FftF32 is the radix-2 Cooley-Tukey pass (complex64 pairs
   // in shared memory); FftRealF32 strips the real part of a complex64
   // buffer into float32 for the irfft tail; FftStageF32 runs the
