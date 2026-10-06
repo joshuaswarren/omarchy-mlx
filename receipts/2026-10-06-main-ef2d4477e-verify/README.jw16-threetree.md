@@ -96,3 +96,24 @@ All 8 artifacts (7 suite binaries + the b8 wheel) staged on jwm1
 `~/b8-jwm1`, shas verified identical to jw16. jwm1 run pending w71's slot
 (Main's call). Completed 19:37:17Z, before the announced 19:45Z reboot
 window (which had not occurred as of 19:59Z).
+
+## Addendum 2 (2026-10-06 ~21:40Z): jwm1 (G13G) leg — b8 FULLY GREEN on the second host
+
+w71's slot opened after w7N's planned reboot (jwm1 back on kernel
+7.1.12-2-11.36-sep-ARCH, boot 2026-10-06 15:06:40, packaged ICD
+/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json). Ran the staged
+jw16-built binaries from `~/b8-jwm1` (shas verified before running: matmul
+04746a6c46d7c563, runtime 19d7d78b3b9d95cd), flock /tmp/m1-gpu.lock, single
+process, 21:35:43–21:37:41Z:
+
+| suite | result |
+|---|---|
+| matmul_family | **26/26 ✓** (82942477 asrt, 0 failed) — Main's landing condition MET |
+| runtime | **49/49 ✓** (22900 asrt) |
+| take_fill / take_bool / kv_ops | 9/9, 5/5, 16/16 ✓ |
+| fast_ops | 43/43 cases ✓ (26 allowed may_fail asrt — the known set) |
+| capsim 6/6 | all SUCCESS |
+
+**b8 = ade1656c3 is green on BOTH hosts: jw16 (M1 Max) and jwm1 (G13G).**
+Landing-ready. Logs: jwm1:~/b8-jwm1/jwm1-*.log; archived in the lab at
+jw16-threetree/jwm1-b8/.
