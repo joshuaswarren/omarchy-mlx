@@ -634,7 +634,7 @@ TEST_CASE("register-blocked f16 matmul matches the 16x16 tile bit for bit") {
   }
 }
 
-TEST_CASE("direct cooperative-matrix f16 matmul matches the 16x16 tile in every orientation") {
+TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
   if (!compute_available()) {
     return;
   }
@@ -642,11 +642,12 @@ TEST_CASE("direct cooperative-matrix f16 matmul matches the 16x16 tile in every 
     return;
   }
   Stream stream = gpu_stream();
-  // On a device with both 8x8x8 shapes, m >= 32 takes MatmulDirectF16
-  // (elsewhere the register-blocked tile); every 16-row slice of A runs
-  // the 16x16 tile. Both keep one f32 accumulator over ascending k, so
-  // every stored bit must agree - including the edge tiles that shift
-  // back to m - 32 / n - 32 and recompute their neighbour's outputs.
+  // On a cooperative-matrix device, f16 and f32 with m >= 32 take
+  // MatmulDirect; every 16-row slice of A runs the 16x16 tile (f16) or
+  // the staged coopmat tile (f32). All keep one f32 accumulator over
+  // ascending k on the same operand values, so every stored bit must
+  // agree - including the edge tiles that shift back to m - 32 / n - 32
+  // and recompute their neighbour's outputs.
   struct Case {
     int m;
     int k;
@@ -654,56 +655,59 @@ TEST_CASE("direct cooperative-matrix f16 matmul matches the 16x16 tile in every 
     bool a_t;
     bool b_t;
   };
-  auto bits = [](array x) {
+  auto bytes = [](array x) {
     eval(x);
-    return std::vector<uint16_t>(
-        x.data<uint16_t>(), x.data<uint16_t>() + x.size());
+    const uint8_t* p = x.data<uint8_t>();
+    return std::vector<uint8_t>(p, p + x.nbytes());
   };
-  for (const Case& c :
-       {Case{110, 88, 200, false, false}, Case{110, 40, 72, false, true},
-        Case{110, 64, 72, true, false}, Case{142, 16, 34, true, true},
-        Case{32, 8, 32, false, false}}) {
-    std::vector<float> av(2 * c.m * c.k);
-    std::vector<float> bv(2 * c.k * c.n);
-    for (size_t i = 0; i < av.size(); ++i) {
-      av[i] = std::sin(0.37f * static_cast<float>(i));
-    }
-    for (size_t i = 0; i < bv.size(); ++i) {
-      bv[i] = std::cos(0.23f * static_cast<float>(i));
-    }
-    array a = astype(
-        array(av.begin(), c.a_t ? Shape{2, c.k, c.m} : Shape{2, c.m, c.k},
-              float32),
-        float16, stream);
-    array b = astype(
-        array(bv.begin(), c.b_t ? Shape{2, c.n, c.k} : Shape{2, c.k, c.n},
-              float32),
-        float16, stream);
-    if (c.a_t) {
-      a = swapaxes(a, 1, 2, stream);
-    }
-    if (c.b_t) {
-      b = swapaxes(b, 1, 2, stream);
-    }
-    auto full_bits = bits(matmul(a, b, stream));
-    size_t mismatches = 0;
-    for (int row0 = 0; row0 < c.m; row0 += 16) {
-      int rows = std::min(16, c.m - row0);
-      auto part = bits(matmul(
-          slice(a, {0, row0, 0}, {2, row0 + rows, c.k}, stream), b, stream));
-      for (int batch = 0; batch < 2; ++batch) {
-        for (int row = 0; row < rows; ++row) {
-          for (int col = 0; col < c.n; ++col) {
-            mismatches +=
-                full_bits[(batch * c.m + row0 + row) * c.n + col] !=
-                part[(batch * rows + row) * c.n + col];
+  for (Dtype dtype : {float16, float32}) {
+    for (const Case& c :
+         {Case{142, 88, 200, false, false}, Case{142, 40, 72, false, true},
+          Case{142, 64, 72, true, false}, Case{142, 16, 34, true, true},
+          Case{32, 8, 32, false, false}}) {
+      std::vector<float> av(2 * c.m * c.k);
+      std::vector<float> bv(2 * c.k * c.n);
+      for (size_t i = 0; i < av.size(); ++i) {
+        av[i] = std::sin(0.37f * static_cast<float>(i));
+      }
+      for (size_t i = 0; i < bv.size(); ++i) {
+        bv[i] = std::cos(0.23f * static_cast<float>(i));
+      }
+      array a = astype(
+          array(av.begin(), c.a_t ? Shape{2, c.k, c.m} : Shape{2, c.m, c.k},
+                float32),
+          dtype, stream);
+      array b = astype(
+          array(bv.begin(), c.b_t ? Shape{2, c.n, c.k} : Shape{2, c.k, c.n},
+                float32),
+          dtype, stream);
+      if (c.a_t) {
+        a = swapaxes(a, 1, 2, stream);
+      }
+      if (c.b_t) {
+        b = swapaxes(b, 1, 2, stream);
+      }
+      const size_t row_bytes = static_cast<size_t>(c.n) * size_of(dtype);
+      auto full = bytes(matmul(a, b, stream));
+      size_t mismatched_rows = 0;
+      for (int row0 = 0; row0 < c.m; row0 += 16) {
+        int rows = std::min(16, c.m - row0);
+        auto part = bytes(matmul(
+            slice(a, {0, row0, 0}, {2, row0 + rows, c.k}, stream), b,
+            stream));
+        for (int batch = 0; batch < 2; ++batch) {
+          for (int row = 0; row < rows; ++row) {
+            mismatched_rows += std::memcmp(
+                full.data() + (batch * c.m + row0 + row) * row_bytes,
+                part.data() + (batch * rows + row) * row_bytes,
+                row_bytes) != 0;
           }
         }
       }
+      INFO("dtype=" << dtype << " m=" << c.m << " k=" << c.k << " n=" << c.n
+                    << " aT=" << c.a_t << " bT=" << c.b_t);
+      CHECK_EQ(mismatched_rows, 0u);
     }
-    INFO("m=" << c.m << " k=" << c.k << " n=" << c.n << " aT=" << c.a_t
-              << " bT=" << c.b_t);
-    CHECK_EQ(mismatches, 0u);
   }
 }
 

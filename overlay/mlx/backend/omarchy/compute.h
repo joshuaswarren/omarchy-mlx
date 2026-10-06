@@ -880,6 +880,12 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectF16Nt,
   MatmulDirectF16Tn,
   MatmulDirectF16Tt,
+  // The same kernel on fp32 operand matrices for f32 matmul.
+  // Append-only profile ids.
+  MatmulDirectF32Nn,
+  MatmulDirectF32Nt,
+  MatmulDirectF32Tn,
+  MatmulDirectF32Tt,
   Count,
 };
 

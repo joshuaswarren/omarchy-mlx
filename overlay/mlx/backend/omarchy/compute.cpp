@@ -539,6 +539,10 @@
 #include "matmul_direct_f16_nt.h"
 #include "matmul_direct_f16_tn.h"
 #include "matmul_direct_f16_tt.h"
+#include "matmul_direct_f32_nn.h"
+#include "matmul_direct_f32_nt.h"
+#include "matmul_direct_f32_tn.h"
+#include "matmul_direct_f32_tt.h"
 
 namespace mlx::core::omarchy {
 
@@ -1665,6 +1669,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_f16_tn, matmul_direct_f16_tn_size};
     case ComputeKernel::MatmulDirectF16Tt:
       return {matmul_direct_f16_tt, matmul_direct_f16_tt_size};
+    case ComputeKernel::MatmulDirectF32Nn:
+      return {matmul_direct_f32_nn, matmul_direct_f32_nn_size};
+    case ComputeKernel::MatmulDirectF32Nt:
+      return {matmul_direct_f32_nt, matmul_direct_f32_nt_size};
+    case ComputeKernel::MatmulDirectF32Tn:
+      return {matmul_direct_f32_tn, matmul_direct_f32_tn_size};
+    case ComputeKernel::MatmulDirectF32Tt:
+      return {matmul_direct_f32_tt, matmul_direct_f32_tt_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

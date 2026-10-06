@@ -5,17 +5,18 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 
-// Dense f16 matmul on the 8x8x8 cooperative matrix with f16 operands
-// and an f32 accumulator, loading every operand tile straight from the
-// storage buffers: no shared staging and no barriers. On G13 the staged
-// kernels (matmul_rb.comp, matmul_coopmat_bf16.comp) spend two to four
-// address and bounds instructions per matrix-unit cycle; this loop
-// issues 8 loads and 16 simd_matrix_fmadd32 per k step of 8.
+// Dense matmul on the 8x8x8 cooperative matrix with an f32 accumulator,
+// loading every operand tile straight from the storage buffers: no
+// shared staging and no barriers. On G13 the staged kernels
+// (matmul_rb.comp, matmul_coopmat*.comp) spend two to four address and
+// bounds instructions per matrix-unit cycle; this loop issues 8 loads
+// and 16 simd_matrix_fmadd32 per k step of 8.
 //
+// Builds: f16 (default; fp16-operand shape) and USE_F32 (fp32 shape).
 // Per output the arithmetic is the matmul.comp contract: one f32
 // accumulator over ascending k (f16 x f16 products are exact in f32),
-// then alpha * acc rounded once to f16. On the M1 the stored bits match
-// matmul_rb.comp exactly.
+// then alpha * acc rounded once to the storage type. On the M1 the
+// stored bits match the staged kernels exactly.
 //
 // A 128-lane workgroup owns a 64x64 output tile; each subgroup owns a
 // 32x32 quarter as 4x4 accumulators. Orientation is compiled in
@@ -25,8 +26,8 @@
 // same outputs from the same inputs in the same order and stores the
 // same bits. Dispatch gate (dispatch_matmul): k % 8 == 0, m >= 32,
 // n >= 32, n even, m even for A_T, and even element offsets, gaps, and
-// batch strides (every lane moves f16 pairs along the stored contiguous
-// axis).
+// batch strides (every lane moves element pairs along the stored
+// contiguous axis).
 //
 // Push constants and the batch unravel match matmul.comp.
 
@@ -37,6 +38,12 @@
 #define B_T 0
 #endif
 
+#ifdef USE_F32
+#define ELEM float
+#else
+#define ELEM float16_t
+#endif
+
 const uint MAT = 8u;
 const uint SG = 4u;
 const uint TILE = 64u;
@@ -44,16 +51,16 @@ const uint TILE = 64u;
 layout(local_size_x = 128) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer InputA {
-  float16_t values[];
+  ELEM values[];
 } input_a;
 layout(set = 0, binding = 1, std430) readonly buffer InputB {
-  float16_t values[];
+  ELEM values[];
 } input_b;
 layout(set = 0, binding = 2, std430) readonly buffer InputC {
-  float16_t values[];
+  ELEM values[];
 } input_c;
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
-  float16_t values[];
+  ELEM values[];
 } output_data;
 
 layout(push_constant) uniform Params {
@@ -118,8 +125,8 @@ void main() {
     }
   }
   for (uint k = 0u; k < params.matrix_k; k += MAT) {
-    coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> mat_a[SG];
-    coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG];
+    coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> mat_a[SG];
+    coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG];
     for (uint i = 0u; i < SG; ++i) {
 #if A_T
       coopMatLoad(mat_a[i], input_a.values, a_off + i * MAT * a_row_step,
@@ -152,8 +159,8 @@ void main() {
       row_base * params.matrix_n + col_base;
   for (uint i = 0u; i < SG; ++i) {
     for (uint j = 0u; j < SG; ++j) {
-      coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
-          h = coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT,
+      coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+          h = coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT,
               gl_MatrixUseAccumulator>(acc[i][j] * params.alpha);
       coopMatStore(h, output_data.values,
           out_base + (i * MAT) * params.matrix_n + j * MAT, params.matrix_n,

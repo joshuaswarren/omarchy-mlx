@@ -592,6 +592,13 @@ always ran this kernel is bit-identical. Regression:
 "scaled_dot_product_attention bf16 fast scores scale through
 MatmulBF16Coopmat" (`omarchy_fast_ops`).
 
+Since 2026-10-06 dense f32 matmuls with `m >= 32` take `MatmulDirectF32`
+when the direct gate holds (see `MatmulDirectF16` under "Prefill glue
+kernels"). `MatmulF32Coopmat` keeps the shapes that gate declines, the
+causal shortcuts, and the SDPA compositions. bf16 keeps
+`MatmulBF16Coopmat`: the direct kernel on exactly widened f32 operands
+lost the linear-layer orientation at every measured m.
+
 ### Q4 prefill on the G13 matrix unit
 
 `QmmPrefillCoopmatF16` (`shaders/qmm_coopmat.comp`) runs the transposed
@@ -695,6 +702,11 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   offsets, gaps, and batch strides. Stored bits equal `MatmulRbF16` on the
   M1; 4096^3 runs at 1.72 TFLOP/s against 0.60
   (`receipts/2026-10-06-dense-f16-gemm-direct/`).
+  `MatmulDirectF32{Nn,Nt,Tn,Tt}` is the same kernel on fp32 operand
+  matrices (only `cooperative_matrix_f32_8` required); stored bits equal
+  the staged coopmat kernel. Test "direct cooperative-matrix matmul matches
+  the 16-row slices in every orientation" (`omarchy_matmul_family_tests`,
+  f16 and f32).
 - `SwigluF16/BF16` (`shaders/swiglu.comp`): the fused chain's
   sigmoid / multiply / multiply program with two direct leaves, four
   elements per thread with the interpreter's per-instruction rounding,
