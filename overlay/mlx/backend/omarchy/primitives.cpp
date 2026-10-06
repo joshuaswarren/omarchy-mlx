@@ -14243,6 +14243,11 @@ void ScaledDotProductAttention::eval_gpu(
               omarchy::ComputeKernel::MatmulF32CoopmatPvBF16);
           encoder.add_temporary(result_c);
           array out_c = row_chunk_view(out, row0, rows);
+          // General, not Vector: the row view is strided (the parent's
+          // head stride exceeds the chunk's), and a Vector copy writes
+          // the destination flat - the same linear scatter the coopmat
+          // output-store assumption produces. General maps through
+          // o_strides and lands every row where the full output needs it.
           copy_gpu_inplace(
               result_c,
               out_c,
@@ -14251,7 +14256,7 @@ void ScaledDotProductAttention::eval_gpu(
               out_c.strides(),
               /*i_offset=*/0,
               /*o_offset=*/0,
-              CopyType::Vector,
+              CopyType::General,
               s);
         }
         return;
