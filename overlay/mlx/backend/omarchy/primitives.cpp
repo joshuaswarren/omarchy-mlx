@@ -879,10 +879,8 @@ void dispatch_matmul(
         (static_cast<uint64_t>(params.rhs_offset) + n1 * k) * b_itemsize;
     omarchy::ComputeParams wparams = params;
     wparams.matrix_n = checked_u32(n1 - n0, name, out);
-    wparams.rhs_offset = params.rhs_offset +
-        static_cast<uint32_t>(n0 * k) -
-        omarchy::window_item_correction(
-            b_first, offset_alignment, b_itemsize);
+    wparams.rhs_offset = omarchy::window_item_correction(
+        b_first, offset_alignment, b_itemsize);
     omarchy::ComputeBinding b_window = omarchy::window_binding(
         bound_b, b_first, b_last, offset_alignment);
     omarchy::ComputeBinding out_binding = binding(out);
@@ -895,10 +893,8 @@ void dispatch_matmul(
           (static_cast<uint64_t>(params.output_offset) + n1) * out_itemsize;
       out_binding = omarchy::window_binding(
           out, out_first, out_last, offset_alignment);
-      wparams.output_offset = params.output_offset +
-          static_cast<uint32_t>(n0) -
-          omarchy::window_item_correction(
-              out_first, offset_alignment, out_itemsize);
+      wparams.output_offset = omarchy::window_item_correction(
+          out_first, offset_alignment, out_itemsize);
     } else {
       wparams.out_row_stride = params.matrix_n;
     }
@@ -1056,8 +1052,8 @@ bool dispatch_elementwise_windows(
           (static_cast<uint64_t>(base) + c0) * value.itemsize();
       const uint64_t last =
           (static_cast<uint64_t>(base) + c1) * value.itemsize();
-      offset = base + static_cast<uint32_t>(c0) -
-          omarchy::window_item_correction(first, alignment, value.itemsize());
+      offset = omarchy::window_item_correction(
+          first, alignment, value.itemsize());
       return omarchy::window_binding(value, first, last, alignment);
     };
     wbindings[0] = window_operand(

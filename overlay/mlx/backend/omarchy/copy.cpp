@@ -1019,12 +1019,10 @@ void copy_gpu_inplace(
               (static_cast<uint64_t>(params.output_offset) + c1) * out_item;
           omarchy::ComputeParams wparams = params;
           wparams.count = checked_u32(c1 - c0, "dtype converting copy", out);
-          wparams.lhs_offset =
-              params.lhs_offset + static_cast<uint32_t>(c0) -
-              omarchy::window_item_correction(in_first, alignment, in_item);
-          wparams.output_offset =
-              params.output_offset + static_cast<uint32_t>(c0) -
-              omarchy::window_item_correction(out_first, alignment, out_item);
+          wparams.lhs_offset = omarchy::window_item_correction(
+              in_first, alignment, in_item);
+          wparams.output_offset = omarchy::window_item_correction(
+              out_first, alignment, out_item);
           std::array<omarchy::ComputeBinding, 3> wbindings{
               omarchy::window_binding(in, in_first, in_last, alignment),
               omarchy::window_binding(in, in_first, in_last, alignment),
