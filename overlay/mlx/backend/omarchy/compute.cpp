@@ -535,6 +535,10 @@
 #include "fill_u64.h"
 #include "fill_u16.h"
 #include "compare_u64.h"
+#include "matmul_direct_f16_nn.h"
+#include "matmul_direct_f16_nt.h"
+#include "matmul_direct_f16_tn.h"
+#include "matmul_direct_f16_tt.h"
 
 namespace mlx::core::omarchy {
 
@@ -1653,6 +1657,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_nb_fp_hgs_bf16, gather_qmm_nb_fp_hgs_bf16_size};
     case ComputeKernel::MatmulComplex64:
       return {matmul_complex64, matmul_complex64_size};
+    case ComputeKernel::MatmulDirectF16Nn:
+      return {matmul_direct_f16_nn, matmul_direct_f16_nn_size};
+    case ComputeKernel::MatmulDirectF16Nt:
+      return {matmul_direct_f16_nt, matmul_direct_f16_nt_size};
+    case ComputeKernel::MatmulDirectF16Tn:
+      return {matmul_direct_f16_tn, matmul_direct_f16_tn_size};
+    case ComputeKernel::MatmulDirectF16Tt:
+      return {matmul_direct_f16_tt, matmul_direct_f16_tt_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
