@@ -25,6 +25,7 @@ The SEP-bindings staging experiment (separate scale/bias/index bindings, no pack
 - A/B, 3 alternating pairs, 16 chained greedy steps, gpu-turn ticket 1436927 (old wheel b8af62c vs 25bf62d, SUB on): new **106.2/107.5/135.3 ms/token** vs old 220.9/229.1/225.9 = **2.0-2.1x end-to-end**; new text coherent and identical across pairs (sha 7a907469...), old coherent (sha 1016cf94...). Text differs between kernels by design (fp32 accumulation order); the numerics gate governs, not bit-equality.
 - Per-op parity at the exact decode shape (6 experts, 1408/2048, q4 g64, bf16): subgroup kernel worst-slot error vs dequantized-fp64 reference **1.92 == packed scalar kernel 1.92** (pure q4 quantization error; same number both paths).
 - Numerics gate (docs/numerics-gate.md): teacher-forced top-1 agreement and S=1 PPL: measured post-reboot 2026-10-06 (see the gate section below); first-divergence ULP rule evaluated from the same run.
+- Coverage note: the native subgroup test covers bf16 transposed 4-bit g64 m==1 only. The f32 paths (both transposed and non-transposed) are NOT covered by this test; the suspected scalar f32+transposed+m==1 mismatch vs a probe fp64 reference on M1 is UNCONFIRMED (the probe/reference layout is itself being re-checked via mx.quantize/mx.dequantize) and is a separate task.
 - SPIR-V identity: `gather_qmm_sub_bf16.spv` sha256 `fb361c32...` identical between the build VM (M2-matched glslang 2026.3/shaderc 2026.3 transplanted after the 1.4.363 drift finding) and an M2-side reference compile with the exact CMake flags.
 
 ## 4. Merge state
