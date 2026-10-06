@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/fused_chain.h"
-#include "mlx/backend/omarchy/primitives.h"
 
 #include <algorithm>
 #include <array>
@@ -708,7 +707,7 @@ void dispatch_chain(
     const uint64_t c1 =
         std::min(c0 + fc_chunk, static_cast<uint64_t>(chain.count));
     ComputeParams wparams = params;
-    wparams.count = checked_u32(c1, "FusedChain", out);
+    wparams.count = static_cast<uint32_t>(c1);
     wparams.window_lo = static_cast<uint32_t>(c0);
     std::array<ComputeBinding, kMaxChainLeaves + 3> wbindings = bindings;
     auto window_leaf = [&](const array& leaf, uint32_t& offset) {
@@ -757,7 +756,7 @@ void dispatch_chain(
         wbindings,
         wparams,
         compute_dispatch_group_count(
-            checked_u32(c1 - c0, "FusedChain", out)));
+            static_cast<uint32_t>(c1 - c0)));
   }
 }
 
