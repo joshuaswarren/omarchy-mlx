@@ -3324,17 +3324,19 @@ void dispatch_gather_qmm(
   // m == 1 and runs latency-bound serial K loops (measured 4.2 ms per
   // dispatch on the M2: 80% of a DeepSeek MoE decode step). Requires
   // subgroup arithmetic and an unclamped one-workgroup-per-output
-  // dispatch, so it is gated to m == 1 and kMaxComputeGroupCountX.
+  // dispatch (counts above 65535 workgroups are z-chunked), so it is
+  // gated to m == 1.
   bool use_sub = false;
-  if (!fp_mode && params.matrix_m == 1 &&
-      params.count <= omarchy::kMaxComputeGroupCountX) {
+  if (!fp_mode && params.matrix_m == 1) {
     // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel. Selector is
     // restricted to the layout class proven correct end to end (bf16,
     // 4-bit, group-64, transposed affine - the DeepSeek-Lite decode
     // case); every other layout stays on the scalar kernel until its
     // parity is proven per layout (jwm1/jw16 suite history: f32-T and
     // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
-    // and untested layouts must not ride an unproven kernel).
+    // and untested layouts must not ride an unproven kernel). Counts
+    // above 65535 workgroups (large-batch routed decode) are handled by
+    // the kernel's x/z grid split, not by this gate.
     const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
@@ -3376,8 +3378,12 @@ void dispatch_gather_qmm(
       kernel,
       bindings,
       params,
-      use_sub ? params.count
-              : omarchy::compute_dispatch_group_count(params.count));
+      use_sub ? std::min(params.count, omarchy::kMaxComputeGroupCountX)
+              : omarchy::compute_dispatch_group_count(params.count),
+      1u,
+      use_sub ? (params.count + omarchy::kMaxComputeGroupCountX - 1) /
+                    omarchy::kMaxComputeGroupCountX
+              : 1u);
 }
 
 // Complex64Transport. Keep in lockstep with the switch in
