@@ -14,7 +14,7 @@ Every decision below keys off measured axes, never chip names:
 | Axis | Meaning | Consumers in the dispatch |
 |---|---|---|
 | `driver_variant` | which driver BUILD serves the chip (honeykrisp_installed / honeykrisp_fork / stock_mesa_honeykrisp / llvmpipe / lavapipe / other) | selects the arithmetic contract and the digest pin set; pins are per driver build, not per chip |
-| `cooperative_matrix_fp32_8x8x8` | extension present AND feature on AND an 8x8x8 all-fp32 subgroup-scope non-saturating shape enumerated | MatmulF32Coopmat, MatmulBF16Coopmat, QmmPrefillCoopmatF16, SdpaDecodeNative |
+| `cooperative_matrix_fp32_8x8x8` | extension present AND feature on AND an 8x8x8 all-fp32 subgroup-scope non-saturating shape enumerated; the 8x8x8 fp16 x fp16 -> fp32 shape is recorded beside it (`cooperative_matrix_f16_8`) and simulated by this axis | MatmulF32Coopmat, MatmulBF16Coopmat, QmmPrefillCoopmatF16, SdpaDecodeNative; MatmulDirectF16 when the fp16 shape is also enumerated |
 | `subgroup_size` | physical + reported subgroup width; gates test `== 32` exactly | every subgroup-reduced kernel |
 | `subgroup_ops_mask` | VkSubgroupFeatureFlags bitmask; ARITHMETIC, SHUFFLE, SHUFFLE_RELATIVE, BASIC are the consumed bits | qmm vec subgroup (ARITHMETIC), dense BF16 decode GEMV (SHUFFLE_RELATIVE), SdpaDecodeNative (BASIC\|ARITHMETIC\|SHUFFLE) |
 | `shared_memory_limit_bytes` | maxComputeSharedMemorySize | 4096 for the coopmat kernels' staging, 21504 for SdpaDecodeNative, 16384 spec floor (fft) |
