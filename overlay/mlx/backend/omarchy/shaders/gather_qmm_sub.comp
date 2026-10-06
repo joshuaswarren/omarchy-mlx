@@ -56,7 +56,11 @@ uint16_t bf16_store(float value) {
 #define STORE_VALUE(f) STORAGE_TYPE(f)
 #endif
 
+#if defined(USE_FP16) || defined(USE_BF16)
 #define PARAM_BYTES 2u
+#else
+#define PARAM_BYTES 4u
+#endif
 
 layout(local_size_x = 256) in;
 
