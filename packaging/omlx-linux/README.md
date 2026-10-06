@@ -127,6 +127,17 @@ Metal APIs are absent?". Patches:
   `fixtures/sam-audio-config.json`): both shapes plus directory-name hints
   classify `audio_sts`; plain LLM configs stay `llm`; Kokoro stays
   `audio_tts`.
+- `patches/0009-omlx-deepfilternet-subfolder.patch` — DeepFilterNet
+  local-path load fix. mlx-audio's `DeepFilterNetModel.from_pretrained`
+  appends its default `v3` subfolder to every path, so a locally hosted
+  model directory that oMLX serves (config.json at the top — the layout
+  discovery hands over) resolved to `<dir>/v3/config.json` and failed with
+  `Missing config.json`. The patch adds `_deepfilternet_subfolder`
+  (returns None when the served directory already has `config.json`,
+  else the repo default `v3`) and passes it from `_load_deepfilternet`.
+  Contract test: `test_omlx_deepfilternet_subfolder.py` (hosted version
+  dir gets no subfolder; bare parent keeps `v3`; skips on mlx-less dev
+  boxes, runs on the target venv).
 
 Tools in this layer:
 
