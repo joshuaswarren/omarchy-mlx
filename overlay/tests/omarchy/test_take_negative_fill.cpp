@@ -279,3 +279,104 @@ TEST_CASE("full_like same-dtype array fill still fills every element") {
   check_floats(same, {7.5, 7.5, 7.5});
   sync_gpu(stream);
 }
+
+// Rank collapse: upstream MLX allows any table rank in take; the
+// kernel packs four dims, so a dense row-contiguous rank-5+ table
+// folds to [prefix, gathered, suffix] on the host. The Qwen2-VL
+// vision path gathers a [1,1,T,16,80] float16 table along axis 2
+// (A9 row: "Take rank ... shape=[1,1,2016,16,80]"). Before the
+// collapse these refused by name.
+TEST_CASE("take collapses rank-5 float16, bool, and rank-6 int tables") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+
+  // Qwen2-VL pattern, scaled down: table [6,16,80] f16, axis 0.
+  // 1-D index keeps the assertion surface independent of the MLX
+  // array(init_list, shape, dtype) overload that over-resolved the
+  // multi-leading-dim initializer used in earlier drafts.
+  const auto& capabilities = omarchy::device(0).capabilities();
+  if (!capabilities.shader_float16 ||
+      !capabilities.storage_buffer_16bit_access) {
+    skip("Vulkan device lacks required FP16 storage features.");
+    return;
+  }
+  std::vector<float> vl_values(6 * 16 * 80);
+  for (size_t i = 0; i < vl_values.size(); ++i) {
+    vl_values[i] = static_cast<float>(i % 97) * 0.25f;
+  }
+  array vl(vl_values.begin(), Shape({6, 16, 80}), float32);
+  array vl16 = astype(vl, float16, stream);
+  std::vector<int32_t> f16_idx{5, 0, 3};
+  array idx = array(f16_idx.begin(), Shape{3}, int32);
+  array out = take(vl16, idx, 0, stream);
+  CHECK_EQ(out.dtype(), float16);
+  CHECK_EQ(out.shape(), Shape({3, 16, 80}));
+  std::vector<float> expected;
+  expected.reserve(3 * 16 * 80);
+  for (int t : {5, 0, 3}) {
+    for (int r = 0; r < 16; ++r) {
+      for (int c = 0; c < 80; ++c) {
+        size_t off = (static_cast<size_t>(t) * 16 + r) * 80 + c;
+        expected.push_back(vl_values[off]);
+      }
+    }
+  }
+  check_floats(astype(out, float32, stream), expected);
+
+  // bool rank 5, axis 3: prefix [2,3,4] folds to 24, suffix [6,7].
+  std::vector<uint8_t> bvals(2 * 3 * 4 * 5 * 6 * 7);
+  for (size_t i = 0; i < bvals.size(); ++i) {
+    bvals[i] = (i % 3 == 0) ? uint8_t{1} : uint8_t{0};
+  }
+  array b5(bvals.begin(), Shape({2, 3, 4, 5, 6, 7}), bool_);
+  std::vector<int32_t> bidx_v{4, 0, 2, 1};
+  array bidx = array(bidx_v.begin(), Shape{4}, int32);
+  array bout = take(b5, bidx, 3, stream);
+  CHECK_EQ(bout.dtype(), bool_);
+  CHECK_EQ(bout.shape(), Shape({2, 3, 4, 4, 6, 7}));
+  auto bdense = contiguous(bout);
+  bdense.eval();
+  sync_gpu(stream);
+  REQUIRE_EQ(bdense.size(), 4u * 2 * 3 * 4 * 6 * 7);
+  const uint8_t* bv = bdense.data<uint8_t>();
+  size_t at = 0;
+  // Table [2,3,4,5,6,7] axis 3, row-contiguous strides s5=1,
+  // s4=7, s3=42, s2=210, s1=1260, s0=3780. Prefix flat p (0..23)
+  // stride s2=210; suffix t (0..41) stride 1.
+  for (int k : {4, 0, 2, 1}) {
+    for (int pflat = 0; pflat < 24; ++pflat) {
+      for (int sfx = 0; sfx < 42; ++sfx) {
+        size_t off = static_cast<size_t>(pflat) * 210 + k * 42 + sfx;
+        INFO("bool rank5 k=", k, " flat=", at, " got ", int(bv[at]),
+             " want ", int(bvals[off]));
+        CHECK_EQ(int(bv[at]), int(bvals[off]));
+        ++at;
+      }
+    }
+  }
+  sync_gpu(stream);
+
+  // int32 rank 6, axis 3: prefix [2,2,2] folds to 8, suffix [2,2] to 4.
+  std::vector<int> i6vals(64);
+  for (int i = 0; i < 64; ++i) {
+    i6vals[i] = i;
+  }
+  array i6 = array(i6vals.begin(), Shape({2, 2, 2, 2, 2, 2}), int32);
+  std::vector<int32_t> iidx_v{1, 0};
+  array iidx = array(iidx_v.begin(), Shape{2}, int32);
+  array iout = take(i6, iidx, 3, stream);
+  CHECK_EQ(iout.dtype(), int32);
+  CHECK_EQ(iout.shape(), Shape({2, 2, 2, 2, 2, 2}));
+  std::vector<int> iexp;
+  for (int k : {1, 0}) {
+    for (int pflat = 0; pflat < 8; ++pflat) {
+      for (int sfx = 0; sfx < 4; ++sfx) {
+        iexp.push_back(pflat * 8 + k * 4 + sfx);
+      }
+    }
+  }
+  check_ints(iout, iexp);
+  sync_gpu(stream);
+}
