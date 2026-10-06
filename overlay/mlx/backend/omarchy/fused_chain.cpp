@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/fused_chain.h"
+#include "mlx/backend/omarchy/primitives.h"
 
 #include <algorithm>
 #include <array>
