@@ -1,0 +1,55 @@
+diff --git a/src/asahi/compiler/agx_compile.c b/src/asahi/compiler/agx_compile.c
+index 7ee9839b418..83505c65f87 100644
+--- a/src/asahi/compiler/agx_compile.c
++++ b/src/asahi/compiler/agx_compile.c
+@@ -3078,6 +3078,13 @@ agx_optimize_nir(nir_shader *nir, bool soft_fault, uint16_t *preamble_size,
+       NIR_PASS(progress, nir, nir_opt_dce);
+    } while (progress);
+ 
++   /* EXPERIMENT (MatmulGap H5, not for landing as-is): hoist loop-invariant
++    * work such as cooperative-matrix lane offsets out of loops. */
++   if (getenv("AGX_LICM")) {
++      NIR_PASS(_, nir, nir_opt_licm, NULL);
++      NIR_PASS(_, nir, nir_opt_cse);
++   }
++
+    progress = false;
+ 
+    /* If address lowering made progress, clean up before forming preambles.
+diff --git a/src/asahi/compiler/agx_nir_lower_address.c b/src/asahi/compiler/agx_nir_lower_address.c
+index d59860f7c9d..acdcd103bf4 100644
+--- a/src/asahi/compiler/agx_nir_lower_address.c
++++ b/src/asahi/compiler/agx_nir_lower_address.c
+@@ -61,12 +61,31 @@ pass(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
+       nir_op op = nir_scalar_alu_op(base);
+       if (op == nir_op_ulea_agx || op == nir_op_ilea_agx) {
+          unsigned shift = nir_scalar_as_uint(nir_scalar_chase_alu_src(base, 2));
++         bool sign_extend = (op == nir_op_ilea_agx);
+          if (shift >= format_shift && shift <= max_shift) {
+             match = (struct match){
+                .base = nir_scalar_chase_alu_src(base, 0),
+                .offset = nir_scalar_chase_alu_src(base, 1),
+                .shift = shift - format_shift,
+-               .sign_extend = (op == nir_op_ilea_agx),
++               .sign_extend = sign_extend,
++            };
++         } else if (shift < format_shift) {
++            /* A byte (or half-element) offset, as the cooperative matrix
++             * loads produce. The access is format-aligned and so is the base,
++             * so the offset is a multiple of the element size: index by the
++             * offset scaled down instead of materializing the 64-bit sum (a
++             * 64-bit add plus the moves that build its operands).
++             */
++            nir_scalar off = nir_scalar_chase_alu_src(base, 1);
++            nir_def *index = nir_channel(b, off.def, off.comp);
++            unsigned down = format_shift - shift;
++            index = sign_extend ? nir_ishr_imm(b, index, down)
++                                : nir_ushr_imm(b, index, down);
++            match = (struct match){
++               .base = nir_scalar_chase_alu_src(base, 0),
++               .offset = nir_get_scalar(index, 0),
++               .shift = 0,
++               .sign_extend = sign_extend,
+             };
+          }
+       } else if (op == nir_op_iadd) {

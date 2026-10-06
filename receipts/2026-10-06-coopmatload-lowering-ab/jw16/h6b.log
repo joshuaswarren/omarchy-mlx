@@ -1,0 +1,13 @@
+start 2026-10-06T23:52:29Z boot 79dec028 load 1.51
+prov base   "mx_version": "0.32.4.dev202610062245+41ca6e47",   "version_match": true } 
+prov cand   "mx_version": "0.32.4.dev202610062245+41ca6e47",   "version_match": true } 
+r1 base lm {"pf512_ms": 372.93, "decode_tok_s": 45.57, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r1 cand lm {"pf512_ms": 371.1, "decode_tok_s": 45.38, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r2 base lm {"pf512_ms": 372.46, "decode_tok_s": 45.14, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r2 cand lm {"pf512_ms": 370.69, "decode_tok_s": 45.54, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r3 base lm {"pf512_ms": 372.77, "decode_tok_s": 45.84, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r3 cand lm {"pf512_ms": 369.93, "decode_tok_s": 45.56, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+mlxcheck2 base "tflops_4096": {"float16": 5.956, "bfloat16": 2.648, "float32": 2.653}
+mlxcheck2 cand "tflops_4096": {"float16": 5.194, "bfloat16": 2.641, "float32": 2.445}
+mlxcheck2 hash diffs: [] of 21
+end 2026-10-06T23:53:58Z

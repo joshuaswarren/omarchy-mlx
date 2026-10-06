@@ -1,0 +1,16 @@
+start 2026-10-06T23:42:29Z boot 7a4b5ab5 7.1.12-2-11.38-sep-ARCH
+base CS shader: 375 instrs, 297 alu, 297 fscib, 134 ic, 2828 code size, 111 gprs, 90 uniforms, 0 scratch, 896 threads, 2 loops, 0:0 spills:fills, 60 preamble inst
+cand CS shader: 353 instrs, 276 alu, 276 fscib, 166 ic, 2700 code size, 95 gprs, 88 uniforms, 0 scratch, 1024 threads, 2 loops, 0:0 spills:fills, 60 preamble inst
+round 1 base flags=0 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.696
+round 1 base flags=1 "out_fnv":"4ad92df0d8a37d87" "tflops":1.468
+round 1 cand flags=0 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.952
+round 1 cand flags=1 "out_fnv":"4ad92df0d8a37d87" "tflops":1.489
+round 2 base flags=0 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.696
+round 2 base flags=1 "out_fnv":"4ad92df0d8a37d87" "tflops":1.460
+round 2 cand flags=0 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.953
+round 2 cand flags=1 "out_fnv":"4ad92df0d8a37d87" "tflops":1.490
+round 3 base flags=0 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.696
+round 3 base flags=1 "out_fnv":"4ad92df0d8a37d87" "tflops":1.470
+round 3 cand flags=0 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.951
+round 3 cand flags=1 "out_fnv":"4ad92df0d8a37d87" "tflops":1.489
+end 2026-10-06T23:43:08Z
