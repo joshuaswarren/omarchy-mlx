@@ -11799,13 +11799,27 @@ void GatedDeltaUpdate::eval_gpu(
   // per (hv, dv) row, Dk/32 = 4 f32 state elements per lane in registers,
   // plain sequential token loop - the Metal gated_delta_step shape. Read
   // per call (not a static): the correctness battery toggles this env per
-  // test case in-process. Default OFF; MLX_OMARCHY_GDN_RECUR32=1 opts in
-  // for T >= 64 (the chunked coopmat kernel's territory; below that the
-  // exact scan route is already competitive). Outputs are NOT
+  // test case in-process. Default OFF; MLX_OMARCHY_GDN_RECUR32 selects:
+  //   1 (or 1/on/true/yes): T >= 64 - the chunked coopmat kernel's
+  //     territory (measured jwm1 G13G: 4.08 vs 6.87 ms/call at T=512).
+  //   2: T >= 2 - every prefill shape the contract allows, the TTFT
+  //     lever for short prompts (the exact 4-lane scan costs 58-94
+  //     us/token there; T=11 is 748 us per call, 18 calls in a pf).
+  // The kernel is single-pass (no snapshots, no chunk walk, grid is
+  // T-independent), so small T carries no two-pass minimum. T=1 stays on
+  // the decode kernel (decode_shape returns above). Outputs are NOT
   // bit-identical to the scan (subgroup reduction trees), so the env is
   // the A/B lever and the fp64 tolerance test is the numerics gate.
-  const bool gdn_recur32 = omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") &&
-      !has_mask && g.ndim() == 3 && T >= 64 && gdn_caps.subgroup_size == 32u;
+  const char* recur32_env = std::getenv("MLX_OMARCHY_GDN_RECUR32");
+  const int gdn_recur32_mode =
+      (recur32_env != nullptr && recur32_env[0] == '2' &&
+       recur32_env[1] == '\0')
+      ? 2
+      : (omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") ? 1 : 0);
+  const uint32_t gdn_recur32_min_t = gdn_recur32_mode == 2 ? 2u : 64u;
+  const bool gdn_recur32 = gdn_recur32_mode != 0 && !has_mask &&
+      g.ndim() == 3 && static_cast<uint32_t>(T) >= gdn_recur32_min_t &&
+      gdn_caps.subgroup_size == 32u;
   if (gdn_recur32) {
     omarchy::ComputeParams params;
     params.count = Dv;

@@ -121,6 +121,15 @@ def check_case(T, rep, nonzero_state):
 
 def main():
     ok = True
+    # mode 2 (MLX_OMARCHY_GDN_RECUR32=2): every prefill T the contract
+    # allows, down to the T >= 2 route minimum (T=1 is the decode kernel).
+    for rep in (1, 2, 3):
+        for T in (2, 3, 5, 11, 16, 31, 32, 33, 63):
+            ok &= check_case(T, rep, nonzero_state=False)
+    for rep in (1, 2):
+        for T in (11, 63):
+            ok &= check_case(T, rep, nonzero_state=True)
+    # mode 1 (MLX_OMARCHY_GDN_RECUR32=1): the T >= 64 sweep.
     for rep in (1, 2, 3):
         for T in (63, 64, 65, 96, 352, 512, 519):
             ok &= check_case(T, rep, nonzero_state=False)
