@@ -1,0 +1,64 @@
+start 2026-10-06T21:36:30Z boot abc36fa1
+lock 2026-10-06T21:37:41Z
+staged 4aaa210e omarchy: f16 GEMM loads fp16 cooperative matrices straight from the buffers
+BUILD-FAIL
+patching file python/tests/test_optimizers.py
+patching file mlx/backend/common/common.cpp
+patching file mlx/backend/common/slicing.cpp
+patching file tests/ops_tests.cpp
+patching file python/src/convert.cpp
+patching file python/tests/test_zero_copy.py
+patching file mlx/primitives.cpp
+Hunk #1 succeeded at 4610 (offset -29 lines).
+patching file python/tests/test_vmap.py
+patching file mlx/ops.cpp
+Hunk #1 succeeded at 4442 (offset 2 lines).
+patching file python/tests/test_ops.py
+Hunk #1 succeeded at 2618 (offset -26 lines).
+patching file mlx/backend/cpu/reduce.cpp
+patching file mlx/backend/cpu/quantized.cpp
+/var/tmp/w7q-h9/src/.work/mlx
+prepare-mlx: Python fast bindings have matching mlx/fast.h declarations
+== stage whole-encoder bundle ==
+[bundle] runtime pin declares parakeet-encoder-whole but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset; refusing to build a wheel that would silently fall back
+[bundle] supply the bundle dir (manifest.json + program-0.anec) via MLX_OMARCHY_WHOLE_BUNDLE_DIR=/path/to/dir
+start 2026-10-06T21:38:15Z boot abc36fa1
+lock 2026-10-06T21:38:15Z
+staged 4aaa210e omarchy: f16 GEMM loads fp16 cooperative matrices straight from the buffers
+a29c6527d0792635a312e9b2cfccd70689516755220dc8ee1eafa100f9a73605  dist/mlx_omarchy-0.32.4.dev202610062138+4aaa210e-cp314-cp314-linux_aarch64.whl
+tests built 2026-10-06T21:43:50Z
+omarchy_runtime_tests rc=0 [doctest] test cases:    49 |    49 passed | 0 failed | 0 skipped
+omarchy_primitive_tests rc=0 [doctest] test cases:     104 |     104 passed | 0 failed | 0 skipped
+omarchy_matmul_family_tests rc=0 [doctest] test cases:       25 |       25 passed | 0 failed | 0 skipped
+omarchy_fast_ops_tests rc=0 [doctest] test cases:      43 |      43 passed |  0 failed | 0 skipped
+omarchy_kv_ops_tests rc=0 [doctest] test cases:  16 |  16 passed | 0 failed | 0 skipped
+omarchy_indexing_ops_tests rc=0 [doctest] test cases:    57 |    57 passed | 0 failed | 0 skipped
+omarchy_reduce_ops_tests rc=0 [doctest] test cases:   35 |   35 passed | 0 failed | 0 skipped
+omarchy_shape_ops_tests rc=0 [doctest] test cases:  25 |  25 passed | 0 failed | 0 skipped
+omarchy_linalg_ops_tests rc=0 [doctest] test cases:     30 |     30 passed | 0 failed | 0 skipped
+omarchy_copy_offset_tests rc=0 [doctest] test cases:  27 |  27 passed | 0 failed | 0 skipped
+omarchy_distributed_tests rc=0 [doctest] test cases:  9 |  9 passed | 0 failed | 0 skipped
+omarchy_compiled_tape_tests rc=0 [doctest] test cases:   13 |   13 passed | 0 failed | 0 skipped
+omarchy_fft_ops_tests rc=0 [doctest] test cases:   19 |   19 passed | 0 failed | 0 skipped
+omarchy_fft_general_tests rc=0 [doctest] test cases:   14 |   14 passed | 0 failed | 0 skipped
+omarchy_eig_ops_tests rc=0 [doctest] test cases:   9 |   9 passed | 0 failed | 0 skipped
+omarchy_take_fill_tests rc=0 [doctest] test cases:    9 |    9 passed | 0 failed | 0 skipped
+omarchy_conv_tests rc=0 [doctest] test cases:   13 |   13 passed | 0 failed | 0 skipped
+omarchy_complex_ops_tests rc=0 [doctest] test cases:   34 |   34 passed | 0 failed | 0 skipped
+omarchy_select_layout_tests rc=0 [doctest] test cases:   13 |   13 passed | 0 failed | 0 skipped
+omarchy_fast_regression_tests rc=0 [doctest] test cases:  2 |  2 passed | 0 failed | 0 skipped
+omarchy_scatter_determinism_tests rc=0 [doctest] test cases:  21 |  21 passed | 0 failed | 0 skipped
+omarchy_eq_math_tests rc=0 [doctest] test cases:   7 |   7 passed | 0 failed | 0 skipped
+omarchy_fused_chain_tests rc=0 [doctest] test cases:     38 |     38 passed | 0 failed | 0 skipped
+omarchy_error_contract_tests rc=0 [doctest] test cases:  3 |  3 passed | 0 failed | 0 skipped
+omarchy_ane_bundle_tests rc=0 [doctest] test cases:   48 |   48 passed | 0 failed | 0 skipped
+omarchy_capability_sim_tests rc=2 
+battery end 2026-10-06T21:45:56Z
+wheel 0.32.4.dev202610062138+4aaa210e
+mm direct #1 {"tflops_total": 1.718, "per_sec": [1.649, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787], "n": 250, "eval_ms_head": [83.7, 84.3, 80.1, 80.1, 80.1, 80.1], "eval_ms_tail": [80.2, 80.2, 80.2, 80.2, 80.2, 80.2]}
+mm noco   #1 {"tflops_total": 0.598, "per_sec": [0.55, 0.55, 0.55, 0.687, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55], "n": 87, "eval_ms_head": [233.9, 236.9, 230.4, 230.1, 230.0, 230.7], "eval_ms_tail": [230.0, 230.0, 230.3, 230.4, 230.0, 230.4]}
+mm direct #2 {"tflops_total": 1.718, "per_sec": [1.649, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.649, 1.787, 1.649, 1.787], "n": 250, "eval_ms_head": [83.8, 87.1, 80.1, 80.1, 80.1, 80.1], "eval_ms_tail": [80.2, 80.2, 80.2, 80.2, 80.2, 80.1]}
+mm noco   #2 {"tflops_total": 0.598, "per_sec": [0.55, 0.55, 0.55, 0.687, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55], "n": 87, "eval_ms_head": [233.5, 235.2, 230.1, 230.4, 230.5, 230.0], "eval_ms_tail": [229.9, 229.9, 230.0, 229.9, 230.0, 230.1]}
+mm direct #3 {"tflops_total": 1.718, "per_sec": [1.649, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.787, 1.649, 1.649, 1.787, 1.649, 1.787], "n": 250, "eval_ms_head": [83.8, 84.0, 80.1, 80.1, 80.1, 80.1], "eval_ms_tail": [80.2, 80.3, 80.4, 80.2, 80.2, 80.1]}
+mm noco   #3 {"tflops_total": 0.598, "per_sec": [0.55, 0.55, 0.55, 0.687, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55, 0.687, 0.55, 0.55], "n": 87, "eval_ms_head": [233.5, 234.8, 229.9, 230.6, 230.3, 230.2], "eval_ms_tail": [230.0, 229.9, 229.9, 230.3, 229.9, 230.2]}
+end 2026-10-06T21:48:50Z

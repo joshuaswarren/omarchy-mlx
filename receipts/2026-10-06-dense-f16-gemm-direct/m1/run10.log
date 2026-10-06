@@ -1,0 +1,13 @@
+start 2026-10-06T21:49:52Z boot abc36fa1
+staged e741c1d8 omarchy: pin the direct f16 route to the 16x16 tile in every orientation; document it
+lock 2026-10-06T21:52:11Z
+matmul_family tip rc=0 [doctest] test cases:       26 |       26 passed | 0 failed | 0 skipped
+capsim m1-honeykrisp-fork rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim m1-stock-no-coopmat rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim subgroup-size-64 rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim small-shared-memory rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim no-cooperative-matrix rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim m1-g13-legacy rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim (real caps) rc=2 usage: build-tests/tests/omarchy/omarchy_capability_sim_tests <profile-name>
+trace lines 45
+end 2026-10-06T21:53:26Z
