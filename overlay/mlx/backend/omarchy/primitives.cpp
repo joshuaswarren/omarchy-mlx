@@ -2355,7 +2355,7 @@ void dispatch_softmax(
         (static_cast<uint64_t>(softmax_lhs_base) + r1 * row_length) *
         src.itemsize();
     omarchy::ComputeParams wparams = params;
-    wparams.output_size = checked_u32(r1, name, out);
+    wparams.output_size = checked_u32(r1, "LogSumExp", out);
     wparams.lhs_offset = softmax_lhs_base +
         static_cast<uint32_t>(r0 * row_length) -
         omarchy::window_item_correction(
@@ -3868,7 +3868,7 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
       const uint64_t c1 =
           std::min(c0 + arange_chunk, static_cast<uint64_t>(count));
       omarchy::ComputeParams wparams = params;
-      wparams.count = wparams.output_size = checked_u32(c1, name, out);
+      wparams.count = wparams.output_size = checked_u32(c1, "Arange", out);
       wparams.window_lo = static_cast<uint32_t>(c0);
       const uint64_t out_first = c0 * arange_itemsize;
       const uint64_t out_last = c1 * arange_itemsize;
@@ -3880,7 +3880,7 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
           wbindings,
           wparams,
           omarchy::compute_dispatch_group_count(
-              checked_u32(c1 - c0, name, out)));
+              checked_u32(c1 - c0, "Arange", out)));
     }
     return;
   }
@@ -7151,7 +7151,7 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
         (static_cast<uint64_t>(lse_lhs_base) + r1 * row_length) *
         src.itemsize();
     omarchy::ComputeParams wparams = params;
-    wparams.output_size = checked_u32(r1, name, out);
+    wparams.output_size = checked_u32(r1, "LogSumExp", out);
     wparams.lhs_offset = lse_lhs_base +
         static_cast<uint32_t>(r0 * row_length) -
         omarchy::window_item_correction(
