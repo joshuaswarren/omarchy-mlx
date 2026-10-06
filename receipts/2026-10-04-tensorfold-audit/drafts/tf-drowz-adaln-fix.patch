@@ -1,0 +1,37 @@
+diff --git a/src/tensorfold/families/h3/weights.py b/src/tensorfold/families/h3/weights.py
+index fa4e8b5..8a031ac 100644
+--- a/src/tensorfold/families/h3/weights.py
++++ b/src/tensorfold/families/h3/weights.py
+@@ -202,9 +202,14 @@ def load_int8_dit(state_dir, blocks: int | None = None):
+             return key.replace("attn.fused_qkv.", "attn.qkv_proj.")
+         return key
+ 
++    def built(key: str) -> bool:
++        key = load_key(key)
++        return blocks is None or not key.startswith("blocks.") or int(key.split(".")[1]) < layers
++
+     model.load_weights([(load_key(k), v) for k, v in state.items()
+                         if load_key(k) != "rope.inv_freq"
+-                        and not load_key(k).endswith(".norms")])
++                        and not load_key(k).endswith(".norms")
++                        and built(k)])
+ 
+     # 8-bit AdaLN projections (the published recipe): official QuantizedLinear
+     # from the bf16 weights pulled back out of the loaded state.
+@@ -220,8 +225,14 @@ def load_int8_dit(state_dir, blocks: int | None = None):
+             return
+         weight = adaln_weights[prefix + ".linear.weight"]
+         bias = adaln_weights.get(prefix + ".linear.bias")
+-        module.linear = nn.QuantizedLinear.from_linear(
+-            nn.Linear(weight.shape[1], weight.shape[0], bias=bias is not None), bits=8, group_size=64)
++        # from_linear quantizes the module it is given: the real checkpoint
++        # weight must be assigned first or the tables quantize noise (a fresh
++        # nn.Linear default-initializes randomly).
++        source = nn.Linear(weight.shape[1], weight.shape[0], bias=bias is not None)
++        source.weight = weight
++        if bias is not None:
++            source.bias = bias
++        module.linear = nn.QuantizedLinear.from_linear(source, bits=8, group_size=64)
+         if bias is not None:
+             module.linear.bias = bias.astype(mx.bfloat16)
+ 
