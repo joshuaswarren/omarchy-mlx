@@ -989,6 +989,51 @@ void copy_gpu_inplace(
     } else {
       std::array<omarchy::ComputeBinding, 3> bindings{
           binding(in), binding(in), binding(out)};
+      // Flat casts read and write 1:1 by item, so when the whole buffers
+      // exceed the storage range the same per-window scheme as
+      // dispatch_elementwise_windows applies — but this kernel family
+      // exposes only three descriptor slots, so the loop lives here
+      // instead of in that helper. In-limit sizes keep the single
+      // dispatch below unchanged.
+      const auto& caps = encoder.device().capabilities();
+      const VkDeviceSize range_limit = caps.max_storage_buffer_range;
+      const uint32_t alignment = caps.min_storage_buffer_offset_alignment;
+      if (static_cast<uint64_t>(out.nbytes()) > range_limit &&
+          !source_bool_kernel) {
+        const size_t in_item = in.itemsize();
+        const size_t out_item = out.itemsize();
+        const uint64_t chunk =
+            std::max<uint64_t>((range_limit / out_item / 16u) * 16u, 16u);
+        for (uint64_t c0 = 0; c0 < count; c0 += chunk) {
+          const uint64_t c1 = std::min(c0 + chunk, static_cast<uint64_t>(count));
+          const uint64_t in_first =
+              (static_cast<uint64_t>(params.lhs_offset) + c0) * in_item;
+          const uint64_t in_last =
+              (static_cast<uint64_t>(params.lhs_offset) + c1) * in_item;
+          const uint64_t out_first =
+              (static_cast<uint64_t>(params.output_offset) + c0) * out_item;
+          const uint64_t out_last =
+              (static_cast<uint64_t>(params.output_offset) + c1) * out_item;
+          omarchy::ComputeParams wparams = params;
+          wparams.count = checked_u32(c1 - c0, "dtype converting copy", out);
+          wparams.lhs_offset =
+              params.lhs_offset + static_cast<uint32_t>(c0) -
+              omarchy::window_item_correction(in_first, alignment, in_item);
+          wparams.output_offset =
+              params.output_offset + static_cast<uint32_t>(c0) -
+              omarchy::window_item_correction(out_first, alignment, out_item);
+          std::array<omarchy::ComputeBinding, 3> wbindings{
+              omarchy::window_binding(in, in_first, in_last, alignment),
+              omarchy::window_binding(in, in_first, in_last, alignment),
+              omarchy::window_binding(out, out_first, out_last, alignment)};
+          encoder.dispatch_compute(
+              kernel,
+              wbindings,
+              wparams,
+              omarchy::compute_dispatch_group_count(wparams.count));
+        }
+        return;
+      }
       encoder.dispatch_compute(
           kernel,
           bindings,
