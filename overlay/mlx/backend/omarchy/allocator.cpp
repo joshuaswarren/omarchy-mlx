@@ -286,12 +286,12 @@ void VulkanAllocator::free(Buffer buffer) {
   // array drops the accounting here — upstream Metal semantics — but the
   // raw buffer skips the reuse cache and waits in the quarantine until
   // release_quarantine proves the driver finished its submission. A
-  // buffer whose generation drained at least one generation ago needs
-  // no wait; without this an idle process parks every freed buffer
-  // until the next submission.
+  // buffer whose generation drained at least one generation ago (a later
+  // generation is observable) needs no wait; without this an idle
+  // process parks every freed buffer until the next submission.
   if (buf->completion != 0) {
     if (buf->completion == kPendingCompletion || !runtime_alive() ||
-        buf->completion > device().completions().drained_value() ||
+        buf->completion >= device().completions().drained_value() ||
         !device().completions().execution_complete(buf->completion)) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
