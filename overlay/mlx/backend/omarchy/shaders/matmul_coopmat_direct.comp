@@ -1,0 +1,163 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Dense f16 matmul on the 8x8x8 cooperative matrix with f16 operands
+// and an f32 accumulator, loading every operand tile straight from the
+// storage buffers: no shared staging and no barriers. On G13 the staged
+// kernels (matmul_rb.comp, matmul_coopmat_bf16.comp) spend two to four
+// address and bounds instructions per matrix-unit cycle; this loop
+// issues 8 loads and 16 simd_matrix_fmadd32 per k step of 8.
+//
+// Per output the arithmetic is the matmul.comp contract: one f32
+// accumulator over ascending k (f16 x f16 products are exact in f32),
+// then alpha * acc rounded once to f16. On the M1 the stored bits match
+// matmul_rb.comp exactly.
+//
+// A 128-lane workgroup owns a 64x64 output tile; each subgroup owns a
+// 32x32 quarter as 4x4 accumulators. Orientation is compiled in
+// (A_T: lhs column-major, B_T: rhs n-major) so the loads carry no
+// branches. A subgroup tile that crosses the m or n edge shifts back to
+// m - 32 / n - 32: its overlap with the neighbouring tile recomputes the
+// same outputs from the same inputs in the same order and stores the
+// same bits. Dispatch gate (dispatch_matmul): k % 8 == 0, m >= 32,
+// n >= 32, n even, m even for A_T, and even element offsets, gaps, and
+// batch strides (every lane moves f16 pairs along the stored contiguous
+// axis).
+//
+// Push constants and the batch unravel match matmul.comp.
+
+#ifndef A_T
+#define A_T 0
+#endif
+#ifndef B_T
+#define B_T 0
+#endif
+
+const uint MAT = 8u;
+const uint SG = 4u;
+const uint TILE = 64u;
+
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputA {
+  float16_t values[];
+} input_a;
+layout(set = 0, binding = 1, std430) readonly buffer InputB {
+  float16_t values[];
+} input_b;
+layout(set = 0, binding = 2, std430) readonly buffer InputC {
+  float16_t values[];
+} input_c;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  float16_t values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+} params;
+
+void main() {
+  uint sub = gl_SubgroupID;
+  uint row0 = gl_WorkGroupID.y * TILE + (sub / 2u) * (SG * MAT);
+  uint col0 = gl_WorkGroupID.x * TILE + (sub % 2u) * (SG * MAT);
+  if (row0 >= params.matrix_m || col0 >= params.matrix_n) {
+    return;
+  }
+  uint batch_index = gl_WorkGroupID.z;
+  uint remaining = batch_index;
+  uint a_batch = 0u;
+  uint b_batch = 0u;
+  for (uint axis = params.dims; axis > 0u; --axis) {
+    uint coord = remaining % params.shape[axis - 1u];
+    remaining /= params.shape[axis - 1u];
+    a_batch += coord * params.in_strides[axis - 1u];
+    b_batch += coord * params.out_strides[axis - 1u];
+  }
+
+  uint row_base = min(row0, params.matrix_m - SG * MAT);
+  uint col_base = min(col0, params.matrix_n - SG * MAT);
+  uint a_row_step = A_T != 0 ? 1u : params.lhs_gap;
+  uint b_col_step = B_T != 0 ? params.rhs_gap : 1u;
+  uint a_k_step = A_T != 0 ? MAT * params.lhs_gap : MAT;
+  uint b_k_step = B_T != 0 ? MAT : MAT * params.rhs_gap;
+  uint a_off = params.lhs_offset + a_batch + row_base * a_row_step;
+  uint b_off = params.rhs_offset + b_batch + col_base * b_col_step;
+
+  coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+      acc[SG][SG];
+  for (uint i = 0u; i < SG; ++i) {
+    for (uint j = 0u; j < SG; ++j) {
+      acc[i][j] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+          gl_MatrixUseAccumulator>(0.0);
+    }
+  }
+  for (uint k = 0u; k < params.matrix_k; k += MAT) {
+    coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> mat_a[SG];
+    coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG];
+    for (uint i = 0u; i < SG; ++i) {
+#if A_T
+      coopMatLoad(mat_a[i], input_a.values, a_off + i * MAT * a_row_step,
+          params.lhs_gap, gl_CooperativeMatrixLayoutColumnMajor);
+#else
+      coopMatLoad(mat_a[i], input_a.values, a_off + i * MAT * a_row_step,
+          params.lhs_gap, gl_CooperativeMatrixLayoutRowMajor);
+#endif
+    }
+    for (uint j = 0u; j < SG; ++j) {
+#if B_T
+      coopMatLoad(mat_b[j], input_b.values, b_off + j * MAT * b_col_step,
+          params.rhs_gap, gl_CooperativeMatrixLayoutColumnMajor);
+#else
+      coopMatLoad(mat_b[j], input_b.values, b_off + j * MAT * b_col_step,
+          params.rhs_gap, gl_CooperativeMatrixLayoutRowMajor);
+#endif
+    }
+    for (uint i = 0u; i < SG; ++i) {
+      for (uint j = 0u; j < SG; ++j) {
+        acc[i][j] = coopMatMulAdd(mat_a[i], mat_b[j], acc[i][j]);
+      }
+    }
+    a_off += a_k_step;
+    b_off += b_k_step;
+  }
+
+  uint out_base = params.output_offset +
+      batch_index * params.matrix_m * params.matrix_n +
+      row_base * params.matrix_n + col_base;
+  for (uint i = 0u; i < SG; ++i) {
+    for (uint j = 0u; j < SG; ++j) {
+      coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+          h = coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(acc[i][j] * params.alpha);
+      coopMatStore(h, output_data.values,
+          out_base + (i * MAT) * params.matrix_n + j * MAT, params.matrix_n,
+          gl_CooperativeMatrixLayoutRowMajor);
+    }
+  }
+}

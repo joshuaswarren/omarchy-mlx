@@ -191,8 +191,11 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   caps.subgroup_operations =
       (caps.subgroup_operations | profile.subgroup_ops_mask_or) &
       profile.subgroup_ops_mask_and;
+  // One axis covers the extension: a simulated cooperative-matrix driver
+  // lists both shapes, as Honeykrisp does.
   if (profile.cooperative_matrix >= 0) {
     caps.cooperative_matrix_f32_8 = profile.cooperative_matrix != 0;
+    caps.cooperative_matrix_f16_8 = profile.cooperative_matrix != 0;
   }
   if (profile.shared_memory_limit_bytes != 0) {
     caps.max_compute_shared_memory_size = profile.shared_memory_limit_bytes;

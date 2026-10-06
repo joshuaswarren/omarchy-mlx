@@ -347,6 +347,7 @@ CapabilityReport collect_capabilities(
   // does not list it at all.
   caps.shader_atomic_float_add = false;
   caps.cooperative_matrix_f32_8 = false;
+  caps.cooperative_matrix_f16_8 = false;
   bool has_coopmat_ext = false;
   uint32_t ext_count = 0;
   if (it.EnumerateDeviceExtensionProperties &&
@@ -372,8 +373,8 @@ CapabilityReport collect_capabilities(
       }
     }
   }
-  // The matmul kernel is written for exactly one shape: 8x8x8, all fp32,
-  // subgroup scope, non-saturating.
+  // Two shapes are used: 8x8x8 all fp32, and 8x8x8 with fp16 A/B and an
+  // fp32 accumulator; both subgroup scope, non-saturating.
   if (has_coopmat_ext && it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR) {
     uint32_t n = 0;
     if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(pd, &n, nullptr) ==
@@ -384,15 +385,17 @@ CapabilityReport collect_capabilities(
       if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(
               pd, &n, shapes.data()) == VK_SUCCESS) {
         for (const auto& p : shapes) {
-          if (p.MSize == 8 && p.NSize == 8 && p.KSize == 8 &&
-              p.AType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
-              p.BType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
-              p.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
-              p.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
-              p.saturatingAccumulation == VK_FALSE &&
-              p.scope == VK_SCOPE_SUBGROUP_KHR) {
+          if (p.MSize != 8 || p.NSize != 8 || p.KSize != 8 ||
+              p.CType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
+              p.ResultType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
+              p.saturatingAccumulation != VK_FALSE ||
+              p.scope != VK_SCOPE_SUBGROUP_KHR || p.AType != p.BType) {
+            continue;
+          }
+          if (p.AType == VK_COMPONENT_TYPE_FLOAT32_KHR) {
             caps.cooperative_matrix_f32_8 = true;
-            break;
+          } else if (p.AType == VK_COMPONENT_TYPE_FLOAT16_KHR) {
+            caps.cooperative_matrix_f16_8 = true;
           }
         }
       }

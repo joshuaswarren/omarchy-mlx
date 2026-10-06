@@ -871,6 +871,15 @@ enum class ComputeKernel : uint16_t {
   // composed route's f32 score matrix exceeds the uint32 element or
   // descriptor byte limits. Append-only profile id.
   SdpaPrefillFlashBF16Hd128,
+  // f16 matmul with fp16-operand cooperative matrices loaded straight
+  // from the buffers (shaders/matmul_coopmat_direct.comp), one build per
+  // orientation: Nn = row-major lhs and rhs, Nt = n-major rhs, Tn =
+  // column-major lhs, Tt = both. Same stored bits as MatmulRbF16.
+  // Append-only profile ids.
+  MatmulDirectF16Nn,
+  MatmulDirectF16Nt,
+  MatmulDirectF16Tn,
+  MatmulDirectF16Tt,
   Count,
 };
 

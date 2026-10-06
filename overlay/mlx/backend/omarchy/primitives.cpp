@@ -746,7 +746,42 @@ void dispatch_matmul(
   // tile and the GEMV paths untouched.
   const bool rb = kernel == omarchy::ComputeKernel::MatmulF16 &&
       params.matrix_m >= 32u && !use_c;
-  if (rb) {
+  // Direct cooperative-matrix f16 route (shaders/matmul_coopmat_direct.comp):
+  // fp16-operand 8x8x8 matrices loaded straight from the buffers, same
+  // stored bits as the register-blocked tile at 2.4-2.9x its rate on the
+  // M1 (4096^3: 1.72 vs 0.60 TFLOP/s). Every lane moves f16 pairs along
+  // the contiguous axis, so offsets, gaps, and batch strides must be
+  // even, as must n (and m for a column-major lhs: the edge tile shifts
+  // back to m - 32). The causal attention shortcuts stay on the
+  // register-blocked tile, which implements them.
+  bool direct_aligned = ((params.lhs_offset | params.rhs_offset |
+      params.output_offset | a_gap | b_gap) & 1u) == 0u;
+  for (uint32_t axis = 0; direct_aligned && axis < params.dims; ++axis) {
+    direct_aligned = ((params.in_strides[axis] |
+        params.out_strides[axis]) & 1u) == 0u;
+  }
+  const bool direct = rb && !sdpa && causal.second == CausalSkip::None &&
+      caps.cooperative_matrix_f32_8 && caps.cooperative_matrix_f16_8 &&
+      caps.subgroup_size == 32u && !coopmat_disabled &&
+      params.matrix_n >= 32u && (params.matrix_k % 8u) == 0u &&
+      (params.matrix_n & 1u) == 0u &&
+      (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned;
+  if (direct) {
+    static constexpr omarchy::ComputeKernel kDirect[4] = {
+        omarchy::ComputeKernel::MatmulDirectF16Nn,
+        omarchy::ComputeKernel::MatmulDirectF16Nt,
+        omarchy::ComputeKernel::MatmulDirectF16Tn,
+        omarchy::ComputeKernel::MatmulDirectF16Tt};
+    kernel = kDirect[(a_transposed ? 2 : 0) + (b_transposed ? 1 : 0)];
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps,
+        direct,
+        "MatmulDirectF16",
+        "cooperative_matrix_fp32_8x8x8+cooperative_matrix_fp16_8x8x8",
+        encoder.device().hardware_capabilities().cooperative_matrix_f32_8 &&
+            encoder.device().hardware_capabilities().cooperative_matrix_f16_8);
+  } else if (rb) {
     kernel = omarchy::ComputeKernel::MatmulRbF16;
   }
   if (sdpa) {

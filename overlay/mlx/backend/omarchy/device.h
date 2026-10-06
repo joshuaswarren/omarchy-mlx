@@ -99,6 +99,10 @@ struct CapabilityReport {
   // feature is on, and the device lists an 8x8x8 all-fp32 subgroup shape.
   // Honeykrisp advertises this behind AGX_SIMDMAT; llvmpipe does not.
   bool cooperative_matrix_f32_8{false};
+  // Same extension and feature, plus an 8x8x8 subgroup shape with fp16
+  // A/B and an fp32 accumulator. The extension is enabled only with
+  // cooperative_matrix_f32_8, so users gate on both.
+  bool cooperative_matrix_f16_8{false};
   // True when the device lists VK_EXT_global_priority. Lets the backend
   // request a lower-than-default queue priority so MLX submissions yield
   // queue arbitration to the desktop compositor between submissions
