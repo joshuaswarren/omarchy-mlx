@@ -1,0 +1,34 @@
+diff --git a/omlx/engine/sts.py b/omlx/engine/sts.py
+index d4eb7ba..62ff52e 100644
+--- a/omlx/engine/sts.py
++++ b/omlx/engine/sts.py
+@@ -104,12 +104,28 @@ def _detect_sts_family(model_name: str, config_model_type: str = "") -> str:
+ # ---------------------------------------------------------------------------
+ 
+ 
++def _deepfilternet_subfolder(model_name: str) -> Optional[str]:
++    """Subfolder for ``DeepFilterNetModel.from_pretrained`` at *model_name*.
++
++    The HuggingFace repo keeps ``v1``/``v2``/``v3`` under subfolders, and
++    mlx-audio appends its default ``v3`` to every path. A locally hosted
++    model directory that oMLX serves already IS one version's content
++    (``config.json`` at the top), so it must be loaded without a subfolder.
++    """
++    if os.path.isfile(os.path.join(model_name, "config.json")):
++        return None
++    return "v3"
++
++
+ def _load_deepfilternet(model_name: str):
+     """Load a DeepFilterNet model."""
+     from mlx_audio.sts.models.deepfilternet import DeepFilterNetModel
+ 
+     # DeepFilterNet-mlx uses subfolder='v3' by default; pass model_name_or_path
+-    return DeepFilterNetModel.from_pretrained(model_name_or_path=model_name)
++    return DeepFilterNetModel.from_pretrained(
++        model_name_or_path=model_name,
++        subfolder=_deepfilternet_subfolder(model_name),
++    )
+ 
+ 
+ def _load_mossformer2(model_name: str):
