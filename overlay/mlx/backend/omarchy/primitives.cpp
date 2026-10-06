@@ -601,9 +601,11 @@ void dispatch_matmul(
   // array. Allocating unconditionally here would detach that view from
   // the output's buffer, so every kernel store would land in detached
   // scratch while the output stayed zero-filled (the LongSdpaCoop3
-  // all-zero composed outputs, 2026-10-06). Views arrive with their
-  // buffer set; only fresh outputs allocate here.
-  if (out.buffer().ptr() == nullptr) {
+  // all-zero composed outputs, 2026-10-06). Fresh outputs carry no Data
+  // yet: data_shared_ptr() is null exactly when set_data has never run.
+  // buffer() itself derefs that null Data (array.h: data->buffer) and
+  // must not be called here.
+  if (out.data_shared_ptr() == nullptr) {
     out.set_data(allocate_omarchy(out.nbytes()));
   }
   if (out.size() == 0) {
