@@ -1016,8 +1016,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_bf16, gather_qmm_bf16_size};
     case ComputeKernel::GatherQmmNbF32:
       return {gather_qmm_nb_f32, gather_qmm_nb_f32_size};
-    case ComputeKernel::GatherQmmNbBF16:
-      return {gather_qmm_nb_bf16, gather_qmm_nb_bf16_size};
+    case ComputeKernel::GatherQmmNbF16:
+      return {gather_qmm_nb_f16, gather_qmm_nb_f16_size};
     case ComputeKernel::GatherQmmSubF32:
       return {gather_qmm_sub_f32, gather_qmm_sub_f32_size};
     case ComputeKernel::GatherQmmSubF16:
