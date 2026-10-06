@@ -57,10 +57,38 @@ layout(push_constant) uniform Params {
   uint flags;
   float alpha;
   float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  // Lockstep tail of ComputeParams (mlx compute.h): a shader may
+  // declare any prefix of the struct, so these appended fields keep
+  // every existing SPIR-V interface byte-identical.
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+  // Windowed-dispatch transport: out_row_stride is the full output row
+  // width for windowed matmul-family dispatches (0 = use matrix_n);
+  // window_lo is the global first row / element for row- or
+  // index-windowed dispatches (0 = unwindowed); window_hi is Take's
+  // exclusive row-window bound (0 = unwindowed).
+  uint out_row_stride;
+  uint window_lo;
+  uint window_hi;
 } params;
 
 void main() {
-  uint index = gl_GlobalInvocationID.x;
+  // Index-windowed dispatches start at window_lo (0 = unwindowed).
+  uint index = gl_GlobalInvocationID.x + params.window_lo;
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   while (index < params.count) {
 #if defined(USE_I32_MATH)
@@ -74,7 +102,11 @@ void main() {
 #else
     float value = params.alpha + params.beta * float(index);
 #endif
-    output_data.values[params.output_offset + index] = STORE_VALUE(value);
+    // Index-windowed dispatches bind the output window at window_lo,
+    // so the store index is window-relative; window_lo is 0 (identity)
+    // for the single-dispatch path.
+    output_data.values[params.output_offset + index -
+                       params.window_lo] = STORE_VALUE(value);
     if (params.count - index <= stride) {
       break;
     }

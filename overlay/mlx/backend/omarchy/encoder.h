@@ -43,6 +43,43 @@ inline ComputeBinding binding(const array& value) {
       buffer};
 }
 
+// Windowed binding for |value| covering its storage bytes
+// [first_byte, last_byte_exclusive). The start is aligned down to
+// |alignment| (the device's minStorageBufferOffsetAlignment); the
+// caller adds the element correction (first_byte - offset) / itemsize
+// to the kernel's element offset parameter, whose relative index then
+// lands on the same global element. The window range stays at or under
+// the device's maxStorageBufferRange, which dispatch_compute_pipeline
+// still refuses to exceed, so an op splits any operand larger than the
+// limit into several windowed dispatches instead of one binding.
+inline ComputeBinding window_binding(
+    const array& value,
+    VkDeviceSize first_byte,
+    VkDeviceSize last_byte_exclusive,
+    uint32_t alignment) {
+  auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
+  const VkDeviceSize unit = std::max<uint32_t>(alignment, 1u);
+  const VkDeviceSize aligned = first_byte - (first_byte % unit);
+  const VkDeviceSize end = std::min<VkDeviceSize>(
+      std::max<VkDeviceSize>(last_byte_exclusive, aligned + 1),
+      buffer->size);
+  return {buffer->buffer, aligned, end - aligned, buffer};
+}
+
+// Element-offset correction for a windowed binding: the bytes the
+// window start moved by the alignment, in elements. A caller binds
+// window_binding(value, first_byte, ...) and passes
+// element_offset + window_item_correction(first_byte, alignment,
+// itemsize) as the kernel's element offset for that operand.
+inline uint32_t window_item_correction(
+    VkDeviceSize first_byte,
+    uint32_t alignment,
+    size_t itemsize) {
+  const VkDeviceSize unit = std::max<uint32_t>(alignment, 1u);
+  const VkDeviceSize correction_bytes = first_byte % unit;
+  return static_cast<uint32_t>(correction_bytes / itemsize);
+}
+
 // Per-stream command recorder over the device's single VkQueue. Recording
 // is BATCHED: primitive evals append to an open command buffer and the
 // buffer is submitted when a node/work budget is reached, a flush is

@@ -114,6 +114,29 @@ layout(push_constant) uniform Params {
   uint shape[4];
   uint in_strides[4];
   uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  // Lockstep tail of ComputeParams (mlx compute.h): a shader may
+  // declare any prefix of the struct, so these appended fields keep
+  // every existing SPIR-V interface byte-identical.
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+  // Windowed-dispatch transport: out_row_stride is the full output row
+  // width for windowed matmul-family dispatches (0 = use matrix_n);
+  // window_lo is the global first row / element for row- or
+  // index-windowed dispatches (0 = unwindowed); window_hi is Take's
+  // exclusive row-window bound (0 = unwindowed).
+  uint out_row_stride;
+  uint window_lo;
+  uint window_hi;
 } params;
 
 // Constant-shift select chain from scatter.comp: runtime word and lane,

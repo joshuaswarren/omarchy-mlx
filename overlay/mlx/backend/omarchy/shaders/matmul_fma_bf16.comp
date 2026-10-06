@@ -65,6 +65,27 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
   uint lhs_gap;
   uint rhs_gap;
+  // Lockstep tail of ComputeParams (mlx compute.h): a shader may
+  // declare any prefix of the struct, so these appended fields keep
+  // every existing SPIR-V interface byte-identical.
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+  // Windowed-dispatch transport: out_row_stride is the full output row
+  // width for windowed matmul-family dispatches (0 = use matrix_n);
+  // window_lo is the global first row / element for row- or
+  // index-windowed dispatches (0 = unwindowed); window_hi is Take's
+  // exclusive row-window bound (0 = unwindowed).
+  uint out_row_stride;
+  uint window_lo;
+  uint window_hi;
 } params;
 
 uint bf16_store(float value) {
@@ -91,10 +112,14 @@ void main() {
   }
   uint m = params.matrix_m;
   uint n = params.matrix_n;
+  // Windowed dispatches shrink n to the output-column window; the
+  // full row width rides out_row_stride.
+  uint out_row = params.out_row_stride != 0u ? params.out_row_stride : n;
   uint k = params.matrix_k;
   uint a_slice4 = (params.lhs_offset + a_batch) / 8u;
   uint b_slice4 = (params.rhs_offset + b_batch) / 8u;
-  uint out_slice = (params.output_offset + batch_index * m * n) / 2u;
+  uint out_slice =
+      (params.output_offset + batch_index * m * out_row) / 2u;
   uint a_vec_per_row = params.lhs_gap / 8u;
   uint b_vec_per_row = params.rhs_gap / 8u;
   uint m_bands = (m + ROWS_PER_WG - 1u) / ROWS_PER_WG;
@@ -159,7 +184,7 @@ void main() {
           for (uint p = 0u; p < COLS_U / 2u; ++p) {
             uint col = col0 + 2u * p;
             if (col + 1u < n) {
-              output_words.values[out_slice + (row * n + col) / 2u] =
+              output_words.values[out_slice + (row * out_row + col) / 2u] =
                   bf16_store(acc[r][2u * p]) |
                   (bf16_store(acc[r][2u * p + 1u]) << 16u);
             }

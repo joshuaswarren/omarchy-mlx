@@ -110,6 +110,10 @@ struct CapabilityReport {
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};
   VkDeviceSize max_storage_buffer_range{0};
+  // Storage buffers bind at offsets aligned to at least this many
+  // bytes; windowed bindings align their starts down to it and correct
+  // the kernel's element offset by the moved bytes.
+  uint32_t min_storage_buffer_offset_alignment{0};
   bool host_visible_coherent{false};
   // Storage-buffer descriptor limits reported by the physical device. These
   // bound the compute binding budget (compute.h kComputeBindingBudget).

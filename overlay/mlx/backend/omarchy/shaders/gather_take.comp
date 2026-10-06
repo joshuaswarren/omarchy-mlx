@@ -123,6 +123,29 @@ layout(push_constant) uniform Params {
   uint shape[4];
   uint in_strides[4];
   uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  // Lockstep tail of ComputeParams (mlx compute.h): a shader may
+  // declare any prefix of the struct, so these appended fields keep
+  // every existing SPIR-V interface byte-identical.
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+  // Windowed-dispatch transport: out_row_stride is the full output row
+  // width for windowed matmul-family dispatches (0 = use matrix_n);
+  // window_lo is the global first row / element for row- or
+  // index-windowed dispatches (0 = unwindowed); window_hi is Take's
+  // exclusive row-window bound (0 = unwindowed).
+  uint out_row_stride;
+  uint window_lo;
+  uint window_hi;
 } params;
 
 // Honeykrisp miscompiles data-dependent shift-then-mask byte
@@ -202,6 +225,7 @@ void main() {
     uint word_slot =
         params.operation == 2u ? idx_lin + idx_lin : idx_lin;
     bool valid = true;
+    bool row_in_window = true;
     uint src = 0u;
 #ifdef USE_MULTI_INDEX
     for (uint axis = 0u; axis < params.aux_size; ++axis) {
@@ -228,6 +252,14 @@ void main() {
                    index);
       valid = index < dim;
       src = index * params.matrix_m;
+      // Row-windowed dispatch (window_hi != 0): a row outside the
+      // window belongs to another dispatch in the split and must not
+      // store; an out-of-extent index keeps its zero write so every
+      // window's dispatch writes the same value there.
+      if (params.window_hi != 0u && valid &&
+          (index < params.window_lo || index >= params.window_hi)) {
+        row_in_window = false;
+      }
     }
 #endif
 #if defined(USE_COMPLEX) || defined(USE_U32) || defined(USE_U16) || defined(USE_I64)
@@ -235,11 +267,15 @@ void main() {
 #else
     float value = 0.0;
 #endif
-    if (valid) {
+    // A row outside this dispatch's window must not load either: its
+    // address lands past the window's byte binding.
+    if (valid && row_in_window) {
       value = LOAD_VALUE(
           input_data.values[params.lhs_offset + src + win]);
     }
-    output_data.values[params.output_offset + t] = STORE_VALUE(value);
+    if (row_in_window) {
+      output_data.values[params.output_offset + t] = STORE_VALUE(value);
+    }
     if (params.count - t <= stride) {
       break;
     }

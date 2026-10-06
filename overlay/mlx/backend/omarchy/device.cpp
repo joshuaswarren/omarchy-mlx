@@ -311,6 +311,8 @@ CapabilityReport collect_capabilities(
   caps.max_allocation_size = m3.maxMemoryAllocationSize;
   caps.max_buffer_size = m4.maxBufferSize;
   caps.max_storage_buffer_range = limits.maxStorageBufferRange;
+  caps.min_storage_buffer_offset_alignment =
+      limits.minStorageBufferOffsetAlignment;
   caps.max_per_stage_descriptor_storage_buffers =
       limits.maxPerStageDescriptorStorageBuffers;
   caps.max_descriptor_set_storage_buffers =

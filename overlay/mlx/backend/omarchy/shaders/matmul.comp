@@ -88,6 +88,27 @@ layout(push_constant) uniform Params {
   // carries its row gap and consumes no materialization.
   uint lhs_gap;
   uint rhs_gap;
+  // Lockstep tail of ComputeParams (mlx compute.h): a shader may
+  // declare any prefix of the struct, so these appended fields keep
+  // every existing SPIR-V interface byte-identical.
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+  // Windowed-dispatch transport: out_row_stride is the full output row
+  // width for windowed matmul-family dispatches (0 = use matrix_n);
+  // window_lo is the global first row / element for row- or
+  // index-windowed dispatches (0 = unwindowed); window_hi is Take's
+  // exclusive row-window bound (0 = unwindowed).
+  uint out_row_stride;
+  uint window_lo;
+  uint window_hi;
 } params;
 
 shared ACCUM_TYPE tile_a[16][16];
@@ -115,7 +136,11 @@ void main() {
   }
   uint lhs_matrix = params.matrix_m * params.matrix_k;
   uint rhs_matrix = params.matrix_k * params.matrix_n;
-  uint out_matrix = params.matrix_m * params.matrix_n;
+  // Windowed dispatches shrink matrix_n to their output-column window
+  // and carry the full row width in out_row_stride.
+  uint out_row = params.out_row_stride != 0u ? params.out_row_stride
+                                             : params.matrix_n;
+  uint out_matrix = params.matrix_m * out_row;
   uint tile_rows = params.matrix_m / TILE_SIZE +
       uint(params.matrix_m % TILE_SIZE != 0u);
   uint tile_columns = params.matrix_n / TILE_SIZE +
@@ -160,8 +185,8 @@ void main() {
       }
 
       if (row < params.matrix_m && column < params.matrix_n) {
-        uint output_index = batch_index * out_matrix +
-            row * params.matrix_n + column;
+        uint output_index =
+            batch_index * out_matrix + row * out_row + column;
         ACCUM_TYPE value = params.alpha * accumulator;
         if ((params.flags & 2u) != 0u) {
           uint c_index = params.aux_size == 1u

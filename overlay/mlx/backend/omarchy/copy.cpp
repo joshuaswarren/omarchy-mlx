@@ -728,6 +728,79 @@ void copy_gpu_inplace(
           make_copy_axis_metadata(collapsed_shape, collapsed_strides, encoder);
       params.matrix_k = static_cast<uint32_t>(rank);
     }
+    // A > 2 GiB flat contiguous copy (collapsed to one axis, unit
+    // strides; includes dtype-converting casts) splits by flat index:
+    // each window binds the source and destination bytes [c0, c1).
+    // Strided copies keep today's single dispatch.
+    {
+      const auto& copy_caps = encoder.device().capabilities();
+      const VkDeviceSize copy_limit = copy_caps.max_storage_buffer_range;
+      const uint32_t copy_alignment =
+          copy_caps.min_storage_buffer_offset_alignment;
+      const bool flat_copy = rank == 1 && params.shape[0] == count &&
+          params.in_strides[0] == 1u && params.out_strides[0] == 1u;
+      const uint64_t copy_bytes =
+          static_cast<uint64_t>(count) * out.itemsize();
+      if (flat_copy && copy_bytes > copy_limit) {
+        const uint64_t copy_chunk = std::max<uint64_t>(
+            (copy_limit / std::max(in.itemsize(), out.itemsize()) / 16u) *
+                16u,
+            16u);
+        omarchy::ComputeKernel window_kernel;
+        if (in.dtype() == out.dtype()) {
+          window_kernel = copy_general_kernel(in.dtype(), out);
+        } else {
+          auto cast_kernel =
+              cast_numeric_kernel(in.dtype(), out.dtype(), capabilities);
+          if (!cast_kernel) {
+            omarchy::unsupported("dtype converting copy", out);
+          }
+          window_kernel = *cast_kernel;
+        }
+        const uint32_t in_base = params.lhs_offset;
+        const uint32_t out_base = params.output_offset;
+        for (uint64_t c0 = 0; c0 < count; c0 += copy_chunk) {
+          const uint64_t c1 =
+              std::min(c0 + copy_chunk, static_cast<uint64_t>(count));
+          omarchy::ComputeParams wparams = params;
+          wparams.count = checked_u32(c1 - c0, "strided copy", out);
+          wparams.shape[0] = wparams.count;
+          if (in.dtype() != out.dtype()) {
+            wparams.operation = cast_code(in.dtype()) |
+                (cast_code(out.dtype()) << 16);
+            wparams.flags = 2;
+          }
+          const uint64_t in_first =
+              (static_cast<uint64_t>(in_base) + c0) * in.itemsize();
+          const uint64_t in_last =
+              (static_cast<uint64_t>(in_base) + c1) * in.itemsize();
+          const uint64_t dst_first =
+              (static_cast<uint64_t>(out_base) + c0) * out.itemsize();
+          const uint64_t dst_last =
+              (static_cast<uint64_t>(out_base) + c1) * out.itemsize();
+          wparams.lhs_offset = in_base + static_cast<uint32_t>(c0) -
+              omarchy::window_item_correction(
+                  in_first, copy_alignment, in.itemsize());
+          wparams.output_offset = out_base + static_cast<uint32_t>(c0) -
+              omarchy::window_item_correction(
+                  dst_first, copy_alignment, out.itemsize());
+          const omarchy::ComputeBinding in_window = omarchy::window_binding(
+              in, in_first, in_last, copy_alignment);
+          std::array<omarchy::ComputeBinding, 4> wbindings{
+              in_window,
+              in_window,
+              omarchy::window_binding(
+                  out, dst_first, dst_last, copy_alignment),
+              in_window};
+          encoder.dispatch_compute(
+              window_kernel,
+              wbindings,
+              wparams,
+              omarchy::compute_dispatch_group_count(wparams.count));
+        }
+        return;
+      }
+    }
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(in),
         binding(in),

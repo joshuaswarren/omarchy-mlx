@@ -650,8 +650,15 @@ void dispatch_matmul(
       bound_c, use_c ? params.aux_size : out.size(), name, out);
   params.output_offset = checked_item_offset(out, out.size(), name, out);
 
+  // Route selection and dispatch for one column window. The windowed
+  // path below reuses this verbatim; the in-limit path calls it once
+  // with the full problem, so the single-dispatch code path (and its
+  // bit-exact outputs) is unchanged.
+  auto issue_dispatch = [&](omarchy::ComputeParams params,
+      omarchy::ComputeBinding b_binding,
+      omarchy::ComputeBinding out_binding) -> void {
   std::array<omarchy::ComputeBinding, 4> bindings{
-      binding(bound_a), binding(bound_b), binding(bound_c), binding(out)};
+      binding(bound_a), b_binding, binding(bound_c), out_binding};
   auto kernel = out.dtype() == complex64
       ? omarchy::ComputeKernel::MatmulComplex64
       : select_float_kernel(
@@ -828,6 +835,70 @@ void dispatch_matmul(
       matrix_group_count(params.matrix_n, tile),
       matrix_group_count(params.matrix_m, tile),
       checked_u32(batch_count, name, out));
+  };
+
+  // A > 2 GiB transposed B (the lm_head / tied-embedding orientation:
+  // B = W.T of a row-major [N, K] weight) splits along N: window w
+  // covers rows n0..n1 of W, which are contiguous in storage, and
+  // output columns n0..n1. Other layouts (batched, non-transposed, and
+  // SDPA) keep columns strided through the buffer, so a byte window
+  // cannot cover one and they keep today's named refusal. m == 1 gemv
+  // routes additionally window the contiguous [1, N] output row; m > 1
+  // routes bind out whole and carry the full row width in
+  // out_row_stride.
+  const auto& window_caps = encoder.device().capabilities();
+  const VkDeviceSize range_limit = window_caps.max_storage_buffer_range;
+  const uint32_t offset_alignment =
+      window_caps.min_storage_buffer_offset_alignment;
+  const size_t b_itemsize = b->itemsize();
+  const uint64_t b_bytes = static_cast<uint64_t>(b->size()) * b_itemsize;
+  uint64_t b_window_cols = 0;
+  if (params.dims == 0 && b_transposed && !sdpa &&
+      !(use_c && params.matrix_m == 1u) && b_bytes > range_limit) {
+    const uint64_t per_col = static_cast<uint64_t>(k) * b_itemsize;
+    if (per_col <= range_limit) {
+      b_window_cols =
+          std::max<uint64_t>((range_limit / per_col / 32u) * 32u, 32u);
+    }
+  }
+  if (b_window_cols == 0) {
+    issue_dispatch(params, binding(bound_b), binding(out));
+    return;
+  }
+  for (uint64_t n0 = 0; n0 < n; n0 += b_window_cols) {
+    const uint64_t n1 = std::min(n0 + b_window_cols, static_cast<uint64_t>(n));
+    const uint64_t b_first =
+        (static_cast<uint64_t>(params.rhs_offset) + n0 * k) * b_itemsize;
+    const uint64_t b_last =
+        (static_cast<uint64_t>(params.rhs_offset) + n1 * k) * b_itemsize;
+    omarchy::ComputeParams wparams = params;
+    wparams.matrix_n = checked_u32(n1 - n0, name, out);
+    wparams.rhs_offset = params.rhs_offset +
+        static_cast<uint32_t>(n0 * k) -
+        omarchy::window_item_correction(
+            b_first, offset_alignment, b_itemsize);
+    omarchy::ComputeBinding b_window = omarchy::window_binding(
+        bound_b, b_first, b_last, offset_alignment);
+    omarchy::ComputeBinding out_binding = binding(out);
+    if (params.matrix_m == 1u) {
+      wparams.out_row_stride = 0;
+      const size_t out_itemsize = out.itemsize();
+      const uint64_t out_first =
+          (static_cast<uint64_t>(params.output_offset) + n0) * out_itemsize;
+      const uint64_t out_last =
+          (static_cast<uint64_t>(params.output_offset) + n1) * out_itemsize;
+      out_binding = omarchy::window_binding(
+          out, out_first, out_last, offset_alignment);
+      wparams.output_offset = params.output_offset +
+          static_cast<uint32_t>(n0) -
+          omarchy::window_item_correction(
+              out_first, offset_alignment, out_itemsize);
+    } else {
+      wparams.out_row_stride = params.matrix_n;
+    }
+    issue_dispatch(std::move(wparams), std::move(b_window),
+                   std::move(out_binding));
+  }
 }
 
 // Fills the general broadcast transport (dims/shape/strides) shared by
@@ -919,6 +990,84 @@ std::optional<array> fill_broadcast_transport(
 // The params fill and dispatch behind dispatch_elementwise, callable
 // with a caller-allocated output so multi-output primitives (DivMod)
 // can target each output in turn.
+// Flat-index windowing shared by the contiguous elementwise
+// dispatchers (float, complex, int, bool-compare). When the output's
+// bytes exceed the device's storage-buffer range and no broadcast
+// transport is involved, splits the flat index into windows: each
+// dispatch binds every count-sized operand's bytes [c0, c1) with
+// window-relative element offsets; smaller broadcast operands stay
+// bound whole (their modulo indexing spans them regardless of the
+// window). Windows are multiples of 16 elements so word-packed outputs
+// stay aligned. Returns true when the op was fully dispatched in
+// windows; false leaves today's single dispatch to the caller.
+bool dispatch_elementwise_windows(
+    const std::string& name,
+    const array& lhs,
+    const array& rhs,
+    const array& out,
+    const omarchy::ComputeParams& params,
+    const std::array<omarchy::ComputeBinding, 4>& bindings,
+    bool general_broadcast,
+    omarchy::ComputeKernel kernel,
+    omarchy::CommandEncoder& encoder) {
+  if (general_broadcast) {
+    return false;
+  }
+  const auto& caps = encoder.device().capabilities();
+  const VkDeviceSize limit = caps.max_storage_buffer_range;
+  const uint32_t alignment = caps.min_storage_buffer_offset_alignment;
+  const size_t itemsize = out.itemsize();
+  const uint64_t out_bytes =
+      static_cast<uint64_t>(out.size()) * itemsize;
+  if (out_bytes <= limit) {
+    return false;
+  }
+  const uint32_t count = params.count;
+  const uint64_t chunk = std::max<uint64_t>((limit / itemsize / 16u) * 16u, 16u);
+  const uint32_t lhs_base = params.lhs_offset;
+  const uint32_t rhs_base = params.rhs_offset;
+  const uint32_t out_base = params.output_offset;
+  const uint32_t lhs_size = params.lhs_size;
+  const uint32_t rhs_size = params.rhs_size;
+  for (uint64_t c0 = 0; c0 < count; c0 += chunk) {
+    const uint64_t c1 = std::min(c0 + chunk, static_cast<uint64_t>(count));
+    omarchy::ComputeParams wparams = params;
+    wparams.count = wparams.output_size = checked_u32(c1 - c0, name, out);
+    std::array<omarchy::ComputeBinding, 4> wbindings{
+        bindings[0], bindings[1], bindings[2], bindings[3]};
+    // No broadcast transport in the windowed path: the metadata slot
+    // is unread, and it must not carry the over-limit whole-output
+    // placeholder binding through the encoder's range check.
+    wbindings[3] = bindings[0];
+    auto window_operand = [&](omarchy::ComputeBinding whole,
+        const array& value, uint32_t size, uint32_t base,
+        uint32_t& offset) {
+      if (static_cast<uint64_t>(size) != count) {
+        return whole;
+      }
+      const uint64_t first =
+          (static_cast<uint64_t>(base) + c0) * value.itemsize();
+      const uint64_t last =
+          (static_cast<uint64_t>(base) + c1) * value.itemsize();
+      offset = base + static_cast<uint32_t>(c0) -
+          omarchy::window_item_correction(first, alignment, value.itemsize());
+      return omarchy::window_binding(value, first, last, alignment);
+    };
+    wbindings[0] = window_operand(
+        bindings[0], lhs, lhs_size, lhs_base, wparams.lhs_offset);
+    wbindings[1] = window_operand(
+        bindings[1], rhs, rhs_size, rhs_base, wparams.rhs_offset);
+    wbindings[2] = window_operand(
+        bindings[2], out, count, out_base, wparams.output_offset);
+    encoder.dispatch_compute(
+        kernel,
+        wbindings,
+        wparams,
+        omarchy::compute_dispatch_group_count(wparams.count));
+  }
+  return true;
+}
+
 void dispatch_float_elementwise_to(
     const std::string& name,
     uint32_t operation,
@@ -950,6 +1099,28 @@ void dispatch_float_elementwise_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
+  {
+    const bool ew_lite = operation <= NegativeOperation;
+    if (dispatch_elementwise_windows(
+            name,
+            lhs,
+            rhs,
+            out,
+            params,
+            bindings,
+            general_broadcast,
+            select_float_kernel(
+                out.dtype(),
+                ew_lite ? omarchy::ComputeKernel::ElementwiseLiteF32
+                        : omarchy::ComputeKernel::ElementwiseF32,
+                ew_lite ? omarchy::ComputeKernel::ElementwiseLiteF16
+                        : omarchy::ComputeKernel::ElementwiseF16,
+                ew_lite ? omarchy::ComputeKernel::ElementwiseLiteBF16
+                        : omarchy::ComputeKernel::ElementwiseBF16),
+            encoder)) {
+      return;
+    }
+  }
   // Four-wide fast path (shaders/binary_vec.comp) for the hot binary
   // ops on 16-bit storage: same math and modulo addressing as
   // elementwise.comp, 8-byte vector loads. Sigmoid takes the same
@@ -1113,6 +1284,18 @@ void dispatch_compare_bool_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
+  if (dispatch_elementwise_windows(
+          name,
+          lhs,
+          rhs,
+          out,
+          params,
+          bindings,
+          general_broadcast,
+          omarchy::ComputeKernel::CompareBool,
+          encoder)) {
+    return;
+  }
   encoder.dispatch_compute(
       omarchy::ComputeKernel::CompareBool,
       bindings,
@@ -1461,6 +1644,18 @@ void dispatch_int_elementwise_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
+  if (dispatch_elementwise_windows(
+          name,
+          lhs,
+          rhs,
+          out,
+          params,
+          bindings,
+          is_trailing_broadcast(lhs, out) && is_trailing_broadcast(rhs, out),
+          elementwise_kernel(out.dtype()),
+          encoder)) {
+    return;
+  }
   // Signed and unsigned run separate SPIR-V variants: `>>` arithmetic
   // versus logical, and the sign fixups compare against a signed zero.
   // The widened variants serve the 8/16/64-bit integer family with the
@@ -2121,11 +2316,63 @@ void dispatch_softmax(
       omarchy::ComputeKernel::SoftmaxF32,
       omarchy::ComputeKernel::SoftmaxF16,
       omarchy::ComputeKernel::SoftmaxBF16);
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
-      params,
-      std::min(output_size, omarchy::kMaxComputeGroupCountX));
+  // A > 2 GiB input splits by rows: window w covers rows r0..r1, whose
+  // input bytes are contiguous, and the row-id base rides window_lo so
+  // the global input and output addresses stay put. The sink and
+  // causal modes keep today's single dispatch (their aux routing is
+  // not row-windowable).
+  const auto& softmax_caps = encoder.device().capabilities();
+  const VkDeviceSize softmax_range_limit =
+      softmax_caps.max_storage_buffer_range;
+  const uint32_t softmax_alignment =
+      softmax_caps.min_storage_buffer_offset_alignment;
+  const uint64_t softmax_bytes =
+      static_cast<uint64_t>(src.size()) * src.itemsize();
+  const uint64_t softmax_row_bytes =
+      static_cast<uint64_t>(row_length) * src.itemsize();
+  uint64_t softmax_rows_per_window = 0;
+  if (sinks == nullptr && !causal && softmax_bytes > softmax_range_limit &&
+      softmax_row_bytes <= softmax_range_limit) {
+    softmax_rows_per_window =
+        std::max<uint64_t>(softmax_range_limit / softmax_row_bytes, 1u);
+  }
+  if (softmax_rows_per_window == 0) {
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        std::min(output_size, omarchy::kMaxComputeGroupCountX));
+    return;
+  }
+  const uint32_t softmax_lhs_base = params.lhs_offset;
+  for (uint64_t r0 = 0; r0 < rows; r0 += softmax_rows_per_window) {
+    const uint64_t r1 =
+        std::min(r0 + softmax_rows_per_window, static_cast<uint64_t>(rows));
+    const uint64_t in_first =
+        (static_cast<uint64_t>(softmax_lhs_base) + r0 * row_length) *
+        src.itemsize();
+    const uint64_t in_last =
+        (static_cast<uint64_t>(softmax_lhs_base) + r1 * row_length) *
+        src.itemsize();
+    omarchy::ComputeParams wparams = params;
+    wparams.output_size = checked_u32(r1, name, out);
+    wparams.lhs_offset = softmax_lhs_base +
+        static_cast<uint32_t>(r0 * row_length) -
+        omarchy::window_item_correction(
+            in_first, softmax_alignment, src.itemsize());
+    wparams.window_lo = static_cast<uint32_t>(r0);
+    const omarchy::ComputeBinding in_window = omarchy::window_binding(
+        src, in_first, in_last, softmax_alignment);
+    std::array<omarchy::ComputeBinding, 3> wbindings{
+        in_window,
+        sinks != nullptr ? bindings[1] : in_window,
+        bindings[2]};
+    encoder.dispatch_compute(
+        kernel,
+        wbindings,
+        wparams,
+        std::min<uint64_t>(r1 - r0, omarchy::kMaxComputeGroupCountX));
+  }
 }
 
 // The general-axis reduction family: integer dtypes, Any/All, and every
@@ -3354,6 +3601,18 @@ void dispatch_complex_elementwise_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
+  if (dispatch_elementwise_windows(
+          name,
+          lhs,
+          rhs,
+          out,
+          params,
+          bindings,
+          general_broadcast,
+          omarchy::ComputeKernel::ComplexElementwise,
+          encoder)) {
+    return;
+  }
   encoder.dispatch_compute(
       omarchy::ComputeKernel::ComplexElementwise,
       bindings,
@@ -3591,6 +3850,40 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
             omarchy::ComputeKernel::ArangeF32,
             omarchy::ComputeKernel::ArangeF16,
             omarchy::ComputeKernel::ArangeBF16);
+  // A > 2 GiB arange splits by flat index: window w covers elements
+  // [c0, c1), the index base rides window_lo (the shader adds it to
+  // the global invocation id so values stay global), and the output
+  // window binding makes the store index window-relative.
+  const auto& arange_caps = encoder.device().capabilities();
+  const VkDeviceSize arange_limit = arange_caps.max_storage_buffer_range;
+  const uint32_t arange_alignment =
+      arange_caps.min_storage_buffer_offset_alignment;
+  const size_t arange_itemsize = out.itemsize();
+  const uint64_t arange_bytes =
+      static_cast<uint64_t>(out.size()) * arange_itemsize;
+  if (arange_bytes > arange_limit) {
+    const uint64_t arange_chunk = std::max<uint64_t>(
+        (arange_limit / arange_itemsize / 16u) * 16u, 16u);
+    for (uint64_t c0 = 0; c0 < count; c0 += arange_chunk) {
+      const uint64_t c1 =
+          std::min(c0 + arange_chunk, static_cast<uint64_t>(count));
+      omarchy::ComputeParams wparams = params;
+      wparams.count = wparams.output_size = checked_u32(c1, name, out);
+      wparams.window_lo = static_cast<uint32_t>(c0);
+      const uint64_t out_first = c0 * arange_itemsize;
+      const uint64_t out_last = c1 * arange_itemsize;
+      std::array<omarchy::ComputeBinding, 1> wbindings{
+          omarchy::window_binding(
+              out, out_first, out_last, arange_alignment)};
+      encoder.dispatch_compute(
+          kernel,
+          wbindings,
+          wparams,
+          omarchy::compute_dispatch_group_count(
+              checked_u32(c1 - c0, name, out)));
+    }
+    return;
+  }
   encoder.dispatch_compute(
       kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
 }
@@ -5999,11 +6292,67 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
             nidx > 1 ? omarchy::ComputeKernel::TakeMultiBF16
                      : omarchy::ComputeKernel::TakeBF16);
   uint32_t bound = nidx > 1 ? 4u : 3u;
-  encoder.dispatch_compute(
-      kernel,
-      std::span<const omarchy::ComputeBinding>(bindings.data(), bound),
-      params,
-      omarchy::compute_dispatch_group_count(count));
+  // A > 2 GiB table splits along its first axis (the embedding-table
+  // orientation: row r occupies the contiguous bytes
+  // [r * row_stride, (r + 1) * row_stride) of a row-contiguous table).
+  // Each window dispatch covers every output position but stores only
+  // rows inside its window (the shader's window gate); an
+  // out-of-extent index keeps its zero write, so every dispatch writes
+  // the same value there and the windows compose. The extent bound
+  // (reduce_size) stays full so out-of-window rows are not re-zeroed.
+  // Multi-index takes and non-leading axes keep today's refusal.
+  const auto& take_caps = encoder.device().capabilities();
+  const VkDeviceSize take_range_limit = take_caps.max_storage_buffer_range;
+  const uint32_t take_alignment =
+      take_caps.min_storage_buffer_offset_alignment;
+  const uint64_t take_table_bytes =
+      static_cast<uint64_t>(table_d.size()) * table_d.itemsize();
+  const uint64_t take_row_bytes =
+      static_cast<uint64_t>(params.matrix_m) * table_d.itemsize();
+  uint64_t take_rows_per_window = 0;
+  if (nidx == 1 && axes[0] == 0 && take_table_bytes > take_range_limit &&
+      take_row_bytes <= take_range_limit) {
+    take_rows_per_window = std::max<uint64_t>(
+        take_range_limit / take_row_bytes, 1u);
+  }
+  if (take_rows_per_window == 0) {
+    encoder.dispatch_compute(
+        kernel,
+        std::span<const omarchy::ComputeBinding>(bindings.data(), bound),
+        params,
+        omarchy::compute_dispatch_group_count(count));
+    return;
+  }
+  const uint32_t take_extent = params.reduce_size;
+  const uint32_t take_lhs_base = params.lhs_offset;
+  for (uint64_t r0 = 0; r0 < take_extent; r0 += take_rows_per_window) {
+    const uint64_t r1 =
+        std::min(r0 + take_rows_per_window, static_cast<uint64_t>(take_extent));
+    const uint64_t t_first =
+        (static_cast<uint64_t>(take_lhs_base) +
+         r0 * params.matrix_m) * table_d.itemsize();
+    const uint64_t t_last =
+        (static_cast<uint64_t>(take_lhs_base) +
+         r1 * params.matrix_m) * table_d.itemsize();
+    omarchy::ComputeParams wparams = params;
+    wparams.lhs_offset = take_lhs_base +
+        static_cast<uint32_t>(r0 * params.matrix_m) -
+        omarchy::window_item_correction(
+            t_first, take_alignment, table_d.itemsize());
+    wparams.window_lo = static_cast<uint32_t>(r0);
+    wparams.window_hi = static_cast<uint32_t>(r1);
+    std::array<omarchy::ComputeBinding, 4> wbindings{
+        omarchy::window_binding(
+            table_d, t_first, t_last, take_alignment),
+        bindings[1],
+        bindings[2],
+        bindings[3]};
+    encoder.dispatch_compute(
+        kernel,
+        std::span<const omarchy::ComputeBinding>(wbindings.data(), bound),
+        wparams,
+        omarchy::compute_dispatch_group_count(count));
+  }
 }
 void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& src = inputs.at(0);
@@ -6768,11 +7117,56 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
       omarchy::ComputeKernel::LogSumExpF32,
       omarchy::ComputeKernel::LogSumExpF16,
       omarchy::ComputeKernel::LogSumExpBF16);
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
-      params,
-      std::min(output_size, omarchy::kMaxComputeGroupCountX));
+  // A > 2 GiB input splits by rows; the row-id base rides window_lo so
+  // the global input and output addresses stay put.
+  const auto& lse_caps = encoder.device().capabilities();
+  const VkDeviceSize lse_range_limit = lse_caps.max_storage_buffer_range;
+  const uint32_t lse_alignment =
+      lse_caps.min_storage_buffer_offset_alignment;
+  const uint64_t lse_bytes =
+      static_cast<uint64_t>(src.size()) * src.itemsize();
+  const uint64_t lse_row_bytes =
+      static_cast<uint64_t>(row_length) * src.itemsize();
+  uint64_t lse_rows_per_window = 0;
+  if (lse_bytes > lse_range_limit && lse_row_bytes <= lse_range_limit) {
+    lse_rows_per_window =
+        std::max<uint64_t>(lse_range_limit / lse_row_bytes, 1u);
+  }
+  if (lse_rows_per_window == 0) {
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        std::min(output_size, omarchy::kMaxComputeGroupCountX));
+    return;
+  }
+  const uint32_t lse_lhs_base = params.lhs_offset;
+  for (uint64_t r0 = 0; r0 < rows; r0 += lse_rows_per_window) {
+    const uint64_t r1 =
+        std::min(r0 + lse_rows_per_window, static_cast<uint64_t>(rows));
+    const uint64_t in_first =
+        (static_cast<uint64_t>(lse_lhs_base) + r0 * row_length) *
+        src.itemsize();
+    const uint64_t in_last =
+        (static_cast<uint64_t>(lse_lhs_base) + r1 * row_length) *
+        src.itemsize();
+    omarchy::ComputeParams wparams = params;
+    wparams.output_size = checked_u32(r1, name, out);
+    wparams.lhs_offset = lse_lhs_base +
+        static_cast<uint32_t>(r0 * row_length) -
+        omarchy::window_item_correction(
+            in_first, lse_alignment, src.itemsize());
+    wparams.window_lo = static_cast<uint32_t>(r0);
+    const omarchy::ComputeBinding lse_window = omarchy::window_binding(
+        src, in_first, in_last, lse_alignment);
+    std::array<omarchy::ComputeBinding, 3> wbindings{
+        lse_window, lse_window, bindings[2]};
+    encoder.dispatch_compute(
+        kernel,
+        wbindings,
+        wparams,
+        std::min<uint64_t>(r1 - r0, omarchy::kMaxComputeGroupCountX));
+  }
 }
 void LUF::eval_gpu(
     const std::vector<array>& inputs,
@@ -7188,18 +7582,96 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                 omarchy::ComputeKernel::QmmVecFpF32,
                 omarchy::ComputeKernel::QmmVecFpF16,
                 omarchy::ComputeKernel::QmmVecFpBF16);
+      // A > 2 GiB transposed packed weight (w [N, Kp] words, scales
+      // [N, K / group] bytes) splits along N: window w covers rows
+      // n0..n1, contiguous in both streams, and output columns n0..n1
+      // of the contiguous [1, N] output row, which rides its own
+      // window. Batched and non-transposed weights keep today's
+      // refusal; so does every m > 1 route (tile / coopmat / fma).
+      const auto& fp_window_caps = fp_encoder.device().capabilities();
+      const VkDeviceSize fp_range_limit =
+          fp_window_caps.max_storage_buffer_range;
+      const uint32_t fp_alignment =
+          fp_window_caps.min_storage_buffer_offset_alignment;
+      const uint64_t fp_w_bytes =
+          static_cast<uint64_t>(w_d.size()) * w_d.itemsize();
+      const uint64_t w_row_bytes =
+          static_cast<uint64_t>(w_d.shape(-1)) * w_d.itemsize();
+      const uint64_t scale_row_bytes =
+          static_cast<uint64_t>(k) / static_cast<uint64_t>(group_size_);
+      uint64_t fp_window_cols = 0;
+      if (batch == 1 && transpose_ &&
+          fp_w_bytes > fp_range_limit &&
+          std::max(w_row_bytes, scale_row_bytes) <= fp_range_limit) {
+        fp_window_cols = std::max<uint64_t>(
+            (fp_range_limit / w_row_bytes / 8u) * 8u, 8u);
+      }
       for (size_t slice = 0; slice < batch; ++slice) {
         params.lhs_offset += slice == 0 ? 0u : lhs_step;
         params.rhs_offset += slice == 0 ? 0u : rhs_step;
         params.aux_offset += slice == 0 ? 0u : aux_step;
         params.output_offset += slice == 0 ? 0u : out_step;
-        fp_encoder.dispatch_compute(
-            vec_kernel,
-            bindings,
-            params,
-            std::min(fp_vec_groups, omarchy::kMaxComputeGroupCountX),
-            1u,
-            1u);
+        if (fp_window_cols == 0) {
+          fp_encoder.dispatch_compute(
+              vec_kernel,
+              bindings,
+              params,
+              std::min(fp_vec_groups, omarchy::kMaxComputeGroupCountX),
+              1u,
+              1u);
+          continue;
+        }
+        for (uint64_t n0 = 0; n0 < static_cast<uint64_t>(n);
+             n0 += fp_window_cols) {
+          const uint64_t n1 =
+              std::min(n0 + fp_window_cols, static_cast<uint64_t>(n));
+          const uint64_t w_first =
+              (static_cast<uint64_t>(params.rhs_offset) +
+               n0 * w_d.shape(-1)) * w_d.itemsize();
+          const uint64_t w_last =
+              (static_cast<uint64_t>(params.rhs_offset) +
+               n1 * w_d.shape(-1)) * w_d.itemsize();
+          const uint64_t s_first = static_cast<uint64_t>(params.aux_offset) +
+              n0 * scale_row_bytes;
+          const uint64_t s_last = static_cast<uint64_t>(params.aux_offset) +
+              n1 * scale_row_bytes;
+          const size_t out_itemsize = out.itemsize();
+          const uint64_t out_first =
+              (static_cast<uint64_t>(params.output_offset) + n0) *
+              out_itemsize;
+          const uint64_t out_last =
+              (static_cast<uint64_t>(params.output_offset) + n1) *
+              out_itemsize;
+          omarchy::ComputeParams wparams = params;
+          wparams.matrix_n = checked_u32(n1 - n0, tag, out);
+          wparams.rhs_offset = params.rhs_offset +
+              static_cast<uint32_t>(n0 * w_d.shape(-1)) -
+              omarchy::window_item_correction(
+                  w_first, fp_alignment, w_d.itemsize());
+          wparams.aux_offset = params.aux_offset +
+              static_cast<uint32_t>(n0 * scale_row_bytes) -
+              omarchy::window_item_correction(s_first, fp_alignment, 1);
+          wparams.output_offset = params.output_offset +
+              static_cast<uint32_t>(n0) -
+              omarchy::window_item_correction(
+                  out_first, fp_alignment, out_itemsize);
+          std::array<omarchy::ComputeBinding, 4> wbindings{
+              bindings[0],
+              omarchy::window_binding(w_d, w_first, w_last, fp_alignment),
+              omarchy::window_binding(scales_d, s_first, s_last, fp_alignment),
+              omarchy::window_binding(
+                  out, out_first, out_last, fp_alignment)};
+          fp_encoder.dispatch_compute(
+              vec_kernel,
+              wbindings,
+              wparams,
+              std::min(
+                  (wparams.matrix_n + kFpGemvColumnsPerGroup - 1u) /
+                      kFpGemvColumnsPerGroup,
+                  omarchy::kMaxComputeGroupCountX),
+              1u,
+              1u);
+        }
       }
       return;
     }
@@ -7507,13 +7979,105 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                           : omarchy::ComputeKernel::QmmVecF16,
               use_q4_word ? omarchy::ComputeKernel::QmmVecQ4WordBF16
                           : omarchy::ComputeKernel::QmmVecBF16);
-    encoder.dispatch_compute(
-        vec_kernel,
-        bindings,
-        params,
-        std::min(n_groups_qmm_vec, omarchy::kMaxComputeGroupCountX),
-        1u,
-        1u);
+    // A > 2 GiB transposed packed weight (w [N, Kp] words; scales and
+    // biases [N, K / group]) splits along N: window w covers rows
+    // n0..n1, contiguous in all three streams, and output columns
+    // n0..n1 of the contiguous [1, N] output row. Batched and
+    // non-transposed weights keep today's refusal.
+    const auto& gemv_window_caps = encoder.device().capabilities();
+    const VkDeviceSize gemv_range_limit =
+        gemv_window_caps.max_storage_buffer_range;
+    const uint32_t gemv_alignment =
+        gemv_window_caps.min_storage_buffer_offset_alignment;
+    const uint64_t gemv_w_bytes =
+        static_cast<uint64_t>(w_d.size()) * w_d.itemsize();
+    const uint64_t gemv_row_bytes =
+        static_cast<uint64_t>(w_d.shape(-1)) * w_d.itemsize();
+    const uint64_t gemv_param_bytes = static_cast<uint64_t>(scale_cols) *
+        scales_d.itemsize();
+    uint64_t gemv_window_cols = 0;
+    if (batch == 1 && transpose_ && gemv_w_bytes > gemv_range_limit &&
+        std::max(gemv_row_bytes, gemv_param_bytes) <= gemv_range_limit) {
+      gemv_window_cols = std::max<uint64_t>(
+          (gemv_range_limit / gemv_row_bytes / 8u) * 8u, 8u);
+    }
+    if (gemv_window_cols == 0) {
+      encoder.dispatch_compute(
+          vec_kernel,
+          bindings,
+          params,
+          std::min(n_groups_qmm_vec, omarchy::kMaxComputeGroupCountX),
+          1u,
+          1u);
+      return;
+    }
+    const uint32_t gemv_row_words = checked_u32(w_d.shape(-1), tag, out);
+    for (uint64_t n0 = 0; n0 < static_cast<uint64_t>(n);
+         n0 += gemv_window_cols) {
+      const uint64_t n1 =
+          std::min(n0 + gemv_window_cols, static_cast<uint64_t>(n));
+      const uint64_t w_first =
+          (static_cast<uint64_t>(params.rhs_offset) + n0 * gemv_row_words) *
+          w_d.itemsize();
+      const uint64_t w_last =
+          (static_cast<uint64_t>(params.rhs_offset) + n1 * gemv_row_words) *
+          w_d.itemsize();
+      const uint64_t s_first =
+          static_cast<uint64_t>(params.aux_offset) +
+          n0 * scale_cols * scales_d.itemsize();
+      const uint64_t s_last =
+          static_cast<uint64_t>(params.aux_offset) +
+          n1 * scale_cols * scales_d.itemsize();
+      const uint64_t b_first =
+          static_cast<uint64_t>(params.aux_size) +
+          n0 * scale_cols * biases_d.itemsize();
+      const uint64_t b_last =
+          static_cast<uint64_t>(params.aux_size) +
+          n1 * scale_cols * biases_d.itemsize();
+      const size_t out_itemsize = out.itemsize();
+      const uint64_t out_first =
+          (static_cast<uint64_t>(params.output_offset) + n0) * out_itemsize;
+      const uint64_t out_last =
+          (static_cast<uint64_t>(params.output_offset) + n1) * out_itemsize;
+      omarchy::ComputeParams wparams = params;
+      wparams.matrix_n = checked_u32(n1 - n0, tag, out);
+      wparams.rhs_offset = params.rhs_offset +
+          static_cast<uint32_t>(n0 * gemv_row_words) -
+          omarchy::window_item_correction(
+              w_first, gemv_alignment, w_d.itemsize());
+      wparams.aux_offset = params.aux_offset +
+          static_cast<uint32_t>(n0 * scale_cols) -
+          omarchy::window_item_correction(
+              s_first, gemv_alignment, scales_d.itemsize());
+      wparams.aux_size = params.aux_size +
+          static_cast<uint32_t>(n0 * scale_cols) -
+          omarchy::window_item_correction(
+              b_first, gemv_alignment, biases_d.itemsize());
+      wparams.output_offset = params.output_offset +
+          static_cast<uint32_t>(n0) -
+          omarchy::window_item_correction(
+              out_first, gemv_alignment, out_itemsize);
+      std::array<omarchy::ComputeBinding, 5> wbindings{
+          bindings[0],
+          omarchy::window_binding(
+              w_d, w_first, w_last, gemv_alignment),
+          omarchy::window_binding(
+              scales_d, s_first, s_last, gemv_alignment),
+          omarchy::window_binding(
+              biases_d, b_first, b_last, gemv_alignment),
+          omarchy::window_binding(
+              out, out_first, out_last, gemv_alignment)};
+      encoder.dispatch_compute(
+          vec_kernel,
+          wbindings,
+          wparams,
+          std::min(
+              (wparams.matrix_n + kGemvColumnsPerGroup - 1u) /
+                  kGemvColumnsPerGroup,
+              omarchy::kMaxComputeGroupCountX),
+          1u,
+          1u);
+    }
     return;
   }
   if (tile_path) {
@@ -9138,15 +9702,77 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
           params,
           omarchy::compute_dispatch_group_count(dispatch_count));
     };
-    if (chunks == 1) {
-      run_phase(0u | 2u, output_size);
-    } else {
-      run_phase(
-          0u,
-          checked_u32(
-              static_cast<uint64_t>(output_size) * chunks,
-              operation_name,
-              out));
+    // A > 2 GiB input splits by rows for the input-reading passes: the
+    // row-id base rides window_lo, scratch and out stay bound whole
+    // (their global row ids index them), and the chunk-combine pass
+    // runs once over all rows after the windows.
+    const auto& reduce_caps = encoder.device().capabilities();
+    const VkDeviceSize reduce_range_limit =
+        reduce_caps.max_storage_buffer_range;
+    const uint32_t reduce_alignment =
+        reduce_caps.min_storage_buffer_offset_alignment;
+    const uint64_t reduce_bytes =
+        static_cast<uint64_t>(input.size()) * input.itemsize();
+    const uint64_t reduce_row_bytes =
+        static_cast<uint64_t>(reduce_size) * input.itemsize();
+    uint64_t reduce_rows_per_window = 0;
+    if (reduce_bytes > reduce_range_limit &&
+        reduce_row_bytes <= reduce_range_limit) {
+      reduce_rows_per_window =
+          std::max<uint64_t>(reduce_range_limit / reduce_row_bytes, 1u);
+    }
+    if (reduce_rows_per_window == 0) {
+      if (chunks == 1) {
+        run_phase(0u | 2u, output_size);
+      } else {
+        run_phase(
+            0u,
+            checked_u32(
+                static_cast<uint64_t>(output_size) * chunks,
+                operation_name,
+                out));
+        run_phase(1u, output_size);
+      }
+      return;
+    }
+    const uint32_t reduce_lhs_base = params.lhs_offset;
+    for (uint64_t r0 = 0; r0 < output_size; r0 += reduce_rows_per_window) {
+      const uint64_t r1 = std::min(
+          r0 + reduce_rows_per_window, static_cast<uint64_t>(output_size));
+      const uint64_t in_first =
+          (static_cast<uint64_t>(reduce_lhs_base) + r0 * reduce_size) *
+          input.itemsize();
+      const uint64_t in_last =
+          (static_cast<uint64_t>(reduce_lhs_base) + r1 * reduce_size) *
+          input.itemsize();
+      omarchy::ComputeParams wparams = params;
+      wparams.output_size = checked_u32(r1, operation_name, out);
+      wparams.lhs_offset = reduce_lhs_base +
+          static_cast<uint32_t>(r0 * reduce_size) -
+          omarchy::window_item_correction(
+              in_first, reduce_alignment, input.itemsize());
+      wparams.window_lo = static_cast<uint32_t>(r0);
+      const omarchy::ComputeBinding in_window = omarchy::window_binding(
+          bound_input, in_first, in_last, reduce_alignment);
+      std::array<omarchy::ComputeBinding, 3> wbindings{
+          in_window, bindings[1], bindings[2]};
+      auto run_window_phase = [&](uint32_t flags, uint32_t dispatch_count) {
+        wparams.flags = flags;
+        encoder.dispatch_compute(
+            kernel,
+            wbindings,
+            wparams,
+            omarchy::compute_dispatch_group_count(dispatch_count));
+      };
+      if (chunks == 1) {
+        run_window_phase(0u | 2u, checked_u32(r1 - r0, operation_name, out));
+      } else {
+        run_window_phase(
+            0u,
+            checked_u32((r1 - r0) * chunks, operation_name, out));
+      }
+    }
+    if (chunks > 1) {
       run_phase(1u, output_size);
     }
     return;
