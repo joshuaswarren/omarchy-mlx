@@ -855,15 +855,19 @@ int main(int argc, char** argv) {
       sum_ulp += e;
       max_ulp = std::max(max_ulp, e);
     }
+    // FNV-1a over the stored bits: compares outputs across processes
+    // (driver A/B runs), where bits_vs_<first side> cannot.
+    uint64_t fnv = 0xcbf29ce484222325ull;
     for (size_t i = 0; i < out_elems; ++i) {
       if (s.result[i] != sides[0].result[i]) ++mismatch_first;
+      fnv = (fnv ^ s.result[i]) * 0x100000001b3ull;
     }
     std::printf("{\"k\":\"accuracy\",\"side\":\"%s\",\"exact_rounded\":%.5f,"
         "\"mean_ulp\":%.4f,\"max_ulp\":%.3f,\"nonfinite\":%zu,"
-        "\"bits_vs_%s\":%zu}\n",
+        "\"bits_vs_%s\":%zu,\"out_fnv\":\"%016llx\"}\n",
         s.name.c_str(), (double)exact / picks.size(),
         sum_ulp / picks.size(), max_ulp, nonfinite, sides[0].name.c_str(),
-        mismatch_first);
+        mismatch_first, (unsigned long long)fnv);
   }
 
   // Timing: one warm-up submission per side, then the sides interleaved
