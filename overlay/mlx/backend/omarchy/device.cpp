@@ -1213,6 +1213,10 @@ Device::RecoveryResult Device::recover_stalled_submissions(
     // wait drained_value_ >= counter, and the fresh value's drain is what
     // lets drained_value_ catch up past the original completion.
     completions.enqueue(fresh, {}, {});
+    // The batch provably executed (recovery rung 2 exists because the GPU
+    // finished it without signalling): record execution without a fence so
+    // buffer recycling is not stalled by an unsignalled lost fence.
+    completions.mark_execution_complete_through(fresh);
     return RecoveryResult::kRecovered;
   }
 
@@ -1256,6 +1260,7 @@ Device::RecoveryResult Device::recover_stalled_submissions(
     uint64_t fresh_completion = completions.reserve();
     batch.value = fresh_completion;
     batch.signal_values.back() = fresh_completion;
+    VkFence resubmit_fence = completions.acquire_execution_fence();
 
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     VkTimelineSemaphoreSubmitInfo timeline{
@@ -1269,15 +1274,15 @@ Device::RecoveryResult Device::recover_stalled_submissions(
         static_cast<uint32_t>(batch.signal_values.size());
     timeline.pSignalSemaphoreValues = batch.signal_values.data();
     si.pNext = &timeline;
-    si.waitSemaphoreCount = static_cast<uint32_t>(batch.wait_sems.size());
-    si.pWaitSemaphores = batch.wait_sems.data();
+    si.waitSemaphoreCount = batch.wait_sems.size();
+    si.waitSemaphores = batch.wait_sems.data();
     si.pWaitDstStageMask = wait_stages.data();
     si.commandBufferCount = batch.cmd != VK_NULL_HANDLE ? 1u : 0u;
     si.pCommandBuffers = batch.cmd != VK_NULL_HANDLE ? &batch.cmd : nullptr;
-    si.signalSemaphoreCount =
-        static_cast<uint32_t>(batch.signal_sems.size());
+    si.signalSemaphoreCount = batch.signal_sems.size();
     si.pSignalSemaphores = batch.signal_sems.data();
-    VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, VK_NULL_HANDLE));
+    VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, resubmit_fence));
+    completions.attach_execution_fence(fresh_completion, resubmit_fence);
     // The batch is pending again at its fresh value; retain it for a
     // further round.
     completions.retain_for_resubmit(fresh_completion, std::move(batch));
@@ -1724,6 +1729,65 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
 uint64_t CompletionDispatcher::drained_value() {
   std::lock_guard<std::mutex> lk(mutex_);
   return drained_value_;
+}
+
+VkFence CompletionDispatcher::acquire_execution_fence() {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  if (!fence_pool_.empty()) {
+    VkFence fence = fence_pool_.back();
+    fence_pool_.pop_back();
+    VKX_CHECK(vk::device_table().ResetFences(device_, 1, &fence));
+    return fence;
+  }
+  VkFence fence = VK_NULL_HANDLE;
+  VkFenceCreateInfo ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VKX_CHECK(
+      vk::device_table().CreateFence(device_, &ci, nullptr, &fence));
+  return fence;
+}
+
+void CompletionDispatcher::attach_execution_fence(uint64_t value, VkFence fence) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  execution_fences_.push_back({value, fence, false});
+}
+
+void CompletionDispatcher::mark_execution_complete_through(uint64_t value) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  // Drop (pool) any queued fences at or below |value|: their batches ran.
+  while (!execution_fences_.empty() &&
+         execution_fences_.front().value <= value) {
+    fence_pool_.push_back(execution_fences_.front().fence);
+    execution_fences_.pop_front();
+  }
+  execution_done_through_ = std::max(execution_done_through_, value);
+}
+
+bool CompletionDispatcher::execution_complete(uint64_t value) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  if (value <= execution_done_through_) {
+    return true;
+  }
+  // Queue order is submit order, so fences signal front to back: pop every
+  // proven-done entry (returning its fence to the pool) until the first
+  // unfinished one. |value| is safe only when nothing <= |value| remains.
+  while (!execution_fences_.empty() &&
+         execution_fences_.front().value <= value) {
+    auto& front = execution_fences_.front();
+    if (front.done) {
+      fence_pool_.push_back(front.fence);
+      execution_fences_.pop_front();
+      continue;
+    }
+    if (vk::device_table().GetFenceStatus(device_, front.fence) ==
+        VK_SUCCESS) {
+      fence_pool_.push_back(front.fence);
+      execution_fences_.pop_front();
+      continue;
+    }
+    return false;
+  }
+  execution_done_through_ = std::max(execution_done_through_, value);
+  return true;
 }
 
 void CompletionDispatcher::run() {

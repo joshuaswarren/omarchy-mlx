@@ -307,8 +307,11 @@ void VulkanAllocator::free(Buffer buffer) {
   // until the next submission.
   if (buf->completion != 0) {
     if (buf->completion == kPendingCompletion || !runtime_alive() ||
-        buf->completion + 1 + reuse_lag() >
-            device().completions().drained_value()) {
+        !device().completions().execution_complete(
+            buf->completion + reuse_lag())) {
+      // The submission fence has not signalled yet: the block's memory is
+      // still owned by the in-flight batch. Non-stalling query; the block
+      // waits in the quarantine and release_quarantine re-checks per drain.
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
       }
@@ -344,9 +347,11 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
     return;
   }
   std::vector<VulkanBuffer*> still_quarantined;
+  (void)cleanup_done_through;
   for (auto* buf : quarantine_) {
     if (buf->completion == kPendingCompletion ||
-        buf->completion + reuse_lag() > cleanup_done_through) {
+        !device().completions().execution_complete(
+            buf->completion + reuse_lag())) {
       still_quarantined.push_back(buf);
       continue;
     }

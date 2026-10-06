@@ -2474,3 +2474,61 @@ TEST_CASE("dependency-gated barriers keep hazard chains correct") {
   alloc.free(wr_src);
   alloc.free(wr_dst);
 }
+
+TEST_CASE("recycled block is not rewritten by the previous owner in flight") {
+  // The one-generation quarantine release assumed Mesa's submit-final
+  // cleanup for completion V has run once V+1 is observed on the completion
+  // timeline. Honeykrisp signals before that cleanup, so a block freed
+  // while its submission was in flight could be handed to a new owner whose
+  // writes then raced the old owner's still-draining writes (H3 int8 DiT
+  // row-corruption NaNs, 2026-10-06). Recycle decisions now gate on the
+  // submission's execution fence; this test fails-before/passes-after.
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s1 = new_stream(Device::gpu);
+  Stream s2 = new_stream(Device::gpu);
+  auto& e1 = omarchy::get_command_encoder(s1);
+  auto& e2 = omarchy::get_command_encoder(s2);
+  constexpr size_t kBytes = 1 << 26;  // 256 MiB: the producer must stay in
+                                      // flight across the malloc below.
+  constexpr uint32_t kP1 = 0x11111111u;
+  constexpr uint32_t kP2 = 0x22222222u;
+  auto a = alloc.malloc(kBytes);
+  auto* a_buf = static_cast<omarchy::VulkanBuffer*>(a.ptr());
+  array a_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
+  a_view.set_data(
+      a, a_view.size(), a_view.strides(), a_view.flags(), 0,
+      [](allocator::Buffer) {});
+
+  // Slow producer on stream 1: whole-block fills keep the submission in
+  // flight far longer than the host needs to free and reallocate.
+  for (int i = 0; i < 96; ++i) {
+    e1.fill_buffer(a_buf->buffer, kP1, kBytes);
+  }
+  e1.commit();
+  alloc.free(a);  // stamped in flight; must not recycle until the fence
+
+  // Stream 2 submits immediately; its completion boundary drains through
+  // the producer's generation and (pre-fix) releases the block mid-flight.
+  auto b = alloc.malloc(kBytes);
+  CHECK(b.ptr() != a.ptr());
+  auto* b_buf = static_cast<omarchy::VulkanBuffer*>(b.ptr());
+  array b_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
+  b_view.set_data(
+      b, b_view.size(), b_view.strides(), b_view.flags(), 0,
+      [](allocator::Buffer) {});
+  e2.fill_buffer(b_buf->buffer, kP2, kBytes);
+  e2.commit();
+  e2.synchronize();
+  e1.synchronize();
+
+  const auto* words = static_cast<const uint32_t*>(b_buf->data);
+  CHECK(std::all_of(words, words + kBytes / sizeof(uint32_t),
+                    [](uint32_t word) { return word == kP2; }));
+  alloc.free(b);
+}

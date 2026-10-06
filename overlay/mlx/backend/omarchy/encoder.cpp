@@ -1231,7 +1231,8 @@ void CommandEncoder::submit() {
       bool simulate_drop = env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SUBMIT");
       bool simulate_strip =
           !simulate_drop && env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SIGNAL");
-      if (simulate_strip) {
+    VkFence submit_fence = device_.completions().acquire_execution_fence();
+    if (simulate_strip) {
         si.signalSemaphoreCount = 0;
         si.pSignalSemaphores = nullptr;
         timeline.signalSemaphoreValueCount = 0;
@@ -1239,13 +1240,14 @@ void CommandEncoder::submit() {
       }
       if (simulate_drop) {
         fprintf(stderr, "[rtmod] TEST-DROP tid=%lu cv=%lu\n",
-                (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
+                (unsigned long)syscall(SYS_gettid), (unsigned long long)completion_value);
       } else if (simulate_strip) {
         fprintf(stderr, "[rtmod] TEST-STRIP tid=%lu cv=%lu\n",
-                (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
+                (unsigned long)syscall(SYS_gettid), (unsigned long long)completion_value);
       } else {
-        VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, VK_NULL_HANDLE));
+        VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, submit_fence));
       }
+      device_.completions().attach_execution_fence(completion_value, submit_fence);
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {
       // The submission never reached the driver: the ended command buffer

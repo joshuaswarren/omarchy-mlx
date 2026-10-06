@@ -233,6 +233,23 @@ class CompletionDispatcher {
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
 
+  // Attach the submission fence for |value|. The fence signals when the
+  // driver has fully finished executing the batch - unlike the completion
+  // timeline semaphore, which Mesa signals before its submit-final cleanup,
+  // so its observation does not prove the batch's memory writes are done
+  // and safe to overwrite.
+  void attach_execution_fence(uint64_t value, VkFence fence);
+  // Non-stalling: true when every submission <= |value| has provably
+  // finished executing (all attached fences signalled). This is the sound
+  // "safe to recycle the block's memory" test; the timeline observation is
+  // not (Mesa pre-cleanup signal, falsified by the H3 b21/b38 NaN class).
+  bool execution_complete(uint64_t value);
+  VkFence acquire_execution_fence();
+  // Recovery path: the work provably ran but its submission fence is gone
+  // (host-signalled completion after an executed-but-unsignaled batch).
+  // Everything through |value| is finished; record it without a fence.
+  void mark_execution_complete_through(uint64_t value);
+
  private:
   void run();
   void drain_through(uint64_t max_value);
@@ -256,6 +273,18 @@ class CompletionDispatcher {
   std::condition_variable cv_;
   std::thread thread_;
   bool stop_{false};
+  // Submission execution fences, in value order. The timeline semaphore is
+  // signalled by Mesa before submit-final cleanup, so recycle decisions use
+  // these instead: a fence signals only when the batch truly finished.
+  struct ExecutionFence {
+    uint64_t value;
+    VkFence fence;
+    bool done;
+  };
+  std::deque<ExecutionFence> execution_fences_;
+  std::vector<VkFence> execution_fence_pool_;
+  uint64_t execution_done_through_{0};
+  std::mutex execution_mutex_;
 };
 
 // A live Vulkan device. Created lazily per supported physical device index.
