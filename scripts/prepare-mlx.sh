@@ -117,6 +117,13 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-aligned-array-pointer.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-vmap-scatter-axis.patch"
+# CPU quantized matmul: accumulate the scalar (non-SIMD) full-row and
+# k-outer kernels in float32 instead of the activation dtype. A bfloat16
+# accumulator drifts several percent from the f64 dequant reference at
+# K=16384 while each group dot stays correct; the SIMD variants already
+# accumulate Simd<float, S>.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-cpu-qmm-fp32-accum.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
