@@ -1,0 +1,45 @@
+[rtmod] DISPATCH kernel=521 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82983e60 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=1 waits=0 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82983e60 val=1 cnt=0 resv=1
+[rtmod] DISPATCH kernel=522 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82885a30 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=2 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82885a30 val=1 cnt=0 resv=2
+[rtmod] DISPATCH kernel=523 count=262144 gx=16 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82983e60 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=3 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82983e60 val=1 cnt=0 resv=3
+[rtmod] DISPATCH kernel=524 count=19200 gx=4 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82885a30 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=4 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82885a30 val=1 cnt=0 resv=4
+[rtmod] DISPATCH kernel=522 count=312000 gx=4 gy=3 gz=12
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82983e60 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=5 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82983e60 val=1 cnt=0 resv=5
+[rtmod] DISPATCH kernel=521 count=194000 gx=16 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82885a30 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=6 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82885a30 val=1 cnt=0 resv=6
+[rtmod] DISPATCH kernel=521 count=4096 gx=1 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=26575 ev=0xaaab82983e60 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=26575
+[rtmod] SUBMIT tid=26575 cv=7 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=26575 ev=0xaaab82983e60 val=1 cnt=0 resv=7
+{"no_coopmat": "", "mlx": "0.32.4.dev202610062138+4aaa210e", "cases": {"nn_4096": {"sha": "8450ba778b2c4ec0", "exact_rounded": 0.99508, "mean_abs_err": 0.00899480855786657, "max_abs_err": 0.1253112147533102}, "nt_512x4096x4096": {"sha": "6ba6ad35dfa559e5", "exact_rounded": 0.99508, "mean_abs_err": 0.008985169247200386, "max_abs_err": 0.12489919020663365}, "tn_256x1024x512": {"sha": "65a010489e34ed74", "exact_rounded": 0.99802, "mean_abs_err": 0.0031708316494830817, "max_abs_err": 0.03125393204391003}, "tt_96x200x64": {"sha": "0b53146dcdede8cf", "exact_rounded": 0.99927, "mean_abs_err": 0.0010989920011380623, "max_abs_err": 0.009313568472862244}, "batched_nt": {"sha": "d40aca7d43dd5f06", "exact_rounded": 0.99934, "mean_abs_err": 0.001192334420909532, "max_abs_err": 0.015340156853199005}, "bcast_nn_odd_m": {"sha": "73a1cb9ee4f2a267", "exact_rounded": 0.99801, "mean_abs_err": 0.003215265250882301, "max_abs_err": 0.031243551522493362}, "slice_offset": {"sha": "7d3d80672200740d", "exact_rounded": 0.99878, "mean_abs_err": 0.001092332443029198, "max_abs_err": 0.008576210588216782}}}
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=26575 reason=explicit last=7

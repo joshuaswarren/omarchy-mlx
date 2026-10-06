@@ -735,6 +735,14 @@ int main(int argc, char** argv) {
   uint16_t* bh = (uint16_t*)b_buf.mapped;
   for (size_t i = 0; i < a_elems; ++i) ah[i] = round_store(dt, nd(rng));
   for (size_t i = 0; i < b_elems; ++i) bh[i] = round_store(dt, nd(rng));
+  // The same operands widened exactly to f32, bound for sides whose
+  // defines carry -DOPERAND_F32 (kernels that read pre-widened inputs).
+  Buf a32_buf = make_buf(g_vk.dev, c.mp, a_elems * 4);
+  Buf b32_buf = make_buf(g_vk.dev, c.mp, b_elems * 4);
+  for (size_t i = 0; i < a_elems; ++i)
+    ((float*)a32_buf.mapped)[i] = (float)to_f64(dt, ah[i]);
+  for (size_t i = 0; i < b_elems; ++i)
+    ((float*)b32_buf.mapped)[i] = (float)to_f64(dt, bh[i]);
 
   Params p{};
   p.count = m * n;
@@ -787,7 +795,9 @@ int main(int argc, char** argv) {
   for (auto& s : sides) {
     s.out = make_buf(g_vk.dev, c.mp, out_elems * 2);
     std::memset(s.out.mapped, 0xff, out_elems * 2);
-    s.set = make_set(c, dpool, s.side.dsl, SetBufs{a_buf, b_buf, c_buf, s.out});
+    bool wide = s.defines.find("-DOPERAND_F32") != std::string::npos;
+    s.set = make_set(c, dpool, s.side.dsl,
+        SetBufs{wide ? a32_buf : a_buf, wide ? b32_buf : b_buf, c_buf, s.out});
     begin();
     record(s, 1);
     g_vk.EndCommandBuffer(cmd);

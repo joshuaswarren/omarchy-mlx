@@ -1,0 +1,12 @@
+# 2026-10-06T20:43:04Z tag=h1-f16-nt boot=abc36fa1-7db1-4088-96ed-4523f5ad087e load=0.08 0.25 0.35 icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+# cmd: ./gemm-bench --dtype f16 --side rb=sh/matmul_rb.comp:64:64:1 --side c64=sh/matmul_coopmat64.comp:64:64:1
+probing Apple M1 (G13G B1) api=1.4
+sh/matmul_rb.comp
+sh/matmul_coopmat64.comp
+{"k":"dev","name":"Apple M1 (G13G B1)","subgroupSize":32,"coopmat":true}
+{"k":"problem","dtype":"f16","m":4096,"n":4096,"kdim":4096,"a_t":0,"b_t":1,"samples":4096}
+{"k":"accuracy","side":"rb","exact_rounded":0.99463,"mean_ulp":0.2519,"max_ulp":3.422,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"c64","exact_rounded":0.99463,"mean_ulp":0.2519,"max_ulp":3.422,"nonfinite":0,"bits_vs_rb":0}
+{"k":"time","side":"rb","median_us":227345.3,"min_us":227321.4,"max_us":227584.0,"tflops":0.605,"tflops_best":0.605}
+{"k":"time","side":"c64","median_us":154010.7,"min_us":153968.0,"max_us":154289.7,"tflops":0.892,"tflops_best":0.893}
+# end 2026-10-06T20:43:26Z rc=0
