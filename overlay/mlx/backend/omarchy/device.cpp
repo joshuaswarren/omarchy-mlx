@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/cpu_pd_hold.h"
 
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/honeykrisp_identity.h"
@@ -1082,6 +1083,7 @@ Device::Device(uint32_t physical_device_index) {
 }
 
 Device::~Device() {
+  cpu_pd_hold_device_destroyed(*this);
   if (device_ != VK_NULL_HANDLE) {
     auto& dt = vk::device_table();
     // Order is load-bearing: the queue finishes every submission first

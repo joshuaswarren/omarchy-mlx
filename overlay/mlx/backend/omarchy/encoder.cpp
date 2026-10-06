@@ -10,6 +10,7 @@
 #include <sys/syscall.h>
 
 #include "mlx/backend/omarchy/allocator.h"
+#include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/gpu_profiler.h"
@@ -1172,6 +1173,9 @@ void CommandEncoder::submit() {
     // explicit flush before submission.
     omarchy::allocator().flush_noncoherent(device_.handle());
     uint64_t completion_value = device_.completions().reserve();
+    // GPU work is now in flight: keep the CPU complex out of the deep idle
+    // state while it runs (T8103 GPU performance state; cpu_pd_hold.h).
+    cpu_pd_hold_note_submit(device_, completion_value);
     // Stamp every buffer referenced by this batch with the completion
     // value just reserved. Free-before-drain sends such buffers to the
     // allocator quarantine; release_quarantine recycles them one

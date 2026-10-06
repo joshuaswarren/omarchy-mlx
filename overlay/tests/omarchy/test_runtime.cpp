@@ -47,6 +47,7 @@
 #include "mlx/backend/gpu/copy.h"
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/allocator.h"
+#include "mlx/backend/omarchy/cpu_pd_hold.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -2473,4 +2474,20 @@ TEST_CASE("dependency-gated barriers keep hazard chains correct") {
   alloc.free(dsp_dst);
   alloc.free(wr_src);
   alloc.free(wr_dst);
+}
+
+TEST_CASE("CPU PD hold: default on for G13 parts other than G13C, env overrides") {
+  using mlx::core::omarchy::cpu_pd_hold_enabled_for;
+  // jwm1 / M1 (T8103): the measured part.
+  CHECK(cpu_pd_hold_enabled_for(nullptr, "Apple M1 (G13G B1)"));
+  CHECK(cpu_pd_hold_enabled_for("", "Apple M1 (G13G B1)"));
+  // M1 Max (jw16) showed no effect: off by default.
+  CHECK_FALSE(cpu_pd_hold_enabled_for(nullptr, "Apple M1 Max (G13C C0)"));
+  // Other generations stay on the previous behavior.
+  CHECK_FALSE(cpu_pd_hold_enabled_for(nullptr, "Apple M2 (G14G B1)"));
+  CHECK_FALSE(cpu_pd_hold_enabled_for(nullptr, "Apple M2 Max (G14C C0)"));
+  // Off switch and force-on.
+  CHECK_FALSE(cpu_pd_hold_enabled_for("0", "Apple M1 (G13G B1)"));
+  CHECK(cpu_pd_hold_enabled_for("1", "Apple M1 Max (G13C C0)"));
+  CHECK(cpu_pd_hold_enabled_for("on", "Apple M2 (G14G B1)"));
 }

@@ -733,6 +733,7 @@ target_sources(
           ${CMAKE_CURRENT_SOURCE_DIR}/event.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/fence.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/copy.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/cpu_pd_hold.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/primitives.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/slicing.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/fused_chain.cpp
