@@ -3265,6 +3265,25 @@ void dispatch_gather_qmm(
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x_d), binding(packed), binding(w_d), binding(out)};
   omarchy::ComputeKernel kernel;
+  // Subgroup path (affine, decode shape): one workgroup per output
+  // element with the K loop split across lanes. The scalar kernel's
+  // one-thread-per-output mapping launches only 33-48 workgroups at
+  // m == 1 and runs latency-bound serial K loops (measured 4.2 ms per
+  // dispatch on the M2: 80% of a DeepSeek MoE decode step). Requires
+  // subgroup arithmetic and an unclamped one-workgroup-per-output
+  // dispatch, so it is gated to m == 1 and kMaxComputeGroupCountX.
+  bool use_sub = false;
+  if (!fp_mode && params.matrix_m == 1 &&
+      params.count <= omarchy::kMaxComputeGroupCountX) {
+    // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel.
+    const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    const auto& sub_caps = encoder.device().capabilities();
+    use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
+        sub_caps.subgroup_size == 32u &&
+        (sub_caps.subgroup_operations &
+         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+        (out.dtype() == float32 || sub_caps.storage_buffer_16bit_access);
+  }
   if (fp_mode) {
     if (out.dtype() == float32) {
       kernel = omarchy::ComputeKernel::GatherQmmNbFpF32;
@@ -3274,20 +3293,30 @@ void dispatch_gather_qmm(
       kernel = omarchy::ComputeKernel::GatherQmmNbFpBF16;
     }
   } else if (out.dtype() == float32) {
-    kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbF32
-                     : omarchy::ComputeKernel::GatherQmmF32;
+    kernel = no_bias
+        ? (use_sub ? omarchy::ComputeKernel::GatherQmmNbSubF32
+                   : omarchy::ComputeKernel::GatherQmmNbF32)
+        : (use_sub ? omarchy::ComputeKernel::GatherQmmSubF32
+                   : omarchy::ComputeKernel::GatherQmmF32);
   } else if (out.dtype() == float16) {
-    kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbF16
-                     : omarchy::ComputeKernel::GatherQmmF16;
+    kernel = no_bias
+        ? (use_sub ? omarchy::ComputeKernel::GatherQmmNbSubF16
+                   : omarchy::ComputeKernel::GatherQmmNbF16)
+        : (use_sub ? omarchy::ComputeKernel::GatherQmmSubF16
+                   : omarchy::ComputeKernel::GatherQmmF16);
   } else {
-    kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbBF16
-                     : omarchy::ComputeKernel::GatherQmmBF16;
+    kernel = no_bias
+        ? (use_sub ? omarchy::ComputeKernel::GatherQmmNbSubBF16
+                   : omarchy::ComputeKernel::GatherQmmNbBF16)
+        : (use_sub ? omarchy::ComputeKernel::GatherQmmSubBF16
+                   : omarchy::ComputeKernel::GatherQmmBF16);
   }
   encoder.dispatch_compute(
       kernel,
       bindings,
       params,
-      omarchy::compute_dispatch_group_count(params.count));
+      use_sub ? params.count
+              : omarchy::compute_dispatch_group_count(params.count));
 }
 
 // Complex64Transport. Keep in lockstep with the switch in
