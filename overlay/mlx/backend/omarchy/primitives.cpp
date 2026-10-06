@@ -3234,6 +3234,66 @@ void dispatch_gather_qmm(
   // no-bias variants. The bound global scale routes to the HGS
   // variants, whose fifth binding carries the float32 word.
   bool no_bias = !biases.has_value();
+  // Separated-parameter affine variants bind scales/biases/indices
+  // directly: no packed staging buffer, no fill/copy commands, no
+  // per-call staging allocation. The kernel reads identical bytes at
+  // identical arithmetic, so outputs are bit-exact with the packed
+  // path. MLX_OMARCHY_GATHER_QMM_SEP=0 forces the packed path.
+  const char* sep_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SEP");
+  bool sep_enabled = sep_env == nullptr || sep_env[0] != '0';
+  if (!fp_mode && sep_enabled &&
+      encoder.device().compute().binding_limit() >= (no_bias ? 6u : 7u) &&
+      scales_d.offset() % 4 == 0 &&
+      (!biases_d || biases_d->offset() % 4 == 0) &&
+      lhs_d.offset() % 4 == 0 && rhs_d.offset() % 4 == 0) {
+    params.aux_offset = checked_u32(scales_d.offset() / 4, tag, out);
+    params.shape[1] = 0;
+    params.shape[2] = biases_d
+        ? checked_u32(biases_d->offset() / 4, tag, out)
+        : 0;
+    params.in_strides[1] = checked_u32(lhs_d.offset() / 4, tag, out);
+    params.out_strides[1] = checked_u32(rhs_d.offset() / 4, tag, out);
+    omarchy::ComputeKernel kernel;
+    if (out.dtype() == float32) {
+      kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbSepF32
+                       : omarchy::ComputeKernel::GatherQmmSepF32;
+    } else if (out.dtype() == float16) {
+      kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbSepF16
+                       : omarchy::ComputeKernel::GatherQmmSepF16;
+    } else {
+      kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbSepBF16
+                       : omarchy::ComputeKernel::GatherQmmSepBF16;
+    }
+    if (no_bias) {
+      std::array<omarchy::ComputeBinding, 6> sep_bindings{
+          binding(x_d),
+          binding(w_d),
+          binding(out),
+          binding(scales_d),
+          binding(lhs_d),
+          binding(rhs_d)};
+      encoder.dispatch_compute(
+          kernel,
+          sep_bindings,
+          params,
+          omarchy::compute_dispatch_group_count(params.count));
+    } else {
+      std::array<omarchy::ComputeBinding, 7> sep_bindings{
+          binding(x_d),
+          binding(w_d),
+          binding(out),
+          binding(scales_d),
+          binding(*biases_d),
+          binding(lhs_d),
+          binding(rhs_d)};
+      encoder.dispatch_compute(
+          kernel,
+          sep_bindings,
+          params,
+          omarchy::compute_dispatch_group_count(params.count));
+    }
+    return;
+  }
   if (fp_mode && out_global_scale) {
     std::array<omarchy::ComputeBinding, 5> hgs_bindings{
         binding(x_d),

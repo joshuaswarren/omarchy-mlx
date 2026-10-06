@@ -298,6 +298,14 @@ enum class ComputeKernel : uint16_t {
   GatherQmmNbF32,
   GatherQmmNbF16,
   GatherQmmNbBF16,
+  // Affine variants binding scales/biases/index buffers directly: no
+  // packed staging buffer, no fill/copy commands. Req "no_bias".
+  GatherQmmSepF32,
+  GatherQmmSepF16,
+  GatherQmmSepBF16,
+  GatherQmmNbSepF32,
+  GatherQmmNbSepF16,
+  GatherQmmNbSepBF16,
   // Wave 8: FFT. FftF32 is the radix-2 Cooley-Tukey pass (complex64 pairs
   // in shared memory); FftRealF32 strips the real part of a complex64
   // buffer into float32 for the irfft tail; FftStageF32 runs the
