@@ -291,6 +291,7 @@ void VulkanAllocator::free(Buffer buffer) {
   // until the next submission.
   if (buf->completion != 0) {
     if (buf->completion == kPendingCompletion || !runtime_alive() ||
+        buf->completion > device().completions().drained_value() ||
         !device().completions().execution_complete(buf->completion)) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
@@ -316,18 +317,23 @@ void VulkanAllocator::free(Buffer buffer) {
   destroy_buffer(buf);
 }
 
-void VulkanAllocator::release_quarantine() {
+void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   // Callable from any thread: the allocator mutex serializes passes, and
-  // each entry's own execution fence decides recyclability. A fence that
-  // signals after this pass is picked up by a later one - the dispatcher
-  // keeps ticking release passes while execution fences are outstanding.
+  // each entry's own stamps decide recyclability. A block recycles only
+  // when its completion generation is strictly behind |cleanup_done_
+  // through| (the design's one-generation rule: observing generation N
+  // does not prove the driver's submit-final cleanup for N has run) and
+  // its execution fence has signalled. A fence that signals after this
+  // pass is picked up by a later one - the dispatcher keeps ticking
+  // release passes while fences are outstanding or blocks are parked.
   std::unique_lock lk(mutex_);
   if (quarantine_.empty()) {
     return;
   }
   std::vector<VulkanBuffer*> still_quarantined;
   for (auto* buf : quarantine_) {
-    if (buf->completion == kPendingCompletion ||
+    if (buf->completion > cleanup_done_through ||
+        buf->completion == kPendingCompletion ||
         !device().completions().execution_complete(buf->completion)) {
       still_quarantined.push_back(buf);
       continue;
@@ -346,6 +352,11 @@ void VulkanAllocator::release_quarantine() {
     }
   }
   quarantine_ = std::move(still_quarantined);
+}
+
+bool VulkanAllocator::has_quarantined() const {
+  std::unique_lock lk(mutex_);
+  return !quarantine_.empty();
 }
 
 void VulkanAllocator::stamp_batch(
