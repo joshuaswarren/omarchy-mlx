@@ -2365,9 +2365,7 @@ void dispatch_softmax(
         src.itemsize();
     omarchy::ComputeParams wparams = params;
     wparams.output_size = checked_u32(r1, "LogSumExp", out);
-    wparams.lhs_offset = softmax_lhs_base +
-        static_cast<uint32_t>(r0 * row_length) -
-        omarchy::window_item_correction(
+    wparams.lhs_offset = omarchy::window_item_correction(
             in_first, softmax_alignment, src.itemsize());
     wparams.window_lo = static_cast<uint32_t>(r0);
     const omarchy::ComputeBinding in_window = omarchy::window_binding(
@@ -6344,9 +6342,7 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
         (static_cast<uint64_t>(take_lhs_base) +
          r1 * params.matrix_m) * table_d.itemsize();
     omarchy::ComputeParams wparams = params;
-    wparams.lhs_offset = take_lhs_base +
-        static_cast<uint32_t>(r0 * params.matrix_m) -
-        omarchy::window_item_correction(
+    wparams.lhs_offset = omarchy::window_item_correction(
             t_first, take_alignment, table_d.itemsize());
     wparams.window_lo = static_cast<uint32_t>(r0);
     wparams.window_hi = static_cast<uint32_t>(r1);
@@ -7161,9 +7157,7 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
         src.itemsize();
     omarchy::ComputeParams wparams = params;
     wparams.output_size = checked_u32(r1, "LogSumExp", out);
-    wparams.lhs_offset = lse_lhs_base +
-        static_cast<uint32_t>(r0 * row_length) -
-        omarchy::window_item_correction(
+    wparams.lhs_offset = omarchy::window_item_correction(
             in_first, lse_alignment, src.itemsize());
     wparams.window_lo = static_cast<uint32_t>(r0);
     const omarchy::ComputeBinding lse_window = omarchy::window_binding(
@@ -7653,16 +7647,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               out_itemsize;
           omarchy::ComputeParams wparams = params;
           wparams.matrix_n = checked_u32(n1 - n0, tag, out);
-          wparams.rhs_offset = params.rhs_offset +
-              static_cast<uint32_t>(n0 * w_d.shape(-1)) -
-              omarchy::window_item_correction(
+          wparams.rhs_offset = omarchy::window_item_correction(
                   w_first, fp_alignment, w_d.itemsize());
-          wparams.aux_offset = params.aux_offset +
-              static_cast<uint32_t>(n0 * scale_row_bytes) -
-              omarchy::window_item_correction(s_first, fp_alignment, 1);
-          wparams.output_offset = params.output_offset +
-              static_cast<uint32_t>(n0) -
-              omarchy::window_item_correction(
+          wparams.aux_offset = omarchy::window_item_correction(s_first, fp_alignment, 1);
+          wparams.output_offset = omarchy::window_item_correction(
                   out_first, fp_alignment, out_itemsize);
           std::array<omarchy::ComputeBinding, 4> wbindings{
               bindings[0],
@@ -8050,21 +8038,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (static_cast<uint64_t>(params.output_offset) + n1) * out_itemsize;
       omarchy::ComputeParams wparams = params;
       wparams.matrix_n = checked_u32(n1 - n0, tag, out);
-      wparams.rhs_offset = params.rhs_offset +
-          static_cast<uint32_t>(n0 * gemv_row_words) -
-          omarchy::window_item_correction(
+      wparams.rhs_offset = omarchy::window_item_correction(
               w_first, gemv_alignment, w_d.itemsize());
-      wparams.aux_offset = params.aux_offset +
-          static_cast<uint32_t>(n0 * scale_cols) -
-          omarchy::window_item_correction(
+      wparams.aux_offset = omarchy::window_item_correction(
               s_first, gemv_alignment, scales_d.itemsize());
-      wparams.aux_size = params.aux_size +
-          static_cast<uint32_t>(n0 * scale_cols) -
-          omarchy::window_item_correction(
+      wparams.aux_size = omarchy::window_item_correction(
               b_first, gemv_alignment, biases_d.itemsize());
-      wparams.output_offset = params.output_offset +
-          static_cast<uint32_t>(n0) -
-          omarchy::window_item_correction(
+      wparams.output_offset = omarchy::window_item_correction(
               out_first, gemv_alignment, out_itemsize);
       std::array<omarchy::ComputeBinding, 5> wbindings{
           bindings[0],
@@ -9756,9 +9736,7 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
           input.itemsize();
       omarchy::ComputeParams wparams = params;
       wparams.output_size = checked_u32(r1, operation_name, out);
-      wparams.lhs_offset = reduce_lhs_base +
-          static_cast<uint32_t>(r0 * reduce_size) -
-          omarchy::window_item_correction(
+      wparams.lhs_offset = omarchy::window_item_correction(
               in_first, reduce_alignment, input.itemsize());
       wparams.window_lo = static_cast<uint32_t>(r0);
       const omarchy::ComputeBinding in_window = omarchy::window_binding(

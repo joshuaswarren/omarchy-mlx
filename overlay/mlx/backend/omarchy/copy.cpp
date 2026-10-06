@@ -778,11 +778,9 @@ void copy_gpu_inplace(
               (static_cast<uint64_t>(out_base) + c0) * out.itemsize();
           const uint64_t dst_last =
               (static_cast<uint64_t>(out_base) + c1) * out.itemsize();
-          wparams.lhs_offset = in_base + static_cast<uint32_t>(c0) -
-              omarchy::window_item_correction(
+          wparams.lhs_offset = omarchy::window_item_correction(
                   in_first, copy_alignment, in.itemsize());
-          wparams.output_offset = out_base + static_cast<uint32_t>(c0) -
-              omarchy::window_item_correction(
+          wparams.output_offset = omarchy::window_item_correction(
                   dst_first, copy_alignment, out.itemsize());
           const omarchy::ComputeBinding in_window = omarchy::window_binding(
               in, in_first, in_last, copy_alignment);
