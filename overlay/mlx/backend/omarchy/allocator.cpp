@@ -147,6 +147,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
     if (void* cached = buffer_cache_.reuse_from_cache(size)) {
       auto* buf = static_cast<VulkanBuffer*>(cached);
       buf->recycled = true;
+      live_by_handle_[buf->buffer] = buf;
       active_memory_ += buf->size;
       peak_memory_ = std::max(active_memory_, peak_memory_);
       lk.unlock();
@@ -245,6 +246,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
       device().handle(), buf->memory, 0, VK_WHOLE_SIZE, 0, &buf->data));
 
   lk.lock();
+  live_by_handle_[buf->buffer] = buf;
   active_memory_ += buf->size;
   peak_memory_ = std::max(active_memory_, peak_memory_);
   if (!buf->coherent) {
@@ -260,6 +262,7 @@ void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
   // memory dies; later flush/invalidate must never see it.
   std::erase(noncoherent_, buf);
   auto& dt = vk::device_table();
+  live_by_handle_.erase(buf->buffer);
   if (buf->memory != VK_NULL_HANDLE) {
     dt.UnmapMemory(device().handle(), buf->memory);
     dt.FreeMemory(device().handle(), buf->memory, nullptr);
@@ -288,7 +291,7 @@ void VulkanAllocator::free(Buffer buffer) {
   // until the next submission.
   if (buf->completion != 0) {
     if (buf->completion == kPendingCompletion || !runtime_alive() ||
-        buf->completion + 1 > device().completions().drained_value()) {
+        !device().completions().execution_complete(buf->completion)) {
       if (buf->completion == kPendingCompletion) {
         pending_quarantine_bytes_ += sz;
       }
@@ -326,7 +329,7 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   std::vector<VulkanBuffer*> still_quarantined;
   for (auto* buf : quarantine_) {
     if (buf->completion == kPendingCompletion ||
-        buf->completion > cleanup_done_through) {
+        !device().completions().execution_complete(buf->completion)) {
       still_quarantined.push_back(buf);
       continue;
     }
@@ -365,6 +368,18 @@ void VulkanAllocator::stamp_batch(
     }
   }
   pending_quarantine_bytes_ = pending;
+}
+
+
+VulkanBuffer* VulkanAllocator::note_buffer_handle(VkBuffer handle) {
+  std::unique_lock lk(mutex_);
+  auto it = live_by_handle_.find(handle);
+  if (it == live_by_handle_.end()) {
+    return nullptr;
+  }
+  VulkanBuffer* buf = it->second;
+  buf->completion = kPendingCompletion;
+  return buf;
 }
 
 size_t VulkanAllocator::size(Buffer buffer) const {
