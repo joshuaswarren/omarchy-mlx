@@ -138,7 +138,13 @@ void main() {
   uint lhs_word_base = params.in_strides[0];
   uint rhs_word_base = params.out_strides[0];
 
-  uint index = gl_WorkGroupID.x;
+  // One workgroup per output element; the x/z grid split keeps counts
+  // above 65535 (large-batch routed decode: B x topk x N) inside the
+  // per-dimension workgroup-count limit.
+  uint index = gl_WorkGroupID.x + gl_WorkGroupID.z * 65535u;
+  if (index >= params.count) {
+    return;
+  }
   uint batch = index / matrix;
   uint within = index - batch * matrix;
   uint row = within / params.matrix_n;
