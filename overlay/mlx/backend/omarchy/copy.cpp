@@ -121,11 +121,7 @@ uint32_t compute_item_offset(
   return static_cast<uint32_t>(base + delta);
 }
 
-omarchy::ComputeBinding compute_binding(const array& value) {
-  auto* buffer =
-      static_cast<const omarchy::VulkanBuffer*>(value.buffer().ptr());
-  return {buffer->buffer, 0, buffer->size, buffer};
-}
+using omarchy::binding;
 
 array make_copy_axis_metadata(
     const Shape& shape,
@@ -523,10 +519,10 @@ void copy_gpu_inplace(
       }
       params.flags = 1;
       std::array<omarchy::ComputeBinding, 4> bindings{
-          compute_binding(scalar),
-          compute_binding(scalar),
-          compute_binding(out),
-          compute_binding(out)};
+          binding(scalar),
+          binding(scalar),
+          binding(out),
+          binding(out)};
       encoder.dispatch_compute(
           *kernel,
           bindings,
@@ -583,7 +579,7 @@ void copy_gpu_inplace(
           &half, in.data<char>() + i_offset * in.itemsize(), sizeof(half));
       uint32_t word = half;
       std::memcpy(&params.alpha, &word, sizeof(float));
-      std::array<omarchy::ComputeBinding, 1> bindings{compute_binding(out)};
+      std::array<omarchy::ComputeBinding, 1> bindings{binding(out)};
       encoder.dispatch_compute(
           omarchy::ComputeKernel::FillU16,
           bindings,
@@ -615,7 +611,7 @@ void copy_gpu_inplace(
           words, in.data<char>() + i_offset * in.itemsize(), sizeof(words));
       std::memcpy(&params.alpha, &words[0], sizeof(float));
       std::memcpy(&params.beta, &words[1], sizeof(float));
-      std::array<omarchy::ComputeBinding, 1> bindings{compute_binding(out)};
+      std::array<omarchy::ComputeBinding, 1> bindings{binding(out)};
       encoder.dispatch_compute(
           omarchy::ComputeKernel::FillU64,
           bindings,
@@ -649,7 +645,7 @@ void copy_gpu_inplace(
     } else {
       params.alpha = scalar_fill_value(in, i_offset);
     }
-    std::array<omarchy::ComputeBinding, 1> bindings{compute_binding(out)};
+    std::array<omarchy::ComputeBinding, 1> bindings{binding(out)};
     encoder.dispatch_compute(
         fill_kernel(in.dtype()),
         bindings,
@@ -733,10 +729,10 @@ void copy_gpu_inplace(
       params.matrix_k = static_cast<uint32_t>(rank);
     }
     std::array<omarchy::ComputeBinding, 4> bindings{
-        compute_binding(in),
-        compute_binding(in),
-        compute_binding(out),
-        compute_binding(axis_metadata ? *axis_metadata : out)};
+        binding(in),
+        binding(in),
+        binding(out),
+        binding(axis_metadata ? *axis_metadata : out)};
     omarchy::ComputeKernel kernel;
     if (in.dtype() == out.dtype()) {
       kernel = copy_general_kernel(in.dtype(), out);
@@ -908,10 +904,10 @@ void copy_gpu_inplace(
         : count;
     if (numeric_transport) {
       std::array<omarchy::ComputeBinding, 4> bindings{
-          compute_binding(in),
-          compute_binding(in),
-          compute_binding(out),
-          compute_binding(out)};
+          binding(in),
+          binding(in),
+          binding(out),
+          binding(out)};
       encoder.dispatch_compute(
           kernel,
           bindings,
@@ -919,7 +915,7 @@ void copy_gpu_inplace(
           omarchy::compute_dispatch_group_count(dispatch_count));
     } else {
       std::array<omarchy::ComputeBinding, 3> bindings{
-          compute_binding(in), compute_binding(in), compute_binding(out)};
+          binding(in), binding(in), binding(out)};
       encoder.dispatch_compute(
           kernel,
           bindings,

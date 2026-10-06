@@ -112,11 +112,6 @@ std::optional<uint32_t> chain_op_for(const Primitive& p) {
   return std::nullopt;
 }
 
-ComputeBinding chain_binding(const array& value) {
-  auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
-  return {buffer->buffer, 0, buffer->size, buffer};
-}
-
 // Leaf broadcast addressing modes; lockstep with fused_chain.comp.
 constexpr uint32_t kLeafDirect = 0;
 constexpr uint32_t kLeafModLast = 1;
@@ -566,13 +561,13 @@ void dispatch_chain(
       // materialized intermediates bindings 5/6 (the fast_trio.comp
       // slot map). The ComputeParams swiglu mapping is unchanged.
       std::array<ComputeBinding, 7> trio_bindings{
-          chain_binding(chain.leaves[leaves->first]),
-          chain_binding(chain.leaves[leaves->second]),
-          chain_binding(out),
-          chain_binding(out),
-          chain_binding(out),
-          chain_binding(materialize_nodes ? chain.node_arrays[0] : out),
-          chain_binding(materialize_nodes ? chain.node_arrays[1] : out)};
+          binding(chain.leaves[leaves->first]),
+          binding(chain.leaves[leaves->second]),
+          binding(out),
+          binding(out),
+          binding(out),
+          binding(materialize_nodes ? chain.node_arrays[0] : out),
+          binding(materialize_nodes ? chain.node_arrays[1] : out)};
       encoder.dispatch_compute(
           ComputeKernel::FastTrioSwigluF16,
           trio_bindings,
@@ -581,11 +576,11 @@ void dispatch_chain(
       return;
     }
     std::array<ComputeBinding, 5> bindings{
-        chain_binding(chain.leaves[leaves->first]),
-        chain_binding(chain.leaves[leaves->second]),
-        chain_binding(out),
-        chain_binding(materialize_nodes ? chain.node_arrays[0] : out),
-        chain_binding(materialize_nodes ? chain.node_arrays[1] : out)};
+        binding(chain.leaves[leaves->first]),
+        binding(chain.leaves[leaves->second]),
+        binding(out),
+        binding(materialize_nodes ? chain.node_arrays[0] : out),
+        binding(materialize_nodes ? chain.node_arrays[1] : out)};
     encoder.dispatch_compute(
         out.dtype() == float16 ? ComputeKernel::SwigluF16
                                : ComputeKernel::SwigluBF16,
@@ -604,11 +599,11 @@ void dispatch_chain(
     params.lhs_size = chain.leaf_offsets[0];
     params.rhs_size = 0u;
     std::array<ComputeBinding, 5> bindings{
-        chain_binding(chain.leaves[0]),
-        chain_binding(chain.leaves[0]),
-        chain_binding(out),
-        chain_binding(out),
-        chain_binding(out)};
+        binding(chain.leaves[0]),
+        binding(chain.leaves[0]),
+        binding(out),
+        binding(out),
+        binding(out)};
     encoder.dispatch_compute(
         out.dtype() == float16 ? ComputeKernel::SiluF16
                                : ComputeKernel::SiluBF16,
@@ -650,19 +645,19 @@ void dispatch_chain(
   params.aux_offset = materialize_intermediates ? 1u : 0u;
 
   std::array<ComputeBinding, kMaxChainLeaves + 3> bindings{
-      chain_binding(out),
-      chain_binding(out),
-      chain_binding(out),
-      chain_binding(program_keeper),
-      chain_binding(out),
-      chain_binding(out)};
+      binding(out),
+      binding(out),
+      binding(out),
+      binding(program_keeper),
+      binding(out),
+      binding(out)};
   for (size_t i = 0; i < chain.leaves.size(); ++i) {
-    bindings[i] = chain_binding(chain.leaves[i]);
+    bindings[i] = binding(chain.leaves[i]);
   }
   if (materialize_intermediates && !chain.node_arrays.empty()) {
-    bindings[2] = chain_binding(chain.node_arrays[0]);
+    bindings[2] = binding(chain.node_arrays[0]);
     if (chain.node_arrays.size() > 2) {
-      bindings[5] = chain_binding(chain.node_arrays[1]);
+      bindings[5] = binding(chain.node_arrays[1]);
     }
   }
 

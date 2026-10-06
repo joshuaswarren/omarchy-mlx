@@ -6,6 +6,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -23,6 +24,24 @@
 #include "mlx/stream.h"
 
 namespace mlx::core::omarchy {
+
+// Storage-buffer binding for |value|: its buffer from byte 0 (kernels add
+// the array's element offset themselves) through the last byte its data
+// reaches. Not the allocation size: allocator round_size bins every
+// request above 1 MiB to a power of two, so a 1-2 GiB array would bind
+// 2^31 bytes and a larger one 2^32 or more, past the device's
+// maxStorageBufferRange (dispatch_compute_pipeline refuses those).
+inline ComputeBinding binding(const array& value) {
+  auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
+  const VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
+      static_cast<VkDeviceSize>(value.data_size()) * value.itemsize();
+  // A zero range is invalid Vulkan; an empty array keeps one byte.
+  return {
+      buffer->buffer,
+      0,
+      std::min<VkDeviceSize>(std::max<VkDeviceSize>(end, 1), buffer->size),
+      buffer};
+}
 
 // Per-stream command recorder over the device's single VkQueue. Recording
 // is BATCHED: primitive evals append to an open command buffer and the

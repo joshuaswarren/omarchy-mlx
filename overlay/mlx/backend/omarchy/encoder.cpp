@@ -577,6 +577,23 @@ void CommandEncoder::dispatch_compute_pipeline(
         " storage-buffer bindings; this device allows " +
         std::to_string(binding_limit) + ".");
   }
+  // A range past maxStorageBufferRange is invalid Vulkan. Honeykrisp
+  // reports INT32_MAX because its storage-buffer addressing uses 32-bit
+  // offsets: a release build gives no guarantee past it, a debug build
+  // asserts once the range passes UINT32_MAX. Refuse here instead.
+  const VkDeviceSize range_limit =
+      device_.capabilities().max_storage_buffer_range;
+  for (size_t i = 0; i < bindings.size(); ++i) {
+    if (bindings[i].range > range_limit) {
+      throw std::invalid_argument(
+          "[omarchy] " + std::string(trace::current_prim()) +
+          " compute dispatch binds " + std::to_string(bindings[i].range) +
+          " bytes at storage-buffer binding " + std::to_string(i) +
+          "; this device's maxStorageBufferRange is " +
+          std::to_string(range_limit) +
+          " bytes. One binding cannot address that much memory.");
+    }
+  }
   for (const auto& item : bindings) {
     note_binding_owner(item.owner);
   }

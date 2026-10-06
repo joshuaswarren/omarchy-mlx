@@ -1896,10 +1896,7 @@ const Translation& cached_translation(
       .first->second;
 }
 
-omarchy::ComputeBinding binding(const array& value) {
-  auto* buffer = static_cast<const omarchy::VulkanBuffer*>(value.buffer().ptr());
-  return {buffer->buffer, 0, buffer->size, buffer};
-}
+using omarchy::binding;
 
 template <typename T>
 array metadata_array(

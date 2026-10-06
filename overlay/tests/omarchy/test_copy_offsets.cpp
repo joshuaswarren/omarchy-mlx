@@ -1426,3 +1426,45 @@ TEST_CASE("rank-six strided casts preserve narrow values and offsets") {
         static_cast<int16_t>(source_values[source_index + 1]));
   }
 }
+
+// Bindings cover the array, not its power-of-two allocation: a
+// 3/4-of-the-limit array (1.5 GiB in a 2 GiB bin on Honeykrisp) binds
+// under maxStorageBufferRange and stays exact at its last items. An array
+// one bin past the limit is refused by name instead of reaching the
+// driver, and the stream keeps working after the refusal.
+TEST_CASE("storage-buffer bindings stay within maxStorageBufferRange") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  const size_t limit = std::get<size_t>(
+      gpu::device_info(0).at("max_storage_buffer_range"));
+  // ponytail: sized for Honeykrisp's INT32_MAX; a larger limit would need
+  // 12+ GiB of test arrays.
+  if (limit > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+    skip("sized for a 2 GiB storage-buffer limit.");
+    return;
+  }
+  Stream s = gpu_stream();
+
+  {
+    const int n = static_cast<int>(limit / sizeof(int32_t) / 4 * 3);
+    array x = arange(0.0, static_cast<double>(n), 1.0, int32, s);
+    array tail = add(slice(x, {n - 4}, {n}, s), array(1, int32), s);
+    array peak = max(x, s);
+    eval(tail, peak);
+    omarchy::get_command_encoder(s).synchronize();
+    CHECK(values_equal(tail, {n - 3, n - 2, n - 1, n}));
+    CHECK(peak.item<int32_t>() == n - 1);
+  }
+
+  const int over = static_cast<int>(limit / sizeof(int32_t) + 1);
+  std::string message;
+  try {
+    eval(sum(zeros({over}, int32, s), s));
+  } catch (const std::invalid_argument& e) {
+    message = e.what();
+  }
+  CHECK(message.find("maxStorageBufferRange") != std::string::npos);
+  CHECK(sum(array({1, 2, 3}, int32), s).item<int32_t>() == 6);
+}
