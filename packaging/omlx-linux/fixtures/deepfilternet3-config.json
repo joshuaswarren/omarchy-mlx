@@ -1,0 +1,46 @@
+{
+  "sample_rate": 48000,
+  "fft_size": 960,
+  "hop_size": 480,
+  "nb_erb": 32,
+  "nb_df": 96,
+  "df_order": 5,
+  "df_lookahead": 2,
+  "lsnr_max": 35,
+  "lsnr_min": -15,
+  "conv_ch": 64,
+  "conv_k_enc": 1,
+  "conv_k_dec": 1,
+  "conv_width_factor": 1,
+  "conv_dec_mode": "transposed",
+  "emb_hidden_dim": 256,
+  "emb_num_layers": 3,
+  "df_hidden_dim": 256,
+  "df_num_layers": 2,
+  "gru_groups": 8,
+  "linear_groups": 16,
+  "enc_linear_groups": 32,
+  "group_shuffle": false,
+  "mask_pf": false,
+  "conv_lookahead": 2,
+  "conv_depthwise": true,
+  "convt_depthwise": false,
+  "enc_concat": false,
+  "emb_gru_skip_enc": "none",
+  "emb_gru_skip": "none",
+  "df_gru_skip": "groupedlinear",
+  "dfop_method": "df",
+  "conv_kernel": [
+    1,
+    3
+  ],
+  "convt_kernel": [
+    1,
+    3
+  ],
+  "conv_kernel_inp": [
+    3,
+    3
+  ],
+  "model_version": "DeepFilterNet3"
+}

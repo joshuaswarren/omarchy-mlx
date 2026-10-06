@@ -109,6 +109,24 @@ Metal APIs are absent?". Patches:
   pass-through, guard delegation and idempotence — the transformers-wiring
   tests skip on dev boxes without transformers and run on the target
   venv).
+- `patches/0008-omlx-audio-sts-discovery.patch` — STS discovery for
+  model_type-less checkpoints. `mlx-community/DeepFilterNet-mlx` (v3) and
+  `mlx-community/sam-audio-small` ship complete checkpoints whose
+  `config.json` has neither `model_type` nor `architectures`; discovery
+  classified them as `llm` and the LLM loader aborted with
+  `KeyError: 'model_type'` before the STS engine ever ran. The patch adds
+  `_looks_like_deepfilternet_config` (df_order/nb_erb/nb_df + a
+  `model_version` string starting with `DeepFilterNet`),
+  `_looks_like_sam_audio_config` (`audio_codec` dict + `span_predictor` —
+  the codec key alone is too common), and `_audio_sts_name_hint`
+  (mirrors `omlx.engine.sts._detect_sts_family` directory rules:
+  deepfilter/mossformer/sam-audio), all returning `audio_sts` from
+  `detect_model_type`. Contract tests:
+  `test_omlx_audio_sts_discovery.py` on the captured checkpoint config
+  fixtures (`fixtures/deepfilternet3-config.json`,
+  `fixtures/sam-audio-config.json`): both shapes plus directory-name hints
+  classify `audio_sts`; plain LLM configs stay `llm`; Kokoro stays
+  `audio_tts`.
 
 Tools in this layer:
 
