@@ -1,0 +1,22 @@
+start 2026-10-06T22:11:33Z boot abc36fa1
+staged 66279866 omarchy: f32 and bf16 dense GEMM take the direct cooperative-matrix kernel
+db39f990c1dae12115189b832847a7c21b5c51232221042a36b65aefaa7bf646  dist/mlx_omarchy-0.32.4.dev202610062211+66279866-cp314-cp314-linux_aarch64.whl
+built 2026-10-06T22:16:54Z
+lock 2026-10-06T22:16:54Z
+omarchy_runtime_tests rc=0 [doctest] test cases:    49 |    49 passed | 0 failed | 0 skipped
+omarchy_primitive_tests rc=0 [doctest] test cases:     104 |     104 passed | 0 failed | 0 skipped
+omarchy_matmul_family_tests rc=0 [doctest] test cases:       27 |       27 passed | 0 failed | 0 skipped
+omarchy_fast_ops_tests rc=0 [doctest] test cases:      43 |      43 passed |  0 failed | 0 skipped
+omarchy_indexing_ops_tests rc=0 [doctest] test cases:    57 |    57 passed | 0 failed | 0 skipped
+omarchy_linalg_ops_tests rc=0 [doctest] test cases:     30 |     30 passed | 0 failed | 0 skipped
+omarchy_conv_tests rc=0 [doctest] test cases:   13 |   13 passed | 0 failed | 0 skipped
+omarchy_fused_chain_tests rc=0 [doctest] test cases:     38 |     38 passed | 0 failed | 0 skipped
+omarchy_compiled_tape_tests rc=0 [doctest] test cases:   13 |   13 passed | 0 failed | 0 skipped
+capsim m1-honeykrisp-fork rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim m1-stock-no-coopmat rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim subgroup-size-64 rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim small-shared-memory rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim no-cooperative-matrix rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim m1-g13-legacy rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+wheel 0.32.4.dev202610062211+66279866
+end 2026-10-06T22:20:28Z
