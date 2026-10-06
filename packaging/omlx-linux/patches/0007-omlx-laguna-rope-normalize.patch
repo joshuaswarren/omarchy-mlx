@@ -71,7 +71,7 @@ index 0000000..db0871b
 +    _ROPE_GUARD_INSTALLED = True
 +    return True
 diff --git a/omlx/utils/model_loading.py b/omlx/utils/model_loading.py
-index 608d4fb..881eb92 100644
+index 608d4fb..f8f2216 100644
 --- a/omlx/utils/model_loading.py
 +++ b/omlx/utils/model_loading.py
 @@ -13,6 +13,8 @@ import mlx.core as mx
@@ -83,11 +83,11 @@ index 608d4fb..881eb92 100644
  logger = logging.getLogger(__name__)
  
  _VLM_TEXT_PREFIX = "language_model."
-@@ -108,6 +110,7 @@ def preflight_text_remote_code(
- 
- def lm_load_compat(path_or_repo: str, *, trust_remote_code: bool = False, **kwargs):
-     """Forward the configured trust setting to the model and tokenizer loaders."""
+@@ -67,6 +69,7 @@ def preflight_text_remote_code(
+     metadata first and, only when it advertises custom Transformers code, ask
+     the real tokenizer loader to resolve the same trust decision up front.
+     """
 +    install_rope_parameters_guard()
-     kwargs["tokenizer_config"] = {
-         **(kwargs.get("tokenizer_config") or {}),
-         "trust_remote_code": trust_remote_code,
+ 
+     if trust_remote_code:
+         return
