@@ -522,14 +522,67 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     acc[r] += fma(scale, dot[r], bias_term); \
   } \
 }
+// Two k-block iterations per pass (QMV_UNROLL2): every weight word, x quad
+// and (via the epilogue) scale/bias load of both iterations is issued before
+// either iteration's arithmetic, so the DRAM requests of iteration B are in
+// flight while iteration A computes. The arithmetic of each iteration is the
+// loop body above, unchanged and in the same order (A then B), so every
+// accumulator sees the identical operation sequence: bit-identical output.
+// Runs while a second iteration exists; the plain loop handles the tail.
+#ifdef QMV_UNROLL2
+#define QMV_UNROLL2_BODY(W, S, B) \
+  for (; w + LANES * 2u < words_per_row; w += LANES * 4u) { \
+    uint wa0[ROWS_PER_SLOT]; \
+    uint wb0[ROWS_PER_SLOT]; \
+    uint wa1[ROWS_PER_SLOT]; \
+    uint wb1[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      wa0[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+      wb0[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      wa1[r] = W.values[w_base + row_base[r] * words_per_row + w + LANES * 2u]; \
+      wb1[r] = W.values[w_base + row_base[r] * words_per_row + w + LANES * 2u + 1u]; \
+    } \
+    uvec4 xa0 = OUTGATE_XWORDS(x_row + w * 8u); \
+    uvec4 xb0 = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+    uvec4 xa1 = OUTGATE_XWORDS(x_row + (w + LANES * 2u) * 8u); \
+    uvec4 xb1 = OUTGATE_XWORDS(x_row + (w + LANES * 2u) * 8u + 8u); \
+    { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+      } \
+      Q4_QUAD_ROWS(wa0[r], xa0.x, xa0.y) \
+      Q4_QUAD_ROWS(wa0[r] >> 16u, xa0.z, xa0.w) \
+      Q4_QUAD_ROWS(wb0[r], xb0.x, xb0.y) \
+      Q4_QUAD_ROWS(wb0[r] >> 16u, xb0.z, xb0.w) \
+      Q4_ROWS_FINISH(w, S, B) \
+    } \
+    { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+      } \
+      Q4_QUAD_ROWS(wa1[r], xa1.x, xa1.y) \
+      Q4_QUAD_ROWS(wa1[r] >> 16u, xa1.z, xa1.w) \
+      Q4_QUAD_ROWS(wb1[r], xb1.x, xb1.y) \
+      Q4_QUAD_ROWS(wb1[r] >> 16u, xb1.z, xb1.w) \
+      Q4_ROWS_FINISH(w + LANES * 2u, S, B) \
+    } \
+  }
+#else
+#define QMV_UNROLL2_BODY(W, S, B)
+#endif
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
     row_base[r] = min(column + r, n - 1u); \
   } \
   if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
-    for (uint w = lane_in_slot * 2u; w < words_per_row; \
-         w += LANES * 2u) { \
+    uint w = lane_in_slot * 2u; \
+    QMV_UNROLL2_BODY(W, S, B) \
+    for (; w < words_per_row; w += LANES * 2u) { \
       precise float dot[ROWS_PER_SLOT]; \
       precise float input_sum = 0.0; \
       uint wa[ROWS_PER_SLOT]; \
