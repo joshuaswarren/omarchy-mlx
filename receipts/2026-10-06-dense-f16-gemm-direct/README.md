@@ -9,8 +9,8 @@ The fix removes the staging. The device lists an 8x8x8 subgroup shape with fp16 
 
 ## Numerics
 f16 x f16 products are exact in f32, and the accumulator visits k in ascending order, so the stored bits equal `MatmulRbF16` and the 16x16 tile.
-- Standalone harness (`tools/gemm-bench`), float64 truth on sampled outputs: 0 bit mismatches against `matmul_rb.comp` over all 16.7M outputs at 4096^3 in all four orientations, and over every output of 22 edge shapes (m, n not multiples of the tile, m = 33, k = 8..4096). Exact-rounded fraction 0.99487 for both kernels at 4096^3.
-- Through the wheel (`m1/mlxcheck-*.json`): seven cases (nn 4096^3, nt 512x4096x4096, tn, tt, batched nt, broadcast batch with odd m, sliced operands with an element offset) give identical output hashes with the direct route and with `MLX_OMARCHY_NO_COOPMAT=1`; fp64 error is identical. `m1/mlxcheck-trace.log` shows every case dispatching kernel ids 521-524 (the four new pipelines).
+- Standalone harness (`tools/gemm-bench`), float64 truth on sampled outputs: 0 bit mismatches against `matmul_rb.comp` over all 16.7M outputs at 4096^3 (nn and nt), and over every output of 24 edge cases across all four orientations (m, n not multiples of the tile, m = 33, k = 8..4096). Exact-rounded fraction 0.99487 for both kernels at 4096^3 nn.
+- Through the wheel (`m1/mlxcheck-*.json`): seven cases (nn 4096^3, nt 512x4096x4096, tn, tt, batched nt, broadcast batch with odd m, sliced operands with an element offset) give identical output hashes with the direct route and with `MLX_OMARCHY_NO_COOPMAT=1`; fp64 error is identical. `m1/mlxcheck-trace.log` shows every case dispatching one of the four new pipelines (kernel ids 521-524 at commit 4aaa210e; later enum insertions on main renumber them).
 - New test "direct cooperative-matrix f16 matmul matches the 16x16 tile in every orientation" (`omarchy_matmul_family_tests`).
 
 ## Performance (M1, T8103 G13G, 8 GPU cores; Linux 7.1.12-2-11.36; omarchy-mlx-vulkan 0.7.22, Mesa e7631595df, libvulkan_asahi.so sha256 26c93b8b...)
