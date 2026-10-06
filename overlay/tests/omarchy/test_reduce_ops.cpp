@@ -601,7 +601,7 @@ TEST_CASE("empty reductions return the upstream identity values") {
             .find("Cannot min reduce") != std::string::npos);
   CHECK(construction_error(
             [&] { return max(uints, std::vector<int>{1}, false, stream); })
-            .find("Cannot min reduce") != std::string::npos);
+            .find("Cannot max reduce") != std::string::npos);
   // Upstream #4546 class: unsigned sum/prod identities over empty axes must
   // not abort for a missing init kernel. The general reduce path covers
   // every width; pin uint32 and uint64 explicitly.
@@ -1326,7 +1326,9 @@ TEST_CASE("logcumsumexp promotes integer and bool inputs to float (#4625)") {
   };
 
   // uint8: a non-promoted scan returns the input dtype with cumulative
-  // maxima; the promoted scan returns float log-space values.
+  // maxima; the promoted scan returns float log-space values. Forward and
+  // reverse inclusive: out[i] is the running logaddexp over the prefix
+  // (forward) or suffix (reverse) the scan walks.
   std::vector<uint8_t> raw = {3, 5, 2, 7};
   array u(raw.begin(), Shape{4}, uint8);
   std::vector<float> expected = running_logaddexp({3.0f, 5.0f, 2.0f, 7.0f});
