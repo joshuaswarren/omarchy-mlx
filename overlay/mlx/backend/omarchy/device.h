@@ -237,16 +237,25 @@ class CompletionDispatcher {
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
 
-  // Attach the submission fence for |value|: the fence signals when the
-  // driver has fully finished executing the batch, unlike the completion
-  // timeline semaphore which Mesa signals before its submit-final cleanup.
+  // Attach the submission fence for |value| BEFORE the value's
+  // QueueSubmit: execution_complete() must see the fence from the moment
+  // the batch is on the queue, or a concurrent free() would read an
+  // empty fence deque as "completed" and recycle a live buffer.
   void attach_execution_fence(uint64_t value, VkFence fence);
+  // The submit never reached the driver (QueueSubmit failed): forget the
+  // fence and return it to the pool.
+  void detach_execution_fence(uint64_t value, VkFence fence);
   // Non-stalling: true when every submission <= |value| provably finished
   // executing (all attached fences signalled). The only sound safe-to-
   // recycle test; the timeline observation is not.
   bool execution_complete(uint64_t value);
   VkFence acquire_execution_fence();
-  void mark_execution_complete_through(uint64_t value);
+  // Retire front execution fences whose fence has signalled, advancing
+  // the done-through watermark; true when a release_quarantine pass is
+  // due (fences still outstanding or just retired). Drives the
+  // dispatcher's idle tick so a fence that signals after the last
+  // completion drained still recycles its quarantined buffers.
+  bool tick_execution_fences();
 
  private:
   void run();
@@ -264,7 +273,6 @@ class CompletionDispatcher {
   struct ExecutionFence {
     uint64_t value;
     VkFence fence;
-    bool done;
   };
   std::deque<ExecutionFence> execution_fences_;
   std::vector<VkFence> execution_fence_pool_;

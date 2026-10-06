@@ -316,12 +316,11 @@ void VulkanAllocator::free(Buffer buffer) {
   destroy_buffer(buf);
 }
 
-void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
-  // Called from the completion drain holding drain_mutex_, so calls are
-  // serialized. Drain order proves that submit-final cleanup for values
-  // <= |cleanup_done_through| has run (Mesa signals a submission's
-  // semaphores before its cleanup retires the timeline points, so a
-  // buffer is released only one generation after its own completion).
+void VulkanAllocator::release_quarantine() {
+  // Callable from any thread: the allocator mutex serializes passes, and
+  // each entry's own execution fence decides recyclability. A fence that
+  // signals after this pass is picked up by a later one - the dispatcher
+  // keeps ticking release passes while execution fences are outstanding.
   std::unique_lock lk(mutex_);
   if (quarantine_.empty()) {
     return;
