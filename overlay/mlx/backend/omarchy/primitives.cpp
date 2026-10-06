@@ -11795,6 +11795,60 @@ void GatedDeltaUpdate::eval_gpu(
       std::getenv("MLX_OMARCHY_GDN_HOIST") == nullptr ||
       omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
   const auto& gdn_caps = encoder.device().capabilities();
+  // macOS-shape per-token recurrence (GdnRecur32): one 32-lane subgroup
+  // per (hv, dv) row, Dk/32 = 4 f32 state elements per lane in registers,
+  // plain sequential token loop - the Metal gated_delta_step shape. Read
+  // per call (not a static): the correctness battery toggles this env per
+  // test case in-process. Default OFF; MLX_OMARCHY_GDN_RECUR32=1 opts in
+  // for T >= 64 (the chunked coopmat kernel's territory; below that the
+  // exact scan route is already competitive). Outputs are NOT
+  // bit-identical to the scan (subgroup reduction trees), so the env is
+  // the A/B lever and the fp64 tolerance test is the numerics gate.
+  const bool gdn_recur32 = omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") &&
+      !has_mask && g.ndim() == 3 && T >= 64 && gdn_caps.subgroup_size == 32u;
+  if (gdn_recur32) {
+    omarchy::ComputeParams params;
+    params.count = Dv;
+    params.lhs_size = checked_u32(q.data_size(), tag, out);
+    params.rhs_size = checked_u32(h0.data_size(), tag, out);
+    params.output_size = checked_u32(hf.data_size(), tag, out);
+    params.matrix_m = checked_u32(Dk, tag, out);
+    params.matrix_n = checked_u32(Dv, tag, out);
+    params.matrix_k = checked_u32(Hv, tag, out);
+    params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+    params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+    params.aux_size = checked_item_offset(v, v.size(), tag, out);
+    params.aux_offset = checked_item_offset(beta, beta.size(), tag, out);
+    params.output_offset = checked_item_offset(out, out.size(), tag, out);
+    params.shape[0] = checked_item_offset(g, g.size(), tag, out);
+    params.shape[1] = checked_item_offset(h0, h0.size(), tag, out);
+    params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
+    params.dims = static_cast<uint32_t>(T);
+    // Scalar g only: [B=1, T, Hv] (ndim gate; B==1 comes from fused_ready).
+    // Bit2 selects the f32 gate load.
+    params.flags = (g.dtype() == float32 ? 4u : 0u);
+    std::array<omarchy::ComputeBinding, 11> bindings{
+        binding(q),      // 0 QBuf
+        binding(k),      // 1 KBuf
+        binding(v),      // 2 VBuf
+        binding(g),      // 3 GBuf
+        binding(beta),   // 4 BBuf
+        binding(h0),     // 5 SIn
+        binding(out),    // 6 YBuf
+        binding(hf),     // 7 SOut
+        binding(out),    // 8 MBuf - unused (maskless gate)
+        binding(g),      // 9 GBufF - unused when g is bf16
+        binding(out)};   // 10 Snap - unused (single pass)
+    // One 128-thread workgroup per four (hv, dv) rows: grid (Hv, Dv/4).
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GatedDeltaPrefillRecur32BF16,
+        bindings,
+        params,
+        static_cast<uint32_t>(Hv),
+        Dv / 4u,
+        1u);
+    return;
+  }
   const bool gdn_coopmat = fused_ready && T >= kGdnCoopmatMinTokens &&
       !has_mask && g.ndim() == 3 && !coopmat_gdn_disabled &&
       gdn_caps.cooperative_matrix_f32_8 && gdn_caps.subgroup_size == 32u;

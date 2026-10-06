@@ -700,6 +700,15 @@ enum class ComputeKernel : uint16_t {
   // MLX_OMARCHY_GDN_HOIST=0.
   GatedDeltaPrefillKktqkt,
   GatedDeltaPrefillCoopmatHoistBF16,
+  // macOS-shape per-token recurrent prefill scan (Metal gated_delta_step
+  // shape): one 32-lane subgroup per (hv, dv) row holds the row's
+  // Dk/32 = 4 f32 state elements in registers and walks the token axis
+  // sequentially; kv/o ride hardware subgroupAdd trees, so outputs are
+  // NOT bit-identical to the chunked scan - the gate is the fp64
+  // reference tolerance. Maskless scalar-g square bf16 shape on 32-lane
+  // subgroup devices only. Selected only by MLX_OMARCHY_GDN_RECUR32=1.
+  // Append-only profile id.
+  GatedDeltaPrefillRecur32BF16,
   // Fused RMSNorm + SwiGLU-gate / RMSNorm + scalar-multiply epilogues
   // for the GDN decode chain (bf16). Mode 0 replaces
   // FastRmsNormBF16 + CastBF16F32 x2 + FusedChainF32(sigmoid,mul,mul)
