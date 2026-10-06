@@ -24,6 +24,7 @@
 // by the unknown-chip sub-case to prove we omit rather than invent).
 
 #define DOCTEST_CONFIG_IMPLEMENT
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -175,6 +176,59 @@ TEST_CASE("set_wired_limit never exceeds expected memory bounds") {
   mlx::core::set_wired_limit(0);
   mlx::core::set_wired_limit(SIZE_MAX);
   mlx::core::set_wired_limit(0);
+}
+
+TEST_CASE("default_hk_sysmem_bytes keeps the stock heap on small hosts") {
+  // MemTotal <= 32 GiB: MemTotal - 16 GiB never beats the 50% DRIR
+  // default, so nullopt keeps mesa's heap byte-for-byte. 16 GB-class
+  // machines (7.55-8 GiB heap) must be unchanged, and jwm1's measured
+  // 15.1 GiB MemTotal (15843696 kB) with it.
+  namespace omarchy = mlx::core::omarchy;
+  constexpr uint64_t kGiB = 1ull << 30;
+  const auto gib = [](double v) {
+    return static_cast<uint64_t>(v * static_cast<double>(kGiB));
+  };
+  CHECK_FALSE(omarchy::default_hk_sysmem_bytes(15843696ull * 1024).has_value());
+  CHECK_FALSE(omarchy::default_hk_sysmem_bytes(gib(16)).has_value());
+  // Border: at exactly 32 GiB the raised value equals the 50% default.
+  CHECK_FALSE(omarchy::default_hk_sysmem_bytes(gib(32)).has_value());
+}
+
+TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
+  namespace omarchy = mlx::core::omarchy;
+  constexpr uint64_t kGiB = 1ull << 30;
+  const auto gib = [](double v) {
+    return static_cast<uint64_t>(v * static_cast<double>(kGiB));
+  };
+  // Past the crossover the heap is MemTotal - 16 GiB (1 MiB-rounded like
+  // mesa): 48 GiB -> 32, 62 GiB (jw16-class) -> 46, 64 GiB -> 48.
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(48)) == gib(32));
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(62)) == gib(46));
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(64)) == gib(48));
+  // Per-process user VA window is ~64 GiB (agx_device.c; HeapBudget's
+  // probe committed 63 GiB, the 64th allocation failed to map), so the
+  // heap never promises more than the 60 GiB clamp: 94/96 GiB -> 60.
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(94)) == gib(60));
+  CHECK(omarchy::default_hk_sysmem_bytes(gib(96)) == gib(60));
+  const auto raised_62 = omarchy::default_hk_sysmem_bytes(gib(62));
+  REQUIRE(raised_62.has_value());
+  CHECK(raised_62.value() % (1ull << 20) == 0);
+  const auto clamped_96 = omarchy::default_hk_sysmem_bytes(gib(96));
+  REQUIRE(clamped_96.has_value());
+  CHECK(clamped_96.value() % (1ull << 20) == 0);
+
+  // Live host cross-check: whatever /proc/meminfo reports, the result
+  // honors the contract (absent <= 32 GiB, inside (50%, 60 GiB] above).
+  const uint64_t total = read_mem_total_bytes();
+  if (total > 0) {
+    const auto live = omarchy::default_hk_sysmem_bytes(total);
+    if (!live.has_value()) {
+      CHECK(total <= gib(32));
+    } else {
+      CHECK(live.value() > total / 2);
+      CHECK(live.value() <= gib(60));
+    }
+  }
 }
 
 int main(int argc, char** argv) {

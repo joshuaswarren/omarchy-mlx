@@ -155,6 +155,23 @@ kept silently. `MLX_OMARCHY_QUEUE_PRIORITY=medium` requests MEDIUM instead;
 Honeykrisp lists `VK_EXT_global_priority` rev 2 on the M2 Max (T6021) and
 M1 Max (T6001).
 
+GPU-memory heap default (`HK_SYSMEM`): Honeykrisp sizes its GPU heap at
+50% of MemTotal (mesa `heap_memory_percent` 0.5) and fails every
+allocation past it, which on 32 GB+ hosts strands half the RAM: on the
+62 GB M1 Max the stock heap (31.18 GiB) rejects Qwen3-32B-8bit's 34.8 GB
+of weights outright. MLX processes therefore set the heap themselves
+before Vulkan loads: `max(50% of MemTotal, MemTotal − 16 GiB)`, rounded
+down to 1 MiB, clamped to 60 GiB. The clamp follows the per-process GPU
+virtual-address window (~64 GiB; the 2026-10-05 heap-budget probe
+committed 63 GiB before the 64th allocation failed to map, so a larger
+heap cannot be used). On MemTotal ≤ 32 GiB the formula never beats the
+50% default and those hosts (16 GB machines included) keep the stock
+heap byte-for-byte. An explicit `HK_SYSMEM` (absolute bytes, as before)
+and a `heap_memory_percent` set in a drirc file (`$DRIRC_CONFIGDIR`,
+`drirc.d`, `/etc/drirc`, `~/.drirc`) still win — the default is applied
+only when neither is present, and only inside MLX processes: every other
+Vulkan application keeps the 50% heap.
+
 Serving placement (`MLX_OMARCHY_UCLAMP_MIN`, default 1024): the serve raises
 `uclamp_min` on its startup thread through an unprivileged
 `sched_setattr` call, so every serving thread inherits the scheduler's
