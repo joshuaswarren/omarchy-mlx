@@ -2157,6 +2157,135 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
   }
 }
 
+TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(131);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::uniform_int_distribution<uint32_t> index_w(0, 2);
+
+  // One case per (dtype, transpose, k edge): decode m == 1 with the
+  // routed-expert gather; k 128 divides the 256-lane K split, k 96
+  // exercises the tail guard, and the non-transposed layout runs the
+  // other weight-routing branch.
+  auto run_case = [&](bool bf16, bool transpose, int k) {
+    const int experts = 3;
+    const int index_count = 2;
+    const int m = 1;
+    const int n = 64;
+    const int group_size = 64;
+    const int bits = 4;
+    const int groups = k / group_size;
+    const int pack = 32 / bits;
+    const int words_per_row = k / pack;
+    auto dtype = bf16 ? bfloat16 : float32;
+    std::vector<HostQuantizedWeights> host_w;
+    std::vector<uint32_t> w_all;
+    std::vector<float> scales_all;
+    std::vector<float> biases_all;
+    for (int e = 0; e < experts; ++e) {
+      std::vector<float> matrix(static_cast<size_t>(n) * k);
+      for (auto& value : matrix) {
+        value = dist(gen);
+      }
+      HostQuantizedWeights host =
+          host_affine_quantize(matrix, n, k, group_size, bits);
+      host_w.push_back(host);
+      w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+      scales_all.insert(
+          scales_all.end(), host.scales.begin(), host.scales.end());
+      biases_all.insert(
+          biases_all.end(), host.biases.begin(), host.biases.end());
+    }
+    std::vector<std::vector<float>> x_batches;
+    std::vector<float> x_all;
+    for (int b = 0; b < index_count; ++b) {
+      std::vector<float> matrix(static_cast<size_t>(m) * k);
+      for (auto& value : matrix) {
+        value = dist(gen);
+      }
+      x_batches.push_back(matrix);
+      x_all.insert(x_all.end(), matrix.begin(), matrix.end());
+    }
+    std::vector<uint32_t> rhs_v(index_count);
+    for (auto& value : rhs_v) {
+      value = index_w(gen) % static_cast<uint32_t>(experts);
+    }
+    array w_words(w_all.begin(), Shape{experts, n, words_per_row}, uint32);
+    array scales =
+        astype(array(scales_all.begin(), Shape{experts, n, groups}, float32),
+               dtype,
+               stream);
+    array biases =
+        astype(array(biases_all.begin(), Shape{experts, n, groups}, float32),
+               dtype,
+               stream);
+    array x = astype(
+        array(x_all.begin(), Shape{index_count, m, k}, float32), dtype, stream);
+    std::vector<uint32_t> zeros(index_count, 0u);
+    array lhs0(zeros.begin(), Shape{index_count}, uint32);
+    array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+
+    std::vector<float> expected(index_count * m * n, 0.0f);
+    for (int b = 0; b < index_count; ++b) {
+      std::vector<float> piece = host_quantized_matmul(
+          host_w[rhs_v[b]], x_batches[b], m, n, k, group_size, bits);
+      std::copy(
+          piece.begin(),
+          piece.end(),
+          expected.begin() + static_cast<ptrdiff_t>(b) * m * n);
+    }
+
+    auto run_once = [&](bool sub) {
+      if (sub) {
+        unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+      } else {
+        setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+      }
+      array out = gather_qmm(
+          x,
+          w_words,
+          scales,
+          biases,
+          lhs0,
+          rhs,
+          transpose,
+          group_size,
+          bits,
+          "affine",
+          std::nullopt,
+          false,
+          stream);
+      REQUIRE(evaluation_error(out).empty());
+      return readback_f32(stream, out);
+    };
+
+    std::vector<float> scalar_out = run_once(false);
+    unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    std::vector<float> sub_out = run_once(true);
+    unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    // Both anchor to the fp64-accumulated host reference; the fp32
+    // accumulation order differs (lane tree vs serial K loop), so
+    // neither is bit-exact against the other. bf16 storage rounds to
+    // its own ULP, hence the wider band there.
+    if (bf16) {
+      expect_close_tol(scalar_out, expected, 1e-2, 1e-2);
+      expect_close_tol(sub_out, expected, 1e-2, 1e-2);
+    } else {
+      expect_close_tol(scalar_out, expected, 1e-4, 1e-3);
+      expect_close_tol(sub_out, expected, 1e-4, 1e-3);
+    }
+  };
+
+  run_case(false, true, 128);
+  run_case(false, true, 96);
+  run_case(false, false, 128);
+  run_case(true, true, 128);
+  run_case(true, true, 96);
+}
+
 TEST_CASE("gather qqmm dequants with scales only") {
   if (!compute_available()) {
     return;
