@@ -169,7 +169,7 @@ void main() {
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   while (index < params.count) {
     float regs[8];
-    for (uint i = 0; i < params.instr_count; ++i) {
+    for (uint i = 0; i < instr_count; ++i) {
       uint word = program_buf.words[i];
       uint op = word & 0xffu;
       uint a = (word >> 8) & 0xffu;
