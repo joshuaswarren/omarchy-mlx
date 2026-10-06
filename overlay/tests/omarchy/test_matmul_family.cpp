@@ -2171,10 +2171,11 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   // exercises the tail guard, and the non-transposed layout runs the
   // other weight-routing branch.
   auto run_case = [&](bool bf16, bool transpose, int k) {
-    const int experts = 3;
-    const int index_count = 2;
+    run_case_shape(bf16, transpose, k, 3, 2, 64);
+  };
+  auto run_case_shape = [&](bool bf16, bool transpose, int k, int experts,
+                            int index_count, int n) {
     const int m = 1;
-    const int n = 64;
     const int group_size = 64;
     const int bits = 4;
     const int groups = k / group_size;
@@ -2284,6 +2285,14 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   // covered by this test (the f32 non-transposed authoring used an
   // invalid weight layout [E, N, K/pack] and the f32 transposed m==1
   // paths are a separate investigation - see the lane receipt).
+  run_case(true, true, 128);
+  run_case(true, true, 192);   // k below one 256-lane stride: tail guard
+  // GLM-4.5-Air routed shapes: B=1 gate/up gather (index_count 8 x
+  // n 1408 = 11,264 workgroups) and a count above the 65535 per-dimension
+  // workgroup limit (48 x 1408 = 67,584 -> z-chunked dispatch).
+  run_case_shape(true, true, 128, 3, 8, 1408);
+  run_case_shape(true, true, 2048, 3, 8, 1408);
+  run_case_shape(true, true, 128, 48, 48, 1408);
 }
 
 TEST_CASE("gather qqmm dequants with scales only") {
