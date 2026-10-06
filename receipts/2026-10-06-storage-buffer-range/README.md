@@ -81,6 +81,16 @@ Native suites (static libmlx, same commit): 28 of 30 binaries pass with zero
 failed cases, including `omarchy_copy_offset_tests` 27/27 with the new case.
 `omarchy_fast_ops_tests` failed one case (`rope_rms_norm vjp`) because that build
 tree carried stale patched-upstream `mlx/fast.cpp`/`fast.h`;
-`omarchy_capability_sim_tests` needs a profile argument. A clean
-`scripts/build-wheel.sh` rebuild (`0.32.4.dev202610060234+e19a800`) is queued for
-the full battery.
+`omarchy_capability_sim_tests` needs a profile argument.
+
+Clean `scripts/build-wheel.sh` rebuild (`0.32.4.dev202610060234+e19a800`, wheel
+sha256 `c52faf26884e2575d184614f0027109edfccd0cb3a20f0e119adc360467bb7f1`) and a
+static suite tree from the same staged source: `repro_post.py` ALL PASS again;
+the H3 block-0 digest is the same `1f5a42ed...` value. All 29 standing and related
+binaries pass, plus `omarchy_capability_sim_tests` under all six CMake profiles
+(7/7 each). `omarchy_copy_offset_tests` is 27/27 and `omarchy_fast_ops_tests` is 43/43.
+`omarchy_matmul_family_tests` failed one case in the full-battery process: `qmm tile
+matches host reference`, m=1023 n=4864 k=4864 f16, with a non-finite result. This is
+the order-transient flake that was already recorded on this chip before this change
+(QmmBackward lane, 2026-10-05). Two standalone reruns then passed 24/24
+(82,942,463 assertions each).
