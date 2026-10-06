@@ -667,11 +667,103 @@ void dispatch_chain(
   } else if (out.dtype() == bfloat16) {
     kernel = ComputeKernel::FusedChainBF16;
   }
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
-      params,
-      compute_dispatch_group_count(chain.count));
+  auto kernel = ComputeKernel::FusedChainF32;
+  if (out.dtype() == float16) {
+    kernel = ComputeKernel::FusedChainF16;
+  } else if (out.dtype() == bfloat16) {
+    kernel = ComputeKernel::FusedChainBF16;
+  }
+  // A > 2 GiB chain output splits by flat index. Direct leaves (mode 0)
+  // and count-sized intermediates / outputs each get a per-window
+  // binding; leaves in modulo / divide / scalar modes read globally
+  // and stay bound whole.
+  const auto& fc_caps = encoder.device().capabilities();
+  const VkDeviceSize fc_limit = fc_caps.max_storage_buffer_range;
+  const uint32_t fc_alignment = fc_caps.min_storage_buffer_offset_alignment;
+  const uint64_t fc_bytes =
+      static_cast<uint64_t>(out.size()) * out.itemsize();
+  const bool fc_windowable =
+      fc_bytes > fc_limit &&
+      std::all_of(
+          chain.leaves.begin(), chain.leaves.end(), [&](const array& leaf) {
+            return leaf.data_size() == out.size() ||
+                static_cast<uint64_t>(leaf.data_size()) * leaf.itemsize() <=
+                    fc_limit;
+          }) &&
+      (!materialize_intermediates ||
+       std::all_of(
+           chain.node_arrays.begin(), chain.node_arrays.end(),
+           [&](const array& node) {
+             return node.data_size() == out.size() ||
+                 static_cast<uint64_t>(node.data_size()) * node.itemsize() <=
+                     fc_limit;
+           }));
+  if (!fc_windowable) {
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        compute_dispatch_group_count(chain.count));
+    return;
+  }
+  const size_t fc_itemsize = out.itemsize();
+  const uint64_t fc_chunk = std::max<uint64_t>(
+      (fc_limit / fc_itemsize / 16u) * 16u, 16u);
+  for (uint64_t c0 = 0; c0 < chain.count; c0 += fc_chunk) {
+    const uint64_t c1 =
+        std::min(c0 + fc_chunk, static_cast<uint64_t>(chain.count));
+    ComputeParams wparams = params;
+    wparams.count = checked_u32(c1, name, out);
+    wparams.window_lo = static_cast<uint32_t>(c0);
+    std::array<ComputeBinding, kMaxChainLeaves + 3> wbindings = bindings;
+    auto window_leaf = [&](const array& leaf, uint32_t& offset) {
+      if (leaf.data_size() != out.size()) {
+        return binding(leaf);
+      }
+      const uint64_t first = static_cast<uint64_t>(offset + c0) *
+          leaf.itemsize();
+      const uint64_t last = static_cast<uint64_t>(offset + c1) *
+          leaf.itemsize();
+      offset = offset + static_cast<uint32_t>(c0) -
+          omarchy::window_item_correction(
+              first, fc_alignment, leaf.itemsize());
+      return omarchy::window_binding(leaf, first, last, fc_alignment);
+    };
+    for (size_t i = 0; i < chain.leaves.size() && i < kMaxChainLeaves;
+         ++i) {
+      uint32_t& slot = i == 0
+          ? wparams.reduce_size
+          : i == 1 ? wparams.output_size : wparams.lhs_offset;
+      wbindings[i] = window_leaf(chain.leaves[i], slot);
+    }
+    if (materialize_intermediates && !chain.node_arrays.empty()) {
+      const uint64_t n_first =
+          static_cast<uint64_t>(c0) * chain.node_arrays[0].itemsize();
+      const uint64_t n_last =
+          static_cast<uint64_t>(c1) * chain.node_arrays[0].itemsize();
+      wbindings[2] = omarchy::window_binding(
+          chain.node_arrays[0], n_first, n_last, fc_alignment);
+      if (chain.node_arrays.size() > 2) {
+        wbindings[5] = omarchy::window_binding(
+            chain.node_arrays[1], n_first, n_last, fc_alignment);
+      }
+    }
+    // Output: a chain output is always count-sized.
+    const uint64_t o_first =
+        static_cast<uint64_t>(c0) * out.itemsize();
+    const uint64_t o_last = static_cast<uint64_t>(c1) * out.itemsize();
+    wbindings[0] = wbindings[1] = wbindings[4] = wbindings[5] =
+        omarchy::window_binding(out, o_first, o_last, fc_alignment);
+    // Preserve placeholder slots 3 (program_keeper) — the binding
+    // already carries the keeper bound whole.
+    wbindings[3] = bindings[3];
+    encoder.dispatch_compute(
+        kernel,
+        wbindings,
+        wparams,
+        compute_dispatch_group_count(
+            checked_u32(c1 - c0, name, out)));
+  }
 }
 
 } // namespace

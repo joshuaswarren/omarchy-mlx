@@ -1004,8 +1004,7 @@ bool dispatch_elementwise_windows(
     const std::string& name,
     const array& lhs,
     const array& rhs,
-    const array& out,
-    const array* dbg_in = nullptr) {
+    const array& out) {
     const omarchy::ComputeParams& params,
     const std::array<omarchy::ComputeBinding, 4>& bindings,
     bool general_broadcast,
