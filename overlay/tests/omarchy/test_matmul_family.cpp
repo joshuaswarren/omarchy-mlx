@@ -2295,14 +2295,16 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
                stream);
     array x = astype(
         array(x_all.begin(), Shape{index_count, m, k}, float32), dtype, stream);
-    std::vector<uint32_t> zeros(index_count, 0u);
-    array lhs0(zeros.begin(), Shape{index_count}, uint32);
-    array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+    std::vector<uint32_t> lhs_v(index_count);
+    for (auto& value : lhs_v) {
+      value = index_w(gen) % static_cast<uint32_t>(index_count);
+    }
+    array lhs(lhs_v.begin(), Shape{index_count}, uint32);
 
     std::vector<float> expected(index_count * m * n, 0.0f);
     for (int b = 0; b < index_count; ++b) {
       std::vector<float> piece = host_quantized_matmul(
-          host_w[rhs_v[b]], x_batches[b], m, n, k, group_size, bits);
+          host_w[rhs_v[b]], x_batches[lhs_v[b]], m, n, k, group_size, bits);
       std::copy(
           piece.begin(),
           piece.end(),
@@ -2320,7 +2322,7 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
           w_words,
           scales,
           biases,
-          lhs0,
+        lhs,
           rhs,
           transpose,
           group_size,
