@@ -1200,6 +1200,8 @@ void CommandEncoder::submit() {
     timeline.pSignalSemaphoreValues = signal_values.data();
     si.signalSemaphoreCount = static_cast<uint32_t>(signal_sems.size());
     si.pSignalSemaphores = signal_sems.data();
+    // Declared outside the try so the catch can detach it.
+    VkFence submit_fence = VK_NULL_HANDLE;
     try {
       queue_t0 = prof::get().profiling() ? prof::host_ns() : 0;
       // Deterministic swallow simulation for the recovery ladder, in the
@@ -1244,7 +1246,13 @@ void CommandEncoder::submit() {
       bool simulate_drop = env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SUBMIT");
       bool simulate_strip =
           !simulate_drop && env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SIGNAL");
-    VkFence submit_fence = device_.completions().acquire_execution_fence();
+      submit_fence = device_.completions().acquire_execution_fence();
+      // Attach BEFORE the submit: a concurrent free() on another stream
+      // must never see an empty fence deque for this value and recycle a
+      // buffer the queue is about to write. A failed submit detaches in
+      // the catch below.
+      device_.completions().attach_execution_fence(
+          completion_value, submit_fence);
       if (simulate_strip) {
         si.signalSemaphoreCount = 0;
         si.pSignalSemaphores = nullptr;
@@ -1260,9 +1268,10 @@ void CommandEncoder::submit() {
       } else {
         VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, submit_fence));
       }
-      device_.completions().attach_execution_fence(completion_value, submit_fence);
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {
+      device_.completions().detach_execution_fence(
+          completion_value, submit_fence);
       // The submission never reached the driver: the ended command buffer
       // and the pending semaphore lists are dead (their keepalives have
       // already moved into the local payload and die with this frame).

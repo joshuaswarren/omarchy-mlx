@@ -120,11 +120,10 @@ class VulkanAllocator : public allocator::Allocator {
 
   // Quarantine for buffers whose last reference died while recorded GPU
   // work may still touch them. free() routes such buffers here instead of
-  // the reuse cache; release_quarantine recycles them one completion
-  // generation later, once the driver's submit-final cleanup for their
-  // submission has provably run. Accounting (active_memory_) drops at
+  // the reuse cache; release_quarantine recycles the entries whose
+  // execution fence has signalled. Accounting (active_memory_) drops at
   // free() time, matching upstream Metal.
-  void release_quarantine(uint64_t cleanup_done_through);
+  void release_quarantine();
 
   // Encoder-level transfers (copy_buffer/fill_buffer) take raw VkBuffer
   // handles: resolve + stamp the owning live block so a transfer marks its

@@ -1695,13 +1695,12 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
       handler();
     }
   }
-  // Completion boundary: buffers freed since their submissions recorded
-  // leave the quarantine here. Cleanup for ready_value - 1 has provably
-  // run once this value is observable (Mesa signals a submission's
-  // semaphores before its submit-final cleanup retires the timeline
-  // points), so quarantined buffers recycle exactly one generation after
-  // their own completion.
-  omarchy::allocator().release_quarantine(ready_value - 1);
+  // Completion boundary: buffers freed while their submission was in
+  // flight wait in the quarantine; this pass recycles the ones whose
+  // execution fence has already signalled. On Honeykrisp the fence can
+  // signal after this observation, so the dispatcher's idle tick keeps
+  // running release passes while fences are outstanding.
+  omarchy::allocator().release_quarantine();
   // Semaphore-keepalive payloads retire one completion generation late:
   // Mesa signals a submission's semaphores (including the completion
   // timeline read above) BEFORE its submit-final cleanup releases that
@@ -1747,17 +1746,43 @@ VkFence CompletionDispatcher::acquire_execution_fence() {
 
 void CompletionDispatcher::attach_execution_fence(uint64_t value, VkFence fence) {
   std::lock_guard<std::mutex> lk(execution_mutex_);
-  execution_fences_.push_back({value, fence, false});
+  execution_fences_.push_back({value, fence});
 }
 
-void CompletionDispatcher::mark_execution_complete_through(uint64_t value) {
+void CompletionDispatcher::detach_execution_fence(
+    uint64_t value,
+    VkFence fence) {
+  if (fence == VK_NULL_HANDLE) {
+    return;
+  }
   std::lock_guard<std::mutex> lk(execution_mutex_);
+  for (auto it = execution_fences_.begin(); it != execution_fences_.end();
+       ++it) {
+    if (it->fence == fence) {
+      execution_fences_.erase(it);
+      break;
+    }
+  }
+  execution_fence_pool_.push_back(fence);
+}
+
+bool CompletionDispatcher::tick_execution_fences() {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  bool due = !execution_fences_.empty();
+  uint64_t retired_through = 0;
   while (!execution_fences_.empty() &&
-         execution_fences_.front().value <= value) {
+         vk::device_table().GetFenceStatus(
+             device_, execution_fences_.front().fence) == VK_SUCCESS) {
+    retired_through = execution_fences_.front().value;
     execution_fence_pool_.push_back(execution_fences_.front().fence);
     execution_fences_.pop_front();
   }
-  execution_done_through_ = std::max(execution_done_through_, value);
+  if (retired_through != 0) {
+    execution_done_through_ =
+        std::max(execution_done_through_, retired_through);
+    due = true;
+  }
+  return due;
 }
 
 bool CompletionDispatcher::execution_complete(uint64_t value) {
@@ -1768,11 +1793,6 @@ bool CompletionDispatcher::execution_complete(uint64_t value) {
   while (!execution_fences_.empty() &&
          execution_fences_.front().value <= value) {
     auto& front = execution_fences_.front();
-    if (front.done) {
-      execution_fence_pool_.push_back(front.fence);
-      execution_fences_.pop_front();
-      continue;
-    }
     if (vk::device_table().GetFenceStatus(device_, front.fence) ==
         VK_SUCCESS) {
       execution_fence_pool_.push_back(front.fence);
@@ -1797,6 +1817,16 @@ void CompletionDispatcher::run() {
       if (pending_.empty()) {
         if (stop_) {
           return;
+        }
+        // A quarantined buffer recycles when its execution fence
+        // signals, which on Honeykrisp can be after the last completion
+        // drained (the fence lags the timeline observation). Keep
+        // running release passes while fences are outstanding so
+        // recycling never depends on a later submission arriving.
+        if (tick_execution_fences()) {
+          lk.unlock();
+          omarchy::allocator().release_quarantine();
+          continue;
         }
         cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
           return stop_ || !pending_.empty();
