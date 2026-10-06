@@ -1,0 +1,10 @@
+# omarchy-mlx: let the logged-in seat user (and group video) hold a PM-QoS CPU
+# latency request. The Vulkan backend opens /dev/cpu_dma_latency and writes
+# int32 0 only while GPU work is in flight (overlay/mlx/backend/omarchy/
+# cpu_pd_hold.h): that keeps the CPU complex out of the deep idle state
+# `CPU PD`, which lifts the M1 (T8103) GPU performance state (TTFT -3..-9 %,
+# decode +0.6..0.8 %; receipts/2026-10-06-cpu-pd-hold). The request exists
+# only while the fd is open; the backend closes it within ~0.5 s of idle.
+# Opt out per process with MLX_OMARCHY_CPU_PD_HOLD=0; remove this rule and the
+# backend disables the hold silently.
+KERNEL=="cpu_dma_latency", SUBSYSTEM=="misc", GROUP="video", MODE="0660", TAG+="uaccess"

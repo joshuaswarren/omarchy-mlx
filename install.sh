@@ -180,6 +180,12 @@ print(next(p for root in mlx.__path__
   install -d -m 755 "$sharedir"
   install -m 644 "$ROOT/packaging/paths.sh" "$sharedir/paths.sh"
 
+  # PM-QoS access for the CPU deep-idle hold (overlay/.../cpu_pd_hold.h).
+  local udevdir="${dest_root%/}/usr/lib/udev/rules.d"
+  install -d -m 755 "$udevdir"
+  install -m 644 "$ROOT/packaging/udev/70-omarchy-mlx-cpu-dma-latency.rules" \
+    "$udevdir/70-omarchy-mlx-cpu-dma-latency.rules"
+
   local unitdir="${dest_root%/}/usr/lib/systemd/user"
   mkdir -p "$unitdir"
   cat >"$unitdir/$UNIT_NAME" <<EOF
