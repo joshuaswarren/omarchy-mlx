@@ -69,3 +69,30 @@ test change does not affect matmul). The DeepSeek wheel b4 stamp
 - (B) API scalar probe v7 (correct lhs semantics) shows the deployed
   SCALAR gather_qmm is correct on M1 Max at the tested configs; no
   scalar defect.
+
+## Addendum (2026-10-06 ~19:55Z): final landing candidate b8
+
+origin/land/moe-sub3 @ `ade1656c3` (= main `2f0dbb2a7` [TakeBool + SDPA chunk
+fix + FenceFix's allocator fence fix 2f0dbb2a7 + backports] + the 5 MoeLayer2
+commits, clean cherry-picks). Built on jw16 from a verified-clean checkout
+(HEAD hash + clean status; overlay-vs-.work full-glob diff 0 mismatches;
+MLX_OMARCHY_ANE_SOURCE_DIR not needed — optional, requires SHARED_LIBS=ON).
+
+| suite | result |
+|---|---|
+| matmul_family | **26/26 ✓** (binary 04746a6c46d7c563) |
+| runtime | **49/49 ✓** (new tests) |
+| take_fill / take_bool / kv_ops | 9/9, 5/5, 16/16 ✓ |
+| fast_ops | 43/43 cases ✓ (26 fused-sdpa-vjp asrt failures inside the may_fail case — pre-existing/known) |
+| capsim 6/6 | all SUCCESS |
+
+DeepSeek-Lite smoke on the b8 wheel (`0.32.4.dev202610061934+ade1656`, built
+from this exact commit): SUB=1 **71.51 ms/token med**, 16-token greedy sha
+**`7a907469015cb745`** — exactly the landing sha Main specified (semantics
+unchanged) — coherent text; SUB=0 475.66 ms/token, sha `1016cf9425bed746`,
+coherent; 6.65x. Provenance verified=match per arm.
+
+All 8 artifacts (7 suite binaries + the b8 wheel) staged on jwm1
+`~/b8-jwm1`, shas verified identical to jw16. jwm1 run pending w71's slot
+(Main's call). Completed 19:37:17Z, before the announced 19:45Z reboot
+window (which had not occurred as of 19:59Z).
