@@ -312,6 +312,8 @@ CapabilityReport collect_capabilities(
   caps.max_allocation_size = m3.maxMemoryAllocationSize;
   caps.max_buffer_size = m4.maxBufferSize;
   caps.max_storage_buffer_range = limits.maxStorageBufferRange;
+  caps.min_storage_buffer_offset_alignment =
+      limits.minStorageBufferOffsetAlignment;
   caps.max_per_stage_descriptor_storage_buffers =
       limits.maxPerStageDescriptorStorageBuffers;
   caps.max_descriptor_set_storage_buffers =
@@ -1062,6 +1064,7 @@ Device::Device(uint32_t physical_device_index) {
   VKX_LOAD_DEVICE_FN(CreateSemaphore, vkCreateSemaphore)
   VKX_LOAD_DEVICE_FN(DestroySemaphore, vkDestroySemaphore)
   VKX_LOAD_DEVICE_FN(GetSemaphoreCounterValue, vkGetSemaphoreCounterValue)
+  VKX_LOAD_DEVICE_FN(GetFenceStatus, vkGetFenceStatus)
   VKX_LOAD_DEVICE_FN(WaitSemaphores, vkWaitSemaphores)
   VKX_LOAD_DEVICE_FN(FlushMappedMemoryRanges, vkFlushMappedMemoryRanges)
   VKX_LOAD_DEVICE_FN(
@@ -1726,6 +1729,60 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
 uint64_t CompletionDispatcher::drained_value() {
   std::lock_guard<std::mutex> lk(mutex_);
   return drained_value_;
+}
+
+VkFence CompletionDispatcher::acquire_execution_fence() {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  if (!execution_fence_pool_.empty()) {
+    VkFence fence = execution_fence_pool_.back();
+    execution_fence_pool_.pop_back();
+    VKX_CHECK(vk::device_table().ResetFences(device_, 1, &fence));
+    return fence;
+  }
+  VkFence fence = VK_NULL_HANDLE;
+  VkFenceCreateInfo ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VKX_CHECK(vk::device_table().CreateFence(device_, &ci, nullptr, &fence));
+  return fence;
+}
+
+void CompletionDispatcher::attach_execution_fence(uint64_t value, VkFence fence) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  execution_fences_.push_back({value, fence, false});
+}
+
+void CompletionDispatcher::mark_execution_complete_through(uint64_t value) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  while (!execution_fences_.empty() &&
+         execution_fences_.front().value <= value) {
+    execution_fence_pool_.push_back(execution_fences_.front().fence);
+    execution_fences_.pop_front();
+  }
+  execution_done_through_ = std::max(execution_done_through_, value);
+}
+
+bool CompletionDispatcher::execution_complete(uint64_t value) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  if (value <= execution_done_through_) {
+    return true;
+  }
+  while (!execution_fences_.empty() &&
+         execution_fences_.front().value <= value) {
+    auto& front = execution_fences_.front();
+    if (front.done) {
+      execution_fence_pool_.push_back(front.fence);
+      execution_fences_.pop_front();
+      continue;
+    }
+    if (vk::device_table().GetFenceStatus(device_, front.fence) ==
+        VK_SUCCESS) {
+      execution_fence_pool_.push_back(front.fence);
+      execution_fences_.pop_front();
+      continue;
+    }
+    return false;
+  }
+  execution_done_through_ = std::max(execution_done_through_, value);
+  return true;
 }
 
 void CompletionDispatcher::run() {

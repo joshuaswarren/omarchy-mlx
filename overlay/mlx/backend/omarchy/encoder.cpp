@@ -349,6 +349,12 @@ void CommandEncoder::copy_buffer(
     VkDeviceSize size,
     VkDeviceSize src_offset,
     VkDeviceSize dst_offset) {
+  if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
+    batch_buffers_.push_back(vb);
+  }
+  if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
+    batch_buffers_.push_back(vb);
+  }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
     node.kind = PendingNode::Kind::Copy;
@@ -398,6 +404,9 @@ void CommandEncoder::fill_buffer(
     uint32_t value,
     VkDeviceSize size,
     VkDeviceSize offset) {
+  if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
+    batch_buffers_.push_back(vb);
+  }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
     node.kind = PendingNode::Kind::Fill;
@@ -1235,6 +1244,7 @@ void CommandEncoder::submit() {
       bool simulate_drop = env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SUBMIT");
       bool simulate_strip =
           !simulate_drop && env_hits_ordinal("MLX_OMARCHY_TEST_DROP_SIGNAL");
+    VkFence submit_fence = device_.completions().acquire_execution_fence();
       if (simulate_strip) {
         si.signalSemaphoreCount = 0;
         si.pSignalSemaphores = nullptr;
@@ -1248,8 +1258,9 @@ void CommandEncoder::submit() {
         fprintf(stderr, "[rtmod] TEST-STRIP tid=%lu cv=%lu\n",
                 (unsigned long)syscall(SYS_gettid), (unsigned long)completion_value);
       } else {
-        VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, VK_NULL_HANDLE));
+        VKX_CHECK(dt.QueueSubmit(device_.queue(), 1, &si, submit_fence));
       }
+      device_.completions().attach_execution_fence(completion_value, submit_fence);
       queue_t1 = prof::get().profiling() ? prof::host_ns() : 0;
     } catch (...) {
       // The submission never reached the driver: the ended command buffer

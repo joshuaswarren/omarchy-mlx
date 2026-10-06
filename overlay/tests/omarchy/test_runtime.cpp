@@ -1594,10 +1594,18 @@ TEST_CASE(
   CHECK(alloc.get_cache_memory() == cache_before);
 
   enc.synchronize(); // bounded completion wait; joins handler execution
-  // The reassignment above evaluated a fresh zeros, so a later
-  // generation drained during this synchronize: cleanup for the
-  // buffer's own submission has run and the quarantine recycled it.
-  CHECK(alloc.get_cache_memory() >= cache_before + 4096);
+  // The submission's execution fence gates the release now: the block
+  // recycles on the first drain after the fence signals (the timeline
+  // semaphore alone does not prove the batch's writes are done). Poll
+  // briefly for that release instead of demanding it synchronously.
+  bool released = false;
+  for (int i = 0; i < 200 && !released; ++i) {
+    released = alloc.get_cache_memory() >= cache_before + 4096;
+    if (!released) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  CHECK(released);
 
   alloc.free(scratch);
 }
@@ -2490,4 +2498,47 @@ TEST_CASE("CPU PD hold: default on for G13 parts other than G13C, env overrides"
   CHECK_FALSE(cpu_pd_hold_enabled_for("0", "Apple M1 (G13G B1)"));
   CHECK(cpu_pd_hold_enabled_for("1", "Apple M1 Max (G13C C0)"));
   CHECK(cpu_pd_hold_enabled_for("on", "Apple M2 (G14G B1)"));
+}
+
+TEST_CASE("recycled block is not rewritten by the previous owner in flight") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s1 = new_stream(Device::gpu);
+  Stream s2 = new_stream(Device::gpu);
+  auto& e1 = omarchy::get_command_encoder(s1);
+  auto& e2 = omarchy::get_command_encoder(s2);
+  constexpr size_t kBytes = 1 << 26;
+  constexpr uint32_t kP1 = 0x11111111u;
+  constexpr uint32_t kP2 = 0x22222222u;
+  auto a = alloc.malloc(kBytes);
+  auto* a_buf = static_cast<omarchy::VulkanBuffer*>(a.ptr());
+  array a_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
+  a_view.set_data(
+      a, a_view.size(), a_view.strides(), a_view.flags(), 0,
+      [](allocator::Buffer) {});
+  for (int i = 0; i < 96; ++i) {
+    e1.fill_buffer(a_buf->buffer, kP1, kBytes);
+  }
+  e1.commit();
+  alloc.free(a);
+  auto b = alloc.malloc(kBytes);
+  CHECK(b.ptr() != a.ptr());
+  auto* b_buf = static_cast<omarchy::VulkanBuffer*>(b.ptr());
+  array b_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
+  b_view.set_data(
+      b, b_view.size(), b_view.strides(), b_view.flags(), 0,
+      [](allocator::Buffer) {});
+  e2.fill_buffer(b_buf->buffer, kP2, kBytes);
+  e2.commit();
+  e2.synchronize();
+  e1.synchronize();
+  const auto* words = static_cast<const uint32_t*>(b_buf->data);
+  CHECK(std::all_of(words, words + kBytes / sizeof(uint32_t),
+                    [](uint32_t word) { return word == kP2; }));
+  alloc.free(b);
 }

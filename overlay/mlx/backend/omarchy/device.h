@@ -110,6 +110,10 @@ struct CapabilityReport {
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};
   VkDeviceSize max_storage_buffer_range{0};
+  // Storage buffers bind at offsets aligned to at least this many
+  // bytes; windowed bindings align their starts down to it and correct
+  // the kernel's element offset by the moved bytes.
+  uint32_t min_storage_buffer_offset_alignment{0};
   bool host_visible_coherent{false};
   // Storage-buffer descriptor limits reported by the physical device. These
   // bound the compute binding budget (compute.h kComputeBindingBudget).
@@ -233,6 +237,17 @@ class CompletionDispatcher {
   void retain_for_resubmit(uint64_t value, ResubmitBatch batch);
   std::vector<ResubmitBatch> take_resubmit_batches(uint64_t through_value);
 
+  // Attach the submission fence for |value|: the fence signals when the
+  // driver has fully finished executing the batch, unlike the completion
+  // timeline semaphore which Mesa signals before its submit-final cleanup.
+  void attach_execution_fence(uint64_t value, VkFence fence);
+  // Non-stalling: true when every submission <= |value| provably finished
+  // executing (all attached fences signalled). The only sound safe-to-
+  // recycle test; the timeline observation is not.
+  bool execution_complete(uint64_t value);
+  VkFence acquire_execution_fence();
+  void mark_execution_complete_through(uint64_t value);
+
  private:
   void run();
   void drain_through(uint64_t max_value);
@@ -244,6 +259,17 @@ class CompletionDispatcher {
   // Completion value -> the batch that carries it, retained until the
   // completion drains so a dropped submission can be resubmitted.
   std::map<uint64_t, ResubmitBatch> resubmitable_;
+  // Submission execution fences, in value order: recycle decisions use
+  // these, not the pre-cleanup timeline observation.
+  struct ExecutionFence {
+    uint64_t value;
+    VkFence fence;
+    bool done;
+  };
+  std::deque<ExecutionFence> execution_fences_;
+  std::vector<VkFence> execution_fence_pool_;
+  uint64_t execution_done_through_{0};
+  std::mutex execution_mutex_;
   // Payloads of already-drained completions, released one completion
   // later. Mesa signals a submission's semaphores before its submit-final
   // cleanup releases timeline points, so a completion value on this

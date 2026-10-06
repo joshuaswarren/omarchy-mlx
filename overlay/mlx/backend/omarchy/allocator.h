@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include "mlx/allocator.h"
@@ -125,6 +126,11 @@ class VulkanAllocator : public allocator::Allocator {
   // free() time, matching upstream Metal.
   void release_quarantine(uint64_t cleanup_done_through);
 
+  // Encoder-level transfers (copy_buffer/fill_buffer) take raw VkBuffer
+  // handles: resolve + stamp the owning live block so a transfer marks its
+  // target in flight; returns nullptr for unknown handles.
+  VulkanBuffer* note_buffer_handle(VkBuffer handle);
+
   // Record a buffer referenced by an open batch (encoder add_temporary
   // and dispatch bindings). The stamp is unconditional: a buffer whose
   // stamp still names an older in-flight generation must not recycle
@@ -178,6 +184,8 @@ class VulkanAllocator : public allocator::Allocator {
   size_t active_memory_{0};
   size_t peak_memory_{0};
   mutable BufferCache<VulkanBuffer> buffer_cache_;
+  // Live blocks by VkBuffer handle (encoder-level transfer stamping).
+  std::unordered_map<VkBuffer, VulkanBuffer*> live_by_handle_;
   std::vector<VulkanBuffer*> noncoherent_;
   // Freed buffers whose recorded GPU work may still reference them (see
   // release_quarantine). Held outside the reuse cache until released.
