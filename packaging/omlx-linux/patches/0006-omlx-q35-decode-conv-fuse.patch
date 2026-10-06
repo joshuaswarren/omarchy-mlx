@@ -1,0 +1,84 @@
+--- a/omlx/patches/mlx_lm_mtp/qwen35_model.py
++++ b/omlx/patches/mlx_lm_mtp/qwen35_model.py
+@@ -49,6 +49,7 @@
+ from __future__ import annotations
+ 
+ import logging
++import os
+ from typing import Any, Optional
+ 
+ from ..dflash_lifecycle import get_dflash_guard_base, set_dflash_guard_base
+@@ -265,16 +266,54 @@
+         lengths=None,
+     ):
+         B, S_chunk = qkv_chunk.shape[:2]
+-        conv_in = mx.concatenate([conv_state, qkv_chunk], axis=1)
+-        n_keep = self.conv_kernel_size - 1
+-        if lengths is not None:
+-            ends = mx.clip(lengths, 0, S_chunk)
+-            positions = (ends[:, None] + mx.arange(n_keep))[..., None]
+-            new_conv_state = mx.take_along_axis(conv_in, positions, axis=1)
+-        else:
+-            new_conv_state = mx.contiguous(conv_in[:, -n_keep:])
+-        conv_out = nn.silu(self.conv1d(conv_in))
+ 
++        # mlx-omarchy decode fast route: single-token chunks fold the conv1d,
++        # the silu activation, and the GDN q/k rms_norm_scaled pair into one
++        # mx.fast.gdn_conv_update dispatch, exactly like the qwen3_5 series
++        # patch on the mlx-lm side. Same gates, same arithmetic; any gate
++        # mismatch runs the composed chain below unchanged.
++        qknorm_fused = False
++        if (
++            os.environ.get("MLX_OMARCHY_OMLX_CONV_FUSE", "1") != "0"
++            and S_chunk == 1
++            and lengths is None
++            and qkv_chunk.dtype == mx.bfloat16
++            and mx.default_device() == mx.gpu
++            and hasattr(mx.fast, "gdn_conv_update")
++        ):
++            if (
++                os.environ.get("MLX_OMARCHY_GDN_QKNORM_FUSE", "1") == "1"
++                and self.head_k_dim == 128
++                and self.key_dim % 256 == 0
++                and (qkv_chunk.shape[0] * qkv_chunk.shape[2]) % 256 == 0
++            ):
++                inv_scale_qk = self.head_k_dim**-0.5
++                conv_out, new_conv_state = mx.fast.gdn_conv_update(
++                    conv_state,
++                    qkv_chunk,
++                    self.conv1d.weight,
++                    activate=True,
++                    qk_key_dim=self.key_dim,
++                    qk_scale_q=inv_scale_qk * inv_scale_qk,
++                    qk_scale_k=inv_scale_qk,
++                    qk_eps=1e-6 * inv_scale_qk * inv_scale_qk,
++                )
++                qknorm_fused = True
++            else:
++                conv_out, new_conv_state = mx.fast.gdn_conv_update(
++                    conv_state, qkv_chunk, self.conv1d.weight, activate=True
++                )
++        if not qknorm_fused:
++            conv_in = mx.concatenate([conv_state, qkv_chunk], axis=1)
++            n_keep = self.conv_kernel_size - 1
++            if lengths is not None:
++                ends = mx.clip(lengths, 0, S_chunk)
++                positions = (ends[:, None] + mx.arange(n_keep))[..., None]
++                new_conv_state = mx.take_along_axis(conv_in, positions, axis=1)
++            else:
++                new_conv_state = mx.contiguous(conv_in[:, -n_keep:])
++            conv_out = nn.silu(self.conv1d(conv_in))
++
+         q, k, v = [
+             t.reshape(B, S_chunk, h, d)
+             for t, h, d in zip(
+@@ -283,7 +322,8 @@
+                 [self.head_k_dim, self.head_k_dim, self.head_v_dim],
+             )
+         ]
+-        q, k = normalize_qk(q, k, inv_scale=self.head_k_dim**-0.5, eps=1e-6)
++        if not qknorm_fused:  # else q/k norms are folded into the conv epilogue
++            q, k = normalize_qk(q, k, inv_scale=self.head_k_dim**-0.5, eps=1e-6)
+ 
+         out, new_ssm_state = gated_delta_update(
+             q,

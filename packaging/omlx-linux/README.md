@@ -76,6 +76,19 @@ Metal APIs are absent?". Patches:
 - `patches/0001-linux-hardware-proc-meminfo.patch`
 - `patches/0002-linux-cli-cache-limit-total-memory.patch`
 - `patches/0003-linux-enforcer-no-wired-limit-log.patch`
+- `patches/0006-omlx-q35-decode-conv-fuse.patch` — GDN decode fast route
+  for the oMLX MTP model. The server's own `qwen35_model.py` routes every
+  chunk through `_process_chunk`'s composed chain (conv1d + silu +
+  `normalize_qk` as separate dispatches) even for single-token decode,
+  where the mlx-lm series folds all three into one
+  `mx.fast.gdn_conv_update` dispatch: 18 layers × ~4 extra dispatches
+  per decode step. The patch adds the series' fused branch — same gates
+  (S==1, bf16, GPU device, `hasattr`), same qk-norm fold conditions
+  (head_k_dim 128, widths %256), and a kill switch
+  `MLX_OMARCHY_OMLX_CONV_FUSE=0` — to `_process_chunk`. Contract tests:
+  `test_omlx_q35_conv_fuse.py` (fused route engages on decode; fused
+  output bit-equal to composed on the omarchy wheel; kill switch and
+  multi-token chunks stay composed).
 
 Tools in this layer:
 
