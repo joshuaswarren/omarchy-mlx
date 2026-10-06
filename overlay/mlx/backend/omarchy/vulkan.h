@@ -162,6 +162,7 @@ struct DeviceTable {
   PFN_vkCreateFence CreateFence{nullptr};
   PFN_vkDestroyFence DestroyFence{nullptr};
   PFN_vkResetFences ResetFences{nullptr};
+  PFN_vkGetFenceStatus GetFenceStatus{nullptr};
   PFN_vkWaitForFences WaitForFences{nullptr};
   PFN_vkCreateSemaphore CreateSemaphore{nullptr};
   PFN_vkDestroySemaphore DestroySemaphore{nullptr};
