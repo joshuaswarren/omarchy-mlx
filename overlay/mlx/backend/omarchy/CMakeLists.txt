@@ -383,6 +383,15 @@ omarchy_shader(
 # see receipts/2026-10-05-gdn-prefill.
 omarchy_shader(gated_delta_prefill_kktqkt shaders/gated_delta_prefill_kktqkt.comp)
 omarchy_shader(gated_delta_prefill_coopmat_hoist_bf16 shaders/gated_delta_prefill_coopmat_hoist.comp)
+# HOIST pass-B Dv split (MLX_OMARCHY_GDN_VSPLIT=2|4, default OFF): one
+# source, two pipelines; bit-identical to the unsplit pass B, smaller
+# per-workgroup shared footprint. See receipts/2026-10-06-gdn-vsplit.
+omarchy_shader(
+    gated_delta_prefill_coopmat_hoist_vsplit2_bf16
+    shaders/gated_delta_prefill_coopmat_hoist_vsplit.comp -DGDN_VSPLIT=2)
+omarchy_shader(
+    gated_delta_prefill_coopmat_hoist_vsplit4_bf16
+    shaders/gated_delta_prefill_coopmat_hoist_vsplit.comp -DGDN_VSPLIT=4)
 # VjpKernels: fused backward kernels for SDPA (upstream #4563) and the
 # gated delta update (upstream #4565). One gated_delta_vjp.comp source
 # builds the state-recall pass (save) and the backward pass.

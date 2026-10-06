@@ -850,6 +850,14 @@ enum class ComputeKernel : uint16_t {
   // composed route's f32 score matrix exceeds the uint32 element or
   // descriptor byte limits. Append-only profile id.
   SdpaPrefillFlashBF16Hd128,
+  // GDN prefill HOIST pass-B Dv split (MLX_OMARCHY_GDN_VSPLIT=2|4, default
+  // OFF): per-simdgroup arithmetic identical to
+  // GatedDeltaPrefillCoopmatHoistBF16, packed into 2 (or 1) simdgroups
+  // per workgroup so per-WG shared drops to 13,952 (6,976) bytes and 2
+  // (4) workgroups fit a 32 KiB core. Bit-identical by construction;
+  // append-only profile ids.
+  GatedDeltaPrefillCoopmatHoistVsplit2BF16,
+  GatedDeltaPrefillCoopmatHoistVsplit4BF16,
   Count,
 };
 

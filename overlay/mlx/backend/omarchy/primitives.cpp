@@ -11867,13 +11867,37 @@ void GatedDeltaUpdate::eval_gpu(
           static_cast<uint32_t>(Hv),
           Dv / 32,
           hoist_chunks);
-      encoder.dispatch_compute(
-          omarchy::ComputeKernel::GatedDeltaPrefillCoopmatHoistBF16,
-          hoist_bindings,
-          params,
-          static_cast<uint32_t>(Hv),
-          Dv / 32,
-          1);
+      // Optional pass-B Dv split (MLX_OMARCHY_GDN_VSPLIT=2|4, default
+      // OFF): same per-simdgroup arithmetic (bit-identical), packed into
+      // 2 or 1 simdgroups per workgroup so per-WG shared drops from
+      // 27,904 B to 13,952 / 6,976 B and 2 / 4 workgroups fit a 32 KiB
+      // core. Any other value keeps the shipped grid (Hv, Dv/32, 1).
+      static const int gdn_vsplit_env = [] {
+        const char* v = std::getenv("MLX_OMARCHY_GDN_VSPLIT");
+        return v ? std::atoi(v) : 0;
+      }();
+      if (gdn_vsplit_env == 2 || gdn_vsplit_env == 4) {
+        const uint32_t sgpw = static_cast<uint32_t>(gdn_vsplit_env);
+        encoder.dispatch_compute(
+            sgpw == 2
+                ? omarchy::ComputeKernel::
+                    GatedDeltaPrefillCoopmatHoistVsplit2BF16
+                : omarchy::ComputeKernel::
+                    GatedDeltaPrefillCoopmatHoistVsplit4BF16,
+            hoist_bindings,
+            params,
+            static_cast<uint32_t>(Hv),
+            Dv / (8u * sgpw),
+            1);
+      } else {
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::GatedDeltaPrefillCoopmatHoistBF16,
+            hoist_bindings,
+            params,
+            static_cast<uint32_t>(Hv),
+            Dv / 32,
+            1);
+      }
       return;
     }
     encoder.dispatch_compute(
