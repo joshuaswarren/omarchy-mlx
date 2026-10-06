@@ -1696,11 +1696,13 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
     }
   }
   // Completion boundary: buffers freed while their submission was in
-  // flight wait in the quarantine; this pass recycles the ones whose
-  // execution fence has already signalled. On Honeykrisp the fence can
-  // signal after this observation, so the dispatcher's idle tick keeps
-  // running release passes while fences are outstanding.
-  omarchy::allocator().release_quarantine();
+  // flight wait in the quarantine; this pass recycles the ones from
+  // generation ready_value - 1 (observing generation N proves cleanup
+  // for N-1 ran) whose execution fence has already signalled. A fence
+  // that signals later is picked up by the dispatcher's idle tick, which
+  // keeps running release passes while fences are outstanding or blocks
+  // are parked.
+  omarchy::allocator().release_quarantine(ready_value - 1);
   // Semaphore-keepalive payloads retire one completion generation late:
   // Mesa signals a submission's semaphores (including the completion
   // timeline read above) BEFORE its submit-final cleanup releases that
@@ -1818,16 +1820,24 @@ void CompletionDispatcher::run() {
         if (stop_) {
           return;
         }
-        // A quarantined buffer recycles when its execution fence
-        // signals, which on Honeykrisp can be after the last completion
-        // drained (the fence lags the timeline observation). Keep
-        // running release passes while fences are outstanding so
+        // A quarantined buffer recycles one generation after its own
+        // completion once its execution fence signals - which on
+        // Honeykrisp can be after the last completion drained (the fence
+        // lags the timeline observation). Keep running release passes
+        // while fences are outstanding or blocks are parked, so
         // recycling never depends on a later submission arriving.
-        if (tick_execution_fences()) {
-          lk.unlock();
-          omarchy::allocator().release_quarantine();
+        // drained_value_ is read under |mutex_|; the probes and the pass
+        // run unlocked (they take allocator/execution locks, and free()
+        // on another thread may hold an allocator lock while reading
+        // dispatcher state).
+        uint64_t through = drained_value_;
+        lk.unlock();
+        if (tick_execution_fences() ||
+            omarchy::allocator().has_quarantined()) {
+          omarchy::allocator().release_quarantine(through);
           continue;
         }
+        lk.lock();
         cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
           return stop_ || !pending_.empty();
         });
