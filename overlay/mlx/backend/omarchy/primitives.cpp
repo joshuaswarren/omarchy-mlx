@@ -853,7 +853,13 @@ void dispatch_matmul(
   const size_t b_itemsize = b->itemsize();
   const uint64_t b_bytes = static_cast<uint64_t>(b->size()) * b_itemsize;
   uint64_t b_window_cols = 0;
-  if (params.dims == 0 && b_transposed && !sdpa &&
+  // collapse_matmul_batches pads an empty batch to [1], so a plain 2D
+  // matmul carries dims == 1 with a single zero-stride batch axis —
+  // gate on that shape, not on dims == 0, or the window below is dead
+  // code for exactly the lm_head case it exists for.
+  const bool windowable_batch = params.dims == 0 ||
+      (params.dims == 1 && params.shape[0] == 1);
+  if (windowable_batch && b_transposed && !sdpa &&
       !(use_c && params.matrix_m == 1u) && b_bytes > range_limit) {
     const uint64_t per_col = static_cast<uint64_t>(k) * b_itemsize;
     if (per_col <= range_limit) {
