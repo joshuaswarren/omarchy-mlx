@@ -117,6 +117,16 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-aligned-array-pointer.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-vmap-scatter-axis.patch"
+# logcumsumexp: promote integer/bool inputs to a float dtype before the
+# scan. The integer scan accumulated logaddexp in integer arithmetic (a
+# cumulative maximum) and the GPU had no integer kernel; every other
+# log-space op promotes.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-logcumsumexp-float-promote.patch"
+# CPU reductions over large arrays: widen offsets and sizes to int64 so a
+# reduction past 2^31 elements reads the right rows.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-reduce-large-offsets.patch"
 # CPU quantized matmul: accumulate the scalar (non-SIMD) full-row and
 # k-outer kernels in float32 instead of the activation dtype. A bfloat16
 # accumulator drifts several percent from the f64 dequant reference at

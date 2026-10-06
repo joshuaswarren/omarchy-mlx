@@ -1,0 +1,40 @@
+# Upstream: ml-explore/mlx 2b2bb4979 (Promote integer inputs in logcumsumexp, #4625)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/ops.cpp b/mlx/ops.cpp
+index 7f1d521d7..c1295e9eb 100644
+--- a/mlx/ops.cpp
++++ b/mlx/ops.cpp
+@@ -4440,12 +4440,13 @@ array logcumsumexp(
+     bool inclusive /* = true*/,
+     StreamOrDevice s /* = {}*/) {
+   axis = normalize_axis_index(axis, a.ndim(), "[logcumsumexp] ");
++  auto out_type = at_least_float(a.dtype());
+   return array(
+       a.shape(),
+-      a.dtype(),
++      out_type,
+       std::make_shared<Scan>(
+           to_stream(s), Scan::ReduceType::LogAddExp, axis, reverse, inclusive),
+-      {a});
++      {astype(a, out_type, s)});
+ }
+ 
+ array logcumsumexp(
+diff --git a/python/tests/test_ops.py b/python/tests/test_ops.py
+index 836362e1b..302d81fdb 100644
+--- a/python/tests/test_ops.py
++++ b/python/tests/test_ops.py
+@@ -2644,11 +2644,9 @@ class TestOps(mlx_tests.MLXTestCase):
+                     mxop(a, axis=ax)
+ 
+             # Valid negative axes still work and agree with the positive one
+-            # logcumsumexp has no integer kernel, so use a float input
+-            a_ = a.astype(mx.float32) if op == "logcumsumexp" else a
+             for ax in [-1, -2, -3]:
+-                out_neg = mxop(a_, axis=ax)
+-                out_pos = mxop(a_, axis=ax + a_.ndim)
++                out_neg = mxop(a, axis=ax)
++                out_pos = mxop(a, axis=ax + a.ndim)
+                 self.assertTrue(mx.array_equal(out_neg, out_pos))
+ 
+     def test_scans(self):
