@@ -11871,13 +11871,19 @@ void GatedDeltaUpdate::eval_gpu(
       // OFF): same per-simdgroup arithmetic (bit-identical), packed into
       // 2 or 1 simdgroups per workgroup so per-WG shared drops from
       // 27,904 B to 13,952 / 6,976 B and 2 / 4 workgroups fit a 32 KiB
-      // core. Any other value keeps the shipped grid (Hv, Dv/32, 1).
+      // core. The env value is the Dv split factor (2 -> Dv/2 columns
+      // per workgroup = 2 simdgroups; 4 -> Dv/4 = 1 simdgroup), so the
+      // grid is (Hv, Dv/(8*SGPW), 1) = (Hv, Dv/16, 1) or (Hv, Dv/8, 1).
+      // b777500c launched VSPLIT=4 with the SGPW-as-env-value divisor
+      // Dv/32: only slabs 0-3 ran, 3/4 of y and state were never
+      // written. Any other env value keeps the shipped grid
+      // (Hv, Dv/32, 1).
       static const int gdn_vsplit_env = [] {
         const char* v = std::getenv("MLX_OMARCHY_GDN_VSPLIT");
         return v ? std::atoi(v) : 0;
       }();
       if (gdn_vsplit_env == 2 || gdn_vsplit_env == 4) {
-        const uint32_t sgpw = static_cast<uint32_t>(gdn_vsplit_env);
+        const uint32_t sgpw = gdn_vsplit_env == 2 ? 2u : 1u;
         encoder.dispatch_compute(
             sgpw == 2
                 ? omarchy::ComputeKernel::

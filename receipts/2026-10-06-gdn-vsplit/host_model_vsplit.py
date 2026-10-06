@@ -96,6 +96,14 @@ def tok(mat, nv):
 def run_pass_b(q, k, v, g, beta, h0, snap, T, sgpw, strict_snap=True):
     """Emulate the vsplit pass-B kernel at local_size_y = sgpw."""
     gy_count = DV // (8 * sgpw)
+    # Dispatch contract (primitives.cpp): grid y = Dv / (8 * SGPW), with
+    # SGPW = 2 for MLX_OMARCHY_GDN_VSPLIT=2 and 1 for VSPLIT=4 — the env
+    # value is the Dv split factor, NOT the simdgroup count. b777500c
+    # launched VSPLIT=4 with divisor Dv/32 (as if SGPW were 4), covering
+    # only slabs 0-3; these asserts pin the shader schedule to the same
+    # grid expression the dispatcher must launch.
+    assert DV % (8 * sgpw) == 0
+    assert gy_count * sgpw == DV // 8, "slab coverage mismatch vs dispatch"
     y = np.zeros((T, HV, DV), dtype=np.float32)
     state_out = np.zeros_like(h0)
     chunks = (T + C - 1) // C
