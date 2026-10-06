@@ -83,12 +83,6 @@ layout(set = 0, binding = 4, std430) readonly buffer OutGlobalScale {
 } out_global_scale_data;
 #endif
 
-// lhs/rhs index reads: the packed staging buffer (every variant).
-// Defined at file scope: main() is shared by all variants, including
-// the fp ones whose parameter decoding differs.
-#define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
-#define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
-
 layout(push_constant) uniform Params {
   uint count;
   uint operation;
@@ -177,8 +171,6 @@ float decode_param(uint byte_offset) {
 #endif
 }
 
-#define BIAS_PARAM_AT(byte_offset) decode_param(params.shape[1] + (byte_offset))
-
 #define DECODE_VALUE(q) float(q)
 #endif
 
@@ -226,8 +218,10 @@ void main() {
     uint within = index - batch * matrix;
     uint row = within / params.matrix_n;
     uint column = within - row * params.matrix_n;
-    uint lhs = LHS_INDEX_AT(batch);
-    uint rhs = RHS_INDEX_AT(batch);
+    uint lhs = packed_params.values[params.aux_offset + lhs_word_base +
+        batch];
+    uint rhs = packed_params.values[params.aux_offset + rhs_word_base +
+        batch];
     uint x_base = params.lhs_offset +
         lhs * (params.matrix_m * params.matrix_k) +
         row * params.matrix_k;
@@ -254,9 +248,10 @@ void main() {
             param_bytes);
         float bias = 0.0;
 #ifndef NO_BIAS
-        // Bias region byte offset: after the whole scales region in the
-        // packed layout (shape[1]); the dedicated bias buffer in SEP.
-        bias = BIAS_PARAM_AT((scale_base + k * param_step) * param_bytes);
+        // shape[1] is the byte base of the bias region inside the packed
+        // buffer, placed after the whole scales region.
+        bias = decode_param(params.shape[1] +
+            (scale_base + k * param_step) * param_bytes);
 #endif
         accumulator += LOAD_VALUE(input_x.values[x_base + k]) *
             (scale * DECODE_VALUE(q) + bias);
@@ -278,9 +273,10 @@ void main() {
         float scale = decode_param((scale_base + group) * param_bytes);
         float bias = 0.0;
 #ifndef NO_BIAS
-        // Bias region byte offset: after the whole scales region in the
-        // packed layout (shape[1]); the dedicated bias buffer in SEP.
-        bias = BIAS_PARAM_AT((scale_base + group) * param_bytes);
+        // shape[1] is the byte base of the bias region inside the packed
+        // buffer, placed after the whole scales region.
+        bias = decode_param(params.shape[1] +
+            (scale_base + group) * param_bytes);
 #endif
         accumulator += LOAD_VALUE(input_x.values[x_base + k]) *
             (scale * DECODE_VALUE(q) + bias);
