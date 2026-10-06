@@ -27,11 +27,16 @@
 // USE_U32 selects raw uint32 storage: words copy with no float
 // conversion, so int32/uint32 tables and packed words above 2^31 stay
 // bit-exact. USE_U16 copies raw halfwords the same way; USE_I64 copies
-// raw 8-byte elements. USE_MULTI_INDEX packs every broadcast index
-// array into binding 1, stores [axis extents | table strides | packed
-// word offsets] at binding 2, and moves output to binding 3. The push-
-// constant tables cap table and broadcast-index ranks at four; gathered
-// axes use the external metadata table.
+// raw 8-byte elements. USE_BOOL copies packed bytes through the same
+// 32-bit storage type; the lower bits of each output word hold the
+// bool values, and BYTE_AT extracts the lane, exactly the byte-load
+// path the scatter bool variants and the packed-bool SelectBool already
+// use (no 8-bit storage feature needed because reads ride a uint
+// word). USE_MULTI_INDEX packs every broadcast index array into binding
+// 1, stores [axis extents | table strides | packed word offsets] at
+// binding 2, and moves output to binding 3. The push-constant tables
+// cap table and broadcast-index ranks at four; gathered axes use the
+// external metadata table.
 #version 460
 
 #ifdef USE_COMPLEX
@@ -61,6 +66,20 @@ uint16_t bf16_store(float value) {
 #define STORAGE_TYPE uint
 #define LOAD_VALUE(x) (x)
 #define STORE_VALUE(x) (x)
+#elif defined(USE_BOOL)
+// Packed-bool storage: one byte per element, four elements per word.
+// The lower byte of each output word is the bool, matching the
+// std430 layout the bool Cast / Select / Scatter kernels use, and
+// the host materializes any non-dense bool table to a dense same-
+// dtype row-major temp before the dispatch. Index reads are byte-
+// addressed through BYTE_AT; output writes byte OR the new bit into
+// the same word slot, so two bools in one word never collide. The
+// LOAD_BOOL macro takes the word AND the byte-lane inside it; the
+// shift amount depends on the source element address, the same
+// pattern the scatter bool lane extraction uses.
+#define STORAGE_TYPE uint
+#define LOAD_BOOL_LANE(word, lane) (((word) >> ((lane) * 8u)) & 0xFFu)
+#define STORE_BOOL(b) ((b) ? 1u : 0u)
 #elif defined(USE_U16)
 // Raw 16-bit table storage: halfwords copy bitwise, so int16/uint16
 // tables keep packed bits exact. Reads need the 16-bit storage
@@ -235,11 +254,32 @@ void main() {
 #else
     float value = 0.0;
 #endif
+#ifdef USE_BOOL
+    // Packed-bool write: each output index t owns a unique byte lane
+    // inside output word (output_offset + t) >> 2. A plain 32-bit word
+    // store would clobber three neighbor bools, so the bit goes in
+    // through atomicOr. The four bools of one output word are written
+    // by four threads, each on a different byte lane - no two writers
+    // touch the same byte, so the OR is a simple merge. The read side
+    // word-shifts the byte address too, because input_data.values is
+    // a uint array indexed by word, not by byte.
+    uint in_elem = params.lhs_offset + src + win;
+    bool bvalue = valid
+        ? (LOAD_BOOL_LANE(input_data.values[in_elem >> 2u],
+                          in_elem & 3u) != 0u)
+        : false;
+    uint out_elem = params.output_offset + t;
+    uint out_byte = out_elem & 3u;
+    uint out_word_index = out_elem >> 2u;
+    uint bbit = STORE_BOOL(bvalue) << (out_byte * 8u);
+    atomicOr(output_data.values[out_word_index], bbit);
+#else
     if (valid) {
       value = LOAD_VALUE(
           input_data.values[params.lhs_offset + src + win]);
     }
     output_data.values[params.output_offset + t] = STORE_VALUE(value);
+#endif
     if (params.count - t <= stride) {
       break;
     }

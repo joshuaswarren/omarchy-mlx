@@ -5794,7 +5794,9 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool raw_half_table = table.dtype() == uint16 || table.dtype() == int16;
   bool raw_i64_table = table.dtype() == int64 || table.dtype() == uint64;
   bool complex_table = table.dtype() == complex64;
-  if (raw_word_table || raw_half_table || raw_i64_table || complex_table) {
+  bool bool_table = table.dtype() == bool_;
+  if (raw_word_table || raw_half_table || raw_i64_table || complex_table ||
+      bool_table) {
     if (out.dtype() != table.dtype()) {
       omarchy::unsupported("Take dtype", out);
     }
@@ -5947,6 +5949,12 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.size() == 0) {
     return;
   }
+  // Packed-bool output merges through atomicOr, so the uninitialized
+  // allocation must start at zero or stale lanes survive an OR of 0.
+  if (bool_table) {
+    size_t zero_bytes = (out.nbytes() + 3u) & ~size_t{3u};
+    encoder.fill_buffer(binding(out).buffer, 0u, zero_bytes, 0);
+  }
   uint32_t count = checked_u32(out.size(), "Take", out);
   omarchy::ComputeParams params;
   params.count = count;
@@ -5981,6 +5989,9 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto kernel = complex_table
       ? (nidx > 1 ? omarchy::ComputeKernel::TakeMultiComplex64
                   : omarchy::ComputeKernel::TakeComplex64)
+      : bool_table
+      ? (nidx > 1 ? omarchy::ComputeKernel::TakeMultiBool
+                  : omarchy::ComputeKernel::TakeBool)
       : raw_word_table
       ? (nidx > 1 ? omarchy::ComputeKernel::TakeMultiU32
                   : omarchy::ComputeKernel::TakeU32)
@@ -6014,7 +6025,8 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
       src.dtype() == float32;
   bool raw_i64 = src.dtype() == int64 || src.dtype() == uint64;
   bool complex = src.dtype() == complex64;
-  if (raw_word || raw_i64 || complex) {
+  bool bool_src = src.dtype() == bool_;
+  if (raw_word || raw_i64 || complex || bool_src) {
     if (out.dtype() != src.dtype()) {
       omarchy::unsupported("Take dtype", out);
     }
@@ -6059,6 +6071,11 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.size() == 0) {
     return;
   }
+  // Packed-bool output merges through atomicOr; zero first.
+  if (bool_src) {
+    size_t zero_bytes = (out.nbytes() + 3u) & ~size_t{3u};
+    encoder.fill_buffer(binding(out).buffer, 0u, zero_bytes, 0);
+  }
   uint32_t count = checked_u32(out.size(), "Take", out);
   omarchy::ComputeParams params;
   params.count = count;
@@ -6093,6 +6110,7 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(src), binding(indices_d), binding(out)};
   auto kernel = complex ? omarchy::ComputeKernel::GatherAxisComplex64
+      : bool_src ? omarchy::ComputeKernel::GatherAxisBool
       : raw_i64 ? omarchy::ComputeKernel::GatherAxisI64
       : src.dtype() == float16 ? omarchy::ComputeKernel::GatherAxisF16
       : src.dtype() == bfloat16 ? omarchy::ComputeKernel::GatherAxisBF16

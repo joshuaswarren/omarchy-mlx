@@ -45,6 +45,10 @@ uint16_t bf16_store(float value) {
 #define STORAGE_TYPE uint
 #define LOAD_VALUE(x) (x)
 #define STORE_VALUE(x) (x)
+#elif defined(USE_BOOL)
+#define STORAGE_TYPE uint
+#define LOAD_BOOL_LANE(word, lane) (((word) >> ((lane) * 8u)) & 0xFFu)
+#define STORE_BOOL(b) ((b) ? 1u : 0u)
 #elif defined(USE_I64)
 #define STORAGE_TYPE uvec2
 #define LOAD_VALUE(x) (x)
@@ -148,12 +152,25 @@ void main() {
 #else
     float value = 0.0;
 #endif
+#ifdef USE_BOOL
+    uint in_elem = params.lhs_offset + src_elem +
+        index * params.matrix_n;
+    bool bvalue = (index < axis_extent)
+        ? (LOAD_BOOL_LANE(src_data.values[in_elem >> 2u],
+                          in_elem & 3u) != 0u)
+        : false;
+    uint out_elem = params.output_offset + t;
+    uint out_byte = out_elem & 3u;
+    atomicOr(output_data.values[out_elem >> 2u],
+             STORE_BOOL(bvalue) << (out_byte * 8u));
+#else
     if (index < axis_extent) {
       value = LOAD_VALUE(
           src_data.values[params.lhs_offset + src_elem +
                           index * params.matrix_n]);
     }
     output_data.values[params.output_offset + t] = STORE_VALUE(value);
+#endif
     if (params.count - t <= stride) {
       break;
     }
