@@ -1,0 +1,93 @@
+diff --git a/omlx/utils/laguna_rope.py b/omlx/utils/laguna_rope.py
+new file mode 100644
+index 0000000..db0871b
+--- /dev/null
++++ b/omlx/utils/laguna_rope.py
+@@ -0,0 +1,66 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Normalize Laguna RoPE metadata without importing repository code.
++
++Laguna checkpoints ship ``rope_parameters`` as a per-layer-type map
++(``full_attention`` / ``sliding_attention`` dicts) plus non-dict top-level
++scalars (``original_max_position_embeddings``). Transformers'
++``RotaryEmbeddingConfigMixin.validate_rope`` calls ``.get`` on every value,
++so the scalar aborts tokenizer config validation with ``'int' object has no
++attribute 'get'``. The upstream remote-code ``LagunaConfig.__post_init__``
++nests the map the same way :func:`coerce_nested_rope_parameters` does; the
++guard applies that coercion before Transformers validates the config.
++"""
++
++from __future__ import annotations
++
++import functools
++from typing import Any
++
++_ROPE_GUARD_INSTALLED = False
++
++
++def coerce_nested_rope_parameters(rope_parameters: Any) -> Any:
++    """Drop non-dict entries from a per-layer-type rope map.
++
++    Flat rope maps (``{"rope_type": "yarn", ...}``) and non-dict values pass
++    through untouched; only maps that mix per-layer-type dicts with scalar
++    metadata are narrowed to the dict entries.
++    """
++    if not isinstance(rope_parameters, dict):
++        return rope_parameters
++    if not any(isinstance(value, dict) for value in rope_parameters.values()):
++        return rope_parameters
++    return {
++        key: dict(value)
++        for key, value in rope_parameters.items()
++        if isinstance(value, dict)
++    }
++
++
++def install_rope_parameters_guard() -> bool:
++    """Make Transformers' ``validate_rope`` tolerate the Laguna rope map.
++
++    Idempotent. Returns True only on the call that installs the guard.
++    """
++    global _ROPE_GUARD_INSTALLED
++    if _ROPE_GUARD_INSTALLED:
++        return False
++
++    from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
++
++    original = RotaryEmbeddingConfigMixin.validate_rope
++    if getattr(original, "_omlx_rope_guard", False):
++        _ROPE_GUARD_INSTALLED = True
++        return False
++
++    @functools.wraps(original)
++    def guarded(self):
++        self.rope_parameters = coerce_nested_rope_parameters(
++            getattr(self, "rope_parameters", None)
++        )
++        return original(self)
++
++    guarded._omlx_rope_guard = True
++    RotaryEmbeddingConfigMixin.validate_rope = guarded
++    _ROPE_GUARD_INSTALLED = True
++    return True
+diff --git a/omlx/utils/model_loading.py b/omlx/utils/model_loading.py
+index 608d4fb..881eb92 100644
+--- a/omlx/utils/model_loading.py
++++ b/omlx/utils/model_loading.py
+@@ -13,6 +13,8 @@ import mlx.core as mx
+ import mlx.nn as nn
+ from mlx.utils import tree_flatten
+ 
++from .laguna_rope import install_rope_parameters_guard
++
+ logger = logging.getLogger(__name__)
+ 
+ _VLM_TEXT_PREFIX = "language_model."
+@@ -108,6 +110,7 @@ def preflight_text_remote_code(
+ 
+ def lm_load_compat(path_or_repo: str, *, trust_remote_code: bool = False, **kwargs):
+     """Forward the configured trust setting to the model and tokenizer loaders."""
++    install_rope_parameters_guard()
+     kwargs["tokenizer_config"] = {
+         **(kwargs.get("tokenizer_config") or {}),
+         "trust_remote_code": trust_remote_code,
