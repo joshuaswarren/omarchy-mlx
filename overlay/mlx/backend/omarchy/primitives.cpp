@@ -5809,7 +5809,13 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
     require_float_dtype("Take", table, out, encoder);
   }
   size_t nidx = inputs.size() - 1;
-  if (table.ndim() != slice_sizes.size() || table.ndim() > 4) {
+  if (table.ndim() != slice_sizes.size()) {
+    omarchy::unsupported("Take rank", out);
+  }
+  if (table.ndim() > 4 && nidx != 1) {
+    // Single-index takes collapse the dense table below; the
+    // zero-index copy and the multi-index metadata transport stay at
+    // four dims.
     omarchy::unsupported("Take rank", out);
   }
   if (nidx == 0) {
@@ -5861,6 +5867,49 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::optional<array> table_temp;
   const array& table_d = ensure_dense(
       table, table.flags().row_contiguous, table_temp, encoder, stream());
+  // Rank collapse for single-index takes: a dense row-contiguous
+  // table reduces exactly to three dims - the dims before the
+  // gathered axis fold into one flat prefix extent with the last
+  // prefix stride, the dims after it fold into one flat suffix
+  // extent with stride 1 - so a rank-5+ take reuses the shipped
+  // four-dim shader walk unchanged. Upstream MLX permits any rank;
+  // Qwen2-VL gathers a [1,1,T,16,80] f16 table along axis 2.
+  int take_rank = table_d.ndim();
+  Shape take_slices(slice_sizes.begin(), slice_sizes.end());
+  Shape take_strides;
+  for (int64_t stride : table_d.strides()) {
+    take_strides.push_back(static_cast<int>(stride));
+  }
+  if (take_rank > 4) {
+    if (!table_d.flags().row_contiguous) {
+      omarchy::unsupported("Take rank", out);
+    }
+    const int a = axes[0];
+    size_t prefix = 1;
+    size_t suffix = 1;
+    for (int i = 0; i < a; ++i) {
+      prefix *= static_cast<size_t>(table_d.shape(i));
+    }
+    for (int i = a + 1; i < take_rank; ++i) {
+      suffix *= static_cast<size_t>(table_d.shape(i));
+    }
+    if (prefix > std::numeric_limits<int>::max() ||
+        suffix > std::numeric_limits<int>::max()) {
+      omarchy::unsupported("Take rank", out);
+    }
+    // The shader's window walk reads slice_sizes[axis] == 1 for the
+    // gathered dim (its offset comes from index * stride), so the
+    // collapsed window is [prefix, 1, suffix] over strides
+    // [last-prefix-stride, unused, 1].
+    take_slices = Shape{static_cast<int>(prefix),
+                        1,
+                        static_cast<int>(suffix)};
+    take_strides = Shape{a > 0 ? static_cast<int>(table_d.strides()[a - 1])
+                               : 0,
+                         0,
+                         1};
+    take_rank = 3;
+  }
   const array* indices = &idx0;
   std::optional<array> single_index;
   std::optional<array> packed_indices;
@@ -5970,11 +6019,11 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
             out)
       : 0u;
   params.output_offset = checked_item_offset(out, out.size(), "Take", out);
-  params.flags = checked_u32(table_d.ndim(), "Take", out);
-  for (int i = 0; i < table_d.ndim(); ++i) {
+  params.flags = checked_u32(take_rank, "Take", out);
+  for (int i = 0; i < take_rank; ++i) {
     params.shape[i] =
-        checked_u32(static_cast<size_t>(slice_sizes[i]), "Take", out);
-    params.in_strides[i] = checked_u32(table_d.strides()[i], "Take", out);
+        checked_u32(static_cast<size_t>(take_slices[i]), "Take", out);
+    params.in_strides[i] = checked_u32(take_strides[i], "Take", out);
   }
   params.dims = checked_u32(idx0.ndim(), "Take", out);
   for (int i = 0; i < idx0.ndim(); ++i) {
