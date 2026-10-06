@@ -249,11 +249,7 @@ uint32_t checked_item_offset(
   return static_cast<uint32_t>(offset);
 }
 
-omarchy::ComputeBinding binding(const array& value) {
-  auto* buffer =
-      static_cast<const omarchy::VulkanBuffer*>(value.buffer().ptr());
-  return {buffer->buffer, 0, buffer->size, buffer};
-}
+using omarchy::binding;
 
 // Consumer-boundary dense normalization. Returns |value| itself when
 // |dense_enough| holds, so a dense operand takes the caller's existing
@@ -13692,16 +13688,16 @@ void ScaledDotProductAttention::eval_gpu(
     return;
   }
   // Flash-style bf16 prefill for long sequences (H3 joint attention:
-  // q_len 13365, heads 56, hd 128). The composed route's f32 score
-  // matrix fails twice out there - past 2^30 elements the scores
-  // buffer leaves Honeykrisp's uint32 descriptor byte range (driver
-  // assert + core dump, 2026-10-05 repro at L=8192), and past 2^32
-  // elements the checked_u32 guard refuses it outright. The flash
-  // kernel materializes nothing: 32-row q tiles with online softmax,
-  // K/V streamed through shared tiles, dispatches split per q tile so
-  // no single dispatch approaches the ~40 ms firmware timer (56
-  // workgroups run one q tile across all heads in ~5-12 ms on the
-  // 38-core G14C).
+  // q_len 13365, heads 56, hd 128). The composed route's score matrix
+  // fails twice out there - past 2^30 bf16 elements it passes the
+  // device's 2 GiB maxStorageBufferRange (the encoder refuses the
+  // binding; before that check it was a driver assert + core dump at
+  // L=8192), and past 2^32 elements the checked_u32 guard refuses it
+  // outright. The flash kernel materializes nothing: 32-row q tiles
+  // with online softmax, K/V streamed through shared tiles, dispatches
+  // split per q tile so no single dispatch approaches the ~40 ms
+  // firmware timer (56 workgroups run one q tile across all heads in
+  // ~5-12 ms on the 38-core G14C).
   // Kill switch: MLX_OMARCHY_SDPA_PREFILL_FLASH=0. By default, use
   // flash when the composed f32 score matrix exceeds 2^30 elements or
   // would exceed 25% of the device heap. MIN_L is an explicit A/B override.

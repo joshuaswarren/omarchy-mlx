@@ -71,6 +71,7 @@ BF16 RMSNorm, scaled and gated normalization, GDN decode normalization, and RoPE
 M1 Vulkan reports FP16 support but lacks native BF16, FP4, integer dot-product, and matrix-core operations.
 The backend must implement MLX storage and arithmetic semantics with Vulkan packing and conversion.
 A missing native format does not permit CPU fallback.
+Each storage-buffer binding covers its array's bytes, not the power-of-two allocation behind it, and a binding past the device's `maxStorageBufferRange` (2 GiB - 1 on Honeykrisp) is refused by name before the driver sees it.
 
 ## ANE integration
 
