@@ -3238,9 +3238,12 @@ void dispatch_gather_qmm(
   // directly: no packed staging buffer, no fill/copy commands, no
   // per-call staging allocation. The kernel reads identical bytes at
   // identical arithmetic, so outputs are bit-exact with the packed
-  // path. MLX_OMARCHY_GATHER_QMM_SEP=0 forces the packed path.
+  // path. MLX_OMARCHY_GATHER_QMM_SEP=1 opts in; the default is OFF
+  // pending a numerics failure at real shapes (on-host A/B 2026-10-06:
+  // first decode token diverged and the generation collapsed; the
+  // packed path with the subgroup kernel is the production route).
   const char* sep_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SEP");
-  bool sep_enabled = sep_env == nullptr || sep_env[0] != '0';
+  bool sep_enabled = sep_env != nullptr && sep_env[0] == '1';
   if (!fp_mode && sep_enabled &&
       encoder.device().compute().binding_limit() >= (no_bias ? 6u : 7u) &&
       scales_d.offset() % 4 == 0 &&
