@@ -60,11 +60,9 @@ layout(local_size_x = 256) in;
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
   STORAGE_TYPE values[];
 } input_x;
-#ifndef SEP_PARAMS
 layout(set = 0, binding = 1, std430) readonly buffer PackedParams {
   uint values[];
 } packed_params;
-#endif
 layout(set = 0, binding = 2, std430) readonly buffer InputW {
   uint values[];
 } input_w;
@@ -85,52 +83,11 @@ layout(set = 0, binding = 4, std430) readonly buffer OutGlobalScale {
 } out_global_scale_data;
 #endif
 
-#ifdef SEP_PARAMS
-// Separated-parameter variants: scales, biases, and the two index
-// buffers bind directly, so the dispatch records no staging fill or
-// copies and allocates no packed buffer. Bindings are dense (the
-// encoder writes descriptor slots by array index): 0=x, 1=w, 2=out,
-// 3=scales, 4=biases (affine with bias only), then lhs/rhs indices.
-// Word bases ride push constants: scales at aux_offset, biases at
-// shape[2] (both in word units), lhs/rhs index words at
-// in_strides[1]/out_strides[1].
-#if defined(FP_MODE) || defined(USE_OUT_GLOBAL_SCALE)
-#error "SEP_PARAMS supports affine gather qmm variants only"
-#endif
-layout(set = 0, binding = 3, std430) readonly buffer ScaleParams {
-  uint values[];
-} scale_params;
-#ifndef NO_BIAS
-layout(set = 0, binding = 4, std430) readonly buffer BiasParams {
-  uint values[];
-} bias_params;
-layout(set = 0, binding = 5, std430) readonly buffer LhsIndices {
-  uint values[];
-} lhs_indices_data;
-layout(set = 0, binding = 6, std430) readonly buffer RhsIndices {
-  uint values[];
-} rhs_indices_data;
-#else
-layout(set = 0, binding = 4, std430) readonly buffer LhsIndices {
-  uint values[];
-} lhs_indices_data;
-layout(set = 0, binding = 6, std430) readonly buffer RhsIndices {
-  uint values[];
-} rhs_indices_data;
-#endif
-#endif
-
-// lhs/rhs index reads: the SEP variants read the dedicated index
-// buffers; every other variant (packed affine and fp) reads the packed
-// staging buffer. Defined at file scope: main() is shared by all
-// variants, including the fp ones whose parameter decoding differs.
-#ifdef SEP_PARAMS
-#define LHS_INDEX_AT(batch) lhs_indices_data.values[params.in_strides[1] + (batch)]
-#define RHS_INDEX_AT(batch) rhs_indices_data.values[params.out_strides[1] + (batch)]
-#else
+// lhs/rhs index reads: the packed staging buffer (every variant).
+// Defined at file scope: main() is shared by all variants, including
+// the fp ones whose parameter decoding differs.
 #define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
 #define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
-#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -203,43 +160,8 @@ float decode_element(uint q) {
 
 #define DECODE_VALUE(q) decode_element(q)
 #else
-// Decode one group parameter stored at byte_offset, in the output
-// dtype. The packed variants read the staging buffer at aux_offset
-// (word units); SEP variants read the dedicated scale/bias word
-// buffers at their own word bases. The word-to-value extraction is
-// shared and reads identical bytes, so both layouts decode the same
-// values bit for bit.
-#ifdef SEP_PARAMS
-float decode_from_word(uint word, uint byte_offset) {
-#if defined(USE_FP16)
-  uint half_index = byte_offset / 2u;
-  uint shifted = (half_index & 1u) == 0u ? word : word >> 16u;
-  return unpackHalf2x16(shifted).x;
-#elif defined(USE_BF16)
-  uint half_index = byte_offset / 2u;
-  uint bits = (half_index & 1u) == 0u ? word << 16u : word & 0xffff0000u;
-  return uintBitsToFloat(bits);
-#else
-  return uintBitsToFloat(word);
-#endif
-}
-
-float decode_param(uint byte_offset) {
-  return decode_from_word(
-      scale_params.values[params.aux_offset + byte_offset / 4u],
-      byte_offset);
-}
-
-#ifndef NO_BIAS
-float decode_bias_param(uint byte_offset) {
-  return decode_from_word(
-      bias_params.values[params.shape[2] + byte_offset / 4u],
-      byte_offset);
-}
-#endif
-
-#define BIAS_PARAM_AT(byte_offset) decode_bias_param(byte_offset)
-#else
+// Decode one group parameter stored at byte_offset in the packed word
+// buffer, in the output dtype.
 float decode_param(uint byte_offset) {
   uint word = packed_params.values[params.aux_offset + byte_offset / 4u];
 #if defined(USE_FP16)
@@ -256,7 +178,6 @@ float decode_param(uint byte_offset) {
 }
 
 #define BIAS_PARAM_AT(byte_offset) decode_param(params.shape[1] + (byte_offset))
-#endif
 
 #define DECODE_VALUE(q) float(q)
 #endif
@@ -290,10 +211,8 @@ void main() {
       ? params.matrix_k * (params.matrix_n / group_size)
       : params.matrix_n * groups_per_row;
   uint index_count = params.shape[0];
-#ifndef SEP_PARAMS
   uint lhs_word_base = params.in_strides[0];
   uint rhs_word_base = params.out_strides[0];
-#endif
   uint total = index_count * matrix;
 #ifdef USE_OUT_GLOBAL_SCALE
   float out_global_dec = uintBitsToFloat(
