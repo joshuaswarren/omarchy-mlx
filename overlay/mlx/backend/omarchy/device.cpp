@@ -1722,6 +1722,7 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
   retired_temporaries_ = std::move(retired);
   std::lock_guard<std::mutex> lk(mutex_);
   drained_value_ = std::max(drained_value_, ready_value);
+  last_drain_at_ = std::chrono::steady_clock::now();
   cv_.notify_all();
   // |release| frees when this function returns: by then drained_value_
   // names a later generation, so the previous one is provably finished.
@@ -1823,28 +1824,34 @@ void CompletionDispatcher::run() {
         // A quarantined buffer recycles one generation after its own
         // completion once its execution fence signals - which on
         // Honeykrisp can be after the last completion drained (the fence
-        // lags the timeline observation). Keep running release passes
-        // while fences are outstanding or blocks are parked, so
+        // lags the timeline observation). Keep ticking release passes so
         // mid-generation frees never wait for the next submission. The
-        // pass gate stays strictly behind the newest drained generation
-        // (same threshold as free()'s direct path): the current
-        // generation's own blocks park until it ends, per the design.
-        // drained_value_ is read under |mutex_|; the probes and the pass
-        // run unlocked (they take allocator/execution locks, and free()
-        // on another thread may hold an allocator lock while reading
-        // dispatcher state).
+        // newest drained generation itself recycles only once the drain
+        // has settled for one poll interval: while submissions drain
+        // steadily (decode) the tick stays strictly behind the newest
+        // generation - matching free()'s direct path and the drain
+        // passes - and once the queue goes quiet the final generation
+        // still recycles inside the release contract. All state is read
+        // under |mutex_|; the probes and the pass run unlocked (they
+        // take allocator/execution locks, and free() on another thread
+        // may hold an allocator lock while reading dispatcher state).
+        cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
+          return stop_ || !pending_.empty();
+        });
+        if (stop_ || !pending_.empty()) {
+          continue;
+        }
+        bool settled =
+            std::chrono::steady_clock::now() - last_drain_at_ >=
+            std::chrono::nanoseconds(kCompletionPollNs);
         uint64_t through =
-            drained_value_ > 0 ? drained_value_ - 1 : 0;
+            settled ? drained_value_
+                    : (drained_value_ > 0 ? drained_value_ - 1 : 0);
         lk.unlock();
         if (tick_execution_fences() ||
             omarchy::allocator().has_quarantined()) {
           omarchy::allocator().release_quarantine(through);
-          continue;
         }
-        lk.lock();
-        cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
-          return stop_ || !pending_.empty();
-        });
         continue;
       }
     }
