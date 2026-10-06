@@ -529,6 +529,15 @@ Owner tokens prevent another process from clearing the reservation.
 Shutdown releases it only after the owned worker has stopped.
 See [budget.py](../serve/mlx_omarchy_serve/budget.py) for the implementation.
 
+Each MLX process raises its own Honeykrisp GPU heap past the stock 50%-of-RAM
+default (see the `HK_SYSMEM` note in [install-omarchy.md](install-omarchy.md)).
+That heap is a per-process ceiling, not a reservation: two MLX processes side
+by side can still commit more than physical RAM together (the Apple Silicon
+hosts run no swap, so the OOM killer decides, not a clean error). Only the
+shared reservation transaction above keeps multi-model serving inside RAM;
+serving two large models through raw oMLX without it has no shared heap
+budget and needs one.
+
 A preflight pass is not a measured peak or a guarantee against unrelated applications consuming memory later.
 The assistant reserves both models and optional speech workers together through batch admission.
 It must never make fit depend on swap, silent model substitution, or CPU tensor fallback.

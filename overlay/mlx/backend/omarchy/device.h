@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -453,5 +454,14 @@ bool tape_no_reuse();
 // (diagnostic, docs/install-omarchy.md): the allocator destroys every
 // freed buffer instead of recycling it, for the whole process.
 bool buffer_cache_disabled();
+
+// Honeykrisp GPU-memory heap default for an MLX process (HK_SYSMEM):
+// max(50% of |mem_total_bytes|, |mem_total_bytes| - 16 GiB), rounded down
+// to 1 MiB like mesa, clamped to 60 GiB (the per-process user VA window
+// is ~64 GiB, so a larger heap cannot map). Nullopt when the formula
+// would not beat mesa's 50%-of-MemTotal DRIR default (MemTotal
+// <= 32 GiB), which leaves 16 GB-class hosts byte-for-byte unchanged.
+// Pure; the runtime applies it in configure_honeykrisp_icd().
+std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes);
 
 } // namespace mlx::core::omarchy

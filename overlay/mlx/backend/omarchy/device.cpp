@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string_view>
 #include <unistd.h>
@@ -22,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 
 #include "mlx/backend/omarchy/vulkan.h"
 
@@ -98,7 +101,121 @@ int env_index(const char* name) {
   return static_cast<int>(parsed);
 }
 
+// --- Honeykrisp heap default (HK_SYSMEM) ----------------------------------
+//
+// Honeykrisp sizes its GPU-memory heap at 50% of MemTotal (mesa DRIR
+// default heap_memory_percent = 0.5, hk_drirc_gen.py) and the budget
+// post-check in hk_device_memory.c fails every allocation past it. On
+// large hosts that strands half the RAM: jw16 (62 GiB) could commit only
+// ~30 GiB and Qwen3-32B-8bit (34.8 GB of weights) could not load, while
+// HK_SYSMEM=44 GiB (absolute bytes, hk_physical_device.c) reaches
+// 44 GiB. The backend therefore raises the heap for its own process, via
+// the same absolute-bytes override, only when nobody else chose a heap.
+
+// MemTotal from /proc/meminfo in bytes; 0 when unreadable.
+uint64_t mem_total_bytes() {
+  std::FILE* file = std::fopen("/proc/meminfo", "r");
+  if (file == nullptr) {
+    return 0;
+  }
+  unsigned long kb = 0;
+  const int matched = std::fscanf(file, " MemTotal: %lu kB", &kb);
+  std::fclose(file);
+  return matched == 1 ? kb * 1024ull : 0;
+}
+
+bool file_contains(const std::string& path, std::string_view needle) {
+  std::error_code error;
+  if (error || !std::filesystem::is_regular_file(path, error) || error) {
+    return false;
+  }
+  std::ifstream in(path);
+  const std::string text((std::istreambuf_iterator<char>(in)),
+                         std::istreambuf_iterator<char>());
+  return text.find(needle) != std::string::npos;
+}
+
+// True when a drirc configuration file names heap_memory_percent: the
+// user (or the distribution) has expressed a heap policy that mesa will
+// honor, and the default below must not override it. Scans the files
+// mesa's xmlconfig.c reads: $DRIRC_CONFIGDIR directories (or
+// DATADIR/drirc.d plus /etc/drirc when unset), then $HOME/.drirc and
+// $XDG_CONFIG_HOME/drirc. Plain substring match on the option name: a
+// hit we cannot attribute (a comment, another driver's section) keeps
+// mesa's default, which fails toward today's behavior.
+bool drirc_names_heap_memory_percent() {
+  constexpr std::string_view kOption = "heap_memory_percent";
+  std::vector<std::string> files;
+  const char* config_dirs = std::getenv("DRIRC_CONFIGDIR");
+  if (config_dirs != nullptr && config_dirs[0] != '\0') {
+    const char* p = config_dirs;
+    while (*p != '\0') {
+      const char* sep = std::strchr(p, ':');
+      const size_t len = sep != nullptr ? static_cast<size_t>(sep - p)
+                                        : std::strlen(p);
+      if (len > 0) {
+        const std::string dir(p, len);
+        std::error_code error;
+        for (std::filesystem::directory_iterator it(dir, error), end;
+             !error && it != end; it.increment(error)) {
+          files.push_back(it->path().string());
+        }
+      }
+      p += len + (sep != nullptr ? 1 : 0);
+    }
+  } else {
+    for (const char* directory :
+         {"/usr/share/drirc.d", "/usr/local/share/drirc.d"}) {
+      std::error_code error;
+      for (std::filesystem::directory_iterator it(directory, error), end;
+           !error && it != end; it.increment(error)) {
+        files.push_back(it->path().string());
+      }
+    }
+    files.emplace_back("/etc/drirc");
+  }
+  if (const char* home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    files.emplace_back(std::string(home) + "/.drirc");
+  }
+  if (const char* xdg = std::getenv("XDG_CONFIG_HOME");
+      xdg != nullptr && xdg[0] != '\0') {
+    files.emplace_back(std::string(xdg) + "/drirc");
+  }
+  for (const std::string& file : files) {
+    if (file_contains(file, kOption)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void apply_default_hk_sysmem() {
+  if (std::getenv("HK_SYSMEM") != nullptr) {
+    return; // explicit HK_SYSMEM wins
+  }
+  if (drirc_names_heap_memory_percent()) {
+    return; // drirc-configured heap_memory_percent wins
+  }
+  const std::optional<uint64_t> heap =
+      default_hk_sysmem_bytes(mem_total_bytes());
+  if (!heap) {
+    return; // small host: mesa's 50% default already covers the formula
+  }
+  char value[32];
+  std::snprintf(
+      value, sizeof(value), "%llu", static_cast<unsigned long long>(*heap));
+  // Never overwrites (checked above). A failed setenv degrades to mesa's
+  // 50% default heap for this process; that is not fatal.
+  ::setenv("HK_SYSMEM", value, 0);
+}
+
 HoneykrispIcdSelection configure_honeykrisp_icd() {
+  // Runs before Vulkan loads: raise the Honeykrisp heap for this MLX
+  // process (HK_SYSMEM) unless an explicit HK_SYSMEM or a drirc
+  // heap_memory_percent already chose one. Other Vulkan applications
+  // never run this code and keep mesa's 50% heap.
+  apply_default_hk_sysmem();
   std::vector<std::string> candidates;
   for (const char* directory : {
            "/etc/vulkan/icd.d",
@@ -690,6 +807,28 @@ bool env_flag(const char* name) {
     return static_cast<char>(std::tolower(c));
   });
   return s == "1" || s == "on" || s == "true" || s == "yes";
+}
+
+// Heap formula (device.h). max(50%, MemTotal - 16 GiB), 1 MiB-rounded
+// like mesa's os_gpu_heap_size_calculate, clamped to 60 GiB: the
+// per-process user VA window is ~64 GiB (agx_device.c), HeapBudget's
+// probe committed 63 GiB and the 64th allocation failed with "Failed to
+// allocate BO VMA", so a bigger heap cannot map. MemTotal <= 32 GiB
+// never beats the 50% default, so those hosts (16 GB M1 included) return
+// nullopt and keep mesa's byte-for-byte heap.
+std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes) {
+  constexpr uint64_t kGiB = 1ull << 30;
+  constexpr uint64_t kSystemReserve = 16 * kGiB;
+  constexpr uint64_t kVaWindowClamp = 60 * kGiB;
+  if (mem_total_bytes < kSystemReserve) {
+    return std::nullopt;
+  }
+  const uint64_t half = mem_total_bytes / 2;
+  const uint64_t raised = mem_total_bytes - kSystemReserve;
+  if (raised <= half) {
+    return std::nullopt;
+  }
+  return std::min(raised, kVaWindowClamp) & ~((1ull << 20) - 1);
 }
 
 // Scoped compiled-tape diagnostic state (device.h). Plain atomics: the
