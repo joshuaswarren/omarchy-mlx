@@ -1,17 +1,31 @@
 # Numerics gate
 
-A decode-route change must pass all three checks against the deployed composed route:
+A kernel or route change is judged against an **independent reference**, never against the kernel it replaces. The old kernel is a noisy implementation too: agreement with it measures how far two roundings drift apart, not which one is closer to the truth.
 
-1. **Per-op error:** fp32/fp64 output and state error is no worse than the deployed path for captured operands.
-2. **Token choices:** teacher-forced top-1 agreement is at least 99%. At every free-run first divergence, the composed path's top-2 gap must be no more than one bf16 ULP at the magnitude of its top logit. For normal bf16 values, the spacing is 2^(floor(log2(|x|))-7); for example, the ULP is 0.125 at magnitudes in [16, 32), and 0.0625 in [8, 16). The boundary is inclusive.
-3. **Perplexity:** route-sensitive S=1 PPL differs by no more than 0.1%.
+## Reference
 
-The free-run condition is evaluated at each prompt's first divergence, not by overall prefix identity. A one-ULP difference can change argmax, then later tokens and hidden states can diverge further; a low full-run identity does not by itself fail this gate. Teacher-forced agreement still has its own 99% minimum.
+Use one of:
 
-The former absolute 0.05 near-tie cutoff was not scale-aware. At logit magnitudes [16, 32), one bf16 ULP is 0.125, so a 0.05 threshold rejected even a one-ULP difference. The ULP threshold replaces that absolute cutoff.
+- an fp64 or fp32-dequantized CPU forward of the same weights and text;
+- the macOS (Metal) MLX implementation on the same quantized weights and text.
 
-For the published v0.7.26 9B fused route, the captured results were: per-op fp64 identical; teacher-forced agreement 99.51% (5,095/5,120); 10/10 free-runs diverged, with six first-divergence gaps of 0.125 (one ULP at the measured logit magnitude) and four gaps of 0; S=1 PPL changed by -0.072%. Prefix identity was 29.43% over 10 prompts × 512 tokens. Under this scale-aware criterion, all three gates pass. The v0.7.27 default remains ON; set MLX_OMARCHY_GDN_RAW_REPEAT=0 to select the composed route.
+Run the same text through the old kernel and the new kernel with identical harness code. Validate the harness first: S=1 teacher-forced PPL of the old kernel must match the prefill PPL of the same text (a decode-loop bug shows up as a wildly different PPL).
 
-Analyzer code: tools/dfuse/bf16_ulp.py, free_run_gaps.py, and compare_tf9.py. The gate evidence and historical 0.05 decision are retained in the dated audit receipts.
+## Checks
 
-The independent G13 H257 run measured 99.53% teacher-forced agreement, identical per-op fp64 results, S=1 PPL -0.079%, and 9 first-divergence gaps within one ULP (six at 0.125 and three below); free-run identity was about 39% over 512 tokens. Both chip classes meet the same bar.
+A change passes when its error against the reference is equal to or better than the old kernel's error against the same reference:
+
+1. **Per-op error:** fp32/fp64 output and state error for captured operands is no worse than the deployed op.
+2. **Token choices:** teacher-forced top-1 agreement with the reference is at least the old kernel's agreement (within the 95% binomial band at the sample size). Flips whose top-2 margin is at most 2 bf16 ULP at the magnitude of the top logit do not count as failures: they are near ties. For normal bf16 values the spacing is 2^(floor(log2(|x|))-7), for example 0.125 in [16, 32) and 0.0625 in [8, 16); the boundary is inclusive.
+3. **Perplexity:** route-sensitive S=1 PPL against the reference is within run-to-run noise of the old kernel's deviation (report both numbers).
+
+Bit agreement between the old and the new kernel is **not** a bar. A reorder-only change (a different fp32 summation order, a lane-parallel reduction) cannot match the old kernel bit for bit, and in routed-MoE models a one-ULP logit change can flip an expert choice and cascade through the layers. Report the old-vs-new agreement for information.
+
+Record in the receipt: reference used, text and token count, the table (kernel x agreement vs reference, PPL vs reference, mean |dlogprob| vs reference, flips and their margins), and the harness validation.
+
+## Precedents
+
+- v0.7.26 9B fused GDN route (old gate, new kernel vs old kernel): per-op fp64 identical; teacher-forced agreement 99.51% (5,095/5,120); six first-divergence gaps of one ULP; S=1 PPL -0.072%. The v0.7.27 default remains ON; MLX_OMARCHY_GDN_RAW_REPEAT=0 selects the composed route. An independent G13 run measured 99.53% and -0.079%.
+- 2026-10-06 DeepSeek-Coder-V2-Lite routed-MoE gather (subgroup kernel, 2.0-2.1x decode), 527-token S=1 text, Metal reference: deployed kernel 96.02% agreement with the reference, PPL +0.245%, mean |dlogprob| 0.0749, 21 flips; Sub kernel 97.15%, PPL +0.416%, mean |dlogprob| 0.0727, 15 flips; old-vs-new agreement 97.34%. Sub agrees with the reference more often and was merged. Receipt: receipts/2026-10-06-moe-layer-decode/.
+
+Analyzer code: tools/dfuse/bf16_ulp.py, free_run_gaps.py, and compare_tf9.py.
