@@ -1636,8 +1636,10 @@ void dispatch_int_elementwise_to(
   params.lhs_offset = checked_item_offset(lhs, params.lhs_size, name, out);
   params.rhs_offset = checked_item_offset(rhs, params.rhs_size, name, out);
   params.output_offset = checked_item_offset(out, count, name, out);
+  bool general_broadcast =
+      !is_trailing_broadcast(lhs, out) || !is_trailing_broadcast(rhs, out);
   std::optional<array> axis_metadata;
-  if (!is_trailing_broadcast(lhs, out) || !is_trailing_broadcast(rhs, out)) {
+  if (general_broadcast) {
     axis_metadata = fill_broadcast_transport(name, params, lhs, rhs, out, encoder);
   }
   std::array<omarchy::ComputeBinding, 4> bindings{
@@ -1652,7 +1654,7 @@ void dispatch_int_elementwise_to(
           out,
           params,
           bindings,
-          is_trailing_broadcast(lhs, out) && is_trailing_broadcast(rhs, out),
+          general_broadcast,
           elementwise_kernel(out.dtype()),
           encoder)) {
     return;
