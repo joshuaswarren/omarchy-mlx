@@ -1019,11 +1019,11 @@ bool dispatch_elementwise_windows(
   const size_t itemsize = out.itemsize();
   const uint64_t out_bytes =
       static_cast<uint64_t>(out.size()) * itemsize;
+  const uint32_t count = params.count;
   fprintf(stderr, "[hkwin-helper] %s count=%u obytes=%llu gb=%.2f gate=%d lhsds=%llu rhsds=%llu outds=%llu\n", name.c_str(), count, (unsigned long long)out_bytes, out_bytes/1e9, (int)general_broadcast, (unsigned long long)lhs.data_size(), (unsigned long long)rhs.data_size(), (unsigned long long)out.data_size());
   if (out_bytes <= limit) {
     return false;
   }
-  const uint32_t count = params.count;
   const uint64_t chunk = std::max<uint64_t>((limit / itemsize / 16u) * 16u, 16u);
   const uint32_t lhs_base = params.lhs_offset;
   const uint32_t rhs_base = params.rhs_offset;

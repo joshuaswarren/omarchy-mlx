@@ -667,12 +667,6 @@ void dispatch_chain(
   } else if (out.dtype() == bfloat16) {
     kernel = ComputeKernel::FusedChainBF16;
   }
-  auto kernel = ComputeKernel::FusedChainF32;
-  if (out.dtype() == float16) {
-    kernel = ComputeKernel::FusedChainF16;
-  } else if (out.dtype() == bfloat16) {
-    kernel = ComputeKernel::FusedChainBF16;
-  }
   // A > 2 GiB chain output splits by flat index. Direct leaves (mode 0)
   // and count-sized intermediates / outputs each get a per-window
   // binding; leaves in modulo / divide / scalar modes read globally
@@ -713,7 +707,7 @@ void dispatch_chain(
     const uint64_t c1 =
         std::min(c0 + fc_chunk, static_cast<uint64_t>(chain.count));
     ComputeParams wparams = params;
-    wparams.count = checked_u32(c1, name, out);
+    wparams.count = checked_u32(c1, "FusedChain", out);
     wparams.window_lo = static_cast<uint32_t>(c0);
     std::array<ComputeBinding, kMaxChainLeaves + 3> wbindings = bindings;
     auto window_leaf = [&](const array& leaf, uint32_t& offset) {
@@ -762,7 +756,7 @@ void dispatch_chain(
         wbindings,
         wparams,
         compute_dispatch_group_count(
-            checked_u32(c1 - c0, name, out)));
+            checked_u32(c1 - c0, "FusedChain", out)));
   }
 }
 
