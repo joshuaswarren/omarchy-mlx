@@ -7,10 +7,13 @@ main at audit time == v0.6.5). The H3 engine is the drowzeys fork at
 "TensorFold 0.6.5 + H3 family").
 
 License: TensorFold is **Apache-2.0** (`pyproject.toml:11`, relicensed from MIT
-at v0.6.0; the fork carries the same Apache-2.0 LICENSE). Any code ported from
-TensorFold into omarchy-mlx (MIT) or into wrapper patches keeps its notices,
-license headers, and the Apache-2.0 patent grant; this receipt records that
-obligation. The translator extensions and int8 ops below are original
+at v0.6.0; the fork carries the same Apache-2.0 LICENSE). Ported files keep the
+Apache-2.0 **NOTICE** and their license headers, plus the patent grant; code
+that predates v0.6.0 (2026-09-30) **stays MIT** (`LICENSES/MIT.txt`). Upstream
+`pyproject.toml:50` ships `license-files = ["LICENSE", "NOTICE",
+"THIRD_PARTY_NOTICES.md", "LICENSES/*"]` (`LICENSES/` = Apache-2.0.txt,
+MIT.txt, MiaAI-Lab-MIT.txt at v0.6.5). This receipt records that obligation.
+The translator extensions and int8 ops below are original
 implementations (no TensorFold code copied).
 
 Audit of github ashhart/TensorFold (LLM decode) and the MiniMax-H3 video path
@@ -255,3 +258,53 @@ against this baseline, not against a claim of zero failures.
    kept with sha256.
 4. M2 Max host (gpu-turn window): gates patched to warnings, int8 ON, PSNR/SSIM
    + audio metrics vs the macOS reference.
+
+## 7. Port-pin addendum (2026-10-06): pinned target tag v0.6.5, v0.6.0..v0.6.5 delta re-check
+
+Pinned target: ashhart/TensorFold **tag `v0.6.5`** = `609ca419abecebdc5a059498a613680bd3aa847f`
+(release commit, 2026-10-03). The audit clone sits exactly on it:
+`git describe --tags` -> `v0.6.5`, clean tree, HEAD = `609ca419`. Upstream
+v0.6.6 (2026-10-06, `--name-priority` background scheduling on the CUDA
+server) does **not** move the pin: server scheduling feature, not
+correctness, no port delta (upstream-watch triage 2026-10-06).
+
+The v0.6.0..v0.6.5 delta (404 files, +31754/−1845) is dominated by the CUDA
+server (two-rank communicators, admission/memory accounting, NVFP4, vision,
+`/v1/decisions`, Anthropic Messages API) — out of the omarchy port's scope.
+Re-check covered the MLX-side rows this audit actually asserts, measured at
+the tag (grep over `src/tensorfold`, cuda excluded):
+
+| Audit claim (§) | Re-check at v0.6.5 | Verdict |
+|---|---|---|
+| `mx.fast.metal_kernel` 30 call sites (§1.1) | 30 | holds |
+| rms_norm 36 / sdpa 14 / rope 6 (§1.1) | 36 / 14 / 6 | holds |
+| quantized_matmul 14 / gather_qmm 6 / dequantize 9 (§1.1) | 14 / 6 / 9 | holds |
+| `mx.compile` 17 (§1.1) | **15** occurrences (11 decorator/call lines) | count corrected 17 -> 15; support claim unchanged |
+| async_eval 41 / depends 4 (§1.1) | 41 / 4 | holds |
+| `mx.metal.is_available()` 9 gates (§1.2) | 9 occurrences | count holds; **site list corrected**: device.py:19, glm/flash/v1/{kda.py:285, fused.py:43, kernels.py:351, sparse_attention.py:82}, qwen/dense/v1/{lane_gdn.py:192, lane_gdn.py:222}, families/glm5_next/__init__.py:153, families/deepseek_v4/__init__.py:68. threads.py:39 and prefill_mm.py:215 are `mx.device_info` sites (§1.1 row), not is_available gates — the original enumeration conflated them |
+| memory APIs "10+" sites (§1.1) | 30 (`get_active_memory`/`get_peak_memory`/`reset_peak_memory`/`set_wired_limit`/`set_cache_limit`) | holds (lower bound) |
+| `mx.distributed.all_sum` 1 site, z_lab drafter (§1.1) | 1 | holds |
+| exactness-contract quotes (§1.3: lane_engine.py:1/:15) | verbatim match | holds |
+| line cites: kernels/README.md:3-9 family table, simd_qmm.py:1 scalar/MMA install-time check, prefill_mm.py:275/:280/:370, threads.py:39, device.py:19/:21, pyproject.toml:11 | verbatim match | holds |
+
+Delta files that touch audited rows, none changing a verdict:
+- `kernels/device.py` is **new since v0.6.0** (upstream `552390f` "one
+  GPU-generation reading; a VM's GPU or a CPU default device is never an M5")
+  — the gate sites moved/centralized after the relicensing point, which is
+  why pre-0.6.0 gate layout differs from the cites above.
+- gemma/v1 `glue.py`/`matmul.py` (`14c90bf` qkv_rows reserves its 1024
+  threads so M1/M2 pipelines take the launch); nemotron/lightning/v1
+  kernels/rows/sources + new `lane_fused.py`; qwen/dense/v1
+  row_forward/row_matmul/simd_qmm_bits; qwen/flash_next/v1 attention/base/
+  embed/prefill_mm + new `block_select.py`/`ngram.py`; `threads.py`.
+  `simd_qmm.py` itself is untouched by the delta — the scalar/MMA split and
+  install-time equivalence check citations stand.
+- engine/* (Qwen3.6 MTP drafts on Macs, Nemotron draft depth by measured
+  cost, API keys — `bcb8f01`; mlx-lm 0.31/0.32 cache-state read parity —
+  `49b2cb8`): engine logic, no new mx API surface; §3's mlx-lm assessment
+  unaffected.
+
+License note (carried from the header, restated for the table): v0.6.0
+relicensed MIT -> Apache-2.0; ported files keep the Apache-2.0 NOTICE and
+license headers (patent grant included); pre-0.6.0 code stays MIT
+(`LICENSES/MIT.txt`). Read-only upstream: no PRs, issues, or comments opened.
