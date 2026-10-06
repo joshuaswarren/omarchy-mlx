@@ -1002,8 +1002,11 @@ void copy_gpu_inplace(
           !source_bool_kernel) {
         const size_t in_item = in.itemsize();
         const size_t out_item = out.itemsize();
-        const uint64_t chunk =
-            std::max<uint64_t>((range_limit / out_item / 16u) * 16u, 16u);
+        // Chunk in OUT items, but the input window spans the same items at
+        // in.itemsize() bytes — divide by the LARGER itemsize or the input
+        // window alone exceeds the storage range on widening casts.
+        const uint64_t chunk = std::max<uint64_t>(
+            (range_limit / std::max(in_item, out_item) / 16u) * 16u, 16u);
         for (uint64_t c0 = 0; c0 < count; c0 += chunk) {
           const uint64_t c1 = std::min(c0 + chunk, static_cast<uint64_t>(count));
           const uint64_t in_first =
