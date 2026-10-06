@@ -2279,13 +2279,11 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     }
   };
 
-  // f32 transposed m==1 configs are excluded: on M1 both scalar and Sub
-  // arms mismatch the fp64 anchor there (MainVerify suite-b2 1da68e477:
-  // 128 contiguous failures = the two f32-T configs; suspected pre-existing
-  // scalar f32-T m==1 defect, separate investigation). k=96 with
-  // group_size 64 was also an invalid authoring choice (96 % 64 != 0).
-  run_case(false, false, 128);
-  run_case(true, true, 128);
+  // Only bf16-transposed configs: they cover the Sub selector's proven
+  // class (bf16, 4-bit, group-64, transposed, m==1). f32 configs are NOT
+  // covered by this test (the f32 non-transposed authoring used an
+  // invalid weight layout [E, N, K/pack] and the f32 transposed m==1
+  // paths are a separate investigation - see the lane receipt).
 }
 
 TEST_CASE("gather qqmm dequants with scales only") {
