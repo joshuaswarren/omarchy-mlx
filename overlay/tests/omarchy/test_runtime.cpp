@@ -1593,10 +1593,18 @@ TEST_CASE(
   CHECK(alloc.get_cache_memory() == cache_before);
 
   enc.synchronize(); // bounded completion wait; joins handler execution
-  // The reassignment above evaluated a fresh zeros, so a later
-  // generation drained during this synchronize: cleanup for the
-  // buffer's own submission has run and the quarantine recycled it.
-  CHECK(alloc.get_cache_memory() >= cache_before + 4096);
+  // The submission's execution fence gates the release now: the block
+  // recycles on the first drain after the fence signals (the timeline
+  // semaphore alone does not prove the batch's writes are done). Poll
+  // briefly for that release instead of demanding it synchronously.
+  bool released = false;
+  for (int i = 0; i < 200 && !released; ++i) {
+    released = alloc.get_cache_memory() >= cache_before + 4096;
+    if (!released) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  CHECK(released);
 
   alloc.free(scratch);
 }
