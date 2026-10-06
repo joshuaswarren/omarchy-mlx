@@ -147,8 +147,10 @@ void main() {
     for (uint i = 0u; i < SLICE; ++i) {
       acc += st[i] * qp[i];
     }
+    // subgroupAdd must run with every lane active: reduce OUTSIDE the lane-0 branch.
+    float o = subgroupAdd(acc);
     if (lane == 0u) {
-      y_buf.v[params.output_offset + act * Dv + dv] = bf16_store(subgroupAdd(acc));
+      y_buf.v[params.output_offset + act * Dv + dv] = bf16_store(o);
     }
   }
 
