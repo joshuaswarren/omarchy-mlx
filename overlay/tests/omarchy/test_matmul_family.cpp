@@ -2243,9 +2243,6 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   // routed-expert gather; k 128 divides the 256-lane K split, k 96
   // exercises the tail guard, and the non-transposed layout runs the
   // other weight-routing branch.
-  auto run_case = [&](bool bf16, bool transpose, int k) {
-    run_case_shape(bf16, transpose, k, 3, 2, 64);
-  };
   auto run_case_shape = [&](bool bf16, bool transpose, int k, int experts,
                             int index_count, int n) {
     const int m = 1;
@@ -2340,16 +2337,57 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
     std::vector<float> sub_out = run_once(true);
     unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
-    // Both anchor to the fp64-accumulated host reference; the fp32
-    // accumulation order differs (lane tree vs serial K loop), so
-    // neither is bit-exact against the other. bf16 storage rounds to
-    // its own ULP, hence the wider band there.
-    if (bf16) {
-      expect_close_tol(scalar_out, expected, 1e-2, 1e-2);
-      expect_close_tol(sub_out, expected, 1e-2, 1e-2);
-    } else {
-      expect_close_tol(scalar_out, expected, 1e-4, 1e-3);
-      expect_close_tol(sub_out, expected, 1e-4, 1e-3);
+    // Scale-aware numerics metric (docs/numerics-gate.md spirit): both
+    // arms anchor to the fp64-accumulated host reference with rel-L2
+    // over the whole output and max-abs error normalized by the
+    // reference's max magnitude - elementwise relative error explodes
+    // on bf16 outputs of k-large sums that pass near zero. The Sub arm
+    // must be within 1.5x the scalar arm's rel-L2 (equal-or-better with
+    // slack), and the scalar arm must clear its own absolute bound with
+    // margin. Both errors print per case so one run names who fails.
+    double ref_l2 = 0.0, ref_max = 0.0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      ref_l2 += double(expected[i]) * expected[i];
+      ref_max = std::max(ref_max, std::abs(double(expected[i])));
+    }
+    ref_l2 = std::sqrt(ref_l2);
+    auto rel_l2 = [&](const std::vector<float>& v) {
+      double acc = 0.0, mx = 0.0;
+      for (size_t i = 0; i < v.size(); ++i) {
+        double d = double(v[i]) - expected[i];
+        acc += d * d;
+        mx = std::max(mx, std::abs(d));
+      }
+      return std::pair<double, double>{std::sqrt(acc) / ref_l2, mx / ref_max};
+    };
+    auto [s_l2, s_max] = rel_l2(scalar_out);
+    auto [b_l2, b_max] = rel_l2(sub_out);
+    double scalar_bound = bf16 ? 0.05 : 0.01;
+    std::cout << "[gather-qmm-sub] bf16=" << bf16 << " transpose=" << transpose
+              << " k=" << k << " experts=" << experts
+              << " index_count=" << index_count << " n=" << n
+              << " scalar: relL2=" << s_l2 << " maxabs/ref=" << s_max
+              << " | sub: relL2=" << b_l2 << " maxabs/ref=" << b_max
+              << " | count=" << expected.size() << std::endl;
+    CHECK(s_l2 <= scalar_bound);
+    CHECK(s_max <= scalar_bound * 2.0);
+    CHECK(b_l2 <= 1.5 * s_l2 + 1e-9);
+    CHECK(b_max <= 1.5 * s_max + 1e-9);
+    // z-chunk boundary: with index_count x n > 65535, outputs at flat
+    // indices >= 65535 come from the z>=1 workgroup chunks - they must
+    // track the reference, not zeros/garbage.
+    if (index_count * n > 65535) {
+      size_t boundary = 65535;
+      double ref_b = 0.0, acc = 0.0;
+      for (size_t i = boundary; i < sub_out.size(); ++i) {
+        double d = double(sub_out[i]) - expected[i];
+        acc += d * d;
+        ref_b += double(expected[i]) * expected[i];
+      }
+      double tail_l2 = std::sqrt(acc) / std::sqrt(ref_b);
+      std::cout << "[gather-qmm-sub] z-chunk tail relL2=" << tail_l2
+                << std::endl;
+      CHECK(tail_l2 <= 1.5 * s_l2 + 1e-9);
     }
   };
 
@@ -2358,8 +2396,8 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   // covered by this test (the f32 non-transposed authoring used an
   // invalid weight layout [E, N, K/pack] and the f32 transposed m==1
   // paths are a separate investigation - see the lane receipt).
-  run_case(true, true, 128);
-  run_case(true, true, 192);   // k below one 256-lane stride: tail guard
+  run_case_shape(true, true, 128, 3, 2, 64);
+  run_case_shape(true, true, 192, 3, 2, 64);   // k below one 256-lane stride: tail guard
   // GLM-4.5-Air routed shapes: B=1 gate/up gather (index_count 8 x
   // n 1408 = 11,264 workgroups) and a count above the 65535 per-dimension
   // workgroup limit (48 x 1408 = 67,584 -> z-chunked dispatch).
