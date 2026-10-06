@@ -1005,6 +1005,7 @@ bool dispatch_elementwise_windows(
     const array& lhs,
     const array& rhs,
     const array& out,
+    const array* dbg_in = nullptr) {
     const omarchy::ComputeParams& params,
     const std::array<omarchy::ComputeBinding, 4>& bindings,
     bool general_broadcast,
@@ -1019,6 +1020,7 @@ bool dispatch_elementwise_windows(
   const size_t itemsize = out.itemsize();
   const uint64_t out_bytes =
       static_cast<uint64_t>(out.size()) * itemsize;
+  fprintf(stderr, "[hkwin-helper] %s count=%u obytes=%llu gb=%.2f gate=%d lhsds=%llu rhsds=%llu outds=%llu\n", name.c_str(), count, (unsigned long long)out_bytes, out_bytes/1e9, (int)general_broadcast, (unsigned long long)lhs.data_size(), (unsigned long long)rhs.data_size(), (unsigned long long)out.data_size());
   if (out_bytes <= limit) {
     return false;
   }

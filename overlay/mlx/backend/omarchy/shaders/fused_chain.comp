@@ -62,29 +62,87 @@ layout(set = 0, binding = 5, std430) writeonly buffer SecondIntermediate {
 // The first eleven ComputeParams scalars carry this compact ABI. aux_offset
 // selects eager materialization of the first two instructions; compiled
 // chains leave it zero.
+// The chain ABI packs the standard ComputeParams scalars: instr_count
+// rides operation, last_dim rides lhs_size, dst_final rides rhs_size,
+// leaf_offset[3] rides reduce_size/output_size/lhs_offset, leaf_mode[3]
+// rides rhs_offset/output_offset/aux_size, and
+// materialize_intermediates rides aux_offset. Declaring the standard
+// names (with these aliases) keeps the block a lockstep prefix of
+// ComputeParams, so the appended windowed-dispatch fields resolve.
+#define leaf_offset(slot) leaf_off(slot)
+#define leaf_mode(slot) leaf_md(slot)
+#define instr_count params.operation
+#define last_dim params.lhs_size
+#define dst_final params.rhs_size
+#define materialize_intermediates params.aux_offset
 layout(push_constant) uniform Params {
   uint count;
-  uint instr_count;
-  uint last_dim;
-  uint dst_final;
-  uint leaf_offset[3];
-  // Per leaf: 0 = direct, 1 = index % last_dim, 2 = index / last_dim,
-  // 3 = scalar (index 0).
-  uint leaf_mode[3];
-  uint materialize_intermediates;
+  uint operation;      // instr_count
+  uint lhs_size;       // last_dim
+  uint rhs_size;       // dst_final
+  uint reduce_size;    // leaf_offset[0]
+  uint output_size;    // leaf_offset[1]
+  uint lhs_offset;     // leaf_offset[2]
+  uint rhs_offset;     // leaf_mode[0]
+  uint output_offset;  // leaf_mode[1]
+  uint aux_size;       // leaf_mode[2]
+  uint aux_offset;     // materialize_intermediates
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+  uint out_row_stride;
+  // Windowed dispatches start at window_lo and bind every count-sized
+  // leaf / intermediate / output at their [window_lo, count) bytes.
+  uint window_lo;
+  uint window_hi;
 } params;
 
+uint leaf_off(uint slot) {
+  if (slot == 0u) {
+    return params.reduce_size;
+  }
+  if (slot == 1u) {
+    return params.output_size;
+  }
+  return params.lhs_offset;
+}
+
+uint leaf_md(uint slot) {
+  if (slot == 0u) {
+    return params.rhs_offset;
+  }
+  if (slot == 1u) {
+    return params.output_offset;
+  }
+  return params.aux_size;
+}
+
 STORAGE_TYPE load_leaf(uint slot, uint index) {
-  uint offset = params.leaf_offset[slot];
+  uint offset = leaf_offset(slot);
   uint address;
-  if (params.leaf_mode[slot] == 1u) {
-    address = index % params.last_dim;
-  } else if (params.leaf_mode[slot] == 2u) {
-    address = index / params.last_dim;
-  } else if (params.leaf_mode[slot] == 3u) {
+  if (leaf_mode(slot) == 1u) {
+    address = index % last_dim;
+  } else if (leaf_mode(slot) == 2u) {
+    address = index / last_dim;
+  } else if (leaf_mode(slot) == 3u) {
     address = 0u;
   } else {
-    address = index;
+    // Direct leaf in a windowed dispatch: the binding starts at the
+    // window, so the address is window-relative.
+    address = index - params.window_lo;
   }
   if (slot == 0u) {
     return leaf_a.values[offset + address];
@@ -106,7 +164,8 @@ void main() {
   // Grid stride, mirroring elementwise.comp: the dispatcher caps the
   // group count at the device limit, so one invocation covers several
   // chain elements when count exceeds one full grid.
-  uint index = gl_GlobalInvocationID.x;
+  // Windowed dispatches start at window_lo (0 = unwindowed).
+  uint index = gl_GlobalInvocationID.x + params.window_lo;
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
   while (index < params.count) {
     float regs[8];
@@ -171,15 +230,18 @@ void main() {
           return;
       }
       regs[dst] = ROUND_INTERMEDIATE(value);
-      if (params.materialize_intermediates != 0u) {
+      if (materialize_intermediates != 0u) {
         if (i == 0u) {
-          leaf_c.values[index] = STORE_VALUE(regs[dst]);
+          leaf_c.values[index - params.window_lo] =
+              STORE_VALUE(regs[dst]);
         } else if (i == 1u) {
-          second_intermediate.values[index] = STORE_VALUE(regs[dst]);
+          second_intermediate.values[index - params.window_lo] =
+              STORE_VALUE(regs[dst]);
         }
       }
     }
-    output_data.values[index] = STORE_VALUE(regs[params.dst_final]);
+    output_data.values[index - params.window_lo] =
+        STORE_VALUE(regs[dst_final]);
     if (params.count - index <= stride) {
       break;
     }
