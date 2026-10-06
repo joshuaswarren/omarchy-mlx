@@ -1326,9 +1326,8 @@ TEST_CASE("logcumsumexp promotes integer and bool inputs to float (#4625)") {
   };
 
   // uint8: a non-promoted scan returns the input dtype with cumulative
-  // maxima; the promoted scan returns float log-space values. Forward and
-  // reverse inclusive: out[i] is the running logaddexp over the prefix
-  // (forward) or suffix (reverse) the scan walks.
+  // maxima; the promoted scan returns float log-space values. Reverse
+  // inclusive walks the suffix: out[i] = logaddexp(a[i..n-1]).
   std::vector<uint8_t> raw = {3, 5, 2, 7};
   array u(raw.begin(), Shape{4}, uint8);
   std::vector<float> expected = running_logaddexp({3.0f, 5.0f, 2.0f, 7.0f});
@@ -1336,11 +1335,18 @@ TEST_CASE("logcumsumexp promotes integer and bool inputs to float (#4625)") {
   array lu = logcumsumexp(u, 0, false, true, stream);
   REQUIRE_EQ(lu.dtype(), float32);
   check_values(lu, expected, stream, 1e-5);
+  // Suffix scan for {3, 5, 2, 7}: out[3]=7, out[2]=lax(2,7), out[1]=lax(5, out[2]),
+  // out[0]=lax(3, out[1]).
+  std::vector<float> reverse_expected = {7.0f, 0.0f, 0.0f, 0.0f};
+  float acc = raw.back();
+  reverse_expected[3] = acc;
+  for (int i = 2; i >= 0; --i) {
+    acc = std::max(acc, static_cast<float>(raw[i])) +
+        std::log1p(std::exp(-std::abs(static_cast<float>(raw[i]) - acc)));
+    reverse_expected[i] = acc;
+  }
   check_values(
-      logcumsumexp(u, 0, true, true, stream),
-      running_logaddexp({7.0f, 2.0f, 5.0f, 3.0f}),
-      stream,
-      1e-5);
+      logcumsumexp(u, 0, true, true, stream), reverse_expected, stream, 1e-5);
 
   // bool: same promotion through the 0/1 floats.
   std::vector<bool> raw_b = {true, false, true, true};
