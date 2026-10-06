@@ -28,6 +28,8 @@ M1 Max (T6001, 32 GPU cores, same driver build, `m1max/`): nn 2.402 -> 4.574 (1.
 ## Battery (M1, commit 4aaa210e, `m1/run.log`; tip e741c1d8, `m1/run10.log`)
 25 standing suites green (runtime 49, primitive 104, matmul_family 25, fast_ops 43, kv 16, indexing 57, reduce 35, shape 25, linalg 30, copy_offset 27, distributed 9, compiled_tape 13, fft 19, fft_general 14, eig 9, take_fill 9, conv 13, complex 34, select_layout 13, fast_regression 2, scatter_determinism 21, eq_math 7, fused_chain 38, error_contract 3, ane_bundle 48). At the tip: matmul_family 26/26 with the new test; capability simulation 7/7 under each of the six profiles.
 
+Rebased on main (MoE subgroup gather) and re-verified at 5998b745 (`m1-tip/`, wheel `0.32.4.dev202610062155+5998b745`): runtime 49, primitive 104, matmul_family 27, fast_ops 43, indexing 57, capability simulation 7/7 under m1-honeykrisp-fork and no-cooperative-matrix; mm_trace 1.718 direct vs 0.598 `MLX_OMARCHY_NO_COOPMAT=1`; mlxcheck hashes identical on all 7 cases; 24 standalone edge cases 0 bit mismatches (`m1-tip/edge.log`).
+
 ## Not changed
 bf16 and f32 matmuls keep their kernels. Shapes the gate declines (k % 8 != 0, n < 32, odd n, odd m with a column-major lhs, odd offsets or strides, bias C, the causal attention shortcuts) keep `MatmulRbF16`. `MLX_OMARCHY_NO_COOPMAT=1` selects the previous route.
 

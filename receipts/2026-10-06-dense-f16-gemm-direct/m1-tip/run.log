@@ -1,0 +1,17 @@
+start 2026-10-06T21:55:46Z boot abc36fa1
+staged 5998b745 receipt: exact coverage wording
+82043b8ae4ffcbe9b271498f795cfdb5d561c469b49e31d19c90f03e0cf38b57  dist/mlx_omarchy-0.32.4.dev202610062155+5998b745-cp314-cp314-linux_aarch64.whl
+built 2026-10-06T22:02:17Z
+lock 2026-10-06T22:02:17Z
+omarchy_runtime_tests rc=0 [doctest] test cases:    49 |    49 passed | 0 failed | 0 skipped
+omarchy_primitive_tests rc=0 [doctest] test cases:     104 |     104 passed | 0 failed | 0 skipped
+omarchy_matmul_family_tests rc=0 [doctest] test cases:       27 |       27 passed | 0 failed | 0 skipped
+omarchy_fast_ops_tests rc=0 [doctest] test cases:      43 |      43 passed |  0 failed | 0 skipped
+omarchy_indexing_ops_tests rc=0 [doctest] test cases:    57 |    57 passed | 0 failed | 0 skipped
+capsim m1-honeykrisp-fork rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+capsim no-cooperative-matrix rc=0 [doctest] test cases:    7 |    7 passed | 0 failed | 0 skipped
+wheel 0.32.4.dev202610062155+5998b745
+mm direct {"tflops_total": 1.718, "per_sec": [1.64
+mm noco   {"tflops_total": 0.598, "per_sec": [0.55
+edge cases 24, nonzero bits 0
+end 2026-10-06T22:05:23Z
