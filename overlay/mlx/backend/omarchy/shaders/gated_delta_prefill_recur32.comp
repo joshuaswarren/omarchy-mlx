@@ -1,0 +1,159 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// macOS-shape per-token recurrent gated-delta-rule prefill
+// (GatedDeltaUpdate, T > 1). Opt-in via MLX_OMARCHY_GDN_RECUR32=1, the
+// Vulkan counterpart of mlx_lm's gated_delta_step on Metal: one 32-lane
+// subgroup per (hv, dv) row, the row's Dk/32 = 4 f32 state elements in
+// registers, a plain sequential loop over the token axis:
+//
+//   state *= g                          (scalar decay per head)
+//   kv     = subgroupAdd(sum state * k) (hardware reduction tree)
+//   delta  = (v - kv) * beta
+//   state += k * delta
+//   o      = subgroupAdd(sum state * q) (post-update state, like Metal)
+//   lane 0 stores y as bf16 RNE
+//
+// 128-thread workgroups carry four rows (one subgroup each), so the
+// B * Hv * Dv = 2048 rows of the pinned model fill the GPU; the four
+// subgroups re-read the same k/q/g/beta token data and rely on the
+// caches, exactly as the Metal kernel does. No shared memory, no
+// barriers, no cooperative matrices.
+//
+// Numerics: NOT bit-identical to the default chunked scan (or to the
+// exact per-token scan) - the kv/o reductions are hardware subgroup
+// trees over lane partials instead of the ascending-Dk sequential
+// chain. The numerics gate is the fp64 reference tolerance used by
+// test_gdn_maskless_correctness (y 0.02 abs, state 2e-4 abs), not a
+// kernel-bits hash. Dispatch (primitives.cpp) selects this kernel only
+// for the square bf16 Dk=Dv=128 maskless scalar-g shape on 32-lane
+// subgroup devices; masked, per-Dk-g, or shorter inputs keep the
+// existing routes.
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+// Dk is 128 by the dispatch contract (GatedDeltaUpdate::use_fallback);
+// the subgroup is 32 lanes by the dispatch gate (capabilities
+// .subgroup_size == 32), so each lane owns Dk / 32 = 4 state elements.
+#define DK 128u
+#define LANES 32u
+#define SLICE (DK / LANES)
+#define WG_THREADS 128u
+#define ROWS_PER_WG (WG_THREADS / LANES)
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
+layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+layout(set = 0, binding = 5, std430) readonly buffer SIn    { float    v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer         SOut { float    v[]; } s_out;
+layout(set = 0, binding = 8, std430) readonly buffer MBuf  { uint8_t  v[]; } m_buf;
+layout(set = 0, binding = 9, std430) readonly buffer GBufF { float     v[]; } g_buf_f;
+layout(set = 0, binding = 10, std430) buffer         Snap   { float    v[]; } snap;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;   // Dk
+  uint matrix_n;   // Dv
+  uint matrix_k;   // Hv
+  uint flags;      // bit2: g is f32 (maskless scalar-g route only)
+  float alpha;
+  float beta_f;
+  uint dims;       // T
+  uint shape[4];   // [0]=g offset, [1]=h0 offset, [2]=hf offset
+  uint in_strides[4];
+  uint out_strides[4];
+  uint chunk;
+  uint chunks;
+} params;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+void main() {
+  uint lane = gl_SubgroupInvocationID;          // 0..31 within the row
+  uint row_in_wg = gl_SubgroupID;               // 0..3, one row per subgroup
+  uint head = gl_WorkGroupID.x;
+  uint dv = gl_WorkGroupID.y * ROWS_PER_WG + row_in_wg;
+  uint hv = params.matrix_k;
+  uint Dv = params.matrix_n;
+  uint T = params.dims;
+
+  // Register-resident state slice: Dk elements [lane*4, lane*4+4) of the
+  // row (head, dv) in the f32 [B, Hv, Dv, Dk] row-contiguous state.
+  uint state_base = head * Dv * DK + dv * DK + lane * SLICE;
+  float st[SLICE];
+  for (uint i = 0u; i < SLICE; ++i) {
+    st[i] = s_in.v[params.shape[1] + state_base + i];
+  }
+
+  uint kd = lane * SLICE;
+  for (uint t = 0u; t < T; ++t) {
+    uint act = t * hv + head;
+    float g = (params.flags & 4u) != 0u
+        ? g_buf_f.v[params.shape[0] + act]
+        : bf16_load(g_buf.v[params.shape[0] + act]);
+    float beta = bf16_load(b_buf.v[params.aux_offset + act]);
+    float v_row = bf16_load(v_buf.v[params.aux_size + act * Dv + dv]);
+    float kp[SLICE];
+    float qp[SLICE];
+    for (uint i = 0u; i < SLICE; ++i) {
+      kp[i] = bf16_load(k_buf.v[params.rhs_offset + act * DK + kd + i]);
+      qp[i] = bf16_load(q_buf.v[params.lhs_offset + act * DK + kd + i]);
+    }
+
+    for (uint i = 0u; i < SLICE; ++i) {
+      st[i] *= g;
+    }
+    float acc = 0.0f;
+    for (uint i = 0u; i < SLICE; ++i) {
+      acc += st[i] * kp[i];
+    }
+    float kv = subgroupAdd(acc);
+    float delta = (v_row - kv) * beta;
+    for (uint i = 0u; i < SLICE; ++i) {
+      st[i] += kp[i] * delta;
+    }
+    acc = 0.0f;
+    for (uint i = 0u; i < SLICE; ++i) {
+      acc += st[i] * qp[i];
+    }
+    if (lane == 0u) {
+      y_buf.v[params.output_offset + act * Dv + dv] = bf16_store(subgroupAdd(acc));
+    }
+  }
+
+  // Terminal state is hf (same layout the scan and decode kernels use).
+  for (uint i = 0u; i < SLICE; ++i) {
+    s_out.v[params.shape[2] + state_base + i] = st[i];
+  }
+}

@@ -8,6 +8,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -354,4 +355,43 @@ TEST_CASE("GDN coopmat prefill matches fp64 on captured 27B operands") {
   Stream stream = gpu_stream();
   check_fixture("layer0", 5e-5, stream);
   check_fixture("layer12", 1e-5, stream);
+}
+
+namespace {
+
+// Route selection reads MLX_OMARCHY_GDN_RECUR32 per call (primitives.cpp),
+// so the env set here redirects only the maskless T >= 64 arms of this
+// case to the recur32 kernel - even when the whole battery runs as one
+// process. The RAII guard restores the default routes for later cases.
+struct EnvGuard {
+  EnvGuard(const char* name, const char* value) : name_(name) {
+    setenv(name, value, 1);
+  }
+  ~EnvGuard() {
+    unsetenv(name_);
+  }
+  const char* name_;
+};
+
+} // namespace
+
+TEST_CASE("GDN recur32 per-token route matches fp64 reference") {
+  if (!compute_available()) return;
+  EnvGuard guard("MLX_OMARCHY_GDN_RECUR32", "1");
+  Stream stream = gpu_stream();
+  // Same sweep as the maskless case above: 63/65 straddle the T >= 64
+  // route boundary (63 keeps the exact scan), 512/519 cover the hoist
+  // Ts the recur32 route now intercepts, and rep varies Hv.
+  for (int rep : {1, 2, 3}) {
+    for (int T : {63, 64, 65, 96, 352, 512, 519}) {
+      CAPTURE(T);
+      CAPTURE(rep);
+      check_case(T, rep, stream);
+    }
+  }
+  for (int rep : {1, 2}) {
+    for (int T : {512, 519}) {
+      check_case_nonzero_state(T, rep, stream);
+    }
+  }
 }
