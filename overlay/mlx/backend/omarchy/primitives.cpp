@@ -596,18 +596,7 @@ void dispatch_matmul(
     omarchy::unsupported("matrix batch rank " + name, out);
   }
 
-  // A caller may pass an output that already carries storage: the chunked
-  // SDPA's PV writes land in a shared-buffer view of the real output
-  // array. Allocating unconditionally here would detach that view from
-  // the output's buffer, so every kernel store would land in detached
-  // scratch while the output stayed zero-filled (the LongSdpaCoop3
-  // all-zero composed outputs, 2026-10-06). Fresh outputs carry no Data
-  // yet: data_shared_ptr() is null exactly when set_data has never run.
-  // buffer() itself derefs that null Data (array.h: data->buffer) and
-  // must not be called here.
-  if (out.data_shared_ptr() == nullptr) {
-    out.set_data(allocate_omarchy(out.nbytes()));
-  }
+  out.set_data(allocate_omarchy(out.nbytes()));
   if (out.size() == 0) {
     return;
   }
@@ -14230,20 +14219,40 @@ void ScaledDotProductAttention::eval_gpu(
           dispatch_softmax(
               tag, scores_c, probs_c, s, nullptr, rows, false, 0);
           encoder.add_temporary(probs_c);
-          // The PV store lands directly in the output slice:
-          // dispatch_matmul keeps out_c's shared buffer (allocation guard
-          // above) and the kernel writes at params.output_offset.
-          array out_c = row_chunk_view(out, row0, rows);
+          // PV lands in a fresh contiguous chunk matrix; the strided
+          // inplace copy then writes it into the output rows through the
+          // row view. The coopmat matmul shader stores at
+          // output_offset + batch_index * (m*n) and assumes a contiguous
+          // batch-major output, so it cannot write the strided output
+          // view directly: every head but the first stayed zero-filled
+          // on G13C (2026-10-06). copy_gpu_inplace (unlike copy_gpu)
+          // writes through an existing buffer and honors the view's
+          // strides and offset.
+          Shape result_shape = probs_c.shape();
+          result_shape.back() = v_dim;
+          array result_c(result_shape, bfloat16, nullptr, {});
           dispatch_matmul(
               tag,
               {probs_c, v32},
-              out_c,
+              result_c,
               1.0f,
               0.0f,
               false,
               s,
               {0u, CausalSkip::None},
               omarchy::ComputeKernel::MatmulF32CoopmatPvBF16);
+          encoder.add_temporary(result_c);
+          array out_c = row_chunk_view(out, row0, rows);
+          copy_gpu_inplace(
+              result_c,
+              out_c,
+              result_c.shape(),
+              result_c.strides(),
+              out_c.strides(),
+              /*i_offset=*/0,
+              /*o_offset=*/0,
+              CopyType::Vector,
+              s);
         }
         return;
       }
