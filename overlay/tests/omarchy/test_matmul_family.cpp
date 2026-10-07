@@ -2300,6 +2300,7 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
       value = index_w(gen) % static_cast<uint32_t>(index_count);
     }
     array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+    array rhs(rhs_v.begin(), Shape{index_count}, uint32);
 
     std::vector<float> expected(index_count * m * n, 0.0f);
     for (int b = 0; b < index_count; ++b) {
