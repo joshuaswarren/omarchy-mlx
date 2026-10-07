@@ -134,6 +134,24 @@ def test_extend_keeps_the_mirror_exact_or_unknown(site):
     a.advance(1)
     assert a.make_mask(1) is None
 
+def test_a_write_from_outside_the_class_leaves_the_mirror_unknown(site):
+    """w7K F2: a stale mirror [0, 3] over a real left_padding [2, 5] dropped a real mask."""
+    _, cache = site
+    c = cache.ArraysCache(size=2, left_padding=[0, 3])
+    c.advance(1)
+    assert c.left_padding_list == [-1, 2]
+    c.left_padding = mx.array([2, 5])
+    assert c.left_padding_list is None
+    assert c.make_mask(1) is not None
+    for op in (lambda x: x.advance(1), lambda x: x.filter([1])):
+        op(c)
+        assert c.left_padding_list is None
+
+    d = cache.ArraysCache(size=2, left_padding=[1, 4])
+    d.advance(1)
+    d.filter([1])
+    assert d.left_padding_list == d.left_padding.tolist() == [3]
+
 def test_kill_switch(site):
     path, _ = site
     code = ("from ssm_mlx_lm.models.cache import ArraysCache; c = ArraysCache(size=2, left_padding=[0, 0]); "
@@ -159,8 +177,14 @@ def test_rerun_upgrades_old_trees(site, tmp_path, old_guard):
     models.mkdir(parents=True)
     patched = (Path(path) / "ssm_mlx_lm" / "models" / "cache.py").read_text()
     guard = "and all(p <= 0 for p in self.left_padding_list)"
-    assert patched.count(guard) == 1 and patched.count(s["EXTEND_NEW"]) == 1
-    old = patched.replace(guard, old_guard).replace(s["EXTEND_NEW"], s["EXTEND_NEW_OLD"])
+    prop = s["FLAG_BLOCK"][s["FLAG_BLOCK"].index(s["PROPERTY_ANCHOR"]):]
+    for new in (s["EXTEND_NEW"], s["FILTER_NEW"], s["FINALIZE_ADVANCE_NEW"], prop):
+        assert patched.count(new) == 1
+    assert patched.count(guard) == 1
+    old = (patched.replace(guard, old_guard).replace(s["EXTEND_NEW"], s["EXTEND_NEW_OLD"])
+           .replace(s["FILTER_NEW"], s["FILTER_NEW_PREV"])
+           .replace(s["FINALIZE_ADVANCE_NEW"], s["FINALIZE_ADVANCE_NEW_PREV"])
+           .replace(prop, s["PROPERTY_ANCHOR"]))
     (models / "cache.py").write_text(old)
     out = subprocess.run([sys.executable, str(PATCHER), str(root)], check=True, capture_output=True, text=True)
     assert "upgraded" in out.stdout

@@ -46,7 +46,23 @@ FLAG_BLOCK = """# A batch ArraysCache with no padded row carries left_padding <=
 _SSM_MASKLESS_UNPADDED = os.environ.get("MLX_OMARCHY_SSM_MASKLESS", "1") != "0"
 
 
-class ArraysCache(_BaseCache):"""
+class ArraysCache(_BaseCache):
+    # Assigning left_padding clears the host mirror, so a write from outside the
+    # class (or a foreign state restore) leaves the guard off instead of reading
+    # a stale mirror. In-class sites read the mirror before they assign and
+    # rebuild it right after.
+    @property
+    def left_padding(self):
+        return self._left_padding
+
+    @left_padding.setter
+    def left_padding(self, value):
+        self._left_padding = value
+        self.left_padding_list = None
+"""
+
+PROPERTY_ANCHOR = "class ArraysCache(_BaseCache):\n"
+PROPERTY_BLOCK = FLAG_BLOCK[FLAG_BLOCK.index(PROPERTY_ANCHOR):]
 
 GUARD_0313 = """    def make_mask(self, N: int):
         if (
@@ -129,12 +145,20 @@ FILTER_OLD = """        if self.left_padding is not None:
         if self.lengths is not None:
             self.lengths = self.lengths[batch_indices]
 """
-FILTER_NEW = """        if self.left_padding is not None:
+FILTER_NEW_PREV = """        if self.left_padding is not None:
             self.left_padding = self.left_padding[batch_indices]
             if self.left_padding_list is not None:
                 self.left_padding_list = [
                     self.left_padding_list[i] for i in batch_indices
                 ]
+        if self.lengths is not None:
+            self.lengths = self.lengths[batch_indices]
+"""
+FILTER_NEW = """        if self.left_padding is not None:
+            mirror = self.left_padding_list
+            self.left_padding = self.left_padding[batch_indices]
+            if mirror is not None:
+                self.left_padding_list = [mirror[i] for i in batch_indices]
         if self.lengths is not None:
             self.lengths = self.lengths[batch_indices]
 """
@@ -191,7 +215,7 @@ FINALIZE_ADVANCE_OLD = """    def finalize(self):
         if self.left_padding is not None:
             self.left_padding -= N
 """
-FINALIZE_ADVANCE_NEW = """    def finalize(self):
+FINALIZE_ADVANCE_NEW_PREV = """    def finalize(self):
         self.lengths = None
         self.left_padding = None
         self.left_padding_list = None
@@ -203,6 +227,20 @@ FINALIZE_ADVANCE_NEW = """    def finalize(self):
             self.left_padding -= N
             if self.left_padding_list is not None:
                 self.left_padding_list = [p - N for p in self.left_padding_list]
+"""
+FINALIZE_ADVANCE_NEW = """    def finalize(self):
+        self.lengths = None
+        self.left_padding = None
+        self.left_padding_list = None
+
+    def advance(self, N):
+        if self.lengths is not None:
+            self.lengths -= N
+        if self.left_padding is not None:
+            mirror = self.left_padding_list
+            self.left_padding -= N
+            if mirror is not None:
+                self.left_padding_list = [p - N for p in mirror]
 """
 
 MERGE_OLD = """        if all(c.empty() for c in caches):
@@ -239,6 +277,8 @@ UPGRADES = [
     ("            and not any(self.left_padding_list)\n", GUARD_NEW),
     ("            and max(self.left_padding_list) <= 0\n", GUARD_NEW),
     (EXTEND_NEW_OLD, EXTEND_NEW),
+    (FILTER_NEW_PREV, FILTER_NEW),
+    (FINALIZE_ADVANCE_NEW_PREV, FINALIZE_ADVANCE_NEW),
 ]
 if MARKER in text:
     # ArraysCache only: BatchKVCache (kv-maskless) carries a guard line of the same text.
@@ -247,6 +287,8 @@ if MARKER in text:
     body = text[start:end]
     for old, new in UPGRADES:
         body = body.replace(old, new)
+    if "def left_padding(self)" not in body:
+        body = body.replace(PROPERTY_ANCHOR, PROPERTY_BLOCK, 1)
     upgraded = text[:start] + body + text[end:]
     if upgraded != text:
         ast.parse(upgraded)
