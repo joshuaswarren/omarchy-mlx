@@ -683,6 +683,27 @@ TEST_CASE("direct matmul route: first matching row wins, else the shipped route"
                shipped).tile_n, 128u);
 }
 
+TEST_CASE("direct matmul route: the shipped rows apply only on the measured chips") {
+  using omarchy::ComputeKernel;
+  const omarchy::DirectMatmulRoute shipped{ComputeKernel::MatmulDirectF16Nn, 64u};
+  auto kernel = [&](std::string_view device, bool a_t, bool b_t) {
+    return omarchy::select_direct_matmul_route(
+        omarchy::kDirectMatmulRows, device, true, a_t, b_t, 4096u, 4096u,
+        shipped).kernel;
+  };
+  for (std::string_view chip : {"Apple M1 (G13G B1)", "Apple M1 Max (G13C C0)"}) {
+    CHECK(kernel(chip, false, true) == ComputeKernel::MatmulDirectF16NtK4S8);
+    CHECK(kernel(chip, true, false) == ComputeKernel::MatmulDirectF16TnWS8);
+    CHECK(kernel(chip, false, false) == shipped.kernel);
+  }
+  // Device name the M2 Max reports (receipts/2026-10-04-hwprobe-device-info).
+  for (bool a_t : {false, true}) {
+    for (bool b_t : {false, true}) {
+      CHECK(kernel("Apple M2 Max (G14C B1)", a_t, b_t) == shipped.kernel);
+    }
+  }
+}
+
 TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
   if (!compute_available()) {
     return;
