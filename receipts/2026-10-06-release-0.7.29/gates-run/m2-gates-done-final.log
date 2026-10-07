@@ -1,0 +1,7 @@
+g1-clean-install_RC=0 wall=25s
+g2-online-9b_RC=0 wall=50s
+g7a-packaged-icd_RC=1 wall=0s
+g10-kokoro-primer_RC=1 wall=105s
+g11-card-9b_RC=0 wall=21s
+g14-routing_RC=0 wall=28s
+g6-codec_RC=0 wall=11s
