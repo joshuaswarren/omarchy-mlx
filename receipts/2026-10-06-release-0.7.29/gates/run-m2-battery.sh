@@ -25,6 +25,16 @@ LOG_DIR="$GATE_ROOT/$TAG-gate-logs"
 DONE="$LOG_DIR/gates.done"
 
 [[ -f "$GATES_DIR/run-all.sh" ]] || { echo "FAIL: run-all.sh not found under $REPO"; exit 1; }
+# Rerun hygiene: the gates REFUSE existing state by design (gate_refuse_existing),
+# so a battery interrupted mid-run must not be rerun over its own leftovers.
+# Clear this battery's throwaway state explicitly before starting.
+stale=0
+for d in "$GATE_ROOT/$TAG"-gate-home "$GATE_ROOT/$TAG"-gate7d-home "$GATE_ROOT/$TAG"-fresh-hf \
+         "$GATE_ROOT/$TAG"-assist-9b "$GATE_ROOT/$TAG"-assist-4b "$GATE_ROOT/$TAG"-assist-off \
+         "$GATE_ROOT/$TAG"-gate-logs; do
+  [[ -e "$d" ]] && { echo "removing stale gate state: $d"; rm -rf "$d"; stale=1; }
+done
+(( stale )) && echo "cleared stale gate state from $GATE_ROOT"
 mkdir -p "$ASSETS_DIR" "$LOG_DIR"
 
 echo "== assets (existence first, then SHA256SUMS) =="

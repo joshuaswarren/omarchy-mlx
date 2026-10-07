@@ -1,0 +1,20 @@
+== wheel + vendored mlx-lm + rule ==
+mlx_lm 0.31.3
+HOLD_UDEV root video 660
+== live hold tests (H2: must really run, under the same ticket/lock) ==
+test_forced_hold_is_held_during_work_and_released_after_idle (__main__.CpuPdHoldLiveTest.test_forced_hold_is_held_during_work_and_released_after_idle) ... ok
+test_off_switch_never_opens_the_request (__main__.CpuPdHoldLiveTest.test_off_switch_never_opens_the_request) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 5.548s
+
+OK
+HOLD_TESTS 2 run, 0 skipped, OK
+== greedy A/B (H1/H4: token ids from generate_step, 4 digests) ==
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+HOLD_AB 4 digests: be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361
+HOLD_AB all 4 digests equal and non-empty
+HOLD_PASS receipt=~/g-hold-receipt-20261007T033958Z.log
