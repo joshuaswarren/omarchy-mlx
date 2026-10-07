@@ -776,6 +776,152 @@ void resolve_kernel_templates(
   }
 }
 
+// Helpers in the user header may take `threadgroup T*` parameters (shared
+// scratch passed by pointer, e.g. the msv_row_inv_rms reduction stage in
+// mlx-serve's fused residual+RMSNorm kernel). GLSL has neither pointer
+// parameters nor storage-qualified parameters. When every call site in the
+// kernel body passes the shared array under its own declared name, the
+// parameter is dropped from the signature: the helper body's references then
+// resolve to the kernel body's global `shared` arrays directly. Anything
+// else — an alias, an expression, a missing argument — is refused with the
+// construct named.
+void specialize_threadgroup_helper_params(
+    std::string& header,
+    std::string& body) {
+  static const std::regex helper_signature(
+      R"(\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()",
+      std::regex_constants::optimize);
+  static const std::regex threadgroup_param(
+      R"(threadgroup\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))",
+      std::regex_constants::optimize);
+  // Each pass erases at most one parameter; erasing invalidates match
+  // positions, so rescan from the start until no parameter remains.
+  while (true) {
+    bool erased = false;
+    for (std::sregex_iterator it(
+             header.begin(), header.end(), helper_signature);
+         it != std::sregex_iterator();
+         ++it) {
+      const std::string helper = (*it)[2].str();
+      const size_t paren = header.find('(', (*it).position(0));
+      if (paren == std::string::npos) {
+        continue;
+      }
+      const size_t close = matching_delimiter(header, paren, '(', ')');
+      const std::string params = header.substr(paren + 1, close - paren - 1);
+      std::sregex_iterator tp(
+          params.begin(), params.end(), threadgroup_param);
+      if (tp == std::sregex_iterator()) {
+        continue;
+      }
+      const std::string ptype = (*tp)[1].str();
+      const std::string pname = (*tp)[2].str();
+      const size_t param_index = static_cast<size_t>(std::count(
+          params.begin(), params.begin() + (*tp).position(0), ','));
+      // Every call site in the kernel body must pass the same-named array.
+      size_t search = 0;
+      size_t calls = 0;
+      while (true) {
+        const size_t call = body.find(helper + "(", search);
+        if (call == std::string::npos) {
+          break;
+        }
+        if (call > 0 &&
+            (std::isalnum(static_cast<unsigned char>(body[call - 1])) ||
+             body[call - 1] == '_')) {
+          search = call + 1;
+          continue;
+        }
+        const size_t call_open = call + helper.size();
+        const size_t call_close =
+            matching_delimiter(body, call_open, '(', ')');
+        const auto arguments =
+            split(body.substr(call_open + 1, call_close - call_open - 1), ',');
+        if (param_index >= arguments.size()) {
+          throw std::runtime_error(
+              "unsupported threadgroup helper parameter: call of `" +
+              helper + "` is missing argument " +
+              std::to_string(param_index));
+        }
+        std::string argument = arguments[param_index];
+        argument.erase(0, argument.find_first_not_of(" \t\r\n"));
+        argument.erase(argument.find_last_not_of(" \t\r\n") + 1);
+        if (argument != pname) {
+          throw std::runtime_error(
+              "unsupported threadgroup helper parameter: call of `" +
+              helper + "` passes `" + argument + "` for shared array `" +
+              pname + "` (GLSL cannot pass shared storage as a parameter)");
+        }
+        ++calls;
+        search = call_close + 1;
+      }
+      if (calls == 0) {
+        throw std::runtime_error(
+            "unsupported threadgroup helper parameter: `" + helper +
+            "` takes `threadgroup " + ptype + "* " + pname +
+            "` but the kernel body never calls it");
+      }
+      // Drop the matching argument from every call site (reverse order so
+      // the collected positions stay valid while erasing).
+      size_t cut_from = 0;
+      std::vector<std::pair<size_t, size_t>> cuts;
+      search = 0;
+      while (true) {
+        const size_t call = body.find(helper + "(", search);
+        if (call == std::string::npos) {
+          break;
+        }
+        if (call > 0 &&
+            (std::isalnum(static_cast<unsigned char>(body[call - 1])) ||
+             body[call - 1] == '_')) {
+          search = call + 1;
+          continue;
+        }
+        const size_t call_open = call + helper.size();
+        const size_t call_close =
+            matching_delimiter(body, call_open, '(', ')');
+        const auto arguments =
+            split(body.substr(call_open + 1, call_close - call_open - 1), ',');
+        size_t arg_start = call_open + 1;
+        for (size_t index = 0; index < param_index; ++index) {
+          arg_start += arguments[index].size() + 1;
+        }
+        size_t begin = arg_start;
+        size_t end = begin + arguments[param_index].size();
+        if (param_index + 1 < arguments.size()) {
+          end += 2;  // ", "
+        } else if (param_index > 0) {
+          begin -= 2;  // ", "
+        }
+        cuts.emplace_back(begin, end);
+        search = call_close + 1;
+      }
+      for (auto it = cuts.rbegin(); it != cuts.rend(); ++it) {
+        body.erase(it->first, it->second - it->first);
+      }
+      // Erase the parameter from this signature (with one adjacent comma).
+      const std::string bare = "threadgroup " + ptype + "* " + pname;
+      size_t at = header.find(bare, paren);
+      if (at == std::string::npos || at + bare.size() > close) {
+        throw std::runtime_error(
+            "threadgroup helper parameter vanished while rewriting");
+      }
+      size_t end = at + bare.size();
+      if (header.compare(end, 2, ", ") == 0) {
+        end += 2;
+      } else if (at > paren + 1 && header.compare(at - 2, 2, ", ") == 0) {
+        at -= 2;
+      }
+      header.erase(at, end - at);
+      erased = true;
+      break;
+    }
+    if (!erased) {
+      return;
+    }
+  }
+}
+
 void translate_header(std::string& header) {
   // Any #include has no GLSL meaning: the OMARCHY ICD compiles the shader
   // standalone, and a kernel that actually calls the included APIs fails
@@ -834,10 +980,14 @@ void translate_header(std::string& header) {
   replace_all(header, "simd_sum", "subgroupAdd");
   replace_all(header, "simd_max", "subgroupMax");
   replace_all(header, "simd_min", "subgroupMin");
+  // metal::precise::rsqrt survives the metal:: strip above as rsqrt; GLSL
+  // names it inversesqrt (same mapping the body rewrites apply).
+  replace_word(header, "rsqrt", "inversesqrt");
   if (header.find("threadgroup") != std::string::npos) {
     throw std::runtime_error(
         "unsupported MSL feature `threadgroup` in a helper function "
-        "(GLSL cannot pass shared storage as a parameter)");
+        "(GLSL allows shared storage only as a file-scope declaration in "
+        "the kernel body; helper parameters must be specialized away)");
   }
   if (header.find("template") != std::string::npos ||
       header.find("[[") != std::string::npos) {
@@ -1007,6 +1157,7 @@ Translation translate_msl(
       search = block_start;
     }
   }
+  specialize_threadgroup_helper_params(header, body);
   translate_header(header);
 
   const std::vector<std::string> forbidden = {
@@ -1072,6 +1223,13 @@ Translation translate_msl(
   replace_all(body, "metal::fast::", "");
   replace_all(body, "metal::", "");
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
+  replace_all(body, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
+  // Remaining `threadgroup ` tokens are shared-memory declarations
+  // (`threadgroup float local_sums[32];`). The attribute rewrites above
+  // already consumed every builtin that carries `threadgroup` as a
+  // substring, so what is left is the storage qualifier, which GLSL spells
+  // `shared`.
+  replace_all(body, "threadgroup ", "shared ");
   replace_all(body, "simd_sum", "subgroupAdd");
   replace_all(body, "simd_max", "subgroupMax");
   // MSL metal::precise::rsqrt survives the metal:: strip as rsqrt; GLSL
