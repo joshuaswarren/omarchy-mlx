@@ -906,6 +906,54 @@ doctest `sdpa vjp fd parity at small rep=1 shapes (known defects)`
 impact: qL=1 is the decode geometry - a fine-tune backward through a
 single-query step silently loses dk/dv today. Next lever: instrument
 s_t_dense/p_t_dense and the dkt/dvt buffers inside eval_gpu at (1,1,2,4).
+
+2026-10-07 update (receipts/2026-10-07-sdpa-vjp-fused-off): the defect
+is now STANDALONE-REPRODUCIBLE on jw16 hardware at the strict shapes
+(B=1,qL=1,kL=2,D=4: dk all stale bytes — recycled poison with
+MLX_OMARCHY_POISON_FREED=1, zeros without; dv zeros), while the same
+shapes pass in-suite — allocator/queue-state dependent, with a trailing
+PORTION of dk never written (at B=2 the first batch is correct, the
+second stale). Every internal plane (lse, delta, dP, dS, P, both
+transposed copies, q5/k5) verified correct at its stage boundary via
+dump probes; the dq leg is correct; the standalone byte-identical
+matmuls are clean. Ruled out this session: cot form, buffer cache,
+gated barriers, dep reflection, the coopmat k-tail, forward coopmat
+route, and each stage bypassed individually. A routing flip (fused VJP
+off) was tested and REJECTED: the composed fallback ALSO deviates from
+host fd at rep=1 shapes (15 logged spots, e.g. 2x1x2x4 dk[4] 0.0155 vs
+0.0355) — the strict doctest had been measuring the fused path; both
+paths are unproven at rep=1 outside the suite's allocator state. Not a
+backport regression (reproduces with the 2026-10-06 backport batch
+reverted). Next lever: log bound buffer addresses/sizes for dk vs the
+dq5 temporary in gqa_reduce/dispatch_matmul — dk has been observed
+carrying dq's exact words, pinning the aliasing point to output-buffer
+handing between the primitive's set_data allocations and
+dispatch_matmul's re-allocation of `out`.
+
+## omarchy_conv_gemm_decomp_tests: "There is no Stream(gpu, N) in current thread" (2026-10-07, open)
+
+2 of 3 cases throw `There is no Stream(gpu, N) in current thread`
+(omarchy encoder.cpp:1375 get_command_encoder) at rep=1 in the battery
+(receipts/2026-10-06-mlx-backports/battery.md). The test creates extra
+GPU streams (`new_stream(Device::gpu)` at test_conv_gemm_decomp.cpp:61/
+121/155) while the per-thread encoder table only holds the default
+stream; standalone runs (without gpu-turn) fail identically, so it is
+not a ticket artifact. Present before the 2026-10-06 backport batch
+(last encoder commit e19a8000 predates it; the batch touches no
+encoder/stream code). Test-side fix options: run the cases on the
+default stream, or extend the per-thread table fallback.
+
+## omarchy_ane_runtime_tests does not link in the static test configure (2026-10-06, open)
+
+`omarchy_ane_runtime_tests` fails at link: undefined
+`AneRuntime::load/~AneRuntime` — `ane/runtime.cpp` compiles into libmlx
+only when `MLX_OMARCHY_ANE_SOURCE_DIR` is set, which requires
+`BUILD_SHARED_LIBS=ON` (docs/ane-runtime.md); the default static test
+configure therefore cannot link the runtime test. Pre-existing
+(recorded in receipts/2026-10-06-gdn-recur32-default). Fix: build the
+test target only when the ANE runtime sources are in the lib, or link
+runtime.cpp into the test binary directly.
+
 ## 2026-10-03: OpCost's in-shader Cody-Waite constants were wrong; the honest contract is accurate-to-5e5, NaN above (fixed this change)
 
 OpCost's `6cbf55d8f` removed the per-call `trig_argument_gate` (a full
