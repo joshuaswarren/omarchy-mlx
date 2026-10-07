@@ -27,6 +27,7 @@
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/matmul_direct_select.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
@@ -632,6 +633,44 @@ TEST_CASE("register-blocked f16 matmul matches the 16x16 tile bit for bit") {
     }
     CHECK_LT(max_err, 0.05f);
   }
+}
+
+TEST_CASE("direct matmul route: first matching row wins, else the shipped route") {
+  using omarchy::ComputeKernel;
+  using omarchy::DirectMatmulRoute;
+  const DirectMatmulRoute shipped{ComputeKernel::MatmulDirectF16Nt, 64u};
+  const DirectMatmulRoute wide{ComputeKernel::MatmulDirectF16Nn, 128u};
+  const DirectMatmulRoute any_g13{ComputeKernel::MatmulDirectF16Tn, 64u};
+  const std::array<omarchy::DirectMatmulRow, 2> rows{{
+      {"G13G", true, false, true, 128u, 64u, wide},
+      {"G13", true, false, true, 32u, 32u, any_g13},
+  }};
+  auto pick = [&](std::string_view device, bool f16, bool a_t, bool b_t,
+                  uint32_t m, uint32_t n) {
+    return omarchy::select_direct_matmul_route(
+        rows, device, f16, a_t, b_t, m, n, shipped);
+  };
+  const auto m1 = pick("Apple M1 (G13G B1)", true, false, true, 512u, 4096u);
+  CHECK(m1.kernel == wide.kernel);
+  CHECK_EQ(m1.tile_n, 128u);
+  // Below the first row's m or n floor, the next matching row takes over.
+  CHECK(pick("Apple M1 (G13G B1)", true, false, true, 127u, 4096u).kernel ==
+        any_g13.kernel);
+  CHECK(pick("Apple M1 (G13G B1)", true, false, true, 512u, 63u).kernel ==
+        any_g13.kernel);
+  // The chip key is a device-name substring.
+  CHECK(pick("Apple M1 Max (G13C C0)", true, false, true, 512u, 4096u).kernel ==
+        any_g13.kernel);
+  // Another chip, dtype, or orientation keeps the shipped route.
+  const auto g14 = pick("Apple M2 (G14G B1)", true, false, true, 512u, 4096u);
+  CHECK(g14.kernel == shipped.kernel);
+  CHECK_EQ(g14.tile_n, 64u);
+  CHECK(pick("Apple M1 (G13G B1)", false, false, true, 512u, 4096u).kernel ==
+        shipped.kernel);
+  CHECK(pick("Apple M1 (G13G B1)", true, false, false, 512u, 4096u).kernel ==
+        shipped.kernel);
+  CHECK(pick("Apple M1 (G13G B1)", true, true, true, 512u, 4096u).kernel ==
+        shipped.kernel);
 }
 
 TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
