@@ -117,3 +117,45 @@ process, 21:35:43–21:37:41Z:
 **b8 = ade1656c3 is green on BOTH hosts: jw16 (M1 Max) and jwm1 (G13G).**
 Landing-ready. Logs: jwm1:~/b8-jwm1/jwm1-*.log; archived in the lab at
 jw16-threetree/jwm1-b8/.
+
+## Addendum 3 (2026-10-07 ~00:50Z): b13 (land/moe-z2 4bd90d5ec) final verification + b8-vs-b13 SUB=1 A/B
+
+b13 = main 436633335 + 4 MoeLayer2 commits (z-chunk dispatch, scale-aware
+metric, fixture lhs fix, rhs decl) — clean cherry-picks, includes FenceFix's
+allocator fix on main. jw16: matmul_family **27/27 ✓** (82942518 asrt incl.
+GLM-shaped 11,264 + 67,584-WG z-chunk cases; binary d601126b9a3917c6),
+runtime 49/49 ✓, take_fill 9/9 ✓, take_bool 5/5 ✓, fast_ops 43/43 ✓,
+kv 16/16 ✓, capsim 6/6 ✓; overlay-vs-.work full-glob diff 0 mismatches.
+[gather-qmm-sub] per-case: scalar and sub relL2 IDENTICAL per config
+(0.00240–0.00272, bf16 band), z-chunk tail 0.00240.
+
+GLM-4.5-Air-4bit timing on the b13 wheel: Sub z-chunk default **9.71 / 18.02 /
+28.17 ms/layer B=1/2/4** vs same-wheel scalar 82.07/146.63/268.40 vs w7G's
+81 ms pre-Sub baseline → 8.3x / 8.1x / 9.5x; batch scaling FIXED (aggregate
+tok/s gain 1.08x B=2, 1.38x B=4; b8 capped at 0.75–0.85x). Census B=2:
+GatherQmmSubBF16 ×24 (2 z-chunks × 3 calls × 4 layers), zero scalar.
+
+DeepSeek-Lite smoke on the b13 wheel: SUB=1 **70.9 ms/token**, sha
+`47b8cd75dcb58c17` (differs from b8's `7a907469015cb745`); SUB=0 449.64
+ms/token, sha `1016cf9425bed746` (identical to every prior run — scalar path
+untouched). 6.34x, coherent, provenance verified=match.
+
+**b8-vs-b13 A/B (Main's challenge): classification (a) benign
+accumulation-order.** Same venv/host/session, SUB=1, 16-token greedy with
+per-step top-2 logits + TRACE_DISPATCH census on both wheels:
+- 16/16 token ids identical (probe sha 10a8446716546a35 both).
+- Step-0 (post-prefill) logits bit-identical → prefill did not move.
+- Divergence first appears at step 1 (the recompiled Sub shader's first
+  decode execution): deltas 0.125–0.5 at |logit|≈16 ≈ 1–4 bf16 ULP; zero
+  argmax flips (min gap 0.25).
+- Census (25,234 lines each): b8 = GatherQmmSubBF16 ×1248 + GatherQmmBF16
+  scalar ×78 (prefill lm_head count>65535 calls the old gate sent to
+  scalar); b13 = GatherQmmSubBF16 ×1326, scalar ×0 — same 1,326 total
+  gather calls. The 78 scalar prefill dispatches are NOT the sha change
+  (step-0 logits identical); the sha change is the decode-phase Sub shader
+  recompile (new index arithmetic reorders float accumulation → ULP-scale
+  noise from step 1). No real error.
+
+b8 landing-ready → superseded by b13 (same kernel semantics + z-chunk +
+fixture/scale-aware fixes). jwm1 ~/b13-jwm1 staging parked until Main
+releases the host.
