@@ -17,7 +17,15 @@
 # Any FAIL line: stop and report (the tag never moves).
 set -euo pipefail
 WHEEL="${G13C_WHEEL:?set G13C_WHEEL to the release wheel path on this host}"
-LOCK="${GPU_LOCK:-/tmp/m1-gpu.lock}"
+# Host-detected GPU lock: M2-class hosts use /tmp/m2-gpu.lock, the M1 family
+# /tmp/m1-gpu.lock. An explicit GPU_LOCK always wins.
+if [[ -z "${GPU_LOCK:-}" ]]; then
+  if grep -aq "t6021\|t6011\|t6010" /proc/device-tree/compatible 2>/dev/null; then
+    GPU_LOCK=/tmp/m2-gpu.lock
+  else
+    GPU_LOCK=/tmp/m1-gpu.lock
+  fi
+fi
 command -v python3.14 >/dev/null || { echo "FAIL python3.14 missing"; exit 1; }
 
 VENV="$(mktemp -d "${TMPDIR:-/tmp}/g13c-gate.XXXX")"
@@ -31,7 +39,8 @@ python3.14 -m venv "$VENV"
 echo "== device =="
 "$VENV/bin/python" - <<'EOF' | sed 's/^/G13C_DEVICE /'
 import mlx.core as mx
-print(mx.default_device())
+info = mx.device_info()
+print(info.get("marketing_name") or info)
 EOF
 
 cat >"$PROBE" <<'EOF'
@@ -77,14 +86,15 @@ run_probe() { # $1: env value ("1") or empty for the default arm; runs as root
   fi
 }
 
-echo "== GPU probes under lock $LOCK (root: isolates the gate decision from permissions) =="
+echo "== GPU probes under lock $GPU_LOCK (root: isolates the gate decision from permissions) =="
 
-out_default="$(flock "$LOCK" run_probe)"
+# flock runs a COMMAND, not a shell function: wrap the probe in bash -c.
+out_default="$(flock "$GPU_LOCK" bash -c "sudo '$VENV/bin/python' '$PROBE'")"
 echo "$out_default" | grep -q "RESULT during=0 after=0" \
   && echo "G13C_GATE default during=0 after=0" \
   || { echo "FAIL default arm: $out_default"; exit 1; }
 
-out_forced="$(flock "$LOCK" run_probe 1)"
+out_forced="$(flock "$GPU_LOCK" bash -c "sudo env MLX_OMARCHY_CPU_PD_HOLD=1 '$VENV/bin/python' '$PROBE'")"
 echo "$out_forced" | grep -qE "RESULT during=[1-9][0-9]* after=0" \
   && echo "G13C_GATE forced during>=1 after=0" \
   || { echo "FAIL forced arm: $out_forced"; exit 1; }
