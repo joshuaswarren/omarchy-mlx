@@ -15,16 +15,21 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <random>
 #include <thread>
 #include <tuple>
+#include <unistd.h>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/cpu/device_info.h"
 #include "mlx/backend/omarchy/trace.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
@@ -3502,7 +3507,7 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
 // (CastBF16F32) and the shader must index that f32 view in f32
 // elements per batch; a batch term halved there shifts batch b by
 // m / 2 rows, so odd batches read the wrong tokens while b % 2 == 0
-// lands on the previous batch (invisible when every batch holds
+// lands on batch b/2 (invisible when every batch holds
 // identical rows, which is how the defect shipped: batched
 // prefill/serving got wrong logits for every row after the first).
 TEST_CASE("batched quantized_matmul matches host on every batch row") {
@@ -3542,12 +3547,15 @@ TEST_CASE("batched quantized_matmul matches host on every batch row") {
       {2, 1, 2048, 64, 4, bfloat16, "b2-t1-n2048-vec"},
       {4, 16, 16, 64, 4, bfloat16, "b4-t16-n16"},
       // Named route pins (w7Q review): m=16 exercises the M16 FullN
-      // build, m=40 the 32-row X32 route, at the review shape
-      // (N=256, K=2048, distinct rows, B=2 and B=4).
+      // build; m=128 at N=2048 gives ceil(m/32)*(N/32) = 256 tile
+      // units, past the cores*6 threshold where coopmat_tile_rows
+      // picks 32 rows (the earlier m=40/N=256 pin stayed on the M16
+      // build: 2*8 = 16 units). The dispatched kernel itself is
+      // asserted in the dispatch-pins case below.
       {2, 16, 256, 64, 4, bfloat16, "b2-m16-n256-m16route"},
       {4, 16, 256, 64, 4, bfloat16, "b4-m16-n256-m16route"},
-      {2, 40, 256, 64, 4, bfloat16, "b2-m40-n256-x32route"},
-      {4, 40, 256, 64, 4, bfloat16, "b4-m40-n256-x32route"},
+      {2, 128, 2048, 64, 4, bfloat16, "b2-m128-n2048-x32route"},
+      {4, 128, 2048, 64, 4, bfloat16, "b4-m128-n2048-x32route"},
   };
   if (float16_available()) {
     cases.push_back({4, 16, 6144, 64, 4, float16, "f16-b4-t16-n6144"});
@@ -3600,21 +3608,32 @@ TEST_CASE("batched quantized_matmul matches host on every batch row") {
     REQUIRE_EQ(out.shape(), Shape{c.batch, c.m, c.n});
     std::vector<float> device_result = readback_f32(stream, out);
 
-    // Per-batch-row f64 host reference; the bound follows the same
+    // Per-batch-row f64 host reference, all batches first: the bound
+    // must derive from the REFERENCE magnitude, not the device result
+    // (w7Q review - a device-derived m_max widens the bound exactly
+    // where a defect inflates the output). The bound follows the same
     // derivation as the qmm_vec case above with the tile route's
     // deeper k chain carried conservatively (one f32 rounding per k
-    // element). m_max scales with this run's observed output
-    // magnitude: with dist(-2,2) over k=2048 the |y| tail reaches
-    // several hundred, where ONE bf16 storage ulp is already ~1.0 -
-    // a fixed-magnitude bound flags legitimate storage rounding (a
-    // first cut pinned at 50 and failed exactly there). A wrong-row
-    // defect still misses by O(|y|), two orders above the bound.
-    double m_max_obs = 0.0;
-    for (float v : device_result) {
-      m_max_obs = std::max(m_max_obs,
-          static_cast<double>(std::fabs(v)));
+    // element). With dist(-2,2) over k=2048 the reference |y| tail
+    // reaches several hundred, where ONE bf16 storage ulp is already
+    // ~1.0 - a fixed-magnitude bound flags legitimate storage
+    // rounding. A wrong-row defect still misses by O(|y|), two orders
+    // above the bound.
+    std::vector<std::vector<float>> expected_batches;
+    expected_batches.reserve(c.batch);
+    double m_max_ref = 0.0;
+    for (int b = 0; b < c.batch; ++b) {
+      std::vector<float> x_batch(
+          x_rt.begin() + static_cast<ptrdiff_t>(b) * c.m * k,
+          x_rt.begin() + static_cast<ptrdiff_t>(b + 1) * c.m * k);
+      expected_batches.push_back(host_quantized_matmul(
+          rounded, x_batch, c.m, c.n, k, c.group_size, c.bits));
+      for (float v : expected_batches.back()) {
+        m_max_ref = std::max(m_max_ref,
+            static_cast<double>(std::fabs(v)));
+      }
     }
-    double m_max = std::max(m_max_obs * 2.0, 50.0);
+    double m_max = std::max(m_max_ref * 2.0, 50.0);
     int storage_mantissa_bits = (c.dtype == float32)
         ? 23
         : (c.dtype == float16) ? 10 : 7;
@@ -3625,11 +3644,7 @@ TEST_CASE("batched quantized_matmul matches host on every batch row") {
     double bound = std::max(e_f32 + e_storage, 1e-6);
 
     for (int b = 0; b < c.batch; ++b) {
-      std::vector<float> x_batch(
-          x_rt.begin() + static_cast<ptrdiff_t>(b) * c.m * k,
-          x_rt.begin() + static_cast<ptrdiff_t>(b + 1) * c.m * k);
-      std::vector<float> expected = host_quantized_matmul(
-          rounded, x_batch, c.m, c.n, k, c.group_size, c.bits);
+      const std::vector<float>& expected = expected_batches[b];
       double max_diff = 0.0;
       int worst = -1;
       for (int i = 0; i < c.m * c.n; ++i) {
@@ -3725,6 +3740,184 @@ TEST_CASE("batched quantized_matmul is bit-identical per batch row alone") {
             row_bytes) == 0;
         INFO("batch=", b, " rows differ from the alone run");
         CHECK(equal);
+      }
+    }
+  }
+}
+
+// w7Q review: the batched-prefill pins must prove WHICH compiled build
+// ran, not only that some coopmat kernel was numerically right. The
+// dispatch trace ("[rtmod] DISPATCH kernel=<id>", ids = the
+// ComputeKernel enum) is captured around one call and matched against
+// the named enum member, so a route silently drifting to another build
+// fails here instead of quietly covering a different shader site.
+// Sites covered: qmm_tile's X_F32 x_slice (M16 FullN and 32-row
+// FullN builds) and qmm_tile_two's (the TwoN build, which only
+// dispatches under MLX_OMARCHY_QMM_TWON=1 with N % 64 == 0).
+// qmm_tile_two correctness is asserted against the f64 host
+// reference, so this case fails-before on the unfixed shader.
+TEST_CASE("coopmat prefill dispatch pins M16, 32-row and TwoN builds") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  bool coopmat =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u;
+  if (!coopmat) {
+    skip("no cooperative_matrix_f32_8; dispatch pins need the coopmat route");
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(614);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+  int k = 2048;
+  int group_size = 64;
+  int bits = 4;
+  int groups = k / group_size;
+  int words_per_row = k / 8;
+  std::vector<float> w_matrix_2048(static_cast<size_t>(2048) * k);
+  for (auto& v : w_matrix_2048) {
+    v = dist(gen);
+  }
+  std::vector<float> w_matrix_256(static_cast<size_t>(256) * k);
+  for (auto& v : w_matrix_256) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host_2048 =
+      host_affine_quantize(w_matrix_2048, 2048, k, group_size, bits);
+  HostQuantizedWeights host_256 =
+      host_affine_quantize(w_matrix_256, 256, k, group_size, bits);
+  std::vector<float> scales_rt = round_trip(stream, host_2048.scales, bfloat16);
+  std::vector<float> biases_rt =
+      round_trip(stream, host_2048.biases, bfloat16);
+  std::vector<float> scales_rt_256 =
+      round_trip(stream, host_256.scales, bfloat16);
+  std::vector<float> biases_rt_256 =
+      round_trip(stream, host_256.biases, bfloat16);
+
+  auto captured = [&](const std::function<void()>& call) {
+    std::fflush(stderr);
+    int saved = ::dup(::fileno(stderr));
+    FILE* cap = std::fopen("/tmp/qmm_dispatch_cap.log", "w");
+    REQUIRE(cap != nullptr);
+    ::dup2(::fileno(cap), ::fileno(stderr));
+    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+    call();
+    omarchy::get_command_encoder(stream).synchronize();
+    std::fflush(stderr);
+    ::dup2(saved, ::fileno(stderr));
+    ::close(saved);
+    std::fclose(cap);
+    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+    std::ifstream in("/tmp/qmm_dispatch_cap.log");
+    std::string text((std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+    return text;
+  };
+  auto dispatches = [](const std::string& text,
+                           uint32_t kernel_id) {
+    return text.find("[rtmod] DISPATCH kernel=" +
+                     std::to_string(kernel_id) + " ") !=
+        std::string::npos;
+  };
+  auto kernel_of = [](omarchy::ComputeKernel kernel) {
+    return static_cast<uint32_t>(kernel);
+  };
+
+  struct Pin {
+    int m, n;
+    const char* env_name;
+    omarchy::ComputeKernel expected;
+    const char* label;
+  };
+  std::vector<Pin> pins{
+      {16, 256, nullptr,
+          omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN,
+          "M16FullN"},
+      {128, 2048, "MLX_OMARCHY_NO_RASTER",
+          omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullN,
+          "X32FullN"},
+      {128, 2048, "MLX_OMARCHY_QMM_TWON",
+          omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullNTwoN,
+          "TwoN"},
+  };
+
+  for (const auto& pin : pins) {
+    CAPTURE(pin.label);
+    HostQuantizedWeights& host = pin.n == 256 ? host_256 : host_2048;
+    std::vector<float>& scales_use = pin.n == 256 ? scales_rt_256 : scales_rt;
+    std::vector<float>& biases_use = pin.n == 256 ? biases_rt_256 : biases_rt;
+    std::vector<float> x_flat(static_cast<size_t>(2) * pin.m * k);
+    for (auto& v : x_flat) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_flat, bfloat16);
+    array x(x_rt.begin(), Shape{2, pin.m, k}, bfloat16);
+    array w_words(host.words.begin(), Shape{pin.n, words_per_row}, uint32);
+    array scales(scales_use.begin(), Shape{pin.n, groups}, bfloat16);
+    array biases(biases_use.begin(), Shape{pin.n, groups}, bfloat16);
+
+    const char* old_env = pin.env_name != nullptr
+        ? std::getenv(pin.env_name) : nullptr;
+    std::string saved_env = old_env != nullptr ? old_env : "";
+    if (pin.env_name != nullptr) {
+      setenv(pin.env_name, "1", 1);
+    }
+    std::optional<array> out_holder;
+    std::string trace = captured([&] {
+      out_holder = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      out_holder->eval();
+    });
+    if (pin.env_name != nullptr) {
+      if (old_env != nullptr) {
+        setenv(pin.env_name, saved_env.c_str(), 1);
+      } else {
+        unsetenv(pin.env_name);
+      }
+    }
+    uint32_t expected_id = kernel_of(pin.expected);
+    bool hit = dispatches(trace, expected_id);
+    INFO("pin=", pin.label, " expected kernel id ", expected_id,
+        " trace bytes=", trace.size());
+    CHECK(hit);
+
+    if (std::string(pin.label) == "TwoN") {
+      // The TwoN build owns the qmm_tile_two x_slice site: its batched
+      // rows must also be numerically right, so this pin fails-before
+      // on the unfixed shader.
+      REQUIRE(evaluation_error(*out_holder).empty());
+      std::vector<float> device_result = readback_f32(stream, *out_holder);
+      std::vector<std::vector<float>> expected_batches;
+      double m_max_ref = 0.0;
+      for (int b = 0; b < 2; ++b) {
+        std::vector<float> x_batch(
+            x_rt.begin() + static_cast<ptrdiff_t>(b) * pin.m * k,
+            x_rt.begin() + static_cast<ptrdiff_t>(b + 1) * pin.m * k);
+        expected_batches.push_back(host_quantized_matmul(
+            host, x_batch, pin.m, pin.n, k, group_size, bits));
+        for (float v : expected_batches.back()) {
+          m_max_ref = std::max(m_max_ref,
+              static_cast<double>(std::fabs(v)));
+        }
+      }
+      double m_max = std::max(m_max_ref * 2.0, 50.0);
+      double bound = k * m_max * std::ldexp(1.0, -23) +
+          m_max * std::ldexp(1.0, -8);
+      for (int b = 0; b < 2; ++b) {
+        double max_diff = 0.0;
+        for (int i = 0; i < pin.m * pin.n; ++i) {
+          max_diff = std::max(max_diff,
+              std::fabs(static_cast<double>(
+                            device_result[static_cast<size_t>(b) *
+                                    pin.m * pin.n +
+                                i]) -
+                  expected_batches[b][i]));
+        }
+        INFO("TwoN batch=", b, " diff=", max_diff, " bound=", bound);
+        CHECK(max_diff <= bound);
       }
     }
   }
