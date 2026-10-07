@@ -3496,6 +3496,221 @@ TEST_CASE("qmm_vec subgroup dispatch matches host reference across decode shapes
   }
 }
 
+// Batched prefill: x is [batch, m, k] with DISTINCT token rows per
+// batch, quantized weights shared across the batch (the 2D-w serving
+// shape). The bf16-activation coopmat route widens x to f32 once
+// (CastBF16F32) and the shader must index that f32 view in f32
+// elements per batch; a batch term halved there shifts batch b by
+// m / 2 rows, so odd batches read the wrong tokens while b % 2 == 0
+// lands on the previous batch (invisible when every batch holds
+// identical rows, which is how the defect shipped: batched
+// prefill/serving got wrong logits for every row after the first).
+TEST_CASE("batched quantized_matmul matches host on every batch row") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  bool coopmat =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u;
+  if (!coopmat) {
+    skip("no cooperative_matrix_f32_8; batched prefill takes the tile route");
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(2026);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+  int k = 2048;
+  // {batch, m, n} on the dominant 4-bit group-64 transposed layout:
+  // the w7B failing shape (2 and 4 batch at T=16, N=6144), odd batch
+  // counts, a T that is not a tile multiple (17), the vec route (m=1),
+  // and a small-n projection. f16 activations cover the no-cast f16
+  // route; bits 8 / group 32 / group 128 take the scalar tile route
+  // (the coopmat gate is 4-bit g64 only) and pin its batch math too.
+  struct Case {
+    int batch, m, n, group_size, bits;
+    Dtype dtype;
+    const char* label;
+  };
+  std::vector<Case> cases{
+      {2, 16, 6144, 64, 4, bfloat16, "b4-t16-n6144"},
+      {4, 16, 6144, 64, 4, bfloat16, "b8-t16-n6144"},
+      {3, 16, 2048, 64, 4, bfloat16, "b3-t16-n2048"},
+      {8, 4, 2048, 64, 4, bfloat16, "b8-t4-n2048"},
+      {5, 17, 2048, 64, 4, bfloat16, "b5-t17-n2048"},
+      {2, 64, 2048, 64, 4, bfloat16, "b2-t64-n2048"},
+      {2, 1, 2048, 64, 4, bfloat16, "b2-t1-n2048-vec"},
+      {4, 16, 16, 64, 4, bfloat16, "b4-t16-n16"},
+  };
+  if (float16_available()) {
+    cases.push_back({4, 16, 6144, 64, 4, float16, "f16-b4-t16-n6144"});
+    cases.push_back({3, 16, 2048, 64, 4, float16, "f16-b3-t16-n2048"});
+    cases.push_back({2, 17, 2048, 64, 4, float16, "f16-b2-t17-n2048"});
+  }
+  cases.push_back({4, 16, 2048, 64, 8, bfloat16, "bits8-tile"});
+  cases.push_back({4, 16, 2048, 32, 4, bfloat16, "g32-tile"});
+  cases.push_back({4, 16, 2048, 128, 4, bfloat16, "g128-tile"});
+
+  for (const auto& c : cases) {
+    CAPTURE(c.label);
+    CAPTURE(c.batch);
+    CAPTURE(c.m);
+    CAPTURE(c.n);
+    CAPTURE(c.group_size);
+    CAPTURE(c.bits);
+    int groups = k / c.group_size;
+    int pack = 32 / c.bits;
+    int words_per_row = k / pack;
+
+    std::vector<float> matrix(static_cast<size_t>(c.n) * k);
+    for (auto& v : matrix) {
+      v = dist(gen);
+    }
+    HostQuantizedWeights host =
+        host_affine_quantize(matrix, c.n, k, c.group_size, c.bits);
+    std::vector<float> scales_rt = round_trip(stream, host.scales, c.dtype);
+    std::vector<float> biases_rt = round_trip(stream, host.biases, c.dtype);
+    HostQuantizedWeights rounded = host;
+    rounded.scales = scales_rt;
+    rounded.biases = biases_rt;
+
+    // DISTINCT token rows per batch (the defect is invisible when
+    // every batch repeats one row block).
+    std::vector<float> x_flat(static_cast<size_t>(c.batch) * c.m * k);
+    for (auto& v : x_flat) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_flat, c.dtype);
+
+    array x(x_rt.begin(), Shape{c.batch, c.m, k}, c.dtype);
+    array w_words(host.words.begin(), Shape{c.n, words_per_row}, uint32);
+    array scales(scales_rt.begin(), Shape{c.n, groups}, c.dtype);
+    array biases(biases_rt.begin(), Shape{c.n, groups}, c.dtype);
+    array out = quantized_matmul(
+        x, w_words, scales, biases, true, c.group_size, c.bits, "affine",
+        stream);
+    REQUIRE(evaluation_error(out).empty());
+    REQUIRE_EQ(out.shape(), Shape{c.batch, c.m, c.n});
+    std::vector<float> device_result = readback_f32(stream, out);
+
+    // Per-batch-row f64 host reference; the bound follows the same
+    // derivation as the qmm_vec case above with the tile route's
+    // deeper k chain carried conservatively (one f32 rounding per k
+    // element), floored at 1e-6.
+    double ops = static_cast<double>(k);
+    double m_max = 50.0;
+    int storage_mantissa_bits = (c.dtype == float32)
+        ? 23
+        : (c.dtype == float16) ? 10 : 7;
+    double e_f32 = ops * m_max * std::ldexp(1.0, -23);
+    double e_storage =
+        m_max * std::ldexp(1.0, -(storage_mantissa_bits + 1));
+    double bound = std::max(e_f32 + e_storage, 1e-6);
+
+    for (int b = 0; b < c.batch; ++b) {
+      std::vector<float> x_batch(
+          x_rt.begin() + static_cast<ptrdiff_t>(b) * c.m * k,
+          x_rt.begin() + static_cast<ptrdiff_t>(b + 1) * c.m * k);
+      std::vector<float> expected = host_quantized_matmul(
+          rounded, x_batch, c.m, c.n, k, c.group_size, c.bits);
+      double max_diff = 0.0;
+      int worst = -1;
+      for (int i = 0; i < c.m * c.n; ++i) {
+        double d = std::fabs(static_cast<double>(
+                                 device_result[static_cast<size_t>(b) *
+                                         c.m * c.n +
+                                     i]) -
+            expected[i]);
+        if (d > max_diff) {
+          max_diff = d;
+          worst = i;
+        }
+      }
+      INFO("batch=", b, " worst=", worst, " diff=", max_diff,
+          " bound=", bound, " got=",
+          device_result[static_cast<size_t>(b) * c.m * c.n + worst],
+          " want=", expected[worst]);
+      CHECK(max_diff <= bound);
+    }
+  }
+}
+
+// Batch independence on the coopmat route: every output row's k chain
+// is independent of which batch (and of how many sibling batches) run
+// beside it, so [batch, m, k] must be bit-identical to each [1, m, k]
+// slice run alone. bf16/f16 widen exactly into f32, so memcmp on the
+// f32 readback is storage-bit equality.
+TEST_CASE("batched quantized_matmul is bit-identical per batch row alone") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  bool coopmat =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u;
+  if (!coopmat) {
+    skip("no cooperative_matrix_f32_8; batched prefill takes the tile route");
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(409);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+  int k = 2048;
+  int n = 2048;
+  int group_size = 64;
+  int bits = 4;
+  int groups = k / group_size;
+  int pack = 32 / bits;
+  int words_per_row = k / pack;
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host = host_affine_quantize(matrix, n, k, group_size, bits);
+  std::vector<float> scales_rt = round_trip(stream, host.scales, bfloat16);
+  std::vector<float> biases_rt = round_trip(stream, host.biases, bfloat16);
+  array w_words(host.words.begin(), Shape{n, words_per_row}, uint32);
+  array scales(scales_rt.begin(), Shape{n, groups}, bfloat16);
+  array biases(biases_rt.begin(), Shape{n, groups}, bfloat16);
+
+  for (int batch : {2, 5}) {
+    for (int m : {1, 2, 17, 64}) {
+      CAPTURE(batch);
+      CAPTURE(m);
+      std::vector<float> x_flat(static_cast<size_t>(batch) * m * k);
+      for (auto& v : x_flat) {
+        v = dist(gen);
+      }
+      std::vector<float> x_rt = round_trip(stream, x_flat, bfloat16);
+      array x(x_rt.begin(), Shape{batch, m, k}, bfloat16);
+      array full = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      REQUIRE(evaluation_error(full).empty());
+      std::vector<float> full_bits = readback_f32(stream, full);
+      for (int b = 0; b < batch; ++b) {
+        std::vector<float> x_one(
+            x_rt.begin() + static_cast<ptrdiff_t>(b) * m * k,
+            x_rt.begin() + static_cast<ptrdiff_t>(b + 1) * m * k);
+        array x1(x_one.begin(), Shape{1, m, k}, bfloat16);
+        array alone = quantized_matmul(
+            x1, w_words, scales, biases, true, group_size, bits, "affine",
+            stream);
+        REQUIRE(evaluation_error(alone).empty());
+        std::vector<float> alone_bits = readback_f32(stream, alone);
+        REQUIRE_EQ(full_bits.size(), alone_bits.size());
+        size_t row_bytes = static_cast<size_t>(m) * n * sizeof(float);
+        bool equal = std::memcmp(
+            full_bits.data() + static_cast<size_t>(b) * m * n,
+            alone_bits.data(),
+            row_bytes) == 0;
+        INFO("batch=", b, " rows differ from the alone run");
+        CHECK(equal);
+      }
+    }
+  }
+}
+
 namespace {
 
 struct QmmVecQ4WordGate {
