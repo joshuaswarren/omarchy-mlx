@@ -121,6 +121,19 @@ print(f"MLX_PIN libmlx_sha={actual} record_sha={pinned} ok={ok_h}")
 sys.exit(0 if (ok_v and ok_h) else 1)
 EOF
 "$VENV/bin/python" -c 'import mlx, mlx_lm; print("mlx_lm", mlx_lm.__version__)' | log
+# ICD receipt lines (w7P rule): which ICD this run used, the sha256 of the
+# libvulkan_asahi.so actually loaded (from VK_DRIVER_FILES' json
+# library_path, else the packaged honeykrisp ICD), and the driverInfo line.
+ICD_JSON="${VK_DRIVER_FILES:-/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json}"
+LIBV=$(python3 -c "import json;print(json.load(open('$ICD_JSON'))['ICD']['library_path'])")
+LIBV="${LIBV/\$DEST/$DEST}"
+echo "ICD_LINE icd_json=$ICD_JSON" | log
+echo "ICD_LINE libvulkan_sha256=$(sha256sum "${LIBV/#\~/$HOME}" 2>/dev/null | awk '{print $1}')" | log
+"$VENV/bin/python" - <<'EOF' | tee -a "$RECEIPT"
+import mlx.core as mx
+info = mx.device_info()
+print("ICD_LINE driver:", info.get("driver", ""), "|", info.get("driver_info", ""))
+EOF
 sudo install -m 644 "$RULE_SRC" "$RULE"
 sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=misc --sysname-match=cpu_dma_latency
