@@ -585,6 +585,57 @@ TEST_CASE("fused hd128 bf16 decode is bit-identical to the composition") {
       hd_sdpa(long_cache, stream), hd_composition(long_cache, 7200, stream), stream);
 }
 
+// Batched decode (an mlx-lm BatchKVCache step: q from a [B, 1, H, D]
+// projection transposed to [B, H, 1, D], capacity-strided K/V per row).
+// Workgroup z walks the batch, so a B=4 call is still one dispatch and
+// each row is bit-identical to that row decoded alone (before, B > 1 ran
+// the ~10-dispatch composition). Keep in sync with the
+// MLX_OMARCHY_SDPA_DECODE_BATCH gate in primitives.cpp.
+TEST_CASE("batched hd128 bf16 decode is one dispatch and per-row bit-identical") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!hd_route_ready(stream)) {
+    printf("Skipping batched hd128 decode: route refuses on this device\n");
+    return;
+  }
+  constexpr int kBatch = 4;
+  constexpr int kCapacity = 320;
+  for (int keys : {37, 263}) {
+    CAPTURE(keys);
+    array q = astype(
+        hd_pattern_values(kBatch * kHdHeads * kHd, 44), bfloat16, stream);
+    q = transpose(
+        reshape(q, Shape{kBatch, 1, kHdHeads, kHd}, stream), {0, 2, 1, 3},
+        stream);
+    auto cache = [&](uint32_t seed) {
+      array c = astype(
+          hd_pattern_values(kBatch * kHdKvHeads * kCapacity * kHd, seed),
+          bfloat16, stream);
+      c = reshape(c, Shape{kBatch, kHdKvHeads, kCapacity, kHd}, stream);
+      return slice(c, {0, 0, 0, 0}, {kBatch, kHdKvHeads, keys, kHd}, stream);
+    };
+    HdCacheInputs batched{q, cache(55), cache(66)};
+    batched.q.eval();
+    batched.k.eval();
+    batched.v.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    CHECK_EQ(dispatches_for([&] { return hd_sdpa(batched, stream); }, stream), 1);
+    array out = hd_sdpa(batched, stream);
+    for (int b = 0; b < kBatch; ++b) {
+      CAPTURE(b);
+      auto row = [&](const array& x) {
+        Shape stop = x.shape();
+        stop[0] = b + 1;
+        return slice(x, {b, 0, 0, 0}, stop, stream);
+      };
+      HdCacheInputs one{row(batched.q), row(batched.k), row(batched.v)};
+      require_hd_bit_identical(row(out), hd_sdpa(one, stream), stream);
+    }
+  }
+}
+
 TEST_CASE("fused hd128 f16 decode is one dispatch and matches the composition") {
   if (!compute_available()) {
     return;

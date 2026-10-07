@@ -126,6 +126,13 @@ apply mlx-lm-gated-delta-raw.patch
 # returns None when the mask is provably all-valid (host-known mirror);
 # padded batches keep the mask. Kill switch MLX_OMARCHY_SSM_MASKLESS=0.
 python3 "$ROOT/scripts/patch-mlx-lm-ssm-maskless.py" "$VENV"
+# Batched serve-path SDPA: BatchKVCache.make_mask returns an array even when no
+# row is padded, which fails the native SDPA decode gate (no array mask), so
+# every full-attention layer of a batched decode step composed. make_mask(1)
+# now returns None when the host mirror proves the mask all-True; padded
+# batches, prefill and outside writes keep the mask. Needs the ssm patch's
+# `import os`. Kill switch MLX_OMARCHY_KV_MASKLESS=0.
+python3 "$ROOT/scripts/patch-mlx-lm-kv-maskless.py" "$VENV"
 apply mlx-lm-greedy-prune.patch
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
 # bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
