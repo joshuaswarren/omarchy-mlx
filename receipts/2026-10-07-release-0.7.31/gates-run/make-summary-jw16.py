@@ -17,7 +17,7 @@ import sys
 D = pathlib.Path(__file__).resolve().parent
 WHEEL_SHA = "a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d"
 TAG_SHA = "9b5c938fe236e767df9545de301cfc74fdbc3395"
-MAIN_SHA = "83f0ddd0bd87d253d5535903fd73c001c812fc1b"
+MAIN_SHA = "ea1227088506fbc6a2e94192d0f872f1864072fd"
 
 
 def read(name):
@@ -35,18 +35,20 @@ def need(name):
 
 
 def marker_rc(text, patterns):
-    """rc=0 iff every regex matches; rc=1 if any explicit nonzero marker; else None."""
+    """rc=0 iff every regex matches; rc=1 if any captured exit code is nonzero;
+    rc=None (log missing/marker not found) otherwise."""
+    if text is None:
+        return None
     rc = 0
     for pat in patterns:
         hits = re.findall(pat, text, re.M)
         if not hits:
             return None
         for h in hits:
-            if isinstance(h, str):
-                if h not in ("0",):
+            vals = h if isinstance(h, tuple) else (h,)
+            for v in vals:
+                if isinstance(v, str) and v.isdigit() and v != "0":
                     rc = 1
-            elif h not in (0, "0"):
-                rc = 1
     return rc
 
 
@@ -85,12 +87,12 @@ add("g17-patch-series (CPU, fill-run)", g17_rc, "gates-run/g17-stdout-jw16.log",
 # --- g1 fresh-home install ---------------------------------------------------
 t = need("g1-install-jw16.log")
 g1_rc = marker_rc(t, [
-    r"^INSTALL_EXIT 0",
-    r"^LAUNCHER_HELP_EXIT 0",
-    r"^SERVE_ENTRY_EXIT 0",
-    r"^PARAKEET_LAUNCHER_HELP_EXIT 0",
-    r"^PARAKEET_LAUNCHER staged",
-    r"^GATE1_DONE",
+    r"^INSTALL_EXIT (\d+)",
+    r"^LAUNCHER_HELP_EXIT (\d+)",
+    r"^SERVE_ENTRY_EXIT (\d+)",
+    r"^PARAKEET_LAUNCHER_HELP_EXIT (\d+)",
+    r"^PARAKEET_LAUNCHER staged$",
+    r"^GATE1_DONE$",
 ])
 add("g1-clean-install (fresh HOME)", g1_rc, "gates-run/g1-install-jw16.log",
     uname=first(t, r"uname=(\S+)"))
