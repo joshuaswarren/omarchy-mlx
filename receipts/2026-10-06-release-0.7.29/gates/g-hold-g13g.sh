@@ -33,6 +33,9 @@
 #   HOLD_PASS
 set -euo pipefail
 WHEEL="${HOLD_WHEEL:?set HOLD_WHEEL to the release wheel path on this host}"
+EXPECTED_WHEEL_SHA="${EXPECTED_WHEEL_SHA256:?set EXPECTED_WHEEL_SHA256}"
+gotw=$(sha256sum "$WHEEL" | awk '{print $1}')
+[[ "$gotw" == "$EXPECTED_WHEEL_SHA" ]] || { echo "FAIL: wheel sha $gotw != $EXPECTED_WHEEL_SHA"; exit 1; }
 VENDOR_TAR="${HOLD_VENDOR_TAR:?set HOLD_VENDOR_TAR to the release vendor tar (pinned mlx-lm comes from it)}"
 MODEL="${HOLD_MODEL:-/var/tmp/MesaParity/model}"
 RULE_SRC="${HOLD_RULE_SRC:?set HOLD_RULE_SRC to packaging/udev/70-omarchy-mlx-cpu-dma-latency.rules from the tag}"

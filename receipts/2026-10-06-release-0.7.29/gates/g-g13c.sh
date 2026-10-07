@@ -22,6 +22,9 @@
 #   G13C_PASS
 set -euo pipefail
 WHEEL="${G13C_WHEEL:?set G13C_WHEEL to the release wheel path on this host}"
+EXPECTED_WHEEL_SHA="${EXPECTED_WHEEL_SHA256:?set EXPECTED_WHEEL_SHA256}"
+got=$(sha256sum "$WHEEL" | awk '{print $1}')
+[[ "$got" == "$EXPECTED_WHEEL_SHA" ]] || { echo "FAIL: wheel sha $got != $EXPECTED_WHEEL_SHA"; exit 1; }
 # Host-detected GPU lock: M2-class hosts use /tmp/m2-gpu.lock, the M1 family
 # /tmp/m1-gpu.lock. An explicit GPU_LOCK always wins.
 if [[ -z "${GPU_LOCK:-}" ]]; then
