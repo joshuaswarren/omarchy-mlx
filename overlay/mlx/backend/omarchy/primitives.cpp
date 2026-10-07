@@ -11697,7 +11697,15 @@ void GatedDeltaUpdate::eval_gpu(
   int Hv = v.shape(2);
   int Dv = v.shape(3);
 
-  bool fused_ready = B == 1 && Hk == Hv && Dk == 128 && Dv == 128 &&
+  // Batched decode (T == 1, no padding mask) runs the fused decode kernel
+  // over B * Hv heads; every per-sequence input is [B, 1, Hv, .]. Masked
+  // batches and B > 1 prefill keep the composed fallback.
+  // MLX_OMARCHY_GDN_DECODE_BATCH=0 restores the B == 1 gate.
+  static const bool gdn_decode_batch =
+      decode_path_override("MLX_OMARCHY_GDN_DECODE_BATCH") != 0;
+  bool fused_ready =
+      (B == 1 || (gdn_decode_batch && T == 1 && !has_mask)) && Hk == Hv &&
+      Dk == 128 && Dv == 128 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
       v.dtype() == bfloat16 && h0.dtype() == float32 &&
       outputs.at(0).dtype() == bfloat16 && outputs.at(1).dtype() == float32;
@@ -11828,7 +11836,7 @@ void GatedDeltaUpdate::eval_gpu(
   // workgroups over 32 rows, so a head takes Dv / 32 = 4 workgroups
   // (shader constants).
   constexpr uint32_t kGdnWorkgroupsPerHead = 4;
-  // Decode (T=1): the original single-token kernel, unchanged.
+  // Decode (T=1): the single-token kernel over B * Hv heads.
   if (decode_shape) {
     out.set_data(allocate_omarchy(out.nbytes()));
     hf.set_data(allocate_omarchy(hf.nbytes()));
@@ -11839,7 +11847,7 @@ void GatedDeltaUpdate::eval_gpu(
     params.output_size = checked_u32(hf.data_size(), tag, out);
     params.matrix_m = checked_u32(Dk, tag, out);
     params.matrix_n = checked_u32(Dv, tag, out);
-    params.matrix_k = checked_u32(Hv, tag, out);
+    params.matrix_k = checked_u32(B * Hv, tag, out);
     params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
     params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
     params.aux_size = checked_item_offset(v, v.size(), tag, out);
@@ -11847,6 +11855,8 @@ void GatedDeltaUpdate::eval_gpu(
     params.shape[1] = checked_item_offset(h0, h0.size(), tag, out);
     params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
     params.dims = static_cast<uint32_t>(T);
+    // A_log and dt_bias are per model head: the shader reads head % Hv.
+    params.in_strides[2] = checked_u32(Hv, tag, out);
     std::array<omarchy::ComputeBinding, 10> bindings{
         binding(q),    // 0 QBuf
         binding(k),    // 1 KBuf
@@ -11909,7 +11919,7 @@ void GatedDeltaUpdate::eval_gpu(
         kernel,
         bindings,
         params,
-        static_cast<uint32_t>(Hv),
+        static_cast<uint32_t>(B * Hv),
         decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
         1);
     return;

@@ -196,16 +196,19 @@ vec2 gdn_gates(uint head) {
     // f32 A_log (the Qwen3.5-9B conversion stores it f32) read as two
     // little-endian u16 words — the same f32 word the eager chain's
     // astype(f32) leaves untouched, so no rounding difference.
+    // head runs over B * Hv (batched decode); A_log and dt_bias are per model
+    // head, so they index head % Hv (in_strides[2] = Hv).
+    uint ph = head % params.in_strides[2];
     float a_log;
     if ((params.flags & 512u) != 0u) {
-      uint base = params.in_strides[0] + 2u * head;
+      uint base = params.in_strides[0] + 2u * ph;
       a_log = uintBitsToFloat(uint(alog_buf.v[base]) |
                               (uint(alog_buf.v[base + 1u]) << 16u));
     } else {
-      a_log = bf16_load(alog_buf.v[params.in_strides[0] + head]);
+      a_log = bf16_load(alog_buf.v[params.in_strides[0] + ph]);
     }
     // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
-    float dt = bf16_load(dt_buf.v[params.in_strides[1] + head]);
+    float dt = bf16_load(dt_buf.v[params.in_strides[1] + ph]);
     // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
 #ifndef GDN_COMPOSED_ORDER
     // bf16) and softplus(x) to bf16; replicate those roundings exactly.
