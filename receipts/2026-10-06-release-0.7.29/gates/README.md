@@ -36,12 +36,15 @@ per-file sha256/bytes lives in
 per-file-verify with the snapshot_download call documented in
 `gates-run/` (window-2 prep), or the assistant's own download flow.
 
-g14 PRECONDITION: the default-ON routing leg requires the routing-default
-commit (8b1226da6 "routing: ON by default with MLX_OMARCHY_ROUTING kill
-switch") to be IN the cut. It is NOT in v0.7.29 (nor on any fetched branch),
-so leg A is expected to fail there; the kill-switch leg (routing disabled
-under MLX_OMARCHY_ROUTING=0) passed in window 1. Run g14 anyway for the
-evidence and let Main/w7K decide how to record it.
+g14 NOTE (corrected): the routing-default-ON change IS in the v0.7.29 cut —
+as 4cd3ef727 "routing: ON by default with MLX_OMARCHY_ROUTING kill switch"
+(8b1226da6 is an unmerged twin; docs/serve.md:41 documents ON by default and
+coordinator.py implements the precedence). Window 1's leg-A failure is
+therefore a REAL signal or a harness defect, and window 2 diagnoses it with
+instrumentation: the staged g14 copy dumps the runtime's full environment and
+leg A's server log is compared with leg B's (window 1 anomaly: leg A reported
+the env-kill-switch reason under a scrubbed `env -i`, and leg A's server log
+file is absent while leg B's exists).
 
 Conventions: every ssh value is an ALIAS supplied by env, never a raw
 address; throwaway state under `GATE_ROOT`; serving venvs are never touched;
