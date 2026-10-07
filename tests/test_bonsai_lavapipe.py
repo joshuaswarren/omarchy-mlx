@@ -19,6 +19,7 @@ Numerical band: per the Bonsai row in MATRIX.md A25 ("known-fail on
 Linux -> silent generic fallback"), the diagnostic envelope is
 1e-3 atol / 1e-2 rtol (the standing q4_word reference parity band).
 """
+import os
 import sys
 from pathlib import Path
 
@@ -37,6 +38,29 @@ _has_wide = hasattr(mx.fast, "bonsai_qmv_wide")
 _has_dequant = hasattr(mx.fast, "bonsai_q1_dequantize")
 _gpu = mx.gpu.is_available() if hasattr(mx.gpu, "is_available") else False
 
+# Same gate contract as test_bonsai_native.py: with OMARCHY_BONSAI_GATE=1
+# a missing bonsai op or a missing Vulkan device is a hard failure, not a
+# silent skip — a green suite must have exercised the kernels.
+_GATE = os.environ.get("OMARCHY_BONSAI_GATE") == "1"
+_BONSAI_OPS = ("bonsai_q1_affine_qmv", "bonsai_qmv_wide", "bonsai_q1_dequantize")
+
+
+class BonsaiGatePreconditions(unittest.TestCase):
+    def test_gate_preconditions(self):
+        if not _GATE:
+            self.skipTest("set OMARCHY_BONSAI_GATE=1 to enforce")
+        missing = [name for name in _BONSAI_OPS if not hasattr(mx.fast, name)]
+        if missing:
+            self.fail(
+                "OMARCHY_BONSAI_GATE=1 but mx.fast lacks %s — the venv's mlx "
+                "wheel was not built with mlx-fast-bonsai-qmv.patch" % missing
+            )
+        if not _gpu:
+            self.fail(
+                "OMARCHY_BONSAI_GATE=1 but mlx reports no Vulkan device; "
+                "refusing a pass that exercised no bonsai kernel"
+            )
+
 
 # Bonsai 1-bit pack: byte e holds 8 codes [e*8, ..., e*8 + 7] in lane
 # bit i. Mirrors the oMLX _dequant_1bit bit order.
@@ -44,13 +68,8 @@ def _bonsai_pack_1bit(w: np.ndarray) -> np.ndarray:
     n, k = w.shape
     assert k % 8 == 0
     codes = (w >= 0).astype(np.uint8)
-    packed = np.zeros((n, k // 8), dtype=np.uint8)
-    for e in range(k // 8):
-        byte_val = 0
-        for i in range(8):
-            byte_val |= int(codes[e * 8 + i]) << i
-        packed[:, e] = byte_val
-    return packed
+    bits = np.left_shift(np.uint8(1), np.arange(8, dtype=np.uint8))
+    return (codes.reshape(n, k // 8, 8) * bits).sum(axis=2, dtype=np.uint8)
 
 
 def _dequant_1bit_ref(packed, scales, biases, group_size):
@@ -72,7 +91,7 @@ def _build_inputs(n, k, group_size, dtype, seed=0):
     rng = np.random.default_rng(seed)
     w_fp = rng.normal(0.0, 0.05, (n, k)).astype(np.float32)
     codes = (w_fp >= 0).astype(np.uint8)
-    packed = _bonsai_pack_1bit(codes)
+    packed = _bonsai_pack_1bit(w_fp)
     scales_np = np.zeros((n, k // group_size), dtype=np.float32)
     biases_np = np.zeros((n, k // group_size), dtype=np.float32)
     for g in range(k // group_size):

@@ -19,6 +19,7 @@ The Bonsai M=1 affine qmv kernel computes the same chain bit-for-bit
 (the per-byte / per-bit exact-float trick the kernel uses is identical
 to the dequant+matmul composition).
 """
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -34,19 +35,34 @@ import mlx.core as mx
 # Try the new ops first (compiled with mlx-fast-bonsai-qmv.patch).
 _has_fast_op = hasattr(mx.fast, "bonsai_q1_affine_qmv")
 
+# A gate run where every parity class silently skips is a green nothing:
+# it passes on a wheel built without mlx-fast-bonsai-qmv.patch.
+# OMARCHY_BONSAI_GATE=1 (exported by the gpu-turn ticket scripts) turns
+# the missing-op condition into a hard failure instead of a skip.
+_GATE = os.environ.get("OMARCHY_BONSAI_GATE") == "1"
+_BONSAI_OPS = ("bonsai_q1_affine_qmv", "bonsai_qmv_wide", "bonsai_q1_dequantize")
+
+
+class BonsaiGatePreconditions(unittest.TestCase):
+    def test_gate_preconditions(self):
+        if not _GATE:
+            self.skipTest("set OMARCHY_BONSAI_GATE=1 to enforce")
+        missing = [name for name in _BONSAI_OPS if not hasattr(mx.fast, name)]
+        if missing:
+            self.fail(
+                "OMARCHY_BONSAI_GATE=1 but mx.fast lacks %s — the venv's mlx "
+                "wheel was not built with mlx-fast-bonsai-qmv.patch; refusing "
+                "to report a pass that exercised no bonsai kernel" % missing
+            )
+
 # Bonsai 1-bit pack: byte e holds 8 codes [e*8, ..., e*8 + 7] in lane
 # bit i. Mirrors the oMLX _dequant_1bit bit order.
 def _bonsai_pack_1bit(w: np.ndarray) -> np.ndarray:
     n, k = w.shape
     assert k % 8 == 0
-    codes = (w != 0).astype(np.uint8)
-    packed = np.zeros((n, k // 8), dtype=np.uint8)
-    for e in range(k // 8):
-        byte_val = 0
-        for i in range(8):
-            byte_val |= int(codes[e * 8 + i]) << i
-        packed[:, e] = byte_val
-    return packed
+    codes = (w >= 0).astype(np.uint8)
+    bits = np.left_shift(np.uint8(1), np.arange(8, dtype=np.uint8))
+    return (codes.reshape(n, k // 8, 8) * bits).sum(axis=2, dtype=np.uint8)
 
 
 def _bonsai_dequant_1bit_reference(
@@ -63,9 +79,8 @@ def _bonsai_dequant_1bit_reference(
         .reshape(n, k)
         .astype(scales.dtype)
     )
-    s_full = mx.repeat(scales.reshape(n, k32 * 8 // n_groups, n_groups), group_size // 8, axis=-2).reshape(n, k)
-    # The reference here is the Bonsai dequant: scale[g_k] * code + bias[g_k]
-    # for each k. Repeat scales along K by group_size.
+    # Bonsai dequant: scales[g] * code + biases[g] per element; repeat the
+    # per-group scales/biases along K by group_size.
     s_full = mx.repeat(scales, group_size, axis=-1).reshape(n, k)
     b_full = mx.repeat(biases, group_size, axis=-1).reshape(n, k)
     return w_bits * s_full + b_full
@@ -76,19 +91,9 @@ def _build_inputs(n, k, group_size, dtype, seed=0):
     w_fp = rng.normal(0.0, 0.05, (n, k)).astype(np.float32)
     # Sign flip random and store as 0/1 codes; affline bias carries the
     # signed magnitude, mirroring Bonsai's asymmetric 1-bit pack.
-    codes = (w_fp >= 0).astype(np.uint8)
-    packed_np = _bonsai_pack_1bit(codes)
+    packed_np = _bonsai_pack_1bit(w_fp)
     # Per-group scales and biases from the original float weights
     n_groups = k // group_size
-    deq = np.zeros((n, k), dtype=np.float32)
-    for g in range(n_groups):
-        slice_w = w_fp[:, g * group_size : (g + 1) * group_size]
-        sc = np.abs(slice_w).max(axis=1, keepdims=True).astype(np.float32)
-        bi = -np.abs(slice_w).max(axis=1, keepdims=True).astype(np.float32) * 0.5  # bias = -scale/2
-        deq[:, g * group_size : (g + 1) * group_size] = (
-            sc * (slice_w >= 0).astype(np.float32) + bi
-        )
-        # overwrite per-group into scales/biases arrays
     scales_np = np.zeros((n, n_groups), dtype=np.float32)
     biases_np = np.zeros((n, n_groups), dtype=np.float32)
     for g in range(n_groups):
@@ -101,7 +106,6 @@ def _build_inputs(n, k, group_size, dtype, seed=0):
         mx.array(scales_np.astype(dtype)),
         mx.array(biases_np.astype(dtype)),
         x.astype(dtype),
-        deq,
     )
 
 
@@ -118,7 +122,7 @@ class BonsaiQ1AffineQmvParity(unittest.TestCase):
     def test_q1_k512_gs64(self):
         for dt in (mx.float32, mx.float16, mx.bfloat16):
             with self.subTest(dtype=dt):
-                packed, scales, biases, x, _ = _build_inputs(
+                packed, scales, biases, x = _build_inputs(
                     n=16, k=512, group_size=64, dtype=dt
                 )
                 got = mx.fast.bonsai_q1_affine_qmv(x, packed, scales, biases, group=64)
@@ -137,7 +141,7 @@ class BonsaiQ1AffineQmvParity(unittest.TestCase):
 class BonsaiQmvWideParity(unittest.TestCase):
     def test_q1_wide_m2(self):
         # 1-bit wide, M=2
-        packed, scales, biases, _, _ = _build_inputs(n=16, k=512, group_size=64, dtype=mx.float16)
+        packed, scales, biases, _ = _build_inputs(n=16, k=512, group_size=64, dtype=mx.float16)
         rng = np.random.default_rng(2)
         x = mx.array(rng.normal(0, 1, (2, 512)).astype(np.float16))
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=64, bits=1)
@@ -153,7 +157,7 @@ class BonsaiQmvWideParity(unittest.TestCase):
         )
 
     def test_q1_wide_m5(self):
-        packed, scales, biases, _, _ = _build_inputs(n=8, k=512, group_size=64, dtype=mx.float16)
+        packed, scales, biases, _ = _build_inputs(n=8, k=512, group_size=64, dtype=mx.float16)
         rng = np.random.default_rng(3)
         x = mx.array(rng.normal(0, 1, (5, 512)).astype(np.float16))
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=64, bits=1)
@@ -191,7 +195,7 @@ class BonsaiQmvWideParity(unittest.TestCase):
 @unittest.skipUnless(_has_fast_op, "mx.fast.bonsai_q1_dequantize not compiled in")
 class BonsaiQ1DequantizeParity(unittest.TestCase):
     def test_dequantize_matches_reference(self):
-        packed, scales, biases, _, _ = _build_inputs(n=8, k=512, group_size=64, dtype=mx.float32)
+        packed, scales, biases, _ = _build_inputs(n=8, k=512, group_size=64, dtype=mx.float32)
         got = mx.fast.bonsai_q1_dequantize(packed, scales, biases, group=64, shape=(8, 512), dtype=mx.float32)
         mx.eval(got)
         want = _bonsai_dequant_1bit_reference(packed, scales, biases, 64)
@@ -211,9 +215,16 @@ class BonsaiReferenceRoundtrip(unittest.TestCase):
         rng = np.random.default_rng(5)
         w_fp = rng.normal(0, 0.05, (8, 64)).astype(np.float32)
         codes = (w_fp >= 0).astype(np.uint8)
-        packed = _bonsai_pack_1bit(codes)
+        # The packer derives codes from the weights itself (w >= 0); feed it
+        # the weights, not the bit matrix (a bit matrix would be re-thresholded
+        # and row-indexed, which raises TypeError on any numpy).
+        packed = _bonsai_pack_1bit(w_fp)
         # dequant via numpy
-        unpacked = np.unpackbits(packed, axis=1)[:, : w_fp.shape[1]]
+        # bitorder little: code e*8+i lives in bit i of byte e, matching the
+        # packer and the mx bit-shift reference
+        unpacked = np.unpackbits(packed, axis=1, bitorder="little")[
+            :, : w_fp.shape[1]
+        ]
         np.testing.assert_array_equal(unpacked, codes)
 
 
