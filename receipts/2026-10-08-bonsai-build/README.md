@@ -216,7 +216,43 @@ shader maps one row per workgroup but the encoder dispatched
 ceil(n*k/256) groups; k<256 left rows 1..n-1 unwritten. Fix: dispatch
 exactly n groups. Hardware-verified: dequant f32 and bf16 arms green.
 
-Bug 2 — qmv/wide wrong values on hardware (OPEN, not fixed): every qmv
+Bug 2 — RESOLVED for q1 qmv (commit 0e0871392): the shader's
+`VALUES_PER_BYTE = 32u / BITS` computed codes per WORD (32) where the
+byte walk needs codes per BYTE (8), so bytes_per_row was K/32 and the
+kernel read only the first quarter of each packed row; the inline
+comment even stated the intended value ('8 for bits=1'). Hardware
+sweeps pinned it exactly: one-hot x probes matched byte 0 codes at
+positions 0..7 and byte 1 codes at positions 32..39 — the 4x k-stride
+signature. After the fix, ALL q1 qmv arms pass on hardware (f32/f16/
+bf16, k512-k4096, gs32-128) and the dequant arms stay green.
+
+Bug 2b — qmv wide wrong values on hardware (OPEN, not fixed): the
+wide route fails in every arm (q1 m2-m5, q2 m2/m5). Three distinct
+defects identified by audit against the observed outputs
+(shaders/bonsai_qmv_wide.comp):
+
+  1. line ~140: the row stride is `row_base[0] * (words_per_row / 4u)`
+     — the shader's own comment derives the stride as bytes_per_row/4
+     which EQUALS words_per_row; the extra /4 re-divides, so rows read
+     at a quarter of their true word offset (overlapping wrong data).
+  2. lines ~168-183: the 1-bit loop reads `input_w.values[w_row + w]`
+     with w_row from row_base[0] only — the ROWS_PER_SLOT-1 sibling
+     rows of the slot never have their words read; every slot row
+     accumulates the first row's weights.
+  3. lines ~207/225: results are written at
+     `output_offset + column + r` while the loops compute
+     dot(x[r], w[column]) — the write indexes the (M, N) output buffer
+     as if it were (N, M), transposing/scrambling everything after
+     element [0][0] (which is why ACTUAL[0][0] equals DESIRED[0][0]
+     in every wide failure).
+
+A correct wide kernel needs a small redesign (per-r weight addressing
+plus (m, n) output indexing); it is not a safe same-session patch.
+Until it lands, the wide route must be considered NOT hardware-
+qualified; the gate keeps these arms red by design.
+
+Original bug 2 (qmv) evidence record:
+every qmv
 and wide arm mismatches its composed reference by large margins
 (e.g. wide m2 first-row elements off by up to 5.65; qmv single-column
 got 0.2232 vs reference 0.6676). Probes (all under gpu-turn, logs
