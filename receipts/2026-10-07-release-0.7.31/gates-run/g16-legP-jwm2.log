@@ -1,0 +1,90 @@
+=== leg P 2026-10-07T15:01:57Z ===
+{
+  "gate": "g16-qmm-batch",
+  "provenance": {
+    "wheel_version": "0.32.4.dev202610071347+9b5c938",
+    "libmlx_sha256": "4cec6a66660c955c8d27e0bbf7d1bd868e249f07d816a69a99f21922010946fa",
+    "icd_json": "/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json",
+    "libvulkan_sha256": "e302c1727a96c8d234112ed11860249a485134fd97b88d4453e22a71656f1faf",
+    "uname": "7.1.12-2-12.1-sep-ARCH"
+  },
+  "cases": 4,
+  "rows": 12,
+  "failures": [],
+  "digests": [
+    {
+      "case": "B2T16",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "86a88f64168ba5b2"
+    },
+    {
+      "case": "B2T16",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "20d2c2840c1d6450"
+    },
+    {
+      "case": "B2T17",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "80ddb3d553292af5"
+    },
+    {
+      "case": "B2T17",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "71aab2543f0d4bef"
+    },
+    {
+      "case": "B4T16",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "ccbb97fb2f3f15f9"
+    },
+    {
+      "case": "B4T16",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "254d9e981422aa36"
+    },
+    {
+      "case": "B4T16",
+      "row": 2,
+      "bit_identical_to_alone": true,
+      "digest": "aba0d1e5940f3db4"
+    },
+    {
+      "case": "B4T16",
+      "row": 3,
+      "bit_identical_to_alone": true,
+      "digest": "5c95cdaa024924c0"
+    },
+    {
+      "case": "B4T17",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "c3e094954664c793"
+    },
+    {
+      "case": "B4T17",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "3d83877b2a0113ac"
+    },
+    {
+      "case": "B4T17",
+      "row": 2,
+      "bit_identical_to_alone": true,
+      "digest": "49a7f34d5693e955"
+    },
+    {
+      "case": "B4T17",
+      "row": 3,
+      "bit_identical_to_alone": true,
+      "digest": "adb1951b8fb2b31f"
+    }
+  ],
+  "pass": true
+}
+g16-legP_RC=0
