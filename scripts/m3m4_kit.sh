@@ -40,7 +40,7 @@ detect_chip() {
 }
 
 CHIP_RAW="$(detect_chip)"
-CHIP=""
+chip=""
 case "${CHIP_RAW}" in
   apple,t8122 | Apple\ M3) chip="Apple M3" ;;
   apple,t6030 | Apple\ M3\ Pro) chip="Apple M3 Pro" ;;
