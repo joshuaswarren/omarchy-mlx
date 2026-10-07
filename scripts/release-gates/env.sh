@@ -140,6 +140,24 @@ gate_begin() { # gate_begin <logfile> — identity header every gate logs first
   gate_log "$1" "BEGIN $(date -u +%FT%TZ) tag=$TAG boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) uname=$(uname -r) host_marker=${GATE_HOST_MARKER:-unset}"
 }
 
+# gate_lock — serialize GPU access. Raw flock by default; a no-op when the
+# caller runs inside a gpu-turn ticket (GPU_TURN_TICKET is set by the driver
+# for the wrapped command), because gpu-turn already holds the same lock and
+# nesting it deadlocks. Every GPU-touching gate wraps its GPU step in this
+# instead of calling flock directly. Leading flock options (-x -w N …) pass
+# through and are dropped with the lock in ticket mode.
+gate_lock() {
+  local -a opts=()
+  while [[ "${1:-}" == -* ]]; do
+    if [[ "$1" == "-w" ]]; then opts+=(-w "$2"); shift 2; else opts+=("$1"); shift; fi
+  done
+  if [[ -n "${GPU_TURN_TICKET:-}" ]]; then
+    "$@"
+  else
+    flock "${opts[@]}" "$GPU_LOCK" "$@"
+  fi
+}
+
 # Refuse to run a gate when its target state already exists (freshness guard).
 gate_refuse_existing() {
   for p in "$@"; do

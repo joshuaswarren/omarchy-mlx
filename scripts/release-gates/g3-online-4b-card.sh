@@ -3,6 +3,10 @@
 # runner (default since v0.7.12). Listener cleanup folded in.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
+# LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
+# server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
+# already holds the lock and nesting flock deadlocks, so exec timeout only.
+LOCKER=(flock -x -w 300); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=(timeout)
 LOG="$LOG_DIR/g3-online-4b.log"
 RUNNER="$GATES_DIR/gate3-card-runner.py"
 
@@ -14,7 +18,7 @@ gate_log_wheel_identity "$LOG"
 gate_log "$LOG" "df_before $(df -BG "$GATE_ROOT" | tail -1 | awk '{print $4}')"
 
 python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  flock -x -w 300 "$GPU_LOCK" timeout -k 60 2400 \
+  "${LOCKER[@]}" timeout -k 60 2400 \
   env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" HF_HOME="$HF_CACHE" \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --home "$ASSIST_4B" --no-browser --pair compact --yes \
   >"$LOG.server" 2>&1 &
