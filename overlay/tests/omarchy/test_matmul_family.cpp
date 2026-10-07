@@ -671,6 +671,16 @@ TEST_CASE("direct matmul route: first matching row wins, else the shipped route"
         shipped.kernel);
   CHECK(pick("Apple M1 (G13G B1)", true, true, true, 512u, 4096u).kernel ==
         shipped.kernel);
+  // A 128-wide route never applies below n = 64, even if its row allows it.
+  const std::array<omarchy::DirectMatmulRow, 1> loose{{
+      {"G13G", true, false, true, 32u, 32u, wide},
+  }};
+  CHECK(omarchy::select_direct_matmul_route(
+            loose, "Apple M1 (G13G B1)", true, false, true, 512u, 48u,
+            shipped).kernel == shipped.kernel);
+  CHECK_EQ(omarchy::select_direct_matmul_route(
+               loose, "Apple M1 (G13G B1)", true, false, true, 512u, 64u,
+               shipped).tile_n, 128u);
 }
 
 TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
