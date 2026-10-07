@@ -529,6 +529,20 @@ void dispatch_matmul(
       a_in, a_transposed, a_gap, a_materialized, name, out, s);
   classify_matmul_operand(
       b_in, b_transposed, b_gap, b_materialized, name, out, s);
+  // Pre-transposed rhs (MatmulGap H8 A/B lever, default off;
+  // MLX_OMARCHY_MATMUL_PRETRANSPOSE_B=1): an n-major f16 rhs is copied to
+  // a row-major batch, so the direct route runs MatmulDirectF16Nn (same k
+  // order, same bits) instead of MatmulDirectF16Nt, whose column-major
+  // fragments take two scalar loads each in Honeykrisp.
+  static const bool pretranspose_b =
+      omarchy::env_flag("MLX_OMARCHY_MATMUL_PRETRANSPOSE_B");
+  if (pretranspose_b && b_transposed && !sdpa && !use_c &&
+      causal.second == CausalSkip::None && out.dtype() == float16 &&
+      a_in.shape(-2) >= 32) {
+    b_materialized = materialize_batched_matrix(b_in, name, out, s);
+    b_transposed = false;
+    b_gap = checked_u32(b_materialized->shape(-1), name, out);
+  }
   if (const char* mm_dbg = std::getenv("MLX_OMARCHY_MATMUL_DEBUG");
       mm_dbg != nullptr && mm_dbg[0] != '0') {
     std::fprintf(stderr,

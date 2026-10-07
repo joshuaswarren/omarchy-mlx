@@ -14,7 +14,9 @@
 // Side spec: name=path:tile_m:tile_n:flags[:-DX=1,-DY=2]. flags carries
 // the transposes (1 = rhs n-major, 4 = lhs column-major) and any
 // kernel bits the host dispatch would set. The grid is
-// (ceil(n / tile_n), ceil(m / tile_m), 1).
+// (ceil(n / tile_n), ceil(m / tile_m), 1). Flag 8 (with 1) binds a k x n
+// copy of the n-major rhs, so a kernel built for a row-major rhs can be
+// timed on the transposed route (copy cost not included).
 //
 // Build: g++ -std=c++17 -O2 -pthread -o /tmp/gemm-bench tools/gemm-bench/bench.cpp
 // Run (repo root): /tmp/gemm-bench --dtype f16 --mnk 4096,4096,4096
@@ -739,10 +741,17 @@ int main(int argc, char** argv) {
   // defines carry -DOPERAND_F32 (kernels that read pre-widened inputs).
   Buf a32_buf = make_buf(g_vk.dev, c.mp, a_elems * 4);
   Buf b32_buf = make_buf(g_vk.dev, c.mp, b_elems * 4);
-  for (size_t i = 0; i < a_elems; ++i)
-    ((float*)a32_buf.mapped)[i] = (float)to_f64(dt, ah[i]);
   for (size_t i = 0; i < b_elems; ++i)
     ((float*)b32_buf.mapped)[i] = (float)to_f64(dt, bh[i]);
+  bool any_pre_t = false;
+  for (const auto& s : sides) any_pre_t |= (s.flags & 8u) != 0u;
+  if (any_pre_t && !b_t) die("flag 8 needs an n-major rhs (flag 1)");
+  Buf bt_buf = make_buf(g_vk.dev, c.mp, any_pre_t ? b_elems * 2 : 16);
+  if (any_pre_t) {
+    for (size_t col = 0; col < n; ++col)
+      for (size_t kk = 0; kk < k; ++kk)
+        ((uint16_t*)bt_buf.mapped)[kk * n + col] = bh[col * k + kk];
+  }
 
   Params p{};
   p.count = m * n;
@@ -766,6 +775,7 @@ int main(int argc, char** argv) {
   auto record = [&](SideSpec& s, int count) {
     Params sp = p;
     sp.flags = s.flags;
+    if (s.flags & 8u) sp.rhs_gap = n;
     g_vk.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.side.pipe);
     g_vk.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         s.side.layout, 0, 1, &s.set, 0, nullptr);
@@ -796,8 +806,11 @@ int main(int argc, char** argv) {
     s.out = make_buf(g_vk.dev, c.mp, out_elems * 2);
     std::memset(s.out.mapped, 0xff, out_elems * 2);
     bool wide = s.defines.find("-DOPERAND_F32") != std::string::npos;
+    bool pre_t = (s.flags & 8u) != 0u;
+    if (wide && pre_t) die("flag 8 does not combine with -DOPERAND_F32");
     s.set = make_set(c, dpool, s.side.dsl,
-        SetBufs{wide ? a32_buf : a_buf, wide ? b32_buf : b_buf, c_buf, s.out});
+        SetBufs{wide ? a32_buf : a_buf,
+                wide ? b32_buf : (pre_t ? bt_buf : b_buf), c_buf, s.out});
     begin();
     record(s, 1);
     g_vk.EndCommandBuffer(cmd);

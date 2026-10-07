@@ -61,15 +61,7 @@ def main():
     }))
     for name, dtype, m, n, k, a_t, b_t in CELLS:
         a, b = operands(dtype, m, n, k, a_t, b_t)
-        for _ in range(3):
-            mx.eval(a @ b)
-        times = []
-        for _ in range(ROUNDS):
-            for _ in range(REPS):
-                start = time.perf_counter()
-                mx.eval(a @ b)
-                times.append(time.perf_counter() - start)
-        times.sort()
+        times = timed(lambda a=a, b=b: a @ b)
         flops = 2.0 * m * n * k
         print(json.dumps({
             "k": "time", "cell": name, "dtype": str(dtype), "m": m, "n": n,
@@ -78,6 +70,27 @@ def main():
             "tflops": round(flops / times[len(times) // 2] / 1e12, 3),
             "tflops_best": round(flops / times[0] / 1e12, 3),
         }), flush=True)
+    # The copy an a @ b.T route pays to hand the a @ b kernel a k x n rhs.
+    _, b = operands(mx.float16, 8, 4096, 4096, False, True)
+    times = timed(lambda: mx.contiguous(b))
+    moved = 2.0 * b.size * b.itemsize
+    print(json.dumps({
+        "k": "time", "cell": "transpose4096_f16",
+        "median_us": round(times[len(times) // 2] * 1e6, 1),
+        "gb_s": round(moved / times[len(times) // 2] / 1e9, 1),
+    }), flush=True)
+
+
+def timed(fn):
+    for _ in range(3):
+        mx.eval(fn())
+    times = []
+    for _ in range(ROUNDS):
+        for _ in range(REPS):
+            start = time.perf_counter()
+            mx.eval(fn())
+            times.append(time.perf_counter() - start)
+    return sorted(times)
 
 
 if __name__ == "__main__":
