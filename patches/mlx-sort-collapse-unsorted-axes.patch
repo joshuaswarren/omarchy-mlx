@@ -1,0 +1,42 @@
+# Upstream: ml-explore/mlx 0b37b0c719ca33a630e994cbeb7ae1b2e99da3bc (Collapse the non sorted axes to pick the contiguous sort kernel, #4366)
+# Shared backend/common part only: our omarchy backend consumes
+# collapse_contiguous_dims via this file; the cuda/metal kernel-call
+# hunks are out of scope. License: MIT; upstream copyright and license
+# notices retained.
+diff --git a/mlx/backend/common/utils.cpp b/mlx/backend/common/utils.cpp
+index 66764173e..a13c02207 100644
+--- a/mlx/backend/common/utils.cpp
++++ b/mlx/backend/common/utils.cpp
+@@ -89,13 +89,16 @@ std::pair<Shape, Strides> collapse_contiguous_dims(
+   Strides collapsed_strides;
+ 
+   if (shape.size() > 0) {
+-    collapsed_shape.push_back(shape[0]);
+-    collapsed_strides.push_back(strides[0]);
+-    for (int i = 1; i < shape.size(); i++) {
++    for (int i = 0; i < shape.size(); i++) {
+       if (shape[i] == 1) {
+         continue;
+-      } else if (
+-          strides[i] * shape[i] != collapsed_strides.back() ||
++      }
++      if (collapsed_shape.empty()) {
++        collapsed_shape.push_back(shape[i]);
++        collapsed_strides.push_back(strides[i]);
++        continue;
++      }
++      if (strides[i] * shape[i] != collapsed_strides.back() ||
+           collapsed_shape.back() * static_cast<int64_t>(shape[i]) > size_cap) {
+         collapsed_shape.push_back(shape[i]);
+         collapsed_strides.push_back(strides[i]);
+@@ -104,6 +107,10 @@ std::pair<Shape, Strides> collapse_contiguous_dims(
+         collapsed_strides.back() = strides[i];
+       }
+     }
++    if (collapsed_shape.empty()) {
++      collapsed_shape.push_back(1);
++      collapsed_strides.push_back(1);
++    }
+   }
+ 
+   return std::make_pair(collapsed_shape, collapsed_strides);

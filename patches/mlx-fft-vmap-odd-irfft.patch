@@ -1,0 +1,119 @@
+# Upstream: ml-explore/mlx 9fcc72bb0e1d225a90a17a11309cd9a17b0ac2f0 (Fix vmap of an inverse real FFT to an odd length, #4637)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/fft.cpp b/mlx/fft.cpp
+index 55596472a..56e6ca2b2 100644
+--- a/mlx/fft.cpp
++++ b/mlx/fft.cpp
+@@ -114,7 +114,12 @@ array fft_impl(
+   auto out = array(
+       out_shape,
+       out_type,
+-      std::make_shared<FFT>(to_stream(s), valid_axes, inverse, real),
++      std::make_shared<FFT>(
++          to_stream(s),
++          valid_axes,
++          inverse,
++          real,
++          real && inverse && (n.back() % 2 != 0)),
+       {astype(in, in_type, s)});
+   auto scale = fft_scale_factor(n, norm, inverse);
+   if (scale != 1.0) {
+diff --git a/mlx/primitives.cpp b/mlx/primitives.cpp
+index d587be060..e7811cfde 100644
+--- a/mlx/primitives.cpp
++++ b/mlx/primitives.cpp
+@@ -2224,7 +2224,7 @@ std::vector<Shape> Flatten::output_shapes(const std::vector<array>& inputs) {
+ bool FFT::is_equivalent(const Primitive& other) const {
+   const FFT& r_other = static_cast<const FFT&>(other);
+   return axes_ == r_other.axes_ && inverse_ == r_other.inverse_ &&
+-      real_ == r_other.real_;
++      real_ == r_other.real_ && odd_out_ == r_other.odd_out_;
+ }
+ 
+ std::vector<array> Unflatten::vjp(
+@@ -2292,13 +2292,13 @@ std::pair<std::vector<array>, std::vector<int>> FFT::vmap(
+   // Only the last transformed axis changes size in a real transform
+   if (real_) {
+     auto n = out_shape[fft_axes.back()];
+-    out_shape[fft_axes.back()] = inverse_ ? 2 * (n - 1) : n / 2 + 1;
++    out_shape[fft_axes.back()] = inverse_ ? 2 * (n - 1) + odd_out_ : n / 2 + 1;
+   }
+   return {
+       {array(
+           out_shape,
+           real_ && inverse_ ? float32 : complex64,
+-          std::make_shared<FFT>(stream(), fft_axes, inverse_, real_),
++          std::make_shared<FFT>(stream(), fft_axes, inverse_, real_, odd_out_),
+           {in})},
+       {ax}};
+ }
+diff --git a/mlx/primitives.h b/mlx/primitives.h
+index f5ffc7d86..352f34db7 100644
+--- a/mlx/primitives.h
++++ b/mlx/primitives.h
+@@ -1079,8 +1079,13 @@ class FFT : public UnaryPrimitive {
+       Stream stream,
+       const std::vector<size_t>& axes,
+       bool inverse,
+-      bool real)
+-      : UnaryPrimitive(stream), axes_(axes), inverse_(inverse), real_(real) {}
++      bool real,
++      bool odd_out = false)
++      : UnaryPrimitive(stream),
++        axes_(axes),
++        inverse_(inverse),
++        real_(real),
++        odd_out_(odd_out) {}
+ 
+   void eval_cpu(const std::vector<array>& inputs, array& out) override;
+   void eval_gpu(const std::vector<array>& inputs, array& out) override;
+@@ -1091,13 +1096,16 @@ class FFT : public UnaryPrimitive {
+ 
+   bool is_equivalent(const Primitive& other) const override;
+   auto state() const {
+-    return std::make_tuple(axes_, inverse_, real_);
++    return std::make_tuple(axes_, inverse_, real_, odd_out_);
+   }
+ 
+  private:
+   std::vector<size_t> axes_;
+   bool inverse_;
+   bool real_;
++  // The output length of an inverse real transform is not recoverable from
++  // the input shape.
++  bool odd_out_;
+ };
+ 
+ class Flatten : public UnaryPrimitive {
+diff --git a/python/tests/test_fft.py b/python/tests/test_fft.py
+index 61aa95fe6..c55c3ea57 100644
+--- a/python/tests/test_fft.py
++++ b/python/tests/test_fft.py
+@@ -482,6 +482,27 @@ class TestFFT(mlx_tests.MLXTestCase):
+             self.assertEqual(tuple(out.shape), tuple(expected.shape))
+             np.testing.assert_allclose(out, expected, atol=1e-5, rtol=1e-5)
+ 
++    def test_fft_vmap_explicit_size(self):
++        # An inverse real transform to an odd length is not recoverable from
++        # the input shape.
++        shape = (3, 8, 6)
++        a = mx.array(np.random.rand(*shape) + 1j * np.random.rand(*shape))
++        for n in [10, 11, 12, 13]:
++            for fftn, axes in [
++                (mx.fft.irfftn, (-1,)),
++                (mx.fft.irfftn, (-2, -1)),
++                (mx.fft.ifftn, (-1,)),
++            ]:
++                s_arg = [shape[-2], n] if len(axes) == 2 else [n]
++
++                def f(x):
++                    return fftn(x, s=s_arg, axes=axes)
++
++                expected = mx.stack([f(a[i]) for i in range(a.shape[0])])
++                out = mx.vmap(f)(a)
++                self.assertEqual(tuple(out.shape), tuple(expected.shape))
++                np.testing.assert_allclose(out, expected, atol=1e-5, rtol=1e-5)
++
+     def test_fft_jvp(self):
+         # The fft is linear so the jvp is the fft of the tangent
+         for fftn, a_np, axes in self.make_ffts():
