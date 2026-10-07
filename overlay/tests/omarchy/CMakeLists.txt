@@ -243,7 +243,7 @@ doctest_discover_tests(omarchy_gdn_decode_batch_tests)
 add_test(NAME omarchy_gdn_decode_batch_tests
          COMMAND omarchy_gdn_decode_batch_tests)
 
-# Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH=1): per-row bit
+# Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on): per-row bit
 # identity over many random datasets, plus trace-proven engagement.
 add_executable(omarchy_qmv_batch_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_qmv_batch.cpp)

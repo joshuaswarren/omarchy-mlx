@@ -888,7 +888,7 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectF32Tt,
   MatmulDirectF16NtK4S8,
   MatmulDirectF16TnWS8,
-  // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH=1, B <= 4).
+  // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
   QmmVecQ4WordSubgroupBatch4BF16,
   Count,
 };
