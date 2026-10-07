@@ -121,6 +121,16 @@ ANE_DTBS_KERNEL_NOTE = (
     "DTBS= is set in /etc/default/update-m1n1, so m1n1 boots the kernel's "
     "own device trees: the overlay opt-in has no effect, and the chip is "
     "enabled only by its node in the kernel DT.")
+ANE_DATAONLY_STEPS = (
+    "This Mac's ANE chip is data-only: no driver binds it yet, and no "
+    "opt-in key applies an overlay for it. For an M3 (H15) chip: run "
+    "aurora 12.3's M3 bring-up report (the aurora install one-liner "
+    "with --m3-report) and submit the tgz it writes. For the ANE, "
+    "follow the h15 volunteer runbook, docs/h15-volunteer.md in "
+    "joshuaswarren/omarchy-ane (the ane/h15 stages 0/1 are read-only "
+    "and opt-in). To send MLX numbers, run python3 scripts/collect_deep.py "
+    "--submit from an omarchy-mlx checkout, or scripts/m3_kit.sh for "
+    "both in one command.")
 
 # Label-keep list for the raw devicetree text member: identity props are
 # REMOVED whole via `is_identity_prop` (serial/uuid/udid/mlb/ecid/
@@ -1109,6 +1119,9 @@ def _ane_smoke_guidance(ane):
                     for line in check.get("lines") or [])):
         messages.append(_ane_untested_steps(_kernel_ships_ane_driver(),
                                             _ane_dtbs_source()))
+    elif (check.get("status") == "FAILED" and any(
+            "data-only" in line.lower() for line in check.get("lines") or [])):
+        messages.append(ANE_DATAONLY_STEPS)
     smoke = ane.get("smoke") or {}
     if smoke.get("reason") == "not run: busy":
         messages.append("Smoke not run: busy. Run again when the machine is idle.")

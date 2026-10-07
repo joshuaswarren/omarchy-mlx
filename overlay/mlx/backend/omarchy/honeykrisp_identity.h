@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,6 +56,41 @@ struct HoneykrispIcdSelection {
   bool user_override{false};
 };
 
+// Apple M3-family chip ids (omarchy-ane data/ane-soc records; t6034 is
+// the M3 Max variant whose ADT reports arm-io,t6031). Read only on the
+// not-found error path: the packaged Honeykrisp ICD targets M1/M2, and
+// an M3 hitting this error must learn that from the message, not a bare
+// "not found". Empty string when the chip is not M3 family or the DT is
+// unreadable.
+inline std::string apple_m3_chip_note() {
+  std::ifstream compatible_file("/proc/device-tree/compatible");
+  if (!compatible_file) {
+    return {};
+  }
+  std::string compatible((std::istreambuf_iterator<char>(compatible_file)),
+                         std::istreambuf_iterator<char>());
+  struct M3Entry {
+    const char* chip_id;
+    const char* name;
+  };
+  static constexpr M3Entry kM3Chips[] = {
+      {"apple,t8122", "Apple M3"},
+      {"apple,t6030", "Apple M3 Pro"},
+      {"apple,t6031", "Apple M3 Max"},
+      {"apple,t6034", "Apple M3 Max variant"},
+  };
+  for (const auto& entry : kM3Chips) {
+    if (compatible.find(entry.chip_id) != std::string::npos) {
+      return " (detected " + std::string(entry.name) + ", " + entry.chip_id +
+             ": the packaged Honeykrisp ICD supports M1/M2 silicon and M3"
+             " GPU compute is not certified yet; aurora's mesa-m3 graphics"
+             " driver is not selected for compute. Collect M3 state with"
+             " scripts/m3_kit.sh in joshuaswarren/omarchy-mlx)";
+    }
+  }
+  return {};
+}
+
 inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
     const std::vector<std::string>& candidates,
     const char* user_files,
@@ -97,7 +133,8 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
       return {candidate, false, false};
     }
   }
-  throw std::runtime_error("Honeykrisp Vulkan ICD JSON was not found");
+  throw std::runtime_error("Honeykrisp Vulkan ICD JSON was not found" +
+                           apple_m3_chip_note());
 }
 
 inline std::string resolve_honeykrisp_icd(
