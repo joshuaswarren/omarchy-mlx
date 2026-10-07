@@ -230,6 +230,18 @@ target_link_options(omarchy_gdn_legacy_policy_tests
 doctest_discover_tests(omarchy_gdn_legacy_policy_tests)
 add_test(NAME omarchy_gdn_legacy_policy_tests
          COMMAND omarchy_gdn_legacy_policy_tests)
+
+# Batched GDN decode (B > 1): rows bit-equal to per-row B=1 decode, fused.
+add_executable(omarchy_gdn_decode_batch_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_decode_batch.cpp)
+target_link_libraries(omarchy_gdn_decode_batch_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_gdn_decode_batch_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_gdn_decode_batch_tests
+                     PRIVATE ${SANITIZER_LINK_FLAGS})
+doctest_discover_tests(omarchy_gdn_decode_batch_tests)
+add_test(NAME omarchy_gdn_decode_batch_tests
+         COMMAND omarchy_gdn_decode_batch_tests)
 add_executable(omarchy_gdn_maskless_correctness_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_gdn_maskless_correctness.cpp)
 target_compile_definitions(omarchy_gdn_maskless_correctness_tests
