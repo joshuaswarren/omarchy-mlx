@@ -101,9 +101,14 @@ parallel. No link, no GPU, no wheel, `.work` cached on `mlx.lock`.
 
 Measured on a 16-core dev box (16 jobs): prepare 7.6 s, configure 6.2 s,
 shader headers 8.7 s wall (~80 s CPU), syntax check 12.5 s wall (~46 s
-CPU), 22/22 omarchy translation units pass. A 4-vCPU ubuntu runner fits
-the whole job in roughly 2-3 minutes including apt — not too heavy; the
-workflow is live on every push to main and every PR.
+CPU), 22/22 omarchy translation units pass. Confirmed on the real
+runner: run
+[37652359143](https://github.com/joshuaswarren/omarchy-mlx/actions/runs/37652359143)
+(workflow_dispatch, ref main @ 263b5fe6c) — every step green, 1 m 42 s
+total. A first push-triggered run stalled 9 min in apt on a runner
+mirror flake (37651222111, canceled; not a workflow defect — the retry
+installed in seconds). The gate runs on every push to main and every
+PR; not too heavy.
 
 Negative proof: with the 5f05b1ee2 overlay staged over a fresh prepare,
 the same driver fails in 27.6 s end-to-end with the real compiler
