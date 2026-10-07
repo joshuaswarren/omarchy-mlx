@@ -143,10 +143,14 @@ TEST_CASE("body threadgroup declarations become shared without helpers") {
       "  threadgroup float acc[8];\n"
       "  acc[thread_position_in_threadgroup % 8] = b0[thread_position_in_threadgroup];\n"
       "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
-      "  res[thread_position_in_threadgroup] = acc[0];\n"
+      "  bool in = thread_position_in_threadgroup < 4;\n"
+      "  res[thread_position_in_threadgroup] = acc[0] + (in ? 1.0f : 0.0f);\n"
       "}\n";
   auto glsl = translate(source, 1);
+  // Hoisted to file scope as GLSL shared, before the kernel body.
   CHECK(glsl.find("shared float acc[8]") != std::string::npos);
   CHECK(glsl.find("threadgroup") == std::string::npos);
   CHECK(glsl.find("barrier()") != std::string::npos);
+  // MSL identifier `in` is a GLSL reserved word; renamed in the body.
+  CHECK(glsl.find("_mlx_in") != std::string::npos);
 }
