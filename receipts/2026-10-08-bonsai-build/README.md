@@ -87,14 +87,53 @@ in the push transcript (`git push origin HEAD:main`,
   `#ifdef MLX_OMARCHY_BF16_DIRECT` / `#else` alternates (return vs
   `break`+throw); no compile hazard.
 
+## Task C — CI compile gate (implemented, landed with this receipt)
+
+The cheap text gate cannot see what only a C++ frontend sees. Commit in
+this push adds `.github/workflows/omarchy-syntax.yml` +
+`scripts/ci/omarchy_syntax_check.py`: GitHub Actions (ubuntu-latest,
+CPU-only) runs `scripts/prepare-mlx.sh` against the mlx.lock pin,
+configures the omarchy backend (`-DMLX_BUILD_OMARCHY=ON` +
+`-DMLX_BUILD_METAL=OFF`...), builds the `omarchy_shaders` target (559
+embedded SPIR-V headers), then rewrites every omarchy backend compile
+from `compile_commands.json` to `-fsyntax-only` and runs them in
+parallel. No link, no GPU, no wheel, `.work` cached on `mlx.lock`.
+
+Measured on a 16-core dev box (16 jobs): prepare 7.6 s, configure 6.2 s,
+shader headers 8.7 s wall (~80 s CPU), syntax check 12.5 s wall (~46 s
+CPU), 22/22 omarchy translation units pass. A 4-vCPU ubuntu runner fits
+the whole job in roughly 2-3 minutes including apt — not too heavy; the
+workflow is live on every push to main and every PR.
+
+Negative proof: with the 5f05b1ee2 overlay staged over a fresh prepare,
+the same driver fails in 27.6 s end-to-end with the real compiler
+errors, exit 1, 20/22:
+
+```
+FAIL compute.cpp
+.../mlx/backend/omarchy/compute.cpp:1493:25: error:
+    'BonsaiQ1QmvSubgroupF32' is not a member of
+    'mlx::core::omarchy::ComputeKernel'
+FAIL primitives.cpp
+.../primitives.cpp:12418:37: error:
+    'BonsaiQ1QmvSubgroupF32' is not a member of
+    'mlx::core::omarchy::ComputeKernel'
+omarchy-syntax-check: 20/22 translation units pass
+```
+
+Documented limitation: the gate validates the preprocessor state of the
+configured build. The bf16 direct GEMM path is enabled only when the
+shader compiler accepts GL_EXT_bfloat16 (the configure-time probe
+decides), so a glslang-12 runner checks the disabled state; glslc
+coverage comes from the jw16 gate builds.
+
 ## Task B — jw16 build + GPU parity (pending GLM window)
 
-Will run after the cluster window: CPU build via fill-run, then
-gpu-turn tickets for omarchy_primitive_tests, the Bonsai parity tests,
-and the dispatch-touching subset of the standing M1 battery
+Blocked until the cluster window closes. Then: CPU build of libmlx.so +
+wheel via fill-run, then gpu-turn tickets for omarchy_primitive_tests,
+the Bonsai parity tests (ctest names from overlay/tests/omarchy), and
+the dispatch-touching subset of the standing M1 battery
 (omarchy_runtime_tests, omarchy_matmul_family_tests) against
-docs/numerics-gate.md.
-
-## Task C — CI compile gate (proposal; implementation below if < 1 h)
-
-Pending.
+docs/numerics-gate.md. Root cause first on any failure; receipts need
+the full hardware fields (kernel, Mesa, ICD, commands, numerics,
+dispatch trace).
