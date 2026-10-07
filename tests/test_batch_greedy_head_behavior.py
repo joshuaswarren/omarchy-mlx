@@ -13,9 +13,9 @@ of the same tied projection. They require:
   1. greedy batches take the head and produce the same tokens and (when
      evaluated) the same logprobs as the full-logits step,
   2. the step never evaluates the lazy logprobs,
-  3. sampled batches, batches with logits processors, and
-     MLX_OMARCHY_BATCH_GREEDY=0 keep the full-logits step, and the patcher
-     stays wired after the greedy-prune patch.
+  3. sampled batches, batches with logits processors, and the default (the
+     head is opt-in: MLX_OMARCHY_BATCH_GREEDY=1) keep the full-logits step,
+     and the patcher stays wired after the greedy-prune patch.
 """
 
 import importlib
@@ -168,8 +168,12 @@ def test_greedy_batch_takes_the_head_with_identical_output(pkg, model, head_call
             assert bool(mx.allclose(got, want, atol=1e-5).item())
 
 
-def test_sampled_and_processed_batches_keep_the_full_logits_step(pkg, model, head_calls):
+def test_sampled_and_processed_batches_keep_the_full_logits_step(pkg, model, head_calls, monkeypatch):
     _, gen = pkg
+    monkeypatch.setattr(gen, "_BATCH_GREEDY", True)
+    run(gen, model, gen.greedy_sampler)
+    assert head_calls["token"], "the switch must engage the head for a greedy batch"
+    head_calls["token"].clear()
     sample_utils = importlib.import_module("bgh_mlx_lm.sample_utils")
     run(gen, model, sample_utils.make_sampler(temp=0.7))
     run(gen, model, lambda x: mx.argmax(x, axis=-1))
@@ -178,9 +182,10 @@ def test_sampled_and_processed_batches_keep_the_full_logits_step(pkg, model, hea
     assert not head_calls["token"]
 
 
-def test_a_tagged_argmax_sampler_takes_the_head(pkg, model, head_calls):
+def test_a_tagged_argmax_sampler_takes_the_head(pkg, model, head_calls, monkeypatch):
     """oMLX's temp == 0 sampler is its own argmax lambda, tagged _mlx_omarchy_greedy by patch 0010."""
     _, gen = pkg
+    monkeypatch.setattr(gen, "_BATCH_GREEDY", True)
 
     def tagged(x):
         return mx.argmax(x, axis=-1)
@@ -192,11 +197,12 @@ def test_a_tagged_argmax_sampler_takes_the_head(pkg, model, head_calls):
     assert head_calls["token"] and got == want
 
 
-def test_kill_switch_and_wiring(pkg):
+def test_opt_in_switch_and_wiring(pkg):
     site, _ = pkg
-    env = dict(os.environ, MLX_OMARCHY_BATCH_GREEDY="0", PYTHONPATH=site)
-    code = ("import importlib; g = importlib.import_module('bgh_mlx_lm.generate'); "
-            "assert g._BATCH_GREEDY is False")
-    assert subprocess.run([sys.executable, "-c", code], env=env).returncode == 0
+    code = ("import importlib, sys; g = importlib.import_module('bgh_mlx_lm.generate'); "
+            "assert g._BATCH_GREEDY is (sys.argv[1] == '1')")
+    for value in ("", "0", "1"):
+        env = dict(os.environ, MLX_OMARCHY_BATCH_GREEDY=value, PYTHONPATH=site)
+        assert subprocess.run([sys.executable, "-c", code, value], env=env).returncode == 0
     apply = (REPO / "scripts" / "apply-mlx-lm-patches.sh").read_text()
     assert apply.index("apply mlx-lm-greedy-prune.patch") < apply.index("patch-mlx-lm-batch-greedy-head.py")

@@ -139,11 +139,11 @@ python3 "$ROOT/scripts/patch-mlx-lm-kv-maskless.py" "$VENV"
 # offset as a host-built array with the same values. Default off (A/B pending).
 python3 "$ROOT/scripts/patch-mlx-lm-kv-host-offset.py" "$VENV"
 apply mlx-lm-greedy-prune.patch
-# Greedy GenerationBatch steps (BatchGenerator / oMLX) take the pruned greedy
-# head per row and leave logprobs lazy instead of projecting every row onto
-# the full vocabulary (B=4 head 1.38 -> 4.28 ms on Qwen3.8-2B). Sampled batches
-# and logits processors keep the full step. 0.32 line only. Kill switch
-# MLX_OMARCHY_BATCH_GREEDY=0.
+# Greedy GenerationBatch steps (BatchGenerator / oMLX) can take the pruned
+# greedy head per row and leave logprobs lazy instead of projecting every row
+# onto the full vocabulary. Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): on jw16 it
+# cost B=1 and in-process B=4 time; only oMLX c4 gained. Sampled batches and
+# logits processors always keep the full step. 0.32 line only.
 python3 "$ROOT/scripts/patch-mlx-lm-batch-greedy-head.py" "$VENV"
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
 # bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
