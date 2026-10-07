@@ -175,10 +175,9 @@ void main() {
   uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
   uint x_words_per_row = params.matrix_k / 2u;
 #elif defined(X_F32)
-  // The cast pass writes a fresh f32 buffer, so the offset is 0 in
-  // practice; the division stays for safety (lhs_offset counts
-  // 2-byte input elements, the f32 view is 4-byte).
-  uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
+  // Matches the shipped kernel: only lhs_offset counts 2-byte input
+  // elements; the batch stride stays in f32 elements.
+  uint x_slice = params.lhs_offset / 2u + b * x_batch_rows;
 #else
   // x elements are f16 here, so the slice/row strides are elements.
   uint x_slice = params.lhs_offset + b * x_batch_rows;
