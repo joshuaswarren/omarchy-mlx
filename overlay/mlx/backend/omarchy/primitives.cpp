@@ -596,7 +596,20 @@ void dispatch_matmul(
     omarchy::unsupported("matrix batch rank " + name, out);
   }
 
-  out.set_data(allocate_omarchy(out.nbytes()));
+  // A caller may pass an output that already carries storage: the chunked
+  // SDPA's PV writes land in a shared-buffer view of the real output
+  // array, and the fused SDPA VJP hands pre-allocated tile buffers here.
+  // Allocating unconditionally detaches that view from the output's
+  // buffer, so kernel stores land in detached scratch while the output
+  // keeps its stale fill (the LongSdpaCoop3 all-zero composed outputs
+  // 2026-10-06; the fused VJP dk carrying dq words 2026-10-07, receipts/
+  // 2026-10-07-sdpa-vjp-fused-off). The guard existed (0386e451/84d7598e)
+  // and was dropped by a later full-file overwrite; data_shared_ptr() is
+  // null exactly when set_data has never run — buffer() must not be
+  // called here (array.h derefs the null Data).
+  if (out.data_shared_ptr() == nullptr) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+  }
   if (out.size() == 0) {
     return;
   }
@@ -2138,7 +2151,12 @@ void dispatch_softmax(
       ensure_dense(input, input.flags().row_contiguous, dense_temp, encoder, s);
   size_t row_length = src.shape(-1);
   size_t rows = src.size() / row_length;
-  out.set_data(allocate_omarchy(out.nbytes()));
+  // Same shared-buffer-view guard as dispatch_matmul (see there): a
+  // destination with existing storage keeps it; reallocating detaches the
+  // view and the softmax lands in detached scratch (2026-10-07).
+  if (out.data_shared_ptr() == nullptr) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+  }
   if (out.size() == 0) {
     return;
   }
