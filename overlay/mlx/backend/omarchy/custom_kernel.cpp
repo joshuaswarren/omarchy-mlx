@@ -1224,12 +1224,6 @@ Translation translate_msl(
   replace_all(body, "metal::", "");
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
   replace_all(body, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
-  // Remaining `threadgroup ` tokens are shared-memory declarations
-  // (`threadgroup float local_sums[32];`). The attribute rewrites above
-  // already consumed every builtin that carries `threadgroup` as a
-  // substring, so what is left is the storage qualifier, which GLSL spells
-  // `shared`.
-  replace_all(body, "threadgroup ", "shared ");
   replace_all(body, "simd_sum", "subgroupAdd");
   replace_all(body, "simd_max", "subgroupMax");
   // MSL metal::precise::rsqrt survives the metal:: strip as rsqrt; GLSL
@@ -1525,6 +1519,13 @@ Translation translate_msl(
         std::regex("(^|[^.\\w])" + regex_escape(parameter.name) + "(?!\\w)"),
         "$1" + alias);
   }
+
+  // GLSL reserves words MSL allows as identifiers (`bool in = ...` in the
+  // mlx-serve residual+RMSNorm row walk; `out` likewise). By this point
+  // every buffer parameter is aliased to _mlx_argN, so a surviving token is
+  // a body-local identifier — rename it out of the reserved set.
+  replace_word(body, "in", "_mlx_in");
+  replace_word(body, "out", "_mlx_out");
 
   if (body.find("threadgroup") != std::string::npos ||
       body.find("memory_order") != std::string::npos ||
