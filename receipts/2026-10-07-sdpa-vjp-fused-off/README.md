@@ -104,3 +104,24 @@ P=[0.772,0.228] from the same-run dumps).
    proves it).
 2. Wider battery re-run on the fix.
 3. Fresh wheel + wheel-level doctest regression.
+
+## LANDED (2026-10-07 06:2xZ): 7f9e0ffe1 on main
+
+- a092c24ae: allocation guards restored (dispatch_matmul data_shared_ptr
+  form; copy_gpu + dispatch_softmax new).
+- 61f1de11f: tile rows kL (the root cause).
+- 7f9e0ffe1: this receipt.
+
+Suite evidence on the build host (fresh clone of the branch tip, static
+configure, M1 Max GPU): omarchy_fast_ops_tests 43/43 cases rc=0; the
+may_fail case now 54/54 assertions for the strict spots and the former
+zeros/half-written signatures are gone. Inner failures dropped 26 -> 4:
+the residual is dk/dv ~half-magnitude at the LAST key of head 1 in
+multi-head rep=1 shapes (dv[104] 5x7 f32+bf16 0.060 vs 0.113; dk[28]/
+dv[28] 4x4 -0.046/0.168 vs -0.096/0.349) — a distinct, smaller tail-key
+defect, kept in the may_fail case (evidence above; NOT the tile bug: the
+tile shape at these shapes is now correct and 22 of the former failures
+are green).
+
+Battery re-run across the full standing suite is queued for the next
+jw16 window (after run P, ~08:10Z+).
