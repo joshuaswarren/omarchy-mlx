@@ -1,0 +1,129 @@
+== stage 0: assets + tag tree ==
+ASSETS_OK
+== stage 1: wheel build tree (CPU) ==
+=== g13-build 04:02:49 ===
+BEGIN 2026-10-07T04:02:49Z tag=v0.7.29 boot_id=79dec028-5b88-4e09-a0bb-2a2f2eced4c9 uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only, no GPU) ==
+CMAKE_CONFIGURE_EXIT 0
+== build target ==
+BUILD_EXIT 0
+BIN ~/v0.7.29-repo/.work/mlx/tests/omarchy/omarchy_gdn_maskless_correctness_tests
+GATE13_BUILD_EXIT 0
+STEP g13-build_RC=0 wall=3s
+=== g15-build 04:02:52 ===
+BEGIN 2026-10-07T04:02:52Z tag=v0.7.29 boot_id=79dec028-5b88-4e09-a0bb-2a2f2eced4c9 uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only) ==
+CMAKE_CONFIGURE_EXIT 0
+== build targets ==
+BUILD_EXIT 0
+BIN ~/v0.7.29-repo/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+BIN ~/v0.7.29-repo/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+GATE15_BUILD_EXIT 0
+STEP g15-build_RC=0 wall=2s
+=== g7c 04:02:54 ===
+BEGIN 2026-10-07T04:08:00Z tag=v0.7.29 boot_id=79dec028-5b88-4e09-a0bb-2a2f2eced4c9 uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+loadavg_before=2.38 1.94 1.90 2/490 412898
+psi_cpu_before=some avg10=9.09 avg60=7.86 avg300=6.03 total=610426335
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+SERVING_VENV=~/.local/share/mlx-omarchy/venv PRIVATE_VENV=~/v0.7.29-gates/v0.7.29-gate-home/.local/share/mlx-omarchy/venv
+vendor_wheel_count=36
+lock_lines=36
+INSTALL_EXIT 0
+mlx_omarchy 0.32.4.dev202610070139+d86daf9
+numpy 2.5.3
+protobuf ~/v0.7.29-gates/v0.7.29-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/google/protobuf/__init__.py
+-rwxr-xr-x 1 joshuawarren joshuawarren 161744 Oct  6 23:08 ~/v0.7.29-gates/v0.7.29-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-ane-worker
+-rwxr-xr-x 1 joshuawarren joshuawarren 147824 Oct  6 23:08 ~/v0.7.29-gates/v0.7.29-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-info
+-rwxr-xr-x 1 joshuawarren joshuawarren  62958 Oct  6 23:08 ~/v0.7.29-gates/v0.7.29-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-parakeet
+OK: 12 files verified in ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018
+OK: audio fixture verified in ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018/audio/fixture.flac
+running golden e2e verify (pinned fixture, full pin checks)
+emitting encoder source into ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018/encoder-source/b650695c2322ee5281dff48d7345b2f3a58ff018 (one-time, CPU-bound)
+{
+  "status": "match",
+  "checks_failed": [],
+  "emissions": 104,
+  "total_pipeline_ms": 24729.541,
+  "out": "~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T040816Z",
+  "transcript": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce........................................... Юн Ю"
+}
+VERIFY_EXIT 0
+G7C_TRACE_ABI_BEGIN
+trace_abi ok size=80 wave=1 dispatches=24 emitted=9 skipped=7
+G7C_TRACE_ABI_EXIT 0
+REPORT_PATH=~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T040816Z/transcribe-report.json
+import json, sys
+d = json.load(open(sys.argv[1]))
+ex = d.get("execution", {})
+print("status", "=", d.get("status"))
+print("ane_mode", "=", ex.get("ane_mode"))
+print("cpu_tensor_events", "=", ex.get("cpu_tensor_events"))
+print("emissions", "=", d.get("emissions"))
+print("transcript_sha256", "=", d.get("transcript_sha256"))
+print("total_pipeline_ms", "=", d.get("timing", {}).get("total_pipeline_ms"))
+for c in d.get("verification", {}).get("checks", []):
+    print("  check", c.get("check"), "pass=", c.get("pass"))
+POST_RUN active=inactive
+GATE7C_EXIT 0
+STEP g7c_RC=0 wall=353s
+=== g7d 04:08:47 ===
+BEGIN 2026-10-07T04:08:48Z tag=v0.7.29 boot_id=79dec028-5b88-4e09-a0bb-2a2f2eced4c9 uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+mode=ane gate7d_home=~/v0.7.29-gates/v0.7.29-gate7d-home cache=~/.cache/mlx-omarchy
+INSTALL_EXIT 0
+mlx_omarchy 0.32.4.dev202610070139+d86daf9
+CACHE_STAGE_EXIT 0
+CACHE_STAGED ~/.cache/mlx-omarchy
+SYSTEM_INTERPRETER_DEPLESS /usr/bin/python3
+ENTRY ~/v0.7.29-gates/v0.7.29-gate7d-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-parakeet (launcher=none: packaged data file)
+--- transcribe (entry) ---
+TRANSCRIBE_EXIT[entry] 0
+--- transcribe (bare-S) ---
+TRANSCRIBE_EXIT[bare-S] 0
+REPORT ~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T040929Z/transcribe-report.json
+status = match ane_mode = True cpu_tensor_events = 0 checks_failed = None
+  check mel_sha256 pass = True
+  check encoder_hidden_sha256 pass = True
+  check emissions pass = True
+  check token_ids pass = True
+  check frame_indices pass = True
+  check durations pass = True
+  check transcript pass = True
+transcript_sha256 = db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790
+golden_pin = db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790
+GOLDEN_MATCH PASS
+GATE7D_EXIT 0
+STEP g7d_RC=0 wall=44s
+=== g13-run 04:09:31 ===
+BIN ~/v0.7.29-repo/.work/mlx/tests/omarchy/omarchy_gdn_maskless_correctness_tests
+loadavg_before=2.36 2.23 2.02 1/505 415243
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   5 |   5 passed | 0 failed | 0 skipped
+[doctest] assertions: 632 | 632 passed | 0 failed |
+[doctest] Status: SUCCESS!
+DOCTEST_EXIT 0
+GATE13_EXIT 0
+STEP g13-run_RC=0 wall=134s
+=== g15-run 04:11:45 ===
+BIN ~/v0.7.29-repo/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+loadavg_before=1.89 1.99 1.96 1/501 417492
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   7 |   7 passed | 0 failed | 0 skipped
+[doctest] assertions: 128 | 128 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_eq_math_tests_EXIT 0
+BIN ~/v0.7.29-repo/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+loadavg_before=1.89 1.99 1.96 2/501 417507
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:  4 |  4 passed | 0 failed | 0 skipped
+[doctest] assertions: 49 | 49 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_trig_reduction_tests_EXIT 0
+GATE15_EXIT 0
+STEP g15-run_RC=0 wall=84s
+JW16_GATES_PASS receipt=~/v0.7.29-gates/jw16-receipt.log
