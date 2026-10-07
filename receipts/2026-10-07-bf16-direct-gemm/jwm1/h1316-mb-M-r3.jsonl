@@ -1,0 +1,13 @@
+{"k": "host", "chip": "apple,j293", "system": "Linux-7.1.12-2-12.1-sep-ARCH-aarch64-with-glibc2.43", "mlx": "0.32.4.dev202610071056+ef70b8cc", "device": "Device(gpu, 0)"}
+{"k": "time", "cell": "nn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 70735.6, "tflops": 1.943, "tflops_best": 1.945}
+{"k": "time", "cell": "nt4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 78386.1, "tflops": 1.753, "tflops_best": 1.755}
+{"k": "time", "cell": "nt512", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 10282.3, "tflops": 1.671, "tflops_best": 1.69}
+{"k": "time", "cell": "tn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": true, "b_t": false, "median_us": 70214.9, "tflops": 1.957, "tflops_best": 1.964}
+{"k": "time", "cell": "nt512k4104", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4104, "a_t": false, "b_t": true, "median_us": 10639.1, "tflops": 1.618, "tflops_best": 1.646}
+{"k": "time", "cell": "bf16_nn4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 205948.3, "tflops": 0.667, "tflops_best": 0.668}
+{"k": "time", "cell": "bf16_nt4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 168307.1, "tflops": 0.817, "tflops_best": 0.817}
+{"k": "time", "cell": "f32_nn4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 110686.2, "tflops": 1.242, "tflops_best": 1.279}
+{"k": "time", "cell": "f32_nt4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 299408.1, "tflops": 0.459, "tflops_best": 0.467}
+{"k": "time", "cell": "transpose4096_f16", "median_us": 5280.1, "gb_s": 12.7}
+{"k": "time", "cell": "q4_gate512", "m": 512, "n": 6144, "kdim": 2048, "median_us": 8206.2, "tflops": 1.57, "out_sha": "45c80660b32430fc"}
+{"k": "time", "cell": "q4_down512", "m": 512, "n": 2048, "kdim": 6144, "median_us": 9020.0, "tflops": 1.428, "out_sha": "7046774e5d46b5dc"}

@@ -1,0 +1,8 @@
+start 2026-10-07T12:15:53Z root 74%
+venv-c1 0.32.4.dev202610071118+fd2e3848
+venv-c2 0.32.4.dev202610071119+27aa6738
+round 1 rc=0 12:17:22
+round 2 rc=0 12:18:39
+round 3 rc=0 12:19:57
+round final rc=0 12:22:57
+end 2026-10-07T12:22:57Z

@@ -1,0 +1,8 @@
+{"k": "host", "mlx": "0.32.4.dev202610071119+27aa6738", "device": "Apple M1 Max (G13C C0)", "bf16_8": 1}
+{"k": "cell", "cell": "f16_nn", "sha": "068872cb68ce64ef", "median_ms": 23.054, "tflops": 5.962, "max_abs_err_fp64": 0.12282728360150941}
+{"k": "cell", "cell": "bf16_nn", "sha": "130de02a9bdf69a6", "median_ms": 22.885, "tflops": 6.006, "max_abs_err_fp64": 0.9208531101467088}
+{"k": "cell", "cell": "bf16_nt", "sha": "69ef1dff11d0d3b2", "median_ms": 23.915, "tflops": 5.747, "max_abs_err_fp64": 0.9965856112539768}
+{"k": "cell", "cell": "bf16_tn", "sha": "1a9d544b913871e4", "median_ms": 20.787, "tflops": 6.612, "max_abs_err_fp64": 0.8234154768288136}
+{"k": "cell", "cell": "f32_nn", "sha": "6fddc242bcc32d9a", "median_ms": 44.828, "tflops": 3.066, "max_abs_err_fp64": 0.0006750913043163109}
+{"k": "cell", "cell": "f32_nt", "sha": "4e6fd7ad8ccad4c8", "median_ms": 25.437, "tflops": 5.403, "max_abs_err_fp64": 0.000750822218464009}
+{"k": "cell", "cell": "f32_tn", "sha": "569616d20556ff2e", "median_ms": 48.476, "tflops": 2.835, "max_abs_err_fp64": 0.0008202471204867834}
