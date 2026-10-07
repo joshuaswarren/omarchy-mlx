@@ -45,7 +45,7 @@ Wheels: base 0.32.4.dev202610070341+e034673d (empty route table, shipped routes)
 | `a @ b` 4096^3 (no row) | 1.941 / 1.941 -> 1.942 / 1.941 | 5.932 / 6.140 -> 6.068 / 5.925 |
 
 - Cells the rows cannot reach (bf16, f32, Q4 prefill, transpose) stay within -1.8..+1.9 %, with one exception: M1 `f32` `a @ b.T` 4096^3 land rep 1 read 0.416 against base 0.521 / 0.528 (land rep 2: 0.533). The rows match f16 only, so this path is unchanged. The cell is noisy on the M1: in the H8 run, two identical configurations measured 0.566 and 0.459.
-- Other chips: a row matches a device-name substring, so `Apple M2 Max (G14C B1)` keeps the shipped route (pinned by the new test case). The on-device G14C neutrality run is pre-registered (notebook MatmulGap H12) for the next M2 window.
+- Other chips: a row matches a device-name substring, so `Apple M2 Max (G14C B1)` keeps the shipped route (pinned by the new test case). Measured on the M2 Max (T6021, 2026-10-07 08:35Z, the host's default driver, same wheels): family tests 29/29, `mlxcheck2` 21/21 equal, and every `metal_baseline` cell within -0.8..+0.9 % of base except `a @ b.T` 512x4096x4104 (-0.2..+3.8 %, base itself 6.446-6.598). The rows do not change the M2 Max.
 - Merge: the tested commits (branch `agent/matmul-land` 60388f09e and 6141ae16452) were rebased onto five later main commits before the merge, one of which (a092c24ae) restores allocation guards in `dispatch_matmul`. The rebase applied without conflicts. The merged tree (main ec6d86378) then passed `omarchy_matmul_family_tests` 29/29 on the M1 Max (2026-10-07 08:00Z, same driver).
 
 ## Not landed
