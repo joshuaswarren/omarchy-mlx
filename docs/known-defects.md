@@ -907,6 +907,20 @@ impact: qL=1 is the decode geometry - a fine-tune backward through a
 single-query step silently loses dk/dv today. Next lever: instrument
 s_t_dense/p_t_dense and the dkt/dvt buffers inside eval_gpu at (1,1,2,4).
 
+2026-10-07 RESOLVED (primary defect): root cause = the fused VJP
+allocated its dK/dV tiles with the score plane's qL rows instead of kL
+([B,H,qL,D] vs the [B,H,kL,D] the transposed matmuls write) - at qL<kL
+dispatch_matmul computed batch_count 0 (no workgroups; stale output) and
+undercounted batches at B>1. Fixed in 61f1de11f with the allocation
+guards restored in a092c24ae (dispatch_matmul/copy_gpu/dispatch_softmax:
+a destination with existing storage keeps it - the LongSdpaCoop3
+detached-view class). fast_ops 43/43 on hardware at 7f9e0ffe1; the
+may_fail case's zeros/half-written legs are green (26 -> 4 inner
+failures). REMAINING (smaller, open): dk/dv ~half-magnitude at the LAST
+key of head 1, multi-head rep=1 shapes (dv[104] 5x7, dk[28]/dv[28] 4x4;
+~0.48-0.53x of fd) - kept in the may_fail case. Full evidence:
+receipts/2026-10-07-sdpa-vjp-fused-off.
+
 2026-10-07 update (receipts/2026-10-07-sdpa-vjp-fused-off): the defect
 is now STANDALONE-REPRODUCIBLE on jw16 hardware at the strict shapes
 (B=1,qL=1,kL=2,D=4: dk all stale bytes — recycled poison with
