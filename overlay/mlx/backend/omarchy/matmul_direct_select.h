@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/dtype.h"
 
 namespace mlx::core::omarchy {
 
@@ -29,7 +30,7 @@ struct DirectMatmulRoute {
 
 struct DirectMatmulRow {
   std::string_view chip;
-  bool f16;
+  Dtype dtype;
   bool a_transposed;
   bool b_transposed;
   uint32_t min_m;
@@ -39,20 +40,20 @@ struct DirectMatmulRow {
 
 // Measured winners: receipts/2026-10-07-direct-gemm-variants (MatmulGap H8).
 inline constexpr std::array<DirectMatmulRow, 4> kDirectMatmulRows{{
-    {"G13C", true, false, true, 512u, 4096u,
+    {"G13C", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
-    {"G13C", true, true, false, 4096u, 4096u,
+    {"G13C", float16, true, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
-    {"G13G", true, false, true, 512u, 4096u,
+    {"G13G", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
-    {"G13G", true, true, false, 4096u, 4096u,
+    {"G13G", float16, true, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
 }};
 
 inline DirectMatmulRoute select_direct_matmul_route(
     std::span<const DirectMatmulRow> rows,
     std::string_view device_name,
-    bool f16,
+    Dtype dtype,
     bool a_transposed,
     bool b_transposed,
     uint32_t m,
@@ -60,7 +61,7 @@ inline DirectMatmulRoute select_direct_matmul_route(
     DirectMatmulRoute shipped) {
   for (const auto& row : rows) {
     if (device_name.find(row.chip) != std::string_view::npos &&
-        row.f16 == f16 && row.a_transposed == a_transposed &&
+        row.dtype == dtype && row.a_transposed == a_transposed &&
         row.b_transposed == b_transposed && m >= row.min_m &&
         n >= row.min_n && n >= row.route.tile_n / 2u) {
       return row.route;

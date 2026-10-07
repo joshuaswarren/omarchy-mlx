@@ -34,7 +34,7 @@
       "name": "cooperative_matrix_fp32_8x8x8",
       "type": "bool",
       "source": "VK_KHR_cooperative_matrix listed AND cooperativeMatrix feature AND an enumerated 8x8x8 all-FLOAT32 subgroup-scope non-saturating shape (device.cpp:274-297)",
-      "meaning": "Gates QmmPrefillCoopmatF16, MatmulF32Coopmat, MatmulBF16Coopmat, MatmulDirectF32, SdpaDecodeNative; with the 8x8x8 FLOAT16 x FLOAT16 -> FLOAT32 shape also enumerated (CapabilityReport::cooperative_matrix_f16_8, simulated by the same axis) it gates MatmulDirectF16. Absent = routes fall to tile/scalar kernels with different accumulation order.",
+      "meaning": "Gates QmmPrefillCoopmatF16, MatmulF32Coopmat, MatmulBF16Coopmat, MatmulDirectF32, SdpaDecodeNative; with the 8x8x8 FLOAT16 x FLOAT16 -> FLOAT32 shape also enumerated (CapabilityReport::cooperative_matrix_f16_8, simulated by the same axis) it gates MatmulDirectF16; with the 8x8x8 BFLOAT16 x BFLOAT16 -> FLOAT32 shape, VK_KHR_shader_bfloat16 shaderBFloat16CooperativeMatrix and a GL_EXT_bfloat16 build (CapabilityReport::cooperative_matrix_bf16_8; simulation can clear it, never grant it) it gates MatmulDirectBF16 in place of MatmulBF16Coopmat. Absent = routes fall to tile/scalar kernels with different accumulation order.",
       "m1_g13_reference": true,
       "m2_known": null,
       "m2_unknown": [

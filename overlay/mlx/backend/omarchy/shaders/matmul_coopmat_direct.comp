@@ -12,9 +12,11 @@
 // bounds instructions per matrix-unit cycle; this loop issues 8 loads
 // and 16 simd_matrix_fmadd32 per k step of 8.
 //
-// Builds: f16 (default; fp16-operand shape) and USE_F32 (fp32 shape).
-// Per output the arithmetic is the matmul.comp contract: one f32
-// accumulator over ascending k (f16 x f16 products are exact in f32),
+// Builds: f16 (default; fp16-operand shape), USE_F32 (fp32 shape), and
+// USE_BF16 (bf16-operand shape; needs GL_EXT_bfloat16 and a driver with
+// VK_KHR_shader_bfloat16 cooperative matrices). Per output the arithmetic
+// is the matmul.comp contract: one f32 accumulator over ascending k (f16
+// and bf16 products are exact in f32),
 // then alpha * acc rounded once to the storage type. On the M1 the
 // stored bits match the staged kernels exactly.
 //
@@ -62,7 +64,10 @@
 #define WIDE_N 0
 #endif
 
-#ifdef USE_F32
+#ifdef USE_BF16
+#extension GL_EXT_bfloat16 : require
+#define ELEM bfloat16_t
+#elif defined(USE_F32)
 #define ELEM float
 #else
 #define ELEM float16_t

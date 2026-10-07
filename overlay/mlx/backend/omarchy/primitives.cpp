@@ -763,23 +763,33 @@ void dispatch_matmul(
       params.matrix_m >= 32u && !use_c;
   // Direct cooperative-matrix route (shaders/matmul_coopmat_direct.comp):
   // 8x8x8 operand tiles loaded straight from the buffers, no shared
-  // staging; f16 on the fp16-operand shape, f32 on the fp32 shape.
-  // Stored bits equal the staged kernels; on the M1 4096^3 runs 1.72 /
-  // 1.11 TFLOP/s for f16 / f32 against 0.60 / 0.49. bf16 keeps
-  // MatmulBF16Coopmat: the same kernel on exactly widened f32 operands
-  // won a @ b at n = 4096 but lost x @ w.T at every m and a @ b at
-  // n = 12288 (receipts/2026-10-06-dense-f16-gemm-direct). Every lane
-  // moves element pairs along the contiguous axis, so offsets, gaps, and
-  // batch strides must be even, as must n (and m for a column-major lhs:
-  // the edge tile shifts back to m - 32). The causal attention shortcuts
-  // stay on the kernels that implement them.
+  // staging; f16 on the fp16-operand shape, f32 on the fp32 shape, bf16
+  // on the bf16-operand shape (cooperative_matrix_bf16_8: a driver with
+  // VK_KHR_shader_bfloat16 cooperative matrices and a build with
+  // GL_EXT_bfloat16). Stored bits equal the staged kernels; on the M1
+  // 4096^3 runs 1.72 / 1.11 / 1.72 TFLOP/s for f16 / f32 / bf16 against
+  // 0.60 / 0.49 / 0.60 (receipts/2026-10-06-dense-f16-gemm-direct,
+  // receipts/2026-10-07-bf16-direct-gemm). Without the bf16 shape, bf16
+  // keeps MatmulBF16Coopmat. Every lane moves element pairs along the
+  // contiguous axis, so offsets, gaps, and batch strides must be even, as
+  // must n (and m for a column-major lhs: the edge tile shifts back to
+  // m - 32). The causal attention shortcuts stay on the kernels that
+  // implement them.
   bool direct_aligned = ((params.lhs_offset | params.rhs_offset |
       params.output_offset | a_gap | b_gap) & 1u) == 0u;
   for (uint32_t axis = 0; direct_aligned && axis < params.dims; ++axis) {
     direct_aligned = ((params.in_strides[axis] |
         params.out_strides[axis]) & 1u) == 0u;
   }
-  const bool direct_f16 = dtype_kernel == omarchy::ComputeKernel::MatmulF16;
+  const Dtype direct_dtype =
+      dtype_kernel == omarchy::ComputeKernel::MatmulF16 ? float16
+      : dtype_kernel == omarchy::ComputeKernel::MatmulBF16 ? bfloat16
+                                                           : float32;
+  const bool direct_shape = direct_dtype == float16
+      ? caps.cooperative_matrix_f16_8
+      : direct_dtype == bfloat16
+      ? caps.cooperative_matrix_bf16_8
+      : dtype_kernel == omarchy::ComputeKernel::MatmulF32;
   const bool direct = !sdpa && !use_c &&
       causal.second == CausalSkip::None && caps.cooperative_matrix_f32_8 &&
       caps.subgroup_size == 32u && !coopmat_disabled &&
@@ -787,11 +797,11 @@ void dispatch_matmul(
       params.matrix_k > 0u && (params.matrix_k % 8u) == 0u &&
       (params.matrix_n & 1u) == 0u &&
       (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
-      (direct_f16 ? caps.cooperative_matrix_f16_8
-                  : dtype_kernel == omarchy::ComputeKernel::MatmulF32);
+      direct_shape;
+  bf16_fma = bf16_fma && !direct;
   uint32_t direct_tile_n = 64u;
   if (direct) {
-    static constexpr omarchy::ComputeKernel kDirect[2][4] = {
+    static constexpr omarchy::ComputeKernel kDirect[3][4] = {
         {omarchy::ComputeKernel::MatmulDirectF16Nn,
          omarchy::ComputeKernel::MatmulDirectF16Nt,
          omarchy::ComputeKernel::MatmulDirectF16Tn,
@@ -799,12 +809,16 @@ void dispatch_matmul(
         {omarchy::ComputeKernel::MatmulDirectF32Nn,
          omarchy::ComputeKernel::MatmulDirectF32Nt,
          omarchy::ComputeKernel::MatmulDirectF32Tn,
-         omarchy::ComputeKernel::MatmulDirectF32Tt}};
-    kernel = kDirect[direct_f16 ? 0 : 1]
+         omarchy::ComputeKernel::MatmulDirectF32Tt},
+        {omarchy::ComputeKernel::MatmulDirectBF16Nn,
+         omarchy::ComputeKernel::MatmulDirectBF16Nt,
+         omarchy::ComputeKernel::MatmulDirectBF16Tn,
+         omarchy::ComputeKernel::MatmulDirectBF16Tt}};
+    kernel = kDirect[direct_dtype == float16 ? 0 : direct_dtype == float32 ? 1 : 2]
                     [(a_transposed ? 2 : 0) + (b_transposed ? 1 : 0)];
     const omarchy::DirectMatmulRoute route =
         omarchy::select_direct_matmul_route(
-            omarchy::kDirectMatmulRows, caps.device_name, direct_f16,
+            omarchy::kDirectMatmulRows, caps.device_name, direct_dtype,
             a_transposed, b_transposed, params.matrix_m, params.matrix_n,
             {kernel, 64u});
     kernel = route.kernel;
@@ -815,11 +829,14 @@ void dispatch_matmul(
         caps,
         direct,
         "MatmulDirect",
-        direct_f16
+        direct_dtype == float16
             ? "cooperative_matrix_fp32_8x8x8+cooperative_matrix_fp16_8x8x8"
+            : direct_dtype == bfloat16
+            ? "cooperative_matrix_fp32_8x8x8+cooperative_matrix_bf16_8x8x8"
             : "cooperative_matrix_fp32_8x8x8",
         hw.cooperative_matrix_f32_8 &&
-            (!direct_f16 || hw.cooperative_matrix_f16_8));
+            (direct_dtype != float16 || hw.cooperative_matrix_f16_8) &&
+            (direct_dtype != bfloat16 || hw.cooperative_matrix_bf16_8));
   } else if (rb) {
     kernel = omarchy::ComputeKernel::MatmulRbF16;
   }
