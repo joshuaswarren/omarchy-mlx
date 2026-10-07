@@ -159,3 +159,36 @@ per-step top-2 logits + TRACE_DISPATCH census on both wheels:
 b8 landing-ready → superseded by b13 (same kernel semantics + z-chunk +
 fixture/scale-aware fixes). jwm1 ~/b13-jwm1 staging parked until Main
 releases the host.
+
+## Addendum 4 (2026-10-07 ~03:55Z): POST-LANDING CONFIRMATION — cc45eab4c green on both hosts; probe sha exact match
+
+Main landed the Sub kernel on main as cc45eab4c (rebased on 067e8ce26, which
+gained other lanes' batched-GDN decode commits 95e60d374/2de9dee8e/067e8ce26).
+Post-landing check on jw16 (fresh configure+build of the exact head):
+
+| suite | result |
+|---|---|
+| matmul_family | **27/27 ✓** (82942518 asrt) — binary 9c1fbaf07b628a31 |
+| runtime | **49/49 ✓** — binary 2408d665b68d6690 |
+| take_fill / take_bool / fast_ops / kv_ops | 9/9, 5/5, 43/43 (26 known may_fail), 16/16 ✓ |
+| capsim 6/6 | all SUCCESS |
+| overlay-vs-.work full-glob diff | 0 mismatches |
+
+DeepSeek SUB=1 probe on the landed wheel
+(`0.32.4.dev202610070213+cc45eab`, sha 2f6454c1...): greedy sha
+**`10a8446716546a35` — EXACT match to expectation** (probe chain b8=b13=land
+closed; b8 and b13 probes produced the identical sha before landing). Text
+coherent.
+
+GLM-4.5-Air-4bit on the landed head (bonus): Sub default **5.90 / 9.56 /
+16.38 ms/layer B=1/2/4** — BETTER than b13's 9.71/18.02/28.17 (main's
+batched-GDN decode + FenceFix commits compound with the Sub kernel); scalar
+control same wheel 79.77/141.66/262.73. vs w7G's 81 ms baseline:
+**13.7x / 14.8x / 16.0x**.
+
+jwm1 (G13G) ran the identical cc45eab4c binaries (shas verified pre-run):
+matmul **27/27 ✓**, runtime **49/49 ✓**, all other suites ✓, capsim 6/6 ✓ —
+03:37–03:43Z under flock, single process.
+
+**LANDING CONFIRMED on both hosts. No regressions from any lane's commits.
+Verification chain closed.**
