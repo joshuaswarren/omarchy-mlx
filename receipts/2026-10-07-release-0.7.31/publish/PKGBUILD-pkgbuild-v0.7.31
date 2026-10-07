@@ -1,0 +1,43 @@
+# Maintainer: Joshua Warren <joshua@warrenappliedlabs.com>
+# Verified against release v0.7.31 assets (draft): receipts/2026-10-07-release-0.7.31/
+
+pkgbase=omarchy-mlx
+pkgname=(omarchy-mlx omarchy-mlx-vulkan)
+pkgver=0.7.31
+pkgrel=1
+arch=('aarch64')
+url='https://github.com/joshuaswarren/omarchy-mlx'
+# The two packages publish together, so the tested wheel and the Vulkan driver
+# it was qualified on can never skew.
+_wheel=mlx_omarchy-0.32.4.dev202610071347+9b5c938-cp314-cp314-linux_aarch64.whl
+_vendor=omarchy-mlx-vendor-wheels-v$pkgver-cp314-aarch64.tar
+# The Honeykrisp Vulkan driver: joshuaswarren/mesa-1 honeykrisp-omarchy-v3.
+_mesa_commit=bbbfa36dce7926e8b9212bda4eb4902b6a9c3561
+# The driver reports this in driverInfo as "git-<sha>"; the runtime compares it.
+_mesa_sha=${_mesa_commit:0:10}
+makedepends=('clang' 'elfutils' 'expat' 'glslang' 'libclc' 'libdrm' 'llvm' 'meson'
+             'patch' 'python' 'python-mako' 'python-packaging' 'python-yaml'
+             'spirv-llvm-translator' 'spirv-tools' 'zstd')
+# check() imports the staged venv's mlx.core, which loads these shared
+# libraries at import. Per-package depends are not installed at check() time
+# (makechrootpkg), so the interpreter needs them on sys.path.
+
+source=("omarchy-mlx-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+        "$_wheel::$url/releases/download/v$pkgver/$_wheel"
+        "$_vendor::$url/releases/download/v$pkgver/$_vendor"
+        "mesa-$_mesa_commit.tar.gz::https://github.com/joshuaswarren/mesa-1/archive/$_mesa_commit.tar.gz")
+noextract=("$_wheel" "$_vendor")
+sha256sums=(
+            '4e83fadd69c732680dfb9d4b1bc984a17a9b29d0bb22a393549db75b703a385b'
+            'a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d'
+            '1cc390b1e25c55a80c8c21327a39d7e498cafb5144a75b0ff1fc9e6f8b54b074'
+            '7677613c36c88ba05300d57d684892ba5a53cb6164fafc811b82f428e886809f'
+            )
+
+prepare() {
+  cd "$srcdir"
+  # vendor wheels: unpack once, install with --no-index (build sandboxes have
+  # no network)
+  mkdir -p vendor
+  tar -xf "$_vendor" -C vendor
+}
