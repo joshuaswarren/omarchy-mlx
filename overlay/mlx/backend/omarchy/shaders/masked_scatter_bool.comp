@@ -1,0 +1,99 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// MaskedScatter for bool outputs. The out buffer is the packed-byte
+// transport (four bool bytes per uint32 word), so the scatter writes
+// each lane's byte with the commuting atomicAnd/atomicOr pair proven in
+// copy_general.comp: the AND clears only the lane's own byte, the OR
+// sets only the lane's own byte, and adjacent lanes sharing a word
+// never lose a byte. Non-selected positions idempotently rewrite their
+// own dst byte (out arrives as the dst copy).
+//
+// The destination rank comes from the exclusive prefix sum of the
+// packed mask, computed on the host path with the battery-proven Scan
+// kernel (an in-shader Hillis-Steele scan here would re-enter the
+// Honeykrisp scan miscompile documented in the float variant). The
+// mask and the decoded source ride the same packed-word transport;
+// bytes are extracted with CONSTANT shifts and a select chain.
+//
+// One invocation per mask element. params: count = mask elements,
+// aux_size = src elements. The masked_scatter op materializes the
+// broadcast and always hands the primitive a single batch row, so the
+// flat position IS the batch row position.
+
+#version 460
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) buffer Output {
+  uint values[];
+} out_data;
+layout(set = 0, binding = 1, std430) readonly buffer Mask {
+  uint values[];
+} mask_data;
+layout(set = 0, binding = 2, std430) readonly buffer Offsets {
+  int values[];
+} offsets_data;
+layout(set = 0, binding = 3, std430) readonly buffer Source {
+  uint values[];
+} src_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+uint byte_at(uint word, uint local_index) {
+  uint b0 = word & 0xFFu;
+  uint b1 = (word >> 8u) & 0xFFu;
+  uint b2 = (word >> 16u) & 0xFFu;
+  uint b3 = word >> 24u;
+  uint lane = local_index & 3u;
+  return (lane == 0u) ? b0 : (lane == 1u) ? b1 : (lane == 2u) ? b2 : b3;
+}
+
+void main() {
+  uint pos = gl_GlobalInvocationID.x;
+  if (pos >= params.count) {
+    return;
+  }
+  uint bit = byte_at(mask_data.values[params.rhs_offset + (pos >> 2u)], pos);
+  if (bit == 0u) {
+    return;
+  }
+  int rank = offsets_data.values[pos];
+  if (rank < 0 || uint(rank) >= params.aux_size) {
+    // Source ran out: the position keeps dst, matching the float
+    // variant and the upstream Metal kernel.
+    return;
+  }
+  uint src_flat = params.lhs_offset + uint(rank);
+  uint value_byte = byte_at(src_data.values[src_flat >> 2u], src_flat);
+  // A true bool byte is 1; normalize the same way upstream bool casts
+  // do so stray non-0/1 source bytes stay predictable.
+  value_byte = value_byte != 0u ? 1u : 0u;
+  uint out_pos = params.output_offset + pos;
+  uint word_index = out_pos >> 2u;
+  uint shift = (out_pos & 3u) * 8u;
+  atomicAnd(out_data.values[word_index], ~(0xFFu << shift));
+  atomicOr(out_data.values[word_index], value_byte << shift);
+}

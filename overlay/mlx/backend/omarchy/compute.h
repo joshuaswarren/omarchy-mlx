@@ -252,6 +252,7 @@ enum class ComputeKernel : uint16_t {
   MaskedScatterU32,
   MaskedScatterF16,
   MaskedScatterBF16,
+  MaskedScatterBool,
   ScatterMultiU32,
   ScatterMultiF16,
   ScatterMultiBF16,
