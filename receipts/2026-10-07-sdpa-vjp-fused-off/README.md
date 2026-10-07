@@ -125,3 +125,15 @@ are green).
 
 Battery re-run across the full standing suite is queued for the next
 jw16 window (after run P, ~08:10Z+).
+
+## Post-fix battery (2026-10-07 08:1x-08:4xZ, build host, fresh tree at b3ad332e0)
+
+- fast_ops 43/43 (1307001 assertions; 4 inner = the residual last-key
+  may_fail legs), reduce_ops 35/35, runtime 49/49, primitive 104/104
+  (2743003), matmul_family 27/27 (82942518), shape_ops 25/25,
+  indexing_ops 57/57, fast_regression 2/2 — all rc=0 on the M1 Max GPU.
+- Remaining full-battery suites (fft/conv/kv/sdpa/gdn/take/linalg/
+  distributed/...) were green pre-fix and the guards/tile change only
+  alters output-buffer handing + the VJP tile shape; their rerun is
+  queued behind the priority lanes (QmmBatch/mv_glm) as the close-out
+  sweep.
