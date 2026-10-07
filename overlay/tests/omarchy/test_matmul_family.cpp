@@ -717,11 +717,23 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
         ComputeKernel::MatmulDirectF32TnWS8);
   CHECK(kernel("Apple M1 Max (G13C C0)", float32, false, false) == shipped.kernel);
   CHECK(kernel("Apple M1 Max (G13C C0)", float32, true, false) == shipped.kernel);
-  // Device name the M2 Max reports (receipts/2026-10-04-hwprobe-device-info).
+  // M2 Max (device name per receipts/2026-10-04-hwprobe-device-info): three
+  // rows (MatmulGap H20); every other cell keeps the shipped route.
+  constexpr std::string_view g14c = "Apple M2 Max (G14C B1)";
+  CHECK(kernel(g14c, bfloat16, true, false) ==
+        ComputeKernel::MatmulDirectBF16TnWS8);
+  CHECK(kernel(g14c, bfloat16, false, true) ==
+        ComputeKernel::MatmulDirectBF16NtK4S8);
+  CHECK(kernel(g14c, float16, false, true) ==
+        ComputeKernel::MatmulDirectF16NtK4S8);
   for (Dtype dtype : {float16, bfloat16, float32}) {
     for (bool a_t : {false, true}) {
       for (bool b_t : {false, true}) {
-        CHECK(kernel("Apple M2 Max (G14C B1)", dtype, a_t, b_t) == shipped.kernel);
+        bool row = (dtype == bfloat16 && a_t != b_t) ||
+            (dtype == float16 && !a_t && b_t);
+        if (!row) {
+          CHECK(kernel(g14c, dtype, a_t, b_t) == shipped.kernel);
+        }
       }
     }
   }

@@ -711,7 +711,7 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   and a build whose shader compiler accepts `GL_EXT_bfloat16`. Without
   either, bf16 keeps `MatmulBF16Coopmat`. bf16 `a @ b.T` goes direct only
   through a chip row in `matmul_direct_select.h` (k1 on G13G, k4s8 on
-  G13C); on other chips it keeps `MatmulBF16Coopmat`, which beat k1 on
+  G13C and G14C); on other chips it keeps `MatmulBF16Coopmat`, which beat k1 on
   G13C. Stored bits equal `MatmulBF16Coopmat`
   (`receipts/2026-10-07-bf16-direct-gemm/`). Test
   "direct cooperative-matrix matmul matches the 16-row slices in every
