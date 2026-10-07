@@ -50,11 +50,14 @@ plus Laya, and it needs a 96 GB machine.
 | M1 Max | Tested | Whole encoder |
 | M2 Max | Tested | Research driver, opt-in |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested overlay |
-| M3 and newer | Not yet | Not yet |
+| M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
+| M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
 
 The install accepts every chip in the M1 class and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
-this project measures on.
+this project measures on. On an M3 or M4 Mac, run the tester kit —
+`bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)) —
+to send us the numbers and ANE state that only real silicon gives.
 
 The ANE is a separate lane from the GPU. It has its own driver and its
 own tested state. Chip-by-chip ANE status, including what each untested

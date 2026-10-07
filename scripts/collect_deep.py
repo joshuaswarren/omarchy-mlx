@@ -125,12 +125,14 @@ ANE_DATAONLY_STEPS = (
     "This Mac's ANE chip is data-only: no driver binds it yet, and no "
     "opt-in key applies an overlay for it. For an M3 (H15) chip: run "
     "aurora 12.3's M3 bring-up report (the aurora install one-liner "
-    "with --m3-report) and submit the tgz it writes. For the ANE, "
-    "follow the h15 volunteer runbook, docs/h15-volunteer.md in "
-    "joshuaswarren/omarchy-ane (the ane/h15 stages 0/1 are read-only "
-    "and opt-in). To send MLX numbers, run python3 scripts/collect_deep.py "
-    "--submit from an omarchy-mlx checkout, or scripts/m3_kit.sh for "
-    "both in one command.")
+    "with --m3-report), submit the tgz it writes, and follow the h15 "
+    "volunteer runbook, docs/h15-volunteer.md in joshuaswarren/"
+    "omarchy-ane (the ane/h15 stages 0/1 are read-only and opt-in). "
+    "For an M4 (H16) chip on Linux, follow ane/h16/README-bringup.md; "
+    "the macOS side of the same box is the reference today. Either "
+    "way, send MLX numbers with python3 scripts/collect_deep.py "
+    "--submit from an omarchy-mlx checkout, or bash scripts/m3m4_kit.sh "
+    "for both in one command.")
 
 # Label-keep list for the raw devicetree text member: identity props are
 # REMOVED whole via `is_identity_prop` (serial/uuid/udid/mlb/ecid/
