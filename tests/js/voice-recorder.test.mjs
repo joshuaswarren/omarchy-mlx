@@ -78,4 +78,52 @@ const { SpeakQueue } = await import("../../serve/mlx_omarchy_assistant/static/js
   assert.equal(truncations, 2, "resume must re-arm the truncation event");
 }
 
+// ---------------------------------------------------------------------------
+// Hands-free (wake word) silence auto-stop.
+// ---------------------------------------------------------------------------
+const silent = () => new Float32Array(128);
+
+// Speech then 160 ms of silence (60 frames at 48 kHz) stops with the
+// named reason; the config is consumed so the next recording runs plain.
+{
+  const stopsHF = [];
+  const hf = new Recorder({ onStop: (s) => stopsHF.push(s) });
+  await hf.start();
+  hf.setHandsFree({ silenceMs: 160, floorRms: 0.01 });
+  for (let i = 0; i < 5; i++) node.port.onmessage({ data: frame() });   // speech
+  for (let i = 0; i < 59; i++) node.port.onmessage({ data: silent() }); // not yet
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stopsHF.length, 0, "silence under the gap must not stop");
+  node.port.onmessage({ data: silent() });                              // 160 ms
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stopsHF.length, 1, "speech-then-gap must stop hands-free");
+  assert.equal(stopsHF[0].reason, "silence");
+  assert.equal(hf.state, "idle");
+  assert.equal(hf._hf, null, "hands-free config is consumed by the stop");
+
+  // Without setHandsFree the same pattern keeps recording (push-to-talk
+  // keeps its semantics).
+  const plain = new Recorder({ onStop: (s) => stopsHF.push(s) });
+  await plain.start();
+  for (let i = 0; i < 5; i++) node.port.onmessage({ data: frame() });
+  for (let i = 0; i < 80; i++) node.port.onmessage({ data: silent() });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stopsHF.length, 1, "silence must not stop a plain recording");
+  await plain.stop();
+}
+
+// Silence alone (never speech) never auto-stops.
+{
+  let stopped = false;
+  const quiet = new Recorder({ onStop: () => { stopped = true; } });
+  await quiet.start();
+  quiet.setHandsFree({ silenceMs: 100, floorRms: 0.01 });
+  for (let i = 0; i < 120; i++) node.port.onmessage({ data: silent() });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stopped, false, "room silence alone must not stop");
+  await quiet.stop();
+}
+
+console.log("voice-recorder hands-free checks passed");
+
 console.log("voice recorder js tests passed");

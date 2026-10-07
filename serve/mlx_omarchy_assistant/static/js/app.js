@@ -280,6 +280,7 @@ export class App {
     catch { return; }
     this.handleStatus(status);
     this.updateVoiceStates(status);
+    this._handleWake(status);
     this._setPollRate((status && status.state === "preparing") || this.activeTurn
       ? STATUS_POLL_BUSY : STATUS_POLL_IDLE);
   }
@@ -290,6 +291,26 @@ export class App {
     clearInterval(this._statusInterval);
     this._activePollMs = ms;
     this._statusInterval = setInterval(() => this.pollStatus(), ms);
+  }
+
+  // Wake word: the server-side opt-in listener records detections in
+  // /api/status. On a fresh detection (never on the first poll after
+  // load, which replays history) open a hands-free recording when voice
+  // input is ready and nothing else holds the turn.
+  _handleWake(status) {
+    const wake = status && status.wake;
+    if (!wake || !wake.last_detection || this._wakeSeen === wake.last_detection) return;
+    const isFresh = this._wakeSeen !== undefined;
+    this._wakeSeen = wake.last_detection;
+    if (!isFresh) return;
+    if (this.activeTurn || this.speakerSpeaking ||
+        this.voiceStates.recognition !== "ready" || !this.composer) {
+      announce(this.live, "Wake word heard, but the assistant is busy.");
+      return;
+    }
+    this.composer.startHandsFree().then((started) => {
+      if (!started) announce(this.live, "Wake word heard, but the microphone is busy.");
+    });
   }
 
   showLaunchError(message) {
@@ -449,9 +470,13 @@ export class App {
       onStopSpeaking: () => this.stopSpeaking(),
       onDraft: (text) => this.onSend({ text, mode: "draft" }),
       onOpenContext: () => this._openContextDrawer(),
-      onMicStart: async () => {
+      onMicStart: async ({ handsFree } = {}) => {
+        if (this.recorder.state !== "idle") return;
+        if (handsFree) this.recorder.setHandsFree({ silenceMs: 1500 });
         await this.recorder.start();
-        this._micMessage("Recording started. Press Escape to cancel.");
+        this._micMessage(handsFree
+          ? "Wake word heard. Listening — pause when done."
+          : "Recording started. Press Escape to cancel.");
       },
       onMicStop: async () => { await this.recorder.stop(); },
       onMicCancel: async () => {
