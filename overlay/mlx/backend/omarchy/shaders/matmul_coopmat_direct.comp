@@ -34,6 +34,12 @@
 // step), then multiplies them in ascending k: the same accumulation order
 // and bits. The k steps after the last full group run one at a time.
 //
+// SWIZZLE_ROWS s > 1 remaps the workgroup grid (bijectively) so that
+// consecutive workgroups walk a band of s tile rows column by column:
+// resident workgroups share A row panels and B column panels in L2
+// instead of sweeping one tile row across every B panel. Each output
+// tile is computed the same way, so the bits do not change.
+//
 // Push constants and the batch unravel match matmul.comp.
 
 #ifndef A_T
@@ -44,6 +50,9 @@
 #endif
 #ifndef K_UNROLL
 #define K_UNROLL 1
+#endif
+#ifndef SWIZZLE_ROWS
+#define SWIZZLE_ROWS 1
 #endif
 
 #ifdef USE_F32
@@ -99,8 +108,20 @@ layout(push_constant) uniform Params {
 
 void main() {
   uint sub = gl_SubgroupID;
+#if SWIZZLE_ROWS > 1
+  uint grid_x = gl_NumWorkGroups.x;
+  uint linear = gl_WorkGroupID.y * grid_x + gl_WorkGroupID.x;
+  uint band = linear / (SWIZZLE_ROWS * grid_x);
+  uint band_rows = min(uint(SWIZZLE_ROWS),
+      gl_NumWorkGroups.y - band * SWIZZLE_ROWS);
+  uint in_band = linear - band * SWIZZLE_ROWS * grid_x;
+  uint row0 = (band * SWIZZLE_ROWS + in_band % band_rows) * TILE +
+      (sub / 2u) * (SG * MAT);
+  uint col0 = (in_band / band_rows) * TILE + (sub % 2u) * (SG * MAT);
+#else
   uint row0 = gl_WorkGroupID.y * TILE + (sub / 2u) * (SG * MAT);
   uint col0 = gl_WorkGroupID.x * TILE + (sub % 2u) * (SG * MAT);
+#endif
   if (row0 >= params.matrix_m || col0 >= params.matrix_n) {
     return;
   }
