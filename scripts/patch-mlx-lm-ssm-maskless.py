@@ -14,8 +14,12 @@ of serve-path GPU time on the 27B).
 
 The all-True mask is arithmetically a no-op: the model applies it to qkv as an
 identity where-select, and the gated-delta update treats every token as valid.
-So make_mask returns None when left_padding is host-known all zeros AND lengths
-is unset (no right padding happened); genuinely padded batches keep the real
+So make_mask returns None when every host-known left_padding is <= 0 AND
+lengths is unset (no right padding happened): the mask is pos >= left_padding,
+all True for pos >= 0. advance(N) lowers left_padding by N every step, so an
+unpadded batch reads 0 only before its first token and negative after; a
+zeros-only test missed every decode step (2026-10-07, B=4 BatchGenerator: 18
+GDN fallbacks and host joins per step). Genuinely padded batches keep the real
 mask and the masked fallback path. The host knowledge rides a Python
 left_padding_list that mirrors the mx array at every mutation site; foreign
 state restores leave the mirror unset, which disables the guard (old behavior,
@@ -30,12 +34,13 @@ import sys
 
 MARKER = "MLX_OMARCHY_SSM_MASKLESS"
 
-FLAG_BLOCK = """# A batch ArraysCache with nothing padded carries left_padding=[0...0] and no
-# lengths; its make_mask is then an all-True validity mask. Consumers apply it
+FLAG_BLOCK = """# A batch ArraysCache with no padded row carries left_padding <= 0 (0 at
+# merge, lowered by advance) and no lengths; its make_mask is then an all-True
+# validity mask. Consumers apply it
 # as identity (qkv zeroing skips nothing; the gated-delta update treats every
 # token as valid), so returning None is arithmetic-preserving and lets the
-# maskless fast kernels (fused coopmat GDN prefill) run on the batched serve
-# path. Genuinely padded batches keep the real mask.
+# maskless fast kernels (fused GDN decode and coopmat prefill) run on the
+# batched serve path. Genuinely padded batches keep the real mask.
 # MLX_OMARCHY_SSM_MASKLESS=0 restores the masked behavior.
 _SSM_MASKLESS_UNPADDED = os.environ.get("MLX_OMARCHY_SSM_MASKLESS", "1") != "0"
 
@@ -48,7 +53,7 @@ GUARD_0313 = """    def make_mask(self, N: int):
             and self.left_padding is not None
             and self.lengths is None
             and self.left_padding_list is not None
-            and not any(self.left_padding_list)
+            and max(self.left_padding_list) <= 0
         ):
             return None
         if self.left_padding is not None:
@@ -62,7 +67,7 @@ GUARD_032 = """    def make_mask(self, N: int):
             and self.left_padding is not None
             and self.lengths is None
             and self.left_padding_list is not None
-            and not any(self.left_padding_list)
+            and max(self.left_padding_list) <= 0
         ):
             return None
         pos = mx.arange(N)
@@ -206,8 +211,17 @@ if not site:
     sys.exit("mlx_lm/models not found under " + venv)
 q = site[0] + "/cache.py"
 text = open(q).read()
+# Trees patched before 2026-10-07 carry the zeros-only guard; upgrade them in place.
+ZEROS_GUARD = ("            and self.lengths is None\n"
+               "            and self.left_padding_list is not None\n"
+               "            and not any(self.left_padding_list)\n")
 if MARKER in text:
-    print("already patched:", q)
+    if ZEROS_GUARD in text:
+        open(q, "w").write(text.replace(ZEROS_GUARD, ZEROS_GUARD.replace(
+            "not any(self.left_padding_list)", "max(self.left_padding_list) <= 0"), 1))
+        print("upgraded guard:", q)
+    else:
+        print("already patched:", q)
     sys.exit(0)
 
 is_032 = MAKE_MASK_032_OLD in text
