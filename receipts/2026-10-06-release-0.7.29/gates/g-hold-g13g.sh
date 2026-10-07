@@ -21,8 +21,8 @@
 # all lines teed to a receipt file.
 #
 # Usage (on the host):
-#   HOLD_WHEEL=/tmp/v0.7.29-assets/mlx_omarchy-*-cp314-cp314-linux_aarch64.whl \
-#   HOLD_VENDOR_TAR=/tmp/v0.7.29-assets/omarchy-mlx-vendor-wheels-v0.7.29-cp314-aarch64.tar \
+#   HOLD_WHEEL=$HOME/v0730-assets/mlx_omarchy-*-cp314-cp314-linux_aarch64.whl \
+#   HOLD_VENDOR_TAR=$HOME/v0730-assets/omarchy-mlx-vendor-wheels-v0.7.30-cp314-aarch64.tar \
 #   HOLD_RULE_SRC=$HOME/rel0729/gates/70-omarchy-mlx-cpu-dma-latency.rules \
 #     bash g-hold-g13g.sh
 #   (HOLD_MODEL defaults to /var/tmp/MesaParity/model)

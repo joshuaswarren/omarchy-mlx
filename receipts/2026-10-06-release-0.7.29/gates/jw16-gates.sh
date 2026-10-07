@@ -17,7 +17,7 @@
 # all seven steps are RC=0.
 set -uo pipefail
 : "${TAG:?set TAG=v0.7.30 (no defaults: a wrong tag silently tests the wrong cut)}"
-: "${ASSETS_DIR:=$HOME/v0.7.29-assets}"
+: "${ASSETS_DIR:?set ASSETS_DIR to the v0.7.30 draft assets dir}"
 : "${GATE_ROOT:?set GATE_ROOT (no defaults)}"
 : "${REPO:?set REPO (no defaults)}"
 # The serving venv on this host: g7c REFUSES to touch it when named.
@@ -86,7 +86,7 @@ if [[ ! -d "$REPO/.work/mlx" ]]; then
   # itself: pin it to the tag sha (keeps the dev version segment identical to
   # the published wheel).
   step build-wheel env HOME="$HOME" DEV_RELEASE=1 CMAKE_BUILD_PARALLEL_LEVEL=8 \
-    MLX_OMARCHY_SOURCE_COMMIT="${MLX_OMARCHY_SOURCE_COMMIT:-d86daf9}" \
+    MLX_OMARCHY_SOURCE_COMMIT="${MLX_OMARCHY_SOURCE_COMMIT:-$(git -C "$REPO" rev-parse --short=7 HEAD)}" \
     MLX_OMARCHY_WHOLE_BUNDLE_DIR="$BUNDLE/mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole" \
     bash "$REPO/scripts/build-wheel.sh"
 fi

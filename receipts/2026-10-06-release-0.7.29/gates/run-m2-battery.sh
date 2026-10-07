@@ -11,12 +11,12 @@
 # jw16-gates.sh; the release is complete only when BOTH pass.
 #
 # Usage (on the gate host, REPO = extracted tag tree with scripts/release-gates):
-#   TAG=v0.7.29 ASSETS_DIR=$HOME/v0.7.29-assets GATE_ROOT=$HOME/v0.7.29-gates \
-#   REPO=$HOME/v0.7.29-repo \
+#   TAG=v0.7.30 ASSETS_DIR=$HOME/v0730-assets GATE_ROOT=$HOME/v0.7.30-gates \
+#   REPO=$HOME/v0.7.30-repo \
 #   GATE_INSTALL_SH=$REPO/install.sh GATE_TAG_TARBALL=$ASSETS_DIR/omarchy-mlx-0.7.29.tar.gz \
 #     bash run-m2-battery.sh
 set -uo pipefail
-: "${TAG:=v0.7.29}"
+: "${TAG:?set TAG=v0.7.30}"
 : "${ASSETS_DIR:=/tmp/${TAG}-assets}"
 : "${GATE_ROOT:=/tmp/m2-gates}"
 REPO="${REPO:?set REPO to the extracted tag tree (scripts/release-gates must exist)}"
