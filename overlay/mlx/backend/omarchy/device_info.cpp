@@ -52,6 +52,15 @@ constexpr ChipIdEntry kChipIdTable[] = {
     {"apple,t6020", "Apple M2 Pro", 19},
     {"apple,t6021", "Apple M2 Max", 38},
     {"apple,t6022", "Apple M2 Ultra", 76},
+    // M3 family, names per omarchy-ane data/ane-soc records (t6034 is
+    // the M3 Max variant whose ADT reports arm-io,t6031; there is no
+    // M3 Ultra id). Binned variants exist (M3 Air 8-core GPU, 14-core
+    // M3 Pro, 30-core M3 Max); like the M1/M2 rows these report the
+    // top configuration for the chip id.
+    {"apple,t8122", "Apple M3", 10},
+    {"apple,t6030", "Apple M3 Pro", 18},
+    {"apple,t6031", "Apple M3 Max", 40},
+    {"apple,t6034", "Apple M3 Max", 30},
 };
 
 const ChipIdEntry* find_chip_entry(const std::string& compatible) {
