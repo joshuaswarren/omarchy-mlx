@@ -63,9 +63,15 @@ while IFS= read -r line; do
 done < SHA256SUMS
 sha256sum -c --quiet SHA256SUMS | log && echo "ASSETS_OK" | log \
   || { echo "FAIL: assets do not match SHA256SUMS" | log; exit 1; }
-if [[ ! -d "$REPO/scripts/release-gates" ]]; then
+# the build stage needs a REAL git tree so the repo HEAD is verifiable
+if [[ ! -d "$REPO/.git" ]]; then
+  git clone --depth 1 --branch "$TAG" https://github.com/joshuaswarren/omarchy-mlx.git "$REPO"
+fi
+repo_head=$(git -C "$REPO" rev-parse HEAD)
+[[ "$repo_head" == "cf71ea276eb87fd2a1289be4c60cfce0dd85536b" ]] || { echo "FAIL: repo HEAD $repo_head != cf71ea276" | log; exit 1; }
+if [[ ! -f "$REPO/scripts/release-gates" ]]; then
   mkdir -p "$REPO"
-  tar -xf "$ASSETS_DIR/omarchy-mlx-0.7.29.tar.gz" -C "$REPO" --strip-components=1
+  tar -xf "$ASSETS_DIR/omarchy-mlx-0.7.30.tar.gz" -C "$REPO" --strip-components=1
 fi
 [[ -f "$GATES_DIR/g13-gdn-maskless.sh" ]] || { echo "FAIL: gate scripts missing under $REPO" | log; exit 1; }
 
