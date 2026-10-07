@@ -38,7 +38,7 @@ struct DirectMatmulRow {
 };
 
 // Measured winners: receipts/2026-10-07-direct-gemm-variants (MatmulGap H8).
-inline constexpr std::array<DirectMatmulRow, 4> kDirectMatmulRows{{
+inline constexpr std::array<DirectMatmulRow, 5> kDirectMatmulRows{{
     {"G13C", true, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13C", true, true, false, 4096u, 4096u,
@@ -47,6 +47,8 @@ inline constexpr std::array<DirectMatmulRow, 4> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13G", true, true, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
+    {"G13C", true, false, false, 4096u, 4096u,
+     {ComputeKernel::MatmulDirectF16NnWS8, 128u}},
 }};
 
 inline DirectMatmulRoute select_direct_matmul_route(

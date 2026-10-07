@@ -888,6 +888,7 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectF32Tt,
   MatmulDirectF16NtK4S8,
   MatmulDirectF16TnWS8,
+  MatmulDirectF16NnWS8,
   Count,
 };
 

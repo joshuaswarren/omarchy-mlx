@@ -694,8 +694,10 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
   for (std::string_view chip : {"Apple M1 (G13G B1)", "Apple M1 Max (G13C C0)"}) {
     CHECK(kernel(chip, false, true) == ComputeKernel::MatmulDirectF16NtK4S8);
     CHECK(kernel(chip, true, false) == ComputeKernel::MatmulDirectF16TnWS8);
-    CHECK(kernel(chip, false, false) == shipped.kernel);
   }
+  CHECK(kernel("Apple M1 Max (G13C C0)", false, false) ==
+        ComputeKernel::MatmulDirectF16NnWS8);
+  CHECK(kernel("Apple M1 (G13G B1)", false, false) == shipped.kernel);
   // Device name the M2 Max reports (receipts/2026-10-04-hwprobe-device-info).
   for (bool a_t : {false, true}) {
     for (bool b_t : {false, true}) {
