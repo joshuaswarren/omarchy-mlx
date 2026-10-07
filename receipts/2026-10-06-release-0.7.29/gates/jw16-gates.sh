@@ -16,10 +16,10 @@
 # Every RC is printed and teed; the summary line is JW16_GATES_PASS only when
 # all seven steps are RC=0.
 set -uo pipefail
-: "${TAG:=v0.7.29}"
+: "${TAG:?set TAG=v0.7.30 (no defaults: a wrong tag silently tests the wrong cut)}"
 : "${ASSETS_DIR:=$HOME/v0.7.29-assets}"
-: "${GATE_ROOT:=$HOME/v0.7.29-gates}"
-: "${REPO:=$HOME/v0.7.29-repo}"
+: "${GATE_ROOT:?set GATE_ROOT (no defaults)}"
+: "${REPO:?set REPO (no defaults)}"
 # The serving venv on this host: g7c REFUSES to touch it when named.
 : "${SERVING_VENV:=$HOME/.local/share/mlx-omarchy/venv}"
 export TAG ASSETS_DIR GATE_ROOT REPO SERVING_VENV
