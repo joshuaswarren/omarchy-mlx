@@ -124,13 +124,23 @@ mkdir -p "$DIST_DIR"
 # setup.py appends CMAKE_ARGS to its cmake invocation; it splits the value on
 # spaces, so keep each -D flag space separated.
 export CMAKE_ARGS="-DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF"
-# MLX finds lapacke.h only in /usr/include and /usr/local/include. Arch Linux
-# ARM ships it with OpenBLAS in /usr/include/openblas (libopenblas also
-# carries the LAPACKE symbols), so configure fails there with
-# LAPACK_INCLUDE_DIRS-NOTFOUND unless the directory is passed in.
-if [[ ! -f /usr/include/lapacke.h && ! -f /usr/local/include/lapacke.h &&
-      -f /usr/include/openblas/lapacke.h ]]; then
+# MLX's CPU backend needs lapacke.h and finds it only in /usr/include,
+# /usr/local/include, and CMAKE_INCLUDE_PATH. Arch Linux ARM's openblas ships
+# it in /usr/include/openblas (libopenblas also carries the LAPACKE symbols),
+# so pass that directory in. Without any lapacke.h, configure fails with only
+# LAPACK_INCLUDE_DIRS-NOTFOUND, so stop here and name the package instead.
+lapacke_dirs=(/usr/include /usr/local/include /usr/include/*-linux-gnu)
+IFS=: read -r -a cmake_include_dirs <<< "${CMAKE_INCLUDE_PATH:-}"
+lapacke_found=0
+for dir in "${lapacke_dirs[@]}" "${cmake_include_dirs[@]}"; do
+  if [[ -n "$dir" && -f "$dir/lapacke.h" ]]; then lapacke_found=1; fi
+done
+if [[ "$lapacke_found" == 0 && -f /usr/include/openblas/lapacke.h ]]; then
   export CMAKE_ARGS="$CMAKE_ARGS -DLAPACK_INCLUDE_DIRS=/usr/include/openblas"
+elif [[ "$lapacke_found" == 0 ]]; then
+  echo "ERROR: lapacke.h not found. Install it: 'sudo pacman -S openblas' (or lapacke) on Arch/Omarchy," >&2
+  echo "       'sudo apt install liblapacke-dev' on Debian-family distributions." >&2
+  exit 2
 fi
 if [[ -n "${MLX_OMARCHY_ANE_SOURCE_DIR:-}" ]]; then
   [[ -d "$MLX_OMARCHY_ANE_SOURCE_DIR" ]] || {

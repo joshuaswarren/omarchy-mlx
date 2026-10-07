@@ -208,7 +208,9 @@ re-measured here").
    On Arch/Omarchy, install `blas-openblas` and set
    `CMAKE_INCLUDE_PATH=/usr/include/openblas` for the build; both BLAS and
    LAPACK headers live in that package-owned directory. No source or linker
-   flag changes are needed.
+   flag changes are needed. `build-wheel.sh` checks for `lapacke.h` first: it
+   uses `/usr/include/openblas/lapacke.h` when no other copy exists, and stops
+   with the package to install when there is none.
 2. Run `./scripts/build-wheel.sh`
 3. Read the wheel path, size, and sha256 from the receipt lines.
 
