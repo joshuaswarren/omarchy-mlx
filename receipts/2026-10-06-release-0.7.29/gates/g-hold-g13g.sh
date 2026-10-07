@@ -126,7 +126,7 @@ EOF
 # library_path, else the packaged honeykrisp ICD), and the driverInfo line.
 ICD_JSON="${VK_DRIVER_FILES:-/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json}"
 LIBV=$(python3 -c "import json;print(json.load(open('$ICD_JSON'))['ICD']['library_path'])")
-LIBV="${LIBV/\$DEST/$DEST}"
+LIBV="${LIBV/\$DEST/${DEST:-}}"
 echo "ICD_LINE icd_json=$ICD_JSON" | log
 echo "ICD_LINE libvulkan_sha256=$(sha256sum "${LIBV/#\~/$HOME}" 2>/dev/null | awk '{print $1}')" | log
 "$VENV/bin/python" - <<'EOF' | tee -a "$RECEIPT"
