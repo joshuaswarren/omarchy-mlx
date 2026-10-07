@@ -55,7 +55,11 @@
 const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP);
 const uint LANES = 32u;
 const uint BITS = 1u;
-const uint VALUES_PER_BYTE = 32u / BITS;  // 8 for bits=1
+// Codes per BYTE (8 one-bit codes per byte). 32u / BITS here would be
+// codes per WORD: the byte walk then covers only K/32 bytes (16 codes
+// at k=64) and every dot product silently drops three quarters of its
+// terms — first seen on hardware 2026-10-07 (G13G, Honeykrisp).
+const uint VALUES_PER_BYTE = 8u / BITS;
 
 layout(local_size_x = SLOTS_PER_GROUP * 32) in;
 
