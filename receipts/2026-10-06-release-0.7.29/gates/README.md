@@ -27,6 +27,22 @@ run the wheel's `mlx-omarchy-parakeet download` once per host/home
 /tmp/v0.7.29-vendor-g7d) are /tmp (tmpfs on Omarchy): they vanish on reboot
 and are regenerated from ASSETS_DIR at every run — nothing to preserve.
 
+g6 TTS voice pack (unpinned external download — record of the source):
+`~/mlx-tts-home/voice/qwen3-tts-0.6b-customvoice-4bit` = HF repo
+`mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit` at revision
+`08c72cad5e2fd0f41730c8bd1f28149585e46361`; the authoritative file list with
+per-file sha256/bytes lives in
+`serve/mlx_omarchy_assistant/synthesis.py` (VOICE_PACK). Fetch +
+per-file-verify with the snapshot_download call documented in
+`gates-run/` (window-2 prep), or the assistant's own download flow.
+
+g14 PRECONDITION: the default-ON routing leg requires the routing-default
+commit (8b1226da6 "routing: ON by default with MLX_OMARCHY_ROUTING kill
+switch") to be IN the cut. It is NOT in v0.7.29 (nor on any fetched branch),
+so leg A is expected to fail there; the kill-switch leg (routing disabled
+under MLX_OMARCHY_ROUTING=0) passed in window 1. Run g14 anyway for the
+evidence and let Main/w7K decide how to record it.
+
 Conventions: every ssh value is an ALIAS supplied by env, never a raw
 address; throwaway state under `GATE_ROOT`; serving venvs are never touched;
 jw16 legs announce in the coordination pane before starting and run under
