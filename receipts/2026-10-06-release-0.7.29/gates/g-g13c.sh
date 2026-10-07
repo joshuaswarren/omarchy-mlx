@@ -12,7 +12,7 @@
 # release check and run under `timeout -k 30 120`.
 #
 # Usage (on the host):
-#   G13C_WHEEL=/tmp/v0.7.29-assets/mlx_omarchy-*-cp314-cp314-linux_aarch64.whl \
+#   G13C_WHEEL=$HOME/v0730-assets/mlx_omarchy-*-cp314-cp314-linux_aarch64.whl \
 #     bash g-g13c.sh
 # Expected PASS output (and the same lines in the receipt file):
 #   G13C_DEVICE device:            Apple M1 Max (G13C C0)

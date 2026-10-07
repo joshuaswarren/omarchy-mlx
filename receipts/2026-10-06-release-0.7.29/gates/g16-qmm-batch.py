@@ -43,13 +43,13 @@ try:
 except Exception as exc:
     LIBV_SHA = f"error: {exc}"
 
-print(json.dumps({
+PROVENANCE = {
     "wheel_version": WHEEL_VERSION,
     "libmlx_sha256": LIBMLX_SHA,
     "icd_json": ICD_JSON,
     "libvulkan_sha256": LIBV_SHA,
     "uname": platform.uname().release,
-}, indent=2))
+}
 
 w = mx.random.normal((N, K)).astype(mx.bfloat16)
 wq, scales, biases = mx.quantize(w, group_size=G64, bits=BITS)
@@ -78,7 +78,7 @@ for B in (2, 4):
         cases += 1
 
 ok = not failures and bool(digests)
-print(json.dumps({"gate": "g16-qmm-batch", "cases": cases,
-                  "rows": len(digests), "failures": failures,
+print(json.dumps({"gate": "g16-qmm-batch", "provenance": PROVENANCE,
+                  "cases": cases, "rows": len(digests), "failures": failures,
                   "digests": digests, "pass": bool(ok)}, indent=2))
 sys.exit(0 if ok else 1)
