@@ -547,12 +547,15 @@
 #include "matmul_direct_f16_tn_ws8.h"
 #include "matmul_direct_f16_nt_k4s8.h"
 #include "matmul_direct_f32_nt_k4s8.h"
+#include "matmul_direct_f32_nn_k4s8.h"
+#include "matmul_direct_f32_tn_ws8.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
 #include "matmul_direct_bf16_tn.h"
 #include "matmul_direct_bf16_tt.h"
 #include "matmul_direct_bf16_tn_ws8.h"
+#include "matmul_direct_bf16_nt_k4s8.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -1694,6 +1697,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_f16_tn_ws8, matmul_direct_f16_tn_ws8_size};
     case ComputeKernel::MatmulDirectF32NtK4S8:
       return {matmul_direct_f32_nt_k4s8, matmul_direct_f32_nt_k4s8_size};
+    case ComputeKernel::MatmulDirectF32NnK4S8:
+      return {matmul_direct_f32_nn_k4s8, matmul_direct_f32_nn_k4s8_size};
+    case ComputeKernel::MatmulDirectF32TnWS8:
+      return {matmul_direct_f32_tn_ws8, matmul_direct_f32_tn_ws8_size};
 #ifdef MLX_OMARCHY_BF16_DIRECT
     case ComputeKernel::MatmulDirectBF16Nn:
       return {matmul_direct_bf16_nn, matmul_direct_bf16_nn_size};
@@ -1705,12 +1712,15 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_bf16_tt, matmul_direct_bf16_tt_size};
     case ComputeKernel::MatmulDirectBF16TnWS8:
       return {matmul_direct_bf16_tn_ws8, matmul_direct_bf16_tn_ws8_size};
+    case ComputeKernel::MatmulDirectBF16NtK4S8:
+      return {matmul_direct_bf16_nt_k4s8, matmul_direct_bf16_nt_k4s8_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
     case ComputeKernel::MatmulDirectBF16Tn:
     case ComputeKernel::MatmulDirectBF16Tt:
     case ComputeKernel::MatmulDirectBF16TnWS8:
+    case ComputeKernel::MatmulDirectBF16NtK4S8:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
