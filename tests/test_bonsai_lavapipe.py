@@ -101,8 +101,8 @@ def _build_inputs(n, k, group_size, dtype, seed=0):
         biases_np[:, g] = -sc * 0.5
     return (
         mx.array(packed.astype(np.uint8)),
-        mx.array(scales_np.astype(dtype)),
-        mx.array(biases_np.astype(dtype)),
+        mx.array(scales_np).astype(dtype),
+        mx.array(biases_np).astype(dtype),
     )
 
 

@@ -103,8 +103,8 @@ def _build_inputs(n, k, group_size, dtype, seed=0):
     x = mx.array(rng.normal(0, 1, (1, k)).astype(np.float32))
     return (
         mx.array(packed_np.astype(np.uint8)),
-        mx.array(scales_np.astype(dtype)),
-        mx.array(biases_np.astype(dtype)),
+        mx.array(scales_np).astype(dtype),
+        mx.array(biases_np).astype(dtype),
         x.astype(dtype),
     )
 
