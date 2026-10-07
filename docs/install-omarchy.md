@@ -239,96 +239,107 @@ Do not install the upstream `mlx` package beside this wheel. The module name
 is the same, so the two distributions conflict. Remove upstream `mlx` before
 you install `mlx-omarchy`.
 
-## Honeykrisp driver with the fork fixes
+## Honeykrisp driver
 
-Stock Mesa 26.1.7 Honeykrisp has four driver-side defects that this
-backend works around in its shaders (data-dependent byte extraction
-miscompiles, one-ulp float division, one-ULP `log`, and `sin`/`cos` range
-reduction above 1e5), and it does not expose `VK_KHR_cooperative_matrix`.
-The fork branch [`honeykrisp-omarchy`](https://github.com/joshuaswarren/mesa-1/tree/honeykrisp-omarchy)
-fixes all four in the compiler and turns the G13 8x8x8 matrix unit on by
-default, so an unmodified wheel runs dense f32 matmul on cooperative
-matrices. Every workaround stays in the shaders for stock Mesa; the fork
-only removes the need for them. The fork's integration receipt (25/25
-suites, every reproducer) and package receipt are not in this checkout.
+The supported driver is the `omarchy-mlx-vulkan` package. It installs a
+private Honeykrisp Vulkan ICD under `/usr/lib/omarchy-mlx/vulkan/` and
+leaves the system Mesa package installed for the desktop. `omarchy-mlx`
+depends on the same version of `omarchy-mlx-vulkan`. The Omarchy menu
+entry Install > AI > MLX + Core ML installs the `omarchy-mac-ml` meta
+package, which pulls both in. A wheel or an `install.sh` venv ships GPU
+kernels only.
 
-`packaging/mesa-honeykrisp-omarchy/PKGBUILD` builds the fork as a pacman
-package that replaces `mesa`. It is the asahi-alarm `mesa` recipe
-(AsahiLinux/PKGBUILDs `28229b8`, the PKGBUILD that produced the installed
-`mesa 26.1.7-1`) with the source pointed at fork commit `6f6afc89`, so GL,
-EGL, GBM, llvmpipe, zink, rusticl, teflon, and VA are built with the same
-options as the stock package. The package is Mesa `26.3.0-devel`; the
-desktop runs on Mesa main plus the fork's Asahi changes.
+The Vulkan package builds the Honeykrisp Vulkan driver alone: the
+driver library and the ICD JSON live under `/usr/lib/omarchy-mlx/vulkan/`,
+outside the loader's default ICD directories. GL, window-system, and
+Gallium drivers stay with the system Mesa package. The package
+conflicts with `mesa-honeykrisp-omarchy`.
 
-### Build
+`packaging/mesa-honeykrisp-omarchy/` is not a supported install. Do not
+build or install it. That recipe replaces the system Mesa package.
 
-On the M1 (Omarchy on Asahi Arch, `base-devel` installed), 2 minutes 31 seconds wall time on 8 cores (clean `makepkg -C -f`, 09:19:55–09:22:26 UTC-5):
+### Package layout
 
-```sh
-mkdir -p ~/src/mesa-pkg && cp packaging/mesa-honeykrisp-omarchy/* ~/src/mesa-pkg/
-cd ~/src/mesa-pkg
-sudo pacman -Sy            # the makedepends list needs a current package db
-makepkg -s --noconfirm     # installs missing makedepends, clones the fork, builds
-ls mesa-honeykrisp-omarchy-*.pkg.tar.xz
-```
+Names are fixed in `serve/mlx_omarchy_paths.py` and
+`overlay/mlx/backend/omarchy/honeykrisp_identity.h`:
 
-The source is a git clone pinned to the commit, not a tarball, because
-Mesa derives the `git-<sha>` in `driverInfo` from the checkout; that
-string is how you tell the fork from stock later.
+| Path | Contents |
+|---|---|
+| `/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json` | ICD JSON. `library_path` is an absolute path to the driver library installed in the same directory. |
+| `/usr/lib/omarchy-mlx/vulkan/mesa-git-sha` | One line: the hex string the driver reports after `git-` in `driverInfo`. |
 
-### Install
+`OMARCHY_MLX_SYSTEM_PREFIX`, when set and non-empty, replaces the
+`/usr/lib/omarchy-mlx` prefix. Tests and staged trees use that seam.
+The ICD and SHA paths are then `<prefix>/vulkan/honeykrisp_icd.aarch64.json`
+and `<prefix>/vulkan/mesa-git-sha`.
 
-Keep the stock package for rollback (pacman already has it in
-`/var/cache/pacman/pkg/`), then replace the conflicting `mesa` package in
-one interactive pacman transaction. Confirm the `Remove mesa?` prompt:
+### Selection
 
-```sh
-ls /var/cache/pacman/pkg/mesa-26.1.*-aarch64.pkg.tar.xz
-sudo pacman -U mesa-honeykrisp-omarchy-*.pkg.tar.xz
-# answer y to pacman's exact `Remove mesa?` conflict prompt
-env -u VK_ICD_FILENAMES -u AGX_SIMDMAT vulkaninfo --summary | grep -E 'driverName|driverInfo'
-```
+Before Vulkan loads, the backend selects the ICD for this process
+(`configure_honeykrisp_icd` in `overlay/mlx/backend/omarchy/device.cpp`).
+A path counts as a Honeykrisp ICD when it contains `honeykrisp`,
+`asahi_icd`, or `libvulkan_asahi`, in any case (`is_honeykrisp_icd` in
+`honeykrisp_identity.h`). The system Mesa ICD `asahi_icd.aarch64.json`
+matches that rule.
 
-`driverInfo` must read `Mesa 26.3.0-devel (git-6f6afc8968)`. Running GL
-clients keep the old libraries mapped until they restart; log out and back
-in (or reboot) for the compositor to pick up the new GL.
+1. A non-empty `VK_DRIVER_FILES` is the override. `VK_ICD_FILENAMES` is
+   the override only when `VK_DRIVER_FILES` is unset or empty. A
+   colon-separated value uses the first entry that is a Honeykrisp
+   ICD. That file must exist; a later entry is not tried. An
+   override does not fall through to the packaged ICD and does not
+   inherit the packaged SHA. `icd_source` is `override`.
+2. Otherwise, if the packaged ICD JSON exists, it is selected
+   (`icd_source` `packaged`).
+3. Otherwise the backend searches `/etc/vulkan/icd.d`, then
+   `/usr/local/share/vulkan/icd.d`, then `/usr/share/vulkan/icd.d`, and
+   selects the first Honeykrisp ICD JSON it finds (`icd_source`
+   `search`). Without the package, that is usually the system Mesa
+   driver, and no packaged SHA applies.
 
-### Normal use
+In cases 2 and 3 this process sets both `VK_DRIVER_FILES` and
+`VK_ICD_FILENAMES` to the selected path. An override leaves those
+variables as the caller set them.
 
-Nothing to set. No `VK_ICD_FILENAMES`, no `AGX_SIMDMAT`, no private ICD
-json; the wheel detects `VK_KHR_cooperative_matrix` from the device
-extension list and uses the coopmat matmul kernel on its own.
-`AGX_SIMDMAT=0` turns the extension off again for A/B comparison. The
-`flock /tmp/m1-gpu.lock` wrapper in this project's receipts is a
-multi-agent convention for the shared test machine, not a driver
-requirement.
+A missing override file fails initialization with
+`Honeykrisp ICD selection refused: user Vulkan ICD JSON does not exist: `
+plus the path. A value that excludes Honeykrisp fails with
+`Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: `
+plus the value. If no ICD is found, initialization fails with
+`Honeykrisp Vulkan ICD JSON was not found`.
 
-### Rollback
+Leave `VK_DRIVER_FILES` and `VK_ICD_FILENAMES` unset on a packaged
+install. The loader variables are set inside the MLX process. Other
+programs keep the loader's normal ICD search and the system Mesa driver.
 
-```sh
-sudo pacman -U /var/cache/pacman/pkg/mesa-26.1.7-1-aarch64.pkg.tar.xz
-```
+### Identity check
 
-pacman removes `mesa-honeykrisp-omarchy` as the conflict and restores the
-stock driver. `sudo pacman -S mesa` does the same from the asahi-alarm
-repository. Because the fork package `conflicts=('mesa')` and provides
-`mesa`, `pacman -Syu` never silently swaps it back for a stock release;
-moving to a newer stock Mesa is always this explicit step.
+`mlx-omarchy-info` and `mx.device_info()` report `icd_path`,
+`icd_source` (`packaged`, `override`, or `search`), `driver`,
+`driver_info`, `driver_sha`, `expected_sha`, and
+`expected_sha_source`. `driver_sha` is the hex run after `git-` in
+driver info when that run is at least 7 digits; otherwise it is empty.
 
-### Distribution
+Expected SHA (`resolve_expected_sha_policy`):
 
-The `[omarchy-aarch64]` pacman repository that Omarchy Mac installs
-(`github.com/omarchy-mac/omarchy-pkgs-aarch64`, release tag `edge`) is
-owned by the `omarchy-mac` organization; this project has read access
-only, so nothing is published there. That repository does accept in-tree
-PKGBUILDs (`pkgbuilds/` plus a `source: local`, `category: compile` entry
-in `packages.json`, built on a native ARM runner), so the path is a pull
-request carrying `packaging/mesa-honeykrisp-omarchy/`. Until then, this
-section's `makepkg` is the supported route, and a personal pacman
-repository is the self-hosted alternative: `repo-add
-mesa-honeykrisp-omarchy.db.tar.gz *.pkg.tar.xz`, upload the package and
-db files to a GitHub release, and point a `Server =` line at the
-release's download URL, exactly as `[omarchy-aarch64]` does.
+- `MLX_OMARCHY_EXPECTED_HK_SHA`, when set and non-empty, is the expected
+  value. `expected_sha_source` is `env`.
+- When that variable is unset and the packaged ICD was selected, the
+  expected value is the trimmed contents of `mesa-git-sha`.
+  `expected_sha_source` is `packaged file`. A missing or unreadable
+  file leaves the expectation empty.
+- The check runs when the device's Vulkan driver id is the Honeykrisp
+  id (`26`). A non-empty expectation that differs from `driver_sha`
+  fails initialization with
+  `Honeykrisp Mesa git SHA mismatch: expected <expected>, found <actual>`
+  (`found unavailable` when `driver_sha` is empty).
+- With no expectation, the runtime records identity and does not reject
+  the driver.
+
+On a packaged install with the variables unset, `mlx-omarchy-info`
+reports `icd_source` `packaged`, `icd_path`
+`/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json`, and
+`expected_sha` equal to `driver_sha` with `expected_sha_source`
+`packaged file`.
 
 ## Benchmark matrix
 

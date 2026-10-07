@@ -147,9 +147,9 @@ Fixed in the `honeykrisp-omarchy` driver: the fork's `log` and `log2`
 are correctly rounded on every probe input (4,107 of 4,107 exact,
 1,048,558 of 1,048,561 exact in the stress sweep, worst case one ULP;
 [receipt](../receipts/hk/2026-09-08-honeykrisp-omarchy-integration.json)).
-Stock Mesa keeps the gap; see
-[docs/install-omarchy.md](install-omarchy.md#honeykrisp-driver-with-the-fork-fixes)
-for the package.
+Stock Mesa keeps the gap. The supported driver is the packaged private
+Honeykrisp ICD; see
+[docs/install-omarchy.md](install-omarchy.md#honeykrisp-driver).
 
 ### Complex tan at fl(pi/2) needs the precise-math Honeykrisp trig
 
