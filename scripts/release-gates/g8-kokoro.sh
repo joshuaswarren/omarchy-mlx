@@ -19,7 +19,7 @@ gate_log_wheel_identity "$LOG"
   || "$P/venv/bin/python" -m spacy download en_core_web_sm >>"$LOG" 2>&1
 
 cp "$GATES_DIR/g8-kokoro-driver.py" "$GATE_HOME/kokoro-smoke-driver.py"
-flock "$GPU_LOCK" env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
+gate_lock env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   PYTHONPATH="$P" MLX_OMARCHY_TTS_HOME="$TTS_PACK_HOME" TERM=dumb \
   "$P/venv/bin/python" "$GATE_HOME/kokoro-smoke-driver.py" >>"$LOG" 2>&1
 RC=$?

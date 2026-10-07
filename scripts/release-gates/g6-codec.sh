@@ -20,7 +20,7 @@ else
 fi
 gate_log "$LOG" "TAG_TESTS_EXIT $?"
 
-flock "$GPU_LOCK" env -C "$T" PYTHONPATH="$P" \
+gate_lock env -C "$T" PYTHONPATH="$P" \
   MLX_OMARCHY_TTS_TEST_PACK="$TTS_PACK_HOME/voice/qwen3-tts-0.6b-customvoice-4bit" \
   "$P/venv/bin/python" -m unittest tests.test_qwen3_tts_codec_regress -v >>"$LOG" 2>&1
 RC=$?

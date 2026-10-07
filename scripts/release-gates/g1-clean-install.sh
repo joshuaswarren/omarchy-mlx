@@ -20,7 +20,7 @@ else
 fi
 gate_log "$LOG" "FETCH_EXIT $?"
 
-flock "$GPU_LOCK" env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
+gate_lock env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   MLX_OMARCHY_VERSION="$TAG" MLX_OMARCHY_RELEASE_BASE="file://$ASSETS_DIR" TERM=dumb \
   bash "$GATE_ROOT/${TAG}-install.sh" >>"$LOG" 2>&1 </dev/null
 rc=$?
