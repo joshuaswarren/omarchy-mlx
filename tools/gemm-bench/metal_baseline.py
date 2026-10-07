@@ -1,4 +1,4 @@
-"""Dense GEMM baseline through MLX, same cells as tools/gemm-bench.
+"""Dense GEMM and Q4 prefill baselines through MLX (gemm-bench cells).
 
 Each cell times 3 rounds of 6 evaluated products and reports the median and
 best rep in TFLOP/s, so the numbers line up with gemm-bench's "tflops" and
@@ -11,6 +11,7 @@ macOS Metal (no other GPU load):
   /tmp/mlx-metal/bin/pip install -q mlx==0.32.3
   /tmp/mlx-metal/bin/python metal_baseline.py > metal-baseline.jsonl
 """
+import hashlib
 import json
 import platform
 import time
@@ -30,6 +31,12 @@ CELLS = [
     ("bf16_nt4096", mx.bfloat16, 4096, 4096, 4096, False, True),
     ("f32_nn4096", mx.float32, 4096, 4096, 4096, False, False),
     ("f32_nt4096", mx.float32, 4096, 4096, 4096, False, True),
+]
+# Qwen3.8-2B prefill linears: bf16 x, 4-bit weights (group 64), m = 512.
+# name, m, n, k
+QCELLS = [
+    ("q4_gate512", 512, 6144, 2048),
+    ("q4_down512", 512, 2048, 6144),
 ]
 
 
@@ -79,6 +86,24 @@ def main():
         "median_us": round(times[len(times) // 2] * 1e6, 1),
         "gb_s": round(moved / times[len(times) // 2] / 1e9, 1),
     }), flush=True)
+    for name, m, n, k in QCELLS:
+        x, w = operands(mx.bfloat16, m, n, k, False, True)
+        wq, scales, biases = mx.quantize(w.T, group_size=64, bits=4)
+        mx.eval(wq, scales, biases)
+
+        def run(x=x, wq=wq, scales=scales, biases=biases):
+            return mx.quantized_matmul(x, wq, scales, biases, transpose=True,
+                                       group_size=64, bits=4)
+
+        times = timed(run)
+        out = run().astype(mx.float32)
+        mx.eval(out)
+        print(json.dumps({
+            "k": "time", "cell": name, "m": m, "n": n, "kdim": k,
+            "median_us": round(times[len(times) // 2] * 1e6, 1),
+            "tflops": round(2.0 * m * n * k / times[len(times) // 2] / 1e12, 3),
+            "out_sha": hashlib.sha256(bytes(memoryview(out))).hexdigest()[:16],
+        }), flush=True)
 
 
 def timed(fn):
