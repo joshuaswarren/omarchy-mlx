@@ -39,6 +39,19 @@ _has_fast_op = hasattr(mx.fast, "bonsai_q1_affine_qmv")
 # it passes on a wheel built without mlx-fast-bonsai-qmv.patch.
 # OMARCHY_BONSAI_GATE=1 (exported by the gpu-turn ticket scripts) turns
 # the missing-op condition into a hard failure instead of a skip.
+def _gpu_available():
+    """mx.gpu is a DeviceType enum on mlx (no is_available); probe by
+    evaluating one element on the gpu device."""
+    try:
+        prev = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        mx.eval(mx.array(np.zeros(1)))
+        mx.set_default_device(prev)
+        return True
+    except Exception:
+        return False
+
+
 _GATE = os.environ.get("OMARCHY_BONSAI_GATE") == "1"
 _BONSAI_OPS = ("bonsai_q1_affine_qmv", "bonsai_qmv_wide", "bonsai_q1_dequantize")
 
