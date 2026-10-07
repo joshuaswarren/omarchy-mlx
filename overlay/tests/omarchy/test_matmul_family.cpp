@@ -693,21 +693,27 @@ TEST_CASE("direct matmul route: first matching row wins, else the shipped route"
 
 TEST_CASE("direct matmul route: the shipped rows apply only on the measured chips") {
   using omarchy::ComputeKernel;
-  const omarchy::DirectMatmulRoute shipped{ComputeKernel::MatmulDirectF16Nn, 64u};
-  auto kernel = [&](std::string_view device, bool a_t, bool b_t) {
+  const omarchy::DirectMatmulRoute shipped{ComputeKernel::Count, 0u};
+  auto kernel = [&](std::string_view device, Dtype dtype, bool a_t, bool b_t) {
     return omarchy::select_direct_matmul_route(
-        omarchy::kDirectMatmulRows, device, float16, a_t, b_t, 4096u, 4096u,
+        omarchy::kDirectMatmulRows, device, dtype, a_t, b_t, 4096u, 4096u,
         shipped).kernel;
   };
   for (std::string_view chip : {"Apple M1 (G13G B1)", "Apple M1 Max (G13C C0)"}) {
-    CHECK(kernel(chip, false, true) == ComputeKernel::MatmulDirectF16NtK4S8);
-    CHECK(kernel(chip, true, false) == ComputeKernel::MatmulDirectF16TnWS8);
-    CHECK(kernel(chip, false, false) == shipped.kernel);
+    CHECK(kernel(chip, float16, false, true) == ComputeKernel::MatmulDirectF16NtK4S8);
+    CHECK(kernel(chip, float16, true, false) == ComputeKernel::MatmulDirectF16TnWS8);
+    CHECK(kernel(chip, float16, false, false) == shipped.kernel);
+    CHECK(kernel(chip, bfloat16, true, false) == ComputeKernel::MatmulDirectBF16TnWS8);
+    CHECK(kernel(chip, float32, false, true) == ComputeKernel::MatmulDirectF32NtK4S8);
+    // No bf16 a @ b.T row: the direct gate then keeps MatmulBF16Coopmat.
+    CHECK(kernel(chip, bfloat16, false, true) == shipped.kernel);
   }
   // Device name the M2 Max reports (receipts/2026-10-04-hwprobe-device-info).
-  for (bool a_t : {false, true}) {
-    for (bool b_t : {false, true}) {
-      CHECK(kernel("Apple M2 Max (G14C B1)", a_t, b_t) == shipped.kernel);
+  for (Dtype dtype : {float16, bfloat16, float32}) {
+    for (bool a_t : {false, true}) {
+      for (bool b_t : {false, true}) {
+        CHECK(kernel("Apple M2 Max (G14C B1)", dtype, a_t, b_t) == shipped.kernel);
+      }
     }
   }
 }

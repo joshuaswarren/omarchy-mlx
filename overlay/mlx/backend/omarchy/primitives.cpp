@@ -785,10 +785,19 @@ void dispatch_matmul(
       dtype_kernel == omarchy::ComputeKernel::MatmulF16 ? float16
       : dtype_kernel == omarchy::ComputeKernel::MatmulBF16 ? bfloat16
                                                            : float32;
+  // bf16 with a transposed rhs takes the direct route only through a route
+  // row: the k1 direct kernel lost to MatmulBF16Coopmat for a @ b.T on the
+  // M1 Max (MatmulGap H13).
+  const bool direct_bf16_nt_row = direct_dtype != bfloat16 || !b_transposed ||
+      omarchy::select_direct_matmul_route(
+          omarchy::kDirectMatmulRows, caps.device_name, bfloat16, a_transposed,
+          true, params.matrix_m, params.matrix_n,
+          {omarchy::ComputeKernel::Count, 0u})
+              .kernel != omarchy::ComputeKernel::Count;
   const bool direct_shape = direct_dtype == float16
       ? caps.cooperative_matrix_f16_8
       : direct_dtype == bfloat16
-      ? caps.cooperative_matrix_bf16_8
+      ? caps.cooperative_matrix_bf16_8 && direct_bf16_nt_row
       : dtype_kernel == omarchy::ComputeKernel::MatmulF32;
   const bool direct = !sdpa && !use_c &&
       causal.second == CausalSkip::None && caps.cooperative_matrix_f32_8 &&
