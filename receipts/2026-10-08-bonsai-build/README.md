@@ -132,13 +132,57 @@ shader compiler accepts GL_EXT_bfloat16 (the configure-time probe
 decides), so a glslang-12 runner checks the disabled state; glslc
 coverage comes from the jw16 gate builds.
 
-## Task B — jw16 build + GPU parity (pending GLM window)
+## Task B leg 1 — CPU build + ctest on jwm1 (done 2026-10-07); wheel blocked on bundle
 
-Blocked until the cluster window closes. Then: CPU build of libmlx.so +
-wheel via fill-run, then gpu-turn tickets for omarchy_primitive_tests,
-the Bonsai parity tests (ctest names from overlay/tests/omarchy), and
-the dispatch-touching subset of the standing M1 battery
-(omarchy_runtime_tests, omarchy_matmul_family_tests) against
-docs/numerics-gate.md. Root cause first on any failure; receipts need
-the full hardware fields (kernel, Mesa, ICD, commands, numerics,
-dispatch trace).
+Per Main's reroute (jw16 root 90% full): built on **jwm1** (Apple M1, T8103,
+chip G13G, aarch64, Omarchy aurora 12.3, kernel
+`7.1.12-2-12.3-sep-ARCH`, boot id `16f875bd-bbea-4a4b-af71-6ed0c7f1617c`,
+8 cores / 15 GiB). The three test binaries are destined for **jw16** (M1
+Max, T6001, G13C) — portable per Main (shader SPIR-V is embedded; mlx is
+linked into the binaries); both chips are stated here as required.
+
+- Source commit: `09da0917a5d0394bd9e4c0a4c42116aa5e08f818` (origin/main tip
+  at 2026-10-07T21:36Z).
+- Toolchain: GCC 16.1.1 (aarch64), cmake + ninja, glslc 2026.3 and glslang
+  16.4.0 (shader compilers), mesa 1:26.2.3, vulkan-icd-loader 1.4.357
+  (ICDs present: asahi, lvp, virtio — none exercised; CPU-only build, no
+  Vulkan device opened).
+- Exact command:
+  `CMAKE_BUILD_PARALLEL_LEVEL=4 nice -n 19 ionice -c3 bash repo/scripts/ticket_bonsai_cpu_build.sh ~/bonsai-build`
+  (`nice`/`ionice` because fill-run is absent on jwm1; verified with `which`).
+- Wall time: 21:36:56Z → 21:41:58Z = **5 m 02 s** (build + shaders + ctest;
+  1232/1232 ninja targets).
+- Peak RSS: **5415 MB** (10 s sampler over system used-memory; limit 15 GiB).
+- ctest (100%, 124.7 s total):
+  - `omarchy_runtime_tests` — Passed 38.80 s
+  - `omarchy_primitive_tests` — Passed 0.90 s
+  - `omarchy_matmul_family_tests` — Passed 85.0 s
+- Binary sha256 (identical after the dev-box relay and on jw16
+  `~/bonsai-run/`, copied with `scp -l 320000`):
+  - `32ecb234307e4c7f7c000ef2d6027a9c4762f9a7a154b6174e3e50b5692246dc`
+    omarchy_primitive_tests
+  - `9a8cecb130687bb91051dbd9e4bdb17e94b798532feb1e8f0ddf93ceb89d3c96`
+    omarchy_runtime_tests
+  - `bcf2dc4becb8b513e51a42dbfffd586dd3f907826a0cd54c778fba7e4729ec8e`
+    omarchy_matmul_family_tests
+- Compile diagnostics: 354 warnings, all the same class — GCC 16.1.1
+  deprecation of `std::atomic_load/atomic_exchange(shared_ptr*)` from
+  upstream `mlx/error.h` (pre-existing upstream code, warnings only).
+- Numerics: the three suites' internal expectations are the bar at this
+  stage; all pass. Op-level pytest parity bars and dispatch-trace evidence
+  require the wheel (below) and a GPU ticket — next legs, not yet run.
+
+**Wheel: blocked, by design.** `DEV_RELEASE=1 scripts/build-wheel.sh` on
+jwm1 refused at the bundle gate:
+
+```
+[bundle] runtime pin declares parakeet-encoder-whole but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset; refusing to build a wheel that would silently fall back
+```
+
+The pinned `parakeet-encoder-whole` bundle (458 MB, manifest + program-0.anec)
+was searched for and is staged on **none** of: jwm1, jw16 (`/var/tmp` and
+`~`), jw14m2 (`/var/tmp` and `~`), dev box (known absent since FamBonsai's
+2026-10-04 attempt). The op-level pytest suites (`tests/test_bonsai_*.py`)
+and the GPU tickets need that wheel; either the bundle's durable location is
+named and staged, or the pin changes. No fallback was attempted — the repo
+refuses silently-degraded wheels by design and so do these tickets.
