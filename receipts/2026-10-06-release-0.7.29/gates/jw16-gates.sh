@@ -56,7 +56,12 @@ step() { # step <name> <cmd...>
 
 echo "== stage 0: assets + tag tree ==" | log
 cd "$ASSETS_DIR"
-sha256sum -c --ignore-missing --quiet SHA256SUMS | log && echo "ASSETS_OK" | log \
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  f="$(echo "$line" | awk '{print $2}')"
+  [[ -f "$f" ]] || { echo "FAIL: staged asset missing: $f" | log; exit 1; }
+done < SHA256SUMS
+sha256sum -c --quiet SHA256SUMS | log && echo "ASSETS_OK" | log \
   || { echo "FAIL: assets do not match SHA256SUMS" | log; exit 1; }
 if [[ ! -d "$REPO/scripts/release-gates" ]]; then
   mkdir -p "$REPO"

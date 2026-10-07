@@ -86,6 +86,38 @@ tar -xf "$VENDOR_TAR" -C "$VW" --strip-components=1
 # vendored wheel with --no-deps (nothing pulls upstream mlx).
 "$VENV/bin/python" -m pip install --quiet --no-index --no-deps "$WHEEL"
 "$VENV/bin/python" -m pip install --quiet --no-index --no-deps "$VW"/*.whl
+# The vendor set must NOT carry an upstream mlx wheel that could shadow the
+# release wheel, and the installed mlx must be the release wheel's bytes
+# (dist version + libmlx sha against the wheel's RECORD).
+if compgen -G "$VW/mlx-*.whl" >/dev/null; then
+  echo "FAIL: vendor tar carries an upstream mlx wheel:" | log
+  ls "$VW"/mlx-*.whl | log
+  exit 1
+fi
+ls "$VW"/*.whl | log
+EXPECTED_MLX_VERSION="${WHEEL##*/mlx_omarchy-}"; EXPECTED_MLX_VERSION="${EXPECTED_MLX_VERSION%%-cp314*}"
+export EXPECTED_MLX_VERSION
+"$VENV/bin/python" - <<'EOF' | log
+import base64, hashlib, importlib.metadata as md, os, pathlib, sys
+import mlx
+expected = os.environ["EXPECTED_MLX_VERSION"]
+version = md.version("mlx_omarchy")
+site = pathlib.Path(mlx.__file__).resolve().parent.parent
+recs = list(site.glob("mlx_omarchy-*.dist-info/RECORD"))
+lib = site / "mlx" / "lib" / "libmlx.so"
+actual = hashlib.sha256(lib.read_bytes()).hexdigest()
+pinned = None
+if recs:
+    for line in recs[0].read_text().splitlines():
+        if line.startswith("mlx/lib/libmlx.so,"):
+            b64 = line.split(",")[1].split("=", 1)[1]
+            pinned = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).hex()
+ok_v = version == expected
+ok_h = pinned is not None and pinned == actual and lib.exists()
+print(f"MLX_PIN version={version} expected={expected} ok={ok_v}")
+print(f"MLX_PIN libmlx_sha={actual} record_sha={pinned} ok={ok_h}")
+sys.exit(0 if (ok_v and ok_h) else 1)
+EOF
 "$VENV/bin/python" -c 'import mlx, mlx_lm; print("mlx_lm", mlx_lm.__version__)' | log
 sudo install -m 644 "$RULE_SRC" "$RULE"
 sudo udevadm control --reload
@@ -104,7 +136,12 @@ elif [[ -f "$SCRIPT_DIR/../../tests/test_cpu_pd_hold.py" ]]; then
 else
   echo "FAIL: stage tests/test_cpu_pd_hold.py next to this script" | log; exit 1
 fi
-sudo "$VENV/bin/python" "$WORK/test_cpu_pd_hold.py" -v 2>&1 | tee "$WORK/tests.log" | tee -a "$RECEIPT"
+# H3: the live tests run under the SAME ticket/lock as the A/B leg. The rc is
+# captured, not piped under set -e: the strict pass/fail comes from the log
+# rules below (a skipped run is a FAIL, not a crash).
+set +e
+runner sudo "$VENV/bin/python" "$WORK/test_cpu_pd_hold.py" -v 2>&1 | tee "$WORK/tests.log" | tee -a "$RECEIPT"
+set -e
 grep -q "Ran 2 tests" "$WORK/tests.log" || { echo "FAIL: tests did not run (Ran 2 tests missing)" | log; exit 1; }
 grep -q "skipped" "$WORK/tests.log" && { echo "FAIL: tests were skipped" | log; exit 1; }
 grep -qE "^OK$" "$WORK/tests.log" && echo "HOLD_TESTS 2 run, 0 skipped, OK" | log \
