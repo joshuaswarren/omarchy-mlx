@@ -3541,6 +3541,13 @@ TEST_CASE("batched quantized_matmul matches host on every batch row") {
       {2, 64, 2048, 64, 4, bfloat16, "b2-t64-n2048"},
       {2, 1, 2048, 64, 4, bfloat16, "b2-t1-n2048-vec"},
       {4, 16, 16, 64, 4, bfloat16, "b4-t16-n16"},
+      // Named route pins (w7Q review): m=16 exercises the M16 FullN
+      // build, m=40 the 32-row X32 route, at the review shape
+      // (N=256, K=2048, distinct rows, B=2 and B=4).
+      {2, 16, 256, 64, 4, bfloat16, "b2-m16-n256-m16route"},
+      {4, 16, 256, 64, 4, bfloat16, "b4-m16-n256-m16route"},
+      {2, 40, 256, 64, 4, bfloat16, "b2-m40-n256-x32route"},
+      {4, 40, 256, 64, 4, bfloat16, "b4-m40-n256-x32route"},
   };
   if (float16_available()) {
     cases.push_back({4, 16, 6144, 64, 4, float16, "f16-b4-t16-n6144"});
