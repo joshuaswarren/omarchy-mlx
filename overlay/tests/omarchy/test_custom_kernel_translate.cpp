@@ -138,6 +138,27 @@ TEST_CASE("helper with threadgroup parameter that is never called is refused") {
   }
 }
 
+TEST_CASE("as_type<ushort> on a bf16 load indexes the pattern table") {
+  const char* source =
+      "[[kernel]] void mlxserve_table(\n"
+      "    const device bfloat16_t* gate [[buffer(0)]],\n"
+      "    const device uint16_t* sigtab [[buffer(1)]],\n"
+      "    device float* y [[buffer(2)]],\n"
+      "    uint thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint i = thread_position_in_grid;\n"
+      "  float g = gate[i];\n"
+      "  float sig = sigtab[as_type<ushort>(g)];\n"
+      "  y[i] = g * sig;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // The table index is the bf16 pattern of the value, not the widened
+  // float's 32-bit bits (floatBitsToUint would index out of the 65536-row
+  // table and read garbage activations).
+  CHECK(glsl.find("_mlx_float_to_bf16(") != std::string::npos);
+  CHECK(glsl.find("floatBitsToUint(gate") == std::string::npos);
+  CHECK(glsl.find("floatBitsToUint(_mlx_bf16_to_float(") == std::string::npos);
+}
+
 TEST_CASE("body threadgroup declarations become shared without helpers") {
   const char* source =
       "[[kernel]] void mlxserve_scratch(\n"

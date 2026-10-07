@@ -169,6 +169,49 @@ void translate_as_type(std::string& code);
 void translate_c_style_casts(std::string& code);
 
 void translate_types(std::string& code) {
+  // as_type<ushort>(bf16-derived value) is a 16-bit pattern bitcast: the
+  // operand's bfloat16 storage pattern, which the bf16 input rewrite has
+  // left as _mlx_bf16_to_float(...). Map it to _mlx_float_to_bf16 BEFORE
+  // the type table below narrows ushort to uint (which would emit
+  // floatBitsToUint on the widened float — a 32-bit index into a 65536-row
+  // per-dtype table; mlx-serve's fused SwiGLU sigmoid lookup, 2026-10-07).
+  // A 16-bit as_type on anything else is left alone and surfaces as the
+  // existing named refusal (as_type between mismatched sizes is invalid
+  // MSL anyway).
+  {
+    size_t bitcast_search = 0;
+    while (true) {
+      const auto marker = code.find("as_type<", bitcast_search);
+      if (marker == std::string::npos) {
+        break;
+      }
+      const auto open_angle = marker + 8;
+      const auto close_angle = code.find('>', open_angle);
+      if (close_angle == std::string::npos) {
+        break;
+      }
+      const auto destination =
+          trim(code.substr(open_angle, close_angle - open_angle));
+      const bool narrow16 = destination == "ushort" ||
+          destination == "short" || destination == "uint16_t" ||
+          destination == "int16_t";
+      const auto open_paren = code.find('(', close_angle + 1);
+      if (open_paren == std::string::npos) {
+        break;
+      }
+      const auto close_paren = matching_delimiter(code, open_paren, '(', ')');
+      const auto operand =
+          code.substr(open_paren + 1, close_paren - open_paren - 1);
+      if (narrow16 && operand.find("_mlx_bf16_to_float(") != std::string::npos) {
+        code.replace(
+            marker, close_paren - marker + 1,
+            "_mlx_float_to_bf16(" + operand + ")");
+        bitcast_search = marker;
+        continue;
+      }
+      bitcast_search = marker + 8;
+    }
+  }
   const std::vector<std::pair<std::string, std::string>> replacements = {
       {"float4", "vec4"},
       {"float3", "vec3"},
