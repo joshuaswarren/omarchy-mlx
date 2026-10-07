@@ -13232,6 +13232,18 @@ void rope_trig_gate(
       offset.detach_event();
     }
     worst_offset = std::abs(static_cast<float>(offset.item<int>()));
+  } else if (
+      offset.status() == array::Status::available && !offset.has_primitive() &&
+      offset.dtype() == int32 && offset.flags().row_contiguous) {
+    // A host-built per-batch offset (mx.array(list), as mlx_lm's
+    // BatchKVCache stores with MLX_OMARCHY_KV_HOST_OFFSET=1) has no
+    // producer on the queue, the same proof as the scalar branch: read it
+    // directly instead of reducing it on the device behind a host join.
+    const int32_t* values = offset.data<int32_t>();
+    worst_offset = 0.0f;
+    for (size_t i = 0; i < offset.size(); ++i) {
+      worst_offset = std::max(worst_offset, std::abs(static_cast<float>(values[i])));
+    }
   } else {
     array offset_worst =
         astype(max(abs(offset, stream), stream), float32, stream);
@@ -13285,7 +13297,16 @@ void RoPE::eval_gpu(
   // the case worth ~460 primitives per token, is forward with a
   // scalar offset and stays fused. Remove one conjunct per fixed
   // defect, with the equivalence test green.
-  if (!forward_ || offset.size() > 1) {
+  // MLX_OMARCHY_ROPE_VECTOR_OFFSET=1 (read per call, default off) sends a
+  // forward per-batch offset [B] to the fused kernel while its re-check runs
+  // on AGX: every batch row must match a scalar-offset call on that row bit
+  // for bit (test_fast_ops.cpp). The fallback's synchronize is a host join
+  // per call: 12 per step at B > 1 on Qwen3.8 (receipts/2026-10-07).
+  const bool vector_offset_fused = forward_ && offset.ndim() == 1 &&
+      offset.size() > 1 && offset.shape(0) == in.shape(0) &&
+      offset.dtype() == int32 &&
+      decode_path_override("MLX_OMARCHY_ROPE_VECTOR_OFFSET") == 1;
+  if (!forward_ || (offset.size() > 1 && !vector_offset_fused)) {
     auto result = fallback_(inputs);
     // Record-only settle: fallback nodes join the open batch, and the
     // synchronize below submits and orders the buffer handoff. A nested
