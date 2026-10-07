@@ -888,6 +888,17 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectF32Tt,
   MatmulDirectF16NtK4S8,
   MatmulDirectF16TnWS8,
+  MatmulDirectF32NtK4S8,
+  MatmulDirectF32NnK4S8,
+  MatmulDirectF32TnWS8,
+  // bf16 direct builds: only with GL_EXT_bfloat16 at build time and a
+  // driver with bf16 cooperative matrices (cooperative_matrix_bf16_8).
+  MatmulDirectBF16Nn,
+  MatmulDirectBF16Nt,
+  MatmulDirectBF16Tn,
+  MatmulDirectBF16Tt,
+  MatmulDirectBF16TnWS8,
+  MatmulDirectBF16NtK4S8,
   // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
   QmmVecQ4WordSubgroupBatch4BF16,
   Count,
