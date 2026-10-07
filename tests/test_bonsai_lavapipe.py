@@ -36,7 +36,20 @@ import mlx.core as mx
 _has_q1 = hasattr(mx.fast, "bonsai_q1_affine_qmv")
 _has_wide = hasattr(mx.fast, "bonsai_qmv_wide")
 _has_dequant = hasattr(mx.fast, "bonsai_q1_dequantize")
-_gpu = mx.gpu.is_available() if hasattr(mx.gpu, "is_available") else False
+def _gpu_available():
+    """mx.gpu is a DeviceType enum on real mlx (no is_available); probe by
+    evaluating one element on the gpu device."""
+    try:
+        prev = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        mx.eval(mx.array(np.zeros(1)))
+        mx.set_default_device(prev)
+        return True
+    except Exception:
+        return False
+
+
+_gpu = _gpu_available()
 
 # Same gate contract as test_bonsai_native.py: with OMARCHY_BONSAI_GATE=1
 # a missing bonsai op or a missing Vulkan device is a hard failure, not a

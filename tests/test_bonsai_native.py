@@ -54,6 +54,12 @@ class BonsaiGatePreconditions(unittest.TestCase):
                 "wheel was not built with mlx-fast-bonsai-qmv.patch; refusing "
                 "to report a pass that exercised no bonsai kernel" % missing
             )
+        if not _gpu_available():
+            self.fail(
+                "OMARCHY_BONSAI_GATE=1 but evaluating on mx.gpu failed; "
+                "the bonsai fast ops would silently ride the composed CPU "
+                "fallback instead of the dispatched kernel"
+            )
 
 # Bonsai 1-bit pack: byte e holds 8 codes [e*8, ..., e*8 + 7] in lane
 # bit i. Mirrors the oMLX _dequant_1bit bit order.
