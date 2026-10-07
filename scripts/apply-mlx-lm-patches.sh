@@ -133,10 +133,10 @@ python3 "$ROOT/scripts/patch-mlx-lm-ssm-maskless.py" "$VENV"
 # batches, prefill and outside writes keep the mask. Needs the ssm patch's
 # `import os`. Kill switch MLX_OMARCHY_KV_MASKLESS=0.
 python3 "$ROOT/scripts/patch-mlx-lm-kv-maskless.py" "$VENV"
-# oMLX decode host joins: BatchKVCache.offset is a lazy device array, so the
+# Batched decode host joins: BatchKVCache.offset is a lazy device array, so the
 # omarchy RoPE gate synchronizes before every RoPE call to bound it. A host
-# mirror tracks every in-class update; MLX_OMARCHY_KV_HOST_OFFSET=1 stores the
-# offset as a host-built array with the same values. Default off (A/B pending).
+# mirror tracks every in-class update and the offset is stored as a host-built
+# array with the same values. Kill switch MLX_OMARCHY_KV_HOST_OFFSET=0.
 python3 "$ROOT/scripts/patch-mlx-lm-kv-host-offset.py" "$VENV"
 apply mlx-lm-greedy-prune.patch
 # Greedy GenerationBatch steps (BatchGenerator / oMLX) can take the pruned

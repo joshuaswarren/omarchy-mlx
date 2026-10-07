@@ -2861,32 +2861,28 @@ TEST_CASE("fused rope vector and int64 offsets match the composed fallback") {
   Stream stream = gpu_stream();
   Shape shape{2, 2, 5, 16};
   array x = rope_input(shape, 151);
-  // Per-batch offsets: FENCED to the composition (the fused kernel's
-  // vector-offset leg failed equivalence on 2026-09-03), so this
-  // asserts the fence routes correctly - the result must equal the
-  // composed fallback exactly, element for element.
+  // Per-batch offsets with MLX_OMARCHY_ROPE_VECTOR_OFFSET=0 take the
+  // composition: the kill switch must route there, element for element.
   std::vector<int32_t> batch_offsets{3, 9};
   array offset_vec = array(batch_offsets.begin(), Shape{2}, int32);
+  setenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET", "0", 1);
+  array fenced =
+      fast::rope(x, 16, true, 10000.0f, 1.0f, offset_vec, std::nullopt, stream);
+  fenced.eval();
+  unsetenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET");
   require_bit_equal(
-      fast::rope(x, 16, true, 10000.0f, 1.0f, offset_vec, std::nullopt, stream),
+      fenced,
       composed_rope(
           x, 16, true, 10000.0f, 1.0f, offset_vec, std::nullopt, true,
           stream),
       stream,
-      "rope vector offset (fenced)");
+      "rope vector offset (kill switch)");
   // int64 offsets exercise the same kernel path through the
   // upstream wrapper's int32 cast. Cast-and-eval on the host produces the
   // same int32 offset the fused path sees, so this asserts only that the
   // wrapper round-trip is lossless, not that the kernel can read int64
   // directly. The omarchy backend does not currently carry an
   // int64-to-int32 device copy; mlx_lm passes int32 offsets in practice.
-  // TODO(per-batch-offset-debug): the per-batch offset leg fails
-  // 160 of 320 element checks (observed at float32, dims 16); the
-  // fused value differs from the composed value by up to 0.5 absolute.
-  // The scalar offset leg agrees bit-exactly on the same test fixture,
-  // so the issue tracks the host broadcast of a multi-element offset
-  // array into the per-batch reading. Deferred to a follow-up that
-  // compares outputs of each per-batch lane in isolation.
   std::vector<int32_t> from_host_int32{4};
   array offset32 = array(from_host_int32.begin(), Shape{1}, int32);
   // The scalar-offset leg stays fused; f32 rides the contraction
@@ -2900,23 +2896,20 @@ TEST_CASE("fused rope vector and int64 offsets match the composed fallback") {
       "rope int32 offset");
 }
 
-// MLX_OMARCHY_ROPE_VECTOR_OFFSET=1 sends a per-batch offset [B] to the fused
-// kernel instead of the fenced composition (one host join per call). The
-// contract: every batch row equals a scalar-offset call on that row, bit for
-// bit (same pipeline, same per-element arithmetic), in the same dispatch count
-// as that scalar call. Covers float32 and bfloat16, both rotation styles, full
-// and partial rotation (dims < D: the passthrough branch), the contiguous
-// [B, H, T, D] layout and the attention layout ([B, T, H, D] transposed), and
-// the fused rope_rms_norm leg Qwen3.8 decode takes (head_dim 256, dims 64).
-TEST_CASE("opt-in fused rope vector offsets match per-row scalar calls") {
+// Per-batch offsets [B] take the fused kernel by default (the composition
+// cost one host join per call). The contract: every batch row equals a
+// scalar-offset call on that row, bit for bit (same pipeline, same
+// per-element arithmetic), in the same dispatch count as that scalar call.
+// Covers float32 and bfloat16, both rotation styles, full and partial
+// rotation (dims < D: the passthrough branch), the contiguous [B, H, T, D]
+// layout and the attention layout ([B, T, H, D] transposed), and the fused
+// rope_rms_norm leg Qwen3.8 decode takes (head_dim 256, dims 64).
+TEST_CASE("fused rope vector offsets match per-row scalar calls") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
-  struct VectorOffsetOn {
-    VectorOffsetOn() { setenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET", "1", 1); }
-    ~VectorOffsetOn() { unsetenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET"); }
-  } on;
+  unsetenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET");
   constexpr int B = 4;
   constexpr int H = 2;
   const std::vector<int32_t> offsets{3, 9, 0, 250};
