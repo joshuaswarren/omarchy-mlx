@@ -474,7 +474,6 @@ omarchy_shader(matmul_direct_f32_tn shaders/matmul_coopmat_direct.comp -DUSE_F32
 omarchy_shader(matmul_direct_f32_tt shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DA_T=1 -DB_T=1)
 omarchy_shader(matmul_direct_f16_tn_ws8 shaders/matmul_coopmat_direct.comp -DA_T=1 -DWIDE_N=1 -DSWIZZLE_ROWS=8)
 omarchy_shader(matmul_direct_f16_nt_k4s8 shaders/matmul_coopmat_direct.comp -DB_T=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
-omarchy_shader(matmul_direct_f16_nn_ws8 shaders/matmul_coopmat_direct.comp -DWIDE_N=1 -DSWIZZLE_ROWS=8)
 omarchy_shader(swiglu_f16 shaders/swiglu.comp -DUSE_FP16=1)
 omarchy_shader(swiglu_bf16 shaders/swiglu.comp -DUSE_BF16=1)
 omarchy_shader(silu_f16 shaders/swiglu.comp -DUSE_FP16=1 -DSILU_ONLY=1)
