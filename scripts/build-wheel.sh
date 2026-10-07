@@ -124,6 +124,14 @@ mkdir -p "$DIST_DIR"
 # setup.py appends CMAKE_ARGS to its cmake invocation; it splits the value on
 # spaces, so keep each -D flag space separated.
 export CMAKE_ARGS="-DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF"
+# MLX finds lapacke.h only in /usr/include and /usr/local/include. Arch Linux
+# ARM ships it with OpenBLAS in /usr/include/openblas (libopenblas also
+# carries the LAPACKE symbols), so configure fails there with
+# LAPACK_INCLUDE_DIRS-NOTFOUND unless the directory is passed in.
+if [[ ! -f /usr/include/lapacke.h && ! -f /usr/local/include/lapacke.h &&
+      -f /usr/include/openblas/lapacke.h ]]; then
+  export CMAKE_ARGS="$CMAKE_ARGS -DLAPACK_INCLUDE_DIRS=/usr/include/openblas"
+fi
 if [[ -n "${MLX_OMARCHY_ANE_SOURCE_DIR:-}" ]]; then
   [[ -d "$MLX_OMARCHY_ANE_SOURCE_DIR" ]] || {
     echo "ERROR: MLX_OMARCHY_ANE_SOURCE_DIR is not a directory" >&2
