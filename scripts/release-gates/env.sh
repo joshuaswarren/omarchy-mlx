@@ -79,20 +79,23 @@ gate_require_asset() { # gate_require_asset <path> <description>
 }
 # gate_ensure_install_tree — clone the tag into $INSTALL_TREE (default
 # $GATE_ROOT/$TAG-worktree) and assert HEAD == $TAG_SHA. Idempotent: if the
-# tree is already at the right sha, leave it. The "no manual staging" entry
-# point called by g7b.
+# tree is already at the right sha, leave it. Otherwise re-clone: an
+# extracted tarball (no .git/) or a stale tree is replaced by a fresh
+# clone so the HEAD assert is meaningful every time. The "no manual
+# staging" entry point called by g7b.
 gate_ensure_install_tree() {
   : "${TAG_SHA:?TAG_SHA is required: full 40-char commit sha the tag points at}"
   : "${INSTALL_TREE:=$GATE_ROOT/${TAG}-worktree}"
   local want_head
   want_head="$TAG_SHA"
-  if [[ ! -f "$INSTALL_TREE/install.sh" ]]; then
+  local got
+  got="$(git -C "$INSTALL_TREE" rev-parse HEAD 2>/dev/null || echo absent)"
+  if [[ "$got" != "$want_head" ]]; then
     rm -rf "$INSTALL_TREE"
     git clone --depth 1 --branch "$TAG" \
       https://github.com/joshuaswarren/omarchy-mlx "$INSTALL_TREE" || return 1
+    got="$(git -C "$INSTALL_TREE" rev-parse HEAD 2>/dev/null || echo absent)"
   fi
-  local got
-  got="$(git -C "$INSTALL_TREE" rev-parse HEAD 2>/dev/null || echo absent)"
   [[ "$got" == "$want_head" ]] || {
     echo "REFUSING: INSTALL_TREE HEAD $got != TAG_SHA $want_head" >&2
     return 1
