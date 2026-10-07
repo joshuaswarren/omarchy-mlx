@@ -1,0 +1,21 @@
+{
+  "gate": "g17-patch-series",
+  "apply_script": "$HOME/v0.7.30-gates/v0.7.31-worktree/scripts/apply-mlx-lm-patches.sh",
+  "results": {
+    "0.31.3": {
+      "version": "0.31.3",
+      "download_rc": 0,
+      "apply1_rc": 0,
+      "apply2_rc": 0,
+      "pass": true
+    },
+    "0.32.0": {
+      "version": "0.32.0",
+      "download_rc": 0,
+      "apply1_rc": 0,
+      "apply2_rc": 0,
+      "pass": true
+    }
+  },
+  "pass": true
+}

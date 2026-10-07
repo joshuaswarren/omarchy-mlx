@@ -1,0 +1,119 @@
+BEGIN 2026-10-07T15:34:41Z tag=v0.7.31 boot_id=022f601c-c945-488a-ac10-b408c59b7091 uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+FETCH_EXIT 0
+[1;32m==>[0m Installing mlx-omarchy v0.7.31 (pinned by MLX_OMARCHY_VERSION)
+[1;32m==>[0m Installing runtime packages (lapack, blas, openblas)
+[1;32m==>[0m Fetching v0.7.31 checksums
+[1;32m==>[0m Fetching mlx_omarchy-0.32.4.dev202610071347+9b5c938-cp314-cp314-linux_aarch64.whl
+[1;32m==>[0m Creating $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv
+[1;32m==>[0m Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)
+mlx-lm patch series: patches
+patching file mlx_lm/server.py
+Hunk #1 succeeded at 147 (offset -3 lines).
+applied: mlx-lm-tool-call-arguments.patch
+patching file mlx_lm/tool_parsers/qwen3_coder.py
+Hunk #1 succeeded at 44 (offset -1 lines).
+applied: mlx-lm-qwen3-coder-untyped-args.patch
+patching file mlx_lm/server.py
+Hunk #1 succeeded at 1191 (offset 2 lines).
+Hunk #2 succeeded at 1233 (offset 2 lines).
+applied: mlx-lm-max-tokens-min-one.patch
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-gated-delta-fast-route.patch
+patching file mlx_lm/models/gated_delta.py
+Hunk #1 succeeded at 278 (offset -2 lines).
+applied: mlx-lm-gated-delta-fast-route-repeat.patch
+patching file mlx_lm/models/gated_delta.py
+Hunk #1 succeeded at 290 (offset 9 lines).
+applied: mlx-lm-gated-delta-raw.patch
+patched: $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx_lm/models/cache.py (mlx-lm 0.31.3)
+kv-maskless/kv-host-offset: 0.32 series only; skipped on patches
+patching file mlx_lm/generate.py
+applied: mlx-lm-greedy-prune.patch
+batch-greedy-head: 0.32 series only (no GenerationBatch); skipped on patches
+patching file mlx_lm/models/qwen3_5.py
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-qk-scaled.patch
+patching file mlx_lm/models/qwen3_5.py
+applied: mlx-lm-qwen35-gdn-conv.patch
+patching file mlx_lm/models/qwen3_5.py
+Hunk #1 succeeded at 167 (offset -4 lines).
+applied: mlx-lm-conv-silu.patch
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-gated-norm.patch
+patching file mlx_lm/generate.py
+applied: mlx-lm-ttft-early-submit.patch
+conv-ring: OFF (set MLX_OMARCHY_CONV_RING=1 to enable)
+patching file mlx_lm/models/qwen3_5.py
+Hunk #2 succeeded at 313 (offset -3 lines).
+applied: mlx-lm-last-logits.patch
+patched: $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py
+patched: $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py
+patched: $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3.py
+patched: $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py
+[1;32m==>[0m Installing launchers into $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/bin
+[1;32m==>[0m Installing serve CLI
+note: to register 'omarchy mlx serve' in the system command center, run:
+  sudo install -m 755 $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/bin/omarchy-mlx-serve /usr/bin/omarchy-mlx-serve
+note: mlx-omarchy-serve works right now without that step.
+[1;32m==>[0m Installing MLX Chat
+[1;32m==>[0m Smoke test
+  device: Apple M2 Max (G14C B1)
+  mlx-omarchy 0.32.4.dev202610071347+9b5c938: matmul OK
+[1;32m==>[0m ANE smoke
+  ANE fdt: yes compatible=apple,t6021-ane
+  ANE module: yes (37ffb57)
+  ANE accel0: yes
+  ANE smoke OK
+[1;32m==>[0m Done.
+  Open MLX Chat:       mlx-omarchy-chat      (also in the Omarchy app launcher as 'MLX Chat')
+  Terminal chat:       mlx-omarchy-demo      (the same local coordinator, no browser)
+  Use in your scripts: mlx-omarchy your_script.py   (import mlx.core as mx)
+  Serve a model:       mlx-omarchy-serve     (also 'omarchy mlx serve' when registered)
+  Voice:               bash install.sh --voice   (adds local speech input and read-aloud deps)
+  Remove everything:   bash install.sh --uninstall
+  note: $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/bin is not on your PATH in this shell; open a new terminal or add it.
+INSTALL_EXIT 0 2026-10-07T15:35:06Z
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 expected=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+usage: mlx-omarchy-assistant [-h] [--home HOME] [--port PORT] [--no-browser]
+                             [--terminal] [--prompt PROMPT] [--once]
+                             [--max-tokens MAX_TOKENS]
+                             [--pair {everyday,quality,compact}] [--resume]
+                             [--yes]
+
+Local MLX Chat and typed decisions
+
+options:
+  -h, --help            show this help message and exit
+  --home HOME
+  --port PORT
+  --no-browser
+  --terminal
+  --prompt PROMPT
+  --once
+  --max-tokens MAX_TOKENS
+                        explicit output allowance; otherwise size it for the
+                        task
+  --pair {everyday,quality,compact}
+  --resume              load the saved pair at login and keep both models
+                        resident
+  --yes                 approve downloading the explicitly selected pair
+LAUNCHER_HELP_EXIT 0
+serve entry imports OK
+SERVE_ENTRY_EXIT 0
+PARAKEET_LAUNCHER staged
+usage: mlx-omarchy-parakeet [-h] {download,verify,transcribe} ...
+
+positional arguments:
+  {download,verify,transcribe}
+    download            fetch and verify the pinned reference
+    verify              verify the cache against the lock and pin, then run
+                        the golden e2e (pinned fixture) where the ANE runtime
+                        exists
+    transcribe          mel, ANE encoder and TDT over 16 kHz mono audio; the
+                        pinned fixture additionally runs the golden pin checks
+
+options:
+  -h, --help            show this help message and exit
+PARAKEET_LAUNCHER_HELP_EXIT 0
+mlx-omarchy-chat.service
+GATE1_DONE
