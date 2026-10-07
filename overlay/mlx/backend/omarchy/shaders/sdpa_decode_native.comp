@@ -189,6 +189,14 @@ void main() {
   uint repeats = params.matrix_m / params.matrix_n;
   uint kv_head = head / repeats;
   uint k_len = params.matrix_k;
+  // Batched decode: workgroup z is the batch row. Element offsets of that
+  // row: q out_strides[2], k lhs_size, v rhs_size, out out_strides[3]
+  // (all zero at batch 0, so a single-row dispatch reads what it always did).
+  uint batch = gl_WorkGroupID.z;
+  uint q_batch = params.lhs_offset + batch * params.out_strides[2];
+  uint k_batch = params.rhs_offset + batch * params.lhs_size;
+  uint v_batch = params.aux_offset + batch * params.rhs_size;
+  uint o_batch = params.output_offset + batch * params.out_strides[3];
 #ifdef SDPA_ROWS
   // Multi-token verify rows: workgroup (head, row). The row's causal
   // bound turns every scan below into exactly the single-query arm's
@@ -207,11 +215,11 @@ void main() {
   if (thread < SDPA_DIM) {
 #ifdef SDPA_ROWS
     s_qrow[thread] = params.alpha * bf16_load(
-        query_data.values[params.lhs_offset + head * params.shape[0] +
+        query_data.values[q_batch + head * params.shape[0] +
             row * params.out_strides[0] + thread * params.shape[3]]);
 #else
     s_qrow[thread] = params.alpha * bf16_load(
-        query_data.values[params.lhs_offset +
+        query_data.values[q_batch +
             head * params.shape[0] + thread * params.shape[3]]);
 #endif
   }
@@ -219,7 +227,7 @@ void main() {
 
   // Scores over every key: ascending-d accumulation, matmul.comp order.
   for (uint key = thread; key < key_end; key += 1024u) {
-    uint k_base = params.rhs_offset + kv_head * params.shape[1] +
+    uint k_base = k_batch + kv_head * params.shape[1] +
         key * params.shape[2];
     float accumulator = 0.0;
     // Loads are independent of the accumulator chain: issue 16 K elements
@@ -291,7 +299,7 @@ void main() {
     uint d = thread;
     float accumulator = 0.0;
     uint key = 0u;
-    uint v_base = params.aux_offset + kv_head * params.in_strides[1] +
+    uint v_base = v_batch + kv_head * params.in_strides[1] +
         d * params.in_strides[3];
     // Whole 16-key tiles: 16 independent V loads first, then the 16 in-order
     // FMAs (a 64-key block spilled the load registers and was 9x slower).
@@ -308,7 +316,7 @@ void main() {
     for (uint index = 0u; index < 16u; ++index) {
       float prob = key < key_end ? s_stream[key] : 0.0;
       float value16 = key < key_end ? bf16_load(
-          value_data.values[params.aux_offset +
+          value_data.values[v_batch +
               kv_head * params.in_strides[1] +
               key * params.in_strides[2] +
               d * params.in_strides[3]]) : 0.0;
@@ -316,10 +324,10 @@ void main() {
       ++key;
     }
 #ifdef SDPA_ROWS
-    output_data.values[params.output_offset + head * params.shape[0] +
+    output_data.values[o_batch + head * params.shape[0] +
         row * SDPA_DIM + d] = bf16_store(1.0 * accumulator);
 #else
-    output_data.values[params.output_offset + head * SDPA_DIM + d] =
+    output_data.values[o_batch + head * SDPA_DIM + d] =
         bf16_store(1.0 * accumulator);
 #endif
   }

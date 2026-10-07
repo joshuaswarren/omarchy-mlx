@@ -13794,9 +13794,17 @@ void ScaledDotProductAttention::eval_gpu(
       do_causal_ && batch == 1 && q_len >= 2 && q_len <= 16 &&
       head_dim == 128 && v_dim == head_dim && k_len >= q_len &&
       k_len <= kDecodeBf16StreamKeys;
+  // Batched decode (q_len 1, bf16, one-pass): workgroup z walks the batch
+  // with per-row base offsets; each row runs the single-row arithmetic, so
+  // B > 1 stays bit-identical to the composed route it replaces.
+  // MLX_OMARCHY_SDPA_DECODE_BATCH=0 restores the batch == 1 gate.
+  static const bool sdpa_decode_batch =
+      decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0;
+  const bool decode_batch_ok = batch == 1 ||
+      (sdpa_decode_batch && decode_bf16_probe && q_len == 1);
   if ((decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
       decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
-      !output_logsumexp_ && batch == 1 &&
+      !output_logsumexp_ && decode_batch_ok &&
       (q_len == 1 || sdpa_rows_route) &&
       (q.dtype() == float16 || q.dtype() == bfloat16) &&
       ((q.dtype() == float16 &&
@@ -13958,11 +13966,19 @@ void ScaledDotProductAttention::eval_gpu(
           static_cast<uint32_t>(q_len));
       return;
     }
+    // Batch strides for workgroup z: q out_strides[2], k lhs_size, v
+    // rhs_size, out out_strides[3]. Batch 1 dispatches z = 0 only.
+    params.out_strides[2] = checked_u32(q.strides()[0], tag, out);
+    params.out_strides[3] = checked_u32(out.strides()[0], tag, out);
+    params.lhs_size = checked_u32(k.strides()[0], tag, out);
+    params.rhs_size = checked_u32(v.strides()[0], tag, out);
     encoder.dispatch_compute(
         one_pass_kernel(),
         bindings,
         params,
-        params.matrix_m);
+        params.matrix_m,
+        1u,
+        static_cast<uint32_t>(batch));
     return;
   }
   // Flash-style bf16 prefill for long sequences (H3 joint attention:
