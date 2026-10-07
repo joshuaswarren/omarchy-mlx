@@ -31,10 +31,14 @@ serving, and speech to text, with no macOS and no cloud account.
   `serve` commands, memory admission, and approve-first model
   downloads. The same install ships the Laya typed-decision server and
   the Bonsai2 packed-runtime server.
-- Core ML on the Neural Engine. `mlx-omarchy-parakeet` transcribes
-  audio (`download`, `verify`, `transcribe`). `mlx-omarchy-coreml`
+- Core ML on the Neural Engine. `mlx-omarchy-parakeet` transcribes audio
+  (`download`, `verify`, `transcribe`). `mlx-omarchy-coreml`
   inspects a Core ML package. The aarch64 wheel ships the ANE worker
   and the pinned Parakeet encoder bundles.
+- An opt-in wake word. `mlx-omarchy-assistant --wake-word hey_jarvis`
+  listens through openWakeWord ONNX models on the CPU (SHA-256-pinned
+  files, downloaded once on first use) and hands the microphone to the
+  chat when it hears the phrase. It is off by default.
 
 Chat models download from Hugging Face the first time you use them. You
 approve each download first. The default pairs: Everyday is Qwen3.5-9B

@@ -173,6 +173,15 @@ export function buildComposer({
     latch = false;
   }
 
+  // Wake-word path: open the mic the way the latch does, hands-free. The
+  // recorder's silence auto-stop ends the turn; the normal stop UI applies.
+  async function startHandsFree() {
+    if (micBtn.disabled || latch || (isRecording && isRecording())) return false;
+    latch = true;
+    await startMic();
+    return true;
+  }
+
   const convToggle = el("label", { class: "setup__checkbox conv-toggle" },
     el("input", { type: "checkbox", id: "conv-mode" }),
     el("span", { class: "conv-toggle__label" }, "Conversation mode"),
@@ -363,7 +372,7 @@ export function buildComposer({
 
   return { wrap, setText, currentText, setBusy, setSpeaking, setVoiceStates,
            prefillCompare,
-           resetMicUi, setMicNotice,
+           resetMicUi, setMicNotice, startHandsFree,
            focus: () => textarea.focus(), closeComparePanel };
 }
 

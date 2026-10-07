@@ -412,6 +412,13 @@ if (( VOICE )); then
     "scipy>=1.10.0" "sounddevice>=0.5.3" "tqdm>=4.67.1" "transformers>=5.14.0" \
     "misaki==0.7.4" "num2words==0.5.14" "spacy>=3.8.0" "phonemizer>=3.2.1" \
     "espeakng-loader==0.2.4"
+  # Wake word (--wake-word, off by default): openwakeword goes in with
+  # --no-deps because its legacy runtime requirement has no wheel for
+  # this interpreter and the ONNX inference path never imports it.
+  # The verified ONNX-path floors are onnxruntime, requests, scikit-learn,
+  # scipy (above), numpy (above), and tqdm (above).
+  "$VENV/bin/pip" install --quiet --no-deps "openwakeword==0.6.0"
+  "$VENV/bin/pip" install --quiet "onnxruntime>=1.17.0" "requests>=2.31.0" "scikit-learn>=1.3.0"
   "$VENV/bin/pip" install --quiet \
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 fi
@@ -556,7 +563,7 @@ fi
 say "Installing MLX Chat"
 ASSISTANT_PKG="$PREFIX/mlx_omarchy_assistant"
 mkdir -p "$ASSISTANT_PKG/static/css" "$ASSISTANT_PKG/static/js/worklet"
-for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_worker.py; do
+for assistant_file in __init__.py __main__.py card_promotion.py routing.py coordinator.py history.py server.py pairs.py managed.py transfer.py components.py theme.py recognition.py synthesis.py kokoro_stream.py kokoro_gen_stats.npz speech_yield.py gpu_stt.py gpu_stt_worker.py wake_word.py; do
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/$assistant_file" \
     -o "$ASSISTANT_PKG/$assistant_file"
 done

@@ -452,6 +452,14 @@ class AssistantInstallTests(unittest.TestCase):
                       '"scipy>=1.10.0"', '"sounddevice>=0.5.3"', '"tqdm>=4.67.1"',
                       '"transformers>=5.14.0"'):
             self.assertIn(floor, voice_section, f"missing voice dependency {floor}")
+        # Wake word: openwakeword installs --no-deps (its tflite-runtime
+        # declaration has no wheel here and the ONNX path never imports it);
+        # the verified ONNX-path floors must be pinned explicitly.
+        self.assertIn('--no-deps "openwakeword==0.6.0"', voice_section)
+        for floor in ('"onnxruntime>=1.17.0"', '"requests>=2.31.0"',
+                      '"scikit-learn>=1.3.0"'):
+            self.assertIn(floor, voice_section, f"missing wake word dependency {floor}")
+        self.assertNotIn("tflite", voice_section)
         # mlx-audio declares an mlx requirement; the custom wheel satisfies
         # it. Any pip install of upstream mlx here would clobber the vendored
         # build.
