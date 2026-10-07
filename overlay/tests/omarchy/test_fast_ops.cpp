@@ -2904,9 +2904,10 @@ TEST_CASE("fused rope vector and int64 offsets match the composed fallback") {
 // kernel instead of the fenced composition (one host join per call). The
 // contract: every batch row equals a scalar-offset call on that row, bit for
 // bit (same pipeline, same per-element arithmetic), in the same dispatch count
-// as that scalar call. Covers float32 and bfloat16, both rotation styles, the
-// contiguous [B, H, T, D] layout and the attention layout ([B, T, H, D]
-// transposed), and the fused rope_rms_norm leg Qwen3.8 decode takes.
+// as that scalar call. Covers float32 and bfloat16, both rotation styles, full
+// and partial rotation (dims < D: the passthrough branch), the contiguous
+// [B, H, T, D] layout and the attention layout ([B, T, H, D] transposed), and
+// the fused rope_rms_norm leg Qwen3.8 decode takes (head_dim 256, dims 64).
 TEST_CASE("opt-in fused rope vector offsets match per-row scalar calls") {
   if (!compute_available()) {
     return;
@@ -2945,22 +2946,25 @@ TEST_CASE("opt-in fused rope vector offsets match per-row scalar calls") {
     for (bool traditional : {false, true}) {
       for (bool attention_layout : {false, true}) {
         for (int T : {1, 3}) {
-          CAPTURE(dtype);
-          CAPTURE(traditional);
-          CAPTURE(attention_layout);
-          CAPTURE(T);
-          array x = input(T, 16, attention_layout, dtype, 160 + T);
-          auto rope = [&](const array& in, const array& off) {
-            return fast::rope(in, 16, traditional, 10000.0f, 1.0f, off, std::nullopt, stream);
-          };
-          array out = rope(x, offset_vec);
-          uint64_t vector_dispatches = dispatches([&] { return rope(x, offset_vec); });
-          for (int b = 0; b < B; ++b) {
-            CAPTURE(b);
-            array one = row(x, b);
-            array scalar = array(offsets[b], int32);
-            CHECK_EQ(vector_dispatches, dispatches([&] { return rope(one, scalar); }));
-            require_bit_equal(row(out, b), rope(one, scalar), stream, "rope vector offset row");
+          for (int dims : {16, 8}) {
+            CAPTURE(dtype);
+            CAPTURE(traditional);
+            CAPTURE(attention_layout);
+            CAPTURE(T);
+            CAPTURE(dims);
+            array x = input(T, 16, attention_layout, dtype, 160 + T);
+            auto rope = [&](const array& in, const array& off) {
+              return fast::rope(in, dims, traditional, 10000.0f, 1.0f, off, std::nullopt, stream);
+            };
+            array out = rope(x, offset_vec);
+            uint64_t vector_dispatches = dispatches([&] { return rope(x, offset_vec); });
+            for (int b = 0; b < B; ++b) {
+              CAPTURE(b);
+              array one = row(x, b);
+              array scalar = array(offsets[b], int32);
+              CHECK_EQ(vector_dispatches, dispatches([&] { return rope(one, scalar); }));
+              require_bit_equal(row(out, b), rope(one, scalar), stream, "rope vector offset row");
+            }
           }
         }
       }
@@ -2968,13 +2972,14 @@ TEST_CASE("opt-in fused rope vector offsets match per-row scalar calls") {
   }
   // The fused rope + RMSNorm leg (mx.fast.rope_rms_norm), bf16, the Qwen3.8
   // decode layout: q/k come from a [B, 1, H, D] projection, transposed.
-  for (int D : {64, 256}) {
+  for (auto [D, dims] : {std::pair{64, 64}, std::pair{256, 256}, std::pair{256, 64}}) {
     CAPTURE(D);
-    array x = input(1, D, true, bfloat16, 170 + D);
+    CAPTURE(dims);
+    array x = input(1, D, true, bfloat16, 170 + D + dims);
     array w = astype(rope_input(Shape{D}, 180 + D), bfloat16, stream);
     w.eval();
     auto rope_norm = [&](const array& in, const array& off) {
-      return fast::rope_rms_norm(in, D, w, 1e-6f, false, 10000.0f, 1.0f, off, stream);
+      return fast::rope_rms_norm(in, dims, w, 1e-6f, false, 10000.0f, 1.0f, off, stream);
     };
     array out = rope_norm(x, offset_vec);
     uint64_t vector_dispatches = dispatches([&] { return rope_norm(x, offset_vec); });
