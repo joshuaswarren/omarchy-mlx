@@ -1,0 +1,13 @@
+B=2 m=16 N=256 default: batched=[  0.4894 305.0635] flat_max=0.4979 bad=[1] FAIL
+B=4 m=16 N=256 default: batched=[  0.4935 375.8795 331.6058 307.5633] flat_max=0.4994 bad=[1, 2, 3] FAIL
+B=2 m=128 N=2048 default: batched=[  0.8336 395.4745] flat_max=0.9989 bad=[1] FAIL
+B=4 m=128 N=2048 default: batched=[  0.9077 438.1098 372.7805 388.707 ] flat_max=0.9216 bad=[1, 2, 3] FAIL
+B=2 m=128 N=2048 MLX_OMARCHY_QMM_TWON=1: batched=[  0.8336 395.4745] flat_max=0.9989 bad=[1] FAIL
+B=4 m=128 N=2048 MLX_OMARCHY_QMM_TWON=1: batched=[  0.9077 438.1098 372.7805 388.707 ] flat_max=0.9216 bad=[1, 2, 3] FAIL
+RESULT: FAIL (6 shape groups with bad rows)
+  B2 m16 N256 default rows [1]
+  B4 m16 N256 default rows [1, 2, 3]
+  B2 m128 N2048 default rows [1]
+  B4 m128 N2048 default rows [1, 2, 3]
+  B2 m128 N2048 MLX_OMARCHY_QMM_TWON=1 rows [1]
+  B4 m128 N2048 MLX_OMARCHY_QMM_TWON=1 rows [1, 2, 3]
