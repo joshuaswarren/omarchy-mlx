@@ -26,7 +26,15 @@
 #         )
 # sha256sums=(... three pins ...)
 
-# depends=(python=3.14 openblas lapack blas glibc gcc-libs)
+# depends=(python=3.14 openblas lapack blas glibc gcc-libs
+#          "omarchy-mlx-vulkan=$pkgver-$pkgrel")
+# omarchy-mlx-vulkan is the split package that installs the private
+# Honeykrisp ICD. Same pkgver-pkgrel as omarchy-mlx. Layout:
+#   /usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+#   /usr/lib/omarchy-mlx/vulkan/mesa-git-sha
+# library_path in the ICD JSON is an absolute path to the driver
+# library in that directory. The ICD is outside the loader's default
+# search path. The package leaves the system Mesa driver installed.
 # optdepends=(omarchy-ane-dkms: ANE execution on qualified chips)
 # makedepends=(python dtc)   # dtc: packaging/build-dtbo.sh (opt-in GPU overlay)
 
