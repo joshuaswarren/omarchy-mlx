@@ -72,3 +72,35 @@ reading dk/dv after `eval()` + encoder synchronize.
   main; suites: omarchy_fast_ops_tests 43/43 rc=0 at cc45eab4
   (re-run after the revert series); full battery earlier this session
   42/43 (receipts/2026-10-06-mlx-backports/battery.md).
+
+## RESOLVED (2026-10-07 later): tile rows took qL instead of kL
+
+Main's lead from the parallel SDPA chunk bug (allocation guards detaching
+shared-buffer views) got this lane to restore the dispatch_matmul/
+copy_gpu/dispatch_softmax allocation guards (22791a528) and, in the same
+probe cycle, the address/size trace exposed the real root cause:
+
+`ScaledDotProductAttentionVJP::eval_gpu` allocated its dK/dV tile buffers
+as `tile_shape = S.shape(); tile_shape.back() = D` — [B,H,qL,D]. The
+transposed matmuls compute [kL,qL]x[qL,D] → the tiles must be
+[B,H,kL,D]. At qL < kL the buffer is short: dispatch_matmul computes
+batch_count = out.size()/(kL*D) = 0 at (qL=1,kL=2) — no workgroups, the
+outputs keep their stale fill — and 1-of-2 at B=2 (batch 0 correct,
+batch 1 stale). qL == kL shapes allocated the right extent, which is why
+the strict fd legs passed in-suite while the standalone probe and the
+may_fail legs failed. The allocation guards were a real second bug
+(detached-view writes, the LongSdpaCoop3 class) and stay; they were not
+the cause of the missing dk/dv.
+
+Fix: `tile_shape[size()-2] = kL` before `.back()` (127601e58, this
+branch). Passing-after: the standalone probe at (1,1,2,4) returns
+dk = dS^T·q and dv = P^T·cot exactly (dS=[0.2147,-0.2147],
+P=[0.772,0.228] from the same-run dumps).
+
+## Queue (jw16 frozen for the GLM cluster run until w7N frees it)
+
+1. fast_ops suite at 127601e58 (the strict + may_fail legs should both
+   pass now; flip may_fail to hard in a follow-up only after the suite
+   proves it).
+2. Wider battery re-run on the fix.
+3. Fresh wheel + wheel-level doctest regression.
