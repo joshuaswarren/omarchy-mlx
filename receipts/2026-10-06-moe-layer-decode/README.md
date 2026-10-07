@@ -32,3 +32,18 @@ The SEP-bindings staging experiment (separate scale/bias/index bindings, no pack
 
 - Merge sha: filled after the post-gate merge (below).
 - Compiled statement: every wheel sha named here was produced by a full `scripts/build-wheel.sh` run; commit 960ae7b23 + the gate-pass default flip are COMPILED (wheel sha256 recorded in the notebook entry).
+
+## Addendum 2026-10-07 (Release0729): SPIR-V pin superseded by the later kernel revisions
+
+Line 29 records `gather_qmm_sub_bf16.spv` sha256 `fb361c32…`. That pin was
+correct for the shader as of the re-land (`73ec9b9fb`), BEFORE `1f66a03bb`
+(dtype-conditional PARAM_BYTES) and `b7e162060` (z-chunked dispatch) changed
+the source. Verified by recompilation with the same pinned toolchain
+(`/opt/m2-tc` glslc 2026.3, `glslc -O --target-env=vulkan1.3 -DUSE_BF16=1`):
+the three pre-change source states (`ef2d4477e`, `73ec9b9fb`, `b2bbaf998`)
+all produce `fb361c3298914b29…` exactly, while the tag-v0.7.29 source
+(= `b7e162060`) produces `4a1db218a90de87add022f96d75f5a56cd5bcc96cb9e49caf15decf52389c44b`.
+`4a1db218…` is the pin for v0.7.29 and later until the source changes again;
+toolchain identity for the same run is confirmed by `matmul_f32_coopmat_qk.spv`
+reproducing `bc6eb65b…` byte-for-byte. See
+`receipts/2026-10-06-release-0.7.29/NOTES.md` (Build provenance).

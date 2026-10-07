@@ -1,11 +1,13 @@
 # 2026-10-06 — mlx-omarchy v0.7.29 release preparation, phase A
 
-Status: phase A complete; phase B waits for Main's GO. Process inherited
-unchanged from `receipts/2026-10-05-release-0.7.28/README.md` and
-`receipts/2026-10-05-golden-build/README.md`: same gates, same standards
-(provenance, compiled statements, asset sha verification). Candidate cut base:
-main `78470402f` (CPU PD hold); pending landings may move it. Companion
-evidence (private lab notebook): entry H332 and
+Status: phase A complete; phase B EXECUTING on Main's GO (2026-10-07):
+tag `v0.7.29` = `d86daf925` pushed at the cut; golden wheel + vendor tar
+built and draft-released (see NOTES.md); omarchy-pkgs DRAFT PR
+omacom/omarchy-pkgs#835 open (not ready-for-review); gate runbook in
+`gates/`. Process inherited unchanged from
+`receipts/2026-10-05-release-0.7.28/README.md` and
+`receipts/2026-10-05-golden-build/README.md`. Companion evidence (private
+lab notebook): entry H332 and
 `artifacts/Release0729/2026-10-06-jw16-udev-ship/`.
 
 Hosts are named by chip class only, per repo policy (no hostnames/IPs in
@@ -127,11 +129,17 @@ digest before the cut.
 1. Cut: `git fetch origin`; annotated tag `v0.7.29` at the agreed main sha;
    push the tag BEFORE any gate runs; the tag never moves (0.7.28 discipline).
 2. Golden/release build on the macstudio OrbStack VM, exactly per
-   `receipts/2026-10-05-golden-build/README.md`: glslang 2026.3 / shaderc
-   1.4.357 pins (the VM's pacman glslang/shaderc must match; use the rescued
-   `/opt/m2-tc` 2026.3 prefix or the dev-box glslc 2026.3 tarball); SPIR-V
-   spot-checks `bc6eb65b…` (matmul_f32_coopmat_qk) and `fb361c32…`
-   (gather_qmm_sub_bf16).
+   `receipts/2026-10-05-golden-build/README.md` — **DONE 2026-10-07**
+   (`lsdc3build`, `/opt/m2-tc` glslc 2026.3 / shaderc 1.4.357 enforced over
+   the VM's newer pacman glslang/shaderc; VM build deps + header-layout
+   changes recorded in NOTES.md): wheel `fe9c92d6…`, vendor tar `39912d15…`.
+   SPIR-V: `matmul_f32_coopmat_qk.spv` = `bc6eb65b…` == the standing pin
+   (toolchain identity proven). `gather_qmm_sub_bf16.spv` = `4a1db218…` —
+   the `fb361c32…` pin is the shader BEFORE MoeLayer2 `1f66a03bb` +
+   `b7e162060`; recompiling the three pre-change source states with the same
+   pinned glslc reproduces `fb361c32…` exactly, so both shas are explained
+   and `4a1db218…` is the v0.7.29 pin (recorded in NOTES.md and as a dated
+   addendum in `receipts/2026-10-06-moe-layer-decode/README.md`).
 3. Wheel: `mlx_omarchy-0.32.4.dev<UTC compact>+<7-sha>-cp314-cp314-linux_aarch64.whl`;
    aarch64-only again (the 0.7.28 x86 decision stands unless Main reopens it).
 4. Vendor tar: `packaging/vendor-wheels.sh` against
@@ -140,7 +148,8 @@ digest before the cut.
 5. Release gates g1–g15 per the 0.7.28 table on the T6021 gate host (fresh
    throwaway GATE_ROOT), plus the v0.7.29-specific gates:
    - **g-udev**: at the tagged sha, re-run `install.sh --system` staging and
-     require the staged rule sha256 == `d63915c4…`.
+     require the staged rule sha256 == `d63915c4…` — **DONE 2026-10-07** on
+     `lsdc3build` from the tag clone: staged rule sha `d63915c4…` PASS.
    - **g-hold** (T8103/G13G host — book through the orchestrator; that host
      belongs to the power-experiments lane): `tests/test_cpu_pd_hold.py` 2/2
      on the release wheel with the rule installed; decode digests bit-identical
