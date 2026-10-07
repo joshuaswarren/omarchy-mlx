@@ -40,6 +40,10 @@
 // instead of sweeping one tile row across every B panel. Each output
 // tile is computed the same way, so the bits do not change.
 //
+// WIDE_N 1 gives each subgroup a 32x64 quarter (4x8 accumulators; the
+// workgroup tile is 64x128): 12 operand loads per 32 matrix products
+// instead of 8 per 16. Needs n >= 64 and a grid of ceil(n / 128) columns.
+//
 // Push constants and the batch unravel match matmul.comp.
 
 #ifndef A_T
@@ -54,6 +58,9 @@
 #ifndef SWIZZLE_ROWS
 #define SWIZZLE_ROWS 1
 #endif
+#ifndef WIDE_N
+#define WIDE_N 0
+#endif
 
 #ifdef USE_F32
 #define ELEM float
@@ -64,6 +71,13 @@
 const uint MAT = 8u;
 const uint SG = 4u;
 const uint TILE = 64u;
+#if WIDE_N
+#define SG_N 8u
+#define TILE_N 128u
+#else
+#define SG_N SG
+#define TILE_N TILE
+#endif
 
 layout(local_size_x = 128) in;
 
@@ -117,10 +131,10 @@ void main() {
   uint in_band = linear - band * SWIZZLE_ROWS * grid_x;
   uint row0 = (band * SWIZZLE_ROWS + in_band % band_rows) * TILE +
       (sub / 2u) * (SG * MAT);
-  uint col0 = (in_band / band_rows) * TILE + (sub % 2u) * (SG * MAT);
+  uint col0 = (in_band / band_rows) * TILE_N + (sub % 2u) * (SG_N * MAT);
 #else
   uint row0 = gl_WorkGroupID.y * TILE + (sub / 2u) * (SG * MAT);
-  uint col0 = gl_WorkGroupID.x * TILE + (sub % 2u) * (SG * MAT);
+  uint col0 = gl_WorkGroupID.x * TILE_N + (sub % 2u) * (SG_N * MAT);
 #endif
   if (row0 >= params.matrix_m || col0 >= params.matrix_n) {
     return;
@@ -137,7 +151,7 @@ void main() {
   }
 
   uint row_base = min(row0, params.matrix_m - SG * MAT);
-  uint col_base = min(col0, params.matrix_n - SG * MAT);
+  uint col_base = min(col0, params.matrix_n - SG_N * MAT);
   uint a_row_step = A_T != 0 ? 1u : params.lhs_gap;
   uint b_col_step = B_T != 0 ? params.rhs_gap : 1u;
   uint a_k_step = A_T != 0 ? MAT * params.lhs_gap : MAT;
@@ -146,9 +160,9 @@ void main() {
   uint b_off = params.rhs_offset + b_batch + col_base * b_col_step;
 
   coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
-      acc[SG][SG];
+      acc[SG][SG_N];
   for (uint i = 0u; i < SG; ++i) {
-    for (uint j = 0u; j < SG; ++j) {
+    for (uint j = 0u; j < SG_N; ++j) {
       acc[i][j] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
           gl_MatrixUseAccumulator>(0.0);
     }
@@ -160,7 +174,7 @@ void main() {
     coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
         group_a[SG][K_UNROLL];
     coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB>
-        group_b[SG][K_UNROLL];
+        group_b[SG_N][K_UNROLL];
     for (uint i = 0u; i < SG; ++i) {
       for (uint u = 0u; u < K_UNROLL; ++u) {
 #if A_T
@@ -174,7 +188,7 @@ void main() {
 #endif
       }
     }
-    for (uint j = 0u; j < SG; ++j) {
+    for (uint j = 0u; j < SG_N; ++j) {
       for (uint u = 0u; u < K_UNROLL; ++u) {
 #if B_T
         coopMatLoad(group_b[j][u], input_b.values,
@@ -189,7 +203,7 @@ void main() {
     }
     for (uint u = 0u; u < K_UNROLL; ++u) {
       for (uint i = 0u; i < SG; ++i) {
-        for (uint j = 0u; j < SG; ++j) {
+        for (uint j = 0u; j < SG_N; ++j) {
           acc[i][j] = coopMatMulAdd(group_a[i][u], group_b[j][u], acc[i][j]);
         }
       }
@@ -200,7 +214,7 @@ void main() {
 #endif
   for (; k < params.matrix_k; k += MAT) {
     coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> mat_a[SG];
-    coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG];
+    coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG_N];
     for (uint i = 0u; i < SG; ++i) {
 #if A_T
       coopMatLoad(mat_a[i], input_a.values, a_off + i * MAT * a_row_step,
@@ -210,7 +224,7 @@ void main() {
           params.lhs_gap, gl_CooperativeMatrixLayoutRowMajor);
 #endif
     }
-    for (uint j = 0u; j < SG; ++j) {
+    for (uint j = 0u; j < SG_N; ++j) {
 #if B_T
       coopMatLoad(mat_b[j], input_b.values, b_off + j * MAT * b_col_step,
           params.rhs_gap, gl_CooperativeMatrixLayoutColumnMajor);
@@ -220,7 +234,7 @@ void main() {
 #endif
     }
     for (uint i = 0u; i < SG; ++i) {
-      for (uint j = 0u; j < SG; ++j) {
+      for (uint j = 0u; j < SG_N; ++j) {
         acc[i][j] = coopMatMulAdd(mat_a[i], mat_b[j], acc[i][j]);
       }
     }
@@ -232,7 +246,7 @@ void main() {
       batch_index * params.matrix_m * params.matrix_n +
       row_base * params.matrix_n + col_base;
   for (uint i = 0u; i < SG; ++i) {
-    for (uint j = 0u; j < SG; ++j) {
+    for (uint j = 0u; j < SG_N; ++j) {
       coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
           h = coopmat<ELEM, gl_ScopeSubgroup, MAT, MAT,
               gl_MatrixUseAccumulator>(acc[i][j] * params.alpha);
