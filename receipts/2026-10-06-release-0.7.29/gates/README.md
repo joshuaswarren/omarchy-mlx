@@ -64,3 +64,9 @@ Publish sequence after all gates pass (Main says GO):
 verify-release-assets.py on the published release, one publish-time install
 test from the published URL in a fresh HOME, then mark the omarchy-pkgs PR
 (omacom/omarchy-pkgs#835, DRAFT) ready for the build-approved label.
+
+DEAD-LEG REGRESSION TEST: `stub-tests/test-g14-deadleg.sh <staged-g14.sh>`
+runs the real gate with a leg server that exits immediately and asserts the
+liveness fail-fast (rc=1, "leg A process died during the driver run", well
+under the old 1200 s poll hang, no leg B). PASS on the current hardened
+staged copy (9 s).
