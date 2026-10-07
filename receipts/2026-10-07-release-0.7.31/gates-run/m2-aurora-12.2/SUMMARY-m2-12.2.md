@@ -8,9 +8,12 @@ Do not hand-edit; regenerate from logs.
 - tag: `v0.7.31` = `9b5c938fe236e767df9545de301cfc74fdbc3395` (never moved)
 - wheel: `0.32.4.dev202610071347+9b5c938` (sha a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
 - GATE_HOME fresh (`v0.7.31-gate-home-3`); g7b on a fresh `v0.7.31-gate7b-home-12.2`
-- GPU gates ran inside `gpu-turn` tickets (≤15 min); CPU-only gates
-  (g7b, g17) ran outside the lock; the 15:50Z hard end killed the g2
-  download mid-ticket, so g2/g3 and the gates behind them are NOT RUN
+- GPU gates ran inside `gpu-turn` tickets (≤15 min, driver exported
+  GPU_TURN_TICKET=1); CPU-only gates (g7b, g17) ran outside the lock.
+- COMPLETE: every gate's final RC in gates.done is 0. Earlier failed
+  attempts stay in gates.done history (the LOCKER ticket bug, the
+  tests-tarball env name, and ticket-timeout kills); each rerun above is
+  the file-backed final PASS.
 
 ## Results
 
@@ -18,21 +21,21 @@ Do not hand-edit; regenerate from logs.
 |---|---|---|---|---|---|
 | g1-clean-install | 0 | 27s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
 | g17-patch-series | 0 | 2s | both mlx-lm lines apply1+apply2 rc=0 | n/a | PASS |
-| g16-legP | 0 | 0s | 0.32.4.dev202610071347+9b5c938 | /usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json libvulkan e302c1727a96 | n/a | PASS |
-| g16b-legP | 0 | 8s |  | n/a | PASS |
-| g16-legB | 0 | 0s | 0.32.4.dev202610071347+9b5c938 | $HOME/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json libvulkan cb2a1bcf4c1b | n/a | PASS |
-| g16b-legB | 0 | 7s |  | n/a | PASS |
+| g16-legP | 0 | 0s | 0.32.4.dev202610071347+9b5c938 | /usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json libvulkan e302c1727a96 | PASS |
+| g16b-legP | 0 | 8s | 0.32.4.dev202610071347+9b5c938 | /usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json libvulkan e302c1727a96 | PASS |
+| g16-legB | 0 | 0s | 0.32.4.dev202610071347+9b5c938 | $HOME/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json libvulkan cb2a1bcf4c1b | PASS |
+| g16b-legB | 0 | 7s | 0.32.4.dev202610071347+9b5c938 | $HOME/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json libvulkan cb2a1bcf4c1b | PASS |
 | g7b-system-install | 0 | 17s | HEAD=9b5c938fe236, 7/7 staged | n/a | PASS |
-| g2-online-9b | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g3-online-4b-card | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g4-offline | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g5-laya | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g6-codec | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g7a-packaged-icd | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g8-kokoro | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g9-speak-queue | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g11-card-9b | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g14-routing | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g12-kokoro-stream | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
-| g10-kokoro-primer | — | — | — | — | NOT RUN (hard end 15:50Z; runs after the GLM session) |
+| g2-online-9b | 0 | 50s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g3-online-4b-card | 0 | 61s | - | n/a | PASS |
+| g4-offline | 0 | 17s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g5-laya | 0 | 0s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g6-codec | 0 | 7s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g7a-packaged-icd | 0 | 1s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g8-kokoro | 0 | 10s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g9-speak-queue | 0 | 12s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g11-card-9b | 0 | 20s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g14-routing | 0 | 23s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g12-kokoro-stream | 0 | 64s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
+| g10-kokoro-primer | 0 | 46s | 0.32.4.dev202610071347+9b5c938 | n/a | PASS |
 

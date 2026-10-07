@@ -1,0 +1,38 @@
+BEGIN 2026-10-07T20:59:44Z tag=v0.7.31 boot_id=f0eafd96-0532-4db9-ab2f-5f42f3eba49c uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+OUTBOUND_DENIED False
+SETUP_COMPLETE 2.7s pair=everyday
+CHAT status=complete 3.20s text='Ready'
+CARD status=complete wall_s=9.03 text_len=109 components=1 component_types=['chart'] sse_component_types=['chart'] first_visible_text_s=2.669 first_visible_component_s=8.666 notices=['working', 'generating']
+CARD_CHECK PASS
+GATE PASS
+SSE_EVENT_COUNT 27
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 0.003}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1685, "context_limit": 4096, "output_tokens": 700}, "at_s": 0.008}
+SSE {"type": "text", "data": {"text": "Here"}, "at_s": 2.669}
+SSE {"type": "text", "data": {"text": " is"}, "at_s": 2.705}
+SSE {"type": "text", "data": {"text": " a"}, "at_s": 2.741}
+SSE {"type": "text", "data": {"text": " bar"}, "at_s": 2.778}
+SSE {"type": "text", "data": {"text": " chart"}, "at_s": 2.814}
+SSE {"type": "text", "data": {"text": " comparing"}, "at_s": 2.851}
+SSE {"type": "text", "data": {"text": " the"}, "at_s": 2.887}
+SSE {"type": "text", "data": {"text": " populations"}, "at_s": 2.924}
+SSE {"type": "text", "data": {"text": " of"}, "at_s": 2.96}
+SSE {"type": "text", "data": {"text": " Paris"}, "at_s": 2.996}
+SSE {"type": "text", "data": {"text": ","}, "at_s": 3.032}
+SSE {"type": "text", "data": {"text": " Tokyo"}, "at_s": 3.069}
+SSE {"type": "text", "data": {"text": ","}, "at_s": 3.105}
+SSE {"type": "text", "data": {"text": " and"}, "at_s": 3.142}
+SSE {"type": "text", "data": {"text": " Lagos"}, "at_s": 3.178}
+SSE {"type": "text", "data": {"text": " based"}, "at_s": 3.215}
+SSE {"type": "text", "data": {"text": " on"}, "at_s": 3.251}
+SSE {"type": "text", "data": {"text": " the"}, "at_s": 3.287}
+SSE {"type": "text", "data": {"text": " figures"}, "at_s": 3.324}
+SSE {"type": "text", "data": {"text": " you"}, "at_s": 3.36}
+SSE {"type": "text", "data": {"text": " provided"}, "at_s": 3.397}
+SSE {"type": "text", "data": {"text": "."}, "at_s": 3.433}
+SSE {"type": "text", "data": {"text": "\n\n"}, "at_s": 3.469}
+SSE {"type": "component", "data": {"type": "chart", "kind": "bar", "series": [{"id": "s1", "label": "City Population (Millions)", "unit": "M", "source": "User message: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M", "estimate": false, "values": [{"label": "Paris", "value": 2.1}, {"label": "Tokyo", "value": 13.9}, {"label": "Lagos", "value": 21.0}]}], "id": "8868b1fcf89841b987d30bd9a260ab06", "turn_id": "0b1c6e0802c84842a2cdb0bf8bb16cda", "revision": 1}, "at_s": 8.666}
+SSE {"type": "done", "data": {"stopped": false}, "at_s": 8.708}
+fuser_port=35285 exit=1 output=
+GATE11_EXIT 0

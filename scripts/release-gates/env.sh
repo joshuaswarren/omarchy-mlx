@@ -140,12 +140,15 @@ gate_begin() { # gate_begin <logfile> — identity header every gate logs first
   gate_log "$1" "BEGIN $(date -u +%FT%TZ) tag=$TAG boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) uname=$(uname -r) host_marker=${GATE_HOST_MARKER:-unset}"
 }
 
-# gate_lock — serialize GPU access. Raw flock by default; a no-op when the
-# caller runs inside a gpu-turn ticket (GPU_TURN_TICKET is set by the driver
-# for the wrapped command), because gpu-turn already holds the same lock and
-# nesting it deadlocks. Every GPU-touching gate wraps its GPU step in this
-# instead of calling flock directly. Leading flock options (-x -w N …) pass
-# through and are dropped with the lock in ticket mode.
+# gate_lock — serialize GPU access. Two modes:
+#   GPU_TURN_TICKET=1  inside a gpu-turn ticket: no-op. gpu-turn holds
+#                      $GPU_LOCK for the whole ticket; the DRIVER (not
+#                      gpu-turn itself, which exports nothing) must set
+#                      GPU_TURN_TICKET=1 for the wrapped command.
+#   unset (raw)        wraps the command in flock. The lock is probed
+#                      first: if it is already held, gate_lock prints the
+#                      named GPU_LOCK_BUSY error and returns 99 instead of
+#                      silently hanging for the probe deadline.
 gate_lock() {
   local -a opts=()
   while [[ "${1:-}" == -* ]]; do
@@ -153,9 +156,15 @@ gate_lock() {
   done
   if [[ -n "${GPU_TURN_TICKET:-}" ]]; then
     "$@"
-  else
-    flock "${opts[@]}" "$GPU_LOCK" "$@"
+    return
   fi
+  if ! flock -n "$GPU_LOCK" true 2>/dev/null; then
+    echo "GPU_LOCK_BUSY: $GPU_LOCK is held by another process and GPU_TURN_TICKET is not set." >&2
+    echo "  Wrap this gate in a gpu-turn ticket whose driver exports GPU_TURN_TICKET=1," >&2
+    echo "  or wait for the current lock holder to finish." >&2
+    return 99
+  fi
+  flock "${opts[@]}" "$GPU_LOCK" "$@"
 }
 
 # Refuse to run a gate when its target state already exists (freshness guard).
