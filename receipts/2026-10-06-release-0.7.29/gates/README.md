@@ -20,6 +20,12 @@ jw16 legs announce in the coordination pane before starting and run under
 the exact output to Main — no re-tag (v0.7.30 would be a Main decision), no
 fixes committed straight to the frozen tag.
 
+NOTE (2026-10-07): the scripts in this directory are the RUNBOOK copies on
+main and are the ones to run — the v0.7.29 tag tarball carries an older
+`g-hold-g13g.sh` (before the record-and-restore udev cleanup, the
+host-detected GPU lock, and the MesaParity model default; the tag is frozen,
+those fixes live here only).
+
 Publish sequence after all gates pass (Main says GO):
 `gh release edit v0.7.29 --draft=false --latest`, re-run
 verify-release-assets.py on the published release, one publish-time install
