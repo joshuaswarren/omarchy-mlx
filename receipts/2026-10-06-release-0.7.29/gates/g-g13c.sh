@@ -43,6 +43,9 @@ trap cleanup EXIT
 
 python3.14 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --quiet "$WHEEL"
+# Name the exact artifact in the receipt (w7K should-item).
+echo "wheel_sha256 $(sha256sum "$WHEEL" | awk '{print $1}') $(basename "$WHEEL")" | log
+"$VENV/bin/python" -c 'import importlib.metadata as m; print("pip mlx_omarchy", m.version("mlx_omarchy"))' | log
 
 echo "== device (from the wheel's own mlx-omarchy-info) ==" | log
 INFO="$("$VENV/bin/python" - <<'EOF'

@@ -1,3 +1,5 @@
+wheel_sha256 fe9c92d666a55c54e4dba46db28daaf34ebc1ebb184e16a7cd1063333f603849 mlx_omarchy-0.32.4.dev202610070139+d86daf9-cp314-cp314-linux_aarch64.whl
+pip mlx_omarchy 0.32.4.dev202610070139+d86daf9
 == device (from the wheel's own mlx-omarchy-info) ==
 mlx-omarchy-info
   device:            Apple M1 Max (G13C C0)
@@ -37,4 +39,4 @@ RESULT during=0 after=0
 G13C_GATE default during=0 after=0
 RESULT during=1 after=0
 G13C_GATE forced during>=1 after=0
-G13C_PASS receipt=~/g-g13c-receipt-20261007T041421Z.log
+G13C_PASS receipt=~/v0.7.29-gates/g-g13c-receipt-final.log

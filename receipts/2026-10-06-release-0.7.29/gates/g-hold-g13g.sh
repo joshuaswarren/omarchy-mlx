@@ -102,7 +102,9 @@ import base64, hashlib, importlib.metadata as md, os, pathlib, sys
 import mlx
 expected = os.environ["EXPECTED_MLX_VERSION"]
 version = md.version("mlx_omarchy")
-site = pathlib.Path(mlx.__file__).resolve().parent.parent
+# mlx is a namespace package in this wheel: __file__ is None, __path__[0]
+# is .../site-packages/mlx.
+site = pathlib.Path(list(mlx.__path__)[0]).resolve().parent
 recs = list(site.glob("mlx_omarchy-*.dist-info/RECORD"))
 lib = site / "mlx" / "lib" / "libmlx.so"
 actual = hashlib.sha256(lib.read_bytes()).hexdigest()
