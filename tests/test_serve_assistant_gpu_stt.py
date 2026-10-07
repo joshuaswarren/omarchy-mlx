@@ -7,6 +7,7 @@ without it.
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -23,6 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
 from mlx_omarchy_assistant import gpu_stt, recognition  # noqa: E402
+
+# Resolved at import, before any test can stub mlx into sys.modules.
+HAS_MLX = importlib.util.find_spec("mlx") is not None
 
 
 def _small_pack(tmp: Path):
@@ -205,6 +209,7 @@ class WorkerFramingTest(unittest.TestCase):
         self.assertFalse(self.handle._group_alive())
 
 
+@unittest.skipUnless(HAS_MLX, "needs mlx (resampling runs on the device)")
 class ResampleTest(unittest.TestCase):
     def test_48k_sine_resamples_to_16k_on_device(self):
         try:

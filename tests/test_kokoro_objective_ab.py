@@ -5,6 +5,7 @@ boundary must be detected against the whole-file distribution; identical
 files must give zero deltas; the autocorrelation F0 estimator must recover
 a known sine. These tests never touch the lab artifacts.
 """
+import importlib.util
 import json
 import sys
 import unittest
@@ -28,6 +29,10 @@ def tone(seconds: float, hz: float = 150.0, seed: int = 7) -> np.ndarray:
     return x.astype(np.float32)
 
 
+HAS_LIBROSA = importlib.util.find_spec("librosa") is not None
+
+
+@unittest.skipUnless(HAS_LIBROSA, "needs librosa (spectral flux)")
 class IdenticalFilesTest(unittest.TestCase):
     def test_zero_deltas_and_trivial_pass(self):
         x = tone(1.0)
@@ -45,6 +50,7 @@ class IdenticalFilesTest(unittest.TestCase):
         self.assertTrue(report["worst"]["flux_pass"])
 
 
+@unittest.skipUnless(HAS_LIBROSA, "needs librosa (spectral flux)")
 class ClickDetectionTest(unittest.TestCase):
     def test_injected_click_is_detected(self):
         whole = tone(1.5)

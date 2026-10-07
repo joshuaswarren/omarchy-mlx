@@ -28,6 +28,7 @@ validity).
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -162,6 +163,7 @@ def _spawn(python: str, pack_dir: Path, home: Path, port: int, *, allow_cpu: boo
     )
 
 
+@unittest.skipUnless(importlib.util.find_spec("mlx"), "needs mlx (serve_main loads the pack with it)")
 class ReservationReleaseTests(unittest.TestCase):
     """Real serve_main subprocess + real budget API + real reservations.json."""
 

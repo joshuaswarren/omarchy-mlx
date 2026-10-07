@@ -18,6 +18,7 @@ assertion pointing at the missing file.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import sys
@@ -54,6 +55,7 @@ for p in (str(SERVE), str(TESTS)):
 from mlx_omarchy_serve.__main__ import module_artifact_problem  # noqa: E402
 
 
+@unittest.skipUnless(importlib.util.find_spec("mlx"), "needs mlx (the Bonsai pack loader imports it)")
 class CliArtifactIntegrationTests(unittest.TestCase):
     """The unified CLI must resolve a real Bonsai pack via the
     validate_artifact hook on the server module."""
