@@ -820,18 +820,25 @@ void translate_header(std::string& header) {
   translate_types(header);
   // Helper functions in the user header (e.g. the msv_row_inv_rms stage
   // helper in mlx-serve's fused residual+RMSNorm kernel) keep their MSL
-  // spellings unless the statement-level body rewrites also run here:
-  // METAL_FUNC marks file-local helpers, `threadgroup` is GLSL `shared`,
-  // and the simd_* reductions / threadgroup_barrier map to subgroup ops
-  // exactly as they do in the body (custom_kernel.cpp body rewrites).
-  replace_all(header, "METAL_FUNC", "static");
-  replace_all(header, "threadgroup ", "shared ");
+  // spellings unless the statement-level body rewrites also run here.
+  // METAL_FUNC marks file-local helpers; GLSL has no storage-class keyword
+  // for them, so it is simply dropped. simd_* reductions and
+  // threadgroup_barrier map to subgroup ops exactly as in the body.
+  // `threadgroup T*` parameters have no GLSL equivalent (shared arrays
+  // cannot be passed as pointer parameters), so a header that uses one is
+  // refused cleanly with the construct named.
+  replace_all(header, "METAL_FUNC", "");
   replace_all(
       header, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()");
   replace_all(header, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
   replace_all(header, "simd_sum", "subgroupAdd");
   replace_all(header, "simd_max", "subgroupMax");
   replace_all(header, "simd_min", "subgroupMin");
+  if (header.find("threadgroup") != std::string::npos) {
+    throw std::runtime_error(
+        "unsupported MSL feature `threadgroup` in a helper function "
+        "(GLSL cannot pass shared storage as a parameter)");
+  }
   if (header.find("template") != std::string::npos ||
       header.find("[[") != std::string::npos) {
     throw std::runtime_error("unsupported user header declaration");
