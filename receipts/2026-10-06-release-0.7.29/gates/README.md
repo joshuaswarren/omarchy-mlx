@@ -20,6 +20,13 @@ contract above (no chip assertion, no receipt, 1 s release check; the
 reviewed revision's probes never started). Final runs land their raw logs in
 `gates-run/` and only those count.
 
+CACHE STAGES (jw16-class hosts): g7c needs the parakeet reference cache —
+run the wheel's `mlx-omarchy-parakeet download` once per host/home
+(~/.cache/mlx-omarchy/parakeet-reference, survives reboots; it is HOME, not
+/tmp). The g7c/g7d vendored-wheel dirs (/tmp/v0.7.29-vendor-g7c,
+/tmp/v0.7.29-vendor-g7d) are /tmp (tmpfs on Omarchy): they vanish on reboot
+and are regenerated from ASSETS_DIR at every run — nothing to preserve.
+
 Conventions: every ssh value is an ALIAS supplied by env, never a raw
 address; throwaway state under `GATE_ROOT`; serving venvs are never touched;
 jw16 legs announce in the coordination pane before starting and run under

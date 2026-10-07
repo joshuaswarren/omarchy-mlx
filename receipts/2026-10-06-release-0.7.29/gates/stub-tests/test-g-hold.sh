@@ -35,8 +35,7 @@ case "$1" in
         pip) exit 0 ;;
       esac ;;
   -c) echo "mlx_lm 0.31.3"; exit 0 ;;
-  -) echo "MLX_PIN version=0.32.4.dev202610070139+d86daf9 expected=0.32.4.dev202610070139+d86daf9 ok=True"
-     echo "MLX_PIN libmlx_sha=deadbeef record_sha=deadbeef ok=True"; exit 0 ;;
+  -) exec /usr/bin/python3 ;;
 esac
 tests_mode=0; ab_mode=0
 for a in "$@"; do
@@ -81,6 +80,32 @@ make_fakebin() { # $1 = case dir, $2 = tests mode
   export STUB_TESTS_MODE
 }
 
+# Namespace-package fixture: mlx with NO __init__.py, so mlx.__file__ is None
+# and __path__[0] is the package dir — exactly the wheel's layout. The MLX_PIN
+# heredoc runs for real against this, so the old `pathlib.Path(mlx.__file__)`
+# bug (TypeError on None) would fail the harness.
+build_fixture_site() {
+  local site="$WORK/fixture-site"
+  rm -rf "$site"
+  mkdir -p "$site/mlx/lib" "$site/mlx_omarchy-0.32.4.dev202610070139+d86daf9.dist-info"
+  echo stub >"$site/mlx/lib/libmlx.so"
+  {
+    echo "Name: mlx_omarchy"
+    echo "Version: 0.32.4.dev202610070139+d86daf9"
+  } >"$site/mlx_omarchy-0.32.4.dev202610070139+d86daf9.dist-info/METADATA"
+  local b64 size
+  size=$(stat -c %s "$site/mlx/lib/libmlx.so")
+  b64=$(python3 - "$site/mlx/lib/libmlx.so" <<'PY'
+import base64, hashlib, sys
+d = open(sys.argv[1], "rb").read()
+print(base64.urlsafe_b64encode(hashlib.sha256(d).digest()).decode().rstrip("="))
+PY
+)
+  printf 'mlx/lib/libmlx.so,sha256=%s,%s\n' "$b64" "$size" \
+    >"$site/mlx_omarchy-0.32.4.dev202610070139+d86daf9.dist-info/RECORD"
+  export PYTHONPATH="$site${PYTHONPATH:+:$PYTHONPATH}"
+}
+
 run_case() { # $1 case, $2 tests mode, $3 vendor mlx
   local name="$1"
   local case_dir="$WORK/$name"
@@ -107,6 +132,7 @@ run_case() { # $1 case, $2 tests mode, $3 vendor mlx
 
 check() { if (( $2 == 0 )); then echo "ok: $1"; else echo "FAIL: $1"; FAILED=1; fi; }
 
+build_fixture_site
 run_case positive "" 0
 rc=$(cat "$WORK/positive/rc")
 check "positive rc=0" $([[ $rc == 0 ]]; echo $?)
@@ -115,7 +141,7 @@ grep -q "Ran 2 tests" "$WORK/positive/receipt.log"; check "positive Ran 2 tests 
 grep -qE "^OK$" "$WORK/positive/receipt.log"; check "positive bare OK" $?
 check "positive 4 AB_DIGEST lines" $([[ $(grep -c "AB_DIGEST" "$WORK/positive/receipt.log") == 4 ]]; echo $?)
 grep -q "HOLD_AB all 4 digests equal" "$WORK/positive/receipt.log"; check "positive digest rule" $?
-grep -q "MLX_PIN libmlx_sha=deadbeef record_sha=deadbeef ok=True" "$WORK/positive/receipt.log"; check "positive mlx pin assert" $?
+grep -qE "MLX_PIN libmlx_sha=[0-9a-f]{64} record_sha=[0-9a-f]{64} ok=True" "$WORK/positive/receipt.log"; check "positive mlx pin assert" $?
 grep -q "HOLD_PASS" "$WORK/positive/out.log"; check "positive PASS" $?
 
 run_case skipped skipped 0
