@@ -264,6 +264,15 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
     }
   }
 
+  // Each A tile's row offset, clamped once: rows past matrix_m are never
+  // stored, but the load must stay in bounds (last real row). Loop-invariant,
+  // so the per-load clamp and row * matrix_k multiply leave the K loop.
+  uint a_off[SUBGROUP_ROW_BLOCKS];
+  for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
+    uint row = min(row_base + (g_sub_rb + rb) * MAT, params.matrix_m - 1u);
+    a_off[rb] = x_slice + row * params.matrix_k;
+  }
+
   for (uint chunk = 0u; chunk < g_k_chunks; ++chunk) {
     float scale = 0.0;
     float bias = 0.0;
@@ -304,13 +313,9 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
-          // Rows past matrix_m are never stored, but the load must
-          // stay in bounds: clamp to the last real row.
-          uint row = row_base + (g_sub_rb + rb) * MAT;
-          row = min(row, params.matrix_m - 1u);
           coopMatLoad(
               mat_a[rb], input_x.values,
-              x_slice + row * params.matrix_k + k_base + ks * MAT,
+              a_off[rb] + k_base + ks * MAT,
               params.matrix_k,
               gl_CooperativeMatrixLayoutRowMajor);
         }
@@ -396,13 +401,9 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
         }
 #else
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
-          // Rows past matrix_m are never stored, but the load must
-          // stay in bounds: clamp to the last real row.
-          uint row = row_base + (g_sub_rb + rb) * MAT;
-          row = min(row, params.matrix_m - 1u);
           coopMatLoad(
               mat_a[rb], input_x.values,
-              x_slice + row * params.matrix_k + k_base + ks * MAT,
+              a_off[rb] + k_base + ks * MAT,
               params.matrix_k,
               gl_CooperativeMatrixLayoutRowMajor);
         }
