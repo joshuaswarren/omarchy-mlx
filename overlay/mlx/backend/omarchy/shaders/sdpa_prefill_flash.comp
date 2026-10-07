@@ -50,19 +50,38 @@
 // B*heads*L*hd < 2^31 keeps every buffer index inside uint32; the
 // u64 intermediates below exist so the element arithmetic cannot wrap
 // before that narrowing.
+//
+// Tiles: -DSDPA_Q_TILE / -DSDPA_K_TILE (32 each by default). hd256
+// builds use 16 x 16 so the shared tiles fit 32 KiB (25.8 KB); the 256
+// lanes then split 16 per row, which keeps 16 accumulators per lane.
+//
+// -DSDPA_CAUSAL: MLX mask="causal" (bottom-right aligned): query row r
+// of q_len rows sees keys [0, k_len - q_len + r]. Key tiles past a q
+// tile's last visible key are skipped; the diagonal tile masks per row
+// with NEGINF (exp underflows to exact 0). The host requires
+// k_len >= q_len, so key 0 is visible to every row and the first tile
+// sets a finite running max.
 
 #ifndef SDPA_HD
 #define SDPA_HD 128
 #endif
 
+#ifndef SDPA_Q_TILE
+#define SDPA_Q_TILE 32
+#endif
+#ifndef SDPA_K_TILE
+#define SDPA_K_TILE 32
+#endif
+
 const uint HD = uint(SDPA_HD);
 const uint HD_WORDS = HD / 2u;        // bf16 pairs per row
-const uint Q_TILE = 32u;
-const uint K_TILE = 32u;
+const uint Q_TILE = uint(SDPA_Q_TILE);
+const uint K_TILE = uint(SDPA_K_TILE);
 const uint WG = 256u;
-const uint SUB = 8u;                  // lanes per row
-const uint KEYS_PER_LANE = K_TILE / SUB;      // 4 keys (phase 1)
-const uint COL_WORDS = HD_WORDS / SUB;        // 8 words (phase 2)
+const uint SUB_SHIFT = Q_TILE == 32u ? 3u : 4u;
+const uint SUB = 1u << SUB_SHIFT;     // lanes per row (WG / Q_TILE)
+const uint KEYS_PER_LANE = K_TILE / SUB;      // keys per lane (phase 1)
+const uint COL_WORDS = HD_WORDS / SUB;        // words per lane (phase 2)
 const uint ACC = COL_WORDS * 2u;              // 16 f32 accumulators
 // Most negative finite f32 (the decode kernels' FINITE_MIN): masked
 // keys store this and exp(NEGINF - m) underflows to exact 0.
@@ -145,8 +164,8 @@ uint bf16_store(float value) {
 
 void main() {
   const uint lid = gl_LocalInvocationID.x;
-  const uint row = lid >> 3u;    // this lane's query row in the tile
-  const uint sub = lid & 7u;     // key eighth (phase 1) / col eighth (phase 2)
+  const uint row = lid >> SUB_SHIFT;  // this lane's query row in the tile
+  const uint sub = lid & (SUB - 1u);  // key share (phase 1) / col share (phase 2)
   const uint head_id = gl_WorkGroupID.y;
   const uint heads = gl_NumWorkGroups.y;
   const uint batch = gl_WorkGroupID.z;
@@ -194,7 +213,14 @@ void main() {
     s_c[row] = 1.0;
   }
 
+#ifdef SDPA_CAUSAL
+  const uint q_first = (params.dims + gl_WorkGroupID.x) * Q_TILE;
+  const uint key_last = lk - lq + q_first + row;  // this row's last visible key
+  const uint tiles = min((lk + K_TILE - 1u) / K_TILE,
+                         (lk - lq + q_first + Q_TILE - 1u) / K_TILE + 1u);
+#else
   const uint tiles = (lk + K_TILE - 1u) / K_TILE;
+#endif
   float acc[ACC];
   for (uint i = 0u; i < ACC; ++i) {
     acc[i] = 0.0;
@@ -233,8 +259,13 @@ void main() {
       }
       for (uint i = 0u; i < KEYS_PER_LANE; ++i) {
         uint j = j0 + i;
+#ifdef SDPA_CAUSAL
+        s_s[row * K_TILE + j] = (k_row0 + j < lk && k_row0 + j <= key_last)
+            ? sc[i] * params.alpha : NEGINF;
+#else
         s_s[row * K_TILE + j] =
             (k_row0 + j < lk) ? sc[i] * params.alpha : NEGINF;
+#endif
       }
     }
     barrier();

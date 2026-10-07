@@ -11,7 +11,8 @@
 // softmax reassociates the sum, so agreement is at bf16 storage
 // granularity, not bit identity. Shapes cover the tile tails
 // (16/17/31/32/33/48/53/64, ragged q<k) where the famqwen flash probe
-// lived.
+// lived. The causal arm (MLX_OMARCHY_SDPA_FLASH_CAUSAL=1, hd128/hd256)
+// is gated the same way against a causal fp64 reference.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
@@ -110,46 +111,54 @@ struct Fp64Ref {
   double rel_l2 = 0.0;
 };
 
-// Exact fp64 attention reference over the bf16-widened operands.
-Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream stream) {
+// Exact fp64 attention reference over the bf16-widened operands. GQA:
+// query head h reads kv head h / (heads / kv_heads). causal: row i sees
+// keys [0, lk - lq + i] (MLX's bottom-right alignment).
+Fp64Ref fp64_reference(
+    const array& q,
+    const array& k,
+    const array& v,
+    Stream stream,
+    int hd = kHd,
+    bool causal = false) {
   auto qw = flat(q, stream);
   auto kw = flat(k, stream);
   auto vw = flat(v, stream);
   int b = q.shape(0), h = q.shape(1), lq = q.shape(2), lk = k.shape(2);
-  float scale = 1.0f / std::sqrt(static_cast<float>(kHd));
+  int hkv = k.shape(1);
+  float scale = 1.0f / std::sqrt(static_cast<float>(hd));
   Fp64Ref ref;
-  ref.out.resize(static_cast<size_t>(b) * h * lq * kHd);
+  ref.out.resize(static_cast<size_t>(b) * h * lq * hd);
   double accum_sq = 0.0;
   for (int bi = 0; bi < b; ++bi) {
     for (int hi = 0; hi < h; ++hi) {
+      const size_t kv = static_cast<size_t>(bi * hkv + hi / (h / hkv));
       for (int i = 0; i < lq; ++i) {
-        std::vector<double> scores(lk);
+        const int keys = causal ? lk - lq + i + 1 : lk;
+        std::vector<double> scores(keys);
         double m = -std::numeric_limits<double>::infinity();
-        for (int j = 0; j < lk; ++j) {
+        for (int j = 0; j < keys; ++j) {
           double dot = 0.0;
-          for (int d = 0; d < kHd; ++d) {
+          for (int d = 0; d < hd; ++d) {
             dot += static_cast<double>(
-                       qw[((size_t)(bi * h + hi) * lq + i) * kHd + d]) *
-                static_cast<double>(
-                    kw[((size_t)(bi * h + hi) * lk + j) * kHd + d]);
+                       qw[((size_t)(bi * h + hi) * lq + i) * hd + d]) *
+                static_cast<double>(kw[(kv * lk + j) * hd + d]);
           }
           scores[j] = dot * scale;
           m = std::max(m, scores[j]);
         }
         double sum = 0.0;
-        for (int j = 0; j < lk; ++j) {
+        for (int j = 0; j < keys; ++j) {
           scores[j] = std::exp(scores[j] - m);
           sum += scores[j];
         }
-        for (int d = 0; d < kHd; ++d) {
+        for (int d = 0; d < hd; ++d) {
           double o = 0.0;
-          for (int j = 0; j < lk; ++j) {
-            o += scores[j] *
-                static_cast<double>(
-                    vw[((size_t)(bi * h + hi) * lk + j) * kHd + d]);
+          for (int j = 0; j < keys; ++j) {
+            o += scores[j] * static_cast<double>(vw[(kv * lk + j) * hd + d]);
           }
           o /= sum;
-          size_t index = ((size_t)(bi * h + hi) * lq + i) * kHd + d;
+          size_t index = ((size_t)(bi * h + hi) * lq + i) * hd + d;
           ref.out[index] = o;
           accum_sq += o * o;
         }
@@ -437,4 +446,106 @@ TEST_CASE("masked and causal prefill keep the composition") {
       stream);
   CHECK(causal_dispatches > 2u);
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+}
+
+namespace {
+
+array sdpa_causal(const array& q, const array& k, const array& v, int hd, Stream stream) {
+  return fast::scaled_dot_product_attention(
+      q, k, v, 1.0f / std::sqrt(static_cast<float>(hd)), "causal",
+      std::nullopt, {}, false, stream);
+}
+
+double max_abs_error(const std::vector<float>& got, const Fp64Ref& ref) {
+  double worst = 0.0;
+  for (size_t i = 0; i < got.size(); ++i) {
+    worst = std::max(worst, std::abs(static_cast<double>(got[i]) - ref.out[i]));
+  }
+  return worst;
+}
+
+} // namespace
+
+// MLX_OMARCHY_SDPA_FLASH_CAUSAL=1 (default off): causal bf16 prompts at
+// hd128 and hd256 take the flash kernel built with SDPA_CAUSAL. Online
+// softmax reassociates the sums, so the gate is error vs fp64 no worse
+// than the composed route's, under absolute caps, not bit identity.
+TEST_CASE("causal flash prefill matches the fp64 reference at hd128 and hd256") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_FLASH_DISPATCH_FLOPS");
+  struct Case {
+    int hd;
+    int heads;
+    int kv_heads;
+    int lq;
+    int lk;
+  };
+  const Case cases[] = {
+      {128, 4, 4, 64, 64},   // two q tiles, diagonal tiles
+      {128, 4, 2, 33, 33},   // GQA, tail q tile
+      {128, 4, 4, 17, 48},   // chunked prefill: q < k, offset 31
+      {256, 4, 4, 64, 64},   // four 16-row q tiles
+      {256, 8, 2, 53, 53},   // Qwen3.8 head grid (8 / 2), tail tile
+      {256, 4, 1, 16, 80},   // GQA 4, offset 64
+      {256, 2, 2, 200, 200}, // many key tiles skipped per q tile
+  };
+  for (const auto& c : cases) {
+    array q = make_bf16({1, c.heads, c.lq, c.hd}, 501 + c.lq, stream);
+    array k = make_bf16({1, c.kv_heads, c.lk, c.hd}, 502 + c.lk, stream);
+    array v = make_bf16({1, c.kv_heads, c.lk, c.hd}, 503 + c.lk, stream);
+    auto ref = fp64_reference(q, k, v, stream, c.hd, true);
+
+    setenv("MLX_OMARCHY_SDPA_FLASH_CAUSAL", "1", 1);
+    std::vector<float> flash = flat(sdpa_causal(q, k, v, c.hd, stream), stream);
+    // One batched dispatch proves the flash kernel ran, not the composition.
+    const uint64_t flash_dispatches = dispatches_for(
+        [&] { return sdpa_causal(q, k, v, c.hd, stream); }, stream);
+    unsetenv("MLX_OMARCHY_SDPA_FLASH_CAUSAL");
+    std::vector<float> composed =
+        flat(sdpa_causal(q, k, v, c.hd, stream), stream);
+
+    CHECK_EQ(flash_dispatches, 1u);
+    const double flash_l2 = rel_l2_error(flash, ref);
+    const double composed_l2 = rel_l2_error(composed, ref);
+    const double flash_max = max_abs_error(flash, ref);
+    const double composed_max = max_abs_error(composed, ref);
+    CHECK_MESSAGE(flash_l2 <= composed_l2 * 1.5 + 0.005, "rel-L2 ", flash_l2,
+                  " vs composed ", composed_l2, " at hd ", c.hd, " lq ", c.lq);
+    CHECK_MESSAGE(flash_l2 <= 0.02, "rel-L2 ", flash_l2, " at hd ", c.hd,
+                  " lq ", c.lq);
+    CHECK_MESSAGE(flash_max <= composed_max * 2.0 + 1.0 / 256.0, "max-abs ",
+                  flash_max, " vs composed ", composed_max, " at hd ", c.hd,
+                  " lq ", c.lq);
+    CHECK_MESSAGE(flash_max <= 1.0 / 32.0, "max-abs ", flash_max, " at hd ",
+                  c.hd, " lq ", c.lq);
+  }
+}
+
+TEST_CASE("causal flash prefill output does not depend on the dispatch split") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  setenv("MLX_OMARCHY_SDPA_FLASH_CAUSAL", "1", 1);
+  for (int hd : {128, 256}) {
+    const int length = 96;
+    const uint64_t tiles = static_cast<uint64_t>(length / (hd == 256 ? 16 : 32));
+    array q = make_bf16({1, 4, length, hd}, 601 + hd, stream);
+    array k = make_bf16({1, 4, length, hd}, 602 + hd, stream);
+    array v = make_bf16({1, 4, length, hd}, 603 + hd, stream);
+    unsetenv("MLX_OMARCHY_SDPA_FLASH_DISPATCH_FLOPS");
+    std::vector<float> batched = flat(sdpa_causal(q, k, v, hd, stream), stream);
+    setenv("MLX_OMARCHY_SDPA_FLASH_DISPATCH_FLOPS", "1", 1);
+    const uint64_t split_dispatches = dispatches_for(
+        [&] { return sdpa_causal(q, k, v, hd, stream); }, stream);
+    std::vector<float> split = flat(sdpa_causal(q, k, v, hd, stream), stream);
+    unsetenv("MLX_OMARCHY_SDPA_FLASH_DISPATCH_FLOPS");
+    CHECK_EQ(split_dispatches, tiles);
+    CHECK(std::memcmp(batched.data(), split.data(),
+                      batched.size() * sizeof(float)) == 0);
+  }
+  unsetenv("MLX_OMARCHY_SDPA_FLASH_CAUSAL");
 }

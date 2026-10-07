@@ -357,6 +357,10 @@ omarchy_shader(sdpa_decode_rows_bf16_hd128 shaders/sdpa_decode_native.comp -DBF1
 # Attn128 long-L prefill: flash-style online-softmax bf16 SDPA
 # (shaders/sdpa_prefill_flash.comp); hd128 first (H3 joint attention).
 omarchy_shader(sdpa_prefill_flash_bf16_hd128 shaders/sdpa_prefill_flash.comp -DSDPA_HD=128)
+# Causal prompt arm (MLX_OMARCHY_SDPA_FLASH_CAUSAL=1): hd128 at the
+# shipped tiles, hd256 at 16 x 16 tiles (shared memory budget).
+omarchy_shader(sdpa_prefill_flash_causal_bf16_hd128 shaders/sdpa_prefill_flash.comp -DSDPA_HD=128 -DSDPA_CAUSAL=1)
+omarchy_shader(sdpa_prefill_flash_causal_bf16_hd256 shaders/sdpa_prefill_flash.comp -DSDPA_HD=256 -DSDPA_Q_TILE=16 -DSDPA_K_TILE=16 -DSDPA_CAUSAL=1)
 omarchy_shader(sdpa_decode_native_bf16_hd160 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=160)
 omarchy_shader(sdpa_decode_native_bf16_hd192 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=192)
 omarchy_shader(sdpa_decode_native_bf16_hd224 shaders/sdpa_decode_native.comp -DBF16_IO=1 -DSDPA_DIM=224)

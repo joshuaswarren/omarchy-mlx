@@ -886,6 +886,12 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectF32Nt,
   MatmulDirectF32Tn,
   MatmulDirectF32Tt,
+  // Causal bf16 SDPA prefill (shaders/sdpa_prefill_flash.comp
+  // -DSDPA_CAUSAL): the flash kernel with bottom-right causal masking and
+  // key-tile skipping, hd128 and hd256 (16 x 16 tiles). Selected by
+  // MLX_OMARCHY_SDPA_FLASH_CAUSAL=1. Append-only profile ids.
+  SdpaPrefillFlashCausalBF16Hd128,
+  SdpaPrefillFlashCausalBF16Hd256,
   Count,
 };
 

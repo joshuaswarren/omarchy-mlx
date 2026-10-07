@@ -14000,13 +14000,23 @@ void ScaledDotProductAttention::eval_gpu(
       flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
+  // Causal arm (MatmulGap H9; default off, MLX_OMARCHY_SDPA_FLASH_CAUSAL=1):
+  // bf16 causal prompts at hd128/hd256 run the kernel built with
+  // SDPA_CAUSAL instead of the composed route, which writes the full
+  // [B*H, L, L] f32 score square although half of it is masked.
+  // k_len >= q_len keeps key 0 visible to every row (bottom-right
+  // alignment, as chunked prefill uses it).
+  const bool flash_causal = do_causal_ &&
+      omarchy::env_flag("MLX_OMARCHY_SDPA_FLASH_CAUSAL") && k_len >= q_len &&
+      (head_dim == 128 || head_dim == 256);
   if ((prefill_flash_env == nullptr ||
           std::strcmp(prefill_flash_env, "0") != 0) &&
-      flash_route_ready && flash_wants && inputs.size() == 3 &&
-      !do_causal_ && !has_sinks_ && !output_logsumexp_ && q_len > 1 &&
+      flash_route_ready && (flash_wants || flash_causal) &&
+      inputs.size() == 3 && (!do_causal_ || flash_causal) && !has_sinks_ &&
+      !output_logsumexp_ && q_len > 1 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
       v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
-      head_dim == 128 && v_dim == 128 && k_len > 0 &&
+      (head_dim == 128 || flash_causal) && v_dim == head_dim && k_len > 0 &&
       q.strides()[3] == 1 && k.strides()[3] == 1 &&
       v.strides()[3] == 1 && out.strides()[3] == 1 &&
       out.strides()[2] == v_dim &&
@@ -14073,19 +14083,48 @@ void ScaledDotProductAttention::eval_gpu(
     params.v_batchstride = checked_u32(v.strides()[0], tag, out);
     std::array<omarchy::ComputeBinding, 4> flash_bindings{
         binding(q), binding(k), binding(v), binding(out)};
-    constexpr int kFlashRowsPerTile = 32;
-    const int q_tiles = (q_len + kFlashRowsPerTile - 1) / kFlashRowsPerTile;
-    // One q tile per dispatch: all heads ride the same dispatch, the
-    // firmware timer stays ~5-12 ms per dispatch at full shape.
-    for (int tile = 0; tile < q_tiles; ++tile) {
+    const bool hd256 = head_dim == 256;
+    const omarchy::ComputeKernel flash_kernel = !do_causal_
+        ? omarchy::ComputeKernel::SdpaPrefillFlashBF16Hd128
+        : (hd256 ? omarchy::ComputeKernel::SdpaPrefillFlashCausalBF16Hd256
+                 : omarchy::ComputeKernel::SdpaPrefillFlashCausalBF16Hd128);
+    const int rows_per_tile = hd256 ? 16 : 32;
+    const int q_tiles = (q_len + rows_per_tile - 1) / rows_per_tile;
+    // Non-causal: one q tile per dispatch; all heads ride it, ~5-12 ms
+    // per dispatch at full H3 shape on the 38-core G14C. Causal: q tiles
+    // join one dispatch until their estimated work (4 * rows * visible
+    // keys * hd * heads * batch flops) reaches ~2 GFLOP
+    // (MLX_OMARCHY_SDPA_FLASH_DISPATCH_FLOPS overrides), so a short
+    // prompt is one dispatch and a long one stays under the firmware timer.
+    uint64_t flash_budget = 1ull << 31;
+    if (const char* budget_env =
+            std::getenv("MLX_OMARCHY_SDPA_FLASH_DISPATCH_FLOPS");
+        budget_env != nullptr && budget_env[0] != '\0') {
+      flash_budget =
+          std::max<uint64_t>(1u, std::strtoull(budget_env, nullptr, 10));
+    }
+    for (int tile = 0; tile < q_tiles;) {
+      int count = 1;
+      if (do_causal_) {
+        uint64_t work = 0;
+        for (count = 0; tile + count < q_tiles && work < flash_budget;
+             ++count) {
+          const uint64_t keys = std::min<uint64_t>(
+              static_cast<uint64_t>(k_len),
+              static_cast<uint64_t>(k_len - q_len) +
+                  static_cast<uint64_t>(tile + count + 1) * rows_per_tile);
+          work += 4ull * rows_per_tile * keys * head_dim * heads * batch;
+        }
+      }
       params.dims = checked_u32(tile, tag, out);
       encoder.dispatch_compute(
-          omarchy::ComputeKernel::SdpaPrefillFlashBF16Hd128,
+          flash_kernel,
           flash_bindings,
           params,
-          1u,
+          static_cast<uint32_t>(count),
           static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
+      tile += count;
     }
     return;
   }
