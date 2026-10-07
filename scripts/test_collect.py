@@ -2701,7 +2701,10 @@ class AneSectionUnavailableMarks(unittest.TestCase):
     """Every capture a machine cannot provide says so explicitly."""
 
     def test_linux_section_runs_read_only_and_reports(self):
+        # The Linux branch is under test; a macOS runner would take the
+        # Darwin branch of section_ane without this pin.
         with tempfile.TemporaryDirectory() as ws, \
+                patch.object(cd.platform, "system", return_value="Linux"), \
                 patch.object(cd, "_omarchy_ane_check", return_value={
                     "available": False, "installed": False,
                     "reason": "omarchy-ane-check not installed",
