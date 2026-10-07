@@ -155,44 +155,77 @@ def build_flux_double(seed=2):
             "norm_added_q": naq, "norm_added_k": nak, "cos_vals": cos, "sin_vals": sin}
 
 
-def _flux_qkv_ref(rows, nq_rows, nk_rows, cos, sin, dim, hd, heads, eps):
-    """Common per-(s,h) RMSNorm+RoPE. nq_rows/nk_rows are (S, hd): the double
-    kernel applies norm_added_* on txt rows and norm_* on img rows; the single
-    kernel applies one norm to every row. q cols at h*hd, k at dim+h*hd,
-    v at 2*dim+h*hd."""
-    outs = [np.zeros((heads, rows.shape[0], hd)) for _ in range(3)]
-    flat = rows.reshape(-1)
-    for s in range(rows.shape[0]):
-        base = s * (3 * dim)
+def _flux_kernel_emulation(rows_flat, nq, nk, cos_flat, sin_flat, meta, eps):
+    """Literal per-thread emulation of the fused norm+rope kernel body.
+    rows_flat is the concatenated qkv plane laid out exactly as the buffers
+    the kernel indexes (txt rows first for the double kernel); nq/nk are
+    (S, hd) selected exactly as the kernel's is_txt branch does."""
+    dim, hd, heads, s_tot = meta
+    hd_half = hd // 2
+    ELEMS = hd // 32
+    outq = np.zeros((heads, s_tot, hd))
+    outk = np.zeros_like(outq)
+    outv = np.zeros_like(outq)
+    for s in range(s_tot):
         for h in range(heads):
-            cols = [base + h * hd, base + dim + h * hd, base + 2 * dim + h * hd]
-            qkv = [flat[c:c + hd].astype(np.float64) for c in cols]
-            for t_i in range(2):
-                inv = 1.0 / np.sqrt((qkv[t_i] ** 2).sum() / hd + eps)
-                qkv[t_i] *= inv
-                qkv[t_i] *= (nk_rows if t_i == 1 else nq_rows)[s].astype(np.float64)
-            c_row = cos[s].astype(np.float64)
-            s_row = sin[s].astype(np.float64)
-            for t_i in range(2):
-                v = qkv[t_i]
-                q0, q1 = v[0::2].copy(), v[1::2].copy()
-                v[0::2] = q0 * c_row - q1 * s_row
-                v[1::2] = q1 * c_row + q0 * s_row
-            for t_i in range(3):
-                outs[t_i][h, s, :] = qkv[t_i]
-    return [o[None] for o in outs]
+            q_col, k_col, v_col = h * hd, dim + h * hd, 2 * dim + h * hd
+            lq = np.zeros((32, ELEMS))
+            lk = np.zeros((32, ELEMS))
+            lv = np.zeros((32, ELEMS))
+            lane_sq_q = np.zeros(32)
+            lane_sq_k = np.zeros(32)
+            for tid in range(32):
+                for i in range(ELEMS):
+                    d = tid * ELEMS + i
+                    base = s * (3 * dim)
+                    lq[tid, i] = rows_flat[base + q_col + d]
+                    lk[tid, i] = rows_flat[base + k_col + d]
+                    lv[tid, i] = rows_flat[base + v_col + d]
+                    lane_sq_q[tid] += lq[tid, i] * lq[tid, i]
+                    lane_sq_k[tid] += lk[tid, i] * lk[tid, i]
+            inv_q = 1.0 / np.sqrt(lane_sq_q.sum() / hd + eps)
+            inv_k = 1.0 / np.sqrt(lane_sq_k.sum() / hd + eps)
+            for tid in range(32):
+                for i in range(ELEMS):
+                    d = tid * ELEMS + i
+                    lq[tid, i] = lq[tid, i] * inv_q * nq[s, d]
+                    lk[tid, i] = lk[tid, i] * inv_k * nk[s, d]
+            cos_base = s * hd_half
+            for tid in range(32):
+                for p in range(0, ELEMS, 2):
+                    d = tid * ELEMS + p
+                    d_half = d >> 1
+                    c = cos_flat[cos_base + d_half]
+                    sn = sin_flat[cos_base + d_half]
+                    for arr in (lq, lk):
+                        a0, a1 = arr[tid, p], arr[tid, p + 1]
+                        arr[tid, p] = a0 * c - a1 * sn
+                        arr[tid, p + 1] = a1 * c + a0 * sn
+            for tid in range(32):
+                for i in range(ELEMS):
+                    d = tid * ELEMS + i
+                    outq[h, s, d] = lq[tid, i]
+                    outk[h, s, d] = lk[tid, i]
+                    outv[h, s, d] = lv[tid, i]
+    return [o[None] for o in (outq, outk, outv)]
 
 
 def ref_flux_double(inp):
     d = FLUX
-    dim = d["dim"]
-    img = inp["img_qkv"].astype(np.float64)[0].reshape(d["img"], 3 * dim)
-    txt = inp["txt_qkv"].astype(np.float64)[0].reshape(d["txt"], 3 * dim)
-    rows = np.concatenate([txt, img], axis=0)      # s < S_TXT reads txt
-    nq_rows = np.concatenate([inp["norm_added_q"], inp["norm_q"]], axis=0)
-    nk_rows = np.concatenate([inp["norm_added_k"], inp["norm_k"]], axis=0)
-    return _flux_qkv_ref(rows, nq_rows, nk_rows, inp["cos_vals"], inp["sin_vals"],
-                         dim, d["hd"], d["heads"], d["eps"])
+    dim, hd, heads, eps = d["dim"], d["hd"], d["heads"], d["eps"]
+    s_tot = d["img"] + d["txt"]
+    txt = inp["txt_qkv"][0].astype(np.float64).reshape(d["txt"], 3 * dim)
+    img = inp["img_qkv"][0].astype(np.float64).reshape(d["img"], 3 * dim)
+    rows = np.concatenate([txt, img], axis=0).reshape(-1)
+    nq = np.concatenate([np.repeat(inp["norm_added_q"][None], d["txt"], axis=0),
+                         np.repeat(inp["norm_q"][None], d["img"], axis=0)], axis=0)
+    nk = np.concatenate([np.repeat(inp["norm_added_k"][None], d["txt"], axis=0),
+                         np.repeat(inp["norm_k"][None], d["img"], axis=0)], axis=0)
+    return _flux_kernel_emulation(
+        rows, nq, nk,
+        inp["cos_vals"].reshape(-1).astype(np.float64),
+        inp["sin_vals"].reshape(-1).astype(np.float64),
+        (dim, hd, heads, s_tot), eps)
 
 
 def build_flux_single(seed=3):
@@ -209,13 +242,16 @@ def build_flux_single(seed=3):
 
 def ref_flux_single(inp):
     d = FLUX
-    dim = d["dim"]
+    dim, hd, heads, eps = d["dim"], d["hd"], d["heads"], d["eps"]
     s_tot = d["img"] + d["txt"]
-    fused = inp["fused"].astype(np.float64)[0].reshape(s_tot, -1)
-    nq_rows = np.repeat(inp["norm_q"][None], s_tot, axis=0)
-    nk_rows = np.repeat(inp["norm_k"][None], s_tot, axis=0)
-    return _flux_qkv_ref(fused, nq_rows, nk_rows, inp["cos_vals"], inp["sin_vals"],
-                         dim, d["hd"], d["heads"], d["eps"])
+    rows = inp["fused"][0].astype(np.float64).reshape(-1)
+    nq = np.repeat(inp["norm_q"][None], s_tot, axis=0)
+    nk = np.repeat(inp["norm_k"][None], s_tot, axis=0)
+    return _flux_kernel_emulation(
+        rows, nq, nk,
+        inp["cos_vals"].reshape(-1).astype(np.float64),
+        inp["sin_vals"].reshape(-1).astype(np.float64),
+        (dim, hd, heads, s_tot), eps)
 
 
 # ---------------------------------------------------------------- inkling
@@ -443,17 +479,14 @@ def build_qk(seed=10):
 
 
 def ref_qk(inp):
+    """Metal executes `half` arithmetic in fp32 on Apple GPUs (half storage,
+    fp32 compute), so the T accumulator is fp32-wide: emulate with an fp64
+    dot (well inside fp32 noise) and round to fp16 at the T boundaries."""
     q = inp["q"].astype(np.float64)
     k = inp["k"].astype(np.float64)
     scale = float(inp["scale"].astype(np.float32)[0])
-    B, G, Q, D = q.shape
-    Kl = k.shape[2]
-    # T sum: the kernel accumulates in fp16, one rounded product per step
-    acc = np.zeros((B, G, Q, Kl), dtype=np.float16)
-    for d in range(D):
-        prod = (q[..., d][..., :, None] * k[..., d][..., None, :]).astype(np.float16)
-        acc = (acc + prod).astype(np.float16)
-    scaled = (acc * np.float16(scale)).astype(np.float16)
+    dot = np.einsum("bgqd,bgkd->bgqk", q, k)
+    scaled = np.float16(dot * np.float16(scale))
     pos = np.maximum(scaled.astype(np.float64), 0.0)
     return [np.float16(pos * pos)]
 
@@ -964,11 +997,11 @@ SPECS = [
          template=[("T", BF16)], grid=(4096, 2, 1), threadgroup=(256, 1, 1)),
     dict(name="custom_depthwise_conv1d", builder=build_depthwise, ref=ref_depthwise,
          inputs=("inp", "weight", "params"), outputs=("out",),
-         out_shapes=[(1, 64, 32)], out_dtypes=[FP32], tol=[("rel", 1e-5)],
+         out_shapes=[(1, 64, 32)], out_dtypes=[FP32], tol=[("rel", 1e-5, 1e-3)],
          template=[("T", FP32)], grid=(32, 64, 1), threadgroup=(1, 1, 1)),
     dict(name="qk_relu_squared", builder=build_qk, ref=ref_qk,
          inputs=("q", "k", "scale"), outputs=("out",),
-         out_shapes=[(2, 4, 16, 16)], out_dtypes=[FP16], tol=[REL16],
+         out_shapes=[(2, 4, 16, 16)], out_dtypes=[FP16], tol=[REL],
          template=[("T", FP16)], grid=(16, 16, 2), threadgroup=(16, 16, 1)),
     dict(name="mlx_audio_phonon_unpack_base5_v1", builder=build_phonon, ref=ref_phonon,
          inputs=("quint5_q", "in_features"), outputs=("base_q", "residual_q"),

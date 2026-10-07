@@ -17,6 +17,7 @@ Status classes:
   wrong     dispatched but outside tolerance (worst class; forces exit 3)
 """
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -55,8 +56,9 @@ def check(name, spec, inputs, refs, outs_np):
             diff = float(np.max(np.abs(out.astype(np.float64) - ref.astype(np.float64)))) if out.size else 0.0
         else:
             rtol = tol[1]
+            atol = tol[2] if len(tol) > 2 else 0.0
             err = np.abs(out.astype(np.float64) - ref)
-            limit = rtol * np.abs(ref)
+            limit = atol + rtol * np.abs(ref)
             bad = err > limit
             diff = float(np.max(err / np.maximum(np.abs(ref), 1e-300))) if out.size else 0.0
         worst = max(worst, diff if diff == diff else 1e308)
@@ -98,7 +100,21 @@ def reference_only(only=None):
 # ---------------------------------------------------------------- gpu child
 def single(name):
     """One kernel on the GPU. Prints 'RESULT <status> maxdiff <x> <detail>'
-    as the LAST stdout line; exit 0 pass, 3 wrong, 1 anything else."""
+    as the LAST stdout line; exit 0 pass, 3 wrong, 1 anything else.
+    Exceptions print a one-line 'CHILDERR: [Type] message' so the parent can
+    classify translator refusals without scraping tracebacks."""
+    try:
+        return _single(name)
+    except SystemExit:
+        raise
+    except BaseException as error:  # noqa: BLE001 - the parent classifies
+        text = str(error).strip()
+        first = text.splitlines()[0] if text else type(error).__name__
+        print(f"CHILDERR: [{type(error).__name__}] {first[:200]}")
+        return 1
+
+
+def _single(name):
     import mlx.core as mx  # deferred: not needed for --reference-only
 
     spec = defs.get_spec(name)
@@ -166,6 +182,8 @@ def single(name):
 def gpu(only=None, timeout=180):
     rows = []
     any_wrong = False
+    stderr_dir = Path(os.environ.get("KERNEL_RECHECK_STDERR", "stderr"))
+    stderr_dir.mkdir(parents=True, exist_ok=True)
     for spec in defs.SPECS:
         name = spec["name"]
         if only and name != only:
@@ -176,42 +194,37 @@ def gpu(only=None, timeout=180):
                 [sys.executable, "-m", "tools.kernel_recheck.run", "--single", name],
                 capture_output=True, text=True, timeout=timeout)
             rc, out, err = proc.returncode, proc.stdout, proc.stderr
-        except subprocess.TimeoutExpired:
-            rc, out, err = None, "", f"timeout after {timeout}s"
+        except subprocess.TimeoutExpired as expired:
+            rc = None
+            out = expired.stdout or ""
+            err = (expired.stderr or "") + f"\n[timeout after {timeout}s]"
+        (stderr_dir / f"{name}.stderr").write_text(
+            f"# rc={rc}\n--- stdout ---\n{out}\n--- stderr ---\n{err}")
         elapsed = time.time() - start
         predict = defs.PREDICT[name]
         result_line = next((l for l in out.splitlines() if l.startswith("RESULT")), "")
+        child_line = next((l for l in out.splitlines() if l.startswith("CHILDERR: ")), "")
         if rc == 0 and result_line:
             status = "pass"
             maxdiff = result_line.split()[3] if len(result_line.split()) > 3 else "n/a"
-            detail = ""
+            first = ""
         elif rc == 3 and result_line:
             status = "wrong"
             maxdiff = result_line.split()[3] if len(result_line.split()) > 3 else "n/a"
-            detail = result_line.split(" ", 4)[-1] if len(result_line.split()) > 4 else ""
+            first = result_line.split(" ", 4)[-1] if len(result_line.split()) > 4 else ""
         else:
-            text = (err or out).strip()
+            text = (child_line or err or out).strip()
             first = text.splitlines()[0] if text else f"exit {rc}"
-            if rc is not None and rc < 0:
-                status = "fail"
-                first = f"signal {-rc}: {first}"
-            elif "unsupported" in text or "[omarchy]" in text:
+            if child_line.startswith("CHILDERR: [omarchy]") or "unsupported" in (child_line or err):
                 status = "refused"
-                first = first[:160]
             else:
                 status = "fail"
-                first = first[:160]
+            first = first[:200]
             maxdiff = "n/a"
-            detail = ""
         rows.append((name, status, predict))
         if status == "wrong":
             any_wrong = True
-        if status == "wrong":
-            tail = detail
-        elif status in ("refused", "fail"):
-            tail = first
-        else:
-            tail = ""
+        tail = first if status in ("refused", "fail", "wrong") else ""
         print(f"KERNEL {name} {status} {tail} maxdiff {maxdiff} [{elapsed:.1f}s] "
               f"predict={predict}")
     passed = sum(1 for r in rows if r[1] == "pass")
