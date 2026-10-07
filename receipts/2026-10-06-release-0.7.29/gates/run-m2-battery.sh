@@ -27,9 +27,14 @@ DONE="$LOG_DIR/gates.done"
 [[ -f "$GATES_DIR/run-all.sh" ]] || { echo "FAIL: run-all.sh not found under $REPO"; exit 1; }
 mkdir -p "$ASSETS_DIR" "$LOG_DIR"
 
-echo "== assets (SHA256SUMS) =="
+echo "== assets (existence first, then SHA256SUMS) =="
 cd "$ASSETS_DIR"
-if sha256sum -c --ignore-missing --quiet SHA256SUMS; then
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  f="$(echo "$line" | awk '{print $2}')"
+  [[ -f "$f" ]] || { echo "FAIL: staged asset missing: $f"; exit 1; }
+done < SHA256SUMS
+if sha256sum -c --quiet SHA256SUMS; then
   echo "ASSETS_OK"
 else
   echo "FAIL: staged assets do not match SHA256SUMS"; exit 1

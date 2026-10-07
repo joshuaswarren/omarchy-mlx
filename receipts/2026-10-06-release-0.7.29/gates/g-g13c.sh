@@ -51,7 +51,15 @@ print(next(p for root in mlx.__path__
            if os.access(p := os.path.join(root, "bin", "mlx-omarchy-info"), os.X_OK)))
 EOF
 )"
-DEVLINE="$("$INFO" | grep '^  device:')" | log
+if [[ -z "$INFO" ]]; then
+  echo "FAIL: the wheel provides no mlx/bin/mlx-omarchy-info" | log; exit 1
+fi
+INFO_OUT="$("$INFO" 2>&1)" || { echo "FAIL: mlx-omarchy-info failed to run" | log; exit 1; }
+printf '%s\n' "$INFO_OUT" | tee -a "$RECEIPT"
+DEVLINE="$(printf '%s\n' "$INFO_OUT" | grep '^  device:')"
+if [[ -z "${DEVLINE:-}" ]]; then
+  echo "FAIL: no device line in mlx-omarchy-info output" | log; exit 1
+fi
 echo "$DEVLINE" | log
 echo "$DEVLINE" | grep -q "G13C" \
   && echo "G13C_CHIP_OK G13C" | log \
