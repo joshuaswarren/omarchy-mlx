@@ -16,6 +16,15 @@
 #   TTS_PACK_HOME pinned voice-pack home for gate 6 / gate 8
 #   SERVING_VENV  jw16 serving venv path; g7c/g7d refuse to touch it when set
 #   INSTALL_TREE  worktree holding the tag's install.sh for gate 7b
+#                 (auto-staged from $TAG by gate_ensure_install_tree when
+#                  TAG_SHA is set)
+#   TAG_SHA       full 40-char commit sha the tag points at; required by
+#                 gate_ensure_install_tree to assert the staged tree
+#   EXPECTED_WHEEL_SHA256
+#                 when set, gate_wheel() picks the asset whose sha256
+#                 matches and REFUSES otherwise
+#   EXPECTED_VTAR_SHA256
+#                 same contract for the vendor tar
 
 : "${TAG:?TAG is required: the DRAFT release tag, e.g. TAG=v0.7.15}"
 : "${ASSETS_DIR:=/tmp/${TAG}-assets}"
@@ -36,15 +45,59 @@
 : "${GATE_WORKTREE:=$HOME/src/mlx-omarchy-v0715}"
 : "${GATE_INSTALL_PATH:=/usr/local/bin:/usr/bin:/bin}"
 : "${SERVING_VENV:=}"
+: "${TAG_SHA:=}"
+: "${EXPECTED_WHEEL_SHA256:=}"
+: "${EXPECTED_VTAR_SHA256:=}"
 
 GATES_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 mkdir -p "$LOG_DIR"
 
 # Draft assets (gates install from these, never from a published release).
-gate_wheel()   { ls "${G7D_WHEEL:-}" 2>/dev/null || ls "$ASSETS_DIR"/*cp314*linux_aarch64.whl 2>/dev/null | head -1; }
-gate_vtar()    { ls "${G7D_VTAR:-}" 2>/dev/null || ls "$ASSETS_DIR"/omarchy-mlx-vendor-wheels-*.tar 2>/dev/null | head -1; }
-gate_require_asset() { # gate_require_asset <glob-result-var> <description>
-  [[ -s "$1" ]] || { echo "REFUSING: $2 not found in $ASSETS_DIR" >&2; return 1; }
+# When EXPECTED_*_SHA256 is set, the lookup is constrained to the asset whose
+# sha256 matches; mismatch or missing = loud REFUSE. The unconstrained lookups
+# still work for callers that intentionally point G7D_WHEEL/G7D_VTAR at a file.
+gate_wheel() {
+  if [[ -n "${G7D_WHEEL:-}" ]]; then ls "$G7D_WHEEL" 2>/dev/null; return; fi
+  if [[ -n "$EXPECTED_WHEEL_SHA256" ]]; then
+    ( cd "$ASSETS_DIR" && sha256sum -- *cp314*linux_aarch64.whl 2>/dev/null \
+      | awk -v s="$EXPECTED_WHEEL_SHA256" '$1==s{print $2}' | head -1 )
+  else
+    ls "$ASSETS_DIR"/*cp314*linux_aarch64.whl 2>/dev/null | head -1
+  fi
+}
+gate_vtar() {
+  if [[ -n "${G7D_VTAR:-}" ]]; then ls "$G7D_VTAR" 2>/dev/null; return; fi
+  if [[ -n "$EXPECTED_VTAR_SHA256" ]]; then
+    ( cd "$ASSETS_DIR" && sha256sum -- omarchy-mlx-vendor-wheels-*.tar 2>/dev/null \
+      | awk -v s="$EXPECTED_VTAR_SHA256" '$1==s{print $2}' | head -1 )
+  else
+    ls "$ASSETS_DIR"/omarchy-mlx-vendor-wheels-*.tar 2>/dev/null | head -1
+  fi
+}
+gate_require_asset() { # gate_require_asset <path> <description>
+  [[ -s "$1" ]] || { echo "REFUSING: $2 not found ($1)" >&2; return 1; }
+}
+# gate_ensure_install_tree — clone the tag into $INSTALL_TREE (default
+# $GATE_ROOT/$TAG-worktree) and assert HEAD == $TAG_SHA. Idempotent: if the
+# tree is already at the right sha, leave it. The "no manual staging" entry
+# point called by g7b.
+gate_ensure_install_tree() {
+  : "${TAG_SHA:?TAG_SHA is required: full 40-char commit sha the tag points at}"
+  : "${INSTALL_TREE:=$GATE_ROOT/${TAG}-worktree}"
+  local want_head
+  want_head="$TAG_SHA"
+  if [[ ! -f "$INSTALL_TREE/install.sh" ]]; then
+    rm -rf "$INSTALL_TREE"
+    git clone --depth 1 --branch "$TAG" \
+      https://github.com/joshuaswarren/omarchy-mlx "$INSTALL_TREE" || return 1
+  fi
+  local got
+  got="$(git -C "$INSTALL_TREE" rev-parse HEAD 2>/dev/null || echo absent)"
+  [[ "$got" == "$want_head" ]] || {
+    echo "REFUSING: INSTALL_TREE HEAD $got != TAG_SHA $want_head" >&2
+    return 1
+  }
+  export INSTALL_TREE
 }
 
 gate_log() { # gate_log <logfile> <line...> — timestamped line to log AND stdout
