@@ -59,8 +59,10 @@ mkdir -p "$LOG_DIR"
 gate_wheel() {
   if [[ -n "${G7D_WHEEL:-}" ]]; then ls "$G7D_WHEEL" 2>/dev/null; return; fi
   if [[ -n "$EXPECTED_WHEEL_SHA256" ]]; then
-    ( cd "$ASSETS_DIR" && sha256sum -- *cp314*linux_aarch64.whl 2>/dev/null \
-      | awk -v s="$EXPECTED_WHEEL_SHA256" '$1==s{print $2}' | head -1 )
+    local f
+    f="$( cd "$ASSETS_DIR" && sha256sum -- *cp314*linux_aarch64.whl 2>/dev/null \
+      | awk -v s="$EXPECTED_WHEEL_SHA256" '$1==s{print $2}' | head -1 )"
+    [[ -n "$f" ]] && echo "$ASSETS_DIR/$f"
   else
     ls "$ASSETS_DIR"/*cp314*linux_aarch64.whl 2>/dev/null | head -1
   fi
@@ -68,8 +70,10 @@ gate_wheel() {
 gate_vtar() {
   if [[ -n "${G7D_VTAR:-}" ]]; then ls "$G7D_VTAR" 2>/dev/null; return; fi
   if [[ -n "$EXPECTED_VTAR_SHA256" ]]; then
-    ( cd "$ASSETS_DIR" && sha256sum -- omarchy-mlx-vendor-wheels-*.tar 2>/dev/null \
-      | awk -v s="$EXPECTED_VTAR_SHA256" '$1==s{print $2}' | head -1 )
+    local f
+    f="$( cd "$ASSETS_DIR" && sha256sum -- omarchy-mlx-vendor-wheels-*.tar 2>/dev/null \
+      | awk -v s="$EXPECTED_VTAR_SHA256" '$1==s{print $2}' | head -1 )"
+    [[ -n "$f" ]] && echo "$ASSETS_DIR/$f"
   else
     ls "$ASSETS_DIR"/omarchy-mlx-vendor-wheels-*.tar 2>/dev/null | head -1
   fi
