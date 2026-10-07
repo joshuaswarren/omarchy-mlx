@@ -11,10 +11,19 @@ VDIR="/tmp/${TAG}-vendor-sysinst"
 : > "$LOG"
 gate_begin "$LOG"
 
-gate_require_asset "$(gate_vtar)" "vendor tar"
+# Driver-staged tag tree (clone + HEAD assert). No manual worktree staging.
+if ! gate_ensure_install_tree; then
+  gate_log "$LOG" "INSTALL_TREE_STAGE FAIL (TAG_SHA=$TAG_SHA, INSTALL_TREE=$INSTALL_TREE)"
+  gate_log "$LOG" "GATE7B_EXIT 1"
+  exit 1
+fi
+gate_log "$LOG" "INSTALL_TREE $INSTALL_TREE HEAD=$(git -C "$INSTALL_TREE" rev-parse HEAD)"
+
+VTAR="$(gate_vtar)"
+gate_require_asset "$VTAR" "vendor tar"
 rm -rf "$DEST" "$VDIR"
 mkdir -p "$DEST" "$VDIR"
-tar -xf "$(gate_vtar)" -C "$VDIR" --strip-components=1
+tar -xf "$VTAR" -C "$VDIR" --strip-components=1
 
 unshare -n -r env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" MLX_OMARCHY_CONV_RING=0 TERM=dumb \
   bash "$INSTALL_TREE/install.sh" --system --dest-root "$DEST" \
