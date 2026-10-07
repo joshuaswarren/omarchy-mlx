@@ -987,7 +987,14 @@ void copy_gpu(const array& input, array& out, CopyType ctype, const Stream& s) {
   // for zero-size outputs (malloc(0) yields a valid empty VulkanBuffer).
   // Skipping set_data left array_desc_->data null, and any later
   // buffer_size()/data() access on the eval'd array segfaulted.
-  out.set_data(omarchy::allocator().malloc(out.nbytes()));
+  // A destination that already carries storage (a shared-buffer view of a
+  // real output, or a primitive's pre-allocated tile) must KEEP it:
+  // reallocating here detaches the view and the copy lands in detached
+  // scratch while the destination keeps its stale fill (2026-10-07 SDPA
+  // VJP isolation, receipts/2026-10-07-sdpa-vjp-fused-off).
+  if (out.data_shared_ptr() == nullptr) {
+    out.set_data(omarchy::allocator().malloc(out.nbytes()));
+  }
   copy_gpu_inplace(
       *in, out, in->shape(), in->strides(), out.strides(), 0, 0, ctype, s);
 }
