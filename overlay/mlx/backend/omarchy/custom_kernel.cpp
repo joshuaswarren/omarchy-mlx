@@ -862,8 +862,9 @@ void specialize_threadgroup_helper_params(
             "` but the kernel body never calls it");
       }
       // Drop the matching argument from every call site (reverse order so
-      // the collected positions stay valid while erasing).
-      size_t cut_from = 0;
+      // the collected positions stay valid while erasing). The source
+      // separates arguments with ", ", so each preceding argument consumes
+      // its trimmed length plus the two separator characters.
       std::vector<std::pair<size_t, size_t>> cuts;
       search = 0;
       while (true) {
@@ -884,7 +885,7 @@ void specialize_threadgroup_helper_params(
             split(body.substr(call_open + 1, call_close - call_open - 1), ',');
         size_t arg_start = call_open + 1;
         for (size_t index = 0; index < param_index; ++index) {
-          arg_start += arguments[index].size() + 1;
+          arg_start += arguments[index].size() + 2;
         }
         size_t begin = arg_start;
         size_t end = begin + arguments[param_index].size();

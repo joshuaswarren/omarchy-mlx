@@ -91,6 +91,11 @@ TEST_CASE("threadgroup helper parameters specialize to same-named globals") {
   // The helper body still references the (now global) arrays.
   CHECK(glsl.find("local_sums[") != std::string::npos);
   CHECK(glsl.find("local_inv[0]") != std::string::npos);
+  // Both parameters were dropped from every call site and the neighbouring
+  // arguments survived byte-for-byte (regression: an off-by-two in the
+  // call-site erase corrupted the third argument's trailing digit).
+  CHECK(glsl.find("msv_row_inv_rms(acc1, 1e-6f, 2560, 0u, lid)") !=
+        std::string::npos);
 }
 
 TEST_CASE("aliased threadgroup argument is refused by name") {
