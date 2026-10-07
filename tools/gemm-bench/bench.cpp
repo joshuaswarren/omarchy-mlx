@@ -337,11 +337,17 @@ static DeviceCtx setup_device() {
     g_vk.GetPhysicalDeviceProperties2(pds[i], &props2);
     // Feature flags are queried through Features2, not Properties2:
     // the driver leaves unknown-to-properties structs untouched.
+    VkPhysicalDeviceShaderBfloat16FeaturesKHR bff{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
     if (has_cm) {
+      cmf.pNext = &bff;
       VkPhysicalDeviceFeatures2 f2{
           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
       f2.pNext = &cmf;
       g_vk.GetPhysicalDeviceFeatures2(pds[i], &f2);
+      std::printf("{\"k\":\"bf16_features\",\"type\":%u,\"coopmat\":%u}\n",
+          bff.shaderBFloat16Type, bff.shaderBFloat16CooperativeMatrix);
+      if (!bff.shaderBFloat16Type) cmf.pNext = nullptr;
     }
     uint32_t qfn = 0;
     g_vk.GetPhysicalDeviceQueueFamilyProperties(pds[i], &qfn, nullptr);
@@ -381,9 +387,10 @@ static DeviceCtx setup_device() {
       dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
       dci.queueCreateInfoCount = 1;
       dci.pQueueCreateInfos = &qci;
-      const char* exts_on[1] = {"VK_KHR_cooperative_matrix"};
+      const char* exts_on[2] = {"VK_KHR_cooperative_matrix",
+                                "VK_KHR_shader_bfloat16"};
       if (c.coopmat) {
-        dci.enabledExtensionCount = 1;
+        dci.enabledExtensionCount = cmf.pNext ? 2 : 1;
         dci.ppEnabledExtensionNames = exts_on;
         dci.pNext = &cmf;
       }

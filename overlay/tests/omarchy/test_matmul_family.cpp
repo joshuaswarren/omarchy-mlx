@@ -647,44 +647,47 @@ TEST_CASE("direct matmul route: first matching row wins, else the shipped route"
   const DirectMatmulRoute wide{ComputeKernel::MatmulDirectF16Nn, 128u};
   const DirectMatmulRoute any_g13{ComputeKernel::MatmulDirectF16Tn, 64u};
   const std::array<omarchy::DirectMatmulRow, 2> rows{{
-      {"G13G", true, false, true, 128u, 64u, wide},
-      {"G13", true, false, true, 32u, 32u, any_g13},
+      {"G13G", float16, false, true, 128u, 64u, wide},
+      {"G13", float16, false, true, 32u, 32u, any_g13},
   }};
-  auto pick = [&](std::string_view device, bool f16, bool a_t, bool b_t,
+  auto pick = [&](std::string_view device, Dtype dtype, bool a_t, bool b_t,
                   uint32_t m, uint32_t n) {
     return omarchy::select_direct_matmul_route(
-        rows, device, f16, a_t, b_t, m, n, shipped);
+        rows, device, dtype, a_t, b_t, m, n, shipped);
   };
-  const auto m1 = pick("Apple M1 (G13G B1)", true, false, true, 512u, 4096u);
+  const auto m1 = pick("Apple M1 (G13G B1)", float16, false, true, 512u, 4096u);
   CHECK(m1.kernel == wide.kernel);
   CHECK_EQ(m1.tile_n, 128u);
   // Below the first row's m or n floor, the next matching row takes over.
-  CHECK(pick("Apple M1 (G13G B1)", true, false, true, 127u, 4096u).kernel ==
+  CHECK(pick("Apple M1 (G13G B1)", float16, false, true, 127u, 4096u).kernel ==
         any_g13.kernel);
-  CHECK(pick("Apple M1 (G13G B1)", true, false, true, 512u, 63u).kernel ==
+  CHECK(pick("Apple M1 (G13G B1)", float16, false, true, 512u, 63u).kernel ==
         any_g13.kernel);
   // The chip key is a device-name substring.
-  CHECK(pick("Apple M1 Max (G13C C0)", true, false, true, 512u, 4096u).kernel ==
+  CHECK(pick("Apple M1 Max (G13C C0)", float16, false, true, 512u, 4096u).kernel ==
         any_g13.kernel);
-  // Another chip, dtype, or orientation keeps the shipped route.
-  const auto g14 = pick("Apple M2 (G14G B1)", true, false, true, 512u, 4096u);
+  // Another chip, dtype, or orientation keeps the shipped route. bf16 and
+  // f16 are distinct keys although both are 16-bit.
+  const auto g14 = pick("Apple M2 (G14G B1)", float16, false, true, 512u, 4096u);
   CHECK(g14.kernel == shipped.kernel);
   CHECK_EQ(g14.tile_n, 64u);
-  CHECK(pick("Apple M1 (G13G B1)", false, false, true, 512u, 4096u).kernel ==
+  CHECK(pick("Apple M1 (G13G B1)", float32, false, true, 512u, 4096u).kernel ==
         shipped.kernel);
-  CHECK(pick("Apple M1 (G13G B1)", true, false, false, 512u, 4096u).kernel ==
+  CHECK(pick("Apple M1 (G13G B1)", bfloat16, false, true, 512u, 4096u).kernel ==
         shipped.kernel);
-  CHECK(pick("Apple M1 (G13G B1)", true, true, true, 512u, 4096u).kernel ==
+  CHECK(pick("Apple M1 (G13G B1)", float16, false, false, 512u, 4096u).kernel ==
+        shipped.kernel);
+  CHECK(pick("Apple M1 (G13G B1)", float16, true, true, 512u, 4096u).kernel ==
         shipped.kernel);
   // A 128-wide route never applies below n = 64, even if its row allows it.
   const std::array<omarchy::DirectMatmulRow, 1> loose{{
-      {"G13G", true, false, true, 32u, 32u, wide},
+      {"G13G", float16, false, true, 32u, 32u, wide},
   }};
   CHECK(omarchy::select_direct_matmul_route(
-            loose, "Apple M1 (G13G B1)", true, false, true, 512u, 48u,
+            loose, "Apple M1 (G13G B1)", float16, false, true, 512u, 48u,
             shipped).kernel == shipped.kernel);
   CHECK_EQ(omarchy::select_direct_matmul_route(
-               loose, "Apple M1 (G13G B1)", true, false, true, 512u, 64u,
+               loose, "Apple M1 (G13G B1)", float16, false, true, 512u, 64u,
                shipped).tile_n, 128u);
 }
 
@@ -693,7 +696,7 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
   const omarchy::DirectMatmulRoute shipped{ComputeKernel::MatmulDirectF16Nn, 64u};
   auto kernel = [&](std::string_view device, bool a_t, bool b_t) {
     return omarchy::select_direct_matmul_route(
-        omarchy::kDirectMatmulRows, device, true, a_t, b_t, 4096u, 4096u,
+        omarchy::kDirectMatmulRows, device, float16, a_t, b_t, 4096u, 4096u,
         shipped).kernel;
   };
   for (std::string_view chip : {"Apple M1 (G13G B1)", "Apple M1 Max (G13C C0)"}) {
@@ -718,11 +721,12 @@ TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every o
   }
   Stream stream = gpu_stream();
   // On a cooperative-matrix device, f16 and f32 with m >= 32 take
-  // MatmulDirect; every 16-row slice of A runs the 16x16 tile (f16) or
-  // the staged coopmat tile (f32). All keep one f32 accumulator over
-  // ascending k on the same operand values, so every stored bit must
-  // agree - including the edge tiles that shift back to m - 32 / n - 32
-  // and recompute their neighbour's outputs.
+  // MatmulDirect, and bf16 does too where the bf16 shape exists
+  // (cooperative_matrix_bf16_8); every 16-row slice of A runs the 16x16
+  // tile (f16, bf16) or the staged coopmat tile (f32). All keep one f32
+  // accumulator over ascending k on the same operand values, so every
+  // stored bit must agree - including the edge tiles that shift back to
+  // m - 32 / n - 32 and recompute their neighbour's outputs.
   struct Case {
     int m;
     int k;
@@ -735,7 +739,11 @@ TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every o
     const uint8_t* p = x.data<uint8_t>();
     return std::vector<uint8_t>(p, p + x.nbytes());
   };
-  for (Dtype dtype : {float16, float32}) {
+  std::vector<Dtype> dtypes{float16, float32};
+  if (omarchy::device(0).capabilities().cooperative_matrix_bf16_8) {
+    dtypes.push_back(bfloat16);
+  }
+  for (Dtype dtype : dtypes) {
     for (const Case& c :
          {Case{142, 88, 200, false, false}, Case{142, 40, 72, false, true},
           Case{142, 64, 72, true, false}, Case{142, 16, 34, true, true},
