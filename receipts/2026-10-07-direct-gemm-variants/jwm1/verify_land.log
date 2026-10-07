@@ -1,0 +1,63 @@
+start 2026-10-07T06:02:47Z so 27e6fca16be550f4
+device Apple M1 (G13G B1)
+venv 0.32.4.dev202610070341+e034673d
+venv-land 0.32.4.dev202610070516+60388f09
+family rc=0 [doctest] test cases:       29 |       29 passed | 0 failed | 0 skipped [doctest] assertions: 82942540 | 82942540 passed | 0 failed | 
+== mlx venv r1
+{"k": "host", "chip": "apple,j293", "system": "Linux-7.1.12-2-11.38-sep-ARCH-aarch64-with-glibc2.43", "mlx": "0.32.4.dev202610070341+e034673d", "device": "Device(gpu, 0)"}
+{"k": "time", "cell": "nn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 70802.3, "tflops": 1.941, "tflops_best": 1.945}
+{"k": "time", "cell": "nt4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 90347.9, "tflops": 1.521, "tflops_best": 1.532}
+{"k": "time", "cell": "nt512", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 10732.6, "tflops": 1.601, "tflops_best": 1.618}
+{"k": "time", "cell": "tn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": true, "b_t": false, "median_us": 75625.0, "tflops": 1.817, "tflops_best": 1.826}
+{"k": "time", "cell": "nt512k4104", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4104, "a_t": false, "b_t": true, "median_us": 11338.9, "tflops": 1.518, "tflops_best": 1.567}
+{"k": "time", "cell": "bf16_nn4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 206154.7, "tflops": 0.667, "tflops_best": 0.667}
+{"k": "time", "cell": "bf16_nt4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 168484.2, "tflops": 0.816, "tflops_best": 0.816}
+{"k": "time", "cell": "f32_nn4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 110219.0, "tflops": 1.247, "tflops_best": 1.274}
+{"k": "time", "cell": "f32_nt4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 264020.9, "tflops": 0.521, "tflops_best": 0.532}
+{"k": "time", "cell": "transpose4096_f16", "median_us": 5312.6, "gb_s": 12.6}
+{"k": "time", "cell": "q4_gate512", "m": 512, "n": 6144, "kdim": 2048, "median_us": 8207.4, "tflops": 1.57, "out_sha": "45c80660b32430fc"}
+{"k": "time", "cell": "q4_down512", "m": 512, "n": 2048, "kdim": 6144, "median_us": 9037.6, "tflops": 1.426, "out_sha": "7046774e5d46b5dc"}
+== mlx venv-land r1
+{"k": "host", "chip": "apple,j293", "system": "Linux-7.1.12-2-11.38-sep-ARCH-aarch64-with-glibc2.43", "mlx": "0.32.4.dev202610070516+60388f09", "device": "Device(gpu, 0)"}
+{"k": "time", "cell": "nn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 70764.4, "tflops": 1.942, "tflops_best": 1.944}
+{"k": "time", "cell": "nt4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 78428.6, "tflops": 1.752, "tflops_best": 1.755}
+{"k": "time", "cell": "nt512", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 10281.7, "tflops": 1.671, "tflops_best": 1.696}
+{"k": "time", "cell": "tn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": true, "b_t": false, "median_us": 70510.7, "tflops": 1.949, "tflops_best": 1.954}
+{"k": "time", "cell": "nt512k4104", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4104, "a_t": false, "b_t": true, "median_us": 10594.7, "tflops": 1.625, "tflops_best": 1.637}
+{"k": "time", "cell": "bf16_nn4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 206246.1, "tflops": 0.666, "tflops_best": 0.667}
+{"k": "time", "cell": "bf16_nt4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 168709.0, "tflops": 0.815, "tflops_best": 0.815}
+{"k": "time", "cell": "f32_nn4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 110960.2, "tflops": 1.239, "tflops_best": 1.28}
+{"k": "time", "cell": "f32_nt4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 330069.6, "tflops": 0.416, "tflops_best": 0.423}
+{"k": "time", "cell": "transpose4096_f16", "median_us": 5306.0, "gb_s": 12.6}
+{"k": "time", "cell": "q4_gate512", "m": 512, "n": 6144, "kdim": 2048, "median_us": 8196.6, "tflops": 1.572, "out_sha": "45c80660b32430fc"}
+{"k": "time", "cell": "q4_down512", "m": 512, "n": 2048, "kdim": 6144, "median_us": 8974.2, "tflops": 1.436, "out_sha": "7046774e5d46b5dc"}
+== mlx venv r2
+{"k": "host", "chip": "apple,j293", "system": "Linux-7.1.12-2-11.38-sep-ARCH-aarch64-with-glibc2.43", "mlx": "0.32.4.dev202610070341+e034673d", "device": "Device(gpu, 0)"}
+{"k": "time", "cell": "nn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 70792.7, "tflops": 1.941, "tflops_best": 1.944}
+{"k": "time", "cell": "nt4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 90088.2, "tflops": 1.526, "tflops_best": 1.542}
+{"k": "time", "cell": "nt512", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 10776.8, "tflops": 1.594, "tflops_best": 1.62}
+{"k": "time", "cell": "tn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": true, "b_t": false, "median_us": 75430.1, "tflops": 1.822, "tflops_best": 1.827}
+{"k": "time", "cell": "nt512k4104", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4104, "a_t": false, "b_t": true, "median_us": 11290.6, "tflops": 1.525, "tflops_best": 1.567}
+{"k": "time", "cell": "bf16_nn4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 206281.8, "tflops": 0.666, "tflops_best": 0.666}
+{"k": "time", "cell": "bf16_nt4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 168438.0, "tflops": 0.816, "tflops_best": 0.816}
+{"k": "time", "cell": "f32_nn4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 111104.8, "tflops": 1.237, "tflops_best": 1.267}
+{"k": "time", "cell": "f32_nt4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 260239.6, "tflops": 0.528, "tflops_best": 0.535}
+{"k": "time", "cell": "transpose4096_f16", "median_us": 5329.6, "gb_s": 12.6}
+{"k": "time", "cell": "q4_gate512", "m": 512, "n": 6144, "kdim": 2048, "median_us": 8200.8, "tflops": 1.571, "out_sha": "45c80660b32430fc"}
+{"k": "time", "cell": "q4_down512", "m": 512, "n": 2048, "kdim": 6144, "median_us": 9147.9, "tflops": 1.409, "out_sha": "7046774e5d46b5dc"}
+== mlx venv-land r2
+{"k": "host", "chip": "apple,j293", "system": "Linux-7.1.12-2-11.38-sep-ARCH-aarch64-with-glibc2.43", "mlx": "0.32.4.dev202610070516+60388f09", "device": "Device(gpu, 0)"}
+{"k": "time", "cell": "nn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 70818.9, "tflops": 1.941, "tflops_best": 1.945}
+{"k": "time", "cell": "nt4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 78489.3, "tflops": 1.751, "tflops_best": 1.754}
+{"k": "time", "cell": "nt512", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 10635.3, "tflops": 1.615, "tflops_best": 1.627}
+{"k": "time", "cell": "tn4096", "dtype": "mlx.core.float16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": true, "b_t": false, "median_us": 70483.1, "tflops": 1.95, "tflops_best": 1.963}
+{"k": "time", "cell": "nt512k4104", "dtype": "mlx.core.float16", "m": 512, "n": 4096, "kdim": 4104, "a_t": false, "b_t": true, "median_us": 10606.5, "tflops": 1.623, "tflops_best": 1.651}
+{"k": "time", "cell": "bf16_nn4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 206314.0, "tflops": 0.666, "tflops_best": 0.666}
+{"k": "time", "cell": "bf16_nt4096", "dtype": "mlx.core.bfloat16", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 168632.4, "tflops": 0.815, "tflops_best": 0.815}
+{"k": "time", "cell": "f32_nn4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": false, "median_us": 110184.1, "tflops": 1.247, "tflops_best": 1.32}
+{"k": "time", "cell": "f32_nt4096", "dtype": "mlx.core.float32", "m": 4096, "n": 4096, "kdim": 4096, "a_t": false, "b_t": true, "median_us": 257989.6, "tflops": 0.533, "tflops_best": 0.542}
+{"k": "time", "cell": "transpose4096_f16", "median_us": 5333.9, "gb_s": 12.6}
+{"k": "time", "cell": "q4_gate512", "m": 512, "n": 6144, "kdim": 2048, "median_us": 8191.0, "tflops": 1.573, "out_sha": "45c80660b32430fc"}
+{"k": "time", "cell": "q4_down512", "m": 512, "n": 2048, "kdim": 6144, "median_us": 8994.4, "tflops": 1.433, "out_sha": "7046774e5d46b5dc"}
+mlxcheck2 land vs base hash diffs: [] of 21
+end 2026-10-07T06:06:35Z
