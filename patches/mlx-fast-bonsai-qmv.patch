@@ -31,7 +31,7 @@ diff --git a/mlx/fast.cpp b/mlx/fast.cpp
 index add78fa..93ddfd9 100644
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1192,4 +1192,290 @@ bool ConvertFP8::is_equivalent(const Primitive& other) const {
+@@ -1192,4 +1192,302 @@ bool ConvertFP8::is_equivalent(const Primitive& other) const {
    return to_fp8_ == a_other.to_fp8_;
  }
  
@@ -75,21 +75,32 @@ index add78fa..93ddfd9 100644
 +  int n_groups = static_cast<int>(scales.shape(-1));
 +  array shifts = arange(8, uint32, s);
 +  // w [N, K32] -> [N, K32, 8] -> [N, K] uint8 -> cast to out dtype
++  // MLX's `uint32` is a Dtype constant in mlx::core, so use the C++
++  // scalar type uint32_t for the array scalar ctor's T parameter.
++  mlx::core::array one_mask = mlx::core::array(uint32_t{1});
 +  array w_unpack = astype(
-+      bitwise_and(expand_dims(right_shift(w, shifts), -1), 1), out.dtype(), s);
-+  w_unpack = reshape(w_unpack, {N, K});
++      bitwise_and(
++          expand_dims(right_shift(w, shifts), -1), one_mask, s),
++      out.dtype(),
++      s);
++  w_unpack = reshape(w_unpack, {N, K}, s);
 +  array w_fp = multiply(
 +      w_unpack,
-+      broadcast_to(expand_dims(scales, -1), {N, K32 * 8 / n_groups, n_groups}, s)
-+          .reshape({N, K}),
++      reshape(
++          broadcast_to(expand_dims(scales, -1), {N, K32 * 8 / n_groups, n_groups}, s),
++          {N, K},
++          s),
 +      s);
-+  if (biases.dtype() != out.dtype()) {
-+    biases = astype(biases, out.dtype(), s);
++  array biases_c = biases;
++  if (biases_c.dtype() != out.dtype()) {
++    biases_c = astype(biases_c, out.dtype(), s);
 +  }
 +  out = add(
 +      w_fp,
-+      broadcast_to(expand_dims(biases, -1), {N, K32 * 8 / n_groups, n_groups}, s)
-+          .reshape({N, K}),
++      reshape(
++          broadcast_to(expand_dims(biases_c, -1), {N, K32 * 8 / n_groups, n_groups}, s),
++          {N, K},
++          s),
 +      s);
 +}
 +
@@ -251,7 +262,8 @@ index add78fa..93ddfd9 100644
 +    }
 +    array out = quantized_matmul(
 +        x_ref, w_ref, sc_ref, bi_ref,
-+        /*transpose=*/true, /*group_size=*/group, /*bits=*/2, s);
++        /*transpose=*/true, /*group_size=*/group, /*bits=*/2,
++        /*mode=*/"affine", s);
 +    return std::vector<array>{out};
 +  };
 +  bool routed = !BonsaiQmvWide::use_fallback(s);
