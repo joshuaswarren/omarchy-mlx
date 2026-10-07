@@ -14736,10 +14736,18 @@ void ScaledDotProductAttentionVJP::eval_gpu(
   copy_gpu(dq5, dq, CopyType::Vector, s);
 
   // dK = dS^T Q and dV = P^T dO per query head, GQA-summed into the
-  // KV-head outputs. The tiles share the score plane's rank: 5-D with
+  // KV-head outputs. The tiles share the score plane's RANK: 5-D with
   // the GQA group axis, plain 4-D at rep=1 where head_split was a
-  // no-op, so derive them from S instead of assuming a rank.
+  // no-op — but the ROW extent is kL (the transpose puts keys first:
+  // dK = [kL,qL]x[qL,D]), NOT the score plane's qL rows. Taking the
+  // whole S shape here allocated [B,H,qL,D]; at qL < kL the matmul's
+  // batch_count = out.size()/(kL*D) undercounts (0 at qL=1, kL=2), the
+  // dispatch launches no workgroups, and dk/dv keep their stale fill
+  // while every earlier plane is correct (2026-10-07, receipts/
+  // 2026-10-07-sdpa-vjp-fused-off; the 2026-10-03 zeros at rep=1 and
+  // the B=2 half-written signature are this bug).
   Shape tile_shape = S.shape();
+  tile_shape[tile_shape.size() - 2] = kL;
   tile_shape.back() = D;
   array dkt(tile_shape, float32, nullptr, {});
   tile_shape.back() = Dv;
