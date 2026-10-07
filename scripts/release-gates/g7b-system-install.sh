@@ -24,6 +24,8 @@ gate_require_asset "$VTAR" "vendor tar"
 rm -rf "$DEST" "$VDIR"
 mkdir -p "$DEST" "$VDIR"
 tar -xf "$VTAR" -C "$VDIR" --strip-components=1
+TAR_RC=$?
+gate_log "$LOG" "VTAR $VTAR strip_rc=$TAR_RC lock=$([ -f "$VDIR/requirements-lock.txt" ] && echo present || echo MISSING)"
 
 unshare -n -r env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" MLX_OMARCHY_CONV_RING=0 TERM=dumb \
   bash "$INSTALL_TREE/install.sh" --system --dest-root "$DEST" \
