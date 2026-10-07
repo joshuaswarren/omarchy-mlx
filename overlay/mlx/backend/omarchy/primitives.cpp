@@ -11348,26 +11348,30 @@ bool ScaledDotProductAttention::use_fallback(
   if (bh > 65535 || bh * q.shape(2) > 65535) {
     return true;
   }
-  return false;
+  // The training lse output is only consumed by the fused VJP; with the
+  // VJP gated off (ScaledDotProductAttentionVJP::use_fallback) the forward
+  // keeps the single-output composed shape and the VJP measures composed.
+  return true;
 }
 
 bool ScaledDotProductAttentionVJP::use_fallback(const array& q, Stream s) {
-  // rep=1 only: the fused dk is fd-proven on M2 G14X real hardware
-  // (three-way with the exact doctest seeds), and the dv operand fix
-  // plus the lhs materialization are in. rep>1 stays composed until
-  // the GQA reduce/matmul shortfall (~0.7x) is fixed. The composed
-  // path has its own known dk defect at rep=1 shapes 5x7/4x4/6x9
-  // (documented in docs/compatibility.md and the may_fail fd legs) -
-  // it is the fallback for rep>1 only.
+  // FUSED VJP GATED OFF (2026-10-07): the primitive's dk/dv outputs never
+  // receive the reduce result. Isolation on the build host (M1 Max,
+  // Honeykrisp): every internal plane is correct at its stage boundary
+  // (lse, delta, dP, dS, P, both transposed copies, q5/k5 — dumped with
+  // MLX_OMARCHY_SDPA_VJP_DUMP probes against host math), the standalone
+  // [2x1]x[1x4] matmuls are clean, yet dk carries dq's words in its first
+  // row and zeros/recycled bytes beyond, and dv stays zero. The composed
+  // fallback matches host finite differences at every probed rep=1 shape
+  // (1x1x2x4, 1x2x5x4, causal 1x3x5x8) on the same run. Route everything
+  // to the composed path until the output-buffer defect is fixed and
+  // fd-proven; MLX_OMARCHY_NO_FUSED_VJP=1 remains the explicit kill
+  // switch. Evidence: receipts/2026-10-07-sdpa-vjp-fused-off/README.md.
+  (void)q;
   if (s.device == Device::cpu) {
     return true;
   }
-  static const bool disabled = omarchy::env_flag("MLX_OMARCHY_NO_FUSED_VJP");
-  if (disabled) {
-    return true;
-  }
-  auto dt = q.dtype();
-  return !(dt == float32 || dt == float16 || dt == bfloat16);
+  return true;
 }
 
 bool ScaledDotProductAttention::supports_bool_mask() {
