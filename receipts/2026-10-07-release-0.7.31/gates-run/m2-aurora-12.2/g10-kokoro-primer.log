@@ -1,0 +1,11 @@
+BEGIN 2026-10-07T21:01:31Z tag=v0.7.31 boot_id=f0eafd96-0532-4db9-ab2f-5f42f3eba49c uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+loadavg_before=1.02 0.59 0.27 1/516 67464
+SETUP_COMPLETE 3.2s
+VOICE_SETUP_COMPLETE 23.3s
+PRIMED true after 10.3s (limit 90s)
+CHAT status=complete text='Ready'
+TTFA 0.716s (limit 2.00s)
+GATE10 PASS
+fuser_port=35019 exit=1 output=
+GATE10_EXIT 0

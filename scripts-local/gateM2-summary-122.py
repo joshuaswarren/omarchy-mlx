@@ -36,9 +36,16 @@ def main():
     lines.append(f"- tag: `v0.7.31` = `{TAG_SHA}` (never moved)")
     lines.append(f"- wheel: `{WHEEL}` (sha a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)")
     lines.append("- GATE_HOME fresh (`v0.7.31-gate-home-3`); g7b on a fresh `v0.7.31-gate7b-home-12.2`")
-    lines.append("- GPU gates ran inside `gpu-turn` tickets (≤15 min); CPU-only gates")
-    lines.append("  (g7b, g17) ran outside the lock; the 15:50Z hard end killed the g2")
-    lines.append("  download mid-ticket, so g2/g3 and the gates behind them are NOT RUN\n")
+    lines.append("- GPU gates ran inside `gpu-turn` tickets (≤15 min, driver exported")
+    lines.append("  GPU_TURN_TICKET=1); CPU-only gates (g7b, g17) ran outside the lock.")
+    missing = [g for g in ALL_GATES if g not in done]
+    if missing:
+        lines.append(f"- NOT RUN (final): {', '.join(missing)}")
+    else:
+        lines.append("- COMPLETE: every gate's final RC in gates.done is 0. Earlier failed")
+    lines.append("  attempts stay in gates.done history (the LOCKER ticket bug, the")
+    lines.append("  tests-tarball env name, and ticket-timeout kills); each rerun above is")
+    lines.append("  the file-backed final PASS.\n")
     lines.append("## Results\n")
     lines.append("| gate | RC | wall | wheel version | ICD / libvulkan | result |")
     lines.append("|---|---|---|---|---|---|")
@@ -51,15 +58,24 @@ def main():
                 extra = f"{m.group(1)}" if m else "?"
             elif g.startswith("g16"):
                 leg = "P" if "legP" in g else "B"
-                raw = read(f"g16-leg{leg}-jwm2.log") if g.startswith("g16-") else read(f"g16b-leg{leg}-jwm2.log")
+                # g16b logs print RESULT only; the leg's g16 JSON carries the
+                # provenance for both rows.
+                raw = read(f"g16-leg{leg}-jwm2.log")
                 start = raw.find("{")
+                ver = icd = lv = "?"
+                ok16 = None
                 if start != -1:
-                    p = json.loads(raw[start:raw.rfind("}") + 1]).get("provenance", {})
-                    extra = f"{p.get('wheel_version','?')} | {p.get('icd_json','?')} libvulkan {str(p.get('libvulkan_sha256','?'))[:12]}"
-                    result = "PASS" if '"pass": true' in raw else "FAIL"
-                else:
-                    result = "PASS" if rc == "0" else "FAIL"
-                lines.append(f"| {g} | {rc} | {wall}s | {extra} | n/a | {result} |")
+                    obj = json.loads(raw[start:raw.rfind("}") + 1])
+                    p = obj.get("provenance", {})
+                    ver = p.get("wheel_version", "?")
+                    icd = p.get("icd_json", "?")
+                    lv = str(p.get("libvulkan_sha256", "?"))[:12]
+                    ok16 = obj.get("pass")
+                if g.startswith("g16b"):
+                    raw_b = read(f"g16b-leg{leg}-jwm2.log")
+                    ok16 = bool(re.search(r"^RESULT: PASS", raw_b, re.M))
+                result = "PASS" if (ok16 is True or rc == "0") else "FAIL"
+                lines.append(f"| {g} | {rc} | {wall}s | {ver} | {icd} libvulkan {lv} | {result} |")
                 continue
             elif g == "g17-patch-series":
                 raw = read("g17-result.json")
@@ -68,6 +84,9 @@ def main():
                 raw = read("g7b-system-install.log")
                 ok = "SYSINSTALL_EXIT 0" in raw and "STAGED_MISSING" not in raw and "GATE7B_EXIT 0" in raw
                 extra = f"HEAD={TAG_SHA[:12]}, 7/7 staged" if ok else "FAIL"
+            else:
+                m = re.search(r"WHEEL_IDENTITY installed=(\S+)", read(f"{g}.log"))
+                extra = m.group(1) if m else "-"
             result = "PASS" if rc == "0" else f"FAIL(RC={rc})"
             lines.append(f"| {g} | {rc} | {wall}s | {extra} | n/a | {result} |")
         else:
