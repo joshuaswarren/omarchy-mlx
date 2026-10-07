@@ -16,6 +16,7 @@ ASSIST_A="$GATE_ROOT/${TAG}-assist-route-on"
 ASSIST_B="$GATE_ROOT/${TAG}-assist-route-off"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 run_leg() { # run_leg <home-dir> [KEY=VALUE ...]  -> background pid
   local home_dir="$1"; shift

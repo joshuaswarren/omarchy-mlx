@@ -10,6 +10,7 @@ DEST="/tmp/${TAG}-sysinst"
 VDIR="/tmp/${TAG}-vendor-sysinst"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 # Driver-staged tag tree (clone + HEAD assert). No manual worktree staging.
 if ! gate_ensure_install_tree; then

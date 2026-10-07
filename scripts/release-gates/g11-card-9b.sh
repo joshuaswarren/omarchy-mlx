@@ -12,6 +12,7 @@ gate_refuse_existing "$ASSIST"
 mkdir -p "$ASSIST"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
   flock -x -w 900 "$GPU_LOCK" timeout -k 60 2400 \

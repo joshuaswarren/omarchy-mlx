@@ -10,6 +10,7 @@ LOG="$LOG_DIR/g12-kokoro-stream.log"
 ASSIST="$GATE_ROOT/${TAG}-assist-stream"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 gate_log "$LOG" "loadavg_before=$(cat /proc/loadavg)"
 
 gate_refuse_existing "$ASSIST"

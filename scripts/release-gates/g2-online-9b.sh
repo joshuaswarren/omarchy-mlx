@@ -11,6 +11,7 @@ gate_refuse_existing "$HF_CACHE" "$ASSIST_9B"
 mkdir -p "$HF_CACHE" "$ASSIST_9B"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 gate_log "$LOG" "df_before $(df -BG "$GATE_ROOT" | tail -1 | awk '{print $4}')"
 gate_log "$LOG" "hf_bytes_before $(du -sb "$HF_CACHE" | cut -f1)"
 

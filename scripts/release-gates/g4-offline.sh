@@ -9,6 +9,7 @@ PROBE="$GATES_DIR/gate-probe.py"
 gate_refuse_existing "$ASSIST_OFF"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 flock -x -w 300 "$GPU_LOCK" unshare -n -r bash -c '
 set -uo pipefail
