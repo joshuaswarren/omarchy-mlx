@@ -1,0 +1,14 @@
+g1-clean-install_RC=0 wall=27s
+g14-routing_RC=1 wall=1249s
+g3-online-4b-card_RC=0 wall=59s
+g2-online-9b_RC=2 wall=0s
+g7a-packaged-icd_RC=1 wall=0s
+g7b-system-install_RC=1 wall=0s
+g4-offline_RC=0 wall=16s
+g5-laya_RC=0 wall=0s
+g11-card-9b_RC=0 wall=20s
+g6-codec_RC=1 wall=20s
+g8-kokoro_RC=0 wall=21s
+g9-speak-queue_RC=0 wall=12s
+g10-kokoro-primer_RC=0 wall=70s
+g12-kokoro-stream_RC=0 wall=87s
