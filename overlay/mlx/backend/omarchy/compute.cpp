@@ -419,6 +419,7 @@
 #include "gather_axis_u32.h"
 #include "gather_axis_bool.h"
 #include "masked_scatter_bf16.h"
+#include "masked_scatter_bool.h"
 #include "masked_scatter_f16.h"
 #include "masked_scatter_u32.h"
 #include "scatter_axis_bf16.h"
@@ -994,6 +995,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {masked_scatter_f16, masked_scatter_f16_size};
     case ComputeKernel::MaskedScatterBF16:
       return {masked_scatter_bf16, masked_scatter_bf16_size};
+    case ComputeKernel::MaskedScatterBool:
+      return {masked_scatter_bool, masked_scatter_bool_size};
     case ComputeKernel::ClearU32:
       return {clear_u32, clear_u32_size};
     case ComputeKernel::QmmF16:
