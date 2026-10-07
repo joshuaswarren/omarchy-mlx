@@ -1,5 +1,10 @@
 # Maintainer: Joshua Warren <joshua@joshuawarren.com>
 #
+# DEPRECATED. Do not build or install this package. It replaces the system
+# Mesa package. The supported Honeykrisp driver is omarchy-mlx-vulkan, which
+# installs a private ICD under /usr/lib/omarchy-mlx/vulkan/ and leaves the
+# system Mesa driver installed for the desktop. See docs/install-omarchy.md.
+#
 # Drop-in replacement for the asahi-alarm `mesa` package that builds the
 # Honeykrisp fork branch (github.com/joshuaswarren/mesa-1, honeykrisp-omarchy).
 # The recipe is AsahiLinux/PKGBUILDs mesa/PKGBUILD at 28229b8 (the exact

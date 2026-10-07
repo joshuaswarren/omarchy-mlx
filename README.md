@@ -69,13 +69,16 @@ table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage) of
 Open the Omarchy menu and pick Install > AI > MLX + Core ML (Apple
 Silicon). It installs the `omarchy-mac-ml` meta package. That pulls in
 `omarchy-mlx` (the runtime, as a system venv under
-`/usr/lib/omarchy-mlx` with launchers in `/usr/bin`), the Honeykrisp
-Vulkan driver, and the ANE packages. The system install builds offline
-from the vendored, hash-locked wheel set attached to each release.
+`/usr/lib/omarchy-mlx` with launchers in `/usr/bin`),
+`omarchy-mlx-vulkan` (the private Honeykrisp ICD under
+`/usr/lib/omarchy-mlx/vulkan/`), and the ANE packages. The Vulkan
+package leaves the system Mesa driver installed for the desktop. The
+system install builds offline from the vendored, hash-locked wheel set
+attached to each release.
 
 ### Install with the script
 
-On any Asahi-based Arch install (M1 class or M2 Max), the script sets
+On an Arch install for an M1-class Mac or an M2 Max, the script sets
 up a private venv under `~/.local/share/mlx-omarchy` and puts the
 launchers in `~/.local/bin`. It registers MLX Chat in the launcher
 menu. It never replaces Mesa or edits Omarchy package files.
@@ -109,8 +112,9 @@ software Vulkan driver plus `MLX_OMARCHY_ALLOW_NON_APPLE=1` to import
 the module.
 
 The wheels ship GPU kernels, not the driver. The Omarchy package path
-brings the Honeykrisp driver with it. A script or wheel install needs
-the fork driver built per
+brings the Honeykrisp driver with it (`omarchy-mlx-vulkan`, a private
+ICD under `/usr/lib/omarchy-mlx/vulkan/`). A script or wheel install
+needs that package. It leaves the system Mesa driver installed. See
 [docs/install-omarchy.md](docs/install-omarchy.md).
 
 The demo video is 2:47, unedited. It runs from the one-line install to
@@ -179,11 +183,13 @@ composed route. See docs/numerics-gate.md for the acceptance criteria.
 MLX lowers your graph to Vulkan compute and runs it on the Apple GPU.
 The backend picks the Vulkan ICD
 inside its own process. With no `VK_DRIVER_FILES` or
-`VK_ICD_FILENAMES` set, it scans the standard ICD paths and prefers
-the packaged Honeykrisp ICD over the stock Asahi one. It pins the
-loader variables for itself. It refuses to start on a driver whose
-Mesa git sha does not match the pinned value. Stock Mesa stays the
-system driver for the desktop; nothing replaces it. The ANE runs as a
+`VK_ICD_FILENAMES` set, it selects
+`/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json` when that
+file exists and points the loader at it for this process. Otherwise it
+searches the standard ICD directories. When the packaged ICD is
+selected and `mesa-git-sha` is non-empty, startup refuses a
+Honeykrisp driver whose reported SHA differs from that file. The desktop keeps its
+system Mesa driver. The ANE runs as a
 separate worker process. It only executes hash-pinned program
 bundles, so unverified ANE programs never run.
 
@@ -241,10 +247,12 @@ The collector prints the steps that match your kernel. One wording source:
 - `import mlx.core` fails on a missing shared library: install
   `openblas`, `lapack`, and `blas` through pacman. The installers do
   this for you; a manual wheel install has to.
-- `mlx-omarchy-info` reports the stock Asahi driver: stock Mesa lacks
-  cooperative matrix support and carries the compiler bugs the fork
-  fixes. The numbers you get will be far off. Build the fork driver
-  per [docs/install-omarchy.md](docs/install-omarchy.md).
+- `mlx-omarchy-info` does not report `icd_source` `packaged`: the
+  wheels do not ship the driver. Install `omarchy-mlx-vulkan` (the
+  `omarchy-mac-ml` package pulls it in). It places a private Honeykrisp
+  ICD under `/usr/lib/omarchy-mlx/vulkan/` and leaves the system Mesa
+  driver installed. See
+  [docs/install-omarchy.md](docs/install-omarchy.md).
 - The backend refuses to start and names a non-Apple GPU. The refusal
   is on purpose. Set `MLX_OMARCHY_ALLOW_NON_APPLE=1` only on a dev
   box with software Vulkan.
