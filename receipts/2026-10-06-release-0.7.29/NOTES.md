@@ -109,6 +109,14 @@ glslang 1.4.363 / shaderc 2026.4 were deliberately NOT used).
 
 ## Known issues
 
+- The mlx-lm serve patches need `patch`(1). Omarchy's base install ships it
+  (verified 2026-10-07 on stock x86 Omarchy and a fresh Omarchy M+ image,
+  both `patch 2.8-1`); pacman users get it through the PKGBUILD's
+  `makedepends`. The installer and `apply-mlx-lm-patches.sh` now fail with
+  an explicit "patch is not installed" message instead of a misleading
+  "mlx-lm version mismatch" (fixed on main after v0.7.29 was tagged; the
+  v0.7.29 tarball keeps the old script).
+
 - SDPA fused-VJP value defects remain open (qL=1 maskless dk/dv zero; B=1,
   kL=5 also fails).
 - `compile()` of the sin*cos tape segfaults on the G13 build host; that leg

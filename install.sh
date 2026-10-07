@@ -58,6 +58,7 @@ install_system() {
   [[ -f $lock ]] || die "lock file not found: $lock"
   [[ -d $serve_src ]] || die "serve sources not found: $serve_src"
   [[ -f "$ROOT/packaging/paths.sh" ]] || die "--system runs from a checkout; packaging/paths.sh is missing"
+  command -v patch >/dev/null || die "patch is missing; the mlx-lm serve patches need it (add patch to makedepends)."
 
   # Every staged path comes from the generated name table.
   # shellcheck disable=SC1091
@@ -291,6 +292,7 @@ if [[ -r /proc/device-tree/compatible ]] &&
   echo "warning: this SoC is outside mlx-omarchy's supported list (M1 family t8103/t6000/t6001/t6002, M2 Max t6021); it is untested here." >&2
 fi
 command -v python3 >/dev/null || die "python3 is missing."
+command -v patch >/dev/null || die "patch is missing; the mlx-lm serve patches need it (e.g. pacman -S patch)."
 python3 -c 'import sys; sys.exit(sys.version_info[:2] != (3, 14))' \
   || die "Python 3.14 is required (found $(python3 --version)); the wheel is built for cp314."
 
