@@ -1,0 +1,37 @@
+== stage 0: assets + tag tree ==
+ASSETS_OK
+Cloning into '~/v0.7.30-repo'...
+warning: refs/tags/v0.7.30 568a2ffc39ef17a2ba2687127e87d779cd2751d0 is not a commit!
+Note: switching to 'cf71ea276eb87fd2a1289be4c60cfce0dd85536b'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+== stage 1: wheel build tree (CPU) ==
+=== build-wheel 11:29:26 ===
+STEP build-wheel_RC=0 wall=153s
+=== g13-build 11:31:59 ===
+STEP g13-build_RC=0 wall=254s
+=== g15-build 11:36:13 ===
+STEP g15-build_RC=0 wall=7s
+=== g7c 11:36:20 ===
+STEP g7c_RC=0 wall=95s
+=== g7d 11:37:55 ===
+STEP g7d_RC=0 wall=40s
+=== g13-run 11:38:35 ===
+STEP g13-run_RC=0 wall=197s
+=== g15-run 11:41:52 ===
+STEP g15-run_RC=0 wall=73s
+JW16_GATES_PASS receipt=~/v0.7.30-gates/jw16-receipt-v0730-rerun.log
