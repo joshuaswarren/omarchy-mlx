@@ -847,3 +847,17 @@ A Supported row must link every applicable record.
   one-ULP gap at logits in [16, 32), where bf16 spacing is 0.125. The current
   three-part gate is documented in docs/numerics-gate.md. The earlier audit
   and default-OFF decision remain in dated receipts as historical records.
+
+## 2026-10-07 — batched GDN decode on the fused kernel (landed, all chips)
+- `GatedDeltaUpdate::eval_gpu` gated the fused decode kernel on `B == 1`. A batched decode step (an oMLX server
+  serving several requests) therefore sent every GDN layer to the composed per-token chain plus an encoder
+  synchronize: 2,340 composed dispatches per c1+c4 server run on Qwen3.8-2B.
+- The decode kernel now runs over `B * Hv` heads for T = 1 without a padding mask; the three decode shaders read
+  `A_log` / `dt_bias` at `head % Hv`. Masked batches and B > 1 prefill keep the composed chain.
+  `MLX_OMARCHY_GDN_DECODE_BATCH=0` restores the old gate.
+- M1 Max, Qwen3.8-2B 4-bit, oMLX server, same wheel with the switch off vs on, 5 alternating pairs (7/10 gated):
+  c4 aggregate 58.06 -> 71.83 tok/s (+23.7%), c4 per request 17.3 -> 22.4 tok/s (+29.5%), c1 85.4 vs 85.2 tok/s
+  (inside spread), c1 greedy text identical. In-process decode step B=4 50.2 -> 37.4 ms, B=2 36.4 -> 24.3 ms.
+- Numerics: each batch row is bit-identical (output and state) to the same row on the B = 1 fused kernel, which
+  already passes the numerics gate. `tests/omarchy/test_gdn_decode_batch.cpp` pins that and the fused dispatch
+  count (1 vs 30 composed); 3/3 cases pass on M1 Max.
