@@ -143,7 +143,7 @@ layout(push_constant) uniform Params {
 } params;
 
 // bf16 in shared: raw u32 pair words. 3 x 8 KiB tiles + 4 KiB scores
-// + 3 x 32 stats floats = 28,928 bytes against the 32 KiB device
+// + 3 x 32 stats floats = 29,056 bytes against the 32 KiB device
 // limit (one workgroup per core; the decode arm already ships near
 // this ceiling).
 shared uint s_q[Q_TILE * HD_WORDS];

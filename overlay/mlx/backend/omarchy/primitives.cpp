@@ -14000,7 +14000,7 @@ void ScaledDotProductAttention::eval_gpu(
   const bool flash_route_ready =
       flash_caps.max_compute_work_group_size[0] >= 256u &&
       flash_caps.max_compute_work_group_invocations >= 256u &&
-      flash_caps.max_compute_shared_memory_size >= 28928u;
+      flash_caps.max_compute_shared_memory_size >= 29056u;
   const uint64_t flash_score_elements =
       static_cast<uint64_t>(batch) * heads * q_len * k_len;
   const bool score_exceeds_heap_budget = flash_caps.total_memory > 0 &&
