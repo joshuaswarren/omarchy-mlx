@@ -3596,12 +3596,22 @@ TEST_CASE("batched quantized_matmul matches host on every batch row") {
     // Per-batch-row f64 host reference; the bound follows the same
     // derivation as the qmm_vec case above with the tile route's
     // deeper k chain carried conservatively (one f32 rounding per k
-    // element), floored at 1e-6.
-    double ops = static_cast<double>(k);
-    double m_max = 50.0;
+    // element). m_max scales with this run's observed output
+    // magnitude: with dist(-2,2) over k=2048 the |y| tail reaches
+    // several hundred, where ONE bf16 storage ulp is already ~1.0 -
+    // a fixed-magnitude bound flags legitimate storage rounding (a
+    // first cut pinned at 50 and failed exactly there). A wrong-row
+    // defect still misses by O(|y|), two orders above the bound.
+    double m_max_obs = 0.0;
+    for (float v : device_result) {
+      m_max_obs = std::max(m_max_obs,
+          static_cast<double>(std::fabs(v)));
+    }
+    double m_max = std::max(m_max_obs * 2.0, 50.0);
     int storage_mantissa_bits = (c.dtype == float32)
         ? 23
         : (c.dtype == float16) ? 10 : 7;
+    double ops = static_cast<double>(k);
     double e_f32 = ops * m_max * std::ldexp(1.0, -23);
     double e_storage =
         m_max * std::ldexp(1.0, -(storage_mantissa_bits + 1));
@@ -3698,7 +3708,9 @@ TEST_CASE("batched quantized_matmul is bit-identical per batch row alone") {
             stream);
         REQUIRE(evaluation_error(alone).empty());
         std::vector<float> alone_bits = readback_f32(stream, alone);
-        REQUIRE_EQ(full_bits.size(), alone_bits.size());
+        REQUIRE_EQ(full_bits.size(),
+            static_cast<size_t>(batch) * m * n);
+        REQUIRE_EQ(alone_bits.size(), static_cast<size_t>(m) * n);
         size_t row_bytes = static_cast<size_t>(m) * n * sizeof(float);
         bool equal = std::memcmp(
             full_bits.data() + static_cast<size_t>(b) * m * n,
