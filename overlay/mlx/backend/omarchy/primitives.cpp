@@ -12340,10 +12340,11 @@ bool GreedyQuantizedArgmax::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }
 
-// Greedy-argmax head, shaders/qmm_vec.comp QMM_VEC_GREEDY stages 0-7.
-// Its exact stage IS the QmmVecQ4WordSubgroupBF16 column, so the route
-// holds only where QuantizedMatmul::eval_gpu picks that kernel for the
-// single decode row; elsewhere the composed fallback answers.
+// Greedy-argmax head, shaders/qmm_vec.comp QMM_VEC_GREEDY stages 0-7, one
+// dispatch y slice per x row. Its exact stage IS the QmmVecQ4WordSubgroupBF16
+// column (the batch-shared decode GEMV is bit-identical per row), so the route
+// holds where QuantizedMatmul::eval_gpu decodes the same rows; elsewhere the
+// composed fallback answers.
 void GreedyQuantizedArgmax::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
@@ -12418,10 +12419,11 @@ void GreedyQuantizedArgmax::eval_gpu(
     encoder.add_temporary(a);
     return a;
   };
-  array state = scratch(uint32, 128);
-  array bounds = scratch(float32, static_cast<int>(n));
-  array survivors = scratch(uint32, static_cast<int>(n));
-  array row_values = scratch(float32, static_cast<int>(n));
+  uint32_t rows = static_cast<uint32_t>(x.size() / x.shape(-1));
+  array state = scratch(uint32, static_cast<int>(128u * rows));
+  array bounds = scratch(float32, static_cast<int>(n * rows));
+  array survivors = scratch(uint32, static_cast<int>(n * rows));
+  array row_values = scratch(float32, static_cast<int>(n * rows));
   omarchy::ComputeParams params;
   params.matrix_n = n;
   params.matrix_k = static_cast<uint32_t>(x.shape(-1));
@@ -12457,7 +12459,7 @@ void GreedyQuantizedArgmax::eval_gpu(
         bindings,
         params,
         groups[stage],
-        1u,
+        rows,
         1u);
   }
 }

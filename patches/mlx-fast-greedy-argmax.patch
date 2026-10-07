@@ -11,7 +11,7 @@
 +// group at bit 3e of that group's six uint32 words ([N, K * 3 / 32]); a
 +// backend may use it to certify rows that cannot hold the argmax and skip
 +// their exact evaluation. Returns {token (x.shape()[:-1], uint32), stats
-+// (uint32 [3]: rows evaluated exactly, 1 when the full exact path decided
++// (uint32 [3 per x row]: rows evaluated exactly, 1 when the full path decided
 +// the token, float bits of the max logit or, on the full path, of the
 +// logsumexp; 0 when composed)}.
 +MLX_API std::vector<array> greedy_quantized_argmax(
@@ -29,7 +29,7 @@
  
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1477,6 +1477,61 @@
+@@ -1477,6 +1477,64 @@
        /* inputs */ std::vector<array>{state, x, weight});
  }
  
@@ -53,18 +53,21 @@
 +    auto logprobs =
 +        subtract(logits, logsumexp(logits, -1, true, s), s);
 +    auto n = static_cast<uint32_t>(in[1].shape(0));
++    int rows = static_cast<int>(in[0].size() / in[0].shape(-1));
 +    return std::vector<array>{
-+        argmax(logprobs, -1, false, s), array({n, 1u, 0u})};
++        argmax(logprobs, -1, false, s), tile(array({n, 1u, 0u}), {rows}, s)};
 +  };
 +  int n = w.shape(0);
 +  int k = x.shape(-1);
 +  Shape plane_shape{n, k * 3 / 32};
 +  Shape param_shape{n, k / 64};
 +  // The GPU route maps one 64-wide group to one of 32 subgroup lanes, so
-+  // it serves exactly the K = 2048, 4-bit, group-64 decode row, with at
-+  // most 65535 bound workgroups of 128 rows.
++  // it serves exactly K = 2048, 4-bit, group-64 decode rows (one dispatch
++  // y slice per x row) with at most 65535 x 128 vocab rows, and per-row
++  // scratch (x rows x N) indexed in int.
 +  bool routed = bits == 4 && group_size == 64 && k == 2048 &&
-+      x.size() == static_cast<size_t>(k) && x.dtype() == bfloat16 &&
++      x.size() % k == 0 && x.size() / k <= 65535 && x.dtype() == bfloat16 &&
++      x.size() / k * static_cast<size_t>(n) <= 0x7fffffff &&
 +      w.dtype() == uint32 && w.shape(1) == k / 8 &&
 +      scales.dtype() == bfloat16 && biases.dtype() == bfloat16 &&
 +      scales.shape() == param_shape && biases.shape() == param_shape &&
@@ -77,7 +80,7 @@
 +  }
 +  Shape token_shape(x.shape().begin(), x.shape().end() - 1);
 +  return array::make_arrays(
-+      {std::move(token_shape), Shape{3}},
++      {std::move(token_shape), Shape{static_cast<int>(x.size() / k) * 3}},
 +      {uint32, uint32},
 +      std::make_shared<GreedyQuantizedArgmax>(s, fallback, group_size, bits),
 +      std::move(inputs));
@@ -191,7 +194,7 @@
 +                    e of a 64-code group at bit 3e of its six words
 +                    [N, K * 3 / 32]
 +            Returns:
-+                List of (token [...] uint32, stats [3] uint32: rows
++                List of (token [...] uint32, stats [3 per row] uint32: rows
 +                evaluated exactly, 1 when the full exact path decided the
 +                token, float bits of the max logit or, on the full path, of
 +                the logsumexp; 0 when composed)

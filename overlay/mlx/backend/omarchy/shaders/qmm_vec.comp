@@ -1146,7 +1146,7 @@ void main() {
 #endif
 #elif defined(QMM_VEC_GREEDY)
 // Greedy-argmax head: the token argmax(logits - logsumexp(logits)) picks
-// for one bf16 x row (K = 2048: one 64-wide group per subgroup lane)
+// for each bf16 x row (dispatch y; K = 2048: one 64-wide group per lane)
 // against a transposed 4-bit/group-64 weight, without evaluating the rows
 // that provably cannot hold it. One dispatch per stage (params.operation),
 // full barriers between them. Proof: receipts/2026-09-23-vocab-prune.md.
@@ -1224,11 +1224,10 @@ float order_value(uint key) {
   GREEDY_TERM4((e) + 8u) GREEDY_TERM4((e) + 12u)
 
 // One exact column: the full GEMV's Q4_ROW, subgroupAdd, and bf16 store.
-float greedy_exact(uint column, uint lane_in_slot) {
+float greedy_exact(uint column, uint lane_in_slot, uint x_row) {
   uint n = params.matrix_n;
   uint words_per_row = params.matrix_k / 8u;
   uint groups_per_row = params.matrix_k / 64u;
-  uint x_row = params.lhs_offset;
   precise float accumulator = 0.0;
   uint w_base = params.rhs_offset + column * words_per_row;
   uint scale_base = params.aux_offset + column * groups_per_row;
@@ -1243,7 +1242,11 @@ void main() {
   uint lane_in_slot = lane % LANES;
   uint n = params.matrix_n;
   uint groups_per_row = params.matrix_k / 64u;
-  uint x_row = params.lhs_offset;
+  // One dispatch y slice per x row: its x, 128 state words, and N-long
+  // bounds, survivors, and row values.
+  uint x_row = params.lhs_offset + gl_WorkGroupID.y * params.matrix_k;
+  uint sb = gl_WorkGroupID.y * 128u;
+  uint rb = gl_WorkGroupID.y * n;
   uint stage = params.operation;
   if (stage == 0u) {
     uvec4 xw = input_x.values[(x_row + lane * 8u) / 8u];
@@ -1281,21 +1284,21 @@ void main() {
         group_sum += greedy_values[lane * 8u + p];
         group_l1 += uintBitsToFloat(greedy_rows[lane * 8u + p]);
       }
-      state.values[lane] = floatBitsToUint(group_sum);
-      state.values[32u + lane] = floatBitsToUint(group_l1);
+      state.values[sb + lane] = floatBitsToUint(group_sum);
+      state.values[sb + 32u + lane] = floatBitsToUint(group_l1);
     }
     if (lane == 0u) {
-      state.values[STATE_LB] = 0u;
-      state.values[STATE_UB] = 0u;
-      state.values[STATE_COUNT] = 0u;
-      state.values[STATE_FULL] =
+      state.values[sb + STATE_LB] = 0u;
+      state.values[sb + STATE_UB] = 0u;
+      state.values[sb + STATE_COUNT] = 0u;
+      state.values[sb + STATE_FULL] =
           (greedy_flag != 0u || (params.flags & 1u) != 0u) ? 1u : 0u;
     }
     return;
   }
   if (stage == 1u) {
-    float group_sum = uintBitsToFloat(state.values[lane_in_slot]);
-    float group_l1 = uintBitsToFloat(state.values[32u + lane_in_slot]);
+    float group_sum = uintBitsToFloat(state.values[sb + lane_in_slot]);
+    float group_l1 = uintBitsToFloat(state.values[sb + 32u + lane_in_slot]);
     float xr[64];
     uint xbase = (x_row + lane_in_slot * 64u) / 8u;
     GREEDY_X8(0u) GREEDY_X8(1u) GREEDY_X8(2u) GREEDY_X8(3u)
@@ -1330,7 +1333,7 @@ void main() {
       float ub = c + 0.5 * subgroupAdd(radius) +
           subgroupAdd(mass) * (1.0 / 4096.0) + 9.094947e-13;
       if (lane_in_slot == 0u) {
-        bounds.values[row] = ub;
+        bounds.values[rb + row] = ub;
       }
       nan_seen |= (isnan(ub) || isnan(c)) ? 1u : 0u;
       if (ub > ub_max) {
@@ -1363,10 +1366,10 @@ void main() {
       }
       // Candidates ride the survivor buffer; stage 3 overwrites them
       // after stage 2 has read them.
-      survivors.values[gl_WorkGroupID.x] = row;
-      atomicMax(state.values[STATE_UB], order_key(ubs));
+      survivors.values[rb + gl_WorkGroupID.x] = row;
+      atomicMax(state.values[sb + STATE_UB], order_key(ubs));
       if (nans != 0u) {
-        atomicOr(state.values[STATE_FULL], 1u);
+        atomicOr(state.values[sb + STATE_FULL], 1u);
       }
     }
     return;
@@ -1377,12 +1380,12 @@ void main() {
     for (uint k = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
          k < candidates;
          k += gl_NumWorkGroups.x * COLUMNS_PER_GROUP) {
-      float value = greedy_exact(survivors.values[k], lane_in_slot);
+      float value = greedy_exact(survivors.values[rb + k], lane_in_slot, x_row);
       if (lane_in_slot == 0u) {
         if (isnan(value)) {
-          atomicOr(state.values[STATE_FULL], 1u);
+          atomicOr(state.values[sb + STATE_FULL], 1u);
         } else {
-          atomicMax(state.values[STATE_LB], order_key(value));
+          atomicMax(state.values[sb + STATE_LB], order_key(value));
         }
       }
     }
@@ -1393,14 +1396,14 @@ void main() {
     if (row >= n) {
       return;
     }
-    float lbs = order_value(state.values[STATE_LB]);
-    float ubs = order_value(state.values[STATE_UB]);
+    float lbs = order_value(state.values[sb + STATE_LB]);
+    float ubs = order_value(state.values[sb + STATE_UB]);
     float guard = 0.13 + max(abs(lbs), abs(ubs)) * (1.0 / 12800.0);
-    float ub = bounds.values[row];
+    float ub = bounds.values[rb + row];
     bool pruned = (params.flags & 2u) == 0u &&
         (lbs - ub) > guard + abs(ub) * 0.0078125;
     if (!pruned) {
-      survivors.values[atomicAdd(state.values[STATE_COUNT], 1u)] = row;
+      survivors.values[rb + atomicAdd(state.values[sb + STATE_COUNT], 1u)] = row;
     }
     return;
   }
@@ -1408,22 +1411,22 @@ void main() {
     // Stage 4 walks the survivor list, stage 6 (flagged only) every row;
     // each subgroup owns one column at a time, exactly as the full GEMV.
     bool full = stage == 6u;
-    if (full && state.values[STATE_FULL] == 0u) {
+    if (full && state.values[sb + STATE_FULL] == 0u) {
       return;
     }
-    uint count = full ? n : state.values[STATE_COUNT];
+    uint count = full ? n : state.values[sb + STATE_COUNT];
     for (uint k = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
          k < count;
          k += gl_NumWorkGroups.x * COLUMNS_PER_GROUP) {
-      float value = greedy_exact(full ? k : survivors.values[k], lane_in_slot);
+      float value = greedy_exact(full ? k : survivors.values[rb + k], lane_in_slot, x_row);
       if (lane_in_slot == 0u) {
-        row_values.values[k] = value;
+        row_values.values[rb + k] = value;
       }
     }
     return;
   }
   if (stage == 5u) {
-    uint count = state.values[STATE_COUNT];
+    uint count = state.values[sb + STATE_COUNT];
     if (lane == 0u) {
       greedy_flag = 0u;
     }
@@ -1431,8 +1434,8 @@ void main() {
     uint best_row = 0xffffffffu;
     uint nan_seen = 0u;
     for (uint k = lane; k < count; k += 256u) {
-      float v = row_values.values[k];
-      uint r = survivors.values[k];
+      float v = row_values.values[rb + k];
+      uint r = survivors.values[rb + k];
       nan_seen |= isnan(v) ? 1u : 0u;
       if (v > best || (v == best && r < best_row)) {
         best = v;
@@ -1459,8 +1462,8 @@ void main() {
     float guard = 0.13 + abs(top) * (1.0 / 12800.0);
     uint risk = nan_seen;
     for (uint k = lane; k < count; k += 256u) {
-      float v = row_values.values[k];
-      risk |= (survivors.values[k] < top_row && v < top && top - v <= guard)
+      float v = row_values.values[rb + k];
+      risk |= (survivors.values[rb + k] < top_row && v < top && top - v <= guard)
           ? 1u : 0u;
     }
     if (risk != 0u) {
@@ -1468,24 +1471,24 @@ void main() {
     }
     barrier();
     if (lane == 0u) {
-      bool full = state.values[STATE_FULL] != 0u || greedy_flag != 0u ||
+      bool full = state.values[sb + STATE_FULL] != 0u || greedy_flag != 0u ||
           top_row == 0xffffffffu;
-      token.values[0] = top_row;
-      stats.values[0] = count;
-      stats.values[1] = full ? 1u : 0u;
-      stats.values[2] = floatBitsToUint(top);
-      state.values[STATE_FULL] = full ? 1u : 0u;
+      token.values[gl_WorkGroupID.y] = top_row;
+      stats.values[3u * gl_WorkGroupID.y] = count;
+      stats.values[3u * gl_WorkGroupID.y + 1u] = full ? 1u : 0u;
+      stats.values[3u * gl_WorkGroupID.y + 2u] = floatBitsToUint(top);
+      state.values[sb + STATE_FULL] = full ? 1u : 0u;
     }
     return;
   }
   // Stage 7, flagged only: LogSumExpBF16 over the stage-6 logits, then
   // the bf16 subtract and ArgMaxBF16, each as its own kernel computes.
-  if (state.values[STATE_FULL] == 0u) {
+  if (state.values[sb + STATE_FULL] == 0u) {
     return;
   }
   float local_max = NEG_INF;
   for (uint index = lane; index < n; index += 256u) {
-    float next = row_values.values[index];
+    float next = row_values.values[rb + index];
     if (isnan(next) || next > local_max) {
       local_max = next;
     }
@@ -1503,7 +1506,7 @@ void main() {
   barrier();
   float local_sum = 0.0;
   for (uint index = lane; index < n; index += 256u) {
-    local_sum += exp(row_values.values[index] - row_max);
+    local_sum += exp(row_values.values[rb + index] - row_max);
   }
   greedy_values[lane] = local_sum;
   barrier();
@@ -1520,7 +1523,7 @@ void main() {
   float local_value = NEG_INF;
   uint local_index = 0u;
   for (uint index = lane; index < n; index += 256u) {
-    float next = LOAD_VALUE(STORE_VALUE(row_values.values[index] - lse));
+    float next = LOAD_VALUE(STORE_VALUE(row_values.values[rb + index] - lse));
     if (next > local_value) {
       local_value = next;
       local_index = index;
@@ -1544,8 +1547,8 @@ void main() {
     barrier();
   }
   if (lane == 0u) {
-    token.values[0] = greedy_rows[0];
-    stats.values[2] = floatBitsToUint(lse);
+    token.values[gl_WorkGroupID.y] = greedy_rows[0];
+    stats.values[3u * gl_WorkGroupID.y + 2u] = floatBitsToUint(lse);
   }
 }
 #else

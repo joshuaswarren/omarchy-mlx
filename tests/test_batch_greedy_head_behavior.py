@@ -156,7 +156,9 @@ def test_greedy_batch_takes_the_head_with_identical_output(pkg, model, head_call
     monkeypatch.setattr(mx, "eval", real_eval)
     monkeypatch.setattr(mx, "async_eval", real_async)
 
-    assert head_calls["token"] and all(s == (1, 64) for s in head_calls["token"])
+    # One head call per step covers every row (one kernel dispatch per stage for the batch, not one per row).
+    assert head_calls["token"] and all(len(s) == 2 and s[1] == 64 for s in head_calls["token"])
+    assert (len(PROMPTS), 64) in head_calls["token"]
     # The logprob projection must see [B, 1, K], the shape the model call gives it (one row per batch slice on
     # the GPU); a 2-D [B, K] would route as an M = B matmul with different bits.
     assert head_calls["logits"] and all(len(s) == 3 and s[1] == 1 for s in head_calls["logits"])

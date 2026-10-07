@@ -9,17 +9,20 @@ patch) served only generate_step, one row. At B=4 on Qwen3.8-2B the head
 cost 1.38 -> 4.28 ms per step.
 
 When every row samples greedily (sampler is greedy_sampler) and no row has
-logits processors, the step takes each row's token from the greedy head (one
-dispatch per row; the token equals argmax of the full logits, proof in
-receipts/2026-09-23-vocab-prune.md) and leaves the logprobs lazy: the full
-projection runs only if a consumer evaluates them (oMLX drops them unless the
-request asked for logprobs). Any other batch keeps the upstream step. A batch
-merged from lazy and eager parts evaluates its logprobs (the safe default).
+logits processors, the step takes every row's token from one greedy-head call
+over [B, K] (one dispatch per kernel stage for all rows; each row's token
+equals argmax of its full logits, proof in receipts/2026-09-23-vocab-prune.md,
+per-row bit identity in overlay/tests/omarchy/test_greedy_batch.cpp) and
+leaves the logprobs lazy: the full projection runs only if a consumer
+evaluates them (oMLX drops them unless the request asked for logprobs). Any
+other batch keeps the upstream step. A batch merged from lazy and eager parts
+evaluates its logprobs (the safe default).
 
 Needs the mlx-lm-greedy-prune patch (_greedy_head). 0.32 line only (no
 GenerationBatch in 0.31.3: nothing to patch). Opt-in: MLX_OMARCHY_BATCH_GREEDY=1
-(read once at import). jw16 2026-10-07: +1.9% ms/token at B=1 and +1.6% at B=4
-in-process, oMLX c1 -2.5%, oMLX c4 +4.7% (receipts/2026-10-07-prefill-hotspots.md).
+(read once at import). The per-row head it replaced lost on jw16 2026-10-07:
++1.9% ms/token at B=1 and +1.6% at B=4 in-process, oMLX c1 -2.5%, oMLX c4
++4.7% (receipts/2026-10-07-prefill-hotspots.md).
 Usage: python3 patch-mlx-lm-batch-greedy-head.py /path/to/venv
 """
 import ast
@@ -54,8 +57,8 @@ HEAD_NEW = """    def token(hidden):
 
 
 # mlx-omarchy: greedy batches decode through the pruned greedy head with lazy
-# logprobs (GenerationBatch._step). Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): it
-# cost B=1 and in-process B=4 time on jw16 and only oMLX c4 gained.
+# logprobs (GenerationBatch._step). Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): the
+# per-row form cost B=1 and in-process B=4 time on jw16 and only oMLX c4 gained.
 _BATCH_GREEDY = os.environ.get("MLX_OMARCHY_BATCH_GREEDY", "0") == "1"
 _UNSET = object()
 """
@@ -123,9 +126,7 @@ STEP_NEW = """        self._current_tokens = self._next_tokens
             # [B, 1, K]: the head projection must see the same m = 1, batch = B
             # shape the model call gives it, so evaluated logprobs keep their bits.
             hidden = greedy.body(inputs[:, None], cache=self.prompt_cache)[:, -1:, :]
-            self._next_tokens = mx.concatenate(
-                [greedy.token(hidden[e : e + 1, 0, :]) for e in range(hidden.shape[0])]
-            )
+            self._next_tokens = greedy.token(hidden[:, 0, :])
             logits = greedy.logits(hidden)[:, -1, :]
             self._next_logprobs = list(
                 logits - mx.logsumexp(logits, axis=-1, keepdims=True)
@@ -150,6 +151,13 @@ EVAL_NEW = """        mx.eval(inputs, [] if self._current_lazy else self._curren
         inputs = inputs.tolist()
 """
 
+PER_ROW = """            self._next_tokens = mx.concatenate(
+                [greedy.token(hidden[e : e + 1, 0, :]) for e in range(hidden.shape[0])]
+            )
+"""
+ONE_CALL = """            self._next_tokens = greedy.token(hidden[:, 0, :])
+"""
+
 venv = sys.argv[1] if len(sys.argv) > 1 else "."
 site = glob.glob(venv.rstrip("/") + "/lib/python3*/site-packages/mlx_lm")
 if not site:
@@ -157,7 +165,14 @@ if not site:
 q = site[0] + "/generate.py"
 text = open(q).read()
 if MARKER in text:
-    print("already patched:", q)
+    # Trees patched with the per-row head: one call over all rows instead.
+    if PER_ROW in text:
+        text = text.replace(PER_ROW, ONE_CALL, 1)
+        ast.parse(text)
+        open(q, "w").write(text)
+        print("upgraded to the one-call greedy head:", q)
+    else:
+        print("already patched:", q)
     sys.exit(0)
 if "class GenerationBatch:" not in text:
     print("no GenerationBatch (mlx-lm 0.31 line); nothing to patch:", q)
