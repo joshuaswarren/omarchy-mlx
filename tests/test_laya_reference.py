@@ -35,6 +35,9 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "serve"))
 
+import pytest  # noqa: E402
+
+pytest.importorskip("mlx.core")  # the laya engine imports mlx
 from mlx_omarchy_laya.api import LayaEngine  # noqa: E402
 
 UPSTREAM = os.environ.get("LAYA_UPSTREAM_DIR")

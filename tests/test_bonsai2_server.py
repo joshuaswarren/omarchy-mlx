@@ -23,7 +23,9 @@ if str(REPO / "serve") not in sys.path:
     sys.path.insert(0, str(REPO / "serve"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import mlx.core as mx
+import pytest
+
+mx = pytest.importorskip("mlx.core")
 
 import bonsai2_fixture
 from bonsai2_fixture import build_tiny_pack

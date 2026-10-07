@@ -56,7 +56,9 @@ import sys
 import time
 import unittest
 
-import mlx.core as mx
+import pytest
+
+mx = pytest.importorskip("mlx.core")
 import numpy as np
 
 

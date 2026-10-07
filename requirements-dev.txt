@@ -1,5 +1,8 @@
 # Test-only dependencies (issue #7): scripts/test_collect*.py run on the
-# stdlib alone, but tests/ imports numpy and protobuf.
+# stdlib alone, but tests/ imports numpy and protobuf, and the assistant
+# pair tests resolve fixture snapshots through huggingface_hub. Tests that
+# need mlx, librosa or transformers skip when those are absent.
+huggingface_hub
 numpy
 protobuf
 pytest

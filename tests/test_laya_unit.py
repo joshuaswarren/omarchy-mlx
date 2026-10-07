@@ -38,6 +38,8 @@ from mlx_omarchy_laya.sequence import (  # noqa: E402
 )
 
 CONVERTED = os.environ.get("LAYA_MLX_CKPT")  # converted checkpoint dir, if available
+# The server and engine import mlx; hosts without it skip those tests.
+HAS_MLX = importlib.util.find_spec("mlx") is not None
 
 
 class CalibrationSemanticsTests(unittest.TestCase):
@@ -167,6 +169,7 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(b["n_tokens"], 5)
 
 
+@unittest.skipUnless(HAS_MLX, "needs mlx (the server imports it)")
 class _FakeHandlerTests(unittest.TestCase):
     """Server mechanics with a tiny synthetic checkpoint (no download)."""
 
@@ -317,6 +320,7 @@ class ManagedRelabelFailureTests(unittest.TestCase):
             mock.patch.stopall()
 
 
+@unittest.skipUnless(HAS_MLX, "needs mlx (the server imports it)")
 class StartupSignalCleanupTests(unittest.TestCase):
     """F3: SIGTERM/KeyboardInterrupt arriving DURING construction (mid-load)
     must clear the held reservation exactly once, then propagate."""
@@ -359,6 +363,7 @@ class StartupSignalCleanupTests(unittest.TestCase):
         self._runConstructorWithEngineRaise(RuntimeError("backend boom"))
 
 
+@unittest.skipUnless(HAS_MLX, "needs mlx (the server imports it)")
 class ManagedCoServingTests(unittest.TestCase):
     """Fail-closed reservation contract: --managed refuses startup when the
     budget registry is unavailable; standalone runs warn and serve."""

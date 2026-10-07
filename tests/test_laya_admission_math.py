@@ -20,6 +20,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "serve"))
 
+import pytest  # noqa: E402
+
+pytest.importorskip("mlx.core")  # the laya server imports mlx
 from mlx_omarchy_laya import server as laya_server  # noqa: E402
 from mlx_omarchy_laya.model import load_encoder_config  # noqa: E402
 

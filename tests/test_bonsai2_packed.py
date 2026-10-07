@@ -27,7 +27,9 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO / "serve") not in sys.path:
     sys.path.insert(0, str(REPO / "serve"))
 
-import mlx.core as mx
+import pytest
+
+mx = pytest.importorskip("mlx.core")
 
 from mlx_omarchy_bonsai2.packed import Packed, PackedError, fwht
 

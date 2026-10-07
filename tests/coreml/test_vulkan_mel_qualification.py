@@ -27,7 +27,7 @@ def _passing_inputs():
     }
     deltas = {
         "gpu_primitive_dispatches": 15,
-        "vk_compute_dispatches": 8,
+        "vk_compute_dispatches": 7,
         "vk_submissions": 1,
     }
     return comparisons, deltas
@@ -51,8 +51,8 @@ def test_qualification_requires_the_exact_expected_stage_set():
     assert extra_status["qualified"] is False
 
 
-@pytest.mark.parametrize("dispatches", [1, 7, 9])
-def test_qualification_requires_exactly_eight_custom_compute_dispatches(dispatches):
+@pytest.mark.parametrize("dispatches", [1, 6, 8])
+def test_qualification_requires_exactly_seven_custom_compute_dispatches(dispatches):
     comparisons, deltas = _passing_inputs()
     deltas["vk_compute_dispatches"] = dispatches
 

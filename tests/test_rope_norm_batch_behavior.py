@@ -24,8 +24,9 @@ import subprocess
 import types
 from pathlib import Path
 
-import mlx.core as mx
 import pytest
+
+mx = pytest.importorskip("mlx.core")
 
 REPO = Path(__file__).resolve().parent.parent
 PATCHER = REPO / "scripts" / "patch-mlx-lm-qwen3-rope-norm.py"

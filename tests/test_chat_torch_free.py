@@ -28,6 +28,7 @@ every torch-free install fails its first turn. Fix the path; do not add
 torch (a multi-gigabyte dependency the product never uses).
 """
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -134,6 +135,7 @@ def _fixture(directory: Path) -> Path:
     return directory
 
 
+@unittest.skipUnless(importlib.util.find_spec("transformers"), "needs transformers (the path under test)")
 class ChatTorchFreeTests(unittest.TestCase):
     def test_localmodels_count_runs_with_torch_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:

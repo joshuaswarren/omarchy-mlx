@@ -22,6 +22,7 @@ the breakage immediately.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import sys
@@ -53,6 +54,7 @@ for p in (str(SERVE), str(TESTS)):
 from mlx_omarchy_bonsai2.server import validate_artifact  # noqa: E402
 
 
+@unittest.skipUnless(importlib.util.find_spec("mlx"), "needs mlx (validation loads the pack with it)")
 class ValidateArtifactPositiveTests(unittest.TestCase):
     """A real Bonsai pack must validate to None."""
 

@@ -118,22 +118,13 @@ class AdmissionInvariantTests(unittest.TestCase):
         self.assertTrue(adm.fits)
 
 
-def _child_set(name_bytes):
-    """Top-level multiprocessing target: set_reservation in a fresh process."""
-    name, bytes_ = name_bytes
-    # The child must use a fresh home — caller writes home into args.
-    pass
-
-
-def _child_set_with_home(home_path):
-    """Sets a unique-named reservation; returns True if it succeeded."""
-    home = Path(home_path)
-    # Each child uses a unique name.
-    import os
-    pid = os.getpid()
-    name = f"child-{pid}"
+def _child_set_with_home(task):
+    """Sets a reservation named by the task index; returns True if it succeeded.
+    The name must not come from the pid: a pool worker can take two tasks."""
+    home_path, index = task
     try:
-        budget.set_reservation(name, int(1 * GiB), note="atomic", home=home)
+        budget.set_reservation(f"child-{index}", int(1 * GiB), note="atomic",
+                               home=Path(home_path))
         return True
     except Exception:  # pragma: no cover (only fires on a real bug)
         return False
@@ -149,13 +140,11 @@ class ConcurrentSetReservationTests(unittest.TestCase):
             # the budget module) see the same home.
             with unittest.mock.patch.object(budget, "default_home", lambda: home):
                 N = 8
-                ctx = multiprocessing.get_context("spawn")
-                # spawn re-imports; inject the patch via env var isn't enough
-                # because budget.default_home is read at call time.
                 with multiprocessing.Pool(processes=N,
                                           initializer=_install_patch,
                                           initargs=(str(home),)) as pool:
-                    results = pool.map(_child_set_with_home, [str(home)] * N)
+                    results = pool.map(_child_set_with_home,
+                                       [(str(home), i) for i in range(N)])
                 self.assertTrue(all(results),
                                 f"some child failed: {results}")
                 # Parent reads the file directly (bypassing the patch is fine;
