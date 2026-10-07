@@ -2900,6 +2900,94 @@ TEST_CASE("fused rope vector and int64 offsets match the composed fallback") {
       "rope int32 offset");
 }
 
+// MLX_OMARCHY_ROPE_VECTOR_OFFSET=1 sends a per-batch offset [B] to the fused
+// kernel instead of the fenced composition (one host join per call). The
+// contract: every batch row equals a scalar-offset call on that row, bit for
+// bit (same pipeline, same per-element arithmetic), in the same dispatch count
+// as that scalar call. Covers float32 and bfloat16, both rotation styles, the
+// contiguous [B, H, T, D] layout and the attention layout ([B, T, H, D]
+// transposed), and the fused rope_rms_norm leg Qwen3.8 decode takes.
+TEST_CASE("opt-in fused rope vector offsets match per-row scalar calls") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  struct VectorOffsetOn {
+    VectorOffsetOn() { setenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET", "1", 1); }
+    ~VectorOffsetOn() { unsetenv("MLX_OMARCHY_ROPE_VECTOR_OFFSET"); }
+  } on;
+  constexpr int B = 4;
+  constexpr int H = 2;
+  const std::vector<int32_t> offsets{3, 9, 0, 250};
+  const array offset_vec = array(offsets.begin(), Shape{B}, int32);
+  auto dispatches = [&](const std::function<array()>& fn) {
+    omarchy::get_command_encoder(stream).synchronize();
+    uint64_t before = omarchy::trace::counters().vk_compute_dispatches.load();
+    array out = fn();
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    return omarchy::trace::counters().vk_compute_dispatches.load() - before;
+  };
+  auto row = [&](const array& x, int b) {
+    Shape stop = x.shape();
+    stop[0] = b + 1;
+    return slice(x, {b, 0, 0, 0}, stop, stream);
+  };
+  auto input = [&](int T, int D, bool attention_layout, Dtype dtype, uint32_t seed) {
+    array x = attention_layout
+        ? transpose(rope_input(Shape{B, T, H, D}, seed), {0, 2, 1, 3}, stream)
+        : rope_input(Shape{B, H, T, D}, seed);
+    x = astype(x, dtype, stream);
+    x.eval();
+    return x;
+  };
+  for (Dtype dtype : {float32, bfloat16}) {
+    for (bool traditional : {false, true}) {
+      for (bool attention_layout : {false, true}) {
+        for (int T : {1, 3}) {
+          CAPTURE(dtype);
+          CAPTURE(traditional);
+          CAPTURE(attention_layout);
+          CAPTURE(T);
+          array x = input(T, 16, attention_layout, dtype, 160 + T);
+          auto rope = [&](const array& in, const array& off) {
+            return fast::rope(in, 16, traditional, 10000.0f, 1.0f, off, std::nullopt, stream);
+          };
+          array out = rope(x, offset_vec);
+          uint64_t vector_dispatches = dispatches([&] { return rope(x, offset_vec); });
+          for (int b = 0; b < B; ++b) {
+            CAPTURE(b);
+            array one = row(x, b);
+            array scalar = array(offsets[b], int32);
+            CHECK_EQ(vector_dispatches, dispatches([&] { return rope(one, scalar); }));
+            require_bit_equal(row(out, b), rope(one, scalar), stream, "rope vector offset row");
+          }
+        }
+      }
+    }
+  }
+  // The fused rope + RMSNorm leg (mx.fast.rope_rms_norm), bf16, the Qwen3.8
+  // decode layout: q/k come from a [B, 1, H, D] projection, transposed.
+  for (int D : {64, 256}) {
+    CAPTURE(D);
+    array x = input(1, D, true, bfloat16, 170 + D);
+    array w = astype(rope_input(Shape{D}, 180 + D), bfloat16, stream);
+    w.eval();
+    auto rope_norm = [&](const array& in, const array& off) {
+      return fast::rope_rms_norm(in, D, w, 1e-6f, false, 10000.0f, 1.0f, off, stream);
+    };
+    array out = rope_norm(x, offset_vec);
+    uint64_t vector_dispatches = dispatches([&] { return rope_norm(x, offset_vec); });
+    for (int b = 0; b < B; ++b) {
+      CAPTURE(b);
+      array one = row(x, b);
+      array scalar = array(offsets[b], int32);
+      CHECK_EQ(vector_dispatches, dispatches([&] { return rope_norm(one, scalar); }));
+      require_bit_equal(row(out, b), rope_norm(one, scalar), stream, "rope_rms_norm vector offset row");
+    }
+  }
+}
+
 // The inverse/VJP path is FENCED to the composition (it failed
 // equivalence on 2026-09-03), so this asserts the fence routes
 // correctly: the gradient must equal the composed inverse rope of the
