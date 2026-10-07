@@ -180,3 +180,80 @@ TEST_CASE("body threadgroup declarations become shared without helpers") {
   // MSL identifier `in` is a GLSL reserved word; renamed in the body.
   CHECK(glsl.find("_mlx_in") != std::string::npos);
 }
+// ---------------------------------------------------------------------------
+// KernelRecheck 2026-10-08: the section-(b) inventory kernels on current main.
+// Each case mirrors a construct the M2 recheck run showed dying at GLSL
+// compile time or at the pointer guard.
+
+TEST_CASE("numeric_limits<T>::infinity() maps to INFINITY, ordinary max survives") {
+  const char* source =
+      "[[kernel]] void llguidance_mask(\n"
+      "    const device float* logits [[buffer(0)]],\n"
+      "    const device uint* mask [[buffer(1)]],\n"
+      "    device float* out [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  bool allowed = ((as_type<uint>(mask[i]) >> (i & 31u)) & 1u) != 0u;\n"
+      "  out[i] = allowed ? logits[i]\n"
+      "                  : -metal::numeric_limits<float>::infinity();\n"
+      "  out[i] = metal::max(out[i], 0.0f);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // The bitcast is exact and the mask constant is the IEEE infinity pattern.
+  CHECK(glsl.find("floatBitsToUint(") != std::string::npos);
+  CHECK(glsl.find("-INFINITY") != std::string::npos);
+  CHECK(glsl.find("#define INFINITY uintBitsToFloat(0x7F800000u)") !=
+        std::string::npos);
+  CHECK(glsl.find("numeric_limits") == std::string::npos);
+  // The ordinary metal::max call must survive: a bare-word mapping of
+  // max/min would corrupt every clamped kernel in the corpus.
+  CHECK(glsl.find("max(") != std::string::npos);
+  CHECK(glsl.find("3.402823") == std::string::npos);
+}
+
+TEST_CASE("constant-space body pointer aliases rewrite like device aliases") {
+  const char* source =
+      "[[kernel]] void glue_post_style(\n"
+      "    const device bfloat16_t* inp [[buffer(0)]],\n"
+      "    const device float* cons [[buffer(1)]],\n"
+      "    device bfloat16_t* y [[buffer(2)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  constant float* cs = cons;\n"
+      "  float x = (float)inp[c];\n"
+      "  y[c] = (bfloat16_t)(x * rsqrt(cs[0]));\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // The alias is gone; uses go through the buffer-1 alias; the guard
+  // never fires.
+  CHECK(glsl.find("constant") == std::string::npos);
+  CHECK(glsl.find("float* cs") == std::string::npos);
+  CHECK(glsl.find("inversesqrt(_mlx_arg1[") != std::string::npos);
+  CHECK(glsl.find("_mlx_float_to_bf16(") != std::string::npos);
+
+  // An alias whose base is not a buffer parameter is still refused by name.
+  const char* bad =
+      "[[kernel]] void glue_post_bad(\n"
+      "    const device float* cons [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  float x = cons[0];\n"
+      "  constant float* cs = x + 1.0f;\n"
+      "  y[c] = cs[c];\n"
+      "}\n";
+  CHECK_THROWS_AS(translate(bad, 1), std::runtime_error);
+}
+
+TEST_CASE("inline header helpers lose the MSL-only qualifier") {
+  const char* header =
+      "inline float twice(float v) { return v + v; }\n";
+  std::string source = std::string(header) +
+      "[[kernel]] void kda_glue_style(\n"
+      "    const device float* values [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  y[c] = twice(values[c]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("inline") == std::string::npos);
+  CHECK(glsl.find("float twice(float v)") != std::string::npos);
+  CHECK(glsl.find("twice(_mlx_arg0[") != std::string::npos);
+}
