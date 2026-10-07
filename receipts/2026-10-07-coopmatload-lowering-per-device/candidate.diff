@@ -1,0 +1,137 @@
+diff --git a/src/asahi/compiler/agx_compile.c b/src/asahi/compiler/agx_compile.c
+index 7ee9839b418..74533de0651 100644
+--- a/src/asahi/compiler/agx_compile.c
++++ b/src/asahi/compiler/agx_compile.c
+@@ -3009,8 +3009,8 @@ set_speculate(nir_builder *b, nir_instr *instr, UNUSED void *_)
+ }
+ 
+ static void
+-agx_optimize_nir(nir_shader *nir, bool soft_fault, uint16_t *preamble_size,
+-                 uint8_t *ts_count, uint8_t *ss_count)
++agx_optimize_nir(nir_shader *nir, bool soft_fault, bool fold_subformat_address,
++                 uint16_t *preamble_size, uint8_t *ts_count, uint8_t *ss_count)
+ {
+    /* This runs only once up front since other optimizations don't affect it */
+    NIR_PASS(_, nir, nir_opt_shrink_stores, true);
+@@ -3062,7 +3062,7 @@ agx_optimize_nir(nir_shader *nir, bool soft_fault, uint16_t *preamble_size,
+     * want to vectorize first since nir_opt_load_store_vectorize doesn't know
+     * how to handle our loads. Likewise for uniform atomic optimization.
+     */
+-   NIR_PASS(_, nir, agx_nir_lower_address);
++   NIR_PASS(_, nir, agx_nir_lower_address, fold_subformat_address);
+ 
+    NIR_PASS(progress, nir, nir_opt_uniform_subgroup, &subgroups_options);
+    if (progress) {
+@@ -3890,7 +3890,8 @@ agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
+ 
+    info->push_count = key->reserved_preamble;
+    agx_optimize_nir(
+-      nir, key->dev.soft_fault, key->secondary ? NULL : &info->push_count,
++      nir, key->dev.soft_fault, key->dev.fold_subformat_address,
++      key->secondary ? NULL : &info->push_count,
+       (key->secondary || !key->promote_textures) ? NULL
+                                                  : &info->texture_state_count,
+       (key->secondary || !key->promote_textures) ? NULL
+diff --git a/src/asahi/compiler/agx_compile.h b/src/asahi/compiler/agx_compile.h
+index e53fba2d894..ac80b9629ce 100644
+--- a/src/asahi/compiler/agx_compile.h
++++ b/src/asahi/compiler/agx_compile.h
+@@ -274,6 +274,13 @@ struct agx_device_key {
+     * codegen defaults that are measured on G13 only.
+     */
+    bool g13;
++
++   /* Index global accesses whose lea shift is below the format shift (the
++    * cooperative-matrix loads) by the scaled offset instead of a 64-bit
++    * address. Measured per device: on for the single-cluster G13 (M1), off
++    * on the multi-cluster G13C, where it slows dense GEMM.
++    */
++   bool fold_subformat_address;
+ };
+ 
+ struct agx_shader_key {
+diff --git a/src/asahi/compiler/agx_nir.h b/src/asahi/compiler/agx_nir.h
+index 719ece490c9..120beede27c 100644
+--- a/src/asahi/compiler/agx_nir.h
++++ b/src/asahi/compiler/agx_nir.h
+@@ -10,7 +10,8 @@
+ struct nir_shader;
+ struct nir_instr;
+ 
+-bool agx_nir_lower_address(struct nir_shader *shader);
++bool agx_nir_lower_address(struct nir_shader *shader,
++                           bool fold_subformat_address);
+ bool agx_nir_lower_algebraic_late(struct nir_shader *shader);
+ bool agx_nir_cleanup_amul(struct nir_shader *shader);
+ bool agx_nir_fuse_lea(struct nir_shader *shader);
+diff --git a/src/asahi/compiler/agx_nir_lower_address.c b/src/asahi/compiler/agx_nir_lower_address.c
+index d59860f7c9d..ccb4185ffd1 100644
+--- a/src/asahi/compiler/agx_nir_lower_address.c
++++ b/src/asahi/compiler/agx_nir_lower_address.c
+@@ -61,12 +61,34 @@ pass(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
+       nir_op op = nir_scalar_alu_op(base);
+       if (op == nir_op_ulea_agx || op == nir_op_ilea_agx) {
+          unsigned shift = nir_scalar_as_uint(nir_scalar_chase_alu_src(base, 2));
++         bool sign_extend = (op == nir_op_ilea_agx);
+          if (shift >= format_shift && shift <= max_shift) {
+             match = (struct match){
+                .base = nir_scalar_chase_alu_src(base, 0),
+                .offset = nir_scalar_chase_alu_src(base, 1),
+                .shift = shift - format_shift,
+-               .sign_extend = (op == nir_op_ilea_agx),
++               .sign_extend = sign_extend,
++            };
++         } else if (shift < format_shift && *(const bool *)data) {
++            /* A byte (or half-element) offset, as the cooperative matrix
++             * loads produce. The access is format-aligned and so is the base,
++             * so the offset is a multiple of the element size: index by the
++             * offset scaled down instead of materializing the 64-bit sum (a
++             * 64-bit add plus the moves that build its operands). Per device
++             * (agx_device_key::fold_subformat_address): measured +15 % on
++             * dense f16 GEMM on the single-cluster M1, -13..17 % on the M1
++             * Max, bit-identical on both.
++             */
++            nir_scalar off = nir_scalar_chase_alu_src(base, 1);
++            nir_def *index = nir_channel(b, off.def, off.comp);
++            unsigned down = format_shift - shift;
++            index = sign_extend ? nir_ishr_imm(b, index, down)
++                                : nir_ushr_imm(b, index, down);
++            match = (struct match){
++               .base = nir_scalar_chase_alu_src(base, 0),
++               .offset = nir_get_scalar(index, 0),
++               .shift = 0,
++               .sign_extend = sign_extend,
+             };
+          }
+       } else if (op == nir_op_iadd) {
+@@ -151,7 +173,7 @@ pass(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
+ }
+ 
+ bool
+-agx_nir_lower_address(nir_shader *nir)
++agx_nir_lower_address(nir_shader *nir, bool fold_subformat_address)
+ {
+    bool progress = false;
+ 
+@@ -169,7 +191,7 @@ agx_nir_lower_address(nir_shader *nir)
+ 
+    /* Next, lower load/store using the lea's */
+    NIR_PASS(progress, nir, nir_shader_intrinsics_pass, pass,
+-            nir_metadata_control_flow, NULL);
++            nir_metadata_control_flow, &fold_subformat_address);
+ 
+    /* Finally, lower any leftover lea instructions back to ALU to let
+     * nir_opt_algebraic simplify them from here.
+diff --git a/src/asahi/lib/agx_device.c b/src/asahi/lib/agx_device.c
+index d70b8419b79..da876c54dfd 100644
+--- a/src/asahi/lib/agx_device.c
++++ b/src/asahi/lib/agx_device.c
+@@ -957,5 +957,8 @@ agx_gather_device_key(struct agx_device *dev)
+       .needs_g13x_coherency = u_tristate_make(g13x_coh),
+       .soft_fault = agx_has_soft_fault(dev),
+       .g13 = dev->params.gpu_generation == 13,
++      .fold_subformat_address = dev->params.gpu_generation == 13 &&
++                                dev->params.num_clusters_total == 1 &&
++                                dev->params.num_dies == 1,
+    };
+ }
