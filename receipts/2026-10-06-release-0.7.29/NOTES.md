@@ -117,6 +117,19 @@ glslang 1.4.363 / shaderc 2026.4 were deliberately NOT used).
   "mlx-lm version mismatch" (fixed on main after v0.7.29 was tagged; the
   v0.7.29 tarball keeps the old script).
 
+- **Batched prefill of GDN/linear-attention models: rows beyond the first
+  can produce wrong values (OPEN, pre-existing).** On the mlx-lm 0.31.3
+  batch path (BatchGenerator) with omarchy's batched prefill/decode ops, a
+  batch of four IDENTICAL prompts shows rows 1-3 diverging from step 0
+  (3.31/3.75/4.63 nats; first differing module `layer0.linear_attn` at
+  T=16) while row 0 and every single-prompt run are correct. Present in
+  v0.7.28 and v0.7.29 alike (bit-identical results on both tags — not a
+  v0.7.29 regression); cause under investigation (GDN prefill path at B>1).
+  **oMLX users: continuous batching (completion_batch_size 8, the default)
+  on GDN-family models (Qwen3.5/3.8) can therefore serve wrong rows in
+  prefill; single-request serving is unaffected.** A per-server workaround
+  (completion_batch_size 1) is being confirmed and will be added here.
+
 - SDPA fused-VJP value defects remain open (qL=1 maskless dk/dv zero; B=1,
   kL=5 also fails).
 - `compile()` of the sin*cos tape segfaults on the G13 build host; that leg
