@@ -110,6 +110,17 @@ add("g-g13c (chip + CPU-PD hold)", g13c_rc, "gates-run/g-g13c-receipt-jw16.log",
     ver=first(t, r"^pip mlx_omarchy (\S+)"),
     note="wheel_sha OK" if sha_line == WHEEL_SHA else "WHEEL SHA MISMATCH")
 
+# --- g-g13c leg B (ICD override: coreglass bbbfa36dce) ----------------------
+t = need("g-g13c-receipt-legB-jw16.log")
+sha_b = first(t, r"^wheel_sha256 ([0-9a-f]{64}) ")
+lvb = first(t, r"^libvulkan_sha256 ([0-9a-f]{64})")
+legb_ok = ("G13C_PASS" in t and sha_b == WHEEL_SHA and
+           lvb == "cb2a1bcf4c1b10cf587a36f6acf59a74604a2c1537be2dc5fbcda6bcfef316e7")
+add("g-g13c leg B (ICD override, coreglass git-bbbfa36dce)",
+    0 if legb_ok else 1, "gates-run/g-g13c-receipt-legB-jw16.log",
+    ver=first(t, r"^pip mlx_omarchy (\S+)"),
+    note="libvulkan cb2a1bcf… as directed" if legb_ok else "SHA/PASS mismatch")
+
 # --- jw16-gates full plan ----------------------------------------------------
 t = need("jw16-gates-receipt-jw16.log")
 steps = ["build-wheel", "g13-build", "g15-build", "g7c", "g7d", "g13-run", "g15-run"]
@@ -189,7 +200,10 @@ lines += [
      if ok_all else
      "NOT GREEN: at least one gate is not RC=0 — see the table; root cause in the cited log."),
     "",
-    "g-g13c leg B: NOT RUN on jw16 for v0.7.31 (w7N phone block; not queued).",
+    ("g-g13c leg B: PASS on jw16 for v0.7.31 (ICD override coreglass git-bbbfa36dce, "
+     "libvulkan cb2a1bcf… as directed; receipt gates-run/g-g13c-receipt-legB-jw16.log)."
+     if legb_ok else
+     "g-g13c leg B: NOT RUN on jw16 for v0.7.31 (w7N phone block; not queued)."),
     "",
 ]
 out = D / "SUMMARY-jw16.md"
