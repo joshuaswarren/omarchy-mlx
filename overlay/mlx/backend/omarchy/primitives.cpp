@@ -12565,7 +12565,7 @@ void BonsaiQmvWide::eval_gpu(
   params.output_offset = checked_item_offset(out, out.size(), tag, out);
   std::array<omarchy::ComputeBinding, 5> bindings{
       binding(xd), binding(wd), binding(scd), binding(bid), binding(out)};
-  constexpr uint32_t kColumnsPerGroup = 4u * static_cast<uint32_t>(M);
+const uint32_t kColumnsPerGroup = 4u * static_cast<uint32_t>(M);
   uint32_t n_groups =
       (params.matrix_n + kColumnsPerGroup - 1u) / kColumnsPerGroup;
   encoder.dispatch_compute(
