@@ -27,6 +27,26 @@ target_link_options(omarchy_primitive_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_primitive_tests)
 add_test(NAME omarchy_primitive_tests COMMAND omarchy_primitive_tests)
 
+add_executable(omarchy_custom_kernel_translate_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_custom_kernel_translate.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/custom_kernel.cpp)
+target_link_libraries(omarchy_custom_kernel_translate_tests PRIVATE mlx doctest)
+# The test-only translate entry lives in custom_kernel.cpp under this define;
+# the target compiles that file itself so the export exists at link time.
+target_include_directories(omarchy_custom_kernel_translate_tests
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx
+                           PRIVATE ${CMAKE_BINARY_DIR}/mlx/backend/omarchy/shaders)
+target_compile_definitions(omarchy_custom_kernel_translate_tests
+                           PRIVATE MLX_OMARCHY_TEST_TRANSLATE)
+target_compile_options(omarchy_custom_kernel_translate_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_custom_kernel_translate_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_custom_kernel_translate_tests)
+add_test(NAME omarchy_custom_kernel_translate_tests
+         COMMAND omarchy_custom_kernel_translate_tests)
+
 add_executable(omarchy_ane_bundle_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_bundle.cpp)
 target_link_libraries(omarchy_ane_bundle_tests PRIVATE mlx doctest)
