@@ -106,14 +106,18 @@ class WakeWordDetector:
         self._refractory = refractory_seconds
         self._consumed = 0.0
         self._last_fire = float("-inf")
+        self._peak = 0.0
 
     def process(self, pcm: bytes | bytearray | memoryview) -> bool:
         samples = len(pcm) // 2
         if samples == 0:
             return False
-        scores = self._session.predict(bytes(pcm))
+        import numpy as np
+        scores = self._session.predict(np.frombuffer(pcm, dtype=np.int16))
         self._consumed += samples / SAMPLE_RATE
         score = max(scores.values())
+        if score > self._peak:
+            self._peak = score
         if score < self.threshold:
             return False
         if self._consumed - self._last_fire < self._refractory:
@@ -125,6 +129,7 @@ class WakeWordDetector:
         self._session.reset()
         self._consumed = 0.0
         self._last_fire = float("-inf")
+        self._peak = 0.0
 
 
 class WakeState:
