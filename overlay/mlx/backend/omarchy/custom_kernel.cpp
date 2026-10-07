@@ -818,6 +818,20 @@ void translate_header(std::string& header) {
           R"(template\s*<\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\1\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\1\s+([A-Za-z_][A-Za-z0-9_]*)\s*\))"),
       "float $2(float $3)");
   translate_types(header);
+  // Helper functions in the user header (e.g. the msv_row_inv_rms stage
+  // helper in mlx-serve's fused residual+RMSNorm kernel) keep their MSL
+  // spellings unless the statement-level body rewrites also run here:
+  // METAL_FUNC marks file-local helpers, `threadgroup` is GLSL `shared`,
+  // and the simd_* reductions / threadgroup_barrier map to subgroup ops
+  // exactly as they do in the body (custom_kernel.cpp body rewrites).
+  replace_all(header, "METAL_FUNC", "static");
+  replace_all(header, "threadgroup ", "shared ");
+  replace_all(
+      header, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()");
+  replace_all(header, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
+  replace_all(header, "simd_sum", "subgroupAdd");
+  replace_all(header, "simd_max", "subgroupMax");
+  replace_all(header, "simd_min", "subgroupMin");
   if (header.find("template") != std::string::npos ||
       header.find("[[") != std::string::npos) {
     throw std::runtime_error("unsupported user header declaration");
