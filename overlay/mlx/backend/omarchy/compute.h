@@ -901,6 +901,27 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectBF16NtK4S8,
   // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
   QmmVecQ4WordSubgroupBatch4BF16,
+  // Bonsai 1-bit / 2-bit affine decode: enum bindings for the shader
+  // lookup tables in compute.cpp. The dispatch tables reference these
+  // names; the matching fast primitives live in mlx/fast.cpp via the
+  // bonsai-qmv patch (patches/mlx-fast-bonsai-qmv.patch).
+  BonsaiQ1QmvSubgroupF32,
+  BonsaiQ1QmvSubgroupF16,
+  BonsaiQ1QmvSubgroupBF16,
+  BonsaiQ1QmvTreeF32,
+  BonsaiQ1QmvTreeF16,
+  BonsaiQ1QmvTreeBF16,
+  BonsaiQ1DequantF32,
+  BonsaiQ1DequantF16,
+  BonsaiQ1DequantBF16,
+  BonsaiQmvWideSubgroupBF16R2,
+  BonsaiQmvWideSubgroupBF16R3,
+  BonsaiQmvWideSubgroupBF16R4,
+  BonsaiQmvWideSubgroupBF16R5,
+  BonsaiQmvWideSubgroupF16R2,
+  BonsaiQmvWideSubgroupF16R3,
+  BonsaiQmvWideSubgroupF16R4,
+  BonsaiQmvWideSubgroupF16R5,
   Count,
 };
 
