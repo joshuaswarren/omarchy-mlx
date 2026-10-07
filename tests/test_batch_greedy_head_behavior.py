@@ -74,20 +74,24 @@ def model(pkg):
 
 @pytest.fixture
 def head_calls(pkg, model, monkeypatch):
-    """Replace _greedy_head with the tied projection's argmax; count its token calls."""
+    """Replace _greedy_head with the tied projection's argmax; record the shapes its token and logits parts see."""
     _, gen = pkg
     emb = model.model.embed_tokens
-    calls = []
+    calls = {"token": [], "logits": []}
 
     def fake(_model):
         def head(hidden):
             raise AssertionError("the batched step must not call the 1-row head")
 
         def token(hidden):
-            calls.append(hidden.shape)
+            calls["token"].append(hidden.shape)
             return mx.argmax(emb.as_linear(hidden), axis=-1)
 
-        head.body, head.token, head.logits = model.model, token, emb.as_linear
+        def logits(hidden):
+            calls["logits"].append(hidden.shape)
+            return emb.as_linear(hidden)
+
+        head.body, head.token, head.logits = model.model, token, logits
         return head
 
     monkeypatch.setattr(gen, "_greedy_head", fake)
@@ -126,7 +130,7 @@ def test_greedy_batch_takes_the_head_with_identical_output(pkg, model, head_call
     _, gen = pkg
     monkeypatch.setattr(gen, "_BATCH_GREEDY", False)
     want_tokens, want_logprobs = run(gen, model, gen.greedy_sampler)
-    assert not head_calls
+    assert not head_calls["token"]
     monkeypatch.setattr(gen, "_BATCH_GREEDY", True)
 
     # Keep every evaluated object alive so no id() is reused by a later array.
@@ -152,7 +156,10 @@ def test_greedy_batch_takes_the_head_with_identical_output(pkg, model, head_call
     monkeypatch.setattr(mx, "eval", real_eval)
     monkeypatch.setattr(mx, "async_eval", real_async)
 
-    assert head_calls and all(s == (1, 64) for s in head_calls)
+    assert head_calls["token"] and all(s == (1, 64) for s in head_calls["token"])
+    # The logprob projection must see [B, 1, K], the shape the model call gives it (one row per batch slice on
+    # the GPU); a 2-D [B, K] would route as an M = B matmul with different bits.
+    assert head_calls["logits"] and all(len(s) == 3 and s[1] == 1 for s in head_calls["logits"])
     assert got_tokens == want_tokens
     lazy = [lp for row in got_logprobs for lp in row[1:]]
     assert lazy and not any(id(lp) in evaluated for lp in lazy), "the greedy step evaluated its logprobs"
@@ -168,7 +175,21 @@ def test_sampled_and_processed_batches_keep_the_full_logits_step(pkg, model, hea
     run(gen, model, lambda x: mx.argmax(x, axis=-1))
     penalty = sample_utils.make_logits_processors(repetition_penalty=1.1)
     run(gen, model, gen.greedy_sampler, processors=[penalty] * len(PROMPTS))
-    assert not head_calls
+    assert not head_calls["token"]
+
+
+def test_a_tagged_argmax_sampler_takes_the_head(pkg, model, head_calls):
+    """oMLX's temp == 0 sampler is its own argmax lambda, tagged _mlx_omarchy_greedy by patch 0010."""
+    _, gen = pkg
+
+    def tagged(x):
+        return mx.argmax(x, axis=-1)
+
+    tagged._mlx_omarchy_greedy = True
+    want, _ = run(gen, model, gen.greedy_sampler)
+    head_calls["token"].clear()
+    got, _ = run(gen, model, tagged)
+    assert head_calls["token"] and got == want
 
 
 def test_kill_switch_and_wiring(pkg):
