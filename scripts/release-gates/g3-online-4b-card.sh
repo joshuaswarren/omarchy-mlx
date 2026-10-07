@@ -5,8 +5,9 @@ set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 # LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
 # server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
-# already holds the lock and nesting flock deadlocks, so exec timeout only.
-LOCKER=(flock -x -w 300); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=(timeout)
+# already holds the lock and nesting flock deadlocks, so exec the inner
+# command with no wrapper (LOCKER empty).
+LOCKER=(flock -x -w 300); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
 LOG="$LOG_DIR/g3-online-4b.log"
 RUNNER="$GATES_DIR/gate3-card-runner.py"
 
