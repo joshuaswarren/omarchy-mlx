@@ -238,6 +238,45 @@ class ListenerTests(unittest.TestCase):
         self.assertIn("no audio device", state.snapshot()["error"])
 
 
+class DeviceSelectionTests(unittest.TestCase):
+    def test_pulse_preferred_when_queryable_succeeds(self):
+        class FakeSD:
+            default = type("D", (), {"device": (-1, -1)})()
+            def query_devices(self, name, kind):
+                return {"name": name}
+        device, source = wake_word.WakeListener._select_input_device(FakeSD())
+        self.assertEqual(device, "pulse")
+        self.assertIsNone(source)
+
+    def test_falls_back_to_default_when_pulse_absent(self):
+        class FakeSD:
+            default = type("D", (), {"device": (3, 4)})()
+            def query_devices(self, name, kind):
+                raise ValueError("No input device matching 'pulse'")
+        device, source = wake_word.WakeListener._select_input_device(FakeSD())
+        self.assertEqual(device, 3)
+        self.assertIsNone(source)
+
+    def test_pactl_set_default_source_invoked_on_fallback(self):
+        os.environ["PULSE_SOURCE"] = "effect_output.j293-mic"
+        class FakeSD:
+            default = type("D", (), {"device": (3, 4)})()
+            def query_devices(self, name, kind):
+                raise ValueError("No input device matching 'pulse'")
+        import subprocess as sp
+        original = sp.run
+        calls = []
+        sp.run = lambda *a, **k: calls.append((a, k)) or None
+        try:
+            device, source = wake_word.WakeListener._select_input_device(FakeSD())
+        finally:
+            sp.run = original
+            del os.environ["PULSE_SOURCE"]
+        self.assertEqual(device, 3)
+        self.assertEqual(source, "effect_output.j293-mic")
+        self.assertTrue(any("set-default-source" in str(args[0]) for args, _ in calls))
+
+
 class RealModelTests(unittest.TestCase):
     """Runs only where the pinned models are already staged (jwm1 receipt runs)."""
 

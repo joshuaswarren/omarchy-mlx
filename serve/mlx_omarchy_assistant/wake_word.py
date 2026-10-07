@@ -178,11 +178,36 @@ class WakeListener(threading.Thread):
         self._factory = stream_factory or self._open_stream
 
     @staticmethod
+    def _select_input_device(sounddevice):
+        # Prefer the ALSA "pulse" device (libpulse-backed, honors PULSE_SOURCE
+        # / pactl set-default-source) so the assistant hears the same
+        # microphone the user's browser + parecord see. Fall back to the
+        # system default if "pulse" is absent. On the PulseAudio fallback
+        # path, sync the OS default source to PULSE_SOURCE so the listener
+        # hears the named wireplumber filter (e.g. j293-mic) rather than
+        # whichever hardware input is configured today.
+        try:
+            sounddevice.query_devices("pulse", kind="input")
+            return "pulse", None
+        except Exception:
+            pass
+        source = __import__("os").environ.get("PULSE_SOURCE")
+        if source:
+            try:
+                subprocess = __import__("subprocess")
+                subprocess.run(["pactl", "set-default-source", source],
+                               check=False, capture_output=True, timeout=5)
+            except Exception:
+                pass
+        return sounddevice.default.device[0], source
+
+    @staticmethod
     def _open_stream(callback):
         import sounddevice
+        device, _ = WakeListener._select_input_device(sounddevice)
         return sounddevice.RawInputStream(
             samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=CHUNK,
-            callback=callback)
+            callback=callback, device=device)
 
     def _callback(self, indata, frames, time_info, status) -> None:
         self._frames.put(bytes(indata))
