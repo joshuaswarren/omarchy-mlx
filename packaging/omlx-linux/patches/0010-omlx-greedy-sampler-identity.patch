@@ -1,0 +1,16 @@
+--- a/omlx/utils/sampling.py	2026-10-06 20:03:35.358156194 -0500
++++ b/omlx/utils/sampling.py	2026-10-06 20:03:42.868087101 -0500
+@@ -184,7 +184,12 @@
+     top-p / min-p / xtc / top-k filters and finishes with categorical sampling.
+     """
+     if temp == 0:
+-        sampler = lambda x: mx.argmax(x, axis=-1)
++        # mlx-lm's own greedy_sampler (plain argmax, no mx.compile): the
++        # mlx-omarchy BatchGenerator recognises it and decodes greedy batches
++        # through the pruned greedy head.
++        from mlx_lm.sample_utils import greedy_sampler
++
++        sampler = greedy_sampler
+     else:
+         sampling_methods = []
+         if 0 < top_p < 1.0 and top_k > 0 and min_p == 0.0 and xtc_probability <= 0.0:

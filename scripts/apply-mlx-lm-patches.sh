@@ -134,6 +134,12 @@ python3 "$ROOT/scripts/patch-mlx-lm-ssm-maskless.py" "$VENV"
 # `import os`. Kill switch MLX_OMARCHY_KV_MASKLESS=0.
 python3 "$ROOT/scripts/patch-mlx-lm-kv-maskless.py" "$VENV"
 apply mlx-lm-greedy-prune.patch
+# Greedy GenerationBatch steps (BatchGenerator / oMLX) take the pruned greedy
+# head per row and leave logprobs lazy instead of projecting every row onto
+# the full vocabulary (B=4 head 1.38 -> 4.28 ms on Qwen3.8-2B). Sampled batches
+# and logits processors keep the full step. 0.32 line only. Kill switch
+# MLX_OMARCHY_BATCH_GREEDY=0.
+python3 "$ROOT/scripts/patch-mlx-lm-batch-greedy-head.py" "$VENV"
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
 # bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
 # digest unchanged, decode +2.1%). The gated-norm site is NOT shipped: it diverges.
