@@ -647,6 +647,14 @@ TEST_CASE("batched bf16 decode is one dispatch and per-row bit-identical") {
         HdCacheInputs one{row(batched.q), row(batched.k), row(batched.v)};
         require_hd_bit_identical(row(out), sdpa(one), stream);
       }
+      // The switch is read per call: =0 in this process sends the same
+      // batch back to the composition, which the bf16 arm reproduces bit
+      // for bit.
+      setenv("MLX_OMARCHY_SDPA_DECODE_BATCH", "0", 1);
+      CHECK_GT(dispatches_for([&] { return sdpa(batched); }, stream), 1);
+      array composed = sdpa(batched);
+      unsetenv("MLX_OMARCHY_SDPA_DECODE_BATCH");
+      require_hd_bit_identical(out, composed, stream);
     }
   }
 }

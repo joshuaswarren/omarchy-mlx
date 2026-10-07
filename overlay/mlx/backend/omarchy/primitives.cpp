@@ -13808,11 +13808,11 @@ void ScaledDotProductAttention::eval_gpu(
   // Batched decode (q_len 1, bf16, one-pass): workgroup z walks the batch
   // with per-row base offsets; each row runs the single-row arithmetic, so
   // B > 1 stays bit-identical to the composed route it replaces.
-  // MLX_OMARCHY_SDPA_DECODE_BATCH=0 restores the batch == 1 gate.
-  static const bool sdpa_decode_batch =
-      decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0;
+  // MLX_OMARCHY_SDPA_DECODE_BATCH=0 restores the batch == 1 gate; it is read
+  // on every batched call, so it can be flipped inside one process.
   const bool decode_batch_ok = batch == 1 ||
-      (sdpa_decode_batch && decode_bf16_probe && q_len == 1);
+      (decode_bf16_probe && q_len == 1 &&
+          decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
   if ((decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
       decode_route_ready && inputs.size() == 3 && !has_sinks_ &&
       !output_logsumexp_ && decode_batch_ok &&
