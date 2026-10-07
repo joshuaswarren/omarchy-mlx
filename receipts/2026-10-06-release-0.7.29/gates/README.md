@@ -8,10 +8,17 @@ host first. The tag never moves: a failing gate is reported, not re-tagged.
 | gate | host / lane | runner | PASS looks like |
 |---|---|---|---|
 | g-udev | any aarch64 host with python3.14 (done: lsdc3build at the tagged sha) | `install.sh --system --dest-root <tmp> --vendor <dir> --lock <dir>/requirements-lock.txt` then `find <tmp> -name '*.rules' -exec sha256sum {} \;` | staged rule sha256 `d63915c47b8247c7a95f5babd4b3318a6590b73c66d74a05c6c311d3e9e4622b` |
-| g-g13c | the G13C M1 Max host (jw16-class), after the cluster window frees it; GPU under the host's flock | `gates/g-g13c.sh` | `G13C_DEVICE Apple M1 Max` (marketing_name; `mlx-omarchy-info` shows the G13C suffix), `G13C_GATE default during=0 after=0`, `G13C_GATE forced during>=1 after=0` |
-| g-hold | the T8103/G13G host — owned by the power-experiments lane; book through the orchestrator, never direct | `gates/g-hold-g13g.sh` | udev `video 660`; `tests.test_cpu_pd_hold` `Ran 2 tests ... OK`; `A/B digests equal 3/3` |
-| M2 battery | the T6021 gate host | `gates/run-m2-battery.sh` (wraps the tag's `scripts/release-gates/run-all.sh`) | every gate RC=0; `$TAG-gate-logs/gates.done` summary all green |
+| g-g13c | the G13C M1 Max host (jw16-class), after the cluster window frees it; GPU via gpu-turn ticket when present, else flock | `gates/g-g13c.sh` | receipt teed; `G13C_DEVICE` containing G13C + `G13C_CHIP_OK`; `G13C_GATE default during=0 after=0`; `G13C_GATE forced during>=1 after=0`; `G13C_PASS` |
+| g-hold | the T8103/G13G host — owned by the power-experiments lane; book through the orchestrator, never direct | `gates/g-hold-g13g.sh` | receipt teed; udev `root video 660`; `Ran 2 tests` + bare `OK` (skipped = FAIL); `HOLD_AB 4 digests:` all equal and non-empty; `HOLD_PASS` |
+| M2 battery | the T6021 gate host | `gates/run-m2-battery.sh` (wraps the tag's `scripts/release-gates/run-all.sh`) | explicit pass rule: run-all rc==2, all 14 local gates `_RC=0`, only the 4 jw16 gates SKIPPED, `M2_BATTERY_PASS` |
+| jw16 gates | the G13C host, same window as g-g13c | `gates/jw16-gates.sh` | `STEP g7c/g7d/g13/g15 (+both build stages)_RC=0` for every step, `JW16_GATES_PASS` |
 | assets | anywhere | `python3 scripts/verify-release-assets.py v0.7.29 --platforms linux_aarch64` | `VERIFIED: every uploaded asset matches what the release claims`, rc=0 (already PASS on the draft, 2026-10-07) |
+
+RETROACTION (2026-10-07, w7K review): the 02:10Z g-g13c "PASS" reported
+earlier is RETRACTED — that run predates these fixes and did not meet the
+contract above (no chip assertion, no receipt, 1 s release check; the
+reviewed revision's probes never started). Final runs land their raw logs in
+`gates-run/` and only those count.
 
 Conventions: every ssh value is an ALIAS supplied by env, never a raw
 address; throwaway state under `GATE_ROOT`; serving venvs are never touched;
