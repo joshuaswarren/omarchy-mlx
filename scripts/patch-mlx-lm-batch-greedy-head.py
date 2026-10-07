@@ -17,8 +17,9 @@ request asked for logprobs). Any other batch keeps the upstream step. A batch
 merged from lazy and eager parts evaluates its logprobs (the safe default).
 
 Needs the mlx-lm-greedy-prune patch (_greedy_head). 0.32 line only (no
-GenerationBatch in 0.31.3: nothing to patch). Kill switch at runtime:
-MLX_OMARCHY_BATCH_GREEDY=0 (read once at import).
+GenerationBatch in 0.31.3: nothing to patch). Opt-in: MLX_OMARCHY_BATCH_GREEDY=1
+(read once at import). jw16 2026-10-07: +1.9% ms/token at B=1 and +1.6% at B=4
+in-process, oMLX c1 -2.5%, oMLX c4 +4.7% (receipts/2026-10-07-prefill-hotspots.md).
 Usage: python3 patch-mlx-lm-batch-greedy-head.py /path/to/venv
 """
 import ast
@@ -53,9 +54,9 @@ HEAD_NEW = """    def token(hidden):
 
 
 # mlx-omarchy: greedy batches decode through the pruned greedy head with lazy
-# logprobs (GenerationBatch._step). MLX_OMARCHY_BATCH_GREEDY=0 keeps the
-# full-logits step.
-_BATCH_GREEDY = os.environ.get("MLX_OMARCHY_BATCH_GREEDY", "1") != "0"
+# logprobs (GenerationBatch._step). Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): it
+# cost B=1 and in-process B=4 time on jw16 and only oMLX c4 gained.
+_BATCH_GREEDY = os.environ.get("MLX_OMARCHY_BATCH_GREEDY", "0") == "1"
 _UNSET = object()
 """
 
