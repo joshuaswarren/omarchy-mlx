@@ -7697,12 +7697,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                           : omarchy::ComputeKernel::QmmVecF16,
               use_q4_word ? omarchy::ComputeKernel::QmmVecQ4WordBF16
                           : omarchy::ComputeKernel::QmmVecBF16);
-    // Batch-shared GEMV (opt-in, MLX_OMARCHY_QMV_BATCH=1): a [B, 1, K]
-    // decode batch (B <= 4) against one 2D weight reads each weight word
-    // once per block instead of once per row; every row keeps the
-    // single-row chain. Read live so tests can flip it between calls.
-    const char* qmv_batch_env = std::getenv("MLX_OMARCHY_QMV_BATCH");
-    if (qmv_batch_env != nullptr && std::strcmp(qmv_batch_env, "1") == 0 &&
+    // Batch-shared GEMV: a [B, 1, K] decode batch (B <= 4) against one 2D
+    // weight reads each weight word once per block instead of once per row;
+    // every row keeps the single-row chain. On by default since 2026-10-07
+    // (jw16: BatchGenerator B=4 27.4 -> 25.6 ms/step, oMLX c4 +3.3%, row
+    // digests unchanged); MLX_OMARCHY_QMV_BATCH=0 (read live) restores the
+    // per-row kernel.
+    if (decode_path_override("MLX_OMARCHY_QMV_BATCH") != 0 &&
         vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16 &&
         batch >= 2u && batch <= 4u && transpose_ && w.ndim() == 2 &&
         scales.ndim() == 2 && biases.ndim() == 2) {

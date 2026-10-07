@@ -1561,7 +1561,7 @@ void main() {
 #error "ROWS_PER_SLOT > 1 builds on QMM_VEC_Q4_WORD"
 #endif
 #if defined(QMM_VEC_BATCH)
-// Batch-shared form (MLX_OMARCHY_QMV_BATCH=1): params.shape[0] = B <=
+// Batch-shared form (MLX_OMARCHY_QMV_BATCH, default on): params.shape[0] = B <=
 // QMM_VEC_BATCH x rows against ONE 2D weight (no per-batch weight or param
 // stride). Each block loads its weight words, scales and biases once and runs
 // every row's chain on them. Per row that chain is Q4_ROWS exactly: the same

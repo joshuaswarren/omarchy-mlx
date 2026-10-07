@@ -1,8 +1,8 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 
-// Batch-shared bf16 decode GEMV (QmmVecQ4WordSubgroupBatch4BF16, opt-in via
-// MLX_OMARCHY_QMV_BATCH=1). A [B, 1, K] decode batch (B <= 4) against one 2D
+// Batch-shared bf16 decode GEMV (QmmVecQ4WordSubgroupBatch4BF16, on by default;
+// MLX_OMARCHY_QMV_BATCH=0 disables it). A [B, 1, K] decode batch (B <= 4) against one 2D
 // 4-bit weight reads each weight word once per block and runs every row's
 // single-row chain on it, so each row must equal the per-row kernel's output
 // bit for bit. The batch-shared token kernel (QMM_VEC_TOKENS) passed fixed-seed
