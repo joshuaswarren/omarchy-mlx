@@ -44,4 +44,8 @@ jobs:
       - run: python scripts/test_collect_macos.py
       - run: python -m unittest discover -s tests -p test_mlx_provenance.py
       - run: python scripts/bench_matrix.py --self-test
+      # tests/ covers the serve, assistant and ANE stack, which runs on Linux
+      # only (/proc, /usr/bin/bash, process start times). The macOS legs keep
+      # the collector steps above.
       - run: pytest tests -q
+        if: runner.os == 'Linux'
