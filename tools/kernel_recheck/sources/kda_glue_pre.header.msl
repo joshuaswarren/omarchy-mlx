@@ -1,0 +1,7 @@
+
+inline bfloat16_t mlx_sigmoid(bfloat16_t x) {
+    bfloat16_t e = (bfloat16_t)metal::exp(metal::abs((float)x));
+    bfloat16_t den = (bfloat16_t)(1.0f + (float)e);
+    bfloat16_t y = (bfloat16_t)(1.0f / (float)den);
+    return ((float)x < 0.0f) ? y : (bfloat16_t)(1.0f - (float)y);
+}

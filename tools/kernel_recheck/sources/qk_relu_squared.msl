@@ -1,0 +1,39 @@
+
+        uint3 tid = thread_position_in_grid;
+        uint batch = tid.z;
+        uint row = tid.y;
+        uint col = tid.x;
+        
+        // Early exit if out of bounds
+        if (row >= q_shape[2] || col >= k_shape[2]) return;
+        
+        uint groups = q_shape[1];
+        uint q_dim = q_shape[3];
+        
+        // Compute strides
+        uint q_stride = q_shape[2] * q_shape[3];
+        uint k_stride = k_shape[2] * k_shape[3];
+        uint out_stride = q_shape[2] * k_shape[2];
+        
+        T scale_val = scale[0];
+        
+        // Process all groups for this batch
+        for (uint g = 0; g < groups; g++) {
+            // Compute dot product
+            T sum = T(0);
+            uint q_offset = batch * groups * q_stride + g * q_stride + row * q_dim;
+            uint k_offset = batch * groups * k_stride + g * k_stride + col * q_dim;
+            
+            for (uint d = 0; d < q_dim; d++) {
+                sum += q[q_offset + d] * k[k_offset + d];
+            }
+            
+            // Scale and apply ReLU²
+            sum *= scale_val;
+            T result = sum > T(0) ? sum * sum : T(0);
+            
+            // Write output
+            uint out_idx = batch * groups * out_stride + g * out_stride + row * k_shape[2] + col;
+            out[out_idx] = result;
+        }
+    

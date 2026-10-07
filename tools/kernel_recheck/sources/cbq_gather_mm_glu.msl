@@ -1,0 +1,47 @@
+
+    constexpr int TG = 256;
+    uint ot = threadgroup_position_in_grid.x;
+    uint r  = threadgroup_position_in_grid.y;
+    uint tid = thread_position_in_threadgroup.x;
+    if (r >= (uint)R) return;
+    uint sg   = tid >> 5;
+    uint lane = tid & 31;
+    uint half_ = sg >> 2;
+    uint o = ot * 4 + (sg & 3);
+
+    threadgroup InT xs[K];
+    threadgroup int64_t gsh[2048];
+    const device InT* xg = x + (size_t)tokidx[r] * K;
+    for (uint k = tid; k < (uint)K; k += TG) xs[k] = xg[k];
+    const device int64_t* g64 = (const device int64_t*)grid;
+    for (uint k = tid; k < 2048u; k += TG) gsh[k] = g64[k];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (o >= (uint)O) return;
+    uint e = eidx[r];
+    const device uint8_t*  qs = (half_ ? b_qs : a_qs) + ((size_t)e * O + o) * (K / 8);
+    const device uint16_t* qh = (half_ ? b_qh : a_qh) + ((size_t)e * O + o) * (K / 32);
+    const device DT*       dd = (half_ ? b_d  : a_d ) + ((size_t)e * O + o) * (K / 256);
+    float acc = 0.0f;
+    for (uint sb = lane; sb < (uint)(K / 32); sb += 32) {
+        uint16_t h = qh[sb];
+        float dl = (float)dd[sb / 8] * (float)(2 * ((h >> 12) & 7) + 1);
+        float del = (h & 0x8000) ? -0.125f : 0.125f;
+        float part = 0.0f;
+        for (uint l = 0; l < 4; ++l) {
+            uint gi = (uint)qs[sb * 4 + l] | ((uint)((h >> (3 * l)) & 7) << 8);
+            int64_t gv = gsh[gi];
+            char4 c0 = as_type<char4>((int)(gv & 0xFFFFFFFF));
+            char4 c1 = as_type<char4>((int)(gv >> 32));
+            const threadgroup InT* xv = xs + sb * 32 + l * 8;
+            float4 xa = float4((float)xv[0], (float)xv[1], (float)xv[2], (float)xv[3]);
+            float4 xb = float4((float)xv[4], (float)xv[5], (float)xv[6], (float)xv[7]);
+            part += dot(float4(c0) + del, xa) + dot(float4(c1) + del, xb);
+        }
+        acc += dl * part;
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) {
+        if (half_) yu[(size_t)r * O + o] = (InT)acc;
+        else       yg[(size_t)r * O + o] = (InT)acc;
+    }

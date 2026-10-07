@@ -1,0 +1,28 @@
+
+    // thread per (r, k-그룹8): gx[tok,k8] += Σ_o d·P[o,k8]·cot[r,o]  (원자 가산)
+    uint g8 = thread_position_in_grid.x;          // K/8 그룹
+    uint r = thread_position_in_grid.y;
+    if (g8 >= (uint)(K / 8) || r >= (uint)R) return;
+    uint e = eidx[r];
+    uint sb = g8 / 4, l = g8 % 4, sup = g8 / 32;
+    float acc[8] = {0,0,0,0,0,0,0,0};
+    for (uint o = 0; o < (uint)O; ++o) {
+        float ct = (float)cot[(size_t)r * O + o];
+        if (ct == 0.0f) continue;
+        const device uint16_t* qh = cb_qh + ((size_t)e * O + o) * (K / 32);
+        uint16_t h = qh[sb];
+        const device uint8_t* qs = cb_qs + ((size_t)e * O + o) * (K / 8);
+        uint gi = (uint)qs[sb * 4 + l] | ((uint)((h >> (3 * l)) & 7) << 8);
+        int64_t gv = *((const device int64_t*)(grid + (size_t)gi * 8));
+        float del = (h & 0x8000) ? -0.125f : 0.125f;
+        float d = (float)cb_d[((size_t)e * O + o) * (K / 256) + sup]
+                  * (float)(2 * ((h >> 12) & 7) + 1);
+        float w = ct * d;
+        for (uint j = 0; j < 8; ++j) {
+            float gj = (float)(char)((gv >> (8 * j)) & 0xFF);
+            acc[j] += w * (gj + del);
+        }
+    }
+    device atomic_float* gx = grad_x + (size_t)tokidx[r] * K + g8 * 8;
+    for (uint j = 0; j < 8; ++j)
+        atomic_fetch_add_explicit(gx + j, acc[j], memory_order_relaxed);

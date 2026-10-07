@@ -1,0 +1,68 @@
+
+    uint e = thread_position_in_threadgroup.x;      // 0..895
+    constant int* mp = meta;                        // [K, K_hi]
+    const uint NE = 896u;
+    const int K = mp[0], KHI = mp[1];
+
+    threadgroup float sc[896];
+    threadgroup float bi[896];
+    threadgroup float red[1024];
+    threadgroup uint  redi[1024];
+    threadgroup uint  sel[32];
+    threadgroup float selw[32];
+
+    float g = (float)gate_out[e];
+    float s = 1.0f / (1.0f + exp(-g));              // fp32 sigmoid(레퍼런스 동일)
+    sc[e] = s;
+    bi[e] = s + bias[e];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // top-K 순차 최대 추출(결정론: 동점은 낮은 인덱스)
+    for (int k = 0; k < K; k++) {
+        float v = bi[e];
+        uint  vi = e;
+        red[e] = v; redi[e] = vi;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint step = 512u; step >= 1u; step >>= 1u) {
+            if (e < step && e + step < NE) {
+                float o = red[e + step]; uint oi = redi[e + step];
+                if (o > red[e] || (o == red[e] && oi < redi[e])) { red[e] = o; redi[e] = oi; }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if (e == 0u) { sel[k] = redi[0]; selw[k] = sc[redi[0]]; }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (e == sel[k]) bi[e] = -1e30f;            // 선택 제거
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // 정규화 + lo/hi 분기(스레드 0..K-1이 슬롯 담당)
+    if (e == 0u) {
+        float tot = 0.0f;
+        for (int k = 0; k < K; k++) tot += selw[k];
+        tot += 1e-20f;
+        for (int k = 0; k < K; k++) {
+            uint ge = sel[k];
+            float wn = selw[k] / tot;
+            int lo = lo_map[ge];
+            int hi = hi_map[ge];
+            lo_idx[k] = (uint)lo;
+            w_lo[k] = (hi >= 0) ? (bfloat16_t)0.0f : (bfloat16_t)wn;
+            selw[k] = (hi >= 0) ? wn : -1.0f;       // hi 랭킹 재사용
+        }
+        // hi top-KHI (선택 K개 안에서, 내림차순·동점 낮은 슬롯)
+        for (int j = 0; j < KHI; j++) {
+            int best = -1; float bv = 0.0f;
+            for (int k = 0; k < K; k++) {
+                if (selw[k] > bv) { bv = selw[k]; best = k; }
+            }
+            if (best >= 0) {
+                hi_idx[j] = (uint)(hi_map[sel[best]] + 1);
+                w_hi[j] = (bfloat16_t)bv;
+                selw[best] = -1.0f;
+            } else {
+                hi_idx[j] = 0u;                      // 더미
+                w_hi[j] = (bfloat16_t)0.0f;
+            }
+        }
+    }
