@@ -589,49 +589,64 @@ TEST_CASE("fused hd128 bf16 decode is bit-identical to the composition") {
 // projection transposed to [B, H, 1, D], capacity-strided K/V per row).
 // Workgroup z walks the batch, so a B=4 call is still one dispatch and
 // each row is bit-identical to that row decoded alone (before, B > 1 ran
-// the ~10-dispatch composition). Keep in sync with the
+// the ~10-dispatch composition). hd128 and hd256 (Qwen3.8's full-attention
+// width: 8 q / 2 kv heads), keys inside both windows. Keep in sync with the
 // MLX_OMARCHY_SDPA_DECODE_BATCH gate in primitives.cpp.
-TEST_CASE("batched hd128 bf16 decode is one dispatch and per-row bit-identical") {
+TEST_CASE("batched bf16 decode is one dispatch and per-row bit-identical") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
   if (!hd_route_ready(stream)) {
-    printf("Skipping batched hd128 decode: route refuses on this device\n");
+    printf("Skipping batched decode: route refuses on this device\n");
     return;
   }
   constexpr int kBatch = 4;
   constexpr int kCapacity = 320;
-  for (int keys : {37, 263}) {
-    CAPTURE(keys);
-    array q = astype(
-        hd_pattern_values(kBatch * kHdHeads * kHd, 44), bfloat16, stream);
-    q = transpose(
-        reshape(q, Shape{kBatch, 1, kHdHeads, kHd}, stream), {0, 2, 1, 3},
-        stream);
-    auto cache = [&](uint32_t seed) {
-      array c = astype(
-          hd_pattern_values(kBatch * kHdKvHeads * kCapacity * kHd, seed),
-          bfloat16, stream);
-      c = reshape(c, Shape{kBatch, kHdKvHeads, kCapacity, kHd}, stream);
-      return slice(c, {0, 0, 0, 0}, {kBatch, kHdKvHeads, keys, kHd}, stream);
+  struct Width {
+    int hd;
+    int heads;
+    int kv_heads;
+  };
+  for (Width w : {Width{128, kHdHeads, kHdKvHeads}, Width{256, 8, 2}}) {
+    const float scale = 1.0f / std::sqrt(float(w.hd));
+    auto sdpa = [&](const HdCacheInputs& in) {
+      return fast::scaled_dot_product_attention(
+          in.q, in.k, in.v, scale, "", {}, std::nullopt, false, stream);
     };
-    HdCacheInputs batched{q, cache(55), cache(66)};
-    batched.q.eval();
-    batched.k.eval();
-    batched.v.eval();
-    omarchy::get_command_encoder(stream).synchronize();
-    CHECK_EQ(dispatches_for([&] { return hd_sdpa(batched, stream); }, stream), 1);
-    array out = hd_sdpa(batched, stream);
-    for (int b = 0; b < kBatch; ++b) {
-      CAPTURE(b);
-      auto row = [&](const array& x) {
-        Shape stop = x.shape();
-        stop[0] = b + 1;
-        return slice(x, {b, 0, 0, 0}, stop, stream);
+    for (int keys : {37, 263}) {
+      CAPTURE(w.hd);
+      CAPTURE(keys);
+      array q = astype(
+          hd_pattern_values(kBatch * w.heads * w.hd, 44), bfloat16, stream);
+      q = transpose(
+          reshape(q, Shape{kBatch, 1, w.heads, w.hd}, stream), {0, 2, 1, 3},
+          stream);
+      auto cache = [&](uint32_t seed) {
+        array c = astype(
+            hd_pattern_values(kBatch * w.kv_heads * kCapacity * w.hd, seed),
+            bfloat16, stream);
+        c = reshape(c, Shape{kBatch, w.kv_heads, kCapacity, w.hd}, stream);
+        return slice(
+            c, {0, 0, 0, 0}, {kBatch, w.kv_heads, keys, w.hd}, stream);
       };
-      HdCacheInputs one{row(batched.q), row(batched.k), row(batched.v)};
-      require_hd_bit_identical(row(out), hd_sdpa(one, stream), stream);
+      HdCacheInputs batched{q, cache(55), cache(66)};
+      batched.q.eval();
+      batched.k.eval();
+      batched.v.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      CHECK_EQ(dispatches_for([&] { return sdpa(batched); }, stream), 1);
+      array out = sdpa(batched);
+      for (int b = 0; b < kBatch; ++b) {
+        CAPTURE(b);
+        auto row = [&](const array& x) {
+          Shape stop = x.shape();
+          stop[0] = b + 1;
+          return slice(x, {b, 0, 0, 0}, stop, stream);
+        };
+        HdCacheInputs one{row(batched.q), row(batched.k), row(batched.v)};
+        require_hd_bit_identical(row(out), sdpa(one), stream);
+      }
     }
   }
 }

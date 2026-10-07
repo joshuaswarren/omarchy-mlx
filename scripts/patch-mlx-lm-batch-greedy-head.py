@@ -82,19 +82,23 @@ EXTEND_OLD = """        self._num_tokens.extend(batch._num_tokens)
 """
 EXTEND_NEW = """        self._num_tokens.extend(batch._num_tokens)
         self._matchers.extend(batch._matchers)
-        self._current_lazy = self._current_lazy and batch._current_lazy
-        self._next_lazy = self._next_lazy and batch._next_lazy
+        self._current_lazy = (getattr(self, "_current_lazy", False)
+                              and getattr(batch, "_current_lazy", False))
+        self._next_lazy = (getattr(self, "_next_lazy", False)
+                           and getattr(batch, "_next_lazy", False))
 
     def _batch_greedy_head(self):
         \"\"\"The greedy head when every row samples greedily without logits
-        processors, else None.\"\"\"
+        processors, else None. Greedy: mlx-lm's greedy_sampler, or a sampler
+        tagged _mlx_omarchy_greedy (oMLX's temp == 0 argmax, patch 0010).\"\"\"
         if not _BATCH_GREEDY or any(self.logits_processors):
             return None
         samplers = self.samplers or [None] * len(self.uids)
-        if any((self.fallback_sampler if s is None else s) is not greedy_sampler
-               for s in samplers):
-            return None
-        if self._greedy is _UNSET:
+        for s in samplers:
+            s = self.fallback_sampler if s is None else s
+            if s is not greedy_sampler and not getattr(s, "_mlx_omarchy_greedy", False):
+                return None
+        if getattr(self, "_greedy", _UNSET) is _UNSET:
             self._greedy = _greedy_head(self.model)
         return self._greedy
 
@@ -110,16 +114,18 @@ STEP_OLD = """        self._current_tokens = self._next_tokens
 """
 STEP_NEW = """        self._current_tokens = self._next_tokens
         self._current_logprobs = self._next_logprobs
-        self._current_lazy = self._next_lazy
+        self._current_lazy = getattr(self, "_next_lazy", False)
         inputs = self._current_tokens
 
         greedy = self._batch_greedy_head()
         if greedy is not None:
-            hidden = greedy.body(inputs[:, None], cache=self.prompt_cache)[:, -1, :]
+            # [B, 1, K]: the head projection must see the same m = 1, batch = B
+            # shape the model call gives it, so evaluated logprobs keep their bits.
+            hidden = greedy.body(inputs[:, None], cache=self.prompt_cache)[:, -1:, :]
             self._next_tokens = mx.concatenate(
-                [greedy.token(hidden[e : e + 1]) for e in range(hidden.shape[0])]
+                [greedy.token(hidden[e : e + 1, 0, :]) for e in range(hidden.shape[0])]
             )
-            logits = greedy.logits(hidden)
+            logits = greedy.logits(hidden)[:, -1, :]
             self._next_logprobs = list(
                 logits - mx.logsumexp(logits, axis=-1, keepdims=True)
             )
