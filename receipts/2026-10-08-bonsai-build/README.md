@@ -132,7 +132,7 @@ shader compiler accepts GL_EXT_bfloat16 (the configure-time probe
 decides), so a glslang-12 runner checks the disabled state; glslc
 coverage comes from the jw16 gate builds.
 
-## Task B leg 1 — CPU build + ctest on jwm1 (done 2026-10-07); wheel blocked on bundle
+## Task B leg 1 — CPU build, ctest and wheel on jwm1 (done 2026-10-07)
 
 Per Main's reroute (jw16 root 90% full): built on **jwm1** (Apple M1, T8103,
 chip G13G, aarch64, Omarchy aurora 12.3, kernel
@@ -172,17 +172,26 @@ linked into the binaries); both chips are stated here as required.
   stage; all pass. Op-level pytest parity bars and dispatch-trace evidence
   require the wheel (below) and a GPU ticket — next legs, not yet run.
 
-**Wheel: blocked, by design.** `DEV_RELEASE=1 scripts/build-wheel.sh` on
-jwm1 refused at the bundle gate:
+**Wheel: built after staging the pinned bundle (Main's decision).** The
+first attempt refused at the bundle gate (log preserved). Main identified
+the candidate `~/.local/share/coreglass/whole-bundle/` on jw16; the
+runtime pin (`parakeet-runtime-pin.json`) demands manifest
+`08769793f8ee3299381f499bf90537d620e23635000a6dbc54b9b5c6a55a54ab` +
+program `13c744231524d440b0a774155343df9ade0bbcbc37edc4b1ccf9698e580d5453`
+and BOTH jw16 candidates — the coreglass dir and the v0.7.31 release
+extract (`~/v0.7.31-assets/bundle-extract/.../parakeet-encoder-whole`) —
+hash to exactly those bytes (458,022,314 B). The coreglass copy traveled
+jw16 → dev box → jwm1 with sha256 verified at every hop (`rsync
+--bwlimit=40000`, `ionice -c3`; no direct jwm1→jw16 key exists).
 
-```
-[bundle] runtime pin declares parakeet-encoder-whole but MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset; refusing to build a wheel that would silently fall back
-```
-
-The pinned `parakeet-encoder-whole` bundle (458 MB, manifest + program-0.anec)
-was searched for and is staged on **none** of: jwm1, jw16 (`/var/tmp` and
-`~`), jw14m2 (`/var/tmp` and `~`), dev box (known absent since FamBonsai's
-2026-10-04 attempt). The op-level pytest suites (`tests/test_bonsai_*.py`)
-and the GPU tickets need that wheel; either the bundle's durable location is
-named and staged, or the pin changes. No fallback was attempted — the repo
-refuses silently-degraded wheels by design and so do these tickets.
+- Wheel: `mlx_omarchy-0.32.4.dev202610072150+09da091-cp314-cp314-linux_aarch64.whl`
+- Size: 416,712,074 B; sha256
+  `4e2b0ca80e74ce9ddbefb20f60ef3f8537dd26561ebde4989e8b35c1f2c43aa7`
+  (identical on jwm1, dev-box relay, and jw16 `~/bonsai-run/`).
+- Source commit: `09da091`; python tag cp314 (jw16 runs 3.14.7 — install
+  compatible); the bundle gate staged the pin-exact bytes
+  (`[bundle] staged ... (manifest 08769793…, program 13c74423…)`,
+  wheel2.log).
+- The build script's own NEXT-STEP note applies before any release:
+  `scripts/verify-release-assets.py <tag>` must print VERIFIED if this
+  wheel is ever uploaded.
