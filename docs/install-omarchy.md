@@ -277,10 +277,11 @@ and `<prefix>/vulkan/mesa-git-sha`.
 
 Before Vulkan loads, the backend selects the ICD for this process
 (`configure_honeykrisp_icd` in `overlay/mlx/backend/omarchy/device.cpp`).
-A path counts as a Honeykrisp ICD when it contains `honeykrisp`,
-`asahi_icd`, or `libvulkan_asahi`, in any case (`is_honeykrisp_icd` in
-`honeykrisp_identity.h`). The system Mesa ICD `asahi_icd.aarch64.json`
-matches that rule.
+`is_honeykrisp_icd` in `honeykrisp_identity.h` accepts a path whose
+name contains `honeykrisp`, in any case. It also accepts the stock
+system ICD JSON and the driver library name, so an explicit override
+of the system driver still resolves. The packaged file
+`honeykrisp_icd.aarch64.json` matches.
 
 1. A non-empty `VK_DRIVER_FILES` is the override. `VK_ICD_FILENAMES` is
    the override only when `VK_DRIVER_FILES` is unset or empty. A
