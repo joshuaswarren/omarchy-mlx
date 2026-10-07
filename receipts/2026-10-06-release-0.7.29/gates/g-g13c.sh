@@ -48,6 +48,7 @@ python3.14 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --quiet "$WHEEL"
 # Name the exact artifact in the receipt (w7K should-item).
 echo "wheel_sha256 $(sha256sum "$WHEEL" | awk '{print $1}') $(basename "$WHEEL")" | log
+echo "uname_r $(uname -r)" | log
 "$VENV/bin/python" -c 'import importlib.metadata as m; print("pip mlx_omarchy", m.version("mlx_omarchy"))' | log
 
 echo "== device (from the wheel's own mlx-omarchy-info) ==" | log
@@ -70,6 +71,19 @@ echo "$DEVLINE" | log
 echo "$DEVLINE" | grep -q "G13C" \
   && echo "G13C_CHIP_OK G13C" | log \
   || { echo "FAIL chip assertion: '$DEVLINE' lacks G13C" | log; exit 1; }
+
+# ICD override leg (e.g. VK_DRIVER_FILES at a specific honeykrisp build):
+# the info block above already ran under this env (driver SHA/ICD source);
+# name the json and its libvulkan sha256 so the receipt is self-contained.
+if [[ -n "${VK_DRIVER_FILES:-}" ]]; then
+  echo "icd_json $VK_DRIVER_FILES" | log
+  "$VENV/bin/python" - "$VK_DRIVER_FILES" <<'PYEOF' 2>&1 | tee -a "$RECEIPT"
+import hashlib, json, os, sys
+p = json.load(open(sys.argv[1]))["ICD"]["library_path"].replace("$DEST", "")
+p = os.path.expanduser(p)
+print("libvulkan_sha256", hashlib.sha256(open(p, "rb").read()).hexdigest())
+PYEOF
+fi
 
 cat >"$PROBE" <<'EOF'
 import os, threading, time
@@ -106,10 +120,14 @@ th.join()
 print("RESULT during=%d after=%d" % (during, holds()))
 EOF
 
-# gpu-turn ticket when the host hands out GPU time that way; plain flock of
-# the host lock only where gpu-turn is absent. Never both.
+# gpu-turn ticket when present; plain flock of the host lock otherwise. When
+# the DRIVER already wrapped us in a gpu-turn ticket (GPU_TURN_TICKET=1, the
+# env.sh gate_lock contract), the ticket holds $GPU_LOCK: run plainly — no
+# nested gpu-turn, no nested flock of the same lock.
 runner() {
-  if command -v gpu-turn >/dev/null 2>&1; then
+  if [[ "${GPU_TURN_TICKET:-}" == 1 ]]; then
+    timeout -k 30 120 "$@"
+  elif command -v gpu-turn >/dev/null 2>&1; then
     gpu-turn -m 2 timeout -k 30 120 "$@"
   else
     timeout -k 30 120 flock "$GPU_LOCK" "$@"
@@ -117,12 +135,18 @@ runner() {
 }
 
 echo "== GPU probes (root: isolates the gate decision from permissions) ==" | log
-out_default="$(runner sudo "$VENV/bin/python" "$PROBE" 2>&1 | tee -a "$RECEIPT")"
+# sudo env_reset would drop the leg's ICD override; pass it as argv so the
+# probe process sees exactly the driver under test. Empty when unset.
+VK_ARGS=()
+if [[ -n "${VK_DRIVER_FILES:-}" ]]; then
+  VK_ARGS=(env "VK_DRIVER_FILES=$VK_DRIVER_FILES")
+fi
+out_default="$(runner sudo "${VK_ARGS[@]}" "$VENV/bin/python" "$PROBE" 2>&1 | tee -a "$RECEIPT")"
 echo "$out_default" | grep -q "RESULT during=0 after=0" \
   && echo "G13C_GATE default during=0 after=0" | log \
   || { echo "FAIL default arm: $out_default" | log; exit 1; }
 
-out_forced="$(runner sudo env MLX_OMARCHY_CPU_PD_HOLD=1 "$VENV/bin/python" "$PROBE" 2>&1 | tee -a "$RECEIPT")"
+out_forced="$(runner sudo "${VK_ARGS[@]}" env MLX_OMARCHY_CPU_PD_HOLD=1 "$VENV/bin/python" "$PROBE" 2>&1 | tee -a "$RECEIPT")"
 echo "$out_forced" | grep -qE "RESULT during=[1-9][0-9]* after=0" \
   && echo "G13C_GATE forced during>=1 after=0" | log \
   || { echo "FAIL forced arm: $out_forced" | log; exit 1; }
