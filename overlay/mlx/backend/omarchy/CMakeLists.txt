@@ -101,6 +101,31 @@ function(omarchy_shader name source)
       PARENT_SCOPE)
 endfunction()
 
+# The bf16 direct GEMM builds need GL_EXT_bfloat16 (shaderc 2026.3 has it;
+# glslang 12 does not). Without it the build leaves them out and bf16
+# keeps the staged MatmulBF16Coopmat route on every driver.
+set(OMARCHY_BF16_DIRECT_PROBE "${CMAKE_CURRENT_BINARY_DIR}/bf16_direct_probe.spv")
+if(OMARCHY_GLSLC)
+  execute_process(
+    COMMAND "${OMARCHY_GLSLC}" --target-env=vulkan1.3 -DUSE_BF16=1
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/matmul_coopmat_direct.comp"
+            -o "${OMARCHY_BF16_DIRECT_PROBE}"
+    RESULT_VARIABLE omarchy_bf16_probe_rc OUTPUT_QUIET ERROR_QUIET)
+else()
+  execute_process(
+    COMMAND "${OMARCHY_GLSLANG}" -V --target-env vulkan1.3 -DUSE_BF16=1
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/matmul_coopmat_direct.comp"
+            -o "${OMARCHY_BF16_DIRECT_PROBE}"
+    RESULT_VARIABLE omarchy_bf16_probe_rc OUTPUT_QUIET ERROR_QUIET)
+endif()
+if(omarchy_bf16_probe_rc EQUAL 0)
+  set(OMARCHY_BF16_DIRECT ON)
+  message(STATUS "omarchy: bf16 direct GEMM shaders enabled (GL_EXT_bfloat16)")
+else()
+  set(OMARCHY_BF16_DIRECT OFF)
+  message(STATUS "omarchy: shader compiler lacks GL_EXT_bfloat16; bf16 direct GEMM disabled")
+endif()
+
 omarchy_shader(elementwise_f32 shaders/elementwise.comp)
 omarchy_shader(elementwise_f16 shaders/elementwise.comp -DUSE_FP16=1)
 omarchy_shader(elementwise_bf16 shaders/elementwise.comp -DUSE_BF16=1)
@@ -477,6 +502,17 @@ omarchy_shader(matmul_direct_f32_tn shaders/matmul_coopmat_direct.comp -DUSE_F32
 omarchy_shader(matmul_direct_f32_tt shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DA_T=1 -DB_T=1)
 omarchy_shader(matmul_direct_f16_tn_ws8 shaders/matmul_coopmat_direct.comp -DA_T=1 -DWIDE_N=1 -DSWIZZLE_ROWS=8)
 omarchy_shader(matmul_direct_f16_nt_k4s8 shaders/matmul_coopmat_direct.comp -DB_T=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
+omarchy_shader(matmul_direct_f32_nt_k4s8 shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DB_T=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
+omarchy_shader(matmul_direct_f32_nn_k4s8 shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
+omarchy_shader(matmul_direct_f32_tn_ws8 shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DA_T=1 -DWIDE_N=1 -DSWIZZLE_ROWS=8)
+if(OMARCHY_BF16_DIRECT)
+  omarchy_shader(matmul_direct_bf16_nn shaders/matmul_coopmat_direct.comp -DUSE_BF16=1)
+  omarchy_shader(matmul_direct_bf16_nt shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DB_T=1)
+  omarchy_shader(matmul_direct_bf16_tn shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DA_T=1)
+  omarchy_shader(matmul_direct_bf16_tt shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DA_T=1 -DB_T=1)
+  omarchy_shader(matmul_direct_bf16_tn_ws8 shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DA_T=1 -DWIDE_N=1 -DSWIZZLE_ROWS=8)
+  omarchy_shader(matmul_direct_bf16_nt_k4s8 shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DB_T=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
+endif()
 omarchy_shader(swiglu_f16 shaders/swiglu.comp -DUSE_FP16=1)
 omarchy_shader(swiglu_bf16 shaders/swiglu.comp -DUSE_BF16=1)
 omarchy_shader(silu_f16 shaders/swiglu.comp -DUSE_FP16=1 -DSILU_ONLY=1)
@@ -763,6 +799,9 @@ target_sources(
           ${CMAKE_CURRENT_SOURCE_DIR}/ane/worker_libane.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/vulkan.cpp)
 target_include_directories(mlx PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+if(OMARCHY_BF16_DIRECT)
+  target_compile_definitions(mlx PRIVATE MLX_OMARCHY_BF16_DIRECT=1)
+endif()
 
 # The custom-kernel translation cache keys on the translator's own source
 # hash: a rebuilt binary with changed translation logic must never serve

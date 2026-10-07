@@ -31,6 +31,14 @@
 #include "mlx/backend/omarchy/capability_sim.h"
 #include "mlx/backend/omarchy/allocator.h"
 
+// bf16 cooperative matrices need the Vulkan header to know
+// VK_KHR_shader_bfloat16 and this build to carry the bf16 direct shaders
+// (CMakeLists.txt GL_EXT_bfloat16 probe); otherwise the capability stays
+// off and the extension is never enabled.
+#if defined(VK_KHR_shader_bfloat16) && defined(MLX_OMARCHY_BF16_DIRECT)
+#define OMARCHY_BF16_CMAT 1
+#endif
+
 namespace mlx::core::omarchy {
 
 namespace {
@@ -465,7 +473,11 @@ CapabilityReport collect_capabilities(
   caps.shader_atomic_float_add = false;
   caps.cooperative_matrix_f32_8 = false;
   caps.cooperative_matrix_f16_8 = false;
+  caps.cooperative_matrix_bf16_8 = false;
   bool has_coopmat_ext = false;
+#ifdef OMARCHY_BF16_CMAT
+  bool has_bf16_ext = false;
+#endif
   uint32_t ext_count = 0;
   if (it.EnumerateDeviceExtensionProperties &&
       it.EnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr) ==
@@ -486,12 +498,33 @@ CapabilityReport collect_capabilities(
         } else if (
             std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
           caps.queue_global_priority = true;
+#ifdef OMARCHY_BF16_CMAT
+        } else if (
+            std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
+            0) {
+          has_bf16_ext = true;
+#endif
         }
       }
     }
   }
-  // Two shapes are used: 8x8x8 all fp32, and 8x8x8 with fp16 A/B and an
-  // fp32 accumulator; both subgroup scope, non-saturating.
+  // bf16 cooperative matrices need VK_KHR_shader_bfloat16 with both the
+  // type and the cooperative-matrix feature. Its feature struct is queried
+  // only when the driver lists the extension.
+#ifdef OMARCHY_BF16_CMAT
+  bool bf16_cmat_features = false;
+  if (has_bf16_ext && has_coopmat_ext) {
+    VkPhysicalDeviceShaderBfloat16FeaturesKHR bf{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
+    VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    query.pNext = &bf;
+    it.GetPhysicalDeviceFeatures2(pd, &query);
+    bf16_cmat_features = bf.shaderBFloat16Type == VK_TRUE &&
+        bf.shaderBFloat16CooperativeMatrix == VK_TRUE;
+  }
+#endif
+  // Three shapes are used, all 8x8x8 with an fp32 accumulator, subgroup
+  // scope, non-saturating: fp32, fp16 and bf16 A/B.
   if (has_coopmat_ext && it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR) {
     uint32_t n = 0;
     if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(pd, &n, nullptr) ==
@@ -513,11 +546,19 @@ CapabilityReport collect_capabilities(
             caps.cooperative_matrix_f32_8 = true;
           } else if (p.AType == VK_COMPONENT_TYPE_FLOAT16_KHR) {
             caps.cooperative_matrix_f16_8 = true;
+#ifdef OMARCHY_BF16_CMAT
+          } else if (p.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR) {
+            caps.cooperative_matrix_bf16_8 = bf16_cmat_features;
+#endif
           }
         }
       }
     }
   }
+  // Device creation chains the bf16 features behind the cooperative-matrix
+  // features, which it enables only with the fp32 shape.
+  caps.cooperative_matrix_bf16_8 =
+      caps.cooperative_matrix_bf16_8 && caps.cooperative_matrix_f32_8;
   return caps;
 }
 
@@ -1028,6 +1069,15 @@ Device::Device(uint32_t physical_device_index) {
   if (hw.cooperative_matrix_f32_8) {
     enabled_fa.pNext = &enabled_cm;
   }
+#ifdef OMARCHY_BF16_CMAT
+  VkPhysicalDeviceShaderBfloat16FeaturesKHR enabled_bf16{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
+  if (hw.cooperative_matrix_bf16_8) {
+    enabled_bf16.shaderBFloat16Type = VK_TRUE;
+    enabled_bf16.shaderBFloat16CooperativeMatrix = VK_TRUE;
+    enabled_cm.pNext = &enabled_bf16;
+  }
+#endif
   enabled2.pNext = &enabled16;
 
   // M1 receipt: Mesa Honeykrisp exposes one compute queue (family 0,
@@ -1085,13 +1135,22 @@ Device::Device(uint32_t physical_device_index) {
   // Extensions enabled only from hardware truth: a simulated
   // cooperative-matrix or float-atomic claim can never enable an
   // extension the driver does not actually provide.
-  std::vector<const char*> device_exts;
-  if (hw.shader_atomic_float_add) {
-    device_exts.push_back("VK_EXT_shader_atomic_float");
-  }
-  if (hw.cooperative_matrix_f32_8) {
-    device_exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-  }
+  auto feature_exts = [&hw] {
+    std::vector<const char*> exts;
+    if (hw.shader_atomic_float_add) {
+      exts.push_back("VK_EXT_shader_atomic_float");
+    }
+    if (hw.cooperative_matrix_f32_8) {
+      exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+    }
+#ifdef OMARCHY_BF16_CMAT
+    if (hw.cooperative_matrix_bf16_8) {
+      exts.push_back(VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME);
+    }
+#endif
+    return exts;
+  };
+  std::vector<const char*> device_exts = feature_exts();
   device_exts.insert(
       device_exts.end(), priority_exts.begin(), priority_exts.end());
   if (!device_exts.empty()) {
@@ -1108,13 +1167,7 @@ Device::Device(uint32_t physical_device_index) {
   // unsupported priority value is a separate, transient refusal.
   if (create_res != VK_SUCCESS && qci.pNext != nullptr) {
     qci.pNext = nullptr;
-    device_exts.clear();
-    if (hw.shader_atomic_float_add) {
-      device_exts.push_back("VK_EXT_shader_atomic_float");
-    }
-    if (hw.cooperative_matrix_f32_8) {
-      device_exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-    }
+    device_exts = feature_exts();
     if (!device_exts.empty()) {
       dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
       dci.ppEnabledExtensionNames = device_exts.data();

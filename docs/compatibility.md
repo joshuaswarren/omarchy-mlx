@@ -704,9 +704,16 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   (`receipts/2026-10-06-dense-f16-gemm-direct/`).
   `MatmulDirectF32{Nn,Nt,Tn,Tt}` is the same kernel on fp32 operand
   matrices (only `cooperative_matrix_f32_8` required); stored bits equal
-  the staged coopmat kernel. Test "direct cooperative-matrix matmul matches
-  the 16-row slices in every orientation" (`omarchy_matmul_family_tests`,
-  f16 and f32).
+  the staged coopmat kernel. `MatmulDirectBF16{Nn,Nt,Tn,Tt}` is the same
+  kernel on bf16 operand matrices. It needs `cooperative_matrix_bf16_8`:
+  a driver exposing `VK_KHR_shader_bfloat16` with
+  `shaderBFloat16CooperativeMatrix` and an 8x8x8 bf16 x bf16 -> f32 shape,
+  and a build whose shader compiler accepts `GL_EXT_bfloat16`. Without
+  either, bf16 keeps `MatmulBF16Coopmat`. Stored bits equal
+  `MatmulBF16Coopmat` (`receipts/2026-10-07-bf16-direct-gemm/`). Test
+  "direct cooperative-matrix matmul matches the 16-row slices in every
+  orientation" (`omarchy_matmul_family_tests`, f16 and f32, and bf16 where
+  the device reports the bf16 shape).
 - `SwigluF16/BF16` (`shaders/swiglu.comp`): the fused chain's
   sigmoid / multiply / multiply program with two direct leaves, four
   elements per thread with the interpreter's per-instruction rounding,
