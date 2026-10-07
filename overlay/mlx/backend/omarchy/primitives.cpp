@@ -12640,11 +12640,17 @@ void BonsaiQ1Dequantize::eval_gpu(
   params.output_offset = checked_item_offset(out, out.size(), tag, out);
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(wd), binding(scd), binding(bid), binding(out)};
+  // shaders/bonsai_dequant_q1.comp maps one ROW per workgroup
+  // (row = gl_WorkGroupID.x, lanes walk the row's packed bytes). The
+  // generic element-count formula ceil(n*k/256) under-dispatches for
+  // k < 256 and silently leaves rows 1..n-1 unwritten (zeros) — first
+  // seen on hardware 2026-10-07 (G13G): n=2 k=64 produced row0 exact,
+  // row1 all-zero.
   encoder.dispatch_compute(
       kernel,
       bindings,
       params,
-      omarchy::compute_dispatch_group_count(params.count));
+      checked_u32(n, tag, out));
 }
 
 bool GreedyQuantizedArgmax::use_fallback(Stream s) {
