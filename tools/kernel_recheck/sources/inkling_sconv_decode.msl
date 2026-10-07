@@ -1,0 +1,37 @@
+
+    uint c = thread_position_in_grid.x;   // channel
+    uint b = thread_position_in_grid.y;   // batch row
+    if (c >= C || b >= B) return;
+    float w0 = (float)w[c * K + 0];
+    float w1 = (float)w[c * K + 1];
+    float w2 = (float)w[c * K + 2];
+    float w3 = (float)w[c * K + 3];
+    // Virtual padded input xp = [state (K-1 rows, fp32); x (L rows, T)].
+    for (uint i = 0; i < L; ++i) {
+        float acc = 0.0f;
+        for (uint k = 0; k < K; ++k) {
+            int r = (int)(i + k) - (int)(K - 1);  // row into x; negative -> state
+            float v = (r < 0)
+                ? state[(b * (K - 1) + (uint)(r + (int)(K - 1))) * C + c]
+                : (float)x[(b * L + (uint)r) * C + c];
+            float wk = (k == 0) ? w0 : (k == 1) ? w1 : (k == 2) ? w2 : w3;
+            acc += wk * v;
+        }
+        // Match the unfused path's rounding: the conv emits bf16 (rounded)
+        // before the fp32 residual add; the layer residual is a second bf16
+        // add on top (as the decoder layer's x + sconv(r) was).
+        float conv_r = (float)((T)acc);
+        T inner = (T)(conv_r + (float)x[(b * L + i) * C + c]);
+        if (HAS_RES) {
+            out[(b * L + i) * C + c] =
+                (T)((float)inner + (float)res[(b * L + i) * C + c]);
+        } else {
+            out[(b * L + i) * C + c] = inner;
+        }
+    }
+    for (uint s = 0; s < K - 1; ++s) {
+        int r = (int)(L + s) - (int)(K - 1);
+        nstate[(b * (K - 1) + s) * C + c] = (r < 0)
+            ? state[(b * (K - 1) + (uint)(r + (int)(K - 1))) * C + c]
+            : (float)x[(b * L + (uint)r) * C + c];
+    }
