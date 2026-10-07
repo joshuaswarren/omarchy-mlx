@@ -203,3 +203,9 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # ON on every chip; set MLX_OMARCHY_GDN_RAW_REPEAT=0 to opt out. The 9B
 # route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
+# Opt-in block-causal prompt attention (prefill lever, default OFF): causal
+# prompts never reach a fused SDPA kernel (flash serves non-causal hd128), so
+# the composed route computes the full [heads, L, L] score square. With
+# MLX_OMARCHY_SDPA_CAUSAL_BLOCK=<rows>, each row block attends to its key
+# prefix only. Unset or 0 keeps the upstream call.
+python3 "$ROOT/scripts/patch-mlx-lm-sdpa-causal-blocks.py" "$VENV"
