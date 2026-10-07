@@ -1,0 +1,177 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] cooperative_matrix_f32_8=1 subgroup_size=32 -> gated shapes run MatmulF32Coopmat
+[matmul-f32] cube8 1x8x8x8 a b path=coopmat max_abs_err=0
+[matmul-f32] cube8 1x8x8x8 a bT path=coopmat max_abs_err=0
+[matmul-f32] cube8 1x8x8x8 aT b path=coopmat max_abs_err=0
+[matmul-f32] cube8 1x8x8x8 aT bT path=coopmat max_abs_err=0
+[matmul-f32] cube64 1x64x64x64 a b path=coopmat max_abs_err=0
+[matmul-f32] cube64 1x64x64x64 a bT path=coopmat max_abs_err=0
+[matmul-f32] cube64 1x64x64x64 aT b path=coopmat max_abs_err=0
+[matmul-f32] cube64 1x64x64x64 aT bT path=coopmat max_abs_err=0
+[matmul-f32] cube128 1x128x128x128 a b path=coopmat max_abs_err=0
+[matmul-f32] cube128 1x128x128x128 a bT path=coopmat max_abs_err=0
+[matmul-f32] cube128 1x128x128x128 aT b path=coopmat max_abs_err=0
+[matmul-f32] cube128 1x128x128x128 aT bT path=coopmat max_abs_err=0
+[matmul-f32] batched4x32 4x32x32x32 a b path=coopmat max_abs_err=0
+[matmul-f32] batched4x32 4x32x32x32 a bT path=coopmat max_abs_err=0
+[matmul-f32] batched4x32 4x32x32x32 aT b path=coopmat max_abs_err=0
+[matmul-f32] batched4x32 4x32x32x32 aT bT path=coopmat max_abs_err=0
+[matmul-f32] odd17x23x19 1x17x23x19 a b path=tiled max_abs_err=0
+[matmul-f32] odd17x23x19 1x17x23x19 a bT path=tiled max_abs_err=0
+[matmul-f32] odd17x23x19 1x17x23x19 aT b path=tiled max_abs_err=0
+[matmul-f32] odd17x23x19 1x17x23x19 aT bT path=tiled max_abs_err=0
+[matmul-f32] slice col4 32x40x24 path=coopmat max_abs_err=0
+[matmul-f32] slice col5 32x40x24 path=tiled max_abs_err=0
+[provenance] cooperative_matrix_f32_8=1 subgroup_size=32
+[matmul-bf16] tail-m8 1x8x8x8 a b max_abs_err=0
+[matmul-bf16] tail-m8 1x8x8x8 a bT max_abs_err=0
+[matmul-bf16] tail-m8 1x8x8x8 aT b max_abs_err=0
+[matmul-bf16] tail-m8 1x8x8x8 aT bT max_abs_err=0
+[matmul-bf16] tail-m9 1x9x8x8 a b max_abs_err=0
+[matmul-bf16] tail-m9 1x9x8x8 a bT max_abs_err=0
+[matmul-bf16] tail-m9 1x9x8x8 aT b max_abs_err=0
+[matmul-bf16] tail-m9 1x9x8x8 aT bT max_abs_err=0
+[matmul-bf16] tail-m33-n40 1x33x8x40 a b max_abs_err=0
+[matmul-bf16] tail-m33-n40 1x33x8x40 a bT max_abs_err=0
+[matmul-bf16] tail-m33-n40 1x33x8x40 aT b max_abs_err=0
+[matmul-bf16] tail-m33-n40 1x33x8x40 aT bT max_abs_err=0
+[matmul-bf16] tile32 1x32x32x32 a b max_abs_err=0
+[matmul-bf16] tile32 1x32x32x32 a bT max_abs_err=0
+[matmul-bf16] tile32 1x32x32x32 aT b max_abs_err=0
+[matmul-bf16] tile32 1x32x32x32 aT bT max_abs_err=0
+[matmul-bf16] tail-m17-k24-n34 1x17x24x34 a b max_abs_err=0
+[matmul-bf16] tail-m17-k24-n34 1x17x24x34 a bT max_abs_err=0
+[matmul-bf16] tail-m17-k24-n34 1x17x24x34 aT b max_abs_err=0
+[matmul-bf16] tail-m17-k24-n34 1x17x24x34 aT bT max_abs_err=0
+[matmul-bf16] batch2 2x40x8x40 a b max_abs_err=0
+[matmul-bf16] batch2 2x40x8x40 a bT max_abs_err=0
+[matmul-bf16] batch2 2x40x8x40 aT b max_abs_err=0
+[matmul-bf16] batch2 2x40x8x40 aT bT max_abs_err=0
+[matmul-bf16] tail-m32-k24-n34 1x32x24x34 a b max_abs_err=0
+[matmul-bf16] tail-m32-k24-n34 1x32x24x34 a bT max_abs_err=0
+[matmul-bf16] tail-m32-k24-n34 1x32x24x34 aT b max_abs_err=0
+[matmul-bf16] tail-m32-k24-n34 1x32x24x34 aT bT max_abs_err=0
+[matmul-bf16] tail-m33-k40-n18 1x33x40x18 a b max_abs_err=0
+[matmul-bf16] tail-m33-k40-n18 1x33x40x18 a bT max_abs_err=0
+[matmul-bf16] tail-m33-k40-n18 1x33x40x18 aT b max_abs_err=0
+[matmul-bf16] tail-m33-k40-n18 1x33x40x18 aT bT max_abs_err=0
+[matmul-bf16] tail-m48-k8-n16 1x48x8x16 a b max_abs_err=0
+[matmul-bf16] tail-m48-k8-n16 1x48x8x16 a bT max_abs_err=0
+[matmul-bf16] tail-m48-k8-n16 1x48x8x16 aT b max_abs_err=0
+[matmul-bf16] tail-m48-k8-n16 1x48x8x16 aT bT max_abs_err=0
+[matmul-bf16] single-row 1x1x8x8 a b max_abs_err=0
+[matmul-bf16] single-row 1x1x8x8 a bT max_abs_err=0
+[matmul-bf16] single-row 1x1x8x8 aT b max_abs_err=0
+[matmul-bf16] single-row 1x1x8x8 aT bT max_abs_err=0
+[matmul-bf16] k12 1x17x12x34 a b max_abs_err=0
+[matmul-bf16] k12 1x17x12x34 a bT max_abs_err=0
+[matmul-bf16] k12 1x17x12x34 aT b max_abs_err=0
+[matmul-bf16] k12 1x17x12x34 aT bT max_abs_err=0
+[matmul-bf16] odd-n 1x17x8x17 a b max_abs_err=0
+[matmul-bf16] odd-n 1x17x8x17 a bT max_abs_err=0
+[matmul-bf16] odd-n 1x17x8x17 aT b max_abs_err=0
+[matmul-bf16] odd-n 1x17x8x17 aT bT max_abs_err=0
+[matmul-bf16] model 1x30x896x896 a b max_abs_err=0
+[matmul-bf16] model 1x30x896x896 a bT max_abs_err=0
+[matmul-bf16] model 1x30x896x896 aT b max_abs_err=0
+[matmul-bf16] model 1x30x896x896 aT bT max_abs_err=0
+[matmul-bf16] model 1x30x896x4864 a b max_abs_err=0
+[matmul-bf16] model 1x30x896x4864 a bT max_abs_err=0
+[matmul-bf16] model 1x30x896x4864 aT b max_abs_err=0
+[matmul-bf16] model 1x30x896x4864 aT bT max_abs_err=0
+[matmul-bf16] model 1x30x4864x896 a b max_abs_err=0
+[matmul-bf16] model 1x30x4864x896 a bT max_abs_err=0
+[matmul-bf16] model 1x30x4864x896 aT b max_abs_err=0
+[matmul-bf16] model 1x30x4864x896 aT bT max_abs_err=0
+[matmul-bf16] model 1x30x4864x4864 a b max_abs_err=0
+[matmul-bf16] model 1x30x4864x4864 a bT max_abs_err=0
+[matmul-bf16] model 1x30x4864x4864 aT b max_abs_err=0
+[matmul-bf16] model 1x30x4864x4864 aT bT max_abs_err=0
+[matmul-bf16] model 1x262x896x896 a b max_abs_err=0
+[matmul-bf16] model 1x262x896x896 a bT max_abs_err=0
+[matmul-bf16] model 1x262x896x896 aT b max_abs_err=0
+[matmul-bf16] model 1x262x896x896 aT bT max_abs_err=0
+[matmul-bf16] model 1x262x896x4864 a b max_abs_err=0
+[matmul-bf16] model 1x262x896x4864 a bT max_abs_err=0
+[matmul-bf16] model 1x262x896x4864 aT b max_abs_err=0
+[matmul-bf16] model 1x262x896x4864 aT bT max_abs_err=0
+[matmul-bf16] model 1x262x4864x896 a b max_abs_err=0
+[matmul-bf16] model 1x262x4864x896 a bT max_abs_err=0
+[matmul-bf16] model 1x262x4864x896 aT b max_abs_err=0
+[matmul-bf16] model 1x262x4864x896 aT bT max_abs_err=0
+[matmul-bf16] model 1x262x4864x4864 a b max_abs_err=0
+[matmul-bf16] model 1x262x4864x4864 a bT max_abs_err=0
+[matmul-bf16] model 1x262x4864x4864 aT b max_abs_err=0
+[matmul-bf16] model 1x262x4864x4864 aT bT max_abs_err=0
+[matmul-bf16] model 1x1053x896x896 a b max_abs_err=0
+[matmul-bf16] model 1x1053x896x896 a bT max_abs_err=0
+[matmul-bf16] model 1x1053x896x896 aT b max_abs_err=0
+[matmul-bf16] model 1x1053x896x896 aT bT max_abs_err=0
+[matmul-bf16] model 1x1053x896x4864 a b max_abs_err=0
+[matmul-bf16] model 1x1053x896x4864 a bT max_abs_err=0
+[matmul-bf16] model 1x1053x896x4864 aT b max_abs_err=0
+[matmul-bf16] model 1x1053x896x4864 aT bT max_abs_err=0
+[matmul-bf16] model 1x1053x4864x896 a b max_abs_err=0
+[matmul-bf16] model 1x1053x4864x896 a bT max_abs_err=0
+[matmul-bf16] model 1x1053x4864x896 aT b max_abs_err=0
+[matmul-bf16] model 1x1053x4864x896 aT bT max_abs_err=0
+[matmul-bf16] model 1x1053x4864x4864 a b max_abs_err=0
+[matmul-bf16] model 1x1053x4864x4864 a bT max_abs_err=0
+[matmul-bf16] model 1x1053x4864x4864 aT b max_abs_err=0
+[matmul-bf16] model 1x1053x4864x4864 aT bT max_abs_err=0
+[matmul-bf16] slice col4 32x40x24 max_abs_err=0
+[matmul-bf16] slice col5 32x40x24 max_abs_err=0
+[matmul-bf16] fractional 33x24x40 bound=0.186038 max_abs_err=0 partial_max=22.8082
+[provenance] subgroup_size=32 decode_gemv_path=subgroup-shuffle
+[matmul-bf16-decode] q_proj 1x896x896 bT bound=0.96725 max_abs_err_vs_f64=0.245659 partial_max=121.829
+[matmul-bf16-decode] k_proj 1x896x128 bT bound=0.868865 max_abs_err_vs_f64=0.23188 partial_max=109.336
+[matmul-bf16-decode] v_proj 1x896x128 bT bound=0.981082 max_abs_err_vs_f64=0.228569 partial_max=123.586
+[matmul-bf16-decode] o_proj 1x896x896 bT bound=1.1124 max_abs_err_vs_f64=0.259842 partial_max=140.26
+[matmul-bf16-decode] gate_proj 1x896x4864 bT bound=1.24652 max_abs_err_vs_f64=0.402222 partial_max=157.291
+[matmul-bf16-decode] down_proj 1x4864x896 bT bound=2.70929 max_abs_err_vs_f64=0.852173 partial_max=331.822
+[matmul-bf16-decode] lm_head 1x896x151936 bT bound=1.49138 max_abs_err_vs_f64=0.493546 partial_max=188.384
+[matmul-bf16-decode] cancel896x128 1x896x128 bT bound=0.0247205 max_abs_err_vs_f64=0.0063467 partial_max=2.14697
+[matmul-bf16-decode] fallback-k832 1x832x896 bT bound=0.935554 max_abs_err_vs_f64=0.239456 partial_max=117.869
+[matmul-bf16-decode] fallback-n897 1x896x897 bT bound=1.02737 max_abs_err_vs_f64=0.462921 partial_max=129.463
+[gather-qmm-sub] bf16=1 transpose=1 k=128 experts=3 index_count=2 n=64 scalar: relL2=0.00272498 maxabs/ref=0.00236842 | sub: relL2=0.00272498 maxabs/ref=0.00236842 | count=128
+[gather-qmm-sub] bf16=1 transpose=1 k=192 experts=3 index_count=2 n=64 scalar: relL2=0.00248547 maxabs/ref=0.00435064 | sub: relL2=0.00248547 maxabs/ref=0.00435064 | count=128
+[gather-qmm-sub] bf16=1 transpose=1 k=128 experts=3 index_count=8 n=1408 scalar: relL2=0.00250937 maxabs/ref=0.003215 | sub: relL2=0.00250937 maxabs/ref=0.003215 | count=11264
+[gather-qmm-sub] bf16=1 transpose=1 k=2048 experts=3 index_count=8 n=1408 scalar: relL2=0.00251218 maxabs/ref=0.00304939 | sub: relL2=0.00251218 maxabs/ref=0.00304939 | count=11264
+[gather-qmm-sub] bf16=1 transpose=1 k=128 experts=48 index_count=48 n=1408 scalar: relL2=0.00245042 maxabs/ref=0.00379938 | sub: relL2=0.00245042 maxabs/ref=0.00379938 | count=67584
+[gather-qmm-sub] z-chunk tail relL2=0.00240393
+[qmm-rb-word] m=2 n=7 k=64 candidate_vs_baseline_max=0 candidate_vs_host_max=0.00719643 baseline_vs_host_max=0.00719643 bound=0.025325
+[qmm-rb-word] m=15 n=17 k=192 candidate_vs_baseline_max=0 candidate_vs_host_max=0.0147629 baseline_vs_host_max=0.0147629 bound=0.0594667
+[qmm-rb-word] m=32 n=32 k=128 candidate_vs_baseline_max=0 candidate_vs_host_max=0.0153732 baseline_vs_host_max=0.0153732 bound=0.0515481
+[qmm-rb-word] m=33 n=17 k=64 candidate_vs_baseline_max=0 candidate_vs_host_max=0.0130997 baseline_vs_host_max=0.0130997 bound=0.0350047
+[provenance] cooperative_matrix_f32_8=1 subgroup_size=32 -> f16 q4/g64 prefill runs QmmPrefillCoopmatF16
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=8 n=896 k=896 max_abs_err=0.0602875 rel_err=0.000368129 bound=0.264921
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=32 n=896 k=896 max_abs_err=0.0607452 rel_err=0.000382647 bound=0.256805
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=262 n=896 k=896 max_abs_err=0.0624542 rel_err=0.000311881 bound=0.323938
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=1053 n=896 k=896 max_abs_err=0.0623932 rel_err=0.000318943 bound=0.316457
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=8 n=4864 k=896 max_abs_err=0.0622406 rel_err=0.000378296 bound=0.266153
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=32 n=4864 k=896 max_abs_err=0.0623932 rel_err=0.000331438 bound=0.304526
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=262 n=4864 k=896 max_abs_err=0.0623932 rel_err=0.000287526 bound=0.351034
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=1053 n=4864 k=896 max_abs_err=0.062561 rel_err=0.000315917 bound=0.320348
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=8 n=896 k=4864 max_abs_err=0.121582 rel_err=0.000334246 bound=1.6208
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=32 n=896 k=4864 max_abs_err=0.124359 rel_err=0.000322766 bound=1.71678
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=262 n=896 k=4864 max_abs_err=0.125031 rel_err=0.000303792 bound=1.83386
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=1053 n=896 k=4864 max_abs_err=0.125458 rel_err=0.000273925 bound=2.04076
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=8 n=128 k=896 max_abs_err=0.0312576 rel_err=0.000225845 bound=0.22389
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=32 n=128 k=896 max_abs_err=0.0474854 rel_err=0.00032322 bound=0.237658
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=262 n=128 k=896 max_abs_err=0.0619354 rel_err=0.000350882 bound=0.285541
+[qmm-coopmat] kernel=QmmPrefillCoopmatF16 m=1053 n=128 k=896 max_abs_err=0.0617523 rel_err=0.000331307 bound=0.301518
+[provenance] cooperative_matrix_f32_8=1 subgroup_size=32 -> offset-parity repro compares coopmat vs staged coopmat
+[qmm-offset-parity] coopmat_device=1 m=64 n=896 k=896 mismatches=0 aligned_diff=0.0606689 odd_diff=0.0606689 bound=0.272173
+[prefill-axes] k=2048 n=2048 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=2048 n=6144 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=6144 n=2048 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=2560 n=9728 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=9728 n=2560 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=4096 n=4096 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=4096 n=12288 all 10 twin arms bit-identical, m in {17..2047 odd}
+[prefill-axes] k=12288 n=4096 all 10 twin arms bit-identical, m in {17..2047 odd}
+===============================================================================
+[doctest] test cases:       32 |       32 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942792 | 82942792 passed | 0 failed |
+[doctest] Status: SUCCESS!

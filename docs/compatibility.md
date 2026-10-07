@@ -709,8 +709,11 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   a driver exposing `VK_KHR_shader_bfloat16` with
   `shaderBFloat16CooperativeMatrix` and an 8x8x8 bf16 x bf16 -> f32 shape,
   and a build whose shader compiler accepts `GL_EXT_bfloat16`. Without
-  either, bf16 keeps `MatmulBF16Coopmat`. Stored bits equal
-  `MatmulBF16Coopmat` (`receipts/2026-10-07-bf16-direct-gemm/`). Test
+  either, bf16 keeps `MatmulBF16Coopmat`. bf16 `a @ b.T` goes direct only
+  through a chip row in `matmul_direct_select.h` (k1 on G13G, k4s8 on
+  G13C); on other chips it keeps `MatmulBF16Coopmat`, which beat k1 on
+  G13C. Stored bits equal `MatmulBF16Coopmat`
+  (`receipts/2026-10-07-bf16-direct-gemm/`). Test
   "direct cooperative-matrix matmul matches the 16-row slices in every
   orientation" (`omarchy_matmul_family_tests`, f16 and f32, and bf16 where
   the device reports the bf16 shape).
