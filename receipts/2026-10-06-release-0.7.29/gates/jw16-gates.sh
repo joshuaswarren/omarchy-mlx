@@ -16,8 +16,8 @@
 # Every RC is printed and teed; the summary line is JW16_GATES_PASS only when
 # all seven steps are RC=0.
 set -uo pipefail
-: "${TAG:?set TAG=v0.7.30 (no defaults: a wrong tag silently tests the wrong cut)}"
-: "${ASSETS_DIR:?set ASSETS_DIR to the v0.7.30 draft assets dir}"
+: "${TAG:?set TAG=v0.7.31 (no defaults: a wrong tag silently tests the wrong cut)}"
+: "${ASSETS_DIR:?set ASSETS_DIR to the v0.7.31 draft assets dir}"
 : "${GATE_ROOT:?set GATE_ROOT (no defaults)}"
 : "${REPO:?set REPO (no defaults)}"
 # The serving venv on this host: g7c REFUSES to touch it when named.
@@ -67,11 +67,12 @@ sha256sum -c --quiet SHA256SUMS | log && echo "ASSETS_OK" | log \
 if [[ ! -d "$REPO/.git" ]]; then
   git clone --depth 1 --branch "$TAG" https://github.com/joshuaswarren/omarchy-mlx.git "$REPO"
 fi
+: "${EXPECTED_TAG_SHA:?set EXPECTED_TAG_SHA to the full tag commit sha this run must verify}"
 repo_head=$(git -C "$REPO" rev-parse HEAD)
-[[ "$repo_head" == "cf71ea276eb87fd2a1289be4c60cfce0dd85536b" ]] || { echo "FAIL: repo HEAD $repo_head != cf71ea276" | log; exit 1; }
-if [[ ! -f "$REPO/scripts/release-gates" ]]; then
+[[ "$repo_head" == "$EXPECTED_TAG_SHA" ]] || { echo "FAIL: repo HEAD $repo_head != $EXPECTED_TAG_SHA" | log; exit 1; }
+if [[ ! -e "$REPO/scripts/release-gates" ]]; then
   mkdir -p "$REPO"
-  tar -xf "$ASSETS_DIR/omarchy-mlx-0.7.30.tar.gz" -C "$REPO" --strip-components=1
+  tar -xf "$ASSETS_DIR/omarchy-mlx-${TAG#v}.tar.gz" -C "$REPO" --strip-components=1
 fi
 [[ -f "$GATES_DIR/g13-gdn-maskless.sh" ]] || { echo "FAIL: gate scripts missing under $REPO" | log; exit 1; }
 
