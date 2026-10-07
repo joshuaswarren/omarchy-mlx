@@ -71,12 +71,14 @@ PREDICT = {
 
 def bf16(x):
     """Round float32 values to the bf16 grid (round-to-nearest-even), the
-    same arithmetic as _mlx_float_to_bf16 / Metal's bfloat16_t stores."""
-    x = np.ascontiguousarray(x, dtype=np.float32)
-    bits = x.view(np.uint32)
+    same arithmetic as _mlx_float_to_bf16 / Metal's bfloat16_t stores.
+    Keeps the input shape: scalars stay 0-d (numpy 2.5 refuses float() on
+    size-1 arrays but accepts 0-d)."""
+    arr = np.asarray(x, dtype=np.float32)
+    bits = arr.view(np.uint32)
     rounded = (bits + np.uint32(0x7FFF) + ((bits >> np.uint32(16)) & np.uint32(1))) \
         & np.uint32(0xFFFF0000)
-    return rounded.view(np.float32)
+    return rounded.view(np.float32).reshape(arr.shape)
 
 
 def f16(x):
