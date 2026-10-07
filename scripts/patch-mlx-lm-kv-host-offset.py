@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Store BatchKVCache.offset as a host-built array (oMLX decode host-join fix, opt-in).
+"""Store BatchKVCache.offset as a host-built array (batched decode host-join fix).
 
 Root cause (receipts/2026-10-07-batch-decode-2, term (a)): BatchKVCache keeps
 offset as a lazy device array (`self.offset + keys.shape[2]` every step). The
 omarchy RoPE trig gate must bound |offset| on the host before it dispatches,
 and an offset with a primitive behind it can only be read after a
 stream-ordered synchronize: one host join per RoPE call inside the decode
-graph. mlx-lm's generate_step passes an int offset and pays none; oMLX serves
-every request (c1 too) through BatchGenerator and BatchKVCache.
+graph. mlx-lm's generate_step passes an int offset and pays none; BatchGenerator
+(mlx_lm.server, and oMLX once a second request joins) uses BatchKVCache.
 
 The values are known on the host: offset_list mirrors offset after every
 in-class update (init, update_and_fetch, prepare, finalize, trim, filter,
-extend, merge). With MLX_OMARCHY_KV_HOST_OFFSET=1 those sites store
+extend, merge), and those sites store
 mx.array(offset_list) - the same int32 values with no primitive, which the
 gate reads directly. offset becomes a property whose setter clears the mirror,
 so any assignment from outside the class (oMLX copies, state restores) keeps
 the assigned array and the old behavior.
 
-Default off (read once at import). Apply after patch-mlx-lm-kv-maskless.py.
+On by default (read once at import; MLX_OMARCHY_KV_HOST_OFFSET=0 keeps the lazy
+device offset). jw16 2026-10-07: BatchGenerator B=1 13.56 -> 11.84 ms/token; with
+fused RoPE vector offsets oMLX c4 70.0 -> 84.9 tok/s, c1 unchanged (A/A cell).
+Apply after patch-mlx-lm-kv-maskless.py.
 Usage: python3 patch-mlx-lm-kv-host-offset.py /path/to/venv
 """
 import ast
@@ -27,7 +30,7 @@ import sys
 MARKER = "MLX_OMARCHY_KV_HOST_OFFSET"
 
 FLAG_OLD = '_KV_MASKLESS_UNPADDED = os.environ.get("MLX_OMARCHY_KV_MASKLESS", "1") != "0"\n'
-FLAG_NEW = FLAG_OLD + '_KV_HOST_OFFSET = os.environ.get("MLX_OMARCHY_KV_HOST_OFFSET", "0") == "1"\n'
+FLAG_NEW = FLAG_OLD + '_KV_HOST_OFFSET = os.environ.get("MLX_OMARCHY_KV_HOST_OFFSET", "1") != "0"\n'
 
 PROP_OLD = """    @left_padding.setter
     def left_padding(self, value):
@@ -35,9 +38,10 @@ PROP_OLD = """    @left_padding.setter
         self.left_padding_list = None
 """
 PROP_NEW = PROP_OLD + """
-    # offset_list mirrors offset on the host. With MLX_OMARCHY_KV_HOST_OFFSET=1
-    # in-class updates store mx.array(offset_list), which the RoPE gate reads
-    # without a host join. An outside assignment clears the mirror.
+    # offset_list mirrors offset on the host; in-class updates store
+    # mx.array(offset_list) (MLX_OMARCHY_KV_HOST_OFFSET=0: the lazy device
+    # array), which the RoPE gate reads without a host join. An outside
+    # assignment clears the mirror.
     @property
     def offset(self):
         return self._offset
@@ -114,8 +118,14 @@ if not site:
     sys.exit("mlx_lm/models not found under " + venv)
 q = site[0] + "/cache.py"
 text = open(q).read()
+OPT_IN_FLAG = '_KV_HOST_OFFSET = os.environ.get("MLX_OMARCHY_KV_HOST_OFFSET", "0") == "1"\n'
 if MARKER in text:
-    print("already patched:", q)
+    # Trees patched while the switch was opt-in carry the old flag line.
+    if OPT_IN_FLAG in text:
+        open(q, "w").write(text.replace(OPT_IN_FLAG, FLAG_NEW[len(FLAG_OLD):], 1))
+        print("upgraded to default on:", q)
+    else:
+        print("already patched:", q)
     sys.exit(0)
 if "MLX_OMARCHY_KV_MASKLESS" not in text:
     sys.exit("cache.py is not kv-maskless patched (apply patch-mlx-lm-kv-maskless.py first)")

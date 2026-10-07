@@ -13289,23 +13289,18 @@ void RoPE::eval_gpu(
   auto s = stream();
   auto& encoder = omarchy::get_command_encoder(s);
 
-  // FENCE (2026-09-03): two variants have not passed equivalence
-  // against the composed fallback - per-batch vector offsets (160 of
-  // 320 element checks diverged) and the inverse/VJP path (5 of 160).
-  // A fused path must never serve a leg that has not passed, so both
-  // ride the composition until each passes real equivalence. Decode,
-  // the case worth ~460 primitives per token, is forward with a
-  // scalar offset and stays fused. Remove one conjunct per fixed
-  // defect, with the equivalence test green.
-  // MLX_OMARCHY_ROPE_VECTOR_OFFSET=1 (read per call, default off) sends a
-  // forward per-batch offset [B] to the fused kernel while its re-check runs
-  // on AGX: every batch row must match a scalar-offset call on that row bit
-  // for bit (test_fast_ops.cpp). The fallback's synchronize is a host join
-  // per call: 12 per step at B > 1 on Qwen3.8 (receipts/2026-10-07).
+  // FENCE (2026-09-03): the inverse/VJP path has not passed equivalence
+  // against the composed fallback (5 of 160 element checks), so it rides
+  // the composition. Forward per-batch [B] int32 offsets passed on
+  // 2026-10-07: every batch row equals a scalar-offset call on that row bit
+  // for bit, in the same dispatch count (AGX, test_fast_ops.cpp), and the
+  // fallback's synchronize had cost a host join per call, 12 per step at
+  // B > 1 on Qwen3.8 (receipts/2026-10-07). MLX_OMARCHY_ROPE_VECTOR_OFFSET=0
+  // (read per call) routes them back to the composition.
   const bool vector_offset_fused = forward_ && offset.ndim() == 1 &&
       offset.size() > 1 && offset.shape(0) == in.shape(0) &&
       offset.dtype() == int32 &&
-      decode_path_override("MLX_OMARCHY_ROPE_VECTOR_OFFSET") == 1;
+      decode_path_override("MLX_OMARCHY_ROPE_VECTOR_OFFSET") != 0;
   if (!forward_ || (offset.size() > 1 && !vector_offset_fused)) {
     auto result = fallback_(inputs);
     // Record-only settle: fallback nodes join the open batch, and the
