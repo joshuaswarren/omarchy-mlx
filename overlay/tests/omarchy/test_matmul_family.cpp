@@ -3821,6 +3821,17 @@ TEST_CASE("coopmat prefill dispatch pins M16, 32-row and TwoN builds") {
                      std::to_string(kernel_id) + " ") !=
         std::string::npos;
   };
+  auto seen_kernels = [](const std::string& text) {
+    std::string ids;
+    for (size_t pos = text.find("kernel=");
+        pos != std::string::npos;
+        pos = text.find("kernel=", pos + 1)) {
+      size_t begin = pos + 7;
+      size_t end = text.find_first_not_of("0123456789", begin);
+      ids += text.substr(begin, end - begin) + " ";
+    }
+    return ids;
+  };
   auto kernel_of = [](omarchy::ComputeKernel kernel) {
     return static_cast<uint32_t>(kernel);
   };
@@ -3835,7 +3846,7 @@ TEST_CASE("coopmat prefill dispatch pins M16, 32-row and TwoN builds") {
       {16, 256, nullptr,
           omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN,
           "M16FullN"},
-      {128, 2048, "MLX_OMARCHY_NO_RASTER",
+      {128, 2048, "MLX_OMARCHY_QMM_NO_RASTER",
           omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullN,
           "X32FullN"},
       {128, 2048, "MLX_OMARCHY_QMM_TWON",
@@ -3881,7 +3892,7 @@ TEST_CASE("coopmat prefill dispatch pins M16, 32-row and TwoN builds") {
     uint32_t expected_id = kernel_of(pin.expected);
     bool hit = dispatches(trace, expected_id);
     INFO("pin=", pin.label, " expected kernel id ", expected_id,
-        " trace bytes=", trace.size());
+        " seen ids: ", seen_kernels(trace));
     CHECK(hit);
 
     if (std::string(pin.label) == "TwoN") {
