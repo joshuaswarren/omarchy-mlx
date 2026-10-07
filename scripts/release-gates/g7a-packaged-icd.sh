@@ -10,7 +10,9 @@ gate_begin "$LOG"
 
 VDST="$DEST/usr/lib/omarchy-mlx/vulkan"
 mkdir -p "$VDST"
-cp "${SYSTEM_ICD:-/usr/share/vulkan/icd.d/asahi_icd.json}" "$VDST/honeykrisp_icd.aarch64.json"
+# the packaged honeykrisp ICD is the only ICD an Omarchy M+ image has;
+# the stock-Mesa asahi default guaranteed a driver-sha mismatch here
+cp "${SYSTEM_ICD:-/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json}" "$VDST/honeykrisp_icd.aarch64.json"
 DRIVER_SHA=$(env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   "$GATE_HOME/.local/bin/mlx-omarchy-info" --json 2>/dev/null \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["driver_sha"])')
