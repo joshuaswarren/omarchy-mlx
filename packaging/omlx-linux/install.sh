@@ -169,6 +169,7 @@ echo "==> installing oMLX runtime dependencies"
   "setproctitle>=1.3.3" "fastapi>=0.108.0" "uvicorn>=0.23.0" \
   "python-multipart>=0.0.5" "jsonschema>=4.0.0" openai-harmony \
   "cohere_melody>=0.9.0" "Pillow>=9.0.0" regex \
+  "mcp>=2.0.0,<3" \
   "markitdown[pdf,docx,pptx]==0.1.7"
 
 echo "==> installing mlx-vlm at oMLX's pin (--no-deps: its resolver would pull mlx/mlx-lm)"
