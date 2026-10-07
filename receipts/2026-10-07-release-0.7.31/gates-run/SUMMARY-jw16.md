@@ -9,6 +9,7 @@ uname -r across GPU legs: 7.1.12-2-12.2-sep-ARCH
 | g17-patch-series (CPU, fill-run) | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/g17-stdout-jw16.log | 0.31.3: apply1=0 apply2=0; 0.32.0: apply1=0 apply2=0 |
 | g1-clean-install (fresh HOME) | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/g1-install-jw16.log |  |
 | g-g13c (chip + CPU-PD hold) | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/g-g13c-receipt-jw16.log | wheel_sha OK |
+| g-g13c leg B (ICD override, coreglass git-bbbfa36dce) | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/g-g13c-receipt-legB-jw16.log | libvulkan cb2a1bcf… as directed |
 | jw16-gates (build+g13+g15+g7c+g7d) | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/jw16-gates-receipt-jw16.log | build-wheel=0 g13-build=0 g15-build=0 g7c=0 g7d=0 g13-run=0 g15-run=0 |
 | g16-qmm-batch leg P | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/g16-qmm-batch-legP-jw16.json | icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json libvulkan=26c93b8b25b7… |
 | g16b-route-probe leg P | jw16 | 0.32.4.dev202610071347+9b5c938 | 0 | gates-run/g16b-qmm-route-probe-legP-jw16.log | icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json libvulkan=26c93b8b25b7… |
@@ -18,4 +19,4 @@ uname -r across GPU legs: 7.1.12-2-12.2-sep-ARCH
 
 JW16 GREEN: every gate RC=0 on this host with this wheel.
 
-g-g13c leg B: NOT RUN on jw16 for v0.7.31 (w7N phone block; not queued).
+g-g13c leg B: PASS on jw16 for v0.7.31 (ICD override coreglass git-bbbfa36dce, libvulkan cb2a1bcf… as directed; receipt gates-run/g-g13c-receipt-legB-jw16.log).
