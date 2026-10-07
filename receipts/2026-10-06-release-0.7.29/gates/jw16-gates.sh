@@ -76,7 +76,11 @@ if [[ ! -d "$REPO/.work/mlx" ]]; then
     mkdir -p "$BUNDLE"
     python3 -m zipfile -e "$(echo "$ASSETS_DIR"/mlx_omarchy-*-cp314-cp314-linux_aarch64.whl)" "$BUNDLE"
   fi
+  # The tag tarball has no .git, so build-wheel cannot stamp the commit by
+  # itself: pin it to the tag sha (keeps the dev version segment identical to
+  # the published wheel).
   step build-wheel env HOME="$HOME" DEV_RELEASE=1 CMAKE_BUILD_PARALLEL_LEVEL=8 \
+    MLX_OMARCHY_SOURCE_COMMIT="${MLX_OMARCHY_SOURCE_COMMIT:-d86daf9}" \
     MLX_OMARCHY_WHOLE_BUNDLE_DIR="$BUNDLE/mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole" \
     bash "$REPO/scripts/build-wheel.sh"
 fi
