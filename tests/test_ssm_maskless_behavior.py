@@ -14,9 +14,14 @@ of the installed stock mlx_lm cache.py and require:
      over a sweep of paddings, steps and query lengths,
   2. unpadded batches drop the mask at decode after advance, padded rows keep
      it until their padding is consumed, and right padding (lengths) keeps it,
-  3. MLX_OMARCHY_SSM_MASKLESS=0 keeps the mask.
+  3. extend leaves the mirror equal to left_padding, or unknown when a side
+     was state-restored (w7K repros: a mirror built after the cats was a + 2b
+     long and dropped a padded row's mask after filter),
+  4. re-running the patcher upgrades every older shipped form, and
+  5. MLX_OMARCHY_SSM_MASKLESS=0 keeps the mask.
 """
 
+import ast
 import importlib
 import importlib.util
 import itertools
@@ -96,6 +101,39 @@ def test_decode_drops_the_mask_once_padding_is_consumed(site):
     assert right.make_mask(1) is not None
 
 
+
+def test_extend_keeps_the_mirror_exact_or_unknown(site):
+    """w7K repros: a side without left_padding next to a padded side, and a state-restored side."""
+    _, cache = site
+
+    def with_state(c, rows):
+        c[0] = mx.zeros((rows, 3, 8))
+        return c
+
+    def check(c, n=1):
+        assert c.left_padding_list is None or c.left_padding_list == c.left_padding.tolist()
+        if c.make_mask(n) is None:
+            assert bool(mx.all(reference(c, n)).item())
+
+    a = with_state(cache.ArraysCache(size=2), 2)
+    a.extend(with_state(cache.ArraysCache(size=2, left_padding=[3]), 1))
+    check(a)
+    a.filter([2])
+    check(a)
+    assert a.make_mask(1) is not None
+
+    a = with_state(cache.ArraysCache(size=2, left_padding=[2, 0]), 2)
+    a.state = a.state
+    a.extend(with_state(cache.ArraysCache(size=2, left_padding=[0]), 1))
+    assert a.left_padding_list is None
+    check(a)
+
+    a = with_state(cache.ArraysCache(size=2, left_padding=[0, 1]), 2)
+    a.extend(with_state(cache.ArraysCache(size=2), 1))
+    assert a.left_padding_list == [0, 1, 0]
+    a.advance(1)
+    assert a.make_mask(1) is None
+
 def test_kill_switch(site):
     path, _ = site
     code = ("from ssm_mlx_lm.models.cache import ArraysCache; c = ArraysCache(size=2, left_padding=[0, 0]); "
@@ -104,15 +142,26 @@ def test_kill_switch(site):
     assert subprocess.run([sys.executable, "-c", code], env=env).returncode == 0
 
 
-def test_rerun_upgrades_a_zeros_only_guard(site, tmp_path):
+def patcher_strings():
+    """The patcher's top-level string constants (its body runs on import, so read them from the AST)."""
+    tree = ast.parse(PATCHER.read_text())
+    return {node.targets[0].id: node.value.value for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str) and isinstance(node.targets[0], ast.Name)}
+
+
+@pytest.mark.parametrize("old_guard", ["and not any(self.left_padding_list)", "and max(self.left_padding_list) <= 0"])
+def test_rerun_upgrades_old_trees(site, tmp_path, old_guard):
     path, _ = site
+    s = patcher_strings()
     root = tmp_path / "old"
     models = root / "lib" / "python3" / "site-packages" / "mlx_lm" / "models"
     models.mkdir(parents=True)
     patched = (Path(path) / "ssm_mlx_lm" / "models" / "cache.py").read_text()
-    new = "and max(self.left_padding_list) <= 0"
-    assert patched.count(new) == 1
-    (models / "cache.py").write_text(patched.replace(new, "and not any(self.left_padding_list)"))
+    guard = "and all(p <= 0 for p in self.left_padding_list)"
+    assert patched.count(guard) == 1 and patched.count(s["EXTEND_NEW"]) == 1
+    old = patched.replace(guard, old_guard).replace(s["EXTEND_NEW"], s["EXTEND_NEW_OLD"])
+    (models / "cache.py").write_text(old)
     out = subprocess.run([sys.executable, str(PATCHER), str(root)], check=True, capture_output=True, text=True)
-    assert "upgraded guard" in out.stdout
+    assert "upgraded" in out.stdout
     assert (models / "cache.py").read_text() == patched

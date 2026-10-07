@@ -29,6 +29,7 @@ Idempotent for mlx-lm 0.31.3 venvs and the 0.32 line. Kill switch at runtime:
 MLX_OMARCHY_SSM_MASKLESS=0 (read once at import). Usage:
 python3 patch-mlx-lm-ssm-maskless.py /path/to/venv
 """
+import ast
 import glob
 import sys
 
@@ -53,7 +54,7 @@ GUARD_0313 = """    def make_mask(self, N: int):
             and self.left_padding is not None
             and self.lengths is None
             and self.left_padding_list is not None
-            and max(self.left_padding_list) <= 0
+            and all(p <= 0 for p in self.left_padding_list)
         ):
             return None
         if self.left_padding is not None:
@@ -67,7 +68,7 @@ GUARD_032 = """    def make_mask(self, N: int):
             and self.left_padding is not None
             and self.lengths is None
             and self.left_padding_list is not None
-            and max(self.left_padding_list) <= 0
+            and all(p <= 0 for p in self.left_padding_list)
         ):
             return None
         pos = mx.arange(N)
@@ -142,7 +143,26 @@ EXTEND_OLD = """        self.cache = [cat(c, o) for c, o in zip(self.cache, othe
         self.left_padding = cat(self.left_padding, other.left_padding)
         self.lengths = cat(self.lengths, other.lengths)
 """
-EXTEND_NEW = """        self.cache = [cat(c, o) for c, o in zip(self.cache, other.cache)]
+# Batch sizes and mirrors are read before the cats: after them batch_size is
+# already a + b. A side without left_padding contributes the zeros cat
+# creates; a side with an array but no mirror (a state restore) is unknown, so
+# the result is unknown and the guard stays off.
+EXTEND_NEW = """        a_n, b_n = self.batch_size, other.batch_size
+        a_lp, b_lp = self.left_padding, other.left_padding
+        a_list, b_list = self.left_padding_list, other.left_padding_list
+        self.cache = [cat(c, o) for c, o in zip(self.cache, other.cache)]
+        self.left_padding = cat(a_lp, b_lp)
+        a_side = [0] * a_n if a_lp is None else a_list
+        b_side = [0] * b_n if b_lp is None else b_list
+        self.left_padding_list = (
+            None
+            if self.left_padding is None or a_side is None or b_side is None
+            else a_side + b_side
+        )
+        self.lengths = cat(self.lengths, other.lengths)
+"""
+# EXTEND_NEW as shipped before 2026-10-07 (mirror built after the cats).
+EXTEND_NEW_OLD = """        self.cache = [cat(c, o) for c, o in zip(self.cache, other.cache)]
         self.left_padding = cat(self.left_padding, other.left_padding)
         if self.left_padding is not None or other.left_padding is not None:
             a_list = (
@@ -211,15 +231,27 @@ if not site:
     sys.exit("mlx_lm/models not found under " + venv)
 q = site[0] + "/cache.py"
 text = open(q).read()
-# Trees patched before 2026-10-07 carry the zeros-only guard; upgrade them in place.
-ZEROS_GUARD = ("            and self.lengths is None\n"
-               "            and self.left_padding_list is not None\n"
-               "            and not any(self.left_padding_list)\n")
+# Trees patched before 2026-10-07 carry an older guard (zeros only, or max(),
+# which raises on an empty mirror) and the extend mirror built after the cats;
+# upgrade them in place.
+GUARD_NEW = "            and all(p <= 0 for p in self.left_padding_list)\n"
+UPGRADES = [
+    ("            and not any(self.left_padding_list)\n", GUARD_NEW),
+    ("            and max(self.left_padding_list) <= 0\n", GUARD_NEW),
+    (EXTEND_NEW_OLD, EXTEND_NEW),
+]
 if MARKER in text:
-    if ZEROS_GUARD in text:
-        open(q, "w").write(text.replace(ZEROS_GUARD, ZEROS_GUARD.replace(
-            "not any(self.left_padding_list)", "max(self.left_padding_list) <= 0"), 1))
-        print("upgraded guard:", q)
+    # ArraysCache only: BatchKVCache (kv-maskless) carries a guard line of the same text.
+    start = text.find("class ArraysCache(")
+    end = text.find("\nclass ", start + 1)
+    body = text[start:end]
+    for old, new in UPGRADES:
+        body = body.replace(old, new)
+    upgraded = text[:start] + body + text[end:]
+    if upgraded != text:
+        ast.parse(upgraded)
+        open(q, "w").write(upgraded)
+        print("upgraded:", q)
     else:
         print("already patched:", q)
     sys.exit(0)
@@ -245,7 +277,6 @@ for old, new in pairs:
         sys.exit("unrecognized content in " + q + "; refusing to patch "
                  "(mlx-lm version mismatch?)")
     text = text.replace(old, new, 1)
-open(q, "w").write(text)
-import ast
 ast.parse(text)
+open(q, "w").write(text)
 print("patched:", q, "(mlx-lm", "0.32 line)" if is_032 else "0.31.3)")
