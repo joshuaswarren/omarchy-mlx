@@ -77,3 +77,20 @@ TAG MOVE RECORD (Main-approved, one-time): the v0.7.30 annotated tag moved
 gates-only line (5aaad7e89 g7a packaged-ICD fixture, cf71ea276 g10 primer
 budget), Main-confirmed; the earlier tag push had no release, no assets, no
 consumer. From now the tag never moves; any gate-driven code fix = v0.7.31.
+
+SCRIPTS SOURCE OF RECORD (v0.7.30 gates): the gate scripts run from MAIN
+(the runbook copies in this directory); the tag carries only cf71ea276's
+copies. Each receipt records the main commit the scripts came from (e.g.
+"gate scripts: main <sha>"). g16-qmm-batch.py and g16b-qmm-route-probe.py
+landed AFTER the tag — they are probe tooling, not shipped code.
+
+v0.7.30 SET ADDITIONS (all three hosts): after the battery/g-hold/jw16 sets,
+run from the host's installed-wheel venv:
+  VK_DRIVER_FILES=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json \
+    python3 g16-qmm-batch.py            # final line RESULT-style JSON "pass": true
+    VK_DRIVER_FILES=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json \
+    python3 g16b-qmm-route-probe.py     # final line RESULT: PASS
+and record the host's `uname -r` + the mlx-omarchy-info ICD block (driver
+SHA + ICD source) in the receipt — for v0.7.30 the ICD line must show the
+packaged honeykrisp ICD; the bbbfa36dce7 bump rides the omarchy-pkgs 0.7.30
+PR (#839) and becomes the expected ICD once that package reaches the hosts.
