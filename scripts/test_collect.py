@@ -2375,6 +2375,8 @@ class OmarchyAneBlockTests(unittest.TestCase):
         self.assertEqual(messages, [cd.ANE_DATAONLY_STEPS])
         self.assertIn("--m3-report", cd.ANE_DATAONLY_STEPS)
         self.assertIn("docs/h15-volunteer.md", cd.ANE_DATAONLY_STEPS)
+        self.assertIn("ane/h16/README-bringup.md", cd.ANE_DATAONLY_STEPS)
+        self.assertIn("m3m4_kit.sh", cd.ANE_DATAONLY_STEPS)
         # A ready check on a supported chip stays silent.
         self.assertEqual(cd._ane_smoke_guidance({
             "platform": "Linux",
