@@ -1,0 +1,61 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+// Shape- and chip-keyed choice among builds of
+// shaders/matmul_coopmat_direct.comp (K_UNROLL, SWIZZLE_ROWS, WIDE_N).
+// A row holds a measured winner: the chip (a device_name substring such
+// as "G13G"), dtype, orientation, the smallest m and n it won at, and
+// the pipeline plus grid width to run. The first matching row wins;
+// anything unmatched keeps the shipped route. Add a row only with the
+// receipt that measured it.
+
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <span>
+#include <string_view>
+
+#include "mlx/backend/omarchy/compute.h"
+
+namespace mlx::core::omarchy {
+
+struct DirectMatmulRoute {
+  ComputeKernel kernel;
+  uint32_t tile_n;  // output columns per workgroup (64; WIDE_N builds 128)
+};
+
+struct DirectMatmulRow {
+  std::string_view chip;
+  bool f16;
+  bool a_transposed;
+  bool b_transposed;
+  uint32_t min_m;
+  uint32_t min_n;
+  DirectMatmulRoute route;
+};
+
+// Empty until a receipt fills it (MatmulGap H8).
+inline constexpr std::array<DirectMatmulRow, 0> kDirectMatmulRows{};
+
+inline DirectMatmulRoute select_direct_matmul_route(
+    std::span<const DirectMatmulRow> rows,
+    std::string_view device_name,
+    bool f16,
+    bool a_transposed,
+    bool b_transposed,
+    uint32_t m,
+    uint32_t n,
+    DirectMatmulRoute shipped) {
+  for (const auto& row : rows) {
+    if (device_name.find(row.chip) != std::string_view::npos &&
+        row.f16 == f16 && row.a_transposed == a_transposed &&
+        row.b_transposed == b_transposed && m >= row.min_m &&
+        n >= row.min_n) {
+      return row.route;
+    }
+  }
+  return shipped;
+}
+
+} // namespace mlx::core::omarchy

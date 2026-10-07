@@ -32,6 +32,7 @@
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/fused_chain.h"
+#include "mlx/backend/omarchy/matmul_direct_select.h"
 #include "mlx/distributed/primitives.h"
 #include "mlx/fast_primitives.h"
 #include "mlx/backend/gpu/copy.h"
@@ -788,6 +789,7 @@ void dispatch_matmul(
       (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
       (direct_f16 ? caps.cooperative_matrix_f16_8
                   : dtype_kernel == omarchy::ComputeKernel::MatmulF32);
+  uint32_t direct_tile_n = 64u;
   if (direct) {
     static constexpr omarchy::ComputeKernel kDirect[2][4] = {
         {omarchy::ComputeKernel::MatmulDirectF16Nn,
@@ -800,6 +802,13 @@ void dispatch_matmul(
          omarchy::ComputeKernel::MatmulDirectF32Tt}};
     kernel = kDirect[direct_f16 ? 0 : 1]
                     [(a_transposed ? 2 : 0) + (b_transposed ? 1 : 0)];
+    const omarchy::DirectMatmulRoute route =
+        omarchy::select_direct_matmul_route(
+            omarchy::kDirectMatmulRows, caps.device_name, direct_f16,
+            a_transposed, b_transposed, params.matrix_m, params.matrix_n,
+            {kernel, 64u});
+    kernel = route.kernel;
+    direct_tile_n = route.tile_n;
     const auto& hw = encoder.device().hardware_capabilities();
     omarchy::capsim::require_backed(
         encoder.device(),
@@ -891,7 +900,7 @@ void dispatch_matmul(
       kernel,
       bindings,
       params,
-      matrix_group_count(params.matrix_n, tile),
+      matrix_group_count(params.matrix_n, direct ? direct_tile_n : tile),
       matrix_group_count(params.matrix_m, tile),
       checked_u32(batch_count, name, out));
 }
