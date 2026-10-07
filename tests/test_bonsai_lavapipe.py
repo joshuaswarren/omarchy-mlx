@@ -124,15 +124,15 @@ class BonsaiQ1AffineQmvGpuParity(unittest.TestCase):
     def _run(self, n, k, group_size, dtype):
         packed, scales, biases = _build_inputs(n, k, group_size, dtype)
         rng = np.random.default_rng(100)
-        x = mx.array(rng.normal(0, 1, (1, k)).astype(dtype))
+        x = mx.array(rng.normal(0, 1, (1, k))).astype(dtype)
         got = mx.fast.bonsai_q1_affine_qmv(x, packed, scales, biases, group=group_size)
         mx.eval(got)
         w_fp = _dequant_1bit_ref(packed, scales, biases, group_size)
         want = x @ w_fp.T
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=1e-3,
             rtol=1e-2,
         )
@@ -155,24 +155,24 @@ class BonsaiQmvWideGpuParity(unittest.TestCase):
     def _q1(self, n, M, k, group_size, dtype):
         packed, scales, biases = _build_inputs(n, k, group_size, dtype)
         rng = np.random.default_rng(101)
-        x = mx.array(rng.normal(0, 1, (M, k)).astype(dtype))
+        x = mx.array(rng.normal(0, 1, (M, k))).astype(dtype)
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=group_size, bits=1)
         mx.eval(got)
         w_fp = _dequant_1bit_ref(packed, scales, biases, group_size)
         want = x @ w_fp.T
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=2e-3,
             rtol=2e-2,
         )
 
     def _q2(self, n, M, k, group_size, dtype):
         rng = np.random.default_rng(102)
-        w = mx.array(rng.normal(0, 0.05, (n, k)).astype(dtype))
+        w = mx.array(rng.normal(0, 0.05, (n, k))).astype(dtype)
         packed, scales, biases = mx.quantize(w, group_size=group_size, bits=2)
-        x = mx.array(rng.normal(0, 1, (M, k)).astype(dtype))
+        x = mx.array(rng.normal(0, 1, (M, k))).astype(dtype)
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=group_size, bits=2)
         mx.eval(got)
         want = mx.quantized_matmul(
@@ -180,8 +180,8 @@ class BonsaiQmvWideGpuParity(unittest.TestCase):
         )
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=2e-3,
             rtol=2e-2,
         )
@@ -216,8 +216,8 @@ class BonsaiQ1DequantizeGpuParity(unittest.TestCase):
         want = _dequant_1bit_ref(packed, scales, biases, group_size)
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=1e-4,
             rtol=1e-3,
         )

@@ -136,8 +136,8 @@ class BonsaiQ1AffineQmvParity(unittest.TestCase):
                 want = _ref_q1(packed, scales, biases, x, 64)
                 mx.eval(want)
                 np.testing.assert_allclose(
-                    np.array(got, copy=False),
-                    np.array(want, copy=False),
+                    np.array(got.astype(mx.float32), copy=False),
+                    np.array(want.astype(mx.float32), copy=False),
                     atol=1e-3,
                     rtol=1e-2,
                 )
@@ -149,15 +149,15 @@ class BonsaiQmvWideParity(unittest.TestCase):
         # 1-bit wide, M=2
         packed, scales, biases, _ = _build_inputs(n=16, k=512, group_size=64, dtype=mx.float16)
         rng = np.random.default_rng(2)
-        x = mx.array(rng.normal(0, 1, (2, 512)).astype(np.float16))
+        x = mx.array(rng.normal(0, 1, (2, 512))).astype(mx.float16)
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=64, bits=1)
         mx.eval(got)
         w_fp = _bonsai_dequant_1bit_reference(packed, scales, biases, 64)
         want = x @ w_fp.T
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=2e-3,
             rtol=2e-2,
         )
@@ -165,15 +165,15 @@ class BonsaiQmvWideParity(unittest.TestCase):
     def test_q1_wide_m5(self):
         packed, scales, biases, _ = _build_inputs(n=8, k=512, group_size=64, dtype=mx.float16)
         rng = np.random.default_rng(3)
-        x = mx.array(rng.normal(0, 1, (5, 512)).astype(np.float16))
+        x = mx.array(rng.normal(0, 1, (5, 512))).astype(mx.float16)
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=64, bits=1)
         mx.eval(got)
         w_fp = _bonsai_dequant_1bit_reference(packed, scales, biases, 64)
         want = x @ w_fp.T
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=2e-3,
             rtol=2e-2,
         )
@@ -185,14 +185,14 @@ class BonsaiQmvWideParity(unittest.TestCase):
         K = 512
         w = mx.array(rng.normal(0, 0.05, (N, K)).astype(np.float16))
         packed, scales, biases = mx.quantize(w, group_size=group, bits=2)
-        x = mx.array(rng.normal(0, 1, (2, K)).astype(np.float16))
+        x = mx.array(rng.normal(0, 1, (2, K))).astype(mx.float16)
         got = mx.fast.bonsai_qmv_wide(x, packed, scales, biases, group=group, bits=2)
         mx.eval(got)
         want = mx.quantized_matmul(x, packed, scales, biases, transpose=True, group_size=group, bits=2)
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=2e-3,
             rtol=2e-2,
         )
@@ -207,8 +207,8 @@ class BonsaiQ1DequantizeParity(unittest.TestCase):
         want = _bonsai_dequant_1bit_reference(packed, scales, biases, 64)
         mx.eval(want)
         np.testing.assert_allclose(
-            np.array(got, copy=False),
-            np.array(want, copy=False),
+            np.array(got.astype(mx.float32), copy=False),
+            np.array(want.astype(mx.float32), copy=False),
             atol=1e-4,
             rtol=1e-3,
         )
