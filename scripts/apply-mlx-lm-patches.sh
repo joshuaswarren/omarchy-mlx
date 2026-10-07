@@ -61,6 +61,8 @@ fi
 # which is what catches a wrong mlx-lm version.
 SERIES_PATCHES=(
   mlx-lm-tool-call-arguments.patch
+  mlx-lm-qwen3-coder-untyped-args.patch
+  mlx-lm-max-tokens-min-one.patch
   mlx-lm-gated-delta-fast-route.patch
   mlx-lm-gated-delta-fast-route-repeat.patch
   mlx-lm-gated-delta-raw.patch
@@ -114,6 +116,12 @@ apply() {
   fi
 }
 apply mlx-lm-tool-call-arguments.patch
+# Qwen3 Coder untyped tool arguments (upstream #1910): without a top-level
+# "type", only JSON objects/arrays parse; text and scalars stay strings.
+apply mlx-lm-qwen3-coder-untyped-args.patch
+# max_tokens min_val 1 (upstream #1935): the handler answers 400 for a
+# max_tokens: 0 request instead of 200-then-generator-reject.
+apply mlx-lm-max-tokens-min-one.patch
 apply mlx-lm-gated-delta-fast-route.patch
 # GDN fast-route Hk!=Hv repeat: Qwen3.5-9B (Hk=16, Hv=32) hit the composed
 # per-token fallback without this; A/B 42 -> 317 tok/s prefill 512 on M2.
