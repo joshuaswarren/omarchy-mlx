@@ -34,7 +34,14 @@ class InstallDocDriverTests(unittest.TestCase):
         text = README.read_text()
         self.assertIn("omarchy-mlx-vulkan", text)
         self.assertIn(PACKAGED_ICD, text)
+        self.assertIn("does not install `omarchy-mlx-vulkan`", text)
         self.assertNotIn("fork driver", text.lower())
+        self.assertNotIn("asahi", text.lower())
+
+    def test_pkgbuild_example_depends_on_the_vulkan_package(self):
+        text = (ROOT / "packaging" / "PKGBUILD.example").read_text()
+        self.assertIn("omarchy-mlx-vulkan=$pkgver-$pkgrel", text)
+        self.assertIn(PACKAGED_ICD, text)
         self.assertNotIn("asahi", text.lower())
 
 

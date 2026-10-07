@@ -81,7 +81,10 @@ attached to each release.
 On an Arch install for an M1-class Mac or an M2 Max, the script sets
 up a private venv under `~/.local/share/mlx-omarchy` and puts the
 launchers in `~/.local/bin`. It registers MLX Chat in the launcher
-menu. It never replaces Mesa or edits Omarchy package files.
+menu. It installs `lapack`, `blas`, and `openblas`. It leaves the
+system Mesa driver installed and does not install `omarchy-mlx-vulkan`.
+Install that package separately, or use the menu path above, so the
+runtime selects the private ICD under `/usr/lib/omarchy-mlx/vulkan/`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
