@@ -61,6 +61,11 @@ constexpr ChipIdEntry kChipIdTable[] = {
     {"apple,t6030", "Apple M3 Pro", 18},
     {"apple,t6031", "Apple M3 Max", 40},
     {"apple,t6034", "Apple M3 Max", 30},
+    // M4 family, same records (t8132 covers all six Mac boards; there
+    // is no M4 Ultra id).
+    {"apple,t8132", "Apple M4", 10},
+    {"apple,t6040", "Apple M4 Pro", 20},
+    {"apple,t6041", "Apple M4 Max", 40},
 };
 
 const ChipIdEntry* find_chip_entry(const std::string& compatible) {

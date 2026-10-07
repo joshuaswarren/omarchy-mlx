@@ -56,36 +56,40 @@ struct HoneykrispIcdSelection {
   bool user_override{false};
 };
 
-// Apple M3-family chip ids (omarchy-ane data/ane-soc records; t6034 is
-// the M3 Max variant whose ADT reports arm-io,t6031). Read only on the
-// not-found error path: the packaged Honeykrisp ICD targets M1/M2, and
-// an M3 hitting this error must learn that from the message, not a bare
-// "not found". Empty string when the chip is not M3 family or the DT is
-// unreadable.
-inline std::string apple_m3_chip_note() {
+// Apple M3/M4-family chip ids (omarchy-ane data/ane-soc records; t6034
+// is the M3 Max variant whose ADT reports arm-io,t6031). Read only on
+// the not-found error path: the packaged Honeykrisp ICD targets M1/M2,
+// and an M3/M4 hitting this error must learn that from the message,
+// not a bare "not found". Empty string when the chip is not M3/M4
+// family or the DT is unreadable.
+inline std::string apple_m3_m4_chip_note() {
   std::ifstream compatible_file("/proc/device-tree/compatible");
   if (!compatible_file) {
     return {};
   }
   std::string compatible((std::istreambuf_iterator<char>(compatible_file)),
                          std::istreambuf_iterator<char>());
-  struct M3Entry {
+  struct NewGenEntry {
     const char* chip_id;
     const char* name;
   };
-  static constexpr M3Entry kM3Chips[] = {
+  static constexpr NewGenEntry kNewGenChips[] = {
       {"apple,t8122", "Apple M3"},
       {"apple,t6030", "Apple M3 Pro"},
       {"apple,t6031", "Apple M3 Max"},
       {"apple,t6034", "Apple M3 Max variant"},
+      {"apple,t8132", "Apple M4"},
+      {"apple,t6040", "Apple M4 Pro"},
+      {"apple,t6041", "Apple M4 Max"},
   };
-  for (const auto& entry : kM3Chips) {
+  for (const auto& entry : kNewGenChips) {
     if (compatible.find(entry.chip_id) != std::string::npos) {
       return " (detected " + std::string(entry.name) + ", " + entry.chip_id +
              ": the packaged Honeykrisp ICD supports M1/M2 silicon and M3"
-             " GPU compute is not certified yet; aurora's mesa-m3 graphics"
-             " driver is not selected for compute. Collect M3 state with"
-             " scripts/m3_kit.sh in joshuaswarren/omarchy-mlx)";
+             "/M4 GPU compute is not certified yet; on an M3 Pro, aurora's"
+             " mesa-m3 graphics driver is not selected for compute. Collect"
+             " M3/M4 state with scripts/m3m4_kit.sh in"
+             " joshuaswarren/omarchy-mlx)";
     }
   }
   return {};
@@ -134,7 +138,7 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
     }
   }
   throw std::runtime_error("Honeykrisp Vulkan ICD JSON was not found" +
-                           apple_m3_chip_note());
+                           apple_m3_m4_chip_note());
 }
 
 inline std::string resolve_honeykrisp_icd(
