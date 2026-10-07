@@ -172,8 +172,9 @@ linked into the binaries); both chips are stated here as required.
   stage; all pass. Op-level pytest parity bars and dispatch-trace evidence
   require the wheel (below) and a GPU ticket — next legs, not yet run.
 
-**Wheel: built after staging the pinned bundle (Main's decision).** The
-first attempt refused at the bundle gate (log preserved). Main identified
+**Wheel: built after staging the pinned bundle (Main's decision).**
+The first attempt refused at the bundle gate (log preserved). Main
+identified
 the candidate `~/.local/share/coreglass/whole-bundle/` on jw16; the
 runtime pin (`parakeet-runtime-pin.json`) demands manifest
 `08769793f8ee3299381f499bf90537d620e23635000a6dbc54b9b5c6a55a54ab` +
@@ -195,3 +196,48 @@ jw16 → dev box → jwm1 with sha256 verified at every hop (`rsync
 - The build script's own NEXT-STEP note applies before any release:
   `scripts/verify-release-assets.py <tag>` must print VERIFIED if this
   wheel is ever uploaded.
+
+**GPU parity leg (G13G ticket, same host's GPU; the G13C run follows on
+jw16 when its queue allows).** Three gpu-turn tickets, wheel
+`0.32.4.dev202610072312+6de45e2` (dispatch fix + gate fixes), fresh venv
+per ticket, `OMARCHY_BONSAI_GATE=1` (skips are failures):
+
+| route | result |
+|---|---|
+| q1 dequant k512 gs64 f32 | PASS (after the dispatch fix) |
+| q1 dequant k1024 gs128 bf16 | PASS (after the dispatch fix) |
+| q1 qmv — all dtypes/shapes (f32/f16/bf16, k512-k4096) | FAIL — wrong values |
+| qmv wide q1/q2, m2-m5 | FAIL — wrong values |
+| gate preconditions | PASS (GPU probe works; zero silent skips) |
+| ctest suites (CPU leg) | 3/3 pass (leg 1; GPU paths not exercised there) |
+
+Bug 1 — dequant under-dispatch (fixed, commit in this receipt): the
+shader maps one row per workgroup but the encoder dispatched
+ceil(n*k/256) groups; k<256 left rows 1..n-1 unwritten. Fix: dispatch
+exactly n groups. Hardware-verified: dequant f32 and bf16 arms green.
+
+Bug 2 — qmv/wide wrong values on hardware (OPEN, not fixed): every qmv
+and wide arm mismatches its composed reference by large margins
+(e.g. wide m2 first-row elements off by up to 5.65; qmv single-column
+got 0.2232 vs reference 0.6676). Probes (all under gpu-turn, logs
+preserved):
+
+- device identity confirmed: `Apple M1 (G13G B1)`, driver `Honeykrisp`,
+  api 1.4.362 under `VK_DRIVER_FILES` -> the coreglass
+  `vulkan-4b-bbbfa36dce` ICD (mesa-git-sha bbbfa36dce7, the 0.7.31 gate
+  ICD); no packaged ICD exists on this host, so the override is
+  required.
+- one-hot x sweeps: the kernel's perceived code vector matches the
+  packed truth only in the first 16 of 64 positions at k=64; bits in
+  bytes 2..7 are never seen (40/64 match, non-permutation).
+- single-bit packed sweeps: bits in packed bytes 0..1 are seen, bytes
+  2..7 never (k=64, 8-byte row).
+- dequant cross-check on the same bytes: row0 decodes bit-exactly at
+  k=64 (and k=512), so the bit order and byte layout of the test packer
+  are right; the defect is specific to the qmv/wide read path.
+- shader + encoder audit: the qmv shader's byte walk, byte_at() select,
+  group scale/bias indexing, and the encoder's binding order and push
+  constants all read correct; the dequant shader differs mainly in
+  mapping one ROW per workgroup. Suspect space: the qmv dispatch/params
+  path or glslc codegen for this shader on the G13G driver — needs a
+  kernel-lane pass with the preserved probes.
