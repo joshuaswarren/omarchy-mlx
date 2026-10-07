@@ -400,14 +400,18 @@ void translate_device_pointer_aliases(
   // mis-binds groups when an alternation and optional const are combined
   // (it shifted the type/name groups by one on
   // 'const device uchar* krow = ...'), so no nested optionals here.
-  // Group 1 = pointee type, group 2 = alias name, group 3 = initializer.
+  // Group 1 = address space, group 2 = pointee type, group 3 = alias name,
+  // group 4 = initializer. `constant` joins `device`: the CBQ/K3 kernels
+  // declare `constant float* cs = cons;` read-only LUT aliases of
+  // constant-bound buffers, and the rewrite is identical (2026-10-08
+  // KernelRecheck). Without it they died at the surviving-pointer guard.
   static const std::regex alias_patterns[] = {
       std::regex(
-          R"(const\s+device\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+          R"((const\s+)?(device|constant)\s+(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
       std::regex(
-          R"(device\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+          R"((device|constant)\s+(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
       std::regex(
-          R"(device\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+          R"((device|constant)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
   };
   struct Alias {
     std::string base;
@@ -432,21 +436,27 @@ void translate_device_pointer_aliases(
   };
   bool vector_read_helpers = false;
   bool progressed = true;
+  // Per-pattern match-group indices for (type, name, initializer); the
+  // optional const/address-space groups shift them per pattern.
+  static const int alias_groups[][3] = {{4, 5, 6}, {3, 4, 5}, {2, 3, 4}};
   while (progressed) {
     progressed = false;
-    for (const auto& alias_pattern : alias_patterns) {
+    for (size_t pattern_index = 0; pattern_index < std::size(alias_patterns);
+         ++pattern_index) {
+      const auto& alias_pattern = alias_patterns[pattern_index];
+      const auto& groups = alias_groups[pattern_index];
       for (std::sregex_iterator it(body.begin(), body.end(), alias_pattern),
                end;
            it != end; ++it) {
-        const auto type = (*it)[1].str();
-        const auto name = (*it)[2].str();
+        const auto type = (*it)[groups[0]].str();
+        const auto name = (*it)[groups[1]].str();
         if (aliases.count(name)) {
           continue;
         }
-        std::string init = trim((*it)[3].str());
+        std::string init = trim((*it)[groups[2]].str());
         // Strip a leading C-style device-pointer cast: `(const device T*)`.
         static const std::regex cast_prefix(
-            R"(^\(\s*(?:const\s+)?device\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
+            R"(^\(\s*(?:const\s+)?(?:device|constant)\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
         init = std::regex_replace(init, cast_prefix, "");
         // Split BASE (+ EXPR)?.
         static const std::regex base_offset(
@@ -1018,6 +1028,10 @@ void translate_header(std::string& header) {
   // cannot be passed as pointer parameters), so a header that uses one is
   // refused cleanly with the construct named.
   replace_all(header, "METAL_FUNC", "");
+  // `inline` marks MSL header helpers (the K3 kda glue sigmoid); GLSL has no
+  // such qualifier and glslang rejects it, so drop it (2026-10-08
+  // KernelRecheck). Header-only: `inline` stays a legal body identifier.
+  replace_word(header, "inline", "");
   replace_all(
       header, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()");
   replace_all(header, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
@@ -1266,6 +1280,35 @@ Translation translate_msl(
   replace_all(body, "metal::precise::", "");
   replace_all(body, "metal::fast::", "");
   replace_all(body, "metal::", "");
+  // numeric_limits<T>::infinity()/max()/lowest()/min()/epsilon() have no GLSL
+  // form; the IEEE bit patterns and C literals are exact. The mlx-vlm
+  // llguidance mask kernel masks with -infinity() (2026-10-08 KernelRecheck).
+  // The whole numeric_limits<...>::fn() expression must match as one — the
+  // bare words are ordinary calls (metal::max) and must survive untouched.
+  // Runs before the INFINITY/NAN defines are emitted below.
+  {
+    static const std::regex limits(
+        R"(numeric_limits\s*<\s*[A-Za-z_][A-Za-z0-9_]*\s*>\s*::\s*(infinity|lowest|max|min|epsilon)\s*\(\s*\))");
+    static const std::unordered_map<std::string, std::string> limit_values = {
+        {"infinity", "INFINITY"},
+        {"lowest", "(-3.4028234663852886e+38f)"},
+        {"max", "3.4028234663852886e+38f"},
+        {"min", "1.1754943508222875e-38f"},
+        {"epsilon", "1.1920928955078125e-07f"},
+    };
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    for (std::sregex_iterator it(body.begin(), body.end(), limits), end;
+         it != end; ++it) {
+      const auto& match = *it;
+      rewritten += body.substr(last, match.position() - last);
+      rewritten += limit_values.at((*it)[1].str());
+      last = match.position() + match.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
+  }
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
   replace_all(body, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
   replace_all(body, "simd_sum", "subgroupAdd");
