@@ -6,8 +6,10 @@
 // A row holds a measured winner: the chip (a device_name substring such
 // as "G13G"), dtype, orientation, the smallest m and n it won at, and
 // the pipeline plus grid width to run. The first matching row wins;
-// anything unmatched keeps the shipped route. Add a row only with the
-// receipt that measured it.
+// anything unmatched keeps the shipped route. A route also needs
+// n >= tile_n / 2: a subgroup's edge tile shifts back to n - tile_n / 2
+// (64 for WIDE_N), so a narrower n would underflow. Add a row only with
+// the receipt that measured it.
 
 #pragma once
 
@@ -51,7 +53,7 @@ inline DirectMatmulRoute select_direct_matmul_route(
     if (device_name.find(row.chip) != std::string_view::npos &&
         row.f16 == f16 && row.a_transposed == a_transposed &&
         row.b_transposed == b_transposed && m >= row.min_m &&
-        n >= row.min_n) {
+        n >= row.min_n && n >= row.route.tile_n / 2u) {
       return row.route;
     }
   }

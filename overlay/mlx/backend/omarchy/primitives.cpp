@@ -534,12 +534,21 @@ void dispatch_matmul(
   // MLX_OMARCHY_MATMUL_PRETRANSPOSE_B=1): an n-major f16 rhs is copied to
   // a row-major batch, so the direct route runs MatmulDirectF16Nn (same k
   // order, same bits) instead of MatmulDirectF16Nt, whose column-major
-  // fragments take two scalar loads each in Honeykrisp.
+  // fragments take two scalar loads each in Honeykrisp. The copy runs only
+  // where the direct route's capability and shape terms hold (the lhs
+  // alignment terms are checked later; a miss costs the copy, not bits).
   static const bool pretranspose_b =
       omarchy::env_flag("MLX_OMARCHY_MATMUL_PRETRANSPOSE_B");
+  const auto& pre_caps = encoder.device().capabilities();
   if (pretranspose_b && b_transposed && !sdpa && !use_c &&
       causal.second == CausalSkip::None && out.dtype() == float16 &&
-      a_in.shape(-2) >= 32) {
+      pre_caps.cooperative_matrix_f32_8 && pre_caps.cooperative_matrix_f16_8 &&
+      pre_caps.subgroup_size == 32u &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      a_in.shape(-2) >= 32 && b_in.shape(-1) >= 32 &&
+      (b_in.shape(-1) & 1) == 0 && a_in.shape(-1) > 0 &&
+      (a_in.shape(-1) % 8) == 0 &&
+      (!a_transposed || (a_in.shape(-2) & 1) == 0)) {
     b_materialized = materialize_batched_matrix(b_in, name, out, s);
     b_transposed = false;
     b_gap = checked_u32(b_materialized->shape(-1), name, out);
