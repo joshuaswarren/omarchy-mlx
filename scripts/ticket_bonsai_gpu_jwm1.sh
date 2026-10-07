@@ -37,6 +37,12 @@ rm -rf "$TREE/gpu-venv"
 python3 -m venv "$TREE/gpu-venv"
 "$TREE/gpu-venv/bin/pip" install --quiet "$WHEEL" pytest numpy
 
+# The M1 build host has no packaged Honeykrisp ICD; point the backend at
+# the coreglass build the 0.7.31 gates used (mesa-git-sha bbbfa36dce7).
+# Without an override the ICD search finds only the stock asahi ICD, which
+# is not Honeykrisp, and mx reports no Vulkan device.
+export VK_DRIVER_FILES="$HOME/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json"
+[ -f "$VK_DRIVER_FILES" ] || { echo "ERROR: $VK_DRIVER_FILES missing" >&2; exit 2; }
 export OMARCHY_BONSAI_GATE=1
 cd "$REPO"
 "$TREE/gpu-venv/bin/python" -m pytest -rA \
