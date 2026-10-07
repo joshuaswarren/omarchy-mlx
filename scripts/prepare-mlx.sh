@@ -127,6 +127,31 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # reduction past 2^31 elements reads the right rows.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-reduce-large-offsets.patch"
+# Sort/argsort on transposed GPU views picked rows from the wrong input
+# row: collapse_contiguous_dims kept a leading size-1 axis as its own
+# collapsed dim, so a transposed view never collapsed to the contiguous
+# sort kernel and the sort ran over the wrong stride plan (upstream
+# #4366; shared backend/common part).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-sort-collapse-unsorted-axes.patch"
+# vmap of an inverse real FFT to an odd length: the output length is not
+# recoverable from the input shape, so carry an odd_out flag through the
+# FFT primitive's vmap (upstream #4637).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fft-vmap-odd-irfft.patch"
+# CPU compile cache: build under a unique temp name and rename into
+# place, so concurrent processes never load a partly written lib*
+# (upstream #4638).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-cpu-compile-cache-race.patch"
+# Dynamic-slice start arrays: read the indices contiguously (upstream
+# #4599 CPU part; the cuda/metal hunks are out of scope).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-slice-noncontig-start-cpu.patch"
+# clip_grad_norm: sum float16 squares in float32 and cast after scaling,
+# so fp16 overflow zeroes every gradient (upstream #4626).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-clip-grad-norm-fp16.patch"
 # CPU quantized matmul: accumulate the scalar (non-SIMD) full-row and
 # k-outer kernels in float32 instead of the activation dtype. A bfloat16
 # accumulator drifts several percent from the f64 dequant reference at
