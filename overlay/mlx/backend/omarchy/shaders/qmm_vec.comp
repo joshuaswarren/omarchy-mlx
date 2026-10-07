@@ -111,6 +111,11 @@ uint16_t bf16_store(float value) {
     (ROWS_PER_SLOT != 2 || !defined(USE_BF16) || !defined(QMM_VEC_Q4_WORD))
 #error "QMM_VEC_TOKENS builds on the bf16 packed-x multi column"
 #endif
+#if defined(QMM_VEC_BATCH) && \
+    (ROWS_PER_SLOT != 2 || !defined(USE_BF16) || !defined(QMM_VEC_Q4_WORD) || \
+     defined(QMM_VEC_MULTI))
+#error "QMM_VEC_BATCH builds on the bf16 packed-x single-weight column"
+#endif
 #if !defined(USE_SUBGROUP) && SLOTS_PER_GROUP != 8
 #error "the tree reduction assumes 8 slots"
 #endif
@@ -1555,6 +1560,116 @@ void main() {
 #ifndef QMM_VEC_Q4_WORD
 #error "ROWS_PER_SLOT > 1 builds on QMM_VEC_Q4_WORD"
 #endif
+#if defined(QMM_VEC_BATCH)
+// Batch-shared form (MLX_OMARCHY_QMV_BATCH=1): params.shape[0] = B <=
+// QMM_VEC_BATCH x rows against ONE 2D weight (no per-batch weight or param
+// stride). Each block loads its weight words, scales and biases once and runs
+// every row's chain on them. Per row that chain is Q4_ROWS exactly: the same
+// quads in the same order into dot, the same input_sum, the same block
+// epilogue and the same subgroup reduction, so each row matches the
+// batch-outer main below bit for bit while the weight bytes are read once
+// instead of B times.
+#define Q4_ROWS_BATCH_ROW(w, X_WORDS) { \
+  uint x_row = params.lhs_offset + bt * params.matrix_k; \
+  precise float dot[ROWS_PER_SLOT]; \
+  precise float input_sum = 0.0; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    dot[r] = 0.0; \
+  } \
+  X_WORDS \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    precise float bias_term = input_sum * bias_r[r]; \
+    acc[bt][r] += fma(scale_r[r], dot[r], bias_term); \
+  } \
+}
+#define Q4_ROWS_BATCH_PARAMS(w, S, B) \
+  float scale_r[ROWS_PER_SLOT]; \
+  float bias_r[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    scale_r[r] = \
+        LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + (w) / 8u]); \
+    bias_r[r] = \
+        LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + (w) / 8u]); \
+  }
+#define Q4_ROWS_BATCH(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+    for (uint w = lane_in_slot * 2u; w < words_per_row; \
+         w += LANES * 2u) { \
+      uint wa[ROWS_PER_SLOT]; \
+      uint wb[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+        wb[r] = W.values[w_base + row_base[r] * words_per_row + w + 1u]; \
+      } \
+      Q4_ROWS_BATCH_PARAMS(w, S, B) \
+      for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
+        if (bt < batch) { \
+          Q4_ROWS_BATCH_ROW(w, \
+            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+            uvec4 xb = OUTGATE_XWORDS(x_row + w * 8u + 8u); \
+            Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+            Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
+            Q4_QUAD_ROWS(wb[r], xb.x, xb.y) \
+            Q4_QUAD_ROWS(wb[r] >> 16u, xb.z, xb.w)) \
+        } \
+      } \
+    } \
+  } else { \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        wa[r] = W.values[w_base + row_base[r] * words_per_row + w]; \
+      } \
+      Q4_ROWS_BATCH_PARAMS(w, S, B) \
+      for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) { \
+        if (bt < batch) { \
+          Q4_ROWS_BATCH_ROW(w, \
+            uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+            Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+            Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w)) \
+        } \
+      } \
+    } \
+  } \
+}
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint batch = min(params.shape[0], uint(QMM_VEC_BATCH));
+  uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP +
+      column_slot * uint(ROWS_PER_SLOT);
+  uint n = params.matrix_n;
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / 64u;
+  precise float acc[QMM_VEC_BATCH][ROWS_PER_SLOT];
+  for (uint bt = 0u; bt < uint(QMM_VEC_BATCH); ++bt) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc[bt][r] = 0.0;
+    }
+  }
+  if (column_active) {
+    uint w_base = params.rhs_offset;
+    uint s_base = params.aux_offset;
+    uint b_base = params.aux_size;
+    Q4_ROWS_BATCH(input_w, scales, biases)
+  }
+  for (uint bt = 0u; bt < batch; ++bt) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      float total = subgroupAdd(acc[bt][r]);
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + bt * params.matrix_n +
+            column + r] = STORE_VALUE(total);
+      }
+    }
+  }
+}
+#else
 // Multi-row form of the Q4 word main: same batch walk and bases as the
 // single-row main below, each slot owning ROWS_PER_SLOT consecutive
 // columns (see Q4_ROWS).
@@ -1592,6 +1707,7 @@ void main() {
     }
   }
 }
+#endif
 #else
 void main() {
   uint lane = gl_LocalInvocationID.x;
