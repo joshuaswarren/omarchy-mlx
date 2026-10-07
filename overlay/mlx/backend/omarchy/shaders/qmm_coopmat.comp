@@ -229,11 +229,12 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
   uint x_slice = (params.lhs_offset + b * x_batch_rows) / 2u;
   uint x_words_per_row = params.matrix_k / 2u;
 #elif defined(X_F32)
-  // The cast pass writes a fresh f32 buffer: only lhs_offset counts
-  // 2-byte input elements (the f32 view is 4-byte). x_batch_rows is
-  // already in f32 elements - halving the batch term shifts every
-  // batch b >= 1 by matrix_m / 2 rows (odd b wrong, b % 2 == 0
-  // landing on the previous batch, masked by identical batch rows).
+  // The cast pass writes a fresh f32 buffer and the host forces
+  // lhs_offset to 0, so the offset term is 0 in practice - only
+  // lhs_offset would count 2-byte input elements (the f32 view is
+  // 4-byte). x_batch_rows is already in f32 elements: halving the
+  // batch term shifts batch b by matrix_m / 2 rows (odd b wrong, even
+  // b reading batch b/2, masked by identical batch rows).
   uint x_slice = params.lhs_offset / 2u + b * x_batch_rows;
 #else
   // x elements are f16 here, so the slice/row strides are elements.
@@ -486,9 +487,10 @@ void qmm_tile_two(uint tile_row, uint tile_col, uint b) {
   uint bias_slice = params.aux_size + b * params.shape[2];
   uint x_batch_rows = params.matrix_m * params.matrix_k;
   // X_F32 only (see the host gate): the cast pass writes a fresh f32
-  // buffer. Only lhs_offset counts 2-byte input elements; the batch
-  // stride x_batch_rows is already f32 elements and must not be
-  // halved (same defect class qmm_tile's X_F32 branch had).
+  // buffer and the host forces lhs_offset to 0 - only lhs_offset would
+  // count 2-byte input elements. The batch stride x_batch_rows is
+  // already in f32 elements and must not be halved (same defect class
+  // qmm_tile's X_F32 branch had).
   uint x_slice = params.lhs_offset / 2u + b * x_batch_rows;
   uint out_slice = params.output_offset +
       b * params.matrix_m * params.matrix_n;
