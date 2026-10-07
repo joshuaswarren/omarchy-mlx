@@ -15,6 +15,12 @@
 #
 # Idempotent: an already-applied patch is reported and skipped.
 set -euo pipefail
+# The series applies with patch(1). A missing binary used to surface as a
+# misleading "mlx-lm version mismatch" (patch's exit 127 fails every probe).
+if ! command -v patch >/dev/null 2>&1; then
+  echo "error: patch is not installed; install it (e.g. pacman -S patch) and rerun." >&2
+  exit 6
+fi
 VENV="${1:?usage: apply-mlx-lm-patches.sh /path/to/venv}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Layout 1 (installed by install.sh): script and patches/ in $PREFIX.
@@ -87,8 +93,13 @@ apply() {
     echo "error: patch file missing: $ROOT/$SERIES/$name" >&2
     exit 5
   fi
-  if patch --dry-run --directory="$SITE" --strip=1 --forward --fuzz=0 \
-      < "$ROOT/$SERIES/$name" >/dev/null 2>&1; then
+  local forward_rc=0
+  patch --dry-run --directory="$SITE" --strip=1 --forward --fuzz=0 \
+      < "$ROOT/$SERIES/$name" >/dev/null 2>&1 || forward_rc=$?
+  if (( forward_rc == 127 )); then
+    echo "error: patch(1) is not installed; install it (e.g. pacman -S patch) and rerun." >&2
+    exit 6
+  elif (( forward_rc == 0 )); then
     patch --directory="$SITE" --strip=1 --forward --fuzz=0 \
       < "$ROOT/$SERIES/$name"
     echo "applied: $name"
