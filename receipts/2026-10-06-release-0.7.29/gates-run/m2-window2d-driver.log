@@ -1,0 +1,124 @@
+cleared ~/v0.7.29-gates/v0.7.29-assist-9b-card
+cleared ~/v0.7.29-gates/v0.7.29-assist-primer
+cleared ~/v0.7.29-gates/v0.7.29-assist-route-on
+cleared ~/v0.7.29-gates/v0.7.29-assist-stream
+=== g1-clean-install 09:00:25 ===
+BEGIN 2026-10-07T09:00:25Z tag=v0.7.29 boot_id=ab5a7079-2856-4754-8088-b4466eef4c2d uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+FETCH_EXIT 0
+INSTALL_EXIT 0 2026-10-07T09:00:50Z
+LAUNCHER_HELP_EXIT 0
+SERVE_ENTRY_EXIT 0
+PARAKEET_LAUNCHER staged
+PARAKEET_LAUNCHER_HELP_EXIT 0
+GATE1_DONE
+g1-clean-install RC=0 wall=25s
+=== g2-online-9b 09:00:50 ===
+BEGIN 2026-10-07T09:00:50Z tag=v0.7.29 boot_id=ab5a7079-2856-4754-8088-b4466eef4c2d uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+df_before 170G
+hf_bytes_before 0
+OUTBOUND_DENIED False
+SETUP_COMPLETE 31.3s pair=everyday
+CHAT status=complete 3.18s text='Ready'
+COMPARE status=complete 9.08s choice=cat p={'cat': 0.7192, 'elephant': 0.2808} model=laya-mlx
+GATE PASS
+fuser_port=35601 exit=1 output=
+GATE2_ONLINE_EXIT 0
+df_after 170G
+hf_bytes_after 6824248635
+g2-online-9b RC=0 wall=50s
+=== g7a-packaged-icd 09:01:40 ===
+BEGIN 2026-10-07T09:01:40Z tag=v0.7.29 boot_id=ab5a7079-2856-4754-8088-b4466eef4c2d uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+fixture_driver_sha e7631595df
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+    d = json.load(sys.stdin)
+  File "/usr/lib/python3.14/json/__init__.py", line 298, in load
+    return loads(fp.read(),
+        cls=cls, object_hook=object_hook,
+        parse_float=parse_float, parse_int=parse_int,
+        parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)
+  File "/usr/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/json/decoder.py", line 363, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+GATE7A_EXIT 1
+g7a-packaged-icd RC=1 wall=0s
+=== g10-kokoro-primer 09:01:40 ===
+BEGIN 2026-10-07T09:01:40Z tag=v0.7.29 boot_id=ab5a7079-2856-4754-8088-b4466eef4c2d uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+loadavg_before=0.77 0.33 0.18 1/496 111446
+SETUP_COMPLETE 3.2s
+VOICE_SETUP_COMPLETE 32.7s
+PRIMED false after 61.6s (limit 60s)
+CHAT status=complete text='Ready'
+SPEAK_FAILED no audio event
+fuser_port=44533 exit=1 output=
+GATE10_EXIT 1
+g10-kokoro-primer RC=1 wall=105s
+=== g11-card-9b 09:03:25 ===
+BEGIN 2026-10-07T09:03:25Z tag=v0.7.29 boot_id=ab5a7079-2856-4754-8088-b4466eef4c2d uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+OUTBOUND_DENIED False
+SETUP_COMPLETE 2.7s pair=everyday
+CHAT status=complete 3.13s text='Ready'
+CARD status=complete wall_s=9.03 text_len=109 components=1 component_types=['chart'] sse_component_types=['chart'] first_visible_text_s=2.667 first_visible_component_s=8.79 notices=['working', 'generating']
+CARD_CHECK PASS
+GATE PASS
+SSE_EVENT_COUNT 27
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 0.004}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1685, "context_limit": 4096, "output_tokens": 700}, "at_s": 0.009}
+SSE {"type": "text", "data": {"text": "Here"}, "at_s": 2.667}
+SSE {"type": "text", "data": {"text": " is"}, "at_s": 2.704}
+SSE {"type": "text", "data": {"text": " a"}, "at_s": 2.741}
+SSE {"type": "text", "data": {"text": " bar"}, "at_s": 2.778}
+SSE {"type": "text", "data": {"text": " chart"}, "at_s": 2.816}
+SSE {"type": "text", "data": {"text": " comparing"}, "at_s": 2.853}
+SSE {"type": "text", "data": {"text": " the"}, "at_s": 2.89}
+SSE {"type": "text", "data": {"text": " populations"}, "at_s": 2.927}
+SSE {"type": "text", "data": {"text": " of"}, "at_s": 2.964}
+SSE {"type": "text", "data": {"text": " Paris"}, "at_s": 3.001}
+SSE {"type": "text", "data": {"text": ","}, "at_s": 3.039}
+SSE {"type": "text", "data": {"text": " Tokyo"}, "at_s": 3.076}
+SSE {"type": "text", "data": {"text": ","}, "at_s": 3.113}
+SSE {"type": "text", "data": {"text": " and"}, "at_s": 3.15}
+SSE {"type": "text", "data": {"text": " Lagos"}, "at_s": 3.187}
+SSE {"type": "text", "data": {"text": " based"}, "at_s": 3.225}
+SSE {"type": "text", "data": {"text": " on"}, "at_s": 3.262}
+SSE {"type": "text", "data": {"text": " the"}, "at_s": 3.299}
+SSE {"type": "text", "data": {"text": " figures"}, "at_s": 3.336}
+SSE {"type": "text", "data": {"text": " you"}, "at_s": 3.373}
+SSE {"type": "text", "data": {"text": " provided"}, "at_s": 3.41}
+SSE {"type": "text", "data": {"text": "."}, "at_s": 3.447}
+SSE {"type": "text", "data": {"text": "\n\n"}, "at_s": 3.484}
+SSE {"type": "component", "data": {"type": "chart", "kind": "bar", "series": [{"id": "s1", "label": "City Population (Millions)", "unit": "M", "source": "User message: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M", "estimate": false, "values": [{"label": "Paris", "value": 2.1}, {"label": "Tokyo", "value": 13.9}, {"label": "Lagos", "value": 21.0}]}], "id": "1aae0d9ca0da4660b4c86fd73d6edf6d", "turn_id": "4647b570afbd4004856fd21ea74b5d65", "revision": 1}, "at_s": 8.79}
+SSE {"type": "done", "data": {"stopped": false}, "at_s": 8.833}
+fuser_port=42035 exit=1 output=
+GATE11_EXIT 0
+g11-card-9b RC=0 wall=21s
+=== g14-routing 09:03:46 ===
+BEGIN 2026-10-07T09:03:46Z tag=v0.7.29 boot_id=ab5a7079-2856-4754-8088-b4466eef4c2d uname=7.1.12-2-11.38-sep-ARCH host_marker=unset
+== leg A: default (routing expected ON) ==
+SETUP_COMPLETE 0.1s
+STATUS_ROUTING {"enabled": true, "disabled_reason": null, "policy_version": "3", "head_ready": true, "pair_state": "ready", "last_head_ms": null, "last_route": null, "last_reason": null, "last_timed_out": null, "last_at": null}
+ANSWER {"status": "complete", "model": "", "head_ms": "", "text_head": "Coffee"}
+MODEL unrecorded
+ 112500== leg B: MLX_OMARCHY_ROUTING=0 (routing expected OFF) ==
+SETUP_COMPLETE 0.1s
+STATUS_ROUTING {"enabled": false, "disabled_reason": "Automatic routing is disabled by MLX_OMARCHY_ROUTING=0. Unset it to re-enable, or use explicit Compare options.", "policy_version": "3", "head_ready": false, "pair_state": "ready", "last_head_ms": null, "last_route": null, "last_reason": null, "last_timed_out":
+ANSWER {"status": "complete", "model": "", "head_ms": "", "text_head": "Coffee"}
+MODEL unrecorded
+ 112707MODEL_A unrecorded
+MODEL_B unrecorded
+ROUTE_ON PASS (status: routing enabled by default; head ready)
+KILL_SWITCH PASS (status: routing disabled under MLX_OMARCHY_ROUTING=0)
+GATE14_EXIT 0
+g14-routing RC=0 wall=28s
+=== g6-codec 09:04:14 ===
+TAG_TESTS_EXIT 0
+GATE6_EXIT 0
+GATE6_DONE
+g6-codec RC=0 wall=11s
+SUBSET_WINDOW_DONE 09:04:25

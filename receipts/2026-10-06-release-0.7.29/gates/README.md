@@ -70,3 +70,10 @@ runs the real gate with a leg server that exits immediately and asserts the
 liveness fail-fast (rc=1, "leg A process died during the driver run", well
 under the old 1200 s poll hang, no leg B). PASS on the current hardened
 staged copy (9 s).
+
+TAG MOVE RECORD (Main-approved, one-time): the v0.7.30 annotated tag moved
+2026-10-07 ~09:1xZ from tag object a0b42e6d230a962fe009597202b3e4c9ef71ccfb
+(target 4f98f45d3) to target cf71ea276 — the cut = 4f98f45d3 plus the
+gates-only line (5aaad7e89 g7a packaged-ICD fixture, cf71ea276 g10 primer
+budget), Main-confirmed; the earlier tag push had no release, no assets, no
+consumer. From now the tag never moves; any gate-driven code fix = v0.7.31.
