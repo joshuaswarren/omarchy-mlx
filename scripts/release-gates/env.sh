@@ -112,6 +112,30 @@ gate_log() { # gate_log <logfile> <line...> — timestamped line to log AND stdo
   printf '%s\n' "$*" | tee -a "$f"
 }
 
+# gate_log_wheel_identity <logfile> — print the INSTALLED wheel version and
+# (when EXPECTED_WHEEL_SHA256 is set) the version implied by the expected
+# asset, so every gate's log can be tied to a wheel identity. g1 calls this
+# inline with its own MISMATCH/ok decision; other gates log a single line
+# for the receipt.
+gate_log_wheel_identity() {
+  local log="$1"
+  local got want
+  got="$("$GATE_HOME/.local/share/mlx-omarchy/venv/bin/python" -c \
+    'import importlib.metadata as md; print(md.version("mlx_omarchy"))' 2>/dev/null || echo absent)"
+  if [[ -n "${EXPECTED_WHEEL_SHA256:-}" ]]; then
+    local w
+    w="$(gate_wheel 2>/dev/null)"
+    want="$(basename "$w" 2>/dev/null | sed -E 's#^mlx_omarchy-(.+)-cp[0-9]+-cp[0-9]+-linux_aarch64\.whl$#\1#')"
+    if [[ "$got" == "$want" && "$got" != "absent" ]]; then
+      gate_log "$log" "WHEEL_IDENTITY installed=$got (sha=$EXPECTED_WHEEL_SHA256)"
+    else
+      gate_log "$log" "WHEEL_IDENTITY MISMATCH installed=$got expected=$want (sha=$EXPECTED_WHEEL_SHA256)"
+    fi
+  else
+    gate_log "$log" "WHEEL_IDENTITY installed=$got"
+  fi
+}
+
 gate_begin() { # gate_begin <logfile> — identity header every gate logs first
   gate_log "$1" "BEGIN $(date -u +%FT%TZ) tag=$TAG boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) uname=$(uname -r) host_marker=${GATE_HOST_MARKER:-unset}"
 }

@@ -9,6 +9,7 @@ P="$GATE_HOME/.local/share/mlx-omarchy"
 LOG="$LOG_DIR/g8-kokoro.log"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 "$P/venv/bin/pip" install --quiet --no-deps "mlx-audio==0.5.6" >>"$LOG" 2>&1
 "$P/venv/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "scipy>=1.10.0" "tqdm>=4.67.1" >>"$LOG" 2>&1

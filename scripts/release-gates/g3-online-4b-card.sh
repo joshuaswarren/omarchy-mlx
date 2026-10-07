@@ -10,6 +10,7 @@ gate_refuse_existing "$ASSIST_4B"
 mkdir -p "$ASSIST_4B"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 gate_log "$LOG" "df_before $(df -BG "$GATE_ROOT" | tail -1 | awk '{print $4}')"
 
 python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \

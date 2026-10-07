@@ -5,6 +5,7 @@ set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 LOG="$LOG_DIR/g5-laya.log"
 : > "$LOG"
+gate_log_wheel_identity "$LOG"
 
 python3 - "$ASSIST_9B" "$ASSIST_4B" >>"$LOG" 2>&1 <<'PY'
 import json, pathlib, sys
