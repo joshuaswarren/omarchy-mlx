@@ -140,19 +140,36 @@ python3 "$ROOT/scripts/patch-mlx-lm-ssm-maskless.py" "$VENV"
 # now returns None when the host mirror proves the mask all-True; padded
 # batches, prefill and outside writes keep the mask. Needs the ssm patch's
 # `import os`. Kill switch MLX_OMARCHY_KV_MASKLESS=0.
-python3 "$ROOT/scripts/patch-mlx-lm-kv-maskless.py" "$VENV"
-# Batched decode host joins: BatchKVCache.offset is a lazy device array, so the
-# omarchy RoPE gate synchronizes before every RoPE call to bound it. A host
-# mirror tracks every in-class update and the offset is stored as a host-built
-# array with the same values. Kill switch MLX_OMARCHY_KV_HOST_OFFSET=0.
-python3 "$ROOT/scripts/patch-mlx-lm-kv-host-offset.py" "$VENV"
+if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
+  python3 "$ROOT/scripts/patch-mlx-lm-kv-maskless.py" "$VENV"
+  # Batched decode host joins: BatchKVCache.offset is a lazy device array, so the
+  # omarchy RoPE gate synchronizes before every RoPE call to bound it. A host
+  # mirror tracks every in-class update and the offset is stored as a host-built
+  # array with the same values. Kill switch MLX_OMARCHY_KV_HOST_OFFSET=0.
+  python3 "$ROOT/scripts/patch-mlx-lm-kv-host-offset.py" "$VENV"
+else
+  # Both patchers anchor on the mlx-lm 0.32 BatchKVCache API (prepare/finalize
+  # right-padding mirrors, host-list filter); 0.31.3's older BatchKVCache
+  # predates them (its filter even syncs via .min().item()) and upstream
+  # reworked the class in 0.32, so there is nothing to port onto. The served
+  # mlx-lm route is single-concurrency; a batched 0.31.3 user falls back to
+  # the upstream array mask and lazy offset (slower, never wrong). See
+  # docs/kernel-flags.md.
+  echo "kv-maskless/kv-host-offset: 0.32 series only; skipped on $SERIES"
+fi
 apply mlx-lm-greedy-prune.patch
 # Greedy GenerationBatch steps (BatchGenerator / oMLX) can take the pruned
 # greedy head per row and leave logprobs lazy instead of projecting every row
 # onto the full vocabulary. Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): on jw16 it
 # cost B=1 and in-process B=4 time; only oMLX c4 gained. Sampled batches and
 # logits processors always keep the full step. 0.32 line only.
-python3 "$ROOT/scripts/patch-mlx-lm-batch-greedy-head.py" "$VENV"
+if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
+  python3 "$ROOT/scripts/patch-mlx-lm-batch-greedy-head.py" "$VENV"
+else
+  # GenerationBatch does not exist on the 0.31 line (the patcher self-guards
+  # too); the gate keeps the series log honest about what shipped.
+  echo "batch-greedy-head: 0.32 series only (no GenerationBatch); skipped on $SERIES"
+fi
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
 # bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
 # digest unchanged, decode +2.1%). The gated-norm site is NOT shipped: it diverges.
