@@ -58,6 +58,15 @@ struct Counters {
   std::atomic<uint64_t> ane_input_bytes{0};
   std::atomic<uint64_t> ane_output_bytes{0};
   std::atomic<uint64_t> ane_exec_ns{0};
+  // Submits observed "started but not retired" past the stuck interval
+  // (MLX_OMARCHY_SUBMIT_STUCK_S) while a waiter held the timeline. One
+  // increment per warning line; the makes-every-hang-visible-in-minutes
+  // diagnostic (2026-10-08 sushi first-forward park).
+  std::atomic<uint64_t> submit_stuck_warnings{0};
+  // Compute-kernel id of the most recent dispatch (profile_kernel enum),
+  // stored unconditionally at dispatch so a stuck-submit warning can name
+  // the last kernel the GPU was given. -1 before the first dispatch.
+  std::atomic<int64_t> last_dispatched_kernel{-1};
 };
 inline Counters& counters() {
   static Counters counters_;

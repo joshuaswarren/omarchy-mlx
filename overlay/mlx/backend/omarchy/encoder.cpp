@@ -571,6 +571,10 @@ void CommandEncoder::dispatch_compute_pipeline(
     uint32_t group_count_x,
     uint32_t group_count_y,
     uint32_t group_count_z) {
+  // The stuck-submit diagnostic names this kernel (trace.h); one relaxed
+  // store per dispatch, unconditional so a hang report needs no env.
+  trace::counters().last_dispatched_kernel.store(
+      static_cast<int64_t>(profile_kernel), std::memory_order_relaxed);
   if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
     fprintf(stderr,
             "[rtmod] DISPATCH kernel=%d count=%u gx=%u gy=%u gz=%u\n",

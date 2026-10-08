@@ -535,6 +535,58 @@ int run_child_scenario(const std::string& mode) {
       std::_Exit(32);
     }
   }
+  if (mode == "stuck_warning") {
+    // Fresh process: the two env knobs are read lazily on this child's
+    // first wait, so the 1 s stuck interval and the 3 s wall deadline are
+    // what wait_for_timeline_progress caches. The waited value sits above
+    // the newest reservation - nothing will ever signal it - which is the
+    // silent shape the 2026-10-08 sushi first-forward park hid inside
+    // 30-minute tickets: no counter motion, no watchdog STALL line, only
+    // a waiter holding the timeline. The stuck-submit diagnostic must
+    // fire its named warning (submit_stuck_warnings) BEFORE the wall
+    // typed error arrives.
+    ::setenv("MLX_OMARCHY_SUBMIT_STUCK_S", "1", 1);
+    ::setenv("MLX_OMARCHY_MAX_WALL_NS", "3000000000", 1); // 3 s
+    auto& dev = omarchy::device(0);
+    Stream s = new_stream(Device::gpu);
+    auto& enc = omarchy::get_command_encoder(s);
+    auto buf = omarchy::allocator().malloc(4096);
+    auto* p = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+    enc.fill_buffer(p->buffer, 0x2a, 4096);
+    enc.commit();
+    enc.synchronize(); // healthy wait; must not warn (default interval)
+    const uint64_t healthy =
+        trace::counters().submit_stuck_warnings.load();
+    const uint64_t target = dev.completions().last_reserved() + 1000;
+    bool threw = false;
+    try {
+      omarchy::wait_for_timeline_progress(
+          dev.handle(),
+          dev.completions().semaphore(),
+          target,
+          &dev.completions(),
+          {},
+          nullptr);
+    } catch (const std::exception& ex) {
+      threw = std::string(ex.what()).find("[omarchy]") !=
+          std::string::npos;
+    }
+    omarchy::allocator().free(buf);
+    if (!threw) {
+      std::cout << "[child/stuck_warning] wall typed error missing\n";
+      return 31;
+    }
+    const uint64_t warned =
+        omarchy::trace::counters().submit_stuck_warnings.load();
+    if (healthy != 0 || warned < 1) {
+      std::cout << "[child/stuck_warning] warned=" << warned
+                << " healthy=" << healthy << "\n";
+      return 32;
+    }
+    std::cout << "[child/stuck_warning] warning fired before the wall"
+                 " typed error\n";
+    return 0;
+  }
   return 126;
 }
 
@@ -2541,4 +2593,23 @@ TEST_CASE("recycled block is not rewritten by the previous owner in flight") {
   CHECK(std::all_of(words, words + kBytes / sizeof(uint32_t),
                     [](uint32_t word) { return word == kP2; }));
   alloc.free(b);
+}
+
+TEST_CASE("stuck-submit warning fires before the wall typed error") {
+  // 2026-10-08 sushi first-forward park: a submission that starts but
+  // never retires keeps the no-progress watchdog refreshed forever
+  // (has_active_submission), so the only bound was the 30-minute wall
+  // deadline - invisible inside 30-minute gpu-turn tickets. The
+  // stuck-submit diagnostic must emit its warning (and bump the counter)
+  // within its interval, before the wall error; a healthy wait must not
+  // warn. The child is process-isolated because both env knobs are
+  // cached lazily on the first wait of a process.
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  ChildRun run = run_child("stuck_warning", 60);
+  CHECK_FALSE(run.timed_out);
+  CHECK_FALSE(run.signaled);
+  CHECK(run.code == 0);
 }
