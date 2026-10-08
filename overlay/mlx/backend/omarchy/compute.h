@@ -890,7 +890,7 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectF16NtK4S8,
   MatmulDirectF16TnWS8,
   MatmulDirectF32NtK4S8,
-  MatmulDirectF32NnK4S8,
+  MatmulDirectF32NnK4S8, // retired (MatmulGap H36, H37): no row, no shader; the id stays (append-only)
   MatmulDirectF32TnWS8,
   // bf16 direct builds: only with GL_EXT_bfloat16 at build time and a
   // driver with bf16 cooperative matrices (cooperative_matrix_bf16_8).

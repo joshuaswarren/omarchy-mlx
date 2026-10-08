@@ -1,0 +1,9 @@
+{"k": "host", "arm": "PR", "mlx": "0.32.4.dev202610081650+468db3eb", "device": "Apple M1 (G13G B1)"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 4096, "n": 4096, "kdim": 2560, "median_us": 52112.7, "evals": 18, "tflops": 1.648, "sha": "f4cfadd42fbb174f"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 4096, "n": 4096, "kdim": 11008, "median_us": 385733.4, "evals": 5, "tflops": 0.958, "sha": "56f6853a40337e63"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 4096, "n": 9728, "kdim": 2560, "median_us": 122750.9, "evals": 15, "tflops": 1.662, "sha": "5ce2e923e4bd20e3"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 4096, "n": 9728, "kdim": 11008, "median_us": 1728825.3, "evals": 5, "tflops": 0.507, "sha": "efeca2264e7548f2"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 8192, "n": 4096, "kdim": 2560, "median_us": 104309.4, "evals": 17, "tflops": 1.647, "sha": "8b8c794a5efed544"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 8192, "n": 4096, "kdim": 11008, "median_us": 786182.9, "evals": 5, "tflops": 0.94, "sha": "bbf6fffce475012c"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 8192, "n": 9728, "kdim": 2560, "median_us": 244012.5, "evals": 7, "tflops": 1.672, "sha": "1cbb74ae671fe4c2"}
+{"k": "cell", "arm": "PR", "dtype": "f32", "ori": "nn", "m": 8192, "n": 9728, "kdim": 11008, "median_us": 1946176.2, "evals": 5, "tflops": 0.902, "sha": "8ce7bd2775de15ca"}

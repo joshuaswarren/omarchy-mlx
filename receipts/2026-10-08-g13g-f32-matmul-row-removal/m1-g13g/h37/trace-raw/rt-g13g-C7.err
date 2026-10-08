@@ -1,0 +1,433 @@
+@@HOST C7 0.32.4.dev202610081650+468db3eb Apple M1 (G13G B1)
+@@CELL f16 nt 128
+[rtmod] DISPATCH kernel=529 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=3 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=3
+@@END
+@@CELL f16 nt 256
+[rtmod] DISPATCH kernel=529 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=6 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=6
+@@END
+@@CELL f16 nt 512
+[rtmod] DISPATCH kernel=536 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=9 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=9
+@@END
+@@CELL f16 nt 1024
+[rtmod] DISPATCH kernel=536 count=4194304 gx=64 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=12 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=12
+@@END
+@@CELL f16 nt 2048
+[rtmod] DISPATCH kernel=536 count=8388608 gx=64 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=15 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=15
+@@END
+@@CELL f16 nt 4096
+[rtmod] DISPATCH kernel=536 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=19 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=19
+@@END
+@@CELL f16 nn 128
+[rtmod] DISPATCH kernel=528 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=22 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=22
+@@END
+@@CELL f16 nn 256
+[rtmod] DISPATCH kernel=528 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=25 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=25
+@@END
+@@CELL f16 nn 512
+[rtmod] DISPATCH kernel=528 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=28 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=28
+@@END
+@@CELL f16 nn 1024
+[rtmod] DISPATCH kernel=528 count=4194304 gx=64 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=31 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=31
+@@END
+@@CELL f16 nn 2048
+[rtmod] DISPATCH kernel=528 count=8388608 gx=64 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=34 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=34
+@@END
+@@CELL f16 nn 4096
+[rtmod] DISPATCH kernel=528 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=38 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=38
+@@END
+@@CELL f16 tn 128
+[rtmod] DISPATCH kernel=530 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=41 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=41
+@@END
+@@CELL f16 tn 256
+[rtmod] DISPATCH kernel=530 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=44 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=44
+@@END
+@@CELL f16 tn 512
+[rtmod] DISPATCH kernel=530 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=47 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=47
+@@END
+@@CELL f16 tn 1024
+[rtmod] DISPATCH kernel=537 count=4194304 gx=32 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=50 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=50
+@@END
+@@CELL f16 tn 2048
+[rtmod] DISPATCH kernel=537 count=8388608 gx=32 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=53 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=53
+@@END
+@@CELL f16 tn 4096
+[rtmod] DISPATCH kernel=537 count=16777216 gx=32 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c92690 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=57 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c92690 val=1 cnt=0 resv=57
+@@END
+@@CELL bf16 nt 128
+[rtmod] DISPATCH kernel=413 count=524288 gx=128 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=60 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=60
+@@END
+@@CELL bf16 nt 256
+[rtmod] DISPATCH kernel=413 count=1048576 gx=128 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=63 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=63
+@@END
+@@CELL bf16 nt 512
+[rtmod] DISPATCH kernel=413 count=2097152 gx=128 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=66 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=66
+@@END
+@@CELL bf16 nt 1024
+[rtmod] DISPATCH kernel=413 count=4194304 gx=128 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=69 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=69
+@@END
+@@CELL bf16 nt 2048
+[rtmod] DISPATCH kernel=413 count=8388608 gx=128 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=72 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=72
+@@END
+@@CELL bf16 nt 4096
+[rtmod] DISPATCH kernel=542 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=76 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=76
+@@END
+@@CELL bf16 nn 128
+[rtmod] DISPATCH kernel=541 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=79 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=79
+@@END
+@@CELL bf16 nn 256
+[rtmod] DISPATCH kernel=541 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=82 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=82
+@@END
+@@CELL bf16 nn 512
+[rtmod] DISPATCH kernel=541 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=85 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=85
+@@END
+@@CELL bf16 nn 1024
+[rtmod] DISPATCH kernel=541 count=4194304 gx=64 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=88 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=88
+@@END
+@@CELL bf16 nn 2048
+[rtmod] DISPATCH kernel=541 count=8388608 gx=64 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=91 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=91
+@@END
+@@CELL bf16 nn 4096
+[rtmod] DISPATCH kernel=541 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=95 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=95
+@@END
+@@CELL bf16 tn 128
+[rtmod] DISPATCH kernel=543 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=98 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=98
+@@END
+@@CELL bf16 tn 256
+[rtmod] DISPATCH kernel=543 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=101 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=101
+@@END
+@@CELL bf16 tn 512
+[rtmod] DISPATCH kernel=545 count=2097152 gx=32 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=104 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=104
+@@END
+@@CELL bf16 tn 1024
+[rtmod] DISPATCH kernel=545 count=4194304 gx=32 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=107 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=107
+@@END
+@@CELL bf16 tn 2048
+[rtmod] DISPATCH kernel=545 count=8388608 gx=32 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=110 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=110
+@@END
+@@CELL bf16 tn 4096
+[rtmod] DISPATCH kernel=545 count=16777216 gx=32 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=114 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=114
+@@END
+@@CELL f32 nt 128
+[rtmod] DISPATCH kernel=533 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=115 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=115
+@@END
+@@CELL f32 nt 256
+[rtmod] DISPATCH kernel=533 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90bd7560 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=116 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90bd7560 val=1 cnt=0 resv=116
+@@END
+@@CELL f32 nt 512
+[rtmod] DISPATCH kernel=538 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=117 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=117
+@@END
+@@CELL f32 nt 1024
+[rtmod] DISPATCH kernel=538 count=4194304 gx=64 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90bdefb0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=118 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90bdefb0 val=1 cnt=0 resv=118
+@@END
+@@CELL f32 nt 2048
+[rtmod] DISPATCH kernel=538 count=8388608 gx=64 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=119 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=119
+@@END
+@@CELL f32 nt 4096
+[rtmod] DISPATCH kernel=538 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90bdefb0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=120 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90bdefb0 val=1 cnt=0 resv=120
+@@END
+@@CELL f32 nn 128
+[rtmod] DISPATCH kernel=532 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=121 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=121
+@@END
+@@CELL f32 nn 256
+[rtmod] DISPATCH kernel=532 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=122 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=122
+@@END
+@@CELL f32 nn 512
+[rtmod] DISPATCH kernel=532 count=2097152 gx=64 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=123 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=123
+@@END
+@@CELL f32 nn 1024
+[rtmod] DISPATCH kernel=532 count=4194304 gx=64 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=124 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=124
+@@END
+@@CELL f32 nn 2048
+[rtmod] DISPATCH kernel=532 count=8388608 gx=64 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=125 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=125
+@@END
+@@CELL f32 nn 4096
+[rtmod] DISPATCH kernel=532 count=16777216 gx=64 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90c35810 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=126 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90c35810 val=1 cnt=0 resv=126
+@@END
+@@CELL f32 tn 128
+[rtmod] DISPATCH kernel=534 count=524288 gx=64 gy=2 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=127 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=127
+@@END
+@@CELL f32 tn 256
+[rtmod] DISPATCH kernel=534 count=1048576 gx=64 gy=4 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90ec6410 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=128 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90ec6410 val=1 cnt=0 resv=128
+@@END
+@@CELL f32 tn 512
+[rtmod] DISPATCH kernel=540 count=2097152 gx=32 gy=8 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=129 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=129
+@@END
+@@CELL f32 tn 1024
+[rtmod] DISPATCH kernel=540 count=4194304 gx=32 gy=16 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab912d4960 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=130 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab912d4960 val=1 cnt=0 resv=130
+@@END
+@@CELL f32 tn 2048
+[rtmod] DISPATCH kernel=540 count=8388608 gx=32 gy=32 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab90f6c330 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=131 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab90f6c330 val=1 cnt=0 resv=131
+@@END
+@@CELL f32 tn 4096
+[rtmod] DISPATCH kernel=540 count=16777216 gx=32 gy=64 gz=1
+[rtmod] EV-SIGNAL tid=2440741 ev=0xaaab912d4960 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=2440741
+[rtmod] SUBMIT tid=2440741 cv=132 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=2440741 ev=0xaaab912d4960 val=1 cnt=0 resv=132
+@@END

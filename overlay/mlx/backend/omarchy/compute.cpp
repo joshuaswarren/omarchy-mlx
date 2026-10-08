@@ -568,7 +568,6 @@
 #include "matmul_direct_f16_nt_k4s8.h"
 #include "matmul_direct_f16_nt_k2s8.h"
 #include "matmul_direct_f32_nt_k4s8.h"
-#include "matmul_direct_f32_nn_k4s8.h"
 #include "matmul_direct_f32_tn_ws8.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
@@ -1769,8 +1768,6 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_f16_tn_ws8, matmul_direct_f16_tn_ws8_size};
     case ComputeKernel::MatmulDirectF32NtK4S8:
       return {matmul_direct_f32_nt_k4s8, matmul_direct_f32_nt_k4s8_size};
-    case ComputeKernel::MatmulDirectF32NnK4S8:
-      return {matmul_direct_f32_nn_k4s8, matmul_direct_f32_nn_k4s8_size};
     case ComputeKernel::MatmulDirectF32TnWS8:
       return {matmul_direct_f32_tn_ws8, matmul_direct_f32_tn_ws8_size};
 #ifdef MLX_OMARCHY_BF16_DIRECT
