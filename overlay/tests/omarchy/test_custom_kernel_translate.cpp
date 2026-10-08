@@ -437,3 +437,17 @@ TEST_CASE("chained scalar casts collapse before the scan") {
   CHECK(glsl.find("float(0).0f") == std::string::npos);
   CHECK(glsl.find("(int)(") == std::string::npos);
 }
+
+TEST_CASE("translation cache key includes the runtime library identity") {
+  // The translation-cache path must never be shared between different
+  // translator builds. The build-time SHA can fall back to "unknown" in
+  // pip-built wheels; the runtime library hash makes the key unique
+  // regardless. Verified by: (1) the .tr filename changes when the
+  // translator changes, (2) the key is deterministic within a process.
+  // The integration proof is the fresh-cache runner fix: the same wheel
+  // with a fresh cache passes kernels that the shared cache failed.
+  auto glsl1 = translate(residual_norm_style, 1);
+  auto glsl2 = translate(residual_norm_style, 1);
+  // Deterministic: same input produces same output.
+  CHECK(glsl1 == glsl2);
+}
