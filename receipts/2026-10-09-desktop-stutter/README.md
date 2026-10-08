@@ -68,19 +68,49 @@ of est. <= 4.1 ms each. Scheduling only: splitting still happens between
 dispatches, results stay bit-identical, greedy ids digests must match
 across every setting.
 
-Measured on our hosts (2026-10-08, diagnostics wheel at edac8b4c6,
-Qwen2-VL-7B-Instruct-8bit text decode, 2 x 32 tokens per arm, device
-timestamps + GdkFrameClock probe on the logged-in compositor):
+Measured on our hosts (2026-10-08, diagnostics wheel at 9deadb639,
+Qwen3-4B-Instruct-2507-4bit text decode, 2 x 32 tokens per arm, device
+timestamps; greedy digest `76b3b1920637feff` identical in every arm of
+every run):
 
-(FILLED AFTER RUNS)
+**jwm1 (M1, T8103/G13G, 60 Hz panel, the slowest chip in the fleet):**
+
+| arm | submissions | sub p50 ms | sub p95 | sub max | decode tok/s |
+|---|---|---|---|---|---|
+| `BATCH_WORK=0` (off) | 74 | 52.8 | 55.7 | 224.8 | 13.55 |
+| `BATCH_WORK=40000` (old default) | 311 | 14.0 | 26.5 | 33-34.6 | 13.55 |
+| `BATCH_MS=4` (new default) | 459 | 9.4 | 20.4 | 23.1 | 13.34 |
+| `BATCH_MS=2` | 915 | 4.8 | 10.1 | 13.0 | 12.99 |
+| `BATCH_WORK=5000` | 2023 | 2.1 | 3.9 | 9.3 | 12.14 |
+| `BATCH_WORK=2000` | 3124 | 1.4 | 3.7 | 6.3 | 11.92 |
+
+On this chip the estimator's 200 GB/s reference over-reads actual
+bandwidth by ~2.4x, so a 4 ms estimate lands at ~9.4 ms real and a 2 ms
+estimate at ~4.8 ms real - and the estimate error is a constant factor,
+so the budget still ranks and bounds correctly. Decode cost of the new
+default: -1.5%; halving to `BATCH_MS=2` costs -4.1%; the equivalent
+group-count value that buys the same p50 (`BATCH_WORK=2000`) costs
+-12%. (The old-default w40000 numbers reproduce across two runs to
+0.1 ms and 0.00 tok/s.)
 
 ## Frame pacing (the check the reporter asked for)
 
-A GTK4 `GdkFrameClock` probe runs on a real logged-in Hyprland session
-on the M2 Max while decode runs: idle baseline, then one probe per arm
-with frames restricted to the decode windows.
+A GTK4 `GdkFrameClock` probe (same method as the reporter's) runs on the
+logged-in Hyprland session while decode runs, with frames restricted to
+the decode windows.
 
-(FILLED AFTER RUNS)
+**jwm1 (60 Hz panel): no stutter at any setting, including cap off.**
+Every arm delivers steady 60.0 fps, frame p50 = p99 = 16.67 ms, zero
+frames over 33 ms - even with 52-225 ms MLX submissions running under
+the cap-off arm. On this machine the kernel GPU scheduler timeslices
+the compositor's own work between MLX submissions, so there is nothing
+to fix; the reporter's t6000, where plain 78 ms OpenGL submissions
+stutter a 120 Hz desktop, behaves differently. The submission-length
+budget stays the right lever for that machine class, and the frame
+probe on the M2 Max (120 Hz panel) is queued behind the fleet's GPU
+backlog.
+
+(FILLED AFTER M2 RUN)
 
 ## Regression test in CI
 
