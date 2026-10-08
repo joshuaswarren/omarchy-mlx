@@ -846,8 +846,10 @@ void resolve_kernel_templates(
           value == "uint16_t") {
         const auto bfloat_name = name;  // the template parameter name (e.g. T)
         // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
-        replace_all(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
-        replace_all(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
+        // Word-bounded: a longer identifier ending in the template name
+        // (POST in the residual+RMSNorm kernel) must not lose its tail.
+        replace_word(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
+        replace_word(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
         // Declarations `T name = expr;`: the declaration becomes float and
         // the initializing expression rounds like Metal's constructor.
         const std::regex decl_pattern(
@@ -859,8 +861,8 @@ void resolve_kernel_templates(
              ++it) {
           bf16_locals.push_back((*it)[1].str());
         }
-        replace_all(body, bfloat_name + " ", "float ");
-        replace_all(header, bfloat_name + " ", "float ");
+        replace_word(body, bfloat_name + " ", "float ");
+        replace_word(header, bfloat_name + " ", "float ");
         for (const auto& local : bf16_locals) {
           body = std::regex_replace(
               body,

@@ -153,6 +153,8 @@ TEST_CASE("as_type<ushort> on a bf16 value indexes the pattern table") {
       "  T g = gate[i];\n"
       "  T sig = sigtab[as_type<ushort>(g)];\n"
       "  T act = g * sig;\n"
+      "  bool POST = i < 4u;\n"
+      "  if (POST || i > 100u) y[i] = act;\n"
       "  y[i] = act * up[i];\n"
       "}\n"
       "template [[kernel]] decltype(mlxserve_table<bfloat16_t>) "
@@ -172,6 +174,9 @@ TEST_CASE("as_type<ushort> on a bf16 value indexes the pattern table") {
   CHECK(glsl.find("float act = _mlx_bf16_round_trip(g * sig);") !=
         std::string::npos);
   CHECK(glsl.find("float g = _mlx_bf16_round_trip(") != std::string::npos);
+  // Word-bounded substitution: an identifier ending in the template name
+  // (POST) must survive the `T ` -> `float ` rewrite.
+  CHECK(glsl.find("POSfloat") == std::string::npos);
 }
 
 TEST_CASE("body threadgroup declarations become shared without helpers") {
