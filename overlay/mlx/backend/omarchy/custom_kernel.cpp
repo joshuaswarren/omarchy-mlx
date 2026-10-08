@@ -171,10 +171,10 @@ std::string glsl_type(const std::string& msl_type) {
   return found->second;
 }
 
-void translate_as_type(std::string& code);
+void translate_as_type(std::string& code, const std::vector<Parameter>& parameters);
 void translate_c_style_casts(std::string& code);
 
-void translate_types(std::string& code) {
+void translate_types(std::string& code, const std::vector<Parameter>& parameters = {}) {
   // as_type<ushort>(bf16-derived value) is a 16-bit pattern bitcast: the
   // operand's bfloat16 storage pattern, which the bf16 input rewrite has
   // left as _mlx_bf16_to_float(...). Map it to _mlx_float_to_bf16 BEFORE
@@ -289,7 +289,7 @@ void translate_types(std::string& code) {
       code,
       std::regex(R"(static_cast\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\(([^()]*)\))"),
       "$1($2)");
-  translate_as_type(code);
+  translate_as_type(code, parameters);
 }
 
 // Translate C-style scalar casts `(type)expr` into functional `type(expr)`
@@ -711,15 +711,49 @@ void translate_device_pointer_aliases(
   }
 }
 
-void translate_as_type(std::string& code) {
+void translate_as_type(
+    std::string& code,
+    const std::vector<Parameter>& parameters) {
   // as_type<Dest>(src) is a bitcast; src may contain nested parentheses, so
   // match the argument by balanced delimiters rather than a flat regex.
-  static const std::unordered_map<std::string, std::string> bitcasts = {
+  // Float sources map to the floatBitsTo* / uintBitsToFloat reinterprets;
+  // INTEGER sources are value-preserving already, so as_type<uint>(int_expr)
+  // is the identity constructor uint(expr) — floatBitsToUint on an int
+  // reinterprets the FLOAT bits of the converted value and produces garbage
+  // (the llguidance mask kernel masks with mask bits read as int,
+  // 2026-10-08 KernelRecheck).
+  static const std::unordered_map<std::string, std::string> float_bitcasts = {
       {"float", "uintBitsToFloat"},
       {"uint", "floatBitsToUint"},
       {"uint32_t", "floatBitsToUint"},
       {"int", "floatBitsToInt"},
       {"int32_t", "floatBitsToInt"},
+  };
+  static const std::unordered_map<std::string, std::string> int_conversions = {
+      {"float", "float"},
+      {"uint", "uint"},
+      {"uint32_t", "uint"},
+      {"int", "int"},
+      {"int32_t", "int"},
+  };
+  auto param_is_integer = [&parameters](const std::string& expression) {
+    for (const auto& parameter : parameters) {
+      const bool integer_type = parameter.type == "int" ||
+          parameter.type == "int32_t" || parameter.type == "uint" ||
+          parameter.type == "uint32_t" || parameter.type == "int8_t" ||
+          parameter.type == "uint8_t" || parameter.type == "int16_t" ||
+          parameter.type == "uint16_t" || parameter.type == "bool";
+      if (!integer_type) {
+        continue;
+      }
+      // The operand names the parameter directly (mask[...], scalar form).
+      static const std::regex direct(
+          R"((^|[^.\w]))" + regex_escape(parameter.name) + R"((?!\w))");
+      if (std::regex_search(expression, direct)) {
+        return true;
+      }
+    }
+    return false;
   };
   size_t search_from = 0;
   while (true) {
@@ -733,8 +767,8 @@ void translate_as_type(std::string& code) {
       return;
     }
     const auto destination = trim(code.substr(open_angle, close_angle - open_angle));
-    const auto mapped = bitcasts.find(destination);
-    if (mapped == bitcasts.end()) {
+    const auto mapped = float_bitcasts.find(destination);
+    if (mapped == float_bitcasts.end()) {
       throw std::runtime_error("unsupported MSL feature `as_type<" + destination + ">`");
     }
     const auto open_paren = code.find('(', close_angle + 1);
@@ -742,9 +776,23 @@ void translate_as_type(std::string& code) {
       return;
     }
     const auto close_paren = matching_delimiter(code, open_paren, '(', ')');
+    const auto argument =
+        code.substr(open_paren + 1, close_paren - open_paren - 1);
+    std::string replacement;
+    if (destination == "uint" || destination == "uint32_t" ||
+        destination == "int" || destination == "int32_t") {
+      const auto converted = int_conversions.find(destination);
+      if (param_is_integer(argument)) {
+        replacement =
+            converted->second + "(" + argument + ")";
+      } else {
+        replacement = mapped->second + "(" + argument + ")";
+      }
+    } else {
+      replacement = mapped->second + "(" + argument + ")";
+    }
     code.replace(
-        marker, close_paren - marker + 1,
-        mapped->second + "(" + code.substr(open_paren + 1, close_paren - open_paren - 1) + ")");
+        marker, close_paren - marker + 1, replacement);
     search_from = marker;
   }
 }
@@ -1409,7 +1457,7 @@ Translation translate_msl(
   replace_all(body, "simd_shuffle_xor", "subgroupShuffleXor");
   replace_all(body, "simd_shuffle", "subgroupShuffle");
   replace_word(body, "constexpr", "const");
-  translate_types(body);
+  translate_types(body, parameters);
   translate_c_style_casts(body);
   std::string vector_alias_helpers;
   translate_device_pointer_aliases(body, parameters, vector_alias_helpers);

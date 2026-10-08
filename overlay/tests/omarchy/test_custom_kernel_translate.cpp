@@ -372,3 +372,23 @@ TEST_CASE("metal fabs maps to GLSL abs and header casts rewrite") {
   CHECK(glsl.find("abs(float(x))") != std::string::npos);
   CHECK(glsl.find("abs(") != std::string::npos);
 }
+
+TEST_CASE("as_type<uint> on an int buffer read is the identity conversion") {
+  // The llguidance mask: mask is int32; as_type<uint>(int) is an identity
+  // bitcast. floatBitsToUint would reinterpret the FLOAT bits of the
+  // converted value and mask ~half the vocabulary at random.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float* logits [[buffer(0)]],\n"
+      "    const device int* mask [[buffer(1)]],\n"
+      "    device float* out [[buffer(2)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  bool allowed = ((as_type<uint>(mask[i]) >> (i & 31u)) & 1u) != 0u;\n"
+      "  out[i] = allowed ? logits[i] : -INFINITY;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("uint(mask[") == std::string::npos ||
+        glsl.find("floatBitsToUint(mask") == std::string::npos);
+  CHECK(glsl.find("floatBitsToUint(_mlx_arg1[") == std::string::npos);
+  CHECK(glsl.find("&& ") != std::string::npos);
+}
