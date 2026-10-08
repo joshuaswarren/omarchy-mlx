@@ -315,7 +315,7 @@ void translate_types(std::string& code, const std::vector<Parameter>& parameters
 //    `consumed + (next - open)`; the old arithmetic was correct in normal
 //    cases but unsafe when the call-chain scan early-exited at a `)` of an
 //    enclosing form. The new path stores the explicit end and uses it.
-void translate_c_style_casts(std::string& code) {
+int translate_c_style_casts_once(std::string& code) {
   static const std::unordered_map<std::string, std::string> casts = {
       {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"},
       {"int", "int"}, {"uint", "uint"},
@@ -324,6 +324,7 @@ void translate_c_style_casts(std::string& code) {
       {"int64_t", "uint"}, {"uint64_t", "uint"},
       {"size_t", "uint"},
   };
+  int replacements = 0;
   size_t search_from = 0;
   while (search_from < code.size()) {
     const auto open = code.find('(', search_from);
@@ -368,6 +369,20 @@ void translate_c_style_casts(std::string& code) {
           // "unsupported bfloat16 buffer expression" (2026-10-08
           // KernelRecheck).
           end = matching_delimiter(code, end, '[', ']') + 1;
+        } else if (c == '.') {
+          // Float-literal tails: `(bfloat16_t)0.0f` must cast the WHOLE
+          // literal `0.0f`; stopping at the digit gave float(0).0f
+          // (2026-10-08 KernelRecheck, moe_route_fused).
+          ++end;
+        } else if (
+            (c == 'e' || c == 'E' || c == 'p' || c == 'P') &&
+            end + 1 < code.size() &&
+            (std::isalnum(static_cast<unsigned char>(code[end + 1])) ||
+             ((code[end + 1] == '+' || code[end + 1] == '-') &&
+              end + 2 < code.size() &&
+              std::isalnum(static_cast<unsigned char>(code[end + 2]))))) {
+          // hex-float / scientific exponent tails (1e-5, 0x1p-3)
+          end += 2;
         } else {
           break;
         }
@@ -391,12 +406,26 @@ void translate_c_style_casts(std::string& code) {
     const std::string replacement =
         mapped->second + "(" + argument + ")";
     code.replace(open, argument_end - open, replacement);
-    // Resume INSIDE the replacement: `uint((r + (int)(4 - 1)))` leaves a
-    // surviving C-style cast in the constructor argument, and glslc rejects
-    // any constructor whose argument expression contains a C-style cast
-    // with a GL_NV_explicit_typecast error (2026-10-08 KernelRecheck,
-    // moe_route_fused / inkling_sconv_decode).
-    search_from = open + 1;
+    // Skip past the replacement in THIS pass; a cast inside the replacement
+    // (e.g. `(float)((float)cq * (float)sq_)`) is rewritten by the NEXT full
+    // pass — translate_c_style_casts runs to a fixpoint. Resuming inside the
+    // replacement instead produced pathological rewrites like
+    // `float((float))(float(cq) * float(sq_)))`
+    // (2026-10-08 KernelRecheck, kda_glue_pre).
+    search_from = std::min(open + replacement.size(), code.size());
+    ++replacements;
+  }
+  return replacements;
+}
+
+void translate_c_style_casts(std::string& code) {
+  // Run to a fixpoint: each pass rewrites the OUTERMOST remaining casts;
+  // casts inside a rewritten constructor argument are handled by later
+  // passes (bounded — every pass removes at least one `(cast)` token).
+  for (int pass = 0; pass < 16; ++pass) {
+    if (translate_c_style_casts_once(code) == 0) {
+      break;
+    }
   }
 }
 
