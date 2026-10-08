@@ -12,6 +12,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <random>
 #include <vector>
 
@@ -22,6 +24,106 @@
 using namespace mlx::core;
 
 namespace {
+
+// A/B routes for the tiled kernel: MLX_OMARCHY_INT8_NAIVE=1 selects the
+// retired one-thread-per-element shader (shaders/int8_matmul_naive.comp).
+struct NaiveEnv {
+  explicit NaiveEnv(bool naive) {
+    if (naive) {
+      setenv("MLX_OMARCHY_INT8_NAIVE", "1", 1);
+    }
+  }
+  ~NaiveEnv() {
+    unsetenv("MLX_OMARCHY_INT8_NAIVE");
+  }
+};
+
+// bf16 bits after exact widening to float32: bit-identical bf16 outputs give
+// bit-identical float32 words, so a uint32 compare is the exactness bar.
+std::vector<uint32_t> bits_of(array& out) {
+  out.eval();
+  auto wide = astype(out, float32);
+  wide.eval();
+  std::vector<uint32_t> bits(wide.size());
+  std::memcpy(bits.data(), wide.data<float>(), bits.size() * sizeof(uint32_t));
+  return bits;
+}
+
+struct Inputs {
+  std::vector<int8_t> x;
+  std::vector<int8_t> w;
+  std::vector<float> xs;
+  std::vector<float> ws;
+  std::vector<float> bias;
+};
+
+Inputs make_inputs(int rows, int k, int group, int n, bool swiglu, int seed) {
+  Inputs in;
+  const int n_w = swiglu ? 2 * n : n;
+  std::mt19937 rng(seed);
+  std::uniform_int_distribution<int> values(-127, 127);
+  std::uniform_real_distribution<float> scales(0.001f, 0.011f);
+  in.x.resize(rows * k);
+  in.w.resize(n_w * k);
+  for (auto& v : in.x) {
+    v = static_cast<int8_t>(values(rng));
+  }
+  for (auto& v : in.w) {
+    v = static_cast<int8_t>(values(rng));
+  }
+  in.xs.resize(rows * (k / group));
+  in.ws.resize(n_w);
+  in.bias.resize(n_w);
+  for (auto& v : in.xs) {
+    v = scales(rng);
+  }
+  for (auto& v : in.ws) {
+    v = scales(rng);
+  }
+  for (auto& v : in.bias) {
+    v = scales(rng);
+  }
+  return in;
+}
+
+array run_int8(const Inputs& in, int rows, int k, int group, int n,
+               bool swiglu) {
+  auto mx_x = array(in.x.data(), {rows, k}, int8);
+  auto mx_xs = array(in.xs.data(), {rows, k / group}, float32);
+  auto mx_w = array(in.w.data(), {swiglu ? 2 * n : n, k}, int8);
+  auto mx_ws = array(in.ws.data(), {swiglu ? 2 * n : n}, float32);
+  auto mx_bias = array(in.bias.data(), {swiglu ? 2 * n : n}, float32);
+  return fast::int8_matmul(
+      mx_x, mx_xs, mx_w, mx_ws, mx_bias, group, swiglu,
+      new_stream(Device::gpu));
+}
+
+// Bit-compare the tiled kernel against the naive kill-switch kernel. Returns
+// the first mismatching index or -1.
+long bitcompare(const Inputs& in, int rows, int k, int group, int n,
+                bool swiglu, uint32_t* mismatch_got = nullptr,
+                uint32_t* mismatch_ref = nullptr) {
+  auto tiled = run_int8(in, rows, k, group, n, swiglu);
+  auto tiled_bits = bits_of(tiled);
+  NaiveEnv guard(true);
+  auto naive = run_int8(in, rows, k, group, n, swiglu);
+  auto naive_bits = bits_of(naive);
+  if (tiled_bits.size() != naive_bits.size()) {
+    return 0;
+  }
+  for (size_t i = 0; i < tiled_bits.size(); i++) {
+    if (tiled_bits[i] != naive_bits[i]) {
+      if (mismatch_got) {
+        *mismatch_got = tiled_bits[i];
+      }
+      if (mismatch_ref) {
+        *mismatch_ref = naive_bits[i];
+      }
+      return static_cast<long>(i);
+    }
+  }
+  return -1;
+}
 
 // One bfloat16 rounding of the fp64 reference is the bar: the in-group
 // integer dot is exact in int32 and the fp32 group sums match the
@@ -89,6 +191,180 @@ std::vector<double> reference_linear(
 }
 
 } // namespace
+
+TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
+  if (!mlx::core::gpu::is_available()) {
+    MESSAGE("no GPU device; skipping");
+    return;
+  }
+  // Clamp-scale + DiT-scale + extremes: all under the landed default
+  // route, each compared bitwise against the naive kill switch.
+  struct BigShape {
+    int rows, k, group, n;
+    bool swiglu;
+    int seed;
+  };
+  const BigShape big[] = {
+      {3200, 256, 256, 8192, false, 202}, // exceeds the 16,776,960 clamp
+      {128, 5376, 256, 21504, false, 303}, // TensorFold H3
+      {128, 256, 256, 4096, false, 404},   // all +127: per-group = +4,129,024
+      {128, 256, 256, 4096, false, 505},   // all -127: per-group = -4,129,024
+      {128, 256, 256, 4096, true, 606},    // all +127 swiglu
+  };
+  for (const auto& b : big) {
+    auto in = make_inputs(b.rows, b.k, b.group, b.n, b.swiglu, b.seed);
+    if (b.seed >= 404) {
+      // Extremes: fill x and w with the magnitude that maximizes
+      // per-group |sum| so the cooperative matrix's f32 accumulator is
+      // probed at the integer bound that defines the exactness claim.
+      for (auto& v : in.x) {
+        v = (b.seed == 505) ? int8_t(127) : int8_t((b.seed % 2 == 0) ? 127 : -127);
+      }
+      for (auto& v : in.w) {
+        v = int8_t((b.seed % 2 == 0) ? 127 : -127);
+      }
+    }
+    auto cur = run_int8(in, b.rows, b.k, b.group, b.n, b.swiglu);
+    auto cur_bits = bits_of(cur);
+    NaiveEnv guard(true);
+    auto naive = run_int8(in, b.rows, b.k, b.group, b.n, b.swiglu);
+    auto naive_bits = bits_of(naive);
+    long bad = -1;
+    for (size_t i = 0; i < cur_bits.size(); i++) {
+      if (cur_bits[i] != naive_bits[i]) {
+        bad = static_cast<long>(i);
+        MESSAGE("default-vs-naive mismatch at rows=", b.rows, " k=", b.k,
+                " group=", b.group, " n=", b.n, " swiglu=", b.swiglu,
+                " index ", bad);
+        break;
+      }
+    }
+    CHECK(bad < 0);
+  }
+
+
+  // rows/n off-tile, group sizes 64/128/256 plus group 96, mid-tile group
+  // flushes (group 16 with a partial final k-tile), mid-word group flushes
+  // (odd group 17), k_total%4 != 0 (word-view straddle), swiglu, tiny rows.
+  // The host requires group | k, so no K-tail-past-groups*group case exists.
+  struct Shape {
+    int rows, k, group, n;
+    bool swiglu;
+  };
+  const Shape shapes[] = {
+      {35, 512, 64, 37, false},
+      {35, 512, 128, 37, false},
+      {35, 512, 256, 37, false},
+      {17, 576, 96, 15, false},
+      {17, 272, 16, 15, false}, // group < TILE_K, 272 % 32 = 16 partial tile
+      {17, 272, 17, 15, false}, // odd group: flushes inside a word
+      {5, 254, 127, 7, false},  // k_total % 4 != 0, partial final k-tile
+      {35, 512, 64, 37, true},
+      {5, 254, 127, 7, true},
+      {1, 256, 128, 70, false},
+      {3, 256, 64, 70, false},
+      {8, 256, 256, 70, false},
+  };
+  // Bit-compare a candidate route (env-controlled) against the naive
+  // kill-switch kernel for every shape in the matrix. Passes: the landed
+  // default (tiled int32-imad kernel) and the explicit MLX_OMARCHY_INT8_COOPMAT=0
+  // route (same kernel; guards against the default silently changing).
+  // The cooperative-matrix opt-in route (MLX_OMARCHY_INT8_COOPMAT=1) ran
+  // the A/B matrix on G13C (aurora 12.6, boot 55cc1c19) and produced
+  // deterministic bitwise mismatches against the naive kernel, so it is
+  // NOT part of the asserted matrix; run its pass explicitly with
+  // MLX_OMARCHY_INT8_TEST_COOPMAT=1 (fails while the route is wrong).
+  auto run_route = [](const Shape& s, int seed) {
+    auto in = make_inputs(s.rows, s.k, s.group, s.n, s.swiglu, seed);
+    auto cur = run_int8(in, s.rows, s.k, s.group, s.n, s.swiglu);
+    auto cur_bits = bits_of(cur);
+    NaiveEnv guard(true);
+    auto naive = run_int8(in, s.rows, s.k, s.group, s.n, s.swiglu);
+    auto naive_bits = bits_of(naive);
+    if (cur_bits.size() != naive_bits.size()) {
+      return std::pair<long, uint64_t>(0, 0);
+    }
+    for (size_t i = 0; i < cur_bits.size(); i++) {
+      if (cur_bits[i] != naive_bits[i]) {
+        return std::pair<long, uint64_t>(
+            static_cast<long>(i),
+            (static_cast<uint64_t>(cur_bits[i]) << 32) | naive_bits[i]);
+      }
+    }
+    return std::pair<long, uint64_t>(-1, 0);
+  };
+  bool test_coopmat = std::getenv("MLX_OMARCHY_INT8_TEST_COOPMAT") != nullptr;
+  const char* env_routes[] = {nullptr, "0", "1"};
+  const char* env_labels[] = {"default", "tiled", "coopmat"};
+  for (int e = 0; e < 3; e++) {
+    if (e == 2 && !test_coopmat) {
+      MESSAGE("coopmat opt-in route: skipped (not validated on hardware; "
+              "set MLX_OMARCHY_INT8_TEST_COOPMAT=1 to run its A/B matrix)");
+      continue;
+    }
+    if (env_routes[e] != nullptr) {
+      setenv("MLX_OMARCHY_INT8_COOPMAT", env_routes[e], 1);
+    }
+    int seed = 101;
+    for (const auto& s : shapes) {
+      auto result = run_route(s, seed++);
+      if (result.first >= 0) {
+        MESSAGE(env_labels[e], "-vs-naive mismatch at shape rows=", s.rows,
+                " k=", s.k, " group=", s.group, " n=", s.n, " swiglu=",
+                s.swiglu, " index ", result.first, ": ", env_labels[e],
+                " 0x", std::hex, (result.second >> 32), " naive 0x",
+                (result.second & 0xffffffffu), std::dec);
+      }
+      CHECK(result.first < 0);
+    }
+    if (env_routes[e] != nullptr) {
+      unsetenv("MLX_OMARCHY_INT8_COOPMAT");
+    }
+  }
+
+}
+
+TEST_CASE("tiled int8_matmul matches the int64 reference at DiT scale") {
+  if (!mlx::core::gpu::is_available()) {
+    MESSAGE("no GPU device; skipping");
+    return;
+  }
+  const int rows = 128;
+  const int k = 5376;
+  const int group = 256;
+  const int n = 21504;
+  auto in = make_inputs(rows, k, group, n, false, 404);
+  auto out = run_int8(in, rows, k, group, n, false);
+  out.eval();
+  auto wide = astype(out, float32);
+  wide.eval();
+
+  const int groups = k / group;
+  const int k_eff = groups * group;
+  const int sampled_rows[] = {0, 77, 127};
+  for (int m : sampled_rows) {
+    for (int ci = 0; ci < 32; ci++) {
+      const int col = ci * (n / 32);
+      double ref = 0.0;
+      for (int g = 0; g < groups; g++) {
+        long long dot = 0;
+        for (int i = 0; i < group; i++) {
+          dot += static_cast<long long>(
+                     in.x[m * k + g * group + i]) *
+              static_cast<long long>(in.w[col * k + g * group + i]);
+        }
+        ref += static_cast<double>(static_cast<float>(dot)) *
+            static_cast<double>(in.xs[m * groups + g]);
+      }
+      ref = ref * static_cast<double>(in.ws[col]) +
+          static_cast<double>(in.bias[col]);
+      float got = wide.data<float>()[m * n + col];
+      double err = std::abs(static_cast<double>(got) - ref);
+      double scale = std::max(1.0, std::abs(ref));
+      CHECK(err <= scale * 0.004);
+    }
+  }
+}
 
 TEST_CASE("int8_matmul writes every output row past the single-dispatch clamp") {
   // One dispatch spawns at most kMaxComputeGroupCountX * kComputeThreadsPerGroup

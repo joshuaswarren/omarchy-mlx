@@ -4,6 +4,7 @@
 #include "mlx/fast_primitives.h"
 
 #include <fcntl.h>
+#include <dlfcn.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -315,7 +316,7 @@ void translate_types(std::string& code, const std::vector<Parameter>& parameters
 //    `consumed + (next - open)`; the old arithmetic was correct in normal
 //    cases but unsafe when the call-chain scan early-exited at a `)` of an
 //    enclosing form. The new path stores the explicit end and uses it.
-int translate_c_style_casts_scan(std::string& code) {
+int translate_c_style_casts_once(std::string& code) {
   static const std::unordered_map<std::string, std::string> casts = {
       {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"},
       {"int", "int"}, {"uint", "uint"},
@@ -402,25 +403,44 @@ int translate_c_style_casts_scan(std::string& code) {
         open > code.size() || argument_end < open) {
       return replacements;
     }
-    std::string argument = code.substr(next, argument_end - next);
-    // Rewrite casts inside the argument FIRST (recursion depth = cast
-    // nesting depth), then splice. A linear scan that resumes past the
-    // replacement misses inner casts; rescanning the replacement instead
-    // re-matched its own output into garbage like
-    // `float((float))(float(cq) * float(sq_)))`
-    // (2026-10-08 KernelRecheck, kda_glue_pre).
-    translate_c_style_casts_scan(argument);
+    const std::string argument = code.substr(next, argument_end - next);
     const std::string replacement =
         mapped->second + "(" + argument + ")";
     code.replace(open, argument_end - open, replacement);
-    search_from = open + replacement.size();
+    // Skip past the replacement in THIS pass; a cast inside the replacement
+    // (e.g. `(float)((float)cq * (float)sq_)`) is rewritten by the NEXT full
+    // pass — translate_c_style_casts runs to a fixpoint. Resuming inside the
+    // replacement instead produced pathological rewrites like
+    // `float((float))(float(cq) * float(sq_)))`
+    // (2026-10-08 KernelRecheck, kda_glue_pre).
+    search_from = std::min(open + replacement.size(), code.size());
     ++replacements;
   }
   return replacements;
 }
 
 void translate_c_style_casts(std::string& code) {
-  translate_c_style_casts_scan(code);
+  // Collapse chained scalar-family casts first: `(float)((float)x)` and
+  // `(float)(bfloat16_t)(x)` otherwise survive as C-style casts inside
+  // constructor arguments after the scan (glslc: GL_NV_explicit_typecast /
+  // syntax error — kda_glue_pre/post, 2026-10-08 KernelRecheck). Repeat
+  // until stable for chains longer than two.
+  static const std::regex chain(
+      R"(\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\)\s*\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\))");
+  std::string prev;
+  int guard = 0;
+  while (code != prev && guard++ < 32) {
+    prev = code;
+    code = std::regex_replace(code, chain, "(");
+  }
+  // Run to a fixpoint: each pass rewrites the OUTERMOST remaining casts;
+  // casts inside a rewritten constructor argument are handled by later
+  // passes (bounded — every pass removes at least one `(cast)` token).
+  for (int pass = 0; pass < 16; ++pass) {
+    if (translate_c_style_casts_once(code) == 0) {
+      break;
+    }
+  }
 }
 
 // Rewrite local device-pointer aliases into (buffer, offset) indexing.
@@ -2278,22 +2298,72 @@ constexpr char kTranslationCacheVersion[] = "2";
 #endif
 constexpr char kTranslatorSourceSha[] = MLX_OMARCHY_TRANSLATOR_SOURCE_SHA;
 
+// Runtime identity of the loaded translator: the SHA-256 of the shared
+// object that provides this code, plus the build-time source hash when the
+// CMake generation produced one. Pip-built wheels may bake the fallback
+// "unknown" (the CMake shader-generation target is not always on the pip
+// compile's include path); the runtime library hash ensures that two
+// different libmlx builds can NEVER share a translation-cache entry,
+// regardless of what the build scripts injected. One-time cost: a single
+// read of the .so (~50-400 MB, cached by the OS page cache).
+const std::string& translator_runtime_identity() {
+  static const std::string identity = [] {
+    Dl_info info;
+    std::string lib_hash = "no-library";
+    if (dladdr((void*)&translator_runtime_identity, &info) &&
+        info.dli_fname) {
+      std::ifstream so(info.dli_fname, std::ios::binary);
+      auto data = std::string(std::istreambuf_iterator<char>(so),
+                              std::istreambuf_iterator<char>());
+      if (!data.empty()) {
+        lib_hash = omarchy::ane::sha256_hex(
+            reinterpret_cast<const uint8_t*>(data.data()), data.size());
+      }
+    }
+    return kTranslatorSourceSha + std::string(":") + lib_hash;
+  }();
+  return identity;
+}
+
+std::string translation_cache_material(const std::string& identity) {
+  std::string material = "mlx-omarchy custom kernel translation ";
+  material += kTranslationCacheVersion;
+  material += " ";
+  material += translator_runtime_identity();
+  material += "\n";
+  material += identity;
+  return material;
+}
+
 std::string translation_cache_path(const std::string& identity) {
   const std::string root = spirv_cache_root();
   if (root.empty()) {
     return {};
   }
-  std::string material = "mlx-omarchy custom kernel translation ";
-  material += kTranslationCacheVersion;
-  material += " ";
-  material += kTranslatorSourceSha;
-  material += "\n";
-  material += identity;
+  std::string material = translation_cache_material(identity);
   return root + "/" +
       omarchy::ane::sha256_hex(
              reinterpret_cast<const uint8_t*>(material.data()),
              material.size()) +
       ".tr";
+}
+
+// Exposed for testing: the cache-key material must change when the
+// translator identity changes, so two different libmlx builds
+// can never share a .tr cache entry.
+std::string translation_cache_material_for_test(
+    const std::string& identity,
+    const std::string& source_sha,
+    const std::string& library_hash) {
+  std::string material = "mlx-omarchy custom kernel translation ";
+  material += kTranslationCacheVersion;
+  material += " ";
+  material += source_sha;
+  material += ":";
+  material += library_hash;
+  material += "\n";
+  material += identity;
+  return material;
 }
 
 void put_u64(std::string& out, uint64_t value) {
@@ -2628,6 +2698,22 @@ void CustomKernel::eval_gpu(
 // harness/kernel_battery.py links against this when computing the
 // per-kernel table for the parity matrix. Intended for dev-box
 // classification only; the GPU dispatch row stays on the M2 lane.
+
+std::string translation_cache_material_for_test(
+    const std::string& identity,
+    const std::string& source_sha,
+    const std::string& library_hash) {
+  std::string material = "mlx-omarchy custom kernel translation ";
+  material += kTranslationCacheVersion;
+  material += " ";
+  material += source_sha;
+  material += ":";
+  material += library_hash;
+  material += "\n";
+  material += identity;
+  return material;
+}
+
 std::string mlx_omarchy_translate_msl_for_test(
     const std::string& source,
     int grid_x,

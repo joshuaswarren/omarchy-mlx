@@ -1,0 +1,149 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+// Symmetric-int8 matmul with runtime-quantized activations (fast::Int8Matmul).
+// X [rows, K] int8 and W [NOUT, K] int8 arrive as raw byte storage read
+// through a uint word view: 4 int8 values per little-endian word, sign
+// extended by the constant shift chain. XS [rows, K / group] and WS [NOUT]
+// and B [NOUT] are float32. One thread owns one output element:
+//   acc_g   = sum_{k in g} int(x[m,k]) * int(w[r,k])      (exact int32)
+//   total  += float(acc_g) * XS[m,g]                      (float32)
+//   OUT[m,r]= bf16(total * WS[r] + B[r])                  (one bf16 round)
+// With flags bit0 (swiglu) W is the fused [gate; value] fc1 of 2N rows and
+// each thread computes both row dots for its column n < N, then stores
+// bf16(silu(gate_total) * value_total) with no intermediate rounding.
+// Spare push-constant routing: shape[0..2] carry the XS / WS / B element
+// offsets (buffers are bound at 0 like every kernel here; X, W and OUT use
+// the regular lhs_offset / rhs_offset / output_offset fields). shape[3]
+// carries the first output element of this dispatch chunk: one dispatch can
+// hold at most kMaxComputeGroupCountX * 256 threads, so the host splits
+// rows*n > 16,776,960 into logical chunks and offsets every index by it.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InX {
+  uint words[];
+} in_x;
+layout(set = 0, binding = 1, std430) readonly buffer InXS {
+  float values[];
+} in_xs;
+layout(set = 0, binding = 2, std430) readonly buffer InW {
+  uint words[];
+} in_w;
+layout(set = 0, binding = 3, std430) readonly buffer InWS {
+  float values[];
+} in_ws;
+layout(set = 0, binding = 4, std430) readonly buffer InB {
+  float values[];
+} in_b;
+layout(set = 0, binding = 5, std430) buffer OutBF16 {
+  uint16_t values[];
+} out_bf16;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+void main() {
+  if (gl_GlobalInvocationID.x >= params.count) {
+    return;
+  }
+  const uint rows = params.matrix_m;
+  const uint n = params.matrix_n;
+  const uint k_total = params.matrix_k;
+  const uint groups = k_total / params.reduce_size;
+  const bool swiglu = (params.flags & 1u) != 0u;
+
+  const uint linear = params.shape[3] + gl_GlobalInvocationID.x;
+  const uint m = linear / n;
+  const uint col = linear % n;
+
+  // Gate row dot (swiglu) or the single row dot.
+  float gate_total = 0.0f;
+  for (uint g = 0u; g < groups; g++) {
+    int acc = 0;
+    const uint base = g * params.reduce_size;
+    for (uint k = 0u; k < params.reduce_size; k++) {
+      uint k_flat = base + k;
+      uint word = in_x.words[params.lhs_offset / 4u + (m * k_total + k_flat) / 4u];
+      uint byte_index = (m * k_total + k_flat) % 4u;
+      int xv = int((word >> (byte_index * 8u)) & 0xffu);
+      if ((xv & 0x80) != 0) {
+        xv -= 0x100;
+      }
+      uint wword = in_w.words[params.rhs_offset / 4u + (col * k_total + k_flat) / 4u];
+      uint wbyte = (col * k_total + k_flat) % 4u;
+      int wv = int((wword >> (wbyte * 8u)) & 0xffu);
+      if ((wv & 0x80) != 0) {
+        wv -= 0x100;
+      }
+      acc += xv * wv;
+    }
+    gate_total += float(acc) * in_xs.values[params.shape[0] + m * groups + g];
+  }
+
+  float result;
+  if (swiglu) {
+    // Value row dot at row N + col.
+    float value_total = 0.0f;
+    for (uint g = 0u; g < groups; g++) {
+      int acc = 0;
+      const uint base = g * params.reduce_size;
+      for (uint k = 0u; k < params.reduce_size; k++) {
+        uint k_flat = base + k;
+        uint word = in_x.words[params.lhs_offset / 4u + (m * k_total + k_flat) / 4u];
+        uint byte_index = (m * k_total + k_flat) % 4u;
+        int xv = int((word >> (byte_index * 8u)) & 0xffu);
+        if ((xv & 0x80) != 0) {
+          xv -= 0x100;
+        }
+        uint wword = in_w.words[params.rhs_offset / 4u + ((n + col) * k_total + k_flat) / 4u];
+        uint wbyte = ((n + col) * k_total + k_flat) % 4u;
+        int wv = int((wword >> (wbyte * 8u)) & 0xffu);
+        if ((wv & 0x80) != 0) {
+          wv -= 0x100;
+        }
+        acc += xv * wv;
+      }
+      value_total += float(acc) * in_xs.values[params.shape[0] + m * groups + g];
+    }
+    float gate = gate_total * in_ws.values[params.shape[1] + col] +
+        in_b.values[params.shape[2] + col];
+    float value = value_total * in_ws.values[params.shape[1] + n + col] +
+        in_b.values[params.shape[2] + n + col];
+    result = gate / (1.0f + exp(-gate)) * value;
+  } else {
+    result = gate_total * in_ws.values[params.shape[1] + col] +
+        in_b.values[params.shape[2] + col];
+  }
+  out_bf16.values[params.output_offset + linear] = bf16_store(result);
+}

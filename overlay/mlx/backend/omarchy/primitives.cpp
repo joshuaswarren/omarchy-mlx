@@ -12442,6 +12442,27 @@ bool Int8Matmul::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }
 
+// A/B kill switch for the tiled kernel (test_int8_matmul.cpp bit-compares the
+// two routes): MLX_OMARCHY_INT8_NAIVE=1 dispatches the retired
+// one-thread-per-element shader, kept as shaders/int8_matmul_naive.comp.
+bool int8_naive_forced() {
+  const char* env = std::getenv("MLX_OMARCHY_INT8_NAIVE");
+  return env != nullptr && env[0] == '1';
+}
+
+// Cooperative-matrix int8 route (shaders/int8_matmul_coop.comp). Opt-in
+// only, via MLX_OMARCHY_INT8_COOPMAT=1: on the first hardware validation
+// run (G13C, aurora 12.6, kernel 7.1.12-2-12.6-sep-ARCH, boot 55cc1c19)
+// the driver reported cooperative_matrix_f16_8 and the route produced
+// bitwise mismatches against the naive kernel, so it does not ship as
+// the default until it passes the A/B matrix. The tiled int32-imad
+// kernel is the default and is bitwise-identical to the naive kernel on
+// the same boot (29/29 A/B assertions, forced via MLX_OMARCHY_INT8_COOPMAT=0).
+bool int8_coopmat_enabled() {
+  const char* env = std::getenv("MLX_OMARCHY_INT8_COOPMAT");
+  return env != nullptr && env[0] == '1';
+}
+
 // Symmetric-int8 matmul, shaders/int8_matmul.comp. X and W are read as
 // uint word views (4 int8 bytes per word, sign extended in-shader), so the
 // route needs no 8-bit storage capability; accumulation is exact int32 per
@@ -12505,22 +12526,61 @@ void Int8Matmul::eval_gpu(
       binding(wsd),
       binding(bd),
       binding(out)};
-  // The shader indexes one thread per output element with no grid-stride
-  // loop, so one dispatch can cover at most kMaxComputeGroupCountX *
-  // kComputeThreadsPerGroup elements. Chunk rows*n the way LogicalOrBool is
-  // chunked (dispatch_logical_chunked): each dispatch receives its first
-  // output element in shape[3]. For count <= one chunk this is a single
-  // dispatch with shape[3] == 0, identical to the unchunked path.
-  for (uint32_t first = 0; first < params.count;) {
-    const uint32_t end = omarchy::next_logical_chunk_end(first, params.count);
-    params.shape[3] = first;
+  // Tiled path: one 16x16 output tile per workgroup, grid-stride over both
+  // tile axes, so every output is written under any dispatch clamp (the same
+  // contract qmm_tile.comp uses) without host-side chunking. The naive path
+  // keeps the logical-chunk loop: its shader indexes one thread per output
+  // element with no grid-stride loop, so one dispatch covers at most
+  // kMaxComputeGroupCountX * kComputeThreadsPerGroup elements, chunked the way
+  // LogicalOrBool is chunked (dispatch_logical_chunked); each dispatch
+  // receives its first output element in shape[3]. For count <= one chunk this
+  // is a single dispatch with shape[3] == 0, identical to the unchunked path.
+  // The cooperative-matrix path (shaders/int8_matmul_coop.comp) is the
+  // landed default when the device reports cooperative_matrix_f16_8 with
+  // subgroup size 32 and the reduction size is a multiple of 8 (the MMA
+  // flush granularity). f16xf16 -> f32 accumulation is bit-identical to
+  // int32-per-group: |x*w| <= 16129, group sums <= 256*16129 < 2^24.
+  if (int8_naive_forced()) {
+    for (uint32_t first = 0; first < params.count;) {
+      const uint32_t end = omarchy::next_logical_chunk_end(first, params.count);
+      params.shape[3] = first;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::Int8MatmulNaiveOp,
+          bindings,
+          params,
+          omarchy::compute_dispatch_group_count(end - first));
+      first = end;
+    }
+    return;
+  }
+  params.shape[3] = 0u;
+  const auto& caps = encoder.device().capabilities();
+  const bool coopmat_ready =
+      int8_coopmat_enabled() && caps.cooperative_matrix_f16_8 &&
+      caps.subgroup_size == 32u && params.matrix_k >= 8u &&
+      (params.matrix_k % 8u) == 0u &&
+      (params.reduce_size % 8u) == 0u && (params.matrix_k % 4u) == 0u;
+  if (coopmat_ready) {
+    const uint32_t n_groups = (params.matrix_n + 31u) / 32u;
+    const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::Int8MatmulOp,
+        omarchy::ComputeKernel::Int8MatmulCoopOp,
         bindings,
         params,
-        omarchy::compute_dispatch_group_count(end - first));
-    first = end;
+        std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+        1u);
+    return;
   }
+  const uint32_t n_groups = (params.matrix_n + 15u) / 16u;
+  const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
+  encoder.dispatch_compute(
+      omarchy::ComputeKernel::Int8MatmulOp,
+      bindings,
+      params,
+      std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+      std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+      1u);
 }
 
 // Bonsai 1-bit affine decode (M=1), shaders/bonsai_qmv_q1.comp. The

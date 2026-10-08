@@ -925,6 +925,15 @@ enum class ComputeKernel : uint16_t {
   BonsaiQmvWideSubgroupF16R5,
   // G14C f16 a @ b.T row (MatmulGap H29, H31).
   MatmulDirectF16NtK2S8,
+  // Byte-identical copy of the pre-tiled int8_matmul.comp, kept selectable
+  // through MLX_OMARCHY_INT8_NAIVE=1 for A/B bit-compare tests and
+  // benchmarks (test_int8_matmul.cpp). Append-only profile id.
+  Int8MatmulNaiveOp,
+  // Cooperative-matrix f16xf16 -> f32 default (shaders/int8_matmul_coop.comp);
+  // dispatched when the device reports cooperative_matrix_f16_8 and
+  // subgroup size 32, the host falls back to the tiled int32-imad kernel
+  // otherwise. Append-only profile id.
+  Int8MatmulCoopOp,
   Count,
 };
 

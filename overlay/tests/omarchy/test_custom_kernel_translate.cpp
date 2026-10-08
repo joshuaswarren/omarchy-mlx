@@ -24,6 +24,10 @@ std::string mlx_omarchy_translate_msl_for_test(
     int threads_y,
     int threads_z,
     std::size_t output_count);
+std::string translation_cache_material_for_test(
+    const std::string& identity,
+    const std::string& source_sha,
+    const std::string& library_hash);
 }
 
 namespace {
@@ -415,4 +419,74 @@ TEST_CASE("triple-nested casts and float literal cast arguments") {
   CHECK(glsl.find("float(0).0f") == std::string::npos);
   CHECK(glsl.find("0.0f") != std::string::npos);
   CHECK(glsl.find("(int)(") == std::string::npos);
+}
+
+TEST_CASE("chained scalar casts collapse before the scan") {
+  // kda_glue_pre: `(float)((float)cq * (float)sq_)` and
+  // moe_route_fused: `(bfloat16_t)0.0f` — after the collapse no C-style
+  // cast survives inside a constructor argument.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float* v [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  float a = (float)((float)v[c] * (float)v[c]);\n"
+      "  float b = (float)0.0f;\n"
+      "  float w = (float)(3 + (int)(7 - 1));\n"
+      "  y[c] = a + b + w;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(float)") == std::string::npos);
+  CHECK(glsl.find("float((float))") == std::string::npos);
+  CHECK(glsl.find("float(0).0f") == std::string::npos);
+  CHECK(glsl.find("(int)(") == std::string::npos);
+}
+
+
+
+TEST_CASE("translation cache material changes with translator identity") {
+  // Different source_sha or library_hash must produce different cache
+  // materials so two translator builds never share a .tr entry.
+  auto m1 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_aaa", "lib_111");
+  auto m2 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_bbb", "lib_111");
+  auto m3 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_aaa", "lib_222");
+  auto m1b = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_aaa", "lib_111");
+  CHECK(m1 != m2);   // different source sha
+  CHECK(m1 != m3);   // different library hash
+  CHECK(m1 == m1b);  // deterministic
+}
+
+TEST_CASE("translation cache material differs per library identity") {
+  // Two libmlx builds with the same kernel source but different library
+  // hashes must produce different .tr cache entries. The 'unknown'
+  // fallback for the build-time SHA is acceptable ONLY because the
+  // runtime library hash is always unique per build.
+  auto m1 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_aaa", "lib_hash_111");
+  auto m2 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_aaa", "lib_hash_222");
+  auto m3 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_bbb", "lib_hash_111");
+  auto m1b = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_aaa", "lib_hash_111");
+  // Different library hash → different cache material
+  CHECK(m1 != m2);
+  // Different source sha → different cache material
+  CHECK(m1 != m3);
+  // Same inputs → same material (deterministic)
+  CHECK(m1 == m1b);
+}
+
+TEST_CASE("the 'unknown' fallback with different library hashes yields different keys") {
+  // This is the pip-built wheel case: the build-time SHA is "unknown"
+  // but the runtime library hash still distinguishes builds.
+  auto m1 = mlx::core::fast::translation_cache_material_for_test(
+      "kid", "unknown", "lib_hash_aaa");
+  auto m2 = mlx::core::fast::translation_cache_material_for_test(
+      "kid", "unknown", "lib_hash_bbb");
+  CHECK(m1 != m2);
 }

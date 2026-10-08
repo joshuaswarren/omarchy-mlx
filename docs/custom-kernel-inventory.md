@@ -125,3 +125,58 @@ Use the bounded runtime translator for MLX custom kernels. Keep its refusal
 boundary explicit rather than importing a general C++ or MSL frontend. Port a
 kernel only when it falls outside that boundary and has a maintained reference
 implementation.
+
+## Vulkan translation status (final GPU recheck, 2026-10-08)
+
+The bounded MSL subset (see "Current implementation" above) was rechecked
+against all 26 kernels of section (b) on the Vulkan GPU. Each kernel ran in
+its own process against an fp64 or integer-exact NumPy reference, with a
+fresh translation cache per run and NaN/inf/checksum validation of every
+output. The table shows one row per kernel from the final full run on an
+M2 Max (G14C), wheel `0.32.4.dev202610081112+f81a560`; the harness under
+`tools/kernel_recheck` was byte-identical to main `987988a` (md5-verified).
+Float kernels allow at most 2 bf16 ulp at magnitude; integer and bit kernels
+compare exactly (docs/numerics-gate.md rule 1).
+
+| Kernel | Status | Detail | Wheel | Chip | `uname -r` | Date |
+|---|---|---|---|---|---|---|
+| `bitlinear_matmul` | PASS | maxdiff 0.000477148 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `fused_double_norm_rope` | PASS | maxdiff 0.00789396 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `fused_single_norm_rope` | WRONG | 288816/294912 outputs bad, maxdiff 164691 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_banded_mask` | PASS | maxdiff 0.00374421 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_banded_mask_v2` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_sconv_decode` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_moe_route` | PASS | maxdiff 0.00214481 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_moe_down_combine` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `mlx_vlm_llguidance_mask` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `custom_depthwise_conv1d` | PASS | maxdiff 7.13119e-05 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `qk_relu_squared` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `mlx_audio_phonon_unpack_base5_v1` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v2` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v3` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v4` | REFUSED | `as_type<bfloat4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v3_situ` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v4_situ` | REFUSED | `as_type<bfloat4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_glu` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_grad_d` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_grad_x` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `kda_glue_pre` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `kda_glue_post` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `moe_route_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `situ_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `situ_pair_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+
+**Counts: 11 PASS / 1 WRONG / 5 COMPILE-FAIL / 9 REFUSED = 26**
+
+`maxdiff` is the runner's worst relative error against the reference. `0` is
+an exact integer or bit match. `1e+308` is the runner's sentinel for equal
+±inf values, which make the difference undefined. The five COMPILE-FAIL
+kernels need the cast scanner rewritten with a real parser, or MSL
+pre-normalization before the scanner; three regex-based rewrites each failed
+differently, and the failed forms are recorded in
+`receipts/2026-10-08-kernel-recheck/README.md`. No kernel in the final run
+produced a silent wrong value inside tolerance: a wrong value fails the run
+(exit 3). Translated GLSL is cached under `~/.cache/mlx-omarchy/spirv`,
+keyed by the kernel source and the translator hash; the runner uses a fresh
+cache directory per run.

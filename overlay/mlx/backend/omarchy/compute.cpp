@@ -397,6 +397,8 @@
 #include "fast_trio_rope_pair_f16.h"
 #include "fast_trio_swiglu_f16.h"
 #include "int8_matmul.h"
+#include "int8_matmul_naive.h"
+#include "int8_matmul_coop.h"
 #include "matmul_f32_coopmat_bf16.h"
 #include "qmm_tile_f32.h"
 #include "dequant_f32.h"
@@ -1591,6 +1593,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_trio_swiglu_f16, fast_trio_swiglu_f16_size};
     case ComputeKernel::Int8MatmulOp:
       return {int8_matmul, int8_matmul_size};
+    case ComputeKernel::Int8MatmulNaiveOp:
+      return {int8_matmul_naive, int8_matmul_naive_size};
+    case ComputeKernel::Int8MatmulCoopOp:
+      return {int8_matmul_coop, int8_matmul_coop_size};
     case ComputeKernel::QmmVecQ4MultiF32:
       return {qmm_vec_q4_multi_f32, qmm_vec_q4_multi_f32_size};
     case ComputeKernel::QmmVecQ4MultiF16:
