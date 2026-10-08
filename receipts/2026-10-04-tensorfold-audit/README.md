@@ -329,3 +329,12 @@ Honeykrisp REAL GPU — max|err| 0.415 vs one-bf16-round bound 0.560 (fp64
 reference) = PASS. First real-GPU validation of the landed op outside
 lavapipe. Ticket log ~/tfport/m2-h3-ticket.log on the M2. VAE decode deferred
 until the 11 GiB VAE weights ship to the M2 (Lead's disk call).
+
+## Depth bisect (2026-10-08): the Linux Vulkan int8 path is the defect
+Pre-registered rule: first K where rel-L2(linux_native_K, mac_ideal_K) > 1e-2 x the per-K
+bf16 round-trip floor (rel-L2(mac_int8_K, mac_bf16_K)). Result (files in the lab artifacts
+dir, DEPTH-BISECT.md): native diverges from K=1 (ratio 5.745; 2.0-2.6 at K>=2); Linux
+plain-ops == mac ideal at every K (ratios 0.007-0.014). Full depth: native vs plainops
+1.1497 video; plainops vs bf16p2 0.0431. VERDICT: (a) the Vulkan int8 kernel/graph path
+is the defect; the quantization design and the other Linux ops are sound; the version
+difference is not implicated (Linux plain-ops == mac plain-ops ideal).
