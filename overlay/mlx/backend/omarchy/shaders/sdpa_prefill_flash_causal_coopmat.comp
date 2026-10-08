@@ -1,0 +1,260 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_bfloat16 : require
+
+// Causal flash prefill on the 8x8x8 cooperative matrix (bf16 operands, f32 accumulators), head_dim 128. Scores are
+// never written to global memory. MatmulGap H35 (notebook entry 20261008T1255Z).
+//
+// A 128-lane workgroup is four independent subgroups; a subgroup owns ROWP x 8 query rows of one head for the whole
+// key walk and uses no workgroup barrier. Operands come straight from the storage buffers: the Q panels stay in
+// registers as A operands, K tiles load column-major as B operands (K^T), V tiles row-major as B operands. Per key
+// tile of 32 keys:
+//   1. S = Q K^T on the matrix unit, f32 accumulators, scaled by alpha, stored to a per-subgroup shared tile.
+//   2. Lanes (4 per row, 8 keys each): causal mask (masked score = FINITE_MIN, so exp underflows to exact 0), tile
+//      max, online max update, p = exp(s - m) in f32 rounded to bf16 (round to nearest even), running sum over the
+//      rounded p, P written to shared as bf16, the row correction exp(m_old - m_new) written as an 8x8 f32 tile
+//      (corr[r] along row r).
+//   3. O *= correction tile (elementwise multiply of f32 matrices: no dependence on the element-to-row layout).
+//   4. O += P V on the matrix unit.
+// The epilogue divides O by the row sum the same way (a 1/l tile) and stores bf16.
+//
+// Causal skip: a subgroup walks key tiles up to the last key its last row sees (row + k_len - q_len), 8-key blocks
+// past it are skipped. Query rows past q_len shift the subgroup back to q_len - ROWP*8: the overlap recomputes the
+// same rows from the same inputs in the same tile order and stores the same bits (host guarantees q_len >= 64).
+// Host contract: k_len % 8 == 0, row strides and offsets multiples of 8 elements, last dim contiguous, output
+// (B, H, L, 128) contiguous, hd 128.
+//
+// Numerics: the online softmax reassociates the composed softmax, so outputs are not bit-identical to the composed
+// route; the gate is the fp64 error no worse than the composed causal route, plus run-to-run identity (fixed order,
+// no atomics).
+
+#ifndef ROWP
+#define ROWP 1
+#endif
+
+const uint MAT = 8u;
+const uint SGS = 4u;                    // subgroups per workgroup
+const uint HD = 128u;
+const uint DT = HD / MAT;               // 16 column tiles of the output
+const uint KT = 32u;                    // keys per tile
+const uint KB = KT / MAT;               // 4 key blocks per tile
+const uint SG_ROWS = uint(ROWP) * MAT;
+const uint WG_ROWS = SGS * SG_ROWS;
+const float NEGINF = -3.4028234663852886e38;
+
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Query { bfloat16_t q[]; };
+layout(set = 0, binding = 1, std430) readonly buffer Key { bfloat16_t k[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Value { bfloat16_t v[]; };
+layout(set = 0, binding = 3, std430) writeonly buffer OutBuf { bfloat16_t o[]; };
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+  uint q_rowstride;
+  uint k_rowstride;
+  uint v_rowstride;
+  uint o_rowstride;
+  uint q_headstride;
+  uint k_headstride;
+  uint v_headstride;
+  uint q_batchstride;
+  uint k_batchstride;
+  uint v_batchstride;
+} params;
+
+shared float s_s[SGS * uint(ROWP) * MAT * KT];
+shared bfloat16_t s_p[SGS * uint(ROWP) * MAT * KT];
+shared float s_c[SGS * uint(ROWP) * MAT * MAT];
+
+#define ACCT coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>
+
+// Round to bf16 (nearest even); returns the bits.
+uint bf16_bits(float value) {
+  uint bits = floatBitsToUint(value);
+  return (bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16;
+}
+
+void sync_subgroup() {
+  subgroupMemoryBarrierShared();
+  subgroupBarrier();
+}
+
+void main() {
+  const uint sub = gl_SubgroupID;
+  const uint lane = gl_SubgroupInvocationID;
+  const uint head_id = gl_WorkGroupID.y;
+  const uint batch = gl_WorkGroupID.z;
+  const uint repeats = max(params.rhs_gap, 1u);
+  const uint kv_head = head_id / repeats;
+  const uint lq = params.matrix_m;
+  const uint lk = params.matrix_n;
+  const uint koff = lk - lq;
+
+  uint row0 = gl_WorkGroupID.x * WG_ROWS + sub * SG_ROWS;
+  if (row0 >= lq) {
+    return;
+  }
+  row0 = min(row0, lq - SG_ROWS);
+
+  const uint q_base = params.lhs_offset + batch * params.q_batchstride + head_id * params.q_headstride;
+  const uint k_base = params.rhs_offset + batch * params.k_batchstride + kv_head * params.k_headstride;
+  const uint v_base = params.aux_offset + batch * params.v_batchstride + kv_head * params.v_headstride;
+  const uint o_base = params.output_offset + (batch * gl_NumWorkGroups.y + head_id) * lq * HD;
+  const uint qs = params.q_rowstride;
+  const uint ks = params.k_rowstride;
+  const uint vs = params.v_rowstride;
+  const uint os = params.o_rowstride;
+
+  coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> qa[ROWP][DT];
+  for (uint p = 0u; p < uint(ROWP); ++p) {
+    for (uint s = 0u; s < DT; ++s) {
+      coopMatLoad(qa[p][s], q, q_base + (row0 + p * MAT) * qs + s * MAT, qs, gl_CooperativeMatrixLayoutRowMajor);
+    }
+  }
+  ACCT acc[ROWP][DT];
+  for (uint p = 0u; p < uint(ROWP); ++p) {
+    for (uint d = 0u; d < DT; ++d) {
+      acc[p][d] = ACCT(0.0);
+    }
+  }
+
+  const uint r = lane >> 2u;            // this lane's row inside an 8-row panel
+  const uint jb = (lane & 3u) * 8u;     // this lane's first key inside the 32-key tile
+  float m_run[ROWP];
+  float l_run[ROWP];
+  for (uint p = 0u; p < uint(ROWP); ++p) {
+    m_run[p] = NEGINF;
+    l_run[p] = 0.0;
+  }
+  const uint last_key = row0 + SG_ROWS - 1u + koff;
+  const uint tiles = last_key / KT + 1u;
+  const uint sbase = sub * uint(ROWP);
+
+  for (uint t = 0u; t < tiles; ++t) {
+    const uint k0 = t * KT;
+
+    ACCT sc[ROWP][KB];
+    for (uint p = 0u; p < uint(ROWP); ++p) {
+      for (uint c = 0u; c < KB; ++c) {
+        sc[p][c] = ACCT(0.0);
+      }
+    }
+    for (uint c = 0u; c < KB; ++c) {
+      if (k0 + c * MAT <= last_key) {
+        for (uint s = 0u; s < DT; ++s) {
+          coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> kb;
+          coopMatLoad(kb, k, k_base + (k0 + c * MAT) * ks + s * MAT, ks, gl_CooperativeMatrixLayoutColumnMajor);
+          for (uint p = 0u; p < uint(ROWP); ++p) {
+            sc[p][c] = coopMatMulAdd(qa[p][s], kb, sc[p][c]);
+          }
+        }
+      }
+    }
+    for (uint p = 0u; p < uint(ROWP); ++p) {
+      for (uint c = 0u; c < KB; ++c) {
+        ACCT scaled = sc[p][c] * params.alpha;
+        coopMatStore(scaled, s_s, (sbase + p) * (MAT * KT) + c * MAT, KT, gl_CooperativeMatrixLayoutRowMajor);
+      }
+    }
+    sync_subgroup();
+
+    for (uint p = 0u; p < uint(ROWP); ++p) {
+      const uint tile_base = (sbase + p) * (MAT * KT) + r * KT + jb;
+      const uint visible = row0 + p * MAT + r + koff;
+      float s[8];
+      float mt = NEGINF;
+      for (uint e = 0u; e < 8u; ++e) {
+        s[e] = (k0 + jb + e <= visible) ? s_s[tile_base + e] : NEGINF;
+        mt = max(mt, s[e]);
+      }
+      mt = max(mt, subgroupShuffleXor(mt, 1u));
+      mt = max(mt, subgroupShuffleXor(mt, 2u));
+      const float m_new = max(m_run[p], mt);
+      const float corr = (m_new == m_run[p]) ? 1.0 : exp(m_run[p] - m_new);
+      float sum = 0.0;
+      for (uint e = 0u; e < 8u; ++e) {
+        const uint bits = bf16_bits(exp(s[e] - m_new));
+        s_p[tile_base + e] = uintBitsToBFloat16EXT(uint16_t(bits));
+        sum += uintBitsToFloat(bits << 16u);
+      }
+      sum += subgroupShuffleXor(sum, 1u);
+      sum += subgroupShuffleXor(sum, 2u);
+      l_run[p] = l_run[p] * corr + sum;
+      m_run[p] = m_new;
+      const uint cbase = (sbase + p) * (MAT * MAT) + r * MAT + (lane & 3u) * 2u;
+      s_c[cbase] = corr;
+      s_c[cbase + 1u] = corr;
+    }
+    sync_subgroup();
+
+    for (uint p = 0u; p < uint(ROWP); ++p) {
+      ACCT cm;
+      coopMatLoad(cm, s_c, (sbase + p) * (MAT * MAT), MAT, gl_CooperativeMatrixLayoutRowMajor);
+      for (uint d = 0u; d < DT; ++d) {
+        acc[p][d] = acc[p][d] * cm;
+      }
+    }
+    for (uint c = 0u; c < KB; ++c) {
+      if (k0 + c * MAT <= last_key) {
+        coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> pa[ROWP];
+        for (uint p = 0u; p < uint(ROWP); ++p) {
+          coopMatLoad(pa[p], s_p, (sbase + p) * (MAT * KT) + c * MAT, KT, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        for (uint d = 0u; d < DT; ++d) {
+          coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> vb;
+          coopMatLoad(vb, v, v_base + (k0 + c * MAT) * vs + d * MAT, vs, gl_CooperativeMatrixLayoutRowMajor);
+          for (uint p = 0u; p < uint(ROWP); ++p) {
+            acc[p][d] = coopMatMulAdd(pa[p], vb, acc[p][d]);
+          }
+        }
+      }
+    }
+    sync_subgroup();
+  }
+
+  for (uint p = 0u; p < uint(ROWP); ++p) {
+    const float inv_l = 1.0 / l_run[p];
+    const uint cbase = (sbase + p) * (MAT * MAT) + r * MAT + (lane & 3u) * 2u;
+    s_c[cbase] = inv_l;
+    s_c[cbase + 1u] = inv_l;
+  }
+  sync_subgroup();
+  for (uint p = 0u; p < uint(ROWP); ++p) {
+    ACCT cm;
+    coopMatLoad(cm, s_c, (sbase + p) * (MAT * MAT), MAT, gl_CooperativeMatrixLayoutRowMajor);
+    for (uint d = 0u; d < DT; ++d) {
+      ACCT scaled = acc[p][d] * cm;
+      coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator> h =
+          coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>(scaled);
+      coopMatStore(h, o, o_base + (row0 + p * MAT) * os + d * MAT, os, gl_CooperativeMatrixLayoutRowMajor);
+    }
+  }
+}
