@@ -1,0 +1,60 @@
+bf16 nt m=  512 n= 4096 k= 2560 gain%  +73.0  +71.8  +72.0  M spread  0.4%  hash_eq True  M 2.81 TFLOP/s  row
+bf16 nt m=  512 n= 4096 k=11008 gain% +117.2 +118.0 +117.2  M spread  0.5%  hash_eq True  M 2.36 TFLOP/s  row
+bf16 nt m=  512 n= 9728 k= 2560 gain%  +71.2  +72.2  +71.9  M spread  0.5%  hash_eq True  M 3.10 TFLOP/s  row
+bf16 nt m=  512 n= 9728 k=11008 gain% +175.3 +175.0 +174.0  M spread  0.2%  hash_eq True  M 1.99 TFLOP/s  row
+bf16 nt m=  512 n=12288 k= 2560 gain%  +73.2  +73.6  +73.5  M spread  0.2%  hash_eq True  M 3.12 TFLOP/s  row
+bf16 nt m=  512 n=12288 k=11008 gain% +178.0 +179.4 +177.6  M spread  0.3%  hash_eq True  M 1.99 TFLOP/s  row
+bf16 nt m= 2048 n= 4096 k= 2560 gain%  +74.1  +74.6  +74.2  M spread  0.1%  hash_eq True  M 3.18 TFLOP/s  row
+bf16 nt m= 2048 n= 4096 k=11008 gain% +148.1 +148.2 +148.1  M spread  0.2%  hash_eq True  M 2.25 TFLOP/s  row
+bf16 nt m= 2048 n= 9728 k= 2560 gain%  +76.6  +76.3  +76.6  M spread  0.0%  hash_eq True  M 3.23 TFLOP/s  row
+bf16 nt m= 2048 n= 9728 k=11008 gain% +190.8 +191.9 +190.9  M spread  0.4%  hash_eq True  M 1.97 TFLOP/s  row
+bf16 nt m= 2048 n=12288 k= 2560 gain%  +77.3  +77.5  +77.5  M spread  0.0%  hash_eq True  M 3.24 TFLOP/s  row
+bf16 nt m= 2048 n=12288 k=11008 gain% +196.2 +195.9 +197.3  M spread  0.4%  hash_eq True  M 1.93 TFLOP/s  row
+bf16 nt m= 8192 n= 4096 k= 2560 gain%  +76.9  +76.7  +76.8  M spread  0.1%  hash_eq True  M 3.27 TFLOP/s  row
+bf16 nt m= 8192 n= 4096 k=11008 gain% +160.6 +159.0 +159.8  M spread  0.5%  hash_eq True  M 2.20 TFLOP/s  row
+bf16 nt m= 8192 n= 9728 k= 2560 gain%  +78.1  +78.3  +78.5  M spread  0.1%  hash_eq True  M 3.28 TFLOP/s  row
+bf16 nt m= 8192 n= 9728 k=11008 gain% +199.6 +199.1 +199.2  M spread  0.2%  hash_eq True  M 1.93 TFLOP/s  row
+bf16 nt m= 8192 n=12288 k= 2560 gain%  +78.6  +78.7  +78.7  M spread  0.1%  hash_eq True  M 3.28 TFLOP/s  row
+bf16 nt m= 8192 n=12288 k=11008 gain% +203.7 +203.1 +203.7  M spread  0.2%  hash_eq True  M 1.90 TFLOP/s  row
+bf16 tn m= 8192 n= 4096 k= 2560 gain% +192.7 +192.7 +192.5  M spread  0.0%  hash_eq True  M 2.26 TFLOP/s  row
+bf16 tn m= 8192 n= 4096 k=11008 gain% +142.7 +145.0 +139.6  M spread  0.0%  hash_eq True  M 2.26 TFLOP/s  row
+bf16 tn m= 8192 n= 9728 k= 2560 gain% +190.8 +190.6 +191.0  M spread  0.0%  hash_eq True  M 2.26 TFLOP/s  row
+bf16 tn m= 8192 n= 9728 k=11008 gain%  +60.8  +60.0  +61.3  M spread  0.0%  hash_eq True  M 2.26 TFLOP/s  row
+bf16 tn m= 8192 n=12288 k= 2560 gain% +183.5 +183.8 +179.7  M spread  0.0%  hash_eq True  M 2.26 TFLOP/s  row
+bf16 tn m= 8192 n=12288 k=11008 gain%  +47.5  +54.2  +46.6  M spread  4.3%  hash_eq True  M 2.17 TFLOP/s  row
+f16  nt m=  512 n= 4096 k= 2560 gain%   -0.5   -0.5   +0.6  M spread  2.0%  hash_eq True  M 5.38 TFLOP/s  control
+f16  nt m=  512 n= 4096 k=11008 gain%   -0.5   -0.6   -0.4  M spread  0.1%  hash_eq True  M 5.70 TFLOP/s  control
+f16  nt m=  512 n= 9728 k= 2560 gain%   -0.7   +0.2   -1.0  M spread  0.8%  hash_eq True  M 5.91 TFLOP/s  control
+f16  nt m=  512 n= 9728 k=11008 gain%   +0.2   +0.4   +0.2  M spread  0.2%  hash_eq True  M 6.07 TFLOP/s  control
+f16  nt m=  512 n=12288 k= 2560 gain%   -0.3   -0.1   +0.3  M spread  0.5%  hash_eq True  M 6.02 TFLOP/s  control
+f16  nt m=  512 n=12288 k=11008 gain%   -0.1   +0.1   +0.0  M spread  0.2%  hash_eq True  M 6.16 TFLOP/s  control
+f16  nt m= 2048 n= 4096 k= 2560 gain%   +0.5   +0.1   -0.5  M spread  0.8%  hash_eq True  M 6.16 TFLOP/s  control
+f16  nt m= 2048 n= 4096 k=11008 gain%   -0.0   +0.2   -0.3  M spread  0.3%  hash_eq True  M 6.23 TFLOP/s  control
+f16  nt m= 2048 n= 9728 k= 2560 gain%   -0.3   -0.3   -0.1  M spread  0.4%  hash_eq True  M 6.39 TFLOP/s  control
+f16  nt m= 2048 n= 9728 k=11008 gain%   +0.0   -0.1   -0.2  M spread  0.1%  hash_eq True  M 6.37 TFLOP/s  control
+f16  nt m= 2048 n=12288 k= 2560 gain%   -0.2   +0.0   +0.2  M spread  0.1%  hash_eq True  M 6.43 TFLOP/s  control
+f16  nt m= 2048 n=12288 k=11008 gain%   -0.1   +0.2   +0.1  M spread  0.1%  hash_eq True  M 6.39 TFLOP/s  control
+f16  nt m= 8192 n= 4096 k= 2560 gain%   -0.0   +0.1   +0.1  M spread  0.0%  hash_eq True  M 6.49 TFLOP/s  control
+f16  nt m= 8192 n= 4096 k=11008 gain%   -0.0   -0.0   +0.1  M spread  0.1%  hash_eq True  M 6.40 TFLOP/s  control
+f16  nt m= 8192 n= 9728 k= 2560 gain%   +0.0   +0.0   +0.1  M spread  0.1%  hash_eq True  M 6.55 TFLOP/s  control
+f16  nt m= 8192 n= 9728 k=11008 gain%   -0.0   +0.0   +0.1  M spread  0.0%  hash_eq True  M 6.44 TFLOP/s  control
+f16  nt m= 8192 n=12288 k= 2560 gain%   -0.0   +0.0   +0.0  M spread  0.1%  hash_eq True  M 6.57 TFLOP/s  control
+f16  nt m= 8192 n=12288 k=11008 gain%   -0.0   -0.0   +0.0  M spread  0.0%  hash_eq True  M 6.45 TFLOP/s  control
+f16  tn m= 8192 n= 4096 k= 2560 gain%   +0.1   -0.0   -0.2  M spread  0.3%  hash_eq True  M 7.13 TFLOP/s  control
+f16  tn m= 8192 n= 4096 k=11008 gain%   +4.1   +3.9   +4.4  M spread  0.1%  hash_eq True  M 4.42 TFLOP/s  control OUT
+f16  tn m= 8192 n= 9728 k= 2560 gain%  +13.5  +13.7   -0.0  M spread  1.0%  hash_eq True  M 5.86 TFLOP/s  control OUT
+f16  tn m= 8192 n= 9728 k=11008 gain%   +2.8   +3.1   +3.2  M spread  0.5%  hash_eq True  M 2.77 TFLOP/s  control OUT
+f16  tn m= 8192 n=12288 k= 2560 gain%   +5.0   +4.8   +0.6  M spread 16.2%  hash_eq True  M 4.55 TFLOP/s  control VOID
+f16  tn m= 8192 n=12288 k=11008 gain%   -5.0   -5.2   -6.2  M spread  1.1%  hash_eq True  M 2.43 TFLOP/s  control OUT
+f32  nt m= 8192 n= 4096 k= 2560 gain% +149.9 +148.4 +151.9  M spread  1.4%  hash_eq True  M 2.12 TFLOP/s  row
+f32  nt m= 8192 n= 4096 k=11008 gain% +1149.7 +1160.2 +1154.9  M spread  1.0%  hash_eq True  M 0.33 TFLOP/s  row
+f32  nt m= 8192 n= 9728 k= 2560 gain% +155.4 +155.8 +156.2  M spread  0.3%  hash_eq True  M 2.09 TFLOP/s  row
+f32  nt m= 8192 n= 9728 k=11008 gain% +1165.6 +1173.7 +1174.8  M spread  0.5%  hash_eq True  M 0.33 TFLOP/s  row
+f32  nt m= 8192 n=12288 k= 2560 gain% +149.3 +149.0 +149.2  M spread  0.1%  hash_eq True  M 2.13 TFLOP/s  row
+f32  nt m= 8192 n=12288 k=11008 gain% +1156.9 +1154.2 +1154.5  M spread  0.2%  hash_eq True  M 0.33 TFLOP/s  row
+base arm M: row cells 30, control cells 24
+hash mismatches: none
+REGRESSION cells: none
+no-benefit row cells: none
+control cells outside 3 %: [(('f16', 'tn', 8192, 4096, 11008), [4.1, 3.9, 4.4]), (('f16', 'tn', 8192, 9728, 2560), [13.5, 13.7, -0.0]), (('f16', 'tn', 8192, 9728, 11008), [2.8, 3.1, 3.2]), (('f16', 'tn', 8192, 12288, 11008), [-5.0, -5.2, -6.2])]
+void cells: [('f16', 'tn', 8192, 12288, 2560)]

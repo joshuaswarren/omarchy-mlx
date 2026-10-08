@@ -1,0 +1,7 @@
+# device: Apple M2 Max (G14C B1); kernel: 7.1.12-2-12.3-sep-ARCH
+# test binary omarchy_matmul_family_tests sha256 starting fa12f6e9e5bfabe6 (same file on all three chips, hashed after the run); wheel build stamp 0.32.4.dev202610081236+50e40389 (head 50e403893)
+# lines: doctest summary of the family tests, then shape_sweep_cmp.py output (baseline sweep from wheel 0.32.4.dev202610071056+ef70b8cc, main before the rows, against the head wheel, 450 cells)
+[doctest] test cases:       33 |       33 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942874 | 82942874 passed | 0 failed |
+[doctest] Status: SUCCESS!
+cells main 450 cand 450 common 450 mismatches 0

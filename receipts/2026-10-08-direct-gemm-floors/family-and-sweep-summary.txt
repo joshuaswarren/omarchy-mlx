@@ -1,0 +1,19 @@
+PR head 582c1a947 (main c26e44df5 plus the route-row change): omarchy_matmul_family_tests and the 450-cell shape sweep
+
+== M1 (G13G)
+[doctest] test cases:       33 |       33 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942852 | 82942852 passed | 0 failed |
+[doctest] Status: SUCCESS!
+cells main 450 cand 450 common 450 mismatches 0
+
+== M1 Max (G13C)
+[doctest] test cases:       33 |       33 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942852 | 82942852 passed | 0 failed |
+[doctest] Status: SUCCESS!
+cells main 450 cand 450 common 450 mismatches 0
+
+== M2 Max (G14C)
+[doctest] test cases:       33 |       33 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942852 | 82942852 passed | 0 failed |
+[doctest] Status: SUCCESS!
+cells main 450 cand 450 common 450 mismatches 0

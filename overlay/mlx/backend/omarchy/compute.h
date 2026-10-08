@@ -923,6 +923,8 @@ enum class ComputeKernel : uint16_t {
   BonsaiQmvWideSubgroupF16R3,
   BonsaiQmvWideSubgroupF16R4,
   BonsaiQmvWideSubgroupF16R5,
+  // G14C f16 a @ b.T row (MatmulGap H29, H31).
+  MatmulDirectF16NtK2S8,
   Count,
 };
 

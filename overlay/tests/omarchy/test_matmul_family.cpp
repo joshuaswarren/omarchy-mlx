@@ -717,14 +717,71 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
         ComputeKernel::MatmulDirectF32TnWS8);
   CHECK(kernel("Apple M1 Max (G13C C0)", float32, false, false) == shipped.kernel);
   CHECK(kernel("Apple M1 Max (G13C C0)", float32, true, false) == shipped.kernel);
-  // Device name the M2 Max reports (receipts/2026-10-04-hwprobe-device-info).
+  // M2 Max (device name per receipts/2026-10-04-hwprobe-device-info): three
+  // rows (MatmulGap H20); every other cell keeps the shipped route.
+  constexpr std::string_view g14c = "Apple M2 Max (G14C B1)";
+  CHECK(kernel(g14c, bfloat16, true, false) ==
+        ComputeKernel::MatmulDirectBF16TnWS8);
+  CHECK(kernel(g14c, bfloat16, false, true) ==
+        ComputeKernel::MatmulDirectBF16NtK4S8);
+  CHECK(kernel(g14c, float16, false, true) ==
+        ComputeKernel::MatmulDirectF16NtK2S8);
   for (Dtype dtype : {float16, bfloat16, float32}) {
     for (bool a_t : {false, true}) {
       for (bool b_t : {false, true}) {
-        CHECK(kernel("Apple M2 Max (G14C B1)", dtype, a_t, b_t) == shipped.kernel);
+        bool row = (dtype == bfloat16 && a_t != b_t) ||
+            (dtype == float16 && !a_t && b_t);
+        if (!row) {
+          CHECK(kernel(g14c, dtype, a_t, b_t) == shipped.kernel);
+        }
       }
     }
   }
+}
+
+TEST_CASE("direct matmul route: every row starts at its measured m floor") {
+  using omarchy::ComputeKernel;
+  const omarchy::DirectMatmulRoute shipped{ComputeKernel::Count, 0u};
+  struct Floor {
+    std::string_view device;
+    Dtype dtype;
+    bool a_t;
+    bool b_t;
+    uint32_t m;
+    ComputeKernel kernel;
+  };
+  const Floor floors[] = {
+      {"Apple M1 (G13G B1)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M1 (G13G B1)", float16, true, false, 1024u, ComputeKernel::MatmulDirectF16TnWS8},
+      {"Apple M1 (G13G B1)", bfloat16, true, false, 512u, ComputeKernel::MatmulDirectBF16TnWS8},
+      {"Apple M1 (G13G B1)", bfloat16, false, true, 4096u, ComputeKernel::MatmulDirectBF16Nt},
+      {"Apple M1 (G13G B1)", float32, false, true, 512u, ComputeKernel::MatmulDirectF32NtK4S8},
+      {"Apple M1 (G13G B1)", float32, false, false, 4096u, ComputeKernel::MatmulDirectF32NnK4S8},
+      {"Apple M1 (G13G B1)", float32, true, false, 512u, ComputeKernel::MatmulDirectF32TnWS8},
+      {"Apple M1 Max (G13C C0)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M1 Max (G13C C0)", float16, true, false, 4096u, ComputeKernel::MatmulDirectF16TnWS8},
+      {"Apple M1 Max (G13C C0)", bfloat16, true, false, 4096u, ComputeKernel::MatmulDirectBF16TnWS8},
+      {"Apple M1 Max (G13C C0)", bfloat16, false, true, 512u, ComputeKernel::MatmulDirectBF16NtK4S8},
+      {"Apple M1 Max (G13C C0)", float32, false, true, 4096u, ComputeKernel::MatmulDirectF32NtK4S8},
+      {"Apple M2 Max (G14C B1)", float16, false, true, 1024u, ComputeKernel::MatmulDirectF16NtK2S8},
+      {"Apple M2 Max (G14C B1)", bfloat16, false, true, 512u, ComputeKernel::MatmulDirectBF16NtK4S8},
+      {"Apple M2 Max (G14C B1)", bfloat16, true, false, 4096u, ComputeKernel::MatmulDirectBF16TnWS8},
+  };
+  for (const auto& f : floors) {
+    CAPTURE(f.device);
+    CAPTURE(f.m);
+    auto route = [&](uint32_t m, uint32_t n) {
+      return omarchy::select_direct_matmul_route(
+          omarchy::kDirectMatmulRows, f.device, f.dtype, f.a_t, f.b_t, m, n,
+          shipped).kernel;
+    };
+    CHECK(route(f.m, 4096u) == f.kernel);
+    CHECK(route(f.m * 2u, 4096u) == f.kernel);
+    CHECK(route(f.m - 1u, 4096u) == shipped.kernel);
+    CHECK(route(f.m, 4095u) == shipped.kernel);
+  }
+  // One floors entry per table row: a row added without its entry fails here.
+  CHECK_EQ(std::size(floors), omarchy::kDirectMatmulRows.size());
 }
 
 TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
@@ -759,10 +816,18 @@ TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every o
     dtypes.push_back(bfloat16);
   }
   for (Dtype dtype : dtypes) {
+    // The first five shapes are small. The last seven are above the route-row
+    // floors with n = 4096 and m not a multiple of 64 (520, 1030, 2054, 4100), so
+    // on a chip with rows the row kernels run their partial row tiles; k = 32
+    // keeps the slice reference cheap. Partial column tiles (n = 4098) are
+    // covered by the shape sweep in the receipt, not here.
     for (const Case& c :
          {Case{142, 88, 200, false, false}, Case{142, 40, 72, false, true},
           Case{142, 64, 72, true, false}, Case{142, 16, 34, true, true},
-          Case{32, 8, 32, false, false}}) {
+          Case{32, 8, 32, false, false}, Case{520, 32, 4096, false, true},
+          Case{520, 32, 4096, true, false}, Case{520, 32, 4096, false, false},
+          Case{1030, 32, 4096, false, true}, Case{1030, 32, 4096, true, false},
+          Case{2054, 32, 4096, false, false}, Case{4100, 32, 4096, true, false}}) {
       std::vector<float> av(2 * c.m * c.k);
       std::vector<float> bv(2 * c.k * c.n);
       for (size_t i = 0; i < av.size(); ++i) {
