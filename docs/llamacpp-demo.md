@@ -20,12 +20,25 @@ Two drivers appear in this demo:
 
 - An Omarchy Mac, M1 or newer.
 - About 12 GB of free disk space and internet access.
-- Run `omarchy update` once before installing packages; it refreshes the
-  database and avoids the 404s a stale mirror causes. The update itself
-  needs about 10 GB free.
-- Build tools (one-time). The script checks for these and prints the
-  exact `pacman` line to run if anything is missing. Do not skip
-  `omarchy update` first: a stale mirror 404s these packages.
+
+## Step 0: update the system (required)
+
+```bash
+omarchy update
+```
+
+This is not optional. It refreshes the package database (a stale mirror 404s
+the build packages) and brings every installed package to the same release.
+Installing the build tools on an out-of-date system is a partial upgrade: for
+example `llvm` jumps to version 23 while `llvm-libs` stays at 22, and the
+driver build then fails with a missing `libLLVM.so.23.1`. The update needs
+about 10 GB free. The script in Step 1 checks for pending updates and
+refuses to run until the system is current.
+
+Build tools (one-time). Step 1 checks for them and prints the exact `pacman`
+line to run if anything is missing. Run that line only after Step 0 and only
+when the script asks for it; it is not needed on a machine that already has
+the tools:
 
 ```bash
 sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers

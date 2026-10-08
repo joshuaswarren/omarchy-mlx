@@ -11,11 +11,33 @@ LLAMA_COMMIT=65840ed                # receipt-pinned llama.cpp
 MODEL_URL=https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-IQ2_M.gguf
 MODEL_FILE=Qwen_Qwen3.5-9B-IQ2_M.gguf
 
+# The system must be fully updated first. Installing build packages on an out-of-date system is a partial
+# upgrade (for example llvm 23 next to llvm-libs 22 breaks llvm-spirv and the driver build).
+rc=0
+if command -v checkupdates >/dev/null 2>&1; then
+  pending=$(checkupdates 2>/dev/null) || rc=$?   # 0 = updates pending, 2 = none, anything else = could not check
+  case $rc in
+    2) ;;
+    0) echo "the system is not fully updated ($(printf '%s\n' "$pending" | wc -l) packages pending). Update first, then rerun this script:"
+       echo "  omarchy update"
+       exit 1 ;;
+    *) echo "could not check for pending updates (network or mirror problem). Run this first, then rerun this script:"
+       echo "  omarchy update"
+       exit 1 ;;
+  esac
+else
+  pending=$(pacman -Qu 2>/dev/null || true)
+  if [ -n "$pending" ]; then
+    echo "the system is not fully updated ($(printf '%s\n' "$pending" | wc -l) packages pending). Update first, then rerun this script:"
+    echo "  omarchy update"
+    exit 1
+  fi
+fi
+
 command -v meson ninja cmake make bison flex glslc git pkg-config >/dev/null 2>&1 && \
 python3 -c 'import mako' >/dev/null 2>&1 && \
 pacman -Qq expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers >/dev/null 2>&1 || {
-  echo "missing build dependencies. Run the first-time setup from the doc:"
-  echo "  sudo omarchy update   # refresh the package database, needs ~10 GiB free"
+  echo "missing build dependencies. The system is up to date, so install them now:"
   echo "  sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers"
   exit 1
 }
