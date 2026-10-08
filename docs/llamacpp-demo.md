@@ -75,9 +75,13 @@ llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -
 Then ours:
 
 ```bash
-env VK_DRIVER_FILES="$PWD/mesa-install/share/vulkan/icd.d/"*.json \
-  llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8
+bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8
 ```
+
+The wrapper first proves the driver actually loaded (it runs `vulkaninfo`
+and looks for a Honeykrisp device). If the driver failed to load, llama.cpp
+would silently fall back to the CPU and print meaningless numbers; the
+wrapper refuses instead and prints what to check.
 
 Each run prints a table with prompt processing (pp512) and generation (tg64)
 tokens per second. Compare the `t/s` columns.
@@ -127,13 +131,12 @@ the same memory pressure.
 One command, and the audience watches tokens appear:
 
 ```bash
-env VK_DRIVER_FILES="$PWD/mesa-install/share/vulkan/icd.d/"*.json \
-  llama-build/bin/llama-cli -m Qwen_Qwen3.5-9B-IQ2_M.gguf -ngl 99 -t 8 --temp 0.7
+bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-cli -m Qwen_Qwen3.5-9B-IQ2_M.gguf -ngl 99 -t 8 --temp 0.7
 ```
 
 That opens an interactive chat running on the GPU (measured 4.3 tok/s
-generating on the M1 above). For contrast, open a second terminal and run the
-same command without the `env` line to land on the system driver.
+generating on the M1 above). For contrast, run the same command directly
+without the wrapper to land on the system driver.
 
 ## Why the new driver is faster
 
@@ -155,3 +158,8 @@ change is most of the decode gap in the table above.
   from source is the supported path for now.
 - The `VK_DRIVER_FILES` variable only affects commands where you set it.
   Close the terminal and your system behaves exactly as before.
+- If the wrapper refuses with "the Honeykrisp driver did not load", the
+  usual cause is system libraries newer than the ones the driver was built
+  against (a partial upgrade, or an update after the build). Delete
+  `llamacpp-demo/mesa-build` and `llamacpp-demo/mesa-install`, then rerun
+  `bash scripts/llamacpp-demo.sh` to rebuild against the current system.
