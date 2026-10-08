@@ -1166,7 +1166,11 @@ void translate_bfloat_parameter(
     }
     // Bare (non-indexed) uses — float(NAME) of a whole bf16 buffer — have
     // no GLSL meaning either; the scalar form (&) is the supported route.
-    if (std::regex_search(body, std::regex("\\b" + escaped + "\\b"))) {
+    // Swizzle positions do not count: `.x` on a uint3 vector is not the
+    // buffer, and the inkling sconv decode kernel names its bf16 buffer `x`
+    // while indexing `thread_position_in_grid.x` (2026-10-08 KernelRecheck).
+    if (std::regex_search(
+            body, std::regex("(^|[^.\\w])" + escaped + "(?!\\w)"))) {
       throw std::runtime_error("unsupported bfloat16 buffer expression");
     }
   }
