@@ -29,7 +29,7 @@ tested, with the receipt or open commit behind every claim:
 | [mlx-serve](https://github.com/davidtai/mlx-serve) | Works | Runs with our Linux build fixes ([PR #1](https://github.com/davidtai/mlx-serve/pull/1)). Output is byte-identical to mlx-lm with the fused kernels on. |
 | [TensorFold](https://github.com/ashhart/TensorFold) | In progress | The int8 path is fixed; the correctness run is still going. Guide: [docs/tensorfold.md](docs/tensorfold.md). |
 | [sushi](https://github.com/beamivalice/sushi) | In progress | The Linux port lives on [our fork branch](https://github.com/joshuaswarren/sushi/tree/omarchy-linux). The first full run waits on a driver fix. |
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan) | Works | With the Honeykrisp Mesa patches under review ([omacom/mesa#6](https://github.com/omacom/mesa/pull/6) and the layers under it), decode on an M1 Max went from 0.95 to 12.8 tok/s on Llama-3.1-8B IQ2_M (13.5x), and the IQ mat-vec kernels run 5 to 24 times faster. |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan) | Works | With the Honeykrisp patches under review ([omacom/mesa#6](https://github.com/omacom/mesa/pull/6) and the layers under it), Qwen3-30B-A3B on an M1 Max went from 1.5 to 27.4 tok/s decode (about 18x) and from 55 to 237 tok/s prompt processing, on the same llama.cpp binary ([receipt](receipts/2026-10-08-llamacpp-mesa-stack/README.md)). On Llama-3.1-8B IQ2_M, decode went from 0.95 to 12.8 tok/s (13.5x). |
 | [MCDMA](https://github.com/ashhart/MCDMA) | Works | Software RDMA over Soft-RoCE between an M1 and an M2 Max MacBook under Linux. Upstream change: [ashhart/MCDMA#16](https://github.com/ashhart/MCDMA/pull/16). |
 
 ## What you get
