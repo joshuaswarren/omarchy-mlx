@@ -511,72 +511,69 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
       {8, 8, 1024, 1024},
       {2, 1, 2048, 2048},
   };
-  for (const char* rowp : {"1", "2"}) {
-    setenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH_ROWP", rowp, 1);
-    for (bool outlier : {false, true}) {
-      for (const auto& c : cases) {
-        auto make = outlier ? make_bf16_outlier : make_bf16;
-        array q = make({1, c.heads, c.lq, kHd}, 101 + c.lq, stream);
-        array k = make({1, c.kv_heads, c.lk, kHd}, 202 + c.lk, stream);
-        array v = make_bf16({1, c.kv_heads, c.lk, kHd}, 303 + c.lk, stream);
-        // The fp64 reference wants matching head counts: widen k and v.
-        array kw = c.kv_heads == c.heads
-            ? k
-            : repeat(k, c.heads / c.kv_heads, 1, stream);
-        array vw = c.kv_heads == c.heads
-            ? v
-            : repeat(v, c.heads / c.kv_heads, 1, stream);
-        auto ref = fp64_reference(q, kw, vw, stream, true);
+  for (bool outlier : {false, true}) {
+    for (const auto& c : cases) {
+      auto make = outlier ? make_bf16_outlier : make_bf16;
+      array q = make({1, c.heads, c.lq, kHd}, 101 + c.lq, stream);
+      array k = make({1, c.kv_heads, c.lk, kHd}, 202 + c.lk, stream);
+      array v = make_bf16({1, c.kv_heads, c.lk, kHd}, 303 + c.lk, stream);
+      // The fp64 reference wants matching head counts: widen k and v.
+      array kw = c.kv_heads == c.heads
+          ? k
+          : repeat(k, c.heads / c.kv_heads, 1, stream);
+      array vw = c.kv_heads == c.heads
+          ? v
+          : repeat(v, c.heads / c.kv_heads, 1, stream);
+      auto ref = fp64_reference(q, kw, vw, stream, true);
 
-        unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
-        const uint64_t composed_dispatches = dispatches_for(
-            [&] { return sdpa_causal(q, k, v, stream); }, stream);
-        std::vector<float> composed =
-            flat(sdpa_causal(q, k, v, stream), stream);
-        setenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH", "1", 1);
-        const uint64_t flash_dispatches = dispatches_for(
-            [&] { return sdpa_causal(q, k, v, stream); }, stream);
-        std::vector<float> run1 = flat(sdpa_causal(q, k, v, stream), stream);
-        std::vector<float> run2 = flat(sdpa_causal(q, k, v, stream), stream);
-        std::vector<float> run3 = flat(sdpa_causal(q, k, v, stream), stream);
-        unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+      unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+      const uint64_t composed_dispatches = dispatches_for(
+          [&] { return sdpa_causal(q, k, v, stream); }, stream);
+      std::vector<float> composed =
+          flat(sdpa_causal(q, k, v, stream), stream);
+      setenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH", "1", 1);
+      const uint64_t flash_dispatches = dispatches_for(
+          [&] { return sdpa_causal(q, k, v, stream); }, stream);
+      std::vector<float> run1 = flat(sdpa_causal(q, k, v, stream), stream);
+      std::vector<float> run2 = flat(sdpa_causal(q, k, v, stream), stream);
+      std::vector<float> run3 = flat(sdpa_causal(q, k, v, stream), stream);
+      unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
 
-        const bool eligible = c.lk % 8 == 0 && c.lq >= 64;
-        CAPTURE(rowp);
-        CAPTURE(outlier);
-        CAPTURE(c.heads);
-        CAPTURE(c.kv_heads);
-        CAPTURE(c.lq);
-        CAPTURE(c.lk);
-        if (eligible) {
-          CHECK_EQ(flash_dispatches, 1u);
-        } else {
-          CHECK_EQ(flash_dispatches, composed_dispatches);
-        }
-        CHECK(run1 == run2);
-        CHECK(run1 == run3);
-        const double flash_max = max_abs_error(run1, ref);
-        const double composed_max = max_abs_error(composed, ref);
-        const double flash_l2 = rel_l2_error(run1, ref);
-        const double composed_l2 = rel_l2_error(composed, ref);
-        // Both routes sit on the bf16 output-rounding floor, so a strict
-        // inequality can flip on a few rounding-boundary elements: the gate
-        // is a 5 % / 3 % tolerance (MatmulGap H35 amendment 2); the strict
-        // result is printed beside it.
-        MESSAGE(
-            "rowp ", rowp, " outlier ", outlier, " h", c.heads, "/", c.kv_heads,
-            " lq ", c.lq, " lk ", c.lk, ": max abs flash ", flash_max,
-            " composed ", composed_max, " rel-L2 flash ", flash_l2,
-            " composed ", composed_l2, " strict ",
-            (flash_max <= composed_max && flash_l2 <= composed_l2));
-        CHECK_MESSAGE(
-            flash_max <= composed_max * 1.05,
-            "flash max abs error ", flash_max, " composed ", composed_max);
-        CHECK_MESSAGE(
-            flash_l2 <= composed_l2 * 1.03,
-            "flash rel-L2 ", flash_l2, " composed ", composed_l2);
+      const bool eligible = c.lk % 8 == 0 && c.lq >= 64;
+      CAPTURE(rowp);
+      CAPTURE(outlier);
+      CAPTURE(c.heads);
+      CAPTURE(c.kv_heads);
+      CAPTURE(c.lq);
+      CAPTURE(c.lk);
+      if (eligible) {
+        CHECK_EQ(flash_dispatches, 1u);
+      } else {
+        CHECK_EQ(flash_dispatches, composed_dispatches);
       }
+      CHECK(run1 == run2);
+      CHECK(run1 == run3);
+      const double flash_max = max_abs_error(run1, ref);
+      const double composed_max = max_abs_error(composed, ref);
+      const double flash_l2 = rel_l2_error(run1, ref);
+      const double composed_l2 = rel_l2_error(composed, ref);
+      // Both routes sit on the bf16 output-rounding floor, so a strict
+      // inequality can flip on a few rounding-boundary elements: the gate
+      // is a 5 % / 3 % tolerance (MatmulGap H35 amendment 2); the strict
+      // result is printed beside it.
+      MESSAGE(
+          "outlier ", outlier, " h", c.heads, "/", c.kv_heads,
+          " lq ", c.lq, " lk ", c.lk, ": max abs flash ", flash_max,
+          " composed ", composed_max, " rel-L2 flash ", flash_l2,
+          " composed ", composed_l2, " strict ",
+          (flash_max <= composed_max && flash_l2 <= composed_l2));
+      CHECK_MESSAGE(
+          flash_max <= composed_max * 1.05,
+          "flash max abs error ", flash_max, " composed ", composed_max);
+      CHECK_MESSAGE(
+          flash_l2 <= composed_l2 * 1.03,
+          "flash rel-L2 ", flash_l2, " composed ", composed_l2);
     }
   }
-  unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH_ROWP");
+
 }

@@ -14649,14 +14649,12 @@ void ScaledDotProductAttention::eval_gpu(
   // Causal cooperative-matrix flash prefill (MatmulGap H35): scores never
   // reach memory, QK and PV run on the 8x8x8 matrix unit. Default OFF:
   // MLX_OMARCHY_SDPA_CAUSAL_FLASH=1 turns it on for q_len >= 64 (A/B arms),
-  // unset or 0 keeps the composed route. MLX_OMARCHY_SDPA_CAUSAL_FLASH_ROWP=2
-  // selects the 16-row-per-subgroup variant (exploration only).
+  // unset or 0 keeps the composed route.
   // Contract: causal, bf16, hd 128, k_len % 8 == 0, k_len >= q_len, no sinks,
   // no logsumexp, no array mask, 8-element aligned strides; anything else
   // keeps the composed route.
   {
     const char* cf_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
-    const char* cf_rowp_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH_ROWP");
     const auto& cf_caps = encoder.device().capabilities();
     if (cf_env != nullptr && std::strcmp(cf_env, "1") == 0 &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
@@ -14682,8 +14680,7 @@ void ScaledDotProductAttention::eval_gpu(
         static_cast<uint64_t>(k.shape(0)) * k.strides()[0] < (1ull << 31) &&
         static_cast<uint64_t>(v.shape(0)) * v.strides()[0] < (1ull << 31) &&
         static_cast<uint64_t>(q.shape(0)) * q.strides()[0] < (1ull << 31)) {
-      const bool rowp2 = cf_rowp_env != nullptr && std::strcmp(cf_rowp_env, "2") == 0;
-      const uint32_t wg_rows = rowp2 ? 64u : 32u;
+      constexpr uint32_t kCausalFlashWgRows = 32u;
       out.set_data(allocate_omarchy(out.nbytes()));
       omarchy::ComputeParams params;
       params.matrix_m = checked_u32(q_len, tag, out);
@@ -14707,11 +14704,11 @@ void ScaledDotProductAttention::eval_gpu(
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
       encoder.dispatch_compute(
-          rowp2 ? omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Sg16
-                : omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Sg8,
+          omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16,
           cf_bindings,
           params,
-          (static_cast<uint32_t>(q_len) + wg_rows - 1u) / wg_rows,
+          (static_cast<uint32_t>(q_len) + kCausalFlashWgRows - 1u) /
+              kCausalFlashWgRows,
           static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
       return;
