@@ -12480,6 +12480,14 @@ bool int8_f32fma_forced() {
   return env != nullptr && env[0] == '1';
 }
 
+// The f32 cooperative-matrix route is on by default where the device
+// reports the f32 8x8x8 shape; MLX_OMARCHY_INT8_COOPF32=0 pins the
+// scalar f32-FMA route for A/B tests.
+bool int8_coopf32_disabled() {
+  const char* env = std::getenv("MLX_OMARCHY_INT8_COOPF32");
+  return env != nullptr && env[0] == '0';
+}
+
 // Symmetric-int8 matmul, shaders/int8_matmul.comp. X and W are read as
 // uint word views (4 int8 bytes per word, sign extended in-shader), so the
 // route needs no 8-bit storage capability; accumulation is exact int32 per
@@ -12586,6 +12594,54 @@ void Int8Matmul::eval_gpu(
         params,
         std::min(n_groups, omarchy::kMaxComputeGroupCountX),
         std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+        1u);
+    return;
+  }
+  // f32 cooperative-matrix route (shaders/int8_matmul_f32coop.comp), the
+  // default where the device reports the f32 8x8x8 shape: the host widens
+  // the int8 streams to exact f32 temps (the converting copy; int8
+  // widening is exact), and the kernel runs per-group 8x8x8 f32 MMAs.
+  // Exact by the same integer-sum argument as the scalar f32 route (see
+  // the shader header): group <= 1024 keeps every partial sum at or under
+  // 2^24, group % 8 == 0 aligns the MMA k step, and the per-group flush
+  // matches the other routes op for op. The 32-row/32-column gate is the
+  // edge-shift contract of the tile. Swiglu stays on the scalar route.
+  const bool coop_f32_ready = !int8_imad_forced() && !int8_f32fma_forced() &&
+      !int8_coopf32_disabled() &&
+      encoder.device().capabilities().cooperative_matrix_f32_8 && !fused &&
+      (params.matrix_k % 8u) == 0u && (params.reduce_size % 8u) == 0u &&
+      params.reduce_size >= 32u && params.reduce_size <= 1024u &&
+      params.matrix_m >= 32u && params.matrix_n >= 32u;
+  if (coop_f32_ready) {
+    array xf(Shape({xd.shape(0), xd.shape(1)}), float32, nullptr, {});
+    xf.set_data(allocate_omarchy(xf.nbytes()));
+    encoder.add_temporary(xf);
+    copy_gpu(xd, xf, CopyType::Vector, s);
+    array wf(Shape({wd.shape(0), wd.shape(1)}), float32, nullptr, {});
+    wf.set_data(allocate_omarchy(wf.nbytes()));
+    encoder.add_temporary(wf);
+    copy_gpu(wd, wf, CopyType::Vector, s);
+    const uint32_t n_groups64 = (params.matrix_n + 63u) / 64u;
+    const uint32_t m_groups64 = (params.matrix_m + 63u) / 64u;
+    if (n_groups64 > omarchy::kMaxComputeGroupCountX ||
+        m_groups64 > omarchy::kMaxComputeGroupCountX) {
+      // The coopmat kernel has no grid-stride loop: refuse by name
+      // instead of dropping tail tiles.
+      omarchy::unsupported(
+          tag + " with a 64-tile grid beyond the dispatch clamp", out);
+    }
+    omarchy::ComputeParams coop_params = params;
+    coop_params.lhs_offset = 0u;
+    coop_params.rhs_offset = 0u;
+    std::array<omarchy::ComputeBinding, 6> coop_bindings{
+        binding(xf), binding(xsd), binding(wf), binding(wsd), binding(bd),
+        binding(out)};
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::Int8MatmulF32CoopOp,
+        coop_bindings,
+        coop_params,
+        n_groups64,
+        m_groups64,
         1u);
     return;
   }

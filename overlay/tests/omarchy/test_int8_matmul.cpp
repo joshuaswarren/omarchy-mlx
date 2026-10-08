@@ -216,10 +216,14 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       // largest group sum f32 accumulates exactly and order-independently.
       {3, 1024, 1024, 5, false, 707}, // x=-128, w=-128: per-group = +2^24
       {3, 1024, 1024, 5, false, 708}, // x=-128, w=+127: per-group = -16646144
+      // The same exact bound through the f32 cooperative-matrix route
+      // (rows 128 >= 32 admits it), plus the 32-quarter edge shift.
+      {128, 1024, 1024, 8, false, 709}, // x=-128, w=-128: +2^24 via MMA
+      {40, 256, 128, 33, false, 710},   // edge-shifted 64-tiles
   };
   for (const auto& b : big) {
     auto in = make_inputs(b.rows, b.k, b.group, b.n, b.swiglu, b.seed);
-    if (b.seed >= 707) {
+    if (b.seed >= 707 && b.seed <= 709) {
       for (auto& v : in.x) {
         v = int8_t(-128);
       }

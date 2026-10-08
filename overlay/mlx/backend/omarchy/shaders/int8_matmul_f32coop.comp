@@ -1,0 +1,186 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+// Symmetric-int8 matmul (fast::Int8Matmul), f32 cooperative-matrix route.
+// The host widens the int8 X and W streams to exact float32 temps (int8
+// widening is exact; MLX's converting copy), then this kernel runs the
+// per-group reduction on the 8x8x8 f32 cooperative matrix: a 128-lane
+// workgroup owns a 64x64 output tile, each of the 4 subgroups a 32x32
+// quarter as 4x4 8x8 accumulators, operands loaded straight from the
+// global f32 temps per 8-wide k step (the matmul_coopmat_direct.comp
+// structure).
+//
+// EXACTNESS (bit-identical to the int32-per-group tiled kernel): int8
+// values and their products are exact in f32 (worst product
+// (-128)*(-128) = 16384). The host gates this route to 32 <= group <=
+// 1024 with group % 8 == 0, so one accumulator holds at most 1024
+// products and every partial sum of integer-valued f32 terms stays
+// <= 1024 * 16384 = 2^24, which f32 represents exactly - so the MMA's
+// internal summation order cannot change a bit, and the accumulator is
+// bitwise the integer the int32 kernel computes. The per-group flush
+// stores the accumulator to shared and scales by XS[m,g] in ascending
+// group order with plain f32 ops, the same expression the other routes
+// use; the WS/B epilogue and the single bf16 RNE store are shared with
+// int8_matmul.comp. The f16-operand cooperative route is bitwise WRONG
+// on this hardware because f16 cannot represent products past 2048; f32
+// operands remove that failure mode by construction.
+//
+// Edge tiles shift back by a whole 32-wide quarter (row_base =
+// min(row0, m - 32), same as matmul_coopmat_direct.comp), so every
+// addressed row and column is in bounds once m >= 32 and n >= 32 (host
+// gate) and an overlap recomputes and stores identical bits. The host
+// dispatches ceil(rows/64) x ceil(n/64) workgroups and refuses shapes
+// whose grid would exceed the dispatch clamp instead of dropping tiles.
+//
+// Shared budget: the per-subgroup 32x32 f32 flush quarter (4 KiB x 4)
+// plus the 64x64 f32 total (16 KiB) = exactly 32 KiB, the M1 threadgroup
+// limit. Swiglu is NOT routed here (the scalar f32-FMA kernel keeps it).
+
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InX {
+  float values[];
+} in_x;
+layout(set = 0, binding = 1, std430) readonly buffer InXS {
+  float values[];
+} in_xs;
+layout(set = 0, binding = 2, std430) readonly buffer InW {
+  float values[];
+} in_w;
+layout(set = 0, binding = 3, std430) readonly buffer InWS {
+  float values[];
+} in_ws;
+layout(set = 0, binding = 4, std430) readonly buffer InB {
+  float values[];
+} in_b;
+layout(set = 0, binding = 5, std430) buffer OutBF16 {
+  uint16_t values[];
+} out_bf16;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const uint MAT = 8u;
+const uint SG = 4u;
+const uint TILE = 64u;
+
+shared float flush_d[SG][TILE * TILE / SG];
+shared float total[TILE * TILE];
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+void main() {
+  const uint rows = params.matrix_m;
+  const uint n = params.matrix_n;
+  const uint k_total = params.matrix_k;
+  const uint group = params.reduce_size;
+  const uint groups = k_total / group;
+  const uint tid = gl_LocalInvocationID.x;
+  const uint sub = gl_SubgroupID;
+
+  const uint row0 = gl_WorkGroupID.y * TILE + (sub / 2u) * (TILE / 2u);
+  const uint col0 = gl_WorkGroupID.x * TILE + (sub % 2u) * (TILE / 2u);
+  if (row0 >= rows || col0 >= n) {
+    return;
+  }
+  const uint row_base = min(row0, rows - TILE / 2u);
+  const uint col_base = min(col0, n - TILE / 2u);
+
+  for (uint q = tid; q < TILE * TILE; q += 128u) {
+    total[q] = 0.0f;
+  }
+
+  coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> mat_a[SG];
+  coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG];
+  coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator> acc[SG][
+      SG];
+
+  for (uint g = 0u; g < groups; g++) {
+    for (uint i = 0u; i < SG; i++) {
+      for (uint j = 0u; j < SG; j++) {
+        acc[i][j] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+            gl_MatrixUseAccumulator>(0.0f);
+      }
+    }
+    const uint k_group_base = g * group;
+    for (uint kc = k_group_base; kc < k_group_base + group; kc += MAT) {
+      for (uint i = 0u; i < SG; i++) {
+        coopMatLoad(mat_a[i], in_x.values,
+            (row_base + i * MAT) * k_total + kc, k_total,
+            gl_CooperativeMatrixLayoutRowMajor);
+      }
+      for (uint j = 0u; j < SG; j++) {
+        coopMatLoad(mat_b[j], in_w.values,
+            (col_base + j * MAT) * k_total + kc, k_total,
+            gl_CooperativeMatrixLayoutColumnMajor);
+      }
+      for (uint i = 0u; i < SG; i++) {
+        for (uint j = 0u; j < SG; j++) {
+          acc[i][j] = coopMatMulAdd(mat_a[i], mat_b[j], acc[i][j]);
+        }
+      }
+    }
+    // Flush: store this subgroup's 32x32 quarter to shared, then scale by
+    // XS[m,g] into the tile total in ascending group order.
+    for (uint i = 0u; i < SG; i++) {
+      for (uint j = 0u; j < SG; j++) {
+        coopMatStore(acc[i][j], flush_d[sub],
+            (i * MAT) * (TILE / 2u) + j * MAT, TILE / 2u,
+            gl_CooperativeMatrixLayoutRowMajor);
+      }
+    }
+    barrier();
+    for (uint q = tid; q < TILE * TILE; q += 128u) {
+      const uint s = q / (TILE * TILE / SG);
+      const uint r = (q / (TILE / 2u)) % (TILE / 2u);
+      const uint c = q % (TILE / 2u);
+      const uint row = row_base + r;
+      const float xs = in_xs.values[params.shape[0] + row * groups + g];
+      total[q] += flush_d[s][q - s * (TILE * TILE / SG)] * xs;
+    }
+    barrier();
+  }
+
+  const uint ws_base = params.shape[1];
+  const uint b_base = params.shape[2];
+  for (uint q = tid; q < TILE * TILE; q += 128u) {
+    const uint r = q / TILE;
+    const uint c = q % TILE;
+    const uint row = row_base + r;
+    const uint col = col_base + c;
+    out_bf16.values[params.output_offset + row * n + col] =
+        bf16_store(total[q] * in_ws.values[ws_base + col] +
+            in_b.values[b_base + col]);
+  }
+}

@@ -939,6 +939,13 @@ enum class ComputeKernel : uint16_t {
   // k_total % 4 == 0 and 32 <= group <= 1024 (the exact-f32 bound is
   // 16384 * 1024 = 2^24; see the shader header). Append-only profile id.
   Int8MatmulF32FmaOp,
+  // f32 cooperative-matrix route (shaders/int8_matmul_f32coop.comp): the
+  // host widens int8 X/W to exact f32 temps, the kernel runs per-group
+  // 8x8x8 f32 MMAs (exact by the same 2^24 integer-sum argument; see the
+  // shader header) and flushes per group. Host-gated to
+  // k % 8 == 0, group % 8 == 0, 32 <= group <= 1024, m >= 32, n >= 32,
+  // non-swiglu. Append-only profile id.
+  Int8MatmulF32CoopOp,
   Count,
 };
 
