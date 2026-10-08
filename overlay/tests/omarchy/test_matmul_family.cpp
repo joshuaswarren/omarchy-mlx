@@ -711,8 +711,8 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
         ComputeKernel::MatmulDirectBF16NtK4S8);
   CHECK(kernel("Apple M1 (G13G B1)", bfloat16, false, true) ==
         ComputeKernel::MatmulDirectBF16Nt);
-  CHECK(kernel("Apple M1 (G13G B1)", float32, false, false) ==
-        ComputeKernel::MatmulDirectF32NnK4S8);
+  // No G13G f32 a @ b row: it lost 8 to 42 % at k 2560 and at n 9728 (MatmulGap H36).
+  CHECK(kernel("Apple M1 (G13G B1)", float32, false, false) == shipped.kernel);
   CHECK(kernel("Apple M1 (G13G B1)", float32, true, false) ==
         ComputeKernel::MatmulDirectF32TnWS8);
   CHECK(kernel("Apple M1 Max (G13C C0)", float32, false, false) == shipped.kernel);
@@ -756,7 +756,6 @@ TEST_CASE("direct matmul route: every row starts at its measured m floor") {
       {"Apple M1 (G13G B1)", bfloat16, true, false, 512u, ComputeKernel::MatmulDirectBF16TnWS8},
       {"Apple M1 (G13G B1)", bfloat16, false, true, 4096u, ComputeKernel::MatmulDirectBF16Nt},
       {"Apple M1 (G13G B1)", float32, false, true, 512u, ComputeKernel::MatmulDirectF32NtK4S8},
-      {"Apple M1 (G13G B1)", float32, false, false, 4096u, ComputeKernel::MatmulDirectF32NnK4S8},
       {"Apple M1 (G13G B1)", float32, true, false, 512u, ComputeKernel::MatmulDirectF32TnWS8},
       {"Apple M1 Max (G13C C0)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
       {"Apple M1 Max (G13C C0)", float16, true, false, 4096u, ComputeKernel::MatmulDirectF16TnWS8},
