@@ -7137,35 +7137,6 @@ void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (rows > omarchy::kMaxComputeGroupCountX) {
       omarchy::unsupported("MaskedScatter row count", out);
     }
-    // The exclusive prefix sum of the flattened mask gives every true
-    // position its destination rank; cast the packed mask to uint32
-    // (cast_int) and scan int32 (ScanGeneralI32, battery-covered). The
-    // direct bool scan route is not part of this change.
-    array counts = array(
-        Shape{1, static_cast<int>(mask.size())}, uint32, nullptr, {});
-    counts.set_data(allocate_omarchy(counts.nbytes()));
-    copy_gpu(mask_flat, counts, CopyType::General, out.primitive().stream());
-    encoder.add_temporary(counts);
-    array offsets = cumsum(
-        counts, 1, /*reverse=*/false, /*inclusive=*/false,
-        out.primitive().stream());
-    // Allocate the offsets now: their buffer must exist for the scatter
-    // binding, and Scan::eval_gpu keeps a pre-set destination (the same
-    // allocation-guard contract as dispatch_matmul).
-    offsets.set_data(allocate_omarchy(offsets.nbytes()));
-    encoder.add_temporary(offsets);
-    if (const char* dbg = std::getenv("MLX_OMARCHY_MS_BOOL_DEBUG")) {
-      array dbg_copy = astype(offsets, int32, out.primitive().stream());
-      dbg_copy.eval();
-      auto& enc2 = omarchy::get_command_encoder(out.primitive().stream());
-      enc2.synchronize("ms-bool-dbg");
-      std::printf(
-          "[ms-bool] offsets:");
-      for (int i = 0; i < static_cast<int>(mask.size()); ++i) {
-        std::printf(" %d", dbg_copy.data<int>()[i]);
-      }
-      std::printf("\n");
-    }
     uint32_t count = checked_u32(mask.size(), "MaskedScatter", out);
     omarchy::ComputeParams params;
     params.count = count;
@@ -7181,10 +7152,9 @@ void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
           static_cast<VkDeviceSize>(std::min(bytes, size_t(buf->size))),
           buf};
     };
-    std::array<omarchy::ComputeBinding, 4> bindings{
+    std::array<omarchy::ComputeBinding, 3> bindings{
         extended(out, out_bytes),
         extended(mask_flat, mask_bytes),
-        extended(offsets, offsets.nbytes()),
         extended(src_flat, src_bytes)};
     encoder.dispatch_compute(
         omarchy::ComputeKernel::MaskedScatterBool, bindings, params,

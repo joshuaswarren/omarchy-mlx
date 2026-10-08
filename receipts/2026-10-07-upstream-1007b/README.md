@@ -46,3 +46,11 @@ before each gate widening (the scalar kernel stays the fallback).
   misses with hypothesis + byte-dump plan written into the test file.
 - Resumes after 'GLM session done': one GPU debug cycle
   (offsets dump -> fix), battery rerun, known-defects update, land.
+
+## 1008(b) (2026-10-08): global_scale API check
+
+1008-global-scale-api-check.md: the locked 0.32.3 tree HAS global_scale
+on gather_qmm/quantize/dequantize/qqmm (NOT on quantized_matmul); #4458
+is mixed per-group widths, not global_scale — backport candidate queued
+behind #4635, would touch the GatherQmm Vulkan kernels' mixed-width
+word unpacking plus upstream ops.cpp validation (~100-200 lines).

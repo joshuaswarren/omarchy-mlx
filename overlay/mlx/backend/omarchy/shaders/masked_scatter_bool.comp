@@ -9,17 +9,19 @@
 // never lose a byte. Non-selected positions idempotently rewrite their
 // own dst byte (out arrives as the dst copy).
 //
-// The destination rank comes from the exclusive prefix sum of the
-// packed mask, computed on the host path with the battery-proven Scan
-// kernel (an in-shader Hillis-Steele scan here would re-enter the
-// Honeykrisp scan miscompile documented in the float variant). The
-// mask and the decoded source ride the same packed-word transport;
-// bytes are extracted with CONSTANT shifts and a select chain.
-//
-// One invocation per mask element. params: count = mask elements,
-// aux_size = src elements. The masked_scatter op materializes the
-// broadcast and always hands the primitive a single batch row, so the
-// flat position IS the batch row position.
+// Rank assignment: each invocation computes its own rank by summing the
+// normalized mask bytes that precede it (O(pos) per invocation). This
+// avoids the Scan primitive entirely: an earlier version consumed an
+// int32 exclusive scan whose output arrived ALL ZEROS inside eval_gpu
+// (both the packed-bool ScanGeneralBool route and the cast-uint32
+// ScanGeneral route — filed for a separate GPU session with a dump
+// probe). The O(N^2) total work is fine for the current test sizes and
+// small serve masks; a scan-based fast path is the follow-up once the
+// int scan defect is root-caused. Bytes are extracted with CONSTANT
+// shifts and a select chain (the Honeykrisp workaround documented in
+// the float variant). One invocation per mask element; the op-level
+// masked_scatter materializes the broadcast and always hands the
+// primitive a single batch row.
 
 #version 460
 
@@ -31,10 +33,7 @@ layout(set = 0, binding = 0, std430) buffer Output {
 layout(set = 0, binding = 1, std430) readonly buffer Mask {
   uint values[];
 } mask_data;
-layout(set = 0, binding = 2, std430) readonly buffer Offsets {
-  int values[];
-} offsets_data;
-layout(set = 0, binding = 3, std430) readonly buffer Source {
+layout(set = 0, binding = 2, std430) readonly buffer Source {
   uint values[];
 } src_data;
 
@@ -76,20 +75,26 @@ void main() {
   if (pos >= params.count) {
     return;
   }
-  uint bit = byte_at(mask_data.values[params.rhs_offset + (pos >> 2u)], pos);
+  uint mask_word = mask_data.values[params.rhs_offset + (pos >> 2u)];
+  uint bit = byte_at(mask_word, pos);
   if (bit == 0u) {
     return;
   }
-  int rank = offsets_data.values[pos];
-  if (rank < 0 || uint(rank) >= params.aux_size) {
+  // Rank among trues: sum the normalized mask bytes before pos.
+  uint rank = 0u;
+  for (uint j = 0u; j < pos; ++j) {
+    rank += byte_at(mask_word, j) != 0u ? 1u : 0u;
+  }
+  if (rank >= params.aux_size) {
     // Source ran out: the position keeps dst, matching the float
     // variant and the upstream Metal kernel.
     return;
   }
-  uint src_flat = params.lhs_offset + uint(rank);
+  // rows == 1 at the primitive (the op adds a single leading batch dim
+  // and materializes the broadcast), so the source segment starts at 0
+  // and the rank IS the flat source index.
+  uint src_flat = params.lhs_offset + rank;
   uint value_byte = byte_at(src_data.values[src_flat >> 2u], src_flat);
-  // A true bool byte is 1; normalize the same way upstream bool casts
-  // do so stray non-0/1 source bytes stay predictable.
   value_byte = value_byte != 0u ? 1u : 0u;
   uint out_pos = params.output_offset + pos;
   uint word_index = out_pos >> 2u;
