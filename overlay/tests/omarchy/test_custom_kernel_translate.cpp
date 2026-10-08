@@ -319,3 +319,56 @@ TEST_CASE("bf16 buffer named x coexists with the threadgrid swizzle") {
   CHECK(glsl.find("thread_position_in_grid.x") == std::string::npos);
   CHECK(glsl.find(".x;") == std::string::npos);
 }
+
+TEST_CASE("nested c-style casts rewrite inside constructor arguments") {
+  // moe_route_fused / sconv: `uint((r + (int)(4 - 1)))` leaves a surviving
+  // C-style cast inside a constructor argument; glslc rejects that with
+  // GL_NV_explicit_typecast. The scanner must rescan its own replacements.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device bfloat16_t* x [[buffer(0)]],\n"
+      "    device float* nstate [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  int r = int((c + (int)(4 - 1)));\n"
+      "  nstate[c] = float(x[uint((r + (int)(4 - 1))) * c]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(int)(") == std::string::npos);
+  CHECK(glsl.find("(4 - 1)") != std::string::npos);
+}
+
+TEST_CASE("const multi-declarator lines keep comma declarators") {
+  // moe_route_fused: `const int K = mp[0], KHI = mp[1];` must not fold into
+  // a single int(A, B) constructor call.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device int* mp [[buffer(0)]],\n"
+      "    device int* y [[buffer(1)]],\n"
+      "    uint e [[thread_position_in_grid]]) {\n"
+      "  constant int* mp_alias = mp;\n"
+      "  const int K = mp[0], KHI = mp[1];\n"
+      "  y[e] = K + KHI;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("int(K,") == std::string::npos);
+  CHECK(glsl.find(", KHI") != std::string::npos);
+}
+
+TEST_CASE("metal fabs maps to GLSL abs and header casts rewrite") {
+  const char* header =
+      "inline float sigmoidish(float x) {\n"
+      "  return (float)exp(abs((float)x)) - fabs(x);\n"
+      "}\n";
+  std::string source = std::string(header) +
+      "[[kernel]] void k(\n"
+      "    const device float* values [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  y[c] = sigmoidish(values[c]) * metal::fabs(values[c]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("fabs") == std::string::npos);
+  CHECK(glsl.find("abs(float(x))") != std::string::npos);
+  CHECK(glsl.find("abs(") != std::string::npos);
+}

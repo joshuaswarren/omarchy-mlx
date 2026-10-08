@@ -391,11 +391,12 @@ void translate_c_style_casts(std::string& code) {
     const std::string replacement =
         mapped->second + "(" + argument + ")";
     code.replace(open, argument_end - open, replacement);
-    // Recompute search_from against the post-replace size; the old
-    // `open + replacement.size()` arithmetic could land past `code.size()`
-    // when argument_end < open (impossible here) and ties the next scan
-    // position to the just-rewritten text rather than to the source.
-    search_from = std::min(open + replacement.size(), code.size());
+    // Resume INSIDE the replacement: `uint((r + (int)(4 - 1)))` leaves a
+    // surviving C-style cast in the constructor argument, and glslc rejects
+    // any constructor whose argument expression contains a C-style cast
+    // with a GL_NV_explicit_typecast error (2026-10-08 KernelRecheck,
+    // moe_route_fused / inkling_sconv_decode).
+    search_from = open + 1;
   }
 }
 
@@ -1083,6 +1084,10 @@ void translate_header(std::string& header) {
           R"(template\s*<\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\1\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\1\s+([A-Za-z_][A-Za-z0-9_]*)\s*\))"),
       "float $2(float $3)");
   translate_types(header);
+  // Header helpers keep C-style casts on their parameters
+  // (`(float)exp(abs((float)x))` in the K3 kda glue sigmoid); GLSL rejects
+  // them, so the body cast pass runs here too (2026-10-08 KernelRecheck).
+  translate_c_style_casts(header);
   // Helper functions in the user header (e.g. the msv_row_inv_rms stage
   // helper in mlx-serve's fused residual+RMSNorm kernel) keep their MSL
   // spellings unless the statement-level body rewrites also run here.
@@ -1106,6 +1111,7 @@ void translate_header(std::string& header) {
   // metal::precise::rsqrt survives the metal:: strip above as rsqrt; GLSL
   // names it inversesqrt (same mapping the body rewrites apply).
   replace_word(header, "rsqrt", "inversesqrt");
+  replace_word(header, "fabs", "abs");
   if (header.find("threadgroup") != std::string::npos) {
     throw std::runtime_error(
         "unsupported MSL feature `threadgroup` in a helper function "
@@ -1389,6 +1395,9 @@ Translation translate_msl(
   // roundEven() is the same function. Needed by the H3 _QUANTIZE kernel
   // (int8 rounding of activations) and any quantize-style kernel.
   replace_word(body, "rint", "roundEven");
+  // Metal's fabs() is C-named; GLSL only has abs() (inkling_moe_route's
+  // softplus stage, 2026-10-08 KernelRecheck).
+  replace_word(body, "fabs", "abs");
   body = std::regex_replace(
       body,
       std::regex(R"(\bfloat16_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
@@ -1414,11 +1423,30 @@ Translation translate_msl(
   //  * const uint16_t/int16_t from float/uint operands (the bf16
   //    pack/unpack idiom in the Qwen3.5-2B GDN kernel, OmlxLinux M2
   //    repro 2026-10-05: float -> const uint16_t).
-  body = std::regex_replace(
-      body,
-      std::regex(
-          R"(\b(const\s+(int|uint|int16_t|uint16_t)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))"),
-      "$1$2($3)$4");
+  {
+    static const std::regex const_decl(
+        R"(\b(const\s+(int|uint|int16_t|uint16_t)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^;{}]+)(;))");
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    for (std::sregex_iterator it(body.begin(), body.end(), const_decl), end;
+         it != end; ++it) {
+      const auto& m = *it;
+      rewritten += body.substr(last, m.position() - last);
+      // Multi-declarator lines (`const int K = mp[0], KHI = mp[1];`,
+      // moe_route_fused) must NOT fold into one constructor call — GLSL
+      // keeps comma declarators legal as written.
+      if (m[3].str().find(',') != std::string::npos) {
+        rewritten += m[0].str();
+      } else {
+        rewritten += m[1].str() + m[2].str() + "(" + m[3].str() + ")" +
+            m[4].str();
+      }
+      last = m.position() + m.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
+  }
 
   // MSL allows any integer expression as a condition (`if (flag)`); GLSL
   // requires a bool. Wrap the narrow forms — a bare identifier, an indexed
