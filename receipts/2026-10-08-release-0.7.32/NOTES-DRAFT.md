@@ -90,8 +90,8 @@ Scan guard) all touch shaders/primitives, so v0.7.32 gates MUST include:
 
 - **Standing battery (all suites in the AGENTS.md list) on EACH chip**:
   - G13G on jwm1,
-  - G13C on jw16 (currently blocked on ssh access — retry when the host
-    answers),
+  - G13C on jw16 (reachable again via `ssh 16m1mbp`; home wiped — needs
+    restaging: release assets + gate scripts, as FILL),
   - G14C on the M2,
   on a fresh build from the main tip (not the 0.7.31 wheel).
 - Plus on the new wheel: g1 fresh-home install on EVERY host, g17
@@ -110,9 +110,9 @@ Scan guard) all touch shaders/primitives, so v0.7.32 gates MUST include:
 
 ## Open before FREEZE
 - G14C Bonsai leg on the M2 (queued).
-- G13C Bonsai leg on jw16 (pending; jw16 ssh currently not answering).
+- G13C Bonsai leg on jw16 (reachable again; restage first — home wiped).
 - Full standing battery per chip on a fresh main-tip build (jwm1 + M2
-  minimum before FREEZE; jw16 when ssh returns).
+  minimum before FREEZE; jw16 restaged then run).
 - Confirm nothing else user-visible lands that is missing here.
 
 Base range at this draft revision: v0.7.31..origin/main = 104 commits
