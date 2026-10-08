@@ -12450,13 +12450,17 @@ bool int8_naive_forced() {
   return env != nullptr && env[0] == '1';
 }
 
-// Disable the cooperative-matrix int8 route (the landed default when the
-// device reports the f16 8x8x8 shape) so the tiled int32-imad kernel
-// (shaders/int8_matmul.comp) runs in its place. Used by the bitwise A/B
-// matrix to compare both routes against the naive kill switch.
-bool int8_coopmat_disabled() {
+// Cooperative-matrix int8 route (shaders/int8_matmul_coop.comp). Opt-in
+// only, via MLX_OMARCHY_INT8_COOPMAT=1: on the first hardware validation
+// run (G13C, aurora 12.6, kernel 7.1.12-2-12.6-sep-ARCH, boot 55cc1c19)
+// the driver reported cooperative_matrix_f16_8 and the route produced
+// bitwise mismatches against the naive kernel, so it does not ship as
+// the default until it passes the A/B matrix. The tiled int32-imad
+// kernel is the default and is bitwise-identical to the naive kernel on
+// the same boot (29/29 A/B assertions, forced via MLX_OMARCHY_INT8_COOPMAT=0).
+bool int8_coopmat_enabled() {
   const char* env = std::getenv("MLX_OMARCHY_INT8_COOPMAT");
-  return env != nullptr && env[0] == '0';
+  return env != nullptr && env[0] == '1';
 }
 
 // Symmetric-int8 matmul, shaders/int8_matmul.comp. X and W are read as
@@ -12552,8 +12556,8 @@ void Int8Matmul::eval_gpu(
   params.shape[3] = 0u;
   const auto& caps = encoder.device().capabilities();
   const bool coopmat_ready =
-      caps.cooperative_matrix_f16_8 && caps.subgroup_size == 32u &&
-      !int8_coopmat_disabled() && params.matrix_k >= 8u &&
+      int8_coopmat_enabled() && caps.cooperative_matrix_f16_8 &&
+      caps.subgroup_size == 32u && params.matrix_k >= 8u &&
       (params.matrix_k % 8u) == 0u &&
       (params.reduce_size % 8u) == 0u && (params.matrix_k % 4u) == 0u;
   if (coopmat_ready) {
