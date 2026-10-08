@@ -126,66 +126,57 @@ boundary explicit rather than importing a general C++ or MSL frontend. Port a
 kernel only when it falls outside that boundary and has a maintained reference
 implementation.
 
-## Vulkan translation status (2026-10-08, translator with the fixes through main d3e450e70)
+## Vulkan translation status (final GPU recheck, 2026-10-08)
 
 The bounded MSL subset (see "Current implementation" above) was rechecked
-against the 26 kernels of section (b) on the Vulkan GPU, each against an
-fp64 or integer-exact NumPy reference, with per-run fresh translation
-caches and NaN/inf/checksum validation of every output.
+against all 26 kernels of section (b) on the Vulkan GPU. Each kernel ran in
+its own process against an fp64 or integer-exact NumPy reference, with a
+fresh translation cache per run and NaN/inf/checksum validation of every
+output. The table shows one row per kernel from the final full run on an
+M2 Max (G14C), wheel `0.32.4.dev202610081112+f81a560`; the harness under
+`tools/kernel_recheck` was byte-identical to main `987988a` (md5-verified).
+Float kernels allow at most 2 bf16 ulp at magnitude; integer and bit kernels
+compare exactly (docs/numerics-gate.md rule 1).
 
-Passing end to end on the GPU (11): `bitlinear_matmul`,
-`flux2_fused_double_norm_rope_*`, `inkling_banded_mask`, `inkling_moe_route`,
-`mlx_vlm_llguidance_mask`, `custom_depthwise_conv1d`, `qk_relu_squared`,
-`mlx_audio_phonon_unpack_base5_v1`, `kda` `moe_route_fused`, `situ_fused`,
-`situ_pair_fused`.
+| Kernel | Status | Detail | Wheel | Chip | `uname -r` | Date |
+|---|---|---|---|---|---|---|
+| `bitlinear_matmul` | PASS | maxdiff 0.000477148 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `fused_double_norm_rope` | PASS | maxdiff 0.00789396 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `fused_single_norm_rope` | WRONG | 288816/294912 outputs bad, maxdiff 164691 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_banded_mask` | PASS | maxdiff 0.00374421 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_banded_mask_v2` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_sconv_decode` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_moe_route` | PASS | maxdiff 0.00214481 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `inkling_moe_down_combine` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `mlx_vlm_llguidance_mask` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `custom_depthwise_conv1d` | PASS | maxdiff 7.13119e-05 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `qk_relu_squared` | PASS | maxdiff 1e+308 (sentinel, equal ±inf values) | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `mlx_audio_phonon_unpack_base5_v1` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v2` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v3` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v4` | REFUSED | `as_type<bfloat4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v3_situ` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_v4_situ` | REFUSED | `as_type<bfloat4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_gather_mm_glu` | REFUSED | `as_type<char4>` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_grad_d` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `cbq_grad_x` | REFUSED | `device pointer arithmetic` | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `kda_glue_pre` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `kda_glue_post` | COMPILE-FAIL | glslc: GL_NV_explicit_typecast, nested C-casts survive | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `moe_route_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `situ_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
+| `situ_pair_fused` | PASS | exact, maxdiff 0 | `f81a560` | M2 Max (G14C) | `7.1.12-2-12.3-sep-ARCH` | 2026-10-08 |
 
-Refused by name — the CBQ family (9 kernels) needs constructs outside the
-bounded subset, each refused with its named error:
+**Counts: 11 PASS / 1 WRONG / 5 COMPILE-FAIL / 9 REFUSED = 26**
 
-- `cbq_gather_mm`, `cbq_grad_d`, `cbq_grad_x`: C-style casts of
-  `device int64_t*` LUT pointers and `device atomic_float*` outputs
-  (`unsupported MSL feature 'device pointer arithmetic'`).
-- `cbq_gather_mm_v2`: a `threadgroup`-space pointer alias
-  (`unsupported MSL feature 'device pointer arithmetic'`).
-- `cbq_gather_mm_v3`, `_v3_situ`, `_glu`: `as_type<char4>`
-  (`unsupported MSL feature 'as_type<char4>'`).
-- `cbq_gather_mm_v4`, `_v4_situ`: `as_type<bfloat4>`
-  (`unsupported MSL feature 'as_type<bfloat4>'`).
-
-GPU-validated pass (11): `bitlinear_matmul`,
-`fused_double_norm_rope_*`, `inkling_banded_mask`, `inkling_moe_route`,
-`mlx_vlm_llguidance_mask`, `custom_depthwise_conv1d`,
-`qk_relu_squared`, `mlx_audio_phonon_unpack_base5_v1`, `kda`
-`moe_route_fused`, `situ_fused`, `situ_pair_fused`.
-
-Compile fail — nested C-casts (3): `inkling_sconv_decode`,
-`inkling_moe_down_combine`, `kda_glue_pre` — nested same-family C-cast
-chains survive inside constructor arguments after translation; needs the
-cast scanner rewritten with a real parser or MSL pre-normalization.
-
-Compile fail — int64 metadata (1): `inkling_banded_mask_v2` — int64
-metadata stride expression produces a non-scalar array subscript.
-
-Unproven — wrong values (2): `fused_single_norm_rope` (translates and
-compiles clean but produces wrong values vs the fp64 reference on the
-GPU) and `inkling_moe_down_combine` (translates and compiles but 52/512
-outputs differ by ~2.5 bf16 ulps from the fp64 reference; possible fp32
-accumulation order or dequantization mismatch). The mx-composed arbiter
-(tools/kernel_recheck/arbiter_flux.py) is the diagnostic tool. Both are
-from the SAME wheel and run (05f823e / 7368d2a91 on G14C); the final
-table is 11 pass / 1 wrong / 5 compile-fail / 9 refused = 26.
-
-Tolerance-fail (1): `kda_glue_post` — 1/12288 outputs at 1 bf16 ulp
-boundary (fp32 accumulation tie).
-
-In validation (5): `fused_single_norm_rope`, `inkling_banded_mask_v2`,
-`inkling_sconv_decode`, `inkling_moe_down_combine`, `kda_glue_pre/post` —
-the translator emits GLSL that still trips the shader compiler on these
-(nested C-style casts of the same scalar family survive inside constructor
-arguments); the reference harness distinguishes these from wrong values,
-and no kernel produces silently wrong output — a wrong value fails the run.
-
-Known cache behavior: translated GLSL is cached under
-`~/.cache/mlx-omarchy/spirv` keyed by the kernel source and the
-translator's own hash; the cache is invalidated when the translator
-changes. Deleting the directory is always safe.
+`maxdiff` is the runner's worst relative error against the reference. `0` is
+an exact integer or bit match. `1e+308` is the runner's sentinel for equal
+±inf values, which make the difference undefined. The five COMPILE-FAIL
+kernels need the cast scanner rewritten with a real parser, or MSL
+pre-normalization before the scanner; three regex-based rewrites each failed
+differently, and the failed forms are recorded in
+`receipts/2026-10-08-kernel-recheck/README.md`. No kernel in the final run
+produced a silent wrong value inside tolerance: a wrong value fails the run
+(exit 3). Translated GLSL is cached under `~/.cache/mlx-omarchy/spirv`,
+keyed by the kernel source and the translator hash; the runner uses a fresh
+cache directory per run.
