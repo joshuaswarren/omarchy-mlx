@@ -173,3 +173,81 @@ TEST_CASE("batched raw-gate decode stays fused") {
   CHECK_MESSAGE(composed > 4 * fused, "the composed reference (", composed,
                 ") is not far above the batched count (", fused, ")");
 }
+
+// B > 1 prefill (T > 1) runs the batch row by row through the B = 1 fused
+// route (patches/mlx-gated-delta-prefill-rows.patch). Before it, every GDN
+// layer of a batched prefill took the per-token composed fallback: a [4, T]
+// prefill was 5.6-7.6x slower than four [1, T] ones (jw16 G13C, T 128-1024).
+std::vector<array> prefill_inputs(int t, Stream s) {
+  return {bf16({B, t, H, D}, 21, 0.1f, s), bf16({B, t, H, D}, 22, 0.1f, s),
+          bf16({B, t, H, D}, 23, 1.0f, s),
+          pattern({B, t, H}, 24, 0.05f, 0.9f, s),
+          bf16({B, t, H}, 25, 0.25f, s, 0.5f),
+          pattern({B, H, D, D}, 26, 0.05f, 0.0f, s)};
+}
+
+TEST_CASE("batched prefill matches per-row prefill bit for bit") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  // T = 128 takes the chunked coopmat route, T = 32 the short-prompt route.
+  for (int t : {32, 128}) {
+    auto x = prefill_inputs(t, s);
+    check_rows(t == 32 ? "prefill B=4 T=32" : "prefill B=4 T=128", x,
+               [&](const std::vector<array>& y) {
+                 return fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4],
+                                                 y[5]);
+               },
+               s);
+  }
+}
+
+TEST_CASE("batched masked prefill matches per-row prefill bit for bit") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  constexpr int t = 64;
+  auto x = prefill_inputs(t, s);
+  // Left padding of b * 5 tokens per row: a real, row-dependent mask.
+  std::vector<bool> bits;
+  for (int b = 0; b < B; ++b) {
+    for (int i = 0; i < t; ++i) {
+      bits.push_back(i >= b * 5);
+    }
+  }
+  x.push_back(array(bits.begin(), {B, t}, bool_));
+  check_rows("masked prefill B=4 T=64", x,
+             [&](const std::vector<array>& y) {
+               return fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4],
+                                               y[5], y[6]);
+             },
+             s);
+}
+
+TEST_CASE("batched prefill stays on the fused dispatches") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  constexpr int t = 128;
+  auto x = prefill_inputs(t, s);
+  eval(x);
+  auto& enc = omarchy::get_command_encoder(s);
+  auto count = [&](const std::vector<array>& y) {
+    enc.synchronize("gdn_prefill_inputs");
+    uint64_t before = counters().vk_compute_dispatches.load();
+    auto r = fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4], y[5]);
+    eval(r);
+    enc.synchronize("gdn_prefill_outputs");
+    return counters().vk_compute_dispatches.load() - before;
+  };
+  std::vector<array> one;
+  for (const auto& v : x) {
+    one.push_back(row(v, 0, s));
+  }
+  eval(one);
+  uint64_t single = count(one), batched = count(x);
+  std::cout << "[gdn_prefill_rows] B=1 T=128 " << single << " dispatches, B=4 "
+            << batched << "\n";
+  CHECK_MESSAGE(single >= 1, "the B=1 prefill dispatched nothing");
+  // Four row calls plus the dense copies and the two concatenations; the
+  // composed per-token chain is thousands of dispatches at T = 128.
+  CHECK_MESSAGE(batched <= 4 * single + 16, "B=4 prefill took ", batched,
+                " dispatches against ", single, " for one row: it fell back");
+}

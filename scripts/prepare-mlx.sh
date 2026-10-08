@@ -77,6 +77,10 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-omarchy-metal-kernel.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-gated-delta-raw-gates.patch"
+# B > 1 GDN prefill: run the batch row by row through the B = 1 fused route
+# (a batched call used to take the per-token composed fallback).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-gated-delta-prefill-rows.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-version-time.patch"
 # GDN decode chain: fused RMSNorm+SwiGLU-gate and RMSNorm+scalar-mul

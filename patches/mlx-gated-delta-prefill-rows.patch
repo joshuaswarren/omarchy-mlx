@@ -1,0 +1,48 @@
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1374,6 +1374,45 @@
+   int Hv = v.shape(2);
+   int Dv = v.shape(3);
+ 
++  // B > 1 prefill runs the batch row by row through the B = 1 route: every
++  // fused prefill kernel (coopmat chunk walk, single-pass recurrence, masked
++  // scan) is a B = 1 kernel, and a batched call used to fall off all of
++  // them into the per-token composed fallback below (a [4, T] prefill was
++  // 5.6-7.6x slower than four [1, T] ones, receipts/2026-10-07-batch-decode-2).
++  // Each row is a view of the batched inputs, so its kernel and result are
++  // the B = 1 call's bit for bit. Decode (T == 1) keeps the batched kernel.
++  if (B > 1 && T > 1 &&
++      !GatedDeltaUpdate::use_fallback(Hk, Dk, Hv, Dv, mask_.has_value(), s)) {
++    auto row = [&](const array& a, int b) {
++      Shape start(a.ndim(), 0), stop = a.shape();
++      start[0] = b;
++      stop[0] = b + 1;
++      return slice(a, start, stop, s);
++    };
++    std::vector<array> outs, states;
++    for (int b = 0; b < B; ++b) {
++      std::optional<array> h0_b, mask_b;
++      if (initial_state.has_value()) {
++        h0_b = row(*initial_state, b);
++      }
++      if (mask_.has_value()) {
++        mask_b = row(*mask_, b);
++      }
++      auto r = gated_delta_update(
++          row(queries, b),
++          row(keys, b),
++          row(values, b),
++          row(gates, b),
++          row(beta_, b),
++          h0_b,
++          mask_b,
++          s);
++      outs.push_back(r[0]);
++      states.push_back(r[1]);
++    }
++    return {concatenate(outs, 0, s), concatenate(states, 0, s)};
++  }
++
+   auto h0 = initial_state.has_value() ? astype(*initial_state, float32, s)
+                                       : zeros({B, Hv, Dv, Dk}, float32, s);
+ 
