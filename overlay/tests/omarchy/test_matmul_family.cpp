@@ -780,6 +780,8 @@ TEST_CASE("direct matmul route: every row starts at its measured m floor") {
     CHECK(route(f.m - 1u, 4096u) == shipped.kernel);
     CHECK(route(f.m, 4095u) == shipped.kernel);
   }
+  // One floors entry per table row: a row added without its entry fails here.
+  CHECK_EQ(std::size(floors), omarchy::kDirectMatmulRows.size());
 }
 
 TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
@@ -814,10 +816,18 @@ TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every o
     dtypes.push_back(bfloat16);
   }
   for (Dtype dtype : dtypes) {
+    // The first five shapes are small. The last seven are above the route-row
+    // floors with n = 4096 and m not a multiple of 64 (520, 1030, 2054, 4100), so
+    // on a chip with rows the row kernels run their partial row tiles; k = 32
+    // keeps the slice reference cheap. Partial column tiles (n = 4098) are
+    // covered by the shape sweep in the receipt, not here.
     for (const Case& c :
          {Case{142, 88, 200, false, false}, Case{142, 40, 72, false, true},
           Case{142, 64, 72, true, false}, Case{142, 16, 34, true, true},
-          Case{32, 8, 32, false, false}}) {
+          Case{32, 8, 32, false, false}, Case{520, 32, 4096, false, true},
+          Case{520, 32, 4096, true, false}, Case{520, 32, 4096, false, false},
+          Case{1030, 32, 4096, false, true}, Case{1030, 32, 4096, true, false},
+          Case{2054, 32, 4096, false, false}, Case{4100, 32, 4096, true, false}}) {
       std::vector<float> av(2 * c.m * c.k);
       std::vector<float> bv(2 * c.k * c.n);
       for (size_t i = 0; i < av.size(); ++i) {
