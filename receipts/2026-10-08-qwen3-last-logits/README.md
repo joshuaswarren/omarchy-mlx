@@ -12,7 +12,7 @@ change to `mlx_lm/models/qwen3.py`. Whole-sequence calls (`cache=None`: scoring,
 `MLX_OMARCHY_FULL_LOGITS=1` keep the full head. `scripts/apply-mlx-lm-patches.sh` applies it
 after `mlx-lm-last-logits.patch`.
 
-## Measurements (M1 Max, T8103 / G13G, aurora 12.3, main wheel fbce5f58, idle-guard gpu-turn ticket)
+## Measurements (base M1, T8103 / G13G, aurora 12.3, main wheel fbce5f58, idle-guard gpu-turn ticket)
 
 Qwen3-4B-Instruct-2507-4bit, qwen38 protocol (10 prompts x 3 passes, 32 new tokens, 512-token
 prefill, temperature 0, CPU PD hold default). Arm B = patched default, arm A = the same patched copy
