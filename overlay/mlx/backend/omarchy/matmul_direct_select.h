@@ -46,7 +46,7 @@ inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13C", float16, true, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
-    {"G13G", float16, false, true, 128u, 4096u,
+    {"G13G", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13G", float16, true, false, 1024u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
@@ -63,7 +63,7 @@ inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
     {"G13G", bfloat16, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectBF16Nt, 64u}},
-    {"G13G", float32, false, false, 512u, 4096u,
+    {"G13G", float32, false, false, 2048u, 4096u,
      {ComputeKernel::MatmulDirectF32NnK4S8, 64u}},
     {"G13G", float32, true, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32TnWS8, 128u}},
@@ -73,7 +73,7 @@ inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
     {"G14C", bfloat16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
     {"G14C", float16, false, true, 1024u, 4096u,
-     {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
+     {ComputeKernel::MatmulDirectF16NtK2S8, 64u}},
 }};
 
 inline DirectMatmulRoute select_direct_matmul_route(

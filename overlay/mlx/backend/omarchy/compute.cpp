@@ -546,6 +546,7 @@
 #include "matmul_direct_f32_tt.h"
 #include "matmul_direct_f16_tn_ws8.h"
 #include "matmul_direct_f16_nt_k4s8.h"
+#include "matmul_direct_f16_nt_k2s8.h"
 #include "matmul_direct_f32_nt_k4s8.h"
 #include "matmul_direct_f32_nn_k4s8.h"
 #include "matmul_direct_f32_tn_ws8.h"
@@ -1693,6 +1694,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_f32_tt, matmul_direct_f32_tt_size};
     case ComputeKernel::MatmulDirectF16NtK4S8:
       return {matmul_direct_f16_nt_k4s8, matmul_direct_f16_nt_k4s8_size};
+    case ComputeKernel::MatmulDirectF16NtK2S8:
+      return {matmul_direct_f16_nt_k2s8, matmul_direct_f16_nt_k2s8_size};
     case ComputeKernel::MatmulDirectF16TnWS8:
       return {matmul_direct_f16_tn_ws8, matmul_direct_f16_tn_ws8_size};
     case ComputeKernel::MatmulDirectF32NtK4S8:

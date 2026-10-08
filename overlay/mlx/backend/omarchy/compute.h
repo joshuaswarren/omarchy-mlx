@@ -901,6 +901,8 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectBF16NtK4S8,
   // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
   QmmVecQ4WordSubgroupBatch4BF16,
+  // G14C f16 a @ b.T row (MatmulGap H29, H31).
+  MatmulDirectF16NtK2S8,
   Count,
 };
 

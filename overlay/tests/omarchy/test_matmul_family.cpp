@@ -725,7 +725,7 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
   CHECK(kernel(g14c, bfloat16, false, true) ==
         ComputeKernel::MatmulDirectBF16NtK4S8);
   CHECK(kernel(g14c, float16, false, true) ==
-        ComputeKernel::MatmulDirectF16NtK4S8);
+        ComputeKernel::MatmulDirectF16NtK2S8);
   for (Dtype dtype : {float16, bfloat16, float32}) {
     for (bool a_t : {false, true}) {
       for (bool b_t : {false, true}) {
@@ -751,19 +751,19 @@ TEST_CASE("direct matmul route: every row starts at its measured m floor") {
     ComputeKernel kernel;
   };
   const Floor floors[] = {
-      {"Apple M1 (G13G B1)", float16, false, true, 128u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M1 (G13G B1)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
       {"Apple M1 (G13G B1)", float16, true, false, 1024u, ComputeKernel::MatmulDirectF16TnWS8},
       {"Apple M1 (G13G B1)", bfloat16, true, false, 512u, ComputeKernel::MatmulDirectBF16TnWS8},
       {"Apple M1 (G13G B1)", bfloat16, false, true, 4096u, ComputeKernel::MatmulDirectBF16Nt},
       {"Apple M1 (G13G B1)", float32, false, true, 512u, ComputeKernel::MatmulDirectF32NtK4S8},
-      {"Apple M1 (G13G B1)", float32, false, false, 512u, ComputeKernel::MatmulDirectF32NnK4S8},
+      {"Apple M1 (G13G B1)", float32, false, false, 2048u, ComputeKernel::MatmulDirectF32NnK4S8},
       {"Apple M1 (G13G B1)", float32, true, false, 512u, ComputeKernel::MatmulDirectF32TnWS8},
       {"Apple M1 Max (G13C C0)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
       {"Apple M1 Max (G13C C0)", float16, true, false, 4096u, ComputeKernel::MatmulDirectF16TnWS8},
       {"Apple M1 Max (G13C C0)", bfloat16, true, false, 4096u, ComputeKernel::MatmulDirectBF16TnWS8},
       {"Apple M1 Max (G13C C0)", bfloat16, false, true, 512u, ComputeKernel::MatmulDirectBF16NtK4S8},
       {"Apple M1 Max (G13C C0)", float32, false, true, 4096u, ComputeKernel::MatmulDirectF32NtK4S8},
-      {"Apple M2 Max (G14C B1)", float16, false, true, 1024u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M2 Max (G14C B1)", float16, false, true, 1024u, ComputeKernel::MatmulDirectF16NtK2S8},
       {"Apple M2 Max (G14C B1)", bfloat16, false, true, 512u, ComputeKernel::MatmulDirectBF16NtK4S8},
       {"Apple M2 Max (G14C B1)", bfloat16, true, false, 4096u, ComputeKernel::MatmulDirectBF16TnWS8},
   };
