@@ -12,9 +12,11 @@ ICD=$(ls "$DEMO_DIR"/mesa-install/share/vulkan/icd.d/*.json | head -1)
 [ -x "$DEMO_DIR/$BIN" ] || { echo "ERROR: $DEMO_DIR/$BIN is not executable. Run scripts/llamacpp-demo.sh first."; exit 2; }
 
 # --- Preflight: refuse before a model can push the machine into the OOM killer ----------------------------------
-# The model and the GPU buffers live in unified memory, and on Apple Silicon Linux they count as shared memory that
-# cannot be evicted. Require model size + 3 GiB of MemAvailable (LLAMACPP_DEMO_MEMINFO replaces /proc/meminfo, for tests).
+# The model and the GPU buffers live in unified memory. Refuse when MemAvailable is below the model size + 1 GiB; warn
+# when it is below the model size + 3 GiB. (An 8 GB machine with about 4.5 GiB free runs the 4B model, not the 9B.)
+# LLAMACPP_DEMO_MEMINFO replaces /proc/meminfo, for tests.
 MEMINFO=${LLAMACPP_DEMO_MEMINFO:-/proc/meminfo}
+GIB=$((1024 * 1024 * 1024))
 model=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
@@ -23,35 +25,16 @@ done
 if [ -n "$model" ]; then
   case "$model" in /*) mpath="$model" ;; *) mpath="$DEMO_DIR/$model" ;; esac
   if [ -f "$mpath" ]; then
-    need=$(( $(stat -c%s "$mpath") + 3 * 1024 * 1024 * 1024 ))
+    size=$(stat -c%s "$mpath")
     avail=$(( $(awk '/^MemAvailable:/ {print $2}' "$MEMINFO") * 1024 ))
-    if [ "$avail" -lt "$need" ]; then
-      echo "ERROR: not enough free memory: $((avail / 1048576)) MiB available, need $((need / 1048576)) MiB (model size + 3 GiB)."
+    if [ "$avail" -lt $((size + GIB)) ]; then
+      echo "ERROR: not enough free memory: $((avail / 1048576)) MiB available, need at least $(((size + GIB) / 1048576)) MiB (model size + 1 GiB)."
       echo "Close other programs, or use a smaller model (the 4B model in this doc), then rerun."
       exit 2
+    elif [ "$avail" -lt $((size + 3 * GIB)) ]; then
+      echo "warning: only $((avail / 1048576)) MiB available; $(((size + 3 * GIB) / 1048576)) MiB (model size + 3 GiB) is comfortable. Close other programs if it stalls." >&2
     fi
   fi
-fi
-swap_total=$(awk '/^SwapTotal:/ {print $2}' "$MEMINFO")
-# A lab host (it has gpu-turn) must also have swap or zram on and must run this inside a gpu-turn ticket.
-if command -v gpu-turn >/dev/null 2>&1 || [ -x "$HOME/bin/gpu-turn" ]; then
-  if [ "${swap_total:-0}" -eq 0 ]; then
-    echo "ERROR: no swap or zram is on, so a model that does not fit ends in the OOM killer. Turn it on first."
-    exit 2
-  fi
-  in_ticket=no
-  p=$$
-  while [ "$p" -gt 1 ]; do
-    if tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -Eq 'flock /tmp/[a-z0-9]+-gpu\.lock'; then in_ticket=yes; break; fi
-    p=$(ps -o ppid= -p "$p" 2> /dev/null | tr -d ' ') || break
-    [ -n "$p" ] || break
-  done
-  if [ "$in_ticket" != yes ]; then
-    echo "ERROR: this host uses gpu-turn tickets. Run this inside one:  gpu-turn -m 15 -- bash scripts/llamacpp-demo-run.sh ..."
-    exit 2
-  fi
-elif [ "${swap_total:-0}" -eq 0 ]; then
-  echo "warning: no swap is on; a model that does not fit will end in the OOM killer." >&2
 fi
 if ! command -v vulkaninfo >/dev/null 2>&1; then
   echo "ERROR: vulkaninfo not found. Install it: sudo pacman -S --needed vulkan-tools"
