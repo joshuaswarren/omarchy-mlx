@@ -12450,6 +12450,15 @@ bool int8_naive_forced() {
   return env != nullptr && env[0] == '1';
 }
 
+// Disable the cooperative-matrix int8 route (the landed default when the
+// device reports the f16 8x8x8 shape) so the tiled int32-imad kernel
+// (shaders/int8_matmul.comp) runs in its place. Used by the bitwise A/B
+// matrix to compare both routes against the naive kill switch.
+bool int8_coopmat_disabled() {
+  const char* env = std::getenv("MLX_OMARCHY_INT8_COOPMAT");
+  return env != nullptr && env[0] == '0';
+}
+
 // Symmetric-int8 matmul, shaders/int8_matmul.comp. X and W are read as
 // uint word views (4 int8 bytes per word, sign extended in-shader), so the
 // route needs no 8-bit storage capability; accumulation is exact int32 per
@@ -12522,6 +12531,11 @@ void Int8Matmul::eval_gpu(
   // LogicalOrBool is chunked (dispatch_logical_chunked); each dispatch
   // receives its first output element in shape[3]. For count <= one chunk this
   // is a single dispatch with shape[3] == 0, identical to the unchunked path.
+  // The cooperative-matrix path (shaders/int8_matmul_coop.comp) is the
+  // landed default when the device reports cooperative_matrix_f16_8 with
+  // subgroup size 32 and the reduction size is a multiple of 8 (the MMA
+  // flush granularity). f16xf16 -> f32 accumulation is bit-identical to
+  // int32-per-group: |x*w| <= 16129, group sums <= 256*16129 < 2^24.
   if (int8_naive_forced()) {
     for (uint32_t first = 0; first < params.count;) {
       const uint32_t end = omarchy::next_logical_chunk_end(first, params.count);
@@ -12536,6 +12550,24 @@ void Int8Matmul::eval_gpu(
     return;
   }
   params.shape[3] = 0u;
+  const auto& caps = encoder.device().capabilities();
+  const bool coopmat_ready =
+      caps.cooperative_matrix_f16_8 && caps.subgroup_size == 32u &&
+      !int8_coopmat_disabled() && params.matrix_k >= 8u &&
+      (params.matrix_k % 8u) == 0u &&
+      (params.reduce_size % 8u) == 0u && (params.matrix_k % 4u) == 0u;
+  if (coopmat_ready) {
+    const uint32_t n_groups = (params.matrix_n + 31u) / 32u;
+    const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::Int8MatmulCoopOp,
+        bindings,
+        params,
+        std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+        1u);
+    return;
+  }
   const uint32_t n_groups = (params.matrix_n + 15u) / 16u;
   const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
   encoder.dispatch_compute(

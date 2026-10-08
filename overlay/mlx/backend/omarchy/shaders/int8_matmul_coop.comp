@@ -1,0 +1,314 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Symmetric-int8 matmul (fast::Int8Matmul), cooperative-matrix route:
+// the landed default when the device reports cooperative_matrix_f16_8
+// with subgroup size 32. One 64-thread workgroup owns a 16x32 output
+// tile (two subgroups, each draining one 8x32 row block), and walks
+// K in 16-wide MMA steps. Both X and W bytes are staged as int8 into
+// shared memory and converted to float16 there: int8 values in
+// [-127, 127] are exact in f16, and |x*w| <= 16129 in f32, so every
+// partial 256-product group sum stays below 2^24 and the cooperative
+// matrix's f16xf16 -> f32 accumulation is bitwise identical to the
+// int32-mac per-group sum. Per group, the f32 accumulator is drained
+// into a shared scratch, multiplied by XS[m,g] in ascending group
+// order (the same order the retired one-thread-per-element kernel
+// uses, so bf16-RNE stores are identical to the naive route), then
+// the accumulator is reset for the next group. The SwiGLU variant
+// runs two B tiles and two accumulators from the one staged X tile.
+//
+// Push-constant routing matches the naive and tiled-fallback
+// kernels. shape[3] is unused (0); the shader grid-strides over
+// both tile axes, which keeps every output written under any
+// dispatch clamp. The host dispatches ceil(rows/16) x ceil(n/32)
+// workgroups (each axis clamped to kMaxComputeGroupCountX), and
+// falls back to the tiled int32-imad kernel when the cooperative
+// matrix extension is absent or group%8 != 0 (the MMA flush
+// granularity is 8-wide).
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InX {
+  uint words[];
+} in_x;
+layout(set = 0, binding = 1, std430) readonly buffer InXS {
+  float values[];
+} in_xs;
+layout(set = 0, binding = 2, std430) readonly buffer InW {
+  uint words[];
+} in_w;
+layout(set = 0, binding = 3, std430) readonly buffer InWS {
+  float values[];
+} in_ws;
+layout(set = 0, binding = 4, std430) readonly buffer InB {
+  float values[];
+} in_b;
+layout(set = 0, binding = 5, std430) buffer OutBF16 {
+  uint16_t values[];
+} out_bf16;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const uint TILE_M = 16u;
+const uint TILE_N = 32u;
+const uint STEP_K = 16u;
+const uint MAT = 8u;
+const uint COL_BLOCKS = TILE_N / MAT;        // 4
+const uint GROUPS_PER_ROW = 0u;              // not used at compile time
+
+// Shared scratch:
+//   a_s  TILE_M * STEP_K   f16 X tile  (16 * 16 * 2 = 512 B)
+//   b_s  STEP_K * TILE_N   f16 W (gate) tile (16 * 32 * 2 = 1 KiB)
+//   bv_s STEP_K * TILE_N   f16 W (value) tile, SwiGLU only
+//   d_s  TILE_M * TILE_N   f32 accumulator drain scratch (2 KiB)
+//   dv_s TILE_M * TILE_N   f32 value drain scratch, SwiGLU only
+// Total: 3.5 KiB non-swiglu, 5.5 KiB swiglu.
+shared float16_t a_s[TILE_M * STEP_K];
+shared float16_t b_s[STEP_K * TILE_N];
+shared float16_t bv_s[STEP_K * TILE_N];
+shared float d_s[TILE_M * TILE_N];
+shared float dv_s[TILE_M * TILE_N];
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+// Stage one 4-byte word of X row (tr * TILE_M + m_row_local) at byte
+// offset k_base + 4*b into a_s[m_row_local, 4*b + lane] as float16.
+// The k%4==0 host gate guarantees a single uint word covers bytes
+// k_base+4*b .. +3, and the host bounds-check on row/column mean
+// no extra guard against OOB buffer reads.
+void stage_x_word(uint tr, uint m_row_local, uint k_base, uint b) {
+  uint m_row = tr * TILE_M + m_row_local;
+  uint kk = k_base + b * 4u;
+  bool ok = m_row < params.matrix_m;
+  uint word = ok
+      ? in_x.words[params.lhs_offset / 4u +
+                   (m_row * params.matrix_k + kk) / 4u]
+      : 0u;
+  uint base = m_row_local * STEP_K + b * 4u;
+  for (uint lane = 0u; lane < 4u; ++lane) {
+    int b_int = int((word >> (lane * 8u)) & 0xffu);
+    b_int = (b_int << 24) >> 24;
+    a_s[base + lane] = float16_t(float(b_int));
+  }
+}
+
+// Stage two 4-byte words of W row w_row at byte offset k_base + 8*b
+// into b_s[k_strip * TILE_N + col_base .. +7] (or bv_s for the
+// value stream). 16 k-strips * 4 slots = 64 slots, each handling
+// 8 bytes (two 4-byte words) per workgroup lane.
+void stage_w_two_words(uint w_row, uint k_base, uint b, uint stage_sel) {
+  bool ok = w_row < params.matrix_n * 2u;
+  for (uint w = 0u; w < 2u; ++w) {
+    uint kk = k_base + (b * 2u + w) * 4u;
+    uint word = ok
+        ? in_w.words[params.rhs_offset / 4u +
+                     (w_row * params.matrix_k + kk) / 4u]
+        : 0u;
+    uint col_base_local = (b * 2u + w) * 4u;
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      int b_int = int((word >> (lane * 8u)) & 0xffu);
+      b_int = (b_int << 24) >> 24;
+      float16_t v = float16_t(float(b_int));
+      if (stage_sel == 0u) {
+        b_s[kk * TILE_N + col_base_local + lane] = v;
+      } else {
+        bv_s[kk * TILE_N + col_base_local + lane] = v;
+      }
+    }
+  }
+}
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;
+  // Subgroup 0 -> row block 0 (rows 0..7), subgroup 1 -> row block 1
+  // (rows 8..15). The 32 lanes inside a subgroup each own one
+  // (row, col-quadrant) output: row index = (lid >> 2) (0..7),
+  // col-quadrant = lid & 3 (0..3, 8 cols each).
+  uint lid = tid & 31u;
+  uint sub_id = tid >> 5u;
+  uint sub_rb = sub_id;
+  uint wpart = lid >> 2u;        // 0..3
+  uint wcol = lid & 3u;          // 0..3
+
+  uint n_tiles = (params.matrix_n + TILE_N - 1u) / TILE_N;
+  uint m_tiles = (params.matrix_m + TILE_M - 1u) / TILE_M;
+
+  for (uint tc = gl_WorkGroupID.x; tc < n_tiles; tc += gl_NumWorkGroups.x) {
+    for (uint tr = gl_WorkGroupID.y; tr < m_tiles; tr += gl_NumWorkGroups.y) {
+      uint row_base = tr * TILE_M;
+      uint col_base = tc * TILE_N;
+      uint g_wcol = col_base + wpart * MAT + wcol;
+      bool in_col = g_wcol < params.matrix_n;
+      bool swiglu = (params.flags & 1u) != 0u;
+      uint groups_per_row = params.matrix_k / params.reduce_size;
+
+      float gate_total = 0.0f;
+      float value_total = 0.0f;
+
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+          acc[COL_BLOCKS];
+      coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseAccumulator>
+          acc_v[COL_BLOCKS];
+      for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+        acc[cb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+            gl_MatrixUseAccumulator>(0.0);
+        acc_v[cb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+            gl_MatrixUseAccumulator>(0.0);
+      }
+
+      for (uint g = 0u; g < groups_per_row; ++g) {
+        uint k_base = g * params.reduce_size;
+        for (uint step = 0u; step * STEP_K < params.reduce_size; ++step) {
+          uint k = k_base + step * STEP_K;
+          barrier();
+          // Stage X: 64 threads -> 16 rows * 4 words each.
+          if (tid < 16u * 4u) {
+            stage_x_word(tr, tid >> 2u, k, tid & 3u);
+          }
+          // Stage gate W: 64 threads -> 16 k-strips * 4 slots each.
+          if (tid < 16u * 4u) {
+            stage_w_two_words(col_base + (tid >> 2u), k, tid & 3u, 0u);
+          }
+          if (swiglu && tid < 16u * 4u) {
+            stage_w_two_words(
+                params.matrix_n + col_base + (tid >> 2u), k, tid & 3u, 1u);
+          }
+          barrier();
+
+          // Load A from shared, 8x8 block at the subgroup's row block.
+          coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+              mat_a;
+          coopMatLoad(
+              mat_a, a_s, sub_rb * MAT * STEP_K, STEP_K,
+              gl_CooperativeMatrixLayoutRowMajor);
+
+          // Load B for each col block. STEP_K/MAT = 2 ks iterations
+          // for the 8x8 MMA. coopMatMulAdd takes the same K dim.
+          for (uint ks = 0u; ks < STEP_K / MAT; ++ks) {
+            for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+              coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB>
+                  mat_b;
+              coopMatLoad(
+                  mat_b, b_s,
+                  (ks * MAT) * TILE_N + cb * MAT,
+                  TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+              acc[cb] = coopMatMulAdd(mat_a, mat_b, acc[cb]);
+              if (swiglu) {
+                coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB>
+                    mat_bv;
+                coopMatLoad(
+                    mat_bv, bv_s,
+                    (ks * MAT) * TILE_N + cb * MAT,
+                    TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                acc_v[cb] = coopMatMulAdd(mat_a, mat_bv, acc_v[cb]);
+              }
+            }
+          }
+        }
+
+        // Per-group flush: store the f32 accumulators to shared, then
+        // multiply by XS[m,g] in ascending group order. The drain
+        // barrier is the uniform barrier after coopMatStore; the next
+        // iteration's leading barrier (above) covers the next step's
+        // staging, so this is the only sync needed.
+        for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+          coopMatStore(
+              acc[cb], d_s, (sub_rb * MAT) * TILE_N + cb * MAT,
+              TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+          if (swiglu) {
+            coopMatStore(
+                acc_v[cb], dv_s, (sub_rb * MAT) * TILE_N + cb * MAT,
+                TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+          }
+        }
+        barrier();
+        {
+          // Each thread owns one row within its subgroup (sub_rb*8 +
+          // (lid>>2) -> 0..15 across the workgroup), and 8
+          // consecutive columns. Read 8 floats from d_s (and dv_s).
+          uint m_local = sub_rb * 8u + (lid >> 2u);
+          uint m_full = row_base + m_local;
+          uint n_local0 = (lid & 3u) * 8u;
+          if (m_full < params.matrix_m) {
+            float xs = in_xs.values[params.shape[0] +
+                                    m_full * groups_per_row + g];
+            uint e0 = m_local * TILE_N + n_local0;
+            for (uint i = 0u; i < 8u; ++i) {
+              gate_total += d_s[e0 + i] * xs;
+            }
+            if (swiglu) {
+              for (uint i = 0u; i < 8u; ++i) {
+                value_total += dv_s[e0 + i] * xs;
+              }
+            }
+          }
+        }
+
+        // Reset accumulators for the next group.
+        for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+          acc[cb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(0.0);
+          acc_v[cb] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(0.0);
+        }
+      }
+
+      // Epilogue (matches the naive kernel order, per output element).
+      if (in_col) {
+        uint m_local = sub_rb * 8u + (lid >> 2u);
+        uint m_full = row_base + m_local;
+        if (m_full < params.matrix_m) {
+          uint ws_base = params.shape[1];
+          uint b_base = params.shape[2];
+          if (swiglu) {
+            float gate = gate_total *
+                in_ws.values[ws_base + g_wcol] + in_b.values[b_base + g_wcol];
+            float value = value_total *
+                in_ws.values[ws_base + params.matrix_n + g_wcol] +
+                in_b.values[b_base + params.matrix_n + g_wcol];
+            out_bf16.values[params.output_offset + m_full * params.matrix_n +
+                            g_wcol] =
+                bf16_store(gate / (1.0f + exp(-gate)) * value);
+          } else {
+            out_bf16.values[params.output_offset + m_full * params.matrix_n +
+                            g_wcol] = bf16_store(
+                gate_total * in_ws.values[ws_base + g_wcol] +
+                in_b.values[b_base + g_wcol]);
+          }
+        }
+      }
+    }
+  }
+}
