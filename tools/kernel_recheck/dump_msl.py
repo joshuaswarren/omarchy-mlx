@@ -1,16 +1,20 @@
 """Replicate mlx's metal_kernel write_signature to dump the generated MSL for
 each recheck kernel without touching the GPU (kernel construction only; the
-caller must not mx.eval).
+caller must not mx.eval). Byte-verified against the wheel's verbose=True dump
+on 2026-10-08 (bitlinear_matmul).
 
 Matches .work/mlx/mlx/backend/common/metal_kernel.cpp:
   - inputs with size < 8 bind in the `constant` address space, others `device`;
   - ndim == 0 binds as `T&`, otherwise `T*`;
   - `NAME_shape` / `NAME_strides` / `NAME_ndim` metadata buffers are appended
     when the source mentions them;
-  - attributes are appended when the source mentions them;
+  - attributes are appended when the source mentions them, and the closing
+    `) {` lands on the last attribute's line;
+  - the kernel function name carries the template hash and the per-input /
+    per-output dtype suffixes ('s' for 0-d, 'c' for small arrays);
   - templated kernels get `template <...>` before the kernel and the
     `template [[host_name(...)]] [[kernel]] decltype(...)` instantiation after
-    the body.
+    the body, with bools rendered as 0/1.
 
 Usage: python3 -m tools.kernel_recheck.dump_msl [NAME...] [--out DIR]
 Prints one `NAME <msl-path> <translate argv>` line per kernel; the argv feeds
@@ -29,10 +33,14 @@ DTYPE_STR = {
     "float16": "float16_t",
     "bfloat16": "bfloat16_t",
     "uint32": "uint",
+    "uint64": "uint64_t",
     "int32": "int",
-    "uint8": "uchar",
-    "uint16": "ushort",
-    "int8": "char",
+    "int64": "int64_t",
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
+    "int8": "int8_t",
+    "int16": "int16_t",
+    "bool": "bool",
 }
 
 METAL_ATTRS = [
@@ -59,13 +67,30 @@ METAL_ATTRS = [
 
 
 def _template_value(value):
+    """(param kind, definition rendering, instantiation rendering)."""
     if isinstance(value, bool):
-        return ("bool", "true" if value else "false")
+        return ("bool", str(int(value)), str(int(value)))
     if isinstance(value, int):
-        return ("int", str(value))
+        return ("int", str(value), str(value))
     if isinstance(value, str) and value in DTYPE_STR:
-        return ("typename", DTYPE_STR[value])
-    return ("typename", "float")
+        return ("typename", DTYPE_STR[value], DTYPE_STR[value])
+    return ("typename", "float", "float")
+
+
+def _make_template_hash(template_def):
+    out = []
+    i = 0
+    while i < len(template_def):
+        c = template_def[i]
+        if c in "<>":
+            out.append("_")
+        elif c == "," and i + 1 < len(template_def) and template_def[i + 1] == " ":
+            out.append("_")
+            i += 1
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)[:-1]
 
 
 def generated_msl(name):
@@ -73,15 +98,28 @@ def generated_msl(name):
     source = source_text(spec)
     inputs = build_inputs(spec)
     template = spec.get("template", [])
+    tdef = "<" + ", ".join(_template_value(v)[1] for _, v in template) + ">" \
+        if template else ""
+    kernel_name = f"custom_kernel_{name}" + \
+        (("_" + _make_template_hash(tdef)) if template else "")
+    in_dtypes = defs.IN_DTYPES[name]
+    for i, n in enumerate(spec["inputs"]):
+        arr = np.asarray(inputs[n])
+        kernel_name += "_" + DTYPE_STR[in_dtypes[i]]
+        if arr.ndim == 0:
+            kernel_name += "s"
+        elif arr.size < 8:
+            kernel_name += "c"
+    for od in spec["out_dtypes"]:
+        kernel_name += "_" + DTYPE_STR[od]
+
     pieces = []
     if template:
         parts = [f"{_template_value(v)[0]} {k}" for k, v in template]
         pieces.append("template <" + ", ".join(parts) + ">\n")
-    func = f"custom_kernel_{name}"
-    pieces.append(f"[[kernel]] void {func}(\n")
+    pieces.append(f"[[kernel]] void {kernel_name}(\n")
     index = 0
     params = []
-    in_dtypes = defs.IN_DTYPES[name]
     for i, n in enumerate(spec["inputs"]):
         arr = np.asarray(inputs[n])
         location = "constant" if arr.size < 8 else "device"
@@ -107,24 +145,24 @@ def generated_msl(name):
         params.append(f"  device {t}* {on} [[buffer({index})]]")
         index += 1
     attrs = [a for a in METAL_ATTRS if a in source]
-    total = index
     rendered = []
     for k, p in enumerate(params):
-        is_last_param = k == len(params) - 1
-        sep = "" if (is_last_param and not attrs) else ","
-        rendered.append(p + sep)
-    for k, a in enumerate(attrs):
-        sep = "," if k < len(attrs) - 1 else ""
-        rendered.append(f"  uint3 {a} [[{a}]]{sep}")
-    pieces.append("\n".join(rendered) + "\n) {\n")
+        last = k == len(params) - 1
+        rendered.append(p + ("" if last and not attrs else ","))
+    if attrs:
+        rendered[-1] = rendered[-1].rstrip(",") + ","
+        for k, a in enumerate(attrs):
+            end = "]]) {" if k == len(attrs) - 1 else "],"
+            rendered.append(f"  uint3 {a} [[{a}{end}")
+    else:
+        rendered[-1] = rendered[-1] + ") {"
+    pieces.append("\n".join(rendered) + "\n")
     pieces.append(source)
     pieces.append("\n}\n")
     if template:
-        tvals = ", ".join(_template_value(v)[1] for _, v in template)
-        tdef = f"<{tvals}>"
         pieces.append(
-            f"\ntemplate [[host_name(\"{func}\")]] [[kernel]] decltype({func}{tdef}) "
-            f"{func}{tdef};\n")
+            f"\ntemplate [[host_name(\"{kernel_name}\")]] [[kernel]] "
+            f"decltype({kernel_name}{tdef}) {kernel_name}{tdef};\n\n")
     return "".join(pieces)
 
 
