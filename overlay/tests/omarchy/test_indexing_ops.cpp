@@ -33,6 +33,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/gpu/copy.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
@@ -1047,11 +1048,63 @@ TEST_CASE("masked_scatter skips writes when the source runs out") {
 // 3. If offsets are wrong: dump counts (the cast uint32 mask) and the
 //    raw scan output separately to split cast vs scan.
 
+TEST_CASE("bool cumsum after a bool atomic-pair copy inside one batch") {
+  // Micro-repro for the MaskedScatter bool defect: the scatter records a
+  // packed-bool atomic-pair copy (dst -> out) and THEN an exclusive int32
+  // scan of the same kind of packed mask. If the scan's read of its input
+  // (or its write) is lost after the preceding atomic-pair dispatch, this
+  // reproduces the all-zero offsets without MaskedScatter in the graph.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto& encoder = omarchy::get_command_encoder(stream);
+
+  std::vector<uint8_t> mb = {1, 0, 1, 0, 1, 1};
+  array mask_flat = array(mb.begin(), Shape{6}, bool_);
+
+  // The atomic-pair copy: bool -> bool dense copy (records the same
+  // CopyGeneralBool atomic kernel the MaskedScatter bool branch records
+  // before its scan).
+  array copied = astype(mask_flat, bool_, stream);
+  copied.eval();
+  encoder.add_temporary(copied);
+
+  // The scan, recorded on the same encoder right after the atomics.
+  // Exclusive prefix sum of [1,0,1,0,1,1] is [0,1,1,2,2,3].
+  array offsets = cumsum(copied, 0, false, false, stream);
+  encoder.add_temporary(offsets);
+  offsets.eval();
+  sync_gpu(stream);
+  const int* ov = offsets.data<int>();
+  const int want[6] = {0, 1, 1, 2, 2, 3};
+  for (int i = 0; i < 6; ++i) {
+    CHECK_MESSAGE(ov[i] == want[i], "micro offsets[", i, "]: got ", ov[i],
+                  " want ", want[i]);
+  }
+
+  // Control: the same scan without the preceding atomic copy.
+  array offsets_direct = cumsum(mask_flat, 0, false, false, stream);
+  encoder.add_temporary(offsets_direct);
+  offsets_direct.eval();
+  sync_gpu(stream);
+  const int* dv = offsets_direct.data<int>();
+  for (int i = 0; i < 6; ++i) {
+    CHECK_MESSAGE(dv[i] == want[i], "direct offsets[", i, "]: got ", dv[i],
+                  " want ", want[i]);
+  }
+}
+
 TEST_CASE("masked_scatter supports bool arrays (upstream #4635)") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
+
+  // The NumPy/CPU reference, computed here so the expectations cannot
+  // drift from the semantics: out = dst; rank = 0; for each position i
+  // in flat order: if mask[i]: if rank < src.size(): out[i] = src[rank];
+  // rank += 1.
   auto check_bools = [](array value,
                         const std::vector<bool>& expected,
                         const Stream& s) {
@@ -1063,77 +1116,123 @@ TEST_CASE("masked_scatter supports bool arrays (upstream #4635)") {
                     values[i], " want ", expected[i]);
     }
   };
+  auto reference = [](std::vector<bool> dst,
+                      const std::vector<bool>& mask,
+                      const std::vector<bool>& src) {
+    std::vector<bool> out = dst;
+    size_t rank = 0;
+    for (size_t i = 0; i < mask.size(); ++i) {
+      if (mask[i]) {
+        if (rank < src.size()) {
+          out[i] = src[rank];
+        }
+        rank += 1;
+      }
+    }
+    return out;
+  };
+  auto make = [](const std::vector<uint8_t>& bits) {
+    return array(bits.begin(), Shape{static_cast<int>(bits.size())}, bool_);
+  };
+  auto to_bits = [](const std::vector<bool>& v) {
+    return std::vector<uint8_t>(v.begin(), v.end());
+  };
 
   // 1-D basic: dst [F,T,F,T], mask [F,T,F,T], src [T,F].
-  // True positions 1,3 take src[0]=T, src[1]=F (NumPy reference:
-  // a[mask] = [True, False]).
-  std::vector<uint8_t> db = {0, 1, 0, 1};
-  array dst(db.begin(), Shape{4}, bool_);
-  std::vector<bool> mv = {false, true, false, true};
-  array mask(mv.begin(), Shape{4}, bool_);
-  std::vector<bool> sb = {true, false};
-  array src(sb.begin(), Shape{2}, bool_);
-  array out = masked_scatter(dst, mask, src, stream);
-  check_bools(out, {false, true, false, false}, stream);
+  {
+    std::vector<bool> dst = {false, true, false, true};
+    std::vector<bool> mask = {false, true, false, true};
+    std::vector<bool> src = {true, false};
+    array out = masked_scatter(
+        make(to_bits(dst)), make(to_bits(mask)), make(to_bits(src)), stream);
+    check_bools(out, reference(dst, mask, src), stream);
+  }
 
-  // Upstream #4635 shape: single-element target and mask, scalar-style
-  // single-element source; the masked position flips to true.
-  array d0 = array({false}, {1}, bool_);
-  array m0 = array({true}, {1}, bool_);
-  array s0 = array({true}, {1}, bool_);
-  array o0 = masked_scatter(d0, m0, s0, stream);
-  check_bools(o0, {true}, stream);
-  array m0f = array({false}, {1}, bool_);
-  array o0f = masked_scatter(d0, m0f, s0, stream);
-  check_bools(o0f, {false}, stream);
+  // Upstream #4635 shape: single-element target and mask (scalar-style).
+  {
+    std::vector<bool> d0 = {false};
+    std::vector<bool> m0t = {true};
+    std::vector<bool> m0f = {false};
+    std::vector<bool> s0 = {true};
+    check_bools(
+        masked_scatter(make(to_bits(d0)), make(to_bits(m0t)),
+                       make(to_bits(s0)), stream),
+        reference(d0, m0t, s0), stream);
+    check_bools(
+        masked_scatter(make(to_bits(d0)), make(to_bits(m0f)),
+                       make(to_bits(s0)), stream),
+        reference(d0, m0f, s0), stream);
+  }
 
-  // N-dim: same-shape mask over a (2,3) target, src is the flat
-  // true-position sequence in row-major order (NumPy reference:
-  // a[mask] = [False, True, False]).
-  array ndst = zeros({2, 3}, bool_, stream);
-  std::vector<bool> nmv = {true, false, true, false, true, true};
-  array nmask(nmv.begin(), Shape{2, 3}, bool_);
-  std::vector<bool> nsv = {false, true, false};
-  array nsrc(nsv.begin(), Shape{3}, bool_);
-  array nout = masked_scatter(ndst, nmask, nsrc, stream);
-  check_bools(
-      nout, {false, true, false, false, true, true}, stream);
+  // N-dim flattened (2,3): mask trues at 0,2,4,5; src [F,T,F].
+  {
+    std::vector<bool> ndst = {false, false, false,
+                              false, false, false};
+    std::vector<bool> nmask = {true,  false, true,
+                               false, true,  true};
+    std::vector<bool> nsrc = {false, true, false};
+    array nout = masked_scatter(
+        make(to_bits(ndst)), make(to_bits(nmask)), make(to_bits(nsrc)),
+        stream);
+    check_bools(nout, reference(ndst, nmask, nsrc), stream);
+  }
 
-  // Broadcast scalar source over every true position.
-  array bsrc = array({true}, {1}, bool_);
-  array bout = masked_scatter(ndst, nmask, bsrc, stream);
-  check_bools(
-      bout, {true, false, true, false, true, true}, stream);
+  // Broadcast scalar source: every true position gets the scalar.
+  {
+    std::vector<bool> bdst = {false, false, false,
+                              false, false, false};
+    std::vector<bool> bmask = {true,  false, true,
+                               false, true,  true};
+    std::vector<bool> bsrc = {true};
+    check_bools(
+        masked_scatter(make(to_bits(bdst)), make(to_bits(bmask)),
+                       make(to_bits(bsrc)), stream),
+        reference(bdst, bmask, bsrc), stream);
+  }
 
   // Empty mask: out equals dst.
-  array edst = zeros({2, 2}, bool_, stream);
-  array emask = zeros({2, 2}, bool_, stream);
-  array eout = masked_scatter(edst, emask, bsrc, stream);
-  check_bools(eout, {false, false, false, false}, stream);
+  {
+    std::vector<bool> edst = {false, false, false, false};
+    std::vector<bool> emask = {false, false, false, false};
+    std::vector<bool> bsrc = {true};
+    check_bools(
+        masked_scatter(make(to_bits(edst)), make(to_bits(emask)),
+                       make(to_bits(bsrc)), stream),
+        reference(edst, emask, bsrc), stream);
+  }
 
-  // All-true mask: out equals the flat source sequence.
-  array adst = zeros({2, 2}, bool_, stream);
-  std::vector<bool> amv = {true, true, true, true};
-  array amask(amv.begin(), Shape{2, 2}, bool_);
-  std::vector<bool> asv = {true, false, false, true};
-  array asrc(asv.begin(), Shape{4}, bool_);
-  array aout = masked_scatter(adst, amask, asrc, stream);
-  check_bools(aout, {true, false, false, true}, stream);
+  // All-true mask: out equals the flat source [T,F,F,T].
+  {
+    std::vector<bool> adst = {false, false, false, false};
+    std::vector<bool> amask = {true, true, true, true};
+    std::vector<bool> asrc = {true, false, false, true};
+    check_bools(
+        masked_scatter(make(to_bits(adst)), make(to_bits(amask)),
+                       make(to_bits(asrc)), stream),
+        reference(adst, amask, asrc), stream);
+  }
 
   // All-false mask: out equals dst.
-  std::vector<bool> afv = {false, false, false, false};
-  array afmask(afv.begin(), Shape{2, 2}, bool_);
-  array afout = masked_scatter(adst, afmask, asrc, stream);
-  check_bools(afout, {false, false, false, false}, stream);
+  {
+    std::vector<bool> afdst = {false, false, false, false};
+    std::vector<bool> afmask = {false, false, false, false};
+    std::vector<bool> bsrc = {true};
+    check_bools(
+        masked_scatter(make(to_bits(afdst)), make(to_bits(afmask)),
+                       make(to_bits(bsrc)), stream),
+        reference(afdst, afmask, bsrc), stream);
+  }
 
-  // Source runs out: remaining true positions keep dst (upstream Metal
-  // behavior, same as the float variant).
-  array sdst = zeros({3}, bool_, stream);
-  std::vector<bool> smv = {true, true, true};
-  array smask(smv.begin(), Shape{3}, bool_);
-  array ssrc = array({true, true}, {2}, bool_);
-  array sout = masked_scatter(sdst, smask, ssrc, stream);
-  check_bools(sout, {true, true, false}, stream);
+  // Source runs out: remaining true positions keep dst.
+  {
+    std::vector<bool> sdst = {false, false, false};
+    std::vector<bool> smask = {true, true, true};
+    std::vector<bool> ssrc = {true, true};
+    check_bools(
+        masked_scatter(make(to_bits(sdst)), make(to_bits(smask)),
+                       make(to_bits(ssrc)), stream),
+        reference(sdst, smask, ssrc), stream);
+  }
 }
 
 TEST_CASE("masked_scatter carries the scan across chunks and rows") {
