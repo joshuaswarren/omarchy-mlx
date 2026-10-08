@@ -12215,7 +12215,7 @@ void GatedDeltaUpdate::eval_gpu(
              ? 2
              : (omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") ? 1 : 0));
   const uint32_t gdn_recur32_min_t = gdn_recur32_mode == 2 ? 2u : 64u;
-  const bool gdn_recur32 = gdn_recur32_mode != 0 && !has_mask &&
+  const bool gdn_recur32 = gdn_recur32_mode != 0 &&
       g.ndim() == 3 && static_cast<uint32_t>(T) >= gdn_recur32_min_t &&
       gdn_caps.subgroup_size == 32u;
   if (gdn_recur32) {
@@ -12237,8 +12237,13 @@ void GatedDeltaUpdate::eval_gpu(
     params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
     params.dims = static_cast<uint32_t>(T);
     // Scalar g only: [B=1, T, Hv] (ndim gate; B==1 comes from fused_ready).
-    // Bit2 selects the f32 gate load.
+    // Bit1 enables the per-token mask (offset in shape[3]); bit2 selects the
+    // f32 gate load.
     params.flags = (g.dtype() == float32 ? 4u : 0u);
+    if (has_mask) {
+      params.shape[3] = checked_item_offset(*mask, mask->size(), tag, out);
+      params.flags |= 2u;
+    }
     std::array<omarchy::ComputeBinding, 11> bindings{
         binding(q),      // 0 QBuf
         binding(k),      // 1 KBuf
@@ -12248,7 +12253,7 @@ void GatedDeltaUpdate::eval_gpu(
         binding(h0),     // 5 SIn
         binding(out),    // 6 YBuf
         binding(hf),     // 7 SOut
-        binding(out),    // 8 MBuf - unused (maskless gate)
+        has_mask ? binding(*mask) : binding(out),  // 8 MBuf (mask bytes; unused when maskless)
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
     // One 128-thread workgroup per four (hv, dv) rows: grid (Hv, Dv/4).

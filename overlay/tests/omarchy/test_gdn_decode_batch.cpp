@@ -258,7 +258,9 @@ uint64_t dispatches(const std::vector<array>& y, Stream s) {
   auto& enc = omarchy::get_command_encoder(s);
   enc.synchronize("gdn_prefill_inputs");
   uint64_t before = counters().vk_compute_dispatches.load();
-  auto r = fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4], y[5]);
+  auto r = y.size() > 6
+      ? fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4], y[5], y[6])
+      : fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4], y[5]);
   eval(r);
   enc.synchronize("gdn_prefill_outputs");
   return counters().vk_compute_dispatches.load() - before;
@@ -284,6 +286,44 @@ TEST_CASE("batched prefill stays on the fused dispatches") {
   // composed per-token chain is thousands of dispatches at T = 128.
   CHECK_MESSAGE(batched <= 4 * single + 16, "B=4 prefill took ", batched,
                 " dispatches against ", single, " for one row: it fell back");
+}
+
+// The single-pass per-token route (one dispatch per row at T = 128) must take
+// a masked row too: the padded rows of a real batched prefill carry a mask,
+// and a masked row used to fall to the two-pass snapshot scan (about 10x the
+// time). Checked only where the maskless row is one dispatch (the route that
+// skips the chunk walk); other devices keep their own masked route.
+TEST_CASE("masked prefill stays on the single-pass route where maskless does") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  constexpr int t = 128;
+  auto x = prefill_inputs(B, t, s);
+  std::vector<bool> bits;
+  for (int b = 0; b < B; ++b) {
+    for (int i = 0; i < t; ++i) {
+      bits.push_back(i >= b * 5 + 7);
+    }
+  }
+  auto masked = x;
+  masked.push_back(array(bits.begin(), {B, t}, bool_));
+  eval(x);
+  eval(masked);
+  std::vector<array> one, one_masked;
+  for (const auto& v : x) one.push_back(row(v, 0, s));
+  for (const auto& v : masked) one_masked.push_back(row(v, 0, s));
+  eval(one);
+  eval(one_masked);
+  uint64_t plain = dispatches(one, s), padded = dispatches(one_masked, s),
+           padded_batch = dispatches(masked, s);
+  provenance("gdn_masked_prefill");
+  std::cout << "[gdn_masked_prefill] B=1 T=128 maskless " << plain
+            << " dispatches, masked " << padded << ", B=4 masked "
+            << padded_batch << "\n";
+  if (plain != 1) return;
+  CHECK_MESSAGE(padded == plain, "a masked row took ", padded,
+                " dispatches against ", plain, " maskless");
+  CHECK_MESSAGE(padded_batch <= 4 * padded + 16, "B=4 masked prefill took ",
+                padded_batch, " dispatches against ", padded, " for one row");
 }
 
 // A dtype the fused route does not take (fp16) keeps ONE batched composed

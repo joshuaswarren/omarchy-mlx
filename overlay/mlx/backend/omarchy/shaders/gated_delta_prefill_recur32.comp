@@ -26,9 +26,9 @@
 // chain. The numerics gate is the fp64 reference tolerance used by
 // test_gdn_maskless_correctness (y 0.02 abs, state 2e-4 abs), not a
 // kernel-bits hash. Dispatch (primitives.cpp) selects this kernel only
-// for the square bf16 Dk=Dv=128 maskless scalar-g shape on 32-lane
-// subgroup devices; masked, per-Dk-g, or shorter inputs keep the
-// existing routes.
+// for the square bf16 Dk=Dv=128 scalar-g shape on 32-lane subgroup
+// devices, with or without a per-token mask; per-Dk-g or shorter inputs
+// keep the existing routes.
 
 #version 460
 
@@ -76,11 +76,11 @@ layout(push_constant) uniform Params {
   uint matrix_m;   // Dk
   uint matrix_n;   // Dv
   uint matrix_k;   // Hv
-  uint flags;      // bit2: g is f32 (maskless scalar-g route only)
+  uint flags;      // bit1: per-token mask, bit2: g is f32 (scalar-g route only)
   float alpha;
   float beta_f;
   uint dims;       // T
-  uint shape[4];   // [0]=g offset, [1]=h0 offset, [2]=hf offset
+  uint shape[4];   // [0]=g offset, [1]=h0 offset, [2]=hf offset, [3]=mask offset
   uint in_strides[4];
   uint out_strides[4];
   uint chunk;
@@ -118,6 +118,15 @@ void main() {
 
   uint kd = lane * SLICE;
   for (uint t = 0u; t < T; ++t) {
+    // Scalar per-token validity (mask [B=1, T], subgroup uniform): a masked-out
+    // token leaves the state untouched and the output zero, like the scan
+    // routes and the composed fallback's where() (left-padded batch rows).
+    if ((params.flags & 2u) != 0u && m_buf.v[params.shape[3] + t] == 0u) {
+      if (lane == 0u) {
+        y_buf.v[params.output_offset + (t * hv + head) * Dv + dv] = uint16_t(0u);
+      }
+      continue;
+    }
     uint act = t * hv + head;
     float g = (params.flags & 4u) != 0u
         ? g_buf_f.v[params.shape[0] + act]
