@@ -3678,8 +3678,9 @@ TEST_CASE("argmax reduces last-axis rows through Vulkan compute") {
   }
   Stream stream = gpu_stream();
 
-  // Exact indices, a tie row, negative values, NaN skipping, and the
-  // all-NaN row that falls back to index 0.
+  // Exact indices, a tie row, negative values, and NaN rows: mlx
+  // reduction semantics propagate NaN, so the first NaN index wins for
+  // argmin and argmax alike (the all-NaN row returns index 0).
   std::vector<float> xv = {
       1.0f, 3.0f, 2.0f,
       3.0f, 3.0f, 1.0f,
@@ -3689,7 +3690,7 @@ TEST_CASE("argmax reduces last-axis rows through Vulkan compute") {
       std::numeric_limits<float>::quiet_NaN(),
       std::numeric_limits<float>::quiet_NaN()};
   array x(xv.begin(), Shape{5, 3}, float32);
-  check_indices(argmax(x, -1, false, stream), {1, 0, 1, 2, 0}, stream);
+  check_indices(argmax(x, -1, false, stream), {1, 0, 1, 1, 0}, stream);
 
   // keepdims keeps the reduced axis with size 1.
   array kept = argmax(x, -1, true, stream);
@@ -3698,7 +3699,7 @@ TEST_CASE("argmax reduces last-axis rows through Vulkan compute") {
   CHECK_EQ(kept.shape().size(), 2);
   CHECK_EQ(kept.shape(0), 5);
   CHECK_EQ(kept.shape(1), 1);
-  check_indices(std::move(kept), {1, 0, 1, 2, 0}, stream);
+  check_indices(std::move(kept), {1, 0, 1, 1, 0}, stream);
 
   // A 1000-wide row crosses several 256-thread blocks. The spike at 512
   // ties the one at 768, so the first occurrence wins; the low spike at
@@ -3734,7 +3735,7 @@ TEST_CASE("argmin matches first-occurrence ties through Vulkan compute") {
       std::numeric_limits<float>::quiet_NaN(),
       std::numeric_limits<float>::quiet_NaN()};
   array x(xv.begin(), Shape{5, 3}, float32);
-  check_indices(argmin(x, -1, false, stream), {0, 2, 0, 0, 0}, stream);
+  check_indices(argmin(x, -1, false, stream), {0, 2, 0, 1, 0}, stream);
 
   // A tie on the minimum keeps the first occurrence.
   array ties({2.0f, -1.0f, -1.0f, 4.0f}, {4}, float32);
