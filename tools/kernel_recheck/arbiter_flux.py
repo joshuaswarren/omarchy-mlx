@@ -11,7 +11,7 @@ import sys
 import numpy as np
 
 from . import defs
-from .run import source_text
+from .run import build_inputs, source_text
 
 
 def gather_qkv(inp):
@@ -69,7 +69,7 @@ def main():
     import mlx.core as mx
     spec = defs.get_spec("fused_double_norm_rope" if which == "double"
                          else "fused_single_norm_rope")
-    inputs = defs.build_inputs(spec)
+    inputs = build_inputs(spec)
     kernel = mx.fast.metal_kernel(
         name=spec["name"] + "_arbiter",
         input_names=list(spec["inputs"]),
