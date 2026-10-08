@@ -49,6 +49,18 @@ What it collects, in the order it runs:
    kernel log lines). The ANE section never loads a module and never
    writes. Values pass through the redactor first.
 
+Opt-in, not part of the read-only default: `MKIT_POWER_SURVEY=1 bash
+scripts/m3m4_kit.sh` also runs aurora's `--m3-power-survey` once, after
+the report and before the collector, so one command gives both archives
+(the survey archive is `aurora-m3-power-<board>-<date>.tgz` in the output
+directory). The survey is not read-only: it needs sudo to read the SMC
+keys, runs short CPU busy loops (idle, all CPUs, P-cores, E-cores) for
+about five minutes, and moves the backlight to maximum and minimum and
+back. It stops at a die temperature of 100 C. It collects SMC
+temperature and power key values, thermal zones, the CPU topology and
+the board, model and kernel strings. It does not collect device-tree
+nodes, bound devices or kernel logs, so it does not replace `--m3-report`.
+
 The output is `m3m4-kit-<UTC>/`: the aurora report archive,
 `mlx-omarchy-m3m4.tar` and a paste-ready `.submission.md`. Review the
 printed manifest. Sending is a separate step the kit prints:

@@ -21,6 +21,9 @@
 #   bash scripts/m3m4_kit.sh                # writes ./m3m4-kit-<UTC>/
 #   AURORA_URL=... bash scripts/m3m4_kit.sh
 #   MKIT_HWX=1 bash scripts/m3m4_kit.sh     # macOS only: H16G compile
+#   MKIT_POWER_SURVEY=1 bash scripts/m3m4_kit.sh  # Linux: also run aurora's
+#     M3 power survey (sudo, ~5 min of CPU load, backlight moves and is
+#     restored); not part of the default read-only flow
 #   MKIT_ANE_STAGE=t8122:1 bash scripts/m3m4_kit.sh   # Linux: one opt-in
 #     ANE bring-up stage (root); parameters and refusals mirror the
 #     omarchy-ane module (ane/h15, ane/h16). Bring-up evidence only:
@@ -243,9 +246,24 @@ if [ "$OS" = "Linux" ]; then
   else
     echo "aurora --m3-report did not complete (recorded above); continuing." >&2
   fi
+  if [ "${MKIT_POWER_SURVEY:-0}" = "1" ]; then
+    # Opt-in: aurora's power survey runs about 5 minutes of CPU busy loops
+    # and moves the backlight (it restores it), and asks for sudo. It runs
+    # before the collector so its idle phase starts from a cool machine.
+    echo "aurora --m3-power-survey (MKIT_POWER_SURVEY=1): about 5 minutes, keep the Mac on power."
+    if [ -f "$OUT/install-aurora-sep.sh" ] &&
+       (cd "$OUT" && bash install-aurora-sep.sh --m3-power-survey); then
+      echo "aurora --m3-power-survey: OK (tgz in $OUT/)"
+    else
+      echo "aurora --m3-power-survey did not complete (recorded above); continuing." >&2
+    fi
+  fi
   collector_stage
-  echo "(Optional, needs sudo, ~5 min, on power: aurora's power survey —"
-  echo "  bash $OUT/install-aurora-sep.sh --m3-power-survey)"
+  if [ "${MKIT_POWER_SURVEY:-0}" != "1" ]; then
+    echo "(Optional, needs sudo, ~5 min, on power, loads the CPUs and moves the"
+    echo " backlight: rerun with MKIT_POWER_SURVEY=1, or run aurora's survey:"
+    echo "  bash $OUT/install-aurora-sep.sh --m3-power-survey)"
+  fi
 else
   collector_stage
   echo "(Optional, needs sudo: one powermetrics sample for the GPU/ANE"
