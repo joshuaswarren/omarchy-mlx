@@ -129,8 +129,13 @@ needs `-ub 256 -b 256` to fit under the old driver's compute buffer; the
 | Qwen3.5-4B IQ2_M (1.81 GiB) | system Mesa 26.2.3 | 51.50 tok/s | 0.44 tok/s |
 | Qwen3.5-4B IQ2_M (1.81 GiB) | Honeykrisp v3 66cb84fd431d | 73.68 tok/s | 7.42 tok/s |
 
-Use the 4B model if you want a 4 GB model file that fits on 8 GB; use the
-9B model only on 16 GB or larger. The system Mesa failure on 8 GB is
+Use the 4B model if you want a model that fits on 8 GB; use the 9B model
+only on 16 GB or larger. The setup script downloads the 4B model too when
+the machine has less than 12 GB of RAM. To fetch it by hand:
+
+```bash
+curl -L -C - --retry 8 --retry-all-errors -o llamacpp-demo/Qwen_Qwen3.5-4B-IQ2_M.gguf https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-IQ2_M.gguf
+``` The system Mesa failure on 8 GB is
 because the old driver tries to allocate a single 542 MB compute buffer
 up-front; our build allocates per-ubatch (256 tokens here) and survives
 the same memory pressure.
@@ -140,7 +145,7 @@ the same memory pressure.
 From the same folder, one command, and the audience watches tokens appear:
 
 ```bash
-bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-cli -m Qwen_Qwen3.5-9B-IQ2_M.gguf -ngl 99 -t 8 --temp 0.7
+bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-cli -m Qwen_Qwen3.5-9B-IQ2_M.gguf -ngl 99 -t 8 --temp 0.7 --reasoning-budget 0
 ```
 
 That opens an interactive chat running on the GPU (measured 4.3 tok/s

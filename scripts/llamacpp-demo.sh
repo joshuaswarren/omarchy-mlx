@@ -75,6 +75,20 @@ until [ "$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)" -eq "$EXPECTED_SIZE" 
 done
 sha256sum "$MODEL_FILE"
 
+# On an 8 GB-class machine, also pull the 4B model: it is the one that fits
+# a stage demo there, and the 9B needs -ub 256 -b 256 under the old driver.
+MEMTOTAL_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+if [ "${MEMTOTAL_MB:-0}" -lt 12288 ]; then
+  MODEL4_URL=https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-IQ2_M.gguf
+  MODEL4_FILE=Qwen_Qwen3.5-4B-IQ2_M.gguf
+  EXPECTED4_SIZE=1953751008   # bartowski Qwen3.5-4B-IQ2_M, verified 2026-10-08
+  until [ "$(stat -c%s "$MODEL4_FILE" 2>/dev/null || echo 0)" -eq "$EXPECTED4_SIZE" ]; do
+    curl -L -C - --retry 8 --retry-all-errors -o "$MODEL4_FILE" "$MODEL4_URL"
+  done
+  echo 'fd6c12b5d4f76be174edbf4769d2a27b0384da020f5cf1241463679798a9f4ec  '"$MODEL4_FILE" | sha256sum -c -
+  echo "4B model downloaded; benchmark and chat commands below use it in place of $MODEL_FILE on this machine."
+fi
+
 REPO=$(dirname "$(pwd)")
 echo "everything is in: $(pwd)"
 echo "benchmark commands, run from the repository folder ($REPO):"
