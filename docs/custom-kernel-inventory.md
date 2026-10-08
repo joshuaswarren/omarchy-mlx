@@ -125,3 +125,41 @@ Use the bounded runtime translator for MLX custom kernels. Keep its refusal
 boundary explicit rather than importing a general C++ or MSL frontend. Port a
 kernel only when it falls outside that boundary and has a maintained reference
 implementation.
+
+## Vulkan translation status (2026-10-08, translator with the fixes through main d3e450e70)
+
+The bounded MSL subset (see "Current implementation" above) was rechecked
+against the 26 kernels of section (b) on the Vulkan GPU, each against an
+fp64 or integer-exact NumPy reference, with per-run fresh translation
+caches and NaN/inf/checksum validation of every output.
+
+Passing end to end on the GPU (11): `bitlinear_matmul`,
+`flux2_fused_double_norm_rope_*`, `inkling_banded_mask`, `inkling_moe_route`,
+`mlx_vlm_llguidance_mask`, `custom_depthwise_conv1d`, `qk_relu_squared`,
+`mlx_audio_phonon_unpack_base5_v1`, `kda` `moe_route_fused`, `situ_fused`,
+`situ_pair_fused`.
+
+Refused by name — the CBQ family (9 kernels) needs constructs outside the
+bounded subset, each refused with its named error:
+
+- `cbq_gather_mm`, `cbq_grad_d`, `cbq_grad_x`: C-style casts of
+  `device int64_t*` LUT pointers and `device atomic_float*` outputs
+  (`unsupported MSL feature 'device pointer arithmetic'`).
+- `cbq_gather_mm_v2`: a `threadgroup`-space pointer alias
+  (`unsupported MSL feature 'device pointer arithmetic'`).
+- `cbq_gather_mm_v3`, `_v3_situ`, `_glu`: `as_type<char4>`
+  (`unsupported MSL feature 'as_type<char4>'`).
+- `cbq_gather_mm_v4`, `_v4_situ`: `as_type<bfloat4>`
+  (`unsupported MSL feature 'as_type<bfloat4>'`).
+
+In validation (5): `fused_single_norm_rope`, `inkling_banded_mask_v2`,
+`inkling_sconv_decode`, `inkling_moe_down_combine`, `kda_glue_pre/post` —
+the translator emits GLSL that still trips the shader compiler on these
+(nested C-style casts of the same scalar family survive inside constructor
+arguments); the reference harness distinguishes these from wrong values,
+and no kernel produces silently wrong output — a wrong value fails the run.
+
+Known cache behavior: translated GLSL is cached under
+`~/.cache/mlx-omarchy/spirv` keyed by the kernel source and the
+translator's own hash; the cache is invalidated when the translator
+changes. Deleting the directory is always safe.
