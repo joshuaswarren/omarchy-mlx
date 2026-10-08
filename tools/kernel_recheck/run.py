@@ -110,7 +110,7 @@ def single(name):
     except BaseException as error:  # noqa: BLE001 - the parent classifies
         text = str(error).strip()
         first = text.splitlines()[0] if text else type(error).__name__
-        print(f"CHILDERR: [{type(error).__name__}] {first[:200]}")
+        print(f"CHILDERR: [{type(error).__name__}] {first[:900]}")
         return 1
 
 
