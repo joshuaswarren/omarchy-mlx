@@ -42,8 +42,8 @@ benchmark commands and the model's SHA-256.
 
 ## Step 2: benchmark both drivers
 
-From the demo directory the script prints at the end, first the system
-driver:
+Change into the demo directory the script printed (`cd llamacpp-demo`), then
+first the system driver:
 
 ```bash
 llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8

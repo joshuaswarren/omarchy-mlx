@@ -47,5 +47,5 @@ ICD=$(ls mesa-install/share/vulkan/icd.d/*.json | head -1)
 echo "everything is in: $(pwd)"
 echo "ICD_JSON=$ICD"
 echo "benchmark commands:"
-echo "  llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
-echo "  VK_DRIVER_FILES=$ICD llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
+echo "  llama-build/bin/llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
+echo "  VK_DRIVER_FILES=$ICD llama-build/bin/llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
