@@ -1728,6 +1728,25 @@ TEST_CASE("integer argreduces pick exact native comparisons") {
   check_uint32_values(argmin(u64_vals, 0, false, stream), {1}, stream);
 }
 
+TEST_CASE("float argreduces propagate NaN like the reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  // mlx reduction semantics: NaN propagates and the FIRST NaN index wins,
+  // for argmin and argmax alike (upstream "test arg reduce NaN").
+  array mixed({3.0f, nan, 1.0f, 5.0f, nan, -1.0f}, {2, 3}, float32);
+  check_uint32_values(argmin(mixed, 1, false, stream), {1, 1}, stream);
+  check_uint32_values(argmax(mixed, 1, false, stream), {1, 1}, stream);
+  std::vector<float> wide(1024, 0.0f);
+  wide[17] = nan;
+  wide[529] = nan;
+  array wide_arr(wide.begin(), Shape{1024}, float32);
+  check_uint32_values(argmin(wide_arr, 0, false, stream), {17}, stream);
+  check_uint32_values(argmax(wide_arr, 0, false, stream), {17}, stream);
+}
+
 TEST_CASE("scans cover int64, complex64, and bool cumsum widths") {
   if (!compute_available()) {
     return;
