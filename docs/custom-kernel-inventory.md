@@ -152,21 +152,29 @@ bounded subset, each refused with its named error:
 - `cbq_gather_mm_v4`, `_v4_situ`: `as_type<bfloat4>`
   (`unsupported MSL feature 'as_type<bfloat4>'`).
 
-Validated on GPU (3 more): `inkling_sconv_decode`,
-`inkling_moe_down_combine`, `kda_glue_post` — translate and pass against
-fp64 references with 1-bf16-ulp tolerances (fp32 accumulation ties
-documented above).
+GPU-validated pass (11): `bitlinear_matmul`,
+`fused_double_norm_rope_*`, `inkling_banded_mask`, `inkling_moe_route`,
+`mlx_vlm_llguidance_mask`, `custom_depthwise_conv1d`,
+`qk_relu_squared`, `mlx_audio_phonon_unpack_base5_v1`, `kda`
+`moe_route_fused`, `situ_fused`, `situ_pair_fused`.
 
-Still failing compile (2): `kda_glue_pre` (nested same-family C-cast
-chains survive inside constructor arguments; needs the cast scanner
-rewritten with a real parser or MSL pre-normalization),
-`inkling_banded_mask_v2` (int64 metadata stride expression produces a
-non-scalar array subscript).
+Compile fail — nested C-casts (3): `inkling_sconv_decode`,
+`inkling_moe_down_combine`, `kda_glue_pre` — nested same-family C-cast
+chains survive inside constructor arguments after translation; needs the
+cast scanner rewritten with a real parser or MSL pre-normalization.
 
-Unproven (1): `fused_single_norm_rope` — translates and compiles clean
-but produces wrong values vs the fp64 reference on the GPU; the
-mx-composed arbiter (in tools/kernel_recheck/arbiter_flux.py) is the
-diagnostic tool.
+Compile fail — int64 metadata (1): `inkling_banded_mask_v2` — int64
+metadata stride expression produces a non-scalar array subscript.
+
+Unproven — wrong values (2): `fused_single_norm_rope` (translates and
+compiles clean but produces wrong values vs the fp64 reference on the
+GPU) and `inkling_moe_down_combine` (translates and compiles but 52/512
+outputs differ by ~2.5 bf16 ulps from the fp64 reference; possible fp32
+accumulation order or dequantization mismatch). The mx-composed arbiter
+(tools/kernel_recheck/arbiter_flux.py) is the diagnostic tool.
+
+Tolerance-fail (1): `kda_glue_post` — 1/12288 outputs at 1 bf16 ulp
+boundary (fp32 accumulation tie).
 
 In validation (5): `fused_single_norm_rope`, `inkling_banded_mask_v2`,
 `inkling_sconv_decode`, `inkling_moe_down_combine`, `kda_glue_pre/post` —
