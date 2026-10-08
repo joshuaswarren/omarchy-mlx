@@ -359,6 +359,15 @@ void translate_c_style_casts(std::string& code) {
           ++end;
         } else if (c == '(') {
           end = matching_delimiter(code, end, '(', ')') + 1;
+        } else if (c == '[') {
+          // C binds the cast to the whole postfix expression: `(float)inp[c]`
+          // means float(inp[c]). Without consuming the subscript the scanner
+          // rewrote it to float(inp)[c], splitting the cast from the index —
+          // bf16/f16 buffer reads then missed their widening rewrite and
+          // every `(float)rel[...]`-style read in the corpus died as
+          // "unsupported bfloat16 buffer expression" (2026-10-08
+          // KernelRecheck).
+          end = matching_delimiter(code, end, '[', ']') + 1;
         } else {
           break;
         }

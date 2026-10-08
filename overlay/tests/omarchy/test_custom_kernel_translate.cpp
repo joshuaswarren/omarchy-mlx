@@ -259,3 +259,26 @@ TEST_CASE("inline header helpers lose the MSL-only qualifier") {
   CHECK(glsl.find("float twice(float v)") != std::string::npos);
   CHECK(glsl.find("twice(_mlx_arg0[") != std::string::npos);
 }
+
+TEST_CASE("c-style cast of a bf16 buffer read keeps the subscript attached") {
+  // (float)inp[c] casts the ELEMENT (C: cast binds to the whole postfix
+  // expression). The scanner used to rewrite it to float(inp)[c], which
+  // separated the index from the buffer name: the bf16 read rewrite then
+  // could not match, and the bare-use check refused the kernel
+  // ("unsupported bfloat16 buffer expression") — the dominant failure of the
+  // 2026-10-08 KernelRecheck corpus (mask, sconv, K3 glue, situ).
+  const char* source =
+      "[[kernel]] void cast_read(\n"
+      "    const device bfloat16_t* inp [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  float x = (float)inp[c];\n"
+      "  y[c] = x;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // The read is widened from the bf16 pattern storage.
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[c])") != std::string::npos);
+  // No bare buffer token survives the widening.
+  CHECK(glsl.find("inp") == std::string::npos);
+  CHECK(glsl.find("float(inp)[c]") == std::string::npos);
+}
