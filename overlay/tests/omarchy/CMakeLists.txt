@@ -47,6 +47,21 @@ doctest_discover_tests(omarchy_custom_kernel_translate_tests)
 add_test(NAME omarchy_custom_kernel_translate_tests
          COMMAND omarchy_custom_kernel_translate_tests)
 
+# KernelRecheck debug entry: translate one generated-MSL file from argv.
+add_executable(omarchy_custom_kernel_translate_dump
+               ${CMAKE_CURRENT_SOURCE_DIR}/translate_dump_main.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/custom_kernel.cpp)
+target_link_libraries(omarchy_custom_kernel_translate_dump PRIVATE mlx)
+target_include_directories(omarchy_custom_kernel_translate_dump
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx
+                           PRIVATE ${CMAKE_BINARY_DIR}/mlx/backend/omarchy/shaders)
+target_compile_definitions(omarchy_custom_kernel_translate_dump
+                           PRIVATE MLX_OMARCHY_TEST_TRANSLATE)
+target_compile_options(omarchy_custom_kernel_translate_dump
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_custom_kernel_translate_dump
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
 add_executable(omarchy_ane_bundle_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/ane/test_bundle.cpp)
 target_link_libraries(omarchy_ane_bundle_tests PRIVATE mlx doctest)
