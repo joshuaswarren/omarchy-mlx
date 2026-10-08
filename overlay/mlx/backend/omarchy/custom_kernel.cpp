@@ -46,6 +46,7 @@ struct Parameter {
   uint32_t binding;
   bool scalar;
   bool atomic;
+  bool constant_space;
 };
 
 struct Translation {
@@ -727,7 +728,7 @@ void translate_as_type(std::string& code) {
 
 std::vector<Parameter> parse_parameters(const std::string& signature) {
   const std::regex parameter_pattern(
-      R"((?:const\s+)?(?:device|constant)\s+(atomic<)?([A-Za-z_][A-Za-z0-9_]*)(?:>)?\s*([*&])\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[\[buffer\(([0-9]+)\)\]\])");
+      R"((?:const\s+)?(device|constant)\s+(atomic<)?([A-Za-z_][A-Za-z0-9_]*)(?:>)?\s*([*&])\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[\[buffer\(([0-9]+)\)\]\])");
   std::vector<Parameter> parameters;
   for (std::sregex_iterator it(
            signature.begin(), signature.end(), parameter_pattern),
@@ -735,11 +736,12 @@ std::vector<Parameter> parse_parameters(const std::string& signature) {
        it != end;
        ++it) {
     parameters.push_back(
-        {(*it)[2].str(),
-         (*it)[4].str(),
-         static_cast<uint32_t>(std::stoul((*it)[5].str())),
-         (*it)[3].str() == "&",
-         (*it)[1].matched});
+        {(*it)[3].str(),
+         (*it)[5].str(),
+         static_cast<uint32_t>(std::stoul((*it)[6].str())),
+         (*it)[4].str() == "&",
+         (*it)[2].matched,
+         (*it)[1].str() == "constant"});
   }
   std::sort(
       parameters.begin(),
@@ -815,6 +817,13 @@ void resolve_kernel_templates(
       // Integer/bool template values (HK=16, L2=true) pass through as-is;
       // only type names (alphabetic first char) map through glsl_type.
       if (value == "bfloat16_t" || value == "bfloat16" || value == "uint16_t") {
+        value = "float";
+      } else if (value == "float16_t" || value == "half") {
+        // Metal promotes half arithmetic to float (half storage, fp32
+        // compute); float locals mirror that and the buffer reads widen in
+        // the float16 parameter pass below (2026-10-08 KernelRecheck,
+        // bitlinear_matmul: `1 / weight_scale[0]` cannot compile as
+        // int / float16_t in GLSL).
         value = "float";
       } else if (value == "true" || value == "false" ||
                  std::isdigit(static_cast<unsigned char>(value.front()))) {
@@ -1372,6 +1381,111 @@ Translation translate_msl(
                               "$1 (_mlx_nonzero($2))");
   }
 
+  // MSL converts integers to bool inside `&&` chains (the llguidance mask:
+  // `word < S && ((bits >> bit) & 1u)`); GLSL requires bool operands. Split
+  // the top-level `&&` of a bool declaration and route the operands through
+  // an overloaded and-helper (identity on bool, != 0 on integers/floats).
+  std::string bool_and_helpers;
+  {
+    static const std::regex bool_decl(
+        R"(\bbool\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    bool any_split = false;
+    auto split_top_level = [](const std::string& init) {
+      std::vector<std::string> parts;
+      int depth = 0;
+      size_t start = 0;
+      for (size_t i = 0; i < init.size(); ++i) {
+        char c = init[i];
+        if (c == '(' || c == '[' || c == '{') {
+          ++depth;
+        } else if (c == ')' || c == ']' || c == '}') {
+          --depth;
+        } else if (depth == 0 && c == '&' && i + 1 < init.size() &&
+                   init[i + 1] == '&') {
+          parts.push_back(init.substr(start, i - start));
+          start = i + 2;
+          ++i;
+        }
+      }
+      parts.push_back(init.substr(start));
+      return parts;
+    };
+    for (std::sregex_iterator it(body.begin(), body.end(), bool_decl), end;
+         it != end; ++it) {
+      const auto& m = *it;
+      rewritten += body.substr(last, m.position() - last);
+      const std::string init = trim(m[2].str());
+      auto parts = split_top_level(init);
+      if (parts.size() > 1) {
+        any_split = true;
+        std::string expr = parts[0];
+        for (size_t k = 1; k < parts.size(); ++k) {
+          expr = "_mlx_bool_and(" + expr + ", " + parts[k] + ")";
+        }
+        rewritten += "bool " + m[1].str() + " = " + expr + ";";
+      } else {
+        rewritten += m[0].str();
+      }
+      last = m.position() + m.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
+    if (any_split) {
+      bool_and_helpers =
+          "bool _mlx_bool_and(bool a, bool b) { return a && b; }\n"
+          "bool _mlx_bool_and(bool a, uint b) { return a && b != 0u; }\n"
+          "bool _mlx_bool_and(uint a, bool b) { return a != 0u && b; }\n"
+          "bool _mlx_bool_and(uint a, uint b) { return a != 0u && b != 0u; }\n"
+          "bool _mlx_bool_and(bool a, int b) { return a && b != 0; }\n"
+          "bool _mlx_bool_and(int a, bool b) { return a != 0 && b; }\n"
+          "bool _mlx_bool_and(int a, int b) { return a != 0 && b != 0; }\n"
+          "bool _mlx_bool_and(uint a, int b) { return a != 0u && b != 0; }\n"
+          "bool _mlx_bool_and(int a, uint b) { return a != 0 && b != 0u; }\n"
+          "bool _mlx_bool_and(bool a, float b) { return a && b != 0.0f; }\n"
+          "bool _mlx_bool_and(float a, bool b) { return a != 0.0f && b; }\n"
+          "bool _mlx_bool_and(float a, float b) { return a != 0.0f && b != 0.0f; }\n";
+    }
+  }
+
+  // MSL array initializers may under-supply elements (`float sum[4] =
+  // {0.0};` zero-fills in C); GLSL requires the exact element count. Expand
+  // the single-constant form; complete lists pass through unchanged
+  // (2026-10-08 KernelRecheck, bitlinear_matmul).
+  {
+    static const std::regex array_init(
+        R"(\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([0-9]+)\s*\]\s*=\s*\{\s*([^{}]*?)\s*\})");
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    for (std::sregex_iterator it(body.begin(), body.end(), array_init), end;
+         it != end; ++it) {
+      const auto& m = *it;
+      rewritten += body.substr(last, m.position() - last);
+      const int size = std::atoi(m[3].str().c_str());
+      const std::string values = trim(m[4].str());
+      const bool single = values.find(',') == std::string::npos;
+      if (size > 1 && single) {
+        rewritten += m[1].str() + " " + m[2].str() + "[" + m[3].str() +
+            "] = {";
+        for (int i = 0; i < size; ++i) {
+          if (i) {
+            rewritten += ", ";
+          }
+          rewritten += values;
+        }
+        rewritten += "}";
+      } else {
+        rewritten += m[0].str();
+      }
+      last = m.position() + m.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
+  }
+
   bool needs_bfloat = false;
 
   // _Pragma("clang loop unroll(full)") and friends are optimization hints
@@ -1536,7 +1650,7 @@ Translation translate_msl(
     }
   }
   for (size_t index = 0; index < parameters.size(); ++index) {
-    const auto& parameter = parameters[index];
+    auto parameter = parameters[index];
     const bool output = index >= output_start;
     declarations += buffer_declaration(parameter, output);
     if (parameter.type == "bfloat16_t") {
@@ -1545,6 +1659,27 @@ Translation translate_msl(
     } else if (parameter.atomic) {
       translate_atomic_parameter(body, parameter);
     } else {
+      // float16_t buffer reads widen to float exactly (Metal promotes half
+      // arithmetic to fp32); mixed int/f16 expressions then compile as
+      // int/float (2026-10-08 KernelRecheck, bitlinear_matmul).
+      if (parameter.type == "float16_t" && !output) {
+        const auto escaped16 = regex_escape(parameter.name);
+        body = std::regex_replace(
+            body,
+            std::regex("\\b" + escaped16 + R"(\s*\[([^\]]+)\])"),
+            "float(_b" + std::to_string(parameter.binding) + ".data[$1])");
+      }
+      // A small array bound in the constant space that the body never
+      // indexes is used as a value: mlx-audio's phonon unpack divides
+      // `in_features / 16` directly (2026-10-08 KernelRecheck). Mark it
+      // scalar so the macro takes element 0; indexed small arrays keep the
+      // array macro.
+      if (parameter.constant_space && !parameter.scalar && !parameter.atomic &&
+          !std::regex_search(
+              body,
+              std::regex("\\b" + regex_escape(parameter.name) + R"(\s*\[)"))) {
+        parameter.scalar = true;
+      }
       // Indexed stores into a non-bfloat buffer of a narrower int type
       // need the same explicit cast as outputs when the RHS is float.
       // Cover bfloat16_t INPUT parameters as well as outputs: kernels
@@ -1559,10 +1694,16 @@ Translation translate_msl(
             parameter.name + "[$1] = " + glsl_type(parameter.type) + "($2);");
       }
       macros += "#define _mlx_arg" +
-          std::to_string(parameter.binding) + " _b" +
-          std::to_string(parameter.binding) + ".data";
-      if (parameter.scalar) {
-        macros += "[0]";
+          std::to_string(parameter.binding) + " ";
+      if (parameter.type == "float16_t" && parameter.scalar) {
+        // half storage widened at the macro: int/f16 arithmetic compiles as
+        // int/float (Metal promotes half math to fp32)
+        macros += "float(_b" + std::to_string(parameter.binding) + ".data[0])";
+      } else {
+        macros += "_b" + std::to_string(parameter.binding) + ".data";
+        if (parameter.scalar) {
+          macros += "[0]";
+        }
       }
       macros += "\n";
     }
@@ -1665,7 +1806,8 @@ Translation translate_msl(
          << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
          << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n";
   }
-  glsl << header << "\n" << element_helpers << vector_alias_helpers << condition_helpers << macros;
+  glsl << header << "\n" << element_helpers << vector_alias_helpers
+       << condition_helpers << bool_and_helpers << macros;
   glsl << "void main() {\n"
        << "if (gl_GlobalInvocationID.x >= " << grid_x
        << "u || gl_GlobalInvocationID.y >= " << grid_y
