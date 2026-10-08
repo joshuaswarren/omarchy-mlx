@@ -14645,6 +14645,79 @@ void ScaledDotProductAttention::eval_gpu(
     }
     return;
   }
+#ifdef MLX_OMARCHY_BF16_DIRECT
+  // Causal cooperative-matrix flash prefill (MatmulGap H35): scores never
+  // reach memory, QK and PV run on the 8x8x8 matrix unit. Default OFF:
+  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=1 turns it on for q_len >= 64 (A/B arms),
+  // unset or 0 keeps the composed route. MLX_OMARCHY_SDPA_CAUSAL_FLASH_ROWP=2
+  // selects the 16-row-per-subgroup variant (exploration only).
+  // Contract: causal, bf16, hd 128, k_len % 8 == 0, k_len >= q_len, no sinks,
+  // no logsumexp, no array mask, 8-element aligned strides; anything else
+  // keeps the composed route.
+  {
+    const char* cf_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+    const char* cf_rowp_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH_ROWP");
+    const auto& cf_caps = encoder.device().capabilities();
+    if (cf_env != nullptr && std::strcmp(cf_env, "1") == 0 &&
+        cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
+        cf_caps.max_compute_work_group_invocations >= 128u &&
+        cf_caps.max_compute_shared_memory_size >= 16384u &&
+        inputs.size() == 3 && do_causal_ && !has_sinks_ &&
+        !output_logsumexp_ && q_len >= 64 && k_len >= q_len &&
+        k_len % 8 == 0 && q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+        v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
+        head_dim == 128 && v_dim == 128 && q.strides()[3] == 1 &&
+        k.strides()[3] == 1 && v.strides()[3] == 1 &&
+        out.strides()[3] == 1 && out.strides()[2] == v_dim &&
+        q.strides()[0] % 8 == 0 && q.strides()[1] % 8 == 0 &&
+        q.strides()[2] % 8 == 0 && k.strides()[0] % 8 == 0 &&
+        k.strides()[1] % 8 == 0 && k.strides()[2] % 8 == 0 &&
+        v.strides()[0] % 8 == 0 && v.strides()[1] % 8 == 0 &&
+        v.strides()[2] % 8 == 0 &&
+        checked_item_offset(q, q.size(), tag, out) % 8 == 0 &&
+        checked_item_offset(k, k.size(), tag, out) % 8 == 0 &&
+        checked_item_offset(v, v.size(), tag, out) % 8 == 0 &&
+        checked_item_offset(out, out.size(), tag, out) % 8 == 0 &&
+        static_cast<uint64_t>(batch) * heads * q_len * 128 < (1ull << 31) &&
+        static_cast<uint64_t>(k.shape(0)) * k.strides()[0] < (1ull << 31) &&
+        static_cast<uint64_t>(v.shape(0)) * v.strides()[0] < (1ull << 31) &&
+        static_cast<uint64_t>(q.shape(0)) * q.strides()[0] < (1ull << 31)) {
+      const bool rowp2 = cf_rowp_env != nullptr && std::strcmp(cf_rowp_env, "2") == 0;
+      const uint32_t wg_rows = rowp2 ? 64u : 32u;
+      out.set_data(allocate_omarchy(out.nbytes()));
+      omarchy::ComputeParams params;
+      params.matrix_m = checked_u32(q_len, tag, out);
+      params.matrix_n = checked_u32(k_len, tag, out);
+      params.alpha = scale_;
+      params.rhs_gap = checked_u32(repeats, tag, out);
+      params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+      params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+      params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+      params.output_offset = checked_item_offset(out, out.size(), tag, out);
+      params.q_rowstride = checked_u32(q.strides()[2], tag, out);
+      params.k_rowstride = checked_u32(k.strides()[2], tag, out);
+      params.v_rowstride = checked_u32(v.strides()[2], tag, out);
+      params.o_rowstride = checked_u32(out.strides()[2], tag, out);
+      params.q_headstride = checked_u32(q.strides()[1], tag, out);
+      params.k_headstride = checked_u32(k.strides()[1], tag, out);
+      params.v_headstride = checked_u32(v.strides()[1], tag, out);
+      params.q_batchstride = checked_u32(q.strides()[0], tag, out);
+      params.k_batchstride = checked_u32(k.strides()[0], tag, out);
+      params.v_batchstride = checked_u32(v.strides()[0], tag, out);
+      std::array<omarchy::ComputeBinding, 4> cf_bindings{
+          binding(q), binding(k), binding(v), binding(out)};
+      encoder.dispatch_compute(
+          rowp2 ? omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Sg16
+                : omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Sg8,
+          cf_bindings,
+          params,
+          (static_cast<uint32_t>(q_len) + wg_rows - 1u) / wg_rows,
+          static_cast<uint32_t>(heads),
+          static_cast<uint32_t>(batch));
+      return;
+    }
+  }
+#endif
   // GQA regroup as pure stride views, so a non-contiguous cache
   // slice rides its own strides straight into the matmul;
   // reshape_in_eval would copy - it only views row-contiguous
