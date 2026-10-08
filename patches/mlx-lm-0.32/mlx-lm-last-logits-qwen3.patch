@@ -1,19 +1,14 @@
 --- a/mlx_lm/models/qwen3.py
 +++ b/mlx_lm/models/qwen3.py
-@@ -1,5 +1,6 @@
- # Copyright © 2023 Apple Inc.
- 
-+import os
- from dataclasses import dataclass
- from typing import Any, Dict, Optional, Union
- 
-@@ -187,6 +188,10 @@
+@@ -187,6 +187,12 @@
          input_embeddings: Optional[mx.array] = None,
      ):
          out = self.model(inputs, cache, input_embeddings)
 +        # mlx-omarchy last-logits (qwen3 family): cached/incremental inference consumes only the
-+        # final position; whole-sequence calls (cache=None) keep full logits.
-+        if cache is not None and os.environ.get("MLX_OMARCHY_FULL_LOGITS", "") != "1":
++        # final position; whole-sequence calls (cache=None) keep full logits. Local import so the
++        # patch does not depend on any other patch having added `import os` to this file.
++        import os as _os
++        if cache is not None and _os.environ.get("MLX_OMARCHY_FULL_LOGITS", "") != "1":
 +            out = out[:, -1:, :]
          if self.args.tie_word_embeddings:
              out = self.model.embed_tokens.as_linear(out)

@@ -51,3 +51,13 @@ fuzz 0 to mlx-lm 94cdcae `qwen3.py` and reverses cleanly.
 Measured on the 4B on this chip only. The other qwen3-family modules (qwen2, llama, qwen3_moe) are
 not patched. macOS stock mlx-lm does not have this change either; the 4B prefill on macOS has not
 been measured, so this is a speed change, not a parity claim.
+
+## Follow-up 2026-10-08: the patch is now self-contained
+
+The first version referenced `os` without importing it, relying on `scripts/patch-mlx-lm-qwen3-rope-norm.py` (applied
+later in the same series) to add `import os` to `qwen3.py`. On a stock mlx-lm 0.31.3 file that patch alone gives
+`NameError: name 'os' is not defined` at the first cached call (seen on macOS, where the macOS-window runner applies
+the patch to an unpatched copy). The patch now imports locally inside `Model.__call__` (`import os as _os`), so it
+applies and runs on a stock file and in any order with the other patchers. Checked on the stock 0.31.3 file, on the
+0.32 (94cdcae) file, and in series order (patch, then the rope-norm patcher: parses, one `import os`, one local
+import, reverse-detect works). The measurements above were taken in series order and are unaffected.
