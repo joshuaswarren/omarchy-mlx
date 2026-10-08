@@ -90,6 +90,95 @@ std::vector<double> reference_linear(
 
 } // namespace
 
+TEST_CASE("int8_matmul writes every output row past the single-dispatch clamp") {
+  // One dispatch spawns at most kMaxComputeGroupCountX * kComputeThreadsPerGroup
+  // = 65535 * 256 = 16,776,960 threads. rows*n = 3200*8192 = 26,214,400 exceeds
+  // that, so an unchunked single dispatch must leave the tail rows unwritten.
+  // floor(16776960 / 8192) = 2047: the first bad element is row 2047 col 7936,
+  // and rows 2048..3199 are entirely garbage without the chunked dispatch.
+  if (!mlx::core::gpu::is_available()) {
+    MESSAGE("no GPU device; skipping");
+    return;
+  }
+  constexpr int rows = 3200;
+  constexpr int k = 256;
+  constexpr int group = 256;
+  constexpr int n = 8192;
+  constexpr uint32_t kMaxThreadsPerDispatch = 65535u * 256u;
+  static_assert(
+      static_cast<uint64_t>(rows) * n > kMaxThreadsPerDispatch,
+      "test must exceed the one-dispatch thread budget");
+  constexpr int first_bad_row = kMaxThreadsPerDispatch / n; // 2047
+  constexpr int first_bad_col = kMaxThreadsPerDispatch % n; // 7936
+
+  std::mt19937 rng(11);
+  std::uniform_int_distribution<int> values(-127, 127);
+  std::uniform_real_distribution<float> scales(0.001f, 0.011f);
+
+  std::vector<int8_t> x(rows * k), w(n * k);
+  for (auto& v : x) {
+    v = static_cast<int8_t>(values(rng));
+  }
+  for (auto& v : w) {
+    v = static_cast<int8_t>(values(rng));
+  }
+  std::vector<float> xs(rows * (k / group)), ws(n), bias(n);
+  for (auto& v : xs) {
+    v = scales(rng);
+  }
+  for (auto& v : ws) {
+    v = scales(rng);
+  }
+  for (auto& v : bias) {
+    v = scales(rng);
+  }
+
+  auto mx_x = array(x.data(), {rows, k}, int8);
+  auto mx_xs = array(xs.data(), {rows, k / group}, float32);
+  auto mx_w = array(w.data(), {n, k}, int8);
+  auto mx_ws = array(ws.data(), {n}, float32);
+  auto mx_bias = array(bias.data(), {n}, float32);
+  auto out = fast::int8_matmul(
+      mx_x, mx_xs, mx_w, mx_ws, mx_bias, group, false,
+      new_stream(Device::gpu));
+
+  // Exact integer reference on a sample of rows that includes the first bad
+  // row (2047), the first fully unwritten row (2048) and the last row (3199).
+  const std::vector<int> sampled = {0, 2046, 2047, 2048, 3199};
+  auto wide = astype(out, float32);
+  wide.eval();
+  std::vector<float> got(wide.data<float>(), wide.data<float>() + wide.size());
+
+  int bad_row = -1;
+  int bad_col = -1;
+  double worst = 0.0;
+  for (int m : sampled) {
+    for (int col = 0; col < n; col++) {
+      long long dot = 0;
+      for (int i = 0; i < k; i++) {
+        dot += static_cast<long long>(x[m * k + i]) *
+            static_cast<long long>(w[col * k + i]);
+      }
+      double ref = static_cast<double>(static_cast<float>(dot)) *
+          static_cast<double>(xs[m]) * static_cast<double>(ws[col]) +
+          static_cast<double>(bias[col]);
+      double scale = std::max(1.0, std::abs(ref));
+      double err = std::abs(static_cast<double>(got[m * n + col]) - ref);
+      if (err > scale * 0.004 && bad_row < 0) {
+        bad_row = m;
+        bad_col = col;
+      }
+      worst = std::max(worst, err / scale);
+    }
+  }
+  if (bad_row >= 0) {
+    MESSAGE("first bad element: row ", bad_row, " col ", bad_col,
+            " (expected first bad row ", first_bad_row, " col ", first_bad_col,
+            "); worst rel err ", worst);
+  }
+  CHECK(bad_row < 0);
+}
+
 TEST_CASE("int8_matmul matches the fp64 int8 reference") {
   if (!mlx::core::gpu::is_available()) {
     MESSAGE("no GPU device; skipping");
