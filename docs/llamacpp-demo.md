@@ -95,6 +95,14 @@ Each run prints a table with prompt processing (pp512) and generation (tg64)
 tokens per second. Compare the `t/s` columns. The `backend` column must say
 `Vulkan`; if it says `CPU`, the GPU driver did not load.
 
+Memory: the model sits in unified memory, so keep the model size plus about 3
+GiB free (about 7 GiB for the 9B model) and close big programs first. The
+wrapper checks this and refuses when `MemAvailable` is lower. It also warns
+when no swap is on. On a lab host that uses `gpu-turn`, it additionally
+requires swap or zram and refuses to run outside a `gpu-turn` ticket.
+The system-driver command above does not go through the wrapper, so check
+`free -h` yourself before you run it.
+
 ## Measured on a 16 GB M1 Pro (base M1 GPU)
 
 Measured 2026-10-08, 8-core Apple M1, 16 GB RAM, model
