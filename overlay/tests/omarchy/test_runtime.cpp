@@ -556,7 +556,7 @@ int run_child_scenario(const std::string& mode) {
     enc.commit();
     enc.synchronize(); // healthy wait; must not warn (default interval)
     const uint64_t healthy =
-        trace::counters().submit_stuck_warnings.load();
+        omarchy::trace::counters().submit_stuck_warnings.load();
     const uint64_t target = dev.completions().last_reserved() + 1000;
     bool threw = false;
     try {
@@ -577,7 +577,7 @@ int run_child_scenario(const std::string& mode) {
       return 31;
     }
     const uint64_t warned =
-        omarchy::trace::counters().submit_stuck_warnings.load();
+        omarchy::omarchy::trace::counters().submit_stuck_warnings.load();
     if (healthy != 0 || warned < 1) {
       std::cout << "[child/stuck_warning] warned=" << warned
                 << " healthy=" << healthy << "\n";
