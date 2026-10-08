@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -210,10 +211,22 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       {128, 256, 256, 4096, false, 404},   // all +127: per-group = +4,129,024
       {128, 256, 256, 4096, false, 505},   // all -127: per-group = -4,129,024
       {128, 256, 256, 4096, true, 606},    // all +127 swiglu
+      // The exact-f32 bound on the f32-FMA route: the worst int8 product
+      // is (-128) * (-128) = 16384, and 1024 * 16384 = 2^24 exactly, the
+      // largest group sum f32 accumulates exactly and order-independently.
+      {3, 1024, 1024, 5, false, 707}, // x=-128, w=-128: per-group = +2^24
+      {3, 1024, 1024, 5, false, 708}, // x=-128, w=+127: per-group = -16646144
   };
   for (const auto& b : big) {
     auto in = make_inputs(b.rows, b.k, b.group, b.n, b.swiglu, b.seed);
-    if (b.seed >= 404) {
+    if (b.seed >= 707) {
+      for (auto& v : in.x) {
+        v = int8_t(-128);
+      }
+      for (auto& v : in.w) {
+        v = (b.seed == 708) ? int8_t(127) : int8_t(-128);
+      }
+    } else if (b.seed >= 404) {
       // Extremes: fill x and w with the magnitude that maximizes
       // per-group |sum| so the cooperative matrix's f32 accumulator is
       // probed at the integer bound that defines the exactness claim.
@@ -264,11 +277,25 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       {1, 256, 128, 70, false},
       {3, 256, 64, 70, false},
       {8, 256, 256, 70, false},
+      // f32-FMA route edges: group 48 straddles 32-wide K steps (the
+      // two-run boundary split), group 512, and the exact-f32 bound
+      // group 1024 (per-group |sum| up to 1024 * 16384 = 2^24).
+      {11, 528, 48, 9, false},
+      {9, 528, 48, 21, true},
+      {9, 512, 512, 7, false},
+      {9, 1024, 1024, 5, false},
+      // n one past the 128-column tile boundary.
+      {3, 256, 128, 129, false},
+      // Above the f32 gate: group > 1024 must route to the int32 tiled
+      // kernel and still match the naive kernel bit for bit.
+      {9, 2048, 2048, 9, false},
   };
   // Bit-compare a candidate route (env-controlled) against the naive
-  // kill-switch kernel for every shape in the matrix. Passes: the landed
-  // default (tiled int32-imad kernel) and the explicit MLX_OMARCHY_INT8_COOPMAT=0
-  // route (same kernel; guards against the default silently changing).
+  // kill-switch kernel for every shape in the matrix. Passes: the default
+  // route (f32-FMA on its gate, int32 tiled kernel elsewhere), the
+  // MLX_OMARCHY_INT8_IMAD=1 pinned int32 tiled kernel, and the
+  // MLX_OMARCHY_INT8_F32FMA=1 pinned f32 route (f32 on its gate, tiled
+  // elsewhere; pins the f32 kernel even if a future default changes).
   // The cooperative-matrix opt-in route (MLX_OMARCHY_INT8_COOPMAT=1) ran
   // the A/B matrix on G13C (aurora 12.6, boot 55cc1c19) and produced
   // deterministic bitwise mismatches against the naive kernel, so it is
@@ -294,34 +321,89 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
     return std::pair<long, uint64_t>(-1, 0);
   };
   bool test_coopmat = std::getenv("MLX_OMARCHY_INT8_TEST_COOPMAT") != nullptr;
-  const char* env_routes[] = {nullptr, "0", "1"};
-  const char* env_labels[] = {"default", "tiled", "coopmat"};
-  for (int e = 0; e < 3; e++) {
-    if (e == 2 && !test_coopmat) {
+  struct RouteEnv {
+    const char* coopmat;
+    const char* imad;
+    const char* f32fma;
+    const char* label;
+    bool gated;
+  };
+  const RouteEnv routes[] = {
+      {nullptr, nullptr, nullptr, "default", false},
+      {nullptr, "1", nullptr, "imad-tiled", false},
+      {"1", nullptr, nullptr, "coopmat", true},
+      {nullptr, nullptr, "1", "f32fma", false},
+  };
+  for (const auto& route : routes) {
+    if (route.gated && !test_coopmat) {
       MESSAGE("coopmat opt-in route: skipped (not validated on hardware; "
               "set MLX_OMARCHY_INT8_TEST_COOPMAT=1 to run its A/B matrix)");
       continue;
     }
-    if (env_routes[e] != nullptr) {
-      setenv("MLX_OMARCHY_INT8_COOPMAT", env_routes[e], 1);
+    if (route.coopmat != nullptr) {
+      setenv("MLX_OMARCHY_INT8_COOPMAT", route.coopmat, 1);
+    }
+    if (route.imad != nullptr) {
+      setenv("MLX_OMARCHY_INT8_IMAD", route.imad, 1);
+    }
+    if (route.f32fma != nullptr) {
+      setenv("MLX_OMARCHY_INT8_F32FMA", route.f32fma, 1);
     }
     int seed = 101;
     for (const auto& s : shapes) {
       auto result = run_route(s, seed++);
       if (result.first >= 0) {
-        MESSAGE(env_labels[e], "-vs-naive mismatch at shape rows=", s.rows,
+        MESSAGE(route.label, "-vs-naive mismatch at shape rows=", s.rows,
                 " k=", s.k, " group=", s.group, " n=", s.n, " swiglu=",
-                s.swiglu, " index ", result.first, ": ", env_labels[e],
+                s.swiglu, " index ", result.first, ": ", route.label,
                 " 0x", std::hex, (result.second >> 32), " naive 0x",
                 (result.second & 0xffffffffu), std::dec);
       }
       CHECK(result.first < 0);
     }
-    if (env_routes[e] != nullptr) {
+    if (route.coopmat != nullptr) {
       unsetenv("MLX_OMARCHY_INT8_COOPMAT");
+    }
+    if (route.imad != nullptr) {
+      unsetenv("MLX_OMARCHY_INT8_IMAD");
+    }
+    if (route.f32fma != nullptr) {
+      unsetenv("MLX_OMARCHY_INT8_F32FMA");
     }
   }
 
+}
+
+TEST_CASE(
+    "int8_matmul big shape stays NaN-free after a poisoned buffer history") {
+  // Regression guard for the out-of-bounds shared-write class found on
+  // 2026-10-08 (X staging wrote 128 slots past tile_x; outputs were NaN
+  // only after process history): fill a large array with bf16 NaN
+  // patterns (0x7FC0), release it so the allocator can recycle it, then
+  // run the big DiT shape in the same process and require a NaN-free
+  // bf16 output.
+  if (!mlx::core::gpu::is_available()) {
+    MESSAGE("no GPU device; skipping");
+    return;
+  }
+  {
+    auto poison = astype(
+        full({1 << 24}, std::numeric_limits<float>::quiet_NaN()), bfloat16);
+    poison.eval();
+  }
+  const int rows = 128;
+  const int k = 5376;
+  const int group = 256;
+  const int n = 21504;
+  auto in = make_inputs(rows, k, group, n, false, 303);
+  auto out_bits = bits_of(run_int8(in, rows, k, group, n, false));
+  size_t nan_count = 0;
+  for (uint32_t value : out_bits) {
+    if ((value & 0x7f800000u) == 0x7f800000u && (value & 0x007fffffu) != 0u) {
+      nan_count++;
+    }
+  }
+  CHECK(nan_count == 0);
 }
 
 TEST_CASE("tiled int8_matmul matches the int64 reference at DiT scale") {
