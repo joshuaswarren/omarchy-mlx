@@ -20,12 +20,14 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
+#include "mlx/version.h"
 
 using namespace mlx::core;
 using mlx::core::omarchy::trace::counters;
@@ -111,6 +113,17 @@ bool have_gpu() {
   return true;
 }
 
+// Provenance beside every measurement (AGENTS.md test rules): the loaded
+// libmlx version stamp (the wheel's source commit) and the device
+// capabilities that choose the GDN prefill route.
+void provenance(const char* tag) {
+  const auto& caps = omarchy::device(0).capabilities();
+  std::cout << "[provenance] " << tag << " mlx=" << mlx::core::version()
+            << " cooperative_matrix_f32_8="
+            << (caps.cooperative_matrix_f32_8 ? 1 : 0)
+            << " subgroup_size=" << caps.subgroup_size << "\n";
+}
+
 } // namespace
 
 TEST_CASE("batched raw-gate decode matches per-row decode bit for bit") {
@@ -166,6 +179,7 @@ TEST_CASE("batched raw-gate decode stays fused") {
     return counters().vk_compute_dispatches.load() - before;
   };
   uint64_t fused = count(false), composed = count(true);
+  provenance("gdn_decode_batch");
   std::cout << "[gdn_decode_batch] B=4 raw decode " << fused
             << " dispatches, masked (composed) " << composed << "\n";
   CHECK_MESSAGE(fused <= 4, "B=4 raw decode took ", fused,
@@ -243,6 +257,7 @@ TEST_CASE("batched prefill stays on the fused dispatches") {
   }
   eval(one);
   uint64_t single = count(one), batched = count(x);
+  provenance("gdn_prefill_rows");
   std::cout << "[gdn_prefill_rows] B=1 T=128 " << single << " dispatches, B=4 "
             << batched << "\n";
   CHECK_MESSAGE(single >= 1, "the B=1 prefill dispatched nothing");

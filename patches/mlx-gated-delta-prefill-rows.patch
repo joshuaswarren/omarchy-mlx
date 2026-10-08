@@ -1,17 +1,21 @@
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1374,6 +1374,45 @@
+@@ -1374,6 +1374,49 @@
    int Hv = v.shape(2);
    int Dv = v.shape(3);
  
 +  // B > 1 prefill runs the batch row by row through the B = 1 route: every
 +  // fused prefill kernel (coopmat chunk walk, single-pass recurrence, masked
 +  // scan) is a B = 1 kernel, and a batched call used to fall off all of
-+  // them into the per-token composed fallback below (a [4, T] prefill was
-+  // 5.6-7.6x slower than four [1, T] ones, receipts/2026-10-07-batch-decode-2).
-+  // Each row is a view of the batched inputs, so its kernel and result are
-+  // the B = 1 call's bit for bit. Decode (T == 1) keeps the batched kernel.
-+  if (B > 1 && T > 1 &&
++  // them into the per-token composed fallback below (receipt:
++  // receipts/2026-10-08-gdn-prefill-rows). Each row is a view of the
++  // batched inputs, so its kernel and result are the B = 1 call's bit for
++  // bit. Decode (T == 1) keeps the batched kernel. Only the shapes and
++  // dtypes the fused route accepts (bf16, Hk == Hv, Dk == Dv == 128, the
++  // primitive's fused_ready) are split: any other input keeps the single
++  // batched composed fallback instead of one synchronized fallback per row.
++  if (B > 1 && T > 1 && out_dtype == bfloat16 && Hk == Hv && Dk == 128 &&
++      Dv == 128 &&
 +      !GatedDeltaUpdate::use_fallback(Hk, Dk, Hv, Dv, mask_.has_value(), s)) {
 +    auto row = [&](const array& a, int b) {
 +      Shape start(a.ndim(), 0), stop = a.shape();
