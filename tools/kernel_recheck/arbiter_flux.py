@@ -60,8 +60,44 @@ def mx_double_ref(inp):
         a, b = f[..., 0::2], f[..., 1::2]
         inter = mx.stack([a * cos - b * sin, b * cos + a * sin], axis=-1)
         return inter.reshape(f.shape).astype(mx.bfloat16)
-    return [o.reshape(1, o.shape[0], o.shape[1], o.shape[2])
-            for o in (rope(q), rope(k), v)]
+    return [o[None].transpose(0, 2, 1, 3) for o in (rope(q), rope(k), v)]
+
+
+def mx_single_ref(inp):
+    """Composed-mx single-stream reference (independent of the emulation)."""
+    import mlx.core as mx
+    d = defs.FLUX
+    dim, hd, heads, eps = d["dim"], d["hd"], d["heads"], d["eps"]
+    s_tot = d["img"] + d["txt"]
+    q = np.zeros((s_tot, heads, hd), dtype=np.float32)
+    k = np.zeros_like(q)
+    v = np.zeros_like(q)
+    fused = inp["fused"][0].reshape(s_tot, -1)
+    for s in range(s_tot):
+        for h in range(heads):
+            q[s, h] = fused[s, h * hd:(h + 1) * hd]
+            k[s, h] = fused[s, dim + h * hd:dim + (h + 1) * hd]
+            v[s, h] = fused[s, 2 * dim + h * hd:2 * dim + (h + 1) * hd]
+    to_bf16 = lambda a: mx.array(a).astype(mx.bfloat16)
+    qb, kb, vb = to_bf16(q), to_bf16(k), to_bf16(v)
+    nq = to_bf16(np.repeat(inp["norm_q"][None], s_tot, axis=0))
+    nk = to_bf16(np.repeat(inp["norm_k"][None], s_tot, axis=0))
+    def rms(x, w):
+        f = x.astype(mx.float32)
+        inv = mx.rsqrt(mx.mean(f * f, axis=-1, keepdims=True) + eps)
+        return (x.astype(mx.float32) * inv).astype(mx.bfloat16) * w[:, None, :]
+    qb, kb = rms(qb, nq), rms(kb, nk)
+    cos = to_bf16(inp["cos_vals"])[:, None, :].astype(mx.float32)
+    sin = to_bf16(inp["sin_vals"])[:, None, :].astype(mx.float32)
+    def rope(x):
+        f = x.astype(mx.float32)
+        a, b = f[..., 0::2], f[..., 1::2]
+        inter = mx.stack([a * cos - b * sin, b * cos + a * sin], axis=-1)
+        return inter.reshape(f.shape).astype(mx.bfloat16)
+    outs = []
+    for o in (rope(qb), rope(kb), vb):
+        outs.append(o.reshape(1, heads, s_tot, hd))
+    return outs
 
 
 def main():
@@ -86,7 +122,7 @@ def main():
         mx.eval(o)
     got = [np.array(o.astype(mx.float32)).astype(np.float64) for o in outs]
     emu = spec["ref"](inputs)
-    comp = mx_double_ref(inputs) if which == "double" else None
+    comp = mx_double_ref(inputs) if which == "double" else mx_single_ref(inputs)
     for i, g in enumerate(got):
         line = (f"out[{i}] kernel-vs-emulation maxdiff "
                 f"{np.abs(g - emu[i]).max():.4g}")
