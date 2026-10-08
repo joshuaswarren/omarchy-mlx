@@ -12469,11 +12469,22 @@ void Int8Matmul::eval_gpu(
       binding(wsd),
       binding(bd),
       binding(out)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::Int8MatmulOp,
-      bindings,
-      params,
-      omarchy::compute_dispatch_group_count(params.count));
+  // The shader indexes one thread per output element with no grid-stride
+  // loop, so one dispatch can cover at most kMaxComputeGroupCountX *
+  // kComputeThreadsPerGroup elements. Chunk rows*n the way LogicalOrBool is
+  // chunked (dispatch_logical_chunked): each dispatch receives its first
+  // output element in shape[3]. For count <= one chunk this is a single
+  // dispatch with shape[3] == 0, identical to the unchunked path.
+  for (uint32_t first = 0; first < params.count;) {
+    const uint32_t end = omarchy::next_logical_chunk_end(first, params.count);
+    params.shape[3] = first;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::Int8MatmulOp,
+        bindings,
+        params,
+        omarchy::compute_dispatch_group_count(end - first));
+    first = end;
+  }
 }
 
 // Bonsai 1-bit affine decode (M=1), shaders/bonsai_qmv_q1.comp. The
