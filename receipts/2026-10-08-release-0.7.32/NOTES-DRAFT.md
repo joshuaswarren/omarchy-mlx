@@ -6,6 +6,27 @@ re-run the range command at FREEZE).
 
 ## Shipped (user impact)
 
+### Upstream correctness fixes (Vulkan backend primitives/shaders, landed after v0.7.31)
+
+- **bool MaskedScatter native** (85c4a0b9a, merge f3dc90c94, upstream
+  #4635): dedicated masked_scatter_bool.comp shader + dispatch; verified on
+  G13G hardware, matrix row updated (receipts/2026-10-08-bool-masked-scatter/README.md,
+  landed via 1e87dc129).
+- **ArgReduce NaN propagation** (b42203b66): argreduce_suffix.comp now
+  propagates NaN like the reference — argmax/argmin over rows containing
+  NaN previously returned wrong indices deterministically (upstream suite
+  test arg reduce NaN failed 6/6 before). Documented as
+  OMARCHY-ARGREDUCE-NAN in docs/known-defects.md (:1057, FIXED same day);
+  test coverage in overlay/tests/omarchy/test_reduce_ops.cpp; audit
+  receipt receipts/2026-10-08-audit-followups/README.md (b0fe81f50).
+- **empty Sort / ArgSort short-circuit** (e7f56fc3d): empty arrays
+  short-circuit before the dtype refusal instead of erroring; defect entry
+  in docs/known-defects.md (same receipt b0fe81f50).
+- **Scan::eval_gpu parent-aliased-output guard** (a3ccf3a90): shared-buffer
+  view allocation guard in Scan eval_gpu prevents aliasing a parent
+  buffer's output; failing-before test 7c0317160 (tests: CumSum with a
+  pre-allocated shared-buffer output); receipt b0fe81f50.
+
 ### Serve performance
 - **mlx-lm last-logits for the dense qwen3 family** (0bdba12e8, both patch
   lines): cached prefill computes the quantized head only for the final
@@ -24,22 +45,20 @@ re-run the range command at FREEZE).
   README, data-only owner steps (284524e5d merge: 50170f716, dbd36ada4,
   91434d7fd, be7e3bb70).
 
-## NOT listed as shipped yet (needs hardware proof before FREEZE)
+## Bonsai status update (2026-10-08, revises the earlier "held out")
 
-- **Bonsai family** (dequant dispatch fix 576223963, qmv byte-walk constant
-  0e0871392, wide-kernel row addressing ba71943eb + scale/bias deconflation
-  902d40936, 21f57e231 MLX 0.32.3 patch drift, fbd8cfb9d enum entries,
-  f4a659358 runtime-M const): G13G hardware parity matrix receipt exists
-  (b865a929b) but the **wide-route redesign has NO hardware proof**. Rule
-  from Main: only list as shipped if G13G+G13C hardware receipts exist.
-  G13C leg ticket is staged (689aab921) but not run. Until both legs are
-  green on hardware, Bonsai stays OUT of the shipped section.
-- Bool MaskedScatter: NOT landed (no commit in range).
-- Kernel recheck translator fixes: the harness/translator work landed
-  (795015644, 353da309a, 123469dec, cd8670ca0, 9a7e83285, a1158b1df,
-  72ebe853e, 73838b26d) but these are dev-tooling; they affect what ships
-  later, not this release's runtime. Listed under tooling, not user impact,
-  unless Main says otherwise.
+- **G13G (jwm1): hardware-QUALIFIED.** Full matrix green including the wide
+  route: 20/20 pytest on the G13G ticket after the wide redesign (q1 qmv,
+  wide q1 m2-m5, q2 m2/m5, dequant f32+bf16, preconditions, roundtrip),
+  ctest 104/49/32 suites green in-ticket (2.77M+ assertions), dispatch
+  trace hits Bonsai ordinal 547 with zero CPU-stream lines; build
+  qualification receipts/2026-10-08-bonsai-build/README.md; wide-route
+  fix + full matrix receipt 725317295.
+- **G14C (M2): leg QUEUED on the M2** (in flight at draft time).
+- **G13C (jw16): PENDING** (leg ticket 689aab921 staged; not run).
+- Shipped-eligible on G13G evidence now; the release notes claim stays
+  scoped "hardware-qualified on G13G" until G14C + G13C legs report, per
+  the free-only rule.
 
 ## Tooling / gates (visible to maintainers)
 
@@ -64,13 +83,23 @@ re-run the range command at FREEZE).
 - TensorFold recipe facts fixed (02e027713), MiniMax H3 int8 recipe
   (37ced5128), upstream layout addendum (6dcc32387).
 
-## v0.7.32 gate plan (additions per Main, 2026-10-08)
+## v0.7.32 gate plan (revised 2026-10-08: shader/primitive fixes force the standing battery per chip)
 
-- g1 fresh-home install on EVERY host (dev box, jwm1, jw16, M2) and g17
-  patch-series on every host again (both lines rc=0 + idempotent, now
-  including mlx-lm-last-logits-qwen3 on pristine wheels).
-- All v0.7.31 gates repeat (g2..g12, g14, g16/g16b P+B, g-g13c P+B,
-  g-hold, jw16-gates full plan) on the 0.7.32 wheel once it exists.
+The upstream correctness fixes (MaskedScatter, ArgReduce NaN, empty Sort,
+Scan guard) all touch shaders/primitives, so v0.7.32 gates MUST include:
+
+- **Standing battery (all suites in the AGENTS.md list) on EACH chip**:
+  - G13G on jwm1,
+  - G13C on jw16 (currently blocked on ssh access — retry when the host
+    answers),
+  - G14C on the M2,
+  on a fresh build from the main tip (not the 0.7.31 wheel).
+- Plus on the new wheel: g1 fresh-home install on EVERY host, g17
+  patch-series on every host (both lines rc=0 + idempotent), g16/g16b
+  legs P+B per host, g-g13c legs P+B, g-hold, jw16-gates full plan, and
+  the M2 full gate set.
+- FREEZE only after: the G14C Bonsai leg + a main battery (full standing
+  battery) on jwm1 AND the M2, built from the main tip.
 - Scheduling: idle-guard backlog queues are the way to book host time
   (~/src/omarchy-mplus-private/tools/idle-guard/README.md): one file per
   host+engine on omp-studio-local, tab-separated ticket lines; the 60 s
@@ -80,5 +109,11 @@ re-run the range command at FREEZE).
   instead of grabbing hosts directly.
 
 ## Open before FREEZE
-- Bonsai G13C leg + wide-route hardware proof (decides shipped vs not).
+- G14C Bonsai leg on the M2 (queued).
+- G13C Bonsai leg on jw16 (pending; jw16 ssh currently not answering).
+- Full standing battery per chip on a fresh main-tip build (jwm1 + M2
+  minimum before FREEZE; jw16 when ssh returns).
 - Confirm nothing else user-visible lands that is missing here.
+
+Base range at this draft revision: v0.7.31..origin/main = 104 commits
+(b0fe81f50 tip). Re-run the range command at FREEZE.
