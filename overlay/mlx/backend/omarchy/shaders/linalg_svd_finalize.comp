@@ -67,7 +67,10 @@ void main() {
   uint tid = gl_LocalInvocationID.x;
   uint r = params.matrix_m;
   uint c = params.matrix_n;
-  uint matrix = gl_WorkGroupID.x;
+  // The host chunks the batch so no dispatch exceeds 65535 workgroups;
+  // aux_offset carries this dispatch's first matrix index (the field is
+  // unused by every linalg shader).
+  uint matrix = params.aux_offset + gl_WorkGroupID.x;
   uint base = matrix * r * c;
   uint ubase = matrix * r * r;
   uint vbase = matrix * c * c;

@@ -1358,15 +1358,15 @@ TEST_CASE("batched linalg writes every matrix past the one-dispatch clamp") {
     }
   }
   {
-    auto outs = linalg::svd(device, /*compute_uv=*/false, stream);
-    auto got_s = readback_f32(stream, outs[1]);
+    auto s_flat =
+        readback_f32(stream, linalg::svd(device, /*compute_uv=*/false, stream).at(0));
     for (int b : sampled) {
       HostMatrix at = host_transpose(refs[b], n, n);
       HostMatrix ata = host_matmul(at, refs[b], n, n, n);
       HostMatrix eig = host_sym_eigvals(ata, n);
       for (int i = 0; i < n; ++i) {
         double ref = std::sqrt(eig[n - 1 - i]);
-        float value = got_s[static_cast<size_t>(b) * n + i];
+        float value = s_flat[static_cast<size_t>(b) * n + i];
         CHECK_MESSAGE(
             std::abs(value - static_cast<float>(ref)) <=
                 1e-4 + 1e-4 * ref,
