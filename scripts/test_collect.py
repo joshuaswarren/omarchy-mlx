@@ -2208,6 +2208,22 @@ class MailboxAndReservedMemoryCapture(unittest.TestCase):
         self.assertEqual(out["ane_nodes"], {})
         self.assertEqual(len(out["pmgr_domains"]), 1)
 
+    def test_display_panel_node_never_looks_like_the_ane(self):
+        """'panel' contains the letters 'ane': a name match must respect
+        word boundaries (community-data record 6ddfdac0c35c reported
+        present=true for soc/dcp@28ec00000/panel)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_dt(tmp, "", {"compatible": b"apple,t8122\x00"})
+            _write_dt(tmp, "soc/dcp@28ec00000/panel", {
+                "compatible": b"apple,panel-j613\x00apple,panel\x00",
+            })
+            _write_dt(tmp, "soc/iop-ane0@280000000", {
+                "compatible": b"iop-ane,ascwrap-v6\x00",
+            })
+            out = cq._ane_port_devicetree(cc.Redactor(), base=tmp)
+        self.assertNotIn("soc/dcp@28ec00000/panel", out["ane_nodes"])
+        self.assertIn("soc/iop-ane0@280000000", out["ane_nodes"])
+
     def test_dtb_error_is_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
             _write_dt(tmp, "", {"compatible": b"apple,t6001\x00"})
