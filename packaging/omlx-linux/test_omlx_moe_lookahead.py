@@ -207,6 +207,39 @@ class Lookahead(unittest.TestCase):
         self.assertEqual(set(cache.slot_of), residents)  # nothing evicted
 
 
+    def test_eviction_ring_feeds_prediction(self):
+        model = _build(self._tmp.name, n_layers=2)
+        self.assertEqual(apply_moe_expert_offload(model, self._tmp.name, 0.25), 2)
+        c1 = _caches(model)[1]
+        c1._ensure_ids(set(range(8)))
+        c1._ensure_ids(set(range(8, 12)))
+        self.assertEqual(len(c1.recently_evicted), 4)
+        _glus(model)[0]._kick(None)
+        self.assertTrue(c1.spec_pending)
+        self.assertGreater(c1.pred_sent, 0)
+
+    def test_dontneed_read_matches_plain_read(self):
+        import numpy as np
+
+        tmp = tempfile.mkdtemp()
+        glu = _make_glu()
+        mx.save_safetensors(
+            str(Path(tmp) / "model.safetensors"), _glu_tensors(glu, "t")
+        )
+        store = offload.CheckpointExpertStore(Path(tmp))
+        plan = store.plan_expert("t.gate_proj.weight", 3)
+        old = offload._READ_DONTNEED
+        try:
+            offload._READ_DONTNEED = False
+            plain = offload.CheckpointExpertStore.read(plan)
+            offload._READ_DONTNEED = True
+            drop = offload.CheckpointExpertStore.read(plan)
+        finally:
+            offload._READ_DONTNEED = old
+        self.assertEqual(plain, drop)
+        mx.eval(mx.array(np.frombuffer(plain, dtype=np.uint32)))
+
+
 def _build_one(tmp, glu, prefix):
     mx.save_safetensors(
         str(Path(tmp) / "model.safetensors"), _glu_tensors(glu, prefix)
