@@ -35,6 +35,11 @@ driver build then fails with a missing `libLLVM.so.23.1`. The update needs
 about 10 GB free. The script in Step 1 checks for pending updates and
 refuses to run until the system is current.
 
+If you hold some packages back on purpose (a lab machine, a pinned kernel)
+and you know the rest is current enough for the build tools, you can skip
+that check with `LLAMACPP_DEMO_SKIP_UPDATE_CHECK=1 bash scripts/llamacpp-demo.sh`.
+Use it only then: it is the same partial-upgrade risk the check exists to prevent.
+
 Build tools (one-time). Step 1 checks for them and prints the exact `pacman`
 line to run if anything is missing. Run that line only after Step 0 and only
 when the script asks for it; it is not needed on a machine that already has

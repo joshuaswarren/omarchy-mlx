@@ -13,24 +13,29 @@ MODEL_FILE=Qwen_Qwen3.5-9B-IQ2_M.gguf
 
 # The system must be fully updated first. Installing build packages on an out-of-date system is a partial
 # upgrade (for example llvm 23 next to llvm-libs 22 breaks llvm-spirv and the driver build).
-rc=0
-if command -v checkupdates >/dev/null 2>&1; then
-  pending=$(checkupdates 2>/dev/null) || rc=$?   # 0 = updates pending, 2 = none, anything else = could not check
-  case $rc in
-    2) ;;
-    0) echo "the system is not fully updated ($(printf '%s\n' "$pending" | wc -l) packages pending). Update first, then rerun this script:"
-       echo "  omarchy update"
-       exit 1 ;;
-    *) echo "could not check for pending updates (network or mirror problem). Run this first, then rerun this script:"
-       echo "  omarchy update"
-       exit 1 ;;
-  esac
+# Override, only if you know your system is current enough: LLAMACPP_DEMO_SKIP_UPDATE_CHECK=1 bash scripts/llamacpp-demo.sh
+if [ "${LLAMACPP_DEMO_SKIP_UPDATE_CHECK:-0}" = 1 ]; then
+  echo "skipping the pending-updates check (LLAMACPP_DEMO_SKIP_UPDATE_CHECK=1)"
 else
-  pending=$(pacman -Qu 2>/dev/null || true)
-  if [ -n "$pending" ]; then
-    echo "the system is not fully updated ($(printf '%s\n' "$pending" | wc -l) packages pending). Update first, then rerun this script:"
-    echo "  omarchy update"
-    exit 1
+  rc=0
+  if command -v checkupdates >/dev/null 2>&1; then
+    pending=$(checkupdates 2>/dev/null) || rc=$?   # 0 = updates pending, 2 = none, anything else = could not check
+    case $rc in
+      2) ;;
+      0) echo "the system is not fully updated ($(printf '%s\n' "$pending" | wc -l) packages pending). Update first, then rerun this script:"
+         echo "  omarchy update"
+         exit 1 ;;
+      *) echo "could not check for pending updates (network or mirror problem). Run this first, then rerun this script:"
+         echo "  omarchy update"
+         exit 1 ;;
+    esac
+  else
+    pending=$(pacman -Qu 2>/dev/null || true)
+    if [ -n "$pending" ]; then
+      echo "the system is not fully updated ($(printf '%s\n' "$pending" | wc -l) packages pending). Update first, then rerun this script:"
+      echo "  omarchy update"
+      exit 1
+    fi
   fi
 fi
 
