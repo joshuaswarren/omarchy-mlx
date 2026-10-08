@@ -125,6 +125,8 @@ def _single(name):
         kwargs["header"] = (Path(__file__).parent / "sources" / spec["header"]).read_text()
     if spec.get("atomic_outputs"):
         kwargs["atomic_outputs"] = True
+    if spec.get("ensure_row_contiguous") is False:
+        kwargs["ensure_row_contiguous"] = False
 
     kernel = mx.fast.metal_kernel(
         name=name,
@@ -158,8 +160,6 @@ def _single(name):
         output_dtypes=[dtypes[d] for d in spec["out_dtypes"]],
         stream=mx.gpu,
     )
-    if spec.get("ensure_row_contiguous") is False:
-        call_kwargs["ensure_row_contiguous"] = False
     if spec.get("init_value") is not None:
         call_kwargs["init_value"] = spec["init_value"]
 
