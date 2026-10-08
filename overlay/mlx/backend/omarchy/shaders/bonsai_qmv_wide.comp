@@ -186,10 +186,8 @@ void main() {
         }
       }
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-        float scale = LOAD_VALUE(scales.values[
-            scale_base + r * groups_per_row + group]);
-        float bias = LOAD_VALUE(biases.values[
-            bias_base + r * groups_per_row + group]);
+        float scale = LOAD_VALUE(scales.values[scale_base + group]);
+        float bias = LOAD_VALUE(biases.values[bias_base + group]);
         acc[r] = fma(scale, dot[r], fma(bias, input_sum[r], acc[r]));
       }
     }
