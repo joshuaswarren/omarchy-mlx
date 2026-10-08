@@ -110,30 +110,82 @@ inline int batch_node_budget() {
 // the queue only between submissions, so one long submission makes the
 // desktop hitch for its whole length (issue #19: ~78 ms submissions
 // stutter, 2-6 ms stay smooth, same GPU busy fraction). Dispatch
-// durations are not cheaply measurable at record time, so the evaluator
-// flushes the open batch once its summed work-group counts reach this
-// budget. The default is calibrated so a 4B decode step splits into
-// ~2-6 ms submissions on the calibration host (measured groups per token
-// and per-group cost in receipts/2026-10-02-submission-cap-19). A single
-// dispatch whose group count alone exceeds the budget still runs whole:
-// splitting happens between dispatches. Copies and fills are not
+// durations are not cheaply measurable at record time, so each dispatch
+// contributes an ESTIMATED GPU time and the evaluator flushes the open
+// batch once the sum reaches a time budget. The estimate is
+// dispatch_est_ns below: the measured per-dispatch floor plus the
+// dispatch's bound bytes at a reference bandwidth. A summed work-group
+// count was tried first (v0.7.17, MLX_OMARCHY_BATCH_WORK, default
+// 40000 groups); it calibrated well on the M2 Max for 4B/9B 4-bit
+// decode (p50 5.6/4.4 ms) but does not transfer: per-group GPU time
+// spans ~78 ns (quantized matvec) to ~4600 ns (rope) on the same
+// profiles, so a bytes-heavier model class (7B 8-bit) landed at ~84 ms
+// per submission on the reporter's M1 Pro - ten times the target the
+// group count was calibrated to (issue #19, 2026-10-06 comment). The
+// default budget is a TIME budget for that reason.
+// A single dispatch whose estimate alone exceeds the budget still runs
+// whole: splitting happens between dispatches. Copies and fills are not
 // counted; the node and byte budgets keep those batches bounded.
-// MLX_OMARCHY_BATCH_WORK=<groups> overrides; =0 turns the work cap off
-// (node and byte budgets still apply). Scheduling only: every submission
-// already waits on this stream's previous completion and cross-submission
-// waits use ALL_COMMANDS stage masks (batching note above), so splitting
-// at any dispatch boundary preserves every dependency and results stay
-// bit-identical.
-inline constexpr uint64_t kBatchWorkBudget = 40000;
-inline uint64_t batch_work_budget() {
-  static const uint64_t v = []() {
-    const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
-    if (!e) {
-      return kBatchWorkBudget;
+// MLX_OMARCHY_BATCH_MS=<ms> sets the time budget (float, 0 = off);
+// MLX_OMARCHY_BATCH_WORK=<groups> keeps the v0.7.17 group-count
+// behavior for anyone tuning against it (set = 0 = off; a set
+// MLX_OMARCHY_BATCH_WORK wins over a set MLX_OMARCHY_BATCH_MS).
+// Scheduling only: every submission already waits on this stream's
+// previous completion and cross-submission waits use ALL_COMMANDS stage
+// masks (batching note above), so splitting at any dispatch boundary
+// preserves every dependency and results stay bit-identical.
+// Measured per-dispatch floor on the calibration host (M2 Max,
+// Honeykrisp, device-timestamp profiles, 2026-10-02 submission-cap
+// receipt): small-grid decode dispatches (norms, rope, reductions) cost
+// 20-30 us each, mostly independent of group count. This is the
+// estimator's fixed term.
+inline constexpr uint64_t kDispatchFixedNs = 25'000;
+// Reference bandwidth of the byte term: 200 bytes/ns = 200 GB/s. The
+// constant only has to be monotone and roughly right: the fixed term
+// dominates small-dispatch chains, and the byte term dominates
+// weight-reading matvecs. A slower chip under-estimates by its
+// bandwidth ratio - the budget stays a time budget, so the error
+// scales all dispatches alike instead of vanishing per group.
+inline constexpr uint64_t kBytesPerNs = 200;
+// Default submission budget: 4 ms, the middle of the reporter's
+// measured-smooth 2-6 ms band on a 120 Hz panel (issue #19).
+inline constexpr uint64_t kBatchTimeBudgetNs = 4'000'000;
+inline uint64_t dispatch_est_ns(uint64_t binding_bytes) {
+  return kDispatchFixedNs + binding_bytes / kBytesPerNs;
+}
+// Resolved submission budget. The legacy group knob ships in v0.7.17+
+// and keeps its exact meaning; the time knob is the default.
+struct BatchBudget {
+  bool off{false};
+  bool groups_mode{false};
+  uint64_t groups{0};
+  uint64_t ns{0};
+};
+inline BatchBudget resolve_batch_budget(const char* work_env, const char* ms_env) {
+  if (work_env != nullptr && work_env[0] != '\0') {
+    // Legacy semantics, unchanged: a positive value is a group-count
+    // budget, anything else (including 0 and unparseable text, which
+    // atoll maps to 0) is the off switch.
+    long long n = std::atoll(work_env);
+    if (n > 0) {
+      return BatchBudget{false, true, static_cast<uint64_t>(n), 0};
     }
-    long long n = std::atoll(e);
-    return n > 0 ? static_cast<uint64_t>(n) : 0;
-  }();
+    return BatchBudget{true, false, 0, 0};
+  }
+  if (ms_env != nullptr && ms_env[0] != '\0') {
+    double ms = std::strtod(ms_env, nullptr);
+    // 0 (and unparseable) is the off switch; 1 s caps the uint64 math.
+    if (ms > 0.0 && ms <= 1000.0) {
+      return BatchBudget{
+          false, false, 0, static_cast<uint64_t>(ms * 1e6)};
+    }
+    return BatchBudget{true, false, 0, 0};
+  }
+  return BatchBudget{false, false, 0, kBatchTimeBudgetNs};
+}
+inline BatchBudget batch_budget() {
+  static const BatchBudget v = resolve_batch_budget(
+      std::getenv("MLX_OMARCHY_BATCH_WORK"), std::getenv("MLX_OMARCHY_BATCH_MS"));
   return v;
 }
 // The one flush predicate for the open batch, shared by the eager
@@ -143,10 +195,17 @@ inline uint64_t batch_work_budget() {
 // number of submissions and their boundaries; no GPU involved.
 inline bool batch_over_budget(
     int nodes,
-    uint64_t work,
+    uint64_t est_ns,
+    uint64_t groups,
     int node_budget,
-    uint64_t work_budget) {
-  return nodes >= node_budget || (work_budget > 0 && work >= work_budget);
+    const BatchBudget& budget) {
+  if (nodes >= node_budget) {
+    return true;
+  }
+  if (budget.off) {
+    return false;
+  }
+  return budget.groups_mode ? groups >= budget.groups : est_ns >= budget.ns;
 }
 // Byte budget for the same batch: freed intermediates stay pinned in the
 // allocator quarantine until their batch submits and drains, so the open
@@ -251,9 +310,15 @@ class MLX_API CommandEncoder {
   }
 
   // Summed dispatch work-group counts of the open batch: the bounded
-  // GPU-time proxy the work budget flushes on (batch_work_budget).
+  // GPU-time proxy the legacy MLX_OMARCHY_BATCH_WORK budget flushes on.
   uint64_t batch_work() const {
     return batch_work_;
+  }
+
+  // Summed estimated GPU nanoseconds of the open batch
+  // (dispatch_est_ns per dispatch): the time budget's proxy.
+  uint64_t batch_est_ns() const {
+    return batch_est_ns_;
   }
 
   // True when nothing is recorded, nothing is queued for submission, and
@@ -502,6 +567,7 @@ class MLX_API CommandEncoder {
   bool recording_{false};
   int node_count_{0};
   uint64_t batch_work_{0};
+  uint64_t batch_est_ns_{0};
   uint64_t last_completion_{0};
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};

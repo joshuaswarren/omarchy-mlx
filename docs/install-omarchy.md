@@ -128,19 +128,29 @@ Per-submission GPU-time cap (issue #19): one queue submission holds the GPU
 until it finishes and the desktop compositor only gets the queue between
 submissions, so a ~78 ms submission hitches the desktop for about nine frames
 at 120 Hz while 2-6 ms submissions stay smooth (same GPU busy fraction;
-reporter's OpenGL measurement). `MLX_OMARCHY_BATCH_WORK=<groups>` bounds each
-submission to an estimated GPU cost: the open batch is submitted once its
-summed dispatch work-group counts reach the budget. The default
-(`40000` groups) is calibrated on the M2 Max so a 4B decode step splits
-into ~2-6 ms submissions; a single dispatch larger than the budget still runs
-whole (splitting happens between dispatches), and copies/fills ride the node
-and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap (headless
-boxes). Scheduling only: every submission already waits on the stream's
-previous completion, so splitting preserves order and results are
-bit-identical (greedy ids digests identical in every A/B pair;
-`receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max at the
-default: a 4B decode step drops from p50 20.9 ms to 5.6 ms per submission
-(decode tok/s −0.15 %), the 9B from 49.6 ms to 4.4 ms (+6 % decode).
+reporter's OpenGL measurement). The open batch is submitted once its
+estimated GPU time reaches the budget: each dispatch counts a measured
+per-dispatch floor (25 us; small-grid norms/rope/reduction dispatches cost
+20-30 us almost independent of their work-group count) plus its bound buffer
+bytes at a 200 GB/s reference bandwidth. A single dispatch larger than the
+budget still runs whole (splitting happens between dispatches), and
+copies/fills ride the node and byte budgets. `MLX_OMARCHY_BATCH_MS=<ms>`
+sets the budget (float; the default is 4 ms, the middle of the reporter's
+smooth 2-6 ms band; `0` disables the cap for headless boxes).
+`MLX_OMARCHY_BATCH_WORK=<groups>` keeps the v0.7.17 behavior (flush at a
+summed work-group count; the v0.7.17 default was 40000 groups); it is kept
+because per-group GPU time spans ~78 ns (quantized matvec) to ~4600 ns
+(rope), so a group budget calibrated on one model class does not transfer
+to another - on the reporter's M1 Pro the 7B 8-bit default landed at ~84 ms
+per submission (issue #19, 2026-10-06 comment), which is why the default is
+a time budget now. A set `MLX_OMARCHY_BATCH_WORK` wins over a set
+`MLX_OMARCHY_BATCH_MS`. Scheduling only: every submission already waits on
+the stream's previous completion, so splitting preserves order and results
+are bit-identical (greedy ids digests identical in every A/B pair;
+`receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max with the
+v0.7.17 group cap at its default: a 4B decode step drops from p50 20.9 ms
+to 5.6 ms per submission (decode tok/s −0.15 %), the 9B from 49.6 ms to
+4.4 ms (+6 % decode).
 Honest limit: frame pacing was not measured on a real logged-in compositor —
 none was available; the evidence is submission-length histograms plus a
 60 Hz tiny-submit probe whose worst host latency was 2.7 ms even with the

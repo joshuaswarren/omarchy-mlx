@@ -622,6 +622,17 @@ void CommandEncoder::dispatch_compute_pipeline(
       group_count_y * group_count_z;
   batch_work_ =
       UINT64_MAX - batch_work_ > groups ? batch_work_ + groups : UINT64_MAX;
+  // Time-budget proxy (encoder.h): per-dispatch floor plus bound bytes
+  // at the reference bandwidth, accumulated saturating like the group
+  // sum. Binding ranges are capped by maxStorageBufferRange and the
+  // binding count by ComputeRuntime::binding_limit(), so the sum fits.
+  uint64_t binding_bytes = 0;
+  for (const auto& item : bindings) {
+    binding_bytes += static_cast<uint64_t>(item.range);
+  }
+  const uint64_t est = dispatch_est_ns(binding_bytes);
+  batch_est_ns_ =
+      UINT64_MAX - batch_est_ns_ > est ? batch_est_ns_ + est : UINT64_MAX;
 
   auto& dt = vk::device_table();
   VkDescriptorSet descriptor_set = acquire_descriptor_set(compute);
@@ -1288,6 +1299,7 @@ void CommandEncoder::submit() {
       recording_ = false;
       node_count_ = 0;
       batch_work_ = 0;
+      batch_est_ns_ = 0;
       wait_semaphores_.clear();
       signal_semaphores_.clear();
       completed_handlers_.clear();
@@ -1341,6 +1353,7 @@ void CommandEncoder::submit() {
   recording_ = false;
   node_count_ = 0;
   batch_work_ = 0;
+  batch_est_ns_ = 0;
   pending_.clear();
   wait_semaphores_.clear();
   signal_semaphores_.clear();

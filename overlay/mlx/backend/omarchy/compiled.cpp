@@ -469,7 +469,8 @@ void eval_compiled_tape(
     // command-buffer; if it persists, the command buffer is innocent
     // and the tape's resource handling stays suspect.
     //
-    // Without that flag: node/work budgets (MLX_OMARCHY_BATCH_NODES /
+    // Without that flag: node/time budgets (MLX_OMARCHY_BATCH_NODES /
+    // MLX_OMARCHY_BATCH_MS, default 4 ms; legacy group-count mode
     // MLX_OMARCHY_BATCH_WORK, issue #19). The decoder's compiled tape is
     // one primitive eval, so without a check here a whole decode step -
     // or a whole prefill tape - is one submission and holds the queue
@@ -480,9 +481,10 @@ void eval_compiled_tape(
     if (per_node_submit ||
         omarchy::batch_over_budget(
             encoder.nodes(),
+            encoder.batch_est_ns(),
             encoder.batch_work(),
             omarchy::batch_node_budget(),
-            omarchy::batch_work_budget())) {
+            omarchy::batch_budget())) {
       encoder.commit();
     }
   }

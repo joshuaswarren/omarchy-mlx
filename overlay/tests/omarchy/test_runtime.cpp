@@ -2613,3 +2613,170 @@ TEST_CASE("stuck-submit warning fires before the wall typed error") {
   CHECK_FALSE(run.signaled);
   CHECK(run.code == 0);
 }
+
+TEST_CASE("dispatch time estimator: fixed floor plus bandwidth term") {
+  using namespace mlx::core::omarchy;
+  // A zero-byte dispatch still costs the measured per-dispatch floor.
+  CHECK(dispatch_est_ns(0) == kDispatchFixedNs);
+  // Linear above the floor at the reference bandwidth (kBytesPerNs).
+  CHECK(dispatch_est_ns(kBytesPerNs * 1'000'000) ==
+        kDispatchFixedNs + 1'000'000);
+  // Monotone.
+  CHECK(dispatch_est_ns(1'000) >= dispatch_est_ns(0));
+}
+
+TEST_CASE("submission budget resolution: time default, legacy groups, off") {
+  using namespace mlx::core::omarchy;
+  // Default (neither variable set): time mode at kBatchTimeBudgetNs.
+  BatchBudget b = resolve_batch_budget(nullptr, nullptr);
+  CHECK_FALSE(b.off);
+  CHECK_FALSE(b.groups_mode);
+  CHECK(b.ns == kBatchTimeBudgetNs);
+  // Legacy MLX_OMARCHY_BATCH_WORK keeps its shipped semantics.
+  b = resolve_batch_budget("40000", nullptr);
+  CHECK_FALSE(b.off);
+  CHECK(b.groups_mode);
+  CHECK(b.groups == 40000);
+  b = resolve_batch_budget("0", nullptr); // 0 = cap off (shipped switch)
+  CHECK(b.off);
+  // New time knob overrides the default when no legacy variable is set.
+  b = resolve_batch_budget(nullptr, "2.5");
+  CHECK_FALSE(b.off);
+  CHECK_FALSE(b.groups_mode);
+  CHECK(b.ns == 2'500'000);
+  b = resolve_batch_budget(nullptr, "0"); // 0 ms = cap off
+  CHECK(b.off);
+  // A set legacy variable wins over a set time variable (documented
+  // precedence: the shipped knob keeps meaning what it meant).
+  b = resolve_batch_budget("1000", "8");
+  CHECK(b.groups_mode);
+  CHECK(b.groups == 1000);
+  // Unparseable legacy values map to the shipped atoll path: 0 = off.
+  // A set-but-garbage legacy knob must not silently become a time cap.
+  b = resolve_batch_budget("banana", "");
+  CHECK(b.off);
+}
+
+TEST_CASE("batch flush predicate: boundaries across budget modes") {
+  using namespace mlx::core::omarchy;
+  BatchBudget off{true, false, 0, 0};
+  BatchBudget groups_mode{false, true, 1000, 0};
+  BatchBudget time_mode{false, false, 0, 1'000'000};
+  // Off mode: only the node budget flushes.
+  CHECK_FALSE(batch_over_budget(1, 999'999, 999, 4096, off));
+  CHECK(batch_over_budget(4096, 0, 0, 4096, off));
+  // Groups mode: summed groups flush, estimated ns does not.
+  CHECK(batch_over_budget(1, 0, 1000, 4096, groups_mode));
+  CHECK_FALSE(batch_over_budget(1, 2'000'000, 999, 4096, groups_mode));
+  // Time mode: estimated ns flush, summed groups do not. Boundary is
+  // inclusive: reaching the budget flushes.
+  CHECK(batch_over_budget(1, 1'000'000, 10, 4096, time_mode));
+  CHECK_FALSE(batch_over_budget(1, 999'999, 100'000, 4096, time_mode));
+  // Node budget fires in every mode.
+  CHECK(batch_over_budget(4096, 0, 0, 4096, groups_mode));
+  CHECK(batch_over_budget(4096, 0, 0, 4096, time_mode));
+}
+
+TEST_CASE(
+    "frame pacing: a 7B-class 8-bit decode token splits under the time "
+    "budget") {
+  // Synthetic dispatch plan for one Qwen2-7B-family 8-bit decode token
+  // (28 layers, hidden 3584, MLP 18944, vocab 152064, GQA 28 Q / 4 KV,
+  // head_dim 128), the shape of the issue #19 reporter's workload. Each
+  // quantized matvec reads its weight bytes (8-bit, group 64, fp16
+  // scales: out*in + out*(in/64)*2); norms, rope, sdpa, and glue record
+  // as zero-byte dispatches that cost the fixed floor.
+  using namespace mlx::core::omarchy;
+  auto q8_bytes = [](uint64_t out, uint64_t in) {
+    return out * in + out * (in / 64) * 2;
+  };
+  const uint64_t hidden = 3584, mlp = 18944, vocab = 152064;
+  const uint64_t qkv_out = (28 + 2 * 4) * 128;
+  std::vector<std::pair<uint64_t, uint64_t>> plan; // (binding bytes, groups)
+  for (int l = 0; l < 28; ++l) {
+    plan.emplace_back(q8_bytes(qkv_out, hidden), (qkv_out + 31) / 32);
+    plan.emplace_back(0, 26); // input layernorm
+    plan.emplace_back(0, 12); // q/k norm
+    plan.emplace_back(0, 6);  // rope
+    plan.emplace_back(0, 28); // sdpa
+    plan.emplace_back(q8_bytes(hidden, hidden), (hidden + 31) / 32);
+    plan.emplace_back(q8_bytes(mlp, hidden), (mlp + 31) / 32); // gate
+    plan.emplace_back(q8_bytes(mlp, hidden), (mlp + 31) / 32); // up
+    plan.emplace_back(0, 12);                                  // silu-mul
+    plan.emplace_back(q8_bytes(hidden, mlp), (hidden + 31) / 32); // down
+    plan.emplace_back(0, 13); // post layernorm
+  }
+  plan.emplace_back(q8_bytes(vocab, hidden), (vocab + 31) / 32); // lm head
+
+  uint64_t token_est = 0;
+  for (const auto& d : plan) {
+    token_est += dispatch_est_ns(d.first);
+  }
+
+  // Walk the evaluator's flush loop under the default time budget: no
+  // submission may carry an estimate above the budget (a single dispatch
+  // bigger than the budget still runs whole, but the lm head here is
+  // under it), and the token must split into the budget-quota of
+  // submissions or more.
+  BatchBudget budget = resolve_batch_budget(nullptr, nullptr);
+  uint64_t run_est = 0, run_groups = 0, run_nodes = 0;
+  uint64_t max_sub_est = 0, subs = 0;
+  for (const auto& d : plan) {
+    // eval() records the eval's dispatches first, then flushes the open
+    // batch when the predicate fires on the accumulated totals.
+    run_est += dispatch_est_ns(d.first);
+    run_groups += d.second;
+    ++run_nodes;
+    if (batch_over_budget(
+            static_cast<int>(run_nodes),
+            run_est,
+            run_groups,
+            kBatchNodeBudget,
+            budget)) {
+      max_sub_est = std::max(max_sub_est, run_est);
+      ++subs;
+      run_est = 0;
+      run_groups = 0;
+      run_nodes = 0;
+    }
+  }
+  if (run_nodes > 0) {
+    max_sub_est = std::max(max_sub_est, run_est);
+    ++subs;
+  }
+  // Every submission stays under the budget plus at most one dispatch
+  // (the dispatch that crosses the line rides the flushed batch).
+  uint64_t max_disp_est = 0;
+  for (const auto& d : plan) {
+    max_disp_est = std::max(max_disp_est, dispatch_est_ns(d.first));
+  }
+  CHECK(max_sub_est <= budget.ns + max_disp_est);
+  CHECK(subs * budget.ns >= token_est);
+  // The whole token must not fit in one submission.
+  CHECK(subs >= 2);
+
+  // The regression this replaces: under the shipped group-count budget
+  // the same plan allows submissions the reporter measured at about
+  // 2.1 microseconds per group (40000-group submissions, frame p50
+  // 83.7 ms at 120 Hz). Ten-ms-plus submissions stutter a compositor;
+  // the time budget exists so that cannot recur on a slower chip or a
+  // bytes-heavier model class.
+  uint64_t token_groups = 0;
+  for (const auto& d : plan) {
+    token_groups += d.second;
+  }
+  BatchBudget groups_budget = resolve_batch_budget("40000", nullptr);
+  uint64_t max_sub_groups = 0;
+  uint64_t g_run = 0;
+  for (const auto& d : plan) {
+    if (batch_over_budget(
+            1, 0, g_run + d.second, kBatchNodeBudget, groups_budget)) {
+      max_sub_groups = std::max(max_sub_groups, g_run);
+      g_run = 0;
+    }
+    g_run += d.second;
+  }
+  max_sub_groups = std::max(max_sub_groups, g_run);
+  const uint64_t reporter_ns_per_group = 2100;
+  CHECK(max_sub_groups * reporter_ns_per_group >= 80'000'000);
+}
