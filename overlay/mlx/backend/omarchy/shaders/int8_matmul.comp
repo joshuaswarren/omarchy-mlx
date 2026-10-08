@@ -179,11 +179,14 @@ void main() {
 
       for (uint k0 = 0u; k0 < k_eff; k0 += TILE_K) {
         barrier();
-        // Stage the X rows, then the gate W rows, then (swiglu) the value
-        // W rows: 256 threads, 128 word slots per stream.
-        stage_stream(tid, tr * TILE, rows, params.lhs_offset / 4u, k0, k_eff,
-                     aligned, 0u);
-        if (tid >= TILE * K_WORDS) {
+        // Stage the X rows (tids 0..127 -> 128 word slots), then the gate
+        // W rows (tids 128..255), then (swiglu) the value W rows. Slots
+        // must stay within each tile: tile_x has exactly TILE * K_WORDS
+        // entries and staging past it is an out-of-bounds shared write.
+        if (tid < TILE * K_WORDS) {
+          stage_stream(tid, tr * TILE, rows, params.lhs_offset / 4u, k0, k_eff,
+                       aligned, 0u);
+        } else {
           stage_stream(tid - TILE * K_WORDS, tc * TILE, n,
                        params.rhs_offset / 4u, k0, k_eff, aligned, 1u);
         }
