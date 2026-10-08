@@ -241,6 +241,36 @@ class M3m4KitAneStageTests(unittest.TestCase):
                 self.assertIn(f"M3/M4 kit: {name} (apple,{soc}) on Linux", result.stdout,
                               result.stdout + result.stderr)
 
+    def _stub_aurora(self):
+        """curl writes a fake installer that logs its arguments; python3 fails
+        so the collector stage stops at once. Returns (PATH, call-log path)."""
+        base = pathlib.Path(self.tmp.name)
+        stubs = base / "aurorastubs"
+        stubs.mkdir()
+        log = base / "aurora-calls.log"
+        (stubs / "curl").write_text(
+            "#!/bin/sh\n"
+            'while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\n'
+            f"printf '#!/bin/sh\\necho \"$*\" >> {log}\\n' > \"$out\"\n")
+        (stubs / "python3").write_text("#!/bin/sh\nexit 1\n")
+        for name in ("curl", "python3"):
+            (stubs / name).chmod(0o755)
+        return f"{stubs}:{os.environ.get('PATH', '')}", log
+
+    def test_power_survey_is_opt_in_and_runs_after_the_report(self):
+        self.rechip("t6031")
+        path, log = self._stub_aurora()
+        result = self.run_kit(MKIT_DRY_RUN=0, PATH=path)
+        self.assertEqual(log.read_text().split(), ["--m3-report"],
+                         result.stdout + result.stderr)
+        self.assertIn("rerun with MKIT_POWER_SURVEY=1", result.stdout)
+        log.unlink()
+        result = self.run_kit(MKIT_DRY_RUN=0, PATH=path, MKIT_POWER_SURVEY=1)
+        self.assertEqual(log.read_text().split(), ["--m3-report", "--m3-power-survey"],
+                         result.stdout + result.stderr)
+        self.assertIn("aurora --m3-power-survey: OK", result.stdout)
+        self.assertNotIn("rerun with MKIT_POWER_SURVEY=1", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
