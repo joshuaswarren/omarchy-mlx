@@ -577,7 +577,7 @@ int run_child_scenario(const std::string& mode) {
       return 31;
     }
     const uint64_t warned =
-        omarchy::omarchy::trace::counters().submit_stuck_warnings.load();
+        omarchy::trace::counters().submit_stuck_warnings.load();
     if (healthy != 0 || warned < 1) {
       std::cout << "[child/stuck_warning] warned=" << warned
                 << " healthy=" << healthy << "\n";
