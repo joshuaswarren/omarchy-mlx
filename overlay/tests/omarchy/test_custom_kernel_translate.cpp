@@ -295,3 +295,22 @@ TEST_CASE("c-style cast of a bf16 buffer read keeps the subscript attached") {
   CHECK(glsl.find("inp") == std::string::npos);
   CHECK(glsl.find("float(inp)[c]") == std::string::npos);
 }
+
+TEST_CASE("bf16 buffer named x coexists with the threadgrid swizzle") {
+  // The inkling sconv decode kernel names its bf16 buffer `x`; the bare-use
+  // check used to count the `.x` swizzle of thread_position_in_grid as a
+  // bare buffer use and refuse the kernel.
+  const char* source =
+      "[[kernel]] void sconv_style(\n"
+      "    const device bfloat16_t* x [[buffer(0)]],\n"
+      "    device float* nstate [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint c = thread_position_in_grid.x;\n"
+      "  float v = (float)x[c];\n"
+      "  nstate[c] = v;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("_mlx_bf16_to_float(_b0.data[c])") != std::string::npos);
+  CHECK(glsl.find("thread_position_in_grid.x") == std::string::npos);
+  CHECK(glsl.find(".x;") == std::string::npos);
+}
