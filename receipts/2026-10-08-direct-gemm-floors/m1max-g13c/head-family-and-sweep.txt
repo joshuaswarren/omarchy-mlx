@@ -1,0 +1,4 @@
+[doctest] test cases:       33 |       33 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942874 | 82942874 passed | 0 failed |
+[doctest] Status: SUCCESS!
+cells main 450 cand 450 common 450 mismatches 0
