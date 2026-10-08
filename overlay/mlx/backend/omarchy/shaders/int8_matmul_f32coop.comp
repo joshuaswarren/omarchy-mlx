@@ -165,9 +165,14 @@ void main() {
       const uint s = q / (TILE * TILE / SG);
       const uint r = (q / (TILE / 2u)) % (TILE / 2u);
       const uint c = q % (TILE / 2u);
-      const uint row = row_base + r;
+      // The quarter lives at tile rows (s/2)*32.. and columns
+      // (s%2)*32..; total is row-major 64x64, so translate. The XS
+      // scale follows the output row, quarter offset included.
+      const uint row = row_base + (s >> 1u) * (TILE / 2u) + r;
       const float xs = in_xs.values[params.shape[0] + row * groups + g];
-      total[q] += flush_d[s][q - s * (TILE * TILE / SG)] * xs;
+      const uint gq = ((s >> 1u) * (TILE / 2u) + r) * TILE +
+          ((s & 1u) * (TILE / 2u) + c);
+      total[gq] += flush_d[s][q - s * (TILE * TILE / SG)] * xs;
     }
     barrier();
   }
