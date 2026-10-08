@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
@@ -73,14 +74,14 @@ array row(const array& x, int i, Stream s) {
 }
 
 // Batched call vs the same rows run one at a time; `call` maps the
-// per-sequence inputs (all [B or 1, ...]) to {out, state}.
+// per-sequence inputs (all [rows or 1, ...]) to {out, state}.
 void check_rows(const char* what, const std::vector<array>& per_seq,
                 const std::function<std::vector<array>(
                     const std::vector<array>&)>& call,
-                Stream s) {
+                Stream s, int rows = B) {
   auto batched = call(per_seq);
   std::vector<array> outs, states;
-  for (int i = 0; i < B; ++i) {
+  for (int i = 0; i < rows; ++i) {
     std::vector<array> one;
     for (const auto& x : per_seq) {
       one.push_back(row(x, i, s));
@@ -191,72 +192,90 @@ TEST_CASE("batched raw-gate decode stays fused") {
 // B > 1 prefill (T > 1) runs the batch row by row through the B = 1 fused
 // route (patches/mlx-gated-delta-prefill-rows.patch). Before it, every GDN
 // layer of a batched prefill took the per-token composed fallback: a [4, T]
-// prefill was 5.6-7.6x slower than four [1, T] ones (jw16 G13C, T 128-1024).
-std::vector<array> prefill_inputs(int t, Stream s) {
-  return {bf16({B, t, H, D}, 21, 0.1f, s), bf16({B, t, H, D}, 22, 0.1f, s),
-          bf16({B, t, H, D}, 23, 1.0f, s),
-          pattern({B, t, H}, 24, 0.05f, 0.9f, s),
-          bf16({B, t, H}, 25, 0.25f, s, 0.5f),
-          pattern({B, H, D, D}, 26, 0.05f, 0.0f, s)};
+// prefill was 5.6-7.6x slower than four [1, T] ones (M1 Max, T 128-1024,
+// receipts/2026-10-08-gdn-prefill-rows). The row split applies only to the
+// shapes and dtypes the fused route accepts (bf16, Hk == Hv, Dk == Dv == 128).
+std::vector<array> prefill_inputs(int rows, int t, Stream s,
+                                  Dtype dt = bfloat16) {
+  auto cast = [&](array x) { return astype(x, dt, s); };
+  return {cast(pattern({rows, t, H, D}, 21, 0.1f, 0.0f, s)),
+          cast(pattern({rows, t, H, D}, 22, 0.1f, 0.0f, s)),
+          cast(pattern({rows, t, H, D}, 23, 1.0f, 0.0f, s)),
+          pattern({rows, t, H}, 24, 0.05f, 0.9f, s),
+          cast(pattern({rows, t, H}, 25, 0.25f, 0.5f, s)),
+          pattern({rows, H, D, D}, 26, 0.05f, 0.0f, s)};
 }
 
 TEST_CASE("batched prefill matches per-row prefill bit for bit") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
-  // T = 128 takes the chunked coopmat route, T = 32 the short-prompt route.
-  for (int t : {32, 128}) {
-    auto x = prefill_inputs(t, s);
-    check_rows(t == 32 ? "prefill B=4 T=32" : "prefill B=4 T=128", x,
-               [&](const std::vector<array>& y) {
-                 return fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4],
-                                                 y[5]);
-               },
-               s);
+  // T < 64 takes the short-prompt scan, T >= 64 the chunked coopmat route
+  // (kGdnCoopmatMinTokens); 33/63/64/65/129 straddle the threshold and the
+  // 8-token chunk grid.
+  for (int rows : {2, 3, 4}) {
+    for (int t : {2, 7, 33, 63, 64, 65, 128, 129}) {
+      auto x = prefill_inputs(rows, t, s);
+      std::string label =
+          "prefill B=" + std::to_string(rows) + " T=" + std::to_string(t);
+      check_rows(label.c_str(), x,
+                 [&](const std::vector<array>& y) {
+                   return fast::gated_delta_update(y[0], y[1], y[2], y[3],
+                                                   y[4], y[5]);
+                 },
+                 s, rows);
+    }
   }
 }
 
 TEST_CASE("batched masked prefill matches per-row prefill bit for bit") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
-  constexpr int t = 64;
-  auto x = prefill_inputs(t, s);
-  // Left padding of b * 5 tokens per row: a real, row-dependent mask.
-  std::vector<bool> bits;
-  for (int b = 0; b < B; ++b) {
-    for (int i = 0; i < t; ++i) {
-      bits.push_back(i >= b * 5);
+  for (int rows : {2, 3, 4}) {
+    for (int t : {33, 64}) {
+      auto x = prefill_inputs(rows, t, s);
+      // Left padding of b * 5 tokens per row: a real, row-dependent mask.
+      std::vector<bool> bits;
+      for (int b = 0; b < rows; ++b) {
+        for (int i = 0; i < t; ++i) {
+          bits.push_back(i >= b * 5);
+        }
+      }
+      x.push_back(array(bits.begin(), {rows, t}, bool_));
+      std::string label = "masked prefill B=" + std::to_string(rows) +
+          " T=" + std::to_string(t);
+      check_rows(label.c_str(), x,
+                 [&](const std::vector<array>& y) {
+                   return fast::gated_delta_update(y[0], y[1], y[2], y[3],
+                                                   y[4], y[5], y[6]);
+                 },
+                 s, rows);
     }
   }
-  x.push_back(array(bits.begin(), {B, t}, bool_));
-  check_rows("masked prefill B=4 T=64", x,
-             [&](const std::vector<array>& y) {
-               return fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4],
-                                               y[5], y[6]);
-             },
-             s);
+}
+
+// Dispatches of one gated_delta_update call (inputs already evaluated).
+uint64_t dispatches(const std::vector<array>& y, Stream s) {
+  auto& enc = omarchy::get_command_encoder(s);
+  enc.synchronize("gdn_prefill_inputs");
+  uint64_t before = counters().vk_compute_dispatches.load();
+  auto r = fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4], y[5]);
+  eval(r);
+  enc.synchronize("gdn_prefill_outputs");
+  return counters().vk_compute_dispatches.load() - before;
 }
 
 TEST_CASE("batched prefill stays on the fused dispatches") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
   constexpr int t = 128;
-  auto x = prefill_inputs(t, s);
+  auto x = prefill_inputs(B, t, s);
   eval(x);
-  auto& enc = omarchy::get_command_encoder(s);
-  auto count = [&](const std::vector<array>& y) {
-    enc.synchronize("gdn_prefill_inputs");
-    uint64_t before = counters().vk_compute_dispatches.load();
-    auto r = fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4], y[5]);
-    eval(r);
-    enc.synchronize("gdn_prefill_outputs");
-    return counters().vk_compute_dispatches.load() - before;
-  };
   std::vector<array> one;
   for (const auto& v : x) {
     one.push_back(row(v, 0, s));
   }
   eval(one);
-  uint64_t single = count(one), batched = count(x);
+  uint64_t single = dispatches(one, s), batched = dispatches(x, s);
   provenance("gdn_prefill_rows");
   std::cout << "[gdn_prefill_rows] B=1 T=128 " << single << " dispatches, B=4 "
             << batched << "\n";
@@ -265,4 +284,34 @@ TEST_CASE("batched prefill stays on the fused dispatches") {
   // composed per-token chain is thousands of dispatches at T = 128.
   CHECK_MESSAGE(batched <= 4 * single + 16, "B=4 prefill took ", batched,
                 " dispatches against ", single, " for one row: it fell back");
+}
+
+// A dtype the fused route does not take (fp16) keeps ONE batched composed
+// fallback: splitting it would run the composed chain once per row (B x the
+// dispatches, one encoder synchronize each). Same result as per-row, and the
+// batched call must not cost more than about one row's dispatches.
+TEST_CASE("batched fp16 prefill keeps the single batched fallback") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  constexpr int t = 8;
+  auto x = prefill_inputs(B, t, s, float16);
+  eval(x);
+  check_rows("fp16 prefill B=4 T=8", x,
+             [&](const std::vector<array>& y) {
+               return fast::gated_delta_update(y[0], y[1], y[2], y[3], y[4],
+                                               y[5]);
+             },
+             s);
+  std::vector<array> one;
+  for (const auto& v : x) {
+    one.push_back(row(v, 0, s));
+  }
+  eval(one);
+  uint64_t single = dispatches(one, s), batched = dispatches(x, s);
+  provenance("gdn_fp16_prefill");
+  std::cout << "[gdn_fp16_prefill] B=1 T=8 " << single << " dispatches, B=4 "
+            << batched << "\n";
+  CHECK_MESSAGE(batched <= 2 * single + 8, "fp16 B=4 prefill took ", batched,
+                " dispatches against ", single,
+                " for one row: the batch was split into per-row fallbacks");
 }
