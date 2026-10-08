@@ -396,7 +396,8 @@ TEST_CASE(
   const int group = 256;
   const int n = 21504;
   auto in = make_inputs(rows, k, group, n, false, 303);
-  auto out_bits = bits_of(run_int8(in, rows, k, group, n, false));
+  auto out = run_int8(in, rows, k, group, n, false);
+  auto out_bits = bits_of(out);
   size_t nan_count = 0;
   for (uint32_t value : out_bits) {
     if ((value & 0x7f800000u) == 0x7f800000u && (value & 0x007fffffu) != 0u) {
