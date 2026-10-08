@@ -15,7 +15,10 @@
 // bf16(silu(gate_total) * value_total) with no intermediate rounding.
 // Spare push-constant routing: shape[0..2] carry the XS / WS / B element
 // offsets (buffers are bound at 0 like every kernel here; X, W and OUT use
-// the regular lhs_offset / rhs_offset / output_offset fields).
+// the regular lhs_offset / rhs_offset / output_offset fields). shape[3]
+// carries the first output element of this dispatch chunk: one dispatch can
+// hold at most kMaxComputeGroupCountX * 256 threads, so the host splits
+// rows*n > 16,776,960 into logical chunks and offsets every index by it.
 
 layout(local_size_x = 256) in;
 
@@ -80,8 +83,9 @@ void main() {
   const uint groups = k_total / params.reduce_size;
   const bool swiglu = (params.flags & 1u) != 0u;
 
-  const uint m = gl_GlobalInvocationID.x / n;
-  const uint col = gl_GlobalInvocationID.x % n;
+  const uint linear = params.shape[3] + gl_GlobalInvocationID.x;
+  const uint m = linear / n;
+  const uint col = linear % n;
 
   // Gate row dot (swiglu) or the single row dot.
   float gate_total = 0.0f;
@@ -141,5 +145,5 @@ void main() {
     result = gate_total * in_ws.values[params.shape[1] + col] +
         in_b.values[params.shape[2] + col];
   }
-  out_bf16.values[params.output_offset + gl_GlobalInvocationID.x] = bf16_store(result);
+  out_bf16.values[params.output_offset + linear] = bf16_store(result);
 }
