@@ -1,0 +1,47 @@
+mlx-lm patch series: patches
+patching file mlx_lm/server.py
+Hunk #1 succeeded at 147 (offset -3 lines).
+applied: mlx-lm-tool-call-arguments.patch
+patching file mlx_lm/tool_parsers/qwen3_coder.py
+Hunk #1 succeeded at 44 (offset -1 lines).
+applied: mlx-lm-qwen3-coder-untyped-args.patch
+patching file mlx_lm/server.py
+Hunk #1 succeeded at 1191 (offset 2 lines).
+Hunk #2 succeeded at 1233 (offset 2 lines).
+applied: mlx-lm-max-tokens-min-one.patch
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-gated-delta-fast-route.patch
+patching file mlx_lm/models/gated_delta.py
+Hunk #1 succeeded at 278 (offset -2 lines).
+applied: mlx-lm-gated-delta-fast-route-repeat.patch
+patching file mlx_lm/models/gated_delta.py
+Hunk #1 succeeded at 290 (offset 9 lines).
+applied: mlx-lm-gated-delta-raw.patch
+patched: /tmp/g17-0732/tree-0.31.3/lib/python3.11/site-packages/mlx_lm/models/cache.py (mlx-lm 0.31.3)
+kv-maskless/kv-host-offset: 0.32 series only; skipped on patches
+patching file mlx_lm/generate.py
+applied: mlx-lm-greedy-prune.patch
+batch-greedy-head: 0.32 series only (no GenerationBatch); skipped on patches
+patching file mlx_lm/models/qwen3_5.py
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-qk-scaled.patch
+patching file mlx_lm/models/qwen3_5.py
+applied: mlx-lm-qwen35-gdn-conv.patch
+patching file mlx_lm/models/qwen3_5.py
+Hunk #1 succeeded at 167 (offset -4 lines).
+applied: mlx-lm-conv-silu.patch
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-gated-norm.patch
+patching file mlx_lm/generate.py
+applied: mlx-lm-ttft-early-submit.patch
+conv-ring: OFF (set MLX_OMARCHY_CONV_RING=1 to enable)
+patching file mlx_lm/models/qwen3_5.py
+Hunk #2 succeeded at 313 (offset -3 lines).
+applied: mlx-lm-last-logits.patch
+patching file mlx_lm/models/qwen3.py
+Hunk #1 succeeded at 176 (offset -59 lines).
+applied: mlx-lm-last-logits-qwen3.patch
+patched: /tmp/g17-0732/tree-0.31.3/lib/python3.11/site-packages/mlx_lm/models/qwen3_next.py
+patched: /tmp/g17-0732/tree-0.31.3/lib/python3.11/site-packages/mlx_lm/models/qwen3_5.py
+patched: /tmp/g17-0732/tree-0.31.3/lib/python3.11/site-packages/mlx_lm/models/qwen3.py
+patched: /tmp/g17-0732/tree-0.31.3/lib/python3.11/site-packages/mlx_lm/models/gated_delta.py
