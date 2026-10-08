@@ -75,6 +75,28 @@ gaps: fused_single emulation (harness-side, kernel translates clean) and
 the banded_mask_v2 call-argument fix (landed, 7368d2a91, untested on
 GPU).
 
+## Final GPU table (M2 G14C, fresh cache, current harness + main wheel)
+
+The final GPU run used a fresh per-process translation cache (the runner
+sets MLX_OMARCHY_SPIRV_CACHE to a fresh temp dir), eliminating stale-cache
+confounds. Results are genuine current-translator outputs.
+
+| status | count | kernels |
+|---|---|---|
+| pass | 11 | bitlinear_matmul, fused_double_norm_rope, inkling_banded_mask, inkling_moe_route, mlx_vlm_llguidance_mask, custom_depthwise_conv1d, qk_relu_squared, mlx_audio_phonon_unpack_base5_v1, moe_route_fused, situ_fused, situ_pair_fused |
+| wrong | 1 | fused_single_norm_rope (harness emulation structural — kernel translates+compiles clean) |
+| compile fail | 5 | inkling_sconv_decode, inkling_moe_down_combine, inkling_banded_mask_v2, kda_glue_pre, kda_glue_post (nested same-family C-casts survive inside constructor arguments; glslc: GL_NV_explicit_typecast) |
+| refused | 9 | CBQ family (as_type<char4>/bfloat4, device pointer arithmetic, threadgroup alias, atomic_float) |
+
+All 11 passing kernels are validated against fp64/integer-exact NumPy
+references with NaN/inf detection and sha256 output checksums. The 9
+refusals are the CBQ family with the predicted constructs.
+
+The 5 compile-fail kernels need MSL pre-normalization or a parser-based
+cast scanner (three regex-based rewrites each failed differently: fixpoint
+never reaches inner casts; rescan corrupts its own output; recursive
+segfaults). This is documented as the boundary of the regex-based approach.
+
 ## Fixed-wheel GPU revalidation (M2)
 
 - Wheel built on the M2 under fill-run from the streamed main tree
