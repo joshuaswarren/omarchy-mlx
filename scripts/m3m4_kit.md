@@ -28,8 +28,9 @@ git clone https://github.com/joshuaswarren/omarchy-mlx && cd omarchy-mlx && bash
 The kit reads `/proc/device-tree/compatible`. `apple,t6031` and
 `apple,t6034` (the binned M3 Max) both print `Apple M3 Max`. `apple,t6030`
 is the M3 Pro and prints `Apple M3 Pro`. A test covers all four M3 ids.
-Run it as a normal user: nothing is installed, no file outside the
-`m3m4-kit-<UTC>/` directory is written, and nothing is uploaded.
+Run it as a normal user: nothing is installed and nothing is uploaded.
+Results go to the `m3m4-kit-<UTC>/` directory; the tools may use
+temporary work files and remove them on exit.
 
 What it collects, in the order it runs:
 
