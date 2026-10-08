@@ -1052,3 +1052,24 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   purpose: the same constants must produce the same answer class on
   both, and the built-in bands keep their documented (measured)
   tolerances in the tests.
+
+
+## OMARCHY-ARGREDUCE-NAN (found 2026-10-08, FIXED same day)
+
+- Symptom: upstream suite case `test arg reduce NaN`
+  (tests/arg_reduce_tests.cpp:192, check at :25) failed 6/6 assertions
+  DETERMINISTICALLY (in isolation too) on the omarchy GPU path: argmin over
+  [3, NaN, 1] returned index 2 (expected 1); 1024-wide row with NaNs at 17
+  and 529 returned 0 (expected 17, first NaN).
+- Root cause: shaders/argreduce_suffix.comp used raw `<` / `>` compares at
+  every reduce site; NaN never wins any compare, so NaN rows resolved to
+  the first non-NaN extremum. NOT order dependence, NOT shared state.
+  Observed identically on pure main (ec2cd9dc) and on the branch tree,
+  jwm1 G13G coreglass ICD. Not a GPU-vendor quirk: it is the shader's
+  comparison semantics.
+- Fix: NaN-wins compare (first NaN index wins; integer dtypes unchanged;
+  the cross-thread tree keeps its index tiebreak) +
+  omarchy_reduce_ops_tests case "float argreduces propagate NaN like the
+  reference". Failing-before observed at ec2cd9dc/branch; passing-after on
+  the fix commit (see receipts/2026-10-08-audit-followups/README.md for
+  counts).

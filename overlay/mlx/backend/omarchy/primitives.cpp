@@ -3970,6 +3970,11 @@ void ArgReduce::eval_gpu(const std::vector<array>& inputs, array& out) {
 void ArgSort::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
   auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
+  // Same empty short-circuit as Sort (see there).
+  if (out.size() == 0) {
+    out.set_data(allocate_omarchy(0));
+    return;
+  }
   require_sort_dtype("ArgSort", input, out, true, encoder);
   dispatch_sort_any_axis("ArgSort", input, out, state(), true, -1, encoder);
 }
@@ -11168,6 +11173,13 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
 void Sort::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
   auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
+  // An empty array sorts to itself in zero work: return before the dtype
+  // refusal so the upstream "test sort and scan on empty arrays" case runs
+  // its no-kernel-needed path (upstream ops_tests.cpp:2992).
+  if (out.size() == 0) {
+    out.set_data(allocate_omarchy(0));
+    return;
+  }
   require_sort_dtype("Sort", input, out, false, encoder);
   dispatch_sort_any_axis("Sort", input, out, state(), false, -1, encoder);
 }
