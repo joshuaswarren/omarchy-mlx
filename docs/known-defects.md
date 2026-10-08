@@ -269,18 +269,29 @@ stride loop; instead of silently clamping grids above 524,280 / 262,140 /
 65,535 they now refuse by name (QmmVecQ4Multi refusal precedent), since
 no realistic Bonsai shape reaches those bounds.
 
+### Batched linalg factorizations went unwritten past 65,535 matrices
+
+Observed on: jw16 (M1 Max, G13C, honeykrisp vulkan-release) with a numpy
+cross-check: at batch 66000 x 3x3, cholesky maxdiff 2.33 and svd values
+maxdiff 5.15 at batch indices 65535..65999, exact below. Status: FIXED in
+`88425b9b1`. The seven linalg kernels (cholesky, inverse, lu, svd sweep +
+finalize + values-only, eig, eigh) run one workgroup per batch matrix,
+read `matrix = gl_WorkGroupID.x` with no stride loop, and the host passed
+the batch count as the group count. `dispatch_linalg_batch` now chunks
+the batch at the 65,535-workgroup clamp and carries each chunk's first
+matrix index in the spare `aux_offset` push constant; batch <= 65535
+stays one dispatch. `GdnVjpBF16` (group_count_z = B*Hv, no stride)
+refuses by name above 65,535 instead of clamping silently. Regression:
+`test_linalg_ops.cpp` "batched linalg writes every matrix past the
+one-dispatch clamp" (66000 x 3x3; red at batch 65535 before the fix).
+Battery on G13C after: omarchy_linalg_ops_tests 31/31 (181,183
+assertions).
+
 ### Still open: same defect class elsewhere (audit 2026-10-08)
 
 Full audit table: the private notebook artifacts/DispatchClamp/dispatch-clamp/
 directory. Verified, unfixed:
 
-- `LinalgSvdF32` / `LinalgSvdFinalizeF32` / `LinalgEigF32` /
-  `LinalgEighF32` (linalg_svd{,_finalize,eig,eigh}.comp): one workgroup
-  per batch matrix, `matrix = gl_WorkGroupID.x`, batch count clamps at
-  65535 — batched calls above 65,535 small matrices leave the tail
-  un-computed. No test covers that batch depth today.
-- `GdnVjpBF16` (gated_delta_vjp.comp): group_count_z = B*Hv clamps
-  silently above 65535 (e.g. batch 1024 x 64 heads); training-only path.
 - `custom_kernel.cpp` user MSL translation: the translator emits
   one-thread-per-invocation code with no stride loop and the encoder
   clamps group_count_{x,y,z} to 65535 without validation, so a custom

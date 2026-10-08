@@ -4349,6 +4349,27 @@ size_t linalg_batch_count(const Shape& shape) {
   return batch;
 }
 
+// Every linalg kernel runs one workgroup per batch matrix and reads
+// matrix = aux_offset + gl_WorkGroupID.x with no grid-stride loop, so the
+// host chunks the batch: no dispatch requests more than the 65535
+// workgroup clamp, and each chunk carries its first matrix index in
+// aux_offset (the field is unused by every linalg shader). Batch <= 65535
+// stays a single dispatch with aux_offset == 0, identical to the old path.
+void dispatch_linalg_batch(
+    omarchy::CommandEncoder& encoder,
+    omarchy::ComputeKernel kernel,
+    std::span<const omarchy::ComputeBinding> bindings,
+    omarchy::ComputeParams& params,
+    uint32_t batch) {
+  for (uint32_t first = 0; first < batch;) {
+    const uint32_t groups =
+        std::min(batch - first, omarchy::kMaxComputeGroupCountX);
+    params.aux_offset = first;
+    encoder.dispatch_compute(kernel, bindings, params, groups);
+    first += groups;
+  }
+}
+
 void linalg_require_f32(
     const std::string& name,
     const array& in,
@@ -4415,8 +4436,8 @@ void Cholesky::eval_gpu(const std::vector<array>& inputs, array& out) {
   params.flags = state() ? 1u : 0u;
   std::array<omarchy::ComputeBinding, 2> bindings{
       binding(out), binding(scratch)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgCholeskyF32, bindings, params, batch);
+  dispatch_linalg_batch(
+      encoder, omarchy::ComputeKernel::LinalgCholeskyF32, bindings, params, batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -6852,8 +6873,8 @@ void Inverse::eval_gpu(const std::vector<array>& inputs, array& out) {
   params.flags = upper ? 1u : 0u;
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(work), binding(out), binding(scratch)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgInverseF32, bindings, params, batch);
+  dispatch_linalg_batch(
+      encoder, omarchy::ComputeKernel::LinalgInverseF32, bindings, params, batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -7032,8 +7053,8 @@ void LUF::eval_gpu(
       binding(pivots),
       binding(row_indices),
       binding(scratch)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgLuF32, bindings, params, batch);
+  dispatch_linalg_batch(
+      encoder, omarchy::ComputeKernel::LinalgLuF32, bindings, params, batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -11289,8 +11310,12 @@ void SVD::eval_gpu(
     params.operation = 0u;
     std::array<omarchy::ComputeBinding, 4> sweep_bindings{
         binding(work), binding(u), binding(work), binding(scratch)};
-    encoder.dispatch_compute(
-        omarchy::ComputeKernel::LinalgSvdF32, sweep_bindings, params, batch);
+    dispatch_linalg_batch(
+        encoder,
+        omarchy::ComputeKernel::LinalgSvdF32,
+        sweep_bindings,
+        params,
+        batch);
     linalg_check_status(
         scratch,
         encoder,
@@ -11300,7 +11325,8 @@ void SVD::eval_gpu(
     params.operation = 2u;
     std::array<omarchy::ComputeBinding, 4> final_bindings{
         binding(work), binding(u), binding(vt), binding(s)};
-    encoder.dispatch_compute(
+    dispatch_linalg_batch(
+        encoder,
         omarchy::ComputeKernel::LinalgSvdFinalizeF32,
         final_bindings,
         params,
@@ -11316,8 +11342,8 @@ void SVD::eval_gpu(
     params.operation = 1u;
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(work), binding(work), binding(s), binding(scratch)};
-    encoder.dispatch_compute(
-        omarchy::ComputeKernel::LinalgSvdF32, bindings, params, batch);
+    dispatch_linalg_batch(
+        encoder, omarchy::ComputeKernel::LinalgSvdF32, bindings, params, batch);
     linalg_check_status(
         scratch,
         encoder,
@@ -11402,8 +11428,8 @@ void Eig::eval_gpu(
       binding(values),
       binding(scratch),
       compute_ev ? binding(vacc) : binding(work)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgEigF32, bindings, params, batch);
+  dispatch_linalg_batch(
+      encoder, omarchy::ComputeKernel::LinalgEigF32, bindings, params, batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -11455,8 +11481,8 @@ void Eigh::eval_gpu(
       compute_ev ? binding(outputs.at(1)) : binding(work),
       binding(values),
       binding(scratch)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::LinalgEighF32, bindings, params, batch);
+  dispatch_linalg_batch(
+      encoder, omarchy::ComputeKernel::LinalgEighF32, bindings, params, batch);
   linalg_check_status(
       scratch,
       encoder,
@@ -11808,6 +11834,16 @@ void GatedDeltaUpdateVJP::eval_gpu(
         binding(db_acc),       // 12 DbAcc
         binding(dh),           // 13 DhOut (f32)
         binding(g)};           // 14 GBufF (f32 view; placeholder when bf16)
+    // gated_delta_vjp.comp reads the (b, head) pair from
+    // gl_WorkGroupID.z with no stride loop, so a z extent above the
+    // 65535 clamp would silently drop the tail. No current GDN training
+    // shape reaches B*Hv = 65536; refuse by name if one ever does.
+    if (static_cast<uint64_t>(B) * Hv > omarchy::kMaxComputeGroupCountX) {
+      omarchy::unsupported(
+          tag + " with batch*heads above " +
+              std::to_string(omarchy::kMaxComputeGroupCountX),
+          dq);
+    }
     encoder.dispatch_compute(
         omarchy::ComputeKernel::GdnVjpBF16,
         bindings,

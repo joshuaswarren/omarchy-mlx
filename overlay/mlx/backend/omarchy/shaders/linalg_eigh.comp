@@ -67,7 +67,10 @@ shared uint perm[1024];
 
 void main() {
   uint tid = gl_LocalInvocationID.x;
-  uint matrix = gl_WorkGroupID.x;
+  // The host chunks the batch so no dispatch exceeds 65535 workgroups;
+  // aux_offset carries this dispatch's first matrix index (the field is
+  // unused by every linalg shader).
+  uint matrix = params.aux_offset + gl_WorkGroupID.x;
   uint n = params.matrix_n;
   uint base = matrix * n * n;
   bool compute_ev = params.operation == 1u;
