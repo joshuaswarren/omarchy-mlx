@@ -1,0 +1,260 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+// Symmetric-int8 matmul (fast::Int8Matmul), f32-FMA route: one 256-thread
+// workgroup owns a 16x128 output tile and walks K in 32-wide steps, staging
+// X and W into shared memory already widened to float32 so the inner loop is
+// one FMA per byte pair on register micro-tiles (thread ly owns output row
+// ly, thread lx owns the 8 columns lx*8 .. lx*8+7). X bytes amortize over
+// 128 columns, W bytes over 16 rows; global word traffic matches
+// int8_matmul.comp while the per-MAC work drops from int32 imad on shared
+// words to register FMA.
+//
+// EXACTNESS (why this is bit-identical to the int32 accumulator in
+// int8_matmul.comp): int8 values are exact in float32 and every product
+// |x*w| <= 128*128 = 16384 (-128 is in range; 127*127 is not the worst
+// case). float32 represents every integer with |v| <= 2^24 exactly, and
+// 16384 * 1024 = 2^24 exactly, so ANY partial sum of at most 1024 int8
+// products is an integer computed exactly regardless of addition order.
+// The host routes this kernel only when 32 <= group <= 1024, so each
+// per-thread float accumulator holds one group and stays bitwise equal to
+// the int32 accumulator float(acc_g) of int8_matmul.comp. Groups outside
+// that range (and k_total % 4 != 0) stay on the int32 tiled kernel, and
+// MLX_OMARCHY_INT8_NAIVE=1 still selects the retired naive shader; all
+// three routes share the flush (total += float(acc_g) * XS[m,g] in
+// ascending group order), the WS/B epilogue, and the single bf16 RNE store
+// of int8_matmul.comp.
+//
+// At most one group boundary falls inside a 32-wide K step when
+// group >= 32, so each step splits into two accumulation runs around that
+// boundary; the boundary position is derived per step from k0 % group
+// (same k_next semantics as int8_matmul.comp, hoisted out of the inner
+// loop).
+//
+// With flags bit0 (swiglu) W is the fused [gate; value] fc1 of 2N rows,
+// computed as two sequential K passes (stage X + gate W, flush gate; stage
+// X + value W, flush value) so the shared budget stays at
+// (16 + 128) * 34 * 4 = 19,584 bytes. The store is
+// bf16(silu(gate_total) * value_total) with no intermediate rounding.
+//
+// Push constants, bindings, word-view addressing (uint words, low byte
+// first, sign-extended in-shader), grid-stride over both tile axes, and
+// the shape[0..2] XS/WS/B offsets are identical to int8_matmul.comp. The
+// host gates this route on k_total % 4 == 0, so a staged 4-byte word is
+// never partially past k_eff; words past k_eff stage as zero and are never
+// accumulated. The host dispatches ceil(rows/16) x ceil(n/128) workgroups.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InX {
+  uint words[];
+} in_x;
+layout(set = 0, binding = 1, std430) readonly buffer InXS {
+  float values[];
+} in_xs;
+layout(set = 0, binding = 2, std430) readonly buffer InW {
+  uint words[];
+} in_w;
+layout(set = 0, binding = 3, std430) readonly buffer InWS {
+  float values[];
+} in_ws;
+layout(set = 0, binding = 4, std430) readonly buffer InB {
+  float values[];
+} in_b;
+layout(set = 0, binding = 5, std430) buffer OutBF16 {
+  uint16_t values[];
+} out_bf16;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const uint TILE_M = 16u;
+const uint TILE_N = 128u;
+const uint QUAD = 8u;
+const uint TILE_K = 32u;
+const uint K_WORDS = TILE_K / 4u;
+// Row stride 34 floats: 34 * 8 = 272 = 8 * 32 + 16, so the 16 staged W rows
+// a warp reads (rows c + 8*lx, c < 8) land on 16 distinct shared banks.
+const uint ROW_STRIDE = TILE_K + 2u;
+
+shared float tile_x[TILE_M][ROW_STRIDE];
+shared float tile_w[TILE_N][ROW_STRIDE];
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+int sign_byte(uint word, uint lane) {
+  return (int((word >> (lane * 8u)) & 0xffu) << 24) >> 24;
+}
+
+// Stage one 4-byte word of the X tile (aligned word view) widened to f32.
+// Threads 0..127 cover the 16 rows x 8 words; rows past matrix_m stage as
+// zero and are never stored.
+void stage_x_word(uint tid, uint row_base, uint k0) {
+  uint r = tid >> 3u;
+  uint w = tid & 7u;
+  uint row = row_base + r;
+  uint word = 0u;
+  if (row < params.matrix_m && k0 + w * 4u < params.matrix_k) {
+    uint addr = params.lhs_offset / 4u + (row * params.matrix_k + k0 + w * 4u) / 4u;
+    word = in_x.words[addr];
+  }
+  uint base = w * 4u;
+  tile_x[r][base + 0u] = float(sign_byte(word, 0u));
+  tile_x[r][base + 1u] = float(sign_byte(word, 1u));
+  tile_x[r][base + 2u] = float(sign_byte(word, 2u));
+  tile_x[r][base + 3u] = float(sign_byte(word, 3u));
+}
+
+// Stage one 4-byte word of the W tile widened to f32. Threads tid*4+q for
+// q < 4 cover exactly the 128 rows x 8 words; rows past row_limit stage as
+// zero and are never stored.
+void stage_w_word(uint slot, uint row_base, uint row_limit, uint k0) {
+  uint r = slot >> 3u;
+  uint w = slot & 7u;
+  uint row = row_base + r;
+  uint word = 0u;
+  if (row < row_limit && k0 + w * 4u < params.matrix_k) {
+    uint addr = params.rhs_offset / 4u + (row * params.matrix_k + k0 + w * 4u) / 4u;
+    word = in_w.words[addr];
+  }
+  uint base = w * 4u;
+  tile_w[r][base + 0u] = float(sign_byte(word, 0u));
+  tile_w[r][base + 1u] = float(sign_byte(word, 1u));
+  tile_w[r][base + 2u] = float(sign_byte(word, 2u));
+  tile_w[r][base + 3u] = float(sign_byte(word, 3u));
+}
+
+void main() {
+  const uint rows = params.matrix_m;
+  const uint n = params.matrix_n;
+  const uint k_total = params.matrix_k;
+  const uint group = params.reduce_size;
+  const uint groups = k_total / group;
+  const uint k_eff = groups * group;
+  const bool swiglu = (params.flags & 1u) != 0u;
+  const uint passes = swiglu ? 2u : 1u;
+
+  const uint n_tiles = (n + TILE_N - 1u) / TILE_N;
+  const uint m_tiles = (rows + TILE_M - 1u) / TILE_M;
+  const uint tid = gl_LocalInvocationID.y * TILE_M + gl_LocalInvocationID.x;
+  const uint lx = gl_LocalInvocationID.x;
+  const uint ly = gl_LocalInvocationID.y;
+
+  for (uint tc = gl_WorkGroupID.x; tc < n_tiles; tc += gl_NumWorkGroups.x) {
+    for (uint tr = gl_WorkGroupID.y; tr < m_tiles; tr += gl_NumWorkGroups.y) {
+      const uint row = tr * TILE_M + ly;
+      const bool in_tile = row < rows;
+      float gate_total[QUAD];
+      float value_total[QUAD];
+      for (uint c = 0u; c < QUAD; c++) {
+        gate_total[c] = 0.0f;
+        value_total[c] = 0.0f;
+      }
+
+      for (uint pass = 0u; pass < passes; pass++) {
+        const uint wrow_base = tc * TILE_N + ((pass == 1u) ? n : 0u);
+        const uint wrow_limit = swiglu ? (2u * n) : n;
+        float acc[QUAD];
+        for (uint c = 0u; c < QUAD; c++) {
+          acc[c] = 0.0f;
+        }
+        uint g = 0u;
+
+        for (uint k0 = 0u; k0 < k_eff; k0 += TILE_K) {
+          barrier();
+          if (tid < TILE_M * K_WORDS) {
+            stage_x_word(tid, tr * TILE_M, k0);
+          }
+          for (uint q = 0u; q < 4u; q++) {
+            stage_w_word(tid * 4u + q, wrow_base, wrow_limit, k0);
+          }
+          barrier();
+
+          const uint kend = min(k0 + TILE_K, k_eff) - k0;
+          const uint rem = k0 % group;
+          const uint rel = (rem == 0u) ? group : (group - rem);
+          const bool has_b = rel <= kend;
+          const uint run1 = has_b ? rel : kend;
+          const uint xs_idx =
+              in_tile ? params.shape[0] + row * groups + g : params.shape[0];
+
+          for (uint kk = 0u; kk < run1; kk++) {
+            float xv = tile_x[ly][kk];
+            for (uint c = 0u; c < QUAD; c++) {
+              acc[c] += xv * tile_w[lx * QUAD + c][kk];
+            }
+          }
+          if (has_b) {
+            float xs = in_xs.values[xs_idx];
+            for (uint c = 0u; c < QUAD; c++) {
+              if (pass == 0u) {
+                gate_total[c] += acc[c] * xs;
+              } else {
+                value_total[c] += acc[c] * xs;
+              }
+              acc[c] = 0.0f;
+            }
+            g++;
+            for (uint kk = run1; kk < kend; kk++) {
+              float xv = tile_x[ly][kk];
+              for (uint c = 0u; c < QUAD; c++) {
+                acc[c] += xv * tile_w[lx * QUAD + c][kk];
+              }
+            }
+          }
+        }
+      }
+
+      if (in_tile) {
+        const uint ws_base = params.shape[1];
+        const uint b_base = params.shape[2];
+        for (uint c = 0u; c < QUAD; c++) {
+          const uint col = tc * TILE_N + lx * QUAD + c;
+          if (col >= n) {
+            break; // columns ascend with c: past the last tile nothing stores
+          }
+          if (swiglu) {
+            float gate = gate_total[c] * in_ws.values[ws_base + col] +
+                in_b.values[b_base + col];
+            float value = value_total[c] * in_ws.values[ws_base + n + col] +
+                in_b.values[b_base + n + col];
+            out_bf16.values[params.output_offset + row * n + col] =
+                bf16_store(gate / (1.0f + exp(-gate)) * value);
+          } else {
+            out_bf16.values[params.output_offset + row * n + col] = bf16_store(
+                gate_total[c] * in_ws.values[ws_base + col] +
+                in_b.values[b_base + col]);
+          }
+        }
+      }
+    }
+  }
+}

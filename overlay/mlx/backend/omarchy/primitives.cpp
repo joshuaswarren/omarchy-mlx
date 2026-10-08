@@ -12463,6 +12463,21 @@ bool int8_coopmat_enabled() {
   return env != nullptr && env[0] == '1';
 }
 
+// Route pins for the A/B bit-compare tests and benchmarks
+// (test_int8_matmul.cpp): MLX_OMARCHY_INT8_IMAD=1 forces the tiled
+// int32-imad kernel, MLX_OMARCHY_INT8_F32FMA=1 pins the f32-FMA route on
+// the shapes its exactness gate admits (it cannot extend the gate; the
+// pin only takes precedence over the coopmat opt-in).
+bool int8_imad_forced() {
+  const char* env = std::getenv("MLX_OMARCHY_INT8_IMAD");
+  return env != nullptr && env[0] == '1';
+}
+
+bool int8_f32fma_forced() {
+  const char* env = std::getenv("MLX_OMARCHY_INT8_F32FMA");
+  return env != nullptr && env[0] == '1';
+}
+
 // Symmetric-int8 matmul, shaders/int8_matmul.comp. X and W are read as
 // uint word views (4 int8 bytes per word, sign extended in-shader), so the
 // route needs no 8-bit storage capability; accumulation is exact int32 per
@@ -12560,11 +12575,35 @@ void Int8Matmul::eval_gpu(
       caps.subgroup_size == 32u && params.matrix_k >= 8u &&
       (params.matrix_k % 8u) == 0u &&
       (params.reduce_size % 8u) == 0u && (params.matrix_k % 4u) == 0u;
-  if (coopmat_ready) {
+  if (coopmat_ready && !int8_f32fma_forced()) {
     const uint32_t n_groups = (params.matrix_n + 31u) / 32u;
     const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
     encoder.dispatch_compute(
         omarchy::ComputeKernel::Int8MatmulCoopOp,
+        bindings,
+        params,
+        std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+        std::min(m_groups, omarchy::kMaxComputeGroupCountX),
+        1u);
+    return;
+  }
+  // f32-FMA register-blocked route (shaders/int8_matmul_f32fma.comp), the
+  // default for the shapes its exactness argument covers: integer-valued
+  // f32 group sums are exact and addition-order-independent only while
+  // every partial sum stays <= 2^24, and the worst int8 product magnitude
+  // is 16384 (-128 * -128), so the group gate is 32..1024 (16384 * 1024 =
+  // 2^24). group >= 32 also keeps at most one group boundary inside a
+  // 32-wide K step, which the shader's two-run split relies on, and
+  // k_total % 4 == 0 keeps a staged word never partially past the
+  // reduction. Everything else keeps the int32 tiled kernel, so the
+  // default stays bit-identical for every legal input;
+  // MLX_OMARCHY_INT8_IMAD=1 forces the tiled kernel for A/B benchmarks.
+  if (!int8_imad_forced() && (params.matrix_k % 4u) == 0u &&
+      params.reduce_size >= 32u && params.reduce_size <= 1024u) {
+    const uint32_t n_groups = (params.matrix_n + 127u) / 128u;
+    const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::Int8MatmulF32FmaOp,
         bindings,
         params,
         std::min(n_groups, omarchy::kMaxComputeGroupCountX),
