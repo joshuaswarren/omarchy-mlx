@@ -11,8 +11,12 @@ LLAMA_COMMIT=65840ed                # receipt-pinned llama.cpp
 MODEL_URL=https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-IQ2_M.gguf
 MODEL_FILE=Qwen_Qwen3.5-9B-IQ2_M.gguf
 
-command -v meson ninja cmake glslc git >/dev/null || {
-  echo "missing tools: sudo pacman -S --needed meson ninja cmake shaderc python-mako python-yaml pkgconf git"
+command -v meson ninja cmake make bison flex glslc git pkg-config >/dev/null 2>&1 && \
+python3 -c 'import mako' >/dev/null 2>&1 && \
+pacman -Qq expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers >/dev/null 2>&1 || {
+  echo "missing build dependencies. Run the first-time setup from the doc:"
+  echo "  sudo omarchy update   # refresh the package database, needs ~10 GiB free"
+  echo "  sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers"
   exit 1
 }
 
@@ -32,7 +36,7 @@ echo "MESA_BUILD_SECONDS=$((SECONDS-T0))"
 git -C llama.cpp fetch origin
 git -C llama.cpp checkout -f "$LLAMA_COMMIT"
 T0=$SECONDS
-cmake -B llama-build -S llama.cpp -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B llama-build -S llama.cpp -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -G Ninja
 cmake --build llama-build --target llama-bench llama-cli -j"$(nproc)"
 echo "LLAMA_BUILD_SECONDS=$((SECONDS-T0))"
 
