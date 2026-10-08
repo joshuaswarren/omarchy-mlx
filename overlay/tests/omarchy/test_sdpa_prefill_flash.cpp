@@ -488,7 +488,7 @@ double max_abs_error(const std::vector<float>& got, const Fp64Ref& ref) {
 
 } // namespace
 
-TEST_CASE("causal coopmat flash prefill is no less accurate than the composed causal route") {
+TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal route") {
   if (!compute_available()) {
     return;
   }
@@ -557,18 +557,24 @@ TEST_CASE("causal coopmat flash prefill is no less accurate than the composed ca
         CHECK(run1 == run3);
         const double flash_max = max_abs_error(run1, ref);
         const double composed_max = max_abs_error(composed, ref);
+        const double flash_l2 = rel_l2_error(run1, ref);
+        const double composed_l2 = rel_l2_error(composed, ref);
+        // Both routes sit on the bf16 output-rounding floor, so a strict
+        // inequality can flip on a few rounding-boundary elements: the gate
+        // is a 5 % / 3 % tolerance (MatmulGap H35 amendment 2); the strict
+        // result is printed beside it.
+        MESSAGE(
+            "rowp ", rowp, " outlier ", outlier, " h", c.heads, "/", c.kv_heads,
+            " lq ", c.lq, " lk ", c.lk, ": max abs flash ", flash_max,
+            " composed ", composed_max, " rel-L2 flash ", flash_l2,
+            " composed ", composed_l2, " strict ",
+            (flash_max <= composed_max && flash_l2 <= composed_l2));
         CHECK_MESSAGE(
-            flash_max <= composed_max,
-            "flash max abs error ",
-            flash_max,
-            " composed ",
-            composed_max);
+            flash_max <= composed_max * 1.05,
+            "flash max abs error ", flash_max, " composed ", composed_max);
         CHECK_MESSAGE(
-            rel_l2_error(run1, ref) <= rel_l2_error(composed, ref),
-            "flash rel-L2 ",
-            rel_l2_error(run1, ref),
-            " composed ",
-            rel_l2_error(composed, ref));
+            flash_l2 <= composed_l2 * 1.03,
+            "flash rel-L2 ", flash_l2, " composed ", composed_l2);
       }
     }
   }

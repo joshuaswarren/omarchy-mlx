@@ -14844,7 +14844,7 @@ void ScaledDotProductAttention::eval_gpu(
     if (cf_env != nullptr && std::strcmp(cf_env, "1") == 0 &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
-        cf_caps.max_compute_shared_memory_size >= 16384u &&
+        cf_caps.max_compute_shared_memory_size >= 20480u &&
         inputs.size() == 3 && do_causal_ && !has_sinks_ &&
         !output_logsumexp_ && q_len >= 64 && k_len >= q_len &&
         k_len % 8 == 0 && q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
