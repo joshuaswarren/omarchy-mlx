@@ -416,7 +416,8 @@ def _ane_scan_nodes(redactor, base):
         if ph:
             phandles[ph[0]] = rel
         named = rel != "." and bool(re.search(
-            r"(?:^|/)[^/]*(?:ane|ascwrap|exclave)[^/]*$", dirpath))
+            r"(?:^|/)[^/]*(?:(?<![a-z])ane(?![a-z])|ascwrap|exclave)[^/]*$",
+            dirpath))
         hit = [t for t in compat
                if t == "apple,ane" or t.endswith("-ane")
                or "ascwrap" in t or "exclave" in t or t.startswith("ane,")]
