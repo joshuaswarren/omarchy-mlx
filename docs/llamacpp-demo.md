@@ -3,9 +3,10 @@
 This demo runs the same llama.cpp binary and the same model twice. The only
 thing that changes between the two runs is the Vulkan driver. On an Apple M1
 the decode speed of a small quantized model jumps by an order of magnitude
-when the current driver branch is used. The whole demo needs about 15 minutes
-on decent internet, mostly the 4 GB model download, and installs nothing
-system-wide.
+when the current driver branch is used. The whole demo needs about 30 minutes
+on decent internet and an M1: about 8 for the builds and the 4 GB model
+download, and about 18 for the first benchmark (see Step 2 to cut that to
+about 4). It installs nothing system-wide.
 
 Two drivers appear in this demo:
 
@@ -57,34 +58,42 @@ One command; the script does the rest and is safe to rerun:
 git clone https://github.com/joshuaswarren/omarchy-mlx && cd omarchy-mlx && bash scripts/llamacpp-demo.sh
 ```
 
-Run it from wherever you like; the script creates an `llamacpp-demo/`
-directory there and puts everything inside it. On an 8-core M1 expect about
-2 minutes for the driver and about 3 minutes for llama.cpp (a fanless Air
-runs a bit slower). The script prints both timings and ends with the exact
-benchmark commands and the model's SHA-256.
+The script puts everything in an `llamacpp-demo/` folder inside the cloned
+repository, wherever you run it from. On an 8-core M1 expect about
+2 minutes for the driver and about 4 minutes for llama.cpp (a fanless Air
+runs a bit slower). The script prints both timings, then the model's
+SHA-256, and ends with the two benchmark commands of Step 2.
 
 ## Step 2: benchmark both drivers
 
-Change into the demo directory the script printed (`cd llamacpp-demo`), then
-first the system driver:
+Stay in the repository folder you cloned (the one that holds `scripts/` and
+`llamacpp-demo/`). First the system driver:
 
 ```bash
-llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8
+(cd llamacpp-demo && llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8)
 ```
 
-Then ours:
+This one is slow on purpose to watch: the old driver generates about 0.3
+tokens per second and `llama-bench` repeats each test five times, so it
+takes about 18 minutes on an M1. Add `-r 1` to run each test once (about 4
+minutes); single runs are noisier.
+
+Then ours, from the same folder:
 
 ```bash
 bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8
 ```
 
-The wrapper first proves the driver actually loaded (it runs `vulkaninfo`
-and looks for a Honeykrisp device). If the driver failed to load, llama.cpp
-would silently fall back to the CPU and print meaningless numbers; the
-wrapper refuses instead and prints what to check.
+The wrapper runs inside `llamacpp-demo`, so the binary and the model file
+in its arguments are relative to that folder. It first proves the driver
+actually loaded (it runs `vulkaninfo` and looks for a Honeykrisp device). If
+the driver failed to load, llama.cpp would silently fall back to the CPU and
+print meaningless numbers; the wrapper refuses instead and prints what to
+check.
 
 Each run prints a table with prompt processing (pp512) and generation (tg64)
-tokens per second. Compare the `t/s` columns.
+tokens per second. Compare the `t/s` columns. The `backend` column must say
+`Vulkan`; if it says `CPU`, the GPU driver did not load.
 
 ## Measured on a 16 GB M1 Pro (base M1 GPU)
 
@@ -128,15 +137,21 @@ the same memory pressure.
 
 ## Step 3: put it on stage
 
-One command, and the audience watches tokens appear:
+From the same folder, one command, and the audience watches tokens appear:
 
 ```bash
 bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-cli -m Qwen_Qwen3.5-9B-IQ2_M.gguf -ngl 99 -t 8 --temp 0.7
 ```
 
 That opens an interactive chat running on the GPU (measured 4.3 tok/s
-generating on the M1 above). For contrast, run the same command directly
-without the wrapper to land on the system driver.
+generating on the M1 above). Type a question, and `/exit` to leave. This model
+thinks before it answers, so the first reply starts with a short "Thinking
+Process"; let it finish. For contrast, run the same command without the
+wrapper to land on the system driver:
+
+```bash
+(cd llamacpp-demo && llama-build/bin/llama-cli -m Qwen_Qwen3.5-9B-IQ2_M.gguf -ngl 99 -t 8 --temp 0.7)
+```
 
 ## Why the new driver is faster
 

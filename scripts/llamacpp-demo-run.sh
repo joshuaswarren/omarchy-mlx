@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Run a llama.cpp binary on our Honeykrisp ICD, or refuse loudly.
-# Usage from the repo root: bash scripts/llamacpp-demo-run.sh <relative-to-llamacpp-demo binary> [args...]
+# Usage: bash scripts/llamacpp-demo-run.sh <binary relative to llamacpp-demo> [args...]   (from any directory)
+# The binary and any file in the arguments (for example the model) are relative to llamacpp-demo: the wrapper runs there.
 # Example: bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-bench -m Qwen_Qwen3.5-9B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8
 set -euo pipefail
-DEMO_DIR="$PWD/llamacpp-demo"
+DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/llamacpp-demo"
 [ "$1" = "--demo-dir" ] && { DEMO_DIR="$2"; shift 2; }
 BIN="$1"; shift
 ICD=$(ls "$DEMO_DIR"/mesa-install/share/vulkan/icd.d/*.json | head -1)
@@ -22,4 +23,5 @@ if ! env VK_DRIVER_FILES="$ICD" vulkaninfo --summary 2>/dev/null | grep -q Honey
   echo "  cd $DEMO_DIR && rm -rf mesa-build mesa-install && cd .. && bash scripts/llamacpp-demo.sh"
   exit 2
 fi
+cd "$DEMO_DIR"
 exec env VK_DRIVER_FILES="$ICD" "$DEMO_DIR/$BIN" "$@"

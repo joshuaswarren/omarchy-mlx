@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Build the demo stack from source in this directory: the Honeykrisp v3 Vulkan
-# driver into a user prefix, llama.cpp with Vulkan, and the demo model.
+# Build the demo stack from source in llamacpp-demo/ inside this repository (wherever you run it from): the
+# Honeykrisp v3 Vulkan driver into a user prefix, llama.cpp with Vulkan, and the demo model.
 # Safe to rerun; installs nothing system-wide.
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mkdir -p llamacpp-demo
 cd llamacpp-demo
 
@@ -74,9 +75,8 @@ until [ "$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)" -eq "$EXPECTED_SIZE" 
 done
 sha256sum "$MODEL_FILE"
 
-ICD=$(ls mesa-install/share/vulkan/icd.d/*.json | head -1)
+REPO=$(dirname "$(pwd)")
 echo "everything is in: $(pwd)"
-echo "ICD_JSON=$ICD"
-echo "benchmark commands:"
-echo "  llama-build/bin/llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
-echo "  VK_DRIVER_FILES=$ICD llama-build/bin/llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
+echo "benchmark commands, run from the repository folder ($REPO):"
+echo "  (cd llamacpp-demo && llama-build/bin/llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8)"
+echo "  bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-bench -m $MODEL_FILE -p 512 -n 64 -ngl 99 -t 8"
