@@ -30,10 +30,10 @@ index 26a0b5b4..62dcdfe5 100644
  _IO_BATCH = 0
  _IO_CONFIGURED = False
 +# Drop each slab's pages from the page cache after the copy (OMLX_MOE_
-+# OFFLOAD_DONTNEED=0 keeps them). A checkpoint bigger than RAM is its own
-+# worst enemy in the page cache: every cached slab evicts other needed
-+# pages and is itself cold by its next use, so caching it only adds
-+# reclaim stalls to every read.
++# OFFLOAD_DONTNEED=0 keeps them). Measured on a checkpoint bigger than RAM
++# (4 prompts, same model): no tok/s change, 0.0 to 0.5 percent, inside the
++# run to run spread. It lowers kswapd reclaim 4 to 5x, which is why it
++# stays on. An earlier 1.8x speedup claim was a confounded comparison.
 +_READ_DONTNEED = os.environ.get("OMLX_MOE_OFFLOAD_DONTNEED", "1") != "0"
  
  
