@@ -747,7 +747,11 @@ void translate_as_type(
         continue;
       }
       // The operand names the parameter directly (mask[...], scalar form).
-      static const std::regex direct(
+      // NOT static: a static here captures the first integer parameter's
+      // name for the whole process and every later kernel probes that name
+      // instead of its own (llguidance masked half the vocabulary at
+      // random, 2026-10-08 KernelRecheck).
+      const std::regex direct(
           R"((^|[^.\w]))" + regex_escape(parameter.name) + R"((?!\w))");
       if (std::regex_search(expression, direct)) {
         return true;
