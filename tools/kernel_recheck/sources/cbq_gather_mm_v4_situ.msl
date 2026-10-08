@@ -1,0 +1,58 @@
+
+    constexpr int NR = 8;
+    uint tile = threadgroup_position_in_grid.x;    // 32출력 타일 (4 simdgroup × 8행)
+    uint r  = threadgroup_position_in_grid.y;
+    uint tid = thread_position_in_threadgroup.x;   // 0..127
+    if (r >= (uint)R) return;
+    uint sg   = tid >> 5;                          // simdgroup 0..3
+    uint lane = tid & 31;
+
+    const device InT* xg = x + (size_t)tokidx[r] * K;
+    const device int64_t* g64 = (const device int64_t*)grid;
+
+    uint o0 = tile * 32 + sg * NR;                 // 이 simdgroup의 첫 행
+    if (o0 >= (uint)O) return;
+    uint e = eidx[r];
+    const size_t rowq = (size_t)(K / 8);
+    const size_t rowh = (size_t)(K / 32);
+    const size_t rowd = (size_t)(K / 256);
+    const device uint8_t*  qs0 = cb_qs + ((size_t)e * O + o0) * rowq;
+    const device uint16_t* qh0 = cb_qh + ((size_t)e * O + o0) * rowh;
+    const device DT*       dd0 = cb_d  + ((size_t)e * O + o0) * rowd;
+
+    float acc[NR] = {0.0f};
+    for (uint sb = lane; sb < (uint)(K / 32); sb += 32) {
+        // x 블록 32값 로드(행 8개가 공유)
+        float4 xa[4], xb[4];
+        for (uint l = 0; l < 4; ++l) {
+            const device uint4* xvv = (const device uint4*)(xg + sb * 32 + l * 8);
+            uint4 raw = xvv[0];
+            xa[l] = float4(as_type<bfloat4>(uint2(raw.x, raw.y)));
+            xb[l] = float4(as_type<bfloat4>(uint2(raw.z, raw.w)));
+        }
+        for (int j = 0; j < NR; ++j) {
+            uint16_t h = qh0[j * rowh + sb];
+            float dl = (float)dd0[j * rowd + sb / 8] * (float)(2 * ((h >> 12) & 7) + 1);
+            float del = (h & 0x8000) ? -0.125f : 0.125f;
+            float part = 0.0f;
+            const device uint8_t* qsj = qs0 + j * rowq + sb * 4;
+            for (uint l = 0; l < 4; ++l) {
+                uint gi = (uint)qsj[l] | ((uint)((h >> (3 * l)) & 7) << 8);
+                int64_t gv = g64[gi];
+                char4 c0 = as_type<char4>((int)(gv & 0xFFFFFFFF));
+                char4 c1 = as_type<char4>((int)(gv >> 32));
+                part += dot(float4(c0) + del, xa[l]) + dot(float4(c1) + del, xb[l]);
+            }
+            acc[j] += dl * part;
+        }
+    }
+    for (int j = 0; j < NR; ++j) {
+        float v = simd_sum(acc[j]);
+        if (lane == 0 && o0 + j < (uint)O) {
+            float uu = (float)(bfloat16_t)v;
+            float gg = (float)gbuf[(size_t)r * O + o0 + j];
+            float yv = (4.0f * tanh(gg / 4.0f)) * (1.0f / (1.0f + exp(-gg)))
+                       * (25.0f * tanh(uu / 25.0f));
+            y[(size_t)r * O + o0 + j] = (InT)yv;
+        }
+    }

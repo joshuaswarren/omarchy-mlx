@@ -1,0 +1,16 @@
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+TAG_TESTS_EXIT 0
+[transformers] You are using a model of type `qwen3_tts` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+test_decoder_reproduces_reference_from_pinned_codes (tests.test_qwen3_tts_codec_regress.Qwen3TtsCodecRegressionTests.test_decoder_reproduces_reference_from_pinned_codes) ... ok
+test_fixture_shapes_are_recorded (tests.test_qwen3_tts_codec_regress.Qwen3TtsCodecRegressionTests.test_fixture_shapes_are_recorded) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 5.979s
+
+OK
+  Initialized encoder codebooks
+Loaded speech tokenizer from $HOME/mlx-tts-home/voice/qwen3-tts-0.6b-customvoice-4bit/speech_tokenizer
+GATE6_EXIT 0
+Ran 2 tests in 5.979s
+OK
+GATE6_DONE

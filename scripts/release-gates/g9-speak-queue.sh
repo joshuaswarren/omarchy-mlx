@@ -10,6 +10,7 @@ P="$GATE_HOME/.local/share/mlx-omarchy"
 LOG="$LOG_DIR/g9-speak-queue.log"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 BROWSER="${GATE_CHROMIUM:-$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)}"
 if [[ -z "$BROWSER" || ! -x "$BROWSER" ]]; then
   gate_log "$LOG" "REFUSING: no Chromium-family browser (set GATE_CHROMIUM)"

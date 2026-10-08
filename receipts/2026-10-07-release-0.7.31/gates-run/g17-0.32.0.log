@@ -1,0 +1,39 @@
+mlx-lm patch series: patches/mlx-lm-0.32
+patching file mlx_lm/server.py
+applied: mlx-lm-tool-call-arguments.patch
+patching file mlx_lm/tool_parsers/qwen3_coder.py
+applied: mlx-lm-qwen3-coder-untyped-args.patch
+patching file mlx_lm/server.py
+applied: mlx-lm-max-tokens-min-one.patch
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-gated-delta-fast-route.patch
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-gated-delta-fast-route-repeat.patch
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-gated-delta-raw.patch
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/cache.py (mlx-lm 0.32 line)
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/cache.py
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/cache.py
+patching file mlx_lm/generate.py
+applied: mlx-lm-greedy-prune.patch
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/generate.py
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-qwen35-qk-scaled.patch
+patching file mlx_lm/models/qwen3_5.py
+applied: mlx-lm-qwen35-gdn-conv.patch
+patching file mlx_lm/models/qwen3_5.py
+applied: mlx-lm-conv-silu.patch
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-gated-norm.patch
+patching file mlx_lm/generate.py
+Hunk #1 succeeded at 6 (offset 1 line).
+Hunk #2 succeeded at 508 (offset 12 lines).
+Hunk #3 succeeded at 571 (offset 12 lines).
+applied: mlx-lm-ttft-early-submit.patch
+conv-ring: OFF (set MLX_OMARCHY_CONV_RING=1 to enable)
+patching file mlx_lm/models/qwen3_5.py
+applied: mlx-lm-last-logits.patch
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/qwen3_next.py
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/qwen3_5.py
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/qwen3.py
+patched: ~/v0731-gate-home/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/gated_delta.py

@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "$HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/mlx_omarchy_assistant/__main__.py", line 223, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "$HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/mlx_omarchy_assistant/__main__.py", line 216, in main
+    server.shutdown()
+    ~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/socketserver.py", line 247, in shutdown
+    def shutdown(self):
+    
+  File "$HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/mlx_omarchy_assistant/__main__.py", line 164, in interrupt
+    raise KeyboardInterrupt
+KeyboardInterrupt
+MLX Chat is running at http://<ip>:43247/ (open it through the launcher)

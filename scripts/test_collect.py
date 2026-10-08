@@ -2366,6 +2366,23 @@ class OmarchyAneBlockTests(unittest.TestCase):
             "--ane-smoke --submit. The collector runs the smoke when the "
             "chip is idle (load < 0.5, PSI 0); no fixed uptime is "
             "required.")
+    def test_dataonly_chip_prints_m3_steps(self):
+        messages = cd._ane_smoke_guidance({
+            "platform": "Linux",
+            "check": {"untested": False, "status": "FAILED",
+                      "lines": ["DATA-ONLY SoC: t8122. No driver binds "
+                                "apple,t8122-ane; nothing to enable"]}})
+        self.assertEqual(messages, [cd.ANE_DATAONLY_STEPS])
+        self.assertIn("--m3-report", cd.ANE_DATAONLY_STEPS)
+        self.assertIn("docs/h15-volunteer.md", cd.ANE_DATAONLY_STEPS)
+        self.assertIn("ane/h16/README-bringup.md", cd.ANE_DATAONLY_STEPS)
+        self.assertIn("m3m4_kit.sh", cd.ANE_DATAONLY_STEPS)
+        # A ready check on a supported chip stays silent.
+        self.assertEqual(cd._ane_smoke_guidance({
+            "platform": "Linux",
+            "check": {"untested": False, "status": "ready",
+                      "lines": ["ready"]}}), [])
+
     def test_untested_steps_branch_on_intree_kernel_and_dtbs(self):
         text = cd._ane_untested_steps(True, "overlay")
         self.assertIn("userspace + smoke + firmware fetch only; do not "

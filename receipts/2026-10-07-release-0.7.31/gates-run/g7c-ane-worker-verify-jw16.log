@@ -1,0 +1,45 @@
+BEGIN 2026-10-07T15:22:17Z tag=v0.7.31 boot_id=dfab0139-e430-4b09-958e-d567aaeac0fb uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+loadavg_before=3.28 1.93 2.22 11/520 62158
+psi_cpu_before=some avg10=1.76 avg60=1.21 avg300=1.66 total=113084184
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+SERVING_VENV=~/.local/share/mlx-omarchy/venv PRIVATE_VENV=~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv
+vendor_wheel_count=36
+lock_lines=36
+INSTALL_EXIT 0
+mlx_omarchy 0.32.4.dev202610071347+9b5c938
+numpy 2.5.3
+protobuf ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/google/protobuf/__init__.py
+-rwxr-xr-x 1 joshuawarren joshuawarren 161744 Oct  7 10:22 ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-ane-worker
+-rwxr-xr-x 1 joshuawarren joshuawarren 147824 Oct  7 10:22 ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-info
+-rwxr-xr-x 1 joshuawarren joshuawarren  62958 Oct  7 10:22 ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-parakeet
+OK: 12 files verified in ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018
+OK: audio fixture verified in ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018/audio/fixture.flac
+running golden e2e verify (pinned fixture, full pin checks)
+{
+  "status": "match",
+  "checks_failed": [],
+  "emissions": 104,
+  "total_pipeline_ms": 1704.283,
+  "out": "~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T152240Z",
+  "transcript": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce........................................... Юн Ю"
+}
+VERIFY_EXIT 0
+G7C_TRACE_ABI_BEGIN
+trace_abi ok size=80 wave=1 dispatches=24 emitted=9 skipped=7
+G7C_TRACE_ABI_EXIT 0
+REPORT_PATH=~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T152240Z/transcribe-report.json
+status = match
+ane_mode = True
+cpu_tensor_events = 0
+emissions = None
+transcript_sha256 = None
+total_pipeline_ms = 1704.283
+  check mel_sha256 pass= True
+  check encoder_hidden_sha256 pass= True
+  check emissions pass= True
+  check token_ids pass= True
+  check frame_indices pass= True
+  check durations pass= True
+  check transcript pass= True
+POST_RUN active=inactive
+GATE7C_EXIT 0

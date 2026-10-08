@@ -74,6 +74,7 @@ SERIES_PATCHES=(
   mlx-lm-ttft-early-submit.patch
   mlx-lm-convring.patch
   mlx-lm-last-logits.patch
+  mlx-lm-last-logits-qwen3.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -207,6 +208,12 @@ fi
 # (cache=None: scoring/training) and MLX_OMARCHY_FULL_LOGITS=1 keep full logits.
 # Bit-exact: records digest and per-digest gates unchanged (Jw16PrefillGap3).
 apply mlx-lm-last-logits.patch
+# Same last-logits change for the dense qwen3 family (qwen3.py; the 4B is model_type qwen3):
+# cached prefill computes the head for the final position only. 4B pf512 +9.0% on the M1
+# Max (178.3 vs 163.5 tok/s, 3 interleaved pairs); token digests equal; last-position logits
+# within one bf16 ULP and identical fp64-reference error (receipts/2026-10-08-qwen3-last-logits).
+# MLX_OMARCHY_FULL_LOGITS=1 restores the full head; cache=None calls always keep it.
+apply mlx-lm-last-logits-qwen3.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the

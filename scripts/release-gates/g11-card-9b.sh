@@ -4,6 +4,11 @@
 # with stream-time card promotion.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
+# LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
+# server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
+# already holds the lock and nesting flock deadlocks, so exec the inner
+# command with no wrapper (LOCKER empty).
+LOCKER=(flock -x -w 900); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
 LOG="$LOG_DIR/g11-card-9b.log"
 RUNNER="$GATES_DIR/gate3-card-runner.py"
 ASSIST="$GATE_ROOT/${TAG}-assist-9b-card"
@@ -12,9 +17,10 @@ gate_refuse_existing "$ASSIST"
 mkdir -p "$ASSIST"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  flock -x -w 900 "$GPU_LOCK" timeout -k 60 2400 \
+  "${LOCKER[@]}" timeout -k 60 2400 \
   env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" HF_HOME="$HF_CACHE" \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --home "$ASSIST" --no-browser --pair everyday --yes \
   >"$LOG.server" 2>&1 &

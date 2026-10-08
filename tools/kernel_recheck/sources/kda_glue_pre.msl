@@ -1,0 +1,53 @@
+
+    uint h = threadgroup_position_in_grid.x;
+    uint d = thread_position_in_threadgroup.x;
+    uint c = h * 128u + d;
+    constant float* cs = cons;           // [lb, scale, scale2, eps]
+
+    float taps_q[4] = { (float)s0[c], (float)s0[12288u + c], (float)s0[24576u + c], (float)hp[c] };
+    float taps_k[4] = { (float)s1[c], (float)s1[12288u + c], (float)s1[24576u + c], (float)hp[12288u + c] };
+    float taps_v[4] = { (float)s2[c], (float)s2[12288u + c], (float)s2[24576u + c], (float)hp[24576u + c] };
+
+    float aq = 0.0f, ak = 0.0f, av = 0.0f;
+    for (uint t = 0; t < 4; t++) {
+        aq += taps_q[t] * (float)wq[c * 4u + t];
+        ak += taps_k[t] * (float)wk[c * 4u + t];
+        av += taps_v[t] * (float)wv[c * 4u + t];
+    }
+    bfloat16_t cq = (bfloat16_t)aq, ck = (bfloat16_t)ak, cv = (bfloat16_t)av;      // conv 출력 반올림
+    bfloat16_t sq_ = mlx_sigmoid(cq);
+    bfloat16_t sk_ = mlx_sigmoid(ck);
+    bfloat16_t sv_ = mlx_sigmoid(cv);
+    float yq = (float)(bfloat16_t)((float)cq * (float)sq_);            // silu = x·σ(x), bf16 경계
+    float yk = (float)(bfloat16_t)((float)ck * (float)sk_);
+    float yv = (float)(bfloat16_t)((float)cv * (float)sv_);
+
+    // 새 conv 상태: [s[1], s[2], x_raw]
+    ns0[c] = s0[12288u + c]; ns0[12288u + c] = s0[24576u + c]; ns0[24576u + c] = hp[c];
+    ns1[c] = s1[12288u + c]; ns1[12288u + c] = s1[24576u + c]; ns1[24576u + c] = hp[12288u + c];
+    ns2[c] = s2[12288u + c]; ns2[12288u + c] = s2[24576u + c]; ns2[24576u + c] = hp[24576u + c];
+
+    // rms_norm(q,k) — 헤드 내 128ch 리덕션(simd_sum 4그룹 → tg 합산)
+    threadgroup float tgq[4];
+    threadgroup float tgk[4];
+    uint sg = d >> 5;
+    float pq = simd_sum(yq * yq);
+    float pk = simd_sum(yk * yk);
+    if ((d & 31u) == 0u) { tgq[sg] = pq; tgk[sg] = pk; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float mq = (tgq[0] + tgq[1] + tgq[2] + tgq[3]) / 128.0f + cs[3];
+    float mk = (tgk[0] + tgk[1] + tgk[2] + tgk[3]) / 128.0f + cs[3];
+    bfloat16_t nq = (bfloat16_t)(yq * rsqrt(mq));                   // rms_norm 출력 반올림
+    bfloat16_t nk = (bfloat16_t)(yk * rsqrt(mk));
+    q[c] = (bfloat16_t)((float)nq * cs[2]);                            // × scale² → bf16
+    k[c] = (bfloat16_t)((float)nk * cs[1]);                            // × scale  → bf16
+    v[c] = (bfloat16_t)yv;
+
+    // 게이트 체인(fp32 유지): exp(lb · σ(e^{A_log[d]} · (z+dt_bias)))
+    // (f_b 인커널 흡수는 기각 — qmm 누산 순서 불일치로 상태 파리티 1e-8→1.4e-3,
+    //  격리 이득 ~0. z는 별도 qmm 유지가 정합 우위)
+    float zf = (float)z[c] + dtb[c];
+    float s = 1.0f / (1.0f + exp(-(exp(alog[d]) * zf)));
+    g[c] = exp(cs[0] * s);
+
+    if (d == 0u) { beta[h] = mlx_sigmoid(hp[49280u + h]); }

@@ -67,6 +67,7 @@ class AssistantServer(ThreadingHTTPServer):
         self.audio_identity: tuple[str, str] | None = None
         self.audio_cancel = threading.Event()
         self.audio_lock = threading.Lock()
+        self.wake = None
         super().__init__(address, Handler)
         self.origin = f"http://127.0.0.1:{self.server_port}"
         self.cookie_name = f"mlx_assistant_{self.server_port}"
@@ -139,6 +140,8 @@ class AssistantServer(ThreadingHTTPServer):
                                "detail": "Speech readiness is verified separately for input and output.",
                                "download_bytes": synthesis.get("memory", {}).get("asset_bytes")}
             result["routing"] = self.coordinator.routing_status(source)
+            if self.wake is not None:
+                result["wake"] = self.wake.snapshot()
             self._maybe_prewarm(synthesis)
             if self.setup_state:
                 result["setup"] = dict(self.setup_state)
@@ -149,6 +152,23 @@ class AssistantServer(ThreadingHTTPServer):
                 elif self.setup_state["state"] == "error":
                     result["error"] = self.setup_state["message"]
             return result
+
+    def start_wake_word(self, model: str = "hey_jarvis", threshold: float = 0.5) -> None:
+        """Opt-in wake listener; --wake-word is the model-download approval."""
+        from . import wake_word
+        state = wake_word.WakeState(model, threshold)
+        self.wake = state
+
+        def prepare_and_listen():
+            try:
+                model_path = wake_word.prepare(self.home, model)
+                detector = wake_word.WakeWordDetector(model_path, threshold=threshold)
+                wake_word.WakeListener(detector, state).start()
+            except Exception as exc:
+                state.set_error(f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=prepare_and_listen, daemon=True,
+                         name="wake-word-setup").start()
 
     def _maybe_prewarm(self, synthesis) -> None:
         """One-shot voice pre-warm: once synthesis is usable, start the

@@ -1,0 +1,114 @@
+#version 460
+
+// Bonsai 1-bit affine dequantize.
+//
+// out[n, k] = scale[n, k / group_size] * dequant(w[n, k/8])[k] +
+//             bias[n, k / group_size]
+// where dequant extracts bit i of byte (k / 8) of w. The Bonsai 1-bit
+// pack is the same uint8 layout the qmv kernel reads; this shader is
+// the inverse, used by callers that need a float weight matrix (e.g.
+// prefill above _T5_PREFILL_THRESHOLD, or reference parity checks).
+//
+// Dispatch: one workgroup per output row, 256 lanes, row stride 32 k
+// values per lane. Output dtype matches the scale dtype (host gates on
+// the affine dtype promotion).
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) float16_t(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat((uint(x)) << 16u)
+#define STORE_VALUE(f) uint16_t((floatBitsToUint(f) + 0x7fffu + ((floatBitsToUint(f) >> 16) & 1u)) >> 16u)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) (x)
+#define STORE_VALUE(f) (f)
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+layout(set = 0, binding = 1, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 2, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;     // group_size
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;        // not used
+  uint matrix_n;        // output rows
+  uint matrix_k;        // output cols
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+uint byte_at(uint word, uint lane) {
+  return (lane == 0u) ? (word & 0xFFu)
+       : (lane == 1u) ? ((word >> 8u) & 0xFFu)
+       : (lane == 2u) ? ((word >> 16u) & 0xFFu)
+                      : ((word >> 24u) & 0xFFu);
+}
+
+float q1_to_f(uint code) {
+  return uintBitsToFloat((code & 1u) | 0x4B000000u) - 8388608.0;
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint row = gl_WorkGroupID.x;
+  if (row >= params.matrix_n) {
+    return;
+  }
+  uint group_size = params.reduce_size;
+  uint bytes_per_row = params.matrix_k / 8u;
+  uint word_stride = (bytes_per_row + 3u) / 4u;  // round-up to words
+  uint groups_per_row = params.matrix_k / group_size;
+  uint bytes_per_group = group_size / 8u;
+  uint w_row = params.rhs_offset + row * word_stride;
+  uint scale_base = params.aux_offset + row * groups_per_row;
+  uint bias_base = params.aux_size + row * groups_per_row;
+  uint out_row = params.output_offset + row * params.matrix_k;
+  // Lane walks bytes; each byte holds 8 k values. Lane stride 256 bytes
+  // covers 2048 k values per step.
+  for (uint byte_idx = lane; byte_idx < bytes_per_row; byte_idx += 256u) {
+    uint word_addr = w_row + byte_idx / 4u;
+    uint word_value = input_w.values[word_addr];
+    uint byte_value = byte_at(word_value, byte_idx & 3u);
+    uint group = byte_idx / bytes_per_group;
+    float scale = LOAD_VALUE(scales.values[scale_base + group]);
+    float bias = LOAD_VALUE(biases.values[bias_base + group]);
+    uint k_base = byte_idx * 8u;
+    for (uint i = 0u; i < 8u; ++i) {
+      uint code = (byte_value >> i) & 1u;
+      float v = q1_to_f(code) * scale + bias;
+      output_data.values[out_row + k_base + i] = STORE_VALUE(v);
+    }
+  }
+}

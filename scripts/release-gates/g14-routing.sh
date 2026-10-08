@@ -11,18 +11,24 @@
 # without this gate green.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
+# LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
+# server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
+# already holds the lock and nesting flock deadlocks, so exec the inner
+# command with no wrapper (LOCKER empty).
+LOCKER=(flock -x -w 900); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
 LOG="$LOG_DIR/g14-routing.log"
 ASSIST_A="$GATE_ROOT/${TAG}-assist-route-on"
 ASSIST_B="$GATE_ROOT/${TAG}-assist-route-off"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 run_leg() { # run_leg <home-dir> [KEY=VALUE ...]  -> background pid
   local home_dir="$1"; shift
   gate_refuse_existing "$home_dir"
   mkdir -p "$home_dir"
   python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-    flock -x -w 900 "$GPU_LOCK" timeout -k 60 2400 \
+    "${LOCKER[@]}" timeout -k 60 2400 \
     env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" HF_HOME="$HF_CACHE" \
     "$@" "$GATE_HOME/.local/bin/mlx-omarchy-chat" --home "$home_dir" --no-browser --pair everyday --yes \
     >"$LOG.server-$(basename "$home_dir")" 2>&1 &

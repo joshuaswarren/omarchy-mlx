@@ -6,6 +6,7 @@ P="$GATE_HOME/.local/share/mlx-omarchy"
 LOG="$LOG_DIR/g6-codec.log"
 T="$GATE_ROOT/${TAG}-tag-tests"
 : > "$LOG"
+gate_log_wheel_identity "$LOG"
 
 "$P/venv/bin/pip" install --quiet --no-deps "mlx-audio==0.5.6" >>"$LOG" 2>&1
 "$P/venv/bin/pip" install --quiet "huggingface_hub>=1.0" "miniaudio>=1.61" "scipy>=1.10.0" "tqdm>=4.67.1" >>"$LOG" 2>&1
@@ -19,7 +20,7 @@ else
 fi
 gate_log "$LOG" "TAG_TESTS_EXIT $?"
 
-flock "$GPU_LOCK" env -C "$T" PYTHONPATH="$P" \
+gate_lock env -C "$T" PYTHONPATH="$P" \
   MLX_OMARCHY_TTS_TEST_PACK="$TTS_PACK_HOME/voice/qwen3-tts-0.6b-customvoice-4bit" \
   "$P/venv/bin/python" -m unittest tests.test_qwen3_tts_codec_regress -v >>"$LOG" 2>&1
 RC=$?

@@ -1,0 +1,66 @@
+name: Omarchy backend syntax gate
+
+# Deep compile gate for the omarchy overlay translation units, beyond the
+# cheap scripts/check_compute_kernel_wiring.py text gate that runs in the
+# pre-push hook. Configures the pinned MLX tree (mlx.lock) CPU-only with
+# the omarchy backend, builds the 559 embedded SPIR-V shader headers, then
+# rewrites every omarchy backend compile to -fsyntax-only
+# (scripts/ci/omarchy_syntax_check.py). No link, no GPU, no wheel.
+#
+# Measured on a 16-core dev box: prepare 7.6 s, configure 6.2 s, shaders
+# 8.7 s (~80 s CPU), syntax 12.5 s (~46 s CPU) — a 4-vCPU runner fits the
+# whole job in roughly 2-3 minutes including apt.
+#
+# Preprocessor-state limitation: the backend's bf16 direct GEMM path is
+# enabled only when the configured shader compiler accepts GL_EXT_bfloat16
+# (shaderc/glslc and recent glslang do; glslang 12 does not). The probe at
+# configure time picks the state, so the gate always validates the exact
+# state a build on that toolchain would compile; glslc-only coverage comes
+# from the jw16 gate builds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: omarchy-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache pinned MLX work tree
+        uses: actions/cache@v4
+        with:
+          path: .work
+          key: mlx-work-${{ hashFiles('mlx.lock') }}
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build glslang-tools libvulkan-dev \
+            libopenblas-dev libblas-dev liblapack-dev liblapacke-dev
+      - name: Prepare patched MLX tree
+        run: bash scripts/prepare-mlx.sh
+      - name: Configure (CPU-only, omarchy backend)
+        env:
+          CMAKE_INCLUDE_PATH: /usr/include/openblas
+        run: |
+          cmake -S .work/mlx -B .work/build -G Ninja \
+            -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON \
+            -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF \
+            -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF \
+            -DMLX_BUILD_BENCHMARKS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build embedded shader headers
+        run: cmake --build .work/build --target omarchy_shaders
+      - name: Syntax-check omarchy translation units
+        run: python3 scripts/ci/omarchy_syntax_check.py .work/build --jobs 4

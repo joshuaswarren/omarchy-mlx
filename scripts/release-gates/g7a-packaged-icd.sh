@@ -7,6 +7,7 @@ LOG="$LOG_DIR/g7a-packaged-icd.log"
 DEST="/tmp/${TAG}-sysinst"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
 VDST="$DEST/usr/lib/omarchy-mlx/vulkan"
 mkdir -p "$VDST"

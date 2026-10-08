@@ -12455,6 +12455,299 @@ void Int8Matmul::eval_gpu(
       omarchy::compute_dispatch_group_count(params.count));
 }
 
+// Bonsai 1-bit affine decode (M=1), shaders/bonsai_qmv_q1.comp. The
+// uint8 Bonsai 1-bit pack is not addressable through the qmm_vec.comp
+// uint32 word reader, so this is a dedicated shader. The subgroup
+// variant is the landed default (Honeykrisp gen-15+ reports
+// subgroupSize==32); the tree fallback compiles for the gate at the
+// capability report.
+bool BonsaiQ1AffineQmv::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+void BonsaiQ1AffineQmv::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const array& x = inputs.at(0);
+  const array& w = inputs.at(1);
+  const array& scales = inputs.at(2);
+  const array& biases = inputs.at(3);
+  array& out = outputs.at(0);
+  if (w.dtype() != uint8) {
+    omarchy::unsupported(tag + " weights dtype (uint8)", out);
+  }
+  if (x.dtype() != float16 && x.dtype() != bfloat16 &&
+      x.dtype() != float32) {
+    omarchy::unsupported(tag + " x dtype (float16/bfloat16/float32)", out);
+  }
+  std::optional<array> x_temp;
+  std::optional<array> w_temp;
+  std::optional<array> sc_temp;
+  std::optional<array> bi_temp;
+  const array& xd =
+      ensure_dense(x, x.flags().row_contiguous, x_temp, encoder, s);
+  const array& wd =
+      ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  const array& scd = ensure_dense(
+      scales, scales.flags().row_contiguous, sc_temp, encoder, s);
+  const array& bid = ensure_dense(
+      biases, biases.flags().row_contiguous, bi_temp, encoder, s);
+  int k = static_cast<int>(x.shape(-1));
+  int n = static_cast<int>(w.shape(0));
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  const auto& caps = encoder.device().capabilities();
+  bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  omarchy::ComputeKernel kernel;
+  switch (out.dtype()) {
+    case float32:
+      kernel = subgroup_ready
+          ? omarchy::ComputeKernel::BonsaiQ1QmvSubgroupF32
+          : omarchy::ComputeKernel::BonsaiQ1QmvTreeF32;
+      break;
+    case float16:
+      kernel = subgroup_ready
+          ? omarchy::ComputeKernel::BonsaiQ1QmvSubgroupF16
+          : omarchy::ComputeKernel::BonsaiQ1QmvTreeF16;
+      break;
+    case bfloat16:
+      kernel = subgroup_ready
+          ? omarchy::ComputeKernel::BonsaiQ1QmvSubgroupBF16
+          : omarchy::ComputeKernel::BonsaiQ1QmvTreeBF16;
+      break;
+    default:
+      omarchy::unsupported(tag + " out dtype", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = checked_u32(n, tag, out);
+  params.operation = 1u;
+  params.reduce_size = checked_u32(static_cast<uint64_t>(group()), tag, out);
+  params.matrix_m = 1u;
+  params.matrix_n = checked_u32(n, tag, out);
+  params.matrix_k = checked_u32(k, tag, out);
+  params.lhs_offset = checked_item_offset(xd, xd.size(), tag, out);
+  params.rhs_offset = checked_item_offset(wd, wd.size(), tag, out);
+  params.aux_offset = checked_item_offset(scd, scd.size(), tag, out);
+  params.aux_size = checked_item_offset(bid, bid.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  std::array<omarchy::ComputeBinding, 5> bindings{
+      binding(xd), binding(wd), binding(scd), binding(bid), binding(out)};
+  constexpr uint32_t kColumnsPerGroup = 8u;
+  uint32_t n_groups =
+      (params.matrix_n + kColumnsPerGroup - 1u) / kColumnsPerGroup;
+  encoder.dispatch_compute(
+      kernel,
+      bindings,
+      params,
+      std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+      1u,
+      1u);
+}
+
+// Bonsai small-batch decode (M=2..5), shaders/bonsai_qmv_wide.comp.
+// One shader handles both 1-bit (uint8 packed) and 2-bit (uint32
+// packed) Bonsai layouts; the bit-width rides in params.operation.
+bool BonsaiQmvWide::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+void BonsaiQmvWide::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const array& x = inputs.at(0);
+  const array& w = inputs.at(1);
+  const array& scales = inputs.at(2);
+  const array& biases = inputs.at(3);
+  array& out = outputs.at(0);
+  if (bits() != 1 && bits() != 2) {
+    omarchy::unsupported(tag + " bits", out);
+  }
+  if (w.dtype() != (bits() == 1 ? uint8 : uint32)) {
+    omarchy::unsupported(tag + " weights dtype", out);
+  }
+  if (x.dtype() != float16 && x.dtype() != bfloat16 &&
+      x.dtype() != float32) {
+    omarchy::unsupported(tag + " x dtype (float16/bfloat16/float32)", out);
+  }
+  std::optional<array> x_temp;
+  std::optional<array> w_temp;
+  std::optional<array> sc_temp;
+  std::optional<array> bi_temp;
+  const array& xd =
+      ensure_dense(x, x.flags().row_contiguous, x_temp, encoder, s);
+  const array& wd =
+      ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  const array& scd = ensure_dense(
+      scales, scales.flags().row_contiguous, sc_temp, encoder, s);
+  const array& bid = ensure_dense(
+      biases, biases.flags().row_contiguous, bi_temp, encoder, s);
+  int M = static_cast<int>(x.shape(0));
+  int k = static_cast<int>(x.shape(1));
+  int n = static_cast<int>(w.shape(0));
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  if (M < 2 || M > 5) {
+    omarchy::unsupported(tag + " M (2..5)", out);
+  }
+  const auto& caps = encoder.device().capabilities();
+  bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  if (!subgroup_ready) {
+    omarchy::unsupported(tag + " subgroup_size==32", out);
+  }
+  omarchy::ComputeKernel kernel;
+  if (out.dtype() == bfloat16) {
+    switch (M) {
+      case 2:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupBF16R2;
+        break;
+      case 3:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupBF16R3;
+        break;
+      case 4:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupBF16R4;
+        break;
+      case 5:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupBF16R5;
+        break;
+      default:
+        omarchy::unsupported(tag + " M (2..5)", out);
+    }
+  } else if (out.dtype() == float16) {
+    switch (M) {
+      case 2:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupF16R2;
+        break;
+      case 3:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupF16R3;
+        break;
+      case 4:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupF16R4;
+        break;
+      case 5:
+        kernel = omarchy::ComputeKernel::BonsaiQmvWideSubgroupF16R5;
+        break;
+      default:
+        omarchy::unsupported(tag + " M (2..5)", out);
+    }
+  } else {
+    omarchy::unsupported(tag + " out dtype (float16/bfloat16)", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = checked_u32(n, tag, out);
+  params.operation = checked_u32(static_cast<uint64_t>(bits()), tag, out);
+  params.reduce_size = checked_u32(static_cast<uint64_t>(group()), tag, out);
+  params.matrix_m = checked_u32(M, tag, out);
+  params.matrix_n = checked_u32(n, tag, out);
+  params.matrix_k = checked_u32(k, tag, out);
+  params.lhs_offset = checked_item_offset(xd, xd.size(), tag, out);
+  params.rhs_offset = checked_item_offset(wd, wd.size(), tag, out);
+  params.aux_offset = checked_item_offset(scd, scd.size(), tag, out);
+  params.aux_size = checked_item_offset(bid, bid.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  std::array<omarchy::ComputeBinding, 5> bindings{
+      binding(xd), binding(wd), binding(scd), binding(bid), binding(out)};
+  // shaders/bonsai_qmv_wide.comp: each workgroup covers SLOTS_PER_GROUP
+  // (= 4) weight rows, one per 32-lane slot, and each slot computes all
+  // M x rows against its row.
+  const uint32_t kRowsPerGroup = 4u;
+  uint32_t n_groups = (params.matrix_n + kRowsPerGroup - 1u) / kRowsPerGroup;
+  encoder.dispatch_compute(
+      kernel,
+      bindings,
+      params,
+      std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+      1u,
+      1u);
+}
+
+// Bonsai 1-bit affine dequantize, shaders/bonsai_dequant_q1.comp.
+// One workgroup per output row; row stride 32 k values per lane.
+bool BonsaiQ1Dequantize::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+void BonsaiQ1Dequantize::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const array& w = inputs.at(0);
+  const array& scales = inputs.at(1);
+  const array& biases = inputs.at(2);
+  array& out = outputs.at(0);
+  if (w.dtype() != uint8) {
+    omarchy::unsupported(tag + " weights dtype (uint8)", out);
+  }
+  if (out.dtype() != float16 && out.dtype() != bfloat16 &&
+      out.dtype() != float32) {
+    omarchy::unsupported(tag + " out dtype (float16/bfloat16/float32)", out);
+  }
+  std::optional<array> w_temp;
+  std::optional<array> sc_temp;
+  std::optional<array> bi_temp;
+  const array& wd =
+      ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+  const array& scd = ensure_dense(
+      scales, scales.flags().row_contiguous, sc_temp, encoder, s);
+  const array& bid = ensure_dense(
+      biases, biases.flags().row_contiguous, bi_temp, encoder, s);
+  int n = static_cast<int>(w.shape(0));
+  int k = static_cast<int>(w.shape(1)) * 8;
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  omarchy::ComputeKernel kernel;
+  switch (out.dtype()) {
+    case float32:
+      kernel = omarchy::ComputeKernel::BonsaiQ1DequantF32;
+      break;
+    case float16:
+      kernel = omarchy::ComputeKernel::BonsaiQ1DequantF16;
+      break;
+    case bfloat16:
+      kernel = omarchy::ComputeKernel::BonsaiQ1DequantBF16;
+      break;
+    default:
+      omarchy::unsupported(tag + " out dtype", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = checked_u32(static_cast<uint64_t>(n) * k, tag, out);
+  params.reduce_size = checked_u32(static_cast<uint64_t>(group()), tag, out);
+  params.matrix_n = checked_u32(n, tag, out);
+  params.matrix_k = checked_u32(k, tag, out);
+  params.rhs_offset = checked_item_offset(wd, wd.size(), tag, out);
+  params.aux_offset = checked_item_offset(scd, scd.size(), tag, out);
+  params.aux_size = checked_item_offset(bid, bid.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  std::array<omarchy::ComputeBinding, 4> bindings{
+      binding(wd), binding(scd), binding(bid), binding(out)};
+  // shaders/bonsai_dequant_q1.comp maps one ROW per workgroup
+  // (row = gl_WorkGroupID.x, lanes walk the row's packed bytes). The
+  // generic element-count formula ceil(n*k/256) under-dispatches for
+  // k < 256 and silently leaves rows 1..n-1 unwritten (zeros) — first
+  // seen on hardware 2026-10-07 (G13G): n=2 k=64 produced row0 exact,
+  // row1 all-zero.
+  encoder.dispatch_compute(
+      kernel,
+      bindings,
+      params,
+      checked_u32(n, tag, out));
+}
+
 bool GreedyQuantizedArgmax::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }

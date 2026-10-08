@@ -20,11 +20,38 @@ else
 fi
 gate_log "$LOG" "FETCH_EXIT $?"
 
-flock "$GPU_LOCK" env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
+gate_lock env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   MLX_OMARCHY_VERSION="$TAG" MLX_OMARCHY_RELEASE_BASE="file://$ASSETS_DIR" TERM=dumb \
   bash "$GATE_ROOT/${TAG}-install.sh" >>"$LOG" 2>&1 </dev/null
 rc=$?
 gate_log "$LOG" "INSTALL_EXIT $rc $(date -u +%FT%TZ)"
+
+# Wheel identity check: the install path picks the wheel from the SHA256SUMS
+# the release base serves. If EXPECTED_WHEEL_SHA256 is set we assert the
+# INSTALLED wheel version is the one the expected asset names. Without
+# EXPECTED_WHEEL_SHA256 we just log whatever the venv has (a pass on a
+# stale SHA256SUMS used to slip through here).
+if [[ -n "${EXPECTED_WHEEL_SHA256:-}" ]]; then
+  WHEEL_FILE="$(gate_wheel)"
+  if [[ -z "$WHEEL_FILE" ]]; then
+    gate_log "$LOG" "WHEEL_IDENTITY FAIL: no asset matches EXPECTED_WHEEL_SHA256=$EXPECTED_WHEEL_SHA256 in $ASSETS_DIR"
+    rc=1
+  else
+    WANT_VER="$(basename "$WHEEL_FILE" | sed -E 's#^mlx_omarchy-(.+)-cp[0-9]+-cp[0-9]+-linux_aarch64\.whl$#\1#')"
+    GOT_VER="$("$GATE_HOME/.local/share/mlx-omarchy/venv/bin/python" -c \
+      'import importlib.metadata as md; print(md.version("mlx_omarchy"))' 2>/dev/null || echo absent)"
+    if [[ "$WANT_VER" == "$GOT_VER" ]]; then
+      gate_log "$LOG" "WHEEL_IDENTITY installed=$GOT_VER expected=$WANT_VER (sha=$EXPECTED_WHEEL_SHA256)"
+    else
+      gate_log "$LOG" "WHEEL_IDENTITY MISMATCH installed=$GOT_VER expected=$WANT_VER (sha=$EXPECTED_WHEEL_SHA256)"
+      rc=1
+    fi
+  fi
+else
+  GOT_VER="$("$GATE_HOME/.local/share/mlx-omarchy/venv/bin/python" -c \
+    'import importlib.metadata as md; print(md.version("mlx_omarchy"))' 2>/dev/null || echo absent)"
+  gate_log "$LOG" "WHEEL_IDENTITY installed=$GOT_VER (no EXPECTED_WHEEL_SHA256)"
+fi
 
 env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --help >>"$LOG" 2>&1

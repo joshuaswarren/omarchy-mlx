@@ -85,6 +85,27 @@ Proving the gate catches the defect: run it against the published v0.7.14
 assets (`ASSETS_DIR` pointing at those wheel+tar) — it MUST fail with the old
 string — then rerun with `G7D_OVERLAY_CLI=<origin/main CLI>` — it must pass.
 
+## gpu-turn tickets on the M2
+
+GPU gates run inside `gpu-turn` tickets (`~/bin/gpu-turn -m N -- cmd`, N ≤ 30).
+`gpu-turn` exports NOTHING to the wrapped command, so the ticket DRIVER must
+export `GPU_TURN_TICKET=1` for the wrapped command — that is the contract
+`gate_lock` (env.sh) depends on:
+
+- `GPU_TURN_TICKET=1` (ticket mode): `gate_lock` runs the command directly.
+  gpu-turn already holds `$GPU_LOCK` for the whole ticket; nesting flock on
+  the same lock deadlocks.
+- unset (raw mode): `gate_lock` wraps the command in `flock`. It probes the
+  lock first; if the lock is already held it prints the named
+  `GPU_LOCK_BUSY` error and returns 99 instead of silently hanging.
+
+Gates whose servers launch via the setsid+execvp pattern (g2, g3, g10, g11,
+g12, g14) exec a BINARY, so they cannot call the `gate_lock` shell function;
+they expand `LOCKER` instead: `flock -x -w N` raw, empty inside a ticket.
+`tests/test_release_gate_lock.py` pins all three behaviors (ticket mode runs
+despite a held lock; no-ticket + held lock = named error 99; free lock =
+flock).
+
 ## Cleanup
 
 - Gate homes/caches are throwaway: `rm -rf $GATE_ROOT/$TAG-gate-home

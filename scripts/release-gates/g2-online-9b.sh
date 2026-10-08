@@ -4,6 +4,11 @@
 # listener fails the gate unless cleared).
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
+# LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
+# server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
+# already holds the lock and nesting flock deadlocks, so exec the inner
+# command with no wrapper (LOCKER empty).
+LOCKER=(flock -x -w 300); [[ "${GPU_TURN_TICKET:-}" == 1 ]] && LOCKER=()
 LOG="$LOG_DIR/g2-online-9b.log"
 PROBE="$GATES_DIR/gate-probe.py"
 
@@ -11,11 +16,12 @@ gate_refuse_existing "$HF_CACHE" "$ASSIST_9B"
 mkdir -p "$HF_CACHE" "$ASSIST_9B"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 gate_log "$LOG" "df_before $(df -BG "$GATE_ROOT" | tail -1 | awk '{print $4}')"
 gate_log "$LOG" "hf_bytes_before $(du -sb "$HF_CACHE" | cut -f1)"
 
 python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  flock -x -w 300 "$GPU_LOCK" timeout -k 60 2400 \
+  "${LOCKER[@]}" timeout -k 60 2400 \
   env -i PATH="$GATE_INSTALL_PATH" HOME="$GATE_HOME" HF_HOME="$HF_CACHE" \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --home "$ASSIST_9B" --no-browser --pair everyday --yes \
   >"$LOG.server" 2>&1 &
