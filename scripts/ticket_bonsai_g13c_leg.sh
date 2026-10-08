@@ -37,8 +37,14 @@ python3 -m venv "$TREE/venv"
 "$TREE/venv/bin/pip" install --quiet "$WHEEL" pytest numpy
 
 export OMARCHY_BONSAI_GATE=1
-export VK_DRIVER_FILES=$HOME/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json
-[ -f "$VK_DRIVER_FILES" ] || { echo "ERROR: $VK_DRIVER_FILES missing" >&2; exit 2; }
+# ICD: env override wins; otherwise the newest coreglass Honeykrisp json
+# on this host (jwm1/jw16 carry the bbbfa36dce build, the M2 6543eeb7df).
+if [ -z "${VK_DRIVER_FILES:-}" ]; then
+  VK_DRIVER_FILES=$(ls -t $HOME/.local/share/coreglass/vulkan-*/honeykrisp_icd.aarch64.json 2>/dev/null | head -1)
+fi
+[ -n "${VK_DRIVER_FILES:-}" ] && [ -f "$VK_DRIVER_FILES" ] || {
+  echo "ERROR: no coreglass Honeykrisp ICD json found; set VK_DRIVER_FILES" >&2; exit 2; }
+echo "icd=$VK_DRIVER_FILES"
 
 cd "$TREE/repo"
 "$TREE/venv/bin/python" -m pytest -rA \
