@@ -29,10 +29,12 @@
 // on this hardware because f16 cannot represent products past 2048; f32
 // operands remove that failure mode by construction.
 //
-// Edge tiles shift back by a whole 32-wide quarter (row_base =
-// min(row0, m - 32), same as matmul_coopmat_direct.comp), so every
-// addressed row and column is in bounds once m >= 32 and n >= 32 (host
-// gate) and an overlap recomputes and stores identical bits. The host
+// Quarters sit at their natural offsets in the 64x64 tile (no overlap):
+// every output element is computed by exactly one workgroup once, so the
+// flush needs no cross-workgroup reasoning. Loads clamp to the last full
+// 8-wide block and XS reads to the last row, so nothing reads past the
+// buffers; the garbage that produces lands only in total slots the
+// epilogue never stores (it gates on row < rows and col < n). The host
 // dispatches ceil(rows/64) x ceil(n/64) workgroups and refuses shapes
 // whose grid would exceed the dispatch clamp instead of dropping tiles.
 //
@@ -109,17 +111,18 @@ void main() {
   const uint tid = gl_LocalInvocationID.x;
   const uint sub = gl_SubgroupID;
 
-  const uint row0 = gl_WorkGroupID.y * TILE + (sub / 2u) * (TILE / 2u);
-  const uint col0 = gl_WorkGroupID.x * TILE + (sub % 2u) * (TILE / 2u);
-  if (row0 >= rows || col0 >= n) {
+  const uint wg_row = gl_WorkGroupID.y * TILE;
+  const uint wg_col = gl_WorkGroupID.x * TILE;
+  if (wg_row >= rows || wg_col >= n) {
     return;
   }
-  const uint row_base = min(row0, rows - TILE / 2u);
-  const uint col_base = min(col0, n - TILE / 2u);
+  const uint qrow0 = wg_row + (sub >> 1u) * (TILE / 2u);
+  const uint qcol0 = wg_col + (sub & 1u) * (TILE / 2u);
 
   for (uint q = tid; q < TILE * TILE; q += 128u) {
     total[q] = 0.0f;
   }
+  barrier();
 
   coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA> mat_a[SG];
   coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[SG];
@@ -136,13 +139,13 @@ void main() {
     const uint k_group_base = g * group;
     for (uint kc = k_group_base; kc < k_group_base + group; kc += MAT) {
       for (uint i = 0u; i < SG; i++) {
-        coopMatLoad(mat_a[i], in_x.values,
-            (row_base + i * MAT) * k_total + kc, k_total,
+        const uint a_row = min(qrow0 + i * MAT, rows - MAT);
+        coopMatLoad(mat_a[i], in_x.values, a_row * k_total + kc, k_total,
             gl_CooperativeMatrixLayoutRowMajor);
       }
       for (uint j = 0u; j < SG; j++) {
-        coopMatLoad(mat_b[j], in_w.values,
-            (col_base + j * MAT) * k_total + kc, k_total,
+        const uint b_col = min(qcol0 + j * MAT, n - MAT);
+        coopMatLoad(mat_b[j], in_w.values, b_col * k_total + kc, k_total,
             gl_CooperativeMatrixLayoutColumnMajor);
       }
       for (uint i = 0u; i < SG; i++) {
@@ -152,7 +155,8 @@ void main() {
       }
     }
     // Flush: store this subgroup's 32x32 quarter to shared, then scale by
-    // XS[m,g] into the tile total in ascending group order.
+    // XS[m,g] into the tile total in ascending group order. Rows past
+    // matrix_m read a clamped scale; their total slots are never stored.
     for (uint i = 0u; i < SG; i++) {
       for (uint j = 0u; j < SG; j++) {
         coopMatStore(acc[i][j], flush_d[sub],
@@ -165,10 +169,8 @@ void main() {
       const uint s = q / (TILE * TILE / SG);
       const uint r = (q / (TILE / 2u)) % (TILE / 2u);
       const uint c = q % (TILE / 2u);
-      // The quarter lives at tile rows (s/2)*32.. and columns
-      // (s%2)*32..; total is row-major 64x64, so translate. The XS
-      // scale follows the output row, quarter offset included.
-      const uint row = row_base + (s >> 1u) * (TILE / 2u) + r;
+      const uint row =
+          min(wg_row + (s >> 1u) * (TILE / 2u) + r, rows - 1u);
       const float xs = in_xs.values[params.shape[0] + row * groups + g];
       const uint gq = ((s >> 1u) * (TILE / 2u) + r) * TILE +
           ((s & 1u) * (TILE / 2u) + c);
@@ -182,10 +184,12 @@ void main() {
   for (uint q = tid; q < TILE * TILE; q += 128u) {
     const uint r = q / TILE;
     const uint c = q % TILE;
-    const uint row = row_base + r;
-    const uint col = col_base + c;
-    out_bf16.values[params.output_offset + row * n + col] =
-        bf16_store(total[q] * in_ws.values[ws_base + col] +
-            in_b.values[b_base + col]);
+    const uint row = wg_row + r;
+    const uint col = wg_col + c;
+    if (row < rows && col < n) {
+      out_bf16.values[params.output_offset + row * n + col] =
+          bf16_store(total[q] * in_ws.values[ws_base + col] +
+              in_b.values[b_base + col]);
+    }
   }
 }
