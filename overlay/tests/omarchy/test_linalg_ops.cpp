@@ -1321,3 +1321,64 @@ TEST_CASE("cholesky_inv matches the analytic inverse") {
       "cholesky_inv analytic inverse");
 }
 
+
+
+TEST_CASE("batched linalg writes every matrix past the one-dispatch clamp") {
+  // The linalg kernels run one workgroup per batch matrix
+  // (matrix = gl_WorkGroupID.x, no grid-stride loop) and the host passes
+  // the batch count as the group count, which clamps at 65535: batched
+  // calls above 65,535 matrices left the tail uncomputed. 66000 x 3x3
+  // exceeds it; the sampled set brackets 65534..65536.
+  if (!compute_available()) {
+    return;
+  }
+  auto stream = gpu_stream();
+  const int batch = 66000;
+  const int n = 3;
+  std::mt19937 gen(23);
+  std::vector<double> flat(static_cast<size_t>(batch) * n * n);
+  std::vector<HostMatrix> refs(batch);
+  for (int b = 0; b < batch; ++b) {
+    refs[b] = host_spd(gen, n);
+    std::copy(
+        refs[b].begin(), refs[b].end(), flat.begin() + static_cast<size_t>(b) * n * n);
+  }
+  array device = device_matrix(stream, flat, Shape{batch, n, n});
+  const std::vector<int> sampled = {0, 65534, 65535, 65536, batch - 1};
+
+  {
+    array factor = linalg::cholesky(device, /*upper=*/false, stream);
+    auto got = readback_f32(stream, factor);
+    for (int b : sampled) {
+      expect_close(
+          to_float(reshape(got, b * n * n, n, n)),
+          host_cholesky(refs[b], n),
+          2e-5,
+          ("cholesky batch " + std::to_string(b)).c_str());
+    }
+  }
+  {
+    auto outs = linalg::svd(device, /*compute_uv=*/false, stream);
+    auto got_s = readback_f32(stream, outs[1]);
+    for (int b : sampled) {
+      HostMatrix at = host_transpose(refs[b], n, n);
+      HostMatrix ata = host_matmul(at, refs[b], n, n, n);
+      HostMatrix eig = host_sym_eigvals(ata, n);
+      for (int i = 0; i < n; ++i) {
+        double ref = std::sqrt(eig[n - 1 - i]);
+        float value = got_s[static_cast<size_t>(b) * n + i];
+        CHECK_MESSAGE(
+            std::abs(value - static_cast<float>(ref)) <=
+                1e-4 + 1e-4 * ref,
+            "svd batch ",
+            b,
+            " singular value ",
+            i,
+            ": got ",
+            value,
+            " want ",
+            ref);
+      }
+    }
+  }
+}
