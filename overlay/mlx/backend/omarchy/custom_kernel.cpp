@@ -4,6 +4,7 @@
 #include "mlx/fast_primitives.h"
 
 #include <fcntl.h>
+#include <dlfcn.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -2297,6 +2298,33 @@ constexpr char kTranslationCacheVersion[] = "2";
 #endif
 constexpr char kTranslatorSourceSha[] = MLX_OMARCHY_TRANSLATOR_SOURCE_SHA;
 
+// Runtime identity of the loaded translator: the SHA-256 of the shared
+// object that provides this code, plus the build-time source hash when the
+// CMake generation produced one. Pip-built wheels may bake the fallback
+// "unknown" (the CMake shader-generation target is not always on the pip
+// compile's include path); the runtime library hash ensures that two
+// different libmlx builds can NEVER share a translation-cache entry,
+// regardless of what the build scripts injected. One-time cost: a single
+// read of the .so (~50-400 MB, cached by the OS page cache).
+const std::string& translator_runtime_identity() {
+  static const std::string identity = [] {
+    Dl_info info;
+    std::string lib_hash = "no-library";
+    if (dladdr((void*)&translator_runtime_identity, &info) &&
+        info.dli_fname) {
+      std::ifstream so(info.dli_fname, std::ios::binary);
+      auto data = std::string(std::istreambuf_iterator<char>(so),
+                              std::istreambuf_iterator<char>());
+      if (!data.empty()) {
+        lib_hash = omarchy::ane::sha256_hex(
+            reinterpret_cast<const uint8_t*>(data.data()), data.size());
+      }
+    }
+    return kTranslatorSourceSha + std::string(":") + lib_hash;
+  }();
+  return identity;
+}
+
 std::string translation_cache_path(const std::string& identity) {
   const std::string root = spirv_cache_root();
   if (root.empty()) {
@@ -2305,7 +2333,7 @@ std::string translation_cache_path(const std::string& identity) {
   std::string material = "mlx-omarchy custom kernel translation ";
   material += kTranslationCacheVersion;
   material += " ";
-  material += kTranslatorSourceSha;
+  material += translator_runtime_identity();
   material += "\n";
   material += identity;
   return root + "/" +
