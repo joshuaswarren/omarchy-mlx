@@ -139,26 +139,39 @@ TEST_CASE("helper with threadgroup parameter that is never called is refused") {
 }
 
 TEST_CASE("as_type<ushort> on a bf16 value indexes the pattern table") {
-  // The real mlx-serve form: the widened value sits in a LOCAL, not in the
-  // buffer read itself (`float g = gate[i]; sigtab[as_type<ushort>(g)]`).
+  // The real mlx-serve form: a templated kernel whose bf16 local feeds the
+  // table lookup (`T g = gate[i]; sigtab[as_type<ushort>(g)]; T act = ...`).
   const char* source =
+      "template <typename T>\n"
       "[[kernel]] void mlxserve_table(\n"
       "    const device bfloat16_t* gate [[buffer(0)]],\n"
-      "    const device uint16_t* sigtab [[buffer(1)]],\n"
-      "    device float* y [[buffer(2)]],\n"
+      "    const device bfloat16_t* sigtab [[buffer(1)]],\n"
+      "    const device bfloat16_t* up [[buffer(2)]],\n"
+      "    device float* y [[buffer(3)]],\n"
       "    uint thread_position_in_grid [[thread_position_in_grid]]) {\n"
       "  uint i = thread_position_in_grid;\n"
-      "  float g = gate[i];\n"
-      "  float sig = sigtab[as_type<ushort>(g)];\n"
-      "  y[i] = g * sig;\n"
-      "}\n";
+      "  T g = gate[i];\n"
+      "  T sig = sigtab[as_type<ushort>(g)];\n"
+      "  T act = g * sig;\n"
+      "  y[i] = act * up[i];\n"
+      "}\n"
+      "template [[kernel]] decltype(mlxserve_table<bfloat16_t>) "
+      "mlxserve_table<bfloat16_t>;\n";
   auto glsl = translate(source, 1);
   // The table index is the bf16 pattern of the value, not the widened
   // float's 32-bit bits (floatBitsToUint would index out of the 65536-row
   // table and read garbage activations).
   CHECK(glsl.find("_mlx_float_to_bf16(") != std::string::npos);
-  CHECK(glsl.find("floatBitsToUint(g)") == std::string::npos);
-  CHECK(glsl.find("floatBitsToUint(_mlx_bf16_to_float(") == std::string::npos);
+  // The bad composite (old translator): the pattern index computed from the
+  // widened float's 32-bit bits.
+  CHECK(glsl.find("_b2.data[floatBitsToUint(") == std::string::npos);
+  CHECK(glsl.find("_b1.data[_mlx_float_to_bf16(") != std::string::npos);
+  // The bf16 locals round like Metal's bfloat16_t operators (compute fp32,
+  // round on store) so the shader stays bit-identical to the composed bf16
+  // op chain.
+  CHECK(glsl.find("float act = _mlx_bf16_round_trip(g * sig);") !=
+        std::string::npos);
+  CHECK(glsl.find("float g = _mlx_bf16_round_trip(") != std::string::npos);
 }
 
 TEST_CASE("body threadgroup declarations become shared without helpers") {
