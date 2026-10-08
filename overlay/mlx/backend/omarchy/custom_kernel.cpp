@@ -419,6 +419,19 @@ int translate_c_style_casts_once(std::string& code) {
 }
 
 void translate_c_style_casts(std::string& code) {
+  // Collapse chained scalar-family casts first: `(float)((float)x)` and
+  // `(float)(bfloat16_t)(x)` otherwise survive as C-style casts inside
+  // constructor arguments after the scan (glslc: GL_NV_explicit_typecast /
+  // syntax error — kda_glue_pre/post, 2026-10-08 KernelRecheck). Repeat
+  // until stable for chains longer than two.
+  static const std::regex chain(
+      R"(\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\)\s*\(\s*(?:float|int|uint|bool|bfloat16_t|float16_t|int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|int64_t|uint64_t|size_t)\s*\))");
+  std::string prev;
+  int guard = 0;
+  while (code != prev && guard++ < 32) {
+    prev = code;
+    code = std::regex_replace(code, chain, "(");
+  }
   // Run to a fixpoint: each pass rewrites the OUTERMOST remaining casts;
   // casts inside a rewritten constructor argument are handled by later
   // passes (bounded — every pass removes at least one `(cast)` token).
