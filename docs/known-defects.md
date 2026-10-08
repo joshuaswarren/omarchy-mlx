@@ -223,6 +223,72 @@ against an oracle that models this storage. Receipt:
 
 ## Fixed in development
 
+### Int8Matmul, CastBool, and fused rope_rms_norm went unwritten past one dispatch (16,776,960 threads)
+
+Observed on: jw16 (M1 Max, G13C, honeykrisp vulkan-release) and, at the DiT
+shapes, jw16 G13C with the v0.7.31 wheel. Status: FIXED on main in
+`2df1aed43` (Int8Matmul) and `ba6f6c4e6` (CastBool SOURCE_BOOL,
+fast_rope_norm fuse_norm, bonsai grid refusals).
+
+Three kernels indexed their work once — no grid-stride loop, no host
+chunk loop — while the host fed an unbounded count to
+`compute_dispatch_group_count`, whose 65,535-group x 256-thread clamp
+silently dropped the tail:
+
+- `fast::int8_matmul` (shaders/int8_matmul.comp): one thread per output
+  element, `rows * n` count. TensorFold H3 DiT (rows = 13365,
+  n in {21504, 14336, 5376}) computed only rows 0..779 / 1169 / 3119;
+  the Linux int8 route diverged from the macOS ideal by rel-L2 1.15 from
+  block 0 while plain ops matched. Failing-before on G13C: first bad
+  element row 2047 col 7936 = floor(16776960/8192) exactly. Fix: the
+  `dispatch_logical_chunked` host loop (LogicalOrBool precedent); the
+  chunk's first output element rides the spare `shape[3]` push constant.
+  Regression: `test_int8_matmul.cpp` "writes every output row past the
+  single-dispatch clamp" (3200 x 8192 = 26,214,400 outputs).
+- `CastBool{F32,I32,F16,BF16,Complex64}` converting copies
+  (copy.cpp, cast.comp SOURCE_BOOL): one thread per 4-byte condition
+  word, `(count + mis + 3) / 4` words — bools above 67,107,840 stayed
+  uncast. Fix: grid-stride word loop, the non-bool branch's own pattern;
+  the word load stays one straight-line statement outside the lane loop
+  (Honeykrisp M1 zero-return hazard). Regression: `test_copy_offsets.cpp`
+  "bool source cast writes every element past the dispatch clamp"
+  (2^26 bools, first bad element 67,107,840).
+- `fast::rope_rms_norm` bf16 fuse_norm leg (shaders/fast_rope_norm.comp):
+  one workgroup per rotation row, group count = B*N*T rows — rows
+  >= 65535 unwritten on any prefill past B*N*T = 65535 (e.g. 32 heads x
+  2048 tokens). Fix: the fast_norm.comp grid-stride pattern; the
+  word-tail early return became a guard (it sits after all barriers) and
+  a trailing barrier releases `rounded[]`/`block_values[]` before the
+  next stride iteration. Regression: `test_fast_ops.cpp` "fused
+  rope_rms_norm writes every row past the one-dispatch clamp"
+  (66000 rows x 64, bit-exact against the composed chain).
+
+The three Bonsai decode kernels (BonsaiQ1Qmv, BonsaiQmvWide,
+BonsaiQ1Dequantize) also index one column/row block per workgroup with no
+stride loop; instead of silently clamping grids above 524,280 / 262,140 /
+65,535 they now refuse by name (QmmVecQ4Multi refusal precedent), since
+no realistic Bonsai shape reaches those bounds.
+
+### Still open: same defect class elsewhere (audit 2026-10-08)
+
+Full audit table: the private notebook artifacts/DispatchClamp/dispatch-clamp/
+directory. Verified, unfixed:
+
+- `LinalgSvdF32` / `LinalgSvdFinalizeF32` / `LinalgEigF32` /
+  `LinalgEighF32` (linalg_svd{,_finalize,eig,eigh}.comp): one workgroup
+  per batch matrix, `matrix = gl_WorkGroupID.x`, batch count clamps at
+  65535 — batched calls above 65,535 small matrices leave the tail
+  un-computed. No test covers that batch depth today.
+- `GdnVjpBF16` (gated_delta_vjp.comp): group_count_z = B*Hv clamps
+  silently above 65535 (e.g. batch 1024 x 64 heads); training-only path.
+- `custom_kernel.cpp` user MSL translation: the translator emits
+  one-thread-per-invocation code with no stride loop and the encoder
+  clamps group_count_{x,y,z} to 65535 without validation, so a custom
+  kernel requesting a larger grid loses its tail silently. Chunking
+  cannot be inferred for arbitrary user index math; the honest fix is a
+  by-name refusal (and/or translator-emitted stride loops). Owner call
+  requested.
+
 ### Bool logical ops and broadcast `where` conditions went unwritten past 16,776,960 elements
 
 Observed on: llvmpipe and real M1 (stock Honeykrisp and every fork
