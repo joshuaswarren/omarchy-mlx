@@ -934,6 +934,11 @@ enum class ComputeKernel : uint16_t {
   // subgroup size 32, the host falls back to the tiled int32-imad kernel
   // otherwise. Append-only profile id.
   Int8MatmulCoopOp,
+  // f32-FMA register-blocked route (shaders/int8_matmul_f32fma.comp):
+  // exact integer-valued f32 group accumulation, host-gated to
+  // k_total % 4 == 0 and 32 <= group <= 1024 (the exact-f32 bound is
+  // 16384 * 1024 = 2^24; see the shader header). Append-only profile id.
+  Int8MatmulF32FmaOp,
   Count,
 };
 
