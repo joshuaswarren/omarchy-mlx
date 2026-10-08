@@ -49,6 +49,32 @@ the numerics rerun on jw16 (G13C) per the chip-independence note below.
   dump for bitlinear_matmul), translated per file with
   `omarchy_custom_kernel_translate_dump`.
 
+## GPU validation trajectory on the M2 (G14C), five wheels
+
+| wheel | translator state | pass | wrong | refused | fail (compile) |
+|---|---|---|---|---|---|
+| v0.7.31 (a2f8c83e) | inventory baseline | 1 | 3 | 18* | 4 |
+| fb0fe7a (145886cb6) | + constant-alias, numeric_limits, inline, header casts, as_type<int>, swizzle bare-use, under-supplied init, f16 widen, int-conversion | 8 | 2 | 9 | 7 |
+| 05f823e (7368d2a91) | + fixpoint scanner, float-literal walk, const-comma skip, fabs→abs, as_type integer probe | 11 | 1 | 9 | 5 |
+
+*pass-1 "refused" count is inflated: the classifier scraped traceback
+headlines, so every child exception mentioning "unsupported" counted.
+Per-kernel stderr files fixed the classification from the fb0fe7a run on.
+
+llguidance_mask moved wrong→pass with the as_type integer probe (the
+static-regex capture fix); bitlinear_matmul, both flux2 double/single,
+banded_mask, moe_route, depthwise, qk_relu, phonon, situ_fused,
+situ_pair_fused, moe_route_fused pass on GPU. The 9 refusals are exactly
+the CBQ family with their predicted constructs. Remaining fails at
+05f823e: 3 compile failures (sconv, down_combine, glue_pre/post) whose
+GLSL still contains surviving C-casts inside constructor arguments —
+reproduced with the post-wave-5 translator via the translate-dump tool on
+the M2 (rebuild needed from a tree whose build-make cache matches; the
+M2 scratch trees mixed generations during diagnosis) — and the harness
+gaps: fused_single emulation (harness-side, kernel translates clean) and
+the banded_mask_v2 call-argument fix (landed, 7368d2a91, untested on
+GPU).
+
 ## Fixed-wheel GPU revalidation (M2)
 
 - Wheel built on the M2 under fill-run from the streamed main tree
