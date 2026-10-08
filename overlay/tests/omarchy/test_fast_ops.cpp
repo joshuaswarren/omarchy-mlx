@@ -3899,3 +3899,50 @@ TEST_CASE("fused gdn vjp matches the composed reference at GQA shapes") {
   // sq T, G = 4.
   run(1, 4, 16, 17);
 }
+
+
+TEST_CASE("fused rope_rms_norm writes every row past the one-dispatch clamp") {
+  // fast_rope_norm.comp runs one workgroup per rotation row with no
+  // grid-stride loop, and the host passes the row count B*N*T as the
+  // group count, which clamps at 65535: rows >= 65535 were left
+  // unwritten. 1 x 66000 x 1 x 64 exceeds it; first bad row = 65535.
+  // The composed chain (fast_norm.comp + fast_rope.comp) strides, so it
+  // stays the bit-exact reference at this size.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const int rows = 66000;
+  const int width = 64;
+  const float eps = 1e-6f;
+  auto x_data = pattern(static_cast<size_t>(rows) * width, width + 31);
+  auto w_data = pattern(width, width + 47);
+  array x = astype(
+      array(x_data.data(), Shape{1, rows, 1, width}, float32),
+      bfloat16,
+      stream);
+  array w = astype(
+      array(w_data.data(), Shape{width}, float32),
+      bfloat16,
+      stream);
+  array fused =
+      fast::rope_rms_norm(x, width, w, eps, false, 10000.0f, 1.0f, 0, stream);
+  array composed = fast::rope(
+      fast::rms_norm(x, w, eps, stream), width, false, 10000.0f, 1.0f, 0);
+  array fused_rows = reshape(fused, {rows, width}, stream);
+  array composed_rows = reshape(composed, {rows, width}, stream);
+  const std::vector<int> sampled = {0, 65534, 65535, 65536, rows - 1};
+  for (int r : sampled) {
+    array got = astype(slice(fused_rows, {r}, {r + 1}, stream), float32, stream);
+    array want =
+        astype(slice(composed_rows, {r}, {r + 1}, stream), float32, stream);
+    eval(got, want);
+    const float* pg = got.data<float>();
+    const float* pw = want.data<float>();
+    for (int c = 0; c < width; ++c) {
+      INFO("fused rope_rms_norm row ", r, " col ", c, ": ", pg[c],
+           " vs composed ", pw[c]);
+      CHECK_EQ(pg[c], pw[c]);
+    }
+  }
+}
