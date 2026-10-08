@@ -12455,8 +12455,10 @@ bool int8_naive_forced() {
 // run (G13C, aurora 12.6, kernel 7.1.12-2-12.6-sep-ARCH, boot 55cc1c19)
 // the driver reported cooperative_matrix_f16_8 and the route produced
 // bitwise mismatches against the naive kernel, so it does not ship as
-// the default until it passes the A/B matrix. The tiled int32-imad
-// kernel is the default and is bitwise-identical to the naive kernel on
+// the default until it passes the A/B matrix. The scalar f32-FMA route
+// is the default on its exactness gate (see the dispatch below); the
+// tiled int32-imad kernel covers the shapes outside that gate and is
+// bitwise-identical to the naive kernel on
 // the same boot (29/29 A/B assertions, forced via MLX_OMARCHY_INT8_COOPMAT=0).
 bool int8_coopmat_enabled() {
   const char* env = std::getenv("MLX_OMARCHY_INT8_COOPMAT");
