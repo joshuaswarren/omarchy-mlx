@@ -56,16 +56,16 @@ inline constexpr std::array<DirectMatmulRow, 12> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
     {"G13C", float32, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF32NtK4S8, 64u}},
-    {"G13G", float32, false, true, 4096u, 4096u,
+    {"G13G", float32, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32NtK4S8, 64u}},
     // Candidate C2 (MatmulGap H15, H16): per-chip rows.
     {"G13C", bfloat16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
     {"G13G", bfloat16, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectBF16Nt, 64u}},
-    {"G13G", float32, false, false, 4096u, 4096u,
+    {"G13G", float32, false, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32NnK4S8, 64u}},
-    {"G13G", float32, true, false, 4096u, 4096u,
+    {"G13G", float32, true, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32TnWS8, 128u}},
 }};
 
