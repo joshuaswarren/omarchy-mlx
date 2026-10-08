@@ -106,31 +106,33 @@ layout(push_constant) uniform Params {
 
 void main() {
 #ifdef SOURCE_BOOL
-  // One condition word load per thread, straight-line at the top of the
-  // function, with its address computed as (lhs_offset >> 2) +
-  // word_index. The Honeykrisp driver on Apple M1 returns zero for bool
-  // word loads whose address is recomputed per lane inside a loop; this
-  // straight-line form reads correctly on that driver. mis handles a
-  // source whose first element does not start on a word boundary, and
-  // word_count includes the skipped leading lanes.
+  // One condition word load per thread per stride iteration, a single
+  // straight-line statement with its address computed as
+  // (lhs_offset >> 2) + word_index. The Honeykrisp driver on Apple M1
+  // returns zero for bool word loads whose address is recomputed per
+  // lane inside a loop; this form keeps the load outside the lane loop.
+  // mis handles a source whose first element does not start on a word
+  // boundary, and word_count includes the skipped leading lanes. The
+  // grid-stride loop keeps every word reachable when the grid clamps at
+  // 65535 workgroups (bool counts above 65535 * 256 * 4 elements).
   uint mis = params.lhs_offset & 3u;
-  uint word_index = gl_GlobalInvocationID.x;
   uint word_count = (params.count + mis + 3u) >> 2u;
-  if (word_index >= word_count) {
-    return;
-  }
-  uint word = input_data.values[(params.lhs_offset >> 2u) + word_index];
-  uint first = 4u * word_index - mis;
-  for (uint lane = 0u; lane < 4u; ++lane) {
-    if (word_index == 0u && lane < mis) {
-      continue;
+  uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+  for (uint word_index = gl_GlobalInvocationID.x; word_index < word_count;
+       word_index += stride) {
+    uint word = input_data.values[(params.lhs_offset >> 2u) + word_index];
+    uint first = 4u * word_index - mis;
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      if (word_index == 0u && lane < mis) {
+        continue;
+      }
+      uint index = first + lane;
+      if (index >= params.count) {
+        break;
+      }
+      output_data.values[params.output_offset + index] =
+          CONVERT((word >> (lane * 8u)) & 0xFFu);
     }
-    uint index = first + lane;
-    if (index >= params.count) {
-      break;
-    }
-    output_data.values[params.output_offset + index] =
-        CONVERT((word >> (lane * 8u)) & 0xFFu);
   }
 #else
   uint index = gl_GlobalInvocationID.x;
