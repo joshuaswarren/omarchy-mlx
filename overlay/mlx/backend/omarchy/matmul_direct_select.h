@@ -42,7 +42,7 @@ struct DirectMatmulRow {
 // f16), receipts/2026-10-07-bf16-direct-gemm (MatmulGap H13, H14: bf16 and
 // f32) and receipts/2026-10-08-direct-gemm-floors (M2 Max rows, lower m
 // floors). A bf16 a @ b.T takes the direct route only through a row here.
-inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
+inline constexpr std::array<DirectMatmulRow, 14> kDirectMatmulRows{{
     {"G13C", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13C", float16, true, false, 4096u, 4096u,
@@ -64,8 +64,6 @@ inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
     {"G13G", bfloat16, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectBF16Nt, 64u}},
-    {"G13G", float32, false, false, 4096u, 4096u,
-     {ComputeKernel::MatmulDirectF32NnK4S8, 64u}},
     {"G13G", float32, true, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32TnWS8, 128u}},
     // M2 Max (MatmulGap H20): bf16 and f16 rows with the pipelines above.
