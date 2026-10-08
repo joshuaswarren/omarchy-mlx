@@ -1,5 +1,5 @@
 diff --git a/omlx/patches/moe_expert_offload.py b/omlx/patches/moe_expert_offload.py
-index 26a0b5b4..ef1a5674 100644
+index 26a0b5b4..083e76e0 100644
 --- a/omlx/patches/moe_expert_offload.py
 +++ b/omlx/patches/moe_expert_offload.py
 @@ -37,7 +37,7 @@ import re
@@ -38,7 +38,7 @@ index 26a0b5b4..ef1a5674 100644
  
  
  def _env_int(name: str, default: int, invalid: int) -> int:
-@@ -393,6 +404,23 @@ class ExpertCache:
+@@ -393,6 +404,26 @@ class ExpertCache:
          self.map = mx.full((self.n_experts,), -1, dtype=mx.int32)
          self.hits = self.misses = 0
          self.warm = False
@@ -59,10 +59,13 @@ index 26a0b5b4..ef1a5674 100644
 +        # the prediction that actually queues reads.
 +        self.recently_evicted: deque = deque(maxlen=max(8, self.capacity))
 +        self.dontneed = os.environ.get("OMLX_MOE_OFFLOAD_DONTNEED", "1") != "0"
++        # Wall time inside _ensure_ids spent waiting on expert reads (the
++        # SSD/IO share of the layer's step; reported as read_wait_s).
++        self.read_wait_ns = 0
  
      def _plans(self, e: int) -> list:
          """Read plans for expert ``e``'s tensors, in slot-write order."""
-@@ -412,7 +440,9 @@ class ExpertCache:
+@@ -412,7 +443,9 @@ class ExpertCache:
          else:
              old_e = next(iter(self.slot_of))  # LRU victim
              slot = self.slot_of.pop(old_e)
@@ -72,7 +75,7 @@ index 26a0b5b4..ef1a5674 100644
          return slot
  
      def _write(self, slot: int, payload: list) -> None:
-@@ -438,8 +468,8 @@ class ExpertCache:
+@@ -438,8 +471,8 @@ class ExpertCache:
          self.warm = len(self.slot_of) == self.n_experts
          return slot
  
@@ -83,7 +86,7 @@ index 26a0b5b4..ef1a5674 100644
  
          Two passes. The first classifies the call's misses without touching
          any cache state and starts their reads on the IO pool, at most
-@@ -454,14 +484,26 @@ class ExpertCache:
+@@ -454,14 +487,26 @@ class ExpertCache:
          unsupported, exactly as before.
  
          The ``.tolist()`` is a device->host readback and therefore a sync per
@@ -116,7 +119,7 @@ index 26a0b5b4..ef1a5674 100644
          """:meth:`ensure` for a route set already read back from the device.
  
          With ``on_slow_read`` (the decode overlap path), the call checks once,
-@@ -477,6 +519,17 @@ class ExpertCache:
+@@ -477,6 +522,17 @@ class ExpertCache:
          queue = [e for e in needed if e not in self.slot_of] if pool is not None else []
          window = _io_batch()
          pending: dict[int, list] = {}
@@ -134,7 +137,7 @@ index 26a0b5b4..ef1a5674 100644
          sent = 0
          keepalive = barrier = None
          slow = False
-@@ -505,6 +558,9 @@ class ExpertCache:
+@@ -505,6 +561,9 @@ class ExpertCache:
                  if e in self.slot_of:
                      slot = self.slot_of.pop(e)  # re-insert: LRU order
                      self.slot_of[e] = slot
@@ -144,7 +147,30 @@ index 26a0b5b4..ef1a5674 100644
                      self.hits += 1
                      continue
                  self.misses += 1
-@@ -549,6 +605,61 @@ class ExpertCache:
+@@ -521,7 +580,9 @@ class ExpertCache:
+                         keepalive = _gpu_keepalive()
+                     on_slow_read = None
+                 if group is None:
++                    t0 = time.perf_counter_ns()
+                     self._install(e)
++                    self.read_wait_ns += time.perf_counter_ns() - t0
+                     continue
+                 # Count the current payload in the window until its writes finish.
+                 prefetch(done + window)
+@@ -530,10 +591,12 @@ class ExpertCache:
+                 if barrier is not None:
+                     mx.eval(barrier)  # right before the first slot write
+                     barrier = None
++                t0 = time.perf_counter_ns()
+                 self._install(
+                     e,
+                     [(name, field, plan, f.result()) for name, field, plan, f in group],
+                 )
++                self.read_wait_ns += time.perf_counter_ns() - t0
+                 del pending[e], group
+                 done += 1
+         finally:
+@@ -549,6 +612,61 @@ class ExpertCache:
          # per-chunk eval in __call__, which is a different mechanism.
          return slow
  
@@ -206,7 +232,7 @@ index 26a0b5b4..ef1a5674 100644
      def qmm(
          self, name: str, x: mx.array, slots: mx.array, sorted_indices: bool = False
      ) -> mx.array:
-@@ -573,6 +684,9 @@ class ExpertCache:
+@@ -573,6 +691,9 @@ class ExpertCache:
  
  # The stock SwitchGLU sorts routes from this many on (prefill); decode is below.
  _SORT_MIN_ROUTES = 64
@@ -216,7 +242,7 @@ index 26a0b5b4..ef1a5674 100644
  
  
  class OffloadSwitchGLU(nn.Module):
-@@ -586,6 +700,39 @@ class OffloadSwitchGLU(nn.Module):
+@@ -586,6 +707,39 @@ class OffloadSwitchGLU(nn.Module):
          # reads of missing experts are pending. OMLX_MOE_OFFLOAD_OVERLAP=0
          # keeps the serial order (read, then compute) for every step.
          self._overlap = os.environ.get("OMLX_MOE_OFFLOAD_OVERLAP", "1") != "0"
@@ -256,7 +282,7 @@ index 26a0b5b4..ef1a5674 100644
  
      def _glu(self, x: mx.array, slots: mx.array) -> mx.array:
          c = self.cache
-@@ -640,7 +787,13 @@ class OffloadSwitchGLU(nn.Module):
+@@ -640,7 +794,13 @@ class OffloadSwitchGLU(nn.Module):
                  mx.async_eval(y_hit)
              return y_hit
  
@@ -271,7 +297,7 @@ index 26a0b5b4..ef1a5674 100644
          if y_hit is None:  # fast reads, or no resident route: one gather
              out = self._glu(mx.expand_dims(x, (-2, -3)), mx.take(c.map, indices))
              out = out.squeeze(-2)
-@@ -654,6 +807,8 @@ class OffloadSwitchGLU(nn.Module):
+@@ -654,6 +814,8 @@ class OffloadSwitchGLU(nn.Module):
              out = out.reshape(indices.shape + (y.shape[-1],))
          if slow:
              mx.async_eval(out)
@@ -280,7 +306,7 @@ index 26a0b5b4..ef1a5674 100644
          return out
  
      def _forward(self, x: mx.array, indices: mx.array) -> mx.array:
-@@ -665,7 +820,11 @@ class OffloadSwitchGLU(nn.Module):
+@@ -665,7 +827,11 @@ class OffloadSwitchGLU(nn.Module):
              and _io_pool() is not None
          ):
              return self._forward_overlap(x, indices)
@@ -293,7 +319,7 @@ index 26a0b5b4..ef1a5674 100644
          slots = mx.take(c.map, indices)
          x = mx.expand_dims(x, (-2, -3))
          # Mirror the stock SwitchGLU's sort rule exactly (threshold and all):
-@@ -680,6 +839,8 @@ class OffloadSwitchGLU(nn.Module):
+@@ -680,6 +846,8 @@ class OffloadSwitchGLU(nn.Module):
          out = c.qmm("down_proj", self.activation(up, gate), slots, do_sort)
          if do_sort:
              out = _scatter_unsort(out, inv, indices.shape)
@@ -302,7 +328,7 @@ index 26a0b5b4..ef1a5674 100644
          return out.squeeze(-2)
  
      def _forward_expert_major(
-@@ -945,6 +1106,7 @@ def apply_moe_expert_offload(
+@@ -945,6 +1113,7 @@ def apply_moe_expert_offload(
      resident_fraction: float = 0.25,
      *,
      mtp_resident: bool = False,
@@ -310,7 +336,7 @@ index 26a0b5b4..ef1a5674 100644
  ) -> int:
      """Replace covered SwitchGLU instances with offloaded ones.
  
-@@ -958,6 +1120,13 @@ def apply_moe_expert_offload(
+@@ -958,6 +1127,13 @@ def apply_moe_expert_offload(
      ``omlx.patches.deepseek_v4.moe_offload``; qwen4_exp's native head under
      ``mtp.*`` is skipped by the generic traversal below). Other families
      reject the combination at validation.
@@ -324,7 +350,7 @@ index 26a0b5b4..ef1a5674 100644
      """
      if os.environ.get("OMLX_MOE_EXPERT_OFFLOAD", "1") == "0":
          return 0
-@@ -989,6 +1158,9 @@ def apply_moe_expert_offload(
+@@ -989,6 +1165,9 @@ def apply_moe_expert_offload(
      wrapped += apply_deepseek_v4_moe_expert_offload(
          model, model_dir, resident_fraction, mtp_resident=mtp_resident
      )
@@ -334,7 +360,7 @@ index 26a0b5b4..ef1a5674 100644
      total_bytes = resident_bytes = 0
      for parent, key, glu, path in list(_iter_switch_glus(model)):
          if mtp_resident and _is_mtp_path(path):
-@@ -1015,9 +1187,36 @@ def apply_moe_expert_offload(
+@@ -1015,9 +1194,36 @@ def apply_moe_expert_offload(
                  + (["biases"] if lin.get("biases") is not None else [])
              )
          )
@@ -371,7 +397,7 @@ index 26a0b5b4..ef1a5674 100644
          if isinstance(parent, nn.Module):
              setattr(parent, key, new)  # registers via Module.__setattr__
          else:
-@@ -1190,8 +1389,10 @@ def materialize_offload_state(model) -> int:
+@@ -1190,8 +1396,11 @@ def materialize_offload_state(model) -> int:
  
  
  def moe_offload_stats(model) -> dict:
@@ -380,10 +406,11 @@ index 26a0b5b4..ef1a5674 100644
      hits = misses = layers = 0
 +    pred_sent = pred_installed = 0
 +    ensure_ns = 0
++    read_wait_ns = 0
      stack = [model]
      seen = set()
      while stack:
-@@ -1204,6 +1405,11 @@ def moe_offload_stats(model) -> dict:
+@@ -1204,6 +1413,12 @@ def moe_offload_stats(model) -> dict:
              hits += cache.hits
              misses += cache.misses
              layers += 1
@@ -392,10 +419,11 @@ index 26a0b5b4..ef1a5674 100644
 +            pred_sent += getattr(cache, "pred_sent", 0)
 +            pred_installed += getattr(cache, "pred_installed", 0)
 +            ensure_ns += getattr(cache, "ensure_ns", 0)
++            read_wait_ns += getattr(cache, "read_wait_ns", 0)
              continue
          if isinstance(obj, dict):
              stack.extend(obj.values())
-@@ -1215,6 +1421,10 @@ def moe_offload_stats(model) -> dict:
+@@ -1215,6 +1430,11 @@ def moe_offload_stats(model) -> dict:
          "hits": hits,
          "misses": misses,
          "hit_rate": (hits / total) if total else None,
@@ -403,6 +431,7 @@ index 26a0b5b4..ef1a5674 100644
 +        "pred_installed": pred_installed,
 +        "pred_rate": (pred_installed / pred_sent) if pred_sent else None,
 +        "ensure_s": ensure_ns / 1e9,
++        "read_wait_s": read_wait_ns / 1e9,
      }
  
  
