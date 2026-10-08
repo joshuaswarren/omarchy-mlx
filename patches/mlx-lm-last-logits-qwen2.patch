@@ -1,0 +1,22 @@
+--- a/mlx_lm/models/qwen2.py
++++ b/mlx_lm/models/qwen2.py
+@@ -3,6 +3,8 @@
+ from dataclasses import dataclass
+ from typing import Any, Dict, Optional, Union
+ 
++import os
++
+ import mlx.core as mx
+ import mlx.nn as nn
+ from mlx.nn.layers.distributed import shard_linear
+@@ -171,6 +173,10 @@
+         input_embeddings: Optional[mx.array] = None,
+     ):
+         out = self.model(inputs, cache, input_embeddings)
++        # mlx-omarchy last-logits (dense qwen2 family): cached/incremental inference consumes only the
++        # final position; whole-sequence calls (cache=None) keep full logits.
++        if cache is not None and os.environ.get("MLX_OMARCHY_FULL_LOGITS", "") != "1":
++            out = out[:, -1:, :]
+         if self.args.tie_word_embeddings:
+             out = self.model.embed_tokens.as_linear(out)
+         else:

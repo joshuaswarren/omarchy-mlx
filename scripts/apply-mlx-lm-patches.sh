@@ -75,6 +75,7 @@ SERIES_PATCHES=(
   mlx-lm-convring.patch
   mlx-lm-last-logits.patch
   mlx-lm-last-logits-qwen3.patch
+  mlx-lm-last-logits-qwen2.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -214,6 +215,9 @@ apply mlx-lm-last-logits.patch
 # within one bf16 ULP and identical fp64-reference error (receipts/2026-10-08-qwen3-last-logits).
 # MLX_OMARCHY_FULL_LOGITS=1 restores the full head; cache=None calls always keep it.
 apply mlx-lm-last-logits-qwen3.patch
+# Dense qwen2 family (qwen2.py; e.g. Qwen2.5-0.5B): same last-logits change. Qwen2.5-0.5B pf512
+# +28.9% on the M1 Max (1642.7 vs 1274.9 tok/s); receipts/2026-10-08-qwen2-last-logits.
+apply mlx-lm-last-logits-qwen2.patch
 # Attention q/k RMSNorm -> mx.fast.rope_rms_norm (the q_norm/k_norm + rope
 # chain folds into one dispatch per tensor; the wheel's FastRopeNorm kernel
 # reproduces the fast RMSNorm reduction and rounds to bf16 before the
