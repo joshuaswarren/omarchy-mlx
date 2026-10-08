@@ -828,17 +828,47 @@ void resolve_kernel_templates(
     if (declaration_parts[index].find("bool") != std::string::npos) {
       value = value == "0" ? "false" : "true";
     } else if (declaration_parts[index].find("typename") != std::string::npos) {
-      // Metal promotes bfloat16_t LOCALS to fp32 for arithmetic; mirroring
-      // that means a typename instantiated as any bf16 representation
-      // substitutes float, not the uint16_t storage type. Buffer parameters
-      // keep uint16_t storage (buffer_declaration uses glsl_type separately)
-      // and narrow via _mlx_float_to_bf16 at stores. Without this, the
-      // Qwen3.5-2B GDN decode leg emits 'uint16_t sy = uint16_t(1) /
-      // (uint16_t(1) + exp(abs(conv)));' — integer math where Metal
-      // computes in fp32.
-      // Integer/bool template values (HK=16, L2=true) pass through as-is;
-      // only type names (alphabetic first char) map through glsl_type.
-      if (value == "bfloat16_t" || value == "bfloat16" || value == "uint16_t") {
+      // A typename instantiated as any bf16 representation substitutes
+      // float — but NOT as a plain widen: Metal's bfloat16_t operators
+      // round EVERY assignment and constructor to bfloat16 (compute fp32,
+      // round on store). The plain substitution rounded only once at the
+      // final output store, and the shader diverged from the composed
+      // bf16 op chain it replaces (mlx-serve SwiGLU: 26% of elements off
+      // by 1 bf16 ulp, 2026-10-07 parity probe). Mirror Metal:
+      // constructor casts `T(expr)` and declarations/assignments of
+      // T-typed locals round through the bf16 storage pattern.
+      // Buffer parameters keep uint16_t storage (buffer_declaration uses
+      // glsl_type separately) and narrow via _mlx_float_to_bf16 at
+      // stores. Without the float substitution, the Qwen3.5-2B GDN decode
+      // leg emits 'uint16_t sy = uint16_t(1) / (uint16_t(1) +
+      // exp(abs(conv)));' — integer math where Metal computes in fp32.
+      if (value == "bfloat16_t" || value == "bfloat16" ||
+          value == "uint16_t") {
+        const auto bfloat_name = name;  // the template parameter name (e.g. T)
+        // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
+        replace_all(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
+        replace_all(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
+        // Declarations `T name = expr;`: the declaration becomes float and
+        // the initializing expression rounds like Metal's constructor.
+        const std::regex decl_pattern(
+            "\\b" + bfloat_name +
+            R"(\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
+        std::vector<std::string> bf16_locals;
+        for (std::sregex_iterator it(body.begin(), body.end(), decl_pattern);
+             it != std::sregex_iterator();
+             ++it) {
+          bf16_locals.push_back((*it)[1].str());
+        }
+        replace_all(body, bfloat_name + " ", "float ");
+        replace_all(header, bfloat_name + " ", "float ");
+        for (const auto& local : bf16_locals) {
+          body = std::regex_replace(
+              body,
+              std::regex(
+                  R"((^|[^=!<>+\-*/%&|^[:alnum:]_]))" + regex_escape(local) +
+                  R"(\s*=\s*([^;]+);)"),
+              "$1" + local + " = _mlx_bf16_round_trip($2);");
+        }
         value = "float";
       } else if (value == "float16_t" || value == "half") {
         // Metal promotes half arithmetic to float (half storage, fp32
@@ -849,7 +879,9 @@ void resolve_kernel_templates(
         value = "float";
       } else if (value == "true" || value == "false" ||
                  std::isdigit(static_cast<unsigned char>(value.front()))) {
-        // boolean and numeric template values pass through unchanged
+        // boolean and numeric template values pass through unchanged;
+        // only other type names (alphabetic first char) map through
+        // glsl_type.
       } else if (!value.empty() &&
                  std::isalpha(static_cast<unsigned char>(value.front()))) {
         value = glsl_type(value);
@@ -1826,7 +1858,8 @@ Translation translate_msl(
   if (needs_bfloat) {
     glsl << "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
          << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
-         << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n";
+         << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n"
+         << "float _mlx_bf16_round_trip(float value) { return _mlx_bf16_round(value); }\n";
   }
   glsl << header << "\n" << element_helpers << vector_alias_helpers
        << condition_helpers << bool_and_helpers << macros;
