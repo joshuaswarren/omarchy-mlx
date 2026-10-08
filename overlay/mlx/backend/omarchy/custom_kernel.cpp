@@ -208,7 +208,15 @@ void translate_types(std::string& code) {
       const auto close_paren = matching_delimiter(code, open_paren, '(', ')');
       const auto operand =
           code.substr(open_paren + 1, close_paren - open_paren - 1);
-      if (narrow16 && operand.find("_mlx_bf16_to_float(") != std::string::npos) {
+      if (narrow16) {
+        // A 16-bit as_type is a storage-pattern bitcast of a 16-bit value.
+        // The bf16 input rewrite has already widened every bf16 load to
+        // f32, so the operand's f32 value round-trips exactly through
+        // _mlx_float_to_bf16 — the pattern the (unwidened) source meant.
+        // This holds whether the operand is the load itself or a local
+        // holding it (mlx-serve's SwiGLU: `float g = gate[i];
+        // sigtab[as_type<ushort>(g)]`). as_type between mismatched sizes
+        // is invalid MSL, so no genuine 32-bit bitcast lands here.
         code.replace(
             marker, close_paren - marker + 1,
             "_mlx_float_to_bf16(" + operand + ")");
