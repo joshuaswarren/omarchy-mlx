@@ -38,6 +38,11 @@
 // loops over p below are the remaining generality and are left in place rather than refactored (debt, H35 entry).
 #define ROWP 1
 
+// DIAG (H42, diagnostic branch only, outputs wrong by design): 0 = kernel, 1 = no PV, 2 = no QK, 3 = no softmax lane loop.
+#ifndef DIAG
+#define DIAG 0
+#endif
+
 const uint MAT = 8u;
 const uint SGS = 4u;                    // subgroups per workgroup
 const uint HD = 128u;
@@ -170,6 +175,7 @@ void main() {
         sc[p][c] = ACCT(0.0);
       }
     }
+#if DIAG != 2
     for (uint c = 0u; c < KB; ++c) {
       if (k0 + c * MAT <= last_key) {
         for (uint s = 0u; s < DT; ++s) {
@@ -181,6 +187,7 @@ void main() {
         }
       }
     }
+#endif
     for (uint p = 0u; p < uint(ROWP); ++p) {
       for (uint c = 0u; c < KB; ++c) {
         ACCT scaled = sc[p][c] * params.alpha;
@@ -189,6 +196,7 @@ void main() {
     }
     sync_subgroup();
 
+#if DIAG != 3
     for (uint p = 0u; p < uint(ROWP); ++p) {
       const uint tile_base = (sbase + p) * (MAT * KT) + r * KT + jb;
       const uint visible = row0 + p * MAT + r + koff;
@@ -220,6 +228,7 @@ void main() {
       s_c[cbase] = corr;
       s_c[cbase + 1u] = corr;
     }
+#endif
     sync_subgroup();
 
     for (uint p = 0u; p < uint(ROWP); ++p) {
@@ -229,6 +238,7 @@ void main() {
         acc[p][d] = acc[p][d] * cm;
       }
     }
+#if DIAG != 1
     for (uint c = 0u; c < KB; ++c) {
       if (k0 + c * MAT <= last_key) {
         coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> pa[ROWP];
@@ -247,6 +257,7 @@ void main() {
         }
       }
     }
+#endif
     sync_subgroup();
   }
 
