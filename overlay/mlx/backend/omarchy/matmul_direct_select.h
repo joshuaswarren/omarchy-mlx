@@ -64,7 +64,7 @@ inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
     {"G13G", bfloat16, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectBF16Nt, 64u}},
-    {"G13G", float32, false, false, 2048u, 4096u,
+    {"G13G", float32, false, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF32NnK4S8, 64u}},
     {"G13G", float32, true, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32TnWS8, 128u}},

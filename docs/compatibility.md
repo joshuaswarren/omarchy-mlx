@@ -712,7 +712,10 @@ replaces (`receipts/2026-09-09-prefill-speed/`):
   either, bf16 keeps `MatmulBF16Coopmat`. bf16 `a @ b.T` goes direct only
   through a chip row in `matmul_direct_select.h` (k1 on G13G, k4s8 on
   G13C and G14C); on other chips it keeps `MatmulBF16Coopmat`, which beat k1 on
-  G13C. Stored bits equal `MatmulBF16Coopmat`
+  G13C. G14C rows: bf16 `a @ b.T` k4s8 from m 512, bf16 `a.T @ b` ws8 from
+  m 4096, f16 `a @ b.T` `MatmulDirectF16NtK2S8` from m 1024; G13G floors
+  are m 512 (bf16 `a.T @ b`, f32 `a @ b.T`, f32 `a.T @ b`) and 1024 (f16
+  `a.T @ b`) (`receipts/2026-10-08-direct-gemm-floors/`). Stored bits equal `MatmulBF16Coopmat`
   (`receipts/2026-10-07-bf16-direct-gemm/`). Test
   "direct cooperative-matrix matmul matches the 16-row slices in every
   orientation" (`omarchy_matmul_family_tests`, f16 and f32, and bf16 where

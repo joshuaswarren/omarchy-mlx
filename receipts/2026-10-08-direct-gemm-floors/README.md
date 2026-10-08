@@ -3,7 +3,7 @@
 Date 2026-10-08. Follows `receipts/2026-10-07-direct-gemm-variants` (f16 rows) and `receipts/2026-10-07-bf16-direct-gemm` (bf16 and f32 rows). Every measurement here is at MLX level (`a @ b` with MLX arrays, one product per `mx.eval`), n = k = 4096, with output hashes compared between arms.
 
 ## Change
-`overlay/mlx/backend/omarchy/matmul_direct_select.h`, one new pipeline, one new test, one doc line.
+`overlay/mlx/backend/omarchy/matmul_direct_select.h`, one new pipeline, one new test, one doc line. The G13G f32 `a @ b` floor (2048 in the first candidate) is not part of the change: the shape grid below showed it losing at larger n, so the row keeps its existing floor of 4096.
 
 | chip | dtype, orientation | kernel | from m |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Date 2026-10-08. Follows `receipts/2026-10-07-direct-gemm-variants` (f16 rows) a
 | M1 (G13G) | f16 `a.T @ b` | ws8 | 1024 (was 4096) |
 | M1 (G13G) | f32 `a @ b.T` | k4s8 | 512 (was 4096) |
 | M1 (G13G) | f32 `a.T @ b` | ws8 | 512 (was 4096) |
-| M1 (G13G) | f32 `a @ b` | k4s8 | 2048 (was 4096) |
+| M1 (G13G) | f32 `a @ b` | k4s8 | unchanged, 4096 (a floor of 2048 lost at n 9728: see Shape generality) |
 
 The M1 Max (G13C) rows are unchanged. The G13G f16 `a @ b.T` k4s8 row keeps its floor of 512: a lower floor was measured and fails (below). The pipeline id is appended at the end of the kernel enum.
 
@@ -47,7 +47,7 @@ The k2s8 choice over k4s8 (C7 over C6): m 1024 +6.3 / +5.5 / +5.9, 2048 +6.0 / +
 | f16 `a.T @ b` ws8 | 1024: +7.6 / +7.5 / +7.7; 2048: +7.7 / +7.7 / +7.7 |
 | f32 `a @ b.T` k4s8 | 512: +79.5 / +79.6 / +79.0; 1024: +91.6 / +88.3 / +90.4; 2048: +96.9 / +98.3 / +96.9 |
 | f32 `a.T @ b` ws8 | 512: +31.4 / +31.6 / +28.7; 1024: +34.7 / +33.7 / +34.9; 2048: +45.9 / +45.5 / +46.0 |
-| f32 `a @ b` k4s8 | 512: -3.7 / -4.5 / -3.9 (fails); 1024: +3.0 / +3.4 / +3.6 (fails); 2048: +20.7 / +22.4 / +21.5 (floor 2048) |
+| f32 `a @ b` k4s8 (floor 2048 NOT adopted) | 512: -3.7 / -4.5 / -3.9 (fails); 1024: +3.0 / +3.4 / +3.6 (fails); 2048 at n = k = 4096: +20.7 / +22.4 / +21.5, but -4.6 to -43 % at three of the four other n and k tried (Shape generality) |
 | f16 `a @ b.T` k4s8 below 512 | 128: -1.7 / -8.7 / -7.2 (C2 spread 8 %, void); 256: +3.2 / +1.5 / +1.8 (fails; floor stays 512) |
 
 All 38 M1 control cells in that run are within 3 %. The kernel-level gain at m = 128 and 256 (`gemm-bench`: +29 to +55 %) does not survive at MLX level: a product of about 0.1 ms is dominated by the 0.4 to 0.5 ms fixed cost per `mx.eval` on this chip.
@@ -58,9 +58,20 @@ No route changes. Timing control, C2 against C6: output hashes equal on all 36 c
 ### Dispatch-trace route controls (C2 against C7)
 | chip | cells | differ | verdict |
 |---|---|---|---|
-| M1 (G13G) | 54 | exactly the 12 cells where C7 adds or moves a row (bf16 `a.T @ b` m 512 / 1024 / 2048; f16 `a.T @ b` m 1024 / 2048; f32 `a @ b` m 2048; f32 `a @ b.T` and `a.T @ b` m 512 / 1024 / 2048) | pass |
+| M1 (G13G) | 54 | exactly the 12 cells where C7 adds or moves a row (bf16 `a.T @ b` m 512 / 1024 / 2048; f16 `a.T @ b` m 1024 / 2048; f32 `a @ b` m 2048; f32 `a @ b.T` and `a.T @ b` m 512 / 1024 / 2048). The PR head has no f32 `a @ b` row change, so its expected set is those 12 minus the f32 `a @ b` m 2048 cell; the head was not traced on this chip | pass (C7) |
 | M1 Max (G13C) | 36 | none | pass |
 | M2 Max (G14C) | 24 | exactly 8: bf16 `a @ b.T` at 4 m values, bf16 `a.T @ b` m 4096, f16 `a @ b.T` m 1024 / 2048 / 4096 | pass |
+
+### Route trace of the PR wheel on the M2 Max (cells compared by kernel name)
+The PR wheel (+582c1a94) and C2 number their kernels differently (the PR base inserted `MaskedScatterBool` in the middle of the kernel enum, so every later id is +1), so the id comparison printed FAIL on 16 cells that all differ by exactly one id. Mapped to names with each build's own enum, exactly the 8 expected cells differ (bf16 `a @ b.T` m 512 to 4096: `MatmulBF16Coopmat` to `MatmulDirectBF16NtK4S8`; bf16 `a.T @ b` m 4096: `MatmulDirectBF16Tn` to `MatmulDirectBF16TnWS8`; f16 `a @ b.T` m 1024, 2048, 4096: `MatmulDirectF16Nt` to `MatmulDirectF16NtK2S8`) and no other. Script `tools/route_trace_names.py`.
+
+## Shape generality and edge tiles (MatmulGap H33, H34)
+Added after review: the rows above were measured at n = k = 4096 and m on the tile grid.
+- Edge tiles: 216 cells per chip with m, n, k off the tile grid, C2 against the PR wheel, output hashes: 216 of 216 equal on the M1, the M1 Max and the M2 Max.
+- LLM shapes, C2 against the PR wheel, 3 rounds, n 4096 / 9728 (/ 12288 on the M2 Max), k 2560 / 11008, m 512 / 2048 (/ 8192 on the M2 Max). Hashes equal in every cell on both chips.
+  - M2 Max: no regression. bf16 `a @ b.T` +64 to +71 % at 17 of 18 cells (the 18th, m 512 n 4096 k 2560, reads +34 / +39 / +65 % with C2 spread 4.4 %); f16 `a @ b.T` k2s8 +10.7 to +15.8 % in the 5 clean row cells (the cells at m 2048 gain +10.7 to +11.3 %); 13 of the 36 row cells (all 6 bf16 `a.T @ b` cells at m 8192 and 7 f16 cells) are void by the registered 5 % C2-spread rule, though each shows a gain of +7 % or more in every round. One f16 control cell (m 512) is also void.
+  - M1: f32 `a @ b` at m 2048 regressed (-4.6 to -43 %, three cells), so that floor change was dropped from this PR. The other rows gain at every non-void cell: f32 `a @ b.T` +44 to +503 %, f32 `a.T @ b` +21 to +150 %, bf16 `a.T @ b` +8 to +31 %, f16 `a.T @ b` +5 to +46 %. Three f32 `a.T @ b` cells are void by the 5 % spread rule. One control cell (f32 `a @ b` m 512, n 4096, k 11008) read +3.0 % in one round with C2 spread 2.9 %, outside the 3 % control band by the letter of the rule.
+- Analysis outputs: `m1-g13g/h34-analysis.txt`, `m2max-g14c/h34-analysis.txt`.
 
 ### Tests at the PR head (main c26e44df5 plus this change)
 `omarchy_matmul_family_tests`: 33 of 33 cases and 82942852 of 82942852 assertions on the M1, the M1 Max and the M2 Max. The new case "every row starts at its measured m floor" checks each row at its floor, above it, one below it and at n = 4095. The 450-cell shape sweep (3 dtypes x 3 orientations x 4 m x 3 n x 4 k plus view offsets, `tools/shape_sweep.py`) is bit-identical to main on all three chips: 450 of 450.

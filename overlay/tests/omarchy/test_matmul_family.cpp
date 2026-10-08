@@ -756,7 +756,7 @@ TEST_CASE("direct matmul route: every row starts at its measured m floor") {
       {"Apple M1 (G13G B1)", bfloat16, true, false, 512u, ComputeKernel::MatmulDirectBF16TnWS8},
       {"Apple M1 (G13G B1)", bfloat16, false, true, 4096u, ComputeKernel::MatmulDirectBF16Nt},
       {"Apple M1 (G13G B1)", float32, false, true, 512u, ComputeKernel::MatmulDirectF32NtK4S8},
-      {"Apple M1 (G13G B1)", float32, false, false, 2048u, ComputeKernel::MatmulDirectF32NnK4S8},
+      {"Apple M1 (G13G B1)", float32, false, false, 4096u, ComputeKernel::MatmulDirectF32NnK4S8},
       {"Apple M1 (G13G B1)", float32, true, false, 512u, ComputeKernel::MatmulDirectF32TnWS8},
       {"Apple M1 Max (G13C C0)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
       {"Apple M1 Max (G13C C0)", float16, true, false, 4096u, ComputeKernel::MatmulDirectF16TnWS8},
