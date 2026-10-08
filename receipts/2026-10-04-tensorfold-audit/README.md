@@ -322,3 +322,15 @@ branches main, python-0.6, zig-flashnext, zig-preview. Consequence for this
 audit: upstream-shaped kernel changes have no Python home upstream; the
 capability-probe PR prepared 2026-10-07 (fork branch `capability-probe`,
 joshuaswarren/TensorFold) targets `python-0.6` and says so in its body.
+
+## 9. Re-scope (2026-10-08)
+
+The capability-probe PR opened after Main's explicit authorization:
+https://github.com/ashhart/TensorFold/pull/501 (fork branch `capability-probe`,
+`c67f700d`, base `python-0.6` @ `ed78d6f`; the body doubles as a spec for the
+Zig side). TensorFold main is Zig with embedded Metal sources — the same shape
+as sushi. After the Vulkan completion-hang fix (SushiHang lane) lands, apply
+the sushi plain-MLX-fallback approach to TensorFold Zig main. The other two
+prepared pieces (mx.fast.int8_matmul dispatch, int8 from_state loader) stay
+blocked: they live only in the unpublished H3 family, and owner consent is
+needed before anything H3-shaped goes upstream.
