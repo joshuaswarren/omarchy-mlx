@@ -39,8 +39,9 @@ struct DirectMatmulRow {
 };
 
 // Measured winners: receipts/2026-10-07-direct-gemm-variants (MatmulGap H8,
-// f16) and receipts/2026-10-07-bf16-direct-gemm (MatmulGap H13, H14: bf16
-// and f32). A bf16 a @ b.T takes the direct route only through a row here.
+// f16), receipts/2026-10-07-bf16-direct-gemm (MatmulGap H13, H14: bf16 and
+// f32) and receipts/2026-10-08-direct-gemm-floors (M2 Max rows, lower m
+// floors). A bf16 a @ b.T takes the direct route only through a row here.
 inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
     {"G13C", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
