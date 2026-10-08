@@ -19,6 +19,45 @@ analysis cannot answer — each kit step exists to answer one of them.
 | collector correctness sections | Do MLX ops on the M3 GPU (G15G, aurora `mesa-m3`) return exactly what the pure-python reference returns? Mesa maturity on G15G is the open risk; static code review cannot grade it. |
 | collector benchmark sections | What decode/prefill numbers does the M3 GPU reach, to compare against the macOS MLX numbers from the same box? |
 
+### One command for an M3 Max on aurora Linux (t6031 or t6034)
+
+```
+git clone https://github.com/joshuaswarren/omarchy-mlx && cd omarchy-mlx && bash scripts/m3m4_kit.sh
+```
+
+The kit reads `/proc/device-tree/compatible`. `apple,t6031` and
+`apple,t6034` (the binned M3 Max) both print `Apple M3 Max`. `apple,t6030`
+is the M3 Pro and prints `Apple M3 Pro`. A test covers all four M3 ids.
+Run it as a normal user: nothing is installed, no file outside the
+`m3m4-kit-<UTC>/` directory is written, and nothing is uploaded.
+
+What it collects, in the order it runs:
+
+1. aurora's own `--m3-report`: the installer script is downloaded into
+   the output directory and run in report mode only. It records which
+   devices have a driver, the boot loader's `/chosen` entries, the
+   device tree, the kernel log of this boot and the SMC temperature and
+   power keys. Host name, user names, serial numbers and MAC addresses
+   are masked, and a file that still has any is not kept. It loads the
+   `phram` kernel module for a moment to read the boot loader's copy of
+   the device tree, and unloads it again (this step may ask for sudo).
+2. The omarchy-mlx collector (`scripts/collect_deep.py`): capability
+   report, MLX operations checked against pure-python references, a short
+   matmul timing sweep (a few seconds of GPU load), and the ANE section
+   (device tree nodes, `/proc/iomem` ranges, firmware file hashes, ANE
+   kernel log lines). The ANE section never loads a module and never
+   writes. Values pass through the redactor first.
+
+The output is `m3m4-kit-<UTC>/`: the aurora report archive,
+`mlx-omarchy-m3m4.tar` and a paste-ready `.submission.md`. Review the
+printed manifest. Sending is a separate step the kit prints:
+`python3 scripts/collect_deep.py --out <dir>/mlx-omarchy-m3m4.tar --submit`.
+
+This command does not run the ANE bring-up stage. That stage needs root,
+a built `ane_h15.ko` and an opt-in line, and is a later, separate ask
+(`MKIT_ANE_STAGE=t6031:0`, see "ANE stage" below). It is not a support
+claim: no ANE driver has run on an M3 Max yet.
+
 ## macOS, M3/M4 (M4 is macOS-only today)
 
 | Step | Hardware-only question it answers |
