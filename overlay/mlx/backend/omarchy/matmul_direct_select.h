@@ -41,32 +41,39 @@ struct DirectMatmulRow {
 // Measured winners: receipts/2026-10-07-direct-gemm-variants (MatmulGap H8,
 // f16) and receipts/2026-10-07-bf16-direct-gemm (MatmulGap H13, H14: bf16
 // and f32). A bf16 a @ b.T takes the direct route only through a row here.
-inline constexpr std::array<DirectMatmulRow, 12> kDirectMatmulRows{{
+inline constexpr std::array<DirectMatmulRow, 15> kDirectMatmulRows{{
     {"G13C", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
     {"G13C", float16, true, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
     {"G13G", float16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF16NtK4S8, 64u}},
-    {"G13G", float16, true, false, 4096u, 4096u,
+    {"G13G", float16, true, false, 1024u, 4096u,
      {ComputeKernel::MatmulDirectF16TnWS8, 128u}},
     {"G13C", bfloat16, true, false, 4096u, 4096u,
      {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
-    {"G13G", bfloat16, true, false, 4096u, 4096u,
+    {"G13G", bfloat16, true, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
     {"G13C", float32, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectF32NtK4S8, 64u}},
-    {"G13G", float32, false, true, 4096u, 4096u,
+    {"G13G", float32, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32NtK4S8, 64u}},
     // Candidate C2 (MatmulGap H15, H16): per-chip rows.
     {"G13C", bfloat16, false, true, 512u, 4096u,
      {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
     {"G13G", bfloat16, false, true, 4096u, 4096u,
      {ComputeKernel::MatmulDirectBF16Nt, 64u}},
-    {"G13G", float32, false, false, 4096u, 4096u,
+    {"G13G", float32, false, false, 2048u, 4096u,
      {ComputeKernel::MatmulDirectF32NnK4S8, 64u}},
-    {"G13G", float32, true, false, 4096u, 4096u,
+    {"G13G", float32, true, false, 512u, 4096u,
      {ComputeKernel::MatmulDirectF32TnWS8, 128u}},
+    // M2 Max (MatmulGap H20): bf16 and f16 rows with the pipelines above.
+    {"G14C", bfloat16, true, false, 4096u, 4096u,
+     {ComputeKernel::MatmulDirectBF16TnWS8, 128u}},
+    {"G14C", bfloat16, false, true, 512u, 4096u,
+     {ComputeKernel::MatmulDirectBF16NtK4S8, 64u}},
+    {"G14C", float16, false, true, 1024u, 4096u,
+     {ComputeKernel::MatmulDirectF16NtK2S8, 64u}},
 }};
 
 inline DirectMatmulRoute select_direct_matmul_route(
