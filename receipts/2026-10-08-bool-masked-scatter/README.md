@@ -32,6 +32,12 @@
   landed kernel computes ranks per-element without a scan primitive.
 - Does not reproduce on jwm1/G13G with the landed kernel (12/12 micro-test,
   33/33 bool case). jw16 is unavailable for re-verification (wiped).
+- INFERENCE, not re-verified: attributing the jw16 zeros to the debug-kernel
+  lineage is plausible (the zeros came from a tree running that shader) but
+  untestable now. The separate suspect — Scan::eval_gpu re-allocating a
+  pre-set output unconditionally (`out.set_data`, primitives.cpp:9646, no
+  allocation guard; the class fixed for dispatch_matmul in 84d7598e) — is
+  tested separately (see the Scan pre-allocated-output micro-test receipt).
 
 ## Landing
 - `f3dc90c94` on `main` (merge of the 1007b line into main; first-parent
