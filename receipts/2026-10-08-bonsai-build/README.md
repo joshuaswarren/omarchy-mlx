@@ -246,10 +246,37 @@ defects identified by audit against the observed outputs
      element [0][0] (which is why ACTUAL[0][0] equals DESIRED[0][0]
      in every wide failure).
 
-A correct wide kernel needs a small redesign (per-r weight addressing
-plus (m, n) output indexing); it is not a safe same-session patch.
-Until it lands, the wide route must be considered NOT hardware-
-qualified; the gate keeps these arms red by design.
+A correct wide kernel needed a small redesign; it landed in-session
+(ba71943eb + the scale/bias follow-up) and is hardware-verified:
+
+**Bug 2b — wide route: FIXED and hardware-verified.** Four defects in
+shaders/bonsai_qmv_wide.comp (the three above plus the scale/bias reads
+adding r * groups_per_row — pulling row column+r's affine pair for x
+row r). Redesign: one weight row per 32-lane slot
+(column = WG * SLOTS_PER_GROUP + slot), w_row = column * words_per_row,
+out writes at output_offset + r * matrix_n + column, encoder dispatches
+ceil(n / 4) workgroups. Failing-before/passing-after is the ticket
+sequence itself (00:39Z run: 9 wide-arm failures with the partial-match
+signature; 01:26Z run: 20/20 pytest PASS including every wide arm).
+
+FINAL MATRIX (G13G, wheel 0.32.4.dev202610080003+ba71943, sha256
+ae6ea26cabda87872c449684f6f3bf08b71ebf1c6a13d6e70ad181ae1afe4f2a,
+OMARCHY_BONSAI_GATE=1, zero skips): 20/20 pytest PASS — q1 qmv all
+dtypes/shapes, wide q1 m2-m5 and q2 m2/m5, dequant f32+bf16, both gate
+preconditions, roundtrip. ctest re-run in-ticket: 104/104,
+49/49, 32/32 doctest cases (2.77M+ assertions). Dispatch trace: Bonsai
+ordinal 547 hit, zero CPU-stream dispatch lines. RSS peak 4.9 GB.
+
+tools/bonsai_bit_sweep.py commits the single-bit + one-hot sweep
+harness that found bug 2 in one ticket; run it against any
+packed-format shader route.
+
+G13C leg (jw16): queued via jw16-gpu.queue
+(ticket_bonsai_g13c_leg.sh, staged on the run host; wheel
+0e08713-build superseded by the ba71943e wheel shipped at 00:1xZ —
+note: superseded wheels on jw16 were removed before the archive
+directive arrived; hashes faef7197.../4e2b0ca8.../03e377c3... are
+recorded above and in the lab artifacts for rebuild).
 
 Original bug 2 (qmv) evidence record:
 every qmv
