@@ -1,0 +1,1 @@
+cells main 216 cand 216 common 216 mismatches 0

@@ -1,0 +1,48 @@
+bf16 nt m=  512 n= 4096 k= 2560 gain%  +34.3  +39.2  +64.6  C2 spread  4.4%  hash_eq True  C2 3.91 TFLOP/s  row
+bf16 nt m=  512 n= 4096 k=11008 gain%  +64.9  +65.9  +65.3  C2 spread  0.1%  hash_eq True  C2 4.03 TFLOP/s  row
+bf16 nt m=  512 n= 9728 k= 2560 gain%  +66.8  +66.3  +65.3  C2 spread  0.4%  hash_eq True  C2 4.15 TFLOP/s  row
+bf16 nt m=  512 n= 9728 k=11008 gain%  +65.2  +64.5  +65.8  C2 spread  0.1%  hash_eq True  C2 4.28 TFLOP/s  row
+bf16 nt m=  512 n=12288 k= 2560 gain%  +66.6  +66.9  +67.3  C2 spread  0.4%  hash_eq True  C2 4.23 TFLOP/s  row
+bf16 nt m=  512 n=12288 k=11008 gain%  +66.5  +66.5  +66.6  C2 spread  0.1%  hash_eq True  C2 4.32 TFLOP/s  row
+bf16 nt m= 2048 n= 4096 k= 2560 gain%  +64.5  +64.5  +64.8  C2 spread  0.3%  hash_eq True  C2 4.41 TFLOP/s  row
+bf16 nt m= 2048 n= 4096 k=11008 gain%  +65.4  +65.1  +65.2  C2 spread  0.1%  hash_eq True  C2 4.42 TFLOP/s  row
+bf16 nt m= 2048 n= 9728 k= 2560 gain%  +68.6  +68.7  +68.9  C2 spread  0.0%  hash_eq True  C2 4.44 TFLOP/s  row
+bf16 nt m= 2048 n= 9728 k=11008 gain%  +65.9  +65.8  +66.3  C2 spread  0.1%  hash_eq True  C2 4.47 TFLOP/s  row
+bf16 nt m= 2048 n=12288 k= 2560 gain%  +70.0  +70.3  +70.4  C2 spread  0.0%  hash_eq True  C2 4.45 TFLOP/s  row
+bf16 nt m= 2048 n=12288 k=11008 gain%  +67.0  +66.9  +67.0  C2 spread  0.1%  hash_eq True  C2 4.47 TFLOP/s  row
+bf16 nt m= 8192 n= 4096 k= 2560 gain%  +68.0  +68.0  +68.0  C2 spread  0.0%  hash_eq True  C2 4.55 TFLOP/s  row
+bf16 nt m= 8192 n= 4096 k=11008 gain%  +65.7  +65.6  +65.7  C2 spread  0.0%  hash_eq True  C2 4.51 TFLOP/s  row
+bf16 nt m= 8192 n= 9728 k= 2560 gain%  +71.0  +71.1  +71.0  C2 spread  0.0%  hash_eq True  C2 4.51 TFLOP/s  row
+bf16 nt m= 8192 n= 9728 k=11008 gain%  +66.6  +66.6  +66.5  C2 spread  0.1%  hash_eq True  C2 4.52 TFLOP/s  row
+bf16 nt m= 8192 n=12288 k= 2560 gain%  +71.5  +71.5  +71.5  C2 spread  0.1%  hash_eq True  C2 4.51 TFLOP/s  row
+bf16 nt m= 8192 n=12288 k=11008 gain%  +67.2  +67.2  +67.4  C2 spread  0.1%  hash_eq True  C2 4.51 TFLOP/s  row
+bf16 tn m= 8192 n= 4096 k= 2560 gain%   +7.1  +13.9  +13.6  C2 spread  6.4%  hash_eq True  C2 7.99 TFLOP/s  row VOID
+bf16 tn m= 8192 n= 4096 k=11008 gain%   +7.0  +27.5  +28.0  C2 spread 19.5%  hash_eq True  C2 7.78 TFLOP/s  row VOID
+bf16 tn m= 8192 n= 9728 k= 2560 gain%  +13.0  +22.1  +23.2  C2 spread  8.8%  hash_eq True  C2 7.63 TFLOP/s  row VOID
+bf16 tn m= 8192 n= 9728 k=11008 gain%  +11.6  +30.6  +32.1  C2 spread 16.0%  hash_eq True  C2 7.32 TFLOP/s  row VOID
+bf16 tn m= 8192 n=12288 k= 2560 gain%  +13.8  +25.8  +27.6  C2 spread 11.1%  hash_eq True  C2 7.48 TFLOP/s  row VOID
+bf16 tn m= 8192 n=12288 k=11008 gain%  +10.3  +22.5  +31.5  C2 spread 15.4%  hash_eq True  C2 7.34 TFLOP/s  row VOID
+f16  nt m=  512 n= 4096 k= 2560 gain%   -1.4   -0.5  +15.0  C2 spread 18.2%  hash_eq True  C2 6.51 TFLOP/s  control VOID
+f16  nt m=  512 n= 4096 k=11008 gain%   +0.1   -0.2   -0.1  C2 spread  0.2%  hash_eq True  C2 6.90 TFLOP/s  control
+f16  nt m=  512 n= 9728 k= 2560 gain%   -1.4   -0.8   -0.4  C2 spread  0.5%  hash_eq True  C2 7.19 TFLOP/s  control
+f16  nt m=  512 n= 9728 k=11008 gain%   -0.1   -0.1   -0.1  C2 spread  0.1%  hash_eq True  C2 7.42 TFLOP/s  control
+f16  nt m=  512 n=12288 k= 2560 gain%   +0.0   +0.2   +0.3  C2 spread  0.7%  hash_eq True  C2 7.38 TFLOP/s  control
+f16  nt m=  512 n=12288 k=11008 gain%   -0.1   -0.1   +0.0  C2 spread  0.1%  hash_eq True  C2 7.59 TFLOP/s  control
+f16  nt m= 2048 n= 4096 k= 2560 gain%  +11.1  +11.2  +10.9  C2 spread  0.1%  hash_eq True  C2 7.53 TFLOP/s  row
+f16  nt m= 2048 n= 4096 k=11008 gain%  +10.7  +11.3  +11.1  C2 spread  0.4%  hash_eq True  C2 7.66 TFLOP/s  row
+f16  nt m= 2048 n= 9728 k= 2560 gain%  +10.9  +10.9  +11.1  C2 spread  0.1%  hash_eq True  C2 7.84 TFLOP/s  row
+f16  nt m= 2048 n= 9728 k=11008 gain%   +8.9  +12.9  +14.6  C2 spread  5.1%  hash_eq True  C2 7.88 TFLOP/s  row VOID
+f16  nt m= 2048 n=12288 k= 2560 gain%  +11.0  +11.9  +11.8  C2 spread  0.8%  hash_eq True  C2 7.89 TFLOP/s  row
+f16  nt m= 2048 n=12288 k=11008 gain%   +9.2  +17.5  +17.6  C2 spread  7.7%  hash_eq True  C2 7.89 TFLOP/s  row VOID
+f16  nt m= 8192 n= 4096 k= 2560 gain%  +11.4  +15.3  +15.8  C2 spread  4.1%  hash_eq True  C2 7.94 TFLOP/s  row
+f16  nt m= 8192 n= 4096 k=11008 gain%   +9.1  +24.7  +25.2  C2 spread 14.8%  hash_eq True  C2 7.89 TFLOP/s  row VOID
+f16  nt m= 8192 n= 9728 k= 2560 gain%  +11.4  +28.1  +29.5  C2 spread 16.3%  hash_eq True  C2 8.02 TFLOP/s  row VOID
+f16  nt m= 8192 n= 9728 k=11008 gain%   +7.4  +21.6  +24.8  C2 spread 15.6%  hash_eq True  C2 7.86 TFLOP/s  row VOID
+f16  nt m= 8192 n=12288 k= 2560 gain%  +10.2  +22.5  +30.5  C2 spread 16.2%  hash_eq True  C2 7.86 TFLOP/s  row VOID
+f16  nt m= 8192 n=12288 k=11008 gain%   +7.1  +17.9  +30.6  C2 spread 14.9%  hash_eq True  C2 7.63 TFLOP/s  row VOID
+base arm C2: row cells 36, control cells 6
+hash mismatches: none
+REGRESSION cells: none
+no-benefit row cells: none
+control cells outside 3 %: none
+void cells: [('bf16', 'tn', 8192, 4096, 2560), ('bf16', 'tn', 8192, 4096, 11008), ('bf16', 'tn', 8192, 9728, 2560), ('bf16', 'tn', 8192, 9728, 11008), ('bf16', 'tn', 8192, 12288, 2560), ('bf16', 'tn', 8192, 12288, 11008), ('f16', 'nt', 512, 4096, 2560), ('f16', 'nt', 2048, 9728, 11008), ('f16', 'nt', 2048, 12288, 11008), ('f16', 'nt', 8192, 4096, 11008), ('f16', 'nt', 8192, 9728, 2560), ('f16', 'nt', 8192, 9728, 11008), ('f16', 'nt', 8192, 12288, 2560), ('f16', 'nt', 8192, 12288, 11008)]
