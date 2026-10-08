@@ -78,7 +78,7 @@ Added after review: the rows above were measured at n = k = 4096 and m on the ti
 
 ## Not measured, not claimed
 - The first and second timing controls on the M1 Max and the M2 Max did not pass; the route trace is the evidence that no row leaks across chips. A timing control with more rounds or longer products could replace it.
-- Vulkan device reopen after the runs, GPU firmware identity, and the loaded-library hash check of `scripts/mlx_provenance.py` were not recorded for these runs. The wheels carry their source commit in the version stamp, and each run printed the driver library hash (`libvulkan_asahi.so` sha256 starting 3546bcafe8ed3995).
+- Vulkan device reopen after the runs, GPU firmware identity, and the loaded-library hash check of `scripts/mlx_provenance.py` were not recorded for these runs. The wheels carry their source commit in the version stamp, and each run printed the driver library hash (the Honeykrisp driver library, sha256 starting 3546bcafe8ed3995).
 - Decode speed and model-level numbers: none. These are dense GEMM cells at 4096 columns and 4096 inner size.
 - bf16 `a @ b` direct rows beyond the existing route, f32 rows on the M2 Max, and the M1 Max rows below their existing floors (f16 and bf16 `a.T @ b`, f32 `a @ b.T`, all from m = 4096): not measured here.
 - Raw `gemm-bench` logs for the k2s8 kernel comparison are in the chip directories; the M1 Max k2s8 sweep shows k2s8 21 to 35 % below k4s8 in every cell, so no M1 Max k2s8 row exists.

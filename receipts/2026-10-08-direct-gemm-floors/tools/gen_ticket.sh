@@ -14,7 +14,7 @@ BASE=C2
 BASEV=venv-c2
 if [ "$CHIP" = g13c ]; then BASE=M; BASEV=venv-h13main; fi
 if [ ! -x "$H/$BASEV/bin/python" ] || [ ! -x "$H/venv-pr/bin/python" ]; then echo "$BASEV or venv-pr missing, nothing run"; exit 2; fi
-echo "start $(date -u +%FT%TZ) host $(hostname) $(uname -r) load $(cut -d' ' -f1 /proc/loadavg) driver $(sha256sum "$D/libvulkan_asahi.so" | cut -c1-16) base $BASE"
+echo "start $(date -u +%FT%TZ) host $(hostname) $(uname -r) load $(cut -d' ' -f1 /proc/loadavg) driver $(sha256sum "$D/libvulkan_*.so" | cut -c1-16) base $BASE"
 ROUND=0
 run() { # arm venv
   sleep "$GAP"
