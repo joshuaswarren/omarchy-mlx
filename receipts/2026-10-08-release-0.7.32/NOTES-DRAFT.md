@@ -6,6 +6,36 @@ re-run the range command at FREEZE).
 
 ## Shipped (user impact)
 
+### HEADLINE: correctness fixes for large shapes (defects present in v0.7.31 and earlier)
+
+One defect class: the one-dispatch thread/matrix clamps silently dropped
+every output past the first dispatch. All documented in
+docs/known-defects.md (80c39075c, section "Int8Matmul, CastBool, and fused
+rope_rms_norm went unwritten past one dispatch (16,776,960 threads)" +
+"Batched linalg factorizations went unwritten past 65,535 matrices"):
+
+- **fast.int8_matmul wrong for rows*n > 16,776,960** (2df1aed43): tail
+  never written past the 16,776,960-thread clamp (first bad element at
+  row 2047 col 7936 = floor(16776960/8192) exactly); the TensorFold H3
+  DiT hit this. Fix: `dispatch_logical_chunked` host loop (LogicalOrBool
+  precedent). Regression: omarchy_int8_matmul_tests "writes every output
+  row past the clamp" (21b920440).
+- **CastBool > 67,107,840 bools unwritten** (ba6f6c4e6): stride-loop bool
+  cast; regression omarchy_copy_offset_tests / test_copy_offsets.cpp
+  (2^26 bools, first bad element 67,107,840; Honeykrisp M1 zero-return
+  hazard).
+- **fused rope_rms_norm >= 65,535 rows unwritten** (ba6f6c4e6): stride
+  loop + word-tail guard placed after all barriers; regression
+  omarchy_fast_ops_tests "fused" case (c57d5ea67).
+- **Batched linalg (Cholesky/Inverse/LU/SVD/Eig/Eigh) unwritten past
+  65,535 matrices** (2dd7dc0e6): chunk batched factorizations past the
+  workgroup clamp; regressions omarchy_linalg_ops_tests + omarchy_eig_ops_tests
+  (91582d56a "must write every matrix past the one-dispatch clamp").
+- **Bonsai/GDN-VJP refuse by name above the clamp** instead of clamping
+  silently (ba6f6c4e6, 2dd7dc0e6).
+- **Stuck-submit diagnostic** (c8104dd48, 58e9881f8, 36703f534,
+  73a20886c): names the started-but-never-retired park.
+
 ### Upstream correctness fixes (Vulkan backend primitives/shaders, landed after v0.7.31)
 
 - **bool MaskedScatter native** (85c4a0b9a, merge f3dc90c94, upstream
@@ -98,8 +128,55 @@ Scan guard) all touch shaders/primitives, so v0.7.32 gates MUST include:
   patch-series on every host (both lines rc=0 + idempotent), g16/g16b
   legs P+B per host, g-g13c legs P+B, g-hold, jw16-gates full plan, and
   the M2 full gate set.
-- FREEZE only after: the G14C Bonsai leg + a main battery (full standing
-  battery) on jwm1 AND the M2, built from the main tip.
+
+### Standing battery additions for v0.7.32 (the large-shape regressions)
+
+The standing battery is the AGENTS.md list; the headline fixes add these
+binaries to it, and the per-chip battery MUST include them (built from
+main tip via the static test configure; run with ctest or directly):
+
+New/extended for the headline fixes:
+- omarchy_int8_matmul_tests (test_int8_matmul.cpp — rows past the clamp;
+  21b920440)
+- omarchy_copy_offset_tests (test_copy_offsets.cpp — >2^26 bools;
+  c57d5ea67)
+- omarchy_fast_ops_tests (fused rope_rms_norm >= 65,535 rows; c57d5ea67)
+- omarchy_linalg_ops_tests + omarchy_eig_ops_tests (batch > 65,535;
+  91582d56a, 2dd7dc0e6)
+- omarchy_indexing_ops_tests (bool MaskedScatter; 85c4a0b9a)
+- omarchy_reduce_ops_tests (ArgReduce NaN; b42203b66)
+
+Exact per-chip binary list (the AGENTS.md standing battery + additions,
+49 test binaries exist; these run on EACH chip):
+omarchy_runtime_tests, omarchy_primitive_tests, omarchy_matmul_family_tests,
+omarchy_fast_ops_tests, omarchy_kv_ops_tests, omarchy_indexing_ops_tests,
+omarchy_reduce_ops_tests, omarchy_shape_ops_tests, omarchy_linalg_ops_tests,
+omarchy_copy_offset_tests, omarchy_distributed_tests,
+omarchy_compiled_tape_tests, omarchy_fft_ops_tests, omarchy_fft_general_tests,
+omarchy_eig_ops_tests, omarchy_take_fill_tests, omarchy_take_bool_tests,
+omarchy_conv_tests, omarchy_complex_ops_tests, omarchy_select_layout_tests,
+omarchy_fast_regression_tests, omarchy_scatter_determinism_tests,
+omarchy_eq_math_tests, omarchy_fused_chain_tests, omarchy_error_contract_tests,
+omarchy_int8_matmul_tests, omarchy_trig_reduction_tests,
+omarchy_capability_sim_tests (profile matrix),
+plus the Bonsai/GDN suites: omarchy_qmv_batch_tests,
+omarchy_gdn_maskless_correctness_tests, omarchy_gdn_decode_batch_tests,
+omarchy_gdn_fast_route_repeat_tests, omarchy_gdn_legacy_policy_tests,
+omarchy_gdn_prefill_profile_tests, omarchy_sdpa_causal_ragged_tests,
+omarchy_sdpa_decode_fused/short names per CMake (sdpa_norm_regression,
+sdpa_prefill_flash), omarchy_conv_gemm_decomp_tests,
+omarchy_ane_bundle_tests.
+
+One command per chip (from the build dir): `ctest --output-on-failure` over
+the omarchy_* tests, or the explicit binary list above.
+Hosts: G13G jwm1 (offline at draft time — macOS boot experiment by the
+jwm1-parity lane; ASK MAIN before touching), G13C jw16 (battery DONE at
+c57d5ea67 by DispatchClamp), G14C M2 (schedule via idle-guard).
+- FREEZE called by Main once: (a) TensorFold full-depth rerun on the fixed
+  wheel is reported (end-to-end validation of the int8_matmul headline
+  fix), (b) the standing battery passes on all three chips from main tip
+  (jw16 DONE at c57d5ea67; jwm1 OFFLINE — ask Main before touching; M2
+  via idle-guard).
 - Scheduling: idle-guard backlog queues are the way to book host time
   (~/src/omarchy-mplus-private/tools/idle-guard/README.md): one file per
   host+engine on omp-studio-local, tab-separated ticket lines; the 60 s
@@ -109,11 +186,14 @@ Scan guard) all touch shaders/primitives, so v0.7.32 gates MUST include:
   instead of grabbing hosts directly.
 
 ## Open before FREEZE
+- TensorFold full-depth rerun on the fixed wheel (validates the headline
+  int8_matmul fix end to end; Main holds FREEZE on this report).
 - G14C Bonsai leg on the M2 (queued).
 - G13C Bonsai leg on jw16 (reachable again; restage first — home wiped).
-- Full standing battery per chip on a fresh main-tip build (jwm1 + M2
-  minimum before FREEZE; jw16 restaged then run).
+- Standing battery per chip from main tip: jw16 DONE (c57d5ea67,
+  DispatchClamp); jwm1 OFFLINE (macOS boot experiment by the jwm1-parity
+  lane — ASK MAIN before touching); M2 via idle-guard.
 - Confirm nothing else user-visible lands that is missing here.
 
-Base range at this draft revision: v0.7.31..origin/main = 104 commits
-(b0fe81f50 tip). Re-run the range command at FREEZE.
+Base range at this draft revision: v0.7.31..origin/main = 126 commits
+(9b42d8878 tip at revision time). Re-run the range command at FREEZE.

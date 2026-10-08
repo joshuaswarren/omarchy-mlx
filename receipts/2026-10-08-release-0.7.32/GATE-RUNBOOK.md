@@ -101,8 +101,85 @@ bash ~/v0732-gates/g-g13c.sh    # leg P; repeat with VK_DRIVER_FILES override fo
 bash /tmp/g17-0732-run.sh   # pattern: pristine 0.31.3/0.32.0 wheels + main's apply script; expect ok=4/4
 ```
 
-## 4. Receipt rules (unchanged from v0.7.31)
+## 4. Standing battery: exact binary list per chip (v0.7.32 additions)
+
+Build (main tip, static test configure) then run with ctest or directly.
+HEADLINE-fix binaries (MUST run on each chip):
+- omarchy_int8_matmul_tests (int8 rows*n > 16,776,960)
+- omarchy_copy_offset_tests (CastBool > 67,107,840)
+- omarchy_fast_ops_tests (fused rope_rms_norm >= 65,535 rows)
+- omarchy_linalg_ops_tests + omarchy_eig_ops_tests (batch > 65,535)
+- omarchy_indexing_ops_tests (bool MaskedScatter)
+- omarchy_reduce_ops_tests (ArgReduce NaN)
+
+Full AGENTS.md standing battery + additions (run on EACH chip):
+omarchy_runtime_tests omarchy_primitive_tests omarchy_matmul_family_tests
+omarchy_fast_ops_tests omarchy_kv_ops_tests omarchy_indexing_ops_tests
+omarchy_reduce_ops_tests omarchy_shape_ops_tests omarchy_linalg_ops_tests
+omarchy_copy_offset_tests omarchy_distributed_tests
+omarchy_compiled_tape_tests omarchy_fft_ops_tests omarchy_fft_general_tests
+omarchy_eig_ops_tests omarchy_take_fill_tests omarchy_take_bool_tests
+omarchy_conv_tests omarchy_complex_ops_tests omarchy_select_layout_tests
+omarchy_fast_regression_tests omarchy_scatter_determinism_tests
+omarchy_eq_math_tests omarchy_fused_chain_tests omarchy_error_contract_tests
+omarchy_int8_matmul_tests omarchy_trig_reduction_tests
+omarchy_capability_sim_tests omarchy_qmv_batch_tests
+omarchy_gdn_maskless_correctness_tests omarchy_gdn_decode_batch_tests
+omarchy_gdn_fast_route_repeat_tests omarchy_gdn_legacy_policy_tests
+omarchy_gdn_prefill_profile_tests omarchy_sdpa_causal_ragged_tests
+omarchy_conv_gemm_decomp_tests omarchy_ane_bundle_tests
+(+ the sdpa norm/prefill/decode binaries per CMake target names).
+
+One-liner (build dir): `ctest --output-on-failure` (ctest selects the
+omarchy_* tests registered via add_test).
+
+Chip status: G13C jw16 DONE (c57d5ea67, DispatchClamp); G13G jwm1 OFFLINE
+(macOS boot experiment, jwm1-parity lane — ASK MAIN); G14C M2 via
+idle-guard. FREEZE waits on: TensorFold full-depth rerun + all three
+batteries green from main tip.
+
+## 4. Standing battery: exact binary list per chip (v0.7.32 additions)
+
+Build (main tip, static test configure) then run with ctest or directly.
+HEADLINE-fix binaries (MUST run on each chip):
+- omarchy_int8_matmul_tests (int8 rows*n > 16,776,960)
+- omarchy_copy_offset_tests (CastBool > 67,107,840)
+- omarchy_fast_ops_tests (fused rope_rms_norm >= 65,535 rows)
+- omarchy_linalg_ops_tests + omarchy_eig_ops_tests (batch > 65,535)
+- omarchy_indexing_ops_tests (bool MaskedScatter)
+- omarchy_reduce_ops_tests (ArgReduce NaN)
+
+Full AGENTS.md standing battery + additions (run on EACH chip):
+omarchy_runtime_tests omarchy_primitive_tests omarchy_matmul_family_tests
+omarchy_fast_ops_tests omarchy_kv_ops_tests omarchy_indexing_ops_tests
+omarchy_reduce_ops_tests omarchy_shape_ops_tests omarchy_linalg_ops_tests
+omarchy_copy_offset_tests omarchy_distributed_tests
+omarchy_compiled_tape_tests omarchy_fft_ops_tests omarchy_fft_general_tests
+omarchy_eig_ops_tests omarchy_take_fill_tests omarchy_take_bool_tests
+omarchy_conv_tests omarchy_complex_ops_tests omarchy_select_layout_tests
+omarchy_fast_regression_tests omarchy_scatter_determinism_tests
+omarchy_eq_math_tests omarchy_fused_chain_tests omarchy_error_contract_tests
+omarchy_int8_matmul_tests omarchy_trig_reduction_tests
+omarchy_capability_sim_tests omarchy_qmv_batch_tests
+omarchy_gdn_maskless_correctness_tests omarchy_gdn_decode_batch_tests
+omarchy_gdn_fast_route_repeat_tests omarchy_gdn_legacy_policy_tests
+omarchy_gdn_prefill_profile_tests omarchy_sdpa_causal_ragged_tests
+omarchy_conv_gemm_decomp_tests omarchy_ane_bundle_tests
+(+ the sdpa norm/prefill/decode binaries per CMake target names).
+
+One-liner (build dir): `ctest --output-on-failure` (ctest selects the
+omarchy_* tests registered via add_test).
+
+Chip status: G13C jw16 DONE (c57d5ea67, DispatchClamp); G13G jwm1 OFFLINE
+(macOS boot experiment, jwm1-parity lane — ASK MAIN); G14C M2 via
+idle-guard. FREEZE waits on: TensorFold full-depth rerun + all three
+batteries green from main tip.
+
+## 5. Receipt rules (unchanged from v0.7.31)
+
 - Every gate logs `WHEEL_IDENTITY` + `uname_r` (feb57d020, 2811cf901).
 - SUMMARY generated from logs by script, never hand-edited.
 - Land under receipts/2026-10-08-release-0.7.32/gates-run/ via fetch+rebase.
 - scrub /home/<user>/ paths before commit (privacy-check blocks them).
+
+
