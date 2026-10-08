@@ -30,13 +30,14 @@
 // operands remove that failure mode by construction.
 //
 // Quarters sit at their natural offsets in the 64x64 tile (no overlap):
-// every output element is computed by exactly one workgroup once, so the
-// flush needs no cross-workgroup reasoning. Loads clamp to the last full
-// 8-wide block and XS reads to the last row, so nothing reads past the
-// buffers; the garbage that produces lands only in total slots the
-// epilogue never stores (it gates on row < rows and col < n). The host
-// dispatches ceil(rows/64) x ceil(n/64) workgroups and refuses shapes
-// whose grid would exceed the dispatch clamp instead of dropping tiles.
+// every output element is computed by exactly one workgroup once. The
+// host pads the widened f32 temps to 64-row multiples, so natural
+// 8-aligned blocks always read in-bounds; garbage pad rows and columns
+// stay isolated to their own MMA row or column and reach only total
+// slots the epilogue never stores (it gates on row < rows and col < n).
+// The host dispatches ceil(rows/64) x ceil(n/64) workgroups and refuses
+// shapes whose grid would exceed the dispatch clamp instead of dropping
+// tiles.
 //
 // Shared budget: the per-subgroup 32x32 f32 flush quarter (4 KiB x 4)
 // plus the 64x64 f32 total (16 KiB) = exactly 32 KiB, the M1 threadgroup
@@ -138,15 +139,16 @@ void main() {
     }
     const uint k_group_base = g * group;
     for (uint kc = k_group_base; kc < k_group_base + group; kc += MAT) {
+      // Natural block positions: the host pads the f32 temps to 64-row
+      // multiples, so every block reads in-bounds; garbage pad rows and
+      // columns only reach total slots the epilogue never stores.
       for (uint i = 0u; i < SG; i++) {
-        const uint a_row = min(qrow0 + i * MAT, rows - MAT);
-        coopMatLoad(mat_a[i], in_x.values, a_row * k_total + kc, k_total,
-            gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(mat_a[i], in_x.values, (qrow0 + i * MAT) * k_total + kc,
+            k_total, gl_CooperativeMatrixLayoutRowMajor);
       }
       for (uint j = 0u; j < SG; j++) {
-        const uint b_col = min(qcol0 + j * MAT, n - MAT);
-        coopMatLoad(mat_b[j], in_w.values, b_col * k_total + kc, k_total,
-            gl_CooperativeMatrixLayoutColumnMajor);
+        coopMatLoad(mat_b[j], in_w.values, (qcol0 + j * MAT) * k_total + kc,
+            k_total, gl_CooperativeMatrixLayoutColumnMajor);
       }
       for (uint i = 0u; i < SG; i++) {
         for (uint j = 0u; j < SG; j++) {

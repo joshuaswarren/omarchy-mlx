@@ -12613,14 +12613,40 @@ void Int8Matmul::eval_gpu(
       params.reduce_size >= 32u && params.reduce_size <= 1024u &&
       params.matrix_m >= 32u && params.matrix_n >= 32u;
   if (coop_f32_ready) {
-    array xf(Shape({xd.shape(0), xd.shape(1)}), float32, nullptr, {});
+    // The kernel loads natural 8-aligned blocks per quarter, so the f32
+    // temps are padded to 64-row multiples; the pad rows read as garbage
+    // but their accumulator slots are never stored (the epilogue gates on
+    // row < rows and col < n), and MMA lanes keep garbage isolated to its
+    // own row or column.
+    const auto pad64 = [](uint32_t v) { return (v + 63u) / 64u * 64u; };
+    array xf(Shape({static_cast<int>(pad64(rows)), xd.shape(1)}), float32,
+        nullptr, {});
     xf.set_data(allocate_omarchy(xf.nbytes()));
     encoder.add_temporary(xf);
-    copy_gpu(xd, xf, CopyType::Vector, s);
-    array wf(Shape({wd.shape(0), wd.shape(1)}), float32, nullptr, {});
+    copy_gpu_inplace(
+        xd,
+        xf,
+        Shape({xd.shape(0), xd.shape(1)}),
+        Strides({xd.strides(0), xd.strides(1)}),
+        Strides({xd.shape(1), 1}),
+        0,
+        0,
+        CopyType::General,
+        s);
+    array wf(Shape({static_cast<int>(pad64(wd.shape(0))), wd.shape(1)}),
+        float32, nullptr, {});
     wf.set_data(allocate_omarchy(wf.nbytes()));
     encoder.add_temporary(wf);
-    copy_gpu(wd, wf, CopyType::Vector, s);
+    copy_gpu_inplace(
+        wd,
+        wf,
+        Shape({wd.shape(0), wd.shape(1)}),
+        Strides({wd.strides(0), wd.strides(1)}),
+        Strides({wd.shape(1), 1}),
+        0,
+        0,
+        CopyType::General,
+        s);
     const uint32_t n_groups64 = (params.matrix_n + 63u) / 64u;
     const uint32_t m_groups64 = (params.matrix_m + 63u) / 64u;
     if (n_groups64 > omarchy::kMaxComputeGroupCountX ||
