@@ -1,0 +1,18 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_decode_batch mlx=0.32.4 cooperative_matrix_f32_8=1 subgroup_size=32
+[gdn_decode_batch] B=4 raw decode 1 dispatches, masked (composed) 30
+[provenance] gdn_prefill_rows mlx=0.32.4 cooperative_matrix_f32_8=1 subgroup_size=32
+[gdn_prefill_rows] B=1 T=128 1 dispatches, B=4 4
+[provenance] gdn_fp16_prefill mlx=0.32.4 cooperative_matrix_f32_8=1 subgroup_size=32
+[gdn_fp16_prefill] B=1 T=8 128 dispatches, B=4 176
+===============================================================================
+[doctest] test cases:  7 |  7 passed | 0 failed | 0 skipped
+[doctest] assertions: 71 | 71 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+@@pb run1 rc=0
+@@pb run1 PFBATCH {"mlx": "0.32.4.dev202610081925+qgpr.390f8a4", "T128": {"seq4_s": 1.2166, "batched4_s": 1.1792, "ratio": 0.9693, "row_max_abs_diff": 0.0, "row0_equals_seq": true}}
+@@pb run2 rc=0
+@@pb run2 PFBATCH {"mlx": "0.32.4.dev202610081925+qgpr.390f8a4", "T128": {"seq4_s": 1.2198, "batched4_s": 1.1802, "ratio": 0.9676, "row_max_abs_diff": 0.0, "row0_equals_seq": true}}
+@@pb done 22:21:17

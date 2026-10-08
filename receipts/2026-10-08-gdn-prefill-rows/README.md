@@ -19,9 +19,11 @@ patch the batched prefill is at parity with four sequential ones (0.86-1.06x) an
 
 | item | M1 (G13G) | M1 Max (G13C) |
 |---|---|---|
+| machine | MacBook Pro (13-inch, M1, 2020) | MacBook Pro (16-inch, M1 Max, 2021) |
 | device tree | `apple,j293` / `apple,t8103` | `apple,j316c` / `apple,t6001` |
 | kernel | `7.1.12-2-12.6-sep-ARCH` (aurora 12.6 prerelease) | same |
-| Vulkan device and firmware identity | not captured in these runs (no `vulkaninfo` or firmware version was recorded) | not captured |
+| Vulkan device (`vulkaninfo --summary`, private ICD selected with `VK_DRIVER_FILES`) | `Apple M1 (G13G B1)`, Honeykrisp, `driverInfo = Mesa 26.3.0-devel (git-6543eeb7df)`, `driverVersion 26.2.99`, `apiVersion 1.4.362` | `Apple M1 Max (G13C C0)`, Honeykrisp, same driver build, same versions |
+| firmware identity (read from the booted device tree) | OS firmware 13.5, system firmware 27.0, iBoot stage 1 `mBoot-20457.1.29`, stage 2 `iBoot-8422.141.2`, m1n1 stage 1 `v1.6.1-dirty`, stage 2 `v1.6.1-omarchy.aurora14` | OS firmware 13.5, system firmware 26.6.2, iBoot stage 1 `mBoot-18000.161.10`, stage 2 `iBoot-8422.141.2`, m1n1 stage 1 `v1.6.1-dirty`, stage 2 `v1.6.1-omarchy.aurora14` |
 | ANE | not used | not used |
 
 ## Model
@@ -68,6 +70,25 @@ eval and a stream sync. `pfbg.py`: four prompts of different lengths (left paddi
 1.48-1.49 s sequential (7.19 / 7.27x); fixed 2.39-2.44 s vs 1.48-1.49 s (1.62 / 1.64x). The padded rows take the masked scan
 route, which is slower than the unmasked fused kernel, so a padded batched prefill is still 1.6x of sequential. That is the
 next audit step, not part of this change.
+
+`pfbatch` on the M1 (G13G, T = 128, fixed wheel, two runs; the pfbatch part of `device-doctest-jwm1.log`): `batched4_s / seq4_s` 0.969 and
+0.968 (1.179 s vs 1.217 s), row max abs diff 0.0, row 0 equals the sequential result.
+
+`pfhead` (not part of this change; audited next): the vocabulary head over every prefill position is 0.3% to 2.8% of a prefill at
+T = 128 and T = 512 on both chips. A last-position-only head saves between -0.8% and +2.2% with equal logits. No change follows.
+
+## Device tests at the PR head
+
+One doctest binary built on the M1 from PR head `32f91952f` (sha256
+`3bcf3fe0d54ab33f35d852abd6161228bf0cf8b2ce170a28c905e50a80ffa309`), copied unchanged to the M1 Max, and run through the idle guard on each
+chip with the private Honeykrisp ICD. Logs: `device-doctest-jwm1.log`, `device-doctest-jw16.log`. The result is the same on both: 7 test
+cases, 7 passed, 0 skipped, 71 assertions, all passed.
+
+| case | dispatches, B=1 then B=4 (equal on both chips) |
+|---|---|
+| `gdn_decode_batch` raw decode (B=4) and masked composed (B=4) | 1 and 30 |
+| `gdn_prefill_rows`, bf16, T = 128 | 1, 4 |
+| `gdn_fp16_prefill`, fp16, T = 8 (one batched composed fallback, not a per-row split) | 128, 176 |
 
 ## Backend dispatch trace
 
