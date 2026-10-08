@@ -540,7 +540,6 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
       unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
 
       const bool eligible = c.lk % 8 == 0 && c.lq >= 64;
-      CAPTURE(rowp);
       CAPTURE(outlier);
       CAPTURE(c.heads);
       CAPTURE(c.kv_heads);
