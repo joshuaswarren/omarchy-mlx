@@ -946,11 +946,10 @@ enum class ComputeKernel : uint16_t {
   // k % 8 == 0, group % 8 == 0, 32 <= group <= 1024, m >= 32, n >= 32,
   // non-swiglu. Append-only profile id.
   Int8MatmulF32CoopOp,
-  // Causal flash prefill on the 8x8x8 cooperative matrix, bf16 hd 128
-  // (shaders/sdpa_prefill_flash_causal_coopmat.comp, MatmulGap H35); Sg8 and
-  // Sg16 are 8 and 16 query rows per subgroup. Append-only profile ids.
-  SdpaCausalFlashCoopmatBF16Sg8,
-  SdpaCausalFlashCoopmatBF16Sg16,
+  // Causal flash prefill on the 8x8x8 cooperative matrix, bf16 hd 128, 8
+  // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
+  // MatmulGap H35). Append-only profile id.
+  SdpaCausalFlashCoopmatBF16,
   Count,
 };
 

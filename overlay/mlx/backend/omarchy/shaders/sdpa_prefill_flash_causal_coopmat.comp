@@ -34,9 +34,9 @@
 // route; the gate is the fp64 error no worse than the composed causal route, plus run-to-run identity (fixed order,
 // no atomics).
 
-#ifndef ROWP
+// ROWP is fixed at 1 (8 query rows per subgroup): ROWP 2 measured 2.1x slower (MatmulGap H35, ROWP selection); the
+// loops over p below are the remaining generality and are left in place rather than refactored (debt, H35 entry).
 #define ROWP 1
-#endif
 
 const uint MAT = 8u;
 const uint SGS = 4u;                    // subgroups per workgroup
