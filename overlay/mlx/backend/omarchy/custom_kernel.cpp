@@ -315,7 +315,7 @@ void translate_types(std::string& code, const std::vector<Parameter>& parameters
 //    `consumed + (next - open)`; the old arithmetic was correct in normal
 //    cases but unsafe when the call-chain scan early-exited at a `)` of an
 //    enclosing form. The new path stores the explicit end and uses it.
-int translate_c_style_casts_once(std::string& code) {
+int translate_c_style_casts_scan(std::string& code) {
   static const std::unordered_map<std::string, std::string> casts = {
       {"int8_t", "int8_t"}, {"uint8_t", "uint8_t"},
       {"int", "int"}, {"uint", "uint"},
@@ -402,31 +402,25 @@ int translate_c_style_casts_once(std::string& code) {
         open > code.size() || argument_end < open) {
       return replacements;
     }
-    const std::string argument = code.substr(next, argument_end - next);
+    std::string argument = code.substr(next, argument_end - next);
+    // Rewrite casts inside the argument FIRST (recursion depth = cast
+    // nesting depth), then splice. A linear scan that resumes past the
+    // replacement misses inner casts; rescanning the replacement instead
+    // re-matched its own output into garbage like
+    // `float((float))(float(cq) * float(sq_)))`
+    // (2026-10-08 KernelRecheck, kda_glue_pre).
+    translate_c_style_casts_scan(argument);
     const std::string replacement =
         mapped->second + "(" + argument + ")";
     code.replace(open, argument_end - open, replacement);
-    // Skip past the replacement in THIS pass; a cast inside the replacement
-    // (e.g. `(float)((float)cq * (float)sq_)`) is rewritten by the NEXT full
-    // pass — translate_c_style_casts runs to a fixpoint. Resuming inside the
-    // replacement instead produced pathological rewrites like
-    // `float((float))(float(cq) * float(sq_)))`
-    // (2026-10-08 KernelRecheck, kda_glue_pre).
-    search_from = std::min(open + replacement.size(), code.size());
+    search_from = open + replacement.size();
     ++replacements;
   }
   return replacements;
 }
 
 void translate_c_style_casts(std::string& code) {
-  // Run to a fixpoint: each pass rewrites the OUTERMOST remaining casts;
-  // casts inside a rewritten constructor argument are handled by later
-  // passes (bounded — every pass removes at least one `(cast)` token).
-  for (int pass = 0; pass < 16; ++pass) {
-    if (translate_c_style_casts_once(code) == 0) {
-      break;
-    }
-  }
+  translate_c_style_casts_scan(code);
 }
 
 // Rewrite local device-pointer aliases into (buffer, offset) indexing.
