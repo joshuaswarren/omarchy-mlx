@@ -739,6 +739,49 @@ TEST_CASE("direct matmul route: the shipped rows apply only on the measured chip
   }
 }
 
+TEST_CASE("direct matmul route: every row starts at its measured m floor") {
+  using omarchy::ComputeKernel;
+  const omarchy::DirectMatmulRoute shipped{ComputeKernel::Count, 0u};
+  struct Floor {
+    std::string_view device;
+    Dtype dtype;
+    bool a_t;
+    bool b_t;
+    uint32_t m;
+    ComputeKernel kernel;
+  };
+  const Floor floors[] = {
+      {"Apple M1 (G13G B1)", float16, false, true, 128u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M1 (G13G B1)", float16, true, false, 1024u, ComputeKernel::MatmulDirectF16TnWS8},
+      {"Apple M1 (G13G B1)", bfloat16, true, false, 512u, ComputeKernel::MatmulDirectBF16TnWS8},
+      {"Apple M1 (G13G B1)", bfloat16, false, true, 4096u, ComputeKernel::MatmulDirectBF16Nt},
+      {"Apple M1 (G13G B1)", float32, false, true, 512u, ComputeKernel::MatmulDirectF32NtK4S8},
+      {"Apple M1 (G13G B1)", float32, false, false, 512u, ComputeKernel::MatmulDirectF32NnK4S8},
+      {"Apple M1 (G13G B1)", float32, true, false, 512u, ComputeKernel::MatmulDirectF32TnWS8},
+      {"Apple M1 Max (G13C C0)", float16, false, true, 512u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M1 Max (G13C C0)", float16, true, false, 4096u, ComputeKernel::MatmulDirectF16TnWS8},
+      {"Apple M1 Max (G13C C0)", bfloat16, true, false, 4096u, ComputeKernel::MatmulDirectBF16TnWS8},
+      {"Apple M1 Max (G13C C0)", bfloat16, false, true, 512u, ComputeKernel::MatmulDirectBF16NtK4S8},
+      {"Apple M1 Max (G13C C0)", float32, false, true, 4096u, ComputeKernel::MatmulDirectF32NtK4S8},
+      {"Apple M2 Max (G14C B1)", float16, false, true, 1024u, ComputeKernel::MatmulDirectF16NtK4S8},
+      {"Apple M2 Max (G14C B1)", bfloat16, false, true, 512u, ComputeKernel::MatmulDirectBF16NtK4S8},
+      {"Apple M2 Max (G14C B1)", bfloat16, true, false, 4096u, ComputeKernel::MatmulDirectBF16TnWS8},
+  };
+  for (const auto& f : floors) {
+    CAPTURE(f.device);
+    CAPTURE(f.m);
+    auto route = [&](uint32_t m, uint32_t n) {
+      return omarchy::select_direct_matmul_route(
+          omarchy::kDirectMatmulRows, f.device, f.dtype, f.a_t, f.b_t, m, n,
+          shipped).kernel;
+    };
+    CHECK(route(f.m, 4096u) == f.kernel);
+    CHECK(route(f.m * 2u, 4096u) == f.kernel);
+    CHECK(route(f.m - 1u, 4096u) == shipped.kernel);
+    CHECK(route(f.m, 4095u) == shipped.kernel);
+  }
+}
+
 TEST_CASE("direct cooperative-matrix matmul matches the 16-row slices in every orientation") {
   if (!compute_available()) {
     return;
