@@ -138,7 +138,9 @@ TEST_CASE("helper with threadgroup parameter that is never called is refused") {
   }
 }
 
-TEST_CASE("as_type<ushort> on a bf16 load indexes the pattern table") {
+TEST_CASE("as_type<ushort> on a bf16 value indexes the pattern table") {
+  // The real mlx-serve form: the widened value sits in a LOCAL, not in the
+  // buffer read itself (`float g = gate[i]; sigtab[as_type<ushort>(g)]`).
   const char* source =
       "[[kernel]] void mlxserve_table(\n"
       "    const device bfloat16_t* gate [[buffer(0)]],\n"
@@ -155,7 +157,7 @@ TEST_CASE("as_type<ushort> on a bf16 load indexes the pattern table") {
   // float's 32-bit bits (floatBitsToUint would index out of the 65536-row
   // table and read garbage activations).
   CHECK(glsl.find("_mlx_float_to_bf16(") != std::string::npos);
-  CHECK(glsl.find("floatBitsToUint(gate") == std::string::npos);
+  CHECK(glsl.find("floatBitsToUint(g)") == std::string::npos);
   CHECK(glsl.find("floatBitsToUint(_mlx_bf16_to_float(") == std::string::npos);
 }
 
