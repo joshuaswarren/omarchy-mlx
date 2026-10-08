@@ -71,7 +71,12 @@ struct TemporaryFile {
     if (fd >= 0) {
       close(fd);
     }
-    if (!path.empty()) {
+    // Diagnostic (MLX_OMARCHY_KEEP_SHADER=1): keep the intermediate GLSL
+    // instead of unlinking it — shader-debugging sessions diff the emitted
+    // text; default stays delete-on-exit.
+    static const bool keep_shader =
+        std::getenv("MLX_OMARCHY_KEEP_SHADER") != nullptr;
+    if (!path.empty() && !keep_shader) {
       unlink(path.c_str());
     }
   }
