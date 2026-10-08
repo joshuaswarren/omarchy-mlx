@@ -167,6 +167,9 @@ inline constexpr uint64_t kSubmitMaxWallNsDefault =
 // override the env before the process reads it.
 uint64_t submit_hang_no_progress_ns();
 uint64_t submit_max_wall_ns();
+// Seconds without counter motion before the stuck-submit warning line
+// fires (MLX_OMARCHY_SUBMIT_STUCK_S; 0 disables, default 300).
+uint64_t submit_stuck_s();
 
 class CompletionDispatcher;
 class Device;

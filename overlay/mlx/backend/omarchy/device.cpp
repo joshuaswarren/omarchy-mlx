@@ -3,6 +3,7 @@
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/trace.h"
 
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/honeykrisp_identity.h"
@@ -1556,6 +1557,26 @@ uint64_t submit_max_wall_ns() {
   return v;
 }
 
+// Started-but-not-retired diagnostic interval (seconds). A submission whose
+// started event is set but whose timeline value does not publish keeps the
+// no-progress watchdog refreshed forever (device.cpp has_active_submission),
+// so without this bound a wedged submit parks a waiter silently until the
+// 30-minute wall deadline - the 2026-10-08 sushi first-forward signature
+// (30-minute tickets expired in the same second the typed error would fire).
+// 0 disables the warning; default 300 s.
+uint64_t submit_stuck_s() {
+  static const uint64_t v = []() {
+    const char* e = std::getenv("MLX_OMARCHY_SUBMIT_STUCK_S");
+    if (e == nullptr || *e == '\0') {
+      return 300ull;
+    }
+    char* p = const_cast<char*>(e);
+    unsigned long long parsed = strtoull(p, &p, 10);
+    return static_cast<uint64_t>(parsed);
+  }();
+  return v;
+}
+
 void wait_for_timeline_progress(
     VkDevice device,
     VkSemaphore semaphore,
@@ -1571,6 +1592,12 @@ void wait_for_timeline_progress(
   uint64_t last_observed = 0;
   auto last_advance = start;
   uint32_t recovery_round = 0;
+  // Stuck-submit diagnostic: the counter froze while a waiter held the
+  // timeline. Fires the named warning line every stuck interval - the
+  // no-progress watchdog cannot do this because an executing submission
+  // (started event set, never retired) legitimately refreshes last_advance.
+  std::chrono::steady_clock::time_point stuck_since = start;
+  const uint64_t stuck_ns = submit_stuck_s() * 1000000000ull;
   // Refused recoveries (empty retained-batch set) are bounded by the same
   // budget as resubmission rounds: a stall whose target is already
   // reserved but whose signalling batch does not exist will never be
@@ -1605,9 +1632,40 @@ void wait_for_timeline_progress(
         current > last_observed) {
       last_observed = current;
       last_advance = clock::now();
+      stuck_since = clock::now();
     }
 
     const auto now = clock::now();
+    // Stuck-submit diagnostic (MLX_OMARCHY_SUBMIT_STUCK_S): the timeline
+    // has not moved for the stuck interval while this waiter holds it.
+    // Every earlier hang class is loud (watchdog STALL lines, recovery
+    // ladder, typed errors); this is the one silent shape - a submission
+    // whose started event set but whose value never published (Honeykrisp
+    // swallow of the signal, or a kernel that never retires) - and the
+    // 30-minute wall deadline made it invisible inside 30-minute tickets
+    // (2026-10-08 sushi first-forward). Name the wait, the reservation
+    // horizon, and the last kernel the GPU was given; re-warn every
+    // interval while the freeze lasts.
+    if (stuck_ns != 0 && now - stuck_since >= std::chrono::nanoseconds(stuck_ns)) {
+      const uint64_t reserved_now =
+          progress ? progress->last_reserved() : 0;
+      fprintf(
+          stderr,
+          "[omarchy] submit stuck: waiting for timeline value=%llu, counter"
+          " frozen at %llu, reserved through %llu, no progress for %llu s,"
+          " last dispatched kernel=%lld (pid %ld). The submission started"
+          " but has not retired; a longer freeze means a wedged GPU job.\n",
+          (unsigned long long)target_value,
+          (unsigned long long)last_observed,
+          (unsigned long long)reserved_now,
+          (unsigned long long)((now - stuck_since) / std::chrono::seconds(1)),
+          (long long)trace::counters().last_dispatched_kernel.load(
+              std::memory_order_relaxed),
+          (long)syscall(SYS_gettid));
+      fflush(stderr);
+      trace::counters().submit_stuck_warnings++;
+      stuck_since = now;
+    }
     if (now >= wall_deadline) {
       throw std::runtime_error(
           std::string(
