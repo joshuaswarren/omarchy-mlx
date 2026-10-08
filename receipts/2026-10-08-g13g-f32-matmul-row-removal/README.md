@@ -8,7 +8,7 @@ Date 2026-10-08. Follows `receipts/2026-10-08-direct-gemm-floors` (PR 38), where
 - `test_matmul_family.cpp`: the floors entry is removed and the route test pins `f32 a @ b` on the M1 to the shipped route.
 
 ## Why (H36)
-M = main before the f32 rows (wheel `+ef70b8cc`), head = the row present (wheel `+50e40389`). f32 `a @ b`, m 4096 and 8192, n 4096 and 9728, k 2560 and 11008, three rounds, 30 s idle before each arm run, kernel 7.1.12-2-12.6 (aurora 12.6 prerelease), driver library sha256 starting 3546bcafe8ed3995. Output hashes equal in all 8 cells. Gain of the row over M, rounds 1 / 2 / 3:
+M = main before the f32 rows (wheel `+ef70b8cc`), head = the row present (wheel `+50e40389`). f32 `a @ b`, m 4096 and 8192, n 4096 and 9728, k 2560 and 11008, three rounds, 30 s idle before each arm run, kernel 7.1.12-2-12.6 (aurora 12.6 prerelease), driver library sha256 starting 3546bcafe8ed3995. Output hashes equal in all 8 cells. Loaded-library provenance of both wheel environments was recorded after these runs, not beside them (`m1-g13g/h36/provenance-wheels-after.txt`: both `verified=match`, version match true; the environments were not touched between the runs and the check). The same loss at m = 2048 was measured earlier with a different build of the same row (wheel `+582c1a94`, other `libmlx.so` hash; PR 38 receipt, H34: -4.6 to -43 % at larger n and k), so the conclusion does not rest on one library. The H36 timing was not re-run. Gain of the row over M, rounds 1 / 2 / 3:
 
 | m | n | k | gain |
 |---|---|---|---|
@@ -27,6 +27,7 @@ The row loses by more than 3 % in at least two of three rounds at 5 of 8 cells, 
 Wheel `0.32.4.dev202610081650+468db3eb`, test binary sha256 starting 62be9776be654c10, kernel 12.6 prerelease, same M1.
 - `omarchy_matmul_family_tests`: 33 of 33 cases, 82942870 of 82942870 assertions (`m1-g13g/h37/family-tests.log`).
 - Loaded-library provenance of both wheel environments (`scripts/mlx_provenance.py`): `verified=match`, version match true (`m1-g13g/h37/ticket.log`).
+- Reproduce the trace verdict: `python3 tools/route_trace_names.py m1-g13g/h37/trace-raw g13g m1-g13g/h37/enums/compute-kernel-enum-ef70b8cc.txt m1-g13g/h37/enums/compute-kernel-enum-468db3ebb.txt` (raw traces `rt-g13g-C2.err` = base M, `rt-g13g-C7.err` = this build; the enum files are the `ComputeKernel` block of `compute.h` at each wheel's source commit). Its output matches `trace-by-kernel-name.txt` (`trace-repro.txt`); the script's own PASS/FAIL line is meaningless here because its expected-difference table is for another comparison.
 - Dispatch trace, one product per cell, compared by kernel name between M and this build (the two number their kernels differently): all 6 f32 `a @ b` cells (m 128 to 4096) dispatch the same kernel. The 23 other differing cells are the other landed rows that M predates (`m1-g13g/h37/trace-by-kernel-name.txt`).
 - Timing, the 8 cells above, M against this build, three rounds: the 6 cells with M spread under 5 % are inside +-1 % in every round. Two cells (m 4096 and 8192 at n 9728, k 11008) are void by the 5 % rule (M spread 10.6 % and 87.5 %: one M round far slower) and are not reached (`m1-g13g/h37/analysis.txt`; its `row ... no-benefit` tags are the analyser's wording for a cell with no gain, which is what a deleted row should show).
 
