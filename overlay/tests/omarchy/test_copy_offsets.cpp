@@ -1468,3 +1468,40 @@ TEST_CASE("storage-buffer bindings stay within maxStorageBufferRange") {
   CHECK(message.find("maxStorageBufferRange") != std::string::npos);
   CHECK(sum(array({1, 2, 3}, int32), s).item<int32_t>() == 6);
 }
+
+
+TEST_CASE("bool source cast writes every element past the dispatch clamp") {
+  // cast.comp SOURCE_BOOL reads one 4-byte condition word per thread with
+  // no grid-stride loop: dispatch_count = (count + 3) / 4 words clamps at
+  // 65535 x 256, so counts above 67,107,840 bools leave the tail uncast.
+  // 2^26 = 67,108,864 exceeds it by 1024 elements; first bad element =
+  // 65535 * 256 * 4 = 67,107,840.
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  Stream s = gpu_stream();
+  const int64_t count = 1LL << 26;
+  const int64_t first_bad = 65535LL * 256 * 4;
+
+  array x = arange(0.0, static_cast<double>(count), 1.0, float32, s);
+  array cond = greater(x, array(static_cast<double>(count) / 2.0, float32), s);
+  array casted = astype(cond, float32, s);
+  eval(casted);
+  omarchy::get_command_encoder(s).synchronize();
+  const float* got = casted.data<float>();
+
+  const std::vector<int64_t> samples = {
+      0,
+      1,
+      first_bad - 1,
+      first_bad,
+      first_bad + 1,
+      count - 1};
+  for (int64_t i : samples) {
+    float expected = (i > count / 2) ? 1.0f : 0.0f;
+    INFO("bool cast mismatch at ", i, ": got ", got[i],
+         " expected ", expected);
+    CHECK_EQ(got[i], expected);
+  }
+}
