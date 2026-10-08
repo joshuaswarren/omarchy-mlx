@@ -56,3 +56,23 @@ Estimated: one session; the compiler drives classes 1-3.
   Results appended below when the entry runs.
 - Upstream diff read read-only via a local throwaway clone
   (/var/tmp/mlx-upstream-4634-*, commit 5dbe9991e2); no upstream comments/PRs.
+
+
+## (a) step 1 RESULTS - G14C (M2, jwm2-linux), release wheel
+## 0.32.4.dev202610050725+5c15fba, Honeykrisp
+
+| case | result |
+|---|---|
+| mx.asarray(np_array, copy=False) (writable f32) | RAISED ValueError: [convert] Cannot import a CPU array without a copy. - zero-copy import does not exist on this backend/wheel |
+| mx.array(np_array) default (writable f32) | import + mx.exp + eval: numpy buffer NOT overwritten (pass) |
+| mx.asarray(memmap mode=r, copy=False) | RAISED the same ValueError |
+| mx.array(memmap mode=r) default | memmap intact after mx.exp + eval (pass) |
+
+Verdict: on the omarchy Vulkan wheel every Python-side import copies, so a
+donating op can never alias - let alone overwrite - caller-owned NumPy or
+memmap memory. The upstream #4634 defect class (donation freeing a foreign
+buffer) is unreachable from Python on this backend; the C++-level ownership
+fix is still required at the next pin bump (the audit table above).
+
+Log: M2 ~/u1008b-probe/4634-donation.log (also queued as an idle-guard
+entry 4634-donation, MAXMIN 10, rerun-safe).
