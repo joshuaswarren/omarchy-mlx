@@ -171,7 +171,9 @@ compiles clean but produces wrong values vs the fp64 reference on the
 GPU) and `inkling_moe_down_combine` (translates and compiles but 52/512
 outputs differ by ~2.5 bf16 ulps from the fp64 reference; possible fp32
 accumulation order or dequantization mismatch). The mx-composed arbiter
-(tools/kernel_recheck/arbiter_flux.py) is the diagnostic tool.
+(tools/kernel_recheck/arbiter_flux.py) is the diagnostic tool. Both are
+from the SAME wheel and run (05f823e / 7368d2a91 on G14C); the final
+table is 11 pass / 1 wrong / 5 compile-fail / 9 refused = 26.
 
 Tolerance-fail (1): `kda_glue_post` — 1/12288 outputs at 1 bf16 ulp
 boundary (fp32 accumulation tie).
