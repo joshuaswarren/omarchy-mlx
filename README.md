@@ -16,6 +16,22 @@ Metal and no CPU fallback.
 It is for people who run Linux on an M1 or M2 Mac. You get local chat,
 serving, and speech to text, with no macOS and no cloud account.
 
+## What runs on Omarchy Linux
+
+This driver stack is not the only inference engine that runs on an
+Apple silicon Mac under Linux. Here is the state of each engine we have
+tested, with the receipt or open commit behind every claim:
+
+| Engine | Status | Note |
+|---|---|---|
+| [mlx-lm](https://github.com/ml-explore/mlx-lm) | Works | The chat and serve commands in this README run on it. It ships in every release. |
+| [oMLX](https://github.com/jundot/omlx) | Works | Serving runs measured around 82 to 91 tok/s on an M1 Max. Guide: [docs/omlx-linux.md](docs/omlx-linux.md). |
+| [mlx-serve](https://github.com/davidtai/mlx-serve) | Works | Runs with our Linux build fixes ([PR #1](https://github.com/davidtai/mlx-serve/pull/1)). Output is byte-identical to mlx-lm with the fused kernels on. |
+| [TensorFold](https://github.com/ashhart/TensorFold) | In progress | The int8 path is fixed; the correctness run is still going. Guide: [docs/tensorfold.md](docs/tensorfold.md). |
+| [sushi](https://github.com/beamivalice/sushi) | In progress | The Linux port lives on [our fork branch](https://github.com/joshuaswarren/sushi/tree/omarchy-linux). The first full run waits on a driver fix. |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan) | Works | With the Honeykrisp Mesa patches under review ([omacom/mesa#6](https://github.com/omacom/mesa/pull/6) and the layers under it), decode on an M1 Max went from 0.95 to 12.8 tok/s on Llama-3.1-8B IQ2_M (13.5x), and the IQ mat-vec kernels run 5 to 24 times faster. |
+| [MCDMA](https://github.com/ashhart/MCDMA) | Works | Software RDMA over Soft-RoCE between an M1 and an M2 Max MacBook under Linux. Upstream change: [ashhart/MCDMA#16](https://github.com/ashhart/MCDMA/pull/16). |
+
 ## What you get
 
 - The `mlx` Python module with the Vulkan GPU backend. The distribution
