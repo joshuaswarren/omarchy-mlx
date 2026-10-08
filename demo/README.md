@@ -1,6 +1,6 @@
 # Demo: chat on the Apple GPU under Omarchy
 
-Five minutes, one M1 running Omarchy (Asahi Linux). Watch it first: [the recorded run](https://joshuaswarren.github.io/mlx-omarchy/) (2:47, unedited). Nothing here changes the
+Five minutes, one M1 running Omarchy (Apple Silicon Linux). Watch it first: [the recorded run](https://joshuaswarren.github.io/mlx-omarchy/) (2:47, unedited). Nothing here changes the
 Mesa driver, Hyprland, or any Omarchy file; everything lands under `$HOME`.
 
 ## 1. Install
@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/inst
 
 ## Troubleshooting
 
-- `Python 3.14 is required`: Omarchy on Asahi ships Python 3.14; `pacman -Syu`
+- `Python 3.14 is required`: Omarchy on Apple Silicon ships Python 3.14; `pacman -Syu`
   if yours is older.
 - `device: llvmpipe`: the Honeykrisp driver was not picked up. Check
   `vulkaninfo --summary` (package `vulkan-tools`) lists `Apple M1`; unset any
