@@ -42,9 +42,9 @@ fi
 
 command -v meson ninja cmake make bison flex glslc git pkg-config >/dev/null 2>&1 && \
 python3 -c 'import mako' >/dev/null 2>&1 && \
-pacman -Qq expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers >/dev/null 2>&1 || {
+pacman -Qq expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers vulkan-tools >/dev/null 2>&1 || {
   echo "missing build dependencies. Install them now (only on a system that is up to date, see Step 0 in the doc):"
-  echo "  sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers"
+  echo "  sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers vulkan-tools"
   exit 1
 }
 
