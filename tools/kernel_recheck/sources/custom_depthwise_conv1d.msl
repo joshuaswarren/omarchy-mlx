@@ -1,0 +1,30 @@
+
+        const int chan = int(thread_position_in_grid.x);
+        const int time = int(thread_position_in_grid.y);
+        const int batch = int(thread_position_in_grid.z);
+
+        const int B = params[0];
+        const int L_in = params[1];
+        const int C = params[2];
+        const int K = params[3];
+        const int pad = params[4];
+        const int L_out = params[5];
+
+        if (batch >= B || time >= L_out || chan >= C) {
+            return;
+        }
+
+        const int out_index = ((batch * L_out) + time) * C + chan;
+        const int weight_base = chan * K;
+
+        T acc = T(0);
+        for (int k = 0; k < K; ++k) {
+            const int in_time = time + k - pad;
+            if (in_time >= 0 && in_time < L_in) {
+                const int in_index = ((batch * L_in) + in_time) * C + chan;
+                acc += inp[in_index] * weight[weight_base + k];
+            }
+        }
+
+        out[out_index] = acc;
+    

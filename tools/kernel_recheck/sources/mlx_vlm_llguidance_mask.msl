@@ -1,0 +1,10 @@
+
+        uint batch = thread_position_in_grid.y;
+        uint token = thread_position_in_grid.x;
+        uint word = token >> 5;
+        uint bit = token & 31;
+        bool allowed = word < mask_shape[1] &&
+            ((as_type<uint>(mask[batch * mask_shape[1] + word]) >> bit) & 1u);
+        uint offset = batch * logits_shape[1] + token;
+        out[offset] = allowed ? logits[offset] : -metal::numeric_limits<T>::infinity();
+    

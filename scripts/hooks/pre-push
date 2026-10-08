@@ -5,4 +5,11 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 CHECK="$HERE/privacy_check.py"
 [ -f "$CHECK" ] || CHECK="$HERE/../privacy_check.py"
 [ -f "$CHECK" ] || { echo "privacy-check: privacy_check.py missing" >&2; exit 1; }
+# Static ComputeKernel wiring gate (5f05b1ee2 class): fail the push when the
+# tree references undeclared enum values or dispatch rows without shaders.
+# Validates the working tree; cheap (~1 s), fail-closed.
+GATE="$HERE/check_compute_kernel_wiring.py"
+[ -f "$GATE" ] || GATE="$HERE/../check_compute_kernel_wiring.py"
+[ -f "$GATE" ] || { echo "compute-kernel-wiring: check_compute_kernel_wiring.py missing" >&2; exit 1; }
+python3 "$GATE" "$HERE/../.." || exit 1
 exec python3 "$CHECK" --hook

@@ -3865,10 +3865,14 @@ TEST_CASE("coopmat prefill dispatch pins M16, 32-row and TwoN builds") {
     omarchy::ComputeKernel expected;
     const char* label;
   };
+  // The M16 full-n route defaults to the LDS-padded build on G14C and to the
+  // plain build elsewhere (primitives.cpp, default_pad).
+  const bool g14c = caps.device_name.find("G14C") != std::string::npos;
   std::vector<Pin> pins{
       {16, 256, nullptr,
-          omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN,
-          "M16FullN"},
+          g14c ? omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNLdsPad
+               : omarchy::ComputeKernel::QmmPrefillCoopmatM16BF16X32FullN,
+          g14c ? "M16FullNLdsPad" : "M16FullN"},
       {128, 2048, "MLX_OMARCHY_QMM_NO_RASTER",
           omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullN,
           "X32FullN"},

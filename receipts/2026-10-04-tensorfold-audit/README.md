@@ -308,3 +308,17 @@ License note (carried from the header, restated for the table): v0.6.0
 relicensed MIT -> Apache-2.0; ported files keep the Apache-2.0 NOTICE and
 license headers (patent grant included); pre-0.6.0 code stays MIT
 (`LICENSES/MIT.txt`). Read-only upstream: no PRs, issues, or comments opened.
+
+## 8. Upstream layout addendum (2026-10-07): main is the native Zig engine now
+
+TensorFold main is a native Zig server (no Python engine; released v1.0.0,
+currently v1.0.2 = `f8fe17d2`); the Python line lives on branch `python-0.6`
+and tag `v0.6.6` (pip instructions on the main setup.py point there), and the
+v0.6.5 pin of this audit stays valid (tag `v0.6.5` = `609ca419`, unchanged).
+New upstream work is Zig, with the Metal kernel sources carried in the Zig
+tree (`zig/kernels/metal/*.metal`). Verified 2026-10-07 against a fresh
+`git ls-remote` and `origin/main` tree: tags v0.6.5/v0.6.6/v1.0.0..v1.0.2;
+branches main, python-0.6, zig-flashnext, zig-preview. Consequence for this
+audit: upstream-shaped kernel changes have no Python home upstream; the
+capability-probe PR prepared 2026-10-07 (fork branch `capability-probe`,
+joshuaswarren/TensorFold) targets `python-0.6` and says so in its body.

@@ -409,6 +409,16 @@ text is ASCII; non-ASCII text falls back to the model's auto-detection,
 which is also how the dialect speakers (Eric, Dylan) keep their
 Sichuan/Beijing dialect when they are used for Chinese text.
 
+### Wake word (opt-in)
+
+`mlx-omarchy-assistant --wake-word hey_jarvis` starts a CPU listener
+(openWakeWord 0.6.0 ONNX models; the three model files are pinned by
+SHA-256 and download once into the assistant home — the flag is the
+download approval). Detections surface in `/api/status` under `wake`;
+the browser starts a hands-free recording on a fresh detection and stops
+it after 1.5 s of silence. Off by default; `--wake-threshold` tunes the
+score cutoff (default 0.5).
+
 ## How cards are produced
 
 A chat reply shows prose only, prose plus a card the model emitted, or prose

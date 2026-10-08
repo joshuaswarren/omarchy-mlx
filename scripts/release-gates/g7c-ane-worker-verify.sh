@@ -92,7 +92,7 @@ REPORT=$(ls -t "$HOME"/.cache/mlx-omarchy/parakeet-reference/transcriptions/*/tr
 gate_log "$LOG" "REPORT_PATH=$REPORT"
 if [[ -n "$REPORT" && -s "$REPORT" ]]; then
   RDIR=$(dirname "$REPORT")
-  "$P/venv/bin/python3" - "$REPORT" 2>&1 | tee -a "$LOG" <<'PY'
+  "$P/venv/bin/python3" - "$REPORT" <<'PY' 2>&1 | tee -a "$LOG"
 import json, sys
 d = json.load(open(sys.argv[1]))
 ex = d.get("execution", {})

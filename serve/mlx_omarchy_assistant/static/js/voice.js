@@ -86,7 +86,14 @@ export class Recorder {
     this._onDeviceLost = onDeviceLost;
     this._warned = false;
     this._maxSamples = 0;
-    this._stopReason = null;       // 'user' | 'limit' | 'device' | null
+    this._stopReason = null;       // 'user' | 'limit' | 'device' | 'silence' | null
+    this._hf = null;               // hands-free config from setHandsFree()
+  }
+
+  // Wake-word hands-free mode: stop on the first silence gap after speech
+  // was heard. Off unless setHandsFree() armed it for this recording.
+  setHandsFree({ silenceMs = 1500, floorRms = 0.01 } = {}) {
+    this._hf = { silenceMs, floorRms };
   }
 
   async start() {
@@ -140,6 +147,18 @@ export class Recorder {
         // announce it correctly.
         this._stopReason = "limit";
         this.stop().catch(() => {});
+        return;
+      }
+      if (this._hf) {
+        if (rms >= this._hf.floorRms) {
+          this._hfVoiceSeen = true;
+          this._hfLastVoiceAt = elapsed;
+        } else if (this._hfVoiceSeen &&
+                   elapsed - this._hfLastVoiceAt >= this._hf.silenceMs / 1000) {
+          this._stopReason = "silence";
+          this.stop().catch(() => {});
+          return;
+        }
       }
     };
     source.connect(node);
@@ -162,6 +181,8 @@ export class Recorder {
     this._maxSamples = 0;
     this._warned = false;
     this._stopReason = null;
+    this._hfVoiceSeen = false;
+    this._hfLastVoiceAt = 0;
     this.state = "recording";
     this.startedAt = ctx.currentTime;
     this._tickHandle = window.setInterval(() => {
@@ -178,6 +199,7 @@ export class Recorder {
     // Frames keep arriving while cleanup awaits; "stopping" makes this stop
     // the only one and drops those late frames.
     this.state = "stopping";
+    this._hf = null;
     if (this._tickHandle) { clearInterval(this._tickHandle); this._tickHandle = null; }
     const reason = this._stopReason || "user";
     const inputRate = this._ctx ? this._ctx.sampleRate : 48000;
@@ -218,6 +240,7 @@ export class Recorder {
   async cancel() {
     if (this.state !== "recording") return;
     this.state = "stopping";
+    this._hf = null;
     if (this._tickHandle) { clearInterval(this._tickHandle); this._tickHandle = null; }
     this._samples = [];
     this._stopReason = null;

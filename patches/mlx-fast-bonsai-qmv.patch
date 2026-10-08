@@ -1,0 +1,624 @@
+From fcd2d3641f6ba4f74ca9add5e4de3ea134ad0dde Mon Sep 17 00:00:00 2001
+From: Joshua Warren <816217+joshuaswarren@users.noreply.github.com>
+Date: Sun, 4 Oct 2026 17:59:36 -0500
+Subject: [PATCH] bonsai qmv fast op skeleton
+
+---
+ mlx/backend/no_gpu/primitives.cpp |   5 +
+ mlx/fast.cpp                      | 286 ++++++++++++++++++++++++++++++
+ mlx/fast.h                        |  52 ++++++
+ mlx/fast_primitives.h             | 130 ++++++++++++++
+ python/src/fast.cpp               |  76 ++++++++
+ 5 files changed, 549 insertions(+)
+
+diff --git a/mlx/backend/no_gpu/primitives.cpp b/mlx/backend/no_gpu/primitives.cpp
+index c37515f..695a697 100644
+--- a/mlx/backend/no_gpu/primitives.cpp
++++ b/mlx/backend/no_gpu/primitives.cpp
+@@ -193,6 +193,11 @@ NO_GPU_MULTI(GatedDeltaUpdate)
+ NO_GPU_MULTI(ConvertFP8)
+ NO_GPU_MULTI(Quantize)
+ NO_GPU_MULTI(CustomKernel)
++// Bonsai 1-bit / 2-bit affine decode kernels: GPU-only; the composed
++// fallback in fast.cpp fires on every CPU dispatch.
++NO_GPU_MULTI(BonsaiQ1AffineQmv)
++NO_GPU_MULTI(BonsaiQmvWide)
++NO_GPU_MULTI(BonsaiQ1Dequantize)
+ } // namespace fast
+ 
+ namespace distributed {
+diff --git a/mlx/fast.cpp b/mlx/fast.cpp
+index add78fa..93ddfd9 100644
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1192,4 +1192,302 @@ bool ConvertFP8::is_equivalent(const Primitive& other) const {
+   return to_fp8_ == a_other.to_fp8_;
+ }
+ 
++// Bonsai 1-bit / 2-bit affine decode kernels. The fallback chain
++// reproduces the in-Python reference (omlx Bonsai _dequant_1bit +
++// stock matmul) bit for bit: the uint8 Bonsai pack is 8 codes per byte
++// (lane bit i of byte e carries w[e * 8 + i]); the affine dequant is
++// scale[g_k] * code + bias[g_k]; the float reference computes
++// out = x @ dequant(w).T, identical to the GPU shader's chain.
++
++bool BonsaiQ1AffineQmv::is_equivalent(const Primitive& other) const {
++  const BonsaiQ1AffineQmv& p = static_cast<const BonsaiQ1AffineQmv&>(other);
++  return p.group_ == group_;
++}
++
++bool BonsaiQmvWide::is_equivalent(const Primitive& other) const {
++  const BonsaiQmvWide& p = static_cast<const BonsaiQmvWide&>(other);
++  return p.group_ == group_ && p.bits_ == bits_;
++}
++
++bool BonsaiQ1Dequantize::is_equivalent(const Primitive& other) const {
++  const BonsaiQ1Dequantize& p = static_cast<const BonsaiQ1Dequantize&>(other);
++  return p.group_ == group_ && p.shape_ == shape_ && p.dtype_ == dtype_;
++}
++
++namespace {
++
++// Bonsai 1-bit pack: byte e holds 8 codes [e*8, ..., e*8 + 7] in lane
++// bit i. Mirrors the oMLX _dequant_1bit bit order; identical to
++// packed[:, :, None] >> shifts & 0x1.
++void _bonsai_dequant_1bit(
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group_size,
++    array& out,
++    Stream s) {
++  int N = static_cast<int>(w.shape(0));
++  int K32 = static_cast<int>(w.shape(-1));
++  int K = K32 * 8; // Bonsai 1-bit: 8 codes per byte, 1 byte per uint8 element
++  int n_groups = static_cast<int>(scales.shape(-1));
++  array shifts = arange(8, uint32, s);
++  // w [N, K32] -> [N, K32, 8] -> [N, K] uint8 -> cast to out dtype
++  // MLX's `uint32` is a Dtype constant in mlx::core, so use the C++
++  // scalar type uint32_t for the array scalar ctor's T parameter.
++  mlx::core::array one_mask = mlx::core::array(uint32_t{1});
++  array w_unpack = astype(
++      bitwise_and(
++          expand_dims(right_shift(w, shifts), -1), one_mask, s),
++      out.dtype(),
++      s);
++  w_unpack = reshape(w_unpack, {N, K}, s);
++  array w_fp = multiply(
++      w_unpack,
++      reshape(
++          broadcast_to(expand_dims(scales, -1), {N, K32 * 8 / n_groups, n_groups}, s),
++          {N, K},
++          s),
++      s);
++  array biases_c = biases;
++  if (biases_c.dtype() != out.dtype()) {
++    biases_c = astype(biases_c, out.dtype(), s);
++  }
++  out = add(
++      w_fp,
++      reshape(
++          broadcast_to(expand_dims(biases_c, -1), {N, K32 * 8 / n_groups, n_groups}, s),
++          {N, K},
++          s),
++      s);
++}
++
++array _bonsai_q1_dequantize_fallback(
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    const Shape& shape,
++    Dtype dtype,
++    Stream s) {
++  array out = zeros(shape, dtype, s);
++  _bonsai_dequant_1bit(w, scales, biases, group, out, s);
++  return out;
++}
++
++} // namespace
++
++array bonsai_q1_affine_qmv(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (x.ndim() < 1 || w.ndim() != 2) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] x must be at least 1D and w must be 2D.");
++  }
++  int k = x.shape(-1);
++  int n_out = static_cast<int>(w.shape(0));
++  if (static_cast<int>(w.shape(1)) * 8 != k) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] w's packed column count (K/8) does not "
++        "match x's last dimension.");
++  }
++  if (k % group != 0) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] the group size must divide K.");
++  }
++  if (w.dtype() != uint8) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] w must be a uint8 array (Bonsai 1-bit "
++        "packs 8 codes per byte).");
++  }
++  if (x.dtype() != float16 && x.dtype() != bfloat16 && x.dtype() != float32) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] x must be float16, bfloat16, or float32.");
++  }
++  int n_groups = k / group;
++  if (scales.shape() != Shape{n_out, n_groups} ||
++      biases.shape() != Shape{n_out, n_groups}) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] scales and biases must be [N, K/group].");
++  }
++  if (scales.dtype() != x.dtype() || biases.dtype() != x.dtype()) {
++    throw std::invalid_argument(
++        "[bonsai_q1_affine_qmv] scales and biases dtype must match x.");
++  }
++  auto fallback = [group, n_out, s](std::vector<array> in) {
++    // Reference path: dequant w to float (matches x dtype), then
++    // out = x @ dequant(w).T. This is the exact chain the Bonsai
++    // shader computes for every element.
++    array w_fp = _bonsai_q1_dequantize_fallback(
++        in[1], in[2], in[3], group, {n_out, static_cast<int>(in[1].shape(-1)) * 8},
++        in[0].dtype(), s);
++    array x_flat = in[0].ndim() >= 2 ? in[0] : reshape(in[0], {1, in[0].shape(-1)}, s);
++    array out_flat = matmul(x_flat, transpose(w_fp, {1, 0}, s), s);
++    if (in[0].ndim() < 2) {
++      return std::vector<array>{reshape(out_flat, {n_out}, s)};
++    }
++    return std::vector<array>{out_flat};
++  };
++  bool routed = !BonsaiQ1AffineQmv::use_fallback(s);
++  std::vector<array> inputs{x, w, scales, biases};
++  if (!routed) {
++    return fallback(inputs)[0];
++  }
++  Shape lead;
++  if (x.ndim() >= 2) {
++    lead = Shape(x.shape().begin(), x.shape().end() - 1);
++  }
++  Shape out_shape = lead;
++  out_shape.push_back(n_out);
++  auto outputs = array::make_arrays(
++      {std::move(out_shape)},
++      {x.dtype()},
++      std::make_shared<BonsaiQ1AffineQmv>(s, fallback, group),
++      std::move(inputs));
++  return std::move(outputs[0]);
++}
++
++array bonsai_qmv_wide(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    int bits,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (bits != 1 && bits != 2) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] bits must be 1 or 2 (Bonsai's supported widths).");
++  }
++  if (x.ndim() != 2 || w.ndim() != 2) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] x must be 2D and w must be 2D.");
++  }
++  int M = static_cast<int>(x.shape(0));
++  int k = static_cast<int>(x.shape(1));
++  int n_out = static_cast<int>(w.shape(0));
++  if (M < 2 || M > 5) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] M must be in {2..5} (decode batch).");
++  }
++  int w_cols = static_cast<int>(w.shape(1));
++  int expect_w_cols = (bits == 1) ? (k / 8) : (k * bits / 32);
++  if (w_cols != expect_w_cols) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] w's column count does not match K/pack_factor.");
++  }
++  if (bits == 1 && w.dtype() != uint8) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] bits=1 requires uint8 weights.");
++  }
++  if (bits == 2 && w.dtype() != uint32) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] bits=2 requires uint32 weights.");
++  }
++  if (k % group != 0) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] the group size must divide K.");
++  }
++  int n_groups = k / group;
++  if (scales.shape() != Shape{n_out, n_groups} ||
++      biases.shape() != Shape{n_out, n_groups}) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] scales and biases must be [N, K/group].");
++  }
++  if (scales.dtype() != x.dtype() || biases.dtype() != x.dtype()) {
++    throw std::invalid_argument(
++        "[bonsai_qmv_wide] scales and biases dtype must match x.");
++  }
++  auto fallback = [group, bits, n_out, s](std::vector<array> in) {
++    // Reference path: dequant w (Bonsai 1-bit or 2-bit affine), then
++    // out = x @ dequant(w).T. The 2-bit path reuses stock mlx
++    // quantized_matmul; the 1-bit path uses the inline dequantize.
++    array x_ref = in[0];
++    array w_ref = in[1];
++    array sc_ref = in[2];
++    array bi_ref = in[3];
++    int K = static_cast<int>(x_ref.shape(1));
++    if (bits == 1) {
++      array w_fp = _bonsai_q1_dequantize_fallback(
++          w_ref, sc_ref, bi_ref, group, {n_out, K}, x_ref.dtype(), s);
++      return std::vector<array>{matmul(x_ref, transpose(w_fp, {1, 0}, s), s)};
++    }
++    array out = quantized_matmul(
++        x_ref, w_ref, sc_ref, bi_ref,
++        /*transpose=*/true, /*group_size=*/group, /*bits=*/2,
++        /*mode=*/"affine", s);
++    return std::vector<array>{out};
++  };
++  bool routed = !BonsaiQmvWide::use_fallback(s);
++  std::vector<array> inputs{x, w, scales, biases};
++  if (!routed) {
++    return fallback(inputs)[0];
++  }
++  auto outputs = array::make_arrays(
++      {Shape{M, n_out}},
++      {x.dtype()},
++      std::make_shared<BonsaiQmvWide>(s, fallback, group, bits),
++      std::move(inputs));
++  return std::move(outputs[0]);
++}
++
++array bonsai_q1_dequantize(
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    const Shape& shape,
++    Dtype dtype,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (w.dtype() != uint8) {
++    throw std::invalid_argument(
++        "[bonsai_q1_dequantize] w must be uint8 (Bonsai 1-bit pack).");
++  }
++  if (w.ndim() != 2) {
++    throw std::invalid_argument(
++        "[bonsai_q1_dequantize] w must be 2D [N, K/8].");
++  }
++  int n_out = static_cast<int>(w.shape(0));
++  int k = static_cast<int>(w.shape(1)) * 8;
++  if (shape != Shape{n_out, k}) {
++    throw std::invalid_argument(
++        "[bonsai_q1_dequantize] shape must equal [N, K].");
++  }
++  if (k % group != 0) {
++    throw std::invalid_argument(
++        "[bonsai_q1_dequantize] the group size must divide K.");
++  }
++  int n_groups = k / group;
++  if (scales.shape() != Shape{n_out, n_groups} ||
++      biases.shape() != Shape{n_out, n_groups}) {
++    throw std::invalid_argument(
++        "[bonsai_q1_dequantize] scales and biases must be [N, K/group].");
++  }
++  if (scales.dtype() != dtype || biases.dtype() != dtype) {
++    throw std::invalid_argument(
++        "[bonsai_q1_dequantize] scales and biases dtype must match dtype.");
++  }
++  auto fallback = [group, shape, dtype, s](std::vector<array> in) {
++    return std::vector<array>{
++        _bonsai_q1_dequantize_fallback(in[0], in[1], in[2], group, shape, dtype, s)};
++  };
++  bool routed = !BonsaiQ1Dequantize::use_fallback(s);
++  std::vector<array> inputs{w, scales, biases};
++  if (!routed) {
++    return fallback(inputs)[0];
++  }
++  auto outputs = array::make_arrays(
++      {shape},
++      {dtype},
++      std::make_shared<BonsaiQ1Dequantize>(s, fallback, group, shape, dtype),
++      std::move(inputs));
++  return std::move(outputs[0]);
++}
++
+ } // namespace mlx::core::fast
+diff --git a/mlx/fast.h b/mlx/fast.h
+index 14a46de..7a39813 100644
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -117,4 +117,56 @@ MLX_API std::vector<array> precompiled_cuda_kernel(
+     bool ensure_row_contiguous = false,
+     StreamOrDevice s = {});
+ 
++// Bonsai 1-bit / 2-bit affine quantized decode kernels.
++//
++// Bonsai packs 1-bit weights as uint8 (8 values/byte) and 2-bit
++// weights as uint32 (16 values/word), both affine with one scale +
++// bias per group of `group_size` channels. Stock mlx::quantized_matmul
++// only handles 2-bit/3-bit/... packed into uint32 and emits an exact
++// compatibility error on the 1-bit uint8 layout, so these three ops
++// close the gap by routing through dedicated Vulkan compute shaders
++// (shaders/bonsai_qmv_q1.comp, shaders/bonsai_qmv_wide.comp,
++// shaders/bonsai_dequant_q1.comp). They mirror the oMLX
++// custom_kernels/bonsai surface at api parity.
++//
++// bonsai_q1_affine_qmv(x, w, scales, biases, group, stream=None)
++//   M=1 decode: out[n] = sum_k (scale[g_k] * w[k] + bias[g_k]) * x[k]
++//   with w a packed uint8 buffer [N, K/8]. Bonsai 1-bit code is 0/1
++//   (asymmetric; bias carries the signed offset).
++// bonsai_qmv_wide(x, w, scales, biases, group, bits, stream=None)
++//   M in {2..5} small-batch decode, bits in {1, 2}. x has leading
++//   batch M matching the column tile (the host tiles M above the
++//   wide threshold). Both 1-bit (uint8 packed) and 2-bit (uint32
++//   packed) layouts share one shader; the bit-width rides in `bits`.
++// bonsai_q1_dequantize(w, scales, biases, group, shape, dtype, stream=None)
++//   Inverse of the 1-bit pack: out[N, K] = scale[g_k] * w[k] + bias[g_k]
++//   cast to dtype. No native GPU dequantize for 1-bit exists; this
++//   fills that hole and provides the reference path callers need for
++//   prefill above _T5_PREFILL_THRESHOLD.
++MLX_API array bonsai_q1_affine_qmv(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    StreamOrDevice s = {});
++
++MLX_API array bonsai_qmv_wide(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    int bits,
++    StreamOrDevice s = {});
++
++MLX_API array bonsai_q1_dequantize(
++    const array& w,
++    const array& scales,
++    const array& biases,
++    int group,
++    const Shape& shape,
++    Dtype dtype,
++    StreamOrDevice s = {});
++
+ } // namespace mlx::core::fast
+diff --git a/mlx/fast_primitives.h b/mlx/fast_primitives.h
+index cef13bb..d909137 100644
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -531,4 +531,134 @@ class CustomKernel : public Primitive {
+   CompileOptions::Data compile_options_;
+ };
+ 
++// Bonsai 1-bit affine quantized matmul (M=1, decode). Inputs
++// (x, w, scales, biases); single output matching x's dtype. See
++// fast::bonsai_q1_affine_qmv. The composed fallback mirrors the
++// pixel-exact dequant + matmul; the Omarchy GPU route runs the
++// dedicated Bonsai qmv shader (shaders/bonsai_qmv_q1.comp).
++class BonsaiQ1AffineQmv : public Custom {
++ public:
++  BonsaiQ1AffineQmv(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int group)
++      : Custom(stream, std::move(fallback)), group_(group) {}
++
++  static bool use_fallback(Stream s);
++
++  int group() const {
++    return group_;
++  }
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(BonsaiQ1AffineQmv);
++  bool is_equivalent(const Primitive& other) const override;
++  auto state() const {
++    return std::make_tuple(nullptr, group_);
++  }
++
++ private:
++  int group_;
++};
++
++// Bonsai small-batch decode (M in {2..5}). Both 1-bit (uint8 packed)
++// and 2-bit (uint32 packed) layouts are supported through one shader;
++// the bit-width rides in `bits_` (1 or 2). See fast::bonsai_qmv_wide.
++class BonsaiQmvWide : public Custom {
++ public:
++  BonsaiQmvWide(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int group,
++      int bits)
++      : Custom(stream, std::move(fallback)), group_(group), bits_(bits) {}
++
++  static bool use_fallback(Stream s);
++
++  int group() const {
++    return group_;
++  }
++
++  int bits() const {
++    return bits_;
++  }
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(BonsaiQmvWide);
++  bool is_equivalent(const Primitive& other) const override;
++  auto state() const {
++    return std::make_tuple(nullptr, group_, bits_);
++  }
++
++ private:
++  int group_;
++  int bits_;
++};
++
++// Bonsai 1-bit affine dequantize: out[N, K] = scale[g_k] * w[k] +
++// bias[g_k] cast to dtype. Inputs (w, scales, biases); the target
++// shape is supplied by the host. See fast::bonsai_q1_dequantize. The
++// composed fallback mirrors the pixel-exact dequant; the Omarchy GPU
++// route runs the dedicated shader (shaders/bonsai_dequant_q1.comp).
++class BonsaiQ1Dequantize : public Custom {
++ public:
++  BonsaiQ1Dequantize(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int group,
++      Shape shape,
++      Dtype dtype)
++      : Custom(stream, std::move(fallback)),
++        group_(group),
++        shape_(std::move(shape)),
++        dtype_(dtype) {}
++
++  static bool use_fallback(Stream s);
++
++  int group() const {
++    return group_;
++  }
++
++  const Shape& shape() const {
++    return shape_;
++  }
++
++  Dtype dtype() const {
++    return dtype_;
++  }
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(BonsaiQ1Dequantize);
++  bool is_equivalent(const Primitive& other) const override;
++  auto state() const {
++    return std::make_tuple(nullptr, group_, shape_, dtype_);
++  }
++
++ private:
++  int group_;
++  Shape shape_;
++  Dtype dtype_;
++};
++
+ } // namespace mlx::core::fast
+diff --git a/python/src/fast.cpp b/python/src/fast.cpp
+index c388980..70f243b 100644
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -749,4 +749,80 @@ void init_fast(nb::module_& parent_module) {
+            before the kernel runs. Default: ``False``.
+         stream (mx.stream, optional): Stream to run the kernel on. Default: ``None``.
+       )pbdoc");
++
++  // Bonsai 1-bit / 2-bit affine decode kernels. See fast.h for shape
++  // contracts; the GPU route runs shaders/bonsai_qmv_q1.comp,
++  // shaders/bonsai_qmv_wide.comp, and shaders/bonsai_dequant_q1.comp.
++  m.def(
++      "bonsai_q1_affine_qmv",
++      &mlx::core::fast::bonsai_q1_affine_qmv,
++      "x"_a,
++      "w"_a,
++      "scales"_a,
++      "biases"_a,
++      "group"_a,
++      "stream"_a = nb::none(),
++      R"(
++            Bonsai 1-bit affine decode, M=1 (single decode row).
++
++            Args:
++                x: float activations [..., K]
++                w: uint8 packed Bonsai weights [N, K/8] (8 codes/byte)
++                scales: float scale factors [N, K/group]
++                biases: float biases [N, K/group]
++                group: group size dividing K (32, 64, or 128)
++                stream: optional device/stream
++            Returns:
++                output [..., N]
++        )");
++
++  m.def(
++      "bonsai_qmv_wide",
++      &mlx::core::fast::bonsai_qmv_wide,
++      "x"_a,
++      "w"_a,
++      "scales"_a,
++      "biases"_a,
++      "group"_a,
++      "bits"_a,
++      "stream"_a = nb::none(),
++      R"(
++            Bonsai small-batch decode (M in {2..5}), 1-bit or 2-bit affine.
++
++            Args:
++                x: float activations [M, K]
++                w: packed weights [N, K/pack] (uint8 for bits=1, uint32 for bits=2)
++                scales: float scale factors [N, K/group]
++                biases: float biases [N, K/group]
++                group: group size dividing K (32, 64, or 128)
++                bits: 1 or 2 (Bonsai's supported widths)
++                stream: optional device/stream
++            Returns:
++                output [M, N]
++        )");
++
++  m.def(
++      "bonsai_q1_dequantize",
++      &mlx::core::fast::bonsai_q1_dequantize,
++      "w"_a,
++      "scales"_a,
++      "biases"_a,
++      "group"_a,
++      "shape"_a,
++      "dtype"_a,
++      "stream"_a = nb::none(),
++      R"(
++            Bonsai 1-bit affine dequantize (uint8 -> dtype).
++
++            Args:
++                w: uint8 packed Bonsai weights [N, K/8] (8 codes/byte)
++                scales: float scale factors [N, K/group]
++                biases: float biases [N, K/group]
++                group: group size dividing K (32, 64, or 128)
++                shape: target shape [N, K]
++                dtype: target dtype for the dequantized output
++                stream: optional device/stream
++            Returns:
++                dequantized output of shape and dtype
++        )");
+ }
+-- 
+2.39.5
+

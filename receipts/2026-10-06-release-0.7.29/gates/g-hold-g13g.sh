@@ -50,6 +50,10 @@ fi
 RECEIPT="${HOLD_RECEIPT:-$PWD/g-hold-receipt-$(date -u +%Y%m%dT%H%M%SZ).log}"
 : > "$RECEIPT"
 log() { tee -a "$RECEIPT"; }
+# Identity header (w7K review: receipts must carry host/uname provenance).
+{
+  echo "BEGIN $(date -u +%FT%TZ) gate=g-hold-g13g uname=$(uname -r) host_marker=${GATE_HOST_MARKER:-unset}"
+} | tee -a "$RECEIPT"
 command -v python3.14 >/dev/null || { echo "FAIL python3.14 missing" | log; exit 1; }
 
 VENV="$(mktemp -d "${TMPDIR:-/tmp}/hold-gate.XXXX")"

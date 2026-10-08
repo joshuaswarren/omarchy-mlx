@@ -46,6 +46,7 @@ struct Parameter {
   uint32_t binding;
   bool scalar;
   bool atomic;
+  bool constant_space;
 };
 
 struct Translation {
@@ -70,7 +71,12 @@ struct TemporaryFile {
     if (fd >= 0) {
       close(fd);
     }
-    if (!path.empty()) {
+    // Diagnostic (MLX_OMARCHY_KEEP_SHADER=1): keep the intermediate GLSL
+    // instead of unlinking it — shader-debugging sessions diff the emitted
+    // text; default stays delete-on-exit.
+    static const bool keep_shader =
+        std::getenv("MLX_OMARCHY_KEEP_SHADER") != nullptr;
+    if (!path.empty() && !keep_shader) {
       unlink(path.c_str());
     }
   }
@@ -169,6 +175,57 @@ void translate_as_type(std::string& code);
 void translate_c_style_casts(std::string& code);
 
 void translate_types(std::string& code) {
+  // as_type<ushort>(bf16-derived value) is a 16-bit pattern bitcast: the
+  // operand's bfloat16 storage pattern, which the bf16 input rewrite has
+  // left as _mlx_bf16_to_float(...). Map it to _mlx_float_to_bf16 BEFORE
+  // the type table below narrows ushort to uint (which would emit
+  // floatBitsToUint on the widened float — a 32-bit index into a 65536-row
+  // per-dtype table; mlx-serve's fused SwiGLU sigmoid lookup, 2026-10-07).
+  // A 16-bit as_type on anything else is left alone and surfaces as the
+  // existing named refusal (as_type between mismatched sizes is invalid
+  // MSL anyway).
+  {
+    size_t bitcast_search = 0;
+    while (true) {
+      const auto marker = code.find("as_type<", bitcast_search);
+      if (marker == std::string::npos) {
+        break;
+      }
+      const auto open_angle = marker + 8;
+      const auto close_angle = code.find('>', open_angle);
+      if (close_angle == std::string::npos) {
+        break;
+      }
+      const auto destination =
+          trim(code.substr(open_angle, close_angle - open_angle));
+      const bool narrow16 = destination == "ushort" ||
+          destination == "short" || destination == "uint16_t" ||
+          destination == "int16_t";
+      const auto open_paren = code.find('(', close_angle + 1);
+      if (open_paren == std::string::npos) {
+        break;
+      }
+      const auto close_paren = matching_delimiter(code, open_paren, '(', ')');
+      const auto operand =
+          code.substr(open_paren + 1, close_paren - open_paren - 1);
+      if (narrow16) {
+        // A 16-bit as_type is a storage-pattern bitcast of a 16-bit value.
+        // The bf16 input rewrite has already widened every bf16 load to
+        // f32, so the operand's f32 value round-trips exactly through
+        // _mlx_float_to_bf16 — the pattern the (unwidened) source meant.
+        // This holds whether the operand is the load itself or a local
+        // holding it (mlx-serve's SwiGLU: `float g = gate[i];
+        // sigtab[as_type<ushort>(g)]`). as_type between mismatched sizes
+        // is invalid MSL, so no genuine 32-bit bitcast lands here.
+        code.replace(
+            marker, close_paren - marker + 1,
+            "_mlx_float_to_bf16(" + operand + ")");
+        bitcast_search = marker;
+        continue;
+      }
+      bitcast_search = marker + 8;
+    }
+  }
   const std::vector<std::pair<std::string, std::string>> replacements = {
       {"float4", "vec4"},
       {"float3", "vec3"},
@@ -302,6 +359,15 @@ void translate_c_style_casts(std::string& code) {
           ++end;
         } else if (c == '(') {
           end = matching_delimiter(code, end, '(', ')') + 1;
+        } else if (c == '[') {
+          // C binds the cast to the whole postfix expression: `(float)inp[c]`
+          // means float(inp[c]). Without consuming the subscript the scanner
+          // rewrote it to float(inp)[c], splitting the cast from the index —
+          // bf16/f16 buffer reads then missed their widening rewrite and
+          // every `(float)rel[...]`-style read in the corpus died as
+          // "unsupported bfloat16 buffer expression" (2026-10-08
+          // KernelRecheck).
+          end = matching_delimiter(code, end, '[', ']') + 1;
         } else {
           break;
         }
@@ -357,14 +423,18 @@ void translate_device_pointer_aliases(
   // mis-binds groups when an alternation and optional const are combined
   // (it shifted the type/name groups by one on
   // 'const device uchar* krow = ...'), so no nested optionals here.
-  // Group 1 = pointee type, group 2 = alias name, group 3 = initializer.
+  // Group 1 = address space, group 2 = pointee type, group 3 = alias name,
+  // group 4 = initializer. `constant` joins `device`: the CBQ/K3 kernels
+  // declare `constant float* cs = cons;` read-only LUT aliases of
+  // constant-bound buffers, and the rewrite is identical (2026-10-08
+  // KernelRecheck). Without it they died at the surviving-pointer guard.
   static const std::regex alias_patterns[] = {
       std::regex(
-          R"(const\s+device\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+          R"((const\s+)?(device|constant)\s+(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
       std::regex(
-          R"(device\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+          R"((device|constant)\s+(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
       std::regex(
-          R"(device\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+          R"((device|constant)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
   };
   struct Alias {
     std::string base;
@@ -389,21 +459,27 @@ void translate_device_pointer_aliases(
   };
   bool vector_read_helpers = false;
   bool progressed = true;
+  // Per-pattern match-group indices for (type, name, initializer); the
+  // optional const/address-space groups shift them per pattern.
+  static const int alias_groups[][3] = {{4, 5, 6}, {3, 4, 5}, {2, 3, 4}};
   while (progressed) {
     progressed = false;
-    for (const auto& alias_pattern : alias_patterns) {
+    for (size_t pattern_index = 0; pattern_index < std::size(alias_patterns);
+         ++pattern_index) {
+      const auto& alias_pattern = alias_patterns[pattern_index];
+      const auto& groups = alias_groups[pattern_index];
       for (std::sregex_iterator it(body.begin(), body.end(), alias_pattern),
                end;
            it != end; ++it) {
-        const auto type = (*it)[1].str();
-        const auto name = (*it)[2].str();
+        const auto type = (*it)[groups[0]].str();
+        const auto name = (*it)[groups[1]].str();
         if (aliases.count(name)) {
           continue;
         }
-        std::string init = trim((*it)[3].str());
+        std::string init = trim((*it)[groups[2]].str());
         // Strip a leading C-style device-pointer cast: `(const device T*)`.
         static const std::regex cast_prefix(
-            R"(^\(\s*(?:const\s+)?device\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
+            R"(^\(\s*(?:const\s+)?(?:device|constant)\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
         init = std::regex_replace(init, cast_prefix, "");
         // Split BASE (+ EXPR)?.
         static const std::regex base_offset(
@@ -674,7 +750,7 @@ void translate_as_type(std::string& code) {
 
 std::vector<Parameter> parse_parameters(const std::string& signature) {
   const std::regex parameter_pattern(
-      R"((?:const\s+)?(?:device|constant)\s+(atomic<)?([A-Za-z_][A-Za-z0-9_]*)(?:>)?\s*([*&])\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[\[buffer\(([0-9]+)\)\]\])");
+      R"((?:const\s+)?(device|constant)\s+(atomic<)?([A-Za-z_][A-Za-z0-9_]*)(?:>)?\s*([*&])\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[\[buffer\(([0-9]+)\)\]\])");
   std::vector<Parameter> parameters;
   for (std::sregex_iterator it(
            signature.begin(), signature.end(), parameter_pattern),
@@ -682,11 +758,12 @@ std::vector<Parameter> parse_parameters(const std::string& signature) {
        it != end;
        ++it) {
     parameters.push_back(
-        {(*it)[2].str(),
-         (*it)[4].str(),
-         static_cast<uint32_t>(std::stoul((*it)[5].str())),
-         (*it)[3].str() == "&",
-         (*it)[1].matched});
+        {(*it)[3].str(),
+         (*it)[5].str(),
+         static_cast<uint32_t>(std::stoul((*it)[6].str())),
+         (*it)[4].str() == "&",
+         (*it)[2].matched,
+         (*it)[1].str() == "constant"});
   }
   std::sort(
       parameters.begin(),
@@ -763,6 +840,13 @@ void resolve_kernel_templates(
       // only type names (alphabetic first char) map through glsl_type.
       if (value == "bfloat16_t" || value == "bfloat16" || value == "uint16_t") {
         value = "float";
+      } else if (value == "float16_t" || value == "half") {
+        // Metal promotes half arithmetic to float (half storage, fp32
+        // compute); float locals mirror that and the buffer reads widen in
+        // the float16 parameter pass below (2026-10-08 KernelRecheck,
+        // bitlinear_matmul: `1 / weight_scale[0]` cannot compile as
+        // int / float16_t in GLSL).
+        value = "float";
       } else if (value == "true" || value == "false" ||
                  std::isdigit(static_cast<unsigned char>(value.front()))) {
         // boolean and numeric template values pass through unchanged
@@ -773,6 +857,153 @@ void resolve_kernel_templates(
     }
     replace_word(header, name, value);
     replace_word(body, name, value);
+  }
+}
+
+// Helpers in the user header may take `threadgroup T*` parameters (shared
+// scratch passed by pointer, e.g. the msv_row_inv_rms reduction stage in
+// mlx-serve's fused residual+RMSNorm kernel). GLSL has neither pointer
+// parameters nor storage-qualified parameters. When every call site in the
+// kernel body passes the shared array under its own declared name, the
+// parameter is dropped from the signature: the helper body's references then
+// resolve to the kernel body's global `shared` arrays directly. Anything
+// else — an alias, an expression, a missing argument — is refused with the
+// construct named.
+void specialize_threadgroup_helper_params(
+    std::string& header,
+    std::string& body) {
+  static const std::regex helper_signature(
+      R"(\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()",
+      std::regex_constants::optimize);
+  static const std::regex threadgroup_param(
+      R"(threadgroup\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))",
+      std::regex_constants::optimize);
+  // Each pass erases at most one parameter; erasing invalidates match
+  // positions, so rescan from the start until no parameter remains.
+  while (true) {
+    bool erased = false;
+    for (std::sregex_iterator it(
+             header.begin(), header.end(), helper_signature);
+         it != std::sregex_iterator();
+         ++it) {
+      const std::string helper = (*it)[2].str();
+      const size_t paren = header.find('(', (*it).position(0));
+      if (paren == std::string::npos) {
+        continue;
+      }
+      const size_t close = matching_delimiter(header, paren, '(', ')');
+      const std::string params = header.substr(paren + 1, close - paren - 1);
+      std::sregex_iterator tp(
+          params.begin(), params.end(), threadgroup_param);
+      if (tp == std::sregex_iterator()) {
+        continue;
+      }
+      const std::string ptype = (*tp)[1].str();
+      const std::string pname = (*tp)[2].str();
+      const size_t param_index = static_cast<size_t>(std::count(
+          params.begin(), params.begin() + (*tp).position(0), ','));
+      // Every call site in the kernel body must pass the same-named array.
+      size_t search = 0;
+      size_t calls = 0;
+      while (true) {
+        const size_t call = body.find(helper + "(", search);
+        if (call == std::string::npos) {
+          break;
+        }
+        if (call > 0 &&
+            (std::isalnum(static_cast<unsigned char>(body[call - 1])) ||
+             body[call - 1] == '_')) {
+          search = call + 1;
+          continue;
+        }
+        const size_t call_open = call + helper.size();
+        const size_t call_close =
+            matching_delimiter(body, call_open, '(', ')');
+        const auto arguments =
+            split(body.substr(call_open + 1, call_close - call_open - 1), ',');
+        if (param_index >= arguments.size()) {
+          throw std::runtime_error(
+              "unsupported threadgroup helper parameter: call of `" +
+              helper + "` is missing argument " +
+              std::to_string(param_index));
+        }
+        std::string argument = arguments[param_index];
+        argument.erase(0, argument.find_first_not_of(" \t\r\n"));
+        argument.erase(argument.find_last_not_of(" \t\r\n") + 1);
+        if (argument != pname) {
+          throw std::runtime_error(
+              "unsupported threadgroup helper parameter: call of `" +
+              helper + "` passes `" + argument + "` for shared array `" +
+              pname + "` (GLSL cannot pass shared storage as a parameter)");
+        }
+        ++calls;
+        search = call_close + 1;
+      }
+      if (calls == 0) {
+        throw std::runtime_error(
+            "unsupported threadgroup helper parameter: `" + helper +
+            "` takes `threadgroup " + ptype + "* " + pname +
+            "` but the kernel body never calls it");
+      }
+      // Drop the matching argument from every call site (reverse order so
+      // the collected positions stay valid while erasing). The source
+      // separates arguments with ", ", so each preceding argument consumes
+      // its trimmed length plus the two separator characters.
+      std::vector<std::pair<size_t, size_t>> cuts;
+      search = 0;
+      while (true) {
+        const size_t call = body.find(helper + "(", search);
+        if (call == std::string::npos) {
+          break;
+        }
+        if (call > 0 &&
+            (std::isalnum(static_cast<unsigned char>(body[call - 1])) ||
+             body[call - 1] == '_')) {
+          search = call + 1;
+          continue;
+        }
+        const size_t call_open = call + helper.size();
+        const size_t call_close =
+            matching_delimiter(body, call_open, '(', ')');
+        const auto arguments =
+            split(body.substr(call_open + 1, call_close - call_open - 1), ',');
+        size_t arg_start = call_open + 1;
+        for (size_t index = 0; index < param_index; ++index) {
+          arg_start += arguments[index].size() + 2;
+        }
+        size_t begin = arg_start;
+        size_t end = begin + arguments[param_index].size();
+        if (param_index + 1 < arguments.size()) {
+          end += 2;  // ", "
+        } else if (param_index > 0) {
+          begin -= 2;  // ", "
+        }
+        cuts.emplace_back(begin, end);
+        search = call_close + 1;
+      }
+      for (auto it = cuts.rbegin(); it != cuts.rend(); ++it) {
+        body.erase(it->first, it->second - it->first);
+      }
+      // Erase the parameter from this signature (with one adjacent comma).
+      const std::string bare = "threadgroup " + ptype + "* " + pname;
+      size_t at = header.find(bare, paren);
+      if (at == std::string::npos || at + bare.size() > close) {
+        throw std::runtime_error(
+            "threadgroup helper parameter vanished while rewriting");
+      }
+      size_t end = at + bare.size();
+      if (header.compare(end, 2, ", ") == 0) {
+        end += 2;
+      } else if (at > paren + 1 && header.compare(at - 2, 2, ", ") == 0) {
+        at -= 2;
+      }
+      header.erase(at, end - at);
+      erased = true;
+      break;
+    }
+    if (!erased) {
+      return;
+    }
   }
 }
 
@@ -818,6 +1049,35 @@ void translate_header(std::string& header) {
           R"(template\s*<\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\1\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\1\s+([A-Za-z_][A-Za-z0-9_]*)\s*\))"),
       "float $2(float $3)");
   translate_types(header);
+  // Helper functions in the user header (e.g. the msv_row_inv_rms stage
+  // helper in mlx-serve's fused residual+RMSNorm kernel) keep their MSL
+  // spellings unless the statement-level body rewrites also run here.
+  // METAL_FUNC marks file-local helpers; GLSL has no storage-class keyword
+  // for them, so it is simply dropped. simd_* reductions and
+  // threadgroup_barrier map to subgroup ops exactly as in the body.
+  // `threadgroup T*` parameters have no GLSL equivalent (shared arrays
+  // cannot be passed as pointer parameters), so a header that uses one is
+  // refused cleanly with the construct named.
+  replace_all(header, "METAL_FUNC", "");
+  // `inline` marks MSL header helpers (the K3 kda glue sigmoid); GLSL has no
+  // such qualifier and glslang rejects it, so drop it (2026-10-08
+  // KernelRecheck). Header-only: `inline` stays a legal body identifier.
+  replace_word(header, "inline", "");
+  replace_all(
+      header, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()");
+  replace_all(header, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
+  replace_all(header, "simd_sum", "subgroupAdd");
+  replace_all(header, "simd_max", "subgroupMax");
+  replace_all(header, "simd_min", "subgroupMin");
+  // metal::precise::rsqrt survives the metal:: strip above as rsqrt; GLSL
+  // names it inversesqrt (same mapping the body rewrites apply).
+  replace_word(header, "rsqrt", "inversesqrt");
+  if (header.find("threadgroup") != std::string::npos) {
+    throw std::runtime_error(
+        "unsupported MSL feature `threadgroup` in a helper function "
+        "(GLSL allows shared storage only as a file-scope declaration in "
+        "the kernel body; helper parameters must be specialized away)");
+  }
   if (header.find("template") != std::string::npos ||
       header.find("[[") != std::string::npos) {
     throw std::runtime_error("unsupported user header declaration");
@@ -986,6 +1246,7 @@ Translation translate_msl(
       search = block_start;
     }
   }
+  specialize_threadgroup_helper_params(header, body);
   translate_header(header);
 
   const std::vector<std::string> forbidden = {
@@ -1050,7 +1311,37 @@ Translation translate_msl(
   replace_all(body, "metal::precise::", "");
   replace_all(body, "metal::fast::", "");
   replace_all(body, "metal::", "");
+  // numeric_limits<T>::infinity()/max()/lowest()/min()/epsilon() have no GLSL
+  // form; the IEEE bit patterns and C literals are exact. The mlx-vlm
+  // llguidance mask kernel masks with -infinity() (2026-10-08 KernelRecheck).
+  // The whole numeric_limits<...>::fn() expression must match as one — the
+  // bare words are ordinary calls (metal::max) and must survive untouched.
+  // Runs before the INFINITY/NAN defines are emitted below.
+  {
+    static const std::regex limits(
+        R"(numeric_limits\s*<\s*[A-Za-z_][A-Za-z0-9_]*\s*>\s*::\s*(infinity|lowest|max|min|epsilon)\s*\(\s*\))");
+    static const std::unordered_map<std::string, std::string> limit_values = {
+        {"infinity", "INFINITY"},
+        {"lowest", "(-3.4028234663852886e+38f)"},
+        {"max", "3.4028234663852886e+38f"},
+        {"min", "1.1754943508222875e-38f"},
+        {"epsilon", "1.1920928955078125e-07f"},
+    };
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    for (std::sregex_iterator it(body.begin(), body.end(), limits), end;
+         it != end; ++it) {
+      const auto& match = *it;
+      rewritten += body.substr(last, match.position() - last);
+      rewritten += limit_values.at((*it)[1].str());
+      last = match.position() + match.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
+  }
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
+  replace_all(body, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
   replace_all(body, "simd_sum", "subgroupAdd");
   replace_all(body, "simd_max", "subgroupMax");
   // MSL metal::precise::rsqrt survives the metal:: strip as rsqrt; GLSL
@@ -1110,6 +1401,111 @@ Translation translate_msl(
         "bool _mlx_nonzero(float v) { return v != 0.0f; }\n";
     body = std::regex_replace(body, integer_condition,
                               "$1 (_mlx_nonzero($2))");
+  }
+
+  // MSL converts integers to bool inside `&&` chains (the llguidance mask:
+  // `word < S && ((bits >> bit) & 1u)`); GLSL requires bool operands. Split
+  // the top-level `&&` of a bool declaration and route the operands through
+  // an overloaded and-helper (identity on bool, != 0 on integers/floats).
+  std::string bool_and_helpers;
+  {
+    static const std::regex bool_decl(
+        R"(\bbool\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    bool any_split = false;
+    auto split_top_level = [](const std::string& init) {
+      std::vector<std::string> parts;
+      int depth = 0;
+      size_t start = 0;
+      for (size_t i = 0; i < init.size(); ++i) {
+        char c = init[i];
+        if (c == '(' || c == '[' || c == '{') {
+          ++depth;
+        } else if (c == ')' || c == ']' || c == '}') {
+          --depth;
+        } else if (depth == 0 && c == '&' && i + 1 < init.size() &&
+                   init[i + 1] == '&') {
+          parts.push_back(init.substr(start, i - start));
+          start = i + 2;
+          ++i;
+        }
+      }
+      parts.push_back(init.substr(start));
+      return parts;
+    };
+    for (std::sregex_iterator it(body.begin(), body.end(), bool_decl), end;
+         it != end; ++it) {
+      const auto& m = *it;
+      rewritten += body.substr(last, m.position() - last);
+      const std::string init = trim(m[2].str());
+      auto parts = split_top_level(init);
+      if (parts.size() > 1) {
+        any_split = true;
+        std::string expr = parts[0];
+        for (size_t k = 1; k < parts.size(); ++k) {
+          expr = "_mlx_bool_and(" + expr + ", " + parts[k] + ")";
+        }
+        rewritten += "bool " + m[1].str() + " = " + expr + ";";
+      } else {
+        rewritten += m[0].str();
+      }
+      last = m.position() + m.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
+    if (any_split) {
+      bool_and_helpers =
+          "bool _mlx_bool_and(bool a, bool b) { return a && b; }\n"
+          "bool _mlx_bool_and(bool a, uint b) { return a && b != 0u; }\n"
+          "bool _mlx_bool_and(uint a, bool b) { return a != 0u && b; }\n"
+          "bool _mlx_bool_and(uint a, uint b) { return a != 0u && b != 0u; }\n"
+          "bool _mlx_bool_and(bool a, int b) { return a && b != 0; }\n"
+          "bool _mlx_bool_and(int a, bool b) { return a != 0 && b; }\n"
+          "bool _mlx_bool_and(int a, int b) { return a != 0 && b != 0; }\n"
+          "bool _mlx_bool_and(uint a, int b) { return a != 0u && b != 0; }\n"
+          "bool _mlx_bool_and(int a, uint b) { return a != 0 && b != 0u; }\n"
+          "bool _mlx_bool_and(bool a, float b) { return a && b != 0.0f; }\n"
+          "bool _mlx_bool_and(float a, bool b) { return a != 0.0f && b; }\n"
+          "bool _mlx_bool_and(float a, float b) { return a != 0.0f && b != 0.0f; }\n";
+    }
+  }
+
+  // MSL array initializers may under-supply elements (`float sum[4] =
+  // {0.0};` zero-fills in C); GLSL requires the exact element count. Expand
+  // the single-constant form; complete lists pass through unchanged
+  // (2026-10-08 KernelRecheck, bitlinear_matmul).
+  {
+    static const std::regex array_init(
+        R"(\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([0-9]+)\s*\]\s*=\s*\{\s*([^{}]*?)\s*\})");
+    std::string rewritten;
+    rewritten.reserve(body.size());
+    size_t last = 0;
+    for (std::sregex_iterator it(body.begin(), body.end(), array_init), end;
+         it != end; ++it) {
+      const auto& m = *it;
+      rewritten += body.substr(last, m.position() - last);
+      const int size = std::atoi(m[3].str().c_str());
+      const std::string values = trim(m[4].str());
+      const bool single = values.find(',') == std::string::npos;
+      if (size > 1 && single) {
+        rewritten += m[1].str() + " " + m[2].str() + "[" + m[3].str() +
+            "] = {";
+        for (int i = 0; i < size; ++i) {
+          if (i) {
+            rewritten += ", ";
+          }
+          rewritten += values;
+        }
+        rewritten += "}";
+      } else {
+        rewritten += m[0].str();
+      }
+      last = m.position() + m.length();
+    }
+    rewritten += body.substr(last);
+    body = std::move(rewritten);
   }
 
   bool needs_bfloat = false;
@@ -1276,7 +1672,7 @@ Translation translate_msl(
     }
   }
   for (size_t index = 0; index < parameters.size(); ++index) {
-    const auto& parameter = parameters[index];
+    auto parameter = parameters[index];
     const bool output = index >= output_start;
     declarations += buffer_declaration(parameter, output);
     if (parameter.type == "bfloat16_t") {
@@ -1285,6 +1681,27 @@ Translation translate_msl(
     } else if (parameter.atomic) {
       translate_atomic_parameter(body, parameter);
     } else {
+      // float16_t buffer reads widen to float exactly (Metal promotes half
+      // arithmetic to fp32); mixed int/f16 expressions then compile as
+      // int/float (2026-10-08 KernelRecheck, bitlinear_matmul).
+      if (parameter.type == "float16_t" && !output) {
+        const auto escaped16 = regex_escape(parameter.name);
+        body = std::regex_replace(
+            body,
+            std::regex("\\b" + escaped16 + R"(\s*\[([^\]]+)\])"),
+            "float(_b" + std::to_string(parameter.binding) + ".data[$1])");
+      }
+      // A small array bound in the constant space that the body never
+      // indexes is used as a value: mlx-audio's phonon unpack divides
+      // `in_features / 16` directly (2026-10-08 KernelRecheck). Mark it
+      // scalar so the macro takes element 0; indexed small arrays keep the
+      // array macro.
+      if (parameter.constant_space && !parameter.scalar && !parameter.atomic &&
+          !std::regex_search(
+              body,
+              std::regex("\\b" + regex_escape(parameter.name) + R"(\s*\[)"))) {
+        parameter.scalar = true;
+      }
       // Indexed stores into a non-bfloat buffer of a narrower int type
       // need the same explicit cast as outputs when the RHS is float.
       // Cover bfloat16_t INPUT parameters as well as outputs: kernels
@@ -1299,10 +1716,16 @@ Translation translate_msl(
             parameter.name + "[$1] = " + glsl_type(parameter.type) + "($2);");
       }
       macros += "#define _mlx_arg" +
-          std::to_string(parameter.binding) + " _b" +
-          std::to_string(parameter.binding) + ".data";
-      if (parameter.scalar) {
-        macros += "[0]";
+          std::to_string(parameter.binding) + " ";
+      if (parameter.type == "float16_t" && parameter.scalar) {
+        // half storage widened at the macro: int/f16 arithmetic compiles as
+        // int/float (Metal promotes half math to fp32)
+        macros += "float(_b" + std::to_string(parameter.binding) + ".data[0])";
+      } else {
+        macros += "_b" + std::to_string(parameter.binding) + ".data";
+        if (parameter.scalar) {
+          macros += "[0]";
+        }
       }
       macros += "\n";
     }
@@ -1346,6 +1769,13 @@ Translation translate_msl(
         std::regex("(^|[^.\\w])" + regex_escape(parameter.name) + "(?!\\w)"),
         "$1" + alias);
   }
+
+  // GLSL reserves words MSL allows as identifiers (`bool in = ...` in the
+  // mlx-serve residual+RMSNorm row walk; `out` likewise). By this point
+  // every buffer parameter is aliased to _mlx_argN, so a surviving token is
+  // a body-local identifier — rename it out of the reserved set.
+  replace_word(body, "in", "_mlx_in");
+  replace_word(body, "out", "_mlx_out");
 
   if (body.find("threadgroup") != std::string::npos ||
       body.find("memory_order") != std::string::npos ||
@@ -1398,7 +1828,8 @@ Translation translate_msl(
          << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
          << "float _mlx_bf16_round(float value) { return _mlx_bf16_to_float(_mlx_float_to_bf16(value)); }\n";
   }
-  glsl << header << "\n" << element_helpers << vector_alias_helpers << condition_helpers << macros;
+  glsl << header << "\n" << element_helpers << vector_alias_helpers
+       << condition_helpers << bool_and_helpers << macros;
   glsl << "void main() {\n"
        << "if (gl_GlobalInvocationID.x >= " << grid_x
        << "u || gl_GlobalInvocationID.y >= " << grid_y

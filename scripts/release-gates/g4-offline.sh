@@ -9,8 +9,9 @@ PROBE="$GATES_DIR/gate-probe.py"
 gate_refuse_existing "$ASSIST_OFF"
 : > "$LOG"
 gate_begin "$LOG"
+gate_log_wheel_identity "$LOG"
 
-flock -x -w 300 "$GPU_LOCK" unshare -n -r bash -c '
+gate_lock -x -w 300 unshare -n -r bash -c '
 set -uo pipefail
 ip link set lo up
 export PATH="'"$GATE_INSTALL_PATH"'"

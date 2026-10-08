@@ -1,0 +1,9 @@
+
+    uint i = thread_position_in_grid.x;             // 0..H-1 (H=은닉 차원)
+    constant float* cs = cons;                      // [b1, b2, H]
+    uint H = (uint)cs[2];
+    float g = (float)gu[i];
+    float u = (float)gu[H + i];
+    float y = (cs[0] * metal::tanh(g / cs[0])) * (1.0f / (1.0f + metal::exp(-g)))
+              * (cs[1] * metal::tanh(u / cs[1]));
+    out[i] = (bfloat16_t)y;

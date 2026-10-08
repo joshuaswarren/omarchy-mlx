@@ -1,0 +1,533 @@
+{
+ "bitlinear": {
+  "repo": "mlx-lm",
+  "commit": "2184db2298042bf56807f0891746123e15528db7",
+  "path": "mlx_lm/models/bitlinear_layers.py"
+ },
+ "kernels": {
+  "bitlinear_matmul": {
+   "from": "bitlinear",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "packed_weights",
+    "weight_scale"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "fused_double_norm_rope": {
+   "from": "bonsai_blocks",
+   "format_keys": [
+    "S_IMG",
+    "S_TXT",
+    "H_DIM",
+    "D_DIM",
+    "DIM",
+    "EPS",
+    "ELEMS"
+   ],
+   "header": false,
+   "input_names": [
+    "img_qkv",
+    "txt_qkv",
+    "norm_q",
+    "norm_k",
+    "norm_added_q",
+    "norm_added_k",
+    "cos_vals",
+    "sin_vals"
+   ],
+   "output_names": [
+    "q_out",
+    "k_out",
+    "v_out"
+   ],
+   "atomic_outputs": false
+  },
+  "fused_single_norm_rope": {
+   "from": "bonsai_blocks",
+   "format_keys": [
+    "S_DIM",
+    "H_DIM",
+    "D_DIM",
+    "FUSED_DIM",
+    "DIM",
+    "EPS",
+    "ELEMS"
+   ],
+   "header": false,
+   "input_names": [
+    "fused",
+    "norm_q",
+    "norm_k",
+    "cos_vals",
+    "sin_vals"
+   ],
+   "output_names": [
+    "q_out",
+    "k_out",
+    "v_out"
+   ],
+   "atomic_outputs": false
+  },
+  "inkling_banded_mask": {
+   "from": "inkling",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "rel",
+    "proj"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "inkling_banded_mask_v2": {
+   "from": "inkling",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "rel",
+    "proj",
+    "kshape"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "inkling_sconv_decode": {
+   "from": "inkling",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "state",
+    "w",
+    "res"
+   ],
+   "output_names": [
+    "out",
+    "nstate"
+   ],
+   "atomic_outputs": false
+  },
+  "inkling_moe_route": {
+   "from": "inkling",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "logits",
+    "corr",
+    "wscale"
+   ],
+   "output_names": [
+    "idx",
+    "wk",
+    "gamma"
+   ],
+   "atomic_outputs": false
+  },
+  "inkling_moe_down_combine": {
+   "from": "inkling",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "xin",
+    "wq",
+    "sc",
+    "bi",
+    "idx",
+    "wk"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "mlx_vlm_llguidance_mask": {
+   "from": "structured",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "logits",
+    "mask"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "custom_depthwise_conv1d": {
+   "from": "mossformer_dw",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "inp",
+    "weight",
+    "params"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "relu_squared": {
+   "from": "mossformer_fa",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "inp"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "fused_multiply_add": {
+   "from": "mossformer_fa",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "a",
+    "b",
+    "scale"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "qk_relu_squared": {
+   "from": "mossformer_fa",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "q",
+    "k",
+    "scale"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "mlx_audio_phonon_unpack_base5_v1": {
+   "from": "phonon",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "quint5_q",
+    "in_features"
+   ],
+   "output_names": [
+    "base_q",
+    "residual_q"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm_v2": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm_v4": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm_v4_situ": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid",
+    "gbuf"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm_v3_situ": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid",
+    "gbuf"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm_v3": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_gather_mm_glu": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "eidx",
+    "tokidx",
+    "a_qs",
+    "a_qh",
+    "a_d",
+    "b_qs",
+    "b_qh",
+    "b_d",
+    "grid"
+   ],
+   "output_names": [
+    "yg",
+    "yu"
+   ],
+   "atomic_outputs": false
+  },
+  "cbq_grad_d": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "x",
+    "cot",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "grid"
+   ],
+   "output_names": [
+    "grad_d"
+   ],
+   "atomic_outputs": true
+  },
+  "cbq_grad_x": {
+   "from": "cbq",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "cot",
+    "eidx",
+    "tokidx",
+    "cb_qs",
+    "cb_qh",
+    "cb_d",
+    "grid"
+   ],
+   "output_names": [
+    "grad_x"
+   ],
+   "atomic_outputs": true
+  },
+  "kda_glue_pre": {
+   "from": "fuse",
+   "format_keys": [],
+   "header": true,
+   "input_names": [
+    "hp",
+    "z",
+    "s0",
+    "s1",
+    "s2",
+    "wq",
+    "wk",
+    "wv",
+    "dtb",
+    "alog",
+    "cons"
+   ],
+   "output_names": [
+    "q",
+    "k",
+    "v",
+    "g",
+    "beta",
+    "ns0",
+    "ns1",
+    "ns2"
+   ],
+   "atomic_outputs": false
+  },
+  "kda_glue_post": {
+   "from": "fuse",
+   "format_keys": [],
+   "header": true,
+   "input_names": [
+    "inp",
+    "hp",
+    "w",
+    "cons"
+   ],
+   "output_names": [
+    "y"
+   ],
+   "atomic_outputs": false
+  },
+  "moe_route_fused": {
+   "from": "fuse",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "gate_out",
+    "bias",
+    "lo_map",
+    "hi_map",
+    "meta"
+   ],
+   "output_names": [
+    "lo_idx",
+    "w_lo",
+    "hi_idx",
+    "w_hi"
+   ],
+   "atomic_outputs": false
+  },
+  "situ_fused": {
+   "from": "fuse",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "gu",
+    "cons"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  },
+  "situ_pair_fused": {
+   "from": "fuse",
+   "format_keys": [],
+   "header": false,
+   "input_names": [
+    "ga",
+    "ub",
+    "cons"
+   ],
+   "output_names": [
+    "out"
+   ],
+   "atomic_outputs": false
+  }
+ },
+ "bonsai_blocks": {
+  "repo": "mlx-vlm",
+  "commit": "8f5dc3ddddbb8d7dd2b88ac51015def6f81fed21",
+  "path": "mlx_vlm/models/bonsai/klein_fast/blocks.py"
+ },
+ "inkling": {
+  "repo": "mlx-vlm",
+  "commit": "8f5dc3ddddbb8d7dd2b88ac51015def6f81fed21",
+  "path": "mlx_vlm/models/inkling/language.py"
+ },
+ "structured": {
+  "repo": "mlx-vlm",
+  "commit": "8f5dc3ddddbb8d7dd2b88ac51015def6f81fed21",
+  "path": "mlx_vlm/structured.py"
+ },
+ "mossformer_dw": {
+  "repo": "mlx-audio",
+  "commit": "17001a6950956302f15b53d86b601324efe716ba",
+  "path": "mlx_audio/sts/models/mossformer2_se/depthwise_conv1d_kernel.py"
+ },
+ "mossformer_fa": {
+  "repo": "mlx-audio",
+  "commit": "17001a6950956302f15b53d86b601324efe716ba",
+  "path": "mlx_audio/sts/models/mossformer2_se/flash_attention_kernels.py"
+ },
+ "phonon": {
+  "repo": "mlx-audio",
+  "commit": "17001a6950956302f15b53d86b601324efe716ba",
+  "path": "mlx_audio/stt/models/phonon/packed.py"
+ },
+ "cbq": {
+  "repo": "hf:avlp12/Kimi-K3-Alis-MLX-Dynamic-2.10bpw",
+  "commit": "downloaded-2026-10-07",
+  "path": "k3_cbq.py"
+ },
+ "fuse": {
+  "repo": "hf:avlp12/Kimi-K3-Alis-MLX-Dynamic-2.10bpw",
+  "commit": "downloaded-2026-10-07",
+  "path": "k3_fuse.py"
+ }
+}

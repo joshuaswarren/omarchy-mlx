@@ -119,7 +119,11 @@ def main(argv=None):
     parser.add_argument("--pair", choices=("everyday", "quality", "compact"))
     parser.add_argument("--resume", action="store_true",
                         help="load the saved pair at login and keep both models resident")
-    parser.add_argument("--yes", action="store_true", help="approve downloading the explicitly selected pair")
+    parser.add_argument("--wake-word", nargs="?", const="hey_jarvis", default=None,
+                        help="opt-in wake word listener (default phrase: hey_jarvis); "
+                             "approves the one-time pinned openWakeWord model download")
+    parser.add_argument("--wake-threshold", type=float, default=0.5,
+                        help="wake word score threshold (default 0.5)")
     args = parser.parse_args(argv)
     if os.environ.get("MLX_OMARCHY_TTFT_TRACE") == "1":
         # Diagnostic: SIGUSR1 dumps every thread's stack to stderr so a
@@ -139,6 +143,8 @@ def main(argv=None):
         parser.error("--yes requires an explicit --pair")
     if args.resume and args.pair:
         parser.error("--resume uses the saved pair; do not pass --pair")
+    if not 0.0 < args.wake_threshold < 1.0:
+        parser.error("--wake-threshold must be between 0 and 1")
     directory = args.home / "assistant"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = (directory / "application.lock").open("a")
@@ -160,6 +166,8 @@ def main(argv=None):
                 json.dump(runtime, stream)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
+            if args.wake_word:
+                server.start_wake_word(args.wake_word, args.wake_threshold)
             def interrupt(_signal, _frame):
                 raise KeyboardInterrupt
 
