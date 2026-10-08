@@ -95,13 +95,12 @@ Each run prints a table with prompt processing (pp512) and generation (tg64)
 tokens per second. Compare the `t/s` columns. The `backend` column must say
 `Vulkan`; if it says `CPU`, the GPU driver did not load.
 
-Memory: the model sits in unified memory, so keep the model size plus about 3
-GiB free (about 7 GiB for the 9B model) and close big programs first. The
-wrapper checks this and refuses when `MemAvailable` is lower. It also warns
-when no swap is on. On a lab host that uses `gpu-turn`, it additionally
-requires swap or zram and refuses to run outside a `gpu-turn` ticket.
-The system-driver command above does not go through the wrapper, so check
-`free -h` yourself before you run it.
+Memory: the model sits in unified memory, so close big programs first. The
+wrapper refuses to start when `MemAvailable` is below the model size plus 1
+GiB, and warns when it is below the model size plus 3 GiB. With about 4.5
+GiB free (an 8 GB machine with a desktop running) the 4B model runs and the 9B
+model is refused. The system-driver command above does not go through the
+wrapper, so check `free -h` yourself before you run it.
 
 ## Measured on a 16 GB M1 Pro (base M1 GPU)
 
@@ -143,10 +142,17 @@ the machine has less than 12 GB of RAM. To fetch it by hand:
 
 ```bash
 curl -L -C - --retry 8 --retry-all-errors -o llamacpp-demo/Qwen_Qwen3.5-4B-IQ2_M.gguf https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-IQ2_M.gguf
-``` The system Mesa failure on 8 GB is
-because the old driver tries to allocate a single 542 MB compute buffer
-up-front; our build allocates per-ubatch (256 tokens here) and survives
-the same memory pressure.
+```
+
+Then run it through the wrapper exactly like the 9B, with the 4B file name:
+
+```bash
+bash scripts/llamacpp-demo-run.sh llama-build/bin/llama-bench -m Qwen_Qwen3.5-4B-IQ2_M.gguf -p 512 -n 64 -ngl 99 -t 8
+```
+
+The system Mesa failure on 8 GB is because the old driver tries to allocate a
+single 542 MB compute buffer up-front; our build allocates per-ubatch (256
+tokens here) and survives the same memory pressure.
 
 ## Step 3: put it on stage
 
