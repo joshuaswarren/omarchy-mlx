@@ -392,3 +392,27 @@ TEST_CASE("as_type<uint> on an int buffer read is the identity conversion") {
   CHECK(glsl.find("floatBitsToUint(_mlx_arg1[") == std::string::npos);
   CHECK(glsl.find("&& ") != std::string::npos);
 }
+
+TEST_CASE("triple-nested casts and float literal cast arguments") {
+  // kda_glue_pre: `(float)((float)cq * (float)sq_)` — the fixpoint pass must
+  // rewrite the inner casts after the outer one, and never re-match its own
+  // output into `float((float))(float(cq) * ...)`. moe_route_fused:
+  // `(bfloat16_t)0.0f` must cast the whole literal, not stop at the digit.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float* v [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  float a = (float)((float)v[c] * (float)v[c]);\n"
+      "  float b = (float)0.0f;\n"
+      "  float w = (float)(3 + (int)(7 - 1));\n"
+      "  y[c] = a + b + w;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("float(") != std::string::npos);
+  CHECK(glsl.find("(float)") == std::string::npos);
+  CHECK(glsl.find("float((float))") == std::string::npos);
+  CHECK(glsl.find("float(0).0f") == std::string::npos);
+  CHECK(glsl.find("0.0f") != std::string::npos);
+  CHECK(glsl.find("(int)(") == std::string::npos);
+}

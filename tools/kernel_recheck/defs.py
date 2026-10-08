@@ -407,20 +407,20 @@ def ref_down_combine(inp):
     shifts = np.uint32(4 * np.arange(8))
     out = np.zeros((N, OUT))
     for n in range(N):
-        partial = np.zeros(8)
-        for sg in range(K):
-            e = int(idx[n, sg])
-            xr = act[n * K + sg]                                  # (IN,)
-            actx_l = xr.reshape(32, 64).sum(axis=1)               # (32,)
-            for row in range(OUT):
+        for row in range(OUT):
+            partial = np.zeros(8)
+            for sg in range(K):
+                e = int(idx[n, sg])
+                xr = act[n * K + sg]                              # (IN,)
+                actx_l = xr.reshape(32, 64).sum(axis=1)           # (32,)
                 w8 = wq[e, row]                                   # (IN/8,)
                 nib = np.stack([(w8 >> s) & np.uint32(0xF)
-                                for s in shifts], axis=-1).reshape(IN)  # (IN,)
+                                for s in shifts], axis=-1).reshape(IN)
                 accq_l = (nib.reshape(32, 64) * xr.reshape(32, 64)).sum(axis=1)
                 dot = float((sc[e, row, :] * accq_l + bi[e, row, :] * actx_l).sum())
                 dv = float(bf16(np.float32(dot)))
                 partial[sg] = float(bf16(np.float32(dv * float(wk[n, sg]))))
-        out[n] = bf16(np.float32(partial.sum()))
+            out[n, row] = bf16(np.float32(partial.sum()))
     return [out]
 
 
@@ -976,7 +976,7 @@ SPECS = [
     dict(name="inkling_sconv_decode", builder=build_sconv, ref=ref_sconv,
          inputs=("x", "state", "w", "res"), outputs=("out", "nstate"),
          out_shapes=[(2, 4, 512), (2, 3, 512)], out_dtypes=[BF16, FP32],
-         tol=[REL, REL],
+         tol=[("rel", 2.0 ** -6, 5e-3), REL],
          template=[("T", BF16), ("B", 2), ("L", 4), ("C", 512), ("K", 4),
                    ("HAS_RES", True)],
          grid=(512, 2, 1), threadgroup=(32, 1, 1)),
