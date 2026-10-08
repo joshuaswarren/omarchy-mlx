@@ -110,7 +110,38 @@ budget stays the right lever for that machine class, and the frame
 probe on the M2 Max (120 Hz panel) is queued behind the fleet's GPU
 backlog.
 
-(FILLED AFTER M2 RUN)
+**jw16 (M1 Max T6001/G13C, the reporter's exact model
+Qwen2-VL-7B-Instruct-8bit, old-code wheel edac8b4c6 - only the group
+arms read there):**
+
+| arm | submissions | sub p50 ms | sub p95 | sub max | decode tok/s |
+|---|---|---|---|---|---|
+| `BATCH_WORK=0` (off) | 102 | 14.3 | 15.6 | 18.0 | 5.92 |
+| `BATCH_WORK=40000` (old default) | 407 | 3.0 | 4.1 | 4.3 | 5.92 |
+| `BATCH_WORK=5000` | 2323 | 0.5 | 0.5 | 4.3 | 5.53 |
+| `BATCH_WORK=2000` | 4476 | 0.12 | 0.5 | 3.4 | 5.34 |
+
+This bounds the mechanism from both sides. The group-count proxy
+under-counts across model classes (the jwm1 table shows that directly:
+per-group cost spans 78 ns to 4,600 ns in the same profiles), but the
+reporter's residual 84 ms is NOT reproduced on the nearest chip with
+their own model: the same 40000-group default gives us 3.0 ms on G13C
+against their ~84 ms on G13S/t6000 - a 28x per-group cost gap their own
+report attributes to stock Mesa (`cooperative_matrix_f32_8 = 0`) and a
+different kernel. The time budget bounds submission length by
+construction on every chip; it cannot make a 28x-slower kernel path
+fast. Digest caveat: the mlx-vlm text path's per-arm digests differ
+(the vlm sampler's greediness is unverified), so bit-identity across
+budgets is evidenced by the lm-engine jwm1 runs (identical digests in
+every arm of two runs) and the standing suites, not by the vlm digests.
+
+**Across both hosts the frame probe never sees the stutter**: steady 60
+fps delivery, frame p99 16.67 ms, zero frames over 33 ms at every
+setting including cap off with 14-18 ms (jw16) and 52-225 ms (jwm1)
+submissions. Our fleet (aurora 12.6 kernel, stock Mesa for the desktop,
+Honeykrisp only under MLX) does not reproduce the hitching the reporter
+sees on their stack; their submission-length sensitivity stands, and
+the time budget is the lever we control that bounds it.
 
 ## Regression test in CI
 
