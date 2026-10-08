@@ -32,6 +32,7 @@
 #define ACC_LOWEST uintBitsToFloat(0xff800000u)
 #define ACC_HIGHEST uintBitsToFloat(0x7f800000u)
 #define LOAD_AT(addr) float(input_data.values[addr])
+#define AR_IS_FLOAT 1
 #elif defined(USE_BF16)
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #define STORAGE_TYPE uint16_t
@@ -39,6 +40,7 @@
 #define ACC_LOWEST uintBitsToFloat(0xff800000u)
 #define ACC_HIGHEST uintBitsToFloat(0x7f800000u)
 #define LOAD_AT(addr) uintBitsToFloat(uint(input_data.values[addr]) << 16u)
+#define AR_IS_FLOAT 1
 #elif defined(USE_I8)
 #define BYTE 1
 #define VAL_TYPE int
@@ -91,6 +93,7 @@
 #define ACC_LOWEST uintBitsToFloat(0xff800000u)
 #define ACC_HIGHEST uintBitsToFloat(0x7f800000u)
 #define LOAD_AT(addr) float(input_data.values[addr])
+#define AR_IS_FLOAT 1
 #endif
 
 layout(local_size_x = 256) in;
@@ -147,12 +150,38 @@ shared uint block_indices[256];
 // the compares consume them in the same order (one element per memory round
 // trip made a 248320-wide logits row latency-bound at ~0.5 ms); every
 // thread's (value, index) pair, and so the result, is unchanged.
+//
+// Float inputs follow the mlx reduction semantics: NaN propagates and the
+// FIRST NaN index wins (upstream arg_reduce_tests.cpp "test arg reduce
+// NaN"). A challenger therefore beats the incumbent only when the
+// challenger is NaN and the incumbent is not (within a thread the walk is
+// ascending, so a later NaN never displaces an earlier one; in the
+// cross-thread tree the index tiebreak keeps the first NaN). Integer
+// inputs keep the plain strict compare.
+#if defined(AR_IS_FLOAT)
+#define AR_CHALLENGES(next, incumbent) \
+  (isnan(next) ? !isnan(incumbent) \
+               : (!isnan(incumbent) && \
+                  (is_max ? (next) > (incumbent) : (next) < (incumbent))))
+#define AR_CHALLENGES_AT(next, incumbent, next_index, incumbent_index) \
+  (isnan(next) ? (!isnan(incumbent) || (next_index) < (incumbent_index)) \
+               : (!isnan(incumbent) && \
+                  (((is_max ? (next) > (incumbent) : (next) < (incumbent))) || \
+                   ((next) == (incumbent) && \
+                    (next_index) < (incumbent_index)))))
+#else
+#define AR_CHALLENGES(next, incumbent) \
+  (is_max ? (next) > (incumbent) : (next) < (incumbent))
+#define AR_CHALLENGES_AT(next, incumbent, next_index, incumbent_index) \
+  (((is_max ? (next) > (incumbent) : (next) < (incumbent))) || \
+   ((next) == (incumbent) && (next_index) < (incumbent_index)))
+#endif
 #define AR_LOAD(b) VAL_TYPE v##b = LOAD_AT(base + (b) * 256u);
 #define AR_LOAD16 AR_LOAD(0u) AR_LOAD(1u) AR_LOAD(2u) AR_LOAD(3u) AR_LOAD(4u) \
   AR_LOAD(5u) AR_LOAD(6u) AR_LOAD(7u) AR_LOAD(8u) AR_LOAD(9u) AR_LOAD(10u) \
   AR_LOAD(11u) AR_LOAD(12u) AR_LOAD(13u) AR_LOAD(14u) AR_LOAD(15u)
 #define AR_STEP(b) { \
-  bool wins = is_max ? v##b > local_value : v##b < local_value; \
+  bool wins = AR_CHALLENGES(v##b, local_value); \
   if (wins) { \
     local_value = v##b; \
     local_index = index + (b) * 256u; \
@@ -178,7 +207,7 @@ void main() {
     if ((params.flags & 0x80000000u) != 0u) {
       for (uint index = thread; index < row_length; index += 256u) {
         VAL_TYPE next = LOAD_AT(start + index);
-        bool wins = is_max ? next > local_value : next < local_value;
+        bool wins = AR_CHALLENGES(next, local_value);
         if (wins) {
           local_value = next;
           local_index = index;
@@ -193,7 +222,7 @@ void main() {
       }
       for (; index < row_length; index += 256u) {
         VAL_TYPE next = LOAD_AT(start + index);
-        bool wins = is_max ? next > local_value : next < local_value;
+        bool wins = AR_CHALLENGES(next, local_value);
         if (wins) {
           local_value = next;
           local_index = index;
@@ -207,10 +236,12 @@ void main() {
       if (thread < stride) {
         VAL_TYPE mine = block_values[thread];
         VAL_TYPE theirs = block_values[thread + stride];
-        bool wins = is_max ? theirs > mine : theirs < mine;
-        bool ties = theirs == mine &&
-            block_indices[thread + stride] < block_indices[thread];
-        if (wins || ties) {
+        bool wins = AR_CHALLENGES_AT(
+            theirs,
+            mine,
+            block_indices[thread + stride],
+            block_indices[thread]);
+        if (wins) {
           block_values[thread] = theirs;
           block_indices[thread] = block_indices[thread + stride];
         }
