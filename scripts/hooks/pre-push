@@ -12,4 +12,9 @@ GATE="$HERE/check_compute_kernel_wiring.py"
 [ -f "$GATE" ] || GATE="$HERE/../check_compute_kernel_wiring.py"
 [ -f "$GATE" ] || { echo "compute-kernel-wiring: check_compute_kernel_wiring.py missing" >&2; exit 1; }
 python3 "$GATE" "$HERE/../.." || exit 1
+# Kernel inventory doc gate: the 26-row GPU status table must exist and its
+# counts line must match the rows (the 2026-10-08 doc-drift class).
+DOC="$HERE/../../tools/kernel_recheck/check_doc_table.py"
+[ -f "$DOC" ] || { echo "kernel-inventory-counts: check_doc_table.py missing" >&2; exit 1; }
+python3 "$DOC" || exit 1
 exec python3 "$CHECK" --hook
