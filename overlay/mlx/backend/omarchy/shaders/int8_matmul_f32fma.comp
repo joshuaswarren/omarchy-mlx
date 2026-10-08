@@ -11,6 +11,12 @@
 // int8_matmul.comp while the per-MAC work drops from int32 imad on shared
 // words to register FMA.
 //
+// The per-thread accumulators are eight SCALARS, not a float[8] array:
+// glslang kept the array form in private Function memory even at -O (first
+// hardware bench: 332 GMAC/s, accumulators disassembled to
+// _ptr_Function__arr_float_uint_8), and every inner FMA then pays stack
+// traffic. Scalar names keep the accumulators in registers by construction.
+//
 // EXACTNESS (why this is bit-identical to the int32 accumulator in
 // int8_matmul.comp): int8 values are exact in float32 and every product
 // |x*w| <= 128*128 = 16384 (-128 is in range; 127*127 is not the worst
@@ -152,6 +158,22 @@ void stage_w_word(uint slot, uint row_base, uint row_limit, uint k0) {
   tile_w[r][base + 3u] = float(sign_byte(word, 3u));
 }
 
+// One k index of the eight-column micro-FMA: eight shared reads, eight
+// FMAs, scalars only.
+#define FMA_STEP(kk)                                                          \
+  do {                                                                        \
+    float xv = tile_x[ly][kk];                                                \
+    uint wr = lx * QUAD;                                                      \
+    a0 += xv * tile_w[wr + 0u][kk];                                           \
+    a1 += xv * tile_w[wr + 1u][kk];                                           \
+    a2 += xv * tile_w[wr + 2u][kk];                                           \
+    a3 += xv * tile_w[wr + 3u][kk];                                           \
+    a4 += xv * tile_w[wr + 4u][kk];                                           \
+    a5 += xv * tile_w[wr + 5u][kk];                                           \
+    a6 += xv * tile_w[wr + 6u][kk];                                           \
+    a7 += xv * tile_w[wr + 7u][kk];                                           \
+  } while (false)
+
 void main() {
   const uint rows = params.matrix_m;
   const uint n = params.matrix_n;
@@ -172,20 +194,16 @@ void main() {
     for (uint tr = gl_WorkGroupID.y; tr < m_tiles; tr += gl_NumWorkGroups.y) {
       const uint row = tr * TILE_M + ly;
       const bool in_tile = row < rows;
-      float gate_total[QUAD];
-      float value_total[QUAD];
-      for (uint c = 0u; c < QUAD; c++) {
-        gate_total[c] = 0.0f;
-        value_total[c] = 0.0f;
-      }
+      float g0 = 0.0f, g1 = 0.0f, g2 = 0.0f, g3 = 0.0f;
+      float g4 = 0.0f, g5 = 0.0f, g6 = 0.0f, g7 = 0.0f;
+      float v0 = 0.0f, v1 = 0.0f, v2 = 0.0f, v3 = 0.0f;
+      float v4 = 0.0f, v5 = 0.0f, v6 = 0.0f, v7 = 0.0f;
 
       for (uint pass = 0u; pass < passes; pass++) {
         const uint wrow_base = tc * TILE_N + ((pass == 1u) ? n : 0u);
         const uint wrow_limit = swiglu ? (2u * n) : n;
-        float acc[QUAD];
-        for (uint c = 0u; c < QUAD; c++) {
-          acc[c] = 0.0f;
-        }
+        float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+        float a4 = 0.0f, a5 = 0.0f, a6 = 0.0f, a7 = 0.0f;
         uint g = 0u;
 
         for (uint k0 = 0u; k0 < k_eff; k0 += TILE_K) {
@@ -207,27 +225,22 @@ void main() {
               in_tile ? params.shape[0] + row * groups + g : params.shape[0];
 
           for (uint kk = 0u; kk < run1; kk++) {
-            float xv = tile_x[ly][kk];
-            for (uint c = 0u; c < QUAD; c++) {
-              acc[c] += xv * tile_w[lx * QUAD + c][kk];
-            }
+            FMA_STEP(kk);
           }
           if (has_b) {
             float xs = in_xs.values[xs_idx];
-            for (uint c = 0u; c < QUAD; c++) {
-              if (pass == 0u) {
-                gate_total[c] += acc[c] * xs;
-              } else {
-                value_total[c] += acc[c] * xs;
-              }
-              acc[c] = 0.0f;
+            if (pass == 0u) {
+              g0 += a0 * xs; g1 += a1 * xs; g2 += a2 * xs; g3 += a3 * xs;
+              g4 += a4 * xs; g5 += a5 * xs; g6 += a6 * xs; g7 += a7 * xs;
+            } else {
+              v0 += a0 * xs; v1 += a1 * xs; v2 += a2 * xs; v3 += a3 * xs;
+              v4 += a4 * xs; v5 += a5 * xs; v6 += a6 * xs; v7 += a7 * xs;
             }
+            a0 = 0.0f; a1 = 0.0f; a2 = 0.0f; a3 = 0.0f;
+            a4 = 0.0f; a5 = 0.0f; a6 = 0.0f; a7 = 0.0f;
             g++;
             for (uint kk = run1; kk < kend; kk++) {
-              float xv = tile_x[ly][kk];
-              for (uint c = 0u; c < QUAD; c++) {
-                acc[c] += xv * tile_w[lx * QUAD + c][kk];
-              }
+              FMA_STEP(kk);
             }
           }
         }
@@ -236,24 +249,34 @@ void main() {
       if (in_tile) {
         const uint ws_base = params.shape[1];
         const uint b_base = params.shape[2];
-        for (uint c = 0u; c < QUAD; c++) {
-          const uint col = tc * TILE_N + lx * QUAD + c;
-          if (col >= n) {
-            break; // columns ascend with c: past the last tile nothing stores
-          }
-          if (swiglu) {
-            float gate = gate_total[c] * in_ws.values[ws_base + col] +
-                in_b.values[b_base + col];
-            float value = value_total[c] * in_ws.values[ws_base + n + col] +
-                in_b.values[b_base + n + col];
-            out_bf16.values[params.output_offset + row * n + col] =
-                bf16_store(gate / (1.0f + exp(-gate)) * value);
-          } else {
-            out_bf16.values[params.output_offset + row * n + col] = bf16_store(
-                gate_total[c] * in_ws.values[ws_base + col] +
-                in_b.values[b_base + col]);
-          }
-        }
+        const uint col0 = tc * TILE_N + lx * QUAD;
+#define STORE_COL(C)                                                          \
+  do {                                                                        \
+    const uint col = col0 + (C);                                              \
+    if (col < n) {                                                            \
+      if (swiglu) {                                                           \
+        float gate = g##C * in_ws.values[ws_base + col] +                     \
+            in_b.values[b_base + col];                                        \
+        float value = v##C * in_ws.values[ws_base + n + col] +                \
+            in_b.values[b_base + n + col];                                    \
+        out_bf16.values[params.output_offset + row * n + col] =               \
+            bf16_store(gate / (1.0f + exp(-gate)) * value);                   \
+      } else {                                                                \
+        out_bf16.values[params.output_offset + row * n + col] = bf16_store(   \
+            g##C * in_ws.values[ws_base + col] +                              \
+            in_b.values[b_base + col]);                                       \
+      }                                                                       \
+    }                                                                         \
+  } while (false)
+        STORE_COL(0);
+        STORE_COL(1);
+        STORE_COL(2);
+        STORE_COL(3);
+        STORE_COL(4);
+        STORE_COL(5);
+        STORE_COL(6);
+        STORE_COL(7);
+#undef STORE_COL
       }
     }
   }
