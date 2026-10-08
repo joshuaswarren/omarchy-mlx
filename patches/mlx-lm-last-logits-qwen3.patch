@@ -1,0 +1,13 @@
+--- a/mlx_lm/models/qwen3.py
++++ b/mlx_lm/models/qwen3.py
+@@ -235,6 +235,10 @@
+         input_embeddings: Optional[mx.array] = None,
+     ):
+         out = self.model(inputs, cache, input_embeddings)
++        # mlx-omarchy last-logits (qwen3 family): cached/incremental inference consumes only the
++        # final position; whole-sequence calls (cache=None) keep full logits.
++        if cache is not None and os.environ.get("MLX_OMARCHY_FULL_LOGITS", "") != "1":
++            out = out[:, -1:, :]
+         if self.args.tie_word_embeddings:
+             out = self.model.embed_tokens.as_linear(out)
+         else:
