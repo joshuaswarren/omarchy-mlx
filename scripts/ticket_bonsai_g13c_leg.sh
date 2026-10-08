@@ -20,7 +20,7 @@ echo "icds=$(ls /usr/share/vulkan/icd.d/ 2>/dev/null | tr '\n' ' ')"
 vulkaninfo --summary 2>/dev/null | grep -E "deviceName|driverName|apiVersion" | head -4 \
   || echo "vulkaninfo: not captured"
 
-WHEEL=$(ls ~/bonsai-run/mlx_omarchy-*.whl | head -1)
+WHEEL=$(ls -t ~/bonsai-run/mlx_omarchy-*.whl | head -1)
 [ -n "$WHEEL" ] || { echo "ERROR: no wheel in ~/bonsai-run" >&2; exit 2; }
 echo "wheel=$WHEEL"
 sha256sum "$WHEEL"

@@ -7,7 +7,7 @@ set -euo pipefail
 
 TREE=${1:-$HOME/bonsai-build}
 REPO="$TREE/repo"
-WHEEL=$(ls "$REPO"/dist/mlx_omarchy-*.whl | head -1)
+WHEEL=$(ls -t "$REPO"/dist/mlx_omarchy-*.whl | head -1)
 [ -n "$WHEEL" ] || { echo "ERROR: no wheel in $REPO/dist" >&2; exit 2; }
 LOG="$TREE/gpu-ticket.log"
 exec > >(tee -a "$LOG") 2>&1
