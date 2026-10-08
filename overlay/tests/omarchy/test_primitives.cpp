@@ -28,6 +28,7 @@
 #include "mlx/linalg.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
+#include "mlx/primitives.h"
 #include "mlx/random.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
@@ -4986,6 +4987,29 @@ TEST_CASE("CumSum scans suffix rows against host references") {
   check_values(cumsum(x, 0, false, false, stream), {0, 1, 3, 6, 10}, stream);
   // Inclusive scan.
   check_values(cumsum(x, 0, false, true, stream), {1, 3, 6, 10, 15}, stream);
+
+  // A caller-composed output may arrive with existing storage that shares a
+  // parent buffer (the composed-SDPA pattern). Scan::eval_gpu must keep that
+  // storage: reallocating detaches the view and the scan lands in scratch
+  // while the parent stays zero-filled.
+  array parent = full({5}, 0.0f, stream);
+  eval(parent);
+  omarchy::get_command_encoder(stream).synchronize();
+  x.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  array pre_out = array::unsafe_weak_copy(parent);
+  pre_out.primitive_ptr() =
+      std::make_shared<Scan>(stream, Scan::Sum, 0, false, true);
+  std::vector<array> scan_inputs{x};
+  std::vector<array> scan_outputs{pre_out};
+  pre_out.primitive().eval_gpu(scan_inputs, scan_outputs);
+  omarchy::get_command_encoder(stream).synchronize();
+  const float* parent_data = parent.data<float>();
+  const float expected_inclusive[5] = {1.0f, 3.0f, 6.0f, 10.0f, 15.0f};
+  for (int index = 0; index < 5; ++index) {
+    CHECK(parent_data[index] ==
+          doctest::Approx(expected_inclusive[index]).epsilon(1e-5));
+  }
 
   // A row longer than one workgroup: one invocation owns the whole row.
   std::vector<float> lv(5000);
