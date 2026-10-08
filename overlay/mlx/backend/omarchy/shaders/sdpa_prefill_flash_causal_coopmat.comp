@@ -16,11 +16,12 @@
 // tile of 32 keys:
 //   1. S = Q K^T on the matrix unit, f32 accumulators, scaled by alpha, stored to a per-subgroup shared tile.
 //   2. Lanes (4 per row, 8 keys each): causal mask (masked score = FINITE_MIN, so exp underflows to exact 0), tile
-//      max, online max update, p = exp(s - m) in f32 rounded to bf16 (round to nearest even), running sum over the
-//      rounded p, P written to shared as bf16, the row correction exp(m_old - m_new) written as an 8x8 f32 tile
-//      (corr[r] along row r).
+//      max, online max update, p = exp(s - m) in f32 split into two bf16 values p_hi = bf16(p) and
+//      p_lo = bf16(p - p_hi) (relative error near 2^-16; the f32 composed route does not round P at all), running
+//      sum over p_hi + p_lo, both written to shared, the row correction exp(m_old - m_new) written as an 8x8 f32
+//      tile (corr[r] along row r).
 //   3. O *= correction tile (elementwise multiply of f32 matrices: no dependence on the element-to-row layout).
-//   4. O += P V on the matrix unit.
+//   4. O += P_hi V + P_lo V on the matrix unit (the V operand is loaded once and used twice).
 // The epilogue divides O by the row sum the same way (a 1/l tile) and stores bf16.
 //
 // Causal skip: a subgroup walks key tiles up to the last key its last row sees (row + k_len - q_len), 8-key blocks
@@ -92,6 +93,7 @@ layout(push_constant) uniform Params {
 
 shared float s_s[SGS * uint(ROWP) * MAT * KT];
 shared bfloat16_t s_p[SGS * uint(ROWP) * MAT * KT];
+shared bfloat16_t s_pl[SGS * uint(ROWP) * MAT * KT];
 shared float s_c[SGS * uint(ROWP) * MAT * MAT];
 
 #define ACCT coopmat<float, gl_ScopeSubgroup, 8, 8, gl_MatrixUseAccumulator>
@@ -201,9 +203,13 @@ void main() {
       const float corr = (m_new == m_run[p]) ? 1.0 : exp(m_run[p] - m_new);
       float sum = 0.0;
       for (uint e = 0u; e < 8u; ++e) {
-        const uint bits = bf16_bits(exp(s[e] - m_new));
-        s_p[tile_base + e] = uintBitsToBFloat16EXT(uint16_t(bits));
-        sum += uintBitsToFloat(bits << 16u);
+        const float pe = exp(s[e] - m_new);
+        const uint hi = bf16_bits(pe);
+        const float p_hi = uintBitsToFloat(hi << 16u);
+        const uint lo = bf16_bits(pe - p_hi);
+        s_p[tile_base + e] = uintBitsToBFloat16EXT(uint16_t(hi));
+        s_pl[tile_base + e] = uintBitsToBFloat16EXT(uint16_t(lo));
+        sum += p_hi + uintBitsToFloat(lo << 16u);
       }
       sum += subgroupShuffleXor(sum, 1u);
       sum += subgroupShuffleXor(sum, 2u);
@@ -225,14 +231,17 @@ void main() {
     for (uint c = 0u; c < KB; ++c) {
       if (k0 + c * MAT <= last_key) {
         coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> pa[ROWP];
+        coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseA> pb[ROWP];
         for (uint p = 0u; p < uint(ROWP); ++p) {
           coopMatLoad(pa[p], s_p, (sbase + p) * (MAT * KT) + c * MAT, KT, gl_CooperativeMatrixLayoutRowMajor);
+          coopMatLoad(pb[p], s_pl, (sbase + p) * (MAT * KT) + c * MAT, KT, gl_CooperativeMatrixLayoutRowMajor);
         }
         for (uint d = 0u; d < DT; ++d) {
           coopmat<bfloat16_t, gl_ScopeSubgroup, 8, 8, gl_MatrixUseB> vb;
           coopMatLoad(vb, v, v_base + (k0 + c * MAT) * vs + d * MAT, vs, gl_CooperativeMatrixLayoutRowMajor);
           for (uint p = 0u; p < uint(ROWP); ++p) {
             acc[p][d] = coopMatMulAdd(pa[p], vb, acc[p][d]);
+            acc[p][d] = coopMatMulAdd(pb[p], vb, acc[p][d]);
           }
         }
       }
