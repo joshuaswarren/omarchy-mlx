@@ -12573,11 +12573,22 @@ void BonsaiQ1AffineQmv::eval_gpu(
   constexpr uint32_t kColumnsPerGroup = 8u;
   uint32_t n_groups =
       (params.matrix_n + kColumnsPerGroup - 1u) / kColumnsPerGroup;
+  // bonsai_qmv_q1.comp indexes one column per workgroup with no
+  // grid-stride loop, so a clamped grid would silently drop the tail
+  // columns. Refuse by name instead.
+  if (n_groups > omarchy::kMaxComputeGroupCountX) {
+    omarchy::unsupported(
+        tag + " with more than " +
+            std::to_string(omarchy::kMaxComputeGroupCountX *
+                           kColumnsPerGroup) +
+            " output columns",
+        out);
+  }
   encoder.dispatch_compute(
       kernel,
       bindings,
       params,
-      std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+      n_groups,
       1u,
       1u);
 }
@@ -12695,11 +12706,21 @@ void BonsaiQmvWide::eval_gpu(
   // M x rows against its row.
   const uint32_t kRowsPerGroup = 4u;
   uint32_t n_groups = (params.matrix_n + kRowsPerGroup - 1u) / kRowsPerGroup;
+  // bonsai_qmv_wide.comp indexes one weight row per workgroup with no
+  // grid-stride loop, so a clamped grid would silently drop the tail
+  // rows. Refuse by name instead.
+  if (n_groups > omarchy::kMaxComputeGroupCountX) {
+    omarchy::unsupported(
+        tag + " with more than " +
+            std::to_string(omarchy::kMaxComputeGroupCountX * kRowsPerGroup) +
+            " output columns",
+        out);
+  }
   encoder.dispatch_compute(
       kernel,
       bindings,
       params,
-      std::min(n_groups, omarchy::kMaxComputeGroupCountX),
+      n_groups,
       1u,
       1u);
 }
@@ -12772,7 +12793,14 @@ void BonsaiQ1Dequantize::eval_gpu(
   // generic element-count formula ceil(n*k/256) under-dispatches for
   // k < 256 and silently leaves rows 1..n-1 unwritten (zeros) — first
   // seen on hardware 2026-10-07 (G13G): n=2 k=64 produced row0 exact,
-  // row1 all-zero.
+  // row1 all-zero. The shader has no grid-stride loop either, so a
+  // clamped grid would drop rows >= 65535; refuse by name instead.
+  if (static_cast<uint64_t>(n) > omarchy::kMaxComputeGroupCountX) {
+    omarchy::unsupported(
+        tag + " with more than " +
+            std::to_string(omarchy::kMaxComputeGroupCountX) + " rows",
+        out);
+  }
   encoder.dispatch_compute(
       kernel,
       bindings,

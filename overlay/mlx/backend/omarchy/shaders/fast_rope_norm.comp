@@ -141,7 +141,6 @@ float rope_round(float value) {
 
 void main() {
   uint thread = gl_LocalInvocationID.x;
-  uint row = gl_WorkGroupID.x;
   uint time = params.shape[1];
   uint heads = params.shape[0];
   bool forward = (params.flags & 1u) != 0u;
@@ -150,6 +149,13 @@ void main() {
   uint half_dims = params.dims;
   uint row_length = params.reduce_size;
   float eps = uintBitsToFloat(params.operation);
+  // One workgroup owns one rotation row, and the host passes the row
+  // count B*N*T as the group count. The grid clamps at 65535 workgroups,
+  // so rows past that must be reached with a grid-stride loop (the
+  // fast_norm.comp pattern). Every thread takes the same trip count, so
+  // the barriers below stay uniform.
+  for (uint row = gl_WorkGroupID.x; row < params.count;
+       row += gl_NumWorkGroups.x) {
 
   uint mat = row / time;
   uint t = row - mat * time;
@@ -260,10 +266,8 @@ void main() {
 
   // Production bf16 word math from fast_rope.comp with shared[] standing in
   // for the loads. Threads own one output word each; word pairs of one row.
-  if (thread >= (row_length / 2u)) {
-    return;
-  }
-  uint k = thread;
+  if (thread < (row_length / 2u)) {
+    uint k = thread;
   float offset = float(offset_data.values[params.rhs_offset + b * params.matrix_m]);
   float position = params.alpha * (float(t) + offset);
   uint word_base = (params.output_offset + out_row) >> 1u;
@@ -328,5 +332,12 @@ void main() {
                    : (rope_round(xd * cos1) - rope_round(xc * sin1));
     }
   }
-  output_data.values[word_base + k] = bf16_bits(v0) | (bf16_bits(v1) << 16u);
+    output_data.values[word_base + k] = bf16_bits(v0) | (bf16_bits(v1) << 16u);
+  }
+  // Release the shared rounded[]/block_values[] state before the next
+  // stride iteration rewrites it: without this trailing barrier a fast
+  // thread could enter row N+1's norm phase while a slow thread still
+  // reads row N's rounded values.
+  barrier();
+  }
 }

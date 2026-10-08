@@ -3933,9 +3933,10 @@ TEST_CASE("fused rope_rms_norm writes every row past the one-dispatch clamp") {
   array composed_rows = reshape(composed, {rows, width}, stream);
   const std::vector<int> sampled = {0, 65534, 65535, 65536, rows - 1};
   for (int r : sampled) {
-    array got = astype(slice(fused_rows, {r}, {r + 1}, stream), float32, stream);
-    array want =
-        astype(slice(composed_rows, {r}, {r + 1}, stream), float32, stream);
+    array got = astype(
+        slice(fused_rows, {r, 0}, {r + 1, width}, stream), float32, stream);
+    array want = astype(
+        slice(composed_rows, {r, 0}, {r + 1, width}, stream), float32, stream);
     eval(got, want);
     const float* pg = got.data<float>();
     const float* pw = want.data<float>();
