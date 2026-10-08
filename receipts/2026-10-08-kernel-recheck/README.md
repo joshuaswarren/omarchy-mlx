@@ -49,6 +49,19 @@ the numerics rerun on jw16 (G13C) per the chip-independence note below.
   dump for bitlinear_matmul), translated per file with
   `omarchy_custom_kernel_translate_dump`.
 
+## Fixed-wheel GPU revalidation (M2)
+
+- Wheel built on the M2 under fill-run from the streamed main tree
+  (886ac85f6): `mlx_omarchy-0.32.4.dev202610080451+31f0f66-cp314-cp314-
+  linux_aarch64.whl`, sha256 `eecd5ca5a2ef638f843f451438ee9bf985bfb4069b1
+  4708a87905ce2b1187dc7`. The build venv provided cmake; the parakeet
+  encoder-whole bundle required by the build gate came from the extracted
+  v0.7.31 release wheel (mlx/share/mlx-omarchy/parakeet-1/bundles/
+  parakeet-encoder-whole, 458 MB, digest-verified by the build's own
+  stage-whole-bundle gate).
+- GPU rerun: fresh venv (venv-fixed) + harness `--gpu --timeout 90` under
+  `gpu-turn -m 15` on the M2 (G14C).
+
 ## Numerical result (M2, pass 1 + diagnostic rerun, wheel = v0.7.31)
 
 26 kernels = the 13 inventory rows expanded (bitlinear, 2x flux2, 5x
