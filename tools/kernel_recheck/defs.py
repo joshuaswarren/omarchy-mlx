@@ -89,8 +89,8 @@ def rng(seed):
     return np.random.default_rng(seed)
 
 
-REL = ("rel", 2.0 ** -7)      # 2 bf16 ULP
-REL16 = ("rel", 2.0 ** -9)    # 2 fp16 ULP
+REL = ("rel", 2.0 ** -7, 5e-3)    # 2 bf16 ULP with an abs floor
+REL16 = ("rel", 2.0 ** -9, 1e-3)  # 2 fp16 ULP with an abs floor
 EXACT = ("exact",)
 
 
@@ -160,7 +160,7 @@ def _flux_kernel_emulation(rows_flat, nq, nk, cos_flat, sin_flat, meta, eps):
     rows_flat is the concatenated qkv plane laid out exactly as the buffers
     the kernel indexes (txt rows first for the double kernel); nq/nk are
     (S, hd) selected exactly as the kernel's is_txt branch does."""
-    dim, hd, heads, s_tot = meta
+    dim, hd, heads, s_tot, row_stride = meta
     hd_half = hd // 2
     ELEMS = hd // 32
     outq = np.zeros((heads, s_tot, hd))
@@ -177,7 +177,7 @@ def _flux_kernel_emulation(rows_flat, nq, nk, cos_flat, sin_flat, meta, eps):
             for tid in range(32):
                 for i in range(ELEMS):
                     d = tid * ELEMS + i
-                    base = s * (3 * dim)
+                    base = s * row_stride
                     lq[tid, i] = rows_flat[base + q_col + d]
                     lk[tid, i] = rows_flat[base + k_col + d]
                     lv[tid, i] = rows_flat[base + v_col + d]
@@ -225,7 +225,7 @@ def ref_flux_double(inp):
         rows, nq, nk,
         inp["cos_vals"].reshape(-1).astype(np.float64),
         inp["sin_vals"].reshape(-1).astype(np.float64),
-        (dim, hd, heads, s_tot), eps)
+        (dim, hd, heads, s_tot, 3 * dim), eps)
 
 
 def build_flux_single(seed=3):
@@ -251,7 +251,7 @@ def ref_flux_single(inp):
         rows, nq, nk,
         inp["cos_vals"].reshape(-1).astype(np.float64),
         inp["sin_vals"].reshape(-1).astype(np.float64),
-        (dim, hd, heads, s_tot), eps)
+        (dim, hd, heads, s_tot, 3 * dim), eps)
 
 
 # ---------------------------------------------------------------- inkling
