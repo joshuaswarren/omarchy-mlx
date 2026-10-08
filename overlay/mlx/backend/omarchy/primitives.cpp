@@ -12565,9 +12565,11 @@ void BonsaiQmvWide::eval_gpu(
   params.output_offset = checked_item_offset(out, out.size(), tag, out);
   std::array<omarchy::ComputeBinding, 5> bindings{
       binding(xd), binding(wd), binding(scd), binding(bid), binding(out)};
-const uint32_t kColumnsPerGroup = 4u * static_cast<uint32_t>(M);
-  uint32_t n_groups =
-      (params.matrix_n + kColumnsPerGroup - 1u) / kColumnsPerGroup;
+  // shaders/bonsai_qmv_wide.comp: each workgroup covers SLOTS_PER_GROUP
+  // (= 4) weight rows, one per 32-lane slot, and each slot computes all
+  // M x rows against its row.
+  const uint32_t kRowsPerGroup = 4u;
+  uint32_t n_groups = (params.matrix_n + kRowsPerGroup - 1u) / kRowsPerGroup;
   encoder.dispatch_compute(
       kernel,
       bindings,
