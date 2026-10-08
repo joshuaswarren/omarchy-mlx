@@ -20,12 +20,20 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 import numpy as np
 
 from . import defs
+
+# A per-process fresh translation cache: pip-built wheels bake the fallback
+# translator SHA ("unknown"), so every wheel shares one ~/.cache translation
+# identity and a GPU run can silently serve GLSL translated by an OLDER
+# wheel — the 2026-10-08 recheck measured stale pre-fix shaders as
+# "compile failures" until a fresh cache exposed the difference. The env
+# var still wins when the caller sets one deliberately.
 
 
 def source_text(spec):
@@ -237,6 +245,14 @@ def gpu(only=None, timeout=180):
     return 3 if any_wrong else 0
 
 
+def _fresh_spirv_cache():
+    """Point MLX_OMARCHY_SPIRV_CACHE at a fresh temp dir unless the caller
+    already chose one. Must run before mlx is imported."""
+    if os.environ.get("MLX_OMARCHY_SPIRV_CACHE"):
+        return
+    os.environ["MLX_OMARCHY_SPIRV_CACHE"] = tempfile.mkdtemp(prefix="krcache-")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference-only", action="store_true")
@@ -245,6 +261,7 @@ def main():
     parser.add_argument("--kernel")
     parser.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()
+    _fresh_spirv_cache()
     if args.single:
         sys.exit(single(args.single))
     if args.reference_only:
