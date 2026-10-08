@@ -9600,7 +9600,13 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (suffix_float_sum) {
     size_t row_length = input.shape(-1);
     size_t rows = row_length == 0 ? 0 : input.size() / row_length;
-    out.set_data(allocate_omarchy(out.nbytes()));
+    // Same shared-buffer-view guard as dispatch_matmul (see there): a
+    // caller-composed output keeps its storage; reallocating detaches the
+    // view and the scan lands in detached scratch while the output stays
+    // zero-filled.
+    if (out.data_shared_ptr() == nullptr) {
+      out.set_data(allocate_omarchy(out.nbytes()));
+    }
     if (out.size() == 0) {
       return;
     }
@@ -9649,7 +9655,10 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
       operation_selector = 4u;
       break;
   }
-  out.set_data(allocate_omarchy(out.nbytes()));
+  // Same shared-buffer-view guard as dispatch_matmul (see there).
+  if (out.data_shared_ptr() == nullptr) {
+    out.set_data(allocate_omarchy(out.nbytes()));
+  }
   if (out.size() == 0) {
     return;
   }
