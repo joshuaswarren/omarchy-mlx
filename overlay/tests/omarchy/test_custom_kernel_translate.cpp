@@ -451,3 +451,20 @@ TEST_CASE("translation cache key includes the runtime library identity") {
   // Deterministic: same input produces same output.
   CHECK(glsl1 == glsl2);
 }
+
+
+TEST_CASE("translation cache material changes with translator identity") {
+  // Different source_sha or library_hash must produce different cache
+  // materials so two translator builds never share a .tr entry.
+  auto m1 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_aaa", "lib_111");
+  auto m2 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_bbb", "lib_111");
+  auto m3 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_aaa", "lib_222");
+  auto m1b = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_id", "sha_aaa", "lib_111");
+  CHECK(m1 != m2);   // different source sha
+  CHECK(m1 != m3);   // different library hash
+  CHECK(m1 == m1b);  // deterministic
+}

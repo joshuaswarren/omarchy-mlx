@@ -2325,22 +2325,45 @@ const std::string& translator_runtime_identity() {
   return identity;
 }
 
-std::string translation_cache_path(const std::string& identity) {
-  const std::string root = spirv_cache_root();
-  if (root.empty()) {
-    return {};
-  }
+std::string translation_cache_material(const std::string& identity) {
   std::string material = "mlx-omarchy custom kernel translation ";
   material += kTranslationCacheVersion;
   material += " ";
   material += translator_runtime_identity();
   material += "\n";
   material += identity;
+  return material;
+}
+
+std::string translation_cache_path(const std::string& identity) {
+  const std::string root = spirv_cache_root();
+  if (root.empty()) {
+    return {};
+  }
+  std::string material = translation_cache_material(identity);
   return root + "/" +
       omarchy::ane::sha256_hex(
              reinterpret_cast<const uint8_t*>(material.data()),
              material.size()) +
       ".tr";
+}
+
+// Exposed for testing: the cache-key material must change when the
+// translator identity changes, so two different libmlx builds
+// can never share a .tr cache entry.
+std::string translation_cache_material_for_test(
+    const std::string& identity,
+    const std::string& source_sha,
+    const std::string& library_hash) {
+  std::string material = "mlx-omarchy custom kernel translation ";
+  material += kTranslationCacheVersion;
+  material += " ";
+  material += source_sha;
+  material += ":";
+  material += library_hash;
+  material += "\n";
+  material += identity;
+  return material;
 }
 
 void put_u64(std::string& out, uint64_t value) {
@@ -2675,6 +2698,22 @@ void CustomKernel::eval_gpu(
 // harness/kernel_battery.py links against this when computing the
 // per-kernel table for the parity matrix. Intended for dev-box
 // classification only; the GPU dispatch row stays on the M2 lane.
+
+std::string translation_cache_material_for_test(
+    const std::string& identity,
+    const std::string& source_sha,
+    const std::string& library_hash) {
+  std::string material = "mlx-omarchy custom kernel translation ";
+  material += kTranslationCacheVersion;
+  material += " ";
+  material += source_sha;
+  material += ":";
+  material += library_hash;
+  material += "\n";
+  material += identity;
+  return material;
+}
+
 std::string mlx_omarchy_translate_msl_for_test(
     const std::string& source,
     int grid_x,
