@@ -138,6 +138,26 @@ Metal APIs are absent?". Patches:
   Contract test: `test_omlx_deepfilternet_subfolder.py` (hosted version
   dir gets no subfolder; bare parent keeps `v3`; skips on mlx-less dev
   boxes, runs on the target venv).
+- `patches/0011-omlx-moe-offload-lookahead.patch` — MoE expert-offload
+  lookahead + slot admission bill. The offload path synced per MoE layer
+  per step (`ensure()`'s route readback) and then stalled on the misses'
+  SSD reads; the patch adds (1) a router-driven lookahead: once a layer's
+  routes are on the host, the next wrapped layer's previous-step routes are
+  speculatively fetched and installed insert-only (never evicting a
+  resident expert), so its reads overlap the current layer's queued GPU
+  work — depth 1, decode-sized route sets, kill switch
+  `OMLX_MOE_OFFLOAD_LOOKAHEAD=0`; (2) an admission bill computed before any
+  slot allocation: a layer whose capacity cannot hold the routing floor is
+  refused by name and left stock, and `apply_moe_expert_offload(...,
+  budget_bytes=N)` refuses the whole offload with `ValueError` when the
+  resident bill exceeds the budget (idea credited to davidtai/mlx-stream
+  `src/expert_admission.zig`); (3) counters — `pred_sent`, `pred_installed`,
+  `pred_rate`, and the per-layer `ensure_s` sync+stall bill — surfaced by
+  `moe_offload_stats`. Greedy output is unchanged by construction (routing
+  never changes; only when an expert's weights are read). Contract tests:
+  `test_omlx_moe_lookahead.py` (lookahead on/off decode bit-identity,
+  kill switch, chaining, below-floor and budget refusals before
+  allocation, insert-only installs).
 
 Tools in this layer:
 
