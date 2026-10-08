@@ -219,32 +219,95 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       {3, 256, 64, 70, false},
       {8, 256, 256, 70, false},
   };
-  int seed = 101;
-  for (const auto& s : shapes) {
-    auto in = make_inputs(s.rows, s.k, s.group, s.n, s.swiglu, seed++);
-    uint32_t got = 0;
-    uint32_t ref = 0;
-    long bad = bitcompare(in, s.rows, s.k, s.group, s.n, s.swiglu, &got, &ref);
-    if (bad >= 0) {
-      MESSAGE("mismatch at shape rows=", s.rows, " k=", s.k, " group=",
-              s.group, " n=", s.n, " swiglu=", s.swiglu, " index ", bad,
-              ": tiled 0x", std::hex, got, " naive 0x", ref, std::dec);
+  // Bit-compare a candidate route (env-controlled) against the naive
+  // kill-switch kernel for every shape in the matrix. Two passes: the
+  // landed default route (cooperative matrix when the device supports
+  // it, else the tiled int32-imad kernel) and the tiled-only route with
+  // MLX_OMARCHY_INT8_COOPMAT=0. A mismatch on either is a real defect.
+  auto run_route = [](const Shape& s, int seed) {
+    auto in = make_inputs(s.rows, s.k, s.group, s.n, s.swiglu, seed);
+    auto cur = run_int8(in, s.rows, s.k, s.group, s.n, s.swiglu);
+    auto cur_bits = bits_of(cur);
+    NaiveEnv guard(true);
+    auto naive = run_int8(in, s.rows, s.k, s.group, s.n, s.swiglu);
+    auto naive_bits = bits_of(naive);
+    if (cur_bits.size() != naive_bits.size()) {
+      return std::pair<long, uint64_t>(0, 0);
     }
-    CHECK(bad < 0);
+    for (size_t i = 0; i < cur_bits.size(); i++) {
+      if (cur_bits[i] != naive_bits[i]) {
+        return std::pair<long, uint64_t>(
+            static_cast<long>(i),
+            (static_cast<uint64_t>(cur_bits[i]) << 32) | naive_bits[i]);
+      }
+    }
+    return std::pair<long, uint64_t>(-1, 0);
+  };
+  const char* env_routes[] = {nullptr, "0"};
+  const char* env_labels[] = {"default", "tiled"};
+  for (int e = 0; e < 2; e++) {
+    if (env_routes[e] != nullptr) {
+      setenv("MLX_OMARCHY_INT8_COOPMAT", env_routes[e], 1);
+    }
+    int seed = 101;
+    for (const auto& s : shapes) {
+      auto result = run_route(s, seed++);
+      if (result.first >= 0) {
+        MESSAGE(env_labels[e], "-vs-naive mismatch at shape rows=", s.rows,
+                " k=", s.k, " group=", s.group, " n=", s.n, " swiglu=",
+                s.swiglu, " index ", result.first, ": ", env_labels[e],
+                " 0x", std::hex, (result.second >> 32), " naive 0x",
+                (result.second & 0xffffffffu), std::dec);
+      }
+      CHECK(result.first < 0);
+    }
+    if (env_routes[e] != nullptr) {
+      unsetenv("MLX_OMARCHY_INT8_COOPMAT");
+    }
   }
 
-  // Clamp-scale bit-compare: rows*n = 26,214,400 spans the one-dispatch
-  // thread budget; the tiled path grid-strides, the naive path chunks.
-  {
-    auto in = make_inputs(3200, 256, 256, 8192, false, 202);
-    long bad = bitcompare(in, 3200, 256, 256, 8192, false);
-    CHECK(bad < 0);
-  }
-
-  // DiT-scale bit-compare at the real TensorFold H3 shape.
-  {
-    auto in = make_inputs(128, 5376, 256, 21504, false, 303);
-    long bad = bitcompare(in, 128, 5376, 256, 21504, false);
+  // Clamp-scale + DiT-scale + extremes: all under the landed default
+  // route, each compared bitwise against the naive kill switch.
+  struct BigShape {
+    int rows, k, group, n;
+    bool swiglu;
+    int seed;
+  };
+  const BigShape big[] = {
+      {3200, 256, 256, 8192, false, 202}, // exceeds the 16,776,960 clamp
+      {128, 5376, 256, 21504, false, 303}, // TensorFold H3
+      {128, 256, 256, 4096, false, 404},   // all +127: per-group = +4,129,024
+      {128, 256, 256, 4096, false, 505},   // all -127: per-group = -4,129,024
+      {128, 256, 256, 4096, true, 606},    // all +127 swiglu
+  };
+  for (const auto& b : big) {
+    auto in = make_inputs(b.rows, b.k, b.group, b.n, b.swiglu, b.seed);
+    if (b.seed >= 404) {
+      // Extremes: fill x and w with the magnitude that maximizes
+      // per-group |sum| so the cooperative matrix's f32 accumulator is
+      // probed at the integer bound that defines the exactness claim.
+      for (auto& v : in.x) {
+        v = (b.seed == 505) ? int8_t(127) : int8_t((b.seed % 2 == 0) ? 127 : -127);
+      }
+      for (auto& v : in.w) {
+        v = int8_t((b.seed % 2 == 0) ? 127 : -127);
+      }
+    }
+    auto cur = run_int8(in, b.rows, b.k, b.group, b.n, b.swiglu);
+    auto cur_bits = bits_of(cur);
+    NaiveEnv guard(true);
+    auto naive = run_int8(in, b.rows, b.k, b.group, b.n, b.swiglu);
+    auto naive_bits = bits_of(naive);
+    long bad = -1;
+    for (size_t i = 0; i < cur_bits.size(); i++) {
+      if (cur_bits[i] != naive_bits[i]) {
+        bad = static_cast<long>(i);
+        MESSAGE("default-vs-naive mismatch at rows=", b.rows, " k=", b.k,
+                " group=", b.group, " n=", b.n, " swiglu=", b.swiglu,
+                " index ", bad);
+        break;
+      }
+    }
     CHECK(bad < 0);
   }
 }
