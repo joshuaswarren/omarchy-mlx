@@ -47,7 +47,7 @@ when the script asks for it; it is not needed on a machine that already has
 the tools:
 
 ```bash
-sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers
+sudo pacman -S --needed meson ninja cmake make bison flex shaderc glslang python-mako python-yaml pkgconf git expat libdrm libelf libunwind zstd zlib llvm spirv-tools spirv-llvm-translator libclc spirv-headers vulkan-tools
 ```
 
 ## Step 1: build the driver, llama.cpp, and the model
@@ -173,8 +173,14 @@ change is most of the decode gap in the table above.
   from source is the supported path for now.
 - The `VK_DRIVER_FILES` variable only affects commands where you set it.
   Close the terminal and your system behaves exactly as before.
-- If the wrapper refuses with "the Honeykrisp driver did not load", the
-  usual cause is system libraries newer than the ones the driver was built
-  against (a partial upgrade, or an update after the build). Delete
-  `llamacpp-demo/mesa-build` and `llamacpp-demo/mesa-install`, then rerun
-  `bash scripts/llamacpp-demo.sh` to rebuild against the current system.
+- If the wrapper refuses with "the Honeykrisp driver did not load", there
+  are two usual causes. First: running the raw `env VK_DRIVER_FILES=...` form
+  from the repository root instead of `llamacpp-demo/`. The driver
+  description glob is relative, so from the repo root it matches nothing,
+  the loader gets a literal `*`, finds no driver, and llama.cpp silently
+  falls back to the CPU. That is why the bench and chat commands go through
+  `scripts/llamacpp-demo-run.sh`, which is path independent. Second: system
+  libraries newer than the ones the driver was built against (a partial
+  upgrade, or an update after the build). Delete `llamacpp-demo/mesa-build`
+  and `llamacpp-demo/mesa-install`, then rerun `bash scripts/llamacpp-demo.sh`
+  to rebuild against the current system.

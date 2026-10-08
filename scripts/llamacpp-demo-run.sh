@@ -24,4 +24,4 @@ if ! env VK_DRIVER_FILES="$ICD" vulkaninfo --summary 2>/dev/null | grep -q Honey
   exit 2
 fi
 cd "$DEMO_DIR"
-exec env VK_DRIVER_FILES="$ICD" "$DEMO_DIR/$BIN" "$@"
+exec env VK_DRIVER_FILES="$ICD" "./$BIN" "$@"
