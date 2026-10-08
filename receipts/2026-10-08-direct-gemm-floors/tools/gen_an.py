@@ -21,6 +21,28 @@ OLD = {  # floor of the row the base arm already has on that chip (a cell is a r
     "g13g": {("f16", "nt"): 512, ("f16", "tn"): 4096, ("bf16", "tn"): 4096, ("f32", "nt"): 4096, ("f32", "nn"): 4096, ("f32", "tn"): 4096},
     "g13c": {("f16", "nt"): 512, ("f16", "tn"): 4096},
 }[chip]
+STAMP = {"C2": "27aa6738", "C6": "8235d7c6", "C7": "14ca9e39", "PR": "582c1a94", "M": "ef70b8cc"}
+
+
+def check_stamps(files_by_arm):
+    """Each arm's host record must carry the build stamp of the commit the arm is meant to be, and the stamps must differ."""
+    seen = {}
+    for arm, paths in files_by_arm.items():
+        for path in paths:
+            with open(path) as f:
+                host = next((x for x in map(json.loads, f) if x.get("k") == "host"), None)
+            stamp = host["mlx"] if host else None
+            if stamp is None or not stamp.endswith("+" + STAMP[arm]):
+                print(f"STAMP MISMATCH arm {arm}: {path} carries {stamp}, expected a build ending +{STAMP[arm]}")
+                sys.exit(2)
+            seen.setdefault(arm, set()).add(stamp)
+    if len(set().union(*seen.values())) < len(seen) or any(len(v) != 1 for v in seen.values()):
+        print("STAMP CHECK FAILED: arms share a build or an arm mixes builds:", {a: sorted(v) for a, v in seen.items()})
+        sys.exit(2)
+    print("build stamps:", {a: sorted(v)[0] for a, v in seen.items()})
+
+
+check_stamps({arm: [f"{d}/gen-{chip}-{arm}-r{r}.jsonl" for r in (1, 2, 3)] for arm in (BASE, "PR")})
 cells = {}
 for arm in (BASE, "PR"):
     for r in (1, 2, 3):

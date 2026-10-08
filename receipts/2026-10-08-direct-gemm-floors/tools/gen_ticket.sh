@@ -14,7 +14,12 @@ BASE=C2
 BASEV=venv-c2
 if [ "$CHIP" = g13c ]; then BASE=M; BASEV=venv-h13main; fi
 if [ ! -x "$H/$BASEV/bin/python" ] || [ ! -x "$H/venv-pr/bin/python" ]; then echo "$BASEV or venv-pr missing, nothing run"; exit 2; fi
-echo "start $(date -u +%FT%TZ) host $(hostname) $(uname -r) load $(cut -d' ' -f1 /proc/loadavg) driver $(sha256sum "$D/libvulkan_*.so" | cut -c1-16) base $BASE"
+shopt -s nullglob
+LIBS=("$D"/libvulkan_*.so)
+shopt -u nullglob
+if [ "${#LIBS[@]}" -ne 1 ]; then echo "driver library: expected 1 match in $D, found ${#LIBS[@]}"; exit 2; fi
+DRV=$(sha256sum "${LIBS[0]}" | cut -c1-16)
+echo "start $(date -u +%FT%TZ) host $(hostname) $(uname -r) load $(cut -d' ' -f1 /proc/loadavg) driver $DRV base $BASE"
 ROUND=0
 run() { # arm venv
   sleep "$GAP"
