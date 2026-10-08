@@ -1568,7 +1568,7 @@ uint64_t submit_stuck_s() {
   static const uint64_t v = []() {
     const char* e = std::getenv("MLX_OMARCHY_SUBMIT_STUCK_S");
     if (e == nullptr || *e == '\0') {
-      return 300ull;
+      return static_cast<uint64_t>(300);
     }
     char* p = const_cast<char*>(e);
     unsigned long long parsed = strtoull(p, &p, 10);
@@ -1576,7 +1576,6 @@ uint64_t submit_stuck_s() {
   }();
   return v;
 }
-
 void wait_for_timeline_progress(
     VkDevice device,
     VkSemaphore semaphore,
