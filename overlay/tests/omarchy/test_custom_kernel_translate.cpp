@@ -24,6 +24,10 @@ std::string mlx_omarchy_translate_msl_for_test(
     int threads_y,
     int threads_z,
     std::size_t output_count);
+std::string translation_cache_material_for_test(
+    const std::string& identity,
+    const std::string& source_sha,
+    const std::string& library_hash);
 }
 
 namespace {
@@ -438,19 +442,6 @@ TEST_CASE("chained scalar casts collapse before the scan") {
   CHECK(glsl.find("(int)(") == std::string::npos);
 }
 
-TEST_CASE("translation cache key includes the runtime library identity") {
-  // The translation-cache path must never be shared between different
-  // translator builds. The build-time SHA can fall back to "unknown" in
-  // pip-built wheels; the runtime library hash makes the key unique
-  // regardless. Verified by: (1) the .tr filename changes when the
-  // translator changes, (2) the key is deterministic within a process.
-  // The integration proof is the fresh-cache runner fix: the same wheel
-  // with a fresh cache passes kernels that the shared cache failed.
-  auto glsl1 = translate(residual_norm_style, 1);
-  auto glsl2 = translate(residual_norm_style, 1);
-  // Deterministic: same input produces same output.
-  CHECK(glsl1 == glsl2);
-}
 
 
 TEST_CASE("translation cache material changes with translator identity") {
@@ -467,4 +458,35 @@ TEST_CASE("translation cache material changes with translator identity") {
   CHECK(m1 != m2);   // different source sha
   CHECK(m1 != m3);   // different library hash
   CHECK(m1 == m1b);  // deterministic
+}
+
+TEST_CASE("translation cache material differs per library identity") {
+  // Two libmlx builds with the same kernel source but different library
+  // hashes must produce different .tr cache entries. The 'unknown'
+  // fallback for the build-time SHA is acceptable ONLY because the
+  // runtime library hash is always unique per build.
+  auto m1 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_aaa", "lib_hash_111");
+  auto m2 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_aaa", "lib_hash_222");
+  auto m3 = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_bbb", "lib_hash_111");
+  auto m1b = mlx::core::fast::translation_cache_material_for_test(
+      "kernel_identity_string", "source_sha_aaa", "lib_hash_111");
+  // Different library hash → different cache material
+  CHECK(m1 != m2);
+  // Different source sha → different cache material
+  CHECK(m1 != m3);
+  // Same inputs → same material (deterministic)
+  CHECK(m1 == m1b);
+}
+
+TEST_CASE("the 'unknown' fallback with different library hashes yields different keys") {
+  // This is the pip-built wheel case: the build-time SHA is "unknown"
+  // but the runtime library hash still distinguishes builds.
+  auto m1 = mlx::core::fast::translation_cache_material_for_test(
+      "kid", "unknown", "lib_hash_aaa");
+  auto m2 = mlx::core::fast::translation_cache_material_for_test(
+      "kid", "unknown", "lib_hash_bbb");
+  CHECK(m1 != m2);
 }
