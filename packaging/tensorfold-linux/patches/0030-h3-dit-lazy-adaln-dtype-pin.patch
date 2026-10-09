@@ -1,0 +1,88 @@
+--- a/src/tensorfold/families/h3/dit.py
++++ b/src/tensorfold/families/h3/dit.py
+@@ -87,6 +87,10 @@
+         return q, k, v
+ 
+     def mix(self, q: mx.array, k: mx.array, v: mx.array) -> mx.array:
++        # Match macOS semantics exactly: all-bf16 sdpa regardless of upstream
++        # promotion (an f32 rope/norm on some mlx builds would otherwise
++        # materialize f32 scores and trip the u32 index limit).
++        q, k, v = q.astype(v.dtype), k.astype(v.dtype), v
+         out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
+         batch, _, rows, _ = out.shape
+         return out.transpose(0, 2, 1, 3).reshape(batch, rows, self.heads * self.head_dim)
+@@ -118,7 +122,12 @@
+         self.linear = nn.Linear(config.time_embed_dim, features, bias=True)
+ 
+     def __call__(self, temb: mx.array) -> mx.array:
+-        return self.linear(nn.silu(temb).astype(self.linear.weight.dtype))
++        weight = self.linear.weight
++        if getattr(weight, "dtype", None) == mx.uint32:
++            # quantized linear: keep the activation in bf16, the layer does
++            # its own dequantize-matmul
++            return self.linear(nn.silu(temb).astype(mx.bfloat16))
++        return self.linear(nn.silu(temb).astype(weight.dtype))
+ 
+     def tables(self, temb: mx.array) -> tuple[mx.array, ...]:
+         flat = self(temb).reshape(-1, 6 * self.hidden).astype(mx.bfloat16)
+@@ -163,7 +172,11 @@
+         self.mlp = FeedForward(config)
+         self.adaln_proj = Modulation(config, config.adaln_out_features)
+ 
+-    def __call__(self, x: mx.array, tables: tuple[mx.array, ...], rows: mx.array, rotary) -> mx.array:
++    def __call__(self, x: mx.array, tables: tuple[mx.array, ...] | None, rows: mx.array, rotary) -> mx.array:
++        if tables is None:
++            # lazy modulation: project this block's tables from the stored
++            # timestep embedding (the projections stay resident at int8)
++            tables = self.adaln_proj.tables(self._temb)
+         shift_a, scale_a, gate_a, shift_m, scale_m, gate_m = tables
+         h = self.norm1(x) * (1.0 + scale_a[rows]) + shift_a[rows]
+         x = x + (gate_a[rows] * self.attn(h, rotary)).astype(x.dtype)
+@@ -191,9 +204,10 @@
+ class H3DiT(nn.Module):
+     """MiniMax H3 joint video and audio transformer; parameter names equal the checkpoint's tensor names."""
+ 
+-    def __init__(self, config: DiTConfig):
++    def __init__(self, config: DiTConfig, lazy_tables: bool = False):
+         super().__init__()
+         self.config = config
++        self.lazy_tables = lazy_tables
+         patch = config.latents_dim * config.patch_size[0] * config.patch_size[1] * config.patch_size[2]
+         self.video_patch_proj = nn.Linear(patch, config.hidden_size, bias=True)
+         self.audio_patch_proj = nn.Linear(config.audio_latents_dim, config.hidden_size, bias=True)
+@@ -209,9 +223,18 @@
+ 
+         The tables depend only on the schedule, so a run needs them computed once. ``release`` then drops
+         the projection weights (about 24 GiB), after which only this timestep table can be served.
++
++        With ``lazy_tables`` the tables are never cached: each block projects
++        its own six tables per call from the stored timestep embedding (the
++        projections stay resident), trading compute for ~24 GiB of heap.
+         """
+ 
+         temb = self.time_embedder(timestep_embedding(timestep, self.config.timestep_input_dim))
++        if self.lazy_tables:
++            for block in self.blocks:
++                block._temb = temb
++            self._modulation = (timestep, None, None)
++            return temb.nbytes
+         tables = []
+         for block in self.blocks:
+             tables.append(block.adaln_proj.tables(temb))
+@@ -230,10 +253,14 @@
+         """(per-block tables, final table) for ``timestep``, from the cache when it was built for the same table."""
+ 
+         cached = self._modulation
+-        if cached is not None and (cached[0] is timestep or (cached[0].shape == timestep.shape
++        if cached is not None and self.lazy_tables:
++            if cached[0] is timestep or (cached[0].shape == timestep.shape
++                                         and bool(mx.all(cached[0] == timestep).item())):
++                return None, None
++        if cached is not None and not self.lazy_tables and (cached[0] is timestep or (cached[0].shape == timestep.shape
+                                                               and bool(mx.all(cached[0] == timestep).item()))):
+             return cached[1], cached[2]
+-        if self.final_layer.adaln_proj.linear is None:
++        if not self.lazy_tables and self.final_layer.adaln_proj.linear is None:
+             raise ValueError("the AdaLN projections were released; this model only serves its cached timesteps")
+         temb = self.time_embedder(timestep_embedding(timestep, self.config.timestep_input_dim))
+         return ([block.adaln_proj.tables(temb) for block in self.blocks],

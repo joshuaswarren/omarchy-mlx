@@ -1,0 +1,56 @@
+--- a/src/tensorfold/families/h3/sampler.py
++++ b/src/tensorfold/families/h3/sampler.py
+@@ -62,7 +62,8 @@
+ 
+ def denoise(dit, text, text_tags, width: int, height: int, frames: int, points: int, seed: int = 0,
+             subset: tuple[int, ...] | None = None, on_step=None, forward=None, release: bool = False,
+-            condition: mx.array | None = None, keyframes: tuple[str, ...] = ()) -> Latents:
++            condition: mx.array | None = None, keyframes: tuple[str, ...] = (),
++            checkpoint_dir: str | None = None, resume: bool = False) -> Latents:
+     """Denoise one clip. ``points`` is the number of sigma points, so ``points - 1`` forwards (fewer with
+     ``subset``). ``forward`` replaces the plain DiT call. The AdaLN tables for the whole run are projected once
+     up front; ``release`` then frees the projection weights. ``condition`` holds the encoded keyframe rows for
+@@ -77,10 +78,19 @@
+     held = packed.condition_video_rows
+     if (condition is None) != (held == 0) or (condition is not None and condition.shape[0] != held):
+         raise ValueError(f"{len(keyframes)} keyframes need {held} condition rows")
++    import json as _json
++    from pathlib import Path as _Path
++    start_index = 0
+     video_rows, audio_rows = start_noise(config, latent_frames, latent_height, latent_width, audio_latents, seed,
+                                          condition)
+-    check_noise("video", video_rows[held:])
+-    check_noise("audio", audio_rows)
++    if resume and checkpoint_dir and _Path(checkpoint_dir, 'resume.json').is_file():
++        meta = _json.loads(_Path(checkpoint_dir, 'resume.json').read_text())
++        state = mx.load(str(_Path(checkpoint_dir, meta['file'])))
++        video_rows, audio_rows, start_index = state['video'], state['audio'], int(meta['next_index'])
++        print(f'[resume] from step index {start_index}', flush=True)
++    if start_index == 0:
++        check_noise("video", video_rows[held:])
++        check_noise("audio", audio_rows)
+ 
+     video_schedule = Schedule(VIDEO_SHIFT, points, subset)
+     audio_schedule = Schedule(AUDIO_SHIFT, points, subset)
+@@ -89,7 +99,7 @@
+     dit.cache_modulation(table, release=release)
+     run = forward or dit
+     seconds = []
+-    for index in range(len(video_schedule)):
++    for index in range(start_index, len(video_schedule)):
+         started = time.perf_counter()
+         video_velocity, audio_velocity = run(video_rows[None], audio_rows[None], text, table, plan[index],
+                                              packed.tags, packed.position_ids, packed.video_rows,
+@@ -98,6 +108,12 @@
+         video_rows = mx.concatenate([video_rows[:held], stepped]) if held else stepped
+         audio_rows = audio_schedule.step(index, audio_velocity[0], audio_rows)
+         mx.eval(video_rows, audio_rows)
++        if checkpoint_dir:
++            fname = f'step{index:03d}.safetensors'
++            mx.save_safetensors(str(_Path(checkpoint_dir, fname)),
++                                {'video': video_rows, 'audio': audio_rows})
++            _Path(checkpoint_dir, 'resume.json').write_text(
++                _json.dumps({'file': fname, 'next_index': index + 1}))
+         seconds.append(time.perf_counter() - started)
+         if on_step is not None:
+             on_step(index + 1, len(video_schedule), seconds[-1])
