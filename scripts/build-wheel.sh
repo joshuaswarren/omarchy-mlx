@@ -227,51 +227,7 @@ fi
 # shipped pin (assets.worker), fix the RECORD line, then re-verify the
 # finished wheel with the same stdlib checker the recipe and install.sh run.
 echo "== stamp worker pin =="
-python3 - "$wheel" <<'EOF'
-import base64, hashlib, json, sys, zipfile
-wheel = sys.argv[1]
-worker_name = worker_sha = pin_name = record_name = None
-with zipfile.ZipFile(wheel) as zf:
-    for name in zf.namelist():
-        if name.endswith("bin/mlx-omarchy-ane-worker"):
-            worker_name, worker_sha = name, hashlib.sha256(zf.read(name)).hexdigest()
-        elif name.endswith("share/mlx-omarchy/parakeet-1/parakeet-runtime-pin.json"):
-            pin_name = name
-        elif name.endswith(".dist-info/RECORD"):
-            record_name = name
-if worker_name is None:
-    print("skip: wheel ships no ANE worker (non-aarch64 build)")
-    sys.exit(0)
-if pin_name is None or record_name is None:
-    sys.exit("wheel lacks the parakeet pin or RECORD; cannot stamp the worker pin")
-with zipfile.ZipFile(wheel) as zf:
-    pin = json.loads(zf.read(pin_name))
-    record = zf.read(record_name).decode()
-    entries = [(info, zf.read(info.filename)) for info in zf.infolist()]
-prior = pin.get("assets", {}).get("worker", {}).get("mlx-omarchy-ane-worker")
-if prior is not None and prior != worker_sha:
-    sys.exit(f"shipped pin already names a different worker: {prior} != {worker_sha}")
-pin.setdefault("assets", {})["worker"] = {"mlx-omarchy-ane-worker": worker_sha}
-pin.setdefault("provenance", {})["worker"] = (
-    "sha256 stamped by scripts/build-wheel.sh from this wheel's own built "
-    "mlx/bin/mlx-omarchy-ane-worker; the worker compiles per release and is "
-    "not byte-reproducible across releases"
-)
-pin_data = json.dumps(pin, indent=2).encode() + b"\n"
-digest = base64.urlsafe_b64encode(hashlib.sha256(pin_data).digest()).rstrip(b"=").decode()
-record_data = "\n".join(
-    f"{pin_name},sha256={digest},{len(pin_data)}" if line.split(",", 1)[0] == pin_name else line
-    for line in record.splitlines()
-).encode() + b"\n"
-with zipfile.ZipFile(wheel, "w", zipfile.ZIP_DEFLATED) as out:
-    for info, data in entries:
-        if info.filename == pin_name:
-            data = pin_data
-        elif info.filename == record_name:
-            data = record_data
-        out.writestr(info, data)
-print(f"[receipt] worker pinned: {worker_name} sha256 {worker_sha}")
-EOF
+python3 "$ROOT/scripts/stamp_worker_pin.py" "$wheel"
 
 echo "== verify finished wheel =="
 VERIFY_DIR="$WORK_DIR/verify-wheel"
