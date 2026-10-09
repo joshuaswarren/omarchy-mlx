@@ -781,6 +781,11 @@ bool Runtime::init_impl() {
     if (info.support.driver_id == kMesaHoneykrispDriverId) {
       require_expected_honeykrisp_sha(expected_sha, info.caps.driver_sha);
     }
+    note_stock_driver_identity(
+        info.caps.icd_source,
+        info.caps.driver_info,
+        info.caps.driver_sha,
+        expected_sha);
     info.hardware = info.caps;
     if (sim) {
       info.caps = capsim::apply(info.caps, *sim);

@@ -29,6 +29,7 @@
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/honeykrisp_identity.h"
 
 namespace mlx::core::gpu {
 
@@ -199,6 +200,8 @@ device_info(int device_index) {
     info["icd_source"] = caps.icd_source;
     info["expected_sha"] = caps.expected_sha;
     info["expected_sha_source"] = caps.expected_sha_source;
+    info["stock_driver_warning"] =
+        mlx::core::omarchy::stock_driver_warning_recorded();
     info["api_version"] =
         std::to_string(VK_API_VERSION_MAJOR(caps.api_version)) + "." +
         std::to_string(VK_API_VERSION_MINOR(caps.api_version)) + "." +

@@ -495,3 +495,69 @@ TEST_CASE("ANE lock files are created and repaired to world access") {
       std::runtime_error);
   std::filesystem::remove_all(directory);
 }
+
+TEST_CASE("a stock system Mesa older than 26.2.4 warns on shift-heavy kernels") {
+  using mlx::core::omarchy::stock_driver_warning;
+  // The stock release strings report "Mesa <release> (git-<sha>)"; the
+  // shift-mask fix landed in the 26.2.4 release.
+  const auto check = stock_driver_warning(
+      "search", "Mesa 26.2.3 (git-0f1e2d3c4b)", "0f1e2d3c4b", "");
+  CHECK(check.warn);
+  CHECK(check.message.find("26.2.3") != std::string::npos);
+  CHECK(check.message.find("int8") != std::string::npos);
+  CHECK(check.message.find("omarchy-mlx-vulkan") != std::string::npos);
+  CHECK(check.message.find("26.2.4") != std::string::npos);
+  // Boundary: 26.2.4 and newer release strings are safe.
+  CHECK_FALSE(stock_driver_warning(
+                  "search", "Mesa 26.2.4 (git-0f1e2d3c4b)", "0f1e2d3c4b", "")
+                  .warn);
+  CHECK_FALSE(
+      stock_driver_warning("search", "Mesa 26.3.0-devel", "", "").warn);
+  // 26.1.x and 25.x still warn.
+  CHECK(stock_driver_warning("search", "Mesa 26.1.7", "", "").warn);
+  CHECK(stock_driver_warning(
+            "search", "Mesa 25.3.9 (git-0f1e2d3c4b)", "0f1e2d3c4b", "")
+            .warn);
+  // The packaged recipe build never warns, whatever its version reads.
+  CHECK_FALSE(
+      stock_driver_warning("packaged", "Mesa 26.2.3", "7faf04c065", "").warn);
+  // An override that carries the known-good packaged commit is safe.
+  CHECK_FALSE(stock_driver_warning(
+                  "override",
+                  "Mesa 26.1.0 (git-aaaa1111bbb)",
+                  "aaaa1111bbb",
+                  "aaaa1111bbb")
+                  .warn);
+  // A search hit that carries the known-good commit is safe too.
+  CHECK_FALSE(stock_driver_warning(
+                  "search",
+                  "Mesa 26.2.2 (git-cccc2222ddd)",
+                  "cccc2222ddd",
+                  "cccc2222ddd")
+                  .warn);
+  // An override away from the known-good build on an old system driver
+  // warns: this is the forced stock ICD case.
+  CHECK(stock_driver_warning(
+            "override",
+            "Mesa 26.2.3 (git-9998887776)",
+            "9998887776",
+            "aaaa1111bbb")
+            .warn);
+  // A version the backend cannot parse stays silent (no false alarm).
+  CHECK_FALSE(stock_driver_warning("search", "Honeykrisp", "", "").warn);
+  CHECK_FALSE(stock_driver_warning(
+                  "override", "Mesa 26.1 (git-123456789a)", "123456789a", "")
+                  .warn);
+}
+
+TEST_CASE("the stock-driver warning is decided and recorded once per process") {
+  using namespace mlx::core::omarchy;
+  const auto& first = note_stock_driver_identity(
+      "search", "Mesa 26.2.3 (git-0f1e2d3c4b)", "0f1e2d3c4b", "");
+  CHECK_FALSE(first.empty());
+  // A later device identity can neither print nor record again.
+  const auto& second =
+      note_stock_driver_identity("packaged", "Mesa 26.3.0-devel", "", "");
+  CHECK(&first == &second);
+  CHECK(second == first);
+}

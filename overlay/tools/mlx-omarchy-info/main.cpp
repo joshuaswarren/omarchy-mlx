@@ -35,6 +35,7 @@
 #include "mlx/backend/omarchy/ane/bundle.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/honeykrisp_identity.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/device.h"
 #include "mlx/stream.h"
@@ -333,6 +334,10 @@ void print_json(uint32_t index) {
   str_field("icd_source", caps.icd_source, true);
   str_field("expected_sha", caps.expected_sha, true);
   str_field("expected_sha_source", caps.expected_sha_source, true);
+  str_field(
+      "stock_driver_warning",
+      omarchy::stock_driver_warning_recorded(),
+      true);
   str_field("api_version", version_string(caps.api_version), true);
   str_field("driver_version_raw", std::to_string(caps.driver_version), true);
   num_field("vendor_id", caps.vendor_id, true);
