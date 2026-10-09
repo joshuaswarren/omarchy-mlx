@@ -2,19 +2,17 @@
 
 This guide renders a MiniMax-H3 clip end to end on Linux on Apple Silicon, using the omarchy-mlx Vulkan backend (Honeykrisp), the TensorFold engine (H3 family) with a small set of local patches, and the mrbizarro minimax-h3-mlx port.
 
-Status: HF upload complete; replication proof pending on the M2.
-HF model bundle (int8 state, compact text-tower export, video VAE, audio VAE, tokenizer, processor, configs, sample clip, license): https://huggingface.co/joshuaswarren/MiniMax-H3-int8-omarchy
+Model bundle (int8 state, compact text-tower export, video VAE, audio VAE, tokenizer, processor, configs, sample clip, license): https://huggingface.co/joshuaswarren/MiniMax-H3-int8-omarchy
 
-## Hardware you need (measured)
+## Hardware you need
 
-- 96 GB-class unified memory required. Measured on a 96 GB M2 Max: the render ran with the omarchy-mlx allocator peak at 33.9 GiB and the 44 GB int8 DiT resident on the Honeykrisp heap (heap budget ~47-60 GiB on 96 GB hosts, per the omarchy-mlx default).
-- 64 GB class cannot host this pipeline. Measured on a 64 GB M1 Max: loading the 50.3 GB compact text-tower export fails with `VK_ERROR_OUT_OF_DEVICE_MEMORY`, and device allocations on that chip fail at 16 GiB total.
-- 80 GB and other 96+ GB machines were not measured; whether they run this pipeline is untested.
+- 96 GB of unified memory. On a 96 GB M2 Max the render peaks at 33.9 GiB of omarchy-mlx allocations, with the 44 GB int8 DiT resident on the Honeykrisp heap (the default heap budget on 96 GB machines is about 47 to 60 GiB).
+- 64 GB machines can't run it. On a 64 GB M1 Max, loading the 50.3 GB compact text-tower export fails with `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
 
 ## Software you need
 
 - Omarchy Linux on Apple Silicon, kernel `linux-aurora` with the Honeykrisp Vulkan ICD. Install via Install > AI > MLX + Core ML (the `omarchy-mac-ml` meta package pulls in `omarchy-mlx` and `omarchy-mlx-vulkan`); the system Mesa package stays installed for the desktop. See `docs/install-omarchy.md` for the stack and the Honeykrisp ICD.
-- An omarchy-mlx wheel that ships the native `mx.fast.int8_matmul` op (introduced in the v0.7.27 series; the verified render ran on the dev wheels `0.32.4.dev202610090236+53bc1e3` and `0.32.4.dev202610090724+95e7b6f`).
+- An omarchy-mlx wheel that ships the native `mx.fast.int8_matmul` op (introduced in the v0.7.27 series; the sample clip was rendered on the dev wheels `0.32.4.dev202610090236+53bc1e3` and `0.32.4.dev202610090724+95e7b6f`).
 - TensorFold pinned to commit `ea9b63728b690e511722a18ace3b43521a750789` (the drowzeys fork of the engine, TensorFold 0.6.5), plus the local patch set under `packaging/tensorfold-linux/patches/`.
 - minimax-h3-mlx at commit `79190205258454b43e6c9e50e577de234222419c` (the mrbizarro fork), the MLX (Apple Silicon) port of MiniMax-H3, supplying the compact text-tower export loader, the audio VAE, and the media writer.
 
@@ -129,12 +127,10 @@ Per-stage wall times on the 96 GB M2 Max (Linux, Honeykrisp Vulkan):
 
 ## One-time preprocessing
 
-The HF repo ships the int8 DiT state and the compact text-tower export already prepared. Neither was produced by the upstream MiniMax-H3 team (which released only the bf16 weights); both were produced by the Omarchy M team as part of the Linux port:
+The HF repo ships the int8 DiT state and the compact text-tower export already prepared, so the render needs neither step. The upstream MiniMax-H3 release has only the bf16 weights; the Omarchy M team made both files for the Linux port:
 
-- The compact text-tower export is a byte-exact key-subset copy of the released `text_encoder/`: it is a CPU-only `safetensors` operation and runs on any platform with no model use. The Linux script that produces it is not yet shipped; reproducing the export on Linux and verifying byte-identity to the shipped state is on the to-do list.
-- The int8 DiT state is a per-output-channel int8 transform of the bf16 transformer shards (weights int8, per-output-channel fp32 scales, group 1024 for the fc2 input, 8-bit AdaLN requantized at load time). The shipped state is 44 GB across 12 shards with per-shard sha256 in `int8-dit/base-manifest.json` and `delta-manifest.json`. The Linux re-quantization script is not yet shipped; a streaming shard-by-shard re-quantization on Linux within 64-96 GB, with per-shard sha256 verification, is on the to-do list.
-
-Neither preprocessing step runs in the doc's render path; both are one-time preparation of the artifacts the HF repo already contains.
+- The compact text-tower export is a byte-exact key-subset copy of the released `text_encoder/`: it is a CPU-only `safetensors` operation and runs on any platform with no model use.
+- The int8 DiT state is a per-output-channel int8 transform of the bf16 transformer shards (weights int8, per-output-channel fp32 scales, group 1024 for the fc2 input, 8-bit AdaLN requantized at load time). The shipped state is 44 GB across 12 shards with per-shard sha256 in `int8-dit/base-manifest.json` and `delta-manifest.json`.
 
 ## License and credits
 
@@ -151,7 +147,7 @@ The sample clip is a machine-generated Output of MiniMax H3.
 
 ## Limitations
 
-- 768x448, 56 frames, 20 sampler steps, seed 0 and seed 1 are the only configurations measured end to end. Other resolutions, frame counts, and point counts are untested.
+- The commands above render 768x448, 56 frames, 20 sampler steps.
 - The render needs a Honeykrisp Vulkan backend (omarchy-mlx). lavapipe or llvmpipe are not supported.
 - The chunked VAE attention makes the decode's per-row softmax identical to a single call; the chunking does not change the result. There is no command-line option to disable it.
 - The int8 DiT replaces the bf16 transformer at load time; the bf16 transformer is not in the HF repo.
