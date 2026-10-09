@@ -2409,15 +2409,15 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   // routed-expert gather; k 128 divides the 256-lane K split, k 96
   // exercises the tail guard, and the non-transposed layout runs the
   // other weight-routing branch.
-  auto run_case_shape = [&](bool bf16, bool transpose, int k, int experts,
+  auto run_case_shape = [&](Dtype dtype, bool transpose, int k, int experts,
                             int index_count, int n) {
+    const bool bf16 = dtype == bfloat16;
     const int m = 1;
     const int group_size = 64;
     const int bits = 4;
     const int groups = k / group_size;
     const int pack = 32 / bits;
     const int words_per_row = k / pack;
-    auto dtype = bf16 ? bfloat16 : float32;
     std::vector<HostQuantizedWeights> host_w;
     std::vector<uint32_t> w_all;
     std::vector<float> scales_all;
@@ -2532,7 +2532,7 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     auto [s_l2, s_max] = rel_l2(scalar_out);
     auto [b_l2, b_max] = rel_l2(sub_out);
     double scalar_bound = bf16 ? 0.05 : 0.01;
-    std::cout << "[gather-qmm-sub] bf16=" << bf16 << " transpose=" << transpose
+    std::cout << "[gather-qmm-sub] dtype=" << (bf16 ? "bf16" : "f16") << " transpose=" << transpose
               << " k=" << k << " experts=" << experts
               << " index_count=" << index_count << " n=" << n
               << " scalar: relL2=" << s_l2 << " maxabs/ref=" << s_max
@@ -2542,6 +2542,32 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     CHECK(s_max <= scalar_bound * 2.0);
     CHECK(b_l2 <= 1.5 * s_l2 + 1e-9);
     CHECK(b_max <= 1.5 * s_max + 1e-9);
+    // Direct sub-versus-scalar check (PR review): the 1.5x gate above sits on
+    // the output-rounding floor, so it cannot see a small extra error. At
+    // least 99 % of the elements must agree within one ulp of the output
+    // dtype and no element may differ by more than 2e-3 of the reference
+    // maximum (near-zero outputs after cancellation can move more than one
+    // ulp, so it is not an every-element ulp rule).
+    {
+      const int mantissa = bf16 ? 7 : 10;
+      size_t within = 0;
+      double worst = 0.0;
+      for (size_t i = 0; i < sub_out.size(); ++i) {
+        const double a = sub_out[i];
+        const double b = scalar_out[i];
+        const double diff = std::abs(a - b);
+        worst = std::max(worst, diff);
+        int exponent = 0;
+        std::frexp(std::max(std::abs(a), std::abs(b)), &exponent);
+        const double ulp = std::ldexp(1.0, exponent - 1 - mantissa);
+        within += diff <= ulp ? 1 : 0;
+      }
+      const double fraction = double(within) / double(sub_out.size());
+      std::cout << "[gather-qmm-sub] sub vs scalar: within 1 ulp " << fraction
+                << " max abs diff / ref max " << worst / ref_max << std::endl;
+      CHECK(fraction >= 0.99);
+      CHECK(worst <= 2e-3 * ref_max);
+    }
     // z-chunk boundary: with index_count x n > 65535, outputs at flat
     // indices >= 65535 come from the z>=1 workgroup chunks - they must
     // track the reference, not zeros/garbage.
@@ -2560,19 +2586,24 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     }
   };
 
-  // Only bf16-transposed configs: they cover the Sub selector's proven
-  // class (bf16, 4-bit, group-64, transposed, m==1). f32 configs are NOT
+  // Only bf16 and f16 transposed configs: they cover the Sub selector's
+  // proven class (4-bit, group-64, transposed, m==1). f32 configs are NOT
   // covered by this test (the f32 non-transposed authoring used an
   // invalid weight layout [E, N, K/pack] and the f32 transposed m==1
   // paths are a separate investigation - see the lane receipt).
-  run_case_shape(true, true, 128, 3, 2, 64);
-  run_case_shape(true, true, 192, 3, 2, 64);   // k below one 256-lane stride: tail guard
-  // GLM-4.5-Air routed shapes: B=1 gate/up gather (index_count 8 x
-  // n 1408 = 11,264 workgroups) and a count above the 65535 per-dimension
-  // workgroup limit (48 x 1408 = 67,584 -> z-chunked dispatch).
-  run_case_shape(true, true, 128, 3, 8, 1408);
-  run_case_shape(true, true, 2048, 3, 8, 1408);
-  run_case_shape(true, true, 128, 48, 48, 1408);
+  // fp16 joined the Sub selector's class with MatmulGap H45: the same
+  // shapes, the same gate (sub within 1.5x of the scalar arm against the
+  // fp64 host reference).
+  for (Dtype dtype : {bfloat16, float16}) {
+    run_case_shape(dtype, true, 128, 3, 2, 64);
+    run_case_shape(dtype, true, 192, 3, 2, 64);   // k below one 256-lane stride: tail guard
+    // GLM-4.5-Air routed shapes: B=1 gate/up gather (index_count 8 x
+    // n 1408 = 11,264 workgroups) and a count above the 65535 per-dimension
+    // workgroup limit (48 x 1408 = 67,584 -> z-chunked dispatch).
+    run_case_shape(dtype, true, 128, 3, 8, 1408);
+    run_case_shape(dtype, true, 2048, 3, 8, 1408);
+    run_case_shape(dtype, true, 128, 48, 48, 1408);
+  }
 }
 
 TEST_CASE("gather qqmm dequants with scales only") {

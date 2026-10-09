@@ -1,0 +1,5 @@
+start 2026-10-09T00:44:05Z host m1 kernel 7.1.12-2-12.6-sep-ARCH load 0.48 venv venv-head wheel 0.32.4.dev202610081236+50e40389
+{"dtype": "fp16", "slots": 40, "arms": {"gq_default": {"ms": 66.317, "spread_pct": 8.7, "hash": "c657a8f9917105e2"}, "gq_scalar": {"ms": 66.312, "spread_pct": 9.2, "hash": "c657a8f9917105e2"}, "take_qmm": {"ms": 3.465, "spread_pct": 32.1, "hash": "99252d5ea1f72564"}}}
+{"dtype": "bf16", "slots": 40, "arms": {"gq_default": {"ms": 4.524, "spread_pct": 3.7, "hash": "3a01a29113ee5445"}, "gq_scalar": {"ms": 66.117, "spread_pct": 9.2, "hash": "982fc0f142b2d4f6"}, "take_qmm": {"ms": 3.701, "spread_pct": 29.8, "hash": "ba70e101e3c2d9e4"}}}
+rc=0 trace dispatch lines 66
+end 2026-10-09T00:44:13Z

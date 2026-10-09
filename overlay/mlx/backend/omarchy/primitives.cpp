@@ -3382,9 +3382,9 @@ void dispatch_gather_qmm(
   bool use_sub = false;
   if (!fp_mode && params.matrix_m == 1) {
     // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel. Selector is
-    // restricted to the layout class proven correct end to end (bf16,
-    // 4-bit, group-64, transposed affine - the DeepSeek-Lite decode
-    // case); every other layout stays on the scalar kernel until its
+    // restricted to the layout class proven correct end to end (bf16 and
+    // f16, 4-bit, group-64, transposed affine - the MoE decode cases;
+    // f16 added by MatmulGap H45); every other layout stays on the scalar kernel until its
     // parity is proven per layout (jwm1/jw16 suite history: f32-T and
     // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
     // and untested layouts must not ride an unproven kernel). Counts
@@ -3394,7 +3394,7 @@ void dispatch_gather_qmm(
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
         transpose && bits == 4u && group_size == 64u &&
-        out.dtype() == bfloat16 &&
+        (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
         sub_caps.subgroup_size == 32u &&
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
