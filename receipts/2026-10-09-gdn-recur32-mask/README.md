@@ -9,9 +9,9 @@ the two-pass snapshot scan.
 
 - `gated_delta_prefill_recur32.comp`: a masked-out token leaves the state untouched and writes a zero output (the same contract as
   the scan routes and the composed fallback's `where`). The mask is the existing `[1, T]` scalar per-token validity.
-- `primitives.cpp`: the recur32 route no longer requires `!has_mask`. By default a masked prefill takes it on every part with
-  32-lane subgroups (mode 2, T >= 2). Maskless defaults are unchanged (G13 except G13C: recur32; G13C and others: coopmat chunk
-  kernel). `MLX_OMARCHY_GDN_RECUR32` and `MLX_OMARCHY_NO_COOPMAT_GDN` still override.
+- `primitives.cpp`: the recur32 route no longer requires `!has_mask`. By default a masked prefill takes it on G13 parts (mode 2,
+  T >= 2; the two measured parts, M1 G13G and M1 Max G13C). Maskless defaults are unchanged (G13 except G13C: recur32; G13C and others:
+  coopmat chunk kernel). `MLX_OMARCHY_GDN_RECUR32` (1 and 2 now cover masked rows) and `MLX_OMARCHY_NO_COOPMAT_GDN` still override.
 - Tests: an fp64 partial-mask test (left padding plus every seventh token masked, non-zero initial state, T 2 to 519, Hv 16 and 32,
   masked tokens must write exactly zero) and a device dispatch-count test (a masked row is one dispatch, as a maskless row).
 
@@ -76,5 +76,13 @@ One build per host from `fa02100a3`; both hosts print the same lines.
 
 ## Not covered
 
-M2 (G14C) was not run, and the change reaches it by default (masked prefill on any 32-lane part). Its device test and the padded-batch
-ratio are the open follow-up. The 4B model at larger T on the M1 was not run (device memory on the `[4, T, vocab]` logits).
+The M2 (G14C) was not run. After review the masked default is guarded to G13 parts (`device_name` contains `G13`, the two measured
+parts), so G14 and later keep the old masked route until measured; `MLX_OMARCHY_GDN_RECUR32=2` forces the new route anywhere and its
+device tests are queued for the M2. The 4B model at larger T on the M1 was not run (device memory on the `[4, T, vocab]` logits).
+
+## Review conditions folded in
+
+- Maskless route unchanged on the M1 (the shader's hot loop gained a mask branch): `mlcheck-*.log`, rule in `mlcheck.py` fixed before the
+  wheel was built (see "Maskless A/B" below).
+- `MLX_OMARCHY_GDN_RECUR32=1` now also covers masked rows (it excluded them before `!has_mask` was dropped); `=0` and
+  `MLX_OMARCHY_NO_COOPMAT_GDN=1` restore the old masked route. `docs/compatibility.md` carries both notes and the order change.

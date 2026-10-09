@@ -874,3 +874,13 @@ A Supported row must link every applicable record.
 - Numerics: each batch row is bit-identical (output and state) to the same row on the B = 1 fused kernel, which
   already passes the numerics gate. `tests/omarchy/test_gdn_decode_batch.cpp` pins that and the fused dispatch
   count (1 vs 30 composed); 3/3 cases pass on M1 Max.
+
+## 2026-10-09 - masked GDN prefill on the single-pass recur32 route (G13 parts)
+- A masked prefill (the padded rows of a batched prefill: left padding, a `[B, T]` mask) used to take the two-pass snapshot scan;
+  a padded batch of four prompts ran 1.46x (M1) to 1.65x (M1 Max) of the same prompts run one at a time. A masked token now leaves
+  the state untouched and writes zero on the recur32 route, which is the default for a masked prefill on G13 parts (M1, M1 Max;
+  M1 Max padded batch 1.645 -> 0.985 of sequential, M1 1.459 -> 0.970). Other parts (G14 and later) keep the old route until measured.
+- Numerics: masked-prefill outputs follow the recur32 subgroup-reduction order, not the scan's ascending order. They are not
+  bit-equal to before; the gate is the fp64 tolerance of the correctness battery (y 0.02, state 2e-4). Maskless defaults are unchanged.
+  `MLX_OMARCHY_GDN_RECUR32=1` and `=2` now also cover masked rows (they excluded them before); `=0` and
+  `MLX_OMARCHY_NO_COOPMAT_GDN=1` restore the old masked route.

@@ -290,9 +290,10 @@ TEST_CASE("batched prefill stays on the fused dispatches") {
 }
 
 // A masked row takes the single-pass per-token route (recur32, one dispatch per
-// row at T = 128) by default on every part with 32-lane subgroups: the padded
-// rows of a real batched prefill carry a mask, and a masked row used to fall to
-// the two-pass snapshot scan (two dispatches; a padded batch ran 1.6x of
+// row at T = 128): by default on G13 parts (measured: G13G and G13C), forced
+// by MLX_OMARCHY_GDN_RECUR32=2 on any part with 32-lane subgroups. The padded
+// rows of a real batched prefill carry a mask, and a masked row used to fall
+// to the two-pass snapshot scan (two dispatches; a padded batch ran 1.6x of
 // sequential on G13C). A maskless row keeps its own default route.
 TEST_CASE("masked prefill takes the single-pass route") {
   if (!have_gpu()) return;
@@ -320,13 +321,23 @@ TEST_CASE("masked prefill takes the single-pass route") {
   std::cout << "[gdn_masked_prefill] B=1 T=128 maskless " << plain
             << " dispatches, masked " << padded << ", B=4 masked "
             << padded_batch << "\n";
-  if (omarchy::device(0).capabilities().subgroup_size == 32 &&
-      std::getenv("MLX_OMARCHY_GDN_RECUR32") == nullptr &&
-      std::getenv("MLX_OMARCHY_NO_COOPMAT_GDN") == nullptr) {
+  const bool env_free = std::getenv("MLX_OMARCHY_GDN_RECUR32") == nullptr &&
+      std::getenv("MLX_OMARCHY_NO_COOPMAT_GDN") == nullptr;
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.device_name.find("G13") != std::string::npos && env_free) {
     CHECK_MESSAGE(padded == 1, "a masked row took ", padded,
-                  " dispatches on the default route (one expected)");
+                  " dispatches on the default route (one expected on G13)");
     CHECK_MESSAGE(padded_batch <= 4 * padded + 16, "B=4 masked prefill took ",
                   padded_batch, " dispatches against ", padded, " for one row");
+  }
+  if (caps.subgroup_size == 32 && env_free) {
+    setenv("MLX_OMARCHY_GDN_RECUR32", "2", 1);
+    uint64_t forced = dispatches(one_masked, s);
+    unsetenv("MLX_OMARCHY_GDN_RECUR32");
+    std::cout << "[gdn_masked_prefill] forced recur32: masked " << forced
+              << " dispatches\n";
+    CHECK_MESSAGE(forced == 1, "a masked row took ", forced,
+                  " dispatches on the forced single-pass route (one expected)");
   }
 }
 
