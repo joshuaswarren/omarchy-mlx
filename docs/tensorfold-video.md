@@ -39,11 +39,26 @@ hf download joshuaswarren/MiniMax-H3-int8-omarchy --local-dir hf-bundle
 Clone and patch the engine, then install it editable. No other GitHub PR or issue is opened anywhere as part of this work.
 
 ```bash
+# 1. The render driver lives in this repo; clone it so the script paths below resolve.
+git clone https://github.com/joshuaswarren/omarchy-mlx
+cd omarchy-mlx
+git checkout 5bf5834d1bae2b292c3eb63aa6f9a53971ea9c94
+
+# 2. The H3 engine itself, with the six local patches.
 git clone https://github.com/drowzeys/TensorFold
 cd TensorFold
 git checkout ea9b63728b690e511722a18ace3b43521a750789
-# Apply the local patch set from this repo:
-for p in /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/*.patch; do patch -p1 < "$p"; done
+# The patches directory holds two unrelated patch series (the older `01-` and `02-` pair
+# targets a different upstream; the six `0010-0060-*-*.patch` files target this drowzeys pin).
+# Pin the glob to the newer six:
+for p in /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0010-*-*.patch \
+         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0020-*-*.patch \
+         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0030-*-*.patch \
+         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0040-*-*.patch \
+         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0050-*-*.patch \
+         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0060-*-*.patch; do
+  patch -p1 < "$p"
+done
 pip install -e .
 ```
 
@@ -71,7 +86,13 @@ export PYTHONPATH="$PWD:$PYTHONPATH"
 
 The render driver is `scripts/tensorfold/h3_generate_rows.py` in this repository. It derives from the engine's `tools/h3_generate_dev.py` at the pinned commit (Apache 2.0, drowzeys); the local changes are limited to the documentation and command-line defaults.
 
-The three stages of a reproducible end-to-end run (768x448, 56 frames, 20 sampler steps, seed 1, the prompt below):
+Before the three render stages, point the driver at the int8 DiT location. The HF bundle ships the int8 shards under `int8-dit/`; the render driver expects a `transformer/` subdirectory inside the model directory:
+
+```bash
+ln -s "$MODEL_DIR/int8-dit" "$MODEL_DIR/transformer"
+```
+
+The three stages of a reproducible run (768x448, 56 frames, 20 sampler steps, seed 1, the prompt below):
 
 ```bash
 MODEL_DIR=/path/to/hf-bundle
@@ -80,12 +101,17 @@ CKPT=ckpt
 LAT=clip.latents.safetensors
 TEXT=clip.text.safetensors
 
+# Run from the omarchy-mlx checkout so `scripts/tensorfold/h3_generate_rows.py` resolves.
+cd /path/to/omarchy-mlx
+
 # 1. Text encode (one-time per prompt): writes 35-row text encoder output. The DiT
-#    is not loaded for this step; --int8-from-state is not needed here.
+#    is not loaded for this step; --int8-from-state is not needed here. `-o /dev/null`
+#    is required by the argparse even though the script exits before any video write.
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
   --prompt "Slow dolly across a dark desk at night: a terminal window on a Hyprland desktop, green text scrolling, rain on the window behind, warm desk lamp glow." \
   --width 768 --height 448 --frames 56 --points 21 --seed 1 \
-  --dump-text-rows "$TEXT"
+  --dump-text-rows "$TEXT" \
+  -o /dev/null
 
 # 2. Denoise (20 forwards, resumable per-step checkpoints).
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
@@ -122,7 +148,7 @@ Per-stage wall times on the 96 GB M2 Max (Linux, Honeykrisp Vulkan):
 | **total** | **90.3 min** | **58.7 min** | **63.2 min** |
 
 - omarchy-mlx allocator peak: 33.9 GiB.
-- The mp4 sha256 was identical across the two wheels on the M2 (the int8 kernels are exact end-to-end): the `clip.mp4` in the HF sample is `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`, and the same seed-1 render on wheels `53bc1e3` and `95e7b6f` produced the same hash. The sha holds across the two wheels on the same chip.
+- The mp4 sha256 was identical across the two wheels on the M2 (the int8 kernels are exact through the whole pipeline): the `clip.mp4` in the HF sample is `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`, and the same seed-1 render on wheels `53bc1e3` and `95e7b6f` produced the same hash. The sha holds across the two wheels on the same chip.
 - This holds only on the same chip family (M2 Max / G14C) with the same seed, because the same-host rerun of the sampler is deterministic (the latents themselves were reproduced bit-identically on the M2). Other chips will produce a visually equivalent clip with a different hash; judge those by per-frame relative error against the sample, not by sha256.
 
 ## One-time preprocessing
