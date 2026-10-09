@@ -227,6 +227,7 @@ With the mlx-lm patches the installer applies (first row; Linux / macOS, tokens 
 | Model | Decode | Prefill 512 |
 |---|---|---|
 | Qwen3.5-9B | 37.1 / 59.3 = **62%** | 299.4 / 333.4 = **90%** |
+| Qwen3.8-27B | 13.5 / 19.6 = **69%** | 87.4 / 104.6 = **84%** |
 
 The Qwen3.5-9B outputs are token-for-token identical to macOS for the 10 test generations (same output digest). On stock mlx-lm the same model measured 43% decode and 17% prefill (table above).
 
