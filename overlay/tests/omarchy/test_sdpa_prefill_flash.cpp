@@ -342,6 +342,57 @@ TEST_CASE("flash prefill handles ragged and GQA shapes like the composition") {
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
 }
 
+TEST_CASE("chunked composed prefill keeps GQA rows in place") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  set_flash_enabled(false);
+
+  struct Case {
+    int heads;
+    int kv_heads;
+    int length;
+  };
+  // 192 rows with the cap below gives 64-row chunks (three per call).
+  const Case cases[] = {
+      {8, 8, 192}, // MHA control
+      {8, 2, 192}, // GQA repeats = 4
+      {6, 1, 192}, // GQA repeats = 6, one KV head
+  };
+  for (const auto& c : cases) {
+    array q = make_bf16({1, c.heads, c.length, kHd}, 301 + c.heads, stream);
+    array k = make_bf16({1, c.kv_heads, c.length, kHd}, 302 + c.heads, stream);
+    array v = make_bf16({1, c.kv_heads, c.length, kHd}, 303 + c.heads, stream);
+    const uint64_t chunk_denom =
+        static_cast<uint64_t>(c.heads) * c.length * sizeof(float);
+    unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    std::vector<float> whole = flat(sdpa(q, k, v, stream), stream);
+    setenv(
+        "MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES",
+        std::to_string(chunk_denom * 64).c_str(),
+        1);
+    std::vector<float> chunked = flat(sdpa(q, k, v, stream), stream);
+    unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    REQUIRE_EQ(chunked.size(), whole.size());
+    double max_diff = 0.0;
+    for (size_t i = 0; i < whole.size(); ++i) {
+      max_diff = std::max(
+          max_diff, static_cast<double>(std::abs(chunked[i] - whole[i])));
+    }
+    CHECK_MESSAGE(
+        max_diff == 0.0,
+        "chunked vs whole composed, heads ",
+        c.heads,
+        "/",
+        c.kv_heads,
+        ": max abs diff ",
+        max_diff);
+  }
+  set_flash_enabled(true);
+}
+
 TEST_CASE("flash prefill splits dispatches per q tile") {
   if (!compute_available()) {
     return;
