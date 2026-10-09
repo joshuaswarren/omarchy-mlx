@@ -14700,20 +14700,19 @@ void ScaledDotProductAttention::eval_gpu(
         static_cast<uint32_t>(batch));
     return;
   }
-  // Flash-style bf16 prefill for long sequences (H3 joint attention:
-  // q_len 13365, heads 56, hd 128). The composed route's score matrix
-  // fails twice out there - past 2^30 bf16 elements it passes the
-  // device's 2 GiB maxStorageBufferRange (the encoder refuses the
-  // binding; before that check it was a driver assert + core dump at
-  // L=8192), and past 2^32 elements the checked_u32 guard refuses it
-  // outright. The flash kernel materializes nothing: 32-row q tiles
-  // with online softmax, K/V streamed through shared tiles, dispatches
-  // split per q tile so no single dispatch approaches the ~40 ms
-  // firmware timer (56 workgroups run one q tile across all heads in
-  // ~5-12 ms on the 38-core G14C).
-  // Kill switch: MLX_OMARCHY_SDPA_PREFILL_FLASH=0. By default, use
-  // flash when the composed f32 score matrix exceeds 2^30 elements or
-  // would exceed 25% of the device heap. MIN_L is an explicit A/B override.
+  // Route order for bf16 prefill (2026-10-09, TFProf receipt, jw16 G13C):
+  // the chunked composed route measured 782 GMAC/s at the H3 demo shape
+  // (56 heads, 6417 rows) against the flash kernel's 245 - 3.2x - with
+  // route agreement at bf16 granularity (max abs diff 4.9e-4), and its
+  // 1 GiB f32 score-chunk cap keeps every storage binding legal at any
+  // sequence length. So composed serves whenever the device reports the
+  // f32 8x8x8 cooperative matrix; the flash kernel (32-row q tiles,
+  // online softmax, zero score memory) stays as the route for devices
+  // without that shape and as an explicit pin.
+  // MLX_OMARCHY_SDPA_PREFILL_FLASH: "1" pins flash (A/B), "0" forces
+  // composed, unset/auto prefers composed and keeps flash for
+  // non-coopmat devices; MIN_L keeps its meaning as a flash override
+  // above a sequence length.
   const char* prefill_flash_env = std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
   const char* prefill_flash_min_l_env =
       std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
@@ -14726,7 +14725,22 @@ void ScaledDotProductAttention::eval_gpu(
       prefill_flash_min_l = static_cast<uint32_t>(parsed);
     }
   }
-  const auto& flash_caps = encoder.device().capabilities();
+  static const bool sdpa_coopmat_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+  const auto& sdpa_caps = encoder.device().capabilities();
+  const bool composed_ready =
+      q_len > 1 && head_dim > 0 && k_len > 0 &&
+      q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+      v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
+      sdpa_caps.cooperative_matrix_f32_8 && sdpa_caps.subgroup_size == 32u &&
+      !sdpa_coopmat_disabled;
+  const bool flash_pinned = prefill_flash_env != nullptr &&
+      std::strcmp(prefill_flash_env, "1") == 0;
+  const bool flash_min_l_requested = prefill_flash_min_l > 0 &&
+      q_len >= static_cast<int>(prefill_flash_min_l);
+  const bool flash_declined = prefill_flash_env != nullptr &&
+      std::strcmp(prefill_flash_env, "0") == 0;
+  const auto& flash_caps = sdpa_caps;
   const bool flash_route_ready =
       flash_caps.max_compute_work_group_size[0] >= 256u &&
       flash_caps.max_compute_work_group_invocations >= 256u &&
@@ -14739,8 +14753,8 @@ void ScaledDotProductAttention::eval_gpu(
       flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
-  if ((prefill_flash_env == nullptr ||
-          std::strcmp(prefill_flash_env, "0") != 0) &&
+  if ((flash_pinned || flash_min_l_requested ||
+          (!flash_declined && !composed_ready)) &&
       flash_route_ready && flash_wants && inputs.size() == 3 &&
       !do_causal_ && !has_sinks_ && !output_logsumexp_ && q_len > 1 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
@@ -14921,7 +14935,16 @@ void ScaledDotProductAttention::eval_gpu(
     encoder.add_temporary(view);
     return view;
   };
-  if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1) {
+  // Scores past 2^30 bf16 elements pass the 2 GiB maxStorageBufferRange
+  // (the encoder refuses the binding), so those shapes skip this branch
+  // and reach the chunked composed route below instead (2026-10-09,
+  // TFProf: 56x6417^2 runs chunked composed at 782 GMAC/s).
+  const bool bf16_big_scores =
+      flash_score_elements > (1ull << 30) && q.dtype() == bfloat16 &&
+      k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
+      out.dtype() == bfloat16;
+  if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1 &&
+      !bf16_big_scores) {
     const bool bf16 = q.dtype() == bfloat16;
     const Dtype storage_dtype = bf16 ? bfloat16 : float16;
     array qs = repeats > 1 ? regroup_view(q) : q;
@@ -15044,14 +15067,8 @@ void ScaledDotProductAttention::eval_gpu(
   // matches it. Gated to exactly the shapes whose two matmuls the
   // composition sends to MatmulF32Coopmat (q_len > 1, the coopmat
   // device gate of dispatch_matmul); everything else keeps the casts.
-  static const bool sdpa_coopmat_disabled =
-      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
-  const auto& sdpa_caps = encoder.device().capabilities();
-  const bool bf16_direct = q.dtype() == bfloat16 &&
-      k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
-      out.dtype() == bfloat16 && q_len > 1 && head_dim > 0 && k_len > 0 &&
-      sdpa_caps.cooperative_matrix_f32_8 && sdpa_caps.subgroup_size == 32 &&
-      !sdpa_coopmat_disabled;
+  // composed_ready above carries the identical condition.
+  const bool bf16_direct = composed_ready;
   // Causal mode with every row holding at least one key: the softmax runs
   // its causal mode and never reads a masked score, so the scores matmul
   // skips fully masked column tiles and the probs matmul stops its k walk
