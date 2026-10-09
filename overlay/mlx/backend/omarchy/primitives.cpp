@@ -12602,21 +12602,27 @@ void Int8Matmul::eval_gpu(
   // the int8 streams to exact f32 temps (the converting copy; int8
   // widening is exact), and the kernel runs per-group 8x8x8 f32 MMAs.
   // Exact by the same integer-sum argument as the scalar f32 route (see
-  // the shader header): group <= 1024 keeps every partial sum at or under
-  // 2^24, group % 8 == 0 aligns the MMA k step, and the per-group flush
-  // matches the other routes op for op. The 32-row/32-column gate is the
-  // edge-shift contract of the tile. Swiglu stays on the scalar route.
-  const bool coop_f32_ready = !int8_imad_forced() && !int8_f32fma_forced() &&
+  // the shader header): the int32 chunk scratch keeps every group at or
+  // under the 2^31 int32 bound, group % 8 == 0 aligns the MMA k step,
+  // and the per-group flush matches the other routes op for op. The
+  // 32-row/32-column gate is the natural-offset contract of the tile.
+  // Swiglu dispatches the coop kernel twice (gate half, value half) into
+  // raw f32 totals (flags bit1) and finishes with the epilogue kernel,
+  // which applies WS/B and stores bf16(silu(gate) * value) with ONE bf16
+  // rounding - the exact op sequence of the scalar swiglu kernel.
+  const bool coop_f32_base = !int8_imad_forced() && !int8_f32fma_forced() &&
       !int8_coopf32_disabled() &&
-      encoder.device().capabilities().cooperative_matrix_f32_8 && !fused &&
+      encoder.device().capabilities().cooperative_matrix_f32_8 &&
       (params.matrix_k % 8u) == 0u && (params.reduce_size % 8u) == 0u &&
       params.reduce_size >= 32u && params.reduce_size <= 131072u &&
       params.matrix_m >= 32u && params.matrix_n >= 32u;
-  if (coop_f32_ready) {
+  const bool coop_f32_ready = coop_f32_base && !fused;
+  const bool coop_f32_swiglu = coop_f32_base && fused;
+  if (coop_f32_ready || coop_f32_swiglu) {
     // Groups longer than 1024 reduce through an int32 scratch tile the
-    // kernel clears per group; it cannot overflow while
-    // group * 16384 <= 2^31 (the 131072 gate). The temps are padded to
-    // 64-row multiples for natural block loads.
+    // kernel clears per group and zeroes at entry; it cannot overflow
+    // while group * 16384 <= 2^31 (the 131072 gate). The temps are
+    // padded to 64-row multiples for natural block loads.
     const bool coop_chunked = params.reduce_size > 1024u;
     const auto pad64 = [](uint32_t v) { return (v + 63u) / 64u * 64u; };
     array xf(Shape({static_cast<int>(pad64(rows)), xd.shape(1)}), float32,
@@ -12653,8 +12659,17 @@ void Int8Matmul::eval_gpu(
     acc32.set_data(allocate_omarchy(acc32.nbytes()));
     encoder.add_temporary(acc32);
     auto acc32_binding = binding(acc32);
-    if (coop_chunked) {
-      encoder.fill_buffer(acc32_binding.buffer, 0u, acc32.nbytes(), 0);
+    std::optional<array> gt_temp;
+    std::optional<array> vt_temp;
+    if (coop_f32_swiglu) {
+      gt_temp = array(Shape({static_cast<int>(rows),
+          static_cast<int>(params.matrix_n)}), float32, nullptr, {});
+      gt_temp->set_data(allocate_omarchy(gt_temp->nbytes()));
+      encoder.add_temporary(*gt_temp);
+      vt_temp = array(Shape({static_cast<int>(rows),
+          static_cast<int>(params.matrix_n)}), float32, nullptr, {});
+      vt_temp->set_data(allocate_omarchy(vt_temp->nbytes()));
+      encoder.add_temporary(*vt_temp);
     }
     const uint32_t n_groups64 = (params.matrix_n + 63u) / 64u;
     const uint32_t m_groups64 = (params.matrix_m + 63u) / 64u;
@@ -12665,20 +12680,59 @@ void Int8Matmul::eval_gpu(
       omarchy::unsupported(
           tag + " with a 64-tile grid beyond the dispatch clamp", out);
     }
-    omarchy::ComputeParams coop_params = params;
-    coop_params.lhs_offset = 0u;
-    coop_params.rhs_offset = 0u;
-    coop_params.shape[3] = pad64(params.matrix_n);
-    std::array<omarchy::ComputeBinding, 7> coop_bindings{
-        binding(xf), binding(xsd), binding(wf), binding(wsd), binding(bd),
-        binding(out), acc32_binding};
-    encoder.dispatch_compute(
-        omarchy::ComputeKernel::Int8MatmulF32CoopOp,
-        coop_bindings,
-        coop_params,
-        n_groups64,
-        m_groups64,
-        1u);
+    const uint32_t coop_passes = coop_f32_swiglu ? 2u : 1u;
+    for (uint32_t half = 0u; half < coop_passes; half++) {
+      omarchy::ComputeParams coop_params = params;
+      coop_params.lhs_offset = 0u;
+      coop_params.rhs_offset = 0u;
+      coop_params.shape[3] = pad64(params.matrix_n);
+      if (coop_f32_swiglu) {
+        // Raw f32 totals into the half's temp: no WS/B, no bf16 store.
+        coop_params.count = checked_u32(
+            static_cast<uint64_t>(rows) * n, tag, out);
+        coop_params.flags = 2u;
+        coop_params.output_offset = 0u;
+        if (half == 1u) {
+          const uint64_t value_base =
+              static_cast<uint64_t>(n) * params.matrix_k;
+          if (value_base > 0xffffffffu) {
+            omarchy::unsupported(tag + " value-half weight offset", out);
+          }
+          coop_params.rhs_offset = static_cast<uint32_t>(value_base);
+        }
+      }
+      array& half_out =
+          coop_f32_swiglu ? (half == 0u ? *gt_temp : *vt_temp) : out;
+      std::array<omarchy::ComputeBinding, 8> coop_bindings{
+          binding(xf), binding(xsd), binding(wf), binding(wsd), binding(bd),
+          binding(half_out), acc32_binding, binding(half_out)};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::Int8MatmulF32CoopOp,
+          coop_bindings,
+          coop_params,
+          n_groups64,
+          m_groups64,
+          1u);
+    }
+    if (coop_f32_swiglu) {
+      omarchy::ComputeParams epi_params;
+      epi_params.count =
+          checked_u32(static_cast<uint64_t>(rows) * n, tag, out);
+      epi_params.matrix_n = params.matrix_n;
+      epi_params.output_offset = params.output_offset;
+      epi_params.shape[1] = params.shape[1];
+      epi_params.shape[2] = params.shape[2];
+      std::array<omarchy::ComputeBinding, 5> epi_bindings{
+          binding(*gt_temp), binding(*vt_temp), binding(wsd), binding(bd),
+          binding(out)};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::Int8SwigluEpilogueOp,
+          epi_bindings,
+          epi_params,
+          omarchy::compute_dispatch_group_count(epi_params.count),
+          1u,
+          1u);
+    }
     return;
   }
   // f32-FMA register-blocked route (shaders/int8_matmul_f32fma.comp), the

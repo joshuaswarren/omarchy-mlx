@@ -401,6 +401,7 @@
 #include "int8_matmul_coop.h"
 #include "int8_matmul_f32fma.h"
 #include "int8_matmul_f32coop.h"
+#include "int8_swiglu_epilogue.h"
 #include "matmul_f32_coopmat_bf16.h"
 #include "qmm_tile_f32.h"
 #include "dequant_f32.h"
@@ -1602,6 +1603,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {int8_matmul_f32fma, int8_matmul_f32fma_size};
     case ComputeKernel::Int8MatmulF32CoopOp:
       return {int8_matmul_f32coop, int8_matmul_f32coop_size};
+    case ComputeKernel::Int8SwigluEpilogueOp:
+      return {int8_swiglu_epilogue, int8_swiglu_epilogue_size};
     case ComputeKernel::QmmVecQ4MultiF32:
       return {qmm_vec_q4_multi_f32, qmm_vec_q4_multi_f32_size};
     case ComputeKernel::QmmVecQ4MultiF16:

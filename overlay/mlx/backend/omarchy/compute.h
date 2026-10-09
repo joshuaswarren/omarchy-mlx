@@ -946,6 +946,10 @@ enum class ComputeKernel : uint16_t {
   // k % 8 == 0, group % 8 == 0, 32 <= group <= 1024, m >= 32, n >= 32,
   // non-swiglu. Append-only profile id.
   Int8MatmulF32CoopOp,
+  // Fused-SwiGLU epilogue for the swiglu two-matmul decomposition:
+  // gate/value f32 totals in, silu(gate)*value with one bf16 rounding
+  // out. Append-only profile id.
+  Int8SwigluEpilogueOp,
   Count,
 };
 
