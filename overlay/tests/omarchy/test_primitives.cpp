@@ -8046,6 +8046,185 @@ TEST_CASE("integer Remainder, DivMod, Power, Sign, and Abs match host references
   check_uint64_values(uldivmod[1], {1ull, 15ull}, stream);
 }
 
+TEST_CASE("FloorDivide floors toward minus infinity and gives 0 for a zero integer divisor") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto host_fd = [](int a, int b) { return b == 0 ? 0 : host_floor_div(a, b); };
+
+  // Signed 32-bit: every sign pair, an exact quotient, and the zero
+  // divisors (upstream CPU reference: quotient 0). The pre-primitive
+  // Divide path returned a stale register value for int32 / 0.
+  std::vector<int32_t> av = {7, -7, 7, -7, 5, 0, -5, 7, 0, -1};
+  std::vector<int32_t> bv = {3, 3, -3, -3, 5, 3, 0, 0, 0, 2};
+  std::vector<int32_t> expected(av.size());
+  for (size_t i = 0; i < av.size(); ++i) {
+    expected[i] = host_fd(av[i], bv[i]);
+  }
+  array a(av.begin(), Shape{10}, int32);
+  array b(bv.begin(), Shape{10}, int32);
+  array q = floor_divide(a, b, stream);
+  CHECK_EQ(std::string(q.primitive().name()), "FloorDivide");
+  check_int32_values(q, expected, stream);
+
+  // Broadcast (3,1) // (1,4) and a transposed (strided) divisor.
+  array col(std::vector<int32_t>{7, -7, 0}.begin(), Shape{3, 1}, int32);
+  std::vector<int32_t> rowv = {2, -2, 0, 3};
+  array row(rowv.begin(), Shape{1, 4}, int32);
+  std::vector<int32_t> bcast_expected;
+  for (int32_t x : std::vector<int32_t>{7, -7, 0}) {
+    for (int32_t y : rowv) {
+      bcast_expected.push_back(host_fd(x, y));
+    }
+  }
+  check_int32_values(floor_divide(col, row, stream), bcast_expected, stream);
+  std::vector<int32_t> tv = {2, -2, 0, 3, 1, -1, 4, 0, -3, 5, 6, -6};
+  array t(tv.begin(), Shape{4, 3}, int32);
+  array tt = transpose(t, stream);
+  array num(std::vector<int32_t>(12, -9).begin(), Shape{3, 4}, int32);
+  std::vector<int32_t> strided_expected;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      strided_expected.push_back(host_fd(-9, tv[j * 3 + i]));
+    }
+  }
+  check_int32_values(floor_divide(num, tt, stream), strided_expected, stream);
+
+  // Unsigned: the plain quotient, zero divisor gives 0.
+  std::vector<uint32_t> uav = {7u, 0xFFFFFFFFu, 5u, 0u};
+  std::vector<uint32_t> ubv = {2u, 16u, 0u, 3u};
+  array ua(uav.begin(), Shape{4}, uint32);
+  array ub(ubv.begin(), Shape{4}, uint32);
+  check_uint32_values(
+      floor_divide(ua, ub, stream), {3u, 0x0FFFFFFFu, 0u, 0u}, stream);
+
+  // The widened 8/16/64-bit kernels, signed and unsigned.
+  for (Dtype dt : {int8, int16, int64}) {
+    std::vector<int32_t> sv = {7, -7, 7, -7, 5, -5, 0, 3};
+    std::vector<int32_t> dv = {3, 3, -3, -3, 0, 0, 4, -1};
+    std::vector<int32_t> sexpected(sv.size());
+    for (size_t i = 0; i < sv.size(); ++i) {
+      sexpected[i] = host_fd(sv[i], dv[i]);
+    }
+    array x = astype(array(sv.begin(), Shape{8}, int32), dt, stream);
+    array y = astype(array(dv.begin(), Shape{8}, int32), dt, stream);
+    array r = floor_divide(x, y, stream);
+    CHECK_EQ(r.dtype(), dt);
+    CHECK_EQ(std::string(r.primitive().name()), "FloorDivide");
+    check_int32_values(astype(r, int32, stream), sexpected, stream);
+  }
+  for (Dtype dt : {uint8, uint16, uint64}) {
+    std::vector<uint32_t> sv = {200u, 7u, 0u, 5u};
+    std::vector<uint32_t> dv = {7u, 2u, 3u, 0u};
+    array x = astype(array(sv.begin(), Shape{4}, uint32), dt, stream);
+    array y = astype(array(dv.begin(), Shape{4}, uint32), dt, stream);
+    array r = floor_divide(x, y, stream);
+    CHECK_EQ(r.dtype(), dt);
+    check_uint32_values(
+        astype(r, uint32, stream), {28u, 3u, 0u, 0u}, stream);
+  }
+
+  // Bool floor_divide is a / b on {0,1}: a && b, zero divisor gives 0.
+  std::array<bool, 4> bav = {true, true, false, false};
+  std::array<bool, 4> bbv = {true, false, true, false};
+  array ba(bav.begin(), Shape{4}, bool_);
+  array bb(bbv.begin(), Shape{4}, bool_);
+  check_bool(floor_divide(ba, bb, stream), {true, false, false, false}, stream);
+}
+
+TEST_CASE("FloorDivide on floats matches the CPU stream, including the f16 and bf16 quotient rounding") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Stream cpu_stream = new_stream(Device::cpu);
+  // The vendored upstream floor_divide emits one FloorDivide primitive for
+  // every non-complex dtype: floor(divide(a, b)) with the quotient rounded
+  // to the storage type before the floor.
+  const float inf = std::numeric_limits<float>::infinity();
+  std::vector<float> av = {5.5f, -5.5f, 5.5f, -5.5f, 7.25f, 1.0f, -1.0f, 0.0f};
+  std::vector<float> bv = {2.0f, 2.0f, -2.0f, -2.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+  std::vector<float> expected = {2.0f, -3.0f, -3.0f, 2.0f, 7.0f, inf, -inf, 0.0f};
+  array a(av.begin(), Shape{8}, float32);
+  array b(bv.begin(), Shape{8}, float32);
+  array q = floor_divide(a, b, stream);
+  CHECK_EQ(std::string(q.primitive().name()), "FloorDivide");
+  q.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  const float* values = q.data<float>();
+  for (size_t i = 0; i + 1 < expected.size(); ++i) {
+    CHECK_EQ(values[i], expected[i]);
+  }
+  CHECK(std::isnan(values[7]));
+
+  // Exact multiples must come out exact (6 / 3 is exactly 2). The
+  // tolerance is far below one unit, but nonzero: doctest::Approx compares
+  // with a strict less-than, so 0.0 would fail an exact match.
+  array exact = floor_divide(
+      array({6.0f, -6.0f, 9.0f, 1e6f}, float32),
+      array({3.0f, 3.0f, -3.0f, 1000.0f}, float32),
+      stream);
+  check_values(exact, {2.0f, -2.0f, -3.0f, 1000.0f}, stream, 1e-9);
+
+  // 16-bit: a deterministic spread of operand pairs, run on the GPU and
+  // the CPU stream from the same rounded inputs. A quotient just below an
+  // integer rounds up to it in the storage type before the floor, so the
+  // result differs from floor(exact quotient); f16 53.40625 / -0.10449219
+  // is -511.103 exactly and -511 after the f16 rounding.
+  std::vector<float> xs = {53.40625f};
+  std::vector<float> ys = {-0.10449219f};
+  uint32_t state = 12345u;
+  auto next_unit = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return static_cast<float>(state >> 8) / 16777216.0f;
+  };
+  for (int i = 0; i < 4000; ++i) {
+    xs.push_back((next_unit() - 0.5f) * 160.0f);
+    ys.push_back((next_unit() - 0.5f) * 20.0f);
+  }
+  const auto& capabilities = omarchy::device(0).capabilities();
+  std::vector<Dtype> half_dtypes;
+  if (capabilities.shader_float16 && capabilities.storage_buffer_16bit_access) {
+    half_dtypes.push_back(float16);
+  }
+  if (capabilities.storage_buffer_16bit_access && capabilities.shader_int16) {
+    half_dtypes.push_back(bfloat16);
+  }
+  Shape shape{static_cast<int>(xs.size())};
+  for (Dtype dt : half_dtypes) {
+    array gx = astype(array(xs.begin(), shape, float32), dt, stream);
+    array gy = astype(array(ys.begin(), shape, float32), dt, stream);
+    array gpu_q = astype(floor_divide(gx, gy, stream), float32, stream);
+    array cx = astype(array(xs.begin(), shape, float32), dt, cpu_stream);
+    array cy = astype(array(ys.begin(), shape, float32), dt, cpu_stream);
+    array cpu_q = astype(floor_divide(cx, cy, cpu_stream), float32, cpu_stream);
+    gpu_q.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    cpu_q.eval();
+    const float* got = gpu_q.data<float>();
+    const float* want = cpu_q.data<float>();
+    size_t mismatches = 0;
+    for (size_t i = 0; i < xs.size(); ++i) {
+      bool same = (std::isnan(got[i]) && std::isnan(want[i])) || got[i] == want[i];
+      mismatches += same ? 0 : 1;
+    }
+    size_t first_bad = xs.size();
+    for (size_t i = 0; i < xs.size(); ++i) {
+      bool same = (std::isnan(got[i]) && std::isnan(want[i])) || got[i] == want[i];
+      if (!same && first_bad == xs.size()) {
+        first_bad = i;
+      }
+    }
+    const char* dtype_name = dt == float16 ? "float16" : "bfloat16";
+    INFO(dtype_name, " first mismatch at ", first_bad);
+    if (first_bad < xs.size()) {
+      INFO("a=", xs[first_bad], " b=", ys[first_bad], " gpu=", got[first_bad], " cpu=", want[first_bad]);
+    }
+    CHECK_EQ(mismatches, 0u);
+  }
+}
+
 TEST_CASE("float Remainder, Power, Sign, Abs, and DivMod match host references") {
   if (!compute_available()) {
     return;
