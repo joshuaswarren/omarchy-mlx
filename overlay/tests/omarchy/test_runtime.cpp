@@ -923,6 +923,33 @@ TEST_CASE(
   unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
 }
 
+TEST_CASE("round_size: above 1 MiB at most 12.5% waste, octave sizes exact") {
+  using omarchy::round_size;
+  CHECK(round_size(1) == 4096);
+  CHECK(round_size(4096) == 4096);
+  CHECK(round_size(4097) == 8192);
+  CHECK(round_size(1u << 20) == (1u << 20));
+  // Above 1 MiB there are 8 bins per octave: 128 KiB apart in the first one.
+  CHECK(round_size((1u << 20) + 1) == (1u << 20) + (128u << 10));
+  // The oMLX expert-offload slot array of Qwen3-30B-A3B at 32 slots is
+  // 24 MiB. It must stay 24 MiB; the old power-of-two rule made it 32 MiB
+  // (33% more device memory per array) and a 16 GB host ran out of heap.
+  CHECK(round_size(24ull << 20) == (24ull << 20));
+  CHECK(round_size((24ull << 20) + 1) == (26ull << 20));
+  for (int k = 20; k < 40; ++k) {
+    CHECK(round_size(1ull << k) == (1ull << k));
+  }
+  size_t prev = 0;
+  for (size_t sz = (1u << 20) + 1; sz < (4ull << 30); sz += 4099ull * 1021) {
+    const size_t r = round_size(sz);
+    REQUIRE(r >= sz);
+    REQUIRE(r % 4096 == 0);
+    REQUIRE((r - sz) * 8 <= sz);
+    REQUIRE(r >= prev);
+    prev = r;
+  }
+}
+
 TEST_CASE(
     "cache stays bounded under a shape-changing alloc/free loop") {
   if (!gpu::is_available()) {
@@ -938,16 +965,14 @@ TEST_CASE(
   alloc.set_cache_limit(ceiling);
   alloc.clear_cache();
 
-  // Requests grow by 64 KiB per iteration; power-of-two bins reuse
-  // storage across neighboring shapes while the GC ceiling bounds the pool.
+  // Requests grow by 64 KiB per iteration; the size bins reuse storage
+  // across neighboring shapes while the GC ceiling bounds the pool.
   std::vector<omarchy::VulkanBuffer*> live;
   for (int i = 0; i < 64; ++i) {
     size_t sz = (1u << 20) + static_cast<size_t>(i) * (64u << 10);
     auto* b = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(sz).ptr());
     REQUIRE(b != nullptr);
-    size_t bin = 1u << 20;
-    while (bin < sz) bin *= 2;
-    CHECK(b->size == bin);
+    CHECK(b->size == omarchy::round_size(sz));
     if (!live.empty()) {
       alloc.free(allocator::Buffer{live.back()});
       live.pop_back();
