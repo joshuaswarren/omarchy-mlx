@@ -1150,3 +1150,22 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   reference". Failing-before observed at ec2cd9dc/branch; passing-after on
   the fix commit (see receipts/2026-10-08-audit-followups/README.md for
   counts).
+
+## Fused GDN backward: the gate gradient dg differs from the composed reference for T > 1 (found 2026-10-09, open)
+
+- Found by the gate for PR #60 (the backend now runs the fused GDN forward at `Hk != Hv`, so autograd reaches the fused backward at GQA shapes).
+  Test: `fused gdn vjp matches the composed reference at equal head counts` (`may_fail`), conditioned inputs (unit-norm q and k, decay in
+  (0.3, 0.999), beta in (0, 1)), bf16, M1 Max.
+- Measured (relative L2 of the fused gradient against the composed per-token recursion on the GPU): dq, dk, dv and dbeta agree to 0.3 percent
+  or better; **dg disagrees by 0.96 at `Hk = Hv = 16`, T = 33**, 1.01 at `Hk = 4, Hv = 8`, T = 33 and 0.95 at `Hk = 4, Hv = 16`, T = 17 (fused
+  backward forced on at GQA with `MLX_OMARCHY_FUSED_VJP_GQA=1`). The same data repeated on the host and run at equal head counts gives the same
+  0.95 for dg, so the GQA path is not the cause. At T = 1 dg is exactly equal.
+- **The fused result is the wrong one.** Against a float32 CPU reference computed from the same bf16-rounded inputs (printed by the test), the
+  composed GPU result for dg is within 0.15 percent (0.0015 relative L2) at every shape above, and the fused dg is off by 0.95 to 1.01. dq, dk,
+  dv and dbeta are within 0.17 percent of the float32 reference on the fused path. So the defect is in the fused backward's dg and is
+  independent of GQA. One run per shape, M1 Max (G13C).
+- Consequence today: the fused backward is on by default at `Hk == Hv`, so a GDN model trained at equal head counts gets a wrong gate gradient
+  for T > 1 (hence wrong gradients for whatever produces g: `A_log`, `dt_bias` and the `a` projection). This applied before PR #60; the old GQA
+  test never saw it because the forward was composed at `Hk != Hv`. At `Hk != Hv` the backward is composed unless `MLX_OMARCHY_FUSED_VJP_GQA=1`.
+  Inference is not affected (it never runs the backward). `MLX_OMARCHY_NO_FUSED_VJP=1` selects the composed backward everywhere.
+- Not fixed in this change; `gated_delta_vjp.comp` and the dg accumulation are the place to look.

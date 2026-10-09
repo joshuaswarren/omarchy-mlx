@@ -1,0 +1,14 @@
+start 2026-10-09T21:06:29Z label green load 0.13 bin 95a3dd8e8c211702 HEAD d858fccbc1f70b6ec99b99db1d83bf13ffb00a35 (was 91004b98b50d83ead8393124b3cc6551b06f01d7)
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[gdn_fast_route_repeat] decode: repeated route 1 dispatches, un-repeated route 3
+[gdn_fast_route_repeat] prefill T=32: repeated route 1 dispatches, un-repeated route 3
+[gdn_fast_route_repeat] prefill T=96 (chunked route): repeated route 1 dispatches, un-repeated route 3
+[gdn_fast_route_repeat] prefill T=32, q/k views with a buffer offset: repeated route 1 dispatches, un-repeated route 3
+[gdn_fast_route_repeat] decode, q/k views with a buffer offset: repeated route 1 dispatches, un-repeated route 3
+===============================================================================
+[doctest] test cases:    2 |    2 passed | 0 failed | 0 skipped
+[doctest] assertions: 3863 | 3863 passed | 0 failed |
+[doctest] Status: SUCCESS!
+rc=0
+end 2026-10-09T21:06:29Z
