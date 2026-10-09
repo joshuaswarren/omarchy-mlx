@@ -202,7 +202,7 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-Note: the Linux rows in this first table ran on the stock upstream mlx-lm, which on Linux falls back to a slow per-token Python loop for the gated-delta layers (Qwen3.5-9B, clef-flash, Qwen3.8-27B) and so understates the prefill ratios. Rows measured with the mlx-lm patches the installer applies are being re-measured and will replace this table.
+Note: the Linux rows in this first table ran on the stock upstream mlx-lm, which on Linux falls back to a slow per-token Python loop for the gated-delta layers (Qwen3.5-9B, clef-flash, Qwen3.8-27B) and so understates the prefill ratios. The table below is the stock-mlx-lm column. The next table is what the installer ships (its mlx-lm patches applied); more models are being added to it.
 
 Two Linux rows fail today: gemma-4-e2b stalls a GPU submit during prefill, and gpt-oss-20b needs an attention-sinks kernel that is not implemented yet. The macOS runs shared the machine with background downloads and a build, which can only lower the macOS numbers.
 
@@ -221,6 +221,14 @@ llama.cpp, Vulkan on Linux against Metal on macOS (same llama.cpp commit):
 |---|---|---|
 | gemma-4-12b (Q4_K_M) | 14.1 / 29.3 = **48%** | 118.2 / 310.8 = **38%** |
 | Qwen3.8-27B (Q4_K_M) | 6.3 / 12.5 = **50%** | 53.8 / 131.2 = **41%** |
+
+With the mlx-lm patches the installer applies (first row; Linux / macOS, tokens per second):
+
+| Model | Decode | Prefill 512 |
+|---|---|---|
+| Qwen3.5-9B | 37.1 / 59.3 = **62%** | 299.4 / 333.4 = **90%** |
+
+The Qwen3.5-9B outputs are token-for-token identical to macOS for the 10 test generations (same output digest). On stock mlx-lm the same model measured 43% decode and 17% prefill (table above).
 
 Rows are re-measured weekly; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
 
