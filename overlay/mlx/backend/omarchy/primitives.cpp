@@ -15111,7 +15111,12 @@ void ScaledDotProductAttention::eval_gpu(
               {0u, CausalSkip::None},
               omarchy::ComputeKernel::MatmulF32CoopmatPvBF16);
           encoder.add_temporary(result_c);
-          array out_c = row_chunk_view(out, row0, rows);
+          // result_c is (batch, kv, repeat, rows, v_dim) when GQA regroups q;
+          // the destination view must carry the same five axes, otherwise
+          // copy_gpu_inplace pairs result_c's five dims with four strides
+          // and every GQA row lands in the wrong place (MatmulGap H47).
+          array out_c =
+              row_chunk_view(repeats > 1 ? regroup_view(out) : out, row0, rows);
           // General, not Vector: the row view is strided (the parent's
           // head stride exceeds the chunk's), and a Vector copy writes
           // the destination flat - the same linear scatter the coopmat
