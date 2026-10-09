@@ -101,10 +101,11 @@ export PYTHONPATH="$PWD:$PYTHONPATH"
 
 The render driver is `scripts/tensorfold/h3_generate_rows.py` in this repository. It derives from the engine's `tools/h3_generate_dev.py` at the pinned commit (Apache 2.0, drowzeys); the local changes are limited to the documentation and command-line defaults.
 
-Before the three render stages, point the driver at the int8 DiT location. The HF bundle ships the int8 shards under `int8-dit/`; the render driver expects a `transformer/` subdirectory inside the model directory:
+Before the three render stages, point the driver at the int8 DiT location. The HF bundle ships the int8 shards and the DiT config under `int8-dit/` (the config is `int8-dit/transformer-config.json`); the render driver expects a `transformer/config.json` inside the model directory:
 
 ```bash
-ln -s "$MODEL_DIR/int8-dit" "$MODEL_DIR/transformer"
+mkdir -p "$MODEL_DIR/transformer"
+ln -s "$MODEL_DIR/int8-dit/transformer-config.json" "$MODEL_DIR/transformer/config.json"
 ```
 
 The three stages of a reproducible run (768x448, 56 frames, 20 sampler steps, seed 1, the prompt below):
