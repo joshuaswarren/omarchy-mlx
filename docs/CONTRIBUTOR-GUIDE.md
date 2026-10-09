@@ -39,7 +39,7 @@ This is not a wish — it is a hard split the rest of the guide depends on.
 | if you have | you can do | you cannot do |
 |---|---|---|
 | any Linux box (no Apple GPU) | shader-level reproductions, correctness tests, dispatch-count measurements, code reading, documentation, tooling, test additions, the `CONTRIBUTING.md` collector | real-Honeykrisp timing, hardware-only defect reports, shader micro-benchmarks on the Apple driver |
-| M1 (or other Asahi-running Apple Silicon) | all of the above + hardware verification | (everything in scope) |
+| M1 (or other Apple Silicon running Linux) | all of the above + hardware verification | (everything in scope) |
 
 If you do not have an M1, the largest share of the open work below is
 yours. If you do have one, you own the measurements, the regression

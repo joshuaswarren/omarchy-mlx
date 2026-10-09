@@ -140,6 +140,17 @@ Each hardware receipt must include:
 Generate `docs/compatibility.md` status from receipts when tooling exists.
 Until then, update a row only when the linked receipt proves every named gate.
 
+
+## Public writing
+
+Published docs, READMEs, model cards, release notes, and posts state what works and what it requires.
+
+- Do not narrate process or hedge: no "pending proof" or "pending replication", no "receipt, not proof", no "not yet verified on X", no "I didn't test", no provenance caveats, and no "evidence" framing.
+- If something does not work, fix it or leave it out. Do not publish a caveat about it.
+- State requirements plainly: RAM, OS, kernel, and hardware (for example, "96 GB of unified memory; 64 GB machines can't run it").
+- Do not mention Asahi in public prose. Technical identifiers (paths, device-tree properties, upstream repo names) stay as they are.
+- Receipts and internal notes under `receipts/` and `receipts-work/` keep their full detail; this rule covers what readers see first.
+
 ## Test rules
 
 - Print the provenance line beside every measurement, reproduction, or
