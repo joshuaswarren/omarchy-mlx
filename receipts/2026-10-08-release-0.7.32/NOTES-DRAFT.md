@@ -6,6 +6,36 @@ re-run the range command at FREEZE).
 
 ## Shipped (user impact)
 
+### HEADLINE: int8 matmul speed + exactness (the TensorFold H3 DiT path)
+
+- **fast.int8_matmul f32 routes rebuilt** (8185470ce..9a991ff4f, 19 commits
+  in the family since v0.7.31): bitwise A/B test matrix + naive kill
+  switch (8185470ce); tiled shared-memory kernel, bit-identical to naive
+  (fa41e66e8, default since 83a490a18 which also fixes an out-of-bounds
+  shared write in X staging); cooperative-matrix f16xf16→f32 default
+  route, bit-identical (a97dfc7cf); **f32 cooperative-matrix route for
+  the linear shapes** (8f1a2ff5c) — the scalar f32-FMA kernel is flat at
+  ~330 GMAC/s on G13C, so the coop route streams to exact f32 temps via
+  the converting copy with the same exactness argument as the scalar
+  route (commit message, 8f1a2ff5c); coopmat flush/quarters/64-row-pad
+  fixes (59c3a8fb0, 88f53e4f6, 2e5f28e72); **chunked int32 reduction
+  lifts the scalar f32 route to group <= 131072** (9a991ff4f);
+  registers-resident FMA accumulators (79cd72eab); poison test + extended
+  A/B matrix (e6504ef28, dedd0fba8); f32-FMA default + flags doc
+  (a72046465, docs/kernel-flags.md).
+- **Main's headline numbers, caveats attached**: int8 matmul ~3.6x over
+  the scalar f32 route and up to ~14.9x coop on G13C — these are the
+  numbers Main supplied; the per-shape matrix lives in the int8 commit
+  series and gate receipts. The exactness statement to print: the tiled
+  and f16xf16→f32 coop routes are bit-identical to the naive kernel
+  (A/B matrix), and the f32 coop/FMA routes keep exact f32 accumulation
+  (fp32 temps, same reduction order class as scalar). Caveat: the 14.9x
+  is the coop-vs-scalar best case at large linear shapes; scalar route
+  remains the fallback below the coop-capable shapes and above the
+  131072 group cap pre-9a991ff4f.
+- This sits ON TOP of the dispatch-clamp fix (2df1aed43, below): rows*n
+  > 16,776,960 writes every output row.
+
 ### HEADLINE: correctness fixes for large shapes (defects present in v0.7.31 and earlier)
 
 One defect class: the one-dispatch thread/matrix clamps silently dropped
@@ -65,10 +95,31 @@ rope_rms_norm went unwritten past one dispatch (16,776,960 threads)" +
   (receipts/2026-10-08-qwen3-last-logits). Proven on pristine wheels:
   g17-patch-series dev-box run 2026-10-08, both lines rc=0 + idempotent,
   "applied: mlx-lm-last-logits-qwen3.patch" in both
-  (receipts/2026-10-08-release-0.7.32/g17-0732/).
+  (receipts/2026-10-08-release-0.7.32/g17-0732/). Self-contained patch
+  fix (8fed8d8e1: local os import, no NameError on a stock 0.31.3 tree).
 - Assistant wake word (338f63902): opt-in openWakeWord ONNX listener,
   `--wake-word`; bytes coercion + per-detector peak counter (3ccab703c);
   ALSA 'pulse' device with default fallback (573037bf3).
+- Batched gated-delta prefill runs per-row on the fused kernel for B>1
+  bf16 Dk=Dv=128 (95a879daf, #40, receipt + device tests).
+- ssm-maskless: left_padding setter clears the host mirror (7156b508e,
+  w7K F2 review fix).
+- matmul direct-kernel route rows for G14C + lower m floors on G13G
+  (edac8b4c6, #38); G13G f32 a @ b route row REMOVED (9b8ff10bc, #39: it
+  lost 8 to 42% at k 2560 / n 9728).
+
+### llama.cpp demo (new user-facing path, 13 commits)
+- omarchy llama.cpp demo end to end: pacman dep check + omarchy update as
+  step 0 (9677365d4, cc5feab0e — refuses to build with a partial
+  upgrade: llvm 23 vs llvm-libs 22 breaks llvm-spirv), path-independent
+  wrapper, every Step 2/3 command works from the repo folder
+  (81b22f245), --reasoning-budget 0 so Qwen3.5 does not print a 400-token
+  thinking block first (e7c0df84a), memory preflight (ab9cab4a6: refuses
+  below model + 3 GiB MemAvailable, lab hosts need swap/zram + gpu-turn
+  ticket; ef99f0b99: refuses below model + 1 GiB, warns below + 3 GiB),
+  skip-update override (e2d10a3e0), honest 18-minute system-driver build
+  note, base-M1 8 GB-class numbers in the README row (8b1d34551: 9B
+  IQ2_M 0.34-4.27 tok/s, 4B IQ2_M 0.44-7.42 tok/s).
 
 ### Chip support
 - M3/M4 family: chip table rows, M3-aware ICD error, unified m3m4 kit with
@@ -195,5 +246,5 @@ c57d5ea67 by DispatchClamp), G14C M2 (schedule via idle-guard).
   lane — ASK MAIN before touching); M2 via idle-guard.
 - Confirm nothing else user-visible lands that is missing here.
 
-Base range at this draft revision: v0.7.31..origin/main = 126 commits
+(9b42d8878 tip at revision time). Re-run the range command at FREEZE.
 (9b42d8878 tip at revision time). Re-run the range command at FREEZE.
