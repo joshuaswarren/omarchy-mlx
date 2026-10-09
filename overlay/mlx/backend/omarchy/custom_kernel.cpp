@@ -174,6 +174,7 @@ std::string glsl_type(const std::string& msl_type) {
 
 void translate_as_type(std::string& code, const std::vector<Parameter>& parameters);
 void translate_c_style_casts(std::string& code);
+void map_numeric_limits(std::string& code);
 
 void translate_types(std::string& code, const std::vector<Parameter>& parameters = {}) {
   // as_type<ushort>(bf16-derived value) is a 16-bit pattern bitcast: the
@@ -754,6 +755,67 @@ void translate_device_pointer_aliases(
   }
 }
 
+// MSL `auto` local declarations have no GLSL counterpart: `auto` is a
+// reserved word, and glslang fails the surviving declaration with
+// 'syntax error, unexpected IDENTIFIER, expecting COMMA or SEMICOLON'
+// (Qwen3.5-9B serve, first decode token, bf16 q_out [1,1,16,128], the
+// omlx_qwen35_gdn_prework kernel's
+// `const auto sy = 1 / (1 + metal::precise::exp(metal::abs(conv)));` —
+// 2026-10-09, offline repro at .comp:72/73; v0.7.31 9b5c938 fails
+// identically at .comp:60, so the construct was never supported, only
+// newly reached). Two corpus shapes:
+//   * value declarations (`const auto sy = 1 / (1 + ...)`) become float:
+//     Metal deduces the initializer's type and every value auto in the
+//     serving corpus is an fp32 expression (GLSL's implicit
+//     int->float declaration conversion covers degenerate integer forms
+//     at float precision);
+//   * pointer declarations (`const auto x_row = x + row * K;` — the MoE
+//     router/decode row-walk idiom, half the Qwen3.5 decode kernels)
+//     deduce the base buffer's element type; they are rewritten to the
+//     explicit `const device T*` form the device-pointer alias pass
+//     already translates, and scoped rebinds (`const auto x = x_row;`,
+//     x_row itself an alias) chain through the same type map.
+void translate_auto_declarations(
+    std::string& body,
+    const std::vector<Parameter>& parameters) {
+  static const std::regex auto_decl(
+      R"((const\s+)?auto\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;{}]+);)");
+  static const std::regex base_offset(
+      R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+|$))");
+  std::unordered_map<std::string, std::string> pointer_types;
+  for (const auto& parameter : parameters) {
+    if (!parameter.scalar) {
+      pointer_types[parameter.name] = parameter.type;
+    }
+  }
+  std::string rewritten;
+  rewritten.reserve(body.size());
+  size_t last = 0;
+  for (std::sregex_iterator it(body.begin(), body.end(), auto_decl), end;
+       it != end;
+       ++it) {
+    const auto& match = *it;
+    rewritten += body.substr(last, match.position() - last);
+    const std::string name = match[2].str();
+    const std::string init = trim(match[3].str());
+    std::smatch parts;
+    if (std::regex_search(init, parts, base_offset)) {
+      const auto base = pointer_types.find(parts[1].str());
+      if (base != pointer_types.end()) {
+        rewritten += match[1].str() + "device " + base->second + "* " +
+            name + " = " + init + ";";
+        pointer_types[name] = base->second;
+        last = match.position() + match.length();
+        continue;
+      }
+    }
+    rewritten += match[1].str() + "float " + name + " = " + init + ";";
+    last = match.position() + match.length();
+  }
+  rewritten += body.substr(last);
+  body = std::move(rewritten);
+}
+
 void translate_as_type(
     std::string& code,
     const std::vector<Parameter>& parameters) {
@@ -1173,6 +1235,7 @@ void translate_header(std::string& header) {
   replace_all(header, "metal::precise::", "");
   replace_all(header, "metal::fast::", "");
   replace_all(header, "metal::", "");
+  map_numeric_limits(header);
   header = std::regex_replace(
       header,
       std::regex(
@@ -1331,6 +1394,39 @@ void translate_atomic_parameter(
   }
 }
 
+// numeric_limits<T>::infinity()/max()/lowest()/min()/epsilon() have no GLSL
+// form; the IEEE bit patterns and C literals are exact. The mlx-vlm
+// llguidance mask kernel masks with -infinity() (2026-10-08 KernelRecheck).
+// The whole numeric_limits<...>::fn() expression must match as one — the
+// bare words are ordinary calls (metal::max) and must survive untouched.
+// Runs before the INFINITY/NAN defines are emitted, on the body AND on
+// header helpers (the GDN kernels' omlx_log1p helper tests against
+// numeric_limits<float>::max(); body-only mapping left `numeric_limits`
+// in the emitted helper and glslang died at the helper line, 2026-10-09).
+void map_numeric_limits(std::string& code) {
+  static const std::regex limits(
+      R"(numeric_limits\s*<\s*[A-Za-z_][A-Za-z0-9_]*\s*>\s*::\s*(infinity|lowest|max|min|epsilon)\s*\(\s*\))");
+  static const std::unordered_map<std::string, std::string> limit_values = {
+      {"infinity", "INFINITY"},
+      {"lowest", "(-3.4028234663852886e+38f)"},
+      {"max", "3.4028234663852886e+38f"},
+      {"min", "1.1754943508222875e-38f"},
+      {"epsilon", "1.1920928955078125e-07f"},
+  };
+  std::string rewritten;
+  rewritten.reserve(code.size());
+  size_t last = 0;
+  for (std::sregex_iterator it(code.begin(), code.end(), limits), end;
+       it != end; ++it) {
+    const auto& match = *it;
+    rewritten += code.substr(last, match.position() - last);
+    rewritten += limit_values.at((*it)[1].str());
+    last = match.position() + match.length();
+  }
+  rewritten += code.substr(last);
+  code = std::move(rewritten);
+}
+
 Translation translate_msl(
     const std::string& source,
     const std::tuple<int, int, int>& grid,
@@ -1450,35 +1546,7 @@ Translation translate_msl(
   replace_all(body, "metal::precise::", "");
   replace_all(body, "metal::fast::", "");
   replace_all(body, "metal::", "");
-  // numeric_limits<T>::infinity()/max()/lowest()/min()/epsilon() have no GLSL
-  // form; the IEEE bit patterns and C literals are exact. The mlx-vlm
-  // llguidance mask kernel masks with -infinity() (2026-10-08 KernelRecheck).
-  // The whole numeric_limits<...>::fn() expression must match as one — the
-  // bare words are ordinary calls (metal::max) and must survive untouched.
-  // Runs before the INFINITY/NAN defines are emitted below.
-  {
-    static const std::regex limits(
-        R"(numeric_limits\s*<\s*[A-Za-z_][A-Za-z0-9_]*\s*>\s*::\s*(infinity|lowest|max|min|epsilon)\s*\(\s*\))");
-    static const std::unordered_map<std::string, std::string> limit_values = {
-        {"infinity", "INFINITY"},
-        {"lowest", "(-3.4028234663852886e+38f)"},
-        {"max", "3.4028234663852886e+38f"},
-        {"min", "1.1754943508222875e-38f"},
-        {"epsilon", "1.1920928955078125e-07f"},
-    };
-    std::string rewritten;
-    rewritten.reserve(body.size());
-    size_t last = 0;
-    for (std::sregex_iterator it(body.begin(), body.end(), limits), end;
-         it != end; ++it) {
-      const auto& match = *it;
-      rewritten += body.substr(last, match.position() - last);
-      rewritten += limit_values.at((*it)[1].str());
-      last = match.position() + match.length();
-    }
-    rewritten += body.substr(last);
-    body = std::move(rewritten);
-  }
+  map_numeric_limits(body);
   replace_all(body, "threadgroup_barrier(mem_flags::mem_threadgroup)", "barrier()" );
   replace_all(body, "threadgroup_barrier(mem_flags::mem_device)", "barrier()");
   replace_all(body, "simd_sum", "subgroupAdd");
@@ -1506,6 +1574,15 @@ Translation translate_msl(
   replace_word(body, "constexpr", "const");
   translate_types(body, parameters);
   translate_c_style_casts(body);
+  // MSL `auto` locals have no GLSL form: `auto` is a reserved word, and
+  // glslang fails the declaration with 'syntax error, unexpected
+  // IDENTIFIER, expecting COMMA or SEMICOLON' (the Qwen3.5 GDN decode
+  // prework's `const auto sy = 1 / (1 + exp(abs(conv)))`, serve failure
+  // 2026-10-09, bf16 q_out [1,1,16,128]; nothing in the tree ever mapped
+  // the construct — v0.7.31 included). Value autos become float;
+  // pointer-style autos rewrite to the explicit device-pointer alias form,
+  // so this must run before the alias pass below consumes those forms.
+  translate_auto_declarations(body, parameters);
   std::string vector_alias_helpers;
   translate_device_pointer_aliases(body, parameters, vector_alias_helpers);
 
