@@ -14357,10 +14357,12 @@ array cast_float_in_eval(
   return wide;
 }
 
-// The softmax reads the attention sinks in its own score dtype, while a model
-// stores them in whatever dtype it loaded (gpt-oss: bf16 sinks with bf16 or
-// f32 scores). Returns `sinks` unchanged when the dtype already matches, else
-// a cast copy kept in `holder`; non-float sinks stay a named refusal.
+// The float32-score composition softmaxes in f32 and reads the sinks in the
+// same dtype, while a model stores them in whatever dtype it loaded (gpt-oss:
+// bf16 sinks with bf16 q). Returns `sinks` unchanged when the dtype already
+// matches, else a widened copy kept in `holder`; non-float sinks stay a named
+// refusal. The storage-dtype composition does not call this: the SDPA op casts
+// sinks to its own dtype before eval, so there they always match.
 const array* cast_sinks_in_eval(
     const array* sinks,
     Dtype dtype,
@@ -15109,8 +15111,9 @@ void ScaledDotProductAttention::eval_gpu(
     std::optional<array> masked;
     const array* sinks =
         has_sinks_ ? &inputs.at(inputs.size() - 1) : nullptr;
-    std::optional<array> sinks_cast;
-    sinks = cast_sinks_in_eval(sinks, storage_dtype, sinks_cast, tag, out, encoder, s);
+    if (sinks != nullptr && (*sinks).dtype() != storage_dtype) {
+      omarchy::unsupported("attention sinks dtype " + tag, out);
+    }
     const bool has_arr_mask =
         (inputs.size() == 5) || (inputs.size() == 4 && !has_sinks_);
     if (!do_causal_ && has_arr_mask) {
