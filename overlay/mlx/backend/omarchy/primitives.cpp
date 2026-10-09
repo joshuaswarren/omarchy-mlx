@@ -12672,18 +12672,19 @@ void Int8Matmul::eval_gpu(
     return;
   }
   // f32-FMA register-blocked route (shaders/int8_matmul_f32fma.comp), the
-  // default for the shapes its exactness argument covers: integer-valued
-  // f32 group sums are exact and addition-order-independent only while
-  // every partial sum stays <= 2^24, and the worst int8 product magnitude
-  // is 16384 (-128 * -128), so the group gate is 32..1024 (16384 * 1024 =
-  // 2^24). group >= 32 also keeps at most one group boundary inside a
-  // 32-wide K step, which the shader's two-run split relies on, and
-  // k_total % 4 == 0 keeps a staged word never partially past the
-  // reduction. Everything else keeps the int32 tiled kernel, so the
-  // default stays bit-identical for every legal input;
+  // default for the shapes its exactness argument covers: groups up to
+  // 1024 reduce purely in f32 (every partial sum stays <= 2^24, and the
+  // worst int8 product magnitude is 16384 = (-128) * (-128)); longer
+  // groups pour exact f32 chunk sums into int32 accumulators every
+  // 1024 k-elements, which cannot overflow while group * 16384 <= 2^31,
+  // i.e. group <= 131072. group >= 32 also keeps at most one group
+  // boundary inside a 32-wide K step, which the shader's two-run split
+  // relies on, and k_total % 4 == 0 keeps a staged word never partially
+  // past the reduction. Everything else keeps the int32 tiled kernel, so
+  // the default stays bit-identical for every legal input;
   // MLX_OMARCHY_INT8_IMAD=1 forces the tiled kernel for A/B benchmarks.
   if (!int8_imad_forced() && (params.matrix_k % 4u) == 0u &&
-      params.reduce_size >= 32u && params.reduce_size <= 1024u) {
+      params.reduce_size >= 32u && params.reduce_size <= 131072u) {
     const uint32_t n_groups = (params.matrix_n + 127u) / 128u;
     const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
     encoder.dispatch_compute(
