@@ -1492,7 +1492,7 @@ enum IntElementwiseOperation : uint32_t {
   IntSquareOperation,
   IntMinimumOperation,
   IntMaximumOperation,
-  IntDivideOperation,
+  IntFloorDivideOperation,
   IntNegateOperation,
 };
 
@@ -1595,8 +1595,9 @@ void dispatch_int_elementwise(
   };
   // Bool rides the unsigned byte lanes (values are 0/1); only the
   // logical ops compute: BitwiseAnd/Or/Xor, Add as the logical or,
-  // Maximum/Minimum, plus Abs and Sign (upstream identity and x != 0,
-  // both the byte itself). Everything else keeps the named refusal.
+  // Maximum/Minimum, FloorDivide (upstream a / b on bool, so a && b),
+  // plus Abs and Sign (upstream identity and x != 0, both the byte
+  // itself). Everything else keeps the named refusal.
   if (out.dtype() == bool_) {
     switch (operation) {
       case IntBitwiseAndOperation:
@@ -1605,6 +1606,7 @@ void dispatch_int_elementwise(
       case IntAddOperation:
       case IntMaximumOperation:
       case IntMinimumOperation:
+      case IntFloorDivideOperation:
       case IntAbsOperation:
       case IntSignOperation:
         break;
@@ -4949,15 +4951,20 @@ void Divide::eval_gpu(const std::vector<array>& inputs, array& out) {
         name(), ComplexDivide, inputs, out, out.primitive().stream());
     return;
   }
-  if (is_int_elementwise_dtype(out.dtype())) {
-    // Integer-output Divide is what upstream floor_divide emits for
-    // promoted integer inputs; the kernel truncates like the upstream
-    // C++ operator/.
-    dispatch_int_elementwise(name(), IntDivideOperation, inputs, out);
+  dispatch_elementwise(
+      name(), DivideOperation, inputs, out, out.primitive().stream());
+}
+// Upstream floor_divide emits FloorDivide for integer and bool dtypes
+// (Python semantics: the quotient rounds toward minus infinity, a zero
+// divisor gives 0 like the CPU reference). The float arm is
+// floor(a / b), the same kernel DivMod's float quotient uses.
+void FloorDivide::eval_gpu(const std::vector<array>& inputs, array& out) {
+  if (is_int_elementwise_dtype(out.dtype()) || out.dtype() == bool_) {
+    dispatch_int_elementwise(name(), IntFloorDivideOperation, inputs, out);
     return;
   }
   dispatch_elementwise(
-      name(), DivideOperation, inputs, out, out.primitive().stream());
+      name(), DivQuotientFloatOperation, inputs, out, out.primitive().stream());
 }
 // DivMod produces the Python floor-division quotient and remainder as
 // two same-shaped outputs (upstream DivMod: integral_op applies the

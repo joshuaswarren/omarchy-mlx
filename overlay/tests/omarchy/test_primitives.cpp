@@ -8046,6 +8046,138 @@ TEST_CASE("integer Remainder, DivMod, Power, Sign, and Abs match host references
   check_uint64_values(uldivmod[1], {1ull, 15ull}, stream);
 }
 
+TEST_CASE("FloorDivide floors toward minus infinity and gives 0 for a zero integer divisor") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto host_fd = [](int a, int b) { return b == 0 ? 0 : host_floor_div(a, b); };
+
+  // Signed 32-bit: every sign pair, an exact quotient, and the zero
+  // divisors (upstream CPU reference: quotient 0). The pre-primitive
+  // Divide path returned a stale register value for int32 / 0.
+  std::vector<int32_t> av = {7, -7, 7, -7, 5, 0, -5, 7, 0, -1};
+  std::vector<int32_t> bv = {3, 3, -3, -3, 5, 3, 0, 0, 0, 2};
+  std::vector<int32_t> expected(av.size());
+  for (size_t i = 0; i < av.size(); ++i) {
+    expected[i] = host_fd(av[i], bv[i]);
+  }
+  array a(av.begin(), Shape{10}, int32);
+  array b(bv.begin(), Shape{10}, int32);
+  array q = floor_divide(a, b, stream);
+  CHECK_EQ(std::string(q.primitive().name()), "FloorDivide");
+  check_int32_values(q, expected, stream);
+
+  // Broadcast (3,1) // (1,4) and a transposed (strided) divisor.
+  array col(std::vector<int32_t>{7, -7, 0}.begin(), Shape{3, 1}, int32);
+  std::vector<int32_t> rowv = {2, -2, 0, 3};
+  array row(rowv.begin(), Shape{1, 4}, int32);
+  std::vector<int32_t> bcast_expected;
+  for (int32_t x : std::vector<int32_t>{7, -7, 0}) {
+    for (int32_t y : rowv) {
+      bcast_expected.push_back(host_fd(x, y));
+    }
+  }
+  check_int32_values(floor_divide(col, row, stream), bcast_expected, stream);
+  std::vector<int32_t> tv = {2, -2, 0, 3, 1, -1, 4, 0, -3, 5, 6, -6};
+  array t(tv.begin(), Shape{4, 3}, int32);
+  array tt = transpose(t, stream);
+  array num(std::vector<int32_t>(12, -9).begin(), Shape{3, 4}, int32);
+  std::vector<int32_t> strided_expected;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      strided_expected.push_back(host_fd(-9, tv[j * 3 + i]));
+    }
+  }
+  check_int32_values(floor_divide(num, tt, stream), strided_expected, stream);
+
+  // Unsigned: the plain quotient, zero divisor gives 0.
+  std::vector<uint32_t> uav = {7u, 0xFFFFFFFFu, 5u, 0u};
+  std::vector<uint32_t> ubv = {2u, 16u, 0u, 3u};
+  array ua(uav.begin(), Shape{4}, uint32);
+  array ub(ubv.begin(), Shape{4}, uint32);
+  check_uint32_values(
+      floor_divide(ua, ub, stream), {3u, 0x0FFFFFFFu, 0u, 0u}, stream);
+
+  // The widened 8/16/64-bit kernels, signed and unsigned.
+  for (Dtype dt : {int8, int16, int64}) {
+    std::vector<int32_t> sv = {7, -7, 7, -7, 5, -5, 0, 3};
+    std::vector<int32_t> dv = {3, 3, -3, -3, 0, 0, 4, -1};
+    std::vector<int32_t> sexpected(sv.size());
+    for (size_t i = 0; i < sv.size(); ++i) {
+      sexpected[i] = host_fd(sv[i], dv[i]);
+    }
+    array x = astype(array(sv.begin(), Shape{8}, int32), dt, stream);
+    array y = astype(array(dv.begin(), Shape{8}, int32), dt, stream);
+    array r = floor_divide(x, y, stream);
+    CHECK_EQ(r.dtype(), dt);
+    CHECK_EQ(std::string(r.primitive().name()), "FloorDivide");
+    check_int32_values(astype(r, int32, stream), sexpected, stream);
+  }
+  for (Dtype dt : {uint8, uint16, uint64}) {
+    std::vector<uint32_t> sv = {200u, 7u, 0u, 5u};
+    std::vector<uint32_t> dv = {7u, 2u, 3u, 0u};
+    array x = astype(array(sv.begin(), Shape{4}, uint32), dt, stream);
+    array y = astype(array(dv.begin(), Shape{4}, uint32), dt, stream);
+    array r = floor_divide(x, y, stream);
+    CHECK_EQ(r.dtype(), dt);
+    check_uint32_values(
+        astype(r, uint32, stream), {28u, 3u, 0u, 0u}, stream);
+  }
+
+  // Bool floor_divide is a / b on {0,1}: a && b, zero divisor gives 0.
+  std::array<bool, 4> bav = {true, true, false, false};
+  std::array<bool, 4> bbv = {true, false, true, false};
+  array ba(bav.begin(), Shape{4}, bool_);
+  array bb(bbv.begin(), Shape{4}, bool_);
+  check_bool(floor_divide(ba, bb, stream), {true, false, false, false}, stream);
+}
+
+TEST_CASE("FloorDivide float arm is floor(a / b) with IEEE zero and NaN results") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // mx.floor_divide builds floor(divide(...)) for inexact dtypes, so the
+  // primitive is constructed directly: vmap, export and compile can
+  // still hand the float arm to a backend.
+  auto make = [&](const array& x, const array& y) {
+    auto inputs = broadcast_arrays({x, y}, stream);
+    auto shape = inputs[0].shape();
+    return array(
+        shape, x.dtype(), std::make_shared<FloorDivide>(stream), inputs);
+  };
+  const float inf = std::numeric_limits<float>::infinity();
+  std::vector<float> av = {5.5f, -5.5f, 5.5f, -5.5f, 7.25f, 1.0f, -1.0f, 0.0f};
+  std::vector<float> bv = {2.0f, 2.0f, -2.0f, -2.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+  std::vector<float> expected = {2.0f, -3.0f, -3.0f, 2.0f, 7.0f, inf, -inf, 0.0f};
+  array a(av.begin(), Shape{8}, float32);
+  array b(bv.begin(), Shape{8}, float32);
+  array q = make(a, b);
+  CHECK_EQ(std::string(q.primitive().name()), "FloorDivide");
+  q.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  const float* values = q.data<float>();
+  for (size_t i = 0; i + 1 < expected.size(); ++i) {
+    CHECK_EQ(values[i], expected[i]);
+  }
+  CHECK(std::isnan(values[7]));
+
+  const auto& capabilities = omarchy::device(0).capabilities();
+  if (capabilities.shader_float16 && capabilities.storage_buffer_16bit_access) {
+    array ha = astype(a, float16, stream);
+    array hb = astype(b, float16, stream);
+    array hq = astype(make(ha, hb), float32, stream);
+    hq.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const float* half_values = hq.data<float>();
+    for (size_t i = 0; i + 1 < expected.size(); ++i) {
+      CHECK_EQ(half_values[i], expected[i]);
+    }
+    CHECK(std::isnan(half_values[7]));
+  }
+}
+
 TEST_CASE("float Remainder, Power, Sign, Abs, and DivMod match host references") {
   if (!compute_available()) {
     return;

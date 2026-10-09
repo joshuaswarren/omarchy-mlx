@@ -5,7 +5,7 @@
 //   0 subtract  1 and  2 or  3 xor  4 left shift  5 right shift
 //   6 invert  7 divmod quotient  8 modulo  9 power  10 sign
 //   11 abs  12 add  13 multiply  14 square  15 minimum  16 maximum
-//   17 divide  18 negate
+//   17 floor divide (zero divisor gives 0)  18 negate
 //
 // The default blobs (no define) serve int32/uint32 with the full op
 // set: wraparound subtraction, bitwise logic, and shifts are identical
@@ -200,6 +200,15 @@ VALUE_TYPE floor_quotient(VALUE_TYPE a, VALUE_TYPE b) {
   return q;
 }
 
+// Upstream FloorDivide: floor_quotient with the CPU reference's zero
+// divisor result. The divisor is swapped for 1 before the division so
+// no SDiv/UDiv by zero executes (Vulkan leaves it undefined; the
+// composed Divide path returned a stale register value for int32 / 0).
+VALUE_TYPE floor_divide_int(VALUE_TYPE a, VALUE_TYPE b) {
+  VALUE_TYPE q = floor_quotient(a, b == VALUE_TYPE(0) ? VALUE_TYPE(1) : b);
+  return b == VALUE_TYPE(0) ? VALUE_TYPE(0) : q;
+}
+
 // Python-style modulo: truncating remainder adjusted by one divisor
 // when the signs of remainder and divisor differ. Unsigned stays the
 // raw remainder, which is already the upstream unsigned result.
@@ -284,7 +293,7 @@ VALUE_TYPE integer_sign(VALUE_TYPE a) {
     value = a > b ? a : b;                                                    \
     break;                                                                    \
   case 17:                                                                    \
-    value = a / b;                                                            \
+    value = floor_divide_int(a, b);                                           \
     break;                                                                    \
   case 18:                                                                    \
     value = -a;                                                               \
@@ -497,13 +506,9 @@ void main() {
         value = a > b ? a : b;
         break;
       case 17:
-        // Upstream Divide with an integer output dtype (floor_divide
-        // on promoted integer inputs reaches this primitive) runs the
-        // C++ operator/, which truncates toward zero. A zero divisor
-        // is undefined upstream on the CPU and yields an
-        // implementation-defined value on Metal, so the raw SDiv/UDiv
-        // matches the reference family; no guard is added.
-        value = a / b;
+        // Upstream FloorDivide: Python floor semantics, a zero
+        // divisor gives 0 (the CPU reference).
+        value = floor_divide_int(a, b);
         break;
       case 18:
         // Negative: wraparound negation, matching upstream's C++
