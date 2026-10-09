@@ -1,0 +1,48 @@
+{
+ "label": "qwen35-9b-Linux",
+ "model": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+ "load_s": 3.89,
+ "decode_tok_s": {
+  "median": 25.388,
+  "mean": 25.333,
+  "stdev": 0.185,
+  "min": 24.866,
+  "max": 25.484,
+  "n": 10
+ },
+ "ttft_s": {
+  "median": 0.387,
+  "mean": 0.398,
+  "stdev": 0.025,
+  "min": 0.375,
+  "max": 0.44,
+  "n": 10
+ },
+ "prefill_tok_s": {
+  "median": 55.213,
+  "mean": 55.208,
+  "stdev": 0.114,
+  "min": 55.057,
+  "max": 55.343,
+  "n": 5
+ },
+ "prefill_all": [
+  55.21,
+  55.06,
+  55.29,
+  55.14,
+  55.34
+ ],
+ "pf_tokens": 512,
+ "decode_digest": "4e5430032a62d99f49c19b654287d140381f80949dd54428fd674d0d92ae6cfd",
+ "corpus_sha256": "9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0",
+ "peak_mem_gb": 6.56,
+ "env": {
+  "platform": "Linux-7.1.12-2-12.6-sep-ARCH-aarch64-with-glibc2.43",
+  "python": "3.14.7",
+  "backend": "Device(gpu, 0)",
+  "load1_end": 0.8994140625,
+  "mlx_lm": "0.32.0",
+  "mlx_dist": "mlx-omarchy 0.32.4.dev202610090923+a48b7cc5"
+ }
+}

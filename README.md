@@ -193,6 +193,34 @@ mlx-omarchy-parakeet transcribe recording.wav -o out/
 printed: missing assets, a hash mismatch, or no ANE. The contract is
 in [docs/parakeet.md](docs/parakeet.md).
 
+## How close to macOS
+
+Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0); measured 2026-10-09. The number is Linux throughput as a percentage of macOS throughput: 100% means equal, higher is faster on Linux.
+
+- Decode: median tokens per second over 10 greedy generations of 64 tokens (prompt processing excluded).
+- Prefill: median tokens per second over 5 runs of one 512-token prompt.
+- llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
+- All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
+Two Linux rows fail today: gemma-4-e2b stalls a GPU submit during prefill, and gpt-oss-20b needs an attention-sinks kernel that is not implemented yet. The macOS runs shared the machine with background downloads and a build, which can only lower the macOS numbers.
+
+| Model | Decode, tok/s (Linux / macOS) | Prefill 512, tok/s (Linux / macOS) |
+|---|---|---|
+| Qwen3.5-9B | 25.4 / 59.3 = **43%** | 55.2 / 333.4 = **17%** |
+| clef-flash | 25.0 / 59.1 = **42%** | 56.1 / 335.0 = **17%** |
+| gemma-4-e2b | fails to run (0%) | fails to run (0%) |
+| gpt-oss-20b | fails to run (0%) | fails to run (0%) |
+| Qwen3.8-27B | 9.3 / 19.6 = **47%** | 19.9 / 104.6 = **19%** |
+| Qwen3.8-Flash-Next | skipped (does not fit in memory) | skipped (does not fit in memory) |
+
+llama.cpp, Vulkan on Linux against Metal on macOS (same llama.cpp commit):
+
+| Model | Decode tg128, tok/s (Linux / macOS) | Prefill pp512, tok/s (Linux / macOS) |
+|---|---|---|
+| gemma-4-12b (Q4_K_M) | 14.1 / 29.3 = **48%** | 118.2 / 310.8 = **38%** |
+| Qwen3.8-27B (Q4_K_M) | 6.3 / 12.5 = **50%** | 53.8 / 131.2 = **41%** |
+
+Rows are re-measured weekly; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
+
 ## Qwen3.5-9B fused GDN decode
 
 The fused raw decode route is ON by default on every chip. The v0.7.26
