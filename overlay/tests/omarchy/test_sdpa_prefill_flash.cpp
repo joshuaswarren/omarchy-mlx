@@ -256,18 +256,22 @@ TEST_CASE("big causal bf16 keeps the named storage-binding refusal") {
   array k = make_bf16({1, heads, length, kHd}, 802, stream);
   array v = make_bf16({1, heads, length, kHd}, 803, stream);
   bool refused_at_bf16 = false;
+  std::string refusal;
   try {
     array out = fast::scaled_dot_product_attention(
         q, k, v, 1.0f / std::sqrt(static_cast<float>(kHd)), "causal",
         std::nullopt, {}, false, stream);
     out.eval();
     omarchy::get_command_encoder(stream).synchronize();
-  } catch (const std::runtime_error& e) {
+  } catch (const std::exception& e) {
+    refusal = e.what();
     refused_at_bf16 =
-        std::strstr(e.what(), "4294967296") != nullptr &&
-        std::strstr(e.what(), "8589934592") == nullptr;
+        refusal.find("4294967296") != std::string::npos &&
+        refusal.find("8589934592") == std::string::npos;
   }
-  CHECK(refused_at_bf16);
+  CHECK_MESSAGE(refused_at_bf16,
+                "refusal message did not name the bf16 storage binding: ",
+                refusal);
   unsetenv("MLX_OMARCHY_SDPA_BF16_FAST");
 }
 
