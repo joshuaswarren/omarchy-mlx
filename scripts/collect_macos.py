@@ -663,12 +663,14 @@ except Exception as exc:
     out["truncated"].append("set_base:%s" % type(exc).__name__)
 
 # CoreML compute-unit availability when pyobjc is present; otherwise a
-# recorded miss, never a crash.
+# recorded miss, never a crash. PyObjC exposes the NS_ENUM cases as
+# module-level constants (MLComputeUnitsAll), not as attributes of the
+# MLComputeUnits type, which is a bare NewType.
 try:
     import CoreML  # type: ignore
-    from CoreML import MLComputeUnits  # type: ignore
     out["coreml"] = {"available": True,
-                     "compute_units": str(MLComputeUnits.all)[:64],
+                     "compute_units": ("MLComputeUnitsAll=%s"
+                                       % CoreML.MLComputeUnitsAll)[:64],
                      "error": None}
 except Exception as exc:
     out["coreml"] = {"available": False, "compute_units": None,
@@ -1023,7 +1025,10 @@ try:
         start = time.perf_counter()
         got = model.predict({"x": x, "y": y})["z"]
         times.append((time.perf_counter() - start) * 1000)
-        if not np.allclose(got, x + y, atol=1e-4):
+        # The NeuralNetwork runtime returns the rank-5 (S,B,C,H,W) array,
+        # shape (1, 1, 2, 1, 1); compared unflattened it would broadcast
+        # against (2,) and fail on correct values.
+        if not np.allclose(np.asarray(got).reshape(-1), x + y, atol=1e-4):
             out["error"] = "wrong result"
             break
     else:
