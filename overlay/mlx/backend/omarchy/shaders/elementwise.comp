@@ -9,6 +9,7 @@
 #define STORAGE_TYPE float16_t
 #define LOAD_VALUE(x) float(x)
 #define STORE_VALUE(f) STORAGE_TYPE(f)
+#define ROUND_VALUE(f) float(STORAGE_TYPE(f))
 #elif defined(USE_BF16)
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
@@ -22,10 +23,12 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 #define STORE_VALUE(f) bf16_store(f)
+#define ROUND_VALUE(f) LOAD_VALUE(bf16_store(f))
 #else
 #define STORAGE_TYPE float
 #define LOAD_VALUE(x) float(x)
 #define STORE_VALUE(f) STORAGE_TYPE(f)
+#define ROUND_VALUE(f) (f)
 #endif
 
 layout(local_size_x = 256) in;
@@ -736,6 +739,13 @@ void main() {
         break;
       case 40:
         value = floor(lhs / rhs);
+        break;
+      case 41:
+        // Upstream FloorDivide on floats is floor(divide(a, b)) with
+        // the quotient rounded to the storage type before the floor,
+        // so f16 and bf16 round first (the same two roundings the
+        // Divide and Floor dispatches gave).
+        value = floor(ROUND_VALUE(lhs / rhs));
         break;
 #endif  // LITE
       default:

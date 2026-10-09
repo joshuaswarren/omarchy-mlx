@@ -160,12 +160,13 @@ enum ElementwiseOperation : uint32_t {
   FloorOperation,
   RoundOperation,
   // Wave-2 float ops. The codes continue the wave-3 block and match
-  // elementwise.comp cases 36-40.
+  // elementwise.comp cases 36-41.
   RemainderFloatOperation,
   PowerFloatOperation,
   SignFloatOperation,
   AbsFloatOperation,
   DivQuotientFloatOperation,
+  FloorDivideFloatOperation,
 };
 
 allocator::Buffer allocate_omarchy(size_t size) {
@@ -4954,17 +4955,18 @@ void Divide::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_elementwise(
       name(), DivideOperation, inputs, out, out.primitive().stream());
 }
-// Upstream floor_divide emits FloorDivide for integer and bool dtypes
-// (Python semantics: the quotient rounds toward minus infinity, a zero
-// divisor gives 0 like the CPU reference). The float arm is
-// floor(a / b), the same kernel DivMod's float quotient uses.
+// Upstream floor_divide emits FloorDivide for every dtype that is not
+// complex. Integer and bool: Python semantics, the quotient rounds toward
+// minus infinity and a zero divisor gives 0 like the CPU reference.
+// Float: floor(divide(a, b)) with the quotient rounded to the storage
+// type first, so f16 and bf16 match the CPU and Metal rounding.
 void FloorDivide::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (is_int_elementwise_dtype(out.dtype()) || out.dtype() == bool_) {
     dispatch_int_elementwise(name(), IntFloorDivideOperation, inputs, out);
     return;
   }
   dispatch_elementwise(
-      name(), DivQuotientFloatOperation, inputs, out, out.primitive().stream());
+      name(), FloorDivideFloatOperation, inputs, out, out.primitive().stream());
 }
 // DivMod produces the Python floor-division quotient and remainder as
 // two same-shaped outputs (upstream DivMod: integral_op applies the

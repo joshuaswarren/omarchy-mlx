@@ -8133,27 +8133,22 @@ TEST_CASE("FloorDivide floors toward minus infinity and gives 0 for a zero integ
   check_bool(floor_divide(ba, bb, stream), {true, false, false, false}, stream);
 }
 
-TEST_CASE("FloorDivide float arm is floor(a / b) with IEEE zero and NaN results") {
+TEST_CASE("FloorDivide on floats matches the CPU stream, including the f16 and bf16 quotient rounding") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
-  // mx.floor_divide builds floor(divide(...)) for inexact dtypes, so the
-  // primitive is constructed directly: vmap, export and compile can
-  // still hand the float arm to a backend.
-  auto make = [&](const array& x, const array& y) {
-    auto inputs = broadcast_arrays({x, y}, stream);
-    auto shape = inputs[0].shape();
-    return array(
-        shape, x.dtype(), std::make_shared<FloorDivide>(stream), inputs);
-  };
+  Stream cpu_stream = new_stream(Device::cpu);
+  // The vendored upstream floor_divide emits one FloorDivide primitive for
+  // every non-complex dtype: floor(divide(a, b)) with the quotient rounded
+  // to the storage type before the floor.
   const float inf = std::numeric_limits<float>::infinity();
   std::vector<float> av = {5.5f, -5.5f, 5.5f, -5.5f, 7.25f, 1.0f, -1.0f, 0.0f};
   std::vector<float> bv = {2.0f, 2.0f, -2.0f, -2.0f, 1.0f, 0.0f, 0.0f, 0.0f};
   std::vector<float> expected = {2.0f, -3.0f, -3.0f, 2.0f, 7.0f, inf, -inf, 0.0f};
   array a(av.begin(), Shape{8}, float32);
   array b(bv.begin(), Shape{8}, float32);
-  array q = make(a, b);
+  array q = floor_divide(a, b, stream);
   CHECK_EQ(std::string(q.primitive().name()), "FloorDivide");
   q.eval();
   omarchy::get_command_encoder(stream).synchronize();
@@ -8163,18 +8158,58 @@ TEST_CASE("FloorDivide float arm is floor(a / b) with IEEE zero and NaN results"
   }
   CHECK(std::isnan(values[7]));
 
+  // Exact multiples must come out exact (6 / 3 is exactly 2). The
+  // tolerance is far below one unit, but nonzero: doctest::Approx compares
+  // with a strict less-than, so 0.0 would fail an exact match.
+  array exact = floor_divide(
+      array({6.0f, -6.0f, 9.0f, 1e6f}, float32),
+      array({3.0f, 3.0f, -3.0f, 1000.0f}, float32),
+      stream);
+  check_values(exact, {2.0f, -2.0f, -3.0f, 1000.0f}, stream, 1e-9);
+
+  // 16-bit: a deterministic spread of operand pairs, run on the GPU and
+  // the CPU stream from the same rounded inputs. A quotient just below an
+  // integer rounds up to it in the storage type before the floor, so the
+  // result differs from floor(exact quotient); f16 53.40625 / -0.10449219
+  // is -511.103 exactly and -511 after the f16 rounding.
+  std::vector<float> xs = {53.40625f};
+  std::vector<float> ys = {-0.10449219f};
+  uint32_t state = 12345u;
+  auto next_unit = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return static_cast<float>(state >> 8) / 16777216.0f;
+  };
+  for (int i = 0; i < 4000; ++i) {
+    xs.push_back((next_unit() - 0.5f) * 160.0f);
+    ys.push_back((next_unit() - 0.5f) * 20.0f);
+  }
   const auto& capabilities = omarchy::device(0).capabilities();
+  std::vector<Dtype> half_dtypes;
   if (capabilities.shader_float16 && capabilities.storage_buffer_16bit_access) {
-    array ha = astype(a, float16, stream);
-    array hb = astype(b, float16, stream);
-    array hq = astype(make(ha, hb), float32, stream);
-    hq.eval();
+    half_dtypes.push_back(float16);
+  }
+  if (capabilities.storage_buffer_16bit_access && capabilities.shader_int16) {
+    half_dtypes.push_back(bfloat16);
+  }
+  Shape shape{static_cast<int>(xs.size())};
+  for (Dtype dt : half_dtypes) {
+    array gx = astype(array(xs.begin(), shape, float32), dt, stream);
+    array gy = astype(array(ys.begin(), shape, float32), dt, stream);
+    array gpu_q = astype(floor_divide(gx, gy, stream), float32, stream);
+    array cx = astype(array(xs.begin(), shape, float32), dt, cpu_stream);
+    array cy = astype(array(ys.begin(), shape, float32), dt, cpu_stream);
+    array cpu_q = astype(floor_divide(cx, cy, cpu_stream), float32, cpu_stream);
+    gpu_q.eval();
     omarchy::get_command_encoder(stream).synchronize();
-    const float* half_values = hq.data<float>();
-    for (size_t i = 0; i + 1 < expected.size(); ++i) {
-      CHECK_EQ(half_values[i], expected[i]);
+    cpu_q.eval();
+    const float* got = gpu_q.data<float>();
+    const float* want = cpu_q.data<float>();
+    size_t mismatches = 0;
+    for (size_t i = 0; i < xs.size(); ++i) {
+      bool same = (std::isnan(got[i]) && std::isnan(want[i])) || got[i] == want[i];
+      mismatches += same ? 0 : 1;
     }
-    CHECK(std::isnan(half_values[7]));
+    CHECK_EQ(mismatches, 0u);
   }
 }
 
