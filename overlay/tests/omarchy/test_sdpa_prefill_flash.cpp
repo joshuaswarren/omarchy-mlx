@@ -347,6 +347,11 @@ TEST_CASE("chunked composed prefill keeps GQA rows in place") {
     return;
   }
   Stream stream = gpu_stream();
+  const auto& chunk_caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(chunk_caps.cooperative_matrix_f32_8 && chunk_caps.subgroup_size == 32u)) {
+    return;  // the chunked route lives in the bf16-direct coopmat composition
+  }
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
   set_flash_enabled(false);
   struct EnvRestore {
@@ -379,13 +384,34 @@ TEST_CASE("chunked composed prefill keeps GQA rows in place") {
     const uint64_t chunk_denom = static_cast<uint64_t>(c.batch) * c.heads *
         c.length * sizeof(float);
     unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    const uint64_t whole_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     std::vector<float> whole = flat(sdpa(q, k, v, stream), stream);
     setenv(
         "MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES",
         std::to_string(chunk_denom * 64).c_str(),
         1);
+    const uint64_t chunked_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     std::vector<float> chunked = flat(sdpa(q, k, v, stream), stream);
     unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    // Without this the equality below passes trivially when both runs take
+    // the unchunked route; the chunked route issues several dispatches per
+    // 64-row chunk, so it must issue more than the single-pass route.
+    CHECK_MESSAGE(
+        chunked_dispatches > whole_dispatches,
+        "chunk route not taken: batch ",
+        c.batch,
+        " heads ",
+        c.heads,
+        "/",
+        c.kv_heads,
+        " length ",
+        c.length,
+        ": dispatches whole ",
+        whole_dispatches,
+        " chunked ",
+        chunked_dispatches);
     REQUIRE_EQ(chunked.size(), whole.size());
     double max_diff = 0.0;
     for (size_t i = 0; i < whole.size(); ++i) {
