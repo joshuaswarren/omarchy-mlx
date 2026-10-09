@@ -506,6 +506,10 @@ add_test(NAME omarchy_sdpa_decode_fused_tests
 # SdpaPrefillFlashBF16Hd128: the flash-style long-L prefill route agrees
 # with the f32-score composition at bf16 storage granularity, splits
 # dispatches per q tile, and refuses masks/causal to the composition.
+# Route order (2026-10-09): the chunked composed coopmat route is the
+# default wherever it serves (it caps score chunks at 1 GiB and measured
+# 3.2x over flash at the H3 demo shape); flash serves non-coopmat
+# devices and the explicit pin.
 add_executable(omarchy_sdpa_prefill_flash_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_sdpa_prefill_flash.cpp)
 target_link_libraries(omarchy_sdpa_prefill_flash_tests PRIVATE mlx doctest)
