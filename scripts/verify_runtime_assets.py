@@ -15,6 +15,15 @@ reaches a package silently (the 2026-10-02 omarchy-mlx 0.7.10-1 defect: the
 package stage carried a locally rebuilt libane-strict.so/worker beside the
 wheel's untouched pin, and the worker seal refused at first transcribe).
 
+The fd-protocol ANE worker ships outside the share tree, at
+``mlx/bin/mlx-omarchy-ane-worker`` beside it. It compiles inside the wheel
+build, so its digest is knowable only after the build:
+``scripts/build-wheel.sh`` stamps the built worker's SHA-256 into
+``assets.worker`` of the pin the wheel ships. The checker therefore refuses
+an installed tree that ships a worker its pin does not name (wheels cut
+before worker pinning fail here; repin to a release built by the stamping
+pipeline), and a build tree that has not built the worker yet still passes.
+
 Exits 0 when every present pin manifest verifies; exits 1 with
 expected/actual digests and the two legal fixes otherwise. Trees without a
 pin manifest (non-aarch64 installs) are skipped.
@@ -68,6 +77,33 @@ def _mismatches(share: Path) -> list[str]:
                     f"UNPINNED {rel}: shipped but not named by the pin "
                     f"(sha256 {_sha256_file(path)})"
                 )
+
+    # The ANE worker lives at mlx/bin beside the share tree. Release builds
+    # stamp its digest into assets.worker; a shipped-but-unnamed worker is
+    # the same defect class as an unpinned libane.
+    if len(share.parents) > 2:
+        bin_dir = share.parents[2] / "bin"
+        named_workers = set(pin["assets"].get("worker", {}))
+        for name, digest in sorted(pin["assets"].get("worker", {}).items()):
+            path = bin_dir / name
+            if not path.is_file():
+                problems.append(
+                    f"MISSING bin/{name}: pin requires it (expected {digest})"
+                )
+            else:
+                actual = _sha256_file(path)
+                if actual != digest:
+                    problems.append(
+                        f"MISMATCH bin/{name}: expected {digest}, got {actual}"
+                    )
+        worker_bin = bin_dir / "mlx-omarchy-ane-worker"
+        if worker_bin.is_file() and "mlx-omarchy-ane-worker" not in named_workers:
+            problems.append(
+                f"UNPINNED bin/mlx-omarchy-ane-worker: shipped but not named "
+                f"by the pin (sha256 {_sha256_file(worker_bin)}); release "
+                f"builds stamp the built worker sha into assets.worker "
+                f"(scripts/build-wheel.sh)"
+            )
     return problems
 
 
