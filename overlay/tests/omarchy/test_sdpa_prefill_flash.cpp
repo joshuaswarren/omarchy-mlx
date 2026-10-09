@@ -347,34 +347,71 @@ TEST_CASE("chunked composed prefill keeps GQA rows in place") {
     return;
   }
   Stream stream = gpu_stream();
+  const auto& chunk_caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  if (!(chunk_caps.cooperative_matrix_f32_8 && chunk_caps.subgroup_size == 32u)) {
+    return;  // the chunked route lives in the bf16-direct coopmat composition
+  }
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
   set_flash_enabled(false);
+  struct EnvRestore {
+    ~EnvRestore() {
+      unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+      set_flash_enabled(true);
+    }
+  } restore;
 
   struct Case {
+    int batch;
     int heads;
     int kv_heads;
     int length;
   };
-  // 192 rows with the cap below gives 64-row chunks (three per call).
+  // The cap below gives 64-row chunks: 192 rows is three equal chunks, 200
+  // rows ends in an 8-row tail chunk (nonzero row offset into the output),
+  // batch 2 exercises the output's batch stride.
   const Case cases[] = {
-      {8, 8, 192}, // MHA control
-      {8, 2, 192}, // GQA repeats = 4
-      {6, 1, 192}, // GQA repeats = 6, one KV head
+      {1, 8, 8, 192}, // MHA control
+      {1, 8, 2, 192}, // GQA repeats = 4
+      {1, 6, 1, 192}, // GQA repeats = 6, one KV head
+      {1, 8, 2, 200}, // GQA with a ragged tail chunk
+      {2, 8, 2, 200}, // GQA, batch 2, ragged tail chunk
   };
   for (const auto& c : cases) {
-    array q = make_bf16({1, c.heads, c.length, kHd}, 301 + c.heads, stream);
-    array k = make_bf16({1, c.kv_heads, c.length, kHd}, 302 + c.heads, stream);
-    array v = make_bf16({1, c.kv_heads, c.length, kHd}, 303 + c.heads, stream);
-    const uint64_t chunk_denom =
-        static_cast<uint64_t>(c.heads) * c.length * sizeof(float);
+    array q = make_bf16({c.batch, c.heads, c.length, kHd}, 301 + c.heads, stream);
+    array k = make_bf16({c.batch, c.kv_heads, c.length, kHd}, 302 + c.heads, stream);
+    array v = make_bf16({c.batch, c.kv_heads, c.length, kHd}, 303 + c.heads, stream);
+    const uint64_t chunk_denom = static_cast<uint64_t>(c.batch) * c.heads *
+        c.length * sizeof(float);
     unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    const uint64_t whole_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     std::vector<float> whole = flat(sdpa(q, k, v, stream), stream);
     setenv(
         "MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES",
         std::to_string(chunk_denom * 64).c_str(),
         1);
+    const uint64_t chunked_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     std::vector<float> chunked = flat(sdpa(q, k, v, stream), stream);
     unsetenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+    // Without this the equality below passes trivially when both runs take
+    // the unchunked route; the chunked route issues several dispatches per
+    // 64-row chunk, so it must issue more than the single-pass route.
+    CHECK_MESSAGE(
+        chunked_dispatches > whole_dispatches,
+        "chunk route not taken: batch ",
+        c.batch,
+        " heads ",
+        c.heads,
+        "/",
+        c.kv_heads,
+        " length ",
+        c.length,
+        ": dispatches whole ",
+        whole_dispatches,
+        " chunked ",
+        chunked_dispatches);
     REQUIRE_EQ(chunked.size(), whole.size());
     double max_diff = 0.0;
     for (size_t i = 0; i < whole.size(); ++i) {
@@ -383,14 +420,18 @@ TEST_CASE("chunked composed prefill keeps GQA rows in place") {
     }
     CHECK_MESSAGE(
         max_diff == 0.0,
-        "chunked vs whole composed, heads ",
+        "chunked vs whole composed, batch ",
+        c.batch,
+        " heads ",
         c.heads,
         "/",
         c.kv_heads,
+        " length ",
+        c.length,
         ": max abs diff ",
         max_diff);
   }
-  set_flash_enabled(true);
+  // EnvRestore resets the env even when a REQUIRE aborts the case.
 }
 
 TEST_CASE("flash prefill splits dispatches per q tile") {
