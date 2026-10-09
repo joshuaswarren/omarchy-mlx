@@ -959,16 +959,21 @@ TEST_CASE("put_along_axis on a negative-stride source matches contiguous copy") 
        9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f},
       {8, 2},
       float32);
-  array indices = array({int32(0), int32(1), int32(2), int32(3)}, {4, 1});
+  array indices = array({0, 1, 2, 3}, {4, 1}, int32);
   array values = array({100.0f, 200.0f, 300.0f, 400.0f,
                          500.0f, 600.0f, 700.0f, 800.0f},
                        {4, 2},
                        float32);
-  array view = base[slice(7, -1, -1)];
+  array view = slice(base, Shape{7, 0}, Shape{-9, 2}, Shape{-1, 1});
   array copy = contiguous(view, false, stream);
   array out_view = put_along_axis(view, indices, values, 0, stream);
   array out_copy = put_along_axis(copy, indices, values, 0, stream);
-  check_floats(out_view, std::vector<float>(out_copy, out_copy + 4 * 2),
+  out_view.eval();
+  out_copy.eval();
+  synchronize(stream);
+  check_floats(out_view,
+               std::vector<float>(out_copy.data<float>(),
+                                  out_copy.data<float>() + out_copy.size()),
                stream);
   array base_i = array(
       {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
@@ -977,12 +982,17 @@ TEST_CASE("put_along_axis on a negative-stride source matches contiguous copy") 
   array values_i = array({100, 200, 300, 400, 500, 600, 700, 800},
                          {4, 2},
                          int32);
-  array view_i = base_i[slice(7, -1, -1)];
+  array view_i = slice(base_i, Shape{7, 0}, Shape{-9, 2}, Shape{-1, 1});
   array copy_i = contiguous(view_i, false, stream);
   array out_view_i = put_along_axis(view_i, indices, values_i, 0, stream);
   array out_copy_i = put_along_axis(copy_i, indices, values_i, 0, stream);
+  out_view_i.eval();
+  out_copy_i.eval();
+  synchronize(stream);
   check_ints(out_view_i,
-             std::vector<int32_t>(out_copy_i, out_copy_i + 4 * 2),
+             std::vector<int32_t>(out_copy_i.data<int32_t>(),
+                                  out_copy_i.data<int32_t>() +
+                                      out_copy_i.size()),
              stream);
 }
 
