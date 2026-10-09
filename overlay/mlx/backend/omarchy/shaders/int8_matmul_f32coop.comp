@@ -66,6 +66,9 @@ layout(set = 0, binding = 5, std430) buffer OutBF16 {
 layout(set = 0, binding = 6, std430) buffer Acc32 {
   int values[];
 } in_acc32;
+layout(set = 0, binding = 7, std430) buffer OutF32 {
+  float values[];
+} out_f32;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -240,12 +243,20 @@ void main() {
 
   const uint ws_base = params.shape[1];
   const uint b_base = params.shape[2];
+  const bool raw_total = (params.flags & 2u) != 0u;
   for (uint q = tid; q < TILE * TILE; q += 128u) {
     const uint r = q / TILE;
     const uint c = q % TILE;
     const uint row = wg_row + r;
     const uint col = wg_col + c;
     if (row < rows && col < n) {
+      if (raw_total) {
+        // Swiglu two-matmul mode: the exact f32 group-scaled total goes
+        // to the f32 temp untouched; the fused epilogue applies WS/B and
+        // the single bf16 rounding.
+        out_f32.values[params.output_offset + row * n + col] = total[q];
+        continue;
+      }
       out_bf16.values[params.output_offset + row * n + col] =
           bf16_store(total[q] * in_ws.values[ws_base + col] +
               in_b.values[b_base + col]);
