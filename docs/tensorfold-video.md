@@ -129,26 +129,22 @@ python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
   --dump-text-rows "$TEXT" \
   -o /dev/null
 
-# 2. Denoise (20 forwards, resumable per-step checkpoints).
+# 2. Denoise + decode + mux (20 forwards; resumable per-step checkpoints; writes the mp4).
+#    The driver always decodes and writes the output file: there is no flag that skips the
+#    decode, so denoise and mux are one command. If the run is interrupted, the same
+#    command resumes from the newest checkpoint in $CKPT.
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
   --text-rows "$TEXT" \
   --width 768 --height 448 --frames 56 --points 21 --seed 1 \
   --int8-from-state "$MODEL_DIR/int8-dit" \
   --checkpoint-dir "$CKPT" --resume \
   --dump-latents "$LAT" \
-  -o /dev/null
-
-# 3. Decode + mux (the driver does this itself if -o points at the final clip; the
-#    two-step path above lets the denoise resume if the decode stage is interrupted).
-python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
-  --text-rows "$TEXT" \
-  --width 768 --height 448 --frames 56 --points 21 --seed 1 \
-  --int8-from-state "$MODEL_DIR/int8-dit" \
-  --latents-in "$LAT" \
   -o "$OUT"
 ```
 
-The packaged `sample/demob-linux-full-768x448-s1.mp4` is the output of stages 1+2+3 on the M2 with the same prompt and seed.
+`--dump-latents "$LAT"` also saves the denoised latents next to the mp4. If a rerun only needs the mp4 from an existing latents file, pass `--latents-in "$LAT"` and drop the `--text-rows`, `--int8-from-state`, `--checkpoint-dir`, and `--resume` flags.
+
+The packaged `sample/demob-linux-full-768x448-s1.mp4` is the output of stages 1 and 2 on the M2 with the same prompt and seed.
 
 ## What you should see
 
