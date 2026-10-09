@@ -210,6 +210,15 @@ void main() {
         }
       }
       barrier();
+      // The next chunk must accumulate from zero: without this reset
+      // every flush would re-add all previous chunks (cumulative sums).
+      for (uint i = 0u; i < SG; i++) {
+        for (uint j = 0u; j < SG; j++) {
+          acc[i][j] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(0.0f);
+        }
+      }
+      barrier();
     }
     if (chunked) {
       // Group end: scale the exact int32 group sum by XS[m,g] and clear
