@@ -133,6 +133,7 @@ python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
 #    The driver always decodes and writes the output file: there is no flag that skips the
 #    decode, so denoise and mux are one command. If the run is interrupted, the same
 #    command resumes from the newest checkpoint in $CKPT.
+mkdir -p "$CKPT"
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
   --text-rows "$TEXT" \
   --width 768 --height 448 --frames 56 --points 21 --seed 1 \
