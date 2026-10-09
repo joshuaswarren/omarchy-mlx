@@ -933,6 +933,69 @@ class AneProbeCodeTests(unittest.TestCase):
         self.assertEqual(macos["set_base_candidate"]["base"],
                          "0x8e08c000")
 
+    def test_coreml_compute_units_read_from_pyobjc_constant(self):
+        # PyObjC's CoreML binding: MLComputeUnits is a bare NewType and the
+        # cases are module constants. An M3 Pro capture (issue #56) recorded
+        # coreml.error "AttributeError" from `MLComputeUnits.all`.
+        fake = types.ModuleType("CoreML")
+        fake.MLComputeUnits = types.new_class("MLComputeUnits")
+        fake.MLComputeUnitsAll = 3
+        with patch.dict(sys.modules, {"CoreML": fake}):
+            out = self._run_probe()
+        self.assertEqual(out["coreml"],
+                         {"available": True,
+                          "compute_units": "MLComputeUnitsAll=3",
+                          "error": None})
+
+
+class AneSmokeProbeTests(unittest.TestCase):
+    """Executes the real ANE_MACOS_SMOKE_PROBE string against a fake
+    coremltools whose predict() returns the rank-5 output shape the
+    NeuralNetwork runtime produces on a real M3 Pro (issue #56)."""
+
+    @staticmethod
+    def _fake_coremltools(np):
+        class Builder:
+            def __init__(self, *a, **k):
+                self.spec = object()
+
+            def add_elementwise(self, **k):
+                pass
+
+        class MLModel:
+            def __init__(self, spec):
+                pass
+
+            def predict(self, feed):
+                z = (feed["x"] + feed["y"]).astype(np.float64)
+                return {"z": z.reshape(1, 1, 2, 1, 1)}
+
+        ct = types.ModuleType("coremltools")
+        ct.models = types.ModuleType("coremltools.models")
+        ct.models.MLModel = MLModel
+        ct.models.datatypes = types.ModuleType("coremltools.models.datatypes")
+        ct.models.datatypes.Array = lambda n: ("Array", n)
+        nn = types.ModuleType("coremltools.models.neural_network")
+        nn.NeuralNetworkBuilder = Builder
+        return {"coremltools": ct, "coremltools.models": ct.models,
+                "coremltools.models.datatypes": ct.models.datatypes,
+                "coremltools.models.neural_network": nn}
+
+    def test_rank5_output_compares_flattened(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("numpy unavailable")
+        ns = {}
+        with patch.dict(sys.modules, self._fake_coremltools(np)), \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            exec(compile(cm.ANE_MACOS_SMOKE_PROBE, "<smoke>", "exec"), ns)
+        out = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertIsNone(out["error"])
+        self.assertTrue(out["available"])
+        self.assertEqual(out["calls"], 20)
+        self.assertIsNotNone(out["median_ms"])
+
 
 class AneDumpStreamCapTests(unittest.TestCase):
     """The deep dump probe's stdout IS the JSON payload: the generic
