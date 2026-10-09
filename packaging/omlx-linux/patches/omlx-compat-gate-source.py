@@ -31,6 +31,7 @@ cost is one dict lookup after the first invocation.
 from __future__ import annotations
 
 import functools
+import os
 import platform
 from typing import Any
 
@@ -50,7 +51,12 @@ def custom_kernels_available() -> bool:
     Callers must be running under ``mx.gpu`` already -- the original
     gates all carried the ``mx.default_device() == mx.gpu`` conjunct,
     which we keep at the call sites so this helper stays pure.
+    ``OMLX_LINUX_CUSTOM_KERNELS=0`` answers False without probing, so every
+    custom-kernel path takes its stock MLX fallback (used when a wheel cannot
+    compile one of the kernels, which a one-op canary cannot detect).
     """
+    if os.environ.get("OMLX_LINUX_CUSTOM_KERNELS") == "0":
+        return False
     if mx.metal.is_available():
         return True
     try:
