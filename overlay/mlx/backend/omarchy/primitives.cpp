@@ -10455,6 +10455,42 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
     encoder.add_temporary(*idx_mat);
     idx = &*idx_mat;
   }
+  // A negative axis-stride on src or updates used to be passed into
+  // checked_u32(size_t, ...) unchecked, where the int64_t-to-size_t
+  // cast turned -8 into 0xFFFFFFFFFFFFFFF8 and tripped the
+  // "with more than UINT32_MAX elements" refusal. Materialize the
+  // operand to a dense contiguous buffer so the downstream check sees
+  // a non-negative stride; out is always dense because the upstream
+  // Primitive::eval_gpu allocates a fresh output.
+  auto materialize_if_neg_stride =
+      [axis, &encoder, stream = out.primitive().stream()](
+          const array& value) -> std::pair<const array*, std::optional<array>> {
+    if (value.strides(axis) < 0 ||
+        !value.flags().row_contiguous ||
+        value.data_size() != value.size()) {
+      auto tmp = array(value.shape(), value.dtype(), nullptr, {});
+      copy_gpu(value, tmp, CopyType::General, stream);
+      encoder.add_temporary(tmp);
+      return {&tmp, std::move(tmp)};
+    }
+    return {&value, std::nullopt};
+  };
+  const array* src_ptr = &src;
+  std::optional<array> src_mat;
+  if (src.strides(axis) < 0) {
+    std::pair<const array*, std::optional<array>> m =
+        materialize_if_neg_stride(src);
+    src_ptr = m.first;
+    src_mat = std::move(m.second);
+  }
+  const array* upd_ptr = &updates;
+  std::optional<array> upd_mat;
+  if (updates.strides(axis) < 0) {
+    std::pair<const array*, std::optional<array>> m =
+        materialize_if_neg_stride(updates);
+    upd_ptr = m.first;
+    upd_mat = std::move(m.second);
+  }
   int non_axis = out.ndim() - 1;
   if (non_axis > 4) {
     omarchy::unsupported("ScatterAxis rank", out);
@@ -10466,18 +10502,18 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   uint32_t count = checked_u32(indices.size(), "ScatterAxis", out);
   omarchy::ComputeParams params;
   params.count = count;
-  params.reduce_size = checked_u32(src.shape(axis), "ScatterAxis", out);
+  params.reduce_size = checked_u32(src_ptr->shape(axis), "ScatterAxis", out);
   params.output_size = checked_u32(post_size, "ScatterAxis", out);
   params.aux_size = checked_u32(indices.shape(axis), "ScatterAxis", out);
   params.aux_offset = scatter_index_mode(*idx, out, "ScatterAxis");
   // lhs_offset carries the update base element offset; the shader
   // walks update addresses through out_strides plus matrix_n.
   params.lhs_offset =
-      checked_item_offset(updates, updates.size(), "ScatterAxis", out);
+      checked_item_offset(*upd_ptr, upd_ptr->size(), "ScatterAxis", out);
   params.rhs_offset = scatter_index_offset(*idx, out, "ScatterAxis");
   params.output_offset = checked_item_offset(out, out.size(), "ScatterAxis", out);
-  params.matrix_m = checked_u32(src.strides(axis), "ScatterAxis", out);
-  params.matrix_n = checked_u32(updates.strides(axis), "ScatterAxis", out);
+  params.matrix_m = checked_u32(src_ptr->strides(axis), "ScatterAxis", out);
+  params.matrix_n = checked_u32(upd_ptr->strides(axis), "ScatterAxis", out);
   params.matrix_k = checked_u32(axis, "ScatterAxis", out);
   params.flags = checked_u32(non_axis, "ScatterAxis", out);
   for (int i = 0, d = 0; i < out.ndim(); ++i) {
@@ -10485,8 +10521,8 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
       continue;
     }
     params.shape[d] = checked_u32(out.shape(i), "ScatterAxis", out);
-    params.in_strides[d] = checked_u32(src.strides(i), "ScatterAxis", out);
-    params.out_strides[d] = checked_u32(updates.strides(i), "ScatterAxis", out);
+    params.in_strides[d] = checked_u32(src_ptr->strides(i), "ScatterAxis", out);
+    params.out_strides[d] = checked_u32(upd_ptr->strides(i), "ScatterAxis", out);
     ++d;
   }
   // Sum: int rides the direct atomicAdd (op 6); float accumulates in
@@ -10505,7 +10541,7 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(out),
         binding(*idx),
-        binding(updates),
+        binding(*upd_ptr),
         int_sum ? binding(out) : binding(*scratch)};
     uint32_t bound = int_sum ? 3u : 4u;
     params.operation = int_sum || out.dtype() == bool_ ? 6u
@@ -10536,7 +10572,7 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   array scratch = make_u32_scratch(out.size(), encoder);
   dispatch_clear_u32(scratch, 0, encoder);
   std::array<omarchy::ComputeBinding, 4> bindings{
-      binding(out), binding(*idx), binding(updates), binding(scratch)};
+      binding(out), binding(*idx), binding(*upd_ptr), binding(scratch)};
   params.operation = 0;
   encoder.dispatch_compute(
       kernel,
