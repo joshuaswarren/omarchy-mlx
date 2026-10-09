@@ -23,8 +23,8 @@ already differs (subgroup reduction trees). The numerics gate is the fp64 refere
 
 | item | value |
 |---|---|
-| branch tip tested | `fa02100a3` (rebased onto main with no change to any GDN file; the only code that differs is unrelated `Int8Matmul` work) |
-| wheel | `mlx_omarchy 0.32.4.dev202610090225+qrm.fa02100` |
+| tip tested | `3852de7ae` (rebased onto main afterwards with no change to any GDN file) |
+| wheel | `mlx_omarchy 0.32.4.dev202610090611+qrm4.3852de7` |
 | control wheel | `mlx_omarchy 0.32.4.dev202610081925+qgpr.390f8a4` (PR 40, merged) |
 | model | `qwen3_5-4bit`, `model.safetensors` sha256 `b0d5de688567bf4acd5e421027acd410dabcdc255a5bd46fdbf06c75dc2e6863` |
 | driver | Honeykrisp, Mesa 26.3.0-devel (git 6543eeb7df), private ICD through `VK_DRIVER_FILES`; Vulkan API 1.4.362 |
@@ -51,12 +51,12 @@ all four arms. The rule holds.
 
 ## After (`pfbgrm-*-after.log`, rule `rm_accept.py` fixed before the wheel was built)
 
-`batched_s / seq_s` of the real prefill (`pfbg.py`), mirrored arms, control `qgpr` against `qrm`:
+`batched_s / seq_s` of the real prefill (`pfbg.py`), mirrored arms, control `qgpr` against the final tip (`qrm4`, 3852de7ae):
 
 | host | lengths | control (PR 40) | this change | first tokens |
 |---|---|---|---|---|
-| M1 Max (G13C) | 454 417 363 304 | 1.645, 1.646 (median 1.645) | 0.991, 0.980 (median 0.985) | equal in all runs |
-| M1 (G13G) | 120 110 90 70 | 1.461, 1.458 (median 1.459) | 0.966, 0.975 (median 0.970) | equal in all runs |
+| M1 Max (G13C) | 454 417 363 304 | 1.665, 1.616 (median 1.641) | 0.984, 0.980 (median 0.982) | equal in all runs |
+| M1 (G13G) | 120 110 90 70 | 1.455, 1.469 (median 1.462) | 0.976, 0.976 (median 0.976) | equal in all runs |
 
 Rule result: ACCEPT on both hosts (at most 1.15 and at most 0.85 of the control). On the M1 the control's first token for row 0 (length
 120) differed from the unpadded result in every run, 271 against 198, with a top-2 logit margin of exactly 0.0 in the unpadded pass: a tie
@@ -65,12 +65,14 @@ the tokens are equal (`pfbg2.py`: verdict EQUAL, two runs on each host).
 
 ## Device tests at the tip (`device-doctest-*.log`)
 
-One build per host from `fa02100a3`; both hosts print the same lines.
+One build per host from the final tip `3852de7ae` (rebased onto main afterwards with no change to a GDN file); both hosts print the same
+lines.
 
 | result | M1 (G13G) | M1 Max (G13C) |
 |---|---|---|
-| `omarchy_gdn_decode_batch_tests` | 8 of 8 cases, 73 of 73 assertions | same |
+| `omarchy_gdn_decode_batch_tests` | 8 of 8 cases, 74 of 74 assertions | same |
 | `[gdn_masked_prefill]` B=1 T=128 maskless, masked, B=4 masked (dispatches) | 1, 1, 4 | 1, 1, 4 |
+| `[gdn_masked_prefill]` forced recur32 (`MLX_OMARCHY_GDN_RECUR32=2`), masked row | 1 | 1 |
 | `[gdn_prefill_rows]` B=1 T=128, B=4 (dispatches) | 1, 4 | 1, 4 |
 | `GDN recur32*` fp64 battery, partial-mask case included | 3 cases, 1178 assertions, all passed | same |
 
@@ -82,7 +84,12 @@ device tests are queued for the M2. The 4B model at larger T on the M1 was not r
 
 ## Review conditions folded in
 
-- Maskless route unchanged on the M1 (the shader's hot loop gained a mask branch): `mlcheck-*.log`, rule in `mlcheck.py` fixed before the
-  wheel was built (see "Maskless A/B" below).
+- Maskless route on the M1 (`mlcheck-*.log`, rule in `mlcheck.py` fixed before the wheel was built: bit-identical output and state at T 128
+  and 512 with zero and non-zero state, time within max(2%, the control's spread)). The first version put the mask skip into the shared
+  loop and FAILED on time with identical bits: maskless +8.1% (T128) and +12.3% (T512) over the control
+  (`mlcheck-g13g-FAILED-shared-loop.log`, tip 4bade89ef). The mask skip is now a separate `-DMASKED=1` build of the shader with its own
+  append-only kernel id; the maskless SPIR-V is byte-identical to main's (`glslangValidator -V --target-env vulkan1.3 -S comp`, sha256
+  prefix `111b5be388ed3023` for both; a second reviewer confirmed with `glslc -O` as well). The rule passes on the final tip: bits
+  identical, deltas -0.5% to +0.7% against a 2.0% tolerance (`mlcheck-g13g-after-fix.log`).
 - `MLX_OMARCHY_GDN_RECUR32=1` now also covers masked rows (it excluded them before `!has_mask` was dropped); `=0` and
   `MLX_OMARCHY_NO_COOPMAT_GDN=1` restore the old masked route. `docs/compatibility.md` carries both notes and the order change.
