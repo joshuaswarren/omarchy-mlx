@@ -11661,13 +11661,16 @@ bool GatedDeltaUpdate::use_fallback(
 // chunk-entry states (every 16 tokens, h0 included) and the backward walk
 // itself (32 lanes per Dv row, 4 state columns per lane, checkpoints
 // replayed in registers). Serves bf16 activations, scalar g (bf16 or the
-// f32 gates compute_g produces for prefill), f32 state, Dk=Dv=128, and any
-// head layout where Hv is a multiple of Hk (the GQA repeat sums ride the
-// compare-exchange float adds). Everything else - per-channel decay,
-// 16-bit/32-bit activations, ragged head dims - keeps the composed
+// f32 gates compute_g produces for prefill), f32 state, Dk=Dv=128 and equal
+// head counts. Everything else - per-channel decay, 16-bit/32-bit
+// activations, ragged head dims, and Hk != Hv (GQA) - keeps the composed
 // fallback, which is the arithmetic reference the kernel was
-// equivalence-checked against. MLX_OMARCHY_NO_FUSED_VJP=1 is the kill
-// switch.
+// equivalence-checked against. GQA is excluded because the forward primitive
+// now exists at Hk != Hv (the backend expands q and k itself), so autograd
+// reaches this kernel at GQA shapes, and 'fused gdn vjp matches the composed
+// reference at GQA shapes' failed against the composed reference there
+// (M1 Max, Hk=4 Hv=16 T=17; receipt 2026-10-09-gdn-hk-neq-hv-native).
+// MLX_OMARCHY_NO_FUSED_VJP=1 is the kill switch.
 bool GatedDeltaUpdateVJP::use_fallback(
     const int Hk,
     const int Dk,
@@ -11681,7 +11684,7 @@ bool GatedDeltaUpdateVJP::use_fallback(
   if (disabled) {
     return true;
   }
-  return Dk != 128 || Dv != 128 || Hk <= 0 || Hv % Hk != 0;
+  return Dk != 128 || Dv != 128 || Hk != Hv;
 }
 
 void GatedDeltaUpdateVJP::eval_gpu(
