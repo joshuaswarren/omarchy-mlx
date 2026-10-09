@@ -25,6 +25,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -175,8 +176,35 @@ std::string glsl_type(const std::string& msl_type) {
 void translate_as_type(std::string& code, const std::vector<Parameter>& parameters);
 void translate_c_style_casts(std::string& code);
 void map_numeric_limits(std::string& code);
+void translate_pointer_advance(std::string& body, const std::vector<Parameter>& parameters);
 
 void translate_types(std::string& code, const std::vector<Parameter>& parameters = {}) {
+  // Single-token C typedefs (`typedef float U;` in the mlx_vlm qwen3_5
+  // ragged-SDPA kernels) have no GLSL meaning; drop the declaration and
+  // expand the alias to its type everywhere.
+  {
+    const std::regex typedef_decl(
+        R"(typedef\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    std::string rewritten;
+    rewritten.reserve(code.size());
+    size_t last = 0;
+    std::vector<std::pair<std::string, std::string>> typedefs;
+    for (std::sregex_iterator it(code.begin(), code.end(), typedef_decl), end;
+         it != end;
+         ++it) {
+      const auto& match = *it;
+      rewritten += code.substr(last, match.position() - last);
+      typedefs.emplace_back(match[2].str(), match[1].str());
+      last = match.position() + match.length();
+    }
+    rewritten += code.substr(last);
+    if (!typedefs.empty()) {
+      code = std::move(rewritten);
+      for (const auto& [name, type] : typedefs) {
+        replace_word(code, name, type);
+      }
+    }
+  }
   // as_type<ushort>(bf16-derived value) is a 16-bit pattern bitcast: the
   // operand's bfloat16 storage pattern, which the bf16 input rewrite has
   // left as _mlx_bf16_to_float(...). Map it to _mlx_float_to_bf16 BEFORE
@@ -802,18 +830,256 @@ void translate_auto_declarations(
     if (std::regex_search(init, parts, base_offset)) {
       const auto base = pointer_types.find(parts[1].str());
       if (base != pointer_types.end()) {
-        rewritten += match[1].str() + "device " + base->second + "* " +
-            name + " = " + init + ";";
+        rewritten += match[1].str() + "device " + base->second + "* " + name +
+            " = " + init + ";";
         pointer_types[name] = base->second;
         last = match.position() + match.length();
         continue;
       }
+    }
+    // Value declaration: Metal deduces the initializer's type. Float is
+    // correct only when the initializer is provably float-valued: a float
+    // literal, a math builtin, or a read through a pointer alias or a
+    // declared float local (bf16 buffer reads widen to float). Integer
+    // initializers (`auto n = thread_position_in_grid.z; auto hv_idx =
+    // n % Hv;`, gated-delta step) would silently compute at float
+    // precision and then fail on `%` and indexing — refuse them by name.
+    const std::regex float_local_decl(
+        R"(\bfloat\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|\[|;))");
+    const std::regex pointer_decl(
+        R"(\b(?:device|constant)\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))");
+    std::unordered_set<std::string> float_locals;
+    for (std::sregex_iterator f(body.begin(), body.end(), float_local_decl),
+             fend;
+         f != fend;
+         ++f) {
+      float_locals.insert((*f)[1].str());
+    }
+    for (std::sregex_iterator f(body.begin(), body.end(), pointer_decl), fend;
+         f != fend;
+         ++f) {
+      float_locals.insert((*f)[1].str());
+    }
+    static const std::regex float_literal(
+        R"([0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)?f?|[0-9]+[eE][+-]?[0-9]+f?|[0-9]+f\b)");
+    static const std::regex float_call(
+        R"(\b(exp|exp2|log|log2|sqrt|rsqrt|sin|cos|tan|pow|floor|ceil|round|roundEven|inversesqrt)\s*\()");
+    bool float_valued = std::regex_search(init, float_literal) ||
+        std::regex_search(init, float_call);
+    for (const auto& local : float_locals) {
+      if (std::regex_search(init,
+              std::regex("\\b" + regex_escape(local) + "\\b"))) {
+        float_valued = true;
+        break;
+      }
+    }
+    if (!float_valued) {
+      throw std::runtime_error(
+          "unsupported MSL feature `auto` value declaration with a "
+          "non-float initializer (declare the type explicitly)");
     }
     rewritten += match[1].str() + "float " + name + " = " + init + ";";
     last = match.position() + match.length();
   }
   rewritten += body.substr(last);
   body = std::move(rewritten);
+}
+
+// Metal's pointer-advance idiom walks buffer rows:
+//   `const device T* kptr = keys + off; ... kptr[j] ...; kptr += step;`
+// (the mlx_vlm qwen3_5 ragged-SDPA attention kernels — the Qwen3.6-35B-A3B
+// prefill refusal 'device pointer arithmetic', 2026-10-09; the gated-delta
+// step walks the same way, and its auto row pointers arrive here in the
+// explicit form translate_auto_declarations emits). GLSL has no pointers,
+// but the walk is exactly an index variable: the advance becomes an add on
+// a uint location, the declaration initializes it, and indexed uses read
+// through it. Buffer parameters advanced in place (`y += Hv * Dv;`) get a
+// zero-initialized location declared at the top of the body.
+void translate_pointer_advance(
+    std::string& body,
+    const std::vector<Parameter>& parameters) {
+  const auto parameter_exists = [&](const std::string& name) {
+    return std::any_of(
+        parameters.begin(),
+        parameters.end(),
+        [&](const Parameter& parameter) { return parameter.name == name; });
+  };
+  // 1. Advanced buffer parameters.
+  for (const auto& parameter : parameters) {
+    if (parameter.scalar) {
+      continue;
+    }
+    const auto escaped = regex_escape(parameter.name);
+    const std::regex advance("\\b" + escaped + R"(\s*\+=\s*([^;]+);)");
+    if (!std::regex_search(body, advance)) {
+      continue;
+    }
+    body = std::regex_replace(
+        body, advance, "_mlx_" + parameter.name + "_loc += $1;");
+    body = std::regex_replace(
+        body,
+        std::regex("\\b" + escaped + R"(\s*\[([^\]]+)\])"),
+        parameter.name + "[(_mlx_" + parameter.name + "_loc) + ($1)]");
+    body.insert(0, "uint _mlx_" + parameter.name + "_loc = 0u;\n");
+  }
+  // 2. Advanced pointer aliases. Same three declaration shapes as the alias
+  // pass (no nested optionals: GCC's ECMAScript engine mis-binds them).
+  static const std::regex advance_alias_patterns[] = {
+      std::regex(
+          R"((const\s+)?(device|constant)\s+(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+      std::regex(
+          R"((device|constant)\s+(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+      std::regex(
+          R"((device|constant)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)"),
+  };
+  // Per-pattern (name, initializer) match-group indices; the optional
+  // const/address-space groups shift them per pattern (same layout rule as
+  // alias_groups below).
+  static const int advance_groups[][2] = {{5, 6}, {4, 5}, {3, 4}};
+  bool progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (size_t pattern_index = 0;
+         pattern_index < std::size(advance_alias_patterns);
+         ++pattern_index) {
+      const auto& pattern = advance_alias_patterns[pattern_index];
+      const auto groups = advance_groups[pattern_index];
+      for (std::sregex_iterator it(body.begin(), body.end(), pattern), end;
+           it != end;
+           ++it) {
+        const auto name = (*it)[groups[0]].str();
+        const std::regex is_advanced(
+            "\\b" + regex_escape(name) + R"(\s*\+=)");
+        if (!std::regex_search(body, is_advanced)) {
+          continue;
+        }
+        std::string init = trim((*it)[groups[1]].str());
+        static const std::regex cast_prefix(
+            R"(^\(\s*(?:const\s+)?(?:device|constant)\s+(?:const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)");
+        init = std::regex_replace(init, cast_prefix, "");
+        static const std::regex base_offset(
+            R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\s*([^;]+))?)");
+        std::smatch parts;
+        if (!std::regex_match(init, parts, base_offset)) {
+          throw std::runtime_error(
+              "unsupported MSL feature `device pointer arithmetic` is not "
+              "implemented for the Omarchy Vulkan backend");
+        }
+        const auto base = parts[1].str();
+        const auto offset = parts[2].matched ? trim(parts[2].str()) : "0";
+        if (!parameter_exists(base)) {
+          // A walk whose base is another alias or an expression has no
+          // single location variable; fail by name rather than guess.
+          throw std::runtime_error(
+              "unsupported MSL feature `device pointer arithmetic` is not "
+              "implemented for the Omarchy Vulkan backend");
+        }
+        // Replace the full declaration first (the later rewrites shift
+        // positions, and a name-only replacement would orphan the type
+        // prefix for the alias pass).
+        body.replace(
+            static_cast<size_t>(it->position()),
+            it->length(),
+            "uint _mlx_" + name + "_loc = uint(" + offset + ");");
+        body = std::regex_replace(
+            body, is_advanced, "_mlx_" + name + "_loc +=");
+        body = std::regex_replace(
+            body,
+            std::regex("\\b" + regex_escape(name) + R"(\s*\[([^\]]+)\])"),
+            base + "[(_mlx_" + name + "_loc) + ($1)]");
+        progressed = true;
+        break;
+      }
+      if (progressed) {
+        break;
+      }
+    }
+  }
+}
+
+// Values of the body's foldable `const int NAME = <literal arithmetic>;`
+// declarations (template substitution has already made the expressions
+// numeric). Used by the array-initializer and shared-hoist passes, which
+// need extents as compile-time integers. Parenthesized expressions do not
+// fold and simply stay absent from the map.
+std::map<std::string, int> fold_const_ints(const std::string& body) {
+  static const std::regex const_int(
+      R"(\bconst\s+int\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*((?:int\s*\(\s*)*)([0-9A-Za-z_][0-9A-Za-z_\s*/+\-]*[0-9A-Za-z_])\s*(?:\)\s*)*\;)");
+  std::vector<std::pair<std::string, std::string>> pending;
+  std::map<std::string, int> values;
+  for (std::sregex_iterator it(body.begin(), body.end(), const_int), end;
+       it != end;
+       ++it) {
+    pending.emplace_back((*it)[1].str(), (*it)[3].str());
+  }
+  // Extent expressions may reference other folded constants
+  // (`constexpr int v_per_thread = D_SIZE / BD;`): substitute known values
+  // and re-evaluate until a pass makes no progress.
+  for (int round = 0; round < 4 && !pending.empty(); ++round) {
+    std::vector<std::pair<std::string, std::string>> remaining;
+    for (const auto& [name, expr] : pending) {
+      std::string resolved = expr;
+      for (const auto& [known, value] : values) {
+        resolved = std::regex_replace(
+            resolved,
+            std::regex("\\b" + regex_escape(known) + "\\b"),
+            std::to_string(value));
+      }
+      if (resolved.find_first_not_of("0123456789+-*/ \t") !=
+          std::string::npos) {
+        remaining.emplace_back(name, resolved);
+        continue;
+      }
+      static const std::regex piece(R"(([0-9]+)|([+\-*/]))");
+      std::vector<int> numbers;
+      std::vector<char> ops;
+      bool ok = true;
+      for (std::sregex_iterator p(resolved.begin(), resolved.end(), piece),
+               piece_end;
+           p != piece_end;
+           ++p) {
+        if ((*p)[1].matched) {
+          numbers.push_back(std::atoi((*p)[1].str().c_str()));
+        } else {
+          ops.push_back((*p)[2].str()[0]);
+        }
+      }
+      if (numbers.empty() || ops.size() + 1 != numbers.size()) {
+        remaining.emplace_back(name, resolved);
+        continue;
+      }
+      std::vector<int> terms;
+      terms.push_back(numbers[0]);
+      std::vector<char> adds;
+      for (size_t i = 0; i < ops.size(); ++i) {
+        if (ops[i] == '*') {
+          terms.back() *= numbers[i + 1];
+        } else if (ops[i] == '/') {
+          if (numbers[i + 1] == 0) {
+            ok = false;
+            break;
+          }
+          terms.back() /= numbers[i + 1];
+        } else {
+          adds.push_back(ops[i]);
+          terms.push_back(numbers[i + 1]);
+        }
+      }
+      if (!ok) {
+        continue;
+      }
+      int value = terms[0];
+      for (size_t i = 0; i < adds.size(); ++i) {
+        value = adds[i] == '+' ? value + terms[i + 1] : value - terms[i + 1];
+      }
+      values[name] = value;
+    }
+    if (remaining.size() == pending.size()) {
+      break;
+    }
+    pending = std::move(remaining);
+  }
+  return values;
 }
 
 void translate_as_type(
@@ -1583,6 +1849,9 @@ Translation translate_msl(
   // pointer-style autos rewrite to the explicit device-pointer alias form,
   // so this must run before the alias pass below consumes those forms.
   translate_auto_declarations(body, parameters);
+  // Pointer-advance walks (`kptr += step;`) become index variables; this
+  // must also run before the alias pass, which refuses bare alias uses.
+  translate_pointer_advance(body, parameters);
   std::string vector_alias_helpers;
   translate_device_pointer_aliases(body, parameters, vector_alias_helpers);
 
@@ -1713,10 +1982,14 @@ Translation translate_msl(
   // MSL array initializers may under-supply elements (`float sum[4] =
   // {0.0};` zero-fills in C); GLSL requires the exact element count. Expand
   // the single-constant form; complete lists pass through unchanged
-  // (2026-10-08 KernelRecheck, bitlinear_matmul).
+  // (2026-10-08 KernelRecheck, bitlinear_matmul). The extent may be a
+  // constant-int identifier (`float o[v_per_thread] = {0};`, mlx_vlm
+  // qwen3_5 ragged SDPA) whose foldable value is read from the body's
+  // `const int NAME = <literal arithmetic>;` declarations.
   {
+    const auto const_ints = fold_const_ints(body);
     static const std::regex array_init(
-        R"(\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([0-9]+)\s*\]\s*=\s*\{\s*([^{}]*?)\s*\})");
+        R"(\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([A-Za-z_][A-Za-z0-9_]*|[0-9]+)\s*\]\s*=\s*\{\s*([^{}]*?)\s*\})");
     std::string rewritten;
     rewritten.reserve(body.size());
     size_t last = 0;
@@ -1724,12 +1997,21 @@ Translation translate_msl(
          it != end; ++it) {
       const auto& m = *it;
       rewritten += body.substr(last, m.position() - last);
-      const int size = std::atoi(m[3].str().c_str());
+      int size = std::atoi(m[3].str().c_str());
+      if (size == 0) {
+        const auto folded = const_ints.find(m[3].str());
+        if (folded == const_ints.end()) {
+          throw std::runtime_error(
+              "unsupported MSL feature `array initializer with an "
+              "unresolved constant extent `" + m[3].str() + "`");
+        }
+        size = folded->second;
+      }
+      const std::string extent = m[3].str();
       const std::string values = trim(m[4].str());
       const bool single = values.find(',') == std::string::npos;
       if (size > 1 && single) {
-        rewritten += m[1].str() + " " + m[2].str() + "[" + m[3].str() +
-            "] = {";
+        rewritten += m[1].str() + " " + m[2].str() + "[" + extent + "] = {";
         for (int i = 0; i < size; ++i) {
           if (i) {
             rewritten += ", ";
@@ -1807,6 +2089,41 @@ Translation translate_msl(
   const std::regex shared_pattern(
       R"(threadgroup\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([^\[\];]+)\s*\]\s*;)");
   std::smatch shared_match;
+  // Extent identifiers must be visible at file scope: the shared arrays
+  // hoist above main(), so `shared float outputs[BN * BD];` would leave BN
+  // undeclared if BN stayed a local const (mlx_vlm qwen3_5 ragged SDPA,
+  // Qwen3.6-35B-A3B prefill 2026-10-09). Any extent identifier with a
+  // foldable `const int` declaration in the body hoists with the array.
+  std::string hoisted_consts;
+  {
+    const auto const_ints = fold_const_ints(body);
+    const std::regex identifier("[A-Za-z_][A-Za-z0-9_]*");
+    std::unordered_set<std::string> needed;
+    for (std::sregex_iterator it(body.begin(), body.end(), shared_pattern),
+             end;
+         it != end;
+         ++it) {
+      for (std::sregex_iterator id((*it)[3].first, (*it)[3].second, identifier),
+               id_end;
+           id != id_end;
+           ++id) {
+        if (const_ints.count(id->str())) {
+          needed.insert(id->str());
+        }
+      }
+    }
+    for (const auto& name : needed) {
+      const auto entry = const_ints.find(name);
+      const std::regex decl("\\bconst\\s+int\\s+" + regex_escape(name) +
+                            R"(\s*=\s*[^;{}]+;\s*)");
+      std::smatch dm;
+      if (std::regex_search(body, dm, decl)) {
+        hoisted_consts +=
+            "const int " + name + " = " + std::to_string(entry->second) + ";\n";
+        body.replace(dm.position(), dm.length(), "");
+      }
+    }
+  }
   while (std::regex_search(body, shared_match, shared_pattern)) {
     shared_declarations += "shared " + glsl_type(shared_match[1].str()) + " " +
         shared_match[2].str() + "[" + shared_match[3].str() + "];\n";
@@ -2060,7 +2377,7 @@ Translation translate_msl(
   }
   glsl << "layout(local_size_x=" << local_x << ", local_size_y=" << local_y
        << ", local_size_z=" << local_z << ") in;\n";
-  glsl << declarations << shared_declarations;
+  glsl << declarations << hoisted_consts << shared_declarations;
   if (needs_bfloat) {
     glsl << "float _mlx_bf16_to_float(uint16_t value) { return uintBitsToFloat(uint(value) << 16); }\n"
          << "uint16_t _mlx_float_to_bf16(float value) { uint bits = floatBitsToUint(value); uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u); return uint16_t(rounded >> 16); }\n"
