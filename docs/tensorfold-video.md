@@ -2,7 +2,7 @@
 
 This guide renders a MiniMax-H3 clip end to end on Linux on Apple Silicon, using the omarchy-mlx Vulkan backend (Honeykrisp), the TensorFold engine (H3 family) with a small set of local patches, and the mrbizarro minimax-h3-mlx port.
 
-Status: works; replication proof pending on the M2.
+Status: HF upload complete; replication proof pending on the M2.
 HF model bundle (int8 state, compact text-tower export, video VAE, audio VAE, tokenizer, processor, configs, sample clip, license): https://huggingface.co/joshuaswarren/MiniMax-H3-int8-omarchy
 
 ## Hardware you need (measured)
