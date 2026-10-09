@@ -14818,9 +14818,15 @@ void ScaledDotProductAttention::eval_gpu(
       flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
+  // Route precedence: the pin and MIN_L are explicit flash overrides;
+  // otherwise flash only when composed cannot serve (non-coopmat
+  // device), and "0" always declines. Without the composed_ready term
+  // the pin would not engage at shapes under flash_wants, while
+  // flash_wants alone would put flash back in front of composed at the
+  // big shapes (w7Q review, 2026-10-09).
   if ((flash_pinned || flash_min_l_requested ||
-          (!flash_declined && !composed_ready)) &&
-      flash_route_ready && flash_wants && inputs.size() == 3 &&
+          (flash_wants && !flash_declined && !composed_ready)) &&
+      flash_route_ready && inputs.size() == 3 &&
       !do_causal_ && !has_sinks_ && !output_logsumexp_ && q_len > 1 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
       v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
@@ -14931,17 +14937,16 @@ void ScaledDotProductAttention::eval_gpu(
     return view;
   };
   // Scores past 2^30 bf16 elements pass the 2 GiB maxStorageBufferRange
-  // (the encoder refuses the binding), so NON-CAUSAL shapes skip this
-  // branch and reach the chunked composed route below instead
-  // (2026-10-09, TFProf: 56x6417^2 runs chunked composed at 782 GMAC/s).
-  // Causal keeps this branch either way: the chunked route is
-  // non-causal-only, and a big causal call must keep the named
-  // storage-binding refusal, not fall into an unchunked full-f32-score
-  // allocation (w7Q review, 2026-10-09).
+  // (the encoder refuses the binding), so shapes the CHUNKED route will
+  // actually take (non-causal, no mask/sinks/logsumexp, coopmat f32 -
+  // composed_ready) skip this branch and reach it (2026-10-09, TFProf:
+  // 56x6417^2 runs chunked composed at 782 GMAC/s). Every other shape
+  // keeps this branch either way: masked, sinks, logsumexp, causal and
+  // non-coopmat calls must keep the named storage-binding refusal, not
+  // fall into an unchunked full-f32-score allocation (w7Q review).
   const bool bf16_big_scores =
-      !do_causal_ && flash_score_elements > (1ull << 30) &&
-      q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
-      v.dtype() == bfloat16 && out.dtype() == bfloat16;
+      composed_ready && !do_causal_ && !has_sinks_ && !output_logsumexp_ &&
+      inputs.size() == 3 && flash_score_elements > (1ull << 30);
   if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1 &&
       !bf16_big_scores) {
     const bool bf16 = q.dtype() == bfloat16;

@@ -346,12 +346,12 @@ TEST_CASE("big masked bf16 keeps the named storage-binding refusal under BF16_FA
   array q = make_bf16({1, heads, length, kHd}, 821, stream);
   array k = make_bf16({1, heads, length, kHd}, 822, stream);
   array v = make_bf16({1, heads, length, kHd}, 823, stream);
-  auto col_values = pattern(heads * length, 905);
-  array col = array(col_values.begin(), Shape{1, heads, length, 1}, float32);
-  array mask = astype(
-      broadcast_to(col, Shape{1, heads, length, length}, stream), bfloat16,
-      stream);
-  mask.eval();
+  // Pre-allocate the mask at its full shape in bf16 (4.29 GB) so the
+  // storage branch's scores-binding refusal surfaces as 4294967296.
+  // Building via a broadcast-to + astype path would materialise the
+  // f32 broadcast at 8.59 GB first and bind 8589934592 on both the fixed
+  // and unfixed paths, collapsing the discriminator.
+  array mask = full(Shape{1, heads, length, length}, 0.0f, bfloat16, stream);
   bool refused_at_bf16 = false;
   std::string refusal;
   try {
