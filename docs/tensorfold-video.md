@@ -2,7 +2,7 @@
 
 This guide renders a MiniMax-H3 clip end to end on Linux on Apple Silicon, using the omarchy-mlx Vulkan backend (Honeykrisp), the TensorFold engine (H3 family) with a small set of local patches, and the mrbizarro minimax-h3-mlx port.
 
-Status: works; replication run in progress on the M2 (proof pending).
+Status: works; replication proof pending on the M2.
 HF model bundle (int8 state, compact text-tower export, video VAE, audio VAE, tokenizer, processor, configs, sample clip, license): https://huggingface.co/joshuaswarren/MiniMax-H3-int8-omarchy
 
 ## Hardware you need (measured)
@@ -82,11 +82,11 @@ CKPT=ckpt
 LAT=clip.latents.safetensors
 TEXT=clip.text.safetensors
 
-# 1. Text encode (one-time per prompt): writes 35-row text encoder output.
+# 1. Text encode (one-time per prompt): writes 35-row text encoder output. The DiT
+#    is not loaded for this step; --int8-from-state is not needed here.
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
   --prompt "Slow dolly across a dark desk at night: a terminal window on a Hyprland desktop, green text scrolling, rain on the window behind, warm desk lamp glow." \
   --width 768 --height 448 --frames 56 --points 21 --seed 1 \
-  --int8-from-state "$MODEL_DIR/int8-dit" \
   --dump-text-rows "$TEXT"
 
 # 2. Denoise (20 forwards, resumable per-step checkpoints).
@@ -114,24 +114,27 @@ The packaged `sample/demob-linux-full-768x448-s1.mp4` is the output of stages 1+
 
 Per-stage wall times on the 96 GB M2 Max (Linux, Honeykrisp Vulkan):
 
-| stage | seed 1 wheel `53bc1e3` | seed 0 wheel `95e7b6f` (swiglu coop) |
-|---|---|---|
-| text encode (35 rows, 50.3 GB load) | 17 s | 16 s |
-| int8 DiT load (44 GB, 12 shards) | < 1 s (page cache) | < 1 s |
-| denoise (20 forwards) | 5195.7 s (258.8 s/step) | 3398.8 s (168.9 s/step) |
-| video VAE decode | 190.0 s | 90.3 s |
-| audio VAE decode + mux | 5.2 s | 5.1 s |
-| **total** | **90.3 min** | **63.2 min** (about 58.7 min inference-only) |
+| stage | seed 1 wheel `53bc1e3` | seed 1 wheel `95e7b6f` (swiglu coop) | seed 0 wheel `95e7b6f` (swiglu coop) |
+|---|---|---|---|
+| text encode (35 rows, 50.3 GB load) | 17 s | 17 s | 16 s |
+| int8 DiT load (44 GB, 12 shards) | < 1 s (page cache) | < 1 s (page cache) | < 1 s (page cache) |
+| denoise (20 forwards) | 5195.7 s (258.8 s/step) | 3399.0 s (168.9 s/step) | 3398.8 s (168.9 s/step) |
+| video VAE decode | 190.0 s | 90.2 s | 90.3 s |
+| audio VAE decode + mux | 5.2 s | 5.1 s | 5.1 s |
+| **total** | **90.3 min** | **58.7 min** | **63.2 min** |
 
 - omarchy-mlx allocator peak: 33.9 GiB.
-- Expected sha256 of `clip.mp4` (the sample in the HF repo): `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`. This holds only on the same chip family (M2 Max / G14C) with the same wheel and seed, because the same-host rerun of the sampler is deterministic (the latents themselves were reproduced bit-identically on the M2; see the references under `receipts/2026-10-04-tensorfold-audit/`). Other chips will produce a visually equivalent clip with a different hash; judge those by per-frame relative error against the sample, not by sha256.
+- The mp4 sha256 was identical across the two wheels on the M2 (the int8 kernels are exact end-to-end): the `clip.mp4` in the HF sample is `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`, and the same seed-1 render on wheels `53bc1e3` and `95e7b6f` produced the same hash. The sha holds across the two wheels on the same chip.
+- This holds only on the same chip family (M2 Max / G14C) with the same seed, because the same-host rerun of the sampler is deterministic (the latents themselves were reproduced bit-identically on the M2). Other chips will produce a visually equivalent clip with a different hash; judge those by per-frame relative error against the sample, not by sha256.
 
 ## One-time preprocessing
 
-The HF repo ships the int8 DiT state and the compact text-tower export already prepared. Both were produced on macOS by the upstream MiniMax-H3 team, and the bundling steps on the Mac are recorded in the notebook entry `entries/TensorFoldPort/20261004T1920Z-macstudio-h3-reference.md` and the `DemoLinux` thread under the same prefix. The state of Linux-only reproduction:
+The HF repo ships the int8 DiT state and the compact text-tower export already prepared. Neither was produced by the upstream MiniMax-H3 team (which released only the bf16 weights); both were produced by the Omarchy M team as part of the Linux port:
 
-- The compact text-tower export is a streaming key-subset copy of the released `text_encoder/`: it is a CPU-only `safetensors` operation and can run on Linux with no model use. The script is not yet shipped; reproducing the export on Linux and verifying byte-identity to the shipped state is on the to-do list.
-- The int8 DiT quantization is a per-output-channel int8 transform of the bf16 transformer shards (weights int8, per-output-channel fp32 scales, group 1024 for the fc2 input, 8-bit AdaLN requantized at load time). The shipped state is 44 GB across 12 shards with per-shard sha256 in `int8-dit/base-manifest.json` and `delta-manifest.json`. A streaming shard-by-shard Linux re-quantization is in progress; a byte-identical (or numerically justified) result is the acceptance criterion, not a deployment claim.
+- The compact text-tower export is a byte-exact key-subset copy of the released `text_encoder/`: it is a CPU-only `safetensors` operation and runs on any platform with no model use. The Linux script that produces it is not yet shipped; reproducing the export on Linux and verifying byte-identity to the shipped state is on the to-do list.
+- The int8 DiT state is a per-output-channel int8 transform of the bf16 transformer shards (weights int8, per-output-channel fp32 scales, group 1024 for the fc2 input, 8-bit AdaLN requantized at load time). The shipped state is 44 GB across 12 shards with per-shard sha256 in `int8-dit/base-manifest.json` and `delta-manifest.json`. The Linux re-quantization script is not yet shipped; a streaming shard-by-shard re-quantization on Linux within 64-96 GB, with per-shard sha256 verification, is on the to-do list.
+
+Neither preprocessing step runs in the doc's render path; both are one-time preparation of the artifacts the HF repo already contains.
 
 ## License and credits
 
