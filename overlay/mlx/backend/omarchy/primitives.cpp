@@ -14931,13 +14931,17 @@ void ScaledDotProductAttention::eval_gpu(
     return view;
   };
   // Scores past 2^30 bf16 elements pass the 2 GiB maxStorageBufferRange
-  // (the encoder refuses the binding), so those shapes skip this branch
-  // and reach the chunked composed route below instead (2026-10-09,
-  // TFProf: 56x6417^2 runs chunked composed at 782 GMAC/s).
+  // (the encoder refuses the binding), so NON-CAUSAL shapes skip this
+  // branch and reach the chunked composed route below instead
+  // (2026-10-09, TFProf: 56x6417^2 runs chunked composed at 782 GMAC/s).
+  // Causal keeps this branch either way: the chunked route is
+  // non-causal-only, and a big causal call must keep the named
+  // storage-binding refusal, not fall into an unchunked full-f32-score
+  // allocation (w7Q review, 2026-10-09).
   const bool bf16_big_scores =
-      flash_score_elements > (1ull << 30) && q.dtype() == bfloat16 &&
-      k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
-      out.dtype() == bfloat16;
+      !do_causal_ && flash_score_elements > (1ull << 30) &&
+      q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+      v.dtype() == bfloat16 && out.dtype() == bfloat16;
   if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1 &&
       !bf16_big_scores) {
     const bool bf16 = q.dtype() == bfloat16;
