@@ -22,6 +22,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -239,6 +240,36 @@ TEST_CASE("flash defers to the chunked composed route on coopmat devices") {
 
 
 } // namespace
+
+TEST_CASE("big causal bf16 keeps the named storage-binding refusal") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  setenv("MLX_OMARCHY_SDPA_BF16_FAST", "1", 1);
+  constexpr int length = 16384;
+  constexpr int heads = 8;
+  // 8 x 16384^2 bf16 scores bind 4294967296 bytes; the f32 fallback the
+  // old unguarded path wandered into would bind 8589934592. The refusal
+  // must name the bf16 storage binding (w7Q review, 2026-10-09).
+  array q = make_bf16({1, heads, length, kHd}, 801, stream);
+  array k = make_bf16({1, heads, length, kHd}, 802, stream);
+  array v = make_bf16({1, heads, length, kHd}, 803, stream);
+  bool refused_at_bf16 = false;
+  try {
+    array out = fast::scaled_dot_product_attention(
+        q, k, v, 1.0f / std::sqrt(static_cast<float>(kHd)), "causal",
+        std::nullopt, {}, false, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+  } catch (const std::runtime_error& e) {
+    refused_at_bf16 =
+        std::strstr(e.what(), "4294967296") != nullptr &&
+        std::strstr(e.what(), "8589934592") == nullptr;
+  }
+  CHECK(refused_at_bf16);
+  unsetenv("MLX_OMARCHY_SDPA_BF16_FAST");
+}
 
 TEST_CASE("flash bf16 prefill matches the composition on tile-boundary shapes") {
   if (!compute_available()) {
