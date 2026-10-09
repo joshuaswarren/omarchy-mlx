@@ -445,6 +445,7 @@ omarchy_shader(gated_delta_prefill_coopmat_hoist_bf16 shaders/gated_delta_prefil
 # macOS-shape per-token recurrence (GdnRecur32). Default OFF until
 # benched; MLX_OMARCHY_GDN_RECUR32=1 selects it.
 omarchy_shader(gated_delta_prefill_recur32_bf16 shaders/gated_delta_prefill_recur32.comp)
+omarchy_shader(gated_delta_prefill_recur32_masked_bf16 shaders/gated_delta_prefill_recur32.comp -DMASKED=1)
 # VjpKernels: fused backward kernels for SDPA (upstream #4563) and the
 # gated delta update (upstream #4565). One gated_delta_vjp.comp source
 # builds the state-recall pass (save) and the backward pass.
