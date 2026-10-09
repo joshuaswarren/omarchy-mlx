@@ -1150,3 +1150,17 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   reference". Failing-before observed at ec2cd9dc/branch; passing-after on
   the fix commit (see receipts/2026-10-08-audit-followups/README.md for
   counts).
+
+## Fused GDN backward: the gate gradient dg differs from the composed reference for T > 1 (found 2026-10-09, open)
+
+- Found by the gate for PR #60 (the backend now runs the fused GDN forward at `Hk != Hv`, so autograd reaches the fused backward at GQA shapes).
+  Test: `fused gdn vjp matches the composed reference at equal head counts` (`may_fail`), conditioned inputs (unit-norm q and k, decay in
+  (0.3, 0.999), beta in (0, 1)), bf16, M1 Max.
+- Measured (relative L2 of the fused gradient against the composed per-token recursion on the GPU): dq, dk, dv and dbeta agree to 0.3 percent
+  or better; **dg disagrees by 0.96 at `Hk = Hv = 16`, T = 33**, 1.01 at `Hk = 4, Hv = 8`, T = 33 and 0.95 at `Hk = 4, Hv = 16`, T = 17 (fused
+  backward forced on at GQA with `MLX_OMARCHY_FUSED_VJP_GQA=1`). The same data repeated on the host and run at equal head counts gives the same
+  0.95 for dg, so the GQA path is not the cause. At T = 1 dg is exactly equal.
+- Which side is wrong is decided by the float32 CPU lines the test prints; see the receipt `receipts/2026-10-09-gdn-hk-neq-hv-native/`.
+- Consequence today: the fused backward is on by default only at `Hk == Hv`, where this defect applies as it did before PR #60; at `Hk != Hv`
+  the backward is composed unless `MLX_OMARCHY_FUSED_VJP_GQA=1`. Inference is not affected (it never runs the backward).
+- Not fixed in this change.
