@@ -27,7 +27,7 @@ binary/test receipts below; no hostnames/IPs/serials).
   (same pattern as dispatch_matmul:611/dispatch_softmax:2192).
 - Passing-after: same case 5038/5038 assertions; [scan] tag 104/104 cases,
   2743008 assertions.
-- The jw16 scan-zeros verdict remains INFERENCE (labelled in the receipt);
+- The M1 Max dev host scan-zeros verdict remains INFERENCE (labelled in the receipt);
   the guard defect is now proven independently of it.
 
 ## (3) arg_reduce failures — NOT order dependence; two real defects, both fixed
@@ -67,3 +67,24 @@ binary/test receipts below; no hostnames/IPs/serials).
 - `152a23fdd` tests: argmin/argmax NaN rows follow mlx semantics
 - All on `main`; branches upstream-scan-guard / upstream-argreduce-nan /
   upstream-sort-empty hold the per-fix lineage.
+
+## 2026-10-09 addendum: upstream 1-bit affine (#3161) vs Bonsai Q1
+
+Upstream merged 1-bit affine quantization (#3161, merge `e0408d473`): affine
+semantics with bit 0 mapping to the group minimum and bit 1 to the group
+maximum, `scale = max(w_max - w_min, eps)`, `bias = w_min`, per-group scale
+and bias arrays of shape `[N, K/group_size]` with group sizes {32, 64, 128},
+weights packed uint32 LSB-first (`[N, K/32]` words). Our Bonsai Q1 path
+(`bonsai_qmv_q1`, `bonsai_dequant_q1` in `overlay/mlx/backend/omarchy`) uses
+the same affine semantics and the same LSB-first bit order, but stores the
+oMLX checkpoint's uint8 byte pack (`[N, K/8]`, 8 one-bit codes per byte,
+byte e bit i carries `w[e*8+i]`), addressed per byte through a uint32 view;
+the two packs are byte-identical when K is a multiple of 32. Both paths
+round at the midpoint of the group range and clamp the scale at eps.
+Interoperation needs only: identical per-group scales/biases (dtype and
+group_size agreement) and K % 8 == 0 for the Bonsai byte addressing; a
+word-aligned upstream weight dumps bit-identically into the Bonsai layout
+(INFERENCE from code reading, not yet exercised on hardware). The modes stay
+on separate paths by design; before the next pin bump, either unify the
+packs behind one layout or keep them apart with named refusals, and the
+existing Bonsai parity gates pin whichever choice lands.
