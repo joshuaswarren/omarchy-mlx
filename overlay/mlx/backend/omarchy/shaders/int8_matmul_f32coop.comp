@@ -131,6 +131,16 @@ void main() {
   const bool chunked = group > 1024u;
   const uint chunk_mark = chunked ? 1024u : group;
   const uint pad_n = params.shape[3];
+  if (chunked) {
+    // Each workgroup exclusively owns its 64x64 tile region of the
+    // scratch, so this per-tile zero replaces any host-side fill.
+    for (uint q = tid; q < TILE * TILE; q += 128u) {
+      const uint r = q / TILE;
+      const uint c = q % TILE;
+      in_acc32.values[(wg_row + r) * pad_n + (wg_col + c)] = 0;
+    }
+    barrier();
+  }
 
   for (uint q = tid; q < TILE * TILE; q += 128u) {
     total[q] = 0.0f;
