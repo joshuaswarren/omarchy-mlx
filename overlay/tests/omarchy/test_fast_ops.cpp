@@ -4019,12 +4019,11 @@ void check_gdn_vjp(Stream stream, int B, int Hk, int Hv, int T, bool host) {
   const std::string names[5] = {"q", "k", "v", "g", "beta"};
   auto rel = gdn_vjp_rel_errors(stream, B, Hk, Hv, T, host);
   for (int arg = 0; arg < 5; ++arg) {
-    CHECK_MESSAGE(
-        rel[arg] <= 0.05,
-        "fused gdn vjp d" + names[arg] + " relative L2 " + std::to_string(rel[arg]) +
-            " B=" + std::to_string(B) + " Hk=" + std::to_string(Hk) +
-            " Hv=" + std::to_string(Hv) + " T=" + std::to_string(T) +
-            (host ? " host-repeated" : ""));
+    std::string what = "fused gdn vjp d" + names[arg] + " relative L2 " +
+        std::to_string(rel[arg]) + " B=" + std::to_string(B) +
+        " Hk=" + std::to_string(Hk) + " Hv=" + std::to_string(Hv) +
+        " T=" + std::to_string(T) + (host ? " host-repeated" : "");
+    CHECK_MESSAGE(rel[arg] <= 0.05, what);
   }
 }
 } // namespace
