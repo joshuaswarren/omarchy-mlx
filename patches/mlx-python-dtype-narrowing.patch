@@ -1,0 +1,58 @@
+# Upstream: ml-explore/mlx 43f5eaae97a342ab34216c79ee981ccc77f3d66f (Fix Python dtpye -> mlx conversion narrowing, #4656)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/python/src/convert.cpp b/python/src/convert.cpp
+index eb4e200bac..ac735e1ff3 100644
+--- a/python/src/convert.cpp
++++ b/python/src/convert.cpp
+@@ -641,6 +641,10 @@ mx::array array_from_list_impl(
+         std::vector<uint32_t> vals;
+         fill_vector(pl, vals);
+         return mx::array(vals.begin(), shape, dtype);
++      } else if (dtype == mx::float64) {
++        std::vector<double> vals;
++        fill_vector(pl, vals);
++        return mx::array(vals.begin(), shape, dtype);
+       } else if (mx::issubdtype(dtype, mx::inexact)) {
+         std::vector<float> vals;
+         fill_vector(pl, vals);
+@@ -653,7 +657,7 @@ mx::array array_from_list_impl(
+     }
+     case pyfloat: {
+       auto out_type = specified_type.value_or(mx::float32);
+-      if (out_type == mx::float64) {
++      if (out_type == mx::float64 || !mx::issubdtype(out_type, mx::inexact)) {
+         std::vector<double> vals;
+         fill_vector(pl, vals);
+         return mx::array(vals.begin(), shape, out_type);
+@@ -748,7 +752,7 @@ mx::array create_array(
+     return mx::array(val, t.value_or(default_type));
+   } else if (nb::isinstance<nb::float_>(v)) {
+     auto out_type = t.value_or(mx::float32);
+-    if (out_type == mx::float64) {
++    if (out_type == mx::float64 || !mx::issubdtype(out_type, mx::inexact)) {
+       return mx::array(nb::cast<double>(v), out_type);
+     } else {
+       return mx::array(nb::cast<float>(v), out_type);
+diff --git a/python/tests/test_array.py b/python/tests/test_array.py
+index bdb80e544a..99c17b8184 100644
+--- a/python/tests/test_array.py
++++ b/python/tests/test_array.py
+@@ -598,6 +598,18 @@ def test_double_keeps_precision(self):
+         out = mx.array([x], dtype=mx.float64).item()
+         self.assertEqual(out, x)
+ 
++        # Integer and bool targets
++        v = 2**24 + 1
++        self.assertEqual(mx.array(float(v), dtype=mx.int32).item(), v)
++        self.assertEqual(mx.array([float(v)], dtype=mx.int64).tolist(), [v])
++        # Small non-zero values are still True
++        self.assertTrue(mx.array(1e-50, dtype=mx.bool_).item())
++        self.assertEqual(mx.array([1e-50], dtype=mx.bool_).tolist(), [True])
++
++        # Python ints to float64
++        out = mx.array([v], dtype=mx.float64).tolist()
++        self.assertEqual(out, [float(v)])
++
+     def test_construction_from_lists_wide_ints(self):
+         # A python int that does not fit in int32 widens to int64, the same
+         # rule the scalar path already uses. It used to raise std::bad_cast.

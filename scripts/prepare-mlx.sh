@@ -172,6 +172,28 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # accumulate Simd<float, S>.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-cpu-qmm-fp32-accum.patch"
+# Pickle of a bfloat16 array passed strides = nullptr, so a non-contiguous
+# (e.g. F-contiguous transposed) array unpickled with wrong strides
+# (upstream #4649).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-pickle-bf16-strides.patch"
+# Python -> mlx conversion narrowed through float for int64/bool/float64
+# list and scalar targets: 2**24+1 lost its odd bit going to int32/int64,
+# 1e-50 became False for bool, and int lists to float64 cast via float32
+# (upstream #4656).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-python-dtype-narrowing.patch"
+# Compile scalar merging merged a scalar that is also a compiled output:
+# the output_map lookup then threw std::out_of_range (unordered_map::at)
+# and compiling a function returning both a value and a constant scalar
+# crashed (upstream #4658).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-compile-scalar-output.patch"
+# The .npy loader read the header shape without validation: a negative or
+# overflowing dim from an untrusted file computed a wild total size
+# (upstream #4657).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-npy-shape-validate.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
