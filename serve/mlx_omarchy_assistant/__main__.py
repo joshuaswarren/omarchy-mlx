@@ -119,6 +119,7 @@ def main(argv=None):
     parser.add_argument("--pair", choices=("everyday", "quality", "compact"))
     parser.add_argument("--resume", action="store_true",
                         help="load the saved pair at login and keep both models resident")
+    parser.add_argument("--yes", action="store_true", help="approve downloading the explicitly selected pair")
     parser.add_argument("--wake-word", nargs="?", const="hey_jarvis", default=None,
                         help="opt-in wake word listener (default phrase: hey_jarvis); "
                              "approves the one-time pinned openWakeWord model download")
