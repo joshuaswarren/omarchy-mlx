@@ -1,0 +1,48 @@
+{
+ "label": "gpt-oss-20b-Darwin",
+ "model": "f356f2747216d7e98fee755df25987459fc19089",
+ "load_s": 1.49,
+ "decode_tok_s": {
+  "median": 79.447,
+  "mean": 79.444,
+  "stdev": 0.043,
+  "min": 79.382,
+  "max": 79.524,
+  "n": 10
+ },
+ "ttft_s": {
+  "median": 0.103,
+  "mean": 0.109,
+  "stdev": 0.014,
+  "min": 0.098,
+  "max": 0.138,
+  "n": 10
+ },
+ "prefill_tok_s": {
+  "median": 575.755,
+  "mean": 574.572,
+  "stdev": 6.427,
+  "min": 567.543,
+  "max": 580.677,
+  "n": 5
+ },
+ "prefill_all": [
+  580.68,
+  580.65,
+  575.76,
+  567.54,
+  568.23
+ ],
+ "pf_tokens": 512,
+ "decode_digest": "78ac354180ad130d8f2ed4ae7291584497faa4305ddb239c77f3982937f378ab",
+ "corpus_sha256": "9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0",
+ "peak_mem_gb": 11.87,
+ "env": {
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "python": "3.13.2",
+  "backend": "Device(gpu, 0)",
+  "load1_end": 3.59716796875,
+  "mlx_lm": "0.32.0",
+  "mlx_dist": "mlx 0.32.3"
+ }
+}

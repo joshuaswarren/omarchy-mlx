@@ -1,0 +1,9 @@
+# key	kind	repo	file	min_ram_gb	note
+qwen35-9b	mlx	mlx-community/Qwen3.5-9B-MLX-4bit	-	16	continuity with the parity rows
+clef-flash	mlx	mlx-community/clef-flash-4bit	-	16	
+gemma-4-e2b	mlx	mlx-community/gemma-4-e2b-it-4bit	-	8	the 12B variant (gemma4_unified) has no mlx-lm module
+gpt-oss-20b	mlx	mlx-community/gpt-oss-20b-MXFP4-Q4	-	24	
+gguf-gemma-4-12b	gguf	unsloth/gemma-4-12b-it-GGUF	gemma-4-12b-it-Q4_K_M.gguf	16	
+qwen38-27b	mlx	mlx-community/Qwen3.8-27B-4bit	-	40	
+gguf-qwen38-27b	gguf	unsloth/Qwen3.8-27B-GGUF	Qwen3.8-27B-UD-Q4_K_M.gguf	40	
+qwen38-flash-next	mlx	mlx-community/Qwen3.8-Flash-Next-4bit	-	160	111 GB of weights, skipped on 64 GB hosts
