@@ -1598,11 +1598,19 @@ TEST_CASE("scaled_dot_product_attention folds bf16 sinks into the denominator") 
     int qL, kL;
     const char* mode;
     bool array_mask;
+    Dtype sink_dtype;
   };
-  for (const Case c : {Case{11, 11, "causal", false},
-                       Case{11, 11, "", false},
-                       Case{1, 40, "", false},
-                       Case{11, 11, "array", true}}) {
+  std::vector<Case> cases;
+  for (const Dtype sink_dtype : {bfloat16, float32}) {
+    for (auto [qL, kL, mode, array_mask] :
+         {std::tuple<int, int, const char*, bool>{11, 11, "causal", false},
+          {11, 11, "", false},
+          {1, 40, "", false},
+          {11, 11, "array", true}}) {
+      cases.push_back({qL, kL, mode, array_mask, sink_dtype});
+    }
+  }
+  for (const Case c : cases) {
     const int B = 1, H = 64, KV = 8, D = 64;
     const float scale = 1.0f / std::sqrt(float(D));
     auto bf = [&](const std::vector<float>& data, Shape shape) {
@@ -1615,13 +1623,13 @@ TEST_CASE("scaled_dot_product_attention folds bf16 sinks into the denominator") 
     array q = bf(q_raw, Shape{B, H, c.qL, D});
     array k = bf(k_raw, Shape{B, KV, c.kL, D});
     array v = bf(v_raw, Shape{B, KV, c.kL, D});
-    array sinks = bf(sink_raw, Shape{H});
+    array sinks = astype(bf(sink_raw, Shape{H}), c.sink_dtype, stream);
     auto q_data = flat(q, stream);
     auto k_data = flat(k, stream);
     auto v_data = flat(v, stream);
     auto sink_data = flat(sinks, stream);
     std::vector<float> mask_host;
-    std::vector<array> mask;
+    std::optional<array> mask;
     if (c.array_mask) {
       std::vector<float> mask_raw(c.qL * c.kL);
       for (int r = 0; r < c.qL; ++r) {
@@ -1631,18 +1639,19 @@ TEST_CASE("scaled_dot_product_attention folds bf16 sinks into the denominator") 
       }
       array m = bf(mask_raw, Shape{1, 1, c.qL, c.kL});
       mask_host = flat(m, stream);
-      mask.push_back(m);
+      mask = m;
     }
     auto out = fast::scaled_dot_product_attention(
-        q, k, v, scale, mask.empty() ? std::string(c.mode) : "array", mask, sinks, false, stream);
+        q, k, v, scale, mask ? std::string("array") : std::string(c.mode), mask, sinks, false, stream);
     const bool causal = std::string(c.mode) == "causal";
     require_close(
         flat(out, stream),
         host_sdpa(
             q_data, k_data, v_data, B, H, KV, c.qL, c.kL, D, scale, causal, sink_data, mask_host),
         3e-2,
-        std::string("sdpa bf16 sinks qL=") + std::to_string(c.qL) + " kL=" +
-            std::to_string(c.kL) + " mode=" + c.mode);
+        std::string("sdpa bf16 q, ") + (c.sink_dtype == bfloat16 ? "bf16" : "f32") +
+            " sinks qL=" + std::to_string(c.qL) + " kL=" + std::to_string(c.kL) +
+            " mode=" + c.mode);
   }
 }
 
