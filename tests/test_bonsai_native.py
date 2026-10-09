@@ -30,7 +30,9 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-import mlx.core as mx
+import pytest
+
+mx = pytest.importorskip("mlx.core")
 
 # Try the new ops first (compiled with mlx-fast-bonsai-qmv.patch).
 _has_fast_op = hasattr(mx.fast, "bonsai_q1_affine_qmv")
