@@ -417,3 +417,92 @@ TEST_CASE("GDN recur32 mode 2 covers short prefill TTFT shapes") {
     }
   }
 }
+
+namespace {
+
+// Left padding (the first T/3 tokens) plus every 7th token after it masked
+// out, non-zero initial state. A masked token leaves the state alone and
+// writes zero, so the fp64 reference is the recurrence over the valid tokens
+// only, scattered back to their positions.
+void check_case_partial_mask(int T, int rep, Stream stream) {
+  const int Hv = kHk * rep;
+  std::vector<int> valid;
+  std::vector<bool> bits(T);
+  for (int t = 0; t < T; ++t) {
+    bits[t] = t >= T / 3 && (t - T / 3) % 7 != 6;
+    if (bits[t]) valid.push_back(t);
+  }
+  const int V = static_cast<int>(valid.size());
+  const size_t token_heads = static_cast<size_t>(T) * Hv;
+  auto q_data = values(token_heads * kD, 0x1a2b3c4du + T + rep, 0.25f);
+  auto k_data = values(token_heads * kD, 0x5e6f7a8bu + T + rep, 0.25f);
+  auto v_data = values(token_heads * kD, 0x9c0d1e2fu + T + rep, 0.25f);
+  auto g_data = values(token_heads, 0x31415926u + T + rep, 0.07f);
+  auto beta_data = values(token_heads, 0x27182818u + T + rep, 0.2f);
+  for (float& gate : g_data) gate = 0.92f + std::abs(gate);
+  for (float& rate : beta_data) rate = 0.3f + rate;
+  round_bf16(q_data);
+  round_bf16(k_data);
+  round_bf16(v_data);
+  round_bf16(beta_data);
+  auto h0_data = values(static_cast<size_t>(Hv) * kD * kD, 0xfeed5678u + T + rep, 0.1f);
+
+  std::vector<float> qv, kv, vv, gv, bv;
+  for (int t : valid) {
+    const size_t th = static_cast<size_t>(t) * Hv;
+    qv.insert(qv.end(), q_data.begin() + th * kD, q_data.begin() + (th + Hv) * kD);
+    kv.insert(kv.end(), k_data.begin() + th * kD, k_data.begin() + (th + Hv) * kD);
+    vv.insert(vv.end(), v_data.begin() + th * kD, v_data.begin() + (th + Hv) * kD);
+    gv.insert(gv.end(), g_data.begin() + th, g_data.begin() + th + Hv);
+    bv.insert(bv.end(), beta_data.begin() + th, beta_data.begin() + th + Hv);
+  }
+  const Reference ref = reference(qv, kv, vv, gv, bv, V, Hv, h0_data);
+  std::vector<double> want_y(token_heads * kD, 0.0);
+  for (int i = 0; i < V; ++i) {
+    std::copy(
+        ref.y.begin() + static_cast<size_t>(i) * Hv * kD,
+        ref.y.begin() + static_cast<size_t>(i + 1) * Hv * kD,
+        want_y.begin() + static_cast<size_t>(valid[i]) * Hv * kD);
+  }
+
+  array q = astype(array(q_data.begin(), Shape{1, T, Hv, kD}, float32), bfloat16, stream);
+  array k = astype(array(k_data.begin(), Shape{1, T, Hv, kD}, float32), bfloat16, stream);
+  array v = astype(array(v_data.begin(), Shape{1, T, Hv, kD}, float32), bfloat16, stream);
+  array g = array(g_data.begin(), Shape{1, T, Hv}, float32);
+  array beta = astype(array(beta_data.begin(), Shape{1, T, Hv}, float32), bfloat16, stream);
+  array h0 = array(h0_data.begin(), Shape{1, Hv, kD, kD}, float32);
+  array mask = array(bits.begin(), Shape{1, T}, bool_);
+  q.eval(); k.eval(); v.eval(); g.eval(); beta.eval(); h0.eval(); mask.eval();
+  omarchy::get_command_encoder(stream).synchronize("gdn_partial_mask_inputs");
+
+  auto out = fast::gated_delta_update(q, k, v, g, beta, h0, mask, stream);
+  const std::string label =
+      "GDN partial mask T=" + std::to_string(T) + " rep=" + std::to_string(rep);
+  auto y = materialize_f32(out[0], stream);
+  check_close(y, want_y, 0.02, label + " y vs fp64");
+  for (int t = 0; t < T; ++t) {
+    if (bits[t]) continue;
+    const size_t base = static_cast<size_t>(t) * Hv * kD;
+    float peak = 0.0f;
+    for (size_t i = 0; i < static_cast<size_t>(Hv) * kD; ++i) {
+      peak = std::max(peak, std::abs(y[base + i]));
+    }
+    CHECK_MESSAGE(peak == 0.0f, label, " masked token ", t, " wrote ", peak);
+  }
+  check_close(materialize_f32(out[1], stream), ref.state, 2e-4, label + " state vs fp64");
+}
+
+} // namespace
+
+TEST_CASE("GDN recur32 masked prefill skips masked tokens (left padding and holes)") {
+  if (!compute_available()) return;
+  EnvGuard guard("MLX_OMARCHY_GDN_RECUR32", "2");
+  Stream stream = gpu_stream();
+  for (int rep : {1, 2}) {
+    for (int T : {2, 3, 11, 33, 64, 65, 128, 519}) {
+      CAPTURE(T);
+      CAPTURE(rep);
+      check_case_partial_mask(T, rep, stream);
+    }
+  }
+}

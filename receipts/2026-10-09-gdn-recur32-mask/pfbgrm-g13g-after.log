@@ -1,0 +1,11 @@
+@@pg qgpr rc=0
+@@pg qgpr PFBG {"mlx": "0.32.4.dev202610081925+qgpr.390f8a4", "lengths": [120, 110, 90, 70], "seq_s": 1.3732, "batched_s": 1.9984, "ratio": 1.4552, "first_tokens_equal": false}
+@@pg qrm4 rc=0
+@@pg qrm4 PFBG {"mlx": "0.32.4.dev202610090611+qrm4.3852de7", "lengths": [120, 110, 90, 70], "seq_s": 1.366, "batched_s": 1.3336, "ratio": 0.9762, "first_tokens_equal": true}
+@@pg qrm4 rc=0
+@@pg qrm4 PFBG {"mlx": "0.32.4.dev202610090611+qrm4.3852de7", "lengths": [120, 110, 90, 70], "seq_s": 1.3665, "batched_s": 1.3342, "ratio": 0.9764, "first_tokens_equal": true}
+@@pg qgpr rc=0
+@@pg qgpr PFBG {"mlx": "0.32.4.dev202610081925+qgpr.390f8a4", "lengths": [120, 110, 90, 70], "seq_s": 1.3626, "batched_s": 2.0014, "ratio": 1.4688, "first_tokens_equal": false}
+@@pg2 qrm run1 PFBG2 {"mlx": "0.32.4.dev202610090611+qrm4.3852de7", "rows": [{"len": 120, "seq": 271, "bat": 271, "margin": 0.0, "equal": true}, {"len": 110, "seq": 391, "bat": 391, "margin": 0.25, "equal": true}, {"len": 90, "seq": 2978, "bat": 2978, "margin": 0.25, "equal": true}, {"len": 70, "seq": 682, "bat": 682, "margin": 0.125, "equal": true}], "verdict": "EQUAL"}
+@@pg2 qrm run2 PFBG2 {"mlx": "0.32.4.dev202610090611+qrm4.3852de7", "rows": [{"len": 120, "seq": 271, "bat": 271, "margin": 0.0, "equal": true}, {"len": 110, "seq": 391, "bat": 391, "margin": 0.25, "equal": true}, {"len": 90, "seq": 2978, "bat": 2978, "margin": 0.25, "equal": true}, {"len": 70, "seq": 682, "bat": 682, "margin": 0.125, "equal": true}], "verdict": "EQUAL"}
+@@pg done 07:17:38
