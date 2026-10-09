@@ -924,6 +924,68 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "OOM retry drains submitted batches and releases their quarantined buffers") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s = new_stream(Device::gpu);
+  auto& encoder = omarchy::get_command_encoder(s);
+
+  auto scratch = alloc.malloc(4096);
+  auto* scratch_buf = static_cast<omarchy::VulkanBuffer*>(scratch.ptr());
+  for (int i = 0; i < 2; ++i) {
+    encoder.fill_buffer(scratch_buf->buffer, 0, 4);
+    encoder.commit();
+    encoder.synchronize();
+  }
+  for (int i = 0; i < 200 && alloc.has_quarantined(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  REQUIRE_FALSE(alloc.has_quarantined());
+
+  constexpr size_t kBytes = 128u << 20;
+  auto src = alloc.malloc(kBytes);
+  auto dst = alloc.malloc(kBytes);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  auto* dst_buf = static_cast<omarchy::VulkanBuffer*>(dst.ptr());
+  array src_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))},
+      float32,
+      nullptr,
+      {});
+  src_view.set_data(
+      allocator::Buffer{src_buf},
+      src_view.size(),
+      src_view.strides(),
+      src_view.flags(),
+      0,
+      [](allocator::Buffer) {});
+  encoder.add_temporary(src_view);
+  for (int i = 0; i < 16; ++i) {
+    encoder.copy_buffer(src_buf->buffer, dst_buf->buffer, kBytes);
+  }
+  alloc.free(src);
+  encoder.commit();
+  encoder.fill_buffer(scratch_buf->buffer, 0, 4);
+  encoder.commit();
+  REQUIRE(alloc.has_quarantined());
+
+  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1", 1);
+  auto* buf = static_cast<omarchy::VulkanBuffer*>(alloc.malloc(4u << 20).ptr());
+  unsetenv("MLX_OMARCHY_TEST_OOM_REMAINING");
+  REQUIRE(buf != nullptr);
+  CHECK_FALSE(alloc.has_quarantined());
+
+  alloc.free(allocator::Buffer{buf});
+  alloc.clear_cache();
+  encoder.synchronize();
+  alloc.free(dst);
+  alloc.free(scratch);
+}
+
+TEST_CASE(
     "cache stays bounded under a shape-changing alloc/free loop") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
