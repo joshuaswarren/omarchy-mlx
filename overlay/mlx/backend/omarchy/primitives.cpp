@@ -10461,35 +10461,25 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   // "with more than UINT32_MAX elements" refusal. Materialize the
   // operand to a dense contiguous buffer so the downstream check sees
   // a non-negative stride; out is always dense because the upstream
-  // Primitive::eval_gpu allocates a fresh output.
-  auto materialize_if_neg_stride =
-      [axis, &encoder, stream = out.primitive().stream()](
-          const array& value) -> std::pair<const array*, std::optional<array>> {
-    if (value.strides(axis) < 0 ||
-        !value.flags().row_contiguous ||
-        value.data_size() != value.size()) {
-      auto tmp = array(value.shape(), value.dtype(), nullptr, {});
-      copy_gpu(value, tmp, CopyType::General, stream);
-      encoder.add_temporary(tmp);
-      return {&tmp, std::move(tmp)};
-    }
-    return {&value, std::nullopt};
-  };
+  // Primitive::eval_gpu allocates a fresh output. The optional owns
+  // the buffer for the rest of the eval; the pointer is taken from
+  // the optional (never from a local), matching the idx_mat pattern
+  // above.
   const array* src_ptr = &src;
   std::optional<array> src_mat;
-  if (src.strides(axis) < 0) {
-    std::pair<const array*, std::optional<array>> m =
-        materialize_if_neg_stride(src);
-    src_ptr = m.first;
-    src_mat = std::move(m.second);
-  }
   const array* upd_ptr = &updates;
   std::optional<array> upd_mat;
+  if (src.strides(axis) < 0) {
+    src_mat = array(src.shape(), src.dtype(), nullptr, {});
+    copy_gpu(src, *src_mat, CopyType::General, out.primitive().stream());
+    encoder.add_temporary(*src_mat);
+    src_ptr = &*src_mat;
+  }
   if (updates.strides(axis) < 0) {
-    std::pair<const array*, std::optional<array>> m =
-        materialize_if_neg_stride(updates);
-    upd_ptr = m.first;
-    upd_mat = std::move(m.second);
+    upd_mat = array(updates.shape(), updates.dtype(), nullptr, {});
+    copy_gpu(updates, *upd_mat, CopyType::General, out.primitive().stream());
+    encoder.add_temporary(*upd_mat);
+    upd_ptr = &*upd_mat;
   }
   int non_axis = out.ndim() - 1;
   if (non_axis > 4) {
