@@ -15,6 +15,7 @@
 #include "doctest/doctest.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -288,12 +289,14 @@ TEST_CASE("batched prefill stays on the fused dispatches") {
                 " dispatches against ", single, " for one row: it fell back");
 }
 
-// The single-pass per-token route (one dispatch per row at T = 128) must take
-// a masked row too: the padded rows of a real batched prefill carry a mask,
-// and a masked row used to fall to the two-pass snapshot scan (about 10x the
-// time). Checked only where the maskless row is one dispatch (the route that
-// skips the chunk walk); other devices keep their own masked route.
-TEST_CASE("masked prefill stays on the single-pass route where maskless does") {
+// A masked row takes the single-pass per-token route (recur32, one dispatch per
+// row at T = 128) wherever that route is on: the padded rows of a real batched
+// prefill carry a mask, and a masked row used to fall to the two-pass snapshot
+// scan (two dispatches and about 10x the time). The route is default-on for
+// G13 parts other than G13C (the others keep the coopmat chunk kernel, maskless
+// only), so the default-route assertion runs on those parts and the forced
+// route (MLX_OMARCHY_GDN_RECUR32=2, read on every call) runs everywhere.
+TEST_CASE("masked prefill takes the single-pass route") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();
   constexpr int t = 128;
@@ -313,17 +316,38 @@ TEST_CASE("masked prefill stays on the single-pass route where maskless does") {
   for (const auto& v : masked) one_masked.push_back(row(v, 0, s));
   eval(one);
   eval(one_masked);
+  const std::string name =
+      omarchy::get_command_encoder(s).device().capabilities().device_name;
+  const bool default_recur32 = name.find("G13") != std::string::npos &&
+      name.find("G13C") == std::string::npos;
+  const char* old = std::getenv("MLX_OMARCHY_GDN_RECUR32");
+  const std::string saved = old ? old : "";
   uint64_t plain = dispatches(one, s), padded = dispatches(one_masked, s),
            padded_batch = dispatches(masked, s);
   provenance("gdn_masked_prefill");
-  std::cout << "[gdn_masked_prefill] B=1 T=128 maskless " << plain
-            << " dispatches, masked " << padded << ", B=4 masked "
+  std::cout << "[gdn_masked_prefill] " << name << " default route: B=1 T=128 maskless "
+            << plain << " dispatches, masked " << padded << ", B=4 masked "
             << padded_batch << "\n";
-  if (plain != 1) return;
-  CHECK_MESSAGE(padded == plain, "a masked row took ", padded,
-                " dispatches against ", plain, " maskless");
-  CHECK_MESSAGE(padded_batch <= 4 * padded + 16, "B=4 masked prefill took ",
-                padded_batch, " dispatches against ", padded, " for one row");
+  if (default_recur32) {
+    CHECK_MESSAGE(padded == 1, "a masked row took ", padded,
+                  " dispatches on the default route (one expected)");
+  }
+  setenv("MLX_OMARCHY_GDN_RECUR32", "2", 1);
+  uint64_t forced = dispatches(one_masked, s),
+           forced_batch = dispatches(masked, s);
+  if (old) {
+    setenv("MLX_OMARCHY_GDN_RECUR32", saved.c_str(), 1);
+  } else {
+    unsetenv("MLX_OMARCHY_GDN_RECUR32");
+  }
+  std::cout << "[gdn_masked_prefill] forced recur32: masked " << forced
+            << " dispatches, B=4 masked " << forced_batch << "\n";
+  if (omarchy::device(0).capabilities().subgroup_size == 32) {
+    CHECK_MESSAGE(forced == 1, "a masked row took ", forced,
+                  " dispatches on the forced single-pass route (one expected)");
+    CHECK_MESSAGE(forced_batch <= 4 * forced + 16, "B=4 masked prefill took ",
+                  forced_batch, " dispatches against ", forced, " for one row");
+  }
 }
 
 // A dtype the fused route does not take (fp16) keeps ONE batched composed
