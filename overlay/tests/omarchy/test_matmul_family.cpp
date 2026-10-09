@@ -2410,11 +2410,10 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   // exercises the tail guard, and the non-transposed layout runs the
   // other weight-routing branch.
   auto run_case_shape = [&](Dtype dtype, bool transpose, int k, int experts,
-                            int index_count, int n) {
+                            int index_count, int n, int bits = 4,
+                            int group_size = 64) {
     const bool bf16 = dtype == bfloat16;
     const int m = 1;
-    const int group_size = 64;
-    const int bits = 4;
     const int groups = k / group_size;
     const int pack = 32 / bits;
     const int words_per_row = k / pack;
@@ -2532,7 +2531,7 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     auto [s_l2, s_max] = rel_l2(scalar_out);
     auto [b_l2, b_max] = rel_l2(sub_out);
     double scalar_bound = bf16 ? 0.05 : 0.01;
-    std::cout << "[gather-qmm-sub] dtype=" << (bf16 ? "bf16" : "f16") << " transpose=" << transpose
+    std::cout << "[gather-qmm-sub] dtype=" << (bf16 ? "bf16" : "f16") << " bits=" << bits << " group=" << group_size << " transpose=" << transpose
               << " k=" << k << " experts=" << experts
               << " index_count=" << index_count << " n=" << n
               << " scalar: relL2=" << s_l2 << " maxabs/ref=" << s_max
@@ -2603,6 +2602,16 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     run_case_shape(dtype, true, 128, 3, 8, 1408);
     run_case_shape(dtype, true, 2048, 3, 8, 1408);
     run_case_shape(dtype, true, 128, 48, 48, 1408);
+  }
+  // Layout matrix (MatmulGap H46): 8-bit and group sizes 32 and 128, both
+  // dtypes. A layout joins the Sub selector only if every case below passes.
+  for (Dtype dtype : {bfloat16, float16}) {
+    for (auto [bits, group] : {std::pair<int, int>{8, 64}, {4, 32}, {4, 128},
+                               {8, 32}, {8, 128}}) {
+      run_case_shape(dtype, true, 256, 3, 2, 64, bits, group);
+      run_case_shape(dtype, true, 2048, 3, 8, 1408, bits, group);
+      run_case_shape(dtype, true, 256, 48, 48, 1408, bits, group);
+    }
   }
 }
 
