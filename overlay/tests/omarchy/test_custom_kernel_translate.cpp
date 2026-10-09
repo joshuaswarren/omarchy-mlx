@@ -391,8 +391,11 @@ TEST_CASE("as_type<uint> on an int buffer read is the identity conversion") {
       "  out[i] = allowed ? logits[i] : -INFINITY;\n"
       "}\n";
   auto glsl = translate(source, 1);
-  CHECK(glsl.find("uint(mask[") == std::string::npos ||
-        glsl.find("floatBitsToUint(mask") == std::string::npos);
+  // doctest rejects `||` inside CHECK; hoist the disjunction.
+  const bool either_bad_form_absent =
+      glsl.find("uint(mask[") == std::string::npos ||
+      glsl.find("floatBitsToUint(mask") == std::string::npos;
+  CHECK(either_bad_form_absent);
   CHECK(glsl.find("floatBitsToUint(_mlx_arg1[") == std::string::npos);
   CHECK(glsl.find("&& ") != std::string::npos);
 }
@@ -489,4 +492,79 @@ TEST_CASE("the 'unknown' fallback with different library hashes yields different
   auto m2 = mlx::core::fast::translation_cache_material_for_test(
       "kid", "unknown", "lib_hash_bbb");
   CHECK(m1 != m2);
+}
+
+// ---------------------------------------------------------------------------
+// Qwen3.5 GDN serve failure 2026-10-09 (Qwen3.5-9B-MLX-4bit, first
+// decode token, bf16 q_out [1,1,16,128]): the omlx_qwen35_gdn_prework kernel
+// body declares `const auto sy = 1 / (1 + exp(abs(conv)));`. MSL `auto` has
+// no GLSL counterpart — `auto` is a reserved word — and glslang died with
+// `.comp:73: syntax error, unexpected IDENTIFIER, expecting COMMA or
+// SEMICOLON`. v0.7.31 (9b5c938) has no auto handling either: the construct
+// was never supported, this is its first serving use.
+
+TEST_CASE("MSL auto value declarations become float locals") {
+  const char* source =
+      "[[kernel]] void gdn_siluscale(\n"
+      "    const device bfloat16_t* x [[buffer(0)]],\n"
+      "    device bfloat16_t* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  float v = (float)x[i];\n"
+      "  const auto sy = 1 / (1 + metal::precise::exp(metal::abs(v)));\n"
+      "  float sig = v < 0.0f ? sy : 1 - sy;\n"
+      "  y[i] = (bfloat16_t)(v * sig);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // The reserved word must not survive anywhere.
+  CHECK(glsl.find("auto ") == std::string::npos);
+  // The declaration keeps its initializer, now concretely typed.
+  CHECK(glsl.find("const float sy = 1 / (1 + exp(abs(v)));") !=
+        std::string::npos);
+}
+
+TEST_CASE("auto pointer declarations alias like explicit device pointers") {
+  // The Qwen3.5 MoE router/decode row-walk idiom: row alias off a buffer
+  // parameter, then a scoped rebind of the buffer's own name to the row.
+  const char* source =
+      "[[kernel]] void row_walk(\n"
+      "    const device float* logits [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 tg [[threadgroup_position_in_grid]]) {\n"
+      "  const auto logits_row = logits + tg.x * 4u;\n"
+      "  {\n"
+      "    const auto logits = logits_row;\n"
+      "    y[tg.x] = logits[0] + logits[1];\n"
+      "  }\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("auto ") == std::string::npos);
+  // Both the row alias and the rebind are gone; the use carries the
+  // parent offset through the buffer-0 macro.
+  CHECK(glsl.find("logits_row") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[tg.x] = float(_mlx_arg0[((tg.x * 4u + 0)) + (0)]") !=
+        std::string::npos);
+}
+
+TEST_CASE("header helper numeric_limits constants map like the body") {
+  // The omlx_log1p header helper of the Qwen3.5/Qwen4 GDN kernels tests
+  // against metal::numeric_limits<float>::max(); the body-only limits pass
+  // left `numeric_limits` in the emitted helper (glslang: undeclared
+  // identifier at the helper line).
+  const char* source =
+      "inline float omlx_cap(float x) {\n"
+      "    if (x == metal::numeric_limits<float>::max()) {\n"
+      "        return metal::numeric_limits<float>::max();\n"
+      "    }\n"
+      "    return x;\n"
+      "}\n"
+      "[[kernel]] void capped(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  y[i] = omlx_cap(x[i]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("numeric_limits") == std::string::npos);
+  CHECK(glsl.find("3.4028234663852886e+38f") != std::string::npos);
+  CHECK(glsl.find("omlx_cap(_mlx_arg0[i])") != std::string::npos);
 }
