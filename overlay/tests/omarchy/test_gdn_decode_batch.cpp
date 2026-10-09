@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -287,6 +288,43 @@ TEST_CASE("batched prefill stays on the fused dispatches") {
   // composed per-token chain is thousands of dispatches at T = 128.
   CHECK_MESSAGE(batched <= 4 * single + 16, "B=4 prefill took ", batched,
                 " dispatches against ", single, " for one row: it fell back");
+}
+
+// A maskless prefill must not take the recur32 kernel by default on any part:
+// on G13G it did until 2026-10-09, and that changed the greedy tokens of
+// Qwen3.5-9B against macOS (H392). The env value 2 still selects it.
+TEST_CASE("a maskless prefill takes the recur32 kernel only when asked") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  constexpr int t = 128;
+  auto x = prefill_inputs(B, t, s);
+  eval(x);
+  std::vector<array> one;
+  for (const auto& v : x) {
+    one.push_back(row(v, 0, s));
+  }
+  eval(one);
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool env_free = std::getenv("MLX_OMARCHY_GDN_RECUR32") == nullptr &&
+      std::getenv("MLX_OMARCHY_NO_COOPMAT_GDN") == nullptr;
+  if (caps.subgroup_size != 32 || !env_free) return;
+  const int64_t recur32 =
+      static_cast<int64_t>(omarchy::ComputeKernel::GatedDeltaPrefillRecur32BF16);
+  auto last_kernel = [&]() {
+    dispatches(one, s);
+    return counters().last_dispatched_kernel.load();
+  };
+  int64_t by_default = last_kernel();
+  setenv("MLX_OMARCHY_GDN_RECUR32", "2", 1);
+  int64_t forced_two = last_kernel();
+  unsetenv("MLX_OMARCHY_GDN_RECUR32");
+  std::cout << "[gdn_maskless_route] " << caps.device_name << " default kernel "
+            << by_default << ", forced 2 kernel " << forced_two
+            << ", recur32 kernel id " << recur32 << "\n";
+  CHECK_MESSAGE(forced_two == recur32, "RECUR32=2 did not select the recur32"
+                " kernel (last kernel ", forced_two, ")");
+  CHECK_MESSAGE(by_default != recur32, "a maskless prefill took the recur32"
+                " kernel by default on ", caps.device_name);
 }
 
 // A masked row takes the single-pass per-token route (recur32, one dispatch per
