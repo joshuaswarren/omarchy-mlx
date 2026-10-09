@@ -20,7 +20,7 @@ done
 FULL=$H/h40-bringup-$HOST.log
 timeout -k 20 800 "$H/tbuild-cf2/tests/omarchy/omarchy_sdpa_prefill_flash_tests" -tc='causal coopmat flash*' > "$FULL" 2>&1
 echo "device test rc=$? $(grep -E '^\[doctest\] (test cases|assertions)' "$FULL" | tr '\n' ' ')" | tee -a "$LOG"
-micro() { # label venv env
+micro() { # label venv env; env is a placeholder word for env(1) when the arm sets nothing (X40=1 is deliberately unused)
   sleep "${GAP:-30}"
   echo "$1 L=512,1024,2048: $(env "$3" timeout 200 "$H/$2/bin/python" "$H/sdpa_micro.py" causal 512,1024,2048 2>&1 | tail -1 | cut -c1-900)" | tee -a "$LOG"
 }

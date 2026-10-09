@@ -1,5 +1,5 @@
 """SDPA prefill micro-benchmark on the Qwen3-4B attention shape: B=1, Hq=32, Hkv=8 (GQA x4), hd=128, bf16, L in {512, 1024, 2048}.
-mode: causal | full ; the route (composed vs flash) is chosen by the environment of THIS process (MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L).
+mode: causal | full ; the route (composed vs flash) is chosen by the environment of THIS process (MLX_OMARCHY_SDPA_CAUSAL_FLASH=1 selects the causal flash route; unset is the composed route).
 Prints one JSON line: ms per call (median of 5 reps x 20 calls), plus the output hash and max|diff| vs an fp32 numpy reference for L=512 (one head)."""
 import json
 import os
