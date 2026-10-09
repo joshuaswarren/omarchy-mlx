@@ -12188,8 +12188,11 @@ void GatedDeltaUpdate::eval_gpu(
   // plain sequential token loop - the Metal gated_delta_step shape. Read
   // per call (not a static): the correctness battery toggles this env per
   // test case in-process. DEFAULT (env unset): mode 2 on G13 parts other
-  // than G13C (jwm1 M1 G13G is the measured part), off elsewhere until
-  // measured there. MLX_OMARCHY_GDN_RECUR32 selects:
+  // than G13C (jwm1 M1 G13G is the measured part), and on every other part
+  // for a MASKED prefill only (the padded rows of a batched prefill; G13C
+  // measured: a masked row on the two-pass snapshot scan made a padded
+  // batch 1.63x of sequential, recur32 makes it 1.02x), off elsewhere
+  // until measured there. MLX_OMARCHY_GDN_RECUR32 selects:
   //   0 (or 0/off/false/no): off - the shipped exact scan (T<64) and
   //     chunked coopmat/hoist routes, bit-identical to before this flip.
   //   1 (or 1/on/true/yes): T >= 64 - the chunked coopmat kernel's
@@ -12208,7 +12211,9 @@ void GatedDeltaUpdate::eval_gpu(
   // bit-identical to the scan (subgroup reduction trees), so the env is
   // the A/B lever and the fp64 tolerance test is the numerics gate.
   const char* recur32_env = std::getenv("MLX_OMARCHY_GDN_RECUR32");
-  const int gdn_recur32_default = (g13_legacy_part(encoder) && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN")) ? 2 : 0;
+  const int gdn_recur32_default =
+      (!omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN") &&
+       (g13_legacy_part(encoder) || has_mask)) ? 2 : 0;
   const int gdn_recur32_mode = recur32_env == nullptr
       ? gdn_recur32_default
       : ((recur32_env[0] == '2' && recur32_env[1] == '\0')
