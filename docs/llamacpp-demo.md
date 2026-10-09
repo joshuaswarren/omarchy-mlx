@@ -154,15 +154,15 @@ The system Mesa failure on 8 GB is because the old driver tries to allocate a
 single 542 MB compute buffer up-front; our build allocates per-ubatch (256
 tokens here) and survives the same memory pressure.
 
-## Measured on an M1 and an M1 Max, three models
+## Measured on an M1, an M1 Max and an M2 Max, three models
 
 Measured 2026-10-09 with the same llama.cpp build (`65840ed`) on both drivers,
 using `llama-bench -p 512 -n 128 -ub 256 -b 256` with the `llama-bench`
-defaults for the rest (every layer on the GPU; 8 CPU threads on the M1 and 10
-on the M1 Max, which do not matter once the GPU does the work). Each cell is
-the mean ± sample standard deviation of 3 runs. The order of the two drivers
-flips from run to run (ours first, system first, ours first) so drift hits
-both. The system driver is Mesa 26.2.4 from `pacman`; ours is Honeykrisp v3
+defaults for the rest (every layer on the GPU; 8 CPU threads on the M1, 10 on
+the M1 Max and 12 on the M2 Max, which do not matter once the GPU does the
+work). Each cell is the mean ± sample standard deviation of 3 runs. The order
+of the two drivers flips from run to run (ours first, system first, ours first)
+so drift hits both. The system driver is Mesa 26.2.4 from `pacman`; ours is Honeykrisp v3
 `66cb84fd431d`. `-ub 256 -b 256` keeps every GPU submit short; the first
 table above used the default ubatch, so the numbers differ slightly.
 
@@ -180,12 +180,20 @@ table above used the default ubatch, so the numbers differ slightly.
 | M1 Max | Qwen3.5 4B IQ2_M | v3 | 248.99 ± 0.08 | 20.22 ± 0.50 | 1.55x / 14.5x |
 | M1 Max | Qwen3.5 9B IQ2_M | system Mesa | 94.77 ± 0.11 | 1.07 ± 0.00 | |
 | M1 Max | Qwen3.5 9B IQ2_M | v3 | 141.39 ± 0.21 | 12.49 ± 0.17 | 1.49x / 11.7x |
+| M2 Max | Llama 3.1 8B Q4_K_M | system Mesa | 175.23 ± 0.05 | 28.79 ± 0.15 | |
+| M2 Max | Llama 3.1 8B Q4_K_M | v3 | 215.50 ± 0.05 | 29.66 ± 0.09 | 1.23x / 1.03x |
+| M2 Max | Qwen3.5 4B IQ2_M | system Mesa | 194.82 ± 0.43 | 2.35 ± 0.07 | |
+| M2 Max | Qwen3.5 4B IQ2_M | v3 | 276.41 ± 23.64 | 22.33 ± 1.82 | 1.42x / 9.5x |
+| M2 Max | Qwen3.5 9B IQ2_M | system Mesa | 112.55 ± 0.08 | 1.85 ± 0.02 | |
+| M2 Max | Qwen3.5 9B IQ2_M | v3 | 165.71 ± 0.16 | 14.73 ± 0.01 | 1.47x / 8.0x |
 
-"vs system" reads prefill / decode. The Q4_K_M model gains little (1.04x to
-1.15x). The two IQ2_M models, the ones the lookup-table change described below
-targets, gain 1.4x to 1.6x on prefill and 11.7x to 16.8x on decode. Each cell
+"vs system" reads prefill / decode. The Q4_K_M model gains little (1.03x to
+1.23x). The two IQ2_M models, the ones the lookup-table change described below
+targets, gain 1.4x to 1.6x on prefill and 8.0x to 16.8x on decode. Each cell
 is only 3 runs, so a gap of a few percent between two cells is within what a
-re-run can move.
+re-run can move. One cell is noisier than that: the M2 Max 4B run on our
+driver measured 290, 249 and 290 tok/s on prefill (and 23.4, 20.2 and 23.4
+tok/s on decode), so its large deviation comes from the middle run.
 
 ## Step 3: put it on stage
 
