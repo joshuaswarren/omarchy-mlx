@@ -112,7 +112,12 @@ struct Fp64Ref {
 };
 
 // Exact fp64 attention reference over the bf16-widened operands.
-Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream stream) {
+Fp64Ref fp64_reference(
+    const array& q,
+    const array& k,
+    const array& v,
+    Stream stream,
+    bool causal = false) {
   auto qw = flat(q, stream);
   auto kw = flat(k, stream);
   auto vw = flat(v, stream);
@@ -124,9 +129,10 @@ Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream st
   for (int bi = 0; bi < b; ++bi) {
     for (int hi = 0; hi < h; ++hi) {
       for (int i = 0; i < lq; ++i) {
+        const int nk = causal ? i + (lk - lq) + 1 : lk;
         std::vector<double> scores(lk);
         double m = -std::numeric_limits<double>::infinity();
-        for (int j = 0; j < lk; ++j) {
+        for (int j = 0; j < nk; ++j) {
           double dot = 0.0;
           for (int d = 0; d < kHd; ++d) {
             dot += static_cast<double>(
@@ -138,13 +144,13 @@ Fp64Ref fp64_reference(const array& q, const array& k, const array& v, Stream st
           m = std::max(m, scores[j]);
         }
         double sum = 0.0;
-        for (int j = 0; j < lk; ++j) {
+        for (int j = 0; j < nk; ++j) {
           scores[j] = std::exp(scores[j] - m);
           sum += scores[j];
         }
         for (int d = 0; d < kHd; ++d) {
           double o = 0.0;
-          for (int j = 0; j < lk; ++j) {
+          for (int j = 0; j < nk; ++j) {
             o += scores[j] *
                 static_cast<double>(
                     vw[((size_t)(bi * h + hi) * lk + j) * kHd + d]);
@@ -744,4 +750,136 @@ TEST_CASE("masked and causal prefill keep the composition") {
       stream);
   CHECK(causal_dispatches > 2u);
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+}
+
+namespace {
+
+array sdpa_causal(array q, array k, array v, Stream stream) {
+  return fast::scaled_dot_product_attention(
+      std::move(q),
+      std::move(k),
+      std::move(v),
+      1.0f / std::sqrt(static_cast<float>(kHd)),
+      "causal",
+      std::nullopt,
+      {},
+      false,
+      stream);
+}
+
+// Pseudo-random bf16 with two outlier channels (|x| up to about 70), the
+// activation shape that made the composed causal route's error 6x its
+// non-causal figure.
+array make_bf16_outlier(Shape shape, uint32_t seed, Stream stream) {
+  auto values = pattern(
+      static_cast<size_t>(shape[0]) * shape[1] * shape[2] * shape[3], seed);
+  for (size_t i = 0; i < values.size(); ++i) {
+    const size_t d = i % kHd;
+    if (d == 5 || d == 77) {
+      values[i] *= 70.0f;
+    }
+  }
+  array a = astype(array(values.begin(), shape, float32), bfloat16, stream);
+  a.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  return a;
+}
+
+double max_abs_error(const std::vector<float>& got, const Fp64Ref& ref) {
+  double worst = 0.0;
+  for (size_t i = 0; i < got.size(); ++i) {
+    worst = std::max(worst, std::abs(static_cast<double>(got[i]) - ref.out[i]));
+  }
+  return worst;
+}
+
+} // namespace
+
+TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal route") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  struct Case {
+    int heads;
+    int kv_heads;
+    int lq;
+    int lk;
+  };
+  const Case cases[] = {
+      {8, 8, 64, 64},
+      {8, 2, 72, 72},
+      {8, 1, 128, 128},
+      {8, 2, 100, 200}, // q_len < k_len offset, ragged q tile
+      {8, 8, 96, 512},
+      {4, 1, 130, 1000}, // offset 870, tail key block
+      {8, 2, 512, 512},
+      {8, 1, 1000, 1000},
+      {8, 8, 1024, 1024},
+      {2, 1, 2048, 2048},
+  };
+  for (bool outlier : {false, true}) {
+    for (const auto& c : cases) {
+      auto make = outlier ? make_bf16_outlier : make_bf16;
+      array q = make({1, c.heads, c.lq, kHd}, 101 + c.lq, stream);
+      array k = make({1, c.kv_heads, c.lk, kHd}, 202 + c.lk, stream);
+      array v = make_bf16({1, c.kv_heads, c.lk, kHd}, 303 + c.lk, stream);
+      // The fp64 reference wants matching head counts: widen k and v.
+      array kw = c.kv_heads == c.heads
+          ? k
+          : repeat(k, c.heads / c.kv_heads, 1, stream);
+      array vw = c.kv_heads == c.heads
+          ? v
+          : repeat(v, c.heads / c.kv_heads, 1, stream);
+      auto ref = fp64_reference(q, kw, vw, stream, true);
+
+      unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+      const uint64_t composed_dispatches = dispatches_for(
+          [&] { return sdpa_causal(q, k, v, stream); }, stream);
+      std::vector<float> composed =
+          flat(sdpa_causal(q, k, v, stream), stream);
+      setenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH", "1", 1);
+      const uint64_t flash_dispatches = dispatches_for(
+          [&] { return sdpa_causal(q, k, v, stream); }, stream);
+      std::vector<float> run1 = flat(sdpa_causal(q, k, v, stream), stream);
+      std::vector<float> run2 = flat(sdpa_causal(q, k, v, stream), stream);
+      std::vector<float> run3 = flat(sdpa_causal(q, k, v, stream), stream);
+      unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+
+      const bool eligible = c.lk % 8 == 0 && c.lq >= 64;
+      CAPTURE(outlier);
+      CAPTURE(c.heads);
+      CAPTURE(c.kv_heads);
+      CAPTURE(c.lq);
+      CAPTURE(c.lk);
+      if (eligible) {
+        CHECK_EQ(flash_dispatches, 1u);
+      } else {
+        CHECK_EQ(flash_dispatches, composed_dispatches);
+      }
+      CHECK(run1 == run2);
+      CHECK(run1 == run3);
+      const double flash_max = max_abs_error(run1, ref);
+      const double composed_max = max_abs_error(composed, ref);
+      const double flash_l2 = rel_l2_error(run1, ref);
+      const double composed_l2 = rel_l2_error(composed, ref);
+      // Both routes sit on the bf16 output-rounding floor, so a strict
+      // inequality can flip on a few rounding-boundary elements: the gate
+      // is a 5 % / 3 % tolerance (MatmulGap H35 amendment 2); the strict
+      // result is printed beside it.
+      MESSAGE(
+          "outlier ", outlier, " h", c.heads, "/", c.kv_heads,
+          " lq ", c.lq, " lk ", c.lk, ": max abs flash ", flash_max,
+          " composed ", composed_max, " rel-L2 flash ", flash_l2,
+          " composed ", composed_l2, " strict ",
+          (flash_max <= composed_max && flash_l2 <= composed_l2));
+      CHECK_MESSAGE(
+          flash_max <= composed_max * 1.05,
+          "flash max abs error ", flash_max, " composed ", composed_max);
+      CHECK_MESSAGE(
+          flash_l2 <= composed_l2 * 1.03,
+          "flash rel-L2 ", flash_l2, " composed ", composed_l2);
+    }
+  }
+
 }

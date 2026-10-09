@@ -1,0 +1,3 @@
+venv-cf 0.32.4.dev202610081925+3c767b30 verified=match version_match=True libmlx=22e357f6e44d155a core=f0ebfdafc986ef61 (M1)
+venv-cf 0.32.4.dev202610081925+3c767b30 verified=match version_match=True libmlx=22e357f6e44d155a core=f0ebfdafc986ef61 (M1 Max)
+M2 Max: loaded check not run (the chip was held for another job); on-disk libmlx.so and mlx.core sha256 equal the two lines above (22e357f6e44d155a, f0ebfdafc986ef61)

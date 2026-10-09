@@ -1,0 +1,35 @@
+start 2026-10-09T00:55:15Z chip G13C kernel 7.1.12-2-12.6-sep-ARCH load 0.47
+wheel 0.32.4.dev202610090004+2073579c
+device Apple M1 Max (G13C C0)
+vulkaninfo: 	apiVersion = 1.4.362;	driverVersion = 26.2.99;	deviceName = Apple M1 Max (G13C C0);	driverName = Honeykrisp;	driverInfo = Mesa 26.3.0-devel (git-6543eeb7df);
+driver library sha256 3546bcafe8ed3995
+test binary sha256 957ed9f82e0d155b
+provenance: 0.32.4.dev202610090004+2073579c verified=match version_match=True
+device test rc=0 [doctest] test cases:   1 |   1 passed | 0 failed | 6 skipped [doctest] assertions: 100 | 100 passed | 0 failed | [doctest] Status: SUCCESS! 
+outlier false h8/8 lq 64 lk 64: max abs flash 0.00194971 composed 0.00194971 rel-L2 flash 0.00148166 composed 0.00148166 strict false
+outlier false h8/2 lq 72 lk 72: max abs flash 0.00195252 composed 0.00195252 rel-L2 flash 0.00150047 composed 0.00150047 strict false
+outlier false h8/1 lq 128 lk 128: max abs flash 0.00195256 composed 0.00195256 rel-L2 flash 0.00151173 composed 0.00151173 strict false
+outlier false h8/2 lq 100 lk 200: max abs flash 0.000488031 composed 0.000488031 rel-L2 flash 0.00165542 composed 0.00165541 strict false
+outlier false h8/8 lq 96 lk 512: max abs flash 0.000244212 composed 0.000244139 rel-L2 flash 0.00165196 composed 0.00165196 strict false
+outlier false h4/1 lq 130 lk 1000: max abs flash 0.000240799 composed 0.000240799 rel-L2 flash 0.00165497 composed 0.00165497 strict false
+outlier false h8/2 lq 512 lk 512: max abs flash 0.00195143 composed 0.00195143 rel-L2 flash 0.00153566 composed 0.00153566 strict false
+outlier false h8/1 lq 1000 lk 1000: max abs flash 0.00194675 composed 0.00194675 rel-L2 flash 0.00153911 composed 0.00153911 strict false
+outlier false h8/8 lq 1024 lk 1024: max abs flash 0.00194213 composed 0.00194213 rel-L2 flash 0.0015426 composed 0.0015426 strict false
+outlier false h2/1 lq 2048 lk 2048: max abs flash 0.00194716 composed 0.00194716 rel-L2 flash 0.00154768 composed 0.00154768 strict false
+outlier true h8/8 lq 64 lk 64: max abs flash 0.00195646 composed 0.00195646 rel-L2 flash 0.000553715 composed 0.000553727 strict true
+outlier true h8/2 lq 72 lk 72: max abs flash 0.00196992 composed 0.00196992 rel-L2 flash 0.00056732 composed 0.000567315 strict false
+outlier true h8/1 lq 128 lk 128: max abs flash 0.00198764 composed 0.00196554 rel-L2 flash 0.000689831 composed 0.000689791 strict false
+outlier true h8/2 lq 100 lk 200: max abs flash 0.00201675 composed 0.00197309 rel-L2 flash 0.000893942 composed 0.000893934 strict false
+outlier true h8/8 lq 96 lk 512: max abs flash 0.00196808 composed 0.00198097 rel-L2 flash 0.00102438 composed 0.0010244 strict true
+outlier true h4/1 lq 130 lk 1000: max abs flash 0.00199397 composed 0.00203813 rel-L2 flash 0.00124307 composed 0.00124307 strict true
+outlier true h8/2 lq 512 lk 512: max abs flash 0.00204839 composed 0.00205954 rel-L2 flash 0.00101133 composed 0.00101136 strict true
+outlier true h8/1 lq 1000 lk 1000: max abs flash 0.00203315 composed 0.00201407 rel-L2 flash 0.00102218 composed 0.00102216 strict false
+outlier true h8/8 lq 1024 lk 1024: max abs flash 0.00202076 composed 0.00203669 rel-L2 flash 0.00101111 composed 0.00101112 strict true
+outlier true h2/1 lq 2048 lk 2048: max abs flash 0.00202132 composed 0.00201464 rel-L2 flash 0.00120074 composed 0.00120073 strict false
+composed L=512,1024,2048: {"mode": "causal", "flash_min_l": null, "flash_env": null, "L": {"512": {"ms_median": 1.9872, "ms_min": 1.9726, "ms_all": [2.041, 1.973, 1.987, 1.993, 1.98], "max_err_head0": 0.006075382232666016, "mean_err_head0": 0.00014500711404252797}, "1024": {"ms_median": 6.2149, "ms_min": 6.0283, "ms_all": [6.028, 6.152, 6.301, 6.215, 6.316], "max_err_head0": 0.0038777589797973633, "mean_err_head0": 0.00010477719479240477}, "2048": {"ms_median": 23.0705, "ms_min": 22.9947, "ms_all": [23.096, 23.004, 23.071, 23.08, 22.995], "max_err_head0": 0.0039037466049194336, "mean_err_head0": 7.490463030990213e-05}}}
+flash-rowp1 L=512,1024,2048: {"mode": "causal", "flash_min_l": null, "flash_env": null, "L": {"512": {"ms_median": 1.8197, "ms_min": 1.8117, "ms_all": [1.868, 1.823, 1.82, 1.816, 1.812], "max_err_head0": 0.006075382232666016, "mean_err_head0": 0.00014500772522296757}, "1024": {"ms_median": 4.6823, "ms_min": 4.6317, "ms_all": [4.645, 4.705, 4.682, 4.632, 4.825], "max_err_head0": 0.0038777589797973633, "mean_err_head0": 0.00010477763134986162}, "2048": {"ms_median": 15.7328, "ms_min": 15.6332, "ms_all": [15.733, 15.758, 15.695, 15.736, 15.633], "max_err_head0": 0.0039037466049194336, "mean_err_head0": 7.490500865969807e-05}}}
+composed L=512,1024,2048: {"mode": "causal", "flash_min_l": null, "flash_env": null, "L": {"512": {"ms_median": 1.9697, "ms_min": 1.9633, "ms_all": [2.033, 1.968, 1.963, 1.972, 1.97], "max_err_head0": 0.006075382232666016, "mean_err_head0": 0.00014500711404252797}, "1024": {"ms_median": 6.1071, "ms_min": 5.9848, "ms_all": [5.985, 6.065, 6.107, 6.138, 6.184], "max_err_head0": 0.0038777589797973633, "mean_err_head0": 0.00010477719479240477}, "2048": {"ms_median": 23.0953, "ms_min": 22.9506, "ms_all": [23.02, 23.101, 23.095, 23.254, 22.951], "max_err_head0": 0.0039037466049194336, "mean_err_head0": 7.490463030990213e-05}}}
+flash-rowp1 L=512,1024,2048: {"mode": "causal", "flash_min_l": null, "flash_env": null, "L": {"512": {"ms_median": 1.8049, "ms_min": 1.7858, "ms_all": [1.919, 1.834, 1.793, 1.805, 1.786], "max_err_head0": 0.006075382232666016, "mean_err_head0": 0.00014500772522296757}, "1024": {"ms_median": 4.7269, "ms_min": 4.6295, "ms_all": [4.727, 4.676, 4.762, 4.63, 4.788], "max_err_head0": 0.0038777589797973633, "mean_err_head0": 0.00010477763134986162}, "2048": {"ms_median": 15.7161, "ms_min": 15.625, "ms_all": [15.9, 15.683, 15.625, 15.811, 15.716], "max_err_head0": 0.0039037466049194336, "mean_err_head0": 7.490500865969807e-05}}}
+composed L=512,1024,2048: {"mode": "causal", "flash_min_l": null, "flash_env": null, "L": {"512": {"ms_median": 1.9535, "ms_min": 1.9253, "ms_all": [1.991, 1.957, 1.954, 1.925, 1.933], "max_err_head0": 0.006075382232666016, "mean_err_head0": 0.00014500711404252797}, "1024": {"ms_median": 6.1288, "ms_min": 6.0391, "ms_all": [6.039, 6.054, 6.129, 6.163, 6.164], "max_err_head0": 0.0038777589797973633, "mean_err_head0": 0.00010477719479240477}, "2048": {"ms_median": 23.0703, "ms_min": 23.0074, "ms_all": [23.007, 23.064, 23.07, 23.081, 23.081], "max_err_head0": 0.0039037466049194336, "mean_err_head0": 7.490463030990213e-05}}}
+flash-rowp1 L=512,1024,2048: {"mode": "causal", "flash_min_l": null, "flash_env": null, "L": {"512": {"ms_median": 1.8455, "ms_min": 1.819, "ms_all": [1.863, 1.82, 1.819, 1.846, 1.857], "max_err_head0": 0.006075382232666016, "mean_err_head0": 0.00014500772522296757}, "1024": {"ms_median": 4.7531, "ms_min": 4.6411, "ms_all": [4.782, 4.767, 4.641, 4.753, 4.733], "max_err_head0": 0.0038777589797973633, "mean_err_head0": 0.00010477763134986162}, "2048": {"ms_median": 15.7059, "ms_min": 15.6364, "ms_all": [15.636, 15.729, 15.706, 15.7, 15.787], "max_err_head0": 0.0039037466049194336, "mean_err_head0": 7.490500865969807e-05}}}
+end 2026-10-09T00:58:42Z
