@@ -329,6 +329,7 @@
 #include "gated_delta_prefill_kktqkt.h"
 #include "gated_delta_prefill_coopmat_hoist_bf16.h"
 #include "gated_delta_prefill_recur32_bf16.h"
+#include "gated_delta_prefill_recur32_masked_bf16.h"
 #include "fast_norm_gated_bf16.h"
 #include "fast_norm_gated_only_bf16.h"
 #include "fast_norm_gated_apple_bf16.h"
@@ -1805,6 +1806,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_batch4_bf16,
           qmm_vec_q4_word_subgroup_batch4_bf16_size};
+    case ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16:
+      return {
+          gated_delta_prefill_recur32_masked_bf16,
+          gated_delta_prefill_recur32_masked_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

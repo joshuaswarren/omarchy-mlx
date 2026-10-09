@@ -12245,12 +12245,11 @@ void GatedDeltaUpdate::eval_gpu(
     params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
     params.dims = static_cast<uint32_t>(T);
     // Scalar g only: [B=1, T, Hv] (ndim gate; B==1 comes from fused_ready).
-    // Bit1 enables the per-token mask (offset in shape[3]); bit2 selects the
-    // f32 gate load.
+    // Bit2 selects the f32 gate load. A mask (offset in shape[3]) selects the
+    // MASKED build of the kernel below.
     params.flags = (g.dtype() == float32 ? 4u : 0u);
     if (has_mask) {
       params.shape[3] = checked_item_offset(*mask, mask->size(), tag, out);
-      params.flags |= 2u;
     }
     std::array<omarchy::ComputeBinding, 11> bindings{
         binding(q),      // 0 QBuf
@@ -12266,7 +12265,8 @@ void GatedDeltaUpdate::eval_gpu(
         binding(out)};   // 10 Snap - unused (single pass)
     // One 128-thread workgroup per four (hv, dv) rows: grid (Hv, Dv/4).
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::GatedDeltaPrefillRecur32BF16,
+        has_mask ? omarchy::ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16
+                 : omarchy::ComputeKernel::GatedDeltaPrefillRecur32BF16,
         bindings,
         params,
         static_cast<uint32_t>(Hv),

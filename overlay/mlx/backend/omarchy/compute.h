@@ -950,6 +950,12 @@ enum class ComputeKernel : uint16_t {
   // gate/value f32 totals in, silu(gate)*value with one bf16 rounding
   // out. Append-only profile id.
   Int8SwigluEpilogueOp,
+  // Masked build of the recur32 prefill scan (same source, -DMASKED=1): a
+  // per-token validity mask [1, T] in the mask binding (shape[3] offset); a
+  // masked token leaves the state untouched and writes zero. Kept separate
+  // from GatedDeltaPrefillRecur32BF16 because the mask branch in the maskless
+  // loop cost the M1 8-12%. Append-only profile id.
+  GatedDeltaPrefillRecur32MaskedBF16,
   Count,
 };
 
