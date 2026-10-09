@@ -3171,7 +3171,8 @@ void dispatch_gather_qmm(
     bool fp_mode,
     const std::optional<array>& out_global_scale,
     array& out,
-    const Stream& s) {
+    const Stream& s,
+    bool right_sorted = false) {
   auto& encoder = omarchy::get_command_encoder(s);
   require_float_dtype(tag, x, out, encoder);
   if (bits != 4 && bits != 8) {
@@ -3402,6 +3403,38 @@ void dispatch_gather_qmm(
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         sub_caps.storage_buffer_16bit_access;
+  }
+  // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
+  // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
+  // every row of a run re-reads the same expert's weights in the kernels
+  // above. gather_qmm_tile.comp dequantizes a weight tile once per run of
+  // up to 32 rows. Gated to the proven layout class of the subgroup kernel
+  // plus K, N multiples of 64; MLX_OMARCHY_GATHER_QMM_TILE=0 turns it off.
+  // Correct for any index order; only a sorted promise makes it fast.
+  const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
+  if (right_sorted && !fp_mode && params.matrix_m == 1 && index_count >= 64 &&
+      (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
+      group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
+      (out.dtype() == bfloat16 || out.dtype() == float16) &&
+      encoder.device().capabilities().storage_buffer_16bit_access &&
+      tile_row_groups <= omarchy::kMaxComputeGroupCountX) {
+    omarchy::ComputeKernel tile_kernel;
+    if (out.dtype() == float16) {
+      tile_kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbTileF16
+                            : omarchy::ComputeKernel::GatherQmmTileF16;
+    } else {
+      tile_kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbTileBF16
+                            : omarchy::ComputeKernel::GatherQmmTileBF16;
+    }
+    encoder.dispatch_compute(
+        tile_kernel,
+        bindings,
+        params,
+        static_cast<uint32_t>(n / 64),
+        tile_row_groups,
+        1u);
+    return;
   }
   if (fp_mode) {
     if (out.dtype() == float32) {
@@ -6385,7 +6418,8 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         /* fp_mode = */ false,
         /* out global scale = */ std::nullopt,
         out,
-        out.primitive().stream());
+        out.primitive().stream(),
+        right_sorted_);
     return;
   }
   // Non-affine inputs: [x, w, scales(uint8), lhs, rhs]; no bias, no

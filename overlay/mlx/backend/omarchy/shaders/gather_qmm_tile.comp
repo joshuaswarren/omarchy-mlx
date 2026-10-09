@@ -1,0 +1,203 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Tiled gathered affine quantized matmul for sorted-expert prefill
+// (MoE SwitchLinear at N*k >= 64 rows): x is [B, 1, K], rhs[b] is the
+// expert of row b, and the rows arrive sorted by expert, so a run of rows
+// shares one expert's weights. gather_qmm.comp and gather_qmm_sub.comp give
+// every row its own pass over the expert's weights; this kernel dequantizes
+// a 64-column x 64-k weight tile into shared memory once per run of rows and
+// multiplies it with up to 32 rows.
+//
+// Contract (host gate in dispatch_gather_qmm): m == 1, transposed affine
+// 4-bit, group 64, K % 64 == 0, N % 64 == 0, bf16/f16 storage, the rhs index
+// array promised sorted. Any index order still computes the right result:
+// a tile splits its 32 rows into runs of equal rhs and takes one weight pass
+// per run, so unsorted input only costs speed.
+//
+// One workgroup = 32 rows (gl_WorkGroupID.y) x 64 columns
+// (gl_WorkGroupID.x), 256 threads; thread (tr, tc) owns rows 2tr, 2tr+1 and
+// columns 4tc..4tc+3. Per output element the k sum runs in ascending k with
+// the same dequantized value and multiply-add as gather_qmm.comp.
+// Binding, push-constant and packed-buffer layout equal gather_qmm.comp:
+// shape[0] the row count B, in_strides[0]/out_strides[0] the lhs/rhs index
+// word offsets, shape[1] the bias region byte base.
+
+#version 460
+
+#if defined(USE_FP16) || defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#error "gather_qmm_tile.comp needs USE_FP16 or USE_BF16"
+#endif
+#define PARAM_BYTES 2u
+
+#define TM 32u
+#define TN 64u
+#define TK 64u
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  STORAGE_TYPE values[];
+} input_x;
+layout(set = 0, binding = 1, std430) readonly buffer PackedParams {
+  uint values[];
+} packed_params;
+layout(set = 0, binding = 2, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+#define LHS_INDEX_AT(batch) packed_params.values[params.aux_offset + lhs_word_base + (batch)]
+#define RHS_INDEX_AT(batch) packed_params.values[params.aux_offset + rhs_word_base + (batch)]
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+// Group parameter (scale or bias) at byte_offset in the packed word buffer,
+// in the storage dtype.
+float decode_param(uint byte_offset) {
+  uint word = packed_params.values[params.aux_offset + byte_offset / 4u];
+  uint half_index = byte_offset / 2u;
+#if defined(USE_FP16)
+  uint shifted = (half_index & 1u) == 0u ? word : word >> 16u;
+  return unpackHalf2x16(shifted).x;
+#else
+  uint bits = (half_index & 1u) == 0u ? word << 16u : word & 0xffff0000u;
+  return uintBitsToFloat(bits);
+#endif
+}
+
+shared float sX[TK][TM + 2u];
+shared float sW[TK][TN];
+shared uint sLhs[TM];
+
+void main() {
+  uint t = gl_LocalInvocationID.x;
+  uint n0 = gl_WorkGroupID.x * TN;
+  uint r0 = gl_WorkGroupID.y * TM;
+  uint rows_total = params.shape[0];
+  uint nrows = min(TM, rows_total - r0);
+  uint K = params.matrix_k;
+  uint N = params.matrix_n;
+  uint words_per_row = K / 8u;
+  uint groups_per_row = K / TK;
+  uint w_row_words = N * words_per_row;
+  uint scale_row_words = N * groups_per_row;
+  uint lhs_word_base = params.in_strides[0];
+  uint rhs_word_base = params.out_strides[0];
+
+  if (t < TM) {
+    sLhs[t] = (t < nrows) ? LHS_INDEX_AT(r0 + t) : 0u;
+  }
+  barrier();
+
+  uint tc = t & 15u;
+  uint tr = t >> 4u;
+  uint load_col = t & 63u;
+  uint load_word = (t >> 6u) * 2u;
+
+  uint run_begin = 0u;
+  while (run_begin < nrows) {
+    uint expert = RHS_INDEX_AT(r0 + run_begin);
+    uint run_end = run_begin + 1u;
+    while (run_end < nrows && RHS_INDEX_AT(r0 + run_end) == expert) {
+      ++run_end;
+    }
+    float acc[8];
+    for (uint i = 0u; i < 8u; ++i) {
+      acc[i] = 0.0;
+    }
+    uint w_base = params.rhs_offset + expert * w_row_words +
+        (n0 + load_col) * words_per_row + load_word;
+    uint scale_base = expert * scale_row_words + (n0 + load_col) * groups_per_row;
+    for (uint k0 = 0u; k0 < K; k0 += TK) {
+      for (uint i = 0u; i < 8u; ++i) {
+        uint idx = t + i * 256u;
+        uint row = idx >> 6u;
+        uint kk = idx & 63u;
+        float v = 0.0;
+        if (row >= run_begin && row < run_end) {
+          v = LOAD_VALUE(input_x.values[params.lhs_offset + sLhs[row] * K + k0 + kk]);
+        }
+        sX[kk][row] = v;
+      }
+      uint group = k0 / TK;
+      float scale = decode_param((scale_base + group) * PARAM_BYTES);
+      float bias = 0.0;
+#ifndef NO_BIAS
+      bias = decode_param(params.shape[1] + (scale_base + group) * PARAM_BYTES);
+#endif
+      for (uint j = 0u; j < 2u; ++j) {
+        uint word = input_w.values[w_base + (k0 >> 3u) + j];
+        for (uint q = 0u; q < 8u; ++q) {
+          uint code = bitfieldExtract(word, int(q * 4u), 4);
+          sW[(load_word + j) * 8u + q][load_col] = scale * float(code) + bias;
+        }
+      }
+      barrier();
+      for (uint kk = 0u; kk < TK; ++kk) {
+        float x0 = sX[kk][2u * tr];
+        float x1 = sX[kk][2u * tr + 1u];
+        for (uint c = 0u; c < 4u; ++c) {
+          float w = sW[kk][4u * tc + c];
+          acc[c] += x0 * w;
+          acc[4u + c] += x1 * w;
+        }
+      }
+      barrier();
+    }
+    for (uint ri = 0u; ri < 2u; ++ri) {
+      uint row = 2u * tr + ri;
+      if (row >= run_begin && row < run_end) {
+        for (uint c = 0u; c < 4u; ++c) {
+          output_data.values[params.output_offset + (r0 + row) * N + n0 + 4u * tc + c] =
+              STORE_VALUE(acc[ri * 4u + c]);
+        }
+      }
+    }
+    run_begin = run_end;
+  }
+}

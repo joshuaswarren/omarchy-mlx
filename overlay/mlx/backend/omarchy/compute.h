@@ -960,6 +960,14 @@ enum class ComputeKernel : uint16_t {
   // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
   // MatmulGap H35). Append-only profile id.
   SdpaCausalFlashCoopmatBF16,
+  // Tiled sorted-expert gathered 4-bit/group-64 matmul for MoE prefill
+  // (shaders/gather_qmm_tile.comp): 32 rows x 64 columns per workgroup, the
+  // expert's weight tile dequantized once per run of rows. Appended to keep
+  // profile kernel ids stable. Append-only profile id.
+  GatherQmmTileF16,
+  GatherQmmTileBF16,
+  GatherQmmNbTileF16,
+  GatherQmmNbTileBF16,
   Count,
 };
 
