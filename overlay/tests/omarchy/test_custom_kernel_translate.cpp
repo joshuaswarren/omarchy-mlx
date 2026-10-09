@@ -522,6 +522,78 @@ TEST_CASE("MSL auto value declarations become float locals") {
         std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Qwen3.6-35B-A3B prefill (no expert offload, custom-kernel gate off — these
+// are mlx_vlm kernels): the qwen3_5 ragged-SDPA and gated-delta kernels walk
+// buffer rows with `kptr += BN * D_SIZE;` — the alias pass refused the bare
+// advance as `device pointer arithmetic` (serve refusal, 2026-10-09).
+
+TEST_CASE("pointer advance on an alias becomes a location variable") {
+  const char* source =
+      "[[kernel]] void row_walk(\n"
+      "    const device float* keys [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint3 tg [[threadgroup_position_in_grid]]) {\n"
+      "  const device float* kptr = keys + tg.x * 8u;\n"
+      "  float acc = 0.0f;\n"
+      "  for (int i = 0; i < 4; ++i) {\n"
+      "    acc += kptr[0] + kptr[1];\n"
+      "    kptr += 8u;\n"
+      "  }\n"
+      "  y[tg.x] = acc;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  // The pointer itself is gone (the location variable legitimately keeps
+  // the name as a suffix); no declaration, no indexed pointer use, no
+  // advance statement survives.
+  CHECK(glsl.find("float* kptr") == std::string::npos);
+  CHECK(glsl.find("kptr[") == std::string::npos);
+  CHECK(glsl.find("kptr +=") == std::string::npos);
+  // The location starts at the row offset and advances in the loop; uses
+  // read through the base buffer via its macro.
+  CHECK(glsl.find("uint _mlx_kptr_loc = uint(") != std::string::npos);
+  CHECK(glsl.find("_mlx_kptr_loc += 8u;") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg0[(_mlx_kptr_loc) + (0)]") != std::string::npos);
+}
+
+TEST_CASE("pointer advance on a buffer parameter becomes a location") {
+  const char* source =
+      "[[kernel]] void step_walk(\n"
+      "    const device float* q [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint dv [[thread_position_in_grid.y]]) {\n"
+      "  y += dv * 4u;\n"
+      "  y[0] = q[0];\n"
+      "  y += 2u;\n"
+      "  y[1] = q[1];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("y +=") == std::string::npos);
+  // The location declaration survives later constructor wrapping.
+  CHECK(glsl.find("uint _mlx_y_loc = ") != std::string::npos);
+  CHECK(glsl.find("_mlx_y_loc += dv * 4u;") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(_mlx_y_loc) + (0)]") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[(_mlx_y_loc) + (1)]") != std::string::npos);
+}
+
+TEST_CASE("single-token typedefs expand to their type") {
+  // `typedef float U;` inside the kernel body (mlx_vlm qwen3_5 ragged SDPA)
+  // has no GLSL meaning.
+  const char* source =
+      "[[kernel]] void widen(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  typedef float U;\n"
+      "  U v = x[i];\n"
+      "  y[i] = v * 2.0f;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("typedef") == std::string::npos);
+  CHECK(glsl.find("U ") == std::string::npos);
+  CHECK(glsl.find("float v = _mlx_arg0[i];") != std::string::npos);
+}
+
 TEST_CASE("auto pointer declarations alias like explicit device pointers") {
   // The Qwen3.5 MoE router/decode row-walk idiom: row alias off a buffer
   // parameter, then a scoped rebind of the buffer's own name to the row.
