@@ -11665,11 +11665,13 @@ bool GatedDeltaUpdate::use_fallback(
 // head counts. Everything else - per-channel decay, 16-bit/32-bit
 // activations, ragged head dims, and Hk != Hv (GQA) - keeps the composed
 // fallback, which is the arithmetic reference the kernel was
-// equivalence-checked against. GQA is excluded because the forward primitive
-// now exists at Hk != Hv (the backend expands q and k itself), so autograd
-// reaches this kernel at GQA shapes, and 'fused gdn vjp matches the composed
-// reference at GQA shapes' failed against the composed reference there
-// (M1 Max, Hk=4 Hv=16 T=17; receipt 2026-10-09-gdn-hk-neq-hv-native).
+// equivalence-checked against. GQA is composed by default because the forward
+// primitive now exists at Hk != Hv (the backend expands q and k itself), so
+// autograd reaches this kernel at GQA shapes, where the former GQA doctest
+// (raw pattern() values as the decay, which compound over T) disagreed with
+// the composed reference on M1 Max (Hk=4 Hv=16 T=17). MLX_OMARCHY_FUSED_VJP_GQA=1
+// selects the fused backward at GQA shapes; the conditioned-input doctests
+// measure it (receipt 2026-10-09-gdn-hk-neq-hv-native).
 // MLX_OMARCHY_NO_FUSED_VJP=1 is the kill switch.
 bool GatedDeltaUpdateVJP::use_fallback(
     const int Hk,
@@ -11684,7 +11686,13 @@ bool GatedDeltaUpdateVJP::use_fallback(
   if (disabled) {
     return true;
   }
-  return Dk != 128 || Dv != 128 || Hk != Hv;
+  if (Dk != 128 || Dv != 128 || Hk <= 0 || Hv <= 0) {
+    return true;
+  }
+  if (Hk == Hv) {
+    return false;
+  }
+  return !omarchy::env_flag("MLX_OMARCHY_FUSED_VJP_GQA") || Hv % Hk != 0;
 }
 
 void GatedDeltaUpdateVJP::eval_gpu(
