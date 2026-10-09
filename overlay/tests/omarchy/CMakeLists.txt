@@ -342,6 +342,17 @@ target_link_options(omarchy_take_bool_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
 doctest_discover_tests(omarchy_take_bool_tests)
 add_test(NAME omarchy_take_bool_tests COMMAND omarchy_take_bool_tests)
+
+add_executable(omarchy_take_u8_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_take_u8.cpp)
+target_link_libraries(omarchy_take_u8_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_take_u8_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_take_u8_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_take_u8_tests)
+add_test(NAME omarchy_take_u8_tests COMMAND omarchy_take_u8_tests)
 # test_eq_math and test_sdpa_norm_regression are still owned by their
 # respective authors. omarchy_topk_ops_tests is UNREGISTERED (2026-09-02,
 # IndexingTopkRepair): its single case only exercised WideRowTopK's

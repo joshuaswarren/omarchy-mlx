@@ -32,7 +32,10 @@
 // bool values, and BYTE_AT extracts the lane, exactly the byte-load
 // path the scatter bool variants and the packed-bool SelectBool already
 // use (no 8-bit storage feature needed because reads ride a uint
-// word). USE_MULTI_INDEX packs every broadcast index array into binding
+// word). USE_U8 copies raw uint8/int8 bytes through the same lane
+// merge without the 0/1 normalization; both byte tables pre-zero the
+// output on the host because bytes land through atomicOr.
+// USE_MULTI_INDEX packs every broadcast index array into binding
 // 1, stores [axis extents | table strides | packed word offsets] at
 // binding 2, and moves output to binding 3. The push-constant tables
 // cap table and broadcast-index ranks at four; gathered axes use the
@@ -80,6 +83,13 @@ uint16_t bf16_store(float value) {
 #define STORAGE_TYPE uint
 #define LOAD_BOOL_LANE(word, lane) (((word) >> ((lane) * 8u)) & 0xFFu)
 #define STORE_BOOL(b) ((b) ? 1u : 0u)
+#elif defined(USE_U8)
+// Raw byte table storage: uint8/int8 tables ride the same 32-bit word
+// transport as packed bools minus the bool 0/1 normalization - the
+// BYTE_AT-extracted lane ORs into the output word verbatim, so unsigned
+// bytes and int8 two's-complement bytes both stay bit-exact. Reads use
+// a uint word, so no 8-bit storage feature is needed.
+#define STORAGE_TYPE uint
 #elif defined(USE_U16)
 // Raw 16-bit table storage: halfwords copy bitwise, so int16/uint16
 // tables keep packed bits exact. Reads need the 16-bit storage
@@ -254,25 +264,34 @@ void main() {
 #else
     float value = 0.0;
 #endif
-#ifdef USE_BOOL
-    // Packed-bool write: each output index t owns a unique byte lane
-    // inside output word (output_offset + t) >> 2. A plain 32-bit word
-    // store would clobber three neighbor bools, so the bit goes in
-    // through atomicOr. The four bools of one output word are written
-    // by four threads, each on a different byte lane - no two writers
-    // touch the same byte, so the OR is a simple merge. The read side
-    // word-shifts the byte address too, because input_data.values is
-    // a uint array indexed by word, not by byte.
+#if defined(USE_BOOL) || defined(USE_U8)
+    // Byte-lane merge shared by packed bools and raw uint8/int8 bytes:
+    // each output index t owns a unique byte lane inside output word
+    // (output_offset + t) >> 2. A plain 32-bit word store would clobber
+    // three neighbor bytes, so the byte goes in through atomicOr. The
+    // four bytes of one output word are written by four threads, each
+    // on a different lane - no two writers touch the same byte, so the
+    // OR is a simple merge. The read side word-shifts the byte address
+    // too, because input_data.values is a uint array indexed by word,
+    // not by byte. Bool normalizes to 0/1; the byte tables copy the
+    // lane verbatim, and an invalid index ORs 0 into the pre-zeroed
+    // output - the documented zero read.
     uint in_elem = params.lhs_offset + src + win;
+#ifdef USE_BOOL
     bool bvalue = valid
         ? (LOAD_BOOL_LANE(input_data.values[in_elem >> 2u],
                           in_elem & 3u) != 0u)
         : false;
+    uint bbit = STORE_BOOL(bvalue);
+#else
+    uint bbit = valid
+        ? BYTE_AT(input_data.values[in_elem >> 2u], in_elem & 3u)
+        : 0u;
+#endif
     uint out_elem = params.output_offset + t;
     uint out_byte = out_elem & 3u;
     uint out_word_index = out_elem >> 2u;
-    uint bbit = STORE_BOOL(bvalue) << (out_byte * 8u);
-    atomicOr(output_data.values[out_word_index], bbit);
+    atomicOr(output_data.values[out_word_index], bbit << (out_byte * 8u));
 #else
     if (valid) {
       value = LOAD_VALUE(

@@ -84,9 +84,11 @@
 #include "take_u16.h"
 #include "take_i64.h"
 #include "take_bool.h"
+#include "take_u8.h"
 #include "take_c64.h"
 #include "take_multi_c64.h"
 #include "take_multi_bool.h"
+#include "take_multi_u8.h"
 #include "take_multi_u16.h"
 #include "take_multi_i64.h"
 #include "slice_update_reduce_bf16.h"
@@ -853,6 +855,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {take_i64, take_i64_size};
     case ComputeKernel::TakeBool:
       return {take_bool, take_bool_size};
+    case ComputeKernel::TakeU8:
+      return {take_u8, take_u8_size};
     case ComputeKernel::TakeComplex64:
       return {take_c64, take_c64_size};
     case ComputeKernel::TakeMultiF32:
@@ -869,6 +873,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {take_multi_i64, take_multi_i64_size};
     case ComputeKernel::TakeMultiBool:
       return {take_multi_bool, take_multi_bool_size};
+    case ComputeKernel::TakeMultiU8:
+      return {take_multi_u8, take_multi_u8_size};
     case ComputeKernel::TakeMultiComplex64:
       return {take_multi_c64, take_multi_c64_size};
     case ComputeKernel::SliceUpdateReduceF32:
