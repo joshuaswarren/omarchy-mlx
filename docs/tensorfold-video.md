@@ -39,12 +39,22 @@ hf download joshuaswarren/MiniMax-H3-int8-omarchy --local-dir hf-bundle
 Clone and patch the engine, then install it editable. No other GitHub PR or issue is opened anywhere as part of this work.
 
 ```bash
+# The render driver lives in this repo; clone it so the script paths resolve.
+git clone https://github.com/joshuaswarren/omarchy-mlx
+cd omarchy-mlx
+git checkout origin/main
+
+# The H3 engine itself, with the six local patches.
 git clone https://github.com/drowzeys/TensorFold
 cd TensorFold
 git checkout ea9b63728b690e511722a18ace3b43521a750789
-# Apply the local patch set from this repo:
-for p in /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/*.patch; do patch -p1 < "$p"; done
+# The patches directory holds two unrelated series: the older 01- and 02- pair targets a
+# different upstream; the six 0010-0060 files target this drowzeys pin. Pin the glob:
+for p in /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/{0010,0020,0030,0040,0050,0060}-*-*.patch; do
+  patch -p1 < "$p"
+done
 pip install -e .
+pip install numpy tqdm safetensors requests pillow huggingface_hub mlx-vlm
 ```
 
 The patch set:
@@ -55,6 +65,26 @@ The patch set:
 - `0040-h3-int8-state-loader.patch` adds `load_int8_dit` to assemble the DiT from the saved int8 shards with a strict, from-state per-block load and the 8-bit AdaLN requantization.
 - `0050-h3-sampler-resume-checkpoints.patch` adds per-step safetensors checkpoints and `start_index`-driven resume to the sampler, plus the `check_noise` gating on resume.
 - `0060-vae-video-query-chunked-sdpa.patch` chunks the video VAE's SDPA over 1024-row query blocks (the unchunked dispatch binds 3.1 GiB of scores per call, over Vulkan's 2 GiB `maxStorageBufferRange`); the per-row softmax keeps each block bit-identical to the single call.
+
+## Install the omarchy-mlx wheel
+
+The engine's int8 path needs the native `mx.fast.int8_matmul` op. Install the wheel last so the `pip install -e .` step (and any later `pip install mlx`) cannot overwrite it; `pip install` does not detect the override because both packages share the `mlx` import name.
+
+```bash
+cd /path/to/omarchy-mlx
+WHEEL_URL=https://github.com/joshuaswarren/omarchy-mlx/releases/download/tensorfold-video-wheel-95e7b6f/mlx_omarchy-0.32.4.dev202610090724%2B95e7b6f-cp314-cp314-linux_aarch64.whl
+WHEEL_SHA=4dcae17fc998256018623dc73e65e8e82492865525f542905e3f93f2ddd3d291
+curl -L -o /tmp/omarchy-mlx.whl "$WHEEL_URL"
+echo "$WHEEL_SHA  /tmp/omarchy-mlx.whl" | sha256sum -c -
+pip install --force-reinstall --no-deps /tmp/omarchy-mlx.whl
+python -c "import mlx.core as mx; assert hasattr(mx.fast, 'int8_matmul'), 'omarchy-mlx wheel was overwritten by PyPI mlx; reinstall with --force-reinstall --no-deps'"
+```
+
+The python one-liner is mandatory. If it raises `AssertionError`, the wheel was overwritten; the render will then fall back to the MSL bf16 path and fail at the first `mx.eval` after a forward.
+
+## Disk and memory required
+
+The render needs roughly 160 GB free on the target filesystem before `hf download` starts: the HF bundle is 101 GB and the HF xet reconstruction layer writes the file in halves before assembling the final safetensors, peaking at roughly 60 GB of cache for the 50 GB text_encoder-compact.safetensors alone. Per-step denoise checkpoints add another ~1 GB at the directory passed to `--checkpoint-dir`.
 
 ## Install minimax-h3-mlx
 
@@ -71,7 +101,13 @@ export PYTHONPATH="$PWD:$PYTHONPATH"
 
 The render driver is `scripts/tensorfold/h3_generate_rows.py` in this repository. It derives from the engine's `tools/h3_generate_dev.py` at the pinned commit (Apache 2.0, drowzeys); the local changes are limited to the documentation and command-line defaults.
 
-The three stages of a reproducible end-to-end run (768x448, 56 frames, 20 sampler steps, seed 1, the prompt below):
+Before the three render stages, point the driver at the int8 DiT location. The HF bundle ships the int8 shards under `int8-dit/`; the render driver expects a `transformer/` subdirectory inside the model directory:
+
+```bash
+ln -s "$MODEL_DIR/int8-dit" "$MODEL_DIR/transformer"
+```
+
+The three stages of a reproducible run (768x448, 56 frames, 20 sampler steps, seed 1, the prompt below):
 
 ```bash
 MODEL_DIR=/path/to/hf-bundle
@@ -80,12 +116,17 @@ CKPT=ckpt
 LAT=clip.latents.safetensors
 TEXT=clip.text.safetensors
 
+# Run from the omarchy-mlx checkout so `scripts/tensorfold/h3_generate_rows.py` resolves.
+cd /path/to/omarchy-mlx
+
 # 1. Text encode (one-time per prompt): writes 35-row text encoder output. The DiT
-#    is not loaded for this step; --int8-from-state is not needed here.
+#    is not loaded for this step; --int8-from-state is not needed here. `-o /dev/null`
+#    is required by the argparse even though the script exits before any video write.
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
   --prompt "Slow dolly across a dark desk at night: a terminal window on a Hyprland desktop, green text scrolling, rain on the window behind, warm desk lamp glow." \
   --width 768 --height 448 --frames 56 --points 21 --seed 1 \
-  --dump-text-rows "$TEXT"
+  --dump-text-rows "$TEXT" \
+  -o /dev/null
 
 # 2. Denoise (20 forwards, resumable per-step checkpoints).
 python scripts/tensorfold/h3_generate_rows.py "$MODEL_DIR" \
@@ -122,7 +163,7 @@ Per-stage wall times on the 96 GB M2 Max (Linux, Honeykrisp Vulkan):
 | **total** | **90.3 min** | **58.7 min** | **63.2 min** |
 
 - omarchy-mlx allocator peak: 33.9 GiB.
-- The mp4 sha256 was identical across the two wheels on the M2 (the int8 kernels are exact end-to-end): the `clip.mp4` in the HF sample is `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`, and the same seed-1 render on wheels `53bc1e3` and `95e7b6f` produced the same hash. The sha holds across the two wheels on the same chip.
+- The mp4 sha256 was identical across the two wheels on the M2 (the int8 kernels are exact through the whole pipeline): the `clip.mp4` in the HF sample is `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`, and the same seed-1 render on wheels `53bc1e3` and `95e7b6f` produced the same hash. The sha holds across the two wheels on the same chip.
 - This holds only on the same chip family (M2 Max / G14C) with the same seed, because the same-host rerun of the sampler is deterministic (the latents themselves were reproduced bit-identically on the M2). Other chips will produce a visually equivalent clip with a different hash; judge those by per-frame relative error against the sample, not by sha256.
 
 ## One-time preprocessing
