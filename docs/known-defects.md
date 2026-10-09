@@ -1160,7 +1160,12 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   or better; **dg disagrees by 0.96 at `Hk = Hv = 16`, T = 33**, 1.01 at `Hk = 4, Hv = 8`, T = 33 and 0.95 at `Hk = 4, Hv = 16`, T = 17 (fused
   backward forced on at GQA with `MLX_OMARCHY_FUSED_VJP_GQA=1`). The same data repeated on the host and run at equal head counts gives the same
   0.95 for dg, so the GQA path is not the cause. At T = 1 dg is exactly equal.
-- Which side is wrong is decided by the float32 CPU lines the test prints; see the receipt `receipts/2026-10-09-gdn-hk-neq-hv-native/`.
-- Consequence today: the fused backward is on by default only at `Hk == Hv`, where this defect applies as it did before PR #60; at `Hk != Hv`
-  the backward is composed unless `MLX_OMARCHY_FUSED_VJP_GQA=1`. Inference is not affected (it never runs the backward).
-- Not fixed in this change.
+- **The fused result is the wrong one.** Against a float32 CPU reference computed from the same bf16-rounded inputs (printed by the test), the
+  composed GPU result for dg is within 0.15 percent (0.0015 relative L2) at every shape above, and the fused dg is off by 0.95 to 1.01. dq, dk,
+  dv and dbeta are within 0.17 percent of the float32 reference on the fused path. So the defect is in the fused backward's dg and is
+  independent of GQA. One run per shape, M1 Max (G13C).
+- Consequence today: the fused backward is on by default at `Hk == Hv`, so a GDN model trained at equal head counts gets a wrong gate gradient
+  for T > 1 (hence wrong gradients for whatever produces g: `A_log`, `dt_bias` and the `a` projection). This applied before PR #60; the old GQA
+  test never saw it because the forward was composed at `Hk != Hv`. At `Hk != Hv` the backward is composed unless `MLX_OMARCHY_FUSED_VJP_GQA=1`.
+  Inference is not affected (it never runs the backward). `MLX_OMARCHY_NO_FUSED_VJP=1` selects the composed backward everywhere.
+- Not fixed in this change; `gated_delta_vjp.comp` and the dg accumulation are the place to look.
