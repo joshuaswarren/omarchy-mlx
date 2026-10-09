@@ -275,6 +275,43 @@ TEST_CASE("big causal bf16 keeps the named storage-binding refusal") {
   unsetenv("MLX_OMARCHY_SDPA_BF16_FAST");
 }
 
+TEST_CASE("chunked composed keeps GQA rows in place against flash") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  // 32 q heads over 8 kv heads, L=4096 non-causal: the shape where the
+  // unregrouped 4-D output view misplaced rows (w7Q, agent/w7q-sdpa-gqa-chunk
+  // 282a06539). The composed-first default must agree with flash to the bf16
+  // quantum, and the flash pin must stay available for the A/B.
+  constexpr int length = 4096;
+  array q = make_bf16({1, 32, length, kHd}, 901, stream);
+  array k = make_bf16({1, 8, length, kHd}, 902, stream);
+  array v = make_bf16({1, 8, length, kHd}, 903, stream);
+  std::vector<float> composed = flat(sdpa(q, k, v, stream), stream);
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
+  std::vector<float> flashed = flat(sdpa(q, k, v, stream), stream);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  REQUIRE(composed.size() == flashed.size());
+  for (size_t i = 0; i < composed.size(); ++i) {
+    if (std::abs(composed[i] - flashed[i]) > 0.02) {
+      CHECK_MESSAGE(
+          false,
+          "composed vs flash GQA element ",
+          i,
+          " at lq=",
+          length,
+          ": ",
+          composed[i],
+          " vs ",
+          flashed[i]);
+      break;
+    }
+  }
+}
+
 TEST_CASE("flash bf16 prefill matches the composition on tile-boundary shapes") {
   if (!compute_available()) {
     return;
