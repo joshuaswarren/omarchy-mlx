@@ -185,28 +185,56 @@ uint64_t dispatches_for(const std::function<array()>& step, Stream stream) {
   uint64_t after = omarchy::trace::counters().vk_compute_dispatches.load();
   return after - before;
 }
-TEST_CASE("flash bf16 prefill defaults to score-memory safety, not sequence length") {
+TEST_CASE("flash defers to the chunked composed route on coopmat devices") {
   if (!compute_available()) return;
   Stream stream = gpu_stream();
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
-  set_flash_enabled(true);
-  constexpr int length = 4096;
-  array q = make_bf16({1, 4, length, kHd}, 701, stream);
-  array k = make_bf16({1, 4, length, kHd}, 702, stream);
-  array v = make_bf16({1, 4, length, kHd}, 703, stream);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
+  const bool composed_serves = caps.cooperative_matrix_f32_8 &&
+      caps.subgroup_size == 32u;
+  // 8 x 16384^2 = 2.15e9 score elements: past the 2^30 storage-binding
+  // bound that pushed prefill onto the flash kernel (2026-10-05). The
+  // chunked composed route caps its f32 score chunks at 1 GiB, so the
+  // binding never exists and the route measures 3.2x over flash at the
+  // H3 demo shape (782 vs 245 GMAC/s, 2026-10-09 TFProf receipt).
+  constexpr int length = 16384;
+  constexpr int heads = 8;
+  const uint64_t flash_tiles = static_cast<uint64_t>((length + 31) / 32);
+  array q = make_bf16({1, heads, length, kHd}, 701, stream);
+  array k = make_bf16({1, heads, length, kHd}, 702, stream);
+  array v = make_bf16({1, heads, length, kHd}, 703, stream);
   const uint64_t default_dispatches =
       dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
-  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
-  const uint64_t forced_dispatches =
+  std::vector<float> composed = flat(sdpa(q, k, v, stream), stream);
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "1", 1);
+  const uint64_t pinned_dispatches =
       dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
-  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
-  const uint64_t flash_tiles = static_cast<uint64_t>((length + 31) / 32);
-  const uint64_t score_elements = static_cast<uint64_t>(4) * length * length;
-  const auto& caps = omarchy::get_command_encoder(stream).device().capabilities();
-  const bool should_flash = score_elements > (1ull << 30) ||
-      (caps.total_memory > 0 && score_elements > caps.total_memory / 16);
-  CHECK_EQ(default_dispatches == flash_tiles, should_flash);
-  CHECK_EQ(forced_dispatches, flash_tiles);
+  std::vector<float> flashed = flat(sdpa(q, k, v, stream), stream);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  if (composed_serves) {
+    CHECK_NE(default_dispatches, flash_tiles);
+  } else {
+    // No coopmat shape: flash stays the long-sequence route.
+    CHECK_EQ(default_dispatches, flash_tiles);
+  }
+  CHECK_EQ(pinned_dispatches, flash_tiles);
+  REQUIRE(composed.size() == flashed.size());
+  for (size_t i = 0; i < composed.size(); ++i) {
+    if (std::abs(composed[i] - flashed[i]) > 0.02) {
+      CHECK_MESSAGE(
+          false,
+          "composed vs flash element ",
+          i,
+          " at lq=",
+          length,
+          ": ",
+          composed[i],
+          " vs ",
+          flashed[i]);
+      break;
+    }
+  }
 }
 
 
