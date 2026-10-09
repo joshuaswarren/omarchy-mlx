@@ -182,4 +182,47 @@ batteries green from main tip.
 - Land under receipts/2026-10-08-release-0.7.32/gates-run/ via fetch+rebase.
 - scrub /home/<user>/ paths before commit (privacy-check blocks them).
 
+## 6. v0.7.32 FREEZE gate plan (per Main, 2026-10-09; CPU prep only until FREEZE)
 
+Hosts and chip roles: M2 = G14C, jw16 = G13C, jwm1 = G13G. Kernel of record
+in every receipt: `uname -r` AND `pacman -Q mesa` (hosts are on Mesa
+26.2.4 now — the StockWarn threshold; any host below 26.2.4 warns by
+design).
+
+Order on EVERY host:
+1. g1 fresh-home install of the draft wheel (drivers: g1 then g17 first —
+   a wheel that cannot install or patch is dead on arrival).
+2. g17 patch-series, both mlx-lm lines rc=0 + idempotent.
+3. Standing battery (the section-4 binary list) on the GPU.
+4. int8 headline check per chip (the clip shapes through the wheel venv:
+   qkv 6417x5376x16128 g=5376, fc1 swiglu 6417x5376x14336 g=5376, fc2
+   6417x14336x5376 g=1024; bit-exact A/B rows<=128 vs naive; GMAC/s with
+   the wheel stamp; fc2 expected ~734 GMAC/s class, coop arms are the
+   headline).
+5. TensorFold guide gate: render/follow check that the guide's expected
+   seed-1 mp4 sha256 36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07
+   reproduces byte-identical on the M2 (per docs/tensorfold-video.md; the
+   guide documents the hash holding across wheels 53bc1e3 and 95e7b6f on
+   one chip).
+6. PR 50 stamp gate on the built wheel: verify_runtime_assets passes
+   (pre-stamp wheels FAIL by design — the wheel must carry the stamped
+   ANE worker; this is a positive check on the stamp, not a skip).
+
+Ticket minutes per host (expected, for scheduling):
+- M2 (G14C): g1 ~1, g17 ~3, battery ~25-35 (49 binaries; the M2 runs them
+  fastest), int8 bench ~6 (three shapes x two routes x 3 submits),
+  TensorFold render gate ~60 (58:44 measured + margin) or the sha
+  re-check only ~2 if Main accepts the receipt-replay form, PR 50 stamp
+  check ~1. TOTAL ~40-50 min without the video render; ~100-110 with.
+- jwm1 (G13G): g1 ~1, g17 ~3, battery — the 15-suite run measured
+  10:33-11:23Z (~50 min wall for all 15 at MAXMIN 20 each; the binaries
+  themselves sum to ~35 min), int8 bench ~6, stamp check ~1. TOTAL ~45-60
+  min.
+- jw16 (G13C): g1 ~1, g17 ~3, battery ~35-45, int8 bench ~6 (this is the
+  headline chip for the coop multipliers), stamp check ~1, plus the
+  jw16-only ANE legs (g7c ~3, g7d ~1, g13 build+run ~7, g15 ~1). TOTAL
+  ~55-70 min.
+
+Rules carried over: no submit > 20 s per call; lane 'Release0729'; one
+flock-protected append; receipts carry WHEEL_IDENTITY + uname -r + Mesa
+version; SUMMARY generated from logs; land via fetch+rebase.
