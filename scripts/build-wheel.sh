@@ -245,6 +245,21 @@ python3 "$ROOT/scripts/verify_runtime_assets.py" \
   "$VERIFY_DIR/mlx/share/mlx-omarchy/parakeet-1"
 
 
+echo "== vendor CPU BLAS (openblas soname isolation) =="
+# libmlx.so links the system OpenBLAS through the bare soname
+# libopenblas.so.0, and torch CPU wheels ship a different library under
+# the same soname: whichever loads first serves both, and mlx-first
+# breaks torch with "undefined symbol: sbgemm_". Vendoring a
+# content-hashed copy next to libmlx.so (RUNPATH $ORIGIN) gives each
+# library its own BLAS; see scripts/openblas_isolation.py. The PKGBUILD
+# is unaffected: it builds from source against the system openblas it
+# already declares.
+if ! command -v patchelf >/dev/null 2>&1; then
+  "$venv_python" -m pip install patchelf
+fi
+python3 "$ROOT/scripts/openblas_isolation.py" vendor "$wheel"
+python3 "$ROOT/scripts/openblas_isolation.py" check "$wheel"
+
 echo "== receipt =="
 echo "[receipt] wheel: $wheel"
 echo "[receipt] size: $(stat -c '%s' "$wheel") bytes"
