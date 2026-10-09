@@ -202,6 +202,8 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
+Note: the Linux rows in this first table ran on the stock upstream mlx-lm, which on Linux falls back to a slow per-token Python loop for the gated-delta layers (Qwen3.5-9B, clef-flash, Qwen3.8-27B) and so understates the prefill ratios. Rows measured with the mlx-lm patches the installer applies are being re-measured and will replace this table.
+
 Two Linux rows fail today: gemma-4-e2b stalls a GPU submit during prefill, and gpt-oss-20b needs an attention-sinks kernel that is not implemented yet. The macOS runs shared the machine with background downloads and a build, which can only lower the macOS numbers.
 
 | Model | Decode, tok/s (Linux / macOS) | Prefill 512, tok/s (Linux / macOS) |
