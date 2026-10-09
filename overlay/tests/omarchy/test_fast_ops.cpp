@@ -1584,6 +1584,68 @@ TEST_CASE("scaled_dot_product_attention folds sinks into the denominator") {
   }
 }
 
+// gpt-oss-20b (mlx-lm) feeds bf16 q/k/v and bf16 sinks: H = 64 query heads,
+// 8 kv heads, head_dim 64, an 11-token prefill failed with "attention sinks
+// dtype ... not implemented" because the f32-score composition only took f32
+// sinks. The host reference reads the bf16-rounded inputs back, so only the
+// bf16 output rounding is left in the tolerance.
+TEST_CASE("scaled_dot_product_attention folds bf16 sinks into the denominator") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  struct Case {
+    int qL, kL;
+    const char* mode;
+    bool array_mask;
+  };
+  for (const Case c : {Case{11, 11, "causal", false},
+                       Case{11, 11, "", false},
+                       Case{1, 40, "", false},
+                       Case{11, 11, "array", true}}) {
+    const int B = 1, H = 64, KV = 8, D = 64;
+    const float scale = 1.0f / std::sqrt(float(D));
+    auto bf = [&](const std::vector<float>& data, Shape shape) {
+      return astype(array(data.begin(), std::move(shape), float32), bfloat16, stream);
+    };
+    auto q_raw = pattern(B * H * c.qL * D, 311);
+    auto k_raw = pattern(B * KV * c.kL * D, 313);
+    auto v_raw = pattern(B * KV * c.kL * D, 317);
+    auto sink_raw = pattern(H, 331);
+    array q = bf(q_raw, Shape{B, H, c.qL, D});
+    array k = bf(k_raw, Shape{B, KV, c.kL, D});
+    array v = bf(v_raw, Shape{B, KV, c.kL, D});
+    array sinks = bf(sink_raw, Shape{H});
+    auto q_data = flat(q, stream);
+    auto k_data = flat(k, stream);
+    auto v_data = flat(v, stream);
+    auto sink_data = flat(sinks, stream);
+    std::vector<float> mask_host;
+    std::vector<array> mask;
+    if (c.array_mask) {
+      std::vector<float> mask_raw(c.qL * c.kL);
+      for (int r = 0; r < c.qL; ++r) {
+        for (int col = 0; col < c.kL; ++col) {
+          mask_raw[r * c.kL + col] = (col > r || r - col > 6) ? -1e4f : 0.0f;
+        }
+      }
+      array m = bf(mask_raw, Shape{1, 1, c.qL, c.kL});
+      mask_host = flat(m, stream);
+      mask.push_back(m);
+    }
+    auto out = fast::scaled_dot_product_attention(
+        q, k, v, scale, mask.empty() ? std::string(c.mode) : "array", mask, sinks, false, stream);
+    const bool causal = std::string(c.mode) == "causal";
+    require_close(
+        flat(out, stream),
+        host_sdpa(
+            q_data, k_data, v_data, B, H, KV, c.qL, c.kL, D, scale, causal, sink_data, mask_host),
+        3e-2,
+        std::string("sdpa bf16 sinks qL=") + std::to_string(c.qL) + " kL=" +
+            std::to_string(c.kL) + " mode=" + c.mode);
+  }
+}
+
 TEST_CASE("scaled_dot_product_attention causal matches host on head dims 72 and 96") {
   if (!compute_available()) {
     return;
