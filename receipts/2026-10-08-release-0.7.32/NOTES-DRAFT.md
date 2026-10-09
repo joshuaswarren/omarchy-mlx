@@ -6,6 +6,58 @@ re-run the range command at FREEZE).
 
 ## Shipped (user impact)
 
+### Serve/GPU: SDPA, GDN, allocator, gather_qmm (landed after the 083217017 draft revision)
+
+- **SDPA prefill composed-first route for non-causal bf16 on coopmat
+  devices** (25052f05f, #43); chunked composed route writes GQA output
+  through the regrouped view (268a33228, #46); causal flash launches the
+  heaviest causal q tiles first — bit-identical, 1 to 5% faster
+  (a8c7132b1, #49); opt-in causal flash (PR 41 family).
+- **GDN prefill masked rows take the single-pass recur32 route on G13
+  parts**: padded batched prefill 1.64x → 0.98x of sequential on G13C
+  (cc9b891bc, #45; receipt in the PR).
+- **Allocator**: submitted batches + quarantine drained before the OOM
+  retry (065168651, #44); bin sizes above 1 MiB geometrically (8 per
+  octave) — fixes the 16 GB offload out-of-memory (ad831f094, #47);
+  receipt 830e87bf1: oMLX upstream pin, M1 16 GB A/B on the allocator-fix
+  wheel — prefill 1.97x, decode 1.10x, token ids identical.
+- **gather_qmm fp16 decode takes the subgroup kernel**: M1 64.1 → 4.13 ms
+  per layer (ce4e77a5e, #42).
+- 4 upstream backports (dbb15d69b: compile scalar output, Python dtype
+  narrowing, .npy shape validation, pickle bfloat16 strides).
+
+### Parakeet worker pin (#50)
+
+- The built ANE worker is now PINNED: stamp step at wheel build, runtime
+  checker, tests (adbdc6408). **Caveat: wheels built before the stamp
+  step (pre-stamp) fail verify_runtime_assets** — that is the checker
+  working as designed; rebuild, do not bypass.
+
+### int8 matmul (chunked coop + swiglu coop, extends the headline below)
+
+- Chunked int32 reduction on the f32 cooperative-matrix route
+  (a7ce66b67), swiglu through two f32 coopmat matmuls (9f6e1e1ad),
+  rhs_offset honored in the coopmat value-half W loads (17734eeb2).
+
+### Stock driver warning
+
+- One-shot warning when the selected driver is a stock Mesa older than
+  26.2.4 (95e7b6f8a) — hosts are on Mesa 26.2.4 now (pacman -Q mesa);
+  the warning is for stock-Mesa installs that never got the packaged
+  Honeykrisp ICD.
+
+### Docs
+
+- TensorFold H3 video: replication guide + patches + render script
+  (325d8491f); fresh-clone replication verified byte-identical mp4
+  sha256 36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07,
+  58 min 44 s, M2 Max (2b007ac7b, docs/tensorfold-video.md); the same
+  seed-1 render on wheels 53bc1e3 and 95e7b6f produced the same hash
+  (the int8 kernels are exact through the whole pipeline).
+- README "How close to macOS" table: Linux as a percentage of macOS, same
+  MacBook Pro, 5 MLX models + 2 llama.cpp GGUF, with receipts
+  (c264198be, 5444406ed).
+
 ### HEADLINE: int8 matmul speed + exactness (the TensorFold H3 DiT path)
 
 - **fast.int8_matmul f32 routes rebuilt** (8185470ce..9a991ff4f, 19 commits
@@ -235,6 +287,27 @@ c57d5ea67 by DispatchClamp), G14C M2 (schedule via idle-guard).
   gpu-turn ticket when the host has been idle 3 min, never disturbing
   MEASURE work; lanes append their pre-approved tickets to the queue files
   instead of grabbing hosts directly.
+
+## Known caveats (honest, printed in the release notes)
+
+- **fc2 int8 at the clip shape is ~734 GMAC/s** (the 6417x14336x5376
+  g=1024 arm; qkv/fc1 coop arms are the headline multipliers). The fc2
+  shape keeps the tiled route at this draft's tip; the coop-f32 fc2 route
+  is the known next step, not shipped here.
+- **fast_ops carries 4 allowed-fail assertions** (fused sdpa vjp
+  finite-difference legs at rep=1; documented known-defect, may_fail by
+  design, doctest SUCCESS with 45/45 cases passed; receipt
+  20261009T104939Z on G13G).
+- **Bonsai CI item**: the wiring static gate is green, the G13G hardware
+  matrix is green; the CI-side Bonsai leg (no-GPU runner coverage for the
+  refused/compile-fail classes) is still open — G13C/G14C hardware legs
+  decide the shipped claim.
+- **PR 50 pre-stamp wheels fail verify_runtime_assets** by design (the
+  pin checker refuses an unstamped worker); only wheels built with the
+  stamp step (adbdc6408 onward) install clean.
+- int8 coop fc2 numbers at g=1024 and the 3.6x/14.9x headline multipliers
+  are G13C-hosted measurements; G13G/G14C tables land with this freeze's
+  battery + bench.
 
 ## Open before FREEZE
 - TensorFold full-depth rerun on the fixed wheel (validates the headline
