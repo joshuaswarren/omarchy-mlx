@@ -1,0 +1,18 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[gather-qmm-sub] dtype=bf16 transpose=1 k=128 experts=3 index_count=2 n=64 scalar: relL2=0.00272498 maxabs/ref=0.00236842 | sub: relL2=0.00272498 maxabs/ref=0.00236842 | count=128
+[gather-qmm-sub] dtype=bf16 transpose=1 k=192 experts=3 index_count=2 n=64 scalar: relL2=0.00248547 maxabs/ref=0.00435064 | sub: relL2=0.00248547 maxabs/ref=0.00435064 | count=128
+[gather-qmm-sub] dtype=bf16 transpose=1 k=128 experts=3 index_count=8 n=1408 scalar: relL2=0.00250937 maxabs/ref=0.003215 | sub: relL2=0.00250937 maxabs/ref=0.003215 | count=11264
+[gather-qmm-sub] dtype=bf16 transpose=1 k=2048 experts=3 index_count=8 n=1408 scalar: relL2=0.00251218 maxabs/ref=0.00304939 | sub: relL2=0.00251218 maxabs/ref=0.00304939 | count=11264
+[gather-qmm-sub] dtype=bf16 transpose=1 k=128 experts=48 index_count=48 n=1408 scalar: relL2=0.00245042 maxabs/ref=0.00379938 | sub: relL2=0.00245042 maxabs/ref=0.00379938 | count=67584
+[gather-qmm-sub] z-chunk tail relL2=0.00240393
+[gather-qmm-sub] dtype=f16 transpose=1 k=128 experts=3 index_count=2 n=64 scalar: relL2=0.000310165 maxabs/ref=0.000516028 | sub: relL2=0.000310165 maxabs/ref=0.000516028 | count=128
+[gather-qmm-sub] dtype=f16 transpose=1 k=192 experts=3 index_count=2 n=64 scalar: relL2=0.000290177 maxabs/ref=0.000378226 | sub: relL2=0.000290177 maxabs/ref=0.000378226 | count=128
+[gather-qmm-sub] dtype=f16 transpose=1 k=128 experts=3 index_count=8 n=1408 scalar: relL2=0.000312888 maxabs/ref=0.000393758 | sub: relL2=0.000312801 maxabs/ref=0.000393758 | count=11264
+[gather-qmm-sub] dtype=f16 transpose=1 k=2048 experts=3 index_count=8 n=1408 scalar: relL2=0.000310803 maxabs/ref=0.000344667 | sub: relL2=0.000310708 maxabs/ref=0.000344667 | count=11264
+[gather-qmm-sub] dtype=f16 transpose=1 k=128 experts=48 index_count=48 n=1408 scalar: relL2=0.000316504 maxabs/ref=0.000415392 | sub: relL2=0.000316608 maxabs/ref=0.000415392 | count=67584
+[gather-qmm-sub] z-chunk tail relL2=0.000314901
+===============================================================================
+[doctest] test cases:    2 |    2 passed | 0 failed | 31 skipped
+[doctest] assertions: 3377 | 3377 passed | 0 failed |
+[doctest] Status: SUCCESS!
