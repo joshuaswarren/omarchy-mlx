@@ -226,7 +226,9 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       {128, 5376, 5376, 8, false, 711},  // x=-128, w=-128: +88,080,384
       {128, 5376, 5376, 8, false, 712},  // x=-128, w=+127: -88,054,272
       {17, 5376, 5376, 8, true, 713},    // swiglu g=5376, x=-128
-      {9, 5376, 5376, 16128, false, 714}, // qkv-wide, random
+      {128, 5376, 5376, 16128, false, 714}, // qkv-wide through coop chunking
+      {40, 5376, 5376, 33, false, 715},  // chunked coop edge tiles
+      {33, 14336, 14336, 40, false, 716}, // chunked coop, g=14336
   };
   for (const auto& b : big) {
     auto in = make_inputs(b.rows, b.k, b.group, b.n, b.swiglu, b.seed);

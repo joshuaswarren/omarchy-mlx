@@ -12610,14 +12610,14 @@ void Int8Matmul::eval_gpu(
       !int8_coopf32_disabled() &&
       encoder.device().capabilities().cooperative_matrix_f32_8 && !fused &&
       (params.matrix_k % 8u) == 0u && (params.reduce_size % 8u) == 0u &&
-      params.reduce_size >= 32u && params.reduce_size <= 1024u &&
+      params.reduce_size >= 32u && params.reduce_size <= 131072u &&
       params.matrix_m >= 32u && params.matrix_n >= 32u;
   if (coop_f32_ready) {
-    // The kernel loads natural 8-aligned blocks per quarter, so the f32
-    // temps are padded to 64-row multiples; the pad rows read as garbage
-    // but their accumulator slots are never stored (the epilogue gates on
-    // row < rows and col < n), and MMA lanes keep garbage isolated to its
-    // own row or column.
+    // Groups longer than 1024 reduce through an int32 scratch tile the
+    // kernel clears per group; it cannot overflow while
+    // group * 16384 <= 2^31 (the 131072 gate). The temps are padded to
+    // 64-row multiples for natural block loads.
+    const bool coop_chunked = params.reduce_size > 1024u;
     const auto pad64 = [](uint32_t v) { return (v + 63u) / 64u * 64u; };
     array xf(Shape({static_cast<int>(pad64(rows)), xd.shape(1)}), float32,
         nullptr, {});
@@ -12647,6 +12647,15 @@ void Int8Matmul::eval_gpu(
         0,
         CopyType::General,
         s);
+    array acc32(Shape({static_cast<int>(coop_chunked ? pad64(rows) : 1),
+                    static_cast<int>(coop_chunked ? pad64(params.matrix_n) : 1)}),
+        int32, nullptr, {});
+    acc32.set_data(allocate_omarchy(acc32.nbytes()));
+    encoder.add_temporary(acc32);
+    auto acc32_binding = binding(acc32);
+    if (coop_chunked) {
+      encoder.fill_buffer(acc32_binding.buffer, 0u, acc32.nbytes(), 0);
+    }
     const uint32_t n_groups64 = (params.matrix_n + 63u) / 64u;
     const uint32_t m_groups64 = (params.matrix_m + 63u) / 64u;
     if (n_groups64 > omarchy::kMaxComputeGroupCountX ||
@@ -12659,9 +12668,10 @@ void Int8Matmul::eval_gpu(
     omarchy::ComputeParams coop_params = params;
     coop_params.lhs_offset = 0u;
     coop_params.rhs_offset = 0u;
-    std::array<omarchy::ComputeBinding, 6> coop_bindings{
+    coop_params.shape[3] = pad64(params.matrix_n);
+    std::array<omarchy::ComputeBinding, 7> coop_bindings{
         binding(xf), binding(xsd), binding(wf), binding(wsd), binding(bd),
-        binding(out)};
+        binding(out), acc32_binding};
     encoder.dispatch_compute(
         omarchy::ComputeKernel::Int8MatmulF32CoopOp,
         coop_bindings,
