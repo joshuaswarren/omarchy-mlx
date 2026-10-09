@@ -55,6 +55,10 @@ The current wheel 145886c cannot run this workload on a 16 GB host: it fails wit
 
 Greedy token ids are identical between the old and new tree in every arm on both chips (same sha over all 33 tokens per arm). On the older M1 wheel the sha differs from the other two runs because that wheel uses a different gather_qmm kernel; the two current-kernel runs (M1 Max and the fix wheel on the M1) share one sha, b530b093661caf6f.
 
+## Provenance caveat
+
+scripts/mlx_provenance.py was not run beside these arms; wheel identity above is the installed dist-info name only. A check run afterwards on the lab's older oMLX venv, which the older M1 wheel row came from (through a clone), fails: its `libmlx.so` on disk does not match the wheel's RECORD, while `mlx.core` matches and the versions agree. The cause is not known. That M1 row therefore describes that venv's binaries, not wheel `58724762` as built. The M1 Max rows and the fix-wheel M1 rows used wheels built from exact commits; the fix wheel was identified by its dist-info name and was not hash-checked at the time. The comparison between the old and new oMLX tree holds inside each table because both trees ran on the same binaries.
+
 ## Limits
 
 One prompt, 96 prefill tokens, 32 decode tokens, two runs per tree on the M1 Max and one on the M1. The M1 Max holds the model mostly in page cache, so it does not measure cold SSD reads. The M1 numbers are one prompt, two runs per tree, and the M1 table with the fix wheel has hit rate and token ids identical to the M1 Max run. Prefill gain on longer prompts was not measured here (upstream reports 2 to 2.5x on long prompts).
