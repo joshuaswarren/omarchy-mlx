@@ -14818,14 +14818,14 @@ void ScaledDotProductAttention::eval_gpu(
       flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
-  // Route precedence: the pin and MIN_L are explicit flash overrides;
-  // otherwise flash only when composed cannot serve (non-coopmat
-  // device), and "0" always declines. Without the composed_ready term
-  // the pin would not engage at shapes under flash_wants, while
-  // flash_wants alone would put flash back in front of composed at the
-  // big shapes (w7Q review, 2026-10-09).
-  if ((flash_pinned || flash_min_l_requested ||
-          (flash_wants && !flash_declined && !composed_ready)) &&
+  // Route precedence: the pin and MIN_L are explicit flash overrides
+  // UNLESS the operator has set MLX_OMARCHY_SDPA_PREFILL_FLASH=0, which
+  // declines every flash route. Without !flash_declined on the overrides
+  // the old A/B test arms (PREFILL_FLASH=0 + MIN_L=1) would both run
+  // flash and compare flash with itself (w7Q review D3, 2026-10-09).
+  if ((!flash_declined &&
+       (flash_pinned || flash_min_l_requested ||
+        (flash_wants && !composed_ready))) &&
       flash_route_ready && inputs.size() == 3 &&
       !do_causal_ && !has_sinks_ && !output_logsumexp_ && q_len > 1 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&

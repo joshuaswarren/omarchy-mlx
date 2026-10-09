@@ -212,6 +212,8 @@ TEST_CASE("flash defers to the chunked composed route on coopmat devices") {
   const uint64_t pinned_dispatches =
       dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
   std::vector<float> flashed = flat(sdpa(q, k, v, stream), stream);
+  std::cout << "[defer] default=" << default_dispatches
+            << " pinned_flash=" << pinned_dispatches << std::endl;
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
   if (composed_serves) {
     CHECK_NE(default_dispatches, flash_tiles);
@@ -288,10 +290,17 @@ TEST_CASE("chunked composed keeps GQA rows in place against flash") {
   array q = make_bf16({1, 32, length, kHd}, 901, stream);
   array k = make_bf16({1, 8, length, kHd}, 902, stream);
   array v = make_bf16({1, 8, length, kHd}, 903, stream);
+  const uint64_t composed_dispatches =
+      dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
   std::vector<float> composed = flat(sdpa(q, k, v, stream), stream);
   setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "1", 1);
   setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
+  const uint64_t flashed_dispatches =
+      dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
   std::vector<float> flashed = flat(sdpa(q, k, v, stream), stream);
+  std::cout << "[gqa-route] length=" << length
+            << " composed=" << composed_dispatches
+            << " flash=" << flashed_dispatches << std::endl;
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
   REQUIRE(composed.size() == flashed.size());
@@ -312,6 +321,28 @@ TEST_CASE("chunked composed keeps GQA rows in place against flash") {
   }
 }
 
+TEST_CASE("MIN_L=1 with PREFILL_FLASH=0 issues the composed dispatch count") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "0", 1);
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L", "1", 1);
+  constexpr int length = 4096;
+  array q = make_bf16({1, 4, length, kHd}, 731, stream);
+  array k = make_bf16({1, 4, length, kHd}, 732, stream);
+  array v = make_bf16({1, 4, length, kHd}, 733, stream);
+  // The "0" decline must reach every flash override, including MIN_L=1
+  // (w7Q review D3, 2026-10-09). Composed runs the dispatch chain; the
+  // flash arm would issue (length + 31) / 32 = 128 q-tile dispatches.
+  const uint64_t composed_dispatches =
+      dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
+  std::cout << "[D3] decline+MIN_L composed dispatches = "
+            << composed_dispatches << std::endl;
+  const uint64_t flash_tiles = static_cast<uint64_t>((length + 31) / 32);
+  CHECK_NE(composed_dispatches, flash_tiles);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+}
+
 TEST_CASE("the flash pin alone forces flash dispatches at small shapes") {
   if (!compute_available()) return;
   Stream stream = gpu_stream();
@@ -326,6 +357,9 @@ TEST_CASE("the flash pin alone forces flash dispatches at small shapes") {
   setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "1", 1);
   const uint64_t pinned_dispatches =
       dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
+  std::cout << "[D1] pin-only flash dispatches = " << pinned_dispatches
+            << " (expected " << (static_cast<uint64_t>((length + 31) / 32))
+            << ")" << std::endl;
   unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
   const uint64_t flash_tiles = static_cast<uint64_t>((length + 31) / 32);
   CHECK_EQ(pinned_dispatches, flash_tiles);
@@ -391,9 +425,17 @@ TEST_CASE("flash bf16 prefill matches the composition on tile-boundary shapes") 
 
     auto ref = fp64_reference(q, k, v, stream);
     std::vector<float> flash = flat(sdpa(q, k, v, stream), stream);
+    const uint64_t flash_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     set_flash_enabled(false);
     std::vector<float> composed = flat(sdpa(q, k, v, stream), stream);
+    const uint64_t composed_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     set_flash_enabled(true);
+    std::cout << "[tile] lq=" << lq
+              << " flash_dispatches=" << flash_dispatches
+              << " composed_dispatches=" << composed_dispatches
+              << std::endl;
 
     double flash_err = rel_l2_error(flash, ref);
     double composed_err = rel_l2_error(composed, ref);
@@ -455,9 +497,16 @@ TEST_CASE("flash prefill handles ragged and GQA shapes like the composition") {
     array v = make_bf16({1, c.kv_heads, c.lk, kHd}, 66 + c.lk, stream);
 
     std::vector<float> flash = flat(sdpa(q, k, v, stream), stream);
+    const uint64_t flash_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     set_flash_enabled(false);
     std::vector<float> composed = flat(sdpa(q, k, v, stream), stream);
+    const uint64_t composed_dispatches =
+        dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
     set_flash_enabled(true);
+    std::cout << "[ragged] h=" << c.heads << " lq=" << c.lq
+              << " flash=" << flash_dispatches
+              << " composed=" << composed_dispatches << std::endl;
     for (size_t i = 0; i < flash.size(); ++i) {
       if (std::abs(flash[i] - composed[i]) > 0.02) {
         CHECK_MESSAGE(
@@ -488,9 +537,15 @@ TEST_CASE("flash prefill handles ragged and GQA shapes like the composition") {
     array kb = make_bf16({2, 4, l, kHd}, 89, stream);
     array vb = make_bf16({2, 4, l, kHd}, 90, stream);
     std::vector<float> flash_b = flat(sdpa(qb, kb, vb, stream), stream);
+    const uint64_t flash_b_dispatches =
+        dispatches_for([&] { return sdpa(qb, kb, vb, stream); }, stream);
     set_flash_enabled(false);
     std::vector<float> composed_b = flat(sdpa(qb, kb, vb, stream), stream);
+    const uint64_t composed_b_dispatches =
+        dispatches_for([&] { return sdpa(qb, kb, vb, stream); }, stream);
     set_flash_enabled(true);
+    std::cout << "[batch2] flash=" << flash_b_dispatches
+              << " composed=" << composed_b_dispatches << std::endl;
     for (size_t i = 0; i < flash_b.size(); ++i) {
       if (std::abs(flash_b[i] - composed_b[i]) > 0.02) {
         CHECK_MESSAGE(
