@@ -344,6 +344,19 @@ reports `icd_source` `packaged`, `icd_path`
 `expected_sha` equal to `driver_sha` with `expected_sha_source`
 `packaged file`.
 
+When the selected driver is the stock system Mesa build (`icd_source`
+`search`, or an `override` that misses the known-good commit) and its
+version is older than 26.2.4, the backend prints one warning per
+process to standard error and keeps running:
+`[omarchy] warning: The system Vulkan driver is Mesa ...`. Mesa older
+than 26.2.4 can return wrong results from int8 and other shift-heavy
+kernels on Apple GPUs; install the `omarchy-mlx-vulkan` package or
+update Mesa to 26.2.4 or newer. The packaged ICD, a driver whose
+`driver_sha` equals `expected_sha`, and version strings the backend
+cannot parse stay silent. `mlx-omarchy-info` and `mx.device_info()`
+report the same text as `stock_driver_warning` (empty when silent);
+the warning never changes any dispatch.
+
 ## Benchmark matrix
 
 `scripts/bench_matrix.py` runs the declared workload matrix (models x
