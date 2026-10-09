@@ -39,10 +39,22 @@ Model: Qwen3-30B-A3B-Instruct-2507 4-bit, expert offload at 0.25 residency (expe
 
 On that wheel decode is bound by the scalar gather_qmm kernel, so a better expert cache cannot show in decode. This run is the older wheel, not the current one.
 
+### M1 (G13G), 16 GB, wheel mlx_omarchy dev202610090304+816ce230 (145886c plus the allocator out-of-memory fix, branch not yet on main), arm order old, new, new, old
+
+The current wheel 145886c cannot run this workload on a 16 GB host: it fails with VK_ERROR_OUT_OF_DEVICE_MEMORY at a 32 MB allocation in the first prefill chunk, with either oMLX tree. The wheel below carries a one-hunk allocator fix and runs it. It also has the subgroup gather_qmm kernel the older wheel lacks.
+
+| | old tree | new tree | change |
+|---|---|---|---|
+| prefill, 96 tokens | 105.8 s and 105.1 s | 53.3 s and 54.0 s | |
+| prefill tok/s (mean of 2) | 0.91 | 1.79 | 1.97x |
+| decode tok/s (mean of 2) | 1.05 | 1.15 | 1.10x |
+| decode ms per token (median, mean of 2) | 952 | 868 | |
+| expert cache hit rate | 0.389 | 0.628 | |
+
 ### Token ids
 
-Greedy token ids are identical between the old and new tree on both chips (same sha over all 33 tokens per arm; sha differs between the two chips because their kernels differ). The first tokens match across chips.
+Greedy token ids are identical between the old and new tree in every arm on both chips (same sha over all 33 tokens per arm). On the older M1 wheel the sha differs from the other two runs because that wheel uses a different gather_qmm kernel; the two current-kernel runs (M1 Max and the fix wheel on the M1) share one sha, b530b093661caf6f.
 
 ## Limits
 
-One prompt, 96 prefill tokens, 32 decode tokens, two runs per tree on the M1 Max and one on the M1. The M1 Max holds the model mostly in page cache, so it does not measure cold SSD reads. A run of the same A/B on the M1 with the current wheel is queued as confirmation and is not part of the numbers above. Prefill gain on longer prompts was not measured here (upstream reports 2 to 2.5x on long prompts).
+One prompt, 96 prefill tokens, 32 decode tokens, two runs per tree on the M1 Max and one on the M1. The M1 Max holds the model mostly in page cache, so it does not measure cold SSD reads. The M1 numbers are one prompt, two runs per tree, and the M1 table with the fix wheel has hit rate and token ids identical to the M1 Max run. Prefill gain on longer prompts was not measured here (upstream reports 2 to 2.5x on long prompts).
