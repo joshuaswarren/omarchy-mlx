@@ -31,7 +31,9 @@ if str(REPO) not in sys.path:
 
 import unittest
 
-import mlx.core as mx
+import pytest
+
+mx = pytest.importorskip("mlx.core")
 
 _has_q1 = hasattr(mx.fast, "bonsai_q1_affine_qmv")
 _has_wide = hasattr(mx.fast, "bonsai_qmv_wide")
