@@ -10,10 +10,8 @@ Before: `GatedDeltaUpdate::use_fallback` returned true for any `Hk != Hv`, so a 
 
 | run | binary (sha256 prefix) | source | result |
 |---|---|---|---|
-| red (`m1max-red.log`) | `d98c4d8341938e8d` | tests only, `91004b98b` | FAILED: 11 of 3,863 assertions. The un-repeated route took 1,634 dispatches at T=96 and 546 at T=32 against 1 for the repeated route, and its output and state differ from the repeated route. |
-| green (`m1max-green.log`) | `95a3dd8e8c211702` | fix, `d858fccbc` | 2 test cases, 3,863 of 3,863 assertions passed. The un-repeated route takes 3 dispatches at every shape (two expansion copies plus the kernel) against 1 for the repeated route; outputs and final states are bit-identical. |
-
 | red (`m1max-red.log`) | `d98c4d8341938e8d` | tests only, `91004b98b` | FAILED: 11 of 3,863 assertions. In the visible part of the log the un-repeated route took 1,634 dispatches at T=96 and 546 at T=32 with offset views, against 1 for the repeated route, and its output and state differ from the repeated route (the log keeps only its last 40 lines, so the plain T=32 and decode lines are not in it). |
+| green (`m1max-green.log`) | `95a3dd8e8c211702` | fix, `d858fccbc` | 2 test cases, 3,863 of 3,863 assertions passed. The un-repeated route takes 3 dispatches at every shape (two expansion copies plus the kernel) against 1 for the repeated route; outputs and final states are bit-identical. |
 
 ## Change
 
