@@ -1,0 +1,15 @@
+start 2026-10-09T16:58:43Z label red load 0.49 bin 2036b60d4beeca03
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+$WORK/src/.work/mlx/tests/omarchy/test_fast_ops.cpp:1592:
+TEST CASE:  scaled_dot_product_attention folds bf16 sinks into the denominator
+
+$WORK/src/.work/mlx/tests/omarchy/test_fast_ops.cpp:1592: ERROR: test case THREW exception: [omarchy] attention sinks dtype ScaledDotProductAttention is not implemented for the Omarchy Vulkan backend (dtype=bfloat16, shape=[1,64,11,64]). No GPU kernel exists for it; no silent CPU fallback occurs. Run it on an explicit CPU stream to use the CPU implementation.
+
+===============================================================================
+[doctest] test cases:   2 |   1 passed | 1 failed | 44 skipped
+[doctest] assertions: 258 | 258 passed | 0 failed |
+[doctest] Status: FAILURE!
+rc=1
+end 2026-10-09T16:58:43Z

@@ -14382,6 +14382,51 @@ void RoPE::eval_gpu(
     omarchy::commit_rope_kv_redirect(out);
   }
 }
+
+// Float-to-float cast of `x` into a fresh temporary; a strided `x` is made
+// contiguous first.
+array cast_float_in_eval(
+    const array& x,
+    Dtype dtype,
+    omarchy::CommandEncoder& encoder,
+    const Stream& s) {
+  array wide(x.shape(), dtype, nullptr, {});
+  if (x.flags().row_contiguous) {
+    copy_gpu(x, wide, CopyType::Vector, s);
+  } else {
+    array dense = contiguous_copy_gpu(x, s);
+    encoder.add_temporary(dense);
+    copy_gpu(dense, wide, CopyType::Vector, s);
+  }
+  encoder.add_temporary(wide);
+  return wide;
+}
+
+// The float32-score composition softmaxes in f32 and reads the sinks in the
+// same dtype, while a model stores them in whatever dtype it loaded (gpt-oss:
+// bf16 sinks with bf16 q). Returns `sinks` unchanged when the dtype already
+// matches, else a widened copy kept in `holder`; non-float sinks stay a named
+// refusal. The storage-dtype composition does not call this: the SDPA op casts
+// sinks to its own dtype before eval, so there they always match.
+const array* cast_sinks_in_eval(
+    const array* sinks,
+    Dtype dtype,
+    std::optional<array>& holder,
+    const std::string& tag,
+    array& out,
+    omarchy::CommandEncoder& encoder,
+    const Stream& s) {
+  if (sinks == nullptr || sinks->dtype() == dtype) {
+    return sinks;
+  }
+  if (sinks->dtype() != float32 && sinks->dtype() != bfloat16 &&
+      sinks->dtype() != float16) {
+    omarchy::unsupported("attention sinks dtype " + tag, out);
+  }
+  holder = cast_float_in_eval(*sinks, dtype, encoder, s);
+  return &*holder;
+}
+
 void ScaledDotProductAttention::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
@@ -15171,16 +15216,7 @@ void ScaledDotProductAttention::eval_gpu(
   // mask are written straight into fresh allocations (the Load idiom)
   // before any command references them.
   auto to_f32 = [&](const array& x) {
-    array wide(x.shape(), float32, nullptr, {});
-    if (x.flags().row_contiguous) {
-      copy_gpu(x, wide, CopyType::Vector, s);
-    } else {
-      array dense = contiguous_copy_gpu(x, s);
-      encoder.add_temporary(dense);
-      copy_gpu(dense, wide, CopyType::Vector, s);
-    }
-    encoder.add_temporary(wide);
-    return wide;
+    return cast_float_in_eval(x, float32, encoder, s);
   };
   auto broadcast_view = [&](const array& base, Shape shape) {
     array view(std::move(shape), base.dtype(), nullptr, {});
@@ -15403,9 +15439,8 @@ void ScaledDotProductAttention::eval_gpu(
 
   std::optional<array> masked;
   const array* sinks = has_sinks_ ? &inputs.at(inputs.size() - 1) : nullptr;
-  if (sinks != nullptr && (*sinks).dtype() != float32) {
-    omarchy::unsupported("attention sinks dtype " + tag, out);
-  }
+  std::optional<array> sinks_cast;
+  sinks = cast_sinks_in_eval(sinks, float32, sinks_cast, tag, out, encoder, s);
   const bool has_arr_mask =
       (inputs.size() == 5) || (inputs.size() == 4 && !has_sinks_);
   if (!causal_fast && do_causal_) {
