@@ -5461,10 +5461,6 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
       std::shuffle(rhs_v.begin(), rhs_v.end(), gen);
     }
     const int rows = static_cast<int>(rhs_v.size());
-    std::vector<uint32_t> lhs_v(rows);
-    for (int i = 0; i < rows; ++i) {
-      lhs_v[i] = static_cast<uint32_t>(i);
-    }
     array w = astype(
         random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
         dtype,
@@ -5474,7 +5470,6 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
         random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
         dtype,
         cpu);
-    array lhs(lhs_v.begin(), Shape{rows}, uint32);
     array rhs(rhs_v.begin(), Shape{rows}, uint32);
     array w_deq = dequantize(
         parts[0], parts[1], parts[2], 64, 4, "affine", std::nullopt, float32, cpu);
@@ -5492,7 +5487,9 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
           parts[0],
           parts[1],
           parts[2],
-          lhs,
+          // No lhs: ops.cpp sets right_sorted only when just the rhs indices
+          // are given, the way mlx-lm's SwitchLinear calls gather_qmm.
+          std::nullopt,
           rhs,
           /*transpose=*/true,
           64,
