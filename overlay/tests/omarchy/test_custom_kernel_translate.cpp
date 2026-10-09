@@ -594,6 +594,27 @@ TEST_CASE("single-token typedefs expand to their type") {
   CHECK(glsl.find("float v = _mlx_arg0[i];") != std::string::npos);
 }
 
+TEST_CASE("alias cast walk does not cross statement boundaries") {
+  // gdn_norm_gate_eps: a row alias plus a later store; the C-style-cast
+  // walk-back from `op[i]` crossed the `;` and misread the tail of the
+  // previous initializer (`(float(nn`) as a `(T)` cast prefix, erasing it.
+  const char* source =
+      "[[kernel]] void probe(\n"
+      "    const device bfloat16_t* z [[buffer(0)]],\n"
+      "    device bfloat16_t* out [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  auto zp = z + 3;\n"
+      "  auto op = out + 5;\n"
+      "  float g = static_cast<float>(zp[0]);\n"
+      "  float nn = static_cast<float>(z[1]);\n"
+      "  float o = static_cast<float>((g * sig0) * float(nn));\n"
+      "  op[i] = o;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("(nn)") != std::string::npos);
+  CHECK(glsl.find("float(nn)") != std::string::npos);
+}
+
 TEST_CASE("constexpr if is refused by name") {
   // The MoE combine row picks a half path with `if constexpr`; the
   // constexpr strip used to leave `if const (...)` — invalid GLSL.
@@ -616,6 +637,23 @@ TEST_CASE("constexpr if is refused by name") {
     CHECK(std::string(error.what()).find("constexpr if") !=
           std::string::npos);
   }
+}
+
+TEST_CASE("nested static_cast operands resolve to functional casts") {
+  // The flat static_cast regex required a paren-free argument; nested
+  // operands left the outer `static_cast` token in the GLSL (glslang:
+  // 'static_cast' undeclared, gdn_norm_gate_eps 2026-10-09).
+  const char* source =
+      "[[kernel]] void narrow(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  float v = static_cast<float>(static_cast<int>(x[i] * 4.0f));\n"
+      "  y[i] = v + x[i];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("static_cast") == std::string::npos);
+  CHECK(glsl.find("float(int(_mlx_arg0[i] * 4.0f))") != std::string::npos);
 }
 
 TEST_CASE("body-level decltype does not break instantiation lookup") {

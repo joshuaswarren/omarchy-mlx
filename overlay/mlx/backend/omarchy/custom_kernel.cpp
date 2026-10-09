@@ -178,6 +178,67 @@ void translate_c_style_casts(std::string& code);
 void map_numeric_limits(std::string& code);
 void translate_pointer_advance(std::string& body, const std::vector<Parameter>& parameters);
 
+// static_cast<T>(expr) -> T(expr) with a balanced-paren argument, run to
+// a fixpoint so nested casts resolve. The old flat regex required a
+// paren-free argument and silently left `static_cast` in the GLSL for
+// nested operands (gdn_norm_gate_eps, 2026-10-09: 'static_cast' :
+// undeclared identifier at glslang). Runs on the raw generated source
+// before the bf16 template substitution: static_cast<InT>(e) keeps its
+// type inside angle brackets there, and the InT( constructor rewrite
+// would otherwise corrupt it into static_cast<_mlx_bf16_round_trip(...).
+void resolve_static_casts(std::string& code) {
+    bool progressed_cast = true;
+    while (progressed_cast) {
+      progressed_cast = false;
+      size_t search = 0;
+      while (true) {
+        const auto marker = code.find("static_cast", search);
+        if (marker == std::string::npos) {
+          break;
+        }
+        const auto open_angle = code.find('<', marker);
+        if (open_angle == std::string::npos) {
+          break;
+        }
+        const auto close_angle = code.find('>', open_angle);
+        if (close_angle == std::string::npos) {
+          break;
+        }
+        const auto type = trim(
+            code.substr(open_angle + 1, close_angle - open_angle - 1));
+        size_t cursor = close_angle + 1;
+        while (cursor < code.size() &&
+               (code[cursor] == ' ' || code[cursor] == '\t' ||
+                code[cursor] == '\n' || code[cursor] == '\r')) {
+          ++cursor;
+        }
+        if (type.empty() ||
+            type.find_first_not_of(
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                "0123456789_") != std::string::npos ||
+            cursor >= code.size() || code[cursor] != '(') {
+          // Not a recognized static_cast form; leave it for the final
+          // syntax guard to name rather than loop forever.
+          search = marker + 11;
+          continue;
+        }
+        size_t close_paren = 0;
+        try {
+          close_paren = matching_delimiter(code, cursor, '(', ')');
+        } catch (const std::runtime_error&) {
+          break;
+        }
+        code.replace(
+            marker,
+            close_paren - marker + 1,
+            type + "(" +
+                code.substr(cursor + 1, close_paren - cursor - 1) + ")");
+        progressed_cast = true;
+        search = marker;
+      }
+    }
+  }
+
 void translate_types(std::string& code, const std::vector<Parameter>& parameters = {}) {
   // Single-token C typedefs (`typedef float U;` in the mlx_vlm qwen3_5
   // ragged-SDPA kernels) have no GLSL meaning; drop the declaration and
@@ -315,10 +376,7 @@ void translate_types(std::string& code, const std::vector<Parameter>& parameters
        }) {
     replace_all(code, from, to);
   }
-  code = std::regex_replace(
-      code,
-      std::regex(R"(static_cast\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>\s*\(([^()]*)\))"),
-      "$1($2)");
+  resolve_static_casts(code);
   translate_as_type(code, parameters);
 }
 
@@ -685,10 +743,16 @@ void translate_device_pointer_aliases(
         while (paren > 0 && (body[paren - 1] == ' ' || body[paren - 1] == '\t'))
           paren--;
         // skip any non-alnum chars between the type and '('
-        // (e.g. ')' of `(T)`, '>' of `vec<T,4>`, whitespace).
+        // (e.g. ')' of `(T)`, '>' of `vec<T,4>`, whitespace). A C-style
+        // cast cannot span a statement separator, so the walk also stops
+        // at `;{}`: without that it crosses into the PREVIOUS statement
+        // and misreads e.g. `(float(nn` (of `... * float(nn)); op[i] = o;`)
+        // as a `(T)` prefix, erasing the tail of the initializer
+        // (gdn_norm_gate_eps1em06, 2026-10-09).
         while (paren > 0 &&
                !std::isalnum(static_cast<unsigned char>(body[paren - 1])) &&
-               body[paren - 1] != '(')
+               body[paren - 1] != '(' && body[paren - 1] != ';' &&
+               body[paren - 1] != '{' && body[paren - 1] != '}')
           paren--;
         // eat the type token (alnum / underscore)
         while (paren > 0 &&
@@ -1282,8 +1346,17 @@ void resolve_kernel_templates(
         // Constructor casts: `T(expr)` -> `_mlx_bf16_round_trip(expr)`.
         // Word-bounded: a longer identifier ending in the template name
         // (POST in the residual+RMSNorm kernel) must not lose its tail.
-        replace_word(body, bfloat_name + "(", "_mlx_bf16_round_trip(");
-        replace_word(header, bfloat_name + "(", "_mlx_bf16_round_trip(");
+        // No trailing word boundary: the constructor call's argument may
+        // open with another parenthesis (`InT((g * sig) * ...)` in the
+        // Qwen3.5 GDN norm-gate helpers), where a trailing \b never
+        // matches and the raw template name survives into the GLSL
+        // (found 2026-10-09 chasing gdn_norm_gate_eps).
+        const std::regex constructor_call(
+            "\\b" + regex_escape(bfloat_name) + "\\(");
+        body = std::regex_replace(
+            body, constructor_call, "_mlx_bf16_round_trip(");
+        header = std::regex_replace(
+            header, constructor_call, "_mlx_bf16_round_trip(");
         // Declarations `T name = expr;`: the declaration becomes float and
         // the initializing expression rounds like Metal's constructor.
         const std::regex decl_pattern(
@@ -1704,11 +1777,16 @@ void map_numeric_limits(std::string& code) {
 }
 
 Translation translate_msl(
-    const std::string& source,
+    const std::string& source_in,
     const std::tuple<int, int, int>& grid,
     const std::tuple<int, int, int>& threadgroup,
     size_t output_count,
     int compile_mode) {
+  // static_cast<T>(expr) resolves before template substitution so a bf16
+  // typename inside the angle brackets survives as a constructor call.
+  std::string source_owned = source_in;
+  resolve_static_casts(source_owned);
+  const std::string& source = source_owned;
   const auto marker = source.find("[[kernel]] void ");
   if (marker == std::string::npos) {
     throw std::runtime_error("generated MSL kernel entry point is missing");
