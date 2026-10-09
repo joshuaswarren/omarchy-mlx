@@ -194,6 +194,11 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # (upstream #4657).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-npy-shape-validate.patch"
+# Integer floor_divide became one FloorDivide primitive instead of a
+# Divide/Remainder/Subtract subgraph (upstream #4642); the omarchy backend
+# implements FloorDivide::eval_gpu. Drop at the first pin at or past 2654664a3.
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-floor-divide.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"

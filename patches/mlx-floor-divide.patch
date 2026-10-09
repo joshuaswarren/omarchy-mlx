@@ -1,0 +1,365 @@
+# Upstream: ml-explore/mlx 2654664a325639a2d121b21ac75c620cbe9412b2 (Add FloorDivide primitive for integer floor division, #4642)
+# License: MIT; upstream copyright and license notices retained.
+# Backport of the core, CPU and test hunks only. The Metal and CUDA hunks are left out: this build has neither backend.
+# Drop this patch at the first MLX pin at or past 2654664a3.
+diff --git a/mlx/backend/cpu/binary.cpp b/mlx/backend/cpu/binary.cpp
+index 90b0378f6a..150cf58339 100644
+--- a/mlx/backend/cpu/binary.cpp
++++ b/mlx/backend/cpu/binary.cpp
+@@ -119,6 +119,13 @@ void Equal::eval_cpu(const std::vector<array>& inputs, array& out) {
+   }
+ }
+ 
++void FloorDivide::eval_cpu(const std::vector<array>& inputs, array& out) {
++  assert(inputs.size() == 2);
++  auto& a = inputs[0];
++  auto& b = inputs[1];
++  binary_op_cpu(a, b, out, detail::FloorDivide(), stream());
++}
++
+ void Greater::eval_cpu(const std::vector<array>& inputs, array& out) {
+   assert(inputs.size() == 2);
+   comparison_op_cpu(inputs[0], inputs[1], out, detail::Greater(), stream());
+diff --git a/mlx/backend/cpu/binary_ops.h b/mlx/backend/cpu/binary_ops.h
+index 0bfdc0501a..c613bc505e 100644
+--- a/mlx/backend/cpu/binary_ops.h
++++ b/mlx/backend/cpu/binary_ops.h
+@@ -26,6 +26,7 @@ using namespace mlx::core::simd;
+ DEFAULT_BINARY_OP(Add, operator+)
+ DEFAULT_BINARY_OP(ArcTan2, atan2)
+ DEFAULT_BINARY_OP(Divide, divide)
++DEFAULT_BINARY_OP(FloorDivide, floor_divide)
+ DEFAULT_BINARY_OP(Multiply, operator*)
+ DEFAULT_BINARY_OP(Subtract, operator-)
+ DEFAULT_BINARY_OP(LogicalAnd, operator&&)
+diff --git a/mlx/backend/cpu/simd/accelerate_simd.h b/mlx/backend/cpu/simd/accelerate_simd.h
+index 5d61283285..6493653738 100644
+--- a/mlx/backend/cpu/simd/accelerate_simd.h
++++ b/mlx/backend/cpu/simd/accelerate_simd.h
+@@ -243,6 +243,27 @@ Simd<T, N> divide(Simd<T, N> a, Simd<T, N> b) {
+   }
+ }
+ 
++// Signed types round the quotient towards minus infinity.
++template <typename T, int N>
++Simd<T, N> floor_divide(Simd<T, N> a, Simd<T, N> b) {
++  if constexpr (std::is_integral_v<T>) {
++    // Swap zero divisors for 1 before dividing so the quotient is defined.
++    auto zero = b == Simd<T, N>(0);
++    auto q = a / select(zero, Simd<T, N>(1), b);
++    q = select(zero, Simd<T, N>(0), q);
++    if constexpr (is_signed_v<T>) {
++      // a - b * q is the remainder and needs no division by zero.
++      auto mask = b != 0 && (a - b * q) != 0 && (a < 0 != b < 0);
++      q = select(mask, q - Simd<T, N>(1), q);
++    }
++    return q;
++  } else if constexpr (is_complex<T>) {
++    return a / b;
++  } else {
++    return floor(divide(a, b));
++  }
++}
++
+ template <typename T, int N>
+ Simd<T, N> remainder(Simd<T, N> a, Simd<T, N> b) {
+   Simd<T, N> r;
+diff --git a/mlx/backend/cpu/simd/base_simd.h b/mlx/backend/cpu/simd/base_simd.h
+index 626dd93df9..b24bc9d011 100644
+--- a/mlx/backend/cpu/simd/base_simd.h
++++ b/mlx/backend/cpu/simd/base_simd.h
+@@ -218,6 +218,29 @@ Simd<T, 1> divide(Simd<T, 1> a_, Simd<T, 1> b_) {
+   return a / b;
+ }
+ 
++template <typename T>
++Simd<T, 1> floor_divide(Simd<T, 1> a_, Simd<T, 1> b_) {
++  T a = a_.value;
++  T b = b_.value;
++  if constexpr (std::is_integral_v<T>) {
++    // Integer division by zero gives 0. See divide above.
++    if (b == 0) {
++      return T(0);
++    }
++    T q = a / b;
++    if constexpr (is_signed_v<T>) {
++      if (a % b != 0 && (a < 0 != b < 0)) {
++        q -= 1;
++      }
++    }
++    return q;
++  } else if constexpr (is_complex<T>) {
++    return a / b;
++  } else {
++    return floor(divide(a_, b_));
++  }
++}
++
+ template <typename T>
+ Simd<T, 1> remainder(Simd<T, 1> a_, Simd<T, 1> b_) {
+   T a = a_.value;
+diff --git a/mlx/backend/no_gpu/primitives.cpp b/mlx/backend/no_gpu/primitives.cpp
+index 45ffbd5d10..e3ee598ea3 100644
+--- a/mlx/backend/no_gpu/primitives.cpp
++++ b/mlx/backend/no_gpu/primitives.cpp
+@@ -119,6 +119,7 @@ NO_GPU(Expm1)
+ NO_GPU(FFT)
+ NO_GPU(Flatten)
+ NO_GPU(Floor)
++NO_GPU(FloorDivide)
+ NO_GPU(Full)
+ NO_GPU(Gather)
+ NO_GPU(GatherAxis)
+diff --git a/mlx/compile.cpp b/mlx/compile.cpp
+index 3cab4c05d7..d110404190 100644
+--- a/mlx/compile.cpp
++++ b/mlx/compile.cpp
+@@ -47,17 +47,16 @@ bool is_unary(const Primitive& p) {
+ }
+ 
+ bool is_binary(const Primitive& p) {
+-  return (
+-      typeid(p) == typeid(Add) || typeid(p) == typeid(Divide) ||
+-      typeid(p) == typeid(Equal) || typeid(p) == typeid(Greater) ||
+-      typeid(p) == typeid(GreaterEqual) || typeid(p) == typeid(Less) ||
+-      typeid(p) == typeid(LessEqual) || typeid(p) == typeid(LogicalNot) ||
+-      typeid(p) == typeid(LogicalAnd) || typeid(p) == typeid(LogicalOr) ||
+-      typeid(p) == typeid(LogAddExp) || typeid(p) == typeid(Maximum) ||
+-      typeid(p) == typeid(Minimum) || typeid(p) == typeid(Multiply) ||
+-      typeid(p) == typeid(NotEqual) || typeid(p) == typeid(Power) ||
+-      typeid(p) == typeid(Subtract) || typeid(p) == typeid(BitwiseBinary) ||
+-      typeid(p) == typeid(ArcTan2));
++  return typeid(p) == typeid(Add) || typeid(p) == typeid(ArcTan2) ||
++      typeid(p) == typeid(BitwiseBinary) || typeid(p) == typeid(Divide) ||
++      typeid(p) == typeid(Equal) || typeid(p) == typeid(FloorDivide) ||
++      typeid(p) == typeid(Greater) || typeid(p) == typeid(GreaterEqual) ||
++      typeid(p) == typeid(Less) || typeid(p) == typeid(LessEqual) ||
++      typeid(p) == typeid(LogicalNot) || typeid(p) == typeid(LogicalAnd) ||
++      typeid(p) == typeid(LogicalOr) || typeid(p) == typeid(LogAddExp) ||
++      typeid(p) == typeid(Maximum) || typeid(p) == typeid(Minimum) ||
++      typeid(p) == typeid(Multiply) || typeid(p) == typeid(NotEqual) ||
++      typeid(p) == typeid(Power) || typeid(p) == typeid(Subtract);
+ }
+ 
+ bool is_ternary(const Primitive& p) {
+diff --git a/mlx/export.cpp b/mlx/export.cpp
+index 55ccbe1874..c10934d1bd 100644
+--- a/mlx/export.cpp
++++ b/mlx/export.cpp
+@@ -384,6 +384,7 @@ struct PrimitiveFactory {
+       SERIALIZE_PRIMITIVE(FFT),
+       SERIALIZE_PRIMITIVE(Flatten),
+       SERIALIZE_PRIMITIVE(Floor),
++      SERIALIZE_PRIMITIVE(FloorDivide),
+       SERIALIZE_PRIMITIVE(Full),
+       SERIALIZE_PRIMITIVE(Gather),
+       SERIALIZE_PRIMITIVE(GatherAxis),
+diff --git a/mlx/ops.cpp b/mlx/ops.cpp
+index 595a108d7f..b58a2836e4 100644
+--- a/mlx/ops.cpp
++++ b/mlx/ops.cpp
+@@ -3307,20 +3307,13 @@ array floor_divide(
+     const array& b,
+     StreamOrDevice s /* = {} */) {
+   auto dtype = promote_types(a.dtype(), b.dtype());
+-  if (issubdtype(dtype, inexact)) {
+-    return floor(divide(a, b, s), s);
+-  }
+-
+   auto inputs = broadcast_arrays({astype(a, dtype, s), astype(b, dtype, s)}, s);
+   auto shape = inputs[0].shape();
+-  auto quotient = array(
+-      shape, dtype, std::make_shared<Divide>(to_stream(s)), std::move(inputs));
+-  auto rem = remainder(a, b, s);
+-  auto zero = array(0, dtype);
+-  auto step = logical_and(
+-      not_equal(rem, zero, s),
+-      not_equal(less(a, zero, s), less(b, zero, s), s));
+-  return subtract(quotient, astype(step, dtype, s), s);
++  return array(
++      shape,
++      dtype,
++      std::make_shared<FloorDivide>(to_stream(s)),
++      std::move(inputs));
+ }
+ 
+ array remainder(const array& a, const array& b, StreamOrDevice s /* = {} */) {
+diff --git a/mlx/primitives.cpp b/mlx/primitives.cpp
+index e7811cfde6..6192e0759f 100644
+--- a/mlx/primitives.cpp
++++ b/mlx/primitives.cpp
+@@ -2221,12 +2221,6 @@ std::vector<Shape> Flatten::output_shapes(const std::vector<array>& inputs) {
+   return {Flatten::output_shape(inputs[0], start_axis_, end_axis_)};
+ }
+ 
+-bool FFT::is_equivalent(const Primitive& other) const {
+-  const FFT& r_other = static_cast<const FFT&>(other);
+-  return axes_ == r_other.axes_ && inverse_ == r_other.inverse_ &&
+-      real_ == r_other.real_ && odd_out_ == r_other.odd_out_;
+-}
+-
+ std::vector<array> Unflatten::vjp(
+     const std::vector<array>&,
+     const std::vector<array>& cotangents,
+@@ -2409,6 +2403,12 @@ std::vector<array> FFT::jvp(
+   }
+ }
+ 
++bool FFT::is_equivalent(const Primitive& other) const {
++  const FFT& r_other = static_cast<const FFT&>(other);
++  return axes_ == r_other.axes_ && inverse_ == r_other.inverse_ &&
++      real_ == r_other.real_ && odd_out_ == r_other.odd_out_;
++}
++
+ std::vector<array> Floor::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
+@@ -2434,6 +2434,32 @@ std::pair<std::vector<array>, std::vector<int>> Floor::vmap(
+   return {{floor(inputs[0], stream())}, axes};
+ }
+ 
++std::vector<array> FloorDivide::vjp(
++    const std::vector<array>& primals,
++    const std::vector<array>&,
++    const std::vector<int>& argnums,
++    const std::vector<array>&) {
++  std::vector<array> vjps;
++  for (auto arg : argnums) {
++    vjps.push_back(zeros_like(primals[arg], stream()));
++  }
++  return vjps;
++}
++
++std::vector<array> FloorDivide::jvp(
++    const std::vector<array>& primals,
++    const std::vector<array>&,
++    const std::vector<int>&) {
++  return {zeros_like(primals[0], stream())};
++}
++
++std::pair<std::vector<array>, std::vector<int>> FloorDivide::vmap(
++    const std::vector<array>& inputs,
++    const std::vector<int>& axes) {
++  auto [a, b, to_ax] = vmap_binary_op(inputs, axes, stream());
++  return {{floor_divide(a, b, stream())}, {to_ax}};
++}
++
+ std::vector<array> Full::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
+diff --git a/mlx/primitives.h b/mlx/primitives.h
+index 352f34db75..3ec8be22f9 100644
+--- a/mlx/primitives.h
++++ b/mlx/primitives.h
+@@ -1147,6 +1147,20 @@ class Floor : public UnaryPrimitive {
+   DEFINE_INPUT_OUTPUT_SHAPE()
+ };
+ 
++class FloorDivide : public UnaryPrimitive {
++ public:
++  explicit FloorDivide(Stream stream) : UnaryPrimitive(stream) {}
++
++  void eval_cpu(const std::vector<array>& inputs, array& out) override;
++  void eval_gpu(const std::vector<array>& inputs, array& out) override;
++
++  DEFINE_VMAP()
++  DEFINE_GRADS()
++  DEFINE_NAME(FloorDivide)
++  DEFINE_DEFAULT_IS_EQUIVALENT()
++  DEFINE_INPUT_OUTPUT_SHAPE()
++};
++
+ class Full : public UnaryPrimitive {
+  public:
+   explicit Full(Stream stream) : UnaryPrimitive(stream) {}
+diff --git a/python/tests/test_ops.py b/python/tests/test_ops.py
+index b5adfaf97f..6369454c7b 100644
+--- a/python/tests/test_ops.py
++++ b/python/tests/test_ops.py
+@@ -399,10 +399,34 @@ def test_floor_divide(self):
+                     np.array(b, dtype=np_int_float_dtypes[kind]),
+                 )
+                 self.assertEqual(result.tolist(), expected.tolist())
++                self.assertEqual(result.dtype, dtype)
+ 
+                 result = mx.array(a, dtype=dtype) // mx.array(b, dtype=dtype)
+                 self.assertEqual(result.tolist(), expected.tolist())
+ 
++        # Unsigned integers use the plain quotient.
++        ua = [7, 0, 5]
++        ub = [2, 2, 3]
++
++        mx_uint_dtypes = mx.__array_namespace_info__().dtypes(
++            kind=("unsigned integer",)
++        )
++        np_uint_dtypes = np.__array_namespace_info__().dtypes(
++            kind=("unsigned integer",)
++        )
++
++        for kind, dtype in mx_uint_dtypes.items():
++            with self.subTest(dtype=dtype):
++                result = mx.floor_divide(
++                    mx.array(ua, dtype=dtype), mx.array(ub, dtype=dtype)
++                )
++                expected = np.floor_divide(
++                    np.array(ua, dtype=np_uint_dtypes[kind]),
++                    np.array(ub, dtype=np_uint_dtypes[kind]),
++                )
++                self.assertEqual(result.tolist(), expected.tolist())
++                self.assertEqual(result.dtype, dtype)
++
+     def test_remainder(self):
+         # Complex is not supported and has to say so rather than quietly
+         # computing a componentwise remainder, which no other library defines
+diff --git a/tests/ops_tests.cpp b/tests/ops_tests.cpp
+index 1b3524f494..cda9523f37 100644
+--- a/tests/ops_tests.cpp
++++ b/tests/ops_tests.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "mlx/backend/cuda/cuda.h"
+ #include "mlx/mlx.h"
++#include "mlx/primitives.h"
+ 
+ using namespace mlx::core;
+ 
+@@ -2111,9 +2112,10 @@ TEST_CASE("test arithmetic binary ops") {
+   // Integer division by zero gives quotient 0 and remainder a.
+   if (default_device() == Device::cpu) {
+     for (auto dt : {int8, int16, int32, int64, uint8, uint16, uint32, uint64}) {
+-      auto num = astype(array({7, 0, 5}, {3}), dt);
+-      auto den = zeros({3}, dt);
+-      CHECK(array_equal(floor_divide(num, den), zeros({3}, dt)).item<bool>());
++      auto num = astype(array({7, 0, 5, -7}, {4}), dt);
++      auto den = zeros({4}, dt);
++      auto q = floor_divide(num, den);
++      CHECK(array_equal(q, zeros({4}, dt)).item<bool>());
+       CHECK(array_equal(remainder(num, den), num).item<bool>());
+     }
+   }
+@@ -3743,6 +3745,25 @@ TEST_CASE("inner") {
+   CHECK(array_equal(z, expected).item<bool>());
+ }
+ 
++TEST_CASE("test floor divide") {
++  // Signed integers round the quotient towards minus infinity.
++  auto x = array({4, 5, -1, -6});
++  auto y = array({-2, 3, 2, -3});
++  CHECK(array_equal(floor_divide(x, y), array({-2, 1, -1, 2})).item<bool>());
++
++  // Unsigned integers use the plain quotient.
++  auto ux = astype(array({7, 0, 5}, {3}), uint32);
++  auto uy = astype(array({2, 2, 3}, {3}), uint32);
++  auto expected = astype(array({3, 0, 1}, {3}), uint32);
++  CHECK(array_equal(floor_divide(ux, uy), expected).item<bool>());
++
++  // The dtype is kept and the result is one primitive.
++  auto out = floor_divide(astype(x, int8), astype(array(3), int8));
++  CHECK_EQ(out.dtype(), int8);
++  CHECK_EQ(std::string(out.primitive().name()), "FloorDivide");
++  CHECK(out.siblings().empty());
++}
++
+ TEST_CASE("test divmod") {
+   auto x = array({1, 2, 3});
+   auto y = array({1, 1, 1});
