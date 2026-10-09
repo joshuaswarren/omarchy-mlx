@@ -20,5 +20,18 @@ Same two wheels on every chip: old = build of the causal flash route, new = that
 
 All three rules are met. The gain is 4.8 percent at L 512 on the M1 Max (bar 3 percent), 2.1 to 3.1 percent on the M2 Max, and within noise on the M1 (worst cell 0.4 percent slower at L 2048). Spreads were 0.0 to 2.8 percent, no cell void. The M1 Max ratio at L 512 is still above the 0.8 minimum bar (0.874): this change closes part of the gap, not all of it.
 
+## Evidence fields (what this receipt records, what it does not)
+Recorded:
+- Source: shader change in commit 2e1c712eb on the causal flash branch (the one-line diff above); the measured wheels are builds of the branch commits `3c767b30` (old) and `2e1c712e` (new), which differ by that change.
+- Exact commands: `tools/h40_ticket.sh` is the ticket that produced every log (identity lines, flash output hashes per length via `tools/sdpa_hash.py`, the device test, then the micro `tools/sdpa_micro.py causal 512,1024,2048` three times per arm with the arms alternated, idle gap before each run). Paths and the private driver directory are replaced by `$WORK` and `$PRIVATE_ICD_DIR`.
+- Kernel `7.1.12-2-12.6-sep-ARCH` on all three chips (printed in each log); Vulkan driver `Mesa 26.3.0-devel (git-6543eeb7df)` and its library sha256 prefix `3546bcafe8ed3995` (in the logs); device names `Apple M1 (G13G B1)`, `Apple M1 Max (G13C C0)`, `Apple M2 Max (G14C B1)` (in the logs and in the flash hash line).
+- Numerical result: the flash output sha256 per length, old against new, per chip (`m1`, `m1max`, `m2max` logs, line `hash venv-cf` and `hash venv-cf2`), equal on all three chips; device test 100 of 100 assertions.
+- Timing procedure: median of 5 reps x 20 calls per process, 3 repeats per arm, arms alternated, 30 s idle before each run (60 s on the M2 Max), spread per cell printed; cells over 5 percent spread are void (none were).
+Not recorded, and not claimed:
+- Backend dispatch trace for these runs. The device test of the causal flash route asserts one flash dispatch per eligible cell and fails when the route is disabled (shown in the causal flash receipt), so the route is exercised, but this ticket did not print a trace.
+- Firmware identity of the boot firmware (not captured by the ticket), thermal state beyond the idle gaps (no temperature or clock log), and a Vulkan device-reopen result (no reset or hang path was exercised; no reopen test was run).
+- Model and quantization hashes: not applicable, this is a kernel micro on synthetic bf16 inputs from a fixed seed.
+The performance claim is therefore limited to the numbers in the table on those builds; reproducing it needs the two wheels, which are builds of the branch commits named above.
+
 ## Identity
 Wheels `0.32.4.dev202610081925+3c767b30` (old) and `0.32.4.dev202610082132+2e1c712e` (new), both from the branch this change was taken from; the shader differs by the two lines above. Driver library sha256 starting 3546bcafe8ed3995 on all three chips. The M1 Max leg was read on 2026-10-08, the M1 and M2 Max legs on 2026-10-09. Not measured here: end-to-end model throughput (the causal flash route's own end-to-end result is in its receipt).
