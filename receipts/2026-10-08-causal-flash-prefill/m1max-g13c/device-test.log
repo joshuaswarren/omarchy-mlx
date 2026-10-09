@@ -1,0 +1,150 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:491:
+TEST CASE:  causal coopmat flash prefill is as accurate as the composed causal route
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/8 lq 64 lk 64: max abs flash 0.00194971 composed 0.00194971 rel-L2 flash 0.00148166 composed 0.00148166 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 8
+          c.lq := 64
+          c.lk := 64
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/2 lq 72 lk 72: max abs flash 0.00195252 composed 0.00195252 rel-L2 flash 0.00150047 composed 0.00150047 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 2
+          c.lq := 72
+          c.lk := 72
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/1 lq 128 lk 128: max abs flash 0.00195256 composed 0.00195256 rel-L2 flash 0.00151173 composed 0.00151173 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 1
+          c.lq := 128
+          c.lk := 128
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/2 lq 100 lk 200: max abs flash 0.000488031 composed 0.000488031 rel-L2 flash 0.00165542 composed 0.00165541 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 2
+          c.lq := 100
+          c.lk := 200
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/8 lq 96 lk 512: max abs flash 0.000244212 composed 0.000244139 rel-L2 flash 0.00165196 composed 0.00165196 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 8
+          c.lq := 96
+          c.lk := 512
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h4/1 lq 130 lk 1000: max abs flash 0.000240799 composed 0.000240799 rel-L2 flash 0.00165497 composed 0.00165497 strict false
+  logged: outlier := false
+          c.heads := 4
+          c.kv_heads := 1
+          c.lq := 130
+          c.lk := 1000
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/2 lq 512 lk 512: max abs flash 0.00195143 composed 0.00195143 rel-L2 flash 0.00153566 composed 0.00153566 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 2
+          c.lq := 512
+          c.lk := 512
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/1 lq 1000 lk 1000: max abs flash 0.00194675 composed 0.00194675 rel-L2 flash 0.00153911 composed 0.00153911 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 1
+          c.lq := 1000
+          c.lk := 1000
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h8/8 lq 1024 lk 1024: max abs flash 0.00194213 composed 0.00194213 rel-L2 flash 0.0015426 composed 0.0015426 strict false
+  logged: outlier := false
+          c.heads := 8
+          c.kv_heads := 8
+          c.lq := 1024
+          c.lk := 1024
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier false h2/1 lq 2048 lk 2048: max abs flash 0.00194716 composed 0.00194716 rel-L2 flash 0.00154768 composed 0.00154768 strict false
+  logged: outlier := false
+          c.heads := 2
+          c.kv_heads := 1
+          c.lq := 2048
+          c.lk := 2048
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/8 lq 64 lk 64: max abs flash 0.00195646 composed 0.00195646 rel-L2 flash 0.000553715 composed 0.000553727 strict true
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 8
+          c.lq := 64
+          c.lk := 64
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/2 lq 72 lk 72: max abs flash 0.00196992 composed 0.00196992 rel-L2 flash 0.00056732 composed 0.000567315 strict false
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 2
+          c.lq := 72
+          c.lk := 72
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/1 lq 128 lk 128: max abs flash 0.00198764 composed 0.00196554 rel-L2 flash 0.000689831 composed 0.000689791 strict false
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 1
+          c.lq := 128
+          c.lk := 128
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/2 lq 100 lk 200: max abs flash 0.00201675 composed 0.00197309 rel-L2 flash 0.000893942 composed 0.000893934 strict false
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 2
+          c.lq := 100
+          c.lk := 200
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/8 lq 96 lk 512: max abs flash 0.00196808 composed 0.00198097 rel-L2 flash 0.00102438 composed 0.0010244 strict true
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 8
+          c.lq := 96
+          c.lk := 512
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h4/1 lq 130 lk 1000: max abs flash 0.00199397 composed 0.00203813 rel-L2 flash 0.00124307 composed 0.00124307 strict true
+  logged: outlier := true
+          c.heads := 4
+          c.kv_heads := 1
+          c.lq := 130
+          c.lk := 1000
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/2 lq 512 lk 512: max abs flash 0.00204839 composed 0.00205954 rel-L2 flash 0.00101133 composed 0.00101136 strict true
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 2
+          c.lq := 512
+          c.lk := 512
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/1 lq 1000 lk 1000: max abs flash 0.00203315 composed 0.00201407 rel-L2 flash 0.00102218 composed 0.00102216 strict false
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 1
+          c.lq := 1000
+          c.lk := 1000
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h8/8 lq 1024 lk 1024: max abs flash 0.00202076 composed 0.00203669 rel-L2 flash 0.00101111 composed 0.00101112 strict true
+  logged: outlier := true
+          c.heads := 8
+          c.kv_heads := 8
+          c.lq := 1024
+          c.lk := 1024
+
+<build>/tests/omarchy/test_sdpa_prefill_flash.cpp:563: MESSAGE: outlier true h2/1 lq 2048 lk 2048: max abs flash 0.00202132 composed 0.00201464 rel-L2 flash 0.00120074 composed 0.00120073 strict false
+  logged: outlier := true
+          c.heads := 2
+          c.kv_heads := 1
+          c.lq := 2048
+          c.lk := 2048
+
+===============================================================================
+[doctest] test cases:   1 |   1 passed | 0 failed | 6 skipped
+[doctest] assertions: 100 | 100 passed | 0 failed |
+[doctest] Status: SUCCESS!

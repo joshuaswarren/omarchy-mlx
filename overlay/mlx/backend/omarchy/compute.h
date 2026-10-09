@@ -956,6 +956,10 @@ enum class ComputeKernel : uint16_t {
   // from GatedDeltaPrefillRecur32BF16 because the mask branch in the maskless
   // loop cost the M1 8-12%. Append-only profile id.
   GatedDeltaPrefillRecur32MaskedBF16,
+  // Causal flash prefill on the 8x8x8 cooperative matrix, bf16 hd 128, 8
+  // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
+  // MatmulGap H35). Append-only profile id.
+  SdpaCausalFlashCoopmatBF16,
   Count,
 };
 
