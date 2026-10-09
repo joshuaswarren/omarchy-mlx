@@ -4028,14 +4028,12 @@ void check_gdn_vjp(Stream stream, int B, int Hk, int Hv, int T, bool host) {
 }
 } // namespace
 
-// Equal head counts: the fused backward is on by default here. Known failing
-// (H55, M1 Max, 2026-10-09): the gate gradient dg disagrees with the composed
-// reference (relative L2 0.96 at T=33) while dq, dk, dv and dbeta agree to
-// 0.3 percent; dg is exactly equal at T=1. The GQA path is not the cause
-// (host-repeated data fails identically). The float32 CPU lines in the output
-// say which side is wrong; see docs/known-defects.md.
-TEST_CASE("fused gdn vjp matches the composed reference at equal head counts" *
-          doctest::may_fail(true)) {
+// Equal head counts: the fused backward is on by default here. The gate
+// gradient dg once disagreed with the composed reference by 0.96 relative L2
+// at T=33 (H55): the shader kept one lane's partial of the key-column sum, 4
+// of 128 columns. dg is exact at T=1 because the initial state is zero. The
+// float32 CPU lines in the output show both GPU results against the truth.
+TEST_CASE("fused gdn vjp matches the composed reference at equal head counts") {
   if (!compute_available()) {
     return;
   }
@@ -4048,8 +4046,7 @@ TEST_CASE("fused gdn vjp matches the composed reference at equal head counts" *
 // backward). The case sets the flag, so it measures the fused kernel at the
 // shapes the former test used, plus the same data repeated on the host and run
 // at equal head counts, which separates a GQA-path fault from the data.
-TEST_CASE("fused gdn vjp at GQA shapes behind the opt-in flag" *
-          doctest::may_fail(true)) {
+TEST_CASE("fused gdn vjp at GQA shapes behind the opt-in flag") {
   if (!compute_available()) {
     return;
   }

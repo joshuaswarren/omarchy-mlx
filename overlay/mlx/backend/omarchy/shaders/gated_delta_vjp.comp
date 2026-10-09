@@ -257,7 +257,8 @@ shared float s_kv[32][4];   // lane x -> column x, row y
 shared float s_w[32][4];
 shared float s_dq[4][128];  // row y -> column c
 shared float s_dk[4][128];
-shared float s_scal[2][4];  // dgamma, w*u per row
+shared float s_db[4];       // w*u per row (db partial)
+shared float s_dg[32][4];   // lane x -> dgamma partial over the lane's NPT columns, row y
 
 void main() {
   uint hv = params.matrix_k;
@@ -373,7 +374,7 @@ void main() {
       // Row-scoped writes: dv and the db partial leave once per row.
       if (lane == 0u) {
         dv_buf.v[t_base_o + t * v_stride] = bf16_store(beta * w_total);
-        s_scal[0][lrow] = w_total *
+        s_db[lrow] = w_total *
             (bf16_load(v_buf.v[t_base_v + t * v_stride]) - kv_total);
       }
       float u = bf16_load(v_buf.v[t_base_v + t * v_stride]) - kv_total;
@@ -386,9 +387,7 @@ void main() {
         s_hat[i] -= beta * w_total * k_slice[i];
         dgamma += s_hat[i] * s_prev[i];
       }
-      if (lane == 0u) {
-        s_scal[1][lrow] = dgamma;
-      }
+      s_dg[lane][lrow] = dgamma;
       barrier();
 
       // One workgroup partial per column: sum the four rows, then the
@@ -408,8 +407,11 @@ void main() {
         }
       }
       if (lane == 0u && lrow == 0u) {
-        float dg_sum = s_scal[1][0] + s_scal[1][1] + s_scal[1][2] + s_scal[1][3];
-        float db_sum = s_scal[0][0] + s_scal[0][1] + s_scal[0][2] + s_scal[0][3];
+        float dg_sum = 0.0f;
+        for (uint x = 0u; x < 32u; ++x) {
+          dg_sum += s_dg[x][0] + s_dg[x][1] + s_dg[x][2] + s_dg[x][3];
+        }
+        float db_sum = s_db[0] + s_db[1] + s_db[2] + s_db[3];
         cas_add(2u, params.in_strides[2] + (b * T + t) * hv + head, dg_sum);
         cas_add(3u, params.in_strides[3] + (b * T + t) * hv + head, db_sum);
       }
