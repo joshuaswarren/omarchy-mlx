@@ -886,3 +886,11 @@ A Supported row must link every applicable record.
   bit-equal to before; the gate is the fp64 tolerance of the correctness battery (y 0.02, state 2e-4). Maskless defaults are unchanged.
   `MLX_OMARCHY_GDN_RECUR32=1` and `=2` now also cover masked rows (they excluded them before); `=0` and
   `MLX_OMARCHY_NO_COOPMAT_GDN=1` restore the old masked route.
+
+## 2026-10-09 - maskless GDN prefill defaults to recur32 mode 0 on M1 (G13G)
+- The maskless default on M1 was `MLX_OMARCHY_GDN_RECUR32=2` (the single-pass subgroup-reduction kernel from T >= 2). With it, Qwen3.5-9B
+  greedy decode gave digest `83043aa001f15d1b` on M1 and on M1 Max with `=2`, and `80274aa790426468` with `=0` on both chips; `=0` is also
+  the digest the parity lane reports for macOS. The default is now mode 0 on every part for a maskless prefill, so M1 matches M1 Max and macOS.
+- Cost on M1: prefill at 512 tokens 98.35 vs 101.66 tok/s (-3.3 percent, one run per arm), decode equal. `=2` stays available. A masked prefill
+  on G13 parts keeps mode 2 (the padded-batch fix above); token parity with macOS is not claimed for that case.
+  Receipt: `receipts/2026-10-09-gdn-recur32-g13g-default/`.
