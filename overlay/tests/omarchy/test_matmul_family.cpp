@@ -2542,6 +2542,32 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     CHECK(s_max <= scalar_bound * 2.0);
     CHECK(b_l2 <= 1.5 * s_l2 + 1e-9);
     CHECK(b_max <= 1.5 * s_max + 1e-9);
+    // Direct sub-versus-scalar check (PR review): the 1.5x gate above sits on
+    // the output-rounding floor, so it cannot see a small extra error. At
+    // least 99 % of the elements must agree within one ulp of the output
+    // dtype and no element may differ by more than 2e-3 of the reference
+    // maximum (near-zero outputs after cancellation can move more than one
+    // ulp, so it is not an every-element ulp rule).
+    {
+      const int mantissa = bf16 ? 7 : 10;
+      size_t within = 0;
+      double worst = 0.0;
+      for (size_t i = 0; i < sub_out.size(); ++i) {
+        const double a = sub_out[i];
+        const double b = scalar_out[i];
+        const double diff = std::abs(a - b);
+        worst = std::max(worst, diff);
+        int exponent = 0;
+        std::frexp(std::max(std::abs(a), std::abs(b)), &exponent);
+        const double ulp = std::ldexp(1.0, exponent - 1 - mantissa);
+        within += diff <= ulp ? 1 : 0;
+      }
+      const double fraction = double(within) / double(sub_out.size());
+      std::cout << "[gather-qmm-sub] sub vs scalar: within 1 ulp " << fraction
+                << " max abs diff / ref max " << worst / ref_max << std::endl;
+      CHECK(fraction >= 0.99);
+      CHECK(worst <= 2e-3 * ref_max);
+    }
     // z-chunk boundary: with index_count x n > 65535, outputs at flat
     // indices >= 65535 come from the z>=1 workgroup chunks - they must
     // track the reference, not zeros/garbage.

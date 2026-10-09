@@ -3394,7 +3394,7 @@ void dispatch_gather_qmm(
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
         transpose && bits == 4u && group_size == 64u &&
-        (out.dtype() == bfloat16 || out.dtype() == float16) &&
+        (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
         sub_caps.subgroup_size == 32u &&
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
