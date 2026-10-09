@@ -312,6 +312,66 @@ TEST_CASE("chunked composed keeps GQA rows in place against flash") {
   }
 }
 
+TEST_CASE("the flash pin alone forces flash dispatches at small shapes") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  // 4 x 4096^2 = 67M score elements: below every flash_wants trigger. The
+  // pin must still force the flash kernel, or a flash-vs-composed A/B at
+  // small shapes compares composed with itself (w7Q review, 2026-10-09).
+  constexpr int length = 4096;
+  array q = make_bf16({1, 4, length, kHd}, 711, stream);
+  array k = make_bf16({1, 4, length, kHd}, 712, stream);
+  array v = make_bf16({1, 4, length, kHd}, 713, stream);
+  setenv("MLX_OMARCHY_SDPA_PREFILL_FLASH", "1", 1);
+  const uint64_t pinned_dispatches =
+      dispatches_for([&] { return sdpa(q, k, v, stream); }, stream);
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  const uint64_t flash_tiles = static_cast<uint64_t>((length + 31) / 32);
+  CHECK_EQ(pinned_dispatches, flash_tiles);
+}
+
+TEST_CASE("big masked bf16 keeps the named storage-binding refusal under BF16_FAST") {
+  if (!compute_available()) return;
+  Stream stream = gpu_stream();
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+  unsetenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  setenv("MLX_OMARCHY_SDPA_BF16_FAST", "1", 1);
+  constexpr int length = 16384;
+  constexpr int heads = 8;
+  // An additive mask (inputs == 4) takes the call outside the chunked
+  // composed route, so the big-score skip must not fire: the refusal
+  // names the bf16 storage binding (4294967296 bytes), not an
+  // unchunked f32 allocation (8589934592 bytes) (w7Q review D2).
+  array q = make_bf16({1, heads, length, kHd}, 821, stream);
+  array k = make_bf16({1, heads, length, kHd}, 822, stream);
+  array v = make_bf16({1, heads, length, kHd}, 823, stream);
+  auto col_values = pattern(heads * length, 905);
+  array col = array(col_values.begin(), Shape{1, heads, length, 1}, float32);
+  array mask = astype(
+      broadcast_to(col, Shape{1, heads, length, length}, stream), bfloat16,
+      stream);
+  mask.eval();
+  bool refused_at_bf16 = false;
+  std::string refusal;
+  try {
+    array out = fast::scaled_dot_product_attention(
+        q, k, v, 1.0f / std::sqrt(static_cast<float>(kHd)), "", mask, {},
+        false, stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+  } catch (const std::exception& e) {
+    refusal = e.what();
+    refused_at_bf16 =
+        refusal.find("4294967296") != std::string::npos &&
+        refusal.find("8589934592") == std::string::npos;
+  }
+  CHECK_MESSAGE(refused_at_bf16,
+                "refusal message did not name the bf16 storage binding: ",
+                refusal);
+  unsetenv("MLX_OMARCHY_SDPA_BF16_FAST");
+}
+
 TEST_CASE("flash bf16 prefill matches the composition on tile-boundary shapes") {
   if (!compute_available()) {
     return;
