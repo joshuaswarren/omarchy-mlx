@@ -225,6 +225,15 @@ Buffer VulkanAllocator::malloc(size_t size) {
   }
   if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
       alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+    // Freed buffers of submitted batches wait in the quarantine; they hold
+    // heap bytes that neither active_memory_ nor the cache count, so the
+    // retry would fail while that memory is about to come back. Wait for
+    // every submitted batch (the drain recycles its quarantined buffers),
+    // then drop the cache they landed in. No allocator lock is held here.
+    if (const uint64_t submitted = device().completions().last_reserved();
+        submitted != 0) {
+      device().completions().wait(submitted);
+    }
     {
       std::unique_lock rl(mutex_);
       buffer_cache_.clear();
