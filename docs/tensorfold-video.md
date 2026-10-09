@@ -4,6 +4,8 @@ This guide renders a MiniMax-H3 clip end to end on Linux on Apple Silicon, using
 
 Model bundle (int8 state, compact text-tower export, video VAE, audio VAE, tokenizer, processor, configs, sample clip, license): https://huggingface.co/joshuaswarren/MiniMax-H3-int8-omarchy
 
+Verified on 2026-10-09: a fresh clone that ran only the commands in this guide, on an M2 Max with 96 GB, produced a byte-identical mp4 (sha256 `36bd5df0a7b4b060304944beeeebb28e89de75ede22b1eaf3e31ce165fafee07`) in 58 min 44 s, from text encode to the muxed clip.
+
 ## Hardware you need
 
 - 96 GB of unified memory. On a 96 GB M2 Max the render peaks at 33.9 GiB of omarchy-mlx allocations, with the 44 GB int8 DiT resident on the Honeykrisp heap (the default heap budget on 96 GB machines is about 47 to 60 GiB).
