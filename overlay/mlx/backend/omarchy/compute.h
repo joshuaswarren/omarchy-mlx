@@ -946,6 +946,16 @@ enum class ComputeKernel : uint16_t {
   // k % 8 == 0, group % 8 == 0, 32 <= group <= 1024, m >= 32, n >= 32,
   // non-swiglu. Append-only profile id.
   Int8MatmulF32CoopOp,
+  // Fused-SwiGLU epilogue for the swiglu two-matmul decomposition:
+  // gate/value f32 totals in, silu(gate)*value with one bf16 rounding
+  // out. Append-only profile id.
+  Int8SwigluEpilogueOp,
+  // Masked build of the recur32 prefill scan (same source, -DMASKED=1): a
+  // per-token validity mask [1, T] in the mask binding (shape[3] offset); a
+  // masked token leaves the state untouched and writes zero. Kept separate
+  // from GatedDeltaPrefillRecur32BF16 because the mask branch in the maskless
+  // loop cost the M1 8-12%. Append-only profile id.
+  GatedDeltaPrefillRecur32MaskedBF16,
   // Causal flash prefill on the 8x8x8 cooperative matrix, bf16 hd 128, 8
   // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
   // MatmulGap H35). Append-only profile id.

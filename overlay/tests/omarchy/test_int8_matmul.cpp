@@ -220,15 +220,25 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       // (rows 128 >= 32 admits it), plus the 32-quarter edge shift.
       {128, 1024, 1024, 8, false, 709}, // x=-128, w=-128: +2^24 via MMA
       {40, 256, 128, 33, false, 710},   // edge-shifted 64-tiles
+      // TensorFold large groups: per-group |sum| = 5376 * 16384 =
+      // 88,080,384 needs the chunked int32 reduction (pure f32 would
+      // lose bits past 2^24); swiglu variant; qkv-wide shape.
+      {128, 5376, 5376, 8, false, 711},  // x=-128, w=-128: +88,080,384
+      {128, 5376, 5376, 8, false, 712},  // x=-128, w=+127: -88,054,272
+      {17, 5376, 5376, 8, true, 713},    // swiglu g=5376, x=-128
+      {128, 5376, 5376, 16128, false, 714}, // qkv-wide through coop chunking
+      {40, 5376, 5376, 33, false, 715},  // chunked coop edge tiles
+      {33, 14336, 14336, 40, false, 716}, // chunked coop, g=14336
   };
   for (const auto& b : big) {
     auto in = make_inputs(b.rows, b.k, b.group, b.n, b.swiglu, b.seed);
-    if (b.seed >= 707 && b.seed <= 709) {
+    if ((b.seed >= 707 && b.seed <= 709) || b.seed == 711 ||
+        b.seed == 712 || b.seed == 713) {
       for (auto& v : in.x) {
         v = int8_t(-128);
       }
       for (auto& v : in.w) {
-        v = (b.seed == 708) ? int8_t(127) : int8_t(-128);
+        v = (b.seed == 708 || b.seed == 712) ? int8_t(127) : int8_t(-128);
       }
     } else if (b.seed >= 404) {
       // Extremes: fill x and w with the magnitude that maximizes
@@ -293,6 +303,16 @@ TEST_CASE("tiled int8_matmul is bitwise identical to the naive kernel") {
       // Above the f32 gate: group > 1024 must route to the int32 tiled
       // kernel and still match the naive kernel bit for bit.
       {9, 2048, 2048, 9, false},
+      // TensorFold large groups through the chunked int32 reduction
+      // (5376 = 5x1024 + 256, groups=2 at K=10752, g=14336), swiglu,
+      // and tiny rows.
+      {9, 5376, 5376, 5, false},
+      {9, 10752, 5376, 3, false},
+      {9, 14336, 14336, 3, false},
+      {17, 5376, 5376, 7, true},
+      {33, 5376, 5376, 21, false},
+      {1, 5376, 5376, 70, false},
+      {3, 5376, 5376, 70, false},
   };
   // Bit-compare a candidate route (env-controlled) against the naive
   // kill-switch kernel for every shape in the matrix. Passes: the default

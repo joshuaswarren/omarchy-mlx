@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -198,6 +200,145 @@ inline void require_expected_honeykrisp_sha(
         "Honeykrisp Mesa git SHA mismatch: expected " + expected +
         ", found " + (actual.empty() ? std::string("unavailable") : actual));
   }
+}
+
+namespace detail {
+// Storage shared by note_stock_driver_identity and
+// stock_driver_warning_recorded (inline-function statics are unique per
+// function, so both must go through one slot).
+inline std::string& stock_driver_warning_slot() {
+  static std::string slot;
+  return slot;
+}
+} // namespace detail
+
+// Parses the first major.minor.patch triple in a driver info string
+// ("Mesa 26.2.3 (git-0f1e2d3c4b)", "Mesa 26.3.0-devel"). Returns false
+// when the string holds no such triple; callers then stay silent
+// instead of guessing a version.
+inline bool first_mesa_version_triple(
+    const std::string& driver_info,
+    unsigned& major,
+    unsigned& minor,
+    unsigned& patch) {
+  size_t index = 0;
+  while (index < driver_info.size()) {
+    if (!std::isdigit(static_cast<unsigned char>(driver_info[index]))) {
+      ++index;
+      continue;
+    }
+    unsigned values[3] = {0, 0, 0};
+    bool complete = true;
+    size_t cursor = index;
+    for (int component = 0; component < 3; ++component) {
+      size_t digits = 0;
+      unsigned long long value = 0;
+      while (cursor < driver_info.size() &&
+             std::isdigit(static_cast<unsigned char>(driver_info[cursor]))) {
+        value = value * 10 + static_cast<unsigned long long>(
+                                  driver_info[cursor] - '0');
+        ++cursor;
+        ++digits;
+      }
+      if (digits == 0) {
+        complete = false;
+        break;
+      }
+      values[component] = static_cast<unsigned>(value);
+      if (component < 2) {
+        if (cursor < driver_info.size() && driver_info[cursor] == '.') {
+          ++cursor;
+        } else {
+          complete = false;
+          break;
+        }
+      }
+    }
+    if (complete) {
+      major = values[0];
+      minor = values[1];
+      patch = values[2];
+      return true;
+    }
+    index = cursor > index ? cursor : index + 1;
+  }
+  return false;
+}
+
+// Whether a warning is owed, decided without a device so every case is
+// unit-tested. The stock system driver only became safe for variable
+// shifts in the 26.2.4 release; older stock builds miscompile
+// shift-heavy kernels (int8 among them) on Apple GPUs.
+struct StockDriverCheck {
+  bool warn{false};
+  std::string message;
+};
+
+inline StockDriverCheck stock_driver_warning(
+    const std::string& icd_source,
+    const std::string& driver_info,
+    const std::string& driver_sha,
+    const std::string& expected_sha) {
+  StockDriverCheck check;
+  // The packaged recipe build comes from the known-good fork: never
+  // warn, whatever its version string reads.
+  if (icd_source == "packaged") {
+    return check;
+  }
+  // A driver that reports the known-good commit is safe even when its
+  // version string reads older (a fork build without a git- token).
+  if (!expected_sha.empty() && !driver_sha.empty() &&
+      driver_sha == expected_sha) {
+    return check;
+  }
+  unsigned major = 0;
+  unsigned minor = 0;
+  unsigned patch = 0;
+  if (!first_mesa_version_triple(driver_info, major, minor, patch)) {
+    return check;
+  }
+  const bool older_than_fix = major < 26 ||
+      (major == 26 &&
+       (minor < 2 || (minor == 2 && patch < 4)));
+  if (!older_than_fix) {
+    return check;
+  }
+  check.warn = true;
+  check.message = "The system Vulkan driver is Mesa " +
+      std::to_string(major) + "." + std::to_string(minor) + "." +
+      std::to_string(patch) +
+      ". Mesa older than 26.2.4 can return wrong results from int8 and"
+      " other shift-heavy kernels. Install the omarchy-mlx-vulkan package"
+      " or update Mesa to 26.2.4 or newer.";
+  return check;
+}
+
+// Resolves the warning decision once per process at the first device
+// identity. When the selected driver is an old stock build it prints
+// one stderr line with the stable "[omarchy] warning: " prefix and
+// keeps running; the same text (empty when silent) is stored for
+// device info reporting. Call it for every resolved device: the guard
+// keeps one decision per process.
+inline const std::string& note_stock_driver_identity(
+    const std::string& icd_source,
+    const std::string& driver_info,
+    const std::string& driver_sha,
+    const std::string& expected_sha) {
+  static std::once_flag once;
+  std::call_once(once, [&] {
+    StockDriverCheck check =
+        stock_driver_warning(icd_source, driver_info, driver_sha, expected_sha);
+    if (check.warn) {
+      std::fprintf(stderr, "[omarchy] warning: %s\n", check.message.c_str());
+    }
+    detail::stock_driver_warning_slot() = std::move(check.message);
+  });
+  return detail::stock_driver_warning_slot();
+}
+
+// The warning text this process printed, or empty when it stayed silent.
+inline const std::string& stock_driver_warning_recorded() {
+  return detail::stock_driver_warning_slot();
 }
 
 } // namespace mlx::core::omarchy

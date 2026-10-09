@@ -3382,9 +3382,9 @@ void dispatch_gather_qmm(
   bool use_sub = false;
   if (!fp_mode && params.matrix_m == 1) {
     // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel. Selector is
-    // restricted to the layout class proven correct end to end (bf16,
-    // 4-bit, group-64, transposed affine - the DeepSeek-Lite decode
-    // case); every other layout stays on the scalar kernel until its
+    // restricted to the layout class proven correct end to end (bf16 and
+    // f16, 4-bit, group-64, transposed affine - the MoE decode cases;
+    // f16 added by MatmulGap H45); every other layout stays on the scalar kernel until its
     // parity is proven per layout (jwm1/jw16 suite history: f32-T and
     // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
     // and untested layouts must not ride an unproven kernel). Counts
@@ -3394,7 +3394,7 @@ void dispatch_gather_qmm(
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
         transpose && bits == 4u && group_size == 64u &&
-        out.dtype() == bfloat16 &&
+        (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
         sub_caps.subgroup_size == 32u &&
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
@@ -12188,8 +12188,12 @@ void GatedDeltaUpdate::eval_gpu(
   // plain sequential token loop - the Metal gated_delta_step shape. Read
   // per call (not a static): the correctness battery toggles this env per
   // test case in-process. DEFAULT (env unset): mode 2 on G13 parts other
-  // than G13C (jwm1 M1 G13G is the measured part), off elsewhere until
-  // measured there. MLX_OMARCHY_GDN_RECUR32 selects:
+  // than G13C (jwm1 M1 G13G is the measured part), and on every G13 part
+  // for a MASKED prefill only (the padded rows of a batched prefill; G13C
+  // measured: a masked row on the two-pass snapshot scan made a padded
+  // batch 1.63x of sequential, recur32 makes it 1.02x), off elsewhere
+  // (G14 and later: unmeasured) until measured there. MLX_OMARCHY_GDN_RECUR32
+  // selects (the 1 and 2 modes cover masked rows too):
   //   0 (or 0/off/false/no): off - the shipped exact scan (T<64) and
   //     chunked coopmat/hoist routes, bit-identical to before this flip.
   //   1 (or 1/on/true/yes): T >= 64 - the chunked coopmat kernel's
@@ -12208,14 +12212,18 @@ void GatedDeltaUpdate::eval_gpu(
   // bit-identical to the scan (subgroup reduction trees), so the env is
   // the A/B lever and the fp64 tolerance test is the numerics gate.
   const char* recur32_env = std::getenv("MLX_OMARCHY_GDN_RECUR32");
-  const int gdn_recur32_default = (g13_legacy_part(encoder) && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN")) ? 2 : 0;
+  const bool gdn_g13 =
+      gdn_caps.device_name.find("G13") != std::string::npos;
+  const int gdn_recur32_default =
+      (!omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT_GDN") &&
+       (g13_legacy_part(encoder) || (has_mask && gdn_g13))) ? 2 : 0;
   const int gdn_recur32_mode = recur32_env == nullptr
       ? gdn_recur32_default
       : ((recur32_env[0] == '2' && recur32_env[1] == '\0')
              ? 2
              : (omarchy::env_flag("MLX_OMARCHY_GDN_RECUR32") ? 1 : 0));
   const uint32_t gdn_recur32_min_t = gdn_recur32_mode == 2 ? 2u : 64u;
-  const bool gdn_recur32 = gdn_recur32_mode != 0 && !has_mask &&
+  const bool gdn_recur32 = gdn_recur32_mode != 0 &&
       g.ndim() == 3 && static_cast<uint32_t>(T) >= gdn_recur32_min_t &&
       gdn_caps.subgroup_size == 32u;
   if (gdn_recur32) {
@@ -12237,8 +12245,12 @@ void GatedDeltaUpdate::eval_gpu(
     params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
     params.dims = static_cast<uint32_t>(T);
     // Scalar g only: [B=1, T, Hv] (ndim gate; B==1 comes from fused_ready).
-    // Bit2 selects the f32 gate load.
+    // Bit2 selects the f32 gate load. A mask (offset in shape[3]) selects the
+    // MASKED build of the kernel below.
     params.flags = (g.dtype() == float32 ? 4u : 0u);
+    if (has_mask) {
+      params.shape[3] = checked_item_offset(*mask, mask->size(), tag, out);
+    }
     std::array<omarchy::ComputeBinding, 11> bindings{
         binding(q),      // 0 QBuf
         binding(k),      // 1 KBuf
@@ -12248,12 +12260,13 @@ void GatedDeltaUpdate::eval_gpu(
         binding(h0),     // 5 SIn
         binding(out),    // 6 YBuf
         binding(hf),     // 7 SOut
-        binding(out),    // 8 MBuf - unused (maskless gate)
+        has_mask ? binding(*mask) : binding(out),  // 8 MBuf (mask bytes; unused when maskless)
         binding(g),      // 9 GBufF - unused when g is bf16
         binding(out)};   // 10 Snap - unused (single pass)
     // One 128-thread workgroup per four (hv, dv) rows: grid (Hv, Dv/4).
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::GatedDeltaPrefillRecur32BF16,
+        has_mask ? omarchy::ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16
+                 : omarchy::ComputeKernel::GatedDeltaPrefillRecur32BF16,
         bindings,
         params,
         static_cast<uint32_t>(Hv),
@@ -12602,22 +12615,28 @@ void Int8Matmul::eval_gpu(
   // the int8 streams to exact f32 temps (the converting copy; int8
   // widening is exact), and the kernel runs per-group 8x8x8 f32 MMAs.
   // Exact by the same integer-sum argument as the scalar f32 route (see
-  // the shader header): group <= 1024 keeps every partial sum at or under
-  // 2^24, group % 8 == 0 aligns the MMA k step, and the per-group flush
-  // matches the other routes op for op. The 32-row/32-column gate is the
-  // edge-shift contract of the tile. Swiglu stays on the scalar route.
-  const bool coop_f32_ready = !int8_imad_forced() && !int8_f32fma_forced() &&
+  // the shader header): the int32 chunk scratch keeps every group at or
+  // under the 2^31 int32 bound, group % 8 == 0 aligns the MMA k step,
+  // and the per-group flush matches the other routes op for op. The
+  // 32-row/32-column gate is the natural-offset contract of the tile.
+  // Swiglu dispatches the coop kernel twice (gate half, value half) into
+  // raw f32 totals (flags bit1) and finishes with the epilogue kernel,
+  // which applies WS/B and stores bf16(silu(gate) * value) with ONE bf16
+  // rounding - the exact op sequence of the scalar swiglu kernel.
+  const bool coop_f32_base = !int8_imad_forced() && !int8_f32fma_forced() &&
       !int8_coopf32_disabled() &&
-      encoder.device().capabilities().cooperative_matrix_f32_8 && !fused &&
+      encoder.device().capabilities().cooperative_matrix_f32_8 &&
       (params.matrix_k % 8u) == 0u && (params.reduce_size % 8u) == 0u &&
-      params.reduce_size >= 32u && params.reduce_size <= 1024u &&
+      params.reduce_size >= 32u && params.reduce_size <= 131072u &&
       params.matrix_m >= 32u && params.matrix_n >= 32u;
-  if (coop_f32_ready) {
-    // The kernel loads natural 8-aligned blocks per quarter, so the f32
-    // temps are padded to 64-row multiples; the pad rows read as garbage
-    // but their accumulator slots are never stored (the epilogue gates on
-    // row < rows and col < n), and MMA lanes keep garbage isolated to its
-    // own row or column.
+  const bool coop_f32_ready = coop_f32_base && !fused;
+  const bool coop_f32_swiglu = coop_f32_base && fused;
+  if (coop_f32_ready || coop_f32_swiglu) {
+    // Groups longer than 1024 reduce through an int32 scratch tile the
+    // kernel clears per group and zeroes at entry; it cannot overflow
+    // while group * 16384 <= 2^31 (the 131072 gate). The temps are
+    // padded to 64-row multiples for natural block loads.
+    const bool coop_chunked = params.reduce_size > 1024u;
     const auto pad64 = [](uint32_t v) { return (v + 63u) / 64u * 64u; };
     array xf(Shape({static_cast<int>(pad64(rows)), xd.shape(1)}), float32,
         nullptr, {});
@@ -12647,6 +12666,24 @@ void Int8Matmul::eval_gpu(
         0,
         CopyType::General,
         s);
+    array acc32(Shape({static_cast<int>(coop_chunked ? pad64(rows) : 1),
+                    static_cast<int>(coop_chunked ? pad64(params.matrix_n) : 1)}),
+        int32, nullptr, {});
+    acc32.set_data(allocate_omarchy(acc32.nbytes()));
+    encoder.add_temporary(acc32);
+    auto acc32_binding = binding(acc32);
+    std::optional<array> gt_temp;
+    std::optional<array> vt_temp;
+    if (coop_f32_swiglu) {
+      gt_temp = array(Shape({static_cast<int>(rows),
+          static_cast<int>(params.matrix_n)}), float32, nullptr, {});
+      gt_temp->set_data(allocate_omarchy(gt_temp->nbytes()));
+      encoder.add_temporary(*gt_temp);
+      vt_temp = array(Shape({static_cast<int>(rows),
+          static_cast<int>(params.matrix_n)}), float32, nullptr, {});
+      vt_temp->set_data(allocate_omarchy(vt_temp->nbytes()));
+      encoder.add_temporary(*vt_temp);
+    }
     const uint32_t n_groups64 = (params.matrix_n + 63u) / 64u;
     const uint32_t m_groups64 = (params.matrix_m + 63u) / 64u;
     if (n_groups64 > omarchy::kMaxComputeGroupCountX ||
@@ -12656,34 +12693,75 @@ void Int8Matmul::eval_gpu(
       omarchy::unsupported(
           tag + " with a 64-tile grid beyond the dispatch clamp", out);
     }
-    omarchy::ComputeParams coop_params = params;
-    coop_params.lhs_offset = 0u;
-    coop_params.rhs_offset = 0u;
-    std::array<omarchy::ComputeBinding, 6> coop_bindings{
-        binding(xf), binding(xsd), binding(wf), binding(wsd), binding(bd),
-        binding(out)};
-    encoder.dispatch_compute(
-        omarchy::ComputeKernel::Int8MatmulF32CoopOp,
-        coop_bindings,
-        coop_params,
-        n_groups64,
-        m_groups64,
-        1u);
+    const uint32_t coop_passes = coop_f32_swiglu ? 2u : 1u;
+    for (uint32_t half = 0u; half < coop_passes; half++) {
+      omarchy::ComputeParams coop_params = params;
+      coop_params.lhs_offset = 0u;
+      coop_params.rhs_offset = 0u;
+      coop_params.shape[3] = pad64(params.matrix_n);
+      if (coop_f32_swiglu) {
+        // Raw f32 totals into the half's temp: no WS/B, no bf16 store.
+        coop_params.count = checked_u32(
+            static_cast<uint64_t>(rows) * n, tag, out);
+        coop_params.flags = 2u;
+        coop_params.output_offset = 0u;
+        if (half == 1u) {
+          const uint64_t value_base =
+              static_cast<uint64_t>(n) * params.matrix_k;
+          if (value_base > 0xffffffffu) {
+            omarchy::unsupported(tag + " value-half weight offset", out);
+          }
+          coop_params.rhs_offset = static_cast<uint32_t>(value_base);
+        }
+      }
+      array& half_out =
+          coop_f32_swiglu ? (half == 0u ? *gt_temp : *vt_temp) : out;
+      std::array<omarchy::ComputeBinding, 8> coop_bindings{
+          binding(xf), binding(xsd), binding(wf), binding(wsd), binding(bd),
+          binding(half_out), acc32_binding, binding(half_out)};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::Int8MatmulF32CoopOp,
+          coop_bindings,
+          coop_params,
+          n_groups64,
+          m_groups64,
+          1u);
+    }
+    if (coop_f32_swiglu) {
+      omarchy::ComputeParams epi_params;
+      epi_params.count =
+          checked_u32(static_cast<uint64_t>(rows) * n, tag, out);
+      epi_params.matrix_n = params.matrix_n;
+      epi_params.output_offset = params.output_offset;
+      epi_params.shape[1] = params.shape[1];
+      epi_params.shape[2] = params.shape[2];
+      std::array<omarchy::ComputeBinding, 5> epi_bindings{
+          binding(*gt_temp), binding(*vt_temp), binding(wsd), binding(bd),
+          binding(out)};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::Int8SwigluEpilogueOp,
+          epi_bindings,
+          epi_params,
+          omarchy::compute_dispatch_group_count(epi_params.count),
+          1u,
+          1u);
+    }
     return;
   }
   // f32-FMA register-blocked route (shaders/int8_matmul_f32fma.comp), the
-  // default for the shapes its exactness argument covers: integer-valued
-  // f32 group sums are exact and addition-order-independent only while
-  // every partial sum stays <= 2^24, and the worst int8 product magnitude
-  // is 16384 (-128 * -128), so the group gate is 32..1024 (16384 * 1024 =
-  // 2^24). group >= 32 also keeps at most one group boundary inside a
-  // 32-wide K step, which the shader's two-run split relies on, and
-  // k_total % 4 == 0 keeps a staged word never partially past the
-  // reduction. Everything else keeps the int32 tiled kernel, so the
-  // default stays bit-identical for every legal input;
+  // default for the shapes its exactness argument covers: groups up to
+  // 1024 reduce purely in f32 (every partial sum stays <= 2^24, and the
+  // worst int8 product magnitude is 16384 = (-128) * (-128)); longer
+  // groups pour exact f32 chunk sums into int32 accumulators every
+  // 1024 k-elements, which cannot overflow while group * 16384 <= 2^31,
+  // i.e. group <= 131072. group >= 32 also keeps at most one group
+  // boundary inside a 32-wide K step, which the shader's two-run split
+  // relies on, and k_total % 4 == 0 keeps a staged word never partially
+  // past the reduction. Everything else keeps the int32 tiled kernel, so
+  // the default stays bit-identical for every legal input;
   // MLX_OMARCHY_INT8_IMAD=1 forces the tiled kernel for A/B benchmarks.
   if (!int8_imad_forced() && (params.matrix_k % 4u) == 0u &&
-      params.reduce_size >= 32u && params.reduce_size <= 1024u) {
+      params.reduce_size >= 32u && params.reduce_size <= 131072u) {
     const uint32_t n_groups = (params.matrix_n + 127u) / 128u;
     const uint32_t m_groups = (params.matrix_m + 15u) / 16u;
     encoder.dispatch_compute(
@@ -14700,20 +14778,19 @@ void ScaledDotProductAttention::eval_gpu(
         static_cast<uint32_t>(batch));
     return;
   }
-  // Flash-style bf16 prefill for long sequences (H3 joint attention:
-  // q_len 13365, heads 56, hd 128). The composed route's score matrix
-  // fails twice out there - past 2^30 bf16 elements it passes the
-  // device's 2 GiB maxStorageBufferRange (the encoder refuses the
-  // binding; before that check it was a driver assert + core dump at
-  // L=8192), and past 2^32 elements the checked_u32 guard refuses it
-  // outright. The flash kernel materializes nothing: 32-row q tiles
-  // with online softmax, K/V streamed through shared tiles, dispatches
-  // split per q tile so no single dispatch approaches the ~40 ms
-  // firmware timer (56 workgroups run one q tile across all heads in
-  // ~5-12 ms on the 38-core G14C).
-  // Kill switch: MLX_OMARCHY_SDPA_PREFILL_FLASH=0. By default, use
-  // flash when the composed f32 score matrix exceeds 2^30 elements or
-  // would exceed 25% of the device heap. MIN_L is an explicit A/B override.
+  // Route order for bf16 prefill (2026-10-09, TFProf receipt, jw16 G13C):
+  // the chunked composed route measured 782 GMAC/s at the H3 demo shape
+  // (56 heads, 6417 rows) against the flash kernel's 245 - 3.2x - with
+  // route agreement at bf16 granularity (max abs diff 4.9e-4), and its
+  // 1 GiB f32 score-chunk cap keeps every storage binding legal at any
+  // sequence length. So composed serves whenever the device reports the
+  // f32 8x8x8 cooperative matrix; the flash kernel (32-row q tiles,
+  // online softmax, zero score memory) stays as the route for devices
+  // without that shape and as an explicit pin.
+  // MLX_OMARCHY_SDPA_PREFILL_FLASH: "1" pins flash (A/B), "0" forces
+  // composed, unset/auto prefers composed and keeps flash for
+  // non-coopmat devices; MIN_L keeps its meaning as a flash override
+  // above a sequence length.
   const char* prefill_flash_env = std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
   const char* prefill_flash_min_l_env =
       std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
@@ -14726,7 +14803,22 @@ void ScaledDotProductAttention::eval_gpu(
       prefill_flash_min_l = static_cast<uint32_t>(parsed);
     }
   }
-  const auto& flash_caps = encoder.device().capabilities();
+  static const bool sdpa_coopmat_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+  const auto& sdpa_caps = encoder.device().capabilities();
+  const bool composed_ready =
+      q_len > 1 && head_dim > 0 && k_len > 0 &&
+      q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+      v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
+      sdpa_caps.cooperative_matrix_f32_8 && sdpa_caps.subgroup_size == 32u &&
+      !sdpa_coopmat_disabled;
+  const bool flash_pinned = prefill_flash_env != nullptr &&
+      std::strcmp(prefill_flash_env, "1") == 0;
+  const bool flash_min_l_requested = prefill_flash_min_l > 0 &&
+      q_len >= static_cast<int>(prefill_flash_min_l);
+  const bool flash_declined = prefill_flash_env != nullptr &&
+      std::strcmp(prefill_flash_env, "0") == 0;
+  const auto& flash_caps = sdpa_caps;
   const bool flash_route_ready =
       flash_caps.max_compute_work_group_size[0] >= 256u &&
       flash_caps.max_compute_work_group_invocations >= 256u &&
@@ -14739,9 +14831,15 @@ void ScaledDotProductAttention::eval_gpu(
       flash_score_elements > (1ull << 30) || score_exceeds_heap_budget ||
       (prefill_flash_min_l > 0 &&
        q_len >= static_cast<int>(prefill_flash_min_l));
-  if ((prefill_flash_env == nullptr ||
-          std::strcmp(prefill_flash_env, "0") != 0) &&
-      flash_route_ready && flash_wants && inputs.size() == 3 &&
+  // Route precedence: the pin and MIN_L are explicit flash overrides
+  // UNLESS the operator has set MLX_OMARCHY_SDPA_PREFILL_FLASH=0, which
+  // declines every flash route. Without !flash_declined on the overrides
+  // the old A/B test arms (PREFILL_FLASH=0 + MIN_L=1) would both run
+  // flash and compare flash with itself (w7Q review D3, 2026-10-09).
+  if ((!flash_declined &&
+       (flash_pinned || flash_min_l_requested ||
+        (flash_wants && !composed_ready))) &&
+      flash_route_ready && inputs.size() == 3 &&
       !do_causal_ && !has_sinks_ && !output_logsumexp_ && q_len > 1 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
       v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
@@ -14921,7 +15019,19 @@ void ScaledDotProductAttention::eval_gpu(
     encoder.add_temporary(view);
     return view;
   };
-  if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1) {
+  // Scores past 2^30 bf16 elements pass the 2 GiB maxStorageBufferRange
+  // (the encoder refuses the binding), so shapes the CHUNKED route will
+  // actually take (non-causal, no mask/sinks/logsumexp, coopmat f32 -
+  // composed_ready) skip this branch and reach it (2026-10-09, TFProf:
+  // 56x6417^2 runs chunked composed at 782 GMAC/s). Every other shape
+  // keeps this branch either way: masked, sinks, logsumexp, causal and
+  // non-coopmat calls must keep the named storage-binding refusal, not
+  // fall into an unchunked full-f32-score allocation (w7Q review).
+  const bool bf16_big_scores =
+      composed_ready && !do_causal_ && !has_sinks_ && !output_logsumexp_ &&
+      inputs.size() == 3 && flash_score_elements > (1ull << 30);
+  if ((q.dtype() == float16 || bf16_fast) && outputs.size() == 1 &&
+      !bf16_big_scores) {
     const bool bf16 = q.dtype() == bfloat16;
     const Dtype storage_dtype = bf16 ? bfloat16 : float16;
     array qs = repeats > 1 ? regroup_view(q) : q;
@@ -15044,14 +15154,8 @@ void ScaledDotProductAttention::eval_gpu(
   // matches it. Gated to exactly the shapes whose two matmuls the
   // composition sends to MatmulF32Coopmat (q_len > 1, the coopmat
   // device gate of dispatch_matmul); everything else keeps the casts.
-  static const bool sdpa_coopmat_disabled =
-      omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
-  const auto& sdpa_caps = encoder.device().capabilities();
-  const bool bf16_direct = q.dtype() == bfloat16 &&
-      k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
-      out.dtype() == bfloat16 && q_len > 1 && head_dim > 0 && k_len > 0 &&
-      sdpa_caps.cooperative_matrix_f32_8 && sdpa_caps.subgroup_size == 32 &&
-      !sdpa_coopmat_disabled;
+  // composed_ready above carries the identical condition.
+  const bool bf16_direct = composed_ready;
   // Causal mode with every row holding at least one key: the softmax runs
   // its causal mode and never reads a masked score, so the scores matmul
   // skips fully masked column tiles and the probs matmul stops its k walk
@@ -15180,7 +15284,12 @@ void ScaledDotProductAttention::eval_gpu(
               {0u, CausalSkip::None},
               omarchy::ComputeKernel::MatmulF32CoopmatPvBF16);
           encoder.add_temporary(result_c);
-          array out_c = row_chunk_view(out, row0, rows);
+          // result_c is (batch, kv, repeat, rows, v_dim) when GQA regroups q;
+          // the destination view must carry the same five axes, otherwise
+          // copy_gpu_inplace pairs result_c's five dims with four strides
+          // and every GQA row lands in the wrong place (MatmulGap H47).
+          array out_c =
+              row_chunk_view(repeats > 1 ? regroup_view(out) : out, row0, rows);
           // General, not Vector: the row view is strided (the parent's
           // head stride exceeds the chunk's), and a Vector copy writes
           // the destination flat - the same linear scatter the coopmat

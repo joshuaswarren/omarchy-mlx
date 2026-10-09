@@ -1,0 +1,9 @@
+@@pe default rc=0
+@@pe default PFBG {"mlx": "0.32.4.dev202610082355+qrm.b5bc1ad", "lengths": [454, 417, 363, 304], "seq_s": 1.484, "batched_s": 2.441, "ratio": 1.6449, "first_tokens_equal": true}
+@@pe env2 rc=0
+@@pe env2 PFBG {"mlx": "0.32.4.dev202610082355+qrm.b5bc1ad", "lengths": [454, 417, 363, 304], "seq_s": 1.4366, "batched_s": 1.4649, "ratio": 1.0197, "first_tokens_equal": true}
+@@pe env2 rc=0
+@@pe env2 PFBG {"mlx": "0.32.4.dev202610082355+qrm.b5bc1ad", "lengths": [454, 417, 363, 304], "seq_s": 1.4439, "batched_s": 1.461, "ratio": 1.0119, "first_tokens_equal": true}
+@@pe default rc=0
+@@pe default PFBG {"mlx": "0.32.4.dev202610082355+qrm.b5bc1ad", "lengths": [454, 417, 363, 304], "seq_s": 1.4871, "batched_s": 2.3931, "ratio": 1.6092, "first_tokens_equal": true}
+@@pe done 02:03:52

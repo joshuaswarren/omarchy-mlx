@@ -1,0 +1,231 @@
+--- a/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/mlp_int8.py
+@@ -10,15 +10,16 @@
+ import hashlib
+ from typing import Any
+ 
++import numpy as np
++
+ import mlx.core as mx
++import mlx.nn as nn
+ 
+ TILE = 128            # rows, output columns and K per tensor-unit tile
+ FC2_GROUP = 1024      # input channels sharing one activation scale on the fc2 input
+ QMAX = 127.0
+ 
+ _HEADER = r"""
+-#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+-using namespace mpp::tensor_ops;
+ """
+ 
+ _PRELUDE = r"""
+@@ -155,9 +156,25 @@
+     return _dims[key]
+ 
+ 
++def _native_op() -> bool:
++    """Whether this MLX build ships the omarchy-native ``mx.fast.int8_matmul`` (Vulkan W8A8)."""
++
++    return hasattr(mx.fast, "int8_matmul")
++
++
+ def available() -> bool:
+-    """Whether this GPU compiles and runs the int8 tensor-unit kernel."""
++    """Whether this GPU compiles and runs the int8 tensor-unit kernel (or the backend's native W8A8 op)."""
+ 
++    if _native_op():
++        try:
++            x = mx.zeros((TILE, TILE), dtype=mx.int8)
++            out = mx.fast.int8_matmul(
++                x, mx.ones((TILE, 1)), x, mx.ones((TILE,)), mx.zeros((TILE,)),
++                group=TILE, swiglu=False)
++            mx.eval(out)
++            return bool(out[0, 0] == 0.0)
++        except (RuntimeError, ValueError):
++            return False
+     try:
+         x = mx.zeros((TILE, TILE), dtype=mx.int8)
+         mx.eval(int8_linear(x, mx.ones((TILE, 1)), x, mx.ones((TILE,)), TILE, TILE))
+@@ -176,6 +193,25 @@
+     return q, scale
+ 
+ 
++def _NATIVE() -> bool:
++    """Whether this MLX build ships the omarchy-native int8 matmul."""
++
++    return hasattr(mx.fast, "int8_matmul")
++
++
++def quantize_rows_native(x: mx.array, group: int) -> tuple[mx.array, mx.array]:
++    """(M, K) -> int8 (M, K) + float32 (M, K / group) scales, same math as the
++    MSL quantize kernel (per-group max magnitude / 127, round-to-nearest)."""
++
++    m, k = x.shape
++    groups = x.reshape(m, k // group, group).astype(mx.float32)
++    top = mx.abs(groups).max(axis=-1, keepdims=True)
++    top = mx.maximum(top, mx.array(1e-12, mx.float32))
++    scale = top / 127.0
++    q = mx.round(groups / scale).astype(mx.int8)
++    return q.reshape(m, k), scale.reshape(m, k // group)
++
++
+ def quantize_rows(x: mx.array, group: int) -> tuple[mx.array, mx.array, int]:
+     """(M, K) activations -> (MP, K) int8 padded to whole tiles, (MP, K / group) float32 scales, and M.
+ 
+@@ -205,6 +241,13 @@
+     padded, k = xq.shape
+     n = wq.shape[0]
+     _check(padded, k, n, group)
++    if _native_op():
++        zero_bias = mx.zeros((n,), dtype=mx.float32)
++        out = mx.fast.int8_matmul(
++            xq, xscale, wq, wscale,
++            bias.astype(mx.float32) if bias is not None else zero_bias,
++            group=group, swiglu=False)
++        return out[:rows]
+     kind, extra = ("linear", []) if bias is None else ("linear_bias", [bias])
+     return _kernel(kind, n, k, group)(inputs=[xq, xscale, wq, wscale, *extra, _mdims(rows, padded)],
+                                       grid=(n // TILE * 256, padded // TILE, 1), threadgroup=(256, 1, 1),
+@@ -221,13 +264,20 @@
+     padded, k = xq.shape
+     n = wq.shape[0] // 2
+     _check(padded, k, n, k)
++    if _native_op():
++        zero_bias = mx.zeros((2 * n,), dtype=mx.float32)
++        out = mx.fast.int8_matmul(
++            xq, xscale, wq, wscale,
++            bias.astype(mx.float32) if bias is not None else zero_bias,
++            group=k, swiglu=True)
++        return out[:rows]
+     kind, extra = ("swiglu", []) if bias is None else ("swiglu_bias", [bias])
+     return _kernel(kind, n, k, k)(inputs=[xq, xscale, wq, wscale, *extra, _mdims(rows, padded)],
+                                   grid=(n // TILE * 256, padded // TILE, 1), threadgroup=(256, 1, 1),
+                                   output_shapes=[(rows, n)], output_dtypes=[mx.bfloat16])[0]
+ 
+ 
+-class Int8MLP:
++class Int8MLP(nn.Module):
+     """``fc2(silu(gate) * value)`` with ``[gate; value] = fc1(x)``, both projections in int8."""
+ 
+     def __init__(self, fc1_weight: mx.array, fc2_weight: mx.array, fc2_group: int = FC2_GROUP,
+@@ -245,8 +295,45 @@
+         self.b2 = None if fc2_bias is None else fc2_bias.astype(mx.float32)
+         mx.eval(self.w1, self.s1, self.w2, self.s2, *[b for b in (self.b1, self.b2) if b is not None])
+ 
++    @classmethod
++    def from_state(cls, w1: mx.array, s1: mx.array, w2: mx.array, s2: mx.array,
++                   b1: mx.array | None = None, b2: mx.array | None = None,
++                   fc2_group: int = FC2_GROUP) -> "Int8MLP":
++        """Wrap an already-quantized state (saved after a swap on another host) without re-quantizing.
++
++        The int8 weights and float32 scales are bit-identical to the normal swap path
++        because they were produced by the same quantize_weight code; only the host that
++        performed the swap differs.
++        """
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        # Attribute semantics match __init__: width is fc2's output dim
++        # (w2 columns = the ff dim; w1 carries the fused [gate; value] rows),
++        # hidden is fc1's input dim (w2 rows); the fc2 activation group
++        # divides width.
++        self.width = w2.shape[1]
++        self.hidden = w2.shape[0]
++        self.fc2_group = fc2_group if self.width % fc2_group == 0 else self.width
++        self.w1, self.s1, self.w2, self.s2 = w1, s1, w2, s2
++        self.b1 = None if b1 is None else b1.astype(mx.float32)
++        self.b2 = None if b2 is None else b2.astype(mx.float32)
++        return self
++
+     def __call__(self, x: mx.array) -> mx.array:
+         lead = x.shape[:-1]
++        if _NATIVE():
++            rows = int(np.prod(x.shape[:-1], dtype=np.int64) if x.ndim > 1 else 1)
++            flat = x.reshape(rows, self.hidden)
++            xq, xs = quantize_rows_native(flat, self.hidden)
++            hidden = mx.fast.int8_matmul(xq, xs, self.w1, self.s1,
++                                         self.b1 if self.b1 is not None else mx.zeros((self.w1.shape[0],), mx.float32),
++                                         group=self.hidden, swiglu=True)
++            hq, hs = quantize_rows_native(hidden, self.fc2_group)
++            out = mx.fast.int8_matmul(hq, hs, self.w2, self.s2,
++                                      self.b2 if self.b2 is not None else mx.zeros((self.w2.shape[0],), mx.float32),
++                                      group=self.fc2_group, swiglu=False)
++            return out.reshape(*lead, -1).astype(x.dtype)
+         xq, xs, rows = quantize_rows(x.reshape(-1, self.hidden), self.hidden)
+         hidden = int8_swiglu(xq, xs, self.w1, self.s1, rows, self.b1)
+         hq, hs, rows = quantize_rows(hidden, self.fc2_group)
+@@ -254,7 +341,7 @@
+         return out.reshape(*lead, -1).astype(x.dtype)
+ 
+ 
+-class Int8Linear:
++class Int8Linear(nn.Module):
+     """A projection in int8: activations quantized per row and ``group`` channels, weights per output channel."""
+ 
+     def __init__(self, weight: mx.array, group: int = FC2_GROUP, bias: mx.array | None = None) -> None:
+@@ -267,7 +354,27 @@
+         self.b = None if bias is None else bias.astype(mx.float32)
+         mx.eval(self.w, self.s, *([] if self.b is None else [self.b]))
+ 
++    @classmethod
++    def from_state(cls, w: mx.array, s: mx.array, b: mx.array | None, group: int = FC2_GROUP) -> "Int8Linear":
++        """Wrap an already-quantized state saved after a swap on another host (bit-identical, no re-quantize)."""
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.width = w.shape[1]
++        self.group = group if self.width % group == 0 else self.width
++        self.w, self.s = w, s
++        self.b = None if b is None else b.astype(mx.float32)
++        return self
++
+     def __call__(self, x: mx.array) -> mx.array:
+         lead = x.shape[:-1]
++        if _NATIVE():
++            rows = int(np.prod(x.shape[:-1], dtype=np.int64) if x.ndim > 1 else 1)
++            flat = x.reshape(rows, self.width)
++            xq, xs = quantize_rows_native(flat, self.group)
++            out = mx.fast.int8_matmul(xq, xs, self.w, self.s,
++                                      self.b if self.b is not None else mx.zeros((self.w.shape[0],), mx.float32),
++                                      group=self.group, swiglu=False)
++            return out.reshape(*lead, -1).astype(x.dtype)
+         xq, xs, rows = quantize_rows(x.reshape(-1, self.width), self.group)
+         return int8_linear(xq, xs, self.w, self.s, rows, self.group, self.b).reshape(*lead, -1).astype(x.dtype)
+--- a/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
++++ b/src/tensorfold/kernels/minimax/h3/v1/qkv_int8.py
+@@ -10,6 +10,7 @@
+ from typing import Any
+ 
+ import mlx.core as mx
++import mlx.nn as nn
+ 
+ from .mlp_int8 import _HEADER, _PRELUDE, TILE, _check, _mdims, quantize_rows, quantize_weight
+ 
+@@ -79,7 +80,7 @@
+     return run
+ 
+ 
+-class Int8QKV:
++class Int8QKV(nn.Module):
+     """``Attention.qkv`` in one kernel: int8 projection, q/k RMSNorm and rotary, head-major outputs."""
+ 
+     def __init__(self, qkv_weight: mx.array, q_norm_weight: mx.array, k_norm_weight: mx.array, heads: int,
+@@ -93,6 +94,18 @@
+         self.norms = mx.stack([q_norm_weight, k_norm_weight]).astype(mx.float32)
+         mx.eval(self.w, self.s, self.norms)
+ 
++    @classmethod
++    def from_state(cls, w: mx.array, s: mx.array, norms: mx.array, heads: int, head_dim: int,
++                   eps: float = 1e-5) -> "Int8QKV":
++        """Wrap an already-quantized fused-QKV state saved after a swap on another host."""
++
++        self = cls.__new__(cls)
++        nn.Module.__init__(self)
++        self.heads, self.head_dim, self.eps = heads, head_dim, float(eps)
++        self.hidden = w.shape[1]
++        self.w, self.s, self.norms = w, s, norms
++        return self
++
+     def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> tuple[mx.array, mx.array, mx.array]:
+         """q, k, v as (1, heads, rows, head_dim) from x (1, rows, hidden) and rotary tables (rows, rotary)."""
+ 

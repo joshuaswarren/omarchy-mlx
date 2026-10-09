@@ -154,6 +154,39 @@ The system Mesa failure on 8 GB is because the old driver tries to allocate a
 single 542 MB compute buffer up-front; our build allocates per-ubatch (256
 tokens here) and survives the same memory pressure.
 
+## Measured on an M1 and an M1 Max, three models
+
+Measured 2026-10-09 with the same llama.cpp build (`65840ed`) on both drivers,
+using `llama-bench -p 512 -n 128 -ub 256 -b 256` with the `llama-bench`
+defaults for the rest (every layer on the GPU; 8 CPU threads on the M1 and 10
+on the M1 Max, which do not matter once the GPU does the work). Each cell is
+the mean ± sample standard deviation of 3 runs. The order of the two drivers
+flips from run to run (ours first, system first, ours first) so drift hits
+both. The system driver is Mesa 26.2.4 from `pacman`; ours is Honeykrisp v3
+`66cb84fd431d`. `-ub 256 -b 256` keeps every GPU submit short; the first
+table above used the default ubatch, so the numbers differ slightly.
+
+| chip | model | driver | prefill pp512 | decode tg128 | vs system |
+|---|---|---|---|---|---|
+| M1 | Llama 3.1 8B Q4_K_M | system Mesa | 46.55 ± 0.00 | 8.39 ± 0.02 | |
+| M1 | Llama 3.1 8B Q4_K_M | v3 | 49.19 ± 0.01 | 8.95 ± 0.00 | 1.06x / 1.07x |
+| M1 | Qwen3.5 4B IQ2_M | system Mesa | 48.86 ± 0.13 | 0.44 ± 0.00 | |
+| M1 | Qwen3.5 4B IQ2_M | v3 | 72.80 ± 0.05 | 7.44 ± 0.03 | 1.49x / 16.8x |
+| M1 | Qwen3.5 9B IQ2_M | system Mesa | 27.85 ± 0.05 | 0.34 ± 0.00 | |
+| M1 | Qwen3.5 9B IQ2_M | v3 | 39.37 ± 0.01 | 4.28 ± 0.01 | 1.41x / 12.6x |
+| M1 Max | Llama 3.1 8B Q4_K_M | system Mesa | 157.06 ± 0.04 | 23.17 ± 0.45 | |
+| M1 Max | Llama 3.1 8B Q4_K_M | v3 | 181.26 ± 0.09 | 24.08 ± 0.42 | 1.15x / 1.04x |
+| M1 Max | Qwen3.5 4B IQ2_M | system Mesa | 160.26 ± 0.06 | 1.40 ± 0.01 | |
+| M1 Max | Qwen3.5 4B IQ2_M | v3 | 248.99 ± 0.08 | 20.22 ± 0.50 | 1.55x / 14.5x |
+| M1 Max | Qwen3.5 9B IQ2_M | system Mesa | 94.77 ± 0.11 | 1.07 ± 0.00 | |
+| M1 Max | Qwen3.5 9B IQ2_M | v3 | 141.39 ± 0.21 | 12.49 ± 0.17 | 1.49x / 11.7x |
+
+"vs system" reads prefill / decode. The Q4_K_M model gains little (1.04x to
+1.15x). The two IQ2_M models, the ones the lookup-table change described below
+targets, gain 1.4x to 1.6x on prefill and 11.7x to 16.8x on decode. Each cell
+is only 3 runs, so a gap of a few percent between two cells is within what a
+re-run can move.
+
 ## Step 3: put it on stage
 
 From the same folder, one command, and the audience watches tokens appear:

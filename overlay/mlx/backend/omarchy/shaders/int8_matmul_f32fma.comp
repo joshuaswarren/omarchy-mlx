@@ -204,6 +204,14 @@ void main() {
         const uint wrow_limit = swiglu ? (2u * n) : n;
         float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
         float a4 = 0.0f, a5 = 0.0f, a6 = 0.0f, a7 = 0.0f;
+        // Exact chunk sums as f32 integers pour into these int32
+        // accumulators every 1024 k-elements, so a group longer than
+        // 1024 still reduces bitwise like the int32 kernel: every f32
+        // partial stays <= 1024 * 16384 = 2^24, int(acc) is exact, and
+        // the int32 sum cannot overflow for group <= 131072
+        // (131072 * 16384 = 2^31; the host gates on that bound).
+        int w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+        int w4 = 0, w5 = 0, w6 = 0, w7 = 0;
         uint g = 0u;
 
         for (uint k0 = 0u; k0 < k_eff; k0 += TILE_K) {
@@ -230,18 +238,42 @@ void main() {
           if (has_b) {
             float xs = in_xs.values[xs_idx];
             if (pass == 0u) {
-              g0 += a0 * xs; g1 += a1 * xs; g2 += a2 * xs; g3 += a3 * xs;
-              g4 += a4 * xs; g5 += a5 * xs; g6 += a6 * xs; g7 += a7 * xs;
+              g0 += float(w0 + int(a0)) * xs;
+              g1 += float(w1 + int(a1)) * xs;
+              g2 += float(w2 + int(a2)) * xs;
+              g3 += float(w3 + int(a3)) * xs;
+              g4 += float(w4 + int(a4)) * xs;
+              g5 += float(w5 + int(a5)) * xs;
+              g6 += float(w6 + int(a6)) * xs;
+              g7 += float(w7 + int(a7)) * xs;
             } else {
-              v0 += a0 * xs; v1 += a1 * xs; v2 += a2 * xs; v3 += a3 * xs;
-              v4 += a4 * xs; v5 += a5 * xs; v6 += a6 * xs; v7 += a7 * xs;
+              v0 += float(w0 + int(a0)) * xs;
+              v1 += float(w1 + int(a1)) * xs;
+              v2 += float(w2 + int(a2)) * xs;
+              v3 += float(w3 + int(a3)) * xs;
+              v4 += float(w4 + int(a4)) * xs;
+              v5 += float(w5 + int(a5)) * xs;
+              v6 += float(w6 + int(a6)) * xs;
+              v7 += float(w7 + int(a7)) * xs;
             }
             a0 = 0.0f; a1 = 0.0f; a2 = 0.0f; a3 = 0.0f;
             a4 = 0.0f; a5 = 0.0f; a6 = 0.0f; a7 = 0.0f;
+            w0 = 0; w1 = 0; w2 = 0; w3 = 0;
+            w4 = 0; w5 = 0; w6 = 0; w7 = 0;
             g++;
             for (uint kk = run1; kk < kend; kk++) {
               FMA_STEP(kk);
             }
+          }
+          // 1024 is a multiple of TILE_K, so chunk marks land on tile
+          // ends; a group flush inside this tile already consumed the
+          // accumulators and the mark then opens the next group's first
+          // chunk (at most 32 elements here).
+          if ((k0 + TILE_K) % 1024u == 0u) {
+            w0 += int(a0); w1 += int(a1); w2 += int(a2); w3 += int(a3);
+            w4 += int(a4); w5 += int(a5); w6 += int(a6); w7 += int(a7);
+            a0 = 0.0f; a1 = 0.0f; a2 = 0.0f; a3 = 0.0f;
+            a4 = 0.0f; a5 = 0.0f; a6 = 0.0f; a7 = 0.0f;
           }
         }
       }

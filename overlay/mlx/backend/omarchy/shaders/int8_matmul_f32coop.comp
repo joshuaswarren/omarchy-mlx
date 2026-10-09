@@ -63,6 +63,12 @@ layout(set = 0, binding = 4, std430) readonly buffer InB {
 layout(set = 0, binding = 5, std430) buffer OutBF16 {
   uint16_t values[];
 } out_bf16;
+layout(set = 0, binding = 6, std430) buffer Acc32 {
+  int values[];
+} in_acc32;
+layout(set = 0, binding = 7, std430) buffer OutF32 {
+  float values[];
+} out_f32;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -119,6 +125,25 @@ void main() {
   }
   const uint qrow0 = wg_row + (sub >> 1u) * (TILE / 2u);
   const uint qcol0 = wg_col + (sub & 1u) * (TILE / 2u);
+  // Groups longer than 1024 flush exact f32 chunk sums into the int32
+  // scratch every 1024 k-elements (host fills it with zero each call);
+  // every f32 partial stays <= 1024 * 16384 = 2^24, int(chunk) is exact,
+  // and the int32 sum cannot overflow while group <= 131072 (group *
+  // 16384 <= 2^31, the host gate). The group end then scales the exact
+  // integer by XS[m,g] exactly like the int32 kernel's float(acc_g).
+  const bool chunked = group > 1024u;
+  const uint chunk_mark = chunked ? 1024u : group;
+  const uint pad_n = params.shape[3];
+  if (chunked) {
+    // Each workgroup exclusively owns its 64x64 tile region of the
+    // scratch, so this per-tile zero replaces any host-side fill.
+    for (uint q = tid; q < TILE * TILE; q += 128u) {
+      const uint r = q / TILE;
+      const uint c = q % TILE;
+      in_acc32.values[(wg_row + r) * pad_n + (wg_col + c)] = 0;
+    }
+    barrier();
+  }
 
   for (uint q = tid; q < TILE * TILE; q += 128u) {
     total[q] = 0.0f;
@@ -147,48 +172,94 @@ void main() {
             k_total, gl_CooperativeMatrixLayoutRowMajor);
       }
       for (uint j = 0u; j < SG; j++) {
-        coopMatLoad(mat_b[j], in_w.values, (qcol0 + j * MAT) * k_total + kc,
-            k_total, gl_CooperativeMatrixLayoutColumnMajor);
+        // rhs_offset carries the value-half base (elements of the padded
+        // f32 temp) for the swiglu second pass; zero for the gate half.
+        coopMatLoad(mat_b[j], in_w.values,
+            params.rhs_offset + (qcol0 + j * MAT) * k_total + kc, k_total,
+            gl_CooperativeMatrixLayoutColumnMajor);
       }
       for (uint i = 0u; i < SG; i++) {
         for (uint j = 0u; j < SG; j++) {
           acc[i][j] = coopMatMulAdd(mat_a[i], mat_b[j], acc[i][j]);
         }
       }
-    }
-    // Flush: store this subgroup's 32x32 quarter to shared, then scale by
-    // XS[m,g] into the tile total in ascending group order. Rows past
-    // matrix_m read a clamped scale; their total slots are never stored.
-    for (uint i = 0u; i < SG; i++) {
-      for (uint j = 0u; j < SG; j++) {
-        coopMatStore(acc[i][j], flush_d[sub],
-            (i * MAT) * (TILE / 2u) + j * MAT, TILE / 2u,
-            gl_CooperativeMatrixLayoutRowMajor);
+      const uint done = kc + MAT - k_group_base;
+      if (done % chunk_mark != 0u && done != group) {
+        continue;
       }
+      // Flush: store this subgroup's 32x32 quarter to shared. Chunked
+      // groups pour exact integer values into the int32 scratch; plain
+      // groups scale by XS[m,g] into the tile total. Rows past matrix_m
+      // read a clamped scale; their slots are never stored.
+      for (uint i = 0u; i < SG; i++) {
+        for (uint j = 0u; j < SG; j++) {
+          coopMatStore(acc[i][j], flush_d[sub],
+              (i * MAT) * (TILE / 2u) + j * MAT, TILE / 2u,
+              gl_CooperativeMatrixLayoutRowMajor);
+        }
+      }
+      barrier();
+      for (uint q = tid; q < TILE * TILE; q += 128u) {
+        const uint s = q / (TILE * TILE / SG);
+        const uint r = (q / (TILE / 2u)) % (TILE / 2u);
+        const uint c = q % (TILE / 2u);
+        const uint row_out = wg_row + (s >> 1u) * (TILE / 2u) + r;
+        const uint col_out = wg_col + (s & 1u) * (TILE / 2u) + c;
+        const float dval = flush_d[s][q - s * (TILE * TILE / SG)];
+        if (chunked) {
+          in_acc32.values[row_out * pad_n + col_out] += int(dval);
+        } else {
+          const uint row = min(row_out, rows - 1u);
+          const uint gq = ((s >> 1u) * (TILE / 2u) + r) * TILE +
+              ((s & 1u) * (TILE / 2u) + c);
+          total[gq] += dval * in_xs.values[params.shape[0] + row * groups + g];
+        }
+      }
+      barrier();
+      // The next chunk must accumulate from zero: without this reset
+      // every flush would re-add all previous chunks (cumulative sums).
+      for (uint i = 0u; i < SG; i++) {
+        for (uint j = 0u; j < SG; j++) {
+          acc[i][j] = coopmat<float, gl_ScopeSubgroup, MAT, MAT,
+              gl_MatrixUseAccumulator>(0.0f);
+        }
+      }
+      barrier();
     }
-    barrier();
-    for (uint q = tid; q < TILE * TILE; q += 128u) {
-      const uint s = q / (TILE * TILE / SG);
-      const uint r = (q / (TILE / 2u)) % (TILE / 2u);
-      const uint c = q % (TILE / 2u);
-      const uint row =
-          min(wg_row + (s >> 1u) * (TILE / 2u) + r, rows - 1u);
-      const float xs = in_xs.values[params.shape[0] + row * groups + g];
-      const uint gq = ((s >> 1u) * (TILE / 2u) + r) * TILE +
-          ((s & 1u) * (TILE / 2u) + c);
-      total[gq] += flush_d[s][q - s * (TILE * TILE / SG)] * xs;
+    if (chunked) {
+      // Group end: scale the exact int32 group sum by XS[m,g] and clear
+      // the scratch for the next group.
+      for (uint q = tid; q < TILE * TILE; q += 128u) {
+        const uint r = q / TILE;
+        const uint c = q % TILE;
+        const uint row_out = wg_row + r;
+        const uint col_out = wg_col + c;
+        const uint row = min(row_out, rows - 1u);
+        const float xs = in_xs.values[params.shape[0] + row * groups + g];
+        const uint gq = r * TILE + c;
+        total[gq] += float(in_acc32.values[row_out * pad_n + col_out]) * xs;
+        in_acc32.values[row_out * pad_n + col_out] = 0;
+      }
+      barrier();
     }
-    barrier();
   }
 
   const uint ws_base = params.shape[1];
   const uint b_base = params.shape[2];
+  const bool raw_total = (params.flags & 2u) != 0u;
   for (uint q = tid; q < TILE * TILE; q += 128u) {
     const uint r = q / TILE;
     const uint c = q % TILE;
     const uint row = wg_row + r;
     const uint col = wg_col + c;
     if (row < rows && col < n) {
+      if (raw_total) {
+        // Swiglu two-matmul mode: the exact f32 group-scaled total goes
+        // to the f32 temp untouched; the fused epilogue applies WS/B and
+        // the single bf16 rounding.
+        out_f32.values[params.output_offset + row * n + col] = total[q];
+        continue;
+      }
       out_bf16.values[params.output_offset + row * n + col] =
           bf16_store(total[q] * in_ws.values[ws_base + col] +
               in_b.values[b_base + col]);
