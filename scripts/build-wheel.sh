@@ -220,6 +220,30 @@ EOF
   echo "[receipt] staged tool: $DIST_DIR/mlx-omarchy-info"
 fi
 
+# The ANE worker compiles inside this build, so its digest is knowable only
+# after the wheel exists, and it is NOT byte-reproducible across releases
+# (v0.7.22 ships 7fe5b720…, v0.7.31 f4562eff…, both 161744 B) — a fixed
+# binary-sha pin would be a lie. Stamp the built worker's sha256 into the
+# shipped pin (assets.worker), fix the RECORD line, then re-verify the
+# finished wheel with the same stdlib checker the recipe and install.sh run.
+echo "== stamp worker pin =="
+python3 "$ROOT/scripts/stamp_worker_pin.py" "$wheel"
+
+echo "== verify finished wheel =="
+VERIFY_DIR="$WORK_DIR/verify-wheel"
+rm -rf "$VERIFY_DIR"
+python3 - "$wheel" "$VERIFY_DIR" <<'EOF'
+import sys, zipfile
+wheel, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(wheel) as zf:
+    for name in zf.namelist():
+        prefix = "/" + name
+        if "/mlx/bin/" in prefix or "/mlx/share/mlx-omarchy/" in prefix:
+            zf.extract(name, dest)
+EOF
+python3 "$ROOT/scripts/verify_runtime_assets.py" \
+  "$VERIFY_DIR/mlx/share/mlx-omarchy/parakeet-1"
+
 
 echo "== receipt =="
 echo "[receipt] wheel: $wheel"
