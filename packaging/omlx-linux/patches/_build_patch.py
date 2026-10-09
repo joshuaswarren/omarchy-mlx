@@ -176,8 +176,8 @@ SITES: list[tuple[str, str, str, list[str]]] = [
     ),
     (
         "omlx/patches/qwen35_moe_routed_decode.py",
-        "    if not _ENABLED or not mx.metal.is_available():\n        return False",
-        "    if not _ENABLED or not _cka():\n        return False",
+        "    if not mx.metal.is_available():\n        return False",
+        "    if not _cka():\n        return False",
         ["A26 qwen35_moe_routed_decode"],
     ),
 
@@ -208,8 +208,8 @@ SITES: list[tuple[str, str, str, list[str]]] = [
     ),
     (
         "omlx/patches/qwen35_gdn_chunked.py",
-        "    if os.environ.get(\"OMLX_GDN_KERNEL\", \"1\") == \"0\":\n        return False\n    if not mx.metal.is_available():\n        return False",
-        "    if os.environ.get(\"OMLX_GDN_KERNEL\", \"1\") == \"0\":\n        return False\n    if not _cka():\n        return False",
+        "    if not mx.metal.is_available():\n        return False",
+        "    if not _cka():\n        return False",
         ["A26 qwen35_gdn_chunked"],
     ),
 
@@ -380,7 +380,7 @@ def main() -> None:
     (OUT_DIR / "01-add-compat-gate.patch").write_text(
         "# omlx platform-gate patch 01: add omlx/_compat_gate.py\n"
         "# License: SPDX-Apache-2.0 -- preserved Apache-2.0 license from omlx (see LICENSE/patches/omlx/LICENSE).\n"
-        "# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).\n"
+        "# Target commit: jundot/omlx c0b1056b41ebde9422af316cf5038a423eb8f24c (tag v0.7.1.dev1).\n"
         + add_helper()
     )
     (OUT_DIR / "02-gate-sites.patch").write_text(
@@ -388,7 +388,7 @@ def main() -> None:
         "# License: SPDX-Apache-2.0 -- upstream files keep their SPDX headers; gate predicates\n"
         "# now delegate to omlx._compat_gate.custom_kernels_available() which is True on\n"
         "# both macOS Metal (passes through mx.metal.is_available) and omarchy-mlx (canary probe).\n"
-        "# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).\n"
+        "# Target commit: jundot/omlx c0b1056b41ebde9422af316cf5038a423eb8f24c (tag v0.7.1.dev1).\n"
         + gate_site_diffs()
     )
     print(f"wrote {OUT_DIR}/01-add-compat-gate.patch")

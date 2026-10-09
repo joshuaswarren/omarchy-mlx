@@ -1,9 +1,9 @@
 # omlx platform-gate patch 01: add omlx/_compat_gate.py
 # License: SPDX-Apache-2.0 -- preserved Apache-2.0 license from omlx (see LICENSE/patches/omlx/LICENSE).
-# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).
+# Target commit: jundot/omlx c0b1056b41ebde9422af316cf5038a423eb8f24c (tag v0.7.1.dev1).
 --- /dev/null
 +++ b/omlx/_compat_gate.py
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,137 @@
 +# SPDX-License-Identifier: Apache-2.0
 +"""Capability probe for omlx custom-kernel paths (omarchy-mlx port patch).
 +
@@ -37,6 +37,7 @@
 +from __future__ import annotations
 +
 +import functools
++import os
 +import platform
 +from typing import Any
 +
@@ -56,7 +57,12 @@
 +    Callers must be running under ``mx.gpu`` already -- the original
 +    gates all carried the ``mx.default_device() == mx.gpu`` conjunct,
 +    which we keep at the call sites so this helper stays pure.
++    ``OMLX_LINUX_CUSTOM_KERNELS=0`` answers False without probing, so every
++    custom-kernel path takes its stock MLX fallback (used when a wheel cannot
++    compile one of the kernels, which a one-op canary cannot detect).
 +    """
++    if os.environ.get("OMLX_LINUX_CUSTOM_KERNELS") == "0":
++        return False
 +    if mx.metal.is_available():
 +        return True
 +    try:

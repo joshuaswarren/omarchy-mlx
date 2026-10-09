@@ -1,0 +1,38 @@
+--- a/omlx/patches/qwen35_gdn_chunked.py
++++ b/omlx/patches/qwen35_gdn_chunked.py
+@@ -33,6 +33,26 @@
+ _MIN_T = 64
+ 
+ 
++def _kernel_runs(fast_prefill) -> bool:
++    """Run the prefill kernel once on a tiny input.
++
++    A gate that only compiles a trivial canary cannot tell whether the backend
++    implements every feature this kernel uses. A missing feature is raised
++    when the graph is evaluated, in the middle of a request, so check it here.
++    """
++    try:
++        q = mx.zeros((1, _MIN_T, 1, 128), dtype=mx.bfloat16)
++        g = mx.zeros((1, _MIN_T, 1), dtype=mx.float32)
++        y, state = fast_prefill(q, q, q, g, g, None)
++        mx.eval(y, state)
++    except Exception as exc:  # noqa: BLE001
++        logger.warning(
++            "Qwen3.5/3.6 GDN prefill kernel is not usable here: %s", str(exc)[:300]
++        )
++        return False
++    return True
++
++
+ def apply_qwen35_gdn_prefill_patch() -> bool:
+     global _PATCHED
+     if _PATCHED:
+@@ -61,6 +81,8 @@
+         "blocked_seq": gated_delta_blocked_seq,
+     }
+     fast_prefill = kernels[_IMPL]
++    if not _kernel_runs(fast_prefill):
++        return False
+ 
+     def gated_delta_update_metal(
+         q,

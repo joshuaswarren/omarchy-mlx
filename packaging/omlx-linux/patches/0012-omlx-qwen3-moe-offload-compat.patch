@@ -1,0 +1,115 @@
+diff --git a/omlx/patches/moe_offload_compat.py b/omlx/patches/moe_offload_compat.py
+index 98fff574..72431673 100644
+--- a/omlx/patches/moe_offload_compat.py
++++ b/omlx/patches/moe_offload_compat.py
+@@ -15,6 +15,7 @@ _SUPPORTED_TYPES = frozenset(
+         "qwen3_5_moe",
+         "gemma4",
+         "olmoe",
++        "qwen3_moe",
+         "glm_moe_dsa",
+         "glm5_next",
+     }
+@@ -72,7 +73,7 @@ def _inspect(path, signature):
+         kind == "gemma4" and not text.get("enable_moe_block")
+     ):
+         return False, "The model does not have the supported MoE geometry."
+-    # glm5_next picks sparse layers per layer, not by frequency.
++    # glm5_next and qwen3_moe pick sparse layers per layer, not by frequency.
+     sparse_layers = None
+     if kind == "glm5_next":
+         types = text.get("mlp_layer_types")
+@@ -81,6 +82,16 @@ def _inspect(path, signature):
+         sparse_layers = {i for i, t in enumerate(types) if t == "sparse"}
+         if not sparse_layers:
+             return False, "The model does not have the supported MoE geometry."
++    elif kind == "qwen3_moe":
++        # The model's own rule: a layer is sparse unless mlp_only_layers lists it
++        # or the (1-based) layer index misses decoder_sparse_step.
++        dense = set(text.get("mlp_only_layers") or [])
++        step = int(text.get("decoder_sparse_step") or 1)
++        sparse_layers = {
++            i for i in range(layers) if i not in dense and (i + 1) % step == 0
++        }
++        if not sparse_layers:
++            return False, "The model does not have the supported MoE geometry."
+     quant = raw.get("quantization", text.get("quantization"))
+     if not isinstance(quant, dict):
+         return False, "Expert offload requires an MLX quantized checkpoint."
+@@ -91,8 +102,8 @@ def _inspect(path, signature):
+         if layer < first_moe or layer % moe_freq:
+             continue  # dense layer (GLM's first_k_dense_replace)
+         if sparse_layers is not None and layer not in sparse_layers:
+-            continue  # dense layer (glm5_next's mlp_layer_types)
+-        if kind in ("olmoe", "glm_moe_dsa"):
++            continue  # dense layer (mlp_layer_types, mlp_only_layers, sparse step)
++        if kind in ("olmoe", "glm_moe_dsa", "qwen3_moe"):
+             parent = f"model.layers.{layer}.mlp"
+             prefix = parent + ".switch_mlp"
+         elif kind in ("qwen4_exp", "qwen3_5_moe"):
+diff --git a/tests/test_moe_offload_compat.py b/tests/test_moe_offload_compat.py
+index 7fd66828..ecd27d38 100644
+--- a/tests/test_moe_offload_compat.py
++++ b/tests/test_moe_offload_compat.py
+@@ -24,6 +24,9 @@ def _checkpoint(path, kind="qwen4_exp", per_expert=False):
+     raw = {"model_type": kind, "quantization": {"bits": 4, "group_size": 32}}
+     if kind == "olmoe":
+         raw.update(text)
++    elif kind == "qwen3_moe":
++        # flat config like olmoe; layer 0 is dense through mlp_only_layers
++        raw.update(text, mlp_only_layers=[0], decoder_sparse_step=1)
+     elif kind == "glm_moe_dsa":
+         # the flagship layout: n_routed_experts, and the first layer dense
+         raw.update(text, n_routed_experts=16, first_k_dense_replace=1)
+@@ -43,9 +46,9 @@ def _checkpoint(path, kind="qwen4_exp", per_expert=False):
+     (path / "config.json").write_text(json.dumps(raw))
+     tensors = {}
+     for layer in range(2):
+-        if kind in ("glm_moe_dsa", "glm5_next") and layer == 0:
++        if kind in ("glm_moe_dsa", "glm5_next", "qwen3_moe") and layer == 0:
+             continue  # dense layer: no experts to cover
+-        if kind in ("olmoe", "glm_moe_dsa"):
++        if kind in ("olmoe", "glm_moe_dsa", "qwen3_moe"):
+             prefix = f"model.layers.{layer}.mlp.switch_mlp"
+         elif kind == "gemma4":
+             prefix = f"language_model.model.layers.{layer}.experts.switch_glu"
+@@ -78,6 +81,8 @@ def _checkpoint(path, kind="qwen4_exp", per_expert=False):
+         ("gemma4", False),
+         ("olmoe", False),
+         ("olmoe", True),
++        ("qwen3_moe", False),
++        ("qwen3_moe", True),
+         ("glm_moe_dsa", False),
+         ("deepseek_v4", False),
+         ("glm5_next", False),
+@@ -147,6 +152,30 @@ def test_glm5_next_dense_layers_skipped_and_routed_required(tmp_path):
+     assert moe_offload_compatibility(tmp_path)[0] is False
+ 
+ 
++def test_qwen3_moe_dense_layers_follow_the_model_rule(tmp_path):
++    """mlp_only_layers and decoder_sparse_step choose the layers with experts."""
++    tensors = _checkpoint(tmp_path, "qwen3_moe")
++    assert moe_offload_compatibility(tmp_path) == (True, "")
++    path = tmp_path / "config.json"
++    raw = json.loads(path.read_text())
++    # step 2, nothing forced dense: layer 0 is still dense ((0 + 1) % 2), layer 1 sparse
++    raw.update(mlp_only_layers=[], decoder_sparse_step=2)
++    path.write_text(json.dumps(raw))
++    assert moe_offload_compatibility(tmp_path) == (True, "")
++    # step 1, nothing forced dense: layer 0 is sparse and has no experts in the file
++    raw.update(decoder_sparse_step=1)
++    path.write_text(json.dumps(raw))
++    ok, reason = moe_offload_compatibility(tmp_path)
++    assert ok is False and "layers.0" in reason
++    # a missing routed projection on the sparse layer hides the model
++    raw.update(mlp_only_layers=[0])
++    path.write_text(json.dumps(raw))
++    del tensors["model.layers.1.mlp.switch_mlp.up_proj.scales"]
++    mx.save_safetensors(str(tmp_path / "model.safetensors"), tensors)
++    ok, reason = moe_offload_compatibility(tmp_path)
++    assert ok is False and "layers.1" in reason
++
++
+ def test_glm_moe_dsa_requires_every_moe_layer(tmp_path):
+     """The dense prefix is skipped; a missing routed layer still hides it."""
+     tensors = _checkpoint(tmp_path, "glm_moe_dsa")

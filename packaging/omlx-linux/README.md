@@ -31,7 +31,7 @@ design and stay `n/a` on M1/M2 hosts per the parity matrix.
 ## Files
 
 - `apply-platform-gate.sh` — installer step; pins to omlx
-  `cc1fdc9a24053224521a8dc6e1350d64e8ec16f4` (upstream main after v0.7.0, commit sha pin); refuses
+  `c0b1056b41ebde9422af316cf5038a423eb8f24c` (upstream tag v0.7.1.dev1, commit sha pin); refuses
   non-pinned HEAD; idempotent.
 - `patches/01-add-compat-gate.patch` — adds
   `omlx/_compat_gate.py`.
@@ -143,6 +143,27 @@ Metal APIs are absent?". Patches:
   current step needs, next-chunk expert prefetch in prefill, borrowed prompt memory) and its own admission
   estimate, which supersede it. Measured on the shared current wheel, Qwen3-30B-A3B 4-bit at 0.25 residency,
   greedy token ids identical: see `receipts/2026-10-09-omlx-upstream-pin.md`.
+- `patches/0012-omlx-qwen3-moe-offload-compat.patch` — expert offload for Qwen3 MoE (Qwen3-30B-A3B). The offload
+  eligibility check (`moe_offload_compat._SUPPORTED_TYPES`) did not list `qwen3_moe`, so the settings API
+  answered HTTP 400 `MoE expert offload is not supported for this model type` for a model whose offload wrapper
+  already works. The patch adds the type, follows the model's own sparse-layer rule (`mlp_only_layers`,
+  `decoder_sparse_step`) and checks the `model.layers.N.mlp.switch_mlp` checkpoint prefix. Contract tests are
+  in the same patch (`tests/test_moe_offload_compat.py`: two supported layouts and the dense-layer rule); they
+  fail without it. Proof, greedy tokens identical between `omlx serve` and the direct offload probe:
+  `receipts/2026-10-09-omlx-qwen3-moe-serve-offload.md`.
+- `patches/0013-omlx-qwen35-gdn-prefill-kernel-probe.patch` — Qwen3.5/3.6/3.8 Gated DeltaNet prefill. The gate
+  (`custom_kernels_available()`) proves only that a one-op kernel compiles. The prefill kernel
+  (`gated_delta_pipelined`) can still fail when the graph is evaluated, in the middle of a request. The patch runs
+  that kernel once on a tiny input when it is bound and leaves the stock path in place if it raises. Measured:
+  on wheel a48b7cc58 the kernel fails with `unsupported MSL feature device pointer arithmetic` at
+  `[1,95,32,128]` bf16 (the probe now logs it and skips the kernel). The translator fix on main (`00d43bf7a`)
+  covers the Qwen3.5 decode kernels, not this prefill kernel: it is still refused by name, so the probe keeps
+  logging and skipping it until the translator or metal2vk covers it.
+- Kill switch `OMLX_LINUX_CUSTOM_KERNELS=0` (in `omlx/_compat_gate.py`, part of `01-add-compat-gate.patch`):
+  `custom_kernels_available()` answers False without probing, so every custom-kernel path takes its stock MLX
+  fallback. Use it when a wheel cannot compile one of the kernels that the one-op canary does not exercise. On
+  wheel a48b7cc58 the Qwen3.5 decode kernel fails with a GLSL syntax error (`.comp:73 unexpected IDENTIFIER`);
+  with the switch set, Qwen3.5 serving takes the stock path.
 
 Tools in this layer:
 
@@ -170,8 +191,8 @@ Tools in this layer:
 ```sh
 # 1. Clone pinned source (only if /tmp/omlx-pin is not present)
 git clone --depth 1 https://github.com/jundot/omlx /tmp/omlx-pin
-git -C /tmp/omlx-pin fetch --depth 1 origin cc1fdc9a24053224521a8dc6e1350d64e8ec16f4
-git -C /tmp/omlx-pin checkout cc1fdc9a24053224521a8dc6e1350d64e8ec16f4
+git -C /tmp/omlx-pin fetch --depth 1 origin c0b1056b41ebde9422af316cf5038a423eb8f24c
+git -C /tmp/omlx-pin checkout c0b1056b41ebde9422af316cf5038a423eb8f24c
 
 # 2. Verify the platform-gate series would apply cleanly
 packaging/omlx-linux/apply-platform-gate.sh /tmp/omlx-pin --verify-only
@@ -209,7 +230,7 @@ green on this machine today.
 
 ```
 $ git -C /tmp/omlx-pin log -1 --format='%H %s'
-cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 fix(memory-guard): count a quarter of other apps' memory in balanced (#4349) (#4372)
+c0b1056b41ebde9422af316cf5038a423eb8f24c chore: bump version to 0.7.1.dev1
 ```
 
 If upstream moves the commit, regenerate both patch series
