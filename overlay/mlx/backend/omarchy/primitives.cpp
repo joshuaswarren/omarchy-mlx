@@ -11634,11 +11634,14 @@ inline constexpr size_t kGdnCoopmatSharedBytes = 24832;
 // with the old per-step K slice removed.
 inline constexpr size_t kGdnCoopmatBatchSharedBytes = 32000;
 
-// Gated delta nets (upstream 0.32.3): the fused GatedDeltaDecodeBF16 kernel
-// serves the decode shape (T=1, no mask, square heads, bf16 activations,
-// f32 state); everything else - prefill token chunks, masks, f16/f32
-// activations, ragged head layouts - keeps the composed fallback, which is
-// the arithmetic reference this kernel was equivalence-checked against.
+// Gated delta nets (upstream 0.32.3): the fused kernels serve bf16
+// activations with f32 state at head dim 128, with Hv a multiple of Hk
+// (Qwen3.5-9B: 16 key heads, 32 value heads). eval_gpu expands q and k to Hv
+// heads on the device before the kernels, so a model that passes the
+// un-repeated q and k reaches the fused path. Everything else - masks that
+// the kernels do not take, f16/f32 activations, ragged head layouts - keeps
+// the composed fallback, which is the arithmetic reference these kernels were
+// equivalence-checked against.
 bool GatedDeltaUpdate::use_fallback(
     const int Hk,
     const int Dk,
@@ -11650,7 +11653,7 @@ bool GatedDeltaUpdate::use_fallback(
   // fused kernels apply load+skip, so a mask no longer forces the
   // composed fallback on its own.
   (void)has_mask;
-  return Dk != 128 || Dv != 128 || Hk != Hv;
+  return Dk != 128 || Dv != 128 || Hk <= 0 || Hv % Hk != 0;
 }
 
 // Gradient of the gated delta update (upstream #4565): the fused backward
@@ -11970,7 +11973,8 @@ void GatedDeltaUpdate::eval_gpu(
   static const bool gdn_decode_batch =
       decode_path_override("MLX_OMARCHY_GDN_DECODE_BATCH") != 0;
   bool fused_ready =
-      (B == 1 || (gdn_decode_batch && T == 1 && !has_mask)) && Hk == Hv &&
+      (B == 1 || (gdn_decode_batch && T == 1 && !has_mask)) && Hk > 0 &&
+      Hv % Hk == 0 &&
       Dk == 128 && Dv == 128 &&
       q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
       v.dtype() == bfloat16 && h0.dtype() == float32 &&
@@ -12003,7 +12007,7 @@ void GatedDeltaUpdate::eval_gpu(
   // kernel takes a push-constant flag).
   bool prefill_shape = !raw_gates_mode && fused_ready && T > 1 &&
       (g.ndim() == 3 || g.ndim() == 4) &&
-      outputs.at(0).shape() == q.shape();
+      outputs.at(0).shape() == v.shape();
   if (decode_shape || prefill_shape) {
     // Strided inputs (in-model callers pass v sliced from a fused qkv
     // projection) are materialized below into dense temporaries recorded
@@ -12096,6 +12100,34 @@ void GatedDeltaUpdate::eval_gpu(
         }
       }
     }
+  }
+
+  // Expand q and k from Hk to Hv key heads on the device so every kernel
+  // below sees equal head counts. Value head j reads key head j / rep, the
+  // order of mx.repeat on the head axis (the upstream fallback and the
+  // mlx-lm repeat patch). q and k are dense here (any strided input was
+  // copied above); the copy adds each array's own buffer offset.
+  if (fused_ready && Hk != Hv) {
+    const int rep = Hv / Hk;
+    auto expand = [&](const array& x) {
+      array wide(Shape{B, T, Hv, Dk}, x.dtype(), nullptr, {});
+      wide.set_data(allocate_omarchy(wide.nbytes()));
+      copy_gpu_inplace(
+          x,
+          wide,
+          Shape{B * T, Hk, rep, Dk},
+          Strides{static_cast<int64_t>(Hk) * Dk, Dk, 0, 1},
+          Strides{static_cast<int64_t>(Hv) * Dk, static_cast<int64_t>(rep) * Dk, Dk, 1},
+          /*i_offset=*/0,
+          /*o_offset=*/0,
+          CopyType::General,
+          s);
+      encoder.add_temporary(wide);
+      return wide;
+    };
+    q = expand(q);
+    k = expand(k);
+    Hk = Hv;
   }
 
   // Decode kernel and prefill scan: LANES=4 threads per Dv row, 128-thread
