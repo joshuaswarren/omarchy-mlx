@@ -25,7 +25,7 @@ tested, with the receipt or open commit behind every claim:
 | Engine | Status | Note |
 |---|---|---|
 | [mlx-lm](https://github.com/ml-explore/mlx-lm) | Works | The chat and serve commands in this README run on it. It ships in every release. |
-| [oMLX](https://github.com/jundot/omlx) | Works | Serving runs measured around 82 to 91 tok/s on an M1 Max. Guide: [docs/omlx-linux.md](docs/omlx-linux.md). |
+| [oMLX](https://github.com/jundot/omlx) | Works | Serving runs measured around 82 to 91 tok/s on an M1 Max. Pinned to upstream commit cc1fdc9a: with expert offload (Qwen3-30B-A3B 4-bit, 0.25 residency) prefill is 2.55x and decode 1.18x over the v0.7.0 pin on an M1 Max, greedy tokens identical ([receipt](receipts/2026-10-09-omlx-upstream-pin/README.md)). Guide: [docs/omlx-linux.md](docs/omlx-linux.md). |
 | [mlx-serve](https://github.com/davidtai/mlx-serve) | Works | Runs with our Linux build fixes ([PR #1](https://github.com/davidtai/mlx-serve/pull/1)). Output is byte-identical to mlx-lm with the fused kernels on. |
 | [TensorFold](https://github.com/ashhart/TensorFold) | In progress | The int8 path is fixed; the correctness run is still going. Guide: [docs/tensorfold.md](docs/tensorfold.md). |
 | [sushi](https://github.com/beamivalice/sushi) | In progress | The Linux port lives on [our fork branch](https://github.com/joshuaswarren/sushi/tree/omarchy-linux). The first full run waits on a driver fix. |

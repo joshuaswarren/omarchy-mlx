@@ -2,7 +2,7 @@
 # License: SPDX-Apache-2.0 -- upstream files keep their SPDX headers; gate predicates
 # now delegate to omlx._compat_gate.custom_kernels_available() which is True on
 # both macOS Metal (passes through mx.metal.is_available) and omarchy-mlx (canary probe).
-# Target commit: jundot/omlx 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40 (v0.7.0).
+# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).
 --- a/omlx/engine/dflash.py
 +++ b/omlx/engine/dflash.py
 @@ -41,6 +41,15 @@
@@ -36,7 +36,7 @@
              raise RuntimeError("MLX did not report a recommended working set size")
 --- a/omlx/memory_monitor.py
 +++ b/omlx/memory_monitor.py
-@@ -32,8 +32,9 @@
+@@ -33,8 +33,9 @@
  # Check if MLX Metal is available
  try:
      import mlx.core as mx
@@ -162,7 +162,7 @@
      source = r"""
 --- a/omlx/patches/m5_gather_qmm.py
 +++ b/omlx/patches/m5_gather_qmm.py
-@@ -73,6 +73,7 @@
+@@ -49,6 +49,7 @@
  import os
  
  import mlx.core as mx
@@ -170,7 +170,7 @@
  
  from omlx.custom_kernels.nax import is_nax_available
  
-@@ -108,7 +109,7 @@
+@@ -85,7 +86,7 @@
      global _defective
      if _defective is not None:
          return _defective
@@ -227,7 +227,7 @@
  import mlx.nn as nn
  from mlx_lm.models.gated_delta import normalize_qk
  
-@@ -1734,7 +1735,7 @@
+@@ -1951,7 +1952,7 @@
      apply_qwen35_vlm_qk_norm_patch()
      if _PATCHED:
          return True
@@ -238,7 +238,7 @@
      from mlx_vlm.models.qwen3_5 import language as q35
 --- a/omlx/patches/qwen35_moe_routed_decode.py
 +++ b/omlx/patches/qwen35_moe_routed_decode.py
-@@ -80,6 +80,7 @@
+@@ -88,6 +88,7 @@
  from typing import NamedTuple
  
  import mlx.core as mx
@@ -246,7 +246,7 @@
  import mlx.nn as nn
  import numpy as np
  
-@@ -811,7 +812,7 @@
+@@ -1001,7 +1002,7 @@
      Needs ``qwen35_moe_router`` applied first: the fast arm reuses its fused
      routing launch, so it selects the same experts with the same scores as
      the body it replaces."""
@@ -257,7 +257,7 @@
          from mlx_vlm.models.qwen3_5_moe import language as vlm_moe
 --- a/omlx/patches/qwen35_moe_router.py
 +++ b/omlx/patches/qwen35_moe_router.py
-@@ -48,6 +48,7 @@
+@@ -52,6 +52,7 @@
  from functools import wraps
  
  import mlx.core as mx
@@ -265,7 +265,7 @@
  
  logger = logging.getLogger(__name__)
  
-@@ -655,7 +656,7 @@
+@@ -747,7 +748,7 @@
      experts, and shared expert; prefill rows and sharded runs keep the
      original body untouched."""
      global _ENGAGED_LOGGED
@@ -283,8 +283,8 @@
 +from omlx._compat_gate import custom_kernels_available as _cka
  
  from .m5_gather_qmm import fused_gate_up_activation
- from .moe_routes import sort_routes
-@@ -54,7 +55,7 @@
+ from .m5_gather_qmm_a8 import try_routed_a8
+@@ -55,7 +56,7 @@
          return False
      if os.environ.get("OMLX_QWEN35_MOE_WEIGHTED_SUM", "1") == "0":
          return False
@@ -314,20 +314,20 @@
      try:
 --- a/omlx/patches/sdpa256_attention.py
 +++ b/omlx/patches/sdpa256_attention.py
-@@ -24,6 +24,7 @@
- import os
+@@ -27,6 +27,7 @@
+ import time
  
  import mlx.core as mx
 +from omlx._compat_gate import custom_kernels_available as _cka
  
- logger = logging.getLogger(__name__)
+ from omlx.custom_kernels.nax import is_nax_available
  
-@@ -205,7 +206,7 @@
+@@ -283,7 +284,7 @@
          and mask == "causal"
          and queries.shape[-2] > keys.shape[-2]
      )
 -    if mx.metal.is_available() and native_shape and _NATIVE_FORCE_FUSED:
 +    if _cka() and native_shape and _NATIVE_FORCE_FUSED:
-         try:
-             return mx.fast.scaled_dot_product_attention(
-                 queries,
+         chunked = not is_nax_available() and (
+             isinstance(mask, mx.array)
+             or mx.result_type(queries.dtype, keys.dtype, values.dtype) == mx.float32

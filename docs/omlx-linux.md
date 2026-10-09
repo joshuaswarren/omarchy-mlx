@@ -19,7 +19,7 @@ python3 packaging/omlx-linux/install.sh \
   --home "$HOME/.local/share/omlx-linux"
 ```
 
-The installer defaults to oMLX v0.7.0 and creates its venv under the supplied private HOME. Supply the compatible wheel built for the target machine and Python version. The compatibility patches target oMLX commit `4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40`; do not apply them to another upstream revision. The installer applies the platform-gate patches, Linux compatibility patches, and the repository's matching mlx-lm patch series.
+The installer defaults to oMLX upstream commit cc1fdc9a (main after v0.7.0) and creates its venv under the supplied private HOME. Supply the compatible wheel built for the target machine and Python version. The compatibility patches target oMLX commit `cc1fdc9a24053224521a8dc6e1350d64e8ec16f4`; do not apply them to another upstream revision. The installer applies the platform-gate patches, Linux compatibility patches, and the repository's matching mlx-lm patch series.
 
 The package README documents installer parameters and checks: [`packaging/omlx-linux/README.md`](../packaging/omlx-linux/README.md). Keep the baseline/shared MLX environment unchanged.
 

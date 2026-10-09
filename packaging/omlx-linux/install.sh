@@ -2,7 +2,7 @@
 # Install oMLX (jundot/omlx) into a user venv on Linux on top of omarchy-mlx.
 #
 #   packaging/omlx-linux/install.sh --mlx-wheel /path/to/mlx_omarchy-...whl \
-#       [--venv DIR] [--omlx-dir DIR] [--home DIR] [--ref v0.7.0]
+#       [--venv DIR] [--omlx-dir DIR] [--home DIR] [--ref <tag or full commit sha>]
 #       [--with-optional-deps] [--no-mlx-lm-patches]
 #
 # What this does:
@@ -29,8 +29,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OMARCHY_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-OMLX_REF="v0.7.0"
-OMLX_PIN="4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40"
+OMLX_REF="cc1fdc9a24053224521a8dc6e1350d64e8ec16f4"
+OMLX_PIN="cc1fdc9a24053224521a8dc6e1350d64e8ec16f4"
 MLX_LM_PIN="94cdcae13b266c337bcaca09b97b9c5a9c0e2cde"
 MLX_VLM_PIN="ea79808ce1e9a19fcb915a96b0c70e37ad393a99"
 
@@ -93,12 +93,21 @@ case "$PYVER" in
     ;;
 esac
 
+# OMLX_REF is a release tag, or a full commit sha when upstream has not tagged the commit we pin (GitHub serves any
+# reachable sha). The pin check below is what makes either form safe.
+fetch_ref() {
+  if [[ $OMLX_REF =~ ^[0-9a-f]{40}$ ]]; then
+    git -C "$OMLX_DIR" fetch --quiet origin "$OMLX_REF"
+  else
+    git -C "$OMLX_DIR" fetch --quiet origin "refs/tags/$OMLX_REF:refs/tags/$OMLX_REF"
+  fi
+}
 echo "==> cloning oMLX at $OMLX_REF (pin $OMLX_PIN) into $OMLX_DIR"
 if [[ -d $OMLX_DIR/.git ]]; then
-  git -C "$OMLX_DIR" fetch --quiet origin "refs/tags/$OMLX_REF:refs/tags/$OMLX_REF" || true
+  fetch_ref || true
 else
   git clone --quiet https://github.com/jundot/omlx "$OMLX_DIR"
-  git -C "$OMLX_DIR" fetch --quiet origin "refs/tags/$OMLX_REF:refs/tags/$OMLX_REF"
+  fetch_ref
 fi
 git -C "$OMLX_DIR" checkout --quiet "$OMLX_REF"
 HEAD_SHA="$(git -C "$OMLX_DIR" rev-parse HEAD)"

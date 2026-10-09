@@ -1,6 +1,6 @@
 # omlx platform-gate patch 01: add omlx/_compat_gate.py
 # License: SPDX-Apache-2.0 -- preserved Apache-2.0 license from omlx (see LICENSE/patches/omlx/LICENSE).
-# Target commit: jundot/omlx 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40 (v0.7.0).
+# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).
 --- /dev/null
 +++ b/omlx/_compat_gate.py
 @@ -0,0 +1,131 @@

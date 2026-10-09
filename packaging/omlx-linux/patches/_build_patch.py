@@ -380,7 +380,7 @@ def main() -> None:
     (OUT_DIR / "01-add-compat-gate.patch").write_text(
         "# omlx platform-gate patch 01: add omlx/_compat_gate.py\n"
         "# License: SPDX-Apache-2.0 -- preserved Apache-2.0 license from omlx (see LICENSE/patches/omlx/LICENSE).\n"
-        "# Target commit: jundot/omlx 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40 (v0.7.0).\n"
+        "# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).\n"
         + add_helper()
     )
     (OUT_DIR / "02-gate-sites.patch").write_text(
@@ -388,7 +388,7 @@ def main() -> None:
         "# License: SPDX-Apache-2.0 -- upstream files keep their SPDX headers; gate predicates\n"
         "# now delegate to omlx._compat_gate.custom_kernels_available() which is True on\n"
         "# both macOS Metal (passes through mx.metal.is_available) and omarchy-mlx (canary probe).\n"
-        "# Target commit: jundot/omlx 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40 (v0.7.0).\n"
+        "# Target commit: jundot/omlx cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 (main after v0.7.0).\n"
         + gate_site_diffs()
     )
     print(f"wrote {OUT_DIR}/01-add-compat-gate.patch")

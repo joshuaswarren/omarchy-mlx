@@ -31,7 +31,7 @@ design and stay `n/a` on M1/M2 hosts per the parity matrix.
 ## Files
 
 - `apply-platform-gate.sh` — installer step; pins to omlx
-  `4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40` (v0.7.0); refuses
+  `cc1fdc9a24053224521a8dc6e1350d64e8ec16f4` (upstream main after v0.7.0, commit sha pin); refuses
   non-pinned HEAD; idempotent.
 - `patches/01-add-compat-gate.patch` — adds
   `omlx/_compat_gate.py`.
@@ -138,26 +138,11 @@ Metal APIs are absent?". Patches:
   Contract test: `test_omlx_deepfilternet_subfolder.py` (hosted version
   dir gets no subfolder; bare parent keeps `v3`; skips on mlx-less dev
   boxes, runs on the target venv).
-- `patches/0011-omlx-moe-offload-lookahead.patch` — MoE expert-offload
-  lookahead + slot admission bill. The offload path synced per MoE layer
-  per step (`ensure()`'s route readback) and then stalled on the misses'
-  SSD reads; the patch adds (1) a router-driven lookahead: once a layer's
-  routes are on the host, the next wrapped layer's previous-step routes are
-  speculatively fetched and installed insert-only (never evicting a
-  resident expert), so its reads overlap the current layer's queued GPU
-  work — depth 1, decode-sized route sets, kill switch
-  `OMLX_MOE_OFFLOAD_LOOKAHEAD=0`; (2) an admission bill computed before any
-  slot allocation: a layer whose capacity cannot hold the routing floor is
-  refused by name and left stock, and `apply_moe_expert_offload(...,
-  budget_bytes=N)` refuses the whole offload with `ValueError` when the
-  resident bill exceeds the budget (idea credited to davidtai/mlx-stream
-  `src/expert_admission.zig`); (3) counters — `pred_sent`, `pred_installed`,
-  `pred_rate`, and the per-layer `ensure_s` sync+stall bill — surfaced by
-  `moe_offload_stats`. Greedy output is unchanged by construction (routing
-  never changes; only when an expert's weights are read). Contract tests:
-  `test_omlx_moe_lookahead.py` (lookahead on/off decode bit-identity,
-  kill switch, chaining, below-floor and budget refusals before
-  allocation, insert-only installs).
+- `0011` (MoE expert-offload lookahead and slot admission bill) is not in this series. The pin moved to an
+  upstream commit that carries a new offload cache (least-used eviction that never evicts an expert the
+  current step needs, next-chunk expert prefetch in prefill, borrowed prompt memory) and its own admission
+  estimate, which supersede it. Measured on the shared current wheel, Qwen3-30B-A3B 4-bit at 0.25 residency,
+  greedy token ids identical: see `receipts/2026-10-09-omlx-upstream-pin.md`.
 
 Tools in this layer:
 
@@ -185,8 +170,8 @@ Tools in this layer:
 ```sh
 # 1. Clone pinned source (only if /tmp/omlx-pin is not present)
 git clone --depth 1 https://github.com/jundot/omlx /tmp/omlx-pin
-git -C /tmp/omlx-pin fetch --depth 1 origin tag v0.7.0
-git -C /tmp/omlx-pin checkout 4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40
+git -C /tmp/omlx-pin fetch --depth 1 origin cc1fdc9a24053224521a8dc6e1350d64e8ec16f4
+git -C /tmp/omlx-pin checkout cc1fdc9a24053224521a8dc6e1350d64e8ec16f4
 
 # 2. Verify the platform-gate series would apply cleanly
 packaging/omlx-linux/apply-platform-gate.sh /tmp/omlx-pin --verify-only
@@ -224,7 +209,7 @@ green on this machine today.
 
 ```
 $ git -C /tmp/omlx-pin log -1 --format='%H %s'
-4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40 release: omlx v0.7.0
+cc1fdc9a24053224521a8dc6e1350d64e8ec16f4 fix(memory-guard): count a quarter of other apps' memory in balanced (#4349) (#4372)
 ```
 
 If upstream moves the commit, regenerate both patch series
