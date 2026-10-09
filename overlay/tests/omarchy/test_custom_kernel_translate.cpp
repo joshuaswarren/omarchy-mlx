@@ -594,6 +594,54 @@ TEST_CASE("single-token typedefs expand to their type") {
   CHECK(glsl.find("float v = _mlx_arg0[i];") != std::string::npos);
 }
 
+TEST_CASE("constexpr if is refused by name") {
+  // The MoE combine row picks a half path with `if constexpr`; the
+  // constexpr strip used to leave `if const (...)` — invalid GLSL.
+  const char* source =
+      "[[kernel]] void pick(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  if constexpr (sizeof(float) == 4u) {\n"
+      "    y[i] = x[i];\n"
+      "  } else {\n"
+      "    y[i] = 0.0f;\n"
+      "  }\n"
+      "}\n";
+  try {
+    translate(source, 1);
+    FAIL("constexpr if must be refused");
+  } catch (const std::exception& error) {
+    INFO("actual error: " << error.what());
+    CHECK(std::string(error.what()).find("constexpr if") !=
+          std::string::npos);
+  }
+}
+
+TEST_CASE("body-level decltype does not break instantiation lookup") {
+  // mlx_vlm's verify-attention gqa partial passes decltype template
+  // arguments in the body; the instantiation finder hit the first body
+  // decltype instead of the trailing instantiation line and refused with a
+  // bogus arity mismatch.
+  const char* source =
+      "template <typename T>\n"
+      "[[kernel]] void probe(\n"
+      "    const device float* x [[buffer(0)]],\n"
+      "    device float* y [[buffer(1)]],\n"
+      "    uint i [[thread_position_in_grid]]) {\n"
+      "  float v = x[i];\n"
+      "  float w = decltype(v)(1.0f);\n"
+      "  y[i] = w + T(v);\n"
+      "}\n"
+      "template [[kernel]] decltype(probe<bfloat16_t>) probe<bfloat16_t>;\n";
+  auto glsl = translate(source, 1);
+  // The instantiation was found: the template parameter is substituted and
+  // the bf16 constructor round-trips (the surviving body decltype is a
+  // separate, untranslated construct).
+  CHECK(glsl.find("T(v)") == std::string::npos);
+  CHECK(glsl.find("_mlx_bf16_round_trip(v)") != std::string::npos);
+}
+
 TEST_CASE("auto pointer declarations alias like explicit device pointers") {
   // The Qwen3.5 MoE router/decode row-walk idiom: row alias off a buffer
   // parameter, then a scoped rebind of the buffer's own name to the row.

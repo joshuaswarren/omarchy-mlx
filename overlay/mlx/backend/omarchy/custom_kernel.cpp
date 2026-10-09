@@ -1227,7 +1227,17 @@ void resolve_kernel_templates(
   header = source.substr(0, template_position);
   const std::string declarations =
       source.substr(template_position + 10, template_end - template_position - 10);
-  const auto decltype_position = source.find("decltype(", marker);
+  // The instantiation line is appended after the kernel's closing brace;
+  // searching from the marker would hit decltype template arguments inside
+  // the body itself (mlx_vlm verify-attention gqa partial,
+  // `attn_qmv<decltype(p0), ...>` — misparsed as the instantiation and
+  // refused with a bogus arity mismatch, 2026-10-09).
+  const auto arguments_open = source.find('(', marker);
+  const auto body_open = source.find(
+      '{', matching_delimiter(source, arguments_open, '(', ')'));
+  const auto body_close =
+      matching_delimiter(source, body_open, '{', '}');
+  const auto decltype_position = source.find("decltype(", body_close);
   if (decltype_position == std::string::npos) {
     throw std::runtime_error("generated MSL kernel template has no instantiation");
   }
@@ -1837,6 +1847,16 @@ Translation translate_msl(
   replace_all(body, "simd_shuffle_up", "subgroupShuffleUp");
   replace_all(body, "simd_shuffle_xor", "subgroupShuffleXor");
   replace_all(body, "simd_shuffle", "subgroupShuffle");
+  // `if constexpr (cond)` specializes at compile time (the MoE combine row
+  // picks a half path); the constexpr strip below would leave `if const
+  // (...)` — invalid GLSL — so the construct is refused by name instead of
+  // mistranslating (Qwen3.5 MoE combine row, 2026-10-09).
+  if (std::regex_search(body, std::regex(R"(if\s+constexpr\b)")) ||
+      std::regex_search(header, std::regex(R"(if\s+constexpr\b)"))) {
+    throw std::runtime_error(
+        "unsupported MSL feature `constexpr if` (compile-time "
+        "specialization has no GLSL form)");
+  }
   replace_word(body, "constexpr", "const");
   translate_types(body, parameters);
   translate_c_style_casts(body);
