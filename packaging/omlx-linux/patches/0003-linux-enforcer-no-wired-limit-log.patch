@@ -1,16 +1,16 @@
 diff --git a/omlx/process_memory_enforcer.py b/omlx/process_memory_enforcer.py
-index 85609b98..d27ad708 100644
+index 0585b79b..baf5fa82 100644
 --- a/omlx/process_memory_enforcer.py
 +++ b/omlx/process_memory_enforcer.py
-@@ -30,6 +30,7 @@ import asyncio
+@@ -30,6 +30,7 @@ from __future__ import annotations
+ import asyncio
  import inspect
  import logging
- import os
 +import platform
  import subprocess
  import time
  from contextlib import suppress
-@@ -269,6 +270,16 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
+@@ -275,6 +276,16 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
                  suggestion // (1024**2),
              )
          else:

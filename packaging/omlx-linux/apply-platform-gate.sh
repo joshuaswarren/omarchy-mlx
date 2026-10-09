@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Apply the omlx platform-gate patch series to a clean clone of
-# jundot/omlx at the pinned commit (cc1fdc9a24053224521a8dc6e1350d64e8ec16f4,
-# upstream main after v0.7.0, see install.sh).
+# jundot/omlx at the pinned commit (c0b1056b41ebde9422af316cf5038a423eb8f24c,
+# upstream tag v0.7.1.dev1, see install.sh).
 #
 #   packaging/omlx-linux/apply-platform-gate.sh SRC_DIR [--verify-only]
 #
@@ -35,7 +35,7 @@ if [[ ! -d $src/.git ]]; then
     exit 1
 fi
 
-PINNED_HEAD="cc1fdc9a24053224521a8dc6e1350d64e8ec16f4"
+PINNED_HEAD="c0b1056b41ebde9422af316cf5038a423eb8f24c"
 actual="$(git -C "$src" rev-parse HEAD)"
 if [[ "$actual" != "$PINNED_HEAD" ]]; then
     echo "error: $src HEAD is $actual; expected $PINNED_HEAD (jundot/omlx, the pinned commit)" >&2

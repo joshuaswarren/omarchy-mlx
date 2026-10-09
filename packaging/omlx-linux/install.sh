@@ -29,8 +29,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OMARCHY_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-OMLX_REF="cc1fdc9a24053224521a8dc6e1350d64e8ec16f4"
-OMLX_PIN="cc1fdc9a24053224521a8dc6e1350d64e8ec16f4"
+OMLX_REF="c0b1056b41ebde9422af316cf5038a423eb8f24c"
+OMLX_PIN="c0b1056b41ebde9422af316cf5038a423eb8f24c"
 MLX_LM_PIN="94cdcae13b266c337bcaca09b97b9c5a9c0e2cde"
 MLX_VLM_PIN="ea79808ce1e9a19fcb915a96b0c70e37ad393a99"
 
