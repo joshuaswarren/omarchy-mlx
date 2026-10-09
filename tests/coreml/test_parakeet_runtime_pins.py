@@ -242,6 +242,96 @@ def test_checker_skips_tree_without_pin(tmp_path: Path) -> None:
     assert "skip" in done.stdout
 
 
+# --- the worker pin: mlx/bin/mlx-omarchy-ane-worker must be named by the pin
+
+WORKER_BYTES = b"\x7fELF-fake-ane-worker"
+
+
+def _write_installed_tree(
+    tmp_path: Path,
+    libane: bytes,
+    worker: bytes | None = None,
+    worker_pin: str | None = None,
+) -> Path:
+    """Installed layout: mlx/bin beside mlx/share/mlx-omarchy/parakeet-1."""
+    share = tmp_path / "mlx" / "share" / "mlx-omarchy" / "parakeet-1"
+    (share / "libane").mkdir(parents=True)
+    (share / "libane" / "libane-strict.so").write_bytes(libane)
+    assets: dict = {
+        "bundles": {},
+        "libane": {
+            "libane-strict.so": hashlib.sha256(libane).hexdigest(),
+        },
+    }
+    if worker_pin is not None:
+        assets["worker"] = {"mlx-omarchy-ane-worker": worker_pin}
+    (share / "parakeet-runtime-pin.json").write_text(json.dumps({
+        "schema": "mlx-omarchy.parakeet-runtime-pin.v1",
+        "assets": assets,
+    }))
+    if worker is not None:
+        bin_dir = tmp_path / "mlx" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "mlx-omarchy-ane-worker").write_bytes(worker)
+    return share
+
+
+def test_checker_accepts_stamped_worker(tmp_path: Path) -> None:
+    share = _write_installed_tree(
+        tmp_path, b"\x7fELF-fake-libane",
+        worker=WORKER_BYTES,
+        worker_pin=hashlib.sha256(WORKER_BYTES).hexdigest(),
+    )
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "OK" in done.stdout
+
+
+def test_checker_refuses_tampered_worker(tmp_path: Path) -> None:
+    evil = b"\x7fELF-evil-ane-worker"
+    share = _write_installed_tree(
+        tmp_path, b"\x7fELF-fake-libane",
+        worker=evil,
+        worker_pin=hashlib.sha256(WORKER_BYTES).hexdigest(),
+    )
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 1
+    assert "MISMATCH bin/mlx-omarchy-ane-worker" in done.stdout
+    assert hashlib.sha256(WORKER_BYTES).hexdigest() in done.stdout
+    assert hashlib.sha256(evil).hexdigest() in done.stdout
+
+
+def test_checker_refuses_shipped_worker_with_stale_pin(tmp_path: Path) -> None:
+    """Wheels cut before worker pinning ship a worker the pin does not name."""
+    share = _write_installed_tree(
+        tmp_path, b"\x7fELF-fake-libane", worker=WORKER_BYTES,
+    )
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 1
+    assert "UNPINNED bin/mlx-omarchy-ane-worker" in done.stdout
+    assert hashlib.sha256(WORKER_BYTES).hexdigest() in done.stdout
+
+
+def test_checker_passes_build_tree_without_worker(tmp_path: Path) -> None:
+    """Before the wheel build there is no worker file; nothing to check."""
+    share = _write_installed_tree(tmp_path, b"\x7fELF-fake-libane")
+    done = subprocess.run(
+        [sys.executable, str(CHECKER), str(share)],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "OK" in done.stdout
+
+
 # --- actionable seal-mismatch diagnosis (the 2026-10-02 jwm1 defect) ---
 
 

@@ -220,7 +220,15 @@ mismatched tree fails before it ships rather than at first transcribe:
 (`scripts/verify_runtime_assets.py`), `install.sh --system` verifies the
 staged venv, the packaging example runs the same check in `check()`
 (`packaging/PKGBUILD.example`), and the worker seal re-authenticates every
-consumed byte at session open. If a rebuild legitimately changes
+consumed byte at session open. The fd-protocol ANE worker
+(`mlx/bin/mlx-omarchy-ane-worker`) is pinned too: it compiles inside the
+wheel build and is not byte-reproducible across releases, so
+`scripts/build-wheel.sh` stamps the built worker's SHA-256 into
+`assets.worker` of the pin the wheel ships and re-verifies the finished
+wheel; `verify_runtime_assets.py` refuses any installed tree that ships a
+worker its pin does not name. Wheels cut before worker pinning carry no
+`assets.worker` entry and fail the checker — repin the packaging recipe to
+a release built by the stamping pipeline. If a rebuild legitimately changes
 `libane-strict.so` (a new pinned `omarchy-ane` commit), update the pin and
 its provenance in the same commit — never package a tree its own pin does
 not name. When the worker refuses a seal mismatch, the CLI prints the
