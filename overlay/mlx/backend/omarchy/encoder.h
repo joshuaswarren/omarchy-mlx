@@ -28,9 +28,10 @@ namespace mlx::core::omarchy {
 // Storage-buffer binding for |value|: its buffer from byte 0 (kernels add
 // the array's element offset themselves) through the last byte its data
 // reaches. Not the allocation size: allocator round_size bins every
-// request above 1 MiB to a power of two, so a 1-2 GiB array would bind
-// 2^31 bytes and a larger one 2^32 or more, past the device's
-// maxStorageBufferRange (dispatch_compute_pipeline refuses those).
+// request above 1 MiB to one of 8 sizes per power of two (up to 12.5%
+// above the request), so binding the whole allocation could reach past the
+// device's maxStorageBufferRange for an array just under it
+// (dispatch_compute_pipeline refuses those).
 inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
   const VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
