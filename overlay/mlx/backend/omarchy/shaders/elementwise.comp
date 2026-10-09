@@ -9,7 +9,12 @@
 #define STORAGE_TYPE float16_t
 #define LOAD_VALUE(x) float(x)
 #define STORE_VALUE(f) STORAGE_TYPE(f)
-#define ROUND_VALUE(f) float(STORAGE_TYPE(f))
+// float16 never reaches op 41 (FloorDivide::eval_gpu splits it into a
+// Divide and a Floor dispatch). Rounding the quotient with a
+// float16_t round trip inside this kernel did not match the CPU stream
+// on Honeykrisp hardware (FloorDivide test, 37 of 4001 pairs), so the
+// rounding goes through the f16 storage buffer instead.
+#define ROUND_VALUE(f) (f)
 #elif defined(USE_BF16)
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
@@ -742,9 +747,9 @@ void main() {
         break;
       case 41:
         // Upstream FloorDivide on floats is floor(divide(a, b)) with
-        // the quotient rounded to the storage type before the floor,
-        // so f16 and bf16 round first (the same two roundings the
-        // Divide and Floor dispatches gave).
+        // the quotient rounded to the storage type before the floor.
+        // f32 needs no rounding, bf16 rounds through integer math
+        // (bf16_store), f16 is split on the host (see ROUND_VALUE).
         value = floor(ROUND_VALUE(lhs / rhs));
         break;
 #endif  // LITE

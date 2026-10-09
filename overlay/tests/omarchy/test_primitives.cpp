@@ -8209,6 +8209,18 @@ TEST_CASE("FloorDivide on floats matches the CPU stream, including the f16 and b
       bool same = (std::isnan(got[i]) && std::isnan(want[i])) || got[i] == want[i];
       mismatches += same ? 0 : 1;
     }
+    size_t first_bad = xs.size();
+    for (size_t i = 0; i < xs.size(); ++i) {
+      bool same = (std::isnan(got[i]) && std::isnan(want[i])) || got[i] == want[i];
+      if (!same && first_bad == xs.size()) {
+        first_bad = i;
+      }
+    }
+    const char* dtype_name = dt == float16 ? "float16" : "bfloat16";
+    INFO(dtype_name, " first mismatch at ", first_bad);
+    if (first_bad < xs.size()) {
+      INFO("a=", xs[first_bad], " b=", ys[first_bad], " gpu=", got[first_bad], " cpu=", want[first_bad]);
+    }
     CHECK_EQ(mismatches, 0u);
   }
 }

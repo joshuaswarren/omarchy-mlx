@@ -4959,10 +4959,20 @@ void Divide::eval_gpu(const std::vector<array>& inputs, array& out) {
 // complex. Integer and bool: Python semantics, the quotient rounds toward
 // minus infinity and a zero divisor gives 0 like the CPU reference.
 // Float: floor(divide(a, b)) with the quotient rounded to the storage
-// type first, so f16 and bf16 match the CPU and Metal rounding.
+// type first, so f16 and bf16 match the CPU and Metal rounding. f16 runs
+// as a Divide into an f16 temporary and then a Floor, so the rounding
+// happens in the f16 storage buffer rather than inside one kernel.
 void FloorDivide::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (is_int_elementwise_dtype(out.dtype()) || out.dtype() == bool_) {
     dispatch_int_elementwise(name(), IntFloorDivideOperation, inputs, out);
+    return;
+  }
+  if (out.dtype() == float16) {
+    const Stream& s = out.primitive().stream();
+    array quotient(out.shape(), float16, nullptr, {});
+    dispatch_elementwise(name(), DivideOperation, inputs, quotient, s);
+    dispatch_elementwise(name(), FloorOperation, {quotient}, out, s);
+    omarchy::get_command_encoder(s).add_temporary(quotient);
     return;
   }
   dispatch_elementwise(
