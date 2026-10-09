@@ -172,8 +172,11 @@ void main() {
             k_total, gl_CooperativeMatrixLayoutRowMajor);
       }
       for (uint j = 0u; j < SG; j++) {
-        coopMatLoad(mat_b[j], in_w.values, (qcol0 + j * MAT) * k_total + kc,
-            k_total, gl_CooperativeMatrixLayoutColumnMajor);
+        // rhs_offset carries the value-half base (elements of the padded
+        // f32 temp) for the swiglu second pass; zero for the gate half.
+        coopMatLoad(mat_b[j], in_w.values,
+            params.rhs_offset + (qcol0 + j * MAT) * k_total + kc, k_total,
+            gl_CooperativeMatrixLayoutColumnMajor);
       }
       for (uint i = 0u; i < SG; i++) {
         for (uint j = 0u; j < SG; j++) {
