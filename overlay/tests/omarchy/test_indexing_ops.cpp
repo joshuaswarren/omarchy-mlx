@@ -941,6 +941,51 @@ TEST_CASE("scatter_add_axis float Sum computes on the atomic and CAS paths") {
   check_floats(out, {3.0f, 0.0f}, stream);
 }
 
+TEST_CASE("put_along_axis on a negative-stride source matches contiguous copy") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // Bug class: a row-reversed view of the source array has a negative
+  // stride along axis 0; the int32 path in ScatterAxis::eval_gpu
+  // passed src.strides(0) (int64_t = -8) into checked_u32(size_t, ...)
+  // unchecked, which cast a negative int64 to 0xFFFFFFFFFFFFFFF8 and
+  // tripped the "with more than UINT32_MAX elements" refusal on an
+  // 8x8 input. bf16 happened to pass because the check fires before
+  // the dtype branch. After the fix the view route matches the
+  // contiguous copy on every supported dtype.
+  array base = array(
+      {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f,
+       9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f},
+      {8, 2},
+      float32);
+  array indices = array({int32(0), int32(1), int32(2), int32(3)}, {4, 1});
+  array values = array({100.0f, 200.0f, 300.0f, 400.0f,
+                         500.0f, 600.0f, 700.0f, 800.0f},
+                       {4, 2},
+                       float32);
+  array view = base[slice(7, -1, -1)];
+  array copy = contiguous(view, false, stream);
+  array out_view = put_along_axis(view, indices, values, 0, stream);
+  array out_copy = put_along_axis(copy, indices, values, 0, stream);
+  check_floats(out_view, std::vector<float>(out_copy, out_copy + 4 * 2),
+               stream);
+  array base_i = array(
+      {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+      {8, 2},
+      int32);
+  array values_i = array({100, 200, 300, 400, 500, 600, 700, 800},
+                         {4, 2},
+                         int32);
+  array view_i = base_i[slice(7, -1, -1)];
+  array copy_i = contiguous(view_i, false, stream);
+  array out_view_i = put_along_axis(view_i, indices, values_i, 0, stream);
+  array out_copy_i = put_along_axis(copy_i, indices, values_i, 0, stream);
+  check_ints(out_view_i,
+             std::vector<int32_t>(out_copy_i, out_copy_i + 4 * 2),
+             stream);
+}
+
 TEST_CASE("scatter_add_axis accumulates both complex components") {
   if (!compute_available()) {
     return;
