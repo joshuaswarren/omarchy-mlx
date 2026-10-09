@@ -1587,70 +1587,72 @@ TEST_CASE("scaled_dot_product_attention folds sinks into the denominator") {
 // gpt-oss-20b (mlx-lm) feeds bf16 q/k/v and bf16 sinks: H = 64 query heads,
 // 8 kv heads, head_dim 64, an 11-token prefill failed with "attention sinks
 // dtype ... not implemented" because the f32-score composition only took f32
-// sinks. The host reference reads the bf16-rounded inputs back, so only the
-// bf16 output rounding is left in the tolerance.
+// sinks. The API accepts sinks whose promotion with the output dtype is the
+// output dtype, so the two reachable mismatches are bf16 q with bf16 sinks and
+// f32 q with bf16 sinks. The host reference reads the rounded inputs back, so
+// only the output rounding is left in the tolerance.
 TEST_CASE("scaled_dot_product_attention folds bf16 sinks into the denominator") {
   if (!compute_available()) {
     return;
   }
   Stream stream = gpu_stream();
   struct Case {
+    Dtype qkv_dtype;
     int qL, kL;
     const char* mode;
-    bool array_mask;
-    Dtype sink_dtype;
+    double tolerance;
   };
-  std::vector<Case> cases;
-  for (const Dtype sink_dtype : {bfloat16, float32}) {
-    for (auto [qL, kL, mode, array_mask] :
-         {std::tuple<int, int, const char*, bool>{11, 11, "causal", false},
-          {11, 11, "", false},
-          {1, 40, "", false},
-          {11, 11, "array", true}}) {
-      cases.push_back({qL, kL, mode, array_mask, sink_dtype});
-    }
-  }
-  for (const Case c : cases) {
+  const std::vector<Case> cases = {
+      {bfloat16, 11, 11, "causal", 3e-2},
+      {bfloat16, 11, 11, "", 3e-2},
+      {bfloat16, 1, 40, "", 3e-2},
+      {bfloat16, 11, 11, "array", 3e-2},
+      {float32, 11, 11, "", 1e-4},
+      {float32, 1, 40, "", 1e-4},
+  };
+  for (const Case& c : cases) {
     const int B = 1, H = 64, KV = 8, D = 64;
     const float scale = 1.0f / std::sqrt(float(D));
-    auto bf = [&](const std::vector<float>& data, Shape shape) {
-      return astype(array(data.begin(), std::move(shape), float32), bfloat16, stream);
+    auto make = [&](const std::vector<float>& data, Shape shape, Dtype dtype) {
+      return astype(array(data.begin(), std::move(shape), float32), dtype, stream);
     };
-    auto q_raw = pattern(B * H * c.qL * D, 311);
-    auto k_raw = pattern(B * KV * c.kL * D, 313);
-    auto v_raw = pattern(B * KV * c.kL * D, 317);
-    auto sink_raw = pattern(H, 331);
-    array q = bf(q_raw, Shape{B, H, c.qL, D});
-    array k = bf(k_raw, Shape{B, KV, c.kL, D});
-    array v = bf(v_raw, Shape{B, KV, c.kL, D});
-    array sinks = astype(bf(sink_raw, Shape{H}), c.sink_dtype, stream);
-    auto q_data = flat(q, stream);
-    auto k_data = flat(k, stream);
-    auto v_data = flat(v, stream);
-    auto sink_data = flat(sinks, stream);
+    array q = make(pattern(B * H * c.qL * D, 311), Shape{B, H, c.qL, D}, c.qkv_dtype);
+    array k = make(pattern(B * KV * c.kL * D, 313), Shape{B, KV, c.kL, D}, c.qkv_dtype);
+    array v = make(pattern(B * KV * c.kL * D, 317), Shape{B, KV, c.kL, D}, c.qkv_dtype);
+    array sinks = make(pattern(H, 331), Shape{H}, bfloat16);
     std::vector<float> mask_host;
     std::optional<array> mask;
-    if (c.array_mask) {
+    if (std::string(c.mode) == "array") {
       std::vector<float> mask_raw(c.qL * c.kL);
       for (int r = 0; r < c.qL; ++r) {
         for (int col = 0; col < c.kL; ++col) {
           mask_raw[r * c.kL + col] = (col > r || r - col > 6) ? -1e4f : 0.0f;
         }
       }
-      array m = bf(mask_raw, Shape{1, 1, c.qL, c.kL});
-      mask_host = flat(m, stream);
-      mask = m;
+      mask = make(mask_raw, Shape{1, 1, c.qL, c.kL}, c.qkv_dtype);
+      mask_host = flat(*mask, stream);
     }
     auto out = fast::scaled_dot_product_attention(
-        q, k, v, scale, mask ? std::string("array") : std::string(c.mode), mask, sinks, false, stream);
-    const bool causal = std::string(c.mode) == "causal";
+        q, k, v, scale, c.mode, mask, sinks, false, stream);
     require_close(
         flat(out, stream),
         host_sdpa(
-            q_data, k_data, v_data, B, H, KV, c.qL, c.kL, D, scale, causal, sink_data, mask_host),
-        3e-2,
-        std::string("sdpa bf16 q, ") + (c.sink_dtype == bfloat16 ? "bf16" : "f32") +
-            " sinks qL=" + std::to_string(c.qL) + " kL=" + std::to_string(c.kL) +
+            flat(q, stream),
+            flat(k, stream),
+            flat(v, stream),
+            B,
+            H,
+            KV,
+            c.qL,
+            c.kL,
+            D,
+            scale,
+            std::string(c.mode) == "causal",
+            flat(sinks, stream),
+            mask_host),
+        c.tolerance,
+        std::string("sdpa ") + (c.qkv_dtype == bfloat16 ? "bf16" : "f32") +
+            " q, bf16 sinks qL=" + std::to_string(c.qL) + " kL=" + std::to_string(c.kL) +
             " mode=" + c.mode);
   }
 }
