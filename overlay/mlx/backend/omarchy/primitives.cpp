@@ -14681,6 +14681,8 @@ void ScaledDotProductAttention::eval_gpu(
         static_cast<uint64_t>(v.shape(0)) * v.strides()[0] < (1ull << 31) &&
         static_cast<uint64_t>(q.shape(0)) * q.strides()[0] < (1ull << 31)) {
       constexpr uint32_t kCausalFlashWgRows = 32u;
+      const char* cf_diag_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH_DIAG");
+      const int cf_diag = cf_diag_env != nullptr ? std::atoi(cf_diag_env) : 0;
       out.set_data(allocate_omarchy(out.nbytes()));
       omarchy::ComputeParams params;
       params.matrix_m = checked_u32(q_len, tag, out);
@@ -14704,7 +14706,10 @@ void ScaledDotProductAttention::eval_gpu(
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
       encoder.dispatch_compute(
-          omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16,
+          cf_diag == 1 ? omarchy::ComputeKernel::SdpaCausalFlashDiag1
+              : cf_diag == 2 ? omarchy::ComputeKernel::SdpaCausalFlashDiag2
+              : cf_diag == 3 ? omarchy::ComputeKernel::SdpaCausalFlashDiag3
+                             : omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16,
           cf_bindings,
           params,
           (static_cast<uint32_t>(q_len) + kCausalFlashWgRows - 1u) /

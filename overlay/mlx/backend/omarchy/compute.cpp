@@ -575,6 +575,9 @@
 #include "matmul_direct_bf16_tn_ws8.h"
 #include "matmul_direct_bf16_nt_k4s8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
+#include "sdpa_flash_diag1.h"
+#include "sdpa_flash_diag2.h"
+#include "sdpa_flash_diag3.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -1782,6 +1785,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           sdpa_prefill_flash_causal_coopmat_bf16,
           sdpa_prefill_flash_causal_coopmat_bf16_size};
+    case ComputeKernel::SdpaCausalFlashDiag1:
+      return {sdpa_flash_diag1, sdpa_flash_diag1_size};
+    case ComputeKernel::SdpaCausalFlashDiag2:
+      return {sdpa_flash_diag2, sdpa_flash_diag2_size};
+    case ComputeKernel::SdpaCausalFlashDiag3:
+      return {sdpa_flash_diag3, sdpa_flash_diag3_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -1790,6 +1799,9 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::MatmulDirectBF16TnWS8:
     case ComputeKernel::MatmulDirectBF16NtK4S8:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
+    case ComputeKernel::SdpaCausalFlashDiag1:
+    case ComputeKernel::SdpaCausalFlashDiag2:
+    case ComputeKernel::SdpaCausalFlashDiag3:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:

@@ -927,6 +927,10 @@ enum class ComputeKernel : uint16_t {
   // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
   // MatmulGap H35). Append-only profile id.
   SdpaCausalFlashCoopmatBF16,
+  // H42 diagnostic builds (agent/w7q-causal-flash-diag only, never merged): outputs wrong by design.
+  SdpaCausalFlashDiag1,
+  SdpaCausalFlashDiag2,
+  SdpaCausalFlashDiag3,
   Count,
 };
 
