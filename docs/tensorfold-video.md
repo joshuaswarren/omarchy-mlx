@@ -39,27 +39,22 @@ hf download joshuaswarren/MiniMax-H3-int8-omarchy --local-dir hf-bundle
 Clone and patch the engine, then install it editable. No other GitHub PR or issue is opened anywhere as part of this work.
 
 ```bash
-# 1. The render driver lives in this repo; clone it so the script paths below resolve.
+# The render driver lives in this repo; clone it so the script paths resolve.
 git clone https://github.com/joshuaswarren/omarchy-mlx
 cd omarchy-mlx
-git checkout 5bf5834d1bae2b292c3eb63aa6f9a53971ea9c94
+git checkout origin/main
 
-# 2. The H3 engine itself, with the six local patches.
+# The H3 engine itself, with the six local patches.
 git clone https://github.com/drowzeys/TensorFold
 cd TensorFold
 git checkout ea9b63728b690e511722a18ace3b43521a750789
-# The patches directory holds two unrelated patch series (the older `01-` and `02-` pair
-# targets a different upstream; the six `0010-0060-*-*.patch` files target this drowzeys pin).
-# Pin the glob to the newer six:
-for p in /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0010-*-*.patch \
-         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0020-*-*.patch \
-         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0030-*-*.patch \
-         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0040-*-*.patch \
-         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0050-*-*.patch \
-         /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/0060-*-*.patch; do
+# The patches directory holds two unrelated series: the older 01- and 02- pair targets a
+# different upstream; the six 0010-0060 files target this drowzeys pin. Pin the glob:
+for p in /path/to/omarchy-mlx/packaging/tensorfold-linux/patches/{0010,0020,0030,0040,0050,0060}-*-*.patch; do
   patch -p1 < "$p"
 done
 pip install -e .
+pip install numpy tqdm safetensors requests pillow huggingface_hub mlx-vlm
 ```
 
 The patch set:
@@ -70,6 +65,26 @@ The patch set:
 - `0040-h3-int8-state-loader.patch` adds `load_int8_dit` to assemble the DiT from the saved int8 shards with a strict, from-state per-block load and the 8-bit AdaLN requantization.
 - `0050-h3-sampler-resume-checkpoints.patch` adds per-step safetensors checkpoints and `start_index`-driven resume to the sampler, plus the `check_noise` gating on resume.
 - `0060-vae-video-query-chunked-sdpa.patch` chunks the video VAE's SDPA over 1024-row query blocks (the unchunked dispatch binds 3.1 GiB of scores per call, over Vulkan's 2 GiB `maxStorageBufferRange`); the per-row softmax keeps each block bit-identical to the single call.
+
+## Install the omarchy-mlx wheel
+
+The engine's int8 path needs the native `mx.fast.int8_matmul` op. Install the wheel last so the `pip install -e .` step (and any later `pip install mlx`) cannot overwrite it; `pip install` does not detect the override because both packages share the `mlx` import name.
+
+```bash
+cd /path/to/omarchy-mlx
+WHEEL_URL=https://github.com/joshuaswarren/omarchy-mlx/releases/download/tensorfold-video-wheel-95e7b6f/mlx_omarchy-0.32.4.dev202610090724%2B95e7b6f-cp314-cp314-linux_aarch64.whl
+WHEEL_SHA=4dcae17fc998256018623dc73e65e8e82492865525f542905e3f93f2ddd3d291
+curl -L -o /tmp/omarchy-mlx.whl "$WHEEL_URL"
+echo "$WHEEL_SHA  /tmp/omarchy-mlx.whl" | sha256sum -c -
+pip install --force-reinstall --no-deps /tmp/omarchy-mlx.whl
+python -c "import mlx.core as mx; assert hasattr(mx.fast, 'int8_matmul'), 'omarchy-mlx wheel was overwritten by PyPI mlx; reinstall with --force-reinstall --no-deps'"
+```
+
+The python one-liner is mandatory. If it raises `AssertionError`, the wheel was overwritten; the render will then fall back to the MSL bf16 path and fail at the first `mx.eval` after a forward.
+
+## Disk and memory required
+
+The render needs roughly 160 GB free on the target filesystem before `hf download` starts: the HF bundle is 101 GB and the HF xet reconstruction layer writes the file in halves before assembling the final safetensors, peaking at roughly 60 GB of cache for the 50 GB text_encoder-compact.safetensors alone. Per-step denoise checkpoints add another ~1 GB at the directory passed to `--checkpoint-dir`.
 
 ## Install minimax-h3-mlx
 
