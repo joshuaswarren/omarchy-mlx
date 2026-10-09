@@ -20,20 +20,23 @@ namespace mlx::core {
 namespace omarchy {
 
 constexpr size_t kPageSize = 4096;
-constexpr size_t kPowerOfTwoBinThreshold = 1u << 20;
+// Requests above kBinThreshold round up to one of kSubBinsPerOctave sizes
+// per power of two, so a buffer wastes at most 1/kSubBinsPerOctave of its
+// size (12.5%) and still lands in a reusable bin. The previous rule rounded
+// to the next power of two (up to 100% waste): a 24 MiB offload slot array
+// became 32 MiB, 33% more device memory per array, and on a 16 GB host the
+// offloaded Qwen3-30B-A3B ran out of the Honeykrisp heap (50% of RAM).
+constexpr size_t kBinThreshold = 1u << 20;
+constexpr size_t kSubBinsPerOctave = 8;
 
 size_t round_size(size_t size) {
   if (size <= kPageSize) {
     return kPageSize;
   }
-  if (size > kPowerOfTwoBinThreshold) {
-    size_t bin = kPowerOfTwoBinThreshold;
-    while (bin < size && bin <= SIZE_MAX / 2) {
-      bin *= 2;
-    }
-    if (bin >= size) {
-      return bin;
-    }
+  if (size > kBinThreshold && size <= SIZE_MAX / 2) {
+    const size_t octave = size_t{1} << (63 - __builtin_clzll(size));
+    const size_t step = octave / kSubBinsPerOctave;
+    return step * ((size + step - 1) / step);
   }
   return kPageSize * ((size + kPageSize - 1) / kPageSize);
 }
