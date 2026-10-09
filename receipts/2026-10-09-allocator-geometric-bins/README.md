@@ -20,7 +20,17 @@ Claim: since commit `b20211a0b` every allocation above 1 MiB is rounded to the n
 | device | Apple M1 (G13G B1), integrated GPU | Apple M1 Max (G13C) |
 | heap the backend reports to oMLX (`max_recommended_working_set_size`) | 8,111,783,936 bytes, half of RAM | not captured |
 
-Firmware identity was not captured in this session. `vulkaninfo` device lines were captured on the M1 only.
+`vulkaninfo` device lines were captured on the M1 only. Boot firmware identity, read from the device tree after the runs:
+
+| | M1 Max | M1 |
+|---|---|---|
+| board | apple,j316c apple,t6001 apple,arm-platform | apple,j293 apple,t8103 apple,arm-platform |
+| iBoot stage 1 | mBoot-18000.161.10 | mBoot-20457.1.29 |
+| iBoot stage 2 | iBoot-8422.141.2 | iBoot-8422.141.2 |
+| m1n1 stage 1 | v1.6.1-dirty | v1.6.1-dirty |
+| m1n1 stage 2 | v1.6.1-omarchy.aurora14 | v1.6.1-omarchy.aurora14 |
+| OS firmware | 13.5 | 13.5 |
+| system firmware | 26.6.2 | 27.0 |
 
 ## Model
 
@@ -57,7 +67,7 @@ First prefill chunk, per wheel. "Distance" is the commit count from wheel `58724
 
 | wheel (mlx_omarchy dev tag) | distance | after materialize | first chunk |
 |---|---|---|---|
-| 202610031525+58724762 | 0 | 4077 MB | pass |
+| 202610031525+58724762 (the lab's older oMLX venv, see Provenance) | 0 | 4077 MB | pass |
 | 202610050725+5c15fba | 211 | 4077 MB | pass |
 | 202610090448+ae8b801 (parent of the binning commit) | 319 | 4077 MB | pass |
 | 202610090452+b20211a (the binning commit) | 320 | 5436 MB | out of memory, 32 MiB request; active 5760 MB, cache 1858 MB at the failure |
@@ -84,6 +94,27 @@ Prefill of 96 tokens 51.6 s, decode 851 ms per token, greedy token sha `b530b093
 | greedy token sha | `a5b0c7f66acd660d` in all four arms | |
 
 The fix lowers device memory by 5.6 GB (24.8%) for the stock model and leaves speed unchanged within the run-to-run spread.
+
+## Provenance
+
+mlx_provenance.py per measured binary (verified = on-disk mlx.core and libmlx.so hashes equal the installed wheel RECORD):
+
+| chip | wheel or venv | verified | dist version | version matches mx | mlx.core sha256 | libmlx.so sha256 |
+|---|---|---|---|---|---|---|
+| M1 Max | 202610090526+268a332 | match | 0.32.4.dev202610090526+268a332 | yes | f0ebfdafc986 | 664e479e9831 |
+| M1 Max | 202610090456+560684 | match | 0.32.4.dev202610090456+560684 | yes | f0ebfdafc986 | a091e52d8e78 |
+| M1 | 202610090448+ae8b801 | match | 0.32.4.dev202610090448+ae8b801 | yes | dcd72c640d75 | 8e1724687a21 |
+| M1 | 202610090452+b20211a | match | 0.32.4.dev202610090452+b20211a | yes | dcd72c640d75 | 254bf8d7e944 |
+| M1 | 202610090456+560684 | match | 0.32.4.dev202610090456+560684 | yes | f0ebfdafc986 | a091e52d8e78 |
+| M1 | omlx-perf | mismatch | 0.32.4.dev202610031525+58724762 | yes | 6715a0f96c3f | 4160e6a5b74d |
+| M1 | venv | match | 0.32.4.dev202610050725+5c15fba | yes | dcd72c640d75 | b12e98579349 |
+| M1 | venv-ab-2540b10 | match | 0.32.4.dev202610061037+2540b10 | yes | dcd72c640d75 | 56969c2f067f |
+| M1 | venv-ab-bf62cfb | match | 0.32.4.dev202610061041+bf62cfb | yes | dcd72c640d75 | c49388e02bb6 |
+| M1 | venv-h13main | match | 0.32.4.dev202610071056+ef70b8cc | yes | dcd72c640d75 | a8f1116df9ed |
+| M1 | venv-release | match | 0.32.4.dev202610071347+9b5c938 | yes | dcd72c640d75 | 4cec6a66660c |
+| M1 | venv-main | match | 0.32.4.dev202610081002+145886c | yes | f0ebfdafc986 | 982be9ea576b |
+
+All wheels built for this work (`ae8b801`, `b20211a`, `268a332`, `560684`) and the other venvs verify against their wheel RECORD. One exception: the older oMLX venv labelled `58724762` fails the check. Its `libmlx.so` on disk (4160e6a5b74d) is not the file its wheel RECORD lists (b58cae8f7bee), while `mlx.core` matches and the versions agree. The cause is not known. Its row in Result 1 therefore describes that venv's binaries, not wheel `58724762`. The bisect does not depend on it: the wheels built from `ae8b8018b` (pass) and `b20211a0b` (fail) both verify, and so does `5c15fba` (pass). The `mlx.core` extension is byte-identical across `ae8b801`, `b20211a` and `5c15fba` to `9b5c938`, and across `268a332`, `560684` and `145886c`; only `libmlx.so` differs between the base and the fix.
 
 ## Dispatch trace
 
