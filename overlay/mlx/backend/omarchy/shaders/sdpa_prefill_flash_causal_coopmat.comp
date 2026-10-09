@@ -120,7 +120,8 @@ void main() {
   const uint lk = params.matrix_n;
   const uint koff = lk - lq;
 
-  uint row0 = gl_WorkGroupID.x * WG_ROWS + sub * SG_ROWS;
+  // Heaviest causal tiles first (MatmulGap H40): the same tiles, launched in descending order.
+  uint row0 = (gl_NumWorkGroups.x - 1u - gl_WorkGroupID.x) * WG_ROWS + sub * SG_ROWS;
   if (row0 >= lq) {
     return;
   }
