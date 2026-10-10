@@ -5423,6 +5423,43 @@ TEST_CASE("cpu quantized matmul full-row dot matches host at large K") {
   run_case(8256, 4, 64, 4); // 129-group tail: non-power-of-two group count
 }
 
+TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Stream cpu = default_stream(Device::cpu);
+  // 64 rows over 32 experts: 2 rows per expert, past the 64-row floor but under the
+  // measured break-even (H71: 0.55x at 1 row per expert, 0.81x at 2, 1.36x at 4).
+  const int experts = 32;
+  const int rows = 64;
+  const int n = 64;
+  const int k = 64;
+  std::vector<uint32_t> rhs_v;
+  for (int e = 0; e < experts; ++e) {
+    rhs_v.insert(rhs_v.end(), rows / experts, static_cast<uint32_t>(e));
+  }
+  array w = astype(
+      random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+      bfloat16,
+      cpu);
+  auto parts = quantize(w, 64, 4, "affine", std::nullopt, cpu);
+  array x = astype(
+      random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+      bfloat16,
+      cpu);
+  array rhs(rhs_v.begin(), Shape{rows}, uint32);
+  setenv("MLX_OMARCHY_GATHER_QMM_TILE", "1", 1);
+  array out = gather_qmm(
+      x, parts[0], parts[1], parts[2], std::nullopt, rhs, true, 64, 4, "affine",
+      std::nullopt, true, stream);
+  REQUIRE(evaluation_error(out).empty());
+  const int64_t kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+  unsetenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  CHECK(kernel != static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmTileBF16));
+  CHECK(kernel != static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmTileF16));
+}
+
 // Sorted-expert prefill route of gather_qmm (shaders/gather_qmm_tile.comp):
 // x is [B, 1, K] with one expert id per row and the ids sorted, the shape
 // mlx-lm's SwitchLinear passes at N*k >= 64 rows. The tile kernel must equal

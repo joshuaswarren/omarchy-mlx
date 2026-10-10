@@ -3420,7 +3420,16 @@ void dispatch_gather_qmm(
   const auto& tile_caps = encoder.device().capabilities();
   // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
   // so only the biased kernels exist.
+  // Average rows per expert (rows over the leading weight batch) of at least 4: measured on
+  // M1 Max, Qwen3-30B-A3B, the route loses at 1 row per expert (0.55x) and 2 (0.81x) and wins
+  // at 4 (1.36x) and 8 (2.06x) (notebook H71). 3 is unmeasured and stays on the per-row route.
+  // Real routing is not uniform, so this average is a proxy for run length.
+  size_t tile_experts = 1;
+  for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
+    tile_experts *= static_cast<size_t>(w.shape(axis));
+  }
   if (right_sorted && !fp_mode && !no_bias && params.matrix_m == 1 && index_count >= 64 &&
+      index_count >= 4 * tile_experts &&
       (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
       group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
       (out.dtype() == bfloat16 || out.dtype() == float16) &&
