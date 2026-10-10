@@ -28,8 +28,9 @@ as the default here; the diff to the PR head is the default flip, the kill switc
 
 The M2 venv copy printed an older dist-info version string than the wheel under test; the loaded library was the experiment build.
 
-At the PR head, M1 Max (G13C), build and test (Linux kernel 7.1.12-2, packaged ICD `omarchy-mlx-vulkan` 0.7.28-2, driver library sha256 prefix
-`ac837b1c`; the test log does not print the device name):
+At the PR code, M1 Max (G13C), build and test (Linux kernel 7.1.12-2). The run exports a private Honeykrisp build through
+`VK_ICD_FILENAMES` (Mesa git `6543eeb7df7`, driver library sha256 prefix `3546bcafe8ed3995`, the same library as the M1 Max column of
+`receipts/2026-10-08-causal-flash-prefill`). The test log does not print the device name:
 
 | Run | Result |
 |---|---|
@@ -39,7 +40,7 @@ At the PR head, M1 Max (G13C), build and test (Linux kernel 7.1.12-2, packaged I
 
 The 8 failed assertions are the same in both runs and match the freeze battery: 4 in the `may_fail` SDPA VJP case (`test_fast_ops.cpp:80`) and 4 in the
 `may_fail` fused GDN VJP cases (`test_fast_ops.cpp:4066`). Both are documented in `docs/known-defects.md`. Both suite runs used one binary
-(`5c4ae47c1c9d047c`). The build ran on the earlier ICD; the suites ran after the ICD update.
+(`5c4ae47c1c9d047c`). The build and both suite runs used the same exported ICD.
 
 ## Not covered
 
