@@ -107,3 +107,18 @@ The fill compiles every input, refuses to leave a compiled kernel unmapped
 in the gate table, and records the expected refusals. `--check` (no
 toolchain needed) verifies the directory covers every input and is the
 release-gate form.
+
+The `.metal` inputs must be byte-identical to the MSL the runtime assembles
+at dispatch (`sha256(msl + NUL + entry)` is the dispatch key): derive them
+from the production call sites (the oMLX/mlx_vlm callers), not from the
+parity rig's own call shapes and not from re-assembled wrappers. Two
+conventions drifted this way once: the pre-2026-10-10 artifact inputs used
+an older mlx wrapper (double underscore after the template hash, `s` for
+small constant arrays), and the parity rig passes `(1,)` arrays where
+production passes 0-d scalars (`mx.array(x)`) — the rig-shaped MSL does not
+even compile for sources that read those params as values. One kernel keeps
+two call contracts: `omlx_chain_attn_partial` ships the production module
+(shape/strides passed via the source-references mechanism, six inputs); the
+parity rig calls it with the strides as real arrays, which assembles twelve
+MSL arguments against ten kernel buffers, so `validate_dispatch` rejects it
+by design and the rig contract intentionally ships no module.

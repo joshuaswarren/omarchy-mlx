@@ -1,11 +1,9 @@
 {
- "module": "custom_kernel_omlx_qwen4_gdn_prefill_prework__bfloat16_t_16_32_128_128_3_8192_1__bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_ints_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t.spv",
+ "module": "custom_kernel_omlx_qwen35_gdn_prework_S1__bfloat16_t_16_32_128_128_3_8192_1_0_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t.spv",
  "capabilities": [
-  "GroupNonUniformShuffle",
+  "GroupNonUniformArithmetic",
   "Int16",
-  "Shader",
-  "VariablePointers",
-  "VariablePointersStorageBuffer"
+  "Shader"
  ],
  "extensions": [
   "SPV_KHR_non_semantic_info"
@@ -24,7 +22,7 @@
  },
  "kernels": [
   {
-   "name": "custom_kernel_omlx_qwen4_gdn_prefill_prework__bfloat16_t_16_32_128_128_3_8192_1__bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_ints_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
+   "name": "custom_kernel_omlx_qwen35_gdn_prework_S1__bfloat16_t_16_32_128_128_3_8192_1_0_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
    "args": [
     {
      "ordinal": 0,
@@ -59,15 +57,15 @@
      "metal_type": "const constant bfloat16_t&"
     },
     {
-     "ordinal": 5,
+     "ordinal": 4,
      "kind": "storage_buffer",
      "set": 0,
      "binding": 4,
-     "metal_name": "s_len",
-     "metal_type": "const constant int&"
+     "metal_name": "k_scale",
+     "metal_type": "const constant bfloat16_t&"
     },
     {
-     "ordinal": 6,
+     "ordinal": 5,
      "kind": "storage_buffer",
      "set": 0,
      "binding": 5,
@@ -75,7 +73,7 @@
      "metal_type": "device bfloat16_t*"
     },
     {
-     "ordinal": 7,
+     "ordinal": 6,
      "kind": "storage_buffer",
      "set": 0,
      "binding": 6,
@@ -83,7 +81,7 @@
      "metal_type": "device bfloat16_t*"
     },
     {
-     "ordinal": 8,
+     "ordinal": 7,
      "kind": "storage_buffer",
      "set": 0,
      "binding": 7,
@@ -91,7 +89,7 @@
      "metal_type": "device bfloat16_t*"
     },
     {
-     "ordinal": 9,
+     "ordinal": 8,
      "kind": "storage_buffer",
      "set": 0,
      "binding": 8,
@@ -102,9 +100,9 @@
    "workgroup_size": null
   }
  ],
- "name": "custom_kernel_omlx_qwen4_gdn_prefill_prework__bfloat16_t_16_32_128_128_3_8192_1__bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_ints_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
+ "name": "custom_kernel_omlx_qwen35_gdn_prework_S1__bfloat16_t_16_32_128_128_3_8192_1_0_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
  "kernel": {
-  "name": "custom_kernel_omlx_qwen4_gdn_prefill_prework__bfloat16_t_16_32_128_128_3_8192_1__bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_ints_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
+  "name": "custom_kernel_omlx_qwen35_gdn_prework_S1__bfloat16_t_16_32_128_128_3_8192_1_0_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
   "args": [
    {
     "ordinal": 0,
@@ -139,15 +137,15 @@
     "metal_type": "const constant bfloat16_t&"
    },
    {
-    "ordinal": 5,
+    "ordinal": 4,
     "kind": "storage_buffer",
     "set": 0,
     "binding": 4,
-    "metal_name": "s_len",
-    "metal_type": "const constant int&"
+    "metal_name": "k_scale",
+    "metal_type": "const constant bfloat16_t&"
    },
    {
-    "ordinal": 6,
+    "ordinal": 5,
     "kind": "storage_buffer",
     "set": 0,
     "binding": 5,
@@ -155,7 +153,7 @@
     "metal_type": "device bfloat16_t*"
    },
    {
-    "ordinal": 7,
+    "ordinal": 6,
     "kind": "storage_buffer",
     "set": 0,
     "binding": 6,
@@ -163,7 +161,7 @@
     "metal_type": "device bfloat16_t*"
    },
    {
-    "ordinal": 8,
+    "ordinal": 7,
     "kind": "storage_buffer",
     "set": 0,
     "binding": 7,
@@ -171,7 +169,7 @@
     "metal_type": "device bfloat16_t*"
    },
    {
-    "ordinal": 9,
+    "ordinal": 8,
     "kind": "storage_buffer",
     "set": 0,
     "binding": 8,
@@ -185,9 +183,9 @@
   "clang": "clang version 23.1.1 (https://github.com/llvm/llvm-project 6dfe1677ab8dffbc6ec13d53a1e0215d75147689)",
   "opt": "LLVM (http://llvm.org/):",
   "clspv": "LLVM (http://llvm.org/):",
-  "clspv_sha256": "00bc42854466a824513730f0e3f2a50a145ad48921d0f778691847a70b225765",
+  "clspv_sha256": "10f47f7b9bd7eed0b9c532b92eb65a195058cacf12d879eda6f4f9b520a015d7",
   "include_sha256": "fb278607df8e5be9db881389d67237ed9c30f823f523e8520cd0aa82533acada",
-  "clspv_patches_sha256": "e42d37480143db62c0677ef3a969b900a77335a724530e7c73ddabf49ddbdb0c",
-  "sources_sha256": "4f11b81e6da9af0ad86a63cfa1917a8130fd99d8b7f2a438e530cb17fb8832ca"
+  "clspv_patches_sha256": "224de5809aeb6cf36f4a08fa5c9de72136bf91ee8a320f5b9f190c546351b3ef",
+  "sources_sha256": "c5e7d4c17ff7b369b03950645283a5c5e2f537b90c87c81625c52e614a352d71"
  }
 }
