@@ -1908,9 +1908,25 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
         all_half = all_half && signature[position];
       }
       std::string& arg = args[position];
-      const bool already =
-          arg.find("float16_t(") != std::string::npos &&
-          arg.find("float16_t(") == arg.find_first_not_of(" \t\n");
+      // Already half only when ONE float16_t(...) constructor spans the whole
+      // argument; `float16_t(w[1]) + w[2]` starts with one but is a float sum.
+      bool already = false;
+      {
+        const size_t first = arg.find_first_not_of(" \t\n");
+        const size_t last = arg.find_last_not_of(" \t\n");
+        static const std::string cast = "float16_t(";
+        if (first != std::string::npos && arg.compare(first, cast.size(), cast) == 0) {
+          int cast_depth = 0;
+          size_t k = first + cast.size() - 1;
+          for (; k <= last; ++k) {
+            cast_depth += arg[k] == '(' ? 1 : arg[k] == ')' ? -1 : 0;
+            if (cast_depth == 0) {
+              break;
+            }
+          }
+          already = k == last;
+        }
+      }
       if (any_signature && all_half && !already && has_operator(arg)) {
         const size_t lead = arg.find_first_not_of(" \t\n");
         const size_t tail = arg.find_last_not_of(" \t\n");
