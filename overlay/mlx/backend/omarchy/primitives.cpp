@@ -5989,8 +5989,9 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool raw_i64_table = table.dtype() == int64 || table.dtype() == uint64;
   bool complex_table = table.dtype() == complex64;
   bool bool_table = table.dtype() == bool_;
+  bool byte_table = table.dtype() == uint8 || table.dtype() == int8;
   if (raw_word_table || raw_half_table || raw_i64_table || complex_table ||
-      bool_table) {
+      bool_table || byte_table) {
     if (out.dtype() != table.dtype()) {
       omarchy::unsupported("Take dtype", out);
     }
@@ -6192,9 +6193,10 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.size() == 0) {
     return;
   }
-  // Packed-bool output merges through atomicOr, so the uninitialized
-  // allocation must start at zero or stale lanes survive an OR of 0.
-  if (bool_table) {
+  // Packed-bool and raw-byte outputs merge through atomicOr, so the
+  // uninitialized allocation must start at zero or stale lanes survive
+  // an OR of 0.
+  if (bool_table || byte_table) {
     size_t zero_bytes = (out.nbytes() + 3u) & ~size_t{3u};
     encoder.fill_buffer(binding(out).buffer, 0u, zero_bytes, 0);
   }
@@ -6235,6 +6237,9 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
       : bool_table
       ? (nidx > 1 ? omarchy::ComputeKernel::TakeMultiBool
                   : omarchy::ComputeKernel::TakeBool)
+      : byte_table
+      ? (nidx > 1 ? omarchy::ComputeKernel::TakeMultiU8
+                  : omarchy::ComputeKernel::TakeU8)
       : raw_word_table
       ? (nidx > 1 ? omarchy::ComputeKernel::TakeMultiU32
                   : omarchy::ComputeKernel::TakeU32)

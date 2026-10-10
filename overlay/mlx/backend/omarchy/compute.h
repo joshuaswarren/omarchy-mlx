@@ -960,6 +960,12 @@ enum class ComputeKernel : uint16_t {
   // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
   // MatmulGap H35). Append-only profile id.
   SdpaCausalFlashCoopmatBF16,
+  // Byte-table gather lanes (uint8/int8 tables) riding the word
+  // transport of shaders/gather_take.comp USE_U8: BYTE_AT lane
+  // extraction on reads, atomicOr byte merge into a pre-zeroed output.
+  // Append-only profile id.
+  TakeU8,
+  TakeMultiU8,
   Count,
 };
 
