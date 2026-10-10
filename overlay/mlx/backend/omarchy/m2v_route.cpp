@@ -808,6 +808,7 @@ std::string validate_dispatch(
   for (const auto& region : reflection.push_constant_regions) {
     push_end = std::max(push_end, region.offset + region.size);
   }
+  int position = 0;
   for (const auto& arg : reflection.args) {
     if (arg.kind != "storage_buffer") {
       return "argument " + std::to_string(arg.ordinal) + " (" +
@@ -821,7 +822,7 @@ std::string validate_dispatch(
           " binds in descriptor set " + std::to_string(arg.set) +
           "; the backend only provides set 0";
     }
-    if (arg.binding != arg.ordinal) {
+    if (arg.binding != position++) {
       return "argument " + std::to_string(arg.ordinal) + " binds at slot " +
           std::to_string(arg.binding) +
           "; the backend writes descriptors in argument order, so a moved "

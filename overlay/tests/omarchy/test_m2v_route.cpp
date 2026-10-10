@@ -332,6 +332,11 @@ TEST_CASE("dispatch validation") {
         validate_dispatch(parse_reflection(moved), 2, {256, 1, 1});
     CHECK(reason.find("binds at slot 5") != std::string::npos);
   }
+  SUBCASE("sparse source ordinals with dense bindings are accepted") {
+    auto sparse = std::string(storage_only);
+    sparse.replace(sparse.find("\"ordinal\": 1"), 12, "\"ordinal\": 5");
+    CHECK(validate_dispatch(parse_reflection(sparse), 2, {256, 1, 1}).empty());
+  }
   SUBCASE("an oversized push constant block is refused") {
     auto big = std::string(storage_only);
     big.replace(

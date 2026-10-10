@@ -3528,9 +3528,9 @@ void CustomKernel::eval_gpu(
       const std::string problem = m2v::validate_dispatch(
           module.reflection,
           bindings.size(),
-          {static_cast<uint32_t>(threads_x),
-           static_cast<uint32_t>(threads_y),
-           static_cast<uint32_t>(threads_z)});
+          {static_cast<uint32_t>(local_x),
+           static_cast<uint32_t>(local_y),
+           static_cast<uint32_t>(local_z)});
       if (!problem.empty()) {
         throw std::runtime_error(problem);
       }
@@ -3539,9 +3539,9 @@ void CustomKernel::eval_gpu(
       VkSpecializationInfo spec{};
       std::array<VkSpecializationMapEntry, 3> spec_entries{};
       const std::array<uint32_t, 3> local = {
-          static_cast<uint32_t>(threads_x),
-          static_cast<uint32_t>(threads_y),
-          static_cast<uint32_t>(threads_z)};
+          static_cast<uint32_t>(local_x),
+          static_cast<uint32_t>(local_y),
+          static_cast<uint32_t>(local_z)};
       const VkSpecializationInfo* spec_pointer = nullptr;
       if (module.reflection.workgroup_size_spec_constant_ids.has_value()) {
         for (size_t axis = 0; axis < 3; ++axis) {
