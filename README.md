@@ -327,11 +327,17 @@ kernel and driver module build it ran on, because they changed between runs:
 - Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13
   percent of calls take longer than 0.4 ms, in a pattern that repeats every 8
   calls.
+- Loading a held program from a second process (module `bd34a12`, kernel 7.1.12-2-12.6-sep-ARCH, 2026-10-10, one run
+  on one boot). A second process that loads a program the first process already holds no longer fails. Three passes
+  over the 38 Qwen3.8-2B programs loaded 38 of 38 each time. The allocator total grew by 2.4 GB in pass 1, by 196,608
+  bytes in pass 2 and by 0 bytes in pass 3. The inputs were zeros and no decode ran through this path, so this is not a
+  tokens-per-second figure. The raw files are in the
+  [receipt](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-prog-lookup).
 
-Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and the
-per-call load path under repeated loads (a second pass over the 38 programs
-failed 5 times with a buffer-allocation error; the resident path is the
-supported fast path).
+Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and the resident session or Parakeet on module
+`bd34a12`. On the earlier module `ca09ce8`, a second pass over the 38 programs failed 5 times with a buffer-allocation
+error. The receipt above shows that pass loading on `bd34a12`. A tokens-per-second figure for the per-call path on that
+module has not been measured.
 
 ## Turn on the ANE for your chip
 
