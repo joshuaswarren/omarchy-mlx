@@ -14111,10 +14111,44 @@ void rope_trig_gate(
   }
   float inv_freq_bound;
   if (freqs != nullptr) {
-    array freqs_min = min(abs(*freqs, stream), stream);
-    settle({freqs_min});
-    omarchy::get_command_encoder(stream).synchronize("rope_freqs_bound");
-    inv_freq_bound = 1.0f / freqs_min.item<float>();
+    // H66 experiment: MLX_OMARCHY_ROPE_FREQS_HOST=1 reads the (tiny) freqs
+    // array on the host after settle + synchronize, like the scalar offset
+    // branch, instead of building min(abs(freqs)) behind a nested join. The
+    // nested graph's wait on an input's async-eval latch can never be
+    // satisfied mid-tape (H51: JOIN reason=rope_freqs_bound, observed=1
+    // target=2). Read on every call: nothing here caches environment state.
+    const bool host_read = omarchy::env_flag("MLX_OMARCHY_ROPE_FREQS_HOST") &&
+        freqs->dtype() == float32 && freqs->flags().row_contiguous;
+    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+      fprintf(
+          stderr,
+          "[rtmod] ROPE-FREQS size=%zu status=%d has_primitive=%d host_read=%d\n",
+          freqs->size(),
+          static_cast<int>(freqs->status()),
+          freqs->has_primitive() ? 1 : 0,
+          host_read ? 1 : 0);
+    }
+    if (host_read) {
+      settle({*freqs});
+      omarchy::get_command_encoder(stream).synchronize("rope_freqs_host");
+      freqs->detach_event();
+      const float* values = freqs->data<float>();
+      float smallest = std::abs(values[0]);
+      for (size_t i = 0; i < freqs->size(); ++i) {
+        const float magnitude = std::abs(values[i]);
+        if (std::isnan(magnitude)) {
+          smallest = magnitude;
+          break;
+        }
+        smallest = std::min(smallest, magnitude);
+      }
+      inv_freq_bound = 1.0f / smallest;
+    } else {
+      array freqs_min = min(abs(*freqs, stream), stream);
+      settle({freqs_min});
+      omarchy::get_command_encoder(stream).synchronize("rope_freqs_bound");
+      inv_freq_bound = 1.0f / freqs_min.item<float>();
+    }
   } else {
     float beta = static_cast<float>(std::log(base) / (dims / 2));
     inv_freq_bound =
