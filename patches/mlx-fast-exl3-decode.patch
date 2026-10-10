@@ -1,6 +1,14 @@
 --- a/mlx/fast.h
 +++ b/mlx/fast.h
-@@ -33,6 +33,25 @@
+@@ -1,6 +1,7 @@
+ // Copyright © 2023-2024 Apple Inc.
+ 
+ #pragma once
+ 
++#include <cstdint>
+ #include <optional>
+ #include <variant>
+@@ -33,6 +34,44 @@
      float eps,
      StreamOrDevice s = {});
  
@@ -22,6 +30,25 @@
 +    Dtype out_dtype,
 +    StreamOrDevice s = {});
 +
++// Debug/reference hook for the M3a device bisect: the exact reference
++// decode with the GPU kernel's per-stage scratch contents. dec16_out
++// receives (in_features/128) * (out_features/128) * 16384 uint32 words,
++// one zero-extended f16 bit pattern per word in block-local row-major
++// order (the shader's dec16 scratch layout); mid_out receives the same
++// element count as floats holding row H128 + suh (the shader's tmp
++// scratch). Either pointer may be null.
++MLX_API void exl3_reconstruct_stages(
++    const std::uint16_t* trellis,
++    const std::uint16_t* suh,
++    const std::uint16_t* svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    float* out,
++    std::uint32_t* dec16_out,
++    float* mid_out);
++
 +
  MLX_API array layer_norm(
      const array& x,
@@ -36,7 +63,7 @@
  #include <numeric>
  
  #include "mlx/fast.h"
-@@ -253,6 +255,350 @@
+@@ -253,6 +255,401 @@
    return fallback({x, passed_weight})[0];
  }
  
@@ -186,8 +213,9 @@
 +// reference's exact f32 accumulation order. The trellis walk is the
 +// reference's global row-major order over ALL 16x16 tiles (the sushi bank
 +// layout [in/16, out/16, packed]), not per-128x128-block runs. Returns
-+// f32; the caller rounds to the output dtype.
-+void exl3_reconstruct(
++// f32; the caller rounds to the output dtype. dec16_out/mid_out, when
++// non-null, receive the shader scratch equivalents (see fast.h).
++void exl3_reconstruct_impl(
 +    const uint16_t* trellis,
 +    const uint16_t* suh,
 +    const uint16_t* svh,
@@ -195,11 +223,14 @@
 +    int out_features,
 +    int bits,
 +    int window,
-+    float* out) {
++    float* out,
++    uint32_t* dec16_out,
++    float* mid_out) {
 +  const uint32_t n = static_cast<uint32_t>(bits) * 16;
 +  const uint16_t mask = static_cast<uint16_t>((1u << window) - 1u);
 +  const int in_tiles = in_features / 16;
 +  const int out_tiles = out_features / 16;
++  const int out_blocks = out_features / 128;
 +  const size_t packed_n = n;
 +  uint16_t tile[256];
 +  std::vector<uint16_t> inner(
@@ -215,6 +246,20 @@
 +                   static_cast<size_t>(tn) * 16],
 +            &tile[static_cast<size_t>(r) * 16],
 +            16 * sizeof(uint16_t));
++      }
++    }
++  }
++  if (dec16_out != nullptr) {
++    // The shader's dec16 scratch: per 128x128 block, one zero-extended
++    // f16 bit pattern per uint32 word, block-local row-major.
++    for (int b = 0; b < (in_features / 128) * out_blocks; b++) {
++      int rb = (b / out_blocks) * 128;
++      int cb = (b % out_blocks) * 128;
++      for (int r = 0; r < 128; r++) {
++        for (int c = 0; c < 128; c++) {
++          dec16_out[static_cast<size_t>(b) * 16384 + r * 128 + c] =
++              inner[static_cast<size_t>(rb + r) * out_features + cb + c];
++        }
 +      }
 +    }
 +  }
@@ -241,8 +286,13 @@
 +        hv[r] = acc;
 +      }
 +      for (int r = 0; r < 128; r++) {
-+        out[static_cast<size_t>(rb + r) * out_features + col] =
-+            hv[r] * exl3_f16_to_f32(suh[rb + r]);
++        float scaled = hv[r] * exl3_f16_to_f32(suh[rb + r]);
++        out[static_cast<size_t>(rb + r) * out_features + col] = scaled;
++        if (mid_out != nullptr) {
++          mid_out[static_cast<size_t>((rb / 128) * out_blocks + col / 128) *
++                      16384 +
++                  r * 128 + col % 128] = scaled;
++        }
 +      }
 +    }
 +  }
@@ -276,6 +326,30 @@
 +}
 +
 +} // namespace
++
++void exl3_reconstruct_stages(
++    const uint16_t* trellis,
++    const uint16_t* suh,
++    const uint16_t* svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    float* out,
++    std::uint32_t* dec16_out,
++    float* mid_out) {
++  exl3_reconstruct_impl(
++      trellis,
++      suh,
++      svh,
++      in_features,
++      out_features,
++      bits,
++      window,
++      out,
++      dec16_out,
++      mid_out);
++}
 +
 +array exl3_decode(
 +    const array& trellis,
@@ -362,7 +436,7 @@
 +    }
 +    std::vector<float> w(
 +        static_cast<size_t>(in_features) * static_cast<size_t>(out_features));
-+    exl3_reconstruct(
++    exl3_reconstruct_impl(
 +        inputs[0].data<uint16_t>(),
 +        inputs[1].data<uint16_t>(),
 +        inputs[2].data<uint16_t>(),
@@ -370,7 +444,9 @@
 +        out_features,
 +        bits,
 +        window,
-+        w.data());
++        w.data(),
++        nullptr,
++        nullptr);
 +    array out(w.data(), Shape{in_features, out_features}, float32);
 +    return std::vector<array>{astype(out, out_type, s)};
 +  };
@@ -389,7 +465,7 @@
  std::vector<array> RMSNorm::vjp(
      const std::vector<array>& primals,
      const std::vector<array>& cotangents,
-@@ -325,6 +671,13 @@
+@@ -325,6 +722,13 @@
    return eps_ == a_other.eps_ && scale_ == a_other.scale_;
  }
  

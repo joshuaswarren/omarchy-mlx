@@ -14,6 +14,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <random>
 #include <vector>
 
@@ -87,6 +89,52 @@ bool qualifying_gpu() {
 
 } // namespace
 
+// Debug bisect companion (MLX_OMARCHY_EXL3_DEBUG_DUMP=<dir>): the GPU side
+// dumps dec16/tmp/out inside Exl3Decode::eval_gpu. For every GPU call this
+// writes the matching CPU reference stages — dec16 (f16-bit tile decode,
+// uint32 words), tmp (row H128 + suh), out (f32) — plus a manifest line.
+// exl3_dump_compare.py pairs call= and ref= entries by (dims, rate, dtype)
+// and prints per-stage first-mismatch indices.
+void dump_reference_stages(
+    const std::vector<uint16_t>& tv,
+    const std::vector<uint16_t>& su,
+    const std::vector<uint16_t>& sv,
+    int in_f,
+    int out_f,
+    int bits,
+    int window,
+    Dtype dt) {
+  const char* dir = std::getenv("MLX_OMARCHY_EXL3_DEBUG_DUMP");
+  if (dir == nullptr || dir[0] == '\0') {
+    return;
+  }
+  static uint32_t ref_index = 0;
+  uint32_t idx = ref_index++;
+  size_t blocks =
+      static_cast<size_t>(in_f / 128) * static_cast<size_t>(out_f / 128);
+  std::vector<float> w(static_cast<size_t>(in_f) * out_f);
+  std::vector<uint32_t> dec16(blocks * 16384);
+  std::vector<float> mid(blocks * 16384);
+  exl3_reconstruct_stages(
+      tv.data(), su.data(), sv.data(), in_f, out_f, bits, window, w.data(),
+      dec16.data(), mid.data());
+  const char* dtype_tag =
+      (dt == float32) ? "f32" : (dt == float16) ? "f16" : "bf16";
+  auto write_all = [&](const std::string& path, const void* data,
+                       size_t bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+  };
+  std::string base = std::string(dir) + "/ref" + std::to_string(idx);
+  write_all(base + "_dec16_u32.bin", dec16.data(), dec16.size() * 4);
+  write_all(base + "_tmp_f32.bin", mid.data(), mid.size() * 4);
+  write_all(base + "_out_f32.bin", w.data(), w.size() * 4);
+  std::ofstream manifest(std::string(dir) + "/manifest.txt", std::ios::app);
+  manifest << "ref=" << idx << " in=" << in_f << " out=" << out_f
+           << " bits=" << bits << " window=" << window
+           << " dtype=" << dtype_tag << "\n";
+}
+
 TEST_CASE("exl3 decode gpu vs cpu reference") {
   if (!qualifying_gpu()) {
     return;
@@ -122,6 +170,8 @@ TEST_CASE("exl3 decode gpu vs cpu reference") {
       array g = fast::exl3_decode(
           trellis, suh, svh, c.in_f, c.out_f, c.bits, c.window, dt, gs);
       eval(g);
+      dump_reference_stages(
+          tv, su, sv, c.in_f, c.out_f, c.bits, c.window, dt);
       array r = fast::exl3_decode(
           trellis, suh, svh, c.in_f, c.out_f, c.bits, c.window, dt, cs);
       eval(r);

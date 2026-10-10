@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string_view>
 #include <initializer_list>
 #include <optional>
@@ -13121,6 +13123,59 @@ bool Exl3Decode::use_fallback(Stream s) {
   return s.device == Device::cpu;
 }
 
+// Debug bisect hook for the Exl3Decode integration bug (MLX_OMARCHY_
+// EXL3_DEBUG_DUMP=<dir>): forces one synchronize so the dispatch retires,
+// then writes the three stage buffers as raw binary files and appends a
+// manifest line. dec16 = f16-bit tile decode (uint32 words, stage A), tmp
+// = f32 chain between the row and column Hadamard stages, out = final
+// output in the caller's dtype. The comparison tool joins these against
+// the CPU reference per stage.
+void exl3_debug_dump_stages(
+    CommandEncoder& encoder,
+    const std::string& tag,
+    const array& dec16,
+    const array& tmp,
+    const array& out,
+    int in_features,
+    int out_features,
+    int bits,
+    int window) {
+  const char* dir = std::getenv("MLX_OMARCHY_EXL3_DEBUG_DUMP");
+  if (dir == nullptr || dir[0] == '\0') {
+    return;
+  }
+  encoder.synchronize("exl3 debug stage dump");
+  static std::atomic<uint32_t> call_index{0};
+  uint32_t idx = call_index.fetch_add(1);
+  const char* dtype_tag = (out.dtype() == float32)   ? "f32"
+      : (out.dtype() == float16)                     ? "f16"
+                                                         : "bf16";
+  auto* dec_buf =
+      static_cast<const omarchy::VulkanBuffer*>(dec16.buffer().ptr());
+  auto* tmp_buf =
+      static_cast<const omarchy::VulkanBuffer*>(tmp.buffer().ptr());
+  auto* out_buf =
+      static_cast<const omarchy::VulkanBuffer*>(out.buffer().ptr());
+  std::string base = std::string(dir) + "/call" + std::to_string(idx);
+  auto write_all = [&](const std::string& path, const void* data,
+                       size_t bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+  };
+  write_all(base + "_dec16_u32.bin", dec_buf->data, dec16.nbytes());
+  write_all(base + "_tmp_f32.bin", tmp_buf->data, tmp.nbytes());
+  write_all(
+      base + "_out_" + dtype_tag + ".bin", out_buf->data, out.nbytes());
+  std::ofstream manifest(
+      std::string(dir) + "/manifest.txt", std::ios::app);
+  manifest << "call=" << idx << " tag=" << tag << " in=" << in_features
+           << " out=" << out_features << " bits=" << bits
+           << " window=" << window << " dtype=" << dtype_tag
+           << " dec16_words=" << (dec16.nbytes() / 4)
+           << " tmp_floats=" << (tmp.nbytes() / 4)
+           << " out_bytes=" << out.nbytes() << "\n";
+}
+
 void Exl3Decode::eval_gpu(
     const std::vector<array>& inputs,
     std::vector<array>& outputs) {
@@ -13227,6 +13282,9 @@ void Exl3Decode::eval_gpu(
       binding(td), binding(shd), binding(svd), binding(dec16),
       binding(tmp), binding(out)};
   encoder.dispatch_compute(kernel, bindings, params, blocks);
+  exl3_debug_dump_stages(
+      encoder, tag, dec16, tmp, out, in_features_, out_features_, bits_,
+      window_);
 }
 
 // Bonsai 1-bit affine dequantize, shaders/bonsai_dequant_q1.comp.
