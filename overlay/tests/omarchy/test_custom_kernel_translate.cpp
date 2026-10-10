@@ -222,8 +222,10 @@ TEST_CASE("numeric_limits<T>::infinity() maps to INFINITY, ordinary max survives
       "  out[i] = metal::max(out[i], 0.0f);\n"
       "}\n";
   auto glsl = translate(source, 1);
-  // The bitcast is exact and the mask constant is the IEEE infinity pattern.
-  CHECK(glsl.find("floatBitsToUint(") != std::string::npos);
+  // as_type<uint> on a uint buffer read is the identity conversion (420271614),
+  // not a float-bits reinterpret; the mask constant is the IEEE infinity pattern.
+  CHECK(glsl.find("floatBitsToUint(") == std::string::npos);
+  CHECK(glsl.find("uint(_mlx_arg1[i])") != std::string::npos);
   CHECK(glsl.find("-INFINITY") != std::string::npos);
   CHECK(glsl.find("#define INFINITY uintBitsToFloat(0x7F800000u)") !=
         std::string::npos);
@@ -397,7 +399,8 @@ TEST_CASE("as_type<uint> on an int buffer read is the identity conversion") {
       glsl.find("floatBitsToUint(mask") == std::string::npos;
   CHECK(either_bad_form_absent);
   CHECK(glsl.find("floatBitsToUint(_mlx_arg1[") == std::string::npos);
-  CHECK(glsl.find("&& ") != std::string::npos);
+  // The identity form: an integer operand converts by value.
+  CHECK(glsl.find("uint(_mlx_arg1[i])") != std::string::npos);
 }
 
 TEST_CASE("triple-nested casts and float literal cast arguments") {

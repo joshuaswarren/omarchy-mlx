@@ -359,11 +359,11 @@ int translate_c_style_casts_once(std::string& code) {
   while (search_from < code.size()) {
     const auto open = code.find('(', search_from);
     if (open == std::string::npos) {
-      return 0;
+      return replacements;
     }
     const auto close = code.find(')', open + 1);
     if (close == std::string::npos) {
-      return 0;
+      return replacements;
     }
     const auto candidate = trim(code.substr(open + 1, close - open - 1));
     const auto mapped = casts.find(candidate);
@@ -373,7 +373,7 @@ int translate_c_style_casts_once(std::string& code) {
     }
     const auto next = code.find_first_not_of(" \t\r\n", close + 1);
     if (next == std::string::npos) {
-      return 0;
+      return replacements;
     }
     // Find the end of the cast's argument: either a balanced call `(...)`,
     // or an identifier extended through any `(...)` call chain it leads.
