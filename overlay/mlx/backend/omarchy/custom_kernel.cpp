@@ -3424,23 +3424,30 @@ void CustomKernel::eval_gpu(
   }
 
   // Route decision: per-kernel override, whole-feature mode, gate table,
-  // then the translator default (docs/custom-kernel-metal2vk.md).
-  const std::string entry_name = m2v::kernel_entry_name(source_);
-  const std::string base_name = m2v::kernel_base_name(entry_name);
+  // then the translator default (docs/custom-kernel-metal2vk.md). With no
+  // routing variable set the kernel stays on the translator and none of
+  // this runs.
+  const bool m2v_active = m2v::route_env_active();
+  std::string entry_name;
+  std::string base_name;
   m2v::Route route = m2v::Route::Translator;
-  try {
-    route = m2v::decide_route(base_name, m2v::gate_table());
-  } catch (const std::exception& error) {
-    omarchy::unsupported(
-        std::string("fast::CustomKernel MSL subset: ") + error.what(),
-        out_for_error);
-  }
-  if (route == m2v::Route::Refuse) {
-    m2v::record_route(base_name, route);
-    omarchy::unsupported(
-        "fast::CustomKernel MSL subset: kernel " + entry_name +
-            " refused by the metal2vk routing override",
-        out_for_error);
+  if (m2v_active) {
+    entry_name = m2v::kernel_entry_name(source_);
+    base_name = m2v::kernel_base_name(entry_name);
+    try {
+      route = m2v::decide_route(base_name, m2v::gate_table());
+    } catch (const std::exception& error) {
+      omarchy::unsupported(
+          std::string("fast::CustomKernel MSL subset: ") + error.what(),
+          out_for_error);
+    }
+    if (route == m2v::Route::Refuse) {
+      m2v::record_route(base_name, route);
+      omarchy::unsupported(
+          "fast::CustomKernel MSL subset: kernel " + entry_name +
+              " refused by the metal2vk routing override",
+          out_for_error);
+    }
   }
 
   auto& s = stream();
@@ -3524,7 +3531,7 @@ void CustomKernel::eval_gpu(
   if (route == m2v::Route::M2v) {
     try {
       m2v_attempted = true;
-      const auto module = m2v::resolve_module(source_, entry_name);
+      const auto& module = m2v::cached_module(source_, entry_name);
       const std::string problem = m2v::validate_dispatch(
           module.reflection,
           bindings.size(),
@@ -3533,6 +3540,14 @@ void CustomKernel::eval_gpu(
            static_cast<uint32_t>(local_z)});
       if (!problem.empty()) {
         throw std::runtime_error(problem);
+      }
+      // The module binds only the arguments it reads, densely and in
+      // ordinal order; descriptor b receives the kernel buffer whose
+      // ordinal the reflection lists at position b.
+      std::vector<omarchy::ComputeBinding> module_bindings;
+      module_bindings.reserve(module.reflection.args.size());
+      for (const auto& arg : module.reflection.args) {
+        module_bindings.push_back(bindings[static_cast<size_t>(arg.ordinal)]);
       }
       // clspv drives the workgroup size from spec constants 0..2; a module
       // with a fixed size validated above against the dispatch dims.
@@ -3569,7 +3584,7 @@ void CustomKernel::eval_gpu(
           module.spv,
           module.reflection.name,
           spec_pointer,
-          bindings,
+          module_bindings,
           params,
           groups_x,
           groups_y,
@@ -3621,7 +3636,9 @@ void CustomKernel::eval_gpu(
       groups_x,
       groups_y,
       groups_z);
-  m2v::record_route(base_name, m2v::Route::Translator);
+  if (m2v_active) {
+    m2v::record_route(base_name, m2v::Route::Translator);
+  }
 }
 
 #ifdef MLX_OMARCHY_TEST_TRANSLATE
