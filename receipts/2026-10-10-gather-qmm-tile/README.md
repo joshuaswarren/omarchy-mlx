@@ -1,6 +1,6 @@
 # gather_qmm tiled sorted-expert route (MoE prefill)
 
-Source commit under test: `4dbeedf4bb2319483ebab96eb4acaf204628fc56` (two tile commits cherry-picked onto main `714cddc9f`).
+Source commits: the speed rows below ran on an older wheel (`+4797d4f7`) with the same kernel; the first build and suite logs ran at `4dbeedf4bb2319483ebab96eb4acaf204628fc56`; the gate change and its short-prompt run are at `ff10ef85bb491bb405fc48ae03268ec29ea40bba` (two tile commits cherry-picked onto main `714cddc9f`, then review fixes and the gate).
 Hardware: M1 Max (G13C) only. Linux kernel 7.1.12-2. Private Honeykrisp build exported through `VK_ICD_FILENAMES` (Mesa git `6543eeb7df7`, driver library
 sha256 prefix `3546bcafe8ed3995`). The logs do not print the device name. Build and home paths in the logs are replaced by `<build>`, `<work>` and `$HOME`.
 
@@ -8,7 +8,7 @@ sha256 prefix `3546bcafe8ed3995`). The logs do not print the device name. Build 
 
 `MLX_OMARCHY_GATHER_QMM_TILE` (default on, `=0` turns it off). For a sorted-expert MoE prefill (`gather_qmm` with `right_sorted`, m = 1, 64 or more rows, 4-bit, group size 64, K and N
 multiples of 64, f16 or bf16 output) the new `gather_qmm_tile.comp` dequantizes a weight tile once per run of up to 32 rows that share an expert, instead of once per row.
-Any other case takes the existing kernels. The route also requires `max_compute_shared_memory_size` of at least 25,216 bytes (the kernel's shared tiles); a smaller limit falls back to the per-row kernels.
+The rows must also average at least 4 per expert (`index_count >= 4 * experts`, see "Short prompts"). Any other case takes the existing kernels. The route also requires `max_compute_shared_memory_size` of at least 25,216 bytes (the kernel's shared tiles); a smaller limit falls back to the per-row kernels.
 There is no no-bias variant: affine quantization always carries biases (`ops.cpp` refuses affine without them), and the bias-free modes are floating-point modes the gate excludes. A first draft shipped two no-bias kernels that no input could reach; they are deleted. The route is correct for any index order and fast only when the rows are sorted.
 
 ## Speed (`g13c/h64-repeated-prompt.log`, `g13c/h69-natural-text.log`)
@@ -29,6 +29,19 @@ first OFF arm only (the void arm read 24.15, within 0.2 percent). The lowest ON 
 H69, last-position logits, ON against OFF, for both ON/OFF pairs: same argmax token and same top-5 set (`[49978, 6985, 5800, 49891, 29699]`), maximum absolute logit difference 0.3125 with
 logit absolute maximum 21.0, no non-finite values. The top logit is 21.125 with the route and 21.0 without. This is one position of one prompt; it is not a perplexity or generation test.
 
+## Short prompts (`g13c/h71-short-t-before-gate.log`, `g13c/h72-short-t-after-gate.log`)
+
+Qwen3-30B-A3B, prompt = first T tokens of the same repo text, prefill, five reps per arm, ON OFF ON OFF. Ratio is the mean of the two ON medians over the mean of the two OFF medians.
+
+| T | rows per expert | Before the gate (older wheel) | With the gate (`+ff10ef85`) |
+|---|---|---|---|
+| 16 | 1 | 0.55 (a loss) | 1.00 |
+| 32 | 2 | 0.81 (a loss) | 1.00 |
+| 64 | 4 | 1.36 | 1.36 |
+| 128 | 8 | 2.06 | 2.06 |
+
+Without the gate, default-on lost 45 and 19 percent at T = 16 and 32. The gate (average rows per expert of at least 4, the smallest measured winning value; 3 is unmeasured) removes the loss and keeps the gain. Load1 at arm starts was 0.12 to 0.84, arm spreads at most 2.5 percent. The kernel that ran was not recorded; the ratios are the evidence.
+
 ## Tests (`g13c/tile-ticket.log`, `g13c/tile-suite.log`)
 
 New doctest `gather_qmm sorted-expert tile route matches the f32 reference and the per-row route`: 32 assertions, 0 failed. Shapes include bf16 and f16, a shuffled (unsorted) index order,
@@ -36,7 +49,9 @@ and tile-versus-f32-reference errors of 0.0006 to 0.0048. Whole `omarchy_matmul_
 
 ## Not covered
 
-- M1 (G13G) and M2 Max (G14C): no run. Only the doctest could run there; the speedup is measured on G13C only.
+- The build and suite logs in `g13c/tile-*.log` are at the earlier head `4dbeedf4b`; a rerun at `ff10ef85` (with the new below-4-rows doctest) is queued and will replace them.
+- Skewed routing (an average above 4 with many 1-row runs would still lose; one below 4 with long runs stays on the per-row route), T = 48, other expert counts.
+- M1 (G13G) and M2 Max (G14C): speed not run. Only the doctest could run there; the speedup is measured on G13C only.
 - Models other than Qwen3-30B-A3B were not run. gpt-oss-20b is MXFP4 (a floating-point mode), which the route's gate excludes.
 - Prefill other than T = 512. Decode (m = 1 with few rows) does not use the route.
 - Generation quality, perplexity.
