@@ -3197,6 +3197,38 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
       std::string::npos);
 }
 
+TEST_CASE("rope freqs host read agrees with the nested gate on both legs") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Shape shape{1, 1, 4, 16};
+  array x = astype(rope_input(shape, 167), float16, stream);
+  array offset = array(3000, int32);
+  array freqs = astype(
+      exp(multiply(array(-0.5f), astype(arange(8, stream), float32, stream),
+                   stream),
+          stream),
+      float32, stream);
+  auto off = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  off.eval();
+  setenv("MLX_OMARCHY_ROPE_FREQS_HOST", "1", 1);
+  auto on = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  on.eval();
+  array tiny_freqs = full({8}, 1e-8f, float32, stream);
+  auto tiny_message = caught_message([&] {
+    fast::rope(x, 16, false, std::nullopt, 1.0f, array(32000, int32),
+               tiny_freqs, stream)
+        .eval();
+  });
+  unsetenv("MLX_OMARCHY_ROPE_FREQS_HOST");
+  // Same bound, same kernel: the outputs are bit-identical.
+  CHECK(flat(on, stream) == flat(off, stream));
+  CHECK(
+      tiny_message.find("exceeds the trig reduction limit") !=
+      std::string::npos);
+}
+
 namespace {
 
 uint64_t alpha1_fnv1a64(const void* data, size_t bytes) {
