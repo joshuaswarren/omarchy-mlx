@@ -53,7 +53,7 @@ Admin routes in the pinned upstream implementation include login (`omlx/admin/ro
 
 ## What you get: measured numbers
 
-These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the omarchy-mlx Vulkan backend and `OMLX_LINUX_CUSTOM_KERNELS=0`. Each row is the first request of one run on the v0.7.1.dev1 tree. The run method, every cell and the raw logs are in [the numbers receipt](../receipts/2026-10-10-omlx-linux-numbers/README.md).
+These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the omarchy-mlx Vulkan backend and `OMLX_LINUX_CUSTOM_KERNELS=0`. Each row is the first request of one run on the v0.7.1.dev1 tree. The run method, every cell, the raw logs and the limits of this data (section "Limits of this data") are in [the numbers receipt](../receipts/2026-10-10-omlx-linux-numbers/README.md#limits-of-this-data).
 
 | machine | model | prompt | first token | decode tok/s |
 |---|---|---|---|---|
@@ -66,7 +66,7 @@ These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the 
 What these numbers say:
 
 - Prefill ran at about 35 tok/s on the M2 Max with the 27B model and at 41 tok/s on the M1 with the 9B model.
-- Several requests at once do not raise prefill speed. oMLX packs concurrent prefills into one forward pass, and that pass ran at 60 to 69 tok/s on the M1 with the 9B model, the same rate as one 476-token request (about 68 tok/s). With 4 prompts the slowest first token arrived after 14.5 s; with 8 prompts, after 26.2 s.
+- Several requests at once do not raise prefill speed. oMLX packs concurrent prefills into one forward pass, and that pass ran at 60 to 69 tok/s on the M1 with the 9B model, the same rate as one 476-token request (about 68 tok/s). With 4 prompts the slowest first token arrived after 14.5 s and 17.0 s in two repeats; with 8 prompts, after 26.2 s and 25.9 s.
 - Expert offload lets a mixture-of-experts model run on a machine that cannot hold it, at a high cost: 1.31 and 2.90 tok/s for the 35B model in the rows above.
 - The memory the offload path needs is close to the weights it keeps resident. For Qwen3-30B-A3B the measured peak after a 128-token prefill was 3.0 to 7.2 percent above the admission estimate, at residencies 0.25, 0.4 and 0.5.
 

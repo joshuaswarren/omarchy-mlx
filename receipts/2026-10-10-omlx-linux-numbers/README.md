@@ -33,7 +33,7 @@ Prefill rates quoted in the doc are the `pilot rate` line of each run (the secon
 
 ## Packed prefill (concurrent requests)
 
-`raw/m1-new-qwen35-9b-packed-prefill-1010T0524.run.log` and `.packspy.log`: the M1, Qwen3.5-9B, same method, with a wrapper that logs every call of the scheduler's packed prefill forward (rows, tokens, wall time). Six calls: 435 tokens in 6.28 s (69 tok/s), 290 in 4.36 s (67), 176 in 2.87 s (61), 352 in 5.53 s (64), 352 in 5.50 s (64), 176 in 2.92 s (60). One 476-token request in the same run: first token at 6.965 s (about 68 tok/s). Four concurrent prompts: slowest first token 14.547 s; eight: 26.21 s.
+`raw/m1-new-qwen35-9b-packed-prefill-1010T0524.run.log` and `.packspy.log`: the M1, Qwen3.5-9B, same method, with a wrapper that logs every call of the scheduler's packed prefill forward (rows, tokens, wall time). Six calls: 435 tokens in 6.28 s (69 tok/s), 290 in 4.36 s (67), 176 in 2.87 s (61), 352 in 5.53 s (64), 352 in 5.50 s (64), 176 in 2.92 s (60). One 476-token request in the same run: first token at 6.965 s (about 68 tok/s). Four concurrent prompts: slowest first token 14.547 s in the first repeat (`conc4`) and 16.969 s in the second (`conc4_b`); eight prompts: 26.21 s (`conc8`) and 25.908 s (`conc8_b`).
 
 ## Offload memory estimate
 
@@ -46,7 +46,7 @@ Prefill rates quoted in the doc are the `pilot rate` line of each run (the secon
 
 ## Limits of this data
 
-- One run per row, no confidence intervals. Decode speed with 4 concurrent requests varied by up to 1.45 times between two repeats in the same run (M2 Max, 35B offload: 0.977 and 0.674 tok/s; 27B: 1.601 and 1.119), so concurrent numbers say nothing about a difference between oMLX versions.
+- One run per row, no confidence intervals. Decode speed per request with 4 concurrent requests varies widely inside one run, because the requests overlap differently as they finish: M2 Max 27B, 1.119 to 5.097 tok/s across the 8 requests of the two repeats (`conc4` 1.601 to 5.097, `conc4_b` 1.119 to 4.173); M2 Max 35B offload, 0.674 to 3.933 tok/s (`conc4` 0.977 to 3.933, `conc4_b` 0.674 to 3.207). A concurrent decode number therefore says nothing about a difference between oMLX versions.
 - Second request (`single_a`) against the first (`single_fixed`), decode tok/s: M2 Max 27B 9.285 against 9.354 (-0.7 %); M1 9B 8.404 against 8.288 (+1.4 %) and 8.282 against 8.308 (-0.3 %); M1 35B offload 1.303 against 1.311 (-0.6 %); M2 Max 35B offload 3.53 against 2.902 (+21.6 %).
 - Provenance: these runs predate a loaded-library check. The header records the wheel directory name and the Mesa package (26.2.4); it does not record the hash of the loaded `libmlx.so`, the harness commit, whether a private driver file was selected, or the Vulkan device and firmware identity. Model and quantization hashes and the exact server command are not recorded beside the runs.
 - Custom kernels on: not measured on this wheel (see the failed runs above).
