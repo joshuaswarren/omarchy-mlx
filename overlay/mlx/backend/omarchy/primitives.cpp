@@ -13200,6 +13200,11 @@ void Exl3Decode::eval_gpu(
   params.count = blocks;
   params.matrix_m = packed_n;
   params.matrix_n = mask;
+  // Global out-tile stride (out_features / 16): the shader walks the
+  // trellis row-major over the [in/16, out/16] tile grid, matching the
+  // sushi bank layout and the CPU reference, not per-block tile runs.
+  params.matrix_k = checked_u32(
+      static_cast<size_t>(out_features_) / 16, tag, out);
   params.lhs_offset = checked_item_offset(td, td.size(), tag, out);
   params.rhs_offset = checked_item_offset(shd, shd.size(), tag, out);
   params.aux_offset = checked_item_offset(svd, svd.size(), tag, out);

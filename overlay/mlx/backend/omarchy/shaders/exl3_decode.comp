@@ -23,6 +23,8 @@
 //   count         = number of 128x128 blocks (grid = count workgroups)
 //   matrix_m      = packed halfwords per tile (rate n = bits * 16)
 //   matrix_n      = codeword window mask (window bits w: (1<<w)-1)
+//   matrix_k      = global out-tile stride (out_features / 16); the
+//                   trellis walk is row-major over [in/16, out/16]
 //   lhs_offset    = trellis element offset (uint16 elements; even, the
 //                   eval layer refuses odd offsets — the trellis is
 //                   addressed as uint32 words)
@@ -206,7 +208,8 @@ void main() {
   uint blockBase = block * 16384u;
 
   // Stage A: threads 0..63 decode tile = 16x16 weights into f16 bits,
-  // laid out row-major over the 128x128 block (reconstructInner layout).
+  // global row-major over the [in/16, out/16] tile grid (the sushi bank
+  // layout and reconstructInner order): tile (rb*8+tk, cb*8+tn).
   if (lid < 64u) {
     uint n = params.matrix_m;  // packed halfwords per tile
     uint wc = n >> 1;          // u32 words per tile
@@ -217,7 +220,10 @@ void main() {
     // Per-tile packed length is n halfwords = wc uint32 words, so a tile's
     // word base stays word-aligned (the eval layer refuses odd trellis
     // offsets).
-    uint tileBase = (block * 64u + lid) * wc;
+    uint cbBlocks = params.matrix_k >> 3u;  // out_features / 128
+    uint rb = block / cbBlocks;
+    uint cb = block - rb * cbBlocks;
+    uint tileBase = ((rb * 8u + tk) * params.matrix_k + cb * 8u + tn) * wc;
     for (uint t = 0u; t < 128u; t++) {
       uint e0 = ((t * 2u + 1u) * n) >> 4;
       uint e1 = ((t * 2u + 2u) * n) >> 4;

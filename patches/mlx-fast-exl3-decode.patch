@@ -183,8 +183,10 @@
 +
 +// reconstructInner + reconstructPublic: tile decode into [in, out] row
 +// major, then the row H128 + suh and column H128 + svh stages in the
-+// reference's exact f32 accumulation order. Returns f32; the caller rounds
-+// to the output dtype.
++// reference's exact f32 accumulation order. The trellis walk is the
++// reference's global row-major order over ALL 16x16 tiles (the sushi bank
++// layout [in/16, out/16, packed]), not per-128x128-block runs. Returns
++// f32; the caller rounds to the output dtype.
 +void exl3_reconstruct(
 +    const uint16_t* trellis,
 +    const uint16_t* suh,
@@ -196,8 +198,8 @@
 +    float* out) {
 +  const uint32_t n = static_cast<uint32_t>(bits) * 16;
 +  const uint16_t mask = static_cast<uint16_t>((1u << window) - 1u);
-+  const int in_tiles = in_features / 128;
-+  const int out_tiles = out_features / 128;
++  const int in_tiles = in_features / 16;
++  const int out_tiles = out_features / 16;
 +  const size_t packed_n = n;
 +  uint16_t tile[256];
 +  std::vector<uint16_t> inner(
