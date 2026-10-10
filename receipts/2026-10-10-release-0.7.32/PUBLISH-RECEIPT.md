@@ -31,3 +31,11 @@ Vendor tar sha256 `f0fcdf0fb0bd67f3898df338b460afcc9af9de1281e96c12c82164bca1539
 - The release has no x86_64 wheel.
 - The Arch package update for this release (omarchy-pkgs #839) is a separate change. It pins the Mesa commit the
   gates ran on, `e7631595df6281748ea5e643d74db59c5f783b01`.
+
+## Correction after publish (2026-10-10)
+
+The first notes called all four red test suites test defects and said the out-of-device-memory failure in
+`sdpa_prefill_flash` was seen on loaded machines only. The #72 verification run on the 13-inch M1 showed that case
+failing on an idle machine with 13.3 GB of memory available, so that claim was wrong. The release body, `NOTES.md` and
+`GATE-SUMMARY.md` now say that three suites are test defects, the fourth is partly a test defect, and that one of its
+cases fails for a reason that is not known yet. No asset and no tag changed.

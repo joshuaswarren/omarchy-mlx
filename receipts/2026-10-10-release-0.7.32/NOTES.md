@@ -5,7 +5,7 @@ Range v0.7.31..v0.7.32: 265 commits, 587 files, +47,151 / -972 lines. Gates ran 
 `omarchy-mlx-vulkan` 0.7.28-2 with Mesa 26.2.4-1 (see "Gates on the frozen wheel" and "Known issues").
 
 Read the known issues before you install: training backward (item 2), a long-dispatch fault on the 14-inch M2 Max
-(item 3), and four failing test suites that are test defects (item 1).
+(item 3), and four failing test suites (item 1).
 
 ## Shipped (user impact)
 
@@ -241,7 +241,7 @@ their rows rerun.
 | ANE legs g7c, g13, g15 | not part of this host's plan | g7c exit 0; g13 6 of 6; g15 4 of 4 | not applicable |
 | int8 matmul A/B (bit-identical to the naive kernel) and timing | PASS | PASS | PASS |
 | fc2 long-dispatch repeat check (output sha256 prefix `5d2eb391db2925b6`) | match | match | match |
-| standing battery, 45 suites | 41 green, 4 red (test defects) | 42 green, 3 red (test defects) | 42 green, 3 red (test defects) |
+| standing battery, 45 suites | 41 green, 4 red (see known issues) | 42 green, 3 red (test defects) | 42 green, 3 red (test defects) |
 | capability profiles, 6 profiles of 7 cases | 7 of 7 each | 7 of 7 each | 7 of 7 each |
 | pinned decode, Qwen3-4B-Instruct-2507-4bit, 64 tokens, median of 5 | 22.04 tok/s (v0.7.31 on the same host: 22.08) | not run | not run |
 
@@ -258,14 +258,16 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
 
 ## Known issues
 
-1. **Four test suites fail in the standing battery.** All four are defects in the tests; no product code is involved.
+1. **Four test suites fail in the standing battery.** Three are defects in the tests, and so is part of the fourth.
    `gdn_legacy_policy` has a precondition that went stale after #60. `conv_gemm_decomp` passes a CPU reference
    stream to a GPU-only call. `gdn_maskless_correctness` has a fixture path fixed at build time (6 of 6 pass with the
-   fixtures in place). `sdpa_prefill_flash` asserts the flash route without checking the device capability, and one of
-   its cases fails with an out-of-device-memory error on a 16 GB machine under load (seen on loaded 16 GB hosts only;
-   a quiet-host rerun is pending). Fix: #72 changes only the tests and fixes the four defects named above, not the
-   out-of-memory case. It lands after the v0.7.32 tag and ships in v0.7.33. If that case still fails on a quiet host,
-   a v0.7.33 change sizes the test to the device heap.
+   fixtures in place). `sdpa_prefill_flash` asserts the flash route without checking the device capability. One of
+   its cases also fails with an out-of-device-memory error on the 13-inch M1: a 1 GiB allocation fails while the
+   machine is idle with 13.3 GB of memory available. The same case passes on the 16-inch M1 Max. The cause is not
+   known yet. The test may be too large for the device heap, or a 16384-token prefill may not fit on a 16 GB
+   machine, which would be a product limit. Fix: #72 changes only the tests. It fixes the four test defects named
+   above and leaves the out-of-memory case alone, and a separate change investigates that case. #72 lands after the
+   v0.7.32 tag and ships in v0.7.33.
 2. **Training backward only; inference is not affected.** Two fused backward bugs. Both are the same in v0.7.31: the
    gated-delta backward kernel and its equal-heads routing, and the attention backward code, did not change between
    v0.7.31 and this release (checked in the source at both tags). At unequal key and value heads (GQA) both releases
