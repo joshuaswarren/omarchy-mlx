@@ -800,6 +800,12 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
     return;
   }
   Stream stream = gpu_stream();
+  // The causal flash route needs the bf16 cooperative-matrix shape. A part
+  // without it (M1 G13G) must fall back to the composed route.
+  const bool flash_engages = omarchy::get_command_encoder(stream)
+                                 .device()
+                                 .capabilities()
+                                 .cooperative_matrix_bf16_8;
   struct Case {
     int heads;
     int kv_heads;
@@ -852,7 +858,7 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
       CAPTURE(c.kv_heads);
       CAPTURE(c.lq);
       CAPTURE(c.lk);
-      if (eligible) {
+      if (eligible && flash_engages) {
         CHECK_EQ(flash_dispatches, 1u);
       } else {
         CHECK_EQ(flash_dispatches, composed_dispatches);
