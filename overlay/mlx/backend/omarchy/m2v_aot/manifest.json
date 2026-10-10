@@ -1,0 +1,218 @@
+{
+ "gated_delta_step": {
+  "base": "gated_delta_step",
+  "entry": "custom_kernel_gated_delta_step__bfloat16_t_float_128_128_16_32_bfloat16_t_bfloat16_t_bfloat16_t_float_bfloat16_t_float_int32_ts_bfloat16_t_float",
+  "key": "12cf7661e52634654e1e95e521ae2acdc717e677839babb5e18b8ded613a0f15",
+  "state": "unverified"
+ },
+ "omlx_chain_attn_combine": {
+  "base": "omlx_chain_attn_combine",
+  "entry": "custom_kernel_omlx_chain_attn_combine__bfloat16_t_8_16_float_float_uint32_tc_bfloat16_t",
+  "key": "dc152736dd1653990c225dbacf30e0aa3ba5a80e046b5b76833e9252b96304f8",
+  "state": "verified"
+ },
+ "omlx_chain_attn_partial": {
+  "base": "omlx_chain_attn_partial",
+  "entry": "custom_kernel_omlx_chain_attn_partial__bfloat16_t_8_16_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_uint32_tc_float_float",
+  "key": "73556e2e43955d6796621df09e56d4b0187b406055253281697b65685a980f9c",
+  "state": "unverified"
+ },
+ "omlx_gdn_norm_gate_eps1em06": {
+  "base": "omlx_gdn_norm_gate_eps1em06",
+  "entry": "custom_kernel_omlx_gdn_norm_gate_eps1em06__bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_float",
+  "key": "8d6eca57336bbc1667dbaefaa38c1effd875788b59fcf5b02cace6128741297e",
+  "state": "verified"
+ },
+ "omlx_gdn_sigmoid_probe_float_float": {
+  "base": "omlx_gdn_sigmoid_probe_float_float",
+  "entry": "custom_kernel_omlx_gdn_sigmoid_probe_float_float",
+  "key": "a6c53068b334505a767364efffc5f416934487558e6429ec6cb05a017823a49b",
+  "state": "verified"
+ },
+ "omlx_gdn_verify_main_replay": {
+  "base": "omlx_gdn_verify_main_replay",
+  "entry": "custom_kernel_omlx_gdn_verify_main_replay__bfloat16_t_16_32_128_128_4_4_float_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_float",
+  "key": "356b7023facf9ba10a683ed20fd069f7b85f5901885aa4ea7d651c1c6edca99f",
+  "state": "verified"
+ },
+ "omlx_qwen35_gdn_prework_S1": {
+  "base": "omlx_qwen35_gdn_prework_S1",
+  "entry": "custom_kernel_omlx_qwen35_gdn_prework_S1__bfloat16_t_16_32_128_128_3_8192_1_0_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
+  "key": "ef9ce6a0c19ceb2af052640c2349498ff9b21551a7e122c41490120ed6e28a21",
+  "state": "unverified"
+ },
+ "omlx_qwen35_moe_combine_row": {
+  "base": "omlx_qwen35_moe_combine_row",
+  "entry": "custom_kernel_omlx_qwen35_moe_combine_row__bfloat16_t_8_2048_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_tc_bfloat16_t",
+  "key": "840d16681186965d078be29064025a3ece2164e47065e0171867806252241273",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_down_combine_decode_b4g32f_shared_b4g32f": {
+  "base": "omlx_qwen35_moe_down_combine_decode_b4g32f_shared_b4g32f",
+  "entry": "custom_kernel_omlx_qwen35_moe_down_combine_decode_b4g32f_shared_b4g32f__bfloat16_t_512_2048_8_512_9_2_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t",
+  "key": "4743ab0dfba636ff25a9adc1e25f00b675b18abf9ee1d8e723a93f46daac29eb",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_down_combine_window_b4g32f_shared_b4g32f": {
+  "base": "omlx_qwen35_moe_down_combine_window_b4g32f_shared_b4g32f",
+  "entry": "custom_kernel_omlx_qwen35_moe_down_combine_window_b4g32f_shared_b4g32f__bfloat16_t_512_2048_8_512_9_4_4_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t",
+  "key": "ff2f70ddd0e83c8919ec4bcbc798629d2b4c965abac28e8c61a117911adb676a",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_gate_up_decode_b4g32f_shared_b4g32f_gate_b4g32s": {
+  "base": "omlx_qwen35_moe_gate_up_decode_b4g32f_shared_b4g32f_gate_b4g32s",
+  "entry": "custom_kernel_omlx_qwen35_moe_gate_up_decode_b4g32f_shared_b4g32f_gate_b4g32s__bfloat16_t_2048_512_2_2_8_512_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_bfloat16_t",
+  "key": "29a58b0a7d4245b0d1ef1db9b6bf1b2419093eff68431badaec7666ba0f8a7f5",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_gate_up_topk_b4g32f_shared_b4g32f_gate_b4g32s": {
+  "base": "omlx_qwen35_moe_gate_up_topk_b4g32f_shared_b4g32f_gate_b4g32s",
+  "entry": "custom_kernel_omlx_qwen35_moe_gate_up_topk_b4g32f_shared_b4g32f_gate_b4g32s__bfloat16_t_2048_512_2_2_8_512_512_1_4609_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t",
+  "key": "13cfd80b6ff2d699fc93b219eb213f10fda5639c9a22009143026ad8aac0a563",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_gate_up_window_b4g32f_shared_b4g32f_gate_b4g32s": {
+  "base": "omlx_qwen35_moe_gate_up_window_b4g32f_shared_b4g32f_gate_b4g32s",
+  "entry": "custom_kernel_omlx_qwen35_moe_gate_up_window_b4g32f_shared_b4g32f_gate_b4g32s__bfloat16_t_2048_512_2_2_8_512_4_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_uint32_t_bfloat16_t_bfloat16_t_bfloat16_t",
+  "key": "4b759098a8e7f6408f94f271cf787bfbdc635334d706862e826991e1dc0bbcc8",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_router_gemv": {
+  "base": "omlx_qwen35_moe_router_gemv",
+  "entry": "custom_kernel_omlx_qwen35_moe_router_gemv__bfloat16_t_2048_512_1_4_bfloat16_t_bfloat16_t_bfloat16_t",
+  "key": "09f3df3c9edcfa8450b69c4030b1d870cd3196190d25b894e75e9fbb9db3a0bf",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_router_softmax_topk_row": {
+  "base": "omlx_qwen35_moe_router_softmax_topk_row",
+  "entry": "custom_kernel_omlx_qwen35_moe_router_softmax_topk_row__bfloat16_t_512_8_bfloat16_t_uint32_t_bfloat16_t",
+  "key": "f26fc5dfd3ae1648c16c7a61289dd86ba422befcb8f8a05093ed808e6fdb3dc3",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_router_softmax_topk_rows": {
+  "base": "omlx_qwen35_moe_router_softmax_topk_rows",
+  "entry": "custom_kernel_omlx_qwen35_moe_router_softmax_topk_rows__bfloat16_t_512_8_bfloat16_t_uint32_t_bfloat16_t",
+  "key": "3f08b18d34bea0dc71b7d6f0fbfd8b0efc58d9e45077290d66bc03ec5407a7fe",
+  "state": "verified"
+ },
+ "omlx_qwen35_moe_router_topk": {
+  "base": "omlx_qwen35_moe_router_topk",
+  "entry": "custom_kernel_omlx_qwen35_moe_router_topk__bfloat16_t_512_8_bfloat16_t_uint32_t_bfloat16_t",
+  "key": "72da54cf270c472ab03ea8c784efa0f9dad8e4b5bd4cc8cd611b8063e0fa414a",
+  "state": "verified"
+ },
+ "omlx_qwen4_gdn_batch_decode_step": {
+  "base": "omlx_qwen4_gdn_batch_decode_step",
+  "entry": "custom_kernel_omlx_qwen4_gdn_batch_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
+  "key": "a73ae819b74b64500ed6310d4fb23633be82cd4804eb4d828914fae7a188f821",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_decode_norm_gate": {
+  "base": "omlx_qwen4_gdn_decode_norm_gate",
+  "entry": "custom_kernel_omlx_qwen4_gdn_decode_norm_gate__bfloat16_t_32_128_bfloat16_t_bfloat16_t_bfloat16_t_floats_bfloat16_t",
+  "key": "b301c09843ae0208fc154baf40b1afc921266e77650da689a6af7df87372c348",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_decode_prework": {
+  "base": "omlx_qwen4_gdn_decode_prework",
+  "entry": "custom_kernel_omlx_qwen4_gdn_decode_prework__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_float_bfloat16_t",
+  "key": "6e5b3374709d0a37bba7a6327a1608c53f2869a8b9f3d1f34760701f496bc31b",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_decode_step": {
+  "base": "omlx_qwen4_gdn_decode_step",
+  "entry": "custom_kernel_omlx_qwen4_gdn_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
+  "key": "98f7e380a92a0bff9b9f21a7179dc9da85a7e08ac762496beef40ed686a19872",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_prefill_norm_gate": {
+  "base": "omlx_qwen4_gdn_prefill_norm_gate",
+  "entry": "custom_kernel_omlx_qwen4_gdn_prefill_norm_gate__bfloat16_t_32_128_bfloat16_t_bfloat16_t_bfloat16_t_floats_bfloat16_t",
+  "key": "00024f037ff43944182fefddc4d88fefa098fb8e11dd81040903e00b94d058f6",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_prefill_prework": {
+  "base": "omlx_qwen4_gdn_prefill_prework",
+  "entry": "custom_kernel_omlx_qwen4_gdn_prefill_prework__bfloat16_t_16_32_128_128_3_8192_1_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_int32_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
+  "key": "119b7a39350ce46440007c1247a903fab292fe666f7e9b9cf58b6e0cd332d57f",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_verify_step": {
+  "base": "omlx_qwen4_gdn_verify_step",
+  "entry": "custom_kernel_omlx_qwen4_gdn_verify_step__bfloat16_t_16_32_128_128_8192_4_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_bfloat16_t_float_bfloat16_t",
+  "key": "0f285ea023306e7736381fc92cf32d7f228ce07824597cadfdb886f478358201",
+  "state": "unverified"
+ },
+ "omlx_qwen4_gdn_verify_step_states": {
+  "base": "omlx_qwen4_gdn_verify_step_states",
+  "entry": "custom_kernel_omlx_qwen4_gdn_verify_step_states__bfloat16_t_16_32_128_128_8192_4_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_bfloat16_t_float_float_bfloat16_t",
+  "key": "138bfa0d2fcd75ed58b82275b039b0646367f29d2a17d57fa549ba93b1720685",
+  "state": "unverified"
+ },
+ "omlx_verify_attn_gqa_combine": {
+  "base": "omlx_verify_attn_gqa_combine",
+  "entry": "custom_kernel_omlx_verify_attn_gqa_combine__bfloat16_t_8_2_float_float_uint32_tc_bfloat16_t",
+  "key": "73abcdfe5a4218dfb84112f6453efa7faf355262f87d87b3b1ba6540bde66dbc",
+  "state": "verified"
+ },
+ "omlx_verify_attn_gqa_partial": {
+  "base": "omlx_verify_attn_gqa_partial",
+  "entry": "custom_kernel_omlx_verify_attn_gqa_partial__bfloat16_t_8_2_bfloat16_t_bfloat16_t_bfloat16_t_uint32_tc_float_float",
+  "key": "55d8e4a767e5d67ff68d9b6e789031cda1952c35feb3bfd260bae9d97c5b5f2a",
+  "state": "refused"
+ },
+ "omlx_verify_attn_wide_combine": {
+  "base": "omlx_verify_attn_wide_combine",
+  "entry": "custom_kernel_omlx_verify_attn_wide_combine__bfloat16_t_8_16_float_float_uint32_tc_bfloat16_t",
+  "key": "480c6f4a7f7bc74cd50c1cc881014815188f0723cd2b8f09a564fd9178299af7",
+  "state": "verified"
+ },
+ "omlx_verify_attn_wide_partial": {
+  "base": "omlx_verify_attn_wide_partial",
+  "entry": "custom_kernel_omlx_verify_attn_wide_partial__bfloat16_t_8_16_bfloat16_t_bfloat16_t_bfloat16_t_uint32_tc_float_float",
+  "key": "cab5891104ae2edc8e13ba327114f96a0ffac07ce6148a065fb330cc64a3d87f",
+  "state": "invalid"
+ },
+ "qwen35_gated_delta_step": {
+  "base": "qwen35_gated_delta_step",
+  "entry": "custom_kernel_qwen35_gated_delta_step__bfloat16_t_float_128_128_16_32_bfloat16_t_bfloat16_t_bfloat16_t_float_bfloat16_t_float_int32_tc_bfloat16_t_float",
+  "key": "ff74ca8fae54f531fc915468dff7aae69eff152140a7c5113908f7d6a0b0db3c",
+  "state": "invalid"
+ },
+ "qwen35_ragged_sdpa_1p": {
+  "base": "qwen35_ragged_sdpa_1p",
+  "entry": "custom_kernel_qwen35_ragged_sdpa_1p__bfloat16_t_256_256_16_2_8_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_floatc_int32_tc_bfloat16_t",
+  "key": "668ace78f8fc55d5db1bac49911afcc678fbd8fcbba1c46fb38b5fcbb6e5ba9c",
+  "state": "unverified"
+ },
+ "qwen35_ragged_sdpa_2p1": {
+  "base": "qwen35_ragged_sdpa_2p1",
+  "entry": "custom_kernel_qwen35_ragged_sdpa_2p1__bfloat16_t_256_256_16_2_8_4_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_floatc_int32_tc_bfloat16_t_float_float",
+  "key": "a28bb2af7b596934602e8051575da77c649c7b7aedda36a0725468a50eced7fe",
+  "state": "unverified"
+ },
+ "qwen35_ragged_sdpa_2p2": {
+  "base": "qwen35_ragged_sdpa_2p2",
+  "entry": "custom_kernel_qwen35_ragged_sdpa_2p2__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
+  "key": "c5d7abfc54fd7cc10901f576f8181868ecdaa820ab943c0abfe959c4538058cb",
+  "state": "unverified"
+ },
+ "qwen3_5_ragged_sdpa_1p_bf16_d256_v256": {
+  "base": "qwen3_5_ragged_sdpa_1p_bf16_d256_v256",
+  "entry": "custom_kernel_qwen3_5_ragged_sdpa_1p_bf16_d256_v256__bfloat16_t_256_256_16_2_8_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_floatc_int32_tc_bfloat16_t",
+  "key": "c8b135602d2f8eea6f991434b215887df1c296e8c55cd8bf2c07a1bb142b1b7f",
+  "state": "unverified"
+ },
+ "qwen3_5_ragged_sdpa_2p1_bf16_d256_v256_b4": {
+  "base": "qwen3_5_ragged_sdpa_2p1_bf16_d256_v256_b4",
+  "entry": "custom_kernel_qwen3_5_ragged_sdpa_2p1_bf16_d256_v256_b4__bfloat16_t_256_256_16_2_8_4_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_floatc_int32_tc_bfloat16_t_float_float",
+  "key": "4b89cd103d3ed753969577d3a3b6bc72eb00656f99d6ce508a89a6ee3d065456",
+  "state": "unverified"
+ },
+ "qwen3_5_ragged_sdpa_2p2_bf16_v256_b4": {
+  "base": "qwen3_5_ragged_sdpa_2p2_bf16_v256_b4",
+  "entry": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
+  "key": "5ed831cf52cf43c246429c3563c099b291583e23a6af3ed20102d9168a8e2823",
+  "state": "unverified"
+ }
+}

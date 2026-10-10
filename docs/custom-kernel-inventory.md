@@ -180,3 +180,9 @@ produced a silent wrong value inside tolerance: a wrong value fails the run
 (exit 3). Translated GLSL is cached under `~/.cache/mlx-omarchy/spirv`,
 keyed by the kernel source and the translator hash; the runner uses a fresh
 cache directory per run.
+
+The verified model kernels also have a second compile route that bypasses
+this translator entirely: metal2vk (clang plus a patched clspv) compiles the
+assembled MSL to SPIR-V ahead of time, and the backend dispatches those
+modules for kernels the gate table marks verified. That route is env
+opt-in; see [custom-kernel-metal2vk.md](custom-kernel-metal2vk.md).

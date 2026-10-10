@@ -1917,11 +1917,19 @@ VkPipeline ComputeRuntime::pipeline(ComputeKernel kernel) {
 VkPipeline ComputeRuntime::pipeline(
     const std::string& cache_key,
     std::span<const uint32_t> spirv) {
+  return pipeline(cache_key, spirv, "main", nullptr);
+}
+
+VkPipeline ComputeRuntime::pipeline(
+    const std::string& cache_key,
+    std::span<const uint32_t> spirv,
+    const std::string& entry_name,
+    const VkSpecializationInfo* spec) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto [entry, inserted] = dynamic_pipelines_.try_emplace(cache_key);
   if (inserted) {
     try {
-      entry->second = create_pipeline(spirv);
+      entry->second = create_pipeline(spirv, entry_name, spec);
     } catch (...) {
       dynamic_pipelines_.erase(entry);
       throw;
@@ -1935,8 +1943,11 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
   if (size == 0 || size % sizeof(uint32_t) != 0) {
     throw std::runtime_error("[omarchy] embedded SPIR-V has an invalid size.");
   }
-  return create_pipeline(std::span<const uint32_t>{
-      reinterpret_cast<const uint32_t*>(bytes), size / sizeof(uint32_t)});
+  return create_pipeline(
+      std::span<const uint32_t>{
+          reinterpret_cast<const uint32_t*>(bytes), size / sizeof(uint32_t)},
+      "main",
+      nullptr);
 }
 
 // Per-binding access from the SPIR-V: glslang lowers `readonly`/`writeonly`
@@ -2010,7 +2021,10 @@ ComputeRuntime::BindingAccess ComputeRuntime::binding_access(VkPipeline pipeline
   return it == access_.end() ? BindingAccess{} : it->second;
 }
 
-VkPipeline ComputeRuntime::create_pipeline(std::span<const uint32_t> spirv) {
+VkPipeline ComputeRuntime::create_pipeline(
+    std::span<const uint32_t> spirv,
+    const std::string& entry_name,
+    const VkSpecializationInfo* spec) {
   if (spirv.empty() || spirv.front() != 0x07230203u) {
     throw std::runtime_error("[omarchy] custom SPIR-V is invalid.");
   }
@@ -2026,7 +2040,8 @@ VkPipeline ComputeRuntime::create_pipeline(std::span<const uint32_t> spirv) {
       VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
   stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
   stage.module = shader;
-  stage.pName = "main";
+  stage.pName = entry_name.c_str();
+  stage.pSpecializationInfo = spec;
   VkComputePipelineCreateInfo pipeline_info{
       VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
   pipeline_info.stage = stage;
