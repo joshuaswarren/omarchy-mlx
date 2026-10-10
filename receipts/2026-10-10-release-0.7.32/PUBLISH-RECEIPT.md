@@ -19,6 +19,11 @@ Release notes as published: `NOTES.md` in this directory.
    `tag_name=v0.7.32`.
 6. **Public download check.** The wheel, the vendor tar and the sidecar were downloaded from the public release URLs.
    `sha256sum -c SHA256SUMS` reports OK for all three.
+7. **Install test from the public URL.** On the 13-inch M1 (21:44Z) and the 16-inch M1 Max (21:47Z), each on driver
+   0.7.28-2: the wheel was downloaded from the public release URL, its sha256 matched
+   `a91fbe5ec2a8e4c197106d749739f696b2689f5926a97349d17e8827cc2f4712` and the public `SHA256SUMS`, and it installed
+   into a fresh venv. The installed version was `0.32.4.dev202610101057+ae5d0950`. One fp16 matrix multiply on the GPU
+   returned `4096.0`. Both runs ended with exit code 0 and no desktop client was running.
 
 Wheel sha256 `a91fbe5ec2a8e4c197106d749739f696b2689f5926a97349d17e8827cc2f4712`.
 Vendor tar sha256 `f0fcdf0fb0bd67f3898df338b460afcc9af9de1281e96c12c82164bca1539db0`.
