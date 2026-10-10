@@ -3210,23 +3210,31 @@ TEST_CASE("rope freqs host read agrees with the nested gate on both legs") {
                    stream),
           stream),
       float32, stream);
-  auto off = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
-  off.eval();
-  setenv("MLX_OMARCHY_ROPE_FREQS_HOST", "1", 1);
-  auto on = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
-  on.eval();
   array tiny_freqs = full({8}, 1e-8f, float32, stream);
-  auto tiny_message = caught_message([&] {
-    fast::rope(x, 16, false, std::nullopt, 1.0f, array(32000, int32),
-               tiny_freqs, stream)
-        .eval();
-  });
-  unsetenv("MLX_OMARCHY_ROPE_FREQS_HOST");
+  auto refuse = [&] {
+    return caught_message([&] {
+      fast::rope(x, 16, false, std::nullopt, 1.0f, array(32000, int32),
+                 tiny_freqs, stream)
+          .eval();
+    });
+  };
+  // Default: the host read.
+  auto host = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  host.eval();
+  auto host_message = refuse();
+  // Kill switch: the nested min(abs(freqs)) gate.
+  setenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST", "1", 1);
+  auto nested =
+      fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  nested.eval();
+  auto nested_message = refuse();
+  unsetenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST");
   // Same bound, same kernel: the outputs are bit-identical.
-  CHECK(flat(on, stream) == flat(off, stream));
+  CHECK(flat(host, stream) == flat(nested, stream));
   CHECK(
-      tiny_message.find("exceeds the trig reduction limit") !=
+      host_message.find("exceeds the trig reduction limit") !=
       std::string::npos);
+  CHECK(host_message == nested_message);
 }
 
 namespace {

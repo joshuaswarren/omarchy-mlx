@@ -14111,14 +14111,18 @@ void rope_trig_gate(
   }
   float inv_freq_bound;
   if (freqs != nullptr) {
-    // H66 experiment: MLX_OMARCHY_ROPE_FREQS_HOST=1 reads the (tiny) freqs
-    // array on the host after settle + synchronize, like the scalar offset
-    // branch, instead of building min(abs(freqs)) behind a nested join. The
-    // nested graph's wait on an input's async-eval latch can never be
-    // satisfied mid-tape (H51: JOIN reason=rope_freqs_bound, observed=1
-    // target=2). Read on every call: nothing here caches environment state.
-    const bool host_read = omarchy::env_flag("MLX_OMARCHY_ROPE_FREQS_HOST") &&
-        freqs->dtype() == float32 && freqs->flags().row_contiguous;
+    // Read the (tiny) freqs array on the host after settle + synchronize, like
+    // the scalar offset branch, instead of building min(abs(freqs)) behind a
+    // nested join. The nested graph waits on the async-eval latch of an input
+    // this pass already evaluated, and only the outer epilogue signals that
+    // latch, so the join never completes mid-tape (gemma-4 prefill under
+    // async_eval: 'Vulkan timeline counter failed to advance', JOIN
+    // reason=rope_freqs_bound; receipts/2026-10-10-rope-freqs-host-read/).
+    // MLX_OMARCHY_NO_ROPE_FREQS_HOST=1 restores the nested path. Read on every
+    // call: nothing here caches environment state.
+    const bool host_read = !omarchy::env_flag("MLX_OMARCHY_NO_ROPE_FREQS_HOST") &&
+        freqs->dtype() == float32 && freqs->flags().row_contiguous &&
+        freqs->size() > 0;
     if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
       fprintf(
           stderr,
