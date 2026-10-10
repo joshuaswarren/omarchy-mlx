@@ -298,25 +298,29 @@ collected and how redaction works, is
 
 ## M2 Max ANE (measured)
 
-What the M2 Max (T6021) Neural Engine has done under Linux, with the receipts
-behind each line (kernel 7.1.12-2-12.6-sep-ARCH; driver module builds from `37ffb57`
-to `ca09ce8`, named per line where it matters):
+What the M2 Max (T6021) Neural Engine has done under Linux. Each line names the
+kernel and driver module build it ran on, because they changed between runs:
 
 - The firmware boots, `/dev/accel/accel0` is present, and the `ane_t6021`
-  module loads.
-- Batch multiply (fp16) on `ca09ce8`, 1, 2, 4 and 8 jobs per call: 12 distinct
-  input seeds per batch size, repeated in 5 separate runs, no mismatches against the
-  half-away fp16 reference. Every output was bit-exact.
-- The whole Parakeet encoder as one Apple-compiled program: 254.5 ms median
-  per call and an output equal to the fp16 golden. This was one run on an
-  earlier module build. It has not been repeated on the current one.
-- Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session:
-  1.21 tokens per second against 0.157 for the per-call path (7.7 times), with
-  logits identical between the two arms. The run is reproducible. It does not match the reference
-  output on every prompt (3 of 10 prompts match; the others diverge at the
-  same step in repeat runs).
-- Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13 percent of calls take
-  longer than 0.4 ms, in a pattern that repeats every 8 calls.
+  module loads (read on 2026-10-10: kernel 7.1.12-2-12.6-sep-ARCH, module
+  `ca09ce8`).
+- Batch multiply (fp16) on `ca09ce8` (kernel 7.1.12-2-12.6-sep-ARCH), 1, 2, 4
+  and 8 jobs per call: 12 distinct input seeds per batch size, repeated in 5
+  separate runs, no mismatches against the half-away fp16 reference. Every
+  output was bit-exact.
+- The whole Parakeet encoder as one Apple-compiled program, one fixture, one
+  boot (kernel 7.1.13-3-1-ARCH, an earlier module build): the median call took
+  254.5 ms in two separate processes of 20 calls each, and the output equals the
+  fp16 golden. It has not been repeated on `ca09ce8`.
+- Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session
+  (module builds `329b9da` and `ca09ce8`): 1.21 tokens per second against 0.157
+  for the per-call path (7.7 times), with logits identical between the two arms.
+  The run is reproducible. It does not match the reference output on every
+  prompt (3 of 10 prompts match; the others diverge at the same step in repeat
+  runs).
+- Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13
+  percent of calls take longer than 0.4 ms, in a pattern that repeats every 8
+  calls.
 
 Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and the
 per-call load path under repeated loads (a second pass over the 38 programs
