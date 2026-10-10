@@ -736,3 +736,36 @@ TEST_CASE("compound and self-referencing assignment into a float16_t local store
   CHECK(glsl.find("facc += float(_b0.data[t * 8 + i]);") != std::string::npos);
   CHECK(glsl.find(" acc += ") == std::string::npos);
 }
+
+TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twice") {
+  // `h[i++] += x` expands to `h[i++] = float16_t(h[i++] + (x))` if the left
+  // side is repeated: i increments twice. A compound statement whose index
+  // has ++, --, a call or an assignment stays exactly as written; a pure index
+  // still expands; a plain `=` names the left side once and still wraps.
+  const char* source =
+      "int bump(int k) { return k + 1; }\n"
+      "[[kernel]] void idx(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t h[8];\n"
+      "  int i = 0;\n"
+      "  int j = 0;\n"
+      "  float facc = 0.0f;\n"
+      "  h[i++] += float16_t(1.0);\n"
+      "  h[i + 1] += w[t];\n"
+      "  h[bump(i)] += w[t];\n"
+      "  h[j++] = w[t];\n"
+      "  facc += w[t];\n"
+      "  out[t] = float(i) + facc;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("h[i++] += ") != std::string::npos);
+  CHECK(glsl.find("float16_t(h[i++]") == std::string::npos);
+  CHECK(glsl.find("h[bump(i)] += ") != std::string::npos);
+  CHECK(glsl.find("float16_t(h[bump(i)]") == std::string::npos);
+  CHECK(glsl.find("h[i + 1] = float16_t(h[i + 1] + (float(_b0.data[t])));") != std::string::npos);
+  CHECK(glsl.find("h[j++] = float16_t(_b0.data[t]);") != std::string::npos);
+  CHECK(glsl.find("facc += float(_b0.data[t]);") != std::string::npos);
+}

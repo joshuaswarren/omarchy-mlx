@@ -1687,6 +1687,20 @@ void wrap_half_lvalue_assignments(
     } else if (
         std::strchr("+-*/", body[cursor]) != nullptr && cursor + 1 < size &&
         body[cursor + 1] == '=' && (cursor + 2 >= size || body[cursor + 2] != '=')) {
+      // The compound form repeats the left-hand side inside its own
+      // expansion, so an index that has side effects or calls something
+      // (`h[i++] += x`, `h[f(i)] += x`) must not be duplicated: it is left
+      // as written, as before the widening commit. A plain `=` names the
+      // left-hand side once and needs no such care.
+      {
+        const std::string lhs_text = body.substr(start, lhs_end - start);
+        if (lhs_text.find("++") != std::string::npos ||
+            lhs_text.find("--") != std::string::npos ||
+            lhs_text.find('(') != std::string::npos ||
+            lhs_text.find('=') != std::string::npos) {
+          continue;
+        }
+      }
       op = body[cursor];
       rhs_begin = cursor + 2;
     } else {
