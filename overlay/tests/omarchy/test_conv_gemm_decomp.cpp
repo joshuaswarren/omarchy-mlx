@@ -22,7 +22,6 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
-#include "mlx/backend/omarchy/encoder.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 
@@ -47,7 +46,7 @@ bool compute_available() {
 std::vector<float> flat(const array& value, Stream stream) {
   array copy = astype(value, float32, stream);
   copy.eval();
-  omarchy::get_command_encoder(stream).synchronize();
+  synchronize(stream);
   const float* data = copy.data<float>();
   return std::vector<float>(data, data + copy.size());
 }

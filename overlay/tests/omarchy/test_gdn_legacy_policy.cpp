@@ -11,8 +11,9 @@
 //
 // main() pins MLX_OMARCHY_CAPS_SIM=m1-g13-legacy before the backend
 // initializes, so the legacy kernel selections run on any host device.
-// Each case compares the dispatch count of the Hk == Hv call against an
-// Hk < Hv call of the same size, which always takes the composed chain.
+// Each case compares the dispatch count of the head-dim 128 call against a
+// head-dim 64 call of the same shape, which always takes the composed chain
+// (GatedDeltaUpdate::use_fallback refuses Dk != 128 || Dv != 128).
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest/doctest.h"
@@ -91,25 +92,25 @@ struct Pair {
 };
 
 void check_fused(const char* what, Pair p, uint64_t fused_cap) {
-  std::cout << "[gdn_legacy_policy] " << what << ": Hk==Hv " << p.fused
-            << " dispatches, Hk<Hv (composed) " << p.composed << "\n";
-  CHECK_MESSAGE(p.fused <= fused_cap, what, ": Hk==Hv took ", p.fused,
+  std::cout << "[gdn_legacy_policy] " << what << ": D=128 " << p.fused
+            << " dispatches, D=64 (composed) " << p.composed << "\n";
+  CHECK_MESSAGE(p.fused <= fused_cap, what, ": D=128 took ", p.fused,
                 " dispatches on a simulated G13 legacy part; the fused "
                 "kernel needs <= ", fused_cap,
                 ". GatedDeltaUpdate::use_fallback sent it to the composed "
                 "chain.");
   CHECK_MESSAGE(p.composed > 4 * p.fused, what,
                 ": the composed reference (", p.composed,
-                ") is not far above the Hk==Hv count (", p.fused,
+                ") is not far above the D=128 count (", p.fused,
                 "), so this case cannot tell fused from composed.");
 }
 
 // Raw-gate decode (T = 1): the mx.fast.gated_delta_update_raw entry.
-Pair raw_decode(Stream s, int hk_composed) {
-  const int H = 16, D = 128;
-  auto run_shape = [&](int hk) {
-    array q = bf16({1, 1, hk, D}, 1, 0.1f, s);
-    array k = bf16({1, 1, hk, D}, 2, 0.1f, s);
+Pair raw_decode(Stream s) {
+  const int H = 16;
+  auto run_shape = [&](int D) {
+    array q = bf16({1, 1, H, D}, 1, 0.1f, s);
+    array k = bf16({1, 1, H, D}, 2, 0.1f, s);
     array v = bf16({1, 1, H, D}, 3, 1.0f, s);
     array a = bf16({1, 1, H}, 4, 1.0f, s);
     array b = bf16({1, 1, H}, 5, 1.0f, s);
@@ -120,16 +121,16 @@ Pair raw_decode(Stream s, int hk_composed) {
       return fast::gated_delta_update_raw(q, k, v, a, b, a_log, dt, h0);
     });
   };
-  return {run_shape(H), run_shape(hk_composed)};
+  return {run_shape(128), run_shape(64)};
 }
 
 // Precomputed-gate GDN through mx.fast.gated_delta_update: decode (T = 1)
 // and prefill (T > 1).
-Pair gated(Stream s, int T, int hk_composed) {
-  const int H = 16, D = 128;
-  auto run_shape = [&](int hk) {
-    array q = bf16({1, T, hk, D}, 11, 0.1f, s);
-    array k = bf16({1, T, hk, D}, 12, 0.1f, s);
+Pair gated(Stream s, int T) {
+  const int H = 16;
+  auto run_shape = [&](int D) {
+    array q = bf16({1, T, H, D}, 11, 0.1f, s);
+    array k = bf16({1, T, H, D}, 12, 0.1f, s);
     array v = bf16({1, T, H, D}, 13, 1.0f, s);
     array g = astype(add(bf16({1, T, H}, 14, 0.05f, s), array(0.9f), s),
                      bfloat16, s);
@@ -140,7 +141,7 @@ Pair gated(Stream s, int T, int hk_composed) {
       return fast::gated_delta_update(q, k, v, g, beta, h0);
     });
   };
-  return {run_shape(H), run_shape(hk_composed)};
+  return {run_shape(128), run_shape(64)};
 }
 
 bool simulated_legacy() {
@@ -164,17 +165,17 @@ bool simulated_legacy() {
 
 TEST_CASE("legacy part: Hk==Hv raw-gate decode stays fused") {
   if (!simulated_legacy()) return;
-  check_fused("raw decode T=1", raw_decode(gpu_stream(), 8), 4);
+  check_fused("raw decode T=1", raw_decode(gpu_stream()), 4);
 }
 
 TEST_CASE("legacy part: Hk==Hv gated decode stays fused") {
   if (!simulated_legacy()) return;
-  check_fused("gated decode T=1", gated(gpu_stream(), 1, 8), 4);
+  check_fused("gated decode T=1", gated(gpu_stream(), 1), 4);
 }
 
 TEST_CASE("legacy part: Hk==Hv prefill stays fused") {
   if (!simulated_legacy()) return;
-  check_fused("prefill T=32", gated(gpu_stream(), 32, 8), 16);
+  check_fused("prefill T=32", gated(gpu_stream(), 32), 16);
 }
 
 int main(int argc, char** argv) {
