@@ -231,6 +231,20 @@ llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit)
 
 Skipped, too large for this machine: GLM-5.3-Flash, Kimi-K3, DeepSeek-V4-Flash, Qwen3.8-Flash-Next.
 
+The same measurement on a base M1 (16 GB, macOS 27.0), for the models that fit, Linux / macOS:
+
+| Model | Decode | Prefill 512 |
+|---|---|---|
+| Qwen3.5-9B (MLX) | 12.4 / 12.9 = **96%** | 101.6 / 85.9 = **118%** |
+| gemma-4-E4B (MLX) | fails to run (0%) | fails to run (0%) |
+
+| llama.cpp Q4_K_M (Vulkan / Metal) | Decode tg128 | Prefill pp512 |
+|---|---|---|
+| Qwen3.5-9B | 7.55 / 10.85 = **70%** | 48.3 / 115.0 = **42%** |
+| gemma-4-E4B | 10.9 / 18.4 = **59%** | 83.3 / 208.6 = **40%** |
+
+On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B and decode is within 4%; the gap on the M1 Max above is chip-dependent. The macOS values are the median of three runs for Qwen3.5-9B and a single run for gemma-4-E4B. The default Linux route for this model on the base M1 produces different greedy tokens from macOS (output digest differs); the route that matches macOS costs 2.8% of prefill.
+
 Rows are re-measured weekly; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
 
 ## Qwen3.5-9B fused GDN decode
