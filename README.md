@@ -68,7 +68,7 @@ plus Laya, and it needs a 96 GB machine.
 |---|---|---|
 | M1 | Tested | Parakeet islands |
 | M1 Max | Tested | Whole encoder |
-| M2 Max | Tested | Research driver, opt-in |
+| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Measured on Linux: see [M2 Max ANE](#m2-max-ane-measured) ([receipt](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested overlay |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
@@ -296,6 +296,37 @@ Omarchy, and submit both. The full guide, including what gets
 collected and how redaction works, is
 [docs/contribute-data.md](docs/contribute-data.md).
 
+## M2 Max ANE (measured)
+
+What the M2 Max (T6021) Neural Engine has done under Linux. Each line names the
+kernel and driver module build it ran on, because they changed between runs:
+
+- The firmware boots, `/dev/accel/accel0` is present, and the `ane_t6021`
+  module loads (read on 2026-10-10: kernel 7.1.12-2-12.6-sep-ARCH, module
+  `ca09ce8`).
+- Batch multiply (fp16) on `ca09ce8` (kernel 7.1.12-2-12.6-sep-ARCH), 1, 2, 4
+  and 8 jobs per call: 12 distinct input seeds per batch size, repeated in 5
+  separate runs, no mismatches against the half-away fp16 reference. Every
+  output was bit-exact.
+- The whole Parakeet encoder as one Apple-compiled program, one fixture, one
+  boot (kernel 7.1.13-3-1-ARCH, an earlier module build): the median call took
+  254.5 ms in two separate processes of 20 calls each, and the output equals the
+  fp16 golden. It has not been repeated on `ca09ce8`.
+- Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session
+  (module builds `329b9da` and `ca09ce8`): 1.21 tokens per second against 0.157
+  for the per-call path (7.7 times), with logits identical between the two arms.
+  The run is reproducible. It does not match the reference output on every
+  prompt (3 of 10 prompts match; the others diverge at the same step in repeat
+  runs).
+- Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13
+  percent of calls take longer than 0.4 ms, in a pattern that repeats every 8
+  calls.
+
+Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and the
+per-call load path under repeated loads (a second pass over the 38 programs
+failed 5 times with a buffer-allocation error; the resident path is the
+supported fast path).
+
 ## Turn on the ANE for your chip
 
 The collector prints the steps that match your kernel. One wording source:
@@ -340,9 +371,10 @@ The collector prints the steps that match your kernel. One wording source:
   `mlx-omarchy-parakeet download` first. The ANE needs an M1 or
   M1 Max with `/dev/accel/accel0` present and the `ane` module
   loaded. The refusal names the missing piece.
-- On an M2 Max, `mlx-omarchy-info` can report the ANE as missing
-  while the research driver is loaded. This is a reporting gap in the
-  current release, not a new failure.
+- On an M2 Max, `mlx-omarchy-info` reports the ANE as available when the
+  driver is loaded (read on 2026-10-10 with the installed 0.7.28 package:
+  node, `accel0`, module and version all present). An older release could
+  report it as missing; if yours does, update the package.
 
 ## Support
 

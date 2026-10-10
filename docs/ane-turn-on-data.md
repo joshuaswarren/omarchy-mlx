@@ -96,7 +96,7 @@ row so far also records `dtb_sha256: null` (`needs root`).
 | t6001 | M1 Max | 3 | 0 | 3 | n/a | yes | **missing** | Linux ANE live; needs passing smoke rows |
 | t6002 | M1 Ultra | 0 | 0 | 6 | **no macOS row** | — | — | quick only; dual-boot macOS deep capture is the single unblock |
 | t6020 | M2 Pro | 13 | 5 | 22 | yes (macOS) | yes | **missing** | most-covered M2 SoC |
-| t6021 | M2 Max | 2 | 1 | 3 | yes (macOS) | yes | **missing** | research driver opt-in |
+| t6021 | M2 Max | 2 | 1 | 3 | yes (macOS) | yes | **missing** | driver loads under Linux; measured results in README, M2 Max ANE |
 | t6022 | M2 Ultra | 0 | 1 | 0 | yes (macOS) | — | — | needs a Linux deep row for high bits + board topology |
 | t8112 | base M2 | 2 | 1 | 0 | unmeasured | partial | **missing** | ASC tunables / chip-revision question (own-memory mode) |
 | t8122 | M3 family | 0 | 0 | 1 | no | — | — | M3 = `iop,ascwrap-v6` ASC IOP; capture lands with v2 |
