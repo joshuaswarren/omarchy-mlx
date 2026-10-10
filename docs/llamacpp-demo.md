@@ -195,6 +195,21 @@ re-run can move. One cell is noisier than that: the M2 Max 4B run on our
 driver measured 290, 249 and 290 tok/s on prefill (and 23.4, 20.2 and 23.4
 tok/s on decode), so its large deviation comes from the middle run.
 
+## Measured on an M2 Max, larger models (Vulkan only)
+
+Six more models on the M2 Max, measured by another run with the same llama.cpp commit (`65840ed`) and `llama-bench -p 512 -n 128 -r 5`, so each cell is the mean of 5 runs. Differences from the table above: only a v3 driver build (`6543eeb7df`) was measured, with no system-Mesa arm, so nothing here is a speed-up; flags are the `llama-bench` defaults (all layers on the GPU, 12 threads, ubatch 512, not the `-ub 256` used above); the models are the `Q4_K_M` and `UD-Q4_K_M` GGUFs from unsloth. There is no macOS measurement for this chip, so no ratio to Metal is claimed.
+
+| model | prefill pp512 | decode tg128 |
+|---|---|---|
+| gemma-4-26B-A4B (mixture of experts) | 321.5 ± 1.7 | 29.5 ± 0.24 |
+| Qwen3.6-35B-A3B (mixture of experts) | 305.7 ± 2.2 | 29.2 ± 0.15 |
+| gemma-4-E4B | 373.6 ± 0.5 | 27.2 ± 0.21 |
+| Qwen3.5 9B | 219.1 ± 0.5 | 22.3 ± 0.11 |
+| gemma-4-31B | 56.2 ± 0.02 | 7.4 ± 0.01 |
+| Qwen3.8 27B | 66.8 ± 0.01 | 6.3 ± 1.4 (median 6.9) |
+
+The two mixture-of-experts models decode at 29 tok/s, about 30 percent faster than the 9B dense model (22.3) and about four times faster than the 27B and 31B dense models. The Qwen3.8 27B decode mean comes from four runs at 6.9 and one at 3.8, so quote the median. Per-run JSON is in `receipts/2026-10-09-linux-vs-macos/m2-max-linux/`.
+
 ## Step 3: put it on stage
 
 From the same folder, one command, and the audience watches tokens appear:
