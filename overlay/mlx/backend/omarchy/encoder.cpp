@@ -580,6 +580,16 @@ void CommandEncoder::dispatch_compute_pipeline(
             "[rtmod] DISPATCH kernel=%d count=%u gx=%u gy=%u gz=%u\n",
             static_cast<int>(profile_kernel), params.count, group_count_x,
             group_count_y, group_count_z);
+    for (size_t b = 0; b < bindings.size(); ++b) {
+      const auto* owned =
+          static_cast<const VulkanBuffer*>(bindings[b].owner);
+      fprintf(stderr,
+              "[rtmod]   bind[%zu] off=%llu range=%llu alloc=%llu\n",
+              b,
+              static_cast<unsigned long long>(bindings[b].offset),
+              static_cast<unsigned long long>(bindings[b].range),
+              static_cast<unsigned long long>(owned ? owned->size : 0llu));
+    }
     fflush(stderr);
   }
   auto& compute = device_.compute();
