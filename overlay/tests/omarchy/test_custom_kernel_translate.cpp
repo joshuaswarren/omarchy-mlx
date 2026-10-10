@@ -737,11 +737,11 @@ TEST_CASE("compound and self-referencing assignment into a float16_t local store
   CHECK(glsl.find(" acc += ") == std::string::npos);
 }
 
-TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twice") {
-  // `h[i++] += x` expands to `h[i++] = float16_t(h[i++] + (x))` if the left
-  // side is repeated: i increments twice. A compound statement whose index
-  // has ++, --, a call or an assignment stays exactly as written; a pure index
-  // still expands; a plain `=` names the left side once and still wraps.
+TEST_CASE("float16_t lvalue wrapping evaluates a side-effecting index once") {
+  // `h[i++] += x` must not expand to `h[i++] = float16_t(h[i++] + (x))`: i
+  // would increment twice. A compound statement whose index has ++, --, a
+  // call or an assignment hoists that index into a temporary first; a pure
+  // index expands in place; a plain `=` names the left side once and wraps.
   const char* source =
       "int bump(int k) { return k + 1; }\n"
       "[[kernel]] void idx(\n"
@@ -761,10 +761,12 @@ TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twic
       "  out[t] = float(i) + facc;\n"
       "}\n";
   auto glsl = translate(source, 1);
-  CHECK(glsl.find("h[i++] += ") != std::string::npos);
-  CHECK(glsl.find("float16_t(h[i++]") == std::string::npos);
-  CHECK(glsl.find("h[bump(i)] += ") != std::string::npos);
-  CHECK(glsl.find("float16_t(h[bump(i)]") == std::string::npos);
+  // Side-effecting and call indices are evaluated once into a block-local
+  // temporary used on both sides: i increments once, the sink stays half.
+  CHECK(glsl.find("{ int _mlx_ix0 = int(i++); h[_mlx_ix0] = float16_t(h[_mlx_ix0] + (float16_t(1.0))); }") != std::string::npos);
+  CHECK(glsl.find("i++") == glsl.rfind("i++"));
+  CHECK(glsl.find("{ int _mlx_ix1 = int(bump(i)); h[_mlx_ix1] = float16_t(h[_mlx_ix1] + (float(_b0.data[t]))); }") != std::string::npos);
+  CHECK(glsl.find("bump(i)") == glsl.rfind("bump(i)"));
   CHECK(glsl.find("h[i + 1] = float16_t(h[i + 1] + (float(_b0.data[t])));") != std::string::npos);
   CHECK(glsl.find("h[j++] = float16_t(_b0.data[t]);") != std::string::npos);
   CHECK(glsl.find("facc += float(_b0.data[t]);") != std::string::npos);
@@ -813,8 +815,8 @@ TEST_CASE("compound assignment into a float16_t output element stores through fl
       "}\n";
   auto glsl = translate(source, 2);
   CHECK(glsl.find("float16_t(_mlx_arg1[t] + (float(_b0.data[j])))") != std::string::npos);
-  CHECK(glsl.find("_mlx_arg1[i++] += ") != std::string::npos);
-  CHECK(glsl.find("float16_t(_mlx_arg1[i++]") == std::string::npos);
+  CHECK(glsl.find("{ int _mlx_ix0 = int(i++); _mlx_arg1[_mlx_ix0] = float16_t(_mlx_arg1[_mlx_ix0] + (float(_b0.data[j]))); }") != std::string::npos);
+  CHECK(glsl.find("i++") == glsl.rfind("i++"));
   CHECK(glsl.find("_mlx_arg2[t] += float(_b0.data[j]);") != std::string::npos);
 }
 
@@ -920,4 +922,29 @@ TEST_CASE("helper arguments: a leading float16_t() cast is skipped only when it 
   CHECK(glsl.find("float16_t(float16_t(_b0.data[1]) + float(_b0.data[2]))") != std::string::npos);
   CHECK(glsl.find("float16_t(float16_t(float(_b0.data[1]) + float(_b0.data[2])))") == std::string::npos);
   CHECK(glsl.find("fma16(bc, _b0.data[0], float16_t(float(_b0.data[1]) + float(_b0.data[2])))") != std::string::npos);
+}
+
+TEST_CASE("hoisted compound index: multidimensional sinks hoist only the effectful groups") {
+  // `h[i++][2] += x` hoists the first group; `h[i + 1][j--] += x` hoists the
+  // second; a pure `h[1][2] += x` expands in place. Each effect happens once.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t h[4][4];\n"
+      "  int i = 0;\n"
+      "  int j = 3;\n"
+      "  h[i++][2] += w[t];\n"
+      "  h[i + 1][j--] += w[t];\n"
+      "  h[1][2] += w[t];\n"
+      "  out[t] = float(i) + float(j);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("{ int _mlx_ix0 = int(i++); h[_mlx_ix0][2] = float16_t(h[_mlx_ix0][2] + (float(_b0.data[t]))); }") != std::string::npos);
+  CHECK(glsl.find("{ int _mlx_ix1 = int(j--); h[i + 1][_mlx_ix1] = float16_t(h[i + 1][_mlx_ix1] + (float(_b0.data[t]))); }") != std::string::npos);
+  CHECK(glsl.find("h[1][2] = float16_t(h[1][2] + (float(_b0.data[t])));") != std::string::npos);
+  CHECK(glsl.find("i++") == glsl.rfind("i++"));
+  CHECK(glsl.find("j--") == glsl.rfind("j--"));
 }

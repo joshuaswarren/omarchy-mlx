@@ -1642,6 +1642,7 @@ void wrap_half_lvalue_assignments(
   const size_t size = body.size();
   std::string out;
   size_t copied = 0;
+  int hoisted_indices = 0;
   size_t i = 0;
   while (i < size) {
     if (!(std::isalpha(static_cast<unsigned char>(body[i])) || body[i] == '_') ||
@@ -1699,20 +1700,6 @@ void wrap_half_lvalue_assignments(
     } else if (
         std::strchr("+-*/", body[cursor]) != nullptr && cursor + 1 < size &&
         body[cursor + 1] == '=' && (cursor + 2 >= size || body[cursor + 2] != '=')) {
-      // The compound form repeats the left-hand side inside its own
-      // expansion, so an index that has side effects or calls something
-      // (`h[i++] += x`, `h[f(i)] += x`) must not be duplicated: it is left
-      // as written, as before the widening commit. A plain `=` names the
-      // left-hand side once and needs no such care.
-      {
-        const std::string lhs_text = body.substr(start, lhs_end - start);
-        if (lhs_text.find("++") != std::string::npos ||
-            lhs_text.find("--") != std::string::npos ||
-            lhs_text.find('(') != std::string::npos ||
-            lhs_text.find('=') != std::string::npos) {
-          continue;
-        }
-      }
       op = body[cursor];
       rhs_begin = cursor + 2;
     } else {
@@ -1765,8 +1752,43 @@ void wrap_half_lvalue_assignments(
         continue;
       }
     }
-    const std::string lhs = body.substr(start, lhs_end - start);
+    std::string lhs = body.substr(start, lhs_end - start);
+    std::string prologue;
+    if (op != 0) {
+      // The compound form names the left-hand side twice. An index group with
+      // a side effect or a call (`h[i++] += x`, `h[f(i)] += x`) is evaluated
+      // once into a block-local temporary and the temporary is used on both
+      // sides, so `i` increments once and the sink stays a half lvalue.
+      std::string rebuilt_lhs = lhs.substr(0, lhs_name.size());
+      size_t pos = lhs_name.size();
+      while (pos < lhs.size() && lhs[pos] == '[') {
+        int group_depth = 0;
+        size_t group_close = pos;
+        for (; group_close < lhs.size(); ++group_close) {
+          group_depth += lhs[group_close] == '[' ? 1 : lhs[group_close] == ']' ? -1 : 0;
+          if (group_depth == 0) {
+            break;
+          }
+        }
+        const std::string inner = lhs.substr(pos + 1, group_close - pos - 1);
+        if (inner.find("++") != std::string::npos ||
+            inner.find("--") != std::string::npos ||
+            inner.find('(') != std::string::npos ||
+            inner.find('=') != std::string::npos) {
+          const std::string temp = "_mlx_ix" + std::to_string(hoisted_indices++);
+          prologue += "int " + temp + " = int(" + inner + "); ";
+          rebuilt_lhs += "[" + temp + "]";
+        } else {
+          rebuilt_lhs += lhs.substr(pos, group_close - pos + 1);
+        }
+        pos = group_close + 1;
+      }
+      lhs = rebuilt_lhs;
+    }
     out.append(body, copied, start - copied);
+    if (!prologue.empty()) {
+      out += "{ " + prologue;
+    }
     out += lhs + " = float16_t(";
     if (op != 0) {
       out += lhs + " " + op + " (" + rhs + ")";
@@ -1774,6 +1796,9 @@ void wrap_half_lvalue_assignments(
       out += rhs;
     }
     out += ");";
+    if (!prologue.empty()) {
+      out += " }";
+    }
     copied = end + 1;
     i = end + 1;
   }
