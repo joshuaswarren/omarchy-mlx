@@ -137,6 +137,11 @@ def main() -> int:
                     problems.append(
                         f"{name} is {state} but a module is present"
                     )
+                elif table.get(base, {}).get("state") != "failed":
+                    problems.append(
+                        f"{name} is recorded {state} but the gate table "
+                        f"no longer marks {base} failed; regenerate the cache"
+                    )
                 continue
             if not has_module:
                 problems.append(f"missing AOT module for {name} ({key})")
