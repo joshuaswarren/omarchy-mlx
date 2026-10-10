@@ -54,7 +54,9 @@ Same convolution split into row blocks, 2 runs alone and 4 runs beside the anima
 |---|---|---|---|
 | 8 | about 87 ms | 4 runs | identical, 0 of 67,108,864 elements differ |
 | 14 | about 152 ms | 4 runs | wrong in 4 of 4: 26.4M, 33.1M, 29.2M and 3.7M elements differ; max abs diff 318.8 to 486 |
-With the 6 runs at 87 ms and the 6 runs at 23 ms in the first sweep, the short lengths are correct in 16 of 16 runs. Twelve of those 16 come from the first sweep, whose raw files are not in the lab archive. The threshold on this machine lies between 87 ms and 152 ms.
+With the 6 runs at 87 ms and the 6 runs at 23 ms in the first sweep (17:16 to 17:21 UTC), the short lengths are correct in 16 of 16 runs. Twelve of those 16 come from the first sweep and 4 from the second. The threshold on this machine lies between 87 ms and 152 ms.
+A separate run at 17:33 UTC (32 blocks, about 175 ms per dispatch, animated page) was wrong in 5 of 5: 17.7M to 23.2M elements differ, max abs diff 401 to 509. The display then wedged.
+No pre-registration entry exists for the 21:19 and 22:11 UTC runs. What was fixed before each run: the ticket's lane text (design and what is compared) and the script, both kept. No numeric prediction was written down. The raw per-run files are kept for every run quoted in this receipt except the log of the 17:09 UTC Mesa-variants ticket (its run directory is kept).
 The kernel GPU driver logged 120 "GPU timeout" events between 22:13:48 and 22:14:08 UTC, which is the 14-row animated arm. The page's frame counter read 5 or 6 before and after each arm from 23 rows (about 300 ms) on, a change of 0, so the page was not animating after that storm. Those later arms (23, 33, 42 and 51 rows, all identical to the alone run) do not test the question and are not counted.
 The first hung-task message (a kernel worker blocked more than 122 s) came at 22:17:18 UTC, 190 s after the last timeout event. A shutdown began at 22:18:41 UTC and the log ends at 22:18:53 UTC. A hard reset is an inference; no saved file shows it.
 
