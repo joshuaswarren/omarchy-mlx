@@ -45,7 +45,10 @@ layout(std430, set = 0, binding = 1) readonly buffer Suh {
 layout(std430, set = 0, binding = 2) readonly buffer Svh {
   uint g_svh[];
 };
-layout(std430, set = 0, binding = 3) writeonly buffer Dec16 {
+// NOT writeonly: stage B reads this block's tile decode back through the
+// workgroup barrier. (writeonly-then-read is undefined; the M1 oracle
+// shader carried the same poison and never ran on hardware.)
+layout(std430, set = 0, binding = 3) buffer Dec16 {
   uint g_dec16[];
 };
 layout(std430, set = 0, binding = 4) buffer Tmp {
