@@ -68,7 +68,7 @@ plus Laya, and it needs a 96 GB machine.
 |---|---|---|
 | M1 | Tested | Parakeet islands |
 | M1 Max | Tested | Whole encoder |
-| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Measured on Linux: see [M2 Max ANE](#m2-max-ane-measured) ([receipt](receipts/2026-10-10-m2-max-ane.md)) |
+| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](#m2-max-ane-measured)) ([receipt](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested overlay |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
@@ -308,10 +308,16 @@ kernel and driver module build it ran on, because they changed between runs:
   and 8 jobs per call: 12 distinct input seeds per batch size, repeated in 5
   separate runs, no mismatches against the half-away fp16 reference. Every
   output was bit-exact.
-- The whole Parakeet encoder as one Apple-compiled program, one fixture, one
-  boot (kernel 7.1.13-3-1-ARCH, an earlier module build): the median call took
-  254.5 ms in two separate processes of 20 calls each, and the output equals the
-  fp16 golden. It has not been repeated on `ca09ce8`.
+- The whole Parakeet encoder as one Apple-compiled program, one 10.44 s fixture,
+  twice. First on kernel 7.1.13-3-1-ARCH with an earlier module build: median
+  call 254.5 ms in two processes of 20 calls each, output equal to the fp16
+  golden. Again on 2026-10-10 on `ca09ce8` (kernel 7.1.12-2-12.6-sep-ARCH,
+  a fresh reboot, one process of 20 calls, taken while another test ran GPU work on
+  the same machine): median call 253.5 ms, maximum 253.8 ms,
+  and the output is bit-exact against the Apple fp16 golden (maximum absolute
+  difference 0.0, no NaN or inf, no new EXCH-fail, DART-fault, quarantine or
+  completion-wait-failed lines). The full result, with the decode check, is in
+  the receipt.
 - Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session
   (module builds `329b9da` and `ca09ce8`): 1.21 tokens per second against 0.157
   for the per-call path (7.7 times), with logits identical between the two arms.
