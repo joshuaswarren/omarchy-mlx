@@ -35,6 +35,7 @@
 #include "mlx/backend/omarchy/ane/bundle.h"
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/m2v_route.h"
 #include "mlx/backend/omarchy/unsupported.h"
 
 #include "translation_version.h"
@@ -3377,6 +3378,7 @@ const Translation& cached_translation(
 }
 
 using omarchy::binding;
+namespace m2v = omarchy::m2v;
 
 template <typename T>
 array metadata_array(
@@ -3421,13 +3423,23 @@ void CustomKernel::eval_gpu(
         out_for_error);
   }
 
-  const Translation* translation = nullptr;
+  // Route decision: per-kernel override, whole-feature mode, gate table,
+  // then the translator default (docs/custom-kernel-metal2vk.md).
+  const std::string entry_name = m2v::kernel_entry_name(source_);
+  const std::string base_name = m2v::kernel_base_name(entry_name);
+  m2v::Route route = m2v::Route::Translator;
   try {
-    translation = &cached_translation(
-        source_, grid_, threadgroup_, outputs.size(), compile_options_);
+    route = m2v::decide_route(base_name, m2v::gate_table());
   } catch (const std::exception& error) {
     omarchy::unsupported(
         std::string("fast::CustomKernel MSL subset: ") + error.what(),
+        out_for_error);
+  }
+  if (route == m2v::Route::Refuse) {
+    m2v::record_route(base_name, route);
+    omarchy::unsupported(
+        "fast::CustomKernel MSL subset: kernel " + entry_name +
+            " refused by the metal2vk routing override",
         out_for_error);
   }
 
@@ -3462,7 +3474,7 @@ void CustomKernel::eval_gpu(
   }
 
   std::vector<omarchy::ComputeBinding> bindings;
-  bindings.reserve(translation->parameters.size());
+  bindings.reserve(checked_inputs.size() * 4 + outputs.size());
   for (size_t index = 0; index < checked_inputs.size(); ++index) {
     const auto& input = checked_inputs[index];
     bindings.push_back(binding(input));
@@ -3492,11 +3504,6 @@ void CustomKernel::eval_gpu(
   for (const auto& output : outputs) {
     bindings.push_back(binding(output));
   }
-  if (bindings.size() != translation->parameters.size()) {
-    omarchy::unsupported(
-        "fast::CustomKernel MSL subset: generated binding count mismatch",
-        out_for_error);
-  }
 
   const auto [grid_x, grid_y, grid_z] = grid_;
   if (grid_x == 0 || grid_y == 0 || grid_z == 0) {
@@ -3510,12 +3517,99 @@ void CustomKernel::eval_gpu(
   const auto groups_y = static_cast<uint32_t>((grid_y + local_y - 1) / local_y);
   const auto groups_z = static_cast<uint32_t>((grid_z + local_z - 1) / local_z);
 
+  // When the metal2vk route was attempted and failed, every later refusal
+  // names the kernel and both reasons.
+  bool m2v_attempted = false;
+  std::string m2v_error;
+  if (route == m2v::Route::M2v) {
+    try {
+      m2v_attempted = true;
+      const auto module = m2v::resolve_module(source_, entry_name);
+      const std::string problem = m2v::validate_dispatch(
+          module.reflection,
+          bindings.size(),
+          {static_cast<uint32_t>(threads_x),
+           static_cast<uint32_t>(threads_y),
+           static_cast<uint32_t>(threads_z)});
+      if (!problem.empty()) {
+        throw std::runtime_error(problem);
+      }
+      // clspv drives the workgroup size from spec constants 0..2; a module
+      // with a fixed size validated above against the dispatch dims.
+      VkSpecializationInfo spec{};
+      std::array<VkSpecializationMapEntry, 3> spec_entries{};
+      const std::array<uint32_t, 3> local = {
+          static_cast<uint32_t>(threads_x),
+          static_cast<uint32_t>(threads_y),
+          static_cast<uint32_t>(threads_z)};
+      const VkSpecializationInfo* spec_pointer = nullptr;
+      if (module.reflection.workgroup_size_spec_constant_ids.has_value()) {
+        for (size_t axis = 0; axis < 3; ++axis) {
+          spec_entries[axis] = VkSpecializationMapEntry{
+              static_cast<uint32_t>(
+                  (*module.reflection.workgroup_size_spec_constant_ids)[axis]),
+              axis * sizeof(uint32_t),
+              sizeof(uint32_t)};
+        }
+        spec = VkSpecializationInfo{
+            3,
+            spec_entries.data(),
+            local.size() * sizeof(uint32_t),
+            local.data()};
+        spec_pointer = &spec;
+      }
+      std::ostringstream pipeline_key;
+      pipeline_key << "m2v:" << module.key << ':' << local[0] << ','
+                   << local[1] << ',' << local[2];
+      omarchy::ComputeParams params;
+      // The dispatch starts at offset zero, so every push-constant word the
+      // clspv module reads (its own region words included) is zero.
+      encoder.dispatch_compute(
+          pipeline_key.str(),
+          module.spv,
+          module.reflection.name,
+          spec_pointer,
+          bindings,
+          params,
+          groups_x,
+          groups_y,
+          groups_z);
+      m2v::record_route(base_name, m2v::Route::M2v);
+      return;
+    } catch (const std::exception& error) {
+      m2v_error = error.what();
+      m2v::log_fallback_once(entry_name, m2v_error);
+      m2v::record_fallback(entry_name, m2v_error);
+    }
+  }
+
+  const std::string m2v_prefix =
+      m2v_attempted
+      ? "fast::CustomKernel MSL subset: kernel " + entry_name +
+            ": metal2vk route failed (" + m2v_error + "): "
+      : std::string("fast::CustomKernel MSL subset: ");
+  const Translation* translation = nullptr;
+  try {
+    translation = &cached_translation(
+        source_, grid_, threadgroup_, outputs.size(), compile_options_);
+  } catch (const std::exception& error) {
+    omarchy::unsupported(
+        m2v_prefix + error.what(),
+        out_for_error);
+  }
+
+  if (bindings.size() != translation->parameters.size()) {
+    omarchy::unsupported(
+        m2v_prefix + "generated binding count mismatch",
+        out_for_error);
+  }
+
   const std::vector<uint32_t>* spirv = nullptr;
   try {
     spirv = &cached_compile(translation->glsl);
   } catch (const std::exception& error) {
     omarchy::unsupported(
-        std::string("fast::CustomKernel MSL subset: ") + error.what(),
+        m2v_prefix + error.what(),
         out_for_error);
   }
   omarchy::ComputeParams params;
@@ -3527,6 +3621,7 @@ void CustomKernel::eval_gpu(
       groups_x,
       groups_y,
       groups_z);
+  m2v::record_route(base_name, m2v::Route::Translator);
 }
 
 #ifdef MLX_OMARCHY_TEST_TRANSLATE
