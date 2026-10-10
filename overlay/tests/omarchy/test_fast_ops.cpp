@@ -3197,6 +3197,46 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
       std::string::npos);
 }
 
+TEST_CASE("rope freqs host read agrees with the nested gate on both legs") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Shape shape{1, 1, 4, 16};
+  array x = astype(rope_input(shape, 167), float16, stream);
+  array offset = array(3000, int32);
+  array freqs = astype(
+      exp(multiply(array(-0.5f), astype(arange(8, stream), float32, stream),
+                   stream),
+          stream),
+      float32, stream);
+  array tiny_freqs = full({8}, 1e-8f, float32, stream);
+  auto refuse = [&] {
+    return caught_message([&] {
+      fast::rope(x, 16, false, std::nullopt, 1.0f, array(32000, int32),
+                 tiny_freqs, stream)
+          .eval();
+    });
+  };
+  // Default: the host read.
+  auto host = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  host.eval();
+  auto host_message = refuse();
+  // Kill switch: the nested min(abs(freqs)) gate.
+  setenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST", "1", 1);
+  auto nested =
+      fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  nested.eval();
+  auto nested_message = refuse();
+  unsetenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST");
+  // Same bound, same kernel: the outputs are bit-identical.
+  CHECK(flat(host, stream) == flat(nested, stream));
+  CHECK(
+      host_message.find("exceeds the trig reduction limit") !=
+      std::string::npos);
+  CHECK(host_message == nested_message);
+}
+
 namespace {
 
 uint64_t alpha1_fnv1a64(const void* data, size_t bytes) {
