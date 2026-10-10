@@ -13131,7 +13131,7 @@ bool Exl3Decode::use_fallback(Stream s) {
 // output in the caller's dtype. The comparison tool joins these against
 // the CPU reference per stage.
 void exl3_debug_dump_stages(
-    CommandEncoder& encoder,
+    omarchy::CommandEncoder& encoder,
     const std::string& tag,
     const array& dec16,
     const array& tmp,
