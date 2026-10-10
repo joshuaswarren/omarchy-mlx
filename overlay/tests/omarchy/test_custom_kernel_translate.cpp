@@ -640,3 +640,154 @@ TEST_CASE("header helper numeric_limits constants map like the body") {
   CHECK(glsl.find("3.4028234663852886e+38f") != std::string::npos);
   CHECK(glsl.find("omlx_cap(_mlx_arg0[i])") != std::string::npos);
 }
+
+TEST_CASE("float16_t buffer reads stay half in a plain assignment and a call argument") {
+  // Parakeet decoder-step chains (v0.7.32 freeze, G13C): `sh_a[i] =
+  // embedding[j];` and `exact_fma16(bc, sh_a[k], weights[j])` need float16_t.
+  // The widened read gave glslc `cannot convert from temp float to temp
+  // float16_t` and `exact_fma16: no matching overloaded function`.
+  const char* source =
+      "float16_t exact_fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "    precise float p = float(x) * float(y);\n"
+      "    return float16_t(float(acc) + p);\n"
+      "}\n"
+      "[[kernel]] void chains(\n"
+      "    const device float16_t* embedding [[buffer(0)]],\n"
+      "    const device float16_t* weights [[buffer(1)]],\n"
+      "    device float16_t* bsum [[buffer(2)]],\n"
+      "    uint t [[thread_position_in_threadgroup]]) {\n"
+      "  threadgroup float16_t sh_a[64];\n"
+      "  sh_a[t] = embedding[t];\n"
+      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  for (uint k = 0u; k < 8u; ++k) {\n"
+      "    bc = exact_fma16(bc, sh_a[k], weights[k * 64u + t]);\n"
+      "  }\n"
+      "  bsum[t] = bc;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("sh_a[t] = float16_t(_b0.data[t]);") != std::string::npos);
+  CHECK(glsl.find("= float(_b0.data[t])") == std::string::npos);
+  CHECK(glsl.find("exact_fma16(bc, sh_a[k], _b1.data[") != std::string::npos);
+  CHECK(glsl.find("float(_b1.data[") == std::string::npos);
+}
+
+TEST_CASE("bitlinear_matmul: float16_t reads widen in int-times-half arithmetic, stay half into a float array") {
+  // The reason 123469dec widens half reads: `1 / weight_scale[0]` is int / half,
+  // and GLSL has no such operation (glslang: "wrong operand types: no
+  // operation '/' exists that takes a left-hand operand of type const int and
+  // a right operand of type readonly temp float16_t"). The same kernel's
+  // `v[j] = x[...]` stores a half read into a float array, which GLSL widens
+  // implicitly, and `float sum[4] = {0.0}` is the under-supplied initializer
+  // the same commit zero-fills. Source: mlx-lm bitlinear_matmul, T = half.
+  const char* source =
+      "[[kernel]] void bitlinear_matmul(\n"
+      "    const device float16_t* x [[buffer(0)]],\n"
+      "    const device uint8_t* packed_weights [[buffer(1)]],\n"
+      "    const device float16_t* weight_scale [[buffer(2)]],\n"
+      "    const device int* invert [[buffer(3)]],\n"
+      "    device float* out [[buffer(4)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint tid = thread_position_in_grid.x;\n"
+      "  float v[4];\n"
+      "  for (int j = 0; j < 4; j++) {\n"
+      "    v[j] = x[tid * 4 + j];\n"
+      "  }\n"
+      "  float sum[4] = {0.0};\n"
+      "  for (int j = 0; j < 4; j++) {\n"
+      "    uint8_t w = packed_weights[tid * 4 + j];\n"
+      "    sum[0] += v[j] * ((w & 3) - 1);\n"
+      "  }\n"
+      "  float scale = invert[0] != 0 ? 1 / weight_scale[0] : weight_scale[0];\n"
+      "  out[tid] = sum[0] * scale;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("1 / float(_b2.data[0]) : float(_b2.data[0])") != std::string::npos);
+  CHECK(glsl.find("v[j] = _b0.data[tid * 4 + j];") != std::string::npos);
+  CHECK(glsl.find("float sum[4] = {0.0, 0.0, 0.0, 0.0};") != std::string::npos);
+}
+
+TEST_CASE("compound and self-referencing assignment into a float16_t local stores through float16_t") {
+  // `acc += w[i]` and `acc = acc + w[i]` translated and compiled before the
+  // half-read widening (353da309a) and failed glslang after it ("cannot
+  // convert from temp float to temp float16_t"). The assignment into a half
+  // lvalue now stores through float16_t(); a float accumulator is untouched.
+  const char* source =
+      "[[kernel]] void accum(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float16_t* y [[buffer(1)]],\n"
+      "    device float* z [[buffer(2)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t acc = float16_t(0.0f);\n"
+      "  float16_t acc2 = float16_t(0.0f);\n"
+      "  float facc = 0.0f;\n"
+      "  for (uint i = 0; i < 8; ++i) {\n"
+      "    acc += w[t * 8 + i];\n"
+      "    acc2 = acc2 + w[t * 8 + i];\n"
+      "    facc += w[t * 8 + i];\n"
+      "  }\n"
+      "  y[t] = acc + acc2;\n"
+      "  z[t] = facc;\n"
+      "}\n";
+  auto glsl = translate(source, 2);
+  CHECK(glsl.find("acc = float16_t(acc + (float(_b0.data[t * 8 + i])));") != std::string::npos);
+  CHECK(glsl.find("acc2 = float16_t(acc2 + float(_b0.data[t * 8 + i]));") != std::string::npos);
+  CHECK(glsl.find("facc += float(_b0.data[t * 8 + i]);") != std::string::npos);
+  CHECK(glsl.find(" acc += ") == std::string::npos);
+}
+
+TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twice") {
+  // `h[i++] += x` expands to `h[i++] = float16_t(h[i++] + (x))` if the left
+  // side is repeated: i increments twice. A compound statement whose index
+  // has ++, --, a call or an assignment stays exactly as written; a pure index
+  // still expands; a plain `=` names the left side once and still wraps.
+  const char* source =
+      "int bump(int k) { return k + 1; }\n"
+      "[[kernel]] void idx(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t h[8];\n"
+      "  int i = 0;\n"
+      "  int j = 0;\n"
+      "  float facc = 0.0f;\n"
+      "  h[i++] += float16_t(1.0);\n"
+      "  h[i + 1] += w[t];\n"
+      "  h[bump(i)] += w[t];\n"
+      "  h[j++] = w[t];\n"
+      "  facc += w[t];\n"
+      "  out[t] = float(i) + facc;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("h[i++] += ") != std::string::npos);
+  CHECK(glsl.find("float16_t(h[i++]") == std::string::npos);
+  CHECK(glsl.find("h[bump(i)] += ") != std::string::npos);
+  CHECK(glsl.find("float16_t(h[bump(i)]") == std::string::npos);
+  CHECK(glsl.find("h[i + 1] = float16_t(h[i + 1] + (float(_b0.data[t])));") != std::string::npos);
+  CHECK(glsl.find("h[j++] = float16_t(_b0.data[t]);") != std::string::npos);
+  CHECK(glsl.find("facc += float(_b0.data[t]);") != std::string::npos);
+}
+
+TEST_CASE("float16_t buffer reads in a brace initializer keep their half type") {
+  // `float16_t arr[2] = {e[0], e[1]};` compiled before the half-read widening
+  // and failed glslang after it ("constructor: cannot convert parameter 1 from
+  // temp float to temp float16_t"): the array constructor takes the element
+  // type. The same initializer into a float array also compiles with half
+  // elements, so every element of the list stays unwidened.
+  const char* source =
+      "[[kernel]] void init(\n"
+      "    const device float16_t* e [[buffer(0)]],\n"
+      "    device float16_t* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t arr[2] = {e[0], e[1]};\n"
+      "  float f[2] = {e[2], e[3]};\n"
+      "  out[t] = arr[1] + float16_t(f[0]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("{_b0.data[0], _b0.data[1]}") != std::string::npos);
+  CHECK(glsl.find("{_b0.data[2], _b0.data[3]}") != std::string::npos);
+  CHECK(glsl.find("float(_b0.data[0])") == std::string::npos);
+}
