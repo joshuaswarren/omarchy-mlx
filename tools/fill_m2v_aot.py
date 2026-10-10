@@ -149,6 +149,12 @@ def main() -> int:
             if base not in table:
                 problems.append(f"{name} has no gate table entry for {base}")
                 continue
+            recorded = manifest.get(base, {}).get("state")
+            if recorded != table[base]["state"]:
+                problems.append(
+                    f"{name}: manifest records {recorded} but the gate table "
+                    f"says {table[base]['state']}; regenerate the manifest"
+                )
             manifest[base] = {"key": key, "entry": name, "base": base}
     else:
         for path in inputs:
