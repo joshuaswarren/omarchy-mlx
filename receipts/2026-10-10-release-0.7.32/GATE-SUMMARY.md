@@ -62,13 +62,16 @@ the 13-inch M1, five runs each, temperature 0, 64 pinned tokens, Qwen3-4B-Instru
 
 ## Battery reds
 
-All are defects in the tests. No product code is involved. Fix: #72.
+Three suites fail because of defects in the tests, and so does part of the fourth. #72 fixes the four test defects.
 
 - `gdn_legacy_policy`: a precondition went stale after #60.
 - `conv_gemm_decomp`: a CPU reference stream is passed to a GPU-only call.
 - `gdn_maskless_correctness`: a fixture path fixed at build time (6 of 6 pass with the fixtures staged).
-- `sdpa_prefill_flash`: asserts the flash route without checking the device capability; one case also fails with an
-  out-of-device-memory error on a 16 GB machine under load. #72 does not fix the out-of-memory case.
+- `sdpa_prefill_flash`: asserts the flash route without checking the device capability (a test defect). One case also
+  fails with an out-of-device-memory error on the 13-inch M1: a 1 GiB allocation fails on an idle machine with 13.3 GB
+  of memory available (the #72 verification run on that machine). The same case passes on the 16-inch M1 Max. The
+  cause is not known yet and #72 does not change that case. It may be a test sized too large for the device heap, or
+  a product limit for a 16384-token prefill on a 16 GB machine.
 
 `fast_ops`: 47 of 47 cases passed; 8 assertions fail inside 3 cases marked as allowed to fail (sdpa vjp rep=1: 4,
 gated-delta vjp equal heads: 1, gated-delta vjp GQA opt-in: 3). Identical on all three chips.
