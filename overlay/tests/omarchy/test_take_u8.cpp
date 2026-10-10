@@ -268,6 +268,40 @@ TEST_CASE("scalar-index take drops the axis on a 5-D uint8 table") {
   check_u8(kept, expected, stream);
 }
 
+// Unaligned byte counts exercise the descriptor boundary the word
+// transport rides: a 5-byte table reads input word (in_elem >> 2) --
+// index 4 pulls word 1, whose bytes 5..7 sit past the logical table --
+// and a 3-byte output merges all its bytes into output word 0 through
+// atomicOr, one byte past the logical end. binding() rounds ranges up
+// to word granularity so both accesses stay inside the bound; bytes
+// past a logical end are never extracted into a result (BYTE_AT reads
+// only valid lanes) and unclaimed output lanes stay at the host
+// pre-zero fill. Expected bytes computed by hand.
+TEST_CASE("take copies unaligned byte tables and writes unaligned outputs") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // 5-byte uint8 table (nbytes % 4 == 1), indices [2, 0, 4]:
+  // out = {t[2], t[0], t[4]} = {30, 10, 50}, a 3-byte output
+  // (nbytes % 4 == 3) landing entirely inside word 0.
+  std::vector<uint8_t> raw = {10, 20, 30, 40, 50};
+  array table(raw.data(), {5}, uint8);
+  array out = take(table, array({2, 0, 4}, {3}, int32), 0, stream);
+  CHECK_EQ(out.dtype(), uint8);
+  CHECK_EQ(out.shape(), Shape({3}));
+  check_u8(out, {30, 10, 50}, stream);
+
+  // The matching int8 variant: index 2 must return the most-negative
+  // byte verbatim ({-3, 127, -128, 1, 0}[{2, 0, 4}] = {-128, -3, 0}),
+  // not its unsigned echo.
+  std::vector<int8_t> sraw = {-3, 127, -128, 1, 0};
+  array stable(sraw.data(), {5}, int8);
+  array sout = take(stable, array({2, 0, 4}, {3}, int32), 0, stream);
+  CHECK_EQ(sout.dtype(), int8);
+  check_i8(sout, {int8_t(-128), int8_t(-3), int8_t(0)}, stream);
+}
+
 // Multi-index gather packs the broadcast indices through the metadata
 // transport; the byte table must survive the same walk.
 TEST_CASE("gather with two index arrays copies a uint8 table") {

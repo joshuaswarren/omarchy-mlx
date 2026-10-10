@@ -279,7 +279,6 @@ enum class ComputeKernel : uint16_t {
   TakeU16,
   TakeI64,
   TakeBool,
-  TakeU8,
   TakeComplex64,
   TakeMultiF32,
   TakeMultiF16,
@@ -288,7 +287,6 @@ enum class ComputeKernel : uint16_t {
   TakeMultiU16,
   TakeMultiI64,
   TakeMultiBool,
-  TakeMultiU8,
   TakeMultiComplex64,
   ClearU32,
   BlockMaskF32,
@@ -962,6 +960,12 @@ enum class ComputeKernel : uint16_t {
   // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
   // MatmulGap H35). Append-only profile id.
   SdpaCausalFlashCoopmatBF16,
+  // Byte-table gather lanes (uint8/int8 tables) riding the word
+  // transport of shaders/gather_take.comp USE_U8: BYTE_AT lane
+  // extraction on reads, atomicOr byte merge into a pre-zeroed output.
+  // Append-only profile id.
+  TakeU8,
+  TakeMultiU8,
   Count,
 };
 

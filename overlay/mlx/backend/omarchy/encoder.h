@@ -25,22 +25,34 @@
 
 namespace mlx::core::omarchy {
 
-// Storage-buffer binding for |value|: its buffer from byte 0 (kernels add
-// the array's element offset themselves) through the last byte its data
-// reaches. Not the allocation size: allocator round_size bins every
-// request above 1 MiB to one of 8 sizes per power of two (up to 12.5%
-// above the request), so binding the whole allocation could reach past the
-// device's maxStorageBufferRange for an array just under it
-// (dispatch_compute_pipeline refuses those).
+// Storage-buffer binding for |value|: its buffer from byte 0 (kernels
+// add the array's element offset themselves) through the last byte its
+// data reaches, rounded up to 32-bit word granularity. Not the
+// allocation size: allocator round_size bins every request above 1 MiB
+// to one of 8 sizes per power of two (up to 12.5% above the request),
+// so binding the whole allocation could reach past the device's
+// maxStorageBufferRange for an array just under it
+// (dispatch_compute_pipeline refuses those). The round exists because
+// the byte-lane kernels address whole words: a take over a 5-byte uint8
+// table reads input word (in_elem >> 2) and a 3-byte output merges its
+// last byte through atomicOr into word (out_elem >> 2), so a logical
+// 3-byte range would have the shader touch a byte outside the bound
+// range. BYTE_AT extracts only lanes below the array's element count
+// and unclaimed output lanes stay at the host pre-zero fill, so the
+// widened window keeps results bit-exact. Allocations are page-rounded
+// (round_size), so the rounded range stays inside the backing buffer;
+// the clamp below keeps that true regardless.
 inline ComputeBinding binding(const array& value) {
   auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
   const VkDeviceSize end = static_cast<VkDeviceSize>(value.offset()) +
       static_cast<VkDeviceSize>(value.data_size()) * value.itemsize();
+  const VkDeviceSize word_end = (end + 3) & ~static_cast<VkDeviceSize>(3);
   // A zero range is invalid Vulkan; an empty array keeps one byte.
   return {
       buffer->buffer,
       0,
-      std::min<VkDeviceSize>(std::max<VkDeviceSize>(end, 1), buffer->size),
+      std::min<VkDeviceSize>(std::max<VkDeviceSize>(word_end, 1),
+                             buffer->size),
       buffer};
 }
 
