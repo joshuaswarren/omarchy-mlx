@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Regression tests for uint8/int8 Take on the Omarchy Vulkan backend.
-// The LTX-2 video-VAE decode on jw16 G13C hit `[omarchy] Take dtype is
+// The LTX-2 video-VAE decode on a 16-inch M1 Max (G13C) hit `[omarchy] Take dtype is
 // not implemented ... (dtype=uint8, shape=[1,3,320,512])` from the
 // tiled_decode loop taking a scalar position out of a uint8 chunk. The
 // bool Take fix (test_take_bool.cpp) already rides a 1-byte packed-word
