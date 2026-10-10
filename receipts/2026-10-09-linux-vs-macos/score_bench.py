@@ -75,6 +75,7 @@ def main():
         "decode_tok_s": summ([r["decode_tok_s"] for r in recs]), "ttft_s": summ([r["ttft_s"] for r in recs]),
         "prefill_tok_s": summ(pf), "prefill_all": [round(x, 2) for x in pf], "pf_tokens": a.pf_tokens,
         "decode_digest": digest, "corpus_sha256": hashlib.sha256(open(a.prompts, "rb").read()).hexdigest(),
+        "first_outputs": [r["out"][:16] for r in recs[: a.decode_limit]],
         "peak_mem_gb": round(mx.get_peak_memory() / 1e9, 2) if hasattr(mx, "get_peak_memory") else None,
         "env": {"platform": platform.platform(), "python": platform.python_version(), "backend": str(mx.default_device()),
                 "load1_end": os.getloadavg()[0]},
