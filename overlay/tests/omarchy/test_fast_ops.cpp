@@ -3237,6 +3237,49 @@ TEST_CASE("rope freqs host read agrees with the nested gate on both legs") {
   CHECK(host_message == nested_message);
 }
 
+// A NaN frequency must give the same answer on the host read and on the
+// nested min(abs(freqs)) gate: the same refusal text or the same output bits.
+TEST_CASE("rope freqs host read treats a NaN frequency like the nested gate") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Shape shape{1, 1, 4, 16};
+  array x = astype(rope_input(shape, 167), float16, stream);
+  std::vector<float> values{1.0f, 0.5f, std::nanf(""), 0.125f, 0.0625f, 0.03f, 0.015f, 0.007f};
+  array freqs(values.begin(), Shape{8}, float32);
+  auto outcome = [&](int offset_value) {
+    std::string message = caught_message([&] {
+      fast::rope(x, 16, false, std::nullopt, 1.0f, array(offset_value, int32), freqs, stream)
+          .eval();
+    });
+    if (!message.empty()) {
+      return message;
+    }
+    auto out = flat(
+        fast::rope(x, 16, false, std::nullopt, 1.0f, array(offset_value, int32), freqs, stream),
+        stream);
+    return std::string(
+        reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+  };
+  // Small offset: the bound is far under the limit unless NaN poisons it.
+  // Large offset: the bound is over the limit for the finite frequencies.
+  for (int offset_value : {3, 3000000}) {
+    CAPTURE(offset_value);
+    auto host = outcome(offset_value);
+    setenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST", "1", 1);
+    auto nested = outcome(offset_value);
+    unsetenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST");
+    auto describe = [](const std::string& s) {
+      return s.find("exceeds the trig reduction limit") != std::string::npos
+          ? std::string("refused (bound over the limit)")
+          : std::string("ran, ") + std::to_string(s.size() / sizeof(float)) + " floats";
+    };
+    MESSAGE("offset ", offset_value, ": host ", describe(host), ", nested ", describe(nested));
+    CHECK(host == nested);
+  }
+}
+
 namespace {
 
 uint64_t alpha1_fnv1a64(const void* data, size_t bytes) {
