@@ -1,0 +1,13 @@
+# start 2026-10-09T18:07:19Z host M1-16GB kernel 7.1.12-2-12.6-sep-ARCH tree new omlx c0b1056b model mlx-community--Qwen3.6-35B-A3B-4bit task chat offload 1 res 0.1 custom_kernels 0
+# mesa mesa 1:26.2.4-1 wheel mlx_omarchy-0.32.4.dev202610091126+a48b7cc.dist-info
+# avail before 13509 MB
+# omlx from <tree>/omlx/__init__.py
+# healthy after 5 s
+# offload PUT HTTP 200 {"success":true,"model_id":"mlx-community--Qwen3.6-35B-A3B-4bit","settings":{"force_sampling":false,"qwen4_ple_ssd_offload":false,"deepseek_v41_engram_ssd_offload":false,"deepseek_v41_ced_prefill_enab
+RESULT pilot1 {"calibration": {"prompt_tokens": 100, "completion_tokens": 1, "ttft_s": 42.515, "prefill_tps": 2.35, "decode_tps": null, "first_at": 42.51540780067444, "text_sha": "f6c88c71337fd90b", "text": "\nHere"}, "tokens_per_word": 1.562, "pilot_tps": 2.35}
+RESULT pilot2 {"calibration": {"prompt_tokens": 100, "completion_tokens": 1, "ttft_s": 34.163, "prefill_tps": 2.93, "decode_tps": null, "first_at": 34.162806272506714, "text_sha": "f6c88c71337fd90b", "text": "\nHere"}, "tokens_per_word": 1.562, "pilot_tps": 2.93}
+# prefill budget: pilot rate 2.93 tok/s, P=35 tokens per forward (cap 12 s)
+RESULT single_fixed {"k": 1, "words": 22, "target_tokens": 35, "wall_first_tokens_s": 19.751, "total_s": 31.2, "requests": [{"prompt_tokens": 43, "completion_tokens": 16, "ttft_s": 19.751, "prefill_tps": 2.18, "decode_tps": 1.311, "first_at": 19.750539541244507, "text_sha": "cfb9312798a43ac7", "text": "\nHere's a thinking process:\n\n1.  **Analyze User Input:**"}]}
+RESULT single_a {"k": 1, "words": 22, "target_tokens": 35, "wall_first_tokens_s": 25.146, "total_s": 36.67, "requests": [{"prompt_tokens": 60, "completion_tokens": 16, "ttft_s": 25.146, "prefill_tps": 2.39, "decode_tps": 1.303, "first_at": 25.14619207382202, "text_sha": "cfb9312798a43ac7", "text": "\nHere's a thinking process:\n\n1.  **Analyze User Input:**"}]}
+# min available 6768 MB; end 18:11:01
+# server.log error-ish lines: 1

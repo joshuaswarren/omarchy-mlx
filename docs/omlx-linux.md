@@ -1,6 +1,6 @@
 # oMLX on omarchy-mlx
 
-This guide runs oMLX v0.7.0 on an Omarchy M+ Linux install with the omarchy-mlx Vulkan backend. It does not apply to stock Linux or macOS. The backend uses the private Honeykrisp Vulkan ICD; Mesa remains the system driver. Install this stack only on supported Omarchy M+ hardware.
+This guide runs oMLX v0.7.1.dev1 on an Omarchy M+ Linux install with the omarchy-mlx Vulkan backend. It does not apply to stock Linux or macOS. The backend uses the private Honeykrisp Vulkan ICD; Mesa remains the system driver. Install this stack only on supported Omarchy M+ hardware.
 
 ## What is verified
 
