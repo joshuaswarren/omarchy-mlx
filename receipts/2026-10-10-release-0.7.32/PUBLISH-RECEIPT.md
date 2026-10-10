@@ -39,3 +39,9 @@ The first notes called all four red test suites test defects and said the out-of
 failing on an idle machine with 13.3 GB of memory available, so that claim was wrong. The release body, `NOTES.md` and
 `GATE-SUMMARY.md` now say that three suites are test defects, the fourth is partly a test defect, and that one of its
 cases fails for a reason that is not known yet. No asset and no tag changed.
+
+A second check found that the out-of-memory case is a product limit, not an open question. Non-causal bf16 attention
+at 16384 tokens and 8 heads fails on its first run, in a fresh process, on an idle 13-inch M1 (load average 0.15,
+device heap 7.55 GiB). The chunked-attention code did not change between the commit of the wheel used for that run and
+the release commit. The release notes now list it as known issue 7. A fix is in progress for v0.7.33. No asset and no
+tag changed.

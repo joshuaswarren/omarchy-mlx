@@ -5,7 +5,7 @@ Range v0.7.31..v0.7.32: 265 commits, 587 files, +47,151 / -972 lines. Gates ran 
 `omarchy-mlx-vulkan` 0.7.28-2 with Mesa 26.2.4-1 (see "Gates on the frozen wheel" and "Known issues").
 
 Read the known issues before you install: training backward (item 2), a long-dispatch fault on the 14-inch M2 Max
-(item 3), and four failing test suites (item 1).
+(item 3), long attention that runs out of memory on the 16 GB M1 (item 7), and four failing test suites (item 1).
 
 ## Shipped (user impact)
 
@@ -262,12 +262,9 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
    `gdn_legacy_policy` has a precondition that went stale after #60. `conv_gemm_decomp` passes a CPU reference
    stream to a GPU-only call. `gdn_maskless_correctness` has a fixture path fixed at build time (6 of 6 pass with the
    fixtures in place). `sdpa_prefill_flash` asserts the flash route without checking the device capability. One of
-   its cases also fails with an out-of-device-memory error on the 13-inch M1: a 1 GiB allocation fails while the
-   machine is idle with 13.3 GB of memory available. The same case passes on the 16-inch M1 Max. The cause is not
-   known yet. The test may be too large for the device heap, or a 16384-token prefill may not fit on a 16 GB
-   machine, which would be a product limit. Fix: #72 changes only the tests. It fixes the four test defects named
-   above and leaves the out-of-memory case alone, and a separate change investigates that case. #72 lands after the
-   v0.7.32 tag and ships in v0.7.33.
+   its cases also fails with an out-of-device-memory error on the 13-inch M1. That failure is a limit in the product,
+   not in the test, and item 7 describes it. Fix: #72 changes only the tests and fixes the four test defects named
+   above. #72 lands after the v0.7.32 tag and ships in v0.7.33.
 2. **Training backward only; inference is not affected.** Two fused backward bugs. Both are the same in v0.7.31: the
    gated-delta backward kernel and its equal-heads routing, and the attention backward code, did not change between
    v0.7.31 and this release (checked in the source at both tags). At unequal key and value heads (GQA) both releases
@@ -297,6 +294,14 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
 6. **Packages.** The release files and `install.sh` carry the 0.7.28-x driver. One lab machine, installed from an
    older stable-pinned image, had a pacman repository entry that offered only 0.7.22-1. What a fresh Omarchy install
    configures was not checked.
+7. **Long non-causal bf16 attention runs out of device memory on the 13-inch M1 (16 GB).** Attention over 16384
+   tokens with 8 heads (head dimension 128, non-causal, bf16) fails on its first run with
+   `VK_ERROR_OUT_OF_DEVICE_MEMORY`. This happens alone, in a fresh process, on an idle machine (device heap 7.55
+   GiB). Afterwards the process cannot allocate even one 1 GiB block and holds about 9 GB of memory. The 16-inch M1
+   Max runs the same call. By reading the code, the chunked attention route keeps the f32 scores of every chunk
+   until the whole batch finishes, about 18 GiB at this shape. We have not measured which smaller shapes fit. We
+   have not tested the causal and masked routes, other lengths, or the 14-inch M2 Max. Fix: a change that releases
+   chunk buffers early is in progress for v0.7.33.
 
 Not shipped: the H66 experiment flag. Float16 writes into custom-kernel input buffers are not a limitation (MLX emits
 every input as a const pointer, so Metal rejects such a write too).
