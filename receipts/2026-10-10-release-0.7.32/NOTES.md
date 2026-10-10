@@ -279,14 +279,20 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
 
    Workaround for both: set `MLX_OMARCHY_NO_FUSED_VJP=1`. Fix, v0.7.33: #79 fixes the dg kernel. The attention case
    gets a fix or a fence, and equal heads move to the composed backward if that costs under 5 percent.
-3. **14-inch M2 Max only (G14C): a long GPU dispatch can return wrong values beside an animating window.** A 690 ms
-   dispatch returned partly wrong values in 6 of 6 runs with an animating window open; no error was raised.
-   Dispatches of 23 ms and 87 ms were correct in 12 of 12 runs. The threshold between 87 ms and 690 ms is not
-   measured yet. The 690 ms dispatch and a 5.5 s dispatch were each correct with no window, a static window, or a
-   stopped window. The 16-inch M1 Max and the 13-inch M1 were clean. Stock Mesa 26.2.4 and six Honeykrisp builds
-   all show it on the M2 Max. Receipt: `receipts/2026-10-10-m2-long-dispatch-vs-animating-window.md` (#74). Fix:
-   v0.7.33 caps the size of one dispatch; the first step is a screening run that times each candidate operation at
-   real shapes and flags any over 50 ms.
+3. **14-inch M2 Max only (G14C): a long GPU dispatch beside an animating window can return wrong values and can
+   hang the display.** Measured on one machine and one kernel version (7.1.12-2-12.6). A 690 ms dispatch returned
+   partly wrong values in 6 of 6 runs with an animating window open, and a 152 ms dispatch in 4 of 4 runs. No error
+   was raised. Dispatches of 23 ms and 87 ms were correct in 16 of 16 runs. So the threshold lies between 87 ms and
+   152 ms. The 690 ms dispatch and a 5.5 s dispatch were each correct with no window, a static window, or a stopped
+   window. During the wrong runs the kernel log shows the GPU firmware watchdog timing out and recovering: 39 events
+   in a 59 s test and 120 events in a 26 s test. In 3 boots that ended hung, the log shows 9 bursts of timeouts (events
+   less than 60 s apart). The last burst in each boot was followed by the hang within 4 minutes. The other 6 were not.
+   In the boot we checked, the shutdown then never finished, so a hard reset is probably needed (an inference). The
+   saved kernel logs of the current boots of the 13-inch M1 and the 16-inch M1 Max hold 0 timeouts, and their results
+   were clean. Stock Mesa 26.2.4 and six Honeykrisp builds all show it on the M2 Max. Workaround: do not run long GPU
+   work beside an animating window on the M2 Max. Receipt:
+   `receipts/2026-10-10-m2-long-dispatch-vs-animating-window.md`. Fix: v0.7.33 caps the length of one dispatch; the
+   first step is a screening run that times each candidate operation at real shapes and flags any over 50 ms.
 4. **Mixture-of-experts prefill is far behind macOS** (see the "How close to macOS" tables in the README), and the
    gemma-4-E4B model stalls the GPU timeline on M1-class hardware. Both are under investigation; no fix date.
 5. **Uint8 and int8 `take` refuse by name** (the LTX video-VAE decode). Fixed on main in #76 after this release's
