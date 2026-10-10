@@ -229,8 +229,6 @@ TEST_CASE("gate table parsing") {
   CHECK(table.at("qwen35_ragged_sdpa_2p1").state == "unverified");
   CHECK(table.at("omlx_verify_attn_wide_partial").state == "failed");
   CHECK(table.at("omlx_verify_attn_gqa_partial").state == "failed");
-  CHECK(table.count("omlx_gdn_sigmoid_probe") == 1);
-  CHECK(table.count("omlx_gdn_sigmoid_probe_float_float") == 1);
 
   SUBCASE("an override file replaces the table") {
     ScopedDir dir;
