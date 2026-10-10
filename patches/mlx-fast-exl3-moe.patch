@@ -38,7 +38,7 @@
      const array& x,
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -599,6 +599,213 @@
+@@ -599,6 +599,215 @@
    return fallback({trellis, suh, svh})[0];
  }
  
@@ -187,9 +187,11 @@
 +            s);
 +        ws.push_back(
 +            exl3_decode(te, suh, svh, in_f, out_f, t.shape(3) / 16, window,
-+                        float32, s));
++                        float16, s));
 +      }
-+      return stack(ws, 0, s);
++      // The production kernel emits f16 weights; round the CPU fallback
++      // through f16 too so the composed math sees the same values.
++      return astype(stack(ws, 0, s), float32, s);
 +    };
 +    array wg = decode_stack(
 +        inputs[1], inputs[2], inputs[3], hidden, inter); // [E, hidden, inter]
@@ -254,7 +256,7 @@
      const std::vector<array>& cotangents,
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
-@@ -242,6 +242,60 @@
+@@ -242,6 +242,46 @@
        )pbdoc");
  
    m.def(
