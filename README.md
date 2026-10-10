@@ -68,7 +68,7 @@ plus Laya, and it needs a 96 GB machine.
 |---|---|---|
 | M1 | Tested | Parakeet islands |
 | M1 Max | Tested | Whole encoder |
-| M2 Max | Tested ([scoreboard](#how-close-to-macos)) | Measured on Linux: see [M2 Max ANE](#m2-max-ane-measured) |
+| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Measured on Linux: see [M2 Max ANE](#m2-max-ane-measured) ([receipt](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra | Untested | Untested overlay |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
 | M4 | Not yet (no Linux GPU driver) | Data-only; h16 bring-up module |
