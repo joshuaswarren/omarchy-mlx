@@ -3411,22 +3411,26 @@ void dispatch_gather_qmm(
   // up to 32 rows. Gated to the proven layout class of the subgroup kernel
   // plus K, N multiples of 64; MLX_OMARCHY_GATHER_QMM_TILE=0 turns it off.
   // Correct for any index order; only a sorted promise makes it fast.
+  // sX 64 x 34 floats + sW 64 x 64 floats + sLhs 32 words (shaders/gather_qmm_tile.comp);
+  // the Vulkan minimum maxComputeSharedMemorySize is 16384, so a small-limit
+  // driver falls through to the per-row kernels instead of failing pipeline creation.
+  constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
   const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
   const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
-  if (right_sorted && !fp_mode && params.matrix_m == 1 && index_count >= 64 &&
+  const auto& tile_caps = encoder.device().capabilities();
+  // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
+  // so only the biased kernels exist.
+  if (right_sorted && !fp_mode && !no_bias && params.matrix_m == 1 && index_count >= 64 &&
       (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
       group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
       (out.dtype() == bfloat16 || out.dtype() == float16) &&
-      encoder.device().capabilities().storage_buffer_16bit_access &&
+      tile_caps.storage_buffer_16bit_access &&
+      kGatherQmmTileSharedBytes <= tile_caps.max_compute_shared_memory_size &&
+      // The row groups ride the y dimension; this guards the one limit the grid uses.
       tile_row_groups <= omarchy::kMaxComputeGroupCountX) {
-    omarchy::ComputeKernel tile_kernel;
-    if (out.dtype() == float16) {
-      tile_kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbTileF16
-                            : omarchy::ComputeKernel::GatherQmmTileF16;
-    } else {
-      tile_kernel = no_bias ? omarchy::ComputeKernel::GatherQmmNbTileBF16
-                            : omarchy::ComputeKernel::GatherQmmTileBF16;
-    }
+    const omarchy::ComputeKernel tile_kernel = out.dtype() == float16
+        ? omarchy::ComputeKernel::GatherQmmTileF16
+        : omarchy::ComputeKernel::GatherQmmTileBF16;
     encoder.dispatch_compute(
         tile_kernel,
         bindings,

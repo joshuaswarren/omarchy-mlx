@@ -166,10 +166,7 @@ void main() {
       }
       uint group = k0 / TK;
       float scale = decode_param((scale_base + group) * PARAM_BYTES);
-      float bias = 0.0;
-#ifndef NO_BIAS
-      bias = decode_param(params.shape[1] + (scale_base + group) * PARAM_BYTES);
-#endif
+      float bias = decode_param(params.shape[1] + (scale_base + group) * PARAM_BYTES);
       for (uint j = 0u; j < 2u; ++j) {
         uint word = input_w.values[w_base + (k0 >> 3u) + j];
         for (uint q = 0u; q < 8u; ++q) {

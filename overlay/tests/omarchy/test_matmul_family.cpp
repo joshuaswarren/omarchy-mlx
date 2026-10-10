@@ -5509,13 +5509,8 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     const int64_t tile_kernel = static_cast<int64_t>(
         dtype == float16 ? omarchy::ComputeKernel::GatherQmmTileF16
                          : omarchy::ComputeKernel::GatherQmmTileBF16);
-    const int64_t other_tile_kernels[2] = {
-        static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmNbTileF16),
-        static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmNbTileBF16)};
     REQUIRE_EQ(tiled.second, tile_kernel);
     CHECK(per_row.second != tile_kernel);
-    CHECK(per_row.second != other_tile_kernels[0]);
-    CHECK(per_row.second != other_tile_kernels[1]);
 
     double vs_ref = rel_l2(tiled.first, expected);
     double vs_row = rel_l2(tiled.first, per_row.first);

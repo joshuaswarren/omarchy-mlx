@@ -703,8 +703,6 @@ omarchy_shader(gather_qmm_nb_sub_f16 shaders/gather_qmm_sub.comp -DUSE_FP16=1 -D
 omarchy_shader(gather_qmm_nb_sub_bf16 shaders/gather_qmm_sub.comp -DUSE_BF16=1 -DNO_BIAS=1)
 omarchy_shader(gather_qmm_tile_f16 shaders/gather_qmm_tile.comp -DUSE_FP16=1)
 omarchy_shader(gather_qmm_tile_bf16 shaders/gather_qmm_tile.comp -DUSE_BF16=1)
-omarchy_shader(gather_qmm_nb_tile_f16 shaders/gather_qmm_tile.comp -DUSE_FP16=1 -DNO_BIAS=1)
-omarchy_shader(gather_qmm_nb_tile_bf16 shaders/gather_qmm_tile.comp -DUSE_BF16=1 -DNO_BIAS=1)
 omarchy_shader(gather_qmm_nb_fp_f32 shaders/gather_qmm.comp -DFP_MODE=1 -DNO_BIAS=1)
 omarchy_shader(gather_qmm_nb_fp_f16 shaders/gather_qmm.comp -DFP_MODE=1 -DUSE_FP16=1 -DNO_BIAS=1)
 omarchy_shader(gather_qmm_nb_fp_bf16 shaders/gather_qmm.comp -DFP_MODE=1 -DUSE_BF16=1 -DNO_BIAS=1)

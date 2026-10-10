@@ -972,8 +972,6 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable. Append-only profile id.
   GatherQmmTileF16,
   GatherQmmTileBF16,
-  GatherQmmNbTileF16,
-  GatherQmmNbTileBF16,
   Count,
 };
 
