@@ -666,7 +666,7 @@ TEST_CASE("float16_t buffer reads stay half in a plain assignment and a call arg
       "  bsum[t] = bc;\n"
       "}\n";
   auto glsl = translate(source, 1);
-  CHECK(glsl.find("sh_a[t] = _b0.data[t];") != std::string::npos);
+  CHECK(glsl.find("sh_a[t] = float16_t(_b0.data[t]);") != std::string::npos);
   CHECK(glsl.find("= float(_b0.data[t])") == std::string::npos);
   CHECK(glsl.find("exact_fma16(bc, sh_a[k], _b1.data[") != std::string::npos);
   CHECK(glsl.find("float(_b1.data[") == std::string::npos);
@@ -705,4 +705,34 @@ TEST_CASE("bitlinear_matmul: float16_t reads widen in int-times-half arithmetic,
   CHECK(glsl.find("1 / float(_b2.data[0]) : float(_b2.data[0])") != std::string::npos);
   CHECK(glsl.find("v[j] = _b0.data[tid * 4 + j];") != std::string::npos);
   CHECK(glsl.find("float sum[4] = {0.0, 0.0, 0.0, 0.0};") != std::string::npos);
+}
+
+TEST_CASE("compound and self-referencing assignment into a float16_t local stores through float16_t") {
+  // `acc += w[i]` and `acc = acc + w[i]` translated and compiled before the
+  // half-read widening (353da309a) and failed glslang after it ("cannot
+  // convert from temp float to temp float16_t"). The assignment into a half
+  // lvalue now stores through float16_t(); a float accumulator is untouched.
+  const char* source =
+      "[[kernel]] void accum(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float16_t* y [[buffer(1)]],\n"
+      "    device float* z [[buffer(2)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t acc = float16_t(0.0f);\n"
+      "  float16_t acc2 = float16_t(0.0f);\n"
+      "  float facc = 0.0f;\n"
+      "  for (uint i = 0; i < 8; ++i) {\n"
+      "    acc += w[t * 8 + i];\n"
+      "    acc2 = acc2 + w[t * 8 + i];\n"
+      "    facc += w[t * 8 + i];\n"
+      "  }\n"
+      "  y[t] = acc + acc2;\n"
+      "  z[t] = facc;\n"
+      "}\n";
+  auto glsl = translate(source, 2);
+  CHECK(glsl.find("acc = float16_t(acc + (float(_b0.data[t * 8 + i])));") != std::string::npos);
+  CHECK(glsl.find("acc2 = float16_t(acc2 + float(_b0.data[t * 8 + i]));") != std::string::npos);
+  CHECK(glsl.find("facc += float(_b0.data[t * 8 + i]);") != std::string::npos);
+  CHECK(glsl.find(" acc += ") == std::string::npos);
 }

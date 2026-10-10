@@ -1602,6 +1602,159 @@ bool half_read_is_plain_value(const std::string& s, size_t begin, size_t end) {
   return false;
 }
 
+// Statements that assign into a float16_t local or shared array (`acc += x;`,
+// `acc = acc + x;`, `sh[i] = x;`) store through float16_t(): the right-hand
+// side may be float after the half reads were widened, and GLSL does not
+// convert float to float16_t on assignment. Compound forms expand to
+// `lhs = float16_t(lhs op (rhs));`. A statement whose right-hand side is
+// already a whole float16_t(...) call is left alone. A match inside a for
+// header (the scan meets an unmatched `)` before the `;`) is skipped.
+void wrap_half_lvalue_assignments(
+    std::string& body,
+    const std::string& hoisted_declarations) {
+  static const std::regex declaration(
+      R"(\bfloat16_t\s+([A-Za-z_][A-Za-z0-9_]*))");
+  std::unordered_set<std::string> half_names;
+  const std::string* const sources[2] = {&body, &hoisted_declarations};
+  for (const std::string* text : sources) {
+    for (std::sregex_iterator it(text->begin(), text->end(), declaration), stop;
+         it != stop;
+         ++it) {
+      half_names.insert((*it)[1].str());
+    }
+  }
+  if (half_names.empty()) {
+    return;
+  }
+  auto is_ident = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+  };
+  auto is_space = [](char c) {
+    return std::isspace(static_cast<unsigned char>(c)) != 0;
+  };
+  const size_t size = body.size();
+  std::string out;
+  size_t copied = 0;
+  size_t i = 0;
+  while (i < size) {
+    if (!(std::isalpha(static_cast<unsigned char>(body[i])) || body[i] == '_') ||
+        (i > 0 && (is_ident(body[i - 1]) || body[i - 1] == '.'))) {
+      ++i;
+      continue;
+    }
+    size_t name_end = i;
+    while (name_end < size && is_ident(body[name_end])) {
+      ++name_end;
+    }
+    const size_t start = i;
+    i = name_end;
+    if (half_names.count(body.substr(start, name_end - start)) == 0) {
+      continue;
+    }
+    size_t before = start;
+    while (before > 0 && is_space(body[before - 1])) {
+      --before;
+    }
+    if (before > 0 && std::strchr(";{})", body[before - 1]) == nullptr) {
+      continue;
+    }
+    size_t cursor = name_end;
+    while (cursor < size && body[cursor] == '[') {
+      int depth = 0;
+      size_t close = cursor;
+      for (; close < size; ++close) {
+        depth += body[close] == '[' ? 1 : body[close] == ']' ? -1 : 0;
+        if (depth == 0) {
+          break;
+        }
+      }
+      if (close >= size) {
+        break;
+      }
+      cursor = close + 1;
+    }
+    const size_t lhs_end = cursor;
+    while (cursor < size && is_space(body[cursor])) {
+      ++cursor;
+    }
+    if (cursor >= size) {
+      break;
+    }
+    char op = 0;
+    size_t rhs_begin = 0;
+    if (body[cursor] == '=' && (cursor + 1 >= size || body[cursor + 1] != '=')) {
+      rhs_begin = cursor + 1;
+    } else if (
+        std::strchr("+-*/", body[cursor]) != nullptr && cursor + 1 < size &&
+        body[cursor + 1] == '=' && (cursor + 2 >= size || body[cursor + 2] != '=')) {
+      op = body[cursor];
+      rhs_begin = cursor + 2;
+    } else {
+      continue;
+    }
+    int depth = 0;
+    size_t end = rhs_begin;
+    bool found = false;
+    for (; end < size; ++end) {
+      const char c = body[end];
+      if (c == '(' || c == '[') {
+        ++depth;
+      } else if (c == ')' || c == ']') {
+        if (--depth < 0) {
+          break;
+        }
+      } else if (c == '{' || c == '}') {
+        break;
+      } else if (c == ';' && depth == 0) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      continue;
+    }
+    size_t rb = rhs_begin;
+    while (rb < end && is_space(body[rb])) {
+      ++rb;
+    }
+    size_t re = end;
+    while (re > rb && is_space(body[re - 1])) {
+      --re;
+    }
+    const std::string rhs = body.substr(rb, re - rb);
+    if (rhs.empty()) {
+      continue;
+    }
+    if (op == 0 && rhs.rfind("float16_t(", 0) == 0) {
+      int d = 0;
+      size_t k = std::string("float16_t").size();
+      for (; k < rhs.size(); ++k) {
+        d += rhs[k] == '(' ? 1 : rhs[k] == ')' ? -1 : 0;
+        if (d == 0) {
+          break;
+        }
+      }
+      if (k == rhs.size() - 1) {
+        i = end + 1;
+        continue;
+      }
+    }
+    const std::string lhs = body.substr(start, lhs_end - start);
+    out.append(body, copied, start - copied);
+    out += lhs + " = float16_t(";
+    if (op != 0) {
+      out += lhs + " " + op + " (" + rhs + ")";
+    } else {
+      out += rhs;
+    }
+    out += ");";
+    copied = end + 1;
+    i = end + 1;
+  }
+  out.append(body, copied, std::string::npos);
+  body = std::move(out);
+}
+
 void translate_bfloat_parameter(
     std::string& body,
     const Parameter& parameter,
@@ -2349,6 +2502,10 @@ Translation translate_msl(
     needs_int64 = needs_int64 || parameter.type == "int64_t" ||
         parameter.type == "uint64_t";
   }
+  // A float16_t local or shared array receives float arithmetic wherever a
+  // half read was widened: `acc += w[i];` and `acc = acc + w[i];` must store
+  // through float16_t(). Runs once after every parameter's reads are rewritten.
+  wrap_half_lvalue_assignments(body, shared_declarations);
   // The body can reference 16/64-bit types the parameters never name —
   // e.g. a local `const uint16_t m = ...` in the bf16 pack/unpack idiom
   // (Qwen3.5-2B GDN, OmlxLinux M2 repro 2026-10-05). Without the
