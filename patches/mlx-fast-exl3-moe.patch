@@ -1,44 +1,6 @@
---- a/mlx/fast.h
-+++ b/mlx/fast.h
-@@ -51,6 +51,35 @@
-     Dtype out_dtype,
-     StreamOrDevice s = {});
- 
-+// Routed EXL3 MoE layer (the mlx_exl3_moe C ABI surface): decode the
-+// gate/up/down trellis banks with exl3_decode and run the routed
-+// clamped-SwiGLU MoE (gate upper-clamped, up symmetrically clamped at
-+// |limit|, limit = 0 disables) over the router slots, exactly the
-+// semantics of sushi's plainMoeFused host path. The trellis banks are
-+// [E, in/16, out/16, packed] uint16, the scales float16/uint16 bit
-+// patterns, slots uint32/int32 router ids, scores the router
-+// probabilities. |window| is the pack's codeword window (runtime config
-+// in sushi, so it is an explicit argument here). Composed and unfused:
-+// correct on every stream, slow everywhere; the fused GPU arms land
-+// with the M3d work.
-+MLX_API array exl3_moe(
-+    const array& x,
-+    const array& gate_trellis,
-+    const array& gate_suh,
-+    const array& gate_svh,
-+    const array& up_trellis,
-+    const array& up_suh,
-+    const array& up_svh,
-+    const array& down_trellis,
-+    const array& down_suh,
-+    const array& down_svh,
-+    const array& slots,
-+    const array& scores,
-+    int topk,
-+    int window,
-+    float limit,
-+    Dtype out_dtype,
-+    StreamOrDevice s = {});
- 
- MLX_API array layer_norm(
-     const array& x,
---- a/mlx/fast.cpp
-+++ b/mlx/fast.cpp
-@@ -599,6 +599,215 @@
+--- a/mlx/fast.cpp	2026-10-10 17:28:08.380402094 -0500
++++ b/mlx/fast.cpp	2026-10-10 17:28:08.861397795 -0500
+@@ -650,6 +650,215 @@
    return fallback({trellis, suh, svh})[0];
  }
  
@@ -254,9 +216,48 @@
  std::vector<array> RMSNorm::vjp(
      const std::vector<array>& primals,
      const std::vector<array>& cotangents,
---- a/python/src/fast.cpp
-+++ b/python/src/fast.cpp
-@@ -242,6 +242,46 @@
+--- a/mlx/fast.h	2026-10-10 17:28:08.380402094 -0500
++++ b/mlx/fast.h	2026-10-10 17:28:08.894397500 -0500
+@@ -71,6 +71,36 @@
+     std::uint32_t* dec16_out,
+     float* mid_out);
+ 
++// Routed EXL3 MoE layer (the mlx_exl3_moe C ABI surface): decode the
++// gate/up/down trellis banks with exl3_decode and run the routed
++// clamped-SwiGLU MoE (gate upper-clamped, up symmetrically clamped at
++// |limit|, limit = 0 disables) over the router slots, exactly the
++// semantics of sushi's plainMoeFused host path. The trellis banks are
++// [E, in/16, out/16, packed] uint16, the scales float16/uint16 bit
++// patterns, slots uint32/int32 router ids, scores the router
++// probabilities. |window| is the pack's codeword window (runtime config
++// in sushi, so it is an explicit argument here). Composed and unfused:
++// correct on every stream, slow everywhere; the fused GPU arms land
++// with the M3d work.
++MLX_API array exl3_moe(
++    const array& x,
++    const array& gate_trellis,
++    const array& gate_suh,
++    const array& gate_svh,
++    const array& up_trellis,
++    const array& up_suh,
++    const array& up_svh,
++    const array& down_trellis,
++    const array& down_suh,
++    const array& down_svh,
++    const array& slots,
++    const array& scores,
++    int topk,
++    int window,
++    float limit,
++    Dtype out_dtype,
++    StreamOrDevice s = {});
++
+ 
+ MLX_API array layer_norm(
+     const array& x,
+--- a/python/src/fast.cpp	2026-10-10 17:28:08.380402094 -0500
++++ b/python/src/fast.cpp	2026-10-10 17:28:08.861397795 -0500
+@@ -242,6 +242,60 @@
        )pbdoc");
  
    m.def(

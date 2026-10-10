@@ -1,60 +1,5 @@
---- a/mlx/fast.h
-+++ b/mlx/fast.h
-@@ -1,6 +1,7 @@
- // Copyright © 2023-2024 Apple Inc.
- 
- #pragma once
- 
-+#include <cstdint>
- #include <optional>
- #include <variant>
-@@ -33,6 +34,44 @@
-     float eps,
-     StreamOrDevice s = {});
- 
-+// EXL3 trellis tile decode: reconstruct one expert weight matrix
-+// [in_features, out_features] from its packed trellis plus the suh/svh
-+// row/column scales, bit-exact to sushi's expert_exl3.zig
-+// reconstructPublic. |bits| is the EXL3 rate K (packed halfwords per
-+// 16x16 tile = bits * 16, so the raw EXL3 bit widths 2, 2.5, 3, ... 8
-+// pass as n/16); |window| is the codeword window width in bits. Only
-+// the MCG codebook (every current pack) is implemented.
-+MLX_API array exl3_decode(
-+    const array& trellis,
-+    const array& suh,
-+    const array& svh,
-+    int in_features,
-+    int out_features,
-+    int bits,
-+    int window,
-+    Dtype out_dtype,
-+    StreamOrDevice s = {});
-+
-+// Debug/reference hook for the M3a device bisect: the exact reference
-+// decode with the GPU kernel's per-stage scratch contents. dec16_out
-+// receives (in_features/128) * (out_features/128) * 16384 uint32 words,
-+// one zero-extended f16 bit pattern per word in block-local row-major
-+// order (the shader's dec16 scratch layout); mid_out receives the same
-+// element count as floats holding row H128 + suh (the shader's tmp
-+// scratch). Either pointer may be null.
-+MLX_API void exl3_reconstruct_stages(
-+    const std::uint16_t* trellis,
-+    const std::uint16_t* suh,
-+    const std::uint16_t* svh,
-+    int in_features,
-+    int out_features,
-+    int bits,
-+    int window,
-+    float* out,
-+    std::uint32_t* dec16_out,
-+    float* mid_out);
-+
-+
- MLX_API array layer_norm(
-     const array& x,
-     const std::optional<array>& weight,
---- a/mlx/fast.cpp
-+++ b/mlx/fast.cpp
+--- a/mlx/fast.cpp	2026-10-10 17:28:07.995405534 -0500
++++ b/mlx/fast.cpp	2026-10-10 17:28:08.380402094 -0500
 @@ -1,5 +1,7 @@
  // Copyright © 2023-2026 Apple Inc.
  #include <cassert>
@@ -479,8 +424,63 @@
  bool RMSNormVJP::is_equivalent(const Primitive& other) const {
    const RMSNormVJP& a_other = static_cast<const RMSNormVJP&>(other);
    return eps_ == a_other.eps_;
---- a/mlx/fast_primitives.h
-+++ b/mlx/fast_primitives.h
+--- a/mlx/fast.h	2026-10-10 17:28:07.995405534 -0500
++++ b/mlx/fast.h	2026-10-10 17:28:08.380402094 -0500
+@@ -2,6 +2,7 @@
+ 
+ #pragma once
+ 
++#include <cstdint>
+ #include <optional>
+ #include <variant>
+ 
+@@ -33,6 +34,44 @@
+     float eps,
+     StreamOrDevice s = {});
+ 
++// EXL3 trellis tile decode: reconstruct one expert weight matrix
++// [in_features, out_features] from its packed trellis plus the suh/svh
++// row/column scales, bit-exact to sushi's expert_exl3.zig
++// reconstructPublic. |bits| is the EXL3 rate K (packed halfwords per
++// 16x16 tile = bits * 16, so the raw EXL3 bit widths 2, 2.5, 3, ... 8
++// pass as n/16); |window| is the codeword window width in bits. Only
++// the MCG codebook (every current pack) is implemented.
++MLX_API array exl3_decode(
++    const array& trellis,
++    const array& suh,
++    const array& svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    Dtype out_dtype,
++    StreamOrDevice s = {});
++
++// Debug/reference hook for the M3a device bisect: the exact reference
++// decode with the GPU kernel's per-stage scratch contents. dec16_out
++// receives (in_features/128) * (out_features/128) * 16384 uint32 words,
++// one zero-extended f16 bit pattern per word in block-local row-major
++// order (the shader's dec16 scratch layout); mid_out receives the same
++// element count as floats holding row H128 + suh (the shader's tmp
++// scratch). Either pointer may be null.
++MLX_API void exl3_reconstruct_stages(
++    const std::uint16_t* trellis,
++    const std::uint16_t* suh,
++    const std::uint16_t* svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    float* out,
++    std::uint32_t* dec16_out,
++    float* mid_out);
++
++
+ MLX_API array layer_norm(
+     const array& x,
+     const std::optional<array>& weight,
+--- a/mlx/fast_primitives.h	2026-10-10 17:28:07.995405534 -0500
++++ b/mlx/fast_primitives.h	2026-10-10 17:28:08.380402094 -0500
 @@ -132,6 +132,51 @@
    float scale_;
  };
@@ -533,8 +533,8 @@
  class RMSNormVJP : public Custom {
   public:
    RMSNormVJP(
---- a/python/src/fast.cpp
-+++ b/python/src/fast.cpp
+--- a/python/src/fast.cpp	2026-10-10 17:28:07.995405534 -0500
++++ b/python/src/fast.cpp	2026-10-10 17:28:08.380402094 -0500
 @@ -202,6 +202,46 @@
        )pbdoc");
  
