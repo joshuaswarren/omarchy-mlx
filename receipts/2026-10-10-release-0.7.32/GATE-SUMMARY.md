@@ -68,10 +68,10 @@ Three suites fail because of defects in the tests, and so does part of the fourt
 - `conv_gemm_decomp`: a CPU reference stream is passed to a GPU-only call.
 - `gdn_maskless_correctness`: a fixture path fixed at build time (6 of 6 pass with the fixtures staged).
 - `sdpa_prefill_flash`: asserts the flash route without checking the device capability (a test defect). One case also
-  fails with an out-of-device-memory error on the 13-inch M1: a 1 GiB allocation fails on an idle machine with 13.3 GB
-  of memory available (the #72 verification run on that machine). The same case passes on the 16-inch M1 Max. The
-  cause is not known yet and #72 does not change that case. It may be a test sized too large for the device heap, or
-  a product limit for a 16384-token prefill on a 16 GB machine.
+  fails with an out-of-device-memory error on the 13-inch M1. That failure is a limit in the product, not in the
+  test: non-causal bf16 attention at 16384 tokens and 8 heads fails on its first run, alone, in a fresh process, on
+  an idle machine (device heap 7.55 GiB, seven 1 GiB blocks allocate and the eighth fails). The same case passes on
+  the 16-inch M1 Max. #72 does not change that case. It is known issue 7 in the release notes.
 
 `fast_ops`: 47 of 47 cases passed; 8 assertions fail inside 3 cases marked as allowed to fail (sdpa vjp rep=1: 4,
 gated-delta vjp equal heads: 1, gated-delta vjp GQA opt-in: 3). Identical on all three chips.

@@ -19,6 +19,11 @@ Release notes as published: `NOTES.md` in this directory.
    `tag_name=v0.7.32`.
 6. **Public download check.** The wheel, the vendor tar and the sidecar were downloaded from the public release URLs.
    `sha256sum -c SHA256SUMS` reports OK for all three.
+7. **Install test from the public URL.** On the 13-inch M1 (21:44Z) and the 16-inch M1 Max (21:47Z), each on driver
+   0.7.28-2: the wheel was downloaded from the public release URL, its sha256 matched
+   `a91fbe5ec2a8e4c197106d749739f696b2689f5926a97349d17e8827cc2f4712` and the public `SHA256SUMS`, and it installed
+   into a fresh venv. The installed version was `0.32.4.dev202610101057+ae5d0950`. One fp16 matrix multiply on the GPU
+   returned `4096.0`. Both runs ended with exit code 0 and no desktop client was running.
 
 Wheel sha256 `a91fbe5ec2a8e4c197106d749739f696b2689f5926a97349d17e8827cc2f4712`.
 Vendor tar sha256 `f0fcdf0fb0bd67f3898df338b460afcc9af9de1281e96c12c82164bca1539db0`.
@@ -39,3 +44,9 @@ The first notes called all four red test suites test defects and said the out-of
 failing on an idle machine with 13.3 GB of memory available, so that claim was wrong. The release body, `NOTES.md` and
 `GATE-SUMMARY.md` now say that three suites are test defects, the fourth is partly a test defect, and that one of its
 cases fails for a reason that is not known yet. No asset and no tag changed.
+
+A second check found that the out-of-memory case is a product limit, not an open question. Non-causal bf16 attention
+at 16384 tokens and 8 heads fails on its first run, in a fresh process, on an idle 13-inch M1 (load average 0.15,
+device heap 7.55 GiB). The chunked-attention code did not change between the commit of the wheel used for that run and
+the release commit. The release notes now list it as known issue 7. A fix is in progress for v0.7.33. No asset and no
+tag changed.
