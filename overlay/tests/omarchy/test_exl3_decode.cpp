@@ -115,7 +115,7 @@ void dump_reference_stages(
   std::vector<float> w(static_cast<size_t>(in_f) * out_f);
   std::vector<uint32_t> dec16(blocks * 16384);
   std::vector<float> mid(blocks * 16384);
-  exl3_reconstruct_stages(
+  fast::exl3_reconstruct_stages(
       tv.data(), su.data(), sv.data(), in_f, out_f, bits, window, w.data(),
       dec16.data(), mid.data());
   const char* dtype_tag =
