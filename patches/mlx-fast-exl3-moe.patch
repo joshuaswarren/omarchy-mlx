@@ -1,0 +1,317 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -51,6 +51,35 @@
+     Dtype out_dtype,
+     StreamOrDevice s = {});
+ 
++// Routed EXL3 MoE layer (the mlx_exl3_moe C ABI surface): decode the
++// gate/up/down trellis banks with exl3_decode and run the routed
++// clamped-SwiGLU MoE (gate upper-clamped, up symmetrically clamped at
++// |limit|, limit = 0 disables) over the router slots, exactly the
++// semantics of sushi's plainMoeFused host path. The trellis banks are
++// [E, in/16, out/16, packed] uint16, the scales float16/uint16 bit
++// patterns, slots uint32/int32 router ids, scores the router
++// probabilities. |window| is the pack's codeword window (runtime config
++// in sushi, so it is an explicit argument here). Composed and unfused:
++// correct on every stream, slow everywhere; the fused GPU arms land
++// with the M3d work.
++MLX_API array exl3_moe(
++    const array& x,
++    const array& gate_trellis,
++    const array& gate_suh,
++    const array& gate_svh,
++    const array& up_trellis,
++    const array& up_suh,
++    const array& up_svh,
++    const array& down_trellis,
++    const array& down_suh,
++    const array& down_svh,
++    const array& slots,
++    const array& scores,
++    int topk,
++    int window,
++    float limit,
++    Dtype out_dtype,
++    StreamOrDevice s = {});
+ 
+ MLX_API array layer_norm(
+     const array& x,
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -599,6 +599,213 @@
+   return fallback({trellis, suh, svh})[0];
+ }
+ 
++array exl3_moe(
++    const array& x,
++    const array& gate_trellis,
++    const array& gate_suh,
++    const array& gate_svh,
++    const array& up_trellis,
++    const array& up_suh,
++    const array& up_svh,
++    const array& down_trellis,
++    const array& down_suh,
++    const array& down_svh,
++    const array& slots,
++    const array& scores,
++    int topk,
++    int window,
++    float limit,
++    Dtype out_dtype,
++    StreamOrDevice s_ /* = {} */) {
++  if (x.dtype() != float16 && x.dtype() != bfloat16 && x.dtype() != float32) {
++    throw std::invalid_argument(
++        "[exl3_moe] x must be float16, bfloat16 or float32.");
++  }
++  if (x.ndim() != 1 && x.ndim() != 2) {
++    throw std::invalid_argument(
++        "[exl3_moe] x must be 1D (one row) or 2D [rows, hidden].");
++  }
++  int rows = (x.ndim() == 2) ? x.shape(0) : 1;
++  int hidden = x.shape(-1);
++  if (hidden % 128 != 0) {
++    throw std::invalid_argument(
++        "[exl3_moe] hidden must be a multiple of 128 (EXL3 packs are "
++        "128x128 block quantized).");
++  }
++  auto check_trellis = [](const array& t, const char* name) {
++    if (t.dtype() != uint16 || t.ndim() != 4) {
++      throw std::invalid_argument(
++          std::string("[exl3_moe] ") + name +
++          " must be a 4D [E, in/16, out/16, packed] uint16 array.");
++    }
++  };
++  auto check_scale = [](const array& v, int size, const char* name) {
++    if (v.ndim() != 1 || v.shape(0) != size ||
++        (v.dtype() != float16 && v.dtype() != uint16)) {
++      throw std::invalid_argument(
++          std::string("[exl3_moe] ") + name +
++          " must be a 1D float16/uint16 (bit pattern) array of the "
++          "projection's axis length.");
++    }
++  };
++  check_trellis(gate_trellis, "gate_trellis");
++  check_trellis(up_trellis, "up_trellis");
++  check_trellis(down_trellis, "down_trellis");
++  int experts = gate_trellis.shape(0);
++  int inter = gate_trellis.shape(2) * 16;
++  if (gate_trellis.shape(1) * 16 != hidden || inter % 128 != 0 ||
++      up_trellis.shape(1) * 16 != hidden || up_trellis.shape(2) * 16 != inter ||
++      down_trellis.shape(1) * 16 != inter ||
++      down_trellis.shape(2) * 16 != hidden) {
++    throw std::invalid_argument(
++        "[exl3_moe] the trellis banks disagree with the projection "
++        "geometry (gate/up map hidden -> inter, down maps inter -> "
++        "hidden).");
++  }
++  check_scale(gate_suh, hidden, "gate_suh");
++  check_scale(gate_svh, inter, "gate_svh");
++  check_scale(up_suh, hidden, "up_suh");
++  check_scale(up_svh, inter, "up_svh");
++  check_scale(down_suh, inter, "down_suh");
++  check_scale(down_svh, hidden, "down_svh");
++  if (gate_trellis.shape(0) != experts ||
++      up_trellis.shape(0) != experts ||
++      down_trellis.shape(0) != experts) {
++    throw std::invalid_argument(
++        "[exl3_moe] the three trellis banks must carry the same expert "
++        "count.");
++  }
++  if (slots.ndim() != 1 && slots.ndim() != 2) {
++    throw std::invalid_argument(
++        "[exl3_moe] slots must be 1D [rows*topk] or 2D [rows, topk].");
++  }
++  if (slots.dtype() != uint32 && slots.dtype() != int32) {
++    throw std::invalid_argument(
++        "[exl3_moe] slots must be uint32 or int32 router ids.");
++  }
++  if (scores.shape() != slots.shape()) {
++    throw std::invalid_argument(
++        "[exl3_moe] scores must have the same shape as slots.");
++  }
++  if (scores.dtype() != float16 && scores.dtype() != bfloat16 &&
++      scores.dtype() != float32) {
++    throw std::invalid_argument(
++        "[exl3_moe] scores must be float16, bfloat16 or float32.");
++  }
++  int slot_rows = (slots.ndim() == 2) ? slots.shape(0) : 1;
++  if (topk <= 0 || slots.shape(-1) != topk ||
++      (slot_rows != 1 && slot_rows != rows)) {
++    std::ostringstream msg;
++    msg << "[exl3_moe] topk must match slots' last axis (" << topk
++        << " given, slots " << slots.shape() << ") and the slot rows must "
++           "be 1 or the x row count ("
++        << rows << ").";
++    throw std::invalid_argument(msg.str());
++  }
++  Dtype out_type = out_dtype;
++  if (out_type != float16 && out_type != bfloat16 && out_type != float32) {
++    throw std::invalid_argument(
++        "[exl3_moe] out_dtype must be float16, bfloat16 or float32.");
++  }
++
++  auto s = to_stream(s_);
++  // Composed route on every stream (see fast.h): the router ids and
++  // scores materialize, each expert decodes through exl3_decode, and the
++  // clamped-SwiGLU routing runs with core ops in f32.
++  auto fallback = [rows, hidden, inter, experts, topk, window, limit,
++                   out_type, s](std::vector<array> inputs) {
++    array xg = inputs[0];
++    if (xg.ndim() == 1) {
++      xg = reshape(xg, {1, xg.shape(0)}, s);
++    }
++    xg = astype(xg, float32, s);
++    array slot_ids = inputs[10];
++    array sc = inputs[11];
++    if (slot_ids.ndim() == 1) {
++      slot_ids = reshape(slot_ids, {1, slot_ids.shape(0)}, s);
++      sc = reshape(sc, {1, sc.shape(0)}, s);
++    }
++    auto decode_stack = [&](const array& t,
++                            const array& suh,
++                            const array& svh,
++                            int in_f,
++                            int out_f) {
++      std::vector<array> ws;
++      ws.reserve(experts);
++      for (int e = 0; e < experts; e++) {
++        array te = reshape(
++            slice(
++                t,
++                {e, 0, 0, 0},
++                {e + 1, t.shape(1), t.shape(2), t.shape(3)},
++                {1, 1, 1, 1},
++                s),
++            {-1},
++            s);
++        ws.push_back(
++            exl3_decode(te, suh, svh, in_f, out_f, t.shape(3) / 16, window,
++                        float32, s));
++      }
++      return stack(ws, 0, s);
++    };
++    array wg = decode_stack(
++        inputs[1], inputs[2], inputs[3], hidden, inter); // [E, hidden, inter]
++    array wu = decode_stack(
++        inputs[4], inputs[5], inputs[6], hidden, inter);
++    array wd = decode_stack(
++        inputs[7], inputs[8], inputs[9], inter, hidden); // [E, inter, hidden]
++    std::optional<array> out;
++    for (int k = 0; k < topk; k++) {
++      // Column k of the slot/score tables: slice it, drop the axis.
++      array ids = astype(
++          reshape(
++              slice(
++                  slot_ids,
++                  {0, k},
++                  {slot_ids.shape(0), k + 1},
++                  {1, 1},
++                  s),
++              {slot_ids.shape(0)},
++              s),
++          int32,
++          s);
++      array scorev = reshape(
++          slice(sc, {0, k}, {sc.shape(0), k + 1}, {1, 1}, s),
++          {sc.shape(0)},
++          s);
++      array wgt = take(wg, ids, 0, s); // [rows, hidden, inter]
++      array hut = take(wu, ids, 0, s);
++      array h = squeeze(
++          matmul(expand_dims(xg, 1, s), wgt, s), 1, s); // [rows, inter]
++      array u = squeeze(
++          matmul(expand_dims(xg, 1, s), hut, s), 1, s);
++      if (limit > 0.0f) {
++        // GLM convention (sushi plainMoeFused): the gate clamps above
++        // only, the up branch symmetrically.
++        h = minimum(h, array(limit, float32), s);
++        u = clip(u, array(-limit, float32), array(limit, float32), s);
++      }
++      array act = multiply(sigmoid(h, s), u, s);
++      array wdt = take(wd, ids, 0, s); // [rows, inter, hidden]
++      array y = squeeze(
++          matmul(expand_dims(act, 1, s), wdt, s), 1, s); // [rows, hidden]
++      array contrib = multiply(
++          y, expand_dims(astype(scorev, float32, s), 1, s), s);
++      out = out.has_value() ? add(*out, contrib, s) : contrib;
++    }
++    return std::vector<array>{astype(*out, out_type, s)};
++  };
++  // No Exl3Moe primitive yet (M3b is the C surface; the fused GPU arms
++  // are M3d): the composed graph answers on every stream, with the decode
++  // legs taking the GPU kernel where the stream provides one.
++  return fallback(
++      {x,
++       gate_trellis, gate_suh, gate_svh,
++       up_trellis, up_suh, up_svh,
++       down_trellis, down_suh, down_svh,
++       slots, scores})[0];
++}
++
+ std::vector<array> RMSNorm::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -242,6 +242,60 @@
+       )pbdoc");
+ 
+   m.def(
++      "exl3_moe",
++      &mx::fast::exl3_moe,
++      "x"_a,
++      "gate_trellis"_a,
++      "gate_suh"_a,
++      "gate_svh"_a,
++      "up_trellis"_a,
++      "up_suh"_a,
++      "up_svh"_a,
++      "down_trellis"_a,
++      "down_suh"_a,
++      "down_svh"_a,
++      "slots"_a,
++      "scores"_a,
++      "topk"_a,
++      "window"_a,
++      "limit"_a,
++      "out_dtype"_a,
++      nb::kw_only(),
++      "stream"_a = nb::none(),
++      nb::sig(
++          "def exl3_moe(x: array, gate_trellis: array, gate_suh: array, gate_svh: array, up_trellis: array, up_suh: array, up_svh: array, down_trellis: array, down_suh: array, down_svh: array, slots: array, scores: array, topk: int, window: int, limit: float, out_dtype: Dtype, *, stream: StreamOrDevice = None) -> array"),
++      R"pbdoc(
++        Routed EXL3 MoE layer.
++
++        Decodes the gate/up/down trellis banks with ``exl3_decode`` and
++        runs the routed clamped-SwiGLU MoE: the gate clamps above
++        ``limit``, the up branch clamps to ``[-limit, limit]`` (``limit``
++        = 0 disables clamping), outputs combine with the router
++        ``scores``. Composed and unfused.
++
++        Args:
++            x (array): Input activations ``[rows, hidden]`` (or 1D row).
++            gate_trellis (array): ``[E, hidden/16, inter/16, packed]``.
++            gate_suh (array): gate row scales, ``[hidden]``.
++            gate_svh (array): gate column scales, ``[inter]``.
++            up_trellis (array): up trellis, gate geometry.
++            up_suh (array): up row scales, ``[hidden]``.
++            up_svh (array): up column scales, ``[inter]``.
++            down_trellis (array): ``[E, inter/16, hidden/16, packed]``.
++            down_suh (array): down row scales, ``[inter]``.
++            down_svh (array): down column scales, ``[hidden]``.
++            slots (array): uint32/int32 router ids, ``[rows, topk]``.
++            scores (array): router probabilities, same shape as slots.
++            topk (int): Experts routed per row.
++            window (int): Codeword window width in bits.
++            limit (float): SwiGLU clamp bound (0 = no clamp).
++            out_dtype (Dtype): Output dtype.
++
++        Returns:
++            array: ``[rows, hidden]`` mixed expert outputs.
++      )pbdoc");
++
++  m.def(
+       "layer_norm",
+       &mx::fast::layer_norm,
+       "x"_a,

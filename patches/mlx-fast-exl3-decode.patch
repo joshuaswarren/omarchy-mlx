@@ -1,0 +1,506 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -33,6 +33,25 @@
+     float eps,
+     StreamOrDevice s = {});
+ 
++// EXL3 trellis tile decode: reconstruct one expert weight matrix
++// [in_features, out_features] from its packed trellis plus the suh/svh
++// row/column scales, bit-exact to sushi's expert_exl3.zig
++// reconstructPublic. |bits| is the EXL3 rate K (packed halfwords per
++// 16x16 tile = bits * 16, so the raw EXL3 bit widths 2, 2.5, 3, ... 8
++// pass as n/16); |window| is the codeword window width in bits. Only
++// the MCG codebook (every current pack) is implemented.
++MLX_API array exl3_decode(
++    const array& trellis,
++    const array& suh,
++    const array& svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    Dtype out_dtype,
++    StreamOrDevice s = {});
++
++
+ MLX_API array layer_norm(
+     const array& x,
+     const std::optional<array>& weight,
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1,5 +1,7 @@
+ // Copyright © 2023-2026 Apple Inc.
+ #include <cassert>
++#include <cstdint>
++#include <cstring>
+ #include <numeric>
+ 
+ #include "mlx/fast.h"
+@@ -253,6 +255,350 @@
+   return fallback({x, passed_weight})[0];
+ }
+ 
++namespace {
++
++constexpr uint32_t exl3_mcg_mult = 0xCBAC1FEDu;
++constexpr float exl3_had_scale = 0.08838834764831845f;
++
++// f16 bit pattern -> f32, exact (integer widen; no host rounding rules).
++inline float exl3_f16_to_f32(uint16_t h) {
++  uint32_t sign = (h >> 15) & 1u;
++  uint32_t exp = (h >> 10) & 0x1Fu;
++  uint32_t man = h & 0x3FFu;
++  uint32_t bits;
++  if (exp == 0u) {
++    if (man == 0u) {
++      bits = sign << 31;
++    } else {
++      uint32_t m = man;
++      uint32_t s = 0u;
++      while ((m & 0x200u) == 0u) {
++        m <<= 1;
++        s++;
++      }
++      bits = (sign << 31) | ((112u - s) << 23) | ((m & 0x1FFu) << 14);
++    }
++  } else if (exp == 0x1Fu) {
++    bits = (sign << 31) | (0xFFu << 23) | (man << 13);
++  } else {
++    bits = (sign << 31) | ((exp + 112u) << 23) | (man << 13);
++  }
++  float v;
++  std::memcpy(&v, &bits, sizeof(v));
++  return v;
++}
++
++// f32 -> f16 bits, round-to-nearest-even (matches Zig @floatCast).
++inline uint16_t exl3_f32_to_f16(float v) {
++  uint32_t b;
++  std::memcpy(&b, &v, sizeof(b));
++  uint32_t sign = (b >> 16) & 0x8000u;
++  uint32_t exp = (b >> 23) & 0xFFu;
++  uint32_t man = b & 0x7FFFFFu;
++  if (exp == 0xFFu) {
++    return static_cast<uint16_t>(sign | 0x7C00u | (man != 0u ? 0x0200u : 0u));
++  }
++  int ne = static_cast<int>(exp) - 127 + 15;
++  if (ne >= 31) {
++    return static_cast<uint16_t>(sign | 0x7C00u);
++  }
++  if (ne <= 0) {
++    if (ne < -10) {
++      return static_cast<uint16_t>(sign);
++    }
++    uint32_t m = man | 0x800000u;
++    uint32_t shift = static_cast<uint32_t>(14 - ne);
++    uint32_t rem = m & ((1u << shift) - 1u);
++    uint32_t h16 = m >> shift;
++    uint32_t half_ulp = 1u << (shift - 1u);
++    if (rem > half_ulp || (rem == half_ulp && (h16 & 1u) == 1u)) {
++      h16++;
++    }
++    return static_cast<uint16_t>(sign | h16);
++  }
++  uint32_t h16 = (static_cast<uint32_t>(ne) << 10) | (man >> 13);
++  uint32_t rem = man & 0x1FFFu;
++  if (rem > 0x1000u || (rem == 0x1000u && ((man >> 13) & 1u) == 1u)) {
++    h16++;
++  }
++  if (h16 >= 0x7C00u) {
++    return static_cast<uint16_t>(sign | 0x7C00u);
++  }
++  return static_cast<uint16_t>(sign | h16);
++}
++
++// expert_exl3.zig decodeMcg: u32 mul + XOR, f32 add of the f16 halves,
++// integer RNE round. The C++ uint32_t multiply wraps exactly like Zig *%.
++inline uint16_t exl3_decode_mcg(uint16_t cw) {
++  uint32_t mixed = static_cast<uint32_t>(cw) * exl3_mcg_mult;
++  uint32_t pair = 0x3B603B60u ^ (mixed & 0x8FFF8FFFu);
++  float lo = exl3_f16_to_f32(static_cast<uint16_t>(pair & 0xFFFFu));
++  float hi = exl3_f16_to_f32(static_cast<uint16_t>(pair >> 16));
++  return exl3_f32_to_f16(lo + hi);
++}
++
++inline uint32_t exl3_word_u32(const uint16_t* words, size_t index) {
++  return static_cast<uint32_t>(words[2 * index]) |
++      (static_cast<uint32_t>(words[2 * index + 1]) << 16);
++}
++
++// unpackTile: the tail-biting 16-bit windows of two consecutive codewords
++// per iteration, exactly the Zig reference arithmetic.
++void exl3_unpack_tile(const uint16_t* words, uint32_t n, uint16_t* cw) {
++  size_t wc = n / 2;
++  size_t total = static_cast<size_t>(n) * 16;
++  for (size_t t = 0; t < 128; t++) {
++    size_t e0 = ((t * 2 + 1) * static_cast<size_t>(n)) >> 4;
++    size_t e1 = ((t * 2 + 2) * static_cast<size_t>(n)) >> 4;
++    size_t bit0 = e0 + total - 16;
++    size_t bit2 = e1 + total;
++    size_t i0 = bit0 >> 5;
++    size_t i1 = (bit2 - 1) >> 5;
++    size_t shift = (i1 + 1) * 32 - bit2;
++    uint64_t merged =
++        (static_cast<uint64_t>(exl3_word_u32(words, i0 % wc)) << 32) |
++        exl3_word_u32(words, i1 % wc);
++    uint32_t funnel = static_cast<uint32_t>(merged >> shift);
++    size_t fresh = e1 - e0;
++    cw[t * 2] = static_cast<uint16_t>((funnel >> fresh) & 0xFFFFu);
++    cw[t * 2 + 1] = static_cast<uint16_t>(funnel & 0xFFFFu);
++  }
++}
++
++// decodeTile: unpack, tensor-core permute, MCG-decode under the window mask.
++void exl3_decode_tile(
++    const uint16_t* words,
++    uint32_t n,
++    uint16_t mask,
++    uint16_t* out) {
++  uint16_t cw[256];
++  exl3_unpack_tile(words, n, cw);
++  size_t perm[256];
++  for (size_t thread = 0; thread < 32; thread++) {
++    size_t row0 = (thread % 4) * 2;
++    size_t row1 = row0 + 1;
++    size_t row2 = row0 + 8;
++    size_t row3 = row0 + 9;
++    size_t col0 = thread / 4;
++    size_t col1 = col0 + 8;
++    size_t base = thread * 8;
++    perm[base + 0] = row0 * 16 + col0;
++    perm[base + 1] = row1 * 16 + col0;
++    perm[base + 2] = row2 * 16 + col0;
++    perm[base + 3] = row3 * 16 + col0;
++    perm[base + 4] = row0 * 16 + col1;
++    perm[base + 5] = row1 * 16 + col1;
++    perm[base + 6] = row2 * 16 + col1;
++    perm[base + 7] = row3 * 16 + col1;
++  }
++  for (size_t i = 0; i < 256; i++) {
++    out[perm[i]] = exl3_decode_mcg(cw[i] & mask);
++  }
++}
++
++// reconstructInner + reconstructPublic: tile decode into [in, out] row
++// major, then the row H128 + suh and column H128 + svh stages in the
++// reference's exact f32 accumulation order. Returns f32; the caller rounds
++// to the output dtype.
++void exl3_reconstruct(
++    const uint16_t* trellis,
++    const uint16_t* suh,
++    const uint16_t* svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    float* out) {
++  const uint32_t n = static_cast<uint32_t>(bits) * 16;
++  const uint16_t mask = static_cast<uint16_t>((1u << window) - 1u);
++  const int in_tiles = in_features / 128;
++  const int out_tiles = out_features / 128;
++  const size_t packed_n = n;
++  uint16_t tile[256];
++  std::vector<uint16_t> inner(
++      static_cast<size_t>(in_features) * out_features);
++  for (int tk = 0; tk < in_tiles; tk++) {
++    for (int tn = 0; tn < out_tiles; tn++) {
++      const uint16_t* src =
++          trellis + (static_cast<size_t>(tk) * out_tiles + tn) * packed_n;
++      exl3_decode_tile(src, n, mask, tile);
++      for (int r = 0; r < 16; r++) {
++        std::memcpy(
++            &inner[(static_cast<size_t>(tk) * 16 + r) * out_features +
++                   static_cast<size_t>(tn) * 16],
++            &tile[static_cast<size_t>(r) * 16],
++            16 * sizeof(uint16_t));
++      }
++    }
++  }
++  // Row blocks: H128 then suh.
++  for (int rb = 0; rb < in_features; rb += 128) {
++    for (int col = 0; col < out_features; col++) {
++      float vec[128];
++      for (int r = 0; r < 128; r++) {
++        vec[r] = exl3_f16_to_f32(
++            inner[static_cast<size_t>(rb + r) * out_features + col]);
++      }
++      float hv[128];
++      for (int r = 0; r < 128; r++) {
++        float acc = 0.0f;
++        for (int k = 0; k < 128; k++) {
++          float entry =
++              (__builtin_popcount(static_cast<unsigned>(r) &
++                                  static_cast<unsigned>(k)) &
++               1)
++                  ? -exl3_had_scale
++                  : exl3_had_scale;
++          acc = acc + entry * vec[k];
++        }
++        hv[r] = acc;
++      }
++      for (int r = 0; r < 128; r++) {
++        out[static_cast<size_t>(rb + r) * out_features + col] =
++            hv[r] * exl3_f16_to_f32(suh[rb + r]);
++      }
++    }
++  }
++  // Column blocks: H128 then svh.
++  for (int cb = 0; cb < out_features; cb += 128) {
++    for (int row = 0; row < in_features; row++) {
++      float vec[128];
++      for (int c = 0; c < 128; c++) {
++        vec[c] = out[static_cast<size_t>(row) * out_features + cb + c];
++      }
++      float hv[128];
++      for (int c = 0; c < 128; c++) {
++        float acc = 0.0f;
++        for (int k = 0; k < 128; k++) {
++          float entry =
++              (__builtin_popcount(static_cast<unsigned>(c) &
++                                  static_cast<unsigned>(k)) &
++               1)
++                  ? -exl3_had_scale
++                  : exl3_had_scale;
++          acc = acc + entry * vec[k];
++        }
++        hv[c] = acc;
++      }
++      for (int c = 0; c < 128; c++) {
++        out[static_cast<size_t>(row) * out_features + cb + c] =
++            hv[c] * exl3_f16_to_f32(svh[cb + c]);
++      }
++    }
++  }
++}
++
++} // namespace
++
++array exl3_decode(
++    const array& trellis,
++    const array& suh,
++    const array& svh,
++    int in_features,
++    int out_features,
++    int bits,
++    int window,
++    Dtype out_type_,
++    StreamOrDevice s_ /* = {} */) {
++  int64_t packed = static_cast<int64_t>(bits) * 16;
++  if (packed < 16 || packed > 128) {
++    std::ostringstream msg;
++    msg << "[exl3_decode] the packed rate n = bits * 16 must be in [16, "
++           "128] but got bits = "
++        << bits << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (window < 8 || window > 16) {
++    std::ostringstream msg;
++    msg << "[exl3_decode] window must be in [8, 16] but got " << window
++        << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (in_features <= 0 || out_features <= 0 || in_features % 128 != 0 ||
++      out_features % 128 != 0) {
++    std::ostringstream msg;
++    msg << "[exl3_decode] in_features and out_features must be positive "
++           "multiples of 128 (EXL3 packs are 128x128 block quantized) but "
++           "got "
++        << in_features << " x " << out_features << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  // suh/svh travel as float16-typed arrays in sushi (the host path reads
++  // their raw bit patterns); uint16 carries the identical bytes. The
++  // trellis is uint16 everywhere.
++  if (trellis.dtype() != uint16 ||
++      !(suh.dtype() == uint16 || suh.dtype() == float16) ||
++      !(svh.dtype() == uint16 || svh.dtype() == float16)) {
++    throw std::invalid_argument(
++        "[exl3_decode] trellis must be uint16 and suh/svh uint16 or "
++        "float16 (they are read as raw bit patterns).");
++  }
++  int in_tiles = in_features / 128;
++  int out_tiles = out_features / 128;
++  Shape want_trellis{
++      static_cast<int>(in_tiles) * out_tiles * 64 *
++      static_cast<int>(packed)};
++  if (trellis.ndim() != 1 || trellis.shape() != want_trellis) {
++    std::ostringstream msg;
++    msg << "[exl3_decode] trellis must be a flat [" << want_trellis[0]
++        << "] uint16 array for the given shape/rate but got shape "
++        << trellis.shape() << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (suh.ndim() != 1 || suh.shape(0) != in_features) {
++    std::ostringstream msg;
++    msg << "[exl3_decode] suh must be [" << in_features
++        << "] but got shape " << suh.shape() << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  if (svh.ndim() != 1 || svh.shape(0) != out_features) {
++    std::ostringstream msg;
++    msg << "[exl3_decode] svh must be [" << out_features
++        << "] but got shape " << svh.shape() << ".";
++    throw std::invalid_argument(msg.str());
++  }
++  Dtype out_type = out_type_;
++  if (out_type != float16 && out_type != bfloat16 && out_type != float32) {
++    throw std::invalid_argument(
++        "[exl3_decode] out_dtype must be float16, bfloat16 or float32.");
++  }
++
++  auto s = to_stream(s_);
++  // The trellis bit plumbing has no composed-op form that preserves the
++  // reference's exact f32 accumulation order, so the CPU fallback
++  // materializes its inputs and runs the bit-exact reference decoder here
++  // (CPU-stream arrays only: use_fallback gates the primitive route).
++  auto fallback = [in_features, out_features, bits, window, out_type, s](
++                      std::vector<array> inputs) {
++    for (auto& a : inputs) {
++      a.eval();
++    }
++    std::vector<float> w(
++        static_cast<size_t>(in_features) * static_cast<size_t>(out_features));
++    exl3_reconstruct(
++        inputs[0].data<uint16_t>(),
++        inputs[1].data<uint16_t>(),
++        inputs[2].data<uint16_t>(),
++        in_features,
++        out_features,
++        bits,
++        window,
++        w.data());
++    array out(w.data(), Shape{in_features, out_features}, float32);
++    return std::vector<array>{astype(out, out_type, s)};
++  };
++
++  if (!Exl3Decode::use_fallback(s)) {
++    return array(
++        Shape{in_features, out_features},
++        out_type,
++        std::make_shared<Exl3Decode>(
++            s, fallback, in_features, out_features, bits, window),
++        {trellis, suh, svh});
++  }
++  return fallback({trellis, suh, svh})[0];
++}
++
+ std::vector<array> RMSNorm::vjp(
+     const std::vector<array>& primals,
+     const std::vector<array>& cotangents,
+@@ -325,6 +671,13 @@
+   return eps_ == a_other.eps_ && scale_ == a_other.scale_;
+ }
+ 
++bool Exl3Decode::is_equivalent(const Primitive& other) const {
++  const Exl3Decode& a_other = static_cast<const Exl3Decode&>(other);
++  return in_features_ == a_other.in_features_ &&
++      out_features_ == a_other.out_features_ && bits_ == a_other.bits_ &&
++      window_ == a_other.window_;
++}
++
+ bool RMSNormVJP::is_equivalent(const Primitive& other) const {
+   const RMSNormVJP& a_other = static_cast<const RMSNormVJP&>(other);
+   return eps_ == a_other.eps_;
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -132,6 +132,51 @@
+   float scale_;
+ };
+ 
++// EXL3 trellis tile decode (shaders/exl3_decode.comp on the omarchy
++// backend). Scalar state is the full reconstruction geometry: the packed
++// rate and window mask travel with it so a decoded weight can never be
++// misread under the wrong rate.
++class Exl3Decode : public Custom {
++ public:
++  Exl3Decode(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int in_features,
++      int out_features,
++      int bits,
++      int window)
++      : Custom(stream, std::move(fallback)),
++        in_features_(in_features),
++        out_features_(out_features),
++        bits_(bits),
++        window_(window) {}
++
++  static bool use_fallback(Stream stream);
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(Exl3Decode)
++  bool is_equivalent(const Primitive& other) const override;
++  DEFINE_INPUT_OUTPUT_SHAPE()
++
++  auto state() const {
++    return std::make_tuple(
++        nullptr,
++        std::make_tuple(in_features_, out_features_, bits_, window_));
++  }
++
++ private:
++  int in_features_;
++  int out_features_;
++  int bits_;
++  int window_;
++};
++
+ class RMSNormVJP : public Custom {
+  public:
+   RMSNormVJP(
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
+@@ -202,6 +202,46 @@
+       )pbdoc");
+ 
+   m.def(
++      "exl3_decode",
++      &mx::fast::exl3_decode,
++      "trellis"_a,
++      "suh"_a,
++      "svh"_a,
++      "in_features"_a,
++      "out_features"_a,
++      "bits"_a,
++      "window"_a = 15,
++      "out_dtype"_a = mx::float32,
++      nb::kw_only(),
++      "stream"_a = nb::none(),
++      nb::sig(
++          "def exl3_decode(trellis: array, suh: array, svh: array, in_features: int, out_features: int, bits: int, window: int = 15, out_dtype: Dtype = float32, *, stream: StreamOrDevice = None) -> array"),
++      R"pbdoc(
++        EXL3 trellis tile decode.
++
++        Reconstructs one expert weight matrix ``[in_features,
++        out_features]`` from its packed trellis (flat uint16, ``64 *
++        (in_features/128) * (out_features/128) * bits*16`` elements) plus
++        the uint16 row scale ``suh`` and column scale ``svh``, bit-exact
++        to the EXL3 reference decoder. ``bits`` is the packed rate
++        divided by 16 (packed halfwords per 16x16 tile = ``bits * 16``)
++        and ``window`` the codeword window width in bits.
++
++        Args:
++            trellis (array): Packed trellis, flat uint16.
++            suh (array): Row scales, ``[in_features]`` uint16.
++            svh (array): Column scales, ``[out_features]`` uint16.
++            in_features (int): Number of rows of the weight matrix.
++            out_features (int): Number of columns of the weight matrix.
++            bits (int): EXL3 packed rate divided by 16.
++            window (int): Codeword window width in bits (default 15).
++            out_dtype (Dtype): Output dtype (float32 default).
++
++        Returns:
++            array: The decoded weight matrix.
++      )pbdoc");
++
++  m.def(
+       "layer_norm",
+       &mx::fast::layer_norm,
+       "x"_a,

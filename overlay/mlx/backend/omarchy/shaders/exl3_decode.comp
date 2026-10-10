@@ -1,0 +1,308 @@
+#version 460
+// EXL3 trellis tile decode (M3a option-b decode primitive).
+//
+// Port of the M1 lavapipe-proven src/exl3/vk/exl3_decode.comp (sushi fork,
+// exl3-vk-decode 94715e0) into the omarchy backend conventions: ComputeParams
+// push constants, storage buffers bound from byte 0 with the array element
+// offsets carried in push constants. Math mirrors sushi
+// src/exl3/expert_exl3.zig: unpackTile (:177), decodeMcg (:141),
+// tensorCorePerm (:226), the row/col H128 + suh/svh stages of
+// reconstructPublic (:287). Integer and bit-exact parts use integer ops only;
+// the only float ops are the f32 add/mul chains the reference performs, in
+// the same order, under `precise` (no FMA contraction — the reference is a
+// separate mul then add).
+//
+// One workgroup (256 invocations) decodes one 128x128 block = 8x8 tiles of
+// 16x16 weights and emits the reconstruction in the caller's dtype. All
+// storage is 32-bit words — the packed trellis, the scale bit patterns and
+// the packed f16/bf16 outputs ride in uint words exactly like the M1 oracle
+// (no 16-bit-storage dependency); the f16/bf16 variants store integer RNE
+// bit patterns, not a driver cast.
+//
+// Push-constant transport (ComputeParams field reuse, matmul-precedent):
+//   count         = number of 128x128 blocks (grid = count workgroups)
+//   matrix_m      = packed halfwords per tile (rate n = bits * 16)
+//   matrix_n      = codeword window mask (window bits w: (1<<w)-1)
+//   lhs_offset    = trellis element offset (uint16 elements; even, the
+//                   eval layer refuses odd offsets — the trellis is
+//                   addressed as uint32 words)
+//   rhs_offset    = suh element offset (uint16 elements, any parity)
+//   aux_offset    = svh element offset (uint16 elements, any parity)
+//   output_offset = output element offset (float elements, or uint16
+//                   elements for the packed variants; even there — the
+//                   packed output is addressed as uint32 word pairs)
+// (the dec16 and tmp stages run on dedicated fresh scratch bindings at
+// element offset 0, so they carry no offset transport)
+
+layout(local_size_x = 256) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Trellis {
+  uint g_trellis[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer Suh {
+  uint g_suh[];
+};
+layout(std430, set = 0, binding = 2) readonly buffer Svh {
+  uint g_svh[];
+};
+layout(std430, set = 0, binding = 3) writeonly buffer Dec16 {
+  uint g_dec16[];
+};
+layout(std430, set = 0, binding = 4) buffer Tmp {
+  float g_tmp[];
+};
+#if defined(EXL3_OUT_F16) || defined(EXL3_OUT_BF16)
+layout(std430, set = 0, binding = 5) writeonly buffer Out {
+  uint g_out[];
+};
+#else
+layout(std430, set = 0, binding = 5) writeonly buffer Out {
+  float g_out[];
+};
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const float HAD_SCALE = 0.08838834764831845;
+const uint MCG_MULT = 0xCBAC1FEDu;
+
+// f16 bit pattern -> f32, exact (integer widen, no driver rounding).
+float f16ToF32(uint h) {
+  uint sign = (h >> 15) & 1u;
+  uint exp = (h >> 10) & 0x1Fu;
+  uint man = h & 0x3FFu;
+  uint bits;
+  if (exp == 0u) {
+    if (man == 0u) {
+      bits = sign << 31;
+    } else {
+      // Normalize: value = man * 2^-24; after the loop m has its MSB at
+      // bit 9, s shifts consumed, exponent = 112 - s.
+      uint m = man;
+      uint s = 0u;
+      while ((m & 0x200u) == 0u) {
+        m <<= 1;
+        s++;
+      }
+      bits = (sign << 31) | ((112u - s) << 23) | ((m & 0x1FFu) << 14);
+    }
+  } else if (exp == 0x1Fu) {
+    bits = (sign << 31) | (0xFFu << 23) | (man << 13);
+  } else {
+    bits = (sign << 31) | ((exp + 112u) << 23) | (man << 13);
+  }
+  return uintBitsToFloat(bits);
+}
+
+// f32 -> f16 bit pattern, round-to-nearest-even (matches Zig @floatCast).
+uint f32ToF16(float v) {
+  uint b = floatBitsToUint(v);
+  uint sign = (b >> 16) & 0x8000u;
+  uint exp = (b >> 23) & 0xFFu;
+  uint man = b & 0x7FFFFFu;
+  if (exp == 0xFFu) {
+    // No NaN-generating op exists on the tested paths; canonicalize anyway.
+    return sign | 0x7C00u | (man != 0u ? 0x0200u : 0u);
+  }
+  int ne = int(exp) - 127 + 15;
+  if (ne >= 31)
+    return sign | 0x7C00u;
+  if (ne <= 0) {
+    if (ne < -10)
+      return sign;
+    uint m = man | 0x800000u;
+    uint shift = uint(14 - ne); // 14..23
+    uint rem = m & ((1u << shift) - 1u);
+    uint h16 = m >> shift;
+    uint halfUlp = 1u << (shift - 1u);
+    if (rem > halfUlp || (rem == halfUlp && (h16 & 1u) == 1u))
+      h16++;
+    return sign | h16;
+  }
+  uint h16 = (uint(ne) << 10) | (man >> 13);
+  uint rem = man & 0x1FFFu;
+  if (rem > 0x1000u || (rem == 0x1000u && ((man >> 13) & 1u) == 1u))
+    h16++;
+  if (h16 >= 0x7C00u)
+    return sign | 0x7C00u;
+  return sign | h16;
+}
+
+// f32 bits -> bf16 bits, round-to-nearest-even.
+uint f32ToBf16(uint b) {
+  uint lsb = (b >> 16) & 1u;
+  return (b + 0x7FFFu + lsb) >> 16;
+}
+
+// expert_exl3.zig decodeMcg: u32 mul + XOR, then an f32 add of the two f16
+// halves, rounded to f16. The add is IEEE f32 on both sides; the round is
+// integer RNE. (The mul1 codebook is not used by the current packs and is
+// rejected by name at the primitive layer.)
+uint decodeMcg(uint cw) {
+  uint mixed = cw * MCG_MULT;
+  uint pair = 0x3B603B60u ^ (mixed & 0x8FFF8FFFu);
+  float lo = f16ToF32(pair & 0xFFFFu);
+  float hi = f16ToF32(pair >> 16);
+  return f32ToF16(lo + hi);
+}
+
+// tensorCorePerm entry i (i in 0..255).
+uint permOf(uint i) {
+  uint thread = i >> 3;
+  uint j = i & 7u;
+  uint row0 = (thread & 3u) << 1;
+  uint col0 = thread >> 2;
+  uint col1 = col0 + 8u;
+  uint rows[4] = uint[4](row0, row0 + 1u, row0 + 8u, row0 + 9u);
+  uint col = (j < 4u) ? col0 : col1;
+  return rows[j & 3u] * 16u + col;
+}
+
+// Halfword |base + index| of a scale bank (element offsets in uint16
+// units, any parity), read from its little-endian uint32 word.
+uint suhAt(uint base, uint index) {
+  uint i = base + index;
+  uint w = g_suh[i >> 1];
+  return (i & 1u) == 0u ? (w & 0xFFFFu) : (w >> 16u);
+}
+
+uint svhAt(uint base, uint index) {
+  uint i = base + index;
+  uint w = g_svh[i >> 1];
+  return (i & 1u) == 0u ? (w & 0xFFFFu) : (w >> 16u);
+}
+
+void main() {
+  uint block = gl_WorkGroupID.x;
+  uint lid = gl_LocalInvocationID.x;
+  uint blockBase = block * 16384u;
+
+  // Stage A: threads 0..63 decode tile = 16x16 weights into f16 bits,
+  // laid out row-major over the 128x128 block (reconstructInner layout).
+  if (lid < 64u) {
+    uint n = params.matrix_m;  // packed halfwords per tile
+    uint wc = n >> 1;          // u32 words per tile
+    uint total = n << 4;       // bits per tile
+    uint mask = params.matrix_n;
+    uint tk = lid >> 3;        // in-tile index (rows)
+    uint tn = lid & 7u;        // out-tile index (cols)
+    // Per-tile packed length is n halfwords = wc uint32 words, so a tile's
+    // word base stays word-aligned (the eval layer refuses odd trellis
+    // offsets).
+    uint tileBase = (block * 64u + lid) * wc;
+    for (uint t = 0u; t < 128u; t++) {
+      uint e0 = ((t * 2u + 1u) * n) >> 4;
+      uint e1 = ((t * 2u + 2u) * n) >> 4;
+      uint bit0 = e0 + total - 16u; // tail-biting pair window start
+      uint bit2 = e1 + total;
+      uint i0 = bit0 >> 5;
+      uint i1 = (bit2 - 1u) >> 5;
+      uint shift = (i1 + 1u) * 32u - bit2;
+      uint wa = g_trellis[params.lhs_offset / 2u + tileBase + (i0 % wc)];
+      uint wb = g_trellis[params.lhs_offset / 2u + tileBase + (i1 % wc)];
+      // Zig reference: funnel = low 32 bits of (wa<<32 | wb) >> shift,
+      // shift in [0,32]; expressed here with 32-bit ops only.
+      uint funnel = (shift == 0u) ? wb
+                  : (shift >= 32u) ? wa
+                  : ((wa << (32u - shift)) | (wb >> shift));
+      uint fresh = e1 - e0;
+      uint cwEven = ((funnel >> fresh) & 0xFFFFu) & mask;
+      uint cwOdd = (funnel & 0xFFFFu) & mask;
+      uint pEven = permOf(t * 2u);
+      uint pOdd = permOf(t * 2u + 1u);
+      // reconstructInner layout: block row = tk*16 + p/16,
+      // block col = tn*16 + p%16.
+      uint rowE = (tk * 16u + (pEven >> 4)) * 128u + tn * 16u + (pEven & 15u);
+      uint rowO = (tk * 16u + (pOdd >> 4)) * 128u + tn * 16u + (pOdd & 15u);
+      g_dec16[blockBase + rowE] = decodeMcg(cwEven);
+      g_dec16[blockBase + rowO] = decodeMcg(cwOdd);
+    }
+  }
+  barrier();
+  memoryBarrierBuffer();
+
+  // Stage B: row H128 then suh (reconstructPublic row stage), k ascending,
+  // the exact reference summation order. Runs on the f32 scratch so the
+  // bit-exact f16 tile decode feeds the Hadamard chain undisturbed.
+  for (uint e = lid; e < 16384u; e += 256u) {
+    uint r = e >> 7;
+    uint c = e & 127u;
+    precise float acc = 0.0;
+    for (uint k = 0u; k < 128u; k++) {
+      float he = (bitCount(r & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+      acc = acc + he * f16ToF32(g_dec16[blockBase + k * 128u + c]);
+    }
+    acc = acc * f16ToF32(suhAt(params.rhs_offset, block * 128u + r));
+    g_tmp[blockBase + e] = acc;
+  }
+  barrier();
+  memoryBarrierBuffer();
+
+#if defined(EXL3_OUT_F16) || defined(EXL3_OUT_BF16)
+  // Stage C, packed outputs: one lane owns one uint32 output word = the
+  // two RNE halfwords of adjacent columns (same row), so no read-modify-
+  // write races. Column H128 then svh per element.
+  for (uint w = lid; w < 8192u; w += 256u) {
+    uint e0 = 2u * w;
+    uint e1 = e0 + 1u;
+    uint r0 = e0 >> 7;
+    uint c0 = e0 & 127u;
+    uint r1 = e1 >> 7;
+    uint c1 = e1 & 127u;
+    precise float a0 = 0.0;
+    precise float a1 = 0.0;
+    for (uint k = 0u; k < 128u; k++) {
+      float x0 = g_tmp[blockBase + r0 * 128u + k];
+      float he0 = (bitCount(c0 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+      a0 = a0 + he0 * x0;
+      float he1 = (bitCount(c1 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+      a1 = a1 + he1 * x0;
+    }
+    float v0 = a0 * f16ToF32(svhAt(params.aux_offset, block * 128u + c0));
+    float v1 = a1 * f16ToF32(svhAt(params.aux_offset, block * 128u + c1));
+#if defined(EXL3_OUT_F16)
+    g_out[params.output_offset / 2u + blockBase / 2u + w] =
+        f32ToF16(v0) | (f32ToF16(v1) << 16u);
+#else
+    g_out[params.output_offset / 2u + blockBase / 2u + w] =
+        f32ToBf16(floatBitsToUint(v0)) |
+        (f32ToBf16(floatBitsToUint(v1)) << 16u);
+#endif
+  }
+#else
+  // Stage C, f32 outputs: column H128 then svh.
+  for (uint e = lid; e < 16384u; e += 256u) {
+    uint r = e >> 7;
+    uint c = e & 127u;
+    precise float acc = 0.0;
+    for (uint k = 0u; k < 128u; k++) {
+      float he = (bitCount(c & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+      acc = acc + he * g_tmp[blockBase + r * 128u + k];
+    }
+    float v = acc * f16ToF32(svhAt(params.aux_offset, block * 128u + c));
+    g_out[params.output_offset + blockBase + e] = v;
+  }
+#endif
+}

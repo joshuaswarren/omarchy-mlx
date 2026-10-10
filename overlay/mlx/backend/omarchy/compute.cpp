@@ -170,6 +170,9 @@
 #include "hadamard_bf16.h"
 #include "hadamard_f16.h"
 #include "hadamard_f32.h"
+#include "exl3_decode_bf16.h"
+#include "exl3_decode_f16.h"
+#include "exl3_decode_f32.h"
 #include "anyall_bf16.h"
 #include "anyall_f16.h"
 #include "anyall_f32.h"
@@ -841,6 +844,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {hadamard_f16, hadamard_f16_size};
     case ComputeKernel::HadamardBF16:
       return {hadamard_bf16, hadamard_bf16_size};
+    case ComputeKernel::Exl3DecodeF32:
+      return {exl3_decode_f32, exl3_decode_f32_size};
+    case ComputeKernel::Exl3DecodeF16:
+      return {exl3_decode_f16, exl3_decode_f16_size};
+    case ComputeKernel::Exl3DecodeBF16:
+      return {exl3_decode_bf16, exl3_decode_bf16_size};
     case ComputeKernel::TakeF32:
       return {take_f32, take_f32_size};
     case ComputeKernel::TakeF16:

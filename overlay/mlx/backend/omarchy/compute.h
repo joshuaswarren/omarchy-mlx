@@ -966,6 +966,12 @@ enum class ComputeKernel : uint16_t {
   // Append-only profile id.
   TakeU8,
   TakeMultiU8,
+  // EXL3 trellis tile decode (fast::Exl3Decode; shaders/exl3_decode.comp).
+  // The packed trellis stays uint16; only the output dtype varies and the
+  // f16/bf16 variants store integer RNE bit patterns.
+  Exl3DecodeF32,
+  Exl3DecodeF16,
+  Exl3DecodeBF16,
   Count,
 };
 

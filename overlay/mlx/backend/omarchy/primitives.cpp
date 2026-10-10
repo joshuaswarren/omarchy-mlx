@@ -13112,6 +13112,113 @@ void BonsaiQmvWide::eval_gpu(
       1u);
 }
 
+// EXL3 trellis tile decode (M3a option b), shaders/exl3_decode.comp.
+// One workgroup per 128x128 block unpacks, MCG-decodes and Hadamard-
+// reconstructs one expert weight matrix; the packed trellis stays uint16 and
+// the caller picks the output dtype. Bit-exact to the sushi CPU reference
+// (expert_exl3.zig) by construction; the doctest pins it.
+bool Exl3Decode::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+void Exl3Decode::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const array& trellis = inputs.at(0);
+  const array& suh = inputs.at(1);
+  const array& svh = inputs.at(2);
+  array& out = outputs.at(0);
+  // suh/svh travel as float16-typed arrays in sushi (the host path reads
+  // their raw bit patterns); uint16 carries the identical bytes. The
+  // trellis is uint16 everywhere.
+  if (trellis.dtype() != uint16 ||
+      !(suh.dtype() == uint16 || suh.dtype() == float16) ||
+      !(svh.dtype() == uint16 || svh.dtype() == float16)) {
+    omarchy::unsupported(
+        tag + " input dtype (uint16 trellis, uint16/float16 suh/svh)", out);
+  }
+  if (out.dtype() != float16 && out.dtype() != bfloat16 &&
+      out.dtype() != float32) {
+    omarchy::unsupported(tag + " out dtype (float16/bfloat16/float32)", out);
+  }
+  uint32_t packed_n = checked_u32(
+      static_cast<size_t>(bits_) * 16, tag, out);
+  uint32_t mask = (1u << window_) - 1u;
+  uint32_t blocks = checked_u32(
+      static_cast<size_t>(in_features_) / 128 *
+          static_cast<size_t>(out_features_) / 128,
+      tag,
+      out);
+  // One workgroup per block, no grid-stride loop in the shader: a clamped
+  // grid would silently drop blocks.
+  if (blocks > omarchy::kMaxComputeGroupCountX) {
+    omarchy::unsupported(
+        tag + " with more than " +
+            std::to_string(omarchy::kMaxComputeGroupCountX) + " blocks",
+        out);
+  }
+  std::optional<array> t_temp;
+  std::optional<array> sh_temp;
+  std::optional<array> sv_temp;
+  const array& td = ensure_dense(
+      trellis, trellis.flags().row_contiguous, t_temp, encoder, s);
+  const array& shd = ensure_dense(
+      suh, suh.flags().row_contiguous, sh_temp, encoder, s);
+  const array& svd = ensure_dense(
+      svh, svh.flags().row_contiguous, sv_temp, encoder, s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  // Per-block scratch: the f16-bit tile decode (uint words) and the f32
+  // Hadamard chain between the row and column stages.
+  array dec16({static_cast<int>(blocks) * 16384}, uint32, nullptr, {});
+  dec16.set_data(allocate_omarchy(dec16.nbytes()));
+  array tmp({static_cast<int>(blocks) * 16384}, float32, nullptr, {});
+  tmp.set_data(allocate_omarchy(tmp.nbytes()));
+  for (const auto* a : std::vector<const array*>{&td, &shd, &svd, &dec16, &tmp, &out}) {
+    encoder.add_temporary(*a);
+  }
+  omarchy::ComputeKernel kernel;
+  switch (out.dtype()) {
+    case float32:
+      kernel = omarchy::ComputeKernel::Exl3DecodeF32;
+      break;
+    case float16:
+      kernel = omarchy::ComputeKernel::Exl3DecodeF16;
+      break;
+    case bfloat16:
+      kernel = omarchy::ComputeKernel::Exl3DecodeBF16;
+      break;
+    default:
+      omarchy::unsupported(tag + " out dtype", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = blocks;
+  params.matrix_m = packed_n;
+  params.matrix_n = mask;
+  params.lhs_offset = checked_item_offset(td, td.size(), tag, out);
+  params.rhs_offset = checked_item_offset(shd, shd.size(), tag, out);
+  params.aux_offset = checked_item_offset(svd, svd.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  // The trellis and the packed f16/bf16 outputs are addressed as uint32
+  // words in the shader: their byte offsets must land on a word boundary
+  // (even uint16 element counts).
+  if (td.offset() % 4 != 0) {
+    omarchy::unsupported(tag + " trellis byte offset", out);
+  }
+  if (out.dtype() != float32 && out.offset() % 4 != 0) {
+    omarchy::unsupported(tag + " packed output byte offset", out);
+  }
+  std::array<omarchy::ComputeBinding, 6> bindings{
+      binding(td), binding(shd), binding(svd), binding(dec16),
+      binding(tmp), binding(out)};
+  encoder.dispatch_compute(kernel, bindings, params, blocks);
+}
+
 // Bonsai 1-bit affine dequantize, shaders/bonsai_dequant_q1.comp.
 // One workgroup per output row; row stride 32 k values per lane.
 bool BonsaiQ1Dequantize::use_fallback(Stream s) {
