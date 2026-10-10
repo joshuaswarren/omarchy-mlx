@@ -297,7 +297,8 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
 7. **Long non-causal bf16 attention runs out of device memory on the 13-inch M1 (16 GB).** Attention over 16384
    tokens with 8 heads (head dimension 128, non-causal, bf16) fails on its first run with
    `VK_ERROR_OUT_OF_DEVICE_MEMORY`. This happens alone, in a fresh process, on an idle machine (device heap 7.55
-   GiB). Afterwards the process cannot allocate even one 1 GiB block and holds about 9 GB of memory. The 16-inch M1
+   GiB). Afterwards the process cannot allocate even one 1 GiB block. System available memory reads 4.56 GB
+   instead of 13.7 GB while the process is alive (not a per-process figure). The 16-inch M1
    Max runs the same call. By reading the code, the chunked attention route keeps the f32 scores of every chunk
    until the whole batch finishes, about 18 GiB at this shape. We have not measured which smaller shapes fit. We
    have not tested the causal and masked routes, other lengths, or the 14-inch M2 Max. Fix: a change that releases
