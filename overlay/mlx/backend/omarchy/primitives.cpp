@@ -13204,6 +13204,11 @@ void Exl3Decode::eval_gpu(
   params.rhs_offset = checked_item_offset(shd, shd.size(), tag, out);
   params.aux_offset = checked_item_offset(svd, svd.size(), tag, out);
   params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  // Scratch carries its element offsets the same way: the allocator may
+  // co-allocate dec16 and tmp into one VkBuffer, and binding() binds the
+  // whole buffer from byte 0.
+  params.lhs_size = checked_item_offset(dec16, dec16.size(), tag, out);
+  params.aux_size = checked_item_offset(tmp, tmp.size(), tag, out);
   // The trellis and the packed f16/bf16 outputs are addressed as uint32
   // words in the shader: their byte offsets must land on a word boundary
   // (even uint16 element counts).

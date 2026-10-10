@@ -31,8 +31,11 @@
 //   output_offset = output element offset (float elements, or uint16
 //                   elements for the packed variants; even there — the
 //                   packed output is addressed as uint32 word pairs)
-// (the dec16 and tmp stages run on dedicated fresh scratch bindings at
-// element offset 0, so they carry no offset transport)
+//   lhs_size      = dec16 scratch element offset (uint32 words)
+//   aux_size      = tmp scratch element offset (float elements)
+// Every bound array carries its own element offset: the allocator
+// co-allocates arrays into shared VkBuffers and binding() always binds
+// a buffer from byte 0, so scratch bindings are NOT at offset 0.
 
 layout(local_size_x = 256) in;
 
@@ -239,8 +242,8 @@ void main() {
       // block col = tn*16 + p%16.
       uint rowE = (tk * 16u + (pEven >> 4)) * 128u + tn * 16u + (pEven & 15u);
       uint rowO = (tk * 16u + (pOdd >> 4)) * 128u + tn * 16u + (pOdd & 15u);
-      g_dec16[blockBase + rowE] = decodeMcg(cwEven);
-      g_dec16[blockBase + rowO] = decodeMcg(cwOdd);
+      g_dec16[params.aux_size / 4u + blockBase + rowE] = decodeMcg(cwEven);
+      g_dec16[params.aux_size / 4u + blockBase + rowO] = decodeMcg(cwOdd);
     }
   }
   barrier();
@@ -255,10 +258,10 @@ void main() {
     precise float acc = 0.0;
     for (uint k = 0u; k < 128u; k++) {
       float he = (bitCount(r & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
-      acc = acc + he * f16ToF32(g_dec16[blockBase + k * 128u + c]);
+      acc = acc + he * f16ToF32(g_dec16[params.aux_size / 4u + blockBase + k * 128u + c]);
     }
     acc = acc * f16ToF32(suhAt(params.rhs_offset, block * 128u + r));
-    g_tmp[blockBase + e] = acc;
+    g_tmp[params.lhs_size + blockBase + e] = acc;
   }
   barrier();
   memoryBarrierBuffer();
@@ -277,7 +280,7 @@ void main() {
     precise float a0 = 0.0;
     precise float a1 = 0.0;
     for (uint k = 0u; k < 128u; k++) {
-      float x0 = g_tmp[blockBase + r0 * 128u + k];
+      float x0 = g_tmp[params.lhs_size + blockBase + r0 * 128u + k];
       float he0 = (bitCount(c0 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
       a0 = a0 + he0 * x0;
       float he1 = (bitCount(c1 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
@@ -302,7 +305,7 @@ void main() {
     precise float acc = 0.0;
     for (uint k = 0u; k < 128u; k++) {
       float he = (bitCount(c & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
-      acc = acc + he * g_tmp[blockBase + r * 128u + k];
+      acc = acc + he * g_tmp[params.lhs_size + blockBase + r * 128u + k];
     }
     float v = acc * f16ToF32(svhAt(params.aux_offset, block * 128u + c));
     g_out[params.output_offset + blockBase + e] = v;
