@@ -813,12 +813,23 @@ omarchy_shader(fill_u16 shaders/fill.comp -DUSE_U16=1)
 add_custom_target(omarchy_shaders DEPENDS ${OMARCHY_SHADER_HEADERS})
 add_dependencies(mlx omarchy_shaders)
 
+# The ahead-of-time metal2vk module cache ships next to libmlx.so; the
+# route resolves it as <library dir>/m2v_aot (MLX_OMARCHY_M2V_AOT_DIR
+# overrides). tools/fill_m2v_aot.py refreshes it where the toolchain lives.
+install(
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/m2v_aot
+  DESTINATION lib
+  FILES_MATCHING
+  PATTERN "*.spv"
+  PATTERN "*.json")
+
 target_sources(
   mlx
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/allocator.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/compiled.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/compute.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/custom_kernel.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/m2v_route.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/device.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/capability_sim.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/device_info.cpp

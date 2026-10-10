@@ -1048,6 +1048,15 @@ class ComputeRuntime {
   VkPipeline pipeline(
       const std::string& cache_key,
       std::span<const uint32_t> spirv);
+  // Dynamic pipeline with an explicit entry point and specialization
+  // constants: clspv-produced modules name their entry after the kernel
+  // and drive the workgroup size from spec constants 0..2. The cache key
+  // must already distinguish the specialization values.
+  VkPipeline pipeline(
+      const std::string& cache_key,
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec);
   VkPipelineLayout pipeline_layout() const {
     return pipeline_layout_;
   }
@@ -1073,7 +1082,10 @@ class ComputeRuntime {
 
  private:
   VkPipeline create_pipeline(ComputeKernel kernel);
-  VkPipeline create_pipeline(std::span<const uint32_t> spirv);
+  VkPipeline create_pipeline(
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec);
 
   uint32_t binding_limit_{0};
 
