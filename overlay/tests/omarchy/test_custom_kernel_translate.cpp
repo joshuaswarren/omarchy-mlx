@@ -791,3 +791,57 @@ TEST_CASE("float16_t buffer reads in a brace initializer keep their half type") 
   CHECK(glsl.find("{_b0.data[2], _b0.data[3]}") != std::string::npos);
   CHECK(glsl.find("float(_b0.data[0])") == std::string::npos);
 }
+
+TEST_CASE("compound assignment into a float16_t output element stores through float16_t") {
+  // Tracked as issue 63 (p6): `out[t] += w[j];` with a half output compiled
+  // before the half-read widening and failed glslang after it. A side-effecting
+  // index is left as written (never evaluated twice); a plain `=` keeps the
+  // existing output-store wrap; a float output is untouched.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float16_t* out [[buffer(1)]],\n"
+      "    device float* fout [[buffer(2)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  uint j = t + 1;\n"
+      "  int i = 0;\n"
+      "  out[t] = float16_t(0.0f);\n"
+      "  out[t] += w[j];\n"
+      "  out[i++] += w[j];\n"
+      "  fout[t] += w[j];\n"
+      "}\n";
+  auto glsl = translate(source, 2);
+  CHECK(glsl.find("float16_t(_mlx_arg1[t] + (float(_b0.data[j])))") != std::string::npos);
+  CHECK(glsl.find("_mlx_arg1[i++] += ") != std::string::npos);
+  CHECK(glsl.find("float16_t(_mlx_arg1[i++]") == std::string::npos);
+  CHECK(glsl.find("_mlx_arg2[t] += float(_b0.data[j]);") != std::string::npos);
+}
+
+TEST_CASE("an operator expression passed to a float16_t helper parameter converts through float16_t") {
+  // Tracked as issue 63 (p1): `fma16(bc, w[t], w[j] + w[j + 1])` needs a half
+  // third argument. Only the helper's declared signature decides: a float
+  // parameter is never narrowed, and plain values keep their text.
+  const char* source =
+      "float16_t fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "  return float16_t(float(acc) + float(x) * float(y));\n"
+      "}\n"
+      "float mix(float a, float b) {\n"
+      "  return a + b;\n"
+      "}\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float16_t* out [[buffer(1)]],\n"
+      "    device float* fout [[buffer(2)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  uint j = t + 1;\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  bc = fma16(bc, w[t], w[j] + w[j + 1]);\n"
+      "  fout[t] = mix(float(bc), w[j] + w[j + 1]);\n"
+      "  out[t] = bc;\n"
+      "}\n";
+  auto glsl = translate(source, 2);
+  CHECK(glsl.find("fma16(bc, _b0.data[t], float16_t(float(_b0.data[j]) + float(_b0.data[j + 1])))") != std::string::npos);
+  CHECK(glsl.find("mix(float(bc), float(_b0.data[j]) + float(_b0.data[j + 1]))") != std::string::npos);
+}
