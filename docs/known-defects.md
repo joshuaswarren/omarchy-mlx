@@ -1021,18 +1021,13 @@ carrying dq's exact words, pinning the aliasing point to output-buffer
 handing between the primitive's set_data allocations and
 dispatch_matmul's re-allocation of `out`.
 
-## omarchy_conv_gemm_decomp_tests: "There is no Stream(gpu, N) in current thread" (2026-10-07, open)
+## omarchy_conv_gemm_decomp_tests: "There is no Stream(gpu, N) in current thread" (2026-10-07, test defect, fix in PR #72)
 
-2 of 3 cases throw `There is no Stream(gpu, N) in current thread`
-(omarchy encoder.cpp:1375 get_command_encoder) at rep=1 in the battery
-(receipts/2026-10-06-mlx-backports/battery.md). The test creates extra
-GPU streams (`new_stream(Device::gpu)` at test_conv_gemm_decomp.cpp:61/
-121/155) while the per-thread encoder table only holds the default
-stream; standalone runs (without gpu-turn) fail identically, so it is
-not a ticket artifact. Present before the 2026-10-06 backport batch
-(last encoder commit e19a8000 predates it; the batch touches no
-encoder/stream code). Test-side fix options: run the cases on the
-default stream, or extend the per-thread table fallback.
+2 of 3 cases threw `There is no Stream(gpu, N) in current thread` (encoder.cpp get_command_encoder) in the v0.7.32 freeze battery on all
+three Apple chips. Cause: the test's `flat()` called `omarchy::get_command_encoder(stream)` on the CPU reference stream, and that table holds
+GPU streams only. A backtrace shim on `__cxa_throw` showed one throw, on the main thread, inside `flat()`. The case with no CPU stream passes.
+The earlier note here blamed the per-thread encoder table; that was wrong. No shipped path calls it on a CPU stream. Fix: `synchronize(stream)`,
+which works for any device. Verification of the fixed test is pending in PR #72.
 
 ## omarchy_ane_runtime_tests does not link in the static test configure (2026-10-06, open)
 

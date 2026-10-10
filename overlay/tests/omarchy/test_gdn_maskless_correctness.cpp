@@ -276,7 +276,10 @@ std::vector<float> load_f32(
 
 // [H, T, D] fixture files -> token-major [T * H * D] vectors.
 FixtureTensors load_fixture(const std::string& tag) {
-  const std::string dir = GDN_FIXTURE_DIR;
+  // GDN_FIXTURE_DIR in the environment overrides the build-tree path baked
+  // in by CMake, for a binary run on a host without that tree.
+  const char* env_dir = std::getenv("GDN_FIXTURE_DIR");
+  const std::string dir = env_dir != nullptr ? env_dir : GDN_FIXTURE_DIR;
   std::vector<int> qkv_shape = {2, 351, kD};
   std::vector<int> gate_shape = {2, 351};
   FixtureTensors fx;
