@@ -316,13 +316,13 @@ TEST_CASE("dispatch validation") {
       {"ordinal": 1, "kind": "storage_buffer", "set": 0, "binding": 1}]}})json";
   const auto good = parse_reflection(storage_only);
   CHECK(validate_dispatch(good, 2, {256, 1, 1}).empty());
-  CHECK_FALSE(validate_dispatch(good, 3, {256, 1, 1}).empty());
+  CHECK_FALSE(validate_dispatch(good, 1, {256, 1, 1}).empty());
 
   SUBCASE("the worked example carries a POD argument") {
     const auto example = parse_reflection(kWorkedExample);
     const std::string reason = validate_dispatch(example, 3, {256, 1, 1});
     CHECK(reason.find("pod_push_constant") != std::string::npos);
-    CHECK(reason.find("count") != std::string::npos);
+    CHECK(reason.find("storage-buffer") != std::string::npos);
   }
   SUBCASE("moved bindings are refused") {
     auto moved = std::string(storage_only);
@@ -332,10 +332,20 @@ TEST_CASE("dispatch validation") {
         validate_dispatch(parse_reflection(moved), 2, {256, 1, 1});
     CHECK(reason.find("binds at slot 5") != std::string::npos);
   }
-  SUBCASE("sparse source ordinals with dense bindings are accepted") {
+  SUBCASE("dropped arguments leave sparse ordinals over dense bindings") {
     auto sparse = std::string(storage_only);
     sparse.replace(sparse.find("\"ordinal\": 1"), 12, "\"ordinal\": 5");
-    CHECK(validate_dispatch(parse_reflection(sparse), 2, {256, 1, 1}).empty());
+    const auto reflection = parse_reflection(sparse);
+    CHECK(validate_dispatch(reflection, 6, {256, 1, 1}).empty());
+    const std::string reason = validate_dispatch(reflection, 5, {256, 1, 1});
+    CHECK(reason.find("beyond the kernel's 5 buffers") != std::string::npos);
+  }
+  SUBCASE("ordinals out of order are refused") {
+    auto swapped = std::string(storage_only);
+    swapped.replace(swapped.find("\"ordinal\": 0"), 12, "\"ordinal\": 3");
+    const std::string reason =
+        validate_dispatch(parse_reflection(swapped), 4, {256, 1, 1});
+    CHECK(reason.find("out of order") != std::string::npos);
   }
   SUBCASE("an oversized push constant block is refused") {
     auto big = std::string(storage_only);
@@ -484,6 +494,27 @@ TEST_CASE("module resolution against a fake tool") {
     CHECK_THROWS_WITH(
         resolve_module(msl, entry),
         doctest::Contains("no ahead-of-time module is shipped"));
+  }
+  SUBCASE("a failing kernel runs the tool once per process") {
+    const std::string counter = aot_root.file("runs");
+    FakeTool tool(
+        "echo run >> '" + counter +
+            "'\n"
+            "echo 'error: clang failed once' >&2\n",
+        4);
+    EnvVar tool_env("MLX_OMARCHY_M2V_COMPILE", tool.path());
+    const std::string unique_msl = "[[kernel]] void custom_kernel_once() { }";
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      CHECK_THROWS_WITH(
+          cached_module(unique_msl, "custom_kernel_once"),
+          doctest::Contains("m2v-compile failed: error: clang failed once"));
+    }
+    std::ifstream runs(counter);
+    int lines = 0;
+    for (std::string line; std::getline(runs, line);) {
+      ++lines;
+    }
+    CHECK(lines == 1);
   }
 }
 

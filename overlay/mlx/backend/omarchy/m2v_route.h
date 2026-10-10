@@ -169,4 +169,20 @@ M2vModule resolve_module(
     const std::string& msl,
     const std::string& entry_name);
 
+// Process-wide memo over resolve_module, keyed by the entry name and the
+// exact MSL text. The first call per kernel resolves (and may compile); every
+// later call returns the same module, or rethrows the same failure without
+// running the tool again. Entries are never evicted, so the reference stays
+// valid for the life of the process.
+const M2vModule& cached_module(
+    const std::string& msl,
+    const std::string& entry_name);
+
+// True when any routing variable is set in the process environment at the
+// first call (MLX_OMARCHY_METAL_KERNEL_BACKEND, or a per-kernel
+// MLX_OMARCHY_M2V_KERNEL_<BASE>). Cached for the life of the process so the
+// silent default costs one load per dispatch. Set the variables before the
+// first custom-kernel dispatch.
+bool route_env_active();
+
 } // namespace mlx::core::omarchy::m2v

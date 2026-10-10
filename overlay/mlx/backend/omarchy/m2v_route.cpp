@@ -22,6 +22,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <string_view>
+#include <unordered_map>
 
 namespace mlx::core::omarchy::m2v {
 namespace {
@@ -809,6 +811,7 @@ std::string validate_dispatch(
     push_end = std::max(push_end, region.offset + region.size);
   }
   int position = 0;
+  int previous_ordinal = -1;
   for (const auto& arg : reflection.args) {
     if (arg.kind != "storage_buffer") {
       return "argument " + std::to_string(arg.ordinal) + " (" +
@@ -825,14 +828,15 @@ std::string validate_dispatch(
     if (arg.binding != position++) {
       return "argument " + std::to_string(arg.ordinal) + " binds at slot " +
           std::to_string(arg.binding) +
-          "; the backend writes descriptors in argument order, so a moved "
-          "binding cannot be honoured";
+          "; the module's bindings are not dense in argument order";
     }
-  }
-  if (binding_count != reflection.args.size()) {
-    return "the kernel takes " + std::to_string(binding_count) +
-        " buffers but the reflection lists " +
-        std::to_string(reflection.args.size()) + " arguments";
+    if (arg.ordinal <= previous_ordinal ||
+        static_cast<size_t>(arg.ordinal) >= binding_count) {
+      return "argument ordinal " + std::to_string(arg.ordinal) +
+          " is out of order or beyond the kernel's " +
+          std::to_string(binding_count) + " buffers";
+    }
+    previous_ordinal = arg.ordinal;
   }
   if (reflection.workgroup_size_spec_constant_ids.has_value()) {
     if (*reflection.workgroup_size_spec_constant_ids !=
@@ -1191,6 +1195,60 @@ M2vModule resolve_module(const std::string& msl, const std::string& entry_name) 
   // 4 covers compile errors, stage timeouts and the wall-clock cap.
   throw std::runtime_error(
       "m2v-compile failed: " + first_line(run.diagnostics));
+}
+
+namespace {
+
+struct ModuleSlot {
+  std::optional<M2vModule> module;
+  std::string error;
+};
+
+std::mutex module_cache_mutex;
+std::unordered_map<std::string, ModuleSlot> module_cache;
+
+} // namespace
+
+const M2vModule& cached_module(
+    const std::string& msl,
+    const std::string& entry_name) {
+  // ponytail: one lock across the compile, so a cold JIT blocks other cold
+  // kernels; per-key futures if cold-start concurrency ever matters.
+  std::lock_guard lock(module_cache_mutex);
+  std::string key = entry_name;
+  key.push_back('\0');
+  key += msl;
+  auto found = module_cache.find(key);
+  if (found == module_cache.end()) {
+    ModuleSlot slot;
+    try {
+      slot.module = resolve_module(msl, entry_name);
+    } catch (const std::exception& error) {
+      slot.error = error.what();
+    }
+    found = module_cache.emplace(std::move(key), std::move(slot)).first;
+  }
+  if (!found->second.module.has_value()) {
+    throw std::runtime_error(found->second.error);
+  }
+  return *found->second.module;
+}
+
+bool route_env_active() {
+  static const bool active = [] {
+    if (!read_env("MLX_OMARCHY_METAL_KERNEL_BACKEND").empty()) {
+      return true;
+    }
+    constexpr std::string_view prefix = "MLX_OMARCHY_M2V_KERNEL_";
+    for (char** entry = environ; entry != nullptr && *entry != nullptr;
+         ++entry) {
+      if (std::string_view(*entry).substr(0, prefix.size()) == prefix) {
+        return true;
+      }
+    }
+    return false;
+  }();
+  return active;
 }
 
 } // namespace mlx::core::omarchy::m2v

@@ -48,9 +48,23 @@ nothing falls back silently.
 Before dispatch, the module's reflection must describe storage-buffer
 arguments in kernel-argument order, a push-constant block inside the shared
 pipeline layout, and a workgroup size (spec constants 0..2, or a fixed size
-equal to the dispatch). Anything else fails the metal2vk route for that
-kernel with the reason logged, and the translator route runs it. A module
-that failed spirv-val never dispatches.
+equal to the dispatch). A module may bind only the arguments it reads: its
+bindings are dense, and each lists the ordinal of the kernel buffer it takes,
+so a dropped unused argument leaves a gap in the ordinals but none in the
+bindings. Anything else fails the metal2vk route for that kernel with the
+reason logged, and the translator route runs it. A module that failed
+spirv-val never dispatches.
+
+A resolved module, or the reason it failed, is remembered for the life of
+the process, so a failing kernel runs `m2v-compile` at most once and every
+later dispatch reuses the result. A per-kernel `m2v` override is not strict:
+it falls back to the translator on failure like `auto`. Use `refuse` to make
+a kernel fail instead of fall back.
+
+Under `auto` or `m2v`, an AOT miss executes `m2v-compile` from
+`MLX_OMARCHY_M2V_COMPILE` or `PATH` and writes the result next to
+`libmlx.so`. Set the routing variables before the first custom-kernel
+dispatch: the process checks once whether any is set.
 
 ## Failure to route to message
 
