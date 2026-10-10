@@ -1,0 +1,17 @@
+H408 18:34:42 start wheel=mlx_omarchy-0.32.4.dev202610101808+158fee60-cp314-cp314-linux_aarch64.whl sha=b09851e0bbbb9241 df=89G free 27% load1=0.05
+H408 18:34:45 wheel import: $HOME/scratch/w71/score/mlxlm408/mlx/core.cpython-314-aarch64-linux-gnu.so
+
+
+DL ok gemma4-e2b 20 s $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e2b-it-4bit/snapshots/238767527555cb75a05732a84dff5d6ba0dd6809
+H408 18:36:00 ARM gemma4-e2b/off off=1 trace=1 rc=1 STALL=3 JOIN_rope_bound=12 JOIN_rope_host=0 err=timeline counter failed to advance for 10000 ms (last observed=18, target=19) digest= decode= prefill= load1_end=
+H408 18:37:40 ARM gemma4-e2b/default off=0 trace=1 rc=0 STALL=0 JOIN_rope_bound=0 JOIN_rope_host=6660 err= digest=d9315ec0 decode=10.839 prefill=195.127 load1_end=0.47900390625
+H408 18:39:10 ARM gemma4-e2b/untraced off=0 trace=0 rc=0 STALL=0 JOIN_rope_bound=0 JOIN_rope_host=0 err= digest=d9315ec0 decode=13.265 prefill=195.492 load1_end=0.341796875
+DELETED 2 dead shared blobs, 3.6 GB
+
+
+DL ok gemma4-e4b 23 s $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2
+H408 18:40:28 ARM gemma4-e4b/off off=1 trace=1 rc=1 STALL=3 JOIN_rope_bound=16 JOIN_rope_host=0 err=timeline counter failed to advance for 10000 ms (last observed=23, target=24) digest= decode= prefill= load1_end=
+H408 18:42:37 ARM gemma4-e4b/default off=0 trace=1 rc=0 STALL=0 JOIN_rope_bound=0 JOIN_rope_host=7498 err= digest=118c7586 decode=8.891 prefill=113.414 load1_end=0.4248046875
+H408 18:44:34 ARM gemma4-e4b/untraced off=0 trace=0 rc=0 STALL=0 JOIN_rope_bound=0 JOIN_rope_host=0 err= digest=118c7586 decode=10.472 prefill=113.591 load1_end=0.3017578125
+DELETED 2 dead shared blobs, 5.2 GB
+H408 18:44:34 DONE df=88G free 29%
