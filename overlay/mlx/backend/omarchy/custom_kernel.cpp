@@ -1820,7 +1820,13 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
   auto is_ident = [](char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
   };
+  // An argument is float-typed when it is an operator expression at the top
+  // level or contains a widened buffer read anywhere (`(w[1] + w[2])`, a
+  // call over widened reads): the read became `float(_bN.data[..])`.
   auto has_operator = [](const std::string& arg) {
+    if (arg.find("float(_b") != std::string::npos) {
+      return true;
+    }
     int depth = 0;
     for (size_t i = 0; i < arg.size(); ++i) {
       const char c = arg[i];
@@ -1920,10 +1926,8 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
         rebuilt += position + 1 == args.size() ? ")" : ",";
       }
       body.replace(name_end, close - name_end + 1, rebuilt);
-      i = name_end + rebuilt.size();
-    } else {
-      i = name_end + 1;
     }
+    i = name_end + 1;
   }
 }
 

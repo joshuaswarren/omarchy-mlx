@@ -872,3 +872,29 @@ TEST_CASE("helper overloads: a float overload keeps its float argument, an all-h
   CHECK(glsl.find("both(_b0.data[0], float16_t(float(_b0.data[0]) + float(_b0.data[1])))") != std::string::npos);
   CHECK(glsl.find("both(float16_t(float(_b0.data[0]) + float(_b0.data[1])))") != std::string::npos);
 }
+
+TEST_CASE("helper arguments: enclosing parentheses and nested helper calls over widened reads convert") {
+  // `fma16(bc, w[0], (w[1] + w[2]))`: the operator sits inside parentheses, so
+  // a top-level operator scan misses it, but the argument is still a float
+  // sum. Any argument containing a widened read is float-typed. A nested helper
+  // call is scanned after its parent is rewritten. A float helper still gets
+  // its float argument unwrapped.
+  const char* source =
+      "float16_t fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "  return float16_t(float(acc) + float(x) * float(y));\n"
+      "}\n"
+      "float sum32(float x, float y) { return x + y; }\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  bc = fma16(bc, w[0], (w[1] + w[2]));\n"
+      "  bc = fma16(bc, w[0], fma16(bc, w[1], w[2] + w[3]));\n"
+      "  out[0] = sum32(float(bc), (w[1] + w[2]));\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("fma16(bc, _b0.data[0], float16_t((float(_b0.data[1]) + float(_b0.data[2]))))") != std::string::npos);
+  CHECK(glsl.find("fma16(bc, _b0.data[1], float16_t(float(_b0.data[2]) + float(_b0.data[3])))") != std::string::npos);
+  CHECK(glsl.find("sum32(float(bc), (float(_b0.data[1]) + float(_b0.data[2])))") != std::string::npos);
+}
