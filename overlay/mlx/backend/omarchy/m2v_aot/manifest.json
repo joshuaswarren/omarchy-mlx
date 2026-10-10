@@ -3,7 +3,7 @@
   "base": "gated_delta_step",
   "entry": "custom_kernel_gated_delta_step__bfloat16_t_float_128_128_16_32_bfloat16_t_bfloat16_t_bfloat16_t_float_bfloat16_t_float_int32_ts_bfloat16_t_float",
   "key": "12cf7661e52634654e1e95e521ae2acdc717e677839babb5e18b8ded613a0f15",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_chain_attn_combine": {
   "base": "omlx_chain_attn_combine",
@@ -15,7 +15,7 @@
   "base": "omlx_chain_attn_partial",
   "entry": "custom_kernel_omlx_chain_attn_partial__bfloat16_t_8_16_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_uint32_tc_float_float",
   "key": "73556e2e43955d6796621df09e56d4b0187b406055253281697b65685a980f9c",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_gdn_norm_gate_eps1em06": {
   "base": "omlx_gdn_norm_gate_eps1em06",
@@ -39,7 +39,7 @@
   "base": "omlx_qwen35_gdn_prework_S1",
   "entry": "custom_kernel_omlx_qwen35_gdn_prework_S1__bfloat16_t_16_32_128_128_3_8192_1_0_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
   "key": "ef9ce6a0c19ceb2af052640c2349498ff9b21551a7e122c41490120ed6e28a21",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen35_moe_combine_row": {
   "base": "omlx_qwen35_moe_combine_row",
@@ -105,49 +105,49 @@
   "base": "omlx_qwen4_gdn_batch_decode_step",
   "entry": "custom_kernel_omlx_qwen4_gdn_batch_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
   "key": "a73ae819b74b64500ed6310d4fb23633be82cd4804eb4d828914fae7a188f821",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_decode_norm_gate": {
   "base": "omlx_qwen4_gdn_decode_norm_gate",
   "entry": "custom_kernel_omlx_qwen4_gdn_decode_norm_gate__bfloat16_t_32_128_bfloat16_t_bfloat16_t_bfloat16_t_floats_bfloat16_t",
   "key": "b301c09843ae0208fc154baf40b1afc921266e77650da689a6af7df87372c348",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_decode_prework": {
   "base": "omlx_qwen4_gdn_decode_prework",
   "entry": "custom_kernel_omlx_qwen4_gdn_decode_prework__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_float_bfloat16_t",
   "key": "6e5b3374709d0a37bba7a6327a1608c53f2869a8b9f3d1f34760701f496bc31b",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_decode_step": {
   "base": "omlx_qwen4_gdn_decode_step",
   "entry": "custom_kernel_omlx_qwen4_gdn_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
   "key": "98f7e380a92a0bff9b9f21a7179dc9da85a7e08ac762496beef40ed686a19872",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_prefill_norm_gate": {
   "base": "omlx_qwen4_gdn_prefill_norm_gate",
   "entry": "custom_kernel_omlx_qwen4_gdn_prefill_norm_gate__bfloat16_t_32_128_bfloat16_t_bfloat16_t_bfloat16_t_floats_bfloat16_t",
   "key": "00024f037ff43944182fefddc4d88fefa098fb8e11dd81040903e00b94d058f6",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_prefill_prework": {
   "base": "omlx_qwen4_gdn_prefill_prework",
   "entry": "custom_kernel_omlx_qwen4_gdn_prefill_prework__bfloat16_t_16_32_128_128_3_8192_1_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_ts_int32_ts_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t",
   "key": "119b7a39350ce46440007c1247a903fab292fe666f7e9b9cf58b6e0cd332d57f",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_verify_step": {
   "base": "omlx_qwen4_gdn_verify_step",
   "entry": "custom_kernel_omlx_qwen4_gdn_verify_step__bfloat16_t_16_32_128_128_8192_4_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_bfloat16_t_float_bfloat16_t",
   "key": "0f285ea023306e7736381fc92cf32d7f228ce07824597cadfdb886f478358201",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_qwen4_gdn_verify_step_states": {
   "base": "omlx_qwen4_gdn_verify_step_states",
   "entry": "custom_kernel_omlx_qwen4_gdn_verify_step_states__bfloat16_t_16_32_128_128_8192_4_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_bfloat16_t_float_float_bfloat16_t",
   "key": "138bfa0d2fcd75ed58b82275b039b0646367f29d2a17d57fa549ba93b1720685",
-  "state": "verified"
+  "state": "unverified"
  },
  "omlx_verify_attn_gqa_combine": {
   "base": "omlx_verify_attn_gqa_combine",
@@ -183,7 +183,7 @@
   "base": "qwen35_ragged_sdpa_1p",
   "entry": "custom_kernel_qwen35_ragged_sdpa_1p__bfloat16_t_256_256_16_2_8_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_floatc_int32_tc_bfloat16_t",
   "key": "668ace78f8fc55d5db1bac49911afcc678fbd8fcbba1c46fb38b5fcbb6e5ba9c",
-  "state": "verified"
+  "state": "unverified"
  },
  "qwen35_ragged_sdpa_2p1": {
   "base": "qwen35_ragged_sdpa_2p1",
@@ -195,13 +195,13 @@
   "base": "qwen35_ragged_sdpa_2p2",
   "entry": "custom_kernel_qwen35_ragged_sdpa_2p2__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
   "key": "c5d7abfc54fd7cc10901f576f8181868ecdaa820ab943c0abfe959c4538058cb",
-  "state": "verified"
+  "state": "unverified"
  },
  "qwen3_5_ragged_sdpa_1p_bf16_d256_v256": {
   "base": "qwen3_5_ragged_sdpa_1p_bf16_d256_v256",
   "entry": "custom_kernel_qwen3_5_ragged_sdpa_1p_bf16_d256_v256__bfloat16_t_256_256_16_2_8_bfloat16_t_bfloat16_t_bfloat16_t_int32_tc_floatc_int32_tc_bfloat16_t",
   "key": "c8b135602d2f8eea6f991434b215887df1c296e8c55cd8bf2c07a1bb142b1b7f",
-  "state": "verified"
+  "state": "unverified"
  },
  "qwen3_5_ragged_sdpa_2p1_bf16_d256_v256_b4": {
   "base": "qwen3_5_ragged_sdpa_2p1_bf16_d256_v256_b4",
@@ -213,6 +213,6 @@
   "base": "qwen3_5_ragged_sdpa_2p2_bf16_v256_b4",
   "entry": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
   "key": "5ed831cf52cf43c246429c3563c099b291583e23a6af3ed20102d9168a8e2823",
-  "state": "verified"
+  "state": "unverified"
  }
 }
