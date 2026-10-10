@@ -311,18 +311,17 @@ to `ca09ce8`, named per line where it matters):
   per call and an output equal to the fp16 golden. This was one run on an
   earlier module build. It has not been repeated on the current one.
 - Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session:
-  1.21 tokens per second, with logits identical between the per-call and the
-  resident arms. The run is reproducible. It does not match the reference
+  1.21 tokens per second against 0.157 for the per-call path (7.7 times), with
+  logits identical between the two arms. The run is reproducible. It does not match the reference
   output on every prompt (3 of 10 prompts match; the others diverge at the
   same step in repeat runs).
-- Add-program latency: 0.25 ms median per call. About 13 percent of calls take
+- Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13 percent of calls take
   longer than 0.4 ms, in a pattern that repeats every 8 calls.
 
 Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and the
 per-call load path under repeated loads (a second pass over the 38 programs
 failed 5 times with a buffer-allocation error; the resident path is the
-supported fast path). A driver change that targets that failure is built and
-host-tested, and has not been tested on the hardware.
+supported fast path).
 
 ## Turn on the ANE for your chip
 
