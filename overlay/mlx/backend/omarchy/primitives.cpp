@@ -3171,7 +3171,8 @@ void dispatch_gather_qmm(
     bool fp_mode,
     const std::optional<array>& out_global_scale,
     array& out,
-    const Stream& s) {
+    const Stream& s,
+    bool right_sorted = false) {
   auto& encoder = omarchy::get_command_encoder(s);
   require_float_dtype(tag, x, out, encoder);
   if (bits != 4 && bits != 8) {
@@ -3402,6 +3403,51 @@ void dispatch_gather_qmm(
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         sub_caps.storage_buffer_16bit_access;
+  }
+  // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
+  // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
+  // every row of a run re-reads the same expert's weights in the kernels
+  // above. gather_qmm_tile.comp dequantizes a weight tile once per run of
+  // up to 32 rows. Gated to the proven layout class of the subgroup kernel
+  // plus K, N multiples of 64; MLX_OMARCHY_GATHER_QMM_TILE=0 turns it off.
+  // Correct for any index order; only a sorted promise makes it fast.
+  // sX 64 x 34 floats + sW 64 x 64 floats + sLhs 32 words (shaders/gather_qmm_tile.comp);
+  // the Vulkan minimum maxComputeSharedMemorySize is 16384, so a small-limit
+  // driver falls through to the per-row kernels instead of failing pipeline creation.
+  constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
+  const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
+  const auto& tile_caps = encoder.device().capabilities();
+  // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
+  // so only the biased kernels exist.
+  // Average rows per expert (rows over the leading weight batch) of at least 4: measured on
+  // M1 Max, Qwen3-30B-A3B, the route loses at 1 row per expert (0.55x) and 2 (0.81x) and wins
+  // at 4 (1.36x) and 8 (2.06x) (notebook H71). 3 is unmeasured and stays on the per-row route.
+  // Real routing is not uniform, so this average is a proxy for run length.
+  size_t tile_experts = 1;
+  for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
+    tile_experts *= static_cast<size_t>(w.shape(axis));
+  }
+  if (right_sorted && !fp_mode && !no_bias && params.matrix_m == 1 && index_count >= 64 &&
+      index_count >= 4 * tile_experts &&
+      (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
+      group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
+      (out.dtype() == bfloat16 || out.dtype() == float16) &&
+      tile_caps.storage_buffer_16bit_access &&
+      kGatherQmmTileSharedBytes <= tile_caps.max_compute_shared_memory_size &&
+      // The row groups ride the y dimension; this guards the one limit the grid uses.
+      tile_row_groups <= omarchy::kMaxComputeGroupCountX) {
+    const omarchy::ComputeKernel tile_kernel = out.dtype() == float16
+        ? omarchy::ComputeKernel::GatherQmmTileF16
+        : omarchy::ComputeKernel::GatherQmmTileBF16;
+    encoder.dispatch_compute(
+        tile_kernel,
+        bindings,
+        params,
+        static_cast<uint32_t>(n / 64),
+        tile_row_groups,
+        1u);
+    return;
   }
   if (fp_mode) {
     if (out.dtype() == float32) {
@@ -6390,7 +6436,8 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         /* fp_mode = */ false,
         /* out global scale = */ std::nullopt,
         out,
-        out.primitive().stream());
+        out.primitive().stream(),
+        right_sorted_);
     return;
   }
   // Non-affine inputs: [x, w, scales(uint8), lhs, rhs]; no bias, no

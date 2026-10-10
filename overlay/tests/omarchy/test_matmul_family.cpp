@@ -36,6 +36,7 @@
 #include "mlx/device.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
+#include "mlx/random.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
 
@@ -5420,4 +5421,157 @@ TEST_CASE("cpu quantized matmul full-row dot matches host at large K") {
 
   run_case(16384, 8, 64, 4); // the reported failure: 256 groups, bf16
   run_case(8256, 4, 64, 4); // 129-group tail: non-power-of-two group count
+}
+
+TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Stream cpu = default_stream(Device::cpu);
+  // 64 rows over 32 experts: 2 rows per expert, past the 64-row floor but under the
+  // measured break-even (H71: 0.55x at 1 row per expert, 0.81x at 2, 1.36x at 4).
+  const int experts = 32;
+  const int rows = 64;
+  const int n = 64;
+  const int k = 64;
+  std::vector<uint32_t> rhs_v;
+  for (int e = 0; e < experts; ++e) {
+    rhs_v.insert(rhs_v.end(), rows / experts, static_cast<uint32_t>(e));
+  }
+  array w = astype(
+      random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+      bfloat16,
+      cpu);
+  auto parts = quantize(w, 64, 4, "affine", std::nullopt, cpu);
+  array x = astype(
+      random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+      bfloat16,
+      cpu);
+  array rhs(rhs_v.begin(), Shape{rows}, uint32);
+  setenv("MLX_OMARCHY_GATHER_QMM_TILE", "1", 1);
+  array out = gather_qmm(
+      x, parts[0], parts[1], parts[2], std::nullopt, rhs, true, 64, 4, "affine",
+      std::nullopt, true, stream);
+  REQUIRE(evaluation_error(out).empty());
+  const int64_t kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+  unsetenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  CHECK(kernel != static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmTileBF16));
+  CHECK(kernel != static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmTileF16));
+}
+
+// Sorted-expert prefill route of gather_qmm (shaders/gather_qmm_tile.comp):
+// x is [B, 1, K] with one expert id per row and the ids sorted, the shape
+// mlx-lm's SwitchLinear passes at N*k >= 64 rows. The tile kernel must equal
+// an f32 reference built on the CPU stream, and the per-row subgroup route
+// (MLX_OMARCHY_GATHER_QMM_TILE=0), whatever the expert-run lengths: runs
+// shorter than a 32-row tile, runs spanning tiles, an expert with no rows,
+// and ids that are not actually sorted.
+TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the per-row route") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Stream cpu = default_stream(Device::cpu);
+  auto rel_l2 = [](const std::vector<float>& got, const std::vector<float>& want) {
+    double num = 0.0, den = 0.0;
+    for (size_t i = 0; i < want.size(); ++i) {
+      double d = double(got[i]) - double(want[i]);
+      num += d * d;
+      den += double(want[i]) * double(want[i]);
+    }
+    return std::sqrt(num) / std::max(std::sqrt(den), 1e-12);
+  };
+  auto run_case = [&](const std::vector<int>& counts,
+                      int n,
+                      int k,
+                      Dtype dtype,
+                      bool shuffled,
+                      double tolerance) {
+    const int experts = static_cast<int>(counts.size());
+    std::vector<uint32_t> rhs_v;
+    for (int e = 0; e < experts; ++e) {
+      rhs_v.insert(rhs_v.end(), counts[e], static_cast<uint32_t>(e));
+    }
+    if (shuffled) {
+      std::mt19937 gen(7);
+      std::shuffle(rhs_v.begin(), rhs_v.end(), gen);
+    }
+    const int rows = static_cast<int>(rhs_v.size());
+    array w = astype(
+        random::normal({experts, n, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+        dtype,
+        cpu);
+    auto parts = quantize(w, 64, 4, "affine", std::nullopt, cpu);
+    array x = astype(
+        random::normal({rows, 1, k}, float32, 0.0f, 1.0f, std::nullopt, cpu),
+        dtype,
+        cpu);
+    array rhs(rhs_v.begin(), Shape{rows}, uint32);
+    array w_deq = dequantize(
+        parts[0], parts[1], parts[2], 64, 4, "affine", std::nullopt, float32, cpu);
+    array w_sel = take(w_deq, rhs, 0, cpu);
+    array reference = matmul(
+        astype(x, float32, cpu), swapaxes(w_sel, 1, 2, cpu), cpu);
+    reference.eval();
+    const float* ref_data = reference.data<float>();
+    std::vector<float> expected(ref_data, ref_data + reference.size());
+
+    auto run_gather = [&](const char* tile) {
+      setenv("MLX_OMARCHY_GATHER_QMM_TILE", tile, 1);
+      array out = gather_qmm(
+          x,
+          parts[0],
+          parts[1],
+          parts[2],
+          // No lhs: ops.cpp sets right_sorted only when just the rhs indices
+          // are given, the way mlx-lm's SwitchLinear calls gather_qmm.
+          std::nullopt,
+          rhs,
+          /*transpose=*/true,
+          64,
+          4,
+          "affine",
+          std::nullopt,
+          /*sorted_indices=*/true,
+          stream);
+      REQUIRE(evaluation_error(out).empty());
+      int64_t kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+      return std::make_pair(readback_f32(stream, out), kernel);
+    };
+    auto tiled = run_gather("1");
+    auto per_row = run_gather("0");
+    unsetenv("MLX_OMARCHY_GATHER_QMM_TILE");
+
+    const int64_t tile_kernel = static_cast<int64_t>(
+        dtype == float16 ? omarchy::ComputeKernel::GatherQmmTileF16
+                         : omarchy::ComputeKernel::GatherQmmTileBF16);
+    REQUIRE_EQ(tiled.second, tile_kernel);
+    CHECK(per_row.second != tile_kernel);
+
+    double vs_ref = rel_l2(tiled.first, expected);
+    double vs_row = rel_l2(tiled.first, per_row.first);
+    size_t identical = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      identical += tiled.first[i] == per_row.first[i];
+    }
+    std::cout << "[gather_qmm_tile] rows=" << rows << " E=" << experts << " N=" << n
+              << " K=" << k << (dtype == float16 ? " f16" : " bf16")
+              << (shuffled ? " shuffled" : "") << " tile-vs-f32-ref " << vs_ref
+              << " tile-vs-per-row " << vs_row << " bit-identical "
+              << identical << "/" << expected.size() << "\n";
+    std::string what_ref = "tile route vs f32 reference, rel L2 " +
+        std::to_string(vs_ref) + " rows=" + std::to_string(rows);
+    std::string what_row = "tile route vs per-row route, rel L2 " +
+        std::to_string(vs_row) + " rows=" + std::to_string(rows);
+    CHECK_MESSAGE(vs_ref <= tolerance, what_ref);
+    CHECK_MESSAGE(vs_row <= tolerance, what_row);
+  };
+
+  run_case({50, 0, 31, 33, 64, 22}, 128, 128, bfloat16, false, 0.01);
+  run_case({1, 95}, 64, 192, bfloat16, false, 0.01);
+  run_case({50, 0, 31, 33, 64, 22}, 128, 128, bfloat16, true, 0.01);
+  if (float16_available()) {
+    run_case({40, 40, 40}, 192, 64, float16, false, 0.005);
+  }
 }
