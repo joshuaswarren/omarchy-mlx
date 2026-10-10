@@ -314,9 +314,9 @@ kernel and driver module build it ran on, because they changed between runs:
   golden. Again on 2026-10-10 on `ca09ce8` (kernel 7.1.12-2-12.6-sep-ARCH,
   a fresh reboot, one process of 20 calls): median call 253.5 ms, maximum 253.8 ms,
   and the output is bit-exact against the Apple fp16 golden (maximum absolute
-  difference 0.0, no NaN or inf, no new EXCH-fail, DART-fault, quarantine or completion-wait lines). Greedy decoding of
-  that encoder output gives the golden transcript (104 tokens, word error rate
-  0.0); the decode ran on a separate machine, not on the M2.
+  difference 0.0, no NaN or inf, no new EXCH-fail, DART-fault, quarantine or
+  completion-wait-failed lines). The full result, with the decode check, is in
+  the receipt.
 - Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session
   (module builds `329b9da` and `ca09ce8`): 1.21 tokens per second against 0.157
   for the per-call path (7.7 times), with logits identical between the two arms.
