@@ -29,7 +29,7 @@ tested, with the receipt or open commit behind every claim:
 | [mlx-serve](https://github.com/davidtai/mlx-serve) | Works | Runs with our Linux build fixes ([PR #1](https://github.com/davidtai/mlx-serve/pull/1)). Output is byte-identical to mlx-lm with the fused kernels on. |
 | [TensorFold](https://github.com/ashhart/TensorFold) | Works (H3 video) | MiniMax-H3 video with sound renders end to end on Linux on a 96 GB Apple Silicon Mac (the demo clip came from an M2 Max). Patches against drowzeys/TensorFold `ea9b6372`: `packaging/tensorfold-linux/`. Guide: [docs/tensorfold-video.md](docs/tensorfold-video.md). HF model bundle: https://huggingface.co/joshuaswarren/MiniMax-H3-int8-omarchy. Overview: [docs/tensorfold.md](docs/tensorfold.md). |
 | [sushi](https://github.com/beamivalice/sushi) | In progress | The Linux port lives on [our fork branch](https://github.com/joshuaswarren/sushi/tree/omarchy-linux). The first full run waits on a driver fix. |
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan) | Works | With the Honeykrisp patches under review ([omacom/mesa#6](https://github.com/omacom/mesa/pull/6) and the layers under it), Qwen3-30B-A3B on an M1 Max went from 1.5 to 27.4 tok/s decode (about 18x) and from 55 to 237 tok/s prompt processing, on the same llama.cpp binary ([receipt](receipts/2026-10-08-llamacpp-mesa-stack/README.md)). On Llama-3.1-8B IQ2_M, decode went from 0.95 to 12.8 tok/s (13.5x). On the base M1 (8-core GPU) at 8 GB-class memory, Qwen3.5-9B IQ2_M decode went from 0.34 to 4.27 tok/s and Qwen3.5-4B IQ2_M from 0.44 to 7.42 tok/s, against system Mesa 26.2.3 ([measurements and a 15-minute reproduction](docs/llamacpp-demo.md)). |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan) | Works | With the Honeykrisp patches under review ([omacom/mesa#6](https://github.com/omacom/mesa/pull/6) and the layers under it), Qwen3-30B-A3B on an M1 Max went from 1.5 to 27.4 tok/s decode (about 18x) and from 55 to 237 tok/s prompt processing, on the same llama.cpp binary ([receipt](receipts/2026-10-08-llamacpp-mesa-stack/README.md)). On Llama-3.1-8B IQ2_M, decode went from 0.95 to 12.8 tok/s (13.5x). On the base M1 (8-core GPU) at 8 GB-class memory, Qwen3.5-9B IQ2_M decode went from 0.34 to 4.27 tok/s. Qwen3.5-4B IQ2_M went from 0.44 to 7.42 tok/s. The comparison is against system Mesa 26.2.3 ([measurements and a 15-minute reproduction](docs/llamacpp-demo.md)). |
 | [MCDMA](https://github.com/ashhart/MCDMA) | Works | Software RDMA over Soft-RoCE between an M1 and an M2 Max MacBook under Linux. Upstream change: [ashhart/MCDMA#16](https://github.com/ashhart/MCDMA/pull/16). |
 
 ## What you get
@@ -75,8 +75,8 @@ plus Laya, and it needs a 96 GB machine.
 
 The install accepts every chip in the M1 class and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
-this project measures on. On an M3 or M4 Mac, run the tester kit —
-`bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)) —
+this project measures on. On an M3 or M4 Mac, run the tester kit,
+`bash scripts/m3m4_kit.sh` (see [scripts/m3m4_kit.md](scripts/m3m4_kit.md)),
 to send us the numbers and ANE state that only real silicon gives.
 
 The ANE is a separate lane from the GPU. It has its own driver and its
@@ -202,7 +202,7 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-The mixture-of-experts models are the largest gap: gemma-4-26B-A4B reaches 15% of macOS on decode and 5% on prefill, Qwen3.6-35B-A3B 18% and 7%, while the dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is 6.5-8.9 times faster than MLX at MoE prefill. One row fails on Linux today: gemma-4-E4B stalls a GPU submit during generation. gpt-oss-20b runs since the attention-sinks kernel landed, but only at 2.2 tokens per second decode and 1.9 prefill (a 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5). The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
+The mixture-of-experts models are the largest gap: gemma-4-26B-A4B reaches 15% of macOS on decode and 5% on prefill, Qwen3.6-35B-A3B 18% and 7%. The dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is 6.5-8.9 times faster than MLX at MoE prefill. One row fails on Linux today: gemma-4-E4B stalls a GPU submit during generation. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
 
 On Qwen3.5-9B the Linux outputs are token-for-token identical to macOS for the 10 test generations. On the four larger models the greedy outputs of the 10 generations differ from macOS in at least one token (the output digests differ); no cause has been established yet.
 
@@ -222,12 +222,12 @@ llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit)
 
 | Model | Decode tg128 | Prefill pp512 |
 |---|---|---|
-| Qwen3.8-27B | 6.3 / 12.3 = **51%** | 53.8 / 131.2 = **41%** |
-| gemma-4-26B-A4B | 26.0 / 62.7 = **41%** | 265.3 / 882.8 = **30%** |
-| gemma-4-31B | 6.5 / 11.5 = **56%** | 42.4 / 112.8 = **38%** |
-| Qwen3.5-9B | 19.8 / 40.5 = **49%** | 171.1 / 476.3 = **36%** |
+| Qwen3.8-27B | 6.3 / 12.3 = 51% | 53.8 / 131.2 = 41% |
+| gemma-4-26B-A4B | 26.0 / 62.7 = 41% | 265.3 / 882.8 = 30% |
+| gemma-4-31B | 6.5 / 11.5 = 56% | 42.4 / 112.8 = 38% |
+| Qwen3.5-9B | 19.8 / 40.5 = 49% | 171.1 / 476.3 = 36% |
 | Qwen3.6-35B-A3B | not measured | not measured |
-| gemma-4-E4B | 18.5 / 59.1 = **31%** | 303.5 / 821.1 = **37%** |
+| gemma-4-E4B | 18.5 / 59.1 = 31% | 303.5 / 821.1 = 37% |
 
 Skipped, too large for this machine: GLM-5.3-Flash, Kimi-K3, DeepSeek-V4-Flash, Qwen3.8-Flash-Next.
 
@@ -235,13 +235,13 @@ The same measurement on a base M1 (16 GB, macOS 27.0), for the models that fit, 
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
-| Qwen3.5-9B (MLX) | 12.4 / 12.9 = **96%** | 97.0 / 85.9 = **113%** |
+| Qwen3.5-9B (MLX) | 12.4 / 12.9 = 96% | 97.0 / 85.9 = 113% |
 | gemma-4-E4B (MLX) | fails to run (0%) | fails to run (0%) |
 
 | llama.cpp Q4_K_M (Vulkan / Metal) | Decode tg128 | Prefill pp512 |
 |---|---|---|
-| Qwen3.5-9B | 7.55 / 10.85 = **70%** | 48.3 / 115.0 = **42%** |
-| gemma-4-E4B | 10.9 / 18.4 = **59%** | 83.3 / 208.6 = **40%** |
+| Qwen3.5-9B | 7.55 / 10.85 = 70% | 48.3 / 115.0 = 42% |
+| gemma-4-E4B | 10.9 / 18.4 = 59% | 83.3 / 208.6 = 40% |
 
 On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B and decode is within 4%; the gap on the M1 Max above is chip-dependent. The macOS values are the median of three runs for Qwen3.5-9B and a single run for gemma-4-E4B. The Linux numbers are from the current development wheel, whose default route on the base M1 produces the same greedy tokens as macOS for this model (identical output digest over the 10 test generations). The earlier default route measured 101.6 tokens per second prefill (118%) but produced different tokens.
 
@@ -313,8 +313,8 @@ kernel and driver module build it ran on, because they changed between runs:
   call 254.5 ms in two processes of 20 calls each, output equal to the fp16
   golden. Again on 2026-10-10 on `ca09ce8` (kernel 7.1.12-2-12.6-sep-ARCH,
   a fresh reboot, one process of 20 calls, taken while another test ran GPU work on
-  the same machine): median call 253.5 ms, maximum 253.8 ms,
-  and the output is bit-exact against the Apple fp16 golden (maximum absolute
+  the same machine). The median call is 253.5 ms and the maximum is 253.8 ms.
+  The output is bit-exact against the Apple fp16 golden (maximum absolute
   difference 0.0, no NaN or inf, no new EXCH-fail, DART-fault, quarantine or
   completion-wait-failed lines). The full result, with the decode check, is in
   the receipt.
