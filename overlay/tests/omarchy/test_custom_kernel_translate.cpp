@@ -740,11 +740,11 @@ TEST_CASE("compound and self-referencing assignment into a float16_t local store
   CHECK(glsl.find(" acc += ") == std::string::npos);
 }
 
-TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twice") {
-  // `h[i++] += x` expands to `h[i++] = float16_t(h[i++] + (x))` if the left
-  // side is repeated: i increments twice. A compound statement whose index
-  // has ++, --, a call or an assignment stays exactly as written; a pure index
-  // still expands; a plain `=` names the left side once and still wraps.
+TEST_CASE("float16_t lvalue wrapping evaluates a side-effecting index once") {
+  // `h[i++] += x` must not expand to `h[i++] = float16_t(h[i++] + (x))`: i
+  // would increment twice. A compound statement whose index has ++, --, a
+  // call or an assignment hoists that index into a temporary first; a pure
+  // index expands in place; a plain `=` names the left side once and wraps.
   const char* source =
       "int bump(int k) { return k + 1; }\n"
       "[[kernel]] void idx(\n"
@@ -764,10 +764,12 @@ TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twic
       "  out[t] = float(i) + facc;\n"
       "}\n";
   auto glsl = translate(source, 1);
-  CHECK(glsl.find("h[i++] += ") != std::string::npos);
-  CHECK(glsl.find("float16_t(h[i++]") == std::string::npos);
-  CHECK(glsl.find("h[bump(i)] += ") != std::string::npos);
-  CHECK(glsl.find("float16_t(h[bump(i)]") == std::string::npos);
+  // Side-effecting and call indices are evaluated once into a block-local
+  // temporary used on both sides: i increments once, the sink stays half.
+  CHECK(glsl.find("{ int _mlx_ix0 = int(i++); h[_mlx_ix0] = float16_t(h[_mlx_ix0] + (float16_t(1.0))); }") != std::string::npos);
+  CHECK(glsl.find("i++") == glsl.rfind("i++"));
+  CHECK(glsl.find("{ int _mlx_ix1 = int(bump(i)); h[_mlx_ix1] = float16_t(h[_mlx_ix1] + (float(_b0.data[t]))); }") != std::string::npos);
+  CHECK(glsl.find("bump(i)") == glsl.rfind("bump(i)"));
   CHECK(glsl.find("h[i + 1] = float16_t(h[i + 1] + (float(_b0.data[t])));") != std::string::npos);
   CHECK(glsl.find("h[j++] = float16_t(_b0.data[t]);") != std::string::npos);
   CHECK(glsl.find("facc += float(_b0.data[t]);") != std::string::npos);
@@ -793,4 +795,159 @@ TEST_CASE("float16_t buffer reads in a brace initializer keep their half type") 
   CHECK(glsl.find("{_b0.data[0], _b0.data[1]}") != std::string::npos);
   CHECK(glsl.find("{_b0.data[2], _b0.data[3]}") != std::string::npos);
   CHECK(glsl.find("float(_b0.data[0])") == std::string::npos);
+}
+
+TEST_CASE("compound assignment into a float16_t output element stores through float16_t") {
+  // Tracked as issue 63 (p6): `out[t] += w[j];` with a half output compiled
+  // before the half-read widening and failed glslang after it. A side-effecting
+  // index is left as written (never evaluated twice); a plain `=` keeps the
+  // existing output-store wrap; a float output is untouched.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float16_t* out [[buffer(1)]],\n"
+      "    device float* fout [[buffer(2)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  uint j = t + 1;\n"
+      "  int i = 0;\n"
+      "  out[t] = float16_t(0.0f);\n"
+      "  out[t] += w[j];\n"
+      "  out[i++] += w[j];\n"
+      "  fout[t] += w[j];\n"
+      "}\n";
+  auto glsl = translate(source, 2);
+  CHECK(glsl.find("float16_t(_mlx_arg1[t] + (float(_b0.data[j])))") != std::string::npos);
+  CHECK(glsl.find("{ int _mlx_ix0 = int(i++); _mlx_arg1[_mlx_ix0] = float16_t(_mlx_arg1[_mlx_ix0] + (float(_b0.data[j]))); }") != std::string::npos);
+  CHECK(glsl.find("i++") == glsl.rfind("i++"));
+  CHECK(glsl.find("_mlx_arg2[t] += float(_b0.data[j]);") != std::string::npos);
+}
+
+TEST_CASE("an operator expression passed to a float16_t helper parameter converts through float16_t") {
+  // Tracked as issue 63 (p1): `fma16(bc, w[t], w[j] + w[j + 1])` needs a half
+  // third argument. Only the helper's declared signature decides: a float
+  // parameter is never narrowed, and plain values keep their text.
+  const char* source =
+      "float16_t fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "  return float16_t(float(acc) + float(x) * float(y));\n"
+      "}\n"
+      "float mix(float a, float b) {\n"
+      "  return a + b;\n"
+      "}\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float16_t* out [[buffer(1)]],\n"
+      "    device float* fout [[buffer(2)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  uint j = t + 1;\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  bc = fma16(bc, w[t], w[j] + w[j + 1]);\n"
+      "  fout[t] = mix(float(bc), w[j] + w[j + 1]);\n"
+      "  out[t] = bc;\n"
+      "}\n";
+  auto glsl = translate(source, 2);
+  CHECK(glsl.find("fma16(bc, _b0.data[t], float16_t(float(_b0.data[j]) + float(_b0.data[j + 1])))") != std::string::npos);
+  CHECK(glsl.find("mix(float(bc), float(_b0.data[j]) + float(_b0.data[j + 1]))") != std::string::npos);
+}
+
+TEST_CASE("helper overloads: a float overload keeps its float argument, an all-half set still converts") {
+  // `pick(float16_t)` and `pick(float)` in the same header: the unwrapped float
+  // argument picks the float overload, as before the helper-argument pass.
+  // Wrapping it in float16_t() would silently pick the half overload (both
+  // compile, so only the translated text shows it). With only half overloads
+  // of that arity the argument still converts. A different arity is a
+  // different signature.
+  const char* source =
+      "float pick(float16_t x) { return 1.0; }\n"
+      "float pick(float x) { return 2.0; }\n"
+      "float both(float16_t a, float16_t b) { return 3.0; }\n"
+      "float both(float16_t a) { return 4.0; }\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  out[0] = pick(w[0] + w[1]);\n"
+      "  out[1] = both(w[0], w[0] + w[1]);\n"
+      "  out[2] = both(w[0] + w[1]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("pick(float(_b0.data[0]) + float(_b0.data[1]))") != std::string::npos);
+  CHECK(glsl.find("pick(float16_t(") == std::string::npos);
+  CHECK(glsl.find("both(_b0.data[0], float16_t(float(_b0.data[0]) + float(_b0.data[1])))") != std::string::npos);
+  CHECK(glsl.find("both(float16_t(float(_b0.data[0]) + float(_b0.data[1])))") != std::string::npos);
+}
+
+TEST_CASE("helper arguments: enclosing parentheses and nested helper calls over widened reads convert") {
+  // `fma16(bc, w[0], (w[1] + w[2]))`: the operator sits inside parentheses, so
+  // a top-level operator scan misses it, but the argument is still a float
+  // sum. Any argument containing a widened read is float-typed. A nested helper
+  // call is scanned after its parent is rewritten. A float helper still gets
+  // its float argument unwrapped.
+  const char* source =
+      "float16_t fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "  return float16_t(float(acc) + float(x) * float(y));\n"
+      "}\n"
+      "float sum32(float x, float y) { return x + y; }\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  bc = fma16(bc, w[0], (w[1] + w[2]));\n"
+      "  bc = fma16(bc, w[0], fma16(bc, w[1], w[2] + w[3]));\n"
+      "  out[0] = sum32(float(bc), (w[1] + w[2]));\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("fma16(bc, _b0.data[0], float16_t((float(_b0.data[1]) + float(_b0.data[2]))))") != std::string::npos);
+  CHECK(glsl.find("fma16(bc, _b0.data[1], float16_t(float(_b0.data[2]) + float(_b0.data[3])))") != std::string::npos);
+  CHECK(glsl.find("sum32(float(bc), (float(_b0.data[1]) + float(_b0.data[2])))") != std::string::npos);
+}
+
+TEST_CASE("helper arguments: a leading float16_t() cast is skipped only when it spans the whole argument") {
+  // `float16_t(w[1]) + w[2]` starts with a constructor but is a float sum and
+  // must be wrapped; `float16_t(w[1] + w[2])` is already one whole constructor
+  // and keeps its text.
+  const char* source =
+      "float16_t fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "  return float16_t(float(acc) + float(x) * float(y));\n"
+      "}\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  bc = fma16(bc, w[0], float16_t(w[1]) + w[2]);\n"
+      "  bc = fma16(bc, w[0], float16_t(w[1] + w[2]));\n"
+      "  out[0] = float(bc);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("float16_t(float16_t(_b0.data[1]) + float(_b0.data[2]))") != std::string::npos);
+  CHECK(glsl.find("float16_t(float16_t(float(_b0.data[1]) + float(_b0.data[2])))") == std::string::npos);
+  CHECK(glsl.find("fma16(bc, _b0.data[0], float16_t(float(_b0.data[1]) + float(_b0.data[2])))") != std::string::npos);
+}
+
+TEST_CASE("hoisted compound index: multidimensional sinks hoist only the effectful groups") {
+  // `h[i++][2] += x` hoists the first group; `h[i + 1][j--] += x` hoists the
+  // second; a pure `h[1][2] += x` expands in place. Each effect happens once.
+  const char* source =
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t h[4][4];\n"
+      "  int i = 0;\n"
+      "  int j = 3;\n"
+      "  h[i++][2] += w[t];\n"
+      "  h[i + 1][j--] += w[t];\n"
+      "  h[1][2] += w[t];\n"
+      "  out[t] = float(i) + float(j);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("{ int _mlx_ix0 = int(i++); h[_mlx_ix0][2] = float16_t(h[_mlx_ix0][2] + (float(_b0.data[t]))); }") != std::string::npos);
+  CHECK(glsl.find("{ int _mlx_ix1 = int(j--); h[i + 1][_mlx_ix1] = float16_t(h[i + 1][_mlx_ix1] + (float(_b0.data[t]))); }") != std::string::npos);
+  CHECK(glsl.find("h[1][2] = float16_t(h[1][2] + (float(_b0.data[t])));") != std::string::npos);
+  CHECK(glsl.find("i++") == glsl.rfind("i++"));
+  CHECK(glsl.find("j--") == glsl.rfind("j--"));
 }

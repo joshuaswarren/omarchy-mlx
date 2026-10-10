@@ -1617,7 +1617,8 @@ bool half_read_is_plain_value(const std::string& s, size_t begin, size_t end) {
 // header (the scan meets an unmatched `)` before the `;`) is skipped.
 void wrap_half_lvalue_assignments(
     std::string& body,
-    const std::string& hoisted_declarations) {
+    const std::string& hoisted_declarations,
+    const std::unordered_set<std::string>& half_outputs) {
   static const std::regex declaration(
       R"(\bfloat16_t\s+([A-Za-z_][A-Za-z0-9_]*))");
   std::unordered_set<std::string> half_names;
@@ -1629,7 +1630,7 @@ void wrap_half_lvalue_assignments(
       half_names.insert((*it)[1].str());
     }
   }
-  if (half_names.empty()) {
+  if (half_names.empty() && half_outputs.empty()) {
     return;
   }
   auto is_ident = [](char c) {
@@ -1641,6 +1642,7 @@ void wrap_half_lvalue_assignments(
   const size_t size = body.size();
   std::string out;
   size_t copied = 0;
+  int hoisted_indices = 0;
   size_t i = 0;
   while (i < size) {
     if (!(std::isalpha(static_cast<unsigned char>(body[i])) || body[i] == '_') ||
@@ -1654,7 +1656,9 @@ void wrap_half_lvalue_assignments(
     }
     const size_t start = i;
     i = name_end;
-    if (half_names.count(body.substr(start, name_end - start)) == 0) {
+    const std::string lhs_name = body.substr(start, name_end - start);
+    const bool output_only = half_names.count(lhs_name) == 0;
+    if (output_only && half_outputs.count(lhs_name) == 0) {
       continue;
     }
     size_t before = start;
@@ -1689,24 +1693,13 @@ void wrap_half_lvalue_assignments(
     char op = 0;
     size_t rhs_begin = 0;
     if (body[cursor] == '=' && (cursor + 1 >= size || body[cursor + 1] != '=')) {
+      if (output_only) {
+        continue;
+      }
       rhs_begin = cursor + 1;
     } else if (
         std::strchr("+-*/", body[cursor]) != nullptr && cursor + 1 < size &&
         body[cursor + 1] == '=' && (cursor + 2 >= size || body[cursor + 2] != '=')) {
-      // The compound form repeats the left-hand side inside its own
-      // expansion, so an index that has side effects or calls something
-      // (`h[i++] += x`, `h[f(i)] += x`) must not be duplicated: it is left
-      // as written, as before the widening commit. A plain `=` names the
-      // left-hand side once and needs no such care.
-      {
-        const std::string lhs_text = body.substr(start, lhs_end - start);
-        if (lhs_text.find("++") != std::string::npos ||
-            lhs_text.find("--") != std::string::npos ||
-            lhs_text.find('(') != std::string::npos ||
-            lhs_text.find('=') != std::string::npos) {
-          continue;
-        }
-      }
       op = body[cursor];
       rhs_begin = cursor + 2;
     } else {
@@ -1759,8 +1752,43 @@ void wrap_half_lvalue_assignments(
         continue;
       }
     }
-    const std::string lhs = body.substr(start, lhs_end - start);
+    std::string lhs = body.substr(start, lhs_end - start);
+    std::string prologue;
+    if (op != 0) {
+      // The compound form names the left-hand side twice. An index group with
+      // a side effect or a call (`h[i++] += x`, `h[f(i)] += x`) is evaluated
+      // once into a block-local temporary and the temporary is used on both
+      // sides, so `i` increments once and the sink stays a half lvalue.
+      std::string rebuilt_lhs = lhs.substr(0, lhs_name.size());
+      size_t pos = lhs_name.size();
+      while (pos < lhs.size() && lhs[pos] == '[') {
+        int group_depth = 0;
+        size_t group_close = pos;
+        for (; group_close < lhs.size(); ++group_close) {
+          group_depth += lhs[group_close] == '[' ? 1 : lhs[group_close] == ']' ? -1 : 0;
+          if (group_depth == 0) {
+            break;
+          }
+        }
+        const std::string inner = lhs.substr(pos + 1, group_close - pos - 1);
+        if (inner.find("++") != std::string::npos ||
+            inner.find("--") != std::string::npos ||
+            inner.find('(') != std::string::npos ||
+            inner.find('=') != std::string::npos) {
+          const std::string temp = "_mlx_ix" + std::to_string(hoisted_indices++);
+          prologue += "int " + temp + " = int(" + inner + "); ";
+          rebuilt_lhs += "[" + temp + "]";
+        } else {
+          rebuilt_lhs += lhs.substr(pos, group_close - pos + 1);
+        }
+        pos = group_close + 1;
+      }
+      lhs = rebuilt_lhs;
+    }
     out.append(body, copied, start - copied);
+    if (!prologue.empty()) {
+      out += "{ " + prologue;
+    }
     out += lhs + " = float16_t(";
     if (op != 0) {
       out += lhs + " " + op + " (" + rhs + ")";
@@ -1768,11 +1796,180 @@ void wrap_half_lvalue_assignments(
       out += rhs;
     }
     out += ");";
+    if (!prologue.empty()) {
+      out += " }";
+    }
     copied = end + 1;
     i = end + 1;
   }
   out.append(body, copied, std::string::npos);
   body = std::move(out);
+}
+
+// A float16_t helper parameter takes a float16_t value; GLSL widens half to
+// float implicitly and never the other way, so an argument that is an operator
+// expression (`f(bc, x, w[j] + w[j + 1])`, a float once its reads are widened)
+// is wrapped in float16_t(). Only the helper's declared signature decides
+// which positions are half: a float parameter is never narrowed, and a plain
+// value (identifier, element read, call, literal) is left exactly as written,
+// so kernels that compiled keep their text.
+void wrap_half_call_arguments(std::string& body, const std::string& header) {
+  static const std::regex definition(
+      R"(\b[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*\{)");
+  std::unordered_map<std::string, std::vector<std::vector<bool>>> signatures;
+  bool any_half = false;
+  for (std::sregex_iterator it(header.begin(), header.end(), definition), stop;
+       it != stop;
+       ++it) {
+    std::vector<bool> positions;
+    const std::string params = (*it)[2].str();
+    size_t cursor = 0;
+    while (cursor <= params.size()) {
+      size_t comma = params.find(',', cursor);
+      if (comma == std::string::npos) {
+        comma = params.size();
+      }
+      std::string one = params.substr(cursor, comma - cursor);
+      static const std::regex half_scalar(
+          R"(^\s*(?:const\s+)?(?:float16_t|half)\s+[A-Za-z_][A-Za-z0-9_]*\s*$)");
+      const bool is_half = std::regex_match(one, half_scalar);
+      positions.push_back(is_half);
+      any_half = any_half || is_half;
+      cursor = comma + 1;
+    }
+    signatures[(*it)[1].str()].push_back(std::move(positions));
+  }
+  if (!any_half) {
+    return;
+  }
+  auto is_ident = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+  };
+  // An argument is float-typed when it is an operator expression at the top
+  // level or contains a widened buffer read anywhere (`(w[1] + w[2])`, a
+  // call over widened reads): the read became `float(_bN.data[..])`.
+  auto has_operator = [](const std::string& arg) {
+    if (arg.find("float(_b") != std::string::npos) {
+      return true;
+    }
+    int depth = 0;
+    for (size_t i = 0; i < arg.size(); ++i) {
+      const char c = arg[i];
+      if (c == '(' || c == '[') {
+        ++depth;
+      } else if (c == ')' || c == ']') {
+        --depth;
+      } else if (depth == 0) {
+        if (c == '+' || c == '*' || c == '/' || c == '%' || c == '?') {
+          return true;
+        }
+        if (c == '-' &&
+            arg.find_first_not_of(" \t\n", 0) != i) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  size_t i = 0;
+  while (i < body.size()) {
+    if (!(std::isalpha(static_cast<unsigned char>(body[i])) || body[i] == '_') ||
+        (i > 0 && (is_ident(body[i - 1]) || body[i - 1] == '.'))) {
+      ++i;
+      continue;
+    }
+    size_t name_end = i;
+    while (name_end < body.size() && is_ident(body[name_end])) {
+      ++name_end;
+    }
+    const std::string name = body.substr(i, name_end - i);
+    const auto helper = signatures.find(name);
+    if (helper == signatures.end() || name_end >= body.size() ||
+        body[name_end] != '(') {
+      i = name_end;
+      continue;
+    }
+    size_t close = name_end;
+    int depth = 0;
+    for (; close < body.size(); ++close) {
+      depth += body[close] == '(' ? 1 : body[close] == ')' ? -1 : 0;
+      if (depth == 0) {
+        break;
+      }
+    }
+    if (close >= body.size()) {
+      break;
+    }
+    std::vector<std::string> args;
+    {
+      size_t arg_begin = name_end + 1;
+      int arg_depth = 0;
+      for (size_t k = arg_begin; k <= close; ++k) {
+        const char c = body[k];
+        if (c == '(' || c == '[') {
+          ++arg_depth;
+        } else if ((c == ')' || c == ']') && k != close) {
+          --arg_depth;
+        }
+        if ((c == ',' && arg_depth == 0) || k == close) {
+          args.push_back(body.substr(arg_begin, k - arg_begin));
+          arg_begin = k + 1;
+        }
+      }
+    }
+    // A position is half only when EVERY overload of this name and arity
+    // takes float16_t there: with a float overload in the set the unwrapped
+    // float argument picks that overload, and wrapping would silently pick
+    // the half one.
+    bool changed = false;
+    for (size_t position = 0; position < args.size(); ++position) {
+      bool any_signature = false;
+      bool all_half = true;
+      for (const auto& signature : helper->second) {
+        if (signature.size() != args.size()) {
+          continue;
+        }
+        any_signature = true;
+        all_half = all_half && signature[position];
+      }
+      std::string& arg = args[position];
+      // Already half only when ONE float16_t(...) constructor spans the whole
+      // argument; `float16_t(w[1]) + w[2]` starts with one but is a float sum.
+      bool already = false;
+      {
+        const size_t first = arg.find_first_not_of(" \t\n");
+        const size_t last = arg.find_last_not_of(" \t\n");
+        static const std::string cast = "float16_t(";
+        if (first != std::string::npos && arg.compare(first, cast.size(), cast) == 0) {
+          int cast_depth = 0;
+          size_t k = first + cast.size() - 1;
+          for (; k <= last; ++k) {
+            cast_depth += arg[k] == '(' ? 1 : arg[k] == ')' ? -1 : 0;
+            if (cast_depth == 0) {
+              break;
+            }
+          }
+          already = k == last;
+        }
+      }
+      if (any_signature && all_half && !already && has_operator(arg)) {
+        const size_t lead = arg.find_first_not_of(" \t\n");
+        const size_t tail = arg.find_last_not_of(" \t\n");
+        arg = arg.substr(0, lead) + "float16_t(" +
+            arg.substr(lead, tail - lead + 1) + ")" + arg.substr(tail + 1);
+        changed = true;
+      }
+    }
+    if (changed) {
+      std::string rebuilt = "(";
+      for (size_t position = 0; position < args.size(); ++position) {
+        rebuilt += args[position];
+        rebuilt += position + 1 == args.size() ? ")" : ",";
+      }
+      body.replace(name_end, close - name_end + 1, rebuilt);
+    }
+    i = name_end + 1;
+  }
 }
 
 void translate_bfloat_parameter(
@@ -2522,10 +2719,21 @@ Translation translate_msl(
     needs_int64 = needs_int64 || parameter.type == "int64_t" ||
         parameter.type == "uint64_t";
   }
-  // A float16_t local or shared array receives float arithmetic wherever a
-  // half read was widened: `acc += w[i];` and `acc = acc + w[i];` must store
-  // through float16_t(). Runs once after every parameter's reads are rewritten.
-  wrap_half_lvalue_assignments(body, shared_declarations);
+  // A float16_t local, shared array or output element receives float
+  // arithmetic wherever a half read was widened: `acc += w[i];`,
+  // `acc = acc + w[i];` and `out[t] += w[j];` must store through float16_t().
+  // An operator expression passed to a float16_t helper parameter converts
+  // the same way. Both run once after every parameter's reads are rewritten.
+  {
+    std::unordered_set<std::string> half_outputs;
+    for (size_t index = output_start; index < parameters.size(); ++index) {
+      if (parameters[index].type == "float16_t") {
+        half_outputs.insert(parameters[index].name);
+      }
+    }
+    wrap_half_lvalue_assignments(body, shared_declarations, half_outputs);
+  }
+  wrap_half_call_arguments(body, header);
   // The body can reference 16/64-bit types the parameters never name —
   // e.g. a local `const uint16_t m = ...` in the bf16 pack/unpack idiom
   // (Qwen3.5-2B GDN, OmlxLinux M2 repro 2026-10-05). Without the
