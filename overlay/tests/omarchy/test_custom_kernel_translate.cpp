@@ -769,3 +769,25 @@ TEST_CASE("float16_t lvalue wrapping never evaluates a side-effecting index twic
   CHECK(glsl.find("h[j++] = float16_t(_b0.data[t]);") != std::string::npos);
   CHECK(glsl.find("facc += float(_b0.data[t]);") != std::string::npos);
 }
+
+TEST_CASE("float16_t buffer reads in a brace initializer keep their half type") {
+  // `float16_t arr[2] = {e[0], e[1]};` compiled before the half-read widening
+  // and failed glslang after it ("constructor: cannot convert parameter 1 from
+  // temp float to temp float16_t"): the array constructor takes the element
+  // type. The same initializer into a float array also compiles with half
+  // elements, so every element of the list stays unwidened.
+  const char* source =
+      "[[kernel]] void init(\n"
+      "    const device float16_t* e [[buffer(0)]],\n"
+      "    device float16_t* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint t = thread_position_in_grid.x;\n"
+      "  float16_t arr[2] = {e[0], e[1]};\n"
+      "  float f[2] = {e[2], e[3]};\n"
+      "  out[t] = arr[1] + float16_t(f[0]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("{_b0.data[0], _b0.data[1]}") != std::string::npos);
+  CHECK(glsl.find("{_b0.data[2], _b0.data[3]}") != std::string::npos);
+  CHECK(glsl.find("float(_b0.data[0])") == std::string::npos);
+}

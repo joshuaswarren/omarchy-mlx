@@ -1587,7 +1587,13 @@ bool half_read_is_plain_value(const std::string& s, size_t begin, size_t end) {
     return plain_assign && next == ';';
   }
   if (prev == ',') {
-    return next == ',' || next == ')';
+    return next == ',' || next == ')' || next == '}';
+  }
+  if (prev == '{') {
+    // First element of a brace initializer (`float16_t arr[2] = {x[0], x[1]};`):
+    // the array constructor takes the element type, and GLSL widens half to
+    // float in it but not float to half.
+    return next == ',' || next == '}';
   }
   if (prev == '(' && (next == ',' || next == ')')) {
     size_t name_end = before - 1;
