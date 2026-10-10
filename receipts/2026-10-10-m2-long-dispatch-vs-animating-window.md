@@ -54,13 +54,13 @@ Same convolution split into row blocks, 2 runs alone and 4 runs beside the anima
 |---|---|---|---|
 | 8 | about 87 ms | 4 runs | identical, 0 of 67,108,864 elements differ |
 | 14 | about 152 ms | 4 runs | wrong in 4 of 4: 26.4M, 33.1M, 29.2M and 3.7M elements differ; max abs diff 318.8 to 486 |
-With the 6 runs at 87 ms and the 6 runs at 23 ms in the first sweep, the short lengths are correct in 16 of 16 runs. The threshold on this machine lies between 87 ms and 152 ms.
-The kernel GPU driver logged 120 "GPU timeout" events between 22:13:48 and 22:14:08 UTC, which is the 14-row animated arm. The page's frame counter read 5 before and after each arm from 23 rows (about 300 ms) on, so the page was not animating after that storm. Those later arms (23, 33, 42 and 51 rows, all identical to the alone run) do not test the question and are not counted.
-The first hung-task message (a kernel worker blocked more than 122 s) came at 22:17:18 UTC, 190 s after the last timeout event. A shutdown began at 22:18:41 UTC and the log ends at 22:18:53 UTC. The next boot started at 22:27:16 UTC. A hard reset is the inference; it was not logged.
+With the 6 runs at 87 ms and the 6 runs at 23 ms in the first sweep, the short lengths are correct in 16 of 16 runs. Twelve of those 16 come from the first sweep, whose raw files are not in the lab archive. The threshold on this machine lies between 87 ms and 152 ms.
+The kernel GPU driver logged 120 "GPU timeout" events between 22:13:48 and 22:14:08 UTC, which is the 14-row animated arm. The page's frame counter read 5 or 6 before and after each arm from 23 rows (about 300 ms) on, a change of 0, so the page was not animating after that storm. Those later arms (23, 33, 42 and 51 rows, all identical to the alone run) do not test the question and are not counted.
+The first hung-task message (a kernel worker blocked more than 122 s) came at 22:17:18 UTC, 190 s after the last timeout event. A shutdown began at 22:18:41 UTC and the log ends at 22:18:53 UTC. A hard reset is an inference; no saved file shows it.
 
 ## Timeout bursts and hangs in the logged boots
 A burst is a run of timeout events with gaps under 60 s. Three boots ended in the same hung state: the sweep boot above and two earlier boots. Their logs hold 4, 4 and 1 bursts (586, 247 and 120 events). The last burst in each boot was followed by the first hung-task message 210 s, 215 s and 190 s later. The other 6 bursts were followed by 999 s or more without a hung-task message. A fourth boot (an animated arm with 39 timeout events in 54 s) has a log that ends 80 s after its burst, before that window, with no hang yet.
-The 13-inch M1 and the 16-inch M1 Max logged 0 GPU timeout events for their whole boots, which include the same animated-page tests.
+The saved kernel logs of the current boots of the 13-inch M1 (up since 2026-10-09 21:41 CDT) and the 16-inch M1 Max (up since 2026-10-10 11:40 CDT), captured 2026-10-10 18:08 CDT, hold 0 "GPU timeout" lines. Earlier boots of the 16-inch M1 Max were not checked, and its first window runs may have come before the boot that was checked.
 One kernel version (7.1.12-2-12.6) and one 14-inch M2 Max. Nothing here says the numbers hold on another kernel or machine.
 
 ## Not known

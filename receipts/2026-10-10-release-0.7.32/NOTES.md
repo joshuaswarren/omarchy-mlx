@@ -287,10 +287,10 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
    window. During the wrong runs the kernel log shows the GPU firmware watchdog timing out and recovering: 39 events
    in a 59 s test and 120 events in a 26 s test. In 3 boots that ended hung, the log shows 9 bursts of timeouts (events
    less than 60 s apart). The last burst in each boot was followed by the hang within 4 minutes. The other 6 were not.
-   In the boot we checked, the shutdown then never finished. A hung machine needs a hard reset. The 13-inch M1 and
-   the 16-inch M1 Max logged 0 timeouts in the boots that ran the same tests, and their results were clean. Stock
-   Mesa 26.2.4 and six Honeykrisp builds all show it on the M2 Max. Workaround: do not run long GPU work beside an
-   animating window on the M2 Max. Receipt:
+   In the boot we checked, the shutdown then never finished, so a hard reset is probably needed (an inference). The
+   saved kernel logs of the current boots of the 13-inch M1 and the 16-inch M1 Max hold 0 timeouts, and their results
+   were clean. Stock Mesa 26.2.4 and six Honeykrisp builds all show it on the M2 Max. Workaround: do not run long GPU
+   work beside an animating window on the M2 Max. Receipt:
    `receipts/2026-10-10-m2-long-dispatch-vs-animating-window.md`. Fix: v0.7.33 caps the length of one dispatch; the
    first step is a screening run that times each candidate operation at real shapes and flags any over 50 ms.
 4. **Mixture-of-experts prefill is far behind macOS** (see the "How close to macOS" tables in the README), and the
