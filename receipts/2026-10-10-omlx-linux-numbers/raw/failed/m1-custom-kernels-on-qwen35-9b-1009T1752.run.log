@@ -1,0 +1,15 @@
+# start 2026-10-09T17:52:11Z host M1-16GB kernel 7.1.12-2-12.6-sep-ARCH tree w31 omlx c0b1056b model mlx-community--Qwen3.5-9B-MLX-4bit task chat offload 0 custom_kernels 1
+# mesa mesa 1:26.2.4-1 wheel mlx_omarchy-0.32.4.dev202610071347+9b5c938.dist-info
+# avail before 12836 MB
+# omlx from <tree>/omlx/__init__.py
+# healthy after 5 s
+RESULT pilot1 {"error": "calibration no tokens"}
+RESULT pilot2 {"error": "calibration no tokens"}
+# prefill budget: pilot rate 0 tok/s, P=32 tokens per forward (cap 12 s)
+RESULT single_fixed {"error": "calibration no tokens"}
+RESULT single_a {"error": "calibration no tokens"}
+RESULT single_b {"error": "calibration no tokens"}
+RESULT conc4 {"error": "calibration no tokens"}
+RESULT conc4_b {"error": "calibration no tokens"}
+# min available 4420 MB; end 17:52:45
+# server.log error-ish lines: 120

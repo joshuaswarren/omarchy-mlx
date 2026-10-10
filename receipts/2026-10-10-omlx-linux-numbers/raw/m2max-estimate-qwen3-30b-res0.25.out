@@ -1,0 +1,2 @@
+EVPJSON {"fraction": 0.25, "wrapped_layers": 48, "full_checkpoint_bytes": 17181071994, "estimate_bytes": 4950481530, "after_load": 4978323456, "peak_prefill": 5137678336, "peak_decode": 5137678336, "prompt_tokens": 128, "chunk": 64}
+rc=0

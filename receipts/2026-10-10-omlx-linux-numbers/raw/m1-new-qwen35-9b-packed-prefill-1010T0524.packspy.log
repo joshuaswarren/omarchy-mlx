@@ -1,0 +1,7 @@
+packspy armed
+packed_forward rows=3 tokens=435 per_row=[145, 145, 145] wall_s=6.28
+packed_forward rows=2 tokens=290 per_row=[145, 145] wall_s=4.36
+packed_forward rows=2 tokens=176 per_row=[88, 88] wall_s=2.87
+packed_forward rows=4 tokens=352 per_row=[88, 88, 88, 88] wall_s=5.53
+packed_forward rows=4 tokens=352 per_row=[88, 88, 88, 88] wall_s=5.50
+packed_forward rows=2 tokens=176 per_row=[88, 88] wall_s=2.92

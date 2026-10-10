@@ -1,0 +1,2 @@
+2026-10-09 12:52:26,821 - omlx.scheduler - ERROR - Error in batch generation step: [omarchy] fast::CustomKernel MSL subset: runtime shader compilation failed: <shader>.comp:9: warning: '#define' : names containing consecutive underscores are reserved: __FAST_MATH__
+<shader>.comp:60: error: '' :  syntax error, unexpected IDENTIFIER, expecting COMMA or SEMICOLON
