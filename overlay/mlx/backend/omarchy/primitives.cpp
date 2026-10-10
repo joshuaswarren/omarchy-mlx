@@ -4836,11 +4836,34 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (chunks == 1) {
     std::array<omarchy::ComputeBinding, 4> bindings{
         binding(x), binding(w), binding(x), binding(out)};
-    encoder.dispatch_compute(
-        kernel,
-        bindings,
-        params,
-        omarchy::compute_dispatch_group_count(total));
+    // MLX_OMARCHY_DISPATCH_SPLIT_GMAC=<g>: run the conv as output tiles of at most g
+    // billion multiply-accumulates, one submission per tile. A long single dispatch
+    // beside a graphics client trips the G14C GPU watchdog (GPU timeout, halt and
+    // recovery) and loses work with no error; tiles keep every submission short.
+    // Unset or 0 is the single dispatch. Read per call; nothing caches the variable.
+    uint32_t tile = total;
+    if (const char* split = std::getenv("MLX_OMARCHY_DISPATCH_SPLIT_GMAC")) {
+      const double gmac = std::atof(split);
+      if (gmac > 0.0 && kernel_products > 0) {
+        const double outputs = gmac * 1e9 / static_cast<double>(kernel_products);
+        if (outputs < static_cast<double>(total)) {
+          tile = std::max(256u, static_cast<uint32_t>(outputs));
+        }
+      }
+    }
+    const auto base_params = params;
+    for (uint32_t base = 0; base < total;) {
+      const uint32_t count = std::min(tile, total - base);
+      params = base_params;
+      params.in_strides[3] = base;
+      params.count = count;
+      encoder.dispatch_compute(
+          kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+      base += count;
+      if (base < total) {
+        encoder.commit();
+      }
+    }
     return;
   }
 

@@ -40,7 +40,7 @@
 //   operation          kernel width
 //   shape[0..dims-2]   output extents above the innermost axis
 //   in_strides[0..2]   kernel stride per axis
-//   in_strides[3]      output tile base       (large kernels)
+//   in_strides[3]      output tile base       (large kernels, split dispatches; 0 otherwise)
 //   out_strides[0..2]  low padding per axis
 //   shape[2]           kernel dilation, depth (3-D)
 //   shape[3]           kernel dilation, above-innermost axis
@@ -265,9 +265,7 @@ void main() {
        work_index += stride_threads) {
     uint chunk = write_partial ? work_index / tile_count : 0u;
     uint local_index = write_partial ? work_index % tile_count : work_index;
-    uint index = write_partial
-        ? params.in_strides[3u] + local_index
-        : local_index;
+    uint index = params.in_strides[3u] + local_index;
     uint batch = index / (total_out_spatial * out_channels);
     uint remainder = index % (total_out_spatial * out_channels);
     uint out_channel = remainder % out_channels;

@@ -13,12 +13,14 @@
 #include "doctest/doctest.h"
 
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <random>
 #include <vector>
 
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
@@ -1249,4 +1251,71 @@ TEST_CASE(
     REQUIRE_EQ(actual.shape(), expected_shape);
     check_close(actual, expected, stream, 1e-5);
   }
+}
+
+// MLX_OMARCHY_DISPATCH_SPLIT_GMAC: a conv run as output tiles, one submission
+// per tile, must give the bytes of the single dispatch. The shape has 12800
+// outputs with 72 products each; 0.0001875 GMAC is 2604 outputs per tile,
+// so five tiles and an uneven last tile.
+TEST_CASE("conv2d split into output tiles is bit-identical to the single dispatch") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 rng(17);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  Shape in_shape{2, 20, 20, 8};
+  Shape wt_shape{16, 3, 3, 8};
+  std::vector<float> in(2 * 20 * 20 * 8);
+  std::vector<float> wt(16 * 3 * 3 * 8);
+  for (auto& v : in) {
+    v = dist(rng);
+  }
+  for (auto& v : wt) {
+    v = dist(rng);
+  }
+  array x(in.begin(), in_shape, float32);
+  array w(wt.begin(), wt_shape, float32);
+  struct Run {
+    std::vector<float> values;
+    uint64_t dispatches;
+    uint64_t submissions;
+  };
+  auto run = [&](const char* gmac) {
+    if (gmac != nullptr) {
+      setenv("MLX_OMARCHY_DISPATCH_SPLIT_GMAC", gmac, 1);
+    } else {
+      unsetenv("MLX_OMARCHY_DISPATCH_SPLIT_GMAC");
+    }
+    array y = conv2d(x, w, {1, 1}, {1, 1}, {1, 1}, 1, stream);
+    auto& counters = omarchy::trace::counters();
+    const uint64_t d0 = counters.vk_compute_dispatches.load();
+    const uint64_t s0 = counters.vk_submissions.load();
+    y.eval();
+    sync_stream(stream);
+    Run result;
+    result.dispatches = counters.vk_compute_dispatches.load() - d0;
+    result.submissions = counters.vk_submissions.load() - s0;
+    const float* p = y.data<float>();
+    result.values.assign(p, p + y.size());
+    unsetenv("MLX_OMARCHY_DISPATCH_SPLIT_GMAC");
+    return result;
+  };
+  Run whole = run(nullptr);
+  Run split = run("0.0001875");
+  Run off = run("0");
+  REQUIRE_EQ(whole.values.size(), split.values.size());
+  CHECK(std::memcmp(
+            whole.values.data(),
+            split.values.data(),
+            whole.values.size() * sizeof(float)) == 0);
+  CHECK(std::memcmp(
+            whole.values.data(), off.values.data(), whole.values.size() * sizeof(float)) == 0);
+  std::cout << "[conv_split] single: " << whole.dispatches << " dispatch(es), " << whole.submissions
+            << " submission(s); split: " << split.dispatches << " dispatches, " << split.submissions
+            << " submissions; GMAC=0: " << off.dispatches << " dispatch(es)\n";
+  CHECK_EQ(whole.dispatches, 1u);
+  CHECK_EQ(off.dispatches, 1u);
+  CHECK_EQ(split.dispatches, 5u);
+  CHECK_GE(split.submissions, whole.submissions + 4u);
 }
