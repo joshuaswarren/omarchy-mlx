@@ -23,7 +23,7 @@ Verified on 2026-10-09: a fresh clone that ran only the commands in this guide, 
 | path | what it is | size | sha256 |
 |---|---|---|---|
 | `int8-dit/` | DiT quantized to per-channel int8: 7 base shards + 5 delta shards + per-shard sha256 manifests + `transformer-config.json` | 44 GB | per-shard in `int8-dit/base-manifest.json` and `delta-manifest.json` |
-| `text_encoder/` | compact text-tower export: byte-exact key-subset copy of the released text encoder (Qwen3-VL-32B text layers 0-49, 552 tensors) + configs | 50.3 GB | `SHA256SUMS` |
+| `text_encoder/` | compact text-tower export (Qwen3-VL-32B text layers 0-49, 552 tensors; its source checkpoint is not verified, see One-time preprocessing) + configs | 50.3 GB | `SHA256SUMS` |
 | `video_vae/` | video VAE weights | 9.8 GB | `SHA256SUMS` |
 | `audio_vae/` | audio VAE weights | 578 MB | `SHA256SUMS` |
 | `tokenizer/`, `processor/`, `model_index.json` | tokenizer, processor, and pipeline index | small | `SHA256SUMS` |
@@ -170,7 +170,9 @@ Per-stage wall times on the 96 GB M2 Max (Linux, Honeykrisp Vulkan):
 
 The HF repo ships the int8 DiT state and the compact text-tower export already prepared, so the render needs neither step. The upstream MiniMax-H3 release has only the bf16 weights; the Omarchy M team made both files for the Linux port:
 
-- The compact text-tower export is a byte-exact key-subset copy of the released `text_encoder/`: it is a CPU-only `safetensors` operation and runs on any platform with no model use.
+- Reproduced on Linux with no macOS: the int8 quantization. A CPU-only numpy port of the quantizer, run on the released bf16 transformer shard, reproduces all 9 tensors of `blocks.0` in the shipped int8 state byte for byte (weights, scales, fused QKV, norms). Only block 0 was checked; the other blocks use the same code path and are not individually verified.
+- Not reproduced: the compact text-tower export. Its layout is exact: 552 tensors, 50,315,741,502 bytes, and a header byte-equal to the shipped header. But re-exporting the same 552 keys from the `FL2VA/text_encoder` shards of the MiniMax-H3 release gives a different file (sha256 `fc36619982b4...` against the shipped `40e1fc3f18ab...`), and every tensor sampled through layer 8 differs. The shipped text tower was therefore built from a different checkpoint than that directory. Which checkpoint is not yet known, so this guide does not claim the shipped file is a copy of any specific release.
+- The render itself does not depend on this: it loads the shipped files and was reproduced byte for byte (see the verification line at the top).
 - The int8 DiT state is a per-output-channel int8 transform of the bf16 transformer shards (weights int8, per-output-channel fp32 scales, group 1024 for the fc2 input, 8-bit AdaLN requantized at load time). The shipped state is 44 GB across 12 shards with per-shard sha256 in `int8-dit/base-manifest.json` and `delta-manifest.json`.
 
 ## License and credits
