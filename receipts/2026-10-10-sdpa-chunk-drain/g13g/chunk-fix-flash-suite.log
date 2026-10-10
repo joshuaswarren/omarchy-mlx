@@ -1,0 +1,21 @@
+IDLE-GUARD-JOB-START 20261010T220445Z lane=matmul-gap w7Q SDPA chunk drain fix on G13G: flash suite x3 from the M1 Max-built binary 2252210d (id checked); the 1 GiB OOM case failed here before the fix
+SETTLE load1=0.04
+start 22:04:45 load 0.04 kernel 7.1.12-2-12.6-sep-ARCH MemAvailable 13479408 kB
+packaged ICD lib sha256 ac837b1c3aa08672
+binary sha256 prefix 2252210dde6d2cdc
+== run 1
+[doctest] test cases:  13 |  13 passed | 0 failed | 0 skipped
+[doctest] assertions: 149 | 149 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0 MemAvailable after 13768224 kB
+== run 2
+[doctest] test cases:  13 |  13 passed | 0 failed | 0 skipped
+[doctest] assertions: 149 | 149 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0 MemAvailable after 13736336 kB
+== run 3
+[doctest] test cases:  13 |  13 passed | 0 failed | 0 skipped
+[doctest] assertions: 149 | 149 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0 MemAvailable after 13651024 kB
+end 22:08:27 load 0.25

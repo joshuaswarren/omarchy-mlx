@@ -15402,6 +15402,12 @@ void ScaledDotProductAttention::eval_gpu(
         array keys_t = swapaxes_in_eval(k32, -1, -2);
         encoder.add_temporary(keys_t);
         out.set_data(allocate_omarchy(out.nbytes()));
+        // scores + probs (f32) + the bf16 result rows, per chunk.
+        const uint64_t chunk_working_bytes = static_cast<uint64_t>(chunk_rows) *
+            (chunk_denom * 2u + out.nbytes() / static_cast<uint64_t>(q_len));
+        const uint64_t chunk_drain_budget =
+            static_cast<uint64_t>(omarchy::capability_report(0).total_memory) / 4u;
+        uint64_t pinned_bytes = 0;
         for (uint32_t row0 = 0; row0 < static_cast<uint32_t>(q_len);
              row0 += chunk_rows) {
           const uint32_t rows =
@@ -15469,6 +15475,18 @@ void ScaledDotProductAttention::eval_gpu(
               /*o_offset=*/0,
               CopyType::General,
               s);
+          // Every chunk's score, probability and result buffers stay pinned until
+          // the batch drains, so a long prefill that queues all chunks holds
+          // chunks x working-set bytes at once (L = 16384, H = 8 asks for about 18
+          // GiB, which a 16 GB M1's 7.5 GiB heap cannot give). Drain the batch
+          // whenever the pinned bytes would pass a quarter of the heap; a working
+          // set above that drains after every chunk.
+          pinned_bytes += scores_c.nbytes() + probs_c.nbytes() + result_c.nbytes();
+          if (row0 + chunk_rows < static_cast<uint32_t>(q_len) &&
+              pinned_bytes + chunk_working_bytes > chunk_drain_budget) {
+            encoder.synchronize("sdpa_chunk_drain");
+            pinned_bytes = 0;
+          }
         }
         return;
       }
