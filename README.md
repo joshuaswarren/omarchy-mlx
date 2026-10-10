@@ -312,7 +312,8 @@ kernel and driver module build it ran on, because they changed between runs:
   twice. First on kernel 7.1.13-3-1-ARCH with an earlier module build: median
   call 254.5 ms in two processes of 20 calls each, output equal to the fp16
   golden. Again on 2026-10-10 on `ca09ce8` (kernel 7.1.12-2-12.6-sep-ARCH,
-  a fresh reboot, one process of 20 calls): median call 253.5 ms, maximum 253.8 ms,
+  a fresh reboot, one process of 20 calls, taken while another test ran GPU work on
+  the same machine): median call 253.5 ms, maximum 253.8 ms,
   and the output is bit-exact against the Apple fp16 golden (maximum absolute
   difference 0.0, no NaN or inf, no new EXCH-fail, DART-fault, quarantine or
   completion-wait-failed lines). The full result, with the decode check, is in
