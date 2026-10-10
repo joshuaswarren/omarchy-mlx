@@ -195,41 +195,41 @@ in [docs/parakeet.md](docs/parakeet.md).
 
 ## How close to macOS
 
-Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0); measured 2026-10-09. The number is Linux throughput as a percentage of macOS throughput: 100% means equal, higher is faster on Linux.
+Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-10. The Linux column runs the mlx-lm patches the installer applies. Each cell is Linux / macOS and the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
 
 - Decode: median tokens per second over 10 greedy generations of 64 tokens (prompt processing excluded).
 - Prefill: median tokens per second over 5 runs of one 512-token prompt.
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-Note: the Linux rows in this first table ran on the stock upstream mlx-lm, which on Linux falls back to a slow per-token Python loop for the gated-delta layers (Qwen3.5-9B, clef-flash, Qwen3.8-27B) and so understates the prefill ratios. The table below is the stock-mlx-lm column. The next table is what the installer ships (its mlx-lm patches applied); more models are being added to it.
+The mixture-of-experts models are the largest gap: gemma-4-26B-A4B reaches 15% of macOS on decode and 5% on prefill, Qwen3.6-35B-A3B 18% and 7%, while the dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is 6.5-8.9 times faster than MLX at MoE prefill. Two rows fail on Linux today: gemma-4-E4B stalls a GPU submit during generation, and gpt-oss-20b needs an attention-sinks kernel that is not implemented yet. The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
 
-Two Linux rows fail today: gemma-4-e2b stalls a GPU submit during prefill, and gpt-oss-20b needs an attention-sinks kernel that is not implemented yet. The macOS runs shared the machine with background downloads and a build, which can only lower the macOS numbers.
+On Qwen3.5-9B the Linux outputs are token-for-token identical to macOS for the 10 test generations. On the four larger models the greedy outputs of the 10 generations differ from macOS in at least one token (the output digests differ); no cause has been established yet.
 
-| Model | Decode, tok/s (Linux / macOS) | Prefill 512, tok/s (Linux / macOS) |
-|---|---|---|
-| Qwen3.5-9B | 25.4 / 59.3 = **43%** | 55.2 / 333.4 = **17%** |
-| clef-flash | 25.0 / 59.1 = **42%** | 56.1 / 335.0 = **17%** |
-| gemma-4-e2b | fails to run (0%) | fails to run (0%) |
-| gpt-oss-20b | fails to run (0%) | fails to run (0%) |
-| Qwen3.8-27B | 9.3 / 19.6 = **47%** | 19.9 / 104.6 = **19%** |
-| Qwen3.8-Flash-Next | skipped (does not fit in memory) | skipped (does not fit in memory) |
-
-llama.cpp, Vulkan on Linux against Metal on macOS (same llama.cpp commit):
-
-| Model | Decode tg128, tok/s (Linux / macOS) | Prefill pp512, tok/s (Linux / macOS) |
-|---|---|---|
-| gemma-4-12b (Q4_K_M) | 14.1 / 29.3 = **48%** | 118.2 / 310.8 = **38%** |
-| Qwen3.8-27B (Q4_K_M) | 6.3 / 12.5 = **50%** | 53.8 / 131.2 = **41%** |
-
-With the mlx-lm patches the installer applies (first row; Linux / macOS, tokens per second):
+MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / macOS:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
-| Qwen3.5-9B | 37.1 / 59.3 = **62%** | 299.4 / 333.4 = **90%** |
-| Qwen3.8-27B | 13.5 / 19.6 = **69%** | 87.4 / 104.6 = **84%** |
+| Qwen3.8-27B (dense 27B) | 13.5 / 19.5 = **69%** | 87.4 / 105.6 = **83%** |
+| gemma-4-26B-A4B (MoE, 4B active) | 10.0 / 66.0 = **15%** | 29.9 / 556.1 = **5%** |
+| gemma-4-31B (dense 31B) | 7.3 / 15.3 = **48%** | 62.4 / 90.0 = **69%** |
+| Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = **62%** | 299.4 / 339.0 = **88%** |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 13.4 / 75.6 = **18%** | 39.4 / 604.1 = **7%** |
+| gemma-4-E4B (dense 4B) | fails to run (0%) | fails to run (0%) |
+| gpt-oss-20b (MoE, attention sinks) | fails to run (0%) | fails to run (0%) |
 
-The Qwen3.5-9B outputs are token-for-token identical to macOS for the 10 test generations (same output digest). On stock mlx-lm the same model measured 43% decode and 17% prefill (table above).
+llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit), Linux / macOS:
+
+| Model | Decode tg128 | Prefill pp512 |
+|---|---|---|
+| Qwen3.8-27B | 6.3 / 12.3 = **51%** | 53.8 / 131.2 = **41%** |
+| gemma-4-26B-A4B | 26.0 / 62.7 = **41%** | 265.3 / 882.8 = **30%** |
+| gemma-4-31B | 6.5 / 11.5 = **56%** | 42.4 / 112.8 = **38%** |
+| Qwen3.5-9B | 19.8 / 40.5 = **49%** | 171.1 / 476.3 = **36%** |
+| Qwen3.6-35B-A3B | not measured | not measured |
+| gemma-4-E4B | 18.5 / 59.1 = **31%** | 303.5 / 821.1 = **37%** |
+
+Skipped, too large for this machine: GLM-5.3-Flash, Kimi-K3, DeepSeek-V4-Flash, Qwen3.8-Flash-Next.
 
 Rows are re-measured weekly; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
 
