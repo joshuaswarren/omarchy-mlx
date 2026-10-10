@@ -8,10 +8,19 @@
  #include <numeric>
  
  #include "mlx/fast.h"
-@@ -253,6 +255,401 @@
+@@ -253,6 +255,417 @@
    return fallback({x, passed_weight})[0];
  }
  
++// The EXL3 CPU reference must be bit-exact to sushi's expert_exl3.zig, which never fuses a multiply into an add.
++// GCC and clang contract a*b+c into an FMA by default on aarch64, which changes the last f32 bit of the Hadamard
++// sums (found on the M1 Max: the device shader and the Zig reference agreed, this reference did not).
++#if defined(__clang__)
++#pragma clang fp contract(off)
++#elif defined(__GNUC__)
++#pragma GCC push_options
++#pragma GCC optimize("fp-contract=off")
++#endif
 +namespace {
 +
 +constexpr uint32_t exl3_mcg_mult = 0xCBAC1FEDu;
@@ -271,6 +280,13 @@
 +}
 +
 +} // namespace
++
++// End of the no-contraction region.
++#if defined(__clang__)
++#pragma clang fp contract(on)
++#elif defined(__GNUC__)
++#pragma GCC pop_options
++#endif
 +
 +void exl3_reconstruct_stages(
 +    const uint16_t* trellis,
