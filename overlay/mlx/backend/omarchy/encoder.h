@@ -298,6 +298,20 @@ class MLX_API CommandEncoder {
       uint32_t group_count_x,
       uint32_t group_count_y = 1,
       uint32_t group_count_z = 1);
+  // The metal2vk route: an explicit entry point and specialization
+  // constants (clspv modules name entries after the kernel and take the
+  // workgroup size from spec constants 0..2). The cache key must already
+  // distinguish the specialization values.
+  void dispatch_compute(
+      const std::string& cache_key,
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec,
+      std::span<const ComputeBinding> bindings,
+      const ComputeParams& params,
+      uint32_t group_count_x,
+      uint32_t group_count_y = 1,
+      uint32_t group_count_z = 1);
 
   // Record a four-byte-word fill. Size and offset must be multiples of 4.
   void fill_buffer(

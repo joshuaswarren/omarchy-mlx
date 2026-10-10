@@ -1,0 +1,162 @@
+{
+ "module": "custom_kernel_qwen35_ragged_sdpa_1p__bfloat16_t_256_256_16_2_8__bfloat16_t_bfloat16_t_bfloat16_t_int_float_int_bfloat16_t.spv",
+ "capabilities": [
+  "GroupNonUniform",
+  "GroupNonUniformArithmetic",
+  "Int16",
+  "Shader",
+  "VariablePointers",
+  "VariablePointersStorageBuffer"
+ ],
+ "extensions": [
+  "SPV_KHR_non_semantic_info"
+ ],
+ "uses_cooperative_matrix": false,
+ "workgroup_size_spec_constant_ids": [
+  0,
+  1,
+  2
+ ],
+ "push_constant_regions": {
+  "PushConstantRegionGroupOffset": {
+   "offset": 0,
+   "size": 12
+  }
+ },
+ "kernels": [
+  {
+   "name": "custom_kernel_qwen35_ragged_sdpa_1p__bfloat16_t_256_256_16_2_8__bfloat16_t_bfloat16_t_bfloat16_t_int_float_int_bfloat16_t",
+   "args": [
+    {
+     "ordinal": 0,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 0,
+     "metal_name": "queries",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 1,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 1,
+     "metal_name": "keys",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 2,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 2,
+     "metal_name": "values",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 3,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 3,
+     "metal_name": "pads",
+     "metal_type": "const device int*"
+    },
+    {
+     "ordinal": 4,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 4,
+     "metal_name": "scale",
+     "metal_type": "const device float*"
+    },
+    {
+     "ordinal": 5,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 5,
+     "metal_name": "k_size",
+     "metal_type": "const device int*"
+    },
+    {
+     "ordinal": 6,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 6,
+     "metal_name": "out",
+     "metal_type": "device bfloat16_t*"
+    }
+   ],
+   "workgroup_size": null
+  }
+ ],
+ "name": "custom_kernel_qwen35_ragged_sdpa_1p__bfloat16_t_256_256_16_2_8__bfloat16_t_bfloat16_t_bfloat16_t_int_float_int_bfloat16_t",
+ "kernel": {
+  "name": "custom_kernel_qwen35_ragged_sdpa_1p__bfloat16_t_256_256_16_2_8__bfloat16_t_bfloat16_t_bfloat16_t_int_float_int_bfloat16_t",
+  "args": [
+   {
+    "ordinal": 0,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 0,
+    "metal_name": "queries",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 1,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 1,
+    "metal_name": "keys",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 2,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 2,
+    "metal_name": "values",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 3,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 3,
+    "metal_name": "pads",
+    "metal_type": "const device int*"
+   },
+   {
+    "ordinal": 4,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 4,
+    "metal_name": "scale",
+    "metal_type": "const device float*"
+   },
+   {
+    "ordinal": 5,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 5,
+    "metal_name": "k_size",
+    "metal_type": "const device int*"
+   },
+   {
+    "ordinal": 6,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 6,
+    "metal_name": "out",
+    "metal_type": "device bfloat16_t*"
+   }
+  ],
+  "workgroup_size": null
+ },
+ "toolchain": {
+  "clang": "clang version 23.1.1 (https://github.com/llvm/llvm-project 6dfe1677ab8dffbc6ec13d53a1e0215d75147689)",
+  "opt": "LLVM (http://llvm.org/):",
+  "clspv": "LLVM (http://llvm.org/):",
+  "clspv_sha256": "00bc42854466a824513730f0e3f2a50a145ad48921d0f778691847a70b225765",
+  "include_sha256": "fb278607df8e5be9db881389d67237ed9c30f823f523e8520cd0aa82533acada",
+  "clspv_patches_sha256": "e42d37480143db62c0677ef3a969b900a77335a724530e7c73ddabf49ddbdb0c",
+  "sources_sha256": "75d82fdb6dd97e233570c6cd6517308793fede33f27b062f76ee7d5822581c57"
+ }
+}
