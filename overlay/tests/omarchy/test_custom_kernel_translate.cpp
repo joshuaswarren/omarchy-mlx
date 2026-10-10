@@ -640,3 +640,49 @@ TEST_CASE("header helper numeric_limits constants map like the body") {
   CHECK(glsl.find("3.4028234663852886e+38f") != std::string::npos);
   CHECK(glsl.find("omlx_cap(_mlx_arg0[i])") != std::string::npos);
 }
+
+TEST_CASE("float16_t buffer reads stay half in a plain assignment and a call argument") {
+  // Parakeet decoder-step chains (v0.7.32 freeze, G13C): `sh_a[i] =
+  // embedding[j];` and `exact_fma16(bc, sh_a[k], weights[j])` need float16_t.
+  // The widened read gave glslc `cannot convert from temp float to temp
+  // float16_t` and `exact_fma16: no matching overloaded function`.
+  const char* source =
+      "float16_t exact_fma16(float16_t acc, float16_t x, float16_t y) {\n"
+      "    precise float p = float(x) * float(y);\n"
+      "    return float16_t(float(acc) + p);\n"
+      "}\n"
+      "[[kernel]] void chains(\n"
+      "    const device float16_t* embedding [[buffer(0)]],\n"
+      "    const device float16_t* weights [[buffer(1)]],\n"
+      "    device float16_t* bsum [[buffer(2)]],\n"
+      "    uint t [[thread_position_in_threadgroup]]) {\n"
+      "  threadgroup float16_t sh_a[64];\n"
+      "  sh_a[t] = embedding[t];\n"
+      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+      "  float16_t bc = float16_t(0.0f);\n"
+      "  for (uint k = 0u; k < 8u; ++k) {\n"
+      "    bc = exact_fma16(bc, sh_a[k], weights[k * 64u + t]);\n"
+      "  }\n"
+      "  bsum[t] = bc;\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("sh_a[t] = _b0.data[t];") != std::string::npos);
+  CHECK(glsl.find("= float(_b0.data[t])") == std::string::npos);
+  CHECK(glsl.find("exact_fma16(bc, sh_a[k], _b1.data[") != std::string::npos);
+  CHECK(glsl.find("float(_b1.data[") == std::string::npos);
+}
+
+TEST_CASE("float16_t buffer reads still widen to float inside arithmetic") {
+  // bitlinear_matmul: int * half needs the float, GLSL has no int/f16 mix.
+  const char* source =
+      "[[kernel]] void mix(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    const device int* cnt [[buffer(1)]],\n"
+      "    device float* y [[buffer(2)]],\n"
+      "    uint c [[thread_position_in_grid]]) {\n"
+      "  y[c] = cnt[c] * w[c] + w[c + 1];\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("float(_b0.data[c])") != std::string::npos);
+  CHECK(glsl.find("float(_b0.data[c + 1])") != std::string::npos);
+}

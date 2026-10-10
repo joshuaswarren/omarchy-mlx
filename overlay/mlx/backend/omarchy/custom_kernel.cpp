@@ -1560,6 +1560,48 @@ std::string buffer_declaration(const Parameter& parameter, bool output) {
       std::to_string(parameter.binding) + ";\n";
 }
 
+// A float16_t buffer read keeps its half type where the context cannot take
+// a float: the whole right-hand side of a plain `=` (`sh_a[i] = embedding[j];`
+// into a float16_t lvalue) and a function-call argument (`exact_fma16(acc,
+// x, weights[j])` into a float16_t parameter). GLSL widens float16_t to float
+// implicitly, never the other way, so the unwidened read is valid wherever the
+// widened one is, and valid in the two places the widened one is not. Any
+// operator context still widens: mixed int/f16 arithmetic needs the float.
+bool half_read_is_plain_value(const std::string& s, size_t begin, size_t end) {
+  size_t before = begin;
+  while (before > 0 && std::isspace(static_cast<unsigned char>(s[before - 1]))) {
+    --before;
+  }
+  size_t after = end;
+  while (after < s.size() && std::isspace(static_cast<unsigned char>(s[after]))) {
+    ++after;
+  }
+  if (before == 0 || after >= s.size()) {
+    return false;
+  }
+  const char prev = s[before - 1];
+  const char next = s[after];
+  if (prev == '=') {
+    const bool plain_assign = before < 2 ||
+        std::strchr("=!<>+-*/%&|^", s[before - 2]) == nullptr;
+    return plain_assign && next == ';';
+  }
+  if (prev == ',') {
+    return next == ',' || next == ')';
+  }
+  if (prev == '(' && (next == ',' || next == ')')) {
+    size_t name_end = before - 1;
+    while (name_end > 0 &&
+           std::isspace(static_cast<unsigned char>(s[name_end - 1]))) {
+      --name_end;
+    }
+    return name_end > 0 &&
+        (std::isalnum(static_cast<unsigned char>(s[name_end - 1])) ||
+         s[name_end - 1] == '_');
+  }
+  return false;
+}
+
 void translate_bfloat_parameter(
     std::string& body,
     const Parameter& parameter,
@@ -2241,10 +2283,26 @@ Translation translate_msl(
       // int/float (2026-10-08 KernelRecheck, bitlinear_matmul).
       if (parameter.type == "float16_t" && !output) {
         const auto escaped16 = regex_escape(parameter.name);
-        body = std::regex_replace(
-            body,
-            std::regex("\\b" + escaped16 + R"(\s*\[([^\]]+)\])"),
-            "float(_b" + std::to_string(parameter.binding) + ".data[$1])");
+        const std::string storage =
+            "_b" + std::to_string(parameter.binding) + ".data[";
+        const std::regex read_pattern(
+            "\\b" + escaped16 + R"(\s*\[([^\]]+)\])");
+        std::string rewritten;
+        size_t last = 0;
+        for (std::sregex_iterator it(body.begin(), body.end(), read_pattern), stop;
+             it != stop;
+             ++it) {
+          const size_t begin = static_cast<size_t>(it->position(0));
+          const size_t end = begin + static_cast<size_t>(it->length(0));
+          const std::string element = storage + (*it)[1].str() + "]";
+          rewritten.append(body, last, begin - last);
+          rewritten += half_read_is_plain_value(body, begin, end)
+              ? element
+              : "float(" + element + ")";
+          last = end;
+        }
+        rewritten.append(body, last, std::string::npos);
+        body = std::move(rewritten);
       }
       // A small array bound in the constant space that the body never
       // indexes is used as a value: mlx-audio's phonon unpack divides
