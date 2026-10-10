@@ -19,7 +19,7 @@ Raw run logs behind the "What you get: measured numbers" section of [docs/omlx-l
 | M2 Max, Qwen3.6-35B-A3B, offload 0.25 | `raw/m2max-new-qwen36-35b-offload-1009T1959.run.log` | 90 | 10.015 s | 2.902 |
 | M1, Qwen3.6-35B-A3B, offload 0.10 | `raw/m1-new-qwen36-35b-offload-1009T1807.run.log` | 43 | 19.751 s | 1.311 |
 
-Old-pin partners for the version comparison (same machine and model, same method):
+Old-pin partners for the version comparison (same machine, model and method). This is not a controlled A/B: each run sizes its prompt from its own pilot request, so paired prompts differ slightly (356 and 364 tokens, 476 and 475, 43 and 42, 90 and 87; the 27B pair is 267 and 267), and the runs print no loaded-library provenance line. Read the deltas as differences inside run-to-run noise, not as an effect of the oMLX version.
 
 | pair | old-pin file | decode (single_fixed) |
 |---|---|---|
@@ -43,3 +43,13 @@ Prefill rates quoted in the doc are the `pilot rate` line of each run (the secon
 
 - `raw/failed/m1-custom-kernels-on-qwen35-9b-1009T1752.run.log` and `.server-error.txt`: an M1 run with custom kernels on and an older wheel (`0.32.4.dev202610071347+9b5c938`). No request returned tokens; the server log shows a shader compile error at the decode step.
 - `raw/failed/m2max-new-qwen36-35b-no-offload-1009T1827.run.log` and `.server-error.txt`: an M2 Max run of Qwen3.6-35B-A3B without offload. No request returned tokens; the server log shows the prefill failing on an unsupported kernel feature (`device pointer arithmetic`).
+
+## Limits of this data
+
+- One run per row, no confidence intervals. Decode speed with 4 concurrent requests varied by up to 1.45 times between two repeats in the same run (M2 Max, 35B offload: 0.977 and 0.674 tok/s; 27B: 1.601 and 1.119), so concurrent numbers say nothing about a difference between oMLX versions.
+- Second request (`single_a`) against the first (`single_fixed`), decode tok/s: M2 Max 27B 9.285 against 9.354 (-0.7 %); M1 9B 8.404 against 8.288 (+1.4 %) and 8.282 against 8.308 (-0.3 %); M1 35B offload 1.303 against 1.311 (-0.6 %); M2 Max 35B offload 3.53 against 2.902 (+21.6 %).
+- Provenance: these runs predate a loaded-library check. The header records the wheel directory name and the Mesa package (26.2.4); it does not record the hash of the loaded `libmlx.so`, the harness commit, whether a private driver file was selected, or the Vulkan device and firmware identity. Model and quantization hashes and the exact server command are not recorded beside the runs.
+- Custom kernels on: not measured on this wheel (see the failed runs above).
+- Qwen3.6-35B-A3B without offload on the M2 Max: not measured (see the failed runs above).
+- Long prompts: not measured for memory; the estimate check used 128 tokens.
+- No macOS measurement of these oMLX runs.

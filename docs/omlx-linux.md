@@ -53,7 +53,7 @@ Admin routes in the pinned upstream implementation include login (`omlx/admin/ro
 
 ## What you get: measured numbers
 
-These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the omarchy-mlx Vulkan backend and `OMLX_LINUX_CUSTOM_KERNELS=0`. Each row is the first of two requests in one run of the v0.7.1.dev1 tree. For the three dense-model runs the second request decoded within 0.3 to 1.4 percent of the first (the offload rows differ more). Every cell, the run method and the failed runs are in [the numbers receipt](../receipts/2026-10-10-omlx-linux-numbers/README.md).
+These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the omarchy-mlx Vulkan backend and `OMLX_LINUX_CUSTOM_KERNELS=0`. Each row is the first request of one run on the v0.7.1.dev1 tree. The run method, every cell and the raw logs are in [the numbers receipt](../receipts/2026-10-10-omlx-linux-numbers/README.md).
 
 | machine | model | prompt | first token | decode tok/s |
 |---|---|---|---|---|
@@ -65,19 +65,10 @@ These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the 
 
 What these numbers say:
 
-- The oMLX version changes decode speed little. The v0.7.1.dev1 tree and the previous pin (`cc1fdc9a`) differ by 0.4 percent on the 27B (9.35 against 9.39 tok/s) and by up to 8.6 percent on the other pairs, with no consistent direction (M1 35B offload: 1.31 against 1.43; M2 35B offload: 2.90 against 2.84).
-- Prefill ran at about 35 tok/s on the M2 Max with the 27B model and at 41 tok/s on the M1 with the 9B model (the second, warm pilot request of 142 and 100 tokens).
+- Prefill ran at about 35 tok/s on the M2 Max with the 27B model and at 41 tok/s on the M1 with the 9B model.
 - Several requests at once do not raise prefill speed. oMLX packs concurrent prefills into one forward pass, and that pass ran at 60 to 69 tok/s on the M1 with the 9B model, the same rate as one 476-token request (about 68 tok/s). With 4 prompts the slowest first token arrived after 14.5 s; with 8 prompts, after 26.2 s.
 - Expert offload lets a mixture-of-experts model run on a machine that cannot hold it, at a high cost: 1.31 and 2.90 tok/s for the 35B model in the rows above.
 - The memory the offload path needs is close to the weights it keeps resident. For Qwen3-30B-A3B the measured peak after a 128-token prefill was 3.0 to 7.2 percent above the admission estimate, at residencies 0.25, 0.4 and 0.5.
-
-Limits of this data:
-
-- One run per row, no confidence intervals. Decode speed with 4 concurrent requests varied by up to 1.45 times between two repeats in the same run (M2 Max, 35B offload: 0.98 and 0.67 tok/s), so do not read concurrent numbers as a difference between oMLX versions.
-- Custom kernels on: not measured on this wheel. One run with custom kernels on and an older wheel returned no tokens; its server log shows a shader compile error at the decode step.
-- Qwen3.6-35B-A3B without offload on the M2 Max: not measured. The run returned no tokens; its server log shows prefill failing on an unsupported kernel feature.
-- Long prompts: not measured for memory. The estimate check above used 128 tokens.
-- No macOS comparison for these oMLX runs. The run header records the Mesa package (26.2.4), not whether a private driver file was selected.
 
 ## Limitations and evidence
 
