@@ -1,0 +1,15 @@
+start 17:45:07 mode suite-default sha e34d1da94230c85a6a0207476877f1460793e204 load 0.02
+TEST BINARY 5c4ae47c1c9d047c
+rc=0 kill_switch=unset
+[doctest] test cases:      48 |      48 passed | 0 failed | 0 skipped
+[doctest] assertions: 1383973 | 1383965 passed | 8 failed |
+[doctest] Status: SUCCESS!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:4066: ERROR: CHECK( rel[arg] <= 0.05 ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:4066: ERROR: CHECK( rel[arg] <= 0.05 ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:4066: ERROR: CHECK( rel[arg] <= 0.05 ) is NOT correct!
+/var/tmp/w7q-h8/mlx-src5/.work/mlx/tests/omarchy/test_fast_ops.cpp:4066: ERROR: CHECK( rel[arg] <= 0.05 ) is NOT correct!
+end 17:45:34
