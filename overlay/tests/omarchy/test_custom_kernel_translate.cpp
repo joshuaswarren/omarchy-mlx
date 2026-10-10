@@ -672,17 +672,37 @@ TEST_CASE("float16_t buffer reads stay half in a plain assignment and a call arg
   CHECK(glsl.find("float(_b1.data[") == std::string::npos);
 }
 
-TEST_CASE("float16_t buffer reads still widen to float inside arithmetic") {
-  // bitlinear_matmul: int * half needs the float, GLSL has no int/f16 mix.
+TEST_CASE("bitlinear_matmul: float16_t reads widen in int-times-half arithmetic, stay half into a float array") {
+  // The reason 123469dec widens half reads: `1 / weight_scale[0]` is int / half,
+  // and GLSL has no such operation (glslang: "wrong operand types: no
+  // operation '/' exists that takes a left-hand operand of type const int and
+  // a right operand of type readonly temp float16_t"). The same kernel's
+  // `v[j] = x[...]` stores a half read into a float array, which GLSL widens
+  // implicitly, and `float sum[4] = {0.0}` is the under-supplied initializer
+  // the same commit zero-fills. Source: mlx-lm bitlinear_matmul, T = half.
   const char* source =
-      "[[kernel]] void mix(\n"
-      "    const device float16_t* w [[buffer(0)]],\n"
-      "    const device int* cnt [[buffer(1)]],\n"
-      "    device float* y [[buffer(2)]],\n"
-      "    uint c [[thread_position_in_grid]]) {\n"
-      "  y[c] = cnt[c] * w[c] + w[c + 1];\n"
+      "[[kernel]] void bitlinear_matmul(\n"
+      "    const device float16_t* x [[buffer(0)]],\n"
+      "    const device uint8_t* packed_weights [[buffer(1)]],\n"
+      "    const device float16_t* weight_scale [[buffer(2)]],\n"
+      "    const device int* invert [[buffer(3)]],\n"
+      "    device float* out [[buffer(4)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  uint tid = thread_position_in_grid.x;\n"
+      "  float v[4];\n"
+      "  for (int j = 0; j < 4; j++) {\n"
+      "    v[j] = x[tid * 4 + j];\n"
+      "  }\n"
+      "  float sum[4] = {0.0};\n"
+      "  for (int j = 0; j < 4; j++) {\n"
+      "    uint8_t w = packed_weights[tid * 4 + j];\n"
+      "    sum[0] += v[j] * ((w & 3) - 1);\n"
+      "  }\n"
+      "  float scale = invert[0] != 0 ? 1 / weight_scale[0] : weight_scale[0];\n"
+      "  out[tid] = sum[0] * scale;\n"
       "}\n";
   auto glsl = translate(source, 1);
-  CHECK(glsl.find("float(_b0.data[c])") != std::string::npos);
-  CHECK(glsl.find("float(_b0.data[c + 1])") != std::string::npos);
+  CHECK(glsl.find("1 / float(_b2.data[0]) : float(_b2.data[0])") != std::string::npos);
+  CHECK(glsl.find("v[j] = _b0.data[tid * 4 + j];") != std::string::npos);
+  CHECK(glsl.find("float sum[4] = {0.0, 0.0, 0.0, 0.0};") != std::string::npos);
 }
