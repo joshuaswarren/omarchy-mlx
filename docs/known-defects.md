@@ -1151,7 +1151,7 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   the fix commit (see receipts/2026-10-08-audit-followups/README.md for
   counts).
 
-## Fused GDN backward: the gate gradient dg differs from the composed reference for T > 1 (found 2026-10-09, open)
+## Fused GDN backward: the gate gradient dg differs from the composed reference for T > 1 (found 2026-10-09, fix in PR, hardware verification pending)
 
 - Found by the gate for PR #60 (the backend now runs the fused GDN forward at `Hk != Hv`, so autograd reaches the fused backward at GQA shapes).
   Test: `fused gdn vjp matches the composed reference at equal head counts` (`may_fail`), conditioned inputs (unit-norm q and k, decay in
@@ -1168,4 +1168,7 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   for T > 1 (hence wrong gradients for whatever produces g: `A_log`, `dt_bias` and the `a` projection). This applied before PR #60; the old GQA
   test never saw it because the forward was composed at `Hk != Hv`. At `Hk != Hv` the backward is composed unless `MLX_OMARCHY_FUSED_VJP_GQA=1`.
   Inference is not affected (it never runs the backward). `MLX_OMARCHY_NO_FUSED_VJP=1` selects the composed backward everywhere.
-- Not fixed in this change; `gated_delta_vjp.comp` and the dg accumulation are the place to look.
+- Root cause (read from `gated_delta_vjp.comp`): each lane owns 4 of the 128 state columns and computed its own partial of `<s_hat, s_prev>`,
+  but only lane 0 wrote its partial to shared memory, so dg carried 4 of 128 columns. At T = 1 the initial state is zero, so every partial is
+  zero and dg looked exact. Fix: every lane writes its partial, and the workgroup sums all 32 lanes per row before the compare-exchange add.
+  The two `may_fail` marks on the GDN VJP cases are removed. Verification on Apple hardware is pending in the PR.
