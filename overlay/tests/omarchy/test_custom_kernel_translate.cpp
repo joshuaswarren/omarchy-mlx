@@ -845,3 +845,30 @@ TEST_CASE("an operator expression passed to a float16_t helper parameter convert
   CHECK(glsl.find("fma16(bc, _b0.data[t], float16_t(float(_b0.data[j]) + float(_b0.data[j + 1])))") != std::string::npos);
   CHECK(glsl.find("mix(float(bc), float(_b0.data[j]) + float(_b0.data[j + 1]))") != std::string::npos);
 }
+
+TEST_CASE("helper overloads: a float overload keeps its float argument, an all-half set still converts") {
+  // `pick(float16_t)` and `pick(float)` in the same header: the unwrapped float
+  // argument picks the float overload, as before the helper-argument pass.
+  // Wrapping it in float16_t() would silently pick the half overload (both
+  // compile, so only the translated text shows it). With only half overloads
+  // of that arity the argument still converts. A different arity is a
+  // different signature.
+  const char* source =
+      "float pick(float16_t x) { return 1.0; }\n"
+      "float pick(float x) { return 2.0; }\n"
+      "float both(float16_t a, float16_t b) { return 3.0; }\n"
+      "float both(float16_t a) { return 4.0; }\n"
+      "[[kernel]] void k(\n"
+      "    const device float16_t* w [[buffer(0)]],\n"
+      "    device float* out [[buffer(1)]],\n"
+      "    uint3 thread_position_in_grid [[thread_position_in_grid]]) {\n"
+      "  out[0] = pick(w[0] + w[1]);\n"
+      "  out[1] = both(w[0], w[0] + w[1]);\n"
+      "  out[2] = both(w[0] + w[1]);\n"
+      "}\n";
+  auto glsl = translate(source, 1);
+  CHECK(glsl.find("pick(float(_b0.data[0]) + float(_b0.data[1]))") != std::string::npos);
+  CHECK(glsl.find("pick(float16_t(") == std::string::npos);
+  CHECK(glsl.find("both(_b0.data[0], float16_t(float(_b0.data[0]) + float(_b0.data[1])))") != std::string::npos);
+  CHECK(glsl.find("both(float16_t(float(_b0.data[0]) + float(_b0.data[1])))") != std::string::npos);
+}

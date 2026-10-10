@@ -1791,12 +1791,12 @@ void wrap_half_lvalue_assignments(
 void wrap_half_call_arguments(std::string& body, const std::string& header) {
   static const std::regex definition(
       R"(\b[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*\{)");
-  std::unordered_map<std::string, std::vector<bool>> half_positions;
+  std::unordered_map<std::string, std::vector<std::vector<bool>>> signatures;
+  bool any_half = false;
   for (std::sregex_iterator it(header.begin(), header.end(), definition), stop;
        it != stop;
        ++it) {
     std::vector<bool> positions;
-    bool any_half = false;
     const std::string params = (*it)[2].str();
     size_t cursor = 0;
     while (cursor <= params.size()) {
@@ -1812,11 +1812,9 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
       any_half = any_half || is_half;
       cursor = comma + 1;
     }
-    if (any_half) {
-      half_positions[(*it)[1].str()] = std::move(positions);
-    }
+    signatures[(*it)[1].str()].push_back(std::move(positions));
   }
-  if (half_positions.empty()) {
+  if (!any_half) {
     return;
   }
   auto is_ident = [](char c) {
@@ -1854,8 +1852,8 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
       ++name_end;
     }
     const std::string name = body.substr(i, name_end - i);
-    const auto helper = half_positions.find(name);
-    if (helper == half_positions.end() || name_end >= body.size() ||
+    const auto helper = signatures.find(name);
+    if (helper == signatures.end() || name_end >= body.size() ||
         body[name_end] != '(') {
       i = name_end;
       continue;
@@ -1871,39 +1869,56 @@ void wrap_half_call_arguments(std::string& body, const std::string& header) {
     if (close >= body.size()) {
       break;
     }
-    std::string rebuilt = "(";
-    size_t arg_begin = name_end + 1;
-    size_t position = 0;
-    int arg_depth = 0;
-    bool changed = false;
-    for (size_t k = arg_begin; k <= close; ++k) {
-      const char c = body[k];
-      if (c == '(' || c == '[') {
-        ++arg_depth;
-      } else if ((c == ')' || c == ']') && k != close) {
-        --arg_depth;
-      }
-      if ((c == ',' && arg_depth == 0) || k == close) {
-        std::string arg = body.substr(arg_begin, k - arg_begin);
-        const bool half_slot =
-            position < helper->second.size() && helper->second[position];
-        const bool already =
-            arg.find("float16_t(") != std::string::npos &&
-            arg.find("float16_t(") == arg.find_first_not_of(" \t\n");
-        if (half_slot && !already && has_operator(arg)) {
-          const size_t lead = arg.find_first_not_of(" \t\n");
-          const size_t tail = arg.find_last_not_of(" \t\n");
-          arg = arg.substr(0, lead) + "float16_t(" +
-              arg.substr(lead, tail - lead + 1) + ")" + arg.substr(tail + 1);
-          changed = true;
+    std::vector<std::string> args;
+    {
+      size_t arg_begin = name_end + 1;
+      int arg_depth = 0;
+      for (size_t k = arg_begin; k <= close; ++k) {
+        const char c = body[k];
+        if (c == '(' || c == '[') {
+          ++arg_depth;
+        } else if ((c == ')' || c == ']') && k != close) {
+          --arg_depth;
         }
-        rebuilt += arg;
-        rebuilt += k == close ? ")" : ",";
-        arg_begin = k + 1;
-        ++position;
+        if ((c == ',' && arg_depth == 0) || k == close) {
+          args.push_back(body.substr(arg_begin, k - arg_begin));
+          arg_begin = k + 1;
+        }
+      }
+    }
+    // A position is half only when EVERY overload of this name and arity
+    // takes float16_t there: with a float overload in the set the unwrapped
+    // float argument picks that overload, and wrapping would silently pick
+    // the half one.
+    bool changed = false;
+    for (size_t position = 0; position < args.size(); ++position) {
+      bool any_signature = false;
+      bool all_half = true;
+      for (const auto& signature : helper->second) {
+        if (signature.size() != args.size()) {
+          continue;
+        }
+        any_signature = true;
+        all_half = all_half && signature[position];
+      }
+      std::string& arg = args[position];
+      const bool already =
+          arg.find("float16_t(") != std::string::npos &&
+          arg.find("float16_t(") == arg.find_first_not_of(" \t\n");
+      if (any_signature && all_half && !already && has_operator(arg)) {
+        const size_t lead = arg.find_first_not_of(" \t\n");
+        const size_t tail = arg.find_last_not_of(" \t\n");
+        arg = arg.substr(0, lead) + "float16_t(" +
+            arg.substr(lead, tail - lead + 1) + ")" + arg.substr(tail + 1);
+        changed = true;
       }
     }
     if (changed) {
+      std::string rebuilt = "(";
+      for (size_t position = 0; position < args.size(); ++position) {
+        rebuilt += args[position];
+        rebuilt += position + 1 == args.size() ? ")" : ",";
+      }
       body.replace(name_end, close - name_end + 1, rebuilt);
       i = name_end + rebuilt.size();
     } else {
