@@ -966,6 +966,12 @@ enum class ComputeKernel : uint16_t {
   // Append-only profile id.
   TakeU8,
   TakeMultiU8,
+  // Tiled sorted-expert gathered 4-bit/group-64 matmul for MoE prefill
+  // (shaders/gather_qmm_tile.comp): 32 rows x 64 columns per workgroup, the
+  // expert's weight tile dequantized once per run of rows. Appended to keep
+  // profile kernel ids stable. Append-only profile id.
+  GatherQmmTileF16,
+  GatherQmmTileBF16,
   Count,
 };
 
