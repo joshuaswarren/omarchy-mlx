@@ -1,6 +1,6 @@
 # oMLX serve on Linux: measured numbers (2026-10-09 and 2026-10-10)
 
-Raw run logs behind the "What you get: measured numbers" section of [docs/omlx-linux.md](../../docs/omlx-linux.md). Host names and local paths are replaced by chip names in the copies; nothing else was edited.
+Raw run logs of `oMLX serve` on Linux. These numbers are not in [docs/omlx-linux.md](../../docs/omlx-linux.md): the repository's measurement rules require provenance beside every published performance number, and these runs do not have it (see "Limits of this data"). They stay here as receipts until the runs are repeated with provenance. Host names and local paths are replaced by chip names in the copies; nothing else was edited.
 
 ## Method
 
@@ -11,7 +11,7 @@ Raw run logs behind the "What you get: measured numbers" section of [docs/omlx-l
 
 ## Table cells to files
 
-| doc row | file | prompt tokens | first token | decode |
+| row | file | prompt tokens | first token | decode |
 |---|---|---|---|---|
 | M2 Max, Qwen3.8-27B | `raw/m2max-new-qwen38-27b-1009T2311.run.log` | 267 | 5.104 s | 9.354 |
 | M1, Qwen3.5-9B (first run) | `raw/m1-new-qwen35-9b-1009T1712.run.log` | 356 | 5.438 s | 8.288 |
@@ -29,7 +29,7 @@ Old-pin partners for the version comparison (same machine, model and method). Th
 | M2 Max 35B offload | `raw/m2max-old-qwen36-35b-offload-1009T2304.run.log` | 2.84 (new 2.902, +2.2 %) |
 | M1 35B offload | `raw/m1-old-qwen36-35b-offload-1009T1813.run.log` | 1.434 (new 1.311, -8.6 %) |
 
-Prefill rates quoted in the doc are the `pilot rate` line of each run (the second, warm pilot request): 35.27 tok/s (M2 Max 27B, 142-token pilot), 40.82 and 41.26 tok/s (M1 9B, 100-token pilot).
+Prefill rates are the `pilot rate` line of each run (the second, warm pilot request): 35.27 tok/s (M2 Max 27B, 142-token pilot), 40.82 and 41.26 tok/s (M1 9B, 100-token pilot).
 
 ## Packed prefill (concurrent requests)
 

@@ -51,25 +51,6 @@ The pinned benchmark implementation (`omlx/admin/benchmark.py`) deliberately gen
 
 Admin routes in the pinned upstream implementation include login (`omlx/admin/routes.py:1815,1906`), chat (`:1862`), model downloads (`:7518`), and benchmark start/stream/results (`:8655-8870`). The benchmark request captures `model_id`, `prompt_lengths`, `generation_length`, `batch_sizes`, `context_profile`, and warmup mode (`omlx/admin/benchmark.py:109-118`). A real benchmark number requires a real model completion on the GPU; a stub backend or dev-box screenshot is not evidence for PP/TG or prefix-cache behavior.
 
-## What you get: measured numbers
-
-These numbers come from runs of `oMLX serve` on Linux with greedy decoding, the omarchy-mlx Vulkan backend and `OMLX_LINUX_CUSTOM_KERNELS=0`. Each row is the first request of one run on the v0.7.1.dev1 tree. The run method, every cell, the raw logs and the limits of this data (section "Limits of this data") are in [the numbers receipt](../receipts/2026-10-10-omlx-linux-numbers/README.md#limits-of-this-data).
-
-| machine | model | prompt | first token | decode tok/s |
-|---|---|---|---|---|
-| M2 Max, 96 GB | Qwen3.8-27B 4-bit | 267 tokens | 5.1 s | 9.35 |
-| M1, 16 GB | Qwen3.5-9B 4-bit (MLX) | 356 tokens | 5.4 s | 8.29 |
-| M1, 16 GB | Qwen3.5-9B 4-bit (MLX) | 476 tokens | 6.9 s | 8.31 |
-| M2 Max, 96 GB | Qwen3.6-35B-A3B 4-bit, expert offload at 25 percent | 90 tokens | 10.0 s | 2.90 |
-| M1, 16 GB | Qwen3.6-35B-A3B 4-bit, expert offload at 10 percent | 43 tokens | 19.8 s | 1.31 |
-
-What these numbers say:
-
-- Prefill ran at about 35 tok/s on the M2 Max with the 27B model and at 41 tok/s on the M1 with the 9B model.
-- Several requests at once do not raise prefill speed. oMLX packs concurrent prefills into one forward pass, and that pass ran at 60 to 69 tok/s on the M1 with the 9B model, the same rate as one 476-token request (about 68 tok/s). With 4 prompts the slowest first token arrived after 14.5 s and 17.0 s in two repeats; with 8 prompts, after 26.2 s and 25.9 s.
-- Expert offload lets a mixture-of-experts model run on a machine that cannot hold it, at a high cost: 1.31 and 2.90 tok/s for the 35B model in the rows above.
-- The memory the offload path needs is close to the weights it keeps resident. For Qwen3-30B-A3B the measured peak after a 128-token prefill was 3.0 to 7.2 percent above the admission estimate, at residencies 0.25, 0.4 and 0.5.
-
 ## Limitations and evidence
 
 The package's compatibility and server-smoke receipt is the source of truth for what has run. A green import, `/health` response, screenshot of an unconnected mock, or API response from a stub backend does not prove model loading, chat generation, benchmark values, or partial prefix-hit behavior. Record missing hardware/UI runs as unverified instead of inferring success.
