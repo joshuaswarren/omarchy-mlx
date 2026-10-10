@@ -1151,7 +1151,7 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
   the fix commit (see receipts/2026-10-08-audit-followups/README.md for
   counts).
 
-## Fused GDN backward: the gate gradient dg differs from the composed reference for T > 1 (found 2026-10-09, fix in PR, hardware verification pending)
+## Fused GDN backward: the gate gradient dg differs from the composed reference for T > 1 (found 2026-10-09, fixed in this change, verified on G13C)
 
 - Found by the gate for PR #60 (the backend now runs the fused GDN forward at `Hk != Hv`, so autograd reaches the fused backward at GQA shapes).
   Test: `fused gdn vjp matches the composed reference at equal head counts` (`may_fail`), conditioned inputs (unit-norm q and k, decay in
@@ -1171,4 +1171,5 @@ calls the same built-in as before; the serve-path corr and Laya dev-set checks i
 - Root cause (read from `gated_delta_vjp.comp`): each lane owns 4 of the 128 state columns and computed its own partial of `<s_hat, s_prev>`,
   but only lane 0 wrote its partial to shared memory, so dg carried 4 of 128 columns. At T = 1 the initial state is zero, so every partial is
   zero and dg looked exact. Fix: every lane writes its partial, and the workgroup sums all 32 lanes per row before the compare-exchange add.
-  The two `may_fail` marks on the GDN VJP cases are removed. Verification on Apple hardware is pending in the PR.
+  The two `may_fail` marks on the GDN VJP cases are removed. After the fix dg agrees with the composed reference (relative L2 0.000000) and with
+  the float32 CPU reference (0.0015) at all four shapes on M1 Max (G13C); receipts/2026-10-10-gdn-vjp-dg/. M1 (G13G) and M2 Max (G14C) not run.
