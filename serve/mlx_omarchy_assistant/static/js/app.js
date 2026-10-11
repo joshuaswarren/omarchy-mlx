@@ -555,9 +555,14 @@ export class App {
     if (this.streamAbort) this.streamAbort.abort();
     const ctrl = new AbortController();
     this.streamAbort = ctrl;
-    const { openEvents } = await import("./api.js");
+    const { openEvents, followEvents } = await import("./api.js");
     try {
-      await openEvents(this.conversation.id, this.view.lastSequence, {
+      // The server closes the stream when no turn runs and after 15 s, so
+      // keep reopening from the last sequence while a turn is active.
+      await followEvents({
+        open: (after, opts) => openEvents(this.conversation.id, after, opts),
+        getAfter: () => this.view.lastSequence,
+        isActive: () => !!this.activeTurn,
         signal: ctrl.signal,
         onEvent: (event) => this.handleEvent(event),
       });
@@ -773,6 +778,9 @@ export class App {
     this.activeTurn = turnId;
     this.view.setTurn(turnId);
     this.view.startHeartbeat();
+    // The stream opened at page load ended while the conversation was idle;
+    // open one for this turn. It resumes from the last sequence seen.
+    this.openStream().catch(() => {});
     this.composer.setBusy(true);
     this.updateHeader(this.status);
     announce(this.live, "Assistant is responding.");

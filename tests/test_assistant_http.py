@@ -63,6 +63,46 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/conversations', {'save': False}, missing)[0], 403)
         self.assertEqual(self.request('POST', '/api/conversations', {'save': False}, headers)[0], 201)
 
+    def _open_events(self, headers, cid, after=0):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        self.addCleanup(conn.close)
+        conn.request('GET', f'/api/conversations/{cid}/events?after={after}', None, headers)
+        return conn.getresponse()
+
+    def test_events_stream_ends_at_once_when_no_turn_runs(self):
+        # The client has to reopen the stream for each turn: the server ends
+        # an idle conversation's stream immediately.
+        headers = self.login()
+        cid = json.loads(self.request('POST', '/api/conversations', {'save': False}, headers)[2])['id']
+        started = time.monotonic()
+        response = self._open_events(headers, cid)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.read(), b'')
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_events_stream_sends_keepalive_comments_while_a_turn_runs(self):
+        headers = self.login()
+        cid = json.loads(self.request('POST', '/api/conversations', {'save': False}, headers)[2])['id']
+        turn_done = threading.Event()
+        self.addCleanup(turn_done.set)
+        store = self.server.store
+        real_get = store.get
+
+        def get(conversation_id):
+            record = dict(real_get(conversation_id))
+            if not turn_done.is_set():
+                record['active_turn'] = 'running-turn'
+            return record
+
+        with mock.patch.object(server_module, 'EVENTS_KEEPALIVE_SECONDS', 0.2), \
+                mock.patch.object(store, 'get', side_effect=get):
+            response = self._open_events(headers, cid)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.fp.readline(), b': keepalive\n')
+            self.assertEqual(response.fp.readline(), b'\n')
+            turn_done.set()
+            response.read()
+
     def test_history_export_and_delete_use_real_http(self):
         headers = self.login()
         status, _, data = self.request('POST', '/api/conversations', {'save': True}, headers)

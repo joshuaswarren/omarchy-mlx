@@ -372,3 +372,27 @@ export async function openEvents(conversationId, after, { signal, onEvent } = {}
   if (!res.ok || !res.body) throw new Error(`events failed (${res.status})`);
   await readSseStream(res.body, onEvent);
 }
+
+// The server ends the events stream as soon as the conversation has no
+// running turn, and after 15 s even while one runs. A client that opened the
+// stream once at page load therefore never sees the events of a later turn.
+// followEvents keeps reopening from the last sequence seen for as long as
+// `isActive()` says a turn is running. An idle end, an abort or an error
+// stops it; errors propagate so the caller can refetch the conversation.
+// Reopening only reads: it never resubmits a turn. A reopen that carried no
+// event backs off from 250 ms to 4 s so a turn the server has not started
+// streaming yet does not cause a tight loop.
+export async function followEvents({ open, getAfter, isActive, signal, sleep, onEvent }) {
+  const wait = sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  let delay = 250;
+  for (;;) {
+    const before = getAfter();
+    await open(before, { signal, onEvent });
+    if (signal && signal.aborted) return;
+    if (!isActive()) return;
+    delay = getAfter() !== before ? 250 : Math.min(delay * 2, 4000);
+    await wait(delay);
+    if (signal && signal.aborted) return;
+    if (!isActive()) return;
+  }
+}
