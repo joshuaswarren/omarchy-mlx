@@ -34,11 +34,30 @@ switch the flush estimate to measured per-dispatch GPU time.
 
 ## Results
 
+### 13-inch M1 (G13G, stock Mesa 26.2.4-1, pinned by `VK_DRIVER_FILES`, lib sha256 a70fb890552f...)
+
+Qwen3-4B-Instruct-2507-4bit, 64 decode tokens after a 512-token prefill,
+load average 0.29 at start, kernel 7.1.12-2-12.6-sep-ARCH. Recomputed from
+the raw per-dispatch timestamp streams; the run's own summary lines agree
+to the displayed precision. Decode tok/s at each budget from the same run:
+
+| MLX_OMARCHY_BATCH_WORK | submissions | p50 ms | p95 ms | p99 ms | max ms | decode tok/s |
+|---|---|---|---|---|---|---|
+| 0 (cap off) | 71 | 89.44 | 90.75 | 324.19 | 842.45 | 8.651 |
+| 40000 (old default) | 287 | 23.56 | 24.70 | 170.71 | 189.85 | 8.588 |
+| 20000 | 574 | 11.97 | 17.34 | 93.29 | 95.18 | 8.545 |
+| 5000 | 1868 | 3.47 | 6.96 | 23.79 | 23.92 | 8.128 |
+| 2000 | 2768 | 2.31 | 6.90 | 13.86 | 14.03 | 8.004 |
+| 1000 | 5394 | 1.18 | 1.84 | 9.81 | 13.23 | 7.279 |
+
+The shipped 40000 default leaves this board at p50 23.6 ms, about 4x the
+band top. In band: 5000 and 2000. The G13G row takes 5000: same p95 as
+2000, 1.5% better decode tok/s, and 40% fewer submissions. Cost against
+cap off is -6.0%; cap off on this board means 89 ms submissions, so the
+cost buys the smooth band the reporter describes. Calibrated on the 4B
+model only (the only model cached on that machine).
+
 ### 16-inch M1 Max (G13C, lab-default Mesa 69bde15340)
-
-(FILLED FROM RECEIPTS)
-
-### 13-inch M1 (G13G, stock Mesa 26.2.4-1, pinned)
 
 (FILLED FROM RECEIPTS)
 
