@@ -29,6 +29,9 @@ PREVIEW_SENTENCE = "Hello. This is a short preview of the selected voice."
 # Seconds between pre-warm grant retries while the pair worker start holds
 # the GPU (an idle resident worker never reaches a yield point).
 PREWARM_RETRY_SECONDS = 5.0
+# While a turn runs and produces no event, the events stream sends an SSE
+# comment line this often so proxies and browsers see a live connection.
+EVENTS_KEEPALIVE_SECONDS = 5.0
 
 
 
@@ -578,6 +581,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             deadline = time.monotonic() + 15
+            last_write = time.monotonic()
             while time.monotonic() < deadline:
                 try:
                     events = app.store.events(cid, after)
@@ -589,8 +593,13 @@ class Handler(BaseHTTPRequestHandler):
                     after = event["sequence"]
                 if events:
                     self.wfile.flush()
+                    last_write = time.monotonic()
                 if not app.store.get(cid)["active_turn"]:
                     break
+                if time.monotonic() - last_write >= EVENTS_KEEPALIVE_SECONDS:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    last_write = time.monotonic()
                 with app.store.changed:
                     app.store.changed.wait(timeout=1)
             self.close_connection = True
