@@ -15477,8 +15477,8 @@ void ScaledDotProductAttention::eval_gpu(
               s);
           // Every chunk's score, probability and result buffers stay pinned until
           // the batch drains, so a long prefill that queues all chunks holds
-          // chunks x working-set bytes at once (L = 16384, H = 8 asks for about 18
-          // GiB, which a 16 GB M1's 7.5 GiB heap cannot give). Drain the batch
+          // chunks x working-set bytes at once (L = 16384, H = 8: 8 x 2.004 GiB =
+          // 16.03 GiB, more than a 16 GB M1's 7.55 GiB heap). Drain the batch
           // whenever the pinned bytes would pass a quarter of the heap; a working
           // set above that drains after every chunk.
           pinned_bytes += scores_c.nbytes() + probs_c.nbytes() + result_c.nbytes();
