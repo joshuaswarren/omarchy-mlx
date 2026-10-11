@@ -9,7 +9,9 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. No table here was measured on the newer lab driver, Mesa PR 6 at commit `69bde15340`. Rows measured on it will be added with the driver named.
+How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. The tables below name the driver they used, or say that it was not recorded. Rows on the newer driver, Mesa git `69bde15340`, are in their own section at the end.
+
+Noise. Prefill is steady. Its spread over repeat runs is 0.0 to 3.0% on the M1 chips and 0.2 to 0.5% on the M2 Max, except Qwen3.8-27B (4.6%) and gemma-4-31B (11.5%) on the M2 Max. Decode is not steady across hours on the M1 chips. On the 16-inch M1 Max, gemma-4-26B-A4B decode ranged from 10.17 to 12.96 tokens per second over 18 runs (23.9%). On the 13-inch M1, gemma-4-E4B ranged from 8.85 to 13.64 over 10 runs (53.9%) and Qwen3.5-9B from 6.93 to 12.51 over 5 runs on one boot (44.8%). On the 14-inch M2 Max, gemma-4-26B-A4B ranged by 7.4% over 14 runs and Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Ornith-1.5-35B-A3B and Qwen3.8-27B by 0.9 to 2.0%. gemma-4-31B ranged by 12.0% and is marked noisy. Inside an interleaved block, where two drivers alternate within minutes, the control spread was 0.0 to 3.4% in seven of eight blocks and 11.1% in one. Only the blocks in the last section were interleaved. Every other row in this document is a single run, or a median of repeats taken at one time, with no paired control.
 
 The mixture-of-experts models are the largest gap on decode: gemma-4-26B-A4B reaches 19% of macOS and Qwen3.6-35B-A3B 18%. Their prefill rose after PR #81 landed on main. It is not in v0.7.32. gemma-4-26B-A4B went from 29.9 to 116.50 tokens per second (3.9 times, now 21% of macOS) and Qwen3.6-35B-A3B from 39.4 to 116.37 (2.95 times, now 19%). The dense models reach 41-69% on decode and 64-88% on prefill. On the same Linux GPU, llama.cpp is now 2.3 times faster than MLX at gemma-4-26B-A4B prefill. It was 8.9 times. gemma-4-E4B stalled a GPU submit on the v0.7.32 wheel. On main it runs, after fix #75, at 41% of macOS on decode and 64% on prefill. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9). Downloads ran before the timed rows. Both can only lower the macOS numbers.
 
@@ -103,6 +105,65 @@ On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B, and it
 
 gemma-4-E4B runs on main since the rope-frequency fix (#75). That fix is not in v0.7.32. On main at `e57cb301` it measured 10.46 / 20.52 = 51% decode and 114.31 / 143.09 = 80% prefill 512. That run used the private ICD at Mesa git `6543eeb7df7` and started with a load average of 0.90 and the ANE busy. An earlier run on the `158fee60` development wheel gave 10.47 and 113.6. Its greedy output digest (118c7586) differs from macOS (491eb46b), so the row does not count as matching.
 
-Driver for the base M1 rows: the Honeykrisp driver from the packaged `omarchy-mlx-vulkan` 0.7.28-2 (Mesa git e7631595df), selected with no override. The system Mesa 26.2.4-1 stays installed. The newer rows on this chip (gemma-4-E4B on main and the models added on 2026-10-11) used the private ICD at Mesa git `6543eeb7df7` instead, as stated for each. For the M1 Max tables above the driver build was not recorded, except for the two MoE rows re-measured on 2026-10-10 and the gemma-4-E4B row measured on 2026-10-11. The lab is moving to a newer patched driver; the tables get a before and after column once the scoreboard has been re-run on it.
+Driver for the base M1 rows: the Honeykrisp driver from the packaged `omarchy-mlx-vulkan` 0.7.28-2 (Mesa git e7631595df), selected with no override. The system Mesa 26.2.4-1 stays installed. The newer rows on this chip (gemma-4-E4B on main and the models added on 2026-10-11) used the private ICD at Mesa git `6543eeb7df7` instead, as stated for each. For the M1 Max tables above the driver build was not recorded, except for the two MoE rows re-measured on 2026-10-10 and the gemma-4-E4B row measured on 2026-10-11. Rows on the newer driver are in the last section.
 
 Rows are re-measured as the lab scoreboard runs; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
+
+## Rows on the newer driver
+
+These rows ran on the newer patched driver, Mesa git `69bde15340` (the installed package library), measured on 2026-10-11. The wheel is main at `e57cb301` for every row. The reference is the private ICD at Mesa git `6543eeb7df7`, called v3 below. Nothing in this section compares with macOS.
+
+Every single run below started with a load average between 0.98 and 1.68, above the 0.5 target, so its numbers may be low. The M2 Max rows ran with the compute-preemption option on.
+
+On the 14-inch M2 Max the newer driver raises decode by 8.5 to 15.9% in four blocks. Prefill moves by 0.3 to 1.0%. On the 16-inch M1 Max it raises gemma-4-26B-A4B decode by 1.7 to 2.9% and leaves prefill flat. On the 13-inch M1 it raises gemma-4-E4B decode by 1.4% and moves prefill by 0.4% down. The percentages come from the ratios in the table. Only within-block ratios are comparable.
+
+### Interleaved blocks
+
+In a block the two drivers alternate, three runs each, within minutes. This is the only kind of row here with a paired control. Ratios are newer driver over v3, from the medians.
+
+| Chip | Model | v3 decode | Newer driver decode | Decode ratio | Prefill ratio | Control spread |
+|---|---|---|---|---|---|---|
+| 14-inch M2 Max | gemma-4-26B-A4B | 10.90, 10.90, 10.90 | 12.22, 12.20, 12.08 | 1.119 | 1.010 | 0.0% |
+| 14-inch M2 Max | Qwen3.6-35B-A3B | 13.09, 13.09, 13.07 | 14.55, 14.54, 14.55 | 1.112 | 1.007 | 0.2% |
+| 14-inch M2 Max | Qwen3-Coder-30B-A3B | 11.92, 11.91, 11.88 | 12.92, 12.94, 12.92 | 1.085 | 1.003 | 0.3% |
+| 14-inch M2 Max | Ornith-1.5-35B-A3B | 8.57, 8.57, 8.57 | 9.92, 9.93, 9.93 | 1.159 | 1.006 | 0.0% |
+| 14-inch M2 Max | gemma-4-31B | 8.12, 9.10, 9.13 | 9.57, 9.54, 8.71 | 1.048 | 1.020 | 11.1% |
+| 16-inch M1 Max | gemma-4-26B-A4B | 11.68, 11.69, 11.70 | 11.99, 11.89, 11.89 | 1.017 | 1.001 | 0.2% |
+| 16-inch M1 Max | gemma-4-26B-A4B | 11.92, 11.84, 11.52 | 11.94, 12.18, 12.49 | 1.029 | 1.001 | 3.4% |
+| 13-inch M1 | gemma-4-E4B | 8.86, 8.85, 8.87 | 9.02, 8.98, 8.97 | 1.014 | 0.996 | 0.2% |
+
+The gemma-4-31B block is noisy. No gain or loss is claimed from it, and a re-run is queued. In the second 16-inch M1 Max block the newer driver rises across the rounds and the control stays within 3.4%. Read it as +1.7 to +2.9%. In the 13-inch M1 block the ANE filler was on in 5 of the 6 runs.
+
+### 14-inch M2 Max, single runs
+
+Each row is one run on the newer driver against the v3 median of the retained runs on the same wheel. When the v3 spread is wide, the ratio says little. The blocks above replace these rows for gemma-4-26B-A4B, Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B and Ornith-1.5-35B-A3B. gemma-4-31B has no valid block yet.
+
+| Model | Newer driver decode / prefill 512 | v3 median decode / prefill (runs, decode spread) | Decode ratio | Prefill ratio | Start load |
+|---|---|---|---|---|---|
+| Qwen3.8-27B | 15.0 / 106.16 | 14.84 / 106.4 (6, 0.9%) | 1.011 | 0.998 | 1.06 |
+| gemma-4-31B | 9.6 / 77.23 | 9.10 / 77.8 (9, 12.0%) | 1.055 | 0.993 | 1.06 |
+| Qwen3.5-9B | 40.3 / 450.9 | 38.80 / 441.4 (1) | 1.039 | 1.021 | 1.68 |
+| gemma-4-26B-A4B | 12.04 / 149.81 | 10.59 / 147.9 (14, 7.4%) | 1.137 | 1.013 | 1.05 |
+| Qwen3.6-35B-A3B | 14.56 / 144.87 | 13.07 / 144.0 (9, 1.8%) | 1.114 | 1.006 | 0.98 |
+| Qwen3-Coder-30B-A3B | 12.89 / 132.5 | 11.89 / 131.9 (4, 2.0%) | 1.084 | 1.004 | 1.00 |
+| Ornith-1.5-35B-A3B | 9.92 / 61.27 | 8.57 / 61.0 (4, 1.6%) | 1.158 | 1.005 | 1.00 |
+| gemma-4-E4B | 15.22 / 514.7 | 15.06 / 508.3 (1) | 1.011 | 1.013 | 1.49 |
+
+### 16-inch M1 Max, single runs
+
+The v3 median of gemma-4-26B-A4B spans 10.17 to 12.96 over 18 runs, so its single-run ratios say little. Use the blocks above for that model.
+
+| Model | Newer driver decode / prefill 512 | v3 median decode / prefill (runs, decode spread) | Decode ratio | Prefill ratio | Start load |
+|---|---|---|---|---|---|
+| gemma-4-26B-A4B | 11.96 / 116.51 | 11.68 / 116.4 (18, 23.9%) | 1.024 | 1.001 | 1.03 |
+| gemma-4-26B-A4B | 11.85 / 116.72 | 11.68 / 116.4 (18, 23.9%) | 1.014 | 1.003 | 1.06 |
+| gemma-4-31B | 9.27 / 63.05 | 10.09 / 63.2 (1) | 0.919 | 0.998 | 1.53 |
+| gemma-4-E4B | 31.98 / 367.03 | 30.45 / 366.7 (3, 0.3%) | 1.050 | 1.001 | 1.22 |
+| Ornith-1.5-35B-A3B | 8.62 / 35.84 | 8.48 / 36.0 (1) | 1.017 | 0.996 | 1.25 |
+| Qwen3-Coder-30B-A3B | 12.09 / 103.82 | 11.65 / 102.4 (2, 0.6%) | 1.037 | 1.014 | 1.25 |
+| Qwen3.5-9B | 38.87 / 309.19 | 37.53 / 309.6 (2, 0.1%) | 1.036 | 0.999 | 1.37 |
+| Qwen3.6-35B-A3B | 14.05 / 117.91 | 13.75 / 117.5 (1) | 1.022 | 1.003 | 1.08 |
+
+### 13-inch M1, single runs
+
+gemma-4-E4B on the newer driver: 9.02 / 111.21, 9.05 / 111.59 and 9.08 / 110.0 (decode / prefill 512), with start loads of 1.21, 1.10 and 1.50. The interleaved block above gives a decode ratio of 1.014 and a prefill ratio of 0.996. No other 13-inch M1 row is published for the newer driver. Decode on this chip dropped partway through the day. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md).
