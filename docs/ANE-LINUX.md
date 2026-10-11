@@ -25,7 +25,7 @@ kernel and driver module build it ran on, because they changed between runs:
   The output is bit-exact against the Apple fp16 golden (maximum absolute
   difference 0.0, no NaN or inf, no new EXCH-fail, DART-fault, quarantine or
   completion-wait-failed lines). The full result, with the decode check, is in
-  the receipt.
+  the raw files.
 - Qwen3.8-2B decode on the ANE, 38 programs per step, in a resident session
   (module builds `329b9da` and `ca09ce8`): 1.21 tokens per second against 0.157
   for the per-call path (7.7 times), with logits identical between the two arms.
@@ -39,7 +39,7 @@ kernel and driver module build it ran on, because they changed between runs:
   (`sudo pacman -S blas-openblas`). The 16 generated tokens were the same as before. The float32 logits differ at the
   rounding level (largest difference 4.0e-5), so the earlier logits hash no longer applies. The ANE part of a step was
   slower on this boot (0.185 s and 0.200 s, against 0.163 s), and the cause was not isolated. The raw files are in the
-  [receipt](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-resident-decode-openblas).
+  [results folder](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-resident-decode-openblas).
 - Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13
   percent of calls take longer than 0.4 ms, in a pattern that repeats every 8
   calls.
@@ -48,11 +48,11 @@ kernel and driver module build it ran on, because they changed between runs:
   over the 38 Qwen3.8-2B programs loaded 38 of 38 each time. The allocator total grew by 2.4 GB in pass 1, by 196,608
   bytes in pass 2 and by 0 bytes in pass 3. The inputs were zeros and no decode ran through this path, so this is not a
   tokens-per-second figure. The raw files are in the
-  [receipt](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-prog-lookup).
+  [results folder](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-prog-lookup).
 
 Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and Parakeet on module
 `bd34a12`. On the earlier module `ca09ce8`, a second pass over the 38 programs failed 5 times with a buffer-allocation
-error. The receipt above shows that pass loading on `bd34a12`. A tokens-per-second figure for the per-call path on that
+error. The raw files above show that pass loading on `bd34a12`. A tokens-per-second figure for the per-call path on that
 module has not been measured.
 
 ## Turn on the ANE for your chip
