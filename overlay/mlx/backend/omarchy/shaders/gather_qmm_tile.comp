@@ -153,6 +153,9 @@ void main() {
     uint w_base = params.rhs_offset + expert * w_row_words +
         (n0 + load_col) * words_per_row + load_word;
     uint scale_base = expert * scale_row_words + (n0 + load_col) * groups_per_row;
+    // A thread whose two rows both lie outside the run adds only zero products and its
+    // outputs are not stored, so it skips the multiply-add loop (barriers stay outside).
+    bool row_active = (2u * tr < run_end) && (2u * tr + 1u >= run_begin);
     for (uint k0 = 0u; k0 < K; k0 += TK) {
       for (uint i = 0u; i < 8u; ++i) {
         uint idx = t + i * 256u;
@@ -175,13 +178,15 @@ void main() {
         }
       }
       barrier();
-      for (uint kk = 0u; kk < TK; ++kk) {
-        float x0 = sX[kk][2u * tr];
-        float x1 = sX[kk][2u * tr + 1u];
-        for (uint c = 0u; c < 4u; ++c) {
-          float w = sW[kk][4u * tc + c];
-          acc[c] += x0 * w;
-          acc[4u + c] += x1 * w;
+      if (row_active) {
+        for (uint kk = 0u; kk < TK; ++kk) {
+          float x0 = sX[kk][2u * tr];
+          float x1 = sX[kk][2u * tr + 1u];
+          for (uint c = 0u; c < 4u; ++c) {
+            float w = sW[kk][4u * tc + c];
+            acc[c] += x0 * w;
+            acc[4u + c] += x1 * w;
+          }
         }
       }
       barrier();
