@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <numeric>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/unsupported.h"
 #include "mlx/stream.h"
 
 namespace mlx::core::omarchy {
@@ -54,6 +56,40 @@ inline ComputeBinding binding(const array& value) {
       std::min<VkDeviceSize>(std::max<VkDeviceSize>(word_end, 1),
                              buffer->size),
       buffer};
+}
+
+// A storage-buffer slot of a flat-index elementwise dispatch, as the
+// chunk splitter in dispatch_compute_chunked must see it.
+struct ChunkedBinding {
+  // The single-dispatch binding, exactly as the call site builds it
+  // today. Reused verbatim whenever every range fits the limit and for
+  // slots a chunk never re-binds (dummies, scalar and modulo operands).
+  ComputeBinding bind;
+  // Non-null only for a flat whole-array operand the shader addresses
+  // as offset + index: a chunk re-binds it at the chunk's first element
+  // so the flat index stays the element index. Null for dummy slots and
+  // for scalar/modulo operands, whose addresses do not follow the flat
+  // index.
+  const array* shift;
+  // Broadcast period in items for a shader address of the form
+  // offset + index % period (0 = none). Chunk starts are multiples of
+  // every period, which makes index % period invariant under the shift.
+  uint32_t period;
+};
+
+// Classify one elementwise operand slot. |operand_size| is the params
+// *_size the shader uses (the operand's data_size), |count| the full
+// dispatch count. size == 1 addresses one constant element; size ==
+// count is flat; anything between is a broadcast period.
+inline ChunkedBinding chunk_operand(
+    const array& value,
+    ComputeBinding bind,
+    uint32_t operand_size,
+    uint32_t count) {
+  if (operand_size == count && count > 1) {
+    return {bind, &value, 0};
+  }
+  return {bind, nullptr, operand_size > 1 ? operand_size : 0};
 }
 
 // Per-stream command recorder over the device's single VkQueue. Recording
@@ -325,6 +361,14 @@ class MLX_API CommandEncoder {
       uint32_t group_count_y = 1,
       uint32_t group_count_z = 1);
 
+  // The largest storage-buffer range one binding may address: the
+  // device's maxStorageBufferRange, lowered by
+  // MLX_OMARCHY_MAX_STORAGE_RANGE (bytes, floored at 1 KiB) so tests
+  // can exercise the chunk splitter on small arrays. Chunks are built
+  // under this limit; dispatch_compute_pipeline still enforces the raw
+  // device cap.
+  VkDeviceSize storage_buffer_range_limit() const;
+
   // Record a four-byte-word fill. Size and offset must be multiples of 4.
   void fill_buffer(
       VkBuffer dst,
@@ -548,5 +592,121 @@ class MLX_API CommandEncoder {
 MLX_API CommandEncoder& get_command_encoder(Stream s);
 std::unordered_map<int, CommandEncoder>& get_command_encoders();
 std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
+
+// Issue one flat-index elementwise dispatch, split into chunks along the
+// flat element index when a whole-array binding would exceed
+// storage_buffer_range_limit(). One binding cannot address past that
+// limit (encoder refuses in dispatch_compute_pipeline), but the flat
+// kernels compute addresses as offset + index (or offset +
+// index % period for broadcast operands), so the dispatch over global
+// elements [first, first + n) is the same shader program with
+// params.count = n and each flat buffer's descriptor offset moved by
+// first * itemsize, provided first is a multiple of every broadcast
+// period and of the 16-byte descriptor alignment step of every shifted
+// dtype. A chunk therefore re-binds each shifted slot at a 16-byte
+// aligned descriptor offset with a word-rounded within-limit range and
+// leaves every ComputeParams field except count untouched, which keeps
+// scalar offsets, broadcast periods, and word-lane geometry identical
+// to the single dispatch. Strided addressing (dims > 0) cannot shift;
+// call sites keep those paths on plain dispatch_compute so an oversized
+// binding still raises the named refusal. Chunk counts are multiples of
+// 4 so the vec4 fast-path kernels and word-window kernels keep the
+// count alignment their call-site gates checked on the full count.
+// |emit|(first, chunk_params, chunk_bindings) records one chunk; a
+// single-chunk problem calls it once with first = 0 and the original
+// bindings, byte-identical to a plain dispatch_compute.
+template <typename Emit>
+inline void dispatch_compute_chunked(
+    CommandEncoder& encoder,
+    const std::string& name,
+    const array& out,
+    std::vector<ChunkedBinding> chunk_bindings,
+    const ComputeParams& params,
+    Emit&& emit) {
+  const uint64_t count = params.count;
+  const VkDeviceSize limit = encoder.storage_buffer_range_limit();
+  VkDeviceSize max_range = 0;
+  // 4 keeps every chunk count a multiple of the vec4/word window width.
+  uint64_t step = 4;
+  for (const auto& slot : chunk_bindings) {
+    max_range = std::max(max_range, slot.bind.range);
+    if (slot.shift != nullptr) {
+      // first * itemsize must stay 16-byte aligned for the descriptor
+      // offset (minStorageBufferOffsetAlignment is 16 on every device
+      // this backend targets, and a shifted binding is invalid Vulkan
+      // otherwise).
+      const uint64_t is = slot.shift->itemsize();
+      step = std::lcm(step, 16 / std::gcd(is, 16));
+    } else if (slot.period > 1) {
+      // A modulo operand keeps its whole-array binding: its addresses
+      // do not follow the flat index, so the chunk cannot shrink it.
+      if (slot.bind.range > limit) {
+        unsupported(name + " broadcast operand storage range", out);
+      }
+      step = std::lcm(step, slot.period);
+    }
+    if (step > std::numeric_limits<uint32_t>::max()) {
+      unsupported(name + " broadcast period chunk step", out);
+    }
+  }
+  std::vector<ComputeBinding> binds(chunk_bindings.size());
+  if (max_range <= limit || count == 0) {
+    for (size_t i = 0; i < chunk_bindings.size(); ++i) {
+      binds[i] = chunk_bindings[i].bind;
+    }
+    emit(0, params, binds);
+    return;
+  }
+  // Largest chunk that keeps every shifted range within the limit. A
+  // chunk range is word_round(begin + n * itemsize) - begin, at most
+  // n * itemsize + 3 bytes; the view offset itself must already sit on
+  // a 16-byte boundary or no chunk can shift this buffer.
+  uint64_t chunk = count;
+  for (const auto& slot : chunk_bindings) {
+    if (slot.shift == nullptr) {
+      continue;
+    }
+    const array& value = *slot.shift;
+    const uint64_t is = value.itemsize();
+    if (value.offset() % 16 != 0) {
+      unsupported(name + " storage range view offset", out);
+    }
+    chunk = std::min(chunk, (static_cast<uint64_t>(limit) - 3) / is);
+  }
+  chunk = (chunk / step) * step;
+  if (chunk == 0) {
+    unsupported(name + " storage range chunk", out);
+  }
+  for (uint64_t first = 0; first < count; first += chunk) {
+    const uint32_t n = static_cast<uint32_t>(
+        std::min(chunk, count - first));
+    ComputeParams chunk_params = params;
+    chunk_params.count = n;
+    for (size_t i = 0; i < chunk_bindings.size(); ++i) {
+      const ChunkedBinding& slot = chunk_bindings[i];
+      if (slot.shift == nullptr) {
+        binds[i] = slot.bind;
+        continue;
+      }
+      const auto* buffer =
+          static_cast<const VulkanBuffer*>(slot.shift->buffer().ptr());
+      const uint64_t is = slot.shift->itemsize();
+      const VkDeviceSize begin =
+          static_cast<VkDeviceSize>(slot.shift->offset()) +
+          static_cast<VkDeviceSize>(first) * static_cast<VkDeviceSize>(is);
+      const VkDeviceSize word_end = ((begin +
+          static_cast<VkDeviceSize>(n) * static_cast<VkDeviceSize>(is)) +
+          3) & ~static_cast<VkDeviceSize>(3);
+      binds[i] = ComputeBinding{
+          buffer->buffer,
+          begin,
+          std::min<VkDeviceSize>(
+              std::max<VkDeviceSize>(word_end - begin, 1),
+              buffer->size - begin),
+          buffer};
+    }
+    emit(first, chunk_params, binds);
+  }
+}
 
 } // namespace mlx::core::omarchy

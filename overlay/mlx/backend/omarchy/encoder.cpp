@@ -587,6 +587,22 @@ void CommandEncoder::dispatch_compute(
       group_count_z);
 }
 
+VkDeviceSize CommandEncoder::storage_buffer_range_limit() const {
+  const char* text = std::getenv("MLX_OMARCHY_MAX_STORAGE_RANGE");
+  VkDeviceSize env_limit = 0;
+  if (text != nullptr) {
+    char* end = nullptr;
+    const unsigned long long value = std::strtoull(text, &end, 10);
+    // Absent, unparsable, or absurdly small keeps the device cap: the
+    // splitter needs room for at least one 4-item chunk per dtype.
+    if (end != text && value >= 1024) {
+      env_limit = static_cast<VkDeviceSize>(value);
+    }
+  }
+  const VkDeviceSize cap = device_.capabilities().max_storage_buffer_range;
+  return env_limit == 0 ? cap : std::min(env_limit, cap);
+}
+
 void CommandEncoder::dispatch_compute_pipeline(
     VkPipeline pipeline,
     ComputeKernel profile_kernel,
@@ -629,8 +645,9 @@ void CommandEncoder::dispatch_compute_pipeline(
   // reports INT32_MAX because its storage-buffer addressing uses 32-bit
   // offsets: a release build gives no guarantee past it, a debug build
   // asserts once the range passes UINT32_MAX. Refuse here instead.
-  const VkDeviceSize range_limit =
-      device_.capabilities().max_storage_buffer_range;
+  // MLX_OMARCHY_MAX_STORAGE_RANGE lowers this check along with the
+  // chunk splitter, so a small device (or a test) exercises one limit.
+  const VkDeviceSize range_limit = storage_buffer_range_limit();
   for (size_t i = 0; i < bindings.size(); ++i) {
     if (bindings[i].range > range_limit) {
       throw std::invalid_argument(

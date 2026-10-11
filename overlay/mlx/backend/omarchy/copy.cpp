@@ -579,12 +579,21 @@ void copy_gpu_inplace(
           &half, in.data<char>() + i_offset * in.itemsize(), sizeof(half));
       uint32_t word = half;
       std::memcpy(&params.alpha, &word, sizeof(float));
-      std::array<omarchy::ComputeBinding, 1> bindings{binding(out)};
-      encoder.dispatch_compute(
-          omarchy::ComputeKernel::FillU16,
-          bindings,
+      omarchy::dispatch_compute_chunked(
+          encoder,
+          "scalar fill",
+          out,
+          {omarchy::chunk_operand(out, binding(out), count, count)},
           params,
-          omarchy::compute_dispatch_group_count(count));
+          [&](uint64_t,
+              const omarchy::ComputeParams& chunk_params,
+              const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::FillU16,
+                chunk_binds,
+                chunk_params,
+                omarchy::compute_dispatch_group_count(chunk_params.count));
+          });
       return;
     }
     if (in.dtype() == int64 || in.dtype() == uint64) {
@@ -611,12 +620,21 @@ void copy_gpu_inplace(
           words, in.data<char>() + i_offset * in.itemsize(), sizeof(words));
       std::memcpy(&params.alpha, &words[0], sizeof(float));
       std::memcpy(&params.beta, &words[1], sizeof(float));
-      std::array<omarchy::ComputeBinding, 1> bindings{binding(out)};
-      encoder.dispatch_compute(
-          omarchy::ComputeKernel::FillU64,
-          bindings,
+      omarchy::dispatch_compute_chunked(
+          encoder,
+          "scalar fill",
+          out,
+          {omarchy::chunk_operand(out, binding(out), count, count)},
           params,
-          omarchy::compute_dispatch_group_count(count));
+          [&](uint64_t,
+              const omarchy::ComputeParams& chunk_params,
+              const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::FillU64,
+                chunk_binds,
+                chunk_params,
+                omarchy::compute_dispatch_group_count(chunk_params.count));
+          });
       return;
     }
     if (in.dtype() != float32 && in.dtype() != float16 &&
@@ -645,12 +663,21 @@ void copy_gpu_inplace(
     } else {
       params.alpha = scalar_fill_value(in, i_offset);
     }
-    std::array<omarchy::ComputeBinding, 1> bindings{binding(out)};
-    encoder.dispatch_compute(
-        fill_kernel(in.dtype()),
-        bindings,
+    omarchy::dispatch_compute_chunked(
+        encoder,
+        "non-zero scalar fill",
+        out,
+        {omarchy::chunk_operand(out, binding(out), count, count)},
         params,
-        omarchy::compute_dispatch_group_count(count));
+        [&](uint64_t,
+            const omarchy::ComputeParams& chunk_params,
+            const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+          encoder.dispatch_compute(
+              fill_kernel(in.dtype()),
+              chunk_binds,
+              chunk_params,
+              omarchy::compute_dispatch_group_count(chunk_params.count));
+        });
     return;
   }
 
@@ -894,34 +921,42 @@ void copy_gpu_inplace(
         kernel == omarchy::ComputeKernel::CastBoolF16 ||
         kernel == omarchy::ComputeKernel::CastBoolBF16 ||
         kernel == omarchy::ComputeKernel::CastBoolComplex64;
-    uint32_t dispatch_count = source_bool_kernel
-        ? checked_u32(
-              (static_cast<uint64_t>(count) +
-               static_cast<uint64_t>(params.lhs_offset & 3u) + 3u) /
-                  4u,
-              "dtype converting copy",
-              out)
-        : count;
+    // Flat whole-array cast: in.data_size() == count, both sides shift
+    // with the chunk. The bool-source word kernels keep their word
+    // geometry under the shift because a chunk start is a multiple of
+    // 16 bytes.
+    std::vector<omarchy::ChunkedBinding> chunk_bindings{
+        omarchy::chunk_operand(in, binding(in), count, count),
+        omarchy::chunk_operand(in, binding(in), count, count),
+        omarchy::chunk_operand(out, binding(out), count, count)};
     if (numeric_transport) {
-      std::array<omarchy::ComputeBinding, 4> bindings{
-          binding(in),
-          binding(in),
-          binding(out),
-          binding(out)};
-      encoder.dispatch_compute(
-          kernel,
-          bindings,
-          params,
-          omarchy::compute_dispatch_group_count(dispatch_count));
-    } else {
-      std::array<omarchy::ComputeBinding, 3> bindings{
-          binding(in), binding(in), binding(out)};
-      encoder.dispatch_compute(
-          kernel,
-          bindings,
-          params,
-          omarchy::compute_dispatch_group_count(dispatch_count));
+      chunk_bindings.push_back(
+          omarchy::chunk_operand(out, binding(out), count, count));
     }
+    omarchy::dispatch_compute_chunked(
+        encoder,
+        "dtype converting copy",
+        out,
+        std::move(chunk_bindings),
+        params,
+        [&](uint64_t,
+            const omarchy::ComputeParams& chunk_params,
+            const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+          const uint32_t chunk_dispatch_count = source_bool_kernel
+              ? checked_u32(
+                    (static_cast<uint64_t>(chunk_params.count) +
+                     static_cast<uint64_t>(chunk_params.lhs_offset & 3u) +
+                     3u) /
+                        4u,
+                    "dtype converting copy",
+                    out)
+              : chunk_params.count;
+          encoder.dispatch_compute(
+              kernel,
+              chunk_binds,
+              chunk_params,
+              omarchy::compute_dispatch_group_count(chunk_dispatch_count));
+        });
     return;
   }
 

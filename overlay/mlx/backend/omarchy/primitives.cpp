@@ -1054,6 +1054,14 @@ void dispatch_float_elementwise_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
+  // Chunk descriptors for the flat-index paths: the output is always
+  // flat, operands are flat or broadcast, and the unused fourth slot
+  // rides the output so an oversized output still splits cleanly.
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(lhs, bindings[0], params.lhs_size, count),
+      omarchy::chunk_operand(rhs, bindings[1], params.rhs_size, count),
+      omarchy::chunk_operand(out, bindings[2], count, count),
+      omarchy::chunk_operand(out, bindings[3], count, count)};
   // Four-wide fast path (shaders/binary_vec.comp) for the hot binary
   // ops on 16-bit storage: same math and modulo addressing as
   // elementwise.comp, 8-byte vector loads. Sigmoid takes the same
@@ -1070,11 +1078,21 @@ void dispatch_float_elementwise_to(
                                   : omarchy::ComputeKernel::UnaryVecBF16)
         : out.dtype() == float16 ? omarchy::ComputeKernel::BinaryVecF16
                                  : omarchy::ComputeKernel::BinaryVecBF16;
-    encoder.dispatch_compute(
-        kernel,
-        bindings,
+    omarchy::dispatch_compute_chunked(
+        encoder,
+        name,
+        out,
+        std::move(chunk_bindings),
         params,
-        omarchy::compute_dispatch_group_count(count / 4u));
+        [&](uint64_t,
+            const omarchy::ComputeParams& chunk_params,
+            const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+          encoder.dispatch_compute(
+              kernel,
+              chunk_binds,
+              chunk_params,
+              omarchy::compute_dispatch_group_count(chunk_params.count / 4u));
+        });
     return;
   }
   const bool lite_op = operation <= NegativeOperation;  // ops 0-10 exist in the -DLITE builds
@@ -1086,8 +1104,28 @@ void dispatch_float_elementwise_to(
               : omarchy::ComputeKernel::ElementwiseF16,
       lite_op ? omarchy::ComputeKernel::ElementwiseLiteBF16
               : omarchy::ComputeKernel::ElementwiseBF16);
-  encoder.dispatch_compute(
-      kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+  if (general_broadcast) {
+    // Stride addressing (dims > 0) cannot shift a chunk window; an
+    // oversized binding keeps the encoder's named refusal.
+    encoder.dispatch_compute(
+        kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+    return;
+  }
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      name,
+      out,
+      std::move(chunk_bindings),
+      params,
+      [&](uint64_t,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        encoder.dispatch_compute(
+            kernel,
+            chunk_binds,
+            chunk_params,
+            omarchy::compute_dispatch_group_count(chunk_params.count));
+      });
 }
 
 void dispatch_elementwise(
@@ -1217,11 +1255,37 @@ void dispatch_compare_bool_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::CompareBool,
-      bindings,
+  if (axis_metadata) {
+    // Stride addressing (dims > 0) cannot shift a chunk window; an
+    // oversized binding keeps the encoder's named refusal.
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::CompareBool,
+        bindings,
+        params,
+        omarchy::compute_dispatch_group_count(word_count));
+    return;
+  }
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(lhs, bindings[0], params.lhs_size, count),
+      omarchy::chunk_operand(rhs, bindings[1], params.rhs_size, count),
+      omarchy::chunk_operand(out, bindings[2], count, count),
+      omarchy::chunk_operand(out, bindings[3], count, count)};
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      name,
+      out,
+      std::move(chunk_bindings),
       params,
-      omarchy::compute_dispatch_group_count(word_count));
+      [&](uint64_t,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::CompareBool,
+            chunk_binds,
+            chunk_params,
+            omarchy::compute_dispatch_group_count(
+                (chunk_params.count + 3u) / 4u));
+      });
 }
 
 void dispatch_comparison(
@@ -1370,11 +1434,37 @@ void dispatch_comparison(
   } else {
     omarchy::unsupported(name + " dtype", out);
   }
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
+  if (axis_metadata) {
+    // Stride addressing (dims > 0) cannot shift a chunk window; an
+    // oversized binding keeps the encoder's named refusal.
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        omarchy::compute_dispatch_group_count(word_count));
+    return;
+  }
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(lhs, bindings[0], params.lhs_size, count),
+      omarchy::chunk_operand(rhs, bindings[1], params.rhs_size, count),
+      omarchy::chunk_operand(out, bindings[2], count, count),
+      omarchy::chunk_operand(out, bindings[3], count, count)};
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      name,
+      out,
+      std::move(chunk_bindings),
       params,
-      omarchy::compute_dispatch_group_count(word_count));
+      [&](uint64_t,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        encoder.dispatch_compute(
+            kernel,
+            chunk_binds,
+            chunk_params,
+            omarchy::compute_dispatch_group_count(
+                (chunk_params.count + 3u) / 4u));
+      });
 }
 
 // logical_or.comp runs one invocation per output element with no
@@ -1570,11 +1660,33 @@ void dispatch_int_elementwise_to(
   // The widened variants serve the 8/16/64-bit integer family with the
   // widened-word bitwise ops only.
   auto kernel = elementwise_kernel(out.dtype());
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
+  if (axis_metadata) {
+    // Stride addressing (dims > 0) cannot shift a chunk window; an
+    // oversized binding keeps the encoder's named refusal.
+    encoder.dispatch_compute(
+        kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+    return;
+  }
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(lhs, bindings[0], params.lhs_size, count),
+      omarchy::chunk_operand(rhs, bindings[1], params.rhs_size, count),
+      omarchy::chunk_operand(out, bindings[2], count, count),
+      omarchy::chunk_operand(out, bindings[3], count, count)};
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      name,
+      out,
+      std::move(chunk_bindings),
       params,
-      omarchy::compute_dispatch_group_count(count));
+      [&](uint64_t,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        encoder.dispatch_compute(
+            kernel,
+            chunk_binds,
+            chunk_params,
+            omarchy::compute_dispatch_group_count(chunk_params.count));
+      });
 }
 
 void dispatch_int_elementwise(
@@ -3554,11 +3666,36 @@ void dispatch_complex_elementwise_to(
       binding(rhs),
       binding(out),
       binding(axis_metadata ? *axis_metadata : out)};
-  encoder.dispatch_compute(
-      omarchy::ComputeKernel::ComplexElementwise,
-      bindings,
+  if (axis_metadata) {
+    // Stride addressing (dims > 0) cannot shift a chunk window; an
+    // oversized binding keeps the encoder's named refusal.
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::ComplexElementwise,
+        bindings,
+        params,
+        omarchy::compute_dispatch_group_count(count));
+    return;
+  }
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(lhs, bindings[0], params.lhs_size, count),
+      omarchy::chunk_operand(rhs, bindings[1], params.rhs_size, count),
+      omarchy::chunk_operand(out, bindings[2], count, count),
+      omarchy::chunk_operand(out, bindings[3], count, count)};
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      name,
+      out,
+      std::move(chunk_bindings),
       params,
-      omarchy::compute_dispatch_group_count(count));
+      [&](uint64_t,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::ComplexElementwise,
+            chunk_binds,
+            chunk_params,
+            omarchy::compute_dispatch_group_count(chunk_params.count));
+      });
 }
 
 void dispatch_complex(
@@ -3664,6 +3801,10 @@ void dispatch_complex_extract(
   out.set_data(allocate_omarchy(out.nbytes()));
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(in), binding(in), binding(out)};
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(in, bindings[0], count, count),
+      omarchy::chunk_operand(in, bindings[1], count, count),
+      omarchy::chunk_operand(out, bindings[2], count, count)};
   auto kernel = operation == 0
       ? omarchy::ComputeKernel::ComplexReal
       : operation == 1
@@ -3671,8 +3812,21 @@ void dispatch_complex_extract(
       : out.dtype() == complex64
       ? omarchy::ComputeKernel::ComplexAbsAsComplex
       : omarchy::ComputeKernel::ComplexAbs;
-  encoder.dispatch_compute(
-      kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      name,
+      out,
+      std::move(chunk_bindings),
+      params,
+      [&](uint64_t,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        encoder.dispatch_compute(
+            kernel,
+            chunk_binds,
+            chunk_params,
+            omarchy::compute_dispatch_group_count(chunk_params.count));
+      });
 }
 
 } // namespace
@@ -3791,8 +3945,51 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
             omarchy::ComputeKernel::ArangeF32,
             omarchy::ComputeKernel::ArangeF16,
             omarchy::ComputeKernel::ArangeBF16);
-  encoder.dispatch_compute(
-      kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+  if (!is_int_arange) {
+    // The float kernel computes alpha + beta*float(index) in floating
+    // point; a host-side start adjustment would reassociate the math
+    // and change bits. An oversized binding keeps the named refusal.
+    encoder.dispatch_compute(
+        kernel, bindings, params, omarchy::compute_dispatch_group_count(count));
+    return;
+  }
+  // The integer kernels compute start + index*step in wraparound
+  // integer math, so a chunk starting at |first| is the same program
+  // with the start advanced by first*step: the wrap is exactly the
+  // single-dispatch value at every element.
+  std::vector<omarchy::ChunkedBinding> chunk_bindings{
+      omarchy::chunk_operand(out, bindings[0], count, count)};
+  omarchy::dispatch_compute_chunked(
+      encoder,
+      "Arange",
+      out,
+      std::move(chunk_bindings),
+      params,
+      [&](uint64_t first,
+          const omarchy::ComputeParams& chunk_params,
+          const std::vector<omarchy::ComputeBinding>& chunk_binds) {
+        omarchy::ComputeParams start_params = chunk_params;
+        if (is_int32 || is_uint32) {
+          start_params.lhs_size = static_cast<uint32_t>(first) *
+                  start_params.reduce_size +
+              start_params.lhs_size;
+        } else {
+          const uint64_t start =
+              static_cast<uint64_t>(start_params.lhs_size) |
+              (static_cast<uint64_t>(start_params.rhs_size) << 32u);
+          const uint64_t step =
+              static_cast<uint64_t>(start_params.reduce_size) |
+              (static_cast<uint64_t>(start_params.aux_size) << 32u);
+          const uint64_t value = start + first * step;
+          start_params.lhs_size = static_cast<uint32_t>(value);
+          start_params.rhs_size = static_cast<uint32_t>(value >> 32u);
+        }
+        encoder.dispatch_compute(
+            kernel,
+            chunk_binds,
+            start_params,
+            omarchy::compute_dispatch_group_count(start_params.count));
+      });
 }
 void ArcCos::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.dtype() == complex64) {

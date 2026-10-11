@@ -17,6 +17,20 @@ target_link_options(omarchy_copy_offset_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_copy_offset_tests)
 add_test(NAME omarchy_copy_offset_tests COMMAND omarchy_copy_offset_tests)
 
+add_executable(omarchy_big_binding_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_big_binding.cpp)
+target_link_libraries(omarchy_big_binding_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_big_binding_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_big_binding_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_big_binding_tests)
+add_test(NAME omarchy_big_binding_tests COMMAND omarchy_big_binding_tests)
+set_tests_properties(omarchy_big_binding_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 300)
+
 add_executable(omarchy_primitive_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_primitives.cpp)
 target_link_libraries(omarchy_primitive_tests PRIVATE mlx doctest)
