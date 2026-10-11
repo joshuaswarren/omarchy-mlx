@@ -23,6 +23,10 @@
 //   flags & 2          write convolution partials
 //   flags & 4          reduce a partial level
 //   flags & 8          store the final partial level to output
+//   flags & 16         im2col (groups = 1): write the input patch matrix
+//                      A[row, product] to the output binding, one thread per
+//                      element. count = rows * products; in_strides[3] is the
+//                      first output position (row) of this block
 //   matrix_m           innermost output extent (partial reduction: tile count)
 //   matrix_n           output channels        rhs_gap   group count
 //   reduce_size        channels per group
@@ -185,9 +189,65 @@ uint idil_axis(uint a) {
   return floatBitsToUint(params.alpha);
 }
 
+// Geometry shared by every mode, filled once per invocation in main().
+uint in_ext[3];
+uint kern_ext[3];
+uint stride[3];
+uint pad_lo[3];
+uint kdil[3];
+uint idil[3];
+uint in_ext_dilated[3];
+uint in_channels;
+uint in_channels_per_group;
+uint flip;
+
+// Input element index read by kernel product `flat_product` (tap-major,
+// channel fastest, matching the weight row layout) for the output
+// position `coord` of `batch`, or false when the tap lands in padding or
+// off the dilated input grid.
+bool tap_input_index(
+    uint flat_product,
+    uint batch,
+    uint group,
+    uint coord[3],
+    out uint input_index) {
+  uint channel = flat_product % in_channels_per_group;
+  uint remaining_tap = flat_product / in_channels_per_group;
+  uint k2 = remaining_tap % kern_ext[2u];
+  remaining_tap /= kern_ext[2u];
+  uint k1 = remaining_tap % kern_ext[1u];
+  uint k0 = remaining_tap / kern_ext[1u];
+  uint k0_window = flip != 0u ? (kern_ext[0u] - 1u - k0) : k0;
+  uint k1_window = flip != 0u ? (kern_ext[1u] - 1u - k1) : k1;
+  uint k2_window = flip != 0u ? (kern_ext[2u] - 1u - k2) : k2;
+  int in_0 = int(coord[0u] * stride[0u]) - int(pad_lo[0u]) +
+      int(k0_window * kdil[0u]);
+  int in_1 = int(coord[1u] * stride[1u]) - int(pad_lo[1u]) +
+      int(k1_window * kdil[1u]);
+  int in_2 = int(coord[2u] * stride[2u]) - int(pad_lo[2u]) +
+      int(k2_window * kdil[2u]);
+  if (in_0 < 0 || in_0 >= int(in_ext_dilated[0u]) ||
+      in_0 % int(idil[0u]) != 0 || in_1 < 0 ||
+      in_1 >= int(in_ext_dilated[1u]) ||
+      in_1 % int(idil[1u]) != 0 || in_2 < 0 ||
+      in_2 >= int(in_ext_dilated[2u]) ||
+      in_2 % int(idil[2u]) != 0) {
+    return false;
+  }
+  uint tap_0 = uint(in_0) / idil[0u];
+  uint tap_1 = uint(in_1) / idil[1u];
+  uint tap_2 = uint(in_2) / idil[2u];
+  input_index = params.lhs_offset +
+      (((batch * in_ext[0u] + tap_0) * in_ext[1u] + tap_1) * in_ext[2u] +
+       tap_2) * in_channels +
+      group * in_channels_per_group + channel;
+  return true;
+}
+
 void main() {
   const bool write_partial = (params.flags & 2u) != 0u;
   const bool reduce_partials = (params.flags & 4u) != 0u;
+  const bool im2col = (params.flags & 16u) != 0u;
   uint stride_threads = gl_NumWorkGroups.x * 256u;
 
   if (reduce_partials) {
@@ -222,19 +282,13 @@ void main() {
   }
 
   uint out_channels = params.matrix_n;
-  uint in_channels_per_group = params.reduce_size;
+  in_channels_per_group = params.reduce_size;
   uint groups = params.rhs_gap;
-  uint in_channels = in_channels_per_group * groups;
+  in_channels = in_channels_per_group * groups;
   uint out_channels_per_group = out_channels / groups;
-  uint flip = params.flags & 1u;
+  flip = params.flags & 1u;
 
-  uint in_ext[3];
-  uint kern_ext[3];
   uint out_ext[3];
-  uint stride[3];
-  uint pad_lo[3];
-  uint kdil[3];
-  uint idil[3];
   for (uint a = 0u; a < 3u; ++a) {
     in_ext[a] = in_axis(a);
     kern_ext[a] = kern_axis(a);
@@ -244,7 +298,6 @@ void main() {
     kdil[a] = kdil_axis(a);
     idil[a] = idil_axis(a);
   }
-  uint in_ext_dilated[3];
   uint total_out_spatial = 1u;
   for (uint a = 0u; a < 3u; ++a) {
     in_ext_dilated[a] = in_ext[a] == 0u
@@ -260,6 +313,29 @@ void main() {
       : 1u + (kernel_products - 1u) / max_chunk_products;
   uint tile_count = write_partial ? params.count / chunks : params.count;
   uint chunk_products = write_partial ? max_chunk_products : kernel_products;
+
+  if (im2col) {
+    for (uint work_index = gl_GlobalInvocationID.x;
+         work_index < params.count;
+         work_index += stride_threads) {
+      uint row = params.in_strides[3u] + work_index / kernel_products;
+      uint flat_product = work_index % kernel_products;
+      uint batch = row / total_out_spatial;
+      uint spatial = row % total_out_spatial;
+      uint coord[3];
+      for (uint a = 3u; a-- > 0u;) {
+        coord[a] = spatial % out_ext[a];
+        spatial /= out_ext[a];
+      }
+      uint input_index;
+      float value = 0.0;
+      if (tap_input_index(flat_product, batch, 0u, coord, input_index)) {
+        value = LOAD_VALUE(input_x.values[input_index]);
+      }
+      output_data.values[work_index] = STORE_VALUE(value);
+    }
+    return;
+  }
 
   for (uint work_index = gl_GlobalInvocationID.x; work_index < params.count;
        work_index += stride_threads) {
@@ -286,41 +362,13 @@ void main() {
     for (uint flat_product = product_begin;
          flat_product < product_end;
          ++flat_product) {
-      uint channel = flat_product % in_channels_per_group;
-      uint remaining_tap = flat_product / in_channels_per_group;
-      uint k2 = remaining_tap % kern_ext[2u];
-      remaining_tap /= kern_ext[2u];
-      uint k1 = remaining_tap % kern_ext[1u];
-      uint k0 = remaining_tap / kern_ext[1u];
-      uint k0_window = flip != 0u ? (kern_ext[0u] - 1u - k0) : k0;
-      uint k1_window = flip != 0u ? (kern_ext[1u] - 1u - k1) : k1;
-      uint k2_window = flip != 0u ? (kern_ext[2u] - 1u - k2) : k2;
-      int in_0 = int(coord[0u] * stride[0u]) - int(pad_lo[0u]) +
-          int(k0_window * kdil[0u]);
-      int in_1 = int(coord[1u] * stride[1u]) - int(pad_lo[1u]) +
-          int(k1_window * kdil[1u]);
-      int in_2 = int(coord[2u] * stride[2u]) - int(pad_lo[2u]) +
-          int(k2_window * kdil[2u]);
-      if (in_0 < 0 || in_0 >= int(in_ext_dilated[0u]) ||
-          in_0 % int(idil[0u]) != 0 || in_1 < 0 ||
-          in_1 >= int(in_ext_dilated[1u]) ||
-          in_1 % int(idil[1u]) != 0 || in_2 < 0 ||
-          in_2 >= int(in_ext_dilated[2u]) ||
-          in_2 % int(idil[2u]) != 0) {
+      uint input_index;
+      if (!tap_input_index(flat_product, batch, group, coord, input_index)) {
         continue;
       }
-      uint tap_0 = uint(in_0) / idil[0u];
-      uint tap_1 = uint(in_1) / idil[1u];
-      uint tap_2 = uint(in_2) / idil[2u];
-      uint input_base = params.lhs_offset +
-          (((batch * in_ext[0u] + tap_0) * in_ext[1u] + tap_1) *
-                    in_ext[2u] +
-                tap_2) *
-              in_channels +
-          group * in_channels_per_group;
       uint weight_index = params.rhs_offset +
           out_channel * kernel_products + flat_product;
-      accumulator += LOAD_VALUE(input_x.values[input_base + channel]) *
+      accumulator += LOAD_VALUE(input_x.values[input_index]) *
           LOAD_VALUE(weight.values[weight_index]);
     }
     if (write_partial) {
