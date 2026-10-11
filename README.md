@@ -123,15 +123,17 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / mac
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
-| Qwen3.8-27B (dense 27B) | 13.5 / 19.5 = 69% | 87.4 / 105.6 = 83% |
-| gemma-4-26B-A4B (MoE, 4B active) | 12.61 / 66.0 = 19% | 116.50 / 556.1 = 21% |
-| gemma-4-31B (dense 31B) | 7.3 / 15.3 = 48% | 62.4 / 90.0 = 69% |
-| Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = 62% | 299.4 / 339.0 = 88% |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 / 75.6 = 18% | 116.37 / 604.1 = 19% |
-| gemma-4-E4B (dense 4B) | 30.5 / 73.8 = 41% | 366.5 / 568.6 = 64% |
+| Qwen3.8-27B (dense 27B) | 14.03 / 19.5 = 72% | 88.51 / 105.6 = 84% |
+| gemma-4-26B-A4B (MoE, 4B active) | 11.96 / 66.0 = 18% | 116.51 / 556.1 = 21% |
+| gemma-4-31B (dense 31B) | 9.27 / 15.3 = 61% | 63.05 / 90.0 = 70% |
+| Qwen3.5-9B (dense 9B, gated-delta) | 38.87 / 59.4 = 65% | 309.19 / 339.0 = 91% |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 14.05 / 75.6 = 19% | 117.91 / 604.1 = 20% |
+| gemma-4-E4B (dense 4B) | 31.98 / 73.8 = 43% | 367.03 / 568.6 = 65% |
 | gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = 3% | 1.9 / 581.1 = 0.3% |
 
-Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
+The updated Linux rows use packaged `omarchy-mlx-vulkan` at Mesa git `69bde15340`. The gpt-oss-20b driver build was not recorded. The full tables list drivers and run conditions by chip. No newer gpt-oss-20b run exists.
+
+The full tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 ## Qwen3.5-9B fused GDN decode
 

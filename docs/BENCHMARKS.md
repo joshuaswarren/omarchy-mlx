@@ -17,25 +17,25 @@ The mixture-of-experts models are the largest gap on decode: gemma-4-26B-A4B rea
 
 ## Results on the M1 Max with 64 GB of memory
 
-Driver: the two mixture-of-experts rows and the gemma-4-E4B row used the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded.
+The updated Linux rows use packaged `omarchy-mlx-vulkan` at Mesa git `69bde15340`. The gpt-oss-20b driver build was not recorded. The earlier macOS values are unchanged.
 
 MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / macOS:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
-| Qwen3.8-27B (dense 27B) | 13.5 / 19.5 = **69%** | 87.4 / 105.6 = **83%** |
-| gemma-4-26B-A4B (MoE, 4B active) | 12.61 / 66.0 = **19%** (was 10.0, 15%) | 116.50 / 556.1 = **21%** (was 29.9, 5%) |
-| gemma-4-31B (dense 31B) | 7.3 / 15.3 = **48%** | 62.4 / 90.0 = **69%** |
-| Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = **62%** | 299.4 / 339.0 = **88%** |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 / 75.6 = **18%** (was 13.4, 18%) | 116.37 / 604.1 = **19%** (was 39.4, 7%) |
-| gemma-4-E4B (dense 4B) | 30.5 / 73.8 = **41%** | 366.5 / 568.6 = **64%** |
+| Qwen3.8-27B (dense 27B) | 14.03 / 19.5 = **72%** | 88.51 / 105.6 = **84%** |
+| gemma-4-26B-A4B (MoE, 4B active) | 11.96 / 66.0 = **18%** | 116.51 / 556.1 = **21%** |
+| gemma-4-31B (dense 31B) | 9.27 / 15.3 = **61%** | 63.05 / 90.0 = **70%** |
+| Qwen3.5-9B (dense 9B, gated-delta) | 38.87 / 59.4 = **65%** | 309.19 / 339.0 = **91%** |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 14.05 / 75.6 = **19%** | 117.91 / 604.1 = **20%** |
+| gemma-4-E4B (dense 4B) | 31.98 / 73.8 = **43%** | 367.03 / 568.6 = **65%** |
 | gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = **3%** | 1.9 / 581.1 = **0.3%** |
 
 The two mixture-of-experts rows with "was" values were re-measured on 2026-10-10 on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`, PR #81 included), with the Honeykrisp driver from the private ICD directory at Mesa git `6543eeb7df7`, which the scoring script selects with `VK_ICD_FILENAMES`. The "was" values are the 2026-10-09 measurements; they ran on wheel `0.32.4.dev202610090923+a48b7cc5`, before PR #81, and their driver was not recorded, so the PR #81 effect is the before and after difference, not an isolated test. The macOS values were not re-run. The output digests did not change (276e9fba and 6666c20f). The gemma-4-26B-A4B run started with a load average of 0.22. The Qwen3.6-35B-A3B cells are the mean of two runs: 13.75 and 13.48 decode, 117.52 and 115.22 prefill. The second run used the Edge0 repository, which holds the same weights and gave the same output digest. Those runs started with load averages of 1.11 and 0.98, so the numbers may be low. The other rows are unchanged.
 
 The gemma-4-E4B Linux cells ran on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`), not on v0.7.32, which still stalls on this model. They are the mean of three runs: decode 30.52, 30.45 and 30.44, prefill 366.67, 366.08 and 366.66. The driver is the private Honeykrisp ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES`, on the plain kernel. The runs started with load averages of 0.91, 1.37 and 1.22, above the 0.5 target, with the ANE idle. The macOS cells are the earlier sealed runs on the same machine (decode median of 10, prefill median of 5). The Linux output digest (118c7586) is the same in all three runs and differs from the macOS digest (491eb46b), so the two sides produced different tokens. The same holds on the 13-inch M1.
 
-llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit), Linux / macOS:
+The Linux rows use Vulkan. The macOS rows use Metal at the same llama.cpp commit. Driver builds were not recorded. The Qwen3.6-35B-A3B Linux run used the plain kernel; its raw JSON is linked below.
 
 | Model | Decode tg128 | Prefill pp512 |
 |---|---|---|

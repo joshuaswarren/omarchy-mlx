@@ -4,14 +4,7 @@ Back to the [README](../README.md).
 
 ## Qwen3.5-9B fused GDN decode
 
-The fused raw decode route is ON by default on every chip. The v0.7.26
-published-wheel audit measured +31-35% decode on G14-class hardware and
-+35-43% on G13. It found per-op fp64 error identical, 99.51% teacher-forced
-top-1 agreement, and S=1 PPL -0.072%. All 10 free-runs diverged within 512
-tokens: six first-divergence gaps were 0.125 (one bf16 ULP at those logits),
-and four were zero; overall prefix identity was 29.43%. This meets the
-scale-aware numerics gate. Set MLX_OMARCHY_GDN_RAW_REPEAT=0 to use the
-composed route. See docs/numerics-gate.md for the acceptance criteria.
+The fused raw decode route is on by default on every chip. The published-wheel audit found that free-run outputs diverged from the reference. See the acceptance criteria in docs/numerics-gate.md. Link the performance and numerical results before publishing figures.
 
 ## How it works
 
