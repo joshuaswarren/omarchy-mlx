@@ -206,6 +206,12 @@ void main() {
   uint block = gl_WorkGroupID.x;
   uint lid = gl_LocalInvocationID.x;
   uint blockBase = block * 16384u;
+  // The grid is [in/128, out/128] blocks, row-major. suh scales INPUT rows (row block rb), svh scales OUTPUT columns
+  // (column block cb); the final output is the row-major [in, out] matrix, while dec16/tmp scratch stay block-major.
+  uint cbBlocks = params.matrix_k >> 3u;  // out_features / 128
+  uint rb = block / cbBlocks;
+  uint cb = block - rb * cbBlocks;
+  uint outF = params.matrix_k * 16u;      // out_features
 
   // Stage A: threads 0..63 decode tile = 16x16 weights into f16 bits,
   // global row-major over the [in/16, out/16] tile grid (the sushi bank
@@ -220,9 +226,7 @@ void main() {
     // Per-tile packed length is n halfwords = wc uint32 words, so a tile's
     // word base stays word-aligned (the eval layer refuses odd trellis
     // offsets).
-    uint cbBlocks = params.matrix_k >> 3u;  // out_features / 128
-    uint rb = block / cbBlocks;
-    uint cb = block - rb * cbBlocks;
+    // (cbBlocks, rb, cb, outF are hoisted to main(): the scale vectors and the output layout need them too.)
     uint tileBase = ((rb * 8u + tk) * params.matrix_k + cb * 8u + tn) * wc;
     for (uint t = 0u; t < 128u; t++) {
       uint e0 = ((t * 2u + 1u) * n) >> 4;
@@ -266,7 +270,7 @@ void main() {
       float he = (bitCount(r & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
       acc = acc + he * f16ToF32(g_dec16[params.aux_size / 4u + blockBase + k * 128u + c]);
     }
-    acc = acc * f16ToF32(suhAt(params.rhs_offset, block * 128u + r));
+    acc = acc * f16ToF32(suhAt(params.rhs_offset, rb * 128u + r));
     g_tmp[params.lhs_size + blockBase + e] = acc;
   }
   barrier();
@@ -292,13 +296,13 @@ void main() {
       float he1 = (bitCount(c1 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
       a1 = a1 + he1 * x0;
     }
-    float v0 = a0 * f16ToF32(svhAt(params.aux_offset, block * 128u + c0));
-    float v1 = a1 * f16ToF32(svhAt(params.aux_offset, block * 128u + c1));
+    float v0 = a0 * f16ToF32(svhAt(params.aux_offset, cb * 128u + c0));
+    float v1 = a1 * f16ToF32(svhAt(params.aux_offset, cb * 128u + c1));
 #if defined(EXL3_OUT_F16)
-    g_out[params.output_offset / 2u + blockBase / 2u + w] =
+    g_out[(params.output_offset + (rb * 128u + r0) * outF + cb * 128u + c0) / 2u] =
         f32ToF16(v0) | (f32ToF16(v1) << 16u);
 #else
-    g_out[params.output_offset / 2u + blockBase / 2u + w] =
+    g_out[(params.output_offset + (rb * 128u + r0) * outF + cb * 128u + c0) / 2u] =
         f32ToBf16(floatBitsToUint(v0)) |
         (f32ToBf16(floatBitsToUint(v1)) << 16u);
 #endif
@@ -313,8 +317,8 @@ void main() {
       float he = (bitCount(c & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
       acc = acc + he * g_tmp[params.lhs_size + blockBase + r * 128u + k];
     }
-    float v = acc * f16ToF32(svhAt(params.aux_offset, block * 128u + c));
-    g_out[params.output_offset + blockBase + e] = v;
+    float v = acc * f16ToF32(svhAt(params.aux_offset, cb * 128u + c));
+    g_out[params.output_offset + (rb * 128u + r) * outF + cb * 128u + c] = v;
   }
 #endif
 }
