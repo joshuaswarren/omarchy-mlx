@@ -390,6 +390,10 @@ scenario("PII-stripped submission WITH an archive completes (regression: error 1
   const fin = await complete(sha);
   expect(fin.res.status === 200, `complete ${fin.res.status} ${JSON.stringify(fin.body)}`);
   expect(fin.body.archive_withheld_pii === true, JSON.stringify(fin.body));
+  const back = await fetch(`${BASE}/v1/results/${sha}`);
+  const text = await back.text();
+  expect(back.status === 200, `read back ${back.status}`);
+  expect(!text.includes("00:1A:2B:3C:4D:5F"), "raw MAC served on the read route");
   return "complete 200, archive withheld (not a tar.gz)";
 });
 

@@ -154,7 +154,8 @@ async function handleInitiate(request: Request, env: Env): Promise<Response> {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const fields: PayloadFields = init.payload as PayloadFields;
+  // Columns come from the STRIPPED payload: the read route serves them at the top level.
+  const fields: PayloadFields = storedPayload as PayloadFields;
   const existing = await store.getSubmission(env.DB, init.content_sha256);
 
   if (existing !== null && existing.published === 1) {
