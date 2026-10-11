@@ -237,16 +237,17 @@ Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so the
 |---|---|---|---|---|---|---|
 | Llama-3.1-8B | 13-inch M1 | 11.48 | 99.57 | 8.87 / 50.10 (MLX 1.29 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.42; llama.cpp load 0.67, ANE busy |
 | Qwen2.5-7B-Instruct | 13-inch M1 | 14.26 | 105.61 | 9.53 / 53.08 (MLX 1.50 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | load 0.70 for both runs (marked) |
+| Llama-3.2-3B-Instruct | 13-inch M1 | 21.52 | 227.20 | 19.47 / 121.96 (MLX 1.11 and 1.86 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.82; llama.cpp load 0.71 (marked) |
 | Qwen3-4B-Instruct-2507 | 13-inch M1 | 21.98 | 185.35 | 15.49 / 89.32 (MLX 1.42 and 2.08 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.97; llama.cpp load 1.07 (marked) |
 | Mellum2-12B-A2.5B (MoE) | 13-inch M1 | 4.83 | 41.21 | no result: llama.cpp could not allocate its compute buffers on 16 GB | `0.32.4.dev202610102357+e57cb301` | load 0.16 |
 | Qwen3-Coder-30B-A3B (MoE) | 16-inch M1 Max | 11.69 | 102.37 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.95 (marked) |
 | Ornith-1.5-35B-A3B (MoE, OptiQ 4-bit repository) | 16-inch M1 Max | 8.48 | 35.99 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.93, ANE busy (marked) |
 
-Mellum2-12B-A2.5B before and after PR #81 on the same 13-inch M1: on the `158fee60` wheel (before) it measured 4.84 decode and 8.05 prefill; on `e57cb301` (after) 4.83 and 41.21, so prefill is 5.1 times faster and decode is unchanged. The output digest (326cf5bd) is the same in both. The before run started with a load average of 0.50 and the ANE busy (marked).
+Mellum2-12B-A2.5B on the same 13-inch M1, before and after: on the `158fee60` wheel it measured 4.84 decode and 8.05 prefill; on `e57cb301` it measured 4.83 and 41.21, so prefill is 5.1 times faster and decode is unchanged. The output digest (326cf5bd) is the same in both. This is not an isolated test of PR #81. The two wheels differ by more than that PR, each side is one run, and the before run started with a load average of 0.50 and the ANE busy, against 0.16 and idle for the after run.
 
 Withdrawn: Ornith-1.5-9B has no row. It does not run cleanly on the 16 GB M1; the system's out-of-memory killer ended processes during the run.
 
-Could not run, by size (MLX 4-bit, or the smallest repository): GLM-5.3-Flash 204 GB, GLM-5.3 418 GB, DeepSeek-V4-Flash 151.5 GB, Kimi-K3 (2-bit) 181 GB and Qwen3.8-Flash-Next 111.5 GB. None fits a 94 GB M2 Max. Also not run: Kolibri-1, which has a custom architecture and no MLX or GGUF conversion, and Xing4.0, whose architecture is not in mlx-lm.
+Could not run, by size (MLX 4-bit, or the smallest repository): GLM-5.3-Flash 204 GB, GLM-5.3 418 GB, DeepSeek-V4-Flash 151.5 GB, Kimi-K3 (2-bit) 181 GB and Qwen3.8-Flash-Next 111.5 GB. None fits a 94 GB M2 Max. Also not run: Kolibri-1, which has a custom architecture and no MLX or GGUF conversion, and Xing4.0, whose architecture is not in mlx-lm. Ternary-Bonsai-2-27B exists only as a GGUF with a PQ2_0 type and has no MLX conversion. llama.cpp at the pinned commit gave no result; the lab reports that it refuses the file as an invalid ggml type 142 and that the authors' fork is needed.
 
 The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models that fit, Linux / macOS. The Linux cells were measured on 2026-10-10; the macOS references are earlier sealed runs:
 
