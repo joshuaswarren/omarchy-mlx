@@ -236,6 +236,8 @@ Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so the
 | Model | Chip | MLX decode | MLX prefill 512 | llama.cpp Q4_K_M decode / prefill | Wheel | Start of run |
 |---|---|---|---|---|---|---|
 | Llama-3.1-8B | 13-inch M1 | 11.48 | 99.57 | 8.87 / 50.10 (MLX 1.29 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.42; llama.cpp load 0.67, ANE busy |
+| Qwen2.5-7B-Instruct | 13-inch M1 | 14.26 | 105.61 | 9.53 / 53.08 (MLX 1.50 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | load 0.70 for both runs (marked) |
+| Qwen3-4B-Instruct-2507 | 13-inch M1 | 21.98 | 185.35 | 15.49 / 89.32 (MLX 1.42 and 2.08 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.97; llama.cpp load 1.07 (marked) |
 | Mellum2-12B-A2.5B (MoE) | 13-inch M1 | 4.83 | 41.21 | no result: llama.cpp could not allocate its compute buffers on 16 GB | `0.32.4.dev202610102357+e57cb301` | load 0.16 |
 | Qwen3-Coder-30B-A3B (MoE) | 16-inch M1 Max | 11.69 | 102.37 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.95 (marked) |
 | Ornith-1.5-35B-A3B (MoE, OptiQ 4-bit repository) | 16-inch M1 Max | 8.48 | 35.99 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.93, ANE busy (marked) |
