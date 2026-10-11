@@ -292,6 +292,7 @@ struct PhysicalDeviceInfo {
   CapabilityReport caps;
   // Hardware truth from discovery, never overridden by simulation.
   CapabilityReport hardware;
+  VkPhysicalDeviceType type{VK_PHYSICAL_DEVICE_TYPE_OTHER};
 };
 
 // Process-wide Vulkan state. The VkInstance lives as long as the process;
@@ -598,9 +599,17 @@ bool Runtime::init_impl() {
         " buffer cache is off for the whole process.\n");
   }
 
-  icd_selection = configure_honeykrisp_icd();
-  icd_path = icd_selection.path;
-  resolve_expected_sha_policy(icd_selection, expected_sha, expected_sha_source);
+  try {
+    icd_selection = configure_honeykrisp_icd();
+    icd_path = icd_selection.path;
+    resolve_expected_sha_policy(icd_selection, expected_sha, expected_sha_source);
+  } catch (const std::runtime_error&) {
+    // Development override: no Honeykrisp ICD, so the loader's own driver
+    // list stands and classify_physical_device admits non-Apple GPUs.
+    if (!allow_non_apple) {
+      throw;
+    }
+  }
   // Honeykrisp bounded syncobj poll (HK_SUBMIT_POLL_US, mesa-1
   // hk/submit-latency): removes the host wake-up premium on the short
   // submit->wait round trips of stepwise loops (Parakeet TDT tdt_decode
@@ -706,8 +715,11 @@ bool Runtime::init_impl() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
     VkPhysicalDeviceProperties2 props2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    VkPhysicalDeviceVulkan13Properties p13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
     props2.pNext = &driver;
     driver.pNext = &subgroup;
+    subgroup.pNext = &p13;
     it.GetPhysicalDeviceProperties2(pd, &props2);
 
     DeviceSupport support = classify_physical_device(
@@ -755,6 +767,7 @@ bool Runtime::init_impl() {
 
     PhysicalDeviceInfo info;
     info.handle = pd;
+    info.type = props2.properties.deviceType;
     info.support = std::move(support);
     info.caps = collect_capabilities(
         it,
@@ -772,6 +785,12 @@ bool Runtime::init_impl() {
         m3,
         m4,
         subgroup);
+    info.caps.required_subgroup_size = required_subgroup_size(
+        f13.subgroupSizeControl == VK_TRUE,
+        p13.requiredSubgroupSizeStages,
+        p13.minSubgroupSize,
+        p13.maxSubgroupSize,
+        info.caps.subgroup_size);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -827,6 +846,15 @@ bool Runtime::init_impl() {
     return false;
   }
 
+  std::vector<VkPhysicalDeviceType> types;
+  for (const auto& d : supported) {
+    types.push_back(d.type);
+  }
+  std::vector<PhysicalDeviceInfo> ordered;
+  for (size_t i : device_order(types)) {
+    ordered.push_back(std::move(supported[i]));
+  }
+  supported = std::move(ordered);
   error.clear();
   // One lazily-filled slot per supported device; device() indexes this
   // vector directly, so it must match |supported| before ready flips.
@@ -958,6 +986,32 @@ DeviceSupport classify_physical_device(
   return s;
 }
 
+uint32_t required_subgroup_size(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t subgroup_size) {
+  if (!size_control || !(required_stages & VK_SHADER_STAGE_COMPUTE_BIT) ||
+      min_size == max_size || subgroup_size < min_size ||
+      subgroup_size > max_size) {
+    return 0;
+  }
+  return subgroup_size;
+}
+
+std::vector<size_t> device_order(
+    const std::vector<VkPhysicalDeviceType>& types) {
+  std::vector<size_t> order(types.size());
+  for (size_t i = 0; i < order.size(); ++i) {
+    order[i] = i;
+  }
+  std::stable_partition(order.begin(), order.end(), [&](size_t i) {
+    return types[i] == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  });
+  return order;
+}
+
 // --- Process-wide API -----------------------------------------------------
 
 bool init() {
@@ -1065,6 +1119,8 @@ Device::Device(uint32_t physical_device_index) {
   enabled12.shaderFloat16 = hw.shader_float16 ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceVulkan13Features enabled13{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+  enabled13.subgroupSizeControl =
+      hw.required_subgroup_size != 0 ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceFeatures2 enabled2{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
   enabled2.features.shaderInt16 = hw.shader_int16 ? VK_TRUE : VK_FALSE;
@@ -1282,7 +1338,8 @@ Device::Device(uint32_t physical_device_index) {
       std::min(
           caps_.max_per_stage_descriptor_storage_buffers,
           caps_.max_descriptor_set_storage_buffers));
-  compute_ = std::make_unique<ComputeRuntime>(device_, binding_limit);
+  compute_ = std::make_unique<ComputeRuntime>(
+      device_, binding_limit, hardware_caps_.required_subgroup_size);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

@@ -60,6 +60,21 @@ DeviceSupport classify_physical_device(
     int32_t driver_id,
     bool allow_non_apple);
 
+// The subgroup size every pipeline requests, or 0 to leave it to the
+// driver. Vulkan 1.3 lets a driver vary it per pipeline within
+// [min_size, max_size] (Intel runs small workgroups at 16 of 8-32 lanes),
+// and every subgroup shader here assumes |subgroup_size| lanes.
+uint32_t required_subgroup_size(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t subgroup_size);
+
+// Device indices for |types| in discovery order: discrete GPUs first, so
+// device 0 is the dGPU where an iGPU enumerates ahead of it. Stable.
+std::vector<size_t> device_order(const std::vector<VkPhysicalDeviceType>& types);
+
 // Physical-device capability facts collected at discovery time. Reported by
 // mlx-omarchy-info and stored in hardware receipts.
 struct CapabilityReport {
@@ -142,6 +157,8 @@ struct CapabilityReport {
   // the load-bearing combination for the qmm_vec subgroup path.
   uint32_t subgroup_size{0};
   uint32_t subgroup_operations{0};
+  // Nonzero: pipelines pin this subgroup size (required_subgroup_size()).
+  uint32_t required_subgroup_size{0};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride

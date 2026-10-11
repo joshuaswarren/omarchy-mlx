@@ -1050,7 +1050,10 @@ struct ComputeParams {
 
 class ComputeRuntime {
  public:
-  explicit ComputeRuntime(VkDevice device, uint32_t binding_limit);
+  ComputeRuntime(
+      VkDevice device,
+      uint32_t binding_limit,
+      uint32_t required_subgroup_size);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1100,6 +1103,7 @@ class ComputeRuntime {
       const VkSpecializationInfo* spec);
 
   uint32_t binding_limit_{0};
+  uint32_t required_subgroup_size_{0};
 
   VkDevice device_;
   VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};

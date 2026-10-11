@@ -1846,8 +1846,13 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
 
 } // namespace
 
-ComputeRuntime::ComputeRuntime(VkDevice device, uint32_t binding_limit)
-    : device_(device), binding_limit_(binding_limit) {
+ComputeRuntime::ComputeRuntime(
+    VkDevice device,
+    uint32_t binding_limit,
+    uint32_t required_subgroup_size)
+    : device_(device),
+      binding_limit_(binding_limit),
+      required_subgroup_size_(required_subgroup_size) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2057,6 +2062,12 @@ VkPipeline ComputeRuntime::create_pipeline(
   stage.module = shader;
   stage.pName = entry_name.c_str();
   stage.pSpecializationInfo = spec;
+  VkPipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size{
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+  subgroup_size.requiredSubgroupSize = required_subgroup_size_;
+  if (required_subgroup_size_ != 0) {
+    stage.pNext = &subgroup_size;
+  }
   VkComputePipelineCreateInfo pipeline_info{
       VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
   pipeline_info.stage = stage;

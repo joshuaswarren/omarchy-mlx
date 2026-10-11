@@ -48,6 +48,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/honeykrisp_identity.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -706,6 +707,46 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
         "NVIDIA GeForce RTX 4090", 0x10de, VK_API_VERSION_1_3, -1, false);
     CHECK_FALSE(s.supported);
   }
+}
+
+TEST_CASE("a variable subgroup size is pinned to the reported size") {
+  constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
+  // Intel ANV: 8-32 lanes, reports 32.
+  CHECK(omarchy::required_subgroup_size(true, compute, 8, 32, 32) == 32);
+  // A fixed size (Honeykrisp, NVIDIA) needs no pin.
+  CHECK(omarchy::required_subgroup_size(true, compute, 32, 32, 32) == 0);
+  CHECK(omarchy::required_subgroup_size(false, compute, 8, 32, 32) == 0);
+  CHECK(
+      omarchy::required_subgroup_size(
+          true, VK_SHADER_STAGE_FRAGMENT_BIT, 8, 32, 32) == 0);
+  CHECK(omarchy::required_subgroup_size(true, compute, 8, 16, 32) == 0);
+}
+
+TEST_CASE("discrete GPUs come first, otherwise discovery order") {
+  using V = std::vector<VkPhysicalDeviceType>;
+  using I = std::vector<size_t>;
+  constexpr auto dgpu = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  constexpr auto igpu = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+  constexpr auto cpu = VK_PHYSICAL_DEVICE_TYPE_CPU;
+  CHECK(omarchy::device_order(V{igpu, dgpu}) == I{1, 0});
+  CHECK(omarchy::device_order(V{dgpu, igpu, dgpu}) == I{0, 2, 1});
+  CHECK(omarchy::device_order(V{igpu, cpu}) == I{0, 1});
+  CHECK(omarchy::device_order(V{}).empty());
+}
+
+TEST_CASE("the development override runs without the Honeykrisp ICD") {
+  // Run with MLX_OMARCHY_ALLOW_NON_APPLE=1 and VK_DRIVER_FILES naming a
+  // non-Honeykrisp driver (e.g. lavapipe or a desktop GPU).
+  const char* allow = std::getenv("MLX_OMARCHY_ALLOW_NON_APPLE");
+  const char* files = std::getenv("VK_DRIVER_FILES");
+  if (allow == nullptr || std::string(allow) != "1" || files == nullptr ||
+      omarchy::is_honeykrisp_icd(files)) {
+    skip("needs the development override and a non-Honeykrisp driver.");
+    return;
+  }
+  CHECK(omarchy::init_error().empty());
+  REQUIRE(gpu::is_available());
+  CHECK(omarchy::hardware_capability_report(0).icd_path.empty());
 }
 
 TEST_CASE("gpu is unavailable reports a reason and refuses selection") {
