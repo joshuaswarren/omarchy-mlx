@@ -231,21 +231,26 @@ llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit)
 
 Skipped, too large for this machine: GLM-5.3-Flash, Kimi-K3, DeepSeek-V4-Flash, Qwen3.8-Flash-Next.
 
-The same measurement on a base M1 (16 GB, macOS 27.0), for the models that fit, Linux / macOS:
+The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models that fit, Linux / macOS. The Linux cells were measured on 2026-10-10; the macOS references are earlier sealed runs:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
-| Qwen3.5-9B (MLX) | 12.4 / 12.9 = 96% | 97.0 / 85.9 = 113% |
-| gemma-4-E4B (MLX) | fails to run (0%) | fails to run (0%) |
+| Qwen3.8-2B (MLX) | 45.6 / 49.4 = 92% | 428.2 / 456.5 = 94% |
+| Qwen3.5-9B (MLX) | 12.4 / 12.9 = 96% | 97.1 / 85.9 = 113% |
+| gemma-4-E4B (MLX) | fails to run on the v0.7.32 wheel (0%) | fails to run on the v0.7.32 wheel (0%) |
 
 | llama.cpp Q4_K_M (Vulkan / Metal) | Decode tg128 | Prefill pp512 |
 |---|---|---|
 | Qwen3.5-9B | 7.55 / 10.85 = 70% | 48.3 / 115.0 = 42% |
 | gemma-4-E4B | 10.9 / 18.4 = 59% | 83.3 / 208.6 = 40% |
 
-On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B and decode is within 4%; the gap on the M1 Max above is chip-dependent. The macOS values are the median of three runs for Qwen3.5-9B and a single run for gemma-4-E4B. The Linux numbers are from the current development wheel, whose default route on the base M1 produces the same greedy tokens as macOS for this model (identical output digest over the 10 test generations). The earlier default route measured 101.6 tokens per second prefill (118%) but produced different tokens.
+On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B, and its decode is about 4% behind (4.2%). Qwen3.8-2B is 8% behind on decode and 6% behind on prefill. The gap on the M1 Max above is chip-dependent. The Linux numbers are from the development wheel `0.32.4.dev202610101808+158fee60`. Its default route on the base M1 produces the same greedy tokens as macOS for Qwen3.5-9B (identical output digest over the 10 test generations). The macOS values are the median of three runs for Qwen3.5-9B, a single run for gemma-4-E4B, and 8 decode and 5 prefill runs for Qwen3.8-2B. The Linux Qwen3.8-2B values are the median of 3 decode cells and 2 prefill cells.
 
-Rows are re-measured weekly; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
+gemma-4-E4B runs on main since the rope-frequency fix (#75). That fix is not in v0.7.32. On the development wheel above it measured 10.47 / 20.52 = 51% decode and 113.6 / 143.09 = 79% prefill 512. Its greedy output digest (118c7586) differs from macOS (491eb46b), so the row does not count as matching.
+
+Driver for the base M1 rows: the Honeykrisp driver from the packaged `omarchy-mlx-vulkan` 0.7.28-2 (Mesa git e7631595df), selected with no override. The system Mesa 26.2.4-1 stays installed. For the M1 Max tables above the driver build was not recorded. The lab is moving to a newer patched driver; the tables get a before and after column once the scoreboard has been re-run on it.
+
+Rows are re-measured as the lab scoreboard runs; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
 
 ## Qwen3.5-9B fused GDN decode
 
