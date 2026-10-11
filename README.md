@@ -109,9 +109,11 @@ attached to each release.
 The Omarchy menu row for this package, Install > AI > MLX + Core ML
 (Apple Silicon), is proposed in
 [omacom/omarchy#14805](https://github.com/omacom/omarchy/pull/14805) and
-may not be in your build. The row that exists today is Install > AI > MLX
-(Apple GPU). It runs the script below and does not install the private
-driver.
+may not be in your build. The Mac platform repository's menu has the row
+Install > AI > MLX (Apple GPU), added in
+[omacom/omarchy-mac#385](https://github.com/omacom/omarchy-mac/pull/385)
+(merged 2026-09-12). It runs the script below and does not install the
+private driver. A build from another fork may carry neither row.
 
 ### Install with the script
 
