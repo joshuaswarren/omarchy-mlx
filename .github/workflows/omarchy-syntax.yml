@@ -11,6 +11,14 @@ name: Omarchy backend syntax gate
 # 8.7 s (~80 s CPU), syntax 12.5 s (~46 s CPU) — a 4-vCPU runner fits the
 # whole job in roughly 2-3 minutes including apt.
 #
+# The translate-tests job below runs the omarchy_custom_kernel_translate_tests
+# unit suite for the MSL->GLSL translator, which the syntax-only gate cannot
+# execute (no link). Same pinned .work cache and toolchain; builds CPU-only
+# libmlx plus the test target and runs the suite. Measured on a 16-core dev
+# box capped at -j4: prepare 3 s, configure 28 s, shaders 29 s, test target
+# 197 s, suite 0.3 s — under the 15-minute mark where the issue would demand
+# a path filter, so it runs on every push and PR like the syntax job.
+#
 # Preprocessor-state limitation: the backend's bf16 direct GEMM path is
 # enabled only when the configured shader compiler accepts GL_EXT_bfloat16
 # (shaderc/glslc and recent glslang do; glslang 12 does not). The probe at
@@ -64,3 +72,37 @@ jobs:
         run: cmake --build .work/build --target omarchy_shaders
       - name: Syntax-check omarchy translation units
         run: python3 scripts/ci/omarchy_syntax_check.py .work/build --jobs 4
+
+  translate-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache pinned MLX work tree
+        uses: actions/cache@v4
+        with:
+          path: .work
+          key: mlx-work-${{ hashFiles('mlx.lock') }}
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build glslang-tools libvulkan-dev \
+            libopenblas-dev libblas-dev liblapack-dev liblapacke-dev
+      - name: Prepare patched MLX tree
+        run: bash scripts/prepare-mlx.sh
+      - name: Configure (CPU-only, omarchy backend, unit tests)
+        env:
+          CMAKE_INCLUDE_PATH: /usr/include/openblas
+        run: |
+          cmake -S .work/mlx -B .work/build -G Ninja \
+            -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=ON \
+            -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF \
+            -DMLX_BUILD_TESTS=ON -DMLX_BUILD_EXAMPLES=OFF \
+            -DMLX_BUILD_BENCHMARKS=OFF -DMLX_BUILD_PYTHON_BINDINGS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build the translator unit tests (pulls in CPU libmlx)
+        run: |
+          cmake --build .work/build --target omarchy_shaders -j4
+          cmake --build .work/build --target omarchy_custom_kernel_translate_tests -j4
+      - name: Run the translator unit tests
+        run: ctest --test-dir .work/build -R omarchy_custom_kernel_translate_tests --output-on-failure
