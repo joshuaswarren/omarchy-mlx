@@ -310,7 +310,8 @@ The gate summary with the key log lines is in `receipts/2026-10-10-release-0.7.3
    from the buffer sizes, not read from the allocator). We have not measured which smaller shapes fit. We
    have not tested the causal and masked routes, other lengths, or the 14-inch M2 Max. Fix: a change that releases
    chunk buffers early (#86) is on main and not in v0.7.32. On the 13-inch M1 the same test passed in 3 of 3 runs
-   (13 test cases each). It was not measured on the 16-inch M1 Max.
+   (13 test cases each). The 16-inch M1 Max passed the same suite after the change, but it passed before it too, so
+   that run does not test the fix.
 
 Not shipped: the H66 experiment flag. Float16 writes into custom-kernel input buffers are not a limitation (MLX emits
 every input as a const pointer, so Metal rejects such a write too).
