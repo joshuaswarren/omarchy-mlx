@@ -213,6 +213,6 @@
   "base": "qwen3_5_ragged_sdpa_2p2_bf16_v256_b4",
   "entry": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
   "key": "5ed831cf52cf43c246429c3563c099b291583e23a6af3ed20102d9168a8e2823",
-  "state": "verified"
+  "state": "unverified"
  }
 }
