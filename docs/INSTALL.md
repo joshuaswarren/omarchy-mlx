@@ -44,13 +44,17 @@ differences from the packaged driver are in
 [docs/known-defects.md](known-defects.md). To use the private ICD,
 install `omarchy-mlx-vulkan` from the `[omarchy]` repository.
 
-Prefill is much slower on the system driver. Stock Mesa 26.2.4 does
-not advertise `VK_KHR_cooperative_matrix`, and an M1 Pro run of
-Qwen3.5-9B 4-bit measured 20.5 prompt tok/s with the system driver
-against 151.0 with the private ICD; decode was 23.0 against 23.8
-(issue #104). The script path is correct; the matrix tile path the
-private ICD enables is what the speed comes from. Install
-`omarchy-mlx-vulkan` to get it.
+Prefill can be much slower on the system driver. On issue #104, a
+user benchmarked Qwen3.5-9B 4-bit on an M1 Pro (32 GB, on battery,
+v0.7.32, `mlx_lm.benchmark -p 512 -g 128 -n 3`). The report gives
+20.5 prompt tok/s on the system Mesa 26.2.4 driver against 151.0
+with the private ICD, and 23.0 against 23.8 generation tok/s. The
+report also notes that the system driver does not expose
+`VK_KHR_cooperative_matrix` and the private ICD does. That is the
+reporter's measurement on their machine. This repository has not
+reproduced it
+([issue #104 comment](https://github.com/joshuaswarren/omarchy-mlx/issues/104#issuecomment-6108693960)).
+Install `omarchy-mlx-vulkan` for prefill-heavy models.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
