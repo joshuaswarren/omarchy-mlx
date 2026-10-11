@@ -350,6 +350,8 @@ void CommandEncoder::copy_buffer(
     VkDeviceSize size,
     VkDeviceSize src_offset,
     VkDeviceSize dst_offset) {
+  if ((src == VK_NULL_HANDLE || dst == VK_NULL_HANDLE) &&
+      diagnostic::enabled("MLX_OMARCHY_OVERSIZE_REPORT")) return;
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
     batch_buffers_.push_back(vb);
   }
@@ -405,6 +407,8 @@ void CommandEncoder::fill_buffer(
     uint32_t value,
     VkDeviceSize size,
     VkDeviceSize offset) {
+  if (dst == VK_NULL_HANDLE &&
+      diagnostic::enabled("MLX_OMARCHY_OVERSIZE_REPORT")) return;
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
     batch_buffers_.push_back(vb);
   }
@@ -650,6 +654,14 @@ void CommandEncoder::dispatch_compute_pipeline(
   // chunk splitter, so a small device (or a test) exercises one limit.
   const VkDeviceSize range_limit = storage_buffer_range_limit();
   for (size_t i = 0; i < bindings.size(); ++i) {
+    const auto* owner = static_cast<const VulkanBuffer*>(bindings[i].owner);
+    if (owner && owner->diagnostic_allocation_failed &&
+        diagnostic::enabled("MLX_OMARCHY_OVERSIZE_REPORT")) {
+      diagnostic::oversize(std::string(trace::current_prim()), i,
+                           bindings[i].range, range_limit, "?", "?",
+                           "allocation-failed");
+      return;
+    }
     if (bindings[i].range > range_limit) {
       if (diagnostic::enabled("MLX_OMARCHY_OVERSIZE_REPORT")) {
         diagnostic::oversize(std::string(trace::current_prim()), i,

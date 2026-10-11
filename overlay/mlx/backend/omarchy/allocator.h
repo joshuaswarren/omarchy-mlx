@@ -44,6 +44,9 @@ struct VulkanBuffer {
   // (convolve/pool boundary garbage, receipts/2026-09-11-wrong-value-
   // sweep). Fresh device-memory allocations are never recycled.
   bool recycled{false};
+  // Report mode can retain a zeroed host-side placeholder after vkAllocateMemory
+  // fails; encoders recognize it and skip every dispatch that would use it.
+  bool diagnostic_allocation_failed{false};
 };
 
 // Stamp written by add_temporary for buffers recorded into an open

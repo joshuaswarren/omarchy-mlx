@@ -12,6 +12,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <sys/mman.h>
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -246,14 +247,27 @@ Buffer VulkanAllocator::malloc(size_t size) {
       std::unique_lock rl(mutex_);
       buffer_cache_.clear();
     }
-    alloc_result =
-        dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+    if (consume_test_oom()) {
+      alloc_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    } else {
+      alloc_result =
+          dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+    }
   }
   if (alloc_result != VK_SUCCESS) {
     diagnostic::allocation(mai.allocationSize, get_total_device_bytes(), get_total_device_bytes(),
                            alloc_result, caller.c_str());
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
     delete buf;
+    if (diagnostic::enabled("MLX_OMARCHY_OVERSIZE_REPORT")) {
+      auto* failed = new VulkanBuffer{};
+      failed->size = size;
+      failed->diagnostic_allocation_failed = true;
+      failed->data = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+      if (failed->data != MAP_FAILED) return Buffer{failed};
+      delete failed;
+    }
     throw std::runtime_error(
         "[omarchy] vkAllocateMemory failed: " +
         std::string(vk::result_string(alloc_result)) +
@@ -281,6 +295,11 @@ Buffer VulkanAllocator::malloc(size_t size) {
 }
 
 void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
+  if (buf->diagnostic_allocation_failed) {
+    munmap(buf->data, buf->size);
+    delete buf;
+    return;
+  }
   // Cache clear/release funnels through here while callers already hold
   // mutex_, so the non-coherent registry drops the buffer before its
   // memory dies; later flush/invalidate must never see it.
@@ -300,6 +319,11 @@ void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
 void VulkanAllocator::free(Buffer buffer) {
   auto* buf = static_cast<VulkanBuffer*>(buffer.ptr());
   if (!buf) {
+    return;
+  }
+  if (buf->diagnostic_allocation_failed) {
+    munmap(buf->data, buf->size);
+    delete buf;
     return;
   }
   size_t sz = buf->size;

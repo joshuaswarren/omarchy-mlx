@@ -695,4 +695,4 @@ target_compile_options(omarchy_oversize_report_tests PRIVATE ${SANITIZER_COMPILE
 target_link_options(omarchy_oversize_report_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_oversize_report_tests)
 add_test(NAME omarchy_oversize_report_tests COMMAND omarchy_oversize_report_tests)
-set_tests_properties(omarchy_oversize_report_tests PROPERTIES ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1" TIMEOUT 300)
+set_tests_properties(omarchy_oversize_report_tests PROPERTIES ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1;MLX_OMARCHY_NO_BUFFER_CACHE=1" TIMEOUT 300)

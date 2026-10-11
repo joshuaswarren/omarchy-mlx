@@ -19,7 +19,7 @@
 namespace mlx::core::omarchy::diagnostic {
 struct State {
   std::mutex mutex;
-  std::map<std::tuple<std::string, size_t, uint64_t, std::string, std::string>, uint64_t> oversize;
+  std::map<std::tuple<std::string, size_t, uint64_t, std::string, std::string, std::string>, uint64_t> oversize;
   uint64_t allocation_high_water = 0;
   int signal_pipe[2]{-1, -1};
 };
@@ -36,11 +36,11 @@ inline void summary() {
   auto& s = state();
   std::lock_guard<std::mutex> lock(s.mutex);
   if (!enabled("MLX_OMARCHY_OVERSIZE_REPORT") && !enabled("MLX_OMARCHY_ALLOC_REPORT")) return;
-  std::string line = "[omarchy-report] oversize summary: primitive binding bytes shape dtype count";
+  std::string line = "[omarchy-report] oversize summary: primitive binding bytes shape dtype reason count";
   std::fprintf(stderr, "%s\n", line.c_str()); append_file(line);
   for (const auto& [key, count] : s.oversize) {
-    const auto& [prim, binding, bytes, shape, dtype] = key;
-    line = "[omarchy-report] " + prim + " " + std::to_string(binding) + " " + std::to_string(bytes) + " " + shape + " " + dtype + " " + std::to_string(count);
+    const auto& [prim, binding, bytes, shape, dtype, reason] = key;
+    line = "[omarchy-report] " + prim + " " + std::to_string(binding) + " " + std::to_string(bytes) + " " + shape + " " + dtype + " " + reason + " " + std::to_string(count);
     std::fprintf(stderr, "%s\n", line.c_str()); append_file(line);
   }
   line = "[omarchy-alloc-report] high_water_bytes=" + std::to_string(s.allocation_high_water);
@@ -63,15 +63,18 @@ inline void install() {
   });
 }
 inline void oversize(const std::string& prim, size_t binding, uint64_t bytes,
-                     uint64_t limit, const char* shape = "?", const char* dtype = "?") {
+                     uint64_t limit, const char* shape = "?", const char* dtype = "?",
+                     const char* reason = "range") {
   install();
   auto& s = state();
   std::lock_guard<std::mutex> lock(s.mutex);
-  auto key = std::make_tuple(prim, binding, bytes, std::string(shape), std::string(dtype));
+  auto key = std::make_tuple(prim, binding, bytes, std::string(shape),
+                             std::string(dtype), std::string(reason));
   uint64_t count = ++s.oversize[key];
   std::string line = "[omarchy-oversize] primitive=" + prim + " binding=" + std::to_string(binding) +
       " bytes=" + std::to_string(bytes) + " limit=" + std::to_string(limit) +
-      " shape=" + shape + " dtype=" + dtype + " count=" + std::to_string(count);
+      " shape=" + shape + " dtype=" + dtype + " reason=" + reason +
+      " count=" + std::to_string(count);
   std::fprintf(stderr, "%s\n", line.c_str()); append_file(line);
 }
 inline void allocation(uint64_t bytes, uint64_t current, uint64_t high_water, VkResult result, const char* caller) {
