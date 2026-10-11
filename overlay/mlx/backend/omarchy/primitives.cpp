@@ -4685,8 +4685,9 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   // dispatch_matmul path instead of hand-set params. Edge rows keep
   // fewer taps via per-tap slice bounds; the zero pads are raw
   // allocate+fill_buffer because mx::zeros inside eval_gpu hits the
-  // GPU-in-flight scalar-fill guard. Anything else (2-D/3-D, groups,
-  // flip, strides, dilations, non-f32) keeps the direct kernel below.
+  // GPU-in-flight scalar-fill guard. Anything else (2-D/3-D, flip,
+  // strides, dilations, non-f32) takes the im2col route below, and groups
+  // other than 1 the direct kernel.
   if (spatial == 1 && groups_ == 1 && !flip_ && out.dtype() == float32 &&
       batch == 1 && axis_or_one(kernel_strides_, 0) == 1u &&
       axis_or_one(kernel_dilation_, 0) == 1u &&
@@ -4699,7 +4700,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     const int co = out_channels;
     // Scratch cap: the k planes cost k * L_out * co * 4 bytes live at
     // once. Above the cap (MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES,
-    // default 1 GiB) fall back to the direct kernel instead of
+    // default 1 GiB) fall back to the im2col route instead of
     // stressing the allocator on very long inputs.
     const int64_t scratch_bytes =
         static_cast<int64_t>(k) * L_out * co * static_cast<int64_t>(4);
@@ -4708,7 +4709,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
       cap = std::atoll(v);
     }
     if (scratch_bytes > cap) {
-      // Fall through to the direct kernel below.
+      // Fall through to the im2col route below.
     } else {
     const int64_t plane = static_cast<int64_t>(L_out) * co;
     // Scratch planes: tap j occupies scratch[j, lo_j : hi_j, :]; the
@@ -4880,15 +4881,21 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   uint32_t kernel_products = checked_u32(
       w.size() / static_cast<size_t>(out_channels), "Convolution", out);
   // im2col + GEMM for every groups == 1 convolution that reaches here: the
-  // direct kernel is a scalar per-output loop (about 55-63x the matmul cost
-  // per MAC, H73/H75), so build A[rows, K] once (one thread per element,
-  // conv.comp flag 16) and run the standard matmul against W[O, K]. Row
-  // blocks keep A under MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES (default
-  // 1 GiB). Grouped convolutions keep the direct kernel.
+  // direct kernel is a scalar per-output loop (55-73x the matmul cost per
+  // MAC on M1, M1 Max and M2 Max, H73/H75), so build A[rows, K] once (one
+  // thread per element, conv.comp flag 16) and run the standard matmul
+  // against W[O, K]. Row blocks keep A under
+  // MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES (default 1 GiB; a value that
+  // is not a positive integer is ignored). Grouped convolutions keep the
+  // direct kernel, including its chunked partial-reduction path.
   if (groups_ == 1 && kernel_products > 0) {
     int64_t cap = 1ll << 30;
     if (const char* v = std::getenv("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES")) {
-      cap = std::atoll(v);
+      char* end = nullptr;
+      const long long parsed = std::strtoll(v, &end, 10);
+      if (end != v && *end == '\0' && parsed > 0) {
+        cap = parsed;
+      }
     }
     const uint32_t out_cols = checked_u32(out_channels, "Convolution", out);
     const uint32_t rows = total / out_cols;
