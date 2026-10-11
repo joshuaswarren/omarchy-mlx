@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/diagnostic_report.h"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -650,6 +651,11 @@ void CommandEncoder::dispatch_compute_pipeline(
   const VkDeviceSize range_limit = storage_buffer_range_limit();
   for (size_t i = 0; i < bindings.size(); ++i) {
     if (bindings[i].range > range_limit) {
+      if (diagnostic::enabled("MLX_OMARCHY_OVERSIZE_REPORT")) {
+        diagnostic::oversize(std::string(trace::current_prim()), i,
+                             bindings[i].range, range_limit);
+        return; // Diagnostic only: leave the output as-is and skip this dispatch.
+      }
       throw std::invalid_argument(
           "[omarchy] " + std::string(trace::current_prim()) +
           " compute dispatch binds " + std::to_string(bindings[i].range) +

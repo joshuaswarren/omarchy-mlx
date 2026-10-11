@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "mlx/backend/omarchy/allocator.h"
+#include "mlx/backend/omarchy/diagnostic_report.h"
+#include "mlx/backend/omarchy/trace.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -219,6 +221,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
   VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   mai.allocationSize = reqs.size;
   mai.memoryTypeIndex = type_index;
+  const std::string caller(trace::current_prim());
   VkResult alloc_result = VK_SUCCESS;
   if (consume_test_oom()) {
     alloc_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -228,6 +231,8 @@ Buffer VulkanAllocator::malloc(size_t size) {
   }
   if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
       alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+    diagnostic::allocation(mai.allocationSize, get_total_device_bytes(), get_total_device_bytes(),
+                           alloc_result, caller.c_str());
     // Freed buffers of submitted batches wait in the quarantine; they hold
     // heap bytes that neither active_memory_ nor the cache count, so the
     // retry would fail while that memory is about to come back. Wait for
@@ -245,6 +250,8 @@ Buffer VulkanAllocator::malloc(size_t size) {
         dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
   }
   if (alloc_result != VK_SUCCESS) {
+    diagnostic::allocation(mai.allocationSize, get_total_device_bytes(), get_total_device_bytes(),
+                           alloc_result, caller.c_str());
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
     delete buf;
     throw std::runtime_error(
@@ -264,7 +271,12 @@ Buffer VulkanAllocator::malloc(size_t size) {
   if (!buf->coherent) {
     noncoherent_.push_back(buf);
   }
+  size_t current = active_memory_ + buffer_cache_.cache_size();
+  for (const auto* quarantined : quarantine_) current += quarantined->size;
+  const size_t high_water = current;
   lk.unlock();
+  diagnostic::allocation(mai.allocationSize, current, high_water, VK_SUCCESS,
+                         caller.c_str());
   return Buffer{buf};
 }
 

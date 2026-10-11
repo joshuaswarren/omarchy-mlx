@@ -64,6 +64,12 @@ class VulkanAllocator : public allocator::Allocator {
     std::unique_lock lk(mutex_);
     return peak_memory_;
   }
+  size_t get_total_device_bytes() const {
+    std::unique_lock lk(mutex_);
+    size_t total = active_memory_ + buffer_cache_.cache_size();
+    for (const auto* buf : quarantine_) total += buf->size;
+    return total;
+  }
   void reset_peak_memory() {
     std::unique_lock lk(mutex_);
     peak_memory_ = 0;
