@@ -110,8 +110,11 @@ float decode_param(uint byte_offset) {
 #endif
 }
 
-shared float sX[TK][TM + 2u];
-shared float sW[TK][TN];
+// Shared tiles are vector typed so the multiply-add loop reads 4 weights and 2 activations
+// per k step with one load each (measured 1.9x on the kernel, notebook H82); the element
+// order and the multiply-adds are unchanged, so outputs are bit-identical.
+shared vec2 sX2[TK][TM / 2u + 1u];
+shared vec4 sW4[TK][TN / 4u];
 shared uint sLhs[TM];
 
 void main() {
@@ -162,7 +165,7 @@ void main() {
         if (row >= run_begin && row < run_end) {
           v = LOAD_VALUE(input_x.values[params.lhs_offset + sLhs[row] * K + k0 + kk]);
         }
-        sX[kk][row] = v;
+        sX2[kk][row >> 1u][row & 1u] = v;
       }
       uint group = k0 / TK;
       float scale = decode_param((scale_base + group) * PARAM_BYTES);
@@ -171,15 +174,17 @@ void main() {
         uint word = input_w.values[w_base + (k0 >> 3u) + j];
         for (uint q = 0u; q < 8u; ++q) {
           uint code = bitfieldExtract(word, int(q * 4u), 4);
-          sW[(load_word + j) * 8u + q][load_col] = scale * float(code) + bias;
+          sW4[(load_word + j) * 8u + q][load_col >> 2u][load_col & 3u] = scale * float(code) + bias;
         }
       }
       barrier();
       for (uint kk = 0u; kk < TK; ++kk) {
-        float x0 = sX[kk][2u * tr];
-        float x1 = sX[kk][2u * tr + 1u];
+        vec2 x01 = sX2[kk][tr];
+        vec4 w4 = sW4[kk][tc];
+        float x0 = x01.x;
+        float x1 = x01.y;
         for (uint c = 0u; c < 4u; ++c) {
-          float w = sW[kk][4u * tc + c];
+          float w = w4[c];
           acc[c] += x0 * w;
           acc[4u + c] += x1 * w;
         }
