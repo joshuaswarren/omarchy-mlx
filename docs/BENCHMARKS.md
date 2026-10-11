@@ -9,9 +9,13 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
+How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. No table here was measured on the newer lab driver, Mesa PR 6 head `69bde15340`. Rows measured on it will be added with the driver named.
+
 The mixture-of-experts models are the largest gap on decode: gemma-4-26B-A4B reaches 19% of macOS and Qwen3.6-35B-A3B 18%. Their prefill rose after PR #81 landed on main. It is not in v0.7.32. gemma-4-26B-A4B went from 29.9 to 116.50 tokens per second (3.9 times, now 21% of macOS) and Qwen3.6-35B-A3B from 39.4 to 116.37 (2.95 times, now 19%). The dense models reach 41-69% on decode and 64-88% on prefill. On the same Linux GPU, llama.cpp is now 2.3 times faster than MLX at gemma-4-26B-A4B prefill. It was 8.9 times. gemma-4-E4B stalled a GPU submit on the v0.7.32 wheel. On main it runs, after fix #75, at 41% of macOS on decode and 64% on prefill. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9). Downloads ran before the timed rows. Both can only lower the macOS numbers.
 
 ## Results on the M1 Max with 64 GB of memory
+
+Driver: the two mixture-of-experts rows and the gemma-4-E4B row used the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded.
 
 MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / macOS:
 
@@ -42,6 +46,8 @@ llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit)
 
 The Qwen3.6-35B-A3B llama.cpp cells are Linux only, so they have no percent. They are means of 5 repetitions, measured on 2026-10-09 (decode 29.06 with a standard deviation of 0.63, prefill 255.44 with 1.68), with the Q4_K_M unsloth GGUF on Vulkan at llama.cpp commit `65840ed`. The scoring lane reports that the kernel was the plain one. The run started with a load average of 0.99, above the 0.5 target. The raw file is `receipts/2026-10-09-linux-vs-macos/llamacpp/linux-llama-gguf-qwen36-35b-a3b.json`. The macOS run needs a macOS window on the 16-inch M1 Max.
 
+A later change to the tiled expert kernel (PR #110) measured 1.73 to 1.74 times faster on that kernel alone (M1 Max, gemma-4-26B-A4B, 512-token prompt, two runs). Prefill for the whole model has not been re-measured.
+
 ## Models added on 2026-10-11
 
 Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so there is no percent of macOS. MLX 4-bit, the same harness as above. The driver is the private ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES` by the scoring script, on both machines. A run that started with a load average above 0.5 or with the ANE busy is marked, and its numbers may be low.
@@ -59,6 +65,8 @@ Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so the
 Mellum2-12B-A2.5B on the same 13-inch M1, before and after. On the `158fee60` wheel it measured 4.84 decode and 8.05 prefill. On `e57cb301` it measured 4.83 and 41.21. Prefill is 5.1 times faster and decode is unchanged. The output digest (326cf5bd) is the same in both. This is not an isolated test of PR #81. The wheels differ by more than that PR, and each side is one run. The before run started with a load average of 0.50 and the ANE busy. The after run started at 0.16 with the ANE idle.
 
 ## Results on the M2 Max with 94 GB of memory
+
+Driver: the private Honeykrisp ICD at Mesa git `6543eeb7df7`, with main at `e57cb301`.
 
 MLX 4-bit on the 14-inch M2 Max (94 GB), Linux only, measured 2026-10-11. No macOS run exists for this chip in the table, so there is no percent of macOS. Tokens per second, decode / prefill 512, with llama.cpp Q4_K_M on Vulkan (tg128 / pp512) from the same machine where it ran:
 
@@ -84,7 +92,7 @@ The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models t
 |---|---|---|
 | Qwen3.8-2B (MLX) | 45.6 / 49.4 = 92% | 428.2 / 456.5 = 94% |
 | Qwen3.5-9B (MLX) | 12.4 / 12.9 = 96% | 97.1 / 85.9 = 113% |
-| gemma-4-E4B (MLX) | fails to run on the v0.7.32 wheel (0%) | fails to run on the v0.7.32 wheel (0%) |
+| gemma-4-E4B (MLX) | 10.46 / 20.52 = 51% (main at `e57cb301`; the v0.7.32 wheel still stalls on this model) | 114.31 / 143.09 = 80% (same run) |
 
 | llama.cpp Q4_K_M (Vulkan / Metal) | Decode tg128 | Prefill pp512 |
 |---|---|---|
