@@ -76,6 +76,8 @@ class InstallerContractTests(unittest.TestCase):
         state = {
             assistant / "pair-locks" / "quality.json": '{"pair": "quality"}',
             assistant / "history" / "c1.json": '{"id": "c1"}',
+            # the converted decision model a saved pair's lock points at (pairs.py _setup_locked)
+            prefix / "models" / "decision-x" / "config.json": '{"converted": true}',
         }
         removed = [
             prefix / "venv" / "bin" / "python",
