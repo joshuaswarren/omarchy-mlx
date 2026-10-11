@@ -3,6 +3,7 @@
 # neighbouring GDN suites, each with its exit code.
 # usage: policy_tests_window.sh <build-tests-dir> <label>
 set -uo pipefail
+# no set -e: each suite's exit code is the recorded result; a failing suite must not stop the others
 B="$1"; L="$2"
 O=/var/tmp/dfuse/policy-tests-$L
 mkdir -p "$O"

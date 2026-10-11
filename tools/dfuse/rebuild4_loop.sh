@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # On-box diag rebuild loop for the perrow fix (survives route flaps).
 set -uo pipefail
+# no set -e: detached retry loop - a failed attempt is logged and retried; aborting would defeat the flap survival
 LOG=/var/tmp/dfuse/rebuild4.log
 for attempt in 1 2 3 4 5 6; do
   echo "=== rebuild4 attempt $attempt $(date -u +%FT%TZ)" > "$LOG"

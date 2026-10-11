@@ -4,6 +4,7 @@
 # series is guilty (qwen3-rope-norm likely). Then run with kills OFF
 # (the default) to confirm reproducibility.
 set -uo pipefail
+# no set -e: hypothesis A/B - an errored request IS the observation; the run must finish to record it
 mkdir -p /tmp/omlx-hypo && cd /tmp/omlx-hypo
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # On-box build retry loop: survives route flaps (runs detached on jw16).
 set -uo pipefail
+# no set -e: detached retry loop - a failed attempt is logged and retried; aborting would defeat the flap survival
 LOG=/var/tmp/dfuse/rebuild3.log
 for attempt in 1 2 3 4 5 6; do
   echo "=== rebuild attempt $attempt $(date -u +%FT%TZ)" > "$LOG"

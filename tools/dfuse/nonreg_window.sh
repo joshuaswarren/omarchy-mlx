@@ -3,6 +3,7 @@
 # digests on the reference wheel vs the candidate wheel, tiled and perrow.
 # usage: nonreg_window.sh <ref-python> <cand-python> <tools-dir> <tokens> <prompt...>
 set -uo pipefail
+# no set -e: the grep '^p' filter exits 1 on a hung/failed arm - that row is the A/B evidence
 REF="$1"; CAND="$2"; TOOLS="$3"; N="$4"; shift 4
 M2B=$(ls -d "$HOME"/.cache/huggingface/hub/models--SiddhJagani--Qwen3.8-2B*/snapshots/*/ | head -1)
 for ARM in tiled perrow_pf; do

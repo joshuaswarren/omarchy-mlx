@@ -4,7 +4,8 @@
 # Dev gate before the held-out legs: first-text p95 <= 2.0 s both pairs,
 # >= 80% card-worthy promoted, 0 spurious. Tickets <= 14 min.
 # Usage: lane_cand2.sh   (nohup me via setsid; log to lane_cand2.log)
-set -u
+set -uo pipefail
+# no set -e: resumable lane - a failed ticket is expected and retried in a loop; checkpoints decide progress
 cd /tmp/CardLatency
 LOG=/tmp/CardLatency/lane_cand2.log
 say() { echo "cand2 $(date -u +%FT%TZ) $*" >> "$LOG"; }

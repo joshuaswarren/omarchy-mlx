@@ -3,6 +3,7 @@
 # reference venv vs a candidate venv, on every GDN decode kernel arm, plus 4B.
 # usage: pins_window.sh <ref-python> <cand-python> <out-dir>
 set -uo pipefail
+# no set -e: each cell records rc plus optional digest/rate lookups; failed cells are recorded, not fatal
 REF="$1"; CAND="$2"; O="$3"
 mkdir -p "$O"
 B=$HOME/bench-scripts/qwen38-mlx-bench.py

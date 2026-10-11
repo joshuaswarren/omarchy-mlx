@@ -2,7 +2,7 @@
 # Numerics-gate closure: greedy batched-vs-single digest equality on
 # Qwen3-4B-Instruct-2507-4bit with the CURRENT interim fences, plus the
 # long-shared-prefix TTFT pair. Correctness only; exits immediately.
-set -uo pipefail
+set -euo pipefail
 mkdir -p /tmp/omlx-gate && cd /tmp/omlx-gate
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }
@@ -13,7 +13,7 @@ MODEL=mlx-community--Qwen3-4B-Instruct-2507-4bit
 export HOME=/tmp/omlx-home
 HF_HUB_CACHE="${HF_HUB_CACHE:-$HOME/.cache/huggingface/hub}"
 export HF_HUB_CACHE
-cleanup() { [[ -n ${SERVER_PID:-} ]] && kill "$SERVER_PID" 2>/dev/null; }
+cleanup() { [[ -z ${SERVER_PID:-} ]] || kill "$SERVER_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo "[$(ts)] === numerics gate start (interim fences ON) ==="

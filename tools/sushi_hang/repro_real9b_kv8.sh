@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Real-model first-forward repro on the M2 omarchy wheel.
-set -u
+set -uo pipefail
+# no set -e: the recorded rc=$? of the timed generate IS the result; a crash must print, not abort
 PY=$HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/venv/bin/python
 MODEL=$HOME/.cache/huggingface/hub/models--SiddhJagani--Qwen3.5-9B-MLX-4bit/snapshots
 MODEL=$(ls -d "$MODEL"/*/ 2>/dev/null | head -1)

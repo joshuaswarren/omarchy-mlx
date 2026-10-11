@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # On-box release build (per-chip policy) + deploy loop.
 set -uo pipefail
+# no set -e: detached retry loop - a failed attempt is logged and retried; aborting would defeat the flap survival
 LOG=/var/tmp/dfuse/rel2-build.log
 for attempt in 1 2 3 4 5 6; do
   echo "=== rel2 attempt $attempt $(date -u +%FT%TZ)" > "$LOG"

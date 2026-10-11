@@ -1,6 +1,7 @@
 #!/bin/bash
 # lane UpstreamMlx - 1008b (a) step 1: foreign-buffer donation probe (mlx#4634)
 set -uo pipefail
+# no set -e: the probe records the python exit status in its log as the result; a crash is the finding, not an abort
 mkdir -p "$HOME/u1008b-probe"
 export VK_DRIVER_FILES=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
 PY=/usr/lib/omarchy-mlx/venv/bin/python

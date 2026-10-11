@@ -5,6 +5,7 @@
 # see if the [broadcast_shapes] (2,8,1,64) vs (2,1,1,128) error
 # disappears.
 set -uo pipefail
+# no set -e: the repro records failure evidence - a missing .comp capture (ls|head finds nothing) or a crashed request is the finding
 mkdir -p /tmp/omlx-repro && cd /tmp/omlx-repro
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }

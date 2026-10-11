@@ -2,6 +2,7 @@
 # Retry smoke: try alternative small models that may use a different fast
 # path. Greedy non-stream completion; record timings and outputs.
 set -uo pipefail
+# no set -e: loops candidate models that are expected to fail; each error is recorded as data
 mkdir -p /tmp/omlx-smoke2 && cd /tmp/omlx-smoke2
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }

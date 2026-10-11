@@ -2,6 +2,7 @@
 # Prefix-cache TTFT pair (completes the gate ticket that hit the
 # bash `wait`-includes-server hang; this script uses explicit pids).
 set -uo pipefail
+# no set -e: a probe may print NO TOKENS and the closing grep exits 1 when server.log has no prefix_cache_lookup line; both are results, not failures
 mkdir -p /tmp/omlx-pfx && cd /tmp/omlx-pfx
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }

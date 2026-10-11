@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CardLatency lane waiter: wait for a quiet window, then run one gpu-turn
 # ticket.  Usage: lane_wait.sh <minutes> <script.sh> [script args...]
-set -u
+set -euo pipefail
 MIN=${1:?minutes}
 SCRIPT=${2:?script}
 shift 2

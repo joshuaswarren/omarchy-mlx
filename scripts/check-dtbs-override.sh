@@ -11,7 +11,7 @@
 #   exit 0 - no DTBS override; the opt-in overlay path is live
 #   exit 1 - a non-empty DTBS= is present; overlays are ignored
 #   exit 2 - bad usage, or the config exists but cannot be read
-set -u
+set -euo pipefail
 if [ $# -gt 1 ]; then
 	echo "usage: $0 [CONFIG]" >&2
 	exit 2

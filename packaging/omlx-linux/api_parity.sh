@@ -14,6 +14,7 @@
 # Sections: a1 a2 a3 a12 a13 a18 a31 (default: all; a12 skips cleanly without models).
 # Exit: 0 iff no FAIL. Every check prints PASS/FAIL/SKIP and leaves evidence files.
 set -uo pipefail
+# no set -e: every check must record PASS/FAIL and continue (ok/bad counters); the exit code is the final FAIL count
 
 BASE=http://127.0.0.1:8900
 MODEL=mlx-community--Qwen3-4B-Instruct-2507-4bit

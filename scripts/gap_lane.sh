@@ -4,7 +4,8 @@
 # (4B then 9B, gated on dev validity). All stages resumable checkpoints;
 # each stage is skipped once complete. One ticket at a time.
 # Usage: gap_lane.sh   (nohup me; log to gap_lane.log)
-set -u
+set -uo pipefail
+# no set -e: resumable lane - a failed ticket is expected and retried in a loop; checkpoints decide progress
 cd /tmp/CardLatency
 LOG=/tmp/CardLatency/gap_lane.log
 say() { echo "gap $(date -u +%FT%TZ) $*" >> "$LOG"; }
