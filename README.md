@@ -228,8 +228,10 @@ llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit)
 | gemma-4-26B-A4B | 26.0 / 62.7 = 41% | 265.3 / 882.8 = 30% |
 | gemma-4-31B | 6.5 / 11.5 = 56% | 42.4 / 112.8 = 38% |
 | Qwen3.5-9B | 19.8 / 40.5 = 49% | 171.1 / 476.3 = 36% |
-| Qwen3.6-35B-A3B | not measured | not measured |
+| Qwen3.6-35B-A3B | 29.06 Linux, macOS not measured | 255.44 Linux, macOS not measured |
 | gemma-4-E4B | 18.5 / 59.1 = 31% | 303.5 / 821.1 = 37% |
+
+The Qwen3.6-35B-A3B llama.cpp cells are Linux only, so they have no percent. They are means of 5 repetitions, measured on 2026-10-09 (decode 29.06 with a standard deviation of 0.63, prefill 255.44 with 1.68), with the Q4_K_M unsloth GGUF on Vulkan at llama.cpp commit `65840ed`. The scoring lane reports that the kernel was the plain one. The run started with a load average of 0.99, above the 0.5 target. The raw file is `receipts/2026-10-09-linux-vs-macos/llamacpp/linux-llama-gguf-qwen36-35b-a3b.json`. The macOS run needs a macOS window on the 16-inch M1 Max.
 
 Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so there is no percent of macOS. MLX 4-bit, the same harness as above. The driver is the private ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES` by the scoring script, on both machines. A run that started with a load average above 0.5 or with the ANE busy is marked, and its numbers may be low.
 
