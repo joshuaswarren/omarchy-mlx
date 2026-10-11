@@ -285,6 +285,14 @@ class CompletionDispatcher {
   // dispatcher's idle tick so a fence that signals after the last
   // completion drained still recycles its quarantined buffers.
   bool tick_execution_fences();
+  // Blocks until the drain has settled through |value|: every completion
+  // <= |value| drained, none are pending, and the drain has been quiet
+  // for one poll interval - the idle tick's rule for releasing the newest
+  // quarantined generation. True when settled; false after |budget|
+  // elapses (submissions still in flight) or on shutdown.
+  bool wait_settled(
+      uint64_t value,
+      std::chrono::steady_clock::duration budget);
 
  private:
   void run();

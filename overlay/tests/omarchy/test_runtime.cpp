@@ -1251,6 +1251,59 @@ TEST_CASE("dispatch bindings stamp their owners against the open batch") {
   alloc.free(dst);
 }
 
+TEST_CASE("the OOM retry releases the newest quarantined generation") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  auto& alloc = omarchy::allocator();
+  Stream s = new_stream(Device::gpu);
+  auto& encoder = omarchy::get_command_encoder(s);
+
+  constexpr size_t kBytes = 1 << 16;
+  auto victim = alloc.malloc(kBytes);
+  auto scratch = alloc.malloc(kBytes);
+  auto* victim_buf = static_cast<omarchy::VulkanBuffer*>(victim.ptr());
+  auto* scratch_buf = static_cast<omarchy::VulkanBuffer*>(scratch.ptr());
+
+  // One submitted batch touches victim: at the drain V becomes both the
+  // buffer's stamp and the newest drained generation, so the free below
+  // parks it in the quarantine (one-generation rule) and no later
+  // submission exists whose drain pass would recycle it.
+  array victim_view(
+      Shape{static_cast<int>(kBytes / sizeof(float))},
+      float32,
+      nullptr,
+      {});
+  victim_view.set_data(
+      victim,
+      victim_view.size(),
+      victim_view.strides(),
+      victim_view.flags(),
+      0,
+      [](allocator::Buffer) {});
+  encoder.add_temporary(victim_view);
+  encoder.copy_buffer(victim_buf->buffer, scratch_buf->buffer, kBytes);
+  encoder.commit();
+  encoder.synchronize();
+
+  const size_t cache_before = alloc.get_cache_memory();
+  alloc.free(victim);
+  // Newest generation: quarantined, not cached.
+  CHECK(alloc.get_cache_memory() == cache_before);
+
+  // Force the OOM retry on a fresh allocation (empty cache so the request
+  // really reaches vkAllocateMemory once).
+  alloc.clear_cache();
+  setenv("MLX_OMARCHY_TEST_OOM_REMAINING", "1", 1);
+  auto retry = alloc.malloc(kBytes + 16);
+  // The retry must release the final generation under the dispatcher's
+  // own settle rule instead of leaving it parked for the idle tick.
+  CHECK(!alloc.has_quarantined());
+  alloc.free(retry);
+  alloc.free(scratch);
+}
+
 TEST_CASE("wave levels schedule hazards into strictly ordered waves") {
   using omarchy::TrackedRange;
   using omarchy::WaveNode;
