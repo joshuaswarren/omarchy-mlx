@@ -88,7 +88,7 @@ Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
 | GPU | Driver | Result |
 |---|---|---|
 | Intel UHD 770 | Mesa ANV 26.2.4 | 55/55 `omarchy_runtime_tests`; op check clean |
-| RTX 5060 Ti | NVIDIA 615.71.09 | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md) |
+| RTX 5060 Ti | NVIDIA 615.71.09 | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [Non-Apple GPUs](docs/compatibility.md#non-apple-gpus-development-drivers) |
 
 AMD (RADV) has no qualifying run.
 
