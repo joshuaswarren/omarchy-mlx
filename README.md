@@ -236,9 +236,11 @@ Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so the
 | Model | Chip | MLX decode | MLX prefill 512 | llama.cpp Q4_K_M decode / prefill | Wheel | Start of run |
 |---|---|---|---|---|---|---|
 | Llama-3.1-8B | 13-inch M1 | 11.48 | 99.57 | 8.87 / 50.10 (MLX 1.29 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.42; llama.cpp load 0.67, ANE busy |
-| Mellum2-12B-A2.5B (MoE) | 13-inch M1 | 4.83 | 41.21 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.16 |
+| Mellum2-12B-A2.5B (MoE) | 13-inch M1 | 4.83 | 41.21 | no result: llama.cpp could not allocate its compute buffers on 16 GB | `0.32.4.dev202610102357+e57cb301` | load 0.16 |
 | Qwen3-Coder-30B-A3B (MoE) | 16-inch M1 Max | 11.69 | 102.37 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.95 (marked) |
-| Ornith-1.5-35B-A3B (MoE) | 16-inch M1 Max | 8.48 | 35.99 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.93, ANE busy (marked) |
+| Ornith-1.5-35B-A3B (MoE, OptiQ 4-bit repository) | 16-inch M1 Max | 8.48 | 35.99 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.93, ANE busy (marked) |
+
+Mellum2-12B-A2.5B before and after PR #81 on the same 13-inch M1: on the `158fee60` wheel (before) it measured 4.84 decode and 8.05 prefill; on `e57cb301` (after) 4.83 and 41.21, so prefill is 5.1 times faster and decode is unchanged. The output digest (326cf5bd) is the same in both. The before run started with a load average of 0.50 and the ANE busy (marked).
 
 Withdrawn: Ornith-1.5-9B has no row. It does not run cleanly on the 16 GB M1; the system's out-of-memory killer ended processes during the run.
 
