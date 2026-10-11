@@ -366,6 +366,46 @@ TEST_CASE("[conv-im2col] row blocks match the host reference") {
   unsetenv("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES");
 }
 
+// Grouped convolutions keep the direct kernel. With more than 4096 kernel
+// products per output (3 x 3 x 512 = 4608) that kernel splits each output
+// into 2 chunks and reduces float32 partials in a second dispatch (flags
+// 2, 4, 8); groups == 1 no longer reaches this path, so this is its only
+// value test.
+TEST_CASE("[conv-gaps] grouped 2-D Convolution over 4096 kernel products matches host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 rng(59);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  Shape in_shape{1, 4, 5, 1024};
+  Shape wt_shape{6, 3, 3, 512};
+  std::vector<float> in(static_cast<size_t>(4) * 5 * 1024);
+  std::vector<float> wt(static_cast<size_t>(6) * 3 * 3 * 512);
+  for (auto& v : in) {
+    v = dist(rng);
+  }
+  for (auto& v : wt) {
+    v = dist(rng);
+  }
+  Conv2DSpec spec;
+  spec.pad_lo_h = 1;
+  spec.pad_lo_w = 1;
+  spec.pad_hi_h = 1;
+  spec.pad_hi_w = 1;
+  spec.groups = 2;
+  auto expected = host_conv2d_general(in, wt, in_shape, wt_shape, spec);
+  auto actual = conv2d(
+      array(in.begin(), in_shape, float32),
+      array(wt.begin(), wt_shape, float32),
+      {1, 1},
+      {1, 1},
+      {1, 1},
+      2,
+      stream);
+  check_close(actual, expected, stream, 1e-4);
+}
+
 TEST_CASE("[conv-gaps] grouped 2-D Convolution matches host reference") {
   if (!compute_available()) {
     return;
