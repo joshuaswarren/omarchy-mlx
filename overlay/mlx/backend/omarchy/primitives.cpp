@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string_view>
 #include <initializer_list>
 #include <optional>
@@ -13157,6 +13159,221 @@ void BonsaiQmvWide::eval_gpu(
       n_groups,
       1u,
       1u);
+}
+
+// EXL3 trellis tile decode (M3a option b), shaders/exl3_decode.comp.
+// One workgroup per 128x128 block unpacks, MCG-decodes and Hadamard-
+// reconstructs one expert weight matrix; the packed trellis stays uint16 and
+// the caller picks the output dtype. Bit-exact to the sushi CPU reference
+// (expert_exl3.zig) by construction; the doctest pins it.
+bool Exl3Decode::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+// Debug bisect hook for the Exl3Decode integration bug (MLX_OMARCHY_
+// EXL3_DEBUG_DUMP=<dir>): forces one synchronize so the dispatch retires,
+// then writes the three stage buffers as raw binary files and appends a
+// manifest line. dec16 = f16-bit tile decode (uint32 words, stage A), tmp
+// = f32 chain between the row and column Hadamard stages, out = final
+// output in the caller's dtype. The comparison tool joins these against
+// the CPU reference per stage.
+void exl3_debug_dump_stages(
+    omarchy::CommandEncoder& encoder,
+    const std::string& tag,
+    const array& dec16,
+    const array& tmp,
+    const array& out,
+    int in_features,
+    int out_features,
+    int bits,
+    int window) {
+  const char* dir = std::getenv("MLX_OMARCHY_EXL3_DEBUG_DUMP");
+  if (dir == nullptr || dir[0] == '\0') {
+    return;
+  }
+  encoder.synchronize("exl3 debug stage dump");
+  static std::atomic<uint32_t> call_index{0};
+  uint32_t idx = call_index.fetch_add(1);
+  const char* dtype_tag = (out.dtype() == float32)   ? "f32"
+      : (out.dtype() == float16)                     ? "f16"
+                                                         : "bf16";
+  auto* dec_buf =
+      static_cast<const omarchy::VulkanBuffer*>(dec16.buffer().ptr());
+  auto* tmp_buf =
+      static_cast<const omarchy::VulkanBuffer*>(tmp.buffer().ptr());
+  auto* out_buf =
+      static_cast<const omarchy::VulkanBuffer*>(out.buffer().ptr());
+  std::string base = std::string(dir) + "/call" + std::to_string(idx);
+  auto write_all = [&](const std::string& path, const void* data,
+                       size_t bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+  };
+  write_all(base + "_dec16_u32.bin", dec_buf->data, dec16.nbytes());
+  write_all(base + "_tmp_f32.bin", tmp_buf->data, tmp.nbytes());
+  write_all(
+      base + "_out_" + dtype_tag + ".bin", out_buf->data, out.nbytes());
+  std::ofstream manifest(
+      std::string(dir) + "/manifest.txt", std::ios::app);
+  manifest << "call=" << idx << " tag=" << tag << " in=" << in_features
+           << " out=" << out_features << " bits=" << bits
+           << " window=" << window << " dtype=" << dtype_tag
+           << " dec16_words=" << (dec16.nbytes() / 4)
+           << " tmp_floats=" << (tmp.nbytes() / 4)
+           << " out_bytes=" << out.nbytes() << "\n";
+}
+
+void Exl3Decode::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  const array& trellis = inputs.at(0);
+  const array& suh = inputs.at(1);
+  const array& svh = inputs.at(2);
+  array& out = outputs.at(0);
+  // suh/svh travel as float16-typed arrays in sushi (the host path reads
+  // their raw bit patterns); uint16 carries the identical bytes. The
+  // trellis is uint16 everywhere.
+  if (trellis.dtype() != uint16 ||
+      !(suh.dtype() == uint16 || suh.dtype() == float16) ||
+      !(svh.dtype() == uint16 || svh.dtype() == float16)) {
+    omarchy::unsupported(
+        tag + " input dtype (uint16 trellis, uint16/float16 suh/svh)", out);
+  }
+  if (out.dtype() != float16 && out.dtype() != bfloat16 &&
+      out.dtype() != float32) {
+    omarchy::unsupported(tag + " out dtype (float16/bfloat16/float32)", out);
+  }
+  uint32_t packed_n = checked_u32(
+      static_cast<size_t>(bits_) * 16, tag, out);
+  uint32_t mask = (1u << window_) - 1u;
+  uint32_t blocks = checked_u32(
+      static_cast<size_t>(in_features_) / 128 *
+          static_cast<size_t>(out_features_) / 128,
+      tag,
+      out);
+  // One workgroup per block, no grid-stride loop in the shader: a clamped
+  // grid would silently drop blocks.
+  if (blocks > omarchy::kMaxComputeGroupCountX) {
+    omarchy::unsupported(
+        tag + " with more than " +
+            std::to_string(omarchy::kMaxComputeGroupCountX) + " blocks",
+        out);
+  }
+  std::optional<array> t_temp;
+  std::optional<array> sh_temp;
+  std::optional<array> sv_temp;
+  const array& td = ensure_dense(
+      trellis, trellis.flags().row_contiguous, t_temp, encoder, s);
+  const array& shd = ensure_dense(
+      suh, suh.flags().row_contiguous, sh_temp, encoder, s);
+  const array& svd = ensure_dense(
+      svh, svh.flags().row_contiguous, sv_temp, encoder, s);
+  out.set_data(allocate_omarchy(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  // Per-block scratch: the f16-bit tile decode (uint words) and the f32
+  // Hadamard chain between the row and column stages.
+  const size_t scratch_words = static_cast<size_t>(blocks) * 16384;
+  // Debug knob for the scratch-offset transport: when
+  // MLX_OMARCHY_EXL3_SCRATCH_PAD is set to N > 0, dec16 and tmp share one
+  // backing buffer with an N-word pad in front of dec16 (element offset N)
+  // and a different non-zero gap before tmp (element offset 2N + words), so
+  // checked_item_offset reports non-zero scratch offsets end to end. The
+  // default (unset or 0) keeps the standalone allocations unchanged.
+  int scratch_pad = 0;
+  if (const char* pad_env = std::getenv("MLX_OMARCHY_EXL3_SCRATCH_PAD")) {
+    scratch_pad = std::atoi(pad_env);
+  }
+  if (scratch_pad < 0) {
+    omarchy::unsupported(
+        tag + " scratch pad (MLX_OMARCHY_EXL3_SCRATCH_PAD >= 0)", out);
+  }
+  array dec16({static_cast<int>(scratch_words)}, uint32, nullptr, {});
+  array tmp({static_cast<int>(scratch_words)}, float32, nullptr, {});
+  std::optional<array> scratch_backing;
+  if (scratch_pad > 0) {
+    scratch_backing = array(
+        Shape{static_cast<int>(
+            2 * scratch_pad + 2 * scratch_words)},
+        uint32,
+        nullptr,
+        {});
+    scratch_backing->set_data(allocate_omarchy(scratch_backing->nbytes()));
+    array::Flags view_flags{true, true, false};
+    dec16.copy_shared_buffer(
+        *scratch_backing,
+        Strides{1},
+        view_flags,
+        scratch_words,
+        scratch_pad);
+    tmp.copy_shared_buffer(
+        *scratch_backing,
+        Strides{1},
+        view_flags,
+        scratch_words,
+        2 * scratch_pad + static_cast<int64_t>(scratch_words));
+  } else {
+    dec16.set_data(allocate_omarchy(dec16.nbytes()));
+    tmp.set_data(allocate_omarchy(tmp.nbytes()));
+  }
+  for (const auto* a : std::vector<const array*>{&td, &shd, &svd, &dec16, &tmp, &out}) {
+    encoder.add_temporary(*a);
+  }
+  if (scratch_backing) {
+    encoder.add_temporary(*scratch_backing);
+  }
+  omarchy::ComputeKernel kernel;
+  switch (out.dtype()) {
+    case float32:
+      kernel = omarchy::ComputeKernel::Exl3DecodeF32;
+      break;
+    case float16:
+      kernel = omarchy::ComputeKernel::Exl3DecodeF16;
+      break;
+    case bfloat16:
+      kernel = omarchy::ComputeKernel::Exl3DecodeBF16;
+      break;
+    default:
+      omarchy::unsupported(tag + " out dtype", out);
+  }
+  omarchy::ComputeParams params;
+  params.count = blocks;
+  params.matrix_m = packed_n;
+  params.matrix_n = mask;
+  // Global out-tile stride (out_features / 16): the shader walks the
+  // trellis row-major over the [in/16, out/16] tile grid, matching the
+  // sushi bank layout and the CPU reference, not per-block tile runs.
+  params.matrix_k = checked_u32(
+      static_cast<size_t>(out_features_) / 16, tag, out);
+  params.lhs_offset = checked_item_offset(td, td.size(), tag, out);
+  params.rhs_offset = checked_item_offset(shd, shd.size(), tag, out);
+  params.aux_offset = checked_item_offset(svd, svd.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  // Scratch carries its element offsets the same way: the allocator may
+  // co-allocate dec16 and tmp into one VkBuffer, and binding() binds the
+  // whole buffer from byte 0.
+  params.lhs_size = checked_item_offset(dec16, dec16.size(), tag, out);
+  params.aux_size = checked_item_offset(tmp, tmp.size(), tag, out);
+  // The trellis and the packed f16/bf16 outputs are addressed as uint32
+  // words in the shader: their byte offsets must land on a word boundary
+  // (even uint16 element counts).
+  if (td.offset() % 4 != 0) {
+    omarchy::unsupported(tag + " trellis byte offset", out);
+  }
+  if (out.dtype() != float32 && out.offset() % 4 != 0) {
+    omarchy::unsupported(tag + " packed output byte offset", out);
+  }
+  std::array<omarchy::ComputeBinding, 6> bindings{
+      binding(td), binding(shd), binding(svd), binding(dec16),
+      binding(tmp), binding(out)};
+  encoder.dispatch_compute(kernel, bindings, params, blocks);
+  exl3_debug_dump_stages(
+      encoder, tag, dec16, tmp, out, in_features_, out_features_, bits_,
+      window_);
 }
 
 // Bonsai 1-bit affine dequantize, shaders/bonsai_dequant_q1.comp.

@@ -110,6 +110,13 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # shaders/bonsai_dequant_q1.comp). Composed fallback in fast.cpp.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-bonsai-qmv.patch"
+# EXL3 trellis decode: fast::Exl3Decode (M3a option-b decode primitive,
+# shaders/exl3_decode.comp) plus the composed fast::exl3_moe MoE surface
+# that the sushi mlx_exl3_moe C ABI binds (M3b).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-exl3-decode.patch"
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-exl3-moe.patch"
 
 # Backend-generic upstream fixes, applied in upstream first-parent order.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
