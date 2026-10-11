@@ -24,7 +24,8 @@
 //
 // Binding 1 is the same packed uint32 staging buffer as the scalar
 // kernel: [all scale bytes | (all bias bytes) | lhs words | rhs words].
-// Push-constant routing is unchanged.
+// Push-constant routing is unchanged. The DIRECT variant instead binds
+// the scales, biases and index arrays as they are (no staging copy).
 
 #version 460
 #extension GL_KHR_shader_subgroup_basic : require
@@ -76,6 +77,29 @@ layout(set = 0, binding = 2, std430) readonly buffer InputW {
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
 } output_data;
+#ifdef DIRECT
+layout(set = 0, binding = 4, std430) readonly buffer BiasParams {
+  uint values[];
+} bias_params;
+layout(set = 0, binding = 5, std430) readonly buffer LhsIndex {
+  uint values[];
+} lhs_index;
+layout(set = 0, binding = 6, std430) readonly buffer RhsIndex {
+  uint values[];
+} rhs_index;
+// Binding 1 holds the scales array itself. Word offsets of each array
+// ride in fields the staged layout leaves unused.
+#define SCALE_WORD(b) packed_params.values[params.shape[2] + (b) / 4u]
+#define BIAS_WORD(b) bias_params.values[params.shape[3] + (b) / 4u]
+#define LHS_WORD(i) lhs_index.values[(i)]
+#define RHS_WORD(i) rhs_index.values[(i)]
+#else
+#define SCALE_WORD(b) packed_params.values[params.aux_offset + (b) / 4u]
+#define BIAS_WORD(b) packed_params.values[params.aux_offset + \
+    (params.shape[1] + (b)) / 4u]
+#define LHS_WORD(i) packed_params.values[params.aux_offset + (i)]
+#define RHS_WORD(i) packed_params.values[params.aux_offset + (i)]
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -103,10 +127,9 @@ layout(push_constant) uniform Params {
 
 shared float subgroup_totals[8];
 
-// Decode one group parameter stored at byte_offset in the packed word
-// buffer, in the output dtype (identical to the scalar kernel).
-float decode_param(uint byte_offset) {
-  uint word = packed_params.values[params.aux_offset + byte_offset / 4u];
+// Decode one group parameter stored at byte_offset of a scales or biases
+// array, in the output dtype (identical to the scalar kernel).
+float unpack_param(uint word, uint byte_offset) {
 #if defined(USE_FP16)
   uint half_index = byte_offset / 2u;
   uint shifted = (half_index & 1u) == 0u ? word : word >> 16u;
@@ -118,6 +141,12 @@ float decode_param(uint byte_offset) {
 #else
   return uintBitsToFloat(word);
 #endif
+}
+float decode_scale(uint byte_offset) {
+  return unpack_param(SCALE_WORD(byte_offset), byte_offset);
+}
+float decode_bias(uint byte_offset) {
+  return unpack_param(BIAS_WORD(byte_offset), byte_offset);
 }
 
 void main() {
@@ -149,10 +178,8 @@ void main() {
   uint within = index - batch * matrix;
   uint row = within / params.matrix_n;
   uint column = within - row * params.matrix_n;
-  uint lhs = packed_params.values[params.aux_offset + lhs_word_base +
-      batch];
-  uint rhs = packed_params.values[params.aux_offset + rhs_word_base +
-      batch];
+  uint lhs = LHS_WORD(lhs_word_base + batch);
+  uint rhs = RHS_WORD(rhs_word_base + batch);
   uint x_base = params.lhs_offset +
       lhs * (params.matrix_m * params.matrix_k) +
       row * params.matrix_k;
@@ -174,12 +201,11 @@ void main() {
             w_base + k * (params.matrix_n / pack_factor)];
         uint q = (word >> lane_shift) & value_mask;
         uint group = k / group_size;
-        float scale = decode_param((scale_base + group * param_step) *
+        float scale = decode_scale((scale_base + group * param_step) *
             param_bytes);
         float bias = 0.0;
 #ifndef NO_BIAS
-        bias = decode_param(params.shape[1] +
-            (scale_base + group * param_step) * param_bytes);
+        bias = decode_bias((scale_base + group * param_step) * param_bytes);
 #endif
         accumulator += LOAD_VALUE(input_x.values[x_base + k]) *
             (scale * float(q) + bias);
@@ -197,11 +223,10 @@ void main() {
         uint word = input_w.values[w_base + k / pack_factor];
         uint lane_shift = (k - (k / pack_factor) * pack_factor) * bits;
         uint q = (word >> lane_shift) & value_mask;
-        float scale = decode_param((scale_base + group) * param_bytes);
+        float scale = decode_scale((scale_base + group) * param_bytes);
         float bias = 0.0;
 #ifndef NO_BIAS
-        bias = decode_param(params.shape[1] +
-            (scale_base + group) * param_bytes);
+        bias = decode_bias((scale_base + group) * param_bytes);
 #endif
         accumulator += LOAD_VALUE(input_x.values[x_base + k]) *
             (scale * float(q) + bias);

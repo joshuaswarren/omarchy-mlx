@@ -3256,17 +3256,136 @@ void dispatch_gather_qmm(
     return;
   }
   size_t index_count = lhs_d.size();
+  if (scales_d.offset() % 4 != 0 ||
+      (biases_d && biases_d->offset() % 4 != 0) ||
+      lhs_d.offset() % 4 != 0 || rhs_d.offset() % 4 != 0) {
+    omarchy::unsupported(tag + " byte offset", out);
+  }
+  bool no_bias = !biases.has_value();
+  // Subgroup path (affine, decode shape): one workgroup per output
+  // element with the K loop split across lanes. The scalar kernel's
+  // one-thread-per-output mapping launches only 33-48 workgroups at
+  // m == 1 and runs latency-bound serial K loops (measured 4.2 ms per
+  // dispatch on the M2: 80% of a DeepSeek MoE decode step). Requires
+  // subgroup arithmetic and an unclamped one-workgroup-per-output
+  // dispatch (counts above 65535 workgroups are z-chunked), so it is
+  // gated to m == 1.
+  bool use_sub = false;
+  if (!fp_mode && m == 1) {
+    // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel. Selector is
+    // restricted to the layout class proven correct end to end (bf16 and
+    // f16, 4-bit, group-64, transposed affine - the MoE decode cases;
+    // f16 added by MatmulGap H45); every other layout stays on the scalar kernel until its
+    // parity is proven per layout (jwm1/jw16 suite history: f32-T and
+    // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
+    // and untested layouts must not ride an unproven kernel). Counts
+    // above 65535 workgroups (large-batch routed decode) are handled by
+    // the kernel's x/z grid split, not by this gate.
+    const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    const auto& sub_caps = encoder.device().capabilities();
+    use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
+        transpose && bits == 4u && group_size == 64u &&
+        (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
+        sub_caps.subgroup_size == 32u &&
+        (sub_caps.subgroup_operations &
+         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+        sub_caps.storage_buffer_16bit_access;
+  }
+  // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
+  // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
+  // every row of a run re-reads the same expert's weights in the kernels
+  // above. gather_qmm_tile.comp dequantizes a weight tile once per run of
+  // up to 32 rows. Gated to the proven layout class of the subgroup kernel
+  // plus K, N multiples of 64; MLX_OMARCHY_GATHER_QMM_TILE=0 turns it off.
+  // Correct for any index order; only a sorted promise makes it fast.
+  // sX 64 x 34 floats + sW 64 x 64 floats + sLhs 32 words (shaders/gather_qmm_tile.comp);
+  // the Vulkan minimum maxComputeSharedMemorySize is 16384, so a small-limit
+  // driver falls through to the per-row kernels instead of failing pipeline creation.
+  constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
+  const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
+  const auto& tile_caps = encoder.device().capabilities();
+  // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
+  // so only the biased kernels exist.
+  // Average rows per expert (rows over the leading weight batch) of at least 4: measured on
+  // M1 Max, Qwen3-30B-A3B, the route loses at 1 row per expert (0.55x) and 2 (0.81x) and wins
+  // at 4 (1.36x) and 8 (2.06x) (notebook H71). 3 is unmeasured and stays on the per-row route.
+  // Real routing is not uniform, so this average is a proxy for run length.
+  size_t tile_experts = 1;
+  for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
+    tile_experts *= static_cast<size_t>(w.shape(axis));
+  }
+  const bool use_tile = right_sorted && !fp_mode && !no_bias && m == 1 && index_count >= 64 &&
+      index_count >= 4 * tile_experts &&
+      (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
+      group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
+      (out.dtype() == bfloat16 || out.dtype() == float16) &&
+      tile_caps.storage_buffer_16bit_access &&
+      kGatherQmmTileSharedBytes <= tile_caps.max_compute_shared_memory_size &&
+      // The row groups ride the y dimension; this guards the one limit the grid uses.
+      tile_row_groups <= omarchy::kMaxComputeGroupCountX;
+  omarchy::ComputeParams params;
+  params.count = checked_u32(out.size(), tag, out);
+  params.lhs_size = checked_u32(x.size(), tag, out);
+  params.rhs_size = checked_u32(w.size(), tag, out);
+  params.reduce_size = static_cast<uint32_t>(group_size);
+  params.output_size = params.count;
+  params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, out);
+  params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, out);
+  params.output_offset = checked_item_offset(out, out.size(), tag, out);
+  params.aux_offset = 0;
+  params.matrix_m = checked_u32(m, tag, out);
+  params.matrix_n = checked_u32(n, tag, out);
+  params.matrix_k = checked_u32(k, tag, out);
+  params.operation = static_cast<uint32_t>(bits);
+  // shape[0] is the per-half index count; flags bit 0 the non-transposed
+  // weight layout. Staged layout: shape[1] the bias region's byte base,
+  // in_strides[0]/out_strides[0] the lhs/rhs word offsets in the packed
+  // buffer. Direct layout: shape[2]/shape[3] the scales/biases word
+  // offsets, in_strides[0]/out_strides[0] the lhs/rhs word offsets.
+  params.shape[0] = checked_u32(index_count, tag, out);
+  params.flags = transpose ? 0u : 1u;
+  if (!omarchy::compute_index_span_fits(params.lhs_offset, x.size()) ||
+      !omarchy::compute_index_span_fits(params.rhs_offset, w.size())) {
+    omarchy::unsupported(tag + " index span", out);
+  }
+  // Decode route: bind the scales, biases and index arrays in place. The
+  // staged route below copies every scale and bias of every expert
+  // (15.9 MB per call at 128 experts) to select a few, which is 212 of
+  // 493 us per call on the M2 (notebook H86).
+  const char* direct_env = std::getenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
+  if (use_sub && !use_tile && !no_bias &&
+      (direct_env == nullptr || direct_env[0] != '0') &&
+      encoder.device().compute().binding_limit() >= 7) {
+    params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 4);
+    params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 4);
+    params.in_strides[0] = static_cast<uint32_t>(lhs_d.offset() / 4);
+    params.out_strides[0] = static_cast<uint32_t>(rhs_d.offset() / 4);
+    std::array<omarchy::ComputeBinding, 7> direct_bindings{
+        binding(x_d),
+        binding(scales_d),
+        binding(w_d),
+        binding(out),
+        binding(*biases_d),
+        binding(lhs_d),
+        binding(rhs_d)};
+    encoder.dispatch_compute(
+        out.dtype() == float16 ? omarchy::ComputeKernel::GatherQmmSubDirectF16
+                               : omarchy::ComputeKernel::GatherQmmSubDirectBF16,
+        direct_bindings,
+        params,
+        std::min(params.count, omarchy::kMaxComputeGroupCountX),
+        1u,
+        (params.count + omarchy::kMaxComputeGroupCountX - 1) /
+            omarchy::kMaxComputeGroupCountX);
+    return;
+  }
   size_t scale_bytes = scales.nbytes();
   size_t bias_bytes = biases ? biases->nbytes() : 0;
   auto align4 = [](size_t value) { return (value + 3) & ~size_t(3); };
   size_t bias_base = align4(scale_bytes);
   size_t index_base = align4(bias_base + bias_bytes);
   size_t packed_bytes = index_base + 2 * index_count * 4;
-  if (scales_d.offset() % 4 != 0 ||
-      (biases_d && biases_d->offset() % 4 != 0) ||
-      lhs_d.offset() % 4 != 0 || rhs_d.offset() % 4 != 0) {
-    omarchy::unsupported(tag + " byte offset", out);
-  }
   array packed(Shape{static_cast<int>(packed_bytes / 4)}, uint32, nullptr, {});
   array::Flags packed_flags;
   packed_flags.contiguous = true;
@@ -3315,37 +3434,13 @@ void dispatch_gather_qmm(
       static_cast<VkDeviceSize>(rhs_d.offset()),
       static_cast<VkDeviceSize>(index_base + index_count * 4));
 
-  omarchy::ComputeParams params;
-  params.count = checked_u32(out.size(), tag, out);
-  params.lhs_size = checked_u32(x.size(), tag, out);
-  params.rhs_size = checked_u32(w.size(), tag, out);
-  params.reduce_size = static_cast<uint32_t>(group_size);
-  params.output_size = params.count;
-  params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, out);
-  params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, out);
-  params.output_offset = checked_item_offset(out, out.size(), tag, out);
-  params.aux_offset = 0;
-  params.matrix_m = checked_u32(m, tag, out);
-  params.matrix_n = checked_u32(n, tag, out);
-  params.matrix_k = checked_u32(k, tag, out);
-  params.operation = static_cast<uint32_t>(bits);
-  // shape[0] is the per-half index count; shape[1] the bias region's
-  // byte base; in_strides[0]/out_strides[0] the lhs/rhs word offsets;
-  // flags bit 0 the non-transposed weight layout.
-  params.shape[0] = checked_u32(index_count, tag, out);
   params.shape[1] = static_cast<uint32_t>(bias_base);
-  params.flags = transpose ? 0u : 1u;
   params.in_strides[0] = static_cast<uint32_t>(index_base / 4);
   params.out_strides[0] =
       static_cast<uint32_t>(index_base / 4 + index_count);
-  if (!omarchy::compute_index_span_fits(params.lhs_offset, x.size()) ||
-      !omarchy::compute_index_span_fits(params.rhs_offset, w.size())) {
-    omarchy::unsupported(tag + " index span", out);
-  }
   // fp modes have no bias term; their kernels are the FP_MODE
   // no-bias variants. The bound global scale routes to the HGS
   // variants, whose fifth binding carries the float32 word.
-  bool no_bias = !biases.has_value();
   if (fp_mode && out_global_scale) {
     std::array<omarchy::ComputeBinding, 5> hgs_bindings{
         binding(x_d),
@@ -3377,68 +3472,7 @@ void dispatch_gather_qmm(
   std::array<omarchy::ComputeBinding, 4> bindings{
       binding(x_d), binding(packed), binding(w_d), binding(out)};
   omarchy::ComputeKernel kernel;
-  // Subgroup path (affine, decode shape): one workgroup per output
-  // element with the K loop split across lanes. The scalar kernel's
-  // one-thread-per-output mapping launches only 33-48 workgroups at
-  // m == 1 and runs latency-bound serial K loops (measured 4.2 ms per
-  // dispatch on the M2: 80% of a DeepSeek MoE decode step). Requires
-  // subgroup arithmetic and an unclamped one-workgroup-per-output
-  // dispatch (counts above 65535 workgroups are z-chunked), so it is
-  // gated to m == 1.
-  bool use_sub = false;
-  if (!fp_mode && params.matrix_m == 1) {
-    // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel. Selector is
-    // restricted to the layout class proven correct end to end (bf16 and
-    // f16, 4-bit, group-64, transposed affine - the MoE decode cases;
-    // f16 added by MatmulGap H45); every other layout stays on the scalar kernel until its
-    // parity is proven per layout (jwm1/jw16 suite history: f32-T and
-    // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
-    // and untested layouts must not ride an unproven kernel). Counts
-    // above 65535 workgroups (large-batch routed decode) are handled by
-    // the kernel's x/z grid split, not by this gate.
-    const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
-    const auto& sub_caps = encoder.device().capabilities();
-    use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
-        transpose && bits == 4u && group_size == 64u &&
-        (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
-        sub_caps.subgroup_size == 32u &&
-        (sub_caps.subgroup_operations &
-         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
-        sub_caps.storage_buffer_16bit_access;
-  }
-  // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
-  // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
-  // every row of a run re-reads the same expert's weights in the kernels
-  // above. gather_qmm_tile.comp dequantizes a weight tile once per run of
-  // up to 32 rows. Gated to the proven layout class of the subgroup kernel
-  // plus K, N multiples of 64; MLX_OMARCHY_GATHER_QMM_TILE=0 turns it off.
-  // Correct for any index order; only a sorted promise makes it fast.
-  // sX 64 x 34 floats + sW 64 x 64 floats + sLhs 32 words (shaders/gather_qmm_tile.comp);
-  // the Vulkan minimum maxComputeSharedMemorySize is 16384, so a small-limit
-  // driver falls through to the per-row kernels instead of failing pipeline creation.
-  constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
-  const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
-  const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
-  const auto& tile_caps = encoder.device().capabilities();
-  // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
-  // so only the biased kernels exist.
-  // Average rows per expert (rows over the leading weight batch) of at least 4: measured on
-  // M1 Max, Qwen3-30B-A3B, the route loses at 1 row per expert (0.55x) and 2 (0.81x) and wins
-  // at 4 (1.36x) and 8 (2.06x) (notebook H71). 3 is unmeasured and stays on the per-row route.
-  // Real routing is not uniform, so this average is a proxy for run length.
-  size_t tile_experts = 1;
-  for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
-    tile_experts *= static_cast<size_t>(w.shape(axis));
-  }
-  if (right_sorted && !fp_mode && !no_bias && params.matrix_m == 1 && index_count >= 64 &&
-      index_count >= 4 * tile_experts &&
-      (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
-      group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
-      (out.dtype() == bfloat16 || out.dtype() == float16) &&
-      tile_caps.storage_buffer_16bit_access &&
-      kGatherQmmTileSharedBytes <= tile_caps.max_compute_shared_memory_size &&
-      // The row groups ride the y dimension; this guards the one limit the grid uses.
-      tile_row_groups <= omarchy::kMaxComputeGroupCountX) {
+  if (use_tile) {
     const omarchy::ComputeKernel tile_kernel = out.dtype() == float16
         ? omarchy::ComputeKernel::GatherQmmTileF16
         : omarchy::ComputeKernel::GatherQmmTileBF16;
