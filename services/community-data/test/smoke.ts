@@ -497,6 +497,38 @@ scenario("cron rebuilds dataset; unpublished rows never appear", async () => {
   return `count=${doc.count}, lines=${lines.length}`;
 });
 
+scenario("every indexed row is readable; a deleted row leaves the index after the cron", async () => {
+  // Regression for the 2026-10-11 row-watch failure: a row removed from the
+  // database while the cached index still listed it made GET /v1/results/<sha>
+  // 404 for a client that walks the index.
+  async function walkIndex(): Promise<string[]> {
+    const list = await fetch(`${BASE}/v1/results`);
+    expect(list.status === 200, `results ${list.status}`);
+    const doc = (await list.json()) as { results: Array<{ content_sha256: string }> };
+    const shas = doc.results.map((r) => r.content_sha256);
+    for (const sha of shas) {
+      const one = await fetch(`${BASE}/v1/results/${sha}`);
+      expect(one.status === 200, `indexed row ${sha.slice(0, 8)} -> ${one.status}`);
+      await one.arrayBuffer();
+    }
+    return shas;
+  }
+  const archive = makeArchive(1, 31);
+  const sha = sha256Hex(archive);
+  const init = await initiate(archive);
+  expect(init.res.status === 200, `initiate ${init.res.status}`);
+  expect((await uploadChunk(sha, 0, archive)).res.status === 200, "chunk");
+  expect((await complete(sha)).res.status === 200, "complete");
+  const before = await walkIndex();
+  expect(before.includes(sha), "published row missing from the index");
+  await d1(`DELETE FROM chunks WHERE content_sha256 = '${sha}'`);
+  await d1(`DELETE FROM submissions WHERE content_sha256 = '${sha}'`);
+  expect((await fetch(`${BASE}/cdn-cgi/local/scheduled`)).status === 200, "scheduled");
+  const after = await walkIndex();
+  expect(!after.includes(sha), "deleted row still indexed after the cron");
+  return `walked ${before.length} rows before, ${after.length} after`;
+});
+
 scenario("GC removes incomplete submissions older than the window", async () => {
   const stale = "e".repeat(64);
   const old = Math.floor(Date.now() / 1000) - 8 * 24 * 3600;
