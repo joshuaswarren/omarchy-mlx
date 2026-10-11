@@ -28,7 +28,7 @@ may not be in your build. The Mac platform repository's menu has the row
 Install > AI > MLX (Apple GPU), added in
 [omacom/omarchy-mac#385](https://github.com/omacom/omarchy-mac/pull/385)
 (merged 2026-09-12). It runs the script below and does not install the
-private driver. A build from another fork may carry neither row.
+private driver. A build from another fork may carry neither row. A fork build can also list its own `[omarchy]` repository, which does not serve these packages; `pacman -Si omarchy-mac-ml` is the check. The official edge `aarch64/omarchy.db` lists `omarchy-mlx 0.7.28-2` and `omarchy-mlx-vulkan 0.7.28-2`; anything else is a different repo (issue #104).
 
 ## Install with the script
 
@@ -43,6 +43,14 @@ shift-heavy kernels, and the runtime prints a warning. The known
 differences from the packaged driver are in
 [docs/known-defects.md](known-defects.md). To use the private ICD,
 install `omarchy-mlx-vulkan` from the `[omarchy]` repository.
+
+Prefill is much slower on the system driver. Stock Mesa 26.2.4 does
+not advertise `VK_KHR_cooperative_matrix`, and an M1 Pro run of
+Qwen3.5-9B 4-bit measured 20.5 prompt tok/s with the system driver
+against 151.0 with the private ICD; decode was 23.0 against 23.8
+(issue #104). The script path is correct; the matrix tile path the
+private ICD enables is what the speed comes from. Install
+`omarchy-mlx-vulkan` to get it.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
