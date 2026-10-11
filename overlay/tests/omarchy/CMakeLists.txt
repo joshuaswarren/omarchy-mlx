@@ -26,6 +26,15 @@ target_link_options(omarchy_big_binding_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 
 doctest_discover_tests(omarchy_big_binding_tests)
 add_test(NAME omarchy_big_binding_tests COMMAND omarchy_big_binding_tests)
+
+add_executable(omarchy_dense_split_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_dense_split.cpp)
+target_link_libraries(omarchy_dense_split_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_dense_split_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_dense_split_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+add_test(NAME omarchy_dense_split_tests COMMAND omarchy_dense_split_tests)
+
 set_tests_properties(omarchy_big_binding_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"

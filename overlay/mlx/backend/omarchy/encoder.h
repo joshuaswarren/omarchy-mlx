@@ -92,6 +92,53 @@ inline ChunkedBinding chunk_operand(
   return {bind, nullptr, operand_size > 1 ? operand_size : 0};
 }
 
+// Descriptor byte offset of a window that starts at |first_byte|:
+// aligned down to the device's minStorageBufferOffsetAlignment so the
+// shifted binding is valid Vulkan. Honeykrisp lowers SSBO access as
+// 64bit_global_32bit_offset with robustBufferAccess off, so a shader
+// never reads the descriptor size and a window binding is addressable
+// exactly like the whole-array one (HkDescRange, 2026-10-06).
+inline VkDeviceSize window_descriptor_offset(
+    uint64_t first_byte,
+    uint32_t alignment) {
+  const VkDeviceSize aligned =
+      static_cast<VkDeviceSize>(first_byte) &
+      ~static_cast<VkDeviceSize>(alignment - 1);
+  return aligned;
+}
+
+// Element correction the shader must add to its element index after the
+// descriptor moved back to the aligned window base: non-negative and a
+// multiple of the alignment step for every dtype this backend binds
+// (itemsize divides the 16-byte alignment).
+inline uint32_t window_item_correction(
+    uint64_t first_byte,
+    uint32_t alignment,
+    size_t itemsize) {
+  const uint64_t moved = first_byte % alignment;
+  return static_cast<uint32_t>(moved / itemsize);
+}
+
+// Storage-buffer binding of the window [first_byte, last_byte) of
+// |value|'s buffer: descriptor offset aligned down, range capped at the
+// buffer end, word-rounded at the top exactly like binding().
+inline ComputeBinding window_binding(
+    const array& value,
+    uint64_t first_byte,
+    uint64_t last_byte,
+    uint32_t alignment) {
+  auto* buffer = static_cast<const VulkanBuffer*>(value.buffer().ptr());
+  const VkDeviceSize offset = window_descriptor_offset(first_byte, alignment);
+  const VkDeviceSize end = static_cast<VkDeviceSize>(last_byte);
+  const VkDeviceSize word_end = (end + 3) & ~static_cast<VkDeviceSize>(3);
+  return {
+      buffer->buffer,
+      offset,
+      std::min<VkDeviceSize>(
+          std::max<VkDeviceSize>(word_end - offset, 1), buffer->size - offset),
+      buffer};
+}
+
 // Per-stream command recorder over the device's single VkQueue. Recording
 // is BATCHED: primitive evals append to an open command buffer and the
 // buffer is submitted when a node/work budget is reached, a flush is

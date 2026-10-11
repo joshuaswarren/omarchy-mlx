@@ -667,8 +667,17 @@ void dispatch_matmul(
       bound_c, use_c ? params.aux_size : out.size(), name, out);
   params.output_offset = checked_item_offset(out, out.size(), name, out);
 
+  const uint32_t full_n = params.matrix_n;
+  // Route selection and dispatch for one column window. The windowed
+  // path below reuses this verbatim; the in-limit path calls it once
+  // with the full problem, so the single-dispatch code path (and its
+  // bit-exact outputs) is unchanged.
+  auto issue_dispatch = [&](omarchy::ComputeParams wparams,
+      omarchy::ComputeBinding b_binding,
+      omarchy::ComputeBinding c_binding,
+      omarchy::ComputeBinding out_binding) -> void {
   std::array<omarchy::ComputeBinding, 4> bindings{
-      binding(bound_a), binding(bound_b), binding(bound_c), binding(out)};
+      binding(bound_a), b_binding, c_binding, out_binding};
   auto kernel = out.dtype() == complex64
       ? omarchy::ComputeKernel::MatmulComplex64
       : select_float_kernel(
@@ -682,18 +691,18 @@ void dispatch_matmul(
   const auto& caps = encoder.device().capabilities();
   const bool coopmat_base = caps.cooperative_matrix_f32_8 &&
       caps.subgroup_size == 32 && !coopmat_disabled &&
-      params.matrix_m > 1u && params.matrix_k > 0u && !use_c;
+      wparams.matrix_m > 1u && wparams.matrix_k > 0u && !use_c;
   // matmul_coopmat.comp never reads alpha (MatmulF32Coopmat stays gated
   // on alpha == 1); matmul_coopmat_bf16.comp scales its f32 accumulator
   // by alpha at the drain, so MatmulBF16Coopmat may take any alpha -
   // that is the attention-scores shape (alpha = 1/sqrt(head_dim)).
   const bool coopmat_alpha = alpha == 1.0f ||
       kernel == omarchy::ComputeKernel::MatmulBF16;
-  bool bf16_aligned = ((params.lhs_offset | params.rhs_offset |
-      params.output_offset | a_gap | b_gap | params.matrix_n) & 1u) == 0u;
-  for (uint32_t axis = 0; bf16_aligned && axis < params.dims; ++axis) {
-    bf16_aligned = ((params.in_strides[axis] |
-        params.out_strides[axis]) & 1u) == 0u;
+  bool bf16_aligned = ((wparams.lhs_offset | wparams.rhs_offset |
+      wparams.output_offset | a_gap | b_gap | wparams.matrix_n) & 1u) == 0u;
+  for (uint32_t axis = 0; bf16_aligned && axis < wparams.dims; ++axis) {
+    bf16_aligned = ((wparams.in_strides[axis] |
+        wparams.out_strides[axis]) & 1u) == 0u;
   }
   // Scalar-FMA bf16 route (shaders/matmul_fma_bf16.comp): the
   // linear-layer orientation (row-major lhs, column-major rhs, alpha 1)
@@ -703,17 +712,17 @@ void dispatch_matmul(
   // MLX_OMARCHY_NO_MATMUL_FMA=1 falls back to the shipped pick for A/B.
   static const bool matmul_fma_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_FMA");
-  bool bf16_fma_aligned = ((params.lhs_offset | params.rhs_offset |
-      params.output_offset | a_gap | b_gap) % 8u) == 0u;
-  for (uint32_t axis = 0; bf16_fma_aligned && axis < params.dims; ++axis) {
-    bf16_fma_aligned = ((params.in_strides[axis] |
-        params.out_strides[axis]) % 8u) == 0u;
+  bool bf16_fma_aligned = ((wparams.lhs_offset | wparams.rhs_offset |
+      wparams.output_offset | a_gap | b_gap) % 8u) == 0u;
+  for (uint32_t axis = 0; bf16_fma_aligned && axis < wparams.dims; ++axis) {
+    bf16_fma_aligned = ((wparams.in_strides[axis] |
+        wparams.out_strides[axis]) % 8u) == 0u;
   }
   bool bf16_fma = !matmul_fma_disabled &&
       kernel == omarchy::ComputeKernel::MatmulBF16 && alpha == 1.0f &&
       b_transposed && !a_transposed && !use_c &&
-      params.matrix_m >= 32u && (params.matrix_k % 8u) == 0u &&
-      (params.matrix_n & 1u) == 0u && bf16_fma_aligned;
+      wparams.matrix_m >= 32u && (wparams.matrix_k % 8u) == 0u &&
+      (wparams.matrix_n & 1u) == 0u && bf16_fma_aligned;
   // The staged bf16 tile shares qmm_coopmat's 4 KiB staging footprint
   // (a 32x16 A patch and a 16x32 B patch); gate on the device limit the
   // same way the qmm route does instead of assuming it.
@@ -722,7 +731,7 @@ void dispatch_matmul(
   const bool coopmat = !sdpa && coopmat_base && coopmat_alpha &&
       (kernel == omarchy::ComputeKernel::MatmulF32 ||
        (kernel == omarchy::ComputeKernel::MatmulBF16 && bf16_aligned &&
-        (params.matrix_k % 8u) == 0u && params.matrix_m >= 32u &&
+        (wparams.matrix_k % 8u) == 0u && wparams.matrix_m >= 32u &&
         kMatmulCoopmatBf16SharedBytes <= caps.max_compute_shared_memory_size));
   // Driver split, measured (receipts/2026-09-12-prefill-fma-qualify):
   // where the bf16 cooperative-matrix route exists (fork) it beats the
@@ -736,14 +745,14 @@ void dispatch_matmul(
   // pair loads (one load per two bf16 pairs) instead of scalar words.
   // Pure transport: staged values are identical either way.
   if (coopmat && kernel == omarchy::ComputeKernel::MatmulBF16 &&
-      ((params.lhs_offset | params.rhs_offset | a_gap | b_gap) & 3u) == 0u) {
+      ((wparams.lhs_offset | wparams.rhs_offset | a_gap | b_gap) & 3u) == 0u) {
     bool pair_strides = true;
-    for (uint32_t axis = 0; pair_strides && axis < params.dims; ++axis) {
-      pair_strides = ((params.in_strides[axis] |
-          params.out_strides[axis]) & 3u) == 0u;
+    for (uint32_t axis = 0; pair_strides && axis < wparams.dims; ++axis) {
+      pair_strides = ((wparams.in_strides[axis] |
+          wparams.out_strides[axis]) & 3u) == 0u;
     }
     if (pair_strides) {
-      params.flags |= 8u;
+      wparams.flags |= 8u;
     }
   }
   if (coopmat) {
@@ -763,7 +772,7 @@ void dispatch_matmul(
   // matmul.comp, 64x64 tile. Decode (matrix_m == 1) keeps the 16x16
   // tile and the GEMV paths untouched.
   const bool rb = dtype_kernel == omarchy::ComputeKernel::MatmulF16 &&
-      params.matrix_m >= 32u && !use_c;
+      wparams.matrix_m >= 32u && !use_c;
   // Direct cooperative-matrix route (shaders/matmul_coopmat_direct.comp):
   // 8x8x8 operand tiles loaded straight from the buffers, no shared
   // staging; f16 on the fp16-operand shape, f32 on the fp32 shape, bf16
@@ -778,11 +787,11 @@ void dispatch_matmul(
   // must n (and m for a column-major lhs: the edge tile shifts back to
   // m - 32). The causal attention shortcuts stay on the kernels that
   // implement them.
-  bool direct_aligned = ((params.lhs_offset | params.rhs_offset |
-      params.output_offset | a_gap | b_gap) & 1u) == 0u;
-  for (uint32_t axis = 0; direct_aligned && axis < params.dims; ++axis) {
-    direct_aligned = ((params.in_strides[axis] |
-        params.out_strides[axis]) & 1u) == 0u;
+  bool direct_aligned = ((wparams.lhs_offset | wparams.rhs_offset |
+      wparams.output_offset | a_gap | b_gap) & 1u) == 0u;
+  for (uint32_t axis = 0; direct_aligned && axis < wparams.dims; ++axis) {
+    direct_aligned = ((wparams.in_strides[axis] |
+        wparams.out_strides[axis]) & 1u) == 0u;
   }
   const Dtype direct_dtype =
       dtype_kernel == omarchy::ComputeKernel::MatmulF16 ? float16
@@ -794,7 +803,7 @@ void dispatch_matmul(
   const bool direct_bf16_nt_row = direct_dtype != bfloat16 || !b_transposed ||
       omarchy::select_direct_matmul_route(
           omarchy::kDirectMatmulRows, caps.device_name, bfloat16, a_transposed,
-          true, params.matrix_m, params.matrix_n,
+          true, wparams.matrix_m, wparams.matrix_n,
           {omarchy::ComputeKernel::Count, 0u})
               .kernel != omarchy::ComputeKernel::Count;
   const bool direct_shape = direct_dtype == float16
@@ -805,10 +814,10 @@ void dispatch_matmul(
   const bool direct = !sdpa && !use_c &&
       causal.second == CausalSkip::None && caps.cooperative_matrix_f32_8 &&
       caps.subgroup_size == 32u && !coopmat_disabled &&
-      params.matrix_m >= 32u && params.matrix_n >= 32u &&
-      params.matrix_k > 0u && (params.matrix_k % 8u) == 0u &&
-      (params.matrix_n & 1u) == 0u &&
-      (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
+      wparams.matrix_m >= 32u && wparams.matrix_n >= 32u &&
+      wparams.matrix_k > 0u && (wparams.matrix_k % 8u) == 0u &&
+      (wparams.matrix_n & 1u) == 0u &&
+      (!a_transposed || (wparams.matrix_m & 1u) == 0u) && direct_aligned &&
       direct_shape;
   bf16_fma = bf16_fma && !direct;
   uint32_t direct_tile_n = 64u;
@@ -831,7 +840,7 @@ void dispatch_matmul(
     const omarchy::DirectMatmulRoute route =
         omarchy::select_direct_matmul_route(
             omarchy::kDirectMatmulRows, caps.device_name, direct_dtype,
-            a_transposed, b_transposed, params.matrix_m, params.matrix_n,
+            a_transposed, b_transposed, wparams.matrix_m, wparams.matrix_n,
             {kernel, 64u});
     kernel = route.kernel;
     direct_tile_n = route.tile_n;
@@ -855,46 +864,63 @@ void dispatch_matmul(
   if (sdpa) {
     kernel = sdpa_kernel;
   }
+  if (wparams.out_row_stride != 0u &&
+      kernel >= omarchy::ComputeKernel::MatmulDirectF16Nn &&
+      kernel <= omarchy::ComputeKernel::MatmulDirectBF16Tt) {
+    omarchy::unsupported(name + " windowed direct-coopmat route", out);
+  }
   if (causal.second != CausalSkip::None &&
       (rb || sdpa || kernel == omarchy::ComputeKernel::MatmulF32Coopmat)) {
-    params.aux_size = causal.first;
-    params.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
+    wparams.aux_size = causal.first;
+    wparams.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
   }
   const uint32_t tile =
       direct ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
-  uint64_t a_inner = params.matrix_m == 0u || params.matrix_k == 0u
+  uint64_t a_inner = wparams.matrix_m == 0u || wparams.matrix_k == 0u
       ? 0u
       : (a_transposed
-            ? static_cast<uint64_t>(params.matrix_k - 1) * a_gap +
-                params.matrix_m
-            : static_cast<uint64_t>(params.matrix_m - 1) * a_gap +
-                params.matrix_k);
-  uint64_t b_inner = params.matrix_k == 0u || params.matrix_n == 0u
+            ? static_cast<uint64_t>(wparams.matrix_k - 1) * a_gap +
+                wparams.matrix_m
+            : static_cast<uint64_t>(wparams.matrix_m - 1) * a_gap +
+                wparams.matrix_k);
+  uint64_t b_inner = wparams.matrix_k == 0u || wparams.matrix_n == 0u
       ? 0u
       : (b_transposed
-            ? static_cast<uint64_t>(params.matrix_n - 1) * b_gap +
-                params.matrix_k
-            : static_cast<uint64_t>(params.matrix_k - 1) * b_gap +
-                params.matrix_n);
+            ? static_cast<uint64_t>(wparams.matrix_n - 1) * b_gap +
+                wparams.matrix_k
+            : static_cast<uint64_t>(wparams.matrix_k - 1) * b_gap +
+                wparams.matrix_n);
   if (!omarchy::compute_index_span_fits(
-          params.lhs_offset, a_span + a_inner) ||
+          wparams.lhs_offset, a_span + a_inner) ||
       !omarchy::compute_index_span_fits(
-          params.rhs_offset, b_span + b_inner)) {
+          wparams.rhs_offset, b_span + b_inner)) {
     omarchy::unsupported(name + " index span", out);
   }
-  bool bf16_vec_aligned = ((params.lhs_offset | params.rhs_offset |
-      params.rhs_gap) & 3u) == 0u;
-  for (uint32_t axis = 0; bf16_vec_aligned && axis < params.dims; ++axis) {
-    bf16_vec_aligned = ((params.in_strides[axis] |
-        params.out_strides[axis]) & 3u) == 0u;
+  bool bf16_vec_aligned = ((wparams.lhs_offset | wparams.rhs_offset |
+      wparams.rhs_gap) & 3u) == 0u;
+  for (uint32_t axis = 0; bf16_vec_aligned && axis < wparams.dims; ++axis) {
+    bf16_vec_aligned = ((wparams.in_strides[axis] |
+        wparams.out_strides[axis]) & 3u) == 0u;
   }
-  const bool bf16_vec = !sdpa && out.dtype() == bfloat16 &&
-      params.matrix_m == 1u &&
+  bool bf16_vec = !sdpa && out.dtype() == bfloat16 &&
+      wparams.matrix_m == 1u &&
       b_transposed && !a_transposed && !use_c && alpha == 1.0f &&
-      (params.matrix_k % 128u) == 0u && (params.matrix_n % 4u) == 0u &&
+      (wparams.matrix_k % 128u) == 0u && (wparams.matrix_n % 4u) == 0u &&
       caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0 &&
       bf16_vec_aligned;
+  // A windowed dispatch must pick the SAME route family as the whole
+  // problem or the per-element accumulation order could change: every
+  // matrix_n gate above therefore sees the full width through this
+  // mismatch guard (windows are 32-multiples, so only an N whose own
+  // parity/mod-4 class admitted the route could flip).
+  if (wparams.out_row_stride != 0u &&
+      ((full_n & 3u) != (wparams.matrix_n & 3u))) {
+    bf16_aligned = false;
+    bf16_vec = false;
+    bf16_fma = false;
+  }
+
   if (bf16_vec) {
     omarchy::capsim::require_backed(
         encoder.device(),
@@ -908,8 +934,8 @@ void dispatch_matmul(
     encoder.dispatch_compute(
         omarchy::ComputeKernel::MatmulVecBF16,
         bindings,
-        params,
-        matrix_group_count(params.matrix_n, 4u),
+        wparams,
+        matrix_group_count(wparams.matrix_n, 4u),
         1u,
         checked_u32(batch_count, name, out));
     return;
@@ -919,19 +945,116 @@ void dispatch_matmul(
     encoder.dispatch_compute(
         fma_kernel,
         bindings,
-        params,
-        matrix_group_count(params.matrix_n, 128u),
-        matrix_group_count(params.matrix_m, 32u),
+        wparams,
+        matrix_group_count(wparams.matrix_n, 128u),
+        matrix_group_count(wparams.matrix_m, 32u),
         checked_u32(batch_count, name, out));
     return;
   }
   encoder.dispatch_compute(
       kernel,
       bindings,
-      params,
-      matrix_group_count(params.matrix_n, direct ? direct_tile_n : tile),
-      matrix_group_count(params.matrix_m, tile),
+      wparams,
+      matrix_group_count(wparams.matrix_n, direct ? direct_tile_n : tile),
+      matrix_group_count(wparams.matrix_m, tile),
       checked_u32(batch_count, name, out));
+};
+
+  // N-split for an oversized rhs or output binding (the readout class):
+  // window w covers output columns [n0, n1) and, for a transposed rhs
+  // (B = W.T of a row-major [N, K] weight), the contiguous W rows of the
+  // same span. Every window keeps the full K loop, so each output
+  // element accumulates in the single-dispatch order and the split is
+  // bit-identical. K-split is deliberately absent: it would reassociate
+  // the accumulation. Other orientations (non-transposed rhs, batched
+  // stacks, SDPA, causal) keep columns strided through the buffer, so no
+  // column window can cover one: they fall through to the single
+  // dispatch and the encoder's named refusal.
+  const VkDeviceSize range_limit = encoder.storage_buffer_range_limit();
+  const uint32_t offset_alignment =
+      encoder.device().capabilities().min_storage_buffer_offset_alignment;
+  const size_t b_itemsize = b->itemsize();
+  const size_t out_itemsize = out.itemsize();
+  const uint64_t b_bytes = static_cast<uint64_t>(b->size()) * b_itemsize;
+  const uint64_t out_bytes = static_cast<uint64_t>(out.size()) * out_itemsize;
+  const bool windowable_batch = params.dims == 0 ||
+      (params.dims == 1 && params.shape[0] == 1);
+  uint64_t window_cols = 0;
+  if (!sdpa && causal.second == CausalSkip::None && windowable_batch &&
+      (b_bytes > range_limit || out_bytes > range_limit)) {
+    uint64_t cap = ~0ull;
+    bool possible = true;
+    if (b_bytes > range_limit) {
+      if (!b_transposed) {
+        possible = false;
+      } else {
+        cap = std::min(
+            cap,
+            (static_cast<uint64_t>(range_limit) - 3) /
+                (static_cast<uint64_t>(k) * b_itemsize));
+      }
+    }
+    if (possible && out_bytes > range_limit) {
+      const uint64_t slab_head =
+          (static_cast<uint64_t>(m) - 1) * static_cast<uint64_t>(n);
+      if (static_cast<uint64_t>(range_limit) - 3 <=
+          slab_head * out_itemsize) {
+        possible = false;
+      } else {
+        cap = std::min(
+            cap,
+            (static_cast<uint64_t>(range_limit) - 3 -
+             slab_head * out_itemsize) / out_itemsize);
+      }
+    }
+    if (possible) {
+      window_cols = (cap / 32u) * 32u;
+    }
+  }
+  if (window_cols == 0) {
+    // When use_c is false, bound_c aliases out: window or whole, the
+    // c slot must agree so the encoder refusal sees the same range as
+    // the out slot (the shader ignores c when flags&2 is unset).
+    issue_dispatch(
+        params, binding(bound_b), binding(bound_c), binding(out));
+    return;
+  }
+  for (uint64_t n0 = 0; n0 < static_cast<uint64_t>(n); n0 += window_cols) {
+    const uint64_t n1 =
+        std::min(n0 + window_cols, static_cast<uint64_t>(n));
+    omarchy::ComputeParams wparams = params;
+    wparams.matrix_n = checked_u32(n1 - n0, name, out);
+    wparams.out_row_stride = params.matrix_n;
+    omarchy::ComputeBinding b_window = binding(bound_b);
+    if (b_bytes > range_limit) {
+      const uint64_t b_first =
+          (static_cast<uint64_t>(params.rhs_offset) + n0 * k) * b_itemsize;
+      const uint64_t b_last =
+          (static_cast<uint64_t>(params.rhs_offset) + n1 * k) * b_itemsize;
+      wparams.rhs_offset += omarchy::window_item_correction(
+          b_first, offset_alignment, b_itemsize);
+      b_window = omarchy::window_binding(
+          bound_b, b_first, b_last, offset_alignment);
+    }
+    omarchy::ComputeBinding out_window = binding(out);
+    if (out_bytes > range_limit) {
+      const uint64_t out_first =
+          (static_cast<uint64_t>(params.output_offset) + n0) * out_itemsize;
+      const uint64_t out_last =
+          (static_cast<uint64_t>(params.output_offset) + n1) * out_itemsize;
+      wparams.output_offset += omarchy::window_item_correction(
+          out_first, offset_alignment, out_itemsize);
+      out_window = omarchy::window_binding(
+          out, out_first, out_last, offset_alignment);
+    }
+    const omarchy::ComputeBinding c_window =
+        use_c ? binding(bound_c) : out_window;
+    issue_dispatch(
+        std::move(wparams),
+        std::move(b_window),
+        std::move(c_window),
+        std::move(out_window));
+  }
 }
 
 // Fills the general broadcast transport (dims/shape/strides) shared by
@@ -2681,17 +2804,23 @@ void dispatch_reduce_general(
     params.matrix_k = static_cast<uint32_t>(collapsed_rank);
   }
 
-  auto run_phase = [&](uint32_t flags, uint32_t dispatch_count) {
-    params.flags = flags;
-    const array& metadata = axis_metadata ? *axis_metadata : scratch;
-    std::array<omarchy::ComputeBinding, 4> bindings{
-        binding(bound_input), binding(scratch), binding(out), binding(metadata)};
+  const array& reduce_metadata = axis_metadata ? *axis_metadata : scratch;
+  auto run_phase = [&](uint32_t flags,
+      uint32_t dispatch_count,
+      const omarchy::ComputeParams& phase_params,
+      const std::array<omarchy::ComputeBinding, 4>& phase_bindings) {
+    omarchy::ComputeParams flushed = phase_params;
+    flushed.flags = flags;
     encoder.dispatch_compute(
         kernel,
-        bindings,
-        params,
+        phase_bindings,
+        flushed,
         omarchy::compute_dispatch_group_count(dispatch_count));
   };
+  std::array<omarchy::ComputeBinding, 4> phase_bindings{binding(bound_input),
+      binding(scratch),
+      binding(out),
+      binding(reduce_metadata)};
 
   if (bool_out) {
     uint32_t word_count = checked_u32(
@@ -2699,16 +2828,86 @@ void dispatch_reduce_general(
         operation_name,
         out);
     if (chunks == 1) {
-      run_phase(0u | 2u, word_count);
+      run_phase(0u | 2u, word_count, params, phase_bindings);
     } else {
-      run_phase(0u, checked_u32(partial_pairs, operation_name, out));
-      run_phase(1u, word_count);
+      run_phase(0u, checked_u32(partial_pairs, operation_name, out), params, phase_bindings);
+      run_phase(1u, word_count, params, phase_bindings);
     }
   } else if (chunks == 1) {
-    run_phase(0u | 2u, output_size);
+    // An oversized input binding windows over the first kept axis when
+    // the kept rows are contiguous slabs: window w covers rows [r0, r1),
+    // whose input and output bytes are contiguous, so both descriptors
+    // shift and the kept-extent vector shrinks by the window. Every
+    // window reduces each of its output elements over the FULL
+    // reduction axis in one dispatch, so the combine order per element
+    // is exactly the single dispatch's and the split is bit-identical
+    // for every operation and dtype (float Sum included). A
+    // reduction-axis split would reassociate float accumulation and is
+    // deliberately absent: the shapes that would need one (a single
+    // row's reduced span over the limit) keep the encoder's named
+    // refusal.
+    const VkDeviceSize reduce_limit = encoder.storage_buffer_range_limit();
+    const uint32_t reduce_alignment =
+        encoder.device().capabilities().min_storage_buffer_offset_alignment;
+    const uint64_t outer = kept.empty() ? 0u : kept[0].extent;
+    const uint64_t inner =
+        outer != 0 && output_size % outer == 0 ? output_size / outer : 0u;
+    const uint64_t in_row_elems =
+        outer != 0 && kept[0].stride != 0 &&
+            inner != 0 && inner * reduce_size_u32 == kept[0].stride
+        ? kept[0].stride
+        : 0u;
+    uint64_t reduce_step = 0;
+    if (in_row_elems != 0 && params.matrix_k == 0 && src.size() != 0 &&
+        binding(bound_input).range > reduce_limit) {
+      const uint64_t rows_fit =
+          (static_cast<uint64_t>(reduce_limit) - 3) / in_row_elems /
+          src.itemsize();
+      // Window starts must keep both shifted descriptors 16-byte
+      // aligned: the input advances stride*itemsize per row, the output
+      // inner*out_itemsize.
+      const auto align_rows = [](uint64_t row_bytes) {
+        const uint64_t rem = row_bytes % 16;
+        return rem == 0 ? 1ull : 16ull / std::gcd(rem, 16ull);
+      };
+      uint64_t step_align = std::lcm(
+          align_rows(in_row_elems * src.itemsize()),
+          align_rows(inner * out.itemsize()));
+      reduce_step = (rows_fit / step_align) * step_align;
+    }
+    if (reduce_step == 0) {
+      run_phase(0u | 2u, output_size, params, phase_bindings);
+    } else {
+      for (uint64_t r0 = 0; r0 < outer; r0 += reduce_step) {
+        const uint64_t r1 = std::min(r0 + reduce_step, outer);
+        const uint64_t win = r1 - r0;
+        omarchy::ComputeParams wparams = params;
+        wparams.shape[0] = checked_u32(win, operation_name, out);
+        wparams.output_size = checked_u32(win * inner, operation_name, out);
+        const uint64_t in_first =
+            (static_cast<uint64_t>(params.lhs_offset) +
+             r0 * kept[0].stride) * src.itemsize();
+        const uint64_t in_last =
+            (static_cast<uint64_t>(params.lhs_offset) +
+             r1 * kept[0].stride) * src.itemsize();
+        const uint64_t out_first =
+            (static_cast<uint64_t>(params.output_offset) + r0 * inner) *
+            out.itemsize();
+        const uint64_t out_last =
+            (static_cast<uint64_t>(params.output_offset) + r1 * inner) *
+            out.itemsize();
+        std::array<omarchy::ComputeBinding, 4> wbindings{
+            omarchy::window_binding(
+                bound_input, in_first, in_last, reduce_alignment),
+            phase_bindings[1],
+            omarchy::window_binding(out, out_first, out_last, reduce_alignment),
+            phase_bindings[3]};
+        run_phase(0u | 2u, wparams.output_size, wparams, wbindings);
+      }
+    }
   } else {
-    run_phase(0u, checked_u32(partial_pairs, operation_name, out));
-    run_phase(1u, output_size);
+    run_phase(0u, checked_u32(partial_pairs, operation_name, out), params, phase_bindings);
+    run_phase(1u, output_size, params, phase_bindings);
   }
 }
 // ---------------------------------------------------------------------------
@@ -4130,11 +4329,65 @@ void dispatch_arg_reduce_suffix(
       kernel = omarchy::ComputeKernel::ArgReduceF32;
       break;
   }
-  encoder.dispatch_compute(
-      kernel,
-      bindings,
-      params,
-      std::min(output_size, omarchy::kMaxComputeGroupCountX));
+  const VkDeviceSize arg_limit = encoder.storage_buffer_range_limit();
+  if (binding(src).range <= arg_limit) {
+    encoder.dispatch_compute(
+        kernel,
+        bindings,
+        params,
+        std::min(output_size, omarchy::kMaxComputeGroupCountX));
+    return;
+  }
+  // Oversized input: window rows [r0, r1). Each window's rows are a
+  // contiguous input slab and a contiguous index-output slab, so both
+  // descriptors shift; every window computes each of its rows over the
+  // FULL row length with the kernel's own ascending walk, so the
+  // per-row compare order is the single dispatch's and argmax/argmin
+  // results (including tie behavior) are bit-identical.
+  const uint32_t arg_alignment =
+      encoder.device().capabilities().min_storage_buffer_offset_alignment;
+  const uint64_t arg_rows = rows;
+  const uint64_t arg_row_bytes =
+      static_cast<uint64_t>(row_length) * src.itemsize();
+  const auto arg_align = [](uint64_t row_bytes) {
+    const uint64_t rem = row_bytes % 16;
+    return rem == 0 ? 1ull : 16ull / std::gcd(rem, 16ull);
+  };
+  const uint64_t rows_fit =
+      arg_row_bytes == 0
+      ? arg_rows
+      : (static_cast<uint64_t>(arg_limit) - 3) / arg_row_bytes;
+  uint64_t step_align = std::lcm(
+      arg_align(arg_row_bytes),
+      std::lcm(arg_align(src.itemsize()), arg_align(out.itemsize())));
+  const uint64_t arg_step = std::max<uint64_t>(
+      (rows_fit / step_align) * step_align, step_align);
+  for (uint64_t r0 = 0; r0 < arg_rows; r0 += arg_step) {
+    const uint64_t r1 = std::min(r0 + arg_step, arg_rows);
+    omarchy::ComputeParams wparams = params;
+    wparams.output_size = checked_u32(r1, operation_name, out);
+    const uint64_t in_first =
+        (static_cast<uint64_t>(params.lhs_offset) + r0 * row_length) *
+        src.itemsize();
+    const uint64_t in_last =
+        (static_cast<uint64_t>(params.lhs_offset) + r1 * row_length) *
+        src.itemsize();
+    const uint64_t out_first =
+        (static_cast<uint64_t>(params.output_offset) + r0) *
+        out.itemsize();
+    const uint64_t out_last =
+        (static_cast<uint64_t>(params.output_offset) + r1) *
+        out.itemsize();
+    std::array<omarchy::ComputeBinding, 3> wbindings{
+        omarchy::window_binding(src, in_first, in_last, arg_alignment),
+        omarchy::window_binding(src, in_first, in_last, arg_alignment),
+        omarchy::window_binding(out, out_first, out_last, arg_alignment)};
+    encoder.dispatch_compute(
+        kernel,
+        wbindings,
+        wparams,
+        std::min<uint64_t>(r1 - r0, omarchy::kMaxComputeGroupCountX));
+  }
 }
 void ArgReduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
@@ -9892,24 +10145,89 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
         omarchy::ComputeKernel::ReduceBF16);
     std::array<omarchy::ComputeBinding, 3> bindings{
         binding(bound_input), binding(scratch), binding(out)};
-    auto run_phase = [&](uint32_t flags, uint32_t dispatch_count) {
-      params.flags = flags;
+    std::array<omarchy::ComputeBinding, 3> phase_bindings = bindings;
+    auto run_phase = [&](uint32_t flags,
+        uint32_t dispatch_count,
+        const omarchy::ComputeParams& phase_params,
+        const std::array<omarchy::ComputeBinding, 3>& window_bindings) {
+      omarchy::ComputeParams flushed = phase_params;
+      flushed.flags = flags;
       encoder.dispatch_compute(
           kernel,
-          bindings,
-          params,
+          window_bindings,
+          flushed,
           omarchy::compute_dispatch_group_count(dispatch_count));
     };
     if (chunks == 1) {
-      run_phase(0u | 2u, output_size);
+      // An oversized input binding windows rows [r0, r1): each window's
+      // input and output slabs are contiguous, so both descriptors
+      // shift and output_size shrinks to the window. Every window runs
+      // each of its rows over the FULL reduction axis in the kernel's
+      // own ascending walk, so the accumulation order per output
+      // element is the single dispatch's and the split is bit-identical
+      // for float Sum included. Row lengths too big for one window
+      // would need a reduction-axis split, which reassociates float
+      // accumulation; those keep the encoder's named refusal.
+      const VkDeviceSize suffix_limit = encoder.storage_buffer_range_limit();
+      const uint32_t suffix_alignment =
+          encoder.device().capabilities().min_storage_buffer_offset_alignment;
+      const uint64_t suffix_rows = output_size;
+      const uint64_t suffix_row_bytes =
+          static_cast<uint64_t>(reduce_size_u32) * input.itemsize();
+      const auto suffix_align = [](uint64_t row_bytes) {
+        const uint64_t rem = row_bytes % 16;
+        return rem == 0 ? 1ull : 16ull / std::gcd(rem, 16ull);
+      };
+      const uint64_t rows_fit =
+          suffix_row_bytes == 0
+          ? suffix_rows
+          : (static_cast<uint64_t>(suffix_limit) - 3) / suffix_row_bytes;
+      const uint64_t step_align = std::lcm(
+          suffix_align(suffix_row_bytes),
+          std::lcm(
+              suffix_align(input.itemsize()),
+              suffix_align(out.itemsize())));
+      const uint64_t suffix_step =
+          (rows_fit / step_align) * step_align;
+      if (input.size() == 0 || binding(bound_input).range <= suffix_limit ||
+          suffix_step == 0) {
+        run_phase(0u | 2u, output_size, params, phase_bindings);
+      } else {
+        for (uint64_t r0 = 0; r0 < suffix_rows; r0 += suffix_step) {
+          const uint64_t r1 = std::min(r0 + suffix_step, suffix_rows);
+          omarchy::ComputeParams wparams = params;
+          wparams.output_size = checked_u32(r1, operation_name, out);
+          const uint64_t in_first =
+              (static_cast<uint64_t>(params.lhs_offset) +
+               r0 * reduce_size_u32) * input.itemsize();
+          const uint64_t in_last =
+              (static_cast<uint64_t>(params.lhs_offset) +
+               r1 * reduce_size_u32) * input.itemsize();
+          const uint64_t out_first =
+              (static_cast<uint64_t>(params.output_offset) + r0) *
+              out.itemsize();
+          const uint64_t out_last =
+              (static_cast<uint64_t>(params.output_offset) + r1) *
+              out.itemsize();
+          std::array<omarchy::ComputeBinding, 3> wbindings{
+              omarchy::window_binding(
+                  bound_input, in_first, in_last, suffix_alignment),
+              phase_bindings[1],
+              omarchy::window_binding(
+                  out, out_first, out_last, suffix_alignment)};
+          run_phase(0u | 2u, r1 - r0, wparams, wbindings);
+        }
+      }
     } else {
       run_phase(
           0u,
           checked_u32(
               static_cast<uint64_t>(output_size) * chunks,
               operation_name,
-              out));
-      run_phase(1u, output_size);
+              out),
+          params,
+          phase_bindings);
+      run_phase(1u, output_size, params, phase_bindings);
     }
     return;
   }

@@ -1046,6 +1046,15 @@ struct ComputeParams {
   uint32_t q_batchstride{0};
   uint32_t k_batchstride{0};
   uint32_t v_batchstride{0};
+  // Windowed-dispatch transport, appended after every field any shader
+  // already declares: a shader Params block is a prefix of this struct,
+  // so appending keeps every existing SPIR-V interface layout identical.
+  // Matmul-family windowed dispatches set out_row_stride to the full
+  // output row width while matrix_n shrinks to the window (0 = derive
+  // from matrix_n, the single-dispatch behavior).
+  uint32_t out_row_stride{0};
+  uint32_t window_lo{0};
+  uint32_t window_hi{0};
 };
 
 class ComputeRuntime {
