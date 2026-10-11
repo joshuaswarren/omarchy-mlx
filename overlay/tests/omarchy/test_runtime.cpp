@@ -709,6 +709,39 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
   }
 }
 
+TEST_CASE("submission-cap default resolves per calibrated board") {
+  // The G14C row ships calibrated (receipts/2026-10-02-submission-cap-19).
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 40000);
+
+  // The G13C/G13G rows are filled from
+  // receipts/2026-10-12-submission-cap-calibration; until that lands the
+  // placeholders are 0 and these fail on purpose (failing-first).
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") > 0);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") > 0);
+
+  // The uncalibrated M1 Pro row stays at 0: no guessed number for the
+  // reporter's board (G13S, t6000).
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Pro (G13S)") == 0);
+
+  // Nothing calibrated matches an unknown device.
+  CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
+
+  // The default for an uncalibrated board is the most conservative
+  // calibrated value: once the G13 rows are filled it must be no larger
+  // than the G14C budget (shorter submissions, never longer).
+  CHECK(omarchy::batch_work_fallback() <= 40000);
+  CHECK(omarchy::batch_work_fallback() > 0);
+
+  // Every calibrated row must sit between the off switch and the old
+  // global default: a calibrated value above 40000 would loosen the
+  // shipped cap on that board without a receipt saying why.
+  for (const auto& row : omarchy::kBatchWorkCalibration) {
+    if (row.budget > 0) {
+      CHECK(row.budget <= 40000);
+    }
+  }
+}
+
 TEST_CASE("a variable subgroup size is pinned to the reported size") {
   constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
   // Intel ANV: 8-32 lanes, reports 32.

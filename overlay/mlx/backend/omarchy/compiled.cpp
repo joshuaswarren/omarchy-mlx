@@ -482,7 +482,8 @@ void eval_compiled_tape(
             encoder.nodes(),
             encoder.batch_work(),
             omarchy::batch_node_budget(),
-            omarchy::batch_work_budget())) {
+            omarchy::batch_work_budget(
+                encoder.device().hardware_capabilities().device_name))) {
       encoder.commit();
     }
   }

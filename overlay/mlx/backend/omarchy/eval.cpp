@@ -151,7 +151,8 @@ void eval(array& arr) {
             encoder.nodes(),
             encoder.batch_work(),
             budget,
-            omarchy::batch_work_budget()) ||
+            omarchy::batch_work_budget(
+                encoder.device().hardware_capabilities().device_name)) ||
         alloc.pending_quarantine_bytes() >=
             alloc.get_memory_limit() / omarchy::kBatchByteBudgetDivisor) {
       encoder.commit();

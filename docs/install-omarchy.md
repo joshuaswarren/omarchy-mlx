@@ -136,17 +136,22 @@ submissions. So a ~78 ms submission hitches the desktop for about nine
 frames at 120 Hz. Submissions of 2-6 ms stay smooth, at the same GPU busy
 fraction (reporter's OpenGL measurement). `MLX_OMARCHY_BATCH_WORK=<groups>`
 bounds each submission to an estimated GPU cost. The open batch is submitted
-once its summed dispatch work-group counts reach the budget. The default
-(`40000` groups) is calibrated on the M2 Max. A 4B decode step then splits
+once its summed dispatch work-group counts reach the budget. The default is
+a per-board table (`receipts/2026-10-02-submission-cap-19`,
+`receipts/2026-10-12-submission-cap-calibration`): per-group GPU cost
+differs by an order of magnitude across the M1 family, so one global count
+cannot land every chip in the 2-6 ms band. A 4B decode step then splits
 into ~2-6 ms submissions. A single dispatch larger than the budget still
 runs whole. Splitting happens between dispatches. Copies/fills ride the
 node and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap
-(headless boxes). Scheduling only: every submission already waits on the
-stream's previous completion. Splitting preserves order, and results are
-bit-identical (greedy ids digests identical in every A/B pair;
-`receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max at the
-default: a 4B decode step drops from p50 20.9 ms to 5.6 ms per submission
-(decode tok/s −0.15 %). The 9B drops from 49.6 ms to 4.4 ms (+6 % decode).
+(headless boxes). Boards with no calibrated row take the most conservative
+calibrated value (shortest submissions). Scheduling only: every submission
+already waits on the stream's previous completion. Splitting preserves
+order, and results are bit-identical (greedy ids digests identical in every
+A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max
+at the default: a 4B decode step drops from p50 20.9 ms to 5.6 ms per
+submission (decode tok/s −0.15 %). The 9B drops from 49.6 ms to 4.4 ms
+(+6 % decode).
 Honest limit: frame pacing was not measured on a real logged-in compositor.
 None was available. The evidence is submission-length histograms. There is
 also a 60 Hz tiny-submit probe whose worst host latency was 2.7 ms even
