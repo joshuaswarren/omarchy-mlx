@@ -369,10 +369,15 @@ CapabilityReport collect_capabilities(
     const VkPhysicalDevice16BitStorageFeatures& f16,
     const VkPhysicalDeviceMaintenance3Properties& m3,
     const VkPhysicalDeviceMaintenance4Properties& m4,
-    const VkPhysicalDeviceSubgroupProperties& subgroup) {
+    const VkPhysicalDeviceSubgroupProperties& subgroup,
+    const VkPhysicalDeviceExternalMemoryHostPropertiesEXT& hostmem) {
   CapabilityReport caps;
   caps.subgroup_size = subgroup.subgroupSize;
   caps.subgroup_operations = subgroup.supportedOperations;
+  // minImportedHostPointerAlignment: recorded even when the extension is
+  // not listed, so receipts can show why the import path stays off.
+  caps.host_pointer_import_alignment =
+      hostmem.minImportedHostPointerAlignment;
   const auto& props = props2.properties;
   const auto& limits = props.limits;
   caps.device_name = props.deviceName;
@@ -499,6 +504,13 @@ CapabilityReport collect_capabilities(
         } else if (
             std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
           caps.queue_global_priority = true;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_external_memory_host") == 0) {
+          // The import path needs the extension listed AND a nonzero
+          // alignment; make_buffer re-checks both and falls back to a
+          // copy per call.
+          caps.host_pointer_import =
+              caps.host_pointer_import_alignment > 0;
 #ifdef OMARCHY_BF16_CMAT
         } else if (
             std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
@@ -704,10 +716,13 @@ bool Runtime::init_impl() {
     m3.pNext = &m4;
     VkPhysicalDeviceSubgroupProperties subgroup{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+    VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostmem{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
     VkPhysicalDeviceProperties2 props2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
     props2.pNext = &driver;
     driver.pNext = &subgroup;
+    subgroup.pNext = &hostmem;
     it.GetPhysicalDeviceProperties2(pd, &props2);
 
     DeviceSupport support = classify_physical_device(
@@ -771,7 +786,8 @@ bool Runtime::init_impl() {
         f16,
         m3,
         m4,
-        subgroup);
+        subgroup,
+        hostmem);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1146,6 +1162,9 @@ Device::Device(uint32_t physical_device_index) {
     if (hw.shader_atomic_float_add) {
       exts.push_back("VK_EXT_shader_atomic_float");
     }
+    if (hw.host_pointer_import) {
+      exts.push_back("VK_EXT_external_memory_host");
+    }
     if (hw.cooperative_matrix_f32_8) {
       exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     }
@@ -1272,6 +1291,13 @@ Device::Device(uint32_t physical_device_index) {
       InvalidateMappedMemoryRanges, vkInvalidateMappedMemoryRanges)
 
 #undef VKX_LOAD_DEVICE_FN
+
+  // Extension function, resolved best-effort: present only when the
+  // device enabled VK_EXT_external_memory_host. Null means the
+  // allocator's make_buffer import is unavailable (copy fallback).
+  dt.GetMemoryHostPointerPropertiesEXT =
+      reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
+          dt.GetDeviceProcAddr(device_, "vkGetMemoryHostPointerPropertiesEXT"));
 
   dt.GetDeviceQueue(device_, caps_.queue_family_index, 0, &queue_);
   // The live binding budget: what the backend wants, clamped by what this

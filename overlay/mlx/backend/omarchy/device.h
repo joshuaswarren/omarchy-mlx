@@ -115,6 +115,15 @@ struct CapabilityReport {
   // family's reported priorities and silently keeps the default when the
   // requested one is absent.
   bool queue_global_priority{false};
+  // VK_EXT_external_memory_host: the device lists the extension and
+  // reports a usable VkPhysicalDeviceExternalMemoryHostPropertiesEXT::
+  // minImportedHostPointerAlignment. Device creation enables the
+  // extension from this bit; the allocator's make_buffer import still
+  // validates each pointer (alignment, vkGetMemoryHostPointerPropertiesEXT,
+  // buffer memory requirements) per call and falls back to a copy
+  // whenever anything does not line up.
+  bool host_pointer_import{false};
+  uint32_t host_pointer_import_alignment{0};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};

@@ -673,3 +673,21 @@ set_tests_properties(omarchy_exl3_decode_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                      TIMEOUT 600)
+
+# Host-pointer import (VK_EXT_external_memory_host) for the
+# array(void*, ...) zero-copy path. Three subcases: aliasing + host
+# rewrite visible, unaligned pointer copy fallback, env kill switch
+# forces copy. Runs on Honeykrisp and on the dev-box llvmpipe path.
+add_executable(omarchy_host_import_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_host_import.cpp)
+target_link_libraries(omarchy_host_import_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_host_import_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_host_import_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_host_import_tests)
+add_test(NAME omarchy_host_import_tests COMMAND omarchy_host_import_tests)
+set_tests_properties(omarchy_host_import_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 300)

@@ -44,6 +44,15 @@ struct VulkanBuffer {
   // (convolve/pool boundary garbage, receipts/2026-09-11-wrong-value-
   // sweep). Fresh device-memory allocations are never recycled.
   bool recycled{false};
+  // True when this block aliases CALLER-owned host memory imported via
+  // VK_EXT_external_memory_host (make_buffer, the array(void*, ...)
+  // zero-copy path). data points at the caller's bytes, VkBuffer/
+  // VkDeviceMemory merely map the range onto the device. Imported blocks
+  // never enter the reuse cache and never get poisoned or flushed as if
+  // they were owned: their lifetime is the array's deleter chain
+  // (allocator::release quarantines the Vk objects until the driver is
+  // done, then the caller's deleter frees the host bytes).
+  bool imported{false};
 };
 
 // Stamp written by add_temporary for buffers recorded into an open
@@ -55,6 +64,14 @@ class VulkanAllocator : public allocator::Allocator {
   Buffer malloc(size_t size) override;
   void free(Buffer buffer) override;
   size_t size(Buffer buffer) const override;
+
+  // Zero-copy wrap of caller-owned host memory (mlx array(void*, ...)):
+  // returns a Buffer whose raw_ptr() IS |ptr| when the device supports
+  // VK_EXT_external_memory_host and the pointer/size can be imported;
+  // Buffer{nullptr} otherwise, which makes the caller copy. release()
+  // destroys the Vk objects; the host bytes stay the caller's.
+  Buffer make_buffer(void* ptr, size_t size) override;
+  void release(Buffer buffer) override;
 
   size_t get_active_memory() const {
     std::unique_lock lk(mutex_);

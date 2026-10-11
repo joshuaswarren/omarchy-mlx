@@ -170,6 +170,10 @@ struct DeviceTable {
   PFN_vkWaitSemaphores WaitSemaphores{nullptr};
   PFN_vkFlushMappedMemoryRanges FlushMappedMemoryRanges{nullptr};
   PFN_vkInvalidateMappedMemoryRanges InvalidateMappedMemoryRanges{nullptr};
+  // Optional (VK_EXT_external_memory_host): null unless the device
+  // enabled the extension; the allocator treats null as "no import".
+  PFN_vkGetMemoryHostPointerPropertiesEXT GetMemoryHostPointerPropertiesEXT{
+      nullptr};
 };
 
 // Filled by device creation. Valid for the lifetime of the runtime because

@@ -65,6 +65,24 @@ void poison_freed_buffer(void* data, size_t size) {
   }
 }
 
+// Host-pointer import toggle. Default on (the import path is the
+// sushi zero-copy expert-slab design's contract). The kill switch
+// forces the old copy path: MLX_OMARCHY_HOST_IMPORT=0|off|false|no
+// returns a null Buffer from make_buffer, identical to a backend
+// without the extension. Used to bisect a regression to the new
+// import path without rebuilding the test.
+bool host_import_disabled() {
+  const char* v = std::getenv("MLX_OMARCHY_HOST_IMPORT");
+  if (v == nullptr || *v == '\0') {
+    return false;
+  }
+  std::string s = v;
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return s == "0" || s == "off" || s == "false" || s == "no";
+}
+
 // Test-only hook: simulate one or more vkAllocateMemory OOM results.
 bool consume_test_oom() {
   const char* env = std::getenv("MLX_OMARCHY_TEST_OOM_REMAINING");
@@ -268,6 +286,155 @@ Buffer VulkanAllocator::malloc(size_t size) {
   return Buffer{buf};
 }
 
+Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
+  // Five early outs to the copy path. Every one of them is a contract
+  // the array(void*, ...) ctor accepts (Buffer{nullptr} -> copy): no
+  // device, env-killed, ptr/size too small, extension unadvertised, or
+  // the function pointer the backend's loader resolved to nothing.
+  if (ptr == nullptr || size == 0) {
+    return Buffer{nullptr};
+  }
+  if (!is_available() || host_import_disabled()) {
+    return Buffer{nullptr};
+  }
+  device();
+  const auto& hw = device().hardware_capabilities();
+  if (!hw.host_pointer_import) {
+    return Buffer{nullptr};
+  }
+  auto& dt = vk::device_table();
+  if (dt.GetMemoryHostPointerPropertiesEXT == nullptr) {
+    return Buffer{nullptr};
+  }
+  const uint32_t align = hw.host_pointer_import_alignment;
+  if (align == 0) {
+    return Buffer{nullptr};
+  }
+  if ((reinterpret_cast<uintptr_t>(ptr) % align) != 0) {
+    return Buffer{nullptr};
+  }
+  // Per-pointer validation: the host pointer must be importable and
+  // must land in at least one memory type.  The driver returns the
+  // memoryTypeBits we must intersect with the buffer's reqs; if that
+  // intersection is empty the import is impossible for this shape.
+  VkMemoryHostPointerPropertiesEXT hpp{
+      VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+  if (dt.GetMemoryHostPointerPropertiesEXT(
+          device().handle(),
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+          ptr,
+          &hpp) != VK_SUCCESS ||
+      hpp.memoryTypeBits == 0) {
+    return Buffer{nullptr};
+  }
+  // The allocation is taken to cover the requested bytes rounded UP to
+  // the import alignment (the spec requires the host range to be
+  // aligned; rounding beyond the requested size is harmless on every
+  // driver we exercise as long as the caller's slab is at least that
+  // big — the GPU never reads past nbytes). The buffer's memory
+  // requirements gate `reqs.size > import_size` is treated as
+  // impossible: a buffer cannot be backed by a memory allocation
+  // smaller than the driver itself requires, and clamping would
+  // silently corrupt a future rebind.
+  const size_t import_size = ((size + align - 1) / align) * align;
+
+  auto* buf = new VulkanBuffer{};
+  buf->imported = true;
+  buf->data = ptr;
+  buf->size = size;
+
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = size;
+  bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VkResult res = dt.CreateBuffer(device().handle(), &bci, nullptr, &buf->buffer);
+  if (res != VK_SUCCESS) {
+    delete buf;
+    return Buffer{nullptr};
+  }
+
+  VkMemoryRequirements reqs{};
+  dt.GetBufferMemoryRequirements(device().handle(), buf->buffer, &reqs);
+  if (reqs.size > import_size) {
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  // The memory type must satisfy both the buffer's reqs and the
+  // host-pointer props, and must be HOST_VISIBLE | HOST_COHERENT.
+  // Host memory is coherent with the CPU by definition; a non-coherent
+  // memory type for an imported host range is driver error, not our
+  // problem to paper over.
+  uint32_t type_bits =
+      reqs.memoryTypeBits & hpp.memoryTypeBits;
+  uint32_t type_index = find_memory_type(
+      type_bits,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  if (type_index == UINT32_MAX) {
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+
+  VkImportMemoryHostPointerInfoEXT imp{
+      VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT};
+  imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+  imp.pHostPointer = ptr;
+  VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  mai.pNext = &imp;
+  mai.allocationSize = import_size;
+  mai.memoryTypeIndex = type_index;
+  res = dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+  if (res != VK_SUCCESS) {
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  res = dt.BindBufferMemory(device().handle(), buf->buffer, buf->memory, 0);
+  if (res != VK_SUCCESS) {
+    // FreeMemory on an import has no effect on the host range; safe.
+    dt.FreeMemory(device().handle(), buf->memory, nullptr);
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  // No MapMemory: the imported range IS host memory; CPU writes go
+  // straight to |ptr|. buf->data = ptr is the aliasing contract that
+  // makes sushi's `data_ptr == slab.ptr` check pass.
+  {
+    std::unique_lock lk(mutex_);
+    live_by_handle_[buf->buffer] = buf;
+    active_memory_ += buf->size;
+    peak_memory_ = std::max(active_memory_, peak_memory_);
+  }
+  return Buffer{buf};
+}
+
+void VulkanAllocator::release(Buffer buffer) {
+  // The make_buffer mirror: only imported buffers arrive here. The
+  // quarantine mirrors free() so the Vk objects survive any in-flight
+  // GPU work before destroy_buffer() runs. Host bytes are the
+  // caller's; the wrapped_deleter in array.cpp invokes our deleter
+  // last, after we return.
+  auto* buf = static_cast<VulkanBuffer*>(buffer.ptr());
+  if (buf == nullptr) {
+    return;
+  }
+  std::unique_lock lk(mutex_);
+  active_memory_ -= buf->size;
+  if (buf->completion == 0) {
+    lk.unlock();
+    destroy_buffer(buf);
+    return;
+  }
+  if (buf->completion == kPendingCompletion) {
+    pending_quarantine_bytes_ += buf->size;
+  }
+  quarantine_.push_back(buf);
+}
+
 void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
   // Cache clear/release funnels through here while callers already hold
   // mutex_, so the non-coherent registry drops the buffer before its
@@ -276,7 +443,11 @@ void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
   auto& dt = vk::device_table();
   live_by_handle_.erase(buf->buffer);
   if (buf->memory != VK_NULL_HANDLE) {
-    dt.UnmapMemory(device().handle(), buf->memory);
+    // Imported host memory is never mapped (it IS host memory);
+    // UnmapMemory on a never-mapped import is an error per spec.
+    if (!buf->imported) {
+      dt.UnmapMemory(device().handle(), buf->memory);
+    }
     dt.FreeMemory(device().handle(), buf->memory, nullptr);
   }
   if (buf->buffer != VK_NULL_HANDLE) {
@@ -293,6 +464,13 @@ void VulkanAllocator::free(Buffer buffer) {
   size_t sz = buf->size;
   std::unique_lock lk(mutex_);
   active_memory_ -= sz;
+  // Imported buffers are caller-owned bytes; nothing the reuse cache
+  // does is ever safe. Quarantine until the driver drains, then
+  // destroy the Vk objects (release_quarantine sees the flag).
+  if (buf->imported) {
+    quarantine_.push_back(buf);
+    return;
+  }
   // A buffer stamped with a completion value has recorded GPU work that
   // may still touch it (kPendingCompletion = an open batch). Freeing the
   // array drops the accounting here — upstream Metal semantics — but the
@@ -348,6 +526,14 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
         buf->completion == kPendingCompletion ||
         !device().completions().execution_complete(buf->completion)) {
       still_quarantined.push_back(buf);
+      continue;
+    }
+    // Imported buffers reach this pass via free() (defensive; the
+    // normal path goes through release). Their Vk objects are safe to
+    // destroy; the host bytes belong to the caller and are untouched
+    // by destroy_buffer's UnmapMemory-skipping branch.
+    if (buf->imported) {
+      destroy_buffer(buf);
       continue;
     }
     buf->completion = 0;
