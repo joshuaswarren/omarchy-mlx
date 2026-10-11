@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash
 #   bash install.sh --ane
 #   bash install.sh --voice
-#   bash install.sh --uninstall   (add --purge to also remove chat history and saved pairs)
+#   bash install.sh --uninstall   (add --purge to also remove chat history, saved pairs and converted models)
 #
 # The default install writes only under $HOME, except for runtime packages
 # installed through pacman. --ane also provisions host-global ANE ownership.
@@ -243,9 +243,10 @@ case "${1:-}" in
     if command -v systemctl >/dev/null 2>&1; then
       systemctl --user disable --now mlx-omarchy-chat.service >/dev/null 2>&1 || true
     fi
-    # The data home is also the install prefix, so chat history and the saved
-    # pairs (assistant/history, assistant/pair-locks) live inside it. Keep them
-    # unless --purge is given, so a reinstall can resume the saved pair.
+    # The data home is also the install prefix, so chat history, the saved
+    # pairs (assistant/history, assistant/pair-locks) and the converted decision
+    # models a saved pair points at (models/) live inside it. Keep them unless
+    # --purge is given, so a reinstall can resume the saved pair.
     purge=0
     [[ "${2:-}" == "--purge" ]] && purge=1
     rm -rf "$BIN/mlx-omarchy" "$BIN/mlx-omarchy-demo" "$BIN/mlx-omarchy-chat" "$BIN/mlx-omarchy-info" \
@@ -257,7 +258,7 @@ case "${1:-}" in
     else
       for entry in "$PREFIX"/* "$PREFIX"/.[!.]*; do
         [[ -e "$entry" || -L "$entry" ]] || continue
-        [[ "$entry" == "$PREFIX/assistant" ]] && continue
+        [[ "$entry" == "$PREFIX/assistant" || "$entry" == "$PREFIX/models" ]] && continue
         rm -rf "$entry"
       done
       if [[ -d "$PREFIX/assistant" ]]; then
@@ -277,9 +278,9 @@ case "${1:-}" in
       fi
     fi
     if ((purge)); then
-      say "mlx-omarchy removed, including chat history and saved pairs. Model downloads stay in ~/.cache/huggingface; delete them yourself if you want the space back."
+      say "mlx-omarchy removed, including chat history, saved pairs and converted models. Model downloads stay in ~/.cache/huggingface; delete them yourself if you want the space back."
     else
-      say "mlx-omarchy removed. Chat history and saved pairs stay in $PREFIX/assistant, so a reinstall can resume them; run 'bash install.sh --uninstall --purge' to remove those too. Model downloads stay in ~/.cache/huggingface; delete them yourself if you want the space back."
+      say "mlx-omarchy removed. Chat history, saved pairs and their converted models stay in $PREFIX (assistant and models), so a reinstall can resume them; run 'bash install.sh --uninstall --purge' to remove those too. Model downloads stay in ~/.cache/huggingface; delete them yourself if you want the space back."
     fi
     exit 0
     ;;
@@ -746,5 +747,5 @@ echo "  Terminal chat:       mlx-omarchy-demo      (the same local coordinator, 
 echo "  Use in your scripts: mlx-omarchy your_script.py   (import mlx.core as mx)"
 echo "  Serve a model:       mlx-omarchy-serve     (also 'omarchy mlx serve' when registered)"
 echo "  Voice:               bash install.sh --voice   (adds local speech input and read-aloud deps)"
-echo "  Remove it:           bash install.sh --uninstall   (keeps chat history and saved pairs; add --purge to remove those too)"
+echo "  Remove it:           bash install.sh --uninstall   (keeps chat history, saved pairs and their converted models; add --purge to remove those too)"
 case ":$PATH:" in *":$BIN:"*) ;; *) echo "  note: $BIN is not on your PATH in this shell; open a new terminal or add it." ;; esac
