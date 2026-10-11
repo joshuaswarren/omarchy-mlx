@@ -1069,6 +1069,14 @@ exl3_moe_fused_dispatch_count();
 // One fused-arm eval happened (called by the primitive's eval_gpu).
 __attribute__((visibility("default"))) void
 exl3_moe_fused_count_fetch_add();
+// Number of decoded-f32 bank materializations the composed fallback did
+// (each exl3_moe call that went through the composed graph on GPU at the
+// covered pack geometry). Sushi never wants to see this for the fused
+// path; the chunked fused call should keep it at zero.
+__attribute__((visibility("default"))) uint64_t
+exl3_moe_decoded_bank_allocations();
+__attribute__((visibility("default"))) void
+exl3_moe_decoded_bank_allocations_fetch_add();
 
 class ComputeRuntime {
  public:

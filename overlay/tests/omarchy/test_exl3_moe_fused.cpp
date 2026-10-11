@@ -52,6 +52,8 @@ bool _allow_non_apple = [] {
 // backend include path.
 namespace mlx::core::omarchy {
 uint64_t exl3_moe_fused_dispatch_count();
+uint64_t exl3_moe_decoded_bank_allocations();
+void exl3_moe_decoded_bank_allocations_reset();
 }
 
 using namespace mlx::core;
@@ -140,14 +142,6 @@ CaseData make_case(const Pack& p, std::mt19937& rng) {
     std::vector<uint16_t> ones_out(out_f, 0x3C00);
     array sa(ones_in.data(), Shape{in_f}, uint16);
     array sv(ones_out.data(), Shape{out_f}, uint16);
-    if (kOracleBanksLoaded && n == (size_t)(kOracleE) *
-            ((size_t)(in_f / 16) * (out_f / 16) * (size_t)(p.bits * 16)) &&
-        in_f == kOracleHidden && out_f == kOracleInter &&
-        p.experts == kOracleE) {
-      if (bank_kind == 0) return kOracleTg;
-      if (bank_kind == 1) return kOracleTu;
-      return kOracleTd;
-    }
     for (int attempt = 0; attempt < 48; attempt++) {
       std::vector<uint16_t> v(n);
       for (auto& w : v) {
@@ -181,15 +175,15 @@ CaseData make_case(const Pack& p, std::mt19937& rng) {
     }
     return v;
   };
-  std::vector<uint16_t> tv = gen_trellis_bounded(tlen, p.hidden, p.inter);
+  std::vector<uint16_t> tv = gen_trellis_bounded(tlen, p.hidden, p.inter, 0);
   auto gt = array(tv.data(),
                   Shape{p.experts, p.hidden / 16, p.inter / 16, packed},
                   uint16);
-  std::vector<uint16_t> tu = gen_trellis_bounded(tlen, p.hidden, p.inter);
+  std::vector<uint16_t> tu = gen_trellis_bounded(tlen, p.hidden, p.inter, 1);
   auto ut = array(tu.data(),
                   Shape{p.experts, p.hidden / 16, p.inter / 16, packed},
                   uint16);
-  std::vector<uint16_t> td = gen_trellis_bounded(tlen, p.inter, p.hidden);
+  std::vector<uint16_t> td = gen_trellis_bounded(tlen, p.inter, p.hidden, 2);
   auto dt = array(td.data(),
                   Shape{p.experts, p.inter / 16, p.hidden / 16, packed},
                   uint16);
@@ -981,4 +975,354 @@ TEST_CASE("exl3 moe fused arm vs m3d oracle") {
     }
   }
   CHECK(ran >= 5);
+}
+
+
+TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
+  if (!gpu_ready()) {
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  Stream cs = new_stream(Device::cpu);
+  // Reuse the proven pack-r1 oracle banks (rows=1, hidden=2560, inter=640,
+  // E=32, k=10) for the E=32 case; for E=512, build a bank of 512 experts
+  // by padding unused experts with zero-trellis (only first 32 carry the
+  // real pack-r1 trellis; the rest contribute zero).
+  static bool loaded = false;
+  static std::vector<uint16_t> kTg32, kTu32, kTd32, kTg512, kTu512, kTd512;
+  static std::vector<float> kX1, kSlots1, kScores1;
+  static std::vector<uint16_t> kSuhg, kSuhu, kSuhd, kSvhg, kSvhu, kSvhd;
+  if (!loaded) {
+    std::ifstream f("/home/joshuawarren/scratch/sushi-final/m3d/sushi-fused/"
+                    "src/exl3/vk/test/oracle_fused.bin",
+                    std::ios::binary);
+    if (!f) {
+      skip("oracle_fused.bin not staged");
+      return;
+    }
+    f.seekg(12);
+    char name[16];
+    f.read(name, 16);
+    uint32_t rows, hidden, inter, E, k, n, mask;
+    float limit;
+    f.read((char*)&rows, 4);
+    f.read((char*)&hidden, 4);
+    f.read((char*)&inter, 4);
+    f.read((char*)&E, 4);
+    f.read((char*)&k, 4);
+    f.read((char*)&n, 4);
+    f.read((char*)&mask, 4);
+    f.read((char*)&limit, 4);
+    int rts = rows * k;
+    size_t ts = (size_t)(hidden / 16) * (inter / 16) * n;
+    kX1.assign((size_t)rows * hidden, 0.0f);
+    f.read((char*)kX1.data(), 4 * kX1.size());
+    kSlots1.assign(rts, 0);
+    f.read((char*)kSlots1.data(), 4 * rts);
+    kScores1.assign(rts, 0.0f);
+    f.read((char*)kScores1.data(), 4 * rts);
+    kTg32.assign(E * ts, 0);
+    f.read((char*)kTg32.data(), 2 * E * ts);
+    kTu32.assign(E * ts, 0);
+    f.read((char*)kTu32.data(), 2 * E * ts);
+    kTd32.assign(E * ts, 0);
+    f.read((char*)kTd32.data(), 2 * E * ts);
+    // Scale planes: replicate expert 0's slice across E (the 2-bit
+    // mcg keeps decoded weights inside |w| <= 4 for the real experts;
+    // unused experts get the same scales, which is fine because their
+    // zero trellis produces zero contribution).
+    auto read_one_then_replicate = [&](std::vector<uint16_t>& v, int sz) {
+      v.assign((size_t)E * sz, 0);
+      f.read((char*)v.data(), 2 * sz);
+      for (size_t i = 1; i < (size_t)E; i++) {
+        std::copy(v.begin(), v.begin() + sz, v.begin() + i * sz);
+      }
+    };
+    read_one_then_replicate(kSuhg, hidden);
+    read_one_then_replicate(kSuhu, hidden);
+    read_one_then_replicate(kSuhd, inter);
+    read_one_then_replicate(kSvhg, inter);
+    read_one_then_replicate(kSvhu, inter);
+    read_one_then_replicate(kSvhd, hidden);
+    // E=512 banks: pad to 512 experts by appending zero trellis.
+    const int E512 = 512;
+    kTg512.assign((size_t)E512 * ts, 0);
+    std::copy(kTg32.begin(), kTg32.end(), kTg512.begin());
+    kTu512.assign((size_t)E512 * ts, 0);
+    std::copy(kTu32.begin(), kTu32.end(), kTu512.begin());
+    kTd512.assign((size_t)E512 * ts, 0);
+    std::copy(kTd32.begin(), kTd32.end(), kTd512.begin());
+    loaded = true;
+  }
+  Pack p32{0, 2560, 640, 32, 10, 2, 0.0f};
+  CaseData c32{
+      array(kX1.data(), Shape{1, 2560}, float32),
+      array(kTg32.data(), Shape{32, 160, 40, 32}, uint16),
+      array(kSuhg.data(), Shape{32, 2560}, uint16),
+      array(kSvhg.data(), Shape{32, 640}, uint16),
+      array(kTu32.data(), Shape{32, 160, 40, 32}, uint16),
+      array(kSuhu.data(), Shape{32, 2560}, uint16),
+      array(kSvhu.data(), Shape{32, 640}, uint16),
+      array(kTd32.data(), Shape{32, 40, 160, 32}, uint16),
+      array(kSuhd.data(), Shape{32, 640}, uint16),
+      array(kSvhd.data(), Shape{32, 2560}, uint16),
+      array(kSlots1.data(), Shape{1, 10}, uint32),
+      array(kScores1.data(), Shape{1, 10}, float32)};
+  setenv("MLX_OMARCHY_EXL3_FUSED_ROWS", "17", 1);
+  omarchy::exl3_moe_decoded_bank_allocations_reset();
+  array single = fast::exl3_moe(
+      c32.x, c32.gt, c32.gsuh, c32.gsvh, c32.ut, c32.usuh, c32.usvh,
+      c32.dt, c32.dsuh, c32.dsvh, c32.slots, c32.scores,
+      p32.topk, 15, p32.limit, float32, gs);
+  eval(single);
+  CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+  // Chunked fused call (rows=2): row 0 = original, row 1 = -original.
+  std::vector<float> x2(2 * 2560);
+  for (int i = 0; i < 2560; i++) {
+    x2[i] = kX1[i];
+    x2[2560 + i] = -kX1[i];
+  }
+  std::vector<uint32_t> slots2(20);
+  for (int i = 0; i < 10; i++) {
+    slots2[i] = kSlots1[i];
+    slots2[10 + i] = kSlots1[i];
+  }
+  std::vector<float> scores2(20);
+  for (int i = 0; i < 10; i++) {
+    scores2[i] = kScores1[i];
+    scores2[10 + i] = kScores1[i];
+  }
+  array x2arr = array(x2.data(), Shape{2, 2560}, float32);
+  array slots2arr = array(slots2.data(), Shape{2, 10}, uint32);
+  array scores2arr = array(scores2.data(), Shape{2, 10}, float32);
+  Pack p2r{2, 2560, 640, 32, 10, 2, 0.0f};
+  omarchy::exl3_moe_decoded_bank_allocations_reset();
+  array chunked = fast::exl3_moe(
+      x2arr, c32.gt, c32.gsuh, c32.gsvh, c32.ut, c32.usuh, c32.usvh,
+      c32.dt, c32.dsuh, c32.dsvh, slots2arr, scores2arr,
+      p2r.topk, 15, p2r.limit, float32, gs);
+  eval(chunked);
+  CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+  {
+    auto a = astype(single, float32);
+    auto c = astype(chunked, float32);
+    eval(a, c);
+    const float* ap = a.data<float>();
+    const float* cp = c.data<float>();
+    for (int i = 0; i < 2560; i++) {
+      CHECK(cp[i] == ap[i]);
+      CHECK(cp[2560 + i] == -ap[i]);
+    }
+  }
+  // E=512 case: same input routed only to the first 32 experts (rest
+  // contribute zero via their zero trellis).
+  CaseData c512{
+      c32.x,
+      array(kTg512.data(), Shape{512, 160, 40, 32}, uint16),
+      c32.gsuh,
+      c32.gsvh,
+      array(kTu512.data(), Shape{512, 160, 40, 32}, uint16),
+      c32.usuh,
+      c32.usvh,
+      array(kTd512.data(), Shape{512, 40, 160, 32}, uint16),
+      c32.dsuh,
+      c32.dsvh,
+      c32.slots,
+      c32.scores};
+  Pack p512{0, 2560, 640, 512, 10, 2, 0.0f};
+  omarchy::exl3_moe_decoded_bank_allocations_reset();
+  array e512 = fast::exl3_moe(
+      c512.x, c512.gt, c512.gsuh, c512.gsvh, c512.ut, c512.usuh, c512.usvh,
+      c512.dt, c512.dsuh, c512.dsvh, c512.slots, c512.scores,
+      p512.topk, 15, p512.limit, float32, gs);
+  eval(e512);
+  CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+  {
+    auto a = astype(single, float32);
+    auto b = astype(e512, float32);
+    eval(a, b);
+    const float* ap = a.data<float>();
+    const float* bp = b.data<float>();
+    int diffs = 0;
+    for (int i = 0; i < 2560; i++) {
+      if (ap[i] != bp[i]) diffs++;
+    }
+    CHECK(diffs == 0);
+  }
+  unsetenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
+}
+
+
+TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
+  if (!gpu_ready()) {
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  Stream cs = new_stream(Device::cpu);
+  // Reuse the proven pack-r1 oracle banks (rows=1, hidden=2560, inter=640,
+  // E=32, k=10) for the E=32 case; for E=512, build a bank of 512 experts
+  // by padding unused experts with zero-trellis (only first 32 carry the
+  // real pack-r1 trellis; the rest contribute zero).
+  static bool loaded = false;
+  static std::vector<uint16_t> kTg32, kTu32, kTd32, kTg512, kTu512, kTd512;
+  static std::vector<float> kX1, kSlots1, kScores1;
+  static std::vector<uint16_t> kSuhg, kSuhu, kSuhd, kSvhg, kSvhu, kSvhd;
+  if (!loaded) {
+    std::ifstream f("/home/joshuawarren/scratch/sushi-final/m3d/sushi-fused/"
+                    "src/exl3/vk/test/oracle_fused.bin",
+                    std::ios::binary);
+    if (!f) {
+      skip("oracle_fused.bin not staged");
+      return;
+    }
+    f.seekg(12);
+    char name[16];
+    f.read(name, 16);
+    uint32_t rows, hidden, inter, E, k, n, mask;
+    float limit;
+    f.read((char*)&rows, 4);
+    f.read((char*)&hidden, 4);
+    f.read((char*)&inter, 4);
+    f.read((char*)&E, 4);
+    f.read((char*)&k, 4);
+    f.read((char*)&n, 4);
+    f.read((char*)&mask, 4);
+    f.read((char*)&limit, 4);
+    int rts = rows * k;
+    size_t ts = (size_t)(hidden / 16) * (inter / 16) * n;
+    kX1.assign((size_t)rows * hidden, 0.0f);
+    f.read((char*)kX1.data(), 4 * kX1.size());
+    kSlots1.assign(rts, 0);
+    f.read((char*)kSlots1.data(), 4 * rts);
+    kScores1.assign(rts, 0.0f);
+    f.read((char*)kScores1.data(), 4 * rts);
+    kTg32.assign(E * ts, 0);
+    f.read((char*)kTg32.data(), 2 * E * ts);
+    kTu32.assign(E * ts, 0);
+    f.read((char*)kTu32.data(), 2 * E * ts);
+    kTd32.assign(E * ts, 0);
+    f.read((char*)kTd32.data(), 2 * E * ts);
+    // Scale planes: replicate expert 0's slice across E (the 2-bit
+    // mcg keeps decoded weights inside |w| <= 4 for the real experts;
+    // unused experts get the same scales, which is fine because their
+    // zero trellis produces zero contribution).
+    auto read_one_then_replicate = [&](std::vector<uint16_t>& v, int sz) {
+      v.assign((size_t)E * sz, 0);
+      f.read((char*)v.data(), 2 * sz);
+      for (size_t i = 1; i < (size_t)E; i++) {
+        std::copy(v.begin(), v.begin() + sz, v.begin() + i * sz);
+      }
+    };
+    read_one_then_replicate(kSuhg, hidden);
+    read_one_then_replicate(kSuhu, hidden);
+    read_one_then_replicate(kSuhd, inter);
+    read_one_then_replicate(kSvhg, inter);
+    read_one_then_replicate(kSvhu, inter);
+    read_one_then_replicate(kSvhd, hidden);
+    // E=512 banks: pad to 512 experts by appending zero trellis.
+    const int E512 = 512;
+    kTg512.assign((size_t)E512 * ts, 0);
+    std::copy(kTg32.begin(), kTg32.end(), kTg512.begin());
+    kTu512.assign((size_t)E512 * ts, 0);
+    std::copy(kTu32.begin(), kTu32.end(), kTu512.begin());
+    kTd512.assign((size_t)E512 * ts, 0);
+    std::copy(kTd32.begin(), kTd32.end(), kTd512.begin());
+    loaded = true;
+  }
+  Pack p32{0, 2560, 640, 32, 10, 2, 0.0f};
+  CaseData c32{
+      array(kX1.data(), Shape{1, 2560}, float32),
+      array(kTg32.data(), Shape{32, 160, 40, 32}, uint16),
+      array(kSuhg.data(), Shape{32, 2560}, uint16),
+      array(kSvhg.data(), Shape{32, 640}, uint16),
+      array(kTu32.data(), Shape{32, 160, 40, 32}, uint16),
+      array(kSuhu.data(), Shape{32, 2560}, uint16),
+      array(kSvhu.data(), Shape{32, 640}, uint16),
+      array(kTd32.data(), Shape{32, 40, 160, 32}, uint16),
+      array(kSuhd.data(), Shape{32, 640}, uint16),
+      array(kSvhd.data(), Shape{32, 2560}, uint16),
+      array(kSlots1.data(), Shape{1, 10}, uint32),
+      array(kScores1.data(), Shape{1, 10}, float32)};
+  setenv("MLX_OMARCHY_EXL3_FUSED_ROWS", "17", 1);
+  omarchy::exl3_moe_decoded_bank_allocations_reset();
+  array single = fast::exl3_moe(
+      c32.x, c32.gt, c32.gsuh, c32.gsvh, c32.ut, c32.usuh, c32.usvh,
+      c32.dt, c32.dsuh, c32.dsvh, c32.slots, c32.scores,
+      p32.topk, 15, p32.limit, float32, gs);
+  eval(single);
+  CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+  // Chunked fused call (rows=2): row 0 = original, row 1 = -original.
+  std::vector<float> x2(2 * 2560);
+  for (int i = 0; i < 2560; i++) {
+    x2[i] = kX1[i];
+    x2[2560 + i] = -kX1[i];
+  }
+  std::vector<uint32_t> slots2(20);
+  for (int i = 0; i < 10; i++) {
+    slots2[i] = kSlots1[i];
+    slots2[10 + i] = kSlots1[i];
+  }
+  std::vector<float> scores2(20);
+  for (int i = 0; i < 10; i++) {
+    scores2[i] = kScores1[i];
+    scores2[10 + i] = kScores1[i];
+  }
+  array x2arr = array(x2.data(), Shape{2, 2560}, float32);
+  array slots2arr = array(slots2.data(), Shape{2, 10}, uint32);
+  array scores2arr = array(scores2.data(), Shape{2, 10}, float32);
+  Pack p2r{2, 2560, 640, 32, 10, 2, 0.0f};
+  omarchy::exl3_moe_decoded_bank_allocations_reset();
+  array chunked = fast::exl3_moe(
+      x2arr, c32.gt, c32.gsuh, c32.gsvh, c32.ut, c32.usuh, c32.usvh,
+      c32.dt, c32.dsuh, c32.dsvh, slots2arr, scores2arr,
+      p2r.topk, 15, p2r.limit, float32, gs);
+  eval(chunked);
+  CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+  {
+    auto a = astype(single, float32);
+    auto c = astype(chunked, float32);
+    eval(a, c);
+    const float* ap = a.data<float>();
+    const float* cp = c.data<float>();
+    for (int i = 0; i < 2560; i++) {
+      CHECK(cp[i] == ap[i]);
+      CHECK(cp[2560 + i] == -ap[i]);
+    }
+  }
+  // E=512 case: same input routed only to the first 32 experts (rest
+  // contribute zero via their zero trellis).
+  CaseData c512{
+      c32.x,
+      array(kTg512.data(), Shape{512, 160, 40, 32}, uint16),
+      c32.gsuh,
+      c32.gsvh,
+      array(kTu512.data(), Shape{512, 160, 40, 32}, uint16),
+      c32.usuh,
+      c32.usvh,
+      array(kTd512.data(), Shape{512, 40, 160, 32}, uint16),
+      c32.dsuh,
+      c32.dsvh,
+      c32.slots,
+      c32.scores};
+  Pack p512{0, 2560, 640, 512, 10, 2, 0.0f};
+  omarchy::exl3_moe_decoded_bank_allocations_reset();
+  array e512 = fast::exl3_moe(
+      c512.x, c512.gt, c512.gsuh, c512.gsvh, c512.ut, c512.usuh, c512.usvh,
+      c512.dt, c512.dsuh, c512.dsvh, c512.slots, c512.scores,
+      p512.topk, 15, p512.limit, float32, gs);
+  eval(e512);
+  CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+  {
+    auto a = astype(single, float32);
+    auto b = astype(e512, float32);
+    eval(a, b);
+    const float* ap = a.data<float>();
+    const float* bp = b.data<float>();
+    int diffs = 0;
+    for (int i = 0; i < 2560; i++) {
+      if (ap[i] != bp[i]) diffs++;
+    }
+    CHECK(diffs == 0);
+  }
+  unsetenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
 }
