@@ -1,6 +1,6 @@
---- a/mlx/fast.cpp	2026-10-10 17:28:08.380402094 -0500
-+++ b/mlx/fast.cpp	2026-10-10 17:28:08.861397795 -0500
-@@ -650,6 +650,215 @@
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -666,6 +666,230 @@
    return fallback({trellis, suh, svh})[0];
  }
  
@@ -44,13 +44,18 @@
 +          " must be a 4D [E, in/16, out/16, packed] uint16 array.");
 +    }
 +  };
-+  auto check_scale = [](const array& v, int size, const char* name) {
-+    if (v.ndim() != 1 || v.shape(0) != size ||
-+        (v.dtype() != float16 && v.dtype() != uint16)) {
++  auto check_scale = [](const array& v, int experts, int size,
++                        const char* name) {
++    // Sushi packs carry per-expert scale planes [E, size]; a 1D [size]
++    // vector shared by every expert stays legal for synthetic callers.
++    bool shape_ok =
++        (v.ndim() == 1 && v.shape(0) == size) ||
++        (v.ndim() == 2 && v.shape(0) == experts && v.shape(1) == size);
++    if (!shape_ok || (v.dtype() != float16 && v.dtype() != uint16)) {
 +      throw std::invalid_argument(
 +          std::string("[exl3_moe] ") + name +
-+          " must be a 1D float16/uint16 (bit pattern) array of the "
-+          "projection's axis length.");
++          " must be a 1D or [E, size] float16/uint16 (bit pattern) array "
++          "of the projection's axis length.");
 +    }
 +  };
 +  check_trellis(gate_trellis, "gate_trellis");
@@ -67,12 +72,12 @@
 +        "geometry (gate/up map hidden -> inter, down maps inter -> "
 +        "hidden).");
 +  }
-+  check_scale(gate_suh, hidden, "gate_suh");
-+  check_scale(gate_svh, inter, "gate_svh");
-+  check_scale(up_suh, hidden, "up_suh");
-+  check_scale(up_svh, inter, "up_svh");
-+  check_scale(down_suh, inter, "down_suh");
-+  check_scale(down_svh, hidden, "down_svh");
++  check_scale(gate_suh, gate_trellis.shape(0), hidden, "gate_suh");
++  check_scale(gate_svh, gate_trellis.shape(0), inter, "gate_svh");
++  check_scale(up_suh, gate_trellis.shape(0), hidden, "up_suh");
++  check_scale(up_svh, gate_trellis.shape(0), inter, "up_svh");
++  check_scale(down_suh, gate_trellis.shape(0), inter, "down_suh");
++  check_scale(down_svh, gate_trellis.shape(0), hidden, "down_svh");
 +  if (gate_trellis.shape(0) != experts ||
 +      up_trellis.shape(0) != experts ||
 +      down_trellis.shape(0) != experts) {
@@ -130,6 +135,16 @@
 +      slot_ids = reshape(slot_ids, {1, slot_ids.shape(0)}, s);
 +      sc = reshape(sc, {1, sc.shape(0)}, s);
 +    }
++    // Per-expert scale planes ([E, size]) slice to the expert's row; a 1D
++    // shared vector passes through. exl3_decode always sees a 1D scale
++    // vector, exactly the layout its kernel and reference are proven on.
++    auto scale_row = [&](const array& v, int e) {
++      if (v.ndim() == 1) {
++        return v;
++      }
++      return reshape(
++          slice(v, {e, 0}, {e + 1, v.shape(1)}, {1, 1}, s), {v.shape(1)}, s);
++    };
 +    auto decode_stack = [&](const array& t,
 +                            const array& suh,
 +                            const array& svh,
@@ -148,8 +163,8 @@
 +            {-1},
 +            s);
 +        ws.push_back(
-+            exl3_decode(te, suh, svh, in_f, out_f, t.shape(3) / 16, window,
-+                        float16, s));
++            exl3_decode(te, scale_row(suh, e), scale_row(svh, e), in_f, out_f,
++                        t.shape(3) / 16, window, float16, s));
 +      }
 +      // The production kernel emits f16 weights; round the CPU fallback
 +      // through f16 too so the composed math sees the same values.
@@ -216,9 +231,9 @@
  std::vector<array> RMSNorm::vjp(
      const std::vector<array>& primals,
      const std::vector<array>& cotangents,
---- a/mlx/fast.h	2026-10-10 17:28:08.380402094 -0500
-+++ b/mlx/fast.h	2026-10-10 17:28:08.894397500 -0500
-@@ -71,6 +71,36 @@
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -55,6 +55,36 @@
      std::uint32_t* dec16_out,
      float* mid_out);
  
@@ -255,8 +270,8 @@
  
  MLX_API array layer_norm(
      const array& x,
---- a/python/src/fast.cpp	2026-10-10 17:28:08.380402094 -0500
-+++ b/python/src/fast.cpp	2026-10-10 17:28:08.861397795 -0500
+--- a/python/src/fast.cpp
++++ b/python/src/fast.cpp
 @@ -242,6 +242,60 @@
        )pbdoc");
  
@@ -295,14 +310,14 @@
 +        Args:
 +            x (array): Input activations ``[rows, hidden]`` (or 1D row).
 +            gate_trellis (array): ``[E, hidden/16, inter/16, packed]``.
-+            gate_suh (array): gate row scales, ``[hidden]``.
-+            gate_svh (array): gate column scales, ``[inter]``.
++            gate_suh (array): gate row scales, ``[hidden]`` or ``[E, hidden]``.
++            gate_svh (array): gate column scales, ``[inter]`` or ``[E, inter]``.
 +            up_trellis (array): up trellis, gate geometry.
-+            up_suh (array): up row scales, ``[hidden]``.
-+            up_svh (array): up column scales, ``[inter]``.
++            up_suh (array): up row scales, ``[hidden]`` or ``[E, hidden]``.
++            up_svh (array): up column scales, ``[inter]`` or ``[E, inter]``.
 +            down_trellis (array): ``[E, inter/16, hidden/16, packed]``.
-+            down_suh (array): down row scales, ``[inter]``.
-+            down_svh (array): down column scales, ``[hidden]``.
++            down_suh (array): down row scales, ``[inter]`` or ``[E, inter]``.
++            down_svh (array): down column scales, ``[hidden]`` or ``[E, hidden]``.
 +            slots (array): uint32/int32 router ids, ``[rows, topk]``.
 +            scores (array): router probabilities, same shape as slots.
 +            topk (int): Experts routed per row.
