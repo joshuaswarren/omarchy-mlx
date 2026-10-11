@@ -202,7 +202,7 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-The mixture-of-experts models are the largest gap: gemma-4-26B-A4B reaches 15% of macOS on decode and 5% on prefill, Qwen3.6-35B-A3B 18% and 7%. The dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is 6.5-8.9 times faster than MLX at MoE prefill. One row fails on Linux today: gemma-4-E4B stalls a GPU submit during generation. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
+The mixture-of-experts models are the largest gap on decode: gemma-4-26B-A4B reaches 19% of macOS and Qwen3.6-35B-A3B 18%. Their prefill rose after the tiled expert route of PR #81 landed on main (it is not in v0.7.32). gemma-4-26B-A4B went from 29.9 to 116.50 tokens per second (3.9 times, now 21% of macOS) and Qwen3.6-35B-A3B from 39.4 to 117.52 (3.0 times, now 19%). The dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is now 2.3 times faster than MLX at gemma-4-26B-A4B prefill; it was 8.9 times. One row fails on Linux today: gemma-4-E4B stalls a GPU submit during generation. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
 
 On Qwen3.5-9B the Linux outputs are token-for-token identical to macOS for the 10 test generations. On the four larger models the greedy outputs of the 10 generations differ from macOS in at least one token (the output digests differ); no cause has been established yet.
 
@@ -211,12 +211,14 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / mac
 | Model | Decode | Prefill 512 |
 |---|---|---|
 | Qwen3.8-27B (dense 27B) | 13.5 / 19.5 = **69%** | 87.4 / 105.6 = **83%** |
-| gemma-4-26B-A4B (MoE, 4B active) | 10.0 / 66.0 = **15%** | 29.9 / 556.1 = **5%** |
+| gemma-4-26B-A4B (MoE, 4B active) | 12.61 / 66.0 = **19%** (was 10.0, 15%) | 116.50 / 556.1 = **21%** (was 29.9, 5%) |
 | gemma-4-31B (dense 31B) | 7.3 / 15.3 = **48%** | 62.4 / 90.0 = **69%** |
 | Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = **62%** | 299.4 / 339.0 = **88%** |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.4 / 75.6 = **18%** | 39.4 / 604.1 = **7%** |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 13.75 / 75.6 = **18%** (was 13.4, 18%) | 117.52 / 604.1 = **19%** (was 39.4, 7%) |
 | gemma-4-E4B (dense 4B) | fails to run (0%) | fails to run (0%) |
 | gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = **3%** | 1.9 / 581.1 = **0.3%** |
+
+The two mixture-of-experts rows with "was" values were re-measured on 2026-10-10 on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`, PR #81 included), with the Honeykrisp driver from the private ICD directory at Mesa git `6543eeb7df7`, which the scoring script selects with `VK_ICD_FILENAMES`. The "was" values are the 2026-10-09 measurements; they ran on wheel `0.32.4.dev202610090923+a48b7cc5`, before PR #81, and their driver was not recorded, so the PR #81 effect is the before and after difference, not an isolated test. The macOS values were not re-run. The output digests did not change (276e9fba and 6666c20f). The gemma-4-26B-A4B run started with a load average of 0.22. The Qwen3.6-35B-A3B run started with 1.11, so its numbers may be low. The other rows are unchanged.
 
 llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit), Linux / macOS:
 
