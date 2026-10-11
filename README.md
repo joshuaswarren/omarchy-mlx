@@ -331,6 +331,14 @@ kernel and driver module build it ran on, because they changed between runs:
   The run is reproducible. It does not match the reference output on every
   prompt (3 of 10 prompts match; the others diverge at the same step in repeat
   runs).
+- Qwen3.8-2B decode with numpy on OpenBLAS (module `bd34a12`, kernel 7.1.12-2-12.6-sep-ARCH, 2026-10-10, two runs on
+  one boot): 4.64 and 4.48 tokens per second. A generated-token step took 0.211 s and 0.226 s, against 0.826 s (1.21
+  tokens per second) before. The only change was the system BLAS. numpy had linked Arch's reference BLAS, which runs
+  on one thread, and the output projection took 604 ms per generated token with it; OpenBLAS takes 20 ms
+  (`sudo pacman -S blas-openblas`). The 16 generated tokens were the same as before. The float32 logits differ at the
+  rounding level (largest difference 4.0e-5), so the earlier logits hash no longer applies. The ANE part of a step was
+  slower on this boot (0.185 s and 0.200 s, against 0.163 s), and the cause was not isolated. The raw files are in the
+  [receipt](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-resident-decode-openblas).
 - Add-program latency (module `37ffb57`): 0.25 ms median per call. About 13
   percent of calls take longer than 0.4 ms, in a pattern that repeats every 8
   calls.
@@ -341,7 +349,7 @@ kernel and driver module build it ran on, because they changed between runs:
   tokens-per-second figure. The raw files are in the
   [receipt](https://github.com/joshuaswarren/omarchy-ane/tree/main/receipts/2026-10-10-m2-max-prog-lookup).
 
-Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and the resident session or Parakeet on module
+Not shown yet: a hybrid ANE and GPU split on this chip, a soak run, and Parakeet on module
 `bd34a12`. On the earlier module `ca09ce8`, a second pass over the 38 programs failed 5 times with a buffer-allocation
 error. The receipt above shows that pass loading on `bd34a12`. A tokens-per-second figure for the per-call path on that
 module has not been measured.
