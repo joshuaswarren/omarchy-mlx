@@ -174,6 +174,9 @@ struct DeviceTable {
   // enabled the extension; the allocator treats null as "no import".
   PFN_vkGetMemoryHostPointerPropertiesEXT GetMemoryHostPointerPropertiesEXT{
       nullptr};
+  // Optional (VK_KHR_external_memory_fd): null unless the device enabled
+  // the extension; the allocator treats null as "no dma-buf import".
+  PFN_vkGetMemoryFdPropertiesKHR GetMemoryFdPropertiesKHR{nullptr};
 };
 
 // Filled by device creation. Valid for the lifetime of the runtime because

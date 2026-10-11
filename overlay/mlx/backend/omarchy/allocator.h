@@ -13,6 +13,7 @@
 #include <vector>
 #include "mlx/allocator.h"
 #include "mlx/backend/common/buffer_cache.h"
+#include "mlx/backend/omarchy/udmabuf.h"
 
 namespace mlx::core::omarchy {
 
@@ -73,6 +74,19 @@ class VulkanAllocator : public allocator::Allocator {
   Buffer make_buffer(void* ptr, size_t size) override;
   void release(Buffer buffer) override;
 
+ private:
+  // make_buffer's udmabuf branch: |ptr| lies inside a slab created by
+  // omarchy_udmabuf_slab_create, so instead of the host-pointer import
+  // (not advertised by Honeykrisp) the slab's dma-buf is imported with
+  // VkImportMemoryFdInfoKHR. Same contract as make_buffer: Buffer{nullptr}
+  // means the caller copies, and an imported block never enters the
+  // reuse cache.
+  Buffer make_dmabuf_buffer(
+      void* ptr,
+      size_t size,
+      const udmabuf::Region& region);
+
+ public:
   size_t get_active_memory() const {
     std::unique_lock lk(mutex_);
     return active_memory_;

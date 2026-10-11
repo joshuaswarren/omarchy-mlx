@@ -691,3 +691,24 @@ set_tests_properties(omarchy_host_import_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                      TIMEOUT 300)
+
+# udmabuf expert-slab ABI (the Linux zero-copy path): create/destroy/sync,
+# registry dispatch in make_buffer, and the copy fallback when the import
+# is impossible. The create ioctl is hookable so the CT (no /dev/udmabuf)
+# still exercises memfd + registry + fallback; on a udmabuf-kernel device
+# the same binary runs the real path end to end.
+add_executable(omarchy_udmabuf_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_udmabuf_slab.cpp)
+target_link_libraries(omarchy_udmabuf_tests PRIVATE mlx doctest)
+target_include_directories(omarchy_udmabuf_tests
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+target_compile_options(omarchy_udmabuf_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_udmabuf_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_udmabuf_tests)
+add_test(NAME omarchy_udmabuf_tests COMMAND omarchy_udmabuf_tests)
+set_tests_properties(omarchy_udmabuf_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 300)

@@ -4,6 +4,7 @@
 #include "mlx/backend/omarchy/allocator.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include <unordered_set>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/vulkan.h"
@@ -346,6 +348,14 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
         "decline=no-device ", "");
     return Buffer{nullptr};
   }
+  // udmabuf slab dispatch: a pointer inside a slab created by
+  // omarchy_udmabuf_slab_create imports its dma-buf (the Linux
+  // Honeykrisp path; the host-pointer extension is not advertised
+  // there). Everything else takes the host-pointer path below.
+  udmabuf::Region region{};
+  if (udmabuf::find_region(ptr, &region)) {
+    return make_dmabuf_buffer(ptr, size, region);
+  }
   if (host_import_disabled()) {
     host_import_note(
         "decline=env-disabled ", "MLX_OMARCHY_HOST_IMPORT=0");
@@ -521,6 +531,154 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
   host_import_note(
       "aliased ", "align=" + std::to_string(align) +
           " import_size=" + std::to_string(import_size));
+  return Buffer{buf};
+}
+
+Buffer VulkanAllocator::make_dmabuf_buffer(
+    void* ptr,
+    size_t size,
+    const udmabuf::Region& region) {
+  // Mirror of make_buffer with VkImportMemoryFdInfoKHR instead of
+  // VkImportMemoryHostPointerInfoEXT: every decline returns
+  // Buffer{nullptr} and the caller copies. The dma-buf fd is dup'd for
+  // the import because a successful vkAllocateMemory CONSUMES it; the
+  // registry's fd stays open for later imports and the slab's lifetime.
+  auto& dt = vk::device_table();
+  if (dt.GetMemoryFdPropertiesKHR == nullptr) {
+    udmabuf::note("decline=dmabuf-fn-missing ", "");
+    return Buffer{nullptr};
+  }
+  const size_t offset =
+      static_cast<const char*>(ptr) - static_cast<const char*>(region.ptr);
+  if (size == 0 || offset + size > region.size) {
+    udmabuf::note(
+        "decline=dmabuf-range ", "offset=" + std::to_string(offset) +
+            " size=" + std::to_string(size) + " slab=" +
+            std::to_string(region.size));
+    return Buffer{nullptr};
+  }
+  VkMemoryFdPropertiesKHR fp{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+  VkResult res = dt.GetMemoryFdPropertiesKHR(
+      device().handle(),
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+      region.fd,
+      &fp);
+  if (res != VK_SUCCESS || fp.memoryTypeBits == 0) {
+    udmabuf::note(
+        "decline=dmabuf-fdprops-failed ",
+        std::string("vkresult=") + vk::result_string(res) + " fd_types=" +
+            hex32(fp.memoryTypeBits));
+    return Buffer{nullptr};
+  }
+
+  auto* buf = new VulkanBuffer{};
+  buf->imported = true;
+  buf->data = ptr;
+  buf->size = size;
+
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = size;
+  bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  res = dt.CreateBuffer(device().handle(), &bci, nullptr, &buf->buffer);
+  if (res != VK_SUCCESS) {
+    udmabuf::note(
+        "decline=dmabuf-create-buffer-failed ",
+        std::string("vkresult=") + vk::result_string(res));
+    delete buf;
+    return Buffer{nullptr};
+  }
+  VkMemoryRequirements reqs{};
+  dt.GetBufferMemoryRequirements(device().handle(), buf->buffer, &reqs);
+  const size_t available = region.size - offset;
+  if (reqs.size > available) {
+    udmabuf::note(
+        "decline=dmabuf-reqs-too-big ",
+        "reqs_size=" + std::to_string(reqs.size) + " available=" +
+            std::to_string(available));
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  uint32_t type_bits = reqs.memoryTypeBits & fp.memoryTypeBits;
+  uint32_t type_index = find_memory_type(
+      type_bits,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  if (type_index == UINT32_MAX) {
+    std::string detail = "fd_types=" + hex32(fp.memoryTypeBits) +
+        " reqs_types=" + hex32(reqs.memoryTypeBits) + " common=" +
+        hex32(type_bits);
+    if (type_bits != 0) {
+      const auto& mem = device().memory_properties();
+      for (uint32_t t = 0; t < mem.memoryTypeCount && t < 32; ++t) {
+        if (type_bits & (1u << t)) {
+          detail += " t" + std::to_string(t) + "=0x" +
+              hex32(mem.memoryTypes[t].propertyFlags).substr(2);
+        }
+      }
+      udmabuf::note("decline=dmabuf-no-coherent-type ", detail);
+    } else {
+      udmabuf::note("decline=dmabuf-no-common-type ", detail);
+    }
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  int dupfd = dup(region.fd);
+  if (dupfd < 0) {
+    udmabuf::note(
+        "decline=dmabuf-dup-failed ", "errno=" + std::to_string(errno));
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  VkImportMemoryFdInfoKHR imp{
+      VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+  imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+  imp.fd = dupfd;
+  VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  mai.pNext = &imp;
+  // The import takes the whole dma-buf range; the buffer binds inside it
+  // at |offset| (0 for a whole-slab array, sushi's shape).
+  mai.allocationSize = region.size;
+  mai.memoryTypeIndex = type_index;
+  res = dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
+  if (res != VK_SUCCESS) {
+    // A failed import does not consume the fd.
+    close(dupfd);
+    udmabuf::note(
+        "decline=dmabuf-alloc-failed ", "type=" + std::to_string(type_index) +
+            " vkresult=" + std::string(vk::result_string(res)));
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    return Buffer{nullptr};
+  }
+  res = dt.BindBufferMemory(
+      device().handle(), buf->buffer, buf->memory, offset);
+  if (res != VK_SUCCESS) {
+    // FreeMemory on an import only releases the import; the dma-buf and
+    // the mmap stay with the slab.
+    dt.FreeMemory(device().handle(), buf->memory, nullptr);
+    dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
+    delete buf;
+    udmabuf::note(
+        "decline=dmabuf-bind-failed ",
+        std::string("vkresult=") + vk::result_string(res));
+    return Buffer{nullptr};
+  }
+  {
+    std::unique_lock lk(mutex_);
+    live_by_handle_[buf->buffer] = buf;
+    active_memory_ += buf->size;
+    peak_memory_ = std::max(active_memory_, peak_memory_);
+  }
+  udmabuf::note(
+      "aliased ", "type=" + std::to_string(type_index) +
+          " fd_types=" + hex32(fp.memoryTypeBits) + " reqs_types=" +
+          hex32(reqs.memoryTypeBits) + " import_size=" +
+          std::to_string(region.size));
   return Buffer{buf};
 }
 

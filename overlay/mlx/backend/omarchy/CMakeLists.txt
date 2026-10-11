@@ -831,6 +831,7 @@ install(
 target_sources(
   mlx
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/allocator.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/udmabuf.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/compiled.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/compute.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/custom_kernel.cpp

@@ -124,6 +124,16 @@ struct CapabilityReport {
   // whenever anything does not line up.
   bool host_pointer_import{false};
   uint32_t host_pointer_import_alignment{0};
+  // VK_KHR_external_memory_fd + VK_EXT_external_memory_dma_buf both
+  // listed: the allocator can import a dma-buf fd
+  // (VkImportMemoryFdInfoKHR, DMA_BUF_BIT_EXT), which is how a
+  // /dev/udmabuf expert slab becomes GPU-visible (the Linux path; the
+  // host-pointer extension is not advertised by Honeykrisp). Device
+  // creation enables both (plus VK_KHR_external_memory) from this bit;
+  // make_buffer still validates the import per call
+  // (vkGetMemoryFdPropertiesKHR, buffer memory requirements) and falls
+  // back to a copy whenever anything does not line up.
+  bool dma_buf_import{false};
   size_t total_memory{0};
   VkDeviceSize max_allocation_size{0};
   VkDeviceSize max_buffer_size{0};

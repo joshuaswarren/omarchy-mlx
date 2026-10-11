@@ -481,6 +481,8 @@ CapabilityReport collect_capabilities(
   caps.cooperative_matrix_f16_8 = false;
   caps.cooperative_matrix_bf16_8 = false;
   bool has_coopmat_ext = false;
+  bool has_external_memory_fd_ext = false;
+  bool has_dma_buf_ext = false;
 #ifdef OMARCHY_BF16_CMAT
   bool has_bf16_ext = false;
 #endif
@@ -511,6 +513,13 @@ CapabilityReport collect_capabilities(
           // copy per call.
           caps.host_pointer_import =
               caps.host_pointer_import_alignment > 0;
+        } else if (
+            std::strcmp(e.extensionName, "VK_KHR_external_memory_fd") == 0) {
+          has_external_memory_fd_ext = true;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_external_memory_dma_buf") ==
+            0) {
+          has_dma_buf_ext = true;
 #ifdef OMARCHY_BF16_CMAT
         } else if (
             std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
@@ -521,6 +530,7 @@ CapabilityReport collect_capabilities(
       }
     }
   }
+  caps.dma_buf_import = has_external_memory_fd_ext && has_dma_buf_ext;
   // bf16 cooperative matrices need VK_KHR_shader_bfloat16 with both the
   // type and the cooperative-matrix feature. Its feature struct is queried
   // only when the driver lists the extension.
@@ -1165,6 +1175,14 @@ Device::Device(uint32_t physical_device_index) {
     if (hw.host_pointer_import) {
       exts.push_back("VK_EXT_external_memory_host");
     }
+    if (hw.dma_buf_import) {
+      // The dependency chain for a dma-buf import; enabling an
+      // extension the driver did not list fails device creation, so
+      // all three come as one gate.
+      exts.push_back("VK_KHR_external_memory");
+      exts.push_back("VK_KHR_external_memory_fd");
+      exts.push_back("VK_EXT_external_memory_dma_buf");
+    }
     if (hw.cooperative_matrix_f32_8) {
       exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     }
@@ -1298,6 +1316,13 @@ Device::Device(uint32_t physical_device_index) {
   dt.GetMemoryHostPointerPropertiesEXT =
       reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
           dt.GetDeviceProcAddr(device_, "vkGetMemoryHostPointerPropertiesEXT"));
+
+  // Extension function for the udmabuf slab import: present only when
+  // the device enabled VK_KHR_external_memory_fd. Null means the
+  // allocator's dma-buf import is unavailable (copy fallback).
+  dt.GetMemoryFdPropertiesKHR =
+      reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(
+          dt.GetDeviceProcAddr(device_, "vkGetMemoryFdPropertiesKHR"));
 
   dt.GetDeviceQueue(device_, caps_.queue_family_index, 0, &queue_);
   // The live binding budget: what the backend wants, clamped by what this
