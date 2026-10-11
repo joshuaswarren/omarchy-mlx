@@ -249,6 +249,22 @@ Withdrawn: Ornith-1.5-9B has no row. It does not run cleanly on the 16 GB M1; th
 
 Could not run, by size (MLX 4-bit, or the smallest repository): GLM-5.3-Flash 204 GB, GLM-5.3 418 GB, DeepSeek-V4-Flash 151.5 GB, Kimi-K3 (2-bit) 181 GB and Qwen3.8-Flash-Next 111.5 GB. None fits a 94 GB M2 Max. Also not run: Kolibri-1 (custom architecture, no MLX or GGUF conversion) and Xing4.0 (architecture not in mlx-lm). Ternary-Bonsai-2-27B exists only as a GGUF with a PQ2_0 type, and has no MLX conversion. llama.cpp at the pinned commit gave no result. The lab reports that it refuses the file as an invalid ggml type 142 and that the authors' fork is needed.
 
+MLX 4-bit on the 14-inch M2 Max (94 GB), Linux only, measured 2026-10-11. No macOS run exists for this chip in the table, so there is no percent of macOS. Tokens per second, decode / prefill 512, with llama.cpp Q4_K_M on Vulkan (tg128 / pp512) from the same machine where it ran:
+
+| Model | MLX decode / prefill | llama.cpp decode / prefill | MLX against llama.cpp |
+|---|---|---|---|
+| Qwen3.8-27B (dense) | 14.72 / 105.04 | 6.94 / 66.80 | 2.12 and 1.57 times |
+| gemma-4-31B (dense) | 8.79 / 77.81 | 7.38 / 56.13 | 1.19 and 1.39 times |
+| Qwen3.5-9B (dense) | 38.80 / 441.43 | 22.32 / 219.05 (see the note) | 1.74 and 2.02 times |
+| gemma-4-26B-A4B (MoE) | 10.57 / 147.80 | 29.43 / 321.56 | 0.36 and 0.46 times |
+| Qwen3.6-35B-A3B (MoE) | 12.87 / 143.62 | 29.13 / 305.79 | 0.44 and 0.47 times |
+| Qwen3-Coder-30B-A3B (MoE) | 11.68 / 132.01 | 34.84 / 299.80 | 0.34 and 0.44 times |
+| Ornith-1.5-35B-A3B (MoE) | 8.43 / 60.95 | 28.14 / 289.57 | 0.30 and 0.21 times |
+
+These rows ran on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`). The driver is the private Honeykrisp ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES` by the scoring script. The kernel ran with the compute-preemption option on (`asahi.debug_flags=281474976710656`), which this chip needs to avoid a GPU wedge. On the M2 the scoring lane measured no decode cost against earlier M2 rows, within 1.2% on an older wheel. That is one chip and one comparison, and it was not re-measured for this table. The M1 Max and 13-inch M1 rows in this section ran on the stock kernel without that option. The runs of 2026-10-11 logged 0 GPU timeouts and 0 out-of-memory kills.
+
+Every run started with a load average between 0.72 and 1.21, above the 0.5 target, so the numbers may be low. The ANE was busy at the start of the Qwen3.8-27B, gemma-4-31B, Qwen3-Coder and Ornith MLX runs and of every llama.cpp run except Qwen3.5-9B, whose log has no ANE field. The Qwen3.5-9B, gemma-4-26B-A4B and Qwen3.6-35B-A3B MLX runs started with the ANE idle. Each cell is one run. The Qwen3.5-9B llama.cpp cell was measured on 2026-10-10 on the plain kernel, before the preemption option, with the same private ICD. The scoring lane reports the kernel. The output digests of gemma-4-26B-A4B, Qwen3.6-35B-A3B, Qwen3-Coder and Ornith equal those of the M1 Max runs above. The Qwen3.5-9B digest (80274aa7) equals the one on the 13-inch M1. The Qwen3.8-27B (70867ed5) and gemma-4-31B (57be531a) digests equal those in the 2026-10-09 M1 Max and M2 Max receipts.
+
 The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models that fit, Linux / macOS. The Linux cells were measured on 2026-10-10; the macOS references are earlier sealed runs:
 
 | Model | Decode | Prefill 512 |
