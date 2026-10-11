@@ -17,3 +17,28 @@ Could not run, by size (MLX 4-bit, or the smallest repository): GLM-5.3-Flash 20
 ## Decode on some 13-inch M1 models fell later in the day
 
 On 2026-10-11, on one boot and one wheel with the v3 driver, Qwen3.5-9B decode fell from 12.45 to 6.93 tokens per second between 07:53Z and 08:00Z (44%). gemma-4-E4B fell from 13.64 at 06:16Z to 8.89 at 08:08Z (35%). Llama-3.1-8B stayed at 11.52 and 11.67 over the same hours. Prefill stayed within 3%. Later runs on the newer driver read 6.98 for Qwen3.5-9B and 6.61 for Llama-3.1-8B. The v3 driver itself read 6.93 for Qwen3.5-9B, so that run does not show a loss caused by the newer driver. There is no v3 run of Llama-3.1-8B after the drop, so for that model the data does not separate a driver effect from the drop. A display on and off test on Qwen3.5-9B, on a later boot, moved decode by 1%. The cause is not found. The only decode ratio published for this chip on the newer driver is the interleaved gemma-4-E4B block, a within-block ratio measured in minutes at 8.85 to 9.02.
+
+## Non-Apple development drivers: the independent-streams timing floor is not calibrated on NVIDIA
+
+`omarchy_runtime_tests` asserts that interleaving two independent
+streams takes no longer than running them one after the other
+(`independent streams measure against the serialized sum`, ratio
+floor 0.95). The floor is calibrated on the Apple Honeykrisp device
+(ratio 1.21 on the M1) and holds on Intel ANV (55/55 runtime tests,
+outside run on a UHD 770, PR
+[#111](https://github.com/joshuaswarren/omarchy-mlx/pull/111)).
+
+An RTX 5060 Ti (NVIDIA 615.71.09) measured 0.78-0.88 across 5 runs
+in the same outside report. The interleaved copies still verify
+byte-for-byte, so the loss is a timing characteristic, not a
+correctness failure. The reporter suspects the host-visible ReBAR
+allocation every array uses on a discrete GPU (CPU reads over PCIe
+at about 3 MB/s); a global serialization lock would sit near 0.5.
+The same run shows one `SUBMIT-RECOVER ... resubmitted 1 stalled
+batch` line per run (the submit-recovery ladder fired once; not
+investigated).
+
+Until NVIDIA numbers are collected here, the floor is asserted on
+every driver except NVIDIA proprietary. The test still prints its
+ratio for every run, so a per-driver floor can be set from
+collected numbers. AMD (RADV) is untested.

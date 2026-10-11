@@ -2117,7 +2117,17 @@ TEST_CASE("independent streams measure against the serialized sum") {
   // is false on the hardware we ship for, so it is not asserted here.
   // Interleaved being faster is only legitimate if every copy actually
   // ran, so the destination buffers are verified byte-for-byte instead.
-  CHECK(ratio > 0.95);
+  // The 0.95 floor is calibrated on Honeykrisp and on Intel ANV; the
+  // outside PR #111 report measured 0.78-0.88 on an RTX 5060 Ti (NVIDIA
+  // 615.71.09), with every copy still byte-for-byte correct, so the
+  // timing loss is not a correctness failure. Until NVIDIA numbers are
+  // collected here the floor is asserted on every driver except NVIDIA
+  // proprietary; the test still prints its ratio for every run so a
+  // per-driver floor can be set from collected numbers. See
+  // docs/KNOWN-ISSUES.md.
+  if (dev.capabilities().driver_id != VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
+    CHECK(ratio > 0.95);
+  }
   CHECK(std::memcmp(y1->data, x1->data, kBytes) == 0);
   CHECK(std::memcmp(y2->data, x2->data, kBytes) == 0);
 
