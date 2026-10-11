@@ -63,14 +63,16 @@ Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
   verified byte-for-byte. The same run prints one
   `SUBMIT-RECOVER ... resubmitted 1 stalled batch` line per run; the
   submit-recovery ladder fired once. The reporter's host-visible
-  ReBAR allocation (CPU reads over PCIe at about 3 MB/s) is the
-  suspected cause of the timing loss; not a correctness failure.
+  ReBAR allocation (CPU reads over PCIe at about 3 MB/s) is possibly
+  the cause of the timing loss. That was not tested, and CPU reads are a
+  different path from the two-stream copy timing. It is not a correctness
+  failure.
 - AMD RADV: no qualifying run.
 
-The non-Apple refusal without the flag is unchanged. The
-[independent-streams floor](KNOWN-ISSUES.md) is asserted on every
-driver except NVIDIA proprietary, where it stays as a reported
-measurement.
+The non-Apple refusal without the flag is unchanged. The independent-streams
+check asserts on every driver except llvmpipe, so the NVIDIA miss above fails
+that test. [PR #128](https://github.com/joshuaswarren/omarchy-mlx/pull/128)
+proposes to report it as a measurement on NVIDIA proprietary instead.
 
 ## MLX core
 
