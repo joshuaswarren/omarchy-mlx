@@ -317,11 +317,10 @@ async function handleComplete(sha: string, request: Request, env: Env): Promise<
       }
     }
   }
-  const outcome = await store.completeSubmission(
-    env.DB,
-    sha,
-    Math.floor(Date.now() / 1000),
-  );
+  const now = Math.floor(Date.now() / 1000);
+  const outcome = archiveWithheld
+    ? await store.publishWithheld(env.DB, sha, now)
+    : await store.completeSubmission(env.DB, sha, now);
   if (!outcome.ok) {
     if (outcome.code === "not_found") return errorResponse(404, "not_found");
     if (outcome.code === "incomplete") {

@@ -328,17 +328,53 @@ export async function completeSubmission(
   return { ok: true, status: "stored" };
 }
 
+/**
+ * Publish a row whose archive was withheld by the PII sanitizer. The archive
+ * columns are NULL by then, so completeSubmission would report "incomplete"
+ * forever (HTTP 409, missing_chunks []) and the cleaned summary the sanitizer
+ * promises to keep would never be published.
+ */
+export async function publishWithheld(
+  db: D1Database,
+  sha: string,
+  now: number,
+): Promise<PublishOutcome> {
+  const row = await getSubmission(db, sha);
+  if (row === null) return { ok: false, code: "not_found" };
+  if (row.published === 1) return { ok: true, status: "duplicate" };
+  await db
+    .prepare(
+      `UPDATE submissions SET published = 1, published_at = ?2, updated_at = ?2
+       WHERE content_sha256 = ?1`,
+    )
+    .bind(sha, now)
+    .run();
+  return { ok: true, status: "stored" };
+}
+
+// D1 hands a BLOB column back as an array of byte values, not an ArrayBuffer
+// (seen on `wrangler dev`, and in production as Worker error 1101 on every
+// submission whose PII strip made handleComplete re-read the archive:
+// `byteLength` was undefined and Uint8Array.set threw "offset is out of
+// bounds"). Accept every form and return Uint8Array.
+export function blobBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+  throw new Error("unexpected BLOB representation from D1");
+}
+
 export async function archiveChunks(
   db: D1Database,
   sha: string,
-): Promise<ArrayBuffer[]> {
+): Promise<Uint8Array[]> {
   const { results } = await db
     .prepare(
       "SELECT bytes FROM chunks WHERE content_sha256 = ?1 ORDER BY idx",
     )
     .bind(sha)
-    .all<{ bytes: ArrayBuffer }>();
-  return results.map((r) => r.bytes);
+    .all<{ bytes: unknown }>();
+  return results.map((r) => blobBytes(r.bytes));
 }
 
 /**

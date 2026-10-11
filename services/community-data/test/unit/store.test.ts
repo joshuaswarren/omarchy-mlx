@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { getPublished, initiateSubmission, rebuildCaches } from "../../src/store";
+import {
+  archiveChunks,
+  blobBytes,
+  getPublished,
+  initiateSubmission,
+  rebuildCaches,
+} from "../../src/store";
 
 // Minimal D1 fake: records every SQL string, and each bound statement
 // either returns a row or throws. Used to pin the 2026-10-03 incident:
@@ -172,5 +178,31 @@ describe("store row reads tolerate a pre-0003 D1 (2026-10-03 incident)", () => {
     expect(doc.count).toBe(1);
     expect(doc.results).toHaveLength(1);
     expect(doc.results[0].content_sha256).toBe("d".repeat(64));
+  });
+});
+
+describe("BLOB reads from D1 (2026-10-11 error 1101 on PII-stripped submissions)", () => {
+  test("blobBytes accepts the array-of-numbers form D1 returns", () => {
+    expect(Array.from(blobBytes([1, 2, 255]))).toEqual([1, 2, 255]);
+  });
+  test("blobBytes accepts ArrayBuffer and Uint8Array", () => {
+    expect(Array.from(blobBytes(new Uint8Array([7, 8]).buffer))).toEqual([7, 8]);
+    const u = new Uint8Array([9]);
+    expect(blobBytes(u)).toBe(u);
+  });
+  test("blobBytes refuses anything else", () => {
+    expect(() => blobBytes("text")).toThrow();
+    expect(() => blobBytes(null)).toThrow();
+  });
+  test("archiveChunks returns Uint8Array whose lengths add up, from number[] rows", async () => {
+    const db = new FakeD1(() => ({ rows: [{ bytes: [1, 2, 3] }, { bytes: [4, 5] }] }));
+    const chunks = await archiveChunks(db as never, "a".repeat(64));
+    expect(chunks.every((c) => c instanceof Uint8Array)).toBe(true);
+    // handleComplete reassembles with reduce(byteLength) and Uint8Array.set
+    const total = chunks.reduce((n, b) => n + b.byteLength, 0);
+    const assembled = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { assembled.set(new Uint8Array(c), off); off += c.byteLength; }
+    expect(Array.from(assembled)).toEqual([1, 2, 3, 4, 5]);
   });
 });

@@ -369,6 +369,30 @@ scenario("MAC address in payload is stripped, row stored clean", async () => {
   return `stored clean, pii_redacted=${JSON.stringify(body.pii_redacted)}`;
 });
 
+scenario("PII-stripped submission WITH an archive completes (regression: error 1101)", async () => {
+  // handleComplete re-reads the stored chunks when the payload was stripped.
+  // D1 returns a BLOB as an array of numbers, so the old code read
+  // byteLength as undefined and threw "offset is out of bounds" (HTTP 500,
+  // Cloudflare error 1101). The bytes here are not a tar.gz, so the
+  // sanitizer withholds the archive; reaching 200 proves the re-read works.
+  const archive = makeArchive(2, 11);
+  const sha = sha256Hex(archive);
+  const init = await initiate(archive, {
+    payload: payload({ model: "eth0 00:1A:2B:3C:4D:5F" }),
+  });
+  expect(init.res.status === 200, `initiate ${init.res.status}`);
+  expect(JSON.stringify(init.body.pii_redacted) === '{"mac":1}',
+    `pii_redacted ${JSON.stringify(init.body.pii_redacted)}`);
+  for (let idx = 0; idx < 2; idx++) {
+    const up = await uploadChunk(sha, idx, archive.subarray(idx * CHUNK, (idx + 1) * CHUNK));
+    expect(up.res.status === 200, `chunk ${idx}: ${up.res.status}`);
+  }
+  const fin = await complete(sha);
+  expect(fin.res.status === 200, `complete ${fin.res.status} ${JSON.stringify(fin.body)}`);
+  expect(fin.body.archive_withheld_pii === true, JSON.stringify(fin.body));
+  return "complete 200, archive withheld (not a tar.gz)";
+});
+
 scenario("completing with a chunk missing returns 409 and stays invisible", async () => {
   const archive = makeArchive(3, 7);
   const init = await initiate(archive);
