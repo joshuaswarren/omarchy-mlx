@@ -13277,12 +13277,54 @@ void Exl3Decode::eval_gpu(
   }
   // Per-block scratch: the f16-bit tile decode (uint words) and the f32
   // Hadamard chain between the row and column stages.
-  array dec16({static_cast<int>(blocks) * 16384}, uint32, nullptr, {});
-  dec16.set_data(allocate_omarchy(dec16.nbytes()));
-  array tmp({static_cast<int>(blocks) * 16384}, float32, nullptr, {});
-  tmp.set_data(allocate_omarchy(tmp.nbytes()));
+  const size_t scratch_words = static_cast<size_t>(blocks) * 16384;
+  // Debug knob for the scratch-offset transport: when
+  // MLX_OMARCHY_EXL3_SCRATCH_PAD is set to N > 0, dec16 and tmp share one
+  // backing buffer with an N-word pad in front of dec16 (element offset N)
+  // and a different non-zero gap before tmp (element offset 2N + words), so
+  // checked_item_offset reports non-zero scratch offsets end to end. The
+  // default (unset or 0) keeps the standalone allocations unchanged.
+  int scratch_pad = 0;
+  if (const char* pad_env = std::getenv("MLX_OMARCHY_EXL3_SCRATCH_PAD")) {
+    scratch_pad = std::atoi(pad_env);
+  }
+  if (scratch_pad < 0) {
+    omarchy::unsupported(
+        tag + " scratch pad (MLX_OMARCHY_EXL3_SCRATCH_PAD >= 0)", out);
+  }
+  array dec16({static_cast<int>(scratch_words)}, uint32, nullptr, {});
+  array tmp({static_cast<int>(scratch_words)}, float32, nullptr, {});
+  std::optional<array> scratch_backing;
+  if (scratch_pad > 0) {
+    scratch_backing = array(
+        Shape{static_cast<int>(
+            2 * scratch_pad + 2 * scratch_words)},
+        uint32,
+        nullptr,
+        {});
+    scratch_backing->set_data(allocate_omarchy(scratch_backing->nbytes()));
+    array::Flags view_flags{true, true, false};
+    dec16.copy_shared_buffer(
+        *scratch_backing,
+        Strides{1},
+        view_flags,
+        scratch_words,
+        scratch_pad);
+    tmp.copy_shared_buffer(
+        *scratch_backing,
+        Strides{1},
+        view_flags,
+        scratch_words,
+        2 * scratch_pad + static_cast<int64_t>(scratch_words));
+  } else {
+    dec16.set_data(allocate_omarchy(dec16.nbytes()));
+    tmp.set_data(allocate_omarchy(tmp.nbytes()));
+  }
   for (const auto* a : std::vector<const array*>{&td, &shd, &svd, &dec16, &tmp, &out}) {
     encoder.add_temporary(*a);
+  }
+  if (scratch_backing) {
+    encoder.add_temporary(*scratch_backing);
   }
   omarchy::ComputeKernel kernel;
   switch (out.dtype()) {

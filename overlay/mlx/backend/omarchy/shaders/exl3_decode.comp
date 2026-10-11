@@ -252,8 +252,8 @@ void main() {
       // block col = tn*16 + p%16.
       uint rowE = (tk * 16u + (pEven >> 4)) * 128u + tn * 16u + (pEven & 15u);
       uint rowO = (tk * 16u + (pOdd >> 4)) * 128u + tn * 16u + (pOdd & 15u);
-      g_dec16[params.aux_size / 4u + blockBase + rowE] = decodeMcg(cwEven);
-      g_dec16[params.aux_size / 4u + blockBase + rowO] = decodeMcg(cwOdd);
+      g_dec16[params.lhs_size + blockBase + rowE] = decodeMcg(cwEven);
+      g_dec16[params.lhs_size + blockBase + rowO] = decodeMcg(cwOdd);
     }
   }
   barrier();
@@ -268,10 +268,10 @@ void main() {
     precise float acc = 0.0;
     for (uint k = 0u; k < 128u; k++) {
       float he = (bitCount(r & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
-      acc = acc + he * f16ToF32(g_dec16[params.aux_size / 4u + blockBase + k * 128u + c]);
+      acc = acc + he * f16ToF32(g_dec16[params.lhs_size + blockBase + k * 128u + c]);
     }
     acc = acc * f16ToF32(suhAt(params.rhs_offset, rb * 128u + r));
-    g_tmp[params.lhs_size + blockBase + e] = acc;
+    g_tmp[params.aux_size + blockBase + e] = acc;
   }
   barrier();
   memoryBarrierBuffer();
@@ -290,7 +290,7 @@ void main() {
     precise float a0 = 0.0;
     precise float a1 = 0.0;
     for (uint k = 0u; k < 128u; k++) {
-      float x0 = g_tmp[params.lhs_size + blockBase + r0 * 128u + k];
+      float x0 = g_tmp[params.aux_size + blockBase + r0 * 128u + k];
       float he0 = (bitCount(c0 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
       a0 = a0 + he0 * x0;
       float he1 = (bitCount(c1 & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
@@ -315,7 +315,7 @@ void main() {
     precise float acc = 0.0;
     for (uint k = 0u; k < 128u; k++) {
       float he = (bitCount(c & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
-      acc = acc + he * g_tmp[params.lhs_size + blockBase + r * 128u + k];
+      acc = acc + he * g_tmp[params.aux_size + blockBase + r * 128u + k];
     }
     float v = acc * f16ToF32(svhAt(params.aux_offset, cb * 128u + c));
     g_out[params.output_offset + (rb * 128u + r) * outF + cb * 128u + c] = v;

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -222,6 +223,74 @@ TEST_CASE("exl3 decode gpu vs cpu reference") {
         if (diffs != 0) {
           std::cout << "  bits bit_diffs=" << diffs << "/" << n << "\n";
         }
+      }
+    }
+  }
+}
+
+TEST_CASE("exl3 decode gpu with forced non-zero scratch offsets") {
+  // Regression for the swapped scratch-offset transport: the shader read
+  // dec16's offset from aux_size and tmp's from lhs_size, which only
+  // worked while both offsets were 0. MLX_OMARCHY_EXL3_SCRATCH_PAD forces
+  // non-zero, different scratch element offsets end to end, so any swap
+  // or scaling error in the transport corrupts the decode here.
+  if (!qualifying_gpu()) {
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  Stream cs = new_stream(Device::cpu);
+  std::mt19937 rng(20261012);
+  // One block and multi-block, f32 and bf16 outputs.
+  std::vector<Case> cases{{128, 128, 4, 15}, {256, 256, 4, 15}};
+  for (const auto& c : cases) {
+    INFO("case ", c.in_f, "x", c.out_f, " bits=", c.bits,
+         " window=", c.window);
+    size_t tiles =
+        static_cast<size_t>(c.in_f / 128) * (c.out_f / 128) * 64;
+    size_t tlen = tiles * static_cast<size_t>(c.bits) * 16;
+    auto tv = gen_trellis(tlen, rng);
+    auto su = gen_scales(static_cast<size_t>(c.in_f), rng);
+    auto sv = gen_scales(static_cast<size_t>(c.out_f), rng);
+    array trellis(tv.data(), Shape{static_cast<int>(tlen)}, uint16);
+    array suh(su.data(), Shape{c.in_f}, uint16);
+    array svh(sv.data(), Shape{c.out_f}, uint16);
+
+    for (Dtype dt : {float32, bfloat16}) {
+      REQUIRE(setenv("MLX_OMARCHY_EXL3_SCRATCH_PAD", "7", 1) == 0);
+      std::optional<array> g;
+      try {
+        g = fast::exl3_decode(
+            trellis, suh, svh, c.in_f, c.out_f, c.bits, c.window, dt, gs);
+        eval(*g);
+      } catch (...) {
+        unsetenv("MLX_OMARCHY_EXL3_SCRATCH_PAD");
+        throw;
+      }
+      REQUIRE(unsetenv("MLX_OMARCHY_EXL3_SCRATCH_PAD") == 0);
+      array r = fast::exl3_decode(
+          trellis, suh, svh, c.in_f, c.out_f, c.bits, c.window, dt, cs);
+      eval(r);
+      size_t n = g->size();
+      if (dt == float32) {
+        auto* gp = g->data<float>();
+        auto* rp = r.data<float>();
+        size_t bit_diffs = 0;
+        for (size_t i = 0; i < n; i++) {
+          if (std::memcmp(&gp[i], &rp[i], 4) != 0) {
+            bit_diffs++;
+          }
+        }
+        CHECK_EQ(bit_diffs, 0);
+      } else {
+        auto* gp = g->data<uint16_t>();
+        auto* rp = r.data<uint16_t>();
+        size_t diffs = 0;
+        for (size_t i = 0; i < n; i++) {
+          if (gp[i] != rp[i]) {
+            diffs++;
+          }
+        }
+        CHECK_EQ(diffs, 0);
       }
     }
   }
