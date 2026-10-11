@@ -982,6 +982,9 @@ enum class ComputeKernel : uint16_t {
   // place (no per-call staging copy). Append-only profile id.
   GatherQmmSubDirectF16,
   GatherQmmSubDirectBF16,
+  // Word-per-lane decode gather_qmm (bf16, shaders/gather_qmm_word.comp).
+  // Append-only profile id.
+  GatherQmmWordBF16,
   Count,
 };
 

@@ -507,6 +507,7 @@
 #include "gather_qmm_tile_bf16.h"
 #include "gather_qmm_sub_direct_f16.h"
 #include "gather_qmm_sub_direct_bf16.h"
+#include "gather_qmm_word_bf16.h"
 #include "fft_f32.h"
 #include "fft_real_f32.h"
 #include "fft_stage_f32.h"
@@ -1843,6 +1844,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_sub_direct_f16, gather_qmm_sub_direct_f16_size};
     case ComputeKernel::GatherQmmSubDirectBF16:
       return {gather_qmm_sub_direct_bf16, gather_qmm_sub_direct_bf16_size};
+    case ComputeKernel::GatherQmmWordBF16:
+      return {gather_qmm_word_bf16, gather_qmm_word_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

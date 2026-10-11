@@ -3357,8 +3357,16 @@ void dispatch_gather_qmm(
   if (use_sub && !use_tile && !no_bias &&
       (direct_env == nullptr || direct_env[0] != '0') &&
       encoder.device().compute().binding_limit() >= 7) {
-    params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 4);
-    params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 4);
+    // Word-per-lane kernel (notebook H88): bf16 only, x rows 16-byte aligned
+    // for its uvec4 view. Scales and biases are addressed in 16-bit elements
+    // there, in 32-bit words by the element-per-lane kernel.
+    const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
+    const bool use_word = out.dtype() == bfloat16 &&
+        (word_env == nullptr || word_env[0] != '0') &&
+        params.lhs_offset % 8 == 0;
+    const uint32_t offset_div = use_word ? 2u : 4u;
+    params.shape[2] = static_cast<uint32_t>(scales_d.offset() / offset_div);
+    params.shape[3] = static_cast<uint32_t>(biases_d->offset() / offset_div);
     params.in_strides[0] = static_cast<uint32_t>(lhs_d.offset() / 4);
     params.out_strides[0] = static_cast<uint32_t>(rhs_d.offset() / 4);
     std::array<omarchy::ComputeBinding, 7> direct_bindings{
@@ -3369,14 +3377,20 @@ void dispatch_gather_qmm(
         binding(*biases_d),
         binding(lhs_d),
         binding(rhs_d)};
+    // One workgroup per output element (element-per-lane kernel) or per four
+    // output elements (word-per-lane kernel, one 32-lane slot each).
+    const uint32_t groups =
+        use_word ? (params.count + 3u) / 4u : params.count;
     encoder.dispatch_compute(
-        out.dtype() == float16 ? omarchy::ComputeKernel::GatherQmmSubDirectF16
-                               : omarchy::ComputeKernel::GatherQmmSubDirectBF16,
+        use_word ? omarchy::ComputeKernel::GatherQmmWordBF16
+                 : (out.dtype() == float16
+                        ? omarchy::ComputeKernel::GatherQmmSubDirectF16
+                        : omarchy::ComputeKernel::GatherQmmSubDirectBF16),
         direct_bindings,
         params,
-        std::min(params.count, omarchy::kMaxComputeGroupCountX),
+        std::min(groups, omarchy::kMaxComputeGroupCountX),
         1u,
-        (params.count + omarchy::kMaxComputeGroupCountX - 1) /
+        (groups + omarchy::kMaxComputeGroupCountX - 1) /
             omarchy::kMaxComputeGroupCountX);
     return;
   }
