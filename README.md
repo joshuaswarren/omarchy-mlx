@@ -73,6 +73,24 @@ chip needs, lives in the [chip coverage
 table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage) of
 [omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 
+## Other Vulkan GPUs (development)
+
+Not a supported target. With `MLX_OMARCHY_ALLOW_NON_APPLE=1` the
+backend admits any Vulkan 1.3 device for development on a normal
+Linux box. The flag, the loader's driver list under that flag, and
+the discrete-first device sort are in
+[docs/install-omarchy.md](docs/install-omarchy.md#development-override).
+The non-Apple refusal without the flag stays.
+
+Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
+
+| GPU | Driver | Result |
+|---|---|---|
+| Intel UHD 770 | Mesa ANV 26.2.4 | 55/55 `omarchy_runtime_tests`; op check clean |
+| RTX 5060 Ti | NVIDIA 615.71.09 | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md) |
+
+AMD (RADV) has no qualifying run.
+
 ## Install
 
 Run one command on an Arch install for an M1-class Mac or an M2 Max. The script picks the latest release, checks the wheel against the release
