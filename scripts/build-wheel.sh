@@ -142,6 +142,16 @@ elif [[ "$lapacke_found" == 0 ]]; then
   echo "       'sudo apt install liblapacke-dev' on Debian-family distributions." >&2
   exit 2
 fi
+# MLX looks for cblas.h only in /usr/include, /usr/local/include and
+# $BLAS_HOME/include. With blas-openblas installed in place of the reference
+# blas and cblas packages, cblas.h exists only in /usr/include/openblas and
+# configure exits 1 with BLAS_INCLUDE_DIRS-NOTFOUND (reproduced 2026-10-11 on
+# a 16-inch M1 Max with a copy of MLX's find_path lines). Pass the directory in.
+if [[ ! -f /usr/include/cblas.h && ! -f /usr/local/include/cblas.h &&
+      ! -f "${BLAS_HOME:-/nonexistent}/include/cblas.h" &&
+      -f /usr/include/openblas/cblas.h ]]; then
+  export CMAKE_ARGS="$CMAKE_ARGS -DBLAS_INCLUDE_DIRS=/usr/include/openblas"
+fi
 if [[ -n "${MLX_OMARCHY_ANE_SOURCE_DIR:-}" ]]; then
   [[ -d "$MLX_OMARCHY_ANE_SOURCE_DIR" ]] || {
     echo "ERROR: MLX_OMARCHY_ANE_SOURCE_DIR is not a directory" >&2
