@@ -1,0 +1,26 @@
+IDLE-GUARD-JOB-START 20261010T215027Z lane=matmul-gap w7Q SDPA chunk drain fix (agent/w7q-sdpa-chunk-drain 134a3c01b): build flash+fast_ops tests, run both on G13C, keep flash binary for G13G, correctness only
+SETTLE load1=0.47
+start 21:51:05 sha 134a3c01bc34babe9def3b3dc0e6269774c69f94 load 0.47 kernel 7.1.12-2-12.6-sep-ARCH
+icd lib sha256 3546bcafe8ed3995
+drain marker in prepared tree: 1
+[1244/1248] Linking CXX static library libmlx.a
+[1245/1248] Linking CXX executable tests/omarchy/omarchy_sdpa_prefill_flash_tests
+[1246/1248] Building CXX object tests/omarchy/CMakeFiles/omarchy_fast_ops_tests.dir/test_fast_ops.cpp.o
+[1247/1248] Linking CXX executable tests/omarchy/omarchy_fast_ops_tests
+flash binary sha256 2252210dde6d2cdc
+fast_ops binary sha256 6997e370edb55211
+== flash suite
+[doctest] test cases:  13 |  13 passed | 0 failed | 0 skipped
+[doctest] assertions: 149 | 149 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0
+== fast_ops (sdpa cases)
+fast_ops rc=0
+[doctest] test cases:      49 |      49 passed | 0 failed | 0 skipped
+[doctest] assertions: 1383975 | 1383971 passed | 4 failed |
+[doctest] Status: SUCCESS!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+end 21:53:10
