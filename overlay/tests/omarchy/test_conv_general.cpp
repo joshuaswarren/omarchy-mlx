@@ -320,6 +320,52 @@ void check_ones_chunked_conv2d(
 
 } // namespace
 
+// The im2col route processes output rows in blocks when the patch matrix
+// would exceed the scratch cap. A cap of 300 bytes gives 2-row blocks on
+// 27 f32 products per row; 35 rows leave a one-row last block. Strides,
+// padding, and kernel dilation make every block start at a different
+// spatial position, so a wrong block origin shows up as shifted rows.
+TEST_CASE("[conv-im2col] row blocks match the host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 rng(47);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  Shape in_shape{1, 9, 13, 3};
+  Shape wt_shape{5, 3, 3, 3};
+  std::vector<float> in(1 * 9 * 13 * 3);
+  std::vector<float> wt(5 * 3 * 3 * 3);
+  for (auto& v : in) {
+    v = dist(rng);
+  }
+  for (auto& v : wt) {
+    v = dist(rng);
+  }
+  Conv2DSpec spec;
+  spec.stride_h = 2;
+  spec.stride_w = 2;
+  spec.pad_lo_h = 2;
+  spec.pad_lo_w = 1;
+  spec.pad_hi_h = 2;
+  spec.pad_hi_w = 1;
+  spec.kernel_dilation_h = 2;
+  auto expected = host_conv2d_general(in, wt, in_shape, wt_shape, spec);
+  REQUIRE_EQ(expected.size() % 5, 0u);
+  REQUIRE_EQ(expected.size() / 5, 35u);
+  setenv("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES", "300", 1);
+  auto actual = conv2d(
+      array(in.begin(), in_shape, float32),
+      array(wt.begin(), wt_shape, float32),
+      {spec.stride_h, spec.stride_w},
+      {spec.pad_lo_h, spec.pad_lo_w},
+      {spec.kernel_dilation_h, spec.kernel_dilation_w},
+      1,
+      stream);
+  check_close(actual, expected, stream, 1e-5);
+  unsetenv("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES");
+}
+
 TEST_CASE("[conv-gaps] grouped 2-D Convolution matches host reference") {
   if (!compute_available()) {
     return;

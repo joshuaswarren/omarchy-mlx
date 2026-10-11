@@ -4515,11 +4515,12 @@ void Conjugate::eval_gpu(const std::vector<array>& inputs, array& out) {
 }
 // General direct convolution for the channels-last layouts upstream
 // hands this primitive: input [N, (D,) (H,) W, C] and weight
-// [O, (kD,) (kH,) kW, C_per_group], both row-major. One thread owns
-// each output element for ordinary kernels. Large windows split into
+// [O, (kD,) (kH,) kW, C_per_group], both row-major. Grouped convolutions
+// run one thread per output element; large windows split into
 // bounded per-output chunks and a float32 scratch reduction so shader
-// trip limits cannot truncate the result. Index guards contribute zero
-// for padding. The kernel covers
+// trip limits cannot truncate the result. Convolutions with groups == 1
+// build an im2col matrix and run the matmul instead (below). Index guards
+// contribute zero for padding. The direct kernel covers
 // every combination the public ops build: groups including the
 // depthwise case, the flip that conv_transpose uses, input dilation,
 // kernel dilation, strides, and asymmetric padding, over 1D, 2D, and
@@ -4878,6 +4879,77 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   constexpr uint32_t kConvChunkProducts = 4096;
   uint32_t kernel_products = checked_u32(
       w.size() / static_cast<size_t>(out_channels), "Convolution", out);
+  // im2col + GEMM for every groups == 1 convolution that reaches here: the
+  // direct kernel is a scalar per-output loop (about 55-63x the matmul cost
+  // per MAC, H73/H75), so build A[rows, K] once (one thread per element,
+  // conv.comp flag 16) and run the standard matmul against W[O, K]. Row
+  // blocks keep A under MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES (default
+  // 1 GiB). Grouped convolutions keep the direct kernel.
+  if (groups_ == 1 && kernel_products > 0) {
+    int64_t cap = 1ll << 30;
+    if (const char* v = std::getenv("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES")) {
+      cap = std::atoll(v);
+    }
+    const uint32_t out_cols = checked_u32(out_channels, "Convolution", out);
+    const uint32_t rows = total / out_cols;
+    const int64_t row_bytes =
+        static_cast<int64_t>(kernel_products) * static_cast<int64_t>(out.itemsize());
+    const uint32_t block_rows = static_cast<uint32_t>(
+        std::min<int64_t>(rows, std::max<int64_t>(1, cap / row_bytes)));
+    array patches(
+        Shape{static_cast<int>(
+            checked_u32(static_cast<size_t>(block_rows) * kernel_products, "Convolution", out))},
+        out.dtype(),
+        nullptr,
+        {});
+    patches.set_data(allocate_omarchy(patches.nbytes()));
+    encoder.add_temporary(patches);
+    auto gemm_kernel = select_float_kernel(
+        out.dtype(),
+        omarchy::ComputeKernel::MatmulF32,
+        omarchy::ComputeKernel::MatmulF16,
+        omarchy::ComputeKernel::MatmulBF16);
+    const auto base_params = params;
+    for (uint32_t row_base = 0; row_base < rows; row_base += block_rows) {
+      const uint32_t block = std::min(block_rows, rows - row_base);
+      params = base_params;
+      params.flags = (flip_ ? 1u : 0u) | 16u;
+      params.in_strides[3] = row_base;
+      params.count = block * kernel_products;
+      std::array<omarchy::ComputeBinding, 4> gather_bindings{
+          binding(x), binding(w), binding(x), binding(patches)};
+      encoder.dispatch_compute(
+          kernel,
+          gather_bindings,
+          params,
+          omarchy::compute_dispatch_group_count(params.count));
+      omarchy::ComputeParams gemm;
+      gemm.count = block * out_cols;
+      gemm.reduce_size = kernel_products;
+      gemm.output_size = gemm.count;
+      gemm.matrix_m = block;
+      gemm.matrix_n = out_cols;
+      gemm.matrix_k = kernel_products;
+      gemm.flags = 1u;
+      gemm.lhs_gap = kernel_products;
+      gemm.rhs_gap = kernel_products;
+      gemm.lhs_offset = 0;
+      gemm.rhs_offset = base_params.rhs_offset;
+      gemm.output_offset = base_params.output_offset + row_base * out_cols;
+      gemm.lhs_size = params.count;
+      gemm.rhs_size = checked_u32(w.size(), "Convolution", out);
+      std::array<omarchy::ComputeBinding, 4> gemm_bindings{
+          binding(patches), binding(w), binding(out), binding(out)};
+      encoder.dispatch_compute(
+          gemm_kernel,
+          gemm_bindings,
+          gemm,
+          matrix_group_count(out_cols),
+          matrix_group_count(block),
+          1u);
+    }
+    return;
+  }
   uint32_t chunks = kernel_products == 0
       ? 1u
       : 1u + (kernel_products - 1u) / kConvChunkProducts;
