@@ -68,6 +68,55 @@ class InstallerContractTests(unittest.TestCase):
                 self.assertFalse(artifact.exists(), artifact)
             self.assertEqual(sentinel.read_text(), "preserve")
 
+    def _uninstall_prefix_with_state(self, tmp, *flags):
+        """A prefix holding install files and user state; returns (prefix, state files)."""
+        home = Path(tmp)
+        prefix = home / "custom-prefix"
+        assistant = prefix / "assistant"
+        state = {
+            assistant / "pair-locks" / "quality.json": '{"pair": "quality"}',
+            assistant / "history" / "c1.json": '{"id": "c1"}',
+        }
+        removed = [
+            prefix / "venv" / "bin" / "python",
+            prefix / "mlx_omarchy_assistant" / "server.py",
+            prefix / "cache" / "recommended-catalog.json",
+            assistant / "logs" / "download-x.log",
+        ]
+        for path, text in state.items():
+            path.parent.mkdir(parents=True)
+            path.write_text(text)
+        for path in removed:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        result = subprocess.run(
+            ["bash", str(INSTALLER), "--uninstall", *flags],
+            env={**os.environ, "HOME": str(home), "MLX_OMARCHY_HOME": str(prefix)},
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return prefix, state, removed, result
+
+    def test_uninstall_keeps_chat_history_and_saved_pairs(self):
+        # Issue #112: the data home is the install prefix, so uninstall used to
+        # delete the pair lock that `mlx-omarchy-chat --resume` needs.
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix, state, removed, result = self._uninstall_prefix_with_state(tmp)
+            for path, text in state.items():
+                self.assertEqual(path.read_text(), text, path)
+            for path in removed:
+                self.assertFalse(path.exists(), path)
+            self.assertFalse((prefix / "venv").exists())
+            self.assertFalse((prefix / "assistant" / "logs").exists())
+            self.assertIn("--purge", result.stdout)
+
+    def test_uninstall_purge_removes_everything(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix, state, removed, _ = self._uninstall_prefix_with_state(tmp, "--purge")
+            self.assertFalse(prefix.exists())
+            for path in [*state, *removed]:
+                self.assertFalse(path.exists(), path)
+
     @unittest.skipIf(platform.machine() == "aarch64", "requires an off-target host")
     def test_refused_install_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
