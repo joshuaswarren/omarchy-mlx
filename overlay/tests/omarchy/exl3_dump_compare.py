@@ -5,6 +5,9 @@ Pairing: manifest.txt carries one "call=..." line per GPU dispatch (written
 by Exl3Decode::eval_gpu under MLX_OMARCHY_EXL3_DEBUG_DUMP) and one "ref=..."
 line per CPU reference (written by the doctest). Entries pair by
 (in, out, bits, window, dtype), zipped in order within each tuple group.
+A GPU call with no matching reference is informational (NO REF PAIRED
+(skipped)); the run fails only on a stage mismatch or when no call at
+all was paired.
 
 Stages: dec16 (uint32 words, one zero-extended f16 bit pattern each,
 block-local row-major), tmp (f32, row H128 + suh), out (final output in the
@@ -105,10 +108,12 @@ def block_r_c(idx):
     return idx // 16384, (idx % 16384) // 128, idx % 128
 
 
-def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    args = [a for a in argv if not a.startswith("--")]
     only = None
-    for a in sys.argv[1:]:
+    for a in argv:
         if a.startswith("--stage="):
             only = a.split("=", 1)[1]
     dump_dir = args[0] if args else "."
@@ -122,6 +127,7 @@ def main():
         by_tuple_refs[tuple_of(e)].append(e)
 
     failures = 0
+    paired = 0
     for t in sorted(by_tuple_calls):
         cs = by_tuple_calls[t]
         rs = by_tuple_refs.get(t, [])
@@ -133,9 +139,13 @@ def main():
         )
         for k, c in enumerate(cs):
             if k >= len(rs):
-                print(f"  call{c['idx']}: NO REF PAIRED")
-                failures += 1
+                # Informational: some GPU calls (the GEMV acceptance call,
+                # extra decode routes) have no matching reference dump by
+                # design. Only a real mismatch or nothing paired at all
+                # fails the run.
+                print(f"  call{c['idx']}: NO REF PAIRED (skipped)")
                 continue
+            paired += 1
             r = rs[k]
             base_c = f"{dump_dir}/call{c['idx']}"
             base_r = f"{dump_dir}/ref{r['idx']}"
@@ -179,9 +189,78 @@ def main():
         extra = len(by_tuple_refs[t]) - len(by_tuple_calls.get(t, []))
         if extra > 0:
             print(f"tuple {t}: {extra} unused ref(s)")
+    if paired == 0:
+        print("RESULT: FAIL (no GPU call was paired with a reference)")
+        return 1
     print("RESULT:", "FAIL" if failures else "PASS")
     return 1 if failures else 0
 
 
+def _write_dump(base, corrupt=False):
+    payload = bytes(128 * 128 * 4)
+    for stage in ("dec16_u32", "tmp_f32", "out_f32"):
+        data = payload
+        if corrupt and stage == "tmp_f32":
+            data = b"\x01" + payload[1:]
+        with open(f"{base}_{stage}.bin", "wb") as f:
+            f.write(data)
+
+
+def _write_manifest(path, calls, refs):
+    with open(path, "w") as f:
+        for idx, t in enumerate(calls):
+            f.write(f"call={idx} in={t[0]} out={t[1]} bits={t[2]} "
+                    f"window={t[3]} dtype={t[4]}\n")
+        for idx, t in enumerate(refs):
+            f.write(f"ref={idx} in={t[0]} out={t[1]} bits={t[2]} "
+                    f"window={t[3]} dtype={t[4]}\n")
+
+
+def self_check():
+    """Fabricate dump sets and pin the pairing/exit-code contract:
+    all-paired passes, an unpaired GPU call is skipped informationally,
+    a stage mismatch fails, and a manifest with no pairable call fails."""
+    import io
+    import os
+    import tempfile
+    from contextlib import redirect_stdout
+
+    t = (128, 128, 2, 15, "f32")
+    root = tempfile.mkdtemp(prefix="exl3-dump-compare-selfcheck-")
+    print(f"self-check dump dirs under {root}")
+
+    def scenario(name, calls, refs, corrupt_call=None, expect=0, needle=None):
+        d = f"{root}/{name}"
+        os.mkdir(d)
+        for idx in range(len(calls)):
+            _write_dump(f"{d}/call{idx}", corrupt=idx == corrupt_call)
+        for idx in range(len(refs)):
+            _write_dump(f"{d}/ref{idx}")
+        _write_manifest(f"{d}/manifest.txt", calls, refs)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([d])
+        out = buf.getvalue()
+        ok = rc == expect and (needle is None or needle in out)
+        print(f"  {name}: {'ok' if ok else 'FAILED'} (exit {rc}, "
+              f"expected {expect})")
+        if not ok:
+            print(out)
+        return ok
+
+    ok = True
+    ok &= scenario("paired", [t], [t], expect=0)
+    ok &= scenario(
+        "unpaired-skip", [t, t], [t], expect=0,
+        needle="NO REF PAIRED (skipped)")
+    ok &= scenario(
+        "mismatch", [t], [t], corrupt_call=0, expect=1)
+    ok &= scenario("no-calls", [], [t], expect=1)
+    print("SELF-CHECK:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--self-check" in sys.argv[1:]:
+        sys.exit(self_check())
     sys.exit(main())
