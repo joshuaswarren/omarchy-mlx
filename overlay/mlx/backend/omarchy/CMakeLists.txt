@@ -685,6 +685,12 @@ omarchy_shader(hadamard_bf16 shaders/hadamard.comp -DUSE_BF16=1)
 omarchy_shader(exl3_decode_f32 shaders/exl3_decode.comp)
 omarchy_shader(exl3_decode_f16 shaders/exl3_decode.comp -DEXL3_OUT_F16=1)
 omarchy_shader(exl3_decode_bf16 shaders/exl3_decode.comp -DEXL3_OUT_BF16=1)
+omarchy_shader(exl3_moe_fused_f32 shaders/exl3_moe_fused.comp)
+omarchy_shader(exl3_moe_fused_f16 shaders/exl3_moe_fused.comp -DEXL3_OUT_F16=1)
+omarchy_shader(exl3_moe_fused_bf16 shaders/exl3_moe_fused.comp -DEXL3_OUT_BF16=1)
+omarchy_shader(exl3_moe_fused_f32_acc_exp shaders/exl3_moe_fused.comp -DEXL3_ACCURATE_EXP=1)
+omarchy_shader(exl3_moe_fused_f16_acc_exp shaders/exl3_moe_fused.comp -DEXL3_OUT_F16=1 -DEXL3_ACCURATE_EXP=1)
+omarchy_shader(exl3_moe_fused_bf16_acc_exp shaders/exl3_moe_fused.comp -DEXL3_OUT_BF16=1 -DEXL3_ACCURATE_EXP=1)
 omarchy_shader(block_mask_f32 shaders/block_mask.comp)
 omarchy_shader(gather_mm_f32 shaders/gather_mm.comp)
 omarchy_shader(gather_mm_f16 shaders/gather_mm.comp -DUSE_FP16=1)
@@ -845,6 +851,7 @@ target_sources(
           ${CMAKE_CURRENT_SOURCE_DIR}/copy.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/cpu_pd_hold.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/primitives.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/exl3_moe_fused_counter.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/slicing.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/fused_chain.cpp
           ${CMAKE_CURRENT_SOURCE_DIR}/stream.cpp

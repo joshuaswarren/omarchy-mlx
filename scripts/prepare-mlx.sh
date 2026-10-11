@@ -117,6 +117,10 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-exl3-decode.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-exl3-moe.patch"
+# Fused exl3_moe arm (M3d): Exl3MoeFused primitive + the fused-arm routing
+# in fast::exl3_moe (shaders/exl3_moe_fused.comp ships in the overlay).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-fast-exl3-moe-fused.patch"
 
 # Backend-generic upstream fixes, applied in upstream first-parent order.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \

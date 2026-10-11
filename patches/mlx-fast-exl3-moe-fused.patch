@@ -1,0 +1,185 @@
+--- a/mlx/fast_primitives.h
++++ b/mlx/fast_primitives.h
+@@ -1,6 +1,7 @@
+ // Copyright © 2024-2026 Apple Inc.
+ 
+ #include <optional>
++#include <string>
+ #include <variant>
+ 
+ #include "mlx/backend/common/metal_kernel.h"
+@@ -177,6 +178,83 @@
+   int window_;
+ };
+ 
++// Fused EXL3 MoE layer arm (shaders/exl3_moe_fused.comp on the omarchy
++// backend, M3d): trellis decode + gate/up GEMV, clamped SwiGLU, down GEMV
++// and router combine as two dispatches of one shader. Scalar state carries
++// the full layer geometry so the packed rate can never be misread; the
++// arm serves only rows in the verified fused range at the harness-covered
++// pack geometry (see accepts) and the op falls back to the composed graph
++// for everything else.
++class Exl3MoeFused : public Custom {
++ public:
++  Exl3MoeFused(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int rows,
++      int hidden,
++      int inter,
++      int topk,
++      int window,
++      float limit,
++      Dtype out_dtype)
++      : Custom(stream, std::move(fallback)),
++        rows_(rows),
++        hidden_(hidden),
++        inter_(inter),
++        topk_(topk),
++        window_(window),
++        limit_(limit),
++        out_dtype_(out_dtype) {}
++
++  static bool use_fallback(Stream stream);
++
++  // The harness-covered pack geometry the fused arm qualifies on. A false
++  // return fills |decline| with a one-line reason for
++  // MLX_OMARCHY_EXL3_DEBUG=1.
++  static bool accepts(
++      int rows,
++      int hidden,
++      int inter,
++      const array& x,
++      const array& gate_trellis,
++      const array& up_trellis,
++      const array& down_trellis,
++      const array& gate_suh,
++      const array& gate_svh,
++      const array& up_suh,
++      const array& up_svh,
++      const array& down_suh,
++      const array& down_svh,
++      Dtype out_dtype,
++      int window,
++      std::string* decline);
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(Exl3MoeFused)
++  bool is_equivalent(const Primitive& other) const override;
++  DEFINE_INPUT_OUTPUT_SHAPE()
++
++  auto state() const {
++    return std::make_tuple(
++        nullptr, std::make_tuple(rows_, hidden_, inter_, topk_, window_));
++  }
++
++ private:
++  int rows_;
++  int hidden_;
++  int inter_;
++  int topk_;
++  int window_;
++  float limit_;
++  Dtype out_dtype_;
++};
++
+ class RMSNormVJP : public Custom {
+  public:
+   RMSNormVJP(
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -879,9 +879,70 @@
+     }
+     return std::vector<array>{astype(*out, out_type, s)};
+   };
+-  // No Exl3Moe primitive yet (M3b is the C surface; the fused GPU arms
+-  // are M3d): the composed graph answers on every stream, with the decode
+-  // legs taking the GPU kernel where the stream provides one.
++  // Fused arm (M3d): on the omarchy backend the whole layer runs as two
++  // dispatches of one shader when the row count is in the verified fused
++  // range and the call matches the harness-covered pack geometry;
++  // everything else takes the composed graph unchanged.
++  if (!Exl3MoeFused::use_fallback(s)) {
++    std::string decline;
++    if (Exl3MoeFused::accepts(
++            rows,
++            hidden,
++            inter,
++            x,
++            gate_trellis,
++            up_trellis,
++            down_trellis,
++            gate_suh,
++            gate_svh,
++            up_suh,
++            up_svh,
++            down_suh,
++            down_svh,
++            out_type,
++            window,
++            &decline)) {
++      if (const char* dbg = std::getenv("MLX_OMARCHY_EXL3_DEBUG");
++          dbg != nullptr && dbg[0] != '\0') {
++        std::fprintf(
++            stderr,
++            "exl3_moe: fused arm selected (rows=%d hidden=%d inter=%d)\n",
++            rows,
++            hidden,
++            inter);
++      }
++      // The fused kernel reads x as f32 words and rounds to f16 itself
++      // (the R1 chain), slots as uint32 words and scores as f32; convert
++      // up front, exactly the element types the composed graph feeds its
++      // math.
++      return array(
++          Shape{rows, hidden},
++          out_type,
++          std::make_shared<Exl3MoeFused>(
++              s,
++              fallback,
++              rows,
++              hidden,
++              inter,
++              topk,
++              window,
++              limit,
++              out_type),
++          {astype(x, float32, s),
++           gate_trellis, gate_suh, gate_svh,
++           up_trellis, up_suh, up_svh,
++           down_trellis, down_suh, down_svh,
++           astype(slots, uint32, s),
++           astype(scores, float32, s)});
++    }
++    if (const char* dbg = std::getenv("MLX_OMARCHY_EXL3_DEBUG");
++        dbg != nullptr && dbg[0] != '\0') {
++      std::fprintf(
++          stderr,
++          "exl3_moe: composed route (fused declined: %s)\n",
++          decline.c_str());
++    }
++  }
+   return fallback(
+       {x,
+        gate_trellis, gate_suh, gate_svh,
+@@ -969,6 +1030,14 @@
+       window_ == a_other.window_;
+ }
+ 
++bool Exl3MoeFused::is_equivalent(const Primitive& other) const {
++  const Exl3MoeFused& a_other = static_cast<const Exl3MoeFused&>(other);
++  return rows_ == a_other.rows_ && hidden_ == a_other.hidden_ &&
++      inter_ == a_other.inter_ && topk_ == a_other.topk_ &&
++      window_ == a_other.window_ && limit_ == a_other.limit_ &&
++      out_dtype_ == a_other.out_dtype_;
++}
++
+ bool RMSNormVJP::is_equivalent(const Primitive& other) const {
+   const RMSNormVJP& a_other = static_cast<const RMSNormVJP&>(other);
+   return eps_ == a_other.eps_;

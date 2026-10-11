@@ -978,6 +978,18 @@ enum class ComputeKernel : uint16_t {
   Exl3DecodeF32,
   Exl3DecodeF16,
   Exl3DecodeBF16,
+  // Fused EXL3 MoE GEMV arm (fast::Exl3MoeFused;
+  // shaders/exl3_moe_fused.comp): decode + gate/up GEMV, clamped SwiGLU,
+  // down GEMV and router combine in two dispatches. The output dtype
+  // varies; the AccExp variants build the same source with
+  // EXL3_ACCURATE_EXP (accurately rounded exp, default off) and exist for
+  // the device exp() characterization.
+  Exl3MoeFusedF32,
+  Exl3MoeFusedF16,
+  Exl3MoeFusedBF16,
+  Exl3MoeFusedF32AccExp,
+  Exl3MoeFusedF16AccExp,
+  Exl3MoeFusedBF16AccExp,
   Count,
 };
 
@@ -1047,6 +1059,16 @@ struct ComputeParams {
   uint32_t k_batchstride{0};
   uint32_t v_batchstride{0};
 };
+
+// Number of fused-arm Exl3MoeFused evals since process start (the doctest
+// and debug tooling read it to prove the fused arm was actually selected).
+// Exported: the mlx target builds with hidden visibility and the doctest
+// links these across the shared-library boundary.
+__attribute__((visibility("default"))) uint64_t
+exl3_moe_fused_dispatch_count();
+// One fused-arm eval happened (called by the primitive's eval_gpu).
+__attribute__((visibility("default"))) void
+exl3_moe_fused_count_fetch_add();
 
 class ComputeRuntime {
  public:

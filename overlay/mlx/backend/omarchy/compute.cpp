@@ -173,6 +173,12 @@
 #include "exl3_decode_bf16.h"
 #include "exl3_decode_f16.h"
 #include "exl3_decode_f32.h"
+#include "exl3_moe_fused_bf16.h"
+#include "exl3_moe_fused_bf16_acc_exp.h"
+#include "exl3_moe_fused_f16.h"
+#include "exl3_moe_fused_f16_acc_exp.h"
+#include "exl3_moe_fused_f32.h"
+#include "exl3_moe_fused_f32_acc_exp.h"
 #include "anyall_bf16.h"
 #include "anyall_f16.h"
 #include "anyall_f32.h"
@@ -852,6 +858,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {exl3_decode_f16, exl3_decode_f16_size};
     case ComputeKernel::Exl3DecodeBF16:
       return {exl3_decode_bf16, exl3_decode_bf16_size};
+    case ComputeKernel::Exl3MoeFusedF32:
+      return {exl3_moe_fused_f32, exl3_moe_fused_f32_size};
+    case ComputeKernel::Exl3MoeFusedF16:
+      return {exl3_moe_fused_f16, exl3_moe_fused_f16_size};
+    case ComputeKernel::Exl3MoeFusedBF16:
+      return {exl3_moe_fused_bf16, exl3_moe_fused_bf16_size};
+    case ComputeKernel::Exl3MoeFusedF32AccExp:
+      return {exl3_moe_fused_f32_acc_exp, exl3_moe_fused_f32_acc_exp_size};
+    case ComputeKernel::Exl3MoeFusedF16AccExp:
+      return {exl3_moe_fused_f16_acc_exp, exl3_moe_fused_f16_acc_exp_size};
+    case ComputeKernel::Exl3MoeFusedBF16AccExp:
+      return {exl3_moe_fused_bf16_acc_exp, exl3_moe_fused_bf16_acc_exp_size};
     case ComputeKernel::TakeF32:
       return {take_f32, take_f32_size};
     case ComputeKernel::TakeF16:

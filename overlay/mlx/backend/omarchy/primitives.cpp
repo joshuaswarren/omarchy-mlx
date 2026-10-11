@@ -13455,6 +13455,275 @@ void Exl3Decode::eval_gpu(
       window_);
 }
 
+// Fused EXL3 MoE GEMV arm (M3d), shaders/exl3_moe_fused.comp: the whole
+// layer (decode + gate/up GEMV, clamped SwiGLU, down GEMV, router combine)
+// in two dispatches of one shader, bit-faithful to the proven raw-Vulkan
+// kernel. The arm serves only the harness-covered pack geometry; every
+// decline goes back to the composed exl3_moe graph with a one-line reason.
+namespace {
+
+// Word offset of the array's data inside its backing VkBuffer (binding()
+// always binds from byte 0). uint16-backed banks are addressed as uint32
+// words, so their byte offset must be word aligned.
+uint32_t checked_word_offset(const array& value, const std::string& name, const array& out) {
+  if (value.offset() % 4 != 0) {
+    omarchy::unsupported(name + " byte offset", out);
+  }
+  if (!omarchy::compute_index_span_fits(
+          static_cast<uint64_t>(value.offset() / 4), value.nbytes() / 4)) {
+    omarchy::unsupported(name + " index span", out);
+  }
+  return static_cast<uint32_t>(value.offset() / 4);
+}
+
+bool env_flag_set(const char* name) {
+  const char* v = std::getenv(name);
+  return v != nullptr && v[0] != '\0' && std::strcmp(v, "0") != 0;
+}
+
+} // namespace
+
+bool Exl3MoeFused::use_fallback(Stream s) {
+  return s.device == Device::cpu;
+}
+
+bool Exl3MoeFused::accepts(
+    int rows,
+    int hidden,
+    int inter,
+    const array& x,
+    const array& gate_trellis,
+    const array& up_trellis,
+    const array& down_trellis,
+    const array& gate_suh,
+    const array& gate_svh,
+    const array& up_suh,
+    const array& up_svh,
+    const array& down_suh,
+    const array& down_svh,
+    Dtype out_dtype,
+    int window,
+    std::string* decline) {
+  auto say = [decline](std::string reason) {
+    if (decline != nullptr) {
+      *decline = std::move(reason);
+    }
+    return false;
+  };
+  if (const char* knob = std::getenv("MLX_OMARCHY_EXL3_FUSED");
+      knob != nullptr && std::strcmp(knob, "0") == 0) {
+    return say("disabled (MLX_OMARCHY_EXL3_FUSED=0)");
+  }
+  long max_rows = 2;
+  if (const char* rows_env = std::getenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
+      rows_env != nullptr && *rows_env != '\0') {
+    max_rows = std::strtol(rows_env, nullptr, 10);
+  }
+  if (rows > max_rows) {
+    return say("rows " + std::to_string(rows) + " > fused limit " +
+               std::to_string(max_rows));
+  }
+  if (x.dtype() == bfloat16) {
+    return say("bf16 x (the fused chain rounds x through f16)");
+  }
+  if (hidden % 128 != 0 || inter % 128 != 0) {
+    return say("hidden/inter must be multiples of 128");
+  }
+  // Shared-memory staging is sized for the harness pack shapes.
+  if (hidden > 2560 || inter > 640) {
+    return say("hidden > 2560 or inter > 640 (uncovered geometry)");
+  }
+  uint32_t packed = checked_u32(gate_trellis.shape(3), "exl3_moe fused", x);
+  if (gate_trellis.shape(3) != up_trellis.shape(3) ||
+      gate_trellis.shape(3) != down_trellis.shape(3) ||
+      (packed != 32 && packed != 48 && packed != 64 && packed != 96 &&
+       packed != 128)) {
+    return say("packed rate not in {32, 48, 64, 96, 128}");
+  }
+  if (window != 15) {
+    return say("window " + std::to_string(window) + " != 15 (uncovered)");
+  }
+  auto planes_ok = [&](const array& v, int size, const char* name) {
+    if (v.ndim() == 2 && v.shape(1) == size) {
+      return true;
+    }
+    say(std::string(name) + " must be a per-expert [E, " +
+        std::to_string(size) + "] plane for the fused arm");
+    return false;
+  };
+  int experts = gate_trellis.shape(0);
+  if (!planes_ok(gate_suh, hidden, "gate_suh") ||
+      !planes_ok(up_suh, hidden, "up_suh") ||
+      !planes_ok(down_svh, hidden, "down_svh") ||
+      !planes_ok(gate_svh, inter, "gate_svh") ||
+      !planes_ok(up_svh, inter, "up_svh") ||
+      !planes_ok(down_suh, inter, "down_suh")) {
+    return false;
+  }
+  if (experts < 1) {
+    return say("no experts");
+  }
+  (void)out_dtype;
+  return true;
+}
+
+void Exl3MoeFused::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  const std::string tag = name();
+  auto s = stream();
+  auto& encoder = omarchy::get_command_encoder(s);
+  array& out = outputs.at(0);
+  const int rows = rows_;
+  const int hidden = hidden_;
+  const int inter = inter_;
+  const int topk = topk_;
+  const uint32_t packed = checked_u32(
+      static_cast<size_t>(inputs.at(1).shape(3)) , tag, out);
+  const uint32_t mask = (1u << window_) - 1u;
+  float limit_bits = 0.0f;
+  std::memcpy(&limit_bits, &limit_, sizeof(limit_bits));
+  const uint32_t slots_rt = checked_u32(
+      static_cast<size_t>(rows) * topk, tag, out);
+
+  out.set_data(allocate_omarchy(out.nbytes()));
+  // Per-mode staging: finished gate/up bits (f16 words), the whole-row
+  // f32 GEMV accumulators (only touched when slabbed), the transformed
+  // inputs, and the per-binding word-offset metadata.
+  array ag({static_cast<int>(slots_rt * inter)}, uint32, nullptr, {});
+  array au({static_cast<int>(slots_rt * inter)}, uint32, nullptr, {});
+  array accg({static_cast<int>(slots_rt * inter)}, float32, nullptr, {});
+  array accu({static_cast<int>(slots_rt * inter)}, float32, nullptr, {});
+  array accd({static_cast<int>(slots_rt * hidden)}, float32, nullptr, {});
+  array xtg({static_cast<int>(slots_rt * hidden)}, uint32, nullptr, {});
+  array xtu({static_cast<int>(slots_rt * hidden)}, uint32, nullptr, {});
+  array xtd({static_cast<int>(slots_rt * inter)}, uint32, nullptr, {});
+  for (auto* a : std::vector<array*>{&ag, &au, &accg, &accu, &accd, &xtg, &xtu, &xtd}) {
+    a->set_data(allocate_omarchy(a->nbytes()));
+  }
+  array meta({22}, uint32, nullptr, {});
+  meta.set_data(allocate_omarchy(meta.nbytes()));
+
+  std::vector<const array*> keep{&out, &ag, &au, &accg, &accu, &accd,
+                                 &xtg, &xtu, &xtd, &meta};
+  std::vector<std::optional<array>> temps(inputs.size());
+  for (size_t i = 0; i < inputs.size(); i++) {
+    keep.push_back(&inputs[i]);
+  }
+  for (const auto* a : keep) {
+    encoder.add_temporary(*a);
+  }
+
+  // Bindings 0..20 data, 21 metadata: word offsets into each backing
+  // VkBuffer. All banks are fresh dense arrays in practice, but the
+  // allocator may co-allocate the small ones.
+  const uint32_t x_w = checked_word_offset(inputs[0], tag + " x", out);
+  const uint32_t slots_w = checked_word_offset(inputs[10], tag + " slots", out);
+  const uint32_t scores_w = checked_word_offset(inputs[11], tag + " scores", out);
+  const uint32_t tg_w = checked_word_offset(inputs[1], tag + " gate trellis", out);
+  const uint32_t tu_w = checked_word_offset(inputs[4], tag + " up trellis", out);
+  const uint32_t td_w = checked_word_offset(inputs[7], tag + " down trellis", out);
+  const uint32_t suhg_w = checked_word_offset(inputs[2], tag + " gate suh", out);
+  const uint32_t svhg_w = checked_word_offset(inputs[3], tag + " gate svh", out);
+  const uint32_t suhu_w = checked_word_offset(inputs[5], tag + " up suh", out);
+  const uint32_t svhu_w = checked_word_offset(inputs[6], tag + " up svh", out);
+  const uint32_t suhd_w = checked_word_offset(inputs[8], tag + " down suh", out);
+  const uint32_t svhd_w = checked_word_offset(inputs[9], tag + " down svh", out);
+  const uint32_t ag_w = checked_word_offset(ag, tag + " ag", out);
+  const uint32_t au_w = checked_word_offset(au, tag + " au", out);
+  const uint32_t out_w = checked_word_offset(out, tag + " out", out);
+  const uint32_t accg_w = checked_word_offset(accg, tag + " accg", out);
+  const uint32_t accu_w = checked_word_offset(accu, tag + " accu", out);
+  const uint32_t accd_w = checked_word_offset(accd, tag + " accd", out);
+  const uint32_t xtg_w = checked_word_offset(xtg, tag + " xtg", out);
+  const uint32_t xtu_w = checked_word_offset(xtu, tag + " xtu", out);
+  const uint32_t xtd_w = checked_word_offset(xtd, tag + " xtd", out);
+  {
+    auto* buf = static_cast<omarchy::VulkanBuffer*>(meta.buffer().ptr());
+    const uint32_t words[22] = {
+        x_w, slots_w, scores_w, tg_w, tu_w, td_w,
+        suhg_w, suhu_w, suhd_w, svhg_w, svhu_w, svhd_w,
+        ag_w, au_w, out_w, accg_w, accu_w, accd_w,
+        xtg_w, xtu_w, xtd_w, 0};
+    std::memcpy(buf->data, words, sizeof(words));
+  }
+
+  omarchy::ComputeKernel kernel;
+  const bool acc_exp = env_flag_set("MLX_OMARCHY_EXL3_ACCURATE_EXP");
+  switch (out.dtype()) {
+    case float32:
+      kernel = acc_exp ? omarchy::ComputeKernel::Exl3MoeFusedF32AccExp
+                       : omarchy::ComputeKernel::Exl3MoeFusedF32;
+      break;
+    case float16:
+      kernel = acc_exp ? omarchy::ComputeKernel::Exl3MoeFusedF16AccExp
+                       : omarchy::ComputeKernel::Exl3MoeFusedF16;
+      break;
+    case bfloat16:
+      kernel = acc_exp ? omarchy::ComputeKernel::Exl3MoeFusedBF16AccExp
+                       : omarchy::ComputeKernel::Exl3MoeFusedBF16;
+      break;
+    default:
+      omarchy::unsupported(tag + " out dtype", out);
+  }
+
+  std::array<omarchy::ComputeBinding, 22> bindings{
+      binding(inputs[0]), binding(inputs[10]), binding(inputs[11]),
+      binding(inputs[1]), binding(inputs[4]), binding(inputs[7]),
+      binding(inputs[2]), binding(inputs[5]), binding(inputs[8]),
+      binding(inputs[3]), binding(inputs[6]), binding(inputs[9]),
+      binding(ag), binding(au), binding(out),
+      binding(accg), binding(accu), binding(accd),
+      binding(xtg), binding(xtu), binding(xtd),
+      binding(meta)};
+
+  const uint32_t out_blocks_g = checked_u32(inter / 128, tag, out);
+  const uint32_t out_blocks_d = checked_u32(hidden / 128, tag, out);
+  const uint32_t grid0 = checked_u32(
+      2u * slots_rt * out_blocks_g, tag, out);
+  const uint32_t grid1 = checked_u32(rows * out_blocks_d, tag, out);
+  if (grid0 > omarchy::kMaxComputeGroupCountX ||
+      grid1 > omarchy::kMaxComputeGroupCountX) {
+    omarchy::unsupported(tag + " grid", out);
+  }
+
+  // mode 0: gate+up, whole row in one dispatch (slabLo 0, slabN inTiles).
+  omarchy::ComputeParams params;
+  params.count = checked_u32(rows, tag, out);
+  params.operation = 0;
+  params.lhs_size = checked_u32(hidden, tag, out);
+  params.rhs_size = checked_u32(inter, tag, out);
+  params.reduce_size = limit_bits == 0.0f ? 0u : *reinterpret_cast<uint32_t*>(&limit_bits);
+  params.output_size = 0; // slabLo
+  params.lhs_offset = checked_u32(hidden / 16, tag, out); // slabN
+  params.rhs_offset = checked_word_offset(meta, tag + " meta", out);
+  params.matrix_m = packed;
+  params.matrix_n = mask;
+  params.matrix_k = checked_u32(topk, tag, out);
+  encoder.dispatch_compute(kernel, bindings, params, grid0);
+
+  // mode 1: down + SwiGLU + combine.
+  params.operation = 1;
+  params.output_size = 0;
+  params.lhs_offset = checked_u32(inter / 16, tag, out); // slabN
+  encoder.dispatch_compute(kernel, bindings, params, grid1);
+
+  omarchy::exl3_moe_fused_count_fetch_add();
+  if (const char* dbg = std::getenv("MLX_OMARCHY_EXL3_DEBUG");
+      dbg != nullptr && dbg[0] != '\0') {
+    std::fprintf(
+        stderr,
+        "exl3_moe: fused arm dispatched (rows=%d hidden=%d inter=%d topk=%d "
+        "packed=%u accurate_exp=%d)\n",
+        rows,
+        hidden,
+        inter,
+        topk,
+        packed,
+        acc_exp ? 1 : 0);
+  }
+}
+
 // Bonsai 1-bit affine dequantize, shaders/bonsai_dequant_q1.comp.
 // One workgroup per output row; row stride 32 k values per lane.
 bool BonsaiQ1Dequantize::use_fallback(Stream s) {

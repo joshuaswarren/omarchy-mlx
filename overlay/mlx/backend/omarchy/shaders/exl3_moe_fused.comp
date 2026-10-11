@@ -1,0 +1,475 @@
+#version 460
+// EXL3 fused MoE GEMV for the omarchy backend (M3d integration).
+//
+// Port of the lavapipe-and-device-proven src/exl3/vk/exl3_gemv_fused.comp
+// (sushi fork exl3-vk-fused 4bb84fc3) into the backend conventions:
+// ComputeParams push constants, storage buffers bound from byte 0 with the
+// array element offsets carried in one metadata buffer, and the output
+// dtype selected at compile time. Math is unchanged from the proven kernel:
+// every accumulation stays a `precise` f32 chain in the reference order
+// (sushi src/exl3/expert_exl3.zig R1: prepareInput :320, innerGemv :333,
+// finishOutput :364, the plainMoeFused clamped SwiGLU, score combine), and
+// products stay precise so no driver may contract them into an FMA.
+//
+// Two modes cover one MoE layer:
+//   mode 0 (gate+up): one dispatch for ALL top-k slots and rows. Workgroup
+//   (projection, slot, 128-output block); codewords are extracted and
+//   mcg-decoded in registers per output lane.
+//   mode 1 (down): one workgroup per (row, 128-hidden block) computes the
+//   SwiGLU h in-kernel from the finished gate/up, the transformed input
+//   xt_d per slot, the fused GEMV, the output H128+svh finish and the
+//   router combine. slotout is never materialized.
+//
+// The tk (in-tile) loop can be slabbed across dispatches (slabLo/slabN,
+// read-modify-write through the f32 acc buffers). Slab boundaries preserve
+// the exact reference accumulation order, so correctness does not depend
+// on the slab size; slabN >= inTiles runs the whole GEMV in one dispatch
+// per mode (the shape the integration uses).
+//
+// Push-constant transport (ComputeParams field reuse):
+//   count         = rows
+//   operation     = mode (0 gate+up, 1 down)
+//   lhs_size      = hiddenDim
+//   rhs_size      = interDim
+//   reduce_size   = SwiGLU clamp magnitude as f32 bits (0 = no clamp)
+//   output_size   = slabLo (first in-tile of this dispatch's slab)
+//   lhs_offset    = slabN (in-tiles per dispatch)
+//   rhs_offset    = word offset of the metadata binding's own array
+//   matrix_m      = packedN (packed halfwords per tile: 32/48/64/96/128)
+//   matrix_n      = codeword window mask
+//   matrix_k      = topk
+//
+// Metadata buffer (binding 21): one uint word per data binding, 0..20,
+// each the binding array's element offset expressed in 32-bit words. The
+// allocator co-allocates arrays into shared VkBuffers and binding() binds
+// from byte 0, so every block adds its word offset. uint16-backed banks
+// (trellis, scales, f16 bit buffers) are addressed as uint32 words: their
+// byte offsets must be word aligned, which the eval layer refuses to
+// violate (same contract as exl3_decode.comp).
+//
+// Qualifying geometry (the harness-covered set; the eval layer declines
+// everything else back to the composed path): hidden <= 2560 and
+// inter <= 640 (shared-memory staging is sized for the pack shapes),
+// both multiples of 128, packedN in {32, 48, 64, 96, 128}, per-expert
+// scale planes ([E, size]).
+layout(local_size_x = 128) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer X { float g_x[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Slots { uint g_slots[]; };
+layout(std430, set = 0, binding = 2) readonly buffer Scores { float g_scores[]; };
+layout(std430, set = 0, binding = 3) readonly buffer TrelG { uint g_tg[]; };
+layout(std430, set = 0, binding = 4) readonly buffer TrelU { uint g_tu[]; };
+layout(std430, set = 0, binding = 5) readonly buffer TrelD { uint g_td[]; };
+layout(std430, set = 0, binding = 6) readonly buffer SuhG { uint g_suhg[]; };
+layout(std430, set = 0, binding = 7) readonly buffer SuhU { uint g_suhu[]; };
+layout(std430, set = 0, binding = 8) readonly buffer SuhD { uint g_suhd[]; };
+layout(std430, set = 0, binding = 9) readonly buffer SvhG { uint g_svhg[]; };
+layout(std430, set = 0, binding = 10) readonly buffer SvhU { uint g_svhu[]; };
+layout(std430, set = 0, binding = 11) readonly buffer SvhD { uint g_svhd[]; };
+// NOT writeonly: mode 1 reads the mode 0 finished gate/up bits back.
+layout(std430, set = 0, binding = 12) buffer Ag { uint g_ag[]; };
+layout(std430, set = 0, binding = 13) buffer Au { uint g_au[]; };
+#if defined(EXL3_OUT_F16) || defined(EXL3_OUT_BF16)
+layout(std430, set = 0, binding = 14) writeonly buffer Out { uint g_out[]; };
+#else
+layout(std430, set = 0, binding = 14) writeonly buffer Out { float g_out[]; };
+#endif
+// Accumulators are only read-modify-written when the dispatch is slabbed
+// (slabLo > 0 or slabN < inTiles); the whole-row shape leaves them at the
+// host pre-zero fill but they stay bound.
+layout(std430, set = 0, binding = 15) buffer AccG { float g_accg[]; };
+layout(std430, set = 0, binding = 16) buffer AccU { float g_accu[]; };
+layout(std430, set = 0, binding = 17) buffer AccD { float g_accd[]; };
+layout(std430, set = 0, binding = 18) buffer XtG { uint g_xtg[]; };
+layout(std430, set = 0, binding = 19) buffer XtU { uint g_xtu[]; };
+layout(std430, set = 0, binding = 20) buffer XtD { uint g_xtd[]; };
+layout(std430, set = 0, binding = 21) readonly buffer Meta { uint g_meta[]; };
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const float HAD_SCALE = 0.08838834764831845;
+const uint MCG_MULT = 0xCBAC1FEDu;
+
+float f16ToF32(uint h) {
+  uint sign = (h >> 15) & 1u;
+  uint exp = (h >> 10) & 0x1Fu;
+  uint man = h & 0x3FFu;
+  uint bits;
+  if (exp == 0u) {
+    if (man == 0u) {
+      bits = sign << 31;
+    } else {
+      uint m = man;
+      uint s = 0u;
+      while ((m & 0x200u) == 0u) {
+        m <<= 1;
+        s++;
+      }
+      bits = (sign << 31) | ((112u - s) << 23) | ((m & 0x1FFu) << 14);
+    }
+  } else if (exp == 0x1Fu) {
+    bits = (sign << 31) | (0xFFu << 23) | (man << 13);
+  } else {
+    bits = (sign << 31) | ((exp + 112u) << 23) | (man << 13);
+  }
+  return uintBitsToFloat(bits);
+}
+
+uint f32ToF16(float v) {
+  uint b = floatBitsToUint(v);
+  uint sign = (b >> 16) & 0x8000u;
+  uint exp = (b >> 23) & 0xFFu;
+  uint man = b & 0x7FFFFFu;
+  if (exp == 0xFFu) {
+    return sign | 0x7C00u | (man != 0u ? 0x0200u : 0u);
+  }
+  int ne = int(exp) - 127 + 15;
+  if (ne >= 31) return sign | 0x7C00u;
+  if (ne <= 0) {
+    if (ne < -10) return sign;
+    uint m = man | 0x800000u;
+    uint shift = uint(14 - ne);
+    uint rem = m & ((1u << shift) - 1u);
+    uint h16 = m >> shift;
+    uint halfUlp = 1u << (shift - 1u);
+    if (rem > halfUlp || (rem == halfUlp && (h16 & 1u) == 1u)) h16++;
+    return sign | h16;
+  }
+  uint h16 = (uint(ne) << 10) | (man >> 13);
+  uint rem = man & 0x1FFFu;
+  if (rem > 0x1000u || (rem == 0x1000u && ((man >> 13) & 1u) == 1u)) h16++;
+  if (h16 >= 0x7C00u) return sign | 0x7C00u;
+  return sign | h16;
+}
+
+uint f32ToBf16(uint b) {
+  uint lsb = (b >> 16) & 1u;
+  return (b + 0x7FFFu + lsb) >> 16;
+}
+
+// expert_exl3.zig decodeMcg (:141): u32 mul + XOR, f32 add of the f16
+// halves, RNE round to f16.
+uint decodeMcg(uint cw) {
+  uint mixed = cw * MCG_MULT;
+  uint pair = 0x3B603B60u ^ (mixed & 0x8FFF8FFFu);
+  float lo = f16ToF32(pair & 0xFFFFu);
+  float hi = f16ToF32(pair >> 16);
+  return f32ToF16(lo + hi);
+}
+
+// Codeword index i (0..255) at tile position (r, c): inverse of
+// tensorCorePerm (:226).
+uint codewordIndex(uint r, uint c) {
+  uint pThread = (c & 7u) * 4u + ((r & 6u) >> 1);
+  uint j = ((r >> 3) << 1) + (r & 1u) + ((c >= 8u) ? 4u : 0u);
+  return pThread * 8u + j;
+}
+
+#if defined(EXL3_ACCURATE_EXP)
+// Accurately rounded exp(x) for the ACCURATE_EXP arm (default off): fma
+// range reduction k = roundEven(x * log2e), r = (x - k*ln2_hi) - k*ln2_lo,
+// degree-6 minimax polynomial (measured within 1 ulp of correctly rounded
+// over all 65536 f16-valued f32 inputs and a 3.2M dense f32 sweep, see
+// artifacts/SushiExl3Vk/m3d-integrate), 2^k exponent assembly with the
+// k=128 and denormal two-step paths.
+float expAcc(float x) {
+  if (x != x) return x;
+  if (x > 88.72283935546875f) return uintBitsToFloat(0x7F800000u);
+  if (x < -103.97208404541029f) return 0.0f;
+  const float INV_LN2 = 1.4426950216293335f;
+  const float LN2_HI = 0.693145751953125f;
+  const float LN2_LO = 1.428606765330187e-06f;
+  float kf = floor(x * INV_LN2 + 0.5f);
+  int k = int(kf);
+  precise float r = fma(-kf, LN2_HI, x);
+  r = fma(-kf, LN2_LO, r);
+  precise float p = 0.00138244335539639f;
+  p = fma(p, r, 0.008371793664991856f);
+  p = fma(p, r, 0.041668254882097244f);
+  p = fma(p, r, 0.16666458547115326f);
+  p = fma(p, r, 0.4999999403953552f);
+  p = fma(p, r, 1.0f);
+  p = fma(p, r, 1.0f);
+  if (k >= -126 && k <= 127) {
+    return p * uintBitsToFloat(uint(k + 127) << 23u);
+  }
+  if (k == 128) {
+    // Exact exponent bump: p * 2^128 cannot round (p < 2) and no literal
+    // fold can overflow the product.
+    return uintBitsToFloat(floatBitsToUint(p) + 0x3F800000u) * 2.0f;
+  }
+  // k < -126: scale in two steps so denormal results round once.
+  float s = uintBitsToFloat(uint(k + 253) << 23u);
+  return (p * s) * uintBitsToFloat(0x00800000u); // 2^-126
+}
+#define SHADER_EXP(x) expAcc(x)
+#else
+// The default arm keeps the driver's exp(): that transcendental is exactly
+// what the device ticket characterizes.
+#define SHADER_EXP(x) exp(x)
+#endif
+
+shared uint s_xt[2560];   // f16 bits, transformed input for one slot (mode 0)
+shared uint s_xtd[640];   // f16 bits, transformed SwiGLU output per slot (mode 1)
+shared float s_h[640];    // SwiGLU output staging (mode 1, slab 0 only)
+shared float s_fin[128];  // f32 accumulator exchange for the output H128
+
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  uint hidden = params.lhs_size;
+  uint inter = params.rhs_size;
+  uint metaBase = params.rhs_offset;
+
+  if (params.operation == 0u) {
+    // --- gate + up: workgroup (proj, slot gx, 128-output block) --------
+    uint outBlocks = inter >> 7;
+    uint per = uint(gl_NumWorkGroups.x) / 2u;  // rts * outBlocks
+    uint proj = gl_WorkGroupID.x / per;
+    uint rem = gl_WorkGroupID.x % per;
+    uint gx = rem / outBlocks;
+    uint blk = rem % outBlocks;
+    uint inDim = hidden;
+    uint outDim = inter;
+    uint inTiles = inDim >> 4;
+    uint outTiles = outDim >> 4;
+    uint tkLo = params.output_size * params.lhs_offset;
+    uint tkHi = tkLo + params.lhs_offset;
+    if (tkHi > inTiles) tkHi = inTiles;
+
+    uint e = g_slots[g_meta[metaBase + 1] + gx];
+    uint suhBase = e * inDim;
+    if (params.output_size == 0u) {
+      for (uint el = lid; el < inDim; el += 128u) {
+        uint boff = el & ~127u;
+        precise float acc = 0.0;
+        for (uint k = 0u; k < 128u; k++) {
+          float xv = f16ToF32(f32ToF16(g_x[g_meta[metaBase + 0] + (gx / params.matrix_k) * inDim + boff + k]));
+          uint sb = (proj == 0u)
+              ? g_suhg[g_meta[metaBase + 6] + suhBase + boff + k]
+              : g_suhu[g_meta[metaBase + 7] + suhBase + boff + k];
+          float prod = xv * f16ToF32(sb);
+          float he = (bitCount((el & 127u) & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+          acc = acc + he * prod;
+        }
+        uint bits = f32ToF16(acc);
+        s_xt[el] = bits;
+        if (proj == 0u) g_xtg[g_meta[metaBase + 18] + gx * inDim + el] = bits;
+        else g_xtu[g_meta[metaBase + 19] + gx * inDim + el] = bits;
+      }
+    } else {
+      for (uint el = lid; el < inDim; el += 128u) {
+        s_xt[el] = (proj == 0u)
+            ? g_xtg[g_meta[metaBase + 18] + gx * inDim + el]
+            : g_xtu[g_meta[metaBase + 19] + gx * inDim + el];
+      }
+    }
+    barrier();
+
+    uint oLocal = lid;
+    uint oGlob = blk * 128u + oLocal;
+    uint tn = oGlob >> 4;
+    uint c = oGlob & 15u;
+    precise float acc = 0.0;
+    if (tkLo > 0u) {
+      acc = (proj == 0u)
+          ? g_accg[g_meta[metaBase + 15] + gx * outDim + oGlob]
+          : g_accu[g_meta[metaBase + 16] + gx * outDim + oGlob];
+    }
+    for (uint tk = tkLo; tk < tkHi; tk++) {
+      for (uint r = 0u; r < 16u; r++) {
+        float xtv = f16ToF32(s_xt[tk * 16u + r]);
+        uint cw = codewordIndex(r, c);
+        uint pair = cw >> 1;
+        uint parity = cw & 1u;
+        uint wc = params.matrix_m >> 1;
+        uint total = params.matrix_m << 4;
+        uint e0 = ((pair * 2u + 1u) * params.matrix_m) >> 4;
+        uint e1 = ((pair * 2u + 2u) * params.matrix_m) >> 4;
+        uint bit0 = e0 + total - 16u;
+        uint bit2 = e1 + total;
+        uint i0 = bit0 >> 5;
+        uint i1 = (bit2 - 1u) >> 5;
+        uint shift = (i1 + 1u) * 32u - bit2;
+        uint wordBase = e * ((inTiles * outTiles * params.matrix_m) >> 1)
+            + (((tk * outTiles + tn) * params.matrix_m) >> 1);
+        uint wa = (proj == 0u)
+            ? g_tg[g_meta[metaBase + 3] + wordBase + (i0 % wc)]
+            : g_tu[g_meta[metaBase + 4] + wordBase + (i0 % wc)];
+        uint wb = (proj == 0u)
+            ? g_tg[g_meta[metaBase + 3] + wordBase + (i1 % wc)]
+            : g_tu[g_meta[metaBase + 4] + wordBase + (i1 % wc)];
+        uint funnel = (shift == 0u) ? wb
+            : (shift >= 32u) ? wa
+            : ((wa << (32u - shift)) | (wb >> shift));
+        uint fresh = e1 - e0;
+        uint raw = (parity == 0u) ? ((funnel >> fresh) & 0xFFFFu)
+            : (funnel & 0xFFFFu);
+        precise float prod = xtv * f16ToF32(decodeMcg(raw & params.matrix_n));
+        acc = acc + prod;
+      }
+    }
+    if (tkHi < inTiles) {
+      if (proj == 0u) g_accg[g_meta[metaBase + 15] + gx * outDim + oGlob] = acc;
+      else g_accu[g_meta[metaBase + 16] + gx * outDim + oGlob] = acc;
+    } else {
+      s_fin[oLocal] = acc;
+      barrier();
+      precise float ha = 0.0;
+      for (uint k = 0u; k < 128u; k++) {
+        float v = f16ToF32(f32ToF16(s_fin[k]));
+        float he = (bitCount(oLocal & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+        ha = ha + he * v;
+      }
+      uint sv = (proj == 0u)
+          ? g_svhg[g_meta[metaBase + 9] + e * outDim + oGlob]
+          : g_svhu[g_meta[metaBase + 10] + e * outDim + oGlob];
+      uint bits = f32ToF16(ha * f16ToF32(sv));
+      if (proj == 0u) g_ag[g_meta[metaBase + 12] + gx * outDim + oGlob] = bits;
+      else g_au[g_meta[metaBase + 13] + gx * outDim + oGlob] = bits;
+    }
+  } else {
+    // --- down + SwiGLU + combine: workgroup (row, 128-output block) ----
+    uint outBlocks = hidden >> 7;
+    uint row = gl_WorkGroupID.x / outBlocks;
+    uint blk = gl_WorkGroupID.x % outBlocks;
+    uint inDim = inter;
+    uint outDim = hidden;
+    uint inTiles = inDim >> 4;
+    uint outTiles = outDim >> 4;
+    uint tkLo = params.output_size * params.lhs_offset;
+    uint tkHi = tkLo + params.lhs_offset;
+    if (tkHi > inTiles) tkHi = inTiles;
+    bool last = tkHi >= inTiles;
+    float lim = uintBitsToFloat(params.reduce_size);
+
+    uint oLocal = lid;
+    uint oGlob = blk * 128u + oLocal;
+    uint tn = oGlob >> 4;
+    uint c = oGlob & 15u;
+    precise float combined = 0.0;
+
+    for (uint j = 0u; j < params.matrix_k; j++) {
+      uint gx = row * params.matrix_k + j;
+      uint e = g_slots[g_meta[metaBase + 1] + gx];
+      // Top-of-loop barrier: the previous slot's GEMV reads of s_xtd (and
+      // finish reads of s_fin) complete before this slot's prep overwrites
+      // the shared staging.
+      barrier();
+      if (params.output_size == 0u) {
+        for (uint el = lid; el < inDim; el += 128u) {
+          precise float a = f16ToF32(g_ag[g_meta[metaBase + 12] + gx * inDim + el]);
+          precise float u = f16ToF32(g_au[g_meta[metaBase + 13] + gx * inDim + el]);
+          if (lim > 0.0) {
+            a = min(a, lim);
+            float am = min(abs(u), lim);
+            u = (u < 0.0) ? -am : am;
+          }
+          precise float sig = 1.0 / (1.0 + SHADER_EXP(-a));
+          s_h[el] = (a * sig) * u;
+        }
+        barrier();
+        for (uint el = lid; el < inDim; el += 128u) {
+          uint boff = el & ~127u;
+          precise float acc = 0.0;
+          for (uint k = 0u; k < 128u; k++) {
+            float hv = f16ToF32(f32ToF16(s_h[boff + k]));
+            float prod = hv * f16ToF32(g_suhd[g_meta[metaBase + 8] + e * inDim + boff + k]);
+            float he = (bitCount((el & 127u) & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+            acc = acc + he * prod;
+          }
+          uint bits = f32ToF16(acc);
+          s_xtd[el] = bits;
+          g_xtd[g_meta[metaBase + 20] + gx * inDim + el] = bits;
+        }
+        barrier();
+      } else {
+        for (uint el = lid; el < inDim; el += 128u) {
+          s_xtd[el] = g_xtd[g_meta[metaBase + 20] + gx * inDim + el];
+        }
+        barrier();
+      }
+
+      precise float acc = 0.0;
+      if (tkLo > 0u) acc = g_accd[g_meta[metaBase + 17] + gx * outDim + oGlob];
+      for (uint tk = tkLo; tk < tkHi; tk++) {
+        for (uint r = 0u; r < 16u; r++) {
+          float xtv = f16ToF32(s_xtd[tk * 16u + r]);
+          uint cw = codewordIndex(r, c);
+          uint pair = cw >> 1;
+          uint parity = cw & 1u;
+          uint wc = params.matrix_m >> 1;
+          uint total = params.matrix_m << 4;
+          uint e0 = ((pair * 2u + 1u) * params.matrix_m) >> 4;
+          uint e1 = ((pair * 2u + 2u) * params.matrix_m) >> 4;
+          uint bit0 = e0 + total - 16u;
+          uint bit2 = e1 + total;
+          uint i0 = bit0 >> 5;
+          uint i1 = (bit2 - 1u) >> 5;
+          uint shift = (i1 + 1u) * 32u - bit2;
+          uint wordBase = e * ((inTiles * outTiles * params.matrix_m) >> 1)
+              + (((tk * outTiles + tn) * params.matrix_m) >> 1);
+          uint wa = g_td[g_meta[metaBase + 5] + wordBase + (i0 % wc)];
+          uint wb = g_td[g_meta[metaBase + 5] + wordBase + (i1 % wc)];
+          uint funnel = (shift == 0u) ? wb
+              : (shift >= 32u) ? wa
+              : ((wa << (32u - shift)) | (wb >> shift));
+          uint fresh = e1 - e0;
+          uint raw = (parity == 0u) ? ((funnel >> fresh) & 0xFFFFu)
+              : (funnel & 0xFFFFu);
+          precise float prod = xtv * f16ToF32(decodeMcg(raw & params.matrix_n));
+          acc = acc + prod;
+        }
+      }
+      if (!last) {
+        g_accd[g_meta[metaBase + 17] + gx * outDim + oGlob] = acc;
+      } else {
+        // finishOutput: f16 round, H128, * svhd, f16 round; the combine
+        // consumes the f16-ROUNDED finished value (the reference rounds
+        // inside finishOutput).
+        s_fin[oLocal] = acc;
+        barrier();
+        precise float ha = 0.0;
+        for (uint k = 0u; k < 128u; k++) {
+          float v = f16ToF32(f32ToF16(s_fin[k]));
+          float he = (bitCount(oLocal & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
+          ha = ha + he * v;
+        }
+        float y2f = ha * f16ToF32(g_svhd[g_meta[metaBase + 11] + e * outDim + oGlob]);
+        y2f = f16ToF32(f32ToF16(y2f));
+        combined = combined + g_scores[g_meta[metaBase + 2] + row * params.matrix_k + j] * y2f;
+      }
+    }
+    if (last) {
+      uint rowBase = row * outDim + oGlob;
+#if defined(EXL3_OUT_F16)
+      g_out[g_meta[metaBase + 14] + rowBase] = f32ToF16(combined);
+#elif defined(EXL3_OUT_BF16)
+      g_out[g_meta[metaBase + 14] + rowBase] = f32ToBf16(floatBitsToUint(combined));
+#else
+      g_out[g_meta[metaBase + 14] + rowBase] = combined;
+#endif
+    }
+  }
+}

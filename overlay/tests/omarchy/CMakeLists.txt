@@ -673,3 +673,23 @@ set_tests_properties(omarchy_exl3_decode_tests
                      PROPERTIES
                      ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
                      TIMEOUT 600)
+
+# Fused EXL3 MoE arm (M3d integration): fused vs composed vs CPU reference
+# at the harness pack shapes, fused-selected counter, rows=4 fallback.
+# The fused kernel is the raw-Vulkan-proven in-register decode, so the GPU
+# legs run on stock-Mesa dev-box llvmpipe too (no stock-driver skip).
+add_executable(omarchy_exl3_moe_fused_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_exl3_moe_fused.cpp)
+target_link_libraries(omarchy_exl3_moe_fused_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_exl3_moe_fused_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_exl3_moe_fused_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_exl3_moe_fused_tests)
+add_test(NAME omarchy_exl3_moe_fused_tests
+         COMMAND omarchy_exl3_moe_fused_tests)
+set_tests_properties(omarchy_exl3_moe_fused_tests
+                     PROPERTIES
+                     ENVIRONMENT "MLX_OMARCHY_ALLOW_NON_APPLE=1"
+                     TIMEOUT 900)
