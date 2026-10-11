@@ -202,7 +202,7 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-The mixture-of-experts models are the largest gap on decode: gemma-4-26B-A4B reaches 19% of macOS and Qwen3.6-35B-A3B 18%. Their prefill rose after the tiled expert route of PR #81 landed on main (it is not in v0.7.32). gemma-4-26B-A4B went from 29.9 to 116.50 tokens per second (3.9 times, now 21% of macOS) and Qwen3.6-35B-A3B from 39.4 to 117.52 (3.0 times, now 19%). The dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is now 2.3 times faster than MLX at gemma-4-26B-A4B prefill; it was 8.9 times. One row fails on Linux today: gemma-4-E4B stalls a GPU submit during generation. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
+The mixture-of-experts models are the largest gap on decode: gemma-4-26B-A4B reaches 19% of macOS and Qwen3.6-35B-A3B 18%. Their prefill rose after the tiled expert route of PR #81 landed on main (it is not in v0.7.32). gemma-4-26B-A4B went from 29.9 to 116.50 tokens per second (3.9 times, now 21% of macOS) and Qwen3.6-35B-A3B from 39.4 to 116.37 (2.95 times, now 19%). The dense models reach 48-69% on decode and 69-88% on prefill. llama.cpp on the same Linux GPU is now 2.3 times faster than MLX at gemma-4-26B-A4B prefill; it was 8.9 times. One row fails on Linux today: gemma-4-E4B stalls a GPU submit during generation. gpt-oss-20b runs since the attention-sinks kernel landed. It reaches only 2.2 tokens per second decode and 1.9 prefill. A 512-token prompt takes about 4.5 minutes, so that row used 3 decode samples of 16 tokens and 2 prefill runs instead of 10 of 64 and 5. The macOS runs shared the machine with background services (load 1.3-1.9) and downloads before the timed rows, which can only lower the macOS numbers.
 
 On Qwen3.5-9B the Linux outputs are token-for-token identical to macOS for the 10 test generations. On the four larger models the greedy outputs of the 10 generations differ from macOS in at least one token (the output digests differ); no cause has been established yet.
 
@@ -214,11 +214,11 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / mac
 | gemma-4-26B-A4B (MoE, 4B active) | 12.61 / 66.0 = **19%** (was 10.0, 15%) | 116.50 / 556.1 = **21%** (was 29.9, 5%) |
 | gemma-4-31B (dense 31B) | 7.3 / 15.3 = **48%** | 62.4 / 90.0 = **69%** |
 | Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = **62%** | 299.4 / 339.0 = **88%** |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.75 / 75.6 = **18%** (was 13.4, 18%) | 117.52 / 604.1 = **19%** (was 39.4, 7%) |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 / 75.6 = **18%** (was 13.4, 18%) | 116.37 / 604.1 = **19%** (was 39.4, 7%) |
 | gemma-4-E4B (dense 4B) | fails to run (0%) | fails to run (0%) |
 | gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = **3%** | 1.9 / 581.1 = **0.3%** |
 
-The two mixture-of-experts rows with "was" values were re-measured on 2026-10-10 on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`, PR #81 included), with the Honeykrisp driver from the private ICD directory at Mesa git `6543eeb7df7`, which the scoring script selects with `VK_ICD_FILENAMES`. The "was" values are the 2026-10-09 measurements; they ran on wheel `0.32.4.dev202610090923+a48b7cc5`, before PR #81, and their driver was not recorded, so the PR #81 effect is the before and after difference, not an isolated test. The macOS values were not re-run. The output digests did not change (276e9fba and 6666c20f). The gemma-4-26B-A4B run started with a load average of 0.22. The Qwen3.6-35B-A3B run started with 1.11, so its numbers may be low. The other rows are unchanged.
+The two mixture-of-experts rows with "was" values were re-measured on 2026-10-10 on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`, PR #81 included), with the Honeykrisp driver from the private ICD directory at Mesa git `6543eeb7df7`, which the scoring script selects with `VK_ICD_FILENAMES`. The "was" values are the 2026-10-09 measurements; they ran on wheel `0.32.4.dev202610090923+a48b7cc5`, before PR #81, and their driver was not recorded, so the PR #81 effect is the before and after difference, not an isolated test. The macOS values were not re-run. The output digests did not change (276e9fba and 6666c20f). The gemma-4-26B-A4B run started with a load average of 0.22. The Qwen3.6-35B-A3B cells are the mean of two runs: 13.75 and 13.48 decode, 117.52 and 115.22 prefill. The second run used the Edge0 repository, which holds the same weights and gave the same output digest. Those runs started with load averages of 1.11 and 0.98, so the numbers may be low. The other rows are unchanged.
 
 llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit), Linux / macOS:
 
@@ -231,7 +231,23 @@ llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit)
 | Qwen3.6-35B-A3B | not measured | not measured |
 | gemma-4-E4B | 18.5 / 59.1 = 31% | 303.5 / 821.1 = 37% |
 
-Skipped, too large for this machine: GLM-5.3-Flash, Kimi-K3, DeepSeek-V4-Flash, Qwen3.8-Flash-Next.
+Models added on 2026-10-11, Linux only. No macOS run exists for them yet, so there is no percent of macOS. MLX 4-bit, the same harness as above. The driver is the private ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES` by the scoring script, on both machines. A run that started with a load average above 0.5 or with the ANE busy is marked, and its numbers may be low.
+
+| Model | Chip | MLX decode | MLX prefill 512 | llama.cpp Q4_K_M decode / prefill | Wheel | Start of run |
+|---|---|---|---|---|---|---|
+| Llama-3.1-8B | 13-inch M1 | 11.48 | 99.57 | 8.87 / 50.10 (MLX 1.29 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.42; llama.cpp load 0.67, ANE busy |
+| Qwen2.5-7B-Instruct | 13-inch M1 | 14.26 | 105.61 | 9.53 / 53.08 (MLX 1.50 and 1.99 times) | `0.32.4.dev202610101808+158fee60` | load 0.70 for both runs (marked) |
+| Llama-3.2-3B-Instruct | 13-inch M1 | 21.52 | 227.20 | 19.47 / 121.96 (MLX 1.11 and 1.86 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.82; llama.cpp load 0.71 (marked) |
+| Qwen3-4B-Instruct-2507 | 13-inch M1 | 21.98 | 185.35 | 15.49 / 89.32 (MLX 1.42 and 2.08 times) | `0.32.4.dev202610101808+158fee60` | MLX load 0.97; llama.cpp load 1.07 (marked) |
+| Mellum2-12B-A2.5B (MoE) | 13-inch M1 | 4.83 | 41.21 | no result: llama.cpp could not allocate its compute buffers on 16 GB | `0.32.4.dev202610102357+e57cb301` | load 0.16 |
+| Qwen3-Coder-30B-A3B (MoE) | 16-inch M1 Max | 11.69 | 102.37 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.95 (marked) |
+| Ornith-1.5-35B-A3B (MoE, OptiQ 4-bit repository) | 16-inch M1 Max | 8.48 | 35.99 | not measured | `0.32.4.dev202610102357+e57cb301` | load 0.93, ANE busy (marked) |
+
+Mellum2-12B-A2.5B on the same 13-inch M1, before and after. On the `158fee60` wheel it measured 4.84 decode and 8.05 prefill. On `e57cb301` it measured 4.83 and 41.21. Prefill is 5.1 times faster and decode is unchanged. The output digest (326cf5bd) is the same in both. This is not an isolated test of PR #81. The wheels differ by more than that PR, and each side is one run. The before run started with a load average of 0.50 and the ANE busy. The after run started at 0.16 with the ANE idle.
+
+Withdrawn: Ornith-1.5-9B has no row. It does not run cleanly on the 16 GB M1; the system's out-of-memory killer ended processes during the run.
+
+Could not run, by size (MLX 4-bit, or the smallest repository): GLM-5.3-Flash 204 GB, GLM-5.3 418 GB, DeepSeek-V4-Flash 151.5 GB, Kimi-K3 (2-bit) 181 GB and Qwen3.8-Flash-Next 111.5 GB. None fits a 94 GB M2 Max. Also not run: Kolibri-1 (custom architecture, no MLX or GGUF conversion) and Xing4.0 (architecture not in mlx-lm). Ternary-Bonsai-2-27B exists only as a GGUF with a PQ2_0 type, and has no MLX conversion. llama.cpp at the pinned commit gave no result. The lab reports that it refuses the file as an invalid ggml type 142 and that the authors' fork is needed.
 
 The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models that fit, Linux / macOS. The Linux cells were measured on 2026-10-10; the macOS references are earlier sealed runs:
 
@@ -248,9 +264,9 @@ The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models t
 
 On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B, and its decode is about 4% behind (4.2%). Qwen3.8-2B is 8% behind on decode and 6% behind on prefill. The gap on the M1 Max above is chip-dependent. The Linux numbers are from the development wheel `0.32.4.dev202610101808+158fee60`. Its default route on the base M1 produces the same greedy tokens as macOS for Qwen3.5-9B (identical output digest over the 10 test generations). The macOS values are the median of three runs for Qwen3.5-9B, a single run for gemma-4-E4B, and 8 decode and 5 prefill runs for Qwen3.8-2B. The Linux Qwen3.8-2B values are the median of 3 decode cells and 2 prefill cells.
 
-gemma-4-E4B runs on main since the rope-frequency fix (#75). That fix is not in v0.7.32. On the development wheel above it measured 10.47 / 20.52 = 51% decode and 113.6 / 143.09 = 79% prefill 512. Its greedy output digest (118c7586) differs from macOS (491eb46b), so the row does not count as matching.
+gemma-4-E4B runs on main since the rope-frequency fix (#75). That fix is not in v0.7.32. On main at `e57cb301` it measured 10.46 / 20.52 = 51% decode and 114.31 / 143.09 = 80% prefill 512. That run used the private ICD at Mesa git `6543eeb7df7` and started with a load average of 0.90 and the ANE busy. An earlier run on the `158fee60` development wheel gave 10.47 and 113.6. Its greedy output digest (118c7586) differs from macOS (491eb46b), so the row does not count as matching.
 
-Driver for the base M1 rows: the Honeykrisp driver from the packaged `omarchy-mlx-vulkan` 0.7.28-2 (Mesa git e7631595df), selected with no override. The system Mesa 26.2.4-1 stays installed. For the M1 Max tables above the driver build was not recorded. The lab is moving to a newer patched driver; the tables get a before and after column once the scoreboard has been re-run on it.
+Driver for the base M1 rows: the Honeykrisp driver from the packaged `omarchy-mlx-vulkan` 0.7.28-2 (Mesa git e7631595df), selected with no override. The system Mesa 26.2.4-1 stays installed. The newer rows on this chip (gemma-4-E4B on main and the models added on 2026-10-11) used the private ICD at Mesa git `6543eeb7df7` instead, as stated for each. For the M1 Max tables above the driver build was not recorded, except for the two MoE rows re-measured on 2026-10-10. The lab is moving to a newer patched driver; the tables get a before and after column once the scoreboard has been re-run on it.
 
 Rows are re-measured as the lab scoreboard runs; the lowest ratios are the next kernel targets. Scripts, raw JSON per model and the full table: `receipts/2026-10-09-linux-vs-macos/`.
 
