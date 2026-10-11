@@ -9,7 +9,7 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. A spread is the maximum minus the minimum, divided by the median. The tables below name the driver they used, or say that it was not recorded. Rows on the newer driver, Mesa git `69bde15340`, are in their own section at the end.
+How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. A spread is the maximum minus the minimum, divided by the median. The tables below name the driver they used, or say that it was not recorded. Rows on the newer driver, Mesa git `69bde15340`, are in their own section at the end. Every decode row names its CPU governor. Rows measured before 2026-10-11 22:36Z did not record it. They ran under the kernel default, schedutil, with the power profile balanced. Read a decode row that names no governor as "not recorded (schedutil default)". Rows under schedutil and rows under performance are not compared with each other. They are never in one table without a governor column.
 
 Noise. Prefill is steady. Its spread over repeat runs is 0.0 to 3.0% on the M1 chips and 0.2 to 0.5% on the M2 Max, except Qwen3.8-27B (4.6%) and gemma-4-31B (11.5%) on the M2 Max. Decode is not steady across hours on the M1 chips. On the 16-inch M1 Max, gemma-4-26B-A4B decode ranged from 10.17 to 12.96 tokens per second over 18 runs (23.9%). On the 13-inch M1, gemma-4-E4B ranged from 8.85 to 13.64 over 10 runs (53.9%) and Qwen3.5-9B from 6.93 to 12.51 over 5 runs on one boot (44.8%). On the 14-inch M2 Max, gemma-4-26B-A4B ranged by 7.4% over 14 runs and Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Ornith-1.5-35B-A3B and Qwen3.8-27B by 0.9 to 2.0%. gemma-4-31B ranged by 12.0% and is marked noisy. Inside an interleaved block, where two drivers alternate within minutes, the control spread was 0.0 to 3.4% in seven of eight blocks and 11.1% in one. Only the blocks in the last section were interleaved. Every other row in this document is a single run, or a median of repeats taken at one time, with no paired control.
 
@@ -167,3 +167,29 @@ The v3 runs of gemma-4-26B-A4B span 10.17 to 12.96 over 18 runs, with a median o
 ### 13-inch M1, single runs
 
 gemma-4-E4B on the newer driver: 9.02 / 111.21, 9.05 / 111.59 and 9.08 / 110.0 (decode / prefill 512), with start loads of 1.21, 1.10 and 1.50. The interleaved block above gives a decode ratio of 1.014 and a prefill ratio of 0.996. No other 13-inch M1 row is published for the newer driver. Decode on some models on this chip fell later in the day. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md).
+
+## Set the CPU governor for local AI
+
+Decode speed on the M1-class chips follows the CPU clock. The Linux default governor, schedutil, held the clocks low during decode. The performance governor kept them at the top.
+
+| Chip | Model | schedutil decode (tokens per second) | performance decode | Ratio | Prefill ratio |
+|---|---|---|---|---|---|
+| 13-inch M1 | gemma-4-E4B | 10.65, 10.66, 10.63 | 15.27, 15.34, 15.17 | 1.434 | 1.009 |
+| 16-inch M1 Max | gemma-4-26B-A4B | 10.40, 10.39 | 12.84, 12.79, 12.80 | 1.231 | 1.011 |
+
+Each row alternates the two governors in one session, schedutil first, on the same boot and the same wheel (main at `e57cb301`) and the same driver, the private ICD at Mesa git `6543eeb7df7`. The ANE filler was off. The ratio is the median of the performance runs over the median of the schedutil runs. Decode spread inside one governor was 0.3% on the 13-inch M1 and 0.1% on the 16-inch M1 Max for schedutil. The first schedutil run on the 16-inch M1 Max read 1.77 tokens per second, with the machine busy at its start (64 W, fans at 2864 rpm). It is left out of the table. With it, the median is 10.39 and the ratio is 1.232. Prefill moved by 1.1% or less.
+
+The 14-inch M2 Max is not measured yet.
+
+To try it, read the current governor so you can put it back:
+
+```sh
+cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+for p in /sys/devices/system/cpu/cpufreq/policy*; do echo performance | sudo tee "$p/scaling_governor"; done
+```
+
+To restore, write the value you read back to each policy. The setting does not survive a reboot.
+
+If you run work on the ANE, you may already see the high clock. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. The ANE driver's boost is the likely cause. We have not isolated it.
+
+What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
