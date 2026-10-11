@@ -8,6 +8,10 @@ driver support next — see the
 If your machine's row says "data needed", a capture from you is literally
 the unblock.
 
+Not on Apple hardware? [docs/ANY-GPU.md](ANY-GPU.md) is the kit for
+building and testing omarchy-mlx on NVIDIA, Intel and AMD, and
+[docs/TESTED-HARDWARE.md](TESTED-HARDWARE.md) lists the results so far.
+
 ## What to do
 
 The short version — clone, then submit with one command (`--submit`
