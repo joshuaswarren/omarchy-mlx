@@ -66,6 +66,17 @@ std::vector<uint16_t> gen_scales(size_t n, std::mt19937& rng) {
   return v;
 }
 
+// Scales for the GEMV route, which decodes to f16: magnitudes in [0.5, 1) so no decoded weight leaves the f16 range
+// (gen_scales deliberately includes max-finite and subnormal edge scales; those are covered by the decode
+// comparisons, where both sides round the same way). Mixed f16/f32 paths would turn an overflow into rel = inf.
+std::vector<uint16_t> tame_scales(size_t n, std::mt19937& rng) {
+  std::vector<uint16_t> v(n);
+  for (size_t i = 0; i < n; i++) {
+    v[i] = static_cast<uint16_t>(0x3800 | (rng() & 0x3FF) | ((rng() & 1) << 15));
+  }
+  return v;
+}
+
 // GPU-comparison gate: the kernel is shift-heavy integer decode, the exact
 // class stock Mesa (< 26.2.4) miscompiles (the backend records a
 // stock-driver warning at init). Skip the GPU legs where the warning is
@@ -230,8 +241,8 @@ TEST_CASE("exl3 decode gemv vs host reference") {
   size_t tlen =
       static_cast<size_t>(in_f / 128) * (out_f / 128) * 64 * bits * 16;
   auto tv = gen_trellis(tlen, rng);
-  auto su = gen_scales(static_cast<size_t>(in_f), rng);
-  auto sv = gen_scales(static_cast<size_t>(out_f), rng);
+  auto su = tame_scales(static_cast<size_t>(in_f), rng);
+  auto sv = tame_scales(static_cast<size_t>(out_f), rng);
   array trellis(tv.data(), Shape{static_cast<int>(tlen)}, uint16);
   array suh(su.data(), Shape{in_f}, uint16);
   array svh(sv.data(), Shape{out_f}, uint16);
@@ -253,28 +264,34 @@ TEST_CASE("exl3 decode gemv vs host reference") {
   auto* yp = y.data<float>();
 
   // Host reference in double over the CPU reference decode.
-  array r = fast::exl3_decode(
-      trellis, suh, svh, in_f, out_f, bits, window, float32, cs);
+  // The reference uses the SAME f16-rounded weights the production route multiplies by (CPU decode to f16, widened),
+  // so the comparison isolates the matmul. Error is measured against the sum of absolute terms, the standard bound
+  // for a dot product: a relative error against |acc| alone blows up wherever the sum cancels.
+  array r16 = fast::exl3_decode(
+      trellis, suh, svh, in_f, out_f, bits, window, float16, cs);
+  array r = astype(r16, float32, cs);
   eval(r);
   auto* rp = r.data<float>();
   double max_rel = 0.0;
   for (int i = 0; i < rows; i++) {
     for (int j = 0; j < out_f; j++) {
       double acc = 0.0;
+      double mag = 0.0;
       for (int k = 0; k < in_f; k++) {
-        acc += static_cast<double>(xv[static_cast<size_t>(i) * in_f + k]) *
+        double term = static_cast<double>(xv[static_cast<size_t>(i) * in_f + k]) *
             static_cast<double>(rp[static_cast<size_t>(k) * out_f + j]);
+        acc += term;
+        mag += std::fabs(term);
       }
       double got = yp[static_cast<size_t>(i) * out_f + j];
-      double denom = std::fabs(acc) > 1e-9 ? std::fabs(acc) : 1.0;
-      double rel = std::fabs(got - acc) / denom;
+      double rel = std::fabs(got - acc) / (mag > 1e-9 ? mag : 1.0);
       if (rel > max_rel) {
         max_rel = rel;
       }
     }
   }
-  std::cout << "GEMV max_rel = " << max_rel << "\n";
-  CHECK_LT(max_rel, 1e-3);
+  std::cout << "GEMV max_rel (vs sum |terms|) = " << max_rel << "\n";
+  CHECK_LT(max_rel, 1e-5);
 }
 
 TEST_CASE("exl3 decode rejects malformed inputs") {
