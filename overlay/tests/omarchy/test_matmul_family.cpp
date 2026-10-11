@@ -2507,6 +2507,12 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
     std::vector<float> sub_out = run_once(true);
     unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    // The direct route (arrays bound in place) must equal the staged route
+    // bit for bit: same kernel arithmetic, only the operand source differs.
+    setenv("MLX_OMARCHY_GATHER_QMM_DIRECT", "0", 1);
+    std::vector<float> staged_out = run_once(true);
+    unsetenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
+    REQUIRE(staged_out == sub_out);
     // Scale-aware numerics metric (docs/numerics-gate.md spirit): both
     // arms anchor to the fp64-accumulated host reference with rel-L2
     // over the whole output and max-abs error normalized by the
