@@ -132,7 +132,7 @@ CaseData make_case(const Pack& p, std::mt19937& rng) {
   // the f16 finish rounds and bury the fused-vs-R1 comparison the harness
   // gate uses. The filter decodes on the CPU stream (fast::exl3_decode,
   // the bit-exact R1 decoder).
-  auto gen_trellis_bounded = [&](size_t n, int in_f, int out_f) {
+  auto gen_trellis_bounded = [&](size_t n, int in_f, int out_f, int bank_kind) {
     std::vector<uint16_t> best;
     float best_mx = 0.0f;
     Stream tmps = new_stream(Device::cpu);
@@ -140,13 +140,19 @@ CaseData make_case(const Pack& p, std::mt19937& rng) {
     std::vector<uint16_t> ones_out(out_f, 0x3C00);
     array sa(ones_in.data(), Shape{in_f}, uint16);
     array sv(ones_out.data(), Shape{out_f}, uint16);
+    if (kOracleBanksLoaded && n == (size_t)(kOracleE) *
+            ((size_t)(in_f / 16) * (out_f / 16) * (size_t)(p.bits * 16)) &&
+        in_f == kOracleHidden && out_f == kOracleInter &&
+        p.experts == kOracleE) {
+      if (bank_kind == 0) return kOracleTg;
+      if (bank_kind == 1) return kOracleTu;
+      return kOracleTd;
+    }
     for (int attempt = 0; attempt < 48; attempt++) {
       std::vector<uint16_t> v(n);
       for (auto& w : v) {
         w = static_cast<uint16_t>(rng() & 0xFFFF);
       }
-      // the decoder takes one expert's flat trellis; the |w| envelope is
-      // uniform across experts, so expert 0's slice gates the bank
       size_t per = static_cast<size_t>(in_f / 16) * (out_f / 16) *
           static_cast<size_t>(p.bits * 16);
       array t = array(v.data(), Shape{static_cast<int>(per)}, uint16);
