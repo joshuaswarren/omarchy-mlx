@@ -1,0 +1,29 @@
+IDLE-GUARD-JOB-START 20261010T205603Z lane=matmul-gap w7Q PR72 test fixes run on G13G: the 4 binaries built on the M1 Max host (ids checked), packaged ICD default, correctness only
+SETTLE load1=0.47
+start 20:58:16 load 0.47 kernel 7.1.12-2-12.6-sep-ARCH MemAvailable 13298464 kB
+packaged ICD lib sha256 ac837b1c3aa08672
+== RUN omarchy_conv_gemm_decomp_tests md5 35d79621057bc8d6
+[doctest] test cases:  3 |  3 passed | 0 failed | 0 skipped
+[doctest] assertions: 14 | 14 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0
+== RUN omarchy_gdn_legacy_policy_tests md5 f22195169f0a2721
+[gdn_legacy_policy] raw decode T=1: D=128 1 dispatches, D=64 (composed) 24
+[gdn_legacy_policy] gated decode T=1: D=128 1 dispatches, D=64 (composed) 16
+[gdn_legacy_policy] prefill T=32: D=128 1 dispatches, D=64 (composed) 544
+[doctest] test cases:  3 |  3 passed | 0 failed | 0 skipped
+[doctest] assertions: 12 | 12 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0
+== RUN omarchy_gdn_maskless_correctness_tests md5 5a1e36f24b99b6c4
+[doctest] test cases:    6 |    6 passed | 0 failed | 0 skipped
+[doctest] assertions: 1394 | 1394 passed | 0 failed |
+[doctest] Status: SUCCESS!
+exit=0
+== RUN omarchy_sdpa_prefill_flash_tests md5 7cc6eeaea6cfdbcb
+<build>/.work/mlx/tests/omarchy/test_sdpa_prefill_flash.cpp:195: ERROR: test case THREW exception: [omarchy] vkAllocateMemory failed: VK_ERROR_OUT_OF_DEVICE_MEMORY (request=1073741824 bytes; cache released)
+[doctest] test cases:  13 |  12 passed | 1 failed | 0 skipped
+[doctest] assertions: 146 | 146 passed | 0 failed |
+[doctest] Status: FAILURE!
+exit=1
+end 20:58:51 load 0.65

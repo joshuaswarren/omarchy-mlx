@@ -3197,6 +3197,89 @@ TEST_CASE("fused rope refuses beyond the trig argument limit by name") {
       std::string::npos);
 }
 
+TEST_CASE("rope freqs host read agrees with the nested gate on both legs") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Shape shape{1, 1, 4, 16};
+  array x = astype(rope_input(shape, 167), float16, stream);
+  array offset = array(3000, int32);
+  array freqs = astype(
+      exp(multiply(array(-0.5f), astype(arange(8, stream), float32, stream),
+                   stream),
+          stream),
+      float32, stream);
+  array tiny_freqs = full({8}, 1e-8f, float32, stream);
+  auto refuse = [&] {
+    return caught_message([&] {
+      fast::rope(x, 16, false, std::nullopt, 1.0f, array(32000, int32),
+                 tiny_freqs, stream)
+          .eval();
+    });
+  };
+  // Default: the host read.
+  auto host = fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  host.eval();
+  auto host_message = refuse();
+  // Kill switch: the nested min(abs(freqs)) gate.
+  setenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST", "1", 1);
+  auto nested =
+      fast::rope(x, 16, false, std::nullopt, 1.0f, offset, freqs, stream);
+  nested.eval();
+  auto nested_message = refuse();
+  unsetenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST");
+  // Same bound, same kernel: the outputs are bit-identical.
+  CHECK(flat(host, stream) == flat(nested, stream));
+  CHECK(
+      host_message.find("exceeds the trig reduction limit") !=
+      std::string::npos);
+  CHECK(host_message == nested_message);
+}
+
+// A NaN frequency must give the same answer on the host read and on the
+// nested min(abs(freqs)) gate: the same refusal text or the same output bits.
+TEST_CASE("rope freqs host read treats a NaN frequency like the nested gate") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  Shape shape{1, 1, 4, 16};
+  array x = astype(rope_input(shape, 167), float16, stream);
+  std::vector<float> values{1.0f, 0.5f, std::nanf(""), 0.125f, 0.0625f, 0.03f, 0.015f, 0.007f};
+  array freqs(values.begin(), Shape{8}, float32);
+  auto outcome = [&](int offset_value) {
+    std::string message = caught_message([&] {
+      fast::rope(x, 16, false, std::nullopt, 1.0f, array(offset_value, int32), freqs, stream)
+          .eval();
+    });
+    if (!message.empty()) {
+      return message;
+    }
+    auto out = flat(
+        fast::rope(x, 16, false, std::nullopt, 1.0f, array(offset_value, int32), freqs, stream),
+        stream);
+    return std::string(
+        reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+  };
+  // Small offset: the bound is far under the limit unless NaN poisons it.
+  // Large offset: the bound is over the limit for the finite frequencies.
+  for (int offset_value : {3, 3000000}) {
+    CAPTURE(offset_value);
+    auto host = outcome(offset_value);
+    setenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST", "1", 1);
+    auto nested = outcome(offset_value);
+    unsetenv("MLX_OMARCHY_NO_ROPE_FREQS_HOST");
+    auto describe = [](const std::string& s) {
+      return s.find("exceeds the trig reduction limit") != std::string::npos
+          ? std::string("refused (bound over the limit)")
+          : std::string("ran, ") + std::to_string(s.size() / sizeof(float)) + " floats";
+    };
+    MESSAGE("offset ", offset_value, ": host ", describe(host), ", nested ", describe(nested));
+    CHECK(host == nested);
+  }
+}
+
 namespace {
 
 uint64_t alpha1_fnv1a64(const void* data, size_t bytes) {
@@ -4028,14 +4111,12 @@ void check_gdn_vjp(Stream stream, int B, int Hk, int Hv, int T, bool host) {
 }
 } // namespace
 
-// Equal head counts: the fused backward is on by default here. Known failing
-// (H55, M1 Max, 2026-10-09): the gate gradient dg disagrees with the composed
-// reference (relative L2 0.96 at T=33) while dq, dk, dv and dbeta agree to
-// 0.3 percent; dg is exactly equal at T=1. The GQA path is not the cause
-// (host-repeated data fails identically). The float32 CPU lines in the output
-// say which side is wrong; see docs/known-defects.md.
-TEST_CASE("fused gdn vjp matches the composed reference at equal head counts" *
-          doctest::may_fail(true)) {
+// Equal head counts: the fused backward is on by default here. The gate
+// gradient dg once disagreed with the composed reference (relative L2 0.96 at
+// T=33; exact at T=1 because the initial state is zero) because the kernel
+// summed only lane 0's four-column partial of <s_hat, s_prev>. The float32
+// CPU lines in the output say which side is right.
+TEST_CASE("fused gdn vjp matches the composed reference at equal head counts") {
   if (!compute_available()) {
     return;
   }
@@ -4048,8 +4129,7 @@ TEST_CASE("fused gdn vjp matches the composed reference at equal head counts" *
 // backward). The case sets the flag, so it measures the fused kernel at the
 // shapes the former test used, plus the same data repeated on the host and run
 // at equal head counts, which separates a GQA-path fault from the data.
-TEST_CASE("fused gdn vjp at GQA shapes behind the opt-in flag" *
-          doctest::may_fail(true)) {
+TEST_CASE("fused gdn vjp at GQA shapes behind the opt-in flag") {
   if (!compute_available()) {
     return;
   }

@@ -1,0 +1,48 @@
+IDLE-GUARD-JOB-START 20261010T193318Z lane=matmul-gap w7Q GDN VJP dg fix (PR branch agent/w7q-gdn-vjp-dg b1115c0fb): build + 2 GDN VJP cases + whole fast_ops, G13C, correctness only
+SETTLE load1=0.30
+start 19:33:18 sha b1115c0fb7a39f2c4655aa8897b9aa40b3484934 load 0.30 kernel 7.1.12-2-12.6-sep-ARCH
+icd lib sha256 3546bcafe8ed3995
+fix marker count in prepared shader: 1
+[1238/1242] Building CXX object CMakeFiles/mlx.dir/mlx/backend/omarchy/primitives.cpp.o
+[1239/1242] Linking CXX static library libmlx.a
+[1240/1242] Building CXX object tests/omarchy/CMakeFiles/omarchy_fast_ops_tests.dir/test_fast_ops.cpp.o
+[1241/1242] Linking CXX executable tests/omarchy/omarchy_fast_ops_tests
+TEST BINARY e11e25360e075844
+== GDN VJP cases
+[gdn_vjp] B=1 Hk=16 Hv=16 T=1
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.000000 0.000000 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001648 0.001668 0.001589 0.000000 0.002080
+    composed(gpu bf16) vs float32 cpu reference:       0.001648 0.001668 0.001589 0.000000 0.002080
+[gdn_vjp] B=1 Hk=16 Hv=16 T=33
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.000012 0.002656 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001672 0.001647 0.001691 0.001543 0.001744
+    composed(gpu bf16) vs float32 cpu reference:       0.001672 0.002243 0.001691 0.001543 0.001744
+[gdn_vjp] B=1 Hk=8 Hv=16 T=1
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.003039 0.002578 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001811 0.001723 0.001979 0.000000 0.001512
+    composed(gpu bf16) vs float32 cpu reference:       0.002365 0.002249 0.001979 0.000000 0.001512
+[gdn_vjp] B=1 Hk=4 Hv=8 T=33
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.002993 0.003265 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001661 0.001638 0.001834 0.001492 0.001528
+    composed(gpu bf16) vs float32 cpu reference:       0.002507 0.002860 0.001834 0.001492 0.001528
+[gdn_vjp] B=1 Hk=4 Hv=16 T=17
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.002535 0.002953 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001624 0.001639 0.001647 0.001568 0.001507
+    composed(gpu bf16) vs float32 cpu reference:       0.002223 0.002632 0.001647 0.001568 0.001507
+[gdn_vjp] B=1 Hk=4 Hv=16 T=17 host-repeated
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.000002 0.002593 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001656 0.001629 0.001647 0.001568 0.001507
+    composed(gpu bf16) vs float32 cpu reference:       0.001656 0.002198 0.001647 0.001568 0.001507
+[doctest] test cases:  2 |  2 passed | 0 failed | 45 skipped
+[doctest] assertions: 30 | 30 passed | 0 failed |
+[doctest] Status: SUCCESS!
+== whole suite
+suite rc=0
+[doctest] test cases:      47 |      47 passed | 0 failed | 0 skipped
+[doctest] assertions: 1383970 | 1383966 passed | 4 failed |
+[doctest] Status: SUCCESS!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+<build>/.work/mlx/tests/omarchy/test_fast_ops.cpp:80: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+end 19:34:22

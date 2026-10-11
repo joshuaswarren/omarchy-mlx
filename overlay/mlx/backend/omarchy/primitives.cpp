@@ -3173,7 +3173,8 @@ void dispatch_gather_qmm(
     bool fp_mode,
     const std::optional<array>& out_global_scale,
     array& out,
-    const Stream& s) {
+    const Stream& s,
+    bool right_sorted = false) {
   auto& encoder = omarchy::get_command_encoder(s);
   require_float_dtype(tag, x, out, encoder);
   if (bits != 4 && bits != 8) {
@@ -3404,6 +3405,51 @@ void dispatch_gather_qmm(
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         sub_caps.storage_buffer_16bit_access;
+  }
+  // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
+  // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
+  // every row of a run re-reads the same expert's weights in the kernels
+  // above. gather_qmm_tile.comp dequantizes a weight tile once per run of
+  // up to 32 rows. Gated to the proven layout class of the subgroup kernel
+  // plus K, N multiples of 64; MLX_OMARCHY_GATHER_QMM_TILE=0 turns it off.
+  // Correct for any index order; only a sorted promise makes it fast.
+  // sX 64 x 34 floats + sW 64 x 64 floats + sLhs 32 words (shaders/gather_qmm_tile.comp);
+  // the Vulkan minimum maxComputeSharedMemorySize is 16384, so a small-limit
+  // driver falls through to the per-row kernels instead of failing pipeline creation.
+  constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
+  const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
+  const auto& tile_caps = encoder.device().capabilities();
+  // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
+  // so only the biased kernels exist.
+  // Average rows per expert (rows over the leading weight batch) of at least 4: measured on
+  // M1 Max, Qwen3-30B-A3B, the route loses at 1 row per expert (0.55x) and 2 (0.81x) and wins
+  // at 4 (1.36x) and 8 (2.06x) (notebook H71). 3 is unmeasured and stays on the per-row route.
+  // Real routing is not uniform, so this average is a proxy for run length.
+  size_t tile_experts = 1;
+  for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
+    tile_experts *= static_cast<size_t>(w.shape(axis));
+  }
+  if (right_sorted && !fp_mode && !no_bias && params.matrix_m == 1 && index_count >= 64 &&
+      index_count >= 4 * tile_experts &&
+      (tile_env == nullptr || tile_env[0] != '0') && transpose && bits == 4 &&
+      group_size == 64 && k % 64 == 0 && n % 64 == 0 &&
+      (out.dtype() == bfloat16 || out.dtype() == float16) &&
+      tile_caps.storage_buffer_16bit_access &&
+      kGatherQmmTileSharedBytes <= tile_caps.max_compute_shared_memory_size &&
+      // The row groups ride the y dimension; this guards the one limit the grid uses.
+      tile_row_groups <= omarchy::kMaxComputeGroupCountX) {
+    const omarchy::ComputeKernel tile_kernel = out.dtype() == float16
+        ? omarchy::ComputeKernel::GatherQmmTileF16
+        : omarchy::ComputeKernel::GatherQmmTileBF16;
+    encoder.dispatch_compute(
+        tile_kernel,
+        bindings,
+        params,
+        static_cast<uint32_t>(n / 64),
+        tile_row_groups,
+        1u);
+    return;
   }
   if (fp_mode) {
     if (out.dtype() == float32) {
@@ -6392,7 +6438,8 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         /* fp_mode = */ false,
         /* out global scale = */ std::nullopt,
         out,
-        out.primitive().stream());
+        out.primitive().stream(),
+        right_sorted_);
     return;
   }
   // Non-affine inputs: [x, w, scales(uint8), lhs, rhs]; no bias, no
@@ -14291,10 +14338,48 @@ void rope_trig_gate(
   }
   float inv_freq_bound;
   if (freqs != nullptr) {
-    array freqs_min = min(abs(*freqs, stream), stream);
-    settle({freqs_min});
-    omarchy::get_command_encoder(stream).synchronize("rope_freqs_bound");
-    inv_freq_bound = 1.0f / freqs_min.item<float>();
+    // Read the (tiny) freqs array on the host after settle + synchronize, like
+    // the scalar offset branch, instead of building min(abs(freqs)) behind a
+    // nested join. The nested graph waits on the async-eval latch of an input
+    // this pass already evaluated, and only the outer epilogue signals that
+    // latch, so the join never completes mid-tape (gemma-4 prefill under
+    // async_eval: 'Vulkan timeline counter failed to advance', JOIN
+    // reason=rope_freqs_bound; receipts/2026-10-10-rope-freqs-host-read/).
+    // MLX_OMARCHY_NO_ROPE_FREQS_HOST=1 restores the nested path. Read on every
+    // call: nothing here caches environment state.
+    const bool host_read = !omarchy::env_flag("MLX_OMARCHY_NO_ROPE_FREQS_HOST") &&
+        freqs->dtype() == float32 && freqs->flags().row_contiguous &&
+        freqs->size() > 0;
+    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+      fprintf(
+          stderr,
+          "[rtmod] ROPE-FREQS size=%zu status=%d has_primitive=%d host_read=%d\n",
+          freqs->size(),
+          static_cast<int>(freqs->status()),
+          freqs->has_primitive() ? 1 : 0,
+          host_read ? 1 : 0);
+    }
+    if (host_read) {
+      settle({*freqs});
+      omarchy::get_command_encoder(stream).synchronize("rope_freqs_host");
+      freqs->detach_event();
+      const float* values = freqs->data<float>();
+      float smallest = std::abs(values[0]);
+      for (size_t i = 0; i < freqs->size(); ++i) {
+        const float magnitude = std::abs(values[i]);
+        if (std::isnan(magnitude)) {
+          smallest = magnitude;
+          break;
+        }
+        smallest = std::min(smallest, magnitude);
+      }
+      inv_freq_bound = 1.0f / smallest;
+    } else {
+      array freqs_min = min(abs(*freqs, stream), stream);
+      settle({freqs_min});
+      omarchy::get_command_encoder(stream).synchronize("rope_freqs_bound");
+      inv_freq_bound = 1.0f / freqs_min.item<float>();
+    }
   } else {
     float beta = static_cast<float>(std::log(base) / (dims / 2));
     inv_freq_bound =
@@ -15539,6 +15624,12 @@ void ScaledDotProductAttention::eval_gpu(
         array keys_t = swapaxes_in_eval(k32, -1, -2);
         encoder.add_temporary(keys_t);
         out.set_data(allocate_omarchy(out.nbytes()));
+        // scores + probs (f32) + the bf16 result rows, per chunk.
+        const uint64_t chunk_working_bytes = static_cast<uint64_t>(chunk_rows) *
+            (chunk_denom * 2u + out.nbytes() / static_cast<uint64_t>(q_len));
+        const uint64_t chunk_drain_budget =
+            static_cast<uint64_t>(omarchy::capability_report(0).total_memory) / 4u;
+        uint64_t pinned_bytes = 0;
         for (uint32_t row0 = 0; row0 < static_cast<uint32_t>(q_len);
              row0 += chunk_rows) {
           const uint32_t rows =
@@ -15606,6 +15697,18 @@ void ScaledDotProductAttention::eval_gpu(
               /*o_offset=*/0,
               CopyType::General,
               s);
+          // Every chunk's score, probability and result buffers stay pinned until
+          // the batch drains, so a long prefill that queues all chunks holds
+          // chunks x working-set bytes at once (L = 16384, H = 8: 8 x 2.004 GiB =
+          // 16.03 GiB, more than a 16 GB M1's 7.55 GiB heap). Drain the batch
+          // whenever the pinned bytes would pass a quarter of the heap; a working
+          // set above that drains after every chunk.
+          pinned_bytes += scores_c.nbytes() + probs_c.nbytes() + result_c.nbytes();
+          if (row0 + chunk_rows < static_cast<uint32_t>(q_len) &&
+              pinned_bytes + chunk_working_bytes > chunk_drain_budget) {
+            encoder.synchronize("sdpa_chunk_drain");
+            pinned_bytes = 0;
+          }
         }
         return;
       }

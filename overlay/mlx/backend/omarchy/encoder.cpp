@@ -563,6 +563,30 @@ void CommandEncoder::dispatch_compute(
       group_count_z);
 }
 
+void CommandEncoder::dispatch_compute(
+    const std::string& cache_key,
+    std::span<const uint32_t> spirv,
+    const std::string& entry_name,
+    const VkSpecializationInfo* spec,
+    std::span<const ComputeBinding> bindings,
+    const ComputeParams& params,
+    uint32_t group_count_x,
+    uint32_t group_count_y,
+    uint32_t group_count_z) {
+  if (group_count_x == 0 || group_count_y == 0 || group_count_z == 0) {
+    return;
+  }
+  auto& compute = device_.compute();
+  dispatch_compute_pipeline(
+      compute.pipeline(cache_key, spirv, entry_name, spec),
+      ComputeKernel::Custom,
+      bindings,
+      params,
+      group_count_x,
+      group_count_y,
+      group_count_z);
+}
+
 void CommandEncoder::dispatch_compute_pipeline(
     VkPipeline pipeline,
     ComputeKernel profile_kernel,

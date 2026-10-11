@@ -29,7 +29,8 @@ add_test(NAME omarchy_primitive_tests COMMAND omarchy_primitive_tests)
 
 add_executable(omarchy_custom_kernel_translate_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_custom_kernel_translate.cpp
-               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/custom_kernel.cpp)
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/custom_kernel.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/m2v_route.cpp)
 target_link_libraries(omarchy_custom_kernel_translate_tests PRIVATE mlx doctest)
 # The test-only translate entry lives in custom_kernel.cpp under this define;
 # the target compiles that file itself so the export exists at link time.
@@ -46,6 +47,23 @@ target_link_options(omarchy_custom_kernel_translate_tests
 doctest_discover_tests(omarchy_custom_kernel_translate_tests)
 add_test(NAME omarchy_custom_kernel_translate_tests
          COMMAND omarchy_custom_kernel_translate_tests)
+
+# metal2vk routing policy: pure C++, no GPU and no mlx linkage.
+add_executable(omarchy_m2v_route_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_m2v_route.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy/m2v_route.cpp)
+target_link_libraries(omarchy_m2v_route_tests PRIVATE doctest)
+target_include_directories(
+    omarchy_m2v_route_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../mlx/backend/omarchy)
+target_compile_options(omarchy_m2v_route_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_m2v_route_tests
+                    PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_m2v_route_tests)
+add_test(NAME omarchy_m2v_route_tests
+         COMMAND omarchy_m2v_route_tests)
 
 # KernelRecheck debug entry: translate one generated-MSL file from argv.
 add_executable(omarchy_custom_kernel_translate_dump

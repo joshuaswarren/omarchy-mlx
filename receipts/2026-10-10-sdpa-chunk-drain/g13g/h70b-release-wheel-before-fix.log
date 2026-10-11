@@ -1,0 +1,14 @@
+IDLE-GUARD-JOB-START 20261010T220034Z lane=matmul-gap w7Q H70b G13G heap probe on the RELEASE wheel ae5d0950 (same probe and rules as H70), private venv copy, est 4 min
+SETTLE load1=0.09
+start 2026-10-10T22:00:34Z load 0.09 kernel 7.1.12-2-12.6-sep-ARCH
+packaged ICD lib sha256 ac837b1c3aa08672
+release wheel sha256 a91fbe5ec2a8e4c1
+installed 0.32.4.dev202610101057+ae5d0950
+PROVENANCE mlx-omarchy 0.32.4.dev202610101057+ae5d0950 libs {"libmlx.so": "b30f8b0571c6744d"} load1 0.125 HK_SYSMEM None
+INFO {'driver_info': 'Mesa 26.3.0-devel (git-e7631595df)', 'total_memory': 8111783936, 'device_name': 'Apple M1 (G13G B1)', 'max_compute_shared_memory_size': 32768, 'memory_size': 8111783936, 'max_recommended_working_set_size': 8111783936, 'unified_memory': 1, 'max_compute_work_group_size_x': 1024, 'max_compute_work_group_invocations': 1024} MemTotal 16223944704 MemAvailable 13722042368
+BLOCKS 7 GiB held before error: [omarchy] vkAllocateMemory failed: VK_ERROR_OUT_OF_DEVICE_MEMORY (request=1073741824 bytes; cache released)
+SDPA run 0 ERROR [omarchy] vkAllocateMemory failed: VK_ERROR_OUT_OF_DEVICE_MEMORY (request=1073741824 bytes; cache released)
+AFTER 0 GiB held before error: [omarchy] vkAllocateMemory failed: VK_ERROR_OUT_OF_DEVICE_MEMORY (request=1073741824 bytes; cache released)
+MemAvailable end 4621221888
+venv left at $HOME/scratch/w7q/h70/venv-release (553 MB)
+end 2026-10-10T22:00:55Z

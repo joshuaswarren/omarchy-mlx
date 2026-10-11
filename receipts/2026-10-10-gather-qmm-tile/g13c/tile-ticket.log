@@ -1,0 +1,24 @@
+IDLE-GUARD-JOB-START 20261010T205402Z lane=matmul-gap w7Q gather_qmm tile route PR branch (agent/w7q-gather-qmm-tile-pr 4dbeedf4b): build matmul_family + tile case + whole suite, G13C, correctness only
+SETTLE load1=0.48
+start 20:55:29 sha 4dbeedf4bb2319483ebab96eb4acaf204628fc56 load 0.48 kernel 7.1.12-2-12.6-sep-ARCH
+icd lib sha256 3546bcafe8ed3995
+tile shader in prepared tree: .work/mlx/mlx/backend/omarchy/shaders/gather_qmm_tile.comp
+[1250/1254] Building CXX object CMakeFiles/mlx.dir/mlx/backend/omarchy/primitives.cpp.o
+[1251/1254] Linking CXX static library libmlx.a
+[1252/1254] Building CXX object tests/omarchy/CMakeFiles/omarchy_matmul_family_tests.dir/test_matmul_family.cpp.o
+[1253/1254] Linking CXX executable tests/omarchy/omarchy_matmul_family_tests
+TEST BINARY 191398e11eaa85d0
+== tile case
+[gather_qmm_tile] rows=200 E=6 N=128 K=128 bf16 tile-vs-f32-ref 0.00484893 tile-vs-per-row 4.19175e-09 bit-identical 25599/25600
+[gather_qmm_tile] rows=96 E=2 N=64 K=192 bf16 tile-vs-f32-ref 0.00466809 tile-vs-per-row 6.99973e-09 bit-identical 6143/6144
+[gather_qmm_tile] rows=200 E=6 N=128 K=128 bf16 shuffled tile-vs-f32-ref 0.00479313 tile-vs-per-row 1.72142e-05 bit-identical 25599/25600
+[gather_qmm_tile] rows=120 E=3 N=192 K=64 f16 tile-vs-f32-ref 0.000603507 tile-vs-per-row 8.16358e-06 bit-identical 23024/23040
+[doctest] test cases:  1 |  1 passed | 0 failed | 33 skipped
+[doctest] assertions: 32 | 32 passed | 0 failed |
+[doctest] Status: SUCCESS!
+== whole suite
+suite rc=0
+[doctest] test cases:       34 |       34 passed | 0 failed | 0 skipped
+[doctest] assertions: 82942953 | 82942953 passed | 0 failed |
+[doctest] Status: SUCCESS!
+end 20:57:32

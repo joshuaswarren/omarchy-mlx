@@ -1,0 +1,289 @@
+{
+ "module": "custom_kernel_omlx_qwen4_gdn_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t.spv",
+ "capabilities": [
+  "GroupNonUniform",
+  "GroupNonUniformArithmetic",
+  "GroupNonUniformShuffle",
+  "Int16",
+  "Shader"
+ ],
+ "extensions": [
+  "SPV_KHR_non_semantic_info"
+ ],
+ "uses_cooperative_matrix": false,
+ "workgroup_size_spec_constant_ids": [
+  0,
+  1,
+  2
+ ],
+ "push_constant_regions": {
+  "PushConstantRegionGroupOffset": {
+   "offset": 0,
+   "size": 12
+  }
+ },
+ "kernels": [
+  {
+   "name": "custom_kernel_omlx_qwen4_gdn_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
+   "args": [
+    {
+     "ordinal": 0,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 0,
+     "metal_name": "qkv",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 1,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 1,
+     "metal_name": "z",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 2,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 2,
+     "metal_name": "b_in",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 3,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 3,
+     "metal_name": "a_in",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 4,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 4,
+     "metal_name": "conv_state",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 5,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 5,
+     "metal_name": "conv_w",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 6,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 6,
+     "metal_name": "q_scale",
+     "metal_type": "const constant bfloat16_t&"
+    },
+    {
+     "ordinal": 7,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 7,
+     "metal_name": "A_log",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 8,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 8,
+     "metal_name": "dt_bias",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 9,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 9,
+     "metal_name": "state_in",
+     "metal_type": "const device float*"
+    },
+    {
+     "ordinal": 10,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 10,
+     "metal_name": "norm_w",
+     "metal_type": "const device bfloat16_t*"
+    },
+    {
+     "ordinal": 11,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 11,
+     "metal_name": "eps",
+     "metal_type": "const constant float&"
+    },
+    {
+     "ordinal": 12,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 12,
+     "metal_name": "conv_out",
+     "metal_type": "device bfloat16_t*"
+    },
+    {
+     "ordinal": 13,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 13,
+     "metal_name": "state_out",
+     "metal_type": "device float*"
+    },
+    {
+     "ordinal": 14,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 14,
+     "metal_name": "out",
+     "metal_type": "device bfloat16_t*"
+    }
+   ],
+   "workgroup_size": null
+  }
+ ],
+ "name": "custom_kernel_omlx_qwen4_gdn_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
+ "kernel": {
+  "name": "custom_kernel_omlx_qwen4_gdn_decode_step__bfloat16_t_16_32_128_128_8192_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_t_bfloat16_ts_bfloat16_t_bfloat16_t_float_bfloat16_t_floats_bfloat16_t_float_bfloat16_t",
+  "args": [
+   {
+    "ordinal": 0,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 0,
+    "metal_name": "qkv",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 1,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 1,
+    "metal_name": "z",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 2,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 2,
+    "metal_name": "b_in",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 3,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 3,
+    "metal_name": "a_in",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 4,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 4,
+    "metal_name": "conv_state",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 5,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 5,
+    "metal_name": "conv_w",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 6,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 6,
+    "metal_name": "q_scale",
+    "metal_type": "const constant bfloat16_t&"
+   },
+   {
+    "ordinal": 7,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 7,
+    "metal_name": "A_log",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 8,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 8,
+    "metal_name": "dt_bias",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 9,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 9,
+    "metal_name": "state_in",
+    "metal_type": "const device float*"
+   },
+   {
+    "ordinal": 10,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 10,
+    "metal_name": "norm_w",
+    "metal_type": "const device bfloat16_t*"
+   },
+   {
+    "ordinal": 11,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 11,
+    "metal_name": "eps",
+    "metal_type": "const constant float&"
+   },
+   {
+    "ordinal": 12,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 12,
+    "metal_name": "conv_out",
+    "metal_type": "device bfloat16_t*"
+   },
+   {
+    "ordinal": 13,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 13,
+    "metal_name": "state_out",
+    "metal_type": "device float*"
+   },
+   {
+    "ordinal": 14,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 14,
+    "metal_name": "out",
+    "metal_type": "device bfloat16_t*"
+   }
+  ],
+  "workgroup_size": null
+ },
+ "toolchain": {
+  "clang": "clang version 23.1.1 (https://github.com/llvm/llvm-project 6dfe1677ab8dffbc6ec13d53a1e0215d75147689)",
+  "opt": "LLVM (http://llvm.org/):",
+  "clspv": "LLVM (http://llvm.org/):",
+  "clspv_sha256": "10f47f7b9bd7eed0b9c532b92eb65a195058cacf12d879eda6f4f9b520a015d7",
+  "include_sha256": "fb278607df8e5be9db881389d67237ed9c30f823f523e8520cd0aa82533acada",
+  "clspv_patches_sha256": "224de5809aeb6cf36f4a08fa5c9de72136bf91ee8a320f5b9f190c546351b3ef",
+  "sources_sha256": "c8f02d05f1927eddc3231170eef0a3480b854800859df84ee46e90768888b629"
+ }
+}

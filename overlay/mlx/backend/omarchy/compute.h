@@ -966,6 +966,12 @@ enum class ComputeKernel : uint16_t {
   // Append-only profile id.
   TakeU8,
   TakeMultiU8,
+  // Tiled sorted-expert gathered 4-bit/group-64 matmul for MoE prefill
+  // (shaders/gather_qmm_tile.comp): 32 rows x 64 columns per workgroup, the
+  // expert's weight tile dequantized once per run of rows. Appended to keep
+  // profile kernel ids stable. Append-only profile id.
+  GatherQmmTileF16,
+  GatherQmmTileBF16,
   // EXL3 trellis tile decode (fast::Exl3Decode; shaders/exl3_decode.comp).
   // The packed trellis stays uint16; only the output dtype varies and the
   // f16/bf16 variants store integer RNE bit patterns.
@@ -1054,6 +1060,15 @@ class ComputeRuntime {
   VkPipeline pipeline(
       const std::string& cache_key,
       std::span<const uint32_t> spirv);
+  // Dynamic pipeline with an explicit entry point and specialization
+  // constants: clspv-produced modules name their entry after the kernel
+  // and drive the workgroup size from spec constants 0..2. The cache key
+  // must already distinguish the specialization values.
+  VkPipeline pipeline(
+      const std::string& cache_key,
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec);
   VkPipelineLayout pipeline_layout() const {
     return pipeline_layout_;
   }
@@ -1079,7 +1094,10 @@ class ComputeRuntime {
 
  private:
   VkPipeline create_pipeline(ComputeKernel kernel);
-  VkPipeline create_pipeline(std::span<const uint32_t> spirv);
+  VkPipeline create_pipeline(
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec);
 
   uint32_t binding_limit_{0};
 
