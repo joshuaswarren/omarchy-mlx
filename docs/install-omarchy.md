@@ -254,9 +254,11 @@ before you install `mlx-omarchy`.
 The supported driver is the `omarchy-mlx-vulkan` package. It installs a
 private Honeykrisp Vulkan ICD under `/usr/lib/omarchy-mlx/vulkan/`. The
 system Mesa package stays installed for the desktop. `omarchy-mlx` depends
-on the same version of `omarchy-mlx-vulkan`. The Omarchy menu entry
-Install > AI > MLX + Core ML installs the `omarchy-mac-ml` meta package.
-That pulls both in. A wheel or an `install.sh` venv ships GPU kernels only.
+on the same version of `omarchy-mlx-vulkan`. The `omarchy-mac-ml` meta
+package pulls both in. It comes from the `[omarchy]` pacman repository
+described in the README. The menu row that installs it is proposed
+upstream and may not be in your build. A wheel or an `install.sh` venv
+ships GPU kernels only.
 
 The Vulkan package builds the Honeykrisp Vulkan driver alone. The driver
 library and the ICD JSON live under `/usr/lib/omarchy-mlx/vulkan/`. That is
