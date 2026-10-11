@@ -32,8 +32,17 @@ on an Apple-GPU receipt.
 git clone https://github.com/joshuaswarren/omarchy-mlx.git
 cd omarchy-mlx
 ./scripts/prepare-mlx.sh
-overlay/tools/ci/run-omarchy-runtime.sh
+.work/mlx/tools/ci/run-omarchy-runtime.sh
 ```
+
+The repository root has no `CMakeLists.txt`. `prepare-mlx.sh` downloads
+the pinned MLX source, applies the overlay and the patch set, and stages
+the buildable tree at `.work/mlx` (it prints that path when it
+finishes). Build and test commands run in the staged tree.
+`run-omarchy-runtime.sh` takes its CMake source directory from its own
+location, so the runnable copy is
+`.work/mlx/tools/ci/run-omarchy-runtime.sh`; the copy under `overlay/`
+cannot configure a build.
 
 The script configures `build-omarchy/` (CMake, `MLX_BUILD_OMARCHY=ON`,
 `MLX_BUILD_TESTS=ON`), builds, and runs `omarchy_runtime_tests`,
@@ -44,9 +53,11 @@ machine, export `MLX_OMARCHY_ALLOW_NON_APPLE=1` first.
 The full battery instead of the runtime slice:
 
 ```bash
-cmake -S . -B build -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_TESTS=ON
-cmake --build build -j"$(nproc)"
-MLX_OMARCHY_ALLOW_NON_APPLE=1 ctest --test-dir build --output-on-failure
+cmake -S .work/mlx -B .work/mlx/build-omarchy \
+  -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_TESTS=ON
+cmake --build .work/mlx/build-omarchy -j"$(nproc)"
+MLX_OMARCHY_ALLOW_NON_APPLE=1 \
+  ctest --test-dir .work/mlx/build-omarchy --output-on-failure
 ```
 
 ## Run the test suite
@@ -54,11 +65,11 @@ MLX_OMARCHY_ALLOW_NON_APPLE=1 ctest --test-dir build --output-on-failure
 ```bash
 MLX_OMARCHY_ALLOW_NON_APPLE=1 \
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/<driver>_icd.json \
-./build-omarchy/tests/omarchy/omarchy_runtime_tests
+./.work/mlx/build-omarchy/tests/omarchy/omarchy_runtime_tests
 ```
 
 - `VK_DRIVER_FILES` selects the ICD: `nvidia_icd.json` (proprietary
-  NVIDIA), `intel_icd.json` (Mesa ANV), `radv_icd.x86_64.json`
+  NVIDIA), `intel_icd.x86_64.json` (Mesa ANV), `radeon_icd.x86_64.json`
   (Mesa RADV), `lvp_icd.x86_64.json` (lavapipe). `ls
   /usr/share/vulkan/icd.d/` lists yours. The loader default is fine
   when only one driver is installed.
@@ -79,20 +90,10 @@ and `file:line`; paste all of it. A case that skipped says why
 (usually "no qualifying Vulkan device"): that means the flag or the
 ICD is wrong, not that the test passed.
 
-Known on NVIDIA (RTX 5060 Ti, driver 615.71.09): the independent
-streams timing check fails: interleaving two streams runs 12-22%
-slower than serializing them (ratio 0.78-0.88 against a 0.95 floor,
-across 5 runs). If that is your only failure it is already known;
-send the output anyway.
-
-Known limits: AMD is untested. On discrete GPUs every array lives in
-host-visible memory (VRAM behind ReBAR), so host reads crawl (about
-3 MB/s measured on the 5060 Ti) while GPU-side work is fine.
-
 ## Attach your results
 
 Open an issue on
-[joshuawarren/omarchy-mlx](https://github.com/joshuaswarren/omarchy-mlx/issues)
+[joshuaswarren/omarchy-mlx](https://github.com/joshuaswarren/omarchy-mlx/issues)
 with:
 
 - the full test-suite output, including the doctest summary and exit code
