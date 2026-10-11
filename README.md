@@ -117,7 +117,9 @@ See [docs/USAGE.md](docs/USAGE.md).
 
 Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Each cell is Linux / macOS and the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
 
-Decode is the median of 10 greedy generations and prefill is the median of 5 runs. The rows are MLX 4-bit through the installer's mlx-lm patches.
+Decode is the median of 10 greedy generations and prefill is the median of 5 runs, except two Linux cells: gemma-4-E4B is the mean of three runs and Qwen3.6-35B-A3B the mean of two. Those two sets of runs started with a load average above 0.5, so the numbers may be low. The macOS cells are earlier sealed runs.
+
+MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / macOS:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
