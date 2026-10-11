@@ -190,6 +190,6 @@ for p in /sys/devices/system/cpu/cpufreq/policy*; do echo performance | sudo tee
 
 To restore, write the value you read back to each policy. The setting does not survive a reboot.
 
-If you run work on the ANE, you may already see the high clock. While two ANE jobs ran on the 13-inch M1, the larger-core policy read its maximum clock on every one of six reads, five seconds apart, under schedutil. We have not isolated that effect.
+If you run work on the ANE, you may already see the high clock. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. The ANE driver's boost is the likely cause. We have not isolated it.
 
 What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
