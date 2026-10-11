@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <unordered_set>
 #include <stdexcept>
 #include <string>
 
@@ -81,6 +83,51 @@ bool host_import_disabled() {
     return static_cast<char>(std::tolower(c));
   });
   return s == "0" || s == "off" || s == "false" || s == "no";
+}
+
+// Compact 0x.. formatter for the memory-type bit masks the debug
+// lines report.
+std::string hex32(uint32_t bits) {
+  static const char* digits = "0123456789abcdef";
+  std::string out = "0x";
+  if (bits == 0) {
+    return out + "0";
+  }
+  bool started = false;
+  for (int shift = 28; shift >= 0; shift -= 4) {
+    uint32_t nibble = (bits >> shift) & 0xf;
+    if (nibble != 0 || started) {
+      out.push_back(digits[nibble]);
+      started = true;
+    }
+  }
+  return out;
+}
+
+// MLX_OMARCHY_HOST_IMPORT_DEBUG=1: one stderr line per process per
+// distinct decline reason (and one on first successful alias), so a
+// device receipt shows exactly which gate declined and with what
+// driver-reported state. Line shape:
+//   [omarchy] host-import: decline=<reason> ext=<0|1> align=<N>
+//       props_types=<0x..> reqs_types=<0x..> <detail>
+//   [omarchy] host-import: aliased align=<N>
+// The per-process-once rule keeps a serve loop from spamming stderr:
+// the same slab re-imported every layer would print the same line
+// every call otherwise.
+void host_import_note(const std::string& key, const std::string& detail) {
+  static const bool enabled = env_flag("MLX_OMARCHY_HOST_IMPORT_DEBUG");
+  if (!enabled) {
+    return;
+  }
+  static std::mutex log_mu;
+  static std::unordered_set<std::string> logged;
+  std::unique_lock lk(log_mu);
+  if (!logged.insert(key).second) {
+    return;
+  }
+  std::fprintf(
+      stderr, "[omarchy] host-import: %s%s\n", key.c_str(), detail.c_str());
+  std::fflush(stderr);
 }
 
 // Test-only hook: simulate one or more vkAllocateMemory OOM results.
@@ -294,23 +341,44 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
   if (ptr == nullptr || size == 0) {
     return Buffer{nullptr};
   }
-  if (!is_available() || host_import_disabled()) {
+  if (!is_available()) {
+    host_import_note(
+        "decline=no-device ", "");
+    return Buffer{nullptr};
+  }
+  if (host_import_disabled()) {
+    host_import_note(
+        "decline=env-disabled ", "MLX_OMARCHY_HOST_IMPORT=0");
     return Buffer{nullptr};
   }
   device();
   const auto& hw = device().hardware_capabilities();
+  const std::string caps = "ext=" +
+      std::to_string(hw.host_pointer_import ? 1 : 0) +
+      " align=" + std::to_string(hw.host_pointer_import_alignment);
   if (!hw.host_pointer_import) {
+    // Either the driver does not list the extension, or it lists it
+    // with a zero alignment. The two values above say which; a listed
+    // extension with align=0 would also cover a driver that only
+    // imports dma-buf-backed handles.
+    host_import_note("decline=ext-not-advertised ", caps);
     return Buffer{nullptr};
   }
   auto& dt = vk::device_table();
   if (dt.GetMemoryHostPointerPropertiesEXT == nullptr) {
+    host_import_note("decline=fn-missing ", caps);
     return Buffer{nullptr};
   }
   const uint32_t align = hw.host_pointer_import_alignment;
   if (align == 0) {
+    host_import_note("decline=align-zero ", caps);
     return Buffer{nullptr};
   }
   if ((reinterpret_cast<uintptr_t>(ptr) % align) != 0) {
+    host_import_note(
+        "decline=unaligned-pointer ",
+        caps + " ptr_mod_align=" +
+            std::to_string(reinterpret_cast<uintptr_t>(ptr) % align));
     return Buffer{nullptr};
   }
   // Per-pointer validation: the host pointer must be importable and
@@ -319,12 +387,19 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
   // intersection is empty the import is impossible for this shape.
   VkMemoryHostPointerPropertiesEXT hpp{
       VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-  if (dt.GetMemoryHostPointerPropertiesEXT(
-          device().handle(),
-          VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
-          ptr,
-          &hpp) != VK_SUCCESS ||
-      hpp.memoryTypeBits == 0) {
+  VkResult props_res = dt.GetMemoryHostPointerPropertiesEXT(
+      device().handle(),
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+      ptr,
+      &hpp);
+  if (props_res != VK_SUCCESS || hpp.memoryTypeBits == 0) {
+    // A failure here on a driver that lists the extension means the
+    // HOST_ALLOCATION handle type is not actually supported for this
+    // pointer (some drivers only wire dma-buf imports through).
+    host_import_note(
+        "decline=props-failed ",
+        caps + " vkresult=" + vk::result_string(props_res) +
+            " props_types=" + hex32(hpp.memoryTypeBits));
     return Buffer{nullptr};
   }
   // The allocation is taken to cover the requested bytes rounded UP to
@@ -350,6 +425,9 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
   bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   VkResult res = dt.CreateBuffer(device().handle(), &bci, nullptr, &buf->buffer);
   if (res != VK_SUCCESS) {
+    host_import_note(
+        "decline=create-buffer-failed ",
+        caps + " vkresult=" + vk::result_string(res));
     delete buf;
     return Buffer{nullptr};
   }
@@ -357,6 +435,10 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
   VkMemoryRequirements reqs{};
   dt.GetBufferMemoryRequirements(device().handle(), buf->buffer, &reqs);
   if (reqs.size > import_size) {
+    host_import_note(
+        "decline=reqs-too-big ",
+        caps + " reqs_size=" + std::to_string(reqs.size) +
+            " import_size=" + std::to_string(import_size));
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
     delete buf;
     return Buffer{nullptr};
@@ -373,6 +455,25 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
   if (type_index == UINT32_MAX) {
+    // Distinguish "no common type at all" from "common types exist but
+    // none is HOST_VISIBLE|HOST_COHERENT", and dump the candidate
+    // types' property flags: a driver whose imported-host type lacks
+    // HOST_COHERENT lands here and the receipt shows it.
+    std::string detail = caps + " props_types=" + hex32(hpp.memoryTypeBits) +
+        " reqs_types=" + hex32(reqs.memoryTypeBits) + " common=" +
+        hex32(type_bits);
+    if (type_bits != 0) {
+      const auto& mem = device().memory_properties();
+      for (uint32_t t = 0; t < mem.memoryTypeCount && t < 32; ++t) {
+        if (type_bits & (1u << t)) {
+          detail += " t" + std::to_string(t) + "=0x" +
+              hex32(mem.memoryTypes[t].propertyFlags).substr(2);
+        }
+      }
+      host_import_note("decline=no-coherent-type ", detail);
+    } else {
+      host_import_note("decline=no-common-type ", detail);
+    }
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
     delete buf;
     return Buffer{nullptr};
@@ -388,12 +489,20 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
   mai.memoryTypeIndex = type_index;
   res = dt.AllocateMemory(device().handle(), &mai, nullptr, &buf->memory);
   if (res != VK_SUCCESS) {
+    host_import_note(
+        "decline=alloc-failed ",
+        caps + " type=" + std::to_string(type_index) + " import_size=" +
+            std::to_string(import_size) +
+            " vkresult=" + vk::result_string(res));
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
     delete buf;
     return Buffer{nullptr};
   }
   res = dt.BindBufferMemory(device().handle(), buf->buffer, buf->memory, 0);
   if (res != VK_SUCCESS) {
+    host_import_note(
+        "decline=bind-failed ",
+        caps + " vkresult=" + vk::result_string(res));
     // FreeMemory on an import has no effect on the host range; safe.
     dt.FreeMemory(device().handle(), buf->memory, nullptr);
     dt.DestroyBuffer(device().handle(), buf->buffer, nullptr);
@@ -409,6 +518,9 @@ Buffer VulkanAllocator::make_buffer(void* ptr, size_t size) {
     active_memory_ += buf->size;
     peak_memory_ = std::max(active_memory_, peak_memory_);
   }
+  host_import_note(
+      "aliased ", "align=" + std::to_string(align) +
+          " import_size=" + std::to_string(import_size));
   return Buffer{buf};
 }
 

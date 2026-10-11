@@ -5,22 +5,32 @@
 // path that the array(void*, ...) ctor takes when the device supports it,
 // the aliasing assertion sushi's data_ptr == slab.ptr check needs, and
 // the copy fallback when the path is unavailable (env kill or unaligned
-// pointer). Three subcases:
-//   1. aligned host buffer, env on, import supported:
-//      arr.data<float>() MUST equal the host pointer; a host rewrite of
-//      the slab bytes is visible to a subsequent GPU sum.
-//   2. unaligned host buffer (offset within a 4 KiB-aligned block):
-//      the import path declines; arr.data<float>() MUST NOT equal the
-//      caller's pointer; the GPU op runs correctly through the copy
-//      path.
-//   3. aligned host buffer, MLX_OMARCHY_HOST_IMPORT=0 set before the
-//      array ctor: same outcome as (2) — copy path, no aliasing.
-// All three are checked from a single binary: the env-setenv call in (3)
-// is process-wide but only affects the next make_buffer, which is
-// scoped to the ctor.
+// pointer). Four subcases:
+//   1. aligned: host buffer aligned to max(sysconf(_SC_PAGESIZE), 4096)
+//      so a 16 KiB-page device is exercised at its real alignment.
+//      When the import aliases, arr.data == the host pointer and a host
+//      rewrite of the slab bytes is visible to a subsequent GPU sum.
+//   2. subpage-offset: base aligned to the same page size, pointer at
+//      base + 4096. On a 4 KiB-page device this is still aligned (the
+//      import aliases); on a 16 KiB-page device it declines. Either way
+//      the GPU op must be numerically correct.
+//   3. misaligned-100: pointer at base + 100. This declines on every
+//      driver; the copy path must run without error and stay correct.
+//   4. env-kill: aligned buffer, MLX_OMARCHY_HOST_IMPORT=0 set before
+//      the array ctor: copy path regardless of device capability.
+// Each case prints ONE stable marker line:
+//   HOST_IMPORT_ALIASED=<0|1> reason=<aliased|copy-fallback>
+//       case=<aligned|subpage-offset|misaligned-100|env-kill>
+//       align=<N> ptr_mod=<N>
+// A device that legitimately declines passes its case (correctness is
+// asserted on both paths); the marker plus the
+// MLX_OMARCHY_HOST_IMPORT_DEBUG stderr lines are what a device receipt
+// reads to see which path ran and why the other one declined.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
+
+#include <unistd.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -41,94 +51,136 @@ using namespace mlx::core;
 
 namespace {
 
+size_t host_align() {
+  long page = sysconf(_SC_PAGESIZE);
+  if (page < 4096) {
+    page = 4096;
+  }
+  return static_cast<size_t>(page);
+}
+
+void marker(
+    bool aliased,
+    const char* reason,
+    const char* kase,
+    size_t align,
+    uintptr_t ptr_mod) {
+  std::cout << "HOST_IMPORT_ALIASED=" << (aliased ? 1 : 0)
+            << " reason=" << reason
+            << " case=" << kase
+            << " align=" << align
+            << " ptr_mod=" << ptr_mod << "\n";
+}
+
 bool omarchy_gpu_available() {
   return gpu::is_available();
 }
 
-// Wrap a host buffer of N floats. fill is a generator that writes the
-// initial bytes. Returns the array and reports whether the backend
-// imported the buffer (true) or copied (false) via the out param.
-array make_array(float* host, int n, std::mt19937& rng, bool& imported) {
-  std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
-  for (int i = 0; i < n; ++i) {
-    host[i] = dist(rng);
-  }
-  // Deleter frees the host buffer after the array is destroyed.
-  array out(
-      static_cast<void*>(host),
-      Shape{n},
-      float32,
-      [](void* p) { std::free(p); });
-  imported = (out.data<float>() == host);
-  return out;
-}
-
 } // namespace
 
-TEST_CASE("host pointer import: aliasing + host rewrite visible") {
+TEST_CASE("host pointer import: page-aligned buffer aliases and shows rewrites") {
+  const size_t align = host_align();
   if (!omarchy_gpu_available()) {
     std::cout << "Skipping: no omarchy GPU device\n";
     return;
   }
   // Force the import path to the enabled state for this case.
   unsetenv("MLX_OMARCHY_HOST_IMPORT");
-  constexpr size_t kAlign = 4096;
   constexpr int kN = 1024;
   void* raw = nullptr;
-  REQUIRE(posix_memalign(&raw, kAlign, sizeof(float) * kN) == 0);
+  REQUIRE(posix_memalign(&raw, align, sizeof(float) * kN) == 0);
   REQUIRE(raw != nullptr);
   auto* host = static_cast<float*>(raw);
   std::mt19937 rng(0xC0FFEE);
-  bool imported = false;
-  array arr = make_array(host, kN, rng, imported);
-  std::cout << "host_import path: "
-            << (imported ? "aliased" : "copied")
-            << " host=" << host
-            << " arr.data=" << arr.data<float>() << "\n";
-  if (imported) {
+  std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
+  for (int i = 0; i < kN; ++i) {
+    host[i] = dist(rng);
+  }
+  array arr(
+      static_cast<void*>(host),
+      Shape{kN},
+      float32,
+      [](void* p) { std::free(p); });
+  bool aliased = (arr.data<float>() == host);
+  array sum1 = sum(arr);
+  eval(sum1);
+  float s1 = sum1.item<float>();
+  if (aliased) {
     CHECK(arr.data<float>() == host);
-    // First GPU op reads the slab.
-    array sum1 = sum(arr);
-    eval(sum1);
     // Rewrite the host slab in place, simulating sushi's
-    // pread-into-slab expert-cache step.
+    // pread-into-slab expert-cache step, then re-issue a fresh sum:
+    // under aliasing the rewritten bytes are what the GPU reads.
     for (int i = 0; i < kN; ++i) {
       host[i] = static_cast<float>(i + 1);
     }
-    // Re-issue a fresh sum; the encoder schedules a new dispatch
-    // reading arr. Under aliasing the rewritten bytes are visible.
     array sum2 = sum(arr);
     eval(sum2);
-    float s1 = sum1.item<float>();
-    float s2 = sum2.item<float>();
-    // sum1: rng-distributed -1000..1000, deterministic seed -> fixed value.
-    // sum2: 1+2+...+1024 = 1024*1025/2 = 524800.
-    CHECK(s2 == doctest::Approx(524800.0f));
-    INFO("sum1 (rng)=" << s1 << " sum2 (rewrite 1..1024)=" << s2);
+    CHECK(sum2.item<float>() == doctest::Approx(524800.0f)); // 1+..+1024
   } else {
-    // Path unavailable: copy was used. arr.data MUST differ from host.
     CHECK(arr.data<float>() != host);
-    array sum1 = sum(arr);
-    eval(sum1);
-    float s1 = sum1.item<float>();
-    INFO("copy path sum (rng)=" << s1);
     CHECK(std::isfinite(s1));
   }
+  marker(
+      aliased,
+      aliased ? "aliased" : "copy-fallback",
+      "aligned",
+      align,
+      reinterpret_cast<uintptr_t>(host) % align);
 }
 
-TEST_CASE("host pointer import: unaligned pointer falls back to copy") {
+TEST_CASE("host pointer import: 4 KiB offset inside a page-aligned block") {
+  const size_t align = host_align();
   if (!omarchy_gpu_available()) {
     std::cout << "Skipping: no omarchy GPU device\n";
     return;
   }
   unsetenv("MLX_OMARCHY_HOST_IMPORT");
   constexpr int kN = 256;
-  // Allocate a 4 KiB-aligned base and offset by 100 bytes. The
-  // import path requires the pointer itself to be aligned to the
-  // device's minImportedHostPointerAlignment (4 KiB on every driver
-  // we exercise). The misaligned pointer must take the copy path.
   void* raw = nullptr;
-  REQUIRE(posix_memalign(&raw, 4096, sizeof(float) * kN + 4096) == 0);
+  REQUIRE(posix_memalign(&raw, align, sizeof(float) * kN + 4096) == 0);
+  REQUIRE(raw != nullptr);
+  auto* host = reinterpret_cast<float*>(static_cast<char*>(raw) + 4096);
+  for (int i = 0; i < kN; ++i) {
+    host[i] = static_cast<float>(i);
+  }
+  array arr(
+      static_cast<void*>(host),
+      Shape{kN},
+      float32,
+      [raw](void* p) {
+        (void)p;
+        std::free(raw);
+      });
+  // On a 4 KiB-page host base+4096 is still page-aligned and the
+  // import aliases; on a 16 KiB-page host it declines. Both paths must
+  // produce the right numbers.
+  bool aliased = (arr.data<float>() == host);
+  array s = sum(arr);
+  eval(s);
+  CHECK(s.item<float>() == doctest::Approx(static_cast<float>(kN * (kN - 1) / 2)));
+  if (aliased) {
+    CHECK(arr.data<float>() == host);
+  } else {
+    CHECK(arr.data<float>() != host);
+  }
+  marker(
+      aliased,
+      aliased ? "aliased" : "copy-fallback",
+      "subpage-offset",
+      align,
+      reinterpret_cast<uintptr_t>(host) % align);
+}
+
+TEST_CASE("host pointer import: 100-byte offset declines on every driver") {
+  const size_t align = host_align();
+  if (!omarchy_gpu_available()) {
+    std::cout << "Skipping: no omarchy GPU device\n";
+    return;
+  }
+  unsetenv("MLX_OMARCHY_HOST_IMPORT");
+  constexpr int kN = 256;
+  void* raw = nullptr;
+  REQUIRE(posix_memalign(&raw, align, sizeof(float) * kN + 4096) == 0);
   REQUIRE(raw != nullptr);
   auto* host = reinterpret_cast<float*>(static_cast<char*>(raw) + 100);
   for (int i = 0; i < kN; ++i) {
@@ -142,25 +194,30 @@ TEST_CASE("host pointer import: unaligned pointer falls back to copy") {
         (void)p;
         std::free(raw);
       });
-  // Misaligned -> copy path. The aliased-pointer assertion fails
-  // outright under the import path; under the copy path the array
-  // owns its own allocation and arr.data != host.
+  // No plausible minImportedHostPointerAlignment divides 100, so this
+  // is the always-decline case: copy path, no error, correct numbers.
   CHECK(arr.data<float>() != host);
   array s = sum(arr);
   eval(s);
   CHECK(s.item<float>() == doctest::Approx(static_cast<float>(kN * (kN - 1) / 2)));
+  marker(
+      false,
+      "copy-fallback",
+      "misaligned-100",
+      align,
+      reinterpret_cast<uintptr_t>(host) % align);
 }
 
 TEST_CASE("host pointer import: env kill switch forces copy path") {
+  const size_t align = host_align();
   if (!omarchy_gpu_available()) {
     std::cout << "Skipping: no omarchy GPU device\n";
     return;
   }
   REQUIRE(setenv("MLX_OMARCHY_HOST_IMPORT", "0", 1) == 0);
-  constexpr size_t kAlign = 4096;
   constexpr int kN = 256;
   void* raw = nullptr;
-  REQUIRE(posix_memalign(&raw, kAlign, sizeof(float) * kN) == 0);
+  REQUIRE(posix_memalign(&raw, align, sizeof(float) * kN) == 0);
   REQUIRE(raw != nullptr);
   auto* host = static_cast<float*>(raw);
   for (int i = 0; i < kN; ++i) {
@@ -176,5 +233,11 @@ TEST_CASE("host pointer import: env kill switch forces copy path") {
   array s = sum(arr);
   eval(s);
   CHECK(s.item<float>() == doctest::Approx(static_cast<float>(kN * (kN - 1) / 2)));
+  marker(
+      false,
+      "copy-fallback",
+      "env-kill",
+      align,
+      reinterpret_cast<uintptr_t>(host) % align);
   unsetenv("MLX_OMARCHY_HOST_IMPORT");
 }
