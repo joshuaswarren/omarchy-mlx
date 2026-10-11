@@ -326,6 +326,75 @@ TEST_CASE("elementwise families survive a lowered storage range") {
   }
 }
 
+TEST_CASE("gather row windows survive a lowered storage range") {
+  if (!omarchy_gpu_available()) {
+    std::cout << "Skipping: no omarchy GPU device\n";
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  Stream cs = new_stream(Device::cpu);
+  // bf16 table [128, 96]: 192-byte rows, 85-row windows at the 16 KiB
+  // limit, so indices 84 and 85 span the window boundary.
+  auto bf16_table = bf16_data(128 * 96, 21);
+  array bf16_src(bf16_table.data(), Shape{128, 96}, bfloat16);
+  // f32 table [64, 96]: 384-byte rows, 42-row windows, boundary 41/42.
+  auto f32_table = f32_data(64 * 96, 22);
+  array f32_src(f32_table.data(), Shape{64, 96}, float32);
+
+  // |indices| values run through take on both streams and the raw
+  // output bytes must match; OOB indices (>= rows) are GPU-only
+  // because the CPU stream rejects them - both passes must still agree
+  // on the zero rows the whole-table path documents.
+  auto gather_case = [&](const char* name, const array& table,
+                         const std::vector<int32_t>& ii, bool vs_cpu) {
+    array idx(ii.data(), Shape{static_cast<int>(ii.size())}, int32);
+    array g = take(table, idx, 0, gs);
+    eval(g);
+    if (vs_cpu) {
+      array r = take(table, idx, 0, cs);
+      eval(r);
+      require_same_bytes(g, r);
+    }
+    digest(name, g);
+  };
+
+  SUBCASE("bf16 table, boundary-spanning with duplicates and negatives") {
+    gather_case(
+        "gather-bf16-span",
+        bf16_src,
+        {0, 84, 85, 127, 7, 7, 42, -1, -96},
+        true);
+  }
+  SUBCASE("f32 table, boundary-spanning") {
+    gather_case("gather-f32-span", f32_src, {0, 41, 42, 63, 5}, true);
+  }
+  SUBCASE("indices confined to the first window") {
+    gather_case("gather-first-window", bf16_src, {0, 3, 17}, true);
+  }
+  SUBCASE("uint32 indices across windows") {
+    std::vector<uint32_t> uu{0, 84, 85, 126, 9, 9};
+    array idx(uu.data(), Shape{6}, uint32);
+    array g = take(bf16_src, idx, 0, gs);
+    eval(g);
+    array r = take(bf16_src, idx, 0, cs);
+    eval(r);
+    require_same_bytes(g, r);
+    digest("gather-u32-idx", g);
+  }
+  SUBCASE("out-of-range indices read zero on both paths") {
+    std::vector<uint32_t> uu{128, 5, 0xFFFFFFFFu};
+    array idx(uu.data(), Shape{3}, uint32);
+    array g = take(bf16_src, idx, 0, gs);
+    eval(g);
+    digest("gather-oob-zero", g);
+  }
+  SUBCASE("small table stays on the whole-table path") {
+    auto tiny = bf16_data(8 * 16, 23);
+    array src(tiny.data(), Shape{8, 16}, bfloat16);
+    gather_case("gather-in-limit", src, {3, 0, 7}, true);
+  }
+}
+
 TEST_CASE("strided broadcast keeps the oversized-binding refusal") {
   if (!omarchy_gpu_available()) {
     std::cout << "Skipping: no omarchy GPU device\n";

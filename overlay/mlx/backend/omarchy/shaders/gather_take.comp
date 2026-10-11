@@ -209,6 +209,15 @@ layout(push_constant) uniform Params {
 void main() {
   uint t = gl_GlobalInvocationID.x;
   uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+  // flags bit 8 marks a row-windowed dispatch: the table descriptor
+  // covers only the window rows [matrix_n, matrix_n + reduce_size) of
+  // the gathered dim, matrix_k carries the full extent the indices
+  // decode against, and an out-of-window position skips the store so
+  // the one owning window is the only writer of each output element.
+  // Whole-table dispatches never set bit 8 (flags is the rank there),
+  // so every in-limit take runs the identical path below.
+  bool windowed = (params.flags & 0x100u) != 0u;
+  uint take_rank = params.flags & 0xFFu;
   while (t < params.count) {
     // Split the output element into index position and window position.
     uint idx_count = 1u;
@@ -222,7 +231,7 @@ void main() {
     // Decode the window position across the table dims.
     uint win = 0u;
     uint scale = 1u;
-    for (uint i = params.flags; i > 0u; --i) {
+    for (uint i = take_rank; i > 0u; --i) {
       uint dim = params.shape[i - 1u];
       win += ((s / scale) % dim) * params.in_strides[i - 1u];
       scale *= dim;
@@ -247,7 +256,11 @@ void main() {
     }
 #else
     {
-      uint dim = params.reduce_size;
+      // A windowed dispatch decodes against the full extent (matrix_k;
+      // negative indices wrap exactly the way a whole-table dispatch
+      // wraps them) and then tests the decoded value against the window
+      // [matrix_n, matrix_n + reduce_size).
+      uint dim = windowed ? params.matrix_k : params.reduce_size;
       uint index;
       DECODE_INDEX(indices_data,
                    params.rhs_offset,
@@ -255,8 +268,9 @@ void main() {
                    params.operation,
                    dim,
                    index);
-      valid = index < dim;
-      src = index * params.matrix_m;
+      uint src_row = index - params.matrix_n;
+      valid = src_row < (windowed ? params.reduce_size : dim);
+      src = src_row * params.matrix_m;
     }
 #endif
 #if defined(USE_COMPLEX) || defined(USE_U32) || defined(USE_U16) || defined(USE_I64)
@@ -296,8 +310,15 @@ void main() {
     if (valid) {
       value = LOAD_VALUE(
           input_data.values[params.lhs_offset + src + win]);
+      output_data.values[params.output_offset + t] = STORE_VALUE(value);
+    } else if (!windowed) {
+      // A whole-table dispatch documents the zero read: out-of-range
+      // indices store zero. A windowed dispatch skips the store; the
+      // host pre-zeroed the output, so a genuinely out-of-range index
+      // still reads zero and the one owning window writes every
+      // in-range position exactly once.
+      output_data.values[params.output_offset + t] = STORE_VALUE(value);
     }
-    output_data.values[params.output_offset + t] = STORE_VALUE(value);
 #endif
     if (params.count - t <= stride) {
       break;

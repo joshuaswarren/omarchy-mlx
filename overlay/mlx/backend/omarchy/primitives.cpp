@@ -6582,6 +6582,72 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
             nidx > 1 ? omarchy::ComputeKernel::TakeMultiBF16
                      : omarchy::ComputeKernel::TakeBF16);
   uint32_t bound = nidx > 1 ? 4u : 3u;
+  const VkDeviceSize range_limit = encoder.storage_buffer_range_limit();
+  const uint64_t stride_items = params.matrix_m;
+  const uint64_t row_bytes = stride_items * table_d.itemsize();
+  if (nidx == 1 && row_bytes > 0 && bindings[0].range > range_limit) {
+    // Row-window split for an oversized table: each window re-binds the
+    // table at its first gathered index (flags bit 8, matrix_k = the
+    // full extent the indices decode against, reduce_size = the window
+    // extent, matrix_n = the window base) and the shader skips the
+    // store for out-of-window positions, so every output element is
+    // written exactly once - by the one window that owns its index.
+    // The descriptor shift is linear in the gathered index
+    // (base + r0*stride*itemsize against src_row = index - r0), so any
+    // gathered axis and stride compose; negatives wrap in the decode
+    // against the full extent exactly as a whole-table dispatch wraps
+    // them. Pre-zero the output so genuinely out-of-range indices keep
+    // the documented zero read (the whole-table path stores zero).
+    if (table_d.offset() % 16 != 0) {
+      omarchy::unsupported("Take storage range view offset", out);
+    }
+    const uint64_t step_rows = 16 / std::gcd(row_bytes, 16);
+    uint64_t window_rows =
+        (static_cast<uint64_t>(range_limit) - 3) / row_bytes;
+    window_rows = (window_rows / step_rows) * step_rows;
+    if (window_rows == 0) {
+      omarchy::unsupported("Take storage range window", out);
+    }
+    if (!bool_table && !byte_table) {
+      size_t zero_bytes = (out.nbytes() + 3u) & ~size_t{3u};
+      encoder.fill_buffer(binding(out).buffer, 0u, zero_bytes, 0);
+    }
+    const uint32_t rows = params.reduce_size;
+    const auto* table_buffer =
+        static_cast<const omarchy::VulkanBuffer*>(table_d.buffer().ptr());
+    for (uint64_t first = 0; first < rows; first += window_rows) {
+      const uint32_t rows_w = static_cast<uint32_t>(
+          std::min(window_rows, static_cast<uint64_t>(rows) - first));
+      omarchy::ComputeParams window_params = params;
+      window_params.matrix_k = rows;
+      window_params.reduce_size = rows_w;
+      window_params.matrix_n = static_cast<uint32_t>(first);
+      window_params.flags = params.flags | 0x100u;
+      const VkDeviceSize begin =
+          static_cast<VkDeviceSize>(table_d.offset()) +
+          static_cast<VkDeviceSize>(first) *
+              static_cast<VkDeviceSize>(row_bytes);
+      const VkDeviceSize word_end = ((begin +
+          static_cast<VkDeviceSize>(rows_w) *
+              static_cast<VkDeviceSize>(row_bytes)) + 3) &
+          ~static_cast<VkDeviceSize>(3);
+      auto window_bindings = bindings;
+      window_bindings[0] = omarchy::ComputeBinding{
+          table_buffer->buffer,
+          begin,
+          std::min<VkDeviceSize>(
+              std::max<VkDeviceSize>(word_end - begin, 1),
+              table_buffer->size - begin),
+          table_buffer};
+      encoder.dispatch_compute(
+          kernel,
+          std::span<const omarchy::ComputeBinding>(
+              window_bindings.data(), bound),
+          window_params,
+          omarchy::compute_dispatch_group_count(count));
+    }
+    return;
+  }
   encoder.dispatch_compute(
       kernel,
       std::span<const omarchy::ComputeBinding>(bindings.data(), bound),
