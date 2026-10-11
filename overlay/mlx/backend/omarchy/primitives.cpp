@@ -13700,6 +13700,7 @@ void Exl3MoeFused::eval_gpu(
   params.matrix_m = packed;
   params.matrix_n = mask;
   params.matrix_k = checked_u32(topk, tag, out);
+  params.dims = static_cast<uint32_t>(chunk_row_offset_);
   encoder.dispatch_compute(kernel, bindings, params, grid0);
 
   // mode 1: down + SwiGLU + combine.
