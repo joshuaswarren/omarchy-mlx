@@ -305,6 +305,8 @@ collected and how redaction works, is
 
 ## M2 Max ANE (measured)
 
+The ANE driver release for this chip is [omarchy-ane v0.4.8](https://github.com/joshuaswarren/omarchy-ane/releases/tag/v0.4.8), M2 Max only. Its limits are in the release notes.
+
 What the M2 Max (T6021) Neural Engine has done under Linux. Each line names the
 kernel and driver module build it ran on, because they changed between runs:
 
