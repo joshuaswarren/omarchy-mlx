@@ -112,6 +112,14 @@ layout(push_constant) uniform Params {
 const float HAD_SCALE = 0.08838834764831845;
 const uint MCG_MULT = 0xCBAC1FEDu;
 
+// The scale planes arrive as uint16 MLX arrays (one f16 bit pattern per
+// element, two per bound word, little-endian): element i lives in halfword
+// i of word i>>1. The trellis banks stay word-addressed - the pack is a
+// contiguous little-endian bitstream and every tile begins on a word
+// boundary (rate.n is even).
+#define SCALE_BITS(words, base, i) \
+  (((words)[(base) + ((i) >> 1)] >> (((i) & 1u) << 4u)) & 0xFFFFu)
+
 float f16ToF32(uint h) {
   uint sign = (h >> 15) & 1u;
   uint exp = (h >> 10) & 0x1Fu;
@@ -267,8 +275,8 @@ void main() {
         for (uint k = 0u; k < 128u; k++) {
           float xv = f16ToF32(f32ToF16(g_x[g_meta[metaBase + 0] + (gx / params.matrix_k) * inDim + boff + k]));
           uint sb = (proj == 0u)
-              ? g_suhg[g_meta[metaBase + 6] + suhBase + boff + k]
-              : g_suhu[g_meta[metaBase + 7] + suhBase + boff + k];
+              ? SCALE_BITS(g_suhg, g_meta[metaBase + 6], suhBase + boff + k)
+              : SCALE_BITS(g_suhu, g_meta[metaBase + 7], suhBase + boff + k);
           float prod = xv * f16ToF32(sb);
           float he = (bitCount((el & 127u) & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
           acc = acc + he * prod;
@@ -343,8 +351,8 @@ void main() {
         ha = ha + he * v;
       }
       uint sv = (proj == 0u)
-          ? g_svhg[g_meta[metaBase + 9] + e * outDim + oGlob]
-          : g_svhu[g_meta[metaBase + 10] + e * outDim + oGlob];
+          ? SCALE_BITS(g_svhg, g_meta[metaBase + 9], e * outDim + oGlob)
+          : SCALE_BITS(g_svhu, g_meta[metaBase + 10], e * outDim + oGlob);
       uint bits = f32ToF16(ha * f16ToF32(sv));
       if (proj == 0u) g_ag[g_meta[metaBase + 12] + gx * outDim + oGlob] = bits;
       else g_au[g_meta[metaBase + 13] + gx * outDim + oGlob] = bits;
@@ -395,7 +403,7 @@ void main() {
           precise float acc = 0.0;
           for (uint k = 0u; k < 128u; k++) {
             float hv = f16ToF32(f32ToF16(s_h[boff + k]));
-            float prod = hv * f16ToF32(g_suhd[g_meta[metaBase + 8] + e * inDim + boff + k]);
+            float prod = hv * f16ToF32(SCALE_BITS(g_suhd, g_meta[metaBase + 8], e * inDim + boff + k));
             float he = (bitCount((el & 127u) & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
             acc = acc + he * prod;
           }
@@ -456,7 +464,7 @@ void main() {
           float he = (bitCount(oLocal & k) & 1u) == 0u ? HAD_SCALE : -HAD_SCALE;
           ha = ha + he * v;
         }
-        float y2f = ha * f16ToF32(g_svhd[g_meta[metaBase + 11] + e * outDim + oGlob]);
+        float y2f = ha * f16ToF32(SCALE_BITS(g_svhd, g_meta[metaBase + 11], e * outDim + oGlob));
         y2f = f16ToF32(f32ToF16(y2f));
         combined = combined + g_scores[g_meta[metaBase + 2] + row * params.matrix_k + j] * y2f;
       }
