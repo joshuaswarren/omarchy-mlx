@@ -9,7 +9,7 @@ Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides w
 - llama.cpp rows: `llama-bench` pp512 and tg128 (5 repetitions), Vulkan on Linux against Metal on macOS, same llama.cpp commit.
 - All models are 4-bit (MLX) or Q4_K_M (GGUF). A model that does not fit in memory is listed as skipped, not shrunk. A model that fails to run on Linux counts as 0%.
 
-How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. The tables below name the driver they used, or say that it was not recorded. Rows on the newer driver, Mesa git `69bde15340`, are in their own section at the end.
+How we measure. The target is a quiet machine. A run that started with a load average above 0.5 or with a busy ANE is marked, and its numbers may be low. A cell with repeat runs lists them. A spread is the maximum minus the minimum, divided by the median. The tables below name the driver they used, or say that it was not recorded. Rows on the newer driver, Mesa git `69bde15340`, are in their own section at the end.
 
 Noise. Prefill is steady. Its spread over repeat runs is 0.0 to 3.0% on the M1 chips and 0.2 to 0.5% on the M2 Max, except Qwen3.8-27B (4.6%) and gemma-4-31B (11.5%) on the M2 Max. Decode is not steady across hours on the M1 chips. On the 16-inch M1 Max, gemma-4-26B-A4B decode ranged from 10.17 to 12.96 tokens per second over 18 runs (23.9%). On the 13-inch M1, gemma-4-E4B ranged from 8.85 to 13.64 over 10 runs (53.9%) and Qwen3.5-9B from 6.93 to 12.51 over 5 runs on one boot (44.8%). On the 14-inch M2 Max, gemma-4-26B-A4B ranged by 7.4% over 14 runs and Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Ornith-1.5-35B-A3B and Qwen3.8-27B by 0.9 to 2.0%. gemma-4-31B ranged by 12.0% and is marked noisy. Inside an interleaved block, where two drivers alternate within minutes, the control spread was 0.0 to 3.4% in seven of eight blocks and 11.1% in one. Only the blocks in the last section were interleaved. Every other row in this document is a single run, or a median of repeats taken at one time, with no paired control.
 
@@ -113,7 +113,7 @@ Rows are re-measured as the lab scoreboard runs; the lowest ratios are the next 
 
 These rows ran on the newer patched driver, Mesa git `69bde15340` (the installed package library), measured on 2026-10-11. The wheel is main at `e57cb301` for every row. The reference is the private ICD at Mesa git `6543eeb7df7`, called v3 below. Nothing in this section compares with macOS.
 
-Every single run below started with a load average between 0.98 and 1.68, above the 0.5 target, so its numbers may be low. The M2 Max rows ran with the compute-preemption option on.
+Every run in the single-run tables below started with a load average between 0.98 and 1.68, above the 0.5 target, so its numbers may be low. The interleaved blocks list no start loads. The M2 Max rows ran with the compute-preemption option on.
 
 On the 14-inch M2 Max the newer driver raises decode by 8.5 to 15.9% in four blocks. Prefill moves by 0.3 to 1.0%. On the 16-inch M1 Max it raises gemma-4-26B-A4B decode by 1.7 to 2.9% and leaves prefill flat. On the 13-inch M1 it raises gemma-4-E4B decode by 1.4% and moves prefill by 0.4% down. The percentages come from the ratios in the table. Only within-block ratios are comparable.
 
@@ -151,7 +151,7 @@ Each row is one run on the newer driver against the v3 median of the retained ru
 
 ### 16-inch M1 Max, single runs
 
-The v3 median of gemma-4-26B-A4B spans 10.17 to 12.96 over 18 runs, so its single-run ratios say little. Use the blocks above for that model.
+The v3 runs of gemma-4-26B-A4B span 10.17 to 12.96 over 18 runs, with a median of 11.68, so its single-run ratios say little. Use the blocks above for that model.
 
 | Model | Newer driver decode / prefill 512 | v3 median decode / prefill (runs, decode spread) | Decode ratio | Prefill ratio | Start load |
 |---|---|---|---|---|---|
