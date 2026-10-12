@@ -48,11 +48,13 @@ Vulkan, ANE, and install gates are not qualified on those systems.
 ## Non-Apple GPUs (development drivers)
 
 Not a supported target. With `MLX_OMARCHY_ALLOW_NON_APPLE=1` the
-backend admits any Vulkan 1.3 device for development. Apple vendor
+backend admits a Vulkan 1.3 device that exposes timeline semaphores
+and a compute queue, for development. Apple vendor
 0x106b and Mesa Honeykrisp (driver id 26) are accepted without the
 flag; every other device is refused.
 
-Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
+Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111),
+run record in [receipts/2026-10-11-non-apple-gpu-run/README.md](../receipts/2026-10-11-non-apple-gpu-run/README.md):
 
 - Intel UHD 770 (Mesa ANV 26.2.4): 55/55 `omarchy_runtime_tests`; op
   check clean across add, sigmoid, softmax, copy, argmax, rms_norm,

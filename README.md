@@ -76,14 +76,16 @@ table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage) of
 ## Other Vulkan GPUs (development)
 
 Not a supported target. With `MLX_OMARCHY_ALLOW_NON_APPLE=1` the
-backend admits any Vulkan 1.3 device for development on a normal
-Linux box. The flag and the llvmpipe note are in
+backend admits a Vulkan 1.3 device that exposes timeline semaphores
+and a compute queue, for development on a normal Linux box. The flag
+and the llvmpipe note are in
 [Development override](docs/install-omarchy.md#development-override).
 Driver selection with `VK_DRIVER_FILES` is in
 [Selection](docs/install-omarchy.md#selection).
 The non-Apple refusal without the flag stays.
 
-Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
+Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111),
+run record in [receipts/2026-10-11-non-apple-gpu-run/README.md](receipts/2026-10-11-non-apple-gpu-run/README.md):
 
 | GPU | Driver | Result |
 |---|---|---|
