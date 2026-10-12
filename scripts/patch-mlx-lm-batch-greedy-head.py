@@ -18,7 +18,7 @@ merged from lazy and eager parts evaluates its logprobs (the safe default).
 
 Needs the mlx-lm-greedy-prune patch (_greedy_head). 0.32 line only (no
 GenerationBatch in 0.31.3: nothing to patch). Opt-in: MLX_OMARCHY_BATCH_GREEDY=1
-(read once at import). jw16 2026-10-07: +1.9% ms/token at B=1 and +1.6% at B=4
+(read once at import). 16-inch M1 Max 2026-10-07: +1.9% ms/token at B=1 and +1.6% at B=4
 in-process, oMLX c1 -2.5%, oMLX c4 +4.7% (receipts/2026-10-07-prefill-hotspots.md).
 Usage: python3 patch-mlx-lm-batch-greedy-head.py /path/to/venv
 """

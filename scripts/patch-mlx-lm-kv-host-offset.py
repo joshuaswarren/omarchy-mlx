@@ -18,7 +18,7 @@ so any assignment from outside the class (oMLX copies, state restores) keeps
 the assigned array and the old behavior.
 
 On by default (read once at import; MLX_OMARCHY_KV_HOST_OFFSET=0 keeps the lazy
-device offset). jw16 2026-10-07: BatchGenerator B=1 13.56 -> 11.84 ms/token; with
+device offset). 16-inch M1 Max 2026-10-07: BatchGenerator B=1 13.56 -> 11.84 ms/token; with
 fused RoPE vector offsets oMLX c4 70.0 -> 84.9 tok/s, c1 unchanged (A/A cell).
 Apply after patch-mlx-lm-kv-maskless.py.
 Usage: python3 patch-mlx-lm-kv-host-offset.py /path/to/venv
