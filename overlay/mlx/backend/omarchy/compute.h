@@ -978,6 +978,10 @@ enum class ComputeKernel : uint16_t {
   Exl3DecodeF32,
   Exl3DecodeF16,
   Exl3DecodeBF16,
+  // Decode gather_qmm_sub reading the scales, biases and index arrays in
+  // place (no per-call staging copy). Append-only profile id.
+  GatherQmmSubDirectF16,
+  GatherQmmSubDirectBF16,
   Count,
 };
 
