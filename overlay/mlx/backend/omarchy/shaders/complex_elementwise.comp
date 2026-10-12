@@ -92,7 +92,7 @@ uint rhs_stride_at(uint index) {
   return axis_data.values[2u * params.matrix_k + index];
 }
 
-// AGX (Honeykrisp) rounding contract, measured on jwm1-linux (Mesa
+// AGX (Honeykrisp) rounding contract, measured on a 13-inch M1 (Mesa
 // 26.1.7): (1) GLSL "/" lands up to 1 ulp from the correctly rounded
 // quotient - 80/25 and 10/25 one ulp low - so the complex64 divide vjp
 // pin (-3.2-0.4j) missed by one bit even though every multiply and add

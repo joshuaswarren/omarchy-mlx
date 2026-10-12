@@ -119,7 +119,7 @@ float round_away_from_zero(float value) {
   return sign(value) * floor(abs(value) + 0.5);
 }
 
-// AGX (Honeykrisp) rounding contract, measured on jwm1-linux (Mesa
+// AGX (Honeykrisp) rounding contract, measured on a 13-inch M1 (Mesa
 // 26.1.7): (1) GLSL "/" lands up to 1 ulp from the correctly rounded
 // quotient - 80/25 and 10/25 one ulp low, 6.55859375/0.030016447 one
 // ulp high, which flipped one affine code at the exact 218.5
