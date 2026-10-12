@@ -20,7 +20,7 @@
 // `value` from input_data after the reduction barrier, matching production
 // fast_norm.comp's output loop exactly. The multiply chain is in the
 // EXACT order production's compiled SPIR-V emits: (weight * norm) * value
-// (verified in artifacts/Jw16DecodeGap9/nir-diffs/); reordering to
+// (verified in the private DecodeGap9 NIR diffs); reordering to
 // (value * norm) * weight shifts the bf16 rounding boundary by 1 ULP at
 // the rounding tie line, which is what DecodeGap8 W2 gate observed (9
 // mismatches per 1M output bytes on model-q-prefill-t512-off{0,600}).
@@ -227,7 +227,7 @@ void main() {
   // multiplies into an ffma that drifts by 1 bf16 ULP at the rounding
   // boundary. The re-load here is what makes the fused reduction bit-
   // identical to the production chain (verified row-by-row; see
-  // artifacts/Jw16DecodeGap9/nir-diffs/).
+  // the private DecodeGap9 NIR diffs).
   float mean_square = block_values[0] / float(row_length);
   // The fast_norm.comp production script inserts a barrier() between the
   // reduction tree's last iteration and the output multiply chain. We
@@ -248,7 +248,7 @@ void main() {
       : 0.0;
   // MIRROR PRODUCTION'S EXACT MULTIPLY ORDER: fast_norm.comp's compiled
   // SPIR-V emits (weight * norm) * value (verified in
-  // artifacts/Jw16DecodeGap9/nir-diffs/fast_rms_norm_bf16.spvasm:
+  // the private DecodeGap9 NIR diff of fast_rms_norm_bf16:
   //   %171 = InverseSqrt(...)             -> norm
   //   %190 = weight loaded as f32
   //   %225 = FMul %190 %171               -> weight * norm

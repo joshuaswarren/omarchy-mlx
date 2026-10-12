@@ -1,7 +1,7 @@
 // Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
 // SPDX-License-Identifier: MIT
 //
-// Native-shape pass 1 of the long-context decode SDPA (Jw16DecodeGap's
+// Native-shape pass 1 of the long-context decode SDPA (DecodeGap's
 // named lever, receipts 2026-09-17). The fused SdpaDecodeNativeF16 kernel
 // keeps one workgroup per head, so each of its 32 subgroups walks k/32
 // sequential keys no matter how many blocks the two-pass splits into - the
