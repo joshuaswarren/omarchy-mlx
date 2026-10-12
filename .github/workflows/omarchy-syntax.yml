@@ -57,6 +57,8 @@ jobs:
             libopenblas-dev libblas-dev liblapack-dev liblapacke-dev
       - name: Prepare patched MLX tree
         run: bash scripts/prepare-mlx.sh
+      - name: Check every eval_cpu has a NO_CPU stub (CPU-off link)
+        run: python3 scripts/check-no-cpu-stubs.py .work/mlx
       - name: Configure (CPU-only, omarchy backend)
         env:
           CMAKE_INCLUDE_PATH: /usr/include/openblas
