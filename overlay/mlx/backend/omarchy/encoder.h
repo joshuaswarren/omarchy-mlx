@@ -151,7 +151,7 @@ struct BatchWorkCalibration {
 };
 inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13S", 0},  // M1 Pro: uncalibrated, the reporter's chip, not in the fleet
-    {"G13C", 0},  // SUBCAP-TABLE (receipts/2026-10-12-submission-cap-calibration)
+    {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
     {"G13G", 5000},  // 13-inch M1, stock Mesa 26.2.4-1, Qwen3-4B: p50 3.47 ms (receipts/2026-10-12-submission-cap-calibration)
     {"G14C", 40000},  // receipts/2026-10-02-submission-cap-19
 };
