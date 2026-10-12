@@ -71,4 +71,5 @@ column.
 
 Ran the kit on hardware that is not here? Open an issue with the
 outputs listed in [ANY-GPU.md](ANY-GPU.md), or submit with the
-collector. Rows are added from real outputs only.
+collector. `./scripts/run-on-your-hardware.sh` produces both in one
+command. Rows are added from real outputs only.

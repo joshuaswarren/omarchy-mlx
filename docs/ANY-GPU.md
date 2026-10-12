@@ -15,6 +15,35 @@ contract (that concept is defined for Apple silicon in
 [docs/new-chip-bringup.md](new-chip-bringup.md)). Do not set the flag
 on an Apple-GPU receipt.
 
+## One command
+
+`scripts/run-on-your-hardware.sh` runs the whole path in this document:
+it checks the prerequisites and names the Omarchy/Arch packages to
+install, stages the pinned MLX source, builds and runs the runtime
+suite, and prints the quick capability report.
+
+```bash
+./scripts/run-on-your-hardware.sh            # check, build, run, collect
+./scripts/run-on-your-hardware.sh --submit   # also publish the report
+```
+
+A run on a terminal offers the same publish step as an exact-word
+`SUBMIT` prompt after the report prints. The published row is the
+printed report and nothing else; the dataset deduplicates identical
+reports by content hash, and [contribute-data.md](contribute-data.md)
+describes the dataset and the redaction. The suite log is not
+published; it stays in the output directory the script prints, and a
+failure report needs it (see "Attach your results").
+
+Verification status of the script:
+
+| Verified | Where |
+|---|---|
+| Prerequisite checks, device detection, `--help`, `--dry-run` | x86_64 CPU-only container (Debian 12), device llvmpipe |
+| Stage, build, runtime suite, quick collector | lavapipe software Vulkan 1.3, same container |
+| AMD, Intel, NVIDIA hardware | not verified |
+| Fresh Omarchy install from the ISO | not verified |
+
 ## Prerequisites
 
 - Linux with a Vulkan 1.3 driver: Mesa ANV (Intel), Mesa RADV (AMD),
