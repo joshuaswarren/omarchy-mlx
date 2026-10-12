@@ -124,28 +124,77 @@ inline int batch_node_budget() {
 // desktop hitch for its whole length (issue #19: ~78 ms submissions
 // stutter, 2-6 ms stay smooth, same GPU busy fraction). Dispatch
 // durations are not cheaply measurable at record time, so the evaluator
-// flushes the open batch once its summed work-group counts reach this
-// budget. The default is calibrated so a 4B decode step splits into
-// ~2-6 ms submissions on the calibration host (measured groups per token
-// and per-group cost in receipts/2026-10-02-submission-cap-19). A single
-// dispatch whose group count alone exceeds the budget still runs whole:
-// splitting happens between dispatches. Copies and fills are not
-// counted; the node and byte budgets keep those batches bounded.
-// MLX_OMARCHY_BATCH_WORK=<groups> overrides; =0 turns the work cap off
-// (node and byte budgets still apply). Scheduling only: every submission
-// already waits on this stream's previous completion and cross-submission
-// waits use ALL_COMMANDS stage masks (batching note above), so splitting
-// at any dispatch boundary preserves every dependency and results stay
-// bit-identical.
+// flushes the open batch once its summed work-group counts reach the
+// budget. Per-group GPU cost is chip-dependent (order 0.1 ms per 1000
+// groups on the M2 Max, 2 ms per 1000 groups on the 13-inch M1), so the
+// default is a per-board table calibrated from device-timestamp profiles
+// to land typical decode submissions at p50 in the 2-6 ms band:
+// receipts/2026-10-02-submission-cap-19 (G14C) and
+// receipts/2026-10-12-submission-cap-calibration (G13C, G13G). Board
+// codes key the rows like the direct-matmul routes above
+// (matmul_direct_select.h): G13C M1 Max, G13G 13-inch M1, G13S M1 Pro,
+// G14C M2 Max. A single dispatch whose group count alone exceeds the
+// budget still runs whole: splitting happens between dispatches. Copies
+// and fills are not counted; the node and byte budgets keep those
+// batches bounded. MLX_OMARCHY_BATCH_WORK=<groups> overrides the table;
+// =0 turns the work cap off (node and byte budgets still apply).
+// Scheduling only: every submission already waits on this stream's
+// previous completion and cross-submission waits use ALL_COMMANDS stage
+// masks (batching note above), so splitting at any dispatch boundary
+// preserves every dependency and results stay bit-identical.
+struct BatchWorkCalibration {
+  // CapabilityReport device-name substring, e.g. "Apple M1 Max (G13C)".
+  std::string_view board;
+  // Calibrated work-groups per submission; 0 marks a board that has no
+  // measurement yet (the row documents the gap instead of guessing).
+  uint64_t budget;
+};
+inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
+    {"G13S", 0},  // M1 Pro: uncalibrated, the reporter's chip, not in the fleet
+    {"G13C", 40000},  // M1 Max, lab default Mesa 69bde15340: both models <= 1.6 ms p50 at 40000 (receipts/2026-10-12-submission-cap-calibration)
+    {"G13G", 5000},  // 13-inch M1, stock Mesa 26.2.4-1, Qwen3-4B: p50 3.47 ms (receipts/2026-10-12-submission-cap-calibration)
+    {"G14C", 40000},  // receipts/2026-10-02-submission-cap-19
+};
 inline constexpr uint64_t kBatchWorkBudget = 40000;
-inline uint64_t batch_work_budget() {
-  static const uint64_t v = []() {
-    const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
-    if (!e) {
-      return kBatchWorkBudget;
+
+// Pure table lookup for the runtime doctest: the calibrated budget for a
+// device name; 0 when nothing calibrated matches (unknown board or a row
+// still at its placeholder).
+inline uint64_t calibrated_batch_work(std::string_view device_name) {
+  const BatchWorkCalibration* best = nullptr;
+  for (const auto& row : kBatchWorkCalibration) {
+    if (device_name.find(row.board) == std::string_view::npos) {
+      continue;
     }
-    long long n = std::atoll(e);
-    return n > 0 ? static_cast<uint64_t>(n) : 0;
+    if (!best || row.board.size() > best->board.size()) {
+      best = &row;
+    }
+  }
+  return best ? best->budget : 0;
+}
+
+// The default for an uncalibrated board: the most conservative calibrated
+// value (shortest submissions). Under-budging costs a little submit
+// overhead; over-budging is the stutter the cap exists to prevent.
+inline uint64_t batch_work_fallback() {
+  uint64_t lo = kBatchWorkBudget;
+  for (const auto& row : kBatchWorkCalibration) {
+    if (row.budget > 0 && row.budget < lo) {
+      lo = row.budget;
+    }
+  }
+  return lo;
+}
+
+inline uint64_t batch_work_budget(std::string_view device_name) {
+  static const uint64_t v = [device_name]() {
+    const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
+    if (e) {
+      long long n = std::atoll(e);
+      return n > 0 ? static_cast<uint64_t>(n) : 0;
+    }
+    uint64_t cal = calibrated_batch_work(device_name);
+    return cal > 0 ? cal : batch_work_fallback();
   }();
   return v;
 }
