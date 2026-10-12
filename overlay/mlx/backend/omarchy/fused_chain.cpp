@@ -1869,7 +1869,7 @@ EagerFusionScope::~EagerFusionScope() {
 }
 
 // Out-gate prologue fold (sigmoid*multiply recomputed per o_proj workgroup).
-// Chip-keyed like the other decode-path defaults: it gained on G13C (jw16,
+// Chip-keyed like the other decode-path defaults: it gained on G13C (the 16-inch
 // M1 Max) but every o_proj workgroup redoes the 4096-element gate on
 // G13G (T8103), where decode dropped ~1.7% versus the wheel without it
 // (H147). MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.

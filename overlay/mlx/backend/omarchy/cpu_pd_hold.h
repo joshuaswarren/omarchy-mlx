@@ -12,13 +12,13 @@ class Device;
 
 // CPU deep-idle hold for the Apple M1 (T8103, G13G) GPU performance state.
 //
-// Measured on jwm1 (receipts/2026-10-06-cpu-pd-hold): while every CPU core
+// Measured on a 13-inch M1 (receipts/2026-10-06-cpu-pd-hold): while every CPU core
 // can sit in the deep idle state `CPU PD` (cpuidle state1, exit latency
 // 10 us) the GPU firmware settles in a lower performance state: a 4096^2
 // fp16 matmul loop runs 0.506 TFLOPS instead of 0.598 (+18 %), and the real
 // cells gain TTFT -2.7 % (2B) / -6.5 % (4B) / -7.5 % (9B) and decode
 // +0.6..0.8 %. Any CPU activity that keeps the cores out of CPU PD has the
-// same effect. The M1 Max (G13C, jw16) shows no effect.
+// same effect. The 16-inch M1 Max (G13C) shows no effect.
 //
 // While a stream has GPU work in flight the backend therefore holds a
 // PM-QoS CPU latency request of 0 us (an open /dev/cpu_dma_latency fd

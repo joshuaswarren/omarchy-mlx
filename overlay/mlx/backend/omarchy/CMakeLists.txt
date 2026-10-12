@@ -333,7 +333,7 @@ omarchy_shader(qmm_vec_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUB
 # qmv_fast keeps four rows per simdgroup): the x quads load once per block
 # and feed both rows, the row loads sit independent in flight, and the
 # per-row chain is unchanged, so the digests hold
-# (receipts/2026-09-25-jw16-gpu-levers). Four slots keep 8 columns per
+# (private GPU-levers receipt, 2026-09-25, 16-inch M1 Max). Four slots keep 8 columns per
 # workgroup, the dispatch contract (kGemvColumnsPerGroup).
 omarchy_shader(qmm_vec_q4_word_f32 shaders/qmm_vec.comp -DQMM_VEC_Q4_WORD=1)
 omarchy_shader(qmm_vec_q4_word_f16 shaders/qmm_vec.comp -DUSE_FP16=1 -DQMM_VEC_Q4_WORD=1)

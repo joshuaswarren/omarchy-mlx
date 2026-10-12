@@ -45,7 +45,7 @@ inline size_t ane_packed_offset(
 // plane * plane_stride + row * row_stride and stores width contiguous
 // elements, and the dense source is row-major, so a full row is one
 // memcpy of width * element_size bytes. The per-element reference loops
-// this replaces measured ~50-80 ms per encoder island submit on jwm1;
+// this replaces measured ~50-80 ms per encoder island submit on a 13-inch M1;
 // row memcpy is the same byte placement without the per-element call.
 //
 // `elements` caps the transfer below the full tensor when a caller
