@@ -114,7 +114,7 @@ diff --git a/mlx/backend/no_cpu/primitives.cpp b/mlx/backend/no_cpu/primitives.c
 index 45ffbd5d10..e3ee598ea3 100644
 --- a/mlx/backend/no_cpu/primitives.cpp
 +++ b/mlx/backend/no_cpu/primitives.cpp
-@@ -119,6 +119,7 @@ NO_CPU(Expm1)
+@@ -119,7 +119,8 @@ NO_CPU(Expm1)
  NO_CPU(FFT)
  NO_CPU(Flatten)
  NO_CPU(Floor)
