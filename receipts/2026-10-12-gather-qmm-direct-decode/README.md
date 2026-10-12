@@ -8,7 +8,7 @@ Every figure below names its chip, driver and governor. The lab's measurement no
 
 | Rows | Chip | Driver | Governor | Kernel |
 |---|---|---|---|---|
-| per-call and decode-step rows measured before 2026-10-12 01:23Z | 14-inch M2 Max (G14C), 16-inch M1 Max (G13C), 13-inch M1 (G13G) | packaged Honeykrisp library `40282811c6e14ef9` (Mesa git `69bde15340`) | `schedutil` (the fleet baseline before the switch to `performance`; the tickets did not read it back) | 7.1.12-2 12.6 on the M2 Max and the M1 Max (read in the ticket logs); not recorded for the M1 |
+| per-call and decode-step rows measured before 2026-10-12 01:23Z | 14-inch M2 Max (G14C), 16-inch M1 Max (G13C), 13-inch M1 (G13G) | packaged Honeykrisp library `40282811c6e14ef9` (Mesa git `69bde15340`) | `schedutil` (the fleet baseline before the switch to `performance`; the tickets did not read it back) | 7.1.12-2 12.6 on all three chips (read in the ticket logs) |
 | M2 Max ablation and the same-block block | 14-inch M2 Max (G14C) | same library `40282811c6e14ef9` | `performance` (read back) | 7.1.12-2 `20261011.15` |
 
 Wheel under test for the per-call and decode-step rows: `0.32.4.dev202610111829+d2a3067a` (PR 124 library code before the test and docs commit), libmlx.so `80b7e6dd1fbb8c9d`. Wheel for the same-block block: `0.32.4.dev202610120329+18059c80` (sha256 `2c124f9cff3837c8b221ba49a5583406ace2c10a035722ccc4f1bb396c1541f7`).
@@ -38,7 +38,7 @@ Two kinds of number, not interchangeable:
 
 2. The same arms measured as decode tokens per second over greedy generations, three interleaved rounds, with the filler load on the Neural Engine running (`performance`, kernel `20261011.15`, wheel `18059c80`): gemma-4-26B-A4B, staged route 14.27 / 14.28 / 14.28, direct route 19.77 / 19.71 / 19.72, old wheel (main `e57cb301`) 14.23 / 14.24 / 14.01. Direct over staged 1.381 (control spread 0.1 percent); staged over the old wheel 1.004. Prefill staged 227.70 / 227.40 / 225.68, direct 226.72 / 227.85 / 225.42 (0.997). That block's raw logs are summarized in a bundle whose `SHA256SUMS` file hashes to `6ec23d073210bbabd91bab880d658a7e2659abb4efbc709aa72ac009453646f5`.
 
-The saving is the stable quantity: 18.7 ms per token in (1), 18.4 ms in the ablation below, 19.4 ms in (2). The ratio grows as the rest of the step shrinks.
+The saving is the stable quantity: 18.7 ms per token in (1), 18.4 ms in the ablation below, 19.3 ms in (2) (70.03 ms against 50.71 ms per token, from the medians 14.28 and 19.72). The ratio grows as the rest of the step shrinks.
 
 ## Where the step goes after this change (M2 Max, gemma-4-26B-A4B, `performance`, kernel `20261011.15`)
 
