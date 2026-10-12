@@ -79,8 +79,8 @@ namespace mlx::core {
 
 namespace {
 
-// Width/rows dispatch guard for the Apple row reduction, measured on jw16
-// (M1 Max, paired interleaved same-binary A/B, notebook lane Jw16NormApple3):
+// Width/rows dispatch guard for the Apple row reduction, measured on a 16-inch M1 Max
+// (G13C, paired interleaved same-binary A/B, notebook lane NormApple3):
 // - width 128 loses 13-31% on the gated/scaled kernels and ~9% on the GDN
 //   decode epilogue, so 128 stays on the deployed kernels;
 // - widths 256 and 2048 win at decode row counts (direct rms_norm up to
@@ -8031,7 +8031,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // Batch-shared GEMV: a [B, 1, K] decode batch (B <= 4) against one 2D
     // weight reads each weight word once per block instead of once per row;
     // every row keeps the single-row chain. On by default since 2026-10-07
-    // (jw16: BatchGenerator B=4 27.4 -> 25.6 ms/step, oMLX c4 +3.3%, row
+    // (16-inch M1 Max: BatchGenerator B=4 27.4 -> 25.6 ms/step, oMLX c4 +3.3%, row
     // digests unchanged); MLX_OMARCHY_QMV_BATCH=0 (read live) restores the
     // per-row kernel.
     if (decode_path_override("MLX_OMARCHY_QMV_BATCH") != 0 &&
@@ -9133,7 +9133,7 @@ bool dispatch_rope_pair(
   // Input readiness is the evaluator tape contract, exactly as for the
   // single RoPE dispatch: data_shared_ptr() can read as null for a
   // lazily-installed producer buffer at this point while the binding is
-  // still valid (measured on jw16 - the null checks refused every pair
+  // still valid (measured on a 16-inch M1 Max - the null checks refused every pair
   // while the ordinary path produced pinned digests from the same
   // arrays), so no null or input_ready probe happens here.
   if (q_in.offset() % q_in.itemsize() != 0 ||
@@ -12432,7 +12432,7 @@ void GatedDeltaUpdate::eval_gpu(
   // pf1145 e2e +1.84%, 5/5 disjoint pairs; kernel-only -12.3%/-13.7% on
   // G13G and -13.6%/-15.2% on G14C at T=512/1024; digests equal at every
   // depth; captured-operand doctests bit-identical incl. a non-zero
-  // initial state; jwm1 pins exact). Kill switch MLX_OMARCHY_GDN_HOIST=0
+  // initial state; the 13-inch M1 pins exact). Kill switch MLX_OMARCHY_GDN_HOIST=0
   // restores the shipped single-dispatch route exactly.
   static const bool gdn_hoist_env =
       std::getenv("MLX_OMARCHY_GDN_HOIST") == nullptr ||
@@ -12451,7 +12451,7 @@ void GatedDeltaUpdate::eval_gpu(
   //   0 (or 0/off/false/no): off - the exact scan (T<64) and chunked
   //     coopmat/hoist routes.
   //   1 (or 1/on/true/yes): T >= 64 - the chunked coopmat kernel's
-  //     territory (measured jwm1 G13G: 4.08 vs 6.87 ms/call at T=512).
+  //     territory (measured on a 13-inch M1, G13G: 4.08 vs 6.87 ms/call at T=512).
   //   2: T >= 2 - every prefill shape the contract allows, the TTFT
   //     lever for short prompts (the exact 4-lane scan costs 58-94
   //     us/token there; T=11 is 748 us per call, 18 calls in a pf).
@@ -14463,7 +14463,7 @@ void rope_trig_gate(
       // satisfied: the dispatching thread deadlocked until the watchdog
       // fired and the generation thread died ('Vulkan timeline counter
       // failed to advance ... target=1', the mlx_lm.server / oMLX
-      // prefill serving hangs - receipts/2026-09-19-mlxlm-server-hang-jw16.md).
+      // prefill serving hangs - private receipt 2026-09-19, mlx_lm server hang, 16-inch M1 Max).
       // synchronize() above proved the data is final, so drop the stale
       // latch and read.
       offset.detach_event();
@@ -15104,7 +15104,7 @@ void ScaledDotProductAttention::eval_gpu(
   // the arm engages from 12 keys - just under the 13-key first decode step
   // of a 12-token prompt - through 128; larger contexts keep the
   // composition. The 128 cap is also the measured-safe side of both
-  // 2026-09-24 sweeps (receipts-work/receipt-sdpa-k512-jw16.md): the arm
+  // 2026-09-24 sweeps (private SDPA k512 receipt): the arm
   // wins through 192 keys, ties near 256-300, and loses 33-46% in the
   // 448..544 contract regime (502.9 vs 339.8 us at 512), where the shipped
   // <=2048 bound had been routing decode to the slower arm.
@@ -15328,7 +15328,7 @@ void ScaledDotProductAttention::eval_gpu(
         static_cast<uint32_t>(batch));
     return;
   }
-  // Route order for bf16 prefill (2026-10-09, TFProf receipt, jw16 G13C):
+  // Route order for bf16 prefill (2026-10-09, TFProf receipt, 16-inch M1 Max G13C):
   // the chunked composed route measured 782 GMAC/s at the H3 demo shape
   // (56 heads, 6417 rows) against the flash kernel's 245 - 3.2x - with
   // route agreement at bf16 granularity (max abs diff 4.9e-4), and its
