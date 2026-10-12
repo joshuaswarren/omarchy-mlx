@@ -344,11 +344,14 @@ void VulkanAllocator::free(Buffer buffer) {
 void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   // Callable from any thread: the allocator mutex serializes passes, and
   // each entry's own stamps decide recyclability. A block recycles only
-  // when its completion generation is strictly behind |cleanup_done_
-  // through| (the design's one-generation rule: observing generation N
-  // does not prove the driver's submit-final cleanup for N has run) and
-  // its execution fence has signalled. A fence that signals after this
-  // pass is picked up by a later one - the dispatcher keeps ticking
+  // when its completion generation is at or below |cleanup_done_through|.
+  // Callers pass a generation whose cleanup is proven: the drain pass passes
+  // one behind the newest drained generation, and the OOM retry passes the
+  // requested one after a later generation drained or the queue went idle
+  // (the design's one-generation rule: observing generation N does not
+  // prove the driver's submit-final cleanup for N has run). A block also
+  // needs its execution fence to have signalled. A fence that signals after
+  // this pass is picked up by a later one - the dispatcher keeps ticking
   // release passes while fences are outstanding or blocks are parked.
   std::unique_lock lk(mutex_);
   if (quarantine_.empty()) {
