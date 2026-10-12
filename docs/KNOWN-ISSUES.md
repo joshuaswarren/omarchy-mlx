@@ -31,9 +31,11 @@ outside run on a UHD 770, PR
 An RTX 5060 Ti (NVIDIA 615.71.09) measured 0.78-0.88 across 5 runs
 in the same outside report. The interleaved copies still verify
 byte-for-byte, so the loss is a timing characteristic, not a
-correctness failure. The reporter suspects the host-visible ReBAR
-allocation every array uses on a discrete GPU (CPU reads over PCIe
-at about 3 MB/s); a global serialization lock would sit near 0.5.
+correctness failure. The host-visible ReBAR allocation every array uses
+on a discrete GPU is possibly the cause. That was not tested. The
+report's CPU reads over PCIe, about 3 MB/s, are a different path from
+the two-stream copy timing. A global serialization lock would sit near
+0.5.
 The same run shows one `SUBMIT-RECOVER ... resubmitted 1 stalled
 batch` line per run (the submit-recovery ladder fired once; not
 investigated).
