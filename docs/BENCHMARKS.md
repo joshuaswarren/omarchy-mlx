@@ -170,16 +170,29 @@ gemma-4-E4B on the newer driver: 9.02 / 111.21, 9.05 / 111.59 and 9.08 / 110.0 (
 
 ## Set the CPU governor for local AI
 
-Decode speed on the M1-class chips follows the CPU clock. The Linux default governor, schedutil, held the clocks low during decode. The performance governor kept them at the top.
+Decode speed on the 13-inch M1 and the 16-inch M1 Max changed with the CPU governor in our tests with no ANE work running. The Linux default governor, schedutil, held the clocks low during decode. The performance governor kept them at the top.
 
-| Chip | Model | schedutil decode (tokens per second) | performance decode | Ratio | Prefill ratio |
+Every row names its driver, governor and ANE state. "v3" is the private ICD at Mesa git `6543eeb7df7`. "package" is the installed driver at Mesa git `69bde15340`. Rows before 2026-10-11 22:36Z did not record the governor and say "schedutil (default, not recorded)". All rows are gemma-4-E4B on the 13-inch M1 unless the first column says otherwise. All rows use the wheel built from main at `e57cb301`. Prefill moved by 1.1% or less in the interleaved blocks.
+
+| Chip, model | Driver | Governor | ANE filler | Decode (tokens per second) | Kind |
 |---|---|---|---|---|---|
-| 13-inch M1 | gemma-4-E4B | 10.65, 10.66, 10.63 | 15.27, 15.34, 15.17 | 1.434 | 1.009 |
-| 16-inch M1 Max | gemma-4-26B-A4B | 10.40, 10.39 | 12.84, 12.79, 12.80 | 1.231 | 1.011 |
+| 13-inch M1, gemma-4-E4B | v3 | schedutil | off | 10.65, 10.66, 10.63 | interleaved block, one session |
+| 13-inch M1, gemma-4-E4B | v3 | performance | off | 15.27, 15.34, 15.17 | same block, ratio 1.434 |
+| 13-inch M1, gemma-4-E4B | package | schedutil (default, not recorded) | off | 9.02, 9.05, 9.08 | single runs |
+| 13-inch M1, gemma-4-E4B | package | schedutil (default, not recorded) | on | 9.02, 8.98, 8.97 | arm of an interleaved block against v3 |
+| 13-inch M1, gemma-4-E4B | package | performance | on | 9.18 | one run |
+| 16-inch M1 Max, gemma-4-26B-A4B | v3 | schedutil | off | 10.40, 10.39 | interleaved block, ratio 1.231 |
+| 16-inch M1 Max, gemma-4-26B-A4B | v3 | performance | off | 12.84, 12.79, 12.80 | same block |
+| 14-inch M2 Max, gemma-4-26B-A4B | package | schedutil (default, not recorded) | on | 12.22, 12.20, 12.08 | arm of an interleaved block against v3 |
+| 14-inch M2 Max, gemma-4-26B-A4B | package | performance | on | 14.21 | one run |
+| 14-inch M2 Max, Qwen3.6-35B-A3B | package | schedutil (default, not recorded) | on | 14.55, 14.54, 14.55 | arm of an interleaved block against v3 |
+| 14-inch M2 Max, Qwen3.6-35B-A3B | package | performance | on | 14.63 | one run |
 
-Each row alternates the two governors in one session, schedutil first, on the same boot and the same wheel (main at `e57cb301`) and the same driver, the private ICD at Mesa git `6543eeb7df7`. The ANE filler was off. The ratio is the median of the performance runs over the median of the schedutil runs. Decode spread inside one governor was 0.3% on the 13-inch M1 and 0.1% on the 16-inch M1 Max for schedutil. The first schedutil run on the 16-inch M1 Max read 1.77 tokens per second, with the machine busy at its start (64 W, fans at 2864 rpm). It is left out of the table. With it, the median is 10.39 and the ratio is 1.232. Prefill moved by 1.1% or less.
+The first schedutil run of the 16-inch M1 Max block read 1.77 tokens per second, with the machine busy at its start (64 W, fans at 2864 rpm). It is left out of the table. With it, the median is 10.39 and the ratio is 1.232.
 
-The 14-inch M2 Max is not measured yet.
+The 13-inch M1 and 16-inch M1 Max ratios compare two governors in one session, on one driver, with no ANE work running. The 13-inch M1 rows with the ANE filler on all use the package driver. Under both governors they read about 9 tokens per second. The filler-off performance block used the v3 driver, so the gap between 15.27 and 9.18 mixes a driver difference, an ANE difference and a difference in hour. We have not separated them. A same-driver test with the filler on and off is queued. On the 14-inch M2 Max with the filler on, the performance rows are single runs against the schedutil block arms from earlier in the day. They read 16.5% higher for gemma-4-26B-A4B and 0.5% higher for Qwen3.6-35B-A3B. That is not an interleaved comparison. The 16-inch M1 Max has no performance row with the filler on yet.
+
+The 14-inch M2 Max filler-off case is not measured.
 
 To try it, read the current governor so you can put it back:
 
@@ -190,6 +203,6 @@ for p in /sys/devices/system/cpu/cpufreq/policy*; do echo performance | sudo tee
 
 To restore, write the value you read back to each policy. The setting does not survive a reboot.
 
-If you run work on the ANE, you may already see the high clock. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. The ANE driver's boost is the likely cause. We have not isolated it.
+If you run work on the ANE, do not expect the 13-inch M1 gain from the table above. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. Decode with the filler on was about 9 tokens per second under both governors. We have not isolated why.
 
 What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
