@@ -170,7 +170,7 @@ gemma-4-E4B on the newer driver: 9.02 / 111.21, 9.05 / 111.59 and 9.08 / 110.0 (
 
 ## Set the CPU governor for local AI
 
-Decode speed on the M1-class chips follows the CPU clock. The Linux default governor, schedutil, held the clocks low during decode. The performance governor kept them at the top.
+Decode speed on the M1-class chips changed with the CPU governor in our tests with no ANE work running. The Linux default governor, schedutil, held the clocks low during decode. The performance governor kept them at the top.
 
 | Chip | Model | schedutil decode (tokens per second) | performance decode | Ratio | Prefill ratio |
 |---|---|---|---|---|---|
@@ -181,6 +181,8 @@ Each row alternates the two governors in one session, schedutil first, on the sa
 
 The 14-inch M2 Max is not measured yet.
 
+With ANE work running, the performance governor did not help on the 13-inch M1. In runs with the ANE filler on, gemma-4-E4B read 9.18 tokens per second under performance and 9.02, 9.05 and 9.08 under schedutil. Those are separate single runs, not an interleaved block. The cause of the low decode with ANE work running is not found.
+
 To try it, read the current governor so you can put it back:
 
 ```sh
@@ -190,6 +192,6 @@ for p in /sys/devices/system/cpu/cpufreq/policy*; do echo performance | sudo tee
 
 To restore, write the value you read back to each policy. The setting does not survive a reboot.
 
-If you run work on the ANE, you may already see the high clock. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. The ANE driver's boost is the likely cause. We have not isolated it.
+If you run work on the ANE, the performance governor is not the setting to change. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. Decode was still low in that state. We have not isolated why.
 
 What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
