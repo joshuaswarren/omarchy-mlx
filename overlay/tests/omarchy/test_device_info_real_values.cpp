@@ -181,7 +181,7 @@ TEST_CASE("set_wired_limit never exceeds expected memory bounds") {
 TEST_CASE("default_hk_sysmem_bytes keeps the stock heap on small hosts") {
   // MemTotal <= 32 GiB: MemTotal - 16 GiB never beats the 50% DRIR
   // default, so nullopt keeps mesa's heap byte-for-byte. 16 GB-class
-  // machines (7.55-8 GiB heap) must be unchanged, and jwm1's measured
+  // machines (7.55-8 GiB heap) must be unchanged, and the 13-inch M1's measured
   // 15.1 GiB MemTotal (15843696 kB) with it.
   namespace omarchy = mlx::core::omarchy;
   constexpr uint64_t kGiB = 1ull << 30;
@@ -201,7 +201,7 @@ TEST_CASE("default_hk_sysmem_bytes raises large hosts and clamps at 60") {
     return static_cast<uint64_t>(v * static_cast<double>(kGiB));
   };
   // Past the crossover the heap is MemTotal - 16 GiB (1 MiB-rounded like
-  // mesa): 48 GiB -> 32, 62 GiB (jw16-class) -> 46, 64 GiB -> 48.
+  // mesa): 48 GiB -> 32, 62 GiB (16-inch M1 Max class) -> 46, 64 GiB -> 48.
   CHECK(omarchy::default_hk_sysmem_bytes(gib(48)) == gib(32));
   CHECK(omarchy::default_hk_sysmem_bytes(gib(62)) == gib(46));
   CHECK(omarchy::default_hk_sysmem_bytes(gib(64)) == gib(48));

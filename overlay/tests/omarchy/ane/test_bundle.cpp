@@ -940,7 +940,7 @@ TEST_CASE("digest cache skips re-hash on unchanged file identity") {
   REQUIRE(load_bundle(fixture.dir.path()).programs.size() == 2);
 
   // Same size, same mtime, different content: since the key carries
-  // ctime_ns (Jw16ParakeetWarm, Main review 2026-10-03) an in-place
+  // ctime_ns (ParakeetWarm, Main review 2026-10-03) an in-place
   // rewrite always moves ctime — the documented same-mtime trade is
   // reversed and the change is caught by a full re-verify.
   const auto payload = fixture.dir.path() / "program-0.anec";
@@ -1028,7 +1028,7 @@ TEST_CASE("digest cache sidecar serves a fresh process without re-hash") {
   };
 
   // helper: identity key line for the CURRENT file state (5 fields incl.
-  // ctime_ns — the format the Jw16ParakeetWarm key carries)
+  // ctime_ns — the format the ParakeetWarm key carries)
   auto key_line = [&](const std::string& digest) {
     struct ::stat st {};
     REQUIRE(::stat(payload.c_str(), &st) == 0);
@@ -1383,7 +1383,7 @@ TEST_CASE("load_bundle_sealed enforces the directory contract") {
 }
 
 // ---------------------------------------------------------------------
-// Seal stamp fast path (Jw16ParakeetWarm, Main review 2026-10-03):
+// Seal stamp fast path (ParakeetWarm, Main review 2026-10-03):
 // eligibility, forged/stale sidecars, force env, root-owned chain.
 
 namespace {

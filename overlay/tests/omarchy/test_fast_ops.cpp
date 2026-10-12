@@ -2137,7 +2137,7 @@ constexpr double f32_tolerance = 1e-6;
 // promise the two compilations agree in the last bit - and the
 // driver's sin/cos range reduction has a documented accuracy envelope
 // (known-defects: 4.8e-3 absolute error at theta 123457). Observed on
-// the M1 (jwm1 rope-fastops.log, main 6a57c84, 2026-09-04): f32 deltas
+// the M1 (13-inch M1 rope-fastops.log, main 6a57c84, 2026-09-04): f32 deltas
 // <= 6.2e-4 and f16 deltas <= 2 ulp, every failing element inside
 // that envelope; no garbage-corruption class values. llvmpipe codegen
 // is deterministic and bit-exact, so the strict contract holds where
@@ -3928,7 +3928,7 @@ TEST_CASE("sdpa vjp fd parity across degenerate rep=1 shapes (dq dk dv)") {
 }
 
 // Known-failing value defects the new coverage surfaced (2026-10-03;
-// llvmpipe and, for the qL=1 zeros, jw16 M1 Max hardware; both build
+// llvmpipe and, for the qL=1 zeros, 16-inch M1 Max hardware; both build
 // types; separate signatures):
 // 1. qL == 1 with kL > 1 maskless: dk and dv come back all zero while
 //    dq and the forward stay correct (dS provably nonzero via dq).
