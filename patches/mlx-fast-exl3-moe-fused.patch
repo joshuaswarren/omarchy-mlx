@@ -115,7 +115,7 @@
    RMSNormVJP(
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -879,9 +879,126 @@
+@@ -879,9 +879,134 @@
      }
      return std::vector<array>{astype(*out, out_type, s)};
    };
@@ -149,8 +149,16 @@
 +        out_type,
 +        window,
 +        &decline);
++    // MLX_OMARCHY_EXL3_FUSED=1 forces the fused arm whenever the
++    // geometry qualifies, ignoring the small-bank heuristic (the E
++    // invariance test needs it at geometries whose decoded bank is
++    // small); unset or any other value keeps the heuristic.
++    const char* fuse_knob = std::getenv("MLX_OMARCHY_EXL3_FUSED");
++    bool force_fused =
++        fuse_knob != nullptr && std::strcmp(fuse_knob, "1") == 0;
 +    double decoded_bytes = 12.0 * static_cast<double>(experts) * hidden * inter;
-+    bool small_bank = qualified && decoded_bytes < 256.0 * 1024 * 1024;
++    bool small_bank = qualified && !force_fused &&
++        decoded_bytes < 256.0 * 1024 * 1024;
 +    if (qualified && !small_bank) {
 +      int chunk_rows = 2;
 +      if (const char* rows_env = std::getenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
@@ -245,7 +253,7 @@
    return fallback(
        {x,
         gate_trellis, gate_suh, gate_svh,
-@@ -969,6 +1086,15 @@
+@@ -969,6 +1094,15 @@
        window_ == a_other.window_;
  }
  

@@ -273,235 +273,6 @@ array run_op(const CaseData& c, const Pack& p, Dtype dt, Stream s) {
       s);
 }
 
-// f32 -> f16 bit pattern (RNE), the same rounding the reference chain and
-// the kernel use at every finish round.
-uint16_t f32_to_f16_bits(float v) {
-  uint32_t b;
-  std::memcpy(&b, &v, 4);
-  uint32_t sign = (b >> 16) & 0x8000u;
-  uint32_t exp = (b >> 23) & 0xFFu;
-  uint32_t man = b & 0x7FFFFFu;
-  if (exp == 0xFFu) {
-    return static_cast<uint16_t>(sign | 0x7C00u | (man != 0u ? 0x0200u : 0u));
-  }
-  int ne = static_cast<int>(exp) - 127 + 15;
-  if (ne >= 31) {
-    return static_cast<uint16_t>(sign | 0x7C00u);
-  }
-  if (ne <= 0) {
-    if (ne < -10) {
-      return static_cast<uint16_t>(sign);
-    }
-    uint32_t m = man | 0x800000u;
-    uint32_t shift = static_cast<uint32_t>(14 - ne);
-    uint32_t rem = m & ((1u << shift) - 1u);
-    uint32_t h = m >> shift;
-    uint32_t half = 1u << (shift - 1u);
-    if (rem > half || (rem == half && (h & 1u) == 1u)) {
-      h++;
-    }
-    return static_cast<uint16_t>(sign | h);
-  }
-  uint32_t h = (static_cast<uint32_t>(ne) << 10) | (man >> 13);
-  uint32_t rem = man & 0x1FFFu;
-  if (rem > 0x1000u || (rem == 0x1000u && ((man >> 13) & 1u) == 1u)) {
-    h++;
-  }
-  if (h >= 0x7C00u) {
-    return static_cast<uint16_t>(sign | 0x7C00u);
-  }
-  return static_cast<uint16_t>(sign | h);
-}
-
-// The project reference chain R1 (expert_exl3.zig, mirrored by
-// gen_moe_fused.zig moeProjectRef): prepareInput (f16 round, H128, f16
-// round), the tile-order GEMV with one f16 round per finished projection,
-// the clamped SwiGLU in f32, the down chain whose prepareInput rounds h,
-// the f16-ROUNDED combine input, score combine. Weights come from
-// fast::exl3_decode on the CPU stream (the bit-exact R1 decoder), walked
-// in the same tk/tn/r/c order the kernel uses.
-struct R1Ref {
-  std::vector<float> o32;
-};
-
-float r1_had(float* acc, const float* v) {
-  const float s = 0.08838834764831845f;
-  for (int i = 0; i < 128; i++) {
-    float a = 0.0f;
-    for (int k = 0; k < 128; k++) {
-      float he = (__builtin_popcount(static_cast<unsigned>(i & k)) & 1) == 0
-          ? s
-          : -s;
-      a += he * v[k];
-    }
-    acc[i] = a;
-  }
-  return s;
-}
-
-void r1_prepare_input(
-    const std::vector<float>& x,
-    const std::vector<uint16_t>& suh,
-    std::vector<float>& out) {
-  for (size_t i = 0; i < x.size(); i++) {
-    out[i] = f16_to_f32(f32_to_f16_bits(x[i])) * f16_to_f32(suh[i]);
-  }
-  std::vector<float> hv(128);
-  for (size_t b = 0; b + 128 <= out.size(); b += 128) {
-    r1_had(hv.data(), out.data() + b);
-    for (int i = 0; i < 128; i++) {
-      out[b + i] = f16_to_f32(f32_to_f16_bits(hv[i]));
-    }
-  }
-}
-
-void r1_finish_output(
-    const std::vector<float>& inner,
-    const std::vector<uint16_t>& svh,
-    std::vector<float>& out) {
-  out = inner;
-  std::vector<float> hv(128);
-  for (size_t b = 0; b + 128 <= out.size(); b += 128) {
-    r1_had(hv.data(), out.data() + b);
-    for (int i = 0; i < 128; i++) {
-      out[b + i] = hv[i];
-    }
-  }
-  for (size_t i = 0; i < out.size(); i++) {
-    out[i] = f16_to_f32(f32_to_f16_bits(out[i] * f16_to_f32(svh[i])));
-  }
-}
-
-// Decodes every expert of one bank to f32 weights [E, in, out] via the
-// CPU reference decoder with the caller's per-expert scale planes.
-void r1_decode_bank(
-    const array& t,
-    const array& suh,
-    const array& svh,
-    int in_f,
-    int out_f,
-    int bits,
-    Stream cs,
-    std::vector<float>& w) {
-  const int E = t.shape(0);
-  const size_t per = t.size() / E;
-  w.assign(static_cast<size_t>(E) * in_f * out_f, 0.0f);
-  const uint16_t* tp = t.data<uint16_t>();
-  const uint16_t* sp = suh.data<uint16_t>();
-  const uint16_t* vp = svh.data<uint16_t>();
-  for (int e = 0; e < E; e++) {
-    std::vector<uint16_t> te(tp + e * per, tp + (e + 1) * per);
-    std::vector<uint16_t> se(
-        sp + static_cast<size_t>(e) * in_f,
-        sp + static_cast<size_t>(e + 1) * in_f);
-    std::vector<uint16_t> ve(
-        vp + static_cast<size_t>(e) * out_f,
-        vp + static_cast<size_t>(e + 1) * out_f);
-    array ta(te.data(), Shape{static_cast<int>(per)}, uint16);
-    array sase(se.data(), Shape{in_f}, uint16);
-    array svve(ve.data(), Shape{out_f}, uint16);
-    array w16 = fast::exl3_decode(ta, sase, svve, in_f, out_f, bits, 15,
-                                  float16, cs);
-    eval(w16);
-    const uint16_t* wp = w16.data<uint16_t>();
-    size_t base = static_cast<size_t>(e) * in_f * out_f;
-    for (size_t i = 0; i < static_cast<size_t>(in_f) * out_f; i++) {
-      w[base + i] = f16_to_f32(wp[i]);
-    }
-  }
-}
-
-R1Ref r1_reference(const CaseData& c, const Pack& p, Stream cs) {
-  R1Ref ref;
-  ref.o32.assign(static_cast<size_t>(p.rows) * p.hidden, 0.0f);
-  std::vector<float> wg, wu, wd;
-  r1_decode_bank(c.gt, c.gsuh, c.gsvh, p.hidden, p.inter, p.bits, cs, wg);
-  r1_decode_bank(c.ut, c.usuh, c.usvh, p.hidden, p.inter, p.bits, cs, wu);
-  r1_decode_bank(c.dt, c.dsuh, c.dsvh, p.inter, p.hidden, p.bits, cs, wd);
-  auto gemv = [&](const std::vector<float>& w,
-                  int e,
-                  const std::vector<float>& xt,
-                  int in_f,
-                  int out_f,
-                  std::vector<float>& out) {
-    std::fill(out.begin(), out.end(), 0.0f);
-    const float* we = w.data() + static_cast<size_t>(e) * in_f * out_f;
-    for (int tk = 0; tk < in_f / 16; tk++) {
-      for (int tn = 0; tn < out_f / 16; tn++) {
-        for (int r = 0; r < 16; r++) {
-          float xv = xt[tk * 16 + r];
-          for (int cc = 0; cc < 16; cc++) {
-            out[tn * 16 + cc] +=
-                xv * we[static_cast<size_t>(tk * 16 + r) * out_f + tn * 16 +
-                        cc];
-          }
-        }
-      }
-    }
-    for (auto& v : out) {
-      v = f16_to_f32(f32_to_f16_bits(v));
-    }
-  };
-  const uint32_t* slots = c.slots.data<uint32_t>();
-  const float* scores = c.scores.data<float>();
-  const float* xp = c.x.data<float>();
-  std::vector<float> suhg_e(p.hidden), dummy;
-  std::vector<uint16_t> suhg, suhu, suhd, svhg, svhu, svhd;
-  auto plane = [&](const array& a, int e, int size, std::vector<uint16_t>& out) {
-    const uint16_t* pp = a.data<uint16_t>();
-    out.assign(
-        pp + static_cast<size_t>(e) * size,
-        pp + static_cast<size_t>(e + 1) * size);
-  };
-  std::vector<float> xt(p.hidden), agf(p.inter), auf(p.inter), ag2(p.inter),
-      auf2(p.inter), h(p.inter), xtdf(p.inter), y(p.hidden), y2(p.hidden);
-  for (int r = 0; r < p.rows; r++) {
-    std::vector<float> accrow(p.hidden, 0.0f);
-    std::vector<float> xr(
-        xp + static_cast<size_t>(r) * p.hidden,
-        xp + static_cast<size_t>(r + 1) * p.hidden);
-    for (int j = 0; j < p.topk; j++) {
-      int slot = r * p.topk + j;
-      int e = static_cast<int>(slots[slot]);
-      float sc = scores[slot];
-      plane(c.gsuh, e, p.hidden, suhg);
-      plane(c.usuh, e, p.hidden, suhu);
-      plane(c.dsvh, e, p.hidden, svhd);
-      plane(c.gsvh, e, p.inter, svhg);
-      plane(c.usvh, e, p.inter, svhu);
-      plane(c.dsuh, e, p.inter, suhd);
-      r1_prepare_input(xr, suhg, xt);
-      gemv(wg, e, xt, p.hidden, p.inter, agf);
-      r1_finish_output(agf, svhg, ag2);
-      r1_prepare_input(xr, suhu, xt);
-      gemv(wu, e, xt, p.hidden, p.inter, auf);
-      r1_finish_output(auf, svhu, auf2);
-      for (int o = 0; o < p.inter; o++) {
-        float a = ag2[o];
-        float u = auf2[o];
-        if (p.limit > 0.0f) {
-          a = std::min(a, p.limit);
-          float am = std::min(std::fabs(u), p.limit);
-          u = (u < 0.0f) ? -am : am;
-        }
-        float sig = 1.0f / (1.0f + std::exp(-a));
-        h[o] = (a * sig) * u;
-      }
-      r1_prepare_input(h, suhd, xtdf);
-      gemv(wd, e, xtdf, p.inter, p.hidden, y);
-      r1_finish_output(y, svhd, y2);
-      for (int o = 0; o < p.hidden; o++) {
-        accrow[o] += sc * y2[o];
-      }
-    }
-    for (int o = 0; o < p.hidden; o++) {
-      ref.o32[static_cast<size_t>(r) * p.hidden + o] = accrow[o];
-    }
-  }
-  (void)suhg_e;
-  (void)dummy;
-  return ref;
-}
 
 struct Diff {
   double max_abs = 0.0;
@@ -1539,4 +1310,275 @@ TEST_CASE("exl3 moe fused bf16 x") {
   CHECK(ran_cases == 8);
 }
 
+// Streamed-cache expert ids (E well past 32): sushi hands the op the
+// whole 512-slot bank, so the fused arm must address every expert and
+// every scale halfword exactly for any slot id. Small geometry (hidden
+// 256, inter 128, packed 32) keeps every E inside the CT storage range;
+// the banks and planes tile the pack-r1 oracle banks (expert e carries
+// expert e%32's proven bits, top-left tile subset for the smaller
+// grid), so the R1 reference chain gives the exact expected output for
+// the boundary slot ids 0, 1, 127, 128, 255, 256, 257, 300, 511 and
+// E-1. bf16 x and bf16 out match the serve call; the f32-out twin must
+// equal the R1 reference bit for bit and the bf16 output must equal the
+// RNE cast of it.
+TEST_CASE("exl3 moe fused streamed cache expert ids") {
+  if (!gpu_ready()) {
+    return;
+  }
+  OraclePack oc;
+  if (!load_pack_r1(oc)) {
+    skip("oracle_fused.bin not staged or pack-r1 case missing");
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  Stream cs = new_stream(Device::cpu);
+  const int hidden = 256, inter = 128, packed = 32, topk = 10;
+  const int inTiles = hidden / 16, outTiles = inter / 16;
+  const int E512 = 512;
+  const size_t perExpert = (size_t)inTiles * outTiles * packed;
+  const size_t perExpertD = (size_t)(inter / 16) * (hidden / 16) * packed;
 
+  // Tile the pack-r1 grids down to the small geometry (gate/up grid
+  // 160x40 -> inTiles x outTiles; down grid 40x160 -> inter/16 x
+  // hidden/16) for all 512 experts, expert e carrying expert e%32.
+  std::vector<uint16_t> tgT((size_t)E512 * perExpert);
+  std::vector<uint16_t> tuT((size_t)E512 * perExpert);
+  std::vector<uint16_t> tdT((size_t)E512 * perExpertD);
+  for (int e = 0; e < E512; e++) {
+    int se = e % oc.experts;
+    for (int ti = 0; ti < inTiles; ti++) {
+      for (int tn = 0; tn < outTiles; tn++) {
+        size_t dst = ((size_t)e * inTiles * outTiles + ti * outTiles + tn) * packed;
+        size_t src = ((size_t)se * 160 * 40 + ti * 40 + tn) * packed;
+        std::copy(oc.tg.begin() + src, oc.tg.begin() + src + packed,
+                  tgT.begin() + dst);
+        std::copy(oc.tu.begin() + src, oc.tu.begin() + src + packed,
+                  tuT.begin() + dst);
+      }
+    }
+    for (int ti = 0; ti < inter / 16; ti++) {
+      for (int tn = 0; tn < hidden / 16; tn++) {
+        size_t dst = ((size_t)e * (inter / 16) * (hidden / 16) +
+                      ti * (hidden / 16) + tn) * packed;
+        size_t src = ((size_t)se * 40 * 160 + ti * 160 + tn) * packed;
+        std::copy(oc.td.begin() + src, oc.td.begin() + src + packed,
+                  tdT.begin() + dst);
+      }
+    }
+  }
+  auto plane_h = [&](const std::vector<uint16_t>& src) {
+    std::vector<uint16_t> out((size_t)E512 * hidden);
+    for (int e = 0; e < E512; e++) {
+      std::copy(src.begin() + (size_t)(e % oc.experts) * oc.hidden,
+                src.begin() + (size_t)(e % oc.experts) * oc.hidden + hidden,
+                out.begin() + (size_t)e * hidden);
+    }
+    return out;
+  };
+  auto plane_i = [&](const std::vector<uint16_t>& src) {
+    std::vector<uint16_t> out((size_t)E512 * inter);
+    for (int e = 0; e < E512; e++) {
+      std::copy(src.begin() + (size_t)(e % oc.experts) * oc.inter,
+                src.begin() + (size_t)(e % oc.experts) * oc.inter + inter,
+                out.begin() + (size_t)e * inter);
+    }
+    return out;
+  };
+  std::vector<uint16_t> suhgT = plane_h(oc.suhg);
+  std::vector<uint16_t> suhuT = plane_h(oc.suhu);
+  std::vector<uint16_t> svhdT = plane_h(oc.svhd);
+  std::vector<uint16_t> svhgT = plane_i(oc.svhg);
+  std::vector<uint16_t> svhuT = plane_i(oc.svhu);
+  std::vector<uint16_t> suhdT = plane_i(oc.suhd);
+
+  // rows=3 of bf16-quantized x (exact f32 values) and the boundary slot
+  // table; the sweep compares every E against the E=32 mapping below.
+  const int rows_all = 3;
+  const std::vector<float> mults{1.0f, -1.0f, 0.5f};
+  std::vector<float> xrows((size_t)rows_all * hidden);
+  for (int r = 0; r < rows_all; r++) {
+    float m = mults[r % mults.size()];
+    for (int j = 0; j < hidden; j++) {
+      xrows[(size_t)r * hidden + j] = oc.x[j] * m;
+    }
+  }
+  array xq_full = astype(
+      astype(array(xrows.data(), Shape{rows_all, hidden}, bfloat16), float32, cs),
+      float32, cs);
+  eval(xq_full);
+
+  setenv("MLX_OMARCHY_EXL3_FUSED_ROWS", "2", 1);
+  int ran_E = 0;
+  // Tiling probe: the tiled small bank must decode to the top-left
+  // [hidden x inter] corner of the decoded full bank, bit for bit.
+  {
+    std::vector<uint16_t> e0_small(tgT.begin(), tgT.begin() + perExpert);
+    std::vector<uint16_t> s_small(suhgT.begin(), suhgT.begin() + hidden);
+    std::vector<uint16_t> v_small(svhgT.begin(), svhgT.begin() + inter);
+    array ts(array(e0_small.data(), Shape{(int)perExpert}, uint16));
+    array ss(array(s_small.data(), Shape{hidden}, uint16));
+    array vs(array(v_small.data(), Shape{inter}, uint16));
+    array w_small = fast::exl3_decode(
+        ts, ss, vs, hidden, inter, 2, 15, float32, cs);
+    eval(w_small);
+    std::vector<uint16_t> e0_big(oc.tg.begin(),
+                                 oc.tg.begin() + (size_t)160 * 40 * packed);
+    std::vector<uint16_t> s_big(oc.suhg.begin(),
+                                oc.suhg.begin() + oc.hidden);
+    std::vector<uint16_t> v_big(oc.svhg.begin(),
+                                oc.svhg.begin() + oc.inter);
+    array tb(array(e0_big.data(), Shape{160 * 40 * packed}, uint16));
+    array sb(array(s_big.data(), Shape{oc.hidden}, uint16));
+    array vb(array(v_big.data(), Shape{oc.inter}, uint16));
+    array w_big = fast::exl3_decode(
+        tb, sb, vb, oc.hidden, oc.inter, 2, 15, float32, cs);
+    eval(w_big);
+    const float* wsp = w_small.data<float>();
+    const float* wbp = w_big.data<float>();
+    size_t tdiffs = 0;
+    for (int i = 0; i < hidden; i++) {
+      for (int j = 0; j < inter; j++) {
+        if (wsp[i * inter + j] != wbp[i * oc.inter + j]) {
+          tdiffs++;
+        }
+      }
+    }
+    std::printf(
+        "tiling-probe decode diffs=%zu/%d (small[0][0]=%g big-corner[0][0]=%g)\n",
+        tdiffs,
+        hidden * inter,
+        wsp[0],
+        wbp[0]);
+  }
+
+  // E-invariance sweep: bank(e) carries expert e % 32's proven bits, so
+  // the fused output for boundary slot ids at expert count E must equal
+  // the E=32 output for the mapped ids bit for bit - any dependence on
+  // the expert count is the streamed-cache defect class (the device's
+  // E=512 failure with expert ids 0,1,2,255,256,257,300,509,510,511).
+  // f32-out and bf16-out both checked; rows carry three boundary-slot
+  // patterns (Main's list, the device list, the reversed list). xq_full
+  // above is the bf16-quantized three-row input.
+  uint32_t bnd[3][10] = {
+      {0u, 1u, 127u, 128u, 255u, 256u, 257u, 300u, 511u, 511u},
+      {0u, 1u, 2u, 255u, 256u, 257u, 300u, 509u, 510u, 511u},
+      {511u, 510u, 300u, 257u, 256u, 255u, 128u, 127u, 1u, 0u}};
+  std::vector<float> scoresr((size_t)rows_all * topk);
+  for (int r = 0; r < rows_all; r++) {
+    std::copy(oc.scores.begin(), oc.scores.end(),
+              scoresr.begin() + (size_t)r * topk);
+  }
+  array scr = array(scoresr.data(), Shape{rows_all, topk}, float32);
+
+  // The small-bank heuristic would route this geometry to composed (the
+  // E=512 bank decodes to 192 MiB here), so the sweep forces the fused
+  // arm with MLX_OMARCHY_EXL3_FUSED=1; serve keeps the heuristic.
+  setenv("MLX_OMARCHY_EXL3_FUSED", "1", 1);
+  setenv("MLX_OMARCHY_EXL3_FUSED_ROWS", "2", 1);
+  for (int E : {32, 64, 128, 255, 256, 257, 512}) {
+    array gt = array(tgT.data(), Shape{E, inTiles, outTiles, packed}, uint16);
+    array ut = array(tuT.data(), Shape{E, inTiles, outTiles, packed}, uint16);
+    array dt = array(tdT.data(), Shape{E, inter / 16, hidden / 16, packed}, uint16);
+    array gsuh = array(suhgT.data(), Shape{E, hidden}, uint16);
+    array usuh = array(suhuT.data(), Shape{E, hidden}, uint16);
+    array dsvh = array(svhdT.data(), Shape{E, hidden}, uint16);
+    array gsvh = array(svhgT.data(), Shape{E, inter}, uint16);
+    array usvh = array(svhuT.data(), Shape{E, inter}, uint16);
+    array dsuh = array(suhdT.data(), Shape{E, inter}, uint16);
+    for (int rows : {1, 2, 3}) {
+      array xr = slice(xq_full, {0, 0}, {rows, hidden}, {1, 1}, cs);
+      array scrr = slice(scr, {0, 0}, {rows, topk}, {1, 1}, cs);
+      eval(xr, scrr);
+      std::vector<uint32_t> slotsE((size_t)rows * topk);
+      std::vector<uint32_t> slots32((size_t)rows * topk);
+      for (int r = 0; r < rows; r++) {
+        for (int j = 0; j < topk; j++) {
+          uint32_t id = bnd[r][j] < (uint32_t)E ? bnd[r][j]
+                                                : (uint32_t)(E - 1);
+          slotsE[(size_t)r * topk + j] = id;
+          slots32[(size_t)r * topk + j] = id % 32u;
+        }
+      }
+      array srE = array(slotsE.data(), Shape{rows, topk}, uint32);
+      array sr32 = array(slots32.data(), Shape{rows, topk}, uint32);
+      int want_chunks = (rows + 1) / 2;
+
+      omarchy::exl3_moe_decoded_bank_allocations_reset();
+      uint64_t before32 = omarchy::exl3_moe_fused_dispatch_count();
+      array base32 = fast::exl3_moe(
+          xr, gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          sr32, scrr,
+          topk, 15, 0.0f, float32, gs);
+      eval(base32);
+      CHECK(omarchy::exl3_moe_fused_dispatch_count() ==
+            before32 + static_cast<uint64_t>(want_chunks));
+      CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+
+      uint64_t beforeE = omarchy::exl3_moe_fused_dispatch_count();
+      array gotE = fast::exl3_moe(
+          xr, gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          srE, scrr,
+          topk, 15, 0.0f, float32, gs);
+      eval(gotE);
+      CHECK(omarchy::exl3_moe_fused_dispatch_count() ==
+            beforeE + static_cast<uint64_t>(want_chunks));
+
+      auto a32 = astype(base32, float32);
+      auto aE = astype(gotE, float32);
+      eval(a32, aE);
+      const float* p32 = a32.data<float>();
+      const float* pE = aE.data<float>();
+      size_t diffs = 0;
+      int first = -1;
+      for (int j = 0; j < rows * hidden; j++) {
+        // NaN-payload-insensitive: a NaN equals a NaN (the random
+        // fixture can saturate f16 intermediates to inf/nan; both banks
+        // must saturate the same way, payload bits aside).
+        if (p32[j] != pE[j] &&
+            !(std::isnan(p32[j]) && std::isnan(pE[j]))) {
+          if (first < 0) {
+            first = j;
+          }
+          diffs++;
+        }
+      }
+      std::printf(
+          "expert-ids E=%d rows=%d f32 invariance diffs=%zu/%d first=%d "
+          "E=%g base=%g slot0=%u slot9=%u\n",
+          E, rows, diffs, rows * hidden, first,
+          first >= 0 ? pE[first] : 0.0f, first >= 0 ? p32[first] : 0.0f,
+          slotsE[0], slotsE[(size_t)(rows - 1) * topk + topk - 1]);
+      CHECK(diffs == 0);
+
+      array baseb = fast::exl3_moe(
+          astype(xr, bfloat16, gs),
+          gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          sr32, scrr,
+          topk, 15, 0.0f, bfloat16, gs);
+      eval(baseb);
+      array gotb = fast::exl3_moe(
+          astype(xr, bfloat16, gs),
+          gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          srE, scrr,
+          topk, 15, 0.0f, bfloat16, gs);
+      eval(gotb);
+      auto bb32 = astype(baseb, float32);
+      auto bbE = astype(gotb, float32);
+      eval(bb32, bbE);
+      const float* q32 = bb32.data<float>();
+      const float* qE = bbE.data<float>();
+      size_t bdiffs = 0;
+      for (int j = 0; j < rows * hidden; j++) {
+        if (q32[j] != qE[j] &&
+            !(std::isnan(q32[j]) && std::isnan(qE[j]))) {
+          bdiffs++;
+        }
+      }
+      CHECK(bdiffs == 0);
+    }
+    ran_E++;
+  }
+  unsetenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
+  unsetenv("MLX_OMARCHY_EXL3_FUSED");
+  CHECK(ran_E == 7);
+}
