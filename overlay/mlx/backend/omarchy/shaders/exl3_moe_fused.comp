@@ -360,8 +360,7 @@ void main() {
   } else {
     // --- down + SwiGLU + combine: workgroup (row, 128-output block) ----
     uint outBlocks = hidden >> 7;
-    uint chunkRowOffset = params.dims;
-    uint row = chunkRowOffset + gl_WorkGroupID.x / outBlocks;
+    uint row = gl_WorkGroupID.x / outBlocks;
     uint blk = gl_WorkGroupID.x % outBlocks;
     uint inDim = inter;
     uint outDim = hidden;
@@ -471,7 +470,7 @@ void main() {
       }
     }
     if (last) {
-      uint rowBase = row * outDim + oGlob;  // row is already chunkRowOffset-bases
+      uint rowBase = row * outDim + oGlob;
 #if defined(EXL3_OUT_F16)
       g_out[g_meta[metaBase + 14] + rowBase] = f32ToF16(combined);
 #elif defined(EXL3_OUT_BF16)

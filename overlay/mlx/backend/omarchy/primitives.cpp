@@ -13514,15 +13514,11 @@ bool Exl3MoeFused::accepts(
       knob != nullptr && std::strcmp(knob, "0") == 0) {
     return say("disabled (MLX_OMARCHY_EXL3_FUSED=0)");
   }
-  long max_rows = 2;
-  if (const char* rows_env = std::getenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
-      rows_env != nullptr && *rows_env != '\0') {
-    max_rows = std::strtol(rows_env, nullptr, 10);
-  }
-  if (rows > max_rows) {
-    return say("rows " + std::to_string(rows) + " > fused limit " +
-               std::to_string(max_rows));
-  }
+  // Row count is not an acceptance criterion: the op covers every row
+  // count with per-chunk primitives (MLX_OMARCHY_EXL3_FUSED_ROWS is the
+  // chunk width, not a row ceiling). Only geometry the shader cannot
+  // chunk over declines here.
+  (void)rows;
   if (x.dtype() == bfloat16) {
     return say("bf16 x (the fused chain rounds x through f16)");
   }
@@ -13700,7 +13696,6 @@ void Exl3MoeFused::eval_gpu(
   params.matrix_m = packed;
   params.matrix_n = mask;
   params.matrix_k = checked_u32(topk, tag, out);
-  params.dims = static_cast<uint32_t>(chunk_row_offset_);
   encoder.dispatch_compute(kernel, bindings, params, grid0);
 
   // mode 1: down + SwiGLU + combine.

@@ -8,17 +8,30 @@
  #include <variant>
  
  #include "mlx/backend/common/metal_kernel.h"
-@@ -177,6 +178,83 @@
+@@ -177,6 +178,104 @@
    int window_;
  };
  
++} // namespace mlx::core::fast
++
++// Declared in the omarchy backend (compute.h owns the contract). The
++// composed arm of fast::exl3_moe bumps it per served call so tests can
++// prove the fused arm never materializes a decoded f32 bank.
++namespace mlx::core::omarchy {
++__attribute__((visibility("default"))) void
++exl3_moe_decoded_bank_allocations_fetch_add();
++} // namespace mlx::core::omarchy
++
++namespace mlx::core::fast {
++
 +// Fused EXL3 MoE layer arm (shaders/exl3_moe_fused.comp on the omarchy
 +// backend, M3d): trellis decode + gate/up GEMV, clamped SwiGLU, down GEMV
 +// and router combine as two dispatches of one shader. Scalar state carries
-+// the full layer geometry so the packed rate can never be misread; the
-+// arm serves only rows in the verified fused range at the harness-covered
-+// pack geometry (see accepts) and the op falls back to the composed graph
-+// for everything else.
++// the full layer geometry so the packed rate can never be misread; the op
++// covers every row count by issuing one primitive per row chunk (rows_
++// holds the chunk's row count, chunk_row_offset_ its base row), and falls
++// back to the composed graph only when the arm declines or the decoded
++// bank is too small to be worth the fused dispatch.
 +class Exl3MoeFused : public Custom {
 + public:
 +  Exl3MoeFused(
@@ -30,7 +43,8 @@
 +      int topk,
 +      int window,
 +      float limit,
-+      Dtype out_dtype)
++      Dtype out_dtype,
++      int chunk_row_offset = 0)
 +      : Custom(stream, std::move(fallback)),
 +        rows_(rows),
 +        hidden_(hidden),
@@ -38,7 +52,8 @@
 +        topk_(topk),
 +        window_(window),
 +        limit_(limit),
-+        out_dtype_(out_dtype) {}
++        out_dtype_(out_dtype),
++        chunk_row_offset_(chunk_row_offset) {}
 +
 +  static bool use_fallback(Stream stream);
 +
@@ -76,7 +91,9 @@
 +
 +  auto state() const {
 +    return std::make_tuple(
-+        nullptr, std::make_tuple(rows_, hidden_, inter_, topk_, window_));
++        nullptr,
++        std::make_tuple(
++            rows_, hidden_, inter_, topk_, window_, chunk_row_offset_));
 +  }
 +
 + private:
@@ -87,6 +104,10 @@
 +  int window_;
 +  float limit_;
 +  Dtype out_dtype_;
++  // Base row of this chunk inside the op's full output. Rows are
++  // independent in the routed MoE, so chunks only need their identity
++  // carried for graph equivalence.
++  int chunk_row_offset_;
 +};
 +
  class RMSNormVJP : public Custom {
@@ -94,81 +115,137 @@
    RMSNormVJP(
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -879,9 +879,70 @@
+@@ -879,9 +879,126 @@
      }
      return std::vector<array>{astype(*out, out_type, s)};
    };
 -  // No Exl3Moe primitive yet (M3b is the C surface; the fused GPU arms
 -  // are M3d): the composed graph answers on every stream, with the decode
 -  // legs taking the GPU kernel where the stream provides one.
-+  // Fused arm (M3d): on the omarchy backend the whole layer runs as two
-+  // dispatches of one shader when the row count is in the verified fused
-+  // range and the call matches the harness-covered pack geometry;
-+  // everything else takes the composed graph unchanged.
++  // Fused arm (M3d/M3e): on the omarchy backend the whole layer runs as
++  // two dispatches of one shader per row chunk. Rows are independent in
++  // the routed MoE, so any row count runs as ceil(rows / chunk_rows)
++  // fused primitives (MLX_OMARCHY_EXL3_FUSED_ROWS, default 2 = the
++  // device-verified single-call range). The composed graph stays for
++  // MLX_OMARCHY_EXL3_FUSED=0, for calls the arm declines, and for banks
++  // whose decoded f32 stack is small enough (< 256 MiB) that materializing
++  // it is not worth avoiding.
 +  if (!Exl3MoeFused::use_fallback(s)) {
 +    std::string decline;
-+    if (Exl3MoeFused::accepts(
-+            rows,
-+            hidden,
-+            inter,
-+            x,
-+            gate_trellis,
-+            up_trellis,
-+            down_trellis,
-+            gate_suh,
-+            gate_svh,
-+            up_suh,
-+            up_svh,
-+            down_suh,
-+            down_svh,
-+            out_type,
-+            window,
-+            &decline)) {
++    bool qualified = Exl3MoeFused::accepts(
++        rows,
++        hidden,
++        inter,
++        x,
++        gate_trellis,
++        up_trellis,
++        down_trellis,
++        gate_suh,
++        gate_svh,
++        up_suh,
++        up_svh,
++        down_suh,
++        down_svh,
++        out_type,
++        window,
++        &decline);
++    double decoded_bytes = 12.0 * static_cast<double>(experts) * hidden * inter;
++    bool small_bank = qualified && decoded_bytes < 256.0 * 1024 * 1024;
++    if (qualified && !small_bank) {
++      int chunk_rows = 2;
++      if (const char* rows_env = std::getenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
++          rows_env != nullptr && *rows_env != '\0') {
++        chunk_rows = std::atoi(rows_env);
++      }
++      if (chunk_rows < 1) {
++        chunk_rows = 1;
++      }
++      if (chunk_rows > rows) {
++        chunk_rows = rows;
++      }
++      int nchunks = (rows + chunk_rows - 1) / chunk_rows;
 +      if (const char* dbg = std::getenv("MLX_OMARCHY_EXL3_DEBUG");
 +          dbg != nullptr && dbg[0] != '\0') {
 +        std::fprintf(
 +            stderr,
-+            "exl3_moe: fused arm selected (rows=%d hidden=%d inter=%d)\n",
++            "exl3_moe: fused arm (rows=%d hidden=%d inter=%d chunks=%d "
++            "chunk_rows=%d)\n",
 +            rows,
 +            hidden,
-+            inter);
++            inter,
++            nchunks,
++            chunk_rows);
 +      }
 +      // The fused kernel reads x as f32 words and rounds to f16 itself
 +      // (the R1 chain), slots as uint32 words and scores as f32; convert
 +      // up front, exactly the element types the composed graph feeds its
-+      // math.
-+      return array(
-+          Shape{rows, hidden},
-+          out_type,
-+          std::make_shared<Exl3MoeFused>(
-+              s,
-+              fallback,
-+              rows,
-+              hidden,
-+              inter,
-+              topk,
-+              window,
-+              limit,
-+              out_type),
-+          {astype(x, float32, s),
-+           gate_trellis, gate_suh, gate_svh,
-+           up_trellis, up_suh, up_svh,
-+           down_trellis, down_suh, down_svh,
-+           astype(slots, uint32, s),
-+           astype(scores, float32, s)});
++      // math. A [1, topk] router table broadcast over the rows is
++      // materialized so every chunk binds real per-row words.
++      array xf = astype(x, float32, s);
++      array slotf = astype(slots, uint32, s);
++      array scoref = astype(scores, float32, s);
++      if (slotf.ndim() == 2 && slotf.shape(0) == 1 && rows > 1) {
++        slotf = repeat(slotf, rows, 0, s);
++        scoref = repeat(scoref, rows, 0, s);
++      }
++      std::vector<array> chunks;
++      chunks.reserve(nchunks);
++      for (int start = 0; start < rows; start += chunk_rows) {
++        int cr = std::min(chunk_rows, rows - start);
++        array xc = (cr == rows)
++            ? xf
++            : slice(xf, {start, 0}, {start + cr, hidden}, {1, 1}, s);
++        array slotc = (cr == rows)
++            ? slotf
++            : slice(slotf, {start, 0}, {start + cr, topk}, {1, 1}, s);
++        array scorec = (cr == rows)
++            ? scoref
++            : slice(scoref, {start, 0}, {start + cr, topk}, {1, 1}, s);
++        chunks.push_back(array(
++            Shape{cr, hidden},
++            out_type,
++            std::make_shared<Exl3MoeFused>(
++                s,
++                fallback,
++                cr,
++                hidden,
++                inter,
++                topk,
++                window,
++                limit,
++                out_type,
++                start),
++            {std::move(xc),
++             gate_trellis, gate_suh, gate_svh,
++             up_trellis, up_suh, up_svh,
++             down_trellis, down_suh, down_svh,
++             std::move(slotc),
++             std::move(scorec)}));
++      }
++      // One output buffer whose rows are written by sibling primitives is
++      // not expressible safely in the graph (a returned leaf carries no
++      // dependency on the chunk ops, and eval-time set_data re-allocates
++      // the buffer), so the chunks concatenate into a fresh full output;
++      // the extra rows*hidden copy is noise next to the GiB bank decode
++      // this arm skips.
++      if (nchunks == 1) {
++        return std::move(chunks[0]);
++      }
++      return concatenate(chunks, 0, s);
 +    }
 +    if (const char* dbg = std::getenv("MLX_OMARCHY_EXL3_DEBUG");
 +        dbg != nullptr && dbg[0] != '\0') {
++      std::string why = small_bank ? "decoded bank below 256 MiB"
++                                   : "fused declined: " + decline;
 +      std::fprintf(
-+          stderr,
-+          "exl3_moe: composed route (fused declined: %s)\n",
-+          decline.c_str());
++          stderr, "exl3_moe: composed route (%s)\n", why.c_str());
 +    }
 +  }
++  omarchy::exl3_moe_decoded_bank_allocations_fetch_add();
    return fallback(
        {x,
         gate_trellis, gate_suh, gate_svh,
-@@ -969,6 +1030,14 @@
+@@ -969,6 +1086,15 @@
        window_ == a_other.window_;
  }
  
@@ -177,7 +254,8 @@
 +  return rows_ == a_other.rows_ && hidden_ == a_other.hidden_ &&
 +      inter_ == a_other.inter_ && topk_ == a_other.topk_ &&
 +      window_ == a_other.window_ && limit_ == a_other.limit_ &&
-+      out_dtype_ == a_other.out_dtype_;
++      out_dtype_ == a_other.out_dtype_ &&
++      chunk_row_offset_ == a_other.chunk_row_offset_;
 +}
 +
  bool RMSNormVJP::is_equivalent(const Primitive& other) const {

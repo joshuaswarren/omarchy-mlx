@@ -1077,6 +1077,8 @@ __attribute__((visibility("default"))) uint64_t
 exl3_moe_decoded_bank_allocations();
 __attribute__((visibility("default"))) void
 exl3_moe_decoded_bank_allocations_fetch_add();
+__attribute__((visibility("default"))) void
+exl3_moe_decoded_bank_allocations_reset();
 
 class ComputeRuntime {
  public:
