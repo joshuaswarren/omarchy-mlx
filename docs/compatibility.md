@@ -12,38 +12,49 @@ Blocked means an external or hardware condition prevents the qualifying run.
 
 ## Hardware
 
-**Current hardware status (2026-09-20).** Apple M1 Omarchy (m1-test-host, T8103)
-fresh Arch boot reported (user-observed at login); Omarchy provisioning
-and benchmark recertification pending; recovery success not yet
-published. Every M1 row below and every M1 number in this tree is
-**historical dated evidence** from prior Linux boots, NOT a current
-recert under any live firmware/kernel pair. t6001-test-host (T6001) Linux ANE is
-live.
+**Hardware status (2026-10-12).** GPU and ANE are separate lanes: a GPU
+result says nothing about the ANE. Terms match the README hardware
+table: Tested, Experimental, Untested, Not yet.
 
-Apple M1 Max (T6001) GPU and Linux ANE have measured runs. The dated
-[v0.7.1 Parakeet receipt](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-19-parakeet-e2e-v071-t6001-test-host.md)
-records 104/104 transcript agreement on its fixture. This does not
-qualify full-encoder ANE coverage or macOS performance parity.
-
-Apple M2 Max (T6021, t6021-test-host) GPU is verified third-silicon on Mesa
-Honeykrisp / Vulkan 1.4.354 ([`ane-linux-experiments/receipts/2026-09-23-m2-gpu-qwen38/README.md`](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-23-m2-gpu-qwen38/README.md)).
-t6021-test-host Linux on kernel 7.1.13-3-1-ARCH was ANE_UNBOUND, with no
-`/dev/accel/accel0`. On 2026-09-28, kernel `7.1.13-ARCH-polltx` bound
-`ane_t6021_rtclient`. With the nap-prevention bit set, legacy `CONFIG_GET`
-returned 0. The reply words were `00000000,00000003,016e3600,00000003`.
-A following header-only `PING` (`0x0011`) was not consumed. `/dev/accel`
-was still absent. **Apple M2 Max ANE is NOT live-inference-qualified
-on the Linux driver.** macOS-side ANE numbers cited in this tree
-(T8103/T6021 "divisor" measurements, t6021 captures, H14 oracle mints)
-are macOS CoreML / `aned` measurements on t6021-test-host / studio-host, not
-Linux-side execution. The T6021 driver descriptor is `ANE_RECOGNIZED`,
-not `ANE_QUALIFIED`
-([`omarchy-ane/ane/src/ane_drv.c` `ane_soc_t6021`](https://github.com/joshuaswarren/omarchy-ane/blob/main/ane/src/ane_drv.c)).
-Apple GPU and Apple ANE are separate lanes: M2 Max GPU qualification
-does not qualify M2 Max ANE.
-
-M3 and M4 Omarchy Linux work is deferred.
-Vulkan, ANE, and install gates are not qualified on those systems.
+- 13-inch M1 (T8103). GPU: Tested ([2026-10-09 Linux-vs-macOS
+  runs](../receipts/2026-10-09-linux-vs-macos/m1-16gb/), full tables in
+  [BENCHMARKS.md](BENCHMARKS.md)). ANE: Parakeet islands; the installed
+  Parakeet path ran on this machine on 2026-09-23
+  ([session receipt](../receipts/2026-09-23-parakeet-session.md)).
+- 16-inch M1 Max (T6001). GPU: Tested; the Linux-vs-macOS table was
+  measured 2026-10-09 to 2026-10-11
+  ([receipt tables](../receipts/2026-10-09-linux-vs-macos/table-full.md)).
+  ANE: Whole encoder; E2E x3 with a 104/104 matching transcript prefix
+  on 2026-09-22
+  ([whole-program receipt](../receipts/2026-09-22-encoder-whole-program.md)).
+  This does not qualify macOS performance parity.
+- 14-inch M2 Max (T6021). GPU: Tested on Linux
+  ([2026-10-09 Linux-vs-macOS runs](../receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md)).
+  Third silicon verified on Mesa Honeykrisp / Vulkan 1.4.354 on
+  2026-09-23
+  ([GPU receipt](https://github.com/joshuaswarren/ane-linux-experiments/blob/main/receipts/2026-09-23-m2-gpu-qwen38/README.md)).
+  ANE: Whole encoder, bit-exact
+  ([2026-10-10 results](../receipts/2026-10-10-m2-max-ane.md)). On
+  2026-10-10 the whole Parakeet encoder ran on the Linux driver, module
+  `ca09ce8`, after a fresh boot: 20 calls, median 253.5 ms. The output
+  is bit-exact against the Apple fp16 golden. Greedy decode of that
+  output on a separate machine gave the golden transcript. The driver
+  release for this chip is
+  [omarchy-ane v0.4.8](https://github.com/joshuaswarren/omarchy-ane/releases/tag/v0.4.8)
+  (2026-10-11), M2 Max only. The receipt covers one fixture, one boot
+  and one clip length. The timing was taken while another test ran GPU
+  work, so there is no speed claim. Running audio-to-text on this
+  machine is not shown yet.
+- M1 Pro, M1 Ultra, M2, M2 Pro, M2 Ultra. Untested
+  ([README table](../README.md#supported-hardware)).
+- M3. Experimental: aurora mesa-m3 graphics; compute not certified
+  (README row since 2026-10-07;
+  [README table](../README.md#supported-hardware)). ANE: Data-only; h15
+  bring-up module. No run receipts exist yet; the tester kit is
+  [scripts/m3m4_kit.md](../scripts/m3m4_kit.md).
+- M4. Not yet: no Linux GPU driver (README row since 2026-10-07;
+  [README table](../README.md#supported-hardware)). ANE: Data-only; h16
+  bring-up module.
 
 ## Non-Apple GPUs (development drivers)
 
