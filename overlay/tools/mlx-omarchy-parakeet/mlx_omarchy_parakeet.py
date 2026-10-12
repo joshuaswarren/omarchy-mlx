@@ -57,7 +57,7 @@ from coreml.reference import (  # noqa: E402
 RECEIPT_SCHEMA = "mlx-omarchy.parakeet-download-receipt.v1"
 REPORT_SCHEMA = "mlx-omarchy.parakeet-transcribe.v1"
 
-# Jw16ParakeetWarm: env-gated waterfall instrumentation (no logic changes).
+# ParakeetWarm: env-gated waterfall instrumentation (no logic changes).
 # MLX_OMARCHY_PK_WATERFALL=1 emits a one-line stderr summary of stages at the
 # end of each transcribe invocation (cold + warm --repeat visibility).
 # MLX_OMARCHY_PK_TIMING_EXTRA=1 records the additional stages
@@ -445,11 +445,11 @@ class _GpuWarm:
     """GPU pre-warm during the CPU decoder load (default on; MLX_OMARCHY_PK_PREWARM=off disables).
 
     The first GPU work after >= ~50 ms of GPU idle costs about +10 ms on the M1
-    (the fast state decays over 10-50 ms; jwm1 H27-H30/H56/H57), and the mel
+    (the fast state decays over 10-50 ms; 13-inch M1 H27-H30/H56/H57), and the mel
     stage is the first real GPU work after the CPU-only decoder load. While
     that stage runs, a background thread streams 1024x1024 f32 matmuls (results
     discarded, no pipeline data touched) and is joined right before mel, so mel
-    starts in the fast state (mel 29 -> 19.5 ms on jwm1). The thread stops
+    starts in the fast state (mel 29 -> 19.5 ms on a 13-inch M1). The thread stops
     exactly when the CPU stage ends, so it never delays a stage by more than
     one matmul (~5 ms). GPU energy for ~45 ms per transcription is not measured.
     """
@@ -1357,7 +1357,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
 
     mx.set_default_device(mx.gpu)
     # A larger buffer cache keeps the TDT chain's per-step temporaries (and the
-    # pre-warm outputs) from being re-created and re-mapped every step: on jwm1
+    # pre-warm outputs) from being re-created and re-mapped every step: on a 13-inch M1
     # tdt_decode 137.8 -> 133.4 ms, and without it the pre-warm's cached outputs
     # made TDT ~10 ms slower. MLX_OMARCHY_PK_CACHE_MB overrides (0 keeps the default).
     _cache_mb = int(os.environ.get("MLX_OMARCHY_PK_CACHE_MB", "1024"))

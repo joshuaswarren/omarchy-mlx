@@ -161,7 +161,7 @@ fi
 apply mlx-lm-greedy-prune.patch
 # Greedy GenerationBatch steps (BatchGenerator / oMLX) can take the pruned
 # greedy head per row and leave logprobs lazy instead of projecting every row
-# onto the full vocabulary. Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): on jw16 it
+# onto the full vocabulary. Opt-in (MLX_OMARCHY_BATCH_GREEDY=1): on a 16-inch M1 Max it
 # cost B=1 and in-process B=4 time; only oMLX c4 gained. Sampled batches and
 # logits processors always keep the full step. 0.32 line only.
 if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
@@ -172,11 +172,11 @@ else
   echo "batch-greedy-head: 0.32 series only (no GenerationBatch); skipped on $SERIES"
 fi
 # GDN q/k rms_norm + scalar multiply -> mx.fast.rms_norm_scaled (decode-sized rows,
-# bf16, self-guarded on hasattr; bit-identical to the composed pair on jwm1: 7fe6badf
+# bf16, self-guarded on hasattr; bit-identical to the composed pair on a 13-inch M1: 7fe6badf
 # digest unchanged, decode +2.1%). The gated-norm site is NOT shipped: it diverges.
 apply mlx-lm-qwen35-qk-scaled.patch
 # GDN decode conv -> mx.fast.gdn_conv_update (state concat + carry folded into the conv
-# kernel; decode S==1, bf16, self-guarded on hasattr): bit-identical on jwm1 (decode64/128/256
+# kernel; decode S==1, bf16, self-guarded on hasattr): bit-identical on a 13-inch M1 (decode64/128/256
 # digests 7fe6badf/da5568ee/7d0523ae unchanged), decode +1.5-2.0%.
 apply mlx-lm-qwen35-gdn-conv.patch
 # GDN conv + silu epilogue: the decode fast route's nn.silu folds into the
@@ -189,11 +189,11 @@ apply mlx-lm-conv-silu.patch
 # GDN gated norm -> mx.fast.rms_norm_gated (rms_norm + silu(gate) * x in one dispatch, decode-sized
 # rows only, bf16, self-guarded on hasattr). Requires the wheel's bit-exact FastNormGatedOnly kernel
 # (precise product associations; verified 0 mismatches vs the composed chain over an exhaustive bf16
-# gate sweep). Measured on jwm1: decode64/128 +2.4%/+1.7% with identical digests.
+# gate sweep). Measured on a 13-inch M1: decode64/128 +2.4%/+1.7% with identical digests.
 apply mlx-lm-qwen35-gated-norm.patch
 # Early first submit around prompt processing + the first token (sets
 # MLX_OMARCHY_BATCH_FIRST=128 for those graphs only, cleared after the first token;
-# backend ignores nothing else). Scheduling only: digests identical; jwm1 TTFT -12%,
+# backend ignores nothing else). Scheduling only: digests identical; 13-inch M1 TTFT -12%,
 # pipelined decode unchanged. MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT=1 disables at runtime.
 apply mlx-lm-ttft-early-submit.patch
 if [[ "${MLX_OMARCHY_CONV_RING:-0}" == 1 ]]; then
@@ -206,7 +206,7 @@ fi
 # the head over 2048 positions no consumer reads). Decode steps are untouched
 # (greedy fast path never routes through this call). Whole-sequence calls
 # (cache=None: scoring/training) and MLX_OMARCHY_FULL_LOGITS=1 keep full logits.
-# Bit-exact: records digest and per-digest gates unchanged (Jw16PrefillGap3).
+# Bit-exact: records digest and per-digest gates unchanged (PrefillGap3).
 apply mlx-lm-last-logits.patch
 # Same last-logits change for the dense qwen3 family (qwen3.py; the 4B is model_type qwen3):
 # cached prefill computes the head for the final position only. 4B pf512 +9.0% on the base M1
@@ -231,7 +231,7 @@ python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"
 # Qwen3 dense rope-norm fold (qwen3.py attention site; the F3 fold ported
 # to the dense file code shape). Default ON since 2026-10-04: bit-exact,
 # 4B decode +4.18..+4.86% across d64-d512 (receipts/
-# 2026-10-04-jw16-decode-dispatchfuse.md). Kill switch
+# the 2026-10-04 decode dispatch-fuse receipt). Kill switch
 # MLX_OMARCHY_ROPE_NORM_FUSE=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # GDN raw-decode GQA repeat (Hk<Hv models, e.g. Qwen3.5-9B): expands q/k to

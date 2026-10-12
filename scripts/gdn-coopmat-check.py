@@ -24,7 +24,7 @@ quanta) and stay as close to the f32 oracle as the scan does (max abs error
 <= CORR_ORACLE_RATIO x the scan's). The max-quanta figure is reported but not
 gated: near-zero outputs make it large for any two roundings (54 quanta on
 the uncorrelated 512 case for both the defective and the fixed kernel);
-measured 2026-09-29 on jw16, fixed: p999 0.0, ratio 1.0; defective: p999
+measured 2026-09-29 on a 16-inch M1 Max, fixed: p999 0.0, ratio 1.0; defective: p999
 118-121, ratio 4.6-6.8.
 
 Usage: gdn-coopmat-check.py <python-with-wheel> <out.json>

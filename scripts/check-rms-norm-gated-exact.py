@@ -1,4 +1,4 @@
-"""Exactness check (jwm1 2026-09-28): does mx.fast.rms_norm_gated / rms_norm_scaled match the composed mlx-lm path? Exit 1 on a systematic deviation (rate > 1e-4).
+"""Exactness check (13-inch M1, 2026-09-28): does mx.fast.rms_norm_gated / rms_norm_scaled match the composed mlx-lm path? Exit 1 on a systematic deviation (rate > 1e-4).
 
 Compares, on bf16 GDN-shaped inputs (16 rows x 128 and 1 row x 2048, model-like scales):
   composed  = mlx_lm qwen3_next._precise_swiglu(h, z, mx.fast.rms_norm(h, w, eps))

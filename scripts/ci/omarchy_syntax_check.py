@@ -12,7 +12,7 @@ type errors, bad includes) in a couple of minutes on a 4-core runner.
 Limitation: it validates the preprocessor state of the configured build.
 With glslang (no GL_EXT_bfloat16) the runner configures with
 MLX_OMARCHY_BF16_DIRECT off, so the bf16 direct GEMM compile path is
-validated only by real shaderc/glslc builds (dev boxes, jw16 gates).
+validated only by real shaderc/glslc builds (dev boxes, the 16-inch M1 Max gates).
 
 Usage:
   omarchy_syntax_check.py <build_dir> [--jobs N]

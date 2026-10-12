@@ -152,7 +152,7 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
 
     def test_installing_venv_python_accepts_symlinked_venv_python(self):
         """A venv python symlinks to the same CPython binary the system
-        python3 may use (jw16: /usr/bin/python3 -> python3.14). The
+        python3 may use (on the 16-inch M1 Max: /usr/bin/python3 -> python3.14). The
         environments differ even when the binary does not, so discovery
         must compare raw paths and still return the candidate — the
         resolve()-based comparison disabled the re-exec and was the one
@@ -184,7 +184,7 @@ class ParakeetDependencyProbeTest(unittest.TestCase):
     def test_reexec_self_heal_runs_transcribe_help_under_a_bare_interpreter(self):
         """End to end: `transcribe --help` under an interpreter without the
         deps re-execs into the owning venv and exits 0 instead of
-        refusing. This is the jwm1 defect, staged in a fake install."""
+        refusing. This is the 13-inch M1 defect, staged in a fake install."""
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp)
             mlx_root = env / "lib" / "python3.x" / "site-packages" / "mlx"

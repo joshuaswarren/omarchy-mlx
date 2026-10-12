@@ -10,7 +10,7 @@ bindings), and registers the bundle in the content-addressed compiled
 cache so every later hit re-verifies the stored digests.
 
 Provenance: receipts/2026-09-22-encoder-direct-exec — 13701 TDs, ONE
-submit, rc=0 on jwm1 (T8103), hidden bit-exact vs the macOS gold capture.
+submit, rc=0 on a 13-inch M1 (T8103), hidden bit-exact vs the macOS gold capture.
 """
 
 from __future__ import annotations
