@@ -40,6 +40,7 @@ def kernel_names(header_path):
                 inside = True
                 continue
             if inside:
+                line = line.split("//", 1)[0]
                 if "}" in line:
                     break
                 m = pat.match(line)

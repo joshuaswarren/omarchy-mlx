@@ -166,6 +166,7 @@ def kernel_names(compute_h):
                 in_enum = True
                 continue
             if in_enum:
+                line = line.split("//", 1)[0]
                 if "}" in line:
                     break
                 name = line.strip().rstrip(",")
