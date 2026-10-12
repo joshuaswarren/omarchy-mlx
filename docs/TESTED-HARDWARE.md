@@ -5,8 +5,9 @@ Back to the [README](../README.md). How to produce a row:
 
 One row per real output. Empty cell = not recorded, never guessed.
 Source kinds: **author run** (the testing section of a merged PR),
+**reporter run** (an issue that posts the outputs; not reproduced here),
 **collector row** (the community dataset), **benchmark** (a published
-benchmark table). Author-run and benchmark rows carry test results.
+benchmark table). Author-run, reporter-run, and benchmark rows carry test results.
 Collector rows do not: the collector captures machine facts and runs
 no test suite, so the collector sections are a capture inventory, not
 a compatibility list.
@@ -19,6 +20,20 @@ a compatibility list.
 | NVIDIA GeForce RTX 5060 Ti | NVIDIA proprietary 615.71.09, Vulkan loader 1.4.363 | CachyOS, Linux 7.2.9 | source build on main `e95e86b6` + PR #111 (MLX 0.32.3, upstream `9c3d355`) | 54/55 `omarchy_runtime_tests`; all op checks within bf16 tolerance | independent-streams timing ratio 0.78-0.88 against the 0.95 floor (5 runs); one `SUBMIT-RECOVER ... resubmitted 1 stalled batch` line per run | author run, [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111) |
 
 AMD: no result yet.
+
+## Apple silicon GPU (reporter runs)
+
+These rows are the reporter's measurements. This repository has not
+reproduced them. The README supported-hardware table still says the M2
+GPU is untested until we run the suite ourselves.
+
+| GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
+|---|---|---|---|---|---|---|
+| Apple M2 (G14G B0), 13-inch 2022, `apple,t8112`, 8 cores, 24 GB | private ICD, Mesa 26.3.0-devel (git-6f6afc8968), Vulkan API 1.4.359, loader 1.4.357 | NixOS, Linux 7.1.13, 16 KiB pages | source build on main `e422231`, upstream `9c3d355`, CPU backend on | 57/57 `omarchy_runtime_tests` (27055 assertions); 28/28 `omarchy_copy_offset_tests` (639 assertions); streams check passed; `mlx-omarchy-info` exit 0 | none in the suite. A package build with the CPU backend off does not link ([issue #156](https://github.com/joshuaswarren/omarchy-mlx/issues/156)) | reporter run, [issue #157](https://github.com/joshuaswarren/omarchy-mlx/issues/157) |
+
+The same issue reports one warm Qwen2.5-0.5B run. The reporter said it
+is not a speed claim, so it is not in the table.
+
 
 ## Apple silicon capture inventory (community collector rows)
 
