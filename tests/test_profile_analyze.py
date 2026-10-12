@@ -9,6 +9,7 @@ attribute by the submission id d["s"] against the submit record's host time,
 never by file order.
 """
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -140,6 +141,26 @@ class AttributionTests(unittest.TestCase):
         # No --compute-h: enum 7 must surface as kernel_7, not crash or
         # group by anything else.
         self.assertIn("kernel_7", r.stdout)
+
+    def test_enum_parse_keeps_enumerators_with_trailing_comments(self):
+        # A retired enumerator keeps its id (append-only) and is written
+        # `Name, // retired ...`; dropping it shifts every later name by one.
+        header = (
+            "enum class ComputeKernel : uint16_t {\n"
+            "  Alpha,\n"
+            "  Retired, // retired: no shader; the id stays\n"
+            "  // a comment line\n"
+            "  Gamma,\n"
+            "  Count,\n"
+            "};\n")
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "compute.h"
+            path.write_text(header, encoding="utf-8")
+            spec = importlib.util.spec_from_file_location("profile_analyze", SCRIPT)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            names = module.parse_kernel_names(str(path))
+        self.assertEqual(names, ["Alpha", "Retired", "Gamma", "Count"])
 
 
 class MalformedInputTests(unittest.TestCase):
