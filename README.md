@@ -2,6 +2,8 @@
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink)](https://github.com/sponsors/joshuaswarren)
 
+Sponsor this work or help stock the lab: [joshuawarren.com/sponsors](https://joshuawarren.com/sponsors)
+
 MLX on the Apple GPU under Linux, and Core ML models on the
 Apple Neural Engine.
 
