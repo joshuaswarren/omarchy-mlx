@@ -1003,19 +1003,20 @@ TEST_CASE("exl3 moe fused arm vs m3d oracle") {
   CHECK(ran >= 5);
 }
 
-// Chunked-routing matrix (M3e): rows 1, 2, 3, 4, 5, 17 at E=32 and at the
-// E=512 streamed-cache size (zero-padded banks; the router only names the
-// real first 32 experts, so the padding content is never read). With
-// MLX_OMARCHY_EXL3_FUSED_ROWS=2 the op must run ceil(rows/2) fused
-// primitives whose outputs are bit-identical per row to single-row fused
-// calls, and the composed arm's decoded-bank counter must stay at zero
-// throughout. Row 0 of every case is the pack-r1 oracle row, so the m3d
-// oracle comparison anchors it (bit gate under EXL3_FUSED_ORACLE_STRICT,
-// matching the oracle case's triage state).
-TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
-  if (!gpu_ready()) {
-    return;
-  }
+// pack-r1 oracle feed (the raw-Vulkan harness's proven banks: rows=1,
+// hidden=2560, inter=640, E=32, k=10) plus the parsed case directory
+// walk. Shared by the chunked matrix and the bf16 x tests.
+namespace {
+
+struct OraclePack {
+  int rows = 0, hidden = 0, inter = 0, experts = 0, topk = 0, packed = 0;
+  float limit = 0.0f;
+  std::vector<float> x, scores, r1o32;
+  std::vector<uint32_t> slots;
+  std::vector<uint16_t> tg, tu, td, suhg, suhu, suhd, svhg, svhu, svhd;
+};
+
+bool load_pack_r1(OraclePack& o) {
   const char* path = std::getenv("EXL3_FUSED_ORACLE");
   if (path == nullptr || path[0] == '\0') {
     path = "/home/joshuawarren/scratch/sushi-final/m3d/sushi-fused/src/"
@@ -1023,30 +1024,17 @@ TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
   }
   std::ifstream f(path, std::ios::binary);
   if (!f) {
-    skip("oracle_fused.bin not staged");
-    return;
+    return false;
   }
-  Stream gs = new_stream(Device::gpu);
   uint32_t magic = 0, version = 0, cases = 0;
   f.read((char*)&magic, 4);
   f.read((char*)&version, 4);
   f.read((char*)&cases, 4);
   if (!f || (magic != 0x464C5854u && magic != 0x46334C58u)) {
-    skip("oracle magic mismatch");
-    return;
+    return false;
   }
   (void)version;
-
-  // Walk the case directory to pack-r1 (32 experts at the pack shape).
-  bool found = false;
-  int orows = 0, ohidden = 0, ointer = 0, oexperts = 0, otopk = 0;
-  int opacked = 0;
-  float olimit = 0.0f;
-  std::vector<float> ox, osc, or1o32;
-  std::vector<uint32_t> osv;
-  std::vector<uint16_t> otg, otu, otd, osuhg, osuhu, osuhd, osvhg, osvhu,
-      osvhd;
-  for (uint32_t ci = 0; ci < cases && !found; ci++) {
+  for (uint32_t ci = 0; ci < cases; ci++) {
     char name[16];
     f.read(name, 16);
     uint32_t rows, hidden, inter, experts, topk, packed, mask;
@@ -1060,7 +1048,7 @@ TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
     f.read((char*)&mask, 4);
     f.read((char*)&limit, 4);
     if (!f) {
-      break;
+      return false;
     }
     size_t ts = (size_t)(hidden / 16) * (inter / 16) * packed;
     size_t payload = (size_t)rows * hidden * 4 + (size_t)rows * topk * 4 * 2 +
@@ -1072,45 +1060,84 @@ TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
       f.seekg(payload, std::ios::cur);
       continue;
     }
-    ox.assign((size_t)rows * hidden, 0.0f);
-    f.read((char*)ox.data(), 4 * ox.size());
-    osv.assign((size_t)rows * topk, 0);
-    f.read((char*)osv.data(), 4 * osv.size());
-    osc.assign((size_t)rows * topk, 0.0f);
-    f.read((char*)osc.data(), 4 * osc.size());
+    o.x.assign((size_t)rows * hidden, 0.0f);
+    f.read((char*)o.x.data(), 4 * o.x.size());
+    o.slots.assign((size_t)rows * topk, 0);
+    f.read((char*)o.slots.data(), 4 * o.slots.size());
+    o.scores.assign((size_t)rows * topk, 0.0f);
+    f.read((char*)o.scores.data(), 4 * o.scores.size());
     auto rd16 = [&](std::vector<uint16_t>& v, size_t n) {
       v.assign(n, 0);
       f.read((char*)v.data(), 2 * n);
     };
-    rd16(otg, experts * ts);
-    rd16(otu, experts * ts);
-    rd16(otd, experts * ts);
-    rd16(osuhg, (size_t)experts * hidden);
-    rd16(osuhu, (size_t)experts * hidden);
-    rd16(osuhd, (size_t)experts * inter);
-    rd16(osvhg, (size_t)experts * inter);
-    rd16(osvhu, (size_t)experts * inter);
-    rd16(osvhd, (size_t)experts * hidden);
+    rd16(o.tg, experts * ts);
+    rd16(o.tu, experts * ts);
+    rd16(o.td, experts * ts);
+    rd16(o.suhg, (size_t)experts * hidden);
+    rd16(o.suhu, (size_t)experts * hidden);
+    rd16(o.suhd, (size_t)experts * inter);
+    rd16(o.svhg, (size_t)experts * inter);
+    rd16(o.svhu, (size_t)experts * inter);
+    rd16(o.svhd, (size_t)experts * hidden);
     // ag/au staging dumps: not needed here.
     f.seekg((size_t)rows * topk * inter * 2 * 2, std::ios::cur);
-    or1o32.assign((size_t)rows * hidden, 0.0f);
-    f.read((char*)or1o32.data(), 4 * or1o32.size());
+    o.r1o32.assign((size_t)rows * hidden, 0.0f);
+    f.read((char*)o.r1o32.data(), 4 * o.r1o32.size());
     // r1o16 + r1obf: not needed here.
     f.seekg((size_t)rows * hidden * (2 + 2), std::ios::cur);
-    orows = static_cast<int>(rows);
-    ohidden = static_cast<int>(hidden);
-    ointer = static_cast<int>(inter);
-    oexperts = static_cast<int>(experts);
-    otopk = static_cast<int>(topk);
-    opacked = static_cast<int>(packed);
-    olimit = limit;
-    found = f.good();
-    (void)mask;
+    o.rows = static_cast<int>(rows);
+    o.hidden = static_cast<int>(hidden);
+    o.inter = static_cast<int>(inter);
+    o.experts = static_cast<int>(experts);
+    o.topk = static_cast<int>(topk);
+    o.packed = static_cast<int>(packed);
+    o.limit = limit;
+    return f.good();
   }
-  if (!found) {
-    skip("pack-r1 case not in oracle file");
+  return false;
+}
+
+} // namespace
+
+// Chunked-routing matrix (M3e): rows 1, 2, 3, 4, 5, 17 at E=32 and at the
+// E=512 streamed-cache size (zero-padded banks; the router only names the
+// real first 32 experts, so the padding content is never read). With
+// MLX_OMARCHY_EXL3_FUSED_ROWS=2 the op must run ceil(rows/2) fused
+// primitives whose outputs are bit-identical per row to single-row fused
+// calls, and the composed arm's decoded-bank counter must stay at zero
+// throughout. Row 0 of every case is the pack-r1 oracle row, so the m3d
+// oracle comparison anchors it (bit gate under EXL3_FUSED_ORACLE_STRICT,
+// matching the oracle case's triage state).
+TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
+  if (!gpu_ready()) {
     return;
   }
+  OraclePack oc;
+  if (!load_pack_r1(oc)) {
+    skip("oracle_fused.bin not staged or pack-r1 case missing");
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  const int& orows = oc.rows;
+  const int& ohidden = oc.hidden;
+  const int& ointer = oc.inter;
+  const int& oexperts = oc.experts;
+  const int& otopk = oc.topk;
+  const int& opacked = oc.packed;
+  const float& olimit = oc.limit;
+  const std::vector<float>& ox = oc.x;
+  const std::vector<float>& osc = oc.scores;
+  const std::vector<float>& or1o32 = oc.r1o32;
+  const std::vector<uint32_t>& osv = oc.slots;
+  const std::vector<uint16_t>& otg = oc.tg;
+  const std::vector<uint16_t>& otu = oc.tu;
+  const std::vector<uint16_t>& otd = oc.td;
+  const std::vector<uint16_t>& osuhg = oc.suhg;
+  const std::vector<uint16_t>& osuhu = oc.suhu;
+  const std::vector<uint16_t>& osuhd = oc.suhd;
+  const std::vector<uint16_t>& osvhg = oc.svhg;
+  const std::vector<uint16_t>& osvhu = oc.svhu;
+  const std::vector<uint16_t>& osvhd = oc.svhd;
   INFO("pack-r1 rows=", orows, " hidden=", ohidden, " E=", oexperts);
 
   const size_t ts = (size_t)(ohidden / 16) * (ointer / 16) * opacked;
@@ -1133,7 +1160,7 @@ TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
   const int E512 = 512;
   std::vector<uint16_t> tg512, tu512, td512;
   if (e512_ok) {
-    auto pad512 = [&](std::vector<uint16_t>& out, std::vector<uint16_t>& in) {
+    auto pad512 = [&](std::vector<uint16_t>& out, const std::vector<uint16_t>& in) {
       out.assign((size_t)E512 * ts, 0);
       std::copy(in.begin(), in.end(), out.begin());
     };
@@ -1323,6 +1350,193 @@ TEST_CASE("exl3 moe fused arm chunked and E=512 cache") {
   }
   unsetenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
   CHECK(ran_cases == (e512_ok ? 12 : 6));
+}
+
+// bf16 x acceptance (sushi serves x as bfloat16 with bf16 out_dtype):
+// the fused arm must take the bf16 call on the same route as the f32
+// path. The op builder widens bf16 to f32 exactly and the fused chain
+// rounds x through f16 exactly as it does for f32 x, so the bf16 call
+// and its f32 twin (the same values carried as float32) must match bit
+// for bit at every row count, with bf16 out_dtype. bf16 x has no m3d
+// oracle case of its own: the oracle's r1o32 corresponds to its
+// full-precision f32 x and bf16 quantization changes the values, so the
+// oracle anchor carries over through the f32 twin (proven in the matrix
+// test). Outside the f16 normal range the fused chain and the project
+// reference both round x through f16 (saturating to inf/zero there)
+// while the composed arm carries f32 through - sushi's activations sit
+// well inside the range. The bf16 finish must also round exactly like
+// mlx's own f32->bf16 cast (what the composed arm applies at its tail):
+// casting the fused f32 output must reproduce the fused bf16 output bit
+// for bit.
+TEST_CASE("exl3 moe fused bf16 x") {
+  if (!gpu_ready()) {
+    return;
+  }
+  OraclePack oc;
+  if (!load_pack_r1(oc)) {
+    skip("oracle_fused.bin not staged or pack-r1 case missing");
+    return;
+  }
+  Stream gs = new_stream(Device::gpu);
+  const int hidden = oc.hidden;
+  const int topk = oc.topk;
+  const int E = oc.experts;
+  array gt = array(
+      oc.tg.data(), Shape{E, hidden / 16, oc.inter / 16, oc.packed}, uint16);
+  array ut = array(
+      oc.tu.data(), Shape{E, hidden / 16, oc.inter / 16, oc.packed}, uint16);
+  array dt = array(
+      oc.td.data(), Shape{E, oc.inter / 16, hidden / 16, oc.packed}, uint16);
+  array gsuh = array(oc.suhg.data(), Shape{E, hidden}, uint16);
+  array usuh = array(oc.suhu.data(), Shape{E, hidden}, uint16);
+  array dsvh = array(oc.svhd.data(), Shape{E, hidden}, uint16);
+  array gsvh = array(oc.svhg.data(), Shape{E, oc.inter}, uint16);
+  array usvh = array(oc.svhu.data(), Shape{E, oc.inter}, uint16);
+  array dsuh = array(oc.suhd.data(), Shape{E, oc.inter}, uint16);
+
+  setenv("MLX_OMARCHY_EXL3_FUSED_ROWS", "2", 1);
+  int ran_cases = 0;
+  for (int rows : {1, 2, 3, 4, 5, 17}) {
+    const std::vector<float> mults{1.0f, -1.0f, 0.5f, -0.25f};
+    std::vector<float> xrows((size_t)rows * hidden);
+    for (int r = 0; r < rows; r++) {
+      float m = mults[r % mults.size()];
+      for (int j = 0; j < hidden; j++) {
+        xrows[(size_t)r * hidden + j] = oc.x[j] * m;
+      }
+    }
+    std::vector<uint32_t> slotsr((size_t)rows * topk);
+    std::vector<float> scoresr((size_t)rows * topk);
+    for (int r = 0; r < rows; r++) {
+      std::copy(
+          oc.slots.begin(), oc.slots.end(), slotsr.begin() + (size_t)r * topk);
+      std::copy(
+          oc.scores.begin(),
+          oc.scores.end(),
+          scoresr.begin() + (size_t)r * topk);
+    }
+    // bf16 x and its exact f32 twin (the bf16 values widened, which the
+    // op builder also does internally).
+    array xb = array(xrows.data(), Shape{rows, hidden}, bfloat16);
+    array xq = astype(xb, float32, gs);
+    array sr = array(slotsr.data(), Shape{rows, topk}, uint32);
+    array scr = array(scoresr.data(), Shape{rows, topk}, float32);
+    // Sushi also hands over bf16 scores: widen for one twin leg.
+    array scr_b = astype(scr, bfloat16, gs);
+
+    for (float limit : {0.0f, 10.0f}) {
+      if (limit == 10.0f && rows != 1 && rows != 17) {
+        continue;
+      }
+      uint64_t before = omarchy::exl3_moe_fused_dispatch_count();
+      omarchy::exl3_moe_decoded_bank_allocations_reset();
+      array got_b = fast::exl3_moe(
+          xb,
+          gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          sr, scr,
+          topk, 15, limit, bfloat16, gs);
+      eval(got_b);
+      int want_chunks = (rows + 1) / 2;
+      CHECK(omarchy::exl3_moe_fused_dispatch_count() ==
+            before + static_cast<uint64_t>(want_chunks));
+      CHECK(omarchy::exl3_moe_decoded_bank_allocations() == 0);
+
+      uint64_t before_f = omarchy::exl3_moe_fused_dispatch_count();
+      array got_f = fast::exl3_moe(
+          xq,
+          gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          sr, scr,
+          topk, 15, limit, bfloat16, gs);
+      eval(got_f);
+      CHECK(omarchy::exl3_moe_fused_dispatch_count() ==
+            before_f + static_cast<uint64_t>(want_chunks));
+
+      // bf16 outputs compared exactly through the injective bf16->f32
+      // widening.
+      auto ab = astype(got_b, float32);
+      eval(ab);
+      const float* pb = ab.data<float>();
+
+      // The scores dtype must not matter either (bf16 -> f32 widens
+      // exactly), so the bf16-scores call must match a call whose f32
+      // scores carry the same bf16-representable values; one leg at
+      // rows=1 covers the path.
+      if (rows == 1 && limit == 0.0f) {
+        array scr2 = astype(scr_b, float32, gs);
+        eval(scr2);
+        array got_sb = fast::exl3_moe(
+            xb,
+            gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+            sr, scr_b,
+            topk, 15, limit, bfloat16, gs);
+        array got_s32 = fast::exl3_moe(
+            xq,
+            gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+            sr, scr2,
+            topk, 15, limit, bfloat16, gs);
+        auto asb = astype(got_sb, float32);
+        auto as32 = astype(got_s32, float32);
+        eval(asb, as32);
+        const float* ps = asb.data<float>();
+        const float* p32 = as32.data<float>();
+        size_t sdiffs = 0;
+        for (int j = 0; j < rows * hidden; j++) {
+          if (ps[j] != p32[j]) {
+            sdiffs++;
+          }
+        }
+        CHECK(sdiffs == 0);
+      }
+
+      auto af = astype(got_f, float32);
+      eval(af);
+      const float* pf = af.data<float>();
+      size_t diffs = 0;
+      for (int j = 0; j < rows * hidden; j++) {
+        if (pb[j] != pf[j]) {
+          diffs++;
+        }
+      }
+      CHECK(diffs == 0);
+
+      // The bf16 finish must agree with mlx's own f32->bf16 cast: run
+      // the f32-out twin and cast it.
+      array got32 = fast::exl3_moe(
+          xq,
+          gt, gsuh, gsvh, ut, usuh, usvh, dt, dsuh, dsvh,
+          sr, scr,
+          topk, 15, limit, float32, gs);
+      eval(got32);
+      auto cast = astype(got32, bfloat16);
+      auto cast32 = astype(cast, float32);
+      eval(cast32, ab);
+      const float* pc = cast32.data<float>();
+      size_t rdiffs = 0;
+      int first_diff = -1;
+      for (int j = 0; j < rows * hidden; j++) {
+        if (pb[j] != pc[j]) {
+          if (first_diff < 0) {
+            first_diff = j;
+          }
+          rdiffs++;
+        }
+      }
+      std::printf(
+          "bf16-cast rows=%d limit=%.0f rdiffs=%zu/%d first=%d got_b=%g "
+          "cast=%g\n",
+          rows,
+          limit,
+          rdiffs,
+          rows * hidden,
+          first_diff,
+          first_diff >= 0 ? pb[first_diff] : 0.0f,
+          first_diff >= 0 ? pc[first_diff] : 0.0f);
+      CHECK(rdiffs == 0);
+      ran_cases++;
+    }
+  }
+  unsetenv("MLX_OMARCHY_EXL3_FUSED_ROWS");
+  CHECK(ran_cases == 8);
 }
 
 

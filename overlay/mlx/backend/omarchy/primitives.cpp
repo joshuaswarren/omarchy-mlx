@@ -19,6 +19,7 @@
 #include <initializer_list>
 #include <optional>
 #include <numeric>
+#include <sstream>
 #include <string>
 #include <typeinfo>
 #include <utility>
@@ -13517,34 +13518,46 @@ bool Exl3MoeFused::accepts(
   // Row count is not an acceptance criterion: the op covers every row
   // count with per-chunk primitives (MLX_OMARCHY_EXL3_FUSED_ROWS is the
   // chunk width, not a row ceiling). Only geometry the shader cannot
-  // chunk over declines here.
+  // chunk over declines here. bf16 x is fine: the op builder widens it
+  // to f32 exactly and the fused chain rounds x through f16 at
+  // prepareInput, which is what the project reference does; values
+  // outside the f16 normal range saturate to inf/zero there (the
+  // composed arm carries them in f32 instead, so the two arms only
+  // diverge outside the f16 range - sushi's activations sit well inside
+  // it).
   (void)rows;
-  if (x.dtype() == bfloat16) {
-    return say("bf16 x (the fused chain rounds x through f16)");
-  }
   if (hidden % 128 != 0 || inter % 128 != 0) {
-    return say("hidden/inter must be multiples of 128");
+    return say("hidden/inter must be multiples of 128 (hidden " +
+               std::to_string(hidden) + ", inter " + std::to_string(inter) +
+               ")");
   }
   // Shared-memory staging is sized for the harness pack shapes.
   if (hidden > 2560 || inter > 640) {
-    return say("hidden > 2560 or inter > 640 (uncovered geometry)");
+    return say("hidden > 2560 or inter > 640 (uncovered geometry: hidden " +
+               std::to_string(hidden) + ", inter " + std::to_string(inter) +
+               ")");
   }
   uint32_t packed = checked_u32(gate_trellis.shape(3), "exl3_moe fused", x);
   if (gate_trellis.shape(3) != up_trellis.shape(3) ||
       gate_trellis.shape(3) != down_trellis.shape(3) ||
       (packed != 32 && packed != 48 && packed != 64 && packed != 96 &&
        packed != 128)) {
-    return say("packed rate not in {32, 48, 64, 96, 128}");
+    return say("packed rate not in {32, 48, 64, 96, 128} (got " +
+               std::to_string(packed) + ")");
   }
   if (window != 15) {
     return say("window " + std::to_string(window) + " != 15 (uncovered)");
   }
   auto planes_ok = [&](const array& v, int size, const char* name) {
-    if (v.ndim() == 2 && v.shape(1) == size) {
+    if (v.ndim() == 2 && v.shape(1) == size &&
+        (v.dtype() == float16 || v.dtype() == uint16)) {
       return true;
     }
-    say(std::string(name) + " must be a per-expert [E, " +
-        std::to_string(size) + "] plane for the fused arm");
+    std::ostringstream msg;
+    msg << name << " must be a per-expert [E, " << size
+        << "] f16/uint16 plane (got shape " << v.shape() << " dtype "
+        << v.dtype() << ")";
+    say(msg.str());
     return false;
   };
   int experts = gate_trellis.shape(0);
@@ -13557,7 +13570,7 @@ bool Exl3MoeFused::accepts(
     return false;
   }
   if (experts < 1) {
-    return say("no experts");
+    return say("no experts (" + std::to_string(experts) + ")");
   }
   (void)out_dtype;
   return true;

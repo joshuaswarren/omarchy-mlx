@@ -243,6 +243,7 @@ shared uint s_xt[2560];   // f16 bits, transformed input for one slot (mode 0)
 shared uint s_xtd[640];   // f16 bits, transformed SwiGLU output per slot (mode 1)
 shared float s_h[640];    // SwiGLU output staging (mode 1, slab 0 only)
 shared float s_fin[128];  // f32 accumulator exchange for the output H128
+shared uint s_pack[128];  // 16-bit output pair packing (mode 1 finish)
 
 void main() {
   uint lid = gl_LocalInvocationID.x;
@@ -471,10 +472,22 @@ void main() {
     }
     if (last) {
       uint rowBase = row * outDim + oGlob;
+#if defined(EXL3_OUT_F16) || defined(EXL3_OUT_BF16)
+      // 16-bit outputs ride two elements per uint32 word (the
+      // exl3_decode packed convention): even lanes pack their odd
+      // neighbor after both 16-bit patterns are published. hidden is a
+      // multiple of 128, so pairs never straddle a row or a block.
+      s_pack[oLocal] =
 #if defined(EXL3_OUT_F16)
-      g_out[g_meta[metaBase + 14] + rowBase] = f32ToF16(combined);
-#elif defined(EXL3_OUT_BF16)
-      g_out[g_meta[metaBase + 14] + rowBase] = f32ToBf16(floatBitsToUint(combined));
+          f32ToF16(combined);
+#else
+          f32ToBf16(floatBitsToUint(combined));
+#endif
+      barrier();
+      if ((oLocal & 1u) == 0u) {
+        g_out[g_meta[metaBase + 14] + (rowBase >> 1u)] =
+            s_pack[oLocal] | (s_pack[oLocal + 1u] << 16u);
+      }
 #else
       g_out[g_meta[metaBase + 14] + rowBase] = combined;
 #endif
