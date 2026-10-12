@@ -37,8 +37,8 @@ is not a speed claim, so it is not in the table.
 
 ## Apple silicon capture inventory (community collector rows)
 
-Machine captures from the community dataset snapshot of 2026-10-11,
-199 records:
+Machine captures from the community dataset snapshot of 2026-10-12,
+205 records:
 [SUMMARY.md](https://github.com/joshuaswarren/omarchy-mlx/blob/community-data/snapshot/SUMMARY.md)
 and
 [latest.jsonl](https://github.com/joshuaswarren/omarchy-mlx/blob/community-data/snapshot/latest.jsonl)
@@ -49,7 +49,7 @@ recorded, not recorded otherwise. Tests passed of total: not collected.
 
 | GPU / SoC | Rows | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
 |---|---|---|---|---|---|---|---|
-| apple,t6020 | 45 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
+| apple,t6020 | 47 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
 | Apple M2 Pro | 14 | (native macOS) | macOS where recorded (15.7 to 27.0.1) | 0.32.1 where recorded | not collected | not collected | collector row |
 | apple,t6000 | 13 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.4.dev where recorded | not collected | not collected | collector row |
 | apple,t8103 | 12 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev where recorded | not collected | not collected | collector row |
@@ -57,7 +57,7 @@ recorded, not recorded otherwise. Tests passed of total: not collected.
 | Apple M5 Max | 10 | (native macOS) | macOS 27.0 to 27.0.1 (Darwin 27.0) | 0.32.3 where recorded | not collected | not collected | collector row |
 | Apple M3 Pro | 8 | (native macOS) | macOS where recorded (15.5 to 27.0) | 0.32.1 to 0.32.3 where recorded | not collected | not collected | collector row |
 | apple,t6001 | 7 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
-| apple,t8112 | 7 | not recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.4.dev where recorded | not collected | not collected | collector row |
+| apple,t8112 | 8 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.4.dev where recorded | not collected | not collected | collector row |
 | Apple M4 Max | 7 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
 | apple,t6021 | 6 | Honeykrisp where recorded | Linux 7.1.x-ARCH, and one record with a 7.1.12 USB-C build | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
 | Apple M2 Max | 6 | (native macOS) | macOS where recorded (26.3 to 27.0) | where recorded | not collected | not collected | collector row |
@@ -69,6 +69,7 @@ recorded, not recorded otherwise. Tests passed of total: not collected.
 | linux,dummy-virt | 4 | no GPU captured | Linux 7.2.x aarch64-ARCH (VM) | 0.32.4.dev where recorded | not collected | not collected | collector row |
 | apple,t8122 | 3 | Honeykrisp where recorded | Linux 7.1.x where recorded | not recorded | not collected | not collected | collector row |
 | Apple M1 Max | 3 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| apple,t6031 | 3 | not recorded | Linux 7.1.12-2 sep builds | not recorded | not collected | not collected | collector row |
 | Apple M1 Pro | 2 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
 | Apple M1 | 2 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
 | Apple M3 Max | 2 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
