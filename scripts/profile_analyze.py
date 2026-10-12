@@ -41,7 +41,7 @@ import sys
 
 def parse_kernel_names(header_path):
     names = []
-    pattern = re.compile(r"^\s{2}(\w+),\s*$")
+    pattern = re.compile(r"^\s{2}(\w+),\s*(?://.*)?$")
     inside = False
     with open(header_path, "r", encoding="utf-8") as f:
         for line in f:
