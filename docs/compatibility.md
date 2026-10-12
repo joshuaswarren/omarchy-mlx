@@ -45,6 +45,35 @@ does not qualify M2 Max ANE.
 M3 and M4 Omarchy Linux work is deferred.
 Vulkan, ANE, and install gates are not qualified on those systems.
 
+## Non-Apple GPUs (development drivers)
+
+Not a supported target. With `MLX_OMARCHY_ALLOW_NON_APPLE=1` the
+backend admits any Vulkan 1.3 device for development. Apple vendor
+0x106b and Mesa Honeykrisp (driver id 26) are accepted without the
+flag; every other device is refused.
+
+Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
+
+- Intel UHD 770 (Mesa ANV 26.2.4): 55/55 `omarchy_runtime_tests`; op
+  check clean across add, sigmoid, softmax, copy, argmax, rms_norm,
+  rope, sdpa, take, bf16 matmul and 4-bit qmm through N = 6144.
+- NVIDIA RTX 5060 Ti (NVIDIA 615.71.09): 54/55; the
+  `independent streams measure against the serialized sum` check
+  missed (0.78-0.88 across 5 runs against the 0.95 floor). Every copy
+  verified byte-for-byte. The same run prints one
+  `SUBMIT-RECOVER ... resubmitted 1 stalled batch` line per run; the
+  submit-recovery ladder fired once. The reporter's host-visible
+  ReBAR allocation (CPU reads over PCIe at about 3 MB/s) is possibly
+  the cause of the timing loss. That was not tested, and CPU reads are a
+  different path from the two-stream copy timing. It is not a correctness
+  failure.
+- AMD RADV: no qualifying run.
+
+The non-Apple refusal without the flag is unchanged. The independent-streams
+check asserts on every driver except llvmpipe, so the NVIDIA miss above fails
+that test. [PR #128](https://github.com/joshuaswarren/omarchy-mlx/pull/128)
+proposes to report it as a measurement on NVIDIA proprietary instead.
+
 ## MLX core
 
 ### Compiled tape bfloat16 - fixed and re-enabled

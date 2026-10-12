@@ -73,6 +73,25 @@ chip needs, lives in the [chip coverage
 table](https://github.com/joshuaswarren/omarchy-ane#chip-coverage) of
 [omarchy-ane](https://github.com/joshuaswarren/omarchy-ane).
 
+## Other Vulkan GPUs (development)
+
+Not a supported target. With `MLX_OMARCHY_ALLOW_NON_APPLE=1` the
+backend admits any Vulkan 1.3 device for development on a normal
+Linux box. The flag and the llvmpipe note are in
+[Development override](docs/install-omarchy.md#development-override).
+Driver selection with `VK_DRIVER_FILES` is in
+[Selection](docs/install-omarchy.md#selection).
+The non-Apple refusal without the flag stays.
+
+Observed, from [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111):
+
+| GPU | Driver | Result |
+|---|---|---|
+| Intel UHD 770 | Mesa ANV 26.2.4 | 55/55 `omarchy_runtime_tests`; op check clean |
+| RTX 5060 Ti | NVIDIA 615.71.09 | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [Non-Apple GPUs](docs/compatibility.md#non-apple-gpus-development-drivers) |
+
+AMD (RADV) has no qualifying run.
+
 ## Install
 
 Run one command on an Arch install for an M1-class Mac or an M2 Max. The script picks the latest release, checks the wheel against the release
@@ -132,6 +151,8 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / mac
 | gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = 3% | 1.9 / 581.1 = 0.3% |
 
 Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
+
+Decode on the M1-class chips follows the CPU clock. See [Set the CPU governor for local AI](docs/BENCHMARKS.md#set-the-cpu-governor-for-local-ai).
 
 ## Qwen3.5-9B fused GDN decode
 
