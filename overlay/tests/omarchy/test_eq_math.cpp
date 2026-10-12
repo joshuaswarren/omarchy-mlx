@@ -234,7 +234,7 @@ TEST_CASE("W8 sin/cos/tan common path matches numpy f32") {
 //  |v| <= 1e3        -> built-in, 1e-4 abs (measured 2.8e-5 worst, M1)
 //  1e3 < |v| <= 1e4  -> built-in, 5e-3 abs (measured 4.8e-3 worst, M1)
 //  1e4 < |v| <= 5e5  -> shared Cody-Waite reduction, 1e-3 abs
-//                       (measured 2.5e-7 llvmpipe/jw16; jwm1 built-in adds
+//                       (measured 2.5e-7 llvmpipe/16-inch M1 Max; 13-inch M1 built-in adds
 //                       up to 6.9e-4; per-device maxima in the receipt)
 //  |v| > 5e5         -> NaN (sin, cos, tan alike); +inf/-inf -> NaN,
 //                       NaN in -> NaN out (IEEE)

@@ -3,7 +3,7 @@
 
 // Regression tests for the bool Take / TakeAlongAxis path the Omarchy
 // Vulkan backend shipped without. oMLX DeepSeek-OCR row A10
-// (jw16 /var/tmp/omlxmodal-a10/server.log lines 60, 147, 251) hit
+// (an oMLX server log on the 16-inch M1 Max, lines 60, 147, 251) hit
 // `[omarchy] Take dtype is not implemented ... (dtype=bool,
 // shape=[1,599])` from the `np.where(images_seq_mask)` gather that
 // `mlx_vlm.models.deepseekocr` calls on a bool mask at row 300. The

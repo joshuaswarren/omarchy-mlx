@@ -13,9 +13,9 @@
 // Measured error envelope of the reduction band (max abs err vs float64
 // over logspace samples + edges, receipts/2026-10-03-trig-contract/):
 //   llvmpipe      2.5e-7   (decade 1e4..1e5; 8.6e-8 in 1e5..5e5)
-//   jw16/M1 Max   <see receipt>  (same contract value pinned here)
+//   16-inch M1 Max   <see receipt>  (same contract value pinned here)
 // The test pins 1e-3 in the reduction band: the reduction's own
-// envelope is 2.5e-7 (llvmpipe, jw16), but jwm1's older-Mesa built-in
+// envelope is 2.5e-7 (llvmpipe, 16-inch M1 Max), but the 13-inch M1's older-Mesa built-in
 // sin/cos adds up to 6.9e-4 at some reduced arguments (measured,
 // stable across runs), so the pin covers the device built-in floor.
 // Per-device maxima are tabulated in the receipt.
@@ -94,11 +94,11 @@ TEST_CASE("sin/cos accuracy across the contract bands") {
   };
   std::vector<Range> ranges{
       {0.0f, 100.0f, 64, 1e-6, "small (built-in)"},
-      {100.0f, 1.0e3f, 64, 1e-3, "moderate (built-in; jwm1 measured 7.1e-4)"},
+      {100.0f, 1.0e3f, 64, 1e-3, "moderate (built-in; 13-inch M1 measured 7.1e-4)"},
       {1.0e3f, 1.0e4f, 64, 1e-2,
-          "built-in edge (jwm1 measured 6.6e-3; older driver 4.8e-3)"},
-      // The reduction's own envelope is 2.5e-7 (llvmpipe, jw16 measured).
-      // jwm1's older-Mesa built-in sin/cos adds up to 6.9e-4 at some
+          "built-in edge (13-inch M1 measured 6.6e-3; older driver 4.8e-3)"},
+      // The reduction's own envelope is 2.5e-7 (llvmpipe, 16-inch M1 Max measured).
+      // The 13-inch M1's older-Mesa built-in sin/cos adds up to 6.9e-4 at some
       // reduced arguments (measured, stable across runs) - the pin
       // covers the device built-in floor; per-device maxima are tabulated
       // in receipts/2026-10-03-trig-contract/.
@@ -154,7 +154,7 @@ TEST_CASE("tan uses the same reduction in its band") {
     float got = flat(tan(x, Stream(gpu)), Stream(gpu)).at(0);
     double err = std::abs(static_cast<double>(got) - ref);
     // 1e-2 relative: the reduction contributes ~1e-6; the device
-    // built-in's small-argument floor (jwm1, older Mesa: ~7e-4 absolute)
+    // built-in's small-argument floor (13-inch M1, older Mesa: ~7e-4 absolute)
     // amplifies through tan exactly as it does at small arguments.
     CHECK_MESSAGE(
         err <= 1e-2 * std::max(1.0, std::abs(ref)),
