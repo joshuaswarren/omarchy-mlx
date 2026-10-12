@@ -1876,6 +1876,35 @@ void CompletionDispatcher::wait(uint64_t value) {
         " available.");
   }
 }
+
+bool CompletionDispatcher::wait_settled(
+    uint64_t value,
+    std::chrono::steady_clock::duration budget) {
+  const auto deadline = std::chrono::steady_clock::now() + budget;
+  for (;;) {
+    bool settled = false;
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      if (stop_) {
+        return false;
+      }
+      settled = drained_value_ >= value &&
+          (drained_value_ > value ||
+           (pending_.empty() &&
+            std::chrono::steady_clock::now() - last_drain_at_ >=
+                std::chrono::nanoseconds(kCompletionPollNs)));
+    }
+    if (settled) {
+      return true;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(
+        std::chrono::nanoseconds(kCompletionPollNs));
+  }
+}
+
 void CompletionDispatcher::shutdown() {
   {
     std::lock_guard<std::mutex> lk(mutex_);

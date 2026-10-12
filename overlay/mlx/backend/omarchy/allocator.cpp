@@ -4,6 +4,7 @@
 #include "mlx/backend/omarchy/allocator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -229,13 +230,24 @@ Buffer VulkanAllocator::malloc(size_t size) {
   if (alloc_result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
       alloc_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
     // Freed buffers of submitted batches wait in the quarantine; they hold
-    // heap bytes that neither active_memory_ nor the cache count, so the
-    // retry would fail while that memory is about to come back. Wait for
-    // every submitted batch (the drain recycles its quarantined buffers),
-    // then drop the cache they landed in. No allocator lock is held here.
+    // heap bytes that neither active_memory_ nor the cache count. The
+    // drain's release pass stops one generation short of the newest
+    // (observing N proves cleanup for N-1: Mesa signals the completion
+    // timeline before its submit-final cleanup), so the newest
+    // generation's buffers are still parked here and the plain wait would
+    // retry while they are about to come back. Settle the drain like the
+    // dispatcher's idle tick and release through the newest generation;
+    // each buffer still has to pass its own execution fence. A queue that
+    // never goes quiet leaves the tick in charge and the retry behaves as
+    // before. No allocator lock is held here.
     if (const uint64_t submitted = device().completions().last_reserved();
         submitted != 0) {
       device().completions().wait(submitted);
+      if (device().completions().wait_settled(
+              submitted,
+              std::chrono::nanoseconds(submit_hang_no_progress_ns()))) {
+        release_quarantine(submitted);
+      }
     }
     {
       std::unique_lock rl(mutex_);
