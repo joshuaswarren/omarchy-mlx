@@ -115,7 +115,7 @@ int env_index(const char* name) {
 // Honeykrisp sizes its GPU-memory heap at 50% of MemTotal (mesa DRIR
 // default heap_memory_percent = 0.5, hk_drirc_gen.py) and the budget
 // post-check in hk_device_memory.c fails every allocation past it. On
-// large hosts that strands half the RAM: jw16 (62 GiB) could commit only
+// large hosts that strands half the RAM: a 62 GiB machine could commit only
 // ~30 GiB and Qwen3-32B-8bit (34.8 GB of weights) could not load, while
 // HK_SYSMEM=44 GiB (absolute bytes, hk_physical_device.c) reaches
 // 44 GiB. The backend therefore raises the heap for its own process, via
