@@ -766,6 +766,22 @@ def _cap_ane_block(block, redactor, max_bytes=96 * 1024):
     return out
 
 
+# A payload no reader can attribute: no Vulkan device and no chip or
+# model identity. The dataset held 10 such rows (2026-09-17/18) before
+# the collectors started refusing them; see docs/ANY-GPU.md (2026-10-12).
+NO_IDENTITY_MESSAGE = (
+    "[submit] refused: the report carries no GPU identity (no Vulkan "
+    "device and no chip), so the row could not be matched to any "
+    "hardware. Install vulkan-tools so vulkaninfo can run, then rerun "
+    "with --submit. Nothing was sent.")
+
+
+def payload_has_identity(payload):
+    """False when a submitted row would name no hardware at all."""
+    return bool(payload.get("chip") or payload.get("model")
+                or payload.get("mesa_device") or payload.get("mesa_driver"))
+
+
 def build_payload(kind, quick, manifest, generated_at=None, benchmark=None,
                   redactor=None, ane_macos=None, ane_linux=None):
     """Build the strict-schema JSON summary sent with the upload.

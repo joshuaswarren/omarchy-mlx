@@ -136,9 +136,9 @@ with:
 
 - `python3 scripts/collect_quick.py --submit` publishes host facts
   and, when `vulkaninfo` is installed, the Vulkan device section to
-  the public community dataset. Without `vulkaninfo` the row still
-  lands, but with no GPU identity; the dataset already holds rows of
-  that shape.
+  the public community dataset. Without `vulkaninfo` there is no GPU
+  identity on an x86_64 host, so the collector refuses to publish
+  (see the decision below); install `vulkan-tools` and rerun.
 - `python3 scripts/collect_deep.py --out FILE` adds correctness and
   benchmark sections, but only where a `mlx` module is importable.
   Current releases ship aarch64 wheels only, so on x86_64 non-Apple
@@ -146,6 +146,20 @@ with:
   x86_64 host on 2026-10-11). Export `MLX_OMARCHY_ALLOW_NON_APPLE=1`
   before running it so a source-built module may start.
 
-Test-suite numbers have no collector field today: attach them to an
-issue as above. The collector always previews first; nothing uploads
-without `--submit`.
+## Non-Apple results stay issue-only
+
+Decided 2026-10-12. The payload schema has no field for test-suite
+output, and adding one means a schema version bump and a Worker
+deploy. Decision: non-Apple test results stay issue-only. Follow
+"Attach your results" above; the non-Apple tables in
+[TESTED-HARDWARE.md](TESTED-HARDWARE.md) grow from those issues.
+
+The quick and deep collectors also refuse to publish a row that names
+no hardware (no Vulkan device and no chip or model). The dataset held
+10 such rows from 2026-09-17 and 2026-09-18; they stay as they are.
+Install `vulkan-tools` so `vulkaninfo` runs, then submit. The refusal
+exits with status 3 and sends nothing; the report still prints and
+`--out` still writes it.
+
+The collector always previews first; nothing uploads without
+`--submit`.

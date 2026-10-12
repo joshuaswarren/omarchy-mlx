@@ -38,8 +38,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import collect_macos
-from collect_common import (PROBE_STREAM_CHARS, SCHEMA_VERSION, Redactor,
-                            build_payload, is_identity_prop,
+from collect_common import (NO_IDENTITY_MESSAGE, PROBE_STREAM_CHARS,
+                            SCHEMA_VERSION, Redactor, build_payload,
+                            is_identity_prop, payload_has_identity,
                             dump_json, host_aliases, json_bytes, run_tool,
                             local_hostname)
 
@@ -1220,6 +1221,9 @@ def maybe_submit(args, report):
     if endpoint is None:
         return 0
     payload = build_payload("quick", report, {}, redactor=Redactor())
+    if not payload_has_identity(payload):
+        print(NO_IDENTITY_MESSAGE, file=sys.stderr)
+        return 3
     digest = collect_submit.sha256_hex(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
     if not args.submit and not collect_submit.confirm_interactive(
