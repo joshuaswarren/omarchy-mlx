@@ -1888,9 +1888,11 @@ bool CompletionDispatcher::wait_settled(
       if (stop_) {
         return false;
       }
-      settled = drained_value_ >= value && pending_.empty() &&
-          std::chrono::steady_clock::now() - last_drain_at_ >=
-              std::chrono::nanoseconds(kCompletionPollNs);
+      settled = drained_value_ >= value &&
+          (drained_value_ > value ||
+           (pending_.empty() &&
+            std::chrono::steady_clock::now() - last_drain_at_ >=
+                std::chrono::nanoseconds(kCompletionPollNs)));
     }
     if (settled) {
       return true;
