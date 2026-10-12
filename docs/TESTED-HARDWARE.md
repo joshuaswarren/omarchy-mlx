@@ -44,7 +44,7 @@ recorded, not recorded otherwise. Tests passed of total: not collected.
 | apple,t6001 | 7 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
 | apple,t8112 | 7 | not recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.4.dev where recorded | not collected | not collected | collector row |
 | Apple M4 Max | 7 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
-| apple,t6021 | 6 | Honeykrisp where recorded | Linux 7.1.x-ARCH, and one record with kernel `7.1.12-asahi-usbc` | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
+| apple,t6021 | 6 | Honeykrisp where recorded | Linux 7.1.x-ARCH, and one record with a 7.1.12 USB-C build | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
 | Apple M2 Max | 6 | (native macOS) | macOS where recorded (26.3 to 27.0) | where recorded | not collected | not collected | collector row |
 | Apple M5 | 6 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
 | Apple M2 Ultra | 5 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
