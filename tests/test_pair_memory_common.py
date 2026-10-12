@@ -4,7 +4,7 @@
 Stdlib unittest only, no network: the pure helpers run on dicts and temp
 files; the /proc walkers run against the live test process and a reaped
 child. The HTTP/session plumbing (call, wait_for_setup, backend_peak) is
-out of scope here — it needs a live server.
+out of scope here; it needs a live server.
 """
 
 import json
