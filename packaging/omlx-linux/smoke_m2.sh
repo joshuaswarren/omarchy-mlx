@@ -2,6 +2,7 @@
 # oMLX-on-Linux server smoke — runs INSIDE a gpu-turn ticket on the M2.
 # Receipts land in /tmp/omlx-smoke/ with wall-clock timestamps everywhere.
 set -uo pipefail
+# no set -e: broad smoke receipt - probes report their own errors and the log is the verdict
 mkdir -p /tmp/omlx-smoke && cd /tmp/omlx-smoke
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }

@@ -3,6 +3,7 @@
 # gap (mlx-community--Qwen3-4B-Instruct-2507-4bit serves cleanly). Document
 # the Qwen3.5-2B upstream gap in the receipt.
 set -uo pipefail
+# no set -e: receipt runner - every probe's result (including failures) is analyzed and logged; one failed curl must not discard the rest of the evidence
 mkdir -p /tmp/omlx-smoke3 && cd /tmp/omlx-smoke3
 exec > >(tee -a run.log) 2>&1
 ts() { date -u +%H:%M:%S.%3NZ; }

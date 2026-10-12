@@ -4,6 +4,7 @@
 # kernels forced on this part), then optionally the 10x512 free-run bar.
 # usage: arms_window.sh <venv-python> <tools-dir> <nstep> <freerun 0|1> <prompt...>
 set -uo pipefail
+# no set -e: each arm/prompt cell records its own rc and grep counts; a failed probe is a data point in the A/B matrix
 PY="$1"; TOOLS="$2"; NSTEP="$3"; FREERUN="$4"; shift 4
 M9B=$(ls -d "$HOME"/.cache/huggingface/hub/models--mlx-community--Qwen3.5-9B-MLX-4bit/snapshots/*/ | head -1)
 "$PY" -c "import mlx.core as mx; print('wheel', mx.__version__)"

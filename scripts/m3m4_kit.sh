@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # One-command M3/M4 tester kit for omarchy-mlx.
 #
 # Linux (aurora 12.3, M3):
@@ -30,7 +31,6 @@
 #     no M3/M4 hardware support is claimed or implied.
 #   MKIT_DRY_RUN=1 MKIT_ANE_STAGE=t8122:1 ...  # print every refusal
 #     check result and the exact insmod command; run nothing
-set -euo pipefail
 
 AURORA_URL="${AURORA_URL:-https://github.com/iconidentify/aurora-linux/releases/latest/download/install-aurora-sep.sh}"
 HWX_REPO="${HWX_REPO:-https://github.com/joshuaswarren/mil-hwx-compiler}"

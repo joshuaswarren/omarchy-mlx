@@ -4,7 +4,7 @@
 # the first /api/speak TTFA must be <= 2.0 s (the 1.5 s-target TTFA work:
 # primer + first-segment split). Must run on an idle machine — any load
 # invalidates the TTFA number.
-set -uo pipefail
+set -euo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 # LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
 # server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
@@ -27,24 +27,24 @@ python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
   "$GATE_HOME/.local/bin/mlx-omarchy-chat" --home "$ASSIST" --no-browser --pair everyday --yes \
   >"$LOG.server" 2>&1 &
 PID=$!
-python3 "$GATES_DIR/g10-kokoro-primer-driver.py" "$ASSIST" "$LOG"
-RC=$?
+RC=0
+python3 "$GATES_DIR/g10-kokoro-primer-driver.py" "$ASSIST" "$LOG" || RC=$?
 
 PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' \
-  "$ASSIST/assistant/application.json" 2>/dev/null)
+  "$ASSIST/assistant/application.json" 2>/dev/null || true)
 if [[ -n "$PORT" ]]; then
   if LISTENERS=$(fuser -n tcp "$PORT" 2>/dev/null); then
     for SERVER_PID in $LISTENERS; do
-      PGID=$(python3 -c 'import pathlib,sys; print((pathlib.Path("/proc")/sys.argv[1]/"stat").read_text().split()[4])' "$SERVER_PID" 2>/dev/null)
-      [[ -z "$PGID" ]] || kill -TERM -- "-$PGID" 2>/dev/null
-      kill -TERM "$SERVER_PID" 2>/dev/null
+      PGID=$(python3 -c 'import pathlib,sys; print((pathlib.Path("/proc")/sys.argv[1]/"stat").read_text().split()[4])' "$SERVER_PID" 2>/dev/null || true)
+      [[ -z "$PGID" ]] || kill -TERM -- "-$PGID" 2>/dev/null || :
+      kill -TERM "$SERVER_PID" 2>/dev/null || :
     done
     sleep 5
-    kill -KILL -- "-${PGID:-0}" 2>/dev/null
+    kill -KILL -- "-${PGID:-0}" 2>/dev/null || :
     sleep 1
   fi
 fi
-kill -TERM -- "-$PID" 2>/dev/null
+kill -TERM -- "-$PID" 2>/dev/null || :
 wait "$PID" 2>/dev/null || :
 if [[ -n "$PORT" ]]; then
   if FUSER_OUT=$(fuser -n tcp "$PORT" 2>&1); then FUSER_RC=0; else FUSER_RC=$?; fi

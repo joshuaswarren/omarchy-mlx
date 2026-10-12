@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SushiHang: wait for the zig fetch to land, then build sushi and arm capture.
 set -uo pipefail
+# no set -e: the poller probes for the zig toolchain in a loop and re-runs the fetch; absence is expected
 cd /var/tmp/sushi-rr
 nohup bash -c '
   for i in $(seq 1 240); do

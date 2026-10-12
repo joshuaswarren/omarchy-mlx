@@ -5,7 +5,8 @@
 # Usage: lane_v4.sh [base|cand ...]   (nohup me; log to lane_v4.log)
 # Legs default to both; pass "base" to run only the baseline column and
 # leave the candidate leg gated on dev-set validation.
-set -u
+set -uo pipefail
+# no set -e: resumable lane - a failed ticket is expected and retried in a loop; checkpoints decide progress
 cd /tmp/CardLatency
 LOG=/tmp/CardLatency/lane_v4.log
 LEGS=${*:-"base cand"}

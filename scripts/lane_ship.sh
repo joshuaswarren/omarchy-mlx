@@ -2,7 +2,8 @@
 # CardLatency lane: CONFIRMATION of the shipped build (promotion + wrap,
 # original prompt) on the frozen held-out v4, once per pair.
 # Usage: lane_ship.sh   (nohup me via setsid; log to lane_ship.log)
-set -u
+set -uo pipefail
+# no set -e: resumable lane - a failed ticket is expected and retried in a loop; checkpoints decide progress
 cd /tmp/CardLatency
 LOG=/tmp/CardLatency/lane_ship.log
 say() { echo "ship $(date -u +%FT%TZ) $*" >> "$LOG"; }

@@ -124,8 +124,8 @@ gate_log_wheel_identity() {
     'import importlib.metadata as md; print(md.version("mlx_omarchy"))' 2>/dev/null || echo absent)"
   if [[ -n "${EXPECTED_WHEEL_SHA256:-}" ]]; then
     local w
-    w="$(gate_wheel 2>/dev/null)"
-    want="$(basename "$w" 2>/dev/null | sed -E 's#^mlx_omarchy-(.+)-cp[0-9]+-cp[0-9]+-linux_aarch64\.whl$#\1#')"
+    w="$(gate_wheel 2>/dev/null || true)"
+    want="$(basename "$w" 2>/dev/null | sed -E 's#^mlx_omarchy-(.+)-cp[0-9]+-cp[0-9]+-linux_aarch64\.whl$#\1#' || true)"
     if [[ "$got" == "$want" && "$got" != "absent" ]]; then
       gate_log "$log" "WHEEL_IDENTITY installed=$got (sha=$EXPECTED_WHEEL_SHA256)"
     else

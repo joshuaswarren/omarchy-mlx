@@ -9,7 +9,7 @@
 # be in the cut; without it the default-ON leg cannot pass and this gate
 # is expected to fail — do not ship a cut that claims routing default ON
 # without this gate green.
-set -uo pipefail
+set -euo pipefail
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 # LOCKER: the binary the setsid+execvp launcher runs. Raw mode wraps the
 # server in flock; inside a gpu-turn ticket (GPU_TURN_TICKET=1) the ticket
@@ -38,12 +38,12 @@ run_leg() { # run_leg <home-dir> [KEY=VALUE ...]  -> background pid
 kill_leg() { # kill_leg <home-dir> <pid>
   local home="$1" pid="$2" port
   port=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' \
-    "$home/assistant/application.json" 2>/dev/null)
-  [ -n "$port" ] && fuser -k -n tcp "$port" 2>/dev/null
-  kill -TERM -- "-$pid" 2>/dev/null
-  kill -TERM "$pid" 2>/dev/null
+    "$home/assistant/application.json" 2>/dev/null || true)
+  [ -z "$port" ] || fuser -k -n tcp "$port" 2>/dev/null || :
+  kill -TERM -- "-$pid" 2>/dev/null || :
+  kill -TERM "$pid" 2>/dev/null || :
   sleep 3
-  kill -KILL -- "-$pid" 2>/dev/null
+  kill -KILL -- "-$pid" 2>/dev/null || :
   sleep 1
   if [ -n "$port" ] && fuser -n tcp "$port" >/dev/null 2>&1; then
     gate_log "$LOG" "LISTENER_LEFT port=$port"
@@ -55,19 +55,19 @@ RC=0
 echo "== leg A: default (routing expected ON) ==" | tee -a "$LOG"
 PA=$(run_leg "$ASSIST_A")
 sleep 5
-OUT_A=$(python3 "$GATES_DIR/g14-routing-driver.py" "$ASSIST_A" "$LOG")
+OUT_A=$(python3 "$GATES_DIR/g14-routing-driver.py" "$ASSIST_A" "$LOG" || true)
 echo "$OUT_A" | tee -a "$LOG"
-MODEL_A=$(echo "$OUT_A" | grep "^MODEL " | awk '{print $2}')
-STATUS_ROUTING_A=$(echo "$OUT_A" | grep "^STATUS_ROUTING" | head -1)
+MODEL_A=$(echo "$OUT_A" | grep "^MODEL " | awk '{print $2}' || true)
+STATUS_ROUTING_A=$(echo "$OUT_A" | grep "^STATUS_ROUTING" | head -1 || true)
 kill_leg "$ASSIST_A" "$PA"
 
 echo "== leg B: MLX_OMARCHY_ROUTING=0 (routing expected OFF) ==" | tee -a "$LOG"
 PB=$(run_leg "$ASSIST_B" MLX_OMARCHY_ROUTING=0)
 sleep 5
-OUT_B=$(python3 "$GATES_DIR/g14-routing-driver.py" "$ASSIST_B" "$LOG")
+OUT_B=$(python3 "$GATES_DIR/g14-routing-driver.py" "$ASSIST_B" "$LOG" || true)
 echo "$OUT_B" | tee -a "$LOG"
-MODEL_B=$(echo "$OUT_B" | grep "^MODEL " | awk '{print $2}')
-STATUS_ROUTING_B=$(echo "$OUT_B" | grep "^STATUS_ROUTING" | head -1)
+MODEL_B=$(echo "$OUT_B" | grep "^MODEL " | awk '{print $2}' || true)
+STATUS_ROUTING_B=$(echo "$OUT_B" | grep "^STATUS_ROUTING" | head -1 || true)
 kill_leg "$ASSIST_B" "$PB"
 
 gate_log "$LOG" "MODEL_A $MODEL_A"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # On-box release-wheel build + serving deploy loop (survives route flaps).
 set -uo pipefail
+# no set -e: detached retry loop - a failed attempt is logged and retried; aborting would defeat the flap survival
 LOG=/var/tmp/dfuse/rel-build.log
 for attempt in 1 2 3 4 5 6; do
   echo "=== rel build attempt $attempt $(date -u +%FT%TZ)" > "$LOG"
