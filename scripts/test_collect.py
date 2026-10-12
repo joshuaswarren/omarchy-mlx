@@ -113,6 +113,148 @@ class QuickReportStructure(unittest.TestCase):
         self.assertIn("RuntimeError", report["broken"]["error"])
 
 
+LAVAPIPE_FIXTURE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "testdata",
+    "vulkaninfo-text-lavapipe.txt")
+
+
+class VulkaninfoTextParser(unittest.TestCase):
+    """The parser against real `vulkaninfo --text` output.
+
+    Captured on a CPU-only x86 container running Mesa 22.3.6 with the
+    Vulkan loader 1.3.239 (lavapipe). The checked-in copy has the five
+    UUID values it contained replaced with zeros; collector data never
+    carries device or driver identifiers, and the fixture keeps that
+    rule while staying otherwise byte-identical to the capture.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        with open(LAVAPIPE_FIXTURE, encoding="utf-8") as fh:
+            cls.parsed = cq.parse_vulkaninfo_text(fh.read())
+        cls.device = cls.parsed["devices"][0]
+
+    def test_versions_and_driver_identity(self):
+        self.assertEqual(self.parsed["instance_version"], "1.3.239")
+        self.assertEqual(self.device["apiVersion"], "1.3.230")
+        self.assertTrue(self.device["deviceName"].startswith("llvmpipe"))
+        driver = self.device["driver"]
+        self.assertEqual(driver["driverID"], "DRIVER_ID_MESA_LLVMPIPE")
+        self.assertEqual(driver["driverName"], "llvmpipe")
+        self.assertEqual(driver["driverInfo"], "Mesa 22.3.6 (LLVM 15.0.6)")
+        self.assertEqual(driver["conformanceVersion"], "1.3.1.1")
+
+    def test_memory_heaps(self):
+        self.assertEqual(self.device["memory_heaps"],
+                         [{"size": 2147483648, "deviceLocal": True}])
+
+    def test_subgroup(self):
+        subgroup = self.device["subgroup"]
+        self.assertEqual(subgroup["subgroupSize"], 8)
+        self.assertEqual(subgroup["minSubgroupSize"], 8)
+        self.assertEqual(subgroup["maxSubgroupSize"], 8)
+        self.assertIn("SHADER_STAGE_COMPUTE_BIT", subgroup["supportedStages"])
+        for op in ("SUBGROUP_FEATURE_BASIC_BIT",
+                   "SUBGROUP_FEATURE_ARITHMETIC_BIT",
+                   "SUBGROUP_FEATURE_SHUFFLE_BIT",
+                   "SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT"):
+            self.assertIn(op, subgroup["supportedOperations"])
+
+    def test_backend_limits_features_queues(self):
+        limits = self.device["limits"]
+        self.assertEqual(limits["maxComputeSharedMemorySize"], 32768)
+        self.assertEqual(limits["maxComputeWorkGroupInvocations"], 1024)
+        self.assertEqual(limits["maxComputeWorkGroupSize"],
+                         [1024, 1024, 1024])
+        self.assertEqual(limits["maxComputeWorkGroupCount"],
+                         [65535, 65535, 65535])
+        self.assertEqual(limits["maxStorageBufferRange"], 134217728)
+        self.assertEqual(limits["maxPushConstantsSize"], 128)
+        self.assertEqual(limits["maxBoundDescriptorSets"], 8)
+        self.assertEqual(self.device["features"],
+                         {"timelineSemaphore": True, "shaderFloat16": True,
+                          "shaderInt8": True,
+                          "storageBuffer16BitAccess": True})
+        # lavapipe in this Mesa release does not list the extension, so
+        # the recorded presence is a real false, not a missing field.
+        self.assertFalse(self.device["cooperative_matrix"])
+        self.assertEqual(self.device["compute_queues"],
+                         {"families": 1, "queues": 1})
+
+    def test_absent_fields_stay_null(self):
+        minimal = cq.parse_vulkaninfo_text(
+            "Vulkan Instance Version: 9.9.9\n"
+            "GPU0:\n"
+            "VkPhysicalDeviceProperties:\n"
+            "\tdeviceName = minimal\n")
+        device = minimal["devices"][0]
+        self.assertEqual(minimal["instance_version"], "9.9.9")
+        self.assertIsNone(device["driver"]["driverID"])
+        self.assertIsNone(device["driver"]["conformanceVersion"])
+        self.assertIsNone(device["limits"]["maxComputeSharedMemorySize"])
+        self.assertIsNone(device["limits"]["maxComputeWorkGroupSize"])
+        self.assertEqual(device["memory_heaps"], [])
+        self.assertIsNone(device["subgroup"]["subgroupSize"])
+        self.assertIsNone(device["features"]["timelineSemaphore"])
+        self.assertIsNone(device["cooperative_matrix"])
+        self.assertEqual(device["compute_queues"],
+                         {"families": 0, "queues": 0})
+
+    def test_garbage_input_is_empty_not_fatal(self):
+        for text in ("", "vulkaninfo exploded\nno devices here"):
+            self.assertEqual(cq.parse_vulkaninfo_text(text),
+                             {"instance_version": None, "devices": []})
+
+    def test_no_identifier_leak(self):
+        blob = json.dumps(self.parsed).lower()
+        for marker in ("uuid", "luid", "serial"):
+            self.assertNotIn(marker, blob)
+        self.assertIsNone(re.search(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            blob))
+
+    def test_probe_mesa_records_capabilities(self):
+        with open(LAVAPIPE_FIXTURE, encoding="utf-8") as fh:
+            text = fh.read()
+        summary = (
+            "Vulkan Instance Version: 1.3.239\n"
+            "\n"
+            "GPU0:\n"
+            "\tdeviceName = llvmpipe (LLVM 15.0.6, 256 bits)\n"
+            "\tdeviceType = PHYSICAL_DEVICE_TYPE_CPU\n"
+            "\tdriverName = llvmpipe\n"
+            "\tapiVersion = 1.3.230 (4206822)\n")
+        records = {
+            ("vulkaninfo", "--summary"): {
+                "label": "vulkaninfo --summary",
+                "argv": ["vulkaninfo", "--summary"],
+                "available": True, "exit_code": 0, "error": None,
+                "duration_ms": 1.0, "stdout": summary, "stderr": ""},
+            ("vulkaninfo", "--text"): {
+                "label": "vulkaninfo --text",
+                "argv": ["vulkaninfo", "--text"],
+                "available": True, "exit_code": 0, "error": None,
+                "duration_ms": 1.0, "stdout": text, "stderr": ""},
+        }
+
+        def fake_run(argv, redactor, **kwargs):
+            return records[tuple(argv)]
+
+        with patch("platform.system", return_value="Linux"), \
+                patch.object(cq, "run_tool", fake_run):
+            mesa = cq.probe_mesa(cc.Redactor())
+        self.assertTrue(mesa["available"])
+        caps = mesa["capabilities"]
+        self.assertTrue(caps["available"])
+        self.assertEqual(caps["instance_version"], "1.3.239")
+        self.assertEqual(caps["device"]["driver"]["driverID"],
+                         "DRIVER_ID_MESA_LLVMPIPE")
+        self.assertEqual(caps["device"]["memory_heaps"],
+                         [{"size": 2147483648, "deviceLocal": True}])
+        self.assertNotIn("stdout", caps["vulkaninfo"])
+        self.assertEqual(caps["vulkaninfo"]["stdout_bytes"], len(text))
+
+
 class UnavailableToolBehavior(unittest.TestCase):
     def test_missing_binary_recorded(self):
         rec = cc.run_tool(["definitely-not-a-real-tool-xyz"],
@@ -126,6 +268,15 @@ class UnavailableToolBehavior(unittest.TestCase):
         self.assertTrue(rec["available"])
         self.assertEqual(rec["exit_code"], 0)
         self.assertEqual(rec["stdout"], "hello")
+
+    def test_line_cap_can_be_raised_for_one_tool(self):
+        lines = [sys.executable, "-c",
+                 "print('\\n'.join(str(i) for i in range(600)))"]
+        capped = cc.run_tool(lines, cc.Redactor(), label="capped")
+        self.assertIn("[truncated:", capped["stdout"])
+        self.assertNotIn("599", capped["stdout"])
+        wide = cc.run_tool(lines, cc.Redactor(), label="wide", max_lines=1000)
+        self.assertEqual(wide["stdout"].splitlines()[-1], "599")
 
     def test_deep_section_preserves_unavailability(self):
         with tempfile.TemporaryDirectory() as ws:

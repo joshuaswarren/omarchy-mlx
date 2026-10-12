@@ -38,8 +38,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import collect_macos
-from collect_common import (SCHEMA_VERSION, Redactor, build_payload,
-                            is_identity_prop,
+from collect_common import (PROBE_STREAM_CHARS, SCHEMA_VERSION, Redactor,
+                            build_payload, is_identity_prop,
                             dump_json, host_aliases, json_bytes, run_tool,
                             local_hostname)
 
@@ -786,6 +786,249 @@ def _primary_device(devices):
     return devices[0]
 
 
+# Backend-relevant Vulkan facts for a non-Apple GPU. The omarchy backend
+# dispatches through compute workgroups of 256+ invocations, 4 KiB of
+# shared memory, subgroup shuffles and, when a driver exposes it,
+# cooperative matrix (docs/chip-portability.md F-02, F-03, F-05, F-12;
+# the bench tools in tools/ also chain timelineSemaphore and
+# shaderFloat16). Fields are copied out as `vulkaninfo --text` reports
+# them; a field the driver or loader does not report stays null.
+_VK_SCALAR_LIMITS = (
+    "maxComputeSharedMemorySize", "maxComputeWorkGroupInvocations",
+    "maxStorageBufferRange", "maxPushConstantsSize",
+    "maxBoundDescriptorSets")
+_VK_ARRAY_LIMITS = ("maxComputeWorkGroupSize", "maxComputeWorkGroupCount")
+_VK_FEATURES = ("timelineSemaphore", "shaderFloat16", "shaderInt8",
+                "storageBuffer16BitAccess")
+
+_VK_HEADER_RE = re.compile(r"^(\t*)([A-Za-z][A-Za-z0-9_\[\] ]*):\s*$")
+_VK_KV_RE = re.compile(r"^(\t*)([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)$")
+_VK_COUNTED_RE = re.compile(
+    r"^(\t*)([A-Za-z][A-Za-z0-9_]*): count = (\d+)\s*$")
+
+
+def _vk_sections(lines):
+    """Map `outer/inner` section paths to the data lines inside them.
+
+    vulkaninfo nests with tabs; a section runs from its `Name:` header
+    until the next header at the same or shallower indent. Indexed
+    sub-sections (memoryHeaps[0], queueProperties[2]) keep their index
+    in the path.
+    """
+    sections = {}
+    stack = []
+    for line in lines:
+        m = _VK_HEADER_RE.match(line)
+        if m:
+            indent = len(m.group(1))
+            while stack and stack[-1][0] >= indent:
+                stack.pop()
+            stack.append((indent, m.group(2).strip()))
+            continue
+        if stack:
+            sections.setdefault("/".join(n for _, n in stack),
+                                []).append(line)
+    return sections
+
+
+def _vk_kv(lines, key):
+    """Full value of the first `key = value` line, or None."""
+    for line in lines:
+        m = _VK_KV_RE.match(line)
+        if m and m.group(2) == key:
+            return m.group(3).strip()
+    return None
+
+
+def _vk_int(lines, key):
+    """Integer value of `key = N` (first token; understands 0x hex)."""
+    value = _vk_kv(lines, key)
+    if value is None:
+        return None
+    try:
+        return int(value.split()[0], 0)
+    except ValueError:
+        return None
+
+
+def _vk_counted(lines, key, integers=False):
+    """Items under `key: count = N`, until the indent returns.
+
+    Array limits list bare numbers one per line; bit lists list
+    FLAG_BIT tokens. Nothing after the list is consumed.
+    """
+    opener = None
+    items = []
+    for line in lines:
+        m = _VK_COUNTED_RE.match(line)
+        if m and m.group(2) == key:
+            opener = len(m.group(1))
+            continue
+        if opener is None:
+            continue
+        if len(line) - len(line.lstrip("\t")) <= opener:
+            break
+        token = line.strip()
+        if integers:
+            try:
+                token = int(token.split()[0], 0)
+            except ValueError:
+                return None
+        items.append(token)
+    return items or None
+
+
+def _vk_feature(lines, name):
+    """true/false of the first `<name> = true|false`, or None."""
+    for line in lines:
+        m = re.match(r"^\s+%s\s*=\s+(true|false)\s*$" % name, line)
+        if m:
+            return m.group(1) == "true"
+    return None
+
+
+def _vk_text_device(lines):
+    """Backend-relevant fields of one GPU block of `vulkaninfo --text`.
+
+    Extraction is allowlisted key by key, so identifier-shaped values
+    in the input (deviceUUID, driverUUID, LUID, pipelineCacheUUID)
+    can never reach the report even when the driver reports them.
+    """
+    sections = _vk_sections(lines)
+    props = sections.get("VkPhysicalDeviceProperties", [])
+    driver = sections.get("VkPhysicalDeviceDriverProperties", [])
+    conf = sections.get("VkPhysicalDeviceDriverProperties/conformanceVersion",
+                        [])
+    limits = sections.get("VkPhysicalDeviceLimits", [])
+    subgroup = sections.get("VkPhysicalDeviceSubgroupProperties", [])
+    size_control = sections.get(
+        "VkPhysicalDeviceSubgroupSizeControlProperties", [])
+    heaps = []
+    for path, heap_lines in sections.items():
+        if not re.search(r"memoryHeaps\[\d+\]$", path):
+            continue
+        flags = _vk_counted(heap_lines, "flags") or []
+        heaps.append({
+            "size": _vk_int(heap_lines, "size"),
+            "deviceLocal": "MEMORY_HEAP_DEVICE_LOCAL_BIT" in flags,
+        })
+    families = 0
+    compute_queues = 0
+    for path, queue_lines in sections.items():
+        if not re.search(r"queueProperties\[\d+\]$", path):
+            continue
+        families += 1
+        if "QUEUE_COMPUTE" in (_vk_kv(queue_lines, "queueFlags") or ""):
+            compute_queues += _vk_int(queue_lines, "queueCount") or 0
+    extensions_listed = any(re.match(r"^\s*Device Extensions: count = ",
+                                     line) for line in lines)
+    conf_parts = [_vk_int(conf, part) for part in
+                  ("major", "minor", "subminor", "patch")]
+    api = _vk_kv(props, "apiVersion")
+    return {
+        "deviceName": _vk_kv(props, "deviceName"),
+        "deviceType": _vk_kv(props, "deviceType"),
+        "apiVersion": api.split()[0] if api else None,
+        "driver": {
+            "driverID": _vk_kv(driver, "driverID"),
+            "driverName": _vk_kv(driver, "driverName"),
+            "driverInfo": _vk_kv(driver, "driverInfo"),
+            "conformanceVersion": (
+                ".".join(str(part) for part in conf_parts)
+                if all(part is not None for part in conf_parts) else None),
+        },
+        "memory_heaps": heaps,
+        "subgroup": {
+            "subgroupSize": _vk_int(subgroup, "subgroupSize"),
+            "minSubgroupSize": _vk_int(size_control, "minSubgroupSize"),
+            "maxSubgroupSize": _vk_int(size_control, "maxSubgroupSize"),
+            "supportedStages": _vk_counted(subgroup, "supportedStages"),
+            "supportedOperations": _vk_counted(subgroup,
+                                               "supportedOperations"),
+        },
+        "limits": {
+            **{k: _vk_int(limits, k) for k in _VK_SCALAR_LIMITS},
+            **{k: _vk_counted(limits, k, integers=True)
+               for k in _VK_ARRAY_LIMITS},
+        },
+        "features": {k: _vk_feature(lines, k) for k in _VK_FEATURES},
+        "cooperative_matrix": (
+            any(re.match(r"^\s*VK_KHR_cooperative_matrix\s*:", line)
+                for line in lines)
+            if extensions_listed else None),
+        "compute_queues": {"families": families, "queues": compute_queues},
+    }
+
+
+def parse_vulkaninfo_text(text):
+    """Parse `vulkaninfo --text` into per-device capability dicts.
+
+    The text form is the stable one: the `--json` shape changed
+    wholesale between loader releases (1.3.239 emitted the profiles
+    schema), while the text sections parsed here go back years. Fields
+    the driver does not report stay null, never invented.
+    """
+    devices = []
+    current = None
+    for line in text.splitlines():
+        if re.match(r"^GPU\d+:$", line.strip()):
+            current = []
+            devices.append(current)
+            continue
+        if current is not None:
+            current.append(line)
+    m = re.search(r"^Vulkan Instance Version: (\S+)", text, re.MULTILINE)
+    return {
+        "instance_version": m.group(1) if m else None,
+        "devices": [_vk_text_device(lines) for lines in devices],
+    }
+
+
+def _capabilities_device(devices, gpu):
+    """The parsed device matching the summary's primary device."""
+    for dev in devices:
+        if dev["deviceName"] and dev["deviceName"] == gpu.get("deviceName"):
+            return dev
+    for dev in devices:
+        if dev["deviceType"] != "PHYSICAL_DEVICE_TYPE_CPU":
+            return dev
+    return devices[0] if devices else {}
+
+
+# `vulkaninfo --text` lists every property and feature struct; on real
+# drivers that runs to a couple thousand lines, far above the generic
+# 400-line stream cap, and the sections the backend needs (memory
+# heaps, feature blocks, queue families) sit past the cut. The dump
+# still never reaches the report: it is parsed and dropped.
+_VK_TEXT_MAX_LINES = 4000
+
+
+def _probe_vulkan_capabilities(redactor, gpu):
+    """Device facts the omarchy backend needs, from `vulkaninfo --text`.
+
+    The text dump is large (format tables), so the raw stdout is
+    dropped after parsing: only the run status and the parsed fields
+    travel in the report.
+    """
+    caps = {"available": False}
+    rec = run_tool(["vulkaninfo", "--text"], redactor,
+                   label="vulkaninfo --text", timeout=120,
+                   max_chars=PROBE_STREAM_CHARS,
+                   max_lines=_VK_TEXT_MAX_LINES)
+    caps["vulkaninfo"] = {k: rec.get(k) for k in
+                          ("label", "argv", "available", "exit_code",
+                           "error")}
+    caps["vulkaninfo"]["stdout_bytes"] = len(rec.get("stdout") or "")
+    if not rec["available"] or rec["exit_code"] != 0:
+        return caps
+    parsed = parse_vulkaninfo_text(rec["stdout"])
+    caps["instance_version"] = parsed["instance_version"]
+    caps["available"] = bool(parsed["devices"])
+    if caps["available"]:
+        caps["device"] = _capabilities_device(parsed["devices"], gpu)
+    return caps
+
+
 def probe_mesa(redactor):
     """Vulkan stack identity from `vulkaninfo --summary`."""
     if platform.system() == "Darwin":
@@ -806,6 +1049,7 @@ def probe_mesa(redactor):
              "driverID", "driverInfo")
     out["gpu"] = {k: primary[k] for k in known if k in primary}
     out["available"] = bool(out["gpu"])
+    out["capabilities"] = _probe_vulkan_capabilities(redactor, out["gpu"])
     return out
 
 

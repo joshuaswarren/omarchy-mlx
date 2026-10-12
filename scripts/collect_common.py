@@ -314,16 +314,17 @@ class Redactor:
         return text
 
 
-def cap_stream(text, max_chars=None):
+def cap_stream(text, max_chars=None, max_lines=None):
     """Cap one captured output stream so archives stay small."""
     if text is None:
         return ""
     limit = MAX_STREAM_CHARS if max_chars is None else max_chars
+    keep = MAX_STREAM_LINES if max_lines is None else max_lines
     lines = text.splitlines()
     total = len(lines)
-    kept = lines[:MAX_STREAM_LINES]
+    kept = lines[:keep]
     out = "\n".join(kept)[:limit]
-    if total > MAX_STREAM_LINES or len(text) > limit:
+    if total > keep or len(text) > limit:
         out += f"\n[truncated: {total} lines, {len(text)} chars captured]"
     return out
 
@@ -334,7 +335,7 @@ def redact_argv(argv, redactor):
 
 
 def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None,
-             max_chars=None, redact_output=True):
+             max_chars=None, redact_output=True, max_lines=None):
     """Run one external command; record absence, timeout, and output.
 
     Returns a dict. Never raises for a missing binary or a timeout.
@@ -365,8 +366,10 @@ def run_tool(argv, redactor, label=None, timeout=30, cwd=None, env=None,
             env=env,
         )
         record["exit_code"] = proc.returncode
-        stdout = cap_stream(proc.stdout or "", max_chars=max_chars)
-        stderr = cap_stream(proc.stderr or "", max_chars=max_chars)
+        stdout = cap_stream(proc.stdout or "", max_chars=max_chars,
+                            max_lines=max_lines)
+        stderr = cap_stream(proc.stderr or "", max_chars=max_chars,
+                            max_lines=max_lines)
         record["stdout"] = redactor.apply(stdout) if redact_output else stdout
         record["stderr"] = redactor.apply(stderr) if redact_output else stderr
     except subprocess.TimeoutExpired:
