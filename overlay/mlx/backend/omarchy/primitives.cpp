@@ -3276,7 +3276,7 @@ void dispatch_gather_qmm(
     // restricted to the layout class proven correct end to end (bf16 and
     // f16, 4-bit, group-64, transposed affine - the MoE decode cases;
     // f16 added by MatmulGap H45); every other layout stays on the scalar kernel until its
-    // parity is proven per layout (jwm1/jw16 suite history: f32-T and
+    // parity is proven per layout (M1 and M1 Max suite history: f32-T and
     // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
     // and untested layouts must not ride an unproven kernel). Counts
     // above 65535 workgroups (large-batch routed decode) are handled by
