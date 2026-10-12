@@ -190,6 +190,8 @@ Every row names its driver, governor and ANE state. "v3" is the private ICD at M
 
 The first schedutil run of the 16-inch M1 Max block read 1.77 tokens per second, with the machine busy at its start (64 W, fans at 2864 rpm). It is left out of the table. With it, the median is 10.39 and the ratio is 1.232.
 
+The 13-inch M1 run at 9.18 started with a load average of 1.37, above the 0.5 target, so its number may be low.
+
 The 13-inch M1 and 16-inch M1 Max ratios compare two governors in one session, on one driver, with no ANE work running. The 13-inch M1 rows with the ANE filler on all use the package driver. Under both governors they read about 9 tokens per second. The filler-off performance block used the v3 driver, so the gap between 15.27 and 9.18 mixes a driver difference, an ANE difference and a difference in hour. We have not separated them. A same-driver test with the filler on and off is queued. On the 14-inch M2 Max with the filler on, the performance rows are single runs against the schedutil block arms from earlier in the day. They read 16.5% higher for gemma-4-26B-A4B and 0.5% higher for Qwen3.6-35B-A3B. That is not an interleaved comparison. The 16-inch M1 Max has no performance row with the filler on yet.
 
 The 14-inch M2 Max filler-off case is not measured.
