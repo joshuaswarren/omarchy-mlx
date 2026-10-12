@@ -59,6 +59,7 @@ import collect_macos
 import collect_quick
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 from collect_common import (
+    NO_IDENTITY_MESSAGE,
     SCHEMA_VERSION,
     Redactor,
     _cap_omarchy_ane,
@@ -70,6 +71,7 @@ from collect_common import (
     is_native_macos,
     json_bytes,
     local_hostname,
+    payload_has_identity,
     read_text,
     run_tool,
 )
@@ -1629,6 +1631,9 @@ def maybe_submit(args, data, archive_name, out_path, payload):
                   f"--submit or send {out_path} "
                   f"and its .submission.md by hand.")
         return 0
+    if not payload_has_identity(payload):
+        print(NO_IDENTITY_MESSAGE, file=sys.stderr)
+        return 3
     temp_path = None
     if not out_path:
         # Bare --submit: stage the bytes in the user's tmp dir so the

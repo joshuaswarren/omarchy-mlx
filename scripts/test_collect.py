@@ -3080,7 +3080,7 @@ class BareSubmitStagingTests(unittest.TestCase):
     the file and prints its path (2026-10-03: bare --submit refused with
     exit 4 before the upload was attempted)."""
 
-    def _capture(self, args, out_path=None, **overrides):
+    def _capture(self, args, out_path=None, payload=None, **overrides):
         import collect_submit as cs
         saved = {k: getattr(cs, k) for k in overrides}
         for k, v in overrides.items():
@@ -3091,7 +3091,12 @@ class BareSubmitStagingTests(unittest.TestCase):
             try:
                 code = cd.maybe_submit(args, b"archive-bytes",
                                        "mlx-omarchy-deep.tar.gz",
-                                       out_path, {})
+                                       out_path, payload or {
+                                           "schema_version": 2,
+                                           "kind": "deep",
+                                           "generated_at":
+                                               "2026-10-12T00:00:00Z",
+                                           "chip": "apple,t8103"})
             except SystemExit as e:
                 code = e.code
         for k, v in saved.items():
@@ -3153,5 +3158,126 @@ class BareSubmitStagingTests(unittest.TestCase):
         finally:
             if os.path.exists(out_path):
                 os.remove(out_path)
+
+
+class SubmitRefusesNoIdentity(unittest.TestCase):
+    """A submit whose payload names no hardware is refused before
+    anything is sent (issue 149; decision in docs/ANY-GPU.md).
+
+    A row with no Vulkan device and no chip or model string cannot be
+    matched to any machine; the dataset held 10 such rows. The
+    collectors keep the report local and exit 3 instead of uploading.
+    """
+
+    ENDPOINT = "https://collector.example"
+    GENERATED = "2026-10-12T00:00:00Z"
+
+    def _args(self, submit=True):
+        import collect_submit as cs
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--submit", nargs="?", default=None,
+                        const=cs.DEFAULT_ENDPOINT, metavar="URL")
+        return ap.parse_args(["--submit", self.ENDPOINT] if submit else [])
+
+    def _quick_report(self, identity=True):
+        host = {"arch": "aarch64" if identity else "x86_64",
+                "kernel_release": "6.12.8"}
+        if identity:
+            host["devicetree"] = {
+                "compatible": ["apple,t8103", "apple,arm-platform"]}
+        return {"host": host, "mesa": {"available": False}}
+
+    def _deep_payload(self, identity=True):
+        return {"schema_version": cc.SCHEMA_VERSION, "kind": "deep",
+                "generated_at": self.GENERATED,
+                "chip": "apple,t8103" if identity else None,
+                "model": None, "mesa_device": None, "mesa_driver": None}
+
+    def test_quick_refuses_submit_without_identity(self):
+        import collect_submit as cs
+
+        def _boom(*a, **k):
+            raise AssertionError("upload attempted without GPU identity")
+
+        err = io.StringIO()
+        with patch.object(cs, "submit_payload", side_effect=_boom):
+            with contextlib.redirect_stderr(err):
+                code = cq.maybe_submit(self._args(),
+                                       self._quick_report(identity=False))
+        self.assertEqual(code, 3)
+        text = err.getvalue()
+        self.assertIn("vulkaninfo", text)
+        self.assertIn("Nothing was sent", text)
+
+    def test_quick_env_endpoint_refuses_before_prompt(self):
+        """The wrapper path (MLX_OMARCHY_SUBMIT_URL plus the exact-word
+        prompt) refuses before the prompt is ever shown."""
+        import collect_submit as cs
+
+        def _boom(*a, **k):
+            raise AssertionError("consent prompt reached without identity")
+
+        err = io.StringIO()
+        with patch.dict(os.environ,
+                        {"MLX_OMARCHY_SUBMIT_URL": self.ENDPOINT}):
+            with patch.object(cs, "confirm_interactive",
+                              side_effect=_boom):
+                with contextlib.redirect_stderr(err):
+                    code = cq.maybe_submit(
+                        self._args(submit=False),
+                        self._quick_report(identity=False))
+        self.assertEqual(code, 3)
+        self.assertIn("Nothing was sent", err.getvalue())
+
+    def test_quick_upload_with_identity_still_works(self):
+        import collect_submit as cs
+
+        def _ok(*a, **k):
+            return {"url": "http://r/x", "deduplicated": False,
+                    "status": 200}
+
+        out = io.StringIO()
+        with patch.object(cs, "submit_payload", side_effect=_ok):
+            with contextlib.redirect_stdout(out):
+                code = cq.maybe_submit(self._args(),
+                                       self._quick_report(identity=True))
+        self.assertEqual(code, 0)
+        self.assertIn("public URL: http://r/x", out.getvalue())
+
+    def test_deep_refuses_submit_without_identity(self):
+        import collect_submit as cs
+
+        def _boom(*a, **k):
+            raise AssertionError("upload attempted without GPU identity")
+
+        err, out = io.StringIO(), io.StringIO()
+        with patch.object(cs, "submit", side_effect=_boom):
+            with contextlib.redirect_stderr(err):
+                with contextlib.redirect_stdout(out):
+                    code = cd.maybe_submit(
+                        self._args(), b"archive-bytes", "deep.tar.gz",
+                        None, self._deep_payload(identity=False))
+        self.assertEqual(code, 3)
+        self.assertIn("Nothing was sent", err.getvalue())
+        self.assertNotIn("staged archive", out.getvalue(),
+                         "refusal must fire before temp staging")
+
+    def test_deep_upload_with_chip_still_works(self):
+        import collect_submit as cs
+
+        def _ok(*a, **k):
+            return {"url": "http://r/y", "deduplicated": False,
+                    "status": 200}
+
+        out = io.StringIO()
+        with patch.object(cs, "submit", side_effect=_ok):
+            with contextlib.redirect_stdout(out):
+                code = cd.maybe_submit(
+                    self._args(), b"archive-bytes", "deep.tar.gz",
+                    None, self._deep_payload(identity=True))
+        self.assertEqual(code, 0)
+        self.assertIn("public URL: http://r/y", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
