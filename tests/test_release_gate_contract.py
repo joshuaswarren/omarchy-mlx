@@ -1,4 +1,7 @@
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -117,17 +120,46 @@ class ReleaseGateHarnessTests(unittest.TestCase):
     def test_env_defaults_are_placeholders(self):
         env = (self.HARNESS / "env.sh").read_text()
         self.assertIn("M2_SSH_ALIAS", env)
-        self.assertIn("JW16_SSH_ALIAS", env)
+        self.assertIn("ANE_GATE_HOST_SSH_ALIAS", env)
         self.assertNotIn("joshuaswarren@macstudio", env)
+
+    def resolve_gate_env(self, **extra):
+        """Source env.sh in a clean shell and print the ANE host variables."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PATH": os.environ["PATH"], "HOME": tmp, "TAG": "v0.0.0-test",
+                   "GATE_ROOT": tmp, "LOG_DIR": tmp + "/logs", **extra}
+            out = subprocess.run(
+                ["bash", "-c",
+                 '. "$1"; printf "%s|%s" "$ANE_GATE_HOST_SSH" "$RUN_ANE_GATES"',
+                 "_", str(self.HARNESS / "env.sh")],
+                env=env, capture_output=True, text=True, check=True).stdout
+        return tuple(out.split("|"))
+
+    def test_ane_host_variables_accept_new_and_old_names(self):
+        self.assertEqual(self.resolve_gate_env(),
+                         ("ANE_GATE_HOST_SSH_ALIAS", "0"))
+        self.assertEqual(
+            self.resolve_gate_env(ANE_GATE_HOST_SSH="new-alias",
+                                  RUN_ANE_GATES="1"),
+            ("new-alias", "1"))
+        self.assertEqual(
+            self.resolve_gate_env(JW16_SSH="old-alias", RUN_JW16="1"),
+            ("old-alias", "1"))
+        # The new name wins when both are set.
+        self.assertEqual(
+            self.resolve_gate_env(ANE_GATE_HOST_SSH="new-alias",
+                                  JW16_SSH="old-alias",
+                                  RUN_ANE_GATES="0", RUN_JW16="1"),
+            ("new-alias", "0"))
 
     def test_run_all_executes_gates_in_order(self):
         run_all = (self.HARNESS / "run-all.sh").read_text()
         positions = [run_all.find(name) for name in self.RUN_ORDER]
         self.assertEqual([p for p in positions if p == -1], [])
         self.assertEqual(positions, sorted(positions))
-        # The jw16 leg must refuse to silently skip: a partial battery
+        # The ANE-host leg must refuse to silently skip: a partial battery
         # must fail the run.
-        self.assertIn("RUN_JW16", run_all)
+        self.assertIn("RUN_ANE_GATES", run_all)
         self.assertIn("SKIPPED", run_all)
 
     def test_g7d_pins_golden_transcript_and_failure_string(self):

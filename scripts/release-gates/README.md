@@ -13,13 +13,13 @@ passed by environment variable.
 | `TAG` | DRAFT release tag (**required**) | — |
 | `ASSETS_DIR` | draft assets: `*cp314*linux_aarch64.whl`, `omarchy-mlx-vendor-wheels-*.tar[.sha256]`, `*cp311*linux_x86_64.whl`, `SHA256SUMS` | `/tmp/$TAG-assets` |
 | `GATE_ROOT` | parent for throwaway gate state | `$HOME` |
-| `M2_SSH` / `JW16_SSH` | ssh **aliases** (never raw addresses) of the two gate hosts | placeholders |
+| `M2_SSH` / `ANE_GATE_HOST_SSH` | ssh **aliases** (never raw addresses) of the two gate hosts (the old name `JW16_SSH` is accepted for one release) | placeholders |
 | `GPU_LOCK` | M2 serialization flock | `/tmp/m2-gpu.lock` |
 | `TTS_PACK_HOME` | pinned voice-pack home (g6/g8) | `$HOME/mlx-tts-home` |
 | `INSTALL_TREE` | worktree with the tag's `install.sh` (g7b) | `$GATE_ROOT/$TAG-worktree` |
-| `SERVING_VENV` | jw16 serving venv path; g7c/g7d refuse to touch it | unset (guard off) |
+| `SERVING_VENV` | serving venv path on the ANE gate host; g7c/g7d refuse to touch it | unset (guard off) |
 | `PY_AARCH64` | aarch64 host python | `python3.14` |
-| `RUN_JW16` | `1` = run g7c/g7d on jw16 in gpuwin windows | off (run fails loudly) |
+| `RUN_ANE_GATES` | `1` = run g7c/g7d on the ANE gate host in gpuwin windows (the old name `RUN_JW16` is accepted for one release) | off (run fails loudly) |
 | `GATE_INSTALL_SH`, `GATE_TAG_TARBALL` | offline overrides for the tag install.sh / tests tarball | fetched from the tag |
 
 Gate homes (all under `$GATE_ROOT`, one naming scheme): `$TAG-gate-home`
@@ -34,8 +34,8 @@ Gate homes (all under `$GATE_ROOT`, one naming scheme): `$TAG-gate-home`
 Laya manifest pin → **g6** TTS codec regression (installed wheel) → **g7a**
 packaged-ICD fixture contract → **g7b** offline system install + staged-tree
 readback → **g8** Kokoro smoke → **g9** read-aloud playout (headless
-Chromium, no GPU) → on the jw16 ANE host, each in its own
-gpuwin window announced to the jw16 coordination pane first: **g7c** packaged
+Chromium, no GPU) → on the ANE gate host, each in its own
+gpuwin window announced to the coordination pane first: **g7c** packaged
 ANE worker verify, **g7d** fresh-image parakeet transcribe.
 
 Publish + Latest only if every gate exits 0 and
@@ -56,8 +56,8 @@ DRAFT. Gate runners must NEVER set `MLX_OMARCHY_PAIR_DEV_QUALIFICATION`
 | g7a | system ICD + `$TAG-sysinst` prefix | `icd_source=packaged`, expected sha == driver sha |
 | g7b | vendor tar, `$INSTALL_TREE/install.sh` | offline `--system` install exit 0; staged tree incl. `usr/bin/mlx-omarchy-parakeet`; no launcher path leaks |
 | g9 | g1 home's installed `static/js`, a Chromium-family browser (`GATE_CHROMIUM` or PATH) | four sentences against a serialising fake `/api/speak` on the real Web Audio clock: `SPEAK_QUEUE_SMOKE PASS` = in order, 0 overlaps, 0 gaps, 0 busy retries, one audio-done after the last chunk; no browser = exit 2 |
-| g7c | draft wheel + vendor tar on jw16 | private venv; packaged `verify` golden e2e: status match, all pin checks pass, `ane_mode=true`, `cpu_tensor_events=0` |
-| g7d | draft wheel + vendor tar + staged reference cache on jw16 (or a CLI file in cpu mode) | user-style `transcribe` of the pinned fixture: exit 0 twice (entry + `python3 -S`), golden transcript sha match, `ane_mode=true`, old failure string ABSENT |
+| g7c | draft wheel + vendor tar on the ANE gate host | private venv; packaged `verify` golden e2e: status match, all pin checks pass, `ane_mode=true`, `cpu_tensor_events=0` |
+| g7d | draft wheel + vendor tar + staged reference cache on the ANE gate host (or a CLI file in cpu mode) | user-style `transcribe` of the pinned fixture: exit 0 twice (entry + `python3 -S`), golden transcript sha match, `ane_mode=true`, old failure string ABSENT |
 
 ### g7d details (`g7d-fresh-transcribe.sh`)
 
@@ -111,13 +111,13 @@ flock).
 - Gate homes/caches are throwaway: `rm -rf $GATE_ROOT/$TAG-gate-home
   $GATE_ROOT/$TAG-gate7d-home $GATE_ROOT/$TAG-fresh-hf
   $GATE_ROOT/$TAG-assist-* $GATE_ROOT/$TAG-gate-logs
-  $GATE_ROOT/$TAG-tag-tests` and on jw16 `/tmp/omarchy-release-gates`,
+  $GATE_ROOT/$TAG-tag-tests` and on the ANE gate host `/tmp/omarchy-release-gates`,
   `/tmp/$TAG-vendor-*`, `/tmp/$TAG-gate-logs`, the gate homes.
 - g2/g3 kill the chat server's process group and FAIL if `fuser` still shows
   a listener on the assistant port — never skip this check.
-- jw16: g7c/g7d only run inside `/var/tmp/appbar/gpuwin.sh` windows (it stops
+- ANE gate host: g7c/g7d only run inside `/var/tmp/appbar/gpuwin.sh` windows (it stops
   llm-inference, takes the GPU flock, restores + health-probes on exit);
-  announce to the jw16 pane before each window; `SERVING_VENV` must name the
+  announce to the coordination pane before each window; `SERVING_VENV` must name the
   serving venv so the private-venv guard is live. Windows are serialized by
   the gpuwin mutex; keep each under 15 minutes.
 - M2: every GPU-touching step holds `$GPU_LOCK`. Check the boot id before a
@@ -149,7 +149,7 @@ flock).
 3. **Disk-full admission refusal** — g3 once failed because /home was 100%
    full and the app's own admission refused the 4B setup (spent gate scratch
    from old releases). `run-all.sh` checks ≥25G free BEFORE the battery.
-4. **gpuwin windows on jw16** — never run ANE/GPU work outside a gpuwin
+4. **gpuwin windows on the ANE gate host** — never run ANE/GPU work outside a gpuwin
    window (it owns the stop → flock → restore → health-probe cycle); two
    gates = two windows, announced to the coordination pane; a window whose
    RESTORE line is not `health_ok=1 probe_finish=length` counts as failed.
