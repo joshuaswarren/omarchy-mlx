@@ -240,7 +240,8 @@ class VulkaninfoTextParser(unittest.TestCase):
         def fake_run(argv, redactor, **kwargs):
             return records[tuple(argv)]
 
-        with patch.object(cq, "run_tool", fake_run):
+        with patch("platform.system", return_value="Linux"), \
+                patch.object(cq, "run_tool", fake_run):
             mesa = cq.probe_mesa(cc.Redactor())
         self.assertTrue(mesa["available"])
         caps = mesa["capabilities"]

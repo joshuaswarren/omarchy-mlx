@@ -1015,10 +1015,10 @@ def _probe_vulkan_capabilities(redactor, gpu):
                    label="vulkaninfo --text", timeout=120,
                    max_chars=PROBE_STREAM_CHARS,
                    max_lines=_VK_TEXT_MAX_LINES)
-    caps["vulkaninfo"] = {k: rec[k] for k in
+    caps["vulkaninfo"] = {k: rec.get(k) for k in
                           ("label", "argv", "available", "exit_code",
                            "error")}
-    caps["vulkaninfo"]["stdout_bytes"] = len(rec["stdout"])
+    caps["vulkaninfo"]["stdout_bytes"] = len(rec.get("stdout") or "")
     if not rec["available"] or rec["exit_code"] != 0:
         return caps
     parsed = parse_vulkaninfo_text(rec["stdout"])
