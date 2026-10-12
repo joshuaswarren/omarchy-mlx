@@ -110,6 +110,18 @@ index 45ffbd5d10..e3ee598ea3 100644
  NO_GPU(Full)
  NO_GPU(Gather)
  NO_GPU(GatherAxis)
+diff --git a/mlx/backend/no_cpu/primitives.cpp b/mlx/backend/no_cpu/primitives.cpp
+index 45ffbd5d10..e3ee598ea3 100644
+--- a/mlx/backend/no_cpu/primitives.cpp
++++ b/mlx/backend/no_cpu/primitives.cpp
+@@ -119,6 +119,7 @@ NO_CPU(Expm1)
+ NO_CPU(FFT)
+ NO_CPU(Flatten)
+ NO_CPU(Floor)
++NO_CPU(FloorDivide)
+ NO_CPU(Full)
+ NO_CPU(Gather)
+ NO_CPU(GatherAxis)
 diff --git a/mlx/compile.cpp b/mlx/compile.cpp
 index 3cab4c05d7..d110404190 100644
 --- a/mlx/compile.cpp
