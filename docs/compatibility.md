@@ -14,7 +14,9 @@ Blocked means an external or hardware condition prevents the qualifying run.
 
 **Hardware status (2026-10-12).** GPU and ANE are separate lanes: a GPU
 result says nothing about the ANE. Terms match the README hardware
-table: Tested, Experimental, Untested, Not yet.
+table: Tested, Experimental, Untested, Not yet. The macOS ANE numbers
+cited in this tree are CoreML measurements made on macOS. They say
+nothing about Linux execution.
 
 - 13-inch M1 (T8103). GPU: Tested ([2026-10-09 Linux-vs-macOS
   runs](../receipts/2026-10-09-linux-vs-macos/m1-16gb/), full tables in
