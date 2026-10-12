@@ -215,7 +215,10 @@ Code contributions start at
 [CONTRIBUTING.md](CONTRIBUTING.md). Hardware captures start at
 [docs/contribute-data.md](docs/contribute-data.md). Dev machines
 without an Apple GPU can run the module under software Vulkan. GPU
-kernel changes still need real hardware before a release.
+kernel changes still need real hardware before a release. Any other
+Vulkan GPU (NVIDIA, Intel, AMD): the contributor kit is
+[docs/ANY-GPU.md](docs/ANY-GPU.md) and the results so far are in
+[docs/TESTED-HARDWARE.md](docs/TESTED-HARDWARE.md).
 
 ## Releases
 
