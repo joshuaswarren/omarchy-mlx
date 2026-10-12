@@ -11,10 +11,14 @@
 #                 *cp311*linux_x86_64.whl
 #   GATE_ROOT     parent for all throwaway gate state (default $HOME)
 #   M2_SSH        ssh ALIAS of the M2 gate host   (placeholder: M2_SSH_ALIAS)
-#   JW16_SSH      ssh ALIAS of the jw16 ANE host  (placeholder: JW16_SSH_ALIAS)
+#   ANE_GATE_HOST_SSH
+#                 ssh ALIAS of the ANE gate host (placeholder: ANE_GATE_HOST_SSH_ALIAS).
+#                 The old name JW16_SSH is still accepted for one release.
+#   RUN_ANE_GATES 1 = run the ANE-host gates (the old name RUN_JW16 is still
+#                 accepted for one release)
 #   GPU_LOCK      M2 serialization flock (default /tmp/m2-gpu.lock)
 #   TTS_PACK_HOME pinned voice-pack home for gate 6 / gate 8
-#   SERVING_VENV  jw16 serving venv path; g7c/g7d refuse to touch it when set
+#   SERVING_VENV  serving venv path on the ANE gate host; g7c/g7d refuse to touch it when set
 #   INSTALL_TREE  worktree holding the tag's install.sh for gate 7b
 #                 (auto-staged from $TAG by gate_ensure_install_tree when
 #                  TAG_SHA is set)
@@ -37,7 +41,8 @@
 : "${ASSIST_4B:=$GATE_ROOT/${TAG}-assist-4b}"
 : "${ASSIST_OFF:=$GATE_ROOT/${TAG}-assist-off}"
 : "${M2_SSH:=M2_SSH_ALIAS}"
-: "${JW16_SSH:=JW16_SSH_ALIAS}"
+: "${ANE_GATE_HOST_SSH:=${JW16_SSH:-ANE_GATE_HOST_SSH_ALIAS}}"
+: "${RUN_ANE_GATES:=${RUN_JW16:-0}}"
 : "${GPU_LOCK:=/tmp/m2-gpu.lock}"
 : "${TTS_PACK_HOME:=${HOME}/mlx-tts-home}"
 : "${PY_AARCH64:=python3.14}"

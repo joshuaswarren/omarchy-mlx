@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate 15 — trig contract tests on the jw16 aarch64 build host.
+# Gate 15 — trig contract tests on the aarch64 build host.
 #   g15-gdn... no: g15 builds and runs omarchy_eq_math_tests and
 #   omarchy_trig_reduction_tests from the wheel build tree
 #   (MLX_BUILD_OMARCHY=ON MLX_BUILD_TESTS=ON).

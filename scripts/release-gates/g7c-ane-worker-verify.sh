@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate 7c — packaged ANE worker verify (runs ON the jw16 ANE host, inside a
+# Gate 7c — packaged ANE worker verify (runs ON the ANE gate host, inside a
 # gpuwin window driven by run-all.sh or the operator). Builds a PRIVATE venv
 # from the DRAFT wheel + vendor tar and runs the packaged golden e2e verify
 # with the venv's python (the data-file shebang resolves the system python,

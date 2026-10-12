@@ -5,7 +5,7 @@
 # google.protobuf"; fixed by the staged launcher + CLI self-heal).
 #
 # What it proves, as a user would hit it:
-#   ane mode (ANE host, e.g. inside a gpuwin window on jw16):
+#   ane mode (ANE host, e.g. inside a gpuwin window on the ANE gate host):
 #     - install from the DRAFT assets exactly like a user (private venv from
 #       wheel + vendor lock), fresh home, no manual pip;
 #     - assert the SYSTEM interpreter is dep-less (the fresh-image property);

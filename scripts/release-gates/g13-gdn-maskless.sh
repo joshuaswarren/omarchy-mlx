@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate 13 — GDN coopmat correctness smoke on the jw16 aarch64 build host.
+# Gate 13 — GDN coopmat correctness smoke on the aarch64 build host.
 #   g13-gdn-maskless.sh build   CPU-only: reconfigure the wheel build tree
 #                               with MLX_BUILD_OMARCHY/TESTS=ON and build
 #                               omarchy_gdn_maskless_correctness_tests
