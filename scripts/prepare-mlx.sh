@@ -206,6 +206,12 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # implements FloorDivide::eval_gpu. Drop at the first pin at or past 2654664a3.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-floor-divide.patch"
+# CPU comm primitives (AllReduce, AllGather, Recv, ReduceScatter): the queued
+# ring task writes the output through a raw pointer, so hold the output
+# until that task ran. A Depends-dropped all_gather output was unmapped
+# under it (lb10: SIGSEGV in RingGroup::all_gather_impl).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-cpu-distributed-hold-output.patch"
 
 rm -rf "$SOURCE_DIR"
 mv "$STAGING_DIR" "$SOURCE_DIR"
