@@ -138,21 +138,23 @@ See [docs/USAGE.md](docs/USAGE.md).
 
 ## How close to macOS
 
-Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Each cell is Linux / macOS and the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
+Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Where macOS is shown, the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
 
-Decode is the median of 10 greedy generations and prefill is the median of 5 runs, except two Linux cells: gemma-4-E4B is the mean of three runs and Qwen3.6-35B-A3B the mean of two. Those two sets of runs started with a load average above 0.5, so the numbers may be low. The macOS cells are earlier sealed runs.
+Decode is the median of 10 greedy generations and prefill is the median of 5 runs, except two Linux cells: gemma-4-E4B is the mean of three runs and Qwen3.6-35B-A3B the mean of two. Those two sets of runs started with a load average above 0.5, so the numbers may be low. The Qwen3.5-9B macOS cells are earlier sealed runs.
 
-MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / macOS:
+MLX 4-bit through the installer's mlx-lm patches, tokens per second. A cell shows Linux, or Linux / macOS and the percentage where macOS is shown:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
-| Qwen3.8-27B (dense 27B) | 13.5 / 19.5 = 69% | 87.4 / 105.6 = 83% |
-| gemma-4-26B-A4B (MoE, 4B active) | 12.61 / 66.0 = 19% | 116.50 / 556.1 = 21% |
-| gemma-4-31B (dense 31B) | 7.3 / 15.3 = 48% | 62.4 / 90.0 = 69% |
+| Qwen3.8-27B (dense 27B) | 13.5 | 87.4 |
+| gemma-4-26B-A4B (MoE, 4B active) | 12.61 | 116.50 |
+| gemma-4-31B (dense 31B) | 7.3 | 62.4 |
 | Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = 62% | 299.4 / 339.0 = 88% |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 / 75.6 = 18% | 116.37 / 604.1 = 19% |
-| gemma-4-E4B (dense 4B) | 30.5 / 73.8 = 41% | 366.5 / 568.6 = 64% |
-| gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = 3% | 1.9 / 581.1 = 0.3% |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 | 116.37 |
+| gemma-4-E4B (dense 4B) | 30.5 | 366.5 |
+| gpt-oss-20b (MoE, attention sinks) | 2.2 | 1.9 |
+
+macOS shares are printed only where both sides produce identical tokens.
 
 Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
