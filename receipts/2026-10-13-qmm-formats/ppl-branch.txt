@@ -1,0 +1,2 @@
+{"tokens": 2048, "ppl": 9.402129416962538} Main processes terminated with: code=exited, status=0/SUCCESS                    Memory peak: 8.8G (swap: 0B) 
+{"tokens": 300, "ppl": 14.033564010302008} Main processes terminated with: code=exited, status=0/SUCCESS                    Memory peak: 9G (swap: 0B) 

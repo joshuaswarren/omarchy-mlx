@@ -982,6 +982,38 @@ enum class ComputeKernel : uint16_t {
   // place (no per-call staging copy). Append-only profile id.
   GatherQmmSubDirectF16,
   GatherQmmSubDirectBF16,
+  // Default coopmat prefill routes for 4-bit group 32, 8-bit group 64 and
+  // 8-bit group 32 affine weights (QBITS/QGROUP builds of qmm_coopmat.comp).
+  // Append-only profile ids.
+  QmmPrefillCoopmatF16Q4G32,
+  QmmPrefillCoopmatM16F16Q4G32,
+  QmmPrefillCoopmatBF16X32Q4G32,
+  QmmPrefillCoopmatM16BF16X32Q4G32,
+  QmmPrefillCoopmatBF16X32FullNQ4G32,
+  QmmPrefillCoopmatM16BF16X32FullNQ4G32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadQ4G32,
+  QmmPrefillCoopmatF16Q8G64,
+  QmmPrefillCoopmatM16F16Q8G64,
+  QmmPrefillCoopmatBF16X32Q8G64,
+  QmmPrefillCoopmatM16BF16X32Q8G64,
+  QmmPrefillCoopmatBF16X32FullNQ8G64,
+  QmmPrefillCoopmatM16BF16X32FullNQ8G64,
+  QmmPrefillCoopmatBF16X32FullNLdsPadQ8G64,
+  QmmPrefillCoopmatF16Q8G32,
+  QmmPrefillCoopmatM16F16Q8G32,
+  QmmPrefillCoopmatBF16X32Q8G32,
+  QmmPrefillCoopmatM16BF16X32Q8G32,
+  QmmPrefillCoopmatBF16X32FullNQ8G32,
+  QmmPrefillCoopmatM16BF16X32FullNQ8G32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadQ8G32,
+  // Multi-row word decode (m == 1) for 4-bit group 32, 8-bit group 64 and
+  // 8-bit group 32 affine weights. Append-only profile ids.
+  QmmVecWordSubgroupF16Q4G32,
+  QmmVecWordSubgroupBF16Q4G32,
+  QmmVecWordSubgroupF16Q8G64,
+  QmmVecWordSubgroupBF16Q8G64,
+  QmmVecWordSubgroupF16Q8G32,
+  QmmVecWordSubgroupBF16Q8G32,
   Count,
 };
 

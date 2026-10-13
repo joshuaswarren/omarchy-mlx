@@ -1,0 +1,27 @@
+{"bits": 4, "gs": 64, "dtype": "float16", "M": 1, "ms": 0.883, "GBps": 32.0, "GFLOPs": 113.9}
+{"bits": 4, "gs": 64, "dtype": "float16", "M": 32, "ms": 2.949, "GBps": 9.6, "GFLOPs": 1092.3}
+{"bits": 4, "gs": 64, "dtype": "float16", "M": 512, "ms": 36.697, "GBps": 0.8, "GFLOPs": 1404.5}
+{"bits": 4, "gs": 32, "dtype": "float16", "M": 1, "ms": 2.706, "GBps": 11.6, "GFLOPs": 37.2}
+{"bits": 4, "gs": 32, "dtype": "float16", "M": 32, "ms": 20.363, "GBps": 1.5, "GFLOPs": 158.2}
+{"bits": 4, "gs": 32, "dtype": "float16", "M": 512, "ms": 316.699, "GBps": 0.1, "GFLOPs": 162.7}
+{"bits": 8, "gs": 64, "dtype": "float16", "M": 1, "ms": 2.893, "GBps": 18.5, "GFLOPs": 34.8}
+{"bits": 8, "gs": 64, "dtype": "float16", "M": 32, "ms": 21.092, "GBps": 2.5, "GFLOPs": 152.7}
+{"bits": 8, "gs": 64, "dtype": "float16", "M": 512, "ms": 317.581, "GBps": 0.2, "GFLOPs": 162.3}
+{"bits": 8, "gs": 32, "dtype": "float16", "M": 1, "ms": 2.748, "GBps": 20.6, "GFLOPs": 36.6}
+{"bits": 8, "gs": 32, "dtype": "float16", "M": 32, "ms": 20.404, "GBps": 2.8, "GFLOPs": 157.9}
+{"bits": 8, "gs": 32, "dtype": "float16", "M": 512, "ms": 317.155, "GBps": 0.2, "GFLOPs": 162.5}
+{"bits": 4, "gs": 64, "dtype": "bfloat16", "M": 1, "ms": 0.77, "GBps": 36.8, "GFLOPs": 130.7}
+{"bits": 4, "gs": 64, "dtype": "bfloat16", "M": 32, "ms": 2.663, "GBps": 10.6, "GFLOPs": 1209.4}
+{"bits": 4, "gs": 64, "dtype": "bfloat16", "M": 512, "ms": 32.985, "GBps": 0.9, "GFLOPs": 1562.5}
+{"bits": 4, "gs": 32, "dtype": "bfloat16", "M": 1, "ms": 3.003, "GBps": 10.5, "GFLOPs": 33.5}
+{"bits": 4, "gs": 32, "dtype": "bfloat16", "M": 32, "ms": 20.884, "GBps": 1.5, "GFLOPs": 154.2}
+{"bits": 4, "gs": 32, "dtype": "bfloat16", "M": 512, "ms": 321.676, "GBps": 0.1, "GFLOPs": 160.2}
+{"bits": 8, "gs": 64, "dtype": "bfloat16", "M": 1, "ms": 3.062, "GBps": 17.5, "GFLOPs": 32.9}
+{"bits": 8, "gs": 64, "dtype": "bfloat16", "M": 32, "ms": 21.095, "GBps": 2.5, "GFLOPs": 152.7}
+{"bits": 8, "gs": 64, "dtype": "bfloat16", "M": 512, "ms": 321.405, "GBps": 0.2, "GFLOPs": 160.4}
+{"bits": 8, "gs": 32, "dtype": "bfloat16", "M": 1, "ms": 3.121, "GBps": 18.1, "GFLOPs": 32.3}
+{"bits": 8, "gs": 32, "dtype": "bfloat16", "M": 32, "ms": 21.032, "GBps": 2.7, "GFLOPs": 153.2}
+{"bits": 8, "gs": 32, "dtype": "bfloat16", "M": 512, "ms": 322.52, "GBps": 0.2, "GFLOPs": 159.8}
+{"dense": "mlx.core.float16", "M": 512, "ms": 29.49, "GFLOPs": 1747.8}
+{"dense": "mlx.core.bfloat16", "M": 512, "ms": 56.41, "GFLOPs": 913.6}
+{"peak_memory_bytes": 411086848}
