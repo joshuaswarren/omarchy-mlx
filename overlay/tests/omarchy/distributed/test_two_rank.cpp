@@ -29,7 +29,9 @@
 #include "mlx/transforms.h"
 #include "mlx/distributed/distributed.h"
 #include "mlx/distributed/ops.h"
+#include "mlx/memory.h"
 #include "mlx/ops.h"
+#include "mlx/random.h"
 
 using namespace mlx::core;
 
@@ -175,4 +177,32 @@ TEST_CASE("sum_scatter is refused by the ring transport at two ranks") {
   eval(x);
   array y = distributed::sum_scatter(x);
   CHECK_THROWS_AS(eval(y), std::runtime_error);
+}
+
+// The gather output is only a depends() dependency, so no handle to it survives
+// async_eval; the ring task must still find it mapped after clear_cache().
+TEST_CASE("an unread all_gather output survives a dropped handle and a cache clear") {
+  auto group = distributed::init();
+  if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
+    FAIL("expected a two-rank ring group");
+  }
+  int rank = group.rank();
+  std::vector<float> mine = {static_cast<float>(rank + 1)};
+  array w = astype(random::normal({2048, 2048}), bfloat16);
+  eval(w);
+  for (int step = 0; step < 50; ++step) {
+    array t = astype(random::normal({1, 2048}), bfloat16);
+    for (int i = 0; i < 8; ++i) {
+      t = matmul(t, w);
+    }
+    array y = argmax(random::normal({1, 102400}) + astype(sum(t), float32), -1);
+    auto outs = depends({y}, {distributed::all_gather(astype(y, float32))});
+    async_eval(outs);
+    clear_cache();
+    eval(outs);
+  }
+  array x = array(mine.data(), {1}, float32);
+  eval(x);
+  auto got = values(distributed::all_gather(x));
+  CHECK_EQ(got, std::vector<float>{1.0f, 2.0f});
 }
