@@ -138,23 +138,26 @@ See [docs/USAGE.md](docs/USAGE.md).
 
 ## How close to macOS
 
-Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Each cell is Linux / macOS and the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
+Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides, measured 2026-10-09 to 2026-10-12; each row names its wheel and driver build. The Linux column runs the mlx-lm patches the installer applies. Each cell is Linux / macOS and the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
 
-Decode is the median of 10 greedy generations and prefill is the median of 5 runs, except two Linux cells: gemma-4-E4B is the mean of three runs and Qwen3.6-35B-A3B the mean of two. Those two sets of runs started with a load average above 0.5, so the numbers may be low. The macOS cells are earlier sealed runs.
+The macOS cells are sealed runs: decode is the median of 10 greedy generations and prefill is the median of 5 runs. The Runs column gives the number of timed runs behind each Linux cell. Runs that started with a load average above 0.5 or with a busy ANE are flagged, and their numbers may be low.
 
 MLX 4-bit through the installer's mlx-lm patches, tokens per second, Linux / macOS:
 
-| Model | Decode | Prefill 512 |
-|---|---|---|
-| Qwen3.8-27B (dense 27B) | 13.5 / 19.5 = 69% | 87.4 / 105.6 = 83% |
-| gemma-4-26B-A4B (MoE, 4B active) | 12.61 / 66.0 = 19% | 116.50 / 556.1 = 21% |
-| gemma-4-31B (dense 31B) | 7.3 / 15.3 = 48% | 62.4 / 90.0 = 69% |
-| Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = 62% | 299.4 / 339.0 = 88% |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 / 75.6 = 18% | 116.37 / 604.1 = 19% |
-| gemma-4-E4B (dense 4B) | 30.5 / 73.8 = 41% | 366.5 / 568.6 = 64% |
-| gpt-oss-20b (MoE, attention sinks) | 2.2 / 79.2 = 3% | 1.9 / 581.1 = 0.3% |
+<!-- BEGIN GENERATED: bench-main -->
+| Model | Decode (Linux / macOS = share) | Prefill | Driver | Wheel | Runs | Governor | Flags |
+|---|---|---|---|---|---|---|---|
+| Qwen3.5-9B | 38.87 / 59.4 = 65.4% | 309.19 / 339.0 = 91.2% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | start load 1.37 |
+| Qwen3.6-35B-A3B | 21.03 / 75.6 = 27.8% | 183.65 / 604.1 = 30.4% | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | ANE busy; P spread 0.29% |
+| Qwen3.8-27B | 14.03 / 19.5 = 71.9% | 88.51 / 105.6 = 83.8% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | start load 1.10 |
+| gemma-4-26B-A4B | 17.16 / 66.0 = 26.0% | 176.08 / 556.1 = 31.7% | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | ANE busy |
+| gemma-4-31B | - | 63.05 / 90.0 = 70.1% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | start load 1.53 |
+| gemma-4-E4B | 31.98 / 73.79 = 43.3% | 367.03 / 568.62 = 64.5% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | start load 1.22 |
 
-Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
+Driver build: Honeykrisp (lab package) at Mesa git 69bde15340
+<!-- END GENERATED: bench-main -->
+
+The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 Decode on the 13-inch M1 changed with the CPU governor with no ANE work running. See [Set the CPU governor for local AI](docs/BENCHMARKS.md#set-the-cpu-governor-for-local-ai).
 
