@@ -179,6 +179,8 @@ TEST_CASE("sum_scatter is refused by the ring transport at two ranks") {
   CHECK_THROWS_AS(eval(y), std::runtime_error);
 }
 
+// The gather output is only a depends() dependency, so no handle to it survives
+// async_eval; the ring task must still find it mapped after clear_cache().
 TEST_CASE("an unread all_gather output survives a dropped handle and a cache clear") {
   auto group = distributed::init();
   if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
@@ -186,13 +188,6 @@ TEST_CASE("an unread all_gather output survives a dropped handle and a cache cle
   }
   int rank = group.rank();
   std::vector<float> mine = {static_cast<float>(rank + 1)};
-  // The token-share pattern of the layer-split pipeline: the gather output
-  // is only a depends() dependency and no handle to it survives async_eval.
-  // The ring task is still queued on the CPU stream when clear_cache()
-  // releases every cached buffer; without the output held until that task
-  // ran, the ring wrote into an unmapped page (SIGSEGV in all_gather_impl).
-  // A chain of GPU matmuls runs before the gathered value exists, so the ring
-  // task stays parked on the CPU stream while clear_cache() runs on this thread.
   array w = astype(random::normal({2048, 2048}), bfloat16);
   eval(w);
   for (int step = 0; step < 50; ++step) {
