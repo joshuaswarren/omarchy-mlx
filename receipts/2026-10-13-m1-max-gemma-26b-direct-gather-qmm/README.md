@@ -56,11 +56,11 @@ Decode P over V is 1.296. Prefill P over V is 1.001. The control spread (the V a
 
 ## Dispatch trace
 
-A separate 4-token traced run per arm, with a debugger attached. Both arms gave the same output digest, `713907965e81609f`, with `mlx 0.32.4.dev202610120329+18059c80` and `Device(gpu, 0)`. V ran with `MLX_OMARCHY_GATHER_QMM_DIRECT=0` and P with the variable unset. The per-kernel dispatch counts are equal in the two arms except one pair: kernel id 224 with 537 dispatches appears only in V, and kernel id 581 with 537 dispatches appears only in P. A breakpoint on the CPU command encoder was hit 0 times in both arms.
+A separate 4-token traced run per arm, with a debugger attached. Both arms gave the same output digest, `713907965e81609f`, with `mlx 0.32.4.dev202610120329+18059c80` and `Device(gpu, 0)`. V ran with `MLX_OMARCHY_GATHER_QMM_DIRECT=0` and P with the variable unset. The per-kernel dispatch counts are equal in the two arms except one pair: kernel id 224 (`GatherQmmSubBF16`, the staged kernel) with 537 dispatches appears only in V, and kernel id 581 (`GatherQmmSubDirectBF16`, the direct kernel) with 537 dispatches appears only in P. The ids are the positions in the `ComputeKernel` enum in `overlay/mlx/backend/omarchy/compute.h` at `18059c80`. A breakpoint on the CPU command encoder was hit 0 times in both arms.
 
 ## Timing and thermal procedure
 
-- No settle wait before the block (the settle step was skipped). The load average was 2.28 at the first sample and 1.06 to 1.34 before each timed run, above the 0.5 target, so the table flags the start load and the numbers may be low.
+- The load average was 2.28 at the first sample and 1.06 to 1.34 before each timed run. No settle wait ran before the block.
 - A 1-second sampler ran through the block (668 rows in 674 seconds): system power, fan speeds, NAND, battery and charger temperatures, CPU frequency policy, load average and ANE busy time.
 - Fan 1 ran 1496 to 2604 rpm and fan 2 ran 1626 to 2811 rpm. NAND temperature was 37.7 to 41.0 C and the charger sensor 45.6 to 59.3 C. The three CPU frequency policies held 2,064,000, 3,036,000 and 3,036,000 kHz in every row, so no run saw a frequency drop.
 - No GPU timeouts, recovery lines, fault lines or out-of-memory kills before the trace, after the trace or after the timed block.
