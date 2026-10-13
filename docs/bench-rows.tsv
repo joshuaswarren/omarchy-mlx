@@ -1,0 +1,1 @@
+chip	model	metric	linux	macos	governor	driver_name	driver_commit	wheel_commit	runs	start_load_max	ane_busy	control_spread_pct	p_spread_pct	noisy	interleaved	date	caption	pv_decode	pv_prefill
