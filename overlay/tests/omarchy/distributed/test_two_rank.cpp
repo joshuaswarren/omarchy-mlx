@@ -31,6 +31,7 @@
 #include "mlx/distributed/ops.h"
 #include "mlx/memory.h"
 #include "mlx/ops.h"
+#include "mlx/random.h"
 
 using namespace mlx::core;
 
@@ -190,10 +191,17 @@ TEST_CASE("an unread all_gather output survives a dropped handle and a cache cle
   // The ring task is still queued on the CPU stream when clear_cache()
   // releases every cached buffer; without the output held until that task
   // ran, the ring wrote into an unmapped page (SIGSEGV in all_gather_impl).
+  // A chain of GPU matmuls runs before the gathered value exists, so the ring
+  // task stays parked on the CPU stream while clear_cache() runs on this thread.
+  array w = astype(random::normal({2048, 2048}), bfloat16);
+  eval(w);
   for (int step = 0; step < 50; ++step) {
-    array x = array(mine.data(), {1}, float32);
-    array y = x + array(0.0f);
-    auto outs = depends({y}, {distributed::all_gather(y)});
+    array t = astype(random::normal({1, 2048}), bfloat16);
+    for (int i = 0; i < 8; ++i) {
+      t = matmul(t, w);
+    }
+    array y = argmax(random::normal({1, 102400}) + astype(sum(t), float32), -1);
+    auto outs = depends({y}, {distributed::all_gather(astype(y, float32))});
     async_eval(outs);
     clear_cache();
     eval(outs);
