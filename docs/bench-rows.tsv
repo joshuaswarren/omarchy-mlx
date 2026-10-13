@@ -1,0 +1,43 @@
+chip	model	metric	linux	macos	governor	driver_name	driver_commit	wheel_commit	runs	start_load_max	ane_busy	control_spread_pct	p_spread_pct	noisy	interleaved	date	caption	pv_decode	pv_prefill	old_baseline_linux	old_baseline_date
+M1 (G13G)	Llama-3.1-8B	decode	6.61			package	69bde15340	e57cb301	1	0.98	0			0	0	2026-10-11					
+M1 (G13G)	Llama-3.1-8B	prefill	90.39			package	69bde15340	e57cb301	1	0.98	0			0	0	2026-10-11					
+M1 (G13G)	Mellum2-12B-A2.5B	decode	4.67			package	69bde15340	e57cb301	1	1.06	0			0	0	2026-10-11					
+M1 (G13G)	Mellum2-12B-A2.5B	prefill	40.03			package	69bde15340	e57cb301	1	1.06	0			0	0	2026-10-11					
+M1 (G13G)	Qwen3.5-9B	decode	6.98	12.9	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.34	0			1	0	2026-10-11					
+M1 (G13G)	Qwen3.5-9B	prefill	94.15	85.9	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.34	0			0	0	2026-10-11					
+M1 (G13G)	gemma-4-E4B	decode	9.19		performance (filler on)	package	69bde15340	e57cb301	1	0.67	1			0	1	2026-10-13				8.98	2026-10-11
+M1 (G13G)	gemma-4-E4B	decode	15.69		performance (filler off)	package	69bde15340	e57cb301	2	0.95	0	0.26		0	1	2026-10-13					
+M1 (G13G)	gemma-4-E4B	prefill	107.72		performance (filler on)	package	69bde15340	e57cb301	1	0.67	1			0	1	2026-10-13				111.06	2026-10-11
+M1 (G13G)	gemma-4-E4B	prefill	114.375		performance (filler off)	package	69bde15340	e57cb301	2	0.95	0			0	1	2026-10-13					
+M1 Max (G13C)	Ornith-1.5-35B-A3B	decode	8.62			package	69bde15340	e57cb301	1	1.25	0			0	0	2026-10-11					
+M1 Max (G13C)	Ornith-1.5-35B-A3B	prefill	35.84			package	69bde15340	e57cb301	1	1.25	0			0	0	2026-10-11					
+M1 Max (G13C)	Qwen3-Coder-30B-A3B	decode	12.09			package	69bde15340	e57cb301	1	1.25	0			0	0	2026-10-11					
+M1 Max (G13C)	Qwen3-Coder-30B-A3B	prefill	103.82			package	69bde15340	e57cb301	1	1.25	0			0	0	2026-10-11					
+M1 Max (G13C)	Qwen3.5-9B	decode	38.87	59.4	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.37	0			0	0	2026-10-11					
+M1 Max (G13C)	Qwen3.5-9B	prefill	309.19	339.0	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.37	0			0	0	2026-10-11					
+M1 Max (G13C)	Qwen3.6-35B-A3B	decode	21.03	75.6	performance (filler on)	package	69bde15340	18059c80	2		1	0.21	0.29	0	1	2026-10-12		1.488		14.05	2026-10-11
+M1 Max (G13C)	Qwen3.6-35B-A3B	prefill	183.65	604.1	performance (filler on)	package	69bde15340	18059c80	2		1	0.0		0	1	2026-10-12				117.91	2026-10-11
+M1 Max (G13C)	Qwen3.8-27B	decode	14.03	19.5	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.10	0			0	0	2026-10-11					
+M1 Max (G13C)	Qwen3.8-27B	prefill	88.51	105.6	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.10	0			0	0	2026-10-11					
+M1 Max (G13C)	gemma-4-26B-A4B	decode	17.16	66.0	performance (filler on)	package	69bde15340	18059c80	2		1	0.1		0	1	2026-10-12		1.292		11.89	2026-10-11
+M1 Max (G13C)	gemma-4-26B-A4B	prefill	176.08	556.1	performance (filler on)	package	69bde15340	18059c80	2		1	0.1		0	1	2026-10-12				116.65	2026-10-11
+M1 Max (G13C)	gemma-4-31B	decode	9.27	15.3	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.53	0			1	0	2026-10-11					
+M1 Max (G13C)	gemma-4-31B	prefill	63.05	90.0	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.53	0			0	0	2026-10-11					
+M1 Max (G13C)	gemma-4-E4B	decode	31.98	73.79	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.22	0			0	0	2026-10-11					
+M1 Max (G13C)	gemma-4-E4B	prefill	367.03	568.62	schedutil (not recorded)	package	69bde15340	e57cb301	1	1.22	0			0	0	2026-10-11					
+M2 Max (G14C)	Ornith-1.5-35B-A3B	decode	12.965		performance (filler on)	package	69bde15340	18059c80	2		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	Ornith-1.5-35B-A3B	prefill	68.485		performance (filler on)	package	69bde15340	18059c80	2		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	Qwen3-Coder-30B-A3B	decode	19.35		performance (filler on)	package	69bde15340	18059c80	2		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	Qwen3-Coder-30B-A3B	prefill	212.39		performance (filler on)	package	69bde15340	18059c80	2		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	Qwen3.5-9B	decode	40.30			package	69bde15340	e57cb301	1	1.68	0			0	0	2026-10-11	preemption kernel option on				
+M2 Max (G14C)	Qwen3.5-9B	prefill	450.90			package	69bde15340	e57cb301	1	1.68	0			0	0	2026-10-11	preemption kernel option on				
+M2 Max (G14C)	Qwen3.6-35B-A3B	decode	23.57		performance (filler on)	package	69bde15340	18059c80	2		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	Qwen3.6-35B-A3B	prefill	228.03		performance (filler on)	package	69bde15340	18059c80	2		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	Qwen3.8-27B	decode	15.00			package	69bde15340	e57cb301	1	1.06	0			0	0	2026-10-11	preemption kernel option on				
+M2 Max (G14C)	Qwen3.8-27B	prefill	106.16			package	69bde15340	e57cb301	1	1.06	0			0	0	2026-10-11	preemption kernel option on				
+M2 Max (G14C)	gemma-4-26B-A4B	decode	19.72		performance (filler on)	package	69bde15340	18059c80	3		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	gemma-4-26B-A4B	prefill	226.72		performance (filler on)	package	69bde15340	18059c80	3		1			0	0	2026-10-12	preemption kernel option on				
+M2 Max (G14C)	gemma-4-31B	decode	9.54			package	69bde15340	e57cb301	3	1.23	1	11.1		1	1	2026-10-11	preemption kernel option on	1.048			
+M2 Max (G14C)	gemma-4-31B	prefill	79.67			package	69bde15340	e57cb301	3	1.23	1	11.1		1	1	2026-10-11	preemption kernel option on		1.020		
+M2 Max (G14C)	gemma-4-E4B	decode	15.22			package	69bde15340	e57cb301	1	1.49	0			0	0	2026-10-11	preemption kernel option on				
+M2 Max (G14C)	gemma-4-E4B	prefill	514.70			package	69bde15340	e57cb301	1	1.49	0			0	0	2026-10-11	preemption kernel option on				
