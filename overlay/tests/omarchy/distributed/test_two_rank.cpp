@@ -29,6 +29,7 @@
 #include "mlx/transforms.h"
 #include "mlx/distributed/distributed.h"
 #include "mlx/distributed/ops.h"
+#include "mlx/memory.h"
 #include "mlx/ops.h"
 
 using namespace mlx::core;
@@ -175,4 +176,30 @@ TEST_CASE("sum_scatter is refused by the ring transport at two ranks") {
   eval(x);
   array y = distributed::sum_scatter(x);
   CHECK_THROWS_AS(eval(y), std::runtime_error);
+}
+
+TEST_CASE("an unread all_gather output survives a dropped handle and a cache clear") {
+  auto group = distributed::init();
+  if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
+    FAIL("expected a two-rank ring group");
+  }
+  int rank = group.rank();
+  std::vector<float> mine = {static_cast<float>(rank + 1)};
+  // The token-share pattern of the layer-split pipeline: the gather output
+  // is only a depends() dependency and no handle to it survives async_eval.
+  // The ring task is still queued on the CPU stream when clear_cache()
+  // releases every cached buffer; without the output held until that task
+  // ran, the ring wrote into an unmapped page (SIGSEGV in all_gather_impl).
+  for (int step = 0; step < 50; ++step) {
+    array x = array(mine.data(), {1}, float32);
+    array y = x + array(0.0f);
+    auto outs = depends({y}, {distributed::all_gather(y)});
+    async_eval(outs);
+    clear_cache();
+    eval(outs);
+  }
+  array x = array(mine.data(), {1}, float32);
+  eval(x);
+  auto got = values(distributed::all_gather(x));
+  CHECK_EQ(got, std::vector<float>{1.0f, 2.0f});
 }
