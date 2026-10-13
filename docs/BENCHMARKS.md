@@ -194,7 +194,7 @@ The first schedutil run of the 16-inch M1 Max block read 1.77 tokens per second,
 
 The 13-inch M1 run at 9.18 started with a load average of 1.37, above the 0.5 target, so its number may be low.
 
-The 13-inch M1 and 16-inch M1 Max ratios compare two governors in one session, on one driver, with no ANE work running. The 13-inch M1 rows with the ANE filler on all use the package driver. Under both governors they read about 9 tokens per second. The filler-off performance block used the v3 driver, so the gap between 15.27 and 9.18 mixes a driver difference, an ANE difference and a difference in hour. We have not separated them. A same-driver test with the filler on and off is queued. On the 14-inch M2 Max with the filler on, the performance rows are single runs against the schedutil block arms from earlier in the day. They read 16.5% higher for gemma-4-26B-A4B and 0.5% higher for Qwen3.6-35B-A3B. That is not an interleaved comparison. The 16-inch M1 Max has no performance row with the filler on yet.
+The 13-inch M1 and 16-inch M1 Max ratios compare two governors in one session, on one driver, with no ANE work running. The 13-inch M1 rows with the ANE filler on all use the package driver. Under both governors they read about 9 tokens per second. The filler-off performance block used the v3 driver, so the gap between 15.27 and 9.18 mixes a driver difference, an ANE difference and a difference in hour. We have not separated them. A same-driver test with the filler on and off is queued. On the 14-inch M2 Max with the filler on, the performance rows are single runs against the schedutil block arms from earlier in the day. They read 16.5% higher for gemma-4-26B-A4B and 0.5% higher for Qwen3.6-35B-A3B. That is not an interleaved comparison. The 16-inch M1 Max has one performance row with the filler on, gemma-4-26B-A4B only, in the generated table below.
 
 The 14-inch M2 Max filler-off case is not measured.
 
@@ -210,3 +210,17 @@ To restore, write the value you read back to each policy. The setting does not s
 If you run work on the ANE, do not expect the 13-inch M1 gain from the table above. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. Decode with the filler on was about 9 tokens per second under both governors. We have not isolated why.
 
 What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
+
+## Generated scoreboard tables (per chip)
+
+<!-- BEGIN GENERATED: bench-chip:g13c -->
+### 16-inch M1 Max (G13C)
+
+| Model | Decode | Prefill | Driver | Wheel | Runs | Governor | P/V | Control | Flags |
+|---|---|---|---|---|---|---|---|---|---|
+| gemma-4-26B-A4B | 17.17 | 176.03 | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | 1.296 / - | staged gather_qmm route, same wheel; control spread 0.2% | P spread 0.35% |
+
+_A cell shows Linux tokens per second, or Linux / macOS = share where both sides produce identical tokens. P is the default direct route. V is the staged route on the same wheel and driver. P/V = P over V (decode / prefill). Control spread = spread of the V arm. Governor: the CPU governor, with the ANE filler off or on._
+<!-- END GENERATED: bench-chip:g13c -->
+
+The 16-inch M1 Max row above is backed by [receipts/2026-10-13-m1-max-gemma-26b-direct-gather-qmm](../receipts/2026-10-13-m1-max-gemma-26b-direct-gather-qmm/README.md): wheel, driver, kernel, model hashes, command, both arms, dispatch trace, thermal procedure and device reopen.
