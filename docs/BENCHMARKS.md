@@ -35,7 +35,7 @@ macOS shares are printed only where both sides produce identical tokens.
 
 The two mixture-of-experts rows with "was" values were re-measured on 2026-10-10 on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`, PR #81 included), with the Honeykrisp driver from the private ICD directory at Mesa git `6543eeb7df7`, which the scoring script selects with `VK_ICD_FILENAMES`. The "was" values are the 2026-10-09 measurements; they ran on wheel `0.32.4.dev202610090923+a48b7cc5`, before PR #81, and their driver was not recorded, so the PR #81 effect is the before and after difference, not an isolated test. The output digests did not change (276e9fba and 6666c20f). The gemma-4-26B-A4B run started with a load average of 0.22. The Qwen3.6-35B-A3B cells are the mean of two runs: 13.75 and 13.48 decode, 117.52 and 115.22 prefill. The second run used the Edge0 repository, which holds the same weights and gave the same output digest. Those runs started with load averages of 1.11 and 0.98, so the numbers may be low. The other rows are unchanged.
 
-The gemma-4-E4B Linux cells ran on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`), not on v0.7.32, which still stalls on this model. They are the mean of three runs: decode 30.52, 30.45 and 30.44, prefill 366.67, 366.08 and 366.66. The driver is the private Honeykrisp ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES`, on the plain kernel. The runs started with load averages of 0.91, 1.37 and 1.22, above the 0.5 target, with the ANE idle. The Linux output digest (118c7586) is the same in all three runs and differs from the macOS digest (491eb46b), so the two sides produced different tokens. The same holds on the 13-inch M1.
+The gemma-4-E4B Linux cells ran on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`), not on v0.7.32, which still stalls on this model. They are the mean of three runs: decode 30.52, 30.45 and 30.44, prefill 366.67, 366.08 and 366.66. The driver is the private Honeykrisp ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES`, on the plain kernel. The runs started with load averages of 0.91, 1.37 and 1.22, above the 0.5 target, with the ANE idle. The Qwen3.5-9B macOS cells are the earlier sealed runs on the same machine (decode median of 10, prefill median of 5). The Linux output digest (118c7586) is the same in all three runs and differs from the macOS digest (491eb46b), so the two sides produced different tokens. The same holds on the 13-inch M1.
 
 llama.cpp Q4_K_M, Vulkan on Linux against Metal on macOS (same llama.cpp commit), Linux / macOS:
 
@@ -90,7 +90,7 @@ Every run started with a load average between 0.72 and 1.21, above the 0.5 targe
 
 ## Results on a base M1 (13-inch, 16 GB)
 
-The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models that fit. A cell shows Linux, or Linux / macOS and the percentage where macOS is shown. The Linux cells were measured on 2026-10-10; the macOS references are earlier sealed runs:
+The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models that fit. A cell shows Linux, or Linux / macOS and the percentage where macOS is shown. The Linux cells were measured on 2026-10-10; the Qwen3.5-9B macOS references are earlier sealed runs:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
@@ -103,7 +103,7 @@ The same measurement on a base M1 (13-inch, 16 GB, macOS 27.0), for the models t
 | Qwen3.5-9B | 7.55 / 10.85 = 70% | 48.3 / 115.0 = 42% |
 | gemma-4-E4B | 10.9 / 18.4 = 59% | 83.3 / 208.6 = 40% |
 
-On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B, and its decode is about 4% behind (4.2%). The Linux numbers are from the development wheel `0.32.4.dev202610101808+158fee60`. Its default route on the base M1 produces the same greedy tokens as macOS for Qwen3.5-9B (identical output digest over the 10 test generations). The macOS values are the median of three runs for Qwen3.5-9B. The Linux Qwen3.8-2B values are the median of 3 decode cells and 2 prefill cells.
+On the base M1 the Linux MLX prefill is faster than macOS for Qwen3.5-9B, and its decode is about 4% behind (4.2%). The Linux numbers are from the development wheel `0.32.4.dev202610101808+158fee60`. Its default route on the base M1 produces the same greedy tokens as macOS for Qwen3.5-9B (identical output digest over the 10 test generations). The macOS values are the median of three runs for Qwen3.5-9B, a single run for gemma-4-E4B, and 8 decode and 5 prefill runs for Qwen3.8-2B. The Linux Qwen3.8-2B values are the median of 3 decode cells and 2 prefill cells.
 
 gemma-4-E4B runs on main since the rope-frequency fix (#75). That fix is not in v0.7.32. On main at `e57cb301` it measured 10.46 decode and 114.31 prefill 512. That run used the private ICD at Mesa git `6543eeb7df7` and started with a load average of 0.90 and the ANE busy. An earlier run on the `158fee60` development wheel gave 10.47 and 113.6. Its greedy output digest (118c7586) differs from macOS (491eb46b), so no macOS share is printed.
 
