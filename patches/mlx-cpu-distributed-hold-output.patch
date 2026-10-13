@@ -1,0 +1,36 @@
+--- a/mlx/backend/cpu/distributed.cpp
++++ b/mlx/backend/cpu/distributed.cpp
+@@ -53,6 +53,9 @@
+       throw std::runtime_error(
+           "Only all reduce sum, min and max are supported for now");
+   }
++  // The queued task writes the output through a raw pointer: keep it alive
++  // until that task ran (cpu::eval releases encoder temporaries after it).
++  cpu::get_command_encoder(stream()).add_temporary(outputs[0]);
+ }
+ 
+ void AllGather::eval_cpu(
+@@ -64,6 +67,7 @@
+   auto [in, copied] = ensure_row_contiguous(inputs[0], stream());
+   outputs[0].set_data(allocator::malloc(outputs[0].nbytes()));
+   distributed::detail::all_gather(group(), in, outputs[0], stream());
++  cpu::get_command_encoder(stream()).add_temporary(outputs[0]);
+   if (copied) {
+     auto& enc = cpu::get_command_encoder(stream());
+     enc.add_temporary(in);
+@@ -93,6 +97,7 @@
+ 
+   outputs[0].set_data(allocator::malloc(outputs[0].nbytes()));
+   distributed::detail::recv(group(), outputs[0], src_, stream());
++  cpu::get_command_encoder(stream()).add_temporary(outputs[0]);
+ }
+ 
+ void ReduceScatter::eval_cpu(
+@@ -111,6 +116,7 @@
+     default:
+       throw std::runtime_error("Only scatter sum is supported for now");
+   }
++  cpu::get_command_encoder(stream()).add_temporary(outputs[0]);
+   if (copied) {
+     auto& enc = cpu::get_command_encoder(stream());
+     enc.add_temporary(in);
