@@ -208,3 +208,57 @@ To restore, write the value you read back to each policy. The setting does not s
 If you run work on the ANE, do not expect the 13-inch M1 gain from the table above. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. Decode with the filler on was about 9 tokens per second under both governors. We have not isolated why.
 
 What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
+
+## Generated scoreboard tables (per chip)
+
+<!-- BEGIN GENERATED: bench-chip:g13c -->
+### 16-inch M1 Max (G13C)
+
+| Model | Decode | Prefill | Driver | Wheel | Runs | Governor | P/V | Control | Flags |
+|---|---|---|---|---|---|---|---|---|---|
+| Ornith-1.5-35B-A3B | 8.62 | 35.84 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | - | start load 1.25 |
+| Qwen3-Coder-30B-A3B | 12.09 | 103.82 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | - | start load 1.25 |
+| Qwen3.5-9B | 38.87 / 59.4 = 65.4% | 309.19 / 339.0 = 91.2% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | - | start load 1.37 |
+| Qwen3.6-35B-A3B | 21.03 / 75.6 = 27.8% | 183.65 / 604.1 = 30.4% | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | 1.488 / - | staged gather_qmm route, same wheel; control spread 0.21% | ANE busy; P spread 0.29% |
+| Qwen3.8-27B | 14.03 / 19.5 = 71.9% | 88.51 / 105.6 = 83.8% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | - | start load 1.10 |
+| gemma-4-26B-A4B | 17.16 / 66.0 = 26.0% | 176.08 / 556.1 = 31.7% | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | 1.292 / - | staged gather_qmm route, same wheel; control spread 0.1% | ANE busy |
+| gemma-4-31B | - | 63.05 / 90.0 = 70.1% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | - | start load 1.53 |
+| gemma-4-E4B | 31.98 / 73.79 = 43.3% | 367.03 / 568.62 = 64.5% | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | - | start load 1.22 |
+
+_Cells are Linux / macOS = share where a macOS reference exists, Linux-only where not. Control: what the package arm was interleaved against; control spread = spread of the control arm V. P/V = package over control (decode / prefill). Governor: CPU governor series -- schedutil (not recorded before 2026-10-11 22:36Z), or performance with the ANE filler off / on._
+<!-- END GENERATED: bench-chip:g13c -->
+
+The PR 124 rows ran with the ANE filler on and have no filler-off pair. Their control is the staged route of the same wheel.
+
+<!-- BEGIN GENERATED: bench-chip:g13g -->
+### 13-inch M1 (G13G)
+
+| Model | Decode | Prefill | Driver | Wheel | Runs | Governor | Control | Flags |
+|---|---|---|---|---|---|---|---|---|
+| Llama-3.1-8B | 6.61 | 90.39 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | start load 0.98; decode inside the unexplained 13-inch drop, see [KNOWN-ISSUES](KNOWN-ISSUES.md#decode-on-the-13-inch-m1-changed-with-the-cpu-governor-with-no-ane-work-running) |
+| Mellum2-12B-A2.5B | 4.67 | 40.03 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | start load 1.06; decode inside the unexplained 13-inch drop, see [KNOWN-ISSUES](KNOWN-ISSUES.md#decode-on-the-13-inch-m1-changed-with-the-cpu-governor-with-no-ane-work-running) |
+| gemma-4-E4B | 15.69 | 114.375 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=2 | performance (filler off) | - | start load 0.95 |
+| gemma-4-E4B | 9.19 | 107.72 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | performance (filler on) | - | start load 0.67; ANE busy |
+
+_Cells are Linux / macOS = share where a macOS reference exists, Linux-only where not. Control: what the package arm was interleaved against; control spread = spread of the control arm V. P/V = package over control (decode / prefill). Governor: CPU governor series -- schedutil (not recorded before 2026-10-11 22:36Z), or performance with the ANE filler off / on._
+<!-- END GENERATED: bench-chip:g13g -->
+
+The filler-on and filler-off rows come from one block on one chip with one model. On the 14-inch M2 Max the same filler comparison read 1.017, with no cost, so do not read the gap between them as a cost on other chips or models. Never average a filler-off row with a filler-on row.
+
+<!-- BEGIN GENERATED: bench-chip:g14c -->
+### 14-inch M2 Max (G14C)
+
+_preemption kernel option on_
+
+| Model | Decode | Prefill | Driver | Wheel | Runs | Governor | Control | Flags |
+|---|---|---|---|---|---|---|---|---|
+| Ornith-1.5-35B-A3B | 12.965 | 68.485 | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | staged gather_qmm route, same wheel | ANE busy |
+| Qwen3-Coder-30B-A3B | 19.35 | 212.39 | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | staged gather_qmm route, same wheel | ANE busy |
+| Qwen3.5-9B | 40.30 | 450.90 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | start load 1.68 |
+| Qwen3.6-35B-A3B | 23.57 | 228.03 | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=2 | performance (filler on) | staged gather_qmm route, same wheel | ANE busy |
+| Qwen3.8-27B | 15.00 | 106.16 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | start load 1.06 |
+| gemma-4-26B-A4B | 19.72 | 226.72 | Honeykrisp (lab package) 69bde15340 | 18059c80 | n=3 | performance (filler on) | staged gather_qmm route, same wheel | ANE busy |
+| gemma-4-E4B | 15.22 | 514.70 | Honeykrisp (lab package) 69bde15340 | e57cb301 | n=1 | schedutil (not recorded) | - | start load 1.49 |
+
+_Cells are Linux / macOS = share where a macOS reference exists, Linux-only where not. Control: what the package arm was interleaved against; control spread = spread of the control arm V. P/V = package over control (decode / prefill). Governor: CPU governor series -- schedutil (not recorded before 2026-10-11 22:36Z), or performance with the ANE filler off / on. No macOS denominator: Linux-only rows._
+<!-- END GENERATED: bench-chip:g14c -->
