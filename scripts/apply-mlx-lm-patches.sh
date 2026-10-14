@@ -240,3 +240,9 @@ python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
 # ON on every chip; set MLX_OMARCHY_GDN_RAW_REPEAT=0 to opt out. The 9B
 # route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
+# Qwen3-Next dense MLP, single-token rows: write silu(gate) * up as raw ops so
+# the backend's GEMV store-epilogue fold fires (32 fewer dispatches per
+# Qwen3.5-9B decode token). Same operands and bf16 rounding as the compiled
+# swiglu; prefill keeps the compiled function. Kill switch
+# MLX_OMARCHY_EAGER_SWIGLU=0.
+python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
