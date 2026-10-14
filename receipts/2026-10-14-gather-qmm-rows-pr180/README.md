@@ -90,7 +90,7 @@ test $(lslocks -n -o PATH | grep -cxF /var/tmp/ane-run.lock) -ge 1
 test $(pgrep -fc '[a]ne-run') -ge 1
 ```
 
-The 9B and 35B tickets carry the same clauses with their own model cache directory. The harness command by itself does not assert the wheel stamps. The checks above did. Each row JSON also records the stamp of its arm: `0.32.4.dev202610141543+7604d92c` for O and `0.32.4.dev202610142002+e625c4e6` for P, in all 24 rows of the three blocks.
+The 35B ticket carries the same clauses with its own model cache directory. The 9B ticket has no model cache check and is otherwise the same. The harness command by itself does not assert the wheel stamps. The checks above did. Each row JSON also records the stamp of its arm: `0.32.4.dev202610141543+7604d92c` for O and `0.32.4.dev202610142002+e625c4e6` for P, in all 24 rows of the three blocks.
 
 ## Results
 
