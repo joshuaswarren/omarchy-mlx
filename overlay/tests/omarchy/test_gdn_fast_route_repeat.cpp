@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -200,6 +201,75 @@ TEST_CASE("gdn fused path: un-repeated q/k (Hk != Hv) equals the repeated route 
     CHECK_MESSAGE(
         array_equal(a.out[1], b.out[1]).item<bool>(),
         c.name, ": final state differs between the repeated and un-repeated routes");
+  }
+}
+
+// Raw-gates decode on the Qwen3.5-9B contract (f32 A_log, Hk = 16, Hv = 32).
+// The composed-order tiled decode kernel reads key head j / (Hv / Hk) itself,
+// so a call with the un-repeated q and k must equal, bit for bit, the call
+// the Python repeat patch used to make (q and k expanded with mx.repeat
+// first). Batched decode (B > 1) maps head b * Hv + j to key head
+// b * Hk + j / (Hv / Hk). A buffer offset on q and k rides the item offsets.
+TEST_CASE("gdn raw decode f32 A_log: native GQA equals the repeated route bit for bit") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  struct Case {
+    int B;
+    int pad;
+    const char* name;
+  };
+  for (const Case& c : {
+           Case{1, 0, "B=1"},
+           Case{1, 3, "B=1, q/k views with a buffer offset"},
+           Case{3, 0, "B=3 batched decode"}}) {
+    Qwen95Shape sh;
+    sh.B = c.B;
+    sh.T = 1;
+    GdnInputs in = make_conditioned(sh, s, c.pad);
+    auto bf16 = [&](const std::vector<float>& data, Shape shape, float scale) {
+      std::vector<float> scaled(data);
+      for (float& x : scaled) x *= scale;
+      return astype(array(scaled.data(), std::move(shape), float32), bfloat16, s);
+    };
+    const size_t heads = static_cast<size_t>(sh.B) * sh.Hv;
+    array a = bf16(pattern(heads, 21), Shape{sh.B, 1, sh.Hv}, 1.0f);
+    array b = bf16(pattern(heads, 22), Shape{sh.B, 1, sh.Hv}, 1.0f);
+    std::vector<float> alog_data = pattern(static_cast<size_t>(sh.Hv), 23);
+    for (float& x : alog_data) x *= 0.5f;
+    array a_log = array(alog_data.data(), Shape{sh.Hv}, float32);
+    array dt_bias = bf16(pattern(static_cast<size_t>(sh.Hv), 24), Shape{sh.Hv}, 0.1f);
+    std::vector<float> h0_data =
+        pattern(static_cast<size_t>(sh.B) * sh.Hv * sh.Dv * sh.Dk, 25);
+    array h0 = array(h0_data.data(), Shape{sh.B, sh.Hv, sh.Dv, sh.Dk}, float32);
+    array q_exp = repeat(in.q, sh.Hv / sh.Hk, 2, s);
+    array k_exp = repeat(in.k, sh.Hv / sh.Hk, 2, s);
+    eval(std::vector<array>{
+        in.q, in.k, in.v, a, b, a_log, dt_bias, h0, q_exp, k_exp});
+    auto& enc = omarchy::get_command_encoder(s);
+    enc.synchronize("gdn_raw_gqa_inputs");
+    auto run = [&](const array& q, const array& k) {
+      enc.synchronize("gdn_raw_gqa_before");
+      uint64_t before = counters().vk_compute_dispatches.load();
+      auto out = fast::gated_delta_update_raw(
+          q, k, in.v, a, b, a_log, dt_bias, h0, std::nullopt, s);
+      out[0].eval();
+      out[1].eval();
+      enc.synchronize("gdn_raw_gqa_after");
+      return GdnRun{out, counters().vk_compute_dispatches.load() - before};
+    };
+    GdnRun rep = run(q_exp, k_exp);
+    GdnRun native = run(in.q, in.k);
+    std::cout << "[gdn_raw_gqa] " << c.name << ": repeated route " << rep.dispatches
+              << " dispatches, un-repeated route " << native.dispatches << "\n";
+    CHECK_MESSAGE(
+        native.dispatches <= 3,
+        c.name, ": un-repeated raw decode took ", native.dispatches, " dispatches");
+    CHECK_MESSAGE(
+        array_equal(rep.out[0], native.out[0]).item<bool>(),
+        c.name, ": output differs between the repeated and native GQA routes");
+    CHECK_MESSAGE(
+        array_equal(rep.out[1], native.out[1]).item<bool>(),
+        c.name, ": final state differs between the repeated and native GQA routes");
   }
 }
 

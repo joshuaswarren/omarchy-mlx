@@ -273,8 +273,22 @@ void main() {
   vec2 gates = gdn_gates(head);
   float g = gates.x;
   float beta = gates.y;
-  sk[lane] = bf16_load(k_buf.v[params.rhs_offset + head * dk + lane]);
-  sq[lane] = bf16_load(q_buf.v[params.lhs_offset + head * dk + lane]);
+#ifdef GDN_COMPOSED_ORDER
+  // Native GQA decode (Hk < Hv): q and k keep their Hk heads. in_strides[3]
+  // carries Hk (0 = q and k already have Hv heads), in_strides[2] carries
+  // Hv. Value head j reads key head j / (Hv / Hk), the order mx.repeat on
+  // the head axis produces, per batch row (head runs over B * Hv).
+  uint khead = head;
+  if (params.in_strides[3] != 0u) {
+    uint hv_b = params.in_strides[2];
+    uint hk_b = params.in_strides[3];
+    khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
+  }
+#else /* GDN_COMPOSED_ORDER */
+  uint khead = head;
+#endif /* GDN_COMPOSED_ORDER */
+  sk[lane] = bf16_load(k_buf.v[params.rhs_offset + khead * dk + lane]);
+  sq[lane] = bf16_load(q_buf.v[params.lhs_offset + khead * dk + lane]);
   skg[lane] = sk[lane] * g;
   uint head_base = head * dv * dk;
   uint tile_base = params.shape[1] + head_base + row0 * dk;

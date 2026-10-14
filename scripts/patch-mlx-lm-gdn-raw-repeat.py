@@ -9,15 +9,18 @@ fall through to the composed per-token fallback: ~700 extra small
 dispatches per decoded token (AsType/Multiply/Sum/Subtract F32 soup, per
 the 2026-10-03 3-model census).
 
-This patch expands q/k to the value-head count before the dispatch.
-MLX_OMARCHY_GDN_RAW_REPEAT defaults to 1; set it to 0 to use the
-composed path. The 9B route's free-run tokens can differ from the
-composed path, but the updated bf16-ULP numerics bar accepts the measured
+The backend now serves Hk < Hv natively (the composed-order tiled decode
+kernel reads key head j / (Hv / Hk) itself), so this patch no longer
+expands q/k by default: the 48 per-token expansion copies of the 9B are
+gone. MLX_OMARCHY_GDN_RAW_REPEAT=1 restores the Python-side expansion
+before the dispatch (the backend then sees equal head counts).
+The 9B route's free-run tokens can differ from the composed path, but the updated bf16-ULP numerics bar accepts the measured
 divergences: >=99% teacher-forced top-1 agreement and every free-run
 first divergence within one bf16 ULP, alongside per-op fp64 and PPL gates.
 Idempotent; refuses unrecognized content. Usage: patch <venv>
 """
 import glob
+import re
 import sys
 
 IMPORT_OLD = "from functools import partial\n"
@@ -30,10 +33,11 @@ DISPATCH_OLD = """    if not use_kernel or mx.default_device() != mx.gpu:
 DISPATCH_NEW = """    # mlx-omarchy decode fast-route (GQA repeat): the fused raw decode
     # kernel requires Hk == Hv (omarchy GatedDeltaUpdate::use_fallback);
     # expand q/k to the value-head count so Hk<Hv models take the fused
-    # route instead of the composed per-token fallback. Gate:
-    # MLX_OMARCHY_GDN_RAW_REPEAT (default ON; set to 0 to opt out).
+    # route instead of the composed per-token fallback. The backend now
+    # serves Hk < Hv itself, so the expansion is opt-in. Gate:
+    # MLX_OMARCHY_GDN_RAW_REPEAT (default OFF; set to 1 to expand here).
     if (
-        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1") != "0"
+        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0") == "1"
         and use_kernel
         and q.shape[1] == 1
         and q.shape[-1] == 128
@@ -67,10 +71,30 @@ if not site:
     sys.exit("mlx_lm/models not found under " + venv)
 site = site[0]
 
+# Earlier versions of this patcher wrote the Python q/k expansion ON by default, in three
+# forms: get(..., "1") != "0" (comment "default ON"), and get(..., "1") == "1" (comment
+# "default 0 = exact existing dispatch", which does not match the code). A venv patched by
+# any of them keeps the expansion through "already patched", so match the gate line itself
+# (either operator) and rewrite it, and its comment, to the opt-in form.
+GATE_RE = re.compile(r'os\.environ\.get\("MLX_OMARCHY_GDN_RAW_REPEAT", "1"\) (?:!= "0"|== "1")')
+GATE_NEW = 'os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0") == "1"'
+OLD_COMMENTS = (
+    "# MLX_OMARCHY_GDN_RAW_REPEAT (default ON; set to 0 to opt out).",
+    "# MLX_OMARCHY_GDN_RAW_REPEAT (default 0 = exact existing dispatch).",
+)
+NEW_COMMENT = "# MLX_OMARCHY_GDN_RAW_REPEAT (default OFF; set to 1 to expand here)."
+
 g = site + "/gated_delta.py"
 text = open(g).read()
 if "MLX_OMARCHY_GDN_RAW_REPEAT" in text:
-    print("already patched:", g)
+    if GATE_RE.search(text):
+        migrated = GATE_RE.sub(GATE_NEW, text)
+        for old_comment in OLD_COMMENTS:
+            migrated = migrated.replace(old_comment, NEW_COMMENT)
+        open(g, "w").write(migrated)
+        print("migrated to the opt-in default:", g)
+    else:
+        print("already patched:", g)
 else:
     if text.count(DISPATCH_OLD) != 1:
         sys.exit("dispatch anchor not unique in " + g + "; refusing to patch")

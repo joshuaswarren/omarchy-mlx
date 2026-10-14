@@ -12285,7 +12285,16 @@ void GatedDeltaUpdate::eval_gpu(
   // order of mx.repeat on the head axis (the upstream fallback and the
   // mlx-lm repeat patch). q and k are dense here (any strided input was
   // copied above); the copy adds each array's own buffer offset.
-  if (fused_ready && Hk != Hv) {
+  // Native GQA decode: the composed-order tiled decode kernel (the f32
+  // A_log raw route, Qwen3.5-9B) reads key head j / (Hv / Hk) itself, so
+  // q and k keep their Hk heads and the two expansion copies per linear
+  // layer per token are not recorded. Every other route expands here.
+  // MLX_OMARCHY_GDN_GQA_DECODE=0 restores the expansion.
+  static const bool gdn_gqa_decode =
+      decode_path_override("MLX_OMARCHY_GDN_GQA_DECODE") != 0;
+  const bool gqa_native = gdn_gqa_decode && decode_shape && raw_gates_mode &&
+      Hk != Hv && A_log.dtype() == float32 && gdn_decode_tile_enabled(encoder);
+  if (fused_ready && Hk != Hv && !gqa_native) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
       array wide(Shape{B, T, Hv, Dk}, x.dtype(), nullptr, {});
@@ -12333,6 +12342,9 @@ void GatedDeltaUpdate::eval_gpu(
     params.dims = static_cast<uint32_t>(T);
     // A_log and dt_bias are per model head: the shader reads head % Hv.
     params.in_strides[2] = checked_u32(Hv, tag, out);
+    // Native GQA: q and k carry Hk heads; the composed-order tiled shader
+    // maps value head j to key head j / (Hv / Hk). 0 means equal head counts.
+    params.in_strides[3] = gqa_native ? checked_u32(Hk, tag, out) : 0u;
     std::array<omarchy::ComputeBinding, 10> bindings{
         binding(q),    // 0 QBuf
         binding(k),    // 1 KBuf

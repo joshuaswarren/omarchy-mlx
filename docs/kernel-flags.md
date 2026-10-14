@@ -46,9 +46,12 @@ A/B gating and qualification, not for normal operation.
 - `mlx-lm-gated-delta-fast-route.patch` — **default ON.** Routes
   `mx.fast.gated_delta_update` in mlx-lm 0.31.3 to the fused kernel in the
   mlx-omarchy wheel. Required for the measured serve numbers.
-- `patch-mlx-lm-gdn-raw-repeat.py` — **default ON on all chips.** Set
-  `MLX_OMARCHY_GDN_RAW_REPEAT=0` to opt out of the Qwen3.5-9B fused raw
-  decode route (+31-35% on G14-class; +35-43% on G13). The published-wheel
+- `patch-mlx-lm-gdn-raw-repeat.py` — **default ON on all chips.** The
+  Qwen3.5-9B fused raw decode route (+31-35% on G14-class; +35-43% on G13)
+  runs at Hk != Hv inside the backend: the tiled decode kernel on the f32
+  A_log route reads key head j / (Hv / Hk) itself, and
+  `MLX_OMARCHY_GDN_GQA_DECODE=0` makes the backend expand q and k instead.
+  `MLX_OMARCHY_GDN_RAW_REPEAT=1` expands them in Python before the call. The published-wheel
   audit measured 99.51% teacher-forced agreement; all first free-run
   divergences were within one bf16 ULP. See docs/numerics-gate.md for the
   criteria and receipts/2026-10-04-gdu-bar-audit/README.md for evidence.
