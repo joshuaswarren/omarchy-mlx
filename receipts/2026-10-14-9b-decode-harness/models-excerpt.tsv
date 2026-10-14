@@ -1,0 +1,2 @@
+qwen35-9b	mlx	mlx-community/Qwen3.5-9B-4bit	-	16	
+# key	kind	repo	file	min_ram_gb	note   (v2, 2026-10-09: ranked by HF popularity, family-deduped; run JIT with SCORE_JIT=1 on small disks)

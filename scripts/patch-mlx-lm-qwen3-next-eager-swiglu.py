@@ -2,7 +2,7 @@
 """Let the GEMV store-epilogue fold fire on the Qwen3-Next family's decode MLP.
 
 mlx_lm's Qwen3NextMLP (Qwen3.5 dense, Qwen3.8, the Qwen3.6 MoE shared expert) calls the
-compiled swiglu(gate, x). The compiled function reaches the omarchy backend as ONE Compiled
+compiled swiglu(gate, up) of mlx_lm/models/activations.py, defined there as swiglu(gate, x) = nn.silu(gate) * x. The compiled function reaches the omarchy backend as ONE Compiled
 node, so the backend's SwiGLU store-epilogue fold (fused_chain.cpp: the gate and up GEMVs
 compute silu(gate) * up in one dispatch) never matches it: a standalone Swiglu dispatch runs
 per layer per token (32 per Qwen3.5-9B decode token). The fold's planner matches eager
