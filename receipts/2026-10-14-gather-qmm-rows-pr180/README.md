@@ -69,6 +69,29 @@ $HOME/scratch/w71/score/venv/bin/python $HOME/scratch/w71/score/provrec.py $HOME
 
 The 9B and 35B tickets have the same form with their own model key and repository. Arm O ran the tree `gprp`, which is the O wheel unpacked. Arm P ran the tree `gqe`, which is the P wheel unpacked. The harness scripts are not in this repository. Their hashes: `runprov.sh` `552b326909635e3f32e95ffe311a0740050815336a4d63a0c0ed2db4f69c33e4`, `runwhl.sh` `6bed2895fbfae97e04b4af04446dc959687621ff95ab636c86a677a3e4a0a447`, `provrec.py` `cbf00a706687bf6877099476ce1329e0ff1c342398d7af6f46e95fa59dae6e94`.
 
+The ticket line ran these checks before the command. A mismatch aborts the ticket. For the 26B ticket they were:
+
+```
+uname -r | grep -q '20261013.18'
+test $(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor) = performance
+test -d $HOME/scratch/w71/score/gprp/mlx
+test -d $HOME/scratch/w71/score/gqe/mlx
+test -d $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-26b-a4b-it-4bit
+test $(sha256sum $HOME/scratch/w71/score/whl-gprp/mlx/lib/libmlx.so | cut -c1-16) = 7c9c9fff09bbc988
+test $(sha256sum $HOME/scratch/w71/score/whl-gprp/mlx/core.cpython-314-aarch64-linux-gnu.so | cut -c1-16) = 7542a0bcff502c00
+test $(sha256sum $HOME/scratch/w71/score/whl-gqe/mlx/lib/libmlx.so | cut -c1-16) = be731051e39075a8
+test $(sha256sum $HOME/scratch/w71/score/whl-gqe/mlx/core.cpython-314-aarch64-linux-gnu.so | cut -c1-16) = 7542a0bcff502c00
+test $(cut -c1-8 /proc/sys/kernel/random/boot_id) = a5445704
+test $(sha256sum $HOME/scratch/w71/score/runprov.sh | cut -c1-16) = 552b326909635e3f
+test $(sha256sum $HOME/scratch/w71/score/runwhl.sh | cut -c1-16) = 6bed2895fbfae97e
+test $(sha256sum $HOME/scratch/w71/score/provrec.py | cut -c1-16) = cbf00a706687bf68
+bash -n $HOME/scratch/w71/score/runprov.sh
+test $(lslocks -n -o PATH | grep -cxF /var/tmp/ane-run.lock) -ge 1
+test $(pgrep -fc '[a]ne-run') -ge 1
+```
+
+The 9B and 35B tickets carry the same clauses with their own model cache directory. The harness command by itself does not assert the wheel stamps. The checks above did. Each row JSON also records the stamp of its arm: `0.32.4.dev202610141543+7604d92c` for O and `0.32.4.dev202610142002+e625c4e6` for P, in all 24 rows of the three blocks.
+
 ## Results
 
 Each row reports the median of 10 timed decode samples and of 5 prefill samples. The values come from the row JSON files in [rows-26b](rows-26b), [rows-9b](rows-9b) and [rows-35b](rows-35b). Each aggregate is the median of the four row medians. Each arm has 40 decode samples and 20 prefill samples.
@@ -134,4 +157,4 @@ Each row is a fresh process. It waits 15 seconds. Then it waits up to 60 seconds
 
 ## What this does not cover
 
-These blocks cover one boot, one prompt set per model and four rounds. They include no run of the exact P wheel with the variable set to 0. The 4-output setting was measured only in the synthetic device check. Other models and the other chips were not run in these blocks.
+These blocks took no dispatch trace. The ticket ran with `TRACE_ARMS` empty, so the blocks do not show which kernel ran. The route evidence that exists for this head is separate: a 4-token trace on the 13-inch M1 with DeepSeek-Coder-V2-Lite-Instruct-4bit showed kernel id 612 (the 8-output bf16 kernel) 465 times in 8201 dispatches, with ids 580, 581, 609, 610 and 611 at zero; the P wheel contains the four new `GatherQmmSubDirectR` kernel names and the O wheel contains none; and the earlier device check, on a wheel with the same shader file, asserted the dispatch counts of the one-output, 4-output and 8-output kernels. This receipt makes no CPU-count claim. These blocks cover one boot, one prompt set per model and four rounds. They include no run of the exact P wheel with the variable set to 0. The 4-output setting was measured only in the synthetic device check. Other models and the other chips were not run in these blocks.
