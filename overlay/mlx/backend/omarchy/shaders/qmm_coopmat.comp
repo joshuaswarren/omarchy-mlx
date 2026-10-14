@@ -4,6 +4,9 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef BF16C
+#extension GL_EXT_bfloat16 : require
+#endif
 
 // Direct-global-load qmm prefill coopmat: whenever x can feed the
 // matrix unit exactly, the A (x) tiles are coopMatLoad'ed straight
@@ -66,6 +69,12 @@
 #endif
 #if (defined(CHUNK_DEQ) || defined(LDS_PAD)) && defined(TWO_N)
 #error "TWO_N keeps its own second tile; chunk/pad combos are out of scope"
+#endif
+#if defined(BF16C) && (defined(X_F32) || defined(X_BF16) || defined(CHUNK_DEQ) || defined(TWO_N) || !defined(FULL_N) || !defined(LDS_PAD))
+#error "BF16C is the bf16-operand FullN LdsPad build; it excludes X_F32, X_BF16, CHUNK_DEQ, TWO_N and needs FULL_N and LDS_PAD"
+#endif
+#if defined(BF16C) && (defined(QBITS) && QBITS != 4 || defined(QGROUP) && QGROUP != 64)
+#error "BF16C is a 4-bit group-64 build"
 #endif
 
 // Affine weight format (compile time). The shipped builds are 4-bit,
@@ -131,6 +140,10 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
   float values[];
 } input_x;
+#elif defined(BF16C)
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  bfloat16_t values[];
+} input_x;
 #else
 layout(set = 0, binding = 0, std430) readonly buffer InputX {
   float16_t values[];
@@ -139,7 +152,7 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
   uint values[];
 } input_w;
-#if defined(X_BF16) || defined(X_F32)
+#if defined(X_BF16) || defined(X_F32) || defined(BF16C)
 // bf16 models store scales and biases in bfloat16 (16-bit word layout,
 // widened exactly); the f16 models use float16_t storage. The X_F32
 // build serves the same bf16-hybrid route (x pre-widened by the host
@@ -176,7 +189,7 @@ layout(set = 0, binding = 4, std430) writeonly buffer Output {
 #else
 #define X_UNPACK(word) unpackHalf2x16(word)
 #endif
-#if defined(X_BF16) || defined(X_F32)
+#if defined(X_BF16) || defined(X_F32) || defined(BF16C)
 #define SCALE_LOAD(x) uintBitsToFloat(uint(x) << 16u)
 #else
 #define SCALE_LOAD(x) float(x)
@@ -225,7 +238,18 @@ layout(push_constant) uniform Params {
 #ifdef X_BF16
 shared float x_s[TILE_M * STEP_K];
 #endif
+#ifdef BF16C
+// bf16-operand build (QMM_BF16C): the dequantized weight tile is staged as
+// bfloat16 (the value scale * q + bias is rounded to bf16 once, round to
+// nearest even) and both matrix operands are bf16 with an f32 accumulator.
+// The output drain needs an f32 scratch of its own.
+shared bfloat16_t w_s[QMM_W_ROWS * QMM_W_STRIDE];
+shared float o_s[4u * MAT * MAT];
+#define DRAIN_BUF o_s
+#else
 shared float w_s[QMM_W_ROWS * QMM_W_STRIDE];
+#define DRAIN_BUF w_s
+#endif
 
 // Workgroup-lane scalars the tile body reads; set once in main().
 uint g_lid;
@@ -386,6 +410,15 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
           scale * float((packed_hi >> 16u) & 0xFFu) + bias;
       w_s[w_base + 7u * QMM_W_STRIDE] =
           scale * float(packed_hi >> 24u) + bias;
+#elif defined(BF16C)
+      // One packed word per lane covers the 16x32 weight tile; each value is
+      // computed in f32 exactly as in the shipped build and rounded once to bf16.
+      uint packed = input_w.values[w_row + k_base / 8u + g_wpart];
+      uint w_base = 8u * g_wpart * QMM_W_STRIDE + g_wcol;
+      for (uint j = 0u; j < 8u; ++j) {
+        w_s[w_base + j * QMM_W_STRIDE] =
+            bfloat16_t(scale * float((packed >> (4u * j)) & 0xFu) + bias);
+      }
 #else
       // One packed word per lane covers the 16x32 weight tile.
       uint packed = column_ok
@@ -437,11 +470,18 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #elif defined(X_F32)
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
+#elif defined(BF16C)
+        coopmat<bfloat16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
+            mat_a[SUBGROUP_ROW_BLOCKS];
 #else
         coopmat<float16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseA>
             mat_a[SUBGROUP_ROW_BLOCKS];
 #endif
+#ifdef BF16C
+        coopmat<bfloat16_t, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
+#else
         coopmat<float, gl_ScopeSubgroup, MAT, MAT, gl_MatrixUseB> mat_b[4];
+#endif
 #ifdef X_BF16
         for (uint rb = 0u; rb < SUBGROUP_ROW_BLOCKS; ++rb) {
           coopMatLoad(
@@ -491,7 +531,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
             gl_CooperativeMatrixLayoutRowMajor);
 #else
         coopMatStore(
-            acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], w_s,
+            acc[rb & (SUBGROUP_ROW_BLOCKS - 1u)][cb], DRAIN_BUF,
             cb * MAT * MAT, MAT,
             gl_CooperativeMatrixLayoutRowMajor);
 #endif
@@ -509,7 +549,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
                             r * MAT + (g_wcol % 8u)]);
 #else
           output_data.values[out_slice + row * params.matrix_n + column] =
-              OUT_STORE(w_s[(g_wcol / 8u) * MAT * MAT +
+              OUT_STORE(DRAIN_BUF[(g_wcol / 8u) * MAT * MAT +
                             r * MAT + (g_wcol % 8u)]);
 #endif
         }
