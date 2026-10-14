@@ -20,6 +20,7 @@ first divergence within one bf16 ULP, alongside per-op fp64 and PPL gates.
 Idempotent; refuses unrecognized content. Usage: patch <venv>
 """
 import glob
+import re
 import sys
 
 IMPORT_OLD = "from functools import partial\n"
@@ -70,26 +71,27 @@ if not site:
     sys.exit("mlx_lm/models not found under " + venv)
 site = site[0]
 
-# The block this patcher wrote before the backend served Hk < Hv natively expanded q/k by
-# default (RAW_REPEAT default "1"). A venv patched by that version keeps the expansion
-# through "already patched", so migrate the old gate to the opt-in one.
-MIGRATE_OLD = """    # route instead of the composed per-token fallback. Gate:
-    # MLX_OMARCHY_GDN_RAW_REPEAT (default ON; set to 0 to opt out).
-    if (
-        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "1") != "0"
-"""
-MIGRATE_NEW = """    # route instead of the composed per-token fallback. The backend now
-    # serves Hk < Hv itself, so the expansion is opt-in. Gate:
-    # MLX_OMARCHY_GDN_RAW_REPEAT (default OFF; set to 1 to expand here).
-    if (
-        os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0") == "1"
-"""
+# Earlier versions of this patcher wrote the Python q/k expansion ON by default, in three
+# forms: get(..., "1") != "0" (comment "default ON"), and get(..., "1") == "1" (comment
+# "default 0 = exact existing dispatch", which does not match the code). A venv patched by
+# any of them keeps the expansion through "already patched", so match the gate line itself
+# (either operator) and rewrite it, and its comment, to the opt-in form.
+GATE_RE = re.compile(r'os\.environ\.get\("MLX_OMARCHY_GDN_RAW_REPEAT", "1"\) (?:!= "0"|== "1")')
+GATE_NEW = 'os.environ.get("MLX_OMARCHY_GDN_RAW_REPEAT", "0") == "1"'
+OLD_COMMENTS = (
+    "# MLX_OMARCHY_GDN_RAW_REPEAT (default ON; set to 0 to opt out).",
+    "# MLX_OMARCHY_GDN_RAW_REPEAT (default 0 = exact existing dispatch).",
+)
+NEW_COMMENT = "# MLX_OMARCHY_GDN_RAW_REPEAT (default OFF; set to 1 to expand here)."
 
 g = site + "/gated_delta.py"
 text = open(g).read()
 if "MLX_OMARCHY_GDN_RAW_REPEAT" in text:
-    if text.count(MIGRATE_OLD) == 1:
-        open(g, "w").write(text.replace(MIGRATE_OLD, MIGRATE_NEW, 1))
+    if GATE_RE.search(text):
+        migrated = GATE_RE.sub(GATE_NEW, text)
+        for old_comment in OLD_COMMENTS:
+            migrated = migrated.replace(old_comment, NEW_COMMENT)
+        open(g, "w").write(migrated)
         print("migrated to the opt-in default:", g)
     else:
         print("already patched:", g)
