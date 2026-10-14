@@ -2,7 +2,7 @@
 
 This is the source for the decode figures in [docs/compatibility.md](../../docs/compatibility.md). The change runs 8 outputs per workgroup in the direct `gather_qmm` decode kernel. On the same boot, back to back, decode went from 20.3935 to 24.581 tokens per second on gemma-4-26B-A4B (plus 20.53 percent). It went from 25.066 to 28.663 on Qwen3.6-35B-A3B (plus 14.35 percent). Qwen3.5-9B did not change. Every row of all three blocks has the same output digest as its same-block main rows.
 
-P is the head of this pull request. O is main with PR 179 merged. Each block ran four rounds interleaved O P O P O P O P.
+P is the head of PR 180, `e625c4e6`. PR 180 merged as main `b0799ab895bf6748666d83939da72a05910947d8` with the same tree, `8378903106d127ef745a76e5515bf1dd169444a9`. O is main with PR 179 merged. Each block ran four rounds interleaved O P O P O P O P.
 
 ## Source and wheels
 
