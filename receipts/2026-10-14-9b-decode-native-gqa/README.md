@@ -57,7 +57,16 @@ A separate untimed ticket traced both arms on the same machine and kernel. It ra
 
 ## Device test
 
-The new doctest is `gdn raw decode f32 A_log: native GQA equals the repeated route bit for bit`. CI configures with the C++ tests off, so it does not build this test. I build and run it on the M2 and add the result here.
+The new doctest is `gdn raw decode f32 A_log: native GQA equals the repeated route bit for bit`. CI configures with the C++ tests off, so it does not build this test. I built `omarchy_gdn_fast_route_repeat_tests` from candidate commit `849a36c5` and ran it on the M2. The C++ files are the same at this head.
+
+- Binary sha256 `6276fc6fba473eaeea18c18dd87fe3a76fded67fb6794ed302bd362ed0dd6bc6`.
+- The run was on boot `35eb9d8f`, kernel `7.1.12-2-20261013.18-sep-ARCH`, governor performance, with the ANE filler running.
+- The device is `Apple M2 Max (G14C B1)` on Honeykrisp, Mesa `26.3.0-devel` at git `69bde15340`, driver library sha256 starting `40282811c6e1`. These come from the provenance record of a ticket on the same boot.
+- No driver override variable was set, so the installed driver ran.
+- Default run: 3 test cases passed and 3872 assertions passed, with 0 failures.
+- The new case printed 1 dispatch for the native route and 1 for the repeated route at B=1, at B=1 with a buffer offset, and at B=3. Output and final state are bit-identical.
+- With `MLX_OMARCHY_GDN_GQA_DECODE=0` the same 3 cases pass. The un-repeated route then takes 3 dispatches, the kernel and the two expansion copies.
+- The earlier precomputed-gates cases take 3 dispatches for the un-repeated route in both runs. This change does not touch them.
 
 ## Integrity
 
