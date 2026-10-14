@@ -701,7 +701,14 @@ without them.
   64-wide k chunk keeps its layout. Group 32 reads a scale and bias per
   16-row step. 8-bit unpacks two words per lane step, low byte first.
   The output is bit-identical to `QmmTileRb*` on the same inputs. The
-  env-selected twins (TwoN, chunk dequant) stay 4-bit group 64 only.
+  env-selected twins stay 4-bit group 64 only, so these formats ignore
+  `MLX_OMARCHY_QMM_RASTER`, `MLX_OMARCHY_QMM_NO_RASTER`,
+  `MLX_OMARCHY_QMM_TWON`, `MLX_OMARCHY_QMM_PERSIST`,
+  `MLX_OMARCHY_QMM_CHUNK` and `MLX_OMARCHY_QMM_LDSPAD=0`: they always
+  take the default route of the shape. `MLX_OMARCHY_NO_COOPMAT`,
+  `MLX_OMARCHY_QMM_TILE`, `MLX_OMARCHY_QMM_TILE_RB`,
+  `MLX_OMARCHY_QMM_NO_FULLN` and `MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE`
+  apply as for 4-bit group 64.
 - Decode (`m == 1`, subgroup size 32): `QmmVecWordSubgroup{F16,BF16}*`,
   the multi-row word kernel, with native `qmv` arithmetic. Group 32 only
   changes the block's scale and bias index. 8-bit follows Metal's

@@ -4359,8 +4359,10 @@ TEST_CASE("q4g32 and q8 affine formats take the word decode and coopmat prefill 
   // k 512: the two-word qmv_fast step; k 192: the one-word step and a
   // group-32 k that is not a multiple of 128. n 264 is full-n for the
   // 8-column decode tile; n 100 clamps the last multi-row slot and leaves
-  // a partial coopmat column tile. m 16 and 100 cover the 16-row and
-  // 32-row coopmat mappings.
+  // a partial coopmat column tile. m 16 runs the 16-row coopmat
+  // mapping. m 100 runs the 32-row mapping only on a device missing from
+  // apple_gpu_cores; on the listed chips coopmat_tile_rows keeps these
+  // grids at 16 rows, so the pins there cover M16 builds only.
   const std::vector<std::pair<int, int>> kn{{512, 264}, {192, 100}};
   unsigned seed = 4242u;
   for (const auto& f : formats) {
