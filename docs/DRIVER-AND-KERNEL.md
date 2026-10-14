@@ -10,8 +10,8 @@ published-wheel audit measured +31-35% decode on G14-class hardware and
 top-1 agreement, and S=1 PPL -0.072%. All 10 free-runs diverged within 512
 tokens: six first-divergence gaps were 0.125 (one bf16 ULP at those logits),
 and four were zero; overall prefix identity was 29.43%. This meets the
-scale-aware numerics gate. Set MLX_OMARCHY_GDN_RAW_REPEAT=0 to use the
-composed route. See docs/numerics-gate.md for the acceptance criteria.
+scale-aware numerics gate. MLX_OMARCHY_GDN_GQA_DECODE=0 makes the
+backend expand q and k for the same fused route. See docs/numerics-gate.md for the acceptance criteria.
 
 ## How it works
 

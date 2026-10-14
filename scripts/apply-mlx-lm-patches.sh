@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Apply the vendored mlx-lm serve patches to a venv's mlx_lm package.
 #
-# GDN fast route and raw 9B decode route are ON by default. Set
-# MLX_OMARCHY_GDN_RAW_REPEAT=0 to opt out of raw decode. The fast route sends
+# GDN fast route and raw 9B decode route are ON by default. The backend
+# serves Hk < Hv decode itself; MLX_OMARCHY_GDN_RAW_REPEAT=1 expands q/k in
+# Python instead. The fast route sends
 # gated-delta updates to mx.fast.gated_delta_update; the raw route adds T==1
 # decode dispatch to mx.fast.gated_delta_update_raw. Both self-guard on
 # hasattr, falling back to the upstream kernel when the entry point is absent.
@@ -234,9 +235,9 @@ python3 "$ROOT/scripts/patch-mlx-lm-qknorm.py" "$VENV"
 # the 2026-10-04 decode dispatch-fuse receipt). Kill switch
 # MLX_OMARCHY_ROPE_NORM_FUSE=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-rope-norm.py" "$VENV"
-# GDN raw-decode GQA repeat (Hk<Hv models, e.g. Qwen3.5-9B): expands q/k to
-# the value-head count so the fused GatedDeltaUpdate kernel can fire instead
-# of the composed per-token fallback (~700 small dispatches/token). Default
-# ON on every chip; set MLX_OMARCHY_GDN_RAW_REPEAT=0 to opt out. The 9B
-# route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
+# GDN raw-decode GQA (Hk<Hv models, e.g. Qwen3.5-9B): the backend runs the
+# fused GatedDeltaUpdate decode kernel at Hk != Hv, so the composed per-token
+# fallback (~700 small dispatches/token) is not taken and q/k are not expanded
+# in Python. Set MLX_OMARCHY_GDN_RAW_REPEAT=1 to expand q/k here instead. The
+# 9B route passes the updated bf16-ULP numerics gate; see docs/numerics-gate.md.
 python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
