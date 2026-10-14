@@ -90,15 +90,21 @@ shared float block_values[256];
 // The caller has already run levels 128, 64 and 32 through shared memory, so block_values[0..31] hold the 32
 // partials that the in-place tree would hold at the start of level 16. Lane t then forms the same sums:
 // own + the value of lane t + stride. Lanes whose source lane is out of range only ever feed lanes that are not
-// read afterwards (lane 0's value is the result). `precise` keeps each add an add of exactly those two operands.
-// The function is separate so `precise` does not reach the per-thread accumulation in main().
+// read afterwards (lane 0's value is the result). The adds go through a function whose result is `precise`, so each
+// stays an add of exactly those two operands. The partials are loaded plainly: `precise` on the loaded value would
+// propagate through block_values back to the per-thread accumulation, which the shared-memory kernels leave contractible.
+precise float exact_add(float a, float b) {
+  precise float r = a + b;
+  return r;
+}
+
 float sgtail_reduce() {
-  precise float level0 = block_values[gl_SubgroupInvocationID];
-  precise float level16 = level0 + subgroupShuffleDown(level0, 16u);
-  precise float level8 = level16 + subgroupShuffleDown(level16, 8u);
-  precise float level4 = level8 + subgroupShuffleDown(level8, 4u);
-  precise float level2 = level4 + subgroupShuffleDown(level4, 2u);
-  precise float level1 = level2 + subgroupShuffleDown(level2, 1u);
+  float level0 = block_values[gl_SubgroupInvocationID];
+  float level16 = exact_add(level0, subgroupShuffleDown(level0, 16u));
+  float level8 = exact_add(level16, subgroupShuffleDown(level16, 8u));
+  float level4 = exact_add(level8, subgroupShuffleDown(level8, 4u));
+  float level2 = exact_add(level4, subgroupShuffleDown(level4, 2u));
+  float level1 = exact_add(level2, subgroupShuffleDown(level2, 1u));
   return subgroupBroadcastFirst(level1);
 }
 #endif

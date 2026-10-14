@@ -153,7 +153,9 @@ shared float block_values[256];
 // partials that the in-place tree would hold at the start of level 16. Lane t then forms the same sums:
 // own + the value of lane t + stride. Lanes whose source lane is out of range only ever feed lanes that are not
 // read afterwards (lane 0's value is the result). `precise` keeps each add an add of exactly those two operands.
-// The function is separate so `precise` does not reach the per-thread accumulation in main().
+// This kernel's base build already carries `precise` on its normalization products, which glslang propagates through
+// block_values to the per-thread accumulation; the tail keeps `precise` on the loaded partials so that propagation, and so
+// the exactness of the accumulation, is the same as in the shared-memory build.
 float sgtail_reduce() {
   precise float level0 = block_values[gl_SubgroupInvocationID];
   precise float level16 = level0 + subgroupShuffleDown(level0, 16u);
