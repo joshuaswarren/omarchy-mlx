@@ -1,0 +1,43 @@
+{
+ "tree": "gqe",
+ "kernel": "7.1.12-2-20261013.18-sep-ARCH",
+ "boot_id8": "a5445704",
+ "governor": "performance",
+ "wheel": "0.32.4.dev202610142002+e625c4e6",
+ "wheel_files": {
+  "mlx/lib/libmlx.so": {
+   "sha256": "be731051e39075a804d136d056b583f67df897d37a9863d72e1fac0b659ac77e",
+   "matches_wheel_record": true
+  },
+  "mlx/core.cpython-314-aarch64-linux-gnu.so": {
+   "sha256": "7542a0bcff502c00f2c48a2395367e9d49e3405b13f59b17f54abb78b9a0444d",
+   "matches_wheel_record": true
+  }
+ },
+ "model_repo": "mlx-community/Qwen3.5-9B-4bit",
+ "model_snapshot": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+ "model_files": {
+  "config.json": "0435ae3f4b3c8b907f7359a2f8f7150d316f3435",
+  "model-00001-of-00002.safetensors": "3acb9f38a41e3f05344c3255f717897c11421fbb6e5f97124ee1da869f15ad95",
+  "model-00002-of-00002.safetensors": "e6f7e2e79e5580f4610b07cccd10b7da2284d09f0d25afd20d5c795d9366d69f",
+  "model.safetensors.index.json": "d366fa524ccd8f4ed93a67c7857597dc56172b92"
+ },
+ "quantization": {
+  "group_size": 64,
+  "bits": 4,
+  "mode": "affine"
+ },
+ "model_type": "qwen3_5",
+ "vulkan": {
+  "deviceName": "Apple M2 Max (G14C B1)",
+  "driverID": "DRIVER_ID_MESA_HONEYKRISP",
+  "driverName": "Honeykrisp",
+  "driverInfo": "Mesa 26.3.0-devel (git-69bde15340)",
+  "apiVersion": "1.4.362",
+  "deviceType": "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+ },
+ "driver_lib_sha256_12": "40282811c6e1",
+ "driver_package": "vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2",
+ "gpu_kernel_driver_version": "0.2.0",
+ "gpu_rtkit_protocol": "12"
+}
