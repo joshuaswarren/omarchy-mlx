@@ -22,7 +22,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest/doctest.h"
 
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include <vector>
 
 #include "mlx/array.h"
@@ -205,4 +207,77 @@ TEST_CASE("an unread all_gather output survives a dropped handle and a cache cle
   eval(x);
   auto got = values(distributed::all_gather(x));
   CHECK_EQ(got, std::vector<float>{1.0f, 2.0f});
+}
+// Send's output aliases its input. h is evaluated and drained BEFORE the send tape, and depends() on the
+// default GPU stream with a primitive-less y has no open GPU node, so nothing pins h: after every handle
+// drops, only the queued ring task reads the bytes. h's freed buffer goes straight to the allocator cache
+// (its generation already drained). The receiver sleeps before recv, so the ring worker stays mid-buffer on
+// a 16 MiB message while rank 0 polls get_cache_memory on the host thread (no GPU work, which would wait
+// behind the send) and calls clear_cache(). eval(outs) must then deliver exactly.
+TEST_CASE("an unread send survives dropped handles and a cache clear") {
+  auto group = distributed::init();
+  if (group.size() != 2 || group.rank() < 0 || group.rank() > 1) {
+    FAIL("expected a two-rank ring group");
+  }
+  int rank = group.rank();
+  constexpr int n = 8 * 1024 * 1024;
+  constexpr size_t bytes = size_t(n) * 2;
+  Stream cpu = default_stream(Device::cpu);
+  Stream gpu = default_stream(Device::gpu);
+  int retired = 0;
+  for (int step = 0; step < 10; ++step) {
+    float want = static_cast<float>(step + 1);
+    if (rank == 0) {
+      synchronize(cpu);
+      for (int i = 0; i < 2; ++i) {
+        eval(add(array(1.0f), array(1.0f)));
+        synchronize(gpu);
+      }
+      std::vector<array> outs;
+      {
+        array h = full({1, n}, array(want, bfloat16), bfloat16);
+        eval(h);
+        for (int i = 0; i < 2; ++i) {
+          eval(add(array(1.0f), array(1.0f)));
+          synchronize(gpu);
+        }
+        clear_cache();
+        CHECK_LT(get_cache_memory(), bytes);
+        array y = array(want);
+        outs = depends({y}, {distributed::send(h, 1)});
+        async_eval(outs);
+      }
+      const size_t first = get_cache_memory();
+      int iters = 0;
+      bool hit = false;
+      size_t cached = 0;
+      for (; iters < 300 && !hit; ++iters) {
+        cached = get_cache_memory();
+        hit = cached >= bytes;
+        if (!hit) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+      }
+      retired += hit;
+      std::printf("SEND_STEP step=%d first_cache_bytes=%zu retired=%d iters=%d cache_bytes=%zu\n", step, first, int(hit), iters, cached);
+      std::fflush(stdout);
+      clear_cache();
+      eval(outs);
+      synchronize(cpu);
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(400));
+      array got = astype(distributed::recv({1, n}, bfloat16, 0), float32);
+      eval(got);
+      size_t bad = 0;
+      const float* p = got.data<float>();
+      for (size_t i = 0; i < got.size(); ++i) {
+        bad += (p[i] != want);
+      }
+      CHECK_EQ(bad, 0u);
+    }
+  }
+  if (rank == 0) {
+    std::printf("SEND_RETIRED rank=0 retired=%d/10\n", retired);
+    std::fflush(stdout);
+  }
 }
