@@ -6755,6 +6755,33 @@ uint32_t coopmat_tile_rows(
   return static_cast<uint64_t>(m_groups_32) * n_groups < target ? 16u : 32u;
 }
 
+#ifdef MLX_OMARCHY_BF16_DIRECT
+// Opt-in bf16-operand build of the 4-bit group-64 prefill coopmat
+// (shaders/qmm_coopmat.comp BF16C): MLX_OMARCHY_QMM_BF16C=1 selects it, the
+// default is off. It is one fixed route (32-row tile, full column tiles,
+// padded B tile, group-of-4 raster); an env that selects another route of the
+// same family turns it off, so exactly one thing differs from the default.
+bool qmm_bf16c_requested() {
+  const char* env = std::getenv("MLX_OMARCHY_QMM_BF16C");
+  if (env == nullptr || std::strcmp(env, "1") != 0) {
+    return false;
+  }
+  for (const char* other :
+       {"MLX_OMARCHY_QMM_RASTER",
+        "MLX_OMARCHY_QMM_TWON",
+        "MLX_OMARCHY_QMM_NO_RASTER",
+        "MLX_OMARCHY_QMM_CHUNK",
+        "MLX_OMARCHY_QMM_NO_FULLN",
+        "MLX_OMARCHY_QMM_PERSIST"}) {
+    if (std::getenv(other) != nullptr) {
+      return false;
+    }
+  }
+  const char* pad = std::getenv("MLX_OMARCHY_QMM_LDSPAD");
+  return !(pad != nullptr && pad[0] == '0');
+}
+#endif
+
 } // namespace
 
 void GatherQQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -8188,6 +8215,28 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           encoder.device().hardware_capabilities().device_name);
       uint32_t m_groups =
           (params.matrix_m + coopmat_rows - 1u) / coopmat_rows;
+#ifdef MLX_OMARCHY_BF16_DIRECT
+      // bf16-operand route (opt-in): the matrix unit reads x straight from
+      // the bf16 buffer (no widening cast pass) and the dequantized weight
+      // tile as bf16, f32 accumulator. Needs the driver's bf16 8x8x8 shape.
+      if (q4_g64_transpose && coopmat_rows == 32u && params.matrix_m > 32u &&
+          (params.matrix_n % 32u) == 0u &&
+          coopmat_caps.cooperative_matrix_bf16_8 &&
+          encoder.device().hardware_capabilities().cooperative_matrix_bf16_8 &&
+          qmm_bf16c_requested()) {
+        constexpr uint32_t gm = 4u;
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::QmmPrefillCoopmatBF16CX32FullNLdsPad,
+            bindings,
+            params,
+            std::min(
+                n_groups * gm * ((m_groups + gm - 1u) / gm),
+                omarchy::kMaxComputeGroupCountX),
+            1u,
+            1u);
+        return;
+      }
+#endif
       // Direct-global-load A: widen bf16 x to f32 once (the widening is
       // exact, so the kernel k chain is bit-identical to the staged
       // path), then the shader coopMatLoads A tiles straight from the

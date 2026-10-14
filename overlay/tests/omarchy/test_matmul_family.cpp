@@ -5174,6 +5174,113 @@ TEST_CASE("qmm coopmat prefill matches host reference at Qwen shapes") {
   }
 }
 
+// Opt-in bf16-operand build of the 4-bit group-64 prefill coopmat
+// (MLX_OMARCHY_QMM_BF16C=1, default off): x is read from the bf16 buffer and
+// the dequantized weight tile is rounded once to bf16, so the output bits are
+// NOT those of the default f32-operand route. Two contracts, neither of them
+// a dispatch assertion. (1) The result stays inside the same f64-reference
+// bound the other bf16 qmm cases use (reduction depth in f32, bf16 storage
+// rounding; the bound is not loosened for this route). (2) The route is a
+// different one: at least one output element differs in bits from the default
+// route, otherwise the env var did not select it and the bound check above
+// would only repeat the default route. Skipped (and said so) on a device
+// without the bf16 8x8x8 matrix shape.
+TEST_CASE("qmm bf16-operand coopmat prefill stays inside the f64 bound and is a different route") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  if (!caps.cooperative_matrix_bf16_8 || !caps.cooperative_matrix_f32_8 ||
+      caps.subgroup_size != 32u) {
+    skip("no cooperative_matrix_bf16_8 with a 32-lane subgroup");
+    return;
+  }
+  Stream stream = gpu_stream();
+  constexpr int group_size = 64;
+  constexpr int bits = 4;
+  unsigned seed = 181u;
+  bool any_different = false;
+  for (auto [k, n] : {std::pair{2048, 2048}, std::pair{896, 4864}}) {
+    const int words_per_row = k / (32 / bits);
+    const int groups_per_row = k / group_size;
+    std::mt19937 gen(seed++);
+    std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+    std::vector<float> matrix(static_cast<size_t>(n) * k);
+    for (auto& value : matrix) {
+      value = dist(gen);
+    }
+    HostQuantizedWeights weights =
+        host_affine_quantize(matrix, n, k, group_size, bits);
+    weights.scales = round_trip(stream, weights.scales, bfloat16);
+    weights.biases = round_trip(stream, weights.biases, bfloat16);
+    array w_words(weights.words.begin(), Shape{n, words_per_row}, uint32);
+    array scales(weights.scales.begin(), Shape{n, groups_per_row}, bfloat16);
+    array biases(weights.biases.begin(), Shape{n, groups_per_row}, bfloat16);
+    for (int m : {262, 1053}) {
+      std::vector<float> x_values(static_cast<size_t>(m) * k);
+      for (auto& value : x_values) {
+        value = dist(gen);
+      }
+      x_values = round_trip(stream, x_values, bfloat16);
+      const std::vector<float> expected = host_quantized_matmul(
+          weights, x_values, m, n, k, group_size, bits);
+      array x(x_values.begin(), Shape{m, k}, bfloat16);
+      auto run = [&](const char* mode) {
+        if (mode != nullptr) {
+          setenv("MLX_OMARCHY_QMM_BF16C", mode, 1);
+        } else {
+          unsetenv("MLX_OMARCHY_QMM_BF16C");
+        }
+        array out = quantized_matmul(
+            x, w_words, scales, biases, true, group_size, bits, "affine",
+            stream);
+        REQUIRE(evaluation_error(out).empty());
+        std::vector<float> values = readback_f32(stream, out);
+        unsetenv("MLX_OMARCHY_QMM_BF16C");
+        return values;
+      };
+      const std::vector<float> shipped = run(nullptr);
+      const std::vector<float> candidate = run("1");
+      REQUIRE_EQ(candidate.size(), expected.size());
+      REQUIRE_EQ(shipped.size(), expected.size());
+      double m_max_obs = 0.0;
+      for (float v : candidate) {
+        m_max_obs = std::max(m_max_obs, std::fabs(static_cast<double>(v)));
+      }
+      const double m_max_bound = std::max(m_max_obs * 2.0, 50.0);
+      const double ops = 3.0 * k / 32.0 + 32.0;
+      const double bound = ops * m_max_bound * std::ldexp(1.0, -23) +
+          m_max_bound * std::ldexp(1.0, -(7 + 1));
+      double max_diff_candidate = 0.0;
+      double max_diff_shipped = 0.0;
+      bool different = false;
+      for (size_t i = 0; i < expected.size(); ++i) {
+        REQUIRE(std::isfinite(candidate[i]));
+        max_diff_candidate = std::max(
+            max_diff_candidate,
+            std::fabs(static_cast<double>(candidate[i]) - expected[i]));
+        max_diff_shipped = std::max(
+            max_diff_shipped,
+            std::fabs(static_cast<double>(shipped[i]) - expected[i]));
+        different = different ||
+            std::memcmp(&candidate[i], &shipped[i], sizeof(float)) != 0;
+      }
+      any_different = any_different || different;
+      INFO("bf16-operand route m=" << m << " n=" << n << " k=" << k
+           << " candidate max diff=" << max_diff_candidate
+           << " shipped max diff=" << max_diff_shipped << " bound=" << bound);
+      CHECK(max_diff_candidate <= bound);
+      CHECK(max_diff_shipped <= bound);
+      std::cout << "[qmm-bf16c] m=" << m << " n=" << n << " k=" << k
+                << " candidate_max_diff=" << max_diff_candidate
+                << " shipped_max_diff=" << max_diff_shipped
+                << " bound=" << bound << " bits_differ=" << (different ? 1 : 0)
+                << "\n";
+    }
+  }
+  CHECK(any_different);
+}
+
 // The coopmat gate used to reroute a row-contiguous x view at an odd
 // f16-element offset to the register-blocked tile kernel, whose different
 // accumulation order silently changes generated tokens under allocator

@@ -1019,6 +1019,8 @@ enum class ComputeKernel : uint16_t {
   GatherQmmSubDirectR4BF16,
   GatherQmmSubDirectR8F16,
   GatherQmmSubDirectR8BF16,
+  // bf16-operand build of the 4-bit group-64 prefill coopmat (opt-in route; needs cooperative_matrix_bf16_8).
+  QmmPrefillCoopmatBF16CX32FullNLdsPad,
   Count,
 };
 
