@@ -3375,7 +3375,8 @@ void dispatch_gather_qmm(
     // MLX_OMARCHY_GATHER_QMM_ROWS = 0 (one output per workgroup), 4 or 8; default 8.
     uint32_t rows_per_wg = 8u;
     if (const char* rows_env = std::getenv("MLX_OMARCHY_GATHER_QMM_ROWS")) {
-      rows_per_wg = rows_env[0] == '4' ? 4u : rows_env[0] == '8' ? 8u : 0u;
+      rows_per_wg = std::strcmp(rows_env, "4") == 0 ? 4u
+          : std::strcmp(rows_env, "8") == 0 ? 8u : 0u;
     }
     if (rows_per_wg != 0u &&
         (!transpose || (static_cast<uint32_t>(n) % rows_per_wg) != 0u)) {
