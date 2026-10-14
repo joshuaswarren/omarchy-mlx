@@ -2513,6 +2513,15 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     std::vector<float> staged_out = run_once(true);
     unsetenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
     REQUIRE(staged_out == sub_out);
+    // Multi-output decode kernels (MLX_OMARCHY_GATHER_QMM_ROWS 4 and 8 outputs per
+    // workgroup, default 8): each output is bit-identical to the one-output kernel
+    // (0), which is the staged route's arithmetic as well.
+    for (const char* rows : {"0", "4", "8"}) {
+      setenv("MLX_OMARCHY_GATHER_QMM_ROWS", rows, 1);
+      std::vector<float> rows_out = run_once(true);
+      unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+      REQUIRE(rows_out == sub_out);
+    }
     // Scale-aware numerics metric (docs/numerics-gate.md spirit): both
     // arms anchor to the fp64-accumulated host reference with rel-L2
     // over the whole output and max-abs error normalized by the
@@ -5427,6 +5436,124 @@ TEST_CASE("cpu quantized matmul full-row dot matches host at large K") {
 
   run_case(16384, 8, 64, 4); // the reported failure: 256 groups, bf16
   run_case(8256, 4, 64, 4); // 129-group tail: non-power-of-two group count
+}
+
+TEST_CASE("gather_qmm decode dispatches the multi-output kernel the host picks") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.subgroup_size != 32u ||
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0u ||
+      !caps.storage_buffer_16bit_access) {
+    skip("no 32-lane subgroup arithmetic");
+    return;
+  }
+  using K = omarchy::ComputeKernel;
+  auto trace_of = [&](const std::function<void()>& call) {
+    std::fflush(stderr);
+    int saved = ::dup(::fileno(stderr));
+    FILE* cap = std::fopen("/tmp/gqmm_rows_cap.log", "w");
+    REQUIRE(cap != nullptr);
+    ::dup2(::fileno(cap), ::fileno(stderr));
+    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+    call();
+    omarchy::get_command_encoder(stream).synchronize();
+    std::fflush(stderr);
+    ::dup2(saved, ::fileno(stderr));
+    ::close(saved);
+    std::fclose(cap);
+    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+    std::ifstream in("/tmp/gqmm_rows_cap.log");
+    return std::string((std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+  };
+  auto dispatched = [](const std::string& text, K kernel) {
+    return text.find("[rtmod] DISPATCH kernel=" +
+               std::to_string(static_cast<uint32_t>(kernel)) + " ") !=
+        std::string::npos;
+  };
+  std::mt19937 gen(77);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  const int experts = 8;
+  const int index_count = 8;
+  const int k = 128;
+  for (Dtype dtype : {bfloat16, float16}) {
+    if (dtype == float16 && !float16_available()) {
+      continue;
+    }
+    const bool bf16 = dtype == bfloat16;
+    // n 64 divides 8 and 4; n 100 divides 4 only; n 66 divides neither.
+    for (int n : {64, 100, 66}) {
+      std::vector<uint32_t> w_all;
+      std::vector<float> scales_all;
+      std::vector<float> biases_all;
+      for (int e = 0; e < experts; ++e) {
+        std::vector<float> matrix(static_cast<size_t>(n) * k);
+        for (auto& value : matrix) {
+          value = dist(gen);
+        }
+        HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 64, 4);
+        w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+        scales_all.insert(scales_all.end(), host.scales.begin(), host.scales.end());
+        biases_all.insert(biases_all.end(), host.biases.begin(), host.biases.end());
+      }
+      std::vector<float> x_all(static_cast<size_t>(index_count) * k);
+      for (auto& value : x_all) {
+        value = dist(gen);
+      }
+      array w_words(w_all.begin(), Shape{experts, n, k / 8}, uint32);
+      array scales = astype(
+          array(scales_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+      array biases = astype(
+          array(biases_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+      array x = astype(
+          array(x_all.begin(), Shape{index_count, 1, k}, float32), dtype, stream);
+      std::vector<uint32_t> lhs_v(index_count);
+      std::vector<uint32_t> rhs_v(index_count);
+      for (int b = 0; b < index_count; ++b) {
+        lhs_v[b] = static_cast<uint32_t>(b);
+        rhs_v[b] = static_cast<uint32_t>((b * 3) % experts);
+      }
+      array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+      array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+      auto run = [&](const char* rows) {
+        if (rows != nullptr) {
+          setenv("MLX_OMARCHY_GATHER_QMM_ROWS", rows, 1);
+        } else {
+          unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+        }
+        std::vector<float> out_values;
+        const std::string trace = trace_of([&] {
+          array out = gather_qmm(x, w_words, scales, biases, lhs, rhs, true, 64, 4,
+              "affine", std::nullopt, false, stream);
+          REQUIRE(evaluation_error(out).empty());
+          out_values = readback_f32(stream, out);
+        });
+        unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+        return std::make_pair(trace, out_values);
+      };
+      const K one = bf16 ? K::GatherQmmSubDirectBF16 : K::GatherQmmSubDirectF16;
+      const K r4 = bf16 ? K::GatherQmmSubDirectR4BF16 : K::GatherQmmSubDirectR4F16;
+      const K r8 = bf16 ? K::GatherQmmSubDirectR8BF16 : K::GatherQmmSubDirectR8F16;
+      INFO("dtype=" << dtype << " n=" << n);
+      auto [t0, o0] = run("0");
+      auto [t4, o4] = run("4");
+      auto [tdef, odef] = run(nullptr);
+      CHECK(dispatched(t0, one));
+      CHECK(!dispatched(t0, r4));
+      CHECK(!dispatched(t0, r8));
+      // rows 4 needs n % 4, the default (8) needs n % 8; otherwise the one-output kernel.
+      CHECK(dispatched(t4, n % 4 == 0 ? r4 : one));
+      CHECK(!dispatched(t4, r8));
+      CHECK(dispatched(tdef, n % 8 == 0 ? r8 : one));
+      CHECK(!dispatched(tdef, n % 8 == 0 ? one : r8));
+      CHECK(!dispatched(tdef, r4));
+      REQUIRE(o4 == o0);
+      REQUIRE(odef == o0);
+    }
+  }
 }
 
 TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
