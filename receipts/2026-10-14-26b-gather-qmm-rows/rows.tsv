@@ -1,0 +1,9 @@
+row	arm	decode_median_tok_s	prefill_median_tok_s	decode_samples	prefill_samples	digest16
+O1	O	19.751	228.302	10	5	276e9fba48abdee3
+O2	O	19.734	227.662	10	5	276e9fba48abdee3
+O3	O	19.729	228.405	10	5	276e9fba48abdee3
+O4	O	19.742	228.157	10	5	276e9fba48abdee3
+P1	P	23.606	228.108	10	5	276e9fba48abdee3
+P2	P	23.587	227.799	10	5	276e9fba48abdee3
+P3	P	23.594	227.986	10	5	276e9fba48abdee3
+P4	P	23.631	227.547	10	5	276e9fba48abdee3

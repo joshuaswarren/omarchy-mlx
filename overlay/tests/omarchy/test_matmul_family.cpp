@@ -128,6 +128,14 @@ std::vector<float> readback_f32(const Stream& stream, array value) {
   return std::vector<float>(data, data + value.size());
 }
 
+// Exact bit equality of two readbacks of 16-bit (bf16 or f16) outputs.
+// Widening those to f32 is lossless, so comparing the f32 bit patterns is
+// comparing the 16-bit patterns; unlike operator== it tells +0 from -0.
+bool bits_identical(const std::vector<float>& a, const std::vector<float>& b) {
+  return a.size() == b.size() &&
+      std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+}
+
 void expect_close(
     const std::vector<float>& device,
     const std::vector<float>& expected,
@@ -2513,6 +2521,15 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
     std::vector<float> staged_out = run_once(true);
     unsetenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
     REQUIRE(staged_out == sub_out);
+    // Multi-output decode kernels (MLX_OMARCHY_GATHER_QMM_ROWS 4 and 8 outputs per
+    // workgroup, default 8): each output is bit-identical to the one-output kernel
+    // (0), which is the staged route's arithmetic as well.
+    for (const char* rows : {"0", "4", "8"}) {
+      setenv("MLX_OMARCHY_GATHER_QMM_ROWS", rows, 1);
+      std::vector<float> rows_out = run_once(true);
+      unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+      REQUIRE(bits_identical(rows_out, sub_out));
+    }
     // Scale-aware numerics metric (docs/numerics-gate.md spirit): both
     // arms anchor to the fp64-accumulated host reference with rel-L2
     // over the whole output and max-abs error normalized by the
@@ -5608,6 +5625,90 @@ TEST_CASE("cpu quantized matmul full-row dot matches host at large K") {
 
   run_case(16384, 8, 64, 4); // the reported failure: 256 groups, bf16
   run_case(8256, 4, 64, 4); // 129-group tail: non-power-of-two group count
+}
+
+// MLX_OMARCHY_GATHER_QMM_ROWS 4 and 8 compute that many consecutive outputs per
+// workgroup in the direct decode kernel; 0 is the one-output kernel. Every
+// output must have the same bits. N 64 divides 8 and 4; N 100 divides 4 only;
+// N 66 divides neither, so rows 4 and 8 must fall back and still match. K 128
+// is two groups of 64 inside one 256-wide k step; K 320 leaves a 64-wide tail
+// after one full step. The expert ids repeat on purpose.
+TEST_CASE("gather_qmm multi-output decode rows give the one-output kernel's output bits") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  if (caps.subgroup_size != 32u ||
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0u ||
+      !caps.storage_buffer_16bit_access) {
+    skip("no 32-lane subgroup arithmetic");
+    return;
+  }
+  std::mt19937 gen(77);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  const int experts = 8;
+  const int index_count = 8;
+  const std::vector<uint32_t> rhs_v{3, 3, 7, 0, 7, 5, 3, 1};
+  for (Dtype dtype : {bfloat16, float16}) {
+    if (dtype == float16 && !float16_available()) {
+      continue;
+    }
+    for (int k : {128, 320}) {
+      for (int n : {64, 100, 66}) {
+        std::vector<uint32_t> w_all;
+        std::vector<float> scales_all;
+        std::vector<float> biases_all;
+        for (int e = 0; e < experts; ++e) {
+          std::vector<float> matrix(static_cast<size_t>(n) * k);
+          for (auto& value : matrix) {
+            value = dist(gen);
+          }
+          HostQuantizedWeights host = host_affine_quantize(matrix, n, k, 64, 4);
+          w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+          scales_all.insert(scales_all.end(), host.scales.begin(), host.scales.end());
+          biases_all.insert(biases_all.end(), host.biases.begin(), host.biases.end());
+        }
+        std::vector<float> x_all(static_cast<size_t>(index_count) * k);
+        for (auto& value : x_all) {
+          value = dist(gen);
+        }
+        array w_words(w_all.begin(), Shape{experts, n, k / 8}, uint32);
+        array scales = astype(
+            array(scales_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+        array biases = astype(
+            array(biases_all.begin(), Shape{experts, n, k / 64}, float32), dtype, stream);
+        array x = astype(
+            array(x_all.begin(), Shape{index_count, 1, k}, float32), dtype, stream);
+        std::vector<uint32_t> lhs_v(index_count);
+        for (int b = 0; b < index_count; ++b) {
+          lhs_v[b] = static_cast<uint32_t>(b);
+        }
+        array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+        array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+        auto run = [&](const char* rows) {
+          if (rows != nullptr) {
+            setenv("MLX_OMARCHY_GATHER_QMM_ROWS", rows, 1);
+          } else {
+            unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+          }
+          array out = gather_qmm(x, w_words, scales, biases, lhs, rhs, true, 64, 4,
+              "affine", std::nullopt, false, stream);
+          REQUIRE(evaluation_error(out).empty());
+          std::vector<float> values = readback_f32(stream, out);
+          unsetenv("MLX_OMARCHY_GATHER_QMM_ROWS");
+          return values;
+        };
+        INFO("dtype=" << dtype << " k=" << k << " n=" << n);
+        const std::vector<float> one_output = run("0");
+        REQUIRE_EQ(one_output.size(), static_cast<size_t>(index_count) * static_cast<size_t>(n));
+        for (const char* rows : {"4", "8", static_cast<const char*>(nullptr)}) {
+          INFO("rows=" << (rows == nullptr ? "default" : rows));
+          CHECK(bits_identical(run(rows), one_output));
+        }
+      }
+    }
+  }
 }
 
 TEST_CASE("gather_qmm tile route stays off below four rows per expert") {

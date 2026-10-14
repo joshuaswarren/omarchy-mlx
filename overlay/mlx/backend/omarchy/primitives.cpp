@@ -3369,14 +3369,37 @@ void dispatch_gather_qmm(
         binding(*biases_d),
         binding(lhs_d),
         binding(rhs_d)};
+    // Multi-output form: ROWS outputs per workgroup, bit-identical per output
+    // (shaders/gather_qmm_sub.comp ROWS_PER_WG). Transposed layout only, and N a
+    // multiple of ROWS so a group never crosses a row, a batch or an expert.
+    // MLX_OMARCHY_GATHER_QMM_ROWS = 0 (one output per workgroup), 4 or 8; default 8.
+    uint32_t rows_per_wg = 8u;
+    if (const char* rows_env = std::getenv("MLX_OMARCHY_GATHER_QMM_ROWS")) {
+      rows_per_wg = std::strcmp(rows_env, "4") == 0 ? 4u
+          : std::strcmp(rows_env, "8") == 0 ? 8u : 0u;
+    }
+    if (rows_per_wg != 0u &&
+        (!transpose || (static_cast<uint32_t>(n) % rows_per_wg) != 0u)) {
+      rows_per_wg = 0u;
+    }
+    const bool bf16_out = out.dtype() != float16;
+    const omarchy::ComputeKernel direct_kernel = rows_per_wg == 8u
+        ? (bf16_out ? omarchy::ComputeKernel::GatherQmmSubDirectR8BF16
+                    : omarchy::ComputeKernel::GatherQmmSubDirectR8F16)
+        : rows_per_wg == 4u
+        ? (bf16_out ? omarchy::ComputeKernel::GatherQmmSubDirectR4BF16
+                    : omarchy::ComputeKernel::GatherQmmSubDirectR4F16)
+        : (bf16_out ? omarchy::ComputeKernel::GatherQmmSubDirectBF16
+                    : omarchy::ComputeKernel::GatherQmmSubDirectF16);
+    const uint32_t direct_groups =
+        rows_per_wg == 0u ? params.count : params.count / rows_per_wg;
     encoder.dispatch_compute(
-        out.dtype() == float16 ? omarchy::ComputeKernel::GatherQmmSubDirectF16
-                               : omarchy::ComputeKernel::GatherQmmSubDirectBF16,
+        direct_kernel,
         direct_bindings,
         params,
-        std::min(params.count, omarchy::kMaxComputeGroupCountX),
+        std::min(direct_groups, omarchy::kMaxComputeGroupCountX),
         1u,
-        (params.count + omarchy::kMaxComputeGroupCountX - 1) /
+        (direct_groups + omarchy::kMaxComputeGroupCountX - 1) /
             omarchy::kMaxComputeGroupCountX);
     return;
   }

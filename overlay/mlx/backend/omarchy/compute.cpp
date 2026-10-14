@@ -534,6 +534,10 @@
 #include "qmm_vec_word_subgroup_bf16_q8g64.h"
 #include "qmm_vec_word_subgroup_f16_q8g32.h"
 #include "qmm_vec_word_subgroup_bf16_q8g32.h"
+#include "gather_qmm_sub_direct_r4_f16.h"
+#include "gather_qmm_sub_direct_r4_bf16.h"
+#include "gather_qmm_sub_direct_r8_f16.h"
+#include "gather_qmm_sub_direct_r8_bf16.h"
 #include "fft_f32.h"
 #include "fft_real_f32.h"
 #include "fft_stage_f32.h"
@@ -1924,6 +1928,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_vec_word_subgroup_f16_q8g32, qmm_vec_word_subgroup_f16_q8g32_size};
     case ComputeKernel::QmmVecWordSubgroupBF16Q8G32:
       return {qmm_vec_word_subgroup_bf16_q8g32, qmm_vec_word_subgroup_bf16_q8g32_size};
+    case ComputeKernel::GatherQmmSubDirectR4F16:
+      return {gather_qmm_sub_direct_r4_f16, gather_qmm_sub_direct_r4_f16_size};
+    case ComputeKernel::GatherQmmSubDirectR4BF16:
+      return {gather_qmm_sub_direct_r4_bf16, gather_qmm_sub_direct_r4_bf16_size};
+    case ComputeKernel::GatherQmmSubDirectR8F16:
+      return {gather_qmm_sub_direct_r8_f16, gather_qmm_sub_direct_r8_f16_size};
+    case ComputeKernel::GatherQmmSubDirectR8BF16:
+      return {gather_qmm_sub_direct_r8_bf16, gather_qmm_sub_direct_r8_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

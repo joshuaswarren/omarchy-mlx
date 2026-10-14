@@ -1014,6 +1014,11 @@ enum class ComputeKernel : uint16_t {
   QmmVecWordSubgroupBF16Q8G64,
   QmmVecWordSubgroupF16Q8G32,
   QmmVecWordSubgroupBF16Q8G32,
+  // Multi-output forms of the direct decode kernel (4 and 8 outputs per workgroup).
+  GatherQmmSubDirectR4F16,
+  GatherQmmSubDirectR4BF16,
+  GatherQmmSubDirectR8F16,
+  GatherQmmSubDirectR8BF16,
   Count,
 };
 
