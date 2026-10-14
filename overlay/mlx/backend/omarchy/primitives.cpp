@@ -123,6 +123,33 @@ bool apple_norm_enabled(
   return subgroup_ready && apple_norm_shape_selected(row_length, rows);
 }
 
+// Default-tree RMSNorm and gated-only norm with the last five levels of the 256-wide halving tree on subgroup
+// shuffles (shaders/fast_norm.comp and fast_norm_gated.comp, -DSGTAIL=1). The adds, their operands and their
+// order equal the shared-memory tree; only five of the ten barriers per row go. Needs a 32-lane subgroup (the
+// first 32 partials fill one subgroup) with basic, ballot and shuffle-relative operations. Anything else keeps the
+// shared-memory kernels. MLX_OMARCHY_NORM_SGTAIL=0 also keeps them.
+bool sgtail_norm_enabled(const omarchy::Device& device) {
+  if (std::getenv("MLX_OMARCHY_NORM_SGTAIL") != nullptr &&
+      !omarchy::env_flag("MLX_OMARCHY_NORM_SGTAIL")) {
+    return false;
+  }
+  constexpr VkSubgroupFeatureFlags kNeeded = VK_SUBGROUP_FEATURE_BASIC_BIT |
+      VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  const auto& caps = device.capabilities();
+  bool ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & kNeeded) == kNeeded;
+  omarchy::capsim::require_backed(
+      device,
+      caps,
+      ready,
+      "*NormSgTail*",
+      "subgroup_size==32+subgroup_ops_mask[BASIC,BALLOT,SHUFFLE_RELATIVE]",
+      (device.hardware_capabilities().subgroup_size == 32u &&
+       (device.hardware_capabilities().subgroup_operations & kNeeded) ==
+           kNeeded));
+  return ready;
+}
+
 // Keep in lockstep with the switch in shaders/elementwise.comp.
 enum ElementwiseOperation : uint32_t {
   AddOperation,
@@ -13851,6 +13878,9 @@ void RMSNorm::eval_gpu(
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
       kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+    } else if (
+        out.dtype() == bfloat16 && sgtail_norm_enabled(encoder.device())) {
+      kernel = omarchy::ComputeKernel::FastRmsNormSgTailBF16;
     }
   }
   encoder.dispatch_compute(
@@ -13914,7 +13944,9 @@ void RMSNormGated::eval_gpu(
       encoder.device(), row_length, out.size() / row_length);
   encoder.dispatch_compute(
       apple_norm ? omarchy::ComputeKernel::FastNormGatedOnlyAppleBF16
-                 : omarchy::ComputeKernel::FastNormGatedOnlyBF16,
+                 : (sgtail_norm_enabled(encoder.device())
+                        ? omarchy::ComputeKernel::FastNormGatedOnlySgTailBF16
+                        : omarchy::ComputeKernel::FastNormGatedOnlyBF16),
       bindings,
       params,
       std::min(params.output_size, omarchy::kMaxComputeGroupCountX));

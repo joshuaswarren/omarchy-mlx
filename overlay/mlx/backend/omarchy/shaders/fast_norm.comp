@@ -15,6 +15,12 @@
 
 #version 460
 
+#ifdef SGTAIL
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#endif
+
 #ifdef USE_FP16
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
@@ -79,6 +85,24 @@ layout(push_constant) uniform Params {
 
 shared float block_values[256];
 
+#ifdef SGTAIL
+// Levels 16, 8, 4, 2 and 1 of the 256-wide halving tree, on lane values, with every lane of the subgroup active.
+// The caller has already run levels 128, 64 and 32 through shared memory, so block_values[0..31] hold the 32
+// partials that the in-place tree would hold at the start of level 16. Lane t then forms the same sums:
+// own + the value of lane t + stride. Lanes whose source lane is out of range only ever feed lanes that are not
+// read afterwards (lane 0's value is the result). `precise` keeps each add an add of exactly those two operands.
+// The function is separate so `precise` does not reach the per-thread accumulation in main().
+float sgtail_reduce() {
+  precise float level0 = block_values[gl_SubgroupInvocationID];
+  precise float level16 = level0 + subgroupShuffleDown(level0, 16u);
+  precise float level8 = level16 + subgroupShuffleDown(level16, 8u);
+  precise float level4 = level8 + subgroupShuffleDown(level8, 4u);
+  precise float level2 = level4 + subgroupShuffleDown(level4, 2u);
+  precise float level1 = level2 + subgroupShuffleDown(level2, 1u);
+  return subgroupBroadcastFirst(level1);
+}
+#endif
+
 void main() {
   uint thread = gl_LocalInvocationID.x;
   uint row_length = params.reduce_size;
@@ -111,6 +135,18 @@ void main() {
       float value = LOAD_VALUE(input_data.values[start + index]);
       local_sq += value * value;
     }
+#ifdef SGTAIL
+    block_values[thread] = local_sq;
+    barrier();
+    for (uint stride = 128u; stride > 16u; stride >>= 1u) {
+      if (thread < stride) {
+        block_values[thread] += block_values[thread + stride];
+      }
+      barrier();
+    }
+    float mean_square = sgtail_reduce() / float(row_length);
+    barrier();
+#else
     block_values[thread] = local_sq;
     barrier();
     for (uint stride = 128u; stride > 0u; stride >>= 1u) {
@@ -121,6 +157,7 @@ void main() {
     }
     float mean_square = block_values[0] / float(row_length);
     barrier();
+#endif
 #ifdef LAYER_NORM
     float variance = mean_square - mu * mu;
 #else

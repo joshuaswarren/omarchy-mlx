@@ -738,6 +738,8 @@ omarchy_shader(fast_norm_gated_only_bf16 shaders/fast_norm_gated.comp -DUSE_BF16
 omarchy_shader(gdn_conv_decode_bf16 shaders/gdn_conv_decode.comp -DUSE_BF16=1)
 omarchy_shader(fast_norm_gated_apple_bf16 shaders/fast_norm_gated.comp -DUSE_BF16=1 -DAPPLE_REDUCTION=1)
 omarchy_shader(fast_norm_gated_only_apple_bf16 shaders/fast_norm_gated.comp -DUSE_BF16=1 -DGATED_ONLY=1 -DAPPLE_REDUCTION=1)
+omarchy_shader(fast_rms_norm_sgtail_bf16 shaders/fast_norm.comp -DUSE_BF16=1 -DSGTAIL=1)
+omarchy_shader(fast_norm_gated_only_sgtail_bf16 shaders/fast_norm_gated.comp -DUSE_BF16=1 -DGATED_ONLY=1 -DSGTAIL=1)
 omarchy_shader(gdn_conv_decode_apple_bf16 shaders/gdn_conv_decode.comp -DUSE_BF16=1 -DAPPLE_REDUCTION=1)
 omarchy_shader(fast_layer_norm_f32 shaders/fast_norm.comp -DLAYER_NORM=1)
 omarchy_shader(fast_layer_norm_f16 shaders/fast_norm.comp -DUSE_FP16=1 -DLAYER_NORM=1)

@@ -982,6 +982,11 @@ enum class ComputeKernel : uint16_t {
   // place (no per-call staging copy). Append-only profile id.
   GatherQmmSubDirectF16,
   GatherQmmSubDirectBF16,
+  // Default-tree RMSNorm and gated-only norm with the last five tree levels on subgroup shuffles (same adds,
+  // same operands, five fewer barriers per row). Selected only on 32-lane subgroups with shuffle-relative and
+  // ballot support; MLX_OMARCHY_NORM_SGTAIL=0 keeps the shared-memory tree.
+  FastRmsNormSgTailBF16,
+  FastNormGatedOnlySgTailBF16,
   Count,
 };
 
