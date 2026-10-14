@@ -26,8 +26,20 @@
 // kernel: [all scale bytes | (all bias bytes) | lhs words | rhs words].
 // Push-constant routing is unchanged. The DIRECT variant instead binds
 // the scales, biases and index arrays as they are (no staging copy).
+//
+// ROWS_PER_WG (DIRECT, transposed layout, with biases only): the same
+// arithmetic for ROWS_PER_WG consecutive outputs per workgroup. Per output
+// the lane partials, the subgroupAdd and the eight-way sum in subgroup
+// order are exactly the one-output kernel's, so each output is bit-identical;
+// what changes is that one workgroup keeps ROWS_PER_WG independent weight
+// loads in flight per k step and pays its launch, x read and barrier once
+// for ROWS_PER_WG outputs. The host guarantees matrix_n % ROWS_PER_WG == 0,
+// so a group of outputs never crosses a row, a batch or an expert.
 
 #version 460
+#if defined(ROWS_PER_WG) && (!defined(DIRECT) || defined(NO_BIAS))
+#error "ROWS_PER_WG covers the DIRECT biased kernel only"
+#endif
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 
@@ -125,7 +137,11 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
+#ifdef ROWS_PER_WG
+shared float subgroup_totals[8 * ROWS_PER_WG];
+#else
 shared float subgroup_totals[8];
+#endif
 
 // Decode one group parameter stored at byte_offset of a scales or biases
 // array, in the output dtype (identical to the scalar kernel).
@@ -149,6 +165,80 @@ float decode_bias(uint byte_offset) {
   return unpack_param(BIAS_WORD(byte_offset), byte_offset);
 }
 
+#ifdef ROWS_PER_WG
+void main() {
+  uint bits = params.operation;
+  uint group_size = params.reduce_size;
+  uint pack_factor = 32u / bits;
+  uint value_mask = (1u << bits) - 1u;
+  uint words_per_row = params.matrix_k / pack_factor;
+  uint groups_per_row = params.matrix_k / group_size;
+  uint matrix = params.matrix_m * params.matrix_n;
+  uint param_bytes = PARAM_BYTES;
+  uint w_row_words = params.matrix_n * words_per_row;
+  uint scale_row_words = params.matrix_n * groups_per_row;
+  uint lhs_word_base = params.in_strides[0];
+  uint rhs_word_base = params.out_strides[0];
+
+  // One workgroup per ROWS_PER_WG consecutive outputs; the x/z grid split
+  // keeps counts above 65535 inside the per-dimension workgroup limit.
+  uint index0 = (gl_WorkGroupID.x + gl_WorkGroupID.z * 65535u) * uint(ROWS_PER_WG);
+  if (index0 >= params.count) {
+    return;
+  }
+  uint batch = index0 / matrix;
+  uint within = index0 - batch * matrix;
+  uint row = within / params.matrix_n;
+  uint column0 = within - row * params.matrix_n;
+  uint lhs = LHS_WORD(lhs_word_base + batch);
+  uint rhs = RHS_WORD(rhs_word_base + batch);
+  uint x_base = params.lhs_offset +
+      lhs * (params.matrix_m * params.matrix_k) +
+      row * params.matrix_k;
+
+  uint lane = gl_LocalInvocationID.x;
+  uint k_steps = (params.matrix_k + 255u) / 256u;
+  uint w_base0 = params.rhs_offset + rhs * w_row_words +
+      column0 * words_per_row;
+  uint scale_base0 = rhs * scale_row_words + column0 * groups_per_row;
+  float accumulator[ROWS_PER_WG];
+  for (uint r = 0u; r < uint(ROWS_PER_WG); ++r) {
+    accumulator[r] = 0.0;
+  }
+  for (uint j = 0u; j < k_steps; ++j) {
+    uint k = lane + j * 256u;
+    if (k < params.matrix_k) {
+      uint group = k / group_size;
+      uint word_index = k / pack_factor;
+      uint lane_shift = (k - word_index * pack_factor) * bits;
+      float x_value = LOAD_VALUE(input_x.values[x_base + k]);
+      for (uint r = 0u; r < uint(ROWS_PER_WG); ++r) {
+        uint word = input_w.values[w_base0 + r * words_per_row + word_index];
+        uint q = (word >> lane_shift) & value_mask;
+        uint param_index = (scale_base0 + r * groups_per_row + group) * param_bytes;
+        float scale = decode_scale(param_index);
+        float bias = decode_bias(param_index);
+        accumulator[r] += x_value * (scale * float(q) + bias);
+      }
+    }
+  }
+
+  for (uint r = 0u; r < uint(ROWS_PER_WG); ++r) {
+    float total = subgroupAdd(accumulator[r]);
+    if (gl_SubgroupInvocationID == 0u) {
+      subgroup_totals[r * 8u + gl_SubgroupID] = total;
+    }
+  }
+  barrier();
+  if (lane < uint(ROWS_PER_WG)) {
+    float sum = 0.0;
+    for (uint s = 0u; s < 8u; ++s) {
+      sum += subgroup_totals[lane * 8u + s];
+    }
+    output_data.values[params.output_offset + index0 + lane] = STORE_VALUE(sum);
+  }
+}
+#else
 void main() {
   uint bits = params.operation;
   uint group_size = params.reduce_size;
@@ -247,3 +337,4 @@ void main() {
     output_data.values[params.output_offset + index] = STORE_VALUE(sum);
   }
 }
+#endif
