@@ -1,0 +1,164 @@
+{
+ "tree": "gqc",
+ "kernel": "7.1.12-2-20261013.18-sep-ARCH",
+ "boot_id8": "5bdfa1cd",
+ "governor": "performance",
+ "wheel": "0.32.4.dev202610141546+171aeb06",
+ "wheel_files": {
+  "mlx/lib/libmlx.so": {
+   "sha256": "b7b0186e2f3449ed0f0e0bc7b9e771ecff2ad5407e31433aa61cd6d2a434b5f9",
+   "matches_wheel_record": true
+  },
+  "mlx/core.cpython-314-aarch64-linux-gnu.so": {
+   "sha256": "7542a0bcff502c00f2c48a2395367e9d49e3405b13f59b17f54abb78b9a0444d",
+   "matches_wheel_record": true
+  }
+ },
+ "model_repo": "mlx-community/gemma-4-26b-a4b-it-4bit",
+ "model_snapshot": "0d77464eeb233a2da68ebf9d7dc4edaac7db956d",
+ "model_files": {
+  "config.json": "9e6233a7e7174ab214c49dca84f2828a8fb504ef",
+  "model-00001-of-00003.safetensors": "801b67693463d31f36ea860494922b09adc9db920884a59b97d0d6e12db1ad25",
+  "model-00002-of-00003.safetensors": "5ae0d2a6bb02c4d99accbe4fdc5880280dcac9d7b0ec841bc80c40294b0ce717",
+  "model-00003-of-00003.safetensors": "8936e717c2cc88bfc13e83eb556a4c60d5939a3b2fdc3c9b258fb9572e1daa58",
+  "model.safetensors.index.json": "f6f9e61c33077cc7e2ef701eff7056927a4a65e6"
+ },
+ "quantization": {
+  "group_size": 64,
+  "bits": 4,
+  "mode": "affine",
+  "language_model.model.layers.0.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.1.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.2.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.3.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.4.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.5.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.6.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.7.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.8.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.9.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.10.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.11.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.12.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.13.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.14.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.15.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.16.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.17.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.18.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.19.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.20.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.21.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.22.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.23.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.24.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.25.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.26.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.27.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.28.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  },
+  "language_model.model.layers.29.router.proj": {
+   "group_size": 64,
+   "bits": 8
+  }
+ },
+ "model_type": "gemma4",
+ "vulkan": {
+  "deviceName": "Apple M2 Max (G14C B1)",
+  "driverID": "DRIVER_ID_MESA_HONEYKRISP",
+  "driverName": "Honeykrisp",
+  "driverInfo": "Mesa 26.3.0-devel (git-69bde15340)",
+  "apiVersion": "1.4.362",
+  "deviceType": "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+ },
+ "driver_lib_sha256_12": "40282811c6e1",
+ "driver_package": "vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2",
+ "gpu_kernel_driver_version": "0.2.0",
+ "gpu_rtkit_protocol": "12"
+}
