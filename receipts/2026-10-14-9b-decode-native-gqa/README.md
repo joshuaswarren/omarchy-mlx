@@ -43,7 +43,21 @@ The gain is 1.3 percent. It is one change of several planned for the decode path
 - The ANE filler was running as in production. ANE busy time was 97.6 to 100 percent on every row.
 - The load average read before each row was 1.03 to 1.13.
 - GPU timeouts, recovery lines, fault-info lines and out-of-memory events were all 0 before and after. A fresh process opened the device after the block and returned 0.
-- The dispatch trace is not part of this block. I have not traced the candidate wheel.
+- The dispatch trace is not part of this block. It was taken in a separate ticket, described below.
+
+## Dispatch trace
+
+A separate untimed ticket traced both arms on the same machine and kernel. It ran later, on boot `35eb9d8f`, after a module-swap reboot. Each arm ran 4 and 12 greedy tokens with `MLX_OMARCHY_TRACE_DISPATCH=1`. One decoded token is the difference divided by 8.
+
+- Arm O dispatches 385.0 kernels per decoded token. Arm P dispatches 337.0.
+- Only `CopyGeneralBF16` changes, from 56.0 to 8.0 per token. These are the 48 q/k expansion copies.
+- Every other kernel class has the same count in both arms.
+- The 4-token digest is `4eca14f7f3a94967` in both arms. The 12-token digest is `c57d3ee2dfeb29e2` in both arms.
+- Both arms ran inside one ticket, so the boot change does not touch the comparison.
+
+## Device test
+
+The new doctest is `gdn raw decode f32 A_log: native GQA equals the repeated route bit for bit`. CI configures with the C++ tests off, so it does not build this test. I build and run it on the M2 and add the result here.
 
 ## Integrity
 
