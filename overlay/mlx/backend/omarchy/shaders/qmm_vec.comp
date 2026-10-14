@@ -377,6 +377,26 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 }
 #endif
 
+// Affine weight format of the multi-row word kernel (compile time). The
+// shipped builds are 4-bit group 64. QGROUP=32 changes only the block's
+// scale/bias group; QBITS=8 reads two weight words (bytes low first) per
+// eight x values, with the same quad chain and block epilogue.
+#ifndef QBITS
+#define QBITS 4
+#endif
+#ifndef QGROUP
+#define QGROUP 64
+#endif
+#if QBITS != 4 || QGROUP != 64
+#if !defined(QMM_VEC_Q4_WORD) || ROWS_PER_SLOT < 2 || \
+    defined(QMM_VEC_MULTI) || defined(QMM_VEC_BATCH) || \
+    defined(QMM_VEC_TOKENS) || defined(QMM_VEC_GREEDY)
+#error "QBITS/QGROUP builds cover the multi-row word kernel only"
+#endif
+#if (QBITS != 4 && QBITS != 8) || (QGROUP != 64 && QGROUP != 32)
+#error "QBITS must be 4 or 8 and QGROUP 64 or 32"
+#endif
+#endif
 #ifdef QMM_VEC_Q4_WORD
 // One x quad against the low 16 bits of `packed` (nibbles low first).
 // The quad's half chain sum joins input_sum; ((p0 + p1) + p2) + p3 joins
@@ -516,8 +536,18 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
                 x0 * Q4_NIB(p, 0u)))); \
   } \
 }
+#if QGROUP == 32
+#define Q4_ROWS_GROUP(w) ((w) / 4u)
+#else
+#define Q4_ROWS_GROUP(w) ((w) / 8u)
+#endif
+#if QBITS == 8
+// Exact float(b) for a byte b in [0, 255]; same trick as Q4_NIB.
+#define Q8_BYTE(p, shift) \
+  (uintBitsToFloat((((p) >> (shift)) & 0xffu) | 0x4B000000u) - 8388608.0)
+#endif
 #define Q4_ROWS_FINISH(w, S, B) { \
-  uint group = (w) / 8u; \
+  uint group = Q4_ROWS_GROUP(w); \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
     float scale = \
         LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
@@ -527,6 +557,66 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     acc[r] += fma(scale, dot[r], bias_term); \
   } \
 }
+#if QBITS == 8
+// 8-bit twin of Q4_ROWS in native qmv_fast order (metal quantized.h,
+// bits == 8: values_per_thread = 8, block_size = 256): a lane owns one
+// eight-value step (two weight words, bytes low first) per 256-wide
+// block, load_vector forms sum += x[i] in float over the eight values,
+// qdot forms accum += x[i] * w[i] as one fma ladder, and the block
+// epilogue is Q4_ROWS_FINISH's. w counts eight-value steps, so the x
+// address and the group index are Q4_ROWS'; the weight row is row_words
+// wide.
+#ifdef USE_FP16
+#define Q8_X8(xw) \
+  float x0 = float(unpackFloat2x16((xw).x).x); \
+  float x1 = float(unpackFloat2x16((xw).x).y); \
+  float x2 = float(unpackFloat2x16((xw).y).x); \
+  float x3 = float(unpackFloat2x16((xw).y).y); \
+  float x4 = float(unpackFloat2x16((xw).z).x); \
+  float x5 = float(unpackFloat2x16((xw).z).y); \
+  float x6 = float(unpackFloat2x16((xw).w).x); \
+  float x7 = float(unpackFloat2x16((xw).w).y);
+#else
+#define Q8_X8(xw) \
+  float x0 = uintBitsToFloat(((xw).x & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((xw).x & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((xw).y & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((xw).y & 0xFFFF0000u); \
+  float x4 = uintBitsToFloat(((xw).z & 0xFFFFu) << 16u); \
+  float x5 = uintBitsToFloat((xw).z & 0xFFFF0000u); \
+  float x6 = uintBitsToFloat(((xw).w & 0xFFFFu) << 16u); \
+  float x7 = uintBitsToFloat((xw).w & 0xFFFF0000u);
+#endif
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+    precise float dot[ROWS_PER_SLOT]; \
+    precise float input_sum = 0.0; \
+    uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+    Q8_X8(xa) \
+    input_sum += x0; \
+    input_sum += x1; \
+    input_sum += x2; \
+    input_sum += x3; \
+    input_sum += x4; \
+    input_sum += x5; \
+    input_sum += x6; \
+    input_sum += x7; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      uint lo = W.values[w_base + row_base[r] * row_words + 2u * w]; \
+      uint hi = W.values[w_base + row_base[r] * row_words + 2u * w + 1u]; \
+      dot[r] = fma(x7, Q8_BYTE(hi, 24u), fma(x6, Q8_BYTE(hi, 16u), \
+          fma(x5, Q8_BYTE(hi, 8u), fma(x4, Q8_BYTE(hi, 0u), \
+          fma(x3, Q8_BYTE(lo, 24u), fma(x2, Q8_BYTE(lo, 16u), \
+          fma(x1, Q8_BYTE(lo, 8u), x0 * Q8_BYTE(lo, 0u)))))))); \
+    } \
+    Q4_ROWS_FINISH(w, S, B) \
+  } \
+}
+#else
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -568,6 +658,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
   } \
 }
+#endif
 // Multi-token (verify / small-batch) forms: the token (query-row)
 // dimension sits INSIDE the k walk so one weight-word load feeds every
 // token. Per token and slot column the chain is instruction-for-
@@ -1685,7 +1776,10 @@ void main() {
   uint n = params.matrix_n;
   bool column_active = column < n;
   uint words_per_row = params.matrix_k / 8u;
-  uint groups_per_row = params.matrix_k / 64u;
+  uint groups_per_row = params.matrix_k / QGROUP;
+#if QBITS == 8
+  uint row_words = params.matrix_k / 4u;
+#endif
   for (uint b = 0u; b < batch; ++b) {
     precise float acc[ROWS_PER_SLOT];
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {

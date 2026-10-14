@@ -68,6 +68,28 @@
 #error "TWO_N keeps its own second tile; chunk/pad combos are out of scope"
 #endif
 
+// Affine weight format (compile time). The shipped builds are 4-bit,
+// group 64 and keep their exact source below; the 8-bit and group-32
+// builds change only how a lane unpacks its eight k values and which
+// scale/bias pair it reads. The coopmat k chain, tiles and drain are the
+// same in every build, so each format keeps one per-output ascending-k
+// f32 accumulation.
+#ifndef QBITS
+#define QBITS 4
+#endif
+#ifndef QGROUP
+#define QGROUP 64
+#endif
+#if QBITS != 4 && QBITS != 8
+#error "QBITS must be 4 or 8"
+#endif
+#if QGROUP != 64 && QGROUP != 32
+#error "QGROUP must be 64 or 32"
+#endif
+#if (QBITS != 4 || QGROUP != 64) && (defined(CHUNK_DEQ) || defined(TWO_N))
+#error "CHUNK_DEQ and TWO_N are 4-bit group-64 experiments"
+#endif
+
 #ifdef LDS_PAD
 #define QMM_W_STRIDE (TILE_N + 4u)
 #else
@@ -267,10 +289,12 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
   for (uint chunk = 0u; chunk < g_k_chunks; ++chunk) {
     float scale = 0.0;
     float bias = 0.0;
+#if QGROUP == 64
     if (column_ok) {
       scale = SCALE_LOAD(scales.values[scale_row + chunk]);
       bias = SCALE_LOAD(biases.values[bias_row + chunk]);
     }
+#endif
 #ifdef CHUNK_DEQ
     // Whole-chunk dequant into the shared tile (rows 0..63), one
     // fence, then every (step, ks) MAC iteration of the chunk runs
@@ -333,6 +357,36 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #else
     for (uint step = 0u; step < CHUNK_K / STEP_K; ++step) {
       uint k_base = chunk * CHUNK_K + step * STEP_K;
+#if QGROUP == 32
+      // A 16-row step never straddles a 32-wide group.
+      if (column_ok) {
+        scale = SCALE_LOAD(scales.values[scale_row + k_base / 32u]);
+        bias = SCALE_LOAD(biases.values[bias_row + k_base / 32u]);
+      }
+#endif
+#if QBITS == 8
+      // Two packed words per lane (four bytes each, low byte first)
+      // cover the lane's eight k values of the 16x32 weight tile.
+      uint packed = column_ok
+          ? input_w.values[w_row + k_base / 4u + 2u * g_wpart] : 0u;
+      uint packed_hi = column_ok
+          ? input_w.values[w_row + k_base / 4u + 2u * g_wpart + 1u] : 0u;
+      uint w_base = 8u * g_wpart * QMM_W_STRIDE + g_wcol;
+      w_s[w_base + 0u * QMM_W_STRIDE] = scale * float(packed & 0xFFu) + bias;
+      w_s[w_base + 1u * QMM_W_STRIDE] =
+          scale * float((packed >> 8u) & 0xFFu) + bias;
+      w_s[w_base + 2u * QMM_W_STRIDE] =
+          scale * float((packed >> 16u) & 0xFFu) + bias;
+      w_s[w_base + 3u * QMM_W_STRIDE] = scale * float(packed >> 24u) + bias;
+      w_s[w_base + 4u * QMM_W_STRIDE] =
+          scale * float(packed_hi & 0xFFu) + bias;
+      w_s[w_base + 5u * QMM_W_STRIDE] =
+          scale * float((packed_hi >> 8u) & 0xFFu) + bias;
+      w_s[w_base + 6u * QMM_W_STRIDE] =
+          scale * float((packed_hi >> 16u) & 0xFFu) + bias;
+      w_s[w_base + 7u * QMM_W_STRIDE] =
+          scale * float(packed_hi >> 24u) + bias;
+#else
       // One packed word per lane covers the 16x32 weight tile.
       uint packed = column_ok
           ? input_w.values[w_row + k_base / 8u + g_wpart] : 0u;
@@ -352,6 +406,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
           scale * float((packed >> 24u) & 0xFu) + bias;
       w_s[w_base + 7u * QMM_W_STRIDE] =
           scale * float(packed >> 28u) + bias;
+#endif
 #ifdef X_BF16
       // X_WORDS half-word loads per lane cover the TILE_ROWS x 16 x tile.
       uint x_words[TILE_M / 8u];
@@ -643,8 +698,8 @@ void main() {
   g_wcol = g_lid % 32u;
   g_wpart = g_lid / 32u;
   g_k_chunks = params.matrix_k / CHUNK_K;
-  g_words_per_row = params.matrix_k / 8u;
-  g_groups_per_row = params.matrix_k / 64u;
+  g_words_per_row = params.matrix_k / (32u / QBITS);
+  g_groups_per_row = params.matrix_k / QGROUP;
   uint batch = params.shape[0];
   uint m_tiles = (params.matrix_m + TILE_M - 1u) / TILE_M;
   uint n_tiles = (params.matrix_n + TILE_N - 1u) / TILE_N;

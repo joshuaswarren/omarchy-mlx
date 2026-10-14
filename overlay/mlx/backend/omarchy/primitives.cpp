@@ -7563,6 +7563,74 @@ void QRF::eval_gpu(
   encoder.dispatch_compute(
       omarchy::ComputeKernel::LinalgQrF32, bindings, params, batch);
 }
+namespace {
+
+// Default coopmat prefill routes of the affine formats beyond the shipped
+// 4-bit group 64 (QBITS/QGROUP builds of shaders/qmm_coopmat.comp).
+enum class QmmCoopmatRoute {
+  F16,
+  M16F16,
+  X32,
+  M16X32,
+  X32FullN,
+  M16X32FullN,
+  X32FullNLdsPad,
+};
+
+omarchy::ComputeKernel qmm_coopmat_format_kernel(
+    QmmCoopmatRoute route,
+    int bits,
+    int group_size) {
+  using K = omarchy::ComputeKernel;
+  static constexpr K q4g32[] = {
+      K::QmmPrefillCoopmatF16Q4G32,
+      K::QmmPrefillCoopmatM16F16Q4G32,
+      K::QmmPrefillCoopmatBF16X32Q4G32,
+      K::QmmPrefillCoopmatM16BF16X32Q4G32,
+      K::QmmPrefillCoopmatBF16X32FullNQ4G32,
+      K::QmmPrefillCoopmatM16BF16X32FullNQ4G32,
+      K::QmmPrefillCoopmatBF16X32FullNLdsPadQ4G32};
+  static constexpr K q8g64[] = {
+      K::QmmPrefillCoopmatF16Q8G64,
+      K::QmmPrefillCoopmatM16F16Q8G64,
+      K::QmmPrefillCoopmatBF16X32Q8G64,
+      K::QmmPrefillCoopmatM16BF16X32Q8G64,
+      K::QmmPrefillCoopmatBF16X32FullNQ8G64,
+      K::QmmPrefillCoopmatM16BF16X32FullNQ8G64,
+      K::QmmPrefillCoopmatBF16X32FullNLdsPadQ8G64};
+  static constexpr K q8g32[] = {
+      K::QmmPrefillCoopmatF16Q8G32,
+      K::QmmPrefillCoopmatM16F16Q8G32,
+      K::QmmPrefillCoopmatBF16X32Q8G32,
+      K::QmmPrefillCoopmatM16BF16X32Q8G32,
+      K::QmmPrefillCoopmatBF16X32FullNQ8G32,
+      K::QmmPrefillCoopmatM16BF16X32FullNQ8G32,
+      K::QmmPrefillCoopmatBF16X32FullNLdsPadQ8G32};
+  const K* table =
+      bits == 8 ? (group_size == 32 ? q8g32 : q8g64) : q4g32;
+  return table[static_cast<int>(route)];
+}
+
+// Multi-row word decode kernel (m == 1, subgroup) of the same formats.
+omarchy::ComputeKernel qmm_vec_word_format_kernel(
+    bool bf16,
+    int bits,
+    int group_size) {
+  using K = omarchy::ComputeKernel;
+  if (bits == 4) {
+    return bf16 ? K::QmmVecWordSubgroupBF16Q4G32
+                : K::QmmVecWordSubgroupF16Q4G32;
+  }
+  if (group_size == 32) {
+    return bf16 ? K::QmmVecWordSubgroupBF16Q8G32
+                : K::QmmVecWordSubgroupF16Q8G32;
+  }
+  return bf16 ? K::QmmVecWordSubgroupBF16Q8G64
+              : K::QmmVecWordSubgroupF16Q8G64;
+}
+
+} // namespace
+
 void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   const std::string tag = name();
   // Non-affine modes pass three inputs, so the mode check must land
@@ -7806,9 +7874,25 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   const char* q4_word_env = std::getenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
   bool q4_g64_transpose = transpose_ && bits_ == 4 && group_size_ == 64;
+  // Coopmat prefill formats: the shipped 4-bit group 64, plus 4-bit
+  // group 32 and 8-bit groups 64 and 32 on the default routes
+  // (qmm_coopmat_format_kernel). The shader walks k in 64-wide chunks,
+  // so the group-32 formats need k % 64 == 0 (group 64 implies it).
+  bool coopmat_format = q4_g64_transpose ||
+      (transpose_ &&
+       ((bits_ == 4 && group_size_ == 32) ||
+        (bits_ == 8 && (group_size_ == 64 || group_size_ == 32))) &&
+       x.shape(-1) % 64 == 0);
   bool use_q4_word =
       (q4_word_env == nullptr || std::strcmp(q4_word_env, "1") == 0) &&
       q4_g64_transpose;
+  // The other transposed formats' word decode kernel (f16/bf16 subgroup
+  // builds only) reads x through the same packed uvec4 view.
+  bool use_word_format =
+      (q4_word_env == nullptr || std::strcmp(q4_word_env, "1") == 0) &&
+      transpose_ && !q4_g64_transpose &&
+      ((bits_ == 4 && group_size_ == 32) ||
+       (bits_ == 8 && (group_size_ == 64 || group_size_ == 32)));
   // Prefill coopmat eligibility, resolved before operand normalization so
   // a row-contiguous x view at an odd f16-element offset is materialized
   // into an aligned buffer instead of silently rerouting to the tile
@@ -7834,7 +7918,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       (32u * 16u + 16u * 32u) * sizeof(float);
   const auto& coopmat_caps = encoder.device().capabilities();
   bool coopmat_reachable =
-      tile_path && rb_enabled && q4_g64_transpose &&
+      tile_path && rb_enabled && coopmat_format &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&
       x.ndim() >= 2 && x.shape(-2) > 1 &&
       coopmat_caps.cooperative_matrix_f32_8 &&
@@ -7860,7 +7944,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // rare row-contiguous view whose element offset is not 16-byte aligned;
   // the coopmat word-pair reader extends the same rule to a 2-byte
   // alignment (an even f16 element offset).
-  bool packed_q4_x = use_q4_word &&
+  bool packed_q4_x = (use_q4_word || use_word_format) &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&
       (x.ndim() < 2 || x.shape(-2) == 1);
   bool x_dense = x.flags().row_contiguous &&
@@ -8028,6 +8112,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                           : omarchy::ComputeKernel::QmmVecF16,
               use_q4_word ? omarchy::ComputeKernel::QmmVecQ4WordBF16
                           : omarchy::ComputeKernel::QmmVecBF16);
+    if (use_word_format && subgroup_ready &&
+        (out.dtype() == float16 || out.dtype() == bfloat16)) {
+      vec_kernel = qmm_vec_word_format_kernel(
+          out.dtype() == bfloat16, bits_, group_size_);
+    }
     // Batch-shared GEMV: a [B, 1, K] decode batch (B <= 4) against one 2D
     // weight reads each weight word once per block instead of once per row;
     // every row keeps the single-row chain. On by default since 2026-10-07
@@ -8057,8 +8146,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     // driver without the fp32 cooperative matrix keeps the shipped
     // tile path (the block below declines by not dispatching, matching
     // the pre-route behavior bit for bit).
-    if (rb_enabled && out.dtype() == bfloat16 && transpose_ && bits_ == 4 &&
-        group_size_ == 64 && coopmat_reachable) {
+    if (rb_enabled && out.dtype() == bfloat16 && coopmat_reachable) {
       if ((params.lhs_offset | params.output_offset) & 1u) {
         omarchy::unsupported(tag + " coopmat operand alignment", out);
       }
@@ -8130,6 +8218,35 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // bit-exact digests; G13G confirmation in the same receipt. The
       // single-row-tile case keeps the shipped mapping (nothing to
       // regroup).
+      if (!q4_g64_transpose) {
+        // Other formats: the default route of each shape only (32-row
+        // g4 raster with the padded B tile, else the shipped mappings);
+        // the env-selected twins are 4-bit group-64 builds.
+        constexpr uint32_t pad_bytes = (32u * 16u + 16u * 36u) * 4u;
+        const bool g4_pad = coopmat_rows == 32u && full_n &&
+            params.matrix_m > 32u &&
+            pad_bytes <= coopmat_caps.max_compute_shared_memory_size;
+        const QmmCoopmatRoute route = g4_pad
+            ? QmmCoopmatRoute::X32FullNLdsPad
+            : coopmat_rows == 16u
+            ? (full_n ? QmmCoopmatRoute::M16X32FullN : QmmCoopmatRoute::M16X32)
+            : (full_n ? QmmCoopmatRoute::X32FullN : QmmCoopmatRoute::X32);
+        uint32_t fmt_grid_x = n_groups;
+        uint32_t fmt_grid_y = m_groups;
+        if (g4_pad) {
+          constexpr uint32_t gm = 4u;
+          fmt_grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
+          fmt_grid_y = 1u;
+        }
+        encoder.dispatch_compute(
+            qmm_coopmat_format_kernel(route, bits_, group_size_),
+            qmm_bindings,
+            params,
+            std::min(fmt_grid_x, omarchy::kMaxComputeGroupCountX),
+            std::min(fmt_grid_y, omarchy::kMaxComputeGroupCountX),
+            1u);
+        return;
+      }
       omarchy::ComputeKernel qmm_kernel;
       uint32_t grid_x = n_groups;
       uint32_t grid_y = m_groups;
@@ -8283,8 +8400,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           1u);
       return;
     }
-    if (rb_enabled && out.dtype() == float16 && transpose_ && bits_ == 4 &&
-        group_size_ == 64) {
+    if (rb_enabled && out.dtype() == float16 &&
+        (q4_g64_transpose || coopmat_reachable)) {
       if (qmm_fma_reachable) {
         // Scalar-FMA route: the kernel's per-output arithmetic is the
         // same ascending-k f32 chain the tile and coopmat kernels
@@ -8360,6 +8477,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           ? (params.matrix_m >= 1024u
                  ? omarchy::ComputeKernel::QmmTileRbPreciseF16
                  : omarchy::ComputeKernel::QmmTileRbF16)
+          : !q4_g64_transpose
+          ? qmm_coopmat_format_kernel(
+                coopmat_rows == 16u ? QmmCoopmatRoute::M16F16
+                                    : QmmCoopmatRoute::F16,
+                bits_,
+                group_size_)
           : coopmat_rows == 16u
           ? omarchy::ComputeKernel::QmmPrefillCoopmatM16F16
           : omarchy::ComputeKernel::QmmPrefillCoopmatF16;

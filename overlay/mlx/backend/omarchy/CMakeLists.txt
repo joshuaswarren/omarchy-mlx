@@ -344,6 +344,15 @@ omarchy_shader(qmm_vec_q4_word_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 # Batch-shared decode GEMV (default on, MLX_OMARCHY_QMV_BATCH=0 disables): up to four x rows
 # against one 2D weight, weight words read once per block.
 omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_BATCH=4)
+# Multi-row word decode kernel for 4-bit group 32, 8-bit group 64 and
+# 8-bit group 32 affine weights (QBITS/QGROUP in qmm_vec.comp); the
+# 4-bit group-64 builds above are unchanged.
+omarchy_shader(qmm_vec_word_subgroup_f16_q4g32 shaders/qmm_vec.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQGROUP=32)
+omarchy_shader(qmm_vec_word_subgroup_bf16_q4g32 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQGROUP=32)
+omarchy_shader(qmm_vec_word_subgroup_f16_q8g64 shaders/qmm_vec.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQBITS=8)
+omarchy_shader(qmm_vec_word_subgroup_bf16_q8g64 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQBITS=8)
+omarchy_shader(qmm_vec_word_subgroup_f16_q8g32 shaders/qmm_vec.comp -DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_vec_word_subgroup_bf16_q8g32 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQBITS=8 -DQGROUP=32)
 # DecodeFusion: the same Q4 word chain against up to three weights per
 # dispatch with an optional fused Add epilogue (QMM_VEC_MULTI).
 omarchy_shader(qmm_vec_q4_multi_f32 shaders/qmm_vec.comp -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1)
@@ -516,6 +525,31 @@ omarchy_shader(qmm_coopmat_x32_fn_twon shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_
 omarchy_shader(qmm_coopmat_x32_fn_g4_chunk shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DCHUNK_DEQ=1)
 omarchy_shader(qmm_coopmat_x32_fn_g4_pad shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1)
 omarchy_shader(qmm_coopmat_x32_fn_g4_chunk_pad shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DCHUNK_DEQ=1 -DLDS_PAD=1)
+# Other affine formats on the default coopmat prefill routes: 4-bit group 32,
+# 8-bit group 64 and 8-bit group 32 (QBITS/QGROUP in the shader). Only the
+# unpack and the scale index differ from the 4-bit group-64 builds above;
+# the k chain, tiles and drain are shared. Env-selected twins stay 4-bit/64.
+omarchy_shader(qmm_coopmat_f16_q4g32 shaders/qmm_coopmat.comp -DQGROUP=32)
+omarchy_shader(qmm_coopmat_m16_f16_q4g32 shaders/qmm_coopmat.comp -DTILE_ROWS=16 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_x32_q4g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_m16_x32_q4g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_x32_fn_q4g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_m16_x32_fn_q4g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad_q4g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_f16_q8g64 shaders/qmm_coopmat.comp -DQBITS=8)
+omarchy_shader(qmm_coopmat_m16_f16_q8g64 shaders/qmm_coopmat.comp -DTILE_ROWS=16 -DQBITS=8)
+omarchy_shader(qmm_coopmat_x32_q8g64 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DQBITS=8)
+omarchy_shader(qmm_coopmat_m16_x32_q8g64 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DQBITS=8)
+omarchy_shader(qmm_coopmat_x32_fn_q8g64 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DQBITS=8)
+omarchy_shader(qmm_coopmat_m16_x32_fn_q8g64 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DQBITS=8)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad_q8g64 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1 -DQBITS=8)
+omarchy_shader(qmm_coopmat_f16_q8g32 shaders/qmm_coopmat.comp -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_m16_f16_q8g32 shaders/qmm_coopmat.comp -DTILE_ROWS=16 -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_x32_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_m16_x32_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_x32_fn_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_m16_x32_fn_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DTILE_ROWS=16 -DFULL_N=1 -DQBITS=8 -DQGROUP=32)
+omarchy_shader(qmm_coopmat_x32_fn_g4_pad_q8g32 shaders/qmm_coopmat.comp -DX_F32=1 -DOUT_BF16=1 -DFULL_N=1 -DRASTER_GM=4 -DLDS_PAD=1 -DQBITS=8 -DQGROUP=32)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
 omarchy_shader(matmul_fma_bf16 shaders/matmul_fma_bf16.comp)

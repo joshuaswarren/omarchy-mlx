@@ -507,6 +507,33 @@
 #include "gather_qmm_tile_bf16.h"
 #include "gather_qmm_sub_direct_f16.h"
 #include "gather_qmm_sub_direct_bf16.h"
+#include "qmm_coopmat_f16_q4g32.h"
+#include "qmm_coopmat_m16_f16_q4g32.h"
+#include "qmm_coopmat_x32_q4g32.h"
+#include "qmm_coopmat_m16_x32_q4g32.h"
+#include "qmm_coopmat_x32_fn_q4g32.h"
+#include "qmm_coopmat_m16_x32_fn_q4g32.h"
+#include "qmm_coopmat_x32_fn_g4_pad_q4g32.h"
+#include "qmm_coopmat_f16_q8g64.h"
+#include "qmm_coopmat_m16_f16_q8g64.h"
+#include "qmm_coopmat_x32_q8g64.h"
+#include "qmm_coopmat_m16_x32_q8g64.h"
+#include "qmm_coopmat_x32_fn_q8g64.h"
+#include "qmm_coopmat_m16_x32_fn_q8g64.h"
+#include "qmm_coopmat_x32_fn_g4_pad_q8g64.h"
+#include "qmm_coopmat_f16_q8g32.h"
+#include "qmm_coopmat_m16_f16_q8g32.h"
+#include "qmm_coopmat_x32_q8g32.h"
+#include "qmm_coopmat_m16_x32_q8g32.h"
+#include "qmm_coopmat_x32_fn_q8g32.h"
+#include "qmm_coopmat_m16_x32_fn_q8g32.h"
+#include "qmm_coopmat_x32_fn_g4_pad_q8g32.h"
+#include "qmm_vec_word_subgroup_f16_q4g32.h"
+#include "qmm_vec_word_subgroup_bf16_q4g32.h"
+#include "qmm_vec_word_subgroup_f16_q8g64.h"
+#include "qmm_vec_word_subgroup_bf16_q8g64.h"
+#include "qmm_vec_word_subgroup_f16_q8g32.h"
+#include "qmm_vec_word_subgroup_bf16_q8g32.h"
 #include "fft_f32.h"
 #include "fft_real_f32.h"
 #include "fft_stage_f32.h"
@@ -1843,6 +1870,60 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_sub_direct_f16, gather_qmm_sub_direct_f16_size};
     case ComputeKernel::GatherQmmSubDirectBF16:
       return {gather_qmm_sub_direct_bf16, gather_qmm_sub_direct_bf16_size};
+    case ComputeKernel::QmmPrefillCoopmatF16Q4G32:
+      return {qmm_coopmat_f16_q4g32, qmm_coopmat_f16_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatM16F16Q4G32:
+      return {qmm_coopmat_m16_f16_q4g32, qmm_coopmat_m16_f16_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32Q4G32:
+      return {qmm_coopmat_x32_q4g32, qmm_coopmat_x32_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32Q4G32:
+      return {qmm_coopmat_m16_x32_q4g32, qmm_coopmat_m16_x32_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNQ4G32:
+      return {qmm_coopmat_x32_fn_q4g32, qmm_coopmat_x32_fn_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNQ4G32:
+      return {qmm_coopmat_m16_x32_fn_q4g32, qmm_coopmat_m16_x32_fn_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadQ4G32:
+      return {qmm_coopmat_x32_fn_g4_pad_q4g32, qmm_coopmat_x32_fn_g4_pad_q4g32_size};
+    case ComputeKernel::QmmPrefillCoopmatF16Q8G64:
+      return {qmm_coopmat_f16_q8g64, qmm_coopmat_f16_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatM16F16Q8G64:
+      return {qmm_coopmat_m16_f16_q8g64, qmm_coopmat_m16_f16_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32Q8G64:
+      return {qmm_coopmat_x32_q8g64, qmm_coopmat_x32_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32Q8G64:
+      return {qmm_coopmat_m16_x32_q8g64, qmm_coopmat_m16_x32_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNQ8G64:
+      return {qmm_coopmat_x32_fn_q8g64, qmm_coopmat_x32_fn_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNQ8G64:
+      return {qmm_coopmat_m16_x32_fn_q8g64, qmm_coopmat_m16_x32_fn_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadQ8G64:
+      return {qmm_coopmat_x32_fn_g4_pad_q8g64, qmm_coopmat_x32_fn_g4_pad_q8g64_size};
+    case ComputeKernel::QmmPrefillCoopmatF16Q8G32:
+      return {qmm_coopmat_f16_q8g32, qmm_coopmat_f16_q8g32_size};
+    case ComputeKernel::QmmPrefillCoopmatM16F16Q8G32:
+      return {qmm_coopmat_m16_f16_q8g32, qmm_coopmat_m16_f16_q8g32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32Q8G32:
+      return {qmm_coopmat_x32_q8g32, qmm_coopmat_x32_q8g32_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32Q8G32:
+      return {qmm_coopmat_m16_x32_q8g32, qmm_coopmat_m16_x32_q8g32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNQ8G32:
+      return {qmm_coopmat_x32_fn_q8g32, qmm_coopmat_x32_fn_q8g32_size};
+    case ComputeKernel::QmmPrefillCoopmatM16BF16X32FullNQ8G32:
+      return {qmm_coopmat_m16_x32_fn_q8g32, qmm_coopmat_m16_x32_fn_q8g32_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPadQ8G32:
+      return {qmm_coopmat_x32_fn_g4_pad_q8g32, qmm_coopmat_x32_fn_g4_pad_q8g32_size};
+    case ComputeKernel::QmmVecWordSubgroupF16Q4G32:
+      return {qmm_vec_word_subgroup_f16_q4g32, qmm_vec_word_subgroup_f16_q4g32_size};
+    case ComputeKernel::QmmVecWordSubgroupBF16Q4G32:
+      return {qmm_vec_word_subgroup_bf16_q4g32, qmm_vec_word_subgroup_bf16_q4g32_size};
+    case ComputeKernel::QmmVecWordSubgroupF16Q8G64:
+      return {qmm_vec_word_subgroup_f16_q8g64, qmm_vec_word_subgroup_f16_q8g64_size};
+    case ComputeKernel::QmmVecWordSubgroupBF16Q8G64:
+      return {qmm_vec_word_subgroup_bf16_q8g64, qmm_vec_word_subgroup_bf16_q8g64_size};
+    case ComputeKernel::QmmVecWordSubgroupF16Q8G32:
+      return {qmm_vec_word_subgroup_f16_q8g32, qmm_vec_word_subgroup_f16_q8g32_size};
+    case ComputeKernel::QmmVecWordSubgroupBF16Q8G32:
+      return {qmm_vec_word_subgroup_bf16_q8g32, qmm_vec_word_subgroup_bf16_q8g32_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

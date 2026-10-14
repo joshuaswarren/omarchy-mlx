@@ -686,6 +686,41 @@ reference case at the Qwen shapes passes under the qmm tile anchor
 bound with the same max error as the tile to three digits; receipt
 `receipts/2026-09-08-qmm-prefill-coopmat.json`.
 
+### Other affine formats: 4-bit group 32, 8-bit group 64 and 32
+
+Since 2026-10-13 transposed affine `QuantizedMatmul` with 4-bit group 32,
+8-bit group 64 or 8-bit group 32 weights (f16 or bf16) takes the same two
+routes as 4-bit group 64 instead of the generic `QmmVec` and tile kernels.
+The shaders take the format at compile time (`QBITS`, `QGROUP`, default
+4/64), and the 4-bit group-64 SPIR-V is byte-identical to the build
+without them.
+
+- Prefill (`m > 1`, cooperative matrix, `k % 64 == 0`):
+  `QmmPrefillCoopmat*{Q4G32,Q8G64,Q8G32}` on each shape's default route
+  (M16 or 32-row, full-n, the 32-row raster with the padded B tile). The
+  64-wide k chunk keeps its layout. Group 32 reads a scale and bias per
+  16-row step. 8-bit unpacks two words per lane step, low byte first.
+  The output is bit-identical to `QmmTileRb*` on the same inputs. The
+  env-selected twins stay 4-bit group 64 only, so these formats ignore
+  `MLX_OMARCHY_QMM_RASTER`, `MLX_OMARCHY_QMM_NO_RASTER`,
+  `MLX_OMARCHY_QMM_TWON`, `MLX_OMARCHY_QMM_PERSIST`,
+  `MLX_OMARCHY_QMM_CHUNK` and `MLX_OMARCHY_QMM_LDSPAD=0`: they always
+  take the default route of the shape. `MLX_OMARCHY_NO_COOPMAT`,
+  `MLX_OMARCHY_QMM_TILE`, `MLX_OMARCHY_QMM_TILE_RB`,
+  `MLX_OMARCHY_QMM_NO_FULLN` and `MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE`
+  apply as for 4-bit group 64.
+- Decode (`m == 1`, subgroup size 32): `QmmVecWordSubgroup{F16,BF16}*`,
+  the multi-row word kernel, with native `qmv` arithmetic. Group 32 only
+  changes the block's scale and bias index. 8-bit follows Metal's
+  `qmv_fast` bits == 8 order: the sum over eight x values in float, then
+  one fma chain over the eight bytes. `MLX_OMARCHY_QMM_VEC_Q4_WORD=0`
+  turns it off, as for 4-bit group 64.
+
+Regression coverage: "q4g32 and q8 affine formats take the word decode
+and coopmat prefill routes" (`omarchy_matmul_family_tests`). It checks
+the host bound at m = 1, 16 and 100 and pins the kernel ids. Receipt:
+`receipts/2026-10-13-qmm-formats/README.md`.
+
 Settled-boot parity on T8103 at the v0.7.21 ledger cells (2026-10-03):
 pf512 prefill 419.4 tok/s = 0.916x of same-machine macOS (457.6) and
 pf1024 420.9 = 0.918x (458.7), short-prompt TTFT 0.1307 s = 1.046x

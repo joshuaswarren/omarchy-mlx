@@ -4263,6 +4263,187 @@ TEST_CASE("qmm_vec packed-word candidate matches baseline and host reference") {
   CHECK_EQ(gated_v, base_v);
 }
 
+// 4-bit group 32 and 8-bit group 64/32 affine weights (transposed, f16 or
+// bf16) take the multi-row word decode kernel at m == 1 and the coopmat
+// prefill builds at m > 1 (QBITS/QGROUP in qmm_vec.comp and
+// qmm_coopmat.comp). Decode matches the host reference and the generic
+// qmm_vec kernel within qmm_vec's derived bound; prefill matches the host
+// reference within the coopmat bound of the Qwen-shape test. Each case
+// pins the kernel id so a gate regression back to the generic kernels
+// fails here.
+TEST_CASE("q4g32 and q8 affine formats take the word decode and coopmat prefill routes") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  const bool coopmat =
+      caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u;
+  using K = omarchy::ComputeKernel;
+
+  auto trace_of = [&](const std::function<void()>& call) {
+    std::fflush(stderr);
+    int saved = ::dup(::fileno(stderr));
+    FILE* cap = std::fopen("/tmp/qmm_format_cap.log", "w");
+    REQUIRE(cap != nullptr);
+    ::dup2(::fileno(cap), ::fileno(stderr));
+    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+    call();
+    omarchy::get_command_encoder(stream).synchronize();
+    std::fflush(stderr);
+    ::dup2(saved, ::fileno(stderr));
+    ::close(saved);
+    std::fclose(cap);
+    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+    std::ifstream in("/tmp/qmm_format_cap.log");
+    return std::string((std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+  };
+  auto dispatched = [](const std::string& text, K kernel) {
+    return text.find("[rtmod] DISPATCH kernel=" +
+               std::to_string(static_cast<uint32_t>(kernel)) + " ") !=
+        std::string::npos;
+  };
+  auto max_diff = [](
+      const std::vector<float>& lhs, const std::vector<float>& rhs) {
+    double result = 0.0;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+      result = std::max(
+          result, std::fabs(static_cast<double>(lhs[i]) - rhs[i]));
+    }
+    return result;
+  };
+  auto max_abs = [](const std::vector<float>& values) {
+    double result = 1.0;
+    for (float v : values) {
+      REQUIRE(std::isfinite(v));
+      result = std::max(result, std::fabs(static_cast<double>(v)));
+    }
+    return result;
+  };
+
+  struct Format {
+    int bits, group_size;
+    K decode_f16, decode_bf16;
+    std::vector<K> prefill;
+  };
+  const std::vector<Format> formats{
+      {4, 32, K::QmmVecWordSubgroupF16Q4G32, K::QmmVecWordSubgroupBF16Q4G32,
+          {K::QmmPrefillCoopmatF16Q4G32, K::QmmPrefillCoopmatM16F16Q4G32,
+              K::QmmPrefillCoopmatBF16X32Q4G32,
+              K::QmmPrefillCoopmatM16BF16X32Q4G32,
+              K::QmmPrefillCoopmatBF16X32FullNQ4G32,
+              K::QmmPrefillCoopmatM16BF16X32FullNQ4G32,
+              K::QmmPrefillCoopmatBF16X32FullNLdsPadQ4G32}},
+      {8, 64, K::QmmVecWordSubgroupF16Q8G64, K::QmmVecWordSubgroupBF16Q8G64,
+          {K::QmmPrefillCoopmatF16Q8G64, K::QmmPrefillCoopmatM16F16Q8G64,
+              K::QmmPrefillCoopmatBF16X32Q8G64,
+              K::QmmPrefillCoopmatM16BF16X32Q8G64,
+              K::QmmPrefillCoopmatBF16X32FullNQ8G64,
+              K::QmmPrefillCoopmatM16BF16X32FullNQ8G64,
+              K::QmmPrefillCoopmatBF16X32FullNLdsPadQ8G64}},
+      {8, 32, K::QmmVecWordSubgroupF16Q8G32, K::QmmVecWordSubgroupBF16Q8G32,
+          {K::QmmPrefillCoopmatF16Q8G32, K::QmmPrefillCoopmatM16F16Q8G32,
+              K::QmmPrefillCoopmatBF16X32Q8G32,
+              K::QmmPrefillCoopmatM16BF16X32Q8G32,
+              K::QmmPrefillCoopmatBF16X32FullNQ8G32,
+              K::QmmPrefillCoopmatM16BF16X32FullNQ8G32,
+              K::QmmPrefillCoopmatBF16X32FullNLdsPadQ8G32}},
+  };
+  std::vector<Dtype> dtypes{bfloat16};
+  if (float16_available()) {
+    dtypes.push_back(float16);
+  }
+  // k 512: the two-word qmv_fast step; k 192: the one-word step and a
+  // group-32 k that is not a multiple of 128. n 264 is full-n for the
+  // 8-column decode tile; n 100 clamps the last multi-row slot and leaves
+  // a partial coopmat column tile. m 16 runs the 16-row coopmat
+  // mapping. m 100 runs the 32-row mapping only on a device missing from
+  // apple_gpu_cores; on the listed chips coopmat_tile_rows keeps these
+  // grids at 16 rows, so the pins there cover M16 builds only.
+  const std::vector<std::pair<int, int>> kn{{512, 264}, {192, 100}};
+  unsigned seed = 4242u;
+  for (const auto& f : formats) {
+    for (auto dtype : dtypes) {
+      for (auto [k, n] : kn) {
+        const int words_per_row = k * f.bits / 32;
+        const int groups_per_row = k / f.group_size;
+        std::mt19937 gen(seed++);
+        std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+        std::vector<float> matrix(static_cast<size_t>(n) * k);
+        for (auto& v : matrix) v = dist(gen);
+        HostQuantizedWeights host =
+            host_affine_quantize(matrix, n, k, f.group_size, f.bits);
+        host.scales = round_trip(stream, host.scales, dtype);
+        host.biases = round_trip(stream, host.biases, dtype);
+        array w_words(host.words.begin(), Shape{n, words_per_row}, uint32);
+        array scales(host.scales.begin(), Shape{n, groups_per_row}, dtype);
+        array biases(host.biases.begin(), Shape{n, groups_per_row}, dtype);
+        const int mantissa = dtype == float16 ? 10 : 7;
+
+        for (int m : {1, 16, 100}) {
+          INFO("bits=" << f.bits << " group_size=" << f.group_size
+               << " dtype=" << dtype << " m=" << m << " n=" << n
+               << " k=" << k);
+          std::vector<float> x_values(static_cast<size_t>(m) * k);
+          for (auto& v : x_values) v = dist(gen);
+          x_values = round_trip(stream, x_values, dtype);
+          const std::vector<float> expected = host_quantized_matmul(
+              host, x_values, m, n, k, f.group_size, f.bits);
+          array x(x_values.begin(), Shape{m, k}, dtype);
+          auto run = [&] {
+            array out = quantized_matmul(x, w_words, scales, biases, true,
+                f.group_size, f.bits, "affine", stream);
+            const auto error = evaluation_error(out);
+            REQUIRE_MESSAGE(error.empty(), error);
+            REQUIRE_EQ(out.shape(), Shape{m, n});
+            return readback_f32(stream, out);
+          };
+          std::vector<float> fast;
+          const std::string trace = trace_of([&] { fast = run(); });
+          const double magnitude =
+              std::max(max_abs(fast), max_abs(expected)) * 2.0;
+
+          if (m == 1) {
+            if (subgroup_ready) {
+              CHECK(dispatched(trace,
+                  dtype == float16 ? f.decode_f16 : f.decode_bf16));
+            }
+            QmmVecQ4WordGate gate(false);
+            const std::vector<float> generic = run();
+            const double host_bound = std::max(
+                (3.0 * k / 32.0 + 32.0) * magnitude * std::ldexp(1.0, -23) +
+                    magnitude * std::ldexp(1.0, -(mantissa + 1)),
+                1e-6);
+            INFO("word_host=" << max_diff(fast, expected)
+                 << " generic_host=" << max_diff(generic, expected)
+                 << " pair=" << max_diff(fast, generic)
+                 << " bound=" << host_bound);
+            CHECK(max_diff(fast, expected) <= host_bound);
+            CHECK(max_diff(fast, generic) <= 2.0 * host_bound);
+          } else {
+            if (coopmat) {
+              bool hit = false;
+              for (K kernel : f.prefill) {
+                hit = hit || dispatched(trace, kernel);
+              }
+              CHECK(hit);
+            }
+            const double host_bound =
+                (3.0 * k + 1.0) * magnitude * std::ldexp(1.0, -23) +
+                magnitude * std::ldexp(1.0, -(mantissa + 1));
+            INFO("host_diff=" << max_diff(fast, expected)
+                 << " bound=" << host_bound);
+            CHECK(max_diff(fast, expected) <= host_bound);
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST_CASE("qmm tile covers the large-prefill arithmetic path") {
   if (!compute_available() || !float16_available()) {
     return;
