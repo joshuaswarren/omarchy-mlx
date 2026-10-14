@@ -982,6 +982,11 @@ enum class ComputeKernel : uint16_t {
   // place (no per-call staging copy). Append-only profile id.
   GatherQmmSubDirectF16,
   GatherQmmSubDirectBF16,
+  // Multi-output forms of the direct decode kernel (4 and 8 outputs per workgroup).
+  GatherQmmSubDirectR4F16,
+  GatherQmmSubDirectR4BF16,
+  GatherQmmSubDirectR8F16,
+  GatherQmmSubDirectR8BF16,
   Count,
 };
 
