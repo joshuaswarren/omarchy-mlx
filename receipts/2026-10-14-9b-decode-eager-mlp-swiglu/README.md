@@ -68,6 +68,26 @@ A separate untimed ticket traced the combined arm P against arm O on the same ma
 - The 4-token digest is `4eca14f7f3a94967` in both arms. The 12-token digest is `c57d3ee2dfeb29e2` in both arms.
 - Both arms ran inside one ticket, so the boot change does not touch the comparison.
 
+## Bit check
+
+`scripts/check_eager_swiglu_bits.py` compares the eager product with the compiled swiglu on the device. It ran on boot `35eb9d8f` in a tree with the current-main wheel and the patched mlx-lm. The script sha256 is `ff859c10c8b5a376f7a77a4b1bc0eb64c3042b883da1cc98763d7b06670474b0`.
+
+- Elementwise: `swiglu(gate, up)` against `gate * sigmoid(gate) * up` on random bf16 data 12288 wide, compared as uint16 bits.
+- MLP: a Qwen3-Next MLP with real 4-bit group-64 projections, hidden 4096 and intermediate 12288. The compiled path is `down(swiglu(gate(x), up(x)))`. The patched `mlp(x)` is the candidate. Both paths share the same weights.
+- Each comparison uses 64 draws at batch 1 and at batch 3. It uses fresh standard normal draws, and fresh draws scaled by 8.
+- Result: 512 comparisons, 0 mismatching. Every line reports 0 mismatching draws.
+- Batch 1 is the decode shape where the gate/up fold applies. The fold needs a single row unless `MLX_OMARCHY_QMM_VEC_TOKEN_FOLD` is set (`fused_chain.cpp`), so batch 3 compares the eager ops without the fold.
+- A dispatch trace of one compiled-path MLP call and one eager-path call counted the whole process. Only kernel id 419, `SwigluBF16`, differs: 1 dispatch in the compiled trace and none in the eager trace. Every other id has the same count.
+
+## Provenance
+
+`scripts/mlx_provenance.py`, with the claimed wheel file, ran for each tree of the measured blocks on the same boot. It reported `verified: match` for every tree.
+
+- Current-main tree: the core extension sha256 is `7542a0bcff502c00f2c48a2395367e9d49e3405b13f59b17f54abb78b9a0444d` and `mlx/lib/libmlx.so` is `0e9696a9d08d79bad7fc63134a4915a39406e378a0e08cd4fc68b1e9c7a678e9`. Both equal the wheel RECORD.
+- The tree with only the Python change uses the same wheel and gives the same hashes.
+- Combined tree, the native GQA wheel: the core extension hash is the same and `mlx/lib/libmlx.so` is `a79fa5aa7b60918a8d1f95bd0938b043f74af382c13c700fda501cd43a7e13de`. Both equal the wheel RECORD.
+- The scripts of the measured blocks are in `receipts/2026-10-14-9b-decode-harness/`, which also has `provrec.py` and the literal ticket commands.
+
 ## Integrity
 
 The raw row logs, provenance files and checksums are kept with the lab notebook. The wheels are identified above by sha256.
