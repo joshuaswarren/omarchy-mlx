@@ -69,6 +69,62 @@ class ResidentWorkerError(RuntimeError):
 # forever either.
 _CLIENT_GRACE_MS = 5000
 
+# Host placement. On the M2 a worker that sleeps most of each step was
+# placed on an efficiency core: every call cost 0.72 ms more with the exec
+# time flat (omarchy-ane tools/pcore_mask.py, same rule). The performance
+# cores are the CPUs at the maximum cpu_capacity, read from sysfs; a chip
+# without capacity files, or with one capacity, is left alone.
+# OMARCHY_ANE_NO_PIN=1 turns the pin off. Arithmetic is unchanged.
+_SYSFS_CPU = Path("/sys/devices/system/cpu")
+_NO_PIN = "OMARCHY_ANE_NO_PIN"
+
+
+def _p_core_cpus(root: Path = _SYSFS_CPU) -> list[int] | None:
+    capacity: dict[int, int] = {}
+    for entry in Path(root).glob("cpu[0-9]*"):
+        try:
+            capacity[int(entry.name[3:])] = int((entry / "cpu_capacity").read_text())
+        except (OSError, ValueError):
+            return None
+    if not capacity:
+        return None
+    top = max(capacity.values())
+    cpus = sorted(cpu for cpu, value in capacity.items() if value == top)
+    return cpus if len(cpus) < len(capacity) else None
+
+
+def _pin_worker(pid: int, root: Path = _SYSFS_CPU) -> list[int] | None:
+    """Set every task of the worker to the performance cores it may use.
+    Returns that list, or None when nothing was set. Threads the worker
+    starts later inherit the mask."""
+    if os.environ.get(_NO_PIN) == "1":
+        return None
+    cpus = _p_core_cpus(root)
+    if not cpus:
+        return None
+    applied: list[int] | None = None
+    seen: set[int] = set()
+    # A thread created while the loop runs would inherit the old mask, so
+    # list again until no new task appears.
+    for _ in range(4):
+        try:
+            tasks = {int(name) for name in os.listdir(f"/proc/{pid}/task")} - seen
+        except OSError:
+            break
+        if not tasks:
+            break
+        seen |= tasks
+        for tid in tasks:
+            try:
+                allowed = set(os.sched_getaffinity(tid))
+                mask = set(cpus) & allowed
+                if mask and mask != allowed:
+                    os.sched_setaffinity(tid, mask)
+                    applied = sorted(mask)
+            except (ProcessLookupError, FileNotFoundError, PermissionError):
+                continue
+    return applied
+
 
 class ResidentAneWorker:
     """A resident worker session over a fixed set of named bundles.
@@ -176,6 +232,9 @@ class ResidentAneWorker:
         self.start_ns = 0
         self.close_ns = 0
         self.log: list[dict] = []
+        # CPUs the private worker was pinned to (None: not pinned, or the
+        # daemon path, where the daemon owns its own placement).
+        self.worker_pinned: list[int] | None = None
 
         # Transport: subprocess.Popen (private subprocess path) or a
         # connected unix socket (daemon attach). Exactly one is live at
@@ -279,6 +338,7 @@ class ResidentAneWorker:
             stderr=self._stderr,
         )
         self.worker_starts += 1
+        self.worker_pinned = _pin_worker(self._process.pid)
         # In relay-bypass mode the worker prints the same bundle reports
         # and a "relay-bypass ready ..." banner; the resident's "loaded"
         # line never reaches us (it's the worker's spawn success line,
