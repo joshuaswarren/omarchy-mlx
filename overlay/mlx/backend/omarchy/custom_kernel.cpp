@@ -3391,7 +3391,7 @@ array metadata_array(
   flags.row_contiguous = true;
   flags.col_contiguous = true;
   metadata.set_data(
-      omarchy::allocator().malloc(metadata.nbytes()),
+      mlx::core::allocator::malloc(metadata.nbytes()),
       metadata.size(),
       Strides{1},
       flags,
@@ -3459,7 +3459,7 @@ void CustomKernel::eval_gpu(
       temporaries.emplace_back(init_value_.value(), out.dtype());
       fill_gpu(temporaries.back(), out, s);
     } else {
-      out.set_data(omarchy::allocator().malloc(out.nbytes()));
+      out.set_data(mlx::core::allocator::malloc(out.nbytes()));
     }
   }
 

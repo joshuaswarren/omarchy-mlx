@@ -265,7 +265,7 @@ class MLX_API CommandEncoder {
     if (!data) {
       return;
     }
-    auto* buf = static_cast<VulkanBuffer*>(data->buffer.ptr());
+    auto* buf = static_cast<VulkanBuffer*>(data->buffer().ptr());
     if (!buf) {
       return;
     }

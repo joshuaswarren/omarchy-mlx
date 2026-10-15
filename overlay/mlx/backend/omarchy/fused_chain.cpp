@@ -539,11 +539,11 @@ void dispatch_chain(
     const Stream& stream,
     bool materialize_intermediates) {
   auto& encoder = get_command_encoder(stream);
-  out.set_data(allocator().malloc(out.nbytes()));
+  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
   if (materialize_intermediates) {
     for (size_t i = 0; i + 1 < chain.node_arrays.size(); ++i) {
       chain.node_arrays[i].set_data(
-          allocator().malloc(chain.node_arrays[i].nbytes()));
+          mlx::core::allocator::malloc(chain.node_arrays[i].nbytes()));
     }
   }
   const bool materialize_nodes =
@@ -614,8 +614,8 @@ void dispatch_chain(
   }
 
   const size_t program_bytes = chain.program.size() * sizeof(uint32_t);
-  Buffer program_buffer = allocator().malloc(program_bytes);
-  auto* program_vk = static_cast<VulkanBuffer*>(program_buffer.ptr());
+  allocator::Data program_buffer = mlx::core::allocator::malloc(program_bytes);
+  auto* program_vk = static_cast<VulkanBuffer*>(program_buffer.buffer().ptr());
   std::memcpy(program_vk->data, chain.program.data(), program_bytes);
   array program_keeper(
       Shape{static_cast<int>(chain.program.size())}, uint32, nullptr, {});
@@ -624,7 +624,7 @@ void dispatch_chain(
   keeper_flags.row_contiguous = true;
   keeper_flags.col_contiguous = true;
   program_keeper.set_data(
-      program_buffer,
+      std::move(program_buffer),
       program_keeper.size(),
       Strides{1},
       keeper_flags,
@@ -2088,7 +2088,7 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
           // Not provably exclusive: materialize a fresh cache copy and
           // let the window scatter target it (the merged pair dispatch
           // this replaces does exactly the same copy).
-          w.node.set_data(allocator().malloc(w.node.nbytes()));
+          w.node.set_data(mlx::core::allocator::malloc(w.node.nbytes()));
           copy_gpu(
               w.base,
               w.node,

@@ -31,7 +31,7 @@ void concatenate_gpu(
   std::partial_sum(sizes.cbegin(), sizes.cend(), sizes.begin());
 
   if (out.nbytes() > 0) {
-    out.set_data(omarchy::allocator().malloc(out.nbytes()));
+    out.set_data(mlx::core::allocator::malloc(out.nbytes()));
   }
 
   auto strides = out.strides();
@@ -77,7 +77,7 @@ array compute_dynamic_offset(
     offset += static_cast<int64_t>(words[i]) * strides[axes[i]];
   }
   array result({1}, int64, nullptr, {});
-  result.set_data(omarchy::allocator().malloc(result.nbytes()));
+  result.set_data(mlx::core::allocator::malloc(result.nbytes()));
   *static_cast<int64_t*>(result.buffer().raw_ptr()) = offset;
   return result;
 }

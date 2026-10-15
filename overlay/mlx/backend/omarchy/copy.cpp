@@ -144,7 +144,7 @@ array make_copy_axis_metadata(
   flags.row_contiguous = true;
   flags.col_contiguous = true;
   metadata.set_data(
-      omarchy::allocator().malloc(metadata.nbytes()),
+      mlx::core::allocator::malloc(metadata.nbytes()),
       metadata.size(),
       Strides{1},
       flags,
@@ -487,7 +487,7 @@ void copy_gpu_inplace(
         omarchy::unsupported("dtype converting copy", out);
       }
       array scalar({1}, in.dtype(), nullptr, {});
-      scalar.set_data(omarchy::allocator().malloc(scalar.nbytes()));
+      scalar.set_data(mlx::core::allocator::malloc(scalar.nbytes()));
       auto* scalar_buffer =
           static_cast<omarchy::VulkanBuffer*>(scalar.buffer().ptr());
       if (scalar_buffer->recycled) {
@@ -958,7 +958,7 @@ void copy_gpu(const array& input, array& out, CopyType ctype, const Stream& s) {
       !input.flags().row_contiguous;
   if (flat_only) {
     dense = array(input.shape(), input.dtype(), nullptr, {});
-    dense->set_data(omarchy::allocator().malloc(dense->nbytes()));
+    dense->set_data(mlx::core::allocator::malloc(dense->nbytes()));
     // Pin it: this local dies at return while both dispatches that touch
     // it are still queued. Unpinned, the allocator recycled its bytes into
     // the next token's RoPE offset scalar and the strided copy wrote an
@@ -993,7 +993,7 @@ void copy_gpu(const array& input, array& out, CopyType ctype, const Stream& s) {
   // scratch while the destination keeps its stale fill (2026-10-07 SDPA
   // VJP isolation, receipts/2026-10-07-sdpa-vjp-fused-off).
   if (out.data_shared_ptr() == nullptr) {
-    out.set_data(omarchy::allocator().malloc(out.nbytes()));
+    out.set_data(mlx::core::allocator::malloc(out.nbytes()));
   }
   copy_gpu_inplace(
       *in, out, in->shape(), in->strides(), out.strides(), 0, 0, ctype, s);
@@ -1018,7 +1018,7 @@ void reshape_gpu(const array& in, array& out, Stream s) {
   // strided-copy engine expresses both shapes for every supported
   // numeric storage width.
   if (out.nbytes() > 0) {
-    out.set_data(omarchy::allocator().malloc(out.nbytes()));
+    out.set_data(mlx::core::allocator::malloc(out.nbytes()));
   }
   copy_gpu_inplace(
       in,

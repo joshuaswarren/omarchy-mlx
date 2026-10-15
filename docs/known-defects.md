@@ -1029,16 +1029,18 @@ GPU streams only. A backtrace shim on `__cxa_throw` showed one throw, on the mai
 The earlier note here blamed the per-thread encoder table; that was wrong. No shipped path calls it on a CPU stream. Fix: `synchronize(stream)`,
 which works for any device. Verification of the fixed test is pending in PR #72.
 
-## omarchy_ane_runtime_tests does not link in the static test configure (2026-10-06, open)
+## omarchy_ane_runtime_tests does not link in the static test configure (2026-10-06, fixed 2026-10-15)
 
 `omarchy_ane_runtime_tests` fails at link: undefined
 `AneRuntime::load/~AneRuntime` — `ane/runtime.cpp` compiles into libmlx
 only when `MLX_OMARCHY_ANE_SOURCE_DIR` is set, which requires
 `BUILD_SHARED_LIBS=ON` (docs/ane-runtime.md); the default static test
 configure therefore cannot link the runtime test. Pre-existing
-(recorded in receipts/2026-10-06-gdn-recur32-default). Fix: build the
-test target only when the ANE runtime sources are in the lib, or link
-runtime.cpp into the test binary directly.
+(recorded in receipts/2026-10-06-gdn-recur32-default). Fixed: the test
+target is now defined under the same condition as the runtime sources
+(`MLX_OMARCHY_ANE_SOURCE_DIR`), so a static configure without the ANE
+runtime no longer declares a test that cannot link. With the option set
+the test is built and run as before.
 
 ## 2026-10-03: OpCost's in-shader Cody-Waite constants were wrong; the honest contract is accurate-to-5e5, NaN above (fixed this change)
 

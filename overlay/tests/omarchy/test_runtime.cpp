@@ -1058,12 +1058,11 @@ TEST_CASE(
       nullptr,
       {});
   src_view.set_data(
-      allocator::Buffer{src_buf},
+      allocator::Data(allocator::Buffer{src_buf}, [](allocator::Buffer) {}),
       src_view.size(),
       src_view.strides(),
       src_view.flags(),
-      0,
-      [](allocator::Buffer) {});
+      0);
   encoder.add_temporary(src_view);
   for (int i = 0; i < 16; ++i) {
     encoder.copy_buffer(src_buf->buffer, dst_buf->buffer, kBytes);
@@ -1156,12 +1155,11 @@ TEST_CASE(
       nullptr,
       {});
   src_view.set_data(
-      allocator::Buffer{src_buf},
+      allocator::Data(allocator::Buffer{src_buf}, [](allocator::Buffer) {}),
       src_view.size(),
       src_view.strides(),
       src_view.flags(),
-      0,
-      [](allocator::Buffer) {});
+      0);
   encoder.add_temporary(src_view);
   CHECK(src_buf->completion == omarchy::kPendingCompletion);
   encoder.copy_buffer(src_buf->buffer, dst_buf->buffer, kBytes);
@@ -1209,8 +1207,7 @@ TEST_CASE("re-recorded buffers stay quarantined until completion") {
   array src_view(
       Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
   src_view.set_data(
-      src, src_view.size(), src_view.strides(), src_view.flags(), 0,
-      [](allocator::Buffer) {});
+      allocator::Data(src, [](allocator::Buffer) {}), src_view.size(), src_view.strides(), src_view.flags(), 0);
   encoder.add_temporary(src_view);
   encoder.fill_buffer(src_buf->buffer, kPattern, kBytes);
   encoder.copy_buffer(src_buf->buffer, dst_buf->buffer, kBytes);
@@ -1310,12 +1307,11 @@ TEST_CASE("the OOM retry releases the newest quarantined generation") {
       nullptr,
       {});
   victim_view.set_data(
-      victim,
+      allocator::Data(victim, [](allocator::Buffer) {}),
       victim_view.size(),
       victim_view.strides(),
       victim_view.flags(),
-      0,
-      [](allocator::Buffer) {});
+      0);
   encoder.add_temporary(victim_view);
   encoder.copy_buffer(victim_buf->buffer, scratch_buf->buffer, kBytes);
   encoder.commit();
@@ -1365,12 +1361,11 @@ TEST_CASE("the OOM retry settles on progress, not global idleness") {
       nullptr,
       {});
   victim_view.set_data(
-      victim,
+      allocator::Data(victim, [](allocator::Buffer) {}),
       victim_view.size(),
       victim_view.strides(),
       victim_view.flags(),
-      0,
-      [](allocator::Buffer) {});
+      0);
   encoder.add_temporary(victim_view);
   encoder.copy_buffer(victim_buf->buffer, scratch_buf->buffer, kBytes);
   encoder.commit();
@@ -2869,8 +2864,7 @@ TEST_CASE("recycled block is not rewritten by the previous owner in flight") {
   array a_view(
       Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
   a_view.set_data(
-      a, a_view.size(), a_view.strides(), a_view.flags(), 0,
-      [](allocator::Buffer) {});
+      allocator::Data(a, [](allocator::Buffer) {}), a_view.size(), a_view.strides(), a_view.flags(), 0);
   for (int i = 0; i < 96; ++i) {
     e1.fill_buffer(a_buf->buffer, kP1, kBytes);
   }
@@ -2882,8 +2876,7 @@ TEST_CASE("recycled block is not rewritten by the previous owner in flight") {
   array b_view(
       Shape{static_cast<int>(kBytes / sizeof(float))}, float32, nullptr, {});
   b_view.set_data(
-      b, b_view.size(), b_view.strides(), b_view.flags(), 0,
-      [](allocator::Buffer) {});
+      allocator::Data(b, [](allocator::Buffer) {}), b_view.size(), b_view.strides(), b_view.flags(), 0);
   e2.fill_buffer(b_buf->buffer, kP2, kBytes);
   e2.commit();
   e2.synchronize();
