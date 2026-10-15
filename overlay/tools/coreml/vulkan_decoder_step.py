@@ -43,6 +43,7 @@ from __future__ import annotations
 
 from functools import cache
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -370,15 +371,31 @@ def _joint_window_kernel():
     )
 
 
-def pack_step_weights(decoder, joint_package: Path) -> StepWeights:
-    """Pack the pinned decoder/joint constants into kernel-order buffers."""
-    mx = _mx()
-    weights = decoder._weights
+class StepPacking(NamedTuple):
+    """CPU-side half of `pack_step_weights`: kernel-order numpy buffers."""
+
+    embedding: np.ndarray
+    weights: np.ndarray
+    biases: np.ndarray
+    luts: np.ndarray
+    projector: np.ndarray
+    joint: np.ndarray
+
+
+def prepare_step_weights(parts, joint_package: Path) -> StepPacking:
+    """Pack the pinned decoder/joint constants into kernel-order buffers.
+
+    CPU-only (numpy tables, LUT archive, joint package parse); performs no
+    GPU call; safe to run on a worker thread. `parts` is the
+    `vulkan_decoder.DecoderParts` prepared by `prepare_decoder`."""
+    from .vulkan_decoder import _Weights, _fused_luts
+
+    values = _Weights(*parts.values)
     layer_mats = []
     biases = []
     for wih, whh, bias in (
-        (weights.layer_0_ih, weights.layer_0_hh, weights.layer_0_bias),
-        (weights.layer_1_ih, weights.layer_1_hh, weights.layer_1_bias),
+        (values.layer_0_ih, values.layer_0_hh, values.layer_0_bias),
+        (values.layer_1_ih, values.layer_1_hh, values.layer_1_bias),
     ):
         cat = np.concatenate(
             [np.asarray(wih, dtype=np.float16), np.asarray(whh, dtype=np.float16)],
@@ -386,15 +403,13 @@ def pack_step_weights(decoder, joint_package: Path) -> StepWeights:
         )
         layer_mats.append(np.ascontiguousarray(cat.T, dtype=np.float16))
         biases.append(np.asarray(bias, dtype=np.float16).ravel())
-    from .vulkan_decoder import _fused_luts
-
     sigma, tanh = _fused_luts()
     luts = np.concatenate([sigma.ravel(), tanh.ravel()]).astype(np.float16)
-    projector = np.asarray(weights.projector, dtype=np.float16)
+    projector = np.asarray(values.projector, dtype=np.float16)
     proj_pack = np.concatenate(
         [
             np.ascontiguousarray(projector.T, dtype=np.float16).ravel(),
-            np.asarray(weights.projector_bias, dtype=np.float16).ravel(),
+            np.asarray(values.projector_bias, dtype=np.float16).ravel(),
         ]
     )
     joint_component = load_pinned_component(Path(joint_package), "joint")
@@ -407,14 +422,27 @@ def pack_step_weights(decoder, joint_package: Path) -> StepWeights:
     joint_pack = np.concatenate(
         [np.ascontiguousarray(jw.T, dtype=np.float16).ravel(), jb]
     )
+    return StepPacking(
+        embedding=np.ascontiguousarray(values.embedding),
+        weights=np.ascontiguousarray(np.concatenate(layer_mats)),
+        biases=np.ascontiguousarray(np.concatenate(biases)),
+        luts=np.ascontiguousarray(luts),
+        projector=np.ascontiguousarray(proj_pack),
+        joint=np.ascontiguousarray(joint_pack),
+    )
+
+
+def finish_step_weights(packing: StepPacking) -> StepWeights:
+    """GPU half of the old pack: upload the buffers (main thread only)."""
+    mx = _mx()
     with mx.stream(mx.gpu):
         packed = StepWeights(
-            embedding=mx.array(np.ascontiguousarray(weights.embedding)),
-            weights=mx.array(np.ascontiguousarray(np.concatenate(layer_mats))),
-            biases=mx.array(np.ascontiguousarray(np.concatenate(biases))),
-            luts=mx.array(np.ascontiguousarray(luts)),
-            projector=mx.array(np.ascontiguousarray(proj_pack)),
-            joint=mx.array(np.ascontiguousarray(joint_pack)),
+            embedding=mx.array(packing.embedding),
+            weights=mx.array(packing.weights),
+            biases=mx.array(packing.biases),
+            luts=mx.array(packing.luts),
+            projector=mx.array(packing.projector),
+            joint=mx.array(packing.joint),
         )
     mx.eval(
         packed.embedding,

@@ -371,7 +371,7 @@ def compare_vulkan_capture(
 
     import mlx.core as mx
 
-    from .vulkan_decoder import load_decoder
+    from .vulkan_decoder import finish_decoder, prepare_decoder
     from .vulkan_joint import run_joint as run_vulkan_joint
     from .vulkan_mel import trace_snapshot
 
@@ -415,7 +415,7 @@ def compare_vulkan_capture(
         hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
         cell = mx.zeros((2, 1, 640), dtype=mx.float32)
     mx.eval(encoder, hidden, cell)
-    decoder = load_decoder(model_dir / "decoder.mlpackage")
+    decoder = finish_decoder(prepare_decoder(model_dir / "decoder.mlpackage"))
     decoder_calls = 0
     joint_calls = 0
 

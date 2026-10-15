@@ -442,16 +442,20 @@ def _check_ane_capability() -> None:
 
 
 class _GpuWarm:
-    """GPU pre-warm during the CPU decoder load (default on; MLX_OMARCHY_PK_PREWARM=off disables).
+    """GPU pre-warm across the overlapped decoder-load window (default on; MLX_OMARCHY_PK_PREWARM=off disables).
 
     The first GPU work after >= ~50 ms of GPU idle costs about +10 ms on the M1
     (the fast state decays over 10-50 ms; 13-inch M1 H27-H30/H56/H57), and the mel
-    stage is the first real GPU work after the CPU-only decoder load. While
-    that stage runs, a background thread streams 1024x1024 f32 matmuls (results
-    discarded, no pipeline data touched) and is joined right before mel, so mel
-    starts in the fast state (mel 29 -> 19.5 ms on a 13-inch M1). The thread stops
-    exactly when the CPU stage ends, so it never delays a stage by more than
-    one matmul (~5 ms). GPU energy for ~45 ms per transcription is not measured.
+    stage is the first real GPU work after the decoder load. While the CPU
+    decoder/joint preparation runs on its worker thread (and island_open on the
+    main thread), this thread streams 1024x1024 f32 matmuls (results discarded,
+    no pipeline data touched) and is joined right after the main thread's
+    decoder/joint uploads, so mel starts in the fast state (mel 29 -> 19.5 ms on
+    a 13-inch M1). The overlap does not replace it: the join and island open can
+    both idle the GPU, and the uploads alone do not bridge that gap. The thread
+    stops exactly when the CPU-bound window ends, so it never delays a stage by
+    more than one matmul (~5 ms). GPU energy for ~45 ms per transcription is not
+    measured.
     """
 
     def __init__(self, mx):
@@ -671,18 +675,21 @@ def _stage_recorder() -> tuple:
     """Named wall-clock/GPU-counter stage wrapper plus its record list."""
     stages_records: list[dict] = []
 
-    def stage(name: str, snapshot, work):
+    def stage(name: str, snapshot, work, extra=None):
         before = snapshot()
         started = time.monotonic_ns()
         result = work()
         elapsed = time.monotonic_ns() - started
         after = snapshot()
-        stages_records.append({
+        record = {
             "stage": name,
             "wall_ns": elapsed,
             "wall_ms": round(elapsed / 1e6, 3),
             "gpu_counter_delta": {k: after[k] - before[k] for k in after},
-        })
+        }
+        if extra is not None:
+            record.update(extra())
+        stages_records.append(record)
         return result
 
     return stage, stages_records
@@ -731,6 +738,52 @@ def _load_audio(lock, fixture) -> tuple:
         mx.eval(waveform)
         return waveform, pcm.size, decoder_name
     return stage_audio()
+
+
+def _start_decoder_load(cache_dir: Path) -> tuple:
+    """Start the CPU-only decoder/joint preparation on one worker thread.
+
+    Started right after audio_load so the package parse, graph validation
+    and numpy packing overlap island_open. The thread performs no GPU
+    call; every mx upload happens on the main thread in
+    `_join_decoder_load` after the join. An exception in the preparation
+    is stored and re-raised on the main thread at the join."""
+    from coreml.vulkan_decoder import prepare_decoder
+    from coreml.vulkan_decoder_step import prepare_step_weights
+
+    import threading
+
+    state: dict = {}
+
+    def _work():
+        try:
+            parts = prepare_decoder(cache_dir / "decoder.mlpackage")
+            state["parts"] = parts
+            state["packing"] = prepare_step_weights(
+                parts, cache_dir / "joint.mlpackage")
+        except BaseException as error:
+            state["error"] = error
+
+    thread = threading.Thread(target=_work, name="decoder-load", daemon=True)
+    state["started_ns"] = time.monotonic_ns()
+    thread.start()
+    return thread, state
+
+
+def _join_decoder_load(thread, state: dict):
+    """Main thread: join the CPU preparation, then submit the GPU uploads.
+
+    The decoder_load stage wraps this call, so its gpu_counter_delta keeps
+    covering exactly the GPU work of the load (the background thread adds
+    none). Reports the overlapped CPU wall as `cpu_thread_wall_ms`."""
+    from coreml.vulkan_decoder import finish_decoder
+
+    thread.join()
+    state["cpu_thread_wall_ns"] = (
+        time.monotonic_ns() - state["started_ns"])
+    if "error" in state:
+        raise state["error"]
+    return finish_decoder(state["parts"])
 
 
 def _plan_chunks(sample_count: int) -> tuple[list[int], bool]:
@@ -1351,8 +1404,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     (passed, token_ids, transcript).
     """
     import mlx.core as mx
-    from coreml.vulkan_decoder import load_decoder
-    from coreml.vulkan_decoder_step import pack_step_weights
+    from coreml.vulkan_decoder_step import finish_step_weights
     from coreml.vulkan_mel import trace_snapshot
 
     mx.set_default_device(mx.gpu)
@@ -1379,6 +1431,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         _record_lifetime_stage(stages_records, "startup_to_main", trace_snapshot)
     waveform, sample_count, decoder_name = stage(
         "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
+    decoder_thread, decoder_state = _start_decoder_load(cache_dir)
     warm = _GpuWarm(mx)
     warm.start()
 
@@ -1386,21 +1439,30 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     chunk_starts, single = _plan_chunks(sample_count)
 
     # ----------------------------------------------------------- 3. encoder
-    if _pk_timing_extra_on():
-        island, source, runner = stage(
-            "island_open", trace_snapshot,
-            lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
-                                   scratch_root))
-    else:
-        island, source, runner = _open_encoder(
-            args, pin, lock, cache_dir, worker, share, scratch_root)
+    try:
+        if _pk_timing_extra_on():
+            island, source, runner = stage(
+                "island_open", trace_snapshot,
+                lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
+                                       scratch_root))
+        else:
+            island, source, runner = _open_encoder(
+                args, pin, lock, cache_dir, worker, share, scratch_root)
 
-    # ------------------------------------------- 4. decoder, joint, control
-    decoder = stage(
-        "decoder_load", trace_snapshot,
-        lambda: load_decoder(cache_dir / "decoder.mlpackage"),
-    )
-    fused_packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
+        # ------------------------------- 4. decoder, joint, control
+        # The CPU preparation ran on decoder_thread since audio_load; the
+        # stage records the main-thread join plus the GPU uploads only.
+        decoder = stage(
+            "decoder_load", trace_snapshot,
+            lambda: _join_decoder_load(decoder_thread, decoder_state),
+            extra=lambda: {"cpu_thread_wall_ms": round(
+                decoder_state["cpu_thread_wall_ns"] / 1e6, 3)},
+        )
+        fused_packed = finish_step_weights(decoder_state["packing"])
+    finally:
+        # No worker thread outlives a failed pipeline, whatever failed.
+        if decoder_thread.is_alive():
+            decoder_thread.join()
     warm.stop()
     control = _TdtControl(fused_packed, scratch_root)
 

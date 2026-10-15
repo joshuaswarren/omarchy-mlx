@@ -355,8 +355,12 @@ class DictationTranscriber:
         ))
         from coreml.parakeet_tdt import DecoderStep, JointDecision, tdt_decode
         from coreml.tokenizer import ParakeetTokenizer
-        from coreml.vulkan_decoder import load_decoder
-        from coreml.vulkan_decoder_step import pack_step_weights, run_step
+        from coreml.vulkan_decoder import finish_decoder, prepare_decoder
+        from coreml.vulkan_decoder_step import (
+            finish_step_weights,
+            prepare_step_weights,
+            run_step,
+        )
         from coreml.vulkan_encoder import AneIsland, EncoderRunner
         from coreml.vulkan_mel import extract_chunk_features
 
@@ -368,8 +372,13 @@ class DictationTranscriber:
         self._runner = EncoderRunner(
             source / "model.mil", source / "model-root", island,
         )
-        decoder = load_decoder(cache_dir / "decoder.mlpackage")
-        self._packed = pack_step_weights(decoder, cache_dir / "joint.mlpackage")
+        # Serial on purpose: the dictation worker loads once per process,
+        # so the transcribe CLI's overlap-with-audio_load lever has no
+        # window to pay off here.
+        parts = prepare_decoder(cache_dir / "decoder.mlpackage")
+        finish_decoder(parts)
+        self._packed = finish_step_weights(
+            prepare_step_weights(parts, cache_dir / "joint.mlpackage"))
         tokenizer_sha = next(
             item.sha256 for item in lock.files
             if item.path == "tokenizer.json"

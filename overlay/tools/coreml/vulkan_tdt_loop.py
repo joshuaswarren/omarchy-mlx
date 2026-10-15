@@ -454,7 +454,7 @@ def run_tdt_loop(
 ) -> TdtLoopOutput:
     """Run the greedy TDT decode in one kernel dispatch.
 
-    ``packed`` is the step2 ``StepWeights`` (``pack_step_weights``),
+    ``packed`` is the step2 ``StepWeights`` (``finish_step_weights``),
     ``encoder`` the fp32 encoder output (1, F, 640) and ``config`` the
     ``reference.TdtConfig`` from the reference lock.  Emissions and the
     recurrent state are read back once; no per-emission host sync exists.

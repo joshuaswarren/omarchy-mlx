@@ -17,8 +17,9 @@ sys.path.insert(0, str(TOOLS / "coreml"))
 from coreml.pinned_component import load_pinned_component
 from coreml.reference import ReferenceLock, default_cache_root
 from coreml.vulkan_decoder import (
+    finish_decoder,
     fused_lstm_numpy,
-    load_decoder,
+    prepare_decoder,
 )
 from coreml.vulkan_mel import trace_snapshot
 
@@ -99,7 +100,7 @@ def _assert_close(actual, expected):
 )
 def test_decoder_rejects_invalid_input_contract(which, value, message):
     _require_package()
-    decoder = load_decoder(PACKAGE)
+    decoder = finish_decoder(prepare_decoder(PACKAGE))
     inputs = {
         "input_ids": mx.zeros((1, 1), dtype=mx.int32),
         "hidden": mx.zeros((2, 1, 640), dtype=mx.float32),
@@ -126,7 +127,7 @@ def test_decoder_matches_official_mil_lstm_semantics_across_state_transitions():
         "projector_bias_to_fp16",
     )
     constants = {name: component.constant(name) for name in names}
-    decoder = load_decoder(PACKAGE)
+    decoder = finish_decoder(prepare_decoder(PACKAGE))
     rng = np.random.default_rng(1847)
     cases = [
         (
@@ -175,7 +176,7 @@ def test_decoder_matches_official_mil_lstm_semantics_across_state_transitions():
 
 def test_decoder_preserves_mil_negative_embedding_index_semantics():
     _require_package()
-    decoder = load_decoder(PACKAGE)
+    decoder = finish_decoder(prepare_decoder(PACKAGE))
     hidden = mx.zeros((2, 1, 640), dtype=mx.float32)
     cell = mx.zeros((2, 1, 640), dtype=mx.float32)
 

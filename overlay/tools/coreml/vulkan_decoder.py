@@ -244,12 +244,62 @@ def _constant(component: PinnedComponent, name: str) -> np.ndarray:
     return value
 
 
-def _load_weights(component: PinnedComponent, mx) -> _Weights:
-    values = [_constant(component, name) for name in _CONSTANT_SPECS]
+def _build_layers(weights: _Weights) -> tuple:
+    """Numpy LSTM tables for the measured BNNS contract (no GPU call)."""
+    return tuple(
+        (
+            np.ascontiguousarray(
+                np.concatenate(
+                    [
+                        np.asarray(wih, dtype=_F16),
+                        np.asarray(whh, dtype=_F16),
+                    ],
+                    axis=1,
+                ).T,
+                dtype=np.float64,
+            ),
+            np.asarray(bias, dtype=_F16).ravel().copy(),
+        )
+        for wih, whh, bias in (
+            (
+                weights.layer_0_ih,
+                weights.layer_0_hh,
+                weights.layer_0_bias,
+            ),
+            (
+                weights.layer_1_ih,
+                weights.layer_1_hh,
+                weights.layer_1_bias,
+            ),
+        )
+    )
+
+
+class DecoderParts(NamedTuple):
+    """CPU-side half of the decoder load: numpy constants and LSTM tables."""
+
+    values: tuple
+    layers: tuple
+
+
+def prepare_decoder(package_path: Path) -> DecoderParts:
+    """CPU-only half of the decoder load: hash-validate, parse, pack tables.
+
+    Performs no GPU call; safe to run on a worker thread (the transcribe
+    CLI overlaps this with island open)."""
+    component = load_pinned_component(package_path, "decoder")
+    _validate_graph(component)
+    values = tuple(_constant(component, name) for name in _CONSTANT_SPECS)
+    return DecoderParts(values, _build_layers(_Weights(*values)))
+
+
+def finish_decoder(parts: DecoderParts) -> "VulkanDecoder":
+    """GPU half of the old load: upload the constants (main thread only)."""
+    mx = _mlx()
     with mx.stream(mx.gpu):
-        arrays = [mx.array(value) for value in values]
+        arrays = [mx.array(value) for value in parts.values]
     mx.eval(*arrays)
-    return _Weights(*arrays)
+    return VulkanDecoder(_Weights(*arrays), parts.layers)
 
 
 def _validate_array(name, value, shape, dtype, mx) -> None:
@@ -266,36 +316,9 @@ class VulkanDecoder:
 
     __slots__ = ("_weights", "_layers")
 
-    def __init__(self, component: PinnedComponent):
-        _validate_graph(component)
-        self._weights = _load_weights(component, _mlx())
-        self._layers = tuple(
-            (
-                np.ascontiguousarray(
-                    np.concatenate(
-                        [
-                            np.asarray(wih, dtype=_F16),
-                            np.asarray(whh, dtype=_F16),
-                        ],
-                        axis=1,
-                    ).T,
-                    dtype=np.float64,
-                ),
-                np.asarray(bias, dtype=_F16).ravel().copy(),
-            )
-            for wih, whh, bias in (
-                (
-                    self._weights.layer_0_ih,
-                    self._weights.layer_0_hh,
-                    self._weights.layer_0_bias,
-                ),
-                (
-                    self._weights.layer_1_ih,
-                    self._weights.layer_1_hh,
-                    self._weights.layer_1_bias,
-                ),
-            )
-        )
+    def __init__(self, weights: _Weights, layers: tuple):
+        self._weights = weights
+        self._layers = layers
 
     def __call__(self, input_ids, hidden, cell) -> DecoderResult:
         mx = _mlx()
@@ -339,11 +362,6 @@ class VulkanDecoder:
         return DecoderResult(decoder_hidden, next_hidden, next_cell)
 
 
-def load_decoder(package_path: Path) -> VulkanDecoder:
-    """Hash-validate and load the exact pinned ``decoder.mlpackage``."""
-    return VulkanDecoder(load_pinned_component(package_path, "decoder"))
-
-
 def _tensor_summary(value) -> dict:
     materialized = np.asarray(value)
     return {
@@ -357,7 +375,7 @@ def _tensor_summary(value) -> dict:
 def smoke(package_path: Path) -> dict:
     """Run two dependent decoder transitions and return a machine-readable receipt."""
     mx = _mlx()
-    decoder = load_decoder(package_path)
+    decoder = finish_decoder(prepare_decoder(package_path))
     with mx.stream(mx.gpu):
         hidden = mx.zeros(_STATE_SHAPE, dtype=mx.float32)
         cell = mx.zeros(_STATE_SHAPE, dtype=mx.float32)

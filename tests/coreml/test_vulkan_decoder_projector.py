@@ -29,7 +29,8 @@ from coreml.vulkan_decoder import (
     _HIDDEN_SIZE,
     _PROJECTOR_GROUP,
     _project,
-    load_decoder,
+    finish_decoder,
+    prepare_decoder,
 )
 
 LOCK = ReferenceLock.load(TOOLS / "coreml" / "parakeet-reference.lock")
@@ -95,7 +96,7 @@ class _Codes:
 def test_projector_is_bit_exact_with_native_on_every_transition():
     """The shipped kernel, driven by the decoder's own loaded weights."""
     rows = _require_transitions()
-    weights = load_decoder(PACKAGE)._weights
+    weights = finish_decoder(prepare_decoder(PACKAGE))._weights
 
     for index, hidden, native in rows:
         projected = _project(hidden, weights, mx)
