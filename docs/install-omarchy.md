@@ -214,17 +214,27 @@ not re-measured here").
 ## Build the wheel
 
 1. Install the build tools: Python 3.10 or newer with `venv`, `cmake` 3.25
-   or newer, Vulkan development headers, a C++ compiler, and the
+   or newer, the Vulkan development headers, a C++ compiler, and the
    BLAS/LAPACK development packages the CPU backend links (`liblapack-dev libblas-dev
    liblapacke-dev` on Debian-family distributions).
+   The Vulkan headers are `libvulkan-dev` on Debian-family distributions and
+   `vulkan-headers` on Arch/Omarchy. Without them CMake stops with
+   `Could NOT find Vulkan (missing: Vulkan_INCLUDE_DIR)`.
    On Arch/Omarchy, install `blas-openblas` and set
    `CMAKE_INCLUDE_PATH=/usr/include/openblas` for the build. Both BLAS and
    LAPACK headers live in that package-owned directory. No source or linker
    flag changes are needed. `build-wheel.sh` checks for `lapacke.h` first.
    It uses `/usr/include/openblas/lapacke.h` when no other copy exists. It
    stops with the package to install when there is none.
-2. Run `./scripts/build-wheel.sh`
-3. Read the wheel path, size, and sha256 from the receipt lines.
+2. Point `MLX_OMARCHY_WHOLE_BUNDLE_DIR` at the whole-encoder bundle. The
+   runtime pin declares this bundle, so `build-wheel.sh` refuses to run
+   without it. The directory must hold `manifest.json` and `program-0.anec`.
+   The script checks both sha256 values against the pin and stops on a
+   mismatch. There is no opt-out. A release wheel installs a copy at
+   `site-packages/mlx/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole`.
+   Use that copy when its bytes match the pin of the tree you build.
+3. Run `MLX_OMARCHY_WHOLE_BUNDLE_DIR=/path/to/bundle ./scripts/build-wheel.sh`
+4. Read the wheel path, size, and sha256 from the receipt lines.
 
 The script prepares the pinned upstream tree. It builds with
 `MLX_BUILD_OMARCHY=ON`, the CPU backend on, and the Metal and CUDA backends
