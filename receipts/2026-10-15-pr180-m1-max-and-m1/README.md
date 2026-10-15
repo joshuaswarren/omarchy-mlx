@@ -21,7 +21,7 @@ The P library files match their wheel RECORD on both chips (`prov-26b-m1-max.jso
 
 Both arms set `MLX_OMARCHY_QUEUE_PRIORITY=low`. This receipt lists no other variable and does not claim that the variable has no effect.
 
-Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 prefill samples of 512 tokens. The prompt corpus has sha256 `9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0`. The ANE filler was on. The load average at the end of each row was 1.14 to 1.56 for the 26B pair and 1.21 to 1.62 for the 35B pair on the 16-inch M1 Max. It was 1.20 to 1.43 on the 13-inch M1.
+Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 prefill samples of 512 tokens. The prompt corpus has sha256 `9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0`. The ANE background load was running, with the ANE lock held during each run. The load average at the end of each row was 1.14 to 1.56 for the 26B pair and 1.21 to 1.62 for the 35B pair on the 16-inch M1 Max. It was 1.20 to 1.43 on the 13-inch M1.
 
 ## Device, kernel and driver
 
@@ -34,7 +34,7 @@ Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 
 | Driver library | sha256 prefix `40282811c6e1` | the same prefix |
 | GPU kernel driver | version 0.2.0, RTKit protocol 12 | the same |
 | Governor | `performance` | `performance` |
-| ANE | filler on, busy 99.3 to 100 percent in each row | filler on; the busy percentage is not in the row files |
+| ANE | background load running, ANE lock held during each run; the busy sampler output is not copied here | background load running, ANE lock held during each run |
 
 ## Models
 
