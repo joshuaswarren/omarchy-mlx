@@ -1,0 +1,5 @@
+gemma4-26b-a4b-1422: rows O=4 P=4 decode samples {'O': 40, 'P': 40}
+  decode O 17.6435 P 22.7190 P/O 1.287670  pairs [1.29372, 1.28326, 1.28857, 1.28656]
+  prefill O 177.0235 P 177.0315 P/O 1.000045
+  row medians O [17.602, 17.662, 17.625, 17.665] P [22.772, 22.665, 22.711, 22.727]
+  digests: 1 distinct, ['276e9fba48abdee3']

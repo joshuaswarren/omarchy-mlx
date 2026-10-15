@@ -138,16 +138,16 @@ See [docs/USAGE.md](docs/USAGE.md).
 
 ## How close to macOS
 
-Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Where macOS is shown, the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
+Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The gemma-4-26B-A4B row was measured again on 2026-10-15 after PR 180, with the same mlx-lm. The Linux column runs the mlx-lm patches the installer applies. Where macOS is shown, the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
 
-Decode is the median of 10 greedy generations and prefill is the median of 5 runs, except two Linux cells: gemma-4-E4B is the mean of three runs and Qwen3.6-35B-A3B the mean of two. Those two sets of runs started with a load average above 0.5, so the numbers may be low. The Qwen3.5-9B macOS cells are earlier sealed runs.
+Decode is the median of 10 greedy generations and prefill is the median of 5 runs, except two Linux cells: gemma-4-E4B is the mean of three runs and Qwen3.6-35B-A3B the mean of two. Those two sets of runs started with a load average above 0.5, so the numbers may be low. The gemma-4-26B-A4B row is the median of four such row medians from one paired run. The Qwen3.5-9B macOS cells are earlier sealed runs.
 
 MLX 4-bit through the installer's mlx-lm patches, tokens per second. A cell shows Linux, or Linux / macOS and the percentage where macOS is shown:
 
 | Model | Decode | Prefill 512 |
 |---|---|---|
 | Qwen3.8-27B (dense 27B) | 13.5 | 87.4 |
-| gemma-4-26B-A4B (MoE, 4B active) | 12.61 | 116.50 |
+| gemma-4-26B-A4B (MoE, 4B active) | 22.72 | 177.03 |
 | gemma-4-31B (dense 31B) | 7.3 | 62.4 |
 | Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = 62% | 299.4 / 339.0 = 88% |
 | Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 | 116.37 |
@@ -156,9 +156,22 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second. A cell show
 
 macOS shares are printed only where both sides produce identical tokens.
 
-Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
+Driver build: the gemma-4-26B-A4B row ran on the PR 180 head `e625c4e6`, whose tree equals main `b0799ab8`, with the package Honeykrisp driver at Mesa git `69bde15340`. The Qwen3.6-35B-A3B and gemma-4-E4B rows ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Differences from macOS and models that did not run are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 Decode on the 13-inch M1 changed with the CPU governor with no ANE work running. See [Set the CPU governor for local AI](docs/BENCHMARKS.md#set-the-cpu-governor-for-local-ai).
+
+### Decode gain from PR 180
+
+PR 180 runs several outputs per workgroup in the mixture-of-experts decode kernel. Each row below is one paired run. The before arm is main with PR 179 merged. The after arm is the PR 180 head, whose tree equals main `b0799ab8`. Both arms ran four rounds, interleaved, on one boot. Every row has the same output digest in both arms. Figures are tokens per second, the median of four row medians. Prefill did not change on any row. The chips are separate results and are not averaged.
+
+| Chip | Model | Decode before | Decode after | Change | Prefill 512 before / after | Driver |
+|---|---|---|---|---|---|---|
+| 16-inch M1 Max | gemma-4-26B-A4B | 17.64 | 22.72 | +28.8% | 177.02 / 177.03 | Mesa git `69bde15340` |
+| 14-inch M2 Max | gemma-4-26B-A4B | 20.39 | 24.58 | +20.5% | 229.74 / 229.79 | Mesa git `69bde15340` |
+| 14-inch M2 Max | Qwen3.6-35B-A3B | 25.07 | 28.66 | +14.4% | 230.91 / 231.14 | Mesa git `69bde15340` |
+| 13-inch M1 | DeepSeek-Coder-V2-Lite-Instruct (MoE) | 5.75 | 8.64 | +50.3% | 59.46 / 59.47 | package build git `69bde15340` |
+
+Qwen3.5-9B does not use this kernel. It did not change on the 14-inch M2 Max (40.54 before, 40.56 after). The 35B has no pair on the 16-inch M1 Max. The sources are the [14-inch M2 Max receipt](receipts/2026-10-14-gather-qmm-rows-pr180/README.md) and the [16-inch M1 Max and 13-inch M1 receipt](receipts/2026-10-15-pr180-m1-max-and-m1/README.md).
 
 ## Qwen3.5-9B fused GDN decode
 
