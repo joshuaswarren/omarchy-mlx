@@ -17,6 +17,7 @@ linked or vendored.
 | GNUstep (libobjc2, gnustep-base, gnustep-make) | MIT-family | built by the pinned compiler's `scripts/bootstrap-linux-toolchain.sh` | used only to build mil-hwx-compiler; never shipped inside mlx-omarchy |
 | protobuf | BSD-3-Clause | system package | the vendored Core ML schema bindings are generated from Apple's proto sources |
 | Python (tooling) | PSF-2.0 | system | host-only front-end tools |
+| mlx-lm Muse Spark text model (closed PR 1975, `117b84cae44a`) | MIT (Apple Inc.) | vendored unchanged: `serve/mlx_omarchy_muse/muse_spark.py` | licence text in `LICENSES/mlx-lm.txt`; repository checkout only |
 
 ## Project-owned external repositories (consumed, not vendored)
 
