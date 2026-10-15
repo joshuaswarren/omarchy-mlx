@@ -252,6 +252,11 @@ DEV_RELEASE=1 ./scripts/build-wheel.sh
 ./scripts/build-wheel.sh --diagnostics
 ```
 
+Both builds refuse to run unless `MLX_OMARCHY_WHOLE_BUNDLE_DIR` points at the
+pinned whole-encoder bundle (`manifest.json` and `program-0.anec`). Set it in
+front of either command. The "Build the wheel" section of
+`docs/install-omarchy.md` says where to find the bundle.
+
 The release wheel stamps its source commit into the version's local segment
 (`0.32.2.dev<timestamp>+<short7>`). The diagnostics wheel stages
 `+diag.<short7>`. Verify both.
