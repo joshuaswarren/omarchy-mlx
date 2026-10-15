@@ -6,19 +6,26 @@ The transcribe CLI runs the decoder/joint load (CPU preparation AND GPU
 uploads) on one worker thread started right before chunk 0's encoder
 stage, on the MAIN thread's stream object (default streams are
 thread-local); the main thread joins, synchronizes that stream and builds
-the TDT control inside the `decoder_load` stage. These checks hold the
+the TDT control inside the `decoder_load` stage. The GPU-warm thread
+starts BEFORE the audio_load stage and is stopped, on every exit path, in
+a finally that spans audio_load and island_open. These checks hold the
 CLI to that contract with fake prepare/finish functions and a fake
 `mlx.core`, so a regression (uploads leaving the adopted stream, a
 swallowed thread exception, a renamed or reshaped stage record, the join
-escaping its position) fails on any host before it can reach hardware.
+escaping its position, a warm thread leaking past the chunk-loop
+boundary) fails on any host before it can reach hardware.
 
 Fake limits (untested here, by design): the fake cannot demonstrate real
 scheduler ordering (one worker per stream), the device queue mutex, or
 the StreamContext spare-stream creation in a fresh thread — those rest on
 the cited MLX source lines in B2-source-proposal.md (mlx/stream.cpp,
-scheduler.cpp, omarchy/encoder.cpp), not on this fake.
+scheduler.cpp, omarchy/encoder.cpp), not on this fake. The warm-position
+check is an AST order check, not a behavioural run: a full _run_pipeline
+run without mlx would need fakes for the mel/encoder/TDT stages and the
+installed mlx-omarchy distribution metadata that _golden_report reads.
 """
 
+import ast
 import sys
 import threading
 import types
@@ -80,6 +87,13 @@ class FakeMx(types.ModuleType):
             self.events.append(("enter", s))
             self.current = s
         yield
+
+    # _run_pipeline's pre-stage setup on the main thread.
+    def set_default_device(self, device):
+        pass
+
+    def set_cache_limit(self, limit):
+        pass
 
 
 @pytest.fixture()
@@ -146,6 +160,83 @@ def fake_load(monkeypatch, fake_mx):
         vulkan_decoder_step, "finish_step_weights", finish_step_weights)
     state["seen"] = seen
     return state
+
+
+class FakeWarm:
+    """Stand-in for _GpuWarm: a real parked thread and stop bookkeeping."""
+
+    instances: list = []
+
+    def __init__(self, mx):
+        self.started = 0
+        self.stopped = 0
+        self._release = threading.Event()
+        self.thread = threading.Thread(target=self._park, daemon=True)
+        FakeWarm.instances.append(self)
+
+    def _park(self):
+        self._release.wait(5)
+
+    def start(self):
+        self.started += 1
+        self.thread.start()
+
+    def stop(self):
+        self.stopped += 1
+        self._release.set()
+        self.thread.join()
+
+    @property
+    def thread_alive(self):
+        return self.thread.is_alive()
+
+
+@pytest.fixture()
+def fake_warm(monkeypatch):
+    FakeWarm.instances = []
+    monkeypatch.setattr(cli, "_GpuWarm", FakeWarm)
+    return FakeWarm
+
+
+def _fake_lock():
+    lock = types.SimpleNamespace()
+    lock.audio = types.SimpleNamespace(sample_rate=16000)
+    lock.numerical_contract = types.SimpleNamespace(
+        nan_count_allowed=0, inf_count_allowed=0)
+    lock.files = [types.SimpleNamespace(path="tokenizer.json", sha256="tok")]
+    lock.tdt = types.SimpleNamespace(durations=[0, 2])
+    return lock
+
+
+def _fake_pin():
+    return {"e2e": {"decode_control": "host"}, "assets": []}
+
+
+def _run_pipeline_until_audio_fails(monkeypatch, fake_warm,
+                                    raise_in_open=False):
+    """Drive _run_pipeline into the audio_load/island_open failure path."""
+    args = types.SimpleNamespace(deadline_ms=20000, repeat=1,
+                                 keep_scratch=False)
+    monkeypatch.setattr(cli, "_load_audio", self_raiser())
+    # stage() reads the process-wide GPU counters via coreml.vulkan_mel's
+    # trace_snapshot, which needs the installed libmlx — fake it.
+    monkeypatch.setattr(
+        "coreml.vulkan_mel.trace_snapshot",
+        lambda: {"vk_submissions": 0, "vk_buffer_copies": 0})
+    if raise_in_open:
+        monkeypatch.setattr(cli, "_open_encoder", self_raiser())
+    with pytest.raises(RuntimeError, match="boom"):
+        cli._run_pipeline(
+            args, _fake_pin(), _fake_lock(), Path("/tmp/cache"),
+            Path("/tmp/fixture.flac"), "0" * 64, Path("/tmp/worker"),
+            Path("/tmp/share"), Path("/tmp/scratch"),
+            Path("/tmp/out"), False, None)
+
+
+def self_raiser():
+    def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+    return _raise
 
 
 def test_uploads_run_in_thread_on_the_adopted_stream(
@@ -226,6 +317,94 @@ def test_decoder_load_stage_lands_after_encoder_before_begin_chunk():
     assert '"decoder_load"' not in pipeline
     assert "_start_decoder_load" not in pipeline
     assert "chunk.control" in pipeline
+
+
+def test_warm_spans_audio_and_island_open_only_ast():
+    """AST order check (behavioural full-run infeasible without mlx —
+    see module docstring): warm.start precedes the audio_load stage;
+    warm.stop sits in a finally whose body spans audio_load and
+    island_open and precedes the _decode_chunks call."""
+    tree = ast.parse(
+        (TOOLS / "mlx-omarchy-parakeet" / "mlx_omarchy_parakeet.py")
+        .read_text())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_run_pipeline")
+    start_line = audio_line = stop_line = decode_line = open_line = None
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        name = ""
+        if isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        elif isinstance(node.func, ast.Name):
+            name = node.func.id
+        if name == "start" and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id == "warm":
+            start_line = node.lineno
+        elif name == "stop" and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id == "warm":
+            stop_line = node.lineno
+        elif name == "stage" and any(
+                isinstance(a, ast.Constant) and a.value == "audio_load"
+                for a in node.args):
+            audio_line = node.lineno
+        elif name == "stage" and any(
+                isinstance(a, ast.Constant) and a.value == "island_open"
+                for a in node.args):
+            open_line = node.lineno
+        elif name == "_decode_chunks":
+            decode_line = node.lineno
+    assert None not in (start_line, audio_line, stop_line, decode_line)
+    assert start_line < audio_line, "warm must start before audio_load"
+    assert open_line < stop_line < decode_line, (
+        "warm must stop after island_open and before the chunk loop")
+    # The stop must sit in a finally whose guarded body contains both the
+    # audio_load and island_open stage calls.
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Try) and node.finalbody:
+            stops = [n for n in ast.walk(ast.Module(
+                body=node.finalbody, type_ignores=[]))
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute) and n.func.attr == "stop"]
+            lines = [n.lineno for n in ast.walk(ast.Module(
+                body=node.body, type_ignores=[]))
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "stage"]
+            if stops and lines:
+                assert min(lines) <= audio_line <= max(lines)
+                assert min(lines) <= open_line <= max(lines)
+                assert stops[0].lineno < decode_line
+                break
+    else:
+        pytest.fail("warm.stop not found in a try/finally")
+
+
+def test_audio_load_exception_stops_and_joins_warm_thread(
+        monkeypatch, fake_warm, fake_mx):
+    _run_pipeline_until_audio_fails(monkeypatch, fake_warm)
+    warm = fake_warm.instances[-1]
+    assert warm.started == 1
+    assert warm.stopped == 1
+    assert not warm.thread_alive
+
+
+def test_island_open_exception_stops_and_joins_warm_thread(
+        monkeypatch, fake_warm, fake_mx):
+    _run_pipeline_until_audio_fails(monkeypatch, fake_warm, raise_in_open=True)
+    warm = fake_warm.instances[-1]
+    assert warm.started == 1
+    assert warm.stopped == 1
+    assert not warm.thread_alive
+
+
+def test_prewarm_off_creates_no_thread(monkeypatch, fake_mx):
+    monkeypatch.setenv("MLX_OMARCHY_PK_PREWARM", "off")
+    warm = cli._GpuWarm(fake_mx)  # env off: no mx.ones/eval, no thread
+    assert warm.thread is None
+    warm.start()
+    assert warm.thread is None
+    warm.stop()
+    assert warm.thread is None
 
 
 def test_stage_records_keep_name_shape_and_extra_field():

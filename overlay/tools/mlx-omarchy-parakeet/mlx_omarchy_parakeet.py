@@ -442,19 +442,21 @@ def _check_ane_capability() -> None:
 
 
 class _GpuWarm:
-    """GPU pre-warm across island_open (default on; MLX_OMARCHY_PK_PREWARM=off disables).
+    """GPU pre-warm across audio_load and island_open (default on; MLX_OMARCHY_PK_PREWARM=off disables).
 
     The first GPU work after >= ~50 ms of GPU idle costs about +10 ms on the M1
     (the fast state decays over 10-50 ms; jwm1 H27-H30/H56/H57), and the mel
-    stage of chunk 0 is the first real GPU work after audio_load. While
-    island_open runs on the main thread (a private worker spawn can idle the
-    GPU for ~0.8 s), this thread streams 1024x1024 f32 matmuls (results
-    discarded, no pipeline data touched) and is stopped right after
-    island_open, before the chunk loop, so mel starts in the fast state
-    (mel 29 -> 19.5 ms on jwm1) and the chunk stages' gpu_counter_delta stays
-    free of warm matmuls. The thread stops exactly when the idle window ends,
-    so it never delays a stage by more than one matmul (~5 ms). GPU energy for
-    the warm window is not measured.
+    stage of chunk 0 is the first heavy GPU work of a run. This thread starts
+    before audio_load and is stopped right after island_open, before the
+    chunk loop, so the warm window covers audio_load plus island_open (about
+    7 ms with the L3 daemon; a private worker spawn, ~0.8 s, when there is
+    one). While it runs it streams 1024x1024 f32 matmuls (results discarded,
+    no pipeline data touched) on its own thread-local stream; audio_load's
+    upload shares only the device queue mutex with it. mel starts in the
+    fast state (mel 29 -> 19.5 ms on jwm1) and the chunk stages'
+    gpu_counter_delta stays free of warm matmuls. The thread stops exactly
+    when the window ends, so it never delays a stage by more than one matmul
+    (~5 ms). GPU energy for the warm window is not measured.
     """
 
     def __init__(self, mx):
@@ -1486,27 +1488,47 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     # ------------------------------------------------------------- 1. audio
     if _pk_timing_extra_on():
         _record_lifetime_stage(stages_records, "startup_to_main", trace_snapshot)
-    waveform, sample_count, decoder_name = stage(
-        "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
+    # Warm must cover every GPU-idle window before mel: audio_load and
+    # island_open (~7 ms with the daemon; a private worker spawn when
+    # there is one). __init__ runs its mx.ones/eval on THIS thread before
+    # the audio_load stage timer starts, so its cost sits outside
+    # total_pipeline_ms in B3 exactly as it sat between stages before;
+    # wall time includes it either way.
+    # Concurrency: the warm thread streams matmuls while audio_load runs.
+    # audio_load's own GPU upload (`_load_audio`: CPU decode first via
+    # _decode_audio, then one mx.array upload + eval LAST, :730-736) shares
+    # the single Vulkan queue — submits serialize on the device queue mutex
+    # (backend/omarchy/encoder.cpp:1174-1180) — so it can wait behind at
+    # most one in-flight matmul (~5 ms). The warm thread runs on its OWN
+    # stream (mx.stream(mx.gpu) in a new thread creates a thread-local
+    # default stream), so nothing orders it against audio_load; the
+    # process-wide counters mean the warm thread's submissions land in
+    # audio_load's stage gpu_counter_delta.
     warm = _GpuWarm(mx)
     warm.start()
+    try:
+        waveform, sample_count, decoder_name = stage(
+            "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
 
-    # ------------------------------------------- 2. chunks (30 s windows)
-    chunk_starts, single = _plan_chunks(sample_count)
+        # ------------------------------------------- 2. chunks (30 s windows)
+        chunk_starts, single = _plan_chunks(sample_count)
 
-    # ----------------------------------------------------------- 3. encoder
-    if _pk_timing_extra_on():
-        island, source, runner = stage(
-            "island_open", trace_snapshot,
-            lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
-                                   scratch_root))
-    else:
-        island, source, runner = _open_encoder(
-            args, pin, lock, cache_dir, worker, share, scratch_root)
-    # mel is the next GPU work after audio_load's uploads; the warm
-    # thread bridges island_open's idle and must not race the chunk
-    # stages (it would pollute their gpu_counter_delta).
-    warm.stop()
+        # ----------------------------------------------------------- 3. encoder
+        if _pk_timing_extra_on():
+            island, source, runner = stage(
+                "island_open", trace_snapshot,
+                lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
+                                       scratch_root))
+        else:
+            island, source, runner = _open_encoder(
+                args, pin, lock, cache_dir, worker, share, scratch_root)
+    finally:
+        # Stop is idempotent and covers every exit path: an exception in
+        # audio_load or island_open must not leave the warm thread
+        # running into the chunk stages (it would race mel and pollute
+        # the chunk stages' gpu_counter_delta) or outlive the run into
+        # the daemon. mel is the next GPU work after this point.
+        warm.stop()
 
     # -------------------------------- 4. decoder, joint, control
     # The decoder/joint load runs on a worker thread inside
