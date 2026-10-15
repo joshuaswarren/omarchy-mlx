@@ -17,11 +17,11 @@ P is the head of PR 180, `e625c4e6`. PR 180 merged as main `b0799ab895bf6748666d
 | P `mlx/core.cpython-314-aarch64-linux-gnu.so` sha256 | `7542a0bcff502c00f2c48a2395367e9d49e3405b13f59b17f54abb78b9a0444d` |
 | mlx-lm | 0.32.0 in every row |
 
-The P library files match their wheel RECORD on both chips (`prov-26b-m1-max.json`, `prov-deepseek-m1-part1.json`, `prov-deepseek-m1-part2.json`). The provenance files record the P wheel only. The O wheel stamp and library hash are not recorded here.
+The P library files match their wheel RECORD on both chips (`prov-26b-m1-max.json`, `prov-deepseek-m1-part1.json`, `prov-deepseek-m1-part2.json`). The provenance files record the P wheel only. Every O row records the wheel stamp `mlx-omarchy 0.32.4.dev202610141543+7604d92c`. It is the stamp of the O wheel in the M2 Max pair. The O library hash is not recorded here.
 
 Both arms set `MLX_OMARCHY_QUEUE_PRIORITY=low`. This receipt lists no other variable and does not claim that the variable has no effect.
 
-Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 prefill samples of 512 tokens. The prompt corpus has sha256 `9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0`.
+Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 prefill samples of 512 tokens. The prompt corpus has sha256 `9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0`. The ANE filler was on. The load average at the end of each row was 1.14 to 1.56 on the 16-inch M1 Max. It was 1.20 to 1.43 on the 13-inch M1.
 
 ## Device, kernel and driver
 
