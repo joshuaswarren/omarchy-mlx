@@ -234,8 +234,10 @@ HostQuantizedWeights host_affine_quantize(
     int bits) {
   HostQuantizedWeights result;
   int groups = cols / group_size;
-  int pack = 32 / bits;
-  int words_per_row = cols / pack;
+  // Codes are a contiguous little-endian bit stream along the row, so a
+  // 3-bit code can straddle two words (identical to the old layout for
+  // 2, 4 and 8 bits).
+  int words_per_row = cols * bits / 32;
   float n_bins = static_cast<float>((1 << bits) - 1);
   result.words.assign(static_cast<size_t>(rows) * words_per_row, 0);
   result.scales.resize(static_cast<size_t>(rows) * groups);
@@ -267,8 +269,13 @@ HostQuantizedWeights host_affine_quantize(
         float q = std::clamp(std::round((value - bias) / scale), 0.0f, n_bins);
         uint32_t code = static_cast<uint32_t>(q);
         int col = group * group_size + i;
-        result.words[row * words_per_row + col / pack] |=
-            code << ((col % pack) * bits);
+        int bit_pos = col * bits;
+        int shift = bit_pos % 32;
+        result.words[row * words_per_row + bit_pos / 32] |= code << shift;
+        if (shift + bits > 32) {
+          result.words[row * words_per_row + bit_pos / 32 + 1] |=
+              code >> (32 - shift);
+        }
       }
     }
   }
@@ -285,8 +292,7 @@ std::vector<float> host_quantized_matmul(
     int k,
     int group_size,
     int bits) {
-  int pack = 32 / bits;
-  int words_per_row = k / pack;
+  int words_per_row = k * bits / 32;
   int groups = k / group_size;
   uint32_t mask = (1u << bits) - 1u;
   std::vector<float> out(static_cast<size_t>(m) * n);
@@ -294,10 +300,15 @@ std::vector<float> host_quantized_matmul(
     for (int column = 0; column < n; ++column) {
       double acc = 0.0;
       for (int inner = 0; inner < k; ++inner) {
-        uint32_t code =
-            (w.words[column * words_per_row + inner / pack] >>
-             ((inner % pack) * bits)) &
-            mask;
+        int bit_pos = inner * bits;
+        int shift = bit_pos % 32;
+        uint32_t word = w.words[column * words_per_row + bit_pos / 32];
+        uint32_t code = word >> shift;
+        if (shift + bits > 32) {
+          code |= w.words[column * words_per_row + bit_pos / 32 + 1] <<
+              (32 - shift);
+        }
+        code &= mask;
         double dequant = static_cast<double>(code) *
                 w.scales[column * groups + inner / group_size] +
             w.biases[column * groups + inner / group_size];
@@ -2149,8 +2160,7 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
     CAPTURE(group_size);
     CAPTURE(bits);
     int groups = k / group_size;
-    int pack = 32 / bits;
-    int words_per_row = k / pack;
+    int words_per_row = k * bits / 32;
     std::vector<HostQuantizedWeights> host_w;
     // uint32, not float: these are raw packed code words. Held in a
     // float vector, every word >= 2^24 is silently rounded by the
@@ -2283,6 +2293,12 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
   run_case(3, 2, 5, 192, 37, 64, 4, false);
   run_case(2, 2, 1, 128, 16, 32, 8, true);
   run_case(3, 1, 7, 192, 37, 64, 8, true);
+  // 3-bit (the Muse routed-expert layout): transposed affine, codes are a bit
+  // stream so most codes straddle a word boundary. k = 192 is 18 words per row.
+  run_case(3, 2, 5, 192, 37, 64, 3, true);
+  run_case(3, 2, 5, 192, 37, 64, 3, false);
+  run_case(2, 2, 1, 128, 16, 32, 3, true);
+  run_case(3, 1, 7, 256, 64, 64, 3, true);
 
   // Named errors. Each shape is crafted to clear the op layer's shape
   // validation so the rejection provably comes from this backend: the

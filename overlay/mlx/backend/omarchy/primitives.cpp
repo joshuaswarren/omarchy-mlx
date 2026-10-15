@@ -3177,7 +3177,11 @@ void dispatch_gather_qmm(
     bool right_sorted = false) {
   auto& encoder = omarchy::get_command_encoder(s);
   require_float_dtype(tag, x, out, encoder);
-  if (bits != 4 && bits != 8) {
+  // 3-bit is the affine transposed layout only (the scalar kernel reads the
+  // K * 3 / 32 words per row as a bit stream); the sub and tile kernels stay
+  // 4-bit.
+  if ((bits != 4 && bits != 8) &&
+      !(bits == 3 && transpose && !fp_mode && x.shape(-1) % 32 == 0)) {
     omarchy::unsupported(tag + " bits", out);
   }
   if (group_size != 32 && group_size != 64 && group_size != 128 &&
