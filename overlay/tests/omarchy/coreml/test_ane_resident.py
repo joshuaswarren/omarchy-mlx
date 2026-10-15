@@ -297,6 +297,54 @@ class ResidentAneWorkerTest(unittest.TestCase):
             child.kill()
             child.wait()
 
+    def test_a_thread_that_appears_during_the_pin_is_covered(self):
+        """A helper thread that is not pinned yet starts a thread right after the first listing. The new thread
+        inherits the helper's old mask, so only a second listing finds and pins it."""
+        import threading
+
+        sysfs, p_cores = self._fake_chip()
+        stop, spawn, spawned = threading.Event(), threading.Event(), threading.Event()
+        late = []
+
+        def helper():
+            spawn.wait()
+            thread = threading.Thread(target=stop.wait)
+            thread.start()
+            late.append(thread)
+            spawned.set()
+
+        helper_thread = threading.Thread(target=helper)
+        helper_thread.start()
+        real = os.listdir
+        calls = {"n": 0}
+
+        def listing(path):
+            calls["n"] += 1
+            names = real(path)
+            if calls["n"] == 1:
+                spawn.set()
+                self.assertTrue(spawned.wait(5))
+            return names
+
+        allowed = set(os.sched_getaffinity(0))
+        try:
+            with mock.patch.object(_module.os, "listdir", listing):
+                _module._pin_worker(os.getpid(), sysfs)
+            self.assertTrue(late)
+            self.assertEqual(self._allowed(late[0].native_id), set(p_cores))
+            self.assertGreaterEqual(calls["n"], 2)
+        finally:
+            stop.set()
+            spawn.set()
+            helper_thread.join()
+            for thread in late:
+                thread.join()
+            for name in os.listdir(f"/proc/{os.getpid()}/task"):
+                try:
+                    os.sched_setaffinity(int(name), allowed)
+                except ProcessLookupError:
+                    pass
+
     def test_the_opt_out_word_and_a_chip_without_efficiency_cores_leave_the_worker_alone(self):
         sysfs, _ = self._fake_chip()
         child = subprocess.Popen(["sleep", "5"])
