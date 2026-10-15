@@ -9,12 +9,15 @@ submits, payloads that really round-trip, and a failure, a death or a
 stall that is named and torn down rather than retried or waited on.
 """
 
+import os
+import subprocess
 import sys
 import tempfile
 import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 try:
     from _bootstrap import _TOOLS  # plain-script execution
@@ -26,6 +29,7 @@ for _entry in (str(_TOOLS_DIR), str(_TOOLS_DIR / "coreml")):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
+from coreml import ane_resident as _module  # noqa: E402
 from coreml.ane_resident import (  # noqa: E402
     ResidentAneWorker,
     ResidentWorkerError,
@@ -251,6 +255,66 @@ class ResidentAneWorkerTest(unittest.TestCase):
         self.assertEqual(ledger.count("start"), 1)
         self.assertEqual(ledger.count("load"), 2)
         self.assertEqual(ledger.count("submit"), 6)
+
+    def _fake_chip(self, name: str = "chip"):
+        """A sysfs tree whose lowest allowed CPU is an efficiency core and every other CPU a performance core."""
+        allowed = sorted(os.sched_getaffinity(0))
+        if len(allowed) < 2:
+            self.skipTest("needs two allowed CPUs")
+        sysfs = self.root / name
+        for cpu in range(max(allowed) + 1):
+            (sysfs / f"cpu{cpu}").mkdir(parents=True)
+            (sysfs / f"cpu{cpu}" / "cpu_capacity").write_text("561\n" if cpu == allowed[0] else "1024\n")
+        return sysfs, allowed[1:]
+
+    @staticmethod
+    def _allowed(pid: int) -> set[int]:
+        return set(os.sched_getaffinity(pid))
+
+    def test_the_private_worker_is_pinned_to_the_performance_cores(self):
+        sysfs, p_cores = self._fake_chip()
+        original = _module._pin_worker
+        with mock.patch.object(_module, "_pin_worker", lambda pid: original(pid, sysfs)):
+            session = self._session()
+            with session:
+                self.assertEqual(session.worker_pinned, p_cores)
+                self.assertEqual(self._allowed(session._process.pid), set(p_cores))
+
+    def test_every_thread_of_a_multithreaded_worker_is_pinned(self):
+        sysfs, p_cores = self._fake_chip()
+        code = ("import threading, time\n"
+                "for _ in range(3): threading.Thread(target=time.sleep, args=(20,), daemon=True).start()\n"
+                "print('ready', flush=True)\ntime.sleep(20)\n")
+        child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            self.assertEqual(_module._pin_worker(child.pid, sysfs), p_cores)
+            tasks = [int(name) for name in os.listdir(f"/proc/{child.pid}/task")]
+            self.assertGreaterEqual(len(tasks), 4)
+            for tid in tasks:
+                self.assertEqual(self._allowed(tid), set(p_cores), tid)
+        finally:
+            child.kill()
+            child.wait()
+
+    def test_the_opt_out_word_and_a_chip_without_efficiency_cores_leave_the_worker_alone(self):
+        sysfs, _ = self._fake_chip()
+        child = subprocess.Popen(["sleep", "5"])
+        try:
+            before = self._allowed(child.pid)
+            with mock.patch.dict(os.environ, {_module._NO_PIN: "1"}):
+                self.assertIsNone(_module._pin_worker(child.pid, sysfs))
+            self.assertEqual(self._allowed(child.pid), before)
+            flat = self.root / "flat"
+            for cpu in range(4):
+                (flat / f"cpu{cpu}").mkdir(parents=True)
+                (flat / f"cpu{cpu}" / "cpu_capacity").write_text("1024\n")
+            self.assertIsNone(_module._pin_worker(child.pid, flat))
+            self.assertIsNone(_module._pin_worker(child.pid, self.root / "no-sysfs"))
+            self.assertEqual(self._allowed(child.pid), before)
+        finally:
+            child.kill()
+            child.wait()
 
     def test_payloads_never_touch_the_filesystem(self):
         session = self._session()

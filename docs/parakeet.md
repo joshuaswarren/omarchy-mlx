@@ -180,6 +180,15 @@ a warm `transcribe` from 1939 ms to 853 ms per call (median), with the
 encoder stage at the ANE exec floor; see
 [the receipt](../receipts/2026-10-02-parakeet-warm-clip/README.md).
 
+The private worker that `transcribe` starts is pinned to the performance
+cores. On the M2 a worker that sleeps most of each step was placed on an
+efficiency core, and every call cost 0.72 ms more with the exec time
+unchanged. The cores are the CPUs at the maximum `cpu_capacity`, read from
+sysfs, so no chip list is hard-coded. A chip with no capacity files, or with
+one capacity, is left alone. Set `OMARCHY_ANE_NO_PIN=1` to turn the pin off.
+It changes no arithmetic. The daemon is a separate long-running process and
+keeps its own placement. Start it under `taskset` if it needs the same pin.
+
 ## Golden capture
 
 Bulk capture data lives **outside git** at
