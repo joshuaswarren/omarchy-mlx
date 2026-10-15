@@ -269,7 +269,7 @@ class ResidentAneWorkerTest(unittest.TestCase):
 
     @staticmethod
     def _allowed(pid: int) -> set[int]:
-        return {cpu for cpu in os.sched_getaffinity(pid)}
+        return set(os.sched_getaffinity(pid))
 
     def test_the_private_worker_is_pinned_to_the_performance_cores(self):
         sysfs, p_cores = self._fake_chip()
@@ -279,6 +279,23 @@ class ResidentAneWorkerTest(unittest.TestCase):
             with session:
                 self.assertEqual(session.worker_pinned, p_cores)
                 self.assertEqual(self._allowed(session._process.pid), set(p_cores))
+
+    def test_every_thread_of_a_multithreaded_worker_is_pinned(self):
+        sysfs, p_cores = self._fake_chip()
+        code = ("import threading, time\n"
+                "for _ in range(3): threading.Thread(target=time.sleep, args=(20,), daemon=True).start()\n"
+                "print('ready', flush=True)\ntime.sleep(20)\n")
+        child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            self.assertEqual(_module._pin_worker(child.pid, sysfs), p_cores)
+            tasks = [int(name) for name in os.listdir(f"/proc/{child.pid}/task")]
+            self.assertGreaterEqual(len(tasks), 4)
+            for tid in tasks:
+                self.assertEqual(self._allowed(tid), set(p_cores), tid)
+        finally:
+            child.kill()
+            child.wait()
 
     def test_the_opt_out_word_and_a_chip_without_efficiency_cores_leave_the_worker_alone(self):
         sysfs, _ = self._fake_chip()

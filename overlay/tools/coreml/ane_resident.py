@@ -103,21 +103,27 @@ def _pin_worker(pid: int, root: Path = _SYSFS_CPU) -> list[int] | None:
     if not cpus:
         return None
     applied: list[int] | None = None
-    try:
-        tasks = [int(name) for name in os.listdir(f"/proc/{pid}/task")]
-    except OSError:
-        return None
-    for tid in tasks:
+    seen: set[int] = set()
+    # A thread created while the loop runs would inherit the old mask, so
+    # list again until no new task appears.
+    for _ in range(4):
         try:
-            allowed = set(os.sched_getaffinity(tid))
-            mask = set(cpus) & allowed
-            if mask and mask != allowed:
-                os.sched_setaffinity(tid, mask)
-                applied = sorted(mask)
-        except (ProcessLookupError, FileNotFoundError, PermissionError):
-            continue
+            tasks = {int(name) for name in os.listdir(f"/proc/{pid}/task")} - seen
+        except OSError:
+            break
+        if not tasks:
+            break
+        seen |= tasks
+        for tid in tasks:
+            try:
+                allowed = set(os.sched_getaffinity(tid))
+                mask = set(cpus) & allowed
+                if mask and mask != allowed:
+                    os.sched_setaffinity(tid, mask)
+                    applied = sorted(mask)
+            except (ProcessLookupError, FileNotFoundError, PermissionError):
+                continue
     return applied
-
 
 
 class ResidentAneWorker:
