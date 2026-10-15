@@ -1165,22 +1165,35 @@ Device::Device(uint32_t physical_device_index) {
       VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR};
   if (auto wanted = requested_global_priority()) {
     global_priority.globalPriority = *wanted;
-    VkQueueFamilyGlobalPriorityPropertiesKHR family_priorities{
-        VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR};
-    VkQueueFamilyProperties2 family_props2{
-        VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2};
-    family_props2.pNext = &family_priorities;
     if (hw.queue_global_priority &&
         it.GetPhysicalDeviceQueueFamilyProperties2) {
-      // Core-1.1 takes a pointer to the family index (and to the
-      // properties2 array; one element here). The core signature mirrors
-      // the KHR_promoted ext: get the count + one family in pNext chain.
-      uint32_t family = caps_.queue_family_index;
-      it.GetPhysicalDeviceQueueFamilyProperties2(pd, &family, &family_props2);
-      for (uint32_t i = 0; i < family_priorities.priorityCount; ++i) {
-        if (family_priorities.priorities[i] == *wanted) {
-          qci.pNext = &global_priority;
-          break;
+      // The second argument is the property-array COUNT, not a family
+      // index: query the count, then every family, and read ours. Passing
+      // the family index (0 on Honeykrisp) as the count returned no
+      // properties, so LOW was never requested (2026-10-13, J613: the
+      // kernel created MLX's queue at normal priority).
+      uint32_t count = 0;
+      it.GetPhysicalDeviceQueueFamilyProperties2(pd, &count, nullptr);
+      if (caps_.queue_family_index < count) {
+        std::vector<VkQueueFamilyGlobalPriorityPropertiesKHR> priorities(
+            count,
+            VkQueueFamilyGlobalPriorityPropertiesKHR{
+                VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR});
+        std::vector<VkQueueFamilyProperties2> families(
+            count,
+            VkQueueFamilyProperties2{VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+        for (uint32_t i = 0; i < count; ++i) {
+          families[i].pNext = &priorities[i];
+        }
+        it.GetPhysicalDeviceQueueFamilyProperties2(pd, &count, families.data());
+        const auto& family = priorities[caps_.queue_family_index];
+        const uint32_t listed =
+            caps_.queue_family_index < count ? family.priorityCount : 0;
+        for (uint32_t i = 0; i < listed; ++i) {
+          if (family.priorities[i] == *wanted) {
+            qci.pNext = &global_priority;
+            break;
+          }
         }
       }
     }
