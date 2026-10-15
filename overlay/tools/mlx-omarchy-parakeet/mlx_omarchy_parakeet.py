@@ -442,20 +442,19 @@ def _check_ane_capability() -> None:
 
 
 class _GpuWarm:
-    """GPU pre-warm across the overlapped decoder-load window (default on; MLX_OMARCHY_PK_PREWARM=off disables).
+    """GPU pre-warm across island_open (default on; MLX_OMARCHY_PK_PREWARM=off disables).
 
     The first GPU work after >= ~50 ms of GPU idle costs about +10 ms on the M1
-    (the fast state decays over 10-50 ms; 13-inch M1 H27-H30/H56/H57), and the mel
-    stage is the first real GPU work after the decoder load. While the CPU
-    decoder/joint preparation runs on its worker thread (and island_open on the
-    main thread), this thread streams 1024x1024 f32 matmuls (results discarded,
-    no pipeline data touched) and is joined right after the main thread's
-    decoder/joint uploads, so mel starts in the fast state (mel 29 -> 19.5 ms on
-    a 13-inch M1). The overlap does not replace it: the join and island open can
-    both idle the GPU, and the uploads alone do not bridge that gap. The thread
-    stops exactly when the CPU-bound window ends, so it never delays a stage by
-    more than one matmul (~5 ms). GPU energy for ~45 ms per transcription is not
-    measured.
+    (the fast state decays over 10-50 ms; jwm1 H27-H30/H56/H57), and the mel
+    stage of chunk 0 is the first real GPU work after audio_load. While
+    island_open runs on the main thread (a private worker spawn can idle the
+    GPU for ~0.8 s), this thread streams 1024x1024 f32 matmuls (results
+    discarded, no pipeline data touched) and is stopped right after
+    island_open, before the chunk loop, so mel starts in the fast state
+    (mel 29 -> 19.5 ms on jwm1) and the chunk stages' gpu_counter_delta stays
+    free of warm matmuls. The thread stops exactly when the idle window ends,
+    so it never delays a stage by more than one matmul (~5 ms). GPU energy for
+    the warm window is not measured.
     """
 
     def __init__(self, mx):
@@ -744,10 +743,11 @@ def _start_decoder_load(cache_dir: Path) -> tuple:
     """Start the CPU-only decoder/joint preparation on one worker thread.
 
     Started right after audio_load so the package parse, graph validation
-    and numpy packing overlap island_open. The thread performs no GPU
-    call; every mx upload happens on the main thread in
-    `_join_decoder_load` after the join. An exception in the preparation
-    is stored and re-raised on the main thread at the join."""
+    and numpy packing overlap island_open and the chunk-0 mel/encoder
+    stages; `_join_decoder_load` lands inside `_decode_chunks` after chunk
+    0's encoder stage. The thread performs no GPU call; every mx upload
+    happens on the main thread after the join. An exception in the
+    preparation is stored and re-raised on the main thread at the join."""
     from coreml.vulkan_decoder import prepare_decoder
     from coreml.vulkan_decoder_step import prepare_step_weights
 
@@ -970,6 +970,7 @@ class _ChunkDecode:
     frame_base: int
     last_mask_valid: int
     last_window: int
+    control: object
 
 
 def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
@@ -1134,6 +1135,7 @@ def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
         frame_base=frame_base,
         last_mask_valid=last_mask_valid,
         last_window=last_window,
+        control=control,
     )
 
 
@@ -1491,6 +1493,7 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         if decoder_thread.is_alive():
             decoder_thread.join()
     tdt, mel_host, hidden_host, mask_host = _collect_tdt(chunk, single)
+    control = chunk.control
 
     # ----------------------------------------------------------- 5. tokenizer
     tokenizer, transcript = stage(
