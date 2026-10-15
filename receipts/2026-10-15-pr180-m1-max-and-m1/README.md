@@ -1,10 +1,10 @@
 # Several `gather_qmm` outputs per workgroup in decode, 16-inch M1 Max and 13-inch M1
 
-This receipt adds two pairs to the 14-inch M2 Max pair in [receipts/2026-10-14-gather-qmm-rows-pr180](../2026-10-14-gather-qmm-rows-pr180/README.md). The change is the same. The direct `gather_qmm` decode kernel runs 8 outputs per workgroup.
+This receipt adds three pairs to the 14-inch M2 Max pair in [receipts/2026-10-14-gather-qmm-rows-pr180](../2026-10-14-gather-qmm-rows-pr180/README.md). The change is the same. The direct `gather_qmm` decode kernel runs 8 outputs per workgroup.
 
-On the 16-inch M1 Max, decode went from 17.6435 to 22.7190 tokens per second on gemma-4-26B-A4B (plus 28.77 percent). On the 13-inch M1, decode went from 5.7485 to 8.6400 on DeepSeek-Coder-V2-Lite-Instruct 4-bit (plus 50.30 percent). Prefill did not change on either chip. Every row of each pair has the same output digest.
+On the 16-inch M1 Max, decode went from 17.6435 to 22.7190 tokens per second on gemma-4-26B-A4B (plus 28.77 percent). On the same chip, decode went from 22.1850 to 29.1950 on Qwen3.6-35B-A3B (plus 31.60 percent). On the 13-inch M1, decode went from 5.7485 to 8.6400 on DeepSeek-Coder-V2-Lite-Instruct 4-bit (plus 50.30 percent). Prefill did not change on either chip or model. Every row of each pair has the same output digest.
 
-The two chips and the M2 Max are separate results. The gains differ by chip and by model, so they are not averaged.
+The chips and the M2 Max are separate results. The gains differ by chip and by model, so they are not averaged.
 
 ## Arms and builds
 
@@ -21,7 +21,7 @@ The P library files match their wheel RECORD on both chips (`prov-26b-m1-max.jso
 
 Both arms set `MLX_OMARCHY_QUEUE_PRIORITY=low`. This receipt lists no other variable and does not claim that the variable has no effect.
 
-Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 prefill samples of 512 tokens. The prompt corpus has sha256 `9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0`. The ANE filler was on. The load average at the end of each row was 1.14 to 1.56 on the 16-inch M1 Max. It was 1.20 to 1.43 on the 13-inch M1.
+Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 prefill samples of 512 tokens. The prompt corpus has sha256 `9299a3b2fc136a4c0c355f9ad3e211be81823a5fb9eeadbc2e6608fb3e5718a0`. The ANE filler was on. The load average at the end of each row was 1.14 to 1.56 for the 26B pair and 1.21 to 1.62 for the 35B pair on the 16-inch M1 Max. It was 1.20 to 1.43 on the 13-inch M1.
 
 ## Device, kernel and driver
 
@@ -41,13 +41,14 @@ Rows alternate O P O P within a pair. Each row is 10 timed decode samples and 5 
 | Chip | Model | Snapshot | Quantization |
 |---|---|---|---|
 | 16-inch M1 Max | `mlx-community/gemma-4-26b-a4b-it-4bit` | `0d77464eeb233a2da68ebf9d7dc4edaac7db956d` | affine, group size 64, 4 bits, with 8-bit router projections |
+| 16-inch M1 Max | `mlx-community/Qwen3.6-35B-A3B-4bit` | `38740b847e4cb78f352aba30aa41c76e08e6eb46` | affine, group size 64, 4 bits, with 8-bit router and shared-expert gate projections |
 | 13-inch M1 | `mlx-community/DeepSeek-Coder-V2-Lite-Instruct-4bit` | `156620553457c261a1fdee60b46da888b95b8b4c` | affine, group size 64, 4 bits, model type `deepseek_v2` |
 
-The 26B file hashes are in `prov-26b-m1-max.json` and equal the ones in the M2 Max receipt. The DeepSeek provenance lists file names only, so its file hashes are not recorded.
+The 26B file hashes are in `prov-26b-m1-max.json` and the 35B file hashes are in `prov-35b-m1-max-part1.json` and `part2`. Both sets equal the ones in the M2 Max receipt. The DeepSeek provenance lists file names only, so its file hashes are not recorded.
 
 ## Results
 
-Each figure is the median of the four row medians. The row files are in [rows-26b-m1-max](rows-26b-m1-max) and [rows-deepseek-m1](rows-deepseek-m1). `python3 recompute.py` prints every figure below from those files.
+Each figure is the median of the four row medians. The row files are in [rows-26b-m1-max](rows-26b-m1-max), [rows-35b-m1-max](rows-35b-m1-max) and [rows-deepseek-m1](rows-deepseek-m1). `python3 recompute.py` prints every figure below from those files.
 
 ### gemma-4-26B-A4B on the 16-inch M1 Max
 
@@ -65,6 +66,25 @@ Decode digest `276e9fba48abdee348ea4d20ed9f75dca4fcaf81359669d8775e66d2f3e93680`
 | P4 | 22.727 | 177.093 |
 
 Decode medians: O 17.6435, P 22.7190. P over O is 1.287670. Pair ratios: 1.29372, 1.28326, 1.28857, 1.28656. The row spread is 0.357 percent for O and 0.471 percent for P. Prefill medians: O 177.0235, P 177.0315. The ratio is 1.000045.
+
+### Qwen3.6-35B-A3B on the 16-inch M1 Max
+
+Decode digest `6666c20f80815c027a1e2857ccd5adecb025156aa1f9fb1846f76d9ad1b21540` in all eight rows. It is the same digest as in the M2 Max pair.
+
+The pair ran as two jobs of two rounds each on the same boot as the 26B pair. The second job started about 59 minutes after the first, and other tickets ran on the host in between.
+
+| Row | Decode tok/s | Prefill tok/s |
+|---|---|---|
+| part 1 O1 | 22.180 | 186.077 |
+| part 1 P1 | 29.229 | 185.856 |
+| part 1 O2 | 22.183 | 186.283 |
+| part 1 P2 | 29.164 | 185.870 |
+| part 2 O1 | 22.189 | 185.952 |
+| part 2 P1 | 29.226 | 185.543 |
+| part 2 O2 | 22.187 | 185.759 |
+| part 2 P2 | 29.164 | 186.000 |
+
+Decode medians: O 22.1850, P 29.1950. P over O is 1.315979. Pair ratios: 1.31781, 1.31470, 1.31714, 1.31446. The two jobs give 1.316255 and 1.315801 on their own. The row spread is 0.041 percent for O and 0.223 percent for P. Prefill medians: O 186.0145, P 185.8630. The ratio is 0.999186.
 
 ### DeepSeek-Coder-V2-Lite-Instruct on the 13-inch M1
 
@@ -87,7 +107,7 @@ Decode medians: O 5.7485, P 8.6400. P over O is 1.503001. Pair ratios: 1.49497, 
 
 ## Counters
 
-The 16-inch M1 Max boot already held 11 GPU timeouts, 11 recovery lines and 11 fault-info lines before the job started. No out-of-memory line. The count did not change during the job, so the job added none. The boot is not clean.
+The 16-inch M1 Max boot already held 11 GPU timeouts, 11 recovery lines and 11 fault-info lines before either job started. No out-of-memory line. The counts did not change during the 26B job or during either 35B job, so the jobs added none. The boot is not clean.
 
 On the 13-inch M1 the GPU timeout, recovery, fault-info and out-of-memory counters were 0 before and after both jobs.
 
@@ -97,16 +117,17 @@ No row showed a queue-priority refusal line.
 
 - Each pair is one chip, one boot, one model and four rounds.
 - The credit applies to merged main only. PR 180 is merged as `b0799ab8`, and the P tree equals it.
-- The 26B and 35B do not fit the 13-inch M1, so DeepSeek is the model that ran there. The 35B has no pair on the 16-inch M1 Max.
+- The 26B and 35B do not fit the 13-inch M1, so DeepSeek is the model that ran there.
 - The harness scripts are not in this repository. The row files are copied unchanged from the lab record, and the lab receipt log is not copied because it names hosts.
 - Same output digests mean the O and P arms produced the same tokens on this corpus. They are not a numerical comparison against an independent reference.
-- The DeepSeek gain is not comparable with the gemma-4-26B-A4B gains on other chips.
+- The DeepSeek gain is not comparable with the gemma-4-26B-A4B and Qwen3.6-35B-A3B gains. The 35B on the 16-inch M1 Max and on the M2 Max are separate results.
 
 ## Files
 
 | File | Content |
 |---|---|
 | `rows-26b-m1-max/` | the eight row files of the 26B pair |
+| `rows-35b-m1-max/` | the eight row files of the 35B pair |
 | `rows-deepseek-m1/` | the eight row files of the DeepSeek pair |
 | `prov-*.json` | wheel, driver and model provenance of each job |
 | `analysis-*.txt` | the lab analyzer output for each pair |

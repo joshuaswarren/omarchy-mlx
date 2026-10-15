@@ -1,3 +1,5 @@
 chip	model	metric	linux	macos	governor	driver_name	driver_commit	wheel_commit	runs	start_load_max	ane_busy	control_spread_pct	p_spread_pct	noisy	interleaved	date	caption	pv_decode	pv_prefill
 M1 Max (G13C)	gemma-4-26B-A4B	decode	22.72		performance (filler on)	package	69bde15340	e625c4e6	4		1	0.36	0.47	0	1	2026-10-15			
 M1 Max (G13C)	gemma-4-26B-A4B	prefill	177.03		performance (filler on)	package	69bde15340	e625c4e6	4		1	0.24	0.05	0	1	2026-10-15			
+M1 Max (G13C)	Qwen3.6-35B-A3B	decode	29.20		performance (filler on)	package	69bde15340	e625c4e6	4		1	0.04	0.22	0	1	2026-10-15			
+M1 Max (G13C)	Qwen3.6-35B-A3B	prefill	185.86		performance (filler on)	package	69bde15340	e625c4e6	4		1	0.28	0.25	0	1	2026-10-15			

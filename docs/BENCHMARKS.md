@@ -27,7 +27,7 @@ MLX 4-bit through the installer's mlx-lm patches, tokens per second. A cell show
 | gemma-4-26B-A4B (MoE, 4B active) | 22.72 (was 12.61) | 177.03 (was 116.50) |
 | gemma-4-31B (dense 31B) | 7.3 | 62.4 |
 | Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = **62%** | 299.4 / 339.0 = **88%** |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 (was 13.4) | 116.37 (was 39.4) |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 29.20 (was 13.62) | 185.86 (was 116.37) |
 | gemma-4-E4B (dense 4B) | 30.5 | 366.5 |
 | gpt-oss-20b (MoE, attention sinks) | 2.2 | 1.9 |
 
@@ -35,7 +35,7 @@ macOS shares are printed only where both sides produce identical tokens.
 
 The two mixture-of-experts rows with "was" values were re-measured on 2026-10-10 on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`, PR #81 included), with the Honeykrisp driver from the private ICD directory at Mesa git `6543eeb7df7`, which the scoring script selects with `VK_ICD_FILENAMES`. The "was" values are the 2026-10-09 measurements; they ran on wheel `0.32.4.dev202610090923+a48b7cc5`, before PR #81, and their driver was not recorded, so the PR #81 effect is the before and after difference, not an isolated test. The output digests did not change (276e9fba and 6666c20f). The gemma-4-26B-A4B run started with a load average of 0.22. The Qwen3.6-35B-A3B cells are the mean of two runs: 13.75 and 13.48 decode, 117.52 and 115.22 prefill. The second run used the Edge0 repository, which holds the same weights and gave the same output digest. Those runs started with load averages of 1.11 and 0.98, so the numbers may be low. The other rows are unchanged.
 
-The gemma-4-26B-A4B row was measured again on 2026-10-15 on the PR 180 head `e625c4e6`, whose tree equals main `b0799ab8` (development wheel `0.32.4.dev202610142002+e625c4e6`), with the package Honeykrisp driver at Mesa git `69bde15340`. Its "was" values are the 2026-10-10 figures above. The paired PR 180 result, 17.64 to 22.72 decode, is in [the receipt](../receipts/2026-10-15-pr180-m1-max-and-m1/README.md). The driver and main also changed between 2026-10-10 and that pair, so the move from 12.61 to 17.64 has no isolated cause.
+The gemma-4-26B-A4B and Qwen3.6-35B-A3B rows were measured again on 2026-10-15. They ran on the PR 180 head `e625c4e6`, whose tree equals main `b0799ab8`. The development wheel is `0.32.4.dev202610142002+e625c4e6`. The driver is the package Honeykrisp at Mesa git `69bde15340`. Their "was" values are the 2026-10-10 figures above. The paired PR 180 results are in [the receipt](../receipts/2026-10-15-pr180-m1-max-and-m1/README.md). They are 17.64 to 22.72 decode for the 26B and 22.19 to 29.20 for the 35B. The driver and main also changed between 2026-10-10 and that pair. So the moves from 12.61 to 17.64 (26B) and from 13.62 to 22.19 (35B) have no isolated cause.
 
 The gemma-4-E4B Linux cells ran on main at `e57cb301` (development wheel `0.32.4.dev202610102357+e57cb301`), not on v0.7.32, which still stalls on this model. They are the mean of three runs: decode 30.52, 30.45 and 30.44, prefill 366.67, 366.08 and 366.66. The driver is the private Honeykrisp ICD at Mesa git `6543eeb7df7`, selected with `VK_ICD_FILENAMES`, on the plain kernel. The runs started with load averages of 0.91, 1.37 and 1.22, above the 0.5 target, with the ANE idle. The Qwen3.5-9B macOS cells are the earlier sealed runs on the same machine (decode median of 10, prefill median of 5). The Linux output digest (118c7586) is the same in all three runs and differs from the macOS digest (491eb46b), so the two sides produced different tokens. The same holds on the 13-inch M1.
 
@@ -220,9 +220,10 @@ What it costs is not measured yet: idle power, heat and fan noise with the perfo
 
 | Model | Decode | Prefill | Driver | Wheel | Runs | Governor | Control | Flags |
 |---|---|---|---|---|---|---|---|---|
+| Qwen3.6-35B-A3B | 29.20 | 185.86 | Honeykrisp (lab package) 69bde15340 | e625c4e6 | n=4 | performance (filler on) | - | P spread 0.22% |
 | gemma-4-26B-A4B | 22.72 | 177.03 | Honeykrisp (lab package) 69bde15340 | e625c4e6 | n=4 | performance (filler on) | - | P spread 0.47% |
 
 _A cell shows Linux tokens per second, or Linux / macOS = share where both sides produce identical tokens. P is the default direct route. V is the staged route on the same wheel and driver. P/V = P over V (decode / prefill). Control spread = spread of the V arm. Governor: the CPU governor, with the ANE filler off or on._
 <!-- END GENERATED: bench-chip:g13c -->
 
-The 16-inch M1 Max row above is the P arm of the PR 180 pair in [receipts/2026-10-15-pr180-m1-max-and-m1](../receipts/2026-10-15-pr180-m1-max-and-m1/README.md): wheel, driver, kernel, model, both arms, counters and limits. The earlier row on this chip, 17.17 decode and 176.03 prefill on wheel `18059c80` with the staged route as control, is in [receipts/2026-10-13-m1-max-gemma-26b-direct-gather-qmm](../receipts/2026-10-13-m1-max-gemma-26b-direct-gather-qmm/README.md).
+The 16-inch M1 Max rows above are the P arms of the PR 180 pairs in [receipts/2026-10-15-pr180-m1-max-and-m1](../receipts/2026-10-15-pr180-m1-max-and-m1/README.md): wheel, driver, kernel, model, both arms, counters and limits. The earlier 26B row on this chip, 17.17 decode and 176.03 prefill on wheel `18059c80` with the staged route as control, is in [receipts/2026-10-13-m1-max-gemma-26b-direct-gather-qmm](../receipts/2026-10-13-m1-max-gemma-26b-direct-gather-qmm/README.md).

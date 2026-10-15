@@ -44,3 +44,8 @@ report(
     load("rows-deepseek-m1/*.json"),
     lambda n: (n.split("-")[1][0], (n.split("-")[0], int(n.split("-")[1][1:]))),
 )
+report(
+    "Qwen3.6-35B-A3B 4-bit, 16-inch M1 Max",
+    load("rows-35b-m1-max/*.json"),
+    lambda n: (n.split("-")[1][0], (n.split("-")[0], int(n.split("-")[1][1:]))),
+)
