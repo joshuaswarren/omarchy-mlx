@@ -770,20 +770,25 @@ def _start_decoder_load(cache_dir: Path) -> tuple:
     return thread, state
 
 
-def _join_decoder_load(thread, state: dict):
+def _join_decoder_load(thread, state: dict, scratch_root: Path):
     """Main thread: join the CPU preparation, then submit the GPU uploads.
 
+    Called from inside `_decode_chunks` after chunk 0's encoder stage, so
+    the CPU work overlaps audio_load through mel_frontend/encoder_ane.
     The decoder_load stage wraps this call, so its gpu_counter_delta keeps
     covering exactly the GPU work of the load (the background thread adds
     none). Reports the overlapped CPU wall as `cpu_thread_wall_ms`."""
     from coreml.vulkan_decoder import finish_decoder
+    from coreml.vulkan_decoder_step import finish_step_weights
 
     thread.join()
     state["cpu_thread_wall_ns"] = (
         time.monotonic_ns() - state["started_ns"])
     if "error" in state:
         raise state["error"]
-    return finish_decoder(state["parts"])
+    decoder = finish_decoder(state["parts"])
+    packed = finish_step_weights(state["packing"])
+    return decoder, _TdtControl(packed, scratch_root)
 
 
 def _plan_chunks(sample_count: int) -> tuple[list[int], bool]:
@@ -967,9 +972,15 @@ class _ChunkDecode:
     last_window: int
 
 
-def _decode_chunks(island, runner, control, stage, lock, waveform,
-                   chunk_starts, single, pinned) -> _ChunkDecode:
-    """mel -> encoder -> TDT per 30 s chunk; closes the island when done."""
+def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
+                   chunk_starts, single, pinned, scratch_root) -> _ChunkDecode:
+    """mel -> encoder -> TDT per 30 s chunk; closes the island when done.
+
+    `decoder_load` is the (thread, state) pair from `_start_decoder_load`.
+    On chunk 0 only, after encoder_ane's eval and before the TDT control
+    is first built, the decoder_load stage joins the CPU preparation and
+    submits the GPU uploads; later chunks reuse the loaded decoder and
+    never wait."""
     import numpy as np
 
     import mlx.core as mx
@@ -1019,6 +1030,7 @@ def _decode_chunks(island, runner, control, stage, lock, waveform,
     frame_base = 0
     last_mask_valid = 0
     last_window = 0
+    control = None
     try:
         for ci, start in enumerate(chunk_starts):
             suffix = "" if single else f"#{ci}"
@@ -1059,6 +1071,19 @@ def _decode_chunks(island, runner, control, stage, lock, waveform,
             last_window = window
             decode_hidden = (encoder_hidden if decode_frames == window
                              else encoder_hidden[:, :decode_frames, :])
+            if control is None:
+                # Chunk 0 only: the CPU decoder/joint preparation has been
+                # running since audio_load; the join plus the GPU uploads
+                # land here, after encoder_ane's eval and before the TDT
+                # control first touches the packed constants.
+                load_thread, load_state = decoder_load
+                _, control = stage(
+                    "decoder_load", trace_snapshot,
+                    lambda: _join_decoder_load(load_thread, load_state,
+                                               scratch_root),
+                    extra=lambda: {"cpu_thread_wall_ms": round(
+                        load_state["cpu_thread_wall_ns"] / 1e6, 3)},
+                )
             control.begin_chunk(decode_hidden)
 
             # The CoreML reference (GreedyTDTDecoder.decode, called once per
@@ -1404,7 +1429,6 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     (passed, token_ids, transcript).
     """
     import mlx.core as mx
-    from coreml.vulkan_decoder_step import finish_step_weights
     from coreml.vulkan_mel import trace_snapshot
 
     mx.set_default_device(mx.gpu)
@@ -1448,26 +1472,24 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         else:
             island, source, runner = _open_encoder(
                 args, pin, lock, cache_dir, worker, share, scratch_root)
+        # mel is the next GPU work after audio_load's uploads; the warm
+        # thread bridges island_open's idle and must not race the chunk
+        # stages (it would pollute their gpu_counter_delta).
+        warm.stop()
 
-        # ------------------------------- 4. decoder, joint, control
-        # The CPU preparation ran on decoder_thread since audio_load; the
-        # stage records the main-thread join plus the GPU uploads only.
-        decoder = stage(
-            "decoder_load", trace_snapshot,
-            lambda: _join_decoder_load(decoder_thread, decoder_state),
-            extra=lambda: {"cpu_thread_wall_ms": round(
-                decoder_state["cpu_thread_wall_ns"] / 1e6, 3)},
-        )
-        fused_packed = finish_step_weights(decoder_state["packing"])
+        # -------------------------------- 4. decoder, joint, control
+        # The CPU preparation runs on decoder_thread from audio_load until
+        # chunk 0's encoder stage; the join plus the GPU uploads (the
+        # decoder_load stage record) land inside _decode_chunks, after
+        # encoder_ane's eval and before the TDT control is first built.
+        chunk = _decode_chunks(island, runner,
+                               (decoder_thread, decoder_state), stage, lock,
+                               waveform, chunk_starts, single, pinned,
+                               scratch_root)
     finally:
         # No worker thread outlives a failed pipeline, whatever failed.
         if decoder_thread.is_alive():
             decoder_thread.join()
-    warm.stop()
-    control = _TdtControl(fused_packed, scratch_root)
-
-    chunk = _decode_chunks(island, runner, control, stage, lock, waveform,
-                           chunk_starts, single, pinned)
     tdt, mel_host, hidden_host, mask_host = _collect_tdt(chunk, single)
 
     # ----------------------------------------------------------- 5. tokenizer

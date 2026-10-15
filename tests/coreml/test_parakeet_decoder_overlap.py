@@ -34,6 +34,7 @@ def fake_load(monkeypatch):
     seen: list[tuple[str, bool]] = []
     state: dict = {"cpu_error": None}
     parts, packing, decoder = object(), object(), object()
+    state["packing_sentinel"] = packing
 
     def prepare_decoder(package_path):
         seen.append(("prepare_decoder", threading.current_thread() is MAIN))
@@ -54,7 +55,8 @@ def fake_load(monkeypatch):
     def finish_step_weights(packed):
         seen.append(("finish_step_weights", threading.current_thread() is MAIN))
         assert packed is packing
-        return object()
+        state["device_sentinel"] = object()
+        return state["device_sentinel"]
 
     monkeypatch.setattr(vulkan_decoder, "prepare_decoder", prepare_decoder)
     monkeypatch.setattr(
@@ -66,28 +68,47 @@ def fake_load(monkeypatch):
     return state
 
 
-def test_cpu_preparation_off_main_thread_gpu_after_join(fake_load):
+def test_cpu_preparation_off_main_thread_gpu_after_join(fake_load, monkeypatch):
+    controls = []
+    monkeypatch.setattr(
+        cli, "_TdtControl",
+        lambda packed, scratch_root:
+        controls.append((packed, scratch_root)) or "control")
     thread, state = cli._start_decoder_load(Path("/tmp"))
     assert thread is not MAIN
-    loaded = cli._join_decoder_load(thread, state)
+    scratch = Path("/tmp/scratch-x")
+    loaded, control = cli._join_decoder_load(thread, state, scratch)
     assert fake_load["seen"] == [
         ("prepare_decoder", False),
         ("prepare_step_weights", False),
         ("finish_decoder", True),
+        ("finish_step_weights", True),
     ]
-    assert loaded is not None
+    assert loaded is not None and control == "control"
     assert state["cpu_thread_wall_ns"] >= 0
-    # The step upload runs on the main thread too (pipeline line after the
-    # decoder_load stage).
-    vulkan_decoder_step.finish_step_weights(state["packing"])
-    assert fake_load["seen"][-1] == ("finish_step_weights", True)
+    # The step upload and the TDT control build run on the main thread
+    # too, inside the join, on the packed buffers.
+    assert controls == [(fake_load["device_sentinel"], scratch)]
+
+
+def test_decoder_load_stage_lands_after_encoder_before_begin_chunk():
+    import inspect
+
+    chunks = inspect.getsource(cli._decode_chunks)
+    assert 0 <= chunks.index('"encoder_ane') < chunks.index(
+        '"decoder_load"') < chunks.index("control.begin_chunk")
+    # The pipeline hands the load future to _decode_chunks and no longer
+    # stages decoder_load itself.
+    pipeline = inspect.getsource(cli._run_pipeline)
+    assert '"decoder_load"' not in pipeline
+    assert "(decoder_thread, decoder_state)" in pipeline
 
 
 def test_thread_error_propagates_at_join_and_thread_is_joined(fake_load):
     fake_load["cpu_error"] = RuntimeError("bad package")
     thread, state = cli._start_decoder_load(Path("/tmp"))
     with pytest.raises(RuntimeError, match="bad package"):
-        cli._join_decoder_load(thread, state)
+        cli._join_decoder_load(thread, state, Path("/tmp/scratch-x"))
     assert not thread.is_alive()
 
 
