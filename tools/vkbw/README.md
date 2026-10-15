@@ -26,8 +26,10 @@ Close other GPU work first. Do not read a result as a quiet-machine number unles
 ## What it measures
 
 Each case is one compute dispatch that reads every element of a buffer exactly once. In copy mode it also writes each
-element to a second buffer. GB/s is useful bytes (read, plus written for a copy) divided by GPU time from timestamp queries.
-A case runs a batch of passes in one submit, then repeats the batch 5 times; the table shows the median of those 5.
+element to a second buffer. GB/s is useful bytes (read, plus written for a copy) divided by the wall time of a batch of
+passes in one submission (GPU timestamp queries are not used: on some drivers they do not measure the work). A batch is
+about 60 ms. A pass slower than 2 s is skipped, and a submission over 10 s stops the program. Each case repeats the batch
+5 times; the table shows the median of those 5.
 `summarize.py` then takes the median over the runs and shows the lowest and highest in brackets. 1 GB is 1e9 bytes.
 
 | Knob | Values | Meaning |

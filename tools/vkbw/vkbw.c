@@ -5,9 +5,11 @@
 // One compute dispatch walks a storage buffer once. The shader sums every element (the host checks the sum, so a skipped or
 // wrong read cannot pass) and, in copy mode, writes each element to a second buffer. Cases vary the load width (2, 4, 8, 16
 // bytes: bf16 / f32 / vec2 / vec4), the distance between neighbouring lanes (coalesced to 1 KiB apart), the buffer size, the
-// workgroup size and, where the driver allows it, the subgroup size. GB/s is useful bytes (read, plus written for copy) over GPU
-// time from timestamp queries around a batch of dispatches; 1 GB is 1e9 bytes.
+// workgroup size and, where the driver allows it, the subgroup size. GB/s is useful bytes (read, plus written for copy) over the
+// wall time of a batch of dispatches in one submission (GPU timestamp queries are not used: they do not measure the work on
+// every driver); 1 GB is 1e9 bytes. A pass slower than 2 s is skipped and a submission over 10 s stops the program.
 #define _POSIX_C_SOURCE 200809L
+#include <time.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -22,6 +24,8 @@
 #define MAX_SLOTS 256
 #define TARGET_MS 60.0
 #define REPEATS 5
+#define MAX_SUBMIT_S 10
+#define MAX_PASS_S 2.0
 
 static void die(const char* fmt, ...) {
   va_list ap;
@@ -41,7 +45,6 @@ static VkDevice dev;
 static VkQueue queue;
 static uint32_t qfam;
 static VkPhysicalDeviceMemoryProperties memprops;
-static float ts_period;
 static bool has_16bit, has_sgsize;
 static uint32_t sg_default, sg_min, sg_max, max_wg_invocations;
 static uint64_t max_alloc, max_storage_range;
@@ -51,7 +54,6 @@ static VkDescriptorPool dpool;
 static VkCommandPool cpool;
 static VkCommandBuffer cb;
 static VkFence fence;
-static VkQueryPool qpool;
 
 typedef struct { VkBuffer buf; VkDeviceMemory mem; VkDeviceSize size; void* map; } Buf;
 
@@ -125,12 +127,19 @@ static void begin(void) {
   VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
   VK(vkBeginCommandBuffer(cb, &bi));
 }
+static double last_submit_ns;  // wall time of the last submit_wait, ns
 static void submit_wait(void) {
   VK(vkEndCommandBuffer(cb));
   VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
   VK(vkResetFences(dev, 1, &fence));
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
   VK(vkQueueSubmit(queue, 1, &si, fence));
-  VK(vkWaitForFences(dev, 1, &fence, VK_TRUE, 30ull * 1000000000ull));
+  VkResult r = vkWaitForFences(dev, 1, &fence, VK_TRUE, MAX_SUBMIT_S * 1000000000ull);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  if (r == VK_TIMEOUT) die("a submission ran longer than %d s; stopping before the GPU watchdog does", MAX_SUBMIT_S);
+  if (r != VK_SUCCESS) die("vkWaitForFences failed: %d", (int)r);
+  last_submit_ns = (double)(t1.tv_sec - t0.tv_sec) * 1e9 + (double)(t1.tv_nsec - t0.tv_nsec);
 }
 static void barrier_compute(void) {
   VkMemoryBarrier mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT, .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT};
@@ -223,15 +232,12 @@ static double run_batch(VkPipeline p, VkDescriptorSet set, uint32_t groups, cons
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
   vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
-  vkCmdResetQueryPool(cb, qpool, 0, 2);
-  vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qpool, 0);
   for (uint32_t i = 0; i < K; i++) {
     uint32_t pc[5] = {pc_base[0], pc_base[1], pc_base[2], pc_base[3], i};
     vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, pc);
     vkCmdDispatch(cb, groups, 1, 1);
     barrier_compute();
   }
-  vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qpool, 1);
   VkBufferCopy bc = {0, 0, MAX_SLOTS * 4};
   VkMemoryBarrier mb2 = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT};
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb2, 0, NULL, 0, NULL);
@@ -239,9 +245,7 @@ static double run_batch(VkPipeline p, VkDescriptorSet set, uint32_t groups, cons
   VkMemoryBarrier mb3 = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb3, 0, NULL, 0, NULL);
   submit_wait();
-  uint64_t t[2];
-  VK(vkGetQueryPoolResults(dev, qpool, 0, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT));
-  return (double)(t[1] - t[0]) * ts_period;
+  return last_submit_ns;
 }
 
 static bool all_equal(uint32_t n, uint32_t want) {
@@ -267,10 +271,14 @@ static bool run_case(int op, int w, uint32_t wg, uint32_t sg, uint64_t bytes, ui
   uint32_t groups = (uint32_t)(grid / wg);
 
   if (op == 1) clear_dst();
-  double ns1 = run_batch(p, set_fwd, groups, pc, 1);  // warm up and calibrate
+  double ns1 = run_batch(p, set_fwd, groups, pc, 1);  // warm up
   if (!all_equal(1, want)) { out->ok = false; return true; }
-  uint32_t K = (uint32_t)(TARGET_MS * 1e6 / (ns1 > 1 ? ns1 : 1));
+  if (ns1 > MAX_PASS_S * 1e9) { fprintf(stderr, "vkbw: skipped a case: one pass took %.1f s\n", ns1 / 1e9); return false; }
+  double ns5 = run_batch(p, set_fwd, groups, pc, 5);
+  double per_pass = ns5 > ns1 ? (ns5 - ns1) / 4 : ns5 / 5;  // the difference removes the fixed submit cost
+  uint32_t K = (uint32_t)(TARGET_MS * 1e6 / (per_pass > 1 ? per_pass : 1));
   K = K < 1 ? 1 : (K > MAX_SLOTS ? MAX_SLOTS : K);
+  run_batch(p, set_fwd, groups, pc, K);  // clocks and caches settle, not timed
   double gbs[REPEATS];
   double ns_last = 0;
   bool ok = true;
@@ -394,16 +402,14 @@ int main(int argc, char** argv) {
   max_wg_invocations = p2.properties.limits.maxComputeWorkGroupInvocations;
   max_alloc = m3.maxMemoryAllocationSize;
   max_storage_range = p2.properties.limits.maxStorageBufferRange;
-  ts_period = p2.properties.limits.timestampPeriod;
-  if (!p2.properties.limits.timestampComputeAndGraphics) die("the device has no timestamp support on compute queues");
 
   uint32_t nq = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(phys, &nq, NULL);
   VkQueueFamilyProperties* qf = calloc(nq, sizeof *qf);
   vkGetPhysicalDeviceQueueFamilyProperties(phys, &nq, qf);
   qfam = UINT32_MAX;
-  for (uint32_t i = 0; i < nq; i++) if ((qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && qf[i].timestampValidBits >= 36) { qfam = i; break; }
-  if (qfam == UINT32_MAX) die("no compute queue with timestamps");
+  for (uint32_t i = 0; i < nq; i++) if (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) { qfam = i; break; }
+  if (qfam == UINT32_MAX) die("no compute queue");
 
   float prio = 1.0f;
   VkDeviceQueueCreateInfo dq = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = qfam, .queueCount = 1, .pQueuePriorities = &prio};
@@ -444,8 +450,6 @@ int main(int argc, char** argv) {
   VK(vkAllocateCommandBuffers(dev, &cai, &cb));
   VkFenceCreateInfo fi = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   VK(vkCreateFence(dev, &fi, NULL, &fence));
-  VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2};
-  VK(vkCreateQueryPool(dev, &qi, NULL, &qpool));
   res = make_buf(MAX_SLOTS * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
   rb = make_buf(MAX_SLOTS * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
   mod_init = make_module(spv_init, sizeof spv_init);
@@ -465,12 +469,12 @@ int main(int argc, char** argv) {
 
   FILE* csv = csv_path ? fopen(csv_path, "w") : NULL;
   if (csv_path && !csv) die("cannot write %s", csv_path);
-#define BOTH(...) do { printf(__VA_ARGS__); if (csv) fprintf(csv, __VA_ARGS__); } while (0)
+#define BOTH(...) do { printf(__VA_ARGS__); if (csv) { fprintf(csv, __VA_ARGS__); fflush(csv); } } while (0)
   BOTH("# vkbw device: %s (%s)\n", p2.properties.deviceName, dev_type(p2.properties.deviceType));
   BOTH("# driver: %s %s | api %u.%u.%u\n", drv.driverName, drv.driverInfo, VK_VERSION_MAJOR(p2.properties.apiVersion), VK_VERSION_MINOR(p2.properties.apiVersion), VK_VERSION_PATCH(p2.properties.apiVersion));
   BOTH("# vendor 0x%04x device 0x%04x | subgroup default %u, controllable %s (%u..%u) | max workgroup invocations %u\n", p2.properties.vendorID, p2.properties.deviceID, sg_default, has_sgsize ? "yes" : "no", sg_min, sg_max, max_wg_invocations);
-  BOTH("# storage buffer 16-bit access: %s | timestamp period %.3f ns | largest buffer used %" PRIu64 " MiB\n", has_16bit ? "yes" : "no (bf16 width skipped)", ts_period, cap >> 20);
-  BOTH("# GB/s is 1e9 bytes per second of useful bytes (read, plus written for copy); stride_bytes is the distance between neighbouring lanes\n");
+  BOTH("# storage buffer 16-bit access: %s | largest buffer used %" PRIu64 " MiB\n", has_16bit ? "yes" : "no (bf16 width skipped)", cap >> 20);
+  BOTH("# GB/s is 1e9 bytes per second of useful bytes (read, plus written for copy), from wall time; stride_bytes is the distance between neighbouring lanes\n");
   BOTH("suite,op,width_bytes,wg,subgroup,size_mib,stride_bytes,gbs_median,gbs_min,gbs_max,ms_per_pass,check\n");
 
   uint64_t biggest = 0;
