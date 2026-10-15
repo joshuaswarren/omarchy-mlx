@@ -739,56 +739,66 @@ def _load_audio(lock, fixture) -> tuple:
     return stage_audio()
 
 
-def _start_decoder_load(cache_dir: Path) -> tuple:
-    """Start the CPU-only decoder/joint preparation on one worker thread.
+def _start_decoder_load(cache_dir: Path, stream) -> tuple:
+    """Start the decoder/joint load on one worker thread (prep + uploads).
 
-    Started right after audio_load so the package parse, graph validation
-    and numpy packing overlap island_open and the chunk-0 mel/encoder
-    stages; `_join_decoder_load` lands inside `_decode_chunks` after chunk
-    0's encoder stage. The thread performs no GPU call; every mx upload
-    happens on the main thread after the join. An exception in the
-    preparation is stored and re-raised on the main thread at the join."""
-    from coreml.vulkan_decoder import prepare_decoder
-    from coreml.vulkan_decoder_step import prepare_step_weights
+    Started on chunk 0 right before the encoder stage, so the CPU-only
+    preparation and the GPU uploads run while the main thread blocks in
+    the ANE worker wait (select releases the GIL and holds no GPU lock).
+    `stream` is the MAIN thread's stream object (`mx.default_stream(mx.gpu)`):
+    default streams are thread-local (a new thread would otherwise create
+    its own stream), so the worker adopts the passed stream with
+    `mx.stream(stream)`; same-stream work is in-order on the stream's
+    scheduler worker, and Vulkan submits serialize on the device queue
+    mutex. The thread stores `error` on any failure; the re-raise happens
+    on the main thread at the join."""
+    from coreml.vulkan_decoder import finish_decoder, prepare_decoder
+    from coreml.vulkan_decoder_step import (
+        finish_step_weights,
+        prepare_step_weights,
+    )
 
+    import mlx.core as mx
     import threading
 
     state: dict = {}
 
     def _work():
         try:
-            parts = prepare_decoder(cache_dir / "decoder.mlpackage")
-            state["parts"] = parts
-            state["packing"] = prepare_step_weights(
-                parts, cache_dir / "joint.mlpackage")
+            with mx.stream(stream):
+                parts = prepare_decoder(cache_dir / "decoder.mlpackage")
+                state["parts"] = parts
+                state["packing"] = prepare_step_weights(
+                    parts, cache_dir / "joint.mlpackage")
+                state["decoder"] = finish_decoder(parts)
+                state["packed"] = finish_step_weights(state["packing"])
         except BaseException as error:
             state["error"] = error
 
     thread = threading.Thread(target=_work, name="decoder-load", daemon=True)
+    state["stream"] = stream
     state["started_ns"] = time.monotonic_ns()
     thread.start()
     return thread, state
 
 
 def _join_decoder_load(thread, state: dict, scratch_root: Path):
-    """Main thread: join the CPU preparation, then submit the GPU uploads.
+    """Main thread: join the worker, synchronize its stream, build control.
 
-    Called from inside `_decode_chunks` after chunk 0's encoder stage, so
-    the CPU work overlaps audio_load through mel_frontend/encoder_ane.
-    The decoder_load stage wraps this call, so its gpu_counter_delta keeps
-    covering exactly the GPU work of the load (the background thread adds
-    none). Reports the overlapped CPU wall as `cpu_thread_wall_ms`."""
-    from coreml.vulkan_decoder import finish_decoder
-    from coreml.vulkan_decoder_step import finish_step_weights
+    The decoder_load stage wraps this call. The worker's own `mx.eval`
+    calls plus the join already order its uploads before any use; the
+    explicit synchronize on the adopted stream is the belt-and-braces
+    barrier. Reports the overlapped wall (thread start to join) as
+    `cpu_thread_wall_ms`."""
+    import mlx.core as mx
 
     thread.join()
     state["cpu_thread_wall_ns"] = (
         time.monotonic_ns() - state["started_ns"])
     if "error" in state:
         raise state["error"]
-    decoder = finish_decoder(state["parts"])
-    packed = finish_step_weights(state["packing"])
-    return decoder, _TdtControl(packed, scratch_root)
+    mx.synchronize(state["stream"])
+    return state["decoder"], _TdtControl(state["packed"], scratch_root)
 
 
 def _plan_chunks(sample_count: int) -> tuple[list[int], bool]:
@@ -973,15 +983,15 @@ class _ChunkDecode:
     control: object
 
 
-def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
+def _decode_chunks(island, runner, cache_dir, stage, lock, waveform,
                    chunk_starts, single, pinned, scratch_root) -> _ChunkDecode:
     """mel -> encoder -> TDT per 30 s chunk; closes the island when done.
 
-    `decoder_load` is the (thread, state) pair from `_start_decoder_load`.
-    On chunk 0 only, after encoder_ane's eval and before the TDT control
-    is first built, the decoder_load stage joins the CPU preparation and
-    submits the GPU uploads; later chunks reuse the loaded decoder and
-    never wait."""
+    On chunk 0 the decoder/joint load runs on a worker thread started
+    right before the encoder stage (it overlaps the main thread's block
+    in the ANE worker wait); the decoder_load stage joins it after
+    encoder_ane's eval and before the TDT control is first built. Later
+    chunks reuse the loaded decoder and never wait."""
     import numpy as np
 
     import mlx.core as mx
@@ -1032,6 +1042,8 @@ def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
     last_mask_valid = 0
     last_window = 0
     control = None
+    load_thread = None
+    load_state = None
     try:
         for ci, start in enumerate(chunk_starts):
             suffix = "" if single else f"#{ci}"
@@ -1039,6 +1051,14 @@ def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
                           else waveform[start:start + CHUNK_SAMPLES])
             mel_result = stage(f"mel_frontend{suffix}", trace_snapshot,
                                stage_mel(chunk_wave))
+            if load_thread is None:
+                # Chunk 0 only: start the decoder/joint load right before
+                # the encoder stage, so prep + uploads run while the main
+                # thread blocks in the ANE worker wait. The stream is the
+                # main thread's default stream (thread-local default
+                # streams otherwise give the worker its own stream).
+                load_thread, load_state = _start_decoder_load(
+                    cache_dir, mx.default_stream(mx.gpu))
             encoded = stage(f"encoder_ane{suffix}", trace_snapshot,
                             stage_encoder(mel_result))
             encoder_hidden = encoded["encoder_hidden"].astype(mx.float32)
@@ -1073,11 +1093,10 @@ def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
             decode_hidden = (encoder_hidden if decode_frames == window
                              else encoder_hidden[:, :decode_frames, :])
             if control is None:
-                # Chunk 0 only: the CPU decoder/joint preparation has been
-                # running since audio_load; the join plus the GPU uploads
-                # land here, after encoder_ane's eval and before the TDT
+                # Chunk 0 only: the load thread has been running since
+                # before the encoder stage; the decoder_load stage joins
+                # it here, after encoder_ane's eval and before the TDT
                 # control first touches the packed constants.
-                load_thread, load_state = decoder_load
                 _, control = stage(
                     "decoder_load", trace_snapshot,
                     lambda: _join_decoder_load(load_thread, load_state,
@@ -1120,6 +1139,11 @@ def _decode_chunks(island, runner, decoder_load, stage, lock, waveform,
                 mask_parts.append(encoder_mask)
     finally:
         island.close()
+        # The load thread must never outlive a failed chunk loop: an
+        # encoder-stage exception still joins it here (its own failure,
+        # if any, surfaces at the join in the happy path).
+        if load_thread is not None and load_thread.is_alive():
+            load_thread.join()
     return _ChunkDecode(
         mel_parts=mel_parts,
         hidden_parts=hidden_parts,
@@ -1457,7 +1481,6 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
         _record_lifetime_stage(stages_records, "startup_to_main", trace_snapshot)
     waveform, sample_count, decoder_name = stage(
         "audio_load", trace_snapshot, lambda: _load_audio(lock, fixture))
-    decoder_thread, decoder_state = _start_decoder_load(cache_dir)
     warm = _GpuWarm(mx)
     warm.start()
 
@@ -1465,33 +1488,26 @@ def _run_pipeline(args, pin, lock, cache_dir, fixture, audio_sha, worker,
     chunk_starts, single = _plan_chunks(sample_count)
 
     # ----------------------------------------------------------- 3. encoder
-    try:
-        if _pk_timing_extra_on():
-            island, source, runner = stage(
-                "island_open", trace_snapshot,
-                lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
-                                       scratch_root))
-        else:
-            island, source, runner = _open_encoder(
-                args, pin, lock, cache_dir, worker, share, scratch_root)
-        # mel is the next GPU work after audio_load's uploads; the warm
-        # thread bridges island_open's idle and must not race the chunk
-        # stages (it would pollute their gpu_counter_delta).
-        warm.stop()
+    if _pk_timing_extra_on():
+        island, source, runner = stage(
+            "island_open", trace_snapshot,
+            lambda: _open_encoder(args, pin, lock, cache_dir, worker, share,
+                                   scratch_root))
+    else:
+        island, source, runner = _open_encoder(
+            args, pin, lock, cache_dir, worker, share, scratch_root)
+    # mel is the next GPU work after audio_load's uploads; the warm
+    # thread bridges island_open's idle and must not race the chunk
+    # stages (it would pollute their gpu_counter_delta).
+    warm.stop()
 
-        # -------------------------------- 4. decoder, joint, control
-        # The CPU preparation runs on decoder_thread from audio_load until
-        # chunk 0's encoder stage; the join plus the GPU uploads (the
-        # decoder_load stage record) land inside _decode_chunks, after
-        # encoder_ane's eval and before the TDT control is first built.
-        chunk = _decode_chunks(island, runner,
-                               (decoder_thread, decoder_state), stage, lock,
-                               waveform, chunk_starts, single, pinned,
-                               scratch_root)
-    finally:
-        # No worker thread outlives a failed pipeline, whatever failed.
-        if decoder_thread.is_alive():
-            decoder_thread.join()
+    # -------------------------------- 4. decoder, joint, control
+    # The decoder/joint load runs on a worker thread inside
+    # _decode_chunks: started right before chunk 0's encoder stage, joined
+    # by the decoder_load stage after encoder_ane's eval. Control comes
+    # back on the chunk.
+    chunk = _decode_chunks(island, runner, cache_dir, stage, lock, waveform,
+                           chunk_starts, single, pinned, scratch_root)
     tdt, mel_host, hidden_host, mask_host = _collect_tdt(chunk, single)
     control = chunk.control
 
