@@ -11,6 +11,12 @@ CLI to that contract with fake prepare/finish functions and a fake
 `mlx.core`, so a regression (uploads leaving the adopted stream, a
 swallowed thread exception, a renamed or reshaped stage record, the join
 escaping its position) fails on any host before it can reach hardware.
+
+Fake limits (untested here, by design): the fake cannot demonstrate real
+scheduler ordering (one worker per stream), the device queue mutex, or
+the StreamContext spare-stream creation in a fresh thread — those rest on
+the cited MLX source lines in B2-source-proposal.md (mlx/stream.cpp,
+scheduler.cpp, omarchy/encoder.cpp), not on this fake.
 """
 
 import sys
@@ -34,26 +40,46 @@ GPU = object()
 
 
 class FakeMx(types.ModuleType):
-    """Minimal `mlx.core` stand-in that records stream and sync usage."""
+    """Minimal `mlx.core` stand-in modelling w7K's source reading.
+
+    `set_default_stream(s)` sets THIS thread's current stream (no
+    StreamContext, no spare stream). `stream(mx.gpu)` is the device-form
+    context: its constructor resolves `default_stream(default_device())`
+    to the CURRENT default stream and then sets that same stream — so a
+    device-form context inside the worker resolves to the adopted stream.
+    Every call is recorded in `events` (ordered) so the test can require
+    set_default_stream to be the worker's FIRST GPU-side action.
+    """
 
     def __init__(self):
         super().__init__("mlx.core")
         self.gpu = GPU
-        self.entered = []      # stream objects entered via mx.stream(...)
-        self.synchronized = []  # stream objects passed to mx.synchronize(...)
+        self.current = None            # this (fake) thread's default stream
+        self.events = []               # ordered ("set_default"|"enter"|...)
+        self.synchronized = []
         self.default_requested = 0
 
-    @contextmanager
-    def stream(self, s):
-        self.entered.append(s)
-        yield
+    def set_default_stream(self, s):
+        self.events.append(("set_default", s))
+        self.current = s
 
     def default_stream(self, device):
         self.default_requested += 1
-        return "thread-local-default"
+        return self.current
 
     def synchronize(self, s):
+        self.events.append(("synchronize", s))
         self.synchronized.append(s)
+
+    @contextmanager
+    def stream(self, s):
+        if s is GPU:
+            resolved = self.default_stream(GPU)  # StreamContext ctor read
+            self.events.append(("enter", resolved))
+        else:
+            self.events.append(("enter", s))
+            self.current = s
+        yield
 
 
 @pytest.fixture()
@@ -63,12 +89,23 @@ def fake_mx(monkeypatch):
     package.core = mx
     monkeypatch.setitem(sys.modules, "mlx", package)
     monkeypatch.setitem(sys.modules, "mlx.core", mx)
-    return mx
+    # The decoder modules cache their mx handle; clear so every test's
+    # fake instance is the one the inner mx.stream(mx.gpu) blocks see.
+    vulkan_decoder._mlx.cache_clear()
+    vulkan_decoder_step._mx.cache_clear()
+    yield mx
+    monkeypatch.undo()
+    vulkan_decoder._mlx.cache_clear()
+    vulkan_decoder_step._mx.cache_clear()
 
 
 @pytest.fixture()
-def fake_load(monkeypatch):
-    """Replace the load phases; record which thread each ran on."""
+def fake_load(monkeypatch, fake_mx):
+    """Replace the load phases; record which thread each ran on.
+
+    The fake finish bodies enter the device-form `mx.stream(mx.gpu)`
+    context exactly like the real ones, so the recorded events show what
+    stream those contexts resolved to inside the worker."""
     seen: list[tuple[str, bool]] = []
     state: dict = {"cpu_error": None, "error_at": None}
     parts, packing, decoder = object(), object(), object()
@@ -88,15 +125,17 @@ def fake_load(monkeypatch):
 
     def finish_decoder(prepared):
         seen.append(("finish_decoder", threading.current_thread() is MAIN))
-        if state["error_at"] == "finish_decoder":
-            raise RuntimeError("upload failed")
+        with fake_mx.stream(fake_mx.gpu):
+            if state["error_at"] == "finish_decoder":
+                raise RuntimeError("upload failed")
         return decoder
 
     def finish_step_weights(packed):
         seen.append(("finish_step_weights", threading.current_thread() is MAIN))
         assert packed is packing
-        if state["error_at"] == "finish_step_weights":
-            raise RuntimeError("upload failed")
+        with fake_mx.stream(fake_mx.gpu):
+            if state["error_at"] == "finish_step_weights":
+                raise RuntimeError("upload failed")
         return packed
 
     monkeypatch.setattr(vulkan_decoder, "prepare_decoder", prepare_decoder)
@@ -128,9 +167,16 @@ def test_uploads_run_in_thread_on_the_adopted_stream(
         ("finish_step_weights", False),
     ]
     assert loaded is fake_load["decoder_sentinel"] and control == "control"
-    # The worker adopted EXACTLY the passed stream: a thread-local default
-    # stream (what mx.stream(mx.gpu) would create) must never appear.
-    assert fake_mx.entered == [stream]
+    # The worker's first GPU-side action adopts EXACTLY the passed stream
+    # via set_default_stream; the two inner device-form contexts (the
+    # `mx.stream(mx.gpu)` blocks in finish_decoder / finish_step_weights)
+    # resolve to that same adopted stream and enter no other.
+    assert fake_mx.events == [
+        ("set_default", stream),
+        ("enter", stream),   # finish_decoder's mx.stream(mx.gpu)
+        ("enter", stream),   # finish_step_weights' mx.stream(mx.gpu)
+        ("synchronize", stream),  # the join's explicit barrier
+    ]
     assert fake_mx.synchronized == [stream]
     assert state["cpu_thread_wall_ns"] >= 0
     assert controls == [(fake_load["packing_sentinel"], scratch)]
@@ -138,16 +184,20 @@ def test_uploads_run_in_thread_on_the_adopted_stream(
 
 def test_stream_mismatch_is_visible(fake_load, fake_mx):
     """A regression that uploads on any stream other than the one passed
-    in fails this check: the fake records what the worker entered."""
+    in fails this check: the fake records what the worker set and what
+    its device-form contexts resolved to."""
     stream_a, stream_b = object(), object()
     thread_a, _ = cli._start_decoder_load(Path("/tmp"), stream_a)
     thread_a.join()
-    assert fake_mx.entered == [stream_a]
-    assert stream_b not in fake_mx.entered
+    assert [kind for kind, _ in fake_mx.events] == [
+        "set_default", "enter", "enter"]
+    assert {s for _, s in fake_mx.events} == {stream_a}
     thread_b, state_b = cli._start_decoder_load(Path("/tmp"), stream_b)
     thread_b.join()
-    assert fake_mx.entered[-1] is stream_b
-    assert fake_mx.default_requested == 0  # never a thread-local default
+    assert {s for _, s in fake_mx.events[-3:]} == {stream_b}
+    # Untested note: the fake cannot show real scheduler/queue ordering
+    # (single worker per stream, device queue mutex) — those rest on the
+    # cited MLX source lines in the B2 proposal, not on this fake.
     cli._join_decoder_load(thread_b, state_b, Path("/tmp/scratch-y"))
     assert fake_mx.synchronized == [stream_b]
 

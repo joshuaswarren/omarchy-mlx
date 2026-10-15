@@ -294,7 +294,11 @@ def prepare_decoder(package_path: Path) -> DecoderParts:
 
 
 def finish_decoder(parts: DecoderParts) -> "VulkanDecoder":
-    """GPU half of the old load: upload the constants (main thread only)."""
+    """GPU half of the load: upload the prepared constants.
+
+    May run on a worker thread that has adopted the pipeline's stream
+    with `mx.set_default_stream` (the transcribe CLI does), never
+    concurrently with another upload on a different stream."""
     mx = _mlx()
     with mx.stream(mx.gpu):
         arrays = [mx.array(value) for value in parts.values]

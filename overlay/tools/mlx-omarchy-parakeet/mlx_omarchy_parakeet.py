@@ -747,11 +747,12 @@ def _start_decoder_load(cache_dir: Path, stream) -> tuple:
     the ANE worker wait (select releases the GIL and holds no GPU lock).
     `stream` is the MAIN thread's stream object (`mx.default_stream(mx.gpu)`):
     default streams are thread-local (a new thread would otherwise create
-    its own stream), so the worker adopts the passed stream with
-    `mx.stream(stream)`; same-stream work is in-order on the stream's
-    scheduler worker, and Vulkan submits serialize on the device queue
-    mutex. The thread stores `error` on any failure; the re-raise happens
-    on the main thread at the join."""
+    its own stream), so the worker's first statement adopts the passed
+    stream with `mx.set_default_stream(stream)` — no StreamContext, hence
+    no spare stream in the new thread; same-stream work is in-order on
+    the stream's scheduler worker, and Vulkan submits serialize on the
+    device queue mutex. The thread stores `error` on any failure; the
+    re-raise happens on the main thread at the join."""
     from coreml.vulkan_decoder import finish_decoder, prepare_decoder
     from coreml.vulkan_decoder_step import (
         finish_step_weights,
@@ -764,14 +765,20 @@ def _start_decoder_load(cache_dir: Path, stream) -> tuple:
     state: dict = {}
 
     def _work():
+        # mx.set_default_stream adopts the main thread's stream for THIS
+        # thread only (thread-local slot, no StreamContext, so no spare
+        # stream is created and no process-wide device write). The inner
+        # mx.stream(mx.gpu) contexts inside the finish_* calls then
+        # resolve to the adopted stream; they re-write the default device
+        # with the same value, which w7K accepted (2026-10-15).
         try:
-            with mx.stream(stream):
-                parts = prepare_decoder(cache_dir / "decoder.mlpackage")
-                state["parts"] = parts
-                state["packing"] = prepare_step_weights(
-                    parts, cache_dir / "joint.mlpackage")
-                state["decoder"] = finish_decoder(parts)
-                state["packed"] = finish_step_weights(state["packing"])
+            mx.set_default_stream(stream)
+            parts = prepare_decoder(cache_dir / "decoder.mlpackage")
+            state["parts"] = parts
+            state["packing"] = prepare_step_weights(
+                parts, cache_dir / "joint.mlpackage")
+            state["decoder"] = finish_decoder(parts)
+            state["packed"] = finish_step_weights(state["packing"])
         except BaseException as error:
             state["error"] = error
 

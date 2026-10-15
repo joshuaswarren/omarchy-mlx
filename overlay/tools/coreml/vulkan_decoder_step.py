@@ -433,7 +433,11 @@ def prepare_step_weights(parts, joint_package: Path) -> StepPacking:
 
 
 def finish_step_weights(packing: StepPacking) -> StepWeights:
-    """GPU half of the old pack: upload the buffers (main thread only)."""
+    """GPU half of the pack: upload the buffers.
+
+    May run on a worker thread that has adopted the pipeline's stream
+    with `mx.set_default_stream` (the transcribe CLI does), never
+    concurrently with another upload on a different stream."""
     mx = _mx()
     with mx.stream(mx.gpu):
         packed = StepWeights(
