@@ -1,36 +1,17 @@
---- a/mlx/fast.h
-+++ b/mlx/fast.h
-@@ -119,6 +119,26 @@
-     const array& weight,
-     StreamOrDevice s = {});
+--- a/mlx/backend/no_gpu/primitives.cpp
++++ b/mlx/backend/no_gpu/primitives.cpp
+@@ -191,6 +191,7 @@ NO_GPU(View)
+ NO_GPU(MaskedScatter)
  
-+// Greedy token of a transposed affine-quantized projection: the index
-+// argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
-+// logits = quantized_matmul(x, w, scales, biases, transpose=true).
-+// high_bits packs q >> 1 of every 4-bit code q, code e of each 64-code
-+// group at bit 3e of that group's six uint32 words ([N, K * 3 / 32]); a
-+// backend may use it to certify rows that cannot hold the argmax and skip
-+// their exact evaluation. Returns {token (x.shape()[:-1], uint32), stats
-+// (uint32 [3]: rows evaluated exactly, 1 when the full exact path decided
-+// the token, float bits of the max logit or, on the full path, of the
-+// logsumexp; 0 when composed)}.
-+MLX_API std::vector<array> greedy_quantized_argmax(
-+    const array& x,
-+    const array& w,
-+    const array& scales,
-+    const array& biases,
-+    const array& high_bits,
-+    int group_size,
-+    int bits,
-+    StreamOrDevice s = {});
-+
- using TemplateArg = std::variant<int, bool, Dtype>;
- using ScalarArg = std::variant<bool, int, float>;
- 
+ namespace fast {
++NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
+ NO_GPU_USE_FALLBACK(CrossEntropy)
+ NO_GPU_MULTI(CrossEntropyVJP)
+ NO_GPU_USE_FALLBACK(LayerNorm)
 --- a/mlx/fast.cpp
 +++ b/mlx/fast.cpp
-@@ -1477,6 +1477,61 @@
-       /* inputs */ std::vector<array>{state, x, weight});
+@@ -1775,6 +1775,61 @@ std::vector<array> GatedDeltaUpdate::vjp(
+   return returned_vjps;
  }
  
 +std::vector<array> greedy_quantized_argmax(
@@ -91,9 +72,38 @@
  bool Quantize::is_equivalent(const Primitive& other) const {
    const Quantize& p_other = static_cast<const Quantize&>(other);
    return (
+--- a/mlx/fast.h
++++ b/mlx/fast.h
+@@ -160,6 +160,26 @@ MLX_API std::vector<array> gdn_conv_update(
+     float qk_eps = 0.0f,
+     StreamOrDevice s = {});
+ 
++// Greedy token of a transposed affine-quantized projection: the index
++// argmax(logits - logsumexp(logits, -1, keepdims=true), -1) selects, with
++// logits = quantized_matmul(x, w, scales, biases, transpose=true).
++// high_bits packs q >> 1 of every 4-bit code q, code e of each 64-code
++// group at bit 3e of that group's six uint32 words ([N, K * 3 / 32]); a
++// backend may use it to certify rows that cannot hold the argmax and skip
++// their exact evaluation. Returns {token (x.shape()[:-1], uint32), stats
++// (uint32 [3]: rows evaluated exactly, 1 when the full exact path decided
++// the token, float bits of the max logit or, on the full path, of the
++// logsumexp; 0 when composed)}.
++MLX_API std::vector<array> greedy_quantized_argmax(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const array& biases,
++    const array& high_bits,
++    int group_size,
++    int bits,
++    StreamOrDevice s = {});
++
+ using TemplateArg = std::variant<int, bool, Dtype>;
+ using ScalarArg = std::variant<bool, int, float>;
+ 
 --- a/mlx/fast_primitives.h
 +++ b/mlx/fast_primitives.h
-@@ -436,7 +436,6 @@
+@@ -450,7 +450,6 @@ class ConvertFP8 : public Primitive {
  
    void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
        override;
@@ -101,7 +111,7 @@
    const char* name() const override {
      if (to_fp8_) {
        return "ToFP8";
-@@ -447,13 +446,44 @@
+@@ -461,13 +460,44 @@ class ConvertFP8 : public Primitive {
    bool state() const {
      return to_fp8_;
    };
@@ -148,19 +158,9 @@
  
  class GatedDeltaUpdate : public Custom {
   public:
---- a/mlx/backend/no_gpu/primitives.cpp
-+++ b/mlx/backend/no_gpu/primitives.cpp
-@@ -190,6 +190,7 @@
- NO_GPU_MULTI(ScaledDotProductAttention)
- NO_GPU_MULTI(ScaledDotProductAttentionVJP)
- NO_GPU_MULTI(GatedDeltaUpdate)
-+NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
- NO_GPU_MULTI(ConvertFP8)
- NO_GPU_MULTI(Quantize)
- NO_GPU_MULTI(CustomKernel)
 --- a/python/src/fast.cpp
 +++ b/python/src/fast.cpp
-@@ -499,6 +499,38 @@
+@@ -549,6 +549,38 @@ void init_fast(nb::module_& parent_module) {
              Returns:
                  Tuple of (output [B, 1, Hv, Dv], final_state [B, Hv, Dv, Dk])
          )");

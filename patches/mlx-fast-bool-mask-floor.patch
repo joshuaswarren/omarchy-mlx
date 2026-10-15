@@ -1,6 +1,6 @@
---- a/mlx/fast.cpp	2026-09-06 10:55:04.712401172 -0500
-+++ b/mlx/fast.cpp	2026-09-06 10:55:04.717401124 -0500
-@@ -939,13 +939,21 @@
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1090,13 +1090,21 @@ array scaled_dot_product_attention(
            force_fused,
            stream)) {
      if (has_bool_mask && !ScaledDotProductAttention::supports_bool_mask()) {
@@ -15,13 +15,13 @@
        array& mask = inputs[3];
        mask = where(
            mask,
-           full_like(mask, 0, final_type, s),
--          full_like(mask, -inf, final_type, s));
+           full_like(mask, 0, final_type, stream),
+-          full_like(mask, -inf, final_type, stream),
 +          full_like(
 +              mask,
 +              static_cast<float>(finfo(final_type).min),
 +              final_type,
-+              s));
++              stream),
+           stream);
      }
      Shape out_shape{q.shape(0), q.shape(1), q.shape(2), v.shape(-1)};
-     auto primitive = std::make_shared<ScaledDotProductAttention>(

@@ -1,4 +1,4 @@
-MLX_VERSION=0.32.3
-MLX_COMMIT=9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8
-MLX_ARCHIVE_URL=https://github.com/ml-explore/mlx/archive/9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8.tar.gz
-MLX_ARCHIVE_SHA256=3e564bf7a0d5e5bac3a56fc26668cdcedd4a9db9fbfbf2bb6d762632ceb6f65a
+MLX_VERSION=0.32.4
+MLX_COMMIT=36969c094354086e15d2a327a9c50feb20b9cf11
+MLX_ARCHIVE_URL=https://github.com/ml-explore/mlx/archive/36969c094354086e15d2a327a9c50feb20b9cf11.tar.gz
+MLX_ARCHIVE_SHA256=391b1e41414cddebe7a4fb5c55bf193ea5edd70e26adcfb0e1d6a5e5e86ec34a

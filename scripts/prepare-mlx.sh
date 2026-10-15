@@ -118,60 +118,7 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-fast-exl3-moe.patch"
 
-# Backend-generic upstream fixes, applied in upstream first-parent order.
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-view-offset.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-eval-cleanup-deadlock.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-shared-buffer-reshape-contiguity.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-view-last-axis-stride.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-view-contiguity-flags.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-multioptimizer-empty-group.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-as-strided-contiguity.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-aligned-array-pointer.patch"
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-vmap-scatter-axis.patch"
-# logcumsumexp: promote integer/bool inputs to a float dtype before the
-# scan. The integer scan accumulated logaddexp in integer arithmetic (a
-# cumulative maximum) and the GPU had no integer kernel; every other
-# log-space op promotes.
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-logcumsumexp-float-promote.patch"
-# CPU reductions over large arrays: widen offsets and sizes to int64 so a
-# reduction past 2^31 elements reads the right rows.
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-reduce-large-offsets.patch"
-# Sort/argsort on transposed GPU views picked rows from the wrong input
-# row: collapse_contiguous_dims kept a leading size-1 axis as its own
-# collapsed dim, so a transposed view never collapsed to the contiguous
-# sort kernel and the sort ran over the wrong stride plan (upstream
-# #4366; shared backend/common part).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-sort-collapse-unsorted-axes.patch"
-# vmap of an inverse real FFT to an odd length: the output length is not
-# recoverable from the input shape, so carry an odd_out flag through the
-# FFT primitive's vmap (upstream #4637).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-fft-vmap-odd-irfft.patch"
-# CPU compile cache: build under a unique temp name and rename into
-# place, so concurrent processes never load a partly written lib*
-# (upstream #4638).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-cpu-compile-cache-race.patch"
-# Dynamic-slice start arrays: read the indices contiguously (upstream
-# #4599 CPU part; the cuda/metal hunks are out of scope).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-slice-noncontig-start-cpu.patch"
-# clip_grad_norm: sum float16 squares in float32 and cast after scaling,
-# so fp16 overflow zeroes every gradient (upstream #4626).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-clip-grad-norm-fp16.patch"
+# Backend-generic fixes that upstream v0.32.4 does not carry, applied in upstream first-parent order.
 # CPU quantized matmul: accumulate the scalar (non-SIMD) full-row and
 # k-outer kernels in float32 instead of the activation dtype. A bfloat16
 # accumulator drifts several percent from the f64 dequant reference at
@@ -179,33 +126,6 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # accumulate Simd<float, S>.
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-cpu-qmm-fp32-accum.patch"
-# Pickle of a bfloat16 array passed strides = nullptr, so a non-contiguous
-# (e.g. F-contiguous transposed) array unpickled with wrong strides
-# (upstream #4649).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-pickle-bf16-strides.patch"
-# Python -> mlx conversion narrowed through float for int64/bool/float64
-# list and scalar targets: 2**24+1 lost its odd bit going to int32/int64,
-# 1e-50 became False for bool, and int lists to float64 cast via float32
-# (upstream #4656).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-python-dtype-narrowing.patch"
-# Compile scalar merging merged a scalar that is also a compiled output:
-# the output_map lookup then threw std::out_of_range (unordered_map::at)
-# and compiling a function returning both a value and a constant scalar
-# crashed (upstream #4658).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-compile-scalar-output.patch"
-# The .npy loader read the header shape without validation: a negative or
-# overflowing dim from an untrusted file computed a wild total size
-# (upstream #4657).
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-npy-shape-validate.patch"
-# Integer floor_divide became one FloorDivide primitive instead of a
-# Divide/Remainder/Subtract subgraph (upstream #4642); the omarchy backend
-# implements FloorDivide::eval_gpu. Drop at the first pin at or past 2654664a3.
-patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
-  < "$ROOT/patches/mlx-floor-divide.patch"
 # CPU comm primitives (AllReduce, AllGather, Recv, ReduceScatter): the queued
 # ring task writes the output through a raw pointer, so hold the output
 # until that task ran. A Depends-dropped all_gather output was unmapped

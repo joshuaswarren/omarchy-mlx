@@ -1,7 +1,7 @@
 """Issue #156 regression: every class that gains an eval_cpu body in the patch
 series must also gain a cpu-off stub in the same patch.
 
-The 2026-10-12 report: patches/mlx-floor-divide.patch added NO_GPU(FloorDivide)
+The 2026-10-12 report: the floor-divide patch (dropped at the v0.32.4 pin, upstream carries it) added NO_GPU(FloorDivide)
 but no NO_CPU(FloorDivide), so MLX_BUILD_CPU=OFF failed to link with an
 undefined vtable. The runtime CI gate builds with the CPU backend on, so it
 never sees that configuration.
@@ -48,10 +48,6 @@ class StubParityTests(unittest.TestCase):
             if missing:
                 uncovered[patch.name] = sorted(missing)
         self.assertEqual(uncovered, {}, f"eval_cpu bodies without a NO_CPU stub: {uncovered}")
-
-    def test_floor_divide_stub_is_present(self):
-        text = (PATCHES / "mlx-floor-divide.patch").read_text()
-        self.assertIn("+NO_CPU(FloorDivide)", text.splitlines())
 
 
 if __name__ == "__main__":

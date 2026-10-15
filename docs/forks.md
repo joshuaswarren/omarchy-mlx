@@ -71,12 +71,12 @@ upstream fix on the pinned base, cherry-pick that commit instead.
 
 The build still consumes the pinned upstream archive:
 
-- `mlx.lock` pins MLX 0.32.3 at commit
-  `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. The archive URL and SHA-256
-  were verified against main on 2026-09-30.
+- `mlx.lock` pins MLX 0.32.4 at commit
+  `36969c094354086e15d2a327a9c50feb20b9cf11`. The archive URL and SHA-256
+  were checked on 2026-10-15.
 - `scripts/prepare-mlx.sh` downloads the archive. It applies the patches
-  from `patches/`. That is 58 files after the 2026-10-09 upstream backports
-  #4658 #4656 #4657 #4649.
+  from `patches/`. That is 41 files after the pin moved to v0.32.4 on 2026-10-15.
+  The move dropped 21 patches that upstream now carries and rebased two.
 - Nothing in the build reads `joshuaswarren/omarchy-mlx`.
 
 Switching the build to the fork is an owner decision. Nobody has made it.
