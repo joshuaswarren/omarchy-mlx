@@ -3280,7 +3280,8 @@ void dispatch_gather_qmm(
   if (!fp_mode && m == 1) {
     // MLX_OMARCHY_GATHER_QMM_SUB=0 forces the scalar kernel. Selector is
     // restricted to the layout class proven correct end to end (bf16 and
-    // f16, 4-bit, group-64, transposed affine - the MoE decode cases;
+    // f16, 4-bit group-64 and 2-bit group-32/64/128 (16 codes per word, the
+    // kernel's generic pack-factor decode), transposed affine - the MoE decode cases;
     // f16 added by MatmulGap H45); every other layout stays on the scalar kernel until its
     // parity is proven per layout (M1 and M1 Max suite history: f32-T and
     // bits=8/g32 f32 variants failed here before the PARAM_BYTES fix,
@@ -3290,7 +3291,10 @@ void dispatch_gather_qmm(
     const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
-        transpose && bits == 4u && group_size == 64u &&
+        transpose &&
+        ((bits == 4u && group_size == 64u) ||
+         (bits == 2u &&
+          (group_size == 32u || group_size == 64u || group_size == 128u))) &&
         (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
         sub_caps.subgroup_size == 32u &&
         (sub_caps.subgroup_operations &
