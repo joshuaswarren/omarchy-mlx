@@ -1,6 +1,6 @@
 #version 450
 // vkbw: fill a buffer with a deterministic pattern: word i = hash(i). The host computes the same sum on the CPU.
-layout(local_size_x = 256) in;
+layout(local_size_x = 64) in;
 layout(std430, set = 0, binding = 0) writeonly buffer Dst { uint dst[]; };
 layout(push_constant) uniform PC { uint words; } pc;
 

@@ -96,6 +96,22 @@ Read, 512 MiB, coalesced 2-byte loads, workgroup size (subgroup size 32 forced a
 - Peak memory bandwidth of the chips was not measured here, and no table cell is compared with a datasheet figure.
 - The 13-inch M1 has 16 GB of memory; the 512 MiB cases allocate two 512 MiB buffers.
 
+## Receipt fields
+
+| Field | State |
+|---|---|
+| Source commit | the commit that adds this receipt, `tools/vkbw` as committed (binary sha256 above) |
+| Kernel and Mesa versions | in the table above |
+| Vulkan device | in the table above (the CSV `#` header lines repeat device, driver, limits) |
+| Firmware identity | not recorded |
+| Exact command | per laptop, as one job on that laptop: `make -s vkbw`, then a pilot `./vkbw --quick --sizes-mib 4`, then `./run.sh <label>` with `REPS=3 RUN_TIMEOUT=600`, which runs `./vkbw --csv results/<label>-runN.csv` three times |
+| Numerical result | the tables above and `data/*.csv`; every pass is checked against a CPU checksum, 0 failures |
+| Backend dispatch trace | not applicable: the tool dispatches its own two compute shaders through the Vulkan API and does not use the MLX backend |
+| Timing and thermal procedure | wall clock of 60 ms batches, 5 repeats, 3 runs; no thermal procedure and no clock or governor read-back; each laptop ran the job as the only GPU job on that host (the lab scheduler holds a per-host GPU lock), not in a quiet window, with other non-GPU lab jobs running |
+| Device reopen result | each run is a new process that opens the device; the pilot and 3 runs per laptop all opened it (12 opens, 0 failures) |
+
+A rerun in a quiet window with the clock state read back would replace the tables. Until then the tables are what they say: one binary, tonight, three runs.
+
 ## Reproduce
 
 ```

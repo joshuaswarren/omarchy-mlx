@@ -196,7 +196,7 @@ static RefSum ref_for(uint64_t bytes) {
 
 // Fill src with hash(i). Set fwd binds src at binding 0, which is where the init shader writes.
 static void init_src(uint64_t bytes) {
-  VkPipeline pi = make_pipeline(mod_init, 256, 0, 0);
+  VkPipeline pi = make_pipeline(mod_init, 64, 0, 0);
   begin();
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pi);
   vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set_fwd, 0, NULL);
@@ -294,7 +294,7 @@ static bool run_case(int op, int w, uint32_t wg, uint32_t sg, uint64_t bytes, ui
     while ((1ull << (vpc[0] + 1)) <= n4) vpc[0]++;
     vpc[2] = (uint32_t)(n4 / g4);
     vpc[3] = (uint32_t)g4;
-    run_batch(get_pipe(4, 256, 0, 0), set_rev, (uint32_t)(g4 / 256), vpc, 1);
+    run_batch(get_pipe(4, 128, 0, 0), set_rev, (uint32_t)(g4 / 128), vpc, 1);
     ok = ok && all_equal(1, ref.sum32);
   }
   qsort(gbs, REPEATS, sizeof gbs[0], cmp_d);
@@ -400,6 +400,7 @@ int main(int argc, char** argv) {
   sg_min = has_sgsize ? sgcp.minSubgroupSize : sg_default;
   sg_max = has_sgsize ? sgcp.maxSubgroupSize : sg_default;
   max_wg_invocations = p2.properties.limits.maxComputeWorkGroupInvocations;
+  if (p2.properties.limits.maxComputeWorkGroupSize[0] < max_wg_invocations) max_wg_invocations = p2.properties.limits.maxComputeWorkGroupSize[0];  // one dimension is used
   max_alloc = m3.maxMemoryAllocationSize;
   max_storage_range = p2.properties.limits.maxStorageBufferRange;
 
