@@ -66,6 +66,8 @@ Each time is the median of five calls after one warm-up, in one process, with th
 
 The same wheel and the same script ran on a 16-inch M1 Max (boot `b02ba9f6`, same kernel, performance governor). The files are `m1max-g3d-gpu.*`. All three configs print `RESULT PASS`. The errors against the fp64 reference equal the CPU stream's error to the printed digits. The traces show kernels 613 and 611, as on the M2.
 
+The M1 Max host has the same packages as the M2 host, read with `pacman -Q` after the run: `mesa 1:26.2.4-1`, `vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2`, `linux-aurora 7.1.12.aurora2-20261013.18` and `asahi-fwextract 0.8.4-1`. The kernel is `7.1.12-2-20261013.18-sep-ARCH` and the boot id starts `b02ba9f6`.
+
 | Config | Default route | Scalar kernel |
 |---|---|---|
 | 3-bit group 64 | 2.36 ms | 69.25 ms |
