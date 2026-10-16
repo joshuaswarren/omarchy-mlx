@@ -22,12 +22,18 @@
 // biases element offsets, in_strides[0] / out_strides[0] the lhs / rhs
 // index word offsets, lhs_offset the x element offset (multiple of 8),
 // rhs_offset the weight word offset.
+//
+// -DBITS2: the 2-bit form (bf16, group 64 or 128, transposed). A word holds 16 codes
+// (two uvec4 of x), a lane owns word l, l + 32, ...; per word dot = sum x_j q_j and
+// the x-sum are formed in f32 and the group's contribution is scale * dot + bias * sum.
+// There is no dense 2-bit qmv to match bit for bit, so this form is gated against fp64.
 
 #version 460
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_control_flow_attributes : require
 
 #define STORAGE_TYPE uint16_t
 #define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
@@ -128,8 +134,14 @@ void main() {
   uint lane = gl_LocalInvocationID.x % 32u;
   uint k = params.matrix_k;
   uint n = params.matrix_n;
+#ifdef BITS2
+  uint words_per_row = k / 16u;
+  uint words_per_group = params.reduce_size / 16u;
+  uint groups_per_row = k / params.reduce_size;
+#else
   uint words_per_row = k / 8u;
   uint groups_per_row = k / 64u;
+#endif
   uint group_index = gl_WorkGroupID.x + gl_WorkGroupID.z * 65535u;
   uint index = group_index * SLOTS + slot;
   // Slots past the output count still join the subgroup reduction.
@@ -144,6 +156,40 @@ void main() {
     uint w_base = params.rhs_offset + (rhs * n + column) * words_per_row;
     uint s_base = params.shape[2] + (rhs * n + column) * groups_per_row;
     uint b_base = params.shape[3] + (rhs * n + column) * groups_per_row;
+#ifdef BITS2
+    for (uint w = lane; w < words_per_row; w += 32u) {
+      uint word_value = input_w.values[w_base + w];
+      uvec4 xa = input_x.values[(x_row + w * 16u) / 8u];
+      uvec4 xb = input_x.values[(x_row + w * 16u) / 8u + 1u];
+      float xv[16];
+      xv[0] = uintBitsToFloat((xa.x & 0xFFFFu) << 16u);
+      xv[1] = uintBitsToFloat(xa.x & 0xFFFF0000u);
+      xv[2] = uintBitsToFloat((xa.y & 0xFFFFu) << 16u);
+      xv[3] = uintBitsToFloat(xa.y & 0xFFFF0000u);
+      xv[4] = uintBitsToFloat((xa.z & 0xFFFFu) << 16u);
+      xv[5] = uintBitsToFloat(xa.z & 0xFFFF0000u);
+      xv[6] = uintBitsToFloat((xa.w & 0xFFFFu) << 16u);
+      xv[7] = uintBitsToFloat(xa.w & 0xFFFF0000u);
+      xv[8] = uintBitsToFloat((xb.x & 0xFFFFu) << 16u);
+      xv[9] = uintBitsToFloat(xb.x & 0xFFFF0000u);
+      xv[10] = uintBitsToFloat((xb.y & 0xFFFFu) << 16u);
+      xv[11] = uintBitsToFloat(xb.y & 0xFFFF0000u);
+      xv[12] = uintBitsToFloat((xb.z & 0xFFFFu) << 16u);
+      xv[13] = uintBitsToFloat(xb.z & 0xFFFF0000u);
+      xv[14] = uintBitsToFloat((xb.w & 0xFFFFu) << 16u);
+      xv[15] = uintBitsToFloat(xb.w & 0xFFFF0000u);
+      float dot = 0.0;
+      float input_sum = 0.0;
+      [[unroll]] for (uint j = 0u; j < 16u; ++j) {
+        dot = fma(xv[j], float((word_value >> (2u * j)) & 3u), dot);
+        input_sum += xv[j];
+      }
+      uint group = w / words_per_group;
+      float scale = LOAD_VALUE(scales.values[s_base + group]);
+      float bias = LOAD_VALUE(biases.values[b_base + group]);
+      accumulator += fma(scale, dot, input_sum * bias);
+    }
+#else
     if (k % 512u == 0u && n % 8u == 0u) {
       for (uint w = lane * 2u; w < words_per_row; w += 64u) {
         precise float dot = 0.0;
@@ -160,6 +206,7 @@ void main() {
         Q4_BLOCK_FINISH(w)
       }
     }
+#endif
   }
   float total = subgroupAdd(accumulator);
   if (live && gl_SubgroupInvocationID == 0u) {
