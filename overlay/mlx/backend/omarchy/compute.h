@@ -1026,6 +1026,8 @@ enum class ComputeKernel : uint16_t {
   QmmVec6C1R8F16,
   QmmVec6C4R1BF16,
   QmmVec6C1R8BF16,
+  // Word-per-lane gathered 4-bit group-64 decode (bf16, one 32-lane slot per output element).
+  GatherQmmWordBF16,
   Count,
 };
 
