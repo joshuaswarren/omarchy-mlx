@@ -80,5 +80,5 @@ The suite also passes with mlx-lm 0.32.0 and with mlx-lm main at `06e03f7ce`. Th
 ## Requirements
 
 - Memory for the checkpoint: 359.2 GB for 3bit and 461.7 GB for 4bit (Hugging Face file sizes).
-- The 3bit experts use 3-bit `gather_qmm`. The backend must run that layout. The Vulkan `gather_qmm` in this repository accepts 4-bit and 8-bit weights only.
+- The routed experts run `gather_qmm` at their stored width. The Vulkan `gather_qmm` in this repository runs 2-bit, 3-bit, 4-bit and 8-bit affine weights in the transposed layout with biases.
 - The class reads the Hugging Face layout of the mlx-community checkpoints. It does not read ModelOpt NVFP4 checkpoints.
