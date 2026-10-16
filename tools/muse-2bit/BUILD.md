@@ -18,3 +18,14 @@ Built 2026-10-15.
 ## Equivalence rule
 File bytes differ across platforms for identical tensors (MLX saves in hash-map order; header 4,671 vs 4,681 B for layer 3). Equality is checked per tensor: layer 3 converted on the Mac Studio and on the M2 has 39/39 equal tensor sha256.
 Independent check: one expert tensor (layer 1, expert 5, gate_proj) dequantized with a separate numpy decoder and re-quantized with a separate numpy implementation of the MLX affine quantizer: identical to mx.from_fp8 / mx.quantize bit for bit (that tensor only; CPU backend).
+
+## Provenance
+What the recorded runs used, per `recipe.json` and the hashes above. Nothing else was recorded, and these runs cannot be rerun to extend the record.
+
+- Machines: a Mac Studio (macOS) and a 14-inch M2 Max running Linux (the `M2 aarch64 Linux CPU` in `recipe.json`, the "M2 laptop" under Hashes). Layers 14-61 as recorded under Hashes ran on the M2 Max; the Studio ran the rest, including the layer 3 and layer 1 equivalence checks. The `CT shared part` Python entry in `recipe.json` is the shared part's interpreter (3.11.2); that entry does not name its machine.
+- Tools: converter `requant_stream.py` sha256 `9a2fa17a762c8806da6297376088a7dcefce794e15a3ce73d537dc13cb77f3b8`; mlx `0.32.3` on the Studio (macOS) and `0.32.4` on the M2 Max, as recorded in `recipe.json`; Python `3.13.16` (Studio) and `3.11.2` (shared part).
+- No mlx-omarchy wheel is recorded for these runs: `recipe.json` records plain upstream version strings with no local build segment and no omarchy dev-build version string. What was installed on each machine beyond those version numbers is `not captured`.
+- No installed-binary check was recorded for those runs: there is no `scripts/mlx_provenance.py` line for the conversions behind the numbers in Result and in `recipe.json` (`measured_so_far`). Treat those numbers as lacking installed-binary provenance.
+- For a rebuild, record one: with the interpreter environment that has the mlx install the rebuild actually used, run the documented provenance check (`docs/CONTRIBUTOR-GUIDE.md`, "Hardware protocol"):
+  `~/.venvs/mlx-collect/bin/python scripts/mlx_provenance.py`
+  and put its line beside the numbers, after `python3 scripts/mlx_provenance.py --self-test` exits 0.
