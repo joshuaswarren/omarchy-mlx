@@ -187,16 +187,34 @@ inline uint64_t batch_work_fallback() {
 }
 
 inline uint64_t batch_work_budget(std::string_view device_name) {
-  static const uint64_t v = [device_name]() {
-    const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
-    if (e) {
-      long long n = std::atoll(e);
-      return n > 0 ? static_cast<uint64_t>(n) : 0;
-    }
-    uint64_t cal = calibrated_batch_work(device_name);
-    return cal > 0 ? cal : batch_work_fallback();
-  }();
-  return v;
+  // The env override is a process setting: read it once. A set but
+  // non-positive value disables the cap, so "set" and its value stay
+  // separate statics (issue 207).
+  static const bool have_env =
+      std::getenv("MLX_OMARCHY_BATCH_WORK") != nullptr;
+  static const long long env_value =
+      have_env ? std::atoll(std::getenv("MLX_OMARCHY_BATCH_WORK")) : 0;
+  if (have_env) {
+    return env_value > 0 ? static_cast<uint64_t>(env_value) : 0;
+  }
+  // Per-device calibration, cached on the name: the call sites run this
+  // once per evaluated node, where the uncached path costs one getenv
+  // plus a four-row scan (75 ns measured on x86 with 81 environment
+  // entries, issue 207 review), and the name comes from
+  // hardware_capabilities(), a stable reference, so a one-entry
+  // thread_local compare is enough. The name is copied so a caller
+  // passing a temporary cannot leave a dangling view in the cache.
+  thread_local std::string cached_name;
+  thread_local uint64_t cached_budget = 0;
+  thread_local bool cached = false;
+  if (cached && cached_name == device_name) {
+    return cached_budget;
+  }
+  const uint64_t budget = calibrated_batch_work(device_name);
+  cached_budget = budget > 0 ? budget : batch_work_fallback();
+  cached_name.assign(device_name);
+  cached = true;
+  return cached_budget;
 }
 // The one flush predicate for the open batch, shared by the eager
 // evaluator (eval.cpp) and the compiled-tape recorder (compiled.cpp) so
