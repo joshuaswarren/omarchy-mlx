@@ -6124,3 +6124,139 @@ TEST_CASE("gather_qmm sorted-expert tile route matches the f32 reference and the
     run_case({40, 40, 40}, 192, 64, float16, false, 0.005);
   }
 }
+
+// 6-bit affine weights (the Muse lm_head format) at up to 32 activation rows
+// take the streaming decode kernel on a 32-lane subgroup device. Odd n, k
+// beyond one 32-chunk pass and every group size cover the column clamp, the
+// lane loop tail and the scale index; rows 9 and 17 cover a partial row
+// block. Output matches a double-precision host contraction of the values the
+// device holds within the output dtype's rounding.
+TEST_CASE("6-bit affine decode matches a host reference at 1 to 17 rows") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  using K = omarchy::ComputeKernel;
+  auto trace_of = [&](const std::function<void()>& call) {
+    std::fflush(stderr);
+    int saved = ::dup(::fileno(stderr));
+    FILE* cap = std::fopen("/tmp/qmm6_stream_cap.log", "w");
+    REQUIRE(cap != nullptr);
+    ::dup2(::fileno(cap), ::fileno(stderr));
+    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+    call();
+    omarchy::get_command_encoder(stream).synchronize();
+    std::fflush(stderr);
+    ::dup2(saved, ::fileno(stderr));
+    ::close(saved);
+    std::fclose(cap);
+    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+    std::ifstream in("/tmp/qmm6_stream_cap.log");
+    return std::string((std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+  };
+  auto streamed = [](const std::string& text) {
+    for (uint32_t id = static_cast<uint32_t>(K::QmmVec6C4R1F16);
+         id <= static_cast<uint32_t>(K::QmmVec6C1R8BF16);
+         ++id) {
+      if (text.find("[rtmod] DISPATCH kernel=" + std::to_string(id) + " ") !=
+          std::string::npos) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  constexpr int k = 640;
+  constexpr int n = 21;
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (size_t i = 0; i < matrix.size(); ++i) {
+    matrix[i] = static_cast<float>(static_cast<int>((i * 37u) % 61u) - 30) *
+        0.0625f;
+  }
+  for (Dtype dtype : {bfloat16, float16}) {
+    if (dtype == float16 && !float16_available()) {
+      continue;
+    }
+    const double step = dtype == bfloat16 ? 0x1p-7 : 0x1p-10;
+    for (int group_size : {32, 64, 128}) {
+      HostQuantizedWeights weights =
+          host_affine_quantize(matrix, n, k, group_size, 6);
+      weights.scales = round_trip(stream, weights.scales, dtype);
+      weights.biases = round_trip(stream, weights.biases, dtype);
+      array w(weights.words.begin(), Shape{n, k * 6 / 32}, uint32);
+      array scales = astype(
+          array(weights.scales.begin(), Shape{n, k / group_size}, float32),
+          dtype,
+          stream);
+      array biases = astype(
+          array(weights.biases.begin(), Shape{n, k / group_size}, float32),
+          dtype,
+          stream);
+      for (int rows : {1, 2, 8, 9, 17}) {
+        std::vector<float> x_values(static_cast<size_t>(rows) * k);
+        for (size_t i = 0; i < x_values.size(); ++i) {
+          x_values[i] =
+              static_cast<float>(static_cast<int>((i * 53u) % 47u) - 23) *
+              0.0625f;
+        }
+        x_values = round_trip(stream, x_values, dtype);
+        array x = astype(
+            array(x_values.begin(), Shape{rows, k}, float32), dtype, stream);
+        std::vector<float> got;
+        std::string trace = trace_of([&] {
+          got = readback_f32(stream, quantized_matmul(
+              x, w, scales, biases, true, group_size, 6, "affine", stream));
+        });
+        std::vector<float> expected = host_quantized_matmul(
+            weights, x_values, rows, n, k, group_size, 6);
+        double max_abs = 0.0;
+        for (float v : expected) {
+          max_abs = std::max(max_abs, std::fabs(static_cast<double>(v)));
+        }
+        REQUIRE_EQ(got.size(), expected.size());
+        for (size_t i = 0; i < got.size(); ++i) {
+          double bound = std::fabs(expected[i]) * step + 1e-4 * max_abs;
+          INFO("dtype=" << (dtype == bfloat16 ? "bf16" : "f16")
+               << " group=" << group_size << " rows=" << rows
+               << " index=" << i);
+          CHECK(std::fabs(static_cast<double>(got[i]) - expected[i]) <= bound);
+        }
+        if (subgroup_ready) {
+          INFO("dtype=" << (dtype == bfloat16 ? "bf16" : "f16")
+               << " group=" << group_size << " rows=" << rows);
+          CHECK(streamed(trace));
+        }
+      }
+      {
+        // A view that starts 8 bytes past a 16-byte boundary: the uvec4 reads
+        // need it materialized aligned, with the same result as an aligned x.
+        std::vector<float> view_values(k);
+        for (int i = 0; i < k; ++i) {
+          view_values[i] =
+              static_cast<float>(((i * 29) % 41) - 20) * 0.0625f;
+        }
+        view_values = round_trip(stream, view_values, dtype);
+        std::vector<float> parent_values(k + 4, 123.0f);
+        std::copy(view_values.begin(), view_values.end(),
+            parent_values.begin() + 4);
+        array parent = astype(
+            array(parent_values.begin(), Shape{1, k + 4}, float32),
+            dtype,
+            stream);
+        array x_view = slice(parent, {0, 4}, {1, k + 4}, stream);
+        array x_aligned = astype(
+            array(view_values.begin(), Shape{1, k}, float32), dtype, stream);
+        auto aligned = readback_f32(stream, quantized_matmul(
+            x_aligned, w, scales, biases, true, group_size, 6, "affine",
+            stream));
+        auto viewed = readback_f32(stream, quantized_matmul(
+            x_view, w, scales, biases, true, group_size, 6, "affine", stream));
+        CHECK_EQ(viewed, aligned);
+      }
+    }
+  }
+}

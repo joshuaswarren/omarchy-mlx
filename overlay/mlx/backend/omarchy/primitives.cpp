@@ -7996,8 +7996,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool packed_q4_x = (use_q4_word || use_word_format) &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&
       (x.ndim() < 2 || x.shape(-2) == 1);
+  // 6-bit streaming decode (shaders/qmm_vec6.comp): transposed f16 or bf16
+  // weights read x through uvec4 loads, so a view must start 16-byte aligned.
+  static const bool qmm6_stream_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_QMM6_STREAM");
+  bool qmm6_stream = !qmm6_stream_disabled && bits_ == 6 && transpose_ &&
+      (out.dtype() == float16 || out.dtype() == bfloat16);
   bool x_dense = x.flags().row_contiguous &&
       (!packed_q4_x || x.offset() % (8 * x.itemsize()) == 0) &&
+      (!qmm6_stream || x.offset() % (8 * x.itemsize()) == 0) &&
       (!coopmat_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
       (!qmm_fma_reachable || x.offset() % (8 * x.itemsize()) == 0);
   std::optional<array> x_temp;
@@ -8125,6 +8132,46 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   constexpr uint32_t kGemvColumnsPerGroup = 8u;
   auto n_groups_qmm_vec = (params.matrix_n + kGemvColumnsPerGroup - 1u) /
       kGemvColumnsPerGroup;
+  // The 8-row kernel re-reads the weights once per 8-row block, so beyond 32
+  // rows the coopmat and tile prefill routes below keep the work.
+  if (qmm6_stream && batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
+      biases.ndim() == 2 && params.matrix_m <= 32u) {
+    const auto& caps6 = encoder.device().capabilities();
+    bool sg32 = caps6.subgroup_size == 32u &&
+        (caps6.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps6,
+        sg32,
+        "QmmVec6*",
+        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+         (encoder.device().hardware_capabilities().subgroup_operations &
+          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+    if (sg32) {
+      bool one_row = params.matrix_m == 1u;
+      bool bf16 = out.dtype() == bfloat16;
+      auto stream_kernel = one_row
+          ? (bf16 ? omarchy::ComputeKernel::QmmVec6C4R1BF16
+                  : omarchy::ComputeKernel::QmmVec6C4R1F16)
+          : (bf16 ? omarchy::ComputeKernel::QmmVec6C1R8BF16
+                  : omarchy::ComputeKernel::QmmVec6C1R8F16);
+      uint32_t cols_per_group = one_row ? 32u : 8u;
+      uint32_t rows_per_group = one_row ? 1u : 8u;
+      uint32_t column_groups =
+          (params.matrix_n + cols_per_group - 1u) / cols_per_group;
+      if (column_groups <= omarchy::kMaxComputeGroupCountX) {
+        encoder.dispatch_compute(
+            stream_kernel,
+            bindings,
+            params,
+            column_groups,
+            (params.matrix_m + rows_per_group - 1u) / rows_per_group,
+            1u);
+        return;
+      }
+    }
+  }
   if (params.matrix_m == 1u) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =

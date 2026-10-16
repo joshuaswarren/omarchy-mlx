@@ -1021,6 +1021,11 @@ enum class ComputeKernel : uint16_t {
   GatherQmmSubDirectR8BF16,
   // 3-bit direct decode form (8 outputs per workgroup, f16 only): bit-stream codes, appended so earlier ids do not move.
   GatherQmmSubDirectR8Q3F16,
+  // Streaming 6-bit affine decode (qmm_vec6.comp): 4 columns by 1 row for one activation row, 1 column by 8 rows for 2 to 32 rows.
+  QmmVec6C4R1F16,
+  QmmVec6C1R8F16,
+  QmmVec6C4R1BF16,
+  QmmVec6C1R8BF16,
   Count,
 };
 
