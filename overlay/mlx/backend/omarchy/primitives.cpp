@@ -8139,6 +8139,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     const auto& caps6 = encoder.device().capabilities();
     bool sg32 = caps6.subgroup_size == 32u &&
         (caps6.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps6,
+        sg32,
+        "QmmVec6*",
+        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+         (encoder.device().hardware_capabilities().subgroup_operations &
+          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (sg32) {
       bool one_row = params.matrix_m == 1u;
       bool bf16 = out.dtype() == bfloat16;
