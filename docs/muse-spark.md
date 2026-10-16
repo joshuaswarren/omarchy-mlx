@@ -6,7 +6,7 @@ The mlx-community Muse Spark Open quantizations (3bit and 4bit) declare `model_t
 
 ## Quick start
 
-You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries the 3-bit and 2-bit `gather_qmm`, and enough memory for the checkpoint (see Requirements).
+You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries the 3-bit and 2-bit `gather_qmm`, mlx-lm 0.32.0, and enough memory for the checkpoint (see Requirements). The run uses mlx-lm through the adapter. It does not use the oMLX server.
 
 1. Install the release wheel. See [INSTALL.md](INSTALL.md).
 2. Check the expert kernels on your GPU. Each command prints `RESULT PASS`.
