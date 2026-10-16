@@ -1140,6 +1140,7 @@ void CommandEncoder::submit() {
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
     }
+    prof::get().on_end(this, current_slot_, cmd_);
     VKX_CHECK(dt.EndCommandBuffer(cmd_));
     close_t = prof::get().profiling() ? prof::host_ns() : 0;
   }
