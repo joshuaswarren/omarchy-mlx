@@ -1,0 +1,16 @@
+G3GPU kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=2.13
+G3GPU tree libmlx sha256 e544f1198fe51668d2ce0915d29246499f6efc782208c65913cd91480cef12b3 script 46e1688cf079d3a3
+G3GPU python rc=0 load1_after=2.12
+G3GPU libmlx loaded: ['$HOME/scratch/w6z/g3-tree/mlx/lib/libmlx.so']
+G3GPU default device: Device(gpu, 0) mlx 0.32.4.dev202610152345+619b5578
+G3GPU mlx.core.float32 T= 1 k=8 E=16 K=2048 N=1024: gpu-ref 1.230e-04 cpu-ref 3.086e-05 gpu-cpu 1.221e-04 scale 89.007 OK
+G3GPU mlx.core.float32 T= 1 k=8 E=64 K=4096 N=512: gpu-ref 2.320e-04 cpu-ref 4.033e-05 gpu-cpu 2.289e-04 scale 118.067 OK
+G3GPU mlx.core.float32 T=32 k=8 E=16 K=2048 N=1024: gpu-ref 1.553e-04 cpu-ref 2.524e-05 gpu-cpu 1.526e-04 scale 102.436 OK
+G3GPU mlx.core.float32 T= 3 k=2 E= 4 K=192 N=37: gpu-ref 6.841e-06 cpu-ref 3.049e-06 gpu-cpu 5.722e-06 scale 18.548 OK
+G3GPU mlx.core.float16 T= 1 k=8 E=16 K=2048 N=1024: gpu-ref 3.057e-02 cpu-ref 3.057e-02 gpu-cpu 3.125e-02 scale 87.239 OK
+G3GPU mlx.core.float16 T= 1 k=8 E=64 K=4096 N=512: gpu-ref 5.648e-02 cpu-ref 5.648e-02 gpu-cpu 1.562e-02 scale 140.319 OK
+G3GPU mlx.core.float16 T=32 k=8 E=16 K=2048 N=1024: gpu-ref 3.133e-02 cpu-ref 3.125e-02 gpu-cpu 6.250e-02 scale 120.161 OK
+G3GPU mlx.core.float16 T= 3 k=2 E= 4 K=192 N=37: gpu-ref 7.697e-03 cpu-ref 7.697e-03 gpu-cpu 0.000e+00 scale 17.168 OK
+G3GPU RESULT PASS
+G3GPU stderr lines: 0
+G3GPU DONE out=$HOME/scratch/w6z/g3-gpu-m2-1 rc=0
