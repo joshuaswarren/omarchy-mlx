@@ -2,7 +2,7 @@
 
 The mlx-community Muse Spark Open quantizations (3bit, 4bit) carry model_type "muse_spark" and the
 Hugging Face text_config layout. mlx-lm main has no loader for that name: its muse_spark_open class
-takes the native checkpoint layout, and it calls seven fused Metal kernels. This package adds the
+takes the native checkpoint layout, and it calls eight fused Metal kernels. This package adds the
 text-only class of the closed mlx-lm pull request 1975 (head 117b84cae44a, MIT, Copyright Apple Inc.).
 That class uses only mx operations, so it needs no Metal kernel.
 
