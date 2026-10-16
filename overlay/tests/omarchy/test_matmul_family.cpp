@@ -2307,7 +2307,7 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
     // f16 rounds the output once (about 5e-4 relative): the reference runs on
     // the f16-rounded inputs the device buffers carry.
     if (half) {
-      expect_close_tol(readback_f32(stream, out), expected, 5e-2, 4e-3);
+      expect_close_tol(readback_f32(stream, out), expected, 1e-2, 4e-3);
     } else {
       expect_close_tol(readback_f32(stream, out), expected, 1e-4, 1e-3);
     }
