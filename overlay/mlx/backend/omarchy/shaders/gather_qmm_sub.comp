@@ -171,7 +171,12 @@ void main() {
   uint group_size = params.reduce_size;
   uint pack_factor = 32u / bits;
   uint value_mask = (1u << bits) - 1u;
+#ifdef BITS3
+  // 3-bit codes are a little-endian bit stream along K: K * 3 / 32 words per row, a code can straddle two words.
+  uint words_per_row = (params.matrix_k * 3u) / 32u;
+#else
   uint words_per_row = params.matrix_k / pack_factor;
+#endif
   uint groups_per_row = params.matrix_k / group_size;
   uint matrix = params.matrix_m * params.matrix_n;
   uint param_bytes = PARAM_BYTES;
@@ -209,12 +214,30 @@ void main() {
     uint k = lane + j * 256u;
     if (k < params.matrix_k) {
       uint group = k / group_size;
+#ifdef BITS3
+      uint bit_pos = k * 3u;
+      uint word_index = bit_pos >> 5u;
+      uint shift = bit_pos & 31u;
+      float x_value = LOAD_VALUE(input_x.values[x_base + k]);
+      for (uint r = 0u; r < uint(ROWS_PER_WG); ++r) {
+        uint w0 = input_w.values[w_base0 + r * words_per_row + word_index];
+        uint q;
+        if (shift <= 29u) {
+          q = bitfieldExtract(w0, int(shift), 3);
+        } else {
+          uint low_bits = 32u - shift;
+          uint w1 = input_w.values[w_base0 + r * words_per_row + word_index + 1u];
+          q = bitfieldExtract(w0, int(shift), int(low_bits)) |
+              (bitfieldExtract(w1, 0, int(3u - low_bits)) << low_bits);
+        }
+#else
       uint word_index = k / pack_factor;
       uint lane_shift = (k - word_index * pack_factor) * bits;
       float x_value = LOAD_VALUE(input_x.values[x_base + k]);
       for (uint r = 0u; r < uint(ROWS_PER_WG); ++r) {
         uint word = input_w.values[w_base0 + r * words_per_row + word_index];
         uint q = (word >> lane_shift) & value_mask;
+#endif
         uint param_index = (scale_base0 + r * groups_per_row + group) * param_bytes;
         float scale = decode_scale(param_index);
         float bias = decode_bias(param_index);

@@ -538,6 +538,7 @@
 #include "gather_qmm_sub_direct_r4_bf16.h"
 #include "gather_qmm_sub_direct_r8_f16.h"
 #include "gather_qmm_sub_direct_r8_bf16.h"
+#include "gather_qmm_sub_direct_r8_q3_f16.h"
 #include "fft_f32.h"
 #include "fft_real_f32.h"
 #include "fft_stage_f32.h"
@@ -1936,6 +1937,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_sub_direct_r8_f16, gather_qmm_sub_direct_r8_f16_size};
     case ComputeKernel::GatherQmmSubDirectR8BF16:
       return {gather_qmm_sub_direct_r8_bf16, gather_qmm_sub_direct_r8_bf16_size};
+    case ComputeKernel::GatherQmmSubDirectR8Q3F16:
+      return {gather_qmm_sub_direct_r8_q3_f16, gather_qmm_sub_direct_r8_q3_f16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

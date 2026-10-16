@@ -1019,6 +1019,8 @@ enum class ComputeKernel : uint16_t {
   GatherQmmSubDirectR4BF16,
   GatherQmmSubDirectR8F16,
   GatherQmmSubDirectR8BF16,
+  // 3-bit direct decode form (8 outputs per workgroup, f16 only): bit-stream codes, appended so earlier ids do not move.
+  GatherQmmSubDirectR8Q3F16,
   Count,
 };
 
