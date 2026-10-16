@@ -58,6 +58,39 @@ class RegistrationTests(unittest.TestCase):
         self.assertIsNotNone(importlib.import_module(mlx_omarchy_muse.MODEL_NAME))
         self.assertFalse(mlx_omarchy_muse.register())
 
+    def _with_upstream_module(self, env):
+        """Plant a stand-in for mlx-lm's own muse_spark module, run register(), return (result, module now registered). Restores the real state."""
+        import os
+        import types
+        from unittest import mock
+
+        name = mlx_omarchy_muse.MODEL_NAME
+        mlx_omarchy_muse.register()
+        ours = sys.modules[name]
+        upstream = types.ModuleType(name)
+        upstream.__file__ = "/upstream/mlx_lm/models/muse_spark.py"
+        sys.modules[name] = upstream
+        try:
+            with mock.patch.dict(os.environ, env):
+                if "MLX_OMARCHY_MUSE_UPSTREAM" not in env:
+                    os.environ.pop("MLX_OMARCHY_MUSE_UPSTREAM", None)
+                result = mlx_omarchy_muse.register()
+            return result, sys.modules[name], upstream
+        finally:
+            sys.modules[name] = ours
+            importlib.import_module("mlx_lm.models").muse_spark = ours
+
+    def test_register_replaces_an_mlx_lm_module_of_the_same_name(self):
+        result, now, upstream = self._with_upstream_module({})
+        self.assertTrue(result)
+        self.assertIsNot(now, upstream)
+        self.assertEqual(now.__file__, str(mlx_omarchy_muse.MODEL_PATH))
+
+    def test_upstream_switch_keeps_the_mlx_lm_module(self):
+        result, now, upstream = self._with_upstream_module({"MLX_OMARCHY_MUSE_UPSTREAM": "1"})
+        self.assertFalse(result)
+        self.assertIs(now, upstream)
+
     def test_published_config_resolves(self):
         from mlx_lm import utils
 

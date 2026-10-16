@@ -13,12 +13,15 @@ The licence text is LICENSES/mlx-lm.txt.
     mlx_omarchy_muse.register()
     # mlx_lm.load(...) now resolves model_type "muse_spark"
 
-register() does nothing when mlx_lm already provides a muse_spark module.
+register() installs this class as mlx_lm.models.muse_spark, also when the installed mlx-lm ships its own module of that name. mlx-lm 0.32.2 and later do: that module
+reads the native checkpoint layout and imports the eight fused Metal kernels, so it does not load the community checkpoints on a Vulkan backend. Set
+MLX_OMARCHY_MUSE_UPSTREAM=1 to keep the mlx-lm module instead; register() then does nothing.
 This package changes no mlx-lm file. It does not change the memory a model needs: the 3bit file is 359 GB.
 """
 
 import importlib
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -35,23 +38,22 @@ def is_registered() -> bool:
 
 
 def register() -> bool:
-    """Expose the vendored class as mlx_lm.models.muse_spark. Return True when it was added."""
-    if MODEL_NAME in sys.modules:
+    """Install the vendored class as mlx_lm.models.muse_spark. Return True when it was installed or replaced an mlx-lm module."""
+    if is_registered() or os.environ.get("MLX_OMARCHY_MUSE_UPSTREAM") == "1":
         return False
-    try:
-        if importlib.util.find_spec(MODEL_NAME) is not None:
-            return False
-    except (ImportError, ValueError):
-        pass
     spec = importlib.util.spec_from_file_location(MODEL_NAME, MODEL_PATH)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {MODEL_PATH}")
     module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(MODEL_NAME)
     sys.modules[MODEL_NAME] = module
     try:
         spec.loader.exec_module(module)
     except BaseException:
-        del sys.modules[MODEL_NAME]
+        if previous is None:
+            del sys.modules[MODEL_NAME]
+        else:
+            sys.modules[MODEL_NAME] = previous
         raise
     setattr(importlib.import_module("mlx_lm.models"), "muse_spark", module)
     return True

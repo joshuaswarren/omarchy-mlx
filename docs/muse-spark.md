@@ -54,7 +54,12 @@ import mlx_lm  # mlx_lm.load(...) now resolves model_type 'muse_spark'
 "
 ```
 
-`register()` does nothing when mlx-lm already provides a `muse_spark` module. It changes no mlx-lm file. The package is in a repository checkout only. It is not in the release package.
+`register()` installs the adapter class as `mlx_lm.models.muse_spark`. It replaces the module that mlx-lm 0.32.2 and later ship under that name, because that module reads the native checkpoint layout and imports the eight fused Metal kernels. Set `MLX_OMARCHY_MUSE_UPSTREAM=1` to keep the mlx-lm module instead. `register()` then does nothing. It changes no mlx-lm file. The package is in a repository checkout only. It is not in the release package.
+
+| mlx-lm | Status |
+|---|---|
+| 0.32.0 | The adapter tests pass. The adapter adds the `muse_spark` module. |
+| 0.32.2 | The adapter tests pass. `register()` replaces the module that mlx-lm ships. |
 
 ## Tests and reference figures
 
@@ -75,7 +80,7 @@ Provenance of the figures above:
 | `scripts/mlx_provenance.py` | `verified: no-metadata`, `mx_version: 0.32.3`. The library is a source install, so no wheel RECORD exists to compare. |
 | transformers, torch | 5.20.0, 2.14.1 (CPU) |
 
-The suite also passes with mlx-lm 0.32.0 and with mlx-lm main at `06e03f7ce`. The figures were not produced with the mlx-omarchy wheel.
+The suite passes with mlx-lm 0.32.0 and with mlx-lm 0.32.2 (nine tests each), and with mlx-lm main at `06e03f7ce`. The figures were not produced with the mlx-omarchy wheel.
 
 ## Requirements
 
