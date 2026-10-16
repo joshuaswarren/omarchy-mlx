@@ -545,6 +545,12 @@
 #include "qmm_vec6_c1r4_f16.h"
 #include "qmm_vec6_c1r8_f16.h"
 #include "qmm_vec6_c2r4_f16.h"
+#include "qmm_vec6_c4r1_bf16.h"
+#include "qmm_vec6_c2r1_bf16.h"
+#include "qmm_vec6_c1r1_bf16.h"
+#include "qmm_vec6_c1r4_bf16.h"
+#include "qmm_vec6_c1r8_bf16.h"
+#include "qmm_vec6_c2r4_bf16.h"
 #include "fft_f32.h"
 #include "fft_real_f32.h"
 #include "fft_stage_f32.h"
@@ -1957,6 +1963,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_vec6_c1r8_f16, qmm_vec6_c1r8_f16_size};
     case ComputeKernel::QmmVec6C2R4F16:
       return {qmm_vec6_c2r4_f16, qmm_vec6_c2r4_f16_size};
+    case ComputeKernel::QmmVec6C4R1BF16:
+      return {qmm_vec6_c4r1_bf16, qmm_vec6_c4r1_bf16_size};
+    case ComputeKernel::QmmVec6C2R1BF16:
+      return {qmm_vec6_c2r1_bf16, qmm_vec6_c2r1_bf16_size};
+    case ComputeKernel::QmmVec6C1R1BF16:
+      return {qmm_vec6_c1r1_bf16, qmm_vec6_c1r1_bf16_size};
+    case ComputeKernel::QmmVec6C1R4BF16:
+      return {qmm_vec6_c1r4_bf16, qmm_vec6_c1r4_bf16_size};
+    case ComputeKernel::QmmVec6C1R8BF16:
+      return {qmm_vec6_c1r8_bf16, qmm_vec6_c1r8_bf16_size};
+    case ComputeKernel::QmmVec6C2R4BF16:
+      return {qmm_vec6_c2r4_bf16, qmm_vec6_c2r4_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

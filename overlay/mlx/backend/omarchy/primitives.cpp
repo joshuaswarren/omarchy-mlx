@@ -7996,12 +7996,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool packed_q4_x = (use_q4_word || use_word_format) &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&
       (x.ndim() < 2 || x.shape(-2) == 1);
-  // 6-bit streaming decode (shaders/qmm_vec6.comp): transposed f16 weights
-  // read x through uvec4 loads, so a view must start 16-byte aligned.
+  // 6-bit streaming decode (shaders/qmm_vec6.comp): transposed f16 or bf16
+  // weights read x through uvec4 loads, so a view must start 16-byte aligned.
   static const bool qmm6_stream_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_QMM6_STREAM");
   bool qmm6_stream = !qmm6_stream_disabled && bits_ == 6 && transpose_ &&
-      out.dtype() == float16;
+      (out.dtype() == float16 || out.dtype() == bfloat16);
   bool x_dense = x.flags().row_contiguous &&
       (!packed_q4_x || x.offset() % (8 * x.itemsize()) == 0) &&
       (!qmm6_stream || x.offset() % 8 == 0) &&
@@ -8144,15 +8144,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         uint32_t cols;
         uint32_t rows;
       };
-      static const Qmm6 variants[] = {
-          {K6::QmmVec6C4R1F16, 4u, 1u}, {K6::QmmVec6C2R1F16, 2u, 1u},
-          {K6::QmmVec6C1R1F16, 1u, 1u}, {K6::QmmVec6C1R4F16, 1u, 4u},
-          {K6::QmmVec6C1R8F16, 1u, 8u}, {K6::QmmVec6C2R4F16, 2u, 4u}};
+      static const Qmm6 variants[2][6] = {
+          {{K6::QmmVec6C4R1F16, 4u, 1u}, {K6::QmmVec6C2R1F16, 2u, 1u},
+           {K6::QmmVec6C1R1F16, 1u, 1u}, {K6::QmmVec6C1R4F16, 1u, 4u},
+           {K6::QmmVec6C1R8F16, 1u, 8u}, {K6::QmmVec6C2R4F16, 2u, 4u}},
+          {{K6::QmmVec6C4R1BF16, 4u, 1u}, {K6::QmmVec6C2R1BF16, 2u, 1u},
+           {K6::QmmVec6C1R1BF16, 1u, 1u}, {K6::QmmVec6C1R4BF16, 1u, 4u},
+           {K6::QmmVec6C1R8BF16, 1u, 8u}, {K6::QmmVec6C2R4BF16, 2u, 4u}}};
+      const auto* table = variants[out.dtype() == bfloat16 ? 1 : 0];
       const char* variant_env = std::getenv("MLX_OMARCHY_QMM6_VARIANT");
-      Qmm6 pick = params.matrix_m == 1u ? variants[0] : variants[4];
+      Qmm6 pick = params.matrix_m == 1u ? table[0] : table[4];
       if (variant_env != nullptr && variant_env[0] >= '0' &&
           variant_env[0] <= '5') {
-        pick = variants[variant_env[0] - '0'];
+        pick = table[variant_env[0] - '0'];
       }
       uint32_t cols_per_group = 8u * pick.cols;
       encoder.dispatch_compute(

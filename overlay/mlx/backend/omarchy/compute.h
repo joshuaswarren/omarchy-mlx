@@ -1028,6 +1028,12 @@ enum class ComputeKernel : uint16_t {
   QmmVec6C1R4F16,
   QmmVec6C1R8F16,
   QmmVec6C2R4F16,
+  QmmVec6C4R1BF16,
+  QmmVec6C2R1BF16,
+  QmmVec6C1R1BF16,
+  QmmVec6C1R4BF16,
+  QmmVec6C1R8BF16,
+  QmmVec6C2R4BF16,
   Count,
 };
 
