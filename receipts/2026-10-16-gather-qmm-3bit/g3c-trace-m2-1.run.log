@@ -1,0 +1,60 @@
+G3CTRACE wheel mlx_omarchy-0.32.4.dev202610160211+b13f2ffc-cp314-cp314-linux_aarch64.whl sha256 fda8ab8e7d6fa1465f5103388334f5cb267be4f70ed630ba956db91314a79e17
+G3CTRACE kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=6.21
+G3CTRACE packages: mesa 1:26.2.4-1;vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2;linux-aurora 7.1.12.aurora2-20261013.18;asahi-fwextract 0.8.4-1;
+G3CTRACE tree libmlx sha256 b6c1678d958e86071e5c54957e3e0efbaac613b2fd5fc21508d5f2a3dfc79ccb script 9ea770093802ab4a
+G3CTRACE bits_group 3 64 rc=0 stderr lines 136
+G3CTRACE 3_64: libmlx loaded: ['$HOME/scratch/w6z/g3c-tree/mlx/lib/libmlx.so']
+G3CTRACE 3_64: default device: Device(gpu, 0) mlx 0.32.4.dev202610160211+b13f2ffc bits 3 group 64
+G3CTRACE 3_64: T=3 k=2 E=4 K=192 N=40: cpu-ref 4.860e-04 scale 1.97 | default gpu-ref 4.860e-04 | scalar gpu-ref 4.860e-04 | default-vs-scalar 0.000e+00 OK
+G3CTRACE 3_64: peak memory GiB 0.0
+G3CTRACE 3_64: RESULT PASS
+G3CTRACE trace 3 64:      12 [rtmod] SUBMIT-ENTER tid=N
+G3CTRACE trace 3 64:      11 [rtmod]   bind[2] off=0 range=N alloc=N
+G3CTRACE trace 3 64:      11 [rtmod]   bind[0] off=0 range=N alloc=N
+G3CTRACE trace 3 64:       9 [rtmod] COMMIT-NOOP
+G3CTRACE trace 3 64:       8 [rtmod]   bind[1] off=0 range=N alloc=N
+G3CTRACE trace 3 64:       5 [rtmod]   bind[1] off=0 range=12 alloc=N
+G3CTRACE trace 3 64:       4 [rtmod] EV-SIGNAL tid=N ev=0xaaab17b5eac0 val=1 st=0 host=0
+G3CTRACE trace 3 64:       4 [rtmod]   bind[0] off=0 range=12 alloc=N
+G3CTRACE trace 3 64:       3 [rtmod] EV-SIGNAL tid=N ev=0xaaabNc0 val=1 st=0 host=0
+G3CTRACE trace 3 64:       3 [rtmod] DISPATCH kernel=N count=4 gx=1 gy=1 gz=1
+G3CTRACE trace 3 64:       3 [rtmod] DISPATCH kernel=3 count=N gx=1 gy=1 gz=1
+G3CTRACE trace 3 64:       3 [rtmod]   bind[1] off=0 range=16 alloc=N
+G3CTRACE bits_group 2 64 rc=0 stderr lines 151
+G3CTRACE 2_64: libmlx loaded: ['$HOME/scratch/w6z/g3c-tree/mlx/lib/libmlx.so']
+G3CTRACE 2_64: default device: Device(gpu, 0) mlx 0.32.4.dev202610160211+b13f2ffc bits 2 group 64
+G3CTRACE 2_64: T=3 k=2 E=4 K=192 N=40: cpu-ref 4.871e-04 scale 2.01 | default gpu-ref 4.871e-04 | scalar gpu-ref 4.871e-04 | default-vs-scalar 0.000e+00 OK
+G3CTRACE 2_64: peak memory GiB 0.0
+G3CTRACE 2_64: RESULT PASS
+G3CTRACE trace 2 64:      16 [rtmod] EV-WAIT-TASK tid=N ev=0xaaab7dN val=1
+G3CTRACE trace 2 64:      12 [rtmod] SUBMIT-ENTER tid=N
+G3CTRACE trace 2 64:      11 [rtmod]   bind[2] off=0 range=N alloc=N
+G3CTRACE trace 2 64:      11 [rtmod]   bind[0] off=0 range=N alloc=N
+G3CTRACE trace 2 64:       9 [rtmod] COMMIT-NOOP
+G3CTRACE trace 2 64:       8 [rtmod]   bind[1] off=0 range=N alloc=N
+G3CTRACE trace 2 64:       5 [rtmod] EV-SIGNAL tid=N ev=0xaaab7dN val=1 st=0 host=0
+G3CTRACE trace 2 64:       5 [rtmod]   bind[1] off=0 range=12 alloc=N
+G3CTRACE trace 2 64:       4 [rtmod]   bind[0] off=0 range=12 alloc=N
+G3CTRACE trace 2 64:       3 [rtmod] EV-WAIT-TASK tid=N ev=0xaaab7dN val=3
+G3CTRACE trace 2 64:       3 [rtmod] EV-SIGNAL tid=N ev=0xaaab7dNd0 val=1 st=0 host=0
+G3CTRACE trace 2 64:       3 [rtmod] DISPATCH kernel=N count=4 gx=1 gy=1 gz=1
+G3CTRACE bits_group 2 128 rc=0 stderr lines 152
+G3CTRACE 2_128: libmlx loaded: ['$HOME/scratch/w6z/g3c-tree/mlx/lib/libmlx.so']
+G3CTRACE 2_128: default device: Device(gpu, 0) mlx 0.32.4.dev202610160211+b13f2ffc bits 2 group 128
+G3CTRACE 2_128: T=3 k=2 E=4 K=256 N=40: cpu-ref 4.526e-04 scale 2.05 | default gpu-ref 4.526e-04 | scalar gpu-ref 4.526e-04 | default-vs-scalar 0.000e+00 OK
+G3CTRACE 2_128: peak memory GiB 0.0
+G3CTRACE 2_128: RESULT PASS
+G3CTRACE trace 2 128:      16 [rtmod] EV-WAIT-TASK tid=N ev=0xaaab1e5eN val=1
+G3CTRACE trace 2 128:      12 [rtmod] SUBMIT-ENTER tid=N
+G3CTRACE trace 2 128:      11 [rtmod]   bind[2] off=0 range=N alloc=N
+G3CTRACE trace 2 128:      11 [rtmod]   bind[0] off=0 range=N alloc=N
+G3CTRACE trace 2 128:      10 [rtmod] COMMIT-NOOP
+G3CTRACE trace 2 128:       8 [rtmod]   bind[1] off=0 range=N alloc=N
+G3CTRACE trace 2 128:       5 [rtmod] DISPATCH kernel=3 count=N gx=1 gy=1 gz=1
+G3CTRACE trace 2 128:       5 [rtmod]   bind[1] off=0 range=12 alloc=N
+G3CTRACE trace 2 128:       4 [rtmod] EV-SIGNAL tid=N ev=0xaaab1e5eN val=1 st=0 host=0
+G3CTRACE trace 2 128:       4 [rtmod] DISPATCH kernel=N count=N gx=1 gy=1 gz=1
+G3CTRACE trace 2 128:       4 [rtmod]   bind[0] off=0 range=12 alloc=N
+G3CTRACE trace 2 128:       3 [rtmod] EV-SIGNAL tid=N ev=0xaaab1eNba0 val=1 st=0 host=0
+G3CTRACE device reopen rc=0 reopen Device(gpu, 0) [2.0, 2.0, 2.0, 2.0]
+G3CTRACE DONE out=$HOME/scratch/w6z/g3c-trace-m2-1

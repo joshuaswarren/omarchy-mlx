@@ -1,0 +1,152 @@
+[rtmod] DISPATCH kernel=102 count=4 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=8 alloc=4096
+[rtmod]   bind[1] off=0 range=16 alloc=4096
+[rtmod] DISPATCH kernel=102 count=4 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=8 alloc=4096
+[rtmod]   bind[1] off=0 range=16 alloc=4096
+[rtmod] DISPATCH kernel=102 count=4 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=8 alloc=4096
+[rtmod]   bind[1] off=0 range=16 alloc=4096
+[rtmod] FENCE-UPDATE count=0 st=0
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e6058c0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=1 waits=0 sigs=2 cmds=1
+[rtmod] FENCE-UPDATE count=1 st=0
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e6058c0 val=2 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=2 waits=1 sigs=2 cmds=0
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e6058c0 val=2
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e6058c0 val=2
+[rtmod] FENCE-UPDATE count=2 st=0
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e6058c0 val=3 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=3 waits=1 sigs=2 cmds=0
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e6058c0 val=3
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e673ba0 val=1 st=1 host=1
+[rtmod] COMMIT-NOOP
+[rtmod] DISPATCH kernel=195 count=1920 gx=8 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=10240 alloc=12288
+[rtmod]   bind[1] off=0 range=12 alloc=4096
+[rtmod]   bind[2] off=0 range=7680 alloc=8192
+[rtmod] FENCE-UPDATE count=0 st=0
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=4 waits=1 sigs=2 cmds=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=1
+[rtmod] DISPATCH kernel=193 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=640 alloc=4096
+[rtmod]   bind[1] off=0 range=12 alloc=4096
+[rtmod]   bind[2] off=0 range=480 alloc=4096
+[rtmod] DISPATCH kernel=193 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=640 alloc=4096
+[rtmod]   bind[1] off=0 range=12 alloc=4096
+[rtmod]   bind[2] off=0 range=480 alloc=4096
+[rtmod] DISPATCH kernel=3 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=480 alloc=4096
+[rtmod]   bind[1] off=0 range=480 alloc=4096
+[rtmod]   bind[2] off=0 range=960 alloc=4096
+[rtmod] FENCE-UPDATE count=1 st=0
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=2 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=5 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] DISPATCH kernel=3 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=480 alloc=4096
+[rtmod]   bind[1] off=0 range=480 alloc=4096
+[rtmod]   bind[2] off=0 range=960 alloc=4096
+[rtmod] FENCE-UPDATE count=2 st=0
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=3 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=6 waits=1 sigs=2 cmds=1
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=3
+[rtmod] EV-WAIT-TASK tid=976343 ev=0xaaab1e5e6710 val=3
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e673ba0 val=1 st=1 host=1
+[rtmod] COMMIT-NOOP
+[rtmod] DISPATCH kernel=3 count=768 gx=3 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=1536 alloc=4096
+[rtmod]   bind[1] off=0 range=1536 alloc=4096
+[rtmod]   bind[2] off=0 range=3072 alloc=4096
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e673ba0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=7 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=976343 ev=0xaaab1e673ba0 val=1 cnt=0 resv=7
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=1 st=1 host=1
+[rtmod] DISPATCH kernel=3 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=480 alloc=4096
+[rtmod]   bind[1] off=0 range=480 alloc=4096
+[rtmod]   bind[2] off=0 range=960 alloc=4096
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=8 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=976343 ev=0xaaab1e5e6710 val=1 cnt=0 resv=8
+[rtmod] DISPATCH kernel=79 count=3 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=12 alloc=4096
+[rtmod] DISPATCH kernel=59 count=6 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=12 alloc=4096
+[rtmod]   bind[1] off=0 range=12 alloc=4096
+[rtmod]   bind[2] off=0 range=24 alloc=4096
+[rtmod]   bind[3] off=0 range=24 alloc=4096
+[rtmod] DISPATCH kernel=217 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=1536 alloc=4096
+[rtmod]   bind[1] off=0 range=1328 alloc=4096
+[rtmod]   bind[2] off=0 range=10240 alloc=12288
+[rtmod]   bind[3] off=0 range=480 alloc=4096
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e673ba0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=9 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=976343 ev=0xaaab1e673ba0 val=1 cnt=0 resv=9
+[rtmod] DISPATCH kernel=3 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=480 alloc=4096
+[rtmod]   bind[1] off=0 range=480 alloc=4096
+[rtmod]   bind[2] off=0 range=960 alloc=4096
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=10 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=976343 ev=0xaaab1e5e6710 val=1 cnt=0 resv=10
+[rtmod] DISPATCH kernel=79 count=3 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=12 alloc=4096
+[rtmod] DISPATCH kernel=59 count=6 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=12 alloc=4096
+[rtmod]   bind[1] off=0 range=12 alloc=4096
+[rtmod]   bind[2] off=0 range=24 alloc=4096
+[rtmod]   bind[3] off=0 range=24 alloc=4096
+[rtmod] DISPATCH kernel=217 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=1536 alloc=4096
+[rtmod]   bind[1] off=0 range=1328 alloc=4096
+[rtmod]   bind[2] off=0 range=10240 alloc=12288
+[rtmod]   bind[3] off=0 range=480 alloc=4096
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e673ba0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=11 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=976343 ev=0xaaab1e673ba0 val=1 cnt=0 resv=11
+[rtmod] DISPATCH kernel=3 count=240 gx=1 gy=1 gz=1
+[rtmod]   bind[0] off=0 range=480 alloc=4096
+[rtmod]   bind[1] off=0 range=480 alloc=4096
+[rtmod]   bind[2] off=0 range=960 alloc=4096
+[rtmod] EV-SIGNAL tid=976343 ev=0xaaab1e5e6710 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=976343
+[rtmod] SUBMIT tid=976343 cv=12 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=976343 ev=0xaaab1e5e6710 val=1 cnt=0 resv=12
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=976343 reason=explicit last=12
