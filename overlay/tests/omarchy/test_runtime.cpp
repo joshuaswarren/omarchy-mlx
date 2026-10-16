@@ -757,6 +757,11 @@ TEST_CASE("work budget resolves per device name, not per process") {
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 5000);
 
+  // A third name between repeats: a one-entry cache that returns its
+  // stored value without re-keying on the name would surface a stale
+  // 40000 or 5000 here.
+  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 40000);
+
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 5000);
