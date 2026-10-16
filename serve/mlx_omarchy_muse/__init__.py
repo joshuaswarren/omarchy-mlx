@@ -40,7 +40,8 @@ def _install_prune(module) -> None:
     Rank size-1 runs the first layers and is the only rank whose embedding values are used (the other ranks take the
     hidden state from a recv and read only the shape and dtype). Rank 0 runs the last layers and is the only rank that
     needs lm_head, provided one rank samples and shares the token (omarchy-cluster does). A stub with the same shape or
-    dtype takes their place, so the load never reads the real tensors. Without that sharing, leave this off."""
+    dtype takes their place, so the load never reads the real tensors. Without that sharing, leave this off.
+    A model with tie_word_embeddings keeps everything: its ranks all use embed_tokens for the logits."""
     import mlx.core as mx
     import mlx.nn as nn
 
@@ -69,6 +70,8 @@ def _install_prune(module) -> None:
     def pipeline(self, group, *rest):
         module.PipelineMixin.pipeline(self, group, *rest)  # looked up late: omarchy-cluster replaces it
         rank, size = self.pipeline_rank, self.pipeline_size
+        if self.args.tie_word_embeddings:
+            return  # tied: every rank computes logits with embed_tokens.as_linear, so every rank keeps it
         if size > 1 and rank != size - 1 and not isinstance(self.embed_tokens, _ZeroEmbed):
             emb = self.embed_tokens
             dtype = emb.scales.dtype if hasattr(emb, "scales") else emb.weight.dtype

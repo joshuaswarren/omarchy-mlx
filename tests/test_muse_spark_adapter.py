@@ -157,20 +157,20 @@ for rank in (0, 1):
     real = model.model.embed(mx.array([[1, 2, 3]]))
     model.model.pipeline(Group(rank, 2))
     got = model.model.embed(mx.array([[1, 2, 3]]))
-    out[rank] = {"embed": type(model.model.embed_tokens).__name__, "head": type(model.lm_head).__name__,
+    out[rank] = {"embed": type(model.model.embed_tokens).__name__, "head": type(getattr(model, "lm_head", None)).__name__,
                  "shape": list(got.shape) == list(real.shape), "dtype": got.dtype == real.dtype,
-                 "vocab": model.lm_head.weight.shape[0] if "weight" in model.lm_head else None}
+                 "vocab": model.lm_head.weight.shape[0] if "lm_head" in model and "weight" in model.lm_head else None}
 print(json.dumps(out))
 """
 
 
 class PruneTest(unittest.TestCase):
-    def _run(self, flag):
+    def _run(self, flag, tie=False):
         import os
         import subprocess
 
         reference = json.loads((FIXTURES / "muse_tiny_reference.json").read_text())
-        config = {**reference["config"], "model_type": "muse_spark"}
+        config = {**reference["config"], "model_type": "muse_spark", "tie_word_embeddings": tie}
         env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(REPO / "serve")]), "MLX_OMARCHY_PIPELINE_PRUNE": flag}
         done = subprocess.run([sys.executable, "-c", _PRUNE_SCRIPT, json.dumps(config)], env=env, capture_output=True, text=True, check=True)
         return json.loads(done.stdout.strip().splitlines()[-1]), config
@@ -179,6 +179,12 @@ class PruneTest(unittest.TestCase):
         out, _ = self._run("0")
         for rank in ("0", "1"):
             self.assertEqual((out[rank]["embed"], out[rank]["head"]), ("Embedding", "Linear"))
+
+    def test_on_keeps_everything_when_embeddings_are_tied(self):
+        out, _ = self._run("1", tie=True)
+        for rank in ("0", "1"):
+            self.assertEqual(out[rank]["embed"], "Embedding")
+            self.assertEqual(out[rank]["head"], "NoneType")
 
     def test_on_keeps_embed_on_the_first_layer_rank_and_the_head_on_rank_zero(self):
         out, config = self._run("1")

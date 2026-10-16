@@ -7,7 +7,7 @@ It runs on omarchy-mlx via omarchy-cluster (mlx-lm), not the oMLX server.
 `MLX_OMARCHY_PIPELINE_PRUNE=1` makes the adapter swap two tensors for stubs after the pipeline split.
 - `embed_tokens` stays only on the rank that runs the first layers (rank size-1). The other ranks read only the shape and dtype of the embedding.
 - `lm_head` stays only on rank 0, the rank that samples. The other ranks already swap it for the token all_gather in omarchy-cluster.
-The setting is off by default. The vendored class file is unchanged.
+The setting is off by default. The vendored class file is unchanged. A model with `tie_word_embeddings` keeps every tensor, because every rank then computes logits with `embed_tokens`.
 
 ## Run
 - Setup: four CPU ranks on one x86 machine. Stock mlx 0.32.3. mlx-lm 0.32.0. Ring backend.
@@ -15,11 +15,15 @@ The setting is off by default. The vendored class file is unchanged.
 - Model: hidden size 256. 8 layers. Vocab 32000. fp16 with 2-bit experts. Random weights.
 - Load order: one safetensors file loaded lazily, then the split, then `mx.eval(parameters)`.
 - Greedy decode. 12 tokens. Prompt of 8 ids.
-- Files: `prune_probe.py`, `run_prune_probe.sh`.
+- Files: `prune_probe.py`, `run_prune_probe.sh`. Set `MUSE_SERVE_DIR` and `OMARCHY_CLUSTER_DIR`, then run the shell script.
+
+## Provenance
+`scripts/mlx_provenance.py` on the Python that ran this: `dist` mlx-omarchy, `verified` no-metadata, `mx_version` 0.32.3.
+This is stock mlx from PyPI. No mlx-omarchy wheel was installed, so there is no installed-binary check. The adapter under test is `serve/mlx_omarchy_muse/__init__.py` with sha256 `6d2e261baaeef128eab42f2c919a03746b2fb8097f9621083c57028bf8241d1b` on main at `8af52fb4e`.
 
 ## Result
-Tokens: identical on all four ranks and identical with the setting on and off: `[1447, 19746, 9666, 6908, 14716, 23978, 15036, 4153, 14509, 8837, 16260, 22876]`.
-Rank 0 log-probabilities: the sha256 of the float32 bytes of each of the 12 steps matches with the setting on and off. The first eight hex digits per step are `c7925998 5f272022 0688b95c 81362989 638ac848 dbb658a8 f1623a49 1461546b f8d9d8bd 3454aa26 f244e614 0a5c6f42`.
+Tokens: identical on all four ranks and identical with the setting on and off: `[1841, 8239, 30859, 8928, 24700, 10261, 4155, 19032, 9265, 1545, 393, 4651]`.
+Rank 0 log-probabilities: the sha256 of the float32 bytes of each of the 12 steps matches with the setting on and off. The first eight hex digits per step are `5196ba2a 37d6c284 27d29e2e d6b14643 fc4b7c43 a667e40c 026adab4 a7a722e7 6890427e cc543f00 e0864e20 6dcb032f`.
 Ranks 1 to 3 hold a one-hot head by design, so only rank 0 shows real log-probabilities.
 The packed expert weights are not seeded, so the tokens differ from run to run. Each comparison above uses one checkpoint file for both settings.
 

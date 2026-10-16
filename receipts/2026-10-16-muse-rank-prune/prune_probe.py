@@ -1,6 +1,6 @@
 """prune_probe.py: four CPU ranks (mx.distributed ring on localhost, stock mlx) run the tiny 2-bit Muse model, layers split by omarchy-cluster's _pipeline_split, the token shared by omarchy-cluster's _share_token (both imported from the rank.py checkout), greedy 12 tokens.
 Weights come from one safetensors file loaded lazily (load_weights), then the pipeline split, then mx.eval(parameters), the order mlx_lm.sharded_load uses.
-Run under mlx.launch with MLX_OMARCHY_PIPELINE_PRUNE=0 or 1. Each rank prints active memory after the eval and after the token-sharing swap, the pruned tensor bytes, and its tokens."""
+Run under mlx.launch with MLX_OMARCHY_PIPELINE_PRUNE=0 or 1, MUSE_SERVE_DIR (the repo's serve directory) and OMARCHY_CLUSTER_DIR (an omarchy-cluster checkout) set. Each rank prints active memory after the eval and after the token-sharing swap, the pruned tensor bytes, and its tokens."""
 import gc
 import importlib
 import os
@@ -11,8 +11,8 @@ import mlx.nn as nn
 import numpy as np
 from mlx.utils import tree_flatten, tree_unflatten
 
-sys.path.insert(0, os.path.expanduser("~/.config/superpowers/worktrees/mlx-omarchy/MusePrune/serve"))
-sys.path.insert(0, os.path.expanduser("~/scratch/w7k-pr-reviews/clu15-main"))
+sys.path.insert(0, os.environ["MUSE_SERVE_DIR"])
+sys.path.insert(0, os.environ["OMARCHY_CLUSTER_DIR"])
 import mlx_omarchy_muse  # noqa: E402
 
 mlx_omarchy_muse.register()
