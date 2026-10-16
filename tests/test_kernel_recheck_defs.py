@@ -281,6 +281,18 @@ def test_ref_sconv_decode_small_case():
     assert nstate.shape == (1, 3, 2)
     assert np.allclose(nstate, [[[2.0, 2.0], [1.0, 2.0], [3.0, 4.0]]], atol=0)
 
+    # variant whose final inner+res sum needs bf16 rounding: res = bf16(0.1)
+    # = 0.10009765625, so the sums 2.10009765625 / 4.10009765625 /
+    # 5.10009765625 / 8.10009765625 land OFF the bf16 grid and must round
+    # to 2.09375 / 4.09375 / 5.09375 / 8.125
+    res2 = defs.bf16(np.full((1, 2, 2), 0.1, dtype=np.float32))
+    out2, _ = defs.ref_sconv({"x": x, "state": state, "w": w, "res": res2})
+    want2 = np.array([[[2.09375, 4.09375], [5.09375, 8.125]]])
+    assert np.array_equal(out2, want2)
+    for s, want_v in zip((2.0, 4.0, 5.0, 8.0),
+                         (2.09375, 4.09375, 5.09375, 8.125)):
+        assert float(defs.bf16(np.float32(s + 0.10009765625))) == want_v
+
 
 def test_ref_route_topk_lowest_index_tie_break():
     # R=8 routed + SH=1 shared; two exact ties (j0/j1 at 0.5, and the picked
