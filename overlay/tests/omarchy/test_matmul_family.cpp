@@ -2685,6 +2685,101 @@ TEST_CASE("gather qmm subgroup kernel matches scalar at decode shapes") {
   }
 }
 
+TEST_CASE("gather qmm 2-bit bf16 decode: the default route and the scalar kernel match the host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(417);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  const int bits = 2;
+  const int m = 1;
+  const int experts = 3;
+  const int index_count = 5;
+  const int n = 40;
+  for (int group_size : {64, 128}) {
+    const int k = 256;
+    CAPTURE(group_size);
+    const int groups = k / group_size;
+    const int words_per_row = k * bits / 32;
+    std::vector<HostQuantizedWeights> host_w;
+    std::vector<uint32_t> w_all;
+    std::vector<float> scales_all;
+    std::vector<float> biases_all;
+    for (int e = 0; e < experts; ++e) {
+      std::vector<float> matrix(static_cast<size_t>(n) * k);
+      for (auto& value : matrix) {
+        value = dist(gen);
+      }
+      HostQuantizedWeights host = host_affine_quantize(matrix, n, k, group_size, bits);
+      host.scales = round_trip(stream, host.scales, bfloat16);
+      host.biases = round_trip(stream, host.biases, bfloat16);
+      host_w.push_back(host);
+      w_all.insert(w_all.end(), host.words.begin(), host.words.end());
+      scales_all.insert(scales_all.end(), host.scales.begin(), host.scales.end());
+      biases_all.insert(biases_all.end(), host.biases.begin(), host.biases.end());
+    }
+    std::vector<float> x_all;
+    for (int b = 0; b < index_count; ++b) {
+      for (int i = 0; i < m * k; ++i) {
+        x_all.push_back(dist(gen));
+      }
+    }
+    x_all = round_trip(stream, x_all, bfloat16);
+    std::vector<uint32_t> lhs_v(index_count);
+    std::vector<uint32_t> rhs_v(index_count);
+    for (int b = 0; b < index_count; ++b) {
+      lhs_v[b] = static_cast<uint32_t>(b);
+      rhs_v[b] = static_cast<uint32_t>(gen() % static_cast<uint32_t>(experts));
+    }
+    array w_words(w_all.begin(), Shape{experts, n, words_per_row}, uint32);
+    array scales = astype(array(scales_all.begin(), Shape{experts, n, groups}, float32), bfloat16, stream);
+    array biases = astype(array(biases_all.begin(), Shape{experts, n, groups}, float32), bfloat16, stream);
+    array x = astype(array(x_all.begin(), Shape{index_count, m, k}, float32), bfloat16, stream);
+    array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+    array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+    std::vector<float> expected(static_cast<size_t>(index_count) * m * n, 0.0f);
+    for (int b = 0; b < index_count; ++b) {
+      std::vector<float> row(x_all.begin() + static_cast<ptrdiff_t>(b) * k,
+                             x_all.begin() + static_cast<ptrdiff_t>(b + 1) * k);
+      std::vector<float> piece = host_quantized_matmul(host_w[rhs_v[b]], row, m, n, k, group_size, bits);
+      std::copy(piece.begin(), piece.end(), expected.begin() + static_cast<ptrdiff_t>(b) * m * n);
+    }
+    auto run_once = [&](bool sub) {
+      if (sub) {
+        unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+      } else {
+        setenv("MLX_OMARCHY_GATHER_QMM_SUB", "0", 1);
+      }
+      array out = gather_qmm(x, w_words, scales, biases, lhs, rhs, true, group_size, bits, "affine",
+                             std::nullopt, false, stream);
+      REQUIRE(evaluation_error(out).empty());
+      std::vector<float> values = readback_f32(stream, out);
+      unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+      return values;
+    };
+    std::vector<float> scalar_out = run_once(false);
+    std::vector<float> default_out = run_once(true);
+    // On a device with 32-lane subgroups the default route is the subgroup kernel and the sum
+    // order differs from the scalar kernel, so the routes are compared with the host reference
+    // and with each other inside the bf16 rounding band.
+    double ref_max = 0.0;
+    double err_default = 0.0;
+    double err_scalar = 0.0;
+    double gap = 0.0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      ref_max = std::max(ref_max, std::abs(static_cast<double>(expected[i])));
+      err_default = std::max(err_default, std::abs(static_cast<double>(default_out[i]) - expected[i]));
+      err_scalar = std::max(err_scalar, std::abs(static_cast<double>(scalar_out[i]) - expected[i]));
+      gap = std::max(gap, std::abs(static_cast<double>(default_out[i]) - scalar_out[i]));
+    }
+    MESSAGE("2-bit bf16 g", group_size, ": default max abs ", err_default, " scalar max abs ", err_scalar, " gap ", gap, " ref max ", ref_max);
+    CHECK(err_default <= 8e-3 * ref_max);
+    CHECK(err_scalar <= 8e-3 * ref_max);
+    CHECK(gap <= 8e-3 * ref_max);
+  }
+}
+
 TEST_CASE("gather qmm 3-bit f16 decode: the direct subgroup kernel matches the scalar kernel and the host reference") {
   if (!compute_available()) {
     return;
