@@ -11,18 +11,19 @@ import mlx.core as mx
 import numpy as np
 
 BITS, GS = int(sys.argv[1]), int(sys.argv[2])
+DT = mx.bfloat16 if "bf16" in sys.argv[3:] else mx.float16
 mx.random.seed(11)
 print("libmlx loaded:", sorted({ln.split()[-1] for ln in open("/proc/self/maps") if "libmlx" in ln}), flush=True)
 print("default device:", mx.default_device(), "mlx", mx.__version__, "bits", BITS, "group", GS, flush=True)
 cases = [(1, 8, 16, 2048, 1024, False), (1, 8, 64, 4096, 512, False), (32, 8, 16, 2048, 1024, False), (3, 2, 4, 192 if GS <= 64 else 256, 40, False), (1, 8, 24, 4096, 4096, True)]
-if len(sys.argv) > 3 and sys.argv[3] == "small":
+if len(sys.argv) > 3 and "small" in sys.argv[3:]:
     cases = cases[3:4]  # dispatch-trace pass: one small case only
 bad = 0
 for T, top_k, E, K, N, real in cases:
-    w = mx.multiply(mx.random.normal((E, N, K), stream=mx.cpu), 0.05, stream=mx.cpu).astype(mx.float16, stream=mx.cpu)
+    w = mx.multiply(mx.random.normal((E, N, K), stream=mx.cpu), 0.05, stream=mx.cpu).astype(DT, stream=mx.cpu)
     wq, sc, bi = mx.quantize(w, group_size=GS, bits=BITS, stream=mx.cpu)
     del w
-    x = mx.random.normal((T, 1, 1, K), stream=mx.cpu).astype(mx.float16, stream=mx.cpu)
+    x = mx.random.normal((T, 1, 1, K), stream=mx.cpu).astype(DT, stream=mx.cpu)
     idx = mx.random.randint(0, E, (T, top_k), stream=mx.cpu).astype(mx.uint32, stream=mx.cpu)
     mx.eval(wq, sc, bi, x, idx)
 

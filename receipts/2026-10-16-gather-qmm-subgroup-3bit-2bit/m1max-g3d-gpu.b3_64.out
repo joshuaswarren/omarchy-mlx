@@ -1,0 +1,9 @@
+libmlx loaded: ['$HOME/scratch/w71/g3d/g3d-tree/mlx/lib/libmlx.so']
+default device: Device(gpu, 0) mlx 0.32.4.dev202610160214+39f00215 bits 3 group 64
+T=1 k=8 E=16 K=2048 N=1024: cpu-ref 1.951e-03 scale 8.36 | default gpu-ref 1.951e-03 | scalar gpu-ref 1.951e-03 | default-vs-scalar 1.953e-03 OK
+T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.774e-03 scale 12.04 | default gpu-ref 3.774e-03 | scalar gpu-ref 3.774e-03 | default-vs-scalar 3.906e-03 OK
+T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.907e-03 scale 10.94 | default gpu-ref 3.907e-03 | scalar gpu-ref 3.907e-03 | default-vs-scalar 3.906e-03 OK
+T=3 k=2 E=4 K=192 N=40: cpu-ref 4.719e-04 scale 1.86 | default gpu-ref 4.719e-04 | scalar gpu-ref 4.719e-04 | default-vs-scalar 2.441e-04 OK
+T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.893e-03 scale 14.52 | default gpu-ref 3.893e-03 ms/call 2.36 | scalar gpu-ref 3.893e-03 ms/call 69.25 | default-vs-scalar 3.906e-03 OK
+peak memory GiB 2.41
+RESULT PASS
