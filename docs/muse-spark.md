@@ -49,9 +49,9 @@ This route runs on omarchy-mlx through omarchy-cluster (mlx-lm). It does not use
 | Item | State at this commit |
 |---|---|
 | Tiny 8-layer Muse-shaped model, three machines, split 3,3,2, through the commands below | Run. 8 tokens at 19.95 tok/s. There is no agreed single-process reference: single-process runs on two devices disagree on the first token too. So this is a plumbing result and not a correctness claim. |
-| The raw completion request of step 6 | Unit test and a mock gateway only. Not run on real nodes. |
-| The 2-bit 62-layer checkpoint on the cluster | Not run. The layer split is not final, so none is given here. |
-| Quality, decode speed and first-token time of the 2-bit checkpoint | Not measured. |
+| The raw completion request of step 6 | Run on the real cluster: three prompts, in the measured run below. |
+| The 2-bit 62-layer checkpoint on the cluster | Run: all 62 layers on 5 ranks on 4 Apple Silicon machines, three prompts at 64 new tokens, repeated once. Figures in the measured run below. No 128 or 256 token output exists: the first 128-token request ended the run (the 13-inch machine's GPU hung and the ranks stopped). |
+| Quality of the 2-bit checkpoint | Not measured. No independent numeric reference exists. Three short prompts were judged coherent against a rubric fixed before the run (see the limits below). |
 
 1. Get the 2-bit checkpoint. It is the unpruned `amd/Muse-Spark-Open-816B-A42B-Quark-PTPC-FP8` (revision `52cace63f43ed9fc6acef6dcd391adb02f4bfbe1`) converted to MLX affine weights: routed experts 2-bit group 128, attention and the expert projections 4-bit group 64, embedding 4-bit, `lm_head` 6-bit group 64. It has 63 part files, 2,425 tensors and 237,429,698,758 bytes, and every tensor name, dtype and logical shape equals the published mlx-community 3-bit layout (the packed widths differ, because the bit widths differ). The converter, the finalizer and the recipe are in [tools/muse-2bit](../tools/muse-2bit/README.md).
 2. Put the parts where every node can read them. Each node needs a Hugging Face cache snapshot directory (`models--<org>--<name>/snapshots/<revision>`) that holds links to the part files and to `config.json`, the tokenizer files and `model.safetensors.index.json`. On the machines that lack the disk space, the links pointed into read-only sshfs mounts of the disks that hold the parts. Each node then loads the model by its repository name, offline.
@@ -89,6 +89,24 @@ This route runs on omarchy-mlx through omarchy-cluster (mlx-lm). It does not use
    curl -s http://<gateway>:18020/v1/completions -H 'Content-Type: application/json' \
      -d '{"model":"<model>","prompt":"<the text above>","raw":true,"max_tokens":200,"temperature":0}'
    ```
+
+### Measured run: 62 of 62 layers on 5 ranks, 4 machines
+
+Placement, in rank order (`--split 24,12,12,12,2`): rank 0 on the M1 Ultra Mac Studio runs layers 38 to 61 and `lm_head`; two ranks on the 14-inch M2 Max run layers 26 to 37 and 14 to 25; the 16-inch M1 Max runs layers 2 to 13; the 13-inch M1 runs layers 0 and 1 and the embedding. Active memory per rank, printed by the ranks: 92.4 GB, 45.5 GB, 45.5 GB, 45.5 GB and 8.6 GB.
+
+Settings: pipeline prune on (`MLX_OMARCHY_PIPELINE_PRUNE=1`), `MLX_DISABLE_COMPILE=1`, the default kernels, the raw completion route of step 6, temperature 0. The Linux ranks used the omarchy-mlx build selected by the rank wrapper script (a later tree when present); the package versions of this run are not recorded. With compile off, no compiled kernel ran. The Studio's share was above the planner's free-memory rule (the run used `--no-fit-check`) and ran under a swap guard.
+
+| Prompt | Prompt tokens | First token (gateway `prefill_ms`) | Generated tokens | Decode (gateway `tokens_per_s`) | Output |
+|---|---:|---:|---:|---:|---|
+| What is 17 times 23? Answer with only the number. | 161 | 26.5 s | 2 | too short for a rate | `391` |
+| What is the capital of Australia? Answer in one sentence. | 159 | 26.1 s | 8 | too short for a rate | `The capital of Australia is Canberra.` |
+| Write a Python function is_prime(n). Code only. | 158 | 25.9 s | 64, cut at the limit | 2.00 tok/s | a function `def is_prime(n)` with the usual guards, cut at 64 tokens, not run |
+
+A repeat of the same three requests gave byte-identical text; the first token came after 26.0 to 26.7 s and decode ran at 2.03 tok/s on the 64-token output. The first token wait is the whole prefill of a 158 to 161 token prompt through five ranks (about 6 tokens per second, derived); those tokens include the fixed system preamble of the prompt files (reasoning strength and channel rules), so the first-token time is not the time for a one-line question. Per generated token the server step took 507 ms, 437 ms of it rank 0 waiting on the ring receive (read from the run's server timings).
+
+What the run shows and does not show: the 62-layer pipeline carries signal and answers three simple prompts deterministically at temperature 0. Two independent reads against criteria fixed before any 62-layer text existed judged all three outputs good (right answers, no repeated token runs, identical on repeat). It does not validate the weights or the numerics, because no independent reference exists; it is not a quality score; it is three short prompts on one boot with one placement; and the figures are not a speed claim for the product: the run used default kernels on the 2-bit expert path. The 6-bit `lm_head` ran on the Studio (macOS MLX on Metal): the Vulkan 6-bit head route was not part of this run, and no independent reference exists for the head.
+
+The run ended at the first 128-token request: the 13-inch machine's GPU hung and all ranks stopped (12:46:45Z by the run's logs). The cause is not known, and no later run was made. Nothing here shows that a longer output works.
 
 ## Use
 
