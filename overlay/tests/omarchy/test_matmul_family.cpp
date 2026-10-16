@@ -234,8 +234,10 @@ HostQuantizedWeights host_affine_quantize(
     int bits) {
   HostQuantizedWeights result;
   int groups = cols / group_size;
-  int pack = 32 / bits;
-  int words_per_row = cols / pack;
+  // Codes are a contiguous little-endian bit stream along the row, so a
+  // 3-bit code can straddle two words (identical to the old layout for
+  // 2, 4 and 8 bits).
+  int words_per_row = cols * bits / 32;
   float n_bins = static_cast<float>((1 << bits) - 1);
   result.words.assign(static_cast<size_t>(rows) * words_per_row, 0);
   result.scales.resize(static_cast<size_t>(rows) * groups);
@@ -267,8 +269,13 @@ HostQuantizedWeights host_affine_quantize(
         float q = std::clamp(std::round((value - bias) / scale), 0.0f, n_bins);
         uint32_t code = static_cast<uint32_t>(q);
         int col = group * group_size + i;
-        result.words[row * words_per_row + col / pack] |=
-            code << ((col % pack) * bits);
+        int bit_pos = col * bits;
+        int shift = bit_pos % 32;
+        result.words[row * words_per_row + bit_pos / 32] |= code << shift;
+        if (shift + bits > 32) {
+          result.words[row * words_per_row + bit_pos / 32 + 1] |=
+              code >> (32 - shift);
+        }
       }
     }
   }
@@ -285,8 +292,7 @@ std::vector<float> host_quantized_matmul(
     int k,
     int group_size,
     int bits) {
-  int pack = 32 / bits;
-  int words_per_row = k / pack;
+  int words_per_row = k * bits / 32;
   int groups = k / group_size;
   uint32_t mask = (1u << bits) - 1u;
   std::vector<float> out(static_cast<size_t>(m) * n);
@@ -294,10 +300,15 @@ std::vector<float> host_quantized_matmul(
     for (int column = 0; column < n; ++column) {
       double acc = 0.0;
       for (int inner = 0; inner < k; ++inner) {
-        uint32_t code =
-            (w.words[column * words_per_row + inner / pack] >>
-             ((inner % pack) * bits)) &
-            mask;
+        int bit_pos = inner * bits;
+        int shift = bit_pos % 32;
+        uint32_t word = w.words[column * words_per_row + bit_pos / 32];
+        uint32_t code = word >> shift;
+        if (shift + bits > 32) {
+          code |= w.words[column * words_per_row + bit_pos / 32 + 1] <<
+              (32 - shift);
+        }
+        code &= mask;
         double dequant = static_cast<double>(code) *
                 w.scales[column * groups + inner / group_size] +
             w.biases[column * groups + inner / group_size];
@@ -2141,7 +2152,8 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
                       int n,
                       int group_size,
                       int bits,
-                      bool with_lhs) {
+                      bool with_lhs,
+                      bool half = false) {
     CAPTURE(experts);
     CAPTURE(m);
     CAPTURE(n);
@@ -2149,8 +2161,7 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
     CAPTURE(group_size);
     CAPTURE(bits);
     int groups = k / group_size;
-    int pack = 32 / bits;
-    int words_per_row = k / pack;
+    int words_per_row = k * bits / 32;
     std::vector<HostQuantizedWeights> host_w;
     // uint32, not float: these are raw packed code words. Held in a
     // float vector, every word >= 2^24 is silently rounded by the
@@ -2167,6 +2178,15 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
       }
       HostQuantizedWeights host =
           host_affine_quantize(matrix, n, k, group_size, bits);
+      if (half) {
+        // The device holds f16 scales and biases; the reference must use them.
+        for (auto& value : host.scales) {
+          value = static_cast<float>(float16_t(value));
+        }
+        for (auto& value : host.biases) {
+          value = static_cast<float>(float16_t(value));
+        }
+      }
       host_w.push_back(host);
       w_all.insert(w_all.end(), host.words.begin(), host.words.end());
       scales_all.insert(scales_all.end(), host.scales.begin(),
@@ -2180,6 +2200,9 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
       std::vector<float> matrix(static_cast<size_t>(m) * k);
       for (auto& value : matrix) {
         value = dist(gen);
+        if (half) {
+          value = static_cast<float>(float16_t(value));
+        }
       }
       x_batches.push_back(matrix);
       x_all.insert(x_all.end(), matrix.begin(), matrix.end());
@@ -2205,6 +2228,11 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
         x_all.begin(),
         Shape{x_batch, m, k},
         float32);
+    if (half) {
+      scales = astype(scales, float16, stream);
+      biases = astype(biases, float16, stream);
+      x = astype(x, float16, stream);
+    }
 
     // gather_qmm returns a fresh array in both branches; hold it in an
     // optional so one declaration serves both.
@@ -2276,13 +2304,37 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
           expected.begin() +
               static_cast<ptrdiff_t>(p) * static_cast<ptrdiff_t>(m) * n);
     }
-    expect_close_tol(readback_f32(stream, out), expected, 1e-4, 1e-3);
+    // f16 rounds the output once (about 5e-4 relative): the reference runs on
+    // the f16-rounded inputs the device buffers carry.
+    if (half) {
+      expect_close_tol(readback_f32(stream, out), expected, 5e-2, 4e-3);
+    } else {
+      expect_close_tol(readback_f32(stream, out), expected, 1e-4, 1e-3);
+    }
   };
 
   run_case(3, 2, 5, 192, 37, 64, 4, true);
   run_case(3, 2, 5, 192, 37, 64, 4, false);
   run_case(2, 2, 1, 128, 16, 32, 8, true);
   run_case(3, 1, 7, 192, 37, 64, 8, true);
+  // 3-bit (the Muse routed-expert layout): transposed affine, codes are a bit
+  // stream so most codes straddle a word boundary. k = 192 is 18 words per row.
+  run_case(3, 2, 5, 192, 37, 64, 3, true);
+  run_case(3, 2, 5, 192, 37, 64, 3, false);
+  run_case(2, 2, 1, 128, 16, 32, 3, true);
+  run_case(3, 1, 7, 256, 64, 64, 3, true);
+  // 2-bit (the smallest routed-expert layout): 16 codes per word, none straddle
+  // a word. The scalar kernel's generic pack-factor path decodes it; K is a
+  // multiple of 32 (so a row is whole words) with group sizes 32, 64 and 128.
+  run_case(3, 2, 5, 192, 37, 64, 2, true);
+  run_case(3, 2, 5, 192, 37, 64, 2, false);
+  run_case(2, 2, 1, 128, 16, 32, 2, true);
+  run_case(3, 1, 7, 256, 64, 128, 2, true);
+  run_case(2, 1, 4, 64, 24, 32, 2, true);
+  // The same layouts with f16 activations, scales, biases and output (no bf16).
+  run_case(3, 2, 5, 192, 37, 64, 2, true, true);
+  run_case(2, 2, 1, 128, 16, 32, 2, true, true);
+  run_case(3, 1, 7, 256, 64, 128, 2, false, true);
 
   // Named errors. Each shape is crafted to clear the op layer's shape
   // validation so the rejection provably comes from this backend: the
@@ -2353,8 +2405,11 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
     std::vector<float> nt_expected(2 * 64, 64.0f * 0.25f * 0.5f);
     expect_close_tol(readback_f32(stream, nt_out), nt_expected, 1e-5, 1e-4);
 
-    // bits=2: packed width and scales must agree through the op layer
-    // equality, so k = 8*32/2 = 128 with one scale per 128 columns.
+    // bits=5 (byte-packed codes, unsupported on this kernel): packed width and
+    // scales must agree through the op layer equality, so k = 20*32/5 = 128
+    // with one scale per 128 columns.
+    std::vector<uint32_t> w5_values(8 * 20, 0u);
+    array w5_words(w5_values.begin(), Shape{8, 20}, uint32);
     std::vector<float> x2_values(2 * 128, 0.25f);
     array x2(x2_values.begin(), Shape{2, 128}, float32);
     std::vector<float> one_param(8 * 1, 0.5f);
@@ -2362,14 +2417,14 @@ TEST_CASE("gather qmm gathers experts with scales and biases") {
     array biases_one(one_param.begin(), Shape{8, 1}, float32);
     std::string bits_error = evaluation_error(gather_qmm(
         x2,
-        w_words,
+        w5_words,
         scales_one,
         biases_one,
         lhs0,
         rhs,
         true,
         128,
-        2,
+        5,
         "affine",
         std::nullopt, false,
         stream));
@@ -2745,6 +2800,18 @@ TEST_CASE("gather qqmm dequants with scales only") {
         x, w_float, scales, idx, idx, 64, 4, "affine", std::nullopt,
         std::nullopt, false, stream));
     CHECK(weight_error.find("GatherQQMM") != std::string::npos);
+
+    // 3-bit and 2-bit are admitted for the biased gather_qmm only: the scale-only
+    // GatherQQMM route keeps the named bits refusal.
+    {
+      auto host3 = host_affine_quantize(matrix, n, k, 64, 3);
+      array w_words3(host3.words.begin(), Shape{n, k * 3 / 32}, uint32);
+      array scales3(host3.scales.begin(), Shape{n, 1}, float32);
+      std::string bits_error = evaluation_error(gather_qqmm(
+          x, w_words3, scales3, idx, idx, 64, 3, "affine", std::nullopt,
+          std::nullopt, false, stream));
+      CHECK(bits_error.find("GatherQQMM bits") != std::string::npos);
+    }
   }
 }
 

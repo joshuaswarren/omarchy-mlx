@@ -196,7 +196,10 @@ void main() {
   bool non_transposed = (params.flags & 1u) != 0u;
   uint pack_factor = 32u / bits;
   uint value_mask = (1u << bits) - 1u;
-  uint words_per_row = params.matrix_k / pack_factor;
+  // 3-bit codes (transposed layout only) are a contiguous little-endian bit
+  // stream along K, so a code can straddle two words: K * 3 / 32 words per row.
+  uint words_per_row = (bits == 3u) ? (params.matrix_k * 3u) / 32u
+                                    : params.matrix_k / pack_factor;
   uint groups_per_row = params.matrix_k / group_size;
   uint matrix = params.matrix_m * params.matrix_n;
 #ifdef FP_MODE
@@ -268,13 +271,29 @@ void main() {
       uint scale_base = rhs * scale_row_words + column * groups_per_row;
       for (uint k = 0u; k < params.matrix_k; ++k) {
         uint group = k / group_size;
-        uint word = input_w.values[w_base + k / pack_factor];
-        uint lane = k - (k / pack_factor) * pack_factor;
-        // bitfieldExtract compiles to OpBitFieldUExtract; the equivalent
-        // shift+mask misdecodes lanes 1..2 (reading the next lane's nibble,
-        // lane 0 reading zero) on llvmpipe Mesa 22.3 when the lane comes
-        // from a division-derived index.
-        uint q = bitfieldExtract(word, int(lane * bits), int(bits));
+        uint q;
+        if (bits == 3u) {
+          uint bit_pos = k * 3u;
+          uint word_index = bit_pos >> 5u;
+          uint shift = bit_pos & 31u;
+          uint w0 = input_w.values[w_base + word_index];
+          if (shift <= 29u) {
+            q = bitfieldExtract(w0, int(shift), 3);
+          } else {
+            uint low_bits = 32u - shift;
+            uint w1 = input_w.values[w_base + word_index + 1u];
+            q = bitfieldExtract(w0, int(shift), int(low_bits)) |
+                (bitfieldExtract(w1, 0, int(3u - low_bits)) << low_bits);
+          }
+        } else {
+          uint word = input_w.values[w_base + k / pack_factor];
+          uint lane = k - (k / pack_factor) * pack_factor;
+          // bitfieldExtract compiles to OpBitFieldUExtract; the equivalent
+          // shift+mask misdecodes lanes 1..2 (reading the next lane's nibble,
+          // lane 0 reading zero) on llvmpipe Mesa 22.3 when the lane comes
+          // from a division-derived index.
+          q = bitfieldExtract(word, int(lane * bits), int(bits));
+        }
         float scale = decode_param((scale_base + group) * param_bytes);
         float bias = 0.0;
 #ifndef NO_BIAS

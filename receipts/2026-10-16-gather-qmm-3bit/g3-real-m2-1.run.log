@@ -1,0 +1,12 @@
+G3REAL kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=1.96
+G3REAL tree libmlx sha256 e544f1198fe51668d2ce0915d29246499f6efc782208c65913cd91480cef12b3 script 0dc5986f7c50205d
+G3REAL python rc=0 load1_after=1.97
+G3REAL libmlx loaded: ['$HOME/scratch/w6z/g3-tree/mlx/lib/libmlx.so']
+G3REAL default device: Device(gpu, 0) mlx 0.32.4.dev202610152345+619b5578
+G3REAL quantized: (24, 4096, 384) mlx.core.uint32 (24, 4096, 64) mlx.core.float16 words per row 384 = K*3/32 384
+G3REAL T=1 top_k=8 K=4096 N=4096 E=24: gpu-vs-cpu max abs 3.906e-03 output scale 13.203 ms/call median 14.63 min 14.62 max 17.30 OK
+G3REAL T=8 top_k=8 K=4096 N=4096 E=24: gpu-vs-cpu max abs 7.812e-03 output scale 14.195 ms/call median 253.61 min 252.78 max 254.20 OK
+G3REAL peak memory GiB 2.41
+G3REAL RESULT PASS
+G3REAL stderr lines: 0
+G3REAL DONE out=$HOME/scratch/w6z/g3-real-m2-1 rc=0

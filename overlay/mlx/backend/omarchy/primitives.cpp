@@ -3177,7 +3177,13 @@ void dispatch_gather_qmm(
     bool right_sorted = false) {
   auto& encoder = omarchy::get_command_encoder(s);
   require_float_dtype(tag, x, out, encoder);
-  if (bits != 4 && bits != 8) {
+  // 2- and 3-bit are the biased affine transposed layout only (the scale-only GatherQQMM and
+  // QQMatmul routes keep the named refusal). 2-bit packs 16 codes per word (no code straddles
+  // a word, the generic pack-factor path of the scalar kernel decodes it); 3-bit reads the
+  // K * 3 / 32 words per row as a bit stream. The sub and tile kernels stay 4-bit.
+  if ((bits != 4 && bits != 8) &&
+      !((bits == 2 || bits == 3) && transpose && !fp_mode && biases.has_value() &&
+        x.shape(-1) % 32 == 0)) {
     omarchy::unsupported(tag + " bits", out);
   }
   if (group_size != 32 && group_size != 64 && group_size != 128 &&
