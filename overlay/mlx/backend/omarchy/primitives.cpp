@@ -3290,13 +3290,28 @@ void dispatch_gather_qmm(
     const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
-        transpose && bits == 4u && group_size == 64u &&
+        transpose &&
+        ((bits == 4u && group_size == 64u) ||
+         // 2-bit codes never straddle a word, so the generic decode of the subgroup
+         // kernels applies unchanged (group 64 and 128; shipped with a device check).
+         (bits == 2u && (group_size == 64u || group_size == 128u))) &&
         (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
         sub_caps.subgroup_size == 32u &&
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         sub_caps.storage_buffer_16bit_access;
   }
+  // 3-bit decode (the Muse routed-expert layout): the direct 8-output subgroup kernel with the
+  // bit-stream decode (BITS3 variant of gather_qmm_sub.comp). f16, transposed, biases present,
+  // group 64, N a multiple of 8, m == 1. Everything else at 3 bits stays on the scalar kernel.
+  const bool use_sub_q3 = bits == 3 && transpose && !fp_mode && m == 1 &&
+      group_size == 64 && !no_bias && out.dtype() == float16 && (n % 8) == 0 &&
+      (std::getenv("MLX_OMARCHY_GATHER_QMM_SUB") == nullptr ||
+       std::getenv("MLX_OMARCHY_GATHER_QMM_SUB")[0] != '0') &&
+      encoder.device().capabilities().subgroup_size == 32u &&
+      (encoder.device().capabilities().subgroup_operations &
+       VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+      encoder.device().capabilities().storage_buffer_16bit_access;
   // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
   // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
   // every row of a run re-reads the same expert's weights in the kernels
@@ -3360,7 +3375,7 @@ void dispatch_gather_qmm(
   // (15.9 MB per call at 128 experts) to select a few, which is 212 of
   // 493 us per call on the M2 (notebook H86).
   const char* direct_env = std::getenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
-  if (use_sub && !use_tile && !no_bias &&
+  if ((use_sub || use_sub_q3) && !use_tile && !no_bias &&
       (direct_env == nullptr || direct_env[0] != '0') &&
       encoder.device().compute().binding_limit() >= 7) {
     params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 4);
@@ -3388,8 +3403,13 @@ void dispatch_gather_qmm(
         (!transpose || (static_cast<uint32_t>(n) % rows_per_wg) != 0u)) {
       rows_per_wg = 0u;
     }
+    if (use_sub_q3) {
+      rows_per_wg = 8u;
+    }
     const bool bf16_out = out.dtype() != float16;
-    const omarchy::ComputeKernel direct_kernel = rows_per_wg == 8u
+    const omarchy::ComputeKernel direct_kernel = use_sub_q3
+        ? omarchy::ComputeKernel::GatherQmmSubDirectR8Q3F16
+        : rows_per_wg == 8u
         ? (bf16_out ? omarchy::ComputeKernel::GatherQmmSubDirectR8BF16
                     : omarchy::ComputeKernel::GatherQmmSubDirectR8F16)
         : rows_per_wg == 4u
