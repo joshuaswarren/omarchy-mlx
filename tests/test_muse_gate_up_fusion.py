@@ -71,3 +71,27 @@ def test_layer_with_different_bits_is_left_alone():
     mx.eval(glu.parameters())
     assert mlx_omarchy_muse.fuse_gate_up(_Stack(glu)) == 0
     assert "gate_proj" in glu and "up_proj" in glu
+
+
+def test_ring_ranks_load_unfused_and_a_single_process_fuses(monkeypatch):
+    """mlx-lm's sharded_load loads the whole lazy model before it prunes the layers a rank does not own, so a ring rank must not fuse."""
+    import types
+
+    glu = _glu()
+    nn.quantize(glu, group_size=128, bits=2)
+    mx.eval(glu.parameters())
+
+    class Stub(_Stack):
+        def load_weights(self, weights, strict=True):
+            return "loaded"
+
+    ns = types.SimpleNamespace(Model=Stub)
+    mlx_omarchy_muse._install_fuse(ns)
+    stub = ns.Model(glu)
+    monkeypatch.delenv("MLX_HOSTFILE", raising=False)
+    monkeypatch.setenv("MLX_RANK", "1")
+    assert stub.load_weights([]) == "loaded"
+    assert "gate_proj" in glu and "gate_up_proj" not in glu
+    monkeypatch.delenv("MLX_RANK")
+    assert stub.load_weights([]) == "loaded"
+    assert "gate_up_proj" in glu and "gate_proj" not in glu

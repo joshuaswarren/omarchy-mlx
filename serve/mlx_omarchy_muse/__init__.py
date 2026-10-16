@@ -19,6 +19,7 @@ MLX_OMARCHY_MUSE_UPSTREAM=1 to keep the mlx-lm module instead; register() then d
 This package changes no mlx-lm file. It does not change the memory a model needs: the 3bit file is 359 GB.
 MLX_OMARCHY_MUSE_FUSE_GATE_UP=1 (off by default) fuses the routed experts' gate and up projections after the weights load (fuse_gate_up). It is bit-identical to the
 separate calls on the CPU test shapes; its speed on the Vulkan backend is not measured, and it needs one layer's expert weights of extra memory while it runs.
+It does nothing in a ring run (MLX_RANK or MLX_HOSTFILE set): pipeline ranks load unfused until a hook exists that fuses after the layers are pruned.
 """
 
 import copy
@@ -143,12 +144,16 @@ def fuse_gate_up(model) -> int:
 
 
 def _install_fuse(module) -> None:
-    """Opt in with MLX_OMARCHY_MUSE_FUSE_GATE_UP=1: fuse_gate_up runs once after the weights are loaded."""
+    """Opt in with MLX_OMARCHY_MUSE_FUSE_GATE_UP=1: fuse_gate_up runs once after the weights are loaded.
+
+    Not in a ring run (MLX_RANK or MLX_HOSTFILE set): mlx-lm's sharded_load calls load_weights on the whole lazy model BEFORE it prunes the layers this rank does
+    not own, so fusing there would read every layer's experts from disk, and its later load_weights would find no gate_proj to fill. Those ranks run unfused."""
     load_weights = module.Model.load_weights
 
     def load_and_fuse(self, file_or_weights, strict=True):
         result = load_weights(self, file_or_weights, strict=strict)
-        fuse_gate_up(self)
+        if "MLX_RANK" not in os.environ and "MLX_HOSTFILE" not in os.environ:
+            fuse_gate_up(self)
         return result
 
     module.Model.load_weights = load_and_fuse
