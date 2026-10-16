@@ -4,6 +4,32 @@ The mlx-community Muse Spark Open quantizations (3bit and 4bit) declare `model_t
 
 `serve/mlx_omarchy_muse` adds the text-only class of the closed mlx-lm pull request 1975 (head `117b84cae44a`). That class uses only `mx` operations, so it needs no Metal kernel. The file is copied unchanged. Its sha256 is in `serve/mlx_omarchy_muse/__init__.py` and in [dependency-licenses.md](dependency-licenses.md). The licence text is `LICENSES/mlx-lm.txt`.
 
+## Quick start
+
+You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries the 3-bit and 2-bit `gather_qmm`, and enough memory for the checkpoint (see Requirements).
+
+1. Install the release wheel. See [INSTALL.md](INSTALL.md).
+2. Check the expert kernels on your GPU. Each command prints `RESULT PASS`.
+
+   ```sh
+   python3 receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 3 64
+   python3 receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 2 128
+   ```
+
+3. Register the class and load a checkpoint. The checkpoint directory is a download of an mlx-community Muse Spark Open repository.
+
+   ```sh
+   PYTHONPATH=serve python3 -c "
+   import mlx_omarchy_muse
+   mlx_omarchy_muse.register()
+   from mlx_lm import load, generate
+   model, tokenizer = load('/path/to/checkpoint')
+   print(generate(model, tokenizer, prompt='Say hello.', max_tokens=32))
+   "
+   ```
+
+The routed experts run `gather_qmm` at their stored bit width. 4-bit and 8-bit use the kernels that ship with the wheel. 3-bit group 64 and 2-bit group 64 and 128 use the subgroup decode kernels at the decode shape. The check scripts print the time per call at the real expert shape.
+
 ## Use
 
 From a clean checkout, put `serve` on the path:

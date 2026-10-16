@@ -164,6 +164,10 @@ Decode on the 13-inch M1 changed with the CPU governor with no ANE work running.
 
 See [docs/DRIVER-AND-KERNEL.md](docs/DRIVER-AND-KERNEL.md#qwen35-9b-fused-gdn-decode).
 
+## Muse Spark Open
+
+The mlx-community Muse Spark Open checkpoints load through the adapter in `serve/mlx_omarchy_muse`. Their 3-bit and 2-bit routed experts run on the GPU. See [docs/muse-spark.md](docs/muse-spark.md).
+
 ## How it works
 
 See [docs/DRIVER-AND-KERNEL.md](docs/DRIVER-AND-KERNEL.md#how-it-works).
