@@ -7996,8 +7996,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   bool packed_q4_x = (use_q4_word || use_word_format) &&
       (out.dtype() == float16 || out.dtype() == bfloat16) &&
       (x.ndim() < 2 || x.shape(-2) == 1);
+  // 6-bit streaming decode (shaders/qmm_vec6.comp): transposed f16 weights
+  // read x through uvec4 loads, so a view must start 16-byte aligned.
+  static const bool qmm6_stream_disabled =
+      omarchy::env_flag("MLX_OMARCHY_NO_QMM6_STREAM");
+  bool qmm6_stream = !qmm6_stream_disabled && bits_ == 6 && transpose_ &&
+      out.dtype() == float16;
   bool x_dense = x.flags().row_contiguous &&
       (!packed_q4_x || x.offset() % (8 * x.itemsize()) == 0) &&
+      (!qmm6_stream || x.offset() % 8 == 0) &&
       (!coopmat_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
       (!qmm_fma_reachable || x.offset() % (8 * x.itemsize()) == 0);
   std::optional<array> x_temp;
@@ -8125,6 +8132,41 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   constexpr uint32_t kGemvColumnsPerGroup = 8u;
   auto n_groups_qmm_vec = (params.matrix_n + kGemvColumnsPerGroup - 1u) /
       kGemvColumnsPerGroup;
+  if (qmm6_stream && batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
+      biases.ndim() == 2) {
+    const auto& caps6 = encoder.device().capabilities();
+    bool sg32 = caps6.subgroup_size == 32u &&
+        (caps6.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+    if (sg32) {
+      using K6 = omarchy::ComputeKernel;
+      struct Qmm6 {
+        K6 kernel;
+        uint32_t cols;
+        uint32_t rows;
+      };
+      static const Qmm6 variants[] = {
+          {K6::QmmVec6C4R1F16, 4u, 1u}, {K6::QmmVec6C2R1F16, 2u, 1u},
+          {K6::QmmVec6C1R1F16, 1u, 1u}, {K6::QmmVec6C1R4F16, 1u, 4u},
+          {K6::QmmVec6C1R8F16, 1u, 8u}, {K6::QmmVec6C2R4F16, 2u, 4u}};
+      const char* variant_env = std::getenv("MLX_OMARCHY_QMM6_VARIANT");
+      Qmm6 pick = params.matrix_m == 1u ? variants[0] : variants[4];
+      if (variant_env != nullptr && variant_env[0] >= '0' &&
+          variant_env[0] <= '5') {
+        pick = variants[variant_env[0] - '0'];
+      }
+      uint32_t cols_per_group = 8u * pick.cols;
+      encoder.dispatch_compute(
+          pick.kernel,
+          bindings,
+          params,
+          std::min(
+              (params.matrix_n + cols_per_group - 1u) / cols_per_group,
+              omarchy::kMaxComputeGroupCountX),
+          (params.matrix_m + pick.rows - 1u) / pick.rows,
+          1u);
+      return;
+    }
+  }
   if (params.matrix_m == 1u) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
