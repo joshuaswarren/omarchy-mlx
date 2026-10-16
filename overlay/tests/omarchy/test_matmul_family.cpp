@@ -6231,6 +6231,32 @@ TEST_CASE("6-bit affine decode matches a host reference at 1 to 17 rows") {
           CHECK(streamed(trace));
         }
       }
+      {
+        // A view that starts 8 bytes past a 16-byte boundary: the uvec4 reads
+        // need it materialized aligned, with the same result as an aligned x.
+        std::vector<float> view_values(k);
+        for (int i = 0; i < k; ++i) {
+          view_values[i] =
+              static_cast<float>(((i * 29) % 41) - 20) * 0.0625f;
+        }
+        view_values = round_trip(stream, view_values, dtype);
+        std::vector<float> parent_values(k + 4, 123.0f);
+        std::copy(view_values.begin(), view_values.end(),
+            parent_values.begin() + 4);
+        array parent = astype(
+            array(parent_values.begin(), Shape{1, k + 4}, float32),
+            dtype,
+            stream);
+        array x_view = slice(parent, {0, 4}, {1, k + 4}, stream);
+        array x_aligned = astype(
+            array(view_values.begin(), Shape{1, k}, float32), dtype, stream);
+        auto aligned = readback_f32(stream, quantized_matmul(
+            x_aligned, w, scales, biases, true, group_size, 6, "affine",
+            stream));
+        auto viewed = readback_f32(stream, quantized_matmul(
+            x_view, w, scales, biases, true, group_size, 6, "affine", stream));
+        CHECK_EQ(viewed, aligned);
+      }
     }
   }
 }

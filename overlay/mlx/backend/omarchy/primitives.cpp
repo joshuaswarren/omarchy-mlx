@@ -8004,7 +8004,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       (out.dtype() == float16 || out.dtype() == bfloat16);
   bool x_dense = x.flags().row_contiguous &&
       (!packed_q4_x || x.offset() % (8 * x.itemsize()) == 0) &&
-      (!qmm6_stream || x.offset() % 8 == 0) &&
+      (!qmm6_stream || x.offset() % (8 * x.itemsize()) == 0) &&
       (!coopmat_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
       (!qmm_fma_reachable || x.offset() % (8 * x.itemsize()) == 0);
   std::optional<array> x_temp;
