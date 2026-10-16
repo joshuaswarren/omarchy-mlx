@@ -1,0 +1,9 @@
+libmlx loaded: ['$HOME/scratch/w6z/rc1-tree/mlx/lib/libmlx.so']
+default device: Device(gpu, 0) mlx 0.32.4.dev202610160409+7107ccb8 bits 2 group 128
+T=1 k=8 E=16 K=2048 N=1024: cpu-ref 1.946e-02 scale 8.68 | default gpu-ref 1.946e-02 | scalar gpu-ref 1.946e-02 | default-vs-scalar 2.441e-04 OK
+T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.103e-02 scale 12.79 | default gpu-ref 3.103e-02 | scalar gpu-ref 3.103e-02 | default-vs-scalar 0.000e+00 OK
+T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.113e-02 scale 10.49 | default gpu-ref 3.113e-02 | scalar gpu-ref 3.113e-02 | default-vs-scalar 1.562e-02 OK
+T=3 k=2 E=4 K=256 N=40: cpu-ref 5.755e-03 scale 2.21 | default gpu-ref 5.755e-03 | scalar gpu-ref 5.755e-03 | default-vs-scalar 0.000e+00 OK
+T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.113e-02 scale 13.47 | default gpu-ref 3.113e-02 ms/call 1.61 | scalar gpu-ref 3.113e-02 ms/call 14.20 | default-vs-scalar 3.906e-03 OK
+peak memory GiB 2.36
+RESULT PASS
