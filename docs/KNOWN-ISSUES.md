@@ -24,7 +24,7 @@ On 2026-10-11, on one boot and one wheel with the v3 driver, Qwen3.5-9B decode f
 
 The CPU governor also changes decode on this chip. With the ANE idle, gemma-4-E4B read 10.65, 10.66 and 10.63 tokens per second under the schedutil governor and 15.27, 15.34 and 15.17 under performance (ratio 1.434, one block). On the 16-inch M1 Max, gemma-4-26B-A4B read 10.40 and 10.39 under schedutil and 12.84, 12.79 and 12.80 under performance (ratio 1.231). With the ANE busy, gemma-4-E4B read about 9 tokens per second under both governors (9.18 under performance, 8.97 to 9.02 under schedutil), on a different driver and at a different hour from the idle block. See "Set the CPU governor for local AI" in [BENCHMARKS.md](BENCHMARKS.md#set-the-cpu-governor-for-local-ai) for the setting.
 
-Limits: one Qwen3.5-9B decode pair on one boot, run with the ANE idle first and busy second (no reversed-order pair, and the busy state heats the case, so an order effect is not excluded for decode); no replicate of the idle row; the vkbw figures are two pairs in opposite orders; the cause of the bandwidth loss is open.
+Limits: one Qwen3.5-9B decode pair in each order on one boot (ANE idle first: 12.52 idle, 7.00 busy; ANE busy first: 6.98 busy, 12.64 idle, read after a hot busy arm), so the loss was 44 percent in both orders, but the temperature at the start of each row was not matched and there is no ABBA run; the vkbw figures are two pairs in opposite orders; the cause of the bandwidth loss is open.
 
 ## Non-Apple development drivers: the independent-streams timing floor is not calibrated on NVIDIA
 
