@@ -104,6 +104,8 @@ import mlx_lm  # mlx_lm.load(...) now resolves model_type 'muse_spark'
 
 `register()` installs the adapter class as `mlx_lm.models.muse_spark`. It replaces the module that mlx-lm 0.32.2 and later ship under that name, because that module reads the native checkpoint layout and imports the eight fused Metal kernels. Set `MLX_OMARCHY_MUSE_UPSTREAM=1` to keep the mlx-lm module instead. `register()` then does nothing. It changes no mlx-lm file. The package is in a repository checkout only. It is not in the release package.
 
+Set `MLX_OMARCHY_PIPELINE_PRUNE=1` on every rank to save memory in a layer pipeline. Each rank then drops the shared tensors it never reads. Only the rank that runs the first layers keeps `embed_tokens`. Only rank 0, which runs the last layers, keeps `lm_head`. Use it with omarchy-cluster, where rank 0 samples and shares the token. With a different launcher that computes logits on every rank, leave it off. A model with tied embeddings keeps every tensor. A four-rank CPU run of the tiny model gave identical tokens with the setting on and off.
+
 | mlx-lm | Status |
 |---|---|
 | 0.32.0 | The adapter tests pass. The adapter adds the `muse_spark` module. |

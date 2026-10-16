@@ -140,5 +140,60 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(sorted(set(self.reference["layer_types"])), ["full_attention", "sliding_attention"])
 
 
+_PRUNE_SCRIPT = """
+import importlib, json, sys
+import mlx.core as mx
+import mlx_omarchy_muse
+mlx_omarchy_muse.register()
+module = importlib.import_module(mlx_omarchy_muse.MODEL_NAME)
+config = json.loads(sys.argv[1])
+class Group:
+    def __init__(self, rank, size): self._r, self._s = rank, size
+    def rank(self): return self._r
+    def size(self): return self._s
+out = {}
+for rank in (0, 1):
+    model = module.Model(module.ModelArgs.from_dict(config))
+    real = model.model.embed(mx.array([[1, 2, 3]]))
+    model.model.pipeline(Group(rank, 2))
+    got = model.model.embed(mx.array([[1, 2, 3]]))
+    out[rank] = {"embed": type(model.model.embed_tokens).__name__, "head": type(getattr(model, "lm_head", None)).__name__,
+                 "shape": list(got.shape) == list(real.shape), "dtype": got.dtype == real.dtype,
+                 "vocab": model.lm_head.weight.shape[0] if "lm_head" in model and "weight" in model.lm_head else None}
+print(json.dumps(out))
+"""
+
+
+class PruneTest(unittest.TestCase):
+    def _run(self, flag, tie=False):
+        import os
+        import subprocess
+
+        reference = json.loads((FIXTURES / "muse_tiny_reference.json").read_text())
+        config = {**reference["config"], "model_type": "muse_spark", "tie_word_embeddings": tie}
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(REPO / "serve")]), "MLX_OMARCHY_PIPELINE_PRUNE": flag}
+        done = subprocess.run([sys.executable, "-c", _PRUNE_SCRIPT, json.dumps(config)], env=env, capture_output=True, text=True, check=True)
+        return json.loads(done.stdout.strip().splitlines()[-1]), config
+
+    def test_off_keeps_every_tensor(self):
+        out, _ = self._run("0")
+        for rank in ("0", "1"):
+            self.assertEqual((out[rank]["embed"], out[rank]["head"]), ("Embedding", "Linear"))
+
+    def test_on_keeps_everything_when_embeddings_are_tied(self):
+        out, _ = self._run("1", tie=True)
+        for rank in ("0", "1"):
+            self.assertEqual(out[rank]["embed"], "Embedding")
+            self.assertEqual(out[rank]["head"], "NoneType")
+
+    def test_on_keeps_embed_on_the_first_layer_rank_and_the_head_on_rank_zero(self):
+        out, config = self._run("1")
+        self.assertEqual((out["0"]["embed"], out["0"]["head"]), ("_ZeroEmbed", "Linear"))
+        self.assertEqual((out["1"]["embed"], out["1"]["head"]), ("Embedding", "_NoHead"))
+        self.assertEqual(out["1"]["vocab"], config["vocab_size"])
+        for rank in ("0", "1"):
+            self.assertTrue(out[rank]["shape"] and out[rank]["dtype"])
+
+
 if __name__ == "__main__":
     unittest.main()
