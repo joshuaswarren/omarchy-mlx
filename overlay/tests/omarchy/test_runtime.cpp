@@ -743,6 +743,28 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   }
 }
 
+TEST_CASE("work budget resolves per device name, not per process") {
+  // The override env var replaces the table for every device, so the
+  // per-device checks below only mean anything without it.
+  if (std::getenv("MLX_OMARCHY_BATCH_WORK") != nullptr) {
+    MESSAGE("skipping: MLX_OMARCHY_BATCH_WORK overrides the table");
+    return;
+  }
+
+  // Two calibrated boards with different rows must observe their own
+  // budgets however many devices ran before them: the first caller must
+  // not pin the value for the process (issue 207).
+  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 5000);
+
+  // A repeat call for the same name resolves to the same value.
+  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 5000);
+
+  // An unknown board keeps the conservative fallback, again per call.
+  CHECK(omarchy::batch_work_budget("llvmpipe (LLVM 19.1.0, 256 bits)") == 5000);
+}
+
 TEST_CASE("a variable subgroup size is pinned to the reported size") {
   constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
   // Intel ANV: 8-32 lanes, reports 32.

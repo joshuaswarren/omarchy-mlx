@@ -187,16 +187,18 @@ inline uint64_t batch_work_fallback() {
 }
 
 inline uint64_t batch_work_budget(std::string_view device_name) {
-  static const uint64_t v = [device_name]() {
-    const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
-    if (e) {
-      long long n = std::atoll(e);
-      return n > 0 ? static_cast<uint64_t>(n) : 0;
-    }
-    uint64_t cal = calibrated_batch_work(device_name);
-    return cal > 0 ? cal : batch_work_fallback();
-  }();
-  return v;
+  // No memoization: the value depends on device_name, and a function-
+  // local static would pin the first caller's calibration onto every
+  // later device in the process (issue 207). The call is a table scan
+  // over four rows plus one getenv, negligible next to the submissions
+  // it gates, so it is recomputed at every flush check.
+  const char* e = std::getenv("MLX_OMARCHY_BATCH_WORK");
+  if (e) {
+    long long n = std::atoll(e);
+    return n > 0 ? static_cast<uint64_t>(n) : 0;
+  }
+  uint64_t cal = calibrated_batch_work(device_name);
+  return cal > 0 ? cal : batch_work_fallback();
 }
 // The one flush predicate for the open batch, shared by the eager
 // evaluator (eval.cpp) and the compiled-tape recorder (compiled.cpp) so
