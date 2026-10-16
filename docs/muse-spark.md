@@ -59,7 +59,6 @@ import mlx_lm  # mlx_lm.load(...) now resolves model_type 'muse_spark'
 | mlx-lm | Status |
 |---|---|
 | 0.32.0 | The adapter tests pass. The adapter adds the `muse_spark` module. |
-| 0.32.1 | Not tested. |
 | 0.32.2 | The adapter tests pass. `register()` replaces the module that mlx-lm ships. |
 
 ## Tests and reference figures
