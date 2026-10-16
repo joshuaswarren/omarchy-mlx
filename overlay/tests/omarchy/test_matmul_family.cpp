@@ -6260,3 +6260,92 @@ TEST_CASE("6-bit affine decode matches a host reference at 1 to 17 rows") {
     }
   }
 }
+
+// bf16 4-bit group-64 transposed gather_qmm at one row per index (the decode shape) takes the
+// word-per-lane kernel on a 32-lane subgroup device. Each selected expert's output equals
+// quantized_matmul on that expert's slice bit for bit there; K 640 and N 24 take the one-word tile
+// of the dense kernel, K 1024 and N 16 the two-word tile. Elsewhere (no subgroup 32) the route is
+// not taken and the output must match a double-precision host contraction within bf16 rounding.
+TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected expert") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  constexpr int experts = 6;
+  constexpr int top = 5;
+  struct Dims {
+    int k, n;
+  };
+  for (Dims shape : {Dims{640, 24}, Dims{1024, 16}}) {
+    std::vector<float> matrix(static_cast<size_t>(experts) * shape.n * shape.k);
+    for (size_t i = 0; i < matrix.size(); ++i) {
+      matrix[i] = static_cast<float>(static_cast<int>((i * 41u) % 67u) - 33) * 0.03125f;
+    }
+    HostQuantizedWeights weights =
+        host_affine_quantize(matrix, experts * shape.n, shape.k, 64, 4);
+    weights.scales = round_trip(stream, weights.scales, bfloat16);
+    weights.biases = round_trip(stream, weights.biases, bfloat16);
+    array w(weights.words.begin(), Shape{experts, shape.n, shape.k / 8}, uint32);
+    array scales = astype(
+        array(weights.scales.begin(), Shape{experts, shape.n, shape.k / 64}, float32),
+        bfloat16,
+        stream);
+    array biases = astype(
+        array(weights.biases.begin(), Shape{experts, shape.n, shape.k / 64}, float32),
+        bfloat16,
+        stream);
+    const std::vector<uint32_t> picked{3, 0, 5, 3, 1};
+    for (bool per_expert_x : {false, true}) {
+      std::vector<float> x_values(static_cast<size_t>(per_expert_x ? top : 1) * shape.k);
+      for (size_t i = 0; i < x_values.size(); ++i) {
+        x_values[i] = static_cast<float>(static_cast<int>((i * 53u) % 47u) - 23) * 0.0625f;
+      }
+      x_values = round_trip(stream, x_values, bfloat16);
+      array x = astype(
+          array(x_values.begin(), Shape{per_expert_x ? top : 1, 1, shape.k}, float32),
+          bfloat16,
+          stream);
+      std::vector<uint32_t> lhs_values(top, 0u);
+      if (per_expert_x) {
+        for (int j = 0; j < top; ++j) {
+          lhs_values[j] = static_cast<uint32_t>(j);
+        }
+      }
+      array lhs(lhs_values.begin(), Shape{top}, uint32);
+      array rhs(picked.begin(), Shape{top}, uint32);
+      auto got = readback_f32(stream, gather_qmm(
+          x, w, scales, biases, lhs, rhs, true, 64, 4, "affine", std::nullopt, false, stream));
+      REQUIRE_EQ(got.size(), static_cast<size_t>(top) * shape.n);
+      for (int j = 0; j < top; ++j) {
+        const int e = static_cast<int>(picked[j]);
+        array w_e = slice(w, {e, 0, 0}, {e + 1, shape.n, shape.k / 8}, stream);
+        array s_e = slice(scales, {e, 0, 0}, {e + 1, shape.n, shape.k / 64}, stream);
+        array b_e = slice(biases, {e, 0, 0}, {e + 1, shape.n, shape.k / 64}, stream);
+        array x_j = slice(
+            x, {per_expert_x ? j : 0, 0, 0}, {per_expert_x ? j + 1 : 1, 1, shape.k}, stream);
+        auto dense = readback_f32(stream, quantized_matmul(
+            reshape(x_j, Shape{1, shape.k}, stream),
+            reshape(w_e, Shape{shape.n, shape.k / 8}, stream),
+            reshape(s_e, Shape{shape.n, shape.k / 64}, stream),
+            reshape(b_e, Shape{shape.n, shape.k / 64}, stream),
+            true, 64, 4, "affine", stream));
+        std::vector<float> row(got.begin() + j * shape.n, got.begin() + (j + 1) * shape.n);
+        INFO("k=" << shape.k << " n=" << shape.n << " per_expert_x=" << per_expert_x << " j=" << j);
+        if (subgroup_ready) {
+          CHECK(bits_identical(row, dense));
+        } else {
+          double max_abs = 0.0;
+          for (float v : dense) {
+            max_abs = std::max(max_abs, std::fabs(static_cast<double>(v)));
+          }
+          for (int c = 0; c < shape.n; ++c) {
+            CHECK(std::fabs(static_cast<double>(row[c]) - dense[c]) <= 0.02 * max_abs + 0.05);
+          }
+        }
+      }
+    }
+  }
+}
