@@ -1,6 +1,6 @@
 G3DGPU wheel mlx_omarchy-0.32.4.dev202610160214+39f00215-cp314-cp314-linux_aarch64.whl sha256 e14d0a5f8a70255204ceae2ca8b872b029cb09aa211de0e113d50eb5f2f18cba
 G3DGPU kernel=7.1.12-2-20261013.18-sep-ARCH boot=b02ba9f6 governor=performance load1=2.08
-G3DGPU ane-run processes: /var/tmp/m1slot/tree/tools/ane-run --anec /var/tmp/m1slot/parakeet/program-0.anec --in 0 /;
+G3DGPU ane-run processes: 1 (the idle background load; command line removed)
 G3DGPU tree libmlx sha256 80107e18113638e220dbd391cbe95a967f3bcb26a646a7dbe86992c1f1acf0ef script 9ea770093802ab4a
 G3DGPU bits_group 3 64 rc=0 load1_after=2.06
 G3DGPU 3_64: libmlx loaded: ['$HOME/scratch/w71/g3d/g3d-tree/mlx/lib/libmlx.so']

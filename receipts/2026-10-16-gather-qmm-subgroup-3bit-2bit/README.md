@@ -52,7 +52,7 @@ That is the f16 rounding of the output. The default route differs from the scala
 | Source commit of the wheel | `39f002151` |
 | Governor | performance |
 
-Each config ran as `PYTHONPATH=<unpacked wheel> python3 gather_bits_gpu.py <bits> <group>`. The dispatch trace ran as `MLX_OMARCHY_TRACE_DISPATCH=1 PYTHONPATH=<unpacked wheel> python3 gather_bits_gpu.py <bits> <group> small`.
+Each config ran as `PYTHONPATH=<unpacked wheel> python3 gather_bits_gpu.py <bits> <group>`. The runs used the script with sha256 prefix `9ea770093802ab4a`, kept here as `gather_bits_gpu.9ea77009.py`. `gather_bits_gpu.py` is the same script with an added `bf16` option. The dispatch trace ran as `MLX_OMARCHY_TRACE_DISPATCH=1 PYTHONPATH=<unpacked wheel> python3 gather_bits_gpu.py <bits> <group> small`.
 
 ## Dispatch trace
 
