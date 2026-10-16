@@ -210,6 +210,34 @@ class MockServerTest(unittest.TestCase):
                                   "content_block_delta", "content_block_stop",
                                   "message_delta", "message_stop"])
 
+    def test_messages_stream_thinking_delta_carries_the_text(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("POST", "/v1/messages", json.dumps(
+            {"model": "m", "max_tokens": 16, "stream": True,
+             "thinking": {"type": "enabled"}}).encode(),
+            {"content-type": "application/json"})
+        resp = conn.getresponse()
+        text = resp.read().decode()
+        conn.close()
+        events = []
+        for block in text.split("\n\n"):
+            if not block.startswith("event: "):
+                continue
+            lines = block.splitlines()
+            name = lines[0][len("event: "):]
+            data = json.loads(lines[1][len("data: "):])
+            events.append((name, data))
+        names = [n for n, _ in events]
+        self.assertEqual(names, ["message_start", "content_block_start",
+                                 "content_block_delta", "content_block_stop",
+                                 "content_block_start", "content_block_delta",
+                                 "content_block_stop", "message_delta",
+                                 "message_stop"])
+        deltas = {d["delta"]["type"]: d["delta"] for n, d in events
+                  if n == "content_block_delta"}
+        self.assertEqual(deltas["thinking_delta"]["thinking"], "17*23=391")
+        self.assertEqual(deltas["text_delta"]["text"], "391")
+
     def test_messages_thinking_block_when_enabled(self):
         status, _, data = self.req("POST", "/v1/messages",
                                    {"model": "m", "max_tokens": 16,

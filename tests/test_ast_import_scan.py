@@ -60,6 +60,16 @@ FIND_SPEC_IF = ('"""m"""\nimport importlib.util\n'
 # NOT a guard as shipped: guard_reason only accepts tests containing
 # platform/find_spec/importlib/import, and "TYPE_CHECKING" contains none.
 TYPE_CHECKING_IF = '"""m"""\nfrom typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import torch\n'
+ASYNC_DEF = '"""m"""\nasync def load():\n    import torch\n    return torch\n'
+RELATIVE = '"""m"""\nfrom .torch import x\nfrom . import torch\n'
+MULTI_ALIAS = '"""m"""\nimport os, torch\n'
+# Pinned independently of ast_import_scan.WATCHED so that dropping a name
+# from the module fails here instead of shrinking the parametrized loop.
+EXPECTED_WATCHED = frozenset({
+    "dflash_mlx", "mlx_audio", "mlx_embeddings", "torch", "rumps",
+    "AppKit", "Foundation", "Quartz", "xgrammar", "mistral_common",
+    "ddgs", "zeroconf", "modelscope", "mcp",
+})
 
 
 class ScannerCli(unittest.TestCase):
@@ -144,6 +154,48 @@ class ScannerCli(unittest.TestCase):
         self.assertEqual(r2.returncode, 0, r2.stdout)
         self.assertIn("(skipping pkg,lib via --allow)", r2.stdout)
 
+    def test_allow_matches_start_of_relative_path_only(self):
+        root = make_tree({"pkg/mod.py": UNGUARDED, "other/pkg/mod.py": UNGUARDED})
+        r = run_scan(root, "--allow", "pkg")
+        self.assertEqual(r.returncode, 1)
+        # pkg/mod.py skipped, other/pkg/mod.py still scanned and flagged
+        self.assertIn("  other/pkg/mod.py:2: unguarded import of torch", r.stdout)
+        self.assertNotIn("  pkg/mod.py:", r.stdout)
+        self.assertIn("scanned 1 files under", r.stdout)
+
+    def test_async_def_import_is_a_deferred_guard(self):
+        root = make_tree({"a.py": ASYNC_DEF})
+        r = run_scan(root)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        r_all = run_scan(root, "--all")
+        self.assertIn("(deferred (function body))", r_all.stdout)
+
+    def test_relative_import_of_watched_name_is_not_reported(self):
+        # as shipped: watched_imports skips relative imports (not node.level),
+        # and `from . import torch` has no module at all
+        root = make_tree({"rel.py": RELATIVE})
+        r = run_scan(root)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("OK: no unguarded watched imports (0 guarded)", r.stdout)
+
+    def test_multi_alias_import_reports_the_watched_name(self):
+        root = make_tree({"multi.py": MULTI_ALIAS})
+        r = run_scan(root)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("multi.py:2: unguarded import of torch", r.stdout)
+        self.assertNotIn("import of os", r.stdout)
+
+    def test_watched_set_matches_the_pinned_list(self):
+        self.assertEqual(ast_import_scan.WATCHED, EXPECTED_WATCHED)
+
+    def test_unguarded_case_over_every_watched_name(self):
+        for name in sorted(EXPECTED_WATCHED):
+            with self.subTest(name=name):
+                root = make_tree({f"w_{name}.py": f'"""m"""\nimport {name}\n'})
+                r = run_scan(root)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f":2: unguarded import of {name}", r.stdout)
+
     def test_syntax_error_file_fails_loudly_not_silently(self):
         # As shipped, ast.parse raises: the CLI dies with a traceback and a
         # nonzero status. Pinned so the gate can never silently pass on an
@@ -178,6 +230,19 @@ class ScannerInProcess(unittest.TestCase):
     def test_main_returns_2_without_exactly_one_root(self):
         self.assertEqual(call_main([])[0], 2)
         self.assertEqual(call_main(["/no/such", "/other"])[0], 2)
+
+    def test_guard_reason_treats_lambda_as_deferred(self):
+        # No valid Python program can place an ast.Import inside a lambda
+        # (the body is an expression), so the ast.Lambda branch of
+        # guard_reason is only observable here: guard_reason on a hand-built
+        # Lambda->Import parent chain. Pins that dropping ast.Lambda from
+        # the isinstance tuple is a real behaviour change, not a no-op.
+        import ast as pyast
+
+        lam = pyast.parse("f = lambda: 1").body[0].value
+        imp = pyast.parse("import torch").body[0]
+        reason = ast_import_scan.guard_reason(imp, {id(imp): lam})
+        self.assertEqual(reason, "deferred (function body)")
 
 
 class WatchedList(unittest.TestCase):
