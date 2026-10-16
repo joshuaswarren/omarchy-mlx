@@ -76,10 +76,21 @@ The M1 Max host has the same packages as the M2 host, read with `pacman -Q` afte
 
 The 13-inch M1 has not run these checks.
 
+## 2-bit with bf16 output
+
+The same script ran with a `bf16` option on the 14-inch M2 Max, on a release-candidate wheel built from main `7107ccb86` (`mlx_omarchy-0.32.4.dev202610160409+7107ccb8-cp314-cp314-linux_aarch64.whl`, sha256 `3990f5432a7d48937814145e1e2ccd905da1b27cae6f9f34f85fe258bbff3eda`, loaded `libmlx.so` sha256 `754fc031ccdeb439154004cb4aedc47fd1c3f8a489a04a2cbd6c640f08b5cb2f`, boot `7dcada54`). Kernel code in main is unchanged since that commit. The files are `rc1-verify-m2-1.*`.
+
+| Config | Result | Default route at the real shape | Scalar kernel |
+|---|---|---|---|
+| 2-bit group 128, bf16 | `RESULT PASS` | 1.61 ms | 14.20 ms |
+| 2-bit group 64, bf16 | `RESULT PASS` | 1.73 ms | 14.27 ms |
+
+The errors against the fp64 reference equal the CPU stream's error to the printed digits, as in the f16 runs. The dispatch trace of the small 2-bit group 128 case in bf16 shows kernel 612, `GatherQmmSubDirectR8BF16`, once for the default route. It shows the scalar bf16 kernel (218) once for the scalar arm. So the subgroup kernel engages for bf16 at one row.
+
 ## Limits
 
 - The weights are random. No checkpoint was loaded.
 - The default route is not bit-identical to the scalar route.
-- f32 2-bit and 3-bit stay on the scalar kernel.
+- f32 2-bit and 3-bit stay on the scalar kernel. 3-bit with bf16 output stays on the scalar kernel.
 - The checks ran on a 14-inch M2 Max and a 16-inch M1 Max, one boot each.
 - The 3-bit subgroup kernel needs group 64. 3-bit group 128 uses the scalar kernel.
