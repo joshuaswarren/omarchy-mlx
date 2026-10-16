@@ -22,6 +22,7 @@
 #include <complex>
 #include <cstdlib>
 #include <functional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -1071,5 +1072,108 @@ TEST_CASE(
     // widening this demands bit-exact agreement with eager.
     check_compiled_matches_eager(
         adain_snake, inputs, dtype, stream, dtype == float32 ? 1e-5 : 1e-7);
+  }
+}
+
+// The RMS norm of a mlx-lm style block: multiply by a broadcast weight, square, a keepdims mean
+// (a reduce between fused elementwise parts), rsqrt, and the full norm. Each piece is compared
+// compiled against eager at [1, 24, 256] float32.
+TEST_CASE("compiled RMS norm pieces match eager at [1, 24, 256] float32") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  std::mt19937 gen(5);
+  std::normal_distribution<float> dist(0.0f, 1.0f);
+  std::vector<float> xv(1 * 24 * 256);
+  std::vector<float> wv(256);
+  for (auto& v : xv) {
+    v = dist(gen);
+  }
+  for (auto& v : wv) {
+    v = 1.0f + 0.1f * dist(gen);
+  }
+  array x(xv.begin(), Shape{1, 24, 256}, float32);
+  array w(wv.begin(), Shape{256}, float32);
+  const float eps = 1e-5f;
+
+  auto mean_square = [&stream](const array& a) {
+    return mean(square(a, stream), -1, true, stream);
+  };
+  auto norm = [&](const array& a) {
+    return multiply(
+        a, rsqrt(add(mean_square(a), array(eps), stream), stream), stream);
+  };
+  SUBCASE("A multiply by a broadcast weight") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{multiply(in[0], in[1], stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("B square") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{square(in[0], stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("C keepdims mean of the square") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{mean_square(in[0])};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("D norm without the weight") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{norm(in[0])};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("E full norm with the weight") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{multiply(norm(in[0]), in[1], stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("D1 mean plus eps") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{add(mean_square(in[0]), array(eps), stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("D2 rsqrt of the mean") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{rsqrt(mean_square(in[0]), stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("D3 x times the mean") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{multiply(in[0], mean_square(in[0]), stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("D4 x times (mean plus eps)") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{
+              multiply(in[0], add(mean_square(in[0]), array(eps), stream), stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
+  }
+  SUBCASE("D5 x times rsqrt of the mean") {
+    check_compiled_matches_eager(
+        [&](const std::vector<array>& in) {
+          return std::vector<array>{
+              multiply(in[0], rsqrt(mean_square(in[0]), stream), stream)};
+        },
+        {x, w}, float32, stream, 1e-5);
   }
 }

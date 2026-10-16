@@ -95,7 +95,8 @@ std::optional<uint32_t> chain_op_for(const Primitive& p) {
     return ChainSquare;
   }
   if (t == typeid(Sqrt)) {
-    return ChainSqrt;
+    // mx.rsqrt is Sqrt with the recip flag; mapping it to ChainSqrt returned sqrt(x).
+    return static_cast<const Sqrt&>(p).state() ? ChainRsqrt : ChainSqrt;
   }
   if (t == typeid(Subtract)) {
     return ChainSubtract;
