@@ -3290,7 +3290,11 @@ void dispatch_gather_qmm(
     const char* sub_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
     const auto& sub_caps = encoder.device().capabilities();
     use_sub = (sub_env == nullptr || sub_env[0] != '0') &&
-        transpose && bits == 4u && group_size == 64u &&
+        transpose &&
+        ((bits == 4u && group_size == 64u) ||
+         // 2-bit codes never straddle a word, so the generic decode of the subgroup
+         // kernels applies unchanged (group 64 and 128; shipped with a device check).
+         (bits == 2u && (group_size == 64u || group_size == 128u))) &&
         (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
         sub_caps.subgroup_size == 32u &&
         (sub_caps.subgroup_operations &
