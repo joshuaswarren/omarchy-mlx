@@ -35,10 +35,18 @@
 // loads in flight per k step and pays its launch, x read and barrier once
 // for ROWS_PER_WG outputs. The host guarantees matrix_n % ROWS_PER_WG == 0,
 // so a group of outputs never crosses a row, a batch or an expert.
+//
+// FP_MODE (staged NO_BIAS transposed layout only): mxfp4 weights. The group parameter is one e8m0 byte per group of 32 and
+// the element codes are e2m1 nibbles, two per byte, low element low. The decode helpers and the product scale * code are
+// the scalar gather_qmm.comp -DFP_MODE kernel's own, so each product is bit-identical to it; only the fp32 accumulation
+// order changes (lane tree). Host gate: bits 4, group 32, transposed, no output global scale (not nvfp4, not mxfp8).
 
 #version 460
 #if defined(ROWS_PER_WG) && (!defined(DIRECT) || defined(NO_BIAS))
 #error "ROWS_PER_WG covers the DIRECT biased kernel only"
+#endif
+#if defined(FP_MODE) && (defined(ROWS_PER_WG) || defined(DIRECT) || !defined(NO_BIAS))
+#error "FP_MODE covers the staged NO_BIAS kernel only"
 #endif
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -158,9 +166,25 @@ float unpack_param(uint word, uint byte_offset) {
   return uintBitsToFloat(word);
 #endif
 }
+#ifdef FP_MODE
+float e8m0_decode(uint bits) {
+  return uintBitsToFloat(bits == 0u ? 0x400000u : bits << 23u);
+}
+float fp4_decode(uint code) {
+  float magnitude = unpackHalf2x16((code & 7u) << 9u).x * 16384.0;
+  return ((code & 8u) != 0u) ? -magnitude : magnitude;
+}
+// One scale byte per group at byte_offset of the staged scales region.
+float decode_scale(uint byte_offset) {
+  return e8m0_decode((SCALE_WORD(byte_offset) >> ((byte_offset & 3u) * 8u)) & 0xFFu);
+}
+#define DECODE_Q(q) fp4_decode(q)
+#else
 float decode_scale(uint byte_offset) {
   return unpack_param(SCALE_WORD(byte_offset), byte_offset);
 }
+#define DECODE_Q(q) float(q)
+#endif
 float decode_bias(uint byte_offset) {
   return unpack_param(BIAS_WORD(byte_offset), byte_offset);
 }
@@ -271,7 +295,11 @@ void main() {
   uint words_per_row = params.matrix_k / pack_factor;
   uint groups_per_row = params.matrix_k / group_size;
   uint matrix = params.matrix_m * params.matrix_n;
+#ifdef FP_MODE
+  uint param_bytes = 1u;
+#else
   uint param_bytes = PARAM_BYTES;
+#endif
   uint w_row_words = params.matrix_n * words_per_row;
   uint scale_row_words = non_transposed
       ? params.matrix_k * (params.matrix_n / group_size)
@@ -321,7 +349,7 @@ void main() {
         bias = decode_bias((scale_base + group * param_step) * param_bytes);
 #endif
         accumulator += LOAD_VALUE(input_x.values[x_base + k]) *
-            (scale * float(q) + bias);
+            (scale * DECODE_Q(q) + bias);
       }
     }
   } else {
@@ -342,7 +370,7 @@ void main() {
         bias = decode_bias((scale_base + group) * param_bytes);
 #endif
         accumulator += LOAD_VALUE(input_x.values[x_base + k]) *
-            (scale * float(q) + bias);
+            (scale * DECODE_Q(q) + bias);
       }
     }
   }

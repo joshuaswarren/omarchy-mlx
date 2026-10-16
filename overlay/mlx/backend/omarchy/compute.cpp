@@ -539,6 +539,9 @@
 #include "gather_qmm_sub_direct_r8_f16.h"
 #include "gather_qmm_sub_direct_r8_bf16.h"
 #include "gather_qmm_sub_direct_r8_q3_f16.h"
+#include "gather_qmm_nb_sub_fp_f32.h"
+#include "gather_qmm_nb_sub_fp_f16.h"
+#include "gather_qmm_nb_sub_fp_bf16.h"
 #include "qmm_vec6_c4r1_f16.h"
 #include "qmm_vec6_c1r8_f16.h"
 #include "qmm_vec6_c4r1_bf16.h"
@@ -1943,6 +1946,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gather_qmm_sub_direct_r8_bf16, gather_qmm_sub_direct_r8_bf16_size};
     case ComputeKernel::GatherQmmSubDirectR8Q3F16:
       return {gather_qmm_sub_direct_r8_q3_f16, gather_qmm_sub_direct_r8_q3_f16_size};
+    case ComputeKernel::GatherQmmNbSubFpF32:
+      return {gather_qmm_nb_sub_fp_f32, gather_qmm_nb_sub_fp_f32_size};
+    case ComputeKernel::GatherQmmNbSubFpF16:
+      return {gather_qmm_nb_sub_fp_f16, gather_qmm_nb_sub_fp_f16_size};
+    case ComputeKernel::GatherQmmNbSubFpBF16:
+      return {gather_qmm_nb_sub_fp_bf16, gather_qmm_nb_sub_fp_bf16_size};
     case ComputeKernel::QmmVec6C4R1F16:
       return {qmm_vec6_c4r1_f16, qmm_vec6_c4r1_f16_size};
     case ComputeKernel::QmmVec6C1R8F16:
