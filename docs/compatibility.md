@@ -57,8 +57,7 @@ nothing about Linux execution.
   A third-party M3 guide, [Omarchy-M3-Native](https://github.com/tonibergholm/Omarchy-M3-Native/blob/main/docs/graphics.md),
   gives 618 MHz (performance state 2) as the highest GPU clock it tested. We have not
   measured that cap. It would not explain the CPU memory bandwidth in
-  [#173](https://github.com/joshuaswarren/omarchy-mlx/issues/173). Other M3 users report
-  22 to 65 GB/s GPU reads on Linux (Signal group, not measured by us).
+  [#173](https://github.com/joshuaswarren/omarchy-mlx/issues/173).
 - M4. Not yet: no Linux GPU driver (README row since 2026-10-07;
   [README table](../README.md#supported-hardware)). ANE: Data-only; h16
   bring-up module.
