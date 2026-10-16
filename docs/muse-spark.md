@@ -4,6 +4,44 @@ The mlx-community Muse Spark Open quantizations (3bit and 4bit) declare `model_t
 
 `serve/mlx_omarchy_muse` adds the text-only class of the closed mlx-lm pull request 1975 (head `117b84cae44a`). That class uses only `mx` operations, so it needs no Metal kernel. The file is copied unchanged. Its sha256 is in `serve/mlx_omarchy_muse/__init__.py` and in [dependency-licenses.md](dependency-licenses.md). The licence text is `LICENSES/mlx-lm.txt`.
 
+## Quick start
+
+You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries the 3-bit and 2-bit `gather_qmm`, mlx-lm 0.32.0, and enough memory for the checkpoint (see Requirements). The run uses mlx-lm through the adapter. It does not use the oMLX server.
+
+1. Install the release wheel. See [INSTALL.md](INSTALL.md). The install script builds a private venv, and `mlx-omarchy` runs that venv's Python.
+2. Install mlx-lm 0.32.0 into that venv. The `--no-deps` flag keeps the mlx-omarchy build of `mlx`.
+
+   ```sh
+   mlx-omarchy -m pip install --no-deps mlx-lm==0.32.0
+   ```
+
+3. Clone the repository. The adapter and the check scripts live in the checkout.
+
+   ```sh
+   git clone https://github.com/joshuaswarren/omarchy-mlx && cd omarchy-mlx
+   ```
+
+4. Check the expert kernels on your GPU. Each command prints `RESULT PASS`.
+
+   ```sh
+   mlx-omarchy receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 3 64
+   mlx-omarchy receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 2 128
+   ```
+
+5. Register the class and load a checkpoint. The checkpoint directory is a download of an mlx-community Muse Spark Open repository.
+
+   ```sh
+   PYTHONPATH=serve mlx-omarchy -c "
+   import mlx_omarchy_muse
+   mlx_omarchy_muse.register()
+   from mlx_lm import load, generate
+   model, tokenizer = load('/path/to/checkpoint')
+   print(generate(model, tokenizer, prompt='Say hello.', max_tokens=32))
+   "
+   ```
+
+The routed experts run `gather_qmm` at their stored bit width. 4-bit and 8-bit use the kernels that ship with the wheel. 3-bit group 64 and 2-bit group 64 and 128 use the subgroup decode kernels at the decode shape. The check scripts print the time per call at the real expert shape.
+
 ## Use
 
 From a clean checkout, put `serve` on the path:
@@ -42,5 +80,5 @@ The suite also passes with mlx-lm 0.32.0 and with mlx-lm main at `06e03f7ce`. Th
 ## Requirements
 
 - Memory for the checkpoint: 359.2 GB for 3bit and 461.7 GB for 4bit (Hugging Face file sizes).
-- The 3bit experts use 3-bit `gather_qmm`. The backend must run that layout. The Vulkan `gather_qmm` in this repository accepts 4-bit and 8-bit weights only.
+- The routed experts run `gather_qmm` at their stored width. The Vulkan `gather_qmm` in this repository runs 2-bit, 3-bit, 4-bit and 8-bit affine weights in the transposed layout with biases.
 - The class reads the Hugging Face layout of the mlx-community checkpoints. It does not read ModelOpt NVFP4 checkpoints.
