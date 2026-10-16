@@ -42,6 +42,54 @@ You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries
 
 The routed experts run `gather_qmm` at their stored bit width. 4-bit and 8-bit use the kernels that ship with the wheel. 3-bit group 64 and 2-bit group 64 and 128 use the subgroup decode kernels at the decode shape. The check scripts print the time per call at the real expert shape.
 
+## Run it across several machines (omarchy-cluster, MLX)
+
+This route runs on omarchy-mlx through omarchy-cluster (mlx-lm). It does not use the oMLX server. It does not use llama.cpp.
+
+| Item | State at this commit |
+|---|---|
+| Tiny 8-layer Muse-shaped model, three machines, split 3,3,2, through the commands below | Run. 8 tokens at 19.95 tok/s. There is no agreed single-process reference: single-process runs on two devices disagree on the first token too. So this is a plumbing result and not a correctness claim. |
+| The raw completion request of step 6 | Unit test and a mock gateway only. Not run on real nodes. |
+| The 2-bit 62-layer checkpoint on the cluster | Not run. The layer split is not final, so none is given here. |
+| Quality, decode speed and first-token time of the 2-bit checkpoint | Not measured. |
+
+1. Get the 2-bit checkpoint. It is the unpruned `amd/Muse-Spark-Open-816B-A42B-Quark-PTPC-FP8` (revision `52cace63f43ed9fc6acef6dcd391adb02f4bfbe1`) converted to MLX affine weights: routed experts 2-bit group 128, attention and the expert projections 4-bit group 64, embedding 4-bit, `lm_head` 6-bit group 64. It has 63 part files, 2,425 tensors and 237,429,698,758 bytes, and every tensor name, dtype and logical shape equals the published mlx-community 3-bit layout (the packed widths differ, because the bit widths differ). The converter, the finalizer and the recipe are in [tools/muse-2bit](../tools/muse-2bit/README.md).
+2. Put the parts where every node can read them. Each node needs a Hugging Face cache snapshot directory (`models--<org>--<name>/snapshots/<revision>`) that holds links to the part files and to `config.json`, the tokenizer files and `model.safetensors.index.json`. On the machines that lack the disk space, the links pointed into read-only sshfs mounts of the disks that hold the parts. Each node then loads the model by its repository name, offline.
+3. Install on every node: the omarchy-cluster agent (see the omarchy-cluster README) at or after merge commit `224c1b2` (raw prompts, step 6) and, on each Linux node, an omarchy-mlx wheel built from main at or after the commits that add the subgroup 3-bit and 2-bit `gather_qmm` and the compiled `rsqrt` fix. The Linux ranks of the tiny run used wheel `0.32.4.dev202610160322+64f85e71`. The macOS rank used stock `mlx` 0.32.3 and mlx-lm 0.32.1 from main.
+4. Give every rank the adapter. Set `OMARCHY_MLX_SERVE=<checkout>/serve` in the rank environment. Point `--python-linux` and `--python-mac` at a small wrapper script that sets the environment and then runs the node's Python. On Linux the wrapper puts the omarchy-mlx tree first on `PYTHONPATH`.
+5. Start the pipeline from one gateway machine.
+
+   ```sh
+   omarchy-cluster serve <model> --nodes <node1>,<node2>,<node3> --split 3,3,2 \
+     --ring-ip <node1>=<ip1> --ring-ip <node2>=<ip2> --ring-ip <node3>=<ip3> \
+     --python-mac <rank-wrapper> --python-linux <rank-wrapper> --port 18020 --engine-port 18031
+   ```
+
+   `--split` lists the layers per node, in node order. The first node is rank 0, the engine, and it runs the last layers: `--nodes a,b,c --split 3,3,2` puts layers 5 to 7 on `a`, 2 to 4 on `b` and 0 to 1 on `c`. The tiny model has 8 layers. The 2-bit checkpoint has 62.
+6. Send a request. The gateway accepts temperature 0 only. The reply carries `timings` with `prefill_ms`, `decode_ms` and `tokens_per_s`. A chat request applies the checkpoint's chat template:
+
+   ```sh
+   curl -s http://<gateway>:18020/v1/chat/completions -H 'Content-Type: application/json' \
+     -d '{"model":"<model>","messages":[{"role":"user","content":"hello"}],"max_tokens":8,"temperature":0}'
+   ```
+
+   The staged chat template has no switch that turns reasoning off. In llama.cpp runs Muse opened with private reasoning (recipient `self`) and spent its token budget before it answered; this has not yet been seen on MLX. To get the answer at once, send a raw completion that ends in the answer channel. A raw prompt is tokenized as written and the engine adds no beginning-of-text token, so the text carries its own. Render the prompt from the template, then append the answer channel. `AutoTokenizer` needs a transformers release that provides the `TokenizersBackend` class (4.46.3 does not). The template's default reasoning effort is `xhigh` (it prints `Reasoning strength: 512`); `reasoning_effort="low"` prints 8:
+
+   ```python
+   from transformers import AutoTokenizer
+   tok = AutoTokenizer.from_pretrained("/path/to/checkpoint")
+   prompt = tok.apply_chat_template([{"role": "user", "content": "What is the capital of France?"}], tokenize=False, add_generation_prompt=True,
+                                    reasoning_effort="low")
+   prompt += " to=user<|message|>"
+   ```
+
+   Check the text before you send it: it begins with `<|begin_of_text|><|start|>system` and ends with `<|start|>assistant to=user<|message|>`. Then send it with `"raw": true`:
+
+   ```sh
+   curl -s http://<gateway>:18020/v1/completions -H 'Content-Type: application/json' \
+     -d '{"model":"<model>","prompt":"<the text above>","raw":true,"max_tokens":200,"temperature":0}'
+   ```
+
 ## Use
 
 From a clean checkout, put `serve` on the path:
