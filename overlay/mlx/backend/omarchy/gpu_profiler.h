@@ -149,7 +149,20 @@ class GpuProfiler {
     SlotCtx& s = ctx->slots[slot];
     s.cursor = 0;
     s.pending.clear();
-    vk::device_table().CmdResetQueryPool(cmd, s.pool, 0, kPoolQueries);
+    s.n_disp = 0;
+    s.span = false;
+    vk::device_table().CmdResetQueryPool(
+        cmd, s.pool, 0, submit_only_ ? 2u : kPoolQueries);
+    if (submit_only_) {
+      vk::device_table().CmdPipelineBarrier(
+          cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 0,
+          nullptr);
+      vk::device_table().CmdWriteTimestamp(
+          cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s.pool, 0);
+      s.cursor = 1;
+      s.last_sub = 0;
+    }
   }
 
   // Called after the pre-dispatch barrier (when one was recorded) and
@@ -169,6 +182,10 @@ class GpuProfiler {
       return;
     }
     SlotCtx& s = ctx->slots[slot];
+    if (submit_only_) {
+      s.n_disp++;
+      return;
+    }
     PendingDispatch p{};
     p.skipped = s.cursor + 2 > kPoolQueries;
     p.bar = barrier ? 1u : 0u;
@@ -212,7 +229,7 @@ class GpuProfiler {
       uint32_t gz,
       uint64_t host_cost,
       uint32_t tape) {
-    if (out_ == nullptr) {
+    if (out_ == nullptr || submit_only_) {
       return;
     }
     Ctx* ctx = find(owner);
@@ -246,6 +263,24 @@ class GpuProfiler {
       s.cursor = p.tick_index + 2;
     }
     dispatches_++;
+  }
+
+  // Submit-only mode: called just before EndCommandBuffer, after every
+  // dispatch of the batch was recorded. One BOTTOM_OF_PIPE stamp closes the
+  // span that on_begin opened with TOP_OF_PIPE.
+  void on_end(const void* owner, int slot, VkCommandBuffer cmd) {
+    if (out_ == nullptr || !submit_only_) {
+      return;
+    }
+    Ctx* ctx = find(owner);
+    if (ctx == nullptr) {
+      return;
+    }
+    SlotCtx& s = ctx->slots[slot];
+    vk::device_table().CmdWriteTimestamp(
+        cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.pool, 1);
+    s.cursor = 2;
+    s.span = true;
   }
 
   // Called at the end of a successful submit(); sub is 0 for submissions
@@ -354,6 +389,8 @@ class GpuProfiler {
     uint32_t cursor{0};
     uint64_t last_sub{0};
     std::vector<PendingDispatch> pending;
+    uint32_t n_disp{0};
+    bool span{false};
   };
 
   struct Ctx {
@@ -391,6 +428,32 @@ class GpuProfiler {
   // the slot's submission has completed (slot reuse or a full join).
   void flush_slot(Ctx& ctx, int slot, uint64_t sub) {
     SlotCtx& s = ctx.slots[slot];
+    if (submit_only_) {
+      if (s.span) {
+        if (valid_bits_ == 0 || s.last_sub == 0) {
+          emitf("{\"k\":\"cx\",\"s\":%" PRIu64 ",\"why\":\"%s\",\"n\":%u}\n",
+                sub, valid_bits_ == 0 ? "nobits" : "nosub", s.n_disp);
+        } else {
+          uint64_t ticks[2];
+          VkResult r = vk::device_table().GetQueryPoolResults(
+              device_, s.pool, 0, 2, sizeof(ticks), ticks, sizeof(uint64_t),
+              VK_QUERY_RESULT_64_BIT);
+          if (r == VK_SUCCESS && ticks[1] >= ticks[0]) {
+            emitf("{\"k\":\"c\",\"s\":%" PRIu64 ",\"n\":%u,\"t0\":%" PRIu64
+                  ",\"t1\":%" PRIu64 "}\n",
+                  sub, s.n_disp, ticks[0], ticks[1]);
+          } else {
+            emitf("{\"k\":\"cx\",\"s\":%" PRIu64
+                  ",\"why\":\"read\",\"r\":%d,\"n\":%u}\n",
+                  sub, static_cast<int>(r), s.n_disp);
+          }
+        }
+      }
+      s.span = false;
+      s.n_disp = 0;
+      s.cursor = 0;
+      return;
+    }
     if (s.pending.empty() || valid_bits_ == 0 || s.last_sub == 0) {
       s.pending.clear();
       s.cursor = 0;
@@ -470,6 +533,8 @@ class GpuProfiler {
     period_ns_ = device.capabilities().timestamp_period;
     device_ = device.handle();
     host_t0_ = host_ns();
+    const char* mode = std::getenv("MLX_OMARCHY_GPU_PROFILE_MODE");
+    submit_only_ = mode != nullptr && std::strcmp(mode, "submit") == 0;
     const char* label = std::getenv("MLX_OMARCHY_GPU_PROFILE_LABEL");
     emitf("{\"k\":\"meta\",\"device\":\"%s\",\"period_ns\":%.6f"
           ",\"valid_bits\":%u,\"pool\":%u,\"label\":\"%s\",\"host_t0\":%"
@@ -480,6 +545,10 @@ class GpuProfiler {
           kPoolQueries,
           label != nullptr ? label : "",
           host_t0_);
+    if (submit_only_) {
+      emitf("{\"k\":\"mode\",\"mode\":\"submit\",\"valid_bits\":%u}\n",
+            valid_bits_);
+    }
     if (valid_bits_ == 0) {
       std::fprintf(
           stderr,
@@ -506,6 +575,7 @@ class GpuProfiler {
   std::unordered_map<const void*, std::unique_ptr<Ctx>> contexts_;
   VkDevice device_{VK_NULL_HANDLE};
   FILE* out_{nullptr};
+  bool submit_only_{false};
   uint32_t valid_bits_{0};
   float period_ns_{1.0f};
   uint64_t host_t0_{0};
@@ -546,6 +616,7 @@ class GpuProfiler {
 
   void attach(const void*, const Device&) {}
   void on_begin(const void*, int, VkCommandBuffer, uint64_t) {}
+  void on_end(const void*, int, VkCommandBuffer) {}
   void before_dispatch(const void*, int, VkCommandBuffer, bool) {}
   void on_barrier(bool) {}
   void after_dispatch(
