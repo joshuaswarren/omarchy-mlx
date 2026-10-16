@@ -18,7 +18,10 @@ The setting is off by default. The vendored class file is unchanged.
 - Files: `prune_probe.py`, `run_prune_probe.sh`.
 
 ## Result
-Tokens: identical on all four ranks and identical with the setting on and off: `[8371, 28438, 10492, 31308, 437, 3614, 25398, 24825, 5749, 13764, 4423, 22877]`.
+Tokens: identical on all four ranks and identical with the setting on and off: `[1447, 19746, 9666, 6908, 14716, 23978, 15036, 4153, 14509, 8837, 16260, 22876]`.
+Rank 0 log-probabilities: the sha256 of the float32 bytes of each of the 12 steps matches with the setting on and off. The first eight hex digits per step are `c7925998 5f272022 0688b95c 81362989 638ac848 dbb658a8 f1623a49 1461546b f8d9d8bd 3454aa26 f244e614 0a5c6f42`.
+Ranks 1 to 3 hold a one-hot head by design, so only rank 0 shows real log-probabilities.
+The packed expert weights are not seeded, so the tokens differ from run to run. Each comparison above uses one checkpoint file for both settings.
 
 Active memory in bytes, `mx.get_active_memory()`:
 

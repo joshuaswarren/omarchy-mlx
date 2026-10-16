@@ -65,5 +65,12 @@ print(f"rank {rank} PRUNE={os.environ.get('MLX_OMARCHY_PIPELINE_PRUNE')} layers 
 from mlx_lm.generate import generate_step  # noqa: E402
 
 kw = {"sampler": getattr(model, "omarchy_sampler", None)}
-toks = [int(t) for t, _ in generate_step(mx.array([1, 2, 3, 4, 5, 6, 7, 8]), model, max_tokens=12, **kw)]
+import hashlib  # noqa: E402
+
+toks, digs = [], []
+for t, lp in generate_step(mx.array([1, 2, 3, 4, 5, 6, 7, 8]), model, max_tokens=12, **kw):
+    toks.append(int(t))
+    digs.append(lp)  # no evaluation inside the loop: every rank must reach its collectives in the same order
+digs = [hashlib.sha256(np.array(lp.astype(mx.float32)).tobytes()).hexdigest()[:8] for lp in digs]
+print(f"rank {rank} logprob-sha8 {' '.join(digs)}", flush=True)
 print(f"rank {rank} tokens {toks}", flush=True)
