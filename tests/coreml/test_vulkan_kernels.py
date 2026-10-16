@@ -102,7 +102,9 @@ def test_kernel_names_inputs_outputs_and_math_mode(recorded):
         for input_name in spec["input_names"]:
             assert re.search(rf"\b{re.escape(input_name)}\b", source)
         for output_name in spec["output_names"]:
-            assert re.search(rf"\b{re.escape(output_name)}\s*\[[^\]]*\]\s*=", source)
+            assert re.search(
+                rf"\b{re.escape(output_name)}\s*\[[^\]]*\]\s*=(?!=)", source
+            )
         compile_options = spec.get("compile_options")
         if compile_options:
             assert compile_options.get("math_mode") == "safe"
@@ -192,6 +194,10 @@ def test_pw_returns_none_for_non_f16_or_unmatched_shapes(monkeypatch):
     stem_x = mx.zeros((1, 2, 5, 8), dtype=mx.float16)
     stem_y = mx.zeros((1, 1, 6, 1), dtype=mx.float16)
     assert vk._pw("mul", stem_x, stem_y) is None
+    mask_x = mx.zeros((1, 4, 9, 32), dtype=mx.float16)
+    for bad_y_shape in [(2, 1, 9, 1), (1, 2, 9, 1), (1, 1, 9, 2)]:
+        bad_y = mx.zeros(bad_y_shape, dtype=mx.float16)
+        assert vk._pw("mul", mask_x, bad_y) is None
 
 
 def test_pw_routes_scalar_layout_for_size_one_y(monkeypatch):
