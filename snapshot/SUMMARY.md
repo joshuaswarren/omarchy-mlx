@@ -1,6 +1,6 @@
 # Community hardware data snapshot
 
-Records: 211 | dataset generated_at: - | source: https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
+Records: 213 | dataset generated_at: - | source: https://mlx-omarchy-community-data.joshua-s-warren.workers.dev
 
 Mirrored by `.github/workflows/community-data.yml` from the public
 read API. Summaries only; archive blobs stay on the endpoint.
@@ -218,6 +218,8 @@ read API. Summaries only; archive blobs stay on the endpoint.
 | [7dd600b5d54c](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/7dd600b5d54cd85b5502358ddecc26ef00cc6d23d636ebe0a0d1901d7d659b3b) | deep | Apple M3 Max | Darwin 27.0.0 (macOS 27.0.1 (26A434)) | - | - | [0](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/7dd600b5d54cd85b5502358ddecc26ef00cc6d23d636ebe0a0d1901d7d659b3b/archive) |
 | [3702075d3643](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/3702075d36435d2430a0523b77cb8bbc013e304016d42dd78c3c38ff21d3b948) | quick | apple,t6020 | 7.1.13-3-2-ARCH | Honeykrisp | - | [0](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/3702075d36435d2430a0523b77cb8bbc013e304016d42dd78c3c38ff21d3b948/archive) |
 | [cad6ca64f5ee](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/cad6ca64f5eed07e75a67f551b52bc1d9ae004e27cca94f7de1cb0aa62b30852) | deep | apple,t8122 | 7.1.9-aurora-m3 | Honeykrisp | 0.32.4.dev202610131404+a0a879b | [6](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/cad6ca64f5eed07e75a67f551b52bc1d9ae004e27cca94f7de1cb0aa62b30852/archive) |
+| [98eeb75912e5](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/98eeb75912e5ec65e106177ad71dbec05e9ef5582ebce5bd37c42884ec59626d) | quick | apple,t8112 | 7.1.13 | Honeykrisp | 0.32.4.dev198001020000+4872e12 | [0](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/98eeb75912e5ec65e106177ad71dbec05e9ef5582ebce5bd37c42884ec59626d/archive) |
+| [164a76081918](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/164a76081918cc4f4d81d02da07cf444047f16d39e75094d1e851383e9603c97) | deep | apple,t8112 | 7.1.13 | Honeykrisp | 0.32.4.dev198001020000+4872e12 | [6](https://mlx-omarchy-community-data.joshua-s-warren.workers.dev/v1/results/164a76081918cc4f4d81d02da07cf444047f16d39e75094d1e851383e9603c97/archive) |
 
 Query this snapshot:
 
