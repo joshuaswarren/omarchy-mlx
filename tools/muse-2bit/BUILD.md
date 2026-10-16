@@ -18,3 +18,14 @@ Built 2026-10-15.
 ## Equivalence rule
 File bytes differ across platforms for identical tensors (MLX saves in hash-map order; header 4,671 vs 4,681 B for layer 3). Equality is checked per tensor: layer 3 converted on the Mac Studio and on the M2 has 39/39 equal tensor sha256.
 Independent check: one expert tensor (layer 1, expert 5, gate_proj) dequantized with a separate numpy decoder and re-quantized with a separate numpy implementation of the MLX affine quantizer: identical to mx.from_fp8 / mx.quantize bit for bit (that tensor only; CPU backend).
+
+## Provenance
+Tools, as `recipe.json` records them: converter `requant_stream.py` sha256 `9a2fa17a762c8806da6297376088a7dcefce794e15a3ce73d537dc13cb77f3b8`.
+mlx: `0.32.3` on the Studio macOS (layers 0-13, shared part checked).
+mlx: `0.32.4` on the M2 aarch64 Linux CPU (layers 14-36, 39 and 41-61 per Hashes; the "M2 laptop").
+Python: `3.13.16` on the Studio and `3.11.2` for the `CT shared part`.
+The machines are the ones these records name: the Mac Studio and the M2 aarch64 Linux CPU.
+The full provenance statement is in `receipts/2026-10-16-muse-2bit-provenance/README.md`.
+For a rebuild, run `python3 scripts/mlx_provenance.py` with the same interpreter that runs `requant_stream.py`.
+`python3 scripts/mlx_provenance.py --self-test` must exit 0 there first.
+Put the provenance line beside the numbers.
