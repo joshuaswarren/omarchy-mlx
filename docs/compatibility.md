@@ -54,6 +54,10 @@ nothing about Linux execution.
   [README table](../README.md#supported-hardware)). ANE: Data-only; h15
   bring-up module. No run receipts exist yet; the tester kit is
   [scripts/m3m4_kit.md](../scripts/m3m4_kit.md).
+  A third-party M3 guide, [Omarchy-M3-Native](https://github.com/tonibergholm/Omarchy-M3-Native/blob/main/docs/graphics.md),
+  gives 618 MHz (performance state 2) as the highest GPU clock it tested. We have not
+  measured that cap. It would not explain the CPU memory bandwidth in
+  [#173](https://github.com/joshuaswarren/omarchy-mlx/issues/173).
 - M4. Not yet: no Linux GPU driver (README row since 2026-10-07;
   [README table](../README.md#supported-hardware)). ANE: Data-only; h16
   bring-up module.
