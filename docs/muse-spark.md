@@ -8,18 +8,30 @@ The mlx-community Muse Spark Open quantizations (3bit and 4bit) declare `model_t
 
 You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries the 3-bit and 2-bit `gather_qmm`, mlx-lm 0.32.0, and enough memory for the checkpoint (see Requirements). The run uses mlx-lm through the adapter. It does not use the oMLX server.
 
-1. Install the release wheel. See [INSTALL.md](INSTALL.md).
-2. Check the expert kernels on your GPU. Each command prints `RESULT PASS`.
+1. Install the release wheel. See [INSTALL.md](INSTALL.md). The install script builds a private venv, and `mlx-omarchy` runs that venv's Python.
+2. Install mlx-lm 0.32.0 into that venv. The `--no-deps` flag keeps the mlx-omarchy build of `mlx`.
 
    ```sh
-   python3 receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 3 64
-   python3 receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 2 128
+   mlx-omarchy -m pip install --no-deps mlx-lm==0.32.0
    ```
 
-3. Register the class and load a checkpoint. The checkpoint directory is a download of an mlx-community Muse Spark Open repository.
+3. Clone the repository. The adapter and the check scripts live in the checkout.
 
    ```sh
-   PYTHONPATH=serve python3 -c "
+   git clone https://github.com/joshuaswarren/omarchy-mlx && cd omarchy-mlx
+   ```
+
+4. Check the expert kernels on your GPU. Each command prints `RESULT PASS`.
+
+   ```sh
+   mlx-omarchy receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 3 64
+   mlx-omarchy receipts/2026-10-16-gather-qmm-subgroup-3bit-2bit/gather_bits_gpu.py 2 128
+   ```
+
+5. Register the class and load a checkpoint. The checkpoint directory is a download of an mlx-community Muse Spark Open repository.
+
+   ```sh
+   PYTHONPATH=serve mlx-omarchy -c "
    import mlx_omarchy_muse
    mlx_omarchy_muse.register()
    from mlx_lm import load, generate
