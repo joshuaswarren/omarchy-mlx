@@ -42,6 +42,36 @@ You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries
 
 The routed experts run `gather_qmm` at their stored bit width. 4-bit and 8-bit use the kernels that ship with the wheel. 3-bit group 64 and 2-bit group 64 and 128 use the subgroup decode kernels at the decode shape. The check scripts print the time per call at the real expert shape.
 
+## Run it across several machines (omarchy-cluster, MLX)
+
+This route runs on omarchy-mlx through omarchy-cluster (mlx-lm). It does not use the oMLX server. It does not use llama.cpp.
+
+| Item | State at this commit |
+|---|---|
+| Tiny 8-layer Muse-shaped model, three machines, split 3,3,2, through the commands below | Run. 8 tokens at 19.95 tok/s. The tokens do not yet match a single-process reference, so this is a plumbing result and not a correctness claim. |
+| The 2-bit 62-layer checkpoint on the cluster | Not run. The layer split is not final, so none is given here. |
+| Quality, decode speed and first-token time of the 2-bit checkpoint | Not measured. |
+
+1. Get the 2-bit checkpoint. It is the unpruned `amd/Muse-Spark-Open-816B-A42B-Quark-PTPC-FP8` (revision `52cace63f43ed9fc6acef6dcd391adb02f4bfbe1`) converted to MLX affine weights: routed experts 2-bit group 128, attention and the expert projections 4-bit group 64, embedding 4-bit, `lm_head` 6-bit group 64. It has 63 part files and 237,429,698,758 bytes, and every tensor name, dtype, shape and bit width equals the published mlx-community 3-bit layout. The conversion recipe is in `tools/muse-2bit`.
+2. Put the parts where every node can read them. Each node needs a Hugging Face cache snapshot directory (`models--<org>--<name>/snapshots/<revision>`) that holds links to the part files and to `config.json`, the tokenizer files and `model.safetensors.index.json`. On the machines that lack the disk space, the links pointed into read-only sshfs mounts of the disks that hold the parts. Each node then loads the model by its repository name, offline.
+3. Install on every node: the omarchy-cluster agent (see the omarchy-cluster README) and, on each Linux node, an omarchy-mlx wheel built from main at or after the commits that add the subgroup 3-bit and 2-bit `gather_qmm` and the compiled `rsqrt` fix. The Linux ranks of the tiny run used wheel `0.32.4.dev202610160322+64f85e71`. The macOS rank used stock `mlx` 0.32.3 and mlx-lm 0.32.1 from main.
+4. Give every rank the adapter. Set `OMARCHY_MLX_SERVE=<checkout>/serve` in the rank environment. Point `--python-linux` and `--python-mac` at a small wrapper script that sets the environment and then runs the node's Python. On Linux the wrapper puts the omarchy-mlx tree first on `PYTHONPATH`.
+5. Start the pipeline from one gateway machine.
+
+   ```sh
+   omarchy-cluster serve <model> --nodes <node1>,<node2>,<node3> --split 3,3,2 \
+     --ring-ip <node1>=<ip1> --ring-ip <node2>=<ip2> --ring-ip <node3>=<ip3> \
+     --python-mac <rank-wrapper> --python-linux <rank-wrapper> --port 18020 --engine-port 18031
+   ```
+
+   `--split` is the number of layers per node, in node order. The tiny model has 8 layers. The 2-bit checkpoint has 62.
+6. Send a request. The gateway accepts temperature 0 only. The reply carries `timings` with `prefill_ms`, `decode_ms` and `tokens_per_s`.
+
+   ```sh
+   curl -s http://<gateway>:18020/v1/chat/completions -H 'Content-Type: application/json' \
+     -d '{"model":"<model>","messages":[{"role":"user","content":"hello"}],"max_tokens":8,"temperature":0}'
+   ```
+
 ## Use
 
 From a clean checkout, put `serve` on the path:
