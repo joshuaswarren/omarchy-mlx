@@ -23,7 +23,7 @@ for p, d in parts.items():
     f = open(f"{d}/{p}", "rb"); n = struct.unpack("<Q", f.read(8))[0]; h = json.loads(f.read(n)); h.pop("__metadata__", None); sizes[p] = os.path.getsize(f"{d}/{p}")
     for k, v in h.items():
         assert k not in wm, f"duplicate tensor {k}"; wm[k] = p; shapes[k] = v["shape"]; dtypes[k] = v["dtype"]
-inv = {t["name"]: t for t in json.load(open(INV3))["tensors"]}
+_inv = json.load(open(INV3)); inv = {t["name"]: t for t in _inv["tensors"]}  # the inventory records repo + revision; the reference config is fetched from that same revision
 missing = sorted(set(inv) - set(wm)); extra = sorted(set(wm) - set(inv))
 print("parts", len(parts), "of", N, "| tensors", len(wm), "expected", len(inv), "missing", len(missing), "extra", len(extra), extra[:3])
 bad = []
@@ -45,11 +45,11 @@ for g, (b, gs) in RECIPE.items():
     if got and got != {float(b)}: bad.append((g, "bits", got, b))
 print("shape/dtype/bits mismatches:", len(bad), bad[:5], "| bits groups:", dict(cnt))
 total = sum(sizes.values()); print("bytes in parts", total)
-if (missing or bad) and not PARTIAL: sys.exit("INCOMPLETE/MISMATCH")
+if (missing or extra or bad) and not PARTIAL: sys.exit("INCOMPLETE/MISMATCH (missing, extra or mismatched tensors)")
 if PARTIAL: sys.exit(0)
 os.makedirs(META, exist_ok=True)
 json.dump({"metadata": {"total_size": total}, "weight_map": dict(sorted((k, final_name(p)) for k, p in wm.items()))}, open(f"{META}/model.safetensors.index.json", "w"), indent=1)
-base = json.loads(urllib.request.urlopen(urllib.request.Request("https://huggingface.co/mlx-community/Muse-Spark-Open-816B-A42B-3bit/resolve/main/config.json", headers={"User-Agent": "w7y-finalize"}), timeout=120).read())
+base = json.loads(urllib.request.urlopen(urllib.request.Request(f"https://huggingface.co/{_inv['repo']}/resolve/{_inv['sha']}/config.json", headers={"User-Agent": "w7y-finalize"}), timeout=120).read())
 q = {"group_size": 64, "bits": 4, "mode": "affine"}
 for k in wm:
     if k.endswith(".scales"):

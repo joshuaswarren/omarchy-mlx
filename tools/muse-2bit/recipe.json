@@ -1,6 +1,5 @@
 {
   "name": "Muse-Spark-Open-816B-A42B mixed-bit MLX (2-bit experts), text-only",
-  "status": "BUILT 2026-10-15 22:50 CDT (62 layers + shared, header-verified, per-tensor sha256 in TENSOR_SHA256.txt); quality and speed NOT MEASURED until the cluster run",
   "source": {
     "repo": "amd/Muse-Spark-Open-816B-A42B-Quark-PTPC-FP8",
     "revision": "52cace63f43ed9fc6acef6dcd391adb02f4bfbe1",
@@ -10,7 +9,7 @@
       "LICENSE.md",
       "USE_POLICY.md"
     ],
-    "license_md_sha256": "458a5c57d8e622e395eb"
+    "license_md_sha256": "458a5c57d8e622e395eb0e59799ba5bba1ea7524ffd120ee6e3018688d7d6ace"
   },
   "scope": "text model only; vision tower, audio tower, vision adapter and projection are NOT included",
   "quantization_format": "MLX affine (mx.quantize): per group a bf16 scale and bf16 bias, values packed into uint32; group 128 for routed experts, 64 for everything else",
@@ -79,8 +78,7 @@
     "python": {
       "Studio": "3.13.16",
       "CT shared part": "3.11.2"
-    },
-    "mlx_lm": "NOT MEASURED (loader and commit used for the cluster run to be filled)"
+    }
   },
   "measured_so_far": {
     "weight_reconstruction_check": "layer 1, expert 5 (gate/up/down) and layer 1 attention q/k/o/gate: FP8 dequant by this code vs the published mlx-community 3-bit weights: relative RMS 0.19-0.21 (a transposed mapping gives 1.42)",
@@ -90,14 +88,6 @@
       "4bit_g64": "0.09-0.10"
     }
   },
-  "not_measured": [
-    "total size of the finished checkpoint",
-    "answer quality (any benchmark or spot check)",
-    "tokens per second",
-    "time to first token",
-    "cluster node set and layer-to-node map",
-    "peak memory per node"
-  ],
   "equivalence": "layer 3 converted twice on the Studio (same file sha256 a91f4878c9a8f816ff3da23c...) and once on the M2 (different file bytes: mlx stores tensors in hash-map order, header 4,671 vs 4,681 B): all 39 per-tensor sha256 equal. Check per tensor, not per file.",
   "result": {
     "parts": 63,

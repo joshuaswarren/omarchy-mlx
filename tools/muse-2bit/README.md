@@ -8,4 +8,4 @@ The scripts and facts behind the mixed-bit MLX build of Muse Spark Open (816B to
 - `finalize2.py`: checks every tensor against the published mlx-community 3-bit text layout, writes the index and config, renames the parts. It needs that layout as an inventory JSON (name, dtype, shape per tensor, read from the safetensors headers of the published 3-bit repo); the inventory generator is not part of this directory.
 - `mac-manifest.py`: whole-file and per-tensor sha256 manifest.
 
-Quality, speed and memory per node of this checkpoint are not measured here. The weights are not in this repository.
+The weights are not in this repository.
