@@ -2899,6 +2899,18 @@ TEST_CASE("gather qqmm dequants with scales only") {
         x, w_float, scales, idx, idx, 64, 4, "affine", std::nullopt,
         std::nullopt, false, stream));
     CHECK(weight_error.find("GatherQQMM") != std::string::npos);
+
+    // 3-bit and 2-bit are admitted for the biased gather_qmm only: the scale-only
+    // GatherQQMM route keeps the named bits refusal.
+    {
+      auto host3 = host_affine_quantize(matrix, n, k, 64, 3);
+      array w_words3(host3.words.begin(), Shape{n, k * 3 / 32}, uint32);
+      array scales3(host3.scales.begin(), Shape{n, 1}, float32);
+      std::string bits_error = evaluation_error(gather_qqmm(
+          x, w_words3, scales3, idx, idx, 64, 3, "affine", std::nullopt,
+          std::nullopt, false, stream));
+      CHECK(bits_error.find("GatherQQMM bits") != std::string::npos);
+    }
   }
 }
 
