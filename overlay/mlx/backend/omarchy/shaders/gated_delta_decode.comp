@@ -107,7 +107,13 @@ uint16_t bf16_store(float value) {
 // The walks and the gate prologue sit in their own functions because
 // glslang propagates `precise` backward through everything that feeds a
 // precise value inside one function.
-const uint ROWS = 32u;
+// GDN_ROWS (default 32) sets the Dv rows per workgroup. 8 and 16 are default-OFF variants (MLX_OMARCHY_GDN_DECODE_ROWS):
+// the walks, their order and every rounding are unchanged, so the output bytes equal the 32-row kernel's; only the number of
+// workgroups per head (Dv / ROWS) and the shared tile size change.
+#ifndef GDN_ROWS
+#define GDN_ROWS 32
+#endif
+const uint ROWS = uint(GDN_ROWS);
 const uint TILE_STRIDE = 129u;  // padded: row r, column i -> bank (r + i) % 32
 
 shared float sk[128];

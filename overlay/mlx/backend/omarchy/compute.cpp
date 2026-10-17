@@ -326,6 +326,10 @@
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
+#include "gated_delta_decode_r8_bf16.h"
+#include "gated_delta_decode_r16_bf16.h"
+#include "gated_delta_decode_composed_r8_bf16.h"
+#include "gated_delta_decode_composed_r16_bf16.h"
 #include "gated_delta_decode_perrow_composed_bf16.h"
 #include "gated_delta_decode_perrow_pf_composed_bf16.h"
 #include "gated_delta_prefill_bf16.h"
@@ -1513,6 +1517,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_composed_bf16,
           gated_delta_decode_composed_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeBF16R8:
+      return {gated_delta_decode_r8_bf16, gated_delta_decode_r8_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeBF16R16:
+      return {gated_delta_decode_r16_bf16, gated_delta_decode_r16_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeBF16ComposedR8:
+      return {gated_delta_decode_composed_r8_bf16, gated_delta_decode_composed_r8_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeBF16ComposedR16:
+      return {gated_delta_decode_composed_r16_bf16, gated_delta_decode_composed_r16_bf16_size};
     case ComputeKernel::GatedDeltaDecodeBF16PfComposed:
       return {
           gated_delta_decode_perrow_pf_composed_bf16,

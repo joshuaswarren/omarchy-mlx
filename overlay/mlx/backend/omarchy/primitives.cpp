@@ -12639,9 +12639,22 @@ void GatedDeltaUpdate::eval_gpu(
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
+    // MLX_OMARCHY_GDN_DECODE_ROWS=8 or 16 (default off): the tiled kernel with fewer Dv rows per workgroup. Same arithmetic and order.
+    uint32_t gdn_rows = 32u;
+    if (decode_tile) {
+      const char* rows_env = std::getenv("MLX_OMARCHY_GDN_DECODE_ROWS");
+      if (rows_env != nullptr && (std::strcmp(rows_env, "8") == 0 || std::strcmp(rows_env, "16") == 0) &&
+          (static_cast<uint32_t>(Dv) % static_cast<uint32_t>(std::atoi(rows_env))) == 0u) {
+        gdn_rows = static_cast<uint32_t>(std::atoi(rows_env));
+      }
+    }
     const omarchy::ComputeKernel kernel = decode_tile
-        ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
-                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
+        ? (gdn_rows == 8u ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16ComposedR8
+                                      : omarchy::ComputeKernel::GatedDeltaDecodeBF16R8)
+           : gdn_rows == 16u ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16ComposedR16
+                                         : omarchy::ComputeKernel::GatedDeltaDecodeBF16R16)
+           : composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
+                      : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
         : gdn_pf
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed
                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
@@ -12652,7 +12665,7 @@ void GatedDeltaUpdate::eval_gpu(
         bindings,
         params,
         static_cast<uint32_t>(B * Hv),
-        decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
+        decode_tile ? static_cast<uint32_t>(Dv) / gdn_rows : 1u,
         1);
     return;
   }

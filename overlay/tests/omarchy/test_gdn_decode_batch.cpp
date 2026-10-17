@@ -158,6 +158,51 @@ TEST_CASE("batched gated decode matches per-row decode bit for bit") {
              s);
 }
 
+// MLX_OMARCHY_GDN_DECODE_ROWS=8 or 16 (default off) runs the tiled decode kernel with fewer Dv rows per workgroup. The arithmetic and its order are
+// unchanged, so output and state must equal the default 32-row kernel's bytes, for the default order (bf16 A_log) and the composed order (f32 A_log).
+TEST_CASE("gated-delta decode with 8 or 16 rows per workgroup gives the 32-row kernel's bytes") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_decode_rows");
+  for (bool composed : {false, true}) {
+    array a_log = bf16({H}, 7, 1.0f, s, 1.0f);
+    array dt = bf16({H}, 8, 1.0f, s);
+    if (composed) {
+      a_log = astype(a_log, float32, s);
+    }
+    auto x = raw_inputs(s);
+    eval(x);
+    eval({a_log, dt});
+    auto run = [&](const char* rows, int64_t& kernel) {
+      if (rows != nullptr) {
+        setenv("MLX_OMARCHY_GDN_DECODE_ROWS", rows, 1);
+      } else {
+        unsetenv("MLX_OMARCHY_GDN_DECODE_ROWS");
+      }
+      auto r = fast::gated_delta_update_raw(x[0], x[1], x[2], x[3], x[4], a_log, dt, x[5]);
+      eval(r);
+      kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+      unsetenv("MLX_OMARCHY_GDN_DECODE_ROWS");
+      return r;
+    };
+    int64_t base_kernel = 0;
+    auto base = run(nullptr, base_kernel);
+    CHECK_EQ(base_kernel, static_cast<int64_t>(composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
+                                                         : omarchy::ComputeKernel::GatedDeltaDecodeBF16));
+    for (const char* rows : {"8", "16"}) {
+      int64_t kernel = 0;
+      auto v = run(rows, kernel);
+      const bool r8 = std::string(rows) == "8";
+      const auto expected = composed
+          ? (r8 ? omarchy::ComputeKernel::GatedDeltaDecodeBF16ComposedR8 : omarchy::ComputeKernel::GatedDeltaDecodeBF16ComposedR16)
+          : (r8 ? omarchy::ComputeKernel::GatedDeltaDecodeBF16R8 : omarchy::ComputeKernel::GatedDeltaDecodeBF16R16);
+      CHECK_EQ(kernel, static_cast<int64_t>(expected));
+      CHECK_MESSAGE(array_equal(v[0], base[0], s).item<bool>(), "rows=", rows, " composed=", composed, ": output differs");
+      CHECK_MESSAGE(array_equal(v[1], base[1], s).item<bool>(), "rows=", rows, " composed=", composed, ": state differs");
+    }
+  }
+}
+
 TEST_CASE("batched raw-gate decode stays fused") {
   if (!have_gpu()) return;
   Stream s = gpu_stream();

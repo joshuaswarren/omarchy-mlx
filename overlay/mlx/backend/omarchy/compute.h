@@ -1030,6 +1030,11 @@ enum class ComputeKernel : uint16_t {
   GatherQmmNbSubFpF32,
   GatherQmmNbSubFpF16,
   GatherQmmNbSubFpBF16,
+  // Tiled gated-delta decode with 8 or 16 Dv rows per workgroup (default off): appended so earlier ids do not move.
+  GatedDeltaDecodeBF16R8,
+  GatedDeltaDecodeBF16R16,
+  GatedDeltaDecodeBF16ComposedR8,
+  GatedDeltaDecodeBF16ComposedR16,
   Count,
 };
 
