@@ -1,0 +1,116 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Log-sum-exp over the last axis of a long float row, phase 1 of 2. The
+// single-workgroup kernel (logsumexp_suffix.comp) reads a 248320-wide logits
+// row twice with 256 lanes and takes about 0.5 ms on an M2 Max. Here the row
+// is cut into `matrix_n` contiguous chunks of `matrix_m` elements (at most
+// 4096, so a lane holds at most 16 values in registers), one workgroup per
+// (row, chunk). Each workgroup reads its chunk once, finds the chunk maximum
+// m with a shared-memory tree, and writes the pair (m, s) with
+// s = sum(exp(x - m)). Phase 2 (logsumexp_combine.comp) merges the pairs of
+// one row with s = sum(s_i * exp(m_i - m)).
+//
+// A chunk whose maximum is infinite or NaN writes an s that is NaN or
+// meaningless; phase 2 ignores the s of a chunk with an infinite maximum,
+// returns the row maximum for an infinite row maximum and NaN when any chunk
+// maximum is NaN, the same two rules as the single-workgroup kernel.
+//
+// Variants: float32 (default), -DUSE_FP16, -DUSE_BF16. All arithmetic runs in
+// float32. Grid: x = rows * chunks (at most 65535).
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#endif
+
+#define NEG_INF uintBitsToFloat(0xff800000u)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  STORAGE_TYPE values[];
+} input_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Partials {
+  vec2 values[];
+} partial_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+} params;
+
+shared float block_values[256];
+
+float nan_max(float a, float b) {
+  return isnan(a) ? a : (isnan(b) ? b : (b > a ? b : a));
+}
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint n = params.reduce_size;
+  uint chunks = params.matrix_n;
+  uint id = gl_WorkGroupID.x;
+  uint row = id / chunks;
+  uint chunk = id - row * chunks;
+  uint begin = chunk * params.matrix_m;
+  uint end = min(begin + params.matrix_m, n);
+  uint start = params.lhs_offset + row * n;
+  float v[16];
+  float local_max = NEG_INF;
+  for (uint k = 0u; k < 16u; ++k) {
+    uint index = begin + thread + k * 256u;
+    v[k] = index < end ? LOAD_VALUE(input_data.values[start + index]) : NEG_INF;
+    local_max = nan_max(local_max, v[k]);
+  }
+  block_values[thread] = local_max;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) {
+      block_values[thread] =
+          nan_max(block_values[thread], block_values[thread + stride]);
+    }
+    barrier();
+  }
+  float chunk_max = block_values[0];
+  barrier();
+  float local_sum = 0.0;
+  for (uint k = 0u; k < 16u; ++k) {
+    local_sum += exp(v[k] - chunk_max);
+  }
+  block_values[thread] = local_sum;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) {
+      block_values[thread] += block_values[thread + stride];
+    }
+    barrier();
+  }
+  if (thread == 0u) {
+    partial_data.values[id] = vec2(chunk_max, block_values[0]);
+  }
+}

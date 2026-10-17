@@ -193,6 +193,16 @@ target_link_options(omarchy_reduce_row_tests PRIVATE ${SANITIZER_LINK_FLAGS})
 doctest_discover_tests(omarchy_reduce_row_tests)
 add_test(NAME omarchy_reduce_row_tests COMMAND omarchy_reduce_row_tests)
 
+add_executable(omarchy_vocab_tail_tests
+               ${CMAKE_CURRENT_SOURCE_DIR}/test_vocab_tail.cpp)
+target_link_libraries(omarchy_vocab_tail_tests PRIVATE mlx doctest)
+target_compile_options(omarchy_vocab_tail_tests
+                       PRIVATE ${SANITIZER_COMPILE_FLAGS})
+target_link_options(omarchy_vocab_tail_tests PRIVATE ${SANITIZER_LINK_FLAGS})
+
+doctest_discover_tests(omarchy_vocab_tail_tests)
+add_test(NAME omarchy_vocab_tail_tests COMMAND omarchy_vocab_tail_tests)
+
 add_executable(omarchy_indexing_ops_tests
                ${CMAKE_CURRENT_SOURCE_DIR}/test_indexing_ops.cpp)
 target_link_libraries(omarchy_indexing_ops_tests PRIVATE mlx doctest)

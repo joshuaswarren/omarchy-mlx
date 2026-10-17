@@ -168,6 +168,16 @@
 #include "reduce_f16.h"
 #include "reduce_f32.h"
 #include "reduce_row_bf16.h"
+#include "argreduce_chunk_f32.h"
+#include "argreduce_chunk_f16.h"
+#include "argreduce_chunk_bf16.h"
+#include "argreduce_combine.h"
+#include "logsumexp_chunk_f32.h"
+#include "logsumexp_chunk_f16.h"
+#include "logsumexp_chunk_bf16.h"
+#include "logsumexp_combine_f32.h"
+#include "logsumexp_combine_f16.h"
+#include "logsumexp_combine_bf16.h"
 #include "reduce_row_f16.h"
 #include "reduce_row_f32.h"
 #include "hadamard_bf16.h"
@@ -1972,6 +1982,26 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {reduce_row_bf16, reduce_row_bf16_size};
     case ComputeKernel::GatherQmmWordBF16:
       return {gather_qmm_word_bf16, gather_qmm_word_bf16_size};
+    case ComputeKernel::ArgReduceChunkF32:
+      return {argreduce_chunk_f32, argreduce_chunk_f32_size};
+    case ComputeKernel::ArgReduceChunkF16:
+      return {argreduce_chunk_f16, argreduce_chunk_f16_size};
+    case ComputeKernel::ArgReduceChunkBF16:
+      return {argreduce_chunk_bf16, argreduce_chunk_bf16_size};
+    case ComputeKernel::ArgReduceCombine:
+      return {argreduce_combine, argreduce_combine_size};
+    case ComputeKernel::LogSumExpChunkF32:
+      return {logsumexp_chunk_f32, logsumexp_chunk_f32_size};
+    case ComputeKernel::LogSumExpChunkF16:
+      return {logsumexp_chunk_f16, logsumexp_chunk_f16_size};
+    case ComputeKernel::LogSumExpChunkBF16:
+      return {logsumexp_chunk_bf16, logsumexp_chunk_bf16_size};
+    case ComputeKernel::LogSumExpCombineF32:
+      return {logsumexp_combine_f32, logsumexp_combine_f32_size};
+    case ComputeKernel::LogSumExpCombineF16:
+      return {logsumexp_combine_f16, logsumexp_combine_f16_size};
+    case ComputeKernel::LogSumExpCombineBF16:
+      return {logsumexp_combine_bf16, logsumexp_combine_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

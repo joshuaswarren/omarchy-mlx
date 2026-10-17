@@ -4014,6 +4014,34 @@ static bool walk_prefetch_enabled(omarchy::CommandEncoder& encoder) {
                              : !g13_legacy_part(encoder);
 }
 
+// Chunked routes for long rows (argreduce_chunk.comp + argreduce_combine.comp,
+// logsumexp_chunk.comp + logsumexp_combine.comp): the row is cut into
+// kChunkedRowChunk-element chunks, one workgroup each, and a second dispatch
+// merges the per-chunk pairs. Both routes are off unless their flag is "1",
+// read live on every call.
+static constexpr size_t kChunkedRowChunk = 4096;
+static constexpr size_t kChunkedRowMin = 8192;
+static constexpr size_t kChunkedRowMaxChunks = 256;
+
+static bool chunked_flag_enabled(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && std::string(value) == "1";
+}
+
+// Chunks per row for the chunked routes, or 0 when the row keeps the
+// single-workgroup kernel (short rows, rows past 256 chunks, or a grid that
+// would pass the group-count limit).
+static uint32_t chunked_row_chunks(size_t row_length, size_t rows) {
+  if (row_length < kChunkedRowMin ||
+      row_length > kChunkedRowChunk * kChunkedRowMaxChunks) {
+    return 0;
+  }
+  size_t chunks = (row_length + kChunkedRowChunk - 1) / kChunkedRowChunk;
+  return rows * chunks <= omarchy::kMaxComputeGroupCountX
+      ? static_cast<uint32_t>(chunks)
+      : 0;
+}
+
 void dispatch_arg_reduce_suffix(
     const std::string& operation_name,
     bool is_max,
@@ -4037,6 +4065,43 @@ void dispatch_arg_reduce_suffix(
   params.output_offset = checked_item_offset(out, out.size(), operation_name, out);
   if (!walk_prefetch_enabled(encoder)) {
     params.flags |= kWalkLegacyFlag;
+  }
+  bool float_row = src.dtype() == float32 || src.dtype() == float16 ||
+      src.dtype() == bfloat16;
+  uint32_t chunks = float_row &&
+          chunked_flag_enabled("MLX_OMARCHY_ARGREDUCE_CHUNKED")
+      ? chunked_row_chunks(row_length, rows)
+      : 0;
+  if (chunks != 0) {
+    // Phase 1: one (value, index) pair per (row, chunk); phase 2: one
+    // workgroup per row picks the pair the single-workgroup kernel would.
+    array partials(
+        Shape{static_cast<int>(rows * chunks * 2)}, uint32, nullptr, {});
+    partials.set_data(allocate_omarchy(partials.nbytes()));
+    omarchy::ComputeParams chunk_params = params;
+    chunk_params.flags = 0;
+    chunk_params.matrix_m = static_cast<uint32_t>(kChunkedRowChunk);
+    chunk_params.matrix_n = chunks;
+    std::array<omarchy::ComputeBinding, 2> chunk_bindings{
+        binding(src), binding(partials)};
+    encoder.dispatch_compute(
+        src.dtype() == float16
+            ? omarchy::ComputeKernel::ArgReduceChunkF16
+            : src.dtype() == bfloat16
+                ? omarchy::ComputeKernel::ArgReduceChunkBF16
+                : omarchy::ComputeKernel::ArgReduceChunkF32,
+        chunk_bindings,
+        chunk_params,
+        static_cast<uint32_t>(rows * chunks));
+    std::array<omarchy::ComputeBinding, 2> combine_bindings{
+        binding(partials), binding(out)};
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::ArgReduceCombine,
+        combine_bindings,
+        chunk_params,
+        output_size);
+    encoder.add_temporary(partials);
+    return;
   }
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(src), binding(src), binding(out)};
@@ -7297,6 +7362,44 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
       out, out.size(), "LogSumExp", out);
   if (!walk_prefetch_enabled(encoder)) {
     params.flags |= kWalkLegacyFlag;
+  }
+  uint32_t chunks = chunked_flag_enabled("MLX_OMARCHY_LSE_CHUNKED")
+      ? chunked_row_chunks(row_length, rows)
+      : 0;
+  if (chunks != 0) {
+    // Phase 1: one (max, sum of exp) pair per (row, chunk); phase 2 merges
+    // the pairs of each row.
+    array partials(
+        Shape{static_cast<int>(rows * chunks * 2)}, float32, nullptr, {});
+    partials.set_data(allocate_omarchy(partials.nbytes()));
+    omarchy::ComputeParams chunk_params = params;
+    chunk_params.flags = 0;
+    chunk_params.matrix_m = static_cast<uint32_t>(kChunkedRowChunk);
+    chunk_params.matrix_n = chunks;
+    std::array<omarchy::ComputeBinding, 2> chunk_bindings{
+        binding(src), binding(partials)};
+    encoder.dispatch_compute(
+        select_float_kernel(
+            out.dtype(),
+            omarchy::ComputeKernel::LogSumExpChunkF32,
+            omarchy::ComputeKernel::LogSumExpChunkF16,
+            omarchy::ComputeKernel::LogSumExpChunkBF16),
+        chunk_bindings,
+        chunk_params,
+        static_cast<uint32_t>(rows * chunks));
+    std::array<omarchy::ComputeBinding, 2> combine_bindings{
+        binding(partials), binding(out)};
+    encoder.dispatch_compute(
+        select_float_kernel(
+            out.dtype(),
+            omarchy::ComputeKernel::LogSumExpCombineF32,
+            omarchy::ComputeKernel::LogSumExpCombineF16,
+            omarchy::ComputeKernel::LogSumExpCombineBF16),
+        combine_bindings,
+        chunk_params,
+        output_size);
+    encoder.add_temporary(partials);
+    return;
   }
   std::array<omarchy::ComputeBinding, 3> bindings{
       binding(src), binding(src), binding(out)};
