@@ -5,6 +5,7 @@ and validation paths run without a GPU.
 """
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -172,6 +173,25 @@ class CliExitTests(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 2)
         self.assertIn("does not exist", r.stderr)
+
+
+class ClampOrderTests(unittest.TestCase):
+    def test_clamp_runs_before_mlx_is_imported(self):
+        src = SCRIPT.read_text()
+        clamp = src.index("perf_placement import apply_from_env")
+        self.assertLess(clamp, src.index("installed_provenance("))
+        self.assertLess(clamp, src.index("from mlx_lm.utils import load"))
+        self.assertLess(clamp, src.index("import mlx.core as mx"))
+
+    def test_clamp_line_prints_before_the_run_fails(self):
+        """Behavior check: with the switch off the script reports it on stdout
+        before it fails on the missing model (no syscall happens)."""
+        env = dict(os.environ, MLX_OMARCHY_UCLAMP_MIN="0", HF_HUB_OFFLINE="1")
+        r = subprocess.run([sys.executable, str(SCRIPT), "--model", "/nonexistent/model-dir",
+                            "--prompt", "p", "--tokens", "8"],
+                           capture_output=True, text=True, timeout=120, env=env, check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("uclamp: MLX_OMARCHY_UCLAMP_MIN off or invalid", r.stdout)
 
 
 if __name__ == "__main__":

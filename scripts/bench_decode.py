@@ -255,6 +255,14 @@ def main():
     if args.wheel and not Path(args.wheel).is_file():
         print(f"ERROR: --wheel {args.wheel} does not exist", file=sys.stderr)
         sys.exit(2)
+    # Same placement as the serve entry: clamp this thread BEFORE mlx starts its
+    # stream threads, so they inherit uclamp_min (MLX_OMARCHY_UCLAMP_MIN, 0 = off).
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "serve"))
+    try:
+        from mlx_omarchy_serve.perf_placement import apply_from_env
+        print("uclamp: " + apply_from_env()[1])
+    except ImportError:
+        print("uclamp: perf_placement not found, no clamp")
     # Provenance gate: no number leaves this process without the identity
     # of the binary that produced it. Runs BEFORE any mlx import so a
     # lying environment refuses instead of measuring.
