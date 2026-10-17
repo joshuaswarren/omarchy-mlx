@@ -69,8 +69,8 @@ fetch_patch_assets() {
   done
 }
 
-# --patch-venv: apply the vendored mlx-lm serve patches to an EXISTING venv —
-# the release-wheel path of docs/INSTALL.md, and the Muse quick start, which
+# --patch-venv: apply the vendored mlx-lm serve patches to an EXISTING venv.
+# It serves the release-wheel path of docs/INSTALL.md and the Muse quick start, which
 # upgrades the installer venv to mlx-lm 0.32.0 after the install patched it as
 # 0.31.3. Runs with the installer's own download logic and before the hardware
 # and interpreter gates: patching only edits mlx-lm's .py files, so it also
@@ -78,6 +78,7 @@ fetch_patch_assets() {
 apply_to_existing_venv() {
   local target="${1:-}"
   [[ -n "$target" && -d "$target" ]] || die "usage: install.sh --patch-venv /path/to/existing/venv"
+  mkdir -p "$PREFIX"
   resolve_release "Patching from"
   fetch_patch_assets
   say "Patching mlx-lm in $target (vendored serve patches)"

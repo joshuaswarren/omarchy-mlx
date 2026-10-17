@@ -190,6 +190,39 @@ def test_fetch_covers_both_series():
     assert 'grep -oE \'mlx-lm-[a-z0-9-]+\\.patch\'' in fetch
 
 
+def test_patch_venv_creates_a_missing_prefix(tmp_path):
+    """The release-wheel path has no earlier installer step, so the install
+    prefix does not exist. --patch-venv must create it and lay out the apply
+    script, both patch series and the helper scripts under it (curl exit 23
+    'Failure writing output' before the fix). The curl shim serves the same
+    release-tag paths out of this checkout; no network."""
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "curl"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        "url=; out=\n"
+        'while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; http*) url=$1 ;; esac; shift; done\n'
+        'rel=${url#https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/vtest/}\n'
+        f'src={REPO}/$rel\n'
+        '[ -f "$src" ] || exit 22\n'
+        'cp "$src" "$out"\n')
+    shim.chmod(0o755)
+    venv = tmp_path / "venv"
+    venv.mkdir()
+    prefix = tmp_path / "no-such-prefix"
+    env = {"PATH": f"{shim_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
+           "MLX_OMARCHY_HOME": str(prefix), "MLX_OMARCHY_VERSION": "vtest"}
+    r = subprocess.run(["bash", str(INSTALLER), "--patch-venv", str(venv)],
+                       capture_output=True, text=True, env=env, timeout=120, check=False)
+    # The apply step itself fails on an empty venv; what matters is the fetch.
+    assert "Failure writing output" not in r.stderr + r.stdout, r.stderr[-300:]
+    assert (prefix / "apply-mlx-lm-patches.sh").is_file(), r.stdout[-300:] + r.stderr[-300:]
+    assert list((prefix / "patches").glob("mlx-lm-*.patch")), "flat series missing"
+    assert list((prefix / "patches" / "mlx-lm-0.32").glob("mlx-lm-*.patch")), "0.32 series missing"
+    assert (prefix / "scripts").is_dir()
+
+
 def test_release_wheel_doc_ends_with_the_patch_command():
     section = INSTALL_DOC.read_text().split("## From a release wheel", 1)[1]
     section = section.split("\n## ", 1)[0]
