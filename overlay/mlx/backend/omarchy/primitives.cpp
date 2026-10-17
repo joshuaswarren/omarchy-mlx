@@ -9907,10 +9907,11 @@ void Real::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_complex_extract(name(), 0, inputs, out, out.primitive().stream());
 }
 
-// MLX_OMARCHY_ROW_REDUCE=1 turns the workgroup-per-row suffix reduction on.
+// The workgroup-per-row suffix reduction is on unless MLX_OMARCHY_ROW_REDUCE=0
+// (read on every call).
 bool omarchy_row_reduce_enabled() {
   const char* value = std::getenv("MLX_OMARCHY_ROW_REDUCE");
-  return value != nullptr && std::string(value) == "1";
+  return value == nullptr || std::string(value) != "0";
 }
 
 void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -10011,7 +10012,8 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   // shorter than 256 keep the serial kernels, which waste fewer invocations.
   // Max and Min stay on the serial kernels: the tree combines equal values
   // in a different order, so a tie between +0 and -0 could return the other
-  // zero. Default off; MLX_OMARCHY_ROW_REDUCE=1 turns the route on.
+  // zero. Default on since this change; MLX_OMARCHY_ROW_REDUCE=0 restores the
+  // serial kernels.
   if (omarchy_row_reduce_enabled() && float_dtype &&
       out.dtype() == input.dtype() && input.flags().row_contiguous &&
       reduce_type == Reduce::Sum) {

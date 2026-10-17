@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Workgroup-per-row suffix reduction (shaders/reduce_row.comp, routed by
-// Reduce::eval_gpu when MLX_OMARCHY_ROW_REDUCE=1). The gate is numeric:
+// Reduce::eval_gpu unless MLX_OMARCHY_ROW_REDUCE=0). The gate is numeric:
 //   - Sum error against a float64 reference of the stored input values stays
 //     inside a float32 accumulation bound, for float32, float16 and bfloat16
 //     storage, at the decode widths 8192, 2816 and 5120 and at batched rows;
@@ -269,4 +269,50 @@ TEST_CASE("row reduce: rows shorter than 256 keep the serial route") {
   std::vector<float> data = make_values(static_cast<size_t>(4) * 255, 21u);
   array x = array(data.data(), Shape{4, 255}, float32);
   CHECK(same_bytes(run(x, {1}, 0, true, stream), run(x, {1}, 0, false, stream)));
+}
+
+// The route is the default. With the variable unset, or set to anything but "0", a float Sum
+// takes the workgroup-per-row kernel (the same bytes as MLX_OMARCHY_ROW_REDUCE=1); "0" restores
+// the serial kernels (the old bytes). Rows shorter than 256 and Max keep the serial route in every state.
+TEST_CASE("row reduce: on by default, MLX_OMARCHY_ROW_REDUCE=0 restores the serial route") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto run_env = [&](const array& x, int op, const char* value) {
+    if (value == nullptr) {
+      unsetenv("MLX_OMARCHY_ROW_REDUCE");
+    } else {
+      setenv("MLX_OMARCHY_ROW_REDUCE", value, 1);
+    }
+    array r = op == 0 ? sum(x, {2}, false, stream) : max(x, {2}, false, stream);
+    array f = astype(r, float32, stream);
+    f.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const float* p = f.data<float>();
+    std::vector<float> out(p, p + f.size());
+    unsetenv("MLX_OMARCHY_ROW_REDUCE");
+    return out;
+  };
+  for (Dtype dtype : {float32, bfloat16}) {
+    // 5 rows of 8192: the tree and the serial walk associate differently, so the bytes differ somewhere.
+    std::vector<float> data = make_values(static_cast<size_t>(5) * 8192, 31u);
+    array x = astype(array(data.data(), Shape{1, 5, 8192}, float32), dtype, stream);
+    std::vector<float> dflt = run_env(x, 0, nullptr);
+    std::vector<float> one = run_env(x, 0, "1");
+    std::vector<float> zero = run_env(x, 0, "0");
+    std::vector<float> other = run_env(x, 0, "yes");
+    CHECK(same_bytes(dflt, one));
+    CHECK(same_bytes(dflt, other));
+    // A bfloat16 output rounds both associations to the same value most of the time, so only the float32 sum must differ.
+    if (dtype == float32) {
+      CHECK_FALSE(same_bytes(dflt, zero));
+    }
+    // Max never takes the row route.
+    CHECK(same_bytes(run_env(x, 1, nullptr), run_env(x, 1, "0")));
+  }
+  // Rows shorter than 256: the serial route in every state.
+  std::vector<float> small = make_values(static_cast<size_t>(4) * 255, 33u);
+  array y = array(small.data(), Shape{1, 4, 255}, float32);
+  CHECK(same_bytes(run_env(y, 0, nullptr), run_env(y, 0, "0")));
 }

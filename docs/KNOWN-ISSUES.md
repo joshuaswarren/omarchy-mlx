@@ -53,6 +53,28 @@ every driver except NVIDIA proprietary. The test still prints its
 ratio for every run, so a per-driver floor can be set from
 collected numbers. AMD (RADV) is untested.
 
+## Sum over a long row: row-reduce route, on by default
+
+A float32, float16 or bfloat16 Sum over a row-contiguous suffix of at least 256 elements runs one 256-wide workgroup per output row with a fixed shared-memory tree (`shaders/reduce_row.comp`). `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels, which gave one invocation a whole row. Max and Min are not affected.
+
+The sum associates differently, so its bits can differ from the serial kernel in the last places. A model whose graph computes a mean or a sum over a long float row outside a fused kernel produces different bits. Muse Spark Open is such a model. Its norm takes the mean of a (1, 1, 8192) float32 tensor. The model code of gemma3n, kimi_k3 and minimax also computes a sum or mean over the last axis of a float tensor.
+
+The route is the default. `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels.
+
+Models that change output are those whose graph reduces a float row of 256 or more elements with a Sum that is not inside a fused kernel. The whole-process dispatch profiles of Qwen3.5-9B and Qwen3.8-27B on an M2 Max, prefill and decode, contain no Reduce dispatch of any kind, so the route is not reached. The sums in the gemma-4 text generation path, qwen3-next, qwen3-moe, gpt-oss and deepseek model code run over the expert axis, over the top-k width (fewer than 256 elements) or over integers. The route needs the trailing axes and a float type, so those sums do not take it. The embedding-norm check in gemma-4 that runs when input embeddings are supplied sums over the last axis.
+
+On Muse Spark Open, a teacher-forced run over three passages of 255 tokens each gave these mean differences in negative log-likelihood per token (route on minus route off, in nats).
+
+| Passage | Off | On | Difference | Standard error |
+| --- | --- | --- | --- | --- |
+| GPL v3 | 0.13535 | 0.13309 | -0.00226 | 0.0055 |
+| Apache 2 | 0.25747 | 0.24504 | -0.01244 | 0.0108 |
+| README | 2.86670 | 2.87443 | +0.00773 | 0.0133 |
+
+On Apache 2 the difference of -0.01244 is outside the registered bound of 0.01.
+
+The route's unit test, `omarchy_reduce_row_tests` (6 cases, 216 assertions), passes on the 13-inch M1, the 16-inch M1 Max and the 14-inch M2 Max. It checks float32, float16 and bfloat16 rows of 256 to 70001 elements against a long double sum, and checks that Max and Min keep the serial route. The measurements, commands and run procedure are in `receipts/2026-10-17-row-reduce-default/`.
+
 ## gather_qmm word-per-lane route: developer switch, numerics verdict REJECT
 
 A word-per-lane decode kernel for `gather_qmm` (bf16, 4-bit, group 64, one row per index, 32-lane subgroup) is built into the backend and stays off. `MLX_OMARCHY_GATHER_QMM_WORD=1` is a developer switch and is not a supported setting.
