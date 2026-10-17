@@ -35,8 +35,8 @@ timeout 900 $PYTHON run_clamped.py MODE bench_decode.py --model MODEL --prompt P
 
 Both machines ran kernel 7.1.12-2-20261013.18-sep-ARCH, and the mlx-omarchy tree of each passed `mlx_provenance.py` with `verified=match`.
 
-- 13-inch M1: boot `7c94b356`, tree 0.32.4.dev202610102357+e57cb301, libmlx sha256 prefix `9a225264dcf2dbcb`. Run window 2026-10-17 UTC: E4B 03:53 to 04:01, 9B 04:01 to 04:09.
-- M2 Max: boot `54e956a9`, tree 0.32.4.dev202610161042+75cc013b, libmlx sha256 prefix `3f6d0a63405aa6f7`. Run window 2026-10-17 UTC: 04:26 to 04:34.
+- 13-inch M1: tree 0.32.4.dev202610102357+e57cb301, libmlx sha256 prefix `9a225264dcf2dbcb`. Run window 2026-10-17 UTC: E4B 03:53 to 04:01, 9B 04:01 to 04:09.
+- M2 Max: tree 0.32.4.dev202610161042+75cc013b, libmlx sha256 prefix `3f6d0a63405aa6f7`. Run window 2026-10-17 UTC: 04:26 to 04:34.
 - Model gemma-4-E4B: `mlx-community/gemma-4-e4b-it-4bit`, snapshot `475b9088d29754a3379866cf5aeb6b41acd313c2`. Run on the 13-inch M1 only.
 - Model Qwen3.5-9B: `mlx-community/Qwen3.5-9B-4bit`, snapshot `8b2b98c00a6b4d291155e4890773ca8f769aee53`. Run on both machines.
 

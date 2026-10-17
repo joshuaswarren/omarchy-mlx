@@ -1,5 +1,5 @@
 CLAMP clamp-9b-20261017T040115Z 04:01:25 waited 10s for load1 to settle (now 0.43)
-CLAMP clamp-9b-20261017T040115Z 04:01:25 start key 9b model mlx-community/Qwen3.5-9B-4bit boot 7c94b356 kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.43 tree main81 tokens 128 rounds 4
+CLAMP clamp-9b-20261017T040115Z 04:01:25 start key 9b model mlx-community/Qwen3.5-9B-4bit kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.43 tree main81 tokens 128 rounds 4
 CLAMP clamp-9b-20261017T040115Z 04:01:25 found governors: policy0=performance policy4=performance 
 CLAMP clamp-9b-20261017T040115Z 04:01:25 sha256 prefixes: script 6669a1c70f15c304 bench_decode f5062d88f34b0845 run_clamped 9249ca2a2ec08145
 CLAMP clamp-9b-20261017T040115Z 04:01:25 libmlx 9a225264dcf2dbcb from $TREE
