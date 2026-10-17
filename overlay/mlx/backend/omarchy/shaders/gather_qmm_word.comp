@@ -1,0 +1,168 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Word-per-lane gathered affine quantized matvec (decode shape m == 1,
+// bf16, 4-bit, group 64, transposed weights), arrays bound in place.
+//
+// gather_qmm_sub.comp gives a workgroup one output element and a lane one
+// weight element per step: four loads (weight word, scale, bias, x) per
+// weight. This kernel is built like qmm_vec.comp's QMM_VEC_Q4_WORD: a
+// 32-lane slot owns one output element, lane l owns word l, l + 32, ... of
+// the K row (eight weights, one uvec4 x load, one scale, one bias), the
+// word's dot and x-sum follow the dense kernel's Q4_WORD chain, the slot
+// reduces with subgroupAdd. The expert comes from the rhs index array, the
+// x row from the lhs index array. Like the dense kernel, a lane owns two
+// consecutive words per 512-wide block when K % 512 == 0 and N % 8 == 0
+// (the qmv_fast tile) and one word otherwise, so the result equals
+// quantized_matmul on the selected expert's slice bit for bit at every K.
+//
+// Bindings: 0 x (uvec4 view, 16-byte aligned rows), 1 scales, 2 weights,
+// 3 output, 4 biases, 5 lhs indices, 6 rhs indices. Word/element offsets of
+// each array ride in push-constant fields: shape[2] / shape[3] the scales /
+// biases element offsets, in_strides[0] / out_strides[0] the lhs / rhs
+// index word offsets, lhs_offset the x element offset (multiple of 8),
+// rhs_offset the weight word offset.
+
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+const uint SLOTS = 4u;
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  uvec4 values[];
+} input_x;
+layout(set = 0, binding = 1, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 2, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+layout(set = 0, binding = 4, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+layout(set = 0, binding = 5, std430) readonly buffer LhsIndex {
+  uint values[];
+} lhs_index;
+layout(set = 0, binding = 6, std430) readonly buffer RhsIndex {
+  uint values[];
+} rhs_index;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+// bf16 x quad: two words of the uvec4 carry four halves, low first; the
+// left shift by 16 is exact (qmm_vec.comp Q4_QUAD_LOAD).
+#define Q4_QUAD_LOAD(lo, hi) \
+  float x0 = uintBitsToFloat(((lo) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((lo) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((hi) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((hi) & 0xFFFF0000u); \
+  input_sum += ((x0 + x1) + x2) + x3;
+// Exact float(n) for a nibble n in [0, 15] (qmm_vec.comp Q4_NIB).
+#define Q4_NIB(p, shift) \
+  (uintBitsToFloat((((p) >> (shift)) & 0xfu) | 0x4B000000u) - 8388608.0)
+#define Q4_QUAD(packed, a, b) { \
+  Q4_QUAD_LOAD(a, b) \
+  uint p = (packed); \
+  dot += fma(x3, Q4_NIB(p, 12u), \
+      fma(x2, Q4_NIB(p, 8u), \
+          fma(x1, Q4_NIB(p, 4u), \
+              x0 * Q4_NIB(p, 0u)))); \
+}
+// One packed weight word and its eight x values: the dense kernel's Q4_WORD.
+#define Q4_WORD_AT(widx) { \
+  uint word_value = input_w.values[w_base + (widx)]; \
+  uvec4 x_words = input_x.values[(x_row + (widx) * 8u) / 8u]; \
+  Q4_QUAD(word_value, x_words.x, x_words.y) \
+  Q4_QUAD(word_value >> 16u, x_words.z, x_words.w) \
+}
+// Block epilogue (every word of a lane's block sits in one group).
+#define Q4_BLOCK_FINISH(widx) { \
+  uint group = (widx) / 8u; \
+  float scale = LOAD_VALUE(scales.values[s_base + group]); \
+  float bias = LOAD_VALUE(biases.values[b_base + group]); \
+  precise float bias_term = input_sum * bias; \
+  accumulator += fma(scale, dot, bias_term); \
+}
+
+void main() {
+  uint slot = gl_LocalInvocationID.x / 32u;
+  uint lane = gl_LocalInvocationID.x % 32u;
+  uint k = params.matrix_k;
+  uint n = params.matrix_n;
+  uint words_per_row = k / 8u;
+  uint groups_per_row = k / 64u;
+  uint group_index = gl_WorkGroupID.x + gl_WorkGroupID.z * 65535u;
+  uint index = group_index * SLOTS + slot;
+  // Slots past the output count still join the subgroup reduction.
+  bool live = index < params.count;
+  precise float accumulator = 0.0;
+  if (live) {
+    uint batch = index / n;
+    uint column = index - batch * n;
+    uint lhs = lhs_index.values[params.in_strides[0] + batch];
+    uint rhs = rhs_index.values[params.out_strides[0] + batch];
+    uint x_row = params.lhs_offset + lhs * k;
+    uint w_base = params.rhs_offset + (rhs * n + column) * words_per_row;
+    uint s_base = params.shape[2] + (rhs * n + column) * groups_per_row;
+    uint b_base = params.shape[3] + (rhs * n + column) * groups_per_row;
+    if (k % 512u == 0u && n % 8u == 0u) {
+      for (uint w = lane * 2u; w < words_per_row; w += 64u) {
+        precise float dot = 0.0;
+        precise float input_sum = 0.0;
+        Q4_WORD_AT(w)
+        Q4_WORD_AT(w + 1u)
+        Q4_BLOCK_FINISH(w)
+      }
+    } else {
+      for (uint w = lane; w < words_per_row; w += 32u) {
+        precise float dot = 0.0;
+        precise float input_sum = 0.0;
+        Q4_WORD_AT(w)
+        Q4_BLOCK_FINISH(w)
+      }
+    }
+  }
+  float total = subgroupAdd(accumulator);
+  if (live && gl_SubgroupInvocationID == 0u) {
+    output_data.values[params.output_offset + index] = bf16_store(total);
+  }
+}

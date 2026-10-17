@@ -1034,6 +1034,8 @@ enum class ComputeKernel : uint16_t {
   ReduceRowF32,
   ReduceRowF16,
   ReduceRowBF16,
+  // Word-per-lane gathered 4-bit group-64 decode (bf16, one 32-lane slot per output element).
+  GatherQmmWordBF16,
   Count,
 };
 

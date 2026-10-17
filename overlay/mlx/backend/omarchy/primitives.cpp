@@ -3412,6 +3412,41 @@ void dispatch_gather_qmm(
         binding(*biases_d),
         binding(lhs_d),
         binding(rhs_d)};
+    // Word-per-lane kernel (shaders/gather_qmm_word.comp): bf16, 4-bit, group 64.
+    // One 32-lane slot per output element, scales and biases addressed in 16-bit
+    // elements, x read as uvec4 (x element offset a multiple of 8). It runs the
+    // dense qmv's per-word arithmetic, so each output equals quantized_matmul on
+    // the selected expert's slice bit for bit. Opt-in: MLX_OMARCHY_GATHER_QMM_WORD=1
+    // enables it. Default off, so the 8-output element kernel below stays the route:
+    // the teacher-forced NLL gate against it gave verdict REJECT (see the PR).
+    const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
+    if (!use_sub_q3 && bits == 4 && group_size == 64 &&
+        out.dtype() == bfloat16 && word_env != nullptr && word_env[0] == '1' &&
+        params.lhs_offset % 8 == 0) {
+      const auto& word_caps = encoder.device().capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          word_caps,
+          word_caps.subgroup_size == 32u &&
+              (word_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u,
+          "GatherQmmWord*",
+          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+           (encoder.device().hardware_capabilities().subgroup_operations &
+            VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+      params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 2);
+      params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 2);
+      const uint32_t word_groups = (params.count + 3u) / 4u;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::GatherQmmWordBF16,
+          direct_bindings,
+          params,
+          std::min(word_groups, omarchy::kMaxComputeGroupCountX),
+          1u,
+          (word_groups + omarchy::kMaxComputeGroupCountX - 1) /
+              omarchy::kMaxComputeGroupCountX);
+      return;
+    }
     // Multi-output form: ROWS outputs per workgroup, bit-identical per output
     // (shaders/gather_qmm_sub.comp ROWS_PER_WG). Transposed layout only, and N a
     // multiple of ROWS so a group never crosses a row, a batch or an expert.
