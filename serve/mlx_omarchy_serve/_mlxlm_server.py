@@ -552,13 +552,6 @@ def main() -> None:
     if limit <= 0:
         print(f"error: {LIMIT_ENV} must be positive", file=sys.stderr)
         raise SystemExit(3)
-    # Serving placement, step 1: clamp THIS thread before mlx and mlx_lm start
-    # their stream threads, so every thread they create inherits uclamp_min.
-    try:
-        from .perf_placement import apply_from_env
-    except ImportError:
-        from perf_placement import apply_from_env
-    early_applied, early_detail = apply_from_env()
     try:
         import mlx_lm.server as server_module
     except ImportError as exc:
@@ -602,14 +595,17 @@ def main() -> None:
 
         traced_pct._omarchy_ttft_wrapped = True
         server_module._process_control_tokens = traced_pct
-    # Serving placement, step 2 (no root): clamp every thread that already
-    # exists. MLX evaluates and submits to the GPU on its stream threads, and a
-    # thread started before step 1 (or by a library that spawns early) would
-    # keep the stock clamp. Silent fallback: EPERM / old kernel / off switch
-    # -> serving is unchanged.
-    applied, detail = apply_from_env(all_threads=True)
+    # Serving placement (no root): raise uclamp_min on THIS startup thread
+    # before the HTTP server and decode threads spawn, so every serving
+    # thread inherits the P-cluster boost hint (stock governors). Silent
+    # fallback: EPERM / old kernel / off switch -> serving is unchanged.
+    try:
+        from .perf_placement import apply_from_env
+    except ImportError:
+        from perf_placement import apply_from_env
+    applied, detail = apply_from_env()
     print(f"shim: uclamp placement {'applied' if applied else 'skipped'} "
-          f"(start: {early_detail}; all threads: {detail})", file=sys.stderr, flush=True)
+          f"({detail})", file=sys.stderr, flush=True)
     server_module.main()
 
 

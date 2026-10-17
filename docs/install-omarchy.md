@@ -196,7 +196,11 @@ other value sets the clamp. Some kernels refuse the call
 then logs one stderr line and serves unchanged. Measured A/B on both Macs
 with the published v0.7.14 wheel. Prefill gained +1.0 to 2.3 % by route.
 First-token rate gained +0.3 to 2.7 %.
-Decode was unchanged, and greedy digests were identical everywhere. The w71
+Decode was unchanged for the 2B model in that A/B, and greedy digests were identical
+everywhere. Decode depends on the model. On the 13-inch M1 under `schedutil`,
+gemma-4-E4B decodes at 10.6 tok/s without the clamp and 15.3 tok/s with it.
+Qwen3.5-9B was flat on the 13-inch and on the M2 Max. The clamp reaches decode
+when the calling thread is clamped, before or after the imports. The w71
 lane's ≥6 % first-token numbers were taken against an idle-decayed P
 cluster. That machine state did not recur in this A/B. The
 power-profiles-daemon route this replaces cannot work on Apple Silicon.
