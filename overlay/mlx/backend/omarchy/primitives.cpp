@@ -9865,17 +9865,18 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     }
   }
 
-  // Workgroup-per-row route (reduce_row.comp): a float Sum, Max or Min over
-  // a row-contiguous suffix with one 256-wide workgroup per output row and a
+  // Workgroup-per-row route (reduce_row.comp): a float Sum over a
+  // row-contiguous suffix with one 256-wide workgroup per output row and a
   // fixed shared-memory tree. The serial kernels below give one invocation a
   // whole row, which costs about 0.9 ms for one row of 8192 float32 values
   // (every batch 1 decode norm, mean and variance over the last axis). Rows
   // shorter than 256 keep the serial kernels, which waste fewer invocations.
-  // Default off; MLX_OMARCHY_ROW_REDUCE=1 turns the route on.
+  // Max and Min stay on the serial kernels: the tree combines equal values
+  // in a different order, so a tie between +0 and -0 could return the other
+  // zero. Default off; MLX_OMARCHY_ROW_REDUCE=1 turns the route on.
   if (omarchy_row_reduce_enabled() && float_dtype &&
       out.dtype() == input.dtype() && input.flags().row_contiguous &&
-      (reduce_type == Reduce::Sum || reduce_type == Reduce::Max ||
-       reduce_type == Reduce::Min)) {
+      reduce_type == Reduce::Sum) {
     int first_row_axis = input.ndim() - static_cast<int>(axes.size());
     bool row_suffix = first_row_axis >= 0;
     size_t row_reduce_size = 1;
@@ -9889,13 +9890,13 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (row_suffix && row_reduce_size >= 256 &&
         row_reduce_size <= (size_t(1) << 30) && out.size() > 0 &&
         input.size() > 0) {
+      // The same float capability gate the general path applies below.
+      require_float_input(operation_name, input, out, encoder);
       out.set_data(allocate_omarchy(out.nbytes()));
       uint32_t output_size = checked_u32(out.size(), operation_name, out);
       omarchy::ComputeParams params;
       params.count = output_size;
-      params.operation = reduce_type == Reduce::Sum ? 0u
-          : reduce_type == Reduce::Min              ? 2u
-                                                    : 3u;
+      params.operation = 0u;
       params.reduce_size = static_cast<uint32_t>(row_reduce_size);
       params.output_size = output_size;
       params.lhs_offset =
