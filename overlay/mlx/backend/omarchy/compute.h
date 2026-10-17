@@ -1048,6 +1048,8 @@ enum class ComputeKernel : uint16_t {
   LogSumExpCombineF32,
   LogSumExpCombineF16,
   LogSumExpCombineBF16,
+  // Default-order GDN decode with the native GQA key-head index (gated_delta_decode.comp -DGDN_NATIVE_GQA_INDEX), appended so earlier ids do not move.
+  GatedDeltaDecodeBF16Gqa,
   Count,
 };
 
