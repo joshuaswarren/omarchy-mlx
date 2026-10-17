@@ -6370,8 +6370,18 @@ TEST_CASE("6-bit affine decode matches a host reference at 1 to 17 rows") {
   }
 }
 
-// bf16 4-bit group-64 transposed gather_qmm at one row per index (the decode shape) takes the
-// word-per-lane kernel on a 32-lane subgroup device. Each selected expert's output equals
+struct GatherQmmWordGate {
+  GatherQmmWordGate() {
+    setenv("MLX_OMARCHY_GATHER_QMM_WORD", "1", 1);
+  }
+  ~GatherQmmWordGate() {
+    unsetenv("MLX_OMARCHY_GATHER_QMM_WORD");
+  }
+};
+
+// The route is opt-in (MLX_OMARCHY_GATHER_QMM_WORD=1). Then bf16 4-bit group-64 transposed
+// gather_qmm at one row per index (the decode shape) takes the word-per-lane kernel on a
+// 32-lane subgroup device. Each selected expert's output equals
 // quantized_matmul on that expert's slice bit for bit there. K 640 and K 1024 with N 12 take the
 // one-word tile of the dense kernel, K 1024 with N 16 the two-word tile; N 21 makes the output
 // count (105) not a multiple of the 4 outputs a workgroup owns. An x view that starts 4 elements
@@ -6382,6 +6392,7 @@ TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected exp
     return;
   }
   Stream stream = gpu_stream();
+  GatherQmmWordGate word_route_on;
   const auto& caps = omarchy::device(0).capabilities();
   const bool subgroup_ready = caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;

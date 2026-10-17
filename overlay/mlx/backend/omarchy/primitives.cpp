@@ -3416,11 +3416,12 @@ void dispatch_gather_qmm(
     // One 32-lane slot per output element, scales and biases addressed in 16-bit
     // elements, x read as uvec4 (x element offset a multiple of 8). It runs the
     // dense qmv's per-word arithmetic, so each output equals quantized_matmul on
-    // the selected expert's slice bit for bit. MLX_OMARCHY_GATHER_QMM_WORD=0
-    // selects the 8-output element kernel below.
+    // the selected expert's slice bit for bit. Opt-in: MLX_OMARCHY_GATHER_QMM_WORD=1
+    // enables it. Default off, so the 8-output element kernel below stays the route:
+    // the teacher-forced NLL gate against it gave verdict REJECT (see the PR).
     const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
     if (!use_sub_q3 && bits == 4 && group_size == 64 &&
-        out.dtype() == bfloat16 && (word_env == nullptr || word_env[0] != '0') &&
+        out.dtype() == bfloat16 && word_env != nullptr && word_env[0] == '1' &&
         params.lhs_offset % 8 == 0) {
       const auto& word_caps = encoder.device().capabilities();
       omarchy::capsim::require_backed(
