@@ -64,6 +64,8 @@ PER_TOKEN_RE = re.compile(r"decode mean per-token ([0-9.]+) ms")
 PROV_LINE_RE = re.compile(r"provenance: (.+)")
 IDS_RE = re.compile(r"generated_ids sha256:([0-9a-f]+) n=(\d+)")
 PROMPT_TOKENS_RE = re.compile(r"prompt_tokens (\d+)")
+# bench_decode.py prints "uclamp: <outcome>" before the provenance line.
+UCLAMP_RE = re.compile(r"^uclamp: (.+)$")
 
 
 def sanitize(text, home=None):
@@ -492,7 +494,7 @@ def parse_bench_output(stdout):
     m = {"decode_tok_s": None, "decode_tokens": None, "requested_tokens": None,
          "prefill_s": None, "decode_mean_per_token_ms": None,
          "provenance_line": None, "generated_ids_sha256_16": None,
-         "generated_ids_n": None, "prompt_tokens": None}
+         "generated_ids_n": None, "prompt_tokens": None, "uclamp": None}
     result_json = None
     for line in stdout.splitlines():
         if result_json is None and line.startswith("{"):
@@ -506,6 +508,7 @@ def parse_bench_output(stdout):
                                  (PREFILL_RE, "prefill_s", float),
                                  (PER_TOKEN_RE, "decode_mean_per_token_ms", float),
                                  (PROV_LINE_RE, "provenance_line", str),
+                                 (UCLAMP_RE, "uclamp", str),
                                  (IDS_RE, None, str),
                                  (PROMPT_TOKENS_RE, None, str)):
             hit = regex.search(line)
@@ -814,6 +817,15 @@ def self_test():
     assert m["provenance_line"].startswith("mlx-omarchy")
     assert m["generated_ids_sha256_16"] == "0123456789abcdef"
     assert m["generated_ids_n"] == 64
+    assert m["uclamp"] is None  # no uclamp line: an older bench_decode.py
+
+    # The clamp outcome is persisted: applied, switched off, or refused.
+    for line, want in (("uclamp: uclamp_min=1024", "uclamp_min=1024"),
+                       ("uclamp: MLX_OMARCHY_UCLAMP_MIN off or invalid",
+                        "MLX_OMARCHY_UCLAMP_MIN off or invalid"),
+                       ("uclamp: perf_placement not found, no clamp",
+                        "perf_placement not found, no clamp")):
+        assert parse_bench_output(line + "\n" + out)["uclamp"] == want, line
 
     # The JSON result line overrides the 3-decimal printed span: the
     # printed "prefill 0.512s" would quantize a 0.512345 s span.
