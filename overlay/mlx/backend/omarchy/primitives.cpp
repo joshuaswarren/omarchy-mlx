@@ -3312,6 +3312,28 @@ void dispatch_gather_qmm(
       (encoder.device().capabilities().subgroup_operations &
        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
       encoder.device().capabilities().storage_buffer_16bit_access;
+  // mxfp4 subgroup decode (gather_qmm_sub.comp -DFP_MODE): the routed experts of gpt-oss-20b are mxfp4
+  // (bits 4, group 32, e8m0 scale byte, e2m1 nibbles, transposed, no output global scale). Until this route they
+  // took only the scalar one-thread-per-output kernel. Same gate class as the affine subgroup kernel above;
+  // MLX_OMARCHY_GATHER_QMM_SUB=0 turns it off too. nvfp4 (group 16) and mxfp8 (bits 8) stay scalar.
+  bool use_sub_fp = false;
+  if (fp_mode && m == 1 && transpose && bits == 4u && group_size == 32u && !out_global_scale) {
+    const char* sub_fp_env = std::getenv("MLX_OMARCHY_GATHER_QMM_SUB");
+    const auto& fp_caps = encoder.device().capabilities();
+    const auto& fp_hw = encoder.device().hardware_capabilities();
+    use_sub_fp = (sub_fp_env == nullptr || sub_fp_env[0] != '0') &&
+        fp_caps.subgroup_size == 32u &&
+        (fp_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+        fp_caps.storage_buffer_16bit_access;
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        fp_caps,
+        use_sub_fp,
+        "GatherQmmNbSubFp*",
+        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+        (fp_hw.subgroup_size == 32u &&
+         (fp_hw.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u));
+  }
   // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
   // passes x as [B, 1, K] with the expert id per row sorted, so m == 1 and
   // every row of a run re-reads the same expert's weights in the kernels
@@ -3536,11 +3558,14 @@ void dispatch_gather_qmm(
   }
   if (fp_mode) {
     if (out.dtype() == float32) {
-      kernel = omarchy::ComputeKernel::GatherQmmNbFpF32;
+      kernel = use_sub_fp ? omarchy::ComputeKernel::GatherQmmNbSubFpF32
+                          : omarchy::ComputeKernel::GatherQmmNbFpF32;
     } else if (out.dtype() == float16) {
-      kernel = omarchy::ComputeKernel::GatherQmmNbFpF16;
+      kernel = use_sub_fp ? omarchy::ComputeKernel::GatherQmmNbSubFpF16
+                          : omarchy::ComputeKernel::GatherQmmNbFpF16;
     } else {
-      kernel = omarchy::ComputeKernel::GatherQmmNbFpBF16;
+      kernel = use_sub_fp ? omarchy::ComputeKernel::GatherQmmNbSubFpBF16
+                          : omarchy::ComputeKernel::GatherQmmNbFpBF16;
     }
   } else if (out.dtype() == float32) {
     kernel = no_bias
@@ -3565,12 +3590,12 @@ void dispatch_gather_qmm(
       kernel,
       bindings,
       params,
-      use_sub ? std::min(params.count, omarchy::kMaxComputeGroupCountX)
-              : omarchy::compute_dispatch_group_count(params.count),
+      (use_sub || use_sub_fp) ? std::min(params.count, omarchy::kMaxComputeGroupCountX)
+                              : omarchy::compute_dispatch_group_count(params.count),
       1u,
-      use_sub ? (params.count + omarchy::kMaxComputeGroupCountX - 1) /
-                    omarchy::kMaxComputeGroupCountX
-              : 1u);
+      (use_sub || use_sub_fp) ? (params.count + omarchy::kMaxComputeGroupCountX - 1) /
+                                    omarchy::kMaxComputeGroupCountX
+                              : 1u);
 }
 
 // Complex64Transport. Keep in lockstep with the switch in

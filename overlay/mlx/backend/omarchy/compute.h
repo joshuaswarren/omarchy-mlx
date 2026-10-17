@@ -1026,6 +1026,10 @@ enum class ComputeKernel : uint16_t {
   QmmVec6C1R8F16,
   QmmVec6C4R1BF16,
   QmmVec6C1R8BF16,
+  // mxfp4 subgroup decode (gather_qmm_sub.comp -DFP_MODE): appended so earlier ids do not move.
+  GatherQmmNbSubFpF32,
+  GatherQmmNbSubFpF16,
+  GatherQmmNbSubFpBF16,
   Count,
 };
 

@@ -5972,6 +5972,115 @@ TEST_CASE("gather_qmm multi-output decode rows give the one-output kernel's outp
   }
 }
 
+TEST_CASE("gather_qmm mxfp4 decode: the subgroup kernel matches the scalar kernel and a host reference") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  // The scalar kernel is checked against the host reference on every device. The subgroup kernel only where the route exists.
+  const bool has_sub = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+      caps.storage_buffer_16bit_access;
+  std::mt19937 gen(91);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::uniform_int_distribution<uint32_t> word_dist(0u, 0xFFFFFFFFu);
+  std::uniform_int_distribution<int> scale_dist(120, 132);
+  const int experts = 8;
+  const int index_count = 8;
+  const std::vector<uint32_t> rhs_v{3, 3, 7, 0, 7, 5, 3, 1};
+  struct Case {
+    Dtype dtype;
+    omarchy::ComputeKernel sub_kernel;
+    omarchy::ComputeKernel scalar_kernel;
+    double relative_tolerance;
+  };
+  const std::vector<Case> cases{
+      {bfloat16, omarchy::ComputeKernel::GatherQmmNbSubFpBF16, omarchy::ComputeKernel::GatherQmmNbFpBF16, 8e-3},
+      {float16, omarchy::ComputeKernel::GatherQmmNbSubFpF16, omarchy::ComputeKernel::GatherQmmNbFpF16, 2e-3},
+      {float32, omarchy::ComputeKernel::GatherQmmNbSubFpF32, omarchy::ComputeKernel::GatherQmmNbFpF32, 1e-4},
+  };
+  for (const Case& c : cases) {
+    if (c.dtype == float16 && !float16_available()) {
+      continue;
+    }
+    for (int k : {96, 320, 2880}) {
+      for (int n : {64, 100, 66}) {
+        std::vector<uint32_t> w_all(static_cast<size_t>(experts) * n * (k / 8));
+        for (auto& word : w_all) {
+          word = word_dist(gen);
+        }
+        std::vector<uint8_t> scale_all(static_cast<size_t>(experts) * n * (k / 32));
+        for (auto& byte : scale_all) {
+          byte = static_cast<uint8_t>(scale_dist(gen));
+        }
+        std::vector<float> x_all(static_cast<size_t>(index_count) * k);
+        for (auto& value : x_all) {
+          value = dist(gen);
+        }
+        array w_words(w_all.begin(), Shape{experts, n, k / 8}, uint32);
+        array scales(scale_all.begin(), Shape{experts, n, k / 32}, uint8);
+        array x = astype(array(x_all.begin(), Shape{index_count, 1, k}, float32), c.dtype, stream);
+        std::vector<uint32_t> lhs_v(index_count);
+        for (int b = 0; b < index_count; ++b) {
+          lhs_v[b] = static_cast<uint32_t>(b);
+        }
+        array lhs(lhs_v.begin(), Shape{index_count}, uint32);
+        array rhs(rhs_v.begin(), Shape{index_count}, uint32);
+        // The reference reads x as the dtype stored it.
+        std::vector<float> x_stored = readback_f32(stream, x);
+        std::vector<double> reference(static_cast<size_t>(index_count) * n);
+        double scale_of_output = 1e-6;
+        for (int b = 0; b < index_count; ++b) {
+          for (int col = 0; col < n; ++col) {
+            const size_t row = (static_cast<size_t>(rhs_v[b]) * n + col);
+            double sum = 0.0;
+            for (int kk = 0; kk < k; ++kk) {
+              uint32_t word = w_all[row * (k / 8) + kk / 8];
+              uint8_t code = static_cast<uint8_t>((word >> ((kk % 8) * 4)) & 0xFu);
+              float scale = host_e8m0_decode(scale_all[row * (k / 32) + kk / 32]);
+              sum += static_cast<double>(x_stored[static_cast<size_t>(b) * k + kk]) *
+                  static_cast<double>(scale * host_fp4_decode(code));
+            }
+            reference[static_cast<size_t>(b) * n + col] = sum;
+            scale_of_output = std::max(scale_of_output, std::abs(sum));
+          }
+        }
+        auto run = [&](const char* sub, int64_t expected_kernel) {
+          if (sub != nullptr) {
+            setenv("MLX_OMARCHY_GATHER_QMM_SUB", sub, 1);
+          } else {
+            unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+          }
+          array out = gather_qmm(x, w_words, scales, std::nullopt, lhs, rhs, true, 32, 4,
+              "mxfp4", std::nullopt, false, stream);
+          REQUIRE(evaluation_error(out).empty());
+          // Read the kernel before the readback: the readback dispatches its own cast.
+          const int64_t kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+          std::vector<float> values = readback_f32(stream, out);
+          unsetenv("MLX_OMARCHY_GATHER_QMM_SUB");
+          CHECK_EQ(kernel, expected_kernel);
+          return values;
+        };
+        INFO("dtype=" << c.dtype << " k=" << k << " n=" << n);
+        const std::vector<float> scalar = run("0", static_cast<int64_t>(c.scalar_kernel));
+        const std::vector<float> sub = has_sub ? run(nullptr, static_cast<int64_t>(c.sub_kernel)) : scalar;
+        REQUIRE_EQ(sub.size(), reference.size());
+        REQUIRE_EQ(scalar.size(), reference.size());
+        const double tolerance = c.relative_tolerance * scale_of_output;
+        double worst_sub = 0.0;
+        double worst_scalar = 0.0;
+        for (size_t i = 0; i < reference.size(); ++i) {
+          worst_sub = std::max(worst_sub, std::abs(static_cast<double>(sub[i]) - reference[i]));
+          worst_scalar = std::max(worst_scalar, std::abs(static_cast<double>(scalar[i]) - reference[i]));
+        }
+        CHECK_LE(worst_sub, tolerance);
+        CHECK_LE(worst_scalar, tolerance);
+      }
+    }
+  }
+}
+
 TEST_CASE("gather_qmm tile route stays off below four rows per expert") {
   if (!compute_available()) {
     return;

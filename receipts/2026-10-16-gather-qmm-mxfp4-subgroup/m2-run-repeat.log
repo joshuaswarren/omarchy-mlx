@@ -1,0 +1,41 @@
+FPSUB wheel mlx_omarchy-0.32.4.dev202610162253+2f8fc403-cp314-cp314-linux_aarch64.whl size 422344150 sha256 1d77ffcd8f85d648406902cccb0ca999ac4c6a2e3b3a4f85d955f16e8c9ab9e8
+FPSUB kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=1.01
+FPSUB tree libmlx sha256 a1b8ffa54ea3688ff6aa2e8923a903cce41648e7301721ee8a03a678198bd11f script 3cbae27b846753bd
+FPSUB tree holds GatherQmmNbSubFp: 1 line(s) with the name
+FPSUB run1 rc=0 load1_after=0.93
+FPSUB run1: libmlx loaded: ['$WORK/fpsub-tree/mlx/lib/libmlx.so']
+FPSUB run1: default device: Device(gpu, 0) mlx 0.32.4.dev202610162253+2f8fc403
+FPSUB run1: TIMES bfloat16 index_count 4 default: 1.890 1.859 1.853 1.854 1.858 1.204 0.993
+FPSUB run1: TIMES bfloat16 index_count 4 scalar: 4.147 3.820 3.832 3.810 3.807 3.784 3.803
+FPSUB run1: bfloat16 index_count 4: default ms 1.854 (min 0.993 max 1.890) err 1.525e+01 OK; scalar ms 3.810 (min 3.784 max 4.147) err 1.525e+01 OK; ref max 5606.50 tol 4.485e+01; speedup 2.06x; 24 layers x 3 calls x default = 133 ms, x scalar = 274 ms per token (expert matmuls only)
+FPSUB run1: TIMES bfloat16 index_count 64 default: 8.257 8.293 8.260 8.226 8.231 8.231 8.224
+FPSUB run1: TIMES bfloat16 index_count 64 scalar: 33.228 33.149 33.164 33.186 33.169 33.186 33.203
+FPSUB run1: bfloat16 index_count 64: default ms 8.231 (min 8.224 max 8.293) err 1.832e+01 OK; scalar ms 33.186 (min 33.149 max 33.228) err 1.832e+01 OK; ref max 8941.68 tol 7.153e+01; speedup 4.03x
+FPSUB run1: TIMES float16 index_count 4 default: 0.752 0.748 0.750 0.750 0.749 0.738 0.738
+FPSUB run1: TIMES float16 index_count 4 scalar: 3.785 3.795 3.779 3.782 3.800 3.781 3.791
+FPSUB run1: float16 index_count 4: default ms 0.749 (min 0.738 max 0.752) err 1.919e+00 OK; scalar ms 3.785 (min 3.779 max 3.800) err 1.919e+00 OK; ref max 6974.26 tol 1.395e+01; speedup 5.06x; 24 layers x 3 calls x default = 54 ms, x scalar = 273 ms per token (expert matmuls only)
+FPSUB run1: TIMES float16 index_count 64 default: 8.079 8.102 8.089 8.080 8.070 8.075 8.079
+FPSUB run1: TIMES float16 index_count 64 scalar: 33.187 33.201 33.197 33.211 33.172 33.212 33.220
+FPSUB run1: float16 index_count 64: default ms 8.079 (min 8.070 max 8.102) err 1.990e+00 OK; scalar ms 33.201 (min 33.172 max 33.220) err 1.990e+00 OK; ref max 8009.12 tol 1.602e+01; speedup 4.11x
+FPSUB run1: TIMES bfloat16 (second pass) index_count 4 default: 0.785 0.760 0.758 0.766 0.768 0.760 0.758
+FPSUB run1: TIMES bfloat16 (second pass) index_count 4 scalar: 3.763 3.772 3.781 3.729 3.769 3.759 3.761
+FPSUB run1: bfloat16 (second pass) index_count 4: default ms 0.760 (min 0.758 max 0.785) err 1.586e+01 OK; scalar ms 3.763 (min 3.729 max 3.781) err 1.586e+01 OK; ref max 5458.82 tol 4.367e+01; speedup 4.95x; 24 layers x 3 calls x default = 55 ms, x scalar = 271 ms per token (expert matmuls only)
+FPSUB run1: TIMES bfloat16 (second pass) index_count 64 default: 8.256 8.259 8.236 8.242 8.248 8.256 8.249
+FPSUB run1: TIMES bfloat16 (second pass) index_count 64 scalar: 33.159 33.170 33.192 33.170 33.174 33.172 33.173
+FPSUB run1: bfloat16 (second pass) index_count 64: default ms 8.249 (min 8.236 max 8.259) err 1.590e+01 OK; scalar ms 33.172 (min 33.159 max 33.192) err 1.590e+01 OK; ref max 7943.14 tol 6.355e+01; speedup 4.02x
+FPSUB run1: peak memory GiB 0.14
+FPSUB run1: RESULT PASS
+FPSUB run1 err: CELLMARK float16 index_count 64:
+FPSUB run1 err: CELLEND float16 index_count 64:
+FPSUB run1 err: CELLMARK bfloat16 (second pass) index_count 4:
+FPSUB run1 err: CELLEND bfloat16 (second pass) index_count 4:
+FPSUB run1 err: CELLMARK bfloat16 (second pass) index_count 64:
+FPSUB run1 err: CELLEND bfloat16 (second pass) index_count 64:
+FPSUB run2 (trace) rc=0
+FPSUB kernels: bfloat16 (second pass) index_count 4: id 620 1
+FPSUB kernels: bfloat16 (second pass) index_count 64: id 620 1
+FPSUB kernels: bfloat16 index_count 4: id 620 1
+FPSUB kernels: bfloat16 index_count 64: id 620 1
+FPSUB kernels: float16 index_count 4: id 619 1
+FPSUB kernels: float16 index_count 64: id 619 1
+FPSUB DONE out=$WORK/fpsub-gpu-m2-2 rc=0 rc2=0

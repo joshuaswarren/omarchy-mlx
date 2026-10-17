@@ -1,0 +1,25 @@
+FPSUB wheel mlx_omarchy-0.32.4.dev202610162253+2f8fc403-cp314-cp314-linux_aarch64.whl size 422344150 sha256 1d77ffcd8f85d648406902cccb0ca999ac4c6a2e3b3a4f85d955f16e8c9ab9e8
+FPSUB kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=1.11
+FPSUB tree libmlx sha256 a1b8ffa54ea3688ff6aa2e8923a903cce41648e7301721ee8a03a678198bd11f script 8c2556177c9e2310
+FPSUB tree holds GatherQmmNbSubFp: 1 line(s) with the name
+FPSUB run1 rc=0 load1_after=1.11
+FPSUB run1: libmlx loaded: ['$WORK/fpsub-tree/mlx/lib/libmlx.so']
+FPSUB run1: default device: Device(gpu, 0) mlx 0.32.4.dev202610162253+2f8fc403
+FPSUB run1: bfloat16 index_count 4: default ms 1.815 (min 0.992 max 1.892) err 1.525e+01 OK; scalar ms 3.893 (min 3.797 max 4.886) err 1.525e+01 OK; ref max 5606.50 tol 4.485e+01; speedup 2.14x; 24 layers x 3 calls x default = 131 ms, x scalar = 280 ms per token (expert matmuls only)
+FPSUB run1: bfloat16 index_count 64: default ms 8.262 (min 8.249 max 8.287) err 1.832e+01 OK; scalar ms 33.185 (min 33.157 max 33.297) err 1.832e+01 OK; ref max 8941.68 tol 7.153e+01; speedup 4.02x
+FPSUB run1: float16 index_count 4: default ms 0.755 (min 0.739 max 0.863) err 1.919e+00 OK; scalar ms 3.812 (min 3.781 max 3.852) err 1.919e+00 OK; ref max 6974.26 tol 1.395e+01; speedup 5.05x; 24 layers x 3 calls x default = 54 ms, x scalar = 274 ms per token (expert matmuls only)
+FPSUB run1: float16 index_count 64: default ms 8.084 (min 8.072 max 8.197) err 1.990e+00 OK; scalar ms 33.173 (min 33.163 max 33.226) err 1.990e+00 OK; ref max 8009.12 tol 1.602e+01; speedup 4.10x
+FPSUB run1: peak memory GiB 0.14
+FPSUB run1: RESULT PASS
+FPSUB run1 err: CELLMARK bfloat16 index_count 64:
+FPSUB run1 err: CELLEND bfloat16 index_count 64:
+FPSUB run1 err: CELLMARK float16 index_count 4:
+FPSUB run1 err: CELLEND float16 index_count 4:
+FPSUB run1 err: CELLMARK float16 index_count 64:
+FPSUB run1 err: CELLEND float16 index_count 64:
+FPSUB run2 (trace) rc=0
+FPSUB kernels: bfloat16 index_count 4: id 620 1
+FPSUB kernels: bfloat16 index_count 64: id 620 1
+FPSUB kernels: float16 index_count 4: id 619 1
+FPSUB kernels: float16 index_count 64: id 619 1
+FPSUB DONE out=$WORK/fpsub-gpu-m2-1 rc=0 rc2=0
