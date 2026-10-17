@@ -1,0 +1,92 @@
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:41 waited 120s for load1 to settle (now 0.46)
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:41 start key 9b-m2 model mlx-community/Qwen3.5-9B-4bit kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.46 tree main81 tokens 128 rounds 4
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:41 found governors: policy8=performance policy0=performance policy4=performance 
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:41 sha256 prefixes: script 6669a1c70f15c304 bench_decode f5062d88f34b0845 run_clamped 9249ca2a2ec08145
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:41 libmlx 3f6d0a63405aa6f7 from $TREE
+started $WORK/sampler/rows-clamp-9b-m2-20261017T042641Z.csv pid 137629
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:41 sampler csv $WORK/sampler/rows-clamp-9b-m2-20261017T042641Z.csv
+CLAMP clamp-9b-m2-20261017T042641Z 04:28:56 round 1 arm N mode none governors=schedutil, load1=0.36 start_epoch=1792211336
+CLAMP clamp-9b-m2-20261017T042641Z 04:29:04 round 1 arm N end_epoch=1792211344 rc=0 decode 39.00 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP mode none threads 13 138223:python:0 138232:python:0 138233:python:0 138234:python:0 138235:python:0 138236:python:0 138237:python:0 138238:python:0 138239:python:0 138240:python:0 138241:python:0 138242:python:0 138302:python:0
+CLAMP mode none at exit threads 25 138223:python:0 138232:python:0 138233:python:0 138234:python:0 138235:python:0 138236:python:0 138237:python:0 138238:python:0 138239:python:0 138240:python:0 138241:python:0 138242:python:0 138302:python:0 138443:python:0 138444:python:0 138445:python:0 138446:python:0 138447:python:0 138448:python:0 138449:python:0 13845
+CLAMP clamp-9b-m2-20261017T042641Z 04:29:19 round 1 arm T mode thread governors=schedutil, load1=0.35 start_epoch=1792211359
+CLAMP clamp-9b-m2-20261017T042641Z 04:29:26 round 1 arm T end_epoch=1792211366 rc=0 decode 39.44 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP thread-only set rc=0
+CLAMP mode thread threads 13 139251:python:1024 139252:python:0 139253:python:0 139254:python:0 139255:python:0 139256:python:0 139257:python:0 139258:python:0 139259:python:0 139260:python:0 139261:python:0 139262:python:0 139282:python:0
+CLAMP mode thread at exit threads 25 139251:python:1024 139252:python:0 139253:python:0 139254:python:0 139255:python:0 139256:python:0 139257:python:0 139258:python:0 139259:python:0 139260:python:0 139261:python:0 139262:python:0 139282:python:0 139347:python:1024 139348:python:1024 139349:python:1024 139350:python:1024 139351:python:1024 139352:python:102
+CLAMP clamp-9b-m2-20261017T042641Z 04:29:41 round 1 arm B mode before governors=schedutil, load1=0.25 start_epoch=1792211381
+CLAMP clamp-9b-m2-20261017T042641Z 04:29:48 round 1 arm B end_epoch=1792211388 rc=0 decode 39.30 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP before-import set rc=0
+CLAMP mode before threads 1 140160:python:1024
+CLAMP mode before at exit threads 25 140160:python:1024 140196:python:1024 140197:python:1024 140198:python:1024 140199:python:1024 140200:python:1024 140201:python:1024 140202:python:1024 140203:python:1024 140204:python:1024 140205:python:1024 140206:python:1024 140214:python:1024 140331:python:1024 140332:python:1024 140333:python:1024 140334:python:1024 
+CLAMP clamp-9b-m2-20261017T042641Z 04:30:03 round 1 arm A mode all governors=schedutil, load1=0.22 start_epoch=1792211403
+CLAMP clamp-9b-m2-20261017T042641Z 04:30:10 round 1 arm A end_epoch=1792211410 rc=0 decode 39.42 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP all-tids set rcs=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+CLAMP mode all threads 13 141115:python:1024 141116:python:1024 141117:python:1024 141118:python:1024 141119:python:1024 141120:python:1024 141121:python:1024 141122:python:1024 141123:python:1024 141124:python:1024 141125:python:1024 141126:python:1024 141128:python:1024
+CLAMP mode all at exit threads 25 141115:python:1024 141116:python:1024 141117:python:1024 141118:python:1024 141119:python:1024 141120:python:1024 141121:python:1024 141122:python:1024 141123:python:1024 141124:python:1024 141125:python:1024 141126:python:1024 141128:python:1024 141252:python:1024 141253:python:1024 141254:python:1024 141255:python:1024 141
+CLAMP clamp-9b-m2-20261017T042641Z 04:30:25 round 2 arm T mode thread governors=schedutil, load1=0.22 start_epoch=1792211425
+CLAMP clamp-9b-m2-20261017T042641Z 04:30:32 round 2 arm T end_epoch=1792211432 rc=0 decode 39.60 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP thread-only set rc=0
+CLAMP mode thread threads 13 142052:python:1024 142053:python:0 142054:python:0 142055:python:0 142056:python:0 142057:python:0 142058:python:0 142059:python:0 142060:python:0 142061:python:0 142062:python:0 142063:python:0 142099:python:0
+CLAMP mode thread at exit threads 25 142052:python:1024 142053:python:0 142054:python:0 142055:python:0 142056:python:0 142057:python:0 142058:python:0 142059:python:0 142060:python:0 142061:python:0 142062:python:0 142063:python:0 142099:python:0 142189:python:1024 142190:python:1024 142191:python:1024 142192:python:1024 142193:python:1024 142194:python:102
+CLAMP clamp-9b-m2-20261017T042641Z 04:30:47 round 2 arm B mode before governors=schedutil, load1=0.16 start_epoch=1792211447
+CLAMP clamp-9b-m2-20261017T042641Z 04:30:54 round 2 arm B end_epoch=1792211454 rc=0 decode 39.23 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP before-import set rc=0
+CLAMP mode before threads 1 143017:python:1024
+CLAMP mode before at exit threads 25 143017:python:1024 143019:python:1024 143020:python:1024 143021:python:1024 143022:python:1024 143023:python:1024 143024:python:1024 143025:python:1024 143026:python:1024 143027:python:1024 143028:python:1024 143029:python:1024 143031:python:1024 143113:python:1024 143114:python:1024 143115:python:1024 143116:python:1024 
+CLAMP clamp-9b-m2-20261017T042641Z 04:31:09 round 2 arm A mode all governors=schedutil, load1=0.22 start_epoch=1792211469
+CLAMP clamp-9b-m2-20261017T042641Z 04:31:15 round 2 arm A end_epoch=1792211475 rc=0 decode 39.34 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP all-tids set rcs=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+CLAMP mode all threads 13 143932:python:1024 143933:python:1024 143934:python:1024 143935:python:1024 143936:python:1024 143937:python:1024 143938:python:1024 143939:python:1024 143940:python:1024 143941:python:1024 143942:python:1024 143943:python:1024 143979:python:1024
+CLAMP mode all at exit threads 25 143932:python:1024 143933:python:1024 143934:python:1024 143935:python:1024 143936:python:1024 143937:python:1024 143938:python:1024 143939:python:1024 143940:python:1024 143941:python:1024 143942:python:1024 143943:python:1024 143979:python:1024 144028:python:1024 144029:python:1024 144030:python:1024 144031:python:1024 144
+CLAMP clamp-9b-m2-20261017T042641Z 04:31:30 round 2 arm N mode none governors=schedutil, load1=0.22 start_epoch=1792211490
+CLAMP clamp-9b-m2-20261017T042641Z 04:31:37 round 2 arm N end_epoch=1792211497 rc=0 decode 39.12 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP mode none threads 13 144841:python:0 144842:python:0 144843:python:0 144844:python:0 144845:python:0 144846:python:0 144847:python:0 144848:python:0 144849:python:0 144850:python:0 144851:python:0 144852:python:0 144854:python:0
+CLAMP mode none at exit threads 25 144841:python:0 144842:python:0 144843:python:0 144844:python:0 144845:python:0 144846:python:0 144847:python:0 144848:python:0 144849:python:0 144850:python:0 144851:python:0 144852:python:0 144854:python:0 144961:python:0 144962:python:0 144963:python:0 144964:python:0 144965:python:0 144966:python:0 144967:python:0 14496
+CLAMP clamp-9b-m2-20261017T042641Z 04:31:53 round 3 arm B mode before governors=schedutil, load1=0.27 start_epoch=1792211512
+CLAMP clamp-9b-m2-20261017T042641Z 04:31:59 round 3 arm B end_epoch=1792211519 rc=0 decode 39.48 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP before-import set rc=0
+CLAMP mode before threads 1 145746:python:1024
+CLAMP mode before at exit threads 25 145746:python:1024 145748:python:1024 145749:python:1024 145750:python:1024 145751:python:1024 145752:python:1024 145753:python:1024 145754:python:1024 145755:python:1024 145756:python:1024 145757:python:1024 145758:python:1024 145794:python:1024 145876:python:1024 145877:python:1024 145878:python:1024 145879:python:1024 
+CLAMP clamp-9b-m2-20261017T042641Z 04:32:14 round 3 arm A mode all governors=schedutil, load1=0.25 start_epoch=1792211534
+CLAMP clamp-9b-m2-20261017T042641Z 04:32:21 round 3 arm A end_epoch=1792211541 rc=0 decode 39.40 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP all-tids set rcs=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+CLAMP mode all threads 13 146752:python:1024 146753:python:1024 146754:python:1024 146755:python:1024 146756:python:1024 146757:python:1024 146758:python:1024 146759:python:1024 146760:python:1024 146761:python:1024 146762:python:1024 146763:python:1024 146765:python:1024
+CLAMP mode all at exit threads 25 146752:python:1024 146753:python:1024 146754:python:1024 146755:python:1024 146756:python:1024 146757:python:1024 146758:python:1024 146759:python:1024 146760:python:1024 146761:python:1024 146762:python:1024 146763:python:1024 146765:python:1024 146850:python:1024 146851:python:1024 146852:python:1024 146853:python:1024 146
+CLAMP clamp-9b-m2-20261017T042641Z 04:32:36 round 3 arm N mode none governors=schedutil, load1=0.24 start_epoch=1792211556
+CLAMP clamp-9b-m2-20261017T042641Z 04:32:43 round 3 arm N end_epoch=1792211563 rc=0 decode 39.13 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP mode none threads 13 147651:python:0 147654:python:0 147655:python:0 147656:python:0 147657:python:0 147658:python:0 147659:python:0 147660:python:0 147661:python:0 147662:python:0 147663:python:0 147664:python:0 147700:python:0
+CLAMP mode none at exit threads 25 147651:python:0 147654:python:0 147655:python:0 147656:python:0 147657:python:0 147658:python:0 147659:python:0 147660:python:0 147661:python:0 147662:python:0 147663:python:0 147664:python:0 147700:python:0 147794:python:0 147795:python:0 147796:python:0 147797:python:0 147798:python:0 147799:python:0 147800:python:0 14780
+CLAMP clamp-9b-m2-20261017T042641Z 04:32:58 round 3 arm T mode thread governors=schedutil, load1=0.22 start_epoch=1792211578
+CLAMP clamp-9b-m2-20261017T042641Z 04:33:05 round 3 arm T end_epoch=1792211585 rc=0 decode 39.27 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP thread-only set rc=0
+CLAMP mode thread threads 13 148573:python:1024 148574:python:0 148575:python:0 148576:python:0 148577:python:0 148578:python:0 148579:python:0 148580:python:0 148581:python:0 148582:python:0 148583:python:0 148584:python:0 148586:python:0
+CLAMP mode thread at exit threads 25 148573:python:1024 148574:python:0 148575:python:0 148576:python:0 148577:python:0 148578:python:0 148579:python:0 148580:python:0 148581:python:0 148582:python:0 148583:python:0 148584:python:0 148586:python:0 148703:python:1024 148704:python:1024 148705:python:1024 148706:python:1024 148707:python:1024 148708:python:102
+CLAMP clamp-9b-m2-20261017T042641Z 04:33:20 round 4 arm A mode all governors=schedutil, load1=0.15 start_epoch=1792211600
+CLAMP clamp-9b-m2-20261017T042641Z 04:33:27 round 4 arm A end_epoch=1792211607 rc=0 decode 39.44 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP all-tids set rcs=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+CLAMP mode all threads 13 149486:python:1024 149487:python:1024 149488:python:1024 149489:python:1024 149490:python:1024 149491:python:1024 149492:python:1024 149493:python:1024 149494:python:1024 149495:python:1024 149496:python:1024 149497:python:1024 149533:python:1024
+CLAMP mode all at exit threads 25 149486:python:1024 149487:python:1024 149488:python:1024 149489:python:1024 149490:python:1024 149491:python:1024 149492:python:1024 149493:python:1024 149494:python:1024 149495:python:1024 149496:python:1024 149497:python:1024 149533:python:1024 149651:python:1024 149652:python:1024 149653:python:1024 149654:python:1024 149
+CLAMP clamp-9b-m2-20261017T042641Z 04:33:42 round 4 arm N mode none governors=schedutil, load1=0.17 start_epoch=1792211622
+CLAMP clamp-9b-m2-20261017T042641Z 04:33:49 round 4 arm N end_epoch=1792211629 rc=0 decode 39.08 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP mode none threads 13 150467:python:0 150469:python:0 150470:python:0 150471:python:0 150472:python:0 150473:python:0 150474:python:0 150475:python:0 150476:python:0 150477:python:0 150478:python:0 150479:python:0 150481:python:0
+CLAMP mode none at exit threads 25 150467:python:0 150469:python:0 150470:python:0 150471:python:0 150472:python:0 150473:python:0 150474:python:0 150475:python:0 150476:python:0 150477:python:0 150478:python:0 150479:python:0 150481:python:0 150567:python:0 150568:python:0 150569:python:0 150570:python:0 150571:python:0 150572:python:0 150573:python:0 15057
+CLAMP clamp-9b-m2-20261017T042641Z 04:34:04 round 4 arm T mode thread governors=schedutil, load1=0.94 start_epoch=1792211644
+CLAMP clamp-9b-m2-20261017T042641Z 04:34:11 round 4 arm T end_epoch=1792211651 rc=0 decode 39.32 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP thread-only set rc=0
+CLAMP mode thread threads 13 151368:python:1024 151370:python:0 151371:python:0 151372:python:0 151373:python:0 151374:python:0 151375:python:0 151376:python:0 151377:python:0 151378:python:0 151379:python:0 151380:python:0 151418:python:0
+CLAMP mode thread at exit threads 25 151368:python:1024 151370:python:0 151371:python:0 151372:python:0 151373:python:0 151374:python:0 151375:python:0 151376:python:0 151377:python:0 151378:python:0 151379:python:0 151380:python:0 151418:python:0 151526:python:1024 151527:python:1024 151528:python:1024 151529:python:1024 151530:python:1024 151531:python:102
+CLAMP clamp-9b-m2-20261017T042641Z 04:34:26 round 4 arm B mode before governors=schedutil, load1=0.74 start_epoch=1792211666
+CLAMP clamp-9b-m2-20261017T042641Z 04:34:33 round 4 arm B end_epoch=1792211673 rc=0 decode 39.62 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:958cb85f5f5a32ee n=128 first=8160,579,264 last=348,40,53238
+CLAMP before-import set rc=0
+CLAMP mode before threads 1 152335:python:1024
+CLAMP mode before at exit threads 25 152335:python:1024 152345:python:1024 152346:python:1024 152347:python:1024 152348:python:1024 152349:python:1024 152350:python:1024 152351:python:1024 152352:python:1024 152353:python:1024 152354:python:1024 152355:python:1024 152357:python:1024 152439:python:1024 152440:python:1024 152441:python:1024 152442:python:1024 
+stopped $WORK/sampler/rows-clamp-9b-m2-20261017T042641Z.csv (345 rows)
+CLAMP RESULT decode: N none median 39.10 [39.0, 39.12, 39.13, 39.08] spread 0.3% | T thread only median 39.38 [39.44, 39.6, 39.27, 39.32] spread 0.8% | B before median 39.39 [39.3, 39.23, 39.48, 39.62] spread 1.0% | A all threads median 39.41 [39.42, 39.34, 39.4, 39.44] spread 0.3% | T/N 1.007 B/N 1.007 A/N 1.008
+CLAMP DIGESTS equal in all arms: 958cb85f5f5a32ee
+CLAMP CLOCK arm N: mean P-cluster 1950 MHz, heatpipe power 28.9 W over 29 one-second samples (whole runs)
+CLAMP CLOCK arm T: mean P-cluster 2088 MHz, heatpipe power 28.5 W over 27 one-second samples (whole runs)
+CLAMP CLOCK arm B: mean P-cluster 2449 MHz, heatpipe power 30.9 W over 27 one-second samples (whole runs)
+CLAMP CLOCK arm A: mean P-cluster 2312 MHz, heatpipe power 30.3 W over 27 one-second samples (whole runs)
+CLAMP clamp-9b-m2-20261017T042641Z 04:34:33 DONE
+CLAMP clamp-9b-m2-20261017T042641Z 04:34:33 restored governors: policy8=performance policy0=performance policy4=performance 
