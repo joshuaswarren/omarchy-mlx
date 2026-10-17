@@ -6514,3 +6514,110 @@ TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected exp
     }
   }
 }
+
+struct GatherQmmWord2Gate {
+  GatherQmmWord2Gate() {
+    setenv("MLX_OMARCHY_GATHER_QMM_WORD2", "1", 1);
+  }
+  ~GatherQmmWord2Gate() {
+    unsetenv("MLX_OMARCHY_GATHER_QMM_WORD2");
+  }
+};
+
+// The 2-bit route is opt-in (MLX_OMARCHY_GATHER_QMM_WORD2=1). Then bf16 2-bit group-64 and group-128
+// transposed gather_qmm at one row per index (the decode shape) takes the 2-bit word-per-lane kernel
+// on a 32-lane subgroup device. A 2-bit form has no dense twin, so each output is checked against a
+// host float64 contraction of the same bf16 inputs: within 1.5 bf16 steps of the largest output of
+// its call. With the switch unset the route must not be taken and the same bound must hold.
+TEST_CASE("gather_qmm bf16 2-bit decode is opt-in and within 1.5 bf16 steps of fp64") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  constexpr int experts = 6;
+  constexpr int top = 5;
+  struct Dims {
+    int k, n, group;
+  };
+  for (Dims shape : {Dims{1024, 16, 64}, Dims{1024, 16, 128}, Dims{1024, 21, 64}, Dims{2048, 12, 128}}) {
+    std::vector<float> matrix(static_cast<size_t>(experts) * shape.n * shape.k);
+    for (size_t i = 0; i < matrix.size(); ++i) {
+      matrix[i] = static_cast<float>(static_cast<int>((i * 41u) % 67u) - 33) * 0.03125f;
+    }
+    HostQuantizedWeights weights =
+        host_affine_quantize(matrix, experts * shape.n, shape.k, shape.group, 2);
+    weights.scales = round_trip(stream, weights.scales, bfloat16);
+    weights.biases = round_trip(stream, weights.biases, bfloat16);
+    const int groups = shape.k / shape.group;
+    const int words_per_row = shape.k / 16;
+    array w(weights.words.begin(), Shape{experts, shape.n, words_per_row}, uint32);
+    array scales = astype(
+        array(weights.scales.begin(), Shape{experts, shape.n, groups}, float32), bfloat16, stream);
+    array biases = astype(
+        array(weights.biases.begin(), Shape{experts, shape.n, groups}, float32), bfloat16, stream);
+    std::vector<float> x_values(static_cast<size_t>(top) * shape.k);
+    for (size_t i = 0; i < x_values.size(); ++i) {
+      x_values[i] = static_cast<float>(static_cast<int>((i * 53u) % 47u) - 23) * 0.0625f;
+    }
+    x_values = round_trip(stream, x_values, bfloat16);
+    array x = astype(
+        array(x_values.begin(), Shape{top, 1, shape.k}, float32), bfloat16, stream);
+    const std::vector<uint32_t> picked{3, 0, 5, 3, 1};
+    std::vector<uint32_t> lhs_values(top);
+    for (int j = 0; j < top; ++j) {
+      lhs_values[j] = static_cast<uint32_t>(j);
+    }
+    array lhs(lhs_values.begin(), Shape{top}, uint32);
+    array rhs(picked.begin(), Shape{top}, uint32);
+    GatherQmmWord2Gate word2_scope;
+    for (bool switch_on : {true, false}) {
+      if (switch_on) {
+        setenv("MLX_OMARCHY_GATHER_QMM_WORD2", "1", 1);
+      } else {
+        unsetenv("MLX_OMARCHY_GATHER_QMM_WORD2");
+      }
+      array gathered = gather_qmm(
+          x, w, scales, biases, lhs, rhs, true, shape.group, 2, "affine", std::nullopt, false, stream);
+      gathered.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const int64_t dispatched = omarchy::trace::counters().last_dispatched_kernel.load();
+      const int64_t word2 = static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmWord2BF16);
+      INFO("k=" << shape.k << " n=" << shape.n << " group=" << shape.group << " switch_on=" << switch_on);
+      if (switch_on && subgroup_ready) {
+        CHECK_EQ(dispatched, word2);
+      }
+      if (!switch_on) {
+        CHECK_NE(dispatched, word2);
+      }
+      auto got = readback_f32(stream, gathered);
+      REQUIRE_EQ(got.size(), static_cast<size_t>(top) * shape.n);
+      std::vector<double> want(got.size());
+      double max_abs = 0.0;
+      for (int j = 0; j < top; ++j) {
+        const int e = static_cast<int>(picked[j]);
+        for (int c = 0; c < shape.n; ++c) {
+          double acc = 0.0;
+          const size_t row = static_cast<size_t>(e) * shape.n + c;
+          for (int i = 0; i < shape.k; ++i) {
+            const uint32_t word = weights.words[row * words_per_row + i / 16];
+            const double q = static_cast<double>((word >> (2 * (i % 16))) & 3u);
+            const int g = i / shape.group;
+            const double scale = weights.scales[row * groups + g];
+            const double bias = weights.biases[row * groups + g];
+            acc += static_cast<double>(x_values[static_cast<size_t>(j) * shape.k + i]) * (q * scale + bias);
+          }
+          want[static_cast<size_t>(j) * shape.n + c] = acc;
+          max_abs = std::max(max_abs, std::fabs(acc));
+        }
+      }
+      const double tol = 1.5 * std::ldexp(1.0, std::ilogb(max_abs) - 7);
+      for (size_t i = 0; i < got.size(); ++i) {
+        INFO("output " << i << " want " << want[i] << " got " << got[i]);
+        CHECK(std::fabs(static_cast<double>(got[i]) - want[i]) <= tol);
+      }
+    }
+  }
+}
