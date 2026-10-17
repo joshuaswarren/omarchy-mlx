@@ -21,6 +21,9 @@ Design invariants (do not weaken):
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import importlib.metadata
 import importlib.util
 import json
 import math
@@ -796,6 +799,39 @@ def cmd_plan(args, cat, home) -> int:
     return 0
 
 
+def mlxlm_patch_status() -> str | None:
+    """One line saying whether the vendored mlx-lm serve patches are applied.
+
+    The patches edit mlx-lm's .py files in place, so a file that still matches
+    its wheel RECORD hash is unpatched. Counts the issue-#217 metric: .py files
+    of the installed mlx-lm whose sha256 differs from the wheel's RECORD.
+    Returns None when mlx-lm is absent (not the serving engine's concern).
+    """
+    try:
+        dist = importlib.metadata.distribution("mlx-lm")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    total = modified = 0
+    for f in dist.files or []:
+        name = str(f)
+        if not name.startswith("mlx_lm/") or not name.endswith(".py") or f.hash is None:
+            continue
+        total += 1
+        try:
+            data = Path(dist.locate_file(f)).read_bytes()
+        except OSError:
+            continue
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+        modified += digest != f.hash.value
+    if not total:
+        return None
+    if modified:
+        return (f"mlx-lm serve patches: applied ({modified} of {total} files "
+                "differ from the wheel RECORD)")
+    return ("mlx-lm serve patches: NOT applied (stock mlx-lm); "
+            "fix: install.sh --patch-venv <this venv>")
+
+
 def approve_download(lines: list[str], *, interactive: bool, assume_yes: bool,
                      explicit_target: bool, input_fn=None) -> bool:
     print("\n".join(lines))
@@ -911,6 +947,9 @@ def cmd_serve(args, cat, home) -> int:
     child_env = dict(os.environ)
     if backend == "mlx-lm":
         child_env[cap_shim.LIMIT_ENV] = str(context)
+        status = mlxlm_patch_status()
+        if status:
+            print(status, flush=True)
     import signal
     import threading
 

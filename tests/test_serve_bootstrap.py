@@ -360,7 +360,11 @@ class PatchFetchTests(unittest.TestCase):
         # Run the real 4b fetch text under the release-tag curl shim, then ask
         # the fetched apply script which files it needs.
         text = installer_text()
-        section = text[text.index("# 4b."):text.index('MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING')]
+        # The real fetch lives in fetch_patch_assets(); run that function
+        # body verbatim under the release-tag curl shim, then ask the fetched
+        # apply script which files it needs.
+        start = text.index("fetch_patch_assets() {")
+        section = text[start:text.index("\n}", start) + 2]
         with tempfile.TemporaryDirectory() as tmp:
             prefix = Path(tmp)
             script = "".join([
@@ -369,6 +373,7 @@ class PatchFetchTests(unittest.TestCase):
                 f'PREFIX="{prefix}"\n',
                 CURL_SHIM,
                 section,
+                '\nfetch_patch_assets\n',
             ])
             env = {**os.environ, "MLX_OMARCHY_TEST_TREE": str(REPO_ROOT),
                    "REPO": "local.test/does-not-matter", "VERSION": "test"}
@@ -380,6 +385,10 @@ class PatchFetchTests(unittest.TestCase):
             self.assertGreaterEqual(len(needed), 4)
             fetched = {p.name for p in (prefix / "patches").iterdir()}
             self.assertEqual(needed - fetched, set())
+            # The 0.32 series directory ships beside the flat one (issue #217):
+            # a venv moved to mlx-lm 0.32 must be patchable from the prefix.
+            fetched32 = {p.name for p in (prefix / "patches" / "mlx-lm-0.32").iterdir()}
+            self.assertIn("mlx-lm-greedy-prune.patch", fetched32)
 
 
 if __name__ == "__main__":

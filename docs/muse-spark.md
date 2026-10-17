@@ -10,9 +10,12 @@ You need an Apple Silicon machine on Omarchy Linux, a release wheel that carries
 
 1. Install the release wheel. See [INSTALL.md](INSTALL.md). The install script builds a private venv, and `mlx-omarchy` runs that venv's Python.
 2. Install mlx-lm 0.32.0 into that venv. The `--no-deps` flag keeps the mlx-omarchy build of `mlx`.
+   The upgrade moves the venv off the 0.31.3 series the installer patched, so re-apply the
+   vendored serve patches with the installer's patch step:
 
    ```sh
    mlx-omarchy -m pip install --no-deps mlx-lm==0.32.0
+   curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash -s -- --patch-venv ~/.local/share/mlx-omarchy/venv
    ```
 
 3. Clone the repository. The adapter and the check scripts live in the checkout.
