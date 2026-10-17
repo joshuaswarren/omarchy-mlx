@@ -1036,6 +1036,18 @@ enum class ComputeKernel : uint16_t {
   ReduceRowBF16,
   // Word-per-lane gathered 4-bit group-64 decode (bf16, one 32-lane slot per output element).
   GatherQmmWordBF16,
+  // Chunked ArgMin/ArgMax and LogSumExp for long rows (argreduce_chunk.comp, argreduce_combine.comp,
+  // logsumexp_chunk.comp, logsumexp_combine.comp), appended so earlier ids do not move.
+  ArgReduceChunkF32,
+  ArgReduceChunkF16,
+  ArgReduceChunkBF16,
+  ArgReduceCombine,
+  LogSumExpChunkF32,
+  LogSumExpChunkF16,
+  LogSumExpChunkBF16,
+  LogSumExpCombineF32,
+  LogSumExpCombineF16,
+  LogSumExpCombineBF16,
   Count,
 };
 
