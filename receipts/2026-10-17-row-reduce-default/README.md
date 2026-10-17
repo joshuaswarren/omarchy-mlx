@@ -71,7 +71,7 @@ Negative log-likelihood, teacher forced, 255 scored tokens per passage, same loa
 | README | 2.866704 | 2.874434 | +0.007730 | 0.013263 | [-0.0188, +0.0343] |
 | all 765 tokens | | | -0.002321 | 0.005977 | [-0.0143, +0.0096] |
 
-The registered rule was a mean difference within 0.01 nats per token on each passage. Apache 2 misses it with 0.0124, so the rule as written fails. On that passage the route gives the lower NLL, by 1.2 standard errors. The paired per-token standard deviation was 0.09, 0.17 and 0.21, three to four times the estimate that set the bound. Three tokens carry the mean of the Apache 2 difference; the largest changes by -2.6 nats. The follow-up study is registered with its rule fixed in advance. It uses eight passages written after the model's training data, with 255 scored tokens each. The unit is the passage and the interval is the mean plus or minus 2 standard errors. The route stays accepted if the upper end of the interval is at most +0.02 nats per token. It is rejected if the upper end is above.
+The registered rule was a mean difference within 0.01 nats per token on each passage. Apache 2 misses it with 0.0124, so the rule as written fails. On that passage the route gives the lower NLL, by 1.2 standard errors. The paired per-token standard deviation was 0.09, 0.17 and 0.21, three to four times the estimate that set the bound. Three tokens carry the mean of the Apache 2 difference; the largest changes by -2.6 nats. The follow-up study is registered with its rule fixed in advance. The margin of +0.02 was fixed before the study ran and is twice the 0.01 of the first rule. It does not replace the first rule, which failed on one passage and is not scored again. It uses eight passages written after the model's training data, with 255 scored tokens each. The unit is the passage and the interval is the mean plus or minus 2 standard errors. The route stays accepted if the upper end of the interval is at most +0.02 nats per token. It is rejected if the upper end is above.
 
 ## 4. Unit test on three chips
 
@@ -87,4 +87,4 @@ Each machine ran the binary three times, with `MLX_OMARCHY_ROW_REDUCE` unset, `0
 
 ## Source records
 
-`SHA256SUMS` holds the sha256 of the source record of each section: the benchmark log, output and traces of the timing run, the two fidelity result files with their ticket logs, and the cluster result and comparison files.
+`SHA256SUMS` holds the sha256 of the source record of each section: the benchmark log, output and traces of the timing run, the two fidelity result files with their ticket logs, and the cluster result and comparison files. The source files are in the lab archive, not in this directory, so `sha256sum -c` run here cannot check those lines.
