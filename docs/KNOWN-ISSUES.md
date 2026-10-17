@@ -57,17 +57,13 @@ collected numbers. AMD (RADV) is untested.
 
 A float32, float16 or bfloat16 Sum over a row-contiguous suffix of at least 256 elements runs one 256-wide workgroup per output row with a fixed shared-memory tree (`shaders/reduce_row.comp`). `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels, which gave one invocation a whole row. Max and Min are not affected.
 
-The sum associates differently, so its bits can differ from the serial kernel in the last places. A model whose graph computes a mean or a sum over a long float row outside a fused kernel produces different bits. Muse Spark Open is such a model. Its norm takes the mean of a (1, 1, 8192) float32 tensor, which cost about 0.9 ms per call on the serial kernel. The model code of gemma3n, kimi_k3 and minimax also computes a sum or mean over the last axis of a float tensor.
+The sum associates differently, so its bits can differ from the serial kernel in the last places. A model whose graph computes a mean or a sum over a long float row outside a fused kernel produces different bits. Muse Spark Open is such a model. Its norm takes the mean of a (1, 1, 8192) float32 tensor. The model code of gemma3n, kimi_k3 and minimax also computes a sum or mean over the last axis of a float tensor.
 
-On a 14-inch M2 Max, Muse Spark Open, layers 14 to 17 of 62, route off against on:
+The route is the default. `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels.
 
-- A mean over (1, 1, 8192) float32 takes 908 us off and 7.6 us on. The float32 norm takes 945 us off and 41 us on.
-- The 4-layer decode step takes 38.2 ms off and 27.55 ms on (27.9 percent shorter).
-- Hidden-state fidelity against a float64 sum of the same squares, on synthetic inputs, is ACCEPT-BETTER on the preregistered rule in both runs. The route's hidden state was closer to the reference in 31 of 32 windows, uncompiled and compiled. This is not a model-quality measurement.
+Models that change output are those whose graph reduces a float row of 256 or more elements with a Sum that is not inside a fused kernel. The whole-process dispatch profiles of Qwen3.5-9B and Qwen3.8-27B on an M2 Max, prefill and decode, contain no Reduce dispatch of any kind, so the route is not reached. The sums in the gemma-4 text generation path, qwen3-next, qwen3-moe, gpt-oss and deepseek model code run over the expert axis, over the top-k width (fewer than 256 elements) or over integers. The route needs the trailing axes and a float type, so those sums do not take it. The embedding-norm check in gemma-4 that runs when input embeddings are supplied sums over the last axis.
 
-Whole model, all 62 layers on five ranks across four machines, route off against on in the same load: every generated text is identical in every pair (three prompts at 64, 128 and 256 tokens). On the `is_prime` answers decode rises from 2.04 and 2.00 to 2.54 and 2.54 tokens per second at 64 tokens, from 1.98 to 2.53 at 128 and from 1.96 to 2.55 at 256. That is 26 to 30 percent, taken per prompt and length on the medians. The two short answers have 1 and 7 decode steps and rise by 22 to 29 percent on the same basis. Time to first token is unchanged.
-
-The registered negative log-likelihood rule failed on one passage. A teacher-forced run compared the route off and on over three passages of 255 tokens each. The mean difference in NLL per token (on minus off, in nats) was as follows.
+On Muse Spark Open, a teacher-forced run over three passages of 255 tokens each gave these mean differences in negative log-likelihood per token (route on minus route off, in nats).
 
 | Passage | Off | On | Difference | Standard error |
 | --- | --- | --- | --- | --- |
@@ -75,13 +71,9 @@ The registered negative log-likelihood rule failed on one passage. A teacher-for
 | Apache 2 | 0.25747 | 0.24504 | -0.01244 | 0.0108 |
 | README | 2.86670 | 2.87443 | +0.00773 | 0.0133 |
 
-The registered bound was a mean difference of at most 0.01 per passage. Apache 2 misses it by 0.00244, so the rule as written fails. On that passage the route gives the lower NLL, by 1.2 standard errors. The bound came from an estimated per-token standard deviation of 0.03 to 0.06. The measured spread was 0.09 to 0.21, so the bound sits near one standard error and three passages cannot resolve it.
+On Apache 2 the difference of -0.01244 is outside the registered bound of 0.01.
 
-The route is the default. `MLX_OMARCHY_ROW_REDUCE=0` restores the serial kernels.
-
-Models that change output are those whose graph reduces a float row of 256 or more elements with a Sum that is not inside a fused kernel. The whole-process dispatch profiles of Qwen3.5-9B and Qwen3.8-27B on an M2 Max, prefill and decode, contain no Reduce dispatch of any kind, so the route is not reached. The sums in the gemma-4 text generation path, qwen3-next, qwen3-moe, gpt-oss and deepseek model code run over the expert axis, over the top-k width (fewer than 256 elements) or over integers. The route needs the trailing axes and a float type, so those sums do not take it. The embedding-norm check in gemma-4 that runs when input embeddings are supplied sums over the last axis.
-
-The route's unit test, `omarchy_reduce_row_tests` (6 cases, 216 assertions), passes on the 13-inch M1, the 16-inch M1 Max and the 14-inch M2 Max. It checks float32, float16 and bfloat16 rows of 256 to 70001 elements against a long double sum, and checks that Max and Min keep the serial route. The three chips print byte-identical error values. The 4-layer decode timing, the micro-benchmark and the two fidelity runs were measured on the 14-inch M2 Max. The whole-model decode and negative log-likelihood numbers come from a ring of five ranks on four Apple Silicon machines. The record is in `receipts/2026-10-17-row-reduce-default/`.
+The route's unit test, `omarchy_reduce_row_tests` (6 cases, 216 assertions), passes on the 13-inch M1, the 16-inch M1 Max and the 14-inch M2 Max. It checks float32, float16 and bfloat16 rows of 256 to 70001 elements against a long double sum, and checks that Max and Min keep the serial route. The measurements, commands and run procedure are in `receipts/2026-10-17-row-reduce-default/`.
 
 ## gather_qmm word-per-lane route: developer switch, numerics verdict REJECT
 
