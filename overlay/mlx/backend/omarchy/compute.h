@@ -1030,6 +1030,10 @@ enum class ComputeKernel : uint16_t {
   GatherQmmNbSubFpF32,
   GatherQmmNbSubFpF16,
   GatherQmmNbSubFpBF16,
+  // Workgroup-per-row suffix reduction (reduce_row.comp), appended so earlier ids do not move.
+  ReduceRowF32,
+  ReduceRowF16,
+  ReduceRowBF16,
   Count,
 };
 
