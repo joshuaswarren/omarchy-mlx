@@ -78,7 +78,7 @@ Capture. `MUSE_CAPTURE_META="row_reduce=<ARM>;pass=<n>" CAPTURE_LENGTHS=<64|128|
 
 Score. `score_client.py` (sha256 prefix `e95601997d74e152`) posts `{"text": "<|begin_of_text|>" + <passage>, "limit": 256}` to `http://<studio>:18031/score` for three passages in turn, in the order off, on, on, off. Every rank runs one forward and rank 0 returns the NLL of tokens 2 to 256.
 
-Procedure. The passes ran back to back. The only step between two passes was the copy of the live-env file, which takes a second or two. No settle wait, CPU governor value or temperature was read or set. The driver did not read the GPU timeout counter before or after the run, so no count is recorded. Reads by other jobs found no kernel GPU timeout on the 13-inch boot (14:53Z) and the M2 boot (16:23Z) after the run. The 13-inch rank logged user-space Vulkan timeline timeouts in two earlier loads. No separate device reopen test was run.
+Procedure. The passes ran back to back. The only step between two passes was the copy of the live-env file, which takes a second or two. No settle wait, CPU governor value or temperature was read or set. The driver did not read the GPU timeout counter before or after the run, so no count is recorded. Reads by other jobs found no kernel GPU timeout on the 13-inch boot (read at 14:53Z) and on the M2 boot (read at 16:23Z) after the run. The 13-inch rank logged user-space Vulkan timeline timeouts in two earlier loads. No separate device reopen test was run.
 
 Text: every on text equals its off text. The runs were 64 tokens in the order off, on, on, off, and 128 and 256 tokens in the order off, on. An off-against-off repeat is byte-identical.
 
