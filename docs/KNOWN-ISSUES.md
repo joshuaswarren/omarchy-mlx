@@ -59,8 +59,6 @@ A float32, float16 or bfloat16 Sum over a row-contiguous suffix of at least 256 
 
 The sum associates differently, so its bits can differ from the serial kernel in the last places. A model whose graph computes a mean or a sum over a long float row outside a fused kernel produces different bits. Muse Spark Open is such a model. Its norm takes the mean of a (1, 1, 8192) float32 tensor, which cost about 0.9 ms per call on the serial kernel. The model code of gemma3n, kimi_k3 and minimax also contains a sum or mean over a long float row.
 
-The measurements ran on a build of an earlier head of the route. That head routed Sum, Max and Min. The merged code routes Sum only. In the traced Muse graph the 12 mean sums per decode step took the route and no Max or Min did. The record is in `receipts/2026-10-17-row-reduce-default/`.
-
 On a 14-inch M2 Max, Muse Spark Open, layers 14 to 17 of 62, route off against on:
 
 - A mean over (1, 1, 8192) float32 takes 908 us off and 7.6 us on. The float32 norm takes 945 us off and 41 us on.
