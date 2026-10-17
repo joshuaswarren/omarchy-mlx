@@ -1034,6 +1034,18 @@ enum class ComputeKernel : uint16_t {
   ReduceRowF32,
   ReduceRowF16,
   ReduceRowBF16,
+  // Chunked ArgMin/ArgMax and LogSumExp for long rows (argreduce_chunk.comp, argreduce_combine.comp,
+  // logsumexp_chunk.comp, logsumexp_combine.comp), appended so earlier ids do not move.
+  ArgReduceChunkF32,
+  ArgReduceChunkF16,
+  ArgReduceChunkBF16,
+  ArgReduceCombine,
+  LogSumExpChunkF32,
+  LogSumExpChunkF16,
+  LogSumExpChunkBF16,
+  LogSumExpCombineF32,
+  LogSumExpCombineF16,
+  LogSumExpCombineBF16,
   Count,
 };
 
