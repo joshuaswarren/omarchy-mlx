@@ -14,7 +14,7 @@ Random weights. This measures cost and numerics at one shape. It is not a model 
 - Shape: 32 experts, K 2880, N 2880, top-4 per token. Cells are bf16 and f16, at `index_count` 4 (one token) and 64 (a sorted prefill block, x passed as `[B, 1, K]`).
 - Each cell runs the default route and the scalar route in one process. Both are checked against an fp64 numpy reference on 128 output columns. Cost is the median of 7 calls after a warm-up.
 - A second run with the dispatch trace on reads the kernel id of the default route in each cell.
-- Files: `gptoss_fp_sub_gpu.py`, `m2-fpsub-gpu.sh`, `m2-run.log`.
+- Files for the first run: `gptoss_fp_sub_gpu.py`, `m2-fpsub-gpu.sh`, `m2-run.log`.
 
 ## Rule fixed before the run
 
@@ -35,9 +35,26 @@ Route: bf16 dispatches 620 and f16 dispatches 619 in all four cells, one dispatc
 | f16 | 4 | 0.755 (0.739 to 0.863) | 3.812 (3.781 to 3.852) | 5.05x |
 | f16 | 64 | 8.084 (8.072 to 8.197) | 33.173 (33.163 to 33.226) | 4.10x |
 
-The cost bar holds for f16 at 5.05x. It does not hold for bf16 as measured, at 2.14x. The bf16 one-token cell is the first cell the run measures, and its default median sits far above its minimum. A clock ramp on the first cell would explain that. This run does not show it. A repeat with the bf16 cell run twice is queued. Its result will be added here.
+The cost bar holds for f16 at 5.05x. It did not hold for bf16 in the first run, at 2.14x. The bf16 one-token cell is the first cell that run measures, and its default median sat far above its minimum.
 
-Arithmetic, not a measurement of the model: 24 layers times three expert matmuls is 72 calls per token. At the scalar rate of 3.8 to 3.9 ms that is about 275 to 280 ms. At the default rates it is 54 ms for f16 or 131 ms for bf16 at the median.
+## Repeat with the bf16 cell run twice
+
+The same wheel, chip and boot, a second ticket, with the cell order bf16, f16, bf16 and every per-call time printed. Files: `gptoss_fp_sub_gpu_repeat.py`, `m2-fpsub-gpu2.sh`, `m2-run-repeat.log`. The weights and x are drawn again, so the reference maxima differ from the first run.
+
+| dtype | index_count | default ms (min to max) | scalar ms (min to max) | speedup |
+|---|---|---|---|---|
+| bf16, first cell | 4 | 1.854 (0.993 to 1.890) | 3.810 (3.784 to 4.147) | 2.06x |
+| bf16, first cell | 64 | 8.231 (8.224 to 8.293) | 33.186 (33.149 to 33.228) | 4.03x |
+| f16 | 4 | 0.749 (0.738 to 0.752) | 3.785 (3.779 to 3.800) | 5.06x |
+| f16 | 64 | 8.079 (8.070 to 8.102) | 33.201 (33.172 to 33.220) | 4.11x |
+| bf16, second pass | 4 | 0.760 (0.758 to 0.785) | 3.763 (3.729 to 3.781) | 4.95x |
+| bf16, second pass | 64 | 8.249 (8.236 to 8.259) | 33.172 (33.159 to 33.192) | 4.02x |
+
+The seven default times of the first bf16 cell are 1.890, 1.859, 1.853, 1.854, 1.858, 1.204 and 0.993 ms. They fall during the cell and end near the second-pass value. The scalar route does not change over the same cell. The same cell run last gives 0.760 ms. So the first-run bf16 figure is a warm-up effect of the first measured cell. In steady state bf16 and f16 cost the same at one token.
+
+The cost bar holds for both dtypes at steady state: 5.06x for f16 and 4.95x for bf16. The first measured cell of a run is slower. All numerics pass in both runs, with the same error for both routes. The traced run shows kernel 620 for every bf16 cell and 619 for every f16 cell.
+
+Arithmetic, not a measurement of the model: 24 layers times three expert matmuls is 72 calls per token. At the scalar rate of 3.8 to 3.9 ms that is about 275 to 280 ms. At the steady default rate of 0.75 to 0.76 ms it is about 54 to 55 ms, for both dtypes.
 
 The gpt-oss-20b receipt in `receipts/2026-10-09-linux-vs-macos` reads 459 ms per token on a 16-inch M1 Max with an older wheel. The scalar arithmetic accounts for about 60 percent of that. What the rest is has not been measured.
 
