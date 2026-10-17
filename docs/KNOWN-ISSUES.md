@@ -82,3 +82,11 @@ A word-per-lane decode kernel for `gather_qmm` (bf16, 4-bit, group 64, one row p
 Speed, one Apple M2 Max, one tree, three paired rounds: decode 23.91 tok/s with the switch off and 34.59 with it on on gemma-4-26B-A4B 4-bit (+44.7 percent), and 27.70 against 40.99 on Qwen3.6-35B-A3B 4-bit (+48.0 percent). Prefill is unchanged. The output token streams differ between the two settings.
 
 Numerics, teacher-forced negative log-likelihood on gemma-4-26B-A4B, word route minus the 8-output element kernel, windows 0 to 127 (8192 positions): paired mean +0.00906 nats, cluster standard error 0.00757, interval [-0.00608, +0.02420]. The preregistered rule accepts only an interval wholly inside plus or minus 0.02, so the verdict is REJECT. The point estimate is slightly worse, and the interval contains 0. The route picks a different top token at 7.6 percent of positions. Each output equals the dense `quantized_matmul` on the selected expert bit for bit, which is a statement about the kernel arithmetic, not about model quality. No README row comes from this route.
+
+## gather_qmm word-per-lane 2-bit route: developer switch, no model-level numerics run
+
+The same word-per-lane form also exists for 2-bit weights (bf16, group 64 or 128, one row per index, 32-lane subgroup). It stays off. `MLX_OMARCHY_GATHER_QMM_WORD2=1` is a developer switch and is not a supported setting. It is not in the public flags table.
+
+Kernel-level numbers, one Apple M2 Max, random weights: a 36-case gate (6 shapes, bf16, 8 experts per call) has every output of both kernels within 1.5 bf16 steps of a float64 contraction. A 2-bit form has no dense twin, so there is no bit-identity claim. At the Muse expert shape (8 experts of 4096 by 4096, group 128) one call costs 290.9 us with the switch on and 1184.6 us with the 8-output kernel it replaces (4.07 times). A paired A/B on one real layer of the 2-bit Muse model reads 9.48 ms with the switch off and 6.64 ms with it on.
+
+No model-level numerics gate has been run for this route: no negative log-likelihood and no token-agreement count. The 4-bit form of the same kernel has a preregistered NLL verdict of REJECT (see above). Random weights give cost and arithmetic only, not model speed or quality.
