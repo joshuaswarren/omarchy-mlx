@@ -52,3 +52,11 @@ Until NVIDIA numbers are collected here, the floor is asserted on
 every driver except NVIDIA proprietary. The test still prints its
 ratio for every run, so a per-driver floor can be set from
 collected numbers. AMD (RADV) is untested.
+
+## gather_qmm word-per-lane route: developer switch, numerics verdict REJECT
+
+A word-per-lane decode kernel for `gather_qmm` (bf16, 4-bit, group 64, one row per index, 32-lane subgroup) is built into the backend and stays off. `MLX_OMARCHY_GATHER_QMM_WORD=1` is a developer switch and is not a supported setting.
+
+Speed, one Apple M2 Max, one tree, three paired rounds: decode 23.91 tok/s with the switch off and 34.59 with it on on gemma-4-26B-A4B 4-bit (+44.7 percent), and 27.70 against 40.99 on Qwen3.6-35B-A3B 4-bit (+48.0 percent). Prefill is unchanged. The output token streams differ between the two settings.
+
+Numerics, teacher-forced negative log-likelihood on gemma-4-26B-A4B, word route minus the 8-output element kernel, windows 0 to 127 (8192 positions): paired mean +0.00906 nats, cluster standard error 0.00757, interval [-0.00608, +0.02420]. The preregistered rule accepts only an interval wholly inside plus or minus 0.02, so the verdict is REJECT. The point estimate is slightly worse, and the interval contains 0. The route picks a different top token at 7.6 percent of positions. Each output equals the dense `quantized_matmul` on the selected expert bit for bit, which is a statement about the kernel arithmetic, not about model quality. No README row comes from this route.
