@@ -1,0 +1,11 @@
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:51 start key e4b model mlx-community/gemma-4-e4b-it-4bit kernel 7.1.12-2-20261013.18-sep-ARCH governors performance, load1 0.40
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:51 packages: asahi-alarm-keyring 20241216-1;asahi-audio 4.1-1;asahi-bless 0.4.2-1;asahi-fwextract 0.8.4-1;asahi-scripts 20260127.1-1;linux-api-headers 7.2-1;linux-aurora 7.1.12.aurora2-20261013.18;linux-aurora-headers 7.1.12.aurora2-12.6;mesa 1:26.2.4-1;omarchy-mlx 0.7.28-2;omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2;vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2;vulkan-icd-loader 1.4.363.0-1;vulkan-mesa-implicit-layers 1:26.2.4-1;
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:51 vulkaninfo: not installed
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:51 serving processes: litellm=0 mlx_lm_server=0
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:51 provenance script sha256 21337ddd29e79291 bench_decode sha256 f5062d88f34b0845
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:51 provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:58 traced run rc=0: decode 12.39 tok/s over 15 tokens (16 requested, EOS suppressed) generated_ids sha256:c8024a4ae6fe42d3 n=16 first=100,45518,107 last=3925,236787,108
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:58 traced run provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:58 TRACE dispatch_lines 35801 distinct_kernels 29 max_count 333312 top10(id x lines) 414x7804 233x5226 416x4920 410x4136 471x2012 2x1940 504x1794 58x1720 425x1452 257x1290
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:58 device reopen rc=0 reopen Device(gpu, 0) [2.0, 2.0, 2.0, 2.0]
+CLAMPMETA meta-e4b-20261017T063651Z 06:36:58 DONE out=$WORK/out-meta-e4b-20261017T063651Z

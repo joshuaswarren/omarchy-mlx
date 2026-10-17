@@ -21,7 +21,8 @@ The clamp value is 1024 in every clamped arm.
 - One run is one `bench_decode.py` process. It loads the model, runs 4 untimed tokens, then 128 timed tokens. EOS is suppressed, so every run generates exactly 128 tokens. The decode rate is 127 gaps over the time from the first to the last token.
 - One fixed prompt: `Write a short story about a lighthouse keeper who finds a message in a bottle.` Greedy, temperature 0, seed 0.
 - Four rounds. Each round runs the four arms once. The order is a Latin square. The rounds run `N T B A`, `T B A N`, `B A N T` and `A N T B`, so each arm takes every position once.
-- 15 seconds of idle before each run, and the load average under 0.5 before the first.
+- 15 seconds of idle before each run, and the load average under 0.5 before the first. The script refuses to start when an ANE process is running.
+- Each block ran as one GPU ticket under the lab's idle guard. The guard runs one GPU job per host at a time and holds the others back. No other GPU job ran during a block.
 - The command of every run:
 
 ```
@@ -29,7 +30,7 @@ timeout 900 $PYTHON run_clamped.py MODE bench_decode.py --model MODEL --prompt P
 ```
 
 - Environment: `HF_HUB_OFFLINE=1`, `MESA_SHADER_CACHE_DISABLE=1`, a fresh process per run, no other GPU work on the machine.
-- A spread is the largest of the four values of an arm over the smallest. A spread above 5 percent in arm N would have made a block noisy. None did.
+- A spread is the range of the four values of an arm divided by their median. A spread above 5 percent in arm N would have made a block noisy. None did.
 
 ## Environment
 
@@ -70,6 +71,24 @@ Mean P-cluster clock and heatpipe power per arm, over the whole runs (load and w
 | 9B, 13-inch M1 | 1914 MHz, 9.5 W | 1954 MHz, 9.9 W | 2114 MHz, 10.4 W | 2104 MHz, 10.5 W |
 | 9B, M2 Max | 1950 MHz, 28.9 W | 2088 MHz, 28.5 W | 2449 MHz, 30.9 W | 2312 MHz, 30.3 W |
 
+## Backend evidence
+
+These were collected by a second ticket on each machine, hours after the timed blocks, with the same trees, models and kernel package. The 13-inch M1 was on the same boot. The M2 Max had rebooted in between. They show that the Vulkan backend ran. They are in `backend/`.
+
+- Mesa: `mesa 1:26.2.4-1`. Vulkan driver package: `omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2`. The M2 Max reports driver `Honeykrisp`, `Mesa 26.3.0-devel (git-69bde15340)`, Vulkan API 1.4.362.
+- Device: `Apple M2 Max (G14C B1)` from `vulkaninfo` on the M2 Max. `vulkaninfo` is not installed on the 13-inch M1. Its device name comes from `bench_decode.py`: `Apple M1 (G13G B1)`, printed in every `runs/` output.
+- Kernel package: `linux-aurora 7.1.12.aurora2-20261013.18`. No separate firmware version string was captured. The `packages:` line of each log has the firmware extractor package and its version.
+- Provenance: the first line of every file under `runs/` is the provenance line of that run. All 48 say `verified=match`. The libmlx hash in them equals the one in the Environment section.
+- Dispatch trace: one 16-token `bench_decode.py` run per model with `MLX_OMARCHY_TRACE_DISPATCH=1`. Dispatch lines counted:
+  - E4B on the 13-inch M1: 35801 lines, 29 distinct kernels.
+  - Qwen3.5-9B on the 13-inch M1: 11362 lines, 32 distinct kernels.
+  - Qwen3.5-9B on the M2 Max: 11006 lines, 33 distinct kernels.
+  The logs list the ten most dispatched kernel ids with their line counts. The ids are labels of that wheel and change between wheels. The largest `count` field of a dispatch line is 524288 for the 9B and 333312 for E4B. It is a parameter of the dispatch, not a running total.
+- Device reopen: a new process opened the device after the run and computed a small array. All three logs show `Device(gpu, 0)` and `[2.0, 2.0, 2.0, 2.0]`.
+- Serving processes: `litellm=0` and `mlx_lm_server=0` on both machines, counted when the backend evidence ran. They were not counted during the timed blocks.
+
+The trace shows which kernels the backend dispatched. It does not show that no tensor op ran on the CPU.
+
 ## What it shows
 
 - On E4B the three clamped placements agree within 0.1 percent and sit 44 percent above N. Clamping the calling thread after the imports, the way the serve does, is enough.
@@ -79,12 +98,15 @@ Mean P-cluster clock and heatpipe power per arm, over the whole runs (load and w
 ## What it does not show
 
 - The serve process over HTTP. These runs use `bench_decode.py`.
+- That no tensor op ran on the CPU. The dispatch trace does not show it.
 - Any other model, any other machine, or the `performance` governor, where the clamp has no role.
 - Whether the clock gain would appear on a different kernel.
 - The mlx-lm version of the runs.
 
 ## Files
 
+- `runs/` holds the stdout of all 48 runs, 16 per block. Each file starts with the provenance line and has the decode row, the token digest and the JSON result line.
+- `backend/` holds the backend evidence logs described above.
 - `ticket-e4b-13in.log`, `ticket-9b-13in.log` and `ticket-9b-m2.log` are the logs of the three blocks. Each has every run with its decode row and digest, the `util_min` table of the threads at start and exit, and the summary lines.
 - `clampab.sh`, `run_clamped.py` and `clampab_analyze.py` are the scripts that ran. Two path strings are replaced: the score directory by `$WORK/score` and the sampler directory by `$WORK/sampler`. In the logs the tree path is replaced by `$TREE`.
 - `SHA256SUMS` holds the sha256 of every file here. Check it with `sha256sum -c SHA256SUMS`.
