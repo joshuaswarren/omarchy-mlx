@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/inst
 ```
 
 `--patch-venv` downloads the patch series that matches the venv's mlx-lm
-(0.31.3 or 0.32.x) into the install prefix and applies it. `mlx-omarchy
+(0.31.3, or 0.32.0 through 0.32.2, the releases tried) into the install prefix and applies it. `mlx-omarchy
 serve` prints one line at launch saying whether the patches are applied.
 
 The wheels ship GPU kernels, not the driver. The Omarchy package path

@@ -805,6 +805,10 @@ def mlxlm_patch_status() -> str | None:
     The patches edit mlx-lm's .py files in place, so a file that still matches
     its wheel RECORD hash is unpatched. Counts the issue-#217 metric: .py files
     of the installed mlx-lm whose sha256 differs from the wheel's RECORD.
+    Changed files alone do not prove a complete apply: the script edits files
+    one patch at a time, so a failure part way leaves some of them changed. The
+    script writes mlx_lm/.omarchy-serve-patches only after the last step, so
+    "applied" needs that record for this mlx-lm version as well.
     Returns None when mlx-lm is absent (not the serving engine's concern).
     """
     try:
@@ -826,8 +830,16 @@ def mlxlm_patch_status() -> str | None:
     if not total:
         return None
     if modified:
-        return (f"mlx-lm serve patches: applied ({modified} of {total} files "
-                "differ from the wheel RECORD)")
+        try:
+            record = Path(dist.locate_file("mlx_lm/.omarchy-serve-patches")).read_text()
+        except OSError:
+            record = ""
+        if f"mlx_lm={dist.version}\n" in record:
+            return (f"mlx-lm serve patches: applied ({modified} of {total} files "
+                    "differ from the wheel RECORD, apply completed)")
+        return (f"mlx-lm serve patches: PARTIAL or unverified ({modified} of {total} files "
+                "differ from the wheel RECORD, but no completed apply is recorded for "
+                f"mlx-lm {dist.version}); fix: install.sh --patch-venv <this venv>")
     return ("mlx-lm serve patches: NOT applied (stock mlx-lm); "
             "fix: install.sh --patch-venv <this venv>")
 

@@ -36,6 +36,9 @@ else
 fi
 SITE="$(dirname "$(ls -d "$VENV"/lib/python3.*/site-packages/mlx_lm 2>/dev/null | head -n 1 || true)")"
 [[ -d "$SITE/mlx_lm" ]] || { echo "mlx_lm not found under $VENV" >&2; exit 3; }
+# Completion record: removed now, written only after every step below succeeded (set -e), so a half-applied tree never has one.
+RECORD_FILE="$SITE/mlx_lm/.omarchy-serve-patches"
+rm -f "$RECORD_FILE"
 # Two series: patches/ for mlx-lm 0.31.3 (every vendor lock), patches/mlx-lm-0.32/ for the 0.32 API
 # line (mlx-lm 94cdcae, the commit oMLX pins). StopSequences is the 0.32 API marker.
 SERIES="patches"
@@ -247,3 +250,6 @@ python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
 # swiglu; prefill keeps the compiled function. Kill switch
 # MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
+# Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
+DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
+printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"

@@ -167,6 +167,26 @@ def test_prefix_layout_reaches_the_reference_count(
     assert count == reference_count, (
         f"prefix layout patched {version} to {count} files, checkout "
         f"reference is {reference_count}")
+    record = (tree / "lib" / "python3.11" / "site-packages" / "mlx_lm" / ".omarchy-serve-patches").read_text()
+    assert f"mlx_lm={version}\n" in record, f"no completion record for {version}: {record!r}"
+
+
+def test_a_failed_apply_leaves_no_completion_record(wheels, version, tmp_path):
+    """The script edits files one patch at a time. When a later patch fails the
+    earlier files stay changed, but the completion record must not exist, so the
+    serve status says PARTIAL instead of applied."""
+    tree = tmp_path / "venv"
+    site = _pristine_site(wheels, tree)
+    target = site / "mlx_lm" / "models" / "gated_delta.py"
+    target.write_text(target.read_text() + "\nDRIFT = True\n")
+    target.write_text(target.read_text().replace("import mlx.core as mx", "import mlx.core as mx  # drift", 1))
+    stale = site / "mlx_lm" / ".omarchy-serve-patches"
+    stale.write_text(f"series=old\nmlx_lm={version}\n")  # a record left by an earlier complete apply
+    r = _run_apply(SCRIPT, tree)
+    if r.returncode == 0:
+        pytest.skip(f"the drifted file did not stop the series on {version}")
+    assert not (site / "mlx_lm" / ".omarchy-serve-patches").exists()
+    assert _count_modified(site) >= 2, "an earlier patch should have changed a file besides the drifted one"
 
 
 # ---------------------------------------------------------------------------
