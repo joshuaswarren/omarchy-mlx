@@ -24,12 +24,14 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
+#include "mlx/version.h"
 
 using namespace mlx::core;
 using mlx::core::omarchy::trace::counters;
@@ -59,6 +61,14 @@ std::vector<float> pattern(size_t count, uint32_t seed) {
     v.push_back(static_cast<float>(static_cast<double>(s % 20000u) / 10000.0) - 1.0f);
   }
   return v;
+}
+
+// Provenance beside every measurement (AGENTS.md test rules): the loaded libmlx version stamp (the
+// wheel's source commit) and the device that ran the test.
+void provenance(const char* tag) {
+  const auto& caps = omarchy::device(0).capabilities();
+  std::cout << "[provenance] " << tag << " mlx=" << mlx::core::version() << " device=\"" << caps.device_name
+            << "\" driver=\"" << caps.driver_info << "\" subgroup_size=" << caps.subgroup_size << "\n";
 }
 
 struct Shape27 {
@@ -131,6 +141,7 @@ bool same(const Run& x, const Run& y, Stream s) {
 TEST_CASE("gdn raw decode bf16 A_log: native GQA equals the expanded and the repeated routes bit for bit") {
   if (!compute_available()) return;
   Stream s = gpu_stream();
+  provenance("gdn_gqa_bf16a");
   struct Case {
     int B;
     int pad;
@@ -167,6 +178,7 @@ TEST_CASE("gdn raw decode bf16 A_log: native GQA equals the expanded and the rep
 TEST_CASE("gdn raw decode: calls outside the bf16 A_log native route do not change") {
   if (!compute_available()) return;
   Stream s = gpu_stream();
+  provenance("gdn_gqa_bf16a_outside");
   Shape27 sh;
   // Flag "0" and an unset flag are the same route.
   {
