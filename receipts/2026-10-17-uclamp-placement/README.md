@@ -108,7 +108,7 @@ The trace shows which kernels the backend dispatched. It does not show that no t
 - `runs/` holds the stdout of all 48 runs, 16 per block. Each file starts with the provenance line and has the decode row, the token digest and the JSON result line.
 - `backend/` holds the backend evidence logs described above.
 - `ticket-e4b-13in.log`, `ticket-9b-13in.log` and `ticket-9b-m2.log` are the logs of the three blocks. Each has every run with its decode row and digest, the `util_min` table of the threads at start and exit, and the summary lines.
-- `clampab.sh`, `run_clamped.py` and `clampab_analyze.py` are the scripts that ran. Two path strings are replaced: the score directory by `$WORK/score` and the sampler directory by `$WORK/sampler`. In the logs the tree path is replaced by `$TREE`.
+- `clampab.sh`, `run_clamped.py` and `clampab_analyze.py` are the scripts that ran. Two path strings are replaced: the score directory by `$WORK/score` and the sampler directory by `$WORK/sampler`. In the logs the tree path is replaced by `$TREE`, and the boot id that the script prints at the start of a block is removed.
 - `SHA256SUMS` holds the sha256 of every file here. Check it with `sha256sum -c SHA256SUMS`.
 
 The scripts as run had these sha256 prefixes: `clampab.sh` `6669a1c70f15c304`, `run_clamped.py` `9249ca2a2ec08145`, `clampab_analyze.py` `d8b7801b808237ec`. The copies here differ only by the replaced paths. The helper modules of `bench_decode.py`, `caps_sim_guard.py` and `mlx_provenance.py`, are the files in `scripts/`.
