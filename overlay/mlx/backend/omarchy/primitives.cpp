@@ -12736,7 +12736,16 @@ void GatedDeltaUpdate::eval_gpu(
       decode_path_override("MLX_OMARCHY_GDN_GQA_DECODE") != 0;
   const bool gqa_native = gdn_gqa_decode && decode_shape && raw_gates_mode &&
       Hk != Hv && A_log.dtype() == float32 && gdn_decode_tile_enabled(encoder);
-  if (fused_ready && Hk != Hv && !gqa_native) {
+  // MLX_OMARCHY_GDN_GQA_BF16A=1 (read live, default off): the same native GQA
+  // decode for bf16-A_log models (the Qwen3.8 family), through
+  // GatedDeltaDecodeBF16Gqa, the default-order kernel with the key-head index
+  // of the composed one. q and k keep their Hk heads, so the two expansion
+  // copies per linear layer per token are not recorded.
+  const char* gqa_bf16a_env = std::getenv("MLX_OMARCHY_GDN_GQA_BF16A");
+  const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
+      decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
+      gdn_decode_tile_enabled(encoder);
+  if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
       array wide(Shape{B, T, Hv, Dk}, x.dtype(), nullptr, {});
@@ -12786,7 +12795,8 @@ void GatedDeltaUpdate::eval_gpu(
     params.in_strides[2] = checked_u32(Hv, tag, out);
     // Native GQA: q and k carry Hk heads; the composed-order tiled shader
     // maps value head j to key head j / (Hv / Hk). 0 means equal head counts.
-    params.in_strides[3] = gqa_native ? checked_u32(Hk, tag, out) : 0u;
+    params.in_strides[3] =
+        (gqa_native || gqa_bf16a) ? checked_u32(Hk, tag, out) : 0u;
     std::array<omarchy::ComputeBinding, 10> bindings{
         binding(q),    // 0 QBuf
         binding(k),    // 1 KBuf
@@ -12839,7 +12849,8 @@ void GatedDeltaUpdate::eval_gpu(
     const bool composed = (params.flags & 512u) != 0u;
     const omarchy::ComputeKernel kernel = decode_tile
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed
-                    : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
+                    : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
+                                : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
         : gdn_pf
         ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed
                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)

@@ -284,6 +284,15 @@ void main() {
     uint hk_b = params.in_strides[3];
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
+#elif defined(GDN_NATIVE_GQA_INDEX)
+  // The default arithmetic order with the native GQA key-head index above
+  // (bf16 A_log models; MLX_OMARCHY_GDN_GQA_BF16A). Nothing else differs.
+  uint khead = head;
+  if (params.in_strides[3] != 0u) {
+    uint hv_b = params.in_strides[2];
+    uint hk_b = params.in_strides[3];
+    khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
+  }
 #else /* GDN_COMPOSED_ORDER */
   uint khead = head;
 #endif /* GDN_COMPOSED_ORDER */
