@@ -167,6 +167,9 @@
 #include "reduce_bf16.h"
 #include "reduce_f16.h"
 #include "reduce_f32.h"
+#include "reduce_row_bf16.h"
+#include "reduce_row_f16.h"
+#include "reduce_row_f32.h"
 #include "hadamard_bf16.h"
 #include "hadamard_f16.h"
 #include "hadamard_f32.h"
@@ -1960,6 +1963,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_vec6_c4r1_bf16, qmm_vec6_c4r1_bf16_size};
     case ComputeKernel::QmmVec6C1R8BF16:
       return {qmm_vec6_c1r8_bf16, qmm_vec6_c1r8_bf16_size};
+    case ComputeKernel::ReduceRowF32:
+      return {reduce_row_f32, reduce_row_f32_size};
+    case ComputeKernel::ReduceRowF16:
+      return {reduce_row_f16, reduce_row_f16_size};
+    case ComputeKernel::ReduceRowBF16:
+      return {reduce_row_bf16, reduce_row_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

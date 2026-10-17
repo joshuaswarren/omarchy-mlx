@@ -9769,6 +9769,12 @@ void Real::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_complex_extract(name(), 0, inputs, out, out.primitive().stream());
 }
 
+// MLX_OMARCHY_ROW_REDUCE=1 turns the workgroup-per-row suffix reduction on.
+bool omarchy_row_reduce_enabled() {
+  const char* value = std::getenv("MLX_OMARCHY_ROW_REDUCE");
+  return value != nullptr && std::string(value) == "1";
+}
+
 void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
   auto [reduce_type, axes] = state();
@@ -9856,6 +9862,60 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     }
     if (reduce_size == 0) {
       suffix_fast_path = false;
+    }
+  }
+
+  // Workgroup-per-row route (reduce_row.comp): a float Sum over a
+  // row-contiguous suffix with one 256-wide workgroup per output row and a
+  // fixed shared-memory tree. The serial kernels below give one invocation a
+  // whole row, which costs about 0.9 ms for one row of 8192 float32 values
+  // (every batch 1 decode norm, mean and variance over the last axis). Rows
+  // shorter than 256 keep the serial kernels, which waste fewer invocations.
+  // Max and Min stay on the serial kernels: the tree combines equal values
+  // in a different order, so a tie between +0 and -0 could return the other
+  // zero. Default off; MLX_OMARCHY_ROW_REDUCE=1 turns the route on.
+  if (omarchy_row_reduce_enabled() && float_dtype &&
+      out.dtype() == input.dtype() && input.flags().row_contiguous &&
+      reduce_type == Reduce::Sum) {
+    int first_row_axis = input.ndim() - static_cast<int>(axes.size());
+    bool row_suffix = first_row_axis >= 0;
+    size_t row_reduce_size = 1;
+    for (int index = 0; index < static_cast<int>(axes.size()); ++index) {
+      if (axes[index] != first_row_axis + index) {
+        row_suffix = false;
+        break;
+      }
+      row_reduce_size *= input.shape(axes[index]);
+    }
+    if (row_suffix && row_reduce_size >= 256 &&
+        row_reduce_size <= (size_t(1) << 30) && out.size() > 0 &&
+        input.size() > 0) {
+      // The same float capability gate the general path applies below.
+      require_float_input(operation_name, input, out, encoder);
+      out.set_data(allocate_omarchy(out.nbytes()));
+      uint32_t output_size = checked_u32(out.size(), operation_name, out);
+      omarchy::ComputeParams params;
+      params.count = output_size;
+      params.operation = 0u;
+      params.reduce_size = static_cast<uint32_t>(row_reduce_size);
+      params.output_size = output_size;
+      params.lhs_offset =
+          checked_item_offset(input, input.size(), operation_name, out);
+      params.output_offset =
+          checked_item_offset(out, out.size(), operation_name, out);
+      auto kernel = select_float_kernel(
+          out.dtype(),
+          omarchy::ComputeKernel::ReduceRowF32,
+          omarchy::ComputeKernel::ReduceRowF16,
+          omarchy::ComputeKernel::ReduceRowBF16);
+      std::array<omarchy::ComputeBinding, 2> bindings{
+          binding(input), binding(out)};
+      encoder.dispatch_compute(
+          kernel,
+          bindings,
+          params,
+          std::min(output_size, omarchy::kMaxComputeGroupCountX));
+      return;
     }
   }
 
