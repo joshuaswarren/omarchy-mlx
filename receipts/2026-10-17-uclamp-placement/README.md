@@ -22,7 +22,7 @@ The clamp value is 1024 in every clamped arm.
 - One fixed prompt: `Write a short story about a lighthouse keeper who finds a message in a bottle.` Greedy, temperature 0, seed 0.
 - Four rounds. Each round runs the four arms once. The order is a Latin square. The rounds run `N T B A`, `T B A N`, `B A N T` and `A N T B`, so each arm takes every position once.
 - 15 seconds of idle before each run, and the load average under 0.5 before the first. The script refuses to start when an ANE process is running.
-- Each block ran as one GPU ticket under the lab's idle guard. The guard runs one GPU job per host at a time and holds the others back. No other GPU job ran during a block.
+- Each block ran as one `gpu-turn` ticket of the lab's idle guard. The guard queues GPU jobs per host and holds the host's own GPU lock while one runs: `/tmp/m1-gpu.lock` on the 13-inch M1 and `/tmp/m2-gpu.lock` on the M2 Max. No other GPU job ran during a block.
 - The command of every run:
 
 ```
@@ -73,7 +73,7 @@ Mean P-cluster clock and heatpipe power per arm, over the whole runs (load and w
 
 ## Backend evidence
 
-These were collected by a second ticket on each machine, hours after the timed blocks, with the same trees, models and kernel package. The 13-inch M1 was on the same boot. The M2 Max had rebooted in between. They show that the Vulkan backend ran. They are in `backend/`.
+These were collected by a second ticket on each machine, hours after the timed blocks, with the same trees, models and kernel package. The tickets pinned the boot id of the 13-inch M1 and it was unchanged. The ids are removed from the files. The M2 Max had rebooted in between. They show that the Vulkan backend ran. They are in `backend/`.
 
 - Mesa: `mesa 1:26.2.4-1`. Vulkan driver package: `omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2`. The M2 Max reports driver `Honeykrisp`, `Mesa 26.3.0-devel (git-69bde15340)`, Vulkan API 1.4.362.
 - Device: `Apple M2 Max (G14C B1)` from `vulkaninfo` on the M2 Max. `vulkaninfo` is not installed on the 13-inch M1. Its device name comes from `bench_decode.py`: `Apple M1 (G13G B1)`, printed in every `runs/` output.
@@ -83,7 +83,7 @@ These were collected by a second ticket on each machine, hours after the timed b
   - E4B on the 13-inch M1: 35801 lines, 29 distinct kernels.
   - Qwen3.5-9B on the 13-inch M1: 11362 lines, 32 distinct kernels.
   - Qwen3.5-9B on the M2 Max: 11006 lines, 33 distinct kernels.
-  The logs list the ten most dispatched kernel ids with their line counts. The ids are labels of that wheel and change between wheels. The largest `count` field of a dispatch line is 524288 for the 9B and 333312 for E4B. It is a parameter of the dispatch, not a running total.
+  The `omarchy-mlx 0.7.28-2` in the `packages:` lines is the installed package, not the tree the timed runs used. The logs list the ten most dispatched kernel ids with their line counts. The ids are labels of that wheel and change between wheels. The largest `count` field of a dispatch line is 524288 for the 9B and 333312 for E4B. It is a parameter of the dispatch, not a running total.
 - Device reopen: a new process opened the device after the run and computed a small array. All three logs show `Device(gpu, 0)` and `[2.0, 2.0, 2.0, 2.0]`.
 - Serving processes: `litellm=0` and `mlx_lm_server=0` on both machines, counted when the backend evidence ran. They were not counted during the timed blocks.
 
