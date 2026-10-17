@@ -73,6 +73,18 @@ Negative log-likelihood, teacher forced, 255 scored tokens per passage, same loa
 
 The registered rule was a mean difference within 0.01 nats per token on each passage. Apache 2 misses it with 0.0124, so the rule as written fails. On that passage the route gives the lower NLL, by 1.2 standard errors. The paired per-token standard deviation was 0.09, 0.17 and 0.21, three to four times the estimate that set the bound. Three tokens carry the mean of the Apache 2 difference; the largest changes by -2.6 nats. The follow-up study is registered with its rule fixed in advance. It uses eight passages written after the model's training data, with 255 scored tokens each. The unit is the passage and the interval is the mean plus or minus 2 standard errors. The route stays accepted if the upper end of the interval is at most +0.02 nats per token. It is rejected if the upper end is above.
 
+## 4. Unit test on three chips
+
+`omarchy_reduce_row_tests` was built once from the pull request head `c9717a7b6dab2d954af8cae2b69405cd584f7ce1` (CPU build, no GPU use) and the one binary (sha256 `afc4f949a065233dca3972e8720f553eb988f6fda309c52abccccc8d332d6ef1`) ran on each machine. The code of that head is the code of the pull request. The test needs an Apple GPU; without one it prints "Skipping" and reports no assertions. No run printed "Skipping".
+
+| Machine | Driver library sha256 prefix | Mesa | Cases | Assertions |
+| --- | --- | --- | --- | --- |
+| 13-inch M1 (T8103) | `40282811c6e14ef9` | git 69bde15340 | 6 of 6 | 216 of 216 |
+| 16-inch M1 Max (T6001) | `40282811c6e14ef9` | git 69bde15340 | 6 of 6 | 216 of 216 |
+| 14-inch M2 Max (T6021) | `c499962c742f399a` | git a5b1797446 | 6 of 6 | 216 of 216 |
+
+Each machine ran the binary three times, with `MLX_OMARCHY_ROW_REDUCE` unset, `0` and `1`. The test sets that variable itself for every case, so the outer setting does not change a run. All nine outputs are byte-identical, `device-doctest.txt` in this directory is one of them (sha256 `88485fa676e78872e3138fe633e9c5f1f415dbc5d31239bdeef60a13bcc39cd1`). For float32, float16 and bfloat16 rows of 256 to 70001 elements it lists the worst row's error of each route against a long double sum, in units of 2^-24 times the sum of magnitudes. Each case also checks the row route against a bound of 32 of those units plus the storage step. The values on the three chips are equal.
+
 ## Source records
 
 `SHA256SUMS` holds the sha256 of the source record of each section: the benchmark log, output and traces of the timing run, the two fidelity result files with their ticket logs, and the cluster result and comparison files.
