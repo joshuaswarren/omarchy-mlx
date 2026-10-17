@@ -3,7 +3,7 @@ FPSUB kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance lo
 FPSUB tree libmlx sha256 a1b8ffa54ea3688ff6aa2e8923a903cce41648e7301721ee8a03a678198bd11f script 8c2556177c9e2310
 FPSUB tree holds GatherQmmNbSubFp: 1 line(s) with the name
 FPSUB run1 rc=0 load1_after=1.11
-FPSUB run1: libmlx loaded: ['$HOME/scratch/w6z/fpsub-tree/mlx/lib/libmlx.so']
+FPSUB run1: libmlx loaded: ['$WORK/fpsub-tree/mlx/lib/libmlx.so']
 FPSUB run1: default device: Device(gpu, 0) mlx 0.32.4.dev202610162253+2f8fc403
 FPSUB run1: bfloat16 index_count 4: default ms 1.815 (min 0.992 max 1.892) err 1.525e+01 OK; scalar ms 3.893 (min 3.797 max 4.886) err 1.525e+01 OK; ref max 5606.50 tol 4.485e+01; speedup 2.14x; 24 layers x 3 calls x default = 131 ms, x scalar = 280 ms per token (expert matmuls only)
 FPSUB run1: bfloat16 index_count 64: default ms 8.262 (min 8.249 max 8.287) err 1.832e+01 OK; scalar ms 33.185 (min 33.157 max 33.297) err 1.832e+01 OK; ref max 8941.68 tol 7.153e+01; speedup 4.02x
@@ -22,4 +22,4 @@ FPSUB kernels: bfloat16 index_count 4: id 620 1
 FPSUB kernels: bfloat16 index_count 64: id 620 1
 FPSUB kernels: float16 index_count 4: id 619 1
 FPSUB kernels: float16 index_count 64: id 619 1
-FPSUB DONE out=$HOME/scratch/w6z/fpsub-gpu-m2-1 rc=0 rc2=0
+FPSUB DONE out=$WORK/fpsub-gpu-m2-1 rc=0 rc2=0

@@ -56,7 +56,38 @@ The cost bar holds for both dtypes at steady state: 5.06x for f16 and 4.95x for 
 
 Arithmetic, not a measurement of the model: 24 layers times three expert matmuls is 72 calls per token. At the scalar rate of 3.8 to 3.9 ms that is about 275 to 280 ms. At the steady default rate of 0.75 to 0.76 ms it is about 54 to 55 ms, for both dtypes.
 
-The gpt-oss-20b receipt in `receipts/2026-10-09-linux-vs-macos` reads 459 ms per token on a 16-inch M1 Max with an older wheel. The scalar arithmetic accounts for about 60 percent of that. What the rest is has not been measured.
+The scalar gather costs several times more on the 16-inch M1 Max (see the PR 190 receipt), so these M2 figures say nothing about that machine's token time.
+
+## Environment and provenance
+
+| Item | Value |
+|---|---|
+| Packages | `mesa 1:26.2.4-1`, `vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2`, `linux-aurora 7.1.12.aurora2-20261013.18`, `asahi-fwextract 0.8.4-1` |
+| Vulkan device | Apple M2 Max (G14C B1), Honeykrisp, driver `Mesa 26.3.0-devel (git-69bde15340)`, Vulkan API 1.4.362 |
+| Provenance | `scripts/mlx_provenance.py --expect-wheel` on the unpacked wheel: `verified` is `match`, and `mx.__version__` equals the wheel version `0.32.4.dev202610162253+2f8fc403` |
+| Device reopen | a new process opened the device and computed a small array on it: `Device(gpu, 0)`, values `[2.0, 2.0, 2.0, 2.0]` |
+| Firmware | read through the `asahi-fwextract` package version above. No separate firmware version string was captured |
+
+The metadata run is `m2-fpsub-meta.sh` with `m2-meta.log`. It ran after the numerics runs, on the same boot and the same unpacked wheel.
+
+## Exact commands
+
+Each run used the wheel unpacked into a directory `TREE`:
+
+```sh
+PYTHONPATH=$TREE python gptoss_fp_sub_gpu.py
+MLX_OMARCHY_TRACE_DISPATCH=1 PYTHONPATH=$TREE python gptoss_fp_sub_gpu.py
+```
+
+The first command gave the numerics and the times. The second gave the kernel ids. The repeat used `gptoss_fp_sub_gpu_repeat.py` in the same two ways. The scripts here have the working-directory paths of the run replaced by `$WORK` and `$PYENV`. Nothing else differs. The run scripts had these sha256 prefixes: first run `8c2556177c9e2310`, repeat `3cbae27b846753bd`.
+
+## Timing procedure
+
+The call times are medians of seven calls after one warm-up, in one process, with the performance governor and no thermal control. They are cost figures. The first cell of a run is slower than later cells, as the repeat shows.
+
+## Kernel ids
+
+The ids in this receipt belong to the wheel `+2f8fc403`. Other branches also append kernels at the end of the enum, so the ids can shift after a merge. Match kernels by name: `GatherQmmNbSubFpBF16` and `GatherQmmNbSubFpF16`.
 
 ## Not measured
 

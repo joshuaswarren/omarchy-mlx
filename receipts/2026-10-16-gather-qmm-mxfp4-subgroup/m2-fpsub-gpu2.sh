@@ -4,8 +4,8 @@
 # Run 2 (trace on): the same script, only to read the kernel id the default route dispatches in each cell (timings from this run are not used).
 # Random weights: cost and numerics only. No model, no download.
 set -uo pipefail
-W=$HOME/scratch/w6z
-S=$HOME/scratch/w71/score
+W=${WORK:?set WORK to the working directory}
+S=${PYENV:?set PYENV to a directory with venv/bin/python}
 WHL=$(find "$W/fpsub-wheel" -maxdepth 1 -name 'mlx_omarchy-*+2f8fc40*-cp314-cp314-linux_aarch64.whl' | head -1)
 TREE=$W/fpsub-tree
 O=$W/fpsub-gpu-m2-2
@@ -21,14 +21,14 @@ if [ ! -e "$TREE" ]; then
   mkdir -p "$TREE" && "$S/venv/bin/python" -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$WHL" "$TREE" || { say "ABORT unpack"; exit 1; }
 fi
 say "kernel=$(uname -r) boot=$(cut -c1-8 /proc/sys/kernel/random/boot_id) governor=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor) load1=$(cut -d' ' -f1 /proc/loadavg)"
-say "tree libmlx sha256 $(sha256sum "$TREE/mlx/lib/libmlx.so" | cut -c1-64) script $(sha256sum "$W/muse/gptoss_fp_sub_gpu.py" | cut -c1-16)"
+say "tree libmlx sha256 $(sha256sum "$TREE/mlx/lib/libmlx.so" | cut -c1-64) script $(sha256sum "$W/gptoss_fp_sub_gpu.py" | cut -c1-16)"
 say "tree holds GatherQmmNbSubFp: $(grep -c -a 'GatherQmmNbSubFp' "$TREE/mlx/lib/libmlx.so") line(s) with the name"
-timeout 900 env PYTHONPATH="$TREE" "$S/venv/bin/python" "$W/muse/gptoss_fp_sub_gpu.py" > "$O/run1.out" 2> "$O/run1.err"
+timeout 900 env PYTHONPATH="$TREE" "$S/venv/bin/python" "$W/gptoss_fp_sub_gpu.py" > "$O/run1.out" 2> "$O/run1.err"
 rc=$?
 say "run1 rc=$rc load1_after=$(cut -d' ' -f1 /proc/loadavg)"
 while IFS= read -r ln; do say "run1: $ln"; done < "$O/run1.out"
 grep -a -v "^\[rtmod\]" "$O/run1.err" | tail -n 6 | while IFS= read -r ln; do say "run1 err: $ln"; done
-MLX_OMARCHY_TRACE_DISPATCH=1 timeout 900 env PYTHONPATH="$TREE" "$S/venv/bin/python" "$W/muse/gptoss_fp_sub_gpu.py" > "$O/run2.out" 2> "$O/run2.err"
+MLX_OMARCHY_TRACE_DISPATCH=1 timeout 900 env PYTHONPATH="$TREE" "$S/venv/bin/python" "$W/gptoss_fp_sub_gpu.py" > "$O/run2.out" 2> "$O/run2.err"
 rc2=$?
 say "run2 (trace) rc=$rc2"
 awk '/CELLMARK/ {cell=$0; sub(/^CELLMARK /,"",cell); on=1; next} /CELLEND/ {on=0; next} on && /DISPATCH kernel=/ {split($0,a,"kernel="); split(a[2],b," "); n[cell" id "b[1]]++} END {for (k in n) print k, n[k]}' "$O/run2.err" | sort | while IFS= read -r ln; do say "kernels: $ln"; done
