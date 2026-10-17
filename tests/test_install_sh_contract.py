@@ -348,7 +348,7 @@ class ServeCliContractTests(unittest.TestCase):
         was missing and the install died mid-patch).
         """
         text = installer_text()
-        section = text.split("Applying mlx-lm serve patches", 1)[1]
+        section = text.split("fetch_patch_assets()", 1)[1]
         self.assertIn("grep -oE 'scripts/[a-z0-9_-]+\\.py'", section)
         self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/$s"', section)
         self.assertIn('-o "$PREFIX/$s"', section)
@@ -468,7 +468,7 @@ class PatcherCoverageTests(unittest.TestCase):
 
     def test_every_invoked_patcher_is_fetched_by_the_installer(self):
         text = installer_text()
-        section = text.split("Applying mlx-lm serve patches", 1)[1]
+        section = text.split("fetch_patch_assets()", 1)[1]
         self.assertIn("grep -oE 'scripts/[a-z0-9_-]+\\.py'", section)
         self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/$s"', section)
         # Simulate the installer's exact fetch grep over the apply script:
@@ -494,7 +494,7 @@ class AssistantInstallTests(unittest.TestCase):
         text = installer_text()
         self.assertIn("VOICE=0", text)
         self.assertIn("--voice) VOICE=1 ;;", text)
-        self.assertIn("(supported: --ane, --voice, --system, --uninstall)", text)
+        self.assertIn("(supported: --ane, --voice, --system, --uninstall, --patch-venv PATH)", text)
         self.assertIn("MLX_AUDIO_VERSION=0.5.6", text)
         voice_section = text[text.index("if (( VOICE )); then"):]
         self.assertIn('--no-deps "mlx-audio==$MLX_AUDIO_VERSION"', voice_section)

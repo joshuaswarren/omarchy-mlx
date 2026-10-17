@@ -5,6 +5,7 @@
 #   bash install.sh --ane
 #   bash install.sh --voice
 #   bash install.sh --uninstall   (add --purge to also remove chat history, saved pairs and converted models)
+#   bash install.sh --patch-venv ~/.venvs/mlx   (apply the vendored mlx-lm serve patches to an existing venv)
 #
 # The default install writes only under $HOME, except for runtime packages
 # installed through pacman. --ane also provisions host-global ANE ownership.
@@ -29,6 +30,60 @@ ANE=0
 VOICE=0
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Sets VERSION ($1 labels the say line): the MLX_OMARCHY_VERSION pin, else the
+# latest published release (unauthenticated GitHub API, 60 req/h/IP).
+resolve_release() {
+  local label="${1:-Using}"
+  if [[ -n "${MLX_OMARCHY_VERSION:-}" ]]; then
+    VERSION=$MLX_OMARCHY_VERSION
+    say "$label mlx-omarchy $VERSION (pinned by MLX_OMARCHY_VERSION)"
+    return
+  fi
+  say "Resolving the latest mlx-omarchy release"
+  VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null) ||
+    die "could not resolve the latest release from api.github.com (offline, or the unauthenticated 60 req/h limit is exhausted); install a known version with MLX_OMARCHY_VERSION=v0.7.1"
+  say "$label mlx-omarchy $VERSION"
+}
+
+# Download the vendored mlx-lm serve patches for $VERSION into $PREFIX: the
+# apply script itself plus every patch and helper script it names. The patch
+# names span BOTH series (patches/ for the mlx-lm 0.31.3 line,
+# patches/mlx-lm-0.32/ for the 0.32 line); a name that exists in only one
+# series 404s on the other and is skipped. The apply script stays the loud
+# checker: if the series it selects lacks a file it needs, it exits 5.
+fetch_patch_assets() {
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/scripts/apply-mlx-lm-patches.sh" \
+    -o "$PREFIX/apply-mlx-lm-patches.sh"
+  mkdir -p "$PREFIX/patches" "$PREFIX/patches/mlx-lm-0.32" "$PREFIX/scripts"
+  local p s
+  for p in $(grep -oE 'mlx-lm-[a-z0-9-]+\.patch' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p" ||
+      rm -f "$PREFIX/patches/$p"
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/mlx-lm-0.32/$p" \
+      -o "$PREFIX/patches/mlx-lm-0.32/$p" || rm -f "$PREFIX/patches/mlx-lm-0.32/$p"
+  done
+  for s in $(grep -oE 'scripts/[a-z0-9_-]+\.py' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/$s" -o "$PREFIX/$s"
+  done
+}
+
+# --patch-venv: apply the vendored mlx-lm serve patches to an EXISTING venv.
+# It serves the release-wheel path of docs/INSTALL.md and the Muse quick start, which
+# upgrades the installer venv to mlx-lm 0.32.0 after the install patched it as
+# 0.31.3. Runs with the installer's own download logic and before the hardware
+# and interpreter gates: patching only edits mlx-lm's .py files, so it also
+# works on an x86_64 dev box (no Apple GPU, no ANE, any Python that has mlx-lm).
+apply_to_existing_venv() {
+  local target="${1:-}"
+  [[ -n "$target" && -d "$target" ]] || die "usage: install.sh --patch-venv /path/to/existing/venv"
+  mkdir -p "$PREFIX"
+  resolve_release "Patching from"
+  fetch_patch_assets
+  say "Patching mlx-lm in $target (vendored serve patches)"
+  MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$target"
+}
 
 # ---------------------------------------------------------------------------
 # System-layout install (packaging lane). A PKGBUILD runs this in build()
@@ -239,6 +294,10 @@ case "${1:-}" in
     install_system "${@:2}"
     exit 0
     ;;
+  --patch-venv)
+    apply_to_existing_venv "${2:-}"
+    exit 0
+    ;;
   --uninstall)
     if command -v systemctl >/dev/null 2>&1; then
       systemctl --user disable --now mlx-omarchy-chat.service >/dev/null 2>&1 || true
@@ -285,7 +344,7 @@ case "${1:-}" in
     exit 0
     ;;
   "") ;;
-  *) die "unknown option: $1 (supported: --ane, --voice, --system, --uninstall)" ;;
+  *) die "unknown option: $1 (supported: --ane, --voice, --system, --uninstall, --patch-venv PATH)" ;;
 esac
 
 # 1. Hardware and interpreter checks. The release wheel is cp314 linux_aarch64
@@ -304,16 +363,7 @@ fi
 
 # MLX_OMARCHY_VERSION pins a release explicitly; otherwise the latest published
 # release is resolved from the GitHub API (unauthenticated limit: 60 req/h/IP).
-if [[ -n "${MLX_OMARCHY_VERSION:-}" ]]; then
-  VERSION=$MLX_OMARCHY_VERSION
-  say "Installing mlx-omarchy $VERSION (pinned by MLX_OMARCHY_VERSION)"
-else
-  say "Resolving the latest mlx-omarchy release"
-  VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-    python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null) ||
-    die "could not resolve the latest release from api.github.com (offline, or the unauthenticated 60 req/h limit is exhausted); install a known version with MLX_OMARCHY_VERSION=v0.7.1"
-  say "Installing mlx-omarchy $VERSION"
-fi
+resolve_release "Installing"
 [[ "$(uname -m)" == aarch64 ]] || die "mlx-omarchy runs on Apple Silicon (aarch64); this machine is $(uname -m)."
 if [[ -r /proc/device-tree/compatible ]] &&
    ! tr '\0' ' ' </proc/device-tree/compatible | grep -qE 'apple,t(8103|6000|6001|6002|6021)'; then
@@ -456,18 +506,7 @@ fi
 #     downloads exactly the patches that script names, so a patch added to the
 #     script can never be missing here. Served models pick them up from the venv.
 say "Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
-curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/scripts/apply-mlx-lm-patches.sh" -o "$PREFIX/apply-mlx-lm-patches.sh"
-mkdir -p "$PREFIX/patches"
-for p in $(grep -oE 'mlx-lm-[a-z0-9-]+\.patch' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p"
-done
-# The apply script also runs helper scripts from the repo (scripts/*.py).
-# Download exactly those, by the same derive-from-the-script contract: a
-# helper the script names can never be missing here.
-mkdir -p "$PREFIX/scripts"
-for s in $(grep -oE 'scripts/[a-z0-9_-]+\.py' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/$s" -o "$PREFIX/$s"
-done
+fetch_patch_assets
 MLX_OMARCHY_CONV_RING="${MLX_OMARCHY_CONV_RING:-0}" bash "$PREFIX/apply-mlx-lm-patches.sh" "$VENV"
 
 # 5. Demo and launchers.

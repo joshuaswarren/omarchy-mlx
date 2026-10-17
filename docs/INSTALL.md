@@ -84,6 +84,20 @@ which would clobber this wheel. On x86_64 there is no ANE. You need a
 software Vulkan driver plus `MLX_OMARCHY_ALLOW_NON_APPLE=1` to import
 the module.
 
+The wheel ships the GPU runtime only. The mlx-lm serve patches (the GDN
+fast routes, the greedy prune, and the rest of the installer's patch set)
+are vendored in this repository, and `mlx_lm.server` runs the stock
+upstream path without them. End the install with the installer's patch
+step:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joshuaswarren/omarchy-mlx/main/install.sh | bash -s -- --patch-venv ~/.venvs/mlx
+```
+
+`--patch-venv` downloads the patch series that matches the venv's mlx-lm
+(0.31.3, or 0.32.0 through 0.32.2, the releases tried) into the install prefix and applies it. `mlx-omarchy
+serve` prints one line at launch saying whether the patches are applied.
+
 The wheels ship GPU kernels, not the driver. The Omarchy package path
 brings the Honeykrisp driver with it (`omarchy-mlx-vulkan`, a private
 ICD under `/usr/lib/omarchy-mlx/vulkan/`). A script or wheel install
