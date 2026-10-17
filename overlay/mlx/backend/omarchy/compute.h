@@ -1048,6 +1048,8 @@ enum class ComputeKernel : uint16_t {
   LogSumExpCombineF32,
   LogSumExpCombineF16,
   LogSumExpCombineBF16,
+  // 2-bit form of the same kernel (bf16, group 64 or 128): 16 codes per word, fp64-gated (no dense 2-bit qmv to match).
+  GatherQmmWord2BF16,
   Count,
 };
 
