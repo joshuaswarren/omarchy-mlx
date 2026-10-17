@@ -6372,9 +6372,11 @@ TEST_CASE("6-bit affine decode matches a host reference at 1 to 17 rows") {
 
 // bf16 4-bit group-64 transposed gather_qmm at one row per index (the decode shape) takes the
 // word-per-lane kernel on a 32-lane subgroup device. Each selected expert's output equals
-// quantized_matmul on that expert's slice bit for bit there; K 640 and N 24 take the one-word tile
-// of the dense kernel, K 1024 and N 16 the two-word tile. Elsewhere (no subgroup 32) the route is
-// not taken and the output must match a double-precision host contraction within bf16 rounding.
+// quantized_matmul on that expert's slice bit for bit there. K 640 and K 1024 with N 12 take the
+// one-word tile of the dense kernel, K 1024 with N 16 the two-word tile; N 21 makes the output
+// count (105) not a multiple of the 4 outputs a workgroup owns. An x view that starts 4 elements
+// in is not 16-byte aligned: that call must skip the word route and still match. Without a
+// 32-lane subgroup device the route is not taken and the output must match within bf16 rounding.
 TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected expert") {
   if (!compute_available()) {
     return;
@@ -6388,7 +6390,7 @@ TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected exp
   struct Dims {
     int k, n;
   };
-  for (Dims shape : {Dims{640, 24}, Dims{1024, 16}}) {
+  for (Dims shape : {Dims{640, 24}, Dims{1024, 16}, Dims{640, 21}, Dims{1024, 12}}) {
     std::vector<float> matrix(static_cast<size_t>(experts) * shape.n * shape.k);
     for (size_t i = 0; i < matrix.size(); ++i) {
       matrix[i] = static_cast<float>(static_cast<int>((i * 41u) % 67u) - 33) * 0.03125f;
@@ -6425,8 +6427,15 @@ TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected exp
       }
       array lhs(lhs_values.begin(), Shape{top}, uint32);
       array rhs(picked.begin(), Shape{top}, uint32);
-      auto got = readback_f32(stream, gather_qmm(
-          x, w, scales, biases, lhs, rhs, true, 64, 4, "affine", std::nullopt, false, stream));
+      array gathered = gather_qmm(
+          x, w, scales, biases, lhs, rhs, true, 64, 4, "affine", std::nullopt, false, stream);
+      gathered.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const int64_t dispatched = omarchy::trace::counters().last_dispatched_kernel.load();
+      if (subgroup_ready) {
+        CHECK_EQ(dispatched, static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmWordBF16));
+      }
+      auto got = readback_f32(stream, gathered);
       REQUIRE_EQ(got.size(), static_cast<size_t>(top) * shape.n);
       for (int j = 0; j < top; ++j) {
         const int e = static_cast<int>(picked[j]);
@@ -6454,6 +6463,42 @@ TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected exp
             CHECK(std::fabs(static_cast<double>(row[c]) - dense[c]) <= 0.02 * max_abs + 0.05);
           }
         }
+      }
+    }
+    {
+      std::vector<float> view_values(shape.k);
+      for (int i = 0; i < shape.k; ++i) {
+        view_values[i] = static_cast<float>(((i * 29) % 41) - 20) * 0.0625f;
+      }
+      view_values = round_trip(stream, view_values, bfloat16);
+      std::vector<float> parent_values(shape.k + 4, 123.0f);
+      std::copy(view_values.begin(), view_values.end(), parent_values.begin() + 4);
+      array parent = astype(
+          array(parent_values.begin(), Shape{1, 1, shape.k + 4}, float32), bfloat16, stream);
+      array x_view = slice(parent, {0, 0, 4}, {1, 1, shape.k + 4}, stream);
+      array x_aligned = astype(
+          array(view_values.begin(), Shape{1, 1, shape.k}, float32), bfloat16, stream);
+      const std::vector<uint32_t> zeros(top, 0u);
+      array lhs0(zeros.begin(), Shape{top}, uint32);
+      array rhs_v(picked.begin(), Shape{top}, uint32);
+      array viewed_out = gather_qmm(
+          x_view, w, scales, biases, lhs0, rhs_v, true, 64, 4, "affine", std::nullopt, false, stream);
+      viewed_out.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const int64_t viewed_kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+      if (subgroup_ready) {
+        CHECK_NE(viewed_kernel, static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmWordBF16));
+      }
+      auto viewed = readback_f32(stream, viewed_out);
+      auto aligned = readback_f32(stream, gather_qmm(
+          x_aligned, w, scales, biases, lhs0, rhs_v, true, 64, 4, "affine", std::nullopt, false, stream));
+      REQUIRE_EQ(viewed.size(), aligned.size());
+      double max_abs = 0.0;
+      for (float v : aligned) {
+        max_abs = std::max(max_abs, std::fabs(static_cast<double>(v)));
+      }
+      for (size_t i = 0; i < viewed.size(); ++i) {
+        CHECK(std::fabs(static_cast<double>(viewed[i]) - aligned[i]) <= 0.02 * max_abs + 0.05);
       }
     }
   }

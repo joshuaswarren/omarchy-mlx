@@ -3422,6 +3422,17 @@ void dispatch_gather_qmm(
     if (!use_sub_q3 && bits == 4 && group_size == 64 &&
         out.dtype() == bfloat16 && (word_env == nullptr || word_env[0] != '0') &&
         params.lhs_offset % 8 == 0) {
+      const auto& word_caps = encoder.device().capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          word_caps,
+          word_caps.subgroup_size == 32u &&
+              (word_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u,
+          "GatherQmmWord*",
+          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+           (encoder.device().hardware_capabilities().subgroup_operations &
+            VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
       params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 2);
       params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 2);
       const uint32_t word_groups = (params.count + 3u) / 4u;
