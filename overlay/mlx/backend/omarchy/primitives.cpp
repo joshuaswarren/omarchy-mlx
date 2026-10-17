@@ -3412,6 +3412,41 @@ void dispatch_gather_qmm(
         binding(*biases_d),
         binding(lhs_d),
         binding(rhs_d)};
+    // Word-per-lane kernel (shaders/gather_qmm_word.comp): bf16, 4-bit, group 64.
+    // One 32-lane slot per output element, scales and biases addressed in 16-bit
+    // elements, x read as uvec4 (x element offset a multiple of 8). It runs the
+    // dense qmv's per-word arithmetic, so each output equals quantized_matmul on
+    // the selected expert's slice bit for bit. Opt-in: MLX_OMARCHY_GATHER_QMM_WORD=1
+    // enables it. Default off, so the 8-output element kernel below stays the route:
+    // the teacher-forced NLL gate against it gave verdict REJECT (see the PR).
+    const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
+    if (!use_sub_q3 && bits == 4 && group_size == 64 &&
+        out.dtype() == bfloat16 && word_env != nullptr && word_env[0] == '1' &&
+        params.lhs_offset % 8 == 0) {
+      const auto& word_caps = encoder.device().capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          word_caps,
+          word_caps.subgroup_size == 32u &&
+              (word_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u,
+          "GatherQmmWord*",
+          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
+          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+           (encoder.device().hardware_capabilities().subgroup_operations &
+            VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
+      params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 2);
+      params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 2);
+      const uint32_t word_groups = (params.count + 3u) / 4u;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::GatherQmmWordBF16,
+          direct_bindings,
+          params,
+          std::min(word_groups, omarchy::kMaxComputeGroupCountX),
+          1u,
+          (word_groups + omarchy::kMaxComputeGroupCountX - 1) /
+              omarchy::kMaxComputeGroupCountX);
+      return;
+    }
     // Multi-output form: ROWS outputs per workgroup, bit-identical per output
     // (shaders/gather_qmm_sub.comp ROWS_PER_WG). Transposed layout only, and N a
     // multiple of ROWS so a group never crosses a row, a batch or an expert.
@@ -9769,6 +9804,12 @@ void Real::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_complex_extract(name(), 0, inputs, out, out.primitive().stream());
 }
 
+// MLX_OMARCHY_ROW_REDUCE=1 turns the workgroup-per-row suffix reduction on.
+bool omarchy_row_reduce_enabled() {
+  const char* value = std::getenv("MLX_OMARCHY_ROW_REDUCE");
+  return value != nullptr && std::string(value) == "1";
+}
+
 void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   const array& input = inputs.at(0);
   auto [reduce_type, axes] = state();
@@ -9856,6 +9897,60 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     }
     if (reduce_size == 0) {
       suffix_fast_path = false;
+    }
+  }
+
+  // Workgroup-per-row route (reduce_row.comp): a float Sum over a
+  // row-contiguous suffix with one 256-wide workgroup per output row and a
+  // fixed shared-memory tree. The serial kernels below give one invocation a
+  // whole row, which costs about 0.9 ms for one row of 8192 float32 values
+  // (every batch 1 decode norm, mean and variance over the last axis). Rows
+  // shorter than 256 keep the serial kernels, which waste fewer invocations.
+  // Max and Min stay on the serial kernels: the tree combines equal values
+  // in a different order, so a tie between +0 and -0 could return the other
+  // zero. Default off; MLX_OMARCHY_ROW_REDUCE=1 turns the route on.
+  if (omarchy_row_reduce_enabled() && float_dtype &&
+      out.dtype() == input.dtype() && input.flags().row_contiguous &&
+      reduce_type == Reduce::Sum) {
+    int first_row_axis = input.ndim() - static_cast<int>(axes.size());
+    bool row_suffix = first_row_axis >= 0;
+    size_t row_reduce_size = 1;
+    for (int index = 0; index < static_cast<int>(axes.size()); ++index) {
+      if (axes[index] != first_row_axis + index) {
+        row_suffix = false;
+        break;
+      }
+      row_reduce_size *= input.shape(axes[index]);
+    }
+    if (row_suffix && row_reduce_size >= 256 &&
+        row_reduce_size <= (size_t(1) << 30) && out.size() > 0 &&
+        input.size() > 0) {
+      // The same float capability gate the general path applies below.
+      require_float_input(operation_name, input, out, encoder);
+      out.set_data(allocate_omarchy(out.nbytes()));
+      uint32_t output_size = checked_u32(out.size(), operation_name, out);
+      omarchy::ComputeParams params;
+      params.count = output_size;
+      params.operation = 0u;
+      params.reduce_size = static_cast<uint32_t>(row_reduce_size);
+      params.output_size = output_size;
+      params.lhs_offset =
+          checked_item_offset(input, input.size(), operation_name, out);
+      params.output_offset =
+          checked_item_offset(out, out.size(), operation_name, out);
+      auto kernel = select_float_kernel(
+          out.dtype(),
+          omarchy::ComputeKernel::ReduceRowF32,
+          omarchy::ComputeKernel::ReduceRowF16,
+          omarchy::ComputeKernel::ReduceRowBF16);
+      std::array<omarchy::ComputeBinding, 2> bindings{
+          binding(input), binding(out)};
+      encoder.dispatch_compute(
+          kernel,
+          bindings,
+          params,
+          std::min(output_size, omarchy::kMaxComputeGroupCountX));
+      return;
     }
   }
 

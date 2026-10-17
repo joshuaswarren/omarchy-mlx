@@ -6369,3 +6369,148 @@ TEST_CASE("6-bit affine decode matches a host reference at 1 to 17 rows") {
     }
   }
 }
+
+struct GatherQmmWordGate {
+  GatherQmmWordGate() {
+    setenv("MLX_OMARCHY_GATHER_QMM_WORD", "1", 1);
+  }
+  ~GatherQmmWordGate() {
+    unsetenv("MLX_OMARCHY_GATHER_QMM_WORD");
+  }
+};
+
+// The route is opt-in (MLX_OMARCHY_GATHER_QMM_WORD=1). Then bf16 4-bit group-64 transposed
+// gather_qmm at one row per index (the decode shape) takes the word-per-lane kernel on a
+// 32-lane subgroup device. Each selected expert's output equals
+// quantized_matmul on that expert's slice bit for bit there. K 640 and K 1024 with N 12 take the
+// one-word tile of the dense kernel, K 1024 with N 16 the two-word tile; N 21 makes the output
+// count (105) not a multiple of the 4 outputs a workgroup owns. An x view that starts 4 elements
+// in is not 16-byte aligned: that call must skip the word route and still match. Without a
+// 32-lane subgroup device the route is not taken and the output must match within bf16 rounding.
+TEST_CASE("gather_qmm bf16 4-bit decode equals quantized_matmul per selected expert") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  GatherQmmWordGate word_route_on;
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+  constexpr int experts = 6;
+  constexpr int top = 5;
+  struct Dims {
+    int k, n;
+  };
+  for (Dims shape : {Dims{640, 24}, Dims{1024, 16}, Dims{640, 21}, Dims{1024, 12}}) {
+    std::vector<float> matrix(static_cast<size_t>(experts) * shape.n * shape.k);
+    for (size_t i = 0; i < matrix.size(); ++i) {
+      matrix[i] = static_cast<float>(static_cast<int>((i * 41u) % 67u) - 33) * 0.03125f;
+    }
+    HostQuantizedWeights weights =
+        host_affine_quantize(matrix, experts * shape.n, shape.k, 64, 4);
+    weights.scales = round_trip(stream, weights.scales, bfloat16);
+    weights.biases = round_trip(stream, weights.biases, bfloat16);
+    array w(weights.words.begin(), Shape{experts, shape.n, shape.k / 8}, uint32);
+    array scales = astype(
+        array(weights.scales.begin(), Shape{experts, shape.n, shape.k / 64}, float32),
+        bfloat16,
+        stream);
+    array biases = astype(
+        array(weights.biases.begin(), Shape{experts, shape.n, shape.k / 64}, float32),
+        bfloat16,
+        stream);
+    const std::vector<uint32_t> picked{3, 0, 5, 3, 1};
+    for (bool per_expert_x : {false, true}) {
+      std::vector<float> x_values(static_cast<size_t>(per_expert_x ? top : 1) * shape.k);
+      for (size_t i = 0; i < x_values.size(); ++i) {
+        x_values[i] = static_cast<float>(static_cast<int>((i * 53u) % 47u) - 23) * 0.0625f;
+      }
+      x_values = round_trip(stream, x_values, bfloat16);
+      array x = astype(
+          array(x_values.begin(), Shape{per_expert_x ? top : 1, 1, shape.k}, float32),
+          bfloat16,
+          stream);
+      std::vector<uint32_t> lhs_values(top, 0u);
+      if (per_expert_x) {
+        for (int j = 0; j < top; ++j) {
+          lhs_values[j] = static_cast<uint32_t>(j);
+        }
+      }
+      array lhs(lhs_values.begin(), Shape{top}, uint32);
+      array rhs(picked.begin(), Shape{top}, uint32);
+      array gathered = gather_qmm(
+          x, w, scales, biases, lhs, rhs, true, 64, 4, "affine", std::nullopt, false, stream);
+      gathered.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const int64_t dispatched = omarchy::trace::counters().last_dispatched_kernel.load();
+      if (subgroup_ready) {
+        CHECK_EQ(dispatched, static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmWordBF16));
+      }
+      auto got = readback_f32(stream, gathered);
+      REQUIRE_EQ(got.size(), static_cast<size_t>(top) * shape.n);
+      for (int j = 0; j < top; ++j) {
+        const int e = static_cast<int>(picked[j]);
+        array w_e = slice(w, {e, 0, 0}, {e + 1, shape.n, shape.k / 8}, stream);
+        array s_e = slice(scales, {e, 0, 0}, {e + 1, shape.n, shape.k / 64}, stream);
+        array b_e = slice(biases, {e, 0, 0}, {e + 1, shape.n, shape.k / 64}, stream);
+        array x_j = slice(
+            x, {per_expert_x ? j : 0, 0, 0}, {per_expert_x ? j + 1 : 1, 1, shape.k}, stream);
+        auto dense = readback_f32(stream, quantized_matmul(
+            reshape(x_j, Shape{1, shape.k}, stream),
+            reshape(w_e, Shape{shape.n, shape.k / 8}, stream),
+            reshape(s_e, Shape{shape.n, shape.k / 64}, stream),
+            reshape(b_e, Shape{shape.n, shape.k / 64}, stream),
+            true, 64, 4, "affine", stream));
+        std::vector<float> row(got.begin() + j * shape.n, got.begin() + (j + 1) * shape.n);
+        INFO("k=" << shape.k << " n=" << shape.n << " per_expert_x=" << per_expert_x << " j=" << j);
+        if (subgroup_ready) {
+          CHECK(bits_identical(row, dense));
+        } else {
+          double max_abs = 0.0;
+          for (float v : dense) {
+            max_abs = std::max(max_abs, std::fabs(static_cast<double>(v)));
+          }
+          for (int c = 0; c < shape.n; ++c) {
+            CHECK(std::fabs(static_cast<double>(row[c]) - dense[c]) <= 0.02 * max_abs + 0.05);
+          }
+        }
+      }
+    }
+    {
+      std::vector<float> view_values(shape.k);
+      for (int i = 0; i < shape.k; ++i) {
+        view_values[i] = static_cast<float>(((i * 29) % 41) - 20) * 0.0625f;
+      }
+      view_values = round_trip(stream, view_values, bfloat16);
+      std::vector<float> parent_values(shape.k + 4, 123.0f);
+      std::copy(view_values.begin(), view_values.end(), parent_values.begin() + 4);
+      array parent = astype(
+          array(parent_values.begin(), Shape{1, 1, shape.k + 4}, float32), bfloat16, stream);
+      array x_view = slice(parent, {0, 0, 4}, {1, 1, shape.k + 4}, stream);
+      array x_aligned = astype(
+          array(view_values.begin(), Shape{1, 1, shape.k}, float32), bfloat16, stream);
+      const std::vector<uint32_t> zeros(top, 0u);
+      array lhs0(zeros.begin(), Shape{top}, uint32);
+      array rhs_v(picked.begin(), Shape{top}, uint32);
+      array viewed_out = gather_qmm(
+          x_view, w, scales, biases, lhs0, rhs_v, true, 64, 4, "affine", std::nullopt, false, stream);
+      viewed_out.eval();
+      omarchy::get_command_encoder(stream).synchronize();
+      const int64_t viewed_kernel = omarchy::trace::counters().last_dispatched_kernel.load();
+      if (subgroup_ready) {
+        CHECK_NE(viewed_kernel, static_cast<int64_t>(omarchy::ComputeKernel::GatherQmmWordBF16));
+      }
+      auto viewed = readback_f32(stream, viewed_out);
+      auto aligned = readback_f32(stream, gather_qmm(
+          x_aligned, w, scales, biases, lhs0, rhs_v, true, 64, 4, "affine", std::nullopt, false, stream));
+      REQUIRE_EQ(viewed.size(), aligned.size());
+      double max_abs = 0.0;
+      for (float v : aligned) {
+        max_abs = std::max(max_abs, std::fabs(static_cast<double>(v)));
+      }
+      for (size_t i = 0; i < viewed.size(); ++i) {
+        CHECK(std::fabs(static_cast<double>(viewed[i]) - aligned[i]) <= 0.02 * max_abs + 0.05);
+      }
+    }
+  }
+}
