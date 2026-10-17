@@ -174,5 +174,14 @@ class CliExitTests(unittest.TestCase):
         self.assertIn("does not exist", r.stderr)
 
 
+class ClampOrderTests(unittest.TestCase):
+    def test_clamp_runs_before_mlx_is_imported(self):
+        src = SCRIPT.read_text()
+        clamp = src.index("perf_placement import apply_from_env")
+        self.assertLess(clamp, src.index("installed_provenance("))
+        self.assertLess(clamp, src.index("from mlx_lm.utils import load"))
+        self.assertLess(clamp, src.index("import mlx.core as mx"))
+
+
 if __name__ == "__main__":
     unittest.main()
