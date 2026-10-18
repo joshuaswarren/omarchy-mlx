@@ -3420,8 +3420,8 @@ void dispatch_gather_qmm(
     // form has no dense twin and is gated against fp64. Both are opt-in developer
     // switches, off by default, so the 8-output element kernel below stays the route:
     // MLX_OMARCHY_GATHER_QMM_WORD=1 (4-bit; its teacher-forced NLL gate gave verdict
-    // REJECT, see docs/KNOWN-ISSUES.md) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; no
-    // model-level numerics gate has been run).
+    // REJECT, see docs/KNOWN-ISSUES.md) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
+    // hidden-state fidelity gate gave verdict WIDER, see docs/KNOWN-ISSUES.md).
     const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
     const char* word2_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD2");
     const bool word4 = bits == 4 && group_size == 64 &&
