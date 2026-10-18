@@ -152,15 +152,25 @@ if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
   # mirror tracks every in-class update and the offset is stored as a host-built
   # array with the same values. Kill switch MLX_OMARCHY_KV_HOST_OFFSET=0.
   python3 "$ROOT/scripts/patch-mlx-lm-kv-host-offset.py" "$VENV"
+  # Batched sliding-window decode: BatchRotatingKVCache.make_mask returns an
+  # all-True array while the window is not binding, so every sliding-window
+  # layer (35 in gemma-4-E4B) misses the native SDPA decode kernel and composes
+  # its attention (+568 dispatches and +5.18 ms per token on a 13-inch M1,
+  # 2026-10-18 serve-loop census; token ids unchanged). make_mask(1) now
+  # returns None when the host mirror proves the mask all-True (no padding,
+  # no rotation, no right-padding lengths, window not binding); padded,
+  # rotated, prefill and window-bound states keep the mask. Needs the ssm
+  # patch's `import os`. Kill switch MLX_OMARCHY_ROTKV_MASKLESS=0.
+  python3 "$ROOT/scripts/patch-mlx-lm-rotkv-maskless.py" "$VENV"
 else
-  # Both patchers anchor on the mlx-lm 0.32 BatchKVCache API (prepare/finalize
-  # right-padding mirrors, host-list filter); 0.31.3's older BatchKVCache
+  # All three patchers anchor on the mlx-lm 0.32 batched-cache API (prepare/
+  # finalize right-padding mirrors, host-list filter); 0.31.3's older BatchKVCache
   # predates them (its filter even syncs via .min().item()) and upstream
   # reworked the class in 0.32, so there is nothing to port onto. The served
   # mlx-lm route is single-concurrency; a batched 0.31.3 user falls back to
   # the upstream array mask and lazy offset (slower, never wrong). See
   # docs/kernel-flags.md.
-  echo "kv-maskless/kv-host-offset: 0.32 series only; skipped on $SERIES"
+  echo "kv-maskless/kv-host-offset/rotkv-maskless: 0.32 series only; skipped on $SERIES"
 fi
 apply mlx-lm-greedy-prune.patch
 # Greedy GenerationBatch steps (BatchGenerator / oMLX) can take the pruned
