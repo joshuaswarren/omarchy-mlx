@@ -1,5 +1,4 @@
 IDLE-GUARD-JOB-START 20261017T113300Z word2 fidelity RUN (PR 224 head 37ff5f09 wheel, windows 128 to 159): hidden-state fidelity of the 2-bit word-per-lane gather_qmm route on layers 14 to 17 of the Muse 2-bit model, arms S R F S2 R2, 2-token prefill then decode m=1, routing not pinned, not model quality, on the 14-inch M2 Max
-KERNEL-CMDLINE:  kernel=7.1.12-2-20261013.18-sep-ARCH
 PREFLIGHT-RUN
 SETTLE load1=0.47 SETTLED
 GPU-TIMEOUTS before=0 boot=<id>

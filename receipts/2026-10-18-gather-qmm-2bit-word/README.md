@@ -1,6 +1,8 @@
 # gather_qmm word-per-lane 2-bit route: kernel gate, layer A/B, hidden-state fidelity, device doctest
 
-This receipt records the hardware runs behind the numbers in `docs/KNOWN-ISSUES.md` for the opt-in switch `MLX_OMARCHY_GATHER_QMM_WORD2=1`. The route is off by default. `SHA256SUMS` lists the files here. Paths in the copies are shortened to `<scratch>` and `~`. Boot ids are removed.
+This receipt records the hardware runs behind the numbers in `docs/KNOWN-ISSUES.md` for the opt-in switch `MLX_OMARCHY_GATHER_QMM_WORD2=1`. The route is off by default. `SHA256SUMS` lists the files here.
+
+The files are copies of the run outputs with these edits. Paths are shortened to `<scratch>` and `~`. Boot ids are replaced by `<id>`. Lane codes in labels are replaced by `lane`. Host names are replaced by `host`. Line 2 of `fidelity/ticket.out` and of `device-doctest/run.ticket.out`, the guard's echo of the kernel command line, is removed.
 
 ## Source
 
@@ -18,9 +20,15 @@ Kernel ids are labels. They move when kernels are appended. The route is named b
 ## Machine and driver
 
 - 14-inch M2 Max (G14C), Linux kernel 7.1.12-2-20261013.18-sep-ARCH, CPU governor performance.
-- Gate, layer A/B and fidelity: Vulkan driver package `omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2`, library sha256 prefix `40282811c6e14ef9`.
+- Gate, layer A/B and fidelity: the installed Vulkan driver package (Mesa git 69bde15340), version `1:26.2.4.git69bde15340-2`, library sha256 prefix `40282811c6e14ef9`.
 - Device doctest: library sha256 prefix `c499962c742f399a`, Mesa git `a5b1797446`.
 - Platform firmware of the 14-inch M2 Max, read from its device tree: OS firmware version 13.5, system firmware version 27.0, iBoot-8422.141.2, boot loader v1.6.1-omarchy.aurora14.
+
+## Device identity, reopen and thermal procedure
+
+- The device is named by mlx as `Device(gpu, 0)` in the gate and the layer A/B outputs. The Vulkan device name string was not recorded by these tickets.
+- No Vulkan device reopen was run in these tickets. The GPU timeout counter was read before and after the gate, fidelity and device doctest tickets and stayed at 0.
+- No temperature or fan readings were taken. The thermal procedure is the guard's load settle before each ticket and the performance CPU governor. The load averages are in the sections below.
 
 ## Model
 
