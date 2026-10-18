@@ -209,7 +209,7 @@ To restore, write the value you read back to each policy. The setting does not s
 
 If you run work on the ANE, do not expect the 13-inch M1 gain from the table above. In one 30-second check on the 13-inch M1, with two ANE processes running, the larger-core policy read its maximum clock on all six reads, five seconds apart, under schedutil. Decode with the filler on was about 9 tokens per second under both governors. We have not isolated why.
 
-What it costs is not measured yet: idle power, heat and fan noise with the performance governor. Whether `powerprofilesctl set performance` has the same effect is also untested. The installer does not change this setting.
+The serve process raises `uclamp_min` in both arms of this measurement (see [install-omarchy.md](install-omarchy.md)). On the 16-inch M1 Max, serving gemma-4-26B-A4B (4-bit) with that process, decode read 13.62 tokens per second under `schedutil` and 13.93 under `performance`, a ratio of 1.023 over four interleaved rounds, with identical text in all 24 requests. The direct gemma-4-26B-A4B rows for the same chip in the table above gain 23 percent. They are a different measurement. At idle the `performance` governor draws about 2 W more system power (10.33 W against 8.39 W). We keep the kernel's default governor, and the installer does not change it. The record is in [receipts/2026-10-17-governor-serve-idle](../receipts/2026-10-17-governor-serve-idle/README.md).
 
 ## Generated scoreboard tables (per chip)
 
