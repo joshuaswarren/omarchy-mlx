@@ -1,0 +1,33 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+ROWREDUCE-ERR dtype=10 row=8192 rows=1 row_route=0.0339647 serial_route=0.305489
+ROWREDUCE-ERR dtype=10 row=2816 rows=1 row_route=0.020634 serial_route=0.0408256
+ROWREDUCE-ERR dtype=10 row=5120 rows=1 row_route=0.0106606 serial_route=0.429628
+ROWREDUCE-ERR dtype=10 row=256 rows=1 row_route=0.08377 serial_route=0.271885
+ROWREDUCE-ERR dtype=10 row=4097 rows=1 row_route=0.0434562 serial_route=0.19045
+ROWREDUCE-ERR dtype=10 row=4096 rows=15 row_route=0.0754015 serial_route=1.84714
+ROWREDUCE-ERR dtype=10 row=2816 rows=14 row_route=0.106273 serial_route=0.969264
+ROWREDUCE-ERR dtype=10 row=4096 rows=4 row_route=0.0935843 serial_route=0.155497
+ROWREDUCE-ERR dtype=10 row=70001 rows=1 row_route=0.00611992 serial_route=0.0990005
+ROWREDUCE-ERR dtype=12 row=8192 rows=1 row_route=410.359 serial_route=410.359
+ROWREDUCE-ERR dtype=12 row=2816 rows=1 row_route=1.73568 serial_route=1.73568
+ROWREDUCE-ERR dtype=12 row=5120 rows=1 row_route=11.8231 serial_route=11.8231
+ROWREDUCE-ERR dtype=12 row=256 rows=1 row_route=844.818 serial_route=844.818
+ROWREDUCE-ERR dtype=12 row=4097 rows=1 row_route=113.514 serial_route=113.514
+ROWREDUCE-ERR dtype=12 row=4096 rows=15 row_route=1783.78 serial_route=1783.78
+ROWREDUCE-ERR dtype=12 row=2816 rows=14 row_route=1958.34 serial_route=1958.34
+ROWREDUCE-ERR dtype=12 row=4096 rows=4 row_route=219.054 serial_route=219.054
+ROWREDUCE-ERR dtype=12 row=70001 rows=1 row_route=40.5931 serial_route=40.5931
+ROWREDUCE-ERR dtype=9 row=8192 rows=1 row_route=10.7685 serial_route=10.7685
+ROWREDUCE-ERR dtype=9 row=2816 rows=1 row_route=0.278017 serial_route=0.278017
+ROWREDUCE-ERR dtype=9 row=5120 rows=1 row_route=5.50748 serial_route=5.50748
+ROWREDUCE-ERR dtype=9 row=256 rows=1 row_route=250.509 serial_route=250.509
+ROWREDUCE-ERR dtype=9 row=4097 rows=1 row_route=3.43286 serial_route=3.43286
+ROWREDUCE-ERR dtype=9 row=4096 rows=15 row_route=225.169 serial_route=225.169
+ROWREDUCE-ERR dtype=9 row=2816 rows=14 row_route=268.236 serial_route=268.236
+ROWREDUCE-ERR dtype=9 row=4096 rows=4 row_route=35.9774 serial_route=35.9774
+ROWREDUCE-ERR dtype=9 row=70001 rows=1 row_route=1.23716 serial_route=1.23716
+===============================================================================
+[doctest] test cases:   6 |   6 passed | 0 failed | 0 skipped
+[doctest] assertions: 216 | 216 passed | 0 failed |
+[doctest] Status: SUCCESS!
