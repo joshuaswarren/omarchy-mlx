@@ -12765,7 +12765,7 @@ void GatedDeltaUpdate::eval_gpu(
   const bool pf_gqa_default = !pf_gqa_off && gdn_gqa_decode &&
       decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
       omarchy::gdn_pf_gqa_default_part(encoder.device().capabilities().device_name);
-  const bool pf_gqa = f32_gqa_route && gdn_pf_env && (pf_gqa_opt_in || pf_gqa_default) &&
+  const bool pf_gqa = f32_gqa_route && gdn_gqa_decode && gdn_pf_env && (pf_gqa_opt_in || pf_gqa_default) &&
       (checked_item_offset(h0, h0.size(), tag, out) % 4u) == 0u &&
       (checked_item_offset(hf, hf.size(), tag, out) % 4u) == 0u;
   const bool gqa_native = gdn_gqa_decode && f32_gqa_route && tile_on && !pf_gqa;
