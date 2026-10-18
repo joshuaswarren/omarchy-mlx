@@ -499,4 +499,14 @@ bool buffer_cache_disabled();
 // Pure; the runtime applies it in configure_honeykrisp_icd().
 std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes);
 
+// GatedDeltaUpdate decode on the f32 A_log raw route (Qwen3.5-9B) with Hk != Hv: the parts whose
+// default is the untiled prefetch kernel with native GQA (ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa),
+// because that route was measured bit-equal to the tiled one and faster on them (receipts/2026-10-18-gdn-pf-gqa).
+// Keyed on the device name so an unmeasured part keeps its previous default (a G13 part other than G13C
+// already runs the untiled kernel with the expansion copies). Pure.
+inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
+}
+
 } // namespace mlx::core::omarchy
