@@ -1,5 +1,5 @@
-CENSUS census-26b-20261018T115634Z 11:56:34 start key 26b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-26b-a4b-it-4bit/snapshots/0d77464eeb233a2da68ebf9d7dc4edaac7db956d boot d3eaefec kernel 7.1.12-2-12.6-sep-ARCH load1 1.40
-CENSUS census-26b-20261018T115634Z 11:56:34 tree $HOME/scratch/w71/score/gprp libmlx 7c9c9fff09bbc988
+CENSUS census-26b-20261018T115634Z 11:56:34 start key 26b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-26b-a4b-it-4bit/snapshots/0d77464eeb233a2da68ebf9d7dc4edaac7db956d boot <id> kernel 7.1.12-2-12.6-sep-ARCH load1 1.40
+CENSUS census-26b-20261018T115634Z 11:56:34 tree $WORK/score/gprp libmlx 7c9c9fff09bbc988
 CENSUS census-26b-20261018T115634Z 11:56:34 sha256 prefixes: script 33386b8fd58abae3 bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_inproc.py a6f339aa962fd623 census_analyze.py 2e1965f88ddf6ebf
 CENSUS census-26b-20261018T115634Z 11:56:54 A tokens=6 rc=0 dispatches=25139 keys=138 generated_ids sha256:6e69c2cbc2a36c36 n=6 first=100,45518,107 last=236798,34680,64222
 CENSUS census-26b-20261018T115634Z 11:57:12 A tokens=10 rc=0 dispatches=31967 keys=154 generated_ids sha256:efc9ae9e4e4cc26a n=10 first=100,45518,107 last=107,11823,236751

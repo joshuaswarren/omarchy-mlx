@@ -1,4 +1,4 @@
-FIXAB fixab-e4b-20261018T115240Z 11:52:40 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 weights_gib 5.5 boot af2c726b kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.41 tokens 128 reqs 2 rounds 3
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 weights_gib 5.5 boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.41 tokens 128 reqs 2 rounds 3
 FIXAB fixab-e4b-20261018T115240Z 11:52:40 governors:       2 performance  (read only)
 FIXAB fixab-e4b-20261018T115240Z 11:52:40 tree main81 libmlx 9a225264dcf2dbcb cache.py 9d663baa1e7e5cc3 server.py 1090d5342c447257 rotkv marker 0 logprob marker 0
 FIXAB fixab-e4b-20261018T115240Z 11:52:40 tree main81-fix libmlx 9a225264dcf2dbcb cache.py 7dcc85f3223f9786 server.py 2533fcc1f62bb3bf rotkv marker 2 logprob marker 2

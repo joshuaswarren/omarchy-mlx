@@ -3,8 +3,9 @@ With no ids prints a few check values. Reads the enum with `git show` from ~/src
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-src = subprocess.run(["git", "-C", "$HOME/src/mlx-omarchy", "show", "e57cb301:overlay/mlx/backend/omarchy/compute.h"],
+src = subprocess.run(["git", "-C", str(Path.home() / "src/mlx-omarchy"), "show", "e57cb301:overlay/mlx/backend/omarchy/compute.h"],
                      capture_output=True, text=True, check=True).stdout
 body = src.split("enum class ComputeKernel : uint16_t {", 1)[1].split("};", 1)[0]
 body = re.sub(r"//[^\n]*", "", body)

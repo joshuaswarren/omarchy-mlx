@@ -14,10 +14,10 @@ set -u
 KEY=${1:?KEY}
 MODEL=${2:?MODEL_DIR}
 WGIB=${3:?WEIGHTS_GIB}
-S=${GOV_S:-$HOME/scratch/w71/score}
+S=${GOV_S:-$WORK/score}
 CPUF=${GOV_CPUF:-/sys/devices/system/cpu/cpufreq}
 PYB=${PYB:-$S/venv/bin/python}
-SERVEPKG=${SERVEPKG:-$HOME/scratch/w7k-clean/serve-pkg/serve}
+SERVEPKG=${SERVEPKG:-$WORK/serve-pkg/serve}
 ROUNDS=${ROUNDS:-3}
 REQS=${REQS:-2}
 TOKENS=${TOKENS:-128}

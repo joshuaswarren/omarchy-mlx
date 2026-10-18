@@ -5,15 +5,15 @@
 # G, GM: servegen_inproc.py with PAIRS=1 and TOKENS 24 and 40 (requests of 8 + 6 + 24 and 8 + 10 + 40 tokens: the difference is 20 decoded tokens;
 # every request pays its own prefill, three requests in both runs, so prefill cancels). Per-token histogram = (big - small) / delta tokens.
 # Histogram key = "kernel=<ComputeKernel id> count=<n> gx gy gz" of the "[rtmod] DISPATCH" line (overlay/mlx/backend/omarchy/encoder.cpp:575).
-# Nothing is written outside ~/scratch/w71/servepath/out-census-*. No governor write, no root, no kill. Same wheel/tree/prompt as flip_ab.sh.
+# Nothing is written outside $WORK/servepath/out-census-*. No governor write, no root, no kill. Same wheel/tree/prompt as flip_ab.sh.
 set -u
 KEY=${1:?KEY}
 MODEL=${2:?MODEL_DIR}
-S=${GOV_S:-$HOME/scratch/w71/score}
+S=${GOV_S:-$WORK/score}
 CPUF=${GOV_CPUF:-/sys/devices/system/cpu/cpufreq}
 PYB=${PYB:-$S/venv/bin/python}
 TREE=${TREE:-main81}
-SERVEPKG=${SERVEPKG:-$HOME/scratch/w7k-clean/serve-pkg/serve}
+SERVEPKG=${SERVEPKG:-$WORK/serve-pkg/serve}
 PROMPT="Write a short story about a lighthouse keeper who finds a message in a bottle."
 HERE=$(cd "$(dirname "$0")" && pwd)
 T=census-$KEY-$(date -u +%Y%m%dT%H%M%SZ)

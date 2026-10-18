@@ -1,23 +1,21 @@
 #!/bin/bash
-# flip_ab.sh KEY MODEL_DIR: do the two measured costs add up, and where does the rest of the generator-loop gap go? (13-inch, E4B)
-#   A     bench_decode through run_clamped.py thread mode (anchor, as in servepath_ab.sh)
-#   G     the mlx_lm.server generator in-process, no HTTP (servegen_inproc.py G): the loop under test
-#   GM    G without the mask array of the sliding-window batch cache when it would be all True        (cache.py:1447-1470 vs 557-585)
-#   GL    G without the per-token logprob read in the server loop                                       (server.py:867)
-#   GML   G with BOTH removals (additivity test)
-#   GMLT  GML with phase timers (BatchGenerator.next, mx.eval, mx.async_eval): where the remaining time per token goes; its rate is not judged
-#   (GS, a new thread-local stream, was measured in the previous ticket: NOTHING; arm names in ARMS are free: ARMS="A G GM GL GS" reruns it)
-# Same prompt, 128 tokens, greedy, one wheel (tree main81), governor performance READ not written, ANE filler off. ROUNDS rounds; the order
-# of each round is a rotation of the arm list. G-type arms run REQS request pairs per process. REGISTERED RULE: flip_analyze.py header.
-# No governor write, no root, no kill. env: ARMS, PYB, TREE, ROUNDS(4), REQS(2), TOKENS(128), GOV_SETTLE(15), GOV_MAXLOAD(0.5), GOV_LOADWAIT(300), GOV_SAMP, GOV_CSV
+# flip_ab.sh KEY MODEL_DIR: which candidate cost makes the mlx_lm.server generator loop 12 ms per token slower than bench_decode? (13-inch, E4B)
+#   A   bench_decode through run_clamped.py thread mode (anchor, as in servepath_ab.sh)
+#   G   the mlx_lm.server generator in-process, no HTTP (servegen_inproc.py G): the loop under test
+#   GM  G without the mask array of the sliding-window batch cache when it would be all True        (cache.py:1447-1470 vs 557-585)
+#   GL  G without the per-token logprob read in the server loop                                       (server.py:867)
+#   GS  G on a new thread-local stream like bench_decode's path instead of the default stream         (server.py:660 vs generate.py:227)
+# Same prompt, 128 tokens, greedy, one wheel (tree main81), governor performance READ not written, ANE filler off. Four rounds; the order
+# of each round is a rotation of the five arms. G-type arms run REQS request pairs per process. REGISTERED RULE: flip_analyze.py header.
+# No governor write, no root, no kill. env: PYB, TREE, ROUNDS(4), REQS(2), TOKENS(128), GOV_SETTLE(15), GOV_MAXLOAD(0.5), GOV_LOADWAIT(300), GOV_SAMP, GOV_CSV
 set -u
 KEY=${1:?KEY (a short label such as e4b)}
 MODEL=${2:?MODEL_DIR (a local model snapshot directory)}
-S=${GOV_S:-$HOME/scratch/w71/score}
+S=${GOV_S:-$WORK/score}
 CPUF=${GOV_CPUF:-/sys/devices/system/cpu/cpufreq}
 PYB=${PYB:-$S/venv/bin/python}
 TREE=${TREE:-main81}
-SERVEPKG=${SERVEPKG:-$HOME/scratch/w7k-clean/serve-pkg/serve}
+SERVEPKG=${SERVEPKG:-$WORK/serve-pkg/serve}
 ROUNDS=${ROUNDS:-4}
 REQS=${REQS:-2}
 TOKENS=${TOKENS:-128}
@@ -62,11 +60,10 @@ say "tree $S/$TREE libmlx $(sha256sum "$S/$TREE/mlx/lib/libmlx.so" 2> /dev/null 
 say "sha256 prefixes: script $(sha256sum "$0" | cut -c1-16)$(for f in bench_decode.py run_clamped.py servegen_inproc.py thread_table.py flip_analyze.py; do printf ' %s %s' "$f" "$(sha256sum "$HERE/$f" | cut -c1-16)"; done)"
 [ -f "$SAMP" ] && { bash "$SAMP" start "$CSV" >> "$L" 2>&1; say "sampler csv $CSV"; }
 
-read -ra AR <<< "${ARMS:-A G GM GL GML GMLT}"
-rot() { local i n=${#AR[@]}; for ((i = 0; i < n; i++)); do printf '%s ' "${AR[$(((i + $1) % n))]}"; done; }
+ORDERS=("A G GM GL GS" "G GM GL GS A" "GM GL GS A G" "GL GS A G GM")
 r=0
 while [ "$r" -lt "$ROUNDS" ]; do
-	for a in $(rot "$r"); do
+	for a in ${ORDERS[$((r % 4))]}; do
 		sleep "$SETTLE"
 		f=$OUT/run-$a$((r + 1))
 		t0=$(date +%s)

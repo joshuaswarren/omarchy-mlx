@@ -1,5 +1,5 @@
-CENSUS census-e4b-20261018T100859Z 10:08:59 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 boot af2c726b kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.98
-CENSUS census-e4b-20261018T100859Z 10:08:59 tree $HOME/scratch/w71/score/main81 libmlx 9a225264dcf2dbcb
+CENSUS census-e4b-20261018T100859Z 10:08:59 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.98
+CENSUS census-e4b-20261018T100859Z 10:08:59 tree $WORK/score/main81 libmlx 9a225264dcf2dbcb
 CENSUS census-e4b-20261018T100859Z 10:08:59 sha256 prefixes: script 33386b8fd58abae3 bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_inproc.py 4adb8206f615723c census_analyze.py 2e1965f88ddf6ebf
 CENSUS census-e4b-20261018T100859Z 10:09:14 A tokens=6 rc=0 dispatches=20733 keys=129 generated_ids sha256:964671f03e3d700e n=6 first=100,45518,107 last=8291,236789,236751
 CENSUS census-e4b-20261018T100859Z 10:09:30 A tokens=10 rc=0 dispatches=26761 keys=145 generated_ids sha256:47ec4c42dfb4da55 n=10 first=100,45518,107 last=6972,1657,600

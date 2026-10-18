@@ -1,6 +1,6 @@
-FLIP flip-e4b-20261018T101153Z 10:11:53 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 boot af2c726b kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.29 tokens 128 reqs 2 rounds 4
+FLIP flip-e4b-20261018T101153Z 10:11:53 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.29 tokens 128 reqs 2 rounds 4
 FLIP flip-e4b-20261018T101153Z 10:11:53 governors:       2 performance  (read only)
-FLIP flip-e4b-20261018T101153Z 10:11:53 tree $HOME/scratch/w71/score/main81 libmlx 9a225264dcf2dbcb
+FLIP flip-e4b-20261018T101153Z 10:11:53 tree $WORK/score/main81 libmlx 9a225264dcf2dbcb
 FLIP flip-e4b-20261018T101153Z 10:11:53 sha256 prefixes: script 97d0c5f0ebdcdfb5 bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_inproc.py 4adb8206f615723c thread_table.py 2bef8caee53b2909 flip_analyze.py f6fa4ca2e909fd1b
 FLIP flip-e4b-20261018T101153Z 10:11:53 sampler csv /var/tmp/sampler/rows-flip-e4b-20261018T101153Z.csv
 FLIP flip-e4b-20261018T101153Z 10:12:08 round 1 arm A load1=0.36 start_epoch=1792318328
