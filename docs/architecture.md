@@ -107,13 +107,15 @@ output checks on every run (byte-exact on the two M1 chips, a 2 ulp or
 | Chip | 4.2 M MACs | 67 M MACs | 268 M MACs | 537 M MACs |
 |---|---|---|---|---|
 | M1 (T8103, 13-inch) | about 0.013 ms | not measured | 0.215 to 0.216 ms | 0.400 ms |
-| M1 Max (T6001, 16-inch) | not measured | not measured | not measured | 1.106 ms |
+| M1 Max (T6001, 16-inch) | not measured | not measured | 0.597 to 0.652 ms | 1.015 to 1.126 ms (median 1.071) |
 | M2 Max (T6021, 14-inch) | 0.287 to 0.326 ms | 0.375 to 0.398 ms | 0.807 to 0.809 ms | 1.109 to 1.117 ms |
 
 Routing decision from these numbers: at 537 M MACs the M1 Max and M2 Max ANE
-agree within 1 percent while the base M1 ANE is 2.77 times faster (0.400 against 1.106 and 1.11 ms, the same MIL and inputs), so a
+land within 3 percent (medians 1.071 and 1.11 ms, the same MIL and inputs) while the base M1 ANE is 2.7 times faster (0.400 ms), so a
 per-chip measured cost is required before moving any large static matmul
-region onto the ANE. On T6001 and T6021 the ANE work rate at that size is
+region onto the ANE. At 268 M MACs the two bigger chips already differ by
+25 percent (0.61 against 0.81 ms), so the cost must be measured per size
+band, not per chip alone. On T6001 and T6021 the ANE work rate at that size is
 about 1.0 TFLOP per second (1.07 GFLOP in 1.11 ms), which the partitioner
 must compare against the measured Vulkan path for the same region before
 selecting the ANE. Below roughly 70 M MACs the T6021 ANE sits on a per-call
