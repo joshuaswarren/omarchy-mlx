@@ -19,6 +19,8 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -402,6 +404,11 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
   CHECK(same(def.run, untiled.run, s));
   CHECK(same(flag_off.run, tiled.run, s));
   CHECK_EQ(tiled.run.dispatches + 2, untiled.run.dispatches);
+  // The global GQA kill switch is read once per process (a static, like MLX_OMARCHY_GDN_PF), so the case below
+  // re-runs the binary with it set at launch; here the opt-in alone selects the native kernel.
+  EnvRun opt_in = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+  CHECK_EQ(opt_in.kernel, prefetch_gqa);
+  CHECK(same(opt_in.run, def.run, s));
   CHECK_EQ(def.run.dispatches, measured ? tiled.run.dispatches : (legacy ? untiled.run.dispatches : tiled.run.dispatches));
 
   // Equal head counts: no GQA, the previous default on every part.
@@ -428,4 +435,40 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
     EnvRun r_pf = run_env(b, b.q, b.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "1"}, no_bf16a}, s);
     CHECK_EQ(r_pf.kernel, r.kernel);
   }
+}
+
+// The global GQA kill switch MLX_OMARCHY_GDN_GQA_DECODE is read once per process (a static), so this case checks it by
+// re-running the test binary in a fresh process with it set at launch: there the opt-in route (TILE=0 with PF_GQA=1)
+// must fall back to the untiled composed kernel with the expansion copies.
+TEST_CASE("gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in route (fresh process)") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_pf_gqa_kill");
+  if (std::getenv("MLX_OMARCHY_GDN_GQA_DECODE") == nullptr) {
+    char self[4096];
+    const ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    CHECK(n > 0);
+    if (n <= 0) return;
+    self[n] = '\0';
+    const std::string cmd = "env MLX_OMARCHY_GDN_GQA_DECODE=0 '" + std::string(self) +
+        "' --test-case='gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in route*' -q";
+    const int rc = std::system(cmd.c_str());
+    CHECK_EQ(WEXITSTATUS(rc), 0);
+    return;
+  }
+  using K = omarchy::ComputeKernel;
+  const EnvVar no_flag{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
+  Shape27 sh;
+  sh.Hv = 32;
+  Inputs in = make_inputs(sh, /*a_log_f32=*/true, s);
+  eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+  omarchy::get_command_encoder(s).synchronize("gdn_pf_kill_inputs");
+  EnvRun opt_in = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+  EnvRun untiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag}, s);
+  std::cout << "[gdn_pf_gqa_kill] with the kill switch set: opt-in kernel " << opt_in.kernel << " ("
+            << opt_in.run.dispatches << " dispatches), untiled " << untiled.kernel << " (" << untiled.run.dispatches
+            << ")\n";
+  CHECK_EQ(opt_in.kernel, kind(K::GatedDeltaDecodeBF16PfComposed));
+  CHECK_EQ(opt_in.run.dispatches, untiled.run.dispatches);
+  CHECK(same(opt_in.run, untiled.run, s));
 }
