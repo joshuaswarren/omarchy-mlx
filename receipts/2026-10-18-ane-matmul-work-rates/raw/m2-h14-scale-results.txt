@@ -1,0 +1,21 @@
+== m2-h14-scale 2026-10-18T20:08:44Z host: 14-inch M2 Max kernel 7.1.12-2-20261013.18-sep-ARCH boot <id>
+script sha256 e497dfbcb6cc5990104c6cb73c8089be632c4efd9ff9f052aedc5ee434e670fd
+ane-run sha256 943ae8c67598175a542f9a2c370852d60ba9a810cb1e8db11fed92efc2daf2e1
+seal ok: ad6ea1cf55f453db7ca95ab5a7efea5298d2e66addeef61dfc6e52e0ebe365ca
+bo_total_bytes before: 8601600 (cap 12288 MiB)
+ane_stats before: busy_ns 1888441497 jobs 5600 
+RUNG 1 g19-h14-m64-k2048-n2048 rc=0 wall_s=0.17 jobs_delta=200 busy_per_job_ms=0.8069 check='PASS g19-h14-m64-k2048-n2048 131072/131072 lanes in band, 131072 bit-exact, padding nonzero 0, output 131072 halves' | exec ms over 200 calls: min 0.718 p10 0.797 p25 0.812 median 0.812 p75 0.813 p90 0.816 p99 0.820 max 0.823
+    exec ms over 200 calls: min 0.718 p10 0.797 p25 0.812 median 0.812 p75 0.813 p90 0.816 p99 0.820 max 0.823
+RUNG 1 g20-h14-m64-k4096-n2048 rc=0 wall_s=0.24 jobs_delta=200 busy_per_job_ms=1.1166 check='PASS g20-h14-m64-k4096-n2048 131072/131072 lanes in band, 131072 bit-exact, padding nonzero 0, output 131072 halves' | exec ms over 200 calls: min 1.111 p10 1.116 p25 1.116 median 1.116 p75 1.117 p90 1.120 p99 1.132 max 1.170
+    exec ms over 200 calls: min 1.111 p10 1.116 p25 1.116 median 1.116 p75 1.117 p90 1.120 p99 1.132 max 1.170
+RUNG 2 g19-h14-m64-k2048-n2048 rc=0 wall_s=0.17 jobs_delta=200 busy_per_job_ms=0.8087 check='PASS g19-h14-m64-k2048-n2048 131072/131072 lanes in band, 131072 bit-exact, padding nonzero 0, output 131072 halves' | exec ms over 200 calls: min 0.761 p10 0.797 p25 0.812 median 0.812 p75 0.813 p90 0.816 p99 0.820 max 0.820
+    exec ms over 200 calls: min 0.761 p10 0.797 p25 0.812 median 0.812 p75 0.813 p90 0.816 p99 0.820 max 0.820
+RUNG 2 g20-h14-m64-k4096-n2048 rc=0 wall_s=0.24 jobs_delta=200 busy_per_job_ms=1.1108 check='PASS g20-h14-m64-k4096-n2048 131072/131072 lanes in band, 131072 bit-exact, padding nonzero 0, output 131072 halves' | exec ms over 200 calls: min 1.027 p10 1.089 p25 1.116 median 1.116 p75 1.117 p90 1.120 p99 1.137 max 1.221
+    exec ms over 200 calls: min 1.027 p10 1.089 p25 1.116 median 1.116 p75 1.117 p90 1.120 p99 1.137 max 1.221
+RUNG 3 g19-h14-m64-k2048-n2048 rc=0 wall_s=0.17 jobs_delta=200 busy_per_job_ms=0.8088 check='PASS g19-h14-m64-k2048-n2048 131072/131072 lanes in band, 131072 bit-exact, padding nonzero 0, output 131072 halves' | exec ms over 200 calls: min 0.711 p10 0.801 p25 0.812 median 0.812 p75 0.813 p90 0.816 p99 0.820 max 0.820
+    exec ms over 200 calls: min 0.711 p10 0.801 p25 0.812 median 0.812 p75 0.813 p90 0.816 p99 0.820 max 0.820
+RUNG 3 g20-h14-m64-k4096-n2048 rc=0 wall_s=0.24 jobs_delta=200 busy_per_job_ms=1.1088 check='PASS g20-h14-m64-k4096-n2048 131072/131072 lanes in band, 131072 bit-exact, padding nonzero 0, output 131072 halves' | exec ms over 200 calls: min 1.034 p10 1.067 p25 1.116 median 1.116 p75 1.117 p90 1.121 p99 1.132 max 1.187
+    exec ms over 200 calls: min 1.034 p10 1.067 p25 1.116 median 1.116 p75 1.117 p90 1.121 p99 1.132 max 1.187
+bo_total_bytes after: 35225600
+ane_stats after: busy_ns 3040557250 jobs 6800 
+== end 2026-10-18T20:08:46Z

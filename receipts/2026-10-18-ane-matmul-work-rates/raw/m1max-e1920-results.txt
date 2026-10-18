@@ -1,0 +1,12 @@
+== m1max-e1920 2026-10-18T21:54:02Z host: 16-inch M1 Max kernel 7.1.12-2-12.6-sep-ARCH boot <id>
+script sha256 4e144fc269b4929ee4bbb1243be11f3ba0107fd3712bbaa9bd0679298e658f0d
+ane-run sha256 480040b5f700f407f11563f5349e7614df9fefe0efe57327c68ebc35b9779805
+ane_stats before: busy_ns 0 jobs 0 
+RUNG 1 r19 rc=0 wall_s=0.13 jobs_delta=200 busy_per_job_ms=0.5966 check='sha 2bc27f2f6fcc7aa3 want 2bc27f2f6fcc7aa3' | exec ms over 200 calls: min 0.547 p10 0.576 p25 0.591 median 0.605 p75 0.622 p90 0.643 p99 0.692 max 0.693
+RUNG 1 r20 rc=0 wall_s=0.23 jobs_delta=200 busy_per_job_ms=1.0710 check='sha 8ad59ed665c130c2 want 8ad59ed665c130c2' | exec ms over 200 calls: min 0.978 p10 0.990 p25 1.038 median 1.093 p75 1.123 p90 1.154 p99 1.194 max 1.263
+RUNG 2 r19 rc=0 wall_s=0.14 jobs_delta=200 busy_per_job_ms=0.6524 check='sha 2bc27f2f6fcc7aa3 want 2bc27f2f6fcc7aa3' | exec ms over 200 calls: min 0.576 p10 0.622 p25 0.639 median 0.662 p75 0.690 p90 0.708 p99 0.748 max 0.751
+RUNG 2 r20 rc=0 wall_s=0.24 jobs_delta=200 busy_per_job_ms=1.1256 check='sha 8ad59ed665c130c2 want 8ad59ed665c130c2' | exec ms over 200 calls: min 0.989 p10 1.069 p25 1.113 median 1.139 p75 1.177 p90 1.204 p99 1.256 max 1.269
+RUNG 3 r19 rc=0 wall_s=0.13 jobs_delta=200 busy_per_job_ms=0.6130 check='sha 2bc27f2f6fcc7aa3 want 2bc27f2f6fcc7aa3' | exec ms over 200 calls: min 0.557 p10 0.593 p25 0.606 median 0.625 p75 0.642 p90 0.658 p99 0.693 max 0.694
+RUNG 3 r20 rc=0 wall_s=0.22 jobs_delta=200 busy_per_job_ms=1.0146 check='sha 8ad59ed665c130c2 want 8ad59ed665c130c2' | exec ms over 200 calls: min 0.984 p10 0.990 p25 0.990 median 0.993 p75 1.075 p90 1.099 p99 1.142 max 1.147
+ane_stats after: busy_ns 1014648824 jobs 1200 
+== end 2026-10-18T21:54:03Z

@@ -1,0 +1,61 @@
+== m2-h14-grid 2026-10-18T16:33:47Z host: 14-inch M2 Max kernel 7.1.12-2-20261013.18-sep-ARCH boot <id>
+script sha256 f613cdc386374fb80e3f85cd3b35210fc74f61280e117d59f2532f0ae692506e
+ane-run sha256 943ae8c67598175a542f9a2c370852d60ba9a810cb1e8db11fed92efc2daf2e1
+seal ok: 2b69285e0c293cd346908491b5f3e0e6b982570e2159769426701e92f7eccf57
+ane_stats before: busy_ns 58812449 jobs 200 
+RUNG 1 g01-h14-m64-k256-n256 rc=0 wall_s=0.06 jobs_delta=200 busy_per_job_ms=0.2872 check='PASS g01-h14-m64-k256-n256 16384/16384 lanes in band, 15367 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.205 p10 0.205 p25 0.205 median 0.306 p75 0.307 p90 0.357 p99 0.445 max 0.458
+    exec ms over 200 calls: min 0.205 p10 0.205 p25 0.205 median 0.306 p75 0.307 p90 0.357 p99 0.445 max 0.458
+RUNG 1 g02-h14-m64-k512-n256 rc=0 wall_s=0.06 jobs_delta=200 busy_per_job_ms=0.2944 check='PASS g02-h14-m64-k512-n256 16384/16384 lanes in band, 15418 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.205 p10 0.205 p25 0.283 median 0.306 p75 0.307 p90 0.357 p99 0.407 max 0.457
+    exec ms over 200 calls: min 0.205 p10 0.205 p25 0.283 median 0.306 p75 0.307 p90 0.357 p99 0.407 max 0.457
+RUNG 1 g03-h14-m64-k256-n512 rc=0 wall_s=0.06 jobs_delta=200 busy_per_job_ms=0.3028 check='PASS g03-h14-m64-k256-n512 32768/32768 lanes in band, 30759 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.205 p10 0.255 p25 0.306 median 0.306 p75 0.307 p90 0.356 p99 0.357 max 0.357
+    exec ms over 200 calls: min 0.205 p10 0.255 p25 0.306 median 0.306 p75 0.307 p90 0.356 p99 0.357 max 0.357
+RUNG 1 g04-h14-m64-k512-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3112 check='PASS g04-h14-m64-k512-n512 32768/32768 lanes in band, 30686 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.205 p10 0.257 p25 0.306 median 0.306 p75 0.356 p90 0.357 p99 0.407 max 0.439
+    exec ms over 200 calls: min 0.205 p10 0.257 p25 0.306 median 0.306 p75 0.356 p90 0.357 p99 0.407 max 0.439
+RUNG 1 g05-h14-m64-k1024-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3150 check='PASS g05-h14-m64-k1024-n256 16384/16384 lanes in band, 15399 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.205 p10 0.255 p25 0.306 median 0.306 p75 0.357 p90 0.357 p99 0.438 max 0.457
+    exec ms over 200 calls: min 0.205 p10 0.255 p25 0.306 median 0.306 p75 0.357 p90 0.357 p99 0.438 max 0.457
+RUNG 1 g06-h14-m64-k256-n1024 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3177 check='PASS g06-h14-m64-k256-n1024 65536/65536 lanes in band, 61678 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.306 p75 0.357 p90 0.357 p99 0.408 max 0.458
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.306 p75 0.357 p90 0.357 p99 0.408 max 0.458
+RUNG 1 g07-h14-m64-k1024-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3467 check='PASS g07-h14-m64-k1024-n512 32768/32768 lanes in band, 30712 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.268 p10 0.306 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.458 max 0.462
+    exec ms over 200 calls: min 0.268 p10 0.306 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.458 max 0.462
+RUNG 1 g08-h14-m64-k512-n1024 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3536 check='PASS g08-h14-m64-k512-n1024 65536/65536 lanes in band, 61523 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.270 p10 0.306 p25 0.332 median 0.356 p75 0.357 p90 0.407 p99 0.458 max 0.458
+    exec ms over 200 calls: min 0.270 p10 0.306 p25 0.332 median 0.356 p75 0.357 p90 0.407 p99 0.458 max 0.458
+RUNG 1 g09-h14-m64-k1024-n1024 rc=0 wall_s=0.08 jobs_delta=200 busy_per_job_ms=0.3752 check='PASS g09-h14-m64-k1024-n1024 65536/65536 lanes in band, 61604 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.306 p10 0.356 p25 0.356 median 0.357 p75 0.360 p90 0.458 p99 0.509 max 0.512
+    exec ms over 200 calls: min 0.306 p10 0.356 p25 0.356 median 0.357 p75 0.360 p90 0.458 p99 0.509 max 0.512
+RUNG 2 g01-h14-m64-k256-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3261 check='PASS g01-h14-m64-k256-n256 16384/16384 lanes in band, 15367 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.300 median 0.307 p75 0.357 p90 0.407 p99 0.507 max 0.510
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.300 median 0.307 p75 0.357 p90 0.407 p99 0.507 max 0.510
+RUNG 2 g02-h14-m64-k512-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3289 check='PASS g02-h14-m64-k512-n256 16384/16384 lanes in band, 15418 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.235 p10 0.255 p25 0.293 median 0.345 p75 0.357 p90 0.407 p99 0.508 max 0.558
+    exec ms over 200 calls: min 0.235 p10 0.255 p25 0.293 median 0.345 p75 0.357 p90 0.407 p99 0.508 max 0.558
+RUNG 2 g03-h14-m64-k256-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3365 check='PASS g03-h14-m64-k256-n512 32768/32768 lanes in band, 30759 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.508 max 0.511
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.508 max 0.511
+RUNG 2 g04-h14-m64-k512-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3306 check='PASS g04-h14-m64-k512-n512 32768/32768 lanes in band, 30686 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.240 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.460 max 0.507
+    exec ms over 200 calls: min 0.240 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.460 max 0.507
+RUNG 2 g05-h14-m64-k1024-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3274 check='PASS g05-h14-m64-k1024-n256 16384/16384 lanes in band, 15399 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.255 median 0.340 p75 0.357 p90 0.407 p99 0.508 max 0.512
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.255 median 0.340 p75 0.357 p90 0.407 p99 0.508 max 0.512
+RUNG 2 g06-h14-m64-k256-n1024 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3447 check='PASS g06-h14-m64-k256-n1024 65536/65536 lanes in band, 61678 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.357 p75 0.359 p90 0.407 p99 0.459 max 0.508
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.357 p75 0.359 p90 0.407 p99 0.459 max 0.508
+RUNG 2 g07-h14-m64-k1024-n512 rc=0 wall_s=0.08 jobs_delta=200 busy_per_job_ms=0.3615 check='PASS g07-h14-m64-k1024-n512 32768/32768 lanes in band, 30712 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.273 p10 0.306 p25 0.356 median 0.357 p75 0.360 p90 0.407 p99 0.458 max 0.510
+    exec ms over 200 calls: min 0.273 p10 0.306 p25 0.356 median 0.357 p75 0.360 p90 0.407 p99 0.458 max 0.510
+RUNG 2 g08-h14-m64-k512-n1024 rc=0 wall_s=0.08 jobs_delta=200 busy_per_job_ms=0.3666 check='PASS g08-h14-m64-k512-n1024 65536/65536 lanes in band, 61523 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.306 p10 0.306 p25 0.356 median 0.357 p75 0.360 p90 0.458 p99 0.463 max 0.480
+    exec ms over 200 calls: min 0.306 p10 0.306 p25 0.356 median 0.357 p75 0.360 p90 0.458 p99 0.463 max 0.480
+RUNG 2 g09-h14-m64-k1024-n1024 rc=0 wall_s=0.08 jobs_delta=200 busy_per_job_ms=0.3977 check='PASS g09-h14-m64-k1024-n1024 65536/65536 lanes in band, 61604 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.306 p10 0.356 p25 0.356 median 0.357 p75 0.457 p90 0.458 p99 0.512 max 0.512
+    exec ms over 200 calls: min 0.306 p10 0.356 p25 0.356 median 0.357 p75 0.457 p90 0.458 p99 0.512 max 0.512
+RUNG 3 g01-h14-m64-k256-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3259 check='PASS g01-h14-m64-k256-n256 16384/16384 lanes in band, 15367 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.253 p10 0.255 p25 0.257 median 0.344 p75 0.357 p90 0.407 p99 0.458 max 0.508
+    exec ms over 200 calls: min 0.253 p10 0.255 p25 0.257 median 0.344 p75 0.357 p90 0.407 p99 0.458 max 0.508
+RUNG 3 g02-h14-m64-k512-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3323 check='PASS g02-h14-m64-k512-n256 16384/16384 lanes in band, 15418 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.245 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.461 max 0.507
+    exec ms over 200 calls: min 0.245 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.461 max 0.507
+RUNG 3 g03-h14-m64-k256-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3351 check='PASS g03-h14-m64-k256-n512 32768/32768 lanes in band, 30759 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.508 max 0.508
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.508 max 0.508
+RUNG 3 g04-h14-m64-k512-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3338 check='PASS g04-h14-m64-k512-n512 32768/32768 lanes in band, 30686 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.507 max 0.508
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.507 max 0.508
+RUNG 3 g05-h14-m64-k1024-n256 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3329 check='PASS g05-h14-m64-k1024-n256 16384/16384 lanes in band, 15399 bit-exact, padding nonzero 0, output 16384 halves' | exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.507 max 0.508
+    exec ms over 200 calls: min 0.255 p10 0.255 p25 0.306 median 0.356 p75 0.357 p90 0.407 p99 0.507 max 0.508
+RUNG 3 g06-h14-m64-k256-n1024 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3538 check='PASS g06-h14-m64-k256-n1024 65536/65536 lanes in band, 61678 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.245 p10 0.306 p25 0.310 median 0.357 p75 0.357 p90 0.407 p99 0.485 max 0.507
+    exec ms over 200 calls: min 0.245 p10 0.306 p25 0.310 median 0.357 p75 0.357 p90 0.407 p99 0.485 max 0.507
+RUNG 3 g07-h14-m64-k1024-n512 rc=0 wall_s=0.07 jobs_delta=200 busy_per_job_ms=0.3610 check='PASS g07-h14-m64-k1024-n512 32768/32768 lanes in band, 30712 bit-exact, padding nonzero 0, output 32768 halves' | exec ms over 200 calls: min 0.287 p10 0.306 p25 0.356 median 0.357 p75 0.357 p90 0.448 p99 0.465 max 0.508
+    exec ms over 200 calls: min 0.287 p10 0.306 p25 0.356 median 0.357 p75 0.357 p90 0.448 p99 0.465 max 0.508
+RUNG 3 g08-h14-m64-k512-n1024 rc=0 wall_s=0.08 jobs_delta=200 busy_per_job_ms=0.3621 check='PASS g08-h14-m64-k512-n1024 65536/65536 lanes in band, 61523 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.306 p10 0.306 p25 0.356 median 0.357 p75 0.361 p90 0.446 p99 0.459 max 0.492
+    exec ms over 200 calls: min 0.306 p10 0.306 p25 0.356 median 0.357 p75 0.361 p90 0.446 p99 0.459 max 0.492
+RUNG 3 g09-h14-m64-k1024-n1024 rc=0 wall_s=0.08 jobs_delta=200 busy_per_job_ms=0.3873 check='PASS g09-h14-m64-k1024-n1024 65536/65536 lanes in band, 61604 bit-exact, padding nonzero 0, output 65536 halves' | exec ms over 200 calls: min 0.306 p10 0.356 p25 0.357 median 0.357 p75 0.407 p90 0.458 p99 0.509 max 0.559
+    exec ms over 200 calls: min 0.306 p10 0.356 p25 0.357 median 0.357 p75 0.407 p90 0.458 p99 0.509 max 0.559
+ane_stats after: busy_ns 1888441497 jobs 5600 
+== end 2026-10-18T16:33:50Z
