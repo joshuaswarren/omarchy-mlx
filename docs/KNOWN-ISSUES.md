@@ -71,7 +71,7 @@ On Muse Spark Open, a teacher-forced run over three passages of 255 tokens each 
 | Apache 2 | 0.25747 | 0.24504 | -0.01244 | 0.0108 |
 | README | 2.86670 | 2.87443 | +0.00773 | 0.0133 |
 
-On Apache 2 the difference of -0.01244 is outside the registered bound of 0.01.
+On Apache 2 the difference of -0.01244 is outside the registered bound of 0.01. A second run over eight passages of technical prose written after the training data gave a mean difference of +0.00484 nats per token. The interval of the mean plus or minus 2.365 standard errors over passages is [-0.00960, +0.01928], so it includes 0 and ends at +0.019.
 
 The route's unit test, `omarchy_reduce_row_tests` (6 cases, 216 assertions), passes on the 13-inch M1, the 16-inch M1 Max and the 14-inch M2 Max. It checks float32, float16 and bfloat16 rows of 256 to 70001 elements against a long double sum, and checks that Max and Min keep the serial route. The measurements, commands and run procedure are in `receipts/2026-10-17-row-reduce-default/`.
 
