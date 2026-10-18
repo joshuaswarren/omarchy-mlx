@@ -276,6 +276,26 @@ python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
 # swiglu; prefill keeps the compiled function. Kill switch
 # MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
+
+# Optional mlx-audio series (applied only when mlx_audio is installed in the
+# same venv; absent audio is a clean skip, an already-guarded module is
+# detected and skipped, and a second run is idempotent). The 0.5.6 wheel
+# ships the mossformer2 depthwise custom kernel without the Metal
+# availability gate that upstream added later (4e429cfa); on this backend
+# that selects the custom route with Metal unavailable. The patch is the
+# upstream-identical one-conjunct backport.
+if [[ -d "$SITE/mlx_audio/sts/models/mossformer2_se" ]]; then
+  AUDIO_FILE="$SITE/mlx_audio/sts/models/mossformer2_se/depthwise_conv1d_kernel.py"
+  if grep -q "mx.metal.is_available()" "$AUDIO_FILE"; then
+    echo "mlx-audio patch series: depthwise gate already present; skipped"
+  else
+    patch --batch --forward -p1 -d "$SITE" \
+      < "$ROOT/patches/mlx-audio-mossformer-depthwise-metal-gate.patch"
+    echo "mlx-audio patch series: depthwise Metal gate applied"
+  fi
+else
+  echo "mlx-audio patch series: mlx_audio not installed; skipped"
+fi
 # Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
 DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
 printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"
