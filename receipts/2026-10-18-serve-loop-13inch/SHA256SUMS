@@ -101,7 +101,7 @@ a9ef86549495792ba7f6909fad90b29fe49adaa25f87c9de6f6fc66262ad2f13  ./data/guard/2
 e49ae391ce6de9e0c10b8564d38592e2f836a1d007e6800926988fe68b01e550  ./data/sampler/rows-flip-e4b-20261018T101153Z.csv
 66bcf46cd8dd1dd262bcbad58bea4e3596daad75bb15e7e5750db933f1e9eb24  ./data/sampler/rows-flip-e4b-20261018T110823Z.csv
 7a4d7ae56fb067ae06fb8e2b3257369d803fa9204b546bfcf541247c5f6ab7e1  ./data/sampler/thermal-summary.txt
-04368688dbd5344b0edb4c28f1b0349608551d39f0a334d6d6d19eac233e2a99  ./harness/census-16inch/census-jw16.line
+04368688dbd5344b0edb4c28f1b0349608551d39f0a334d6d6d19eac233e2a99  ./harness/census-16inch/census-16inch.line
 e401915a9f3cf283d8ec6be761db4ea723aaa99a09fa29c8db5255e2f5fad546  ./harness/census-16inch/census_ab.sh
 2e1965f88ddf6ebf82072757da8c73df853dff9d5235c21de71fe58b979d3bd3  ./harness/census-16inch/census_analyze.py
 a6f339aa962fd6236d3ed85df0c3523ac018ac913dbd23907e55ec56ab479368  ./harness/census-16inch/servegen_inproc.py
