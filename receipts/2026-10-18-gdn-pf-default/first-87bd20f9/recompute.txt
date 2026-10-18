@@ -1,0 +1,66 @@
+======== m2 14-inch M2 Max
+device field of the 30 timing outputs: {'Apple M2 Max (G14C B1)'}
+  speed P1 D: rounds [43.73, 43.96, 43.9, 43.74, 43.71] median 43.740 spread 0.57%
+  speed P1 T: rounds [40.5, 40.43, 40.47, 40.48, 40.47] median 40.470 spread 0.17%
+  speed P1 U: rounds [43.23, 43.2, 43.23, 43.24, 43.25] median 43.230 spread 0.12%
+  speed P2 D: rounds [43.83, 43.74, 43.75, 43.72, 43.78] median 43.750 spread 0.25%
+  speed P2 T: rounds [40.48, 40.46, 40.48, 40.45, 40.43] median 40.460 spread 0.12%
+  speed P2 U: rounds [43.24, 43.32, 43.16, 43.23, 43.19] median 43.230 spread 0.37%
+  P1: D/T 1.0808  D/U 1.0118  U/T 1.0682
+  P2: D/T 1.0813  D/U 1.0120  U/T 1.0685
+  census D: totals 3411 4635 -> 306.0 dispatches per token; per-token by kernel {637: 24.0, 58: 8.0}
+  census T: totals 3411 4635 -> 306.0 dispatches per token; per-token by kernel {514: 24.0, 58: 8.0}
+  census U: totals 3747 5163 -> 354.0 dispatches per token; per-token by kernel {516: 24.0, 58: 56.0}
+  numerics P1 D vs T: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 D vs U: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 D vs D2: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 T vs U: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P2 D vs T: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  rc!=0 in the log: 0 | verified=match count: 42 | whole binary: ['0']
+======== 16-inch 16-inch M1 Max
+device field of the 30 timing outputs: {'Apple M1 Max (G13C C0)'}
+  speed P1 D: rounds [42.72, 42.68, 42.68, 42.71, 42.78] median 42.710 spread 0.23%
+  speed P1 T: rounds [39.33, 39.34, 39.38, 39.26, 39.44] median 39.340 spread 0.46%
+  speed P1 U: rounds [42.34, 42.24, 42.24, 42.22, 42.43] median 42.240 spread 0.50%
+  speed P2 D: rounds [42.82, 42.77, 42.63, 42.74, 42.67] median 42.740 spread 0.44%
+  speed P2 T: rounds [39.33, 39.38, 39.28, 39.36, 39.32] median 39.330 spread 0.25%
+  speed P2 U: rounds [42.34, 42.34, 42.22, 42.3, 42.22] median 42.300 spread 0.28%
+  P1: D/T 1.0857  D/U 1.0111  U/T 1.0737
+  P2: D/T 1.0867  D/U 1.0104  U/T 1.0755
+  census D: totals 3411 4635 -> 306.0 dispatches per token; per-token by kernel {637: 24.0, 58: 8.0}
+  census T: totals 3411 4635 -> 306.0 dispatches per token; per-token by kernel {514: 24.0, 58: 8.0}
+  census U: totals 3747 5163 -> 354.0 dispatches per token; per-token by kernel {516: 24.0, 58: 56.0}
+  numerics P1 D vs T: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 D vs U: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 D vs D2: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 T vs U: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P2 D vs T: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  rc!=0 in the log: 0 | verified=match count: 42 | whole binary: ['0']
+======== 13-inch 13-inch M1
+device field of the 30 timing outputs: {'Apple M1 (G13G B1)'}
+  speed P1 D: rounds [12.02, 12.04, 12.05, 12.09, 12.11] median 12.050 spread 0.75%
+  speed P1 T: rounds [11.04, 11.05, 11.04, 11.1, 11.11] median 11.050 spread 0.63%
+  speed P1 U: rounds [12.03, 12.04, 12.03, 12.11, 12.12] median 12.040 spread 0.75%
+  speed P2 D: rounds [12.06, 12.04, 12.11, 12.09, 12.11] median 12.090 spread 0.58%
+  speed P2 T: rounds [11.06, 11.05, 11.13, 11.13, 11.12] median 11.120 spread 0.72%
+  speed P2 U: rounds [12.04, 12.04, 12.08, 12.1, 12.11] median 12.080 spread 0.58%
+  P1: D/T 1.0905  D/U 1.0008  U/T 1.0896
+  P2: D/T 1.0872  D/U 1.0008  U/T 1.0863
+  census D: totals 3854 5334 -> 370.0 dispatches per token; per-token by kernel {516: 24.0, 58: 56.0}
+  census T: totals 3518 4806 -> 322.0 dispatches per token; per-token by kernel {514: 24.0, 58: 8.0}
+  census U: totals 3854 5334 -> 370.0 dispatches per token; per-token by kernel {516: 24.0, 58: 56.0}
+  numerics P1 D vs T: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 D vs U: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 D vs D2: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P1 T vs U: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  numerics P2 D vs T: ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 KL 0.0
+  rc!=0 in the log: 1 | verified=match count: 42 | whole binary: ['1']
+== first-87bd20f9 m2: arrays with equal sha256 (full 32-step log-probability arrays)
+  P1: 0e39a2478649b53b: P1-D P1-D2 P1-T P1-U;
+  P2: 2fed2a7ba0c57591: P2-D P2-T;
+== first-87bd20f9 16-inch: arrays with equal sha256 (full 32-step log-probability arrays)
+  P1: 0e39a2478649b53b: P1-D P1-D2 P1-T P1-U;
+  P2: 2fed2a7ba0c57591: P2-D P2-T;
+== first-87bd20f9 13-inch: arrays with equal sha256 (full 32-step log-probability arrays)
+  P1: 0e39a2478649b53b: P1-D P1-D2 P1-T P1-U;
+  P2: 2fed2a7ba0c57591: P2-D P2-T;
