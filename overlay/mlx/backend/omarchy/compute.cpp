@@ -561,6 +561,7 @@
 #include "qmm_vec6_c4r1_bf16.h"
 #include "qmm_vec6_c1r8_bf16.h"
 #include "gather_qmm_word_bf16.h"
+#include "gather_qmm_word2_bf16.h"
 #include "fft_f32.h"
 #include "fft_real_f32.h"
 #include "fft_stage_f32.h"
@@ -2007,6 +2008,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {logsumexp_combine_f16, logsumexp_combine_f16_size};
     case ComputeKernel::LogSumExpCombineBF16:
       return {logsumexp_combine_bf16, logsumexp_combine_bf16_size};
+    case ComputeKernel::GatherQmmWord2BF16:
+      return {gather_qmm_word2_bf16, gather_qmm_word2_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

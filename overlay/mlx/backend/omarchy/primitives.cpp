@@ -3412,16 +3412,23 @@ void dispatch_gather_qmm(
         binding(*biases_d),
         binding(lhs_d),
         binding(rhs_d)};
-    // Word-per-lane kernel (shaders/gather_qmm_word.comp): bf16, 4-bit, group 64.
-    // One 32-lane slot per output element, scales and biases addressed in 16-bit
-    // elements, x read as uvec4 (x element offset a multiple of 8). It runs the
-    // dense qmv's per-word arithmetic, so each output equals quantized_matmul on
-    // the selected expert's slice bit for bit. Opt-in: MLX_OMARCHY_GATHER_QMM_WORD=1
-    // enables it. Default off, so the 8-output element kernel below stays the route:
-    // the teacher-forced NLL gate against it gave verdict REJECT (see the PR).
+    // Word-per-lane kernel (shaders/gather_qmm_word.comp): bf16, 4-bit group 64 or
+    // 2-bit group 64 or 128. One 32-lane slot per output element, scales and biases
+    // addressed in 16-bit elements, x read as uvec4 (x element offset a multiple of
+    // 8). The 4-bit form runs the dense qmv's per-word arithmetic, so each output
+    // equals quantized_matmul on the selected expert's slice bit for bit; the 2-bit
+    // form has no dense twin and is gated against fp64. Both are opt-in developer
+    // switches, off by default, so the 8-output element kernel below stays the route:
+    // MLX_OMARCHY_GATHER_QMM_WORD=1 (4-bit; its teacher-forced NLL gate gave verdict
+    // REJECT, see docs/KNOWN-ISSUES.md) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
+    // hidden-state fidelity gate gave verdict WIDER, see docs/KNOWN-ISSUES.md).
     const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
-    if (!use_sub_q3 && bits == 4 && group_size == 64 &&
-        out.dtype() == bfloat16 && word_env != nullptr && word_env[0] == '1' &&
+    const char* word2_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD2");
+    const bool word4 = bits == 4 && group_size == 64 &&
+        word_env != nullptr && word_env[0] == '1';
+    const bool word2 = bits == 2 && (group_size == 64 || group_size == 128) &&
+        word2_env != nullptr && word2_env[0] == '1';
+    if (!use_sub_q3 && (word4 || word2) && out.dtype() == bfloat16 &&
         params.lhs_offset % 8 == 0) {
       const auto& word_caps = encoder.device().capabilities();
       omarchy::capsim::require_backed(
@@ -3438,7 +3445,8 @@ void dispatch_gather_qmm(
       params.shape[3] = static_cast<uint32_t>(biases_d->offset() / 2);
       const uint32_t word_groups = (params.count + 3u) / 4u;
       encoder.dispatch_compute(
-          omarchy::ComputeKernel::GatherQmmWordBF16,
+          word2 ? omarchy::ComputeKernel::GatherQmmWord2BF16
+                : omarchy::ComputeKernel::GatherQmmWordBF16,
           direct_bindings,
           params,
           std::min(word_groups, omarchy::kMaxComputeGroupCountX),

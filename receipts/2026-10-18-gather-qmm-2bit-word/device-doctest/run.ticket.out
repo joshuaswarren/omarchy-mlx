@@ -1,0 +1,26 @@
+IDLE-GUARD-JOB-START 20261018T043417Z pr224 doctest run at 127a611: one doctest case of the 2-bit gather_qmm word route on the Apple M2 Max, pass or fail only, the 2-bit case alone must print 666 of 666, no timing
+PREFLIGHT-RUN
+SETTLE load1=0.40 SETTLED
+GPU-TIMEOUTS before=0 boot=<id>
+stage run boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH sha 127a611087378b2712b12760f8dee0a06d6a9207 start 2026-10-18T04:34:17Z load1 0.40
+85ee7605de04aeb033fbf91d371f63451ab0a4a93fc692ef5c548758358b882a  <scratch>/src-216/.work/build/tests/omarchy/omarchy_matmul_family_tests
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:    2 |    2 passed | 0 failed | 41 skipped
+[doctest] assertions: 1095 | 1095 passed | 0 failed |
+[doctest] Status: SUCCESS!
+[doctest] test cases:   1 |   1 passed | 0 failed | 42 skipped
+[doctest] assertions: 666 | 666 passed | 0 failed |
+[doctest] Status: SUCCESS!
+doctest rc 0, 2-bit alone rc 0
+ROUTE CHECKS RAN (2-bit case alone: 666 of 666)
+done 2026-10-18T04:34:17Z rc 0
+GPU-TIMEOUTS after=0 delta=0
+test] Status: SUCCESS!
+[doctest] test cases:   1 |   1 passed | 0 failed | 42 skipped
+[doctest] assertions: 666 | 666 passed | 0 failed |
+[doctest] Status: SUCCESS!
+doctest rc 0, 2-bit alone rc 0
+ROUTE CHECKS RAN (2-bit case alone: 666 of 666)
+done 2026-10-18T04:34:17Z rc 0
