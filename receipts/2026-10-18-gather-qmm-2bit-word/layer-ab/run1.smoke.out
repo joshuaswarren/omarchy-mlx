@@ -1,4 +1,4 @@
-RESULT {"kind": "env", "boot": "7dcada54", "mx": "<scratch>/tree-1860679/mlx/core.cpython-314-aarch64-linux-gnu.so", "sub": null, "compile_off": "1", "snapshot": "<model snapshot>", "layers": "2-5", "tokens": 145, "device": "Device(gpu, 0)"}
+RESULT {"kind": "env", "boot": "<id>", "mx": "<scratch>/tree-1860679/mlx/core.cpython-314-aarch64-linux-gnu.so", "sub": null, "compile_off": "1", "snapshot": "<model snapshot>", "layers": "2-5", "tokens": 145, "device": "Device(gpu, 0)"}
 [transformers] You are using a model of type `muse_spark` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
 RESULT {"kind": "load", "seconds": 1.0, "active_gb": 0.002, "n_layers": 4, "hidden": 256, "bits": 2, "group": 128}
 RESULT {"kind": "arm", "round": 0, "label": "sub-on", "prefill_ms": 23.5, "decode_ms": [10.03, 12.3, 7.17, 7.02, 7.06], "digest": "9df94ccdec75edfb"}

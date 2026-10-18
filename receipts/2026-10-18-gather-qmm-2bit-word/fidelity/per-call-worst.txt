@@ -1,0 +1,12 @@
+arm S  file sha256 aa12e65b00dabe62c5e1505e71c244c7762e06e5cbe21f88be1debeced6c54e5
+  calls 384 (windows 32 x calls per window 12)
+  worst single-call rms err / rms ref: 0.0001329
+  worst single-call max |err|: 0.01562
+  largest share of a call's outputs that differ from the float64 reference: 0.0244 percent
+  mean rms err over all calls: 5.027e-06
+arm R  file sha256 026f933e21ab1211b28d20ccf06106fbb1b13827082aeb119dbdebc1f3dcf0a5
+  calls 384 (windows 32 x calls per window 12)
+  worst single-call rms err / rms ref: 0.0001328
+  worst single-call max |err|: 0.01562
+  largest share of a call's outputs that differ from the float64 reference: 0.0244 percent
+  mean rms err over all calls: 4.455e-06

@@ -40,7 +40,7 @@ Command: `python3 gword2_gate.py`, in one guard ticket. The GPU timeout counter 
 
 ## 2. Layer A/B (`layer-ab/`)
 
-The run covers layers 14 to 17 of the real snapshot with one decode row. Each arm runs 12 steps per round, for 3 rounds that alternate the two arms. Compile is disabled and `--no-ops` is set. Arm "sub-on" runs the word route. Arm "word2-off" runs the 8-output kernel. The A/B ran twice in the same boot.
+The run covers layers 14 to 17 of the real snapshot with one decode row. Each arm runs 12 steps per round, for 3 rounds that alternate the two arms. The harness drops the first 2 steps of a round, so a step median is the median of the other 10. Compile is disabled and `--no-ops` is set. Arm "sub-on" runs the word route. Arm "word2-off" runs the 8-output kernel. The A/B ran twice in the same boot.
 
 | Run | Word route, step median per round (ms) | Per layer | 8-output kernel, step median per round (ms) | Per layer |
 |---|---|---|---|---|
@@ -59,7 +59,7 @@ The run was preregistered and had one look. It covers 32 windows (128 to 159). E
 - The dispatch trace of window 0 shows the routes. S has 12 dispatches of kernel 612 and 0 of `GatherQmmWord2BF16` (635 in that build). R has 12 of 635 and 0 of 612. F has neither. The totals are 612, 612 and 568 dispatches.
 - The registered verdict is WIDER, so there is no ACCEPT. The mean u is +0.0555 with the interval [-0.2331, +0.3441]. The rule needs the interval below ln 1.05.
 - Three of 32 windows had a top-8 routing flip. Windows 142 and 145 flipped in R and window 157 in S. The 29 windows with shared routing give ACCEPT-NOT-WORSE, with mean u -0.0241 and the interval [-0.0810, +0.0328].
-- Per call, the rms error over the rms reference is at most 1.33e-4 in both routes.
+- Per call, the worst single-call rms error over the rms reference is 1.329e-4 in S and 1.328e-4 in R, over 384 calls per arm (12 calls in each of 32 windows). The mean rms error over all calls is 5.027e-6 in S and 4.455e-6 in R. At most 0.0244 percent of a call's 32768 outputs differ from the float64 reference. `fidelity/per-call-worst.txt` holds these numbers and the sha256 of the S and R npz files. `fidelity/per_call_worst.py` computes them from the `diag` arrays of those two files.
 
 Command: `word2-run2.sh <out> <tree> dfbef1940389d762 635 612 128 160`. The wrapper has sha256 `d42e33bf1936c55337ebd4e53de5d860dda847ced2300fb5305718bca4376e73`. The harness has sha256 `920367b59ef425b7fdeccb26638d20abd70081c8d5c3a3db6732b9a45df57126`. The compare script has sha256 `b0c5a3c4fe3210c56bda2c736e95c401f1ef1a8c06fd9d0205f05f73adf83413`. The ticket settled at load 0.47. The GPU timeout counter stayed at 0.
 
