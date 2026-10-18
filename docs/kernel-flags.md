@@ -76,6 +76,20 @@ A/B gating and qualification, not for normal operation.
   time restores the upstream step exactly. The sketch holds 3 bits per
   code, three quarters of the packed codes (190.7 MB for Qwen3.8-2B's
   248320-row head), built once per process at the first greedy call.
+- `mlx-lm-server-skip-logprob-read.patch` (0.32 series only) — **default
+  ON.** The server's decode loops read the sampled token's logprob off the
+  device for every token — a gather graph plus a blocking `.item()` read,
+  3.48 ms/token of the 19% serve-loop decode gap on a 13-inch M1 with
+  gemma-4-E4B — even when the request asked for neither `logprobs` nor
+  `top_logprobs > 0`; the handler reads `Response.logprob` only when
+  `logprobs` is set and `Response.top_tokens` only when `top_logprobs >
+  0`. The per-request flag rides the existing `batch_results` entry (and a
+  hoisted local on the single path); skipped Responses carry
+  `logprob=None` / `top_tokens=None`. Generated token ids are unchanged
+  (`tests/test_server_logprob_skip.py` drives the real ResponseGenerator
+  on the CPU tiny model). Kill switch `MLX_OMARCHY_SERVER_LOGPROB_READ=1`
+  (read once at import) restores the upstream always-read; the 0.31.3
+  series keeps upstream behavior.
 - The patches are idempotent and fail loudly on mlx-lm version drift.
 
 ## Acceptance bar

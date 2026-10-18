@@ -67,6 +67,7 @@ SERIES_PATCHES=(
   mlx-lm-tool-call-arguments.patch
   mlx-lm-qwen3-coder-untyped-args.patch
   mlx-lm-max-tokens-min-one.patch
+  mlx-lm-server-skip-logprob-read.patch
   mlx-lm-gated-delta-fast-route.patch
   mlx-lm-gated-delta-fast-route-repeat.patch
   mlx-lm-gated-delta-raw.patch
@@ -127,6 +128,21 @@ apply mlx-lm-qwen3-coder-untyped-args.patch
 # max_tokens min_val 1 (upstream #1935): the handler answers 400 for a
 # max_tokens: 0 request instead of 200-then-generator-reject.
 apply mlx-lm-max-tokens-min-one.patch
+# Server decode loops: both the batched (batch_results[uid] entry) and the
+# single path read the sampled token's logprob off the device for EVERY
+# token - a gather graph plus a blocking read (3.48 ms/token of the 19%
+# serve-loop decode gap on a 13-inch M1) - even when the request asked for
+# neither logprobs nor top_logprobs > 0; the handler reads Response.logprob
+# only when logprobs is set and Response.top_tokens only when
+# top_logprobs > 0. Skipped Responses carry logprob=None / top_tokens=None;
+# generated token ids are unchanged. Kill switch
+# MLX_OMARCHY_SERVER_LOGPROB_READ=1 forces the upstream always-read (read
+# once at import). 0.32 series only; 0.31.3 keeps upstream behavior.
+if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
+  apply mlx-lm-server-skip-logprob-read.patch
+else
+  echo "server-skip-logprob-read: 0.32 series only; skipped on $SERIES"
+fi
 apply mlx-lm-gated-delta-fast-route.patch
 # GDN fast-route Hk!=Hv repeat: Qwen3.5-9B (Hk=16, Hv=32) hit the composed
 # per-token fallback without this; A/B 42 -> 317 tok/s prefill 512 on M2.
