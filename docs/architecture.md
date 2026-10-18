@@ -78,15 +78,18 @@ Each storage-buffer binding covers its array's bytes, not the binned allocation 
 ANE integration starts after the `v0.5.0` Vulkan compatibility release.
 It also requires the corrected 13-layer Qwen graph and 11-layer tail to pass on Linux.
 
-**ANE current scope (2026-09-20).** Live Linux ANE inference is qualified
+**ANE current scope (updated 2026-10-18).** Live Linux ANE inference is qualified
 on the M1 Max (T6001, t6001-test-host) and previously qualified on the M1 (T8103,
 m1-test-host, historical — m1-test-host fresh Arch boot reported, Omarchy provisioning
-and benchmark recertification pending). M2 Max (T6021, t6021-test-host) GPU is
-qualified but its ANE is not live-inference-qualified on the Linux
-driver (t6021-test-host Linux reads kernel 7.1.13-3-1-ARCH stable, ANE_UNBOUND,
-no `/dev/accel/accel0`; macOS ANE numbers are macOS CoreML / `aned`
-measurements, not Linux-side execution). Apple GPU and Apple ANE are
-separate lanes.
+and benchmark recertification pending). The t6021-test-host ANE was
+live-inference-unqualified as of 2026-09-20 (that host read kernel
+7.1.13-3-1-ARCH with ANE_UNBOUND and no `/dev/accel/accel0`; its macOS ANE
+numbers are macOS CoreML / `aned` measurements). On separate T6021 lab
+hosts, sealed H14 ANEC programs execute on the Linux `ane_t6021` driver with
+an output check on every run (33 of 33 runs in band on 2026-10-18, from
+4.2 M to 537 M MACs; see the receipt above); serving qualification on the
+M2 Max ANE follows the same bounded-worker path as the other chips. Apple
+GPU and Apple ANE are separate lanes.
 
 The partitioner uses an exact capability key:
 
@@ -98,31 +101,29 @@ The partitioner uses an exact capability key:
 - compiler target and source identity plus exact driver ABI major
 - measured transfer and execution cost
 
-Measured ANE work rates below feed that key. All numbers are Linux driver
-measurements from 2026-10-18: sealed constant-weight matmul programs at M=64,
-200 calls per rung, three rounds, one pinned performance core per host, exact
-output checks on every run (byte-exact on the two M1 chips, a 2 ulp or
-4 condition unit band on the M2 chip, whose H14 checker allows that band).
+Measured ANE work rates feed that key. Every number is a Linux driver
+measurement from 2026-10-18 with sealed constant-weight matmul programs at
+M=64, 200 calls per rung, three rounds, one pinned performance core per host,
+and an output check on every run. The full identity, commands, per-round
+values and recovery record are in
+`receipts/2026-10-18-ane-matmul-work-rates/`.
 
-| Chip | 4.2 M MACs | 67 M MACs | 268 M MACs | 537 M MACs |
-|---|---|---|---|---|
-| M1 (T8103, 13-inch) | about 0.013 ms | not measured | 0.215 to 0.216 ms | 0.400 ms |
-| M1 Max (T6001, 16-inch) | not measured | not measured | 0.597 to 0.652 ms | 1.015 to 1.126 ms (median 1.071) |
-| M2 Max (T6021, 14-inch) | 0.287 to 0.326 ms | 0.375 to 0.398 ms | 0.807 to 0.809 ms | 1.109 to 1.117 ms |
+Busy per job, ms, per-round ranges:
 
-Routing decision from these numbers: at 537 M MACs the M1 Max and M2 Max ANE
-land within 3 percent (medians 1.071 and 1.11 ms, the same MIL and inputs) while the base M1 ANE is 2.7 times faster (0.400 ms), so a
-per-chip measured cost is required before moving any large static matmul
-region onto the ANE. At 268 M MACs the two bigger chips already differ by
-25 percent (0.61 against 0.81 ms), so the cost must be measured per size
-band, not per chip alone. On T6001 and T6021 the ANE work rate at that size is
-about 1.0 TFLOP per second (1.07 GFLOP in 1.11 ms), which the partitioner
-must compare against the measured Vulkan path for the same region before
-selecting the ANE. Below roughly 70 M MACs the T6021 ANE sits on a per-call
-floor near 0.3 ms (16 times the MACs costs 1.15 to 1.22 times the time), so
-small regions cannot amortize that floor and stay on the GPU unless the
-whole region batch is restructured. The T8103 floor is near 0.010 to 0.012 ms
-by a two-point fit, an extrapolation, not a measurement.
+| Chip | 268 M MACs | 537 M MACs |
+|---|---|---|
+| M1 (T8103) | 0.2151 to 0.2161 | 0.3998 to 0.4009 |
+| M1 Max (T6001) | 0.5966 to 0.6524 | 1.0146 to 1.1256 |
+| M2 Max (T6021) | 0.8069 to 0.8088 | 1.1088 to 1.1166 |
+
+On the M2 Max the same sealed family also ran at 4.2 M and 67 M MACs
+(0.2872 to 0.3261 and 0.3752 to 0.3977 ms): 16 times the MACs costs 1.15 to
+1.22 times the busy time, so ANE-side cost on that chip changes slowly below
+70 M MACs. These are ANE-side busy times only. The partitioner applies them
+through the measured-cost key together with the crossover comparison the
+architecture already requires (staging copies, process IPC, and the measured
+Vulkan path for the same region); they are inputs to that comparison, not a
+placement decision on their own.
 
 ANE compilation must run on Linux without private Apple frameworks. The schema-4 adapter accepts explicit H13 ANEC v2 packages. It preserves ordered logical return views separately from physical buffers, plus programs, slices, allocations, and payload digests. It requires compiler provenance, target `h13`, and driver ABI major 1. Bundle versions 1 through 3 and dotted firmware fields are rejected.
 
