@@ -1,0 +1,23 @@
+# Firmware strings of the three machines, read from the device tree after the runs (same hardware and same firmware as at the runs; the runs did not print them).
+# The property names carry a vendor prefix that is dropped here; values are verbatim.
+== 14-inch M2 Max
+compatible apple,j414capple,t6021apple,arm-platform
+chosen/iboot1-version: mBoot-20457.1.29
+chosen/iboot2-version: iBoot-8422.141.2
+chosen/os-fw-version: 13.5
+chosen/system-fw-version: 27.0
+m1n1-aurora 1.6.1.aurora14-1
+== 16-inch M1 Max
+compatible apple,j316capple,t6001apple,arm-platform
+chosen/iboot1-version: mBoot-18000.161.10
+chosen/iboot2-version: iBoot-8422.141.2
+chosen/os-fw-version: 13.5
+chosen/system-fw-version: 26.6.2
+m1n1-aurora 1.6.1.aurora14-1
+== 13-inch M1
+compatible apple,j293apple,t8103apple,arm-platform
+chosen/iboot1-version: mBoot-20457.1.29
+chosen/iboot2-version: iBoot-8422.141.2
+chosen/os-fw-version: 13.5
+chosen/system-fw-version: 27.0
+m1n1-aurora 1.6.1.aurora14-1
