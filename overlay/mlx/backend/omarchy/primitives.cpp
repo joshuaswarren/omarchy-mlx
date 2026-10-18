@@ -12744,6 +12744,10 @@ void GatedDeltaUpdate::eval_gpu(
   // MLX_OMARCHY_GDN_GQA_DECODE=0 restores the expansion.
   static const bool gdn_gqa_decode =
       decode_path_override("MLX_OMARCHY_GDN_GQA_DECODE") != 0;
+  // MLX_OMARCHY_GDN_PF=0 restores the scalar untiled kernel (read once per process); the untiled prefetch
+  // kernel needs the state offsets to be multiples of 4 (checked again at dispatch).
+  static const bool gdn_pf_env =
+      decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   const bool gqa_native = gdn_gqa_decode && decode_shape && raw_gates_mode &&
       Hk != Hv && A_log.dtype() == float32 && gdn_decode_tile_enabled(encoder);
   // MLX_OMARCHY_GDN_GQA_BF16A=1 (read live, default off): the same native GQA
@@ -12755,7 +12759,19 @@ void GatedDeltaUpdate::eval_gpu(
   const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
       decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
       gdn_decode_tile_enabled(encoder);
-  if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a) {
+  // MLX_OMARCHY_GDN_PF_GQA=1 (read live, default off): native GQA decode for the UNTILED prefetch
+  // kernel on the f32-A_log raw route (the Qwen3.5-9B route), through GatedDeltaDecodeBF16PfComposedGqa:
+  // the composed-order prefetch kernel with the key-head index of the tiled composed one. It applies
+  // only where the tile is off (MLX_OMARCHY_GDN_DECODE_TILE=0 or a legacy G13 part), because the tiled
+  // route has its own native GQA (gqa_native). q and k keep their Hk heads, so the two expansion copies
+  // per linear layer per token are not recorded. It needs the prefetch kernel's alignment (h0 offset a
+  // multiple of 4); outside that it expands as before.
+  const char* pf_gqa_env = std::getenv("MLX_OMARCHY_GDN_PF_GQA");
+  const bool pf_gqa = pf_gqa_env != nullptr && pf_gqa_env[0] == '1' &&
+      decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32 &&
+      !gdn_decode_tile_enabled(encoder) && gdn_pf_env &&
+      (checked_item_offset(h0, h0.size(), tag, out) % 4u) == 0u;
+  if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a && !pf_gqa) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
       array wide(Shape{B, T, Hv, Dk}, x.dtype(), nullptr, {});
@@ -12806,7 +12822,7 @@ void GatedDeltaUpdate::eval_gpu(
     // Native GQA: q and k carry Hk heads; the composed-order tiled shader
     // maps value head j to key head j / (Hv / Hk). 0 means equal head counts.
     params.in_strides[3] =
-        (gqa_native || gqa_bf16a) ? checked_u32(Hk, tag, out) : 0u;
+        (gqa_native || gqa_bf16a || pf_gqa) ? checked_u32(Hk, tag, out) : 0u;
     std::array<omarchy::ComputeBinding, 10> bindings{
         binding(q),    // 0 QBuf
         binding(k),    // 1 KBuf
@@ -12850,10 +12866,11 @@ void GatedDeltaUpdate::eval_gpu(
     // Vec4 prefetching walks for the untiled (legacy G13 part) kernel:
     // bit-exact, +3.4% decode on the 13-inch M1. MLX_OMARCHY_GDN_PF=0 restores
     // the scalar kernel.
-    static const bool gdn_pf_env =
-        decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
     const bool gdn_pf = gdn_pf_env && (params.shape[1] % 4u) == 0u &&
         (params.shape[2] % 4u) == 0u;
+    if (pf_gqa && !gdn_pf) {
+      omarchy::unsupported(tag + " pf gqa alignment", out);
+    }
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
@@ -12862,7 +12879,8 @@ void GatedDeltaUpdate::eval_gpu(
                     : gqa_bf16a ? omarchy::ComputeKernel::GatedDeltaDecodeBF16Gqa
                                 : omarchy::ComputeKernel::GatedDeltaDecodeBF16)
         : gdn_pf
-        ? (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed
+        ? (composed ? (pf_gqa ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa
+                              : omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed)
                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf)
         : (composed ? omarchy::ComputeKernel::GatedDeltaDecodeBF16UntiledComposed
                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Untiled);

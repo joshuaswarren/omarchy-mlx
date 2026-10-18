@@ -25,6 +25,7 @@
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
@@ -136,6 +137,44 @@ bool same(const Run& x, const Run& y, Stream s) {
   return array_equal(x.out[0], y.out[0], s).item<bool>() && array_equal(x.out[1], y.out[1], s).item<bool>();
 }
 
+// A run under a set of environment variables (nullptr = unset); every variable named is unset again afterwards.
+struct EnvVar {
+  const char* name;
+  const char* value;
+};
+
+struct EnvRun {
+  Run run;
+  int64_t kernel;
+};
+
+EnvRun run_env(const Inputs& in, const array& q, const array& k, const std::vector<EnvVar>& env, Stream s) {
+  for (const EnvVar& e : env) {
+    if (e.value == nullptr) {
+      unsetenv(e.name);
+    } else {
+      setenv(e.name, e.value, 1);
+    }
+  }
+  auto& enc = omarchy::get_command_encoder(s);
+  enc.synchronize("gdn_pf_gqa_before");
+  uint64_t before = counters().vk_compute_dispatches.load();
+  auto out = fast::gated_delta_update_raw(q, k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0, std::nullopt, s);
+  out[0].eval();
+  out[1].eval();
+  enc.synchronize("gdn_pf_gqa_after");
+  uint64_t n = counters().vk_compute_dispatches.load() - before;
+  const int64_t kernel = counters().last_dispatched_kernel.load();
+  for (const EnvVar& e : env) {
+    unsetenv(e.name);
+  }
+  return EnvRun{Run{out, n}, kernel};
+}
+
+constexpr int64_t kind(omarchy::ComputeKernel k) {
+  return static_cast<int64_t>(k);
+}
+
 } // namespace
 
 TEST_CASE("gdn raw decode bf16 A_log: native GQA equals the expanded and the repeated routes bit for bit") {
@@ -211,5 +250,112 @@ TEST_CASE("gdn raw decode: calls outside the bf16 A_log native route do not chan
     Run on = run_route(in, in.q, in.k, "1", s);
     CHECK(same(off, on, s));
     CHECK(off.dispatches == on.dispatches);
+  }
+}
+
+// The untiled prefetch decode with native GQA (MLX_OMARCHY_GDN_PF_GQA=1, default off), on the Qwen3.5-9B contract: f32 A_log,
+// 16 key heads and 32 value heads. It applies only where the tile is off (MLX_OMARCHY_GDN_DECODE_TILE=0 here, a legacy G13
+// part by default). Gate: exact equality, bit for bit, of the output and the final state with the backend expansion and with
+// the caller-repeated q and k, exactly two dispatches fewer, and the kernel named by its enum.
+TEST_CASE("gdn raw decode f32 A_log, tile off: native GQA through the prefetch kernel equals the expanded and the repeated routes") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_pf_gqa");
+  struct Case {
+    int B;
+    int pad;
+    const char* name;
+  };
+  for (const Case& c : {Case{1, 0, "B=1"}, Case{1, 3, "B=1, q/k views with a buffer offset"}, Case{3, 0, "B=3 batched decode"},
+                        Case{3, 2, "B=3, q/k views with a buffer offset"}}) {
+    Shape27 sh;
+    sh.B = c.B;
+    sh.Hv = 32;
+    Inputs in = make_inputs(sh, /*a_log_f32=*/true, s, c.pad);
+    array q_rep = repeat(in.q, sh.Hv / sh.Hk, 2, s);
+    array k_rep = repeat(in.k, sh.Hv / sh.Hk, 2, s);
+    eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0, q_rep, k_rep});
+    omarchy::get_command_encoder(s).synchronize("gdn_pf_gqa_inputs");
+    const std::vector<EnvVar> off{{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", nullptr}};
+    const std::vector<EnvVar> on{{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}};
+    EnvRun expanded = run_env(in, in.q, in.k, off, s);
+    EnvRun repeated = run_env(in, q_rep, k_rep, off, s);
+    EnvRun native = run_env(in, in.q, in.k, on, s);
+    std::cout << "[gdn_pf_gqa] " << c.name << ": expanded " << expanded.run.dispatches << " dispatches, repeated "
+              << repeated.run.dispatches << ", native " << native.run.dispatches << "\n";
+    CHECK_MESSAGE(same(native.run, expanded.run, s), c.name, ": native output or state differs from the expanded route");
+    CHECK_MESSAGE(same(native.run, repeated.run, s), c.name, ": native output or state differs from the caller-repeated route");
+    CHECK_MESSAGE(same(expanded.run, repeated.run, s), c.name, ": the two reference routes differ from each other");
+    CHECK_MESSAGE(native.run.dispatches + 2 == expanded.run.dispatches, c.name, ": the native route took ", native.run.dispatches,
+                  " dispatches against ", expanded.run.dispatches, " expanded (expected two fewer)");
+    if (!(c.B > 1 && c.pad > 0)) {
+      CHECK_MESSAGE(native.run.dispatches == repeated.run.dispatches, c.name, ": native ", native.run.dispatches,
+                    " against the repeated route ", repeated.run.dispatches);
+    }
+    CHECK_EQ(expanded.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed));
+    CHECK_EQ(repeated.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed));
+    CHECK_EQ(native.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposedGqa));
+  }
+}
+
+TEST_CASE("gdn raw decode: calls outside the prefetch native GQA route do not change") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_pf_gqa_outside");
+  Shape27 sh;
+  sh.Hv = 32;
+  Inputs in32 = make_inputs(sh, true, s);
+  eval(std::vector<array>{in32.q, in32.k, in32.v, in32.a, in32.b, in32.a_log, in32.dt_bias, in32.h0});
+  omarchy::get_command_encoder(s).synchronize("gdn_pf_gqa_inputs2");
+  const EnvVar unset_flag{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
+  // A flag of "0" and an unset flag are the same route.
+  {
+    EnvRun off = run_env(in32, in32.q, in32.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, unset_flag}, s);
+    EnvRun zero = run_env(in32, in32.q, in32.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "0"}}, s);
+    CHECK(same(off.run, zero.run, s));
+    CHECK(off.run.dispatches == zero.run.dispatches);
+    CHECK_EQ(off.kernel, zero.kernel);
+  }
+  // With the tile on the tiled route keeps its own native GQA whether or not the flag is set.
+  {
+    EnvRun off = run_env(in32, in32.q, in32.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, unset_flag}, s);
+    EnvRun on = run_env(in32, in32.q, in32.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+    CHECK(same(off.run, on.run, s));
+    CHECK(off.run.dispatches == on.run.dispatches);
+    CHECK_EQ(off.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed));
+    CHECK_EQ(on.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed));
+  }
+  // A bf16 A_log (the Qwen3.8 route) does not take it.
+  {
+    Inputs bf = make_inputs(sh, false, s);
+    eval(std::vector<array>{bf.q, bf.k, bf.v, bf.a, bf.b, bf.a_log, bf.dt_bias, bf.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_pf_gqa_inputs3");
+    EnvRun off = run_env(bf, bf.q, bf.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, unset_flag}, s);
+    EnvRun on = run_env(bf, bf.q, bf.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+    CHECK(same(off.run, on.run, s));
+    CHECK(off.run.dispatches == on.run.dispatches);
+    CHECK_EQ(on.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16Pf));
+  }
+  // Equal head counts (no GQA) with the flag on: unchanged.
+  {
+    Shape27 eq;
+    eq.Hk = eq.Hv;
+    Inputs in = make_inputs(eq, true, s);
+    eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_pf_gqa_inputs4");
+    EnvRun off = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, unset_flag}, s);
+    EnvRun on = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+    CHECK(same(off.run, on.run, s));
+    CHECK(off.run.dispatches == on.run.dispatches);
+    CHECK_EQ(on.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed));
+  }
+  // The default is unchanged: with no variable set the kernel is the tiled composed one, except on a legacy G13 part
+  // (G13 and not G13C), whose default is the untiled prefetch kernel; the flag is off.
+  {
+    const std::string& device = omarchy::device(0).capabilities().device_name;
+    const bool legacy = device.find("G13") != std::string::npos && device.find("G13C") == std::string::npos;
+    EnvRun def = run_env(in32, in32.q, in32.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr}, unset_flag}, s);
+    CHECK_EQ(def.kernel, kind(legacy ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed
+                                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed));
   }
 }
