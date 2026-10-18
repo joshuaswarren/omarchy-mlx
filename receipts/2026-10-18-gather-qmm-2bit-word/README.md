@@ -18,7 +18,7 @@ Kernel ids are labels. They move when kernels are appended. The route is named b
 ## Machine and driver
 
 - 14-inch M2 Max (G14C), Linux kernel 7.1.12-2-20261013.18-sep-ARCH, CPU governor performance.
-- Gate, layer A/B and fidelity: Vulkan driver package `vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2`, library sha256 prefix `40282811c6e14ef9`.
+- Gate, layer A/B and fidelity: Vulkan driver package `omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2`, library sha256 prefix `40282811c6e14ef9`.
 - Device doctest: library sha256 prefix `c499962c742f399a`, Mesa git `a5b1797446`.
 - Platform firmware of the 14-inch M2 Max, read from its device tree: OS firmware version 13.5, system firmware version 27.0, iBoot-8422.141.2, boot loader v1.6.1-omarchy.aurora14.
 

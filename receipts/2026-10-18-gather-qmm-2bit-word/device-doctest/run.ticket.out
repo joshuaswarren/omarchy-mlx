@@ -1,5 +1,5 @@
 IDLE-GUARD-JOB-START 20261018T043417Z pr224 doctest run at 127a611: one doctest case of the 2-bit gather_qmm word route on the Apple M2 Max, pass or fail only, the 2-bit case alone must print 666 of 666, no timing
-KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+KERNEL-CMDLINE:  kernel=7.1.12-2-20261013.18-sep-ARCH
 PREFLIGHT-RUN
 SETTLE load1=0.40 SETTLED
 GPU-TIMEOUTS before=0 boot=<id>
