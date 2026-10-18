@@ -1,0 +1,49 @@
+GUARD ok   arm labels {'S': ['S'], 'R': ['R'], 'F': ['F'], 'S2': ['S2'], 'R2': ['R2']}
+GUARD ok   inputs sha256 equal {('18acd6d6cf33c74b72e5d0e8d1bb8abacbbab6d5c58c985e9ede523ab0e77571',)}
+GUARD ok   prefill length equal in all arms {(2,)}
+GUARD ok   libmlx equal {('dfbef1940389d76202a04f44b3c00379c73ca9cc6ad44a7d19e6974b4dbb471e',)}
+GUARD ok   windows equal 32 windows
+GUARD ok   one look of 32 windows W 32
+GUARD ok   windows are 128..159 first 128 last 159
+GUARD ok   gather call counts equal in all arms first row (prefill, decode) S [12 12] R [12 12] F [12 12] S2 [12 12] R2 [12 12]
+GUARD ok   determinism S == S2 (hidden states; with the diagnostic only in S, it also shows the diagnostic changed no value) 32 of 32 windows bit-equal
+GUARD ok   routing S == S2 (expert indices of every decode gather) equal
+GUARD ok   determinism R == R2 (hidden states; with the diagnostic only in R, it also shows the diagnostic changed no value) 32 of 32 windows bit-equal
+GUARD ok   routing R == R2 (expert indices of every decode gather) equal
+GUARD ok   first layer routing equal in all arms 
+GUARD ok   diagnostic present in S and R only 
+noise floor: rms(S - S2) max 0.000e+00, rms(R - R2) max 0.000e+00 (last layer, per window)
+GUARD ok   vacuity: F is not bit-equal to S in all 32 windows, and the same for R F==S in 0, F==R in 0, S==R in 0 of 32 windows
+ROUTING (decode gathers, layers after the first: sets of the 8 expert indices):
+  S vs R: identical in 29 of 32 windows; differing windows [142, 145, 157]
+  S vs F: identical in 31 of 32 windows; differing windows [157]
+  R vs F: identical in 30 of 32 windows; differing windows [142, 145]
+  windows where S, R and F share ALL routing: 29 of 32 (routing is not pinned)
+d_R < d_S in 17 of 32 windows; windows with d_R = 0: 0, d_S = 0: 0
+REGISTERED (all 32 windows): windows 32  mean u 0.0555152  SE 0.144299  interval (2 SE) [-0.233082, 0.344112]  margin ln(1.05) 0.0487902  exp(mean u) 1.0571 (0.7921 to 1.4107)
+REGISTERED (all 32 windows) VERDICT WIDER (single look): no ACCEPT
+SECONDARY (windows with shared routing): windows 29  mean u -0.0241084  SE 0.028462  interval (2 SE) [-0.0810325, 0.0328156]  margin ln(1.05) 0.0487902  exp(mean u) 0.9762 (0.9222 to 1.0334)
+SECONDARY (windows with shared routing) VERDICT ACCEPT-NOT-WORSE (interval below +ln 1.05, not below 0)
+INFORMATION ONLY (flipped windows, a flip-driven WIDER or REJECT is reported as such): windows 3  mean u 0.82521  SE 1.73381  interval (2 SE) [-2.64241, 4.29283]  margin ln(1.05) 0.0487902  exp(mean u) 2.2824 (0.0712 to 73.1730)
+INFORMATION ONLY (flipped windows, a flip-driven WIDER or REJECT is reported as such) VERDICT WIDER (single look): no ACCEPT
+scale-free: mean d_S / rms(F) 0.006151, mean d_R / rms(F) 0.007139
+layer 14  mean d_S 6.18526e-05  mean d_R 5.47511e-05  max abs S-F 0.01562  R-F 0.007812
+layer 15  mean d_S 0.00135715  mean d_R 0.00297934  max abs S-F 0.03125  R-F 0.3906
+layer 16  mean d_S 0.00218046  mean d_R 0.00364958  max abs S-F 0.03125  R-F 0.3242
+layer 17  mean d_S 0.0048588  mean d_R 0.00568518  max abs S-F 0.5117  R-F 0.4609
+PER-CALL DIAGNOSTIC (non-gating; each decode gather output against the float64 contraction of the same inputs; S then R; mean over 32 windows):
+  layer 14 up    S: max|err| 0.003906 rms err 5.987e-06 (rms ref 0.6616) differing 0.0059% | R: max|err| 0.003906 rms err 4.168e-06 differing 0.0051%
+  layer 14 gate  S: max|err| 0.01562 rms err 4.792e-06 (rms ref 0.6661) differing 0.0051% | R: max|err| 0.01562 rms err 5.512e-06 differing 0.0065%
+  layer 14 down  S: max|err| 0.0009766 rms err 1.14e-06 (rms ref 0.1925) differing 0.0089% | R: max|err| 0.0009766 rms err 1.399e-06 differing 0.0110%
+  layer 15 up    S: max|err| 0.007812 rms err 6.225e-06 (rms ref 0.7458) differing 0.0051% | R: max|err| 0.007812 rms err 6.72e-06 differing 0.0054%
+  layer 15 gate  S: max|err| 0.007812 rms err 8.963e-06 (rms ref 0.8099) differing 0.0051% | R: max|err| 0.007812 rms err 8.009e-06 differing 0.0064%
+  layer 15 down  S: max|err| 0.001953 rms err 1.167e-06 (rms ref 0.218) differing 0.0085% | R: max|err| 0.0009766 rms err 1.269e-06 differing 0.0097%
+  layer 16 up    S: max|err| 0.007812 rms err 5.677e-06 (rms ref 0.6401) differing 0.0061% | R: max|err| 0.007812 rms err 6.262e-06 differing 0.0061%
+  layer 16 gate  S: max|err| 0.007812 rms err 6.482e-06 (rms ref 0.6492) differing 0.0045% | R: max|err| 0.007812 rms err 4.755e-06 differing 0.0064%
+  layer 16 down  S: max|err| 0.007812 rms err 2.2e-06 (rms ref 0.2484) differing 0.0080% | R: max|err| 0.0009766 rms err 7.556e-07 differing 0.0079%
+  layer 17 up    S: max|err| 0.007812 rms err 9.08e-06 (rms ref 0.6154) differing 0.0057% | R: max|err| 0.007812 rms err 7.959e-06 differing 0.0060%
+  layer 17 gate  S: max|err| 0.007812 rms err 6.945e-06 (rms ref 0.6233) differing 0.0064% | R: max|err| 0.007812 rms err 4.568e-06 differing 0.0051%
+  layer 17 down  S: max|err| 0.0009766 rms err 1.663e-06 (rms ref 0.2009) differing 0.0083% | R: max|err| 0.001953 rms err 2.083e-06 differing 0.0075%
+  all gathers: mean rms err S 5.027e-06, R 4.455e-06 (ratio R/S 0.886)
+digests of stored hidden states: S 361635427a944a05 R d8ef4f0a11d19880 F 922650d0f66fd33f
+claim: hidden-state fidelity on layers 14-17 of 62 of the Muse model, real quantized weights; the routed-expert gather_qmm of the 2-bit word-per-lane route and of the 8-output route are each compared with a float64 contraction of the same stored words, scales and biases; uncompiled graph, synthetic heavy-tailed inputs, 2-token prefill then decode m=1; routing is not pinned; not model quality

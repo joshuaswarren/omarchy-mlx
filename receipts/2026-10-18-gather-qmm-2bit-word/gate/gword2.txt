@@ -1,0 +1,63 @@
+device Device(gpu, 0) mlx 0.32.4.dev202610162350+1860679
+mlx file <scratch>/tree-1860679/mlx/core.cpython-314-aarch64-linux-gnu.so | libmlx loaded {'<scratch>/tree-1860679/mlx/lib/libmlx.so': 'a78282e363bfbb7a'} | WORD2 env None
+== shape muse-expert-g128: E=32 K=4096 N=4096 g128 top=8 2-bit bf16 (256 words per row, 0 lanes idle)
+  bcast  sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 2 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 1 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 5 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 9 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 1 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 1 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  per call word2: median    290.9 us (block medians 291.6, 290.9, 290.5, 291.0; min 288.3 max 478.1) -> 129.8 GB/s
+  per call r8   : median   1184.6 us (block medians 1184.3, 1184.2, 1185.4, 1184.9; min 1181.9 max 1187.3) -> 31.9 GB/s
+  ratio r8/word2 4.07x; bytes per call 37748736
+== shape muse-expert-g64: E=32 K=4096 N=4096 g64 top=8 2-bit bf16 (256 words per row, 0 lanes idle)
+  bcast  sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 2 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 2 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 1 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 6 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 2 of 32768; R3 ids word2 [619] r8 [612] route ok -> ok
+  per call word2: median    292.9 us (block medians 293.7, 292.9, 292.5, 292.7; min 290.1 max 406.3) -> 143.2 GB/s
+  per call r8   : median   1235.7 us (block medians 1235.7, 1235.4, 1235.6, 1235.8; min 1233.5 max 1242.4) -> 33.9 GB/s
+  ratio r8/word2 4.22x; bytes per call 41943040
+== shape k2048-n704-g64: E=32 K=2048 N=704 g64 top=8 2-bit bf16 (128 words per row, 0 lanes idle)
+  bcast  sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 5632; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 1 of 5632; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 5632; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 3 of 5632; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 5632; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 5632; R3 ids word2 [619] r8 [612] route ok -> ok
+  per call word2: median     33.8 us (block medians 34.7, 33.8, 33.9, 33.5; min 32.5 max 57.9) -> 106.6 GB/s
+  per call r8   : median    106.2 us (block medians 107.0, 106.9, 105.9, 105.5; min 105.1 max 112.7) -> 33.9 GB/s
+  ratio r8/word2 3.14x; bytes per call 3604480
+== shape k512-n256-g128: E=16 K=512 N=256 g128 top=8 2-bit bf16 (32 words per row, 0 lanes idle)
+  bcast  sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 2048; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 2048; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 2048; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 1 of 2048; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 2048; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 2048; R3 ids word2 [619] r8 [612] route ok -> ok
+  per call word2: median     13.1 us (block medians 13.2, 13.1, 13.1, 13.0; min 12.2 max 18.9) -> 22.5 GB/s
+  per call r8   : median     18.7 us (block medians 18.7, 18.6, 18.7, 18.7; min 17.5 max 61.0) -> 15.8 GB/s
+  ratio r8/word2 1.43x; bytes per call 294912
+== shape k1024-n100-g128: E=8 K=1024 N=100 g128 top=8 2-bit bf16 (64 words per row, 0 lanes idle)
+  bcast  sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 800; R3 ids word2 [619] r8 [581] route ok -> ok
+  bcast  random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 800; R3 ids word2 [619] r8 [581] route ok -> ok
+  bcast  repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 800; R3 ids word2 [619] r8 [581] route ok -> ok
+  perexp sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 800; R3 ids word2 [619] r8 [581] route ok -> ok
+  perexp random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 800; R3 ids word2 [619] r8 [581] route ok -> ok
+  perexp repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 800; R3 ids word2 [619] r8 [581] route ok -> ok
+  per call word2: median     11.7 us (block medians 11.7, 11.7, 11.8, 11.8; min 11.2 max 59.4) -> 19.6 GB/s
+  per call r8   : median     24.5 us (block medians 24.4, 24.3, 24.6, 24.6; min 24.1 max 67.1) -> 9.4 GB/s
+  ratio r8/word2 2.08x; bytes per call 230400
+== shape k128-n64-g128: E=8 K=128 N=64 g128 top=8 2-bit bf16 (8 words per row, 24 lanes idle)
+  bcast  sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 512; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 512; R3 ids word2 [619] r8 [612] route ok -> ok
+  bcast  repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 512; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp sorted R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 512; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp random R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 512; R3 ids word2 [619] r8 [612] route ok -> ok
+  perexp repeat R2 beyond-1.5-steps word2 0.0e+00 r8 0.0e+00, max steps word2 0.50 r8 0.50; control word2 vs r8 byte mismatch 0 of 512; R3 ids word2 [619] r8 [612] route ok -> ok
+  per call word2: median     10.5 us (block medians 10.6, 10.6, 10.5, 10.4; min 10.0 max 17.8) -> 1.8 GB/s
+  per call r8   : median     11.4 us (block medians 11.4, 11.4, 11.4, 11.4; min 10.2 max 55.2) -> 1.6 GB/s
+  ratio r8/word2 1.08x; bytes per call 18432
+RESULT PASS

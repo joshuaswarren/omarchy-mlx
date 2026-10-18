@@ -1,0 +1,5 @@
+start 00:10:37 tag=word2 tree=<scratch>/tree-1860679 boot=<id> libmlx=a78282e363bfbb7a bench_sha=d2965d6a6c9f0d99 micro_sha=b9e2f6d24404b01e
+smoke ok 00:10:39
+micro rc=0 00:10:43
+trace rc=0 00:10:48
+bench rc=0 00:11:02
