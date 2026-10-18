@@ -1,0 +1,4 @@
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM GM THREADS pid 978988 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 978988:1024 979144:0 979145:0 979146:0 979147:0 979148:0 979149:0 979150:0 979217:0 979218:1024 979268:1024 979269:1024 979270:1024 979271:1024 979272:1024 979273:1024 979274:1024 979275:1024
+{"arm": "GM", "finish": "length", "ids_sha16": "723f76658ffc3dc8", "n_long": 40, "n_short": 10, "pair": 1, "text_sha16": "52c8b30c07dc14b3", "ts_tps": 10.7573, "wall_long_s": 4.0112, "wall_short_s": 1.207, "wall_tps": 10.6984}
+FLIP GM make_mask returned None 61 times, delegated 3 times
