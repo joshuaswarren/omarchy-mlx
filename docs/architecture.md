@@ -98,6 +98,30 @@ The partitioner uses an exact capability key:
 - compiler target and source identity plus exact driver ABI major
 - measured transfer and execution cost
 
+Measured ANE work rates below feed that key. All numbers are Linux driver
+measurements from 2026-10-18: sealed constant-weight matmul programs at M=64,
+200 calls per rung, three rounds, one pinned performance core per host, exact
+output checks on every run (byte-exact on the two M1 chips, a 2 ulp or
+4 condition unit band on the M2 chip, whose H14 checker allows that band).
+
+| Chip | 4.2 M MACs | 67 M MACs | 268 M MACs | 537 M MACs |
+|---|---|---|---|---|
+| M1 (T8103, 13-inch) | about 0.013 ms | not measured | not measured | about 0.4 ms (pinned run pending) |
+| M1 Max (T6001, 16-inch) | not measured | not measured | not measured | 1.106 ms |
+| M2 Max (T6021, 14-inch) | 0.287 to 0.326 ms | 0.375 to 0.398 ms | 0.807 to 0.809 ms | 1.109 to 1.117 ms |
+
+Routing decision from these numbers: at 537 M MACs the M1 Max and M2 Max ANE
+agree within 1 percent while the base M1 ANE is about 2.7 times faster, so a
+per-chip measured cost is required before moving any large static matmul
+region onto the ANE. On T6001 and T6021 the ANE work rate at that size is
+about 1.0 TFLOP per second (1.07 GFLOP in 1.11 ms), which the partitioner
+must compare against the measured Vulkan path for the same region before
+selecting the ANE. Below roughly 70 M MACs the T6021 ANE sits on a per-call
+floor near 0.3 ms (16 times the MACs costs 1.15 to 1.22 times the time), so
+small regions cannot amortize that floor and stay on the GPU unless the
+whole region batch is restructured. The T8103 floor is near 0.010 to 0.012 ms
+by a two-point fit, an extrapolation, not a measurement.
+
 ANE compilation must run on Linux without private Apple frameworks. The schema-4 adapter accepts explicit H13 ANEC v2 packages. It preserves ordered logical return views separately from physical buffers, plus programs, slices, allocations, and payload digests. It requires compiler provenance, target `h13`, and driver ABI major 1. Bundle versions 1 through 3 and dotted firmware fields are rejected.
 
 Bundle validation is structural and device-free. It does not establish that H13 bytes are eligible for a physical t8103 or t6000 device, and the current compiler's separate HWX-extraction regression prevents compiler-wide qualification or a release pin. Physical-device and numerical qualification still run through the bounded worker before general MLX lowering can use a region. Runtime-generated, content-addressed bundles may be cached, but each cache hit passes the same strict loader. Linux rejects a bundle before device access if any contract field differs. A missing bundle keeps only the affected region on Vulkan.
