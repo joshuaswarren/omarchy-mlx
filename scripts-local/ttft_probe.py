@@ -46,14 +46,15 @@ def measure_ttft(host, port, body, timeout=300):
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
+                now = time.perf_counter() - t0  # one read per event
                 if first_event is None and any(
                         v for k, v in delta.items()
                         if k in ("content", "reasoning_content", "reasoning")
                         and isinstance(v, str) and v):
-                    first_event = time.perf_counter() - t0
+                    first_event = now
                 content = delta.get("content")
                 if content and first_content is None:
-                    first_content = time.perf_counter() - t0
+                    first_content = now
                     first_idx = events
         total = time.perf_counter() - t0
         if first_content is None:

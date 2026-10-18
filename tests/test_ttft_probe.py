@@ -18,13 +18,16 @@ import json
 import sys
 import threading
 import time
+import types
 import unittest
+from unittest import mock
 import http.server
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts-local"))
 
+import ttft_probe  # noqa: E402
 from ttft_probe import measure_ttft  # noqa: E402
 
 
@@ -111,7 +114,13 @@ class TtftProbeTests(unittest.TestCase):
             {"delay": 0.10, "payload": _delta("direct answer")},
             {"delay": 0.05, "payload": _delta(" more")},
         ]
-        result = measure_ttft("127.0.0.1", self.port, self.body, timeout=10)
+        # A fake clock that advances on every read: the two figures can only
+        # match if the probe reads the clock once for the event.
+        ticks = iter(range(1, 1000))
+        fake_time = types.SimpleNamespace(
+            perf_counter=lambda: next(ticks) * 0.001)
+        with mock.patch.object(ttft_probe, "time", fake_time):
+            result = measure_ttft("127.0.0.1", self.port, self.body, timeout=10)
         self.assertIsNone(result.get("error"), result)
         self.assertEqual(result["first_event_s"], result["first_content_s"])
         self.assertEqual(result["reasoning_lead_s"], 0)
