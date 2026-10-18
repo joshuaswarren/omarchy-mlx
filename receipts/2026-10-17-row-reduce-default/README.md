@@ -126,6 +126,31 @@ The firmware values are read from each device tree on 2026-10-17 after the runs.
 
 Each machine ran the binary three times, with `MLX_OMARCHY_ROW_REDUCE` unset, `0` and `1`. The test sets that variable itself for every case, so the outer setting does not change a run. All nine outputs are byte-identical, `device-doctest.txt` in this directory is one of them (sha256 `88485fa676e78872e3138fe633e9c5f1f415dbc5d31239bdeef60a13bcc39cd1`). For float32, float16 and bfloat16 rows of 256 to 70001 elements it lists the worst row's error of each route against a long double sum, in units of 2^-24 times the sum of magnitudes. Each case also checks the row route against a bound of 32 of those units plus the storage step. The values on the three chips are equal.
 
+## 5. Follow-up negative log-likelihood check
+
+The first check of section 3 used three passages. This check scores eight passages of technical prose written on 15 to 17 October 2026, after the training data of the model, so none is memorised. Each passage has 1,800 characters and 255 scored tokens. The passage text is not published. The table names each passage by the sha256 prefix of its file.
+
+Setup. One load of Muse Spark Open 2-bit, all 62 layers on five ranks, split 24,12,12,12,2. The Mac Studio rank (an M1 Ultra) runs the Metal backend. The other four ranks run on the 14-inch M2 Max (two processes), the 16-inch M1 Max and the 13-inch M1 with the Vulkan driver. Compilation is off. The route is switched per request through each Vulkan rank's live environment file: off is the variable unset and on is `MLX_OMARCHY_ROW_REDUCE=1`. The passes ran in the order off, on, on, off over all eight passages. The commands, the guard that read the no-progress variable on every Vulkan rank, the driver library of each machine and the items that were not recorded are in the source record listed in `SHA256SUMS`. The setup of the load is that of section 3 with the rank code and `rankpy.sh` hashes named there.
+
+Rule, fixed before the run. The unit is the passage. For each passage d is the mean over its 255 tokens of the negative log-likelihood with the route on minus the route off, from the first on pass and the first off pass. D is the mean of d over the eight passages. The interval is D plus or minus 2 standard errors over passages, and the verdict is also quoted with the t value 2.365 for 7 degrees of freedom. The margin of +0.02 nats per token was fixed before the run. It is twice the 0.01 of the first rule, which is not scored again. If the upper end of the interval is above +0.02, the route is rejected and the default reverts. If the upper end is at most +0.02 and the interval is not wholly below 0, the verdict is ACCEPT-NOT-WORSE.
+
+Guards, all passed. The 32 score records have no error. The two off passes are bit-identical on every passage and so are the two on passes. The route on differs from the route off on 100 percent of the tokens of every passage. The live environment line with the on value is in the log of every Vulkan rank in the on passes, and the log of the last off pass shows the variable unset. The first off pass has no such line because the load starts with the variable unset, so its state is shown by the identical last off pass.
+
+| Passage | File sha256 prefix | NLL off | NLL on | d | Per-token sd of the difference |
+| --- | --- | --- | --- | --- | --- |
+| P1 | `70f055e1527b1281` | 3.78112 | 3.78985 | +0.00873 | 0.2499 |
+| P2 | `88c8a9db88bd2da4` | 3.72706 | 3.73409 | +0.00702 | 0.3560 |
+| P3 | `401031a1bc9f7866` | 4.27858 | 4.26054 | -0.01804 | 0.3288 |
+| P4 | `e2e5f44be9d1824d` | 3.68971 | 3.68694 | -0.00277 | 0.2877 |
+| P5 | `ec1dafd45c760160` | 3.38112 | 3.40479 | +0.02367 | 0.3259 |
+| P6 | `c6bff5c894081ef4` | 3.28422 | 3.27927 | -0.00494 | 0.1914 |
+| P7 | `10d945764eb2fafc` | 4.13349 | 4.12459 | -0.00890 | 0.2984 |
+| P8 | `bca0e29b3f80ba75` | 4.36063 | 4.39459 | +0.03395 | 0.2286 |
+
+Result in nats per token. D = +0.00484. The standard error over passages is 0.00611. D plus or minus 2 standard errors is [-0.00737, +0.01705]. With t = 2.365 the interval is [-0.00960, +0.01928]. A token-level paired standard error over the 2,040 tokens is 0.00638. Four of the eight passages have a positive d, and two of them (P5 and P8) are above +0.02 on their own. The upper end is below +0.02 under both forms and the interval contains 0, so the verdict is ACCEPT-NOT-WORSE and the default stays on. The t form leaves 0.0007 to the line. The data do not exclude a shift of +0.019 and do not show a shift.
+
+Limits. Eight passages, one load, one look. The tree is the PR 215 head 50f72c21, which routes Sum, Max and Min, while the merged route is Sum only. The text of the answers was not read in this run. This is a paired negative log-likelihood check and not a quality benchmark.
+
 ## Source records
 
 `SHA256SUMS` holds the sha256 of the source record of each section: the benchmark log, output and traces of the timing run, the two fidelity result files with their ticket logs, and the cluster result and comparison files. The source files are in the lab archive, not in this directory, so `sha256sum -c` run here cannot check those lines.
