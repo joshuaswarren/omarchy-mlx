@@ -1,0 +1,28 @@
+== rows-fixab-e4b-20261018T115240Z.csv: 607 one-second rows
+  nand_mC: min 47.7 max 56.1 mean 53.0 C
+  batt_hotspot_mC: min 34.9 max 35.2 mean 35.1 C
+  charger_mC: min 48.1 max 55.2 mean 52.1 C
+  wifi_mC: min 45.8 max 48.9 mean 47.3 C
+  fan1_rpm: min 1169.0 max 1238.0 mean 1199.8 rpm
+  khz_policy4: min 2988.0 max 2988.0 mean 2988.0 MHz
+  heatpipe_uW: min 0.9 max 19.1 mean 7.8 W
+  sys_power_uW: min 3.9 max 26.5 mean 14.9 W
+== rows-flip-e4b-20261018T101153Z.csv: 815 one-second rows
+  nand_mC: min 40.6 max 55.9 mean 51.7 C
+  batt_hotspot_mC: min 32.8 max 35.2 mean 34.0 C
+  charger_mC: min 41.9 max 55.2 mean 50.9 C
+  wifi_mC: min 41.9 max 48.8 mean 46.3 C
+  fan1_rpm: min 0.0 max 1504.0 mean 648.1 rpm
+  khz_policy4: min 2988.0 max 2988.0 mean 2988.0 MHz
+  heatpipe_uW: min 0.9 max 16.4 mean 7.8 W
+  sys_power_uW: min 3.9 max 25.5 mean 15.3 W
+== rows-flip-e4b-20261018T110823Z.csv: 730 one-second rows
+  nand_mC: min 40.7 max 55.9 mean 51.5 C
+  batt_hotspot_mC: min 32.8 max 34.8 mean 33.9 C
+  charger_mC: min 41.0 max 55.0 mean 50.6 C
+  wifi_mC: min 40.8 max 48.9 mean 45.9 C
+  fan1_rpm: min 0.0 max 1416.0 mean 586.7 rpm
+  khz_policy4: min 2988.0 max 2988.0 mean 2988.0 MHz
+  heatpipe_uW: min 0.8 max 16.8 mean 7.9 W
+  sys_power_uW: min 3.5 max 24.9 mean 14.6 W
+== thermal-summary.txt: 26 one-second rows

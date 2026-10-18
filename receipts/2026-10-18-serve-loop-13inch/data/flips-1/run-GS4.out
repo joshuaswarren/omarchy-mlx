@@ -1,0 +1,5 @@
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM GS THREADS pid 1010280 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1010280:1024 1010282:0 1010283:0 1010284:0 1010285:0 1010286:0 1010287:0 1010288:0 1010290:0 1010291:1024 1010416:1024 1010417:1024 1010418:1024 1010419:1024 1010420:1024 1010421:1024 1010422:1024 1010423:1024
+{"arm": "GS", "finish": "length", "ids_sha16": "6e98b674dcae2e22", "n_long": 128, "n_short": 32, "pair": 1, "text_sha16": "10937c53e2548405", "ts_tps": 13.1001, "wall_long_s": 10.0268, "wall_short_s": 2.6506, "wall_tps": 13.0148}
+{"arm": "GS", "finish": "length", "ids_sha16": "6e98b674dcae2e22", "n_long": 128, "n_short": 32, "pair": 2, "text_sha16": "10937c53e2548405", "ts_tps": 13.0918, "wall_long_s": 10.0495, "wall_short_s": 2.7005, "wall_tps": 13.063}
+FLIP GS make_mask returned None 0 times, delegated 0 times

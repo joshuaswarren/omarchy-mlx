@@ -1,0 +1,80 @@
+IDLE-GUARD-JOB-START 20261018T115239Z TIMING serve-loop before-after 13-inch-M1 gemma-4-E4B: G and the real server on tree main81 against main81-fix (rotating-cache mask patch + server logprob-read patch), A bench_decode anchor; governor performance, 3 rounds
+KERNEL-CMDLINE kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.41 SETTLED
+GPU-TIMEOUTS before=0 boot=<id>
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 weights_gib 5.5 boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.41 tokens 128 reqs 2 rounds 3
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 governors:       2 performance  (read only)
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 tree main81 libmlx 9a225264dcf2dbcb cache.py 9d663baa1e7e5cc3 server.py 1090d5342c447257 rotkv marker 0 logprob marker 0
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 tree main81-fix libmlx 9a225264dcf2dbcb cache.py 7dcc85f3223f9786 server.py 2533fcc1f62bb3bf rotkv marker 2 logprob marker 2
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 sha256 prefixes: script d9397e5a86c83d01 bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_inproc.py a6f339aa962fd623 serve_client.py ee2cb55198c8c12a thread_table.py 2bef8caee53b2909 fixab_analyze.py 004e05260cd03627
+FIXAB fixab-e4b-20261018T115240Z 11:52:40 sampler csv /var/tmp/sampler/rows-fixab-e4b-20261018T115240Z.csv
+FIXAB fixab-e4b-20261018T115240Z 11:52:55 round 1 arm A load1=0.31 start_epoch=1792324375
+FIXAB fixab-e4b-20261018T115240Z 11:53:09 round 1 arm A rc=0 decode 15.48 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+FIXAB fixab-e4b-20261018T115240Z 11:53:09 round 1 arm A end_epoch=1792324389
+FIXAB fixab-e4b-20261018T115240Z 11:53:24 round 1 arm G load1=0.35 start_epoch=1792324404
+FIXAB fixab-e4b-20261018T115240Z 11:53:55 round 1 arm G tree main81 rc=0 pairs 2
+FIXAB fixab-e4b-20261018T115240Z 11:53:55 round 1 arm G end_epoch=1792324435
+FIXAB fixab-e4b-20261018T115240Z 11:54:10 round 1 arm GF load1=0.47 start_epoch=1792324450
+FIXAB fixab-e4b-20261018T115240Z 11:54:38 round 1 arm GF tree main81-fix rc=0 pairs 2
+FIXAB fixab-e4b-20261018T115240Z 11:54:38 round 1 arm GF end_epoch=1792324478
+FIXAB fixab-e4b-20261018T115240Z 11:54:53 round 1 arm H load1=0.38 start_epoch=1792324493
+FIXAB fixab-e4b-20261018T115240Z 11:54:58 round 1 arm H tree main81 THREADS pid 1269692 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1269692:1024 1269693:0 1269694:0 1269695:0 1269696:0 1269697:0 1269698:0 1269699:0 1269733:0 1269735:1024 1269866:1024 1269867:
+FIXAB fixab-e4b-20261018T115240Z 11:55:11 round 1 arm H req 1 rc=0 {"decode_tps": 12.9991, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 10.06, "wall_short_s": 2.6749}
+FIXAB fixab-e4b-20261018T115240Z 11:55:23 round 1 arm H req 2 rc=0 {"decode_tps": 13.0422, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 10.0649, "wall_short_s": 2.7042}
+FIXAB fixab-e4b-20261018T115240Z 11:55:24 round 1 arm H end_epoch=1792324524
+FIXAB fixab-e4b-20261018T115240Z 11:55:39 round 1 arm HF load1=0.67 start_epoch=1792324539
+FIXAB fixab-e4b-20261018T115240Z 11:55:43 round 1 arm HF tree main81-fix THREADS pid 1271711 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1271711:1024 1271712:0 1271713:0 1271714:0 1271715:0 1271716:0 1271717:0 1271718:0 1271752:0 1271753:1024 1271839:1024 1271840:
+FIXAB fixab-e4b-20261018T115240Z 11:55:55 round 1 arm HF req 1 rc=0 {"decode_tps": 14.6268, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 8.996, "wall_short_s": 2.4327}
+FIXAB fixab-e4b-20261018T115240Z 11:56:06 round 1 arm HF req 2 rc=0 {"decode_tps": 14.5947, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 8.9998, "wall_short_s": 2.4221}
+FIXAB fixab-e4b-20261018T115240Z 11:56:06 round 1 arm HF end_epoch=1792324566
+FIXAB fixab-e4b-20261018T115240Z 11:56:21 round 2 arm G load1=0.57 start_epoch=1792324581
+FIXAB fixab-e4b-20261018T115240Z 11:56:52 round 2 arm G tree main81 rc=0 pairs 2
+FIXAB fixab-e4b-20261018T115240Z 11:56:52 round 2 arm G end_epoch=1792324612
+FIXAB fixab-e4b-20261018T115240Z 11:57:07 round 2 arm GF load1=0.63 start_epoch=1792324627
+FIXAB fixab-e4b-20261018T115240Z 11:57:34 round 2 arm GF tree main81-fix rc=0 pairs 2
+FIXAB fixab-e4b-20261018T115240Z 11:57:34 round 2 arm GF end_epoch=1792324654
+FIXAB fixab-e4b-20261018T115240Z 11:57:49 round 2 arm H load1=0.59 start_epoch=1792324669
+FIXAB fixab-e4b-20261018T115240Z 11:57:54 round 2 arm H tree main81 THREADS pid 1277869 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1277869:1024 1277870:0 1277871:0 1277872:0 1277873:0 1277874:0 1277875:0 1277876:0 1277910:0 1277911:1024 1277983:1024 1277984:
+FIXAB fixab-e4b-20261018T115240Z 11:58:07 round 2 arm H req 1 rc=0 {"decode_tps": 13.0204, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 10.0289, "wall_short_s": 2.6558}
+FIXAB fixab-e4b-20261018T115240Z 11:58:20 round 2 arm H req 2 rc=0 {"decode_tps": 13.1917, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 10.022, "wall_short_s": 2.7447}
+FIXAB fixab-e4b-20261018T115240Z 11:58:20 round 2 arm H end_epoch=1792324700
+FIXAB fixab-e4b-20261018T115240Z 11:58:35 round 2 arm HF load1=0.43 start_epoch=1792324715
+FIXAB fixab-e4b-20261018T115240Z 11:58:39 round 2 arm HF tree main81-fix THREADS pid 1279648 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1279648:1024 1279651:0 1279652:0 1279653:0 1279654:0 1279655:0 1279656:0 1279657:0 1279690:0 1279692:1024 1279796:1024 1279797:
+FIXAB fixab-e4b-20261018T115240Z 11:58:51 round 2 arm HF req 1 rc=0 {"decode_tps": 14.6746, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 8.9814, "wall_short_s": 2.4395}
+FIXAB fixab-e4b-20261018T115240Z 11:59:02 round 2 arm HF req 2 rc=0 {"decode_tps": 14.8665, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 8.9728, "wall_short_s": 2.5153}
+FIXAB fixab-e4b-20261018T115240Z 11:59:03 round 2 arm HF end_epoch=1792324743
+FIXAB fixab-e4b-20261018T115240Z 11:59:18 round 2 arm A load1=0.46 start_epoch=1792324758
+FIXAB fixab-e4b-20261018T115240Z 11:59:31 round 2 arm A rc=0 decode 15.37 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+FIXAB fixab-e4b-20261018T115240Z 11:59:31 round 2 arm A end_epoch=1792324771
+FIXAB fixab-e4b-20261018T115240Z 11:59:46 round 3 arm GF load1=0.36 start_epoch=1792324786
+FIXAB fixab-e4b-20261018T115240Z 12:00:13 round 3 arm GF tree main81-fix rc=0 pairs 2
+FIXAB fixab-e4b-20261018T115240Z 12:00:13 round 3 arm GF end_epoch=1792324813
+FIXAB fixab-e4b-20261018T115240Z 12:00:28 round 3 arm H load1=0.48 start_epoch=1792324828
+FIXAB fixab-e4b-20261018T115240Z 12:00:33 round 3 arm H tree main81 THREADS pid 1284330 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1284330:1024 1284331:0 1284332:0 1284333:0 1284334:0 1284335:0 1284336:0 1284337:0 1284339:0 1284340:1024 1284453:1024 1284454:
+FIXAB fixab-e4b-20261018T115240Z 12:00:46 round 3 arm H req 1 rc=0 {"decode_tps": 13.0245, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 10.0425, "wall_short_s": 2.6718}
+FIXAB fixab-e4b-20261018T115240Z 12:00:59 round 3 arm H req 2 rc=0 {"decode_tps": 13.0888, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 10.0321, "wall_short_s": 2.6976}
+FIXAB fixab-e4b-20261018T115240Z 12:00:59 round 3 arm H end_epoch=1792324859
+FIXAB fixab-e4b-20261018T115240Z 12:01:14 round 3 arm HF load1=0.58 start_epoch=1792324874
+FIXAB fixab-e4b-20261018T115240Z 12:01:18 round 3 arm HF tree main81-fix THREADS pid 1286159 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 1286159:1024 1286160:0 1286161:0 1286162:0 1286163:0 1286164:0 1286165:0 1286166:0 1286168:0 1286169:1024 1286337:1024 1286338:
+FIXAB fixab-e4b-20261018T115240Z 12:01:30 round 3 arm HF req 1 rc=0 {"decode_tps": 14.6537, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 8.9826, "wall_short_s": 2.4314}
+FIXAB fixab-e4b-20261018T115240Z 12:01:41 round 3 arm HF req 2 rc=0 {"decode_tps": 14.2795, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "30e02a01d2c805d4", "wall_long_s": 9.1446, "wall_short_s": 2.4217}
+FIXAB fixab-e4b-20261018T115240Z 12:01:42 round 3 arm HF end_epoch=1792324902
+FIXAB fixab-e4b-20261018T115240Z 12:01:57 round 3 arm A load1=0.52 start_epoch=1792324917
+FIXAB fixab-e4b-20261018T115240Z 12:02:10 round 3 arm A rc=0 decode 15.49 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+FIXAB fixab-e4b-20261018T115240Z 12:02:10 round 3 arm A end_epoch=1792324930
+FIXAB fixab-e4b-20261018T115240Z 12:02:25 round 3 arm G load1=0.48 start_epoch=1792324945
+FIXAB fixab-e4b-20261018T115240Z 12:02:55 round 3 arm G tree main81 rc=0 pairs 2
+FIXAB fixab-e4b-20261018T115240Z 12:02:55 round 3 arm G end_epoch=1792324975
+SERVEFIX RESULT decode tok/s: A median 15.48 (m 64.59 ms) n 3 run medians [15.48, 15.37, 15.49] spread 0.8% | G median 13.06 (m 76.60 ms) n 6 run medians [13.0, 13.06, 13.08] spread 0.6% | GF median 14.63 (m 68.37 ms) n 6 run medians [14.62, 14.64, 14.62] spread 0.2% | H median 13.03 (m 76.73 ms) n 6 run medians [13.02, 13.11, 13.06] spread 0.7% | HF median 14.64 (m 68.30 ms) n 6 run medians [14.61, 14.77, 14.47] spread 2.1%
+SERVEFIX IN-PROCESS G -> GF: gain +8.22 ms/token (1.120x tok/s), share of the G-A gap (+12.00 ms) 69% REAL
+SERVEFIX SERVED H -> HF: gain +8.42 ms/token (1.123x tok/s) REAL; HF 14.64 tok/s against A 15.48
+SERVEFIX VERDICT by the rule registered before the run: FIX WORKS: the served gain is REAL, ids and served text equal
+SERVEFIX DIGESTS ids equal in A, G, GF: 6e98b674dcae2e22; served text equal in H and HF: 30e02a01d2c805d4
+SERVEFIX CLOCK arm A: mean P-cluster 2988 MHz, heatpipe power 9.8 W over 40 one-second samples (whole runs, load and warm-up included)
+SERVEFIX CLOCK arm G: mean P-cluster 2988 MHz, heatpipe power 11.1 W over 91 one-second samples (whole runs, load and warm-up included)
+SERVEFIX CLOCK arm GF: mean P-cluster 2988 MHz, heatpipe power 11.7 W over 81 one-second samples (whole runs, load and warm-up included)
+SERVEFIX CLOCK arm H: mean P-cluster 2988 MHz, heatpipe power 11.0 W over 92 one-second samples (whole runs, load and warm-up included)
+SERVEFIX CLOCK arm HF: mean P-cluster 2988 MHz, heatpipe power 11.6 W over 82 one-second samples (whole runs, load and warm-up included)
+FIXAB fixab-e4b-20261018T115240Z 12:02:55 DONE
+GPU-TIMEOUTS after=0 delta=0
