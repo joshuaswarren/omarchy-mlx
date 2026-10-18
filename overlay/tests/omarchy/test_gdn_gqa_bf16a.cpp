@@ -19,6 +19,8 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -353,13 +355,120 @@ TEST_CASE("gdn raw decode: calls outside the prefetch native GQA route do not ch
     CHECK(off.run.dispatches == on.run.dispatches);
     CHECK_EQ(on.kernel, kind(omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed));
   }
-  // The default is unchanged: with no variable set the kernel is the tiled composed one, except on a legacy G13 part
-  // (G13 and not G13C), whose default is the untiled prefetch kernel; the flag is off.
+}
+
+// The default route of the f32 A_log decode with Hk != Hv (Qwen3.5-9B: 16 key heads, 32 value heads). On the parts where the
+// untiled prefetch kernel with native GQA was measured bit-equal to the tiled one and faster (G14C and G13C), it is the default
+// kernel; every other part keeps its previous default (the tiled composed kernel, and on a legacy G13 part the untiled composed
+// prefetch kernel with the expansion copies). Explicit MLX_OMARCHY_GDN_DECODE_TILE and MLX_OMARCHY_GDN_PF_GQA=0 win. The kernel
+// is named by enum on the device that runs the test; the part rule is checked on names.
+TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches and the routes outside it") {
+  CHECK(omarchy::gdn_pf_gqa_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::gdn_pf_gqa_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M2 Pro (G14S B1)"));
+  CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("Apple M1 Ultra (G13D C0)"));
+  CHECK_FALSE(omarchy::gdn_pf_gqa_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_pf_gqa_default");
+  const std::string& device = omarchy::device(0).capabilities().device_name;
+  const bool measured = omarchy::gdn_pf_gqa_default_part(device);
+  const bool legacy = device.find("G13") != std::string::npos && device.find("G13C") == std::string::npos;
+  using K = omarchy::ComputeKernel;
+  const EnvVar no_tile{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr};
+  const EnvVar no_flag{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
+  const EnvVar no_bf16a{"MLX_OMARCHY_GDN_GQA_BF16A", nullptr};
+
+  Shape27 sh;
+  sh.Hv = 32;
+  Inputs in = make_inputs(sh, /*a_log_f32=*/true, s);
+  eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+  omarchy::get_command_encoder(s).synchronize("gdn_pf_default_inputs");
+  const int64_t prefetch_gqa = kind(K::GatedDeltaDecodeBF16PfComposedGqa);
+  const int64_t default_kernel =
+      measured ? prefetch_gqa : kind(legacy ? K::GatedDeltaDecodeBF16PfComposed : K::GatedDeltaDecodeBF16Composed);
+
+  EnvRun def = run_env(in, in.q, in.k, {no_tile, no_flag}, s);
+  EnvRun tiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag}, s);
+  EnvRun untiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag}, s);
+  EnvRun flag_off = run_env(in, in.q, in.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "0"}}, s);
+  std::cout << "[gdn_pf_gqa_default] device \"" << device << "\" measured " << measured << " legacy " << legacy << ": default "
+            << def.run.dispatches << " dispatches kernel " << def.kernel << ", tiled " << tiled.run.dispatches << ", untiled "
+            << untiled.run.dispatches << "\n";
+  CHECK_EQ(def.kernel, default_kernel);
+  CHECK_EQ(tiled.kernel, kind(K::GatedDeltaDecodeBF16Composed));
+  CHECK_EQ(untiled.kernel, kind(K::GatedDeltaDecodeBF16PfComposed));
+  CHECK_EQ(flag_off.kernel, kind(legacy ? K::GatedDeltaDecodeBF16PfComposed : K::GatedDeltaDecodeBF16Composed));
+  CHECK(same(def.run, tiled.run, s));
+  CHECK(same(def.run, untiled.run, s));
+  CHECK(same(flag_off.run, tiled.run, s));
+  CHECK_EQ(tiled.run.dispatches + 2, untiled.run.dispatches);
+  // The global GQA kill switch is read once per process (a static, like MLX_OMARCHY_GDN_PF), so the case below
+  // re-runs the binary with it set at launch; here the opt-in alone selects the native kernel.
+  EnvRun opt_in = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+  CHECK_EQ(opt_in.kernel, prefetch_gqa);
+  CHECK(same(opt_in.run, def.run, s));
+  CHECK_EQ(def.run.dispatches, measured ? tiled.run.dispatches : (legacy ? untiled.run.dispatches : tiled.run.dispatches));
+
+  // Equal head counts: no GQA, the previous default on every part.
   {
-    const std::string& device = omarchy::device(0).capabilities().device_name;
-    const bool legacy = device.find("G13") != std::string::npos && device.find("G13C") == std::string::npos;
-    EnvRun def = run_env(in32, in32.q, in32.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr}, unset_flag}, s);
-    CHECK_EQ(def.kernel, kind(legacy ? omarchy::ComputeKernel::GatedDeltaDecodeBF16PfComposed
-                                     : omarchy::ComputeKernel::GatedDeltaDecodeBF16Composed));
+    Shape27 eq;
+    eq.Hk = eq.Hv;
+    Inputs e = make_inputs(eq, true, s);
+    eval(std::vector<array>{e.q, e.k, e.v, e.a, e.b, e.a_log, e.dt_bias, e.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_pf_default_inputs_eq");
+    EnvRun r = run_env(e, e.q, e.k, {no_tile, no_flag}, s);
+    CHECK_EQ(r.kernel, kind(legacy ? K::GatedDeltaDecodeBF16PfComposed : K::GatedDeltaDecodeBF16Composed));
   }
+  // A bf16 A_log (the Qwen3.8 family, 16 key heads and 48 value heads): never the new kernel. Default is the previous one; the
+  // bf16a switch of the earlier change still selects GatedDeltaDecodeBF16Gqa where the tile is on.
+  {
+    Inputs b = make_inputs(Shape27{}, /*a_log_f32=*/false, s);
+    eval(std::vector<array>{b.q, b.k, b.v, b.a, b.b, b.a_log, b.dt_bias, b.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_pf_default_inputs_bf16");
+    EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
+    CHECK_EQ(r.kernel, kind(legacy ? K::GatedDeltaDecodeBF16Pf : K::GatedDeltaDecodeBF16));
+    EnvRun r_flag = run_env(b, b.q, b.k, {no_tile, no_flag, {"MLX_OMARCHY_GDN_GQA_BF16A", "1"}}, s);
+    CHECK_EQ(r_flag.kernel, kind(legacy ? K::GatedDeltaDecodeBF16Pf : K::GatedDeltaDecodeBF16Gqa));
+    CHECK(same(r.run, r_flag.run, s));
+    EnvRun r_pf = run_env(b, b.q, b.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "1"}, no_bf16a}, s);
+    CHECK_EQ(r_pf.kernel, r.kernel);
+  }
+}
+
+// The global GQA kill switch MLX_OMARCHY_GDN_GQA_DECODE is read once per process (a static), so this case checks it by
+// re-running the test binary in a fresh process with it set at launch: there the opt-in route (TILE=0 with PF_GQA=1)
+// must fall back to the untiled composed kernel with the expansion copies.
+TEST_CASE("gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in route (fresh process)") {
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_pf_gqa_kill");
+  if (std::getenv("MLX_OMARCHY_GDN_GQA_DECODE") == nullptr) {
+    char self[4096];
+    const ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    CHECK(n > 0);
+    if (n <= 0) return;
+    self[n] = '\0';
+    const std::string cmd = "env MLX_OMARCHY_GDN_GQA_DECODE=0 '" + std::string(self) +
+        "' --test-case='gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in route*' -q";
+    const int rc = std::system(cmd.c_str());
+    CHECK_EQ(WEXITSTATUS(rc), 0);
+    return;
+  }
+  using K = omarchy::ComputeKernel;
+  const EnvVar no_flag{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
+  Shape27 sh;
+  sh.Hv = 32;
+  Inputs in = make_inputs(sh, /*a_log_f32=*/true, s);
+  eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+  omarchy::get_command_encoder(s).synchronize("gdn_pf_kill_inputs");
+  EnvRun opt_in = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+  EnvRun untiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag}, s);
+  std::cout << "[gdn_pf_gqa_kill] with the kill switch set: opt-in kernel " << opt_in.kernel << " ("
+            << opt_in.run.dispatches << " dispatches), untiled " << untiled.kernel << " (" << untiled.run.dispatches
+            << ")\n";
+  CHECK_EQ(opt_in.kernel, kind(K::GatedDeltaDecodeBF16PfComposed));
+  CHECK_EQ(opt_in.run.dispatches, untiled.run.dispatches);
+  CHECK(same(opt_in.run, untiled.run, s));
 }

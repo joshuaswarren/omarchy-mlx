@@ -1,0 +1,56 @@
+GDNS1 start 2026-10-18T11:44:12Z kernel=7.1.12-2-20261013.18-sep-ARCH boot=<id> governor=performance load1=0.49 model=mlx-community/Qwen3.5-9B-4bit
+GDNS1 env variables GDN/MLX/HK/AGX present: 0
+GDNS1 wheel mlx_omarchy-0.32.4.dev202610181116+87bd20f9-cp314-cp314-linux_aarch64.whl sha256 e9c541171ea8a471cd86365fe764ea31bb7a20d7b7336e488ddb563b82b06e5d
+GDNS1 libmlx 4856d408883dedd2 vulkan driver library 40282811c6e14ef9
+GDNS1 scripts bench_decode 8220064c5ea3aaaf logits 4ac2745a45594687
+GDNS1 patches tree a003c55941c6c106 files 76
+GDNS1 model snapshot 8b2b98c00a6b4d291155e4890773ca8f769aee53 MemAvailable_kB 13840272
+GDNS1 venv mlx-lm 0.31.3;mlx-omarchy 0.32.4.dev202610181116+87bd20f9;
+GDNS1 device: 
+GDNS1 test binary $HOME/scratch/gdn/step1-87bd20f9/tb/omarchy_gdn_gqa_bf16a_tests sha256 dc1a37e6815cb314ad685663e23e96e5a3a89dc4cec065eb9457588c0d875dff (equal to the build log of the commit)
+GDNS1 test new case rc=0 [doctest] test cases: 1 | 1 passed | 0 failed | 4 skipped;[doctest] assertions: 20 | 20 passed | 0 failed |;
+GDNS1 test default line: [gdn_pf_gqa_default] device "Apple M1 (G13G B1)" measured 0 legacy 1: default 3 dispatches kernel 516, tiled 1, untiled 3
+GDNS1 test whole binary rc=1 [doctest] test cases: 5 | 4 passed | 1 failed | 0 skipped;[doctest] assertions: 89 | 82 passed | 7 failed |;
+GDNS1 time P1 round 1 D rc=0 decode 12.02 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 1 T rc=0 decode 11.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 1 U rc=0 decode 12.03 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 1 D rc=0 decode 12.06 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 1 T rc=0 decode 11.06 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 1 U rc=0 decode 12.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 2 T rc=0 decode 11.05 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 2 U rc=0 decode 12.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 2 D rc=0 decode 12.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 2 T rc=0 decode 11.05 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 2 U rc=0 decode 12.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 2 D rc=0 decode 12.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 3 U rc=0 decode 12.03 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 3 D rc=0 decode 12.05 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 3 T rc=0 decode 11.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 3 U rc=0 decode 12.08 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 3 D rc=0 decode 12.11 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 3 T rc=0 decode 11.13 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 4 D rc=0 decode 12.09 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 4 T rc=0 decode 11.10 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 4 U rc=0 decode 12.11 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 4 D rc=0 decode 12.09 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 4 T rc=0 decode 11.13 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 4 U rc=0 decode 12.10 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 5 T rc=0 decode 11.11 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 5 U rc=0 decode 12.12 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P1 round 5 D rc=0 decode 12.11 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 5 T rc=0 decode 11.12 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 5 U rc=0 decode 12.11 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 time P2 round 5 D rc=0 decode 12.11 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNS1 numerics P1 D rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNS1 numerics P1 T rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNS1 numerics P1 U rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNS1 numerics P1 D2 rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNS1 numerics P2 D rc=0 logits-run ids_sha256_16 0ef184dc7060ef1a n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNS1 numerics P2 T rc=0 logits-run ids_sha256_16 0ef184dc7060ef1a n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNS1 census D tokens=6 dispatches=3854 kernels=32 verified=match
+GDNS1 census D tokens=10 dispatches=5334 kernels=32 verified=match
+GDNS1 census T tokens=6 dispatches=3518 kernels=32 verified=match
+GDNS1 census T tokens=10 dispatches=4806 kernels=32 verified=match
+GDNS1 census U tokens=6 dispatches=3854 kernels=32 verified=match
+GDNS1 census U tokens=10 dispatches=5334 kernels=32 verified=match
+GDNS1 end 2026-10-18T11:51:40Z

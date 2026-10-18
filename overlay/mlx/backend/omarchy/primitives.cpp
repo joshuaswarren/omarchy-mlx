@@ -12748,8 +12748,27 @@ void GatedDeltaUpdate::eval_gpu(
   // kernel needs the state offsets to be multiples of 4 (checked again at dispatch).
   static const bool gdn_pf_env =
       decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
-  const bool gqa_native = gdn_gqa_decode && decode_shape && raw_gates_mode &&
-      Hk != Hv && A_log.dtype() == float32 && gdn_decode_tile_enabled(encoder);
+  const bool f32_gqa_route = decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32;
+  // The f32-A_log route (Qwen3.5-9B) with Hk != Hv: the untiled prefetch kernel with native GQA
+  // (GatedDeltaDecodeBF16PfComposedGqa) is the default on the parts where it was measured bit-equal to the
+  // tiled one and faster (gdn_pf_gqa_default_part: G14C and G13C), unless MLX_OMARCHY_GDN_DECODE_TILE is set
+  // (1 keeps the tiled kernel, 0 the untiled one with the expansion), MLX_OMARCHY_GDN_PF_GQA=0, MLX_OMARCHY_GDN_PF=0
+  // or MLX_OMARCHY_GDN_GQA_DECODE=0. MLX_OMARCHY_GDN_PF_GQA=1 (read live) also turns it on where the tile is
+  // off (the tiled route has its own native GQA, gqa_native). q and k keep their Hk heads, so the two expansion
+  // copies per linear layer per token are not recorded. It needs the prefetch kernel's alignment (the h0 and
+  // hf offsets multiples of 4); outside that the route keeps the previous default. Models with a bf16 A_log
+  // (the Qwen3.8 family) never take it: their route is gqa_bf16a below.
+  const bool tile_on = gdn_decode_tile_enabled(encoder);
+  const char* pf_gqa_env = std::getenv("MLX_OMARCHY_GDN_PF_GQA");
+  const bool pf_gqa_off = pf_gqa_env != nullptr && pf_gqa_env[0] == '0' && pf_gqa_env[1] == '\0';
+  const bool pf_gqa_opt_in = pf_gqa_env != nullptr && pf_gqa_env[0] == '1' && !tile_on;
+  const bool pf_gqa_default = !pf_gqa_off && gdn_gqa_decode &&
+      decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
+      omarchy::gdn_pf_gqa_default_part(encoder.device().capabilities().device_name);
+  const bool pf_gqa = f32_gqa_route && gdn_gqa_decode && gdn_pf_env && (pf_gqa_opt_in || pf_gqa_default) &&
+      (checked_item_offset(h0, h0.size(), tag, out) % 4u) == 0u &&
+      (checked_item_offset(hf, hf.size(), tag, out) % 4u) == 0u;
+  const bool gqa_native = gdn_gqa_decode && f32_gqa_route && tile_on && !pf_gqa;
   // MLX_OMARCHY_GDN_GQA_BF16A=1 (read live, default off): the same native GQA
   // decode for bf16-A_log models (the Qwen3.8 family), through
   // GatedDeltaDecodeBF16Gqa, the default-order kernel with the key-head index
@@ -12759,18 +12778,6 @@ void GatedDeltaUpdate::eval_gpu(
   const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
       decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
       gdn_decode_tile_enabled(encoder);
-  // MLX_OMARCHY_GDN_PF_GQA=1 (read live, default off): native GQA decode for the UNTILED prefetch
-  // kernel on the f32-A_log raw route (the Qwen3.5-9B route), through GatedDeltaDecodeBF16PfComposedGqa:
-  // the composed-order prefetch kernel with the key-head index of the tiled composed one. It applies
-  // only where the tile is off (MLX_OMARCHY_GDN_DECODE_TILE=0 or a legacy G13 part), because the tiled
-  // route has its own native GQA (gqa_native). q and k keep their Hk heads, so the two expansion copies
-  // per linear layer per token are not recorded. It needs the prefetch kernel's alignment (h0 offset a
-  // multiple of 4); outside that it expands as before.
-  const char* pf_gqa_env = std::getenv("MLX_OMARCHY_GDN_PF_GQA");
-  const bool pf_gqa = pf_gqa_env != nullptr && pf_gqa_env[0] == '1' &&
-      decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == float32 &&
-      !gdn_decode_tile_enabled(encoder) && gdn_pf_env &&
-      (checked_item_offset(h0, h0.size(), tag, out) % 4u) == 0u;
   if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a && !pf_gqa) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
@@ -12862,15 +12869,12 @@ void GatedDeltaUpdate::eval_gpu(
     }
     // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head;
     // the legacy per-row variant runs one workgroup per head.
-    bool decode_tile = gdn_decode_tile_enabled(encoder);
+    bool decode_tile = tile_on && !pf_gqa;
     // Vec4 prefetching walks for the untiled (legacy G13 part) kernel:
     // bit-exact, +3.4% decode on the 13-inch M1. MLX_OMARCHY_GDN_PF=0 restores
     // the scalar kernel.
     const bool gdn_pf = gdn_pf_env && (params.shape[1] % 4u) == 0u &&
         (params.shape[2] % 4u) == 0u;
-    if (pf_gqa && !gdn_pf) {
-      omarchy::unsupported(tag + " pf gqa alignment", out);
-    }
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
