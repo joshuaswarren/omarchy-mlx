@@ -384,11 +384,15 @@ class PatchFetchTests(unittest.TestCase):
             needed = set(re.findall(r"^\s*apply (\S+\.patch)", applied, re.MULTILINE))
             self.assertGreaterEqual(len(needed), 4)
             fetched = {p.name for p in (prefix / "patches").iterdir()}
-            self.assertEqual(needed - fetched, set())
+            # Patches that exist only in the 0.32 series (applied inside the 0.32 guard of the
+            # apply script) live in patches/mlx-lm-0.32/ and not in the flat directory.
+            only_032 = {"mlx-lm-server-skip-logprob-read.patch"}
+            self.assertEqual(needed - fetched - only_032, set())
             # The 0.32 series directory ships beside the flat one (issue #217):
             # a venv moved to mlx-lm 0.32 must be patchable from the prefix.
             fetched32 = {p.name for p in (prefix / "patches" / "mlx-lm-0.32").iterdir()}
             self.assertIn("mlx-lm-greedy-prune.patch", fetched32)
+            self.assertEqual(only_032 - fetched32, set())
 
 
 if __name__ == "__main__":
