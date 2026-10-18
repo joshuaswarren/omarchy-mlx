@@ -26,7 +26,9 @@ Arms in every run: A is the default (the tiled kernel on the M2 and the 16-inch,
 | 16-inch M1 Max | Apple M1 Max (G13C C0) | 7.1.12-2-12.6-sep-ARCH | Mesa 26.2.4, driver package git 69bde15340, library sha256 prefix `40282811c6e14ef9` | mlx-community/Qwen3.5-9B-MLX-4bit `938d8919941c6e7efd3c7150eff7fe9d12afa631` |
 | 13-inch M1 | Apple M1 (G13G B1) | 7.1.12-2-20261013.18-sep-ARCH | Mesa 26.2.4, driver package git 69bde15340, library sha256 prefix `40282811c6e14ef9` | mlx-community/Qwen3.5-9B-4bit `8b2b98c00a6b4d291155e4890773ca8f769aee53` |
 
-All three ran with the performance CPU governor and no `GDN_`, `MLX_`, `HK_` or `AGX_` variable in the environment (the run log counts them: 0). The snapshots are the Hugging Face revision ids of the 4-bit models. The firmware and the Vulkan device name string were not recorded by these runs.
+All three ran with the performance CPU governor and no `GDN_`, `MLX_`, `HK_` or `AGX_` variable in the environment (the run log counts them: 0). The snapshots are the Hugging Face revision ids of the 4-bit models.
+
+Device and firmware identity. The chip id in the table is the Vulkan device name string: every bench output carries it in its `device` field, which the harness takes from `mx.metal.device_info()["device_name"]`, and the backend fills that field with the `deviceName` of the Vulkan physical device. The driver identity is the Mesa version, the driver package and the library hash in the table. The firmware values were read from the device tree of each machine after the runs, on the same boots: the 14-inch M2 Max has OS firmware 13.5, system firmware 27.0 and iBoot-8422.141.2; the 16-inch M1 Max has OS firmware 13.5, system firmware 26.6.2 and iBoot-8422.141.2; the 13-inch M1 has OS firmware 13.5, system firmware 27.0 and iBoot-8422.141.2.
 
 ## Commands
 
@@ -73,7 +75,7 @@ Numerics: prompt P1, 128 greedy tokens, the full log-probability vector (248320 
 ## Procedure
 
 - Timing: the guard's idle settle before each ticket, the performance governor, the arm order rotated every round, one process per sample. The load average at the start of each run: 0.31 (14-inch M2 Max), 0.48 (16-inch), 0.36 (13-inch), 0.49 (rebased M2 run). No temperature, fan or throttle reading was taken.
-- Reopen and recovery: no Vulkan device reopen was run. The GPU timeout counter was not read around these runs.
+- Reopen and recovery: no dedicated reopen test (close and reopen the device inside one process) was run. Each run is a sequence of separate processes, and every process opened the Vulkan device from the start after the one before it had exited: 47 processes on the 14-inch M2 Max, 40 on the 16-inch M1 Max, 40 on the 13-inch M1 and 13 in the rebased M2 run. All of them finished with exit code 0 and printed `verified=match`; the run logs count 47, 40, 40 and 13 of these lines and no non-zero exit code. The guard counted the GPU timeout lines of the kernel log (`Job timed out on the DRM scheduler` and `GPU timeout`) before and after each ticket: 0 and 0 on the 14-inch M2 Max (tickets ending 07:07:41Z and 08:17:00Z), 0 and 0 on the 16-inch M1 Max (ticket ending 07:43:09Z) and 0 and 0 on the 13-inch M1 (ticket ending 07:46:02Z). The kernel log of each machine, read after the runs, still shows 0 such lines.
 - Dispatch trace: the census above, from `MLX_OMARCHY_TRACE_DISPATCH=1`.
 
 ## Limits
