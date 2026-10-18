@@ -85,7 +85,7 @@ Numerics, teacher-forced negative log-likelihood on gemma-4-26B-A4B, word route 
 
 ## gather_qmm word-per-lane 2-bit route: developer switch, hidden-state fidelity verdict WIDER
 
-The same word-per-lane form also exists for 2-bit weights (bf16, group 64 or 128, one row per index, 32-lane subgroup). It stays off. `MLX_OMARCHY_GATHER_QMM_WORD2=1` is a developer switch and is not a supported setting. It is not in the public flags table.
+The same word-per-lane form also exists for 2-bit weights (bf16, group 64 or 128, one row per index, 32-lane subgroup). It stays off, and the reason is the fidelity verdict below: the preregistered rule did not accept it (verdict WIDER), so no default is justified. `MLX_OMARCHY_GATHER_QMM_WORD2=1` is a developer switch and is not a supported setting. It is not in the public flags table.
 
 Kernel-level numbers, one Apple M2 Max, random weights: a 36-case gate (6 shapes, bf16, 8 experts per call) has every output of both kernels within 1.5 bf16 steps of a float64 contraction. A 2-bit form has no dense twin, so there is no bit-identity claim. At the Muse expert shape (8 experts of 4096 by 4096, group 128) one call costs 290.9 us with the switch on and 1184.6 us with the 8-output kernel it replaces (4.07 times). A paired A/B on the 2-bit Muse model reads 9.48 ms per layer with the switch off and 6.64 ms per layer with it on, each the mean of a 4-layer decode.
 
