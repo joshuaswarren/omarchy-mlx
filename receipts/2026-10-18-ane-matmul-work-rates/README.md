@@ -14,9 +14,9 @@ two M1 chips, and the 2 ulp or 4 condition unit band checker on the M2 chip
 
 | Machine | Kernel | ANE driver | Runner | Programs |
 |---|---|---|---|---|
-| 13-inch M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH`, boot `2864cca3` | stock `ane` DRM driver, in-tree | `ane-run` sha256 `480040b5f700f407f11563f5349e7614df9fefe0efe57327c68ebc35b9779805` | H13 set E seal `94aff857fadcd20d9c5bb8ad1e87cf31706fc5a2603a544cffefb254dc4237d1` |
-| 16-inch M1 Max (T6001) | `7.1.12-2-12.6-sep-ARCH`, boot `562a9cbc` | stock `ane` DRM driver, in-tree | same as above | same H13 set E seal |
-| 14-inch M2 Max (T6021) | `7.1.12-2-20261013.18-sep-ARCH`, boot `320aadb8` | `ane_t6021` (sha of the loaded module's source tree verified at run time by the queue pins) | `ane-run` sha256 `943ae8c67598175a542f9a2c370852d60ba9a810cb1e8db11fed92efc2daf2e1` | H14 grid seal `2b69285e0c293cd346908491b5f3e0e6b982570e2159769426701e92f7eccf57`; H14 scale seal `ad6ea1cf55f453db7ca95ab5a7efea5298d2e66addeef61dfc6e52e0ebe365ca` |
+| 13-inch M1 (T8103) | `7.1.12-2-20261013.18-sep-ARCH`, boot `<id>` | stock `ane` DRM driver, in-tree | `ane-run` sha256 `480040b5f700f407f11563f5349e7614df9fefe0efe57327c68ebc35b9779805` | H13 set E seal `94aff857fadcd20d9c5bb8ad1e87cf31706fc5a2603a544cffefb254dc4237d1` |
+| 16-inch M1 Max (T6001) | `7.1.12-2-12.6-sep-ARCH`, boot `<id>` | stock `ane` DRM driver, in-tree | same as above | same H13 set E seal |
+| 14-inch M2 Max (T6021) | `7.1.12-2-20261013.18-sep-ARCH`, boot `<id>` | `ane_t6021` (sha of the loaded module's source tree verified at run time by the queue pins) | `ane-run` sha256 `943ae8c67598175a542f9a2c370852d60ba9a810cb1e8db11fed92efc2daf2e1` | H14 grid seal `2b69285e0c293cd346908491b5f3e0e6b982570e2159769426701e92f7eccf57`; H14 scale seal `ad6ea1cf55f453db7ca95ab5a7efea5298d2e66addeef61dfc6e52e0ebe365ca` |
 
 Program provenance: the seals hold the compiler output, the deterministic
 inputs and weights, the expected outputs, and per-rung manifests. The H14

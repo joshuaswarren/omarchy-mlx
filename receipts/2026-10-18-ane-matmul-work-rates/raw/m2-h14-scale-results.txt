@@ -1,4 +1,4 @@
-== m2-h14-scale 2026-10-18T20:08:44Z host jwm2-linux kernel 7.1.12-2-20261013.18-sep-ARCH boot 320aadb8
+== m2-h14-scale 2026-10-18T20:08:44Z host: 14-inch M2 Max kernel 7.1.12-2-20261013.18-sep-ARCH boot <id>
 script sha256 e497dfbcb6cc5990104c6cb73c8089be632c4efd9ff9f052aedc5ee434e670fd
 ane-run sha256 943ae8c67598175a542f9a2c370852d60ba9a810cb1e8db11fed92efc2daf2e1
 seal ok: ad6ea1cf55f453db7ca95ab5a7efea5298d2e66addeef61dfc6e52e0ebe365ca

@@ -1,4 +1,4 @@
-== jwm1-rung21-pairs 2026-10-18T17:05:51Z host jwm1-linux kernel 7.1.12-2-20261013.18-sep-ARCH boot 2864cca3
+== m1-rung21-pairs 2026-10-18T17:05:51Z host: 13-inch M1 kernel 7.1.12-2-20261013.18-sep-ARCH boot <id>
 script sha256 f32a6852bdd733c3703bcbfc907221916c9241a5a23e7d2ea9b9656bcf9ce2fb
 ane-run sha256 480040b5f700f407f11563f5349e7614df9fefe0efe57327c68ebc35b9779805
 rung 21 seal ok

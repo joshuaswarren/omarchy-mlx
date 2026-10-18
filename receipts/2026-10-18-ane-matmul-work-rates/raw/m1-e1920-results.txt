@@ -1,4 +1,4 @@
-== jwm1-e1920 2026-10-18T20:20:04Z host jwm1-linux kernel 7.1.12-2-20261013.18-sep-ARCH boot 2864cca3
+== m1-e1920 2026-10-18T20:20:04Z host: 13-inch M1 kernel 7.1.12-2-20261013.18-sep-ARCH boot <id>
 script sha256 7d6232f300644a6cce69fb75d677abf2160ed59b0ffee788f0a2f2215234ac61
 ane-run sha256 480040b5f700f407f11563f5349e7614df9fefe0efe57327c68ebc35b9779805
 ane_stats before: busy_ns 121247179 jobs 3600 

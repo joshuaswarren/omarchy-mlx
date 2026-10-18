@@ -79,12 +79,12 @@ ANE integration starts after the `v0.5.0` Vulkan compatibility release.
 It also requires the corrected 13-layer Qwen graph and 11-layer tail to pass on Linux.
 
 **ANE current scope (updated 2026-10-18).** Live Linux ANE inference is qualified
-on the M1 Max (T6001, t6001-test-host) and previously qualified on the M1 (T8103,
-m1-test-host, historical — m1-test-host fresh Arch boot reported, Omarchy provisioning
-and benchmark recertification pending). The t6021-test-host ANE was
-live-inference-unqualified as of 2026-09-20 (that host read kernel
-7.1.13-3-1-ARCH with ANE_UNBOUND and no `/dev/accel/accel0`; its macOS ANE
-numbers are macOS CoreML / `aned` measurements). On separate T6021 lab
+on the 16-inch M1 Max (T6001) and previously qualified on the 13-inch M1
+(T8103, historical: a fresh Arch boot on that machine was reported, with
+Omarchy provisioning and benchmark recertification pending). The T6021 ANE was
+live-inference-unqualified as of 2026-09-20 on the machine checked that day
+(it read kernel 7.1.13-3-1-ARCH with ANE_UNBOUND and no `/dev/accel/accel0`;
+its macOS ANE numbers are macOS CoreML / `aned` measurements). On separate T6021 lab
 hosts, sealed H14 ANEC programs execute on the Linux `ane_t6021` driver with
 an output check on every run (33 of 33 runs in band on 2026-10-18, from
 4.2 M to 537 M MACs; see the receipt above); serving qualification on the
@@ -117,9 +117,9 @@ Busy per job, ms, per-round ranges:
 | M2 Max (T6021) | 0.8069 to 0.8088 | 1.1088 to 1.1166 |
 
 On the M2 Max the same sealed family also ran at 4.2 M and 67 M MACs
-(0.2872 to 0.3261 and 0.3752 to 0.3977 ms): 16 times the MACs costs 1.15 to
-1.22 times the busy time, so ANE-side cost on that chip changes slowly below
-70 M MACs. These are ANE-side busy times only. The partitioner applies them
+(0.2872 to 0.3261 and 0.3752 to 0.3977 ms): the busy time changes 1.19 to
+1.31 times for 16 times the MACs when the rounds are paired, so ANE-side
+cost on that chip changes slowly below 70 M MACs. These are ANE-side busy times only. The partitioner applies them
 through the measured-cost key together with the crossover comparison the
 architecture already requires (staging copies, process IPC, and the measured
 Vulkan path for the same region); they are inputs to that comparison, not a
