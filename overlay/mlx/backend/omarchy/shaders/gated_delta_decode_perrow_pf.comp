@@ -335,10 +335,27 @@ void main() {
   if (head >= hv) {
     return;
   }
+#ifdef GDN_NATIVE_GQA_INDEX
+  // Native GQA (only with GDN_COMPOSED_ORDER, the f32-A_log raw route): q and k keep their Hk heads.
+  // in_strides[3] carries Hk (0 = q and k already carry Hv heads), in_strides[2] carries Hv. Value head j
+  // reads key head j / (Hv / Hk), the order mx.repeat on the head axis produces, per batch row (head runs
+  // over B * Hv). The same index as gated_delta_decode.comp. Every other build keeps the loop below.
+  uint khead = head;
+  if (params.in_strides[3] != 0u) {
+    uint hv_b = params.in_strides[2];
+    uint hk_b = params.in_strides[3];
+    khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
+  }
+  for (uint i = row; i < dk; i += 128u) {
+    sk[i] = bf16_load(k_buf.v[params.rhs_offset + khead * dk + i]);
+    sq[i] = bf16_load(q_buf.v[params.lhs_offset + khead * dk + i]);
+  }
+#else
   for (uint i = row; i < dk; i += 128u) {
     sk[i] = bf16_load(k_buf.v[params.rhs_offset + head * dk + i]);
     sq[i] = bf16_load(q_buf.v[params.lhs_offset + head * dk + i]);
   }
+#endif
   barrier();
 
   float g;

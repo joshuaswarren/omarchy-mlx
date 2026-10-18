@@ -1052,6 +1052,8 @@ enum class ComputeKernel : uint16_t {
   GatedDeltaDecodeBF16Gqa,
   // 2-bit form of the same kernel (bf16, group 64 or 128): 16 codes per word, fp64-gated (no dense 2-bit qmv to match).
   GatherQmmWord2BF16,
+  // Untiled prefetch GDN decode, composed order, with the native GQA key-head index (gated_delta_decode_perrow_pf.comp -DGDN_COMPOSED_ORDER -DGDN_NATIVE_GQA_INDEX), appended so earlier ids do not move.
+  GatedDeltaDecodeBF16PfComposedGqa,
   Count,
 };
 

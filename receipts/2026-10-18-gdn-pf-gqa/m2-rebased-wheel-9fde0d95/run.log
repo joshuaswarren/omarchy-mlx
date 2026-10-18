@@ -1,0 +1,22 @@
+GDNPF2 start 2026-10-18T08:15:56Z kernel=7.1.12-2-20261013.18-sep-ARCH boot=<id> governor=performance load1=0.49
+GDNPF2 env variables GDN/MLX/HK/AGX present: 0
+GDNPF2 wheel mlx_omarchy-0.32.4.dev202610180805+9fde0d95-cp314-cp314-linux_aarch64.whl sha256 db3228fb41ad5f56253820d911d106716732a2a89f14c1f335620a5c73963c4f
+GDNPF2 libmlx 1334699b94b07a5d
+GDNPF2 scripts bench_decode 8220064c5ea3aaaf logits 4ac2745a45594687
+GDNPF2 patches tree a003c55941c6c106 files 76
+GDNPF2 model snapshot 8b2b98c00a6b4d291155e4890773ca8f769aee53
+GDNPF2 venv mlx-lm 0.31.3;mlx-omarchy 0.32.4.dev202610180805+9fde0d95;
+GDNPF2 time P1 round 1 A rc=0 decode 40.41 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF2 time P1 round 1 B rc=0 decode 43.17 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF2 time P1 round 1 C rc=0 decode 43.83 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF2 numerics P1 A rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF2 numerics P1 B rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF2 numerics P1 C rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF2 numerics P1 C2 rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF2 census A tokens=6 dispatches=3411 kernels=33 logits-run ids_sha256_16 139a0af7ed4e5481 n=6 prompt_tokens=20 vocab=248320 full_steps=6 verified=match
+GDNPF2 census A tokens=10 dispatches=4635 kernels=33 logits-run ids_sha256_16 df4f0808b6b5fd64 n=10 prompt_tokens=20 vocab=248320 full_steps=10 verified=match
+GDNPF2 census B tokens=6 dispatches=3747 kernels=33 logits-run ids_sha256_16 139a0af7ed4e5481 n=6 prompt_tokens=20 vocab=248320 full_steps=6 verified=match
+GDNPF2 census B tokens=10 dispatches=5163 kernels=33 logits-run ids_sha256_16 df4f0808b6b5fd64 n=10 prompt_tokens=20 vocab=248320 full_steps=10 verified=match
+GDNPF2 census C tokens=6 dispatches=3411 kernels=33 logits-run ids_sha256_16 139a0af7ed4e5481 n=6 prompt_tokens=20 vocab=248320 full_steps=6 verified=match
+GDNPF2 census C tokens=10 dispatches=4635 kernels=33 logits-run ids_sha256_16 df4f0808b6b5fd64 n=10 prompt_tokens=20 vocab=248320 full_steps=10 verified=match
+GDNPF2 end 2026-10-18T08:17:00Z

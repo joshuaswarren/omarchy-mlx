@@ -1,0 +1,26 @@
+machine 13-inch M1 dir <run directory>
+bench files 30 bad [] device Apple M1 (G13G B1)
+P1 A n 5 median 12.045 min 12.0383 max 12.059 [12.059, 12.0425, 12.0383, 12.0584, 12.045]
+P1 B n 5 median 12.0605 min 12.0455 max 12.0686 [12.0605, 12.0489, 12.0686, 12.0455, 12.0625]
+P1 C n 5 median 12.0729 min 12.0383 max 12.0817 [12.0383, 12.0765, 12.0817, 12.0718, 12.0729]
+P1 B vs A: +0.13 percent, every B above every A: False
+P1 C vs A: +0.23 percent, every C above every A: False
+P1 C vs B: +0.10 percent, every C above every B: False
+P1 per-round C>B 4 of 5
+P1 digests [('A', '0a1a64828ea650e8', 64), ('B', '0a1a64828ea650e8', 64), ('C', '0a1a64828ea650e8', 64)]
+P2 A n 5 median 12.0523 min 12.0361 max 12.0548 [12.0548, 12.0483, 12.0526, 12.0361, 12.0523]
+P2 B n 5 median 12.0629 min 12.0387 max 12.0811 [12.0624, 12.0629, 12.0722, 12.0387, 12.0811]
+P2 C n 5 median 12.0941 min 12.0752 max 12.0992 [12.0941, 12.0752, 12.0852, 12.0969, 12.0992]
+P2 B vs A: +0.09 percent, every B above every A: False
+P2 C vs A: +0.35 percent, every C above every A: True
+P2 C vs B: +0.26 percent, every C above every B: False
+P2 per-round C>B 5 of 5
+P2 digests [('A', 'fd33be8b314efb95', 64), ('B', 'fd33be8b314efb95', 64), ('C', 'fd33be8b314efb95', 64)]
+P1 A B ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 B C ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 C C2 ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 A C ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 A C2 ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+A dispatches per token 370.0 kernel 514 None 516 24.0 636 None 479 None 480 None 58 56.0
+B dispatches per token 370.0 kernel 514 None 516 24.0 636 None 479 None 480 None 58 56.0
+C dispatches per token 322.0 kernel 514 None 516 None 636 24.0 479 None 480 None 58 8.0
