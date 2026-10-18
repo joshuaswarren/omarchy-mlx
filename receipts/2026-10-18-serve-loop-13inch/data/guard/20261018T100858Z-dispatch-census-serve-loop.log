@@ -1,5 +1,5 @@
-IDLE-GUARD-JOB-START 20261018T100858Z lane=w71 dispatch census serve loop 13-inch-M1 gemma-4-E4B: A bench_decode, G generator in-process and GM per decoded token, trace on, untimed
-KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+IDLE-GUARD-JOB-START 20261018T100858Z dispatch census serve loop 13-inch-M1 gemma-4-E4B: A bench_decode, G generator in-process and GM per decoded token, trace on, untimed
+KERNEL-CMDLINE kernel=7.1.12-2-20261013.18-sep-ARCH
 PREFLIGHT-RUN
 SETTLE load1=0.98 SETTLE-SKIPPED
 GPU-TIMEOUTS before=0 boot=<id>

@@ -1,5 +1,5 @@
-IDLE-GUARD-JOB-START 20261018T115239Z lane=w71 TIMING serve-loop before-after 13-inch-M1 gemma-4-E4B: G and the real server on tree main81 against main81-fix (rotating-cache mask patch + server logprob-read patch), A bench_decode anchor; governor performance, 3 rounds
-KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+IDLE-GUARD-JOB-START 20261018T115239Z TIMING serve-loop before-after 13-inch-M1 gemma-4-E4B: G and the real server on tree main81 against main81-fix (rotating-cache mask patch + server logprob-read patch), A bench_decode anchor; governor performance, 3 rounds
+KERNEL-CMDLINE kernel=7.1.12-2-20261013.18-sep-ARCH
 PREFLIGHT-RUN
 SETTLE load1=0.41 SETTLED
 GPU-TIMEOUTS before=0 boot=<id>

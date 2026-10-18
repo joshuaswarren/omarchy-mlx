@@ -1,5 +1,5 @@
-IDLE-GUARD-JOB-START 20261018T110823Z lane=w71 TIMING serve-loop additivity 13-inch-M1 gemma-4-E4B: G mlx_lm generator in-process against GM, GL, GML (both removals) and the phase-timed GMLT, A bench_decode anchor; one wheel (tree e57cb301), governor performance, 3 rounds
-KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+IDLE-GUARD-JOB-START 20261018T110823Z TIMING serve-loop additivity 13-inch-M1 gemma-4-E4B: G mlx_lm generator in-process against GM, GL, GML (both removals) and the phase-timed GMLT, A bench_decode anchor; one wheel (tree e57cb301), governor performance, 3 rounds
+KERNEL-CMDLINE kernel=7.1.12-2-20261013.18-sep-ARCH
 PREFLIGHT-RUN
 SETTLE load1=0.39 SETTLED
 GPU-TIMEOUTS before=0 boot=<id>
