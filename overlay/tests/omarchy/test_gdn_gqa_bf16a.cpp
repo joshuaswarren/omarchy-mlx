@@ -121,6 +121,9 @@ Run run_route(const Inputs& in, const array& q, const array& k, const char* flag
   } else {
     setenv("MLX_OMARCHY_GDN_GQA_BF16A", flag, 1);
   }
+  // The bf16 A_log native route is part of the tiled decode, so the tile is forced on: a legacy G13 part (the 13-inch M1)
+  // defaults to the untiled kernel, where the flag does nothing and the dispatch counts below would not differ.
+  setenv("MLX_OMARCHY_GDN_DECODE_TILE", "1", 1);
   auto& enc = omarchy::get_command_encoder(s);
   enc.synchronize("gdn_gqa_bf16a_before");
   uint64_t before = counters().vk_compute_dispatches.load();
@@ -130,6 +133,7 @@ Run run_route(const Inputs& in, const array& q, const array& k, const char* flag
   enc.synchronize("gdn_gqa_bf16a_after");
   uint64_t n = counters().vk_compute_dispatches.load() - before;
   unsetenv("MLX_OMARCHY_GDN_GQA_BF16A");
+  unsetenv("MLX_OMARCHY_GDN_DECODE_TILE");
   return Run{out, n};
 }
 
