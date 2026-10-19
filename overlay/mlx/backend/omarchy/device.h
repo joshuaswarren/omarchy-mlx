@@ -509,4 +509,13 @@ inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
       device_name.find("G13C") != std::string::npos;
 }
 
+// GatedDeltaUpdate decode on the bf16 A_log raw route with Hv == 2 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads): the
+// parts whose default is the untiled prefetch kernel (ComputeKernel::GatedDeltaDecodeBF16Pf) with the expansion copies. On
+// G13C it was about 8 percent faster in decode and not worse in teacher-forced NLL by the 2 SE rule, but it is not bit-equal to
+// the tiled kernel (receipts/2026-10-19-gdn-bf16a-untiled). Keyed on the device name so an unmeasured part keeps the tiled
+// default. Pure.
+inline bool gdn_bf16a_untiled_default_part(const std::string& device_name) {
+  return device_name.find("G13C") != std::string::npos;
+}
+
 } // namespace mlx::core::omarchy
