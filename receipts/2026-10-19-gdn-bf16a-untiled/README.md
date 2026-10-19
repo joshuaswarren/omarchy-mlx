@@ -35,12 +35,33 @@ This is a not-worse check on one text and one model. It is not a quality benchma
 - Numerics of the new wheel against the earlier runs: the new default equals the earlier TILE=0 arm bit for bit, and the new TILE=1 equals the earlier default arm bit for bit, on both prompts (max absolute log-probability difference 0.0, KL 0, ids equal; verify/run.log).
 - Speed of the new wheel, default against TILE=1 (tools/sum_speed.py verify/run.log T D): P1 28.950 to 31.210 tok/s (+7.81%), P2 28.970 to 31.220 (+7.77%), the default faster in 5 of 5 rounds on both prompts, spread 0.3%.
 
+## Two distinct builds, default environment (build-ab/)
+
+The runs above switch the route inside one wheel. This run compares the two builds themselves, both in the default environment, with a verified build stamp on every row: O is mlx_omarchy 0.32.4.dev202610181348+49e6b3c1 (before this change), N is 0.32.4.dev202610192245+a2b0864 (this change). Every row prints provenance ... verified=match with its own build stamp and the libmlx hash of its wheel. 5 rounds, 2 prompts, 64 tokens, order alternating, fresh process each (tools/ab-builds.sh, tools/sum_speed.py build-ab/run.log O N):
+
+| Prompt | O median | N median | Change | N faster | Spread |
+|---|---:|---:|---:|---:|---:|
+| P1 | 28.920 | 31.240 | +8.02% | 5/5 | 0.31% |
+| P2 | 28.940 | 31.200 | +7.81% | 5/5 | 0.38% |
+
+## Hardware record
+
+- Source commits: a2b0864c36761b00c4c97b5c78f32e7b6bd841df (this change, on main b7b0aba36); the comparison build is 49e6b3c1, the rebased head of PR 231.
+- Kernel 7.1.12-2-12.6-sep-ARCH. Mesa package 26.2.4 (pacman mesa 1:26.2.4-1); the Vulkan driver reports Mesa 26.3.0-devel (git-69bde15340), library sha256 prefix 40282811c6e14ef9.
+- Vulkan device Apple M1 Max (G13C C0). Firmware identity, read from the device tree after the runs on the same machine (values verbatim, the vendor prefix of the property names dropped): compatible apple,j316c / apple,t6001; iboot1-version mBoot-18000.161.10; iboot2-version iBoot-8422.141.2; os-fw-version 13.5; system-fw-version 26.6.2. The runs did not print them.
+- Model: mlx-community/Qwen3.6-35B-A3B-4bit snapshot 38740b847e4cb78f352aba30aa41c76e08e6eb46; model.safetensors.index.json sha256 0b28df60e33753a14e816d3b31577ae2c93884c58430a4a6de6ae9ea483842ea (4-bit quantization of the repo; the weight files were not hashed).
+- Commands: tools/ (run-untiled-vs-tiled.sh, run-nll35.sh, verify-bf16a.sh, ab-builds.sh) and the test binary command lines in test/*.out.
+- Numerical result, backend dispatch trace: sections above. The census histograms are in untiled-vs-tiled/hist-*.txt and verify/hist-*.txt.
+- Timing and thermal procedure: one boot per run set, performance governor, fresh process per sample, arm order alternated, one warm-up as the first load of each process; timing under the lab GPU lock. No temperature, fan or throttle reading was taken.
+- Vulkan device reopen: no dedicated close-and-reopen test was run. Every run is a fresh process that opened the Vulkan device from the start. The logs record 72 exit codes (untiled-vs-tiled/speed-run.log 20, numerics-run.log 5, verify/run.log 24, build-ab/run.log 20, nll/run.log 3), all 0, and every timing row prints verified=match. The census runs and the two test-binary runs also exited cleanly; the census pipeline does not log its exit code.
+
 ## Limits
 
 One model (Hk 16, Hv 32), one chip (G13C), one text, two 20-token speed prompts. G14C (M2 Max) was not measured: no 35B model is on that machine, so it keeps the tiled default. The Qwen3.8 family shapes (16 key heads, 48 value heads) are not in the measured set and keep the tiled default. The speed and NLL runs used the pre-rebase PR head wheel; the check of this change used its own wheel. The NLL check ran the decode path with a 512-token prefill window; a long context was not scored. The cause of the numerical difference between the kernels is not investigated.
 
 ## Files
 
+- build-ab/: the two-build A/B (run.log and per-run outputs).
 - untiled-vs-tiled/: speed-run.log, numerics-run.log, hist-*.txt (decode census).
 - nll/: PREREG.md, run.log, D.npz, U.npz, D2.npz, scored with tools/nll_pair.py and tools/nll_cmp.py.
 - verify/: the run log, census histograms and per-run outputs of the new wheel.
