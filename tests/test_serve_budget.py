@@ -52,6 +52,8 @@ class EstimateTests(unittest.TestCase):
         (1024, 256, 104), (1024, 512, 209), (1024, 1024, 417),
         (4096, 512, 593), (4096, 2048, 2370),
         (8192, 256, 587), (8192, 512, 1105), (16384, 512, 2199),
+        # kstrat2001, 8 GB base M2, v0.7.33 wheel (PR #241 comment 6279687191)
+        (512, 512, 164), (1024, 512, 233), (1536, 512, 301), (3584, 512, 573),
     ]
 
     def test_prefill_scratch_covers_every_measured_point(self):
