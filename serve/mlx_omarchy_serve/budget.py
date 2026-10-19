@@ -63,6 +63,12 @@ WORKSPACE_FRACTION = 0.25               # unmeasured; catalog peak_estimate_byte
 WORKSPACE_MIN_BYTES = 1 * GiB
 UNKNOWN_KV_MARGIN = 2 * GiB             # flat margin when kv_bytes_per_token is null
 DEFAULT_CONTEXT_TOKENS = 4096           # when a catalog entry has no max_tokens
+# Prefill scratch, additive to the generic workspace floor: the chunk the
+# backend actually runs allocates before the first output token exists.
+# Unmeasured per-token figure from issue #240: a 2048-token chunk of
+# Qwen3-4B-Instruct-2507-4bit asked for one 512 MiB vkAllocateMemory.
+PREFILL_BYTES_PER_TOKEN = 256 * 1024
+DEFAULT_PREFILL_STEP_TOKENS = 512
 
 RESERVATIONS_FILE = "reservations.json"
 RESERVATION_STATES = ("pending", "resident")
@@ -115,21 +121,28 @@ class Estimate:
     total: int
 
 
-def estimate_required(memory: dict, context_tokens: int) -> Estimate:
+def estimate_required(memory: dict, context_tokens: int,
+                      prefill_step_tokens: int = DEFAULT_PREFILL_STEP_TOKENS) -> Estimate:
+    if prefill_step_tokens < 1:
+        raise BudgetError("prefill step size must be a positive number of tokens")
     weights = memory["weights_bytes"]
     kv_per_tok = memory.get("kv_bytes_per_token")
     peak = memory.get("peak_estimate_bytes")
     kv_known = kv_per_tok is not None
     kv = (kv_per_tok * context_tokens) if kv_known else 0
+    # The chunk the backend actually runs allocates its scratch on top of
+    # the generic workspace floor (issue #240): additive, never hidden by
+    # a measured peak, and scaled by the step size the launcher passes.
+    prefill_scratch = prefill_step_tokens * PREFILL_BYTES_PER_TOKEN
     if peak is not None:
         # The measurement was taken at some (unknown) context; a larger
         # requested context must not hide behind it, and the unmeasured
         # workspace floor still applies — only a measured context-specific
         # peak could justify less, and the schema does not carry one.
-        workspace_floor = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES)
+        workspace_floor = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES) + prefill_scratch
         total = max(peak, weights + kv + workspace_floor)
         return Estimate(weights, kv, kv_known, total - weights - kv, True, total)
-    workspace = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES)
+    workspace = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES) + prefill_scratch
     if not kv_known:
         workspace += UNKNOWN_KV_MARGIN
     return Estimate(weights, kv, kv_known, workspace, False, weights + kv + workspace)
