@@ -287,10 +287,20 @@ def pick_recommended(cat: dict, kind: str, context_tokens: int | None, home: Pat
                     continue
             except budget.BudgetError:
                 pass
-        est = budget.estimate_required(entry["memory"], ctx)
+        est = entry_estimate(entry, ctx)
         if budget.admit(est.total, home).fits:
             fits.append(entry)
     return fits, ranked, soc
+
+
+def entry_estimate(entry: dict, ctx: int) -> budget.Estimate:
+    """The estimate serve would admit for this catalog entry at ctx: mlx-lm
+    entries launch a prefill chunk, so they carry its scratch (issue #240);
+    every other backend keeps the plain estimate."""
+    step = None
+    if entry["serve"]["backend"] == "mlx-lm":
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, ctx)
+    return budget.estimate_required(entry["memory"], ctx, step)
 
 
 def resolve_target(target: str | None, cat: dict) -> Resolved:
@@ -450,6 +460,7 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
         lines.append(f"download filter: {len(patterns)} pattern(s) from the "
                      "catalog entry (whole-repo download prevented)")
     label = "measured peak" if est.peak_override else "workspace margin, unmeasured estimate"
+    lines.append(f"margin:       {est.workspace / GiB:.2f} GiB ({label})")
     if backend == "mlx-lm":
         lines.append(f"prefill:      {prefill_step} tokens/step "
                      f"(scratch {budget.prefill_scratch_bytes(prefill_step, context_tokens) / (1024**2):.0f} MiB in margin)")
@@ -734,11 +745,10 @@ def cmd_recommend(args, cat, home) -> int:
         ctx = entry_context_tokens(entry, requested)
         reason = auto_serve_reason(entry)
         if ctx is None:
-            est_total = budget.estimate_required(entry["memory"],
-                                                 entry["context"]["max_tokens"]).total
+            est_total = entry_estimate(entry, entry["context"]["max_tokens"]).total
             note = f"context {requested} over limit {entry['context']['max_tokens']}"
         else:
-            est_total = budget.estimate_required(entry["memory"], ctx).total
+            est_total = entry_estimate(entry, ctx).total
             note = reason or ""
         fits_now = entry in fits
         print(f"  {'*' if fits_now else ' '} {entry['id']:<28} {quant_label(entry):<10}"
@@ -774,8 +784,8 @@ def build_resolved(args, cat) -> Resolved:
             # Manual variant selection: every fitting quant variant is offered,
             # the curated pick is just the default. Never all of them.
             for i, candidate in enumerate(fits, 1):
-                est = budget.estimate_required(
-                    candidate["memory"], args.context or budget.DEFAULT_CONTEXT_TOKENS)
+                est = entry_estimate(
+                    candidate, args.context or budget.DEFAULT_CONTEXT_TOKENS)
                 print(f"  {i}) {candidate['id']:<28} {quant_label(candidate):<10}"
                       f" {est.total / GiB:.2f} GiB")
             answer = input(f"Select variant [1-{len(fits)}] (default 1): ").strip()

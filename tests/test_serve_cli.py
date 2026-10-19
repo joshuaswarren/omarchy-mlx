@@ -199,13 +199,14 @@ class RecommendTests(CliTestBase):
         big_p1 = fixture_entry(
             id="big-p1", repo="mlx-community/Big-P1",
             priority=1,
-            memory={"weights_bytes": int(10.0 * GiB), "kv_bytes_per_token": 64 * 1024,
+            memory={"weights_bytes": int(9.5 * GiB), "kv_bytes_per_token": 64 * 1024,
                     "peak_estimate_bytes": None})
         small_p4 = fixture_entry(
             id="small-p4", repo="mlx-community/Small-P4",
             priority=4,
             memory={"weights_bytes": int(2.0 * GiB), "kv_bytes_per_token": 64 * 1024,
                     "peak_estimate_bytes": None})
+        # 9.5 GiB: with the prefill scratch serve now admits this entry at 8192 tokens
         FIXTURE["models"] = [big_p1, small_p4]
         code, out, _ = self.run_cli(["recommend"])
         self.assertEqual(code, 0)
@@ -763,6 +764,25 @@ class ServeLaunchTests(CliTestBase):
         step = int(argv[argv.index("--prefill-step-size") + 1])
         self.assertEqual(step, budget.effective_prefill_step(2048, 32768))
         self.assertLess(step, 2048)
+
+    def test_plan_keeps_margin_line_for_mlx_lm(self):
+        code, seen, out, err = self.serve_local()
+        self.assertEqual(code, 0)
+        self.assertIn("margin:", out)
+        self.assertLess(out.index("margin:"), out.index("prefill:"))
+
+    def test_entry_estimate_carries_prefill_scratch_only_for_mlx_lm(self):
+        # recommend, the auto-pick and the variant menu must agree with serve
+        # admission (issue #240), without touching other backends
+        mlx_lm = fixture_entry()
+        module = fixture_entry(serve={"backend": "module", "module": "mlx_omarchy_laya.server"})
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, 4096)
+        self.assertEqual(serve_cli.entry_estimate(mlx_lm, 4096),
+                         budget.estimate_required(mlx_lm["memory"], 4096, step))
+        self.assertGreater(serve_cli.entry_estimate(mlx_lm, 4096).total,
+                           budget.estimate_required(mlx_lm["memory"], 4096).total)
+        self.assertEqual(serve_cli.entry_estimate(module, 4096),
+                         budget.estimate_required(module["memory"], 4096))
 
     def test_zero_context_refused_not_crashed(self):
         for value in ("0", "-5"):

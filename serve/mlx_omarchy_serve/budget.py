@@ -15,6 +15,11 @@ Estimate model (per catalog entry, at an explicit context limit):
                  (measured); otherwise max(WORKSPACE_FRACTION * weights,
                  WORKSPACE_MIN_BYTES) — an UNMEASURED margin for activations,
                  compile buffers, and allocator slack.
+      prefill  = a caller that launches an mlx-lm prefill chunk passes its
+                 step; prefill_scratch_bytes(step, context) is added to the
+                 workspace floor, also under a measured peak (issue #240):
+                 T x 161 KiB + T x L x heads x 8 B, +10%, measured on one
+                 model. Callers that launch no chunk add nothing.
     kv unknown -> flat UNKNOWN_KV_MARGIN added, labeled in every table.
 
 Admission: required + sum(reservation headroom) + SAFETY_RESERVE must fit
