@@ -406,7 +406,8 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
         # exceed the admitted context: sizing scratch at min(step,
         # context) covers the largest chunk the backend can actually run.
         prefill_step = min(prefill_step, context_tokens)
-    est = budget.estimate_required(memory, context_tokens, prefill_step)
+    est = budget.estimate_required(
+        memory, context_tokens, prefill_step if backend == "mlx-lm" else None)
     if not est.kv_known and context_tokens > budget.DEFAULT_CONTEXT_TOKENS:
         raise budget.BudgetError(
             f"KV-per-token unknown for this model, so the budget cannot honestly "

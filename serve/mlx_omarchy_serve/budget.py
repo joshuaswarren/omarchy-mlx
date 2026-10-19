@@ -122,8 +122,10 @@ class Estimate:
 
 
 def estimate_required(memory: dict, context_tokens: int,
-                      prefill_step_tokens: int = DEFAULT_PREFILL_STEP_TOKENS) -> Estimate:
-    if prefill_step_tokens < 1:
+                      prefill_step_tokens: int | None = None) -> Estimate:
+    """prefill_step_tokens None means the caller does not launch an mlx-lm
+    prefill chunk (omlx, module and pair callers) and adds no prefill scratch."""
+    if prefill_step_tokens is not None and prefill_step_tokens < 1:
         raise BudgetError("prefill step size must be a positive number of tokens")
     weights = memory["weights_bytes"]
     kv_per_tok = memory.get("kv_bytes_per_token")
@@ -133,7 +135,7 @@ def estimate_required(memory: dict, context_tokens: int,
     # The chunk the backend actually runs allocates its scratch on top of
     # the generic workspace floor (issue #240): additive, never hidden by
     # a measured peak, and scaled by the step size the launcher passes.
-    prefill_scratch = prefill_step_tokens * PREFILL_BYTES_PER_TOKEN
+    prefill_scratch = (prefill_step_tokens or 0) * PREFILL_BYTES_PER_TOKEN
     if peak is not None:
         # The measurement was taken at some (unknown) context; a larger
         # requested context must not hide behind it, and the unmeasured
