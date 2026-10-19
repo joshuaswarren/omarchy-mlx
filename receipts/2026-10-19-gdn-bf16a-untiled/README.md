@@ -25,7 +25,7 @@ Numerics (128 greedy tokens, full log-probability vector of the first 32 steps; 
 ## Decision: paired teacher-forced NLL, accept-not-worse (nll/)
 
 nll/PREREG.md was written before the scoring run. 128 prefixes of a fixed text, each a 512-token prefill and 64 decode steps, 8192 scored positions per arm. d = NLL(untiled) - NLL(tiled); the unit of replication is the prefix.
-Result (nll/run.log): D mean +0.00082 nats per token, cluster SE 0.00225, interval at 2 SE [-0.00369, +0.00533], at t(127) the upper end is +0.00527. Both are below the +0.02 line, so the rule gives ACCEPT-NOT-WORSE. The two default runs (D and D2) are bit-identical on every position; the untiled run differs from the default on 7964 of 8192 positions; 203 of 8192 argmax positions differ.
+Result (nll/run.log): D mean +0.00082 nats per token, cluster SE 0.00225, interval at 2 SE [-0.00369, +0.00533], at t(127) the upper end is +0.00527 (computed from the logged mean and SE; the log prints the 2 SE interval). Both are below the +0.02 line, so the rule gives ACCEPT-NOT-WORSE. The two default runs (D and D2) are bit-identical on every position; the untiled run differs from the default on 7964 of 8192 positions; 203 of 8192 argmax positions differ.
 This is a not-worse check on one text and one model. It is not a quality benchmark.
 
 ## This change (verify/, test/)
