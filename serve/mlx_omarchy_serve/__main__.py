@@ -405,7 +405,7 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
         # A chunk can never exceed the request, and a request can never
         # exceed the admitted context: sizing scratch at min(step,
         # context) covers the largest chunk the backend can actually run.
-        prefill_step = min(prefill_step, context_tokens)
+        prefill_step = budget.effective_prefill_step(prefill_step, context_tokens)
     est = budget.estimate_required(
         memory, context_tokens, prefill_step if backend == "mlx-lm" else None)
     if not est.kv_known and context_tokens > budget.DEFAULT_CONTEXT_TOKENS:
@@ -452,7 +452,7 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
     label = "measured peak" if est.peak_override else "workspace margin, unmeasured estimate"
     if backend == "mlx-lm":
         lines.append(f"prefill:      {prefill_step} tokens/step "
-                     f"(scratch {prefill_step * budget.PREFILL_BYTES_PER_TOKEN / (1024**2):.0f} MiB in margin)")
+                     f"(scratch {budget.prefill_scratch_bytes(prefill_step, context_tokens) / (1024**2):.0f} MiB in margin)")
     disk_ok = True
     need = disk_need_bytes(resolved) if resolved.local_path is None else None
     if need is not None:
@@ -619,8 +619,9 @@ def server_argv(backend: str, module: str | None, model_dir: Path, host: str,
                 # (issue #240). A chunk larger than the admitted
                 # context never runs.
                 "--prefill-step-size",
-                str(min(prefill_step_tokens or budget.DEFAULT_PREFILL_STEP_TOKENS,
-                        context_tokens))]
+                str(budget.effective_prefill_step(
+                    prefill_step_tokens or budget.DEFAULT_PREFILL_STEP_TOKENS,
+                    context_tokens))]
         return argv
     if backend == "omlx":
         return [sys.executable, "-m", "omlx.server", "--model-dir", str(model_dir),

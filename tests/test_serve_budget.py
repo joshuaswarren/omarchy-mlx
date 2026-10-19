@@ -46,14 +46,39 @@ class EstimateTests(unittest.TestCase):
         expected = max(int(0.25 * 16 * GiB), GiB) + budget.UNKNOWN_KV_MARGIN
         self.assertEqual(est.workspace, expected)
 
-    def test_prefill_scratch_scales_with_step(self):
-        # issue #240: a 2048-token chunk asked for one 512 MiB allocation
+    # Measured worst-chunk scratch, Qwen3-4B-Instruct-2507-4bit on a base M2 (G14G),
+    # PR #241 comment 6273955296: (context after the worst chunk, tokens in it, MiB).
+    MEASURED_SCRATCH = [
+        (1024, 256, 104), (1024, 512, 209), (1024, 1024, 417),
+        (4096, 512, 593), (4096, 2048, 2370),
+        (8192, 256, 587), (8192, 512, 1105), (16384, 512, 2199),
+    ]
+
+    def test_prefill_scratch_covers_every_measured_point(self):
+        for context, step, measured_mib in self.MEASURED_SCRATCH:
+            got = budget.prefill_scratch_bytes(step, context) / 2**20
+            self.assertGreaterEqual(got, measured_mib, (context, step))
+            self.assertLessEqual(got, measured_mib * 1.25, (context, step))
+
+    def test_prefill_scratch_grows_with_context_not_only_step(self):
+        self.assertGreater(budget.prefill_scratch_bytes(512, 16384),
+                           2 * budget.prefill_scratch_bytes(512, 4096) * 0.9)
+
+    def test_prefill_scratch_added_to_workspace(self):
         base = max(int(0.25 * 2.11 * GiB), GiB)
-        small = budget.estimate_required(memory(2.11, kv_per_tok=140 * 1024), 4096, 512)
-        big = budget.estimate_required(memory(2.11, kv_per_tok=140 * 1024), 4096, 2048)
-        self.assertEqual(small.workspace, base + 512 * 256 * 1024)
-        self.assertEqual(big.workspace, base + 2048 * 256 * 1024)
-        self.assertEqual(big.workspace - small.workspace, 512 * 1024 * 1024 - 128 * 1024 * 1024)
+        est = budget.estimate_required(memory(2.11, kv_per_tok=140 * 1024), 16384, 512)
+        self.assertEqual(est.workspace, base + budget.prefill_scratch_bytes(512, 16384))
+
+    def test_step_capped_below_one_storage_binding(self):
+        # one fp32 [heads, T, L] score tensor of 2 GiB failed the dispatch at
+        # T=2048, L=8192 on a 24 GB machine (maxStorageBufferRange 2^31-1)
+        for context in (8192, 32768, 131072, 262144):
+            step = budget.effective_prefill_step(2048, context)
+            self.assertLess(step * context * budget.PREFILL_CAP_HEADS * 4,
+                            budget.MAX_STORAGE_BINDING_BYTES, context)
+        self.assertEqual(budget.effective_prefill_step(512, 4096), 512)
+        self.assertEqual(budget.effective_prefill_step(512, 300), 300)
+        self.assertEqual(budget.effective_prefill_step(1, 262144), 1)
 
     def test_no_step_means_no_prefill_scratch(self):
         # omlx, module and pair callers launch no mlx-lm prefill chunk
@@ -66,7 +91,7 @@ class EstimateTests(unittest.TestCase):
 
     def test_peak_override_keeps_prefill_scratch(self):
         est = budget.estimate_required(memory(16.0, peak=20.5), 8192, 2048)
-        floor = max(int(0.25 * 16 * GiB), GiB) + 2048 * 256 * 1024
+        floor = max(int(0.25 * 16 * GiB), GiB) + budget.prefill_scratch_bytes(2048, 8192)
         self.assertGreaterEqual(est.total, int(16 * GiB) + est.kv + floor)
 
     def test_peak_estimate_overrides(self):

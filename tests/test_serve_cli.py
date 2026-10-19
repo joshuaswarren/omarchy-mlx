@@ -756,6 +756,14 @@ class ServeLaunchTests(CliTestBase):
         argv = seen["argv"]
         self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "300")
 
+    def test_prefill_step_capped_below_one_storage_binding(self):
+        # a 2048-token chunk over 32768 tokens would need a 4 GiB score tensor
+        argv = serve_cli.server_argv("mlx-lm", None, Path("/m"), "127.0.0.1", 8080, 32768,
+                                     prefill_step_tokens=2048)
+        step = int(argv[argv.index("--prefill-step-size") + 1])
+        self.assertEqual(step, budget.effective_prefill_step(2048, 32768))
+        self.assertLess(step, 2048)
+
     def test_prefill_step_zero_refused(self):
         code, seen, out, err = self.serve_local(["--prefill-step-size", "0"])
         self.assertEqual(code, 2)
