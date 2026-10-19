@@ -35,9 +35,9 @@ This is a not-worse check on one text and one model. It is not a quality benchma
 - Numerics of the new wheel against the earlier runs: the new default equals the earlier TILE=0 arm bit for bit, and the new TILE=1 equals the earlier default arm bit for bit, on both prompts (max absolute log-probability difference 0.0, KL 0, ids equal; verify/run.log).
 - Speed of the new wheel, default against TILE=1 (tools/sum_speed.py verify/run.log T D): P1 28.950 to 31.210 tok/s (+7.81%), P2 28.970 to 31.220 (+7.77%), the default faster in 5 of 5 rounds on both prompts, spread 0.3%.
 
-## Two distinct builds, default environment (build-ab/)
+## Two distinct builds, default environment (two-build-ab/)
 
-The runs above switch the route inside one wheel. This run compares the two builds themselves, both in the default environment, with a verified build stamp on every row: O is mlx_omarchy 0.32.4.dev202610181348+49e6b3c1 (before this change), N is 0.32.4.dev202610192245+a2b0864 (this change). Every row prints provenance ... verified=match with its own build stamp and the libmlx hash of its wheel. 5 rounds, 2 prompts, 64 tokens, order alternating, fresh process each (tools/ab-builds.sh, tools/sum_speed.py build-ab/run.log O N):
+The runs above switch the route inside one wheel. This run compares the two builds themselves, both in the default environment, with a verified build stamp on every row: O is mlx_omarchy 0.32.4.dev202610181348+49e6b3c1 (before this change), N is 0.32.4.dev202610192245+a2b0864 (this change). Every row prints provenance ... verified=match with its own build stamp and the libmlx hash of its wheel. 5 rounds, 2 prompts, 64 tokens, order alternating, fresh process each (tools/ab-builds.sh, tools/sum_speed.py two-build-ab/run.log O N):
 
 | Prompt | O median | N median | Change | N faster | Spread |
 |---|---:|---:|---:|---:|---:|
@@ -53,7 +53,7 @@ The runs above switch the route inside one wheel. This run compares the two buil
 - Commands: tools/ (run-untiled-vs-tiled.sh, run-nll35.sh, verify-bf16a.sh, ab-builds.sh) and the test binary command lines in test/*.out.
 - Numerical result, backend dispatch trace: sections above. The census histograms are in untiled-vs-tiled/hist-*.txt and verify/hist-*.txt.
 - Timing and thermal procedure: one boot per run set, performance governor, fresh process per sample, arm order alternated, one warm-up as the first load of each process; timing under the lab GPU lock. No temperature, fan or throttle reading was taken.
-- Vulkan device reopen: no dedicated close-and-reopen test was run. Every run is a fresh process that opened the Vulkan device from the start. The logs record 72 exit codes (untiled-vs-tiled/speed-run.log 20, numerics-run.log 5, verify/run.log 24, build-ab/run.log 20, nll/run.log 3), all 0, and every timing row prints verified=match. The census runs and the two test-binary runs also exited cleanly; the census pipeline does not log its exit code.
+- Vulkan device reopen: no dedicated close-and-reopen test was run. Every run is a fresh process that opened the Vulkan device from the start. The logs record 72 exit codes (untiled-vs-tiled/speed-run.log 20, numerics-run.log 5, verify/run.log 24, two-build-ab/run.log 20, nll/run.log 3), all 0, and every timing row prints verified=match. The census runs and the two test-binary runs also exited cleanly; the census pipeline does not log its exit code.
 
 ## Limits
 
@@ -61,7 +61,7 @@ One model (Hk 16, Hv 32), one chip (G13C), one text, two 20-token speed prompts.
 
 ## Files
 
-- build-ab/: the two-build A/B (run.log and per-run outputs).
+- two-build-ab/: the two-build A/B (run.log and per-run outputs).
 - untiled-vs-tiled/: speed-run.log, numerics-run.log, hist-*.txt (decode census).
 - nll/: PREREG.md, run.log, D.npz, U.npz, D2.npz, scored with tools/nll_pair.py and tools/nll_cmp.py.
 - verify/: the run log, census histograms and per-run outputs of the new wheel.
