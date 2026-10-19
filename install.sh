@@ -64,6 +64,13 @@ fetch_patch_assets() {
     curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/mlx-lm-0.32/$p" \
       -o "$PREFIX/patches/mlx-lm-0.32/$p" || rm -f "$PREFIX/patches/mlx-lm-0.32/$p"
   done
+  # The optional mlx-audio series patch (same grep, wider pattern; the audio
+  # patch is referenced by the apply script only, and an absent download is
+  # left absent so the apply step skips it cleanly).
+  for p in $(grep -oE 'mlx-audio-[a-z0-9-]+\.patch' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/patches/$p" -o "$PREFIX/patches/$p" ||
+      rm -f "$PREFIX/patches/$p"
+  done
   for s in $(grep -oE 'scripts/[a-z0-9_-]+\.py' "$PREFIX/apply-mlx-lm-patches.sh" | sort -u); do
     curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/$s" -o "$PREFIX/$s"
   done

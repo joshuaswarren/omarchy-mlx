@@ -276,6 +276,41 @@ python3 "$ROOT/scripts/patch-mlx-lm-gdn-raw-repeat.py" "$VENV"
 # swiglu; prefill keeps the compiled function. Kill switch
 # MLX_OMARCHY_EAGER_SWIGLU=0.
 python3 "$ROOT/scripts/patch-mlx-lm-qwen3-next-eager-swiglu.py" "$VENV"
+
+# Optional mlx-audio series (applied only when mlx_audio is installed in the
+# same venv; absent audio is a clean skip, an already-guarded module is
+# detected and skipped, and a second run is idempotent). The 0.5.6 wheel
+# ships the mossformer2 depthwise custom kernel without the Metal
+# availability gate that upstream added later (4e429cfa); on this backend
+# that selects the custom route with Metal unavailable. The patch is the
+# upstream-identical one-conjunct backport.
+if [[ -d "$SITE/mlx_audio/sts/models/mossformer2_se" ]]; then
+  AUDIO_FILE="$SITE/mlx_audio/sts/models/mossformer2_se/depthwise_conv1d_kernel.py"
+  AUDIO_PATCH="$ROOT/patches/mlx-audio-mossformer-depthwise-metal-gate.patch"
+  # GNU patch's -R dry-run succeeds even on a file WITHOUT the hunk (it
+  # falls back to the forward direction), so the discriminator is the
+  # FORWARD dry-run: rc 0 means the module is unguarded and exactly
+  # patchable (a comment mentioning the gate does not stop it); rc 1 means
+  # the hunk is already there or the file drifted. Only then does the
+  # reverse dry-run (with the gate text) certify "already guarded" - a
+  # drifted patch fails both and aborts loudly before the completion
+  # record is written.
+  if patch --batch --forward -p1 --dry-run --fuzz=0 -d "$SITE" \
+       < "$AUDIO_PATCH" >/dev/null 2>&1; then
+    patch --batch --forward -p1 --fuzz=0 -d "$SITE" < "$AUDIO_PATCH"
+    echo "mlx-audio patch series: depthwise Metal gate applied"
+  elif grep -q "mx.metal.is_available()" "$AUDIO_FILE" \
+       && patch --batch -R -p1 --dry-run --fuzz=0 -d "$SITE" \
+            < "$AUDIO_PATCH" >/dev/null 2>&1; then
+    echo "mlx-audio patch series: depthwise gate already present (exact upstream hunk); skipped"
+  else
+    echo "error: mlx-audio depthwise gate patch did not apply exactly (marker without the exact hunk, or a drifted module); refusing to continue" >&2
+    echo "error: the module is either already patched in a drifted form or not the pinned 0.5.6 shape; inspect $AUDIO_FILE" >&2
+    exit 7
+  fi
+else
+  echo "mlx-audio patch series: mlx_audio not installed; skipped"
+fi
 # Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
 DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
 printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"
