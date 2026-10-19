@@ -1,0 +1,102 @@
+--- a/mlx_lm/server.py
++++ b/mlx_lm/server.py
+@@ -850,7 +850,24 @@
+ 
+                 uids_to_remove = []
+                 for _ in self._time_budget:
+-                    prompt_responses, gen_responses = batch_generator.next()
++                    try:
++                        prompt_responses, gen_responses = batch_generator.next()
++                    except Exception as error:
++                        logging.error("Generation batch failed: %s", type(error).__name__)
++                        for result in batch_results.values():
++                            result["rqueue"].put(RuntimeError("generation_failed"))
++                        batch_results.clear()
++                        try:
++                            batch_generator.close()
++                        except Exception as close_error:
++                            logging.error("Failed batch close: %s", type(close_error).__name__)
++                        batch_generator = None
++                        current_model = None
++                        current_sampling = None
++                        current_tokenizer = None
++                        current_model_key = None
++                        drain_batch = False
++                        break
+                     if not prompt_responses and not gen_responses:
+                         break
+ 
+@@ -911,6 +928,9 @@
+                         if result["ctx"]._should_stop:
+                             uids_to_remove.append(r.uid)
+ 
++                if batch_generator is None:
++                    mx.clear_cache()
++                    continue
+                 uids_to_remove = self._share_object(uids_to_remove)
+                 if uids_to_remove:
+                     batch_generator.remove(uids_to_remove)
+@@ -1020,8 +1040,9 @@
+                 self.model_provider.model_key, cache_key, cache
+             )
+ 
+-        except Exception as e:
+-            rqueue.put(e)
++        except Exception as error:
++            logging.error("Single generation failed: %s", type(error).__name__)
++            rqueue.put(RuntimeError("generation_failed"))
+ 
+     def generate(
+         self,
+@@ -1364,6 +1385,18 @@
+             raise ValueError(f"Unsupported response type: {self.object_type}")
+ 
+         return response
++
++    def _send_generation_error(self, stream_started=False):
++        payload = json.dumps({"error": "generation_failed"}).encode()
++        self.close_connection = True
++        if stream_started:
++            self.wfile.write(b"data: " + payload + b"\n\ndata: [DONE]\n\n")
++        else:
++            self._set_completion_headers(500)
++            self.send_header("Content-Length", str(len(payload)))
++            self.end_headers()
++            self.wfile.write(payload)
++        self.wfile.flush()
+ 
+     def handle_completion(self, request: CompletionRequest, stop_words: List[str]):
+         """
+@@ -1421,6 +1454,9 @@
+                 args,
+                 progress_callback=keepalive_callback,
+             )
++        except RuntimeError:
++            self._send_generation_error()
++            return
+         except Exception as e:
+             self._set_completion_headers(404)
+             self.end_headers()
+@@ -1433,7 +1469,6 @@
+             self.end_headers()
+             logging.debug("Starting stream:")
+         else:
+-            self._set_completion_headers(200)
+             logging.debug("Starting completion:")
+ 
+         # Tool call formatter
+@@ -1544,10 +1579,14 @@
+                     logging.debug(f"Outgoing Response: {response_debug}")
+ 
+                 response_json = json.dumps(resp).encode()
++                self._set_completion_headers(200)
+                 self.send_header("Content-Length", str(len(response_json)))
+                 self.end_headers()
+                 self.wfile.write(response_json)
+                 self.wfile.flush()
++        except Exception as error:
++            logging.error("Completion response failed: %s", type(error).__name__)
++            self._send_generation_error(stream_started=self.stream)
+         finally:
+             ctx.stop()
+ 
