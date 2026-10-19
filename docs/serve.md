@@ -596,6 +596,13 @@ replace its wheel with the upstream macOS package.
 
 ## HTTP server contract
 
+The serve patches handle a failed prefill or decode batch without leaving its clients blocked.
+Every request in that batch receives `generation_failed`; the worker drops the failed batch before accepting another.
+The worker retains valid shared prompt-cache entries. It does not insert the failed batch's cache.
+Before response headers, the server sends JSON with HTTP 500.
+After streaming headers, it sends one SSE error, then `[DONE]`, and closes the connection.
+The client does not receive the exception message or a second HTTP status.
+
 The installer includes `mlx-lm==0.31.3`. This low-level example bypasses the managed CLI's memory admission and context shim.
 Prefer the managed command above. For direct server development, choose a checkpoint qualified with this exact loader and wheel.
 

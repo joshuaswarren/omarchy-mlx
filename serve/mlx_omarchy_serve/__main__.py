@@ -287,10 +287,23 @@ def pick_recommended(cat: dict, kind: str, context_tokens: int | None, home: Pat
                     continue
             except budget.BudgetError:
                 pass
-        est = budget.estimate_required(entry["memory"], ctx)
+        est = entry_estimate(entry, ctx)
         if budget.admit(est.total, home).fits:
             fits.append(entry)
     return fits, ranked, soc
+
+
+def entry_estimate(entry: dict, ctx: int) -> budget.Estimate:
+    """The estimate serve would admit for this catalog entry at ctx: mlx-lm
+    entries (including entries with no serve block, which backend_for serves
+    through mlx-lm) launch a prefill chunk, so they carry its scratch
+    (issue #240); every other backend keeps the plain estimate."""
+    step = None
+    # An entry without a serve block is still served by mlx-lm when named
+    # explicitly (backend_for), so it carries the chunk too.
+    if (entry.get("serve") or {}).get("backend", "mlx-lm") == "mlx-lm":
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, ctx)
+    return budget.estimate_required(entry["memory"], ctx, step)
 
 
 def resolve_target(target: str | None, cat: dict) -> Resolved:
@@ -375,6 +388,7 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
                module: str | None, host: str, port: int,
                weights_override: int | None, home: Path | None,
                prompt_cache_size: int = 0,
+               prefill_step_tokens: int | None = None,
                patterns: list[str] | None = None) -> tuple[list[str], budget.Admission | None, bool]:
     lines: list[str] = []
     est = None
@@ -396,7 +410,17 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
             )
         memory = {"weights_bytes": weights_override, "kv_bytes_per_token": None, "peak_estimate_bytes": None}
 
-    est = budget.estimate_required(memory, context_tokens)
+    prefill_step = (budget.DEFAULT_PREFILL_STEP_TOKENS
+                    if prefill_step_tokens is None else prefill_step_tokens)
+    if prefill_step < 1:
+        raise budget.BudgetError("--prefill-step-size must be a positive number of tokens")
+    if backend == "mlx-lm":
+        # A chunk can never exceed the request, and a request can never
+        # exceed the admitted context: sizing scratch at min(step,
+        # context) covers the largest chunk the backend can actually run.
+        prefill_step = budget.effective_prefill_step(prefill_step, context_tokens)
+    est = budget.estimate_required(
+        memory, context_tokens, prefill_step if backend == "mlx-lm" else None)
     if not est.kv_known and context_tokens > budget.DEFAULT_CONTEXT_TOKENS:
         raise budget.BudgetError(
             f"KV-per-token unknown for this model, so the budget cannot honestly "
@@ -440,6 +464,9 @@ def plan_lines(resolved: Resolved, context_tokens: int, backend: str,
                      "catalog entry (whole-repo download prevented)")
     label = "measured peak" if est.peak_override else "workspace margin, unmeasured estimate"
     lines.append(f"margin:       {est.workspace / GiB:.2f} GiB ({label})")
+    if backend == "mlx-lm":
+        lines.append(f"prefill:      {prefill_step} tokens/step "
+                     f"(scratch {budget.prefill_scratch_bytes(prefill_step, context_tokens) / (1024**2):.0f} MiB in margin)")
     disk_ok = True
     need = disk_need_bytes(resolved) if resolved.local_path is None else None
     if need is not None:
@@ -575,6 +602,7 @@ def check_custom_code(model_dir: Path) -> None:
 def server_argv(backend: str, module: str | None, model_dir: Path, host: str,
                 port: int, context_tokens: int,
                 prompt_cache_size: int = 0,
+                prefill_step_tokens: int | None = None,
                 max_questions: int | None = None) -> list[str]:
     if backend == "mlx-lm":
         # Upstream --max-tokens is only a per-request default (client
@@ -599,7 +627,15 @@ def server_argv(backend: str, module: str | None, model_dir: Path, host: str,
                 "--max-tokens", str(min(512, context_tokens)),
                 "--decode-concurrency", "1",
                 "--prompt-concurrency", "1",
-                "--prompt-cache-size", str(prompt_cache_size)]
+                "--prompt-cache-size", str(prompt_cache_size),
+                # Pin the chunk size the admission budget sized its
+                # scratch for; without this mlx-lm defaults to 2048
+                # (issue #240). A chunk larger than the admitted
+                # context never runs.
+                "--prefill-step-size",
+                str(budget.effective_prefill_step(
+                    prefill_step_tokens or budget.DEFAULT_PREFILL_STEP_TOKENS,
+                    context_tokens))]
         return argv
     if backend == "omlx":
         return [sys.executable, "-m", "omlx.server", "--model-dir", str(model_dir),
@@ -660,6 +696,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                        help="mlx-lm prompt cache entries; 0 (default) keeps the "
                             "aggregate KV bound at the admitted context, N raises "
                             "the worst case to (N+1) x context and is budgeted")
+        p.add_argument("--prefill-step-size", type=int, default=None, dest="prefill_step_size",
+                       help="tokens per mlx-lm prefill chunk; default 512. The admission "
+                            "workspace sizes prefill scratch for the step the backend "
+                            "actually runs (issue #240: the 2048 mlx-lm default asked "
+                            "for one 512 MiB chunk allocation on an 8 GB machine)")
 
     p_recommend = sub.add_parser("recommend", help="show curated fits and the pick")
     common(p_recommend, with_target=False)
@@ -707,11 +748,10 @@ def cmd_recommend(args, cat, home) -> int:
         ctx = entry_context_tokens(entry, requested)
         reason = auto_serve_reason(entry)
         if ctx is None:
-            est_total = budget.estimate_required(entry["memory"],
-                                                 entry["context"]["max_tokens"]).total
+            est_total = entry_estimate(entry, entry["context"]["max_tokens"]).total
             note = f"context {requested} over limit {entry['context']['max_tokens']}"
         else:
-            est_total = budget.estimate_required(entry["memory"], ctx).total
+            est_total = entry_estimate(entry, ctx).total
             note = reason or ""
         fits_now = entry in fits
         print(f"  {'*' if fits_now else ' '} {entry['id']:<28} {quant_label(entry):<10}"
@@ -747,8 +787,8 @@ def build_resolved(args, cat) -> Resolved:
             # Manual variant selection: every fitting quant variant is offered,
             # the curated pick is just the default. Never all of them.
             for i, candidate in enumerate(fits, 1):
-                est = budget.estimate_required(
-                    candidate["memory"], args.context or budget.DEFAULT_CONTEXT_TOKENS)
+                est = entry_estimate(
+                    candidate, args.context or budget.DEFAULT_CONTEXT_TOKENS)
                 print(f"  {i}) {candidate['id']:<28} {quant_label(candidate):<10}"
                       f" {est.total / GiB:.2f} GiB")
             answer = input(f"Select variant [1-{len(fits)}] (default 1): ").strip()
@@ -788,7 +828,9 @@ def do_plan(args, cat, home) -> tuple[Resolved, list[str], budget.Admission | No
     lines, admission, disk_ok = plan_lines(
         resolved, context, backend, module, args.host, args.port,
         args.weights_gib if args.weights_gib else None, home,
-        prompt_cache_size=cache_size, patterns=patterns,
+        prompt_cache_size=cache_size,
+        prefill_step_tokens=getattr(args, "prefill_step_size", None),
+        patterns=patterns,
     )
     return resolved, lines, admission, disk_ok, backend, module, context, patterns
 
@@ -955,7 +997,8 @@ def cmd_serve(args, cat, home) -> int:
     # confirmed dead — otherwise it is retained (fail closed) so a future
     # admission cannot double-count the child's RAM.
     argv = server_argv(backend, module, model_dir, args.host, args.port, context,
-                       prompt_cache_size=max(int(getattr(args, "prompt_cache_size", 0) or 0), 0))
+                       prompt_cache_size=max(int(getattr(args, "prompt_cache_size", 0) or 0), 0),
+                       prefill_step_tokens=getattr(args, "prefill_step_size", None))
     child_env = dict(os.environ)
     if backend == "mlx-lm":
         child_env[cap_shim.LIMIT_ENV] = str(context)

@@ -199,13 +199,14 @@ class RecommendTests(CliTestBase):
         big_p1 = fixture_entry(
             id="big-p1", repo="mlx-community/Big-P1",
             priority=1,
-            memory={"weights_bytes": int(10.0 * GiB), "kv_bytes_per_token": 64 * 1024,
+            memory={"weights_bytes": int(9.5 * GiB), "kv_bytes_per_token": 64 * 1024,
                     "peak_estimate_bytes": None})
         small_p4 = fixture_entry(
             id="small-p4", repo="mlx-community/Small-P4",
             priority=4,
             memory={"weights_bytes": int(2.0 * GiB), "kv_bytes_per_token": 64 * 1024,
                     "peak_estimate_bytes": None})
+        # 9.5 GiB: with the prefill scratch serve now admits this entry at 8192 tokens
         FIXTURE["models"] = [big_p1, small_p4]
         code, out, _ = self.run_cli(["recommend"])
         self.assertEqual(code, 0)
@@ -731,6 +732,91 @@ class ServeLaunchTests(CliTestBase):
             for patcher in patchers:
                 patcher.stop()
         return code, seen, out, err
+
+    def test_prefill_step_pinned_by_default(self):
+        # issue #240: without a pin, mlx-lm defaults its prefill chunk to
+        # 2048 and the first chunk allocates outside the sized margin.
+        code, seen, out, err = self.serve_local()
+        self.assertEqual(code, 0)
+        argv = seen["argv"]
+        self.assertIn("--prefill-step-size", argv)
+        self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "512")
+        self.assertIn("prefill:      512 tokens/step", out)
+
+    def test_prefill_step_flag_forwarded(self):
+        code, seen, out, err = self.serve_local(["--prefill-step-size", "256"])
+        self.assertEqual(code, 0)
+        argv = seen["argv"]
+        self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "256")
+        self.assertIn("prefill:      256 tokens/step", out)
+
+    def test_prefill_step_clamped_to_small_context(self):
+        # context 300: the largest chunk the backend can run is 300
+        code, seen, out, err = self.serve_local(["--context", "300"])
+        self.assertEqual(code, 0)
+        argv = seen["argv"]
+        self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "300")
+
+    def test_prefill_step_capped_below_one_storage_binding(self):
+        # a 2048-token chunk over 32768 tokens would need a 4 GiB score tensor
+        argv = serve_cli.server_argv("mlx-lm", None, Path("/m"), "127.0.0.1", 8080, 32768,
+                                     prefill_step_tokens=2048)
+        step = int(argv[argv.index("--prefill-step-size") + 1])
+        self.assertEqual(step, budget.effective_prefill_step(2048, 32768))
+        self.assertLess(step, 2048)
+
+    def test_plan_keeps_margin_line_for_mlx_lm(self):
+        code, seen, out, err = self.serve_local()
+        self.assertEqual(code, 0)
+        self.assertIn("margin:", out)
+        self.assertLess(out.index("margin:"), out.index("prefill:"))
+
+    def test_entry_estimate_carries_prefill_scratch_only_for_mlx_lm(self):
+        # recommend, the auto-pick and the variant menu must agree with serve
+        # admission (issue #240), without touching other backends
+        mlx_lm = fixture_entry()
+        module = fixture_entry(serve={"backend": "module", "module": "mlx_omarchy_laya.server"})
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, 4096)
+        self.assertEqual(serve_cli.entry_estimate(mlx_lm, 4096),
+                         budget.estimate_required(mlx_lm["memory"], 4096, step))
+        self.assertGreater(serve_cli.entry_estimate(mlx_lm, 4096).total,
+                           budget.estimate_required(mlx_lm["memory"], 4096).total)
+        self.assertEqual(serve_cli.entry_estimate(module, 4096),
+                         budget.estimate_required(module["memory"], 4096))
+
+    def test_entry_estimate_handles_every_shipped_catalog_entry(self):
+        # a null serve block must not crash recommend, and it is sized like
+        # mlx-lm (backend_for serves such an entry through mlx-lm)
+        shipped = json.loads((REPO_ROOT / "serve/mlx_omarchy_serve/catalog.json").read_text())
+        entries = shipped["models"] if isinstance(shipped, dict) else shipped
+        no_serve = dict(entries[0], serve=None)
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, 4096)
+        self.assertEqual(serve_cli.entry_estimate(no_serve, 4096),
+                         budget.estimate_required(no_serve["memory"], 4096, step))
+        for entry in entries + [no_serve]:
+            ctx = entry["context"]["max_tokens"] or budget.DEFAULT_CONTEXT_TOKENS
+            serve_cli.entry_estimate(entry, min(ctx, 4096))
+
+    def test_recommend_runs_against_the_real_catalog(self):
+        shipped = json.loads((REPO_ROOT / "serve/mlx_omarchy_serve/catalog.json").read_text())
+        saved = list(FIXTURE["models"])
+        try:
+            FIXTURE["models"] = shipped["models"] if isinstance(shipped, dict) else shipped
+            code, out, _ = RecommendTests.run_cli(self, ["recommend"])
+        finally:
+            FIXTURE["models"] = saved
+        self.assertEqual(code, 0)
+
+    def test_zero_context_refused_not_crashed(self):
+        for value in ("0", "-5"):
+            code, seen, out, err = self.serve_local(["--context", value])
+            self.assertEqual(code, 2, (value, err))
+            self.assertIn("positive number of tokens", err)
+
+    def test_prefill_step_zero_refused(self):
+        code, seen, out, err = self.serve_local(["--prefill-step-size", "0"])
+        self.assertEqual(code, 2)
+        self.assertIn("positive number of tokens", err)
 
     def test_local_model_launches_through_cap_shim(self):
         code, seen, out, err = self.serve_local()

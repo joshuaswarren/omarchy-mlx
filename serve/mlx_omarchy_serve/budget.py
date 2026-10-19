@@ -15,6 +15,11 @@ Estimate model (per catalog entry, at an explicit context limit):
                  (measured); otherwise max(WORKSPACE_FRACTION * weights,
                  WORKSPACE_MIN_BYTES) — an UNMEASURED margin for activations,
                  compile buffers, and allocator slack.
+      prefill  = a caller that launches an mlx-lm prefill chunk passes its
+                 step; prefill_scratch_bytes(step, context) is added to the
+                 workspace floor, also under a measured peak (issue #240):
+                 T x 161 KiB + T x L x heads x 8 B, +10%, measured on one
+                 model. Callers that launch no chunk add nothing.
     kv unknown -> flat UNKNOWN_KV_MARGIN added, labeled in every table.
 
 Admission: required + sum(reservation headroom) + SAFETY_RESERVE must fit
@@ -63,6 +68,45 @@ WORKSPACE_FRACTION = 0.25               # unmeasured; catalog peak_estimate_byte
 WORKSPACE_MIN_BYTES = 1 * GiB
 UNKNOWN_KV_MARGIN = 2 * GiB             # flat margin when kv_bytes_per_token is null
 DEFAULT_CONTEXT_TOKENS = 4096           # when a catalog entry has no max_tokens
+# Prefill scratch, additive to the generic workspace floor: the chunk the
+# backend actually runs allocates before the first output token exists.
+# Measured (PR #241 comment 6273955296, base M2 G14G, Qwen3-4B-Instruct-2507-4bit,
+# 11 runs, step 256..2048, prompts 1024..16384): per chunk
+#   scratch ~= T x 161 KiB  +  T x L x heads x 8 B
+# T = tokens in the chunk, L = KV length after it; the second term is two fp32
+# [heads, T, L] tensors (scores, softmax) alive at once. The fit under-reads by
+# up to 8.6% at L > 7k, hence the margin. Only this model was measured: the
+# per-token constant and head count are its own (unmeasured for other models).
+PREFILL_TOKEN_BYTES = 161 * 1024
+PREFILL_SCORE_HEADS = 32
+PREFILL_SCORE_TENSOR_BYTES = 8
+PREFILL_MARGIN = 1.10
+# One fp32 [heads, T, L] score tensor must fit one storage-buffer binding
+# (maxStorageBufferRange 2^31-1): at T=2048, L=8192, 32 heads it is exactly
+# 2 GiB and the dispatch fails with plenty of RAM free. The cap assumes up to
+# 64 heads so it also holds for larger models; it only shrinks the chunk.
+MAX_STORAGE_BINDING_BYTES = 2**31 - 1
+PREFILL_CAP_HEADS = 64
+DEFAULT_PREFILL_STEP_TOKENS = 512
+
+
+def effective_prefill_step(step: int, context_tokens: int) -> int:
+    """The chunk size the backend is told to use: never above the admitted
+    context (a chunk cannot exceed the request) and never so large that one
+    fp32 score tensor overflows a storage-buffer binding."""
+    if context_tokens < 1:
+        raise BudgetError("context must be a positive number of tokens")
+    cap = MAX_STORAGE_BINDING_BYTES // (context_tokens * PREFILL_CAP_HEADS * 4)
+    return max(1, min(step, context_tokens, cap))
+
+
+def prefill_scratch_bytes(step: int, context_tokens: int) -> int:
+    """Worst chunk is the last one: T tokens attending over the full context."""
+    if step < 1 or context_tokens < 1:
+        raise BudgetError("prefill step and context must be positive numbers of tokens")
+    t = min(step, context_tokens)
+    raw = t * PREFILL_TOKEN_BYTES + t * context_tokens * PREFILL_SCORE_HEADS * PREFILL_SCORE_TENSOR_BYTES
+    return int(raw * PREFILL_MARGIN)
 
 RESERVATIONS_FILE = "reservations.json"
 RESERVATION_STATES = ("pending", "resident")
@@ -115,21 +159,31 @@ class Estimate:
     total: int
 
 
-def estimate_required(memory: dict, context_tokens: int) -> Estimate:
+def estimate_required(memory: dict, context_tokens: int,
+                      prefill_step_tokens: int | None = None) -> Estimate:
+    """prefill_step_tokens None means the caller does not launch an mlx-lm
+    prefill chunk (omlx, module and pair callers) and adds no prefill scratch."""
+    if prefill_step_tokens is not None and prefill_step_tokens < 1:
+        raise BudgetError("prefill step size must be a positive number of tokens")
     weights = memory["weights_bytes"]
     kv_per_tok = memory.get("kv_bytes_per_token")
     peak = memory.get("peak_estimate_bytes")
     kv_known = kv_per_tok is not None
     kv = (kv_per_tok * context_tokens) if kv_known else 0
+    # The chunk the backend actually runs allocates its scratch on top of
+    # the generic workspace floor (issue #240): additive, never hidden by
+    # a measured peak, and scaled by the step size the launcher passes.
+    prefill_scratch = (prefill_scratch_bytes(prefill_step_tokens, context_tokens)
+                       if prefill_step_tokens is not None else 0)
     if peak is not None:
         # The measurement was taken at some (unknown) context; a larger
         # requested context must not hide behind it, and the unmeasured
         # workspace floor still applies — only a measured context-specific
         # peak could justify less, and the schema does not carry one.
-        workspace_floor = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES)
+        workspace_floor = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES) + prefill_scratch
         total = max(peak, weights + kv + workspace_floor)
         return Estimate(weights, kv, kv_known, total - weights - kv, True, total)
-    workspace = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES)
+    workspace = max(int(WORKSPACE_FRACTION * weights), WORKSPACE_MIN_BYTES) + prefill_scratch
     if not kv_known:
         workspace += UNKNOWN_KV_MARGIN
     return Estimate(weights, kv, kv_known, workspace, False, weights + kv + workspace)
