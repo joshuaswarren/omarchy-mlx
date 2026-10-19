@@ -295,11 +295,13 @@ def pick_recommended(cat: dict, kind: str, context_tokens: int | None, home: Pat
 
 def entry_estimate(entry: dict, ctx: int) -> budget.Estimate:
     """The estimate serve would admit for this catalog entry at ctx: mlx-lm
-    entries launch a prefill chunk, so they carry its scratch (issue #240);
-    every other backend keeps the plain estimate."""
+    entries (including entries with no serve block, which backend_for serves
+    through mlx-lm) launch a prefill chunk, so they carry its scratch
+    (issue #240); every other backend keeps the plain estimate."""
     step = None
-    # entries without a serve block (not auto-servable) launch no chunk
-    if (entry.get("serve") or {}).get("backend") == "mlx-lm":
+    # An entry without a serve block is still served by mlx-lm when named
+    # explicitly (backend_for), so it carries the chunk too.
+    if (entry.get("serve") or {}).get("backend", "mlx-lm") == "mlx-lm":
         step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, ctx)
     return budget.estimate_required(entry["memory"], ctx, step)
 

@@ -785,11 +785,15 @@ class ServeLaunchTests(CliTestBase):
                          budget.estimate_required(module["memory"], 4096))
 
     def test_entry_estimate_handles_every_shipped_catalog_entry(self):
-        # entries without a serve block (null) must not crash recommend
+        # a null serve block must not crash recommend, and it is sized like
+        # mlx-lm (backend_for serves such an entry through mlx-lm)
         shipped = json.loads((REPO_ROOT / "serve/mlx_omarchy_serve/catalog.json").read_text())
         entries = shipped["models"] if isinstance(shipped, dict) else shipped
-        self.assertTrue(any(e.get("serve") is None for e in entries))
-        for entry in entries:
+        no_serve = dict(entries[0], serve=None)
+        step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, 4096)
+        self.assertEqual(serve_cli.entry_estimate(no_serve, 4096),
+                         budget.estimate_required(no_serve["memory"], 4096, step))
+        for entry in entries + [no_serve]:
             ctx = entry["context"]["max_tokens"] or budget.DEFAULT_CONTEXT_TOKENS
             serve_cli.entry_estimate(entry, min(ctx, 4096))
 
