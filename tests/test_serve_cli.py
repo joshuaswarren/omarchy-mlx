@@ -784,6 +784,25 @@ class ServeLaunchTests(CliTestBase):
         self.assertEqual(serve_cli.entry_estimate(module, 4096),
                          budget.estimate_required(module["memory"], 4096))
 
+    def test_entry_estimate_handles_every_shipped_catalog_entry(self):
+        # entries without a serve block (null) must not crash recommend
+        shipped = json.loads((REPO_ROOT / "serve/mlx_omarchy_serve/catalog.json").read_text())
+        entries = shipped["models"] if isinstance(shipped, dict) else shipped
+        self.assertTrue(any(e.get("serve") is None for e in entries))
+        for entry in entries:
+            ctx = entry["context"]["max_tokens"] or budget.DEFAULT_CONTEXT_TOKENS
+            serve_cli.entry_estimate(entry, min(ctx, 4096))
+
+    def test_recommend_runs_against_the_real_catalog(self):
+        shipped = json.loads((REPO_ROOT / "serve/mlx_omarchy_serve/catalog.json").read_text())
+        saved = list(FIXTURE["models"])
+        try:
+            FIXTURE["models"] = shipped["models"] if isinstance(shipped, dict) else shipped
+            code, out, _ = RecommendTests.run_cli(self, ["recommend"])
+        finally:
+            FIXTURE["models"] = saved
+        self.assertEqual(code, 0)
+
     def test_zero_context_refused_not_crashed(self):
         for value in ("0", "-5"):
             code, seen, out, err = self.serve_local(["--context", value])

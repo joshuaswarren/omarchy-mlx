@@ -298,7 +298,8 @@ def entry_estimate(entry: dict, ctx: int) -> budget.Estimate:
     entries launch a prefill chunk, so they carry its scratch (issue #240);
     every other backend keeps the plain estimate."""
     step = None
-    if entry["serve"]["backend"] == "mlx-lm":
+    # entries without a serve block (not auto-servable) launch no chunk
+    if (entry.get("serve") or {}).get("backend") == "mlx-lm":
         step = budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, ctx)
     return budget.estimate_required(entry["memory"], ctx, step)
 
