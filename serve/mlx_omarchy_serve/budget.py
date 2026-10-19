@@ -18,7 +18,7 @@ Estimate model (per catalog entry, at an explicit context limit):
       prefill  = a caller that launches an mlx-lm prefill chunk passes its
                  step; prefill_scratch_bytes(step, context) is added to the
                  workspace floor, also under a measured peak (issue #240):
-                 T x 161 KiB + T x L x heads x 8 B, +10%, measured on one
+                 T x 161 KiB + T x L x heads x 8 B, +15%, measured on one
                  model. Callers that launch no chunk add nothing.
     kv unknown -> flat UNKNOWN_KV_MARGIN added, labeled in every table.
 
@@ -75,12 +75,17 @@ DEFAULT_CONTEXT_TOKENS = 4096           # when a catalog entry has no max_tokens
 #   scratch ~= T x 161 KiB  +  T x L x heads x 8 B
 # T = tokens in the chunk, L = KV length after it; the second term is two fp32
 # [heads, T, L] tensors (scores, softmax) alive at once. The fit under-reads by
-# up to 8.6% at L > 7k, hence the margin. Only this model was measured: the
-# per-token constant and head count are its own (unmeasured for other models).
+# up to 8.6% at L > 7k on one build and by up to 13.5% (small L) on another
+# (PR #241 comment 6279687191: Qwen3-4B-Instruct-2507-4bit at 50d4277, v0.7.33
+# wheel, 8 GB base M2), hence the margin. Both sets are contributor-reported:
+# they carry a wheel version but no scripts/mlx_provenance.py line, so they are
+# unverified builds. They only widen a safety margin, never narrow it. Only
+# this model was measured: the per-token constant and head count are its own
+# (unmeasured for other models).
 PREFILL_TOKEN_BYTES = 161 * 1024
 PREFILL_SCORE_HEADS = 32
 PREFILL_SCORE_TENSOR_BYTES = 8
-PREFILL_MARGIN = 1.10
+PREFILL_MARGIN = 1.15
 # One fp32 [heads, T, L] score tensor must fit one storage-buffer binding
 # (maxStorageBufferRange 2^31-1): at T=2048, L=8192, 32 heads it is exactly
 # 2 GiB and the dispatch fails with plenty of RAM free. The cap assumes up to
