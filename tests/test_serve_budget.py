@@ -80,6 +80,13 @@ class EstimateTests(unittest.TestCase):
         self.assertEqual(budget.effective_prefill_step(512, 300), 300)
         self.assertEqual(budget.effective_prefill_step(1, 262144), 1)
 
+    def test_prefill_step_refuses_non_positive_context(self):
+        for context in (0, -1):
+            with self.assertRaises(budget.BudgetError):
+                budget.effective_prefill_step(512, context)
+            with self.assertRaises(budget.BudgetError):
+                budget.prefill_scratch_bytes(512, context)
+
     def test_no_step_means_no_prefill_scratch(self):
         # omlx, module and pair callers launch no mlx-lm prefill chunk
         est = budget.estimate_required(memory(2.11, kv_per_tok=140 * 1024), 4096)

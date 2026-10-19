@@ -764,6 +764,12 @@ class ServeLaunchTests(CliTestBase):
         self.assertEqual(step, budget.effective_prefill_step(2048, 32768))
         self.assertLess(step, 2048)
 
+    def test_zero_context_refused_not_crashed(self):
+        for value in ("0", "-5"):
+            code, seen, out, err = self.serve_local(["--context", value])
+            self.assertEqual(code, 2, (value, err))
+            self.assertIn("positive number of tokens", err)
+
     def test_prefill_step_zero_refused(self):
         code, seen, out, err = self.serve_local(["--prefill-step-size", "0"])
         self.assertEqual(code, 2)

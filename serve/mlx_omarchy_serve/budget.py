@@ -89,12 +89,16 @@ def effective_prefill_step(step: int, context_tokens: int) -> int:
     """The chunk size the backend is told to use: never above the admitted
     context (a chunk cannot exceed the request) and never so large that one
     fp32 score tensor overflows a storage-buffer binding."""
+    if context_tokens < 1:
+        raise BudgetError("context must be a positive number of tokens")
     cap = MAX_STORAGE_BINDING_BYTES // (context_tokens * PREFILL_CAP_HEADS * 4)
     return max(1, min(step, context_tokens, cap))
 
 
 def prefill_scratch_bytes(step: int, context_tokens: int) -> int:
     """Worst chunk is the last one: T tokens attending over the full context."""
+    if step < 1 or context_tokens < 1:
+        raise BudgetError("prefill step and context must be positive numbers of tokens")
     t = min(step, context_tokens)
     raw = t * PREFILL_TOKEN_BYTES + t * context_tokens * PREFILL_SCORE_HEADS * PREFILL_SCORE_TENSOR_BYTES
     return int(raw * PREFILL_MARGIN)
