@@ -732,6 +732,35 @@ class ServeLaunchTests(CliTestBase):
                 patcher.stop()
         return code, seen, out, err
 
+    def test_prefill_step_pinned_by_default(self):
+        # issue #240: without a pin, mlx-lm defaults its prefill chunk to
+        # 2048 and the first chunk allocates outside the sized margin.
+        code, seen, out, err = self.serve_local()
+        self.assertEqual(code, 0)
+        argv = seen["argv"]
+        self.assertIn("--prefill-step-size", argv)
+        self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "512")
+        self.assertIn("prefill:      512 tokens/step", out)
+
+    def test_prefill_step_flag_forwarded(self):
+        code, seen, out, err = self.serve_local(["--prefill-step-size", "256"])
+        self.assertEqual(code, 0)
+        argv = seen["argv"]
+        self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "256")
+        self.assertIn("prefill:      256 tokens/step", out)
+
+    def test_prefill_step_clamped_to_small_context(self):
+        # context 300: the largest chunk the backend can run is 300
+        code, seen, out, err = self.serve_local(["--context", "300"])
+        self.assertEqual(code, 0)
+        argv = seen["argv"]
+        self.assertEqual(argv[argv.index("--prefill-step-size") + 1], "300")
+
+    def test_prefill_step_zero_refused(self):
+        code, seen, out, err = self.serve_local(["--prefill-step-size", "0"])
+        self.assertEqual(code, 2)
+        self.assertIn("positive number of tokens", err)
+
     def test_local_model_launches_through_cap_shim(self):
         code, seen, out, err = self.serve_local()
         self.assertEqual(code, 0)

@@ -36,15 +36,38 @@ class EstimateTests(unittest.TestCase):
         kv = 256 * 1024 * 4096
         self.assertEqual(est.kv, kv)
         self.assertTrue(est.kv_known)
-        self.assertEqual(est.workspace, max(int(0.25 * 16 * GiB), GiB))
+        self.assertEqual(
+            est.workspace,
+            max(int(0.25 * 16 * GiB), GiB)
+            + budget.DEFAULT_PREFILL_STEP_TOKENS * budget.PREFILL_BYTES_PER_TOKEN)
         self.assertEqual(est.total, int(16 * GiB) + kv + est.workspace)
 
     def test_unknown_kv_adds_flat_margin(self):
         est = budget.estimate_required(memory(16.0), 4096)
         self.assertFalse(est.kv_known)
         self.assertEqual(est.kv, 0)
-        expected = max(int(0.25 * 16 * GiB), GiB) + budget.UNKNOWN_KV_MARGIN
+        expected = (max(int(0.25 * 16 * GiB), GiB)
+                    + budget.DEFAULT_PREFILL_STEP_TOKENS * budget.PREFILL_BYTES_PER_TOKEN
+                    + budget.UNKNOWN_KV_MARGIN)
         self.assertEqual(est.workspace, expected)
+
+    def test_prefill_scratch_scales_with_step(self):
+        # issue #240: a 2048-token chunk asked for one 512 MiB allocation
+        base = max(int(0.25 * 2.11 * GiB), GiB)
+        small = budget.estimate_required(memory(2.11, kv_per_tok=140 * 1024), 4096, 512)
+        big = budget.estimate_required(memory(2.11, kv_per_tok=140 * 1024), 4096, 2048)
+        self.assertEqual(small.workspace, base + 512 * 256 * 1024)
+        self.assertEqual(big.workspace, base + 2048 * 256 * 1024)
+        self.assertEqual(big.workspace - small.workspace, 512 * 1024 * 1024 - 128 * 1024 * 1024)
+
+    def test_prefill_step_must_be_positive(self):
+        with self.assertRaises(budget.BudgetError):
+            budget.estimate_required(memory(16.0), 4096, 0)
+
+    def test_peak_override_keeps_prefill_scratch(self):
+        est = budget.estimate_required(memory(16.0, peak=20.5), 8192, 2048)
+        floor = max(int(0.25 * 16 * GiB), GiB) + 2048 * 256 * 1024
+        self.assertGreaterEqual(est.total, int(16 * GiB) + est.kv + floor)
 
     def test_peak_estimate_overrides(self):
         est = budget.estimate_required(memory(16.0, peak=20.5), 8192)
