@@ -1,0 +1,86 @@
+VER start 2026-10-19T23:01:11Z boot=<id> load1=1.29 wheel mlx_omarchy-0.32.4.dev202610192245+a2b0864-cp314-cp314-linux_aarch64.whl sha256 a1eb9765672cf21873a032eeb10e3e27dc6c03be908d267585183a4101b55f5c libmlx 818270b8ca578548
+VER numerics P1 D rc=0 logits-run ids_sha256_16 5c550a6ff859286f n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+VER numerics P1 T rc=0 logits-run ids_sha256_16 669423a578bb9e76 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+VER numerics P2 D rc=0 logits-run ids_sha256_16 682cab5313ecd62d n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+VER numerics P2 T rc=0 logits-run ids_sha256_16 682cab5313ecd62d n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+VER compare P1 new default vs old TILE=0 arm
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 8.5
+  steps_with_gap_below_2x_maxdiff: 0
+VER compare P1 new TILE=1 vs old default arm
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.125
+  median_top1_top2_gap_x: 8.25
+  steps_with_gap_below_2x_maxdiff: 0
+VER compare P2 new default vs old TILE=0 arm
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.125
+  median_top1_top2_gap_x: 6.0625
+  steps_with_gap_below_2x_maxdiff: 0
+VER compare P2 new TILE=1 vs old default arm
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.25
+  median_top1_top2_gap_x: 6.1875
+  steps_with_gap_below_2x_maxdiff: 0
+VER census D tokens=6 dispatches=11992 gdn455= gdn480=210
+VER census D tokens=10 dispatches=17272 gdn455= gdn480=330
+VER census T tokens=6 dispatches=11992 gdn455=210 gdn480=
+VER census T tokens=10 dispatches=17272 gdn455=330 gdn480=
+VER time P1 round 1 D rc=0 decode 31.21 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 1 T rc=0 decode 28.91 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 1 D rc=0 decode 31.21 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 1 T rc=0 decode 28.90 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 2 T rc=0 decode 28.99 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 2 D rc=0 decode 31.26 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 2 T rc=0 decode 28.97 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 2 D rc=0 decode 31.23 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 3 D rc=0 decode 31.29 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 3 T rc=0 decode 28.90 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 3 D rc=0 decode 31.20 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 3 T rc=0 decode 28.94 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 4 T rc=0 decode 28.97 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 4 D rc=0 decode 31.21 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 4 T rc=0 decode 28.98 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 4 D rc=0 decode 31.22 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 5 D rc=0 decode 31.19 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P1 round 5 T rc=0 decode 28.95 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 5 D rc=0 decode 31.28 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER time P2 round 5 T rc=0 decode 28.99 tok/s over 63 tokens (64 requested, EOS suppres verified=match
+VER end 2026-10-19T23:05:24Z
