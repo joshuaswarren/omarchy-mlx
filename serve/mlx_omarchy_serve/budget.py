@@ -76,8 +76,12 @@ DEFAULT_CONTEXT_TOKENS = 4096           # when a catalog entry has no max_tokens
 # T = tokens in the chunk, L = KV length after it; the second term is two fp32
 # [heads, T, L] tensors (scores, softmax) alive at once. The fit under-reads by
 # up to 8.6% at L > 7k on one build and by up to 13.5% (small L) on another
-# (PR #241 comment 6279687191, v0.7.33 wheel, 8 GB base M2), hence the margin. Only this model was measured: the
-# per-token constant and head count are its own (unmeasured for other models).
+# (PR #241 comment 6279687191: Qwen3-4B-Instruct-2507-4bit at 50d4277, v0.7.33
+# wheel, 8 GB base M2), hence the margin. Both sets are contributor-reported:
+# they carry a wheel version but no scripts/mlx_provenance.py line, so they are
+# unverified builds. They only widen a safety margin, never narrow it. Only
+# this model was measured: the per-token constant and head count are its own
+# (unmeasured for other models).
 PREFILL_TOKEN_BYTES = 161 * 1024
 PREFILL_SCORE_HEADS = 32
 PREFILL_SCORE_TENSOR_BYTES = 8
