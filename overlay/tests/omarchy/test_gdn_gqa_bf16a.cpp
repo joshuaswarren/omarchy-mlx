@@ -424,26 +424,32 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
 }
 
 // The default route of the bf16 A_log decode with Hv == 2 * Hk or Hv == 3 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads;
-// Qwen3.8-27B: 16 key heads, 48 value heads). On G13C the untiled prefetch kernel is the default (about 8 and 5.8 percent faster decode
-// there; not bit-equal to the tiled kernel, so the case does not compare the default with the tiled run). Every other part keeps its
-// previous default. Explicit MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) and equal
-// head counts keep the previous default.
+// Qwen3.8-27B: 16 key heads, 48 value heads). The untiled prefetch kernel is the default on G13C at both ratios (about 8 and 5.8 percent
+// faster decode) and on G14C at ratio 3 only (about 6 percent; ratio 2 was not measured there). It is not bit-equal to the tiled kernel,
+// so the case does not compare the default with the tiled run. Every other part keeps its previous default. Explicit
+// MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) and equal head counts keep the
+// previous default.
 TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it") {
-  CHECK(omarchy::gdn_bf16a_untiled_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("Apple M1 Ultra (G13D C0)"));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
-  CHECK(omarchy::gdn_bf16a_untiled_default_shape(16, 32));
-  CHECK(omarchy::gdn_bf16a_untiled_default_shape(16, 48));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_shape(16, 64));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_shape(16, 16));
-  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_shape(0, 0));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 32));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 64));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M1 Max (G13C C0)", 0, 0));
+  CHECK(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 64));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default("Apple M2 Max (G14C B1)", 0, 0));
+  for (const char* other : {"Apple M1 (G13G B1)", "Apple M1 Ultra (G13D C0)", "llvmpipe (LLVM 15.0.6, 256 bits)"}) {
+    CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 32));
+    CHECK_FALSE(omarchy::gdn_bf16a_untiled_default(other, 16, 48));
+  }
   if (!compute_available()) return;
   Stream s = gpu_stream();
   provenance("gdn_bf16a_untiled_default");
   const std::string& device = omarchy::device(0).capabilities().device_name;
-  const bool measured = omarchy::gdn_bf16a_untiled_default_part(device);
+  const bool measured2 = omarchy::gdn_bf16a_untiled_default(device, 16, 32);
+  const bool measured3 = omarchy::gdn_bf16a_untiled_default(device, 16, 48);
   const bool legacy = device.find("G13") != std::string::npos && device.find("G13C") == std::string::npos;
   using K = omarchy::ComputeKernel;
   const EnvVar no_tile{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr};
@@ -462,13 +468,13 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
   EnvRun on_tile = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag, no_bf16a}, s);
   EnvRun off_tile = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag, no_bf16a}, s);
   EnvRun gqa = run_env(in, in.q, in.k, {no_tile, no_flag, {"MLX_OMARCHY_GDN_GQA_BF16A", "1"}}, s);
-  std::cout << "[gdn_bf16a_untiled_default] device \"" << device << "\" measured " << measured << " legacy " << legacy
+  std::cout << "[gdn_bf16a_untiled_default] device \"" << device << "\" measured ratio 2 " << measured2 << " ratio 3 " << measured3 << " legacy " << legacy
             << ": default " << def.run.dispatches << " dispatches kernel " << def.kernel << ", tiled " << on_tile.run.dispatches
             << ", untiled " << off_tile.run.dispatches << "\n";
-  CHECK_EQ(def.kernel, (measured || legacy) ? untiled : tiled);
+  CHECK_EQ(def.kernel, (measured2 || legacy) ? untiled : tiled);
   CHECK_EQ(on_tile.kernel, tiled);
   CHECK_EQ(off_tile.kernel, untiled);
-  CHECK(same(def.run, (measured || legacy) ? off_tile.run : on_tile.run, s));
+  CHECK(same(def.run, (measured2 || legacy) ? off_tile.run : on_tile.run, s));
   CHECK_EQ(def.run.dispatches, on_tile.run.dispatches);
   CHECK_EQ(off_tile.run.dispatches, on_tile.run.dispatches);
   // The native-GQA opt-in keeps the tiled kernel (the earlier change), also where the untiled kernel is the default.
@@ -484,10 +490,10 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
     EnvRun r_off = run_env(b, b.q, b.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag, no_bf16a}, s);
     EnvRun r_gqa = run_env(b, b.q, b.k, {no_tile, no_flag, {"MLX_OMARCHY_GDN_GQA_BF16A", "1"}}, s);
     std::cout << "[gdn_bf16a_untiled_default] ratio 3: default kernel " << r.kernel << ", " << r.run.dispatches << " dispatches\n";
-    CHECK_EQ(r.kernel, (measured || legacy) ? untiled : tiled);
+    CHECK_EQ(r.kernel, (measured3 || legacy) ? untiled : tiled);
     CHECK_EQ(r_on.kernel, tiled);
     CHECK_EQ(r_off.kernel, untiled);
-    CHECK(same(r.run, (measured || legacy) ? r_off.run : r_on.run, s));
+    CHECK(same(r.run, (measured3 || legacy) ? r_off.run : r_on.run, s));
     CHECK_EQ(r_gqa.kernel, legacy ? untiled : kind(K::GatedDeltaDecodeBF16Gqa));
   }
   // Head ratio 4 (16 key heads, 64 value heads) is not a measured shape: the previous default on every part.

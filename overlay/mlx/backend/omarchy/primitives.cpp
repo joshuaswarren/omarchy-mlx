@@ -12778,14 +12778,13 @@ void GatedDeltaUpdate::eval_gpu(
   const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
       decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
       gdn_decode_tile_enabled(encoder);
-  // bf16 A_log with Hv == 2 * Hk or Hv == 3 * Hk (the shapes measured on Qwen3.6-35B-A3B, 16 and 32 heads, and Qwen3.8-27B, 16 and 48
-  // heads): the untiled prefetch kernel is the default on the parts of gdn_bf16a_untiled_default_part, unless
+  // bf16 A_log with Hk != Hv: the untiled prefetch kernel is the default on the (part, head ratio) pairs of
+  // gdn_bf16a_untiled_default (G13C at Hv == 2 * Hk or 3 * Hk, G14C at Hv == 3 * Hk), unless
   // MLX_OMARCHY_GDN_DECODE_TILE is set (1 keeps the tiled kernel), MLX_OMARCHY_GDN_PF=0
   // or MLX_OMARCHY_GDN_GQA_BF16A=1 (the tiled native-GQA opt-in). The expansion copies run as on the tiled route.
   const bool bf16a_untiled_default = decode_shape && raw_gates_mode && Hk != Hv &&
-      omarchy::gdn_bf16a_untiled_default_shape(Hk, Hv) &&
       A_log.dtype() == bfloat16 && !gqa_bf16a && decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
-      omarchy::gdn_bf16a_untiled_default_part(encoder.device().capabilities().device_name);
+      omarchy::gdn_bf16a_untiled_default(encoder.device().capabilities().device_name, Hk, Hv);
   if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a && !pf_gqa) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
