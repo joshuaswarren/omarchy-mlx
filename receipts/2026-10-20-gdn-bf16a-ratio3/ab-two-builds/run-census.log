@@ -1,0 +1,11 @@
+R3 census start 2026-10-20T05:13:45Z boot=2abdc10a kernel=7.1.12-2-12.6-sep-ARCH governor=performance load1=0.08
+R3 census env GDN/MLX/HK/AGX present: 0
+R3 census N wheel mlx_omarchy-0.32.4.dev202610200429+2939e78-cp314-cp314-linux_aarch64.whl sha256 567c99392954092f308cbd546968a6bb09b193d8def5be2de62260155bceeb06 libmlx 451ccdea64b12f54
+R3 census O wheel mlx_omarchy-0.32.4.dev202610200425+657582a-cp314-cp314-linux_aarch64.whl sha256 f047c15b6dddb64daa6f56cb468f41c894ec69df09963bb136a240615453288c libmlx 55bd83b2450afce8
+R3 census test binary sha256 dfcd4b86a7f16b662f09c062d2f0ce5e39ca324557fe885879819eea32fc186a driver 40282811c6e14ef9
+R3 census scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a numcmp 3861d97963fd3100
+R3 census census N D tokens=6 dispatches=7491 kernels=34 455= 480=336
+R3 census census N D tokens=10 dispatches=10283 kernels=34 455= 480=528
+R3 census census N T tokens=6 dispatches=7491 kernels=34 455=336 480=
+R3 census census N T tokens=10 dispatches=10283 kernels=34 455=528 480=
+R3 census end 2026-10-20T05:14:17Z

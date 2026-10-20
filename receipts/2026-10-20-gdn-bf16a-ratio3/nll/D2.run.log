@@ -1,0 +1,6 @@
+NLL27 start 2026-10-20T04:00:04Z part=D2 arm=D first=0 count=32 kernel=7.1.12-2-12.6-sep-ARCH boot=2abdc10a governor=performance load1=0.10
+NLL27 env GDN/MLX/HK/AGX present: 0
+NLL27 nll_pair abdf0dcdbf3b16eb nll_cmp 2ff32652d390afce text e7c41800016e3620
+NLL27 == arm D env MLX_AB_UNUSED=1 04:00:04
+NLL27 part D2 rc=0 NLL mean 1.12385 over 2048 positions; top1_digest eab67ef36fb016b7; last_logits_digest 25e7ff38967fb78c; step_median_ms 79.93
+NLL27 end 2026-10-20T04:05:58Z

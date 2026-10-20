@@ -1,0 +1,17 @@
+nll_cmp 2ff32652d390afce
+U minus D: prefixes 128 (windows 0..127), positions 8192
+  mean NLL A 0.94732  B 0.94625
+  paired mean +0.00107  cluster SE 0.00062  interval [-0.00018, +0.00232]  position-level SE 0.00063
+  bound +-0.02: ACCEPT (interval inside)
+  VACUITY GUARD: positions with nll A != nll B 7825 of 8192; windows with any difference 128 of 128
+  argmax disagreements 91 of 8192 positions; first at (prefix, step) (0, 5)
+  top1 digest A 24b233eac5fcb8ab  B c132de0be6c2efd6
+  per-prefix mean differences: +0.015 -0.001 +0.002 -0.003 +0.004 -0.004 -0.011 -0.000 -0.003 +0.011 -0.000 -0.006 -0.000 +0.006 -0.001 +0.015 +0.007 -0.004 -0.010 -0.001 +0.001 -0.008 +0.007 +0.005 +0.002 -0.000 +0.004 -0.007 +0.008 +0.009 +0.006 -0.023 +0.000 +0.014 -0.000 -0.009 -0.015 -0.008 +0.014 -0.005 -0.003 +0.007 +0.010 +0.003 -0.010 -0.006 +0.015 -0.009 -0.011 +0.005 +0.008 -0.006 -0.001 -0.006 -0.006 -0.001 +0.008 +0.006 -0.004 +0.001 +0.001 +0.005 +0.005 -0.008 +0.005 -0.003 -0.000 -0.001 +0.016 +0.004 +0.014 -0.004 +0.010 -0.000 -0.009 -0.004 +0.005 +0.008 +0.001 -0.004 +0.003 -0.001 +0.004 +0.002 +0.005 +0.002 -0.001 +0.003 +0.011 -0.011 +0.002 -0.008 -0.001 -0.003 -0.001 -0.008 -0.009 +0.007 +0.004 +0.003 +0.003 -0.002 +0.000 -0.009 +0.004 +0.006 +0.002 +0.003 +0.004 +0.000 +0.000 -0.000 -0.002 +0.016 -0.003 -0.001 -0.009 -0.001 +0.007 -0.001 +0.005 +0.009 +0.006 +0.018 +0.001 +0.007 +0.010 +0.006
+D2 minus D (prefixes 0-31): prefixes 32 (windows 0..31), positions 2048
+  mean NLL A 1.12385  B 1.12385
+  paired mean +0.00000  cluster SE 0.00000  interval [+0.00000, +0.00000]  position-level SE 0.00000
+  bound +-0.02: ACCEPT (interval inside)
+  VACUITY GUARD: positions with nll A != nll B 0 of 2048; windows with any difference 0 of 32  (ZERO: the route switch changed nothing; the interval is VOID)
+  argmax disagreements 0 of 2048 positions; first at (prefix, step) None
+  top1 digest A eab67ef36fb016b7  B eab67ef36fb016b7
+  per-prefix mean differences: +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000

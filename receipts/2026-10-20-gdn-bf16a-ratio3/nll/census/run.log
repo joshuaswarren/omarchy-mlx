@@ -1,0 +1,11 @@
+D27 start 2026-10-20T02:44:53Z part=census kernel=7.1.12-2-12.6-sep-ARCH boot=2abdc10a governor=performance load1=0.16
+D27 env GDN/MLX/HK/AGX present: 0
+D27 wheel mlx_omarchy-0.32.4.dev202610181348+49e6b3c1-cp314-cp314-linux_aarch64.whl sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59 libmlx 960f0f358a2aba25 driver 40282811c6e14ef9
+D27 scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a
+D27 census D tokens=6 dispatches=7491 kernels=34 verified=match
+D27 census D tokens=10 dispatches=10283 kernels=34 verified=match
+D27 census U tokens=6 dispatches=7491 kernels=34 verified=match
+D27 census U tokens=10 dispatches=10283 kernels=34 verified=match
+D27 census G tokens=6 dispatches=6819 kernels=34 verified=match
+D27 census G tokens=10 dispatches=9227 kernels=34 verified=match
+D27 end 2026-10-20T02:45:41Z

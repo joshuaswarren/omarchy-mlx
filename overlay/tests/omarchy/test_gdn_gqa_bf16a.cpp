@@ -421,32 +421,24 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
     EnvRun r = run_env(e, e.q, e.k, {no_tile, no_flag}, s);
     CHECK_EQ(r.kernel, kind(legacy ? K::GatedDeltaDecodeBF16PfComposed : K::GatedDeltaDecodeBF16Composed));
   }
-  // A bf16 A_log (the Qwen3.8 family, 16 key heads and 48 value heads): never the new kernel. Default is the previous one; the
-  // bf16a switch of the earlier change still selects GatedDeltaDecodeBF16Gqa where the tile is on.
-  {
-    Inputs b = make_inputs(Shape27{}, /*a_log_f32=*/false, s);
-    eval(std::vector<array>{b.q, b.k, b.v, b.a, b.b, b.a_log, b.dt_bias, b.h0});
-    omarchy::get_command_encoder(s).synchronize("gdn_pf_default_inputs_bf16");
-    EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
-    CHECK_EQ(r.kernel, kind(legacy ? K::GatedDeltaDecodeBF16Pf : K::GatedDeltaDecodeBF16));
-    EnvRun r_flag = run_env(b, b.q, b.k, {no_tile, no_flag, {"MLX_OMARCHY_GDN_GQA_BF16A", "1"}}, s);
-    CHECK_EQ(r_flag.kernel, kind(legacy ? K::GatedDeltaDecodeBF16Pf : K::GatedDeltaDecodeBF16Gqa));
-    CHECK(same(r.run, r_flag.run, s));
-    EnvRun r_pf = run_env(b, b.q, b.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "1"}, no_bf16a}, s);
-    CHECK_EQ(r_pf.kernel, r.kernel);
-  }
 }
 
-// The default route of the bf16 A_log decode with Hv == 2 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads). On G13C the untiled
-// prefetch kernel is the default (about 8 percent faster decode there; not bit-equal to the tiled kernel, so the case does not compare
-// the default with the tiled run). Every other part keeps its previous default. Explicit MLX_OMARCHY_GDN_DECODE_TILE and the bf16a
-// native-GQA opt-in win; another head ratio (the Qwen3.8 family, 16 and 48) and equal head counts keep the previous default.
+// The default route of the bf16 A_log decode with Hv == 2 * Hk or Hv == 3 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads;
+// Qwen3.8-27B: 16 key heads, 48 value heads). On G13C the untiled prefetch kernel is the default (about 8 and 5.8 percent faster decode
+// there; not bit-equal to the tiled kernel, so the case does not compare the default with the tiled run). Every other part keeps its
+// previous default. Explicit MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) and equal
+// head counts keep the previous default.
 TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it") {
   CHECK(omarchy::gdn_bf16a_untiled_default_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("Apple M1 Ultra (G13D C0)"));
   CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
+  CHECK(omarchy::gdn_bf16a_untiled_default_shape(16, 32));
+  CHECK(omarchy::gdn_bf16a_untiled_default_shape(16, 48));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_shape(16, 64));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_shape(16, 16));
+  CHECK_FALSE(omarchy::gdn_bf16a_untiled_default_shape(0, 0));
   if (!compute_available()) return;
   Stream s = gpu_stream();
   provenance("gdn_bf16a_untiled_default");
@@ -482,11 +474,29 @@ TEST_CASE("gdn raw decode bf16 A_log: the default kernel by part, the switches a
   // The native-GQA opt-in keeps the tiled kernel (the earlier change), also where the untiled kernel is the default.
   CHECK_EQ(gqa.kernel, legacy ? untiled : kind(K::GatedDeltaDecodeBF16Gqa));
 
-  // Another head ratio (16 key heads, 48 value heads): the previous default on every part.
+  // Head ratio 3 (16 key heads, 48 value heads, Qwen3.8-27B): the same route as ratio 2, with the same switches.
   {
     Inputs b = make_inputs(Shape27{}, /*a_log_f32=*/false, s);
     eval(std::vector<array>{b.q, b.k, b.v, b.a, b.b, b.a_log, b.dt_bias, b.h0});
     omarchy::get_command_encoder(s).synchronize("gdn_bf16a_default_inputs_48");
+    EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
+    EnvRun r_on = run_env(b, b.q, b.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag, no_bf16a}, s);
+    EnvRun r_off = run_env(b, b.q, b.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag, no_bf16a}, s);
+    EnvRun r_gqa = run_env(b, b.q, b.k, {no_tile, no_flag, {"MLX_OMARCHY_GDN_GQA_BF16A", "1"}}, s);
+    std::cout << "[gdn_bf16a_untiled_default] ratio 3: default kernel " << r.kernel << ", " << r.run.dispatches << " dispatches\n";
+    CHECK_EQ(r.kernel, (measured || legacy) ? untiled : tiled);
+    CHECK_EQ(r_on.kernel, tiled);
+    CHECK_EQ(r_off.kernel, untiled);
+    CHECK(same(r.run, (measured || legacy) ? r_off.run : r_on.run, s));
+    CHECK_EQ(r_gqa.kernel, legacy ? untiled : kind(K::GatedDeltaDecodeBF16Gqa));
+  }
+  // Head ratio 4 (16 key heads, 64 value heads) is not a measured shape: the previous default on every part.
+  {
+    Shape27 r4;
+    r4.Hv = 64;
+    Inputs b = make_inputs(r4, /*a_log_f32=*/false, s);
+    eval(std::vector<array>{b.q, b.k, b.v, b.a, b.b, b.a_log, b.dt_bias, b.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_bf16a_default_inputs_64");
     EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
     CHECK_EQ(r.kernel, legacy ? untiled : tiled);
   }
