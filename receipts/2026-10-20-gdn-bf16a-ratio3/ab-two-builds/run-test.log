@@ -1,0 +1,8 @@
+R3 test start 2026-10-20T04:59:20Z boot=2abdc10a kernel=7.1.12-2-12.6-sep-ARCH governor=performance load1=0.51
+R3 test env GDN/MLX/HK/AGX present: 0
+R3 test N wheel mlx_omarchy-0.32.4.dev202610200429+2939e78-cp314-cp314-linux_aarch64.whl sha256 567c99392954092f308cbd546968a6bb09b193d8def5be2de62260155bceeb06 libmlx 451ccdea64b12f54
+R3 test O wheel mlx_omarchy-0.32.4.dev202610200425+657582a-cp314-cp314-linux_aarch64.whl sha256 f047c15b6dddb64daa6f56cb468f41c894ec69df09963bb136a240615453288c libmlx 55bd83b2450afce8
+R3 test test binary sha256 dfcd4b86a7f16b662f09c062d2f0ce5e39ca324557fe885879819eea32fc186a driver 40282811c6e14ef9
+R3 test scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a numcmp 3861d97963fd3100
+R3 test test all rc=1 [doctest] test cases:   8 |   7 passed | 1 failed | 0 skipped [doctest] assertions: 119 | 117 passed | 2 failed |
+R3 test end 2026-10-20T04:59:21Z

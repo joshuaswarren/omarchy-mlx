@@ -1,0 +1,20 @@
+D27 start 2026-10-20T02:46:35Z part=timeP1 kernel=7.1.12-2-12.6-sep-ARCH boot=2abdc10a governor=performance load1=0.32
+D27 env GDN/MLX/HK/AGX present: 0
+D27 wheel mlx_omarchy-0.32.4.dev202610181348+49e6b3c1-cp314-cp314-linux_aarch64.whl sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59 libmlx 960f0f358a2aba25 driver 40282811c6e14ef9
+D27 scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a
+D27 time P1 round 1 D rc=0 decode 14.07 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 1 U rc=0 decode 14.89 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 1 G rc=0 decode 14.19 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 2 U rc=0 decode 14.90 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 2 G rc=0 decode 14.19 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 2 D rc=0 decode 14.08 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 3 G rc=0 decode 14.18 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 3 D rc=0 decode 14.09 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 3 U rc=0 decode 14.88 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 4 D rc=0 decode 14.08 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 4 G rc=0 decode 14.20 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 4 U rc=0 decode 14.88 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 5 U rc=0 decode 14.89 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 5 D rc=0 decode 14.07 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 time P1 round 5 G rc=0 decode 14.20 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+D27 end 2026-10-20T02:49:50Z
