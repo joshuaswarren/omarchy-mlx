@@ -714,11 +714,13 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 40000);
 
   // The G13C/G13G rows carry the measured values from
-  // receipts/2026-10-12-submission-cap-calibration: the 16-inch M1 Max
-  // keeps 40000 (both models land at or under 1.6 ms p50 there), the
-  // 13-inch M1 needs 5000 (40000 left it at 23.6 ms p50).
+  // receipts/2026-10-12-submission-cap-calibration and
+  // receipts/2026-10-20-g13g-batch-work-8000: the 16-inch M1 Max keeps
+  // 40000 (both models land at or under 1.6 ms p50 there), the 13-inch M1
+  // takes 8000 (40000 left it at 23.6 ms p50; 8000 lands the 2B at 3.0 ms
+  // and the 4B at 4.6 ms, inside the 2-6 ms band).
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
-  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 5000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 8000);
 
   // The uncalibrated M1 Pro row stays at 0: no guessed number for the
   // reporter's board (G13S, t6000).
@@ -727,10 +729,10 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // Nothing calibrated matches an unknown device.
   CHECK(omarchy::calibrated_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
 
-  // The default for an uncalibrated board is the most conservative
-  // calibrated value (here the 13-inch M1's 5000): shorter submissions
-  // cost a little submit overhead, longer ones are the stutter the cap
-  // prevents.
+  // The default for an uncalibrated board is the fixed fallback (5000):
+  // shorter submissions cost a little submit overhead, longer ones are the
+  // stutter the cap prevents. It does not follow the table, so
+  // recalibrating the 13-inch M1 leaves the unmeasured boards alone.
   CHECK(omarchy::batch_work_fallback() == 5000);
 
   // Every calibrated row must sit between the off switch and the old
@@ -755,16 +757,16 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // budgets however many devices ran before them: the first caller must
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
-  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 5000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
-  // 40000 or 5000 here.
+  // 40000 or 8000 here.
   CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 40000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
-  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 5000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 8000);
 
   // An unknown board keeps the conservative fallback, again per call.
   CHECK(omarchy::batch_work_budget("llvmpipe (LLVM 19.1.0, 256 bits)") == 5000);
