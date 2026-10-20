@@ -59,7 +59,7 @@ The 4B model leaves the band between 8000 and 10000. That fixes 8000 as the larg
 ## The 5000 against 8000 pairs
 
 - `runs/s7-2b-1020T174654`: Qwen3.8-2B, 5 pairs, medians. Decode 41.0 against 42.0 tok/s (+2.4%), prefill 404.8 against 409.9 (+1.3%), TTFT 1094.6 against 1081.2 ms (-1.2%). One 8000 sample (pair 5) reads 26.5 tok/s at load1 1.75; the median ignores it.
-- `runs/s7-4b-1020T174654`: Qwen3-4B, void. Another job held load1 at 1.4 to 2.7 and the first three pairs read 10.2 to 11.2 tok/s. The log stays here and no figure of it is used.
+- `runs/s7-4b-1020T174654`: Qwen3-4B, void. Its script `tools/bw8000-run.sh` compared only the integer part of load1, so it started at load 1.75; `tools/bw8000-4b.sh` compares the decimal value and produced the rerun below. Another job held load1 at 1.4 to 2.7 and the first three pairs read 10.2 to 11.2 tok/s. The log stays here and no figure of it is used.
 - `runs/s8-4b-1020T182107`: Qwen3-4B rerun with an abort-if-loaded guard (load1 0.45 to 0.66). Decode 16.3 against 16.8 tok/s (+3.1%), prefill 169.0 against 170.7 (+1.0%), TTFT 2621.3 against 2595.6 ms (-1.0%). All 5 pairs agree.
 
 ## The PR wheel against the release wheel
@@ -81,7 +81,9 @@ The gain of the PR wheel matches the environment-switch pairs above (+2.4% and +
 - Stacks: release v0.7.32 (wheel 0.32.4.dev202610101057+ae5d0950), release v0.7.33 (0.32.4.dev202610160529+33630f9c), parent and commit builds at ff4d488 and 3b24ad4.
 - Harness: `tools/ledgerab.sh` drives the coreglass ledger LLM step (`llmstep.py`, 477 prompt tokens, 128 generated, fresh process per sample, arms alternated). `tools/summ.py` prints the medians.
 
-Not recorded: the Vulkan device name string, a device reopen, and temperature or fan readings.
+Device identity, read after the runs with the PR wheel venv (`tests/device-identity.log`): the Vulkan device name is `Apple M1 (G13G B1)`, the driver is Honeykrisp on Mesa 26.3.0-devel (git e7631595df), 8 GPU cores. That name contains `G13G`, the key of the changed table row. Two fresh processes read the same identity, so the device reopened. The identity was read on the same boot as the runs, not inside them.
+
+Not recorded: temperature and fan readings, and a dispatch trace of the runs.
 
 ## Tests of the change
 
