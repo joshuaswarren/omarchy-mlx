@@ -1,5 +1,5 @@
 GAPCENSUS gapcensus-e4b-20261019T205434Z 20:54:34 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 tree main81-fix boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.21
-GAPCENSUS gapcensus-e4b-20261019T205434Z 20:54:34 tree $HOME/scratch/w71/score/main81-fix libmlx 9a225264dcf2dbcb server.py 2533fcc1f62bb3bf generate.py 5b077a35686d98cd
+GAPCENSUS gapcensus-e4b-20261019T205434Z 20:54:34 tree $HOME/scratch/score/main81-fix libmlx 9a225264dcf2dbcb server.py 2533fcc1f62bb3bf generate.py 5b077a35686d98cd
 GAPCENSUS gapcensus-e4b-20261019T205434Z 20:54:34 sha256 prefixes: script 97e6895bcd993cfc bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_gap.py b505d98d4ea1b358 gapcensus_analyze.py d382ba8fb197a9ee
 GAPCENSUS gapcensus-e4b-20261019T205434Z 20:54:50 A tokens=6 rc=0 dispatches=20733 keys=129 generated_ids sha256:964671f03e3d700e n=6 first=100,45518,107 last=8291,236789,236751
 GAPCENSUS gapcensus-e4b-20261019T205434Z 20:55:06 A tokens=10 rc=0 dispatches=26761 keys=145 generated_ids sha256:47ec4c42dfb4da55 n=10 first=100,45518,107 last=6972,1657,600

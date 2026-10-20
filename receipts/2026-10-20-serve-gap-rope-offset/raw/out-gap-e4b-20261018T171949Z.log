@@ -1,6 +1,6 @@
 SERVEGAP gap-e4b-20261018T171949Z 17:19:49 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 tree main81-fix boot <id>-94ae-4de5-802f-217372cd1341 kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.47 tokens 128 reqs 2 rounds 3
 SERVEGAP gap-e4b-20261018T171949Z 17:19:49 governors:       2 performance  (read only)
-SERVEGAP gap-e4b-20261018T171949Z 17:19:49 tree $HOME/scratch/w71/score/main81-fix libmlx 9a225264dcf2dbcb server.py 2533fcc1f62bb3bf generate.py 5b077a35686d98cd
+SERVEGAP gap-e4b-20261018T171949Z 17:19:49 tree $HOME/scratch/score/main81-fix libmlx 9a225264dcf2dbcb server.py 2533fcc1f62bb3bf generate.py 5b077a35686d98cd
 SERVEGAP gap-e4b-20261018T171949Z 17:19:49 sha256 prefixes: script 656d85b5e96c9b5e bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_gap.py b505d98d4ea1b358 thread_table.py 2bef8caee53b2909 gap_analyze.py 0081dc575cd6be0e
 started /var/tmp/sampler/rows-gap-e4b-20261018T171949Z.csv pid 68413
 SERVEGAP gap-e4b-20261018T171949Z 17:19:49 sampler csv /var/tmp/sampler/rows-gap-e4b-20261018T171949Z.csv
