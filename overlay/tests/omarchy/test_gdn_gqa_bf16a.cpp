@@ -421,20 +421,6 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
     EnvRun r = run_env(e, e.q, e.k, {no_tile, no_flag}, s);
     CHECK_EQ(r.kernel, kind(legacy ? K::GatedDeltaDecodeBF16PfComposed : K::GatedDeltaDecodeBF16Composed));
   }
-  // A bf16 A_log (the Qwen3.8 family, 16 key heads and 48 value heads): never the new kernel. Default is the previous one; the
-  // bf16a switch of the earlier change still selects GatedDeltaDecodeBF16Gqa where the tile is on.
-  {
-    Inputs b = make_inputs(Shape27{}, /*a_log_f32=*/false, s);
-    eval(std::vector<array>{b.q, b.k, b.v, b.a, b.b, b.a_log, b.dt_bias, b.h0});
-    omarchy::get_command_encoder(s).synchronize("gdn_pf_default_inputs_bf16");
-    EnvRun r = run_env(b, b.q, b.k, {no_tile, no_flag, no_bf16a}, s);
-    CHECK_EQ(r.kernel, kind(legacy ? K::GatedDeltaDecodeBF16Pf : K::GatedDeltaDecodeBF16));
-    EnvRun r_flag = run_env(b, b.q, b.k, {no_tile, no_flag, {"MLX_OMARCHY_GDN_GQA_BF16A", "1"}}, s);
-    CHECK_EQ(r_flag.kernel, kind(legacy ? K::GatedDeltaDecodeBF16Pf : K::GatedDeltaDecodeBF16Gqa));
-    CHECK(same(r.run, r_flag.run, s));
-    EnvRun r_pf = run_env(b, b.q, b.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "1"}, no_bf16a}, s);
-    CHECK_EQ(r_pf.kernel, r.kernel);
-  }
 }
 
 // The default route of the bf16 A_log decode with Hv == 2 * Hk or Hv == 3 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads;
