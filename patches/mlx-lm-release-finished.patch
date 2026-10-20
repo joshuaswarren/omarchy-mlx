@@ -11,15 +11,17 @@
  
                      for r in gen_responses:
                          result = batch_results[r.uid]
-@@ -931,6 +935,11 @@
+@@ -927,6 +931,13 @@
+ 
+                         if result["ctx"]._should_stop:
+                             uids_to_remove.append(r.uid)
++
++                    # Drop the responses before the next decode step and before the
++                    # worker waits for the next request: a finished response carries
++                    # the request's extracted KV (prompt_cache), and these names would
++                    # keep it reachable through the next `batch_generator.next()` and
++                    # until a later request rebinds them.
++                    prompt_responses = gen_responses = r = result = None
+ 
                  if batch_generator is None:
                      mx.clear_cache()
-                     continue
-+                # Drop the last responses before the worker waits for the next
-+                # request: a finished response carries the request's extracted
-+                # KV (prompt_cache), and `r` would keep it reachable until the
-+                # next request reassigned it.
-+                prompt_responses = gen_responses = r = result = None
-                 uids_to_remove = self._share_object(uids_to_remove)
-                 if uids_to_remove:
-                     batch_generator.remove(uids_to_remove)
