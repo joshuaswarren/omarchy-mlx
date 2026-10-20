@@ -69,6 +69,7 @@ SERIES_PATCHES=(
   mlx-lm-max-tokens-min-one.patch
   mlx-lm-server-skip-logprob-read.patch
   mlx-lm-generation-failure.patch
+  mlx-lm-release-finished.patch
   mlx-lm-gated-delta-fast-route.patch
   mlx-lm-gated-delta-fast-route-repeat.patch
   mlx-lm-gated-delta-raw.patch
@@ -147,6 +148,9 @@ fi
 # Generation worker failures (#240): generic waiter error, class-only log,
 # released batch state, tolerant batch close; both series.
 apply mlx-lm-generation-failure.patch
+# Finished-request KV (#245): drop the last responses before the worker idles,
+# so the extracted KV is not held until the next request; both series.
+apply mlx-lm-release-finished.patch
 apply mlx-lm-gated-delta-fast-route.patch
 # GDN fast-route Hk!=Hv repeat: Qwen3.5-9B (Hk=16, Hv=32) hit the composed
 # per-token fallback without this; A/B 42 -> 317 tok/s prefill 512 on M2.
