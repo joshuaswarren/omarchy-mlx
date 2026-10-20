@@ -1,0 +1,14 @@
+REASON reason-e4b-20261020T022729Z 02:27:29 start key e4b boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.28 rounds 1
+REASON reason-e4b-20261020T022729Z 02:27:29 sha256 prefixes: script 9af5d0271b1b504f barrier_census.py f3ea31ad5436a240 reason_analyze.py c506ad752e7b5242
+REASON reason-e4b-20261020T022729Z 02:27:44 round 1 arm A tree main81-fix load1=0.22
+REASON reason-e4b-20261020T022729Z 02:27:54 round 1 arm A rc=0 trace lines 770051
+REASON reason-e4b-20261020T022729Z 02:28:09 round 1 arm B tree main81-fix load1=0.21
+REASON reason-e4b-20261020T022729Z 02:28:19 round 1 arm B rc=0 trace lines 783737
+REASON reason-e4b-20261020T022729Z 02:28:34 round 1 arm B5 tree main81-fix5 load1=0.19
+REASON reason-e4b-20261020T022729Z 02:28:45 round 1 arm B5 rc=0 trace lines 776436
+REASON A: 10447.0 trace lines per decoded token over 61 keys
+REASON B: 10615.0 trace lines per decoded token over 64 keys
+REASON B5: 10515.0 trace lines per decoded token over 62 keys
+REASON B minus A (>= 0.5 per token): JOIN reason=rope_offset_scalar +24.0 (0.0 -> 24.0); DISPATCH kernel=103 +20.0 (0.0 -> 20.0); SUBMIT-ENTER +20.0 (13.0 -> 33.0); bind[3] +20.0 (1464.0 -> 1484.0); bind[2] +20.0 (1507.0 -> 1527.0); SUBMIT +20.0 (13.0 -> 33.0); bind[0] +20.0 (1507.0 -> 1527.0); bind[1] +20.0 (1507.0 -> 1527.0); COMMIT-NOOP +4.0 (1.0 -> 5.0)
+REASON B5 minus A (>= 0.5 per token): JOIN reason=rope_offset_scalar +24.0 (0.0 -> 24.0); SUBMIT-ENTER +20.0 (13.0 -> 33.0); SUBMIT +20.0 (13.0 -> 33.0); COMMIT-NOOP +4.0 (1.0 -> 5.0)
+REASON reason-e4b-20261020T022729Z 02:28:47 DONE

@@ -182,8 +182,21 @@ if [[ "$SERIES" == "patches/mlx-lm-0.32" ]]; then
   # rotated, prefill and window-bound states keep the mask. Needs the ssm
   # patch's `import os`. Kill switch MLX_OMARCHY_ROTKV_MASKLESS=0.
   python3 "$ROOT/scripts/patch-mlx-lm-rotkv-maskless.py" "$VENV"
+  # Batched sliding-window RoPE host joins: BatchRotatingKVCache kept its offset as
+  # a lazy device add, and gemma4_text.py copied the batch offset with
+  # mx.array(cache.offset), a Copy node with a primitive. The omarchy RoPE gate
+  # reads only a host constant directly, so every own-cache layer (24 in
+  # gemma-4-E4B) joined the stream and the evaluator committed: +24 host joins,
+  # +20 submissions and +3.8 ms per token against bench_decode on a 13-inch M1
+  # (2026-10-20 trace census; token ids unchanged). The rotating cache now
+  # keeps the same host offset mirror as BatchKVCache and the gemma-4 layer
+  # passes an array offset through. Needs kv-host-offset and rotkv-maskless.
+  # Kill switch MLX_OMARCHY_KV_HOST_OFFSET=0 (the gemma-4 pass-through is
+  # value-identical either way).
+  python3 "$ROOT/scripts/patch-mlx-lm-rotkv-host-offset.py" "$VENV"
+  python3 "$ROOT/scripts/patch-mlx-lm-gemma4-rope-offset.py" "$VENV"
 else
-  # All three patchers anchor on the mlx-lm 0.32 batched-cache API (prepare/
+  # All these patchers anchor on the mlx-lm 0.32 batched-cache API (prepare/
   # finalize right-padding mirrors, host-list filter); 0.31.3's older BatchKVCache
   # predates them (its filter even syncs via .min().item()) and upstream
   # reworked the class in 0.32, so there is nothing to port onto. The served
@@ -191,6 +204,7 @@ else
   # the upstream array mask and lazy offset (slower, never wrong). See
   # docs/kernel-flags.md.
   echo "kv-maskless/kv-host-offset/rotkv-maskless: 0.32 series only; skipped on $SERIES"
+  echo "rotkv-host-offset/gemma4-rope-offset: 0.32 series only; skipped on $SERIES"
 fi
 apply mlx-lm-greedy-prune.patch
 # Greedy GenerationBatch steps (BatchGenerator / oMLX) can take the pruned
