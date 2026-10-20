@@ -1,0 +1,12 @@
+[doctest] listing all test case names
+===============================================================================
+gdn raw decode bf16 A_log: native GQA equals the expanded and the repeated routes bit for bit
+gdn raw decode: calls outside the bf16 A_log native route do not change
+gdn raw decode f32 A_log, tile off: native GQA through the prefetch kernel equals the expanded and the repeated routes
+gdn raw decode: calls outside the prefetch native GQA route do not change
+gdn raw decode f32 A_log: the default kernel by part, the switches and the routes outside it
+gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it
+gdn raw decode bf16 A_log: MLX_OMARCHY_GDN_PF=0 keeps the tiled default (fresh process)
+gdn raw decode f32 A_log: the global GQA kill switch gates the opt-in route (fresh process)
+===============================================================================
+[doctest] unskipped test cases passing the current filters: 8

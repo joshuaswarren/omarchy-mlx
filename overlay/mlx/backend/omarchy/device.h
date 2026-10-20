@@ -509,19 +509,18 @@ inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
       device_name.find("G13C") != std::string::npos;
 }
 
-// GatedDeltaUpdate decode on the bf16 A_log raw route with a head ratio Hv / Hk of 2 or 3 (Qwen3.6-35B-A3B: 16 key heads, 32 value
-// heads; Qwen3.8-27B: 16 key heads, 48 value heads): the parts whose default is the untiled prefetch kernel
-// (ComputeKernel::GatedDeltaDecodeBF16Pf) with the expansion copies. On G13C it was about 8 percent (ratio 2) and 5.8 percent (ratio 3)
-// faster in decode and not worse in teacher-forced NLL by the 2 SE rule, but it is not bit-equal to the tiled kernel
-// (receipts/2026-10-19-gdn-bf16a-untiled, receipts/2026-10-20-gdn-bf16a-ratio3). Keyed on the device name and the two measured
-// ratios, so an unmeasured part or ratio keeps the tiled default. Pure.
-inline bool gdn_bf16a_untiled_default_shape(int hk, int hv) {
-  return hk > 0 && (hv == 2 * hk || hv == 3 * hk);
-}
-
-// The part: G13C (M1 Max) only.
-inline bool gdn_bf16a_untiled_default_part(const std::string& device_name) {
-  return device_name.find("G13C") != std::string::npos;
+// GatedDeltaUpdate decode on the bf16 A_log raw route with Hk != Hv: the (part, head ratio) pairs whose default is the untiled prefetch
+// kernel (ComputeKernel::GatedDeltaDecodeBF16Pf) with the expansion copies. Measured faster in decode and not worse in teacher-forced NLL
+// by the 2 SE rule, but not bit-equal to the tiled kernel:
+//   G13C (M1 Max): ratio 2 (Qwen3.6-35B-A3B, 16 and 32 heads, about 8 percent) and ratio 3 (Qwen3.8-27B, 16 and 48 heads, 5.8 percent),
+//     receipts/2026-10-19-gdn-bf16a-untiled and receipts/2026-10-20-gdn-bf16a-ratio3;
+//   G14C (M2 Max): ratio 3 only (about 6 percent), receipts/2026-10-20-gdn-bf16a-g14c-ratio3; ratio 2 was not measured there.
+// Keyed on the device name and the head ratio, so an unmeasured pair keeps the tiled default. Pure.
+inline bool gdn_bf16a_untiled_default(const std::string& device_name, int hk, int hv) {
+  if (hk <= 0) return false;
+  if (device_name.find("G13C") != std::string::npos) return hv == 2 * hk || hv == 3 * hk;
+  if (device_name.find("G14C") != std::string::npos) return hv == 3 * hk;
+  return false;
 }
 
 } // namespace mlx::core::omarchy
