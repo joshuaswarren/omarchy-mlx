@@ -1,0 +1,11 @@
+G14R census start 2026-10-20T14:23:11Z boot=98f40d84 kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=0.01
+G14R census env GDN/MLX/HK/AGX present: 0
+G14R census N wheel mlx_omarchy-0.32.4.dev202610201405+7076d7a-cp314-cp314-linux_aarch64.whl sha256 d0d205ed5b4067822ff4ad7d5c42954db6c0555cf3dc89d91abd18c87664641e libmlx a32e5cdf868fb03e
+G14R census O wheel mlx_omarchy-0.32.4.dev202610201359+c163e54-cp314-cp314-linux_aarch64.whl sha256 730553fabd04f26dabbe30c374a7037149d2cd12354a344d43b09077dbbbdbcb libmlx 0c3f6d711e49914d
+G14R census test binary sha256 597311bc8ba70416f186208d7410d3635522b2dae2fcda636380514dcb34fc6c driver c499962c742f399a
+G14R census scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a numcmp 3861d97963fd3100
+G14R census census N D tokens=6 dispatches=7491 kernels=34 455= 480=336
+G14R census census N D tokens=10 dispatches=10283 kernels=34 455= 480=528
+G14R census census N T tokens=6 dispatches=7491 kernels=34 455=336 480=
+G14R census census N T tokens=10 dispatches=10283 kernels=34 455=528 480=
+G14R census end 2026-10-20T14:23:45Z

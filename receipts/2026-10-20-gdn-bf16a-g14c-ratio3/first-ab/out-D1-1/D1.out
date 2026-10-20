@@ -1,0 +1,12 @@
+PROVENANCE mlx-omarchy 0.32.4.dev202610200902+f334420 device Apple M2 Max (G14C B1) libs {"libmlx.so": "1a2af63453eeb246"} WORD unset SUB unset DIRECT unset load1 0.1357421875
+TEXT sha256 e7c41800016e36208d0a7b4707332893f58df5bfea9f336d303503dfe3efb27d bytes 529411
+IDS 126996 needed 73856 prefix windows 64 to 127
+prefix 71 running mean_nll 0.70739 step_median_ms 73.56
+prefix 79 running mean_nll 0.63506 step_median_ms 73.64
+prefix 87 running mean_nll 0.68217 step_median_ms 73.72
+prefix 95 running mean_nll 0.81837 step_median_ms 73.86
+prefix 103 running mean_nll 0.82163 step_median_ms 73.82
+prefix 111 running mean_nll 0.82298 step_median_ms 73.88
+prefix 119 running mean_nll 0.81561 step_median_ms 73.91
+prefix 127 running mean_nll 0.83380 step_median_ms 73.89
+NLL mean 0.83380 over 4096 positions; top1_digest 39fb42b5b8050146; last_logits_digest f8518a3727e19568; step_median_ms 73.89

@@ -1,0 +1,7 @@
+G14C start 2026-10-20T11:31:59Z part=D0 kernel=7.1.12-2-20261013.18-sep-ARCH boot=98f40d84 governor=performance  load1=0.28
+G14C env GDN/MLX/HK/AGX present: 0
+G14C wheel mlx_omarchy-0.32.4.dev202610200902+f334420-cp314-cp314-linux_aarch64.whl sha256 d05326b0835cf47b8a21fc4cf9c1f9f22e8813a00feb1963f67eb79bd4933d8c libmlx 1a2af63453eeb246 driver c499962c742f399a
+G14C mlx_lm gated_delta 0d5cd194449cd36e
+G14C scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a nll_pair abdf0dcdbf3b16eb nll_cmp 2ff32652d390afce
+G14C part D0 rc=0 NLL mean 1.05870 over 4096 positions; top1_digest 1ab0bf7cfbc978f2; last_logits_digest 1ad4be3d625a333b; step_median_ms 74.13
+G14C end 2026-10-20T11:42:43Z

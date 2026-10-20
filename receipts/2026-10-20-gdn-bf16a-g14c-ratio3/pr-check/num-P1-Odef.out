@@ -1,0 +1,2 @@
+provenance: mlx-omarchy 0.32.4.dev202610201359+c163e54 mx=0.32.4.dev202610201359+c163e54 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:0c3f6d711e49914d
+logits-run ids_sha256_16 3265cb36223ebb1f n=128 prompt_tokens=62 vocab=248320 full_steps=8

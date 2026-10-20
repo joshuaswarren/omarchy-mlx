@@ -1,0 +1,13 @@
+IDLE-GUARD-JOB-START 20261020T114340Z perf: TIMING G14C Qwen3.8-27B-4bit GDN decode tiled vs untiled, NLL untiled arm, prefixes 0 to 63; no default change from this ticket
+KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.10 SETTLED
+GPU-TIMEOUTS before=0 boot=98f40d84-f9b9-4b92-a7b0-da076e4a65f5
+G14C start 2026-10-20T11:43:40Z part=U0 kernel=7.1.12-2-20261013.18-sep-ARCH boot=98f40d84 governor=performance  load1=0.10
+G14C env GDN/MLX/HK/AGX present: 0
+G14C wheel mlx_omarchy-0.32.4.dev202610200902+f334420-cp314-cp314-linux_aarch64.whl sha256 d05326b0835cf47b8a21fc4cf9c1f9f22e8813a00feb1963f67eb79bd4933d8c libmlx 1a2af63453eeb246 driver c499962c742f399a
+G14C mlx_lm gated_delta 0d5cd194449cd36e
+G14C scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a nll_pair abdf0dcdbf3b16eb nll_cmp 2ff32652d390afce
+G14C part U0 rc=0 NLL mean 1.05899 over 4096 positions; top1_digest 114e090d17da12f1; last_logits_digest 50ecf6e6456ff39a; step_median_ms 71.36
+G14C end 2026-10-20T11:54:09Z
+GPU-TIMEOUTS after=0 delta=0
