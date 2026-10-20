@@ -1,19 +1,18 @@
-"""A finished request's extracted KV must not stay reachable while the worker waits for the next request (#245).
+"""A finished request's KV must not stay reachable while the worker decodes or waits for the next request (#245).
 
-mlx-lm's generation loop keeps `r` (the last response of the finished request) alive after the loop ends, and a finished
-response carries `prompt_cache=extract_cache(i)`: the request's whole KV. The worker thread then waits for the next request
-with that frame alive, so serve held about one extra KV copy after an answer until the next request replaced it."""
+Two bindings in mlx-lm's generation loop kept KV alive:
+- `r` (the last response of the finished request) carries `prompt_cache=extract_cache(i)`, the request's whole KV, and stayed bound while
+  the worker waited for the next request;
+- `cache` (the loop variable of the end-of-segment extraction `for uid, (cache, cache_key) in caches.items()`) stayed bound after `del caches`:
+  with --prompt-cache-size 0 that is the whole prompt's KV, alive through decode and while the worker waits."""
 from collections import deque
 import gc
 import logging
-from queue import Queue
-import weakref
-from types import SimpleNamespace
-
-import pytest
-
-import subprocess
 from pathlib import Path
+from queue import Queue
+import subprocess
+from types import SimpleNamespace
+import weakref
 
 import pytest
 
@@ -29,36 +28,37 @@ def patched_source(request, tmp_path_factory):
     series = "patches" if request.param == "0.31.3" else "patches/mlx-lm-0.32"
     site = root / "lib/python3.11/site-packages"
     for name in ("mlx-lm-generation-failure.patch", "mlx-lm-release-finished.patch"):
-        if name == "mlx-lm-release-finished.patch" and not (REPO / series / name).exists():
-            continue
         subprocess.run(["patch", "--directory", str(site), "--strip=1", "--fuzz=0", "--quiet"],
                        input=(REPO / series / name).read_bytes(), check=True)
     return site / "mlx_lm/server.py"
 
 
-def test_finished_request_cache_released_while_waiting(patched_source):
-    server_source = patched_source
+class Buffer:
+    nbytes = 8
+
+    def __init__(self):
+        self.tokens = [1]
+
+    def is_trimmable(self):
+        return False
+
+
+def run_worker(server_source, segmented):
+    """One request through the patched worker. Returns (finished-response KV alive while waiting,
+    segment KV alive during decode, segment KV alive while waiting)."""
     queue = Queue()
-    owned = []
-    alive_while_waiting = []
+    final = []
+    segment = []
+    seen = {"decode": [], "waiting": [], "final_waiting": []}
     tokenizer = SimpleNamespace(has_tool_calling=False, has_thinking=False, tool_parser=None,
                                 detokenizer=SimpleNamespace(add_token=lambda token: None, finalize=lambda: None, last_segment="ok"))
     provider = SimpleNamespace(load_default=lambda: None, model_key="model", load=lambda *args: (None, tokenizer),
                                cli_args=SimpleNamespace(decode_concurrency=1, prompt_concurrency=1,
                                                         prefill_step_size=512, prompt_cache_bytes=None))
 
-    class Buffer:
-        nbytes = 8
-
-        def __init__(self):
-            self.tokens = [1]
-
-        def is_trimmable(self):
-            return False
-
     class Batch:
         def __init__(self, *args, **kwargs):
-            pass
+            self.calls = 0
 
         def insert_segments(self, **kwargs):
             self.prompt = kwargs["segments"][0][0]
@@ -68,14 +68,25 @@ def test_finished_request_cache_released_while_waiting(patched_source):
             pass
 
         def next(self):
+            self.calls += 1
+            if segmented and self.calls == 1:
+                # the user segment ends: the loop extracts the segment cache (the prompt's KV)
+                return [SimpleNamespace(uid=1, progress=(0, 1), end_of_segment=True, end_of_prompt=False)], []
+            if segmented and self.calls == 2:
+                gc.collect()
+                seen["decode"].extend(ref() is not None for ref in segment)
             buffer = Buffer()
-            owned.append(weakref.ref(buffer))
+            final.append(weakref.ref(buffer))
             return [], [SimpleNamespace(uid=1, token=7, current_state="normal", match_sequence=None,
                                         logprobs={7: SimpleNamespace(item=lambda: 0.0)}, finish_reason="length",
                                         all_tokens=self.prompt + [7], prompt_cache=[buffer])]
 
         def extract_cache(self, ids):
-            return {}
+            if not (segmented and ids):
+                return {}
+            buffer = Buffer()
+            segment.append(weakref.ref(buffer))
+            return {1: ([buffer], [9, 9])}
 
     namespace = {"mx": SimpleNamespace(default_stream=lambda device: None, default_device=lambda: None, clear_cache=lambda: None),
                  "BatchGenerator": Batch, "GenerationContext": lambda **kwargs: SimpleNamespace(**kwargs, _should_stop=False),
@@ -92,14 +103,15 @@ def test_finished_request_cache_released_while_waiting(patched_source):
     worker._stop = False
     worker._time_budget = [None]
     args = SimpleNamespace(model=SimpleNamespace(model="model", adapter=None, draft=None), stop_words=[], max_tokens=1, top_logprobs=0)
-    calls = deque([(queue, [1, 2, 3], args), None, "wait", None])
+    calls = deque([(queue, [1, 2, 3], args), None, None, "wait", None])
 
     def next_request(timeout):
         item = calls.popleft()
         if item == "wait":
             # the worker is idle here, waiting for the next request
             gc.collect()
-            alive_while_waiting.extend(ref() is not None for ref in owned)
+            seen["final_waiting"].extend(ref() is not None for ref in final)
+            seen["waiting"].extend(ref() is not None for ref in segment)
             worker._stop = True
             return None
         return item
@@ -112,6 +124,20 @@ def test_finished_request_cache_released_while_waiting(patched_source):
     worker._share_object = lambda value: value
     provider.reset = lambda: None
     worker._generate()
-    assert owned, "the fake batch never produced a finished response"
-    assert alive_while_waiting, "the worker never reached its idle wait"
-    assert not any(alive_while_waiting), "a finished request's KV is still reachable while the worker waits"
+    assert final, "the fake batch never produced a finished response"
+    assert seen["final_waiting"], "the worker never reached its idle wait"
+    if segmented:
+        assert segment and seen["decode"] and seen["waiting"], "the segment extraction never ran"
+    return seen
+
+
+def test_finished_request_cache_released_while_waiting(patched_source):
+    seen = run_worker(patched_source, segmented=False)
+    assert not any(seen["final_waiting"]), "a finished request's KV is still reachable while the worker waits"
+
+
+def test_segment_cache_released_during_decode_and_while_waiting(patched_source):
+    seen = run_worker(patched_source, segmented=True)
+    assert not any(seen["final_waiting"]), "a finished request's KV is still reachable while the worker waits"
+    assert not any(seen["decode"]), "the extracted segment cache (the prompt's KV) is still bound during decode"
+    assert not any(seen["waiting"]), "the extracted segment cache (the prompt's KV) is still bound while the worker waits"

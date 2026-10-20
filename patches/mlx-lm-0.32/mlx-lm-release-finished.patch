@@ -1,6 +1,17 @@
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
-@@ -906,6 +906,11 @@
+@@ -860,6 +860,10 @@
+                             cache_type=batch_results[uid]["segment_types"].pop(),
+                         )
+                     del caches
++                    # The loop variables keep the last extracted segment cache (the
++                    # whole prompt's KV with --prompt-cache-size 0) bound through
++                    # decode and while the worker waits.
++                    cache = cache_key = None
+ 
+                     for r in gen_responses:
+                         result = batch_results[r.uid]
+@@ -906,6 +910,11 @@
                  if batch_generator is None:
                      mx.clear_cache()
                      continue
