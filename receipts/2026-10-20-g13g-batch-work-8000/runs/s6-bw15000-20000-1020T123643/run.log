@@ -1,0 +1,15 @@
+LAB start 2026-10-20T12:38:04Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=0.56
+LAB driver vulkan-e7631595df libvulkan 40282811c6e14ef9 model b0d5de688567bf4a
+LAB venv venv-release mx=0.32.4.dev202610160529+33630f9c libmlx=1187d5715b66edd4
+LAB venv venv-release mx=0.32.4.dev202610160529+33630f9c libmlx=1187d5715b66edd4
+LAB sample 1 bw15000 rc=0 decode 43.3 prefill 420.1 ttft 1054.7 sha c4ed7eeb93e2eda6 load1=0.63
+LAB sample 1 bw20000 rc=0 decode 43.6 prefill 421.5 ttft 1051.4 sha c4ed7eeb93e2eda6 load1=0.60
+LAB sample 2 bw20000 rc=0 decode 43.6 prefill 420.5 ttft 1053.9 sha c4ed7eeb93e2eda6 load1=0.64
+LAB sample 2 bw15000 rc=0 decode 43.3 prefill 420.2 ttft 1054.7 sha c4ed7eeb93e2eda6 load1=0.69
+LAB sample 3 bw15000 rc=0 decode 43.3 prefill 419.2 ttft 1057.2 sha c4ed7eeb93e2eda6 load1=0.72
+LAB sample 3 bw20000 rc=0 decode 43.7 prefill 422.1 ttft 1049.8 sha c4ed7eeb93e2eda6 load1=0.76
+LAB sample 4 bw20000 rc=0 decode 43.1 prefill 421.5 ttft 1051.4 sha c4ed7eeb93e2eda6 load1=0.72
+LAB sample 4 bw15000 rc=0 decode 43.3 prefill 420.0 ttft 1055.0 sha c4ed7eeb93e2eda6 load1=0.75
+LAB sample 5 bw15000 rc=0 decode 43.2 prefill 419.6 ttft 1056.1 sha c4ed7eeb93e2eda6 load1=0.86
+LAB sample 5 bw20000 rc=0 decode 43.6 prefill 420.6 ttft 1053.5 sha c4ed7eeb93e2eda6 load1=0.87
+LAB end 2026-10-20T12:39:24Z
