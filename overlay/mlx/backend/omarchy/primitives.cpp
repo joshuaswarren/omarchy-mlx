@@ -12778,6 +12778,12 @@ void GatedDeltaUpdate::eval_gpu(
   const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
       decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
       gdn_decode_tile_enabled(encoder);
+  // bf16 A_log with Hv == 2 * Hk (the shape measured on Qwen3.6-35B-A3B): the untiled prefetch kernel is the default on the
+  // parts of gdn_bf16a_untiled_default_part, unless MLX_OMARCHY_GDN_DECODE_TILE is set (1 keeps the tiled kernel), MLX_OMARCHY_GDN_PF=0
+  // or MLX_OMARCHY_GDN_GQA_BF16A=1 (the tiled native-GQA opt-in). The expansion copies run as on the tiled route.
+  const bool bf16a_untiled_default = decode_shape && raw_gates_mode && Hk != Hv && Hv == 2 * Hk &&
+      A_log.dtype() == bfloat16 && !gqa_bf16a && decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
+      omarchy::gdn_bf16a_untiled_default_part(encoder.device().capabilities().device_name);
   if (fused_ready && Hk != Hv && !gqa_native && !gqa_bf16a && !pf_gqa) {
     const int rep = Hv / Hk;
     auto expand = [&](const array& x) {
@@ -12867,14 +12873,16 @@ void GatedDeltaUpdate::eval_gpu(
       bindings[3] = binding(g);
       bindings[4] = binding(beta);
     }
-    // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head;
-    // the legacy per-row variant runs one workgroup per head.
-    bool decode_tile = tile_on && !pf_gqa;
     // Vec4 prefetching walks for the untiled (legacy G13 part) kernel:
     // bit-exact, +3.4% decode on the 13-inch M1. MLX_OMARCHY_GDN_PF=0 restores
     // the scalar kernel.
     const bool gdn_pf = gdn_pf_env && (params.shape[1] % 4u) == 0u &&
         (params.shape[2] % 4u) == 0u;
+    // 32 Dv rows per workgroup (shader ROWS), Dv / 32 workgroups per head;
+    // the legacy per-row variant runs one workgroup per head. The bf16 A_log
+    // default (bf16a_untiled_default) takes the untiled prefetch kernel only
+    // when the prefetch alignment holds, so it never lands on the scalar kernel.
+    bool decode_tile = tile_on && !pf_gqa && !(bf16a_untiled_default && gdn_pf);
     // Flag bit 9 (A_log f32) takes the composed-order specializations; the
     // default kernels stay the v0.7.26 binaries for every other model.
     const bool composed = (params.flags & 512u) != 0u;
