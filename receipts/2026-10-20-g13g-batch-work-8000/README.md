@@ -32,7 +32,7 @@ The change is a deliberate trade that the 2026-10-12 calibration measured on the
 
 ## Budget sweep
 
-`runs/s6-*`: two runs 6 minutes apart (the first at 12:30Z, the second at 12:36Z), v0.7.33 stack, medians of 5, Qwen3.8-2B. The table shows the second run. The first run agrees within 0.1 tok/s on decode and within 1.1 tok/s on prefill. The 40000 row is from `runs/s1-bw`.
+`runs/s6-*`: two runs 6 minutes apart (the first at 12:30Z, the second at 12:36Z), v0.7.33 stack, medians of 5, Qwen3.8-2B. The table shows the second run. The first run agrees within 0.1 tok/s on decode and within 1.1 tok/s on prefill, but it ran under load (load1 up to 1.27, because `tools/sweep-run.sh` compares only the integer part of load1). The second run started at load1 0.02. Only the second run feeds the table. The 40000 row is from `runs/s1-bw`.
 
 | MLX_OMARCHY_BATCH_WORK | Decode tok/s | Prefill tok/s | TTFT ms | Decode against 40000 |
 |---:|---:|---:|---:|---|
@@ -69,7 +69,7 @@ The 4B model leaves the band between 8000 and 10000. That fixes 8000 as the larg
 - Qwen3.8-2B: decode 42.3 against 41.1 tok/s (+2.9%), prefill 410.5 against 405.6 (+1.2%), TTFT 1079.5 against 1092.5 ms (-1.2%). The PR wheel is faster in 5 of 5 pairs.
 - Qwen3-4B: decode 16.8 against 16.4 tok/s (+2.4%), prefill 170.8 against 168.9 (+1.1%), TTFT 2594.8 against 2622.7 ms (-1.1%). The PR wheel is faster in 5 of 5 pairs.
 
-The gain of the PR wheel matches the environment-switch pairs above (+2.4% and +3.1%), so the row change reaches the default path.
+The two wheels are 45 commits apart, so this run is not a single-variable A/B and the gain cannot be assigned to the row alone. The budget-only pairs above isolate the change. This run shows that the default path of the PR wheel produces the same tokens and decodes faster by about the size those pairs predict (+2.4% and +3.1%).
 
 ## Hardware and software record
 
