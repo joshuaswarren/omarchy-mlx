@@ -1,0 +1,40 @@
+BAR bar-e4b-20261019T223410Z 22:34:10 start key e4b boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.45 rounds 3
+BAR bar-e4b-20261019T223410Z 22:34:10 sha256 prefixes: script 061a3145b924aaec barrier_census.py 76780b65717f7b9c bar_analyze.py 4e29e1658381c0d8
+BAR bar-e4b-20261019T223410Z 22:34:25 round 1 arm A tree main81-fix load1=0.35
+BAR bar-e4b-20261019T223410Z 22:34:34 round 1 arm A rc=0 {"arm": "A", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1335.0, "barriers_skipped": 233.0, "commit_calls_noop": 1.0, "commit_calls_with_work": 13.0, "gpu_primitive_dispatches": 1653.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:34:49 round 1 arm B tree main81-fix load1=0.31
+BAR bar-e4b-20261019T223410Z 22:34:58 round 1 arm B rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 277.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1737.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:35:13 round 1 arm B4 tree main81-fix4 load1=0.26
+BAR bar-e4b-20261019T223410Z 22:35:22 round 1 arm B4 rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 257.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1697.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:35:37 round 1 arm B5 tree main81-fix5 load1=0.29
+BAR bar-e4b-20261019T223410Z 22:35:46 round 1 arm B5 rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 257.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1677.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:36:01 round 2 arm B tree main81-fix load1=0.31
+BAR bar-e4b-20261019T223410Z 22:36:10 round 2 arm B rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 277.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1737.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:36:25 round 2 arm B4 tree main81-fix4 load1=0.35
+BAR bar-e4b-20261019T223410Z 22:36:34 round 2 arm B4 rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 257.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1697.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:36:49 round 2 arm B5 tree main81-fix5 load1=0.25
+BAR bar-e4b-20261019T223410Z 22:36:58 round 2 arm B5 rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 257.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1677.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:37:13 round 2 arm A tree main81-fix load1=0.36
+BAR bar-e4b-20261019T223410Z 22:37:22 round 2 arm A rc=0 {"arm": "A", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1335.0, "barriers_skipped": 233.0, "commit_calls_noop": 1.0, "commit_calls_with_work": 13.0, "gpu_primitive_dispatches": 1653.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:37:37 round 3 arm B4 tree main81-fix4 load1=0.35
+BAR bar-e4b-20261019T223410Z 22:37:46 round 3 arm B4 rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 257.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1697.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:38:01 round 3 arm B5 tree main81-fix5 load1=0.35
+BAR bar-e4b-20261019T223410Z 22:38:10 round 3 arm B5 rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 257.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1677.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:38:25 round 3 arm A tree main81-fix load1=0.42
+BAR bar-e4b-20261019T223410Z 22:38:34 round 3 arm A rc=0 {"arm": "A", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1335.0, "barriers_skipped": 233.0, "commit_calls_noop": 1.0, "commit_calls_with_work": 13.0, "gpu_primitive_dispatches": 1653.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR bar-e4b-20261019T223410Z 22:38:49 round 3 arm B tree main81-fix load1=0.38
+BAR bar-e4b-20261019T223410Z 22:38:58 round 3 arm B rc=0 {"arm": "B", "ids_sha16": "a946b608c13045aa", "n": 72, "per_token": {"barriers_emitted": 1355.0, "barriers_skipped": 277.0, "commit_calls_noop": 5.0, "commit_calls_with_work": 33.0, "gpu_primitive_dispatches": 1737.0, "omarchy_finalize_calls": 1.0, "vk_buffer_
+BAR RATE tok/s: A median 15.58 (m 64.20 ms) runs [15.591, 15.576, 15.569] | B median 14.64 (m 68.30 ms) runs [14.685, 14.641, 14.64] | B4 median 14.66 (m 68.21 ms) runs [14.557, 14.707, 14.661] | B5 median 14.53 (m 68.81 ms) runs [14.353, 14.532, 14.674]
+BAR COUNTERS A per token: barriers_emitted 1335.0, barriers_skipped 233.0, commit_calls_noop 1.0, commit_calls_with_work 13.0, gpu_primitive_dispatches 1653.0, omarchy_finalize_calls 1.0, vk_buffer_copies 48.0, vk_buffer_fills 0.0, vk_compute_dispatches 1507.0, vk_submissions 13.0
+BAR COUNTERS B per token: barriers_emitted 1355.0, barriers_skipped 277.0, commit_calls_noop 5.0, commit_calls_with_work 33.0, gpu_primitive_dispatches 1737.0, omarchy_finalize_calls 1.0, vk_buffer_copies 72.0, vk_buffer_fills 0.0, vk_compute_dispatches 1527.0, vk_submissions 33.0
+BAR COUNTERS B4 per token: barriers_emitted 1355.0, barriers_skipped 257.0, commit_calls_noop 5.0, commit_calls_with_work 33.0, gpu_primitive_dispatches 1697.0, omarchy_finalize_calls 1.0, vk_buffer_copies 72.0, vk_buffer_fills 0.0, vk_compute_dispatches 1507.0, vk_submissions 33.0
+BAR COUNTERS B5 per token: barriers_emitted 1355.0, barriers_skipped 257.0, commit_calls_noop 5.0, commit_calls_with_work 33.0, gpu_primitive_dispatches 1677.0, omarchy_finalize_calls 1.0, vk_buffer_copies 72.0, vk_buffer_fills 0.0, vk_compute_dispatches 1507.0, vk_submissions 33.0
+BAR COUNTERS B minus A (>= 0.5): barriers_emitted +20.0, barriers_skipped +44.0, commit_calls_noop +4.0, commit_calls_with_work +20.0, gpu_primitive_dispatches +84.0, vk_buffer_copies +24.0, vk_compute_dispatches +20.0, vk_submissions +20.0
+BAR COUNTERS B4 minus A (>= 0.5): barriers_emitted +20.0, barriers_skipped +24.0, commit_calls_noop +4.0, commit_calls_with_work +20.0, gpu_primitive_dispatches +44.0, vk_buffer_copies +24.0, vk_submissions +20.0
+BAR COUNTERS B5 minus A (>= 0.5): barriers_emitted +20.0, barriers_skipped +24.0, commit_calls_noop +4.0, commit_calls_with_work +20.0, gpu_primitive_dispatches +24.0, vk_buffer_copies +24.0, vk_submissions +20.0
+BAR GAP m(B) - m(A) = +4.10 ms (threshold 1.93) REAL
+BAR GAP m(B4) - m(A) = +4.01 ms (threshold 1.93) REAL
+BAR GAP m(B5) - m(A) = +4.61 ms (threshold 1.93) REAL
+BAR VERDICT by the rule registered before the run: B REAL (+4.10 ms); B4 REAL (+4.01 ms); B5 REAL (+4.61 ms)
+BAR DIGESTS ids equal in all arms: a946b608c13045aa
+BAR bar-e4b-20261019T223410Z 22:38:58 DONE

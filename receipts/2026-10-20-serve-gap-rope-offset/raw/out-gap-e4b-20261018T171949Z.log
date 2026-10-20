@@ -1,0 +1,120 @@
+SERVEGAP gap-e4b-20261018T171949Z 17:19:49 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 tree main81-fix boot <id>-94ae-4de5-802f-217372cd1341 kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.47 tokens 128 reqs 2 rounds 3
+SERVEGAP gap-e4b-20261018T171949Z 17:19:49 governors:       2 performance  (read only)
+SERVEGAP gap-e4b-20261018T171949Z 17:19:49 tree $HOME/scratch/score/main81-fix libmlx 9a225264dcf2dbcb server.py 2533fcc1f62bb3bf generate.py 5b077a35686d98cd
+SERVEGAP gap-e4b-20261018T171949Z 17:19:49 sha256 prefixes: script 656d85b5e96c9b5e bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_gap.py b505d98d4ea1b358 thread_table.py 2bef8caee53b2909 gap_analyze.py 0081dc575cd6be0e
+started /var/tmp/sampler/rows-gap-e4b-20261018T171949Z.csv pid 68413
+SERVEGAP gap-e4b-20261018T171949Z 17:19:49 sampler csv /var/tmp/sampler/rows-gap-e4b-20261018T171949Z.csv
+SERVEGAP gap-e4b-20261018T171949Z 17:20:04 round 1 arm A load1=0.36 start_epoch=1792344004
+SERVEGAP gap-e4b-20261018T171949Z 17:20:19 round 1 arm A rc=0 decode 15.49 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+SERVEGAP gap-e4b-20261018T171949Z 17:20:19 round 1 arm A end_epoch=1792344019
+SERVEGAP gap-e4b-20261018T171949Z 17:20:34 round 1 arm F load1=0.39 start_epoch=1792344034
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM F THREADS pid 70306 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 70306:1024 70340:0 70341:0 70342:0 70343:0 70344:0 70345:0 70346:0 70348:0 70349:1024 70478:1024 70479:1024 70480:1024 70481:1024 70482:1024 70483:1024 70484:1024 70485:1024
+IDENT F sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+SERVEGAP gap-e4b-20261018T171949Z 17:21:01 round 1 arm F rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:21:01 round 1 arm F end_epoch=1792344061
+SERVEGAP gap-e4b-20261018T171949Z 17:21:17 round 1 arm FS load1=0.36 start_epoch=1792344077
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM FS THREADS pid 72124 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 72124:1024 72142:0 72143:0 72144:0 72145:0 72146:0 72147:0 72148:0 72156:0 72157:1024 72291:1024 72292:1024 72293:1024 72294:1024 72295:1024 72296:1024 72297:1024 72298:1024
+IDENT FS sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+SERVEGAP gap-e4b-20261018T171949Z 17:21:44 round 1 arm FS rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:21:44 round 1 arm FS end_epoch=1792344104
+SERVEGAP gap-e4b-20261018T171949Z 17:21:59 round 1 arm FP load1=0.48 start_epoch=1792344119
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM FP THREADS pid 73972 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 73972:1024 73974:0 73975:0 73976:0 73977:0 73978:0 73979:0 73980:0 73982:0 73983:1024 74124:1024 74125:1024 74126:1024 74127:1024 74128:1024 74129:1024 74130:1024 74131:1024
+IDENT FP sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=__main__.<lambda>
+SERVEGAP gap-e4b-20261018T171949Z 17:22:27 round 1 arm FP rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:22:27 round 1 arm FP end_epoch=1792344147
+SERVEGAP gap-e4b-20261018T171949Z 17:22:42 round 1 arm FD load1=0.57 start_epoch=1792344162
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+FLIP FD bypass active on mlx_lm.tokenizer_utils.SPMStreamingDetokenizer (add_token/finalize/last_segment)
+ARM FD THREADS pid 75785 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 75785:1024 75787:0 75788:0 75789:0 75790:0 75791:0 75792:0 75793:0 75809:0 75810:1024 75951:1024 75952:1024 75953:1024 75954:1024 75955:1024 75956:1024 75957:1024 75958:1024
+IDENT FD sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+FLIP FD counts add_token 320 finalize 4 last_segment 320
+SERVEGAP gap-e4b-20261018T171949Z 17:23:09 round 1 arm FD rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:23:09 round 1 arm FD end_epoch=1792344189
+SERVEGAP gap-e4b-20261018T171949Z 17:23:24 round 2 arm F load1=0.74 start_epoch=1792344204
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM F THREADS pid 77654 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 77654:1024 77656:0 77657:0 77658:0 77659:0 77660:0 77661:0 77662:0 77704:0 77705:1024 77806:1024 77807:1024 77808:1024 77809:1024 77810:1024 77811:1024 77812:1024 77813:1024
+IDENT F sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+SERVEGAP gap-e4b-20261018T171949Z 17:23:52 round 2 arm F rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:23:52 round 2 arm F end_epoch=1792344232
+SERVEGAP gap-e4b-20261018T171949Z 17:24:07 round 2 arm FS load1=0.64 start_epoch=1792344247
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM FS THREADS pid 79400 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 79400:1024 79402:0 79403:0 79404:0 79405:0 79406:0 79407:0 79408:0 79410:0 79411:1024 79526:1024 79527:1024 79528:1024 79529:1024 79530:1024 79531:1024 79532:1024 79533:1024
+IDENT FS sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+SERVEGAP gap-e4b-20261018T171949Z 17:24:35 round 2 arm FS rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:24:35 round 2 arm FS end_epoch=1792344275
+SERVEGAP gap-e4b-20261018T171949Z 17:24:50 round 2 arm FP load1=0.50 start_epoch=1792344290
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM FP THREADS pid 81075 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 81075:1024 81077:0 81078:0 81079:0 81080:0 81081:0 81082:0 81083:0 81085:0 81086:1024 81195:1024 81196:1024 81197:1024 81198:1024 81199:1024 81200:1024 81201:1024 81202:1024
+IDENT FP sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=__main__.<lambda>
+SERVEGAP gap-e4b-20261018T171949Z 17:25:17 round 2 arm FP rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:25:17 round 2 arm FP end_epoch=1792344317
+SERVEGAP gap-e4b-20261018T171949Z 17:25:32 round 2 arm FD load1=0.48 start_epoch=1792344332
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+FLIP FD bypass active on mlx_lm.tokenizer_utils.SPMStreamingDetokenizer (add_token/finalize/last_segment)
+ARM FD THREADS pid 82793 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 82793:1024 82795:0 82796:0 82797:0 82798:0 82799:0 82800:0 82801:0 82803:0 82804:1024 82914:1024 82915:1024 82916:1024 82917:1024 82918:1024 82919:1024 82920:1024 82921:1024
+IDENT FD sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+FLIP FD counts add_token 320 finalize 4 last_segment 320
+SERVEGAP gap-e4b-20261018T171949Z 17:26:00 round 2 arm FD rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:26:00 round 2 arm FD end_epoch=1792344360
+SERVEGAP gap-e4b-20261018T171949Z 17:26:15 round 2 arm A load1=0.48 start_epoch=1792344375
+SERVEGAP gap-e4b-20261018T171949Z 17:26:28 round 2 arm A rc=0 decode 15.53 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+SERVEGAP gap-e4b-20261018T171949Z 17:26:28 round 2 arm A end_epoch=1792344388
+SERVEGAP gap-e4b-20261018T171949Z 17:26:43 round 3 arm FS load1=0.39 start_epoch=1792344403
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM FS THREADS pid 85636 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 85636:1024 85638:0 85639:0 85640:0 85641:0 85642:0 85643:0 85644:0 85678:0 85679:1024 85748:1024 85749:1024 85750:1024 85751:1024 85752:1024 85753:1024 85754:1024 85755:1024
+IDENT FS sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+SERVEGAP gap-e4b-20261018T171949Z 17:27:10 round 3 arm FS rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:27:10 round 3 arm FS end_epoch=1792344430
+SERVEGAP gap-e4b-20261018T171949Z 17:27:25 round 3 arm FP load1=0.37 start_epoch=1792344445
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM FP THREADS pid 87354 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 87354:1024 87356:0 87357:0 87358:0 87359:0 87360:0 87361:0 87362:0 87396:0 87397:1024 87466:1024 87467:1024 87468:1024 87469:1024 87470:1024 87471:1024 87472:1024 87473:1024
+IDENT FP sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=__main__.<lambda>
+SERVEGAP gap-e4b-20261018T171949Z 17:27:53 round 3 arm FP rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:27:53 round 3 arm FP end_epoch=1792344473
+SERVEGAP gap-e4b-20261018T171949Z 17:28:08 round 3 arm FD load1=0.44 start_epoch=1792344488
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+FLIP FD bypass active on mlx_lm.tokenizer_utils.SPMStreamingDetokenizer (add_token/finalize/last_segment)
+ARM FD THREADS pid 89238 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 89238:1024 89240:0 89241:0 89242:0 89243:0 89244:0 89245:0 89246:0 89280:0 89281:1024 89366:1024 89367:1024 89368:1024 89369:1024 89370:1024 89371:1024 89372:1024 89373:1024
+IDENT FD sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+FLIP FD counts add_token 320 finalize 4 last_segment 320
+SERVEGAP gap-e4b-20261018T171949Z 17:28:35 round 3 arm FD rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:28:35 round 3 arm FD end_epoch=1792344515
+SERVEGAP gap-e4b-20261018T171949Z 17:28:50 round 3 arm A load1=0.53 start_epoch=1792344530
+SERVEGAP gap-e4b-20261018T171949Z 17:29:03 round 3 arm A rc=0 decode 15.52 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+SERVEGAP gap-e4b-20261018T171949Z 17:29:03 round 3 arm A end_epoch=1792344543
+SERVEGAP gap-e4b-20261018T171949Z 17:29:18 round 3 arm F load1=0.35 start_epoch=1792344558
+provenance: mlx-omarchy 0.32.4.dev202610102357+e57cb301 mx=0.32.4.dev202610102357+e57cb301 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:140acefd0a4418e1 libmlx.so=sha256:9a225264dcf2dbcb
+ARM F THREADS pid 92260 total 18 util_min>=1024 10 util_min=0 8 unreadable 0 92260:1024 92262:0 92263:0 92264:0 92265:0 92266:0 92267:0 92268:0 92270:0 92271:1024 92467:1024 92468:1024 92469:1024 92470:1024 92471:1024 92472:1024 92473:1024 92474:1024
+IDENT F sampler=mlx_lm.sample_utils.greedy_sampler processors=[] factory_sampler=mlx_lm.server._make_sampler
+SERVEGAP gap-e4b-20261018T171949Z 17:29:46 round 3 arm F rc=0 pairs 2
+SERVEGAP gap-e4b-20261018T171949Z 17:29:46 round 3 arm F end_epoch=1792344586
+stopped /var/tmp/sampler/rows-gap-e4b-20261018T171949Z.csv (589 rows)
+SERVEGAP RESULT ts decode tok/s: A median 15.52 (m 64.44 ms) n 3 run medians [15.49, 15.53, 15.52] spread 0.2% | F median 14.63 (m 68.34 ms) n 3 run medians [14.63, 14.59, 14.64] spread 0.3% | FS median 14.66 (m 68.20 ms) n 3 run medians [14.64, 14.66, 14.67] spread 0.2% | FP median 14.67 (m 68.17 ms) n 3 run medians [14.67, 14.66, 14.68] spread 0.1% | FD median 14.65 (m 68.25 ms) n 3 run medians [14.65, 14.66, 14.65] spread 0.1%
+SERVEGAP GAP m(F) - m(A) = +3.90 ms (+6.1% of m(A); threshold 1.93 ms) REAL
+SERVEGAP GAIN FS: m(F) - m(FS) = +0.14 ms (+0.2% of m(A)) -> not real
+SERVEGAP GAIN FP: m(F) - m(FP) = +0.17 ms (+0.3% of m(A)) -> control, not attributed
+SERVEGAP GAIN FD: m(F) - m(FD) = +0.09 ms (+0.1% of m(A)) -> not real
+SERVEGAP FP CONTROL VERIFIED NO-OP: active sampler ('mlx_lm.sample_utils.greedy_sampler', '[]') is the bench sampler with no processors; the factory runs once per request, so no per-token sampler cost is claimed from FP
+SERVEGAP FD NOTE: A and F detokenize; FD bypasses only the server detokenizer ops, so the FD gain is a differential cost of the server path, not a proof of a unique server detokenizer cost
+SERVEGAP VERDICT by the rule registered before the run: GAP REAL (+3.90 ms); FS not real (+0.14 ms); FD not real (+0.09 ms); FP control verified no-op
+SERVEGAP DIGESTS ids equal in all arms: 6e98b674dcae2e22
+SERVEGAP PHASES (F, 6 pairs, ms per decoded token, long minus short): wall 68.51; next() 68.49 of which mx.eval 0.00, mx.async_eval 67.19, host rest 1.29; outside next() 0.02 ms; next() calls per token 1.00
+SERVEGAP PHASES (FS, 6 pairs, ms per decoded token, long minus short): wall 68.37; next() 68.35 of which mx.eval -0.00, mx.async_eval 67.07, host rest 1.28; outside next() 0.02 ms; next() calls per token 1.00
+SERVEGAP PHASES (FP, 6 pairs, ms per decoded token, long minus short): wall 68.32; next() 68.31 of which mx.eval 0.01, mx.async_eval 67.03, host rest 1.27; outside next() 0.02 ms; next() calls per token 1.00
+SERVEGAP PHASES (FD, 6 pairs, ms per decoded token, long minus short): wall 68.42; next() 68.41 of which mx.eval -0.00, mx.async_eval 67.11, host rest 1.30; outside next() 0.01 ms; next() calls per token 1.00
+SERVEGAP arm F THREADS pid 70306 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FS THREADS pid 72124 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FP THREADS pid 73972 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FD THREADS pid 75785 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm F THREADS pid 77654 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FS THREADS pid 79400 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FP THREADS pid 81075 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FD THREADS pid 82793 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FS THREADS pid 85636 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FP THREADS pid 87354 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm FD THREADS pid 89238 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP arm F THREADS pid 92260 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEGAP gap-e4b-20261018T171949Z 17:29:46 DONE
