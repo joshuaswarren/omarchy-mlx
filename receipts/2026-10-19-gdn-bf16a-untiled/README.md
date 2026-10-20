@@ -7,7 +7,7 @@ The two kernels are not bit-equal. The default therefore changed only after a pa
 ## Machine and build
 
 16-inch M1 Max, Vulkan device Apple M1 Max (G13C C0), kernel 7.1.12-2-12.6-sep-ARCH, driver library prefix 40282811c6e14ef9. Model mlx-community/Qwen3.6-35B-A3B-4bit snapshot 38740b847e4cb78f352aba30aa41c76e08e6eb46.
-Two wheels were used. The speed, numerics and NLL runs of "untiled vs tiled" used the rebased head of PR 231, mlx_omarchy-0.32.4.dev202610181348+49e6b3c1 (sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59, libmlx prefix 960f0f358a2aba25), with the switch MLX_OMARCHY_GDN_DECODE_TILE=0. The check of this change used the wheel built from the commit of this pull request, mlx_omarchy-0.32.4.dev202610192245+a2b0864 (sha256 a1eb9765672cf21873a032eeb10e3e27dc6c03be908d267585183a4101b55f5c, libmlx prefix 818270b8ca578548) and its test binary (sha256 9f81bcbaf4d0debe491137069249f1b23d6cb01a4ea74bdb96059324eef7fb05).
+Two wheels were used. The speed, numerics and NLL runs of "untiled vs tiled" used the rebased head of PR 231, mlx_omarchy-0.32.4.dev202610181348+49e6b3c1 (sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59, libmlx prefix 960f0f358a2aba25), with the switch MLX_OMARCHY_GDN_DECODE_TILE=0. The check of this change used the wheel built from the commit of this pull request, mlx_omarchy-0.32.4.dev202610192245+a2b0864 (sha256 a1eb9765672cf21873a032eeb10e3e27dc6c03be908d267585183a4101b55f5c, libmlx prefix 818270b8ca578548) and its test binary (sha256 cb3696d2c6501d3941903b65d46f430b0330acafc8db93ecf94b74d580cbdbc0).
 Timing ran under the lab GPU lock, on one boot, with the performance governor. The runs are not guard tickets, so no GPU-timeout counter was read.
 
 ## Untiled against tiled (untiled-vs-tiled/)
@@ -30,7 +30,7 @@ This is a not-worse check on one text and one model. It is not a quality benchma
 
 ## This change (verify/, test/)
 
-- New test case "gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it": 14 of 14 assertions on this device; the whole binary runs 7 of 7 cases and 107 of 107 assertions (test/new-case.out, test/test-all.out). It names the default kernel by enum (480 here), the switches, a 16/48 head ratio and equal head counts, which keep the previous default.
+- New test case "gdn raw decode bf16 A_log: the default kernel by part, the switches and the routes outside it": 14 of 14 assertions on this device; a second case re-runs the binary in a fresh process with MLX_OMARCHY_GDN_PF=0 and checks that the default stays tiled (kernel 455) and TILE=0 runs the scalar untiled kernel (479), 2 of 2 assertions; the whole binary runs 8 of 8 cases and 109 of 109 assertions (test/new-case.out, test/pf0-case.out, test/test-all.out). It names the default kernel by enum (480 here), the switches, a 16/48 head ratio and equal head counts, which keep the previous default.
 - Census of the new wheel (verify/run.log): default dispatches kernel 480 (330 per 10 tokens), TILE=1 dispatches kernel 455; dispatch totals 11992 and 17272 in both arms.
 - Numerics of the new wheel against the earlier runs: the new default equals the earlier TILE=0 arm bit for bit, and the new TILE=1 equals the earlier default arm bit for bit, on both prompts (max absolute log-probability difference 0.0, KL 0, ids equal; verify/run.log).
 - Speed of the new wheel, default against TILE=1 (tools/sum_speed.py verify/run.log T D): P1 28.950 to 31.210 tok/s (+7.81%), P2 28.970 to 31.220 (+7.77%), the default faster in 5 of 5 rounds on both prompts, spread 0.3%.
@@ -52,7 +52,7 @@ The runs above switch the route inside one wheel. This run compares the two buil
 - Model: mlx-community/Qwen3.6-35B-A3B-4bit snapshot 38740b847e4cb78f352aba30aa41c76e08e6eb46; model.safetensors.index.json sha256 0b28df60e33753a14e816d3b31577ae2c93884c58430a4a6de6ae9ea483842ea (4-bit quantization of the repo; the weight files were not hashed).
 - Commands: tools/ (run-untiled-vs-tiled.sh, run-nll35.sh, verify-bf16a.sh, ab-builds.sh) and the test binary command lines in test/*.out.
 - Numerical result, backend dispatch trace: sections above. The census histograms are in untiled-vs-tiled/hist-*.txt and verify/hist-*.txt.
-- Timing and thermal procedure: one boot per run set, performance governor, fresh process per sample, arm order alternated, one warm-up as the first load of each process; timing under the lab GPU lock. No temperature, fan or throttle reading was taken.
+- Timing and thermal procedure: all run sets ran on one boot; speed-run.log line 1 records its kernel and the performance governor, and the two-build-ab/run.log start line records only the boot and load. One boot per run set, performance governor, fresh process per sample, arm order alternated, one warm-up as the first load of each process; timing under the lab GPU lock. No temperature, fan or throttle reading was taken.
 - Vulkan device reopen: no dedicated close-and-reopen test was run. Every run is a fresh process that opened the Vulkan device from the start. The logs record 72 exit codes (untiled-vs-tiled/speed-run.log 20, numerics-run.log 5, verify/run.log 24, two-build-ab/run.log 20, nll/run.log 3), all 0, and every timing row prints verified=match. The census runs and the two test-binary runs also exited cleanly; the census pipeline does not log its exit code.
 
 ## Limits
