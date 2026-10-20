@@ -12,7 +12,7 @@ Release v0.7.33 changed the default per-submission work budget of the 13-inch M1
 
 | Model | Submission p50 / p95 at 5000 | at 8000 | Decode, 8000 against 5000 | Pairs |
 |---|---|---|---|---|
-| Qwen3.8-2B 4-bit | 1.96 / 3.01 ms | 2.97 / 5.48 ms | 42.0 against 41.0 tok/s (+2.4%) | 4 of 5 clean, 8000 faster in 5 of 5 by median |
+| Qwen3.8-2B 4-bit | 1.96 / 3.01 ms | 2.97 / 5.48 ms | 42.0 against 41.0 tok/s (+2.4%) | 8000 faster in 4 of 5 pairs (pair 5 hit a load spike) |
 | Qwen3-4B 4-bit | 3.24 / 5.79 ms | 4.61 / 6.72 ms | 16.8 against 16.3 tok/s (+3.1%) | 5 of 5 |
 
 Both models stay inside the 2 to 6 ms p50 band at 8000. Output tokens are bit-identical in every arm of both models (one tokens digest per model, 5 of 5 pairs).
@@ -32,14 +32,14 @@ The change is a deliberate trade that the 2026-10-12 calibration measured on the
 
 ## Budget sweep
 
-`runs/s6-*`, run twice, 6 minutes apart, agreeing to 0.2 points; v0.7.33 stack, medians of 5, Qwen3.8-2B.
+`runs/s6-*`: two runs 6 minutes apart (the first at 12:30Z, the second at 12:36Z), v0.7.33 stack, medians of 5, Qwen3.8-2B. The table shows the second run. The first run agrees within 0.1 tok/s on decode and within 1.1 tok/s on prefill. The 40000 row is from `runs/s1-bw`.
 
 | MLX_OMARCHY_BATCH_WORK | Decode tok/s | Prefill tok/s | TTFT ms | Decode against 40000 |
 |---:|---:|---:|---:|---|
-| 5000 | 41.1 | 404.7 | 1095 | -6.2% |
+| 5000 | 41.1 | 404.3 | 1096 | -6.2% |
 | 10000 | 42.7 | 414.6 | 1069 | -2.5% |
-| 15000 | 43.3 | 419.7 | 1056 | -1.1% |
-| 20000 | 43.6 | 421.0 | 1053 | -0.5% |
+| 15000 | 43.3 | 420.0 | 1055 | -1.1% |
+| 20000 | 43.6 | 421.5 | 1051 | -0.5% |
 | 40000 | 43.8 | 424.2 | 1045 | reference |
 
 Submission size per budget (`subcap/`, diagnostics wheel of 3b24ad4, `scripts/subcap_calibrate.py`, 64 decode tokens after a 512-token prefill, one process per budget, the tool's own p50 and p95 of the per-submission GPU time):
@@ -62,10 +62,19 @@ The 4B model leaves the band between 8000 and 10000. That fixes 8000 as the larg
 - `runs/s7-4b-1020T174654`: Qwen3-4B, void. Another job held load1 at 1.4 to 2.7 and the first three pairs read 10.2 to 11.2 tok/s. The log stays here and no figure of it is used.
 - `runs/s8-4b-1020T182107`: Qwen3-4B rerun with an abort-if-loaded guard (load1 0.45 to 0.66). Decode 16.3 against 16.8 tok/s (+3.1%), prefill 169.0 against 170.7 (+1.0%), TTFT 2621.3 against 2595.6 ms (-1.0%). All 5 pairs agree.
 
+## The PR wheel against the release wheel
+
+`runs/s9-2b-1020T193935` and `runs/s9-4b-1020T193935`: the wheel built from this branch (default environment, no override, so the board row decides) against the v0.7.33 release wheel (default 5000). Ledger step, 5 pairs per model, medians, load1 0.25 to 0.76, one boot. Output tokens are bit-identical in every arm.
+
+- Qwen3.8-2B: decode 42.3 against 41.1 tok/s (+2.9%), prefill 410.5 against 405.6 (+1.2%), TTFT 1079.5 against 1092.5 ms (-1.2%). The PR wheel is faster in 5 of 5 pairs.
+- Qwen3-4B: decode 16.8 against 16.4 tok/s (+2.4%), prefill 170.8 against 168.9 (+1.1%), TTFT 2594.8 against 2622.7 ms (-1.1%). The PR wheel is faster in 5 of 5 pairs.
+
+The gain of the PR wheel matches the environment-switch pairs above (+2.4% and +3.1%), so the row change reaches the default path.
+
 ## Hardware and software record
 
 - Firmware: iBoot1 mBoot-20457.1.29, iBoot2 iBoot-8422.141.2, OS firmware 13.5, system firmware 27.0.
-- Platform string `apple,j293apple,t8103apple,arm-platform`.
+- Platform strings `apple,j293`, `apple,t8103`, `apple,arm-platform`.
 - Kernel 7.1.12-2-20261013.18-sep-ARCH, governor `performance` before the runs, boot id replaced by `<id>` in the logs.
 - Vulkan driver of the runs: the release driver directory `vulkan-e7631595df` (ICD library sha256 `03037bf663548c31`). The run logs also print `libvulkan 40282811c6e14ef9`, the sha256 prefix of the system Mesa library (package 26.2.4-1), which the runs did not load.
 - Models: Qwen3.8-2B 4-bit, `model.safetensors` sha256 prefix `b0d5de688567bf4a`; Qwen3-4B 4-bit, `e240c0bdc0ebb068`.
@@ -76,8 +85,8 @@ Not recorded: the Vulkan device name string, a device reopen, and temperature or
 
 ## Tests of the change
 
-Built on the 16-inch M1 Max from branch commit 6b3597ab0 (wheel 0.32.4.dev202610201840+6b3597a, sha256 prefix `ca15b107606dbcd8`): the `omarchy_runtime_tests` binary passes all 59 cases and 27070 assertions. The two budget cases pass alone: "submission-cap default resolves per calibrated board" 9 of 9 and "work budget resolves per device name" 6 of 6. They now require 8000 for the 13-inch M1 row and 5000 for the fallback.
+Built on the 16-inch M1 Max from branch commit 6b3597ab0 (wheel 0.32.4.dev202610201840+6b3597a, sha256 prefix `ca15b107606dbcd8`): the `omarchy_runtime_tests` binary passes all 59 cases and 27070 assertions (`tests/pr250-tests.log`, binary sha256 recorded in its first line). The two budget cases pass alone: "submission-cap default resolves per calibrated board" 9 of 9 and "work budget resolves per device name" 6 of 6. They now require 8000 for the 13-inch M1 row and 5000 for the fallback.
 
 ## Limits
 
-One chip, one boot, 5 pairs per comparison, two models. The submission sizes come from one run per budget. The 13-inch M1 decode on the PR wheel itself is queued as a paired run against the v0.7.32 and v0.7.33 wheels and is not in this directory yet. Desktop smoothness was not measured on a logged-in compositor. No independent review of these numbers yet.
+One chip, one boot, 5 pairs per comparison, two models. The submission sizes come from one run per budget. Desktop smoothness was not measured on a logged-in compositor. No independent review of these numbers yet.
