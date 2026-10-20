@@ -16,8 +16,9 @@ Every timing and numerics row prints its provenance line with verified=match, wi
 
 ## Decision: paired teacher-forced NLL, accept-not-worse (nll/)
 
-nll/PREREG-nll27.md was written before the scoring run (registered 2026-10-20). 128 prefixes of a fixed text, each a 512-token prefill and 64 decode steps, 8192 scored positions per arm. d = NLL(untiled) - NLL(default); the unit of replication is the prefix. The wheel used for this check is mlx_omarchy-0.32.4.dev202610181348+49e6b3c1 (sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59), with MLX_OMARCHY_GDN_DECODE_TILE=0 for the untiled arm; it holds the same kernels as N.
-Result (nll/nll-cmp.log, from the stored arrays with tools/nll_cmp.py): D mean NLL 0.94625, U mean 0.94732, paired mean +0.00107 nats per token, cluster SE 0.00062, interval at 2 SE [-0.00018, +0.00232]. The upper end is below the +0.02 line, so the rule gives ACCEPT-NOT-WORSE. The untiled arm differs from the default on 7825 of 8192 positions and in 128 of 128 prefixes; 91 of 8192 argmax positions differ. A second default run on prefixes 0 to 31 (D2) equals the first on every position, so the scoring is deterministic.
+nll/PREREG-nll27.md was written before the scoring run (registered 2026-10-20). 128 prefixes of a fixed text, each a 512-token prefill and 64 decode steps, 8192 scored positions per arm. d = NLL(untiled) - NLL(tiled); the arm named default (D) in the logs ran the tiled kernel, because the wheel of this check predates the change; the unit of replication is the prefix. The wheel used for this check is mlx_omarchy-0.32.4.dev202610181348+49e6b3c1 (sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59), with MLX_OMARCHY_GDN_DECODE_TILE=0 for the untiled arm; it holds the same kernels as N.
+The dispatch census of that wheel (nll/census/hist-D-10.txt, hist-U-10.txt) shows kernel 455 for D and kernel 480 for U, 528 dispatches each per 10 tokens. The pre-registration file and the score arrays are in one commit, so their order is not checkable from git; the arrays were written after the pre-registration, which its header dates 2026-10-20 03:01:39Z; the array files were written at 04:06Z (23:06 local time on the machine that ran them).
+Result (nll/nll-cmp.log, from the stored arrays with tools/nll_cmp.py): D (tiled) mean NLL 0.94625, U mean 0.94732, paired mean +0.00107 nats per token, cluster SE 0.00062, interval at 2 SE [-0.00018, +0.00232]. The upper end is below the +0.02 line, so the rule gives ACCEPT-NOT-WORSE. The untiled arm differs from the default on 7825 of 8192 positions and in 128 of 128 prefixes; 91 of 8192 argmax positions differ. A second default run on prefixes 0 to 31 (D2) equals the first on every position, so the scoring is deterministic.
 This is a not-worse check on one text and one model. It is not a quality benchmark.
 
 ## This change on the new wheels (ab-two-builds/)
@@ -39,8 +40,8 @@ The earlier switch inside one wheel (same-wheel-speed/, TILE=0 against default) 
 ## Hardware record
 
 - Source commits: 2939e781 (N wheel), 18b78977 (pull request head, test file fix), comparison build 657582a3.
-- Kernel 7.1.12-2-12.6-sep-ARCH; boot 2abdc10a for every run in this directory; Vulkan driver Mesa 26.3.0-devel (git-69bde15340), library sha256 prefix 40282811c6e14ef9; device Apple M1 Max (G13C C0). The runs did not print the firmware identity; none is recorded.
-- Model and quantization: the repo snapshot above (4-bit); the weight files were not hashed.
+- Kernel 7.1.12-2-12.6-sep-ARCH; boot 2abdc10a for every run in this directory; Vulkan driver Mesa 26.3.0-devel (git-69bde15340), library sha256 prefix 40282811c6e14ef9; device Apple M1 Max (G13C C0). Firmware identity, read from the device tree on the same machine after the runs (values verbatim, vendor prefix of the property names dropped): compatible apple,j316c / apple,t6001; iboot1-version mBoot-18000.161.10; iboot2-version iBoot-8422.141.2; os-fw-version 13.5; system-fw-version 26.6.2. The runs did not print them.
+- Model and quantization: the repo snapshot above (4-bit); model.safetensors.index.json sha256 13b840162b4cb35c66fef7df072f7dbb4717908204364f5e5d9f9655a2758fa8. The three weight files were not hashed.
 - Commands: tools/ (verify-r3.sh with stage test | test2 | census | numP1 | numP2 | speedA | speedB, wheel-r3.sh, run27.sh, run-nll27.sh).
 - Numerical result and dispatch trace: sections above. The census histograms are in ab-two-builds/hist-*.txt.
 - Timing and thermal procedure: one boot, performance governor, fresh process per sample, arm order alternated by round, one warm-up as the first load of each process. No temperature, fan or throttle reading was taken. The GPU-timeout counter was not read for the A/B tickets; the NLL tickets read it before and after (delta 0 on all five).
@@ -53,6 +54,6 @@ One chip (G13C), two measured models (Qwen3.6-35B-A3B in PR 243 and Qwen3.8-27B-
 ## Files
 
 - ab-two-builds/: run-*.log per stage, t-*.out and t-*.err per timing run, num-*/ (top.npz, ids, without full.npy), cen-*/, hist-*.txt, test-all.out, test-list.out.
-- nll/: PREREG-nll27.md, the five score arrays (D0, D1, D2, U0, U1 .npz), their .out and .run.log files, nll-cmp.log.
+- nll/: census/ (the dispatch census of the NLL wheel), PREREG-nll27.md, the five score arrays (D0, D1, D2, U0, U1 .npz), their .out and .run.log files, nll-cmp.log.
 - same-wheel-speed/: the two timing logs of the switch inside one wheel.
 - tools/: the run scripts and readers. SHA256SUMS lists every file in this directory.
