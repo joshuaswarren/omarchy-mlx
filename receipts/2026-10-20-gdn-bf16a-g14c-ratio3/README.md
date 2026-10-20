@@ -13,7 +13,7 @@ Model mlx-community/Qwen3.8-27B-4bit snapshot 10c35caafbb80f7dc6a7a432cdd11af10a
 
 ## First A/B on one wheel (first-ab/)
 
-Wheel mlx_omarchy-0.32.4.dev202610200902+f334420 (main f33442078, sha256 d05326b0835cf47b8a21fc4cf9c1f9f22e8813a00feb1963f67eb79bd4933d8c, libmlx prefix 1a2af63453eeb246), default against MLX_OMARCHY_GDN_DECODE_TILE=0, boot 98f40d84, GPU-timeout delta 0 on every ticket (first-ab/*.ticket.out). A first launch used a general serving environment whose mlx-lm has no Omarchy patches; it ran generic ops (census 63511 dispatches, no GatedDeltaDecode kernel) and produced no result. The amendment in the pre-registration records this; its outputs are not kept.
+Wheel mlx_omarchy-0.32.4.dev202610200902+f334420 (main f33442078, sha256 d05326b0835cf47b8a21fc4cf9c1f9f22e8813a00feb1963f67eb79bd4933d8c, libmlx prefix 1a2af63453eeb246), default against MLX_OMARCHY_GDN_DECODE_TILE=0, boot 98f40d84, GPU-timeout delta 0 on every ticket (first-ab/*.ticket.out). A first launch used a general serving environment whose mlx-lm has no Omarchy patches; it ran generic ops (census 63511 dispatches, no GatedDeltaDecode kernel) and produced no result. The amendment in the pre-registration records this. Those outputs stayed on the machine that ran them, moved aside under failed-out-* names; they were not copied into this directory.
 
 - Census: default kernel 455 x528 per 10 tokens, TILE=0 kernel 480 x528, totals 7491 and 10283.
 - Speed (decode tok/s, 64 tokens, 5 rounds, fresh process each, order alternating; every row verified=match):
@@ -39,6 +39,14 @@ N = mlx_omarchy-0.32.4.dev202610201405+7076d7a (this change at 7076d7a5, sha256 
 |---|---:|---:|---:|---:|---|
 | P1 | 15.070 | 15.980 | +6.04% | 5/5 | +6.32 +6.32 +5.24 +5.97 +6.03 |
 | P2 | 15.060 | 15.960 | +5.98% | 5/5 | +5.84 +6.03 +5.86 +5.84 +6.05 |
+
+## Hardware record
+
+- Source commits: 7076d7a5 (N, this change), c163e54a (O, main), f33442078 (first A/B wheel).
+- Kernel, Mesa, driver library, Vulkan device, firmware identity and model hashes: "Machine" above. Numerical result and backend dispatch trace: the sections above (census histograms in first-ab/ and pr-check/hist-*.txt).
+- Commands: tools/ (verify-g14c.sh with stage test | census | numP1 | numP2 | speedA | speedB, run-m2.sh, wheel-r3.sh).
+- Timing and thermal procedure: every run set ran on one boot (98f40d84) as queued tickets of the lab GPU scheduler, with the performance governor, one fresh process per sample, arm order alternated by round, and one warm-up as the first load of each process. No temperature, fan or throttle reading was taken. The GPU-timeout counter was read before and after every ticket of the first A/B (8 tickets) and of the speed, numerics and census stages (5 tickets): delta 0 on all 13. The device-test ticket file was not kept.
+- Vulkan device reopen: no dedicated close-and-reopen test was run. Every run is a fresh process that opened the device from the start. All 54 exit codes in the run logs (first-ab/ and pr-check/ run-*.log) are 0, and every timing, census and numerics row prints verified=match.
 
 ## Limits
 
