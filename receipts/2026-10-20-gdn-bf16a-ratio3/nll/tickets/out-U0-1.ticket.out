@@ -1,0 +1,12 @@
+IDLE-GUARD-JOB-START 20261020T032159Z perf: TIMING NLL accept-not-worse Qwen3.8-27B-4bit, GDN decode tiled vs untiled, untiled arm, prefixes 0 to 63; no speed claim
+KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-12.6-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.11 SETTLED
+GPU-TIMEOUTS before=0 boot=2abdc10a-6577-45f4-9bc6-6f20461a2050
+NLL27 start 2026-10-20T03:22:00Z part=U0 arm=U first=0 count=64 kernel=7.1.12-2-12.6-sep-ARCH boot=2abdc10a governor=performance load1=0.11
+NLL27 env GDN/MLX/HK/AGX present: 0
+NLL27 nll_pair abdf0dcdbf3b16eb nll_cmp 2ff32652d390afce text e7c41800016e3620
+NLL27 == arm U env MLX_OMARCHY_GDN_DECODE_TILE=0 03:22:00
+NLL27 part U0 rc=0 NLL mean 1.05899 over 4096 positions; top1_digest 114e090d17da12f1; last_logits_digest 50ecf6e6456ff39a; step_median_ms 76.01
+NLL27 end 2026-10-20T03:33:34Z
+GPU-TIMEOUTS after=0 delta=0

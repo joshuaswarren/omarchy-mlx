@@ -1,0 +1,21 @@
+IDLE-GUARD-JOB-START 20261020T052301Z TIMING: two-build decode speed rounds 4-5, ratio-3 commit 2939e781 against PR 243 head 657582a3, Qwen3.8-27B-4bit, on the 16-inch M1 Max
+KERNEL-CMDLINE asahi-words:  kernel=7.1.12-2-12.6-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.20 SETTLED
+GPU-TIMEOUTS before=0 boot=2abdc10a-6577-45f4-9bc6-6f20461a2050
+R3 speedB start 2026-10-20T05:23:01Z boot=2abdc10a kernel=7.1.12-2-12.6-sep-ARCH governor=performance load1=0.20
+R3 speedB env GDN/MLX/HK/AGX present: 0
+R3 speedB N wheel mlx_omarchy-0.32.4.dev202610200429+2939e78-cp314-cp314-linux_aarch64.whl sha256 567c99392954092f308cbd546968a6bb09b193d8def5be2de62260155bceeb06 libmlx 451ccdea64b12f54
+R3 speedB O wheel mlx_omarchy-0.32.4.dev202610200425+657582a-cp314-cp314-linux_aarch64.whl sha256 f047c15b6dddb64daa6f56cb468f41c894ec69df09963bb136a240615453288c libmlx 55bd83b2450afce8
+R3 speedB test binary sha256 dfcd4b86a7f16b662f09c062d2f0ce5e39ca324557fe885879819eea32fc186a driver 40282811c6e14ef9
+R3 speedB scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a numcmp 3861d97963fd3100
+R3 speedB time P1 round 4 N rc=0 decode 14.89 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+R3 speedB time P1 round 4 O rc=0 decode 14.06 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+R3 speedB time P2 round 4 N rc=0 decode 14.89 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:a22c18b698408788 n=64 first=1596,1144,3 verified=match
+R3 speedB time P2 round 4 O rc=0 decode 14.09 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:a22c18b698408788 n=64 first=1596,1144,3 verified=match
+R3 speedB time P1 round 5 O rc=0 decode 14.08 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:f75509a4b05301b4 n=64 first=1596,1144,3 verified=match
+R3 speedB time P1 round 5 N rc=0 decode 14.91 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,3 verified=match
+R3 speedB time P2 round 5 O rc=0 decode 14.08 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:a22c18b698408788 n=64 first=1596,1144,3 verified=match
+R3 speedB time P2 round 5 N rc=0 decode 14.88 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:a22c18b698408788 n=64 first=1596,1144,3 verified=match
+R3 speedB end 2026-10-20T05:24:44Z
+GPU-TIMEOUTS after=0 delta=0
