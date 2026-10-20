@@ -1,0 +1,28 @@
+tests start 2026-10-20T19:33:50Z binary sha256 8c3cf7bb4026b1163b0bda31b5b47a0c78972d9c9836f121a1e2fcbf161199fb
+[child/reopen] fresh process device reopen ok
+[rtmod] SUBMIT-RECOVER tid=3344494 resubmitted 1 stalled batch(es) through cv>=1 (round 1, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=3344494 resubmitted 1 stalled batch(es) through cv>=1 (round 2, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=3344658 resubmitted 1 stalled batch(es) through cv>=9 (round 1, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=3344658 resubmitted 1 stalled batch(es) through cv>=9 (round 2, fresh signals)
+[child/reused_slot_blocked_dependency] [omarchy] Vulkan timeline counter failed to advance for 200 ms (last observed=8, target=9). The device may be hung; no CPU fallback is available.
+[child/unrelated_work_event_wait] [omarchy] Vulkan timeline counter failed to advance for 100 ms (last observed=0, target=1). The device may be hung; no CPU fallback is available.
+[rtmod] SUBMIT-RECOVER tid=3344672 resubmitted 2 stalled batch(es) through cv>=3 (round 1, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=3344672 resubmitted 2 stalled batch(es) through cv>=3 (round 2, fresh signals)
+[child/completed_marker_behind_handler] [omarchy] Vulkan timeline counter failed to advance for 100 ms (last observed=2, target=3). The device may be hung; no CPU fallback is available.
+[child/long_matmul_progress] valid matmul completed
+[child/watchdog_teardown] submit completed before the watchdog fired; teardown is the assertion
+[omarchy] submit stuck: waiting for timeline value=1001, counter frozen at 1, reserved through 1, no progress for 1 s, last dispatched kernel=-1 (pid 3344690). The submission started but has not retired; a longer freeze means a wedged GPU job.
+[omarchy] submit stuck: waiting for timeline value=1001, counter frozen at 1, reserved through 1, no progress for 1 s, last dispatched kernel=-1 (pid 3344690). The submission started but has not retired; a longer freeze means a wedged GPU job.
+[child/stuck_warning] warning fired before the wall typed error
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+Skipping: needs the development override and a non-Honeykrisp driver.
+Skipping: a qualifying GPU is present; the refusal path is exercised by the classification tests and this test is meaningless there.
+[receipt] compute queue families expose 1 queue(s)
+[receipt] device exposes 1 queue(s); measuring overlap on one VkQueue
+[receipt] iters=400 serialized_median=0.166893s concurrent_median=0.12298s ratio=1.35707
+===============================================================================
+[doctest] test cases:    59 |    59 passed | 0 failed | 0 skipped
+[doctest] assertions: 27070 | 27070 passed | 0 failed |
+[doctest] Status: SUCCESS!
+tests end 2026-10-20T19:34:32Z rc=0

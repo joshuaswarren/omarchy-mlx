@@ -138,14 +138,17 @@ fraction (reporter's OpenGL measurement). `MLX_OMARCHY_BATCH_WORK=<groups>`
 bounds each submission to an estimated GPU cost. The open batch is submitted
 once its summed dispatch work-group counts reach the budget. The default is
 a per-board table (`receipts/2026-10-02-submission-cap-19`,
-`receipts/2026-10-12-submission-cap-calibration`): per-group GPU cost
+`receipts/2026-10-12-submission-cap-calibration`,
+`receipts/2026-10-20-g13g-batch-work-8000`): per-group GPU cost
 differs by an order of magnitude across the M1 family, so one global count
 cannot land every chip in the 2-6 ms band. A 4B decode step then splits
 into ~2-6 ms submissions. A single dispatch larger than the budget still
 runs whole. Splitting happens between dispatches. Copies/fills ride the
 node and byte budgets. `MLX_OMARCHY_BATCH_WORK=0` disables the cap
-(headless boxes). Boards with no calibrated row take the most conservative
-calibrated value (shortest submissions). Scheduling only: every submission
+(headless boxes). Boards with no calibrated row take 5000 (shortest
+submissions measured to stay in the band). The 13-inch M1 row is 8000: on
+that board 8000 gives p50 3.0 ms (Qwen3.8-2B) and 4.6 ms (Qwen3-4B) and
+decodes 2.4 % faster than 5000. Scheduling only: every submission
 already waits on the stream's previous completion. Splitting preserves
 order, and results are bit-identical (greedy ids digests identical in every
 A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max

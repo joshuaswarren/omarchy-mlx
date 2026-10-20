@@ -1,0 +1,23 @@
+device identity read 2026-10-20T20:03:39Z with the PR wheel venv, two fresh processes, under the GPU turn wrapper
+mx 0.32.4.dev202610201840+6b3597a
+chip_compatible apple,j293 apple,t8103 apple,arm-platform
+device_name Apple M1 (G13G B1)
+driver Honeykrisp
+driver_info Mesa 26.3.0-devel (git-e7631595df)
+driver_sha e7631595df
+driver_version 109060195
+gpu_cores 8
+marketing_name Apple M1
+stock_driver_warning 
+process 1 rc=0
+mx 0.32.4.dev202610201840+6b3597a
+chip_compatible apple,j293 apple,t8103 apple,arm-platform
+device_name Apple M1 (G13G B1)
+driver Honeykrisp
+driver_info Mesa 26.3.0-devel (git-e7631595df)
+driver_sha e7631595df
+driver_version 109060195
+gpu_cores 8
+marketing_name Apple M1
+stock_driver_warning 
+process 2 rc=0
