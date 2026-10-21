@@ -1,0 +1,15 @@
+GATE start 2026-10-21T17:00:31Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=0.05 cpu budget 900s
+GATE venv mx 0.32.4.dev202610211437+7a09bac libmlx eff0e0a66cecc89d tfref 96ba38759d169339 tfcmp 9a38455f19f9eb86 text 3972dc9744f6499f
+GATE cpu smoke rc=1  RuntimeError: NYI
+GATE arm tile1 rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211437+7a09bac segments 4
+GATE arm plain rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211437+7a09bac segments 4
+GATE arm plain2 rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211437+7a09bac segments 4
+GATE arm wide rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211437+7a09bac segments 4
+GATE arm cpu rc=1  segments 0
+TFCMP segments [] steps per segment {} total 0
+Traceback (most recent call last):
+  File "$HOME/work/tfcmp.py", line 27, in <module>
+    ref_nll = -np.concatenate([ref[s]["target_lp"][: steps[s]] for s in segs]).mean()
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: need at least one array to concatenate
+GATE end 2026-10-21T17:01:17Z

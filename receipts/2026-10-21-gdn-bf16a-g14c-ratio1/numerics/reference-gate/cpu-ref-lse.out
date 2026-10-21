@@ -1,0 +1,5 @@
+TFREF seg 0 steps 159 device cpu dtype float32 elapsed 267.0s
+TFREF seg 1 steps 159 device cpu dtype float32 elapsed 533.5s
+TFREF seg 2 steps 159 device cpu dtype float32 elapsed 808.0s
+TFREF seg 3 steps 159 device cpu dtype float32 elapsed 1077.9s
+TFREF done device cpu dtype float32 mlx 0.32.4

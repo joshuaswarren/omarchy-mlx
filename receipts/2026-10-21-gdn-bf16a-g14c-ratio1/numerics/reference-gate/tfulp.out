@@ -1,0 +1,44 @@
+TFULP tile1: 11 flips, 11 near ties (margin <= 2 ULP), 0 beyond
+  seg 0 step 43: ref top logit 13.946 margin 0.0361 ulp 0.0625 near tie
+  seg 0 step 68: ref top logit 13.051 margin 0.0000 ulp 0.0625 near tie
+  seg 0 step 145: ref top logit 21.241 margin 0.0657 ulp 0.1250 near tie
+  seg 1 step 12: ref top logit 18.053 margin 0.0321 ulp 0.1250 near tie
+  seg 1 step 16: ref top logit 18.374 margin 0.0214 ulp 0.1250 near tie
+  seg 1 step 20: ref top logit 18.245 margin 0.0362 ulp 0.1250 near tie
+  seg 1 step 114: ref top logit 17.529 margin 0.0876 ulp 0.1250 near tie
+  seg 1 step 150: ref top logit 18.139 margin 0.0474 ulp 0.1250 near tie
+  seg 2 step 49: ref top logit 17.179 margin 0.1889 ulp 0.1250 near tie
+  seg 3 step 46: ref top logit 18.810 margin 0.0329 ulp 0.1250 near tie
+  seg 3 step 84: ref top logit 15.989 margin 0.0043 ulp 0.0625 near tie
+TFULP plain: 15 flips, 15 near ties (margin <= 2 ULP), 0 beyond
+  seg 1 step 11: ref top logit 18.484 margin 0.0731 ulp 0.1250 near tie
+  seg 1 step 12: ref top logit 18.053 margin 0.0321 ulp 0.1250 near tie
+  seg 1 step 16: ref top logit 18.374 margin 0.0214 ulp 0.1250 near tie
+  seg 1 step 18: ref top logit 20.570 margin 0.0668 ulp 0.1250 near tie
+  seg 1 step 20: ref top logit 18.245 margin 0.0362 ulp 0.1250 near tie
+  seg 1 step 58: ref top logit 21.364 margin 0.1310 ulp 0.1250 near tie
+  seg 1 step 71: ref top logit 16.908 margin 0.0438 ulp 0.1250 near tie
+  seg 1 step 74: ref top logit 18.824 margin 0.0135 ulp 0.1250 near tie
+  seg 1 step 114: ref top logit 17.529 margin 0.0876 ulp 0.1250 near tie
+  seg 1 step 119: ref top logit 20.885 margin 0.1734 ulp 0.1250 near tie
+  seg 1 step 150: ref top logit 18.139 margin 0.0474 ulp 0.1250 near tie
+  seg 2 step 32: ref top logit 20.857 margin 0.1146 ulp 0.1250 near tie
+  seg 2 step 64: ref top logit 20.296 margin 0.0623 ulp 0.1250 near tie
+  seg 3 step 46: ref top logit 18.810 margin 0.0329 ulp 0.1250 near tie
+  seg 3 step 84: ref top logit 15.989 margin 0.0043 ulp 0.0625 near tie
+TFULP wide: 15 flips, 15 near ties (margin <= 2 ULP), 0 beyond
+  seg 1 step 11: ref top logit 18.484 margin 0.0731 ulp 0.1250 near tie
+  seg 1 step 12: ref top logit 18.053 margin 0.0321 ulp 0.1250 near tie
+  seg 1 step 16: ref top logit 18.374 margin 0.0214 ulp 0.1250 near tie
+  seg 1 step 18: ref top logit 20.570 margin 0.0668 ulp 0.1250 near tie
+  seg 1 step 20: ref top logit 18.245 margin 0.0362 ulp 0.1250 near tie
+  seg 1 step 58: ref top logit 21.364 margin 0.1310 ulp 0.1250 near tie
+  seg 1 step 71: ref top logit 16.908 margin 0.0438 ulp 0.1250 near tie
+  seg 1 step 74: ref top logit 18.824 margin 0.0135 ulp 0.1250 near tie
+  seg 1 step 114: ref top logit 17.529 margin 0.0876 ulp 0.1250 near tie
+  seg 1 step 119: ref top logit 20.885 margin 0.1734 ulp 0.1250 near tie
+  seg 1 step 150: ref top logit 18.139 margin 0.0474 ulp 0.1250 near tie
+  seg 2 step 32: ref top logit 20.857 margin 0.1146 ulp 0.1250 near tie
+  seg 2 step 64: ref top logit 20.296 margin 0.0623 ulp 0.1250 near tie
+  seg 3 step 46: ref top logit 18.810 margin 0.0329 ulp 0.1250 near tie
+  seg 3 step 84: ref top logit 15.989 margin 0.0043 ulp 0.0625 near tie

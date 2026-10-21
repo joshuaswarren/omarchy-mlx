@@ -425,7 +425,7 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
 
 // The default route of the bf16 A_log decode with Hv == 2 * Hk or Hv == 3 * Hk (Qwen3.6-35B-A3B: 16 key heads, 32 value heads;
 // Qwen3.8-27B: 16 key heads, 48 value heads). The untiled prefetch kernel is the default on G13C at both ratios (about 8 and 5.8 percent
-// faster decode) and on G14C at ratio 3 (about 6 percent) and at equal head counts (about 2.4 percent); ratio 2 was not measured there. It is not bit-equal to the tiled kernel,
+// faster decode) and on G14C at ratio 3 (about 6 percent) and at equal head counts (about 2.8 percent with the plain prefetch kernel, 3.7 percent with the wide one); ratio 2 was not measured there. It is not bit-equal to the tiled kernel,
 // so the case does not compare the default with the tiled run. Every other part keeps its previous default. Explicit
 // MLX_OMARCHY_GDN_DECODE_TILE and the bf16a native-GQA opt-in win; another head ratio (16 and 64) keeps the previous default.
 // Equal head counts (Qwen3.8-2B) take the untiled kernel on G14C and keep the previous default elsewhere.
