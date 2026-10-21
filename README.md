@@ -18,6 +18,16 @@ Metal and no CPU fallback.
 It is for people who run Linux on an M1 or M2 Mac. You get local chat,
 serving, and speech to text, with no macOS and no cloud account.
 
+## Video overview
+
+[![Watch the omarchy-mlx developer overview](.github/media/repo-overview.jpg)](https://www.ngram.com/embed/omarchy-mlx-mlx-on-apple-silicon-linux-9b2fabac06354b7a9b1ed32fc72c9475)
+
+A 94-second guide to the Vulkan and ANE paths, supported hardware, setup, and repository layout. [Watch the video](https://www.ngram.com/embed/omarchy-mlx-mlx-on-apple-silicon-linux-9b2fabac06354b7a9b1ed32fc72c9475).
+
+[![Create a video like this for your repo](https://img.shields.io/badge/Create_a_video_like_this_for_your_repo-ngram-0D0D0D)](https://github.com/apps/ngram-ai/)
+
+<sub>Video created with ngram.</sub>
+
 ## What runs on Omarchy Linux
 
 mlx-lm, oMLX, mlx-serve, TensorFold, sushi, llama.cpp (Vulkan) and MCDMA have been tested on an Apple silicon Mac under Linux. The status of each, with the commit or measurement behind it, is in [docs/ENGINES.md](docs/ENGINES.md).
