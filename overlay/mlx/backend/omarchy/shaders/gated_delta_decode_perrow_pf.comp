@@ -106,6 +106,59 @@ shared float sdelta[128];
 // delta * k[i] each rounded once.
 shared float skg[128];
 
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+// Wide prefetch (dk a multiple of 32, checked at dispatch): the eight state words of the plain walk become thirty-two. All eight
+// vec4 loads of a block are issued before the first of its thirty-two fma steps, so a row pays one memory round trip per block instead
+// of one per eight words. The fma chain is the plain walk's, element for element in the same order.
+float gdn_kv_walk_wide(uint sbase, uint dk) {
+  float kv = 0.0f;
+  uint q = sbase >> 2u;
+  for (uint i = 0u; i < dk; i += 32u) {
+    vec4 w0 = s_in.v[q + (i >> 2u)];
+    vec4 w1 = s_in.v[q + (i >> 2u) + 1u];
+    vec4 w2 = s_in.v[q + (i >> 2u) + 2u];
+    vec4 w3 = s_in.v[q + (i >> 2u) + 3u];
+    vec4 w4 = s_in.v[q + (i >> 2u) + 4u];
+    vec4 w5 = s_in.v[q + (i >> 2u) + 5u];
+    vec4 w6 = s_in.v[q + (i >> 2u) + 6u];
+    vec4 w7 = s_in.v[q + (i >> 2u) + 7u];
+    kv = fma(w0.x, skg[i], kv);
+    kv = fma(w0.y, skg[i + 1u], kv);
+    kv = fma(w0.z, skg[i + 2u], kv);
+    kv = fma(w0.w, skg[i + 3u], kv);
+    kv = fma(w1.x, skg[i + 4u], kv);
+    kv = fma(w1.y, skg[i + 5u], kv);
+    kv = fma(w1.z, skg[i + 6u], kv);
+    kv = fma(w1.w, skg[i + 7u], kv);
+    kv = fma(w2.x, skg[i + 8u], kv);
+    kv = fma(w2.y, skg[i + 9u], kv);
+    kv = fma(w2.z, skg[i + 10u], kv);
+    kv = fma(w2.w, skg[i + 11u], kv);
+    kv = fma(w3.x, skg[i + 12u], kv);
+    kv = fma(w3.y, skg[i + 13u], kv);
+    kv = fma(w3.z, skg[i + 14u], kv);
+    kv = fma(w3.w, skg[i + 15u], kv);
+    kv = fma(w4.x, skg[i + 16u], kv);
+    kv = fma(w4.y, skg[i + 17u], kv);
+    kv = fma(w4.z, skg[i + 18u], kv);
+    kv = fma(w4.w, skg[i + 19u], kv);
+    kv = fma(w5.x, skg[i + 20u], kv);
+    kv = fma(w5.y, skg[i + 21u], kv);
+    kv = fma(w5.z, skg[i + 22u], kv);
+    kv = fma(w5.w, skg[i + 23u], kv);
+    kv = fma(w6.x, skg[i + 24u], kv);
+    kv = fma(w6.y, skg[i + 25u], kv);
+    kv = fma(w6.z, skg[i + 26u], kv);
+    kv = fma(w6.w, skg[i + 27u], kv);
+    kv = fma(w7.x, skg[i + 28u], kv);
+    kv = fma(w7.y, skg[i + 29u], kv);
+    kv = fma(w7.z, skg[i + 30u], kv);
+    kv = fma(w7.w, skg[i + 31u], kv);
+  }
+  return kv;
+}
+#endif /* GDN_PF_WIDE */
+
 #ifndef GDN_COMPOSED_ORDER
 float gdn_kv_walk(uint sbase, uint dk) {
 #else /* GDN_COMPOSED_ORDER */
@@ -288,6 +341,107 @@ float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd,
   return o;
 }
 
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+// Wide update walk: the same thirty-two-word blocks as gdn_kv_walk_wide, eight vec4 loaded before the first of the block's four
+// eight-word steps. Each step is the plain walk's body, in the same order, so the stores and the o chain are unchanged.
+float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
+  float o = 0.0f;
+  uint qi = sbase >> 2u;
+  uint qo = obase >> 2u;
+  for (uint i = 0u; i < dk; i += 32u) {
+    vec4 w0 = s_in.v[qi + (i >> 2u) + 0u];
+    vec4 w1 = s_in.v[qi + (i >> 2u) + 1u];
+    vec4 w2 = s_in.v[qi + (i >> 2u) + 2u];
+    vec4 w3 = s_in.v[qi + (i >> 2u) + 3u];
+    vec4 w4 = s_in.v[qi + (i >> 2u) + 4u];
+    vec4 w5 = s_in.v[qi + (i >> 2u) + 5u];
+    vec4 w6 = s_in.v[qi + (i >> 2u) + 6u];
+    vec4 w7 = s_in.v[qi + (i >> 2u) + 7u];
+    { // words 0..7 of the block
+      float n0 = fma(w0.x, g, gdn_dk_term(sd, sk[i]));
+      float n1 = fma(w0.y, g, gdn_dk_term(sd, sk[i + 1u]));
+      float n2 = fma(w0.z, g, gdn_dk_term(sd, sk[i + 2u]));
+      float n3 = fma(w0.w, g, gdn_dk_term(sd, sk[i + 3u]));
+      float n4 = fma(w1.x, g, gdn_dk_term(sd, sk[i + 4u]));
+      float n5 = fma(w1.y, g, gdn_dk_term(sd, sk[i + 5u]));
+      float n6 = fma(w1.z, g, gdn_dk_term(sd, sk[i + 6u]));
+      float n7 = fma(w1.w, g, gdn_dk_term(sd, sk[i + 7u]));
+      s_out.v[qo + (i >> 2u) + 0u] = vec4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 1u] = vec4(n4, n5, n6, n7);
+      o = fma(n0, sq[i], o);
+      o = fma(n1, sq[i + 1u], o);
+      o = fma(n2, sq[i + 2u], o);
+      o = fma(n3, sq[i + 3u], o);
+      o = fma(n4, sq[i + 4u], o);
+      o = fma(n5, sq[i + 5u], o);
+      o = fma(n6, sq[i + 6u], o);
+      o = fma(n7, sq[i + 7u], o);
+    }
+    { // words 8..15 of the block
+      float n0 = fma(w2.x, g, gdn_dk_term(sd, sk[i + 8u]));
+      float n1 = fma(w2.y, g, gdn_dk_term(sd, sk[i + 9u]));
+      float n2 = fma(w2.z, g, gdn_dk_term(sd, sk[i + 10u]));
+      float n3 = fma(w2.w, g, gdn_dk_term(sd, sk[i + 11u]));
+      float n4 = fma(w3.x, g, gdn_dk_term(sd, sk[i + 12u]));
+      float n5 = fma(w3.y, g, gdn_dk_term(sd, sk[i + 13u]));
+      float n6 = fma(w3.z, g, gdn_dk_term(sd, sk[i + 14u]));
+      float n7 = fma(w3.w, g, gdn_dk_term(sd, sk[i + 15u]));
+      s_out.v[qo + (i >> 2u) + 2u] = vec4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 3u] = vec4(n4, n5, n6, n7);
+      o = fma(n0, sq[i + 8u], o);
+      o = fma(n1, sq[i + 9u], o);
+      o = fma(n2, sq[i + 10u], o);
+      o = fma(n3, sq[i + 11u], o);
+      o = fma(n4, sq[i + 12u], o);
+      o = fma(n5, sq[i + 13u], o);
+      o = fma(n6, sq[i + 14u], o);
+      o = fma(n7, sq[i + 15u], o);
+    }
+    { // words 16..23 of the block
+      float n0 = fma(w4.x, g, gdn_dk_term(sd, sk[i + 16u]));
+      float n1 = fma(w4.y, g, gdn_dk_term(sd, sk[i + 17u]));
+      float n2 = fma(w4.z, g, gdn_dk_term(sd, sk[i + 18u]));
+      float n3 = fma(w4.w, g, gdn_dk_term(sd, sk[i + 19u]));
+      float n4 = fma(w5.x, g, gdn_dk_term(sd, sk[i + 20u]));
+      float n5 = fma(w5.y, g, gdn_dk_term(sd, sk[i + 21u]));
+      float n6 = fma(w5.z, g, gdn_dk_term(sd, sk[i + 22u]));
+      float n7 = fma(w5.w, g, gdn_dk_term(sd, sk[i + 23u]));
+      s_out.v[qo + (i >> 2u) + 4u] = vec4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 5u] = vec4(n4, n5, n6, n7);
+      o = fma(n0, sq[i + 16u], o);
+      o = fma(n1, sq[i + 17u], o);
+      o = fma(n2, sq[i + 18u], o);
+      o = fma(n3, sq[i + 19u], o);
+      o = fma(n4, sq[i + 20u], o);
+      o = fma(n5, sq[i + 21u], o);
+      o = fma(n6, sq[i + 22u], o);
+      o = fma(n7, sq[i + 23u], o);
+    }
+    { // words 24..31 of the block
+      float n0 = fma(w6.x, g, gdn_dk_term(sd, sk[i + 24u]));
+      float n1 = fma(w6.y, g, gdn_dk_term(sd, sk[i + 25u]));
+      float n2 = fma(w6.z, g, gdn_dk_term(sd, sk[i + 26u]));
+      float n3 = fma(w6.w, g, gdn_dk_term(sd, sk[i + 27u]));
+      float n4 = fma(w7.x, g, gdn_dk_term(sd, sk[i + 28u]));
+      float n5 = fma(w7.y, g, gdn_dk_term(sd, sk[i + 29u]));
+      float n6 = fma(w7.z, g, gdn_dk_term(sd, sk[i + 30u]));
+      float n7 = fma(w7.w, g, gdn_dk_term(sd, sk[i + 31u]));
+      s_out.v[qo + (i >> 2u) + 6u] = vec4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 7u] = vec4(n4, n5, n6, n7);
+      o = fma(n0, sq[i + 24u], o);
+      o = fma(n1, sq[i + 25u], o);
+      o = fma(n2, sq[i + 26u], o);
+      o = fma(n3, sq[i + 27u], o);
+      o = fma(n4, sq[i + 28u], o);
+      o = fma(n5, sq[i + 29u], o);
+      o = fma(n6, sq[i + 30u], o);
+      o = fma(n7, sq[i + 31u], o);
+    }
+  }
+  return o;
+}
+#endif /* GDN_PF_WIDE */
+
 #ifdef GDN_COMPOSED_ORDER
 // Bit-9 gate chain in functions: glslang propagates `precise` backward
 // through everything feeding a precise value inside one function, so an
@@ -449,7 +603,9 @@ void main() {
   }
   barrier();
 
-#ifndef GDN_COMPOSED_ORDER
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+  float kv_acc = gdn_kv_walk_wide(params.shape[1] + row_base, dk);
+#elif !defined(GDN_COMPOSED_ORDER)
   float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk);
 #else /* GDN_COMPOSED_ORDER */
   float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk, g,
@@ -459,7 +615,9 @@ void main() {
   sdelta[row] = delta;
   barrier();
 
-#ifndef GDN_COMPOSED_ORDER
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+  float o_acc = gdn_update_walk_wide(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row]);
+#elif !defined(GDN_COMPOSED_ORDER)
   float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row]);
 #else /* GDN_COMPOSED_ORDER */
   float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row],

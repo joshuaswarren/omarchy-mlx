@@ -1054,6 +1054,8 @@ enum class ComputeKernel : uint16_t {
   GatherQmmWord2BF16,
   // Untiled prefetch GDN decode, composed order, with the native GQA key-head index (gated_delta_decode_perrow_pf.comp -DGDN_COMPOSED_ORDER -DGDN_NATIVE_GQA_INDEX), appended so earlier ids do not move.
   GatedDeltaDecodeBF16PfComposedGqa,
+  // Untiled prefetch GDN decode with thirty-two state words in flight per round trip (gated_delta_decode_perrow_pf.comp -DGDN_PF_WIDE), default order, bf16 A_log; Dk a multiple of 32. Appended so earlier ids do not move.
+  GatedDeltaDecodeBF16PfWide,
   Count,
 };
 
